@@ -335,7 +335,7 @@ test("real WhatsApp demo onboarding sends through broker registered WA router", 
     if (parsed.href === `https://connect.example.test/i/${instanceId}/setup`) {
       return new Response("", {
         status: 302,
-        headers: { location: `/setup/pairing?instanceId=${instanceId}&return=%2Fsetup` },
+        headers: { location: `/setup/pairing?instanceId=${instanceId}&return=%2Fsetup%2Fcodex%3Fcompact%3D1` },
       });
     }
     throw new Error(`unexpected_fetch:${parsed.href}`);

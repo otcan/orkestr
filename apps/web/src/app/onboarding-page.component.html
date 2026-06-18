@@ -6,7 +6,7 @@
       <p>{{ pageSummary() }}</p>
     </div>
     <div class="hero-actions">
-      @if (buildStamp()) {
+      @if (!compactSetupMode() && buildStamp()) {
         <small class="build-stamp">{{ buildStamp() }}</small>
       }
       <button type="button" (click)="openApp()" [disabled]="busy">
@@ -60,7 +60,7 @@
             }
           </nav>
         </section>
-      } @else {
+      } @else if (!compactSetupMode()) {
         <nav class="setup-steps setup-sections" aria-label="Setup sections">
           @for (step of setupSections(); track step.id) {
             <button

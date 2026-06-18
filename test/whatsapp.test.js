@@ -12,6 +12,7 @@ import { deliverPendingThreadInputs, listRuntimeLeases } from "../packages/core/
 import { listRouterTraces } from "../packages/core/src/router-traces.js";
 import { getSetupStatus } from "../packages/core/src/setup.js";
 import { createDesktopShare, desktopShareStatus, openDesktopShare } from "../packages/core/src/desktop-shares.js";
+import { createPairingChallenge, listPairingChallenges } from "../packages/core/src/security.js";
 import { createTenantVm } from "../packages/core/src/tenant-vm-registry.js";
 import { configureTenantWhatsAppRoute } from "../packages/core/src/tenant-whatsapp-routing.js";
 import { appendThreadMessage, createThread, enqueueThreadInput, getThread, listThreadMessages, listThreads, updateThreadMessage } from "../packages/core/src/threads.js";
@@ -222,6 +223,23 @@ function externalBridgeEnv(home, extra = {}) {
     ORKESTR_WHATSAPP_API_AGENT_AUTORUN: "0",
     ...extra,
   };
+}
+
+async function writeBrokerInstance(env, { instanceId, whatsappChatId }) {
+  const registryPath = dataPaths(env).brokerInstances;
+  await fs.mkdir(path.dirname(registryPath), { recursive: true });
+  await fs.writeFile(
+    registryPath,
+    JSON.stringify({
+      schemaVersion: 1,
+      instances: [{
+        instanceId,
+        status: "registered",
+        whatsappChatHash: crypto.createHash("sha256").update(whatsappChatId).digest("hex"),
+        registeredAt: "2026-06-18T09:00:00.000Z",
+      }],
+    }, null, 2),
+  );
 }
 
 async function externalBridgeEnvWithAllowingSanitizer(home, extra = {}) {
@@ -2927,6 +2945,65 @@ test("whatsapp inbound events route to configured agent and dedupe by event id",
   assert.equal(messages[0].chatId, "chat-1");
   assert.equal(messages[0].from, "sender-1");
   assert.equal(messages[0].attachments[0].kind, "image");
+});
+
+test("whatsapp direct approval command approves matching instance pairing challenge", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-approve-"));
+  const env = externalBridgeEnv(home);
+  const instanceId = "instance-approve-1";
+  const whatsappChatId = "491700000001@c.us";
+  await writeBrokerInstance(env, { instanceId, whatsappChatId });
+  const created = await createPairingChallenge({
+    env,
+    instanceId,
+    request: { headers: { "user-agent": "node-test" }, socket: { remoteAddress: "127.0.0.1" } },
+  });
+
+  const routed = await routeWhatsAppInbound({
+    eventId: "wa-approval-command-1",
+    chatId: whatsappChatId,
+    from: whatsappChatId,
+    text: `orkestr connect approve ${created.challenge.approveCode}`,
+  }, env);
+  const duplicate = await routeWhatsAppInbound({
+    eventId: "wa-approval-command-1",
+    chatId: whatsappChatId,
+    from: whatsappChatId,
+    text: `orkestr connect approve ${created.challenge.approveCode}`,
+  }, env);
+  const listed = await listPairingChallenges({ env, includeExpired: true });
+  const challenge = listed.challenges.find((item) => item.id === created.challenge.id);
+
+  assert.equal(routed.approvedSecurityChallenge, true);
+  assert.equal(routed.threadId, null);
+  assert.equal(duplicate.duplicate, true);
+  assert.equal(challenge.status, "approved");
+  assert.equal(challenge.approvedBy, "whatsapp");
+});
+
+test("whatsapp direct approval command rejects non-target sender", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-approve-denied-"));
+  const env = externalBridgeEnv(home);
+  const instanceId = "instance-approve-denied-1";
+  await writeBrokerInstance(env, { instanceId, whatsappChatId: "491700000001@c.us" });
+  const created = await createPairingChallenge({
+    env,
+    instanceId,
+    request: { headers: { "user-agent": "node-test" }, socket: { remoteAddress: "127.0.0.1" } },
+  });
+
+  const routed = await routeWhatsAppInbound({
+    eventId: "wa-approval-command-denied-1",
+    chatId: "491700000002@c.us",
+    from: "491700000002@c.us",
+    text: `orkestr connect approve ${created.challenge.approveCode}`,
+  }, env);
+  const listed = await listPairingChallenges({ env, includeExpired: true });
+  const challenge = listed.challenges.find((item) => item.id === created.challenge.id);
+
+  assert.equal(routed.skipped, "security_approval_sender_denied");
+  assert.equal(routed.threadId, null);
+  assert.equal(challenge.status, "pending");
 });
 
 test("whatsapp inbound only queues sender account events", async () => {

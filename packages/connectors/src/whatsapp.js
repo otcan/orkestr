@@ -111,6 +111,7 @@ import {
   findWhatsAppAccountByAnyId,
   whatsappAccountLookupKeys,
 } from "./whatsapp-account-identity.js";
+import { maybeApprovePairingChallengeFromWhatsApp } from "./whatsapp-security-approval.js";
 
 export { formatWhatsAppOutboundText } from "./whatsapp-formatting.js";
 export { initialQueueDeliveryState } from "./whatsapp-outbound-mirror.js";
@@ -2637,6 +2638,20 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
   }, env).catch(() => {});
 
   const state = await readWhatsAppState(env);
+  const securityApproval = await maybeApprovePairingChallengeFromWhatsApp({
+    input,
+    env,
+    state,
+    writeState: writeWhatsAppState,
+    eventId,
+    canonicalEventId,
+    routerTraceId: initialTraceId,
+    turnId: initialTurnId,
+    chatId: initialChatId,
+    accountId: initialAccountId,
+  });
+  if (securityApproval) return securityApproval;
+
   let threadRoute = null;
   const accountPolicy = whatsappInboundAccountPolicy(input, config, state, env);
   if (!accountPolicy.allowed) {

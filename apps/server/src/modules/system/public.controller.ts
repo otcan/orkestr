@@ -46,7 +46,7 @@ export class InstanceConnectController {
   @Get(":instanceId/setup")
   async instanceSetup(
     @Param("instanceId") rawInstanceId: string,
-    @Query("return") returnTo = "/setup",
+    @Query("return") returnTo = "/setup/codex?compact=1",
     @Res() response: any,
   ) {
     const instanceId = normalizeInstanceId(rawInstanceId);
@@ -58,7 +58,7 @@ export class InstanceConnectController {
     }
     const target = new URL("/setup/pairing", "http://localhost");
     target.searchParams.set("instanceId", instanceId);
-    target.searchParams.set("return", String(returnTo || "/setup").trim() || "/setup");
+    target.searchParams.set("return", String(returnTo || "/setup/codex?compact=1").trim() || "/setup/codex?compact=1");
     return response
       .status(302)
       .header("cache-control", "no-store")

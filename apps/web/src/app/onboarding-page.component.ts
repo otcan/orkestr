@@ -711,21 +711,28 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
     return this.mode === "setup";
   }
 
+  compactSetupMode(): boolean {
+    return this.isSetupMode() && new URLSearchParams(globalThis.location?.search || "").get("compact") === "1";
+  }
+
   isOnboardingMode(): boolean {
     return this.mode === "onboarding";
   }
 
   pageTitle(): string {
+    if (this.compactSetupMode()) return "Connect Codex";
     return this.isSetupMode() ? "Setup" : "Set up Orkestr";
   }
 
   pageSummary(): string {
+    if (this.compactSetupMode()) return "Sign in to Codex so this Orkestr instance can start coding threads.";
     return this.isSetupMode()
       ? "Check secure access, accounts, runtimes, and optional connectors after the installer has prepared the local Orkestr runtime."
       : "Start with Codex and WhatsApp. Add mail, timers, and managed browser desktops only when you need those capabilities.";
   }
 
   pageEyebrow(): string {
+    if (this.compactSetupMode()) return "Orkestr connect";
     return this.isSetupMode() ? "Orkestr setup" : "Self-hosted agent cockpit";
   }
 
@@ -738,6 +745,7 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
   }
 
   closeLabel(): string {
+    if (this.compactSetupMode()) return "Open Orkestr";
     return this.isSetupMode() ? "Back to Orkestr" : "Open Orkestr";
   }
 
@@ -792,6 +800,7 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
   }
 
   setupSections(): Array<{ id: OnboardingStep; label: string; eyebrow: string }> {
+    if (this.compactSetupMode()) return [{ id: "codex", label: "Codex", eyebrow: "Required" }];
     const setupConnectors = this.connectorSteps.filter((step) => this.leanSetupConnectorIds.includes(step.id));
     return [
       { id: "system", label: "Connections", eyebrow: "Runtime" },
@@ -1632,20 +1641,20 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
   private firstOpenStep(): OnboardingStep {
     const steps = this.pageSections();
     const storedStep = steps.find((step) => step.id === this.activeStep)?.id;
-    if (this.isSetupMode()) return storedStep || "system";
+    if (this.isSetupMode()) return storedStep || steps[0]?.id || "system";
     return storedStep || "goal";
   }
 
   private ensureActiveStepAvailable(): void {
     if (this.pageSections().some((step) => step.id === this.activeStep)) return;
-    this.activeStep = this.isSetupMode() ? "system" : "goal";
+    this.activeStep = this.isSetupMode() ? this.pageSections()[0]?.id || "system" : "goal";
   }
 
   private applySetupSectionFromInput(): void {
     if (!this.isSetupMode()) return;
     const section = String(this.setupSection || "").trim().toLowerCase();
     const match = this.setupSections().find((step) => step.id === section);
-    this.activeStep = match?.id || "system";
+    this.activeStep = match?.id || this.setupSections()[0]?.id || "system";
     this.stepInitialized = true;
   }
 
