@@ -16,6 +16,10 @@ function pickString(...values) {
   return "";
 }
 
+function truthy(value = "") {
+  return ["1", "true", "yes", "on"].includes(String(value || "").trim().toLowerCase());
+}
+
 function hashHex(value = "") {
   return createHash("sha256").update(String(value || "")).digest("hex");
 }
@@ -101,6 +105,12 @@ function whatsappApprovalRoutedBindingAllowed({ input = {}, chatId = "", threadR
   if (String(binding.connector || "whatsapp") !== "whatsapp") return false;
   if (pickString(binding.chatId) !== pickString(chatId, input.chatId, input.chat?.id, input.fromChatId)) return false;
   return true;
+}
+
+function whatsappApprovalBrokeredUnscopedAllowed({ input = {}, challenge = {}, env = process.env } = {}) {
+  if (challenge?.instanceId) return false;
+  if (!truthy(env.ORKESTR_WHATSAPP_SECURITY_APPROVAL_ALLOW_BROKERED_UNSCOPED || env.WHATSAPP_SECURITY_APPROVAL_ALLOW_BROKERED_UNSCOPED)) return false;
+  return Boolean(input.machineAuthContext);
 }
 
 async function whatsappApprovalPriorRoutedBindingAllowed({ input = {}, state = {}, accountId = "", env = process.env } = {}) {
@@ -266,7 +276,8 @@ export async function maybeApprovePairingChallengeFromWhatsApp({
   });
   const senderMatchesRegisteredTarget = instance?.whatsappChatHash &&
     whatsappApprovalSenderMatchesHash(input, instance.whatsappChatHash);
-  if (!senderMatchesRegisteredTarget && !senderMatchesRoutedThread && !senderMatchesPriorRoutedThread) {
+  const senderMatchesBrokeredUnscoped = whatsappApprovalBrokeredUnscopedAllowed({ input, challenge, env });
+  if (!senderMatchesRegisteredTarget && !senderMatchesRoutedThread && !senderMatchesPriorRoutedThread && !senderMatchesBrokeredUnscoped) {
     const event = await recordSkipped("security_approval_sender_denied", {
       challengeId: challenge.id || challengeId,
       instanceId: challenge.instanceId || null,

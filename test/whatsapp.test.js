@@ -3245,6 +3245,39 @@ test("whatsapp approval command accepts routed direct lid binding for unscoped c
   assert.equal(challenge.approvedBy, "whatsapp");
 });
 
+test("whatsapp approval command accepts brokered unscoped challenge when explicitly enabled", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-approve-brokered-unscoped-"));
+  const env = externalBridgeEnv(home, {
+    ORKESTR_WHATSAPP_SECURITY_APPROVAL_ALLOW_BROKERED_UNSCOPED: "1",
+  });
+  const created = await createPairingChallenge({
+    env,
+    request: { headers: { "user-agent": "node-test" }, socket: { remoteAddress: "127.0.0.1" } },
+  });
+
+  const deniedWithoutMachineAuth = await routeWhatsAppInbound({
+    eventId: "wa-approval-command-brokered-unscoped-denied",
+    chatId: "491700000001@c.us",
+    from: "491700000001@c.us",
+    text: `orkestr connect approve ${created.challenge.approveCode}`,
+  }, env);
+  const approvedWithMachineAuth = await routeWhatsAppInbound({
+    eventId: "wa-approval-command-brokered-unscoped-approved",
+    chatId: "491700000001@c.us",
+    from: "491700000001@c.us",
+    text: `orkestr connect approve ${created.challenge.approveCode}`,
+    machineAuthContext: { subject: "parent-broker", scopes: ["whatsapp:inbound"] },
+  }, env);
+  const listed = await listPairingChallenges({ env, includeExpired: true });
+  const challenge = listed.challenges.find((item) => item.id === created.challenge.id);
+
+  assert.equal(deniedWithoutMachineAuth.skipped, "security_approval_sender_denied");
+  assert.equal(approvedWithMachineAuth.approvedSecurityChallenge, true);
+  assert.equal(approvedWithMachineAuth.threadId, null);
+  assert.equal(challenge.status, "approved");
+  assert.equal(challenge.approvedBy, "whatsapp");
+});
+
 test("whatsapp approval command accepts direct lid after prior routed group context", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-approve-prior-group-lid-"));
   const env = externalBridgeEnv(home);
