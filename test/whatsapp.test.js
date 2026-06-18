@@ -2981,6 +2981,48 @@ test("whatsapp direct approval command approves matching instance pairing challe
   assert.equal(challenge.approvedBy, "whatsapp");
 });
 
+test("whatsapp approval command accepts routed group binding for registered target challenge", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-approve-group-"));
+  const env = externalBridgeEnv(home);
+  const instanceId = "instance-approve-group-1";
+  const whatsappChatId = "491700000001@c.us";
+  const groupChatId = "120363429021603609@g.us";
+  await writeBrokerInstance(env, { instanceId, whatsappChatId });
+  await createThread({
+    id: "wa-approval-group-thread",
+    name: "WA Approval Group",
+    binding: {
+      connector: "whatsapp",
+      chatId: groupChatId,
+      enabled: true,
+      routeEligible: true,
+      allowOtherPeople: true,
+      mirrorToWhatsApp: true,
+      outboundAccountId: "sender",
+    },
+  }, env);
+  const created = await createPairingChallenge({
+    env,
+    instanceId,
+    request: { headers: { "user-agent": "node-test" }, socket: { remoteAddress: "127.0.0.1" } },
+  });
+
+  const routed = await routeWhatsAppInbound({
+    eventId: "wa-approval-command-group-1",
+    chatId: groupChatId,
+    accountId: "sender",
+    from: "66378837028965@lid",
+    text: `orkestr connect approve ${created.challenge.approveCode}`,
+  }, env);
+  const listed = await listPairingChallenges({ env, includeExpired: true });
+  const challenge = listed.challenges.find((item) => item.id === created.challenge.id);
+
+  assert.equal(routed.approvedSecurityChallenge, true);
+  assert.equal(routed.threadId, null);
+  assert.equal(challenge.status, "approved");
+  assert.equal(challenge.approvedBy, "whatsapp");
+});
+
 test("whatsapp direct approval command rejects non-target sender", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-approve-denied-"));
   const env = externalBridgeEnv(home);

@@ -5,6 +5,7 @@ import { rawSecurityApproveChallengeId } from "../../core/src/raw-terminal-comma
 import { approvePairingChallenge, getPairingChallenge } from "../../core/src/security.js";
 import { appendEvent } from "../../storage/src/store.js";
 import { stripWhatsAppDebugFooter } from "./whatsapp-formatting.js";
+import { isWhatsAppGroupChatId, whatsappBindingIsRouteEligible } from "./whatsapp-inbound-routing.js";
 
 function pickString(...values) {
   for (const value of values) {
@@ -65,6 +66,16 @@ function whatsappApprovalSenderMatchesHash(input = {}, expectedHash = "") {
   return false;
 }
 
+function whatsappApprovalRoutedBindingAllowed({ input = {}, chatId = "", threadRoute = {} } = {}) {
+  const binding = threadRoute?.binding || {};
+  if (!threadRoute?.threadId || !binding || typeof binding !== "object") return false;
+  if (!isWhatsAppGroupChatId(chatId)) return false;
+  if (!whatsappBindingIsRouteEligible(binding)) return false;
+  if (String(binding.connector || "whatsapp") !== "whatsapp") return false;
+  if (pickString(binding.chatId) !== pickString(chatId, input.chatId, input.chat?.id, input.fromChatId)) return false;
+  return true;
+}
+
 function canonicalWhatsAppEventId(value = "") {
   return String(value || "").trim().replace(/^(?:true|false)_/, "");
 }
@@ -89,6 +100,7 @@ export async function maybeApprovePairingChallengeFromWhatsApp({
   turnId = "",
   chatId = "",
   accountId = "",
+  threadRoute = null,
 } = {}) {
   const text = stripWhatsAppDebugFooter(pickString(input.text, input.body, input.message));
   const challengeId = rawSecurityApproveChallengeId(text);
@@ -187,7 +199,10 @@ export async function maybeApprovePairingChallengeFromWhatsApp({
   }
 
   const instance = challenge.instanceId ? await brokerInstance(challenge.instanceId, env).catch(() => null) : null;
-  if (!instance?.whatsappChatHash || !whatsappApprovalSenderMatchesHash(input, instance.whatsappChatHash)) {
+  const senderMatchesRegisteredTarget = instance?.whatsappChatHash &&
+    whatsappApprovalSenderMatchesHash(input, instance.whatsappChatHash);
+  const senderMatchesRoutedThread = whatsappApprovalRoutedBindingAllowed({ input, chatId, threadRoute });
+  if (!senderMatchesRegisteredTarget && !senderMatchesRoutedThread) {
     const event = await recordSkipped("security_approval_sender_denied", {
       challengeId: challenge.id || challengeId,
       instanceId: challenge.instanceId || null,

@@ -2638,6 +2638,7 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
   }, env).catch(() => {});
 
   const state = await readWhatsAppState(env);
+  let threadRoute = await routeThread(input, config, env);
   const securityApproval = await maybeApprovePairingChallengeFromWhatsApp({
     input,
     env,
@@ -2649,10 +2650,10 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
     turnId: initialTurnId,
     chatId: initialChatId,
     accountId: initialAccountId,
+    threadRoute,
   });
   if (securityApproval) return securityApproval;
 
-  let threadRoute = null;
   const accountPolicy = whatsappInboundAccountPolicy(input, config, state, env);
   if (!accountPolicy.allowed) {
     threadRoute = await routeThread(input, config, env);
