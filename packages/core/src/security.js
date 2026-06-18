@@ -404,6 +404,25 @@ function configuredBridgeTokenContext(env = process.env, route = {}) {
   };
 }
 
+function configuredInboundTokenContext(env = process.env, route = {}) {
+  if (route.kind !== "whatsapp_inbound") return null;
+  return {
+    tokenId: "configured-inbound-token",
+    routeKind: route.kind,
+    scopes: route.requiredScopes || ["whatsapp:inbound"],
+    principalKind: "external_instance",
+    principalId: String(env.ORKESTR_WHATSAPP_INBOUND_PRINCIPAL_ID || env.WHATSAPP_INBOUND_PRINCIPAL_ID || "configured-inbound-token").trim(),
+    ownerUserId: null,
+    instanceId: String(env.ORKESTR_WHATSAPP_INBOUND_INSTANCE_ID || env.WHATSAPP_INBOUND_INSTANCE_ID || "").trim() || null,
+    accountId: String(env.ORKESTR_WHATSAPP_INBOUND_ACCOUNT_ID || env.WHATSAPP_INBOUND_ACCOUNT_ID || "").trim() || null,
+    bindingId: null,
+    chatId: null,
+    allowedChatIds: splitStringList(env.ORKESTR_WHATSAPP_INBOUND_ALLOWED_CHAT_IDS || env.WHATSAPP_INBOUND_ALLOWED_CHAT_IDS),
+    allowedPhoneNumbers: splitStringList(env.ORKESTR_WHATSAPP_INBOUND_ALLOWED_PHONE_NUMBERS || env.WHATSAPP_INBOUND_ALLOWED_PHONE_NUMBERS),
+    allowedRecipients: splitStringList(env.ORKESTR_WHATSAPP_INBOUND_ALLOWED_RECIPIENTS || env.WHATSAPP_INBOUND_ALLOWED_RECIPIENTS),
+  };
+}
+
 function whatsappInboundTokens(env = process.env) {
   return [
     ...splitSecretList(env.ORKESTR_WHATSAPP_INBOUND_TOKEN),
@@ -516,7 +535,7 @@ async function authorizeWhatsAppMachineRequest(request, env = process.env) {
   }
   const matched = tokens.some((candidate) => timingSafeSecretEqual(token, candidate));
   if (!matched) return whatsappMachineAuthFailure(route, "invalid", 401);
-  const configuredContext = configuredBridgeTokenContext(env, route);
+  const configuredContext = configuredBridgeTokenContext(env, route) || configuredInboundTokenContext(env, route);
   return {
     ok: true,
     principal: adminPrincipal(defaultAdminUser(env)),

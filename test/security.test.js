@@ -527,6 +527,9 @@ test("whatsapp inbound machine token bypasses browser pairing only for inbound",
   assert.equal(badToken.routingFailure.code, "whatsapp_inbound_token_invalid");
   assert.equal(allowed.ok, true);
   assert.equal(allowed.machineAuth, "whatsapp_inbound");
+  assert.equal(allowed.machineAuthContext.tokenId, "configured-inbound-token");
+  assert.equal(allowed.machineAuthContext.routeKind, "whatsapp_inbound");
+  assert.deepEqual(allowed.machineAuthContext.scopes, ["whatsapp:inbound"]);
   assert.equal(allowed.principal.userId, "admin");
   assert.equal(otherRoute.ok, false);
   assert.equal(otherRoute.error, "browser_pairing_required");
