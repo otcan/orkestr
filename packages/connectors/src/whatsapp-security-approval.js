@@ -3,9 +3,10 @@ import { brokerInstance } from "../../core/src/broker-instance-registry.js";
 import { ensureRouterTurn, recordRouterTraceEvent } from "../../core/src/router-traces.js";
 import { rawSecurityApproveChallengeId } from "../../core/src/raw-terminal-commands.js";
 import { approvePairingChallenge, getPairingChallenge } from "../../core/src/security.js";
+import { listThreads } from "../../core/src/threads.js";
 import { appendEvent } from "../../storage/src/store.js";
 import { stripWhatsAppDebugFooter } from "./whatsapp-formatting.js";
-import { whatsappBindingIsRouteEligible } from "./whatsapp-inbound-routing.js";
+import { comparableParticipantId, whatsappBindingIsRouteEligible, whatsappInboundThreadMatchesBinding } from "./whatsapp-inbound-routing.js";
 
 function pickString(...values) {
   for (const value of values) {
@@ -57,6 +58,33 @@ function directWhatsAppTargetCandidates(input = {}) {
   return candidates;
 }
 
+function directWhatsAppParticipantCandidates(input = {}) {
+  const candidates = new Set();
+  const values = [
+    input.chatId,
+    input.from,
+    input.sender,
+    input.author,
+    input.to,
+    input.fromChatId,
+    input.chat,
+    input.contact,
+    input.senderId,
+    input.authorId,
+    input.participantId,
+    input.externalUserId,
+  ];
+  for (const text of values.flatMap((value) => possibleWhatsAppIdentityStrings(value))) {
+    if (/@g\.us\b/i.test(text)) continue;
+    const comparable = comparableParticipantId(text);
+    if (comparable) candidates.add(comparable);
+    const userPart = text.split("@")[0] || text;
+    const digits = userPart.replace(/[^\d]/g, "");
+    if (digits) candidates.add(digits);
+  }
+  return candidates;
+}
+
 function whatsappApprovalSenderMatchesHash(input = {}, expectedHash = "") {
   const hash = pickString(expectedHash).toLowerCase();
   if (!/^[a-f0-9]{64}$/.test(hash)) return false;
@@ -73,6 +101,37 @@ function whatsappApprovalRoutedBindingAllowed({ input = {}, chatId = "", threadR
   if (String(binding.connector || "whatsapp") !== "whatsapp") return false;
   if (pickString(binding.chatId) !== pickString(chatId, input.chatId, input.chat?.id, input.fromChatId)) return false;
   return true;
+}
+
+async function whatsappApprovalPriorRoutedBindingAllowed({ input = {}, state = {}, accountId = "", env = process.env } = {}) {
+  const candidates = directWhatsAppParticipantCandidates(input);
+  if (!candidates.size) return false;
+  const recentEvents = [...(state.inboundEvents || [])].reverse().slice(0, 500);
+  const threads = await listThreads(env).catch(() => []);
+  if (!threads.length) return false;
+  for (const event of recentEvents) {
+    if (!event?.chatId || event.ignoredReason || (!event.messageId && !event.threadId)) continue;
+    const eventFrom = comparableParticipantId(pickString(event.from));
+    if (!eventFrom || !candidates.has(eventFrom)) continue;
+    const eventAccountId = pickString(event.accountId);
+    const expectedAccountId = pickString(accountId, input.accountId);
+    if (expectedAccountId && eventAccountId && eventAccountId !== expectedAccountId) continue;
+    const matchingThread = threads.find((thread) => {
+      try {
+        return whatsappInboundThreadMatchesBinding({
+          thread,
+          chatId: pickString(event.chatId),
+          accountId: pickString(expectedAccountId, eventAccountId),
+          from: pickString(event.from),
+          fromMe: false,
+        });
+      } catch {
+        return false;
+      }
+    });
+    if (matchingThread) return true;
+  }
+  return false;
 }
 
 function canonicalWhatsAppEventId(value = "") {
@@ -199,9 +258,15 @@ export async function maybeApprovePairingChallengeFromWhatsApp({
 
   const instance = challenge.instanceId ? await brokerInstance(challenge.instanceId, env).catch(() => null) : null;
   const senderMatchesRoutedThread = whatsappApprovalRoutedBindingAllowed({ input, chatId, threadRoute });
+  const senderMatchesPriorRoutedThread = senderMatchesRoutedThread ? false : await whatsappApprovalPriorRoutedBindingAllowed({
+    input,
+    state,
+    accountId,
+    env,
+  });
   const senderMatchesRegisteredTarget = instance?.whatsappChatHash &&
     whatsappApprovalSenderMatchesHash(input, instance.whatsappChatHash);
-  if (!senderMatchesRegisteredTarget && !senderMatchesRoutedThread) {
+  if (!senderMatchesRegisteredTarget && !senderMatchesRoutedThread && !senderMatchesPriorRoutedThread) {
     const event = await recordSkipped("security_approval_sender_denied", {
       challengeId: challenge.id || challengeId,
       instanceId: challenge.instanceId || null,

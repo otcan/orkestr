@@ -3060,6 +3060,56 @@ test("whatsapp approval command accepts routed direct lid binding for unscoped c
   assert.equal(challenge.approvedBy, "whatsapp");
 });
 
+test("whatsapp approval command accepts direct lid after prior routed group context", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-approve-prior-group-lid-"));
+  const env = externalBridgeEnv(home);
+  const groupChatId = "120363429021603609@g.us";
+  const participantLid = "66378837028965@lid";
+  await createThread({
+    id: "wa-approval-prior-group-lid-thread",
+    name: "WA Approval Prior Group LID",
+    binding: {
+      connector: "whatsapp",
+      chatId: groupChatId,
+      enabled: true,
+      routeEligible: true,
+      allowOtherPeople: true,
+      mirrorToWhatsApp: true,
+      outboundAccountId: "sender",
+    },
+  }, env);
+  const prior = await routeWhatsAppInbound({
+    eventId: "false_120363429021603609@g.us_prior_66378837028965@lid",
+    chatId: groupChatId,
+    accountId: "sender",
+    from: participantLid,
+    author: participantLid,
+    fromMe: false,
+    text: "prior routed message",
+  }, env);
+  const created = await createPairingChallenge({
+    env,
+    request: { headers: { "user-agent": "node-test" }, socket: { remoteAddress: "127.0.0.1" } },
+  });
+
+  const routed = await routeWhatsAppInbound({
+    eventId: "wa-approval-command-direct-lid-after-group-1",
+    chatId: participantLid,
+    accountId: "sender",
+    from: participantLid,
+    author: participantLid,
+    text: `orkestr connect approve ${created.challenge.approveCode}`,
+  }, env);
+  const listed = await listPairingChallenges({ env, includeExpired: true });
+  const challenge = listed.challenges.find((item) => item.id === created.challenge.id);
+
+  assert.equal(prior.threadId, "wa-approval-prior-group-lid-thread");
+  assert.equal(routed.approvedSecurityChallenge, true);
+  assert.equal(routed.threadId, null);
+  assert.equal(challenge.status, "approved");
+  assert.equal(challenge.approvedBy, "whatsapp");
+});
+
 test("whatsapp direct approval command rejects non-target sender", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-approve-denied-"));
   const env = externalBridgeEnv(home);
