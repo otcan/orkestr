@@ -1,170 +1,126 @@
 :host {
   display: block;
   min-height: 100vh;
-  background: #07100c;
-  color: #e5f4df;
+  background: #f7f8f5;
+  color: #111827;
 }
 
 .pairing-shell {
   display: grid;
   min-height: 100vh;
   place-items: center;
-  padding: 28px;
+  padding: 18px;
 }
 
 .pairing-panel {
   display: grid;
-  gap: 18px;
-  width: min(900px, 100%);
-  border: 1px solid rgba(128, 210, 138, 0.22);
+  gap: 14px;
+  width: min(440px, 100%);
+  border: 1px solid #d7ded5;
   border-radius: 8px;
-  background: rgba(4, 10, 6, 0.88);
-  padding: 26px;
+  background: #ffffff;
+  padding: 20px;
 }
 
-.pairing-head,
-.challenge-row {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
+header {
+  display: grid;
+  gap: 4px;
 }
 
-.eyebrow,
-.challenge-row span {
+p,
+h1 {
   margin: 0;
-  color: #8cff9b;
-  font-size: 0.72rem;
-  font-weight: 900;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
 }
 
-h1,
-h2 {
-  margin: 0;
-  letter-spacing: 0;
+p {
+  color: #647064;
+  font-size: 0.82rem;
+  font-weight: 800;
 }
 
 h1 {
-  font-size: clamp(2rem, 5vw, 4rem);
+  font-size: 1.45rem;
+  letter-spacing: 0;
 }
 
-h2 {
-  font-size: 1.1rem;
+.notice {
+  border: 1px solid #d8e7d6;
+  border-radius: 6px;
+  background: #f3fbf1;
+  color: #25452b;
+  padding: 10px;
 }
 
-.pairing-copy,
-.ssh-instructions p,
-.empty-challenge p,
-.challenge-meta {
-  color: #a9bea4;
-  line-height: 1.55;
-  margin: 0;
+.notice.error {
+  border-color: #ffc8bd;
+  background: #fff3f0;
+  color: #8f2418;
 }
 
-.pairing-actions {
+button {
+  min-height: 42px;
+  border: 1px solid #111827;
+  border-radius: 6px;
+  background: #111827;
+  color: #ffffff;
+  font-weight: 800;
+}
+
+button.secondary {
+  border-color: #cfd7cf;
+  background: #ffffff;
+  color: #111827;
+}
+
+.command {
+  display: block;
+  width: 100%;
+  min-height: 54px;
+  border-color: #d7ded5;
+  background: #f7f8f5;
+  color: #111827;
+  text-align: left;
+}
+
+code {
+  display: block;
+  overflow-wrap: anywhere;
+  padding: 0 6px;
+  font-size: 1.02rem;
+  line-height: 1.35;
+}
+
+.status {
   display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-}
-
-.pairing-notice,
-.challenge-box,
-.ssh-instructions,
-.empty-challenge {
-  border: 1px solid rgba(101, 198, 222, 0.24);
-  border-radius: 8px;
-  background: rgba(3, 11, 12, 0.72);
-  padding: 14px;
-}
-
-.pairing-notice {
-  color: #c8f5ff;
-}
-
-.pairing-notice.error {
-  border-color: rgba(255, 116, 96, 0.34);
-  background: rgba(78, 21, 17, 0.62);
-  color: #ffd1c4;
-}
-
-.challenge-box,
-.ssh-instructions,
-.empty-challenge {
-  display: grid;
+  align-items: center;
+  justify-content: space-between;
   gap: 12px;
 }
 
-.challenge-row code {
-  display: block;
-  margin-top: 6px;
-  color: #c8f5ff;
-  font-size: 1rem;
-  overflow-wrap: anywhere;
-}
-
-.challenge-meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px 18px;
-}
-
-em {
-  flex: 0 0 auto;
+.status span {
   border-radius: 999px;
-  color: #d8f9cd;
-  font-size: 0.68rem;
-  font-style: normal;
-  font-weight: 900;
   padding: 4px 8px;
+  background: #eef2ee;
+  font-size: 0.72rem;
+  font-weight: 900;
   text-transform: uppercase;
 }
 
-em.ready {
-  background: rgba(101, 198, 222, 0.18);
-  color: #aeeeff;
+.status span.ready {
+  background: #e7f7ef;
+  color: #12623a;
 }
 
-em.partial {
-  background: rgba(236, 177, 80, 0.18);
-  color: #ffd796;
+.status span.partial {
+  background: #fff6de;
+  color: #765100;
 }
 
-em.bad {
-  background: rgba(255, 116, 96, 0.18);
-  color: #ffc8bd;
+.status span.bad {
+  background: #fff0ed;
+  color: #8f2418;
 }
 
-em.idle {
-  background: rgba(102, 124, 96, 0.28);
-}
-
-ol {
-  display: grid;
-  gap: 6px;
-  margin: 0;
-  padding-left: 20px;
-}
-
-pre {
-  margin: 0;
-  overflow-x: auto;
-  border: 1px solid rgba(128, 210, 138, 0.18);
-  border-radius: 8px;
-  background: #020604;
-  color: #c8f5ff;
-  padding: 12px;
-}
-
-@media (max-width: 700px) {
-  .pairing-shell {
-    place-items: stretch;
-    padding: 16px;
-  }
-
-  .pairing-head,
-  .challenge-row {
-    display: grid;
-  }
+small {
+  color: #647064;
 }

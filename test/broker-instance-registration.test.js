@@ -6,6 +6,7 @@ import path from "node:path";
 import test from "node:test";
 import {
   __brokerInstanceRegistryTestInternals,
+  brokerWhatsAppRelayAccountId,
   encryptBrokerChannelPayload,
   decryptBrokerInstanceRequest,
   ensureBrokerClientRegistration,
@@ -112,6 +113,21 @@ test("broker registry persists instances in sqlite and redacts routing metadata"
   assert.equal(JSON.stringify(listed).includes("+49 176 123456"), false);
   assert.equal(resolved.ok, true);
   assert.equal(resolved.instance.instanceId, registration.instanceId);
+});
+
+test("broker WhatsApp onboarding prefers sender account over responder fallback", () => {
+  assert.equal(brokerWhatsAppRelayAccountId({}, {}), "sender");
+  assert.equal(brokerWhatsAppRelayAccountId({}, {
+    ORKESTR_WHATSAPP_SENDER_ACCOUNT_ID: "tr-sender",
+    ORKESTR_WHATSAPP_RESPONDER_ACCOUNT_ID: "de-responder",
+  }), "tr-sender");
+  assert.equal(brokerWhatsAppRelayAccountId({}, {
+    ORKESTR_BROKER_WHATSAPP_ONBOARDING_ACCOUNT_ID: "onboarding-relay",
+    ORKESTR_WHATSAPP_SENDER_ACCOUNT_ID: "tr-sender",
+  }), "onboarding-relay");
+  assert.equal(brokerWhatsAppRelayAccountId({ relayAccountId: "instance-relay" }, {
+    ORKESTR_BROKER_WHATSAPP_ONBOARDING_ACCOUNT_ID: "onboarding-relay",
+  }), "instance-relay");
 });
 
 test("broker client registration cache is scoped to the declared WhatsApp number", async () => {

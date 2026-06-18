@@ -87,6 +87,7 @@ test("tenant VM demo cloud-init includes local Orkestr port for the notifier", a
     demoMode: true,
     whatsappNumber: "+49 176 123456",
     brokerBaseUrl: "https://connect.example.test",
+    entryBaseUrl: "https://orkestr.example.test",
   }, env);
   const manifest = JSON.parse(plan.manifest);
   const cloudInitSecret = manifest.items.find((item) => item.kind === "Secret" && item.metadata.name === "demo-vm-cloudinit");
@@ -100,6 +101,7 @@ test("tenant VM demo cloud-init includes local Orkestr port for the notifier", a
   assert.match(envFile, /^ORKESTR_PORT='19812'$/m);
   assert.match(envFile, /^PORT='19812'$/m);
   assert.match(envFile, /^ORKESTR_DEMO_WHATSAPP_NUMBER='\+49 176 123456'$/m);
+  assert.match(envFile, /^ORKESTR_DEMO_ENTRY_BASE_URL='https:\/\/orkestr\.example\.test'$/m);
   assert.doesNotMatch(envFile, /whatsappChatHash|chatId/i);
 });
 

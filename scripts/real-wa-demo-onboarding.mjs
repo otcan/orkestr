@@ -80,7 +80,7 @@ function usage() {
     "",
     "Runs the connect onboarding acceptance path: Orkestr sends the first WhatsApp",
     "message through the broker WhatsApp router to the target user and asks them",
-    "to complete Codex login/sign-in in setup.",
+    "to open the setup link and approve the short connect command.",
     "",
     "Required with --execute:",
     "  --phone NUMBER           Direct target user's WhatsApp phone number.",
@@ -278,11 +278,11 @@ export async function runRealWhatsAppDemoOnboarding(options) {
     result.sentMessageId = [...sentIds][0] || clean(sentPayload?.id);
     result.observedMessageId = clean(observed?.id);
     result.prompt = {
-      asksForCodexLogin: /Codex login\/sign-in/i.test(text),
+      asksForConnectApproval: /orkestr connect approve/i.test(text),
       includesSetupUrl: text.includes(setup.setupUrl),
-      challengeGated: /browser-pairing challenge/i.test(text),
+      challengeGated: /connect approve/i.test(text),
     };
-    result.ok = Boolean(result.observedMessageId) && result.prompt.asksForCodexLogin && result.prompt.includesSetupUrl && Boolean(result.setupUrlCheck?.status);
+    result.ok = Boolean(result.observedMessageId) && result.prompt.asksForConnectApproval && result.prompt.includesSetupUrl && Boolean(result.setupUrlCheck?.status);
     result.finishedAt = new Date().toISOString();
     return result;
   } catch (error) {

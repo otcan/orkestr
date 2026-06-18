@@ -287,6 +287,7 @@ test("browser pairing protects API routes when auth is required", async () => {
     }));
     assert.equal(challenge.ok, true);
     assert.match(challenge.challengeId, /^[A-Za-z0-9_-]{20,}$/);
+    assert.match(challenge.challenge.approveCode, /^[A-Z0-9]{4,8}$/);
     assert.equal(challenge.challenge.instanceId, "demo-vm-001");
     assert.equal(challenge.code, undefined);
 
@@ -304,12 +305,12 @@ test("browser pairing protects API routes when auth is required", async () => {
     });
     assert.equal(unapprovedPair.status, 409);
 
-    await approvePairingChallenge(challenge.challengeId);
+    await approvePairingChallenge(challenge.challenge.approveCode);
 
     const pairResponse = await fetch(`${baseUrl}/api/setup/security/pair`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ challengeId: challenge.challengeId }),
+      body: JSON.stringify({ challengeId: challenge.challenge.approveCode }),
     });
     assert.equal(pairResponse.status, 200);
     const pairPayload = await json(pairResponse.clone());

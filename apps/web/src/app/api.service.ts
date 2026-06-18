@@ -551,6 +551,7 @@ export interface SecuritySessionListResponse {
 
 export interface SecurityChallenge {
   id: string;
+  approveCode?: string;
   status: string;
   createdAt: string;
   expiresAt: string;

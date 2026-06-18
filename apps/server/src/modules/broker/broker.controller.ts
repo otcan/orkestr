@@ -2,6 +2,7 @@ import { Body, Controller, Get, HttpCode, Param, Post, Req } from "@nestjs/commo
 import crypto from "node:crypto";
 import {
   decryptBrokerInstanceRequest,
+  brokerWhatsAppRelayAccountId,
   heartbeatBrokerInstance,
   listBrokerInstances,
   registerBrokerInstance,
@@ -25,10 +26,6 @@ function sha256(value: string): string {
 function whatsAppChatIdFromNumber(value: unknown): string {
   const digits = clean(value).replace(/[^\d]/g, "");
   return digits ? `${digits}@c.us` : "";
-}
-
-function brokerWhatsAppAccountId(record: any): string {
-  return clean(record.relayAccountId || process.env.ORKESTR_BROKER_WHATSAPP_RELAY_ACCOUNT_ID || process.env.ORKESTR_WHATSAPP_RESPONDER_ACCOUNT_ID || "responder");
 }
 
 function assertRegisteredWhatsAppNumber(record: any, payload: any): string {
@@ -98,7 +95,7 @@ export class BrokerController {
     const chatId = assertRegisteredWhatsAppNumber(record, payload);
     const text = clean(payload.text);
     if (!text) throw httpError("broker_whatsapp_text_required", 400);
-    const accountId = brokerWhatsAppAccountId(record);
+    const accountId = brokerWhatsAppRelayAccountId(record, process.env);
     const sent = await brokerCall(() => sendWhatsAppText({
       accountId,
       chatId,
@@ -117,7 +114,7 @@ export class BrokerController {
   ) {
     const { record, payload } = await brokerCall(() => decryptBrokerInstanceRequest(instanceId, body, process.env));
     const chatId = assertRegisteredWhatsAppNumber(record, payload);
-    const accountId = brokerWhatsAppAccountId(record);
+    const accountId = brokerWhatsAppRelayAccountId(record, process.env);
     const history = await brokerCall(() => getWhatsAppChatMessages({
       accountId,
       chatId,

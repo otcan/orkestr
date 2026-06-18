@@ -81,26 +81,23 @@ test("pairing required page generates and consumes a challenge in a real browser
     page.on("pageerror", (error) => errors.push(error.message || String(error)));
 
     await page.goto(`${baseUrl}/thread/Test`, { waitUntil: "networkidle2" });
-    await page.waitForFunction(() => document.body.innerText.includes("Pairing Required"));
-
-    await page.click("button");
+    await page.waitForFunction(() => document.body.innerText.includes("Approve this browser"));
     await page.waitForFunction(
       () => {
         const text = document.body.innerText.toLowerCase();
-        return text.includes("challenge id") && !text.includes("no challenge yet");
+        return text.includes("orkestr connect approve") && text.includes("pending");
       },
       { timeout: 10_000 },
     );
 
-    const challengeId = await page.$eval(".challenge-box code", (node) => node.textContent.trim());
+    const command = await page.$eval(".command code", (node) => node.textContent.trim());
+    const challengeId = command.split(/\s+/).at(-1) || "";
     const bodyAfterChallenge = await page.$eval("body", (node) => node.innerText);
-    const firstButtonText = await page.$eval("button", (node) => node.textContent.trim());
-    assert.match(challengeId, /^[A-Za-z0-9_-]{20,}$/);
-    assert.match(bodyAfterChallenge, new RegExp(`orkestr security approve ${challengeId}`));
-    assert.equal(firstButtonText, "Generate challenge");
+    assert.match(challengeId, /^[A-Z0-9]{4,8}$/);
+    assert.match(bodyAfterChallenge, new RegExp(`orkestr connect approve ${challengeId}`));
 
     await approvePairingChallenge(challengeId);
-    await page.waitForFunction(() => !document.body.innerText.includes("Pairing Required"), { timeout: 15_000 });
+    await page.waitForFunction(() => !document.body.innerText.includes("Approve this browser"), { timeout: 15_000 });
     assert.equal(new URL(page.url()).pathname, "/");
     assert.deepEqual(errors, []);
   } finally {

@@ -157,6 +157,10 @@ function publicSetupUrlOverride(env = process.env) {
 
 function publicBaseUrlOverride(env = process.env) {
   return firstValue(
+    env.ORKESTR_DEMO_ENTRY_BASE_URL,
+    env.ORKESTR_PUBLIC_SITE_URL,
+    env.ORKESTR_PRIMARY_PUBLIC_URL,
+    env.ORKESTR_PRIMARY_DOMAIN,
     env.ORKESTR_CONNECT_PUBLIC_BASE_URL,
     env.ORKESTR_CONNECT_BASE_URL,
     env.ORKESTR_DEMO_PUBLIC_BASE_URL,
@@ -190,17 +194,10 @@ function positiveTimeoutMs(value, fallback) {
 
 export function readyMessage({ setupUrl }) {
   return [
-    "Orkestr connect setup is ready.",
-    "",
-    "Please open this challenge-gated connect link and complete Codex login/sign-in:",
+    "Orkestr setup:",
     setupUrl,
     "",
-    "Steps:",
-    "1. Complete Codex login/sign-in in setup.",
-    "2. Keep WhatsApp on Orkestr relay, or switch to your own relay.",
-    "3. Start the orkest thread.",
-    "",
-    "Orkestr will show a temporary browser-pairing challenge before setup opens.",
+    "Open it, then paste the one shown `orkestr connect approve ...` command here or in a terminal.",
   ].join("\n");
 }
 

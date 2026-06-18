@@ -1,4 +1,5 @@
 const approveCommandPrefixes = [
+  "orkestr connect approve",
   "orkestr security approve",
   "approve challenge",
   "/approve challenge",
@@ -9,13 +10,14 @@ function compactCommand(value) {
 }
 
 function approveCommandMatch(value) {
-  return compactCommand(value).match(/^(?:sudo\s+)?(?:orkestr\s+security\s+approve|\/?approve\s+challenge:?)\s+([A-Za-z0-9_-]{20,})$/i);
+  return compactCommand(value).match(/^(?:sudo\s+)?(?:orkestr\s+(?:connect|security)\s+approve|\/?approve\s+challenge:?)\s+([A-Za-z0-9_-]{4,})$/i);
 }
 
 function pairingApprovalPasteContext(value) {
   const text = String(value || "").toLowerCase();
   return (
     text.includes("pairing required") ||
+    text.includes("orkestr connect approve") ||
     text.includes("approve from ssh") ||
     (text.includes("challenge id") && text.includes("orkestr security approve"))
   );

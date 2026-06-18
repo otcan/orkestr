@@ -42,6 +42,21 @@ function brokerWhatsAppChatHash(body = {}) {
   );
   return chatId ? sha256(chatId) : "";
 }
+export function brokerWhatsAppRelayAccountId(record = {}, env = process.env) {
+  return clean(
+    record.relayAccountId ||
+      env.ORKESTR_BROKER_WHATSAPP_ONBOARDING_ACCOUNT_ID ||
+      env.ORKESTR_BROKER_WHATSAPP_RELAY_ACCOUNT_ID ||
+      env.ORKESTR_WHATSAPP_SENDER_ACCOUNT_ID ||
+      env.WHATSAPP_SENDER_ACCOUNT_ID ||
+      env.ORKESTR_WHATSAPP_INBOUND_ACCOUNT_ID ||
+      env.WHATSAPP_INBOUND_ACCOUNT_ID ||
+      env.ORKESTR_WHATSAPP_SENDER_ROLE ||
+      env.WHATSAPP_SENDER_ROLE ||
+      env.ORKESTR_WHATSAPP_RESPONDER_ACCOUNT_ID ||
+      "sender",
+  );
+}
 function safeEqual(left, right) {
   const leftBuffer = Buffer.from(String(left || ""), "utf8");
   const rightBuffer = Buffer.from(String(right || ""), "utf8");

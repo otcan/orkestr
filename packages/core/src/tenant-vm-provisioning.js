@@ -88,6 +88,7 @@ function runtimeEnv(input = {}, env = process.env) {
     PORT: demoEnabled ? source.PORT || port : "",
     ORKESTR_DEMO_WHATSAPP_NUMBER: demoEnabled ? input.whatsappNumber || input.demoWhatsappNumber || env.ORKESTR_DEMO_WHATSAPP_NUMBER : "",
     ORKESTR_DEMO_BROKER_BASE_URL: demoEnabled ? input.brokerBaseUrl || input.demoBrokerBaseUrl || env.ORKESTR_DEMO_BROKER_BASE_URL || env.ORKESTR_BROKER_BASE_URL : "",
+    ORKESTR_DEMO_ENTRY_BASE_URL: demoEnabled ? input.entryBaseUrl || input.publicEntryBaseUrl || env.ORKESTR_DEMO_ENTRY_BASE_URL || env.ORKESTR_PUBLIC_SITE_URL || env.ORKESTR_PRIMARY_PUBLIC_URL : "",
     ORKESTR_CONNECT_PUBLIC_BASE_URL: demoEnabled ? input.connectPublicBaseUrl || input.publicConnectBaseUrl || env.ORKESTR_CONNECT_PUBLIC_BASE_URL : "",
     ORKESTR_DEMO_BROKER_REGISTRATION_TOKEN: demoEnabled ? input.brokerRegistrationToken || env.ORKESTR_DEMO_BROKER_REGISTRATION_TOKEN || env.ORKESTR_BROKER_REGISTRATION_TOKEN : "",
     ORKESTR_INSTANCE_DESKTOPS_PROVISIONED: demoEnabled ? input.instanceDesktopsProvisioned ?? env.ORKESTR_INSTANCE_DESKTOPS_PROVISIONED ?? "0" : "",

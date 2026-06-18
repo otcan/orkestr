@@ -69,6 +69,7 @@ test("demo VM notifier sends one broker-routed readiness message and seeds relay
     ORKESTR_DEMO_WHATSAPP_NUMBER: "+49 176 123456",
     ORKESTR_DEMO_INSTANCE_ID: "orkestr-ui",
     ORKESTR_DEMO_SETUP_URL: "http://127.0.0.1:3000/setup",
+    ORKESTR_DEMO_ENTRY_BASE_URL: "https://orkestr.example.test",
     ORKESTR_CONNECT_PUBLIC_BASE_URL: "https://connect.orkestr.de",
     ORKESTR_DEMO_CLOUDFLARE_FALLBACK: "1",
     ORKESTR_DEMO_NOTIFY_HEALTH_TIMEOUT_MS: "0",
@@ -108,7 +109,7 @@ test("demo VM notifier sends one broker-routed readiness message and seeds relay
   assert.equal(settings.connectors.whatsapp.bridgeMode, "relay");
   assert.equal(state.sent, true);
   assert.equal(state.state, "sent");
-  assert.equal(state.setupUrl, `https://connect.orkestr.de/i/${BROKER_UUID}/setup`);
+  assert.equal(state.setupUrl, `https://orkestr.example.test/i/${BROKER_UUID}/setup`);
   assert.equal(state.setupUrlSource, "public_base_url");
   assert.equal(state.instanceId, BROKER_UUID);
   assert.equal(state.targetKey.length, 64);
