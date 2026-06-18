@@ -52,6 +52,10 @@ First run:
 3. Start the default `orkest` thread.
 4. Orkestr starts Virtual Desk for that thread.
 
+For WhatsApp deployments with more than one phone/account, keep the stable
+routing account separate from explicit skill-only accounts. See
+[WhatsApp Account Operations](docs/whatsapp-account-operations.md).
+
 ### Private VM Demo
 
 The demo does not need a permanent public app URL. Run Orkestr on a VM and
@@ -208,6 +212,8 @@ Default remote rules:
 - keep browser pairing enabled
 - keep real credentials, browser profiles, WhatsApp sessions, private prompts,
   and hostnames out of this repo
+- keep skill-only WhatsApp accounts out of Orkestr router account env and
+  bindings
 - use secure-input or host secret storage for secret values
 
 See [SECURITY.md](SECURITY.md).

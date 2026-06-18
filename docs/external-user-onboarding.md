@@ -49,6 +49,9 @@ Only continue after the user explicitly accepts the beta terms.
    OAuth apps.
 9. Send a real WhatsApp `hi` and verify the assistant gives a useful reply.
 
+Use only routed WhatsApp accounts for this flow. Operator or test phones that
+exist as skill-only accounts must not be added to the user's router binding.
+
 Generate the provisioning checklist:
 
 ```bash

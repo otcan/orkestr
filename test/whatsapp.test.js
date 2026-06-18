@@ -723,6 +723,170 @@ test("local whatsapp inbound forwarding posts mapped chats", async () => {
   assert.equal(calls[0].body.chatId, "chat-forward@g.us");
 });
 
+test("local whatsapp forwarded security approval sends visible confirmation", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-forward-approval-notice-"));
+  const chatId = "491700000000@c.us";
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "sender",
+    ORKESTR_WHATSAPP_SEND_CONFIRMATION_REQUIRED: "0",
+    ORKESTR_WHATSAPP_INBOUND_FORWARD_MAP_JSON: JSON.stringify({
+      [chatId]: "http://127.0.0.1:19812/api/connectors/whatsapp/inbound",
+    }),
+    ORKESTR_WHATSAPP_INBOUND_FORWARD_TOKEN: "forward-secret",
+  };
+  const sent = [];
+  const fetchCalls = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url, options) => {
+    fetchCalls.push({ url: String(url), body: JSON.parse(options.body) });
+    return response({
+      ok: true,
+      approvedSecurityChallenge: true,
+      challenge: { id: "challenge-one", status: "approved" },
+    }, true, 202);
+  };
+
+  try {
+    const result = await handleInboundMessage("sender", {
+      id: { _serialized: `false_${chatId}_approval-one`, remote: chatId },
+      fromMe: false,
+      from: chatId,
+      to: "491700000999@c.us",
+      body: "orkestr connect approve ABC123",
+      timestamp: 1_780_000_000,
+    }, env, {
+      client: {
+        async sendMessage(to, body) {
+          sent.push({ to, body });
+          return { id: { _serialized: `true_${chatId}_approval-notice` } };
+        },
+      },
+    });
+
+    assert.equal(fetchCalls.length, 1);
+    assert.equal(fetchCalls[0].body.text, "orkestr connect approve ABC123");
+    assert.equal(result.forwarded, true);
+    assert.equal(result.routed.approvedSecurityChallenge, true);
+    assert.equal(result.approvalNotice.sent, true);
+    assert.deepEqual(sent, [{
+      to: chatId,
+      body: "Orkestr setup approved. Return to the setup page to continue.",
+    }]);
+  } finally {
+    globalThis.fetch = originalFetch;
+    await resetLocalWhatsAppBridgeForTest(env);
+  }
+});
+
+test("local whatsapp approval commands can forward to a security approval target without forwarding chat traffic", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-forward-approval-target-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_SECURITY_APPROVAL_FORWARD_URL: "http://127.0.0.1:19812/api/connectors/whatsapp/inbound",
+    ORKESTR_WHATSAPP_SECURITY_APPROVAL_FORWARD_TOKEN_CHAT_ID: "491700000000@c.us",
+    ORKESTR_WHATSAPP_INBOUND_FORWARD_TOKEN_MAP_JSON: JSON.stringify({
+      "491700000000@c.us": "forward-secret",
+    }),
+  };
+  const calls = [];
+
+  const forwarded = await forwardLocalWhatsAppInbound({
+    eventId: "event-approval-forward",
+    chatId: "group-main@g.us",
+    from: "491700000000@c.us",
+    accountId: "sender",
+    text: "orkestr connect approve ZFZBRW",
+  }, env, async (url, options) => {
+    calls.push({ url: String(url), options, body: JSON.parse(options.body) });
+    return response({
+      ok: true,
+      approvedSecurityChallenge: true,
+      challenge: { id: "challenge-public", status: "approved" },
+    }, true, 202);
+  });
+  const skipped = await forwardLocalWhatsAppInbound({
+    eventId: "event-normal-chat",
+    chatId: "group-main@g.us",
+    from: "491700000000@c.us",
+    accountId: "sender",
+    text: "hi",
+  }, env, async () => {
+    throw new Error("normal group chat should not use the security approval forward target");
+  });
+
+  assert.equal(forwarded.forwarded, true);
+  assert.equal(forwarded.targetSource, "security_approval_forward");
+  assert.equal(forwarded.routeMode, "security_approval");
+  assert.equal(forwarded.payload.approvedSecurityChallenge, true);
+  assert.equal(skipped, null);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, "http://127.0.0.1:19812/api/connectors/whatsapp/inbound");
+  assert.equal(calls[0].options.headers.authorization, "Bearer forward-secret");
+  assert.equal(calls[0].body.chatId, "group-main@g.us");
+  assert.equal(calls[0].body.text, "orkestr connect approve ZFZBRW");
+});
+
+test("local whatsapp forwarded unconfigured codex target sends setup notice", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-forward-codex-notice-"));
+  const chatId = "491700000001@c.us";
+  const setupUrl = "https://orkestr.example.test/i/demo-instance/setup";
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "sender",
+    ORKESTR_WHATSAPP_SEND_CONFIRMATION_REQUIRED: "0",
+    ORKESTR_WHATSAPP_INBOUND_FORWARD_MAP_JSON: JSON.stringify({
+      [chatId]: "http://127.0.0.1:19812/api/connectors/whatsapp/inbound",
+    }),
+    ORKESTR_WHATSAPP_INBOUND_FORWARD_SETUP_URL_MAP_JSON: JSON.stringify({
+      [chatId]: setupUrl,
+    }),
+    ORKESTR_WHATSAPP_INBOUND_FORWARD_TOKEN: "forward-secret",
+  };
+  const sent = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => response({
+    ok: false,
+    error: "whatsapp_target_required",
+    routingFailure: {
+      code: "whatsapp_target_required",
+      capability: "whatsapp",
+      userFacingCategory: "routing",
+      safeMessage: "This WhatsApp chat is not connected to a thread.",
+    },
+  }, false, 400);
+
+  try {
+    const result = await handleInboundMessage("sender", {
+      id: { _serialized: `false_${chatId}_codex-notice`, remote: chatId },
+      fromMe: false,
+      from: chatId,
+      to: "491700000999@c.us",
+      body: "hi",
+      timestamp: 1_780_000_000,
+    }, env, {
+      client: {
+        async sendMessage(to, body) {
+          sent.push({ to, body });
+          return { id: { _serialized: `true_${chatId}_codex-notice` } };
+        },
+      },
+    });
+
+    assert.equal(result.error, "target_codex_not_configured");
+    assert.equal(result.routingFailure.code, "target_codex_not_configured");
+    assert.equal(result.routingFailure.setupUrl, setupUrl);
+    assert.equal(result.noticeSent, true);
+    assert.deepEqual(sent, [{
+      to: chatId,
+      body: `This Orkestr VM is not ready for chat yet. Open ${setupUrl} and enable Codex on the VM, then resend your message.`,
+    }]);
+  } finally {
+    globalThis.fetch = originalFetch;
+    await resetLocalWhatsAppBridgeForTest(env);
+  }
+});
+
 test("local whatsapp recovery notifies chat when tenant sanitizer blocks inbound", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-sanitizer-notice-"));
   const chatId = "wa-group-alpha@g.us";
@@ -837,16 +1001,16 @@ test("local whatsapp bridge flags session roots that already include LocalAuth c
   const env = {
     ORKESTR_HOME: home,
     ORKESTR_WHATSAPP_ACCOUNT_IDS: "responder",
-    ORKESTR_WHATSAPP_ACCOUNT_CLIENT_IDS: "responder:codex-whatsapp-openclaw",
-    ORKESTR_WHATSAPP_ACCOUNT_SESSION_ROOTS: "responder:/state/session-codex-whatsapp-openclaw",
+    ORKESTR_WHATSAPP_ACCOUNT_CLIENT_IDS: "responder:codex-whatsapp-example",
+    ORKESTR_WHATSAPP_ACCOUNT_SESSION_ROOTS: "responder:/state/session-codex-whatsapp-example",
   };
 
   const bridgeStatus = await getLocalWhatsAppBridgeStatus(env);
   const account = bridgeStatus.accounts[0];
 
   assert.equal(account.accountId, "responder");
-  assert.equal(account.sessionRoot, "/state/session-codex-whatsapp-openclaw");
-  assert.equal(account.localAuthSessionDir, "/state/session-codex-whatsapp-openclaw/session-codex-whatsapp-openclaw");
+  assert.equal(account.sessionRoot, "/state/session-codex-whatsapp-example");
+  assert.equal(account.localAuthSessionDir, "/state/session-codex-whatsapp-example/session-codex-whatsapp-example");
   assert.equal(account.sessionRootAlreadyIncludesClient, true);
 });
 
@@ -3007,7 +3171,7 @@ test("whatsapp approval command accepts routed group binding for registered targ
   const env = externalBridgeEnv(home);
   const instanceId = "instance-approve-group-1";
   const whatsappChatId = "491700000001@c.us";
-  const groupChatId = "120363429021603609@g.us";
+  const groupChatId = "120363400000000000@g.us";
   await writeBrokerInstance(env, { instanceId, whatsappChatId });
   await createThread({
     id: "wa-approval-group-thread",
@@ -3032,7 +3196,7 @@ test("whatsapp approval command accepts routed group binding for registered targ
     eventId: "wa-approval-command-group-1",
     chatId: groupChatId,
     accountId: "sender",
-    from: "66378837028965@lid",
+    from: "11111111111111@lid",
     text: `orkestr connect approve ${created.challenge.approveCode}`,
   }, env);
   const listed = await listPairingChallenges({ env, includeExpired: true });
@@ -3047,7 +3211,7 @@ test("whatsapp approval command accepts routed group binding for registered targ
 test("whatsapp approval command accepts routed direct lid binding for unscoped challenge", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-approve-lid-"));
   const env = externalBridgeEnv(home);
-  const chatId = "66378837028965@lid";
+  const chatId = "11111111111111@lid";
   await createThread({
     id: "wa-approval-lid-thread",
     name: "WA Approval LID",
@@ -3084,8 +3248,8 @@ test("whatsapp approval command accepts routed direct lid binding for unscoped c
 test("whatsapp approval command accepts direct lid after prior routed group context", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-approve-prior-group-lid-"));
   const env = externalBridgeEnv(home);
-  const groupChatId = "120363429021603609@g.us";
-  const participantLid = "66378837028965@lid";
+  const groupChatId = "120363400000000000@g.us";
+  const participantLid = "11111111111111@lid";
   await createThread({
     id: "wa-approval-prior-group-lid-thread",
     name: "WA Approval Prior Group LID",
@@ -3100,7 +3264,7 @@ test("whatsapp approval command accepts direct lid after prior routed group cont
     },
   }, env);
   const prior = await routeWhatsAppInbound({
-    eventId: "false_120363429021603609@g.us_prior_66378837028965@lid",
+    eventId: "false_120363400000000000@g.us_prior_11111111111111@lid",
     chatId: groupChatId,
     accountId: "sender",
     from: participantLid,

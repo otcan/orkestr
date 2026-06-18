@@ -23,6 +23,11 @@ not route eligible, or looks like a normal production/project chat. Passing
 `--allow-production-binding` is an explicit escape hatch for attended emergency
 runs only.
 
+Do not use a skill-only WhatsApp account as a routed responder account. A
+skill-only account may be used for attended side checks, but it must stay out of
+Orkestr router bindings and release readiness gates. See
+[WhatsApp Account Operations](whatsapp-account-operations.md).
+
 For the private VM demo acceptance path, use
 `npm run e2e:whatsapp-demo-onboarding`. That test is intentionally
 Orkestr-initiated: it sends the first message from the serving/responder
