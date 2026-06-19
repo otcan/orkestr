@@ -50,6 +50,7 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
   private poller?: ReturnType<typeof setInterval>;
   private outlookPoller?: ReturnType<typeof setInterval>;
   private codexAuthPoller?: ReturnType<typeof setInterval>;
+  private compactCodexOpenTimer?: ReturnType<typeof setTimeout>;
 
   @Input() mode: SetupPageMode = "onboarding";
   @Input() setupSection = "";
@@ -168,6 +169,7 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
     if (this.poller) clearInterval(this.poller);
     if (this.outlookPoller) clearInterval(this.outlookPoller);
     if (this.codexAuthPoller) clearInterval(this.codexAuthPoller);
+    if (this.compactCodexOpenTimer) clearTimeout(this.compactCodexOpenTimer);
   }
 
   async load(showBusy = true): Promise<void> {
@@ -339,7 +341,7 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
       if (Date.now() > expiresAtMs) {
         if (this.codexAuthPoller) clearInterval(this.codexAuthPoller);
         this.codexAuthPoller = undefined;
-        this.notice = "Codex sign-in expired. Start again.";
+        this.notice = "Sign-in expired. Open Codex sign-in again.";
         this.renderNow();
         return;
       }
@@ -720,12 +722,12 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
   }
 
   pageTitle(): string {
-    if (this.compactSetupMode()) return "Connect Codex";
+    if (this.compactSetupMode()) return "Sign in to Codex";
     return this.isSetupMode() ? "Setup" : "Set up Orkestr";
   }
 
   pageSummary(): string {
-    if (this.compactSetupMode()) return "Sign in to Codex so this Orkestr instance can start coding threads.";
+    if (this.compactSetupMode()) return "This Orkestr instance needs a Codex login before it can start coding threads.";
     return this.isSetupMode()
       ? "Check secure access, accounts, runtimes, and optional connectors after the installer has prepared the local Orkestr runtime."
       : "Start with Codex and WhatsApp. Add mail, timers, and managed browser desktops only when you need those capabilities.";
@@ -747,6 +749,23 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
   closeLabel(): string {
     if (this.compactSetupMode()) return "Open Orkestr";
     return this.isSetupMode() ? "Back to Orkestr" : "Open Orkestr";
+  }
+
+  compactCodexTitle(): string {
+    if (this.agentRuntimeReady()) return "Codex is signed in";
+    return "Codex login required";
+  }
+
+  compactCodexSummary(): string {
+    if (this.agentRuntimeReady()) return "Opening Orkestr.";
+    if (!this.codexCommandAvailable()) return "Codex is not ready in this runtime yet.";
+    return "Open the Codex sign-in page and finish login. Orkestr will continue automatically.";
+  }
+
+  codexAuthStatusText(): string {
+    if (this.agentRuntimeReady()) return "Codex connected. Opening Orkestr.";
+    if (this.codexDeviceCode) return "Waiting for Codex sign-in...";
+    return "";
   }
 
   timezoneDone(): boolean {
@@ -1180,7 +1199,9 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
       this.codexAuthUrl = result.authUrl || "";
       this.codexAuthExpiresAt = result.expiresAt || "";
       if (this.codexAuthUrl) globalThis.open?.(this.codexAuthUrl, "_blank", "noopener,noreferrer");
-      this.notice = this.codexDeviceCode ? "Codex sign-in opened. Enter the device code in the browser." : "Codex sign-in started.";
+      this.notice = this.compactSetupMode()
+        ? "Waiting for Codex sign-in..."
+        : this.codexDeviceCode ? "Codex sign-in opened. Enter the device code in the browser." : "Codex sign-in started.";
       this.error = "";
       await this.load(false);
       this.startCodexAuthPolling(this.codexAuthExpiresAt);
@@ -1202,9 +1223,20 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
       this.codexDeviceCode = "";
       this.codexAuthUrl = "";
       this.codexAuthExpiresAt = "";
-      this.notice = this.isSetupMode() ? "Codex connected. You can open Orkestr when ready." : "Codex connected. Continue setup.";
+      this.notice = this.compactSetupMode()
+        ? "Codex connected. Opening Orkestr."
+        : this.isSetupMode() ? "Codex connected. You can open Orkestr when ready." : "Codex connected. Continue setup.";
       this.error = "";
       if (this.activeStep === "codex") await this.loadCodexAppServer(false);
+      if (this.compactSetupMode()) {
+        if (!this.compactCodexOpenTimer) {
+          this.compactCodexOpenTimer = setTimeout(() => {
+            this.compactCodexOpenTimer = undefined;
+            this.openApp();
+          }, 600);
+        }
+        return;
+      }
       if (!this.isSetupMode() && !this.isLastStep()) this.nextStep();
     } catch (error) {
       this.error = this.errorText(error);
