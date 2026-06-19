@@ -245,6 +245,23 @@
   min-height: 0;
 }
 
+.compact-codex-copy {
+  display: grid;
+  gap: 8px;
+}
+
+.compact-codex-copy p,
+.compact-codex-next {
+  max-width: 720px;
+  color: #a9bea4;
+  line-height: 1.5;
+  margin: 0;
+}
+
+.compact-codex-copy p:first-child {
+  color: #d7e7ce;
+}
+
 .codex-device-code {
   display: grid;
   justify-items: start;

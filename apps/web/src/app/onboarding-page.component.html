@@ -352,7 +352,12 @@
         @if (compactSetupMode()) {
           <section class="setup-form compact-codex-setup">
             <h3>{{ compactCodexTitle() }}</h3>
-            <p>{{ compactCodexSummary() }}</p>
+            <div class="compact-codex-copy">
+              <p>Orkestr starts coding threads through the Codex CLI on this VM. To do that, this VM needs a Codex login.</p>
+              <p>The normal Codex browser login opens a callback on the VM itself. Because you are approving this from another browser, Orkestr uses Codex device-code login instead.</p>
+              <p>The alternative is to configure Codex on the VM yourself with an API key or access token.</p>
+              <p>Device-code login must be enabled in ChatGPT security settings.</p>
+            </div>
             @if (codexCommandAvailable()) {
               <div class="button-row">
                 <button
@@ -367,6 +372,7 @@
               <div class="command-box">{{ codexCommandUnavailableHint() }}</div>
             }
             @if (codexDeviceCode) {
+              <p class="compact-codex-next">Enter this code on the OpenAI sign-in page. Orkestr already tried to copy it.</p>
               <button class="codex-device-code" type="button" (click)="copyCodexDeviceCode()" [attr.aria-label]="'Copy Codex device code ' + codexDeviceCode">
                 <span>{{ codexDeviceCodeCopied ? "Code copied" : "Copy code" }}</span>
                 <strong>{{ codexDeviceCode }}</strong>

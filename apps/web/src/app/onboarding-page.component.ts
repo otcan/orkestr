@@ -756,7 +756,7 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
 
   compactCodexTitle(): string {
     if (this.agentRuntimeReady()) return "Codex is signed in";
-    return "Codex login required";
+    return "Connect Codex to this VM";
   }
 
   compactCodexSummary(): string {
