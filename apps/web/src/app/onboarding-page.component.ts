@@ -197,6 +197,7 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
         this.activeStep = this.firstOpenStep();
         this.stepInitialized = true;
       }
+      this.maybeLeaveCompletedCompactSetup();
       this.error = "";
     } catch (error) {
       this.error = this.errorText(error);
@@ -767,6 +768,15 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
     if (this.agentRuntimeReady()) return "Codex connected. Opening Orkestr.";
     if (this.codexDeviceCode) return "Waiting for Codex sign-in...";
     return "";
+  }
+
+  private maybeLeaveCompletedCompactSetup(): void {
+    if (!this.compactSetupMode() || !this.agentRuntimeReady() || this.compactCodexOpenTimer) return;
+    this.notice = "Codex connected. Opening Orkestr.";
+    this.compactCodexOpenTimer = setTimeout(() => {
+      this.compactCodexOpenTimer = undefined;
+      this.openApp();
+    }, 400);
   }
 
   timezoneDone(): boolean {
