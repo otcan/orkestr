@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { brokerInstance } from "../../core/src/broker-instance-registry.js";
+import { brokerInstance, brokerWhatsAppRelayAccountId } from "../../core/src/broker-instance-registry.js";
 import { ensureRouterTurn, recordRouterTraceEvent } from "../../core/src/router-traces.js";
 import { rawSecurityApproveChallengeId } from "../../core/src/raw-terminal-commands.js";
 import { approvePairingChallenge, getPairingChallenge } from "../../core/src/security.js";
@@ -7,6 +7,7 @@ import { listThreads } from "../../core/src/threads.js";
 import { appendEvent } from "../../storage/src/store.js";
 import { stripWhatsAppDebugFooter } from "./whatsapp-formatting.js";
 import { comparableParticipantId, whatsappBindingIsRouteEligible, whatsappInboundThreadMatchesBinding } from "./whatsapp-inbound-routing.js";
+import { upsertWhatsAppThreadBinding } from "./whatsapp-account-bindings.js";
 
 function pickString(...values) {
   for (const value of values) {
@@ -111,6 +112,147 @@ function whatsappApprovalBrokeredUnscopedAllowed({ input = {}, challenge = {}, e
   if (challenge?.instanceId) return false;
   if (!truthy(env.ORKESTR_WHATSAPP_SECURITY_APPROVAL_ALLOW_BROKERED_UNSCOPED || env.WHATSAPP_SECURITY_APPROVAL_ALLOW_BROKERED_UNSCOPED)) return false;
   return Boolean(input.machineAuthContext);
+}
+
+function envThreadCandidates(env = process.env) {
+  return [
+    env.ORKESTR_BROKER_WHATSAPP_THREAD_ID,
+    env.ORKESTR_CONNECT_WHATSAPP_THREAD_ID,
+    env.ORKESTR_PUBLIC_WHATSAPP_THREAD_ID,
+    env.ORKESTR_DEFAULT_WHATSAPP_THREAD_ID,
+    env.ORKESTR_WHATSAPP_DEFAULT_THREAD_ID,
+  ].map((value) => pickString(value)).filter(Boolean);
+}
+
+function threadMatchesKey(thread = {}, key = "") {
+  const wanted = pickString(key).toLowerCase();
+  if (!wanted) return false;
+  return [thread.id, thread.name, thread.title, thread.bindingName]
+    .map((value) => pickString(value).toLowerCase())
+    .some((value) => value === wanted);
+}
+
+function threadOwner(thread = {}, env = process.env) {
+  return pickString(thread.ownerUserId, env.ORKESTR_ADMIN_USER_ID, "admin");
+}
+
+function isWatcherThread(thread = {}) {
+  return [thread.id, thread.name, thread.title, thread.bindingName]
+    .map((value) => pickString(value).toLowerCase())
+    .some((value) => value.includes("watcher"));
+}
+
+function isWhatsAppThread(thread = {}) {
+  const binding = thread?.binding || {};
+  return pickString(binding.chatId) || pickString(binding.connector).toLowerCase() === "whatsapp";
+}
+
+async function brokerApprovalBindingThread({ challenge = {}, env = process.env } = {}) {
+  const threads = await listThreads(env).catch(() => []);
+  if (!threads.length) return { thread: null, reason: "no_threads" };
+
+  for (const key of envThreadCandidates(env)) {
+    const explicit = threads.find((thread) => threadMatchesKey(thread, key));
+    if (explicit) return { thread: explicit, reason: "explicit_env_thread" };
+  }
+
+  const owner = pickString(challenge.userId, env.ORKESTR_ADMIN_USER_ID, "admin");
+  const owned = threads.filter((thread) => threadOwner(thread, env) === owner && !isWatcherThread(thread));
+  const ownedWhatsApp = owned.filter(isWhatsAppThread);
+  if (ownedWhatsApp.length === 1) return { thread: ownedWhatsApp[0], reason: "single_owned_whatsapp_thread" };
+
+  const readyOwned = owned.filter((thread) => pickString(thread.state, "ready") === "ready");
+  if (readyOwned.length === 1) return { thread: readyOwned[0], reason: "single_owned_ready_thread" };
+
+  return {
+    thread: null,
+    reason: ownedWhatsApp.length > 1 || readyOwned.length > 1 ? "ambiguous_threads" : "no_matching_thread",
+  };
+}
+
+async function bindBrokerApprovalChat({ input = {}, challenge = {}, instance = null, chatId = "", accountId = "", from = "", env = process.env } = {}) {
+  if (!challenge?.instanceId || !instance?.whatsappChatHash || !chatId) return null;
+  if (!whatsappApprovalSenderMatchesHash(input, instance.whatsappChatHash)) return null;
+  const target = await brokerApprovalBindingThread({ challenge, instance, env });
+  if (!target.thread?.id) {
+    await appendEvent({
+      type: "whatsapp_security_approval_auto_bind_skipped",
+      challengeId: challenge.id || null,
+      instanceId: challenge.instanceId || null,
+      chatId,
+      accountId,
+      reason: target.reason || "thread_not_found",
+    }, env).catch(() => {});
+    return { ok: false, skipped: target.reason || "thread_not_found" };
+  }
+  const responderAccountId = pickString(
+    accountId,
+    instance.relayAccountId,
+    brokerWhatsAppRelayAccountId(instance, env),
+  );
+  const result = await upsertWhatsAppThreadBinding({
+    level: "chat",
+    threadId: target.thread.id,
+    chatId,
+    displayName: pickString(target.thread.bindingName, target.thread.name, target.thread.title, "Orkestr"),
+    responderConnectorAccountId: responderAccountId,
+    responderAccountId,
+    outboundAccountId: responderAccountId,
+    senderContactId: pickString(from, input.from, input.sender, input.author, chatId),
+    instanceId: challenge.instanceId,
+    mirrorToWhatsApp: true,
+    routeEligible: true,
+    enabled: true,
+    acl: {
+      send: { mode: "thread" },
+      receive: { mode: "thread" },
+      read: { mode: "thread" },
+      manage: { mode: "owner-only" },
+    },
+  }, env);
+  await appendEvent({
+    type: "whatsapp_security_approval_auto_bound",
+    challengeId: challenge.id || null,
+    instanceId: challenge.instanceId || null,
+    threadId: target.thread.id,
+    bindingId: result.binding?.id || result.binding?.bindingId || null,
+    chatId,
+    accountId: responderAccountId,
+    reason: target.reason,
+  }, env).catch(() => {});
+  return { ok: true, ...result, reason: target.reason };
+}
+
+export async function maybeBindApprovedBrokerChat({
+  input = {},
+  env = process.env,
+  state = {},
+  chatId = "",
+  accountId = "",
+} = {}) {
+  const targetChatId = pickString(chatId, input.chatId, input.chat?.id, input.fromChatId);
+  if (!targetChatId) return null;
+  const priorApproval = [...(state.inboundEvents || [])].reverse().find((event) =>
+    pickString(event.chatId) === targetChatId &&
+      pickString(event.ignoredReason) === "security_approval_command" &&
+      pickString(event.instanceId)
+  );
+  if (!priorApproval) return null;
+  const instance = await brokerInstance(priorApproval.instanceId, env).catch(() => null);
+  if (!instance?.whatsappChatHash) return null;
+  return bindBrokerApprovalChat({
+    input,
+    challenge: {
+      id: pickString(priorApproval.challengeId),
+      instanceId: pickString(priorApproval.instanceId),
+      userId: pickString(priorApproval.userId),
+    },
+    instance,
+    chatId: targetChatId,
+    accountId: pickString(accountId, priorApproval.accountId, input.accountId),
+    from: pickString(input.from, input.sender, input.author, priorApproval.from),
+    env,
+  });
 }
 
 async function whatsappApprovalPriorRoutedBindingAllowed({ input = {}, state = {}, accountId = "", env = process.env } = {}) {
@@ -319,6 +461,25 @@ export async function maybeApprovePairingChallengeFromWhatsApp({
   const result = challenge.status === "approved"
     ? { ok: true, challenge }
     : await approvePairingChallenge(challengeId, { env, approvedBy: "whatsapp" });
+  const autoBinding = await bindBrokerApprovalChat({
+    input,
+    challenge: result.challenge || challenge,
+    instance,
+    chatId,
+    accountId,
+    from,
+    env,
+  }).catch(async (error) => {
+    await appendEvent({
+      type: "whatsapp_security_approval_auto_bind_failed",
+      challengeId: result.challenge?.id || challenge.id || challengeId,
+      instanceId: result.challenge?.instanceId || challenge.instanceId || null,
+      chatId,
+      accountId,
+      error: String(error?.message || error || "auto_bind_failed").slice(0, 240),
+    }, env).catch(() => {});
+    return { ok: false, error: String(error?.message || error || "auto_bind_failed") };
+  });
   const event = {
     eventId,
     canonicalEventId,
@@ -333,6 +494,10 @@ export async function maybeApprovePairingChallengeFromWhatsApp({
     ignoredReason: "security_approval_command",
     challengeId: result.challenge?.id || challenge.id || challengeId,
     instanceId: result.challenge?.instanceId || challenge.instanceId || null,
+    autoBinding: autoBinding?.ok ? {
+      threadId: autoBinding.thread?.id || autoBinding.binding?.threadId || null,
+      bindingId: autoBinding.binding?.id || autoBinding.binding?.bindingId || null,
+    } : null,
     receivedAt,
   };
   state.inboundEvents = [...(state.inboundEvents || []), event];
