@@ -80,6 +80,7 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
   codexDeviceCode = "";
   codexAuthUrl = "";
   codexAuthExpiresAt = "";
+  codexDeviceCodeCopied = false;
   codexApiKey = "";
   codexAppServer: CodexAppServerStatus | null = null;
   codexStoredThreads: CodexStoredThread[] = [];
@@ -761,12 +762,13 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
   compactCodexSummary(): string {
     if (this.agentRuntimeReady()) return "Opening Orkestr.";
     if (!this.codexCommandAvailable()) return "Codex is not ready in this runtime yet.";
-    return "Open the Codex sign-in page and finish login. Orkestr will continue automatically.";
+    if (this.codexDeviceCode) return "Paste the copied code on the OpenAI page. Orkestr will continue automatically.";
+    return "Open the Codex sign-in page. Device-code login must be enabled in ChatGPT security settings.";
   }
 
   codexAuthStatusText(): string {
     if (this.agentRuntimeReady()) return "Codex connected. Opening Orkestr.";
-    if (this.codexDeviceCode) return "Waiting for Codex sign-in...";
+    if (this.codexDeviceCode) return this.codexDeviceCodeCopied ? "Code copied. Waiting for Codex sign-in..." : "Copy the code, then paste it on the OpenAI page.";
     return "";
   }
 
@@ -1207,11 +1209,13 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
     try {
       const result = await firstValueFrom(this.api.startCodexDeviceAuth());
       this.codexDeviceCode = result.code || "";
+      this.codexDeviceCodeCopied = false;
       this.codexAuthUrl = result.authUrl || "";
       this.codexAuthExpiresAt = result.expiresAt || "";
+      await this.copyCodexDeviceCode(false);
       if (this.codexAuthUrl) globalThis.open?.(this.codexAuthUrl, "_blank", "noopener,noreferrer");
       this.notice = this.compactSetupMode()
-        ? "Waiting for Codex sign-in..."
+        ? this.codexDeviceCodeCopied ? "Code copied. Waiting for Codex sign-in..." : "Copy the code, then paste it on the OpenAI page."
         : this.codexDeviceCode ? "Codex sign-in opened. Enter the device code in the browser." : "Codex sign-in started.";
       this.error = "";
       await this.load(false);
@@ -1232,6 +1236,7 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
       if (this.codexAuthPoller) clearInterval(this.codexAuthPoller);
       this.codexAuthPoller = undefined;
       this.codexDeviceCode = "";
+      this.codexDeviceCodeCopied = false;
       this.codexAuthUrl = "";
       this.codexAuthExpiresAt = "";
       this.notice = this.compactSetupMode()
@@ -1251,6 +1256,20 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
       if (!this.isSetupMode() && !this.isLastStep()) this.nextStep();
     } catch (error) {
       this.error = this.errorText(error);
+    } finally {
+      this.renderNow();
+    }
+  }
+
+  async copyCodexDeviceCode(showNotice = true): Promise<void> {
+    if (!this.codexDeviceCode) return;
+    try {
+      await globalThis.navigator?.clipboard?.writeText(this.codexDeviceCode);
+      this.codexDeviceCodeCopied = true;
+      if (showNotice) this.notice = "Code copied.";
+    } catch {
+      this.codexDeviceCodeCopied = false;
+      if (showNotice) this.notice = "Select and copy the code.";
     } finally {
       this.renderNow();
     }

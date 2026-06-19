@@ -367,10 +367,13 @@
               <div class="command-box">{{ codexCommandUnavailableHint() }}</div>
             }
             @if (codexDeviceCode) {
-              <div class="command-box">Device code: {{ codexDeviceCode }}</div>
+              <button class="codex-device-code" type="button" (click)="copyCodexDeviceCode()" [attr.aria-label]="'Copy Codex device code ' + codexDeviceCode">
+                <span>{{ codexDeviceCodeCopied ? "Code copied" : "Copy code" }}</span>
+                <strong>{{ codexDeviceCode }}</strong>
+              </button>
             }
             @if (codexAuthUrl) {
-              <a class="oauth-link" [href]="codexAuthUrl" target="_blank" rel="noreferrer">Open sign-in page</a>
+              <a class="oauth-link secondary-link" [href]="codexAuthUrl" target="_blank" rel="noreferrer">Open sign-in page again</a>
             }
             @if (codexAuthStatusText()) {
               <small class="form-section-note">{{ codexAuthStatusText() }}</small>
