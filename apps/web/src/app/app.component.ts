@@ -939,6 +939,20 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.openSetup(this.normalizeSetupSection(section));
   }
 
+  async leaveCompactSetup(): Promise<void> {
+    if (this.pairingRequired) {
+      this.enterPairingRequired();
+      return;
+    }
+    this.onboardingActive = false;
+    this.threadWizardOpen = false;
+    this.activePanel = "chat";
+    this.writeOnboardingFlag("skipped");
+    globalThis.history?.pushState({}, "", "/");
+    this.updateDocumentTitle();
+    await this.refresh(false);
+  }
+
   async leaveOnboarding(completed = false): Promise<void> {
     if (this.pairingRequired) {
       this.enterPairingRequired();

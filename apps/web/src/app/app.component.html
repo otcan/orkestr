@@ -10,6 +10,7 @@
     (setupSectionChange)="handleSetupSectionChange($event)"
     (skip)="leaveOnboarding(false)"
     (complete)="leaveOnboarding(true)"
+    (openAppRequested)="leaveCompactSetup()"
   ></ork-onboarding-page>
 } @else if (appReady) {
 <main class="app-shell" [class.sidebar-resizing]="sidebarResizing" [class.user-mode]="isUserMode()" [style.--sidebar-width.px]="sidebarWidth">

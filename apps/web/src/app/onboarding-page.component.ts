@@ -56,6 +56,7 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
   @Input() setupSection = "";
   @Output() skip = new EventEmitter<void>();
   @Output() complete = new EventEmitter<void>();
+  @Output() openAppRequested = new EventEmitter<void>();
   @Output() setupSectionChange = new EventEmitter<string>();
   @Output() paired = new EventEmitter<void>();
 
@@ -1505,6 +1506,10 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
   }
 
   openApp(): void {
+    if (this.compactSetupMode()) {
+      this.openAppRequested.emit();
+      return;
+    }
     if (this.isSetupMode()) {
       this.skip.emit();
       return;
