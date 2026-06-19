@@ -355,31 +355,22 @@
             <div class="compact-codex-copy">
               <p>Orkestr starts coding threads through the Codex CLI on this VM. To do that, this VM needs a Codex login.</p>
               <p>The normal Codex browser login opens a callback on the VM itself. Because you are approving this from another browser, Orkestr uses Codex device-code login instead.</p>
-              <p>The alternative is to configure Codex on the VM yourself with an API key or access token.</p>
               <p>Device-code login must be enabled in ChatGPT security settings.</p>
             </div>
-            @if (codexCommandAvailable()) {
-              <div class="button-row">
-                <button
-                  type="button"
-                  (click)="startCodexDeviceAuth()"
-                  [disabled]="busy"
-                >
-                  {{ codexDeviceCode ? "Open Codex sign-in again" : "Open Codex sign-in" }}
-                </button>
-              </div>
-            } @else {
+            @if (!codexCommandAvailable()) {
               <div class="command-box">{{ codexCommandUnavailableHint() }}</div>
+            } @else if (!codexDeviceCode) {
+              <div class="command-box">Creating Codex sign-in code...</div>
             }
             @if (codexDeviceCode) {
-              <p class="compact-codex-next">Enter this code on the OpenAI sign-in page. Orkestr already tried to copy it.</p>
+              <p class="compact-codex-next">Click the code to copy it. Then open the sign-in page and paste it there.</p>
               <button class="codex-device-code" type="button" (click)="copyCodexDeviceCode()" [attr.aria-label]="'Copy Codex device code ' + codexDeviceCode">
                 <span>{{ codexDeviceCodeCopied ? "Code copied" : "Copy code" }}</span>
                 <strong>{{ codexDeviceCode }}</strong>
               </button>
             }
             @if (codexAuthUrl) {
-              <a class="oauth-link secondary-link" [href]="codexAuthUrl" target="_blank" rel="noreferrer">Open sign-in page again</a>
+              <a class="oauth-link" [href]="codexAuthUrl" target="_blank" rel="noreferrer">Open Codex sign-in</a>
             }
             @if (codexAuthStatusText()) {
               <small class="form-section-note">{{ codexAuthStatusText() }}</small>
