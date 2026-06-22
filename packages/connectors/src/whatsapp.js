@@ -43,6 +43,10 @@ import {
   whatsappInboundThreadMatchesBinding,
 } from "./whatsapp-inbound-routing.js";
 import {
+  addWhatsAppInboundSecurityBlock,
+  evaluateWhatsAppInboundSecurity,
+} from "./whatsapp-inbound-security.js";
+import {
   claimConnectorOutboxJob,
   connectorOutboxTerminalState,
   connectorOutboxRetryBackoffMs,
@@ -692,6 +696,28 @@ function routingConflict(message, failure = {}) {
     retryable: false,
     userFacingCategory: "connector",
     ...failure,
+  };
+  return error;
+}
+
+function whatsappInboundSecurityError(decision = {}, context = {}) {
+  const error = new Error("whatsapp_inbound_sender_denied");
+  error.statusCode = 403;
+  error.routingFailure = {
+    code: "whatsapp_inbound_sender_denied",
+    capability: "whatsapp",
+    provider: "whatsapp",
+    retryable: false,
+    userFacingCategory: "connector",
+    safeMessage: pickString(decision.safeMessage) || "This WhatsApp sender is not allowed to control this Orkestr chat.",
+    reason: pickString(decision.reason, "inbound_sender_denied"),
+    routerTraceId: pickString(context.routerTraceId),
+    accountId: pickString(context.accountId, decision.participant?.accountId),
+    bindingId: pickString(decision.participant?.bindingId),
+    threadId: pickString(context.threadId, decision.participant?.threadId),
+    chatId: pickString(context.chatId, decision.participant?.chatId),
+    principalKind: "whatsapp-participant",
+    principalId: pickString(decision.participant?.senderId, decision.participant?.participantId),
   };
   return error;
 }
@@ -1378,7 +1404,28 @@ async function routeThread(input, config, env) {
     });
   }
   const thread = matchedThreads[0] || null;
-  return thread ? { threadId: thread.id, binding: thread.binding || null } : { threadId: "", binding: null };
+  if (thread) return { threadId: thread.id, binding: thread.binding || null };
+  const chatBoundThreads = threads.filter((item) => {
+    const binding = item?.binding || {};
+    if (String(binding.connector || "whatsapp").trim().toLowerCase() !== "whatsapp") return false;
+    if (!whatsappBindingIsRouteEligible(binding)) return false;
+    if (pickString(binding.chatId) !== chatId) return false;
+    const accounts = bindingAccountIds(binding);
+    return !accounts.size || !accountId || accounts.has(accountId);
+  });
+  if (chatBoundThreads.length > 1) {
+    throw routingConflict("wa_binding_ambiguous", {
+      reason: "Multiple legacy WhatsApp bindings matched this chat before sender authorization.",
+      chatId,
+      accountId,
+      bindingId: chatBoundThreads.map((item) => pickString(item.binding?.id, item.binding?.bindingId) || `thread:${item.id}:whatsapp`).join(","),
+      safeMessage: "Multiple Orkestr WhatsApp bindings matched this chat. Retire one duplicate binding or create a narrower binding.",
+    });
+  }
+  const chatBoundThread = chatBoundThreads[0] || null;
+  return chatBoundThread
+    ? { threadId: chatBoundThread.id, binding: chatBoundThread.binding || null, senderAuthorizationPending: true }
+    : { threadId: "", binding: null };
 }
 
 async function readWhatsAppState(env) {
@@ -2682,7 +2729,7 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
     phase: "received",
   }, env).catch(() => {});
 
-  const state = await readWhatsAppState(env);
+  let state = await readWhatsAppState(env);
   let threadRoute = null;
   const accountPolicy = whatsappInboundAccountPolicy(input, config, state, env);
   if (!accountPolicy.allowed) {
@@ -3123,6 +3170,79 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
   };
   let thread = threadId ? (await listThreads(env)).find((item) => item.id === threadId || item.name === threadId || item.bindingName === threadId) : null;
   thread = await ensureApiAgentWhatsAppThread(thread, env);
+  const inboundSecurity = evaluateWhatsAppInboundSecurity({
+    binding: threadRoute.binding || thread?.binding || {},
+    input: { ...input, chatId, from, accountId, text },
+    state,
+    thread: thread || {},
+    env,
+  });
+  messageInput.externalPrincipal = inboundSecurity.participant;
+  messageInput.senderParticipantId = inboundSecurity.participant?.senderId || "";
+  messageInput.senderTrustLevel = inboundSecurity.trustLevel || "unknown";
+  messageInput.senderPolicyMode = inboundSecurity.policyMode || "";
+  messageInput.securityClassification = inboundSecurity.classified || null;
+  if (!inboundSecurity.allowed) {
+    const blocked = inboundSecurity.action === "block";
+    if (blocked) state = addWhatsAppInboundSecurityBlock(state, inboundSecurity);
+    const event = {
+      eventId,
+      canonicalEventId,
+      routerTraceId,
+      turnId,
+      agentId: agentId || null,
+      threadId: threadId || null,
+      messageId: null,
+      chatId,
+      from,
+      accountId,
+      attachments: Array.isArray(input.attachments) ? input.attachments : [],
+      ...(inboundDedupeKey ? { inboundDedupeKey } : {}),
+      ignoredReason: blocked ? "inbound_security_blocked" : "inbound_security_denied",
+      inboundSecurity: {
+        reason: inboundSecurity.reason,
+        action: inboundSecurity.action || "deny",
+        trustLevel: inboundSecurity.trustLevel,
+        policyMode: inboundSecurity.policyMode,
+        classified: inboundSecurity.classified,
+      },
+      receivedAt: pickString(input.timestamp, input.receivedAt) || new Date().toISOString(),
+    };
+    state.inboundEvents = [...(state.inboundEvents || []), event];
+    await writeWhatsAppState(state, env);
+    await ensureRouterTurn({ routerTraceId, turnId, connector: "whatsapp", accountId, chatId, eventId, threadId: thread?.id || threadId || "", state: "skipped" }, env).catch(() => null);
+    await recordRouterTraceEvent({
+      routerTraceId,
+      turnId,
+      connector: "whatsapp",
+      accountId,
+      chatId,
+      sourceEventId: eventId,
+      threadId: thread?.id || threadId || "",
+      phase: "skipped",
+      reason: event.ignoredReason,
+      terminal: true,
+    }, env).catch(() => {});
+    await appendEvent({
+      type: blocked ? "whatsapp_inbound_security_blocked" : "whatsapp_inbound_security_denied",
+      eventId,
+      canonicalEventId,
+      routerTraceId,
+      threadId: thread?.id || threadId || null,
+      chatId,
+      accountId,
+      from,
+      reason: inboundSecurity.reason,
+      trustLevel: inboundSecurity.trustLevel,
+      policyMode: inboundSecurity.policyMode,
+    }, env).catch(() => {});
+    throw whatsappInboundSecurityError(inboundSecurity, {
+      routerTraceId,
+      accountId,
+      chatId,
+      threadId: thread?.id || threadId || "",
+    });
+  }
   await ensureRouterTurn({
     routerTraceId,
     turnId,

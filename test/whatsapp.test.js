@@ -8357,7 +8357,7 @@ test("generated whatsapp bindings listen to the selected sender and answer as th
 
   await assert.rejects(
     () => routeWhatsAppInbound({ eventId: "wa-generated-ignored", chatId: "chat-generated", accountId: "account-1", fromMe: false, text: "not selected" }, env),
-    /whatsapp_target_required/,
+    /whatsapp_inbound_sender_denied/,
   );
 
   const routedViaResponder = await routeWhatsAppInbound({
@@ -8429,7 +8429,7 @@ test("whatsapp auto-provision does not bypass existing binding participant restr
       from: "wa-contact-three@c.us",
       text: "should not create a separate user thread",
     }, env),
-    /whatsapp_target_required/,
+    /whatsapp_inbound_sender_denied/,
   );
 
   assert.deepEqual((await listThreads(env)).map((thread) => thread.id), ["restricted-generated-thread"]);
@@ -8465,7 +8465,7 @@ test("generated single-account whatsapp groups route lid senders through the gro
       fromMe: false,
       text: "responder echo",
     }, env),
-    /whatsapp_target_required/,
+    /whatsapp_inbound_sender_denied/,
   );
   await assert.rejects(
     () => routeWhatsAppInbound({
@@ -8640,7 +8640,7 @@ test("legacy allowOtherPeople does not enable additional participants without co
 
   await assert.rejects(
     () => routeWhatsAppInbound({ eventId: "wa-additional-legacy", chatId: "chat-additional", accountId: "account-1", fromMe: false, text: "legacy allowed?" }, env),
-    /whatsapp_target_required/,
+    /whatsapp_inbound_sender_denied/,
   );
 });
 
@@ -8666,11 +8666,11 @@ test("additional participants require an explicit selected participant", async (
 
   await assert.rejects(
     () => routeWhatsAppInbound({ eventId: "wa-additional-rejected", chatId: "chat-selected", accountId: "account-1", from: "wa-contact-three@c.us", fromMe: false, text: "not selected" }, env),
-    /whatsapp_target_required/,
+    /whatsapp_inbound_sender_denied/,
   );
   await assert.rejects(
     () => routeWhatsAppInbound({ eventId: "wa-additional-responder", chatId: "chat-selected", accountId: "account-1", from: "wa-contact-two@c.us", fromMe: false, text: "responder" }, env),
-    /whatsapp_target_required/,
+    /whatsapp_inbound_sender_denied/,
   );
 
   const routed = await routeWhatsAppInbound({ eventId: "wa-additional-selected", chatId: "chat-selected", accountId: "account-1", from: "wa-contact-one@c.us", fromMe: false, text: "selected allowed" }, env);

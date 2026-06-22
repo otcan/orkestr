@@ -39,6 +39,9 @@ const messageStringFields = [
   "recoveryReason",
   "originSurface",
   "originTransport",
+  "senderParticipantId",
+  "senderTrustLevel",
+  "senderPolicyMode",
   "executorKind",
   "executorTransport",
   "executorThreadId",
@@ -445,6 +448,19 @@ export async function appendThreadMessage(threadId, input, env = process.env) {
     for (const key of messageStringFields) {
       const value = String(input[key] || "").trim();
       if (value) nextMessage[key] = value;
+    }
+    if (input.externalPrincipal && typeof input.externalPrincipal === "object" && !Array.isArray(input.externalPrincipal)) {
+      nextMessage.externalPrincipal = Object.fromEntries(
+        Object.entries(input.externalPrincipal)
+          .map(([key, value]) => [key, String(value || "").trim()])
+          .filter(([, value]) => value),
+      );
+    }
+    if (input.securityClassification && typeof input.securityClassification === "object" && !Array.isArray(input.securityClassification)) {
+      nextMessage.securityClassification = {
+        malicious: input.securityClassification.malicious === true,
+        reason: String(input.securityClassification.reason || "").trim(),
+      };
     }
     nextMessage = normalizeNoReplyAssistantMessage(nextMessage);
     if (input.forceDeliveryAfterInterrupt === true) nextMessage.forceDeliveryAfterInterrupt = true;
