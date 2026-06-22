@@ -88,6 +88,36 @@ test("WhatsApp inbound security tags allowed owner messages", async () => {
   assert.equal(messages[0].externalPrincipal.chatId, "owner-chat@g.us");
 });
 
+test("WhatsApp inbound security preserves legacy-open generated bindings without owner policy", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-inbound-security-generated-"));
+  const env = testEnv(home);
+  await createThread({
+    id: "generated-wa-thread",
+    name: "Generated WA Thread",
+    binding: {
+      connector: "whatsapp",
+      chatId: "generated-chat",
+      enabled: true,
+      generated: true,
+      mirrorToWhatsApp: true,
+    },
+  }, env);
+
+  const routed = await routeWhatsAppInbound({
+    eventId: "wa-security-generated-1",
+    chatId: "generated-chat",
+    accountId: "main",
+    from: "contact@c.us",
+    text: "normal generated binding request",
+  }, env);
+  const messages = await listThreadMessages("generated-wa-thread", env);
+
+  assert.equal(routed.threadId, "generated-wa-thread");
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].senderTrustLevel, "unknown");
+  assert.equal(messages[0].senderPolicyMode, "legacy-open");
+});
+
 test("WhatsApp inbound security auto-blocks only when owner policy enables it", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-inbound-security-block-"));
   const env = testEnv(home);

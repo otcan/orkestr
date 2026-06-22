@@ -58,7 +58,7 @@ function inboundSecurityPolicy(binding = {}, env = process.env) {
     legacyBlocked,
   );
   const hasExplicitPolicy = Object.keys(explicit).length > 0;
-  const defaultMode = ownerParticipantIds.length || binding.generated === true || pickString(binding.senderAccountId, binding.inboundAccountId)
+  const defaultMode = ownerParticipantIds.length || pickString(binding.senderAccountId, binding.inboundAccountId)
     ? "owner-only"
     : "legacy-open";
   const mode = pickString(explicit.mode, binding.inboundSecurityMode) || defaultMode;
