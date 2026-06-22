@@ -1824,6 +1824,9 @@ export function inboundRoutingFailureNoticeText(error, { env = process.env } = {
   if (reason === "llm_sanitizer_unconfigured") {
     return "Orkestr could not accept your message because the isolated-user LLM sanitizer is not configured. Ask the admin to connect the sanitizer, then resend.";
   }
+  if (/^llm_sanitizer_(?:http_(?:408|409|425|429|5\d\d)|timeout|empty_response|invalid_json|unavailable|(?:codex|ollama)_(?:timeout|unavailable|failed|invalid_json|http_(?:408|409|425|429|5\d\d)))$/i.test(reason)) {
+    return "Orkestr could not safely verify this message because the isolated-user safety service was temporarily unavailable. Please resend it in a moment.";
+  }
   if (reason === "browser_pairing_required") {
     return `This Orkestr chat needs browser pairing approval before it can accept messages. Open ${publicHelpUrl(env)} to complete pairing, then resend.`;
   }
@@ -1843,7 +1846,7 @@ export function inboundRoutingFailureNoticeText(error, { env = process.env } = {
     return "This chat is missing a required Orkestr capability or connector setup. Please retry after the chat setup is healthy.";
   }
   if (reason.startsWith("llm_sanitizer")) {
-    return `Orkestr could not accept your message because the isolated-user LLM sanitizer blocked or could not verify it: ${reason}.`;
+    return "Orkestr could not accept your message because the isolated-user safety policy blocked or could not verify it. Please retry with a simpler request, or ask the admin to check the chat setup.";
   }
   return `Orkestr could not route your message: ${reason}.`;
 }

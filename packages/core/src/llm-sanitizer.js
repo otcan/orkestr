@@ -36,6 +36,8 @@ function delay(ms = 0) {
 function retryableSanitizerReason(reason = "") {
   const text = clean(reason).toLowerCase();
   if (/^llm_sanitizer_http_(?:408|409|425|429|5\d\d)$/.test(text)) return true;
+  if (/^llm_sanitizer_(?:codex|ollama)_(?:timeout|unavailable|failed|invalid_json)$/.test(text)) return true;
+  if (/^llm_sanitizer_(?:codex|ollama)_http_(?:408|409|425|429|5\d\d)$/.test(text)) return true;
   return [
     "llm_sanitizer_timeout",
     "llm_sanitizer_empty_response",
@@ -269,7 +271,7 @@ async function runOpenAISanitizer(payload, env = process.env) {
   return last;
 }
 
-async function runCommandSanitizer(payload, env = process.env) {
+async function runCommandSanitizerOnce(payload, env = process.env) {
   let command = [];
   try {
     command = parseCommand(env);
@@ -328,6 +330,17 @@ async function runCommandSanitizer(payload, env = process.env) {
     });
     child.stdin.end(`${JSON.stringify(payload)}\n`);
   });
+}
+
+async function runCommandSanitizer(payload, env = process.env) {
+  const attempts = sanitizerMaxAttempts(env);
+  let last = unavailable("llm_sanitizer_unavailable");
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    last = await runCommandSanitizerOnce(payload, env);
+    if (!retryableSanitizerReason(last.reason) || attempt >= attempts) return last;
+    await delay(sanitizerRetryDelayMs(env) * attempt);
+  }
+  return last;
 }
 
 async function runHttpSanitizer(payload, env = process.env) {

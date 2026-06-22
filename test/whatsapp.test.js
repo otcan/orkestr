@@ -787,6 +787,17 @@ test("local whatsapp recovery notifies chat when tenant sanitizer blocks inbound
   assert.match(sent[0].text, /LLM sanitizer is not configured/);
 });
 
+test("local whatsapp sanitizer outage notices avoid raw sanitizer reason codes", () => {
+  assert.equal(
+    inboundRoutingFailureNoticeText(new Error("llm_sanitizer_codex_timeout")),
+    "Orkestr could not safely verify this message because the isolated-user safety service was temporarily unavailable. Please resend it in a moment.",
+  );
+  assert.equal(
+    inboundRoutingFailureNoticeText(new Error("llm_sanitizer_policy_denied")),
+    "Orkestr could not accept your message because the isolated-user safety policy blocked or could not verify it. Please retry with a simpler request, or ask the admin to check the chat setup.",
+  );
+});
+
 test("local whatsapp bridge maps public account ids to existing LocalAuth client ids", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-configured-client-ids-"));
   const env = {

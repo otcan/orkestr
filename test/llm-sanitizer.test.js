@@ -277,6 +277,34 @@ test("OpenAI LLM sanitizer retries transient HTTP failures before fail-closed", 
   }
 });
 
+test("command LLM sanitizer retries transient Codex outages before fail-closed", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-sanitizer-command-retry-"));
+  const countFile = path.join(home, "count.txt");
+  const command = await sanitizerScript(home, [
+    "import fs from 'node:fs';",
+    `const countFile = ${JSON.stringify(countFile)};`,
+    "const current = Number(fs.existsSync(countFile) ? fs.readFileSync(countFile, 'utf8') : '0');",
+    "fs.writeFileSync(countFile, String(current + 1));",
+    "process.stdin.resume();",
+    "process.stdin.on('end', () => {",
+    "  if (current === 0) console.log(JSON.stringify({ allow: false, unavailable: true, reason: 'llm_sanitizer_codex_unavailable', model: 'codex' }));",
+    "  else console.log(JSON.stringify({ allow: true, reason: 'retry recovered', model: 'codex' }));",
+    "});",
+    "",
+  ].join("\n"));
+
+  const decision = await sanitizeAction(request(), {
+    ORKESTR_HOME: home,
+    ORKESTR_LLM_SANITIZER_COMMAND_JSON: JSON.stringify(command),
+    ORKESTR_LLM_SANITIZER_MAX_ATTEMPTS: "2",
+    ORKESTR_LLM_SANITIZER_RETRY_DELAY_MS: "0",
+  });
+
+  assert.equal(decision.allow, true);
+  assert.equal(decision.reason, "retry recovered");
+  assert.equal(await fs.readFile(countFile, "utf8"), "2");
+});
+
 test("LLM sanitizer denies conflicting allow text when explicit allow is false", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-sanitizer-conflict-"));
   const command = await sanitizerScript(home, [
