@@ -61,6 +61,17 @@ of relying on static thread or workspace text in this file.
   participants from prior chats, projects, or examples. If additional people or
   accounts are ambiguous, ask the user before creating the group or promoting
   anyone.
+- When provisioning repeatable LinkedIn account bundles for friends, clients, or
+  collaborators, do not hand-create the WhatsApp chat, thread, browser desktop,
+  CRM/oXRM instance, repo, and timer as unrelated one-off steps. Use a private
+  operator workflow/skill such as `linkedin-friend-provisioning` when available.
+  Keep real phone numbers, browser profiles, private prompts, deployment files,
+  timer overlays, CRM/oXRM instance env files, and backup credentials outside
+  this OSS repo.
+- For WhatsApp-backed friend/client bundles, preserve explicit participant
+  intent: the external account owner must be recorded separately from owner/self
+  admin numbers, the reply account must be verified after binding, and disabled
+  chats must surface a visible warning instead of silently ignoring messages.
 - When a browser desktop is needed, acquire the desktop lease first and release
   it when finished. Do not assume a desktop is free because a profile directory
   exists.
