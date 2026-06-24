@@ -4,7 +4,7 @@ import { enqueueAgentMessage } from "../../core/src/messages.js";
 import { resourceOwnerUserId } from "../../core/src/policy.js";
 import { adminPrincipal, userPrincipal } from "../../core/src/principal.js";
 import { appServerStateFromStatus } from "../../core/src/codex-app-server-common.js";
-import { clearRuntimeLeasesForThread, runtimeStatus } from "../../core/src/runtime-leases.js";
+import { clearRuntimeLeasesForThread, resolveCodexThreadMetadata, runtimeStatus } from "../../core/src/runtime-leases.js";
 import { classifyApprovalReply } from "../../core/src/runtime-settings.js";
 import { processApiAgentThreadInput, threadUsesApiAgent } from "../../core/src/tenant-api-agent.js";
 import { parseThreadInputCommand } from "../../core/src/thread-commands.js";
@@ -1255,6 +1255,38 @@ function whatsappApiAgentAutoRun(env = process.env) {
 }
 
 const whatsappApiAgentKickTimers = new Map();
+
+function codexDebugMetadataMissing(thread = {}) {
+  const metadata = thread?.executor?.metadata && typeof thread.executor.metadata === "object" ? thread.executor.metadata : {};
+  return !thread?.codexRateLimits && !metadata.codexRateLimits && !metadata.rateLimits;
+}
+
+async function threadWithLiveCodexDebugMetadata(thread = null, env = process.env) {
+  if (!thread || !codexDebugMetadataMissing(thread)) return thread;
+  const metadata = await resolveCodexThreadMetadata(thread, env).catch(() => ({}));
+  const rateLimits = metadata.codexRateLimits || metadata.rateLimits || null;
+  if (!rateLimits) return thread;
+  const executor = thread.executor && typeof thread.executor === "object" ? thread.executor : {};
+  const executorMetadata = executor.metadata && typeof executor.metadata === "object" ? executor.metadata : {};
+  return {
+    ...thread,
+    codexModel: thread.codexModel || metadata.codexModel || null,
+    codexModelProvider: thread.codexModelProvider || metadata.codexModelProvider || null,
+    codexReasoningEffort: thread.codexReasoningEffort || metadata.codexReasoningEffort || null,
+    codexContextWindow: thread.codexContextWindow || metadata.codexContextWindow || null,
+    codexTokenUsage: thread.codexTokenUsage || metadata.codexTokenUsage || null,
+    codexTotalTokenUsage: thread.codexTotalTokenUsage || metadata.codexTotalTokenUsage || null,
+    codexRateLimits: rateLimits,
+    executor: {
+      ...executor,
+      metadata: {
+        ...executorMetadata,
+        ...metadata,
+        codexRateLimits: rateLimits,
+      },
+    },
+  };
+}
 
 function whatsappInboundCoalesceMs(env = process.env) {
   const parsed = Number(env.ORKESTR_WHATSAPP_INBOUND_COALESCE_MS || 3000);
@@ -4090,6 +4122,7 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
   ];
   await recoverParentsForAlreadyMirroredReplies(messageSets, deliveredIds, outboundDeliveries, state, env);
   for (const { agentId, threadId, thread, messages, kind } of messageSets) {
+    const debugThread = kind === "thread" ? await threadWithLiveCodexDebugMetadata(thread, env) : thread;
     const messageSetKey = outboundMirrorMessageSetKey({ kind, agentId, threadId });
     for (const [messageIndex, message] of messages.entries()) {
       const messageCursor = outboundMirrorMessageCursor(message, messageIndex);
@@ -4127,7 +4160,7 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
         }
         const text = appendWhatsAppDebugFooter(routerUpdateTarget.text, {
           message,
-          thread,
+          thread: debugThread,
           messages,
           deliveryType: "router_update",
           env,
@@ -4192,7 +4225,7 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
         const chatId = queuedModeTarget.chatId;
         const text = appendWhatsAppDebugFooter(formatWhatsAppModeQueued(queuedModeTarget.mode), {
           message,
-          thread,
+          thread: debugThread,
           messages,
           deliveryType: "mode_queued",
           env,
@@ -4372,7 +4405,7 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
         }
         const text = appendWhatsAppDebugFooter(formatWhatsAppQueueNotice(queueMessage, queueTarget.reason), {
           message: queueMessage,
-          thread,
+          thread: debugThread,
           messages: queueMessages,
           deliveryType: "queue_notice",
           env,
@@ -4476,7 +4509,7 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
         }
         const text = appendWhatsAppDebugFooter(formatWhatsAppDeliveryFailure(message), {
           message,
-          thread,
+          thread: debugThread,
           messages,
           deliveryType: "delivery_error",
           env,
@@ -4577,7 +4610,7 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
         const noticeText = formatWhatsAppMutationNotice(message, mutationTarget);
         const text = appendWhatsAppDebugFooter(noticeText, {
           message,
-          thread,
+          thread: debugThread,
           messages,
           deliveryType: mutationTarget.deliveryType,
           env,
@@ -4720,7 +4753,7 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
         }
         const text = appendWhatsAppDebugFooter(formatWhatsAppOutboundText(pickString(message.text)), {
           message,
-          thread,
+          thread: debugThread,
           messages,
           deliveryType: "progress",
           env,
@@ -4885,7 +4918,7 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
       }));
       const text = appendWhatsAppDebugFooter(appendRemoteAttachmentFailureNotes(formattedText, remoteMaterialized.skipped), {
         message,
-        thread,
+        thread: debugThread,
         messages,
         deliveryType,
         env,

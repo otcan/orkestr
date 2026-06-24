@@ -233,6 +233,19 @@ function processCpuDebugPercent() {
   return Math.max(0, Math.min(999, percent));
 }
 
+function codexRateLimitsDebugValue(thread = {}, key = "") {
+  const metadata = thread?.executor?.metadata && typeof thread.executor.metadata === "object" ? thread.executor.metadata : {};
+  const limits = thread?.codexRateLimits && typeof thread.codexRateLimits === "object"
+    ? thread.codexRateLimits
+    : metadata.codexRateLimits && typeof metadata.codexRateLimits === "object"
+      ? metadata.codexRateLimits
+      : null;
+  const used = Number(limits?.[key]?.used_percent);
+  if (!Number.isFinite(used)) return "";
+  const remaining = Math.max(0, Math.min(100, 100 - used));
+  return `${Math.round(remaining)}%`;
+}
+
 export function shouldAppendWhatsAppDebugFooter(message = {}, env = process.env, deliveryType = "", thread = null) {
   if (!footerEnabled(env)) return false;
   if (thread && threadRequiresTenantIsolation(thread, env)) return false;
@@ -250,11 +263,15 @@ export function whatsappDebugFooter({ message = {}, thread = {}, messages = [], 
   const mode = codexModeDebugValue(message, thread);
   const runtimeSurface = runtimeSurfaceDebugValue(thread);
   const queueNotice = String(deliveryType || "").trim() === "queue_notice";
+  const fiveHourRemaining = codexRateLimitsDebugValue(thread, "primary");
+  const weeklyRemaining = codexRateLimitsDebugValue(thread, "secondary");
   const parts = [
     `m:${codexModelDebugLabel(message, thread, env)}`,
     ...(mode ? [`mode:${mode}`] : []),
     ...(runtimeSurface ? [`rt:${runtimeSurface}`] : []),
     `msg:${footerMessageType(deliveryType)}`,
+    ...(fiveHourRemaining ? [`5h:${fiveHourRemaining}`] : []),
+    ...(weeklyRemaining ? [`wk:${weeklyRemaining}`] : []),
     ...(queueNotice
       ? [`queue:${queueNoticeDebugCount(messages, message)}`, `reason:${queueNoticeDebugReason(message)}`]
       : [`q:${queueDebugCount(messages, message)}`]),
