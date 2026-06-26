@@ -8,6 +8,16 @@ import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 
+async function firstExisting(paths) {
+  for (const candidate of paths) {
+    try {
+      await fs.access(candidate);
+      return candidate;
+    } catch {}
+  }
+  throw new Error(`Missing expected test binary: ${paths.join(" or ")}`);
+}
+
 test("release deploy script exposes versioned install, status, and rollback", async () => {
   const script = await fs.readFile("scripts/deploy-git-release.sh", "utf8");
   const manifest = await fs.readFile("scripts/release-manifest.mjs", "utf8");
@@ -121,6 +131,27 @@ test("release deploy script exposes versioned install, status, and rollback", as
   assert.match(script, /LC_ALL=C tr -c 'A-Za-z0-9\._\+-' '-'/);
   assert.match(manifest, /schemaVersion/);
   assert.match(manifest, /compatibility/);
+});
+
+test("release deploy status does not require deploy-only host tools", async () => {
+  const temp = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-deploy-status-"));
+  const bin = path.join(temp, "bin");
+  await fs.mkdir(bin);
+  await fs.symlink(await firstExisting(["/usr/bin/dirname", "/bin/dirname"]), path.join(bin, "dirname"));
+  await fs.symlink(await firstExisting(["/usr/bin/tr", "/bin/tr"]), path.join(bin, "tr"));
+  const bash = await firstExisting(["/usr/bin/bash", "/bin/bash"]);
+
+  const { stdout } = await execFileAsync(bash, ["scripts/deploy-git-release.sh", "status"], {
+    env: {
+      PATH: bin,
+      ORKESTR_ENV_FILE: path.join(temp, "missing.env"),
+      ORKESTR_DEPLOY_ROOT: temp,
+      ORKESTR_CURRENT_LINK: path.join(temp, "current"),
+    },
+  });
+
+  assert.match(stdout, /Current release: none/);
+  assert.match(stdout, new RegExp(`Current link: ${path.join(temp, "current").replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
 });
 
 test("release manifest generator records git and component metadata", async () => {
