@@ -21,6 +21,29 @@ function threadRuntimeKind(thread = {}) {
   return String(thread.runtimeKind || thread.executorTransport || thread.transport || thread.runtime?.runtimeKind || "").trim();
 }
 
+function threadSessionName(thread = {}) {
+  return String(
+    thread.sessionName ||
+    thread.tmuxSession ||
+    thread.runtime?.sessionName ||
+    thread.executor?.sessionName ||
+    thread.executor?.metadata?.sourceTmuxSession ||
+    "",
+  ).trim();
+}
+
+function threadPaneId(thread = {}) {
+  return String(
+    thread.paneId ||
+    thread.tmuxTarget ||
+    thread.runtime?.paneId ||
+    thread.runtime?.tmuxTarget ||
+    thread.executor?.tmuxTarget ||
+    thread.executor?.metadata?.sourceTmuxTarget ||
+    "",
+  ).trim();
+}
+
 function threadCodexAppServerTransport(thread = {}) {
   return String(
     thread.codexAppServerTransport ||
@@ -31,6 +54,37 @@ function threadCodexAppServerTransport(thread = {}) {
     thread.executor?.metadata?.codexAppServerTransport ||
     "",
   ).trim();
+}
+
+function valueSet(value) {
+  return new Set(
+    String(value || "")
+      .split(/[,\s]+/)
+      .map((item) => item.trim())
+      .filter(Boolean),
+  );
+}
+
+function ignoreConfig(env = {}) {
+  return {
+    threadIds: valueSet(env.ORKESTR_DEPLOY_IGNORE_THREAD_IDS),
+    threadNames: valueSet(env.ORKESTR_DEPLOY_IGNORE_THREAD_NAMES),
+    sessionNames: valueSet(env.ORKESTR_DEPLOY_IGNORE_SESSION_NAMES),
+    paneIds: valueSet(env.ORKESTR_DEPLOY_IGNORE_PANE_IDS),
+  };
+}
+
+function ignoredThread(thread = {}, ignore = {}) {
+  const id = String(thread.id || thread.threadId || "").trim();
+  const name = threadName(thread);
+  const sessionName = threadSessionName(thread);
+  const paneId = threadPaneId(thread);
+  return Boolean(
+    (id && ignore.threadIds?.has(id)) ||
+    (name && ignore.threadNames?.has(name)) ||
+    (sessionName && ignore.sessionNames?.has(sessionName)) ||
+    (paneId && ignore.paneIds?.has(paneId))
+  );
 }
 
 function isActiveThread(thread = {}) {
@@ -56,13 +110,21 @@ function threadsFromPayload(payload) {
 }
 
 export function summarizeActiveThreads(payload) {
+  return summarizeActiveThreadsWithOptions(payload);
+}
+
+export function summarizeActiveThreadsWithOptions(payload, options = {}) {
+  const ignore = options.ignore || ignoreConfig(options.env || {});
   return threadsFromPayload(payload)
+    .filter((thread) => !ignoredThread(thread, ignore))
     .filter(isActiveThread)
     .map((thread) => ({
       id: String(thread.id || thread.threadId || "").trim(),
       name: threadName(thread),
       state: threadState(thread),
       runtimeKind: threadRuntimeKind(thread),
+      sessionName: threadSessionName(thread),
+      paneId: threadPaneId(thread),
       codexAppServerTransport: threadCodexAppServerTransport(thread),
       pendingCount: number(thread.pendingCount),
       runningCount: number(thread.runningCount),
@@ -80,6 +142,8 @@ export function formatActiveThreads(report = {}) {
         thread.name || thread.id || "unknown",
         thread.state ? `state=${thread.state}` : "",
         thread.runtimeKind ? `runtime=${thread.runtimeKind}` : "",
+        thread.sessionName ? `session=${thread.sessionName}` : "",
+        thread.paneId ? `pane=${thread.paneId}` : "",
         thread.codexAppServerTransport ? `appServer=${thread.codexAppServerTransport}` : "",
         thread.pendingCount ? `pending=${thread.pendingCount}` : "",
         thread.runningCount ? `running=${thread.runningCount}` : "",
@@ -140,7 +204,7 @@ export async function checkActiveWork(url, options = {}) {
       ok: true,
       unavailable: false,
       checkedAt,
-      active: summarizeActiveThreads(result.payload),
+      active: summarizeActiveThreadsWithOptions(result.payload, { env: options.env || process.env }),
     };
   } catch (error) {
     return {

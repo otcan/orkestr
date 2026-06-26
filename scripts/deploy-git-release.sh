@@ -43,6 +43,9 @@ Environment:
   ORKESTR_DEPLOY_WAIT_ACTIVE    Wait for active thread work before restart. Defaults to 0.
   ORKESTR_DEPLOY_ACTIVE_TIMEOUT_SECONDS  Max wait with --wait-active. Defaults to 900.
   ORKESTR_DEPLOY_ACTIVE_CHECK_URL Thread summary URL. Defaults to http://$ORKESTR_HOST:$ORKESTR_PORT/api/threads?scope=all.
+  ORKESTR_DEPLOY_IGNORE_CURRENT_TMUX Ignore the invoking tmux pane in active-work checks. Defaults to 1.
+  ORKESTR_DEPLOY_IGNORE_THREAD_IDS Space/comma-separated thread ids to ignore in active-work checks.
+  ORKESTR_DEPLOY_IGNORE_PANE_IDS  Space/comma-separated tmux pane ids to ignore in active-work checks.
   ORKESTR_DEPLOY_DRAIN_FILE     Drain marker file. Defaults to $ORKESTR_HOME/deploy-drain.json.
   ORKESTR_RELEASE_WA_NOTIFICATIONS Send WhatsApp release notifications to non-admin external chats. Defaults to 1.
   ORKESTR_RELEASE_WA_NOTIFY_EXCLUDE_CHAT_IDS Exclude specific WhatsApp chat ids from release notifications.
@@ -471,7 +474,54 @@ active_thread_report() {
     printf '{"ok":false,"unavailable":true,"active":[],"error":"missing_active_work_checker"}\n'
     return 0
   fi
+  configure_active_work_self_ignore
   node "$script_dir/deploy-active-work-check.mjs" --url "$active_check_url" --timeout-ms "$active_check_timeout_ms"
+}
+
+append_list_env() {
+  local name value current words
+  name="$1"
+  value="${2:-}"
+  if [ -z "$value" ]; then
+    return 0
+  fi
+  current="${!name-}"
+  words=" ${current//,/ } "
+  if [[ "$words" == *" $value "* ]]; then
+    return 0
+  fi
+  if [ -n "$current" ]; then
+    printf -v "$name" '%s,%s' "$current" "$value"
+  else
+    printf -v "$name" '%s' "$value"
+  fi
+  export "$name"
+}
+
+configure_active_work_self_ignore() {
+  if [ "${active_work_self_ignore_configured:-0}" = "1" ]; then
+    return 0
+  fi
+  active_work_self_ignore_configured=1
+  if [ "$(bool_value "${ORKESTR_DEPLOY_IGNORE_CURRENT_TMUX:-1}")" != "1" ]; then
+    return 0
+  fi
+  if [ -z "${TMUX:-}" ] || ! command -v tmux >/dev/null 2>&1; then
+    return 0
+  fi
+  local session_name pane_id ignore_label
+  session_name="$(tmux display-message -p '#S' 2>/dev/null || true)"
+  pane_id="$(tmux display-message -p '#{pane_id}' 2>/dev/null || true)"
+  if [ -n "$pane_id" ]; then
+    append_list_env ORKESTR_DEPLOY_IGNORE_PANE_IDS "$pane_id"
+    ignore_label=" pane=$pane_id"
+  elif [ -n "$session_name" ]; then
+    append_list_env ORKESTR_DEPLOY_IGNORE_SESSION_NAMES "$session_name"
+    ignore_label=" session=$session_name"
+  fi
+  if [ -n "$pane_id" ] || [ -n "$session_name" ]; then
+    echo "No-interrupt deploy guard: ignoring invoking tmux runtime${ignore_label:-}." >&2
+  fi
 }
 
 active_thread_count() {

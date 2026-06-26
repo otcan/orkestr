@@ -85,6 +85,9 @@ test("release deploy script exposes versioned install, status, and rollback", as
   assert.match(script, /ORKESTR_DEPLOY_NO_INTERRUPT/);
   assert.match(script, /ORKESTR_DEPLOY_WAIT_ACTIVE/);
   assert.match(script, /ORKESTR_DEPLOY_ACTIVE_CHECK_URL/);
+  assert.match(script, /ORKESTR_DEPLOY_IGNORE_CURRENT_TMUX/);
+  assert.match(script, /ORKESTR_DEPLOY_IGNORE_PANE_IDS/);
+  assert.match(script, /configure_active_work_self_ignore/);
   assert.match(script, /ORKESTR_DEPLOY_DRAIN_FILE/);
   assert.match(script, /ORKESTR_SERVICE_TIMEOUT_STOP_SEC/);
   assert.match(script, /deploy_guard_active_work/);
@@ -199,9 +202,16 @@ test("release manifest generator records git and component metadata", async () =
 });
 
 test("release manifest generator gives untagged deploys a semantic display label", async () => {
-  const output = path.join(await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-release-label-")), "release.json");
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-release-label-"));
+  const output = path.join(tmp, "release.json");
+  await fs.writeFile(path.join(tmp, "package.json"), JSON.stringify({
+    name: "orkestr-oss",
+    version: "0.1.0-alpha.99",
+  }), "utf8");
   await execFileAsync("node", [
     "scripts/release-manifest.mjs",
+    "--cwd",
+    tmp,
     "--output",
     output,
     "--ref",

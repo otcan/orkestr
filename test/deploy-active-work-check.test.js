@@ -5,7 +5,12 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { deployDrainActiveSync, deployDrainPath } from "../packages/core/src/deploy-drain.js";
-import { checkActiveWork, formatActiveThreads, summarizeActiveThreads } from "../scripts/deploy-active-work-check.mjs";
+import {
+  checkActiveWork,
+  formatActiveThreads,
+  summarizeActiveThreads,
+  summarizeActiveThreadsWithOptions,
+} from "../scripts/deploy-active-work-check.mjs";
 
 test("deploy active-work checker treats live and queued thread work as active", () => {
   const active = summarizeActiveThreads({
@@ -25,6 +30,34 @@ test("deploy active-work checker treats live and queued thread work as active", 
   assert.match(formatActiveThreads({ active }), /runtime=codex-app-server/);
   assert.match(formatActiveThreads({ active }), /appServer=proxy/);
   assert.match(formatActiveThreads({ active }), /Queued state=ready pending=1/);
+});
+
+test("deploy active-work checker can ignore the invoking tmux pane only", () => {
+  const active = summarizeActiveThreadsWithOptions({
+    threads: [
+      {
+        id: "release-train",
+        name: "Release train",
+        state: "working",
+        runtimeKind: "raw-terminal",
+        sessionName: "orkestr-thread-release",
+        paneId: "%7",
+      },
+      {
+        id: "other-work",
+        name: "Other work",
+        state: "working",
+        runtimeKind: "raw-terminal",
+        sessionName: "orkestr-thread-other",
+        paneId: "%8",
+      },
+    ],
+  }, {
+    env: { ORKESTR_DEPLOY_IGNORE_PANE_IDS: "%7" },
+  });
+
+  assert.deepEqual(active.map((thread) => thread.id), ["other-work"]);
+  assert.match(formatActiveThreads({ active }), /Other work state=working runtime=raw-terminal session=orkestr-thread-other pane=%8/);
 });
 
 test("deploy active-work checker authenticates with stored CLI token", async () => {
