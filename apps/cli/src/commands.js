@@ -50,6 +50,7 @@ export async function runCli(argv = process.argv.slice(2), context = {}) {
     if (command === "api-session" || command === "api") return await apiSessionCommand(args, ctx);
     if (command === "whatsapp" || command === "wa") return await whatsappCommand(args, ctx);
     if (command === "timers" || command === "timer") return await timersCommand(args, ctx);
+    if (command === "connect") return await connectCommand(args, ctx);
     if (command === "security") return await securityCommand(args, ctx);
     if (command === "desktop" || command === "desktops") return await desktopCommand(args, ctx);
     if (command === "jira") return await jiraCommand(args, ctx);
@@ -1236,6 +1237,13 @@ async function securityCommand(argv, ctx) {
   throw new Error("Usage: orkestr security [challenges|sessions|approve <challenge-id>|reject <challenge-id>|revoke <session-id|all>] [--json]");
 }
 
+async function connectCommand(argv, ctx) {
+  const subcommand = argv[0] || "";
+  const rest = argv.slice(1);
+  if (subcommand === "approve") return approveSecurityChallenge(rest, ctx, "connect");
+  throw new Error("Usage: orkestr connect approve <code> [--json]");
+}
+
 async function codexCommand(argv, ctx) {
   const subcommand = argv[0] || "status";
   const rest = subcommand === "status" && argv[0]?.startsWith("--") ? argv : argv.slice(1);
@@ -1443,13 +1451,13 @@ async function listSecuritySessionsCommand(argv, ctx) {
   return 0;
 }
 
-async function approveSecurityChallenge(argv, ctx) {
+async function approveSecurityChallenge(argv, ctx, commandName = "security") {
   const json = argv.includes("--json");
   const challengeId = positional(argv)[0];
-  if (!challengeId) throw new Error("Usage: orkestr security approve <challenge-id> [--json]");
+  if (!challengeId) throw new Error(`Usage: orkestr ${commandName} approve <${commandName === "connect" ? "code" : "challenge-id"}> [--json]`);
   const payload = await approvePairingChallenge(challengeId, { env: ctx.env, approvedBy: "cli" });
   if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
-  else ctx.stdout.write(`Approved pairing challenge ${payload.challenge.id}\n`);
+  else ctx.stdout.write(`Approved pairing challenge ${payload.challenge.approveCode || payload.challenge.id}\n`);
   return 0;
 }
 
@@ -1783,6 +1791,7 @@ Advanced:
   orkestr whatsapp codex [status|connect] --thread <thread> [--account id] [--json]
   orkestr whatsapp bind-thread <thread> --name <group name> [--wa-participant jid]... [--json]
   orkestr timers [list|doctor|run <timer-id>] [--json]
+  orkestr connect approve <code> [--json]
   orkestr security [challenges|sessions|approve <challenge-id>|reject <challenge-id>|revoke <session-id|all>] [--json]
   orkestr desktop [share [slug]|approve <challenge-id>] [--json]
   orkestr jira draft <thread> [--max N] [--json]

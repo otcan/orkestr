@@ -334,6 +334,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
         return;
       }
       this.pairingRequired = false;
+      if (this.redirectPairedBrowserFromPairingPath()) return;
       if (!this.uiRuntimeReady() && !this.onboardingActive) {
         this.apiOnline = true;
         this.threadWizardOpen = false;
@@ -939,6 +940,20 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.openSetup(this.normalizeSetupSection(section));
   }
 
+  async leaveCompactSetup(): Promise<void> {
+    if (this.pairingRequired) {
+      this.enterPairingRequired();
+      return;
+    }
+    this.onboardingActive = false;
+    this.threadWizardOpen = false;
+    this.activePanel = "chat";
+    this.writeOnboardingFlag("skipped");
+    globalThis.history?.pushState({}, "", "/");
+    this.updateDocumentTitle();
+    await this.refresh(false);
+  }
+
   async leaveOnboarding(completed = false): Promise<void> {
     if (this.pairingRequired) {
       this.enterPairingRequired();
@@ -986,6 +1001,14 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.onboardingActive = false;
     globalThis.history?.replaceState({}, "", "/");
     await this.refresh(false);
+  }
+
+  private redirectPairedBrowserFromPairingPath(): boolean {
+    const parts = globalThis.location?.pathname?.split("/").filter(Boolean) || [];
+    if (parts[0] !== "setup" || parts[1] !== "pairing") return false;
+    const returnUrl = this.sameOriginPairingReturnUrl();
+    globalThis.location.replace(returnUrl || "/");
+    return true;
   }
 
   openThreadWizard(): void {

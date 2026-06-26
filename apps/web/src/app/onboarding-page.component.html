@@ -6,12 +6,14 @@
       <p>{{ pageSummary() }}</p>
     </div>
     <div class="hero-actions">
-      @if (buildStamp()) {
+      @if (!compactSetupMode() && buildStamp()) {
         <small class="build-stamp">{{ buildStamp() }}</small>
       }
-      <button type="button" (click)="openApp()" [disabled]="busy">
-        {{ closeLabel() }}
-      </button>
+      @if (!compactSetupMode() || agentRuntimeReady()) {
+        <button type="button" (click)="openApp()" [disabled]="busy">
+          {{ closeLabel() }}
+        </button>
+      }
     </div>
   </section>
 
@@ -32,14 +34,16 @@
   }
 
   <section class="onboarding-layout">
-    <section class="setup-panel" [class.setup-mode]="isSetupMode()">
-      <header class="setup-panel-head">
-        <div>
-          <p class="eyebrow">{{ isSetupMode() ? "Setup section" : (setup?.setupState || "checking") }}</p>
-          <h2>{{ activeStepLabel() }}</h2>
-        </div>
-        <button class="secondary" type="button" (click)="load()" [disabled]="busy">{{ busy ? "Checking" : "Recheck" }}</button>
-      </header>
+    <section class="setup-panel" [class.setup-mode]="isSetupMode()" [class.compact-setup]="compactSetupMode()">
+      @if (!compactSetupMode()) {
+        <header class="setup-panel-head">
+          <div>
+            <p class="eyebrow">{{ isSetupMode() ? "Setup section" : (setup?.setupState || "checking") }}</p>
+            <h2>{{ activeStepLabel() }}</h2>
+          </div>
+          <button class="secondary" type="button" (click)="load()" [disabled]="busy">{{ busy ? "Checking" : "Recheck" }}</button>
+        </header>
+      }
 
       @if (isOnboardingMode()) {
         <section class="setup-progress" aria-label="Setup progress">
@@ -60,7 +64,7 @@
             }
           </nav>
         </section>
-      } @else {
+      } @else if (!compactSetupMode()) {
         <nav class="setup-steps setup-sections" aria-label="Setup sections">
           @for (step of setupSections(); track step.id) {
             <button
@@ -345,6 +349,34 @@
       }
 
       @if (activeStep === "codex") {
+        @if (compactSetupMode()) {
+          <section class="setup-form compact-codex-setup">
+            <h3>{{ compactCodexTitle() }}</h3>
+            <div class="compact-codex-copy">
+              <p>Orkestr starts coding threads through the Codex CLI on this VM. To do that, this VM needs a Codex login.</p>
+              <p>The normal Codex browser login opens a callback on the VM itself. Because you are approving this from another browser, Orkestr uses Codex device-code login instead.</p>
+              <p>Device-code login must be enabled in ChatGPT security settings.</p>
+            </div>
+            @if (!codexCommandAvailable()) {
+              <div class="command-box">{{ codexCommandUnavailableHint() }}</div>
+            } @else if (!codexDeviceCode) {
+              <div class="command-box">Creating Codex sign-in code...</div>
+            }
+            @if (codexDeviceCode) {
+              <p class="compact-codex-next">Click the code to copy it. Then open the sign-in page and paste it there.</p>
+              <button class="codex-device-code" type="button" (click)="copyCodexDeviceCode()" [attr.aria-label]="'Copy Codex device code ' + codexDeviceCode">
+                <span>{{ codexDeviceCodeCopied ? "Code copied" : "Copy code" }}</span>
+                <strong>{{ codexDeviceCode }}</strong>
+              </button>
+            }
+            @if (codexAuthUrl) {
+              <a class="oauth-link" [href]="codexAuthUrl" target="_blank" rel="noreferrer">Open Codex sign-in</a>
+            }
+            @if (codexAuthStatusText()) {
+              <small class="form-section-note">{{ codexAuthStatusText() }}</small>
+            }
+          </section>
+        } @else {
         <section class="setup-form">
           <h3>Codex Agent</h3>
           <p>{{ connector("codex")?.summary || "Required for coding agents. Orkestr runs Codex through the CLI, so your Codex login and limits are used for agent sessions." }}</p>
@@ -435,6 +467,7 @@
             }
           </div>
         </section>
+        }
       }
 
       @if (activeStep === "gmail") {

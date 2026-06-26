@@ -41,6 +41,7 @@ authorization.
 | OAuth callback broker | `GET /oauth/gmail/callback`, future provider callbacks | Public callback, state-bound to one scoped user | short-lived OAuth state lookup and scoped token storage |
 | WhatsApp inbound | `POST /api/connectors/whatsapp/inbound` | Machine-token bootstrap or paired admin/user route target | inbound machine auth and router ownership |
 | WhatsApp bridge administration | accounts, chats, QR, send, recover, deliver, config, overlay actions | Admin only | connector route guard |
+| Skill-only WhatsApp bridges | local-only skill command surfaces, no Orkestr router API | Outside Orkestr router; operator-invoked only | private local token, separate session root, no public endpoint |
 | Users | `GET/POST/PATCH /api/users` | Admin only | users controller and control-plane guard |
 | User skill registry | `GET/PATCH /api/users/me/skills`, `GET/PATCH /api/users/:id/skills/:skill` | Owner-scoped, admin can manage all | user skill registry helpers and owner access checks |
 | Tenant VM registry, bootstrap provisioning, and WA routes | `GET/POST/PATCH/DELETE /api/tenant-vms`, `POST /api/tenant-vms/:id/provision`, `POST/DELETE /api/tenant-vms/:id/whatsapp-route` | Admin only | tenant VM registry/provisioning/routing controller and control-plane guard |
@@ -55,3 +56,8 @@ Every release that touches route ownership must include negative tests for
 cross-tenant reads/writes, non-admin control-plane access, summary WebSocket
 scope, raw terminal denial, connector administration denial, and scoped files or
 workspace browsing.
+
+Routed WhatsApp accounts and skill-only WhatsApp accounts are separate surfaces.
+Skill-only accounts must not be added to router bindings, inbound forwarding, or
+release readiness account gates. See
+[WhatsApp Account Operations](whatsapp-account-operations.md).

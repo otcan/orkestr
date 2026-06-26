@@ -78,7 +78,7 @@ Run this against the broker route:
 curl -i "https://connect.orkestr.de/i/<uuid>/setup"
 ```
 
-Expected result: `302` to `/setup/pairing?instanceId=<uuid>&return=%2Fsetup`.
+Expected result: `302` to `/setup/pairing?instanceId=<uuid>&return=%2Fsetup%2Fcodex%3Fcompact%3D1`.
 Unknown UUIDs must return `404`; disabled or expired instances must not route.
 
 ## Real WhatsApp E2E

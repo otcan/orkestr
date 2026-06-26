@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -13,10 +12,6 @@ function clean(value = "") {
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, Math.max(0, Number(ms || 0))));
-}
-
-function sha256(value = "") {
-  return crypto.createHash("sha256").update(String(value || "")).digest("hex");
 }
 
 function parseBool(value, fallback = false) {
@@ -41,7 +36,6 @@ function parseArgs(argv = [], env = process.env) {
     execute: false,
     apiBase: clean(env.ORKESTR_REAL_WA_E2E_API_BASE || env.ORKESTR_API_BASE || "http://127.0.0.1:19812"),
     orkestrHome: clean(env.ORKESTR_REAL_WA_E2E_HOME || env.ORKESTR_HOME),
-    chatId: clean(env.ORKESTR_REAL_WA_DEMO_CHAT_ID || env.ORKESTR_REAL_WA_E2E_CHAT_ID),
     phoneNumber: clean(env.ORKESTR_REAL_WA_DEMO_PHONE_NUMBER || env.ORKESTR_REAL_WA_DEMO_PHONE || env.ORKESTR_DEMO_WHATSAPP_NUMBER || env.ORKESTR_DEMO_WA_NUMBER),
     setupUrl: clean(env.ORKESTR_CONNECT_PUBLIC_SETUP_URL || env.ORKESTR_CONNECT_SETUP_PUBLIC_URL || env.ORKESTR_DEMO_PUBLIC_SETUP_URL || env.ORKESTR_DEMO_SETUP_PUBLIC_URL || ""),
     timeoutMs: Number(env.ORKESTR_REAL_WA_E2E_TIMEOUT_MS || 90_000),
@@ -57,7 +51,6 @@ function parseArgs(argv = [], env = process.env) {
     else if (arg === "--execute") options.execute = true;
     else if (arg === "--api-base") options.apiBase = clean(argv[++index]);
     else if (arg === "--orkestr-home") options.orkestrHome = clean(argv[++index]);
-    else if (arg === "--chat-id") options.chatId = clean(argv[++index]);
     else if (arg === "--phone" || arg === "--phone-number") options.phoneNumber = clean(argv[++index]);
     else if (arg === "--responder-account") index += 1;
     else if (arg === "--setup-url") options.setupUrl = clean(argv[++index]);
@@ -69,13 +62,12 @@ function parseArgs(argv = [], env = process.env) {
     else throw new Error(`unknown_arg:${arg}`);
   }
 
-  const target = normalizeDirectWhatsAppTarget({ chatId: options.chatId, phoneNumber: options.phoneNumber });
-  options.chatId = target.chatId;
+  const target = normalizeDirectWhatsAppTarget({ phoneNumber: options.phoneNumber });
   options.phoneNumber = target.phoneNumber;
 
   if (options.help || !options.execute) return options;
   if (!options.apiBase) throw new Error("api_base_required");
-  if (!options.chatId) throw new Error("target_phone_or_chat_id_required");
+  if (!options.phoneNumber) throw new Error("target_phone_required");
   if (options.setupUrl && isLocalUrl(options.setupUrl) && !options.allowLocalSetupUrl) throw new Error("setup_url_must_not_be_local");
   if (!Number.isFinite(options.timeoutMs) || options.timeoutMs < 10_000) throw new Error("invalid_timeout_ms");
   if (!Number.isFinite(options.pollMs) || options.pollMs < 250) throw new Error("invalid_poll_ms");
@@ -88,16 +80,14 @@ function usage() {
     "",
     "Runs the connect onboarding acceptance path: Orkestr sends the first WhatsApp",
     "message through the broker WhatsApp router to the target user and asks them",
-    "to complete Codex login/sign-in in setup.",
+    "to open the setup link and approve the short connect command.",
     "",
     "Required with --execute:",
-    "  --phone NUMBER           Direct target user's WhatsApp phone number; derives <digits>@c.us.",
-    "                           --chat-id is still accepted for legacy direct-chat fixtures.",
+    "  --phone NUMBER           Direct target user's WhatsApp phone number.",
     "",
     "Common options:",
     "  --api-base URL           Orkestr API base. Default: ORKESTR_API_BASE or localhost.",
     "  --orkestr-home DIR       Lets the API client use local CLI auth for that instance.",
-    "  --chat-id ID             Legacy direct WhatsApp chat id for the target user.",
     "  --setup-url URL          Public setup/pairing URL included in the prompt after broker registration.",
     "  --allow-local-setup-url  Unsafe test-only override for localhost setup URLs.",
     "  --artifact FILE          Write JSON result details.",
@@ -106,16 +96,12 @@ function usage() {
   ].join("\n");
 }
 
-export function normalizeDirectWhatsAppTarget({ chatId = "", phoneNumber = "" } = {}) {
-  const explicitChatId = clean(chatId);
+export function normalizeDirectWhatsAppTarget({ phoneNumber = "" } = {}) {
   const rawPhone = clean(phoneNumber);
   const phoneDigits = rawPhone.replace(/[^\d]/g, "");
-  const phoneChatId = phoneDigits ? `${phoneDigits}@c.us` : "";
   return {
-    chatId: explicitChatId || phoneChatId,
-    phoneNumber: rawPhone || (/@c\.us$/i.test(explicitChatId) ? `+${explicitChatId.split("@")[0].replace(/[^\d]/g, "")}` : ""),
+    phoneNumber: rawPhone,
     phoneDigits,
-    derivedChatId: phoneChatId,
   };
 }
 
@@ -208,7 +194,7 @@ async function waitUntil(label, options, fn) {
 async function waitForBrokerOutboundPrompt(setup, options, text, afterMs, sentIds) {
   return waitUntil("broker_outbound_onboarding_prompt_visible", options, async () => {
     const payload = await brokerInstanceWhatsAppRequest(setup, "history", {
-      chatId: options.chatId,
+      whatsappNumber: options.phoneNumber,
       limit: 80,
     }, { env: apiEnv(options) });
     const messages = messagesFromPayload(payload);
@@ -251,7 +237,7 @@ export async function runRealWhatsAppDemoOnboarding(options) {
   const setup = await demoPublicSetupUrl({
     ...apiEnv(options),
     ...(options.setupUrl ? { ORKESTR_CONNECT_PUBLIC_SETUP_URL: options.setupUrl } : {}),
-    ORKESTR_DEMO_WHATSAPP_CHAT_HASH: sha256(options.chatId),
+    ORKESTR_DEMO_WHATSAPP_NUMBER: options.phoneNumber,
     ORKESTR_BROKER_FORCE_REREGISTER: "1",
   }, {
     fetchImpl: authenticatedFetchForApi(options),
@@ -262,7 +248,6 @@ export async function runRealWhatsAppDemoOnboarding(options) {
     ok: false,
     flow: "demo-onboarding-codex-login",
     apiBase: options.apiBase,
-    chatId: options.chatId,
     phoneNumber: options.phoneNumber,
     setupUrl: setup.setupUrl,
     setupUrlSource: setup.source || "",
@@ -283,7 +268,7 @@ export async function runRealWhatsAppDemoOnboarding(options) {
     };
     result.setupUrlCheck = await verifySetupUrlReachable(setup.setupUrl);
     const sent = await brokerInstanceWhatsAppRequest(setup, "onboarding", {
-      chatId: options.chatId,
+      whatsappNumber: options.phoneNumber,
       text,
       crossAccountEchoSuppression: true,
     }, { env: apiEnv(options) });
@@ -293,11 +278,11 @@ export async function runRealWhatsAppDemoOnboarding(options) {
     result.sentMessageId = [...sentIds][0] || clean(sentPayload?.id);
     result.observedMessageId = clean(observed?.id);
     result.prompt = {
-      asksForCodexLogin: /Codex login\/sign-in/i.test(text),
+      asksForConnectApproval: /orkestr connect approve/i.test(text),
       includesSetupUrl: text.includes(setup.setupUrl),
-      challengeGated: /browser-pairing challenge/i.test(text),
+      challengeGated: /connect approve/i.test(text),
     };
-    result.ok = Boolean(result.observedMessageId) && result.prompt.asksForCodexLogin && result.prompt.includesSetupUrl && Boolean(result.setupUrlCheck?.status);
+    result.ok = Boolean(result.observedMessageId) && result.prompt.asksForConnectApproval && result.prompt.includesSetupUrl && Boolean(result.setupUrlCheck?.status);
     result.finishedAt = new Date().toISOString();
     return result;
   } catch (error) {

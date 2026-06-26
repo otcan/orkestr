@@ -65,7 +65,7 @@ async function writeCursorPast(home, threadId, cursor, extraState = {}) {
   }, null, 2));
 }
 
-test("whatsapp delivery recovers missed live app-server output after the mirror cursor advanced", async () => {
+test("whatsapp delivery recovers missed live app-server final output after the mirror cursor advanced", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-live-recovery-"));
   const runtimeEnv = await createBoundThread(home, "thread-live-recovery");
   const oldAt = new Date(Date.now() - 10 * 60 * 1000).toISOString();
@@ -113,12 +113,12 @@ test("whatsapp delivery recovers missed live app-server output after the mirror 
     .filter((intent) => [progress.id, final.id].includes(intent.messageId))
     .map((intent) => intent.createdReason);
 
-  assert.equal(delivery.delivered.length, 2);
-  assert.deepEqual(delivery.delivered.map((item) => item.deliveryType), ["progress", "final"]);
-  assert.deepEqual(calls.map((call) => call.body.to), ["chat-live-recovery", "chat-live-recovery"]);
-  assert.deepEqual(calls.map((call) => call.body.accountId), ["account-live-recovery", "account-live-recovery"]);
-  assert.deepEqual(calls.map((call) => call.body.text), ["Checking the routing path.", "Routing is fixed."]);
-  assert.deepEqual(reasons, ["live_bound_recovery", "live_bound_recovery"]);
+  assert.equal(delivery.delivered.length, 1);
+  assert.deepEqual(delivery.delivered.map((item) => item.deliveryType), ["final"]);
+  assert.deepEqual(calls.map((call) => call.body.to), ["chat-live-recovery"]);
+  assert.deepEqual(calls.map((call) => call.body.accountId), ["account-live-recovery"]);
+  assert.deepEqual(calls.map((call) => call.body.text), ["Routing is fixed."]);
+  assert.deepEqual(reasons, ["live_bound_recovery"]);
 });
 
 test("whatsapp delivery does not recover stale live progress outside the default recovery window", async () => {

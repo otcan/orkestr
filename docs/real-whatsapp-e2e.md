@@ -31,6 +31,11 @@ production/project chat. Passing `--allow-shared-runtime` or
 `--allow-production-binding` is an explicit escape hatch for attended emergency
 runs only.
 
+Do not use a skill-only WhatsApp account as a routed responder account. A
+skill-only account may be used for attended side checks, but it must stay out of
+Orkestr router bindings and release readiness gates. See
+[WhatsApp Account Operations](whatsapp-account-operations.md).
+
 WA2WA release example:
 
 ```bash

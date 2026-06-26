@@ -41,6 +41,7 @@ const largeFileAllowlist = new Set([
   "packages/core/src/codex-app-server-common.js",
   "packages/core/src/codex-app-server-recovery.js",
   "packages/core/src/codex-app-server.js",
+  "packages/core/src/broker-instance-registry.js",
   "packages/core/src/runtime-leases.js",
   "packages/core/src/security.js",
   "packages/core/src/secure-secrets.js",
@@ -57,6 +58,7 @@ const largeFileAllowlist = new Set([
   "packages/connectors/src/whatsapp-broker-migration.js",
   "packages/connectors/src/whatsapp-local-bridge.js",
   "packages/connectors/src/whatsapp-outbound-mirror.js",
+  "packages/connectors/src/whatsapp-security-approval.js",
   "packages/connectors/src/whatsapp.js",
 ]);
 

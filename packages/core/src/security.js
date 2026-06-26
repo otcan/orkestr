@@ -32,6 +32,10 @@ function randomToken(bytes = 32) {
   return crypto.randomBytes(bytes).toString("base64url");
 }
 
+function randomApproveCode() {
+  return crypto.randomBytes(4).toString("base64url").replace(/[^A-Za-z0-9]/g, "").slice(0, 6).toUpperCase();
+}
+
 function envFlag(value) {
   return ["1", "true", "yes", "on"].includes(String(value || "").trim().toLowerCase());
 }
@@ -122,6 +126,7 @@ function publicChallenge(challenge = {}, now = Date.now()) {
   const normalized = normalizeChallenge(challenge, now);
   return {
     id: normalized.id,
+    approveCode: normalized.approveCode || "",
     status: normalized.status,
     createdAt: normalized.createdAt,
     expiresAt: normalized.expiresAt,
@@ -399,6 +404,25 @@ function configuredBridgeTokenContext(env = process.env, route = {}) {
   };
 }
 
+function configuredInboundTokenContext(env = process.env, route = {}) {
+  if (route.kind !== "whatsapp_inbound") return null;
+  return {
+    tokenId: "configured-inbound-token",
+    routeKind: route.kind,
+    scopes: route.requiredScopes || ["whatsapp:inbound"],
+    principalKind: "external_instance",
+    principalId: String(env.ORKESTR_WHATSAPP_INBOUND_PRINCIPAL_ID || env.WHATSAPP_INBOUND_PRINCIPAL_ID || "configured-inbound-token").trim(),
+    ownerUserId: null,
+    instanceId: String(env.ORKESTR_WHATSAPP_INBOUND_INSTANCE_ID || env.WHATSAPP_INBOUND_INSTANCE_ID || "").trim() || null,
+    accountId: String(env.ORKESTR_WHATSAPP_INBOUND_ACCOUNT_ID || env.WHATSAPP_INBOUND_ACCOUNT_ID || "").trim() || null,
+    bindingId: null,
+    chatId: null,
+    allowedChatIds: splitStringList(env.ORKESTR_WHATSAPP_INBOUND_ALLOWED_CHAT_IDS || env.WHATSAPP_INBOUND_ALLOWED_CHAT_IDS),
+    allowedPhoneNumbers: splitStringList(env.ORKESTR_WHATSAPP_INBOUND_ALLOWED_PHONE_NUMBERS || env.WHATSAPP_INBOUND_ALLOWED_PHONE_NUMBERS),
+    allowedRecipients: splitStringList(env.ORKESTR_WHATSAPP_INBOUND_ALLOWED_RECIPIENTS || env.WHATSAPP_INBOUND_ALLOWED_RECIPIENTS),
+  };
+}
+
 function whatsappInboundTokens(env = process.env) {
   return [
     ...splitSecretList(env.ORKESTR_WHATSAPP_INBOUND_TOKEN),
@@ -511,7 +535,7 @@ async function authorizeWhatsAppMachineRequest(request, env = process.env) {
   }
   const matched = tokens.some((candidate) => timingSafeSecretEqual(token, candidate));
   if (!matched) return whatsappMachineAuthFailure(route, "invalid", 401);
-  const configuredContext = configuredBridgeTokenContext(env, route);
+  const configuredContext = configuredBridgeTokenContext(env, route) || configuredInboundTokenContext(env, route);
   return {
     ok: true,
     principal: adminPrincipal(defaultAdminUser(env)),
@@ -601,8 +625,16 @@ export async function createPairingChallenge({ request, env = process.env, userI
   const normalizedRole = String(role || "").trim().toLowerCase() === "user" ? "user" : "admin";
   const normalizedUserId = userId ? normalizeUserId(userId) : "";
   const normalizedInstanceId = normalizeInstanceId(instanceId);
+  const existingCodes = new Set((config.challenges || []).map((item) => String(item.approveCode || "").trim().toUpperCase()).filter(Boolean));
+  let approveCode = "";
+  for (let attempt = 0; attempt < 20 && !approveCode; attempt += 1) {
+    const candidate = randomApproveCode();
+    if (candidate && !existingCodes.has(candidate)) approveCode = candidate;
+  }
+  approveCode ||= randomToken(5).slice(0, 8).toUpperCase();
   const challenge = {
     id: randomToken(18),
+    approveCode,
     status: "pending",
     createdAt: nowIso(),
     expiresAt: new Date(Date.now() + challengeTtlMs).toISOString(),
@@ -639,9 +671,15 @@ export async function listPairingChallenges({ env = process.env, includeExpired 
 export async function getPairingChallenge(challengeId, { env = process.env } = {}) {
   const id = String(challengeId || "").trim();
   const config = await readSecurityConfig(env);
-  const challenge = (config.challenges || []).find((item) => item.id === id);
+  const challenge = (config.challenges || []).find((item) => challengeMatchesId(item, id));
   if (!challenge) throw challengeError("pairing_challenge_not_found", 404);
   return publicChallenge(challenge);
+}
+
+function challengeMatchesId(challenge = {}, id = "") {
+  const value = String(id || "").trim();
+  if (!value) return false;
+  return challenge.id === value || String(challenge.approveCode || "").trim().toUpperCase() === value.toUpperCase();
 }
 
 export async function listSecuritySessions({ env = process.env } = {}) {
@@ -705,7 +743,7 @@ export async function approvePairingChallenge(challengeId, { env = process.env, 
   let approved = null;
   const challenges = (config.challenges || []).map((item) => {
     const challenge = normalizeChallenge(item, now);
-    if (challenge.id !== id) return challenge;
+    if (!challengeMatchesId(challenge, id)) return challenge;
     if (challenge.status !== "pending") throw challengeError(`pairing_challenge_${challenge.status}`, 409);
     approved = {
       ...challenge,
@@ -717,7 +755,7 @@ export async function approvePairingChallenge(challengeId, { env = process.env, 
   });
   if (!approved) throw challengeError("pairing_challenge_not_found", 404);
   await writeSecurityConfig({ ...config, enabled: true, challenges }, env);
-  await appendEvent({ type: "security_pairing_challenge_approved", challengeId: id, approvedBy }, env).catch(() => {});
+  await appendEvent({ type: "security_pairing_challenge_approved", challengeId: approved.id, approvedBy }, env).catch(() => {});
   return { ok: true, challenge: publicChallenge(approved) };
 }
 
@@ -729,7 +767,7 @@ export async function rejectPairingChallenge(challengeId, { env = process.env, r
   let rejected = null;
   const challenges = (config.challenges || []).map((item) => {
     const challenge = normalizeChallenge(item, now);
-    if (challenge.id !== id) return challenge;
+    if (!challengeMatchesId(challenge, id)) return challenge;
     if (challenge.status !== "pending") throw challengeError(`pairing_challenge_${challenge.status}`, 409);
     rejected = {
       ...challenge,
@@ -741,7 +779,7 @@ export async function rejectPairingChallenge(challengeId, { env = process.env, r
   });
   if (!rejected) throw challengeError("pairing_challenge_not_found", 404);
   await writeSecurityConfig({ ...config, challenges }, env);
-  await appendEvent({ type: "security_pairing_challenge_rejected", challengeId: id, rejectedBy }, env).catch(() => {});
+  await appendEvent({ type: "security_pairing_challenge_rejected", challengeId: rejected.id, rejectedBy }, env).catch(() => {});
   return { ok: true, challenge: publicChallenge(rejected) };
 }
 
@@ -792,7 +830,7 @@ export async function pairBrowser({ challengeId, userAgent = "", ip = "", env = 
   const config = await readSecurityConfig(env);
   const now = Date.now();
   const challenges = (config.challenges || []).map((challenge) => normalizeChallenge(challenge, now));
-  const challenge = challenges.find((item) => item.id === id);
+  const challenge = challenges.find((item) => challengeMatchesId(item, id));
   if (!challenge) throw challengeError("invalid_or_expired_pairing_challenge", 401);
   if (challenge.status === "pending") throw challengeError("pairing_challenge_not_approved", 409);
   if (challenge.status !== "approved") throw challengeError(`pairing_challenge_${challenge.status}`, 401);

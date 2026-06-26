@@ -97,9 +97,14 @@ credentials and session state stay outside the repo:
   Outlook tokens go under `ORKESTR_HOME/users/<user-id>/secrets`.
 - WhatsApp Web session data stays under the tenant instance home. Generated
   user routing stores only scoped identity metadata for the user.
+- Skill-only WhatsApp accounts must use separate state/session roots and must
+  not be listed in Orkestr router account configuration.
 - Admin browser profiles stay under `ORKESTR_HOME/browsers`; non-admin browser
   profiles stay under `ORKESTR_HOME/users/<user-id>/browsers`.
 - Host-specific bindings live in private overlays.
+
+See [WhatsApp Account Operations](whatsapp-account-operations.md) for routed
+account versus skill-only account boundaries.
 
 ## Secret Boundary
 

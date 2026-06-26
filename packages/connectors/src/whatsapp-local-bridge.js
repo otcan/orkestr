@@ -7,6 +7,7 @@ import { processApiAgentThreadInput, threadUsesApiAgent } from "../../core/src/t
 import { listTenantWhatsAppRoutes, tenantWhatsAppInboundForwardRoute } from "../../core/src/tenant-whatsapp-routing.js";
 import { attachRoutingFailure, normalizeRoutingFailure, routingFailureFromError } from "../../core/src/routing-failures.js";
 import { recordRouterTraceEvent, routerTraceIdFor, turnIdFor } from "../../core/src/router-traces.js";
+import { rawSecurityApproveChallengeId } from "../../core/src/raw-terminal-commands.js";
 import { getThread, listThreads } from "../../core/src/threads.js";
 import { setGeneratedLocalWhatsAppGroupPicture } from "./whatsapp-chat-picture.js";
 import {
@@ -49,6 +50,11 @@ export function localWhatsAppAccountIdsForEnv(env = process.env) {
   return configured.length ? [...new Set(configured)] : localWhatsAppAccountIds;
 }
 
+function strictLocalWhatsAppAccountIds(env = process.env) {
+  const raw = String(env.ORKESTR_WHATSAPP_STRICT_ACCOUNT_IDS || env.WHATSAPP_LOCAL_STRICT_ACCOUNT_IDS || "").trim().toLowerCase();
+  return ["1", "true", "yes", "on"].includes(raw);
+}
+
 function uniqueAccountIds(values = []) {
   const seen = new Set();
   const result = [];
@@ -70,8 +76,10 @@ async function persistentLocalWhatsAppAccountIds(env = process.env) {
 }
 
 async function managedLocalWhatsAppAccountIds(env = process.env) {
+  const configured = localWhatsAppAccountIdsForEnv(env);
+  if (strictLocalWhatsAppAccountIds(env)) return configured;
   return uniqueAccountIds([
-    ...localWhatsAppAccountIdsForEnv(env),
+    ...configured,
     ...(await persistentLocalWhatsAppAccountIds(env)),
   ]);
 }
@@ -183,6 +191,27 @@ export function localWhatsAppInboundForwardTarget({ chatId = "" } = {}, env = pr
 function localWhatsAppInboundForwardToken({ chatId = "" } = {}, env = process.env) {
   const tokens = readJsonEnvMap(env.ORKESTR_WHATSAPP_INBOUND_FORWARD_TOKEN_MAP_JSON || env.WHATSAPP_INBOUND_FORWARD_TOKEN_MAP_JSON);
   return String(tokens[String(chatId || "").trim()] || env.ORKESTR_WHATSAPP_INBOUND_FORWARD_TOKEN || env.WHATSAPP_INBOUND_FORWARD_TOKEN || "").trim();
+}
+
+function localWhatsAppInboundForwardSetupUrl({ chatId = "" } = {}, env = process.env) {
+  const urls = readJsonEnvMap(env.ORKESTR_WHATSAPP_INBOUND_FORWARD_SETUP_URL_MAP_JSON || env.WHATSAPP_INBOUND_FORWARD_SETUP_URL_MAP_JSON);
+  return String(urls[String(chatId || "").trim()] || env.ORKESTR_WHATSAPP_INBOUND_FORWARD_SETUP_URL || env.WHATSAPP_INBOUND_FORWARD_SETUP_URL || "").trim();
+}
+
+function localWhatsAppSecurityApprovalForwardTarget({ chatId = "" } = {}, env = process.env) {
+  const targets = readJsonEnvMap(env.ORKESTR_WHATSAPP_SECURITY_APPROVAL_FORWARD_MAP_JSON || env.WHATSAPP_SECURITY_APPROVAL_FORWARD_MAP_JSON);
+  return String(targets[String(chatId || "").trim()] || env.ORKESTR_WHATSAPP_SECURITY_APPROVAL_FORWARD_URL || env.WHATSAPP_SECURITY_APPROVAL_FORWARD_URL || "").trim();
+}
+
+function localWhatsAppSecurityApprovalForwardToken({ chatId = "" } = {}, env = process.env) {
+  const tokens = readJsonEnvMap(env.ORKESTR_WHATSAPP_SECURITY_APPROVAL_FORWARD_TOKEN_MAP_JSON || env.WHATSAPP_SECURITY_APPROVAL_FORWARD_TOKEN_MAP_JSON);
+  const tokenChatId = String(env.ORKESTR_WHATSAPP_SECURITY_APPROVAL_FORWARD_TOKEN_CHAT_ID || env.WHATSAPP_SECURITY_APPROVAL_FORWARD_TOKEN_CHAT_ID || "").trim();
+  return String(
+    tokens[String(chatId || "").trim()] ||
+    env.ORKESTR_WHATSAPP_SECURITY_APPROVAL_FORWARD_TOKEN ||
+    env.WHATSAPP_SECURITY_APPROVAL_FORWARD_TOKEN ||
+    (tokenChatId ? localWhatsAppInboundForwardToken({ chatId: tokenChatId }, env) : "")
+  ).trim();
 }
 
 function localWhatsAppInboundForwardChatIds(env = process.env) {
@@ -304,21 +333,34 @@ async function assertInboundForwardTargetHealthy(target = "", tenantRoute = null
 function targetInboundFailureCode(payload = {}, status = 0) {
   const raw = String(payload?.routingFailure?.code || payload?.error || "").trim();
   if ((status === 401 || status === 403) && raw === "browser_pairing_required") return "whatsapp_inbound_token_invalid";
+  if (raw === "whatsapp_target_required") return "target_codex_not_configured";
   return raw || `whatsapp_inbound_forward_failed_${status || "unknown"}`;
 }
 
 function targetInboundFailureCategory(code = "", status = 0) {
   const lowered = String(code || "").toLowerCase();
+  if (lowered.includes("codex")) return "codex";
   if (lowered.includes("token") || lowered.includes("auth") || status === 401 || status === 403) return "connector";
   return "instance_health";
 }
 
 function targetInboundFailureSafeMessage(code = "", status = 0) {
   const lowered = String(code || "").toLowerCase();
+  if (lowered.includes("codex")) return "Target Orkestr instance has not enabled Codex for this VM yet.";
   if (lowered.includes("token_unconfigured")) return "Target instance has no WhatsApp inbound token configured.";
   if (lowered.includes("token_required")) return "Broker request reached the target without a WhatsApp inbound token.";
   if (lowered.includes("token_invalid") || status === 401 || status === 403) return "Target instance rejected the broker WhatsApp inbound token.";
   return "Target instance could not accept the brokered WhatsApp message.";
+}
+
+function targetInboundFailureSetupUrl({ payload = {}, tenantRoute = null, chatId = "", env = process.env } = {}) {
+  return String(
+    payload?.routingFailure?.setupUrl ||
+      payload?.setupUrl ||
+      tenantRoute?.setupUrl ||
+      localWhatsAppInboundForwardSetupUrl({ chatId }, env) ||
+      "",
+  ).trim();
 }
 
 function canonicalLocalWhatsAppEventId(value = "") {
@@ -483,10 +525,18 @@ export async function forwardLocalWhatsAppInbound(input = {}, env = process.env,
         };
       }
     }
+    const approvalChallengeId = rawSecurityApproveChallengeId(input.text || input.body || input.message || "");
     target = tenantRoute?.target || localWhatsAppInboundForwardTarget({ chatId }, env);
+    if (!target && approvalChallengeId) {
+      target = localWhatsAppSecurityApprovalForwardTarget({ chatId }, env);
+      if (target) {
+        targetSource = "security_approval_forward";
+        routeMode = "security_approval";
+      }
+    }
     if (!target) return null;
-    targetSource = tenantRoute ? (tenantRoute.targetSource || "tenant_route") : "legacy_env_forward_map";
-    routeMode = tenantRoute?.routeMode || (tenantRoute ? "managed" : "legacy_env");
+    targetSource ||= tenantRoute ? (tenantRoute.targetSource || "tenant_route") : "legacy_env_forward_map";
+    routeMode ||= tenantRoute?.routeMode || (tenantRoute ? "managed" : "legacy_env");
     await appendEvent({
       type: "whatsapp_local_inbound_forward_route_resolved",
       chatId,
@@ -511,7 +561,11 @@ export async function forwardLocalWhatsAppInbound(input = {}, env = process.env,
       await assertInboundForwardTargetHealthy(target, tenantRoute, env, fetchImpl);
     }
     const headers = { "content-type": "application/json" };
-    const token = tenantRoute?.token || localWhatsAppInboundForwardToken({ chatId }, env);
+    const token = tenantRoute?.token || (
+      targetSource === "security_approval_forward"
+        ? localWhatsAppSecurityApprovalForwardToken({ chatId }, env)
+        : localWhatsAppInboundForwardToken({ chatId }, env)
+    );
     if (token) headers.authorization = `Bearer ${token}`;
     const body = tenantRoute?.chatName && !input.displayName && !input.chatName
       ? { ...input, displayName: tenantRoute.chatName, chatName: tenantRoute.chatName }
@@ -533,6 +587,7 @@ export async function forwardLocalWhatsAppInbound(input = {}, env = process.env,
         ...(payload?.routingFailure && typeof payload.routingFailure === "object" ? payload.routingFailure : {}),
         code,
         safeMessage,
+        setupUrl: targetInboundFailureSetupUrl({ payload, tenantRoute, chatId, env }),
       }, {
         code,
         capability: "whatsapp",
@@ -543,6 +598,7 @@ export async function forwardLocalWhatsAppInbound(input = {}, env = process.env,
         retryable: response.status >= 500,
         reason: code,
         safeMessage,
+        setupUrl: targetInboundFailureSetupUrl({ payload, tenantRoute, chatId, env }),
       });
       throw error;
     }
@@ -1830,6 +1886,18 @@ export function inboundRoutingFailureNoticeText(error, { env = process.env } = {
   if (failureText.includes("whatsapp_inbound_token")) {
     return "This chat route is configured, but the target Orkestr instance rejected or is missing the broker WhatsApp token. Your message was not delivered; ask the admin to sync the target inbound token, then resend.";
   }
+  if (reason === "llm_sanitizer_unconfigured") {
+    return "Orkestr could not accept your message because the isolated-user LLM sanitizer is not configured. Ask the admin to connect the sanitizer, then resend.";
+  }
+  if (/^llm_sanitizer_(?:http_(?:408|409|425|429|5\d\d)|timeout|empty_response|invalid_json|unavailable|(?:codex|ollama)_(?:timeout|unavailable|failed|invalid_json|http_(?:408|409|425|429|5\d\d)))$/i.test(reason)) {
+    return "Orkestr could not safely verify this message because the isolated-user safety service was temporarily unavailable. Please resend it in a moment.";
+  }
+  if (failure.code === "target_codex_not_configured" || failure.userFacingCategory === "codex") {
+    const setupUrl = String(failure.setupUrl || "").trim();
+    return setupUrl
+      ? `This Orkestr VM is not ready for chat yet. Open ${setupUrl} and enable Codex on the VM, then resend your message.`
+      : "This Orkestr VM is not ready for chat yet. Open the setup page and enable Codex on the VM, then resend your message.";
+  }
   if (failure.code === "target_instance_unhealthy" || failure.userFacingCategory === "instance_health") {
     return "This Orkestr instance is temporarily unavailable for this chat. Your message was not delivered; please resend it after the instance is healthy.";
   }
@@ -1841,12 +1909,6 @@ export function inboundRoutingFailureNoticeText(error, { env = process.env } = {
   }
   if (failure.capability === "timers" || failure.userFacingCategory === "timer" || lowered.includes("timer")) {
     return "Timers are not available for this chat right now. Please try again after Orkestr is healthy.";
-  }
-  if (reason === "llm_sanitizer_unconfigured") {
-    return "Orkestr could not accept your message because the isolated-user LLM sanitizer is not configured. Ask the admin to connect the sanitizer, then resend.";
-  }
-  if (/^llm_sanitizer_(?:http_(?:408|409|425|429|5\d\d)|timeout|empty_response|invalid_json|unavailable|(?:codex|ollama)_(?:timeout|unavailable|failed|invalid_json|http_(?:408|409|425|429|5\d\d)))$/i.test(reason)) {
-    return "Orkestr could not safely verify this message because the isolated-user safety service was temporarily unavailable. Please resend it in a moment.";
   }
   if (reason === "browser_pairing_required") {
     return `This Orkestr chat needs browser pairing approval before it can accept messages. Open ${publicHelpUrl(env)} to complete pairing, then resend.`;
@@ -1933,6 +1995,52 @@ async function sendInboundRoutingFailureNotice({ accountId = "", chatId = "", ev
   }
 }
 
+function forwardedSecurityApprovalNoticeText(payload = {}) {
+  if (payload?.approvedSecurityChallenge !== true) return "";
+  return "Orkestr setup approved. Return to the setup page to continue.";
+}
+
+async function sendForwardedSecurityApprovalNotice({ accountId = "", chatId = "", eventId = "", forwarded = null, client = null, env = process.env } = {}) {
+  const selectedAccountId = String(accountId || "").trim();
+  const id = String(chatId || "").trim();
+  const sourceEventId = String(eventId || "").trim();
+  const text = forwardedSecurityApprovalNoticeText(forwarded?.payload || {});
+  if (!text) return { sent: false, reason: "not_security_approval" };
+  if (!selectedAccountId || !id || !sourceEventId) return { sent: false, reason: "missing_target" };
+  try {
+    if (client) {
+      rememberOutboundText(selectedAccountId, id, text, env);
+      const message = await sendWhatsAppTextWithConfirmation({ client, chatId: id, text, env });
+      rememberOutboundMessageId(serializedMessageId(message));
+      await appendEvent({
+        type: "whatsapp_local_forwarded_security_approval_notice_delivered",
+        accountId: selectedAccountId,
+        eventId: sourceEventId,
+        chatId: id,
+        messageId: serializedMessageId(message),
+      }, env).catch(() => {});
+      return { sent: true, messageId: serializedMessageId(message) };
+    }
+    await sendLocalWhatsAppText({ accountId: selectedAccountId, chatId: id, text, env });
+    await appendEvent({
+      type: "whatsapp_local_forwarded_security_approval_notice_delivered",
+      accountId: selectedAccountId,
+      eventId: sourceEventId,
+      chatId: id,
+    }, env).catch(() => {});
+    return { sent: true };
+  } catch (noticeError) {
+    await appendEvent({
+      type: "whatsapp_local_forwarded_security_approval_notice_failed",
+      accountId: selectedAccountId,
+      eventId: sourceEventId,
+      chatId: id,
+      error: noticeError?.message || String(noticeError),
+    }, env).catch(() => {});
+    return { sent: false, reason: noticeError?.message || String(noticeError) };
+  }
+}
+
 async function clearQr(accountId, env = process.env) {
   await fs.unlink(qrPath(accountId, env)).catch(() => {});
 }
@@ -1988,7 +2096,17 @@ export async function handleInboundMessage(accountId, message, env = process.env
   };
   try {
     const forwarded = await forwardLocalWhatsAppInbound(inbound, env);
-    if (forwarded) return { routed: forwarded.payload, forwarded: true, eventId, chatId, from, fromMe: routeFromMe };
+    if (forwarded) {
+      const approvalNotice = await sendForwardedSecurityApprovalNotice({
+        accountId,
+        chatId,
+        eventId,
+        forwarded,
+        client: options.client || null,
+        env,
+      });
+      return { routed: forwarded.payload, forwarded: true, eventId, chatId, from, fromMe: routeFromMe, approvalNotice };
+    }
     const { deliverWhatsAppReplies, routeWhatsAppInbound } = await import("./whatsapp.js");
     const routed = await routeWhatsAppInbound({ ...inbound, deferApiAgentAutoRun: true }, env);
     if (routed?.ignoredDisabledBinding) {

@@ -198,9 +198,9 @@ function artifactEnv(options = {}, name = "", envName = "") {
 function demoOnboardingEnv(options = {}) {
   return {
     ...artifactEnv(options, "real-wa-demo-onboarding.json", "ORKESTR_REAL_WA_DEMO_ARTIFACT"),
-    ...(options.demoWhatsappPhoneNumber ? { ORKESTR_REAL_WA_DEMO_PHONE_NUMBER: options.demoWhatsappPhoneNumber } : {}),
     ORKESTR_REAL_WA_DEMO_CHAT_ID: "",
     ORKESTR_REAL_WA_E2E_CHAT_ID: "",
+    ...(options.demoWhatsappPhoneNumber ? { ORKESTR_REAL_WA_DEMO_PHONE_NUMBER: options.demoWhatsappPhoneNumber } : {}),
   };
 }
 

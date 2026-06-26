@@ -12,6 +12,10 @@ By default the runner checks the local Orkestr API from `ORKESTR_API_BASE`, or
 - WhatsApp reports a ready paired account
 - browser desktop sessions can be listed
 
+For deployments with strict WhatsApp routing, set required accounts to the
+routed account ids only. Skill-only WhatsApp accounts are outside the Orkestr
+router and should not be release-regression requirements.
+
 Detailed JSON artifacts are written under:
 
 ```bash

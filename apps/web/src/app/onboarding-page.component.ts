@@ -50,11 +50,14 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
   private poller?: ReturnType<typeof setInterval>;
   private outlookPoller?: ReturnType<typeof setInterval>;
   private codexAuthPoller?: ReturnType<typeof setInterval>;
+  private compactCodexOpenTimer?: ReturnType<typeof setTimeout>;
+  private compactCodexDeviceAuthStarted = false;
 
   @Input() mode: SetupPageMode = "onboarding";
   @Input() setupSection = "";
   @Output() skip = new EventEmitter<void>();
   @Output() complete = new EventEmitter<void>();
+  @Output() openAppRequested = new EventEmitter<void>();
   @Output() setupSectionChange = new EventEmitter<string>();
   @Output() paired = new EventEmitter<void>();
 
@@ -78,6 +81,7 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
   codexDeviceCode = "";
   codexAuthUrl = "";
   codexAuthExpiresAt = "";
+  codexDeviceCodeCopied = false;
   codexApiKey = "";
   codexAppServer: CodexAppServerStatus | null = null;
   codexStoredThreads: CodexStoredThread[] = [];
@@ -168,6 +172,7 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
     if (this.poller) clearInterval(this.poller);
     if (this.outlookPoller) clearInterval(this.outlookPoller);
     if (this.codexAuthPoller) clearInterval(this.codexAuthPoller);
+    if (this.compactCodexOpenTimer) clearTimeout(this.compactCodexOpenTimer);
   }
 
   async load(showBusy = true): Promise<void> {
@@ -194,6 +199,8 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
         this.activeStep = this.firstOpenStep();
         this.stepInitialized = true;
       }
+      this.maybeLeaveCompletedCompactSetup();
+      this.maybeStartCompactCodexDeviceAuth();
       this.error = "";
     } catch (error) {
       this.error = this.errorText(error);
@@ -339,7 +346,7 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
       if (Date.now() > expiresAtMs) {
         if (this.codexAuthPoller) clearInterval(this.codexAuthPoller);
         this.codexAuthPoller = undefined;
-        this.notice = "Codex sign-in expired. Start again.";
+        this.notice = "Sign-in expired. Open Codex sign-in again.";
         this.renderNow();
         return;
       }
@@ -711,21 +718,28 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
     return this.mode === "setup";
   }
 
+  compactSetupMode(): boolean {
+    return this.isSetupMode() && new URLSearchParams(globalThis.location?.search || "").get("compact") === "1";
+  }
+
   isOnboardingMode(): boolean {
     return this.mode === "onboarding";
   }
 
   pageTitle(): string {
+    if (this.compactSetupMode()) return "Sign in to Codex";
     return this.isSetupMode() ? "Setup" : "Set up Orkestr";
   }
 
   pageSummary(): string {
+    if (this.compactSetupMode()) return "This Orkestr instance needs a Codex login before it can start coding threads.";
     return this.isSetupMode()
       ? "Check secure access, accounts, runtimes, and optional connectors after the installer has prepared the local Orkestr runtime."
       : "Start with Codex and WhatsApp. Add mail, timers, and managed browser desktops only when you need those capabilities.";
   }
 
   pageEyebrow(): string {
+    if (this.compactSetupMode()) return "Orkestr connect";
     return this.isSetupMode() ? "Orkestr setup" : "Self-hosted agent cockpit";
   }
 
@@ -738,7 +752,42 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
   }
 
   closeLabel(): string {
+    if (this.compactSetupMode()) return "Open Orkestr";
     return this.isSetupMode() ? "Back to Orkestr" : "Open Orkestr";
+  }
+
+  compactCodexTitle(): string {
+    if (this.agentRuntimeReady()) return "Codex is signed in";
+    return "Connect Codex to this VM";
+  }
+
+  compactCodexSummary(): string {
+    if (this.agentRuntimeReady()) return "Opening Orkestr.";
+    if (!this.codexCommandAvailable()) return "Codex is not ready in this runtime yet.";
+    if (this.codexDeviceCode) return "Copy the code first, then open the Codex sign-in page and paste it there.";
+    return "Creating a Codex device code. Device-code login must be enabled in ChatGPT security settings.";
+  }
+
+  codexAuthStatusText(): string {
+    if (this.agentRuntimeReady()) return "Codex connected. Opening Orkestr.";
+    if (this.codexDeviceCode) return this.codexDeviceCodeCopied ? "Code copied. Open the sign-in page and paste it there." : "Click the code to copy it before opening the sign-in page.";
+    return "";
+  }
+
+  private maybeLeaveCompletedCompactSetup(): void {
+    if (!this.compactSetupMode() || !this.agentRuntimeReady() || this.compactCodexOpenTimer) return;
+    this.notice = "Codex connected. Opening Orkestr.";
+    this.compactCodexOpenTimer = setTimeout(() => {
+      this.compactCodexOpenTimer = undefined;
+      this.openApp();
+    }, 400);
+  }
+
+  private maybeStartCompactCodexDeviceAuth(): void {
+    if (!this.compactSetupMode() || this.agentRuntimeReady() || !this.codexCommandAvailable()) return;
+    if (this.compactCodexDeviceAuthStarted || this.codexDeviceCode) return;
+    this.compactCodexDeviceAuthStarted = true;
+    void this.startCodexDeviceAuth(false);
   }
 
   timezoneDone(): boolean {
@@ -792,6 +841,7 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
   }
 
   setupSections(): Array<{ id: OnboardingStep; label: string; eyebrow: string }> {
+    if (this.compactSetupMode()) return [{ id: "codex", label: "Codex", eyebrow: "Required" }];
     const setupConnectors = this.connectorSteps.filter((step) => this.leanSetupConnectorIds.includes(step.id));
     return [
       { id: "system", label: "Connections", eyebrow: "Runtime" },
@@ -1158,7 +1208,7 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
     await this.loadSecureSecrets();
   }
 
-  async startCodexDeviceAuth(): Promise<void> {
+  async startCodexDeviceAuth(openAuthPage = true): Promise<void> {
     if (!this.codexCommandAvailable()) {
       this.error = this.codexCommandUnavailableHint();
       this.notice = "";
@@ -1168,10 +1218,13 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
     try {
       const result = await firstValueFrom(this.api.startCodexDeviceAuth());
       this.codexDeviceCode = result.code || "";
+      this.codexDeviceCodeCopied = false;
       this.codexAuthUrl = result.authUrl || "";
       this.codexAuthExpiresAt = result.expiresAt || "";
-      if (this.codexAuthUrl) globalThis.open?.(this.codexAuthUrl, "_blank", "noopener,noreferrer");
-      this.notice = this.codexDeviceCode ? "Codex sign-in opened. Enter the device code in the browser." : "Codex sign-in started.";
+      if (openAuthPage && this.codexAuthUrl) globalThis.open?.(this.codexAuthUrl, "_blank", "noopener,noreferrer");
+      this.notice = this.compactSetupMode()
+        ? ""
+        : this.codexDeviceCode ? "Codex sign-in opened. Enter the device code in the browser." : "Codex sign-in started.";
       this.error = "";
       await this.load(false);
       this.startCodexAuthPolling(this.codexAuthExpiresAt);
@@ -1191,14 +1244,40 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
       if (this.codexAuthPoller) clearInterval(this.codexAuthPoller);
       this.codexAuthPoller = undefined;
       this.codexDeviceCode = "";
+      this.codexDeviceCodeCopied = false;
       this.codexAuthUrl = "";
       this.codexAuthExpiresAt = "";
-      this.notice = this.isSetupMode() ? "Codex connected. You can open Orkestr when ready." : "Codex connected. Continue setup.";
+      this.notice = this.compactSetupMode()
+        ? "Codex connected. Opening Orkestr."
+        : this.isSetupMode() ? "Codex connected. You can open Orkestr when ready." : "Codex connected. Continue setup.";
       this.error = "";
       if (this.activeStep === "codex") await this.loadCodexAppServer(false);
+      if (this.compactSetupMode()) {
+        if (!this.compactCodexOpenTimer) {
+          this.compactCodexOpenTimer = setTimeout(() => {
+            this.compactCodexOpenTimer = undefined;
+            this.openApp();
+          }, 600);
+        }
+        return;
+      }
       if (!this.isSetupMode() && !this.isLastStep()) this.nextStep();
     } catch (error) {
       this.error = this.errorText(error);
+    } finally {
+      this.renderNow();
+    }
+  }
+
+  async copyCodexDeviceCode(showNotice = true): Promise<void> {
+    if (!this.codexDeviceCode) return;
+    try {
+      await globalThis.navigator?.clipboard?.writeText(this.codexDeviceCode);
+      this.codexDeviceCodeCopied = true;
+      if (showNotice) this.notice = "Code copied.";
+    } catch {
+      this.codexDeviceCodeCopied = false;
+      if (showNotice) this.notice = "Select and copy the code.";
     } finally {
       this.renderNow();
     }
@@ -1464,6 +1543,10 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
   }
 
   openApp(): void {
+    if (this.compactSetupMode()) {
+      this.openAppRequested.emit();
+      return;
+    }
     if (this.isSetupMode()) {
       this.skip.emit();
       return;
@@ -1632,20 +1715,20 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
   private firstOpenStep(): OnboardingStep {
     const steps = this.pageSections();
     const storedStep = steps.find((step) => step.id === this.activeStep)?.id;
-    if (this.isSetupMode()) return storedStep || "system";
+    if (this.isSetupMode()) return storedStep || steps[0]?.id || "system";
     return storedStep || "goal";
   }
 
   private ensureActiveStepAvailable(): void {
     if (this.pageSections().some((step) => step.id === this.activeStep)) return;
-    this.activeStep = this.isSetupMode() ? "system" : "goal";
+    this.activeStep = this.isSetupMode() ? this.pageSections()[0]?.id || "system" : "goal";
   }
 
   private applySetupSectionFromInput(): void {
     if (!this.isSetupMode()) return;
     const section = String(this.setupSection || "").trim().toLowerCase();
     const match = this.setupSections().find((step) => step.id === section);
-    this.activeStep = match?.id || "system";
+    this.activeStep = match?.id || this.setupSections()[0]?.id || "system";
     this.stepInitialized = true;
   }
 

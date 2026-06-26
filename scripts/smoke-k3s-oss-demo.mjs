@@ -80,7 +80,7 @@ async function staticContractCheck() {
   assert.match(demoNotify, /brokerInstanceWhatsAppRequest/);
   assert.doesNotMatch(demoNotify, /writeConnectorConfig\("whatsapp"/);
   assert.match(demoNotify, /trycloudflare/);
-  assert.match(demoNotify, /browser-pairing challenge/);
+  assert.match(demoNotify, /orkestr connect approve/);
   assert.match(chart, /name: orkestr/);
   assert.match(values, /repository: orkestr\/orkestr/);
   assert.match(values, /ORKESTR_HOME: \/data/);

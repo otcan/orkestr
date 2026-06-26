@@ -27,6 +27,19 @@ ORKESTR_WHATSAPP_AUTOSTART=1
 ORKESTR_WHATSAPP_AUTOSTART_ACCOUNT_IDS=sender,responder
 ```
 
+When a deployment should expose only one routed account, set strict account ids:
+
+```bash
+ORKESTR_WHATSAPP_ACCOUNT_IDS=sender
+ORKESTR_WHATSAPP_STRICT_ACCOUNT_IDS=1
+ORKESTR_WHATSAPP_AUTOSTART_ACCOUNT_IDS=sender
+ORKESTR_WHATSAPP_DEFAULT_RESPONDER_ACCOUNT_ID=sender
+```
+
+Do not list skill-only WhatsApp accounts here. They should run in separate
+local-only skill runtimes, not in the Orkestr router or `orkestr-wa` account
+set. See [WhatsApp Account Operations](whatsapp-account-operations.md).
+
 For host-native systemd installs, the installer can create the standalone unit
 and a separate private env file:
 
@@ -167,3 +180,6 @@ it also verifies that `ORKESTR_WA_SERVICE_POLICY_JSON` is enforced; add
 exits non-zero when the service is unreachable, an account is missing, a required
 account is not ready, the routing policy does not match, or the access policy is
 not enforced.
+
+Only pass accounts that are intended to route Orkestr traffic to `--account`.
+Skill-only accounts are verified through their skill commands instead.

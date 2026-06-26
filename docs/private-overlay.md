@@ -17,6 +17,7 @@ The public repo may contain fake examples under `examples/`. It must not contain
 - business-specific prompts
 - personal timers
 - deployment files for a private host
+- skill-only WhatsApp account sessions, tokens, pairing codes, and phone numbers
 
 Minimum overlay file:
 
@@ -34,3 +35,8 @@ Minimum overlay file:
 ```
 
 The overlay is runtime input. Public code should add generic extension points when private use cases need new behavior.
+
+WhatsApp deployments that use more than one phone/account should keep the
+routed account configuration in private env or secret-manager state and keep
+skill-only account state outside `ORKESTR_WHATSAPP_ACCOUNT_IDS`. See
+[WhatsApp Account Operations](whatsapp-account-operations.md).

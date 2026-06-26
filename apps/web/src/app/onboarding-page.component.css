@@ -212,6 +212,15 @@
   padding: 0 14px 0 0;
 }
 
+.setup-panel.compact-setup {
+  grid-template-columns: minmax(0, 760px);
+  justify-content: center;
+}
+
+.setup-panel.compact-setup .setup-form {
+  grid-column: 1;
+}
+
 .setup-panel-head {
   display: flex;
   align-items: flex-start;
@@ -229,6 +238,54 @@
 .setup-panel.setup-mode .setup-form {
   max-width: none;
   min-height: 0;
+}
+
+.compact-codex-setup {
+  align-content: start;
+  min-height: 0;
+}
+
+.compact-codex-copy {
+  display: grid;
+  gap: 8px;
+}
+
+.compact-codex-copy p,
+.compact-codex-next {
+  max-width: 720px;
+  color: #a9bea4;
+  line-height: 1.5;
+  margin: 0;
+}
+
+.compact-codex-copy p:first-child {
+  color: #d7e7ce;
+}
+
+.codex-device-code {
+  display: grid;
+  justify-items: start;
+  gap: 6px;
+  border: 1px solid rgba(101, 198, 222, 0.34);
+  border-radius: 8px;
+  background: rgba(3, 11, 12, 0.72);
+  color: #c8f5ff;
+  padding: 14px;
+  text-align: left;
+}
+
+.codex-device-code span {
+  color: #8cff9b;
+  font-size: 0.72rem;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.codex-device-code strong {
+  color: #ffffff;
+  font-size: 1.35rem;
+  letter-spacing: 0.08em;
 }
 
 .setup-form label {
@@ -345,6 +402,10 @@
 
 .oauth-link {
   text-decoration: none;
+}
+
+.secondary-link {
+  color: #a9bea4;
 }
 
 .mail-section-title {

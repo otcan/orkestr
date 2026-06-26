@@ -6,8 +6,10 @@ import path from "node:path";
 import test from "node:test";
 import {
   __brokerInstanceRegistryTestInternals,
+  brokerWhatsAppRelayAccountId,
   encryptBrokerChannelPayload,
   decryptBrokerInstanceRequest,
+  ensureBrokerClientRegistration,
   heartbeatBrokerInstance,
   listBrokerInstances,
   registerBrokerInstance,
@@ -90,7 +92,7 @@ test("broker registry persists instances in sqlite and redacts routing metadata"
       endpointBaseUrl: "http://10.0.0.12:19822",
       connectBaseUrl: "https://connect.orkestr.de",
       relayAccountId: "responder",
-      whatsappChatHash: "hash-only",
+      whatsappNumber: "+49 176 123456",
     },
   });
 
@@ -107,8 +109,71 @@ test("broker registry persists instances in sqlite and redacts routing metadata"
   assert.equal(listed.instances[0].relayAccountId, "responder");
   assert.equal(listed.instances[0].whatsappChatHashConfigured, true);
   assert.equal(listed.instances[0].whatsappChatHash, undefined);
+  assert.equal(JSON.stringify(listed).includes("49176123456"), false);
+  assert.equal(JSON.stringify(listed).includes("+49 176 123456"), false);
   assert.equal(resolved.ok, true);
   assert.equal(resolved.instance.instanceId, registration.instanceId);
+});
+
+test("broker WhatsApp onboarding prefers sender account over responder fallback", () => {
+  assert.equal(brokerWhatsAppRelayAccountId({}, {}), "sender");
+  assert.equal(brokerWhatsAppRelayAccountId({}, {
+    ORKESTR_WHATSAPP_SENDER_ACCOUNT_ID: "tr-sender",
+    ORKESTR_WHATSAPP_RESPONDER_ACCOUNT_ID: "de-responder",
+  }), "tr-sender");
+  assert.equal(brokerWhatsAppRelayAccountId({}, {
+    ORKESTR_BROKER_WHATSAPP_ONBOARDING_ACCOUNT_ID: "onboarding-relay",
+    ORKESTR_WHATSAPP_SENDER_ACCOUNT_ID: "tr-sender",
+  }), "onboarding-relay");
+  assert.equal(brokerWhatsAppRelayAccountId({ relayAccountId: "instance-relay" }, {
+    ORKESTR_BROKER_WHATSAPP_ONBOARDING_ACCOUNT_ID: "onboarding-relay",
+  }), "instance-relay");
+});
+
+test("broker client registration cache is scoped to the declared WhatsApp number", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-broker-client-cache-"));
+  const calls = [];
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_DEMO_BROKER_BASE_URL: "https://broker.example.test",
+    ORKESTR_DEMO_WHATSAPP_NUMBER: "+49 176 111111",
+  };
+  const fetchImpl = async (url, options = {}) => {
+    calls.push({ url, body: JSON.parse(options.body) });
+    return {
+      ok: true,
+      status: 200,
+      async json() {
+        return {
+          ok: true,
+          instanceId: `instance-${calls.length}`,
+          channelId: `channel-${calls.length}`,
+          registeredAt: "2026-06-11T00:00:00.000Z",
+          broker: {
+            keyId: "broker-key-1",
+            publicKey: "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VuAyEA2IFd3Rdi7NTih5q0Glq82pzgjEycOnu/MpuxJdGzGn4=\n-----END PUBLIC KEY-----\n",
+          },
+        };
+      },
+    };
+  };
+
+  const first = await ensureBrokerClientRegistration(env, { fetchImpl });
+  const second = await ensureBrokerClientRegistration(env, { fetchImpl });
+  const third = await ensureBrokerClientRegistration({
+    ...env,
+    ORKESTR_DEMO_WHATSAPP_NUMBER: "+49 176 222222",
+  }, { fetchImpl });
+  const cached = JSON.parse(await fs.readFile(path.join(home, "secrets", "broker-client-registration.json"), "utf8"));
+
+  assert.equal(first.reused, false);
+  assert.equal(second.reused, true);
+  assert.equal(third.reused, false);
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].body.whatsappNumber, "+49 176 111111");
+  assert.equal(calls[1].body.whatsappNumber, "+49 176 222222");
+  assert.equal(cached.whatsappTargetHash.length, 64);
+  assert.equal(JSON.stringify(cached).includes("49176"), false);
 });
 
 test("broker registration rejects missing token and enforces use/rate limits", async () => {
@@ -216,10 +281,9 @@ test("broker heartbeat requires encrypted channel payload", async () => {
   assert.ok(instances.instances[0].lastHeartbeatAt);
 });
 
-test("broker instance WhatsApp requests are encrypted and scoped to registered chat hash", async () => {
+test("broker instance WhatsApp requests are encrypted and scoped to registered WhatsApp number", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-broker-wa-request-"));
   const client = __brokerInstanceRegistryTestInternals.createX25519Identity();
-  const chatId = "4917600000000@c.us";
   const env = {
     ORKESTR_HOME: home,
     ORKESTR_BROKER_REGISTRATION_TOKEN: "register-secret",
@@ -230,14 +294,14 @@ test("broker instance WhatsApp requests are encrypted and scoped to registered c
     body: {
       encryptionPublicKey: client.publicKey,
       relayAccountId: "responder",
-      whatsappChatHash: crypto.createHash("sha256").update(chatId).digest("hex"),
+      whatsappNumber: "+49 176 0000000",
     },
   });
 
   const body = {
     channelId: registration.channelId,
     envelope: encryptBrokerChannelPayload({
-      chatId,
+      whatsappNumber: "+49 176 0000000",
       text: "hello",
     }, {
       clientPrivateKey: client.privateKey,
@@ -249,7 +313,7 @@ test("broker instance WhatsApp requests are encrypted and scoped to registered c
 
   assert.equal(decrypted.record.instanceId, registration.instanceId);
   assert.equal(decrypted.record.relayAccountId, "responder");
-  assert.equal(decrypted.payload.chatId, chatId);
+  assert.equal(decrypted.payload.whatsappNumber, "+49 176 0000000");
   assert.equal(decrypted.payload.text, "hello");
 
   await assert.rejects(
