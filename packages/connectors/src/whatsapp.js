@@ -1416,7 +1416,27 @@ async function routeThread(input, config, env) {
   const registryRoute = await resolveWhatsAppBinding({ chatId, accountId }, { env, threads, status: whatsappStatus }).catch(() => null);
   const registryBinding = registryRoute?.selected || null;
   if (registryRoute?.ok && registryBinding?.threadId) {
-    return { threadId: registryBinding.threadId, binding: registryBinding };
+    const sourceThread = threads.find((item) => item.id === registryBinding.threadId) || null;
+    const sourceBinding = sourceThread?.binding && typeof sourceThread.binding === "object" && !Array.isArray(sourceThread.binding)
+      ? sourceThread.binding
+      : null;
+    const binding = registryBinding.source === "thread" && sourceBinding
+      ? {
+        ...registryBinding,
+        ...sourceBinding,
+        id: pickString(registryBinding.id, sourceBinding.id),
+        bindingId: pickString(registryBinding.bindingId, sourceBinding.bindingId, registryBinding.id),
+        level: pickString(registryBinding.level, sourceBinding.level),
+        source: pickString(registryBinding.source, sourceBinding.source),
+        threadId: pickString(registryBinding.threadId, sourceThread?.id),
+        threadName: pickString(registryBinding.threadName, sourceThread?.name, sourceThread?.title, sourceThread?.bindingName),
+        routeEligible: registryBinding.routeEligible !== false && sourceBinding.routeEligible !== false,
+        acl: sourceBinding.acl || registryBinding.acl,
+        accountIds: registryBinding.accountIds,
+        legacyFields: registryBinding.legacyFields,
+      }
+      : registryBinding;
+    return { threadId: registryBinding.threadId, binding };
   }
   if (registryRoute?.error === "wa_binding_ambiguous") {
     throw routingConflict("wa_binding_ambiguous", {
