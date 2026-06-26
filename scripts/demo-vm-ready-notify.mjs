@@ -158,11 +158,11 @@ function publicSetupUrlOverride(env = process.env) {
 function publicBaseUrlOverride(env = process.env) {
   return firstValue(
     env.ORKESTR_DEMO_ENTRY_BASE_URL,
+    env.ORKESTR_CONNECT_PUBLIC_BASE_URL,
+    env.ORKESTR_CONNECT_BASE_URL,
     env.ORKESTR_PUBLIC_SITE_URL,
     env.ORKESTR_PRIMARY_PUBLIC_URL,
     env.ORKESTR_PRIMARY_DOMAIN,
-    env.ORKESTR_CONNECT_PUBLIC_BASE_URL,
-    env.ORKESTR_CONNECT_BASE_URL,
     env.ORKESTR_DEMO_PUBLIC_BASE_URL,
     env.ORKESTR_PUBLIC_HTTPS_URL,
     env.ORKESTR_HTTPS_URL,

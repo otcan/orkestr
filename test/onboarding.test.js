@@ -63,7 +63,7 @@ test("onboarding focuses the starter setup on virtual desktop and WhatsApp", asy
   assert.ok(onboarding.includes("startCodexAuthPolling"));
   assert.ok(onboarding.includes("pollCodexAuth"));
   assert.ok(onboarding.includes("Codex connected. You can open Orkestr when ready."));
-  assert.ok(onboarding.includes("Codex sign-in expired. Start again."));
+  assert.ok(onboarding.includes("Sign-in expired. Open Codex sign-in again."));
   assert.ok(!onboarding.includes("globalThis.setTimeout(() => this.openApp(), 250)"));
   assert.ok(onboarding.includes("agentRuntimeReady()"));
   assert.ok(onboarding.includes("codexCommandAvailable()"));
