@@ -15,7 +15,7 @@ const requiredText = [
   {
     file: "README.md",
     patterns: [
-      /small self-hosted app around Codex/i,
+      /local-first workstation for running persistent coding and\s+operations agents/i,
       /persistent threads/i,
       /WhatsApp routing/i,
       /OSS vs managed/i,

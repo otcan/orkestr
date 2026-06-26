@@ -208,7 +208,7 @@
               (changed)="load(false)"
             ></ork-security-challenges-panel>
           } @else {
-            <div class="command-box">Unpaired browsers only see the Pairing Required screen. Generate a challenge there and approve it from SSH.</div>
+            <div class="command-box">Unpaired browsers only see the Pairing Required screen. Generate a challenge there, then run the exact orkestr security approve command it shows.</div>
           }
           <div class="command-box">Remote URL: {{ setup?.security?.https?.url || "Configure Caddy/Tailscale HTTPS before remote access" }}</div>
         </section>
@@ -483,10 +483,11 @@
               @if (mailProvider === "gmail") {
                 <strong>Create a Google OAuth app</strong>
                 <ol>
+                  <li>Skip this unless you want mail, calendar, or Drive actions. Codex and WhatsApp do not require Google.</li>
                   <li>Open Google Cloud Console, enable Gmail API plus any selected Calendar or Drive APIs, and configure the OAuth consent screen.</li>
                   <li>Create an OAuth client for a web application.</li>
                   <li>Add this authorized redirect URI: <code>{{ gmailRedirectUri }}</code></li>
-                  <li>Paste the client ID and secret here, then start auth or ask a WhatsApp-bound user to send <code>/connect google</code>.</li>
+                  <li>Paste the client ID and secret here, then start auth. From WhatsApp, send exactly <code>/connect google</code>.</li>
                 </ol>
                 <small>Use your own Google project. Orkestr requests only the scopes selected by the user; Drive uses selected-file access only.</small>
                 <a class="oauth-link" href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noreferrer">Open Google credentials</a>

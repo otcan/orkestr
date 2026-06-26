@@ -2023,6 +2023,13 @@ export class ApiService {
     );
   }
 
+  demoteWhatsAppBridgeChatAdmins(accountId: string, chatId: string, participantIds: string[]): Observable<Record<string, unknown>> {
+    return this.http.post<Record<string, unknown>>(
+      this.api(`/connectors/whatsapp/bridge/accounts/${encodeURIComponent(accountId)}/chats/${encodeURIComponent(chatId)}/admins/demote`),
+      { participantIds },
+    );
+  }
+
   agentTemplates(): Observable<{ templates: AgentTemplate[] }> {
     return this.http.get<{ templates: AgentTemplate[] }>(this.api("/agents/templates"));
   }

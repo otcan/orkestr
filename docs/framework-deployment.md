@@ -433,6 +433,9 @@ With `ORKESTR_RELEASE_DEPLOY=1`, `orkestr-update` delegates to
 - stops and starts `orkestr.service` with a short delivery drain marker so new
   inputs queue instead of being delivered during the restart window
 - verifies `/api/health`
+- fans out by default to broker-listed release-train instances after the local
+  host is healthy. The concrete instances and deploy commands live in private
+  host state, not in the OSS repo.
 - appends the result to `/opt/orkestr/deployments.json`
 
 Manual operations:
@@ -443,6 +446,7 @@ sudo orkestr rollback
 sudo orkestr update --track-main --no-smoke
 sudo orkestr update --track-main --no-smoke --wait-active
 sudo orkestr update --release --ref v0.1.7 --channel production
+sudo orkestr update --release --ref v0.1.7 --channel production --no-all-instances
 orkestr update status
 orkestr update rollback
 orkestr-deploy install --ref main --channel main --allow-untagged --no-smoke

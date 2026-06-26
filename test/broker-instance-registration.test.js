@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -6,9 +7,11 @@ import test from "node:test";
 import {
   __brokerInstanceRegistryTestInternals,
   encryptBrokerChannelPayload,
+  decryptBrokerInstanceRequest,
   heartbeatBrokerInstance,
   listBrokerInstances,
   registerBrokerInstance,
+  resolveBrokerConnectInstance,
 } from "../packages/core/src/broker-instance-registry.js";
 import { authorizeHttpRequest } from "../packages/core/src/security.js";
 
@@ -66,6 +69,46 @@ test("broker registration issues broker UUID and encrypted channel bootstrap", a
   assert.equal(instances.instances[0].instanceId, registration.instanceId);
   assert.equal(instances.instances[0].displayName, "demo vm");
   assert.equal(instances.instances[0].version, "0.1.0-alpha.33");
+});
+
+test("broker registry persists instances in sqlite and redacts routing metadata", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-broker-sqlite-"));
+  const client = __brokerInstanceRegistryTestInternals.createX25519Identity();
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_BROKER_INSTANCE_STORE: "sqlite",
+    ORKESTR_BROKER_REGISTRATION_TOKEN: "register-secret",
+  };
+
+  const registration = await registerBrokerInstance({
+    env,
+    request: request({ authorization: "Bearer register-secret" }),
+    body: {
+      displayName: "isolated vm",
+      version: "0.1.0-alpha.35",
+      encryptionPublicKey: client.publicKey,
+      endpointBaseUrl: "http://10.0.0.12:19822",
+      connectBaseUrl: "https://connect.orkestr.de",
+      relayAccountId: "responder",
+      whatsappChatHash: "hash-only",
+    },
+  });
+
+  const dbStat = await fs.stat(path.join(home, "broker-instances.sqlite"));
+  const listed = await listBrokerInstances(env);
+  const resolved = await resolveBrokerConnectInstance(registration.instanceId, env);
+
+  assert.ok(dbStat.size > 0);
+  assert.equal(listed.backend, "sqlite");
+  assert.equal(listed.instances.length, 1);
+  assert.equal(listed.instances[0].instanceId, registration.instanceId);
+  assert.equal(listed.instances[0].endpointBaseUrl, "http://10.0.0.12:19822");
+  assert.equal(listed.instances[0].connectBaseUrl, "https://connect.orkestr.de");
+  assert.equal(listed.instances[0].relayAccountId, "responder");
+  assert.equal(listed.instances[0].whatsappChatHashConfigured, true);
+  assert.equal(listed.instances[0].whatsappChatHash, undefined);
+  assert.equal(resolved.ok, true);
+  assert.equal(resolved.instance.instanceId, registration.instanceId);
 });
 
 test("broker registration rejects missing token and enforces use/rate limits", async () => {
@@ -173,6 +216,77 @@ test("broker heartbeat requires encrypted channel payload", async () => {
   assert.ok(instances.instances[0].lastHeartbeatAt);
 });
 
+test("broker instance WhatsApp requests are encrypted and scoped to registered chat hash", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-broker-wa-request-"));
+  const client = __brokerInstanceRegistryTestInternals.createX25519Identity();
+  const chatId = "4917600000000@c.us";
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_BROKER_REGISTRATION_TOKEN: "register-secret",
+  };
+  const registration = await registerBrokerInstance({
+    env,
+    request: request({ authorization: "Bearer register-secret" }),
+    body: {
+      encryptionPublicKey: client.publicKey,
+      relayAccountId: "responder",
+      whatsappChatHash: crypto.createHash("sha256").update(chatId).digest("hex"),
+    },
+  });
+
+  const body = {
+    channelId: registration.channelId,
+    envelope: encryptBrokerChannelPayload({
+      chatId,
+      text: "hello",
+    }, {
+      clientPrivateKey: client.privateKey,
+      brokerPublicKey: registration.broker.publicKey,
+      channelId: registration.channelId,
+    }),
+  };
+  const decrypted = await decryptBrokerInstanceRequest(registration.instanceId, body, env);
+
+  assert.equal(decrypted.record.instanceId, registration.instanceId);
+  assert.equal(decrypted.record.relayAccountId, "responder");
+  assert.equal(decrypted.payload.chatId, chatId);
+  assert.equal(decrypted.payload.text, "hello");
+
+  await assert.rejects(
+    () => decryptBrokerInstanceRequest(registration.instanceId, { ...body, channelId: "wrong" }, env),
+    /broker_channel_denied/,
+  );
+});
+
+test("broker connect resolver fails closed for unknown and disabled instances", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-broker-connect-"));
+  const client = __brokerInstanceRegistryTestInternals.createX25519Identity();
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_BROKER_INSTANCE_STORE: "json",
+    ORKESTR_BROKER_REGISTRATION_TOKEN: "register-secret",
+  };
+  const registration = await registerBrokerInstance({
+    env,
+    request: request({ authorization: "Bearer register-secret" }),
+    body: { encryptionPublicKey: client.publicKey },
+  });
+  const registryPath = path.join(home, "broker-instances.json");
+  const registry = JSON.parse(await fs.readFile(registryPath, "utf8"));
+  registry.instances[0].status = "disabled";
+  registry.instances[0].disabledAt = new Date().toISOString();
+  await fs.writeFile(registryPath, `${JSON.stringify(registry, null, 2)}\n`);
+
+  await assert.rejects(
+    () => resolveBrokerConnectInstance("missing", env),
+    /broker_instance_not_found/,
+  );
+  await assert.rejects(
+    () => resolveBrokerConnectInstance(registration.instanceId, env),
+    /broker_instance_disabled/,
+  );
+});
+
 test("broker registration endpoints are allowed before browser pairing", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-broker-prepair-"));
   const env = {
@@ -182,10 +296,14 @@ test("broker registration endpoints are allowed before browser pairing", async (
 
   const register = await authorizeHttpRequest({ method: "POST", url: "/api/broker/instances/register", headers: {} }, env);
   const heartbeat = await authorizeHttpRequest({ method: "POST", url: "/api/broker/instances/demo/heartbeat", headers: {} }, env);
+  const onboarding = await authorizeHttpRequest({ method: "POST", url: "/api/broker/instances/demo/whatsapp/onboarding", headers: {} }, env);
+  const history = await authorizeHttpRequest({ method: "POST", url: "/api/broker/instances/demo/whatsapp/history", headers: {} }, env);
   const privateRoute = await authorizeHttpRequest({ method: "GET", url: "/api/broker/instances", headers: {} }, env);
 
   assert.equal(register.ok, true);
   assert.equal(heartbeat.ok, true);
+  assert.equal(onboarding.ok, true);
+  assert.equal(history.ok, true);
   assert.equal(privateRoute.ok, false);
   assert.equal(privateRoute.statusCode, 401);
 });

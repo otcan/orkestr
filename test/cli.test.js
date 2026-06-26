@@ -141,6 +141,45 @@ test("CLI sends local cli-auth bearer token when ORKESTR_HOME has one", async ()
   assert.equal(seen[0].headers.authorization, "Bearer local-cli-token");
 });
 
+test("CLI updates WhatsApp binding owner aliases", async () => {
+  const stdout = capture();
+  const seen = [];
+  const code = await runCli([
+    "--api",
+    "http://orkestr.test",
+    "whatsapp",
+    "bindings",
+    "update",
+    "thread:owner-alias-thread:whatsapp",
+    "--owner-contact",
+    "4917632400662@c.us",
+    "--owner-contact-alias",
+    "66378837028965@lid",
+    "--authorized-contact",
+    "4917632400662@c.us",
+    "--json",
+  ], {
+    stdout,
+    stderr: capture(),
+    fetchImpl: fakeFetch({
+      "PUT /api/connectors/whatsapp/bindings/thread%3Aowner-alias-thread%3Awhatsapp": {
+        ok: true,
+        binding: {
+          id: "thread:owner-alias-thread:whatsapp",
+          state: "ready",
+          ownerContactAliases: ["66378837028965@lid"],
+        },
+      },
+    }, seen),
+  });
+
+  assert.equal(code, 0);
+  assert.deepEqual(seen[0].body.ownerContactIds, ["4917632400662@c.us"]);
+  assert.deepEqual(seen[0].body.ownerContactAliases, ["66378837028965@lid"]);
+  assert.deepEqual(seen[0].body.authorizedContactIds, ["4917632400662@c.us"]);
+  assert.match(stdout.text(), /owner-alias-thread/);
+});
+
 test("CLI whereiam sends the current directory to the public API", async () => {
   const stdout = capture();
   const seen = [];
@@ -463,6 +502,33 @@ test("CLI desktop share chooses the configured desktop and calls the public API"
   assert.match(stdout.text(), /desktop-share\/share-1/);
 });
 
+test("CLI desktop share warns when desktop start fails after link creation", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-cli-desktop-share-start-warning-"));
+  const env = { ORKESTR_HOME: home };
+  const stdout = capture();
+
+  const code = await runCli(["--api", "http://orkestr.test", "desktop", "share", "linkedin"], {
+    env,
+    stdout,
+    stderr: capture(),
+    fetchImpl: fakeFetch({
+      "POST /api/desktops/linkedin/share": {
+        url: "https://desktop.example.test/desktop-share/share-1?key=secret",
+        share: { desktopSlug: "linkedin", label: "LinkedIn" },
+        desktopStart: {
+          requested: true,
+          ok: false,
+          error: "browserctl_root_requires_run_user_or_explicit_no_sandbox",
+        },
+      },
+    }),
+  });
+
+  assert.equal(code, 0);
+  assert.match(stdout.text(), /Desktop link for LinkedIn/);
+  assert.match(stdout.text(), /Warning: desktop start failed: browserctl_root_requires_run_user_or_explicit_no_sandbox/);
+});
+
 test("CLI desktop approve approves a pasted mobile desktop challenge", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-cli-desktop-approve-"));
   const env = { ORKESTR_HOME: home };
@@ -490,6 +556,71 @@ test("CLI desktop approve approves a pasted mobile desktop challenge", async () 
   assert.equal(code, 0);
   assert.equal(ready.approved, true);
   assert.match(stdout.text(), /Approved desktop access for linkedin/);
+});
+
+test("CLI jira draft emits task candidates from thread history without creating issues", async () => {
+  const stdout = capture();
+  const seen = [];
+  const code = await runCli(["--api", "http://orkestr.test", "jira", "draft", "thread-1", "--json"], {
+    stdout,
+    stderr: capture(),
+    fetchImpl: fakeFetch({
+      "GET /api/threads/thread-1/history": {
+        thread: {
+          id: "thread-1",
+          name: "otcanClaw-orkestr",
+          binding: { chatId: "chat-one@g.us" },
+        },
+        messages: [
+          {
+            id: "msg-1",
+            role: "user",
+            text: "Fix WhatsApp bridge ready-state drift and add regression tests",
+            createdAt: "2026-06-13T12:00:00.000Z",
+            cursor: 1,
+            chatId: "chat-one@g.us",
+          },
+          {
+            id: "msg-2",
+            role: "assistant",
+            text: "I reproduced stale ready state and will patch the bridge.",
+            cursor: 2,
+          },
+        ],
+      },
+    }, seen),
+  });
+
+  const payload = JSON.parse(stdout.text());
+  assert.equal(code, 0);
+  assert.equal(payload.mode, "draft_only");
+  assert.match(payload.warning, /No Jira issues were created/);
+  assert.equal(payload.candidates.length, 1);
+  assert.equal(payload.candidates[0].summary, "Fix WhatsApp bridge ready-state drift and add regression tests");
+  assert.deepEqual(payload.candidates[0].labels.sort(), ["orkestr", "testing", "whatsapp"].sort());
+  assert.equal(payload.candidates[0].source.threadId, "thread-1");
+  assert.deepEqual(seen.map((entry) => entry.key), ["GET /api/threads/thread-1/history"]);
+});
+
+test("CLI jira draft text output is review-only", async () => {
+  const stdout = capture();
+  const code = await runCli(["--api", "http://orkestr.test", "jira", "draft", "thread-2"], {
+    stdout,
+    stderr: capture(),
+    fetchImpl: fakeFetch({
+      "GET /api/threads/thread-2/history": {
+        thread: { id: "thread-2", name: "Desktop Thread" },
+        messages: [
+          { id: "msg-3", role: "user", text: "Improve desktop share renewal flow for expired links", cursor: 1 },
+        ],
+      },
+    }),
+  });
+
+  assert.equal(code, 0);
+  assert.match(stdout.text(), /No Jira issues were created/);
+  assert.match(stdout.text(), /Improve desktop share renewal flow for expired links/);
+  assert.match(stdout.text(), /Acceptance criteria:/);
 });
 
 test("CLI version prints the active build identity", async () => {
@@ -1296,6 +1427,32 @@ test("CLI resolves active WhatsApp bindings", async () => {
   assert.match(stdout.text(), /Reply identity: neutral-1/);
 });
 
+test("CLI resolves WhatsApp bindings by chat without a positional thread", async () => {
+  const stdout = capture();
+  const seen = [];
+  const code = await runCli(["whatsapp", "bindings", "resolve", "--chat-id", "chat-1@g.us", "--account", "neutral-1", "--json"], {
+    stdout,
+    stderr: capture(),
+    fetchImpl: fakeFetch({
+      "GET /api/connectors/whatsapp/bindings/resolve": {
+        ok: true,
+        selected: {
+          id: "thread:thread-1:whatsapp",
+          state: "ready",
+          threadName: "Thread 1",
+          chatId: "chat-1@g.us",
+          responderAccountId: "neutral-1",
+        },
+      },
+    }, seen),
+  });
+
+  assert.equal(code, 0);
+  assert.equal(seen[0].key, "GET /api/connectors/whatsapp/bindings/resolve");
+  assert.equal(seen[0].search, "?chatId=chat-1%40g.us&accountId=neutral-1");
+  assert.equal(JSON.parse(stdout.text()).selected.chatId, "chat-1@g.us");
+});
+
 test("CLI filters active WhatsApp binding lists", async () => {
   const stdout = capture();
   const seen = [];
@@ -1735,8 +1892,9 @@ test("CLI update can run the versioned release deployer", async () => {
   assert.equal(spawned.length, 1);
   assert.equal(spawned[0].command, "bash");
   assert.match(spawned[0].args[0], /scripts\/deploy-git-release\.sh$/);
-  assert.deepEqual(spawned[0].args.slice(1), ["install", "--ref", "v0.1.0-alpha.10", "--channel", "stage", "--no-smoke"]);
+  assert.deepEqual(spawned[0].args.slice(1), ["install", "--ref", "v0.1.0-alpha.10", "--channel", "stage", "--no-smoke", "--all-instances"]);
   assert.equal(spawned[0].env.ORKESTR_RELEASE_DEPLOY, "1");
+  assert.equal(spawned[0].env.ORKESTR_RELEASE_TRAIN_FANOUT, "1");
   assert.equal(spawned[0].env.ORKESTR_DEPLOY_REF, "v0.1.0-alpha.10");
   assert.equal(spawned[0].env.ORKESTR_DEPLOY_CHANNEL, "stage");
   assert.match(stdout.text(), /versioned release update for v0\.1\.0-alpha\.10/);
@@ -1775,6 +1933,7 @@ test("CLI update forwards no-interrupt deploy guard flags", async () => {
     "main",
     "--allow-untagged",
     "--no-smoke",
+    "--all-instances",
     "--wait-active",
     "--active-timeout",
     "30",
@@ -1807,6 +1966,32 @@ test("CLI update forwards release instance fan-out flag", async () => {
   ]);
 });
 
+test("CLI update can opt out of default release instance fan-out", async () => {
+  const spawned = [];
+  const code = await runCli(["update", "--release", "--ref", "main", "--allow-untagged", "--no-all-instances", "--no-smoke"], {
+    env: {},
+    stdout: capture(),
+    stderr: capture(),
+    spawnImpl(command, args, options) {
+      spawned.push({ command, args, env: options.env });
+      const child = new EventEmitter();
+      queueMicrotask(() => child.emit("exit", 0));
+      return child;
+    },
+  });
+
+  assert.equal(code, 0);
+  assert.equal(spawned[0].env.ORKESTR_RELEASE_TRAIN_FANOUT, "0");
+  assert.deepEqual(spawned[0].args.slice(1), [
+    "install",
+    "--ref",
+    "main",
+    "--allow-untagged",
+    "--no-smoke",
+    "--no-all-instances",
+  ]);
+});
+
 test("CLI update can track main as versioned releases", async () => {
   const stdout = capture();
   const spawned = [];
@@ -1826,8 +2011,9 @@ test("CLI update can track main as versioned releases", async () => {
   assert.equal(spawned.length, 1);
   assert.equal(spawned[0].command, "bash");
   assert.match(spawned[0].args[0], /scripts\/deploy-git-release\.sh$/);
-  assert.deepEqual(spawned[0].args.slice(1), ["install", "--ref", "main", "--channel", "main", "--allow-untagged", "--no-smoke"]);
+  assert.deepEqual(spawned[0].args.slice(1), ["install", "--ref", "main", "--channel", "main", "--allow-untagged", "--no-smoke", "--all-instances"]);
   assert.equal(spawned[0].env.ORKESTR_RELEASE_DEPLOY, "1");
+  assert.equal(spawned[0].env.ORKESTR_RELEASE_TRAIN_FANOUT, "1");
   assert.equal(spawned[0].env.ORKESTR_DEPLOY_REF, "main");
   assert.equal(spawned[0].env.ORKESTR_DEPLOY_CHANNEL, "main");
   assert.equal(spawned[0].env.ORKESTR_DEPLOY_TAGS_ONLY, "0");

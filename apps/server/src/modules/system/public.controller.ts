@@ -1,4 +1,5 @@
 import { Body, Controller, Get, HttpCode, Param, Post, Query, Req, Res } from "@nestjs/common";
+import { resolveBrokerConnectInstance } from "../../../../../packages/core/src/broker-instance-registry.js";
 import { submitWaitlistEntry } from "../../../../../packages/core/src/user-waitlist.js";
 import { httpError } from "../../common/http.js";
 
@@ -50,6 +51,11 @@ export class InstanceConnectController {
   ) {
     const instanceId = normalizeInstanceId(rawInstanceId);
     if (!instanceId) throw httpError("instance_id_required", 400);
+    try {
+      await resolveBrokerConnectInstance(instanceId, process.env);
+    } catch (error: any) {
+      throw httpError(String(error?.message || "broker_instance_unavailable"), Number(error?.statusCode || 404));
+    }
     const target = new URL("/setup/pairing", "http://localhost");
     target.searchParams.set("instanceId", instanceId);
     target.searchParams.set("return", String(returnTo || "/setup").trim() || "/setup");

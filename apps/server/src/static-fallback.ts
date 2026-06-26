@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { INestApplication } from "@nestjs/common";
+import { resolveBrokerConnectInstance } from "../../../packages/core/src/broker-instance-registry.js";
 import { securityCookieName, verifySecurityToken } from "../../../packages/core/src/security.js";
 import { publicPairingUrl, publicSiteAllowedForHost, publicSitePath, renderPublicSite } from "./public-site.js";
 
@@ -28,7 +29,19 @@ export function registerStaticFallback(app: INestApplication): void {
     if (url.startsWith("/desktop-share/")) {
       return serveDesktopSharePage(response);
     }
-    const instanceSetupRedirect = instanceSetupRedirectUrl(request, url);
+    let instanceSetupRedirect = "";
+    try {
+      instanceSetupRedirect = await instanceSetupRedirectUrl(request, url);
+    } catch (error: any) {
+      if (isInstanceSetupPath(url)) {
+        return response
+          .status(Number(error?.statusCode || 404))
+          .header("cache-control", "no-store")
+          .type("text/plain; charset=utf-8")
+          .send(String(error?.message || "broker_instance_unavailable"));
+      }
+      throw error;
+    }
     if (instanceSetupRedirect) {
       return response
         .status(302)
@@ -59,16 +72,23 @@ export function registerStaticFallback(app: INestApplication): void {
   });
 }
 
-function instanceSetupRedirectUrl(request: any, requestUrl: string): string {
+async function instanceSetupRedirectUrl(request: any, requestUrl: string): Promise<string> {
   const url = new URL(requestUrl || "/", "http://localhost");
   const parts = url.pathname.split("/").filter(Boolean);
   if (parts.length !== 3 || parts[0] !== "i" || parts[2] !== "setup") return "";
   const instanceId = normalizeInstanceId(parts[1]);
   if (!instanceId) return "";
+  await resolveBrokerConnectInstance(instanceId, process.env);
   const target = new URL("/setup/pairing", originalRequestOrigin(request));
   target.searchParams.set("instanceId", instanceId);
   target.searchParams.set("return", url.searchParams.get("return") || "/setup");
   return `${target.pathname}${target.search}`;
+}
+
+function isInstanceSetupPath(requestUrl: string): boolean {
+  const url = new URL(requestUrl || "/", "http://localhost");
+  const parts = url.pathname.split("/").filter(Boolean);
+  return parts.length === 3 && parts[0] === "i" && parts[2] === "setup";
 }
 
 function normalizeInstanceId(value = ""): string {
@@ -157,7 +177,7 @@ function serveDesktopSharePage(response: any) {
     <p id="status"></p>
     <a id="open" class="button" href="#" hidden>Open desktop</a>
     <a id="mobile" class="button" href="#" hidden>Mobile controls</a>
-    <small>This link only works for this browser after the challenge is pasted back to the Orkestr chat.</small>
+    <small>This link only works for this browser after the exact command below is pasted back to the Orkestr chat.</small>
   </main>
   <script>
     const parts = location.pathname.split('/').filter(Boolean);
@@ -182,8 +202,22 @@ function serveDesktopSharePage(response: any) {
     async function json(url) {
       const response = await fetch(url, { credentials: 'same-origin' });
       const body = await response.json().catch(() => ({}));
-      if (!response.ok || body.ok === false) throw new Error(body.error || body.message || 'desktop_share_failed');
+      if (!response.ok || body.ok === false) {
+        const error = new Error(body.renewal && body.renewal.message ? body.renewal.message : (body.error || body.message || 'desktop_share_failed'));
+        error.payload = body;
+        throw error;
+      }
       return body;
+    }
+    function showExpired(error) {
+      const renewal = error && error.payload ? error.payload.renewal : null;
+      if (!renewal || !renewal.renewCommand) return false;
+      challenge.textContent = renewal.renewCommand;
+      summary.textContent = 'This desktop link expired.';
+      statusNode.textContent = renewal.message || 'Ask the Orkestr operator to create a fresh desktop link.';
+      statusNode.className = 'error';
+      copy.textContent = 'Copy renewal command';
+      return true;
     }
     async function poll() {
       try {
@@ -204,6 +238,7 @@ function serveDesktopSharePage(response: any) {
         statusNode.textContent = 'Waiting for approval from chat.';
         setTimeout(poll, 2000);
       } catch (error) {
+        if (showExpired(error)) return;
         statusNode.textContent = error.message || String(error);
         statusNode.className = 'error';
       }
@@ -213,10 +248,11 @@ function serveDesktopSharePage(response: any) {
         const body = await json(api('open'));
         const value = body.attempt && body.attempt.challenge ? body.attempt.challenge : '';
         challenge.textContent = 'orkestr desktop approve ' + value;
-        summary.textContent = 'Copy this challenge and paste it into the Orkestr chat that requested the desktop.';
+        summary.textContent = 'Copy this exact command and paste it into the Orkestr chat that requested the desktop.';
         statusNode.textContent = 'Waiting for approval from chat.';
         poll();
       } catch (error) {
+        if (showExpired(error)) return;
         challenge.textContent = 'not available';
         statusNode.textContent = error.message || String(error);
         statusNode.className = 'error';

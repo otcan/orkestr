@@ -131,9 +131,9 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
     },
     {
       id: "inbox-summary",
-      label: "Mail summaries",
-      eyebrow: "Daily brief",
-      summary: "Connect Gmail or Outlook and schedule summaries back to WhatsApp.",
+      label: "Optional mail summaries",
+      eyebrow: "Optional",
+      summary: "Connect Gmail or Outlook only if you want inbox summaries sent back to WhatsApp.",
       requiredSteps: ["openai", "gmail", "whatsapp"],
     },
   ];
@@ -141,7 +141,7 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
   readonly connectorSteps: Array<{ id: ConnectorStep; label: string; eyebrow: string }> = [
     { id: "openai", label: "OpenAI API", eyebrow: "Optional API" },
     { id: "codex", label: "Codex Agent", eyebrow: "Required runtime" },
-    { id: "gmail", label: "Mail", eyebrow: "Inbox" },
+    { id: "gmail", label: "Optional mail", eyebrow: "Inbox" },
     { id: "linkedin", label: "LinkedIn", eyebrow: "Browser" },
     { id: "whatsapp", label: "WhatsApp", eyebrow: "Messages" },
     { id: "browsers", label: "Desktops", eyebrow: "Browser runtime" },
@@ -721,8 +721,8 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
 
   pageSummary(): string {
     return this.isSetupMode()
-      ? "Check secure access, accounts, runtimes, and connectors after the installer has prepared the local Orkestr runtime."
-      : "Orkestr runs persistent Codex threads, workspaces, WhatsApp, mail, timers, and managed browser desktops on infrastructure you control.";
+      ? "Check secure access, accounts, runtimes, and optional connectors after the installer has prepared the local Orkestr runtime."
+      : "Start with Codex and WhatsApp. Add mail, timers, and managed browser desktops only when you need those capabilities.";
   }
 
   pageEyebrow(): string {
@@ -866,7 +866,7 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
       {
         label: "Mail auth",
         state: this.mailSystemState(),
-        summary: this.mailSummary(),
+        summary: `Optional. ${this.mailSummary()}`,
         className: this.mailStatusClass(),
       },
     ];

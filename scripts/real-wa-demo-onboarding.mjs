@@ -1,8 +1,10 @@
 #!/usr/bin/env node
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { requestJson } from "../apps/cli/src/api-client.js";
+import { brokerBaseUrlFromSetup, brokerInstanceWhatsAppRequest } from "./broker-wa-router.mjs";
 import { demoPublicSetupUrl, readyMessage } from "./demo-vm-ready-notify.mjs";
 
 function clean(value = "") {
@@ -11,6 +13,10 @@ function clean(value = "") {
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, Math.max(0, Number(ms || 0))));
+}
+
+function sha256(value = "") {
+  return crypto.createHash("sha256").update(String(value || "")).digest("hex");
 }
 
 function parseBool(value, fallback = false) {
@@ -36,7 +42,7 @@ function parseArgs(argv = [], env = process.env) {
     apiBase: clean(env.ORKESTR_REAL_WA_E2E_API_BASE || env.ORKESTR_API_BASE || "http://127.0.0.1:19812"),
     orkestrHome: clean(env.ORKESTR_REAL_WA_E2E_HOME || env.ORKESTR_HOME),
     chatId: clean(env.ORKESTR_REAL_WA_DEMO_CHAT_ID || env.ORKESTR_REAL_WA_E2E_CHAT_ID),
-    responderAccountId: clean(env.ORKESTR_REAL_WA_DEMO_RESPONDER_ACCOUNT || env.ORKESTR_REAL_WA_E2E_RESPONDER_ACCOUNT || "responder"),
+    phoneNumber: clean(env.ORKESTR_REAL_WA_DEMO_PHONE_NUMBER || env.ORKESTR_REAL_WA_DEMO_PHONE || env.ORKESTR_DEMO_WHATSAPP_NUMBER || env.ORKESTR_DEMO_WA_NUMBER),
     setupUrl: clean(env.ORKESTR_CONNECT_PUBLIC_SETUP_URL || env.ORKESTR_CONNECT_SETUP_PUBLIC_URL || env.ORKESTR_DEMO_PUBLIC_SETUP_URL || env.ORKESTR_DEMO_SETUP_PUBLIC_URL || ""),
     timeoutMs: Number(env.ORKESTR_REAL_WA_E2E_TIMEOUT_MS || 90_000),
     pollMs: Number(env.ORKESTR_REAL_WA_E2E_POLL_MS || 2000),
@@ -52,7 +58,8 @@ function parseArgs(argv = [], env = process.env) {
     else if (arg === "--api-base") options.apiBase = clean(argv[++index]);
     else if (arg === "--orkestr-home") options.orkestrHome = clean(argv[++index]);
     else if (arg === "--chat-id") options.chatId = clean(argv[++index]);
-    else if (arg === "--responder-account") options.responderAccountId = clean(argv[++index]);
+    else if (arg === "--phone" || arg === "--phone-number") options.phoneNumber = clean(argv[++index]);
+    else if (arg === "--responder-account") index += 1;
     else if (arg === "--setup-url") options.setupUrl = clean(argv[++index]);
     else if (arg === "--timeout-ms") options.timeoutMs = Number(argv[++index] || 0);
     else if (arg === "--poll-ms") options.pollMs = Number(argv[++index] || 0);
@@ -62,10 +69,13 @@ function parseArgs(argv = [], env = process.env) {
     else throw new Error(`unknown_arg:${arg}`);
   }
 
+  const target = normalizeDirectWhatsAppTarget({ chatId: options.chatId, phoneNumber: options.phoneNumber });
+  options.chatId = target.chatId;
+  options.phoneNumber = target.phoneNumber;
+
   if (options.help || !options.execute) return options;
   if (!options.apiBase) throw new Error("api_base_required");
-  if (!options.chatId) throw new Error("chat_id_required");
-  if (!options.responderAccountId) throw new Error("responder_account_required");
+  if (!options.chatId) throw new Error("target_phone_or_chat_id_required");
   if (options.setupUrl && isLocalUrl(options.setupUrl) && !options.allowLocalSetupUrl) throw new Error("setup_url_must_not_be_local");
   if (!Number.isFinite(options.timeoutMs) || options.timeoutMs < 10_000) throw new Error("invalid_timeout_ms");
   if (!Number.isFinite(options.pollMs) || options.pollMs < 250) throw new Error("invalid_poll_ms");
@@ -77,22 +87,36 @@ function usage() {
     "Usage: npm run e2e:whatsapp-demo-onboarding -- --execute [options]",
     "",
     "Runs the connect onboarding acceptance path: Orkestr sends the first WhatsApp",
-    "message from the serving/responder account to the target user and asks them",
+    "message through the broker WhatsApp router to the target user and asks them",
     "to complete Codex login/sign-in in setup.",
     "",
     "Required with --execute:",
-    "  --chat-id ID             Responder-side direct WhatsApp chat id for the target user.",
+    "  --phone NUMBER           Direct target user's WhatsApp phone number; derives <digits>@c.us.",
+    "                           --chat-id is still accepted for legacy direct-chat fixtures.",
     "",
     "Common options:",
     "  --api-base URL           Orkestr API base. Default: ORKESTR_API_BASE or localhost.",
     "  --orkestr-home DIR       Lets the API client use local CLI auth for that instance.",
-    "  --responder-account ID   WA account that Orkestr uses to send. Default: responder.",
+    "  --chat-id ID             Legacy direct WhatsApp chat id for the target user.",
     "  --setup-url URL          Public setup/pairing URL included in the prompt after broker registration.",
     "  --allow-local-setup-url  Unsafe test-only override for localhost setup URLs.",
     "  --artifact FILE          Write JSON result details.",
     "",
     "The default run refuses to send real WhatsApp messages without --execute.",
   ].join("\n");
+}
+
+export function normalizeDirectWhatsAppTarget({ chatId = "", phoneNumber = "" } = {}) {
+  const explicitChatId = clean(chatId);
+  const rawPhone = clean(phoneNumber);
+  const phoneDigits = rawPhone.replace(/[^\d]/g, "");
+  const phoneChatId = phoneDigits ? `${phoneDigits}@c.us` : "";
+  return {
+    chatId: explicitChatId || phoneChatId,
+    phoneNumber: rawPhone || (/@c\.us$/i.test(explicitChatId) ? `+${explicitChatId.split("@")[0].replace(/[^\d]/g, "")}` : ""),
+    phoneDigits,
+    derivedChatId: phoneChatId,
+  };
 }
 
 function apiEnv(options) {
@@ -148,10 +172,6 @@ function authenticatedFetchForApi(options) {
   };
 }
 
-function historyRoute(accountId, chatId, limit = 80) {
-  return `/api/connectors/whatsapp/bridge/accounts/${encodeURIComponent(accountId)}/chats/${encodeURIComponent(chatId)}/history?limit=${limit}`;
-}
-
 function messagesFromPayload(payload = {}) {
   if (Array.isArray(payload?.messages)) return payload.messages;
   if (Array.isArray(payload?.items)) return payload.items;
@@ -185,50 +205,12 @@ async function waitUntil(label, options, fn) {
   throw lastError || new Error(`${label}_timeout`);
 }
 
-function accountMatches(account = {}, requested = "") {
-  const target = clean(requested).toLowerCase();
-  if (!target) return false;
-  return [
-    account.accountId,
-    account.runtimeAccountId,
-    account.id,
-    account.phoneNumber,
-    account.contactId,
-  ].map((value) => clean(value).toLowerCase()).includes(target);
-}
-
-async function preflight(options) {
-  if (options.skipPreflight) return { skipped: true };
-  const status = await api(options, "/api/connectors/whatsapp/status");
-  const accounts = Array.isArray(status?.accounts) ? status.accounts : [];
-  const account = accounts.find((item) => accountMatches(item, options.responderAccountId));
-  if (!account) {
-    const error = new Error("responder_account_missing");
-    error.details = { requested: options.responderAccountId };
-    throw error;
-  }
-  if (account.ready !== true && clean(account.state) !== "ready") {
-    const error = new Error("responder_account_not_ready");
-    error.details = {
-      requested: options.responderAccountId,
-      accountId: clean(account.accountId || account.id),
-      state: clean(account.state),
-      nextAction: clean(account.nextAction),
-    };
-    throw error;
-  }
-  return {
-    mode: clean(status.mode),
-    state: clean(status.state),
-    accountId: clean(account.accountId || account.id),
-    runtimeAccountId: clean(account.runtimeAccountId),
-    stateText: clean(account.state),
-  };
-}
-
-async function waitForOutboundPrompt(options, text, afterMs, sentIds) {
-  return waitUntil("outbound_onboarding_prompt_visible", options, async () => {
-    const payload = await api(options, historyRoute(options.responderAccountId, options.chatId));
+async function waitForBrokerOutboundPrompt(setup, options, text, afterMs, sentIds) {
+  return waitUntil("broker_outbound_onboarding_prompt_visible", options, async () => {
+    const payload = await brokerInstanceWhatsAppRequest(setup, "history", {
+      chatId: options.chatId,
+      limit: 80,
+    }, { env: apiEnv(options) });
     const messages = messagesFromPayload(payload);
     return messages.find((message) => {
       const id = clean(message.id);
@@ -239,6 +221,23 @@ async function waitForOutboundPrompt(options, text, afterMs, sentIds) {
       );
     }) || null;
   });
+}
+
+async function verifySetupUrlReachable(setupUrl) {
+  const response = await fetch(setupUrl, { redirect: "manual" });
+  const location = clean(response.headers.get("location"));
+  const ok = [200, 302, 303, 307, 308].includes(response.status);
+  if (!ok) {
+    const error = new Error(`setup_url_unreachable_${response.status}`);
+    error.details = { setupUrl, status: response.status, location };
+    throw error;
+  }
+  if (response.status >= 300 && !/\/setup\/pairing\b/.test(location)) {
+    const error = new Error("setup_url_redirect_not_pairing");
+    error.details = { setupUrl, status: response.status, location };
+    throw error;
+  }
+  return { status: response.status, location };
 }
 
 async function writeArtifact(options, payload) {
@@ -252,6 +251,7 @@ export async function runRealWhatsAppDemoOnboarding(options) {
   const setup = await demoPublicSetupUrl({
     ...apiEnv(options),
     ...(options.setupUrl ? { ORKESTR_CONNECT_PUBLIC_SETUP_URL: options.setupUrl } : {}),
+    ORKESTR_DEMO_WHATSAPP_CHAT_HASH: sha256(options.chatId),
     ORKESTR_BROKER_FORCE_REREGISTER: "1",
   }, {
     fetchImpl: authenticatedFetchForApi(options),
@@ -263,7 +263,7 @@ export async function runRealWhatsAppDemoOnboarding(options) {
     flow: "demo-onboarding-codex-login",
     apiBase: options.apiBase,
     chatId: options.chatId,
-    responderAccountId: options.responderAccountId,
+    phoneNumber: options.phoneNumber,
     setupUrl: setup.setupUrl,
     setupUrlSource: setup.source || "",
     instanceId: setup.instanceId || "",
@@ -276,26 +276,28 @@ export async function runRealWhatsAppDemoOnboarding(options) {
   };
 
   try {
-    result.preflight = await preflight(options);
-    const sent = await api(options, "/api/connectors/whatsapp/bridge/send-text", {
-      method: "POST",
-      body: {
-        accountId: options.responderAccountId,
-        chatId: options.chatId,
-        text,
-        crossAccountEchoSuppression: true,
-      },
-    });
-    const sentIds = new Set((sent?.ids || sent?.sent?.map((item) => item.id) || []).map(clean).filter(Boolean));
-    const observed = await waitForOutboundPrompt(options, text, startedAt - 30_000, sentIds);
-    result.sentMessageId = [...sentIds][0] || clean(sent?.id);
+    result.preflight = {
+      mode: "broker",
+      brokerBaseUrl: brokerBaseUrlFromSetup(setup),
+      localWhatsAppRequired: false,
+    };
+    result.setupUrlCheck = await verifySetupUrlReachable(setup.setupUrl);
+    const sent = await brokerInstanceWhatsAppRequest(setup, "onboarding", {
+      chatId: options.chatId,
+      text,
+      crossAccountEchoSuppression: true,
+    }, { env: apiEnv(options) });
+    const sentPayload = sent?.sent || sent;
+    const sentIds = new Set((sentPayload?.ids || sentPayload?.sent?.map((item) => item.id) || []).map(clean).filter(Boolean));
+    const observed = await waitForBrokerOutboundPrompt(setup, options, text, startedAt - 30_000, sentIds);
+    result.sentMessageId = [...sentIds][0] || clean(sentPayload?.id);
     result.observedMessageId = clean(observed?.id);
     result.prompt = {
       asksForCodexLogin: /Codex login\/sign-in/i.test(text),
       includesSetupUrl: text.includes(setup.setupUrl),
       challengeGated: /browser-pairing challenge/i.test(text),
     };
-    result.ok = Boolean(result.observedMessageId) && result.prompt.asksForCodexLogin && result.prompt.includesSetupUrl;
+    result.ok = Boolean(result.observedMessageId) && result.prompt.asksForCodexLogin && result.prompt.includesSetupUrl && Boolean(result.setupUrlCheck?.status);
     result.finishedAt = new Date().toISOString();
     return result;
   } catch (error) {

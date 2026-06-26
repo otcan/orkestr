@@ -42,6 +42,7 @@ import { publicRoutingFailurePayload } from "../../../../../packages/core/src/ro
 import {
   addLocalWhatsAppGroupParticipants,
   createLocalWhatsAppChat,
+  demoteLocalWhatsAppGroupParticipants,
   generateLocalWhatsAppChatPicture,
   getLocalWhatsAppBridgeStatus,
   getLocalWhatsAppQrSvg,
@@ -404,6 +405,17 @@ export class ConnectorsController {
     });
   }
 
+  @Post("whatsapp/bridge/accounts/:accountId/chats/:chatId/admins/demote")
+  @HttpCode(200)
+  async whatsappBridgeDemoteGroupAdmins(@Req() request: any, @Param("accountId") accountId: string, @Param("chatId") chatId: string, @Body() body: Record<string, unknown> = {}) {
+    await assertWhatsAppBridgeBindingAcl("manage", { accountId, chatId }, request.orkestrMachineAuthContext);
+    return demoteLocalWhatsAppGroupParticipants({
+      accountId: await resolveLocalWhatsAppRuntimeAccountId(accountId),
+      chatId,
+      participantIds: bodyStringArray(body, "participantIds").concat(bodyStringArray(body, "participants")),
+    });
+  }
+
   @Post("whatsapp/bridge/typing/clear")
   @HttpCode(200)
   async whatsappBridgeClearTyping(@Req() request: any, @Body() body: Record<string, unknown> = {}) {
@@ -451,6 +463,7 @@ export class ConnectorsController {
       text: String(body.text || ""),
       accountId: String(body.accountId || ""),
       crossAccountEchoSuppression: body.crossAccountEchoSuppression !== false,
+      routeSentMessage: body.routeSentMessage === true,
     });
   }
 
@@ -470,6 +483,7 @@ export class ConnectorsController {
       accountId: String(body.accountId || ""),
       attachments: paths.map((filePath) => ({ path: filePath })),
       crossAccountEchoSuppression: body.crossAccountEchoSuppression !== false,
+      routeSentMessage: body.routeSentMessage === true,
     });
   }
 
@@ -482,6 +496,7 @@ export class ConnectorsController {
     const fromMe = optionalBodyBoolean(body, "fromMe", false);
     const from = String(body.from || body.author || "").trim();
     const eventId = String(body.eventId || body.id || `inject_${Date.now()}`).trim();
+    const routeAccountId = String(body.routeAccountId || body.senderAccountId || body.inboundAccountId || "").trim();
     if (!accountId) throw httpError("whatsapp_account_id_required", 400);
     if (!chatId) throw httpError("whatsapp_chat_id_required", 400);
     if (!text) throw httpError("whatsapp_text_required", 400);
@@ -496,7 +511,7 @@ export class ConnectorsController {
       fromMe,
       body: text,
       timestamp,
-    });
+    }, process.env, { routeAccountId });
   }
 
   @Post("whatsapp/inbound")
@@ -793,6 +808,8 @@ export class GoogleMarketingCallbacksController {
 
   @Get("callback")
   async googleMarketingCallback(@Query() query: Record<string, string>, @Req() request: any, @Res() response: any) {
+    const callbackState = String(query?.state || request?.query?.state || "").trim();
+    const isGmailCallback = callbackState.startsWith("gmail:");
     try {
       const result = await finishGmailOAuth(queryParamsFromRequest(request, query));
       await notifyGmailOAuthCallback(result).catch(() => null);
@@ -803,7 +820,7 @@ export class GoogleMarketingCallbacksController {
         .send(googleOAuthHtml(googleOAuthCallbackPayload(result)));
     } catch (error) {
       const message = String((error as Error)?.message || "");
-      if (message && !["gmail_oauth_state_mismatch", "gmail_oauth_code_required"].includes(message)) {
+      if (message && (isGmailCallback || !["gmail_oauth_state_mismatch", "gmail_oauth_code_required"].includes(message))) {
         return response
           .status(Number((error as any)?.statusCode || 500) || 500)
           .header("cache-control", "no-store")

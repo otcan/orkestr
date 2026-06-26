@@ -1,6 +1,6 @@
 {
   "name": "orkestr-oss",
-  "version": "0.1.0-alpha.35",
+  "version": "0.1.0-alpha.42",
   "description": "Self-hosted agent workstation: Codex threads, connectors, virtual browsers, WhatsApp, and timers.",
   "type": "module",
   "bin": {
@@ -14,7 +14,7 @@
     "build:runtime": "bash scripts/build-runtime.sh",
     "build": "npm run build:server && npm run web:build",
     "web:verify-static": "node scripts/verify-static-web.mjs",
-    "check": "find apps packages scripts examples -path '*/node_modules/*' -prune -o \\( -name '*.js' -o -name '*.mjs' \\) -print | while read -r file; do node --check \"$file\"; done && npm run build && node --test",
+    "check": "find apps packages scripts examples -path '*/node_modules/*' -prune -o \\( -name '*.js' -o -name '*.mjs' \\) -print | while read -r file; do node --check \"$file\"; done && npm run build && npm run test:ci",
     "test": "node --test",
     "test:ci": "node scripts/ci-test-runner.mjs",
     "oss:boundary-check": "node scripts/oss-boundary-check.mjs",
@@ -32,10 +32,12 @@
     "smoke:vps:k3s": "bash scripts/smoke-vps-k3s.sh",
     "smoke:k3s:oss-demo": "node scripts/smoke-k3s-oss-demo.mjs",
     "smoke:demo-vm": "node --test test/demo-vm-bootstrap.test.js",
+    "audit:isolation": "node scripts/audit-isolated-demo-instance.mjs",
     "k3s:public-ip": "bash scripts/k3s-vm-public-ip.sh",
     "install:local": "bash scripts/install.sh",
     "demo:coding-agent": "node scripts/coding-agent-demo.mjs",
     "demo:record": "node scripts/record-demo.mjs",
+    "demo:record:live": "node scripts/record-orkestr-oxrm-demo.mjs",
     "launch:check": "node scripts/launch-check.mjs",
     "pipeline:full": "node scripts/full-run-pipeline.mjs"
   },
@@ -50,6 +52,7 @@
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/addon-web-links": "^0.12.0",
     "@xterm/xterm": "^6.0.0",
+    "pg": "^8.21.0",
     "qrcode": "^1.5.4",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.2",

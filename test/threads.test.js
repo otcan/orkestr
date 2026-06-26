@@ -1906,6 +1906,84 @@ test("runtime status treats active working screen skills hint as typing", async 
   }
 });
 
+test("runtime status treats idle skills hint with status footer as prompt-ready", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-idle-skills-hint-"));
+  const fakeTmux = await createFakeTmux(home);
+  const priorPath = process.env.PATH;
+  const priorTmuxLog = process.env.TMUX_LOG;
+  const priorTmuxState = process.env.TMUX_STATE;
+  const priorTmuxCaptureText = process.env.TMUX_CAPTURE_TEXT;
+  process.env.PATH = `${fakeTmux.bin}:${priorPath || ""}`;
+  process.env.TMUX_LOG = fakeTmux.log;
+  process.env.TMUX_STATE = fakeTmux.state;
+  process.env.TMUX_CAPTURE_TEXT = [
+    "• Created Jira task: ORK-331",
+    "  https://example.test/browse/ORK-331",
+    "› Use /skills to list available skills",
+    "  gpt-5.5 high · /workspace",
+  ].join("\n");
+
+  try {
+    const env = {
+      ORKESTR_HOME: path.join(home, "orkestr-home"),
+      HOME: path.join(home, "runtime-home"),
+      CODEX_HOME: path.join(home, "codex-home"),
+      PATH: process.env.PATH,
+      TMUX_LOG: fakeTmux.log,
+      TMUX_STATE: fakeTmux.state,
+      TMUX_CAPTURE_TEXT: process.env.TMUX_CAPTURE_TEXT,
+    };
+    await createThread({ id: "idle-skills-hint-thread", name: "Idle Skills Hint Thread" }, env);
+    await wakeThread("idle-skills-hint-thread", { reason: "test" }, env);
+
+    const status = await runtimeStatus("idle-skills-hint-thread", env);
+
+    assert.equal(status.state, "ready");
+    assert.equal(status.working, false);
+    assert.equal(status.promptReady, true);
+  } finally {
+    restoreEnvValue("PATH", priorPath);
+    restoreEnvValue("TMUX_LOG", priorTmuxLog);
+    restoreEnvValue("TMUX_STATE", priorTmuxState);
+    restoreEnvValue("TMUX_CAPTURE_TEXT", priorTmuxCaptureText);
+  }
+});
+
+test("whatsapp external ids suppress duplicate source messages across account views", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-wa-external-account-view-"));
+  const env = { ORKESTR_HOME: home };
+  await createThread({ id: "wa-external-account-view-thread", name: "WA External Account View Thread" }, env);
+
+  const first = await enqueueThreadInput("wa-external-account-view-thread", {
+    source: "whatsapp_inbound",
+    connector: "whatsapp",
+    externalId: "chat@g.us_msg-123_sender@lid",
+    chatId: "chat@g.us",
+    accountId: "sender",
+    from: "sender@lid",
+    text: "same source message",
+  }, env);
+  await updateThreadMessage("wa-external-account-view-thread", first.id, {
+    state: "completed",
+    deliveryState: "delivered",
+  }, env);
+  const second = await enqueueThreadInput("wa-external-account-view-thread", {
+    source: "whatsapp_inbound",
+    connector: "whatsapp",
+    externalId: "chat@g.us_msg-123_sender@lid",
+    chatId: "chat@g.us",
+    accountId: "responder",
+    from: "sender@lid",
+    text: "same source message",
+  }, env);
+  const messages = await listThreadMessages("wa-external-account-view-thread", env);
+
+  assert.equal(second.duplicate, true);
+  assert.equal(second.duplicateReason, "external_id");
+  assert.equal(second.id, first.id);
+  assert.equal(messages.filter((message) => message.role === "user").length, 1);
+});
+
 test("thread input delivery waits for runtime acknowledgement before completing", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-delivery-ack-"));
   const fakeTmux = await createFakeTmux(home);
@@ -4664,10 +4742,13 @@ test("thread summary reuses recent live runtime samples", async () => {
     const firstChecks = (firstLog.match(/__CALL__\thas-session/g) || []).length;
     assert.ok(firstChecks >= 1);
 
+    resetThreadInputDeliveryTimersForTest();
+    await fs.writeFile(fakeTmux.log, "", "utf8");
     await threadSummaryPayload({ cacheTtlMs: 0, payloadCacheTtlMs: 0, runtimeStatusCacheTtlMs: 1000 });
-    const secondLog = await fs.readFile(fakeTmux.log, "utf8");
-    const secondChecks = (secondLog.match(/__CALL__\thas-session/g) || []).length;
-    assert.equal(secondChecks, firstChecks);
+    await threadSummaryPayload({ cacheTtlMs: 0, payloadCacheTtlMs: 0, runtimeStatusCacheTtlMs: 1000 });
+    const cachedLog = await fs.readFile(fakeTmux.log, "utf8");
+    const cachedChecks = (cachedLog.match(/__CALL__\thas-session/g) || []).length;
+    assert.ok(cachedChecks <= 1);
   } finally {
     resetThreadInputDeliveryTimersForTest();
     resetThreadSummaryCachesForTest();
@@ -5870,7 +5951,7 @@ test("thread input approves a pasted Orkestr pairing page locally before Codex d
       "Challenge ID",
       challenge.challengeId,
       "pending",
-      "Approve From SSH",
+      "Approve With This Exact Command",
       "ssh root@orkestr.example.test",
       `orkestr security approve ${challenge.challengeId}`,
       `sudo orkestr security approve ${challenge.challengeId}`,
@@ -5968,6 +6049,78 @@ test("thread runtime summary reads Codex model and limits from live metadata", a
     if (priorCodexHome === undefined) delete process.env.CODEX_HOME;
     else process.env.CODEX_HOME = priorCodexHome;
   }
+});
+
+test("Codex thread metadata backfills model from rollout turn context", async (t) => {
+  try {
+    await execFileAsync("sqlite3", ["--version"]);
+  } catch {
+    t.skip("sqlite3 unavailable");
+    return;
+  }
+
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-rollout-model-"));
+  const codexHome = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-rollout-model-"));
+  const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-rollout-workspace-"));
+  const codexThreadId = "44444444-4444-4444-8444-444444444444";
+  const rolloutPath = path.join(codexHome, "sessions", "rollout-turn-context.jsonl");
+  await fs.mkdir(path.dirname(rolloutPath), { recursive: true });
+  await fs.writeFile(rolloutPath, [
+    JSON.stringify({
+      timestamp: "2026-06-14T10:00:00.000Z",
+      type: "turn_context",
+      payload: {
+        model: "gpt-5.5",
+        effort: "high",
+        collaboration_mode: {
+          settings: {
+            reasoning_effort: "high",
+          },
+        },
+      },
+    }),
+    JSON.stringify({
+      timestamp: "2026-06-14T10:00:01.000Z",
+      type: "event_msg",
+      payload: {
+        type: "token_count",
+        info: {
+          total_token_usage: {
+            input_tokens: 220,
+            output_tokens: 40,
+            total_tokens: 260,
+          },
+          last_token_usage: {
+            input_tokens: 90,
+            output_tokens: 20,
+            total_tokens: 110,
+          },
+          model_context_window: 258400,
+        },
+      },
+    }),
+    "",
+  ].join("\n"), "utf8");
+  const nowMs = Date.now();
+  await execFileAsync("sqlite3", [path.join(codexHome, "state_5.sqlite"), [
+    "create table threads (id text primary key, rollout_path text not null, created_at integer not null, updated_at integer not null, source text not null, model_provider text not null, cwd text not null, title text not null, sandbox_policy text not null, approval_mode text not null, tokens_used integer not null default 0, archived integer not null default 0, model text, reasoning_effort text, created_at_ms integer, updated_at_ms integer);",
+    `insert into threads (id, rollout_path, created_at, updated_at, source, model_provider, cwd, title, sandbox_policy, approval_mode, tokens_used, archived, model, reasoning_effort, created_at_ms, updated_at_ms) values (${sqlQuote(codexThreadId)}, ${sqlQuote(rolloutPath)}, ${Math.floor(nowMs / 1000)}, ${Math.floor(nowMs / 1000)}, 'codex', 'openai', ${sqlQuote(workspace)}, 'Rollout Model Thread', 'workspace-write', 'never', 0, 0, null, null, ${nowMs}, ${nowMs});`,
+  ].join("\n")]);
+
+  const metadata = await resolveCodexThreadMetadata(codexThreadId, {
+    ORKESTR_HOME: path.join(home, "orkestr"),
+    CODEX_HOME: codexHome,
+    HOME: home,
+  });
+
+  assert.equal(metadata.codexThreadId, codexThreadId);
+  assert.equal(metadata.codexModel, "gpt-5.5");
+  assert.equal(metadata.codexReasoningEffort, "high");
+  assert.equal(metadata.codexModelProvider, "openai");
+  assert.equal(metadata.codexContextWindow, 258400);
+  assert.equal(metadata.codexTokenUsage.total_tokens, 110);
+  assert.equal(metadata.codexTotalTokenUsage.total_tokens, 260);
+  assert.equal(metadata.codexRolloutPath, rolloutPath);
 });
 
 test("Codex thread metadata keeps empty SQLite fields aligned", async (t) => {

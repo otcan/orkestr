@@ -35,7 +35,7 @@ test("onboarding focuses the starter setup on virtual desktop and WhatsApp", asy
   assert.ok(onboarding.includes("saveTimezone()"));
   assert.ok(onboarding.includes("myOnboarding()"));
   assert.ok(onboarding.includes("Connect only what you need now"));
-  assert.ok(onboarding.includes("persistent Codex threads"));
+  assert.ok(onboarding.includes("Start with Codex and WhatsApp"));
   assert.ok(onboarding.includes("buildStamp()"));
   assert.ok(onboarding.includes("Connections"));
   assert.ok(onboarding.includes("Review runtime items that need attention"));
@@ -55,7 +55,7 @@ test("onboarding focuses the starter setup on virtual desktop and WhatsApp", asy
   assert.ok(onboarding.includes("Agents should acquire Orkestr desktop leases"));
   assert.ok(onboarding.includes("Codex from WhatsApp"));
   assert.ok(onboarding.includes("Managed browser desktop"));
-  assert.ok(onboarding.includes("Mail summaries"));
+  assert.ok(onboarding.includes("Optional mail summaries"));
   assert.ok(onboarding.includes("Open Codex sign-in"));
   assert.ok(onboarding.includes("Connect Codex with API key"));
   assert.ok(onboarding.includes("loginCodexWithApiKey"));

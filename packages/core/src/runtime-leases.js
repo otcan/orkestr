@@ -557,7 +557,13 @@ function paneWorking(text) {
 
 function panePromptReady(text) {
   const lines = String(text || "").split("\n").map((line) => line.trim()).filter(Boolean).slice(-8);
-  return lines.some(panePromptLine);
+  return lines.some(panePromptLine) || paneIdleSkillsHintReady(lines);
+}
+
+function paneIdleSkillsHintReady(lines = []) {
+  const hintIndex = lines.findLastIndex((line) => /^(?:›|>)\s*Use\s+\/skills\s+to\s+list\s+available\s+skills\b/i.test(line));
+  if (hintIndex < 0) return false;
+  return lines.slice(hintIndex + 1).some((line) => /\bgpt-[^\s]+\s+\S+\s+·\s+\S+/i.test(line));
 }
 
 function recentPaneText(text, lines = 16) {
@@ -875,6 +881,25 @@ function tokenCountMetadata(payload) {
   return metadata;
 }
 
+function turnContextMetadata(payload) {
+  const metadata = {};
+  const model = normalizeCodexModel(payload?.model);
+  if (model) metadata.codexModel = model;
+  const effort = [
+    payload?.effort,
+    payload?.reasoning_effort,
+    payload?.reasoningEffort,
+    payload?.collaboration_mode?.settings?.reasoning_effort,
+    payload?.collaborationMode?.settings?.reasoningEffort,
+  ].map(normalizeReasoningEffort).find(Boolean);
+  if (effort) metadata.codexReasoningEffort = effort;
+  const provider = String(payload?.model_provider || payload?.modelProvider || "").trim();
+  if (provider && !provider.startsWith("/") && !provider.toLowerCase().endsWith(".jsonl")) {
+    metadata.codexModelProvider = provider;
+  }
+  return metadata;
+}
+
 async function resolveCodexRolloutMetadata(rolloutPath) {
   const filePath = String(rolloutPath || "").trim();
   if (!filePath) return {};
@@ -895,6 +920,9 @@ async function resolveCodexRolloutMetadata(rolloutPath) {
   }
   const lines = body.split("\n");
   if (start > 0) lines.shift();
+  const metadata = {};
+  let foundTokenCount = false;
+  let foundTurnContext = false;
   for (let index = lines.length - 1; index >= 0; index -= 1) {
     const line = lines[index]?.trim();
     if (!line) continue;
@@ -904,11 +932,23 @@ async function resolveCodexRolloutMetadata(rolloutPath) {
     } catch {
       continue;
     }
-    if (parsed?.type !== "event_msg" || parsed.payload?.type !== "token_count") continue;
-    const metadata = tokenCountMetadata(parsed.payload);
-    if (Object.keys(metadata).length) return metadata;
+    if (!foundTokenCount && parsed?.type === "event_msg" && parsed.payload?.type === "token_count") {
+      const tokenMetadata = tokenCountMetadata(parsed.payload);
+      if (Object.keys(tokenMetadata).length) {
+        Object.assign(metadata, tokenMetadata);
+        foundTokenCount = true;
+      }
+    }
+    if (!foundTurnContext && parsed?.type === "turn_context") {
+      const contextMetadata = turnContextMetadata(parsed.payload);
+      if (Object.keys(contextMetadata).length) {
+        Object.assign(metadata, contextMetadata);
+        foundTurnContext = true;
+      }
+    }
+    if (foundTokenCount && foundTurnContext) return metadata;
   }
-  return {};
+  return metadata;
 }
 
 async function resolveCodexThreadMetadataById(id, env = process.env) {
@@ -2451,6 +2491,19 @@ function inputTextForMessage(message) {
   }
   if (whatsappOrigin(message)) {
     const source = String(message.from || message.chatId || "WhatsApp").trim();
+    const principal = message.externalPrincipal && typeof message.externalPrincipal === "object" && !Array.isArray(message.externalPrincipal)
+      ? message.externalPrincipal
+      : null;
+    if (principal || message.senderTrustLevel || message.senderPolicyMode) {
+      const lines = [
+        "[WhatsApp]",
+        `chat: ${String(message.chatId || principal?.chatId || source || "").trim() || "unknown"}`,
+        `sender: ${String(message.senderParticipantId || principal?.senderId || message.from || "").trim() || "unknown"}`,
+        `trust: ${String(message.senderTrustLevel || "unknown").trim() || "unknown"}`,
+        `scope: ${String(message.senderPolicyMode || "this-thread-only").trim() || "this-thread-only"}`,
+      ];
+      return `${lines.join("\n")}\n\n${body}`;
+    }
     return `[WhatsApp: ${source}]\n\n${body}`;
   }
   return body;

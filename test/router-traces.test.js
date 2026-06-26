@@ -16,6 +16,7 @@ import {
   routerTraceMetrics,
   turnIdFor,
 } from "../packages/core/src/router-traces.js";
+import { listWatcherAlerts } from "../packages/core/src/watcher-alerts.js";
 
 test("router trace projection records phases, turns, outbox, and stuck diagnostics", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-router-traces-"));
@@ -98,4 +99,34 @@ test("router trace projection records phases, turns, outbox, and stuck diagnosti
   assert.equal(metrics.traces, 1);
   assert.equal(metrics.outbox, 1);
   assert.equal(metrics.stuck, 1);
+});
+
+test("router trace suppresses watcher alerts for retryable WhatsApp mirror failures", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-router-traces-wa-retry-"));
+  const env = { ORKESTR_HOME: home };
+  const routerTraceId = routerTraceIdFor({
+    connector: "whatsapp",
+    accountId: "sender",
+    chatId: "chat-1",
+    eventId: "evt-1",
+  });
+  const turnId = turnIdFor({ routerTraceId });
+
+  await recordRouterTraceEvent({
+    routerTraceId,
+    turnId,
+    connector: "whatsapp",
+    threadId: "thread-1",
+    messageId: "message-1",
+    phase: "mirror_failed",
+    error: "whatsapp_local_bridge_not_ready",
+  }, env);
+
+  const traces = await listRouterTraces({ threadId: "thread-1" }, env);
+  const alerts = await listWatcherAlerts({ limit: 10 }, env);
+
+  assert.equal(traces.length, 1);
+  assert.equal(traces[0].currentPhase, "mirror_failed");
+  assert.equal(traces[0].lastError, "whatsapp_local_bridge_not_ready");
+  assert.equal(alerts.total, 0);
 });

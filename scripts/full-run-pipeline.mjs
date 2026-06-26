@@ -71,19 +71,34 @@ Options:
   --regression-expect TEXT       Expected assistant reply for --execute-regression.
   --live-k3s                     Run real k3s demo smoke. Requires Docker, Helm, kubectl.
   --vps-aws                      Run AWS VPS smoke.
+  --demo-release                 Add isolated demo VM gates: isolation audit plus fresh-instance WhatsApp onboarding E2E.
+  --wa-service-url URL           Standalone orkestr-wa service URL for demo release readiness. Defaults to ORKESTR_WA_SERVICE_URL or WHATSAPP_BRIDGE_URL.
+  --wa-service-account ACCOUNT   Required orkestr-wa account. Repeatable; defaults to sender,responder for demo releases.
+  --skip-wa-service-readiness    Skip standalone WA service readiness. Demo deploys require --allow-release-without-wa-service-readiness too.
+  --allow-release-without-wa-service-readiness
+                                 Explicit emergency bypass for demo deploys when the WA service gate cannot run.
+  --demo-whatsapp-phone PHONE    Direct WhatsApp phone number for OSS demo onboarding E2E.
   --whatsapp-real                Run real WhatsApp e2e. Requires explicit real-WA env/config.
   --skip-whatsapp-real           Skip real WhatsApp e2e. Not allowed with --deploy-ref unless --allow-release-without-e2e is also set.
   --allow-release-without-e2e    Explicit emergency bypass for release deploys when real WhatsApp e2e cannot run.
+  --skip-isolation-audit         Skip demo isolation audit. Demo deploys require --allow-release-without-isolation-audit too.
+  --allow-release-without-isolation-audit
+                                 Explicit emergency bypass for demo deploys when the isolation audit cannot run.
   --deploy-ref REF               Deploy with scripts/deploy-git-release.sh after gates pass.
   --deploy-channel CHANNEL       Deploy channel. Default: full-run.
   --deploy-env-file FILE         ORKESTR_ENV_FILE for deploy.
   --deploy-allow-interrupt       Allow deploy restart while work may be active.
-  --deploy-all-instances         Fan out deploy to broker-listed instances.
+  --deploy-all-instances         Fan out deploy to broker-listed instances. This is the default for release deploys.
+  --deploy-no-all-instances      Disable broker fan-out for an intentional local-only deploy.
 
 Environment:
   ORKESTR_FULL_RUN_LAUNCH_CHECK=1
   ORKESTR_FULL_RUN_LIVE_K3S=1
   ORKESTR_FULL_RUN_VPS_AWS=1
+  ORKESTR_FULL_RUN_DEMO_RELEASE=1
+  ORKESTR_FULL_RUN_WA_SERVICE_URL=http://127.0.0.1:18914
+  ORKESTR_FULL_RUN_WA_SERVICE_ACCOUNTS="sender,responder"
+  ORKESTR_REAL_WA_DEMO_PHONE_NUMBER="+4917600000000"
   ORKESTR_FULL_RUN_WHATSAPP_REAL=1
   ORKESTR_FULL_RUN_RELEASE_TARGETS="local=http://127.0.0.1:18912,oss=http://127.0.0.1:19822"
 `;
@@ -114,13 +129,30 @@ export function parseFullRunPipelineArgs(argv = process.argv.slice(2), env = pro
     regressionExpect: flagValue(argv, "--regression-expect"),
     liveK3s: hasFlag(argv, "--live-k3s") || truthy(env.ORKESTR_FULL_RUN_LIVE_K3S),
     vpsAws: hasFlag(argv, "--vps-aws") || truthy(env.ORKESTR_FULL_RUN_VPS_AWS),
+    demoRelease: hasFlag(argv, "--demo-release") || truthy(env.ORKESTR_FULL_RUN_DEMO_RELEASE),
+    waServiceUrl: flagValue(argv, "--wa-service-url", clean(env.ORKESTR_FULL_RUN_WA_SERVICE_URL || env.ORKESTR_WA_SERVICE_URL || env.WHATSAPP_BRIDGE_URL)),
+    waServiceAccounts: [
+      ...allFlagValues(argv, "--wa-service-account"),
+      ...splitList(env.ORKESTR_FULL_RUN_WA_SERVICE_ACCOUNTS || ""),
+    ],
+    skipWaServiceReadiness: hasFlag(argv, "--skip-wa-service-readiness") || truthy(env.ORKESTR_FULL_RUN_SKIP_WA_SERVICE_READINESS),
+    allowReleaseWithoutWaServiceReadiness: hasFlag(argv, "--allow-release-without-wa-service-readiness") || truthy(env.ORKESTR_FULL_RUN_ALLOW_RELEASE_WITHOUT_WA_SERVICE_READINESS),
+    demoWhatsappPhoneNumber: flagValue(argv, "--demo-whatsapp-phone", clean(
+      env.ORKESTR_REAL_WA_DEMO_PHONE_NUMBER ||
+      env.ORKESTR_REAL_WA_DEMO_PHONE ||
+      env.ORKESTR_DEMO_WHATSAPP_NUMBER ||
+      env.ORKESTR_DEMO_WA_NUMBER ||
+      env.ORKESTR_DEMO_WHATSAPP_TARGET_PHONE,
+    )),
+    skipIsolationAudit: hasFlag(argv, "--skip-isolation-audit") || truthy(env.ORKESTR_FULL_RUN_SKIP_ISOLATION_AUDIT),
+    allowReleaseWithoutIsolationAudit: hasFlag(argv, "--allow-release-without-isolation-audit") || truthy(env.ORKESTR_FULL_RUN_ALLOW_RELEASE_WITHOUT_ISOLATION_AUDIT),
     skipWhatsappReal: hasFlag(argv, "--skip-whatsapp-real") || truthy(env.ORKESTR_FULL_RUN_SKIP_WHATSAPP_REAL),
     allowReleaseWithoutE2e: hasFlag(argv, "--allow-release-without-e2e") || truthy(env.ORKESTR_FULL_RUN_ALLOW_RELEASE_WITHOUT_E2E),
     deployRef: flagValue(argv, "--deploy-ref"),
     deployChannel: flagValue(argv, "--deploy-channel", "full-run"),
     deployEnvFile: flagValue(argv, "--deploy-env-file"),
     deployAllowInterrupt: hasFlag(argv, "--deploy-allow-interrupt"),
-    deployAllInstances: hasFlag(argv, "--deploy-all-instances"),
+    deployAllInstances: !hasFlag(argv, "--deploy-no-all-instances"),
   };
   options.whatsappReal = !options.skipWhatsappReal && (
     hasFlag(argv, "--whatsapp-real") ||
@@ -128,19 +160,55 @@ export function parseFullRunPipelineArgs(argv = process.argv.slice(2), env = pro
     Boolean(options.deployRef)
   );
   options.releaseE2eBypass = Boolean(options.deployRef && options.skipWhatsappReal && options.allowReleaseWithoutE2e);
+  if (options.demoRelease && options.whatsappReal && !options.demoWhatsappPhoneNumber) {
+    options.invalid = true;
+    options.error = "demo_release_requires_direct_whatsapp_phone";
+  }
   if (options.deployRef && options.skipWhatsappReal && !options.allowReleaseWithoutE2e) {
     options.invalid = true;
     options.error = "release_deploy_requires_real_whatsapp_e2e";
   }
+  if (options.deployRef && options.demoRelease && options.skipIsolationAudit && !options.allowReleaseWithoutIsolationAudit) {
+    options.invalid = true;
+    options.error = "demo_release_deploy_requires_isolation_audit";
+  }
+  if (options.deployRef && options.demoRelease && options.skipWaServiceReadiness && !options.allowReleaseWithoutWaServiceReadiness) {
+    options.invalid = true;
+    options.error = "demo_release_deploy_requires_wa_service_readiness";
+  }
+  if (options.demoRelease && (!options.waServiceAccounts || options.waServiceAccounts.length === 0)) {
+    options.waServiceAccounts = ["sender", "responder"];
+  }
   return options;
 }
 
-function npmStage(id, script, { enabled = true, env = {}, args = [] } = {}) {
-  return { id, label: `npm run ${script}`, command: "npm", args: ["run", script, ...(args.length ? ["--", ...args] : [])], env, enabled };
+function npmStage(id, script, { enabled = true, env = {}, args = [], skipReason = "" } = {}) {
+  return { id, label: `npm run ${script}`, command: "npm", args: ["run", script, ...(args.length ? ["--", ...args] : [])], env, enabled, skipReason };
 }
 
-function commandStage(id, label, command, args, { enabled = true, env = {} } = {}) {
-  return { id, label, command, args, env, enabled };
+function commandStage(id, label, command, args, { enabled = true, env = {}, skipReason = "" } = {}) {
+  return { id, label, command, args, env, enabled, skipReason };
+}
+
+function artifactEnv(options = {}, name = "", envName = "") {
+  if (!options.artifactDir || !name || !envName) return {};
+  return { [envName]: path.join(options.artifactDir, name) };
+}
+
+function demoOnboardingEnv(options = {}) {
+  return {
+    ...artifactEnv(options, "real-wa-demo-onboarding.json", "ORKESTR_REAL_WA_DEMO_ARTIFACT"),
+    ...(options.demoWhatsappPhoneNumber ? { ORKESTR_REAL_WA_DEMO_PHONE_NUMBER: options.demoWhatsappPhoneNumber } : {}),
+    ORKESTR_REAL_WA_DEMO_CHAT_ID: "",
+    ORKESTR_REAL_WA_E2E_CHAT_ID: "",
+  };
+}
+
+function waServiceReadinessArgs(options = {}) {
+  const args = ["scripts/orkestr-wa-readiness.mjs", "--require-routing-policy", "--require-access-policy"];
+  if (options.waServiceUrl) args.push("--bridge-url", options.waServiceUrl);
+  for (const account of options.waServiceAccounts || []) args.push("--account", account);
+  return args;
 }
 
 export function fullRunPipelineStages(options = {}) {
@@ -164,12 +232,32 @@ export function fullRunPipelineStages(options = {}) {
     if (options.regressionExpect) args.push("--expect", options.regressionExpect);
     stages.push(npmStage("release-regression", "release:regression", { args }));
   }
+  stages.push(commandStage("wa-service-readiness", "orkestr-wa readiness", "node", waServiceReadinessArgs(options), {
+    enabled: options.demoRelease && !options.skipWaServiceReadiness,
+    skipReason: options.demoRelease && options.skipWaServiceReadiness ? "skip_wa_service_readiness" : "",
+  }));
+  stages.push(npmStage("isolation-audit", "audit:isolation", {
+    enabled: options.demoRelease && !options.skipIsolationAudit,
+    skipReason: options.demoRelease && options.skipIsolationAudit ? "skip_isolation_audit" : "",
+  }));
   stages.push(npmStage("live-k3s-oss-demo", "smoke:k3s:oss-demo", {
     enabled: options.liveK3s,
     env: { ORKESTR_K3S_OSS_DEMO_EXECUTE: "1" },
   }));
   stages.push(npmStage("vps-aws", "smoke:vps:aws", { enabled: options.vpsAws }));
-  stages.push(npmStage("whatsapp-real", "e2e:whatsapp-real", { enabled: options.whatsappReal }));
+  stages.push(npmStage("whatsapp-real", "e2e:whatsapp-real", {
+    enabled: options.whatsappReal,
+    env: {
+      ...artifactEnv(options, "real-wa-e2e.json", "ORKESTR_REAL_WA_E2E_ARTIFACT"),
+      ...(options.demoRelease ? { ORKESTR_REAL_WA_E2E_ISOLATED_RUNTIME: "1" } : {}),
+    },
+    skipReason: options.skipWhatsappReal ? "skip_whatsapp_real" : "",
+  }));
+  stages.push(npmStage("whatsapp-demo-onboarding", "e2e:whatsapp-demo-onboarding", {
+    enabled: options.demoRelease && options.whatsappReal,
+    env: demoOnboardingEnv(options),
+    skipReason: options.demoRelease && options.skipWhatsappReal ? "skip_whatsapp_real" : "",
+  }));
 
   if (options.deployRef) {
     const args = ["scripts/deploy-git-release.sh", "install", "--ref", options.deployRef, "--channel", options.deployChannel || "full-run"];
@@ -229,9 +317,14 @@ function runStage(stage) {
 
 export async function runFullRunPipeline(options = {}, env = process.env) {
   const artifactDir = path.resolve(options.artifactDir || defaultArtifactDir(env));
-  const allStages = fullRunPipelineStages(options);
+  const allStages = fullRunPipelineStages({ ...options, artifactDir });
   const stages = allStages.filter((stage) => stage.enabled !== false);
-  const skipped = allStages.filter((stage) => stage.enabled === false).map((stage) => ({ id: stage.id, label: stage.label, status: "skipped" }));
+  const skipped = allStages.filter((stage) => stage.enabled === false).map((stage) => ({
+    id: stage.id,
+    label: stage.label,
+    status: "skipped",
+    ...(stage.skipReason ? { reason: stage.skipReason } : {}),
+  }));
   const summary = {
     ok: false,
     generatedAt: new Date().toISOString(),

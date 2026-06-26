@@ -17,6 +17,7 @@ import { defaultApiBase, requestJson } from "./api-client.js";
 import { createCommand } from "./create-command.js";
 import { desktopCommand } from "./desktop-command.js";
 import { formatRuntimeResources, formatSystemDoctor, formatThreadTable, formatTimerDoctor, formatTimerTable, threadName } from "./format.js";
+import { jiraCommand } from "./jira-command.js";
 import { pickThread as defaultPickThread } from "./thread-picker.js";
 
 export async function runCli(argv = process.argv.slice(2), context = {}) {
@@ -51,6 +52,7 @@ export async function runCli(argv = process.argv.slice(2), context = {}) {
     if (command === "timers" || command === "timer") return await timersCommand(args, ctx);
     if (command === "security") return await securityCommand(args, ctx);
     if (command === "desktop" || command === "desktops") return await desktopCommand(args, ctx);
+    if (command === "jira") return await jiraCommand(args, ctx);
     if (command === "codex") return await codexCommand(args, ctx);
     if (command === "service" || command === "services") return await serviceCommand(args, ctx);
     if (command === "start" || command === "stop" || command === "restart") return await serviceCommand([command, ...args], ctx);
@@ -898,6 +900,14 @@ function whatsappBindingBody(argv = []) {
   const sendAcl = flagValue(argv, "--send-acl") || flagValue(argv, "--send");
   const displayName = flagValue(argv, "--display-name") || flagValue(argv, "--name");
   const replyPrefix = flagValue(argv, "--reply-prefix");
+  const ownerContactId = flagValue(argv, "--owner-contact") || flagValue(argv, "--owner-contact-id");
+  const authorizedContactId = flagValue(argv, "--authorized-contact") || flagValue(argv, "--authorized-contact-id");
+  const senderContactId = flagValue(argv, "--sender-contact") || flagValue(argv, "--sender-contact-id");
+  const additionalParticipantIds = repeatedFlagValues(argv, ["--participant", "--wa-participant", "--additional-participant", "--additional-participant-id"]);
+  const ownerContactIds = repeatedFlagValues(argv, ["--owner-contact-id", "--owner-contact"]);
+  const ownerContactAliases = repeatedFlagValues(argv, ["--owner-contact-alias", "--owner-alias"]);
+  const authorizedContactIds = repeatedFlagValues(argv, ["--authorized-contact-id", "--authorized-contact"]);
+  const authorizedContactAliases = repeatedFlagValues(argv, ["--authorized-contact-alias", "--authorized-alias"]);
   if (level) body.level = level;
   if (threadId) body.threadId = threadId;
   if (chatId) body.chatId = chatId;
@@ -913,8 +923,23 @@ function whatsappBindingBody(argv = []) {
   if (sendAcl) body.acl = { send: { mode: sendAcl } };
   if (displayName) body.displayName = displayName;
   if (replyPrefix) body.replyPrefix = replyPrefix;
+  if (senderContactId) body.senderContactId = senderContactId;
+  if (ownerContactId) body.ownerContactId = ownerContactId;
+  if (ownerContactIds.length) body.ownerContactIds = ownerContactIds;
+  if (ownerContactAliases.length) body.ownerContactAliases = ownerContactAliases;
+  if (authorizedContactId) body.authorizedContactId = authorizedContactId;
+  if (authorizedContactIds.length) body.authorizedContactIds = authorizedContactIds;
+  if (authorizedContactAliases.length) body.authorizedContactAliases = authorizedContactAliases;
+  if (additionalParticipantIds.length) {
+    body.additionalParticipantsEnabled = true;
+    body.additionalParticipantIds = additionalParticipantIds;
+  }
   if (argv.includes("--no-mirror")) body.mirrorToWhatsApp = false;
   if (argv.includes("--mirror")) body.mirrorToWhatsApp = true;
+  if (argv.includes("--suppress-updates")) body.suppressWhatsAppUpdates = true;
+  if (argv.includes("--mirror-updates")) body.suppressWhatsAppUpdates = false;
+  if (argv.includes("--suppress-debug-footer")) body.suppressWhatsAppDebugFooter = true;
+  if (argv.includes("--debug-footer")) body.suppressWhatsAppDebugFooter = false;
   if (argv.includes("--disabled")) body.enabled = false;
   if (argv.includes("--enabled")) body.enabled = true;
   return body;
@@ -1281,6 +1306,7 @@ async function updateInstallCommand(argv, ctx) {
   const checkOnly = argv.includes("--check-only");
   const allInstances = argv.includes("--all-instances");
   const noAllInstances = argv.includes("--no-all-instances");
+  const deployAllInstances = release && !inPlace && !noAllInstances;
   const allowUntagged = trackMain || argv.includes("--allow-untagged") || argv.includes("--allow-untagged-releases");
   const requireTagged = argv.includes("--require-tagged") || argv.includes("--require-tagged-releases");
   const env = { ...ctx.env };
@@ -1291,7 +1317,7 @@ async function updateInstallCommand(argv, ctx) {
   if (channel) env.ORKESTR_DEPLOY_CHANNEL = channel;
   if (release && !inPlace) env.ORKESTR_RELEASE_DEPLOY = "1";
   if (inPlace) env.ORKESTR_RELEASE_DEPLOY = "0";
-  if (allInstances) env.ORKESTR_RELEASE_TRAIN_FANOUT = "1";
+  if (deployAllInstances || allInstances) env.ORKESTR_RELEASE_TRAIN_FANOUT = "1";
   if (noAllInstances) env.ORKESTR_RELEASE_TRAIN_FANOUT = "0";
   if (allowUntagged) env.ORKESTR_DEPLOY_TAGS_ONLY = "0";
   if (requireTagged) env.ORKESTR_DEPLOY_TAGS_ONLY = "1";
@@ -1305,7 +1331,7 @@ async function updateInstallCommand(argv, ctx) {
         ...(allowUntagged ? ["--allow-untagged"] : []),
         ...(requireTagged ? ["--require-tagged"] : []),
         ...(argv.includes("--no-smoke") ? ["--no-smoke"] : []),
-        ...(allInstances ? ["--all-instances"] : []),
+        ...(deployAllInstances || allInstances ? ["--all-instances"] : []),
         ...(noAllInstances ? ["--no-all-instances"] : []),
         ...deployGuardArgs(argv),
         ...(checkOnly ? ["--check-only"] : []),
@@ -1759,6 +1785,7 @@ Advanced:
   orkestr timers [list|doctor|run <timer-id>] [--json]
   orkestr security [challenges|sessions|approve <challenge-id>|reject <challenge-id>|revoke <session-id|all>] [--json]
   orkestr desktop [share [slug]|approve <challenge-id>] [--json]
+  orkestr jira draft <thread> [--max N] [--json]
   orkestr thread create <name> [--id id] [--cwd path] [--command command] [--executor id] [--json]
   orkestr worker create <parent-thread> [task text] [--task text] [--blank] [--label label] [--repo path] [--branch branch] [--no-wake] [--json]
   orkestr sleep <legacy-tmux-thread-name-or-id> [--json]
@@ -1898,6 +1925,8 @@ function positional(argv) {
     "--branch-name",
     "--account",
     "--account-id",
+    "--chat",
+    "--chat-id",
     "--cmd",
     "--command",
     "--cwd",
@@ -1925,6 +1954,18 @@ function positional(argv) {
     "--task",
     "--target-account",
     "--target-account-id",
+    "--owner-contact",
+    "--owner-contact-id",
+    "--owner-contact-alias",
+    "--owner-alias",
+    "--authorized-contact",
+    "--authorized-contact-id",
+    "--authorized-contact-alias",
+    "--authorized-alias",
+    "--sender-contact",
+    "--sender-contact-id",
+    "--additional-participant",
+    "--additional-participant-id",
     "--value",
     "--secret-value",
     "--tenant",

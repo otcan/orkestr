@@ -1,23 +1,60 @@
 # Real WhatsApp E2E
 
-`npm run e2e:whatsapp-real` runs an opt-in live acceptance test for a
-WhatsApp-bound Orkestr thread. In the automated mode it sends a real message
-through a configured sender WhatsApp account, verifies that the responder
-account sees and routes the message, checks that the assistant reply is visible
-in WhatsApp history, opens the desktop share challenge URL, approves that
-challenge through WhatsApp, and exercises desktop lease/share and timer watcher
-APIs.
+Use the real WhatsApp E2E procedure in
+[LLM-assisted release procedures](llm-assisted-release-procedures.md) before
+running live transport checks. The procedure owns preflight, target validation,
+failure classification, retry decisions, and the public-safe evidence packet.
 
-The test is disabled by default. It requires `--execute` and explicit live
-targets because it sends real WhatsApp messages.
+`npm run e2e:whatsapp-real` is the command primitive for the opt-in live
+acceptance test for a WhatsApp-bound Orkestr thread. For release deploys, the
+required path is WA2WA: pass `--real-send` so the live sender WhatsApp account
+sends over WhatsApp to the responder account, and verify responder-side routing,
+assistant reply delivery, desktop share challenge approval, and timer watcher
+APIs. Do not substitute a non-WA2WA release gate unless the user explicitly
+changes that requirement.
+
+In non-release automated mode the same runner can inject inbound test messages
+into the responder account, using the bound sender contact identity for
+attribution. That keeps the sender account isolated for local diagnostics, but
+it is not the default release deploy gate.
+
+The test is disabled by default. It requires `--execute` and explicit targets.
+Default automated mode uses the local bridge injection endpoint; `--real-send`
+and `--manual-send` send real WhatsApp messages.
+
+Use a disposable E2E/demo runtime plus a dedicated
+test/onboarding/release-smoke WhatsApp binding. The runner now requires
+`--isolated-runtime` before it contacts the target API in execute mode. The
+preflight then fails before leasing desktops or routing messages when the
+binding is disabled, not route eligible, or looks like a normal
+production/project chat. Passing `--allow-shared-runtime` or
+`--allow-production-binding` is an explicit escape hatch for attended emergency
+runs only.
+
+WA2WA release example:
+
+```bash
+npm run e2e:whatsapp-real -- --execute \
+  --api-base http://127.0.0.1:19812 \
+  --orkestr-home /path/to/orkestr-home \
+  --thread release-e2e-thread-id \
+  --chat-id whatsapp-group-id@g.us \
+  --sender-account sender \
+  --responder-account responder \
+  --desktop gmail \
+  --real-send \
+  --isolated-runtime \
+  --artifact artifacts/real-wa-e2e.json
+```
 
 For the private VM demo acceptance path, use
 `npm run e2e:whatsapp-demo-onboarding`. That test is intentionally
 Orkestr-initiated: it sends the first message from the serving/responder
 WhatsApp account to the target direct chat and verifies the outbound prompt asks
 the user to complete Codex login/sign-in in setup. For demo-review runs, pass a
-stable public setup URL such as
-`https://connect.orkestr.de/i/demo-vm-001/setup`.
+stable public connect base URL such as `https://connect.orkestr.de`; the runner
+registers a fresh broker instance and sends
+`https://connect.orkestr.de/i/<fresh-broker-uuid>/setup`.
 If no public setup URL is provided, the script can still create a temporary
 Cloudflare quick tunnel for local fallback testing when
 `ORKESTR_DEMO_CLOUDFLARE_FALLBACK=1` is set, but that path is not the
@@ -28,10 +65,8 @@ preferred mobile demo path. It does not depend on the user sending
 npm run e2e:whatsapp-demo-onboarding -- --execute \
   --api-base http://127.0.0.1:19812 \
   --orkestr-home /path/to/orkestr-home \
-  --chat-id target-user-direct-chat@c.us \
+  --phone +4917600000000 \
   --responder-account responder \
-  --instance-id demo-vm-001 \
-  --setup-url 'https://connect.orkestr.de/i/demo-vm-001/setup' \
   --artifact artifacts/real-wa-demo-onboarding.json
 ```
 
@@ -41,16 +76,20 @@ npm run e2e:whatsapp-real -- --execute \
   --orkestr-home /path/to/orkestr-home \
   --thread onboarding-thread-id \
   --chat-id whatsapp-group-id@g.us \
-  --sender-account sender \
   --responder-account responder \
+  --isolated-runtime \
   --desktop gmail
 ```
 
 The runner preflights WhatsApp account readiness before it leases a desktop or
-sends a message. Automated mode requires both `--sender-account` and
-`--responder-account` to resolve to ready WhatsApp accounts. If the sender is not
-paired, the run fails early with `sender_account_not_ready` and writes the
-account state into the JSON artifact.
+routes a message. Default injected mode requires only `--responder-account` to
+resolve to a ready WhatsApp account. If `--sender-account` is present, it is
+recorded as an observed isolation subject but it is not used to queue test
+messages. `--real-send` switches to live sender-account transport; in that mode
+both `--sender-account` and `--responder-account` must resolve to ready WhatsApp
+accounts. If the sender is not paired in `--real-send` mode, the run fails early
+with `sender_account_not_ready` and writes the account state into the JSON
+artifact.
 
 In attended mode, the sender is a WhatsApp contact in the thread binding, not a
 second bridge session. The runner resolves the binding and discovers authorized
@@ -69,10 +108,19 @@ Useful release modes:
   will send `/connect google` from a real phone/contact in the target WhatsApp
   chat. This still uses real WhatsApp transport and does not call the bridge
   injection endpoint, but it cannot run unattended in CI.
+- Add `--real-send` when automated release evidence must prove that a separate
+  paired sender account can send over live WhatsApp transport. Without this
+  flag, automated runs inject inbound messages into the responder account.
+- Add `--isolated-runtime` for the normal release/demo path after verifying the
+  API base and Orkestr home belong to a disposable E2E/demo instance.
+- Add `--allow-shared-runtime` only for an attended emergency dogfood run where
+  the operator intentionally accepts shared-runtime side effects.
 - Add `--sender-contact <contact-id>` when the target chat has multiple allowed
   people and the test should accept only one real sender.
 - Add `--open-link-in-desktop` to open the generated Google connection link in
   the managed desktop.
+- Add `--allow-production-binding` only when the operator intentionally accepts
+  running release E2E traffic against a normal project binding.
 - Add `--require-oauth-callback` only for attended runs where a human/operator
   will complete Google OAuth before the timeout.
 - Add `--artifact artifacts/real-wa-e2e.json` to keep a machine-readable result.
@@ -84,10 +132,11 @@ with `--require-oauth-callback` if callback verification is required.
 
 When desktop checks are enabled, the runner also opens the generated public
 desktop-share URL, obtains the `orkestr desktop approve desk-...` challenge,
-sends that challenge into the real WhatsApp chat in automated mode, waits for
-the responder account to observe it, and verifies that the share status exposes
-an approved desktop URL. In `--manual-send` mode the runner prints the approval
-command and waits for an authorized person in the chat to send it.
+injects that challenge into the responder account in default automated mode, and
+verifies that the share status exposes an approved desktop URL. In `--real-send`
+mode it sends the challenge through the sender account and waits for responder
+history. In `--manual-send` mode the runner prints the approval command and
+waits for an authorized person in the chat to send it.
 
 Attended public-VM example:
 
@@ -101,6 +150,7 @@ npm run e2e:whatsapp-real -- --execute \
   --sender-contact +4917600000000 \
   --desktop gmail \
   --manual-send \
+  --isolated-runtime \
   --artifact artifacts/real-wa-e2e.json
 ```
 

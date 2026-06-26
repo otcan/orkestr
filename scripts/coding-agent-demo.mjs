@@ -8,6 +8,23 @@ import { startServer } from "../apps/server/src/server.js";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const execFileAsync = promisify(execFile);
+const disabledWhatsAppEnv = {
+  ORKESTR_WHATSAPP_AUTOSTART: "0",
+  ORKESTR_WHATSAPP_AUTOSTART_ACCOUNT_IDS: "",
+  ORKESTR_WHATSAPP_ACCOUNT_IDS: "",
+  ORKESTR_WHATSAPP_ACCOUNT_CLIENT_IDS: "",
+  ORKESTR_WHATSAPP_ACCOUNT_SESSION_ROOTS: "",
+  ORKESTR_WHATSAPP_DEFAULT_RESPONDER_ACCOUNT_ID: "",
+  ORKESTR_WHATSAPP_REPLY_PREFIX: "",
+  ORKESTR_WHATSAPP_CHAT_NAME_PREFIX: "",
+  ORKESTR_WHATSAPP_EXTERNAL_BRIDGE_ENABLED: "0",
+  ORKESTR_STARTUP_RECOVERY: "0",
+  WHATSAPP_EXTERNAL_BRIDGE_ENABLED: "0",
+  WHATSAPP_BRIDGE_MODE: "local",
+  WHATSAPP_BRIDGE_URL: "",
+  WHATSAPP_BRIDGE_TOKEN: "",
+  WA_HTTP_TOKEN: "",
+};
 
 async function request(baseUrl, route, options = {}) {
   const response = await fetch(`${baseUrl}${route}`, {
@@ -38,12 +55,38 @@ function restoreEnv(prior) {
   }
 }
 
+function snapshotEnv(keys = []) {
+  return Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+}
+
 async function removeDemoHome(home) {
   await fs.rm(home, {
     recursive: true,
     force: true,
     maxRetries: 5,
     retryDelay: 100,
+  });
+}
+
+async function closeDemoServer(server, timeoutMs = 2000) {
+  if (!server) return;
+  await new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      if (error) reject(error);
+      else resolve();
+    };
+    const timeout = setTimeout(() => {
+      server.closeAllConnections?.();
+      finish();
+    }, timeoutMs);
+    timeout.unref?.();
+    server.close((error) => finish(error));
+    server.closeIdleConnections?.();
+    setTimeout(() => server.closeAllConnections?.(), 100).unref?.();
   });
 }
 
@@ -123,6 +166,7 @@ export async function runCodingAgentDemo({ port = Number(process.env.ORKESTR_COD
     ORKESTR_THREAD_STORE: process.env.ORKESTR_THREAD_STORE,
     ORKESTR_CODEX_BIN: process.env.ORKESTR_CODEX_BIN,
     CODEX_HOME: process.env.CODEX_HOME,
+    ...snapshotEnv(Object.keys(disabledWhatsAppEnv)),
   };
   let server = null;
 
@@ -137,6 +181,7 @@ export async function runCodingAgentDemo({ port = Number(process.env.ORKESTR_COD
     process.env.ORKESTR_THREAD_STORE = "json";
     process.env.ORKESTR_CODEX_BIN = fakeCodex;
     process.env.CODEX_HOME = path.join(home, "codex-home");
+    Object.assign(process.env, disabledWhatsAppEnv);
 
     server = await startServer({ port, host: "127.0.0.1" });
     await waitFor(`${baseUrl}/api/health`);
@@ -187,7 +232,7 @@ export async function runCodingAgentDemo({ port = Number(process.env.ORKESTR_COD
     }
     return result;
   } finally {
-    if (server) await new Promise((resolve) => server.close(resolve));
+    await closeDemoServer(server);
     restoreEnv(priorEnv);
     await removeDemoHome(home);
   }
@@ -208,6 +253,7 @@ export async function runRealCodexDemo({ port = Number(process.env.ORKESTR_REAL_
     ORKESTR_PORT: process.env.ORKESTR_PORT,
     ORKESTR_HOST: process.env.ORKESTR_HOST,
     ORKESTR_RECOVER_RUNNING_ON_START: process.env.ORKESTR_RECOVER_RUNNING_ON_START,
+    ...snapshotEnv(Object.keys(disabledWhatsAppEnv)),
   };
   let server = null;
 
@@ -216,6 +262,7 @@ export async function runRealCodexDemo({ port = Number(process.env.ORKESTR_REAL_
     process.env.ORKESTR_PORT = String(port);
     process.env.ORKESTR_HOST = "127.0.0.1";
     process.env.ORKESTR_RECOVER_RUNNING_ON_START = "0";
+    Object.assign(process.env, disabledWhatsAppEnv);
 
     server = await startServer({ port, host: "127.0.0.1" });
     await waitFor(`${baseUrl}/api/health`);
@@ -258,7 +305,7 @@ export async function runRealCodexDemo({ port = Number(process.env.ORKESTR_REAL_
     restoreEnv(priorEnv);
     if (server) {
       console.log(`Real Codex demo server is still needed only while inspecting ${baseUrl}; shutting down scripted run.`);
-      await new Promise((resolve) => server.close(resolve));
+      await closeDemoServer(server);
     }
   }
 }

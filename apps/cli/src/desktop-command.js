@@ -56,12 +56,17 @@ async function resolveDesktopSlug(explicit, ctx) {
 
 function desktopShareText(payload = {}, slug = "") {
   const label = clean(payload?.share?.label || payload?.label || slug) || "desktop";
-  return [
+  const lines = [
     `Desktop link for ${label}:`,
     payload.url || "",
     "",
-    "Open it on your phone, copy the Orkestr desktop challenge shown there, and paste it back here.",
-  ].join("\n");
+    "Open it on your phone, copy the exact Orkestr desktop approve command shown there, and paste that command back here.",
+  ];
+  const start = payload?.desktopStart;
+  if (start?.requested && !start?.ok) {
+    lines.push("", `Warning: desktop start failed: ${clean(start.error) || "desktop_start_failed"}`);
+  }
+  return lines.join("\n");
 }
 
 async function shareDesktop(argv, ctx) {

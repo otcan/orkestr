@@ -7,6 +7,7 @@ import {
   approveDesktopShareChallenge,
   authorizeDesktopShareHttpRequest,
   createDesktopShare,
+  desktopShareRenewalHint,
   desktopShareStatus,
   openDesktopShare,
 } from "../packages/core/src/desktop-shares.js";
@@ -127,6 +128,33 @@ test("desktop shares reject wrong path subdomains and link keys", async () => {
     () => openDesktopShare({ shareId, key, subdomain: "wrong-subdomain", env }),
     /desktop_share_subdomain_invalid/,
   );
+});
+
+test("expired desktop shares expose renewal hints only with the original link key", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-desktop-share-renewal-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_PUBLIC_HTTPS_URL: "https://app.example.test",
+  };
+  const principal = userPrincipal({ id: "alice", role: "user" });
+  const created = await createDesktopShare({ desktopSlug: "linkedin", principal, env });
+  const { shareId, key } = urlParts(created.url);
+  const statePath = path.join(home, "secrets", "desktop-shares.json");
+  const state = JSON.parse(await fs.readFile(statePath, "utf8"));
+  state.desktopShares[0].expiresAt = new Date(Date.now() - 60_000).toISOString();
+  await fs.writeFile(statePath, `${JSON.stringify(state, null, 2)}\n`);
+
+  await assert.rejects(
+    () => openDesktopShare({ shareId, key, subdomain: created.subdomain, env }),
+    /desktop_share_expired/,
+  );
+  const renewal = await desktopShareRenewalHint({ shareId, key, subdomain: created.subdomain, env });
+  const wrongKey = await desktopShareRenewalHint({ shareId, key: "wrong-key", subdomain: created.subdomain, env });
+
+  assert.equal(renewal.desktopSlug, "linkedin");
+  assert.equal(renewal.renewCommand, "orkestr desktop share linkedin");
+  assert.match(renewal.message, /desktop link expired/i);
+  assert.equal(wrongKey, null);
 });
 
 test("thread router leaves desktop link requests for the agent skill", async () => {
