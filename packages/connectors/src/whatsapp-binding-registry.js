@@ -27,6 +27,29 @@ function optionalBoolean(value, fallback = true) {
   return ["1", "true", "yes", "on"].includes(String(value).trim().toLowerCase());
 }
 
+function unique(values = []) {
+  const seen = new Set();
+  const result = [];
+  for (const value of values) {
+    const text = clean(value);
+    const key = text.toLowerCase();
+    if (!text || seen.has(key)) continue;
+    seen.add(key);
+    result.push(text);
+  }
+  return result;
+}
+
+function listInput(value, fallback = []) {
+  if (Array.isArray(value)) return unique(value);
+  const split = String(value || "")
+    .split(/[\s,]+/g)
+    .map((item) => item.trim())
+    .filter(Boolean);
+  if (split.length) return unique(split);
+  return unique(fallback);
+}
+
 function normalizeLevelValue(value = "") {
   const text = clean(value).toLowerCase().replace(/_/g, "-");
   if (text === "account" || text === "default" || text === "account-default") return "account-default";
@@ -104,6 +127,7 @@ export function normalizeWhatsAppPersistentBinding(input = {}, prior = {}, env =
     throw error;
   }
   const ownerUserId = normalizeUserId(input.ownerUserId || input.userId || prior.ownerUserId || prior.userId || env.ORKESTR_ADMIN_USER_ID || adminUserId);
+  const additionalParticipantsEnabled = optionalBoolean(input.additionalParticipantsEnabled, prior.additionalParticipantsEnabled === true);
   const binding = {
     ...prior,
     ...input,
@@ -120,9 +144,29 @@ export function normalizeWhatsAppPersistentBinding(input = {}, prior = {}, env =
     responderConnectorAccountId: responderAccountId,
     responderAccountId,
     outboundAccountId: responderAccountId,
+    senderContactId: pickString(input.senderContactId, prior.senderContactId),
+    responderContactId: pickString(input.responderContactId, prior.responderContactId),
+    ownerContactId: pickString(input.ownerContactId, prior.ownerContactId),
+    ownerContactIds: listInput(input.ownerContactIds, prior.ownerContactIds || []),
+    ownerContactAliases: listInput(input.ownerContactAliases, prior.ownerContactAliases || []),
+    authorizedContactId: pickString(input.authorizedContactId, prior.authorizedContactId),
+    authorizedContactIds: listInput(input.authorizedContactIds, prior.authorizedContactIds || []),
+    authorizedContactAliases: listInput(input.authorizedContactAliases, prior.authorizedContactAliases || []),
+    inboundSecurity: input.inboundSecurity && typeof input.inboundSecurity === "object" && !Array.isArray(input.inboundSecurity)
+      ? input.inboundSecurity
+      : prior.inboundSecurity && typeof prior.inboundSecurity === "object" && !Array.isArray(prior.inboundSecurity)
+        ? prior.inboundSecurity
+        : null,
+    additionalParticipantsEnabled,
+    additionalParticipantIds: additionalParticipantsEnabled ? listInput(input.additionalParticipantIds, prior.additionalParticipantIds || []) : [],
+    additionalParticipantLabels: input.additionalParticipantLabels && typeof input.additionalParticipantLabels === "object" && !Array.isArray(input.additionalParticipantLabels)
+      ? input.additionalParticipantLabels
+      : prior.additionalParticipantLabels || {},
     enabled: optionalBoolean(input.enabled, prior.enabled !== false),
     routeEligible: optionalBoolean(input.routeEligible, prior.routeEligible !== false),
     mirrorToWhatsApp: optionalBoolean(input.mirrorToWhatsApp, prior.mirrorToWhatsApp !== false),
+    suppressWhatsAppUpdates: optionalBoolean(input.suppressWhatsAppUpdates, prior.suppressWhatsAppUpdates === true),
+    suppressWhatsAppDebugFooter: optionalBoolean(input.suppressWhatsAppDebugFooter, prior.suppressWhatsAppDebugFooter === true),
     displayName: pickString(input.displayName, input.name, prior.displayName, prior.name),
     acl: normalizeBindingAcl(input, prior),
     createdAt: pickString(prior.createdAt) || nowIso(),

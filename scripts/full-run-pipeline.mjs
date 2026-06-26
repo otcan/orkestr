@@ -245,7 +245,10 @@ export function fullRunPipelineStages(options = {}) {
   stages.push(npmStage("vps-aws", "smoke:vps:aws", { enabled: options.vpsAws }));
   stages.push(npmStage("whatsapp-real", "e2e:whatsapp-real", {
     enabled: options.whatsappReal,
-    env: artifactEnv(options, "real-wa-e2e.json", "ORKESTR_REAL_WA_E2E_ARTIFACT"),
+    env: {
+      ...artifactEnv(options, "real-wa-e2e.json", "ORKESTR_REAL_WA_E2E_ARTIFACT"),
+      ...(options.demoRelease ? { ORKESTR_REAL_WA_E2E_ISOLATED_RUNTIME: "1" } : {}),
+    },
     skipReason: options.skipWhatsappReal ? "skip_whatsapp_real" : "",
   }));
   stages.push(npmStage("whatsapp-demo-onboarding", "e2e:whatsapp-demo-onboarding", {

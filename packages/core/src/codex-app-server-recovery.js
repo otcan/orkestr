@@ -285,6 +285,12 @@ function staleTurnNoticeText(reason = "no_assistant_response", options = {}) {
   ]);
 }
 
+function recoveryNoticeCause(options = {}, activeTurnRecovery = false) {
+  const explicit = clean(options.noticeCause || options.cause);
+  if (explicit) return explicit;
+  return activeTurnRecovery ? "active_turn_timeout" : "";
+}
+
 function staleTurnEventId(thread, codexId, turn, options = {}) {
   const message = turn?.latestUser || {};
   const reason = clean(turn?.reason || "no_assistant_response");
@@ -439,6 +445,8 @@ async function appendStaleTurnNotice(thread, messages, turn, env = process.env, 
   const freshTurn = refreshedTurnState(freshMessages, turn);
   if (!freshTurn) return { notice: null, appended: false, skipped: true, messages: freshMessages, turn: null };
   const latestUser = freshTurn?.latestUser || null;
+  const noticeCause = recoveryNoticeCause(options);
+  const recoverySource = clean(options.recoverySource || "");
   const text = staleTurnNoticeText(freshTurn?.reason, options);
   const eventId = staleTurnEventId(thread, codexId, freshTurn, options);
   const existing = freshMessages.find((message) => message.eventId === eventId);
@@ -450,6 +458,9 @@ async function appendStaleTurnNotice(thread, messages, turn, env = process.env, 
     text,
     state: "completed",
     eventId,
+    noticeCause: noticeCause || null,
+    recoverySource: recoverySource || null,
+    recoveryReason: freshTurn?.reason || null,
     codexThreadId: codexId,
     codexTurnId: clean(latestUser?.codexTurnId || latestUser?.executorTurnId || thread?.runtime?.activeTurnId) || null,
     ...codexAppServerMessageFields(codexId, {
@@ -627,9 +638,7 @@ export async function recoverStaleCodexAppServerTurns(env = process.env, options
       freshNoticeTurn = refreshedTurnState(noticeMessages, noticeTurn);
     }
     if (freshNoticeTurn) {
-      const noticeCause = shouldRecoverActiveTurn && !clean(options.noticeCause || options.cause)
-        ? "active_turn_timeout"
-        : clean(options.noticeCause || options.cause);
+      const noticeCause = recoveryNoticeCause(options, shouldRecoverActiveTurn);
       const noticeOptions = noticeCause === "active_turn_timeout"
         ? {
             ...options,
@@ -696,6 +705,8 @@ export async function recoverStaleCodexAppServerTurns(env = process.env, options
           codexThreadId: codexId,
           noticeMessageId: notice?.id || null,
           latestUserMessageId: freshNoticeTurn?.latestUser?.id || noticeTurn?.latestUser?.id || null,
+          noticeCause: recoveryNoticeCause(options, shouldRecoverActiveTurn) || null,
+          recoverySource: clean(options.recoverySource || "") || null,
           recoveryReason: shouldRecoverActiveTurn ? "active_turn_timeout" : freshNoticeTurn?.reason || (notice ? noticeTurn?.reason : null) || (staleRuntime ? "stale_runtime" : "incomplete_turn"),
         });
         if (safeResetSucceeded(autoSafeResetResult)) {
@@ -726,6 +737,8 @@ export async function recoverStaleCodexAppServerTurns(env = process.env, options
           oldCodexThreadId: autoSafeResetResult?.oldCodexThreadId || codexId || null,
           newCodexThreadId: autoSafeResetResult?.newCodexThreadId || null,
           manualCheckpointPath: autoSafeResetResult?.manualCheckpoint?.path || null,
+          noticeCause: recoveryNoticeCause(options, shouldRecoverActiveTurn) || null,
+          recoverySource: clean(options.recoverySource || "") || null,
         }, env).catch(() => {});
       } catch (error) {
         autoSafeResetError = publicError(error);
@@ -752,9 +765,7 @@ export async function recoverStaleCodexAppServerTurns(env = process.env, options
       skippedCachedActiveTurnIds: interruptPlan.skippedTurnIds,
       activeTurnRecoveryTargetId: interruptPlan.targetTurnId || null,
       interruptError: interruptError || null,
-      noticeCause: shouldRecoverActiveTurn && !clean(options.noticeCause || options.cause)
-        ? "active_turn_timeout"
-        : clean(options.noticeCause || options.cause),
+      noticeCause: recoveryNoticeCause(options, shouldRecoverActiveTurn),
       recoverySource: clean(options.recoverySource || ""),
       autoSafeResetAttempted,
       autoSafeReset: Boolean(autoSafeResetResult?.ok || autoSafeResetResult?.safeReset || autoSafeResetResult?.reset),

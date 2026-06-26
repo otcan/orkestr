@@ -65,6 +65,31 @@ function safeDetails(input = {}) {
   return output;
 }
 
+function whatsappBridgeUnavailableAlert(alert = {}) {
+  const details = alert?.details && typeof alert.details === "object" ? alert.details : {};
+  const text = [
+    alert.source,
+    alert.code,
+    alert.message,
+    alert.error?.name,
+    alert.error?.message,
+    details.reason,
+    details.error,
+    details.code,
+  ].map(lower).filter(Boolean).join(" ");
+  if (!/(whatsapp|bridge|connector)/.test(text)) return false;
+  return text.includes("not_ready") ||
+    text.includes("bridge_not_ready") ||
+    text.includes("whatsapp_local_bridge_not_ready") ||
+    text.includes("temporarily unavailable") ||
+    text.includes("detached frame") ||
+    text.includes("target closed") ||
+    text.includes("session closed") ||
+    text.includes("fetch failed") ||
+    text.includes("econnrefused") ||
+    text.includes("timeout");
+}
+
 function alertStoreDefaults(raw = {}) {
   return {
     schemaVersion: 1,
@@ -121,6 +146,7 @@ async function resolveWatcherThread(env = process.env) {
 
 function watcherMessageDefaults(thread = null, alert = {}) {
   if (alert?.mirrorToConnector !== true) return {};
+  if (whatsappBridgeUnavailableAlert(alert)) return {};
   const binding = thread?.binding || {};
   if (lower(binding.connector || "whatsapp") !== "whatsapp") return {};
   if (binding.mirrorToWhatsApp === false || binding.mirrorReplies === false) return {};

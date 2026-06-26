@@ -98,6 +98,11 @@ export class ThreadBindingController {
         .map((id) => [id, rawAdditionalParticipantLabels[id]] as const)
         .filter((entry) => entry[1]),
     );
+    const inboundSecurity = body.inboundSecurity && typeof body.inboundSecurity === "object" && !Array.isArray(body.inboundSecurity)
+      ? body.inboundSecurity
+      : current.inboundSecurity && typeof current.inboundSecurity === "object" && !Array.isArray(current.inboundSecurity)
+        ? current.inboundSecurity
+        : null;
     const remoteBackend = optionalBodyString(body, "remoteBackend", current.remoteBackend || current.remoteRuntimeBackend || "") || null;
     const remoteThreadIdValue = optionalBodyString(body, "remoteThreadId", current.remoteThreadId || current.remoteRuntimeThreadId || "") || null;
     const hasRemoteRuntimeBinding =
@@ -118,6 +123,8 @@ export class ThreadBindingController {
       additionalParticipantIds,
       additionalParticipantLabels,
       mirrorToWhatsApp: optionalBodyBoolean(body, "mirrorToWhatsApp", current.mirrorToWhatsApp !== false),
+      suppressWhatsAppUpdates: optionalBodyBoolean(body, "suppressWhatsAppUpdates", current.suppressWhatsAppUpdates === true),
+      suppressWhatsAppDebugFooter: optionalBodyBoolean(body, "suppressWhatsAppDebugFooter", current.suppressWhatsAppDebugFooter === true),
       replyPrefix: optionalBodyString(body, "replyPrefix", current.replyPrefix || defaultWhatsAppReplyPrefix()) || defaultWhatsAppReplyPrefix(),
       receivingAccountId: inboundAccountId,
       inboundAccountId,
@@ -128,6 +135,13 @@ export class ThreadBindingController {
       responderAccountId: responderConnectorAccountId,
       senderContactId: optionalBodyString(body, "senderContactId", current.senderContactId || "") || null,
       responderContactId: optionalBodyString(body, "responderContactId", current.responderContactId || "") || null,
+      ownerContactId: optionalBodyString(body, "ownerContactId", current.ownerContactId || "") || null,
+      ownerContactIds: optionalBodyStringArray(body, "ownerContactIds", current.ownerContactIds || []),
+      ownerContactAliases: optionalBodyStringArray(body, "ownerContactAliases", current.ownerContactAliases || []),
+      authorizedContactId: optionalBodyString(body, "authorizedContactId", current.authorizedContactId || "") || null,
+      authorizedContactIds: optionalBodyStringArray(body, "authorizedContactIds", current.authorizedContactIds || []),
+      authorizedContactAliases: optionalBodyStringArray(body, "authorizedContactAliases", current.authorizedContactAliases || []),
+      inboundSecurity,
       generated: optionalBodyBoolean(body, "generated", current.generated === true),
       outboundAccountId,
       ownerAuthorTags: optionalBodyStringArray(body, "ownerAuthorTags", current.ownerAuthorTags || []),

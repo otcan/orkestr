@@ -49,13 +49,19 @@ Managed/private operator features, production account bindings, aggregated
 broker views, private tenant operations, and host-specific deployment automation
 must not be required for this flow.
 
-Run the deterministic public demo:
+Run the deterministic public demo. This path uses a temporary `ORKESTR_HOME`
+and a fake Codex app-server, so it does not require Codex sign-in or connector
+credentials:
 
 ```bash
 npm run demo:coding-agent
 ```
 
-Run the real Codex example from a local or VPS host-native setup:
+Expected result: `Coding-agent demo passed`, with a temporary
+`demo-coding-agent` thread and one queued read-only task.
+
+Run the real Codex example from a local or VPS host-native setup after Codex
+sign-in:
 
 ```bash
 npx orkestr-oss thread create "Repo launch reviewer" --id repo-launch-reviewer --cwd "$PWD" --executor codex

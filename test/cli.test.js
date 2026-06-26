@@ -141,6 +141,45 @@ test("CLI sends local cli-auth bearer token when ORKESTR_HOME has one", async ()
   assert.equal(seen[0].headers.authorization, "Bearer local-cli-token");
 });
 
+test("CLI updates WhatsApp binding owner aliases", async () => {
+  const stdout = capture();
+  const seen = [];
+  const code = await runCli([
+    "--api",
+    "http://orkestr.test",
+    "whatsapp",
+    "bindings",
+    "update",
+    "thread:owner-alias-thread:whatsapp",
+    "--owner-contact",
+    "4917632400662@c.us",
+    "--owner-contact-alias",
+    "66378837028965@lid",
+    "--authorized-contact",
+    "4917632400662@c.us",
+    "--json",
+  ], {
+    stdout,
+    stderr: capture(),
+    fetchImpl: fakeFetch({
+      "PUT /api/connectors/whatsapp/bindings/thread%3Aowner-alias-thread%3Awhatsapp": {
+        ok: true,
+        binding: {
+          id: "thread:owner-alias-thread:whatsapp",
+          state: "ready",
+          ownerContactAliases: ["66378837028965@lid"],
+        },
+      },
+    }, seen),
+  });
+
+  assert.equal(code, 0);
+  assert.deepEqual(seen[0].body.ownerContactIds, ["4917632400662@c.us"]);
+  assert.deepEqual(seen[0].body.ownerContactAliases, ["66378837028965@lid"]);
+  assert.deepEqual(seen[0].body.authorizedContactIds, ["4917632400662@c.us"]);
+  assert.match(stdout.text(), /owner-alias-thread/);
+});
+
 test("CLI whereiam sends the current directory to the public API", async () => {
   const stdout = capture();
   const seen = [];
@@ -1403,6 +1442,32 @@ test("CLI resolves active WhatsApp bindings", async () => {
   assert.equal(seen[0].search, "?thread=thread-1");
   assert.match(stdout.text(), /thread:thread-1:whatsapp/);
   assert.match(stdout.text(), /Reply identity: neutral-1/);
+});
+
+test("CLI resolves WhatsApp bindings by chat without a positional thread", async () => {
+  const stdout = capture();
+  const seen = [];
+  const code = await runCli(["whatsapp", "bindings", "resolve", "--chat-id", "chat-1@g.us", "--account", "neutral-1", "--json"], {
+    stdout,
+    stderr: capture(),
+    fetchImpl: fakeFetch({
+      "GET /api/connectors/whatsapp/bindings/resolve": {
+        ok: true,
+        selected: {
+          id: "thread:thread-1:whatsapp",
+          state: "ready",
+          threadName: "Thread 1",
+          chatId: "chat-1@g.us",
+          responderAccountId: "neutral-1",
+        },
+      },
+    }, seen),
+  });
+
+  assert.equal(code, 0);
+  assert.equal(seen[0].key, "GET /api/connectors/whatsapp/bindings/resolve");
+  assert.equal(seen[0].search, "?chatId=chat-1%40g.us&accountId=neutral-1");
+  assert.equal(JSON.parse(stdout.text()).selected.chatId, "chat-1@g.us");
 });
 
 test("CLI filters active WhatsApp binding lists", async () => {

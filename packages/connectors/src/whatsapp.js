@@ -4,7 +4,7 @@ import { enqueueAgentMessage } from "../../core/src/messages.js";
 import { resourceOwnerUserId } from "../../core/src/policy.js";
 import { adminPrincipal, userPrincipal } from "../../core/src/principal.js";
 import { appServerStateFromStatus } from "../../core/src/codex-app-server-common.js";
-import { clearRuntimeLeasesForThread, runtimeStatus } from "../../core/src/runtime-leases.js";
+import { clearRuntimeLeasesForThread, resolveCodexThreadMetadata, runtimeStatus } from "../../core/src/runtime-leases.js";
 import { classifyApprovalReply } from "../../core/src/runtime-settings.js";
 import { processApiAgentThreadInput, threadUsesApiAgent } from "../../core/src/tenant-api-agent.js";
 import { parseThreadInputCommand } from "../../core/src/thread-commands.js";
@@ -43,6 +43,10 @@ import {
   whatsappInboundThreadMatchesBinding,
 } from "./whatsapp-inbound-routing.js";
 import {
+  addWhatsAppInboundSecurityBlock,
+  evaluateWhatsAppInboundSecurity,
+} from "./whatsapp-inbound-security.js";
+import {
   claimConnectorOutboxJob,
   connectorOutboxTerminalState,
   connectorOutboxRetryBackoffMs,
@@ -74,6 +78,7 @@ import {
   codexAssistantSource,
   shouldMirrorWhatsAppProgress,
   shouldMirrorWhatsAppReply,
+  threadSuppressesWhatsAppUpdates,
 } from "./whatsapp-mirror-policy.js";
 import {
   enqueueRemoteWhatsAppThreadInput,
@@ -120,6 +125,14 @@ const whatsappOutboundMirrorWorker = createWhatsAppOutboundMirrorWorker();
 let whatsappDeliveryIdleCache = null;
 let whatsappDeliveryRunCache = null;
 const whatsappMirrorMessageFileCache = new Map();
+const suppressibleWhatsAppUpdateDeliveryTypes = new Set([
+  "delivery_error",
+  "mode_queued",
+  "mutation_notice",
+  "progress",
+  "queue_notice",
+  "router_update",
+]);
 
 function positiveInteger(value, fallback, minimum = 1) {
   if (value === undefined || value === null || String(value).trim() === "") return fallback;
@@ -697,6 +710,28 @@ function routingConflict(message, failure = {}) {
   return error;
 }
 
+function whatsappInboundSecurityError(decision = {}, context = {}) {
+  const error = new Error("whatsapp_inbound_sender_denied");
+  error.statusCode = 403;
+  error.routingFailure = {
+    code: "whatsapp_inbound_sender_denied",
+    capability: "whatsapp",
+    provider: "whatsapp",
+    retryable: false,
+    userFacingCategory: "connector",
+    safeMessage: pickString(decision.safeMessage) || "This WhatsApp sender is not allowed to control this Orkestr chat.",
+    reason: pickString(decision.reason, "inbound_sender_denied"),
+    routerTraceId: pickString(context.routerTraceId),
+    accountId: pickString(context.accountId, decision.participant?.accountId),
+    bindingId: pickString(decision.participant?.bindingId),
+    threadId: pickString(context.threadId, decision.participant?.threadId),
+    chatId: pickString(context.chatId, decision.participant?.chatId),
+    principalKind: "whatsapp-participant",
+    principalId: pickString(decision.participant?.senderId, decision.participant?.participantId),
+  };
+  return error;
+}
+
 function pickString(...values) {
   for (const value of values) {
     const text = String(value || "").trim();
@@ -918,9 +953,12 @@ function outboundEchoDeliveryRecord(job = {}) {
     deliveryType: pickString(job.deliveryType),
     threadId: pickString(job.threadId),
     messageId: pickString(job.sourceMessageId),
+    sourceMessageId: pickString(job.sourceMessageId, job.sourceEventId),
     connectorOutboxJobId: pickString(job.id),
     chatId: pickString(job.chatId),
     accountId: pickString(job.accountId),
+    payloadText: pickString(job.payload?.text),
+    deliveredAt: pickString(job.deliveredAt, job.terminalAt, job.updatedAt),
     brokerAck: job.brokerAck,
   };
 }
@@ -945,6 +983,49 @@ function outboundEchoDeliveryForEvent(outboundDeliveries = [], connectorOutboxJo
       ackId === eventId ||
       (canonicalEventId && canonicalWhatsAppEventId(ackId) === canonicalEventId)
     );
+  }) || null;
+}
+
+function outboundTextEchoTtlMs(env = process.env) {
+  return positiveInteger(
+    pickString(env.ORKESTR_WHATSAPP_OUTBOUND_TEXT_ECHO_TTL_MS, env.ORKESTR_WHATSAPP_OUTBOUND_ECHO_TTL_MS),
+    7 * 24 * 60 * 60 * 1000,
+    1000,
+  );
+}
+
+function outboundDeliveryRecentlySent(delivery = {}, env = process.env, nowMs = Date.now()) {
+  const deliveredAt = pickString(delivery.deliveredAt, delivery.sentAt, delivery.createdAt);
+  const deliveredAtMs = Date.parse(deliveredAt);
+  if (!Number.isFinite(deliveredAtMs)) return false;
+  return Math.abs(nowMs - deliveredAtMs) <= outboundTextEchoTtlMs(env);
+}
+
+function comparableWhatsAppEchoText(value = "") {
+  return comparableWhatsAppBody(comparableWhatsAppVisibleText(value));
+}
+
+function outboundEchoDeliveryForText(outboundDeliveries = [], connectorOutboxJobs = [], input = {}, env = process.env) {
+  if (!inputFromMe(input)) return null;
+  const inputText = comparableWhatsAppEchoText(pickString(input.text, input.body, input.message));
+  if (!inputText) return null;
+  const chatId = pickString(input.chatId, input.chat?.id, input.fromChatId);
+  const accountId = pickString(input.accountId);
+  const nowMs = Date.now();
+  const records = [
+    ...(outboundDeliveries || []),
+    ...(connectorOutboxJobs || [])
+      .filter((job) => pickString(job.state).toLowerCase() === "delivered")
+      .map((job) => outboundEchoDeliveryRecord(job)),
+  ];
+  return records.reverse().find((delivery) => {
+    const deliveryChatId = pickString(delivery.chatId);
+    if (chatId && deliveryChatId && chatId !== deliveryChatId) return false;
+    const deliveryAccountId = pickString(delivery.accountId);
+    if (accountId && deliveryAccountId && accountId !== deliveryAccountId) return false;
+    if (!outboundDeliveryRecentlySent(delivery, env, nowMs)) return false;
+    const deliveryText = comparableWhatsAppEchoText(deliveredWhatsAppPayloadText(delivery, connectorOutboxJobs));
+    return deliveryText && deliveryText === inputText;
   }) || null;
 }
 
@@ -1185,6 +1266,38 @@ function whatsappApiAgentAutoRun(env = process.env) {
 
 const whatsappApiAgentKickTimers = new Map();
 
+function codexDebugMetadataMissing(thread = {}) {
+  const metadata = thread?.executor?.metadata && typeof thread.executor.metadata === "object" ? thread.executor.metadata : {};
+  return !thread?.codexRateLimits && !metadata.codexRateLimits && !metadata.rateLimits;
+}
+
+async function threadWithLiveCodexDebugMetadata(thread = null, env = process.env) {
+  if (!thread || !codexDebugMetadataMissing(thread)) return thread;
+  const metadata = await resolveCodexThreadMetadata(thread, env).catch(() => ({}));
+  const rateLimits = metadata.codexRateLimits || metadata.rateLimits || null;
+  if (!rateLimits) return thread;
+  const executor = thread.executor && typeof thread.executor === "object" ? thread.executor : {};
+  const executorMetadata = executor.metadata && typeof executor.metadata === "object" ? executor.metadata : {};
+  return {
+    ...thread,
+    codexModel: thread.codexModel || metadata.codexModel || null,
+    codexModelProvider: thread.codexModelProvider || metadata.codexModelProvider || null,
+    codexReasoningEffort: thread.codexReasoningEffort || metadata.codexReasoningEffort || null,
+    codexContextWindow: thread.codexContextWindow || metadata.codexContextWindow || null,
+    codexTokenUsage: thread.codexTokenUsage || metadata.codexTokenUsage || null,
+    codexTotalTokenUsage: thread.codexTotalTokenUsage || metadata.codexTotalTokenUsage || null,
+    codexRateLimits: rateLimits,
+    executor: {
+      ...executor,
+      metadata: {
+        ...executorMetadata,
+        ...metadata,
+        codexRateLimits: rateLimits,
+      },
+    },
+  };
+}
+
 function whatsappInboundCoalesceMs(env = process.env) {
   const parsed = Number(env.ORKESTR_WHATSAPP_INBOUND_COALESCE_MS || 3000);
   if (!Number.isFinite(parsed)) return 3000;
@@ -1333,7 +1446,28 @@ async function routeThread(input, config, env) {
     });
   }
   const thread = matchedThreads[0] || null;
-  return thread ? { threadId: thread.id, binding: thread.binding || null } : { threadId: "", binding: null };
+  if (thread) return { threadId: thread.id, binding: thread.binding || null };
+  const chatBoundThreads = threads.filter((item) => {
+    const binding = item?.binding || {};
+    if (String(binding.connector || "whatsapp").trim().toLowerCase() !== "whatsapp") return false;
+    if (!whatsappBindingIsRouteEligible(binding)) return false;
+    if (pickString(binding.chatId) !== chatId) return false;
+    const accounts = bindingAccountIds(binding);
+    return !accounts.size || !accountId || accounts.has(accountId);
+  });
+  if (chatBoundThreads.length > 1) {
+    throw routingConflict("wa_binding_ambiguous", {
+      reason: "Multiple legacy WhatsApp bindings matched this chat before sender authorization.",
+      chatId,
+      accountId,
+      bindingId: chatBoundThreads.map((item) => pickString(item.binding?.id, item.binding?.bindingId) || `thread:${item.id}:whatsapp`).join(","),
+      safeMessage: "Multiple Orkestr WhatsApp bindings matched this chat. Retire one duplicate binding or create a narrower binding.",
+    });
+  }
+  const chatBoundThread = chatBoundThreads[0] || null;
+  return chatBoundThread
+    ? { threadId: chatBoundThread.id, binding: chatBoundThread.binding || null, senderAuthorizationPending: true }
+    : { threadId: "", binding: null };
 }
 
 async function readWhatsAppState(env) {
@@ -1809,6 +1943,25 @@ function findWhatsAppOutboundIntent(outboundIntents = [], input = {}) {
   }
   const fieldKey = outboundIntentFieldKey(input);
   return index.byFields.get(fieldKey) || null;
+}
+
+function whatsappUpdateDeliverySuppressed({ kind, deliveryType, thread, chatId, env } = {}) {
+  if (kind !== "thread") return false;
+  if (!suppressibleWhatsAppUpdateDeliveryTypes.has(pickString(deliveryType).toLowerCase())) return false;
+  return threadSuppressesWhatsAppUpdates(thread, chatId, env);
+}
+
+async function skipSuppressedWhatsAppUpdateCandidate({ skipped, ...input } = {}) {
+  await skipWhatsAppOutboundCandidate({
+    ...input,
+    reason: "updates_suppressed",
+  });
+  skipped?.push({
+    agentId: input.agentId,
+    threadId: input.threadId,
+    messageId: input.messageId,
+    reason: "updates_suppressed",
+  });
 }
 
 async function skipWhatsAppOutboundCandidate({
@@ -2637,7 +2790,7 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
     phase: "received",
   }, env).catch(() => {});
 
-  const state = await readWhatsAppState(env);
+  let state = await readWhatsAppState(env);
   let threadRoute = await routeThread(input, config, env);
   const securityApproval = await maybeApprovePairingChallengeFromWhatsApp({
     input,
@@ -2740,8 +2893,13 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
     connector: "whatsapp",
     limit: 1000,
   }, env).catch(() => ({ jobs: [] }))).jobs || [];
-  const outboundEchoDelivery = outboundEchoDeliveryForEvent(state.outboundDeliveries || [], connectorOutboxJobs, input);
+  const outboundEchoDeliveryByAck = outboundEchoDeliveryForEvent(state.outboundDeliveries || [], connectorOutboxJobs, input);
+  const outboundEchoDeliveryByText = outboundEchoDeliveryByAck
+    ? null
+    : outboundEchoDeliveryForText(state.outboundDeliveries || [], connectorOutboxJobs, input, env);
+  const outboundEchoDelivery = outboundEchoDeliveryByAck || outboundEchoDeliveryByText;
   if (outboundEchoDelivery) {
+    const ignoredReason = outboundEchoDeliveryByAck ? "outbound_echo_delivery_ack" : "outbound_echo_delivery_text";
     const event = {
       eventId,
       canonicalEventId,
@@ -2753,7 +2911,7 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
       chatId: initialChatId,
       from: pickString(input.from, input.sender, input.author),
       accountId: initialAccountId,
-      ignoredReason: "outbound_echo_delivery_ack",
+      ignoredReason,
       outboundMessageId: pickString(outboundEchoDelivery.messageId),
       outboundDeliveryType: pickString(outboundEchoDelivery.deliveryType),
       connectorOutboxJobId: pickString(outboundEchoDelivery.connectorOutboxJobId),
@@ -2780,7 +2938,7 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
       sourceEventId: eventId,
       threadId: pickString(outboundEchoDelivery.threadId) || "",
       phase: "skipped",
-      reason: "outbound_echo_delivery_ack",
+      reason: ignoredReason,
       terminal: true,
     }, env).catch(() => {});
     await appendEvent({
@@ -2793,10 +2951,11 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
       accountId: initialAccountId,
       messageId: pickString(outboundEchoDelivery.messageId),
       deliveryType: pickString(outboundEchoDelivery.deliveryType),
+      ignoredReason,
     }, env).catch(() => {});
     return {
       duplicate: false,
-      skipped: "outbound_echo_delivery_ack",
+      skipped: ignoredReason,
       ignoredOutboundEcho: true,
       event,
       agentId: null,
@@ -2804,17 +2963,31 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
     };
   }
 
-  const skipDisabledBinding = async (routedThreadId) => {
-    const routedThread = routedThreadId ? await getThread(routedThreadId, env).catch(() => null) : null;
+  const disabledThreadForInbound = async (routedThreadId = "") => {
+    if (routedThreadId) return getThread(routedThreadId, env).catch(() => null);
+    if (!initialChatId) return null;
+    const threads = await listThreads(env).catch(() => []);
+    return threads.find((thread) => {
+      const binding = thread?.binding || {};
+      if (binding.connector !== "whatsapp" || binding.enabled !== false || binding.retired === true || binding.deprecated === true) return false;
+      if (pickString(binding.chatId) !== initialChatId) return false;
+      const accounts = bindingAccountIds(binding);
+      return !accounts.size || !initialAccountId || accounts.has(initialAccountId);
+    }) || null;
+  };
+
+  const skipDisabledBinding = async (routedThreadId = "") => {
+    const routedThread = await disabledThreadForInbound(routedThreadId);
     const binding = threadRoute.binding || routedThread?.binding || {};
     if (binding.connector === "whatsapp" && !whatsappBindingIsRouteEligible(binding)) {
+      const disabledThreadId = routedThreadId || routedThread?.id || "";
       const event = {
         eventId,
         canonicalEventId,
         routerTraceId: initialTraceId,
         turnId: initialTurnId,
         agentId: null,
-        threadId: routedThreadId,
+        threadId: disabledThreadId,
         messageId: null,
         chatId: initialChatId,
         from: pickString(input.from, input.sender, input.author),
@@ -2831,7 +3004,7 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
         accountId: initialAccountId,
         chatId: initialChatId,
         eventId,
-        threadId: routedThreadId,
+        threadId: disabledThreadId,
         state: "skipped",
       }, env).catch(() => null);
       await recordRouterTraceEvent({
@@ -2841,7 +3014,7 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
         accountId: initialAccountId,
         chatId: initialChatId,
         sourceEventId: eventId,
-        threadId: routedThreadId,
+        threadId: disabledThreadId,
         phase: "skipped",
         reason: "disabled_whatsapp_binding",
         terminal: true,
@@ -2851,7 +3024,7 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
         eventId,
         canonicalEventId,
         routerTraceId: initialTraceId,
-        threadId: routedThreadId,
+        threadId: disabledThreadId,
         chatId: initialChatId,
         accountId: initialAccountId,
       }, env).catch(() => {});
@@ -2861,7 +3034,7 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
         ignoredDisabledBinding: true,
         event,
         agentId: null,
-        threadId: routedThreadId,
+        threadId: disabledThreadId,
       };
     }
     return null;
@@ -3091,6 +3264,82 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
   };
   let thread = threadId ? (await listThreads(env)).find((item) => item.id === threadId || item.name === threadId || item.bindingName === threadId) : null;
   thread = await ensureApiAgentWhatsAppThread(thread, env);
+  const inboundSecurity = evaluateWhatsAppInboundSecurity({
+    binding: {
+      ...(thread?.binding || {}),
+      ...(threadRoute.binding || {}),
+    },
+    input: { ...input, chatId, from, accountId, text },
+    state,
+    thread: thread || {},
+    env,
+  });
+  messageInput.externalPrincipal = inboundSecurity.participant;
+  messageInput.senderParticipantId = inboundSecurity.participant?.senderId || "";
+  messageInput.senderTrustLevel = inboundSecurity.trustLevel || "unknown";
+  messageInput.senderPolicyMode = inboundSecurity.policyMode || "";
+  messageInput.securityClassification = inboundSecurity.classified || null;
+  if (!inboundSecurity.allowed) {
+    const blocked = inboundSecurity.action === "block";
+    if (blocked) state = addWhatsAppInboundSecurityBlock(state, inboundSecurity);
+    const event = {
+      eventId,
+      canonicalEventId,
+      routerTraceId,
+      turnId,
+      agentId: agentId || null,
+      threadId: threadId || null,
+      messageId: null,
+      chatId,
+      from,
+      accountId,
+      attachments: Array.isArray(input.attachments) ? input.attachments : [],
+      ...(inboundDedupeKey ? { inboundDedupeKey } : {}),
+      ignoredReason: blocked ? "inbound_security_blocked" : "inbound_security_denied",
+      inboundSecurity: {
+        reason: inboundSecurity.reason,
+        action: inboundSecurity.action || "deny",
+        trustLevel: inboundSecurity.trustLevel,
+        policyMode: inboundSecurity.policyMode,
+        classified: inboundSecurity.classified,
+      },
+      receivedAt: pickString(input.timestamp, input.receivedAt) || new Date().toISOString(),
+    };
+    state.inboundEvents = [...(state.inboundEvents || []), event];
+    await writeWhatsAppState(state, env);
+    await ensureRouterTurn({ routerTraceId, turnId, connector: "whatsapp", accountId, chatId, eventId, threadId: thread?.id || threadId || "", state: "skipped" }, env).catch(() => null);
+    await recordRouterTraceEvent({
+      routerTraceId,
+      turnId,
+      connector: "whatsapp",
+      accountId,
+      chatId,
+      sourceEventId: eventId,
+      threadId: thread?.id || threadId || "",
+      phase: "skipped",
+      reason: event.ignoredReason,
+      terminal: true,
+    }, env).catch(() => {});
+    await appendEvent({
+      type: blocked ? "whatsapp_inbound_security_blocked" : "whatsapp_inbound_security_denied",
+      eventId,
+      canonicalEventId,
+      routerTraceId,
+      threadId: thread?.id || threadId || null,
+      chatId,
+      accountId,
+      from,
+      reason: inboundSecurity.reason,
+      trustLevel: inboundSecurity.trustLevel,
+      policyMode: inboundSecurity.policyMode,
+    }, env).catch(() => {});
+    throw whatsappInboundSecurityError(inboundSecurity, {
+      routerTraceId,
+      accountId,
+      chatId,
+      threadId: thread?.id || threadId || "",
+    });
+  }
   await ensureRouterTurn({
     routerTraceId,
     turnId,
@@ -3938,6 +4187,7 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
   ];
   await recoverParentsForAlreadyMirroredReplies(messageSets, deliveredIds, outboundDeliveries, state, env);
   for (const { agentId, threadId, thread, messages, kind } of messageSets) {
+    const debugThread = kind === "thread" ? await threadWithLiveCodexDebugMetadata(thread, env) : thread;
     const messageSetKey = outboundMirrorMessageSetKey({ kind, agentId, threadId });
     for (const [messageIndex, message] of messages.entries()) {
       const messageCursor = outboundMirrorMessageCursor(message, messageIndex);
@@ -3973,9 +4223,28 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
           skipped.push({ agentId, threadId, messageId: message.id, reason: "assistant_output_available" });
           continue;
         }
+        if (whatsappUpdateDeliverySuppressed({ kind, deliveryType: "router_update", thread, chatId, env })) {
+          await skipSuppressedWhatsAppUpdateCandidate({
+            state,
+            outboundIntents,
+            skipped,
+            kind,
+            deliveryType: "router_update",
+            routerUpdateType: routerUpdateTarget.routerUpdateType,
+            agentId,
+            threadId,
+            messageId: deliveryId,
+            sourceMessageId: message.id,
+            chatId,
+            accountId,
+            message,
+            env,
+          });
+          continue;
+        }
         const text = appendWhatsAppDebugFooter(routerUpdateTarget.text, {
           message,
-          thread,
+          thread: debugThread,
           messages,
           deliveryType: "router_update",
           env,
@@ -4040,7 +4309,7 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
         const chatId = queuedModeTarget.chatId;
         const text = appendWhatsAppDebugFooter(formatWhatsAppModeQueued(queuedModeTarget.mode), {
           message,
-          thread,
+          thread: debugThread,
           messages,
           deliveryType: "mode_queued",
           env,
@@ -4061,6 +4330,24 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
             outboundIntents,
             skipped,
             existingIntent,
+            kind,
+            deliveryType: "mode_queued",
+            agentId,
+            threadId,
+            messageId: deliveryId,
+            sourceMessageId: message.id,
+            chatId,
+            accountId,
+            message,
+            env,
+          });
+          continue;
+        }
+        if (whatsappUpdateDeliverySuppressed({ kind, deliveryType: "mode_queued", thread, chatId, env })) {
+          await skipSuppressedWhatsAppUpdateCandidate({
+            state,
+            outboundIntents,
+            skipped,
             kind,
             deliveryType: "mode_queued",
             agentId,
@@ -4159,6 +4446,24 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
           });
           continue;
         }
+        if (whatsappUpdateDeliverySuppressed({ kind, deliveryType: "queue_notice", thread, chatId, env })) {
+          await skipSuppressedWhatsAppUpdateCandidate({
+            state,
+            outboundIntents,
+            skipped,
+            kind,
+            deliveryType: "queue_notice",
+            agentId,
+            threadId,
+            messageId: deliveryId,
+            sourceMessageId: message.id,
+            chatId,
+            accountId,
+            message: queueMessage,
+            env,
+          });
+          continue;
+        }
         if (staleTerminalWhatsAppOutboundIntentPassedCursor({ state, messageSetKey, messageCursor, intent: existingIntent, env })) continue;
         if (!existingIntent && whatsappOutboundMirrorCursorPassed(state, messageSetKey, messageCursor)) continue;
         if (kind === "thread") {
@@ -4220,7 +4525,7 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
         }
         const text = appendWhatsAppDebugFooter(formatWhatsAppQueueNotice(queueMessage, queueTarget.reason), {
           message: queueMessage,
-          thread,
+          thread: debugThread,
           messages: queueMessages,
           deliveryType: "queue_notice",
           env,
@@ -4302,6 +4607,23 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
           });
           continue;
         }
+        if (whatsappUpdateDeliverySuppressed({ kind, deliveryType: "delivery_error", thread, chatId, env })) {
+          await skipSuppressedWhatsAppUpdateCandidate({
+            state,
+            outboundIntents,
+            skipped,
+            kind,
+            deliveryType: "delivery_error",
+            agentId,
+            threadId,
+            messageId: message.id,
+            chatId,
+            accountId,
+            message,
+            env,
+          });
+          continue;
+        }
         if (staleTerminalWhatsAppOutboundIntentPassedCursor({ state, messageSetKey, messageCursor, intent: existingIntent, env })) continue;
         if (!existingIntent && whatsappOutboundMirrorCursorPassed(state, messageSetKey, messageCursor)) continue;
         const completedReply = completedAssistantReplyForParent(messages, message, chatId, state);
@@ -4324,7 +4646,7 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
         }
         const text = appendWhatsAppDebugFooter(formatWhatsAppDeliveryFailure(message), {
           message,
-          thread,
+          thread: debugThread,
           messages,
           deliveryType: "delivery_error",
           env,
@@ -4404,6 +4726,25 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
           });
           continue;
         }
+        if (whatsappUpdateDeliverySuppressed({ kind, deliveryType: "mutation_notice", thread, chatId: mutationTarget.chatId, env })) {
+          await skipSuppressedWhatsAppUpdateCandidate({
+            state,
+            outboundIntents,
+            skipped,
+            kind,
+            deliveryType: mutationTarget.deliveryType,
+            agentId,
+            threadId,
+            messageId: deliveryId,
+            sourceMessageId: message.id,
+            chatId: mutationTarget.chatId,
+            accountId: mutationTarget.accountId,
+            message,
+            parent: mutationParent,
+            env,
+          });
+          continue;
+        }
         if (!mutationTarget.priorDelivery) {
           await markUnsupportedWhatsAppMutation({
             thread,
@@ -4425,7 +4766,7 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
         const noticeText = formatWhatsAppMutationNotice(message, mutationTarget);
         const text = appendWhatsAppDebugFooter(noticeText, {
           message,
-          thread,
+          thread: debugThread,
           messages,
           deliveryType: mutationTarget.deliveryType,
           env,
@@ -4547,6 +4888,24 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
           });
           continue;
         }
+        if (whatsappUpdateDeliverySuppressed({ kind, deliveryType: "progress", thread, chatId, env })) {
+          await skipSuppressedWhatsAppUpdateCandidate({
+            state,
+            outboundIntents,
+            skipped,
+            kind,
+            deliveryType: "progress",
+            agentId,
+            threadId,
+            messageId: message.id,
+            chatId,
+            accountId,
+            message,
+            parent,
+            env,
+          });
+          continue;
+        }
         if (!liveRecovery && progressOvertakenByFinal(messages, message, chatId, env)) {
           await skipWhatsAppOutboundCandidate({
             state,
@@ -4568,7 +4927,7 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
         }
         const text = appendWhatsAppDebugFooter(formatWhatsAppOutboundText(pickString(message.text)), {
           message,
-          thread,
+          thread: debugThread,
           messages,
           deliveryType: "progress",
           env,
@@ -4682,6 +5041,24 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
         });
         continue;
       }
+      if (whatsappUpdateDeliverySuppressed({ kind, deliveryType, thread, chatId, env })) {
+        await skipSuppressedWhatsAppUpdateCandidate({
+          state,
+          outboundIntents,
+          skipped,
+          kind,
+          deliveryType,
+          agentId,
+          threadId,
+          messageId: message.id,
+          chatId,
+          accountId,
+          message,
+          parent,
+          env,
+        });
+        continue;
+      }
 
       if (supersededRuntimeInterruptionNotice(messages, message, chatId, state)) {
         await skipWhatsAppOutboundCandidate({
@@ -4733,7 +5110,7 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
       }));
       const text = appendWhatsAppDebugFooter(appendRemoteAttachmentFailureNotes(formattedText, remoteMaterialized.skipped), {
         message,
-        thread,
+        thread: debugThread,
         messages,
         deliveryType,
         env,
