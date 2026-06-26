@@ -71,6 +71,19 @@ function codexConversationInterruptionNoticeText() {
   ].join("\n");
 }
 
+function existingRecoveryNoticeForTurn(messages = [], turnId = "") {
+  const id = clean(turnId);
+  if (!id) return null;
+  return (Array.isArray(messages) ? messages : []).find((message) => {
+    if (clean(message?.source).toLowerCase() !== "orkestr_runtime") return false;
+    if (clean(message?.phase).toLowerCase() !== "runtime_interrupted") return false;
+    if (clean(message?.codexTurnId || message?.executorTurnId) !== id) return false;
+    const cause = clean(message?.noticeCause).toLowerCase();
+    if (cause === "active_turn_timeout") return true;
+    return /^Codex response timed out/.test(clean(message?.text));
+  }) || null;
+}
+
 function pendingRequestForCodexThread(pendingRequests, codexThreadId) {
   const id = clean(codexThreadId);
   if (!id) return null;
@@ -569,6 +582,18 @@ export class CodexAppServerClient {
             reason: publicError(turn.error),
           }, this.env).catch(() => {});
           if (codexTurnConversationInterrupted(turn)) {
+            const existingRecoveryNotice = existingRecoveryNoticeForTurn(await listThreadMessages(thread.id, this.env).catch(() => []), turnId);
+            if (existingRecoveryNotice) {
+              await appendEvent({
+                type: "codex_app_server_conversation_interrupted_notice_suppressed",
+                threadId: thread.id,
+                codexThreadId: threadId,
+                turnId,
+                existingNoticeMessageId: existingRecoveryNotice.id || null,
+                reason: "existing_timeout_recovery_notice",
+              }, this.env).catch(() => {});
+              return;
+            }
             const text = codexConversationInterruptionNoticeText();
             const whatsappParent =
               await latestWhatsAppParent(thread, params.timestamp || nowIso(), this.env) ||

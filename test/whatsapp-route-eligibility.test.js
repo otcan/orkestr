@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { deliverWhatsAppReplies, routeWhatsAppInbound } from "../packages/connectors/src/whatsapp.js";
+import { upsertWhatsAppConnectorAccount } from "../packages/connectors/src/whatsapp-account-registry.js";
 import { listLocalWhatsAppChats, localWhatsAppUnreadRecoveryBoundChats } from "../packages/connectors/src/whatsapp-local-bridge.js";
 import { appendThreadMessage, createThread, listThreadMessages, listThreads } from "../packages/core/src/threads.js";
 import { writeConnectorConfig } from "../packages/storage/src/config.js";
@@ -117,6 +118,50 @@ test("owner contact aliases can route WhatsApp group messages", async () => {
   assert.equal(routed.threadId, "owner-alias-route-thread");
   assert.equal(messages.length, 1);
   assert.equal(messages[0].senderTrustLevel, "owner");
+  assert.equal(messages[0].senderParticipantId, "66378837028965@lid");
+});
+
+test("generated thread routes preserve raw account aliases for lid sender trust", async () => {
+  const env = await testEnv("orkestr-wa-generated-route-raw-alias-", {
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "sender",
+  });
+  await upsertWhatsAppConnectorAccount({
+    accountId: "sender",
+    displayName: "Sender",
+    phoneNumber: "+905555154214",
+    contactId: "905555154214@c.us",
+    autostart: true,
+  }, env);
+  await createThread({
+    id: "generated-raw-alias-thread",
+    name: "Generated Raw Alias",
+    binding: {
+      connector: "whatsapp",
+      chatId: "wa-generated-raw-alias@g.us",
+      displayName: "Generated Raw Alias",
+      enabled: true,
+      routeEligible: true,
+      generated: true,
+      senderAccountId: "sender",
+      responderAccountId: "sender",
+      outboundAccountId: "sender",
+      senderContactId: "4917632400662@c.us",
+      responderContactId: "905555154214@c.us",
+    },
+  }, env);
+
+  const routed = await routeWhatsAppInbound({
+    eventId: "wa-generated-raw-alias-lid",
+    chatId: "wa-generated-raw-alias@g.us",
+    accountId: "sender",
+    from: "66378837028965@lid",
+    text: "progress?",
+  }, env);
+  const messages = await listThreadMessages("generated-raw-alias-thread", env);
+
+  assert.equal(routed.threadId, "generated-raw-alias-thread");
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].senderTrustLevel, "trusted");
   assert.equal(messages[0].senderParticipantId, "66378837028965@lid");
 });
 

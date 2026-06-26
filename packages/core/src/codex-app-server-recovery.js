@@ -30,6 +30,7 @@ import { readLiveCodexThreadState } from "./codex-app-server-live-state.js";
 import {
   activeTurnIdsFromClientState,
   activeTurnRecoveryPending,
+  shouldSteerStaleActiveTurn,
   shouldRecoverStaleActiveTurn,
 } from "./codex-app-server-active-turn-recovery.js";
 
@@ -421,6 +422,61 @@ function activeTurnInterruptPlan(thread = {}, clientState = {}, turn = null) {
   };
 }
 
+function activeTurnSteerText(env = process.env) {
+  return clean(env.ORKESTR_CODEX_APP_SERVER_ACTIVE_TURN_STEER_TEXT) ||
+    "Orkestr recovery check: please send a brief visible progress update now. Say what you have completed, what you are doing next, and whether you are waiting on a tool or external service. Do not stop the task unless you are blocked.";
+}
+
+function activeTurnSteerPlan(thread = {}, clientState = {}, turn = null) {
+  const turnId = clean(
+    messageTurnId(turn?.latestUser) ||
+    thread?.runtime?.activeTurnId ||
+    clientState?.activeTurnId,
+  );
+  const codexId = codexThreadId(thread);
+  return {
+    codexThreadId: codexId,
+    turnId,
+    canSteer: Boolean(codexId && turnId),
+  };
+}
+
+async function steerStaleActiveTurn(thread = {}, clientState = {}, turn = null, client = null, env = process.env) {
+  const plan = activeTurnSteerPlan(thread, clientState, turn);
+  const steeredAt = nowIso();
+  if (!plan.canSteer || !client) return { steered: false, turnId: plan.turnId || "", error: "steer_unavailable" };
+  let error = "";
+  try {
+    await client.request("turn/steer", {
+      threadId: plan.codexThreadId,
+      expectedTurnId: plan.turnId,
+      input: [{ type: "text", text: activeTurnSteerText(env) }],
+    });
+  } catch (caught) {
+    error = publicError(caught);
+  }
+  await updateThread(thread.id, {
+    runtime: {
+      ...(thread.runtime || {}),
+      runtimeKind: "codex-app-server",
+      activeTurnSteer: {
+        turnId: plan.turnId,
+        steeredAt,
+        ok: !error,
+        error: error || null,
+      },
+    },
+  }, env).catch(() => null);
+  await appendEvent({
+    type: error ? "codex_app_server_active_turn_steer_failed" : "codex_app_server_active_turn_steered",
+    threadId: thread.id,
+    codexThreadId: plan.codexThreadId,
+    turnId: plan.turnId,
+    error: error || null,
+  }, env).catch(() => {});
+  return { steered: !error, turnId: plan.turnId, error };
+}
+
 function activeTurnDoctorLines({ reason = "", interruptTurnIds = [], skippedTurnIds = [] } = {}) {
   if (reason !== "active_turn_timeout") return [];
   const targetCount = interruptTurnIds.length;
@@ -432,7 +488,7 @@ function activeTurnDoctorLines({ reason = "", interruptTurnIds = [], skippedTurn
   if (skippedCount) {
     lines.push(`Doctor: ignored ${skippedCount} stale cached active turn id${skippedCount === 1 ? "" : "s"} instead of interrupting historical turns.`);
   }
-  lines.push("Action: interrupt the current stale turn, mark the thread ready, and safe-reset only if stale turns repeat.");
+  lines.push("Doctor action: interrupting the current stale turn, marking the thread ready, and safe-resetting only if stale turns repeat.");
   return lines;
 }
 
@@ -604,13 +660,15 @@ export async function recoverStaleCodexAppServerTurns(env = process.env, options
     const incompleteTurn = latestIncompleteDeliveredTurn(scanMessages);
     let staleRuntime = staleRuntimeCandidate;
     let shouldRecoverTurn = shouldRecoverIncompleteTurn(thread, clientState, incompleteTurn, env);
+    let shouldSteerActiveTurn = shouldSteerStaleActiveTurn(thread, clientState, incompleteTurn, env);
     let shouldRecoverActiveTurn = shouldRecoverStaleActiveTurn(thread, clientState, incompleteTurn, env);
-    if ((staleRuntime || shouldRecoverTurn || shouldRecoverActiveTurn || activeTurnRecoveryPending(thread, clientState, incompleteTurn, env)) && client) {
+    if ((staleRuntime || shouldRecoverTurn || shouldSteerActiveTurn || shouldRecoverActiveTurn || activeTurnRecoveryPending(thread, clientState, incompleteTurn, env)) && client) {
       const liveReadState = await readLiveCodexThreadState(client, codexId);
       if (liveReadState) {
         clientState = liveReadState;
         staleRuntime = staleAppServerRuntime(thread, clientState);
         shouldRecoverTurn = shouldRecoverIncompleteTurn(thread, clientState, incompleteTurn, env);
+        shouldSteerActiveTurn = shouldSteerStaleActiveTurn(thread, clientState, incompleteTurn, env);
         shouldRecoverActiveTurn = shouldRecoverStaleActiveTurn(thread, clientState, incompleteTurn, env);
       }
     }
@@ -621,6 +679,11 @@ export async function recoverStaleCodexAppServerTurns(env = process.env, options
     const noticeTurn = shouldRecoverTurn || shouldRecoverActiveTurn || shouldRecoverRuntimeTurn
       ? incompleteTurn
       : null;
+    if (shouldSteerActiveTurn && !shouldRecoverActiveTurn && !shouldRecoverTurn && !shouldRecoverRuntimeTurn) {
+      await steerStaleActiveTurn(thread, clientState, incompleteTurn, client, env);
+      recoveryScanCache.delete(thread.id);
+      continue;
+    }
     if (!staleRuntime && !shouldRecoverTurn && !shouldRecoverActiveTurn) {
       if (!activeTurnRecoveryPending(thread, clientState, incompleteTurn, env)) {
         rememberRecoveryNoop(thread.id, liveScanKey, env);

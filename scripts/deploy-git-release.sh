@@ -1200,7 +1200,6 @@ service_name="${ORKESTR_SERVICE_NAME:-orkestr}"
 codex_app_server_mode="$(printf '%s' "${ORKESTR_CODEX_APP_SERVER_MODE:-stdio}" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
 codex_app_server_socket="${ORKESTR_CODEX_APP_SERVER_SOCKET:-}"
 codex_app_server_service_name="${ORKESTR_CODEX_APP_SERVER_SERVICE_NAME:-${service_name}-codex}"
-repair_env_file_permissions
 host="${ORKESTR_HOST:-127.0.0.1}"
 port="${ORKESTR_PORT:-19812}"
 health_url="${ORKESTR_DEPLOY_HEALTH_URL:-http://$host:$port/api/health}"
@@ -1262,13 +1261,20 @@ esac
 
 trap cleanup_deploy_drain_on_exit EXIT
 
-need git
-need npm
-need node
-need curl
-need tar
-need systemctl
-need flock
+if [ "$command" = "status" ]; then
+  if [ "$json_output" -eq 1 ]; then
+    need node
+  fi
+else
+  repair_env_file_permissions
+  need git
+  need npm
+  need node
+  need curl
+  need tar
+  need systemctl
+  need flock
+fi
 
 if [ "$command" != "status" ]; then
   mkdir -p "$(dirname "$lock_file")"
