@@ -128,12 +128,10 @@ function sha256(value) {
   return crypto.createHash("sha256").update(String(value || "")).digest("hex");
 }
 
-function normalizeWhatsAppChatId(value) {
+function normalizeWhatsAppNumber(value) {
   const text = clean(value);
-  if (!text) return "";
-  if (text.includes("@")) return text;
   const digits = text.replace(/[^\d]/g, "");
-  return digits ? `${digits}@c.us` : "";
+  return digits ? { text, chatId: `${digits}@c.us` } : null;
 }
 
 function demoSetupUrl(env = process.env) {
@@ -159,6 +157,10 @@ function publicSetupUrlOverride(env = process.env) {
 
 function publicBaseUrlOverride(env = process.env) {
   return firstValue(
+    env.ORKESTR_DEMO_ENTRY_BASE_URL,
+    env.ORKESTR_PUBLIC_SITE_URL,
+    env.ORKESTR_PRIMARY_PUBLIC_URL,
+    env.ORKESTR_PRIMARY_DOMAIN,
     env.ORKESTR_CONNECT_PUBLIC_BASE_URL,
     env.ORKESTR_CONNECT_BASE_URL,
     env.ORKESTR_DEMO_PUBLIC_BASE_URL,
@@ -192,17 +194,10 @@ function positiveTimeoutMs(value, fallback) {
 
 export function readyMessage({ setupUrl }) {
   return [
-    "Orkestr connect setup is ready.",
-    "",
-    "Please open this challenge-gated connect link and complete Codex login/sign-in:",
+    "Orkestr setup:",
     setupUrl,
     "",
-    "Steps:",
-    "1. Complete Codex login/sign-in in setup.",
-    "2. Keep WhatsApp on Orkestr relay, or switch to your own relay.",
-    "3. Start the orkest thread.",
-    "",
-    "Orkestr will show a temporary browser-pairing challenge before setup opens.",
+    "Open it, then paste the one shown `orkestr connect approve ...` command here or in a terminal.",
   ].join("\n");
 }
 
@@ -385,19 +380,16 @@ export async function runDemoVmReadyNotify(env = process.env, options = {}) {
   if (truthy(env.ORKESTR_DEMO_NOTIFY_DISABLE)) return { ok: true, skipped: true, reason: "disabled" };
   const phoneNumber = firstValue(env.ORKESTR_DEMO_WHATSAPP_NUMBER, env.ORKESTR_DEMO_WA_NUMBER);
   if (!phoneNumber) return { ok: true, skipped: true, reason: "missing_demo_whatsapp_number" };
-  const chatId = normalizeWhatsAppChatId(phoneNumber);
-  if (!chatId) return { ok: false, skipped: true, reason: "invalid_demo_whatsapp_number" };
+  const target = normalizeWhatsAppNumber(phoneNumber);
+  if (!target) return { ok: false, skipped: true, reason: "invalid_demo_whatsapp_number" };
   const filePath = statePath(env);
-  const chatHash = sha256(chatId);
+  const chatHash = sha256(target.chatId);
   const prior = await readJson(filePath, {});
   if (!truthy(env.ORKESTR_DEMO_NOTIFY_FORCE) && prior.sent === true && prior.chatHash === chatHash) {
     return { ok: true, skipped: true, reason: "already_sent", statePath: filePath };
   }
 
-  const publicSetup = await demoPublicSetupUrl({
-    ...env,
-    ORKESTR_DEMO_WHATSAPP_CHAT_HASH: chatHash,
-  }, options);
+  const publicSetup = await demoPublicSetupUrl(env, options);
   if (!publicSetup.ok || !publicSetup.setupUrl) {
     await writeJson(filePath, {
       schemaVersion: 1,
@@ -411,7 +403,7 @@ export async function runDemoVmReadyNotify(env = process.env, options = {}) {
     return { ok: false, skipped: true, reason: publicSetup.reason || "public_setup_url_unavailable", statePath: filePath };
   }
   const setupUrl = publicSetup.setupUrl;
-  const targetKey = sha256(`${chatId}|${setupUrl}`);
+  const targetKey = sha256(`${target.chatId}|${setupUrl}`);
   if (!truthy(env.ORKESTR_DEMO_NOTIFY_FORCE) && prior.sent === true && prior.targetKey === targetKey) {
     return { ok: true, skipped: true, reason: "already_sent", statePath: filePath };
   }
@@ -431,7 +423,7 @@ export async function runDemoVmReadyNotify(env = process.env, options = {}) {
 
   const text = readyMessage({ setupUrl });
   const result = await brokerInstanceWhatsAppRequest(publicSetup, "onboarding", {
-    chatId,
+    whatsappNumber: target.text,
     text,
     crossAccountEchoSuppression: true,
   }, { env, fetchImpl: options.fetchImpl || fetch });

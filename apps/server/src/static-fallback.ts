@@ -81,7 +81,7 @@ async function instanceSetupRedirectUrl(request: any, requestUrl: string): Promi
   await resolveBrokerConnectInstance(instanceId, process.env);
   const target = new URL("/setup/pairing", originalRequestOrigin(request));
   target.searchParams.set("instanceId", instanceId);
-  target.searchParams.set("return", url.searchParams.get("return") || "/setup");
+  target.searchParams.set("return", url.searchParams.get("return") || "/setup/codex?compact=1");
   return `${target.pathname}${target.search}`;
 }
 

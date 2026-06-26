@@ -245,7 +245,7 @@ export async function getConnectorStatuses({ env = process.env, home = os.homedi
         : codex.command
           ? status("codex", "Codex Agent", "partial", codexAuth?.connected && !codexAppServerAvailable
               ? "Codex is signed in, but this Codex CLI does not expose app-server. Update Codex before creating coding agents."
-              : codexEnvKey ? "OpenAI API key exists, but Codex Agent is not signed in yet. Connect Codex here before running coding agents." : "Codex Agent runtime is installed. Sign in here before running coding agents.", {
+              : codexEnvKey ? "Codex is installed but not signed in. Sign in to Codex before starting coding threads." : "Codex Agent runtime is installed. Sign in here before running coding agents.", {
               command: codex.command,
               version: codex.version,
               codexHome,

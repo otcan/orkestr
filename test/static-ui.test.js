@@ -139,7 +139,7 @@ test("server serves the public site at root and Angular UI at app routes", async
     assert.equal(setupGmailResponse.status, 200);
     assert.equal(setupGoogleMarketingResponse.status, 200);
     assert.equal(instanceSetupResponse.status, 302);
-    assert.equal(instanceSetupResponse.headers.get("location"), `/setup/pairing?instanceId=${brokerRegistration.instanceId}&return=%2Fsetup`);
+    assert.equal(instanceSetupResponse.headers.get("location"), `/setup/pairing?instanceId=${brokerRegistration.instanceId}&return=%2Fsetup%2Fcodex%3Fcompact%3D1`);
     assert.equal(workflowOnboardingResponse.status, 200);
     assert.equal(legacyOnboardingResponse.status, 200);
     assert.equal(opsResponse.status, 200);
@@ -190,7 +190,7 @@ test("instance connect setup requires a registered broker UUID", async () => {
     const unknown = await fetch(`http://127.0.0.1:${port}/i/demo-vm-001/setup`, { redirect: "manual" });
 
     assert.equal(registered.status, 302);
-    assert.equal(registered.headers.get("location"), `/setup/pairing?instanceId=${brokerRegistration.instanceId}&return=%2Fsetup`);
+    assert.equal(registered.headers.get("location"), `/setup/pairing?instanceId=${brokerRegistration.instanceId}&return=%2Fsetup%2Fcodex%3Fcompact%3D1`);
     assert.equal(unknown.status, 404);
   } finally {
     await new Promise((resolve) => server.close(resolve));

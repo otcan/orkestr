@@ -26,6 +26,37 @@ function sha256(value) {
   return crypto.createHash("sha256").update(String(value || "")).digest("hex");
 }
 function hashBuffer(value) { return crypto.createHash("sha256").update(value).digest("hex"); }
+function normalizeWhatsAppNumberTarget(value = "") {
+  const text = clean(value);
+  if (!text) return "";
+  const digits = text.replace(/[^\d]/g, "");
+  return digits ? `${digits}@c.us` : "";
+}
+function brokerWhatsAppChatHash(body = {}) {
+  const chatId = normalizeWhatsAppNumberTarget(
+    body.whatsappNumber ||
+      body.targetWhatsAppNumber ||
+      body.whatsappPhoneNumber ||
+      body.targetPhoneNumber ||
+      "",
+  );
+  return chatId ? sha256(chatId) : "";
+}
+export function brokerWhatsAppRelayAccountId(record = {}, env = process.env) {
+  return clean(
+    record.relayAccountId ||
+      env.ORKESTR_BROKER_WHATSAPP_ONBOARDING_ACCOUNT_ID ||
+      env.ORKESTR_BROKER_WHATSAPP_RELAY_ACCOUNT_ID ||
+      env.ORKESTR_WHATSAPP_SENDER_ACCOUNT_ID ||
+      env.WHATSAPP_SENDER_ACCOUNT_ID ||
+      env.ORKESTR_WHATSAPP_INBOUND_ACCOUNT_ID ||
+      env.WHATSAPP_INBOUND_ACCOUNT_ID ||
+      env.ORKESTR_WHATSAPP_SENDER_ROLE ||
+      env.WHATSAPP_SENDER_ROLE ||
+      env.ORKESTR_WHATSAPP_RESPONDER_ACCOUNT_ID ||
+      "sender",
+  );
+}
 function safeEqual(left, right) {
   const leftBuffer = Buffer.from(String(left || ""), "utf8");
   const rightBuffer = Buffer.from(String(right || ""), "utf8");
@@ -243,7 +274,7 @@ export async function registerBrokerInstance({ body = {}, request = {}, env = pr
     connectBaseUrl: clean(body.connectBaseUrl || body.publicBaseUrl || body.publicUrl).slice(0, 500),
     setupUrl: clean(body.setupUrl || body.publicSetupUrl).slice(0, 800),
     relayAccountId: clean(body.relayAccountId || body.whatsappRelayAccountId).slice(0, 120),
-    whatsappChatHash: clean(body.whatsappChatHash || body.targetChatHash).slice(0, 128),
+    whatsappChatHash: brokerWhatsAppChatHash(body),
     createdAt,
     lastSeenAt: createdAt,
     limits: {
@@ -395,8 +426,11 @@ export async function ensureBrokerClientRegistration(env = process.env, options 
   const paths = await ensureDataDirs(env);
   const brokerBaseUrl = clean(env.ORKESTR_DEMO_BROKER_BASE_URL || env.ORKESTR_BROKER_BASE_URL || options.brokerBaseUrl);
   if (!brokerBaseUrl) return { ok: false, reason: "broker_base_url_missing" };
+  const whatsappNumber = clean(env.ORKESTR_DEMO_WHATSAPP_NUMBER || env.ORKESTR_DEMO_WA_NUMBER);
+  const whatsappTargetHash = brokerWhatsAppChatHash({ whatsappNumber });
   const cached = await readJson(paths.brokerClientRegistration, null);
-  if (cached?.instanceId && cached?.channelId && cached?.brokerBaseUrl === brokerBaseUrl && !truthy(env.ORKESTR_BROKER_FORCE_REREGISTER)) {
+  const cacheMatchesTarget = !whatsappTargetHash || cached?.whatsappTargetHash === whatsappTargetHash;
+  if (cached?.instanceId && cached?.channelId && cached?.brokerBaseUrl === brokerBaseUrl && cacheMatchesTarget && !truthy(env.ORKESTR_BROKER_FORCE_REREGISTER)) {
     return { ok: true, reused: true, ...cached };
   }
   const client = await ensureClientIdentity(env);
@@ -409,22 +443,23 @@ export async function ensureBrokerClientRegistration(env = process.env, options 
       options.registrationToken ||
       "",
   );
+  const registrationBody = {
+    displayName: clean(env.ORKESTR_DEMO_INSTANCE_NAME || env.ORKESTR_SERVICE_NAME || os.hostname()),
+    version: clean(env.ORKESTR_VERSION || env.npm_package_version),
+    capabilities: ["demo-onboarding", "pairing-challenge"],
+    encryptionPublicKey: client.publicKey,
+    endpointBaseUrl: clean(env.ORKESTR_DEMO_INTERNAL_BASE_URL || env.ORKESTR_API_BASE || env.ORKESTR_PUBLIC_APP_URL),
+    connectBaseUrl: clean(env.ORKESTR_CONNECT_PUBLIC_BASE_URL || env.ORKESTR_DEMO_PUBLIC_BASE_URL),
+    setupUrl: clean(env.ORKESTR_CONNECT_PUBLIC_SETUP_URL || env.ORKESTR_DEMO_PUBLIC_SETUP_URL),
+    whatsappNumber,
+  };
   const response = await fetchImpl(url, {
     method: "POST",
     headers: {
       "content-type": "application/json",
       ...(token ? { authorization: `Bearer ${token}` } : {}),
     },
-    body: JSON.stringify({
-      displayName: clean(env.ORKESTR_DEMO_INSTANCE_NAME || env.ORKESTR_SERVICE_NAME || os.hostname()),
-      version: clean(env.ORKESTR_VERSION || env.npm_package_version),
-      capabilities: ["demo-onboarding", "pairing-challenge"],
-      encryptionPublicKey: client.publicKey,
-      endpointBaseUrl: clean(env.ORKESTR_DEMO_INTERNAL_BASE_URL || env.ORKESTR_API_BASE || env.ORKESTR_PUBLIC_APP_URL),
-      connectBaseUrl: clean(env.ORKESTR_CONNECT_PUBLIC_BASE_URL || env.ORKESTR_DEMO_PUBLIC_BASE_URL),
-      setupUrl: clean(env.ORKESTR_CONNECT_PUBLIC_SETUP_URL || env.ORKESTR_DEMO_PUBLIC_SETUP_URL),
-      whatsappChatHash: clean(env.ORKESTR_DEMO_WHATSAPP_CHAT_HASH),
-    }),
+    body: JSON.stringify(registrationBody),
   });
   let payload = null;
   try {
@@ -447,6 +482,7 @@ export async function ensureBrokerClientRegistration(env = process.env, options 
     brokerKeyId: payload.broker.keyId || "",
     brokerPublicKey: payload.broker.publicKey,
     clientKeyId: client.keyId,
+    whatsappTargetHash,
     registeredAt: payload.registeredAt || nowIso(),
     updatedAt: nowIso(),
   };

@@ -92,7 +92,13 @@ function configuredAccountIds(status = {}, env = process.env, registryAccounts =
     );
   }
   const localDefaults = localMode ? localWhatsAppAccountIdsForEnv(env) : [];
+  if (strictAccountIds(env) && fromEnv.length) return unique([...fromEnv, fromDefault, ...localDefaults]);
   return unique([...fromStatus, ...fromRegistry, ...fromEnv, fromDefault, ...fromThreads, ...localDefaults]);
+}
+
+function strictAccountIds(env = process.env) {
+  const raw = pickString(env.ORKESTR_WHATSAPP_STRICT_ACCOUNT_IDS, env.WHATSAPP_LOCAL_STRICT_ACCOUNT_IDS).toLowerCase();
+  return ["1", "true", "yes", "on"].includes(raw);
 }
 
 function autostartAccountIds(env = process.env) {

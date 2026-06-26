@@ -1,4 +1,4 @@
-import { ChangeDetectorRef, Component, EventEmitter, Input, OnDestroy, Output, inject } from "@angular/core";
+import { ChangeDetectorRef, Component, EventEmitter, Input, OnDestroy, OnInit, Output, inject } from "@angular/core";
 import { firstValueFrom } from "rxjs";
 import { ApiService, SecurityChallenge, SetupStatus } from "./api.service";
 
@@ -7,7 +7,7 @@ import { ApiService, SecurityChallenge, SetupStatus } from "./api.service";
   templateUrl: "./pairing-required-page.component.html",
   styleUrls: ["./pairing-required-page.component.css"],
 })
-export class PairingRequiredPageComponent implements OnDestroy {
+export class PairingRequiredPageComponent implements OnInit, OnDestroy {
   private readonly api = inject(ApiService);
   private readonly cdr = inject(ChangeDetectorRef);
   private poller?: ReturnType<typeof setInterval>;
@@ -21,6 +21,10 @@ export class PairingRequiredPageComponent implements OnDestroy {
   error = "";
   notice = "";
 
+  ngOnInit(): void {
+    void this.createChallenge();
+  }
+
   ngOnDestroy(): void {
     this.destroyed = true;
     this.stopPolling();
@@ -32,14 +36,16 @@ export class PairingRequiredPageComponent implements OnDestroy {
     this.renderNow();
     try {
       const result = await firstValueFrom(this.api.createSecurityChallenge(this.instanceId()));
-      this.challenge = result.challenge || {
+      const returnedChallenge = result.challenge;
+      this.challenge = returnedChallenge || {
         id: result.challengeId,
+        approveCode: "",
         status: "pending",
         createdAt: new Date().toISOString(),
         expiresAt: result.expiresAt,
         instanceId: this.instanceId(),
       };
-      this.notice = "Challenge generated. Approve it from the server before this browser can continue.";
+      this.notice = "Paste the command below into WhatsApp or a trusted terminal.";
       this.startPolling();
     } catch (error) {
       this.error = this.errorText(error);
@@ -65,18 +71,9 @@ export class PairingRequiredPageComponent implements OnDestroy {
     }
   }
 
-  sshCommand(): string {
-    return this.withChallengeId(this.setupStatus?.security?.approval?.sshCommand || `ssh root@${this.serverHost()}`);
-  }
-
   approveCommand(): string {
-    const id = this.challenge?.id || "<challenge-id>";
-    return this.withChallengeId(this.setupStatus?.security?.approval?.approveCommand || `orkestr security approve ${id}`);
-  }
-
-  sudoApproveCommand(): string {
-    const id = this.challenge?.id || "<challenge-id>";
-    return this.withChallengeId(this.setupStatus?.security?.approval?.sudoApproveCommand || `sudo orkestr security approve ${id}`);
+    const code = this.challenge?.approveCode || this.challenge?.id || "<code>";
+    return `orkestr connect approve ${code}`;
   }
 
   challengeStatusClass(): string {
@@ -92,6 +89,16 @@ export class PairingRequiredPageComponent implements OnDestroy {
     return Number.isFinite(timestamp) ? new Date(timestamp).toLocaleString([], { dateStyle: "short", timeStyle: "short" }) : "unknown";
   }
 
+  async copyCommand(): Promise<void> {
+    try {
+      await globalThis.navigator?.clipboard?.writeText(this.approveCommand());
+      this.notice = "Copied.";
+    } catch {
+      this.notice = "Select and copy the command.";
+    }
+    this.renderNow();
+  }
+
   instanceId(): string {
     const params = new URLSearchParams(globalThis.location?.search || "");
     return String(params.get("instanceId") || params.get("instance") || params.get("orkestrInstanceId") || "").trim();
@@ -102,7 +109,7 @@ export class PairingRequiredPageComponent implements OnDestroy {
     this.stopPolling();
     try {
       await firstValueFrom(this.api.pairSecurityBrowser(this.challenge.id));
-      this.notice = "Browser paired. Opening Orkestr.";
+      this.notice = "Approved. Opening setup.";
       this.renderNow();
       this.paired.emit();
     } catch (error) {
@@ -125,25 +132,6 @@ export class PairingRequiredPageComponent implements OnDestroy {
   private renderNow(): void {
     if (this.destroyed) return;
     this.cdr.detectChanges();
-  }
-
-  private serverHost(): string {
-    const configured =
-      this.setupStatus?.urls?.authUrl ||
-      this.setupStatus?.security?.https?.authUrl ||
-      this.setupStatus?.security?.https?.url ||
-      "";
-    try {
-      if (configured) return new URL(configured).hostname;
-    } catch {
-      // Fall through to the current browser host.
-    }
-    return globalThis.location?.hostname || "your-server";
-  }
-
-  private withChallengeId(command: string): string {
-    const id = this.challenge?.id || "<challenge-id>";
-    return String(command || "").replaceAll("<challenge-id>", id).replaceAll("{{challengeId}}", id);
   }
 
   private errorText(error: unknown): string {

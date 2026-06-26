@@ -961,6 +961,23 @@ test("CLI lists and approves browser pairing challenges from local state", async
   assert.equal((await getPairingChallenge(challenge.challengeId, { env })).status, "approved");
 });
 
+test("CLI connect approve accepts short browser pairing codes", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-cli-connect-approve-"));
+  const env = { ...process.env, ORKESTR_HOME: home };
+  const challenge = await createPairingChallenge({ env });
+  const approveOut = capture();
+
+  const approveCode = await runCli(["connect", "approve", challenge.challenge.approveCode], {
+    env,
+    stdout: approveOut,
+    stderr: capture(),
+  });
+
+  assert.equal(approveCode, 0);
+  assert.match(approveOut.text(), new RegExp(challenge.challenge.approveCode));
+  assert.equal((await getPairingChallenge(challenge.challengeId, { env })).status, "approved");
+});
+
 test("CLI lists and revokes browser pairing sessions from local state", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-cli-security-sessions-"));
   const env = { ...process.env, ORKESTR_HOME: home };

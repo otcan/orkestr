@@ -116,6 +116,7 @@ import {
   findWhatsAppAccountByAnyId,
   whatsappAccountLookupKeys,
 } from "./whatsapp-account-identity.js";
+import { maybeApprovePairingChallengeFromWhatsApp, maybeBindApprovedBrokerChat } from "./whatsapp-security-approval.js";
 
 export { formatWhatsAppOutboundText } from "./whatsapp-formatting.js";
 export { initialQueueDeliveryState } from "./whatsapp-outbound-mirror.js";
@@ -1412,7 +1413,7 @@ async function routeThread(input, config, env) {
     if (binding && !whatsappBindingIsRouteEligible(binding)) return { threadId: "", binding: null };
     return { threadId: explicit, binding };
   }
-  const whatsappStatus = await getLocalWhatsAppBridgeStatus(env).catch(() => ({}));
+  const whatsappStatus = await getWhatsAppStatus(env).catch(() => ({}));
   const registryRoute = await resolveWhatsAppBinding({ chatId, accountId }, { env, threads, status: whatsappStatus }).catch(() => null);
   const registryBinding = registryRoute?.selected || null;
   if (registryRoute?.ok && registryBinding?.threadId) {
@@ -2810,7 +2811,22 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
   }, env).catch(() => {});
 
   let state = await readWhatsAppState(env);
-  let threadRoute = null;
+  let threadRoute = await routeThread(input, config, env);
+  const securityApproval = await maybeApprovePairingChallengeFromWhatsApp({
+    input,
+    env,
+    state,
+    writeState: writeWhatsAppState,
+    eventId,
+    canonicalEventId,
+    routerTraceId: initialTraceId,
+    turnId: initialTurnId,
+    chatId: initialChatId,
+    accountId: initialAccountId,
+    threadRoute,
+  });
+  if (securityApproval) return securityApproval;
+
   const accountPolicy = whatsappInboundAccountPolicy(input, config, state, env);
   if (!accountPolicy.allowed) {
     threadRoute = await routeThread(input, config, env);
@@ -3045,6 +3061,24 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
   };
 
   threadRoute ||= await routeThread(input, config, env);
+  if (!threadRoute.threadId) {
+    const restoredBrokerBinding = await maybeBindApprovedBrokerChat({
+      input,
+      env,
+      state,
+      chatId: initialChatId,
+      accountId: initialAccountId,
+    }).catch((error) => {
+      appendEvent({
+        type: "whatsapp_approved_broker_chat_bind_recovery_failed",
+        chatId: initialChatId,
+        accountId: initialAccountId,
+        error: String(error?.message || error || "approved_broker_bind_recovery_failed").slice(0, 240),
+      }, env).catch(() => {});
+      return null;
+    });
+    if (restoredBrokerBinding?.ok) threadRoute = await routeThread(input, config, env);
+  }
   if (!threadRoute.threadId) threadRoute = await routeAutoProvisionedThread(input, config, env);
   const threadId = threadRoute.threadId;
   const agentId = threadId ? "" : routeAgentId(input, config);

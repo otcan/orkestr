@@ -31,6 +31,7 @@ function inferredCode(message = "") {
   if (text.includes("whatsapp_account_unreachable") || text.includes("account unreachable")) return "whatsapp_account_unreachable";
   if (text.includes("whatsapp_mirror_failed") || text.includes("mirror failure") || text.includes("mirror failed")) return "whatsapp_mirror_failed";
   if (text.includes("target_instance_unhealthy")) return "target_instance_unhealthy";
+  if (text.includes("codex")) return "codex_unavailable";
   if (text.includes("timer")) return "timer_unavailable";
   if (text.includes("gmail")) return "gmail_unavailable";
   if (text.includes("outlook")) return "outlook_unavailable";
@@ -44,6 +45,7 @@ function inferredCode(message = "") {
 function inferredCapability(message = "", code = "") {
   const text = lower(`${code} ${message}`);
   if (text.includes("wa_")) return "whatsapp";
+  if (text.includes("codex")) return "codex";
   if (text.includes("timer")) return "timers";
   if (text.includes("gmail")) return "gmail";
   if (text.includes("outlook")) return "outlook";
@@ -56,6 +58,7 @@ function inferredCapability(message = "", code = "") {
 function inferredCategory(message = "", code = "") {
   const text = lower(`${code} ${message}`);
   if (text.includes("target_instance_unhealthy")) return "instance_health";
+  if (text.includes("codex")) return "codex";
   if (text.includes("sanitizer")) return "sanitizer";
   if (text.includes("timer")) return "timer";
   if (text.includes("whatsapp") || text.includes("wa_")) return "connector";
@@ -90,6 +93,7 @@ export function normalizeRoutingFailure(input = {}, fallback = {}) {
     principalKind: pickContext(source, fallback, "principalKind"),
     principalId: pickContext(source, fallback, "principalId"),
     target: redact(source.target || fallback.target, 500),
+    setupUrl: redact(source.setupUrl || fallback.setupUrl, 800),
     retryable: retryable === null ? Boolean(fallback.retryable) : retryable,
     userFacingCategory: clean(source.userFacingCategory || fallback.userFacingCategory) || inferredCategory(message, code),
     safeMessage: redact(source.safeMessage || fallback.safeMessage, 1000),

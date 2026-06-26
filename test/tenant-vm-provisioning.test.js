@@ -28,11 +28,14 @@ test("tenant VM provisioning builds a public-safe KubeVirt plan", async () => {
   }, env);
   const manifest = JSON.parse(plan.manifest);
   const vm = manifest.items.find((item) => item.kind === "VirtualMachine");
-  const userData = vm.spec.template.spec.volumes.find((volume) => volume.name === "cloudinitdisk").cloudInitNoCloud.userData;
+  const cloudInitSecret = manifest.items.find((item) => item.kind === "Secret" && item.metadata.name === "alice-vm-cloudinit");
+  const cloudInitVolume = vm.spec.template.spec.volumes.find((volume) => volume.name === "cloudinitdisk").cloudInitNoCloud;
+  const userData = cloudInitSecret.stringData.userdata;
   const profile = JSON.parse(Buffer.from(userData.match(/content: ([A-Za-z0-9+/=]+)/)[1], "base64").toString("utf8"));
 
   assert.equal(plan.namespace, "tenant-a");
   assert.equal(plan.vmName, "alice-vm");
+  assert.equal(plan.cloudInitSecretName, "alice-vm-cloudinit");
   assert.equal(plan.bootstrapProfilePath, "/etc/orkestr/tenant-bootstrap-profile.json");
   assert.equal(plan.bootstrapProfile.firstChat.name, "Alice Launch");
   assert.equal(plan.bootstrapProfile.codex.model, "gpt-5.5");
@@ -48,6 +51,8 @@ test("tenant VM provisioning builds a public-safe KubeVirt plan", async () => {
   assert.equal(vm.spec.template.spec.domain.resources.requests.memory, "8192Mi");
   assert.equal(vm.spec.dataVolumeTemplates[0].spec.pvc.resources.requests.storage, "100Gi");
   assert.match(vm.spec.dataVolumeTemplates[0].spec.source.http.url, /noble-server-cloudimg-amd64\.img/);
+  assert.deepEqual(cloudInitVolume, { secretRef: { name: "alice-vm-cloudinit" } });
+  assert.ok(userData.length > 2048);
   assert.match(userData, /bootstrap-vps\.sh/);
   assert.match(userData, /write_files:/);
   assert.match(userData, /\/etc\/orkestr\/tenant-bootstrap-profile\.json/);
@@ -65,9 +70,39 @@ test("tenant VM provisioning builds a public-safe KubeVirt plan", async () => {
     "--vm",
     "alice-vm",
   ]);
-  assert.equal(plan.manifest.includes("secret"), false);
   assert.equal(plan.manifest.includes("password"), false);
   assert.equal(plan.manifest.includes("token"), false);
+});
+
+test("tenant VM demo cloud-init includes local Orkestr port for the notifier", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-tenant-vm-demo-env-"));
+  const env = { ORKESTR_HOME: home };
+  const tenantVm = await createTenantVm({
+    id: "demo-tenant",
+    ownerUserId: "demo",
+    kubevirt: { namespace: "demo", vmName: "demo-vm" },
+  }, env);
+
+  const plan = buildTenantVmProvisioningPlan(tenantVm, {
+    demoMode: true,
+    whatsappNumber: "+49 176 123456",
+    brokerBaseUrl: "https://connect.example.test",
+    entryBaseUrl: "https://orkestr.example.test",
+  }, env);
+  const manifest = JSON.parse(plan.manifest);
+  const cloudInitSecret = manifest.items.find((item) => item.kind === "Secret" && item.metadata.name === "demo-vm-cloudinit");
+  const userData = cloudInitSecret.stringData.userdata;
+  const envFile = Buffer.from(
+    userData.match(/path: \/etc\/orkestr\/orkestr\.env[\s\S]*?content: ([A-Za-z0-9+/=]+)/)[1],
+    "base64",
+  ).toString("utf8");
+
+  assert.match(envFile, /^ORKESTR_HOME='\/opt\/orkestr\/data'$/m);
+  assert.match(envFile, /^ORKESTR_PORT='19812'$/m);
+  assert.match(envFile, /^PORT='19812'$/m);
+  assert.match(envFile, /^ORKESTR_DEMO_WHATSAPP_NUMBER='\+49 176 123456'$/m);
+  assert.match(envFile, /^ORKESTR_DEMO_ENTRY_BASE_URL='https:\/\/orkestr\.example\.test'$/m);
+  assert.doesNotMatch(envFile, /whatsappChatHash|chatId/i);
 });
 
 test("tenant VM provisioning execute path applies manifest and updates registry status", async () => {
@@ -95,6 +130,7 @@ test("tenant VM provisioning execute path applies manifest and updates registry 
 
   assert.equal(result.dryRun, false);
   assert.equal(result.tenantVm.status, "provisioning");
+  assert.equal(result.cloudInitSecretName, "bob-tenant-cloudinit");
   assert.equal(result.bootstrapProfile.firstChat.name, "bob");
   assert.equal(calls.length, 1);
   assert.equal(calls[0].command, "kubectl");

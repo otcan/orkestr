@@ -255,6 +255,17 @@ ORKESTR_RELEASE_CONNECTIVITY_RECOVERY_COMMAND='orkestr whatsapp accounts reconne
 orkestr update --release --ref <tag-or-main-or-sha> --channel <channel> --all-instances
 ```
 
+If a deployment uses a single stable routed account and separate skill-only
+WhatsApp accounts, require only the routed account:
+
+```bash
+ORKESTR_RELEASE_REQUIRED_WHATSAPP_ACCOUNTS="sender" \
+orkestr update --release --ref <tag-or-main-or-sha> --channel <channel>
+```
+
+Skill-only accounts must be checked by their own local skill commands and must
+not be added to the release train account gate.
+
 The account gate retries longer than generic HTTP connectivity because WhatsApp
 Web sessions can take time to reattach after the service restart. Tune with
 `ORKESTR_RELEASE_WHATSAPP_ACCOUNT_ATTEMPTS` and

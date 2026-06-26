@@ -45,7 +45,7 @@ test("OSS demo GO path exposes Docker, Helm, and k3s smoke contracts", async () 
   assert.match(demoNotify, /brokerInstanceWhatsAppRequest/);
   assert.doesNotMatch(demoNotify, /writeConnectorConfig\("whatsapp"/);
   assert.match(demoNotify, /trycloudflare/);
-  assert.match(demoNotify, /browser-pairing challenge/);
+  assert.match(demoNotify, /orkestr connect approve/);
   assert.match(script, /ORKESTR_K3S_OSS_DEMO_EXECUTE/);
   assert.match(script, /no-noop-demo-path/);
   assert.match(script, /private-vm-demo-bootstrap/);

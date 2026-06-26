@@ -15,6 +15,10 @@ test("raw terminal parser recognizes pairing approval commands", () => {
     "rokSko-uJ6Q02OhBlInyhahJ",
   );
   assert.equal(
+    rawSecurityApproveChallengeId("orkestr connect approve A1B2C3"),
+    "A1B2C3",
+  );
+  assert.equal(
     rawSecurityApproveChallengeId("/approve challenge rokSko-uJ6Q02OhBlInyhahJ"),
     "rokSko-uJ6Q02OhBlInyhahJ",
   );
@@ -26,16 +30,11 @@ test("raw terminal parser recognizes pairing approval commands", () => {
     rawSecurityApproveChallengeId([
       "Orkestr security",
       "",
-      "Pairing Required",
-      "Challenge ID",
-      "VxqcH2wTo7_DJhf01y-9KVDy",
+      "Approve this browser",
+      "orkestr connect approve V7Q9KD",
       "pending",
-      "Approve With This Exact Command",
-      "ssh root@orkestr.example.test",
-      "orkestr security approve VxqcH2wTo7_DJhf01y-9KVDy",
-      "sudo orkestr security approve VxqcH2wTo7_DJhf01y-9KVDy",
     ].join("\n")),
-    "VxqcH2wTo7_DJhf01y-9KVDy",
+    "V7Q9KD",
   );
 });
 
@@ -49,6 +48,7 @@ test("raw terminal parser keeps non-control text out of the approval path", () =
   assert.equal(rawControlCommandMayMatch("a"), true);
   assert.equal(rawControlCommandMayMatch("as"), false);
   assert.equal(rawControlCommandMayMatch("orkestr security approve"), true);
+  assert.equal(rawControlCommandMayMatch("orkestr connect approve"), true);
   assert.equal(rawControlCommandMayMatch("/desktop"), false);
   assert.equal(rawControlCommandMayMatch("orkestr desktop approve"), false);
 });
