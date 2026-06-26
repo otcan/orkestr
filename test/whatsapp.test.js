@@ -3729,10 +3729,19 @@ test("whatsapp doctor skips optional idle accounts in global health", async () =
     "ORKESTR_AUTH_REQUIRED",
     "ORKESTR_PUBLIC_HTTPS_URL",
     "ORKESTR_WHATSAPP_ACCOUNT_IDS",
+    "WHATSAPP_LOCAL_ACCOUNT_IDS",
+    "ORKESTR_WHATSAPP_STRICT_ACCOUNT_IDS",
+    "WHATSAPP_LOCAL_STRICT_ACCOUNT_IDS",
+    "ORKESTR_WHATSAPP_ACCOUNT_CLIENT_IDS",
+    "WHATSAPP_LOCAL_ACCOUNT_CLIENT_IDS",
+    "ORKESTR_WHATSAPP_ACCOUNT_SESSION_ROOTS",
+    "WHATSAPP_LOCAL_ACCOUNT_SESSION_ROOTS",
     "ORKESTR_WHATSAPP_AUTOSTART",
     "WHATSAPP_LOCAL_AUTOSTART",
     "ORKESTR_WHATSAPP_AUTOSTART_ACCOUNT_IDS",
+    "WHATSAPP_LOCAL_AUTOSTART_ACCOUNT_IDS",
     "ORKESTR_WHATSAPP_DEFAULT_RESPONDER_ACCOUNT_ID",
+    "WHATSAPP_LOCAL_DEFAULT_RESPONDER_ACCOUNT_ID",
     "ORKESTR_CODEX_BIN",
     "ORKESTR_RECOVER_RUNNING_ON_START",
   ].map((key) => [key, process.env[key]]));
@@ -3740,12 +3749,23 @@ test("whatsapp doctor skips optional idle accounts in global health", async () =
   delete process.env.ORKESTR_AUTH_REQUIRED;
   delete process.env.ORKESTR_PUBLIC_HTTPS_URL;
   process.env.ORKESTR_WHATSAPP_ACCOUNT_IDS = "sender,responder";
+  delete process.env.WHATSAPP_LOCAL_ACCOUNT_IDS;
+  process.env.ORKESTR_WHATSAPP_STRICT_ACCOUNT_IDS = "1";
+  delete process.env.WHATSAPP_LOCAL_STRICT_ACCOUNT_IDS;
+  delete process.env.ORKESTR_WHATSAPP_ACCOUNT_CLIENT_IDS;
+  delete process.env.WHATSAPP_LOCAL_ACCOUNT_CLIENT_IDS;
+  delete process.env.ORKESTR_WHATSAPP_ACCOUNT_SESSION_ROOTS;
+  delete process.env.WHATSAPP_LOCAL_ACCOUNT_SESSION_ROOTS;
   process.env.ORKESTR_WHATSAPP_AUTOSTART = "0";
   process.env.WHATSAPP_LOCAL_AUTOSTART = "0";
   process.env.ORKESTR_WHATSAPP_AUTOSTART_ACCOUNT_IDS = "responder";
+  delete process.env.WHATSAPP_LOCAL_AUTOSTART_ACCOUNT_IDS;
   process.env.ORKESTR_WHATSAPP_DEFAULT_RESPONDER_ACCOUNT_ID = "responder";
+  delete process.env.WHATSAPP_LOCAL_DEFAULT_RESPONDER_ACCOUNT_ID;
   process.env.ORKESTR_CODEX_BIN = "__orkestr_codex_disabled_for_test__";
   process.env.ORKESTR_RECOVER_RUNNING_ON_START = "0";
+  const distBridge = await import("../dist/server/packages/connectors/src/whatsapp-local-bridge.js");
+  await distBridge.resetLocalWhatsAppBridgeForTest(process.env);
 
   await createThread({
     id: "doctor-ready-thread",
@@ -3761,7 +3781,6 @@ test("whatsapp doctor skips optional idle accounts in global health", async () =
   const server = await startServer({ port: 0, host: "127.0.0.1" });
   const { port } = server.address();
   const baseUrl = `http://127.0.0.1:${port}`;
-  const distBridge = await import("../dist/server/packages/connectors/src/whatsapp-local-bridge.js");
   distBridge.setLocalWhatsAppRuntimeForTest("responder", {
     client: {
       info: { wid: { _serialized: "responder@c.us" } },
