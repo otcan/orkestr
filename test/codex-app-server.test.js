@@ -2143,6 +2143,9 @@ test("Codex app-server recovery marks stale delivered turns ready and appends on
 
     assert.equal(restartRecovery.recovered, 1);
     assert.equal(restartRecovery.appended, 1);
+    assert.equal(restartNotice.noticeCause, "orkestr_restart");
+    assert.equal(restartNotice.recoverySource || "", "");
+    assert.equal(restartNotice.recoveryReason, "no_assistant_response");
     assert.match(restartNotice.text, /^Orkestr restarted before Codex replied/);
     assert.match(restartNotice.text, /Orkestr restarted after this message reached Codex/);
 
@@ -2189,6 +2192,9 @@ test("Codex app-server recovery marks stale delivered turns ready and appends on
 
     assert.equal(rebootRecovery.recovered, 1);
     assert.equal(rebootRecovery.appended, 1);
+    assert.equal(rebootNotice.noticeCause, "host_reboot");
+    assert.equal(rebootNotice.recoverySource, "startup_recovery");
+    assert.equal(rebootNotice.recoveryReason, "no_assistant_response");
     assert.match(rebootNotice.text, /^Host rebooted before Codex replied/);
     assert.match(rebootNotice.text, /The machine restarted after this message reached Codex/);
     assert.equal(rebootEvent.noticeCause, "host_reboot");
@@ -3002,6 +3008,8 @@ test("Codex app-server recovery reports progress-only turns with no final answer
     assert.equal(notice.parentMessageId, input.id);
     assert.equal(notice.connector, "whatsapp");
     assert.equal(notice.chatId, "chat-progress-only");
+    assert.equal(notice.noticeCause, "orkestr_restart");
+    assert.equal(notice.recoveryReason, "no_final_answer");
     assert.match(notice.text, /^Orkestr restarted before Codex finished/);
     assert.match(notice.text, /Progress updates before the restart were preserved/);
     assert.doesNotMatch(notice.text, /\/now/);
@@ -3011,6 +3019,7 @@ test("Codex app-server recovery reports progress-only turns with no final answer
     assert.equal(second.recovered, 0);
     assert.equal(second.appended, 0);
     assert.equal(messagesAfterSecond.filter((message) => message.source === "orkestr_runtime" && message.phase === "runtime_interrupted").length, 1);
+    assert.equal(messagesAfterSecond.find((message) => message.id === notice.id)?.noticeCause, "orkestr_restart");
   } finally {
     stopCodexAppServerClients();
   }
@@ -3046,6 +3055,45 @@ test("Codex app-server history hydration preserves non-final assistant messages"
   assert.ok(messages.find((message) => message.role === "assistant" && message.phase === "context_compaction" && message.text === "Codex compacted the conversation context."));
   assert.ok(messages.find((message) => message.role === "assistant" && message.phase === "plan" && message.text === "Plan survives."));
   assert.ok(messages.find((message) => message.role === "assistant" && message.phase === "final_answer" && message.text === "Final answer survives."));
+});
+
+test("Codex app-server history hydration dedupes existing rollout messages", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-rollout-dedupe-"));
+  const env = { ORKESTR_HOME: path.join(home, "orkestr") };
+  const thread = await createThread({ id: "app-server-rollout-dedupe-thread", name: "Rollout Dedupe Thread", cwd: home, executorId: "codex", executor: { type: "codex" } }, env);
+  const codexThread = {
+    id: "codex-rollout-dedupe-thread",
+    turns: [
+      {
+        id: "codex-rollout-dedupe-turn",
+        threadId: "codex-rollout-dedupe-thread",
+        status: "completed",
+        items: [
+          { type: "agentMessage", id: "rollout-dedupe-agent", text: "Same answer from rollout.", phase: "final_answer" },
+        ],
+      },
+    ],
+  };
+  const rollout = await appendThreadMessage(thread.id, {
+    role: "assistant",
+    source: "codex-rollout",
+    phase: "final_answer",
+    state: "completed",
+    text: "Same answer from rollout.",
+    codexThreadId: codexThread.id,
+    codexTurnId: "codex-rollout-dedupe-turn",
+  }, env);
+
+  const result = await hydrateCodexAppServerThreadMessages(thread, codexThread, env);
+  const messages = await listThreadMessages(thread.id, env);
+  const replies = messages.filter((message) => message.role === "assistant" && message.text === "Same answer from rollout.");
+
+  assert.equal(result.created, 0);
+  assert.equal(result.updated, 1);
+  assert.equal(replies.length, 1);
+  assert.equal(replies[0].id, rollout.id);
+  assert.equal(replies[0].source, "codex-rollout");
+  assert.equal(replies[0].codexItemId, "rollout-dedupe-agent");
 });
 
 test("Codex app-server history hydration spreads turn-level timestamps across items", async () => {

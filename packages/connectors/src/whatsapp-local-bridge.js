@@ -1042,6 +1042,10 @@ function attachmentEchoKey(accountId, chatId, attachment = {}) {
   ].join(":");
 }
 
+function anyAccountAttachmentEchoKey(chatId, attachment = {}) {
+  return attachmentEchoKey("*", chatId, attachment);
+}
+
 function attachmentEchoSizeKey(accountId, chatId, attachment = {}) {
   const size = Number(attachment.size);
   if (!Number.isFinite(size) || size <= 0) return "";
@@ -1052,11 +1056,14 @@ function attachmentEchoSizeKey(accountId, chatId, attachment = {}) {
   ].join(":");
 }
 
-function rememberOutboundAttachment(accountId, chatId, attachment = {}, env = process.env) {
+function rememberOutboundAttachment(accountId, chatId, attachment = {}, env = process.env, options = {}) {
   const key = attachmentEchoKey(accountId, chatId, attachment);
+  const crossAccountKey = anyAccountAttachmentEchoKey(chatId, attachment);
   const sizeKey = attachmentEchoSizeKey(accountId, chatId, attachment);
   const rememberedAt = Date.now();
   if (key && !key.endsWith("::")) outboundAttachmentKeys.set(key, rememberedAt);
+  if (options.crossAccount === false) outboundAttachmentKeys.delete(crossAccountKey);
+  else if (crossAccountKey && !crossAccountKey.endsWith("::")) outboundAttachmentKeys.set(crossAccountKey, rememberedAt);
   if (sizeKey && !sizeKey.endsWith("::")) outboundAttachmentSizeKeys.set(sizeKey, rememberedAt);
   pruneOutboundAttachmentKeys(env);
 }
@@ -1068,12 +1075,15 @@ function outboundAttachmentsRecentlySent(accountId, chatId, attachments = [], en
   return items.every((attachment) => {
     const key = attachmentEchoKey(accountId, chatId, attachment);
     if (key && outboundAttachmentKeys.has(key)) return true;
+    const chatKey = anyAccountAttachmentEchoKey(chatId, attachment);
+    if (chatKey && outboundAttachmentKeys.has(chatKey)) return true;
     const sizeKey = attachmentEchoSizeKey(accountId, chatId, attachment);
     return Boolean(options.allowSizeOnly && sizeKey && outboundAttachmentSizeKeys.has(sizeKey));
   });
 }
 
 function inboundAttachmentEchoCandidates(message = {}) {
+  const body = String(message.body || "").trim();
   const names = [
     message.filename,
     message.fileName,
@@ -1081,6 +1091,7 @@ function inboundAttachmentEchoCandidates(message = {}) {
     message._data?.fileName,
     message.rawData?.filename,
     message.mediaData?.filename,
+    message.hasMedia || message.type === "document" ? body : "",
   ].map((value) => String(value || "").trim()).filter(Boolean);
   const seen = new Set();
   return names
@@ -1150,6 +1161,7 @@ function groupIdFromCreateResult(result) {
 async function knownLocalWhatsAppChats(accountId, env = process.env) {
   const selectedAccountId = normalizeAccountId(accountId, env);
   const known = new Map();
+  const eligibleChatIds = new Set();
   const suppressedChatIds = new Set();
   const threads = await listThreads(env).catch(() => []);
   for (const thread of threads) {
@@ -1158,8 +1170,16 @@ async function knownLocalWhatsAppChats(accountId, env = process.env) {
     const chatId = String(binding.chatId || "").trim();
     const accountIds = [...whatsappBindingAccountIds(binding)];
     if (!chatId || (accountIds.length && !accountIds.some((candidate) => localAccountMatches(candidate, selectedAccountId, env)))) continue;
+    if (whatsappBindingIsRouteEligible(binding)) eligibleChatIds.add(chatId);
+  }
+  for (const thread of threads) {
+    const binding = thread?.binding || {};
+    if (String(binding.connector || "whatsapp").trim().toLowerCase() !== "whatsapp") continue;
+    const chatId = String(binding.chatId || "").trim();
+    const accountIds = [...whatsappBindingAccountIds(binding)];
+    if (!chatId || (accountIds.length && !accountIds.some((candidate) => localAccountMatches(candidate, selectedAccountId, env)))) continue;
     if (!whatsappBindingIsRouteEligible(binding)) {
-      suppressedChatIds.add(chatId);
+      if (!eligibleChatIds.has(chatId)) suppressedChatIds.add(chatId);
       continue;
     }
     addChat(known, {
@@ -1208,14 +1228,23 @@ async function knownLocalWhatsAppChats(accountId, env = process.env) {
 async function suppressedLocalWhatsAppChatIds(accountId, env = process.env) {
   const selectedAccountId = normalizeAccountId(accountId, env);
   const threads = await listThreads(env).catch(() => []);
+  const eligibleChatIds = new Set();
   const suppressed = new Set();
+  for (const thread of threads) {
+    const binding = thread?.binding || {};
+    if (String(binding.connector || "whatsapp").trim().toLowerCase() !== "whatsapp") continue;
+    const chatId = String(binding.chatId || "").trim();
+    const accountIds = [...whatsappBindingAccountIds(binding)];
+    if (!chatId || (accountIds.length && !accountIds.some((candidate) => localAccountMatches(candidate, selectedAccountId, env)))) continue;
+    if (whatsappBindingIsRouteEligible(binding)) eligibleChatIds.add(chatId);
+  }
   for (const thread of threads) {
     const binding = thread?.binding || {};
     if (String(binding.connector || "whatsapp").trim().toLowerCase() !== "whatsapp") continue;
     if (whatsappBindingIsRouteEligible(binding)) continue;
     const chatId = String(binding.chatId || "").trim();
     const accountIds = [...whatsappBindingAccountIds(binding)];
-    if (!chatId || (accountIds.length && !accountIds.some((candidate) => localAccountMatches(candidate, selectedAccountId, env)))) continue;
+    if (!chatId || eligibleChatIds.has(chatId) || (accountIds.length && !accountIds.some((candidate) => localAccountMatches(candidate, selectedAccountId, env)))) continue;
     suppressed.add(chatId);
   }
   return suppressed;
@@ -1804,11 +1833,20 @@ export function inboundRoutingFailureNoticeText(error, { env = process.env } = {
   if (failure.code === "target_instance_unhealthy" || failure.userFacingCategory === "instance_health") {
     return "This Orkestr instance is temporarily unavailable for this chat. Your message was not delivered; please resend it after the instance is healthy.";
   }
+  if (failure.code === "whatsapp_binding_disabled" || failure.code === "disabled_whatsapp_binding" || reason === "whatsapp_binding_disabled") {
+    return "This WhatsApp chat is connected to Orkestr, but inbound messages are currently disabled for the bound thread. Your message was not delivered; ask the admin to enable the WhatsApp binding, then resend.";
+  }
+  if (failure.code === "whatsapp_inbound_sender_denied" || failure.reason === "unknown_sender") {
+    return failure.safeMessage || "This WhatsApp sender is not allowed to control this Orkestr chat.";
+  }
   if (failure.capability === "timers" || failure.userFacingCategory === "timer" || lowered.includes("timer")) {
     return "Timers are not available for this chat right now. Please try again after Orkestr is healthy.";
   }
   if (reason === "llm_sanitizer_unconfigured") {
     return "Orkestr could not accept your message because the isolated-user LLM sanitizer is not configured. Ask the admin to connect the sanitizer, then resend.";
+  }
+  if (/^llm_sanitizer_(?:http_(?:408|409|425|429|5\d\d)|timeout|empty_response|invalid_json|unavailable|(?:codex|ollama)_(?:timeout|unavailable|failed|invalid_json|http_(?:408|409|425|429|5\d\d)))$/i.test(reason)) {
+    return "Orkestr could not safely verify this message because the isolated-user safety service was temporarily unavailable. Please resend it in a moment.";
   }
   if (reason === "browser_pairing_required") {
     return `This Orkestr chat needs browser pairing approval before it can accept messages. Open ${publicHelpUrl(env)} to complete pairing, then resend.`;
@@ -1829,7 +1867,7 @@ export function inboundRoutingFailureNoticeText(error, { env = process.env } = {
     return "This chat is missing a required Orkestr capability or connector setup. Please retry after the chat setup is healthy.";
   }
   if (reason.startsWith("llm_sanitizer")) {
-    return `Orkestr could not accept your message because the isolated-user LLM sanitizer blocked or could not verify it: ${reason}.`;
+    return "Orkestr could not accept your message because the isolated-user safety policy blocked or could not verify it. Please retry with a simpler request, or ask the admin to check the chat setup.";
   }
   return `Orkestr could not route your message: ${reason}.`;
 }
@@ -1840,6 +1878,21 @@ function inboundRoutingFailureShouldNotify(error) {
   if (reason === "whatsapp_target_required" || failure.code === "whatsapp_target_required") return false;
   if (reason === "message_text_required" || failure.code === "message_text_required") return false;
   return true;
+}
+
+function disabledBindingRoutingError(routed = {}) {
+  const error = new Error("whatsapp_binding_disabled");
+  error.routingFailure = normalizeRoutingFailure({
+    code: "whatsapp_binding_disabled",
+    reason: "disabled_whatsapp_binding",
+    threadId: String(routed?.threadId || ""),
+    safeMessage: "This WhatsApp chat is connected to Orkestr, but inbound messages are disabled for the bound thread.",
+    userFacingCategory: "connector",
+    retryable: false,
+  }, {
+    reason: "disabled_whatsapp_binding",
+  });
+  return error;
 }
 
 async function sendInboundRoutingFailureNotice({ accountId = "", chatId = "", eventId = "", error = null, client = null, env = process.env } = {}) {
@@ -1938,6 +1991,27 @@ export async function handleInboundMessage(accountId, message, env = process.env
     if (forwarded) return { routed: forwarded.payload, forwarded: true, eventId, chatId, from, fromMe: routeFromMe };
     const { deliverWhatsAppReplies, routeWhatsAppInbound } = await import("./whatsapp.js");
     const routed = await routeWhatsAppInbound({ ...inbound, deferApiAgentAutoRun: true }, env);
+    if (routed?.ignoredDisabledBinding) {
+      const error = disabledBindingRoutingError(routed);
+      const notice = await sendInboundRoutingFailureNotice({
+        accountId,
+        chatId,
+        eventId,
+        error,
+        client: options.client || null,
+        env,
+      }).catch((noticeError) => ({ sent: false, reason: noticeError?.message || String(noticeError) }));
+      return {
+        routed,
+        eventId,
+        chatId,
+        from,
+        fromMe: routeFromMe,
+        noticeSent: notice?.sent === true,
+        noticeReason: notice?.reason || "",
+        routingFailure: error.routingFailure,
+      };
+    }
     if (routed.threadId && !routed.duplicate) {
       const thread = await getThread(routed.threadId, env).catch(() => null);
       if (threadUsesApiAgent(thread || {}, env)) {
@@ -3601,9 +3675,9 @@ async function recoverLocalWhatsAppAccountAfterGroupAdminError(accountId, error,
 }
 
 /**
- * @param {{ chatId?: string, text?: string, accountId?: string, attachments?: Array<Record<string, unknown>>, env?: Record<string, string | undefined> }} [options]
+ * @param {{ chatId?: string, text?: string, accountId?: string, attachments?: Array<Record<string, unknown>>, env?: Record<string, string | undefined>, crossAccountEchoSuppression?: boolean, routeSentMessage?: boolean }} [options]
  */
-export async function sendLocalWhatsAppMessage({ chatId = "", text = "", accountId = "", attachments = [], env = process.env, crossAccountEchoSuppression = true } = {}) {
+export async function sendLocalWhatsAppMessage({ chatId = "", text = "", accountId = "", attachments = [], env = process.env, crossAccountEchoSuppression = true, routeSentMessage = false } = {}) {
   const selectedAccountId = accountId
     ? await normalizeManagedAccountId(accountId, env)
     : localWhatsAppAccountIdsForEnv(env).find((id) => accountStates.get(id)?.ready);
@@ -3616,19 +3690,46 @@ export async function sendLocalWhatsAppMessage({ chatId = "", text = "", account
   }
   await stopLocalWhatsAppTyping({ accountId: selectedAccountId, chatId, env }).catch(() => {});
   const sent = [];
+  const routed = [];
   try {
     const cleanText = String(text || "");
     if (cleanText.trim()) {
-      rememberOutboundText(selectedAccountId, chatId, cleanText, env, { crossAccount: crossAccountEchoSuppression !== false });
+      const routeOwnText = routeSentMessage === true;
+      if (!routeOwnText) {
+        rememberOutboundText(selectedAccountId, chatId, cleanText, env, { crossAccount: crossAccountEchoSuppression !== false });
+      } else {
+        outboundMessageTextKeys.delete(textKey(selectedAccountId, chatId, cleanText));
+        outboundMessageTextKeys.delete(anyAccountTextKey(chatId, cleanText));
+      }
       const message = await sendWhatsAppTextWithConfirmation({
         client: runtime.client,
         chatId,
         text: cleanText,
         env,
       });
-      rememberOutboundMessageId(serializedMessageId(message));
+      const messageId = serializedMessageId(message);
+      if (routeOwnText) {
+        const routableMessage = {
+          ...message,
+          id: message?.id || { _serialized: messageId },
+          fromMe: true,
+          to: message?.to || chatId,
+          body: sentMessageText(message) || cleanText,
+          timestamp: message?.timestamp || Math.floor(Date.now() / 1000),
+        };
+        const result = await handleInboundMessage(selectedAccountId, routableMessage, env, { client: runtime.client });
+        routed.push({
+          id: messageId,
+          threadId: result?.routed?.threadId || "",
+          messageId: result?.routed?.messageId || "",
+          skipped: result?.skipped || result?.routed?.skipped || "",
+          duplicate: result?.routed?.duplicate === true,
+        });
+      } else {
+        rememberOutboundMessageId(messageId);
+      }
       sent.push({
-        id: serializedMessageId(message),
+        id: messageId,
         kind: "text",
       });
     }
@@ -3642,12 +3743,19 @@ export async function sendLocalWhatsAppMessage({ chatId = "", text = "", account
       const MessageMedia = runtime.MessageMedia || (await loadBridgeDependencies()).whatsapp.MessageMedia;
       for (const attachment of normalizedAttachments) {
         const stat = await fs.stat(attachment.path);
-        rememberOutboundAttachment(selectedAccountId, chatId, { ...attachment, size: stat.size }, env);
-        const media = MessageMedia.fromFilePath(attachment.path);
+        rememberOutboundAttachment(selectedAccountId, chatId, { ...attachment, size: stat.size }, env, {
+          crossAccount: crossAccountEchoSuppression !== false,
+        });
+        const sourceMedia = MessageMedia.fromFilePath(attachment.path);
+        const mimetype = String(attachment.mimetype || sourceMedia?.mimetype || "").toLowerCase();
+        const extension = path.extname(attachment.path).toLowerCase();
+        const sendMediaAsDocument = !(mimetype.startsWith("image/") || [".gif", ".jpeg", ".jpg", ".png", ".webp"].includes(extension));
+        const media = sendMediaAsDocument
+          ? sourceMedia
+          : new MessageMedia(sourceMedia.mimetype, sourceMedia.data);
+        const sendOptions = sendMediaAsDocument ? { sendMediaAsDocument: true } : {};
         const message = await withSendOperationTimeout(
-          runtime.client.sendMessage(chatId, media, {
-            sendMediaAsDocument: true,
-          }),
+          runtime.client.sendMessage(chatId, media, sendOptions),
           "whatsapp_send_media",
           env,
         );
@@ -3678,6 +3786,7 @@ export async function sendLocalWhatsAppMessage({ chatId = "", text = "", account
     ids: sent.map((entry) => entry.id).filter(Boolean),
     accountId: selectedAccountId,
     sent,
+    ...(routed.length ? { routed } : {}),
   };
 }
 

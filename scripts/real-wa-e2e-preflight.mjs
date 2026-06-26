@@ -56,6 +56,62 @@ function senderContactsFromBinding(binding = null) {
   ]);
 }
 
+function bindingTokenText(binding = null) {
+  if (!binding || typeof binding !== "object") return "";
+  return unique([
+    binding.bindingId,
+    binding.id,
+    binding.threadId,
+    binding.threadName,
+    binding.displayName,
+    binding.name,
+    binding.chatName,
+  ]).join(" ").toLowerCase();
+}
+
+function bindingLooksLikeDedicatedTestTarget(binding = null) {
+  const text = bindingTokenText(binding);
+  return /\b(?:e2e|real-wa|wa-e2e|smoke|test|fixture|onboarding|release)\b/i.test(text);
+}
+
+function assertBindingEligibleForRealWaE2e(binding = null, options = {}) {
+  if (!binding || typeof binding !== "object") {
+    throw preflightError("whatsapp_binding_required", {
+      threadId: clean(options.threadId),
+      chatId: clean(options.chatId),
+    });
+  }
+  if (binding.enabled === false || binding.routeEligible === false) {
+    throw preflightError("whatsapp_binding_not_route_eligible", {
+      bindingId: clean(binding.bindingId || binding.id),
+      threadId: clean(binding.threadId),
+      chatId: clean(binding.chatId),
+      state: clean(binding.state),
+      reason: clean(binding.reason),
+      nextAction: clean(binding.nextAction),
+    });
+  }
+  const state = clean(binding.state).toLowerCase();
+  if (["disabled", "broken", "error", "unavailable"].includes(state)) {
+    throw preflightError("whatsapp_binding_not_ready", {
+      bindingId: clean(binding.bindingId || binding.id),
+      threadId: clean(binding.threadId),
+      chatId: clean(binding.chatId),
+      state,
+      reason: clean(binding.reason),
+      nextAction: clean(binding.nextAction),
+    });
+  }
+  if (options.allowProductionBinding === true) return;
+  if (bindingLooksLikeDedicatedTestTarget(binding)) return;
+  throw preflightError("whatsapp_binding_not_isolated_test_target", {
+    bindingId: clean(binding.bindingId || binding.id),
+    threadId: clean(binding.threadId),
+    chatId: clean(binding.chatId),
+    displayName: clean(binding.displayName || binding.threadName),
+  });
+}
+
 function accountTokens(account = {}) {
   const values = [
     account.accountId,
@@ -164,6 +220,7 @@ export function validateWhatsAppPreflight(options = {}, statusPayload = {}, acco
 export function validateWhatsAppPreflightWithBinding(options = {}, statusPayload = {}, accountsPayload = {}, bindingPayload = {}) {
   const accounts = collectWhatsAppAccounts(statusPayload, accountsPayload);
   const binding = bindingFromPayload(bindingPayload);
+  assertBindingEligibleForRealWaE2e(binding, options);
   const bindingSenderContacts = senderContactsFromBinding(binding);
   const requestedSenderContact = clean(options.senderContactId);
   if (requestedSenderContact && bindingSenderContacts.length && !bindingSenderContacts.some((contact) => contactMatches(contact, requestedSenderContact))) {

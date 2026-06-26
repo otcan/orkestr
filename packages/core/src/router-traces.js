@@ -3,6 +3,8 @@ import { dataPaths } from "../../storage/src/paths.js";
 import { appendEvent, readJson, writeJson } from "../../storage/src/store.js";
 import { recordWatcherAlert } from "./watcher-alerts.js";
 
+export { routerTraceMetrics } from "./router-trace-metrics.js";
+
 export const routerTracePhases = [
   "received",
   "skipped",
@@ -65,6 +67,21 @@ function stuckThresholdMs(env = process.env) {
 
 function safeError(value) {
   return clean(value?.message || value).replace(/\s+/g, " ").slice(0, 500);
+}
+
+function retryableWhatsAppMirrorFailure(phase = {}, trace = {}) {
+  if (phase.phase !== "mirror_failed") return false;
+  if (lower(trace.connector) !== "whatsapp") return false;
+  const error = lower(phase.error || phase.reason || trace.lastError);
+  return error.includes("not_ready") ||
+    error.includes("bridge_not_ready") ||
+    error.includes("whatsapp_local_bridge_not_ready") ||
+    error.includes("detached frame") ||
+    error.includes("target closed") ||
+    error.includes("session closed") ||
+    error.includes("fetch failed") ||
+    error.includes("econnrefused") ||
+    error.includes("timeout");
 }
 
 function safeArray(values = [], max = 50) {
@@ -276,7 +293,7 @@ export async function recordRouterTraceEvent(input = {}, env = process.env) {
     error: phase.error || "",
     terminal: next.terminal === true,
   }, env).catch(() => {});
-  if (watcherAlertPhases.has(phase.phase)) {
+  if (watcherAlertPhases.has(phase.phase) && !retryableWhatsAppMirrorFailure(phase, next)) {
     await recordWatcherAlert({
       severity: "error",
       source: `router.${phase.phase}`,
@@ -479,18 +496,4 @@ export async function detectStuckRouterTraces(env = process.env) {
     }, env).catch(() => {});
   }
   return stuck;
-}
-
-export async function routerTraceMetrics(env = process.env) {
-  const store = await readRouterTraceStore(env);
-  const traces = await listRouterTraces({}, env);
-  return {
-    traces: traces.length,
-    turns: store.turns.length,
-    outbox: store.outbox.length,
-    stuck: traces.filter((trace) => trace.diagnostics?.stuck === true).length,
-    failed: traces.filter((trace) => failurePhases.has(trace.currentPhase)).length,
-    terminal: traces.filter((trace) => trace.terminal === true).length,
-    updatedAt: store.updatedAt || "",
-  };
 }

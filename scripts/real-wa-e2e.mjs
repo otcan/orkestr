@@ -28,7 +28,7 @@ function parseBool(value, fallback = false) {
   return fallback;
 }
 
-function parseArgs(argv = [], env = process.env) {
+export function parseArgs(argv = [], env = process.env) {
   const options = {
     execute: false,
     apiBase: clean(env.ORKESTR_REAL_WA_E2E_API_BASE || env.ORKESTR_API_BASE || "http://127.0.0.1:19812"),
@@ -53,6 +53,9 @@ function parseArgs(argv = [], env = process.env) {
     openLinkInDesktop: parseBool(env.ORKESTR_REAL_WA_E2E_OPEN_LINK_IN_DESKTOP, false),
     requireOauthCallback: parseBool(env.ORKESTR_REAL_WA_E2E_REQUIRE_OAUTH_CALLBACK, false),
     forceDesktop: parseBool(env.ORKESTR_REAL_WA_E2E_FORCE_DESKTOP, false),
+    isolatedRuntime: parseBool(env.ORKESTR_REAL_WA_E2E_ISOLATED_RUNTIME, false),
+    allowSharedRuntime: parseBool(env.ORKESTR_REAL_WA_E2E_ALLOW_SHARED_RUNTIME, false),
+    allowProductionBinding: parseBool(env.ORKESTR_REAL_WA_E2E_ALLOW_PRODUCTION_BINDING, false),
     artifactPath: clean(env.ORKESTR_REAL_WA_E2E_ARTIFACT),
   };
 
@@ -82,6 +85,9 @@ function parseArgs(argv = [], env = process.env) {
     else if (arg === "--open-link-in-desktop") options.openLinkInDesktop = true;
     else if (arg === "--require-oauth-callback") options.requireOauthCallback = true;
     else if (arg === "--force-desktop") options.forceDesktop = true;
+    else if (arg === "--isolated-runtime") options.isolatedRuntime = true;
+    else if (arg === "--allow-shared-runtime") options.allowSharedRuntime = true;
+    else if (arg === "--allow-production-binding") options.allowProductionBinding = true;
     else if (arg === "--artifact") options.artifactPath = clean(argv[++index]);
     else throw new Error(`unknown_arg:${arg}`);
   }
@@ -98,6 +104,8 @@ function parseArgs(argv = [], env = process.env) {
   if (!options.manualSend && !options.injectInbound && options.senderAccountId === options.responderAccountId) throw new Error("sender_and_responder_must_differ_for_real_transport_e2e");
   if (!Number.isFinite(options.timeoutMs) || options.timeoutMs < 10_000) throw new Error("invalid_timeout_ms");
   if (!Number.isFinite(options.pollMs) || options.pollMs < 250) throw new Error("invalid_poll_ms");
+  if (options.isolatedRuntime && options.allowSharedRuntime) throw new Error("conflicting_runtime_isolation_flags");
+  if (!options.isolatedRuntime && !options.allowSharedRuntime) throw new Error("isolated_runtime_required");
   return options;
 }
 
@@ -129,6 +137,10 @@ function usage() {
     "  --real-send              Send through the sender account instead of injecting. Requires sender readiness.",
     "  --open-link-in-desktop   Open the generated Google connect link in the managed desktop.",
     "  --require-oauth-callback Wait for OAuth callback/success after manual approval.",
+    "  --allow-production-binding",
+    "                           Permit a normal production-looking WA binding instead of a dedicated test target.",
+    "  --isolated-runtime      Confirm the API target is a disposable E2E/demo runtime.",
+    "  --allow-shared-runtime  Emergency escape hatch for intentional shared-runtime dogfood runs.",
     "  --no-desktop             Skip desktop lease/share checks.",
     "  --no-desktop-challenge   Skip desktop public challenge approval over WhatsApp.",
     "  --no-timer               Skip timer watcher checks.",
@@ -438,23 +450,30 @@ async function runDesktopShareChallenge(options, results, share = {}) {
   const after = Date.now() - 30_000;
 
   let injected = null;
+  let sent = null;
   if (options.manualSend) {
     console.error(`Manual desktop approval mode: send this exact WhatsApp message in ${options.responderChatId}: ${commandText}`);
   } else if (options.injectInbound) {
     injected = await injectResponderInbound(options, results, commandText, "desktop-approve");
   } else {
-    await api(options, "/api/connectors/whatsapp/bridge/send-text", {
+    sent = await api(options, "/api/connectors/whatsapp/bridge/send-text", {
       method: "POST",
       body: {
         accountId: options.senderAccountId,
         chatId: options.senderChatId,
         text: commandText,
         crossAccountEchoSuppression: false,
+        routeSentMessage: true,
       },
     });
   }
+  const routedSent = Array.isArray(sent?.routed) && sent.routed.some((entry) =>
+    clean(entry.threadId) || clean(entry.messageId) || entry.duplicate === true
+  );
 
   const observed = injected
+    ? null
+    : routedSent
     ? null
     : await waitForHistoryMessage(
       options,
@@ -482,6 +501,8 @@ async function runDesktopShareChallenge(options, results, share = {}) {
       commandObservedId: clean(observed?.id),
       commandInjectedEventId: clean(injected?.eventId),
       commandInjectedFrom: clean(injected?.from),
+      commandSentMessageId: clean(sent?.ids?.[0] || sent?.id),
+      commandRouted: routedSent,
       approved: ready.approved === true,
       desktopUrl: clean(ready.desktopUrl),
       manualSend: options.manualSend === true,
@@ -523,9 +544,13 @@ async function runConnectFlow(options, results, startedAt) {
         chatId: options.senderChatId,
         text: commandText,
         crossAccountEchoSuppression: false,
+        routeSentMessage: true,
       },
     });
   const sentIds = new Set((sent?.ids || sent?.sent?.map((item) => item.id) || []).map(clean).filter(Boolean));
+  const routedSent = Array.isArray(sent?.routed) && sent.routed.some((entry) =>
+    clean(entry.threadId) || clean(entry.messageId) || entry.duplicate === true
+  );
   const after = startedAt - 30_000;
   const visibleSender = options.manualSend
     ? null
@@ -540,6 +565,8 @@ async function runConnectFlow(options, results, startedAt) {
     );
   const visibleResponder = injected
     ? null
+    : routedSent
+      ? null
     : await waitForHistoryMessage(
       options,
       options.responderAccountId,
@@ -584,6 +611,7 @@ async function runConnectFlow(options, results, startedAt) {
     sentMessageId: [...sentIds][0] || clean(sent?.id),
     senderVisibleId: clean(visibleSender?.id),
     responderVisibleId: clean(visibleResponder?.id),
+    routedSent,
     injectedEventId: clean(injected?.eventId),
     injectedFrom: clean(injected?.from),
     threadUserMessageId: clean(userMessage.id),
@@ -684,6 +712,9 @@ async function main() {
     responderAccountId: options.responderAccountId,
     manualSend: options.manualSend === true,
     injectInbound: options.injectInbound === true,
+    isolatedRuntime: options.isolatedRuntime === true,
+    allowSharedRuntime: options.allowSharedRuntime === true,
+    allowProductionBinding: options.allowProductionBinding === true,
     startedAt: new Date(startedAt).toISOString(),
   };
   try {

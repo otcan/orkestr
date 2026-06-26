@@ -11,6 +11,13 @@ function pickString(...values) {
   return "";
 }
 
+function listValues(...values) {
+  return values
+    .flatMap((value) => Array.isArray(value) ? value : [value])
+    .map((value) => pickString(value))
+    .filter(Boolean);
+}
+
 export function comparableParticipantId(value) {
   const raw = pickString(value).toLowerCase();
   const withoutPrefix = raw.replace(/^whatsapp:/, "");
@@ -96,7 +103,23 @@ export function whatsappInboundThreadMatchesBinding({ thread = {}, chatId = "", 
     if (accountId && !bindingAccountIds(binding).has(accountId)) return false;
     if (!fromMe) {
       if (responderContactId && comparableParticipantId(from) === comparableParticipantId(responderContactId)) return false;
-      const senderContactMatches = senderContactId && comparableParticipantId(from) === comparableParticipantId(senderContactId);
+      const inboundSecurity = binding.inboundSecurity && typeof binding.inboundSecurity === "object" && !Array.isArray(binding.inboundSecurity)
+        ? binding.inboundSecurity
+        : {};
+      const ownerContactIds = listValues(
+        senderContactId,
+        binding.ownerContactId,
+        binding.ownerContactIds,
+        binding.authorizedContactId,
+        binding.authorizedContactIds,
+        binding.ownerContactAliases,
+        binding.authorizedContactAliases,
+        inboundSecurity.ownerParticipantIds,
+        inboundSecurity.ownerParticipants,
+        inboundSecurity.ownerContactIds,
+        inboundSecurity.ownerContactAliases,
+      );
+      const senderContactMatches = participantIdSet(ownerContactIds).has(comparableParticipantId(from));
       const trustGroupBoundary = generatedSingleAccountGroupBindingCanTrustGroupBoundary(binding, chatId, from);
       if (!senderContactMatches && !trustGroupBoundary) {
         const additionalParticipantsEnabled = binding.additionalParticipantsEnabled === true || binding.allowOtherPeopleConfirmed === true;

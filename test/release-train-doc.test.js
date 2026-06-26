@@ -15,4 +15,8 @@ test("release train runbook gates worker deployments through the train", async (
   assert.match(doc, /Then watch CI/);
   assert.match(doc, /Deploy only after local release checks and CI pass/);
   assert.match(doc, /Fast-forward workers that are ancestors/);
+  assert.match(
+    doc,
+    /orkestr-wa-readiness\.mjs --bridge-url <url> --require-routing-policy --require-access-policy --account sender --account responder/,
+  );
 });

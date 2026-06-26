@@ -30,7 +30,7 @@ test("raw terminal parser recognizes pairing approval commands", () => {
       "Challenge ID",
       "VxqcH2wTo7_DJhf01y-9KVDy",
       "pending",
-      "Approve From SSH",
+      "Approve With This Exact Command",
       "ssh root@orkestr.example.test",
       "orkestr security approve VxqcH2wTo7_DJhf01y-9KVDy",
       "sudo orkestr security approve VxqcH2wTo7_DJhf01y-9KVDy",

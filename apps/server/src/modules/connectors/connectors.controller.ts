@@ -463,6 +463,7 @@ export class ConnectorsController {
       text: String(body.text || ""),
       accountId: String(body.accountId || ""),
       crossAccountEchoSuppression: body.crossAccountEchoSuppression !== false,
+      routeSentMessage: body.routeSentMessage === true,
     });
   }
 
@@ -482,6 +483,7 @@ export class ConnectorsController {
       accountId: String(body.accountId || ""),
       attachments: paths.map((filePath) => ({ path: filePath })),
       crossAccountEchoSuppression: body.crossAccountEchoSuppression !== false,
+      routeSentMessage: body.routeSentMessage === true,
     });
   }
 
@@ -806,6 +808,8 @@ export class GoogleMarketingCallbacksController {
 
   @Get("callback")
   async googleMarketingCallback(@Query() query: Record<string, string>, @Req() request: any, @Res() response: any) {
+    const callbackState = String(query?.state || request?.query?.state || "").trim();
+    const isGmailCallback = callbackState.startsWith("gmail:");
     try {
       const result = await finishGmailOAuth(queryParamsFromRequest(request, query));
       await notifyGmailOAuthCallback(result).catch(() => null);
@@ -816,7 +820,7 @@ export class GoogleMarketingCallbacksController {
         .send(googleOAuthHtml(googleOAuthCallbackPayload(result)));
     } catch (error) {
       const message = String((error as Error)?.message || "");
-      if (message && !["gmail_oauth_state_mismatch", "gmail_oauth_code_required"].includes(message)) {
+      if (message && (isGmailCallback || !["gmail_oauth_state_mismatch", "gmail_oauth_code_required"].includes(message))) {
         return response
           .status(Number((error as any)?.statusCode || 500) || 500)
           .header("cache-control", "no-store")

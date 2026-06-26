@@ -112,8 +112,12 @@ Orkestr capabilities:
   pasted \`desk-...\` challenge with \`orkestr desktop approve <challenge-id>\`.
   Choose the manual/default desktop from \`orkestr whereiam --json\` when the
   user does not name a slug.
-- WhatsApp and Gmail: use connector status APIs and Orkestr routing. Do not
-  read connector session files or tokens directly.
+- WhatsApp and Gmail: use connector status APIs and Orkestr routing. Prefer
+  \`orkestr whatsapp accounts list --json\` for local operator WhatsApp status
+  because it carries the local CLI auth header; an unauthenticated
+  \`/api/connectors/whatsapp/status\` probe can fail with browser-pairing auth
+  even when both WhatsApp accounts are connected. Do not read connector session
+  files or tokens directly.
 
 Safety rules:
 

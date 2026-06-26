@@ -84,13 +84,17 @@ export function sanitizedThreadActionInput(input: Record<string, unknown> = {}):
     "connector",
     "chatId",
     "replyPrefix",
+    "senderContactId",
+    "responderContactId",
+    "ownerContactId",
+    "authorizedContactId",
   ];
   const result: Record<string, unknown> = {};
   for (const key of scalarKeys) {
     if (!hasOwn(input, key)) continue;
     result[key] = String(input[key] || "").slice(0, key === "text" || key === "prompt" ? 8000 : 500);
   }
-  for (const key of ["wake", "start", "deleteWorkers", "mirrorToWhatsApp", "enabled", "allowOtherPeople"]) {
+  for (const key of ["wake", "start", "deleteWorkers", "mirrorToWhatsApp", "suppressWhatsAppUpdates", "suppressWhatsAppDebugFooter", "enabled", "allowOtherPeople"]) {
     if (hasOwn(input, key)) result[key] = Boolean(input[key]);
   }
   if (Array.isArray(input.attachments)) {
@@ -98,6 +102,9 @@ export function sanitizedThreadActionInput(input: Record<string, unknown> = {}):
   }
   if (Array.isArray(input.files)) {
     result.files = input.files.map(sanitizerFileMeta);
+  }
+  for (const key of ["ownerContactIds", "ownerContactAliases", "authorizedContactIds", "authorizedContactAliases", "additionalParticipantIds"]) {
+    if (Array.isArray(input[key])) result[key] = input[key].map((value) => String(value || "").slice(0, 500)).filter(Boolean);
   }
   return result;
 }

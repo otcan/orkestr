@@ -126,6 +126,8 @@ test("whereAmI resolves the current thread from a nested workspace path", async 
   assert.equal(payload.settings.desktops.gmailAuth, "gmail");
   assert.equal(payload.matchedBy, "thread.cwd");
   assert.match(payload.commands.postApiSessionMessage, /orkestr api-session message/);
+  assert.equal(payload.commands.whatsappStatus, "orkestr whatsapp accounts list --json");
+  assert.equal(payload.commands.connectorStatus, "orkestr status --json");
 });
 
 test("whereAmI exposes server-owned contained user runtime policy metadata", async () => {
@@ -260,8 +262,16 @@ test("GET /api/whereiam resolves thread context from cwd query", async () => {
   const repo = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-whereiam-api-repo-"));
   const nested = path.join(repo, "src");
   await fs.mkdir(nested, { recursive: true });
-  const priorHome = process.env.ORKESTR_HOME;
+  const priorEnv = {
+    ORKESTR_HOME: process.env.ORKESTR_HOME,
+    ORKESTR_RECOVER_RUNNING_ON_START: process.env.ORKESTR_RECOVER_RUNNING_ON_START,
+    ORKESTR_STARTUP_RECOVERY: process.env.ORKESTR_STARTUP_RECOVERY,
+    ORKESTR_WHATSAPP_AUTOSTART: process.env.ORKESTR_WHATSAPP_AUTOSTART,
+  };
   process.env.ORKESTR_HOME = home;
+  process.env.ORKESTR_RECOVER_RUNNING_ON_START = "0";
+  process.env.ORKESTR_STARTUP_RECOVERY = "0";
+  process.env.ORKESTR_WHATSAPP_AUTOSTART = "0";
   await createThread({ id: "api-whereiam-thread", name: "API Where", cwd: repo, repoPath: repo }, process.env);
   const server = await startServer({ port: 0, host: "127.0.0.1" });
   const { port } = server.address();
@@ -276,7 +286,9 @@ test("GET /api/whereiam resolves thread context from cwd query", async () => {
     assert.equal(payload.workspace.cwd, nested);
   } finally {
     await new Promise((resolve) => server.close(resolve));
-    if (priorHome === undefined) delete process.env.ORKESTR_HOME;
-    else process.env.ORKESTR_HOME = priorHome;
+    for (const [name, value] of Object.entries(priorEnv)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
   }
 });

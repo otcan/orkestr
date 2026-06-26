@@ -1,7 +1,18 @@
-# Coding Agent Demo
+# Real Codex Coding Agent Walkthrough
 
-This is the public, real-agent demo path. No credentials, browser profiles,
-WhatsApp IDs, or private hostnames are included here.
+This is the public real-agent walkthrough. It intentionally uses a real local
+Codex runtime, so it requires Codex sign-in before the thread can run.
+
+For the deterministic no-credential demo used by CI and local smoke checks, run
+this from the repository root instead:
+
+```bash
+npm run demo:coding-agent
+```
+
+Expected result: `Coding-agent demo passed`. That deterministic demo uses a
+temporary `ORKESTR_HOME`, a fake Codex app-server, no browser profiles, no
+WhatsApp IDs, and no private hostnames.
 
 ## Prerequisites
 
@@ -16,6 +27,10 @@ For a host-native development checkout:
 ```
 
 Then open `/setup`, add Codex, and use **Open Codex sign-in**.
+
+Expected result for this walkthrough: the `repo-launch-reviewer` thread wakes a
+real Codex session, accepts the read-only prompt, and can be inspected with
+`npx orkestr-oss attach repo-launch-reviewer`.
 
 ## Create A Coding Thread
 

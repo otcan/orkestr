@@ -60,7 +60,7 @@ function desktopShareText(payload = {}, slug = "") {
     `Desktop link for ${label}:`,
     payload.url || "",
     "",
-    "Open it on your phone, copy the Orkestr desktop challenge shown there, and paste it back here.",
+    "Open it on your phone, copy the exact Orkestr desktop approve command shown there, and paste that command back here.",
   ];
   const start = payload?.desktopStart;
   if (start?.requested && !start?.ok) {

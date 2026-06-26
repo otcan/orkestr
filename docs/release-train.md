@@ -43,8 +43,10 @@ Before changing branches, identify:
   user-specified tag.
 - Required checks: at minimum build, unit tests touched by the train, smoke
   checks, and CI.
-- Deployment target: none by default. A deployment target must be named by the
-  user or host config; do not invent private hostnames.
+- Deployment target: the release train default is the local host plus every
+  broker-listed instance that host config marks `releaseTrainEnabled` and gives a
+  deploy command. Do not invent private hostnames; the concrete instance list
+  must come from private host config or broker state.
 
 ## Phase 1: Inventory
 
@@ -148,16 +150,20 @@ Minimum primitive guidance:
 - smoke-sensitive deploy changes: `npm run smoke`
 - protected/public target checks: `npm run release:regression -- --target
   local=http://127.0.0.1:$ORKESTR_PORT --allow-auth-blocked`
-- real WhatsApp/OAuth/desktop/timer checks:
-  `npm run e2e:whatsapp-real -- --execute --thread <thread-id> --chat-id <chat-id>`.
-  See `docs/real-whatsapp-e2e.md`; this sends real WhatsApp messages and must
-  be opt-in.
+- real WhatsApp/OAuth/desktop/timer checks use WA2WA by default:
+  `npm run e2e:whatsapp-real -- --execute --real-send --sender-account sender
+  --responder-account responder --thread <thread-id> --chat-id <chat-id>
+  --isolated-runtime`.
+  See `docs/real-whatsapp-e2e.md`; this sends real WhatsApp messages from the
+  sender account to the responder account and must be opt-in.
 - isolated demo VM releases: `npm run audit:isolation` plus
   `npm run e2e:whatsapp-demo-onboarding -- --execute` with a direct target phone
   number, as described in `docs/isolated-oss-demo.md`.
 
-Deploys require real WhatsApp E2E unless the user explicitly approves the
-emergency bypass. Demo deploys require an isolation audit unless the user
+Deploys require WA2WA real WhatsApp E2E unless the user explicitly approves the
+emergency bypass. Use the dedicated release/E2E WhatsApp binding and
+`--real-send` sender-to-responder transport; do not ask for a different E2E
+shape unless the user changes the gate. Demo deploys require an isolation audit unless the user
 explicitly approves the isolation-audit bypass. Record any bypass in the
 evidence packet.
 
@@ -227,17 +233,18 @@ When a central broker owns multiple Orkestr instances, the release train must
 inventory them before deployment with `orkestr instances --probe`. Runtime state
 may list additional instances in `release-instances.json` or through
 `ORKESTR_RELEASE_INSTANCES_FILE`; keep real hosts and deploy commands in that
-private state, not in the OSS repo. Instances are updated by fan-out only when
-they are explicitly marked `releaseTrainEnabled` and have a deploy command in
-the broker registry. To deploy eligible remote instances after the local host
-passes health checks, use:
+private state, not in the OSS repo. Release deploys fan out by default after the
+local host passes health checks, but only to instances that are explicitly marked
+`releaseTrainEnabled` and have a deploy command in the broker registry.
+
+Use `--all-instances` when you want the default fan-out to be explicit in logs:
 
 ```bash
 orkestr update --release --ref <tag-or-main-or-sha> --channel <channel> --all-instances
 ```
 
-Without `--all-instances`, the deployer still prints a broker plan so skipped,
-disabled, or commandless instances are visible in the release log.
+Use `--no-all-instances` only for an intentional local-only deploy. Skipped,
+disabled, or commandless instances are still visible in the broker deploy log.
 
 For WhatsApp-routed instances, require the connector accounts that must be live
 after restart:
@@ -260,9 +267,11 @@ For extracted WhatsApp deployments, run the bridge as the standalone
 `WHATSAPP_BRIDGE_MODE=external`. The service/readiness contract and the
 no-copy migration path for carrying an existing linked WhatsApp Web login are in
 [`docs/orkestr-wa-service.md`](./orkestr-wa-service.md). Use
-`node scripts/orkestr-wa-readiness.mjs --bridge-url <url> --account sender` as
-the direct service gate when validating the bridge before restarting dependent
-Orkestr instances.
+`node scripts/orkestr-wa-readiness.mjs --bridge-url <url> --require-routing-policy --require-access-policy --account sender --account responder`
+as the direct service gate when validating the bridge before restarting
+dependent Orkestr instances. The gate must confirm both account routing and the
+client access policy so a demo release cannot silently fall back to a shared
+or unrestricted WhatsApp service.
 
 Versioned deploys are no-interrupt by default. On current host-native installs,
 Codex app-server runs as its own service and Orkestr talks to it through a short

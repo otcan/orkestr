@@ -94,6 +94,10 @@ Environment:
   ORKESTR_CODEX_APP_SERVER_MODE  Codex app-server transport. Defaults to external in --systemd mode.
   ORKESTR_CODEX_APP_SERVER_SOCKET Unix socket for external Codex app-server.
   ORKESTR_CODEX_APP_SERVER_SERVICE_NAME  systemd unit name for the external Codex runtime.
+  ORKESTR_INSTALL_WA_SERVICE  Install standalone orkestr-wa systemd service. Defaults to 0.
+  ORKESTR_WA_SERVICE_NAME     systemd unit name for standalone WhatsApp service. Defaults to <service>-wa.
+  ORKESTR_WA_SERVICE_HOME     Data root for standalone WhatsApp service. Defaults to <ORKESTR_HOME>/wa-service.
+  ORKESTR_WA_SERVICE_ENV_FILE Private env file for standalone WhatsApp service. Defaults to /etc/orkestr/orkestr-wa.env.
   ORKESTR_LOCAL_ENV_FILE    Local env file written for non-systemd installs. Defaults to $ORKESTR_HOME/orkestr.env.
   ORKESTR_SKIP_SYSTEM_PACKAGES  Skip apt package installation when set to 1.
   ORKESTR_FRESH_INSTALL     Set to 1 to stop the local service and remove local Orkestr state before install.
@@ -628,6 +632,10 @@ systemd_service_name() {
 
 codex_app_server_service_name() {
   echo "${ORKESTR_CODEX_APP_SERVER_SERVICE_NAME:-$(systemd_service_name)-codex}"
+}
+
+wa_service_name() {
+  echo "${ORKESTR_WA_SERVICE_NAME:-$(systemd_service_name)-wa}"
 }
 
 codex_cli_version() {
@@ -1205,7 +1213,7 @@ checkout_git_ref() {
 write_env_file() {
   local chrome
   chrome="$(chrome_path)"
-  local codex_command codex_sandbox codex_approval codex_app_server_mode codex_app_server_socket codex_app_server_service runtime_settings_file desktop_mode browserctl_path primary_domain public_site_url app_host auth_host public_url auth_url cookie_domain public_https_url
+  local codex_command codex_sandbox codex_approval codex_app_server_mode codex_app_server_socket codex_app_server_service runtime_settings_file desktop_mode browserctl_path primary_domain public_site_url app_host auth_host public_url auth_url cookie_domain public_https_url wa_bridge_mode wa_external_enabled wa_bridge_url wa_autostart
   codex_command="${ORKESTR_RUNTIME_CODEX_COMMAND:-$(codex_command_default)}"
   codex_sandbox="${ORKESTR_CODEX_SANDBOX:-$(codex_sandbox_default)}"
   codex_approval="${ORKESTR_CODEX_APPROVAL_POLICY:-$(codex_approval_default)}"
@@ -1239,6 +1247,17 @@ write_env_file() {
     cookie_domain="$primary_domain"
   fi
   public_https_url="${ORKESTR_PUBLIC_HTTPS_URL:-$public_url}"
+  if [ "$(normalize_bool "${ORKESTR_INSTALL_WA_SERVICE:-0}")" = "1" ]; then
+    wa_bridge_mode="${WHATSAPP_BRIDGE_MODE:-external}"
+    wa_external_enabled="${ORKESTR_WHATSAPP_EXTERNAL_BRIDGE_ENABLED:-1}"
+    wa_bridge_url="${WHATSAPP_BRIDGE_URL:-http://127.0.0.1:${ORKESTR_WA_SERVICE_PORT:-18914}}"
+    wa_autostart="${ORKESTR_WHATSAPP_AUTOSTART:-0}"
+  else
+    wa_bridge_mode="${WHATSAPP_BRIDGE_MODE:-local}"
+    wa_external_enabled="${ORKESTR_WHATSAPP_EXTERNAL_BRIDGE_ENABLED:-0}"
+    wa_bridge_url="${WHATSAPP_BRIDGE_URL:-}"
+    wa_autostart="${ORKESTR_WHATSAPP_AUTOSTART:-1}"
+  fi
   if [ -f "$env_file" ]; then
     echo "Keeping existing environment file and applying safe defaults: $env_file"
     migrate_systemd_env_file "$desktop_mode" "$browserctl_path"
@@ -1304,11 +1323,13 @@ ORKESTR_DEFAULT_DESKTOP_SLUG=${ORKESTR_DEFAULT_DESKTOP_SLUG:-desktop}
 ORKESTR_GMAIL_AUTH_DESKTOP_SLUG=${ORKESTR_GMAIL_AUTH_DESKTOP_SLUG:-gmail}
 ORKESTR_MANUAL_INTERVENTION_DESKTOP_SLUG=${ORKESTR_MANUAL_INTERVENTION_DESKTOP_SLUG:-desktop}
 ORKESTR_OVERLAY_DIR=${ORKESTR_OVERLAY_DIR:-/opt/orkestr/overlay}
-WHATSAPP_BRIDGE_MODE=${WHATSAPP_BRIDGE_MODE:-local}
+WHATSAPP_BRIDGE_MODE=$wa_bridge_mode
 ORKESTR_WHATSAPP_SENDER_ROLE=${ORKESTR_WHATSAPP_SENDER_ROLE:-sender}
 ORKESTR_WHATSAPP_RESPONDER_ROLE=${ORKESTR_WHATSAPP_RESPONDER_ROLE:-responder}
-ORKESTR_WHATSAPP_EXTERNAL_BRIDGE_ENABLED=${ORKESTR_WHATSAPP_EXTERNAL_BRIDGE_ENABLED:-0}
-WHATSAPP_BRIDGE_URL=${WHATSAPP_BRIDGE_URL:-}
+ORKESTR_WHATSAPP_EXTERNAL_BRIDGE_ENABLED=$wa_external_enabled
+WHATSAPP_BRIDGE_URL=$wa_bridge_url
+ORKESTR_WHATSAPP_AUTOSTART=$wa_autostart
+WHATSAPP_LOCAL_AUTOSTART=$wa_autostart
 OPENAI_API_KEY=
 OPENAI_BASE_URL=
 OPENAI_MODEL=
@@ -2268,6 +2289,62 @@ EOF
   systemctl restart "${service_name}.service"
 }
 
+write_systemd_wa_service() {
+  local service_name group_name wa_home wa_env_file timeout_stop_sec node_bin
+  service_name="$(wa_service_name)"
+  group_name="$(id -gn "$run_user")"
+  wa_home="${ORKESTR_WA_SERVICE_HOME:-$data_dir/wa-service}"
+  wa_env_file="${ORKESTR_WA_SERVICE_ENV_FILE:-/etc/orkestr/orkestr-wa.env}"
+  timeout_stop_sec="${ORKESTR_WA_SERVICE_TIMEOUT_STOP_SEC:-30s}"
+  node_bin="$(command -v node || echo /usr/bin/node)"
+  mkdir -p "$wa_home" "$(dirname "$wa_env_file")"
+  chown -R "$run_user:$group_name" "$wa_home"
+  if [ ! -f "$wa_env_file" ]; then
+    cat > "$wa_env_file" <<EOF
+# Orkestr standalone WhatsApp service environment.
+# Keep account client ids, session roots, service tokens, and policy JSON in this private file.
+ORKESTR_HOME=$wa_home
+ORKESTR_WA_SERVICE_HOST=${ORKESTR_WA_SERVICE_HOST:-127.0.0.1}
+ORKESTR_WA_SERVICE_PORT=${ORKESTR_WA_SERVICE_PORT:-18914}
+ORKESTR_WHATSAPP_AUTOSTART=1
+ORKESTR_WHATSAPP_AUTOSTART_ACCOUNT_IDS=${ORKESTR_WHATSAPP_AUTOSTART_ACCOUNT_IDS:-sender,responder}
+ORKESTR_WHATSAPP_ACCOUNT_IDS=${ORKESTR_WHATSAPP_ACCOUNT_IDS:-sender,responder}
+# ORKESTR_WA_SERVICE_TOKEN=
+# ORKESTR_WA_SERVICE_POLICY_JSON=
+# ORKESTR_WHATSAPP_ACCOUNT_CLIENT_IDS=
+# ORKESTR_WHATSAPP_ACCOUNT_SESSION_ROOTS=
+EOF
+    chmod 0600 "$wa_env_file"
+    chgrp "$group_name" "$wa_env_file" || true
+  fi
+  cat > "/etc/systemd/system/${service_name}.service" <<EOF
+[Unit]
+Description=Orkestr standalone WhatsApp bridge
+Documentation=https://github.com/otcan/orkestr
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=$run_user
+Group=$group_name
+WorkingDirectory=$repo_dir
+EnvironmentFile=-$wa_env_file
+ExecStart=$node_bin scripts/orkestr-wa-service.mjs
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=$timeout_stop_sec
+KillMode=mixed
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  systemctl daemon-reload
+  systemctl enable "${service_name}.service"
+  systemctl restart "${service_name}.service"
+}
+
 run_initial_release_deploy() {
   if [ "${ORKESTR_RELEASE_DEPLOY:-$release_update}" != "1" ]; then
     return 0
@@ -2359,6 +2436,9 @@ EOF
   prepare_default_desktop_profiles
   write_codex_app_server_wrapper
   write_systemd_codex_app_server_service
+  case "$(normalize_bool "${ORKESTR_INSTALL_WA_SERVICE:-0}")" in
+    1) write_systemd_wa_service ;;
+  esac
   write_systemd_service
   run_initial_release_deploy
   if [ "${ORKESTR_AUTO_UPDATE:-$auto_update}" = "1" ]; then
@@ -2463,7 +2543,9 @@ Orkestr host-native service installed.
 
 Service:
   systemctl status ${ORKESTR_SERVICE_NAME:-orkestr}
+  $([ "$(normalize_bool "${ORKESTR_INSTALL_WA_SERVICE:-0}")" = "1" ] && echo "systemctl status $(wa_service_name)" || true)
   journalctl -u ${ORKESTR_SERVICE_NAME:-orkestr} -f
+  $([ "$(normalize_bool "${ORKESTR_INSTALL_WA_SERVICE:-0}")" = "1" ] && echo "journalctl -u $(wa_service_name) -f" || true)
   journalctl -u ${ORKESTR_UPDATE_SERVICE_NAME:-orkestr-update} -f
 
 CLI:

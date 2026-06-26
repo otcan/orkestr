@@ -1,6 +1,14 @@
 import { spawn } from "node:child_process";
 
-const child = spawn(process.execPath, ["--test", "--test-concurrency=1"], {
+const testArgs = ["--test", "--test-concurrency=1"];
+if (process.env.ORKESTR_TEST_FORCE_EXIT !== "0") {
+  // The full suite starts short-lived HTTP and runtime monitors in several
+  // tests. On some hosts Node keeps an already-finished test process alive for
+  // leaked handles, so the CI wrapper exits after the test runner completes.
+  testArgs.push("--test-force-exit");
+}
+
+const child = spawn(process.execPath, testArgs, {
   cwd: process.cwd(),
   env: process.env,
   stdio: ["ignore", "pipe", "pipe"],

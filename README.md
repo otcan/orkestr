@@ -1,10 +1,26 @@
 # Orkestr
 
-Orkestr is a small self-hosted app around Codex.
+[![CI](https://github.com/otcan/orkestr/actions/workflows/ci.yml/badge.svg)](https://github.com/otcan/orkestr/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Node 22+](https://img.shields.io/badge/node-22%2B-339933.svg)](package.json)
+[![Local First](https://img.shields.io/badge/default-local--first-111827.svg)](docs/oss-managed-boundary.md)
+
+Orkestr is a local-first workstation for running persistent coding and
+operations agents from your laptop, browser, phone, or VPS.
 
 It gives Codex a durable home: persistent threads, browser control, status,
 interruptions, WhatsApp routing, timers, and local ops from a web UI or CLI.
 Codex remains the agent. Orkestr is the control surface around it.
+
+Use Orkestr when one interactive terminal is no longer enough and you need a
+private agent workstation with setup, routing, history, status, and recovery.
+You can run the deterministic coding-agent demo in five minutes with
+`npm run demo:coding-agent`; the full live path then connects your own Codex
+login from `/setup`.
+
+oXRM is the first workflow app built around the same model: an MCP-first
+relationship workspace that gives agents structured relationship memory,
+follow-up queues, and safe human-approved actions.
 
 > Public alpha. The Docker/Helm path is the primary OSS demo path. Browser
 > pairing gates remote access; do not expose raw Orkestr API, thread, desktop,
@@ -15,6 +31,18 @@ Codex remains the agent. Orkestr is the control surface around it.
 The generated README asset combines a generated WhatsApp source panel, a fresh
 TMUX capture, and an Orkestr Web UI rendering. It must not contain real tokens,
 phone numbers, chat IDs, local paths, or private hosts.
+
+## Live Demo Recording
+
+[![Orkestr and oXRM live desktop demo poster](docs/assets/orkestr-oxrm-live-demo.poster.png)](docs/assets/orkestr-oxrm-live-demo.mp4)
+
+The live desktop recording shows Orkestr setup, a queued demo coding-agent
+thread, the oXRM Docker dashboard, and MCP/CLI proof using disposable state and
+synthetic demo data only. Reproduce it with:
+
+```bash
+npm run demo:record:live
+```
 
 ## Why This Exists
 
@@ -27,6 +55,43 @@ Use Orkestr when one terminal Codex session stops being enough:
 - you want a private workstation or VPS instead of a hosted control plane
 
 If you only need one interactive Codex terminal, use Codex directly.
+
+## Why Not Just tmux?
+
+tmux is a great primitive for keeping a terminal alive. Orkestr keeps that
+operator ergonomics but adds the parts people otherwise rebuild around tmux:
+setup, browser and phone control, thread status, interrupt and recovery paths,
+timers, connector routing, persistent history, and a safer localhost-first
+remote-access model.
+
+## How Orkestr And oXRM Fit Together
+
+Orkestr is the local-first workstation for persistent coding and operations
+agents.
+
+oXRM is the first workflow app built for that model: an MCP-first relationship
+workspace that gives agents structured relationship memory, follow-up queues,
+and safe human-approved actions.
+
+Use Orkestr when you need to run and supervise agents. Use oXRM when those
+agents need relationship state.
+
+## What Orkestr Is Not
+
+Orkestr is not a hosted SaaS, a team RBAC platform, a generic chatbot UI, or a
+replacement for Codex. It is also not safe to expose directly to the public
+internet without browser pairing plus a protected remote-access layer such as
+Tailscale, Caddy/TLS, or a VPN.
+
+## Known Limitations
+
+- Public alpha: the first-run loop is still optimized for technical operators.
+- The Docker/Helm OSS demo path is stronger than every host-native edge case.
+- Connector setup depends on user-owned credentials and local browser state.
+- WhatsApp, Gmail, LinkedIn desktop, and timer features should be treated as
+  optional capabilities, not mandatory cloud services.
+- Team RBAC, hosted multi-user SaaS, and plugin marketplace abstractions are
+  intentionally outside V1.
 
 ## Quickstart
 
@@ -159,12 +224,20 @@ For a live k3s smoke on a host with Docker, Helm, and kubectl:
 ORKESTR_K3S_OSS_DEMO_EXECUTE=1 npm run smoke:k3s:oss-demo
 ```
 
-The older deterministic coding-agent demo is still available for local
-development:
+The deterministic coding-agent demo is still available for local development
+and CI. It uses a temporary `ORKESTR_HOME`, a fake Codex app-server, and does
+not require Codex sign-in or connector credentials:
 
 ```bash
 npm run demo:coding-agent
 ```
+
+Expected result: the command prints `Coding-agent demo passed`, creates a
+temporary `demo-coding-agent` thread, prepares the virtual desktop profile, and
+queues one safe read-only task before cleaning up.
+
+For a real Codex walkthrough that does require Codex sign-in, use
+`examples/coding-agent-demo/README.md`.
 
 ## What Is Included
 
@@ -195,6 +268,7 @@ flowchart LR
 ```
 
 More detail: [docs/architecture.md](docs/architecture.md).
+One-glance diagram: [docs/architecture-diagram.md](docs/architecture-diagram.md).
 
 ## Security Model
 
@@ -264,6 +338,9 @@ See [docs/oss-managed-boundary.md](docs/oss-managed-boundary.md).
 - [Framework and deployment](docs/framework-deployment.md)
 - [LLM-assisted release procedures](docs/llm-assisted-release-procedures.md)
 - [OSS vs managed boundary](docs/oss-managed-boundary.md)
+- [Architecture diagram](docs/architecture-diagram.md)
+- [Demo script](docs/demo-script.md)
+- [Minimal landing page](docs/landing-page.md)
 - [Secret manager](docs/secret-manager.md)
 - [Security](SECURITY.md)
 - [Contributing](CONTRIBUTING.md)
@@ -295,8 +372,11 @@ Existing `connector-outbox.json` state is migrated into
 SQLite updates instead of rewriting the JSON file. Set
 `ORKESTR_CONNECTOR_OUTBOX_STORE=json` only as an emergency legacy fallback.
 
-`ORKESTR_CONNECTOR_OUTBOX_STORE=postgres` is reserved for a future managed-scale
-backend and currently fails closed instead of silently falling back.
+For managed-scale deployments, set `ORKESTR_CONNECTOR_OUTBOX_STORE=postgres`
+and provide either `ORKESTR_CONNECTOR_OUTBOX_POSTGRES_URL` or the
+`ORKESTR_CONNECTOR_OUTBOX_PGHOST` / `PGPORT` / `PGDATABASE` / `PGUSER` /
+`PGPASSWORD` connection variables. Existing `connector-outbox.json` state is
+migrated into the Postgres table on first use when the table is empty.
 
 ## License
 

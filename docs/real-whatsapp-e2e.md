@@ -6,16 +6,46 @@ running live transport checks. The procedure owns preflight, target validation,
 failure classification, retry decisions, and the public-safe evidence packet.
 
 `npm run e2e:whatsapp-real` is the command primitive for the opt-in live
-acceptance test for a WhatsApp-bound Orkestr thread. In the default automated
-mode it injects inbound test messages into the responder account, using the
-bound sender contact identity for attribution. This keeps the sender account
-isolated while verifying responder-side routing, assistant reply delivery,
-desktop share challenge approval, and timer watcher APIs. Use `--real-send`
-only when the release requires a live sender-account transport check.
+acceptance test for a WhatsApp-bound Orkestr thread. For release deploys, the
+required path is WA2WA: pass `--real-send` so the live sender WhatsApp account
+sends over WhatsApp to the responder account, and verify responder-side routing,
+assistant reply delivery, desktop share challenge approval, and timer watcher
+APIs. Do not substitute a non-WA2WA release gate unless the user explicitly
+changes that requirement.
+
+In non-release automated mode the same runner can inject inbound test messages
+into the responder account, using the bound sender contact identity for
+attribution. That keeps the sender account isolated for local diagnostics, but
+it is not the default release deploy gate.
 
 The test is disabled by default. It requires `--execute` and explicit targets.
 Default automated mode uses the local bridge injection endpoint; `--real-send`
 and `--manual-send` send real WhatsApp messages.
+
+Use a disposable E2E/demo runtime plus a dedicated
+test/onboarding/release-smoke WhatsApp binding. The runner now requires
+`--isolated-runtime` before it contacts the target API in execute mode. The
+preflight then fails before leasing desktops or routing messages when the
+binding is disabled, not route eligible, or looks like a normal
+production/project chat. Passing `--allow-shared-runtime` or
+`--allow-production-binding` is an explicit escape hatch for attended emergency
+runs only.
+
+WA2WA release example:
+
+```bash
+npm run e2e:whatsapp-real -- --execute \
+  --api-base http://127.0.0.1:19812 \
+  --orkestr-home /path/to/orkestr-home \
+  --thread release-e2e-thread-id \
+  --chat-id whatsapp-group-id@g.us \
+  --sender-account sender \
+  --responder-account responder \
+  --desktop gmail \
+  --real-send \
+  --isolated-runtime \
+  --artifact artifacts/real-wa-e2e.json
+```
 
 For the private VM demo acceptance path, use
 `npm run e2e:whatsapp-demo-onboarding`. That test is intentionally
@@ -47,6 +77,7 @@ npm run e2e:whatsapp-real -- --execute \
   --thread onboarding-thread-id \
   --chat-id whatsapp-group-id@g.us \
   --responder-account responder \
+  --isolated-runtime \
   --desktop gmail
 ```
 
@@ -80,10 +111,16 @@ Useful release modes:
 - Add `--real-send` when automated release evidence must prove that a separate
   paired sender account can send over live WhatsApp transport. Without this
   flag, automated runs inject inbound messages into the responder account.
+- Add `--isolated-runtime` for the normal release/demo path after verifying the
+  API base and Orkestr home belong to a disposable E2E/demo instance.
+- Add `--allow-shared-runtime` only for an attended emergency dogfood run where
+  the operator intentionally accepts shared-runtime side effects.
 - Add `--sender-contact <contact-id>` when the target chat has multiple allowed
   people and the test should accept only one real sender.
 - Add `--open-link-in-desktop` to open the generated Google connection link in
   the managed desktop.
+- Add `--allow-production-binding` only when the operator intentionally accepts
+  running release E2E traffic against a normal project binding.
 - Add `--require-oauth-callback` only for attended runs where a human/operator
   will complete Google OAuth before the timeout.
 - Add `--artifact artifacts/real-wa-e2e.json` to keep a machine-readable result.
@@ -113,6 +150,7 @@ npm run e2e:whatsapp-real -- --execute \
   --sender-contact +4917600000000 \
   --desktop gmail \
   --manual-send \
+  --isolated-runtime \
   --artifact artifacts/real-wa-e2e.json
 ```
 
