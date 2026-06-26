@@ -79,8 +79,8 @@ Options:
                                  Explicit emergency bypass for demo deploys when the WA service gate cannot run.
   --demo-whatsapp-phone PHONE    Direct WhatsApp phone number for OSS demo onboarding E2E.
   --whatsapp-real                Run real WhatsApp e2e. Requires explicit real-WA env/config.
-  --skip-whatsapp-real           Skip real WhatsApp e2e. Not allowed with --deploy-ref unless --allow-release-without-e2e is also set.
-  --allow-release-without-e2e    Explicit emergency bypass for release deploys when real WhatsApp e2e cannot run.
+  --skip-whatsapp-real           Skip optional real WhatsApp e2e.
+  --allow-release-without-e2e    Deprecated no-op kept for older operator scripts.
   --skip-isolation-audit         Skip demo isolation audit. Demo deploys require --allow-release-without-isolation-audit too.
   --allow-release-without-isolation-audit
                                  Explicit emergency bypass for demo deploys when the isolation audit cannot run.
@@ -156,17 +156,12 @@ export function parseFullRunPipelineArgs(argv = process.argv.slice(2), env = pro
   };
   options.whatsappReal = !options.skipWhatsappReal && (
     hasFlag(argv, "--whatsapp-real") ||
-    truthy(env.ORKESTR_FULL_RUN_WHATSAPP_REAL) ||
-    Boolean(options.deployRef)
+    truthy(env.ORKESTR_FULL_RUN_WHATSAPP_REAL)
   );
-  options.releaseE2eBypass = Boolean(options.deployRef && options.skipWhatsappReal && options.allowReleaseWithoutE2e);
+  options.releaseE2eBypass = false;
   if (options.demoRelease && options.whatsappReal && !options.demoWhatsappPhoneNumber) {
     options.invalid = true;
     options.error = "demo_release_requires_direct_whatsapp_phone";
-  }
-  if (options.deployRef && options.skipWhatsappReal && !options.allowReleaseWithoutE2e) {
-    options.invalid = true;
-    options.error = "release_deploy_requires_real_whatsapp_e2e";
   }
   if (options.deployRef && options.demoRelease && options.skipIsolationAudit && !options.allowReleaseWithoutIsolationAudit) {
     options.invalid = true;

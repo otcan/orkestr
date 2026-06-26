@@ -69,16 +69,17 @@ test("full run pipeline can include launch, regression, live smoke, and deploy g
   assert.equal(stages.find((stage) => stage.id === "deploy").env.ORKESTR_ENV_FILE, "/etc/orkestr/orkestr.env");
 });
 
-test("full run pipeline requires real WhatsApp e2e before release deploys", () => {
+test("full run pipeline does not require real WhatsApp e2e before release deploys", () => {
   const options = parseFullRunPipelineArgs([
     "--deploy-ref",
     "v0.1.0-alpha.34",
   ], {});
   const ids = stageIds(options);
 
-  assert.equal(options.whatsappReal, true);
+  assert.equal(options.whatsappReal, false);
   assert.equal(options.invalid, undefined);
-  assert.ok(ids.indexOf("whatsapp-real") < ids.indexOf("deploy"));
+  assert.equal(ids.includes("whatsapp-real"), false);
+  assert.ok(ids.includes("deploy"));
   assert.match(fullRunPipelineStages(options).find((stage) => stage.id === "deploy").args.join(" "), /--all-instances/);
 });
 
@@ -99,6 +100,7 @@ test("full run pipeline adds isolated demo gates for demo release deploys", () =
     "--demo-release",
     "--demo-whatsapp-phone",
     "+49 176 0000000",
+    "--whatsapp-real",
     "--artifact-dir",
     artifactDir,
     "--deploy-ref",
@@ -158,17 +160,6 @@ test("full run pipeline blocks OSS demo e2e without a direct phone number", () =
   assert.equal(options.error, "demo_release_requires_direct_whatsapp_phone");
 });
 
-test("full run pipeline blocks release deploys when real WhatsApp e2e is skipped without bypass", () => {
-  const options = parseFullRunPipelineArgs([
-    "--deploy-ref",
-    "v0.1.0-alpha.34",
-    "--skip-whatsapp-real",
-  ], {});
-
-  assert.equal(options.invalid, true);
-  assert.equal(options.error, "release_deploy_requires_real_whatsapp_e2e");
-});
-
 test("full run pipeline blocks demo release deploys when isolation audit is skipped without bypass", () => {
   const options = parseFullRunPipelineArgs([
     "--demo-release",
@@ -193,21 +184,6 @@ test("full run pipeline blocks demo release deploys when WA service readiness is
   assert.equal(options.error, "demo_release_deploy_requires_wa_service_readiness");
 });
 
-test("full run pipeline allows an explicit emergency release e2e bypass", () => {
-  const options = parseFullRunPipelineArgs([
-    "--deploy-ref",
-    "v0.1.0-alpha.34",
-    "--skip-whatsapp-real",
-    "--allow-release-without-e2e",
-  ], {});
-  const ids = stageIds(options);
-
-  assert.equal(options.invalid, undefined);
-  assert.equal(options.releaseE2eBypass, true);
-  assert.equal(ids.includes("whatsapp-real"), false);
-  assert.equal(ids.includes("deploy"), true);
-});
-
 test("full run pipeline records deliberate demo release gate skips", async () => {
   const artifactDir = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-full-run-skips-"));
   const options = parseFullRunPipelineArgs([
@@ -218,7 +194,6 @@ test("full run pipeline records deliberate demo release gate skips", async () =>
     "--deploy-ref",
     "v0.1.0-alpha.35",
     "--skip-whatsapp-real",
-    "--allow-release-without-e2e",
     "--skip-isolation-audit",
     "--allow-release-without-isolation-audit",
     "--skip-wa-service-readiness",

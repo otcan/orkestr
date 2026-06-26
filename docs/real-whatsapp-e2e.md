@@ -6,17 +6,15 @@ running live transport checks. The procedure owns preflight, target validation,
 failure classification, retry decisions, and the public-safe evidence packet.
 
 `npm run e2e:whatsapp-real` is the command primitive for the opt-in live
-acceptance test for a WhatsApp-bound Orkestr thread. For release deploys, the
-required path is WA2WA: pass `--real-send` so the live sender WhatsApp account
-sends over WhatsApp to the responder account, and verify responder-side routing,
-assistant reply delivery, desktop share challenge approval, and timer watcher
-APIs. Do not substitute a non-WA2WA release gate unless the user explicitly
-changes that requirement.
+acceptance test for a WhatsApp-bound Orkestr thread. Release deploys do not
+require WA2WA. When a live sender-to-responder diagnostic is explicitly
+requested, pass `--real-send` so the sender WhatsApp account sends over
+WhatsApp to the responder account, then verify responder-side routing, assistant
+reply delivery, desktop share challenge approval, and timer watcher APIs.
 
-In non-release automated mode the same runner can inject inbound test messages
-into the responder account, using the bound sender contact identity for
-attribution. That keeps the sender account isolated for local diagnostics, but
-it is not the default release deploy gate.
+In automated mode the same runner can inject inbound test messages into the
+responder account, using the bound sender contact identity for attribution. That
+keeps the sender account isolated for local diagnostics.
 
 The test is disabled by default. It requires `--execute` and explicit targets.
 Default automated mode uses the local bridge injection endpoint; `--real-send`
@@ -36,7 +34,7 @@ skill-only account may be used for attended side checks, but it must stay out of
 Orkestr router bindings and release readiness gates. See
 [WhatsApp Account Operations](whatsapp-account-operations.md).
 
-WA2WA release example:
+WA2WA diagnostic example:
 
 ```bash
 npm run e2e:whatsapp-real -- --execute \
@@ -113,9 +111,9 @@ Useful release modes:
   will send `/connect google` from a real phone/contact in the target WhatsApp
   chat. This still uses real WhatsApp transport and does not call the bridge
   injection endpoint, but it cannot run unattended in CI.
-- Add `--real-send` when automated release evidence must prove that a separate
-  paired sender account can send over live WhatsApp transport. Without this
-  flag, automated runs inject inbound messages into the responder account.
+- Add `--real-send` when optional diagnostic evidence must prove that a
+  separate paired sender account can send over live WhatsApp transport. Without
+  this flag, automated runs inject inbound messages into the responder account.
 - Add `--isolated-runtime` for the normal release/demo path after verifying the
   API base and Orkestr home belong to a disposable E2E/demo instance.
 - Add `--allow-shared-runtime` only for an attended emergency dogfood run where

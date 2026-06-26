@@ -20,11 +20,9 @@ Rules:
 - Release, tag, merge-to-main, and deploy work must follow
   `docs/release-train.md`. Worker and parent threads may commit and push their
   own branches, but deployments must go through the release train.
-- Release WhatsApp E2E is WA2WA by default: use the live sender account to send
-  through WhatsApp to the responder account with
-  `npm run e2e:whatsapp-real -- --execute --real-send ...` against a dedicated
-  release/E2E binding. Do not ask whether a separate non-WA2WA E2E path is
-  required unless the user explicitly changes the release gate.
+- Real WhatsApp E2E is an optional diagnostic, not a release/deploy gate. Do not
+  block releases on WA2WA availability unless a user explicitly asks for that
+  check in the current release.
 - Keep files small and purpose-specific. If a file is approaching 500 lines, split new behavior into a separate module, component, helper, controller, or template when it can be managed cleanly.
 - Do not keep extending already-large files with unrelated UI, backend, routing, or integration logic. Exceed 500 lines only when splitting would create artificial fragmentation or a risky refactor.
 

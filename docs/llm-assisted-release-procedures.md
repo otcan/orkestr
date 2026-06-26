@@ -157,29 +157,27 @@ Completion criteria:
 
 ## Procedure: Real WhatsApp E2E
 
-Use only when a release requires WhatsApp routing evidence. Release deploys use
-WA2WA as the default gate: the live sender WhatsApp account sends to the
-responder WhatsApp account with `--real-send`, and the responder side must route
-the message into the dedicated release/E2E Orkestr thread. Do not ask for a
-non-WA2WA E2E path unless the user explicitly changes the release gate.
+Use only when the user explicitly asks for WhatsApp routing evidence. Release
+deploys do not require WA2WA. When this optional diagnostic is requested, the
+live sender WhatsApp account can send to the responder WhatsApp account with
+`--real-send`, and the responder side should route the message into a dedicated
+E2E Orkestr thread.
 
-Default automated non-release mode can still inject inbound test messages into
-the responder account so the sender account stays isolated. That is not the
-release deploy gate.
+Default automated mode can still inject inbound test messages into the responder
+account so the sender account stays isolated.
 
 LLM checkpoints:
 
-1. Confirm the user asked for a real transport run or a release/deploy requires
-   it.
+1. Confirm the user asked for a real transport run.
 2. Preflight target thread, chat, responder account, public URL, and desktop
    availability. Use a disposable E2E/demo runtime and pass
    `--isolated-runtime`; a shared runtime requires the explicit
    `--allow-shared-runtime` escape hatch. Use a dedicated
    E2E/test/onboarding binding; a normal production/project chat requires the
    explicit `--allow-production-binding` escape hatch.
-3. For release deploys, choose WA2WA `--real-send` with the `sender` and
-   `responder` accounts. Use default responder injection or attended
-   `--manual-send` only when the requested test is not a release deploy gate.
+3. Choose WA2WA `--real-send` only when the user specifically wants live
+   sender-to-responder transport. Otherwise use default responder injection or
+   attended `--manual-send` as appropriate.
 4. After a failure, inspect the JSON artifact before any retry.
 
 Primitive:
@@ -239,14 +237,15 @@ Completion criteria:
 
 ## Procedure: Release Train Deploy
 
-Use only after local checks and required live E2E evidence pass.
+Use only after local checks pass and any explicitly requested live E2E evidence
+has been collected.
 
 LLM checkpoints:
 
 1. Reconcile parent and worker branches according to `docs/release-train.md`.
 2. Confirm release target, tag/ref, deploy channel, and instances.
-3. Confirm whether real WhatsApp E2E is required; deploys require it unless the
-   user explicitly approves the emergency bypass.
+3. Confirm whether the user explicitly requested real WhatsApp E2E; deploys do
+   not require it by default.
 4. Probe instances before deploy and classify skipped instances.
 5. Watch CI or equivalent remote checks after push.
 
