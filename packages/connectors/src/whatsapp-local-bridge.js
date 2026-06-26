@@ -1886,6 +1886,12 @@ export function inboundRoutingFailureNoticeText(error, { env = process.env } = {
   if (failureText.includes("whatsapp_inbound_token")) {
     return "This chat route is configured, but the target Orkestr instance rejected or is missing the broker WhatsApp token. Your message was not delivered; ask the admin to sync the target inbound token, then resend.";
   }
+  if (reason === "llm_sanitizer_unconfigured") {
+    return "Orkestr could not accept your message because the isolated-user LLM sanitizer is not configured. Ask the admin to connect the sanitizer, then resend.";
+  }
+  if (/^llm_sanitizer_(?:http_(?:408|409|425|429|5\d\d)|timeout|empty_response|invalid_json|unavailable|(?:codex|ollama)_(?:timeout|unavailable|failed|invalid_json|http_(?:408|409|425|429|5\d\d)))$/i.test(reason)) {
+    return "Orkestr could not safely verify this message because the isolated-user safety service was temporarily unavailable. Please resend it in a moment.";
+  }
   if (failure.code === "target_codex_not_configured" || failure.userFacingCategory === "codex") {
     const setupUrl = String(failure.setupUrl || "").trim();
     return setupUrl
@@ -1903,12 +1909,6 @@ export function inboundRoutingFailureNoticeText(error, { env = process.env } = {
   }
   if (failure.capability === "timers" || failure.userFacingCategory === "timer" || lowered.includes("timer")) {
     return "Timers are not available for this chat right now. Please try again after Orkestr is healthy.";
-  }
-  if (reason === "llm_sanitizer_unconfigured") {
-    return "Orkestr could not accept your message because the isolated-user LLM sanitizer is not configured. Ask the admin to connect the sanitizer, then resend.";
-  }
-  if (/^llm_sanitizer_(?:http_(?:408|409|425|429|5\d\d)|timeout|empty_response|invalid_json|unavailable|(?:codex|ollama)_(?:timeout|unavailable|failed|invalid_json|http_(?:408|409|425|429|5\d\d)))$/i.test(reason)) {
-    return "Orkestr could not safely verify this message because the isolated-user safety service was temporarily unavailable. Please resend it in a moment.";
   }
   if (reason === "browser_pairing_required") {
     return `This Orkestr chat needs browser pairing approval before it can accept messages. Open ${publicHelpUrl(env)} to complete pairing, then resend.`;

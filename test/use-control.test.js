@@ -951,7 +951,7 @@ test("user management API is admin-only and can pair a browser to a managed user
   const priorWorkspaceRoot = process.env.ORKESTR_RUNTIME_WORKSPACE_ROOT;
   const priorAuth = process.env.ORKESTR_AUTH_REQUIRED;
   const priorRecover = process.env.ORKESTR_RECOVER_RUNNING_ON_START;
-  const sanitizerEnvKeys = [
+  const isolatedEnvKeys = [
     "ORKESTR_LLM_SANITIZER_URL",
     "ORKESTR_LLM_SANITIZER_TOKEN",
     "ORKESTR_LLM_SANITIZER_PROVIDER",
@@ -959,13 +959,18 @@ test("user management API is admin-only and can pair a browser to a managed user
     "ORKESTR_LLM_SANITIZER_COMMAND_JSON",
     "OPENAI_API_KEY",
     "ORKESTR_OPENAI_API_KEY",
+    "ORKESTR_WHATSAPP_ACCOUNT_IDS",
+    "WHATSAPP_LOCAL_ACCOUNT_IDS",
+    "ORKESTR_WHATSAPP_STRICT_ACCOUNT_IDS",
+    "WHATSAPP_LOCAL_STRICT_ACCOUNT_IDS",
+    "ORKESTR_WHATSAPP_OWNER_USER_ID",
   ];
-  const priorSanitizerEnv = Object.fromEntries(sanitizerEnvKeys.map((key) => [key, process.env[key]]));
+  const priorIsolatedEnv = Object.fromEntries(isolatedEnvKeys.map((key) => [key, process.env[key]]));
   process.env.ORKESTR_HOME = home;
   process.env.ORKESTR_RUNTIME_WORKSPACE_ROOT = runtimeWorkspaceRoot;
   process.env.ORKESTR_AUTH_REQUIRED = "1";
   process.env.ORKESTR_RECOVER_RUNNING_ON_START = "0";
-  for (const key of sanitizerEnvKeys) delete process.env[key];
+  for (const key of isolatedEnvKeys) delete process.env[key];
   const server = await startServer({ port: 0, host: "127.0.0.1" });
   const { port } = server.address();
   const baseUrl = `http://127.0.0.1:${port}`;
@@ -1490,9 +1495,9 @@ test("user management API is admin-only and can pair a browser to a managed user
     else process.env.ORKESTR_AUTH_REQUIRED = priorAuth;
     if (priorRecover === undefined) delete process.env.ORKESTR_RECOVER_RUNNING_ON_START;
     else process.env.ORKESTR_RECOVER_RUNNING_ON_START = priorRecover;
-    for (const key of sanitizerEnvKeys) {
-      if (priorSanitizerEnv[key] === undefined) delete process.env[key];
-      else process.env[key] = priorSanitizerEnv[key];
+    for (const key of isolatedEnvKeys) {
+      if (priorIsolatedEnv[key] === undefined) delete process.env[key];
+      else process.env[key] = priorIsolatedEnv[key];
     }
   }
 });
