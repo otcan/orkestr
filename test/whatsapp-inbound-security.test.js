@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import { createThread, listThreadMessages } from "../packages/core/src/threads.js";
 import { routeWhatsAppInbound } from "../packages/connectors/src/whatsapp.js";
+import { evaluateWhatsAppInboundSecurity } from "../packages/connectors/src/whatsapp-inbound-security.js";
 import { dataPaths } from "../packages/storage/src/paths.js";
 import { readJson } from "../packages/storage/src/store.js";
 
@@ -86,6 +87,59 @@ test("WhatsApp inbound security tags allowed owner messages", async () => {
   assert.equal(messages[0].senderTrustLevel, "owner");
   assert.equal(messages[0].senderParticipantId, "owner@c.us");
   assert.equal(messages[0].externalPrincipal.chatId, "owner-chat@g.us");
+});
+
+test("WhatsApp inbound security treats normalized authorized contacts as owners", () => {
+  const decision = evaluateWhatsAppInboundSecurity({
+    binding: {
+      connector: "whatsapp",
+      id: "thread:normalized-wa-thread:whatsapp",
+      chatId: "normalized-chat@g.us",
+      senderAccountId: "main",
+      authorizedContactIds: ["owner@c.us"],
+    },
+    input: {
+      chatId: "normalized-chat@g.us",
+      accountId: "main",
+      from: "owner@c.us",
+      text: "should we run the campaign first",
+    },
+    thread: {
+      id: "normalized-wa-thread",
+    },
+  });
+
+  assert.equal(decision.allowed, true);
+  assert.equal(decision.trustLevel, "owner");
+  assert.equal(decision.policyMode, "owner-only");
+  assert.equal(decision.classified.reason, "host_execution");
+});
+
+test("WhatsApp inbound security treats owner contact aliases as owners", () => {
+  const decision = evaluateWhatsAppInboundSecurity({
+    binding: {
+      connector: "whatsapp",
+      id: "thread:owner-alias-wa-thread:whatsapp",
+      chatId: "owner-alias-chat@g.us",
+      senderAccountId: "main",
+      senderContactId: "4917632400662@c.us",
+      ownerContactAliases: ["66378837028965@lid"],
+    },
+    input: {
+      chatId: "owner-alias-chat@g.us",
+      accountId: "main",
+      from: "66378837028965@lid",
+      text: "please run the desktop fix",
+    },
+    thread: {
+      id: "owner-alias-wa-thread",
+    },
+  });
+
+  assert.equal(decision.allowed, true);
+  assert.equal(decision.trustLevel, "owner");
+  assert.equal(decision.policyMode, "owner-only");
+  assert.equal(decision.classified.reason, "host_execution");
 });
 
 test("WhatsApp inbound security preserves legacy-open generated bindings without owner policy", async () => {

@@ -4,7 +4,7 @@ import { enqueueAgentMessage } from "../../core/src/messages.js";
 import { resourceOwnerUserId } from "../../core/src/policy.js";
 import { adminPrincipal, userPrincipal } from "../../core/src/principal.js";
 import { appServerStateFromStatus } from "../../core/src/codex-app-server-common.js";
-import { clearRuntimeLeasesForThread, runtimeStatus } from "../../core/src/runtime-leases.js";
+import { clearRuntimeLeasesForThread, resolveCodexThreadMetadata, runtimeStatus } from "../../core/src/runtime-leases.js";
 import { classifyApprovalReply } from "../../core/src/runtime-settings.js";
 import { processApiAgentThreadInput, threadUsesApiAgent } from "../../core/src/tenant-api-agent.js";
 import { parseThreadInputCommand } from "../../core/src/thread-commands.js";
@@ -78,6 +78,7 @@ import {
   codexAssistantSource,
   shouldMirrorWhatsAppProgress,
   shouldMirrorWhatsAppReply,
+  threadSuppressesWhatsAppUpdates,
 } from "./whatsapp-mirror-policy.js";
 import {
   enqueueRemoteWhatsAppThreadInput,
@@ -123,6 +124,14 @@ const whatsappOutboundMirrorWorker = createWhatsAppOutboundMirrorWorker();
 let whatsappDeliveryIdleCache = null;
 let whatsappDeliveryRunCache = null;
 const whatsappMirrorMessageFileCache = new Map();
+const suppressibleWhatsAppUpdateDeliveryTypes = new Set([
+  "delivery_error",
+  "mode_queued",
+  "mutation_notice",
+  "progress",
+  "queue_notice",
+  "router_update",
+]);
 
 function positiveInteger(value, fallback, minimum = 1) {
   if (value === undefined || value === null || String(value).trim() === "") return fallback;
@@ -1256,6 +1265,38 @@ function whatsappApiAgentAutoRun(env = process.env) {
 
 const whatsappApiAgentKickTimers = new Map();
 
+function codexDebugMetadataMissing(thread = {}) {
+  const metadata = thread?.executor?.metadata && typeof thread.executor.metadata === "object" ? thread.executor.metadata : {};
+  return !thread?.codexRateLimits && !metadata.codexRateLimits && !metadata.rateLimits;
+}
+
+async function threadWithLiveCodexDebugMetadata(thread = null, env = process.env) {
+  if (!thread || !codexDebugMetadataMissing(thread)) return thread;
+  const metadata = await resolveCodexThreadMetadata(thread, env).catch(() => ({}));
+  const rateLimits = metadata.codexRateLimits || metadata.rateLimits || null;
+  if (!rateLimits) return thread;
+  const executor = thread.executor && typeof thread.executor === "object" ? thread.executor : {};
+  const executorMetadata = executor.metadata && typeof executor.metadata === "object" ? executor.metadata : {};
+  return {
+    ...thread,
+    codexModel: thread.codexModel || metadata.codexModel || null,
+    codexModelProvider: thread.codexModelProvider || metadata.codexModelProvider || null,
+    codexReasoningEffort: thread.codexReasoningEffort || metadata.codexReasoningEffort || null,
+    codexContextWindow: thread.codexContextWindow || metadata.codexContextWindow || null,
+    codexTokenUsage: thread.codexTokenUsage || metadata.codexTokenUsage || null,
+    codexTotalTokenUsage: thread.codexTotalTokenUsage || metadata.codexTotalTokenUsage || null,
+    codexRateLimits: rateLimits,
+    executor: {
+      ...executor,
+      metadata: {
+        ...executorMetadata,
+        ...metadata,
+        codexRateLimits: rateLimits,
+      },
+    },
+  };
+}
+
 function whatsappInboundCoalesceMs(env = process.env) {
   const parsed = Number(env.ORKESTR_WHATSAPP_INBOUND_COALESCE_MS || 3000);
   if (!Number.isFinite(parsed)) return 3000;
@@ -1901,6 +1942,25 @@ function findWhatsAppOutboundIntent(outboundIntents = [], input = {}) {
   }
   const fieldKey = outboundIntentFieldKey(input);
   return index.byFields.get(fieldKey) || null;
+}
+
+function whatsappUpdateDeliverySuppressed({ kind, deliveryType, thread, chatId, env } = {}) {
+  if (kind !== "thread") return false;
+  if (!suppressibleWhatsAppUpdateDeliveryTypes.has(pickString(deliveryType).toLowerCase())) return false;
+  return threadSuppressesWhatsAppUpdates(thread, chatId, env);
+}
+
+async function skipSuppressedWhatsAppUpdateCandidate({ skipped, ...input } = {}) {
+  await skipWhatsAppOutboundCandidate({
+    ...input,
+    reason: "updates_suppressed",
+  });
+  skipped?.push({
+    agentId: input.agentId,
+    threadId: input.threadId,
+    messageId: input.messageId,
+    reason: "updates_suppressed",
+  });
 }
 
 async function skipWhatsAppOutboundCandidate({
@@ -3171,7 +3231,10 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
   let thread = threadId ? (await listThreads(env)).find((item) => item.id === threadId || item.name === threadId || item.bindingName === threadId) : null;
   thread = await ensureApiAgentWhatsAppThread(thread, env);
   const inboundSecurity = evaluateWhatsAppInboundSecurity({
-    binding: threadRoute.binding || thread?.binding || {},
+    binding: {
+      ...(thread?.binding || {}),
+      ...(threadRoute.binding || {}),
+    },
     input: { ...input, chatId, from, accountId, text },
     state,
     thread: thread || {},
@@ -4090,6 +4153,7 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
   ];
   await recoverParentsForAlreadyMirroredReplies(messageSets, deliveredIds, outboundDeliveries, state, env);
   for (const { agentId, threadId, thread, messages, kind } of messageSets) {
+    const debugThread = kind === "thread" ? await threadWithLiveCodexDebugMetadata(thread, env) : thread;
     const messageSetKey = outboundMirrorMessageSetKey({ kind, agentId, threadId });
     for (const [messageIndex, message] of messages.entries()) {
       const messageCursor = outboundMirrorMessageCursor(message, messageIndex);
@@ -4125,9 +4189,28 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
           skipped.push({ agentId, threadId, messageId: message.id, reason: "assistant_output_available" });
           continue;
         }
+        if (whatsappUpdateDeliverySuppressed({ kind, deliveryType: "router_update", thread, chatId, env })) {
+          await skipSuppressedWhatsAppUpdateCandidate({
+            state,
+            outboundIntents,
+            skipped,
+            kind,
+            deliveryType: "router_update",
+            routerUpdateType: routerUpdateTarget.routerUpdateType,
+            agentId,
+            threadId,
+            messageId: deliveryId,
+            sourceMessageId: message.id,
+            chatId,
+            accountId,
+            message,
+            env,
+          });
+          continue;
+        }
         const text = appendWhatsAppDebugFooter(routerUpdateTarget.text, {
           message,
-          thread,
+          thread: debugThread,
           messages,
           deliveryType: "router_update",
           env,
@@ -4192,7 +4275,7 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
         const chatId = queuedModeTarget.chatId;
         const text = appendWhatsAppDebugFooter(formatWhatsAppModeQueued(queuedModeTarget.mode), {
           message,
-          thread,
+          thread: debugThread,
           messages,
           deliveryType: "mode_queued",
           env,
@@ -4213,6 +4296,24 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
             outboundIntents,
             skipped,
             existingIntent,
+            kind,
+            deliveryType: "mode_queued",
+            agentId,
+            threadId,
+            messageId: deliveryId,
+            sourceMessageId: message.id,
+            chatId,
+            accountId,
+            message,
+            env,
+          });
+          continue;
+        }
+        if (whatsappUpdateDeliverySuppressed({ kind, deliveryType: "mode_queued", thread, chatId, env })) {
+          await skipSuppressedWhatsAppUpdateCandidate({
+            state,
+            outboundIntents,
+            skipped,
             kind,
             deliveryType: "mode_queued",
             agentId,
@@ -4311,6 +4412,24 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
           });
           continue;
         }
+        if (whatsappUpdateDeliverySuppressed({ kind, deliveryType: "queue_notice", thread, chatId, env })) {
+          await skipSuppressedWhatsAppUpdateCandidate({
+            state,
+            outboundIntents,
+            skipped,
+            kind,
+            deliveryType: "queue_notice",
+            agentId,
+            threadId,
+            messageId: deliveryId,
+            sourceMessageId: message.id,
+            chatId,
+            accountId,
+            message: queueMessage,
+            env,
+          });
+          continue;
+        }
         if (staleTerminalWhatsAppOutboundIntentPassedCursor({ state, messageSetKey, messageCursor, intent: existingIntent, env })) continue;
         if (!existingIntent && whatsappOutboundMirrorCursorPassed(state, messageSetKey, messageCursor)) continue;
         if (kind === "thread") {
@@ -4372,7 +4491,7 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
         }
         const text = appendWhatsAppDebugFooter(formatWhatsAppQueueNotice(queueMessage, queueTarget.reason), {
           message: queueMessage,
-          thread,
+          thread: debugThread,
           messages: queueMessages,
           deliveryType: "queue_notice",
           env,
@@ -4454,6 +4573,23 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
           });
           continue;
         }
+        if (whatsappUpdateDeliverySuppressed({ kind, deliveryType: "delivery_error", thread, chatId, env })) {
+          await skipSuppressedWhatsAppUpdateCandidate({
+            state,
+            outboundIntents,
+            skipped,
+            kind,
+            deliveryType: "delivery_error",
+            agentId,
+            threadId,
+            messageId: message.id,
+            chatId,
+            accountId,
+            message,
+            env,
+          });
+          continue;
+        }
         if (staleTerminalWhatsAppOutboundIntentPassedCursor({ state, messageSetKey, messageCursor, intent: existingIntent, env })) continue;
         if (!existingIntent && whatsappOutboundMirrorCursorPassed(state, messageSetKey, messageCursor)) continue;
         const completedReply = completedAssistantReplyForParent(messages, message, chatId, state);
@@ -4476,7 +4612,7 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
         }
         const text = appendWhatsAppDebugFooter(formatWhatsAppDeliveryFailure(message), {
           message,
-          thread,
+          thread: debugThread,
           messages,
           deliveryType: "delivery_error",
           env,
@@ -4556,6 +4692,25 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
           });
           continue;
         }
+        if (whatsappUpdateDeliverySuppressed({ kind, deliveryType: "mutation_notice", thread, chatId: mutationTarget.chatId, env })) {
+          await skipSuppressedWhatsAppUpdateCandidate({
+            state,
+            outboundIntents,
+            skipped,
+            kind,
+            deliveryType: mutationTarget.deliveryType,
+            agentId,
+            threadId,
+            messageId: deliveryId,
+            sourceMessageId: message.id,
+            chatId: mutationTarget.chatId,
+            accountId: mutationTarget.accountId,
+            message,
+            parent: mutationParent,
+            env,
+          });
+          continue;
+        }
         if (!mutationTarget.priorDelivery) {
           await markUnsupportedWhatsAppMutation({
             thread,
@@ -4577,7 +4732,7 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
         const noticeText = formatWhatsAppMutationNotice(message, mutationTarget);
         const text = appendWhatsAppDebugFooter(noticeText, {
           message,
-          thread,
+          thread: debugThread,
           messages,
           deliveryType: mutationTarget.deliveryType,
           env,
@@ -4699,6 +4854,24 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
           });
           continue;
         }
+        if (whatsappUpdateDeliverySuppressed({ kind, deliveryType: "progress", thread, chatId, env })) {
+          await skipSuppressedWhatsAppUpdateCandidate({
+            state,
+            outboundIntents,
+            skipped,
+            kind,
+            deliveryType: "progress",
+            agentId,
+            threadId,
+            messageId: message.id,
+            chatId,
+            accountId,
+            message,
+            parent,
+            env,
+          });
+          continue;
+        }
         if (!liveRecovery && progressOvertakenByFinal(messages, message, chatId, env)) {
           await skipWhatsAppOutboundCandidate({
             state,
@@ -4720,7 +4893,7 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
         }
         const text = appendWhatsAppDebugFooter(formatWhatsAppOutboundText(pickString(message.text)), {
           message,
-          thread,
+          thread: debugThread,
           messages,
           deliveryType: "progress",
           env,
@@ -4834,6 +5007,24 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
         });
         continue;
       }
+      if (whatsappUpdateDeliverySuppressed({ kind, deliveryType, thread, chatId, env })) {
+        await skipSuppressedWhatsAppUpdateCandidate({
+          state,
+          outboundIntents,
+          skipped,
+          kind,
+          deliveryType,
+          agentId,
+          threadId,
+          messageId: message.id,
+          chatId,
+          accountId,
+          message,
+          parent,
+          env,
+        });
+        continue;
+      }
 
       if (supersededRuntimeInterruptionNotice(messages, message, chatId, state)) {
         await skipWhatsAppOutboundCandidate({
@@ -4885,7 +5076,7 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
       }));
       const text = appendWhatsAppDebugFooter(appendRemoteAttachmentFailureNotes(formattedText, remoteMaterialized.skipped), {
         message,
-        thread,
+        thread: debugThread,
         messages,
         deliveryType,
         env,

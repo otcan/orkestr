@@ -43,9 +43,15 @@ function inboundSecurityPolicy(binding = {}, env = process.env) {
   const ownerParticipantIds = listValues(
     explicit.ownerParticipantIds,
     explicit.ownerParticipants,
+    explicit.ownerContactIds,
+    explicit.ownerContactAliases,
     binding.senderContactId,
     binding.ownerContactId,
+    binding.ownerContactIds,
+    binding.ownerContactAliases,
     binding.authorizedContactId,
+    binding.authorizedContactIds,
+    binding.authorizedContactAliases,
   );
   const trustedParticipantIds = listValues(
     explicit.trustedParticipantIds,

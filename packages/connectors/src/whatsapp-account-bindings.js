@@ -44,6 +44,13 @@ function splitList(value) {
     .filter(Boolean);
 }
 
+function listInput(value, fallback = []) {
+  if (Array.isArray(value)) return unique(value);
+  const split = splitList(value);
+  if (split.length) return unique(split);
+  return unique(fallback);
+}
+
 function unique(values = []) {
   const seen = new Set();
   const result = [];
@@ -378,6 +385,15 @@ function normalizeBindingPatch(thread = {}, input = {}) {
   const displayName = pickString(input.displayName, input.name, current.displayName, thread.bindingName, thread.name, thread.id);
   const replyPrefix = pickString(input.replyPrefix, current.replyPrefix, defaultWhatsAppReplyPrefix());
   const chatId = pickString(input.chatId, input.chat, current.chatId);
+  const additionalParticipantsEnabled = optionalBoolean(input.additionalParticipantsEnabled, current.additionalParticipantsEnabled === true);
+  const additionalParticipantIds = additionalParticipantsEnabled
+    ? listInput(input.additionalParticipantIds, current.additionalParticipantIds || [])
+    : [];
+  const inboundSecurity = input.inboundSecurity && typeof input.inboundSecurity === "object" && !Array.isArray(input.inboundSecurity)
+    ? input.inboundSecurity
+    : current.inboundSecurity && typeof current.inboundSecurity === "object" && !Array.isArray(current.inboundSecurity)
+      ? current.inboundSecurity
+      : null;
   if (!chatId) {
     const error = new Error("wa_binding_chat_required");
     error.statusCode = 400;
@@ -402,7 +418,23 @@ function normalizeBindingPatch(thread = {}, input = {}) {
     outboundAccountId: responderAccountId,
     replyAccountId: responderAccountId,
     bridgeAccountId: responderAccountId,
+    senderContactId: pickString(input.senderContactId, current.senderContactId) || null,
+    responderContactId: pickString(input.responderContactId, current.responderContactId) || null,
+    ownerContactId: pickString(input.ownerContactId, current.ownerContactId) || null,
+    ownerContactIds: listInput(input.ownerContactIds, current.ownerContactIds || []),
+    ownerContactAliases: listInput(input.ownerContactAliases, current.ownerContactAliases || []),
+    authorizedContactId: pickString(input.authorizedContactId, current.authorizedContactId) || null,
+    authorizedContactIds: listInput(input.authorizedContactIds, current.authorizedContactIds || []),
+    authorizedContactAliases: listInput(input.authorizedContactAliases, current.authorizedContactAliases || []),
+    inboundSecurity,
+    additionalParticipantsEnabled,
+    additionalParticipantIds,
+    additionalParticipantLabels: input.additionalParticipantLabels && typeof input.additionalParticipantLabels === "object" && !Array.isArray(input.additionalParticipantLabels)
+      ? input.additionalParticipantLabels
+      : current.additionalParticipantLabels || {},
     mirrorToWhatsApp: optionalBoolean(input.mirrorToWhatsApp, current.mirrorToWhatsApp !== false),
+    suppressWhatsAppUpdates: optionalBoolean(input.suppressWhatsAppUpdates, current.suppressWhatsAppUpdates === true),
+    suppressWhatsAppDebugFooter: optionalBoolean(input.suppressWhatsAppDebugFooter, current.suppressWhatsAppDebugFooter === true),
     replyPrefix,
     acl: normalizeBindingAcl(input, current),
     updatedAt: new Date().toISOString(),
@@ -531,8 +563,24 @@ export function normalizeWhatsAppBinding(input = {}, { accounts = [], env = proc
     replyAccountId: responderAccountId,
     bridgeAccountId: responderAccountId,
     runtimeAccountId: pickString(responderAccount?.runtimeAccountId),
+    senderContactId: pickString(binding.senderContactId),
+    responderContactId: pickString(binding.responderContactId),
+    ownerContactId: pickString(binding.ownerContactId),
+    ownerContactIds: listInput(binding.ownerContactIds),
+    ownerContactAliases: listInput(binding.ownerContactAliases),
+    authorizedContactId: pickString(binding.authorizedContactId),
+    authorizedContactAliases: listInput(binding.authorizedContactAliases),
+    inboundSecurity: binding.inboundSecurity && typeof binding.inboundSecurity === "object" && !Array.isArray(binding.inboundSecurity)
+      ? binding.inboundSecurity
+      : null,
     authorizedContactIds: unique([
       pickString(binding.senderContactId),
+      pickString(binding.ownerContactId),
+      pickString(binding.authorizedContactId),
+      ...(Array.isArray(binding.ownerContactIds) ? binding.ownerContactIds : []),
+      ...(Array.isArray(binding.ownerContactAliases) ? binding.ownerContactAliases : []),
+      ...(Array.isArray(binding.authorizedContactIds) ? binding.authorizedContactIds : []),
+      ...(Array.isArray(binding.authorizedContactAliases) ? binding.authorizedContactAliases : []),
       ...(Array.isArray(binding.additionalParticipantIds) ? binding.additionalParticipantIds : []),
     ]),
     accountIds,
@@ -544,6 +592,8 @@ export function normalizeWhatsAppBinding(input = {}, { accounts = [], env = proc
     compatibilityOnly: Boolean(reliesOnLegacyResponder || reliesOnSeparateLegacySender),
     acl: bindingAcl(binding),
     mirrorToWhatsApp: binding.mirrorToWhatsApp !== false,
+    suppressWhatsAppUpdates: binding.suppressWhatsAppUpdates === true,
+    suppressWhatsAppDebugFooter: binding.suppressWhatsAppDebugFooter === true,
     replyPrefix: pickString(binding.replyPrefix),
     updatedAt: pickString(binding.updatedAt) || null,
     lastEvaluationAt: evaluatedAt,

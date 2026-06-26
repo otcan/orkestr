@@ -1161,6 +1161,7 @@ function groupIdFromCreateResult(result) {
 async function knownLocalWhatsAppChats(accountId, env = process.env) {
   const selectedAccountId = normalizeAccountId(accountId, env);
   const known = new Map();
+  const eligibleChatIds = new Set();
   const suppressedChatIds = new Set();
   const threads = await listThreads(env).catch(() => []);
   for (const thread of threads) {
@@ -1169,8 +1170,16 @@ async function knownLocalWhatsAppChats(accountId, env = process.env) {
     const chatId = String(binding.chatId || "").trim();
     const accountIds = [...whatsappBindingAccountIds(binding)];
     if (!chatId || (accountIds.length && !accountIds.some((candidate) => localAccountMatches(candidate, selectedAccountId, env)))) continue;
+    if (whatsappBindingIsRouteEligible(binding)) eligibleChatIds.add(chatId);
+  }
+  for (const thread of threads) {
+    const binding = thread?.binding || {};
+    if (String(binding.connector || "whatsapp").trim().toLowerCase() !== "whatsapp") continue;
+    const chatId = String(binding.chatId || "").trim();
+    const accountIds = [...whatsappBindingAccountIds(binding)];
+    if (!chatId || (accountIds.length && !accountIds.some((candidate) => localAccountMatches(candidate, selectedAccountId, env)))) continue;
     if (!whatsappBindingIsRouteEligible(binding)) {
-      suppressedChatIds.add(chatId);
+      if (!eligibleChatIds.has(chatId)) suppressedChatIds.add(chatId);
       continue;
     }
     addChat(known, {
@@ -1219,14 +1228,23 @@ async function knownLocalWhatsAppChats(accountId, env = process.env) {
 async function suppressedLocalWhatsAppChatIds(accountId, env = process.env) {
   const selectedAccountId = normalizeAccountId(accountId, env);
   const threads = await listThreads(env).catch(() => []);
+  const eligibleChatIds = new Set();
   const suppressed = new Set();
+  for (const thread of threads) {
+    const binding = thread?.binding || {};
+    if (String(binding.connector || "whatsapp").trim().toLowerCase() !== "whatsapp") continue;
+    const chatId = String(binding.chatId || "").trim();
+    const accountIds = [...whatsappBindingAccountIds(binding)];
+    if (!chatId || (accountIds.length && !accountIds.some((candidate) => localAccountMatches(candidate, selectedAccountId, env)))) continue;
+    if (whatsappBindingIsRouteEligible(binding)) eligibleChatIds.add(chatId);
+  }
   for (const thread of threads) {
     const binding = thread?.binding || {};
     if (String(binding.connector || "whatsapp").trim().toLowerCase() !== "whatsapp") continue;
     if (whatsappBindingIsRouteEligible(binding)) continue;
     const chatId = String(binding.chatId || "").trim();
     const accountIds = [...whatsappBindingAccountIds(binding)];
-    if (!chatId || (accountIds.length && !accountIds.some((candidate) => localAccountMatches(candidate, selectedAccountId, env)))) continue;
+    if (!chatId || eligibleChatIds.has(chatId) || (accountIds.length && !accountIds.some((candidate) => localAccountMatches(candidate, selectedAccountId, env)))) continue;
     suppressed.add(chatId);
   }
   return suppressed;
@@ -1817,6 +1835,9 @@ export function inboundRoutingFailureNoticeText(error, { env = process.env } = {
   }
   if (failure.code === "whatsapp_binding_disabled" || failure.code === "disabled_whatsapp_binding" || reason === "whatsapp_binding_disabled") {
     return "This WhatsApp chat is connected to Orkestr, but inbound messages are currently disabled for the bound thread. Your message was not delivered; ask the admin to enable the WhatsApp binding, then resend.";
+  }
+  if (failure.code === "whatsapp_inbound_sender_denied" || failure.reason === "unknown_sender") {
+    return failure.safeMessage || "This WhatsApp sender is not allowed to control this Orkestr chat.";
   }
   if (failure.capability === "timers" || failure.userFacingCategory === "timer" || lowered.includes("timer")) {
     return "Timers are not available for this chat right now. Please try again after Orkestr is healthy.";
@@ -3725,11 +3746,16 @@ export async function sendLocalWhatsAppMessage({ chatId = "", text = "", account
         rememberOutboundAttachment(selectedAccountId, chatId, { ...attachment, size: stat.size }, env, {
           crossAccount: crossAccountEchoSuppression !== false,
         });
-        const media = MessageMedia.fromFilePath(attachment.path);
+        const sourceMedia = MessageMedia.fromFilePath(attachment.path);
+        const mimetype = String(attachment.mimetype || sourceMedia?.mimetype || "").toLowerCase();
+        const extension = path.extname(attachment.path).toLowerCase();
+        const sendMediaAsDocument = !(mimetype.startsWith("image/") || [".gif", ".jpeg", ".jpg", ".png", ".webp"].includes(extension));
+        const media = sendMediaAsDocument
+          ? sourceMedia
+          : new MessageMedia(sourceMedia.mimetype, sourceMedia.data);
+        const sendOptions = sendMediaAsDocument ? { sendMediaAsDocument: true } : {};
         const message = await withSendOperationTimeout(
-          runtime.client.sendMessage(chatId, media, {
-            sendMediaAsDocument: true,
-          }),
+          runtime.client.sendMessage(chatId, media, sendOptions),
           "whatsapp_send_media",
           env,
         );

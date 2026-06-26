@@ -51,6 +51,75 @@ test("retired WhatsApp bindings are not routable or recovered", async () => {
   assert.deepEqual((await listLocalWhatsAppChats("main", env)).chats, []);
 });
 
+test("disabled duplicate bindings do not hide an eligible WhatsApp chat", async () => {
+  const env = await testEnv("orkestr-wa-disabled-duplicate-");
+  await createThread({
+    id: "disabled-duplicate-thread",
+    name: "Old Duplicate",
+    binding: {
+      connector: "whatsapp",
+      chatId: "wa-group-duplicate@g.us",
+      displayName: "Old Duplicate",
+      enabled: false,
+      routeEligible: false,
+      responderAccountId: "main",
+      outboundAccountId: "main",
+    },
+  }, env);
+  await createThread({
+    id: "eligible-duplicate-thread",
+    name: "Current Duplicate",
+    binding: {
+      connector: "whatsapp",
+      chatId: "wa-group-duplicate@g.us",
+      displayName: "Current Duplicate",
+      enabled: true,
+      routeEligible: true,
+      responderAccountId: "main",
+      outboundAccountId: "main",
+    },
+  }, env);
+
+  assert.deepEqual(localWhatsAppUnreadRecoveryBoundChats(await listThreads(env), "main", env), [
+    { chatId: "wa-group-duplicate@g.us", threadId: "eligible-duplicate-thread", accountId: "main" },
+  ]);
+  assert.deepEqual((await listLocalWhatsAppChats("main", env)).chats.map((chat) => chat.id), ["wa-group-duplicate@g.us"]);
+});
+
+test("owner contact aliases can route WhatsApp group messages", async () => {
+  const env = await testEnv("orkestr-wa-owner-alias-route-");
+  await createThread({
+    id: "owner-alias-route-thread",
+    name: "Owner Alias Route",
+    binding: {
+      connector: "whatsapp",
+      chatId: "wa-owner-alias@g.us",
+      displayName: "Owner Alias Route",
+      enabled: true,
+      routeEligible: true,
+      senderAccountId: "main",
+      responderAccountId: "main",
+      outboundAccountId: "main",
+      senderContactId: "4917632400662@c.us",
+      ownerContactAliases: ["66378837028965@lid"],
+    },
+  }, env);
+
+  const routed = await routeWhatsAppInbound({
+    eventId: "wa-owner-alias-route-1",
+    chatId: "wa-owner-alias@g.us",
+    accountId: "main",
+    from: "66378837028965@lid",
+    text: "please run the desktop fix",
+  }, env);
+  const messages = await listThreadMessages("owner-alias-route-thread", env);
+
+  assert.equal(routed.threadId, "owner-alias-route-thread");
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].senderTrustLevel, "owner");
+  assert.equal(messages[0].senderParticipantId, "66378837028965@lid");
+});
+
 test("retired WhatsApp bindings reserve the chat and block auto-provision resurrection", async () => {
   const env = await testEnv("orkestr-wa-retired-auto-");
   await writeConnectorConfig("whatsapp", {

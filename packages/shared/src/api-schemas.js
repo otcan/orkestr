@@ -1,4 +1,5 @@
 const stringValue = { type: "string" };
+const arrayValue = { type: "array" };
 const objectValue = { type: "object", additionalProperties: true };
 
 export function idParams(name) {
@@ -233,7 +234,17 @@ export const threadBindingUpdateSchema = {
       responderConnectorAccountId: stringValue,
       responderAccountId: stringValue,
       outboundAccountId: stringValue,
+      senderContactId: stringValue,
+      responderContactId: stringValue,
+      ownerContactId: stringValue,
+      ownerContactIds: arrayValue,
+      ownerContactAliases: arrayValue,
+      authorizedContactId: stringValue,
+      authorizedContactIds: arrayValue,
+      authorizedContactAliases: arrayValue,
       mirrorToWhatsApp: { type: "boolean" },
+      suppressWhatsAppUpdates: { type: "boolean" },
+      suppressWhatsAppDebugFooter: { type: "boolean" },
       remoteBackend: stringValue,
       remoteThreadId: stringValue,
       remoteRuntimeEnabled: { type: "boolean" },

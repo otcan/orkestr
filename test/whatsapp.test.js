@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test, { afterEach } from "node:test";
+import { promisify } from "node:util";
 import { startServer } from "../apps/server/src/server.js";
 import { stopCodexAppServerClients } from "../packages/core/src/codex-app-server-client.js";
 import { runNextAgentMessage, runNextThreadMessage } from "../packages/core/src/executors.js";
@@ -30,6 +32,8 @@ import { readConnectorOutbox, writeConnectorOutbox } from "../packages/connector
 import { writeConnectorConfig } from "../packages/storage/src/config.js";
 import { dataPaths, userDataPaths } from "../packages/storage/src/paths.js";
 import { listEvents } from "../packages/storage/src/store.js";
+
+const execFileAsync = promisify(execFile);
 
 afterEach(() => {
   stopCodexAppServerClients();
@@ -198,7 +202,7 @@ async function writeTestDeliveryClaim(home, { accountId, chatId, textKey, claime
   return { claimKey, filePath };
 }
 
-function assertDebugFooter(text, { mode = "", messageType = "final", model = "[^·\\n]+", queueReason = "", runtime = "" } = {}) {
+function assertDebugFooter(text, { mode = "", messageType = "final", model = "[^·\\n]+", queueReason = "", runtime = "", fiveHour = "", weekly = "" } = {}) {
   const escapedModel = model.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const queuePart = queueReason
     ? ` · queue:\\d+ · reason:${queueReason}`
@@ -207,7 +211,10 @@ function assertDebugFooter(text, { mode = "", messageType = "final", model = "[^
     `\\n\\ndbg: m:${model === "[^·\\n]+" ? model : escapedModel}` +
       (mode ? ` · mode:${mode}` : "") +
       (runtime ? ` · rt:${runtime}` : "(?: · rt:[a-z-]+)?") +
-      ` · msg:${messageType}${queuePart} · load:\\d+% · api:\\d+% · help:/help` +
+      ` · msg:${messageType}` +
+      (fiveHour ? ` · 5h:${fiveHour}` : "(?: · 5h:\\d+%)?") +
+      (weekly ? ` · wk:${weekly}` : "(?: · wk:\\d+%)?") +
+      `${queuePart} · load:\\d+% · api:\\d+% · help:/help` +
       (mode === "plan" ? " · switch:/code" : " · switch:/plan") +
       "$",
   );
@@ -4624,6 +4631,14 @@ test("local whatsapp inbound failures explain missing user capabilities", () => 
       safeMessage: "Target instance rejected the broker WhatsApp inbound token.",
     },
   }));
+  const senderDenied = inboundRoutingFailureNoticeText(Object.assign(new Error("whatsapp_inbound_sender_denied"), {
+    routingFailure: {
+      code: "whatsapp_inbound_sender_denied",
+      reason: "unknown_sender",
+      userFacingCategory: "connector",
+      safeMessage: "This WhatsApp sender is not allowed to control this Orkestr chat.",
+    },
+  }));
   const target = inboundRoutingFailureNoticeText(new Error("whatsapp_target_required"));
   const pairing = inboundRoutingFailureNoticeText(new Error("browser_pairing_required"), {
     env: { ORKESTR_PUBLIC_SITE_URL: "https://orkestr.example.test/" },
@@ -4638,6 +4653,8 @@ test("local whatsapp inbound failures explain missing user capabilities", () => 
   assert.match(unhealthy, /temporarily unavailable/i);
   assert.doesNotMatch(unhealthy, /safely handle|private connector|account identity|admin/i);
   assert.match(token, /target Orkestr instance rejected or is missing the broker WhatsApp token/i);
+  assert.equal(senderDenied, "This WhatsApp sender is not allowed to control this Orkestr chat.");
+  assert.doesNotMatch(senderDenied, /missing a required Orkestr capability|connector setup/i);
   assert.match(target, /not connected to a thread/i);
   assert.doesNotMatch(target, /safely handle|private connector|account identity/i);
   assert.match(pairing, /needs browser pairing approval/i);
@@ -5022,6 +5039,109 @@ test("whatsapp delivery mirrors every commentary update before final replies by 
   assertDebugFooter(calls[1].body.text, { messageType: "update" });
   assertDebugFooter(calls[2].body.text, { messageType: "update" });
   assertDebugFooter(calls[3].body.text, { messageType: "final" });
+});
+
+test("whatsapp thread binding suppresses updates and debug footer for one chat only", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-thread-update-suppression-"));
+  const env = externalBridgeEnv(home);
+  await writeConnectorConfig("whatsapp", {
+    bridgeMode: "external",
+    bridgeUrl: "http://wa.local",
+  }, env);
+  await createThread({
+    id: "thread-wa-updates-suppressed",
+    name: "WA Updates Suppressed Thread",
+    binding: {
+      connector: "whatsapp",
+      chatId: "chat-updates-suppressed",
+      mirrorToWhatsApp: true,
+      suppressWhatsAppUpdates: true,
+      suppressWhatsAppDebugFooter: true,
+    },
+  }, env);
+  await createThread({
+    id: "thread-wa-updates-normal",
+    name: "WA Updates Normal Thread",
+    binding: {
+      connector: "whatsapp",
+      chatId: "chat-updates-normal",
+      mirrorToWhatsApp: true,
+    },
+  }, env);
+
+  const suppressedParent = await appendThreadMessage("thread-wa-updates-suppressed", {
+    role: "user",
+    source: "whatsapp_inbound",
+    connector: "whatsapp",
+    chatId: "chat-updates-suppressed",
+    text: "suppressed task",
+  }, env);
+  const normalParent = await appendThreadMessage("thread-wa-updates-normal", {
+    role: "user",
+    source: "whatsapp_inbound",
+    connector: "whatsapp",
+    chatId: "chat-updates-normal",
+    text: "normal task",
+  }, env);
+  const suppressedProgress = await appendThreadMessage("thread-wa-updates-suppressed", {
+    role: "assistant",
+    source: "codex-rollout",
+    phase: "commentary",
+    state: "completed",
+    text: "Suppressed progress.",
+    parentMessageId: suppressedParent.id,
+    connector: "whatsapp",
+    chatId: "chat-updates-suppressed",
+  }, env);
+  await appendThreadMessage("thread-wa-updates-suppressed", {
+    role: "assistant",
+    source: "codex-rollout",
+    phase: "final_answer",
+    state: "completed",
+    text: "Suppressed final.",
+    parentMessageId: suppressedParent.id,
+    connector: "whatsapp",
+    chatId: "chat-updates-suppressed",
+  }, env);
+  await appendThreadMessage("thread-wa-updates-normal", {
+    role: "assistant",
+    source: "codex-rollout",
+    phase: "commentary",
+    state: "completed",
+    text: "Normal progress.",
+    parentMessageId: normalParent.id,
+    connector: "whatsapp",
+    chatId: "chat-updates-normal",
+  }, env);
+  await appendThreadMessage("thread-wa-updates-normal", {
+    role: "assistant",
+    source: "codex-rollout",
+    phase: "final_answer",
+    state: "completed",
+    text: "Normal final.",
+    parentMessageId: normalParent.id,
+    connector: "whatsapp",
+    chatId: "chat-updates-normal",
+  }, env);
+
+  const calls = [];
+  const delivery = await deliverWhatsAppReplies(env, async (url, options) => {
+    calls.push({ url, body: JSON.parse(options.body) });
+    return response({ ok: true, ids: [`sent-${calls.length}`] });
+  });
+
+  const deliveredTexts = calls.map((call) => stripDebugFooter(call.body.text));
+  assert.equal(delivery.delivered.length, 3);
+  assert.equal(delivery.skipped.find((item) => item.messageId === suppressedProgress.id)?.reason, "updates_suppressed");
+  assert.deepEqual(new Set(deliveredTexts), new Set([
+    "Suppressed final.",
+    "Normal progress.",
+    "Normal final.",
+  ]));
+  assert.ok(!deliveredTexts.includes("Suppressed progress."));
+  assert.equal(calls.find((call) => stripDebugFooter(call.body.text) === "Suppressed final.")?.body.text, "Suppressed final.");
+  assertDebugFooter(calls.find((call) => stripDebugFooter(call.body.text) === "Normal progress.")?.body.text, { messageType: "update" });
+  assertDebugFooter(calls.find((call) => stripDebugFooter(call.body.text) === "Normal final.")?.body.text, { messageType: "final" });
 });
 
 test("whatsapp delivery mirrors Codex approval prompts as updates", async () => {
@@ -5842,6 +5962,10 @@ test("whatsapp delivery appends compact debug footer for plan-mode Codex updates
     runtime: { progress: { codexMode: "plan" } },
     codexModel: "gpt-5.5",
     codexReasoningEffort: "xhigh",
+    codexRateLimits: {
+      primary: { used_percent: 12, window_minutes: 300 },
+      secondary: { used_percent: 34, window_minutes: 10080 },
+    },
   }, env);
   await writeConnectorConfig("whatsapp", {
     bridgeMode: "external",
@@ -5871,7 +5995,7 @@ test("whatsapp delivery appends compact debug footer for plan-mode Codex updates
   assert.equal(stripDebugFooter(calls[0].body.text), "Milestone: routing check started.");
   assert.match(
     calls[0].body.text,
-    /\n\ndbg: m:gpt-5\.5\/xh · mode:plan · msg:update · q:0 · load:\d+% · api:\d+% · help:\/help · switch:\/code$/,
+    /\n\ndbg: m:gpt-5\.5\/xh · mode:plan · msg:update · 5h:88% · wk:66% · q:0 · load:\d+% · api:\d+% · help:\/help · switch:\/code$/,
   );
 });
 
@@ -5884,6 +6008,14 @@ test("whatsapp delivery appends debug footer for app-server final replies", asyn
     runtimeKind: "codex-app-server",
     codexModel: "gpt-5.5",
     codexReasoningEffort: "xhigh",
+    executor: {
+      metadata: {
+        codexRateLimits: {
+          primary: { used_percent: 25, window_minutes: 300 },
+          secondary: { used_percent: 60, window_minutes: 10080 },
+        },
+      },
+    },
   }, env);
   await writeConnectorConfig("whatsapp", {
     bridgeMode: "external",
@@ -5911,7 +6043,82 @@ test("whatsapp delivery appends debug footer for app-server final replies", asyn
 
   assert.equal(delivery.delivered.length, 1);
   assert.equal(stripDebugFooter(calls[0].body.text), "Final from app server.");
-  assertDebugFooter(calls[0].body.text, { messageType: "final", model: "gpt-5.5/xh", runtime: "api" });
+  assertDebugFooter(calls[0].body.text, { messageType: "final", model: "gpt-5.5/xh", runtime: "api", fiveHour: "75%", weekly: "40%" });
+});
+
+test("whatsapp debug footer reads live Codex rate limits when thread metadata is stale", async (t) => {
+  try {
+    await execFileAsync("sqlite3", ["--version"]);
+  } catch {
+    t.skip("sqlite3 unavailable");
+    return;
+  }
+
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-debug-footer-live-limits-"));
+  const codexHome = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-codex-home-"));
+  const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-codex-workspace-"));
+  const codexThreadId = "22222222-2222-4222-8222-222222222222";
+  const rolloutPath = path.join(codexHome, "sessions", "rollout-live-limits.jsonl");
+  await fs.mkdir(path.dirname(rolloutPath), { recursive: true });
+  await fs.writeFile(rolloutPath, `${JSON.stringify({
+    timestamp: "2026-06-24T10:00:00.000Z",
+    type: "event_msg",
+    payload: {
+      type: "token_count",
+      info: {
+        total_token_usage: { input_tokens: 100, output_tokens: 20, total_tokens: 120 },
+        last_token_usage: { input_tokens: 80, output_tokens: 10, total_tokens: 90 },
+        model_context_window: 258400,
+      },
+      rate_limits: {
+        primary: { used_percent: 9, window_minutes: 300 },
+        secondary: { used_percent: 83, window_minutes: 10080 },
+        plan_type: "pro",
+      },
+    },
+  })}\n`, "utf8");
+  await execFileAsync("sqlite3", [path.join(codexHome, "state_5.sqlite"), [
+    "create table threads (id text primary key, rollout_path text, model text, reasoning_effort text, model_provider text, tokens_used integer, archived integer, cwd text, created_at integer, updated_at integer, created_at_ms integer, updated_at_ms integer);",
+    `insert into threads (id, rollout_path, model, reasoning_effort, model_provider, tokens_used, archived, cwd, created_at, updated_at, created_at_ms, updated_at_ms) values ('${codexThreadId}', '${rolloutPath.replaceAll("'", "''")}', 'gpt-5.5', 'high', 'openai', 90, 0, '${workspace.replaceAll("'", "''")}', 1, 1, 1, 1);`,
+  ].join("\n")]);
+
+  const env = externalBridgeEnv(home, { CODEX_HOME: codexHome });
+  await createThread({
+    id: "thread-wa-debug-footer-live-limits",
+    name: "WA Debug Footer Live Limits Thread",
+    cwd: workspace,
+    codexThreadId,
+    runtimeKind: "codex-app-server",
+    codexModel: "gpt-5.5",
+    codexReasoningEffort: "high",
+  }, env);
+  await writeConnectorConfig("whatsapp", {
+    bridgeMode: "external",
+    bridgeUrl: "http://wa.local",
+    threadRoutes: { "chat-debug-footer-live-limits": "thread-wa-debug-footer-live-limits" },
+  }, env);
+
+  const routed = await routeWhatsAppInbound({ eventId: "wa-debug-footer-live-limits-1", chatId: "chat-debug-footer-live-limits", text: "status?" }, env);
+  await appendThreadMessage("thread-wa-debug-footer-live-limits", {
+    role: "assistant",
+    source: "codex-app-server",
+    phase: "final_answer",
+    state: "completed",
+    text: "Final with live limits.",
+    parentMessageId: routed.message.id,
+    connector: "whatsapp",
+    chatId: "chat-debug-footer-live-limits",
+  }, env);
+
+  const calls = [];
+  const delivery = await deliverWhatsAppReplies(env, async (url, options) => {
+    calls.push({ url, body: JSON.parse(options.body) });
+    return response({ ok: true, ids: ["sent-debug-footer-live-limits"] });
+  });
+
+  assert.equal(delivery.delivered.length, 1);
+  assert.equal(stripDebugFooter(calls[0].body.text), "Final with live limits.");
+  assertDebugFooter(calls[0].body.text, { messageType: "final", model: "gpt-5.5/h", runtime: "api", fiveHour: "91%", weekly: "17%" });
 });
 
 test("whatsapp debug footer can be disabled", async () => {
