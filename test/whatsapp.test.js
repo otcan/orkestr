@@ -7693,6 +7693,55 @@ test("whatsapp delivery reports skipped local attachments in the outgoing text",
   assert.match(stripDebugFooter(calls[0].body.text), /Attachment not sent:\n- \/etc\/passwd: attachment path not allowed/);
 });
 
+test("whatsapp delivery does not report code links, routes, or directories as skipped attachments", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-reference-paths-"));
+  const env = externalBridgeEnv(home);
+  const workspace = path.join(home, "workspace");
+  await fs.mkdir(workspace, { recursive: true });
+  const filePath = path.join(workspace, "index.html");
+  await fs.writeFile(filePath, "<main></main>", "utf8");
+  await createThread({
+    id: "thread-wa-reference-paths",
+    name: "WA Reference Paths",
+    cwd: workspace,
+    workspace,
+  }, env);
+  await writeConnectorConfig("whatsapp", {
+    bridgeMode: "external",
+    bridgeUrl: "http://wa.local",
+    threadRoutes: { "chat-reference-paths": "thread-wa-reference-paths" },
+  }, env);
+
+  const routed = await routeWhatsAppInbound({ eventId: "wa-reference-paths-1", chatId: "chat-reference-paths", text: "what changed?" }, env);
+  await appendThreadMessage("thread-wa-reference-paths", {
+    role: "assistant",
+    source: "codex-rollout",
+    phase: "final_answer",
+    state: "completed",
+    text: [
+      `Updated [index.html](${filePath}:120).`,
+      `Workspace: ${workspace}`,
+      "Routes: /api/leads and /api/events",
+    ].join("\n"),
+    parentMessageId: routed.message.id,
+    connector: "whatsapp",
+    chatId: "chat-reference-paths",
+  }, env);
+
+  const calls = [];
+  const delivery = await deliverWhatsAppReplies(env, async (url, options) => {
+    calls.push({ url, body: JSON.parse(options.body) });
+    return response({ ok: true, ids: ["sent-reference-paths"] });
+  });
+  const visibleText = stripDebugFooter(calls[0].body.text);
+
+  assert.equal(delivery.delivered.length, 1);
+  assert.equal(calls[0].url.pathname, "/send-text");
+  assert.equal(calls[0].body.paths, undefined);
+  assert.match(visibleText, /\/api\/leads/);
+  assert.doesNotMatch(visibleText, /Attachment not sent:/);
+});
+
 test("whatsapp delivery exposes allowed local paths for user-owned chats while sending media", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-user-path-redaction-"));
   const env = await externalBridgeEnvWithAllowingSanitizer(home, { ORKESTR_ADMIN_USER_ID: "admin" });

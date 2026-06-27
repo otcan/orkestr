@@ -10,6 +10,7 @@ const explicitPathKeys = ["path", "saved_path", "filePath", "localPath"];
 const markdownLinkPattern = /!?\[[^\]\n]*]\(([^)\n]+)\)/g;
 const plainAbsolutePathPattern = /(^|[\s([{"'`])((?:\/[^\s()[\]{}<>"'`|]+)+)/g;
 const trailingPathPunctuationPattern = /[.,;:!?]+$/;
+const applicationRoutePrefixes = new Set(["api"]);
 const registeredSlashCommands = new Set([
   "approve",
   "code",
@@ -174,14 +175,31 @@ function decodePathCandidate(value = "") {
   }
 }
 
+function splitSourceLineReference(value = "") {
+  const text = String(value || "");
+  const withoutLine = text.match(/^(.*):\d+(?::\d+)?$/)?.[1] || "";
+  return withoutLine && path.extname(withoutLine)
+    ? { value: withoutLine, lineReference: true }
+    : { value: text, lineReference: false };
+}
+
+function applicationRouteCandidate(value = "") {
+  const match = decodePathCandidate(value).replace(trailingPathPunctuationPattern, "").match(/^\/([a-z][a-z0-9_-]*)(?:\/|$)/i);
+  return Boolean(match && applicationRoutePrefixes.has(match[1].toLowerCase()));
+}
+
 function resolveTextCandidate(candidate = "", thread = {}) {
   const decoded = decodePathCandidate(candidate).replace(trailingPathPunctuationPattern, "");
   if (!decoded) return "";
   if (registeredSlashCommandCandidate(decoded)) return "";
-  if (path.isAbsolute(decoded)) return path.resolve(decoded);
-  if (!decoded.startsWith("./") && !decoded.startsWith("../")) return "";
+  if (applicationRouteCandidate(decoded)) return "";
+  const parsed = splitSourceLineReference(decoded);
+  if (path.isAbsolute(parsed.value)) {
+    return { path: path.resolve(parsed.value), raw: decoded, lineReference: parsed.lineReference };
+  }
+  if (!parsed.value.startsWith("./") && !parsed.value.startsWith("../")) return "";
   const base = pickString(thread.cwd, thread.workspace, thread.repoPath, thread.worktreePath);
-  return base ? path.resolve(base, decoded) : "";
+  return base ? { path: path.resolve(base, parsed.value), raw: decoded, lineReference: parsed.lineReference } : "";
 }
 
 export function registeredSlashCommandCandidate(value = "") {
@@ -189,6 +207,14 @@ export function registeredSlashCommandCandidate(value = "") {
   const match = decoded.match(/^\/([a-z][a-z0-9_-]*)(?:$|[\s:.,!?])/i) || decoded.match(/^\/([a-z][a-z0-9_-]*)$/i);
   if (!match) return false;
   return registeredSlashCommands.has(match[1].toLowerCase());
+}
+
+function textCandidateSource(source = "") {
+  return source === "markdown_link" || source === "plain_path";
+}
+
+function shouldReportMissingCandidate(candidate = {}) {
+  return !textCandidateSource(candidate.source) || (!candidate.lineReference && Boolean(path.extname(candidate.path)));
 }
 
 function attachmentPath(attachment = {}) {
@@ -262,12 +288,12 @@ export function extractThreadAttachmentPathCandidates({ text = "", attachments =
 
   const source = String(text || "");
   for (const match of source.matchAll(markdownLinkPattern)) {
-    const filePath = resolveTextCandidate(match[1], thread);
-    if (filePath) candidates.push({ path: filePath, raw: match[1], source: "markdown_link" });
+    const candidate = resolveTextCandidate(match[1], thread);
+    if (candidate) candidates.push({ ...candidate, source: "markdown_link" });
   }
   for (const match of source.matchAll(plainAbsolutePathPattern)) {
-    const filePath = resolveTextCandidate(match[2], thread);
-    if (filePath) candidates.push({ path: filePath, raw: match[2], source: "plain_path" });
+    const candidate = resolveTextCandidate(match[2], thread);
+    if (candidate) candidates.push({ ...candidate, source: "plain_path" });
   }
   return candidates;
 }
@@ -372,11 +398,24 @@ export async function resolveThreadAttachments({ thread = {}, text = "", attachm
   const skipped = [];
   const seenPaths = new Set();
   for (const candidate of extractThreadAttachmentPathCandidates({ text, attachments, thread })) {
+    if (textCandidateSource(candidate.source) && candidate.lineReference) continue;
     let realPath = path.resolve(candidate.path);
     try {
       realPath = await fs.realpath(realPath);
     } catch {
-      skipped.push({ path: candidate.path, raw: candidate.raw || "", reason: "attachment_path_missing" });
+      if (shouldReportMissingCandidate(candidate)) {
+        skipped.push({ path: candidate.path, raw: candidate.raw || "", reason: "attachment_path_missing" });
+      }
+      continue;
+    }
+    let stats = null;
+    if (textCandidateSource(candidate.source)) {
+      stats = await fs.stat(realPath).catch(() => null);
+      if (!stats?.isFile()) {
+        continue;
+      }
+    }
+    if (seenPaths.has(realPath)) {
       continue;
     }
     const policy = classifyThreadAttachmentPath(realPath, { thread, env });
@@ -384,9 +423,8 @@ export async function resolveThreadAttachments({ thread = {}, text = "", attachm
       skipped.push({ path: realPath, raw: candidate.raw || "", reason: policy.reason });
       continue;
     }
-    if (seenPaths.has(realPath)) continue;
     seenPaths.add(realPath);
-    const stats = await fs.stat(realPath).catch(() => null);
+    stats ||= await fs.stat(realPath).catch(() => null);
     if (!stats || !stats.isFile()) {
       skipped.push({ path: realPath, raw: candidate.raw || "", reason: "attachment_path_not_file" });
       continue;

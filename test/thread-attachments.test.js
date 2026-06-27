@@ -105,6 +105,37 @@ test("thread attachment path extraction ignores registered slash commands", asyn
   assert.deepEqual(candidates.map((candidate) => candidate.raw), [filePath]);
 });
 
+test("thread attachment resolution ignores code references, app routes, and directory mentions", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-attachment-references-"));
+  const env = { ORKESTR_HOME: home };
+  const workspace = path.join(home, "workspace");
+  await fs.mkdir(workspace, { recursive: true });
+  const filePath = path.join(workspace, "index.html");
+  const missingImagePath = path.join(workspace, "missing-screenshot.png");
+  await fs.writeFile(filePath, "<main></main>", "utf8");
+  const thread = { id: "reference-thread", cwd: workspace };
+  const text = [
+    `Changed [index.html](${filePath}:120).`,
+    `Workspace: ${workspace}`,
+    "Routes: /api/leads and /api/events",
+    `Missing screenshot: ${missingImagePath}`,
+  ].join("\n");
+
+  const candidates = extractThreadAttachmentPathCandidates({ thread, text, env });
+  const lineReference = candidates.find((candidate) => candidate.raw === `${filePath}:120`);
+  assert.equal(lineReference?.path, filePath);
+  assert.equal(lineReference?.lineReference, true);
+  assert.equal(candidates.some((candidate) => candidate.raw === "/api/leads"), false);
+
+  const resolved = await resolveThreadAttachments({ thread, text, env });
+  assert.deepEqual(resolved.attachments, []);
+  assert.deepEqual(resolved.skipped, [{
+    path: missingImagePath,
+    raw: missingImagePath,
+    reason: "attachment_path_missing",
+  }]);
+});
+
 test("thread attachment path redaction is opt-in and role-aware", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-attachment-redaction-"));
   const env = { ORKESTR_HOME: home, ORKESTR_ADMIN_USER_ID: "admin" };
@@ -115,7 +146,7 @@ test("thread attachment path redaction is opt-in and role-aware", async () => {
   const secretPath = path.join(paths.secrets, "token.txt");
   const adminThread = { id: "admin-thread", cwd: workspace, ownerUserId: "admin" };
   const userThread = { id: "user-thread", cwd: workspace, ownerUserId: "alice" };
-  const text = `Open ${allowedPath}; secret ${secretPath}; reply /safe-reset, /codex, /connect google, or /help.`;
+  const text = `Open ${allowedPath}; secret ${secretPath}; route /api/leads; reply /safe-reset, /codex, /connect google, or /help.`;
 
   assert.equal(classifyThreadAttachmentPathRedaction(allowedPath, { thread: adminThread, env }).category, "ordinary_allowed");
   assert.equal(classifyThreadAttachmentPathRedaction(secretPath, { thread: adminThread, env }).category, "sensitive_denied");
@@ -123,21 +154,25 @@ test("thread attachment path redaction is opt-in and role-aware", async () => {
   const adminText = redactDeniedThreadAttachmentPaths(text, { thread: adminThread, env });
   assert.match(adminText, new RegExp(allowedPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   assert.match(adminText, new RegExp(secretPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.match(adminText, /route \/api\/leads/);
   assert.match(adminText, /reply \/safe-reset, \/codex, \/connect google, or \/help/);
 
   const userText = redactDeniedThreadAttachmentPaths(text, { thread: userThread, env });
   assert.match(userText, new RegExp(allowedPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   assert.match(userText, new RegExp(secretPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.match(userText, /route \/api\/leads/);
   assert.doesNotMatch(userText, /\[local file path omitted]/);
 
   const redactedAdminText = redactDeniedThreadAttachmentPaths(text, { thread: adminThread, env: redactingEnv });
   assert.match(redactedAdminText, new RegExp(allowedPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   assert.doesNotMatch(redactedAdminText, new RegExp(secretPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.match(redactedAdminText, /route \/api\/leads/);
   assert.match(redactedAdminText, /reply \/safe-reset, \/codex, \/connect google, or \/help/);
 
   const redactedUserText = redactDeniedThreadAttachmentPaths(text, { thread: userThread, env: redactingEnv });
   assert.doesNotMatch(redactedUserText, new RegExp(allowedPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   assert.doesNotMatch(redactedUserText, new RegExp(secretPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.match(redactedUserText, /route \/api\/leads/);
   assert.match(redactedUserText, /reply \/safe-reset, \/codex, \/connect google, or \/help/);
   assert.equal((redactedUserText.match(/\[local file path omitted]/g) || []).length, 2);
 });
