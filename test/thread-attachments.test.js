@@ -62,6 +62,33 @@ test("thread attachment policy denies secrets and arbitrary paths by default", a
   assert.equal(resolved.skipped.some((item) => item.reason === "attachment_path_forbidden"), true);
 });
 
+test("thread attachment policy allows temp artifacts for admin-owned threads only", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-attachment-admin-tmp-"));
+  const env = { ORKESTR_HOME: home, ORKESTR_ADMIN_USER_ID: "admin" };
+  const paths = dataPaths(env);
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-screenshot-"));
+  const screenshotPath = path.join(tmpDir, "portal-mobile.png");
+  await fs.writeFile(screenshotPath, "png", "utf8");
+  await fs.mkdir(paths.secrets, { recursive: true });
+  const secretPath = path.join(paths.secrets, "token.txt");
+  await fs.writeFile(secretPath, "secret", "utf8");
+  const adminThread = { id: "admin-thread", ownerUserId: "admin" };
+  const userThread = { id: "user-thread", ownerUserId: "alice" };
+
+  assert.equal(classifyThreadAttachmentPath(screenshotPath, { thread: adminThread, env }).ok, true);
+  assert.equal(classifyThreadAttachmentPath(screenshotPath, { thread: userThread, env }).ok, false);
+  assert.equal(classifyThreadAttachmentPath(secretPath, { thread: adminThread, env }).ok, false);
+
+  const resolved = await resolveThreadAttachments({
+    thread: adminThread,
+    text: `Screenshot: [mobile](${screenshotPath})`,
+    env,
+  });
+  assert.equal(resolved.attachments.length, 1);
+  assert.equal(resolved.attachments[0].filename, "portal-mobile.png");
+  assert.equal(resolved.attachments[0].mimetype, "image/png");
+});
+
 test("thread attachment path extraction ignores registered slash commands", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-attachment-commands-"));
   const env = { ORKESTR_HOME: home };

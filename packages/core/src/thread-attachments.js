@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { isAdminPrincipal, resourceOwnerUserId } from "./policy.js";
 import { adminUserId, normalizeUserId } from "./users.js";
@@ -92,6 +93,26 @@ function addAllowedRoot(roots, value) {
   if (!roots.includes(root)) roots.push(root);
 }
 
+function configuredAttachmentAllowedRoots(env = process.env) {
+  const configured = pickString(
+    env.ORKESTR_THREAD_ATTACHMENT_ALLOWED_ROOTS,
+    env.ORKESTR_ADMIN_THREAD_ATTACHMENT_ALLOWED_ROOTS,
+  );
+  const defaults = [
+    os.tmpdir(),
+    path.sep === "/" ? "/var/tmp" : "",
+  ];
+  const extra = configured
+    .split(/[,\n]/g)
+    .map((item) => item.trim())
+    .filter(Boolean);
+  return [...defaults, ...extra];
+}
+
+function adminOwnedThread(thread = {}, env = process.env) {
+  return normalizeUserId(resourceOwnerUserId(thread, env)) === normalizeUserId(env.ORKESTR_ADMIN_USER_ID || adminUserId);
+}
+
 function threadAttachmentRoots(thread = {}, env = process.env) {
   const paths = dataPaths(env);
   const allowed = [];
@@ -105,6 +126,9 @@ function threadAttachmentRoots(thread = {}, env = process.env) {
   addRoot(allowed, path.join(home, "whatsapp-bridge", "inbound-media"));
   for (const key of ["cwd", "workspace", "repoPath", "worktreePath"]) {
     addAllowedRoot(allowed, thread[key]);
+  }
+  if (adminOwnedThread(thread, env)) {
+    for (const root of configuredAttachmentAllowedRoots(env)) addAllowedRoot(allowed, root);
   }
 
   addRoot(denied, paths.secrets);

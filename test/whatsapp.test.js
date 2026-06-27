@@ -7621,6 +7621,78 @@ test("whatsapp delivery sends allowed local paths as media attachments and does 
   assert.equal(storedReply.attachments[0].filename, "report.txt");
 });
 
+test("whatsapp delivery sends admin temp screenshots as media attachments", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-tmp-screenshot-"));
+  const env = externalBridgeEnv(home, { ORKESTR_ADMIN_USER_ID: "admin" });
+  const screenshotDir = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-screenshot-"));
+  const screenshotPath = path.join(screenshotDir, "portal-mobile.png");
+  await fs.writeFile(screenshotPath, "png payload", "utf8");
+  await createThread({ id: "thread-wa-tmp-screenshot", ownerUserId: "admin", name: "WA Temp Screenshot" }, env);
+  await writeConnectorConfig("whatsapp", {
+    bridgeMode: "external",
+    bridgeUrl: "http://wa.local",
+    threadRoutes: { "chat-tmp-screenshot": "thread-wa-tmp-screenshot" },
+  }, env);
+
+  const routed = await routeWhatsAppInbound({ eventId: "wa-tmp-screenshot-1", chatId: "chat-tmp-screenshot", text: "send screenshot" }, env);
+  const reply = await appendThreadMessage("thread-wa-tmp-screenshot", {
+    role: "assistant",
+    source: "codex-rollout",
+    phase: "final_answer",
+    state: "completed",
+    text: `Screenshot: [mobile](${screenshotPath})`,
+    parentMessageId: routed.message.id,
+    connector: "whatsapp",
+    chatId: "chat-tmp-screenshot",
+  }, env);
+
+  const calls = [];
+  const delivery = await deliverWhatsAppReplies(env, async (url, options) => {
+    calls.push({ url, body: JSON.parse(options.body) });
+    return response({ ok: true, ids: ["sent-screenshot"] });
+  });
+  const storedReply = (await listThreadMessages("thread-wa-tmp-screenshot", env)).find((message) => message.id === reply.id);
+
+  assert.equal(delivery.delivered.length, 1);
+  assert.equal(calls[0].url.pathname, "/send-media");
+  assert.deepEqual(calls[0].body.paths, [screenshotPath]);
+  assert.equal(delivery.delivered[0].attachments[0].filename, "portal-mobile.png");
+  assert.equal(storedReply.attachments[0].mimetype, "image/png");
+});
+
+test("whatsapp delivery reports skipped local attachments in the outgoing text", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-skipped-attachment-"));
+  const env = externalBridgeEnv(home);
+  await createThread({ id: "thread-wa-skipped-attachment", name: "WA Skipped Attachment" }, env);
+  await writeConnectorConfig("whatsapp", {
+    bridgeMode: "external",
+    bridgeUrl: "http://wa.local",
+    threadRoutes: { "chat-skipped-attachment": "thread-wa-skipped-attachment" },
+  }, env);
+
+  const routed = await routeWhatsAppInbound({ eventId: "wa-skipped-attachment-1", chatId: "chat-skipped-attachment", text: "send report" }, env);
+  await appendThreadMessage("thread-wa-skipped-attachment", {
+    role: "assistant",
+    source: "codex-rollout",
+    phase: "final_answer",
+    state: "completed",
+    text: "Generated report: /etc/passwd",
+    parentMessageId: routed.message.id,
+    connector: "whatsapp",
+    chatId: "chat-skipped-attachment",
+  }, env);
+
+  const calls = [];
+  const delivery = await deliverWhatsAppReplies(env, async (url, options) => {
+    calls.push({ url, body: JSON.parse(options.body) });
+    return response({ ok: true, ids: ["sent-skipped-note"] });
+  });
+
+  assert.equal(delivery.delivered.length, 1);
+  assert.equal(calls[0].url.pathname, "/send-text");
+  assert.match(stripDebugFooter(calls[0].body.text), /Attachment not sent:\n- \/etc\/passwd: attachment path not allowed/);
+});
+
 test("whatsapp delivery exposes allowed local paths for user-owned chats while sending media", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-user-path-redaction-"));
   const env = await externalBridgeEnvWithAllowingSanitizer(home, { ORKESTR_ADMIN_USER_ID: "admin" });

@@ -352,6 +352,32 @@ function appendRemoteAttachmentFailureNotes(text = "", skipped = []) {
   ].filter((line, index) => index !== 0 || line).join("\n");
 }
 
+function localAttachmentFailureReason(reason = "") {
+  return String(reason || "attachment_unavailable").replace(/_/g, " ");
+}
+
+function appendLocalAttachmentFailureNotes(text = "", skipped = []) {
+  const seen = new Set();
+  const failures = (Array.isArray(skipped) ? skipped : [])
+    .map((item) => {
+      const filePath = pickString(item.raw, item.path);
+      if (!filePath) return "";
+      const reason = localAttachmentFailureReason(item.reason);
+      const key = `${filePath}\n${reason}`;
+      if (seen.has(key)) return "";
+      seen.add(key);
+      return `${filePath}: ${reason}`;
+    })
+    .filter(Boolean);
+  if (!failures.length) return text;
+  return [
+    String(text || "").trim(),
+    "",
+    "Attachment not sent:",
+    ...failures.map((line) => `- ${line}`),
+  ].filter((line, index) => index !== 0 || line).join("\n");
+}
+
 async function externalBridgeAccounts(bridgeUrl, healthPayload, fetchImpl, headers = {}, env = process.env) {
   if (Array.isArray(healthPayload?.accounts)) return healthPayload.accounts.map(publicBridgeAccount);
   try {
@@ -5123,7 +5149,8 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
         env,
       });
       const attachments = resolvedOutboundAttachments.attachments;
-      const formattedText = formatWhatsAppOutboundText(redactDeniedThreadAttachmentPaths(preparedOutbound.text, {
+      const outboundText = appendLocalAttachmentFailureNotes(preparedOutbound.text, resolvedOutboundAttachments.skipped);
+      const formattedText = formatWhatsAppOutboundText(redactDeniedThreadAttachmentPaths(outboundText, {
         thread,
         principal: await principalForThread(thread || {}, env),
         env,
