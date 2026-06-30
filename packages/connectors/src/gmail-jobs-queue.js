@@ -1,3 +1,5 @@
+import { spawn } from "node:child_process";
+import fs from "node:fs/promises";
 import { appendEvent } from "../../storage/src/store.js";
 import {
   processJobCandidateMessages,
@@ -13,6 +15,7 @@ const hourMs = 60 * minuteMs;
 const defaultPollIntervalMs = 10 * minuteMs;
 const defaultDigestIntervalMs = 2 * hourMs;
 const defaultMaxItemsPerRun = 5;
+const defaultGogClient = "ops-health-gmail";
 const defaultQuery = [
   "newer_than:2d",
   "(job OR jobs OR role OR hiring OR recruiter OR opportunity OR LinkedIn OR StepStone OR Wellfound OR 9am)",
@@ -75,7 +78,124 @@ function gmailScopeOptions(principal = null, ownerUserId = "") {
     : { principal };
 }
 
-export async function collectGmailJobMessages(input = {}, env = process.env, fetchImpl = fetch, options = {}) {
+function commandVector(input = {}, env = process.env) {
+  const rawJson = clean(input.gogCommandJson || env.ORKESTR_JOBS_GOG_COMMAND_JSON || env.ORKESTR_GOG_COMMAND_JSON);
+  if (rawJson) {
+    try {
+      const parsed = JSON.parse(rawJson);
+      if (Array.isArray(parsed) && parsed.length) return parsed.map(clean).filter(Boolean);
+    } catch {
+      return ["gog"];
+    }
+  }
+  return [clean(input.gogCommand || env.ORKESTR_JOBS_GOG_COMMAND || env.ORKESTR_GOG_COMMAND) || "gog"];
+}
+
+function parseEnvValue(raw = "") {
+  const text = String(raw || "").trim();
+  if ((text.startsWith('"') && text.endsWith('"')) || (text.startsWith("'") && text.endsWith("'"))) return text.slice(1, -1);
+  return text;
+}
+
+async function envValueFromFile(filePath = "", name = "") {
+  if (!filePath || !name) return "";
+  const raw = await fs.readFile(filePath, "utf8").catch(() => "");
+  for (const line of raw.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    const match = trimmed.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
+    if (match?.[1] === name) return parseEnvValue(match[2]);
+  }
+  return "";
+}
+
+async function gogEnv(input = {}, env = process.env) {
+  const nextEnv = { ...process.env, ...env };
+  if (!nextEnv.GOG_KEYRING_PASSWORD) {
+    const envFile = clean(input.gogEnvFile || env.ORKESTR_JOBS_GOG_ENV_FILE || env.ORKESTR_GOG_ENV_FILE);
+    const password = await envValueFromFile(envFile, "GOG_KEYRING_PASSWORD");
+    if (password) nextEnv.GOG_KEYRING_PASSWORD = password;
+  }
+  return nextEnv;
+}
+
+async function runJsonCommand(command = [], args = [], env = process.env, input = {}) {
+  const runAsUser = clean(input.gogRunAsUser || env.ORKESTR_JOBS_GOG_RUN_AS_USER || env.ORKESTR_GOG_RUN_AS_USER);
+  const base = runAsUser && process.getuid?.() === 0
+    ? ["sudo", "--preserve-env=GOG_KEYRING_PASSWORD", "-u", runAsUser, ...command]
+    : command;
+  return new Promise((resolve, reject) => {
+    const child = spawn(base[0], [...base.slice(1), ...args], { env, stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    const timer = setTimeout(() => {
+      child.kill("SIGTERM");
+      reject(Object.assign(new Error("gog_gmail_timeout"), { statusCode: 504 }));
+    }, Math.max(1000, Number(input.gogTimeoutMs || 60_000) || 60_000));
+    child.stdout.on("data", (chunk) => { stdout += chunk; });
+    child.stderr.on("data", (chunk) => { stderr += chunk; });
+    child.on("error", reject);
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      if (code !== 0) reject(Object.assign(new Error(clean(stderr) || `gog_gmail_exit_${code}`), { statusCode: 502 }));
+      else {
+        try {
+          resolve(JSON.parse(stdout));
+        } catch {
+          reject(Object.assign(new Error("gog_gmail_invalid_json"), { statusCode: 502 }));
+        }
+      }
+    });
+  });
+}
+
+function header(headers = {}, key = "") {
+  return clean(headers[key] || headers[key.toLowerCase()] || headers[key.toUpperCase()]);
+}
+
+function normalizeGogMessage(summary = {}, detail = {}) {
+  const headers = detail.headers && typeof detail.headers === "object" ? detail.headers : {};
+  const id = clean(summary.id || detail.id);
+  return {
+    id,
+    threadId: clean(summary.threadId || detail.threadId || id),
+    subject: clean(summary.subject || header(headers, "subject")),
+    from: clean(summary.from || header(headers, "from")),
+    to: clean(summary.to || header(headers, "to")),
+    date: clean(summary.date || header(headers, "date")),
+    snippet: clean(summary.snippet || detail.message).slice(0, 1000),
+    text: clean(detail.body || summary.snippet || detail.message).slice(0, 20_000),
+  };
+}
+
+async function collectGogJobMessages(input = {}, env = process.env) {
+  const maxResults = intValue(input.maxResults ?? input.maxItemsPerRun ?? env.ORKESTR_JOBS_MAX_ITEMS_PER_RUN, defaultMaxItemsPerRun, 1, 20);
+  const query = jobsQuery(input, env);
+  const command = commandVector(input, env);
+  const account = clean(input.gogAccount || input.account || env.ORKESTR_JOBS_GOG_ACCOUNT || env.GOG_ACCOUNT);
+  const client = clean(input.gogClient || env.ORKESTR_JOBS_GOG_CLIENT || env.GOG_CLIENT) || defaultGogClient;
+  const baseArgs = [...(account ? ["--account", account] : []), "--client", client, "--json", "--no-input"];
+  const commandEnv = await gogEnv(input, env);
+  const listed = await runJsonCommand(command, [...baseArgs, "gmail", "messages", "search", query, "--max", String(maxResults)], commandEnv, input);
+  const summaries = Array.isArray(listed?.messages) ? listed.messages : Array.isArray(listed) ? listed : [];
+  const messages = [];
+  for (const summary of summaries.slice(0, maxResults)) {
+    if (!summary?.id) continue;
+    const detail = await runJsonCommand(command, [...baseArgs, "gmail", "get", String(summary.id), "--format", "full"], commandEnv, input);
+    messages.push(normalizeGogMessage(summary, detail));
+  }
+  return {
+    ownerUserId: ownerUserIdFor(input, null, env),
+    source: "gog",
+    query,
+    maxResults,
+    resultSizeEstimate: Number(listed?.resultSizeEstimate || messages.length) || messages.length,
+    nextPageToken: clean(listed?.nextPageToken),
+    messages,
+  };
+}
+
+async function collectOAuthJobMessages(input = {}, env = process.env, fetchImpl = fetch, options = {}) {
   const ownerUserId = ownerUserIdFor(input, options.principal || null, env);
   const maxResults = intValue(input.maxResults ?? input.maxItemsPerRun ?? env.ORKESTR_JOBS_MAX_ITEMS_PER_RUN, defaultMaxItemsPerRun, 1, 20);
   const query = jobsQuery(input, env);
@@ -93,6 +213,19 @@ export async function collectGmailJobMessages(input = {}, env = process.env, fet
     nextPageToken: listed.nextPageToken || "",
     messages,
   };
+}
+
+export async function collectGmailJobMessages(input = {}, env = process.env, fetchImpl = fetch, options = {}) {
+  const source = lower(input.gmailSource || env.ORKESTR_JOBS_GMAIL_SOURCE || env.ORKESTR_GMAIL_SOURCE);
+  if (source === "gog" || source === "host-native") return collectGogJobMessages(input, env);
+  try {
+    return await collectOAuthJobMessages(input, env, fetchImpl, options);
+  } catch (error) {
+    const fallbackEnabled = input.gogFallback !== false && env.ORKESTR_JOBS_GOG_FALLBACK !== "0";
+    if (source === "oauth" || !fallbackEnabled) throw error;
+    const collected = await collectGogJobMessages(input, env);
+    return { ...collected, oauthError: clean(error?.message || error).slice(0, 500) };
+  }
 }
 
 export async function runGmailJobsPoll(input = {}, env = process.env, fetchImpl = fetch, options = {}) {

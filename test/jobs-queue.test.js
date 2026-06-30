@@ -161,3 +161,47 @@ test("Gmail jobs poll dedupes, classifies, and posts fits as notifications", asy
   assert.equal(whatsappCalls[0].body.to, "chat-jobs");
   assert.match(whatsappCalls[0].body.text, /AI Agent Lead at Acme/);
 });
+
+test("Gmail jobs poll supports host-native gog collection", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-jobs-gog-"));
+  const fakeGog = path.join(home, "fake-gog.mjs");
+  await fs.writeFile(fakeGog, [
+    "const args = process.argv.slice(2);",
+    "if (args.includes('search')) {",
+    "  console.log(JSON.stringify({ messages: [{ id: 'gog-job-1', threadId: 'gog-thread-1', subject: 'Remote Platform Lead at GogCo', from: 'jobs@gogco.example', date: '2026-06-30 12:00', snippet: 'AI remote platform role' }] }));",
+    "} else if (args.includes('get')) {",
+    "  console.log(JSON.stringify({ headers: { subject: 'Remote Platform Lead at GogCo', from: 'jobs@gogco.example', date: 'Tue, 30 Jun 2026 12:00:00 +0000', to: 'me@example.com' }, body: 'Remote AI platform job https://boards.example/gogco/platform?utm_source=gmail' }));",
+    "} else {",
+    "  process.exit(2);",
+    "}",
+    "",
+  ].join("\n"), "utf8");
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_JOBS_GMAIL_SOURCE: "gog",
+    ORKESTR_JOBS_GOG_COMMAND_JSON: JSON.stringify([process.execPath, fakeGog]),
+  };
+  await createThread({ id: "gog-jobs-thread", name: "Gog Jobs" }, env);
+
+  const result = await runGmailJobsPoll({
+    threadId: "gog-jobs-thread",
+    query: "newer_than:1d job",
+    maxResults: 1,
+  }, env, fetch, {
+    classifyImpl: () => ({
+      fit_score: 9,
+      role: "Remote Platform Lead",
+      company: "GogCo",
+      reason: "Strong platform and AI match",
+    }),
+  });
+  const queue = await listJobQueueForPrincipal(adminPrincipal(), env);
+  const messages = await listThreadMessages("gog-jobs-thread", env);
+
+  assert.equal(result.collected, 1);
+  assert.equal(result.presentation.presented.length, 1);
+  assert.equal(queue.counts.presented, 1);
+  assert.match(messages[0].text, /Remote Platform Lead at GogCo/);
+  assert.match(messages[0].text, /https:\/\/boards\.example\/gogco\/platform/);
+  assert.doesNotMatch(messages[0].text, /utm_source/);
+});
