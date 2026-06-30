@@ -10,7 +10,9 @@ import { createThread, listThreadMessages } from "../packages/core/src/threads.j
 import { visibleThreadMessages } from "../packages/core/src/thread-message-visibility.js";
 import { exchangeGmailCode } from "../packages/connectors/src/gmail.js";
 import { deliverWhatsAppReplies } from "../packages/connectors/src/whatsapp.js";
+import { dataPaths } from "../packages/storage/src/paths.js";
 import { writeConnectorConfig } from "../packages/storage/src/config.js";
+import { writeJson } from "../packages/storage/src/store.js";
 
 function jsonResponse(payload, ok = true, status = 200) {
   return {
@@ -58,6 +60,10 @@ test("Gmail jobs poll dedupes, classifies, and posts fits as notifications", asy
     redirectUri: "http://localhost/callback",
   }, env);
   await writeConnectorConfig("whatsapp", { bridgeMode: "external", bridgeUrl: "http://wa.local" }, env);
+  await writeJson(dataPaths(env).whatsapp, {
+    outboundMirrorCursors: [{ messageSetKey: "thread||jobs-thread", cursor: 1 }],
+    outboundDeliveries: [],
+  });
   await exchangeGmailCode("code-123", env, async () =>
     jsonResponse({
       access_token: "jobs-gmail-access",

@@ -163,6 +163,16 @@ function liveRecoveryWindowAllowed(message = {}, env = process.env) {
   return Boolean(messageMs && Date.now() - messageMs <= windowMs);
 }
 
+function freshOutOfBandNotification({ message = {}, thread = null, kind = "", env = process.env } = {}) {
+  if (clean(message.phase).toLowerCase() !== "notification") return false;
+  if (!pickString(message.chatId)) return false;
+  if (!boundThreadOrigin({ message, thread, kind })) return false;
+  const windowMs = whatsappOutboundIntentBootstrapWindowMs(env);
+  if (!windowMs) return false;
+  const messageMs = dateMs(message.createdAt || message.timestamp);
+  return Boolean(messageMs && Date.now() - messageMs <= windowMs);
+}
+
 export function canRecoverLiveWhatsAppOutboundIntent({
   state = null,
   messageSetKey = "",
@@ -218,6 +228,9 @@ export function canCreateWhatsAppOutboundIntent({
       env,
     })) {
       return { ok: true, reason: "live_bound_recovery" };
+    }
+    if (freshOutOfBandNotification({ message, thread, kind, env })) {
+      return { ok: true, reason: "fresh_notification_after_cursor" };
     }
     return { ok: false, reason: "missing_outbound_intent" };
   }
