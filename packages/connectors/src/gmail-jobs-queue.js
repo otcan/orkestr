@@ -141,6 +141,20 @@ async function passwdRecord(username = "") {
   return null;
 }
 
+async function userRuntimeDir(uid) {
+  const runtimeDir = `/run/user/${uid}`;
+  const stat = await fs.stat(runtimeDir).catch(() => null);
+  return stat?.isDirectory() ? runtimeDir : "";
+}
+
+async function userDbusAddress(uid) {
+  const runtimeDir = await userRuntimeDir(uid);
+  if (!runtimeDir) return "disabled:";
+  const busPath = `${runtimeDir}/bus`;
+  const stat = await fs.stat(busPath).catch(() => null);
+  return stat?.isSocket() ? `unix:path=${busPath}` : "disabled:";
+}
+
 async function runJsonCommand(command = [], args = [], env = process.env, input = {}) {
   const runAsUser = clean(input.gogRunAsUser || env.ORKESTR_JOBS_GOG_RUN_AS_USER || env.ORKESTR_GOG_RUN_AS_USER);
   const childEnv = { ...env };
@@ -154,6 +168,12 @@ async function runJsonCommand(command = [], args = [], env = process.env, input 
     childEnv.LOGNAME = record.username;
     if (record.home) childEnv.HOME = record.home;
     if (record.shell) childEnv.SHELL = record.shell;
+    if (!clean(childEnv.XDG_RUNTIME_DIR)) {
+      const runtimeDir = await userRuntimeDir(record.uid);
+      if (runtimeDir) childEnv.XDG_RUNTIME_DIR = runtimeDir;
+    }
+    if (!clean(childEnv.DBUS_SESSION_BUS_ADDRESS)) childEnv.DBUS_SESSION_BUS_ADDRESS = await userDbusAddress(record.uid);
+    if (!clean(childEnv.NO_AT_BRIDGE)) childEnv.NO_AT_BRIDGE = "1";
   }
   return new Promise((resolve, reject) => {
     const child = spawn(command[0], [...command.slice(1), ...args], spawnOptions);
