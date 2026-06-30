@@ -105,6 +105,71 @@ test("api session binding persists and mirrors assistant output through the boun
   assert.match(sendCall.body.text, /router skipped the outbound intent/);
 });
 
+test("api session assistant output delivers after the WhatsApp mirror cursor advanced", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-session-cursor-"));
+  const repo = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-session-cursor-repo-"));
+  const runtimeEnv = env(home);
+  await writeConnectorConfig("whatsapp", { bridgeMode: "external", bridgeUrl: "http://wa.local" }, runtimeEnv);
+  await createThread({
+    id: "api-session-cursor-thread",
+    name: "API Session Cursor Thread",
+    cwd: repo,
+    repoPath: repo,
+    binding: {
+      connector: "whatsapp",
+      chatId: "chat-cursor",
+      responderAccountId: "responder-cursor",
+      mirrorToWhatsApp: true,
+    },
+  }, runtimeEnv);
+  await bindApiSessionToThread({
+    apiSessionId: "api-session-cursor",
+    threadId: "api-session-cursor-thread",
+    cwd: repo,
+  }, runtimeEnv);
+  await fs.writeFile(path.join(home, "whatsapp.json"), JSON.stringify({
+    inboundEvents: [],
+    outboundDeliveries: [],
+    outboundDeliveryClaims: [],
+    outboundIntents: [],
+    outboundMirrorCursors: [{
+      messageSetKey: "thread||api-session-cursor-thread",
+      kind: "thread",
+      threadId: "api-session-cursor-thread",
+      cursor: 999,
+      updatedAt: new Date().toISOString(),
+    }],
+  }, null, 2), "utf8");
+
+  const assistant = await appendApiSessionMessage({
+    apiSessionId: "api-session-cursor",
+    role: "assistant",
+    phase: "final_answer",
+    text: "This final answer must still reach WhatsApp.",
+  }, runtimeEnv);
+
+  const calls = [];
+  const delivery = await deliverWhatsAppReplies(runtimeEnv, async (url, options = {}) => {
+    calls.push({
+      url: String(url),
+      body: JSON.parse(String(options.body || "{}")),
+    });
+    return response({ ok: true, ids: ["sent-cursor"] });
+  });
+  const sendCalls = calls.filter((call) => call.url.endsWith("/send-text"));
+  const state = JSON.parse(await fs.readFile(path.join(home, "whatsapp.json"), "utf8"));
+  const intent = state.outboundIntents.find((item) => item.messageId === assistant.message.id);
+
+  assert.equal(assistant.deliveryExpected, true);
+  assert.equal(delivery.delivered.length, 1);
+  assert.equal(delivery.delivered[0].messageId, assistant.message.id);
+  assert.equal(sendCalls.length, 1);
+  assert.equal(sendCalls[0].body.to, "chat-cursor");
+  assert.match(sendCalls[0].body.text, /must still reach WhatsApp/);
+  assert.equal(intent.status, "delivered");
+  assert.equal(intent.createdReason, "live_bound_recovery");
+});
+
 test("watcher alerts create the configured watcher thread, redact secrets, and dedupe repeats", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-watcher-alert-"));
   const runtimeEnv = env(home, {

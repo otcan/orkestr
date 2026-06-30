@@ -73,6 +73,7 @@ import {
   outboundMirrorCursorMap,
   outboundMirrorMessageCursor,
   outboundMirrorMessageSetKey,
+  whatsappLiveOutputRecoveryWindowMs,
 } from "./whatsapp-outbound-intents.js";
 import {
   codexAssistantSource,
@@ -3908,19 +3909,47 @@ function whatsappMirrorInitialTailLimit(env = process.env) {
   return positiveInteger(env.ORKESTR_WHATSAPP_OUTBOUND_SCAN_TAIL_LIMIT, 250, 1);
 }
 
+function recentApiSessionWhatsAppReply(message = {}, env = process.env) {
+  if (pickString(message?.source) !== "api-session") return false;
+  if (pickString(message?.role).toLowerCase() !== "assistant") return false;
+  if (pickString(message?.state).toLowerCase() !== "completed") return false;
+  if (pickString(message?.connector).toLowerCase() !== "whatsapp") return false;
+  if (!pickString(message?.chatId)) return false;
+  const windowMs = whatsappLiveOutputRecoveryWindowMs(env);
+  if (!windowMs) return false;
+  const createdMs = messageTimeMs(message);
+  return Boolean(createdMs && Date.now() - createdMs <= windowMs);
+}
+
+function mergeCursorScanMessages(messages = [], extras = []) {
+  const merged = [];
+  const seen = new Set();
+  for (const message of [...messages, ...extras]) {
+    const id = pickString(message?.id);
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    merged.push(message);
+  }
+  return merged.sort((left, right) =>
+    outboundMirrorMessageCursor(left, 0) - outboundMirrorMessageCursor(right, 0)
+  );
+}
+
 function messagesAfterMirrorCursor(messages = [], cursor = 0, env = process.env) {
   const list = Array.isArray(messages) ? messages : [];
   const numericCursor = Math.max(0, Number(cursor || 0) || 0);
   let start = Math.max(0, list.length - whatsappMirrorInitialTailLimit(env));
+  const recentApiSessionReplies = list.filter((message) => recentApiSessionWhatsAppReply(message, env));
   if (numericCursor > 0) {
     const threshold = Math.max(0, numericCursor - whatsappMirrorScanOverlap(env));
     const cursorStart = list.findIndex((message, index) => outboundMirrorMessageCursor(message, index) > threshold);
-    if (cursorStart < 0) return [];
+    if (cursorStart < 0) return recentApiSessionReplies;
     start = cursorStart;
   }
-  return list.slice(start).map((message, index) =>
+  const cursorMessages = list.slice(start).map((message, index) =>
     Number(message?.cursor || 0) > 0 ? message : { ...message, cursor: start + index + 1 }
   );
+  return mergeCursorScanMessages(cursorMessages, recentApiSessionReplies);
 }
 
 async function readWhatsAppMirrorMessageSet(filePath, messageSetKey, state = null, env = process.env) {

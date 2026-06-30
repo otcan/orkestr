@@ -134,10 +134,11 @@ function whatsappMessageOrigin(message = {}, state = null) {
   return Boolean((state?.inboundEvents || []).some((event) => event.messageId === message.id));
 }
 
-function liveCodexAppServerAssistantOutput(message = {}) {
+function recoverableCurrentAssistantOutput(message = {}) {
+  const source = clean(message?.source);
   return clean(message?.role).toLowerCase() === "assistant" &&
     clean(message?.state).toLowerCase() === "completed" &&
-    clean(message?.source) === "codex-app-server";
+    (source === "codex-app-server" || source === "api-session");
 }
 
 function threadAllowsLiveRecovery(thread = null) {
@@ -186,7 +187,7 @@ export function canRecoverLiveWhatsAppOutboundIntent({
   const cursor = Math.max(0, Number(messageCursor || 0) || 0);
   const existingCursor = outboundMirrorCursorMap(state?.outboundMirrorCursors || []).get(messageSetKey);
   if (!existingCursor || cursor > Number(existingCursor.cursor || 0)) return false;
-  if (!liveCodexAppServerAssistantOutput(message)) return false;
+  if (!recoverableCurrentAssistantOutput(message)) return false;
   if (!threadAllowsLiveRecovery(thread)) return false;
   if (!boundThreadOrigin({ message, thread, kind })) return false;
   if (!whatsappMessageOrigin(parent, state) && !whatsappMessageOrigin(message, state)) return false;
