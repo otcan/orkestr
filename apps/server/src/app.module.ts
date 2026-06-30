@@ -6,6 +6,7 @@ import { BrokerModule } from "./modules/broker/broker.module.js";
 import { CodexModule } from "./modules/codex/codex.module.js";
 import { ConnectorsModule } from "./modules/connectors/connectors.module.js";
 import { GmailNotificationsModule } from "./modules/gmail-notifications/gmail-notifications.module.js";
+import { JobsModule } from "./modules/jobs/jobs.module.js";
 import { ReleaseModule } from "./modules/release/release.module.js";
 import { RouterTracesModule } from "./modules/router-traces/router-traces.module.js";
 import { SystemModule } from "./modules/system/system.module.js";
@@ -22,6 +23,7 @@ import { UsersModule } from "./modules/users/users.module.js";
     AutomationsModule,
     ConnectorsModule,
     GmailNotificationsModule,
+    JobsModule,
     ReleaseModule,
     RouterTracesModule,
     BrokerModule,

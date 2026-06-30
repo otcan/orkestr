@@ -8,6 +8,7 @@ import {
 } from "../../../packages/core/src/runtime-leases.js";
 import { markDueTimers } from "../../../packages/core/src/timers.js";
 import { runDueGmailNotifications } from "../../../packages/core/src/gmail-notifications.js";
+import { runDueGmailJobsAutomation } from "../../../packages/connectors/src/gmail-jobs-queue.js";
 import { recoverStaleCodexAppServerTurns } from "../../../packages/core/src/codex-app-server.js";
 import { deployDrainActiveSync } from "../../../packages/core/src/deploy-drain.js";
 import { deliverWhatsAppReplies, syncWhatsAppTypingIndicators } from "../../../packages/connectors/src/whatsapp.js";
@@ -97,10 +98,12 @@ export async function runTimerLoop(
 ) {
   const dueTimers = await markDueTimers(env);
   const gmailNotificationRuns = await runDueGmailNotifications(env);
+  const jobsRuns = await runDueGmailJobsAutomation(env);
   const drained = await drainAllPendingThreadInputs(env);
   const deliveredCount = drained.reduce((count: number, result: any) => count + Number(result?.delivered?.length || 0), 0);
   const gmailDeliveredCount = gmailNotificationRuns.reduce((count: number, result: any) => count + Number(result?.run?.delivered?.length || 0), 0);
-  if (dueTimers.length || gmailDeliveredCount > 0 || deliveredCount > 0 || drained.length > 0) {
+  const jobsPresentedCount = jobsRuns.reduce((count: number, result: any) => count + Number(result?.presentation?.presented?.length || 0), 0);
+  if (dueTimers.length || gmailDeliveredCount > 0 || jobsPresentedCount > 0 || deliveredCount > 0 || drained.length > 0) {
     await syncImpl({ forceWhatsapp: true });
   }
 }
