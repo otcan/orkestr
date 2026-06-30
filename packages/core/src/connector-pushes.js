@@ -1,11 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { dataPaths } from "../../storage/src/paths.js";
 import { appendEvent, readJson, writeJson } from "../../storage/src/store.js";
+import { enqueueConnectorPushDelivery, normalizeConnectorPushDeliveryMode } from "./connector-push-delivery.js";
 import { assertSanitizedAction } from "./llm-sanitizer.js";
-import { enqueueAgentMessage } from "./messages.js";
 import { assertOwnerAccess, canAccessOwner, isAdminPrincipal, policyError } from "./policy.js";
 import { principalForUserId, userPrincipal } from "./principal.js";
-import { enqueueThreadInput, getThread, getThreadForPrincipal } from "./threads.js";
+import { getThreadForPrincipal } from "./threads.js";
 import { userScopedCapabilityHints } from "./user-skills.js";
 import { adminUserId, normalizeUserId } from "./users.js";
 
@@ -118,6 +118,7 @@ export function normalizeConnectorPromptPush(input = {}, env = process.env) {
     target: clean(input.target || input.threadId || input.agentId),
     prompt,
     promptTemplate,
+    deliveryMode: normalizeConnectorPushDeliveryMode(input.deliveryMode || input.postMode || input.mode),
     sourceConfig,
     safety,
     automationType: cleanLower(input.automationType || input.notificationType || input.kind),
@@ -226,6 +227,7 @@ export async function createConnectorPromptPushForPrincipal(input = {}, principa
       input: {
         label: push.label,
         connector: push.connector,
+        deliveryMode: push.deliveryMode,
         prompt: push.prompt.slice(0, maxPromptChars),
         sourceConfig: push.sourceConfig,
         safety: push.safety,
@@ -278,7 +280,7 @@ export async function updateConnectorPromptPushForPrincipal(id, patch = {}, prin
       action: "connector_prompt_push.update",
       principal,
       resource: { type: "connector_prompt_push", id: existing.id, ownerUserId: existing.ownerUserId, connector: existing.connector, targetType: updatedPreview.targetType, target: updatedPreview.target, capabilities: capabilityContext.capabilities },
-      input: { label: updatedPreview.label, connector: updatedPreview.connector, prompt: updatedPreview.prompt.slice(0, maxPromptChars), promptTemplate: updatedPreview.promptTemplate.slice(0, maxPromptChars), sourceConfig: updatedPreview.sourceConfig, safety: updatedPreview.safety, enabled: updatedPreview.enabled },
+      input: { label: updatedPreview.label, connector: updatedPreview.connector, deliveryMode: updatedPreview.deliveryMode, prompt: updatedPreview.prompt.slice(0, maxPromptChars), promptTemplate: updatedPreview.promptTemplate.slice(0, maxPromptChars), sourceConfig: updatedPreview.sourceConfig, safety: updatedPreview.safety, enabled: updatedPreview.enabled },
     }, env);
   }
   return updateConnectorPromptPush(id, patch, env);
@@ -347,40 +349,6 @@ export function renderConnectorPrompt(push = {}, item = {}) {
     fields.body ? `Body:\n${fields.body}` : "",
   ].filter(Boolean).join("\n");
   return clipped([rendered, context ? `Connector item:\n${context}` : ""].filter(Boolean).join("\n\n"), maxPromptChars);
-}
-
-function threadDeliveryDefaults(thread, input = {}) {
-  const binding = thread?.binding || {};
-  if (String(binding.connector || "").trim().toLowerCase() !== "whatsapp" && !binding.chatId) return input;
-  const chatId = clean(input.chatId || binding.chatId);
-  if (!chatId) return input;
-  return {
-    ...input,
-    chatId,
-    accountId: clean(
-      input.accountId ||
-      binding.responderAccountId ||
-      binding.outboundAccountId ||
-      binding.senderAccountId ||
-      binding.inboundAccountId,
-    ),
-  };
-}
-
-async function enqueueConnectorPrompt(push, item, text, env = process.env) {
-  const input = {
-    source: "connector_prompt_push",
-    connector: push.connector,
-    originSurface: push.connector,
-    originTransport: "prompt-push",
-    visibility: "internal",
-    externalId: sourceItemId(item),
-    text,
-    ownerUserId: push.ownerUserId,
-  };
-  if (push.targetType === "agent") return enqueueAgentMessage(push.target, input, env);
-  const thread = await getThread(push.target, env);
-  return enqueueThreadInput(thread?.id || push.target, threadDeliveryDefaults(thread, input), env);
 }
 
 async function updatePushAfterRun(push, result, env = process.env) {
@@ -465,11 +433,12 @@ export async function runConnectorPromptPush(pushOrId, sourceItems = [], env = p
             sourceItemId: item.sourceItemId,
             subject: item.subject || "",
             from: item.from || "",
+            deliveryMode: push.deliveryMode,
             prompt: text.slice(0, maxPromptChars),
           },
         }, env);
       }
-      const message = await enqueueConnectorPrompt(push, item, text, env);
+      const message = await enqueueConnectorPushDelivery(push, item, text, env);
       result.delivered.push({ sourceItemId: item.sourceItemId, messageId: message.id, target: push.target });
     } catch (error) {
       result.failed.push({ sourceItemId: item.sourceItemId, error: error?.message || String(error) });

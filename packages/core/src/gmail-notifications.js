@@ -1,5 +1,6 @@
 import { appendEvent } from "../../storage/src/store.js";
 import { runGmailPromptPush } from "../../connectors/src/gmail-prompt-push.js";
+import { normalizeConnectorPushDeliveryMode } from "./connector-push-delivery.js";
 import {
   createConnectorPromptPush,
   createConnectorPromptPushForPrincipal,
@@ -143,6 +144,7 @@ function notificationPushInput(input = {}, principal = null, env = process.env, 
     label: clean(input.label) || "Gmail notifications",
     targetType,
     target,
+    deliveryMode: normalizeConnectorPushDeliveryMode(input.deliveryMode || input.postMode || input.mode, "notification"),
     promptTemplate: clean(input.promptTemplate || input.prompt) || defaultPromptTemplate,
     sourceConfig: {
       query,
@@ -227,6 +229,7 @@ function notificationUpdatePatch(input = {}, existing = {}, env = process.env, c
     label: clean(input.label || existing.label || "Gmail notifications"),
     targetType,
     target,
+    deliveryMode: normalizeConnectorPushDeliveryMode(input.deliveryMode || input.postMode || input.mode, lower(existing.deliveryMode || existing.postMode) || "notification"),
     promptTemplate: normalizedNoReplyTemplate(input, clean(existing.promptTemplate || existing.prompt) || defaultPromptTemplate),
     sourceConfig: {
       ...existingSourceConfig,
@@ -269,6 +272,7 @@ export function publicGmailNotification(push = {}, env = process.env) {
     label: clean(push.label || "Gmail notifications"),
     targetType: lower(push.targetType || "thread"),
     target: clean(push.target),
+    deliveryMode: lower(push.deliveryMode || "notification"),
     enabled: push.enabled === true,
     query: clean(sourceConfig.query),
     sourceConfig: {

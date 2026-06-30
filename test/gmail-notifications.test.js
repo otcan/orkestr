@@ -14,8 +14,10 @@ import {
 import { getConnectorPromptPush } from "../packages/core/src/connector-pushes.js";
 import { adminPrincipal, userPrincipal } from "../packages/core/src/principal.js";
 import { createThread, listThreadMessages } from "../packages/core/src/threads.js";
+import { visibleThreadMessages } from "../packages/core/src/thread-message-visibility.js";
 import { createUser } from "../packages/core/src/users.js";
 import { exchangeGmailCode } from "../packages/connectors/src/gmail.js";
+import { deliverWhatsAppReplies } from "../packages/connectors/src/whatsapp.js";
 import { writeConnectorConfig } from "../packages/storage/src/config.js";
 
 function jsonResponse(payload, ok = true, status = 200) {
@@ -52,6 +54,7 @@ test("gmail notifications schedule safe previews and dedupe Gmail message ids", 
     ORKESTR_HOME: home,
     ORKESTR_GMAIL_NOTIFICATIONS_ENABLED: "1",
     ORKESTR_GMAIL_NOTIFICATION_MIN_INTERVAL_MS: "300000",
+    WHATSAPP_BRIDGE_MODE: "external",
   };
   await createThread({
     id: "gmail-notification-thread",
@@ -63,6 +66,7 @@ test("gmail notifications schedule safe previews and dedupe Gmail message ids", 
     clientSecret: "client-secret",
     redirectUri: "http://localhost/callback",
   }, env);
+  await writeConnectorConfig("whatsapp", { bridgeMode: "external", bridgeUrl: "http://wa.local" }, env);
   await exchangeGmailCode("code-123", env, async () =>
     jsonResponse({
       access_token: "gmail-notification-access",
@@ -112,21 +116,38 @@ test("gmail notifications schedule safe previews and dedupe Gmail message ids", 
   const duplicate = await runGmailNotificationNow(notification.id, env, fetchImpl);
   const messages = await listThreadMessages("gmail-notification-thread", env);
   const notifications = await listGmailNotifications(env);
+  const whatsappCalls = [];
+  const whatsappDelivery = await deliverWhatsAppReplies(env, async (url, options = {}) => {
+    whatsappCalls.push({ url, body: JSON.parse(options.body) });
+    return jsonResponse({ ok: true, ids: ["sent-gmail-notification"] });
+  });
 
   assert.equal(due.length, 1);
   assert.equal(due[0].run.delivered.length, 1);
   assert.equal(duplicate.run.delivered.length, 0);
   assert.equal(duplicate.run.skipped[0].reason, "duplicate");
+  assert.equal(notification.deliveryMode, "notification");
   assert.equal(messages.length, 1);
+  assert.equal(visibleThreadMessages(messages).length, 1);
+  assert.equal(messages[0].role, "assistant");
+  assert.equal(messages[0].state, "completed");
+  assert.equal(messages[0].phase, "notification");
   assert.equal(messages[0].source, "connector_prompt_push");
   assert.equal(messages[0].connector, "gmail");
   assert.equal(messages[0].chatId, "chat-gmail-notifications");
   assert.equal(messages[0].accountId, "wa-1");
+  assert.equal(messages[0].originTransport, "prompt-push-notification");
   assert.equal(messages[0].externalId, "gmail-msg-1");
   assert.match(messages[0].text, /Subject: Alert one/);
   assert.match(messages[0].text, /From: alerts@example\.com/);
   assert.match(messages[0].text, /Snippet: Preview only/);
   assert.doesNotMatch(messages[0].text, /Full body should not be included/);
+  assert.equal(whatsappDelivery.delivered.length, 1);
+  assert.equal(whatsappDelivery.delivered[0].deliveryType, "final");
+  assert.equal(whatsappCalls[0].url.pathname, "/send-text");
+  assert.equal(whatsappCalls[0].body.to, "chat-gmail-notifications");
+  assert.equal(whatsappCalls[0].body.accountId, "wa-1");
+  assert.match(whatsappCalls[0].body.text, /Subject: Alert one/);
   assert.equal(notifications[0].deliveredCount, 1);
   assert.equal(notifications[0].processedSourceItemCount, 1);
   assert.ok(Date.parse(notifications[0].nextRunAt) > Date.now());

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.0-alpha.47
+
+- Deliver Gmail notification rules as out-of-band ChatUI/WhatsApp notifications by default, instead of queuing them as Codex thread input.
+- Keep generic connector prompt pushes on their existing queued prompt path, with an explicit delivery mode for notification-style pushes.
+
 ## 0.1.0-alpha.21
 
 - Mirror all Codex assistant updates to WhatsApp: generic commentary, progress updates, approval prompts, plans, and final answers now all reach the bound WhatsApp chat instead of being filtered to only selected "user-facing" updates.
