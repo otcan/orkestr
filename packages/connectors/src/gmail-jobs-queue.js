@@ -119,13 +119,44 @@ async function gogEnv(input = {}, env = process.env) {
   return nextEnv;
 }
 
+async function passwdRecord(username = "") {
+  const target = clean(username);
+  if (!target) return null;
+  const raw = await fs.readFile("/etc/passwd", "utf8").catch(() => "");
+  for (const line of raw.split("\n")) {
+    if (!line || line.startsWith("#")) continue;
+    const parts = line.split(":");
+    if (parts[0] !== target) continue;
+    const uid = Number(parts[2]);
+    const gid = Number(parts[3]);
+    if (!Number.isFinite(uid) || !Number.isFinite(gid)) return null;
+    return {
+      username: parts[0],
+      uid,
+      gid,
+      home: clean(parts[5]),
+      shell: clean(parts[6]),
+    };
+  }
+  return null;
+}
+
 async function runJsonCommand(command = [], args = [], env = process.env, input = {}) {
   const runAsUser = clean(input.gogRunAsUser || env.ORKESTR_JOBS_GOG_RUN_AS_USER || env.ORKESTR_GOG_RUN_AS_USER);
-  const base = runAsUser && process.getuid?.() === 0
-    ? ["sudo", "--preserve-env=GOG_KEYRING_PASSWORD", "-u", runAsUser, ...command]
-    : command;
+  const childEnv = { ...env };
+  const spawnOptions = { env: childEnv, stdio: ["ignore", "pipe", "pipe"] };
+  if (runAsUser && process.getuid?.() === 0) {
+    const record = await passwdRecord(runAsUser);
+    if (!record) throw Object.assign(new Error("gog_run_as_user_not_found"), { statusCode: 500 });
+    spawnOptions.uid = record.uid;
+    spawnOptions.gid = record.gid;
+    childEnv.USER = record.username;
+    childEnv.LOGNAME = record.username;
+    if (record.home) childEnv.HOME = record.home;
+    if (record.shell) childEnv.SHELL = record.shell;
+  }
   return new Promise((resolve, reject) => {
-    const child = spawn(base[0], [...base.slice(1), ...args], { env, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(command[0], [...command.slice(1), ...args], spawnOptions);
     let stdout = "";
     let stderr = "";
     const timer = setTimeout(() => {
