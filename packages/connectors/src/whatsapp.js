@@ -1522,6 +1522,94 @@ async function readWhatsAppState(env) {
   return readJson(paths.whatsapp, { inboundEvents: [] });
 }
 
+function latestOutboundIntentForMessage(state = {}, messageId = "") {
+  const id = pickString(messageId);
+  if (!id) return null;
+  const intents = Array.isArray(state?.outboundIntents) ? state.outboundIntents : [];
+  for (let index = intents.length - 1; index >= 0; index -= 1) {
+    if (pickString(intents[index]?.messageId) === id) return intents[index];
+  }
+  return null;
+}
+
+export async function whatsappOutboundDeliveryResultForMessage(messageId = "", env = process.env) {
+  const state = await readWhatsAppState(env).catch(() => null);
+  const intent = latestOutboundIntentForMessage(state, messageId);
+  if (!intent) return null;
+  const status = pickString(intent?.status).toLowerCase();
+  if (status === "delivered") {
+    return {
+      ok: true,
+      state: "delivered",
+      delivered: {
+        messageId: pickString(intent.messageId),
+        threadId: pickString(intent.threadId) || null,
+        chatId: pickString(intent.chatId) || null,
+        deliveredAt: pickString(intent.deliveredAt || intent.updatedAt) || null,
+        intent,
+      },
+    };
+  }
+  if (status === "failed") {
+    return {
+      ok: false,
+      state: "failed",
+      statusCode: 502,
+      failure: {
+        messageId: pickString(intent.messageId),
+        threadId: pickString(intent.threadId) || null,
+        chatId: pickString(intent.chatId) || null,
+        reason: pickString(intent.error || intent.reason) || "failed",
+        intent,
+      },
+    };
+  }
+  if (status === "skipped") {
+    return {
+      ok: false,
+      state: "skipped",
+      statusCode: 409,
+      skipped: {
+        messageId: pickString(intent.messageId),
+        threadId: pickString(intent.threadId) || null,
+        chatId: pickString(intent.chatId) || null,
+        reason: pickString(intent.reason || intent.error) || "skipped",
+        intent,
+      },
+    };
+  }
+  return {
+    ok: false,
+    state: status || "pending",
+    pending: {
+      messageId: pickString(intent.messageId),
+      threadId: pickString(intent.threadId) || null,
+      chatId: pickString(intent.chatId) || null,
+      reason: pickString(intent.error || intent.reason) || status || "pending",
+      intent,
+    },
+  };
+}
+
+function sleep(ms = 0) {
+  return new Promise((resolve) => setTimeout(resolve, Math.max(0, Number(ms) || 0)));
+}
+
+export async function waitForWhatsAppOutboundDeliveryResultForMessage(
+  messageId = "",
+  { env = process.env, timeoutMs = 10_000, intervalMs = 250 } = {},
+) {
+  const deadline = Date.now() + Math.max(0, Number(timeoutMs) || 0);
+  let latest = null;
+  do {
+    latest = await whatsappOutboundDeliveryResultForMessage(messageId, env);
+    if (latest?.ok || ["failed", "skipped"].includes(String(latest?.state || ""))) return latest;
+    if (Date.now() >= deadline) break;
+    await sleep(Math.min(Math.max(1, Number(intervalMs) || 250), Math.max(1, deadline - Date.now())));
+  } while (Date.now() <= deadline);
+  return latest;
+}
+
 function mergeByKey(existing = [], next = [], keyFn = () => "") {
   const merged = new Map();
   for (const item of [...(existing || []), ...(next || [])]) {

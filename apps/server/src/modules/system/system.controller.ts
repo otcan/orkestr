@@ -15,7 +15,10 @@ import {
   bindApiSessionToThread,
   getApiSessionBindingForPrincipal,
 } from "../../../../../packages/core/src/api-session-bindings.js";
-import { deliverWhatsAppReplies } from "../../../../../packages/connectors/src/whatsapp.js";
+import {
+  deliverWhatsAppReplies,
+  waitForWhatsAppOutboundDeliveryResultForMessage,
+} from "../../../../../packages/connectors/src/whatsapp.js";
 import { listEventsForPrincipal } from "../../../../../packages/core/src/audit-events.js";
 import { listWatcherAlerts, updateWatcherAlertLifecycle } from "../../../../../packages/core/src/watcher-alerts.js";
 import { createStateBackup, stateBackupStatus, stateRestorePlan } from "../../../../../packages/core/src/state-backups.js";
@@ -329,6 +332,12 @@ function apiSessionDeliveryTimeoutMs(env = process.env): number {
   return positiveInteger(env.ORKESTR_API_SESSION_DELIVERY_TIMEOUT_MS, 30_000, 0);
 }
 
+function apiSessionDeliveryConfirmationMs(env = process.env): number {
+  const timeoutMs = apiSessionDeliveryTimeoutMs(env);
+  const fallback = Math.min(timeoutMs || 0, 10_000);
+  return positiveInteger(env.ORKESTR_API_SESSION_DELIVERY_CONFIRMATION_MS, fallback, 0);
+}
+
 async function deliverWhatsAppRepliesForApiSession(env = process.env): Promise<any> {
   const timeoutMs = apiSessionDeliveryTimeoutMs(env);
   if (!timeoutMs) return deliverWhatsAppReplies(env);
@@ -360,6 +369,20 @@ function throwApiSessionDeliveryTimeout(message: any, timeoutMs: number): never 
       chatId: message.chatId || null,
     },
   }, 504);
+}
+
+async function apiSessionConfirmedDeliveryResultForMessage(delivery: any, messageId: string, env = process.env) {
+  const direct = apiSessionDeliveryResultForMessage(delivery, messageId);
+  if (direct.ok) return direct;
+  const confirmationMs = apiSessionDeliveryConfirmationMs(env);
+  if (!confirmationMs) return direct;
+  const persisted = await waitForWhatsAppOutboundDeliveryResultForMessage(messageId, {
+    env,
+    timeoutMs: confirmationMs,
+    intervalMs: 250,
+  }).catch(() => null);
+  if (persisted?.ok || ["failed", "skipped"].includes(String(persisted?.state || ""))) return persisted;
+  return direct;
 }
 
 function throwApiSessionDeliveryError(result: any, message: any, delivery: any): never {
@@ -716,7 +739,7 @@ export class SystemController {
         }
         throw error;
       }
-      deliveryState = apiSessionDeliveryResultForMessage(delivery, result.message.id);
+      deliveryState = await apiSessionConfirmedDeliveryResultForMessage(delivery, result.message.id, process.env);
       if (!deliveryState.ok) throwApiSessionDeliveryError(deliveryState, { ...result.message, threadId: result.thread.id }, delivery);
     }
     return {

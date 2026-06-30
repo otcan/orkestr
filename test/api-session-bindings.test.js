@@ -11,7 +11,10 @@ import {
 import { listWatcherAlerts, recordWatcherAlert, updateWatcherAlertLifecycle } from "../packages/core/src/watcher-alerts.js";
 import { createThread, listThreadMessages } from "../packages/core/src/threads.js";
 import { whereAmI } from "../packages/core/src/whereiam.js";
-import { deliverWhatsAppReplies } from "../packages/connectors/src/whatsapp.js";
+import {
+  deliverWhatsAppReplies,
+  waitForWhatsAppOutboundDeliveryResultForMessage,
+} from "../packages/connectors/src/whatsapp.js";
 import { writeConnectorConfig } from "../packages/storage/src/config.js";
 
 function env(home, extra = {}) {
@@ -168,6 +171,57 @@ test("api session assistant output delivers after the WhatsApp mirror cursor adv
   assert.match(sendCalls[0].body.text, /must still reach WhatsApp/);
   assert.equal(intent.status, "delivered");
   assert.equal(intent.createdReason, "live_bound_recovery");
+});
+
+test("api session delivery confirmation observes persisted WhatsApp delivery", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-session-delivery-confirm-"));
+  const runtimeEnv = env(home);
+  const whatsappFile = path.join(home, "whatsapp.json");
+  await fs.writeFile(whatsappFile, JSON.stringify({
+    inboundEvents: [],
+    outboundDeliveries: [],
+    outboundDeliveryClaims: [],
+    outboundIntents: [{
+      messageId: "api-session-message-1",
+      messageSetKey: "thread||api-session-thread",
+      threadId: "api-session-thread",
+      chatId: "chat-1",
+      status: "pending",
+      createdAt: new Date().toISOString(),
+    }],
+    outboundMirrorCursors: [],
+  }, null, 2), "utf8");
+
+  const markDelivered = (async () => {
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    await fs.writeFile(whatsappFile, JSON.stringify({
+      inboundEvents: [],
+      outboundDeliveries: [],
+      outboundDeliveryClaims: [],
+      outboundIntents: [{
+        messageId: "api-session-message-1",
+        messageSetKey: "thread||api-session-thread",
+        threadId: "api-session-thread",
+        chatId: "chat-1",
+        status: "delivered",
+        deliveredAt: "2026-06-30T19:23:09.184Z",
+        updatedAt: "2026-06-30T19:23:09.184Z",
+      }],
+      outboundMirrorCursors: [],
+    }, null, 2), "utf8");
+  })();
+
+  const result = await waitForWhatsAppOutboundDeliveryResultForMessage("api-session-message-1", {
+    env: runtimeEnv,
+    timeoutMs: 500,
+    intervalMs: 10,
+  });
+  await markDelivered;
+
+  assert.equal(result.ok, true);
+  assert.equal(result.state, "delivered");
+  assert.equal(result.delivered.messageId, "api-session-message-1");
+  assert.equal(result.delivered.threadId, "api-session-thread");
 });
 
 test("watcher alerts create the configured watcher thread, redact secrets, and dedupe repeats", async () => {
