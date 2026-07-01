@@ -360,7 +360,7 @@ prepare_repo_cache() {
 }
 
 backup_state() {
-  local stamp target backup_name data_dir data_base data_parent exclude tar_args
+  local stamp target backup_name data_dir data_base data_parent exclude tar_args tar_status
   if [ "$run_backup" != "1" ]; then
     echo ""
     return 0
@@ -376,7 +376,7 @@ backup_state() {
   backup_name="$backup_dir/${stamp}-${target}-state.tar.gz"
   data_parent="$(dirname "$data_dir")"
   data_base="$(basename "$data_dir")"
-  tar_args=(-C "$data_parent" -czf "$backup_name")
+  tar_args=(-C "$data_parent" -czf "$backup_name" --ignore-failed-read --warning=no-file-changed --warning=no-file-removed --warning=no-failed-read)
   for exclude in $backup_excludes; do
     [ -n "$exclude" ] || continue
     case "$exclude" in
@@ -384,7 +384,14 @@ backup_state() {
       *) tar_args+=(--exclude="$data_base/$exclude") ;;
     esac
   done
-  tar "${tar_args[@]}" "$data_base"
+  tar_status=0
+  tar "${tar_args[@]}" "$data_base" || tar_status=$?
+  if [ "$tar_status" -gt 1 ]; then
+    return "$tar_status"
+  fi
+  if [ "$tar_status" -eq 1 ]; then
+    echo "State backup completed with non-fatal live-file changes." >&2
+  fi
   echo "$backup_name"
 }
 
@@ -1259,7 +1266,7 @@ exposure_timeout_seconds="${ORKESTR_DEPLOY_EXPOSURE_TIMEOUT_SECONDS:-12}"
 exposure_curl_insecure="$(bool_value "${ORKESTR_DEPLOY_EXPOSURE_CURL_INSECURE:-0}")"
 run_smoke="${run_smoke_arg:-${ORKESTR_DEPLOY_RUN_SMOKE:-1}}"
 run_backup="${backup_state_arg:-${ORKESTR_DEPLOY_BACKUP_STATE:-1}}"
-backup_excludes="${ORKESTR_DEPLOY_BACKUP_EXCLUDES:-run tmp whatsapp-bridge/sessions}"
+backup_excludes="${ORKESTR_DEPLOY_BACKUP_EXCLUDES:-run tmp whatsapp-bridge/sessions wa-skills/*/session wa-skills/*/state}"
 sync_workers="$(bool_value "${sync_workers_arg:-${ORKESTR_DEPLOY_SYNC_WORKERS:-1}}")"
 lock_file="${ORKESTR_DEPLOY_LOCK_FILE:-/var/lock/orkestr-deploy.lock}"
 lock_busy_exit_code="${ORKESTR_DEPLOY_LOCK_BUSY_EXIT_CODE:-0}"

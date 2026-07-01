@@ -111,15 +111,32 @@ test("public URL identity diagnostics warn on mixed runtime service URLs", () =>
     ORKESTR_AUTH_HOST: "auth.ops.example.test",
     ORKESTR_PUBLIC_SITE_URL: "https://orkestr.example.test",
     ORKESTR_PUBLIC_APP_URL: "https://orkestr.app.ops.example.test",
-    ORKESTR_AUTH_URL: "https://auth.ops.example.test",
-    ORKESTR_CONNECT_PUBLIC_URL: "https://connect.orkestr.example.test",
+    ORKESTR_AUTH_URL: "https://auth.orkestr.example.test",
     ORKESTR_PAIRING_URL: "https://orkestr.app.ops.example.test/setup/pairing",
   });
 
   assert.equal(diagnostics.ok, false);
   assert.equal(diagnostics.status, "warning");
   assert.deepEqual(diagnostics.roots.map((root) => root.root), ["example.test", "ops.example.test"]);
-  assert.ok(diagnostics.records.some((record) => record.name === "ORKESTR_CONNECT_PUBLIC_URL" && record.root === "example.test"));
+  assert.ok(diagnostics.records.some((record) => record.name === "ORKESTR_AUTH_URL" && record.root === "example.test"));
+});
+
+test("public URL identity diagnostics ignore role-specific public auth and connect URLs", () => {
+  const diagnostics = publicUrlIdentityDiagnostics({
+    ORKESTR_PRIMARY_DOMAIN: "ops.example.test",
+    ORKESTR_APP_HOST: "orkestr.app.ops.example.test",
+    ORKESTR_AUTH_HOST: "auth.ops.example.test",
+    ORKESTR_PUBLIC_APP_URL: "https://orkestr.app.ops.example.test",
+    ORKESTR_AUTH_URL: "https://auth.ops.example.test",
+    ORKESTR_PUBLIC_AUTH_URL: "https://connect.orkestr.de/setup/pairing",
+    ORKESTR_CONNECT_PUBLIC_URL: "https://connect.crawlerai.de",
+    ORKESTR_PAIRING_URL: "https://orkestr.app.ops.example.test/setup/pairing",
+  });
+
+  assert.equal(diagnostics.ok, true);
+  assert.deepEqual(diagnostics.roots.map((root) => root.root), ["ops.example.test"]);
+  assert.equal(diagnostics.records.some((record) => record.name === "ORKESTR_PUBLIC_AUTH_URL"), false);
+  assert.equal(diagnostics.records.some((record) => record.name === "ORKESTR_CONNECT_PUBLIC_URL"), false);
 });
 
 test("pairing session cookie can cover app and auth subdomains", () => {

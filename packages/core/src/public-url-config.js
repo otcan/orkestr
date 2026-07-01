@@ -108,13 +108,11 @@ const identityConfigInputs = [
   ["ORKESTR_AUTH_HOST", "host"],
   ["ORKESTR_PUBLIC_URL", "url"],
   ["ORKESTR_PUBLIC_APP_URL", "url"],
-  ["ORKESTR_PUBLIC_AUTH_URL", "url"],
   ["ORKESTR_AUTH_URL", "url"],
   ["ORKESTR_APP_URL", "url"],
   ["ORKESTR_PUBLIC_HTTPS_URL", "url"],
   ["ORKESTR_HTTPS_URL", "url"],
   ["ORKESTR_TAILSCALE_HTTPS_NAME", "url"],
-  ["ORKESTR_CONNECT_PUBLIC_URL", "url"],
   ["ORKESTR_PAIRING_URL", "url"],
   ["ORKESTR_COOKIE_DOMAIN", "cookie"],
 ];

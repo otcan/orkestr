@@ -106,6 +106,57 @@ test("system doctor warns when active URL drop-ins mix public and private instan
   assert.ok(doctor.issues.some((issue) => issue.code === "public_url_dropins"));
 });
 
+test("system doctor allows role-specific public auth and connect drop-ins", async () => {
+  const { home, env } = await fakeHost();
+  const dropInDir = path.join(home, "dropins");
+  const privateDropIn = path.join(dropInDir, "71-private-ops-urls.conf");
+  const publicAuthDropIn = path.join(dropInDir, "76-public-auth-url.conf");
+  const connectDropIn = path.join(dropInDir, "73-connect-public-url.conf");
+  await fs.mkdir(dropInDir, { recursive: true });
+  await fs.writeFile(privateDropIn, [
+    "[Service]",
+    "Environment=ORKESTR_PRIMARY_DOMAIN=ops.example.test",
+    "Environment=ORKESTR_APP_HOST=orkestr.app.ops.example.test",
+    "Environment=ORKESTR_AUTH_HOST=auth.ops.example.test",
+    "Environment=ORKESTR_PUBLIC_APP_URL=https://orkestr.app.ops.example.test",
+    "Environment=ORKESTR_AUTH_URL=https://auth.ops.example.test",
+    "",
+  ].join("\n"));
+  await fs.writeFile(publicAuthDropIn, [
+    "[Service]",
+    "Environment=ORKESTR_PUBLIC_AUTH_URL=https://connect.orkestr.example/setup/pairing",
+    "",
+  ].join("\n"));
+  await fs.writeFile(connectDropIn, [
+    "[Service]",
+    "Environment=ORKESTR_CONNECT_PUBLIC_URL=https://connect.crawler.example",
+    "",
+  ].join("\n"));
+
+  const doctor = await systemDoctor({
+    env: {
+      ...env,
+      ORKESTR_SYSTEMD_DROPIN_PATHS: `${privateDropIn} ${publicAuthDropIn} ${connectDropIn}`,
+      ORKESTR_PRIMARY_DOMAIN: "ops.example.test",
+      ORKESTR_APP_HOST: "orkestr.app.ops.example.test",
+      ORKESTR_AUTH_HOST: "auth.ops.example.test",
+      ORKESTR_PUBLIC_APP_URL: "https://orkestr.app.ops.example.test",
+      ORKESTR_AUTH_URL: "https://auth.ops.example.test",
+      ORKESTR_PUBLIC_AUTH_URL: "https://connect.orkestr.example/setup/pairing",
+      ORKESTR_CONNECT_PUBLIC_URL: "https://connect.crawler.example",
+    },
+    home,
+  });
+  const effective = doctor.checks.find((check) => check.id === "public_url_identity");
+  const dropIns = doctor.checks.find((check) => check.id === "public_url_dropins");
+
+  assert.equal(effective?.status, "ok");
+  assert.equal(dropIns?.status, "ok");
+  assert.deepEqual((dropIns?.roots || []).map((root) => root.root), ["ops.example.test"]);
+  assert.equal(doctor.issues.some((issue) => issue.code === "public_url_identity"), false);
+  assert.equal(doctor.issues.some((issue) => issue.code === "public_url_dropins"), false);
+});
+
 test("system doctor reports missing required host tools as errors", async () => {
   const { home, env } = await fakeHost({ omit: ["tmux"] });
   const doctor = await systemDoctor({ env, home });

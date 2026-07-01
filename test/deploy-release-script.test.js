@@ -45,8 +45,12 @@ test("release deploy script exposes versioned install, status, and rollback", as
   assert.match(script, /backup_state/);
   assert.match(script, /ORKESTR_DEPLOY_BACKUP_STATE/);
   assert.match(script, /ORKESTR_DEPLOY_BACKUP_EXCLUDES/);
-  assert.match(script, /backup_excludes="\$\{ORKESTR_DEPLOY_BACKUP_EXCLUDES:-run tmp whatsapp-bridge\/sessions\}"/);
+  assert.match(script, /backup_excludes="\$\{ORKESTR_DEPLOY_BACKUP_EXCLUDES:-run tmp whatsapp-bridge\/sessions wa-skills\/\*\/session wa-skills\/\*\/state\}"/);
   assert.match(script, /--exclude="\$data_base\/\$exclude"/);
+  assert.match(script, /--ignore-failed-read/);
+  assert.match(script, /--warning=no-file-changed/);
+  assert.match(script, /--warning=no-file-removed/);
+  assert.match(script, /State backup completed with non-fatal live-file changes/);
   assert.match(script, /ORKESTR_DEPLOY_SYNC_WORKERS/);
   assert.match(script, /ORKESTR_DEPLOY_LOCK_BUSY_EXIT_CODE/);
   assert.match(script, /lock_busy_exit_code="\$\{ORKESTR_DEPLOY_LOCK_BUSY_EXIT_CODE:-0\}"/);
