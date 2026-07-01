@@ -52,6 +52,8 @@ The tenant isolation suite must cover these boundaries:
   failure notification for contained users.
 - Dynamic `whereiam` policy metadata for contained user sessions.
 - Tenant VM boundary metadata and the containment matrix for public isolation.
+- Tenant local slice registry, provisioning plans, resource limits, per-owner
+  runtime roots, and admin-only control-plane routes.
 - Route ownership across REST and WebSocket surfaces, including summary streams,
   raw terminal access, and control-plane admin-only routes.
 

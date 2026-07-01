@@ -21,6 +21,7 @@ export function dataPaths(env = process.env) {
     waitlist: path.join(home, "waitlist.json"),
     users: path.join(home, "users.json"),
     tenantVms: path.join(home, "tenant-vms.json"),
+    tenantSlices: path.join(home, "tenant-slices.json"),
     userDataRoot: path.join(home, "users"),
     threads: path.join(home, "threads.json"),
     threadsDb: path.join(home, "threads.sqlite"),

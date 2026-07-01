@@ -13,6 +13,7 @@ import { SystemModule } from "./modules/system/system.module.js";
 import { SecureInputModule } from "./modules/secure-input/secure-input.module.js";
 import { ThreadsModule } from "./modules/threads/threads.module.js";
 import { TimersModule } from "./modules/timers/timers.module.js";
+import { TenantSlicesModule } from "./modules/tenant-slices/tenant-slices.module.js";
 import { TenantVmsModule } from "./modules/tenant-vms/tenant-vms.module.js";
 import { UsersModule } from "./modules/users/users.module.js";
 
@@ -32,6 +33,7 @@ import { UsersModule } from "./modules/users/users.module.js";
     AgentsModule,
     ThreadsModule,
     TimersModule,
+    TenantSlicesModule,
     TenantVmsModule,
     UsersModule,
   ],

@@ -209,7 +209,7 @@ function authorizeControlPlaneRequest(request: any, principal: any) {
     if (third === "skills" || third === "credit-usage" || third === "onboarding") return { ok: true };
     return { ok: false, statusCode: 403, error: "control_plane_admin_required" };
   }
-  if (surface === "tenant-vms") return { ok: false, statusCode: 403, error: "control_plane_admin_required" };
+  if (surface === "tenant-vms" || surface === "tenant-slices") return { ok: false, statusCode: 403, error: "control_plane_admin_required" };
   if (surface === "agents" || surface === "executors" || surface === "executions") {
     return { ok: false, statusCode: 403, error: "control_plane_admin_required" };
   }

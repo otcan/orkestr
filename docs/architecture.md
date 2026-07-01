@@ -88,6 +88,13 @@ enabled skills, connector labels, and containment policy. Connector credentials,
 browser sessions, WhatsApp state, and user files are created inside the tenant
 instance after setup; they are not embedded in the profile or KubeVirt manifest.
 
+For constrained same-host deployments, the control plane can also register a
+tenant local slice. A local slice assigns one owner a dedicated Unix service
+user, systemd slice limits, data/workspace/browser/OxRM roots, port block, and
+tenant OpenAI budget environment. This is the efficient single-box tenant
+instance path; it is not a VM boundary and should be used where that tradeoff is
+acceptable.
+
 ## Connector Boundary
 
 The public connector surface contains generic setup and routing code. Real

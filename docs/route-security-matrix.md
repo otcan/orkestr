@@ -45,6 +45,7 @@ authorization.
 | Users | `GET/POST/PATCH /api/users` | Admin only | users controller and control-plane guard |
 | User skill registry | `GET/PATCH /api/users/me/skills`, `GET/PATCH /api/users/:id/skills/:skill` | Owner-scoped, admin can manage all | user skill registry helpers and owner access checks |
 | Tenant VM registry, bootstrap provisioning, and WA routes | `GET/POST/PATCH/DELETE /api/tenant-vms`, `POST /api/tenant-vms/:id/provision`, `POST/DELETE /api/tenant-vms/:id/whatsapp-route` | Admin only | tenant VM registry/provisioning/routing controller and control-plane guard |
+| Tenant local slice registry, provisioning plans, and runtime status | `GET/POST/PATCH/DELETE /api/tenant-slices`, `POST /api/tenant-slices/:id/provision`, `GET /api/tenant-slices/:id/runtime-status`, wake, stop, status | Admin only | tenant slice controller, registry/provisioning helpers, and control-plane guard |
 | Codex host control | `GET /api/codex/*`, import, migrate | Admin only | control-plane guard |
 | Agents and executors | `/api/agents`, `/api/executors`, `/api/executions` | Admin only | control-plane guard |
 | Runtime leases and host system | runtime leases, system/processes/resources/doctor/settings | Admin only | control-plane guard |
