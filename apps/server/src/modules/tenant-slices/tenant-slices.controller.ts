@@ -4,12 +4,14 @@ import {
   deleteTenantSlice,
   getTenantSlice,
   listTenantSlices,
-  provisionTenantSlice,
   publicTenantSlice,
   setTenantSliceStatus,
-  tenantSliceRuntimeStatus,
   updateTenantSlice,
 } from "../../../../../packages/core/src/tenant-slices.js";
+import {
+  provisionTenantSlice,
+  tenantSliceRuntimeStatus,
+} from "../../../../../packages/core/src/tenant-slice-provisioning.js";
 import { isAdminPrincipal } from "../../../../../packages/core/src/policy.js";
 import { requestPrincipal } from "../../../../../packages/core/src/principal.js";
 import { httpError } from "../../common/http.js";

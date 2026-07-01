@@ -8,17 +8,19 @@ import { approvePairingChallenge } from "../packages/core/src/security.js";
 import { userPrincipal } from "../packages/core/src/principal.js";
 import { createUser } from "../packages/core/src/users.js";
 import {
-  buildTenantSliceProvisioningPlan,
   createTenantSlice,
   deleteTenantSlice,
   getTenantSlice,
   getTenantSliceForOwner,
   getTenantSliceForPrincipal,
   listTenantSlicesForPrincipal,
-  provisionTenantSlice,
   publicTenantSlice,
-  tenantSliceRuntimeStatus,
 } from "../packages/core/src/tenant-slices.js";
+import {
+  buildTenantSliceProvisioningPlan,
+  provisionTenantSlice,
+  tenantSliceRuntimeStatus,
+} from "../packages/core/src/tenant-slice-provisioning.js";
 
 async function read(response) {
   const text = await response.text();
