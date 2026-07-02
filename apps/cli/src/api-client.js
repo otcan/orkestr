@@ -57,7 +57,10 @@ async function cliAuthToken(env = process.env) {
   if (!home) return "";
   const file = path.join(home, "secrets", "cli-auth.json");
   const current = await readStoredCliAuthToken(file);
-  if (current) return current;
+  if (current) {
+    await repairStoredCliAuthOwnership(file).catch(() => {});
+    return current;
+  }
   return ensureStoredCliAuthToken(file);
 }
 
@@ -103,6 +106,13 @@ async function storedCliAuthOwner(file) {
   } catch {
     return null;
   }
+}
+
+async function repairStoredCliAuthOwnership(file) {
+  const owner = await storedCliAuthOwner(file);
+  if (!owner) return;
+  await fs.chown(path.dirname(file), owner.uid, owner.gid).catch(() => {});
+  await fs.chown(file, owner.uid, owner.gid).catch(() => {});
 }
 
 function cliClientHost(host = "") {
