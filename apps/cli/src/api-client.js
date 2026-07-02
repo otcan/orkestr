@@ -15,7 +15,7 @@ export class ApiError extends Error {
 export function defaultApiBase(env = process.env) {
   const effective = effectiveCliEnv(env);
   if (effective.ORKESTR_API_BASE) return String(effective.ORKESTR_API_BASE).replace(/\/+$/g, "");
-  const host = effective.ORKESTR_HOST || "127.0.0.1";
+  const host = cliClientHost(effective.ORKESTR_HOST || "127.0.0.1");
   const port = effective.ORKESTR_PORT || effective.PORT || "19812";
   return `http://${host}:${port}`;
 }
@@ -77,17 +77,39 @@ async function readStoredCliAuthToken(file) {
 
 async function ensureStoredCliAuthToken(file) {
   try {
+    const owner = await storedCliAuthOwner(file);
     await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
+    if (owner) await fs.chown(path.dirname(file), owner.uid, owner.gid).catch(() => {});
     const token = crypto.randomBytes(32).toString("base64url");
     const payload = {
       token,
       createdAt: new Date().toISOString(),
     };
     await fs.writeFile(file, `${JSON.stringify(payload, null, 2)}\n`, { mode: 0o600 });
+    if (owner) await fs.chown(file, owner.uid, owner.gid).catch(() => {});
     return token;
   } catch {
     return "";
   }
+}
+
+async function storedCliAuthOwner(file) {
+  if (typeof process.getuid !== "function" || process.getuid() !== 0) return null;
+  try {
+    const home = path.dirname(path.dirname(file));
+    const stat = await fs.stat(home);
+    if (!stat || stat.uid === 0) return null;
+    return { uid: stat.uid, gid: stat.gid };
+  } catch {
+    return null;
+  }
+}
+
+function cliClientHost(host = "") {
+  const value = String(host || "").trim();
+  const lowered = value.toLowerCase();
+  if (!lowered || lowered === "0.0.0.0" || lowered === "::" || lowered === "[::]" || lowered === "*") return "127.0.0.1";
+  return value;
 }
 
 const envFileKeys = new Set([

@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { defaultApiBase } from "../apps/cli/src/api-client.js";
 import { runCli } from "../apps/cli/src/commands.js";
 import { createDesktopShare, desktopShareStatus, openDesktopShare } from "../packages/core/src/desktop-shares.js";
 import { userPrincipal } from "../packages/core/src/principal.js";
@@ -189,6 +190,15 @@ test("CLI creates a missing local cli-auth token from the env-file data home", a
   assert.equal(code, 0);
   assert.match(seen[0].headers.authorization || "", /^Bearer [A-Za-z0-9_-]{32,}$/);
   assert.equal(seen[0].headers.authorization, `Bearer ${stored.token}`);
+});
+
+test("CLI maps bind-all Orkestr hosts to loopback for local API calls", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-cli-bind-host-"));
+  const envFile = path.join(home, "orkestr.env");
+  await fs.writeFile(envFile, "ORKESTR_HOST=0.0.0.0\nORKESTR_PORT=21000\n", "utf8");
+
+  assert.equal(defaultApiBase({ ORKESTR_ENV_FILE: envFile }), "http://127.0.0.1:21000");
+  assert.equal(defaultApiBase({ ORKESTR_HOST: "::", ORKESTR_PORT: "22000" }), "http://127.0.0.1:22000");
 });
 
 test("CLI updates WhatsApp binding owner aliases", async () => {
