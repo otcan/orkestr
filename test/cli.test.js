@@ -141,6 +141,30 @@ test("CLI sends local cli-auth bearer token when ORKESTR_HOME has one", async ()
   assert.equal(seen[0].headers.authorization, "Bearer local-cli-token");
 });
 
+test("CLI falls back to the local Orkestr env file for cli-auth", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-cli-auth-env-file-"));
+  await fs.mkdir(path.join(home, "secrets"), { recursive: true });
+  await fs.writeFile(path.join(home, "secrets", "cli-auth.json"), JSON.stringify({
+    token: "env-file-cli-token",
+    expiresAt: new Date(Date.now() + 60_000).toISOString(),
+  }), "utf8");
+  const envFile = path.join(home, "orkestr.env");
+  await fs.writeFile(envFile, `ORKESTR_HOME=${home}\nORKESTR_API_BASE=http://orkestr.test\n`, "utf8");
+  const stdout = capture();
+  const seen = [];
+  const code = await runCli(["list", "--json"], {
+    env: { ORKESTR_ENV_FILE: envFile },
+    stdout,
+    stderr: capture(),
+    fetchImpl: fakeFetch({
+      "GET /api/threads/summary": { threads: [] },
+    }, seen),
+  });
+
+  assert.equal(code, 0);
+  assert.equal(seen[0].headers.authorization, "Bearer env-file-cli-token");
+});
+
 test("CLI updates WhatsApp binding owner aliases", async () => {
   const stdout = capture();
   const seen = [];
