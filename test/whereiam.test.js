@@ -226,7 +226,7 @@ test("whereAmI gates contained user capabilities through the user skill registry
   assert.equal(payload.capabilities.skills.some((skill) => Object.hasOwn(skill, "token")), false);
 });
 
-test("whereAmI does not inherit parent managed desktops into local tenant slices", async () => {
+test("whereAmI requires a tenant-owned boundary before exposing local-slice desktops", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-whereiam-slice-desktops-home-"));
   const workspace = path.join(home, "users", "tenant-demo", "workspaces", "main");
   await fs.mkdir(workspace, { recursive: true });
@@ -242,11 +242,11 @@ test("whereAmI does not inherit parent managed desktops into local tenant slices
     id: "tenant-demo-slice",
     ownerUserId: "tenant-demo",
     status: "planned",
-    capabilities: ["codex", "files", "timers", "whatsapp"],
+    capabilities: ["codex", "files", "timers", "whatsapp", "linkedin"],
     connectors: {
       whatsapp: { enabled: true, chatId: "tenant-demo@g.us", accountId: "sender" },
       gmail: { enabled: false },
-      linkedin: { enabled: false },
+      linkedin: { enabled: true, desktopSlug: "linkedin" },
       oxrm: { enabled: false },
     },
   }, env);
@@ -276,8 +276,9 @@ test("whereAmI does not inherit parent managed desktops into local tenant slices
   assert.equal(payload.capabilities.scopedConnectors.linkedin, false);
   assert.equal(payload.capabilities.scopedConnectors.gmail, false);
   assert.equal(payload.capabilities.desktopProvisioning.available, false);
-  assert.equal(payload.capabilities.desktopProvisioning.setupState, "instance_desktops_not_provisioned");
+  assert.equal(payload.capabilities.desktopProvisioning.setupState, "tenant_instance_required");
   assert.equal(payload.capabilities.desktopProvisioning.user.tenantSliceId, "tenant-demo-slice");
+  assert.equal(payload.capabilities.desktopProvisioning.user.tenantOwnedBoundary, false);
   assert.equal(payload.capabilities.hostSkills, false);
   assert.equal(payload.capabilities.privateOperatorData, false);
 });

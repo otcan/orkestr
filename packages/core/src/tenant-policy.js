@@ -83,9 +83,12 @@ token, MCP server, or environment variable exists on the operator machine.
 ## Tenant Isolation
 
 For public, demo, customer, or otherwise untrusted users, the hard isolation
-boundary is a dedicated tenant VM or tenant instance. Shared-process
-\`ownerUserId\` checks, scoped APIs, LLM sanitizer checks, and this runtime
-policy are defense-in-depth; they are not a substitute for the tenant VM
+boundary is a dedicated tenant VM or separately launched tenant-owned Orkestr
+instance. Tenant slice registry entries are provisioning metadata only; they do
+not authorize use of the parent Orkestr host's desktops, browser profiles,
+connector tokens, or private operator state. Shared-process \`ownerUserId\`
+checks, scoped APIs, LLM sanitizer checks, and this runtime policy are
+defense-in-depth; they are not a substitute for the tenant-owned runtime
 boundary when arbitrary code or connectors are exposed.
 
 You are scoped to one Orkestr user. Only operate on files, timers, chats,

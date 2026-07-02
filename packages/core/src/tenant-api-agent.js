@@ -817,6 +817,7 @@ function skillUnavailableReason(skill = {}) {
     const message = clean(skill.message).replace(/^Managed Desktop is /i, "it is ").replace(/\.$/, "");
     if (message) return message;
     if ([
+      "tenant_instance_required",
       "instance_desktops_disabled",
       "instance_desktops_not_provisioned",
       "user_desktop_not_provisioned",
@@ -1728,6 +1729,7 @@ function userSafeApiAgentError(error) {
   if (lowered.includes("connector_prompt_push") || (lowered.includes("gmail") && /\b(?:push|notification|notify|poll|every|background)\b/.test(lowered))) return "I couldn't manage Gmail notifications for this chat right now. Please try again in a moment.";
   if (lowered.includes("gmail")) return "Gmail is not connected or enabled for this chat yet. Ask me to connect Gmail and I will send a Google sign-in link.";
   if (lowered.includes("outlook")) return "Outlook is not connected or enabled for this chat yet. Ask me to connect Outlook and I will send Microsoft sign-in instructions.";
+  if (lowered.includes("tenant_instance_required")) return desktopProvisioningMessage("tenant_instance_required");
   if (lowered.includes("instance_desktops_not_provisioned")) return desktopProvisioningMessage("instance_desktops_not_provisioned");
   if (lowered.includes("instance_desktops_disabled")) return desktopProvisioningMessage("instance_desktops_disabled");
   if (lowered.includes("user_desktop_not_provisioned")) return desktopProvisioningMessage("user_desktop_not_provisioned");

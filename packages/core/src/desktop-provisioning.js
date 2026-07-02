@@ -19,6 +19,10 @@ function stringList(values = []) {
   return [...new Set(list.map(clean).filter(Boolean))];
 }
 
+function tenantSliceId(tenantSlice = null) {
+  return clean(tenantSlice?.id || tenantSlice?.tenantSliceId);
+}
+
 function visibleDesktopSlugs(env = process.env, tenantVm = null, tenantSlice = null) {
   if (tenantSlice) {
     const linkedinSlug = clean(tenantSlice?.connectors?.linkedin?.desktopSlug || tenantSlice?.connectors?.linkedinDesktopSlug);
@@ -146,6 +150,9 @@ function tenantSliceDesktopHint(tenantSlice = null) {
 
 export function desktopProvisioningMessage(setupState = "") {
   const state = clean(setupState);
+  if (state === "tenant_instance_required") {
+    return "Managed Desktop requires a tenant-owned Orkestr instance for this chat.";
+  }
   if (state === "instance_desktops_disabled") {
     return "Managed Desktop is disabled for this Orkestr instance.";
   }
@@ -162,7 +169,14 @@ export function desktopProvisioningMessage(setupState = "") {
   return "Managed Desktop is not available for this chat.";
 }
 
-export function resolveDesktopProvisioningState({ skillId = "linkedin", userFound = true, tenantVm = null, tenantSlice = null, env = process.env } = {}) {
+export function resolveDesktopProvisioningState({
+  skillId = "linkedin",
+  userFound = true,
+  tenantVm = null,
+  tenantSlice = null,
+  tenantIsolationRequired = false,
+  env = process.env,
+} = {}) {
   const mode = lower(env.ORKESTR_BROWSER_DESKTOP_MODE);
   const userDesktopsEnabled = boolEnv(env.ORKESTR_USER_DESKTOPS_ENABLED, null);
   const instanceProvisioned = boolEnv(env.ORKESTR_INSTANCE_DESKTOPS_PROVISIONED, null);
@@ -171,13 +185,17 @@ export function resolveDesktopProvisioningState({ skillId = "linkedin", userFoun
   const hasManagedBackend = explicitManagedBackend(env);
   const tenantHint = tenantDesktopHint(tenantVm);
   const sliceHint = tenantSliceDesktopHint(tenantSlice);
+  const tenantOwnedBoundary = Boolean(tenantVm);
+  const hostDesktopStateAllowed = !tenantIsolationRequired || tenantOwnedBoundary;
   const profilesExplicit = mode === "profiles";
   const browserctlExplicit = mode === "browserctl";
-  const backendConfigured = hasManagedBackend || profilesExplicit || browserctlExplicit || tenantHint.hasDesktopCapability || sliceHint.hasDesktopCapability;
+  const hostBackendConfigured = hasManagedBackend || profilesExplicit || browserctlExplicit;
+  const backendConfigured = (hostDesktopStateAllowed && hostBackendConfigured) || tenantHint.hasDesktopCapability;
 
   let setupState = "available";
   if (!userFound) setupState = "user_desktop_not_provisioned";
   else if (["disabled", "none", "off"].includes(mode)) setupState = "instance_desktops_disabled";
+  else if (tenantIsolationRequired && !tenantOwnedBoundary) setupState = "tenant_instance_required";
   else if (tenantSlice && sliceHint.instanceEnabled === false) setupState = "instance_desktops_not_provisioned";
   else if (tenantSlice && !sliceHint.hasDesktopCapability) setupState = "instance_desktops_not_provisioned";
   else if (userDesktopsEnabled === false) setupState = "instance_desktops_not_provisioned";
@@ -204,7 +222,8 @@ export function resolveDesktopProvisioningState({ skillId = "linkedin", userFoun
       provisioned: setupState === "available",
       requiredDesktopAllowed: requiredDesktopAllowed(skillId, env, tenantVm, tenantSlice),
       tenantDesktopStatus: sliceHint.status || tenantHint.status,
-      tenantSliceId: clean(tenantSlice?.id),
+      tenantSliceId: tenantSliceId(tenantSlice),
+      tenantOwnedBoundary,
     },
   };
 }
