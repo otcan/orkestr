@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -54,13 +55,35 @@ async function cliAuthToken(env = process.env) {
   if (String(env.ORKESTR_DISABLE_CLI_AUTH || "").trim() === "1") return "";
   const home = String(env.ORKESTR_HOME || "").trim();
   if (!home) return "";
+  const file = path.join(home, "secrets", "cli-auth.json");
+  const current = await readStoredCliAuthToken(file);
+  if (current) return current;
+  return ensureStoredCliAuthToken(file);
+}
+
+async function readStoredCliAuthToken(file) {
   try {
-    const raw = await fs.readFile(path.join(home, "secrets", "cli-auth.json"), "utf8");
+    const raw = await fs.readFile(file, "utf8");
     const parsed = JSON.parse(raw);
     const token = String(parsed.token || "").trim();
     if (!token) return "";
     const expiresAt = Date.parse(String(parsed.expiresAt || ""));
     if (Number.isFinite(expiresAt) && expiresAt <= Date.now()) return "";
+    return token;
+  } catch {
+    return "";
+  }
+}
+
+async function ensureStoredCliAuthToken(file) {
+  try {
+    await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
+    const token = crypto.randomBytes(32).toString("base64url");
+    const payload = {
+      token,
+      createdAt: new Date().toISOString(),
+    };
+    await fs.writeFile(file, `${JSON.stringify(payload, null, 2)}\n`, { mode: 0o600 });
     return token;
   } catch {
     return "";
