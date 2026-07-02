@@ -1478,6 +1478,7 @@ export async function hydrateCodexAppServerThreadMessages(thread, codexThread, e
           phase: itemPhase(item) || "final_answer",
           text,
           state: "completed",
+          observedVia: "codex_app_server_history_sync",
           eventId: threadEventId({ codexThreadId: codexThread.id, turnId, itemId: item.id, type, role: "assistant", text }),
           codexThreadId: codexThread.id,
           codexTurnId: turnId,

@@ -4285,6 +4285,13 @@ function outOfBandNotificationBypassesMirrorCursor(message = {}) {
   return pickString(message.phase).toLowerCase() === "notification" && Boolean(pickString(message.chatId));
 }
 
+function recoveredCodexHistoryFinalBypassesMirrorCursor(message = {}, parent = null) {
+  return pickString(message.source).toLowerCase() === "codex-app-server-import" &&
+    pickString(message.observedVia).toLowerCase() === "codex_app_server_history_sync" &&
+    pickString(message.phase || "final_answer").toLowerCase() === "final_answer" &&
+    Boolean(pickString(message.chatId, parent?.chatId));
+}
+
 function whatsappTerminalIntentVisibilityWindowMs(env = process.env) {
   const parsed = Number(env.ORKESTR_WHATSAPP_TERMINAL_INTENT_VISIBILITY_WINDOW_MS || 15 * 60 * 1000);
   return Number.isFinite(parsed) ? Math.max(0, Math.floor(parsed)) : 15 * 60 * 1000;
@@ -5188,8 +5195,9 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
       });
       if (!liveRecovery && staleTerminalWhatsAppOutboundIntentPassedCursor({ state, messageSetKey, messageCursor, intent: existingIntent, env })) continue;
       const notificationBypass = outOfBandNotificationBypassesMirrorCursor(message);
-      if (!liveRecovery && !existingIntent && !notificationBypass && whatsappOutboundMirrorCursorPassed(state, messageSetKey, messageCursor)) continue;
-      if (!liveRecovery && !existingIntent && staleUntrackedWhatsAppReply(message, outboundDeliveries, env)) {
+      const historyRecoveryBypass = recoveredCodexHistoryFinalBypassesMirrorCursor(message, parent);
+      if (!liveRecovery && !existingIntent && !notificationBypass && !historyRecoveryBypass && whatsappOutboundMirrorCursorPassed(state, messageSetKey, messageCursor)) continue;
+      if (!liveRecovery && !existingIntent && !historyRecoveryBypass && staleUntrackedWhatsAppReply(message, outboundDeliveries, env)) {
         skipped.push({ agentId, threadId, messageId: message.id, reason: "stale_untracked_reply" });
         continue;
       }

@@ -212,6 +212,45 @@ test("whatsapp delivery does not recover imported transcript output after the mi
   assert.equal(delivery.skippedSummary.count, 0);
 });
 
+test("whatsapp delivery recovers history-synced app-server finals after the mirror cursor advanced", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-history-sync-recovery-"));
+  const runtimeEnv = await createBoundThread(home, "thread-history-sync-recovery");
+  const oldAt = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+  const parent = await appendThreadMessage("thread-history-sync-recovery", {
+    role: "user",
+    source: "whatsapp_inbound",
+    state: "completed",
+    connector: "whatsapp",
+    chatId: "chat-live-recovery",
+    accountId: "account-live-recovery",
+    text: "historical request with recovered final",
+    createdAt: oldAt,
+  }, runtimeEnv);
+  const final = await appendThreadMessage("thread-history-sync-recovery", {
+    role: "assistant",
+    source: "codex-app-server-import",
+    phase: "final_answer",
+    observedVia: "codex_app_server_history_sync",
+    state: "completed",
+    chatId: "chat-live-recovery",
+    accountId: "account-live-recovery",
+    parentMessageId: parent.id,
+    text: "Recovered imported final should send.",
+    createdAt: oldAt,
+  }, runtimeEnv);
+  await writeCursorPast(home, "thread-history-sync-recovery", Number(final.cursor) + 1);
+
+  const calls = [];
+  const delivery = await deliverWhatsAppReplies(runtimeEnv, async (url, options) => {
+    calls.push({ url, body: JSON.parse(options.body) });
+    return response({ ok: true, ids: [`sent-${calls.length}`] });
+  });
+
+  assert.equal(delivery.delivered.length, 1);
+  assert.deepEqual(delivery.delivered.map((item) => item.deliveryType), ["final"]);
+  assert.deepEqual(calls.map((call) => call.body.text), ["Recovered imported final should send."]);
+});
+
 test("whatsapp delivery ignores old terminal skipped intents after the mirror cursor advanced", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-old-terminal-intent-"));
   const runtimeEnv = await createBoundThread(home, "thread-old-terminal-intent");

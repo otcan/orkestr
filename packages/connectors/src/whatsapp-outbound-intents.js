@@ -164,6 +164,17 @@ function liveRecoveryWindowAllowed(message = {}, env = process.env) {
   return Boolean(messageMs && Date.now() - messageMs <= windowMs);
 }
 
+function historySyncedCodexFinalRecoveryAllowed({ message = {}, parent = null, state = null, thread = null, kind = "" } = {}) {
+  if (clean(message?.source).toLowerCase() !== "codex-app-server-import") return false;
+  if (clean(message?.observedVia).toLowerCase() !== "codex_app_server_history_sync") return false;
+  if (clean(message?.role).toLowerCase() !== "assistant") return false;
+  if (clean(message?.state).toLowerCase() !== "completed") return false;
+  if (clean(message?.phase || "final_answer").toLowerCase() !== "final_answer") return false;
+  return whatsappMessageOrigin(parent, state) ||
+    whatsappMessageOrigin(message, state) ||
+    boundThreadOrigin({ message, thread, kind });
+}
+
 function freshOutOfBandNotification({ message = {}, thread = null, kind = "", env = process.env } = {}) {
   if (clean(message.phase).toLowerCase() !== "notification") return false;
   if (!pickString(message.chatId)) return false;
@@ -232,6 +243,9 @@ export function canCreateWhatsAppOutboundIntent({
     }
     if (freshOutOfBandNotification({ message, thread, kind, env })) {
       return { ok: true, reason: "fresh_notification_after_cursor" };
+    }
+    if (historySyncedCodexFinalRecoveryAllowed({ message, parent, state, thread, kind })) {
+      return { ok: true, reason: "history_synced_codex_final_recovery" };
     }
     return { ok: false, reason: "missing_outbound_intent" };
   }
