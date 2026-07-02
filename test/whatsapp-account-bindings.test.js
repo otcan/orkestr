@@ -289,6 +289,52 @@ test("WhatsApp binding status explains responder readiness and ACL", async () =>
   assert.deepEqual(payload.precedence, ["chat", "thread", "instance", "user", "account-default"]);
 });
 
+test("generated tenant relay bindings stay ready when account discovery is scoped", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-tenant-relay-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_ADMIN_USER_ID: "tenant-demo",
+    WHATSAPP_BRIDGE_MODE: "external",
+    WHATSAPP_BRIDGE_URL: "http://parent-wa.local",
+  };
+  await createThread({
+    id: "tenant-demo-slice",
+    name: "Tenant Demo Slice",
+    ownerUserId: "tenant-demo",
+    binding: {
+      id: "thread:tenant-demo-slice:whatsapp",
+      connector: "whatsapp",
+      chatId: "tenant-chat@g.us",
+      displayName: "Tenant Demo Slice",
+      generated: true,
+      tenantVmBootstrap: true,
+      responderAccountId: "sender",
+      outboundAccountId: "sender",
+      mirrorToWhatsApp: true,
+    },
+    bindingName: "Tenant Demo Slice",
+  }, env);
+
+  const status = {
+    state: "failed",
+    summary: "WhatsApp bridge returned HTTP 403.",
+    bridgeUrl: "http://parent-wa.local",
+    accounts: [],
+  };
+  const payload = await listWhatsAppBindingStatuses({ env, status });
+  const binding = payload.bindings.find((item) => item.threadId === "tenant-demo-slice");
+  assert.equal(binding.state, "ready");
+  assert.equal(binding.reason, "ready");
+  assert.equal(binding.responderAccountId, "sender");
+  assert.equal(binding.runtimeAccountId, "sender");
+  assert.equal(binding.account.ready, true);
+  assert.equal(binding.account.sendReady, true);
+
+  const resolution = await resolveWhatsAppBinding({ thread: "tenant-demo-slice" }, { env, status });
+  assert.equal(resolution.ok, true);
+  assert.equal(resolution.selected.id, "thread:tenant-demo-slice:whatsapp");
+});
+
 test("WhatsApp binding ACL gates scoped bridge send, read, and manage actions", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-binding-acl-"));
   const env = {

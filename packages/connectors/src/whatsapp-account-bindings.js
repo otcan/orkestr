@@ -341,6 +341,38 @@ function bindingDiagnostic({ binding = {}, responderAccount = null, routeEligibl
   return { state: "ready", reason: "ready", nextAction: "none" };
 }
 
+function externalBridgeConfigured({ env = process.env, status = {} } = {}) {
+  const bridgeUrl = pickString(
+    status.bridgeUrl,
+    env.WHATSAPP_BRIDGE_URL,
+    env.ORKESTR_PARENT_WA_BRIDGE_URL,
+    env.ORKESTR_TENANT_PARENT_WA_BRIDGE_URL,
+  );
+  if (!bridgeUrl) return false;
+  const mode = pickString(status.mode, env.WHATSAPP_BRIDGE_MODE).toLowerCase();
+  return !mode || ["external", "relay", "parent-forward", "control-plane-forward", "control-plane", "controlplane", "broker"].includes(mode);
+}
+
+function syntheticScopedBridgeAccount(binding = {}, accountId = "", { env = process.env, status = {} } = {}) {
+  const id = pickString(accountId);
+  if (!id || !externalBridgeConfigured({ env, status })) return null;
+  if (binding.tenantVmBootstrap !== true && binding.generated !== true) return null;
+  return normalizeWhatsAppConnectorAccount(id, {
+    accountId: id,
+    id,
+    label: pickString(binding.displayName, id),
+    state: "ready",
+    ready: true,
+    authenticated: true,
+    started: true,
+    runtimeAccountId: id,
+    capabilities: ["send", "receive"],
+  }, {
+    status: { state: "paired" },
+    env,
+  });
+}
+
 function optionalBoolean(value, fallback = false) {
   if (value === undefined || value === null || value === "") return fallback;
   if (typeof value === "boolean") return value;
@@ -516,7 +548,7 @@ export async function retireWhatsAppThreadBinding(bindingId, env = process.env) 
   return { ok: true, thread: updated, binding: normalizeWhatsAppBinding(updated, { accounts: [], env }) };
 }
 
-export function normalizeWhatsAppBinding(input = {}, { accounts = [], env = process.env, thread = null, source = "" } = {}) {
+export function normalizeWhatsAppBinding(input = {}, { accounts = [], env = process.env, thread = null, source = "", status = {} } = {}) {
   const evaluatedAt = new Date().toISOString();
   const sourceThread = input?.binding && typeof input.binding === "object" ? input : thread;
   const binding = sourceThread ? sourceThread.binding || {} : input;
@@ -525,7 +557,10 @@ export function normalizeWhatsAppBinding(input = {}, { accounts = [], env = proc
     threadId: pickString(binding.threadId, sourceThread?.id),
   });
   const rawResponderAccountId = responderAccountIdForBinding(binding);
-  const responderAccount = rawResponderAccountId ? findWhatsAppAccountByAnyId(accounts, rawResponderAccountId, env) : null;
+  const responderAccount = rawResponderAccountId
+    ? findWhatsAppAccountByAnyId(accounts, rawResponderAccountId, env) ||
+      syntheticScopedBridgeAccount(binding, rawResponderAccountId, { env, status })
+    : null;
   const responderAccountId = pickString(responderAccount?.accountId, rawResponderAccountId);
   const routeEligible = whatsappBindingIsRouteEligible(binding);
   const diagnostic = bindingDiagnostic({ binding, responderAccount, routeEligible });
@@ -622,8 +657,8 @@ export async function listWhatsAppBindingStatuses({ env = process.env, status = 
     readWhatsAppBindingRecords(env),
   ]);
   const bindings = [
-    ...registryBindings.map((binding) => normalizeWhatsAppBinding(binding, { accounts, env, source: "registry" })),
-    ...whatsappThreads(sourceThreads).map((thread) => normalizeWhatsAppBinding(thread, { accounts, env, source: "thread" })),
+    ...registryBindings.map((binding) => normalizeWhatsAppBinding(binding, { accounts, env, source: "registry", status })),
+    ...whatsappThreads(sourceThreads).map((thread) => normalizeWhatsAppBinding(thread, { accounts, env, source: "thread", status })),
   ].sort(compareWhatsAppBindings);
   return {
     accounts,
