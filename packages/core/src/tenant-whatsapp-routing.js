@@ -3,6 +3,7 @@ import { dataPaths, ensureDataDirs } from "../../storage/src/paths.js";
 import { appendEvent, readJson, writeSecretJson } from "../../storage/src/store.js";
 import { attachRoutingFailure } from "./routing-failures.js";
 import { getTenantVm, listTenantVms, publicTenantVm, updateTenantVm } from "./tenant-vm-registry.js";
+import { ensureWhatsAppScopedTokens, readWhatsAppScopedTokenRecords } from "./whatsapp-scoped-tokens.js";
 
 function clean(value = "") {
   return String(value || "").trim();
@@ -78,8 +79,54 @@ function tokenSyncPayload(token = "", routeTarget = {}) {
   };
 }
 
+function bridgeSendTokenSyncPayload(token = "") {
+  const value = clean(token);
+  if (!value) return null;
+  return {
+    requiredOnTarget: true,
+    recommendedEnv: {
+      WHATSAPP_BRIDGE_MODE: "external",
+      ORKESTR_WHATSAPP_EXTERNAL_BRIDGE_ENABLED: "1",
+      WHATSAPP_BRIDGE_TOKEN: value,
+    },
+    acceptedEnvKeys: [
+      "WHATSAPP_BRIDGE_TOKEN",
+      "WA_HTTP_TOKEN",
+    ],
+    targetEnvFile: "/etc/orkestr/orkestr.env",
+    authHeader: "Authorization: Bearer <WHATSAPP_BRIDGE_TOKEN>",
+    verifyTarget: {
+      method: "POST",
+      path: "/api/connectors/whatsapp/bridge/send-text",
+      expectedAuthSuccessErrors: ["whatsapp_chat_id_required", "whatsapp_text_required"],
+    },
+  };
+}
+
 function newScopedToken() {
   return `owt_${crypto.randomBytes(32).toString("base64url")}`;
+}
+
+function tenantBridgeSendTokenId(tenantVmId = "") {
+  return `tenant-whatsapp-send:${clean(tenantVmId)}`;
+}
+
+async function ensureTenantBridgeSendToken(vm = {}, { chatId = "", accountId = "" } = {}, env = process.env) {
+  const id = tenantBridgeSendTokenId(vm.id);
+  if (!id || !clean(chatId)) return null;
+  await ensureWhatsAppScopedTokens([{
+    tokenId: id,
+    ownerUserId: vm.ownerUserId,
+    instanceId: vm.id,
+    accountId: clean(accountId),
+    chatId: clean(chatId),
+    allowedChatIds: [clean(chatId)],
+    scopes: ["whatsapp:bridge:send"],
+    routeKind: "whatsapp_bridge",
+    purpose: "tenant-whatsapp-outbound",
+  }], env);
+  const records = await readWhatsAppScopedTokenRecords(env);
+  return records.find((record) => clean(record.tokenId || record.id) === id) || null;
 }
 
 function normalizeBaseUrl(value = "") {
@@ -169,12 +216,14 @@ async function writeRouteSecrets(state, env = process.env) {
   });
 }
 
-function publicRoute(vm, secret = {}, { includeToken = false } = {}) {
+function publicRoute(vm, secret = {}, { includeToken = false, bridgeSendToken = null } = {}) {
   const token = clean(secret.token);
+  const bridgeToken = clean(bridgeSendToken?.token);
   const routeTarget = tenantRouteTarget(vm);
   const enabled = vm.connectors?.whatsappRouteEnabled === true;
   const diagnostics = routeDiagnostics(routeTarget, token, { enabled });
   const tokenSync = includeToken ? tokenSyncPayload(token, routeTarget) : null;
+  const bridgeTokenSync = includeToken ? bridgeSendTokenSyncPayload(bridgeToken) : null;
   return {
     tenantVmId: vm.id,
     ownerUserId: vm.ownerUserId,
@@ -190,7 +239,9 @@ function publicRoute(vm, secret = {}, { includeToken = false } = {}) {
     tokenPreview: tokenPreview(token),
     diagnostics,
     ...(includeToken && token ? { token } : {}),
+    ...(includeToken && bridgeToken ? { bridgeSendToken: bridgeToken } : {}),
     ...(tokenSync ? { tokenSync } : {}),
+    ...(bridgeTokenSync ? { bridgeTokenSync } : {}),
   };
 }
 
@@ -249,11 +300,15 @@ export async function configureTenantWhatsAppRoute(tenantVmId, input = {}, env =
     routeMode: routeTarget.routeMode,
     targetSource: routeTarget.targetSource,
   }, env).catch(() => {});
+  const bridgeSendToken = await ensureTenantBridgeSendToken(updated, {
+    chatId,
+    accountId: clean(updated.connectors?.whatsappAccountId),
+  }, env);
 
   return {
     ok: true,
     tenantVm: publicTenantVm(updated),
-    route: publicRoute(updated, state.routes[updated.id], { includeToken: true }),
+    route: publicRoute(updated, state.routes[updated.id], { includeToken: true, bridgeSendToken }),
   };
 }
 

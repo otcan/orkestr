@@ -27,6 +27,12 @@ function unique(values = []) {
   return result;
 }
 
+function truthy(value, fallback = false) {
+  const text = clean(value).toLowerCase();
+  if (!text) return fallback;
+  return ["1", "true", "yes", "on"].includes(text);
+}
+
 function whatsappIdentityCandidates(value = "") {
   const text = clean(value).toLowerCase();
   if (!text) return [];
@@ -144,6 +150,10 @@ async function readBody(req) {
 
 async function upstreamAuthHeaders(options = {}) {
   const headers = {};
+  if (options.forwardAuthorization) {
+    headers.authorization = options.forwardAuthorization;
+    return headers;
+  }
   if (options.upstreamToken) headers.authorization = `Bearer ${options.upstreamToken}`;
   if (options.upstreamCookie) {
     headers.cookie = options.upstreamCookie.includes("=")
@@ -164,15 +174,27 @@ async function upstreamAuthHeaders(options = {}) {
   return headers;
 }
 
+function upstreamBearerAuthorization(req) {
+  const value = clean(req?.headers?.authorization);
+  return /^Bearer\s+\S+/i.test(value) ? value : "";
+}
+
 export function createParentWhatsAppBridgeProxy(options = {}) {
   const policy = options.policy || parentWhatsAppBridgePolicyFromEnv(options.env || process.env);
   const token = clean(options.token ?? options.env?.ORKESTR_PARENT_WA_BRIDGE_TOKEN ?? process.env.ORKESTR_PARENT_WA_BRIDGE_TOKEN);
+  const allowUpstreamBearer = options.allowUpstreamBearer ?? truthy(
+    options.env?.ORKESTR_PARENT_WA_BRIDGE_ALLOW_UPSTREAM_BEARER ?? process.env.ORKESTR_PARENT_WA_BRIDGE_ALLOW_UPSTREAM_BEARER,
+    true,
+  );
   const upstreamBase = clean(options.upstreamBase ?? options.env?.ORKESTR_PARENT_WA_BRIDGE_UPSTREAM ?? process.env.ORKESTR_PARENT_WA_BRIDGE_UPSTREAM) ||
     "http://127.0.0.1:18912/api/connectors/whatsapp/bridge";
   const defaultAccount = clean(policy.defaultAccount) || "responder";
   return http.createServer(async (req, res) => {
     try {
-      if (token && clean(req.headers.authorization) !== `Bearer ${token}`) {
+      const requestAuthorization = upstreamBearerAuthorization(req);
+      const proxyTokenAuthorized = token && requestAuthorization === `Bearer ${token}`;
+      const forwardAuthorization = !proxyTokenAuthorized && allowUpstreamBearer ? requestAuthorization : "";
+      if (token && !proxyTokenAuthorized && !forwardAuthorization) {
         return json(res, 401, { ok: false, error: "unauthorized" });
       }
       const route = routeFor(req, { upstreamBase, defaultAccount });
@@ -188,6 +210,7 @@ export function createParentWhatsAppBridgeProxy(options = {}) {
             upstreamCookie: clean(options.upstreamCookie ?? options.env?.ORKESTR_PARENT_WA_BRIDGE_UPSTREAM_COOKIE ?? process.env.ORKESTR_PARENT_WA_BRIDGE_UPSTREAM_COOKIE),
             upstreamCookieName: clean(options.upstreamCookieName ?? options.env?.ORKESTR_PARENT_WA_BRIDGE_UPSTREAM_COOKIE_NAME ?? process.env.ORKESTR_PARENT_WA_BRIDGE_UPSTREAM_COOKIE_NAME) || "orkestr_session",
             upstreamCliAuthPath: clean(options.upstreamCliAuthPath ?? options.env?.ORKESTR_PARENT_WA_BRIDGE_UPSTREAM_CLI_AUTH_PATH ?? process.env.ORKESTR_PARENT_WA_BRIDGE_UPSTREAM_CLI_AUTH_PATH),
+            forwardAuthorization,
           })),
         },
         body,

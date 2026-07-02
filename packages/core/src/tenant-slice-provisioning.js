@@ -31,6 +31,20 @@ function truthy(value, fallback = false) {
   return value === true || value === 1 || ["1", "true", "yes", "on"].includes(clean(value).toLowerCase());
 }
 
+function parentWhatsAppBridgeUrl(input = {}, env = process.env) {
+  return clean(
+    input.parentWhatsAppBridgeUrl ||
+      input.whatsappParentBridgeUrl ||
+      input.parentBridgeUrl ||
+      input.controlPlane?.parentWhatsAppBridgeUrl ||
+      input.sharedControlPlane?.parentWhatsAppBridgeUrl ||
+      env.ORKESTR_TENANT_PARENT_WA_BRIDGE_URL ||
+      env.ORKESTR_PARENT_WA_BRIDGE_URL ||
+      env.ORKESTR_PARENT_WA_BRIDGE_BASE_URL ||
+      "http://10.42.0.1:18913",
+  );
+}
+
 function tenantSliceError(message, statusCode = 400) {
   const error = new Error(message);
   error.statusCode = statusCode;
@@ -223,10 +237,17 @@ async function stageTenantSliceWhatsAppRoute(slice, tenantVm, input = {}, env = 
     enabled: false,
     allowPending: true,
   }, env);
-  const { token: _token, tokenSync: _tokenSync, ...safeRoute } = route.route || {};
+  const {
+    token: _token,
+    tokenSync: _tokenSync,
+    bridgeSendToken: _bridgeSendToken,
+    bridgeTokenSync: _bridgeTokenSync,
+    ...safeRoute
+  } = route.route || {};
   return {
     route: safeRoute,
     token: clean(route.route?.token),
+    bridgeSendToken: clean(route.route?.bridgeSendToken),
   };
 }
 
@@ -241,12 +262,19 @@ export async function provisionTenantSlice(tenantSliceId, input = {}, env = proc
   try {
     registryVm = await ensureTenantVm(plan.tenantVm, env);
     const stagedWhatsappRoute = await stageTenantSliceWhatsAppRoute(slice, registryVm, input, env);
+    const whatsappBridgeUrl = stagedWhatsappRoute?.bridgeSendToken ? parentWhatsAppBridgeUrl(input, env) : "";
     const executionInput = stagedWhatsappRoute?.token
       ? {
         ...input,
         runtimeEnv: {
           ...(input.runtimeEnv && typeof input.runtimeEnv === "object" && !Array.isArray(input.runtimeEnv) ? input.runtimeEnv : {}),
           ORKESTR_WHATSAPP_INBOUND_TOKEN: stagedWhatsappRoute.token,
+          ...(stagedWhatsappRoute.bridgeSendToken ? {
+            WHATSAPP_BRIDGE_MODE: "external",
+            ORKESTR_WHATSAPP_EXTERNAL_BRIDGE_ENABLED: "1",
+            WHATSAPP_BRIDGE_URL: whatsappBridgeUrl,
+            WHATSAPP_BRIDGE_TOKEN: stagedWhatsappRoute.bridgeSendToken,
+          } : {}),
         },
       }
       : input;

@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { writeConnectorConfig } from "../../storage/src/config.js";
 import { appendEvent } from "../../storage/src/store.js";
 import { startCodexAppServerThread } from "./codex-app-server.js";
 import { createThread, getThread, updateThread } from "./threads.js";
@@ -48,6 +49,41 @@ function bootstrapShouldStartCodex(profile = {}, env = process.env) {
   if (falsey(env.ORKESTR_TENANT_BOOTSTRAP_START_CODEX)) return false;
   const firstChat = cleanObject(profile.firstChat);
   return firstChat.autoWake !== false;
+}
+
+function parentForwardRouteMode(value = "") {
+  return [
+    "relay",
+    "parent-forward",
+    "control-plane-forward",
+    "control-plane",
+    "controlplane",
+    "broker",
+  ].includes(clean(value).toLowerCase());
+}
+
+async function configureTenantVmWhatsAppConnector(profile = {}, env = process.env) {
+  const connectors = cleanObject(profile.connectors);
+  const whatsapp = cleanObject(connectors.whatsapp);
+  if (whatsapp.enabled === false) return null;
+  const bridgeUrl = clean(
+    env.WHATSAPP_BRIDGE_URL ||
+      env.ORKESTR_PARENT_WA_BRIDGE_URL ||
+      env.ORKESTR_TENANT_PARENT_WA_BRIDGE_URL ||
+      whatsapp.bridgeUrl ||
+      whatsapp.parentBridgeUrl,
+  );
+  const bridgeMode = clean(env.WHATSAPP_BRIDGE_MODE || whatsapp.bridgeMode || whatsapp.routeMode);
+  if (!bridgeUrl || (!parentForwardRouteMode(bridgeMode) && bridgeMode.toLowerCase() !== "external")) return null;
+  const config = { bridgeMode: "external", bridgeUrl };
+  await writeConnectorConfig("whatsapp", config, env);
+  await appendEvent({
+    type: "tenant_vm_bootstrap_whatsapp_bridge_configured",
+    tenantVmId: clean(profile.tenantVmId),
+    bridgeMode: "external",
+    bridgeUrl,
+  }, env).catch(() => {});
+  return config;
 }
 
 function whatsappBootstrapBinding({ threadId = "", threadName = "", whatsapp = {} } = {}) {
@@ -173,6 +209,14 @@ export async function bootstrapTenantVmFromProfile(profileInput = null, env = pr
   }
 
   const input = tenantVmBootstrapThreadInput(profile, env);
+  const whatsappConfig = await configureTenantVmWhatsAppConnector(profile, env).catch((error) => {
+    appendEvent({
+      type: "tenant_vm_bootstrap_whatsapp_bridge_config_failed",
+      tenantVmId: clean(profile.tenantVmId),
+      error: publicStartError(error),
+    }, env).catch(() => {});
+    return null;
+  });
   await fs.mkdir(input.cwd, { recursive: true }).catch(() => {});
   const existing = await getThread(input.id, env).catch(() => null);
   const created = !existing;
@@ -219,6 +263,7 @@ export async function bootstrapTenantVmFromProfile(profileInput = null, env = pr
     tenantVmId: clean(profile.tenantVmId),
     thread,
     created,
+    whatsappConfig,
     codexStart,
   };
 }

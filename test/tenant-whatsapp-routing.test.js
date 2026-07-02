@@ -11,6 +11,7 @@ import {
   listTenantWhatsAppRoutes,
   tenantWhatsAppInboundForwardRoute,
 } from "../packages/core/src/tenant-whatsapp-routing.js";
+import { readWhatsAppScopedTokenRecords } from "../packages/core/src/whatsapp-scoped-tokens.js";
 import { listRouterTraces } from "../packages/core/src/router-traces.js";
 
 function response(payload = {}, ok = true, status = 200) {
@@ -48,11 +49,14 @@ test("tenant WhatsApp routes store scoped tokens outside the public VM registry"
   }, env);
   const listed = await listTenantWhatsAppRoutes(env);
   const tenantVmFile = await fs.readFile(path.join(home, "tenant-vms.json"), "utf8");
+  const bridgeSendToken = (await readWhatsAppScopedTokenRecords(env)).find((record) => record.tokenId === "tenant-whatsapp-send:alice-tenant");
 
   assert.equal(configured.route.target, "https://alice.example.test/api/connectors/whatsapp/inbound");
   assert.equal(configured.route.routeMode, "direct");
   assert.equal(configured.route.targetSource, "endpoint");
   assert.match(configured.route.token, /^owt_/);
+  assert.match(configured.route.bridgeSendToken, /^wa_/);
+  assert.equal(configured.route.bridgeTokenSync.recommendedEnv.WHATSAPP_BRIDGE_TOKEN, configured.route.bridgeSendToken);
   assert.equal(configured.route.tokenConfigured, true);
   assert.equal(configured.route.diagnostics.status, "active");
   assert.equal(configured.route.diagnostics.nextAction, "sync_whatsapp_inbound_token_to_target");
@@ -67,10 +71,17 @@ test("tenant WhatsApp routes store scoped tokens outside the public VM registry"
   assert.equal(route.token, configured.route.token);
   assert.equal(accountMismatch, null);
   assert.equal(listed[0].token, undefined);
+  assert.equal(listed[0].bridgeSendToken, undefined);
+  assert.equal(listed[0].bridgeTokenSync, undefined);
   assert.equal(listed[0].tokenSync, undefined);
   assert.equal(listed[0].diagnostics.tokenState, "configured");
   assert.equal(listed[0].tokenPreview.includes("..."), true);
   assert.equal(tenantVmFile.includes(configured.route.token), false);
+  assert.equal(tenantVmFile.includes(configured.route.bridgeSendToken), false);
+  assert.equal(bridgeSendToken.accountId, "responder");
+  assert.equal(bridgeSendToken.chatId, "wa-group-zero@g.us");
+  assert.deepEqual(bridgeSendToken.allowedChatIds, ["wa-group-zero@g.us"]);
+  assert.deepEqual(bridgeSendToken.scopes, ["whatsapp:bridge:send"]);
 
   const disabled = await disableTenantWhatsAppRoute("alice-tenant", env);
   assert.equal(disabled.route.enabled, false);

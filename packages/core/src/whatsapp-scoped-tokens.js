@@ -87,6 +87,11 @@ function publicTokenRecord(record = {}) {
   };
 }
 
+function comparableTokenRecord(record = {}) {
+  const { updatedAt: _updatedAt, ...rest } = record || {};
+  return rest;
+}
+
 export async function readWhatsAppScopedTokenStore(env = process.env) {
   const raw = await readJson(scopedTokenPath(env), { schemaVersion: 1, tokens: [] });
   return {
@@ -120,12 +125,18 @@ export async function ensureWhatsAppScopedTokens(plans = [], env = process.env) 
   const byId = new Map(records.map((record, index) => [clean(record.tokenId || record.id), { record, index }]).filter(([id]) => id));
   let created = 0;
   let reused = 0;
+  let updated = 0;
   const nextRecords = [...records];
   for (const plan of plans) {
     const tokenId = clean(plan.tokenId || plan.id);
     if (!tokenId) continue;
     const prior = byId.get(tokenId);
     if (prior?.record && !prior.record.deletedAt) {
+      const nextRecord = normalizeTokenRecord({ ...plan, id: tokenId, tokenId }, prior.record);
+      if (JSON.stringify(comparableTokenRecord(nextRecord)) !== JSON.stringify(comparableTokenRecord(prior.record))) {
+        nextRecords[prior.index] = nextRecord;
+        updated += 1;
+      }
       reused += 1;
       continue;
     }
@@ -139,12 +150,13 @@ export async function ensureWhatsAppScopedTokens(plans = [], env = process.env) 
     else nextRecords.push(record);
     created += 1;
   }
-  if (created) await writeWhatsAppScopedTokenStore({ ...store, tokens: nextRecords }, env);
-  const nextStore = created ? { ...store, tokens: nextRecords } : store;
+  if (created || updated) await writeWhatsAppScopedTokenStore({ ...store, tokens: nextRecords }, env);
+  const nextStore = created || updated ? { ...store, tokens: nextRecords } : store;
   return {
     ok: true,
     created,
     reused,
+    updated,
     tokens: nextStore.tokens.map(publicTokenRecord),
   };
 }

@@ -243,9 +243,16 @@ test("tenant slice provisioning execute path and runtime status are observable",
   assert.equal(appliedBootstrapProfile.connectors.whatsapp.accountId, "sender");
   assert.match(appliedRuntimeEnvFile, /^ORKESTR_HOST='0\.0\.0\.0'$/m);
   assert.match(appliedRuntimeEnvFile, /^ORKESTR_WHATSAPP_INBOUND_TOKEN='owt_[^']+'$/m);
+  assert.match(appliedRuntimeEnvFile, /^WHATSAPP_BRIDGE_MODE='external'$/m);
+  assert.match(appliedRuntimeEnvFile, /^ORKESTR_WHATSAPP_EXTERNAL_BRIDGE_ENABLED='1'$/m);
+  assert.match(appliedRuntimeEnvFile, /^WHATSAPP_BRIDGE_URL='http:\/\/10\.42\.0\.1:18913'$/m);
+  assert.match(appliedRuntimeEnvFile, /^WHATSAPP_BRIDGE_TOKEN='wa_[^']+'$/m);
   assert.equal(result.whatsappRoute.token, undefined);
   assert.equal(result.whatsappRoute.tokenSync, undefined);
+  assert.equal(result.whatsappRoute.bridgeSendToken, undefined);
+  assert.equal(result.whatsappRoute.bridgeTokenSync, undefined);
   assert.equal(result.manifest.includes("ORKESTR_WHATSAPP_INBOUND_TOKEN"), false);
+  assert.equal(result.manifest.includes("WHATSAPP_BRIDGE_TOKEN"), false);
   assert.equal((await getTenantSlice("charlie-slice", env)).status, "provisioning");
   assert.equal((await getTenantVm("charlie-slice-vm", env)).status, "provisioning");
   assert.equal(await tenantWhatsAppInboundForwardRoute({ chatId: "charlie-wa@g.us", accountId: "sender" }, env), null);

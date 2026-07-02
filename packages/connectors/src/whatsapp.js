@@ -246,6 +246,9 @@ function externalBridgeEnabled(env = process.env) {
 
 function bridgeMode(config = {}, env = process.env) {
   const mode = String(env.WHATSAPP_BRIDGE_MODE || config.bridgeMode || "local").trim().toLowerCase();
+  if (["relay", "parent-forward", "control-plane-forward", "control-plane", "controlplane", "broker"].includes(mode)) {
+    return String(env.WHATSAPP_BRIDGE_URL || config.bridgeUrl || "").trim() ? "external" : "local";
+  }
   return mode === "external" && externalBridgeEnabled(env) ? "external" : "local";
 }
 
