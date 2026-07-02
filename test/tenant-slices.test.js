@@ -21,18 +21,21 @@ import {
   provisionTenantSlice,
   tenantSliceRuntimeStatus,
 } from "../packages/core/src/tenant-slice-provisioning.js";
+import { getTenantVm } from "../packages/core/src/tenant-vm-registry.js";
 
 async function read(response) {
   const text = await response.text();
   return text ? JSON.parse(text) : {};
 }
 
-test("tenant slice registry keeps one active same-box instance per owner", async () => {
+test("tenant slice registry keeps one active tenant VM slice per owner", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-tenant-slices-core-"));
   const env = {
     ORKESTR_HOME: home,
     ORKESTR_TENANT_SLICE_ROOT: "/tenant-root",
     ORKESTR_TENANT_SLICE_PORT_BASE: "23000",
+    ORKESTR_AUTH_URL: "https://auth.example.test",
+    ORKESTR_PAIRING_URL: "https://connect.example.test/setup/pairing",
   };
 
   const slice = await createTenantSlice({
@@ -48,9 +51,20 @@ test("tenant slice registry keeps one active same-box instance per owner", async
   }, env);
 
   assert.equal(slice.id, "alice-slice");
-  assert.equal(slice.boundary, "local-slice");
+  assert.equal(slice.boundary, "tenant-vm");
   assert.equal(slice.ownerUserId, "alice");
   assert.equal(slice.status, "planned");
+  assert.equal(slice.vm.tenantVmId, "alice-slice-vm");
+  assert.equal(slice.vm.namespace, "orkestr-tenants");
+  assert.equal(slice.vm.vmName, "alice-slice-vm");
+  assert.equal(slice.vm.resources.vcpus, 2);
+  assert.equal(slice.vm.resources.memoryMiB, 6144);
+  assert.equal(slice.vm.resources.diskGiB, 60);
+  assert.equal(slice.controlPlane.enabled, true);
+  assert.equal(slice.controlPlane.sharedAuthorization, true);
+  assert.equal(slice.controlPlane.sharedChallenges, true);
+  assert.equal(slice.controlPlane.authUrl, "https://auth.example.test");
+  assert.equal(slice.controlPlane.pairingUrl, "https://connect.example.test/setup/pairing");
   assert.equal(slice.system.user, "orkt_aliceslice");
   assert.equal(slice.system.serviceName, "orkestr-tenant-alice-slice.service");
   assert.equal(slice.paths.root, "/tenant-root/alice-slice");
@@ -93,12 +107,16 @@ test("tenant slice registry keeps one active same-box instance per owner", async
   assert.equal(replacement.portBlock.base, 23050);
 });
 
-test("tenant slice provisioning builds a resource-limited local plan", async () => {
+test("tenant slice provisioning builds a VM-backed plan", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-tenant-slices-plan-"));
   const env = {
     ORKESTR_HOME: home,
     ORKESTR_TENANT_SLICE_ROOT: "/tenant-root",
     ORKESTR_TENANT_SLICE_PORT_BASE: "24000",
+    ORKESTR_AUTH_URL: "https://auth.example.test",
+    ORKESTR_PAIRING_URL: "https://connect.example.test/setup/pairing",
+    ORKESTR_CONNECT_PUBLIC_BASE_URL: "https://connect.example.test",
+    ORKESTR_BROKER_BASE_URL: "https://broker.example.test",
   };
   const slice = await createTenantSlice({
     id: "bob-slice",
@@ -108,47 +126,62 @@ test("tenant slice provisioning builds a resource-limited local plan", async () 
     connectors: { linkedin: { desktopSlug: "linkedin-bob" } },
   }, env);
 
-  const plan = buildTenantSliceProvisioningPlan(slice, { systemdUnitDir: "/run/systemd/system" }, env);
-  const runtimeEnvFile = plan.files.find((file) => file.path === slice.paths.envFile);
-  const oxrmEnvFile = plan.files.find((file) => file.path === slice.paths.composeEnvFile);
-  const serviceFile = plan.files.find((file) => file.path.endsWith(slice.system.serviceName));
-  const sliceFile = plan.files.find((file) => file.path.endsWith(slice.system.sliceName));
-  const allFileContent = plan.files.map((file) => file.content).join("\n");
+  const plan = buildTenantSliceProvisioningPlan(slice, {
+    namespace: "tenant-bob",
+    vmName: "bob-vm",
+    repoUrl: "https://github.com/example/orkestr.git",
+    gitRef: "main",
+  }, env);
+  const manifest = JSON.parse(plan.manifest);
+  const vm = manifest.items.find((item) => item.kind === "VirtualMachine");
+  const cloudInitSecret = manifest.items.find((item) => item.kind === "Secret" && item.metadata.name === "bob-vm-cloudinit");
+  const userData = cloudInitSecret.stringData.userdata;
+  const runtimeEnvFile = Buffer.from(
+    userData.match(/path: \/etc\/orkestr\/orkestr\.env[\s\S]*?content: ([A-Za-z0-9+/=]+)/)[1],
+    "base64",
+  ).toString("utf8");
 
+  assert.equal(plan.boundary, "tenant-vm");
   assert.equal(plan.dryRun, true);
   assert.equal(plan.tenantSlice.id, "bob-slice");
-  assert.deepEqual(plan.directories, [
-    "/tenant-root/bob-slice",
-    "/tenant-root/bob-slice/home",
-    "/tenant-root/bob-slice/data",
-    "/tenant-root/bob-slice/workspace",
-    "/tenant-root/bob-slice/browsers",
-    "/tenant-root/bob-slice/oxrm",
-    "/tenant-root/bob-slice/run",
-    "/tenant-root/bob-slice/logs",
-  ]);
-  assert.equal(plan.runtimeEnv.ORKESTR_HOME, "/tenant-root/bob-slice/data");
+  assert.equal(plan.tenantSlice.boundary, "tenant-vm");
+  assert.equal(plan.tenantVm.id, "bob-slice-vm");
+  assert.equal(plan.tenantVm.resources.memoryMiB, 4096);
+  assert.equal(plan.tenantVm.resources.diskGiB, 30);
+  assert.equal(plan.namespace, "tenant-bob");
+  assert.equal(plan.vmName, "bob-vm");
+  assert.equal(plan.cloudInitSecretName, "bob-vm-cloudinit");
+  assert.equal(plan.runtimeEnv.ORKESTR_HOME, "/opt/orkestr/data");
   assert.equal(plan.runtimeEnv.ORKESTR_PORT, "24000");
+  assert.equal(plan.runtimeEnv.ORKESTR_TENANT_SLICE_ID, "bob-slice");
+  assert.equal(plan.runtimeEnv.ORKESTR_TENANT_VM_ID, "bob-slice-vm");
   assert.equal(plan.runtimeEnv.ORKESTR_ADMIN_USER_ID, "bob");
-  assert.equal(plan.runtimeEnv.ORKESTR_DEPLOYMENT_TRACK, "tenant-local-slice");
+  assert.equal(plan.runtimeEnv.ORKESTR_DEPLOYMENT_TRACK, "tenant-vm-slice");
   assert.equal(plan.runtimeEnv.ORKESTR_CONTAINED_USER_RUNTIME_POLICY, "1");
+  assert.equal(plan.runtimeEnv.ORKESTR_SHARED_CONTROL_PLANE, "1");
+  assert.equal(plan.runtimeEnv.ORKESTR_AUTH_URL, "https://auth.example.test");
+  assert.equal(plan.runtimeEnv.ORKESTR_PAIRING_URL, "https://connect.example.test/setup/pairing");
+  assert.equal(plan.runtimeEnv.ORKESTR_BROKER_BASE_URL, "https://broker.example.test");
   assert.equal(plan.runtimeEnv.ORKESTR_DEFAULT_DESKTOP_SLUG, "linkedin-bob");
   assert.deepEqual(JSON.parse(plan.runtimeEnv.ORKESTR_API_AGENT_TENANT_BUDGETS_JSON), {
     bob: { dailyUsd: 2, monthlyUsd: 20 },
   });
-  assert.equal(plan.oxrmEnv.COMPOSE_PROJECT_NAME, "oxrm-tenant-bob-slice");
-  assert.equal(plan.oxrmEnv.OXRM_WEB_PORT, "24010");
-  assert.match(runtimeEnvFile.content, /^ORKESTR_HOME='\/tenant-root\/bob-slice\/data'$/m);
-  assert.match(runtimeEnvFile.content, /^ORKESTR_API_AGENT_TENANT_BUDGETS_JSON='\{"bob":\{"dailyUsd":2,"monthlyUsd":20\}\}'$/m);
-  assert.match(oxrmEnvFile.content, /^OXRM_TENANT_ID='bob-slice'$/m);
-  assert.match(serviceFile.content, /Slice=orkestr-tenant-bob-slice\.slice/);
-  assert.match(serviceFile.content, /ReadWritePaths=\/tenant-root\/bob-slice/);
-  assert.match(serviceFile.content, /MemoryHigh=2048M/);
-  assert.match(serviceFile.content, /MemoryMax=4096M/);
-  assert.match(serviceFile.content, /CPUQuota=125%/);
-  assert.match(sliceFile.content, /TasksMax=512/);
-  assert.deepEqual(plan.commands.start, ["systemctl", "start", "orkestr-tenant-bob-slice.service", "orkestr-tenant-bob-slice-oxrm.service"]);
-  assert.equal(/password|token|secret/i.test(allFileContent), false);
+  assert.equal(plan.bootstrapProfile.policy.boundary, "tenant-vm");
+  assert.equal(plan.bootstrapProfile.policy.sharedAuthorization, true);
+  assert.equal(plan.bootstrapProfile.policy.sharedChallenges, true);
+  assert.equal(plan.bootstrapProfile.controlPlane.authUrl, "https://auth.example.test");
+  assert.equal(plan.bootstrapProfile.controlPlane.pairingUrl, "https://connect.example.test/setup/pairing");
+  assert.deepEqual(plan.bootstrapProfile.desks.map((desk) => desk.slug), ["linkedin-bob"]);
+  assert.equal(vm.spec.template.spec.domain.cpu.cores, 2);
+  assert.equal(vm.spec.template.spec.domain.resources.requests.memory, "4096Mi");
+  assert.equal(vm.spec.dataVolumeTemplates[0].spec.pvc.resources.requests.storage, "30Gi");
+  assert.match(runtimeEnvFile, /^ORKESTR_TENANT_SLICE_ID='bob-slice'$/m);
+  assert.match(runtimeEnvFile, /^ORKESTR_TENANT_VM_ID='bob-slice-vm'$/m);
+  assert.match(runtimeEnvFile, /^ORKESTR_SHARED_CONTROL_PLANE='1'$/m);
+  assert.match(runtimeEnvFile, /^ORKESTR_API_AGENT_TENANT_BUDGETS_JSON='\{"bob":\{"dailyUsd":2,"monthlyUsd":20\}\}'$/m);
+  assert.deepEqual(plan.commands.apply, ["kubectl", "apply", "-f", "-"]);
+  assert.equal(plan.manifest.includes("password"), false);
+  assert.equal(plan.manifest.includes("token"), false);
 });
 
 test("tenant slice provisioning execute path and runtime status are observable", async () => {
@@ -157,42 +190,45 @@ test("tenant slice provisioning execute path and runtime status are observable",
     ORKESTR_HOME: home,
     ORKESTR_TENANT_SLICE_ROOT: "/tenant-root",
     ORKESTR_TENANT_SLICE_PORT_BASE: "25000",
+    ORKESTR_AUTH_URL: "https://auth.example.test",
   };
   await createTenantSlice({ id: "charlie-slice", ownerUserId: "charlie" }, env);
   const calls = [];
 
-  const result = await provisionTenantSlice("charlie-slice", { execute: true }, env, {
-    applyPlan: async (plan) => {
-      calls.push(plan);
+  const result = await provisionTenantSlice("charlie-slice", {
+    execute: true,
+    namespace: "tenant-charlie",
+    vmName: "charlie-vm",
+    repoUrl: "https://github.com/example/orkestr.git",
+  }, env, {
+    spawnWithInput: async (command, args, options, input) => {
+      calls.push({ command, args, options, input });
+      return { stdout: "applied", stderr: "" };
     },
   });
 
   assert.equal(result.dryRun, false);
-  assert.equal(result.tenantSlice.status, "stopped");
+  assert.equal(result.tenantSlice.status, "provisioning");
+  assert.equal(result.tenantVm.status, "provisioning");
   assert.equal(calls.length, 1);
-  assert.equal(calls[0].dryRun, false);
-  assert.equal((await getTenantSlice("charlie-slice", env)).status, "stopped");
+  assert.equal(calls[0].command, "kubectl");
+  assert.deepEqual(calls[0].args, ["apply", "-f", "-"]);
+  assert.equal(JSON.parse(calls[0].input).items.some((item) => item.kind === "VirtualMachine"), true);
+  assert.equal((await getTenantSlice("charlie-slice", env)).status, "provisioning");
+  assert.equal((await getTenantVm("charlie-slice-vm", env)).status, "provisioning");
 
-  const statusCalls = [];
-  const status = await tenantSliceRuntimeStatus("charlie-slice", env, {
-    execFile: async (command, args, options) => {
-      statusCalls.push({ command, args, options });
-      return { stdout: "ActiveState=active\nSubState=running\nMemoryCurrent=12345\nCPUUsageNSec=987654\n" };
-    },
-  });
+  const status = await tenantSliceRuntimeStatus("charlie-slice", env);
   assert.equal(status.ok, true);
-  assert.equal(status.service.name, "orkestr-tenant-charlie-slice.service");
-  assert.equal(status.service.activeState, "active");
-  assert.equal(status.service.subState, "running");
-  assert.equal(status.service.memoryCurrentBytes, 12345);
-  assert.equal(status.service.cpuUsageNSec, 987654);
-  assert.equal(statusCalls[0].command, "systemctl");
-  assert.deepEqual(statusCalls[0].args.slice(0, 2), ["show", "orkestr-tenant-charlie-slice.service"]);
+  assert.equal(status.boundary, "tenant-vm");
+  assert.equal(status.service.name, "charlie-vm");
+  assert.equal(status.service.namespace, "tenant-charlie");
+  assert.equal(status.service.activeState, "provisioning");
+  assert.equal(status.service.subState, "untrusted");
 
   await createTenantSlice({ id: "failed-slice", ownerUserId: "failed" }, env);
   await assert.rejects(
     () => provisionTenantSlice("failed-slice", { execute: true }, env, {
-      applyPlan: async () => {
+      spawnWithInput: async () => {
         throw new Error("apply failed");
       },
     }),
@@ -201,6 +237,7 @@ test("tenant slice provisioning execute path and runtime status are observable",
   const failed = await getTenantSlice("failed-slice", env);
   assert.equal(failed.status, "error");
   assert.equal(failed.lastError, "apply failed");
+  assert.equal((await getTenantVm("failed-slice-vm", env)).status, "error");
 });
 
 test("tenant slice API is admin-only and returns provisioning plans", async () => {
@@ -249,7 +286,8 @@ test("tenant slice API is admin-only and returns provisioning plans", async () =
     assert.equal(createdResponse.status, 201);
     assert.equal(created.tenantSlice.id, "dana-slice");
     assert.equal(created.tenantSlice.ownerUserId, "dana");
-    assert.equal(created.tenantSlice.boundary, "local-slice");
+    assert.equal(created.tenantSlice.boundary, "tenant-vm");
+    assert.equal(created.tenantSlice.vm.tenantVmId, "dana-slice-vm");
     assert.equal(created.tenantSlice.portBlock.ports.orkestr, 26000);
     assert.equal(created.tenantSlice.connectors.whatsapp.chatId, "dana@g.us");
 
@@ -259,25 +297,26 @@ test("tenant slice API is admin-only and returns provisioning plans", async () =
     const provisioned = await read(await fetch(`${baseUrl}/api/tenant-slices/dana-slice/provision`, {
       method: "POST",
       headers: { "content-type": "application/json", cookie: adminCookie },
-      body: JSON.stringify({ systemdUnitDir: "/run/systemd/system" }),
+      body: JSON.stringify({
+        namespace: "tenant-dana",
+        vmName: "dana-vm",
+        repoUrl: "https://github.com/example/orkestr.git",
+      }),
     }));
     assert.equal(provisioned.dryRun, true);
+    assert.equal(provisioned.boundary, "tenant-vm");
     assert.equal(provisioned.tenantSlice.id, "dana-slice");
+    assert.equal(provisioned.tenantVm.id, "dana-slice-vm");
+    assert.equal(provisioned.namespace, "tenant-dana");
+    assert.equal(provisioned.vmName, "dana-vm");
     assert.equal(provisioned.runtimeEnv.ORKESTR_ADMIN_USER_ID, "dana");
     assert.equal(provisioned.runtimeEnv.ORKESTR_DEFAULT_DESKTOP_SLUG, "linkedin-dana");
-    assert.equal(provisioned.systemd.serviceName, "orkestr-tenant-dana-slice.service");
+    assert.equal(provisioned.runtimeEnv.ORKESTR_TENANT_SLICE_ID, "dana-slice");
+    assert.equal(provisioned.bootstrapProfile.policy.boundary, "tenant-vm");
+    assert.deepEqual(provisioned.commands.apply, ["kubectl", "apply", "-f", "-"]);
     assert.deepEqual(JSON.parse(provisioned.runtimeEnv.ORKESTR_API_AGENT_TENANT_BUDGETS_JSON), {
       dana: { dailyUsd: 4, monthlyUsd: 40 },
     });
-
-    const executeResponse = await fetch(`${baseUrl}/api/tenant-slices/dana-slice/provision`, {
-      method: "POST",
-      headers: { "content-type": "application/json", cookie: adminCookie },
-      body: JSON.stringify({ execute: true }),
-    });
-    const executePayload = await read(executeResponse);
-    assert.equal(executeResponse.status, 501);
-    assert.equal(executePayload.error, "tenant_slice_execute_not_configured");
 
     await createUser({
       email: "dana@example.test",

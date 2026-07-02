@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { dataPaths, ensureDataDirs } from "../../storage/src/paths.js";
 import { appendEvent, readJson, writeJson } from "../../storage/src/store.js";
 import { assertOwnerAccess, isAdminPrincipal } from "./policy.js";
+import { normalizeTenantControlPlane, publicTenantControlPlane } from "./tenant-control-plane.js";
 import { adminUserId, normalizeUserId } from "./users.js";
 
 const statuses = new Set(["planned", "provisioning", "stopped", "warming", "running", "error", "deleting", "deleted"]);
@@ -111,6 +112,51 @@ function normalizeResources(resources = {}) {
   };
 }
 
+function normalizeVmResources(resources = {}, fallback = {}) {
+  const source = resources && typeof resources === "object" && !Array.isArray(resources) ? resources : {};
+  const local = fallback && typeof fallback === "object" && !Array.isArray(fallback) ? fallback : {};
+  return {
+    vcpus: normalizeNumber(source.vcpus ?? source.cpu ?? Math.ceil(Number(local.cpuQuotaPercent || 200) / 100), 2, { min: 1, max: 64 }),
+    memoryMiB: normalizeNumber(source.memoryMiB ?? source.memoryMb ?? source.memory ?? local.memoryMaxMiB ?? local.memoryMax ?? 9216, 9216, { min: 512, max: 1048576 }),
+    diskGiB: normalizeNumber(source.diskGiB ?? source.diskGb ?? source.disk ?? local.diskSoftGiB ?? local.diskGiB ?? local.disk ?? 100, 100, { min: 5, max: 16384 }),
+  };
+}
+
+function normalizeEndpoint(endpoint = {}, input = {}) {
+  const source = endpoint && typeof endpoint === "object" && !Array.isArray(endpoint) ? endpoint : {};
+  return {
+    domain: clean(source.domain || input.domain),
+    baseUrl: clean(source.baseUrl || source.url || input.baseUrl || input.url),
+    brokerBaseUrl: clean(source.brokerBaseUrl || source.controlPlaneBaseUrl || input.brokerBaseUrl || input.controlPlaneBaseUrl),
+    publicIp: clean(source.publicIp || source.ip || input.publicIp || input.ip),
+    sshHost: clean(source.sshHost || input.sshHost),
+    sshUser: clean(source.sshUser || input.sshUser || "root"),
+  };
+}
+
+function normalizeSliceVm(vm = {}, sliceContext = {}, env = process.env) {
+  const source = vm && typeof vm === "object" && !Array.isArray(vm) ? vm : {};
+  const kubevirt = source.kubevirt && typeof source.kubevirt === "object" && !Array.isArray(source.kubevirt) ? source.kubevirt : {};
+  const id = safeTenantSliceId(source.id || source.tenantVmId || `${sliceContext.id}-vm`) || `${sliceContext.id}-vm`;
+  const namespace = clean(source.namespace || kubevirt.namespace || env.ORKESTR_TENANT_VM_NAMESPACE || "orkestr-tenants");
+  const vmName = clean(source.vmName || kubevirt.vmName || kubevirt.name || id);
+  const storageClass = clean(source.storageClass || kubevirt.storageClass || env.ORKESTR_TENANT_VM_STORAGE_CLASS);
+  return {
+    id,
+    tenantVmId: id,
+    namespace,
+    vmName,
+    storageClass,
+    resources: normalizeVmResources(source.resources, sliceContext.resources),
+    endpoint: normalizeEndpoint(source.endpoint, source),
+    kubevirt: {
+      namespace,
+      vmName,
+      storageClass,
+    },
+  };
+}
+
 function normalizeBudget(budget = {}) {
   const source = budget && typeof budget === "object" && !Array.isArray(budget) ? budget : {};
   const dailyUsd = Number(source.dailyUsd ?? source.daily ?? 5);
@@ -208,9 +254,12 @@ export function normalizeTenantSlice(input = {}, env = process.env, existing = [
   const id = safeTenantSliceId(input.id || input.tenantSliceId || `${ownerUserId}-slice`) || randomUUID();
   const portBlock = normalizePortBlock(input.portBlock, existing, env);
   const connectors = normalizeConnectors(input.connectors || {});
+  const resources = normalizeResources(input.resources);
+  const capabilities = normalizeStringList(input.capabilities || ["codex", "files", "timers", "whatsapp", "gmail", "linkedin", "oxrm"]);
+  const controlPlane = normalizeTenantControlPlane(input.controlPlane || input.sharedControlPlane || {}, env, { defaultEnabled: true });
   return {
     id,
-    boundary: "local-slice",
+    boundary: "tenant-vm",
     ownerUserId,
     displayName,
     status: normalizeStatus(input.status),
@@ -218,12 +267,14 @@ export function normalizeTenantSlice(input = {}, env = process.env, existing = [
     system: normalizeSystem(input.system, id),
     paths: normalizePaths(input.paths, id, env),
     portBlock,
-    resources: normalizeResources(input.resources),
+    resources,
+    vm: normalizeSliceVm(input.vm || input.tenantVm, { id, resources }, env),
+    controlPlane,
     budget: normalizeBudget(input.budget || input.openaiBudget),
     connectors,
     oxrm: normalizeOxrm(input.oxrm, id, portBlock),
     lifecycle: normalizeLifecycle(input.lifecycle),
-    capabilities: normalizeStringList(input.capabilities || ["codex", "files", "timers", "whatsapp", "gmail", "linkedin", "oxrm"]),
+    capabilities,
     labels: normalizeLabels(input.labels),
     lastError: clean(input.lastError || input.error),
     createdAt: clean(input.createdAt) || nowIso(),
@@ -245,6 +296,13 @@ export function publicTenantSlice(slice = {}) {
     paths: { ...normalized.paths },
     portBlock: { ...normalized.portBlock, ports: { ...normalized.portBlock.ports } },
     resources: { ...normalized.resources },
+    vm: {
+      ...normalized.vm,
+      resources: { ...normalized.vm.resources },
+      endpoint: { ...normalized.vm.endpoint },
+      kubevirt: { ...normalized.vm.kubevirt },
+    },
+    controlPlane: publicTenantControlPlane(normalized.controlPlane),
     budget: { ...normalized.budget },
     connectors: JSON.parse(JSON.stringify(normalized.connectors)),
     oxrm: { ...normalized.oxrm },

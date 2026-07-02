@@ -1,4 +1,5 @@
 import path from "node:path";
+import { normalizeTenantControlPlane, publicTenantControlPlane } from "./tenant-control-plane.js";
 import { normalizeTenantVm } from "./tenant-vm-registry.js";
 
 const defaultWorkspaceRoot = "/opt/orkestr/workspace";
@@ -126,6 +127,9 @@ function assertPublicBootstrapProfile(value, pathParts = []) {
 
 export function buildTenantBootstrapProfile(vmInput, input = {}, env = process.env) {
   const vm = normalizeTenantVm(vmInput, env);
+  const controlPlane = normalizeTenantControlPlane(input.controlPlane || input.sharedControlPlane || {}, env, {
+    defaultEnabled: Boolean(input.controlPlane || input.sharedControlPlane || input.tenantSliceId),
+  });
   const inputBootstrap = cleanObject(input.bootstrap);
   const vmBootstrap = cleanObject(vm.bootstrap);
   const firstThreadName = clean(
@@ -187,11 +191,14 @@ export function buildTenantBootstrapProfile(vmInput, input = {}, env = process.e
         desktopSlug: clean(vm.connectors.linkedinDesktopSlug || "linkedin"),
       },
     },
+    controlPlane: publicTenantControlPlane(controlPlane),
     policy: {
       singleThreadLimit: true,
       sanitizerRequired: true,
       sanitizerFallback: false,
       boundary: "tenant-vm",
+      sharedAuthorization: controlPlane.sharedAuthorization,
+      sharedChallenges: controlPlane.sharedChallenges,
     },
   };
   assertPublicBootstrapProfile(profile);

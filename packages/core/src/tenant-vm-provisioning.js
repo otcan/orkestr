@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { normalizeTenantControlPlane, publicTenantControlPlane, tenantControlPlaneRuntimeEnv } from "./tenant-control-plane.js";
 import { tenantBootstrapProfileJson, buildTenantBootstrapProfile } from "./tenant-bootstrap-profile.js";
 import { getTenantVm, publicTenantVm, setTenantVmStatus } from "./tenant-vm-registry.js";
 
@@ -76,20 +77,32 @@ function commandList(...items) {
 
 function runtimeEnv(input = {}, env = process.env) {
   const source = input.runtimeEnv && typeof input.runtimeEnv === "object" && !Array.isArray(input.runtimeEnv) ? input.runtimeEnv : {};
+  const controlPlane = normalizeTenantControlPlane(input.controlPlane || input.sharedControlPlane || {}, env, {
+    defaultEnabled: Boolean(input.controlPlane || input.sharedControlPlane || input.tenantSliceId),
+  });
+  const sliceTenant = Boolean(clean(input.tenantSliceId));
   const demoEnabled = input.demoMode === true ||
     clean(source.ORKESTR_DEMO_MODE) ||
-    clean(input.whatsappNumber || input.demoWhatsappNumber || env.ORKESTR_DEMO_WHATSAPP_NUMBER) ||
-    clean(input.brokerBaseUrl || input.demoBrokerBaseUrl || env.ORKESTR_DEMO_BROKER_BASE_URL || env.ORKESTR_BROKER_BASE_URL);
+    clean(input.demoWhatsappNumber || env.ORKESTR_DEMO_WHATSAPP_NUMBER) ||
+    (!sliceTenant && clean(input.whatsappNumber)) ||
+    (!sliceTenant && clean(input.brokerBaseUrl || input.demoBrokerBaseUrl || env.ORKESTR_DEMO_BROKER_BASE_URL || env.ORKESTR_BROKER_BASE_URL));
   const port = clean(input.port || input.orkestrPort || source.ORKESTR_PORT || env.ORKESTR_PORT || env.PORT || "19812");
   const values = {
+    ORKESTR_TENANT_VM_ID: input.tenantVmId || input.vmId || "",
+    ORKESTR_TENANT_SLICE_ID: input.tenantSliceId || "",
+    ORKESTR_ADMIN_USER_ID: input.ownerUserId || input.userId || "",
+    ORKESTR_TENANT_BOUNDARY: input.tenantVmId || input.tenantSliceId ? "tenant-vm" : "",
+    ORKESTR_CONTAINED_USER_RUNTIME_POLICY: input.tenantVmId || input.tenantSliceId || controlPlane.enabled ? "1" : "",
+    ORKESTR_DEPLOYMENT_TRACK: input.deploymentTrack || input.deployTrack || (input.tenantSliceId ? "tenant-vm-slice" : ""),
+    ...tenantControlPlaneRuntimeEnv(controlPlane),
     ORKESTR_DEMO_MODE: demoEnabled ? "1" : "",
-    ORKESTR_HOME: demoEnabled ? input.orkestrHome || source.ORKESTR_HOME || "/opt/orkestr/data" : "",
-    ORKESTR_PORT: demoEnabled ? port : "",
-    PORT: demoEnabled ? source.PORT || port : "",
+    ORKESTR_HOME: demoEnabled || input.tenantVmId || input.tenantSliceId ? input.orkestrHome || source.ORKESTR_HOME || "/opt/orkestr/data" : "",
+    ORKESTR_PORT: demoEnabled || input.tenantVmId || input.tenantSliceId ? port : "",
+    PORT: demoEnabled || input.tenantVmId || input.tenantSliceId ? source.PORT || port : "",
     ORKESTR_DEMO_WHATSAPP_NUMBER: demoEnabled ? input.whatsappNumber || input.demoWhatsappNumber || env.ORKESTR_DEMO_WHATSAPP_NUMBER : "",
-    ORKESTR_DEMO_BROKER_BASE_URL: demoEnabled ? input.brokerBaseUrl || input.demoBrokerBaseUrl || env.ORKESTR_DEMO_BROKER_BASE_URL || env.ORKESTR_BROKER_BASE_URL : "",
+    ORKESTR_DEMO_BROKER_BASE_URL: demoEnabled ? input.brokerBaseUrl || input.demoBrokerBaseUrl || env.ORKESTR_DEMO_BROKER_BASE_URL || env.ORKESTR_BROKER_BASE_URL : controlPlane.brokerBaseUrl,
     ORKESTR_DEMO_ENTRY_BASE_URL: demoEnabled ? input.entryBaseUrl || input.publicEntryBaseUrl || env.ORKESTR_DEMO_ENTRY_BASE_URL || env.ORKESTR_PUBLIC_SITE_URL || env.ORKESTR_PRIMARY_PUBLIC_URL : "",
-    ORKESTR_CONNECT_PUBLIC_BASE_URL: demoEnabled ? input.connectPublicBaseUrl || input.publicConnectBaseUrl || env.ORKESTR_CONNECT_PUBLIC_BASE_URL : "",
+    ORKESTR_CONNECT_PUBLIC_BASE_URL: demoEnabled ? input.connectPublicBaseUrl || input.publicConnectBaseUrl || env.ORKESTR_CONNECT_PUBLIC_BASE_URL : controlPlane.connectPublicBaseUrl,
     ORKESTR_DEMO_BROKER_REGISTRATION_TOKEN: demoEnabled ? input.brokerRegistrationToken || env.ORKESTR_DEMO_BROKER_REGISTRATION_TOKEN || env.ORKESTR_BROKER_REGISTRATION_TOKEN : "",
     ORKESTR_INSTANCE_DESKTOPS_PROVISIONED: demoEnabled ? input.instanceDesktopsProvisioned ?? env.ORKESTR_INSTANCE_DESKTOPS_PROVISIONED ?? "0" : "",
     ORKESTR_BROKER_INSTANCE_STORE: demoEnabled ? input.brokerInstanceStore || env.ORKESTR_BROKER_INSTANCE_STORE || "sqlite" : "",
@@ -199,6 +212,11 @@ function cloudInitUserData(vm, input, env) {
 }
 
 export function buildTenantVmProvisioningPlan(vm, input = {}, env = process.env) {
+  const planInput = {
+    ...input,
+    tenantVmId: input.tenantVmId || vm.id,
+    ownerUserId: input.ownerUserId || vm.ownerUserId,
+  };
   const namespace = safeName(input.namespace || vm.kubevirt.namespace || "orkestr-tenants");
   const vmName = safeName(input.vmName || vm.kubevirt.vmName || vm.id);
   const cloudInitSecretName = safeName(`${vmName}-cloudinit`, "orkestr-cloudinit");
@@ -244,7 +262,7 @@ export function buildTenantVmProvisioningPlan(vm, input = {}, env = process.env)
         },
         type: "Opaque",
         stringData: {
-          userdata: cloudInitUserData(vm, input, env),
+          userdata: cloudInitUserData(vm, planInput, env),
         },
       },
       {
@@ -305,8 +323,12 @@ export function buildTenantVmProvisioningPlan(vm, input = {}, env = process.env)
     namespace,
     vmName,
     cloudInitSecretName,
-    bootstrapProfilePath: tenantBootstrapProfilePath(input, env),
-    bootstrapProfile: buildTenantBootstrapProfile(vm, input, env),
+    bootstrapProfilePath: tenantBootstrapProfilePath(planInput, env),
+    bootstrapProfile: buildTenantBootstrapProfile(vm, planInput, env),
+    sharedControlPlane: publicTenantControlPlane(normalizeTenantControlPlane(planInput.controlPlane || planInput.sharedControlPlane || {}, env, {
+      defaultEnabled: Boolean(planInput.controlPlane || planInput.sharedControlPlane || planInput.tenantSliceId),
+    })),
+    runtimeEnv: runtimeEnv(planInput, env),
     manifestObject,
     manifest: `${JSON.stringify(manifestObject, null, 2)}\n`,
     commands: {

@@ -1,14 +1,21 @@
-import { execFile } from "node:child_process";
-import path from "node:path";
-import { promisify } from "node:util";
+import { spawn } from "node:child_process";
 import {
   getTenantSlice,
   normalizeTenantSlice,
   publicTenantSlice,
   setTenantSliceStatus,
 } from "./tenant-slices.js";
-
-const execFileAsync = promisify(execFile);
+import { normalizeTenantControlPlane, publicTenantControlPlane } from "./tenant-control-plane.js";
+import {
+  createTenantVm,
+  getTenantVm,
+  getTenantVmForOwner,
+  normalizeTenantVm,
+  publicTenantVm,
+  setTenantVmStatus,
+  updateTenantVm,
+} from "./tenant-vm-registry.js";
+import { buildTenantVmProvisioningPlan } from "./tenant-vm-provisioning.js";
 
 function nowIso() {
   return new Date().toISOString();
@@ -29,198 +36,227 @@ function tenantSliceError(message, statusCode = 400) {
   return error;
 }
 
-function envFile(entries = {}) {
-  return `${Object.entries(entries).map(([key, value]) => `${key}='${String(value).replace(/'/g, "'\\''")}'`).join("\n")}\n`;
+function uniqueList(values = []) {
+  return [...new Set(values.map((value) => clean(value)).filter(Boolean))];
 }
 
-function runtimeEnv(slice) {
+function vmCapabilities(slice) {
+  const capabilities = new Set(uniqueList(slice.capabilities || []));
+  if (capabilities.has("linkedin")) {
+    capabilities.add("desks");
+    capabilities.delete("linkedin");
+  }
+  if (slice.connectors?.linkedin?.enabled !== false) capabilities.add("desks");
+  if (slice.connectors?.gmail?.enabled !== false) capabilities.add("gmail");
+  if (slice.connectors?.whatsapp?.enabled !== false) capabilities.add("whatsapp");
+  if (slice.connectors?.oxrm?.enabled !== false) capabilities.add("oxrm");
+  capabilities.add("codex");
+  capabilities.add("files");
+  capabilities.add("timers");
+  return [...capabilities];
+}
+
+function sharedControlPlane(slice, input = {}, env = process.env) {
+  return normalizeTenantControlPlane(input.controlPlane || input.sharedControlPlane || slice.controlPlane || {}, env, { defaultEnabled: true });
+}
+
+function tenantVmInputForSlice(sliceInput = {}, input = {}, env = process.env) {
+  const slice = normalizeTenantSlice(sliceInput, env);
+  const controlPlane = sharedControlPlane(slice, input, env);
+  const vm = slice.vm || {};
+  const desktopSlug = clean(slice.connectors?.linkedin?.desktopSlug || "linkedin") || "linkedin";
+  return normalizeTenantVm({
+    id: clean(input.tenantVmId || input.vmId || vm.tenantVmId || vm.id) || `${slice.id}-vm`,
+    ownerUserId: slice.ownerUserId,
+    displayName: clean(input.vmDisplayName || input.displayName || `${slice.displayName} VM`),
+    status: "planned",
+    resources: vm.resources,
+    endpoint: {
+      ...vm.endpoint,
+      domain: clean(input.domain || vm.endpoint?.domain),
+      baseUrl: clean(input.baseUrl || input.url || vm.endpoint?.baseUrl),
+      brokerBaseUrl: clean(input.brokerBaseUrl || input.controlPlaneBaseUrl || controlPlane.brokerBaseUrl || vm.endpoint?.brokerBaseUrl),
+      publicIp: clean(input.publicIp || vm.endpoint?.publicIp),
+    },
+    kubevirt: {
+      namespace: clean(input.namespace || vm.namespace || vm.kubevirt?.namespace),
+      vmName: clean(input.vmName || vm.vmName || vm.kubevirt?.vmName || vm.id || `${slice.id}-vm`),
+      storageClass: clean(input.storageClass || vm.storageClass || vm.kubevirt?.storageClass),
+    },
+    bootstrap: {
+      firstThreadName: clean(input.firstThreadName || slice.displayName || slice.ownerUserId),
+      firstThreadId: clean(input.firstThreadId || slice.id),
+      desks: slice.connectors?.linkedin?.enabled === false ? [] : [desktopSlug],
+      skills: vmCapabilities(slice),
+    },
+    desktops: {
+      enabled: slice.connectors?.linkedin?.enabled !== false,
+      provisioned: ["warming", "running"].includes(slice.status),
+      defaultSlug: desktopSlug,
+      visibleSlugs: slice.connectors?.linkedin?.enabled === false ? [] : [desktopSlug],
+      status: slice.status === "error" ? "error" : slice.status === "running" ? "ready" : "not_provisioned",
+    },
+    connectors: {
+      whatsappChatId: clean(slice.connectors?.whatsapp?.chatId),
+      whatsappAccountId: clean(slice.connectors?.whatsapp?.accountId),
+      whatsappRouteEnabled: slice.connectors?.whatsapp?.enabled !== false,
+      whatsappRouteMode: clean(slice.connectors?.whatsapp?.routeMode || "control-plane-forward"),
+      whatsappBrokerBaseUrl: clean(controlPlane.brokerBaseUrl),
+      gmailAccountId: clean(slice.connectors?.gmail?.accountId),
+      linkedinDesktopSlug: desktopSlug,
+    },
+    capabilities: vmCapabilities(slice),
+    labels: {
+      ...slice.labels,
+      tenantSliceId: slice.id,
+      boundary: "tenant-vm",
+    },
+  }, env);
+}
+
+function vmProvisionInput(slice, tenantVm, input = {}, env = process.env) {
+  const controlPlane = sharedControlPlane(slice, input, env);
+  const runtimeEnv = input.runtimeEnv && typeof input.runtimeEnv === "object" && !Array.isArray(input.runtimeEnv) ? input.runtimeEnv : {};
   return {
-    ORKESTR_HOME: slice.paths.dataRoot,
-    ORKESTR_PORT: String(slice.portBlock.ports.orkestr),
-    PORT: String(slice.portBlock.ports.orkestr),
-    ORKESTR_SERVICE_NAME: slice.system.serviceName,
-    ORKESTR_DEPLOYMENT_TRACK: "tenant-local-slice",
-    ORKESTR_TENANT_SLICE_ID: slice.id,
-    ORKESTR_ADMIN_USER_ID: slice.ownerUserId,
-    ORKESTR_AUTH_REQUIRED: "1",
-    ORKESTR_CONTAINED_USER_RUNTIME_POLICY: "1",
-    ORKESTR_DEFAULT_DESKTOP_SLUG: slice.connectors.linkedin.desktopSlug,
-    ORKESTR_INSTANCE_DESKTOPS_PROVISIONED: slice.connectors.linkedin.enabled ? "1" : "0",
-    ORKESTR_API_AGENT_TENANT_BUDGETS_JSON: JSON.stringify({ [slice.ownerUserId]: slice.budget }),
+    ...input,
+    tenantVmId: tenantVm.id,
+    tenantSliceId: slice.id,
+    ownerUserId: slice.ownerUserId,
+    controlPlane,
+    sharedControlPlane: controlPlane,
+    brokerBaseUrl: input.brokerBaseUrl || controlPlane.brokerBaseUrl,
+    connectPublicBaseUrl: input.connectPublicBaseUrl || input.publicConnectBaseUrl || controlPlane.connectPublicBaseUrl,
+    connectPublicSetupUrl: input.connectPublicSetupUrl || input.publicSetupUrl || controlPlane.connectPublicSetupUrl,
+    port: input.port || input.orkestrPort || slice.portBlock?.ports?.orkestr || "19812",
+    instanceDesktopsProvisioned: slice.connectors?.linkedin?.enabled === false ? "0" : "1",
+    runtimeEnv: {
+      ORKESTR_TENANT_SLICE_ID: slice.id,
+      ORKESTR_TENANT_VM_ID: tenantVm.id,
+      ORKESTR_ADMIN_USER_ID: slice.ownerUserId,
+      ORKESTR_DEPLOYMENT_TRACK: "tenant-vm-slice",
+      ORKESTR_DEFAULT_DESKTOP_SLUG: clean(slice.connectors?.linkedin?.desktopSlug || "linkedin") || "linkedin",
+      ORKESTR_API_AGENT_TENANT_BUDGETS_JSON: JSON.stringify({ [slice.ownerUserId]: slice.budget }),
+      ...runtimeEnv,
+    },
   };
 }
 
-function oxrmEnv(slice) {
-  return {
-    COMPOSE_PROJECT_NAME: slice.oxrm.composeProject,
-    OXRM_TENANT_ID: slice.id,
-    OXRM_OWNER_USER_ID: slice.ownerUserId,
-    OXRM_DATA_ROOT: slice.paths.oxrmRoot,
-    OXRM_WEB_PORT: String(slice.portBlock.ports.oxrmWeb),
-    OXRM_API_PORT: String(slice.portBlock.ports.oxrmApi),
-    OXRM_MCP_PORT: String(slice.portBlock.ports.oxrmMcp),
-  };
-}
-
-function serviceUnit(slice) {
-  return `[Unit]
-Description=Orkestr tenant slice ${slice.id}
-After=network.target
-
-[Service]
-Type=simple
-User=${slice.system.user}
-Group=${slice.system.group}
-Slice=${slice.system.sliceName}
-EnvironmentFile=${slice.paths.envFile}
-WorkingDirectory=/opt/orkestr/current
-ExecStart=/usr/bin/node dist/server/apps/server/src/server.js
-Restart=on-failure
-RestartSec=5
-NoNewPrivileges=true
-PrivateTmp=true
-ProtectSystem=strict
-ReadWritePaths=${slice.paths.root}
-MemoryHigh=${slice.resources.memoryHighMiB}M
-MemoryMax=${slice.resources.memoryMaxMiB}M
-CPUQuota=${slice.resources.cpuQuotaPercent}%
-TasksMax=${slice.resources.tasksMax}
-
-[Install]
-WantedBy=multi-user.target
-`;
-}
-
-function sliceUnit(slice) {
-  return `[Unit]
-Description=Resource slice for Orkestr tenant ${slice.id}
-
-[Slice]
-MemoryHigh=${slice.resources.memoryHighMiB}M
-MemoryMax=${slice.resources.memoryMaxMiB}M
-CPUQuota=${slice.resources.cpuQuotaPercent}%
-TasksMax=${slice.resources.tasksMax}
-`;
-}
-
-function oxrmServiceUnit(slice) {
-  return `[Unit]
-Description=OxRM tenant stack ${slice.id}
-After=docker.service
-Requires=docker.service
-
-[Service]
-Type=oneshot
-RemainAfterExit=true
-WorkingDirectory=${slice.paths.oxrmRoot}
-EnvironmentFile=${slice.paths.composeEnvFile}
-ExecStart=/usr/bin/docker compose --project-name ${slice.oxrm.composeProject} up -d
-ExecStop=/usr/bin/docker compose --project-name ${slice.oxrm.composeProject} stop
-TimeoutStartSec=300
-TimeoutStopSec=120
-
-[Install]
-WantedBy=multi-user.target
-`;
+function spawnWithInput(command, args, options, input) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, { ...options, stdio: ["pipe", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    child.on("error", reject);
+    child.on("close", (code) => {
+      if (code === 0) {
+        resolve({ stdout, stderr });
+        return;
+      }
+      const error = new Error(`kubectl_apply_failed:${code}`);
+      error.statusCode = 500;
+      error.stdout = stdout;
+      error.stderr = stderr;
+      reject(error);
+    });
+    child.stdin.end(input);
+  });
 }
 
 export function buildTenantSliceProvisioningPlan(sliceInput = {}, input = {}, env = process.env) {
   const slice = normalizeTenantSlice(sliceInput, env);
-  const unitDir = clean(input.systemdUnitDir || env.ORKESTR_TENANT_SLICE_SYSTEMD_DIR) || "/etc/systemd/system";
-  const directories = [
-    slice.paths.root,
-    slice.paths.home,
-    slice.paths.dataRoot,
-    slice.paths.workspaceRoot,
-    slice.paths.browserRoot,
-    slice.paths.oxrmRoot,
-    slice.paths.runRoot,
-    slice.paths.logRoot,
-  ];
-  const files = [
-    { path: slice.paths.envFile, mode: "0640", owner: `${slice.system.user}:${slice.system.group}`, content: envFile(runtimeEnv(slice)) },
-    { path: slice.paths.composeEnvFile, mode: "0640", owner: `${slice.system.user}:${slice.system.group}`, content: envFile(oxrmEnv(slice)) },
-    { path: path.posix.join(unitDir, slice.system.sliceName), mode: "0644", owner: "root:root", content: sliceUnit(slice) },
-    { path: path.posix.join(unitDir, slice.system.serviceName), mode: "0644", owner: "root:root", content: serviceUnit(slice) },
-    { path: path.posix.join(unitDir, slice.system.oxrmServiceName), mode: "0644", owner: "root:root", content: oxrmServiceUnit(slice) },
-  ];
+  const tenantVm = tenantVmInputForSlice(slice, input, env);
+  const provisionInput = vmProvisionInput(slice, tenantVm, input, env);
+  const vmPlan = buildTenantVmProvisioningPlan(tenantVm, provisionInput, env);
+  const execute = truthy(input.execute, false) && input.dryRun !== true;
   return {
+    ok: true,
+    boundary: "tenant-vm",
+    dryRun: !execute,
     tenantSlice: publicTenantSlice(slice),
-    dryRun: !truthy(input.execute, false),
-    directories,
-    files,
-    runtimeEnv: runtimeEnv(slice),
-    oxrmEnv: oxrmEnv(slice),
-    systemd: {
-      sliceName: slice.system.sliceName,
-      serviceName: slice.system.serviceName,
-      oxrmServiceName: slice.system.oxrmServiceName,
-    },
-    commands: {
-      provision: [
-        ["id", "-u", slice.system.user],
-        ["useradd", "--system", "--create-home", "--home-dir", slice.paths.home, "--shell", "/usr/sbin/nologin", slice.system.user],
-        ["install", "-d", "-o", slice.system.user, "-g", slice.system.group, ...directories],
-        ["systemctl", "daemon-reload"],
-        ["systemctl", "enable", slice.system.serviceName, slice.system.oxrmServiceName],
-      ],
-      start: ["systemctl", "start", slice.system.serviceName, slice.system.oxrmServiceName],
-      stop: ["systemctl", "stop", slice.system.serviceName, slice.system.oxrmServiceName],
-      status: ["systemctl", "show", slice.system.serviceName, "-p", "ActiveState", "-p", "SubState", "-p", "MemoryCurrent", "-p", "CPUUsageNSec"],
-    },
+    tenantVm: publicTenantVm(tenantVm),
+    sharedControlPlane: publicTenantControlPlane(provisionInput.sharedControlPlane),
+    namespace: vmPlan.namespace,
+    vmName: vmPlan.vmName,
+    cloudInitSecretName: vmPlan.cloudInitSecretName,
+    bootstrapProfilePath: vmPlan.bootstrapProfilePath,
+    bootstrapProfile: vmPlan.bootstrapProfile,
+    runtimeEnv: vmPlan.runtimeEnv,
+    manifest: vmPlan.manifest,
+    commands: vmPlan.commands,
   };
+}
+
+async function ensureTenantVm(tenantVm, env = process.env) {
+  const existingById = await getTenantVm(tenantVm.id, env);
+  if (existingById) return updateTenantVm(tenantVm.id, tenantVm, env);
+  const existingForOwner = await getTenantVmForOwner(tenantVm.ownerUserId, env);
+  if (existingForOwner && existingForOwner.id !== tenantVm.id) {
+    throw tenantSliceError("tenant_vm_owner_already_has_instance", 409);
+  }
+  return createTenantVm(tenantVm, env);
 }
 
 export async function provisionTenantSlice(tenantSliceId, input = {}, env = process.env, options = {}) {
   const slice = await getTenantSlice(tenantSliceId, env);
   if (!slice) throw tenantSliceError("tenant_slice_not_found", 404);
   const plan = buildTenantSliceProvisioningPlan(slice, input, env);
-  if (!truthy(input.execute, false)) return plan;
-  if (typeof options.applyPlan !== "function") throw tenantSliceError("tenant_slice_execute_not_configured", 501);
-  await setTenantSliceStatus(slice.id, "provisioning", {}, env);
+  if (plan.dryRun) return plan;
+
+  let registryVm = null;
+  await setTenantSliceStatus(slice.id, "provisioning", { lastError: "" }, env);
   try {
-    await options.applyPlan(plan);
+    registryVm = await ensureTenantVm(plan.tenantVm, env);
+    const [command, ...args] = plan.commands.apply;
+    const runner = options.spawnWithInput || spawnWithInput;
+    const output = await runner(command, args, {
+      env: { ...process.env, ...env, ...(input.kubeconfig ? { KUBECONFIG: clean(input.kubeconfig) } : {}) },
+      maxBuffer: 1024 * 1024 * 16,
+    }, plan.manifest);
+    const [tenantSlice, tenantVm] = await Promise.all([
+      setTenantSliceStatus(slice.id, "provisioning", { lastError: "" }, env),
+      setTenantVmStatus(registryVm.id, "provisioning", { lastError: "" }, env),
+    ]);
+    return {
+      ...plan,
+      dryRun: false,
+      tenantSlice: publicTenantSlice(tenantSlice),
+      tenantVm: publicTenantVm(tenantVm),
+      output,
+    };
   } catch (error) {
-    await setTenantSliceStatus(slice.id, "error", { lastError: clean(error?.message || error) }, env);
+    const lastError = clean(error?.stderr || error?.message || error).slice(0, 1000);
+    await setTenantSliceStatus(slice.id, "error", { lastError }, env).catch(() => {});
+    if (registryVm) await setTenantVmStatus(registryVm.id, "error", { lastError }, env).catch(() => {});
     throw error;
   }
-  const updated = await setTenantSliceStatus(slice.id, "stopped", {}, env);
-  return { ...plan, dryRun: false, tenantSlice: publicTenantSlice(updated) };
 }
 
-function parseSystemctlShow(stdout = "") {
-  return Object.fromEntries(String(stdout || "").split("\n").map((line) => {
-    const index = line.indexOf("=");
-    return index === -1 ? null : [line.slice(0, index), line.slice(index + 1)];
-  }).filter(Boolean));
-}
-
-export async function tenantSliceRuntimeStatus(tenantSliceId, env = process.env, options = {}) {
+export async function tenantSliceRuntimeStatus(tenantSliceId, env = process.env) {
   const slice = await getTenantSlice(tenantSliceId, env);
   if (!slice) throw tenantSliceError("tenant_slice_not_found", 404);
-  const run = options.execFile || execFileAsync;
-  try {
-    const { stdout } = await run("systemctl", ["show", slice.system.serviceName, "-p", "ActiveState", "-p", "SubState", "-p", "MemoryCurrent", "-p", "CPUUsageNSec"], { timeout: 5000 });
-    const parsed = parseSystemctlShow(stdout);
-    return {
-      ok: true,
-      tenantSlice: publicTenantSlice(slice),
-      service: {
-        name: slice.system.serviceName,
-        activeState: clean(parsed.ActiveState),
-        subState: clean(parsed.SubState),
-        memoryCurrentBytes: Number(parsed.MemoryCurrent || 0) || 0,
-        cpuUsageNSec: Number(parsed.CPUUsageNSec || 0) || 0,
-      },
-      generatedAt: nowIso(),
-    };
-  } catch (error) {
-    return {
-      ok: false,
-      tenantSlice: publicTenantSlice(slice),
-      service: { name: slice.system.serviceName, activeState: "unknown", subState: "unknown", memoryCurrentBytes: 0, cpuUsageNSec: 0 },
-      error: clean(error?.message || error),
-      generatedAt: nowIso(),
-    };
-  }
+  const tenantVmId = clean(slice.vm?.tenantVmId || slice.vm?.id || `${slice.id}-vm`);
+  const tenantVm = await getTenantVm(tenantVmId, env).catch(() => null) ||
+    await getTenantVmForOwner(slice.ownerUserId, env).catch(() => null);
+  const vmName = clean(tenantVm?.kubevirt?.vmName || slice.vm?.vmName || tenantVmId);
+  const namespace = clean(tenantVm?.kubevirt?.namespace || slice.vm?.namespace || "orkestr-tenants");
+  return {
+    ok: Boolean(tenantVm) && !["error", "deleted"].includes(tenantVm.status),
+    boundary: "tenant-vm",
+    tenantSlice: publicTenantSlice(slice),
+    tenantVm: tenantVm ? publicTenantVm(tenantVm) : null,
+    service: {
+      name: vmName,
+      namespace,
+      activeState: clean(tenantVm?.status || slice.status || "unknown"),
+      subState: tenantVm ? clean(tenantVm.trust?.trustLevel || "registered") : "tenant_vm_not_registered",
+    },
+    error: tenantVm ? "" : "tenant_vm_not_registered",
+    generatedAt: nowIso(),
+  };
 }

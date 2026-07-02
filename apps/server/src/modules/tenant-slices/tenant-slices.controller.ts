@@ -30,7 +30,7 @@ function tenantSliceBody(body: Record<string, unknown> = {}) {
   for (const key of ["id", "tenantSliceId", "ownerUserId", "userId", "displayName", "name", "status", "lastError", "error"]) {
     if (body[key] !== undefined) output[key] = String(body[key] || "").trim();
   }
-  for (const key of ["system", "paths", "portBlock", "resources", "budget", "openaiBudget", "connectors", "oxrm", "lifecycle", "labels"]) {
+  for (const key of ["system", "paths", "portBlock", "resources", "budget", "openaiBudget", "connectors", "oxrm", "lifecycle", "labels", "vm", "tenantVm", "controlPlane", "sharedControlPlane"]) {
     if (body[key] && typeof body[key] === "object" && !Array.isArray(body[key])) output[key] = body[key];
   }
   if (body.capabilities !== undefined) output.capabilities = listValue(body.capabilities);
@@ -39,7 +39,53 @@ function tenantSliceBody(body: Record<string, unknown> = {}) {
 
 function provisionBody(body: Record<string, unknown> = {}) {
   const output: Record<string, unknown> = {};
+  for (const key of [
+    "imageUrl",
+    "storageClass",
+    "repoUrl",
+    "gitRef",
+    "bootstrapUrl",
+    "domain",
+    "acmeEmail",
+    "email",
+    "namespace",
+    "vmName",
+    "tenantVmId",
+    "vmId",
+    "vmDisplayName",
+    "kubeconfig",
+    "publicIp",
+    "publicIpPorts",
+    "ports",
+    "channel",
+    "baseUrl",
+    "url",
+    "brokerBaseUrl",
+    "controlPlaneBaseUrl",
+    "connectPublicBaseUrl",
+    "publicConnectBaseUrl",
+    "connectPublicSetupUrl",
+    "publicSetupUrl",
+    "firstThreadName",
+    "firstThreadId",
+    "tenantBootstrapProfilePath",
+    "bootstrapProfilePath",
+    "port",
+    "orkestrPort",
+  ]) {
+    if (body[key] !== undefined) output[key] = String(body[key] || "").trim();
+  }
   if (body.execute !== undefined) output.execute = body.execute === true || body.execute === "true";
+  if (body.dryRun !== undefined) output.dryRun = body.dryRun !== false && body.dryRun !== "false";
+  if (body.sshPublicKeys !== undefined || body.sshKeys !== undefined) {
+    const values = body.sshPublicKeys ?? body.sshKeys;
+    output.sshPublicKeys = Array.isArray(values) ? values : String(values || "").split("\n");
+  }
+  if (body.withWhatsapp !== undefined) output.withWhatsapp = body.withWhatsapp === true || body.withWhatsapp === "true";
+  if (body.noTailscale !== undefined) output.noTailscale = body.noTailscale !== false && body.noTailscale !== "false";
+  for (const key of ["runtimeEnv", "bootstrap", "controlPlane", "sharedControlPlane"]) {
+    if (body[key] && typeof body[key] === "object" && !Array.isArray(body[key])) output[key] = body[key];
+  }
   if (body.systemdUnitDir !== undefined) output.systemdUnitDir = String(body.systemdUnitDir || "").trim();
   return output;
 }
