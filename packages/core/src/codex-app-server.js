@@ -35,7 +35,12 @@ import {
 import { getCodexAppServerClient, stopCodexAppServerClients as stopCodexAppServerRuntimeClients } from "./codex-app-server-client.js";
 import { readLiveCodexThreadState } from "./codex-app-server-live-state.js";
 import { codexAppServerSocket, codexAppServerTransport } from "../../connectors/src/codex-app-server-transport.js";
-import { codexAppServerMessageFields } from "./codex-app-server-whatsapp.js";
+import {
+  codexAppServerMessageFields,
+  latestWhatsAppParent,
+  threadWhatsAppBindingParent,
+  whatsappProjectionFields,
+} from "./codex-app-server-whatsapp.js";
 import { ensureRuntimeAgentsFile } from "./agent-context.js";
 import { containedUserDeveloperInstructions } from "./tenant-policy.js";
 import { relocateLegacyUserWorkspace } from "./workspace-files.js";
@@ -43,6 +48,7 @@ import { parseThreadInputCommand } from "./thread-commands.js";
 import { performCodexAppServerSafeReset } from "./codex-safe-reset.js";
 import { completeThreadSecurityApproveCommand } from "./security-thread-command.js";
 import { appendTurnLifecycleEvent, turnLifecycleFromRuntimeStatus } from "./turn-lifecycle.js";
+import { markConnectorDeliverySignal } from "./connector-delivery-signals.js";
 
 const appServerDeliveryTimers = new Map();
 const appServerHistorySyncTimes = new Map();
@@ -1463,6 +1469,9 @@ export async function hydrateCodexAppServerThreadMessages(thread, codexThread, e
       } else if (["agentMessage", "plan", "exitedReviewMode", "contextCompaction"].includes(type)) {
         const text = type === "contextCompaction" ? "Codex compacted the conversation context." : itemText(item);
         if (!text) continue;
+        const whatsappParent =
+          await latestWhatsAppParent(thread, timestamp, env) ||
+          threadWhatsAppBindingParent(thread);
         const result = await upsertHydratedCodexMessage(thread, {
           role: "assistant",
           source: "codex-app-server-import",
@@ -1475,11 +1484,15 @@ export async function hydrateCodexAppServerThreadMessages(thread, codexThread, e
           codexItemId: item.id || null,
           ...(timestamp ? { timestamp, createdAt: timestamp } : {}),
           ...codexAppServerMessageFields(codexThread.id, { turnId, itemId: item.id }),
+          ...whatsappProjectionFields(whatsappParent, thread),
         }, messages, env).catch(() => null);
         if (result) {
           if (result.created) created += 1;
           if (result.updated) updated += 1;
           if (result.changed) count += 1;
+          if (result.changed && clean(result.message?.phase || "final_answer").toLowerCase() === "final_answer") {
+            markConnectorDeliverySignal(result.message);
+          }
         }
       }
     }

@@ -1802,6 +1802,79 @@ test("Codex app-server recovery asks app-server before marking an active turn in
   }
 });
 
+test("Codex app-server recovery syncs completed history before stale notice", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-recovery-history-"));
+  const fake = await createFakeCodex(home);
+  const staleAt = new Date(Date.now() - 5 * 60_000).toISOString();
+  const env = {
+    ORKESTR_HOME: path.join(home, "orkestr"),
+    HOME: path.join(home, "runtime-home"),
+    PATH: `${fake.bin}${path.delimiter}${process.env.PATH || ""}`,
+    FAKE_CODEX_STATE: fake.stateFile,
+    ORKESTR_CODEX_APP_SERVER_STALE_FINAL_GRACE_MS: "0",
+    ORKESTR_CODEX_APP_SERVER_HISTORY_SYNC_INTERVAL_MS: "0",
+    ORKESTR_CODEX_APP_SERVER_STALE_RECOVERY_SCAN_CACHE_MS: "0",
+  };
+  try {
+    consumeThreadConnectorDeliverySignalCount();
+    const thread = await createThread({
+      id: "app-server-recovery-history-thread",
+      name: "Recovery History Thread",
+      cwd: home,
+      executorId: "codex",
+      executor: { type: "codex" },
+      binding: { connector: "whatsapp", chatId: "chat-recovery-history", outboundAccountId: "wa-history" },
+    }, env);
+    const started = await startCodexAppServerThread(thread, env);
+    const codexId = started.thread.executor.codexThreadId;
+    const turnId = "missed-history-turn";
+    const input = await appendThreadMessage(started.thread.id, {
+      role: "user",
+      source: "whatsapp_inbound",
+      connector: "whatsapp",
+      chatId: "chat-recovery-history",
+      accountId: "wa-history",
+      text: "Please reply exactly: slice ok",
+      state: "completed",
+      deliveryState: "delivered",
+      observedVia: "codex_app_server_turn_start",
+      deliveredAt: staleAt,
+      createdAt: staleAt,
+      codexThreadId: codexId,
+      codexTurnId: turnId,
+    }, env);
+    const rawState = JSON.parse(await fs.readFile(fake.stateFile, "utf8"));
+    const codexThread = rawState.threads.find((item) => item.id === codexId);
+    codexThread.turns.push({
+      id: turnId,
+      threadId: codexId,
+      status: "completed",
+      items: [
+        { type: "userMessage", id: "missed-history-user", content: [{ type: "text", text: "Please reply exactly: slice ok" }] },
+        { type: "agentMessage", id: "missed-history-final", text: "slice ok", phase: "final_answer" },
+      ],
+    });
+    await fs.writeFile(fake.stateFile, JSON.stringify(rawState, null, 2));
+    const client = await getCodexAppServerClient({ env, home: env.HOME });
+    client.threadStates.delete(codexId);
+
+    const result = await recoverStaleCodexAppServerTurns(env);
+    const messages = await listThreadMessages(started.thread.id, env);
+    const reply = messages.find((message) => message.role === "assistant" && message.text === "slice ok");
+
+    assert.equal(result.recovered, 1);
+    assert.equal(result.appended, 0);
+    assert.equal(messages.some((message) => message.source === "orkestr_runtime" && message.phase === "runtime_interrupted"), false);
+    assert.equal(reply?.source, "codex-app-server-import");
+    assert.equal(reply?.parentMessageId, input.id);
+    assert.equal(reply?.connector, "whatsapp");
+    assert.equal(reply?.chatId, "chat-recovery-history");
+    assert.equal(consumeThreadConnectorDeliverySignalCount(), 1);
+  } finally {
+    stopCodexAppServerClients();
+  }
+});
+
 test("Codex app-server recovery steers long active turns before interrupting them", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-active-steer-"));
   const fake = await createFakeCodex(home);
@@ -3180,6 +3253,57 @@ test("Codex app-server history hydration preserves non-final assistant messages"
   assert.ok(messages.find((message) => message.role === "assistant" && message.phase === "context_compaction" && message.text === "Codex compacted the conversation context."));
   assert.ok(messages.find((message) => message.role === "assistant" && message.phase === "plan" && message.text === "Plan survives."));
   assert.ok(messages.find((message) => message.role === "assistant" && message.phase === "final_answer" && message.text === "Final answer survives."));
+});
+
+test("Codex app-server history hydration projects WhatsApp final replies", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-history-wa-"));
+  const env = { ORKESTR_HOME: path.join(home, "orkestr") };
+  consumeThreadConnectorDeliverySignalCount();
+  const thread = await createThread({
+    id: "app-server-history-wa-thread",
+    name: "History WhatsApp Thread",
+    cwd: home,
+    executorId: "codex",
+    executor: { type: "codex" },
+    binding: { connector: "whatsapp", chatId: "chat-history-wa", outboundAccountId: "wa-history" },
+  }, env);
+  const input = await appendThreadMessage(thread.id, {
+    role: "user",
+    source: "whatsapp_inbound",
+    connector: "whatsapp",
+    chatId: "chat-history-wa",
+    accountId: "wa-history",
+    text: "Please reply exactly: slice ok",
+    state: "completed",
+    deliveryState: "delivered",
+    codexThreadId: "codex-history-wa-thread",
+    codexTurnId: "codex-history-wa-turn",
+  }, env);
+  const codexThread = {
+    id: "codex-history-wa-thread",
+    turns: [
+      {
+        id: "codex-history-wa-turn",
+        threadId: "codex-history-wa-thread",
+        status: "completed",
+        items: [
+          { type: "agentMessage", id: "history-wa-final", text: "slice ok", phase: "final_answer" },
+        ],
+      },
+    ],
+  };
+
+  const result = await hydrateCodexAppServerThreadMessages(thread, codexThread, env);
+  const messages = await listThreadMessages(thread.id, env);
+  const reply = messages.find((message) => message.role === "assistant" && message.text === "slice ok");
+
+  assert.equal(result.created, 1);
+  assert.equal(reply?.source, "codex-app-server-import");
+  assert.equal(reply?.parentMessageId, input.id);
+  assert.equal(reply?.connector, "whatsapp");
+  assert.equal(reply?.chatId, "chat-history-wa");
+  assert.equal(reply?.accountId, "wa-history");
+  assert.equal(consumeThreadConnectorDeliverySignalCount(), 1);
 });
 
 test("Codex app-server history hydration dedupes existing rollout messages", async () => {

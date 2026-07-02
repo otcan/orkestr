@@ -1,6 +1,6 @@
 {
   "name": "orkestr-oss",
-  "version": "0.1.0-alpha.63",
+  "version": "0.1.0-alpha.64",
   "description": "Self-hosted agent workstation: Codex threads, connectors, virtual browsers, WhatsApp, and timers.",
   "type": "module",
   "bin": {

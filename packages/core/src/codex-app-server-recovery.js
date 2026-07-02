@@ -559,6 +559,24 @@ function staleRuntimeNoticeDue(thread, turn, env = process.env) {
   return Date.now() - turn.lastActivityMs >= staleFinalGraceMs(env);
 }
 
+async function syncCodexHistoryBeforeRecoveryNotice(thread = {}, env = process.env) {
+  const codexId = codexThreadId(thread);
+  if (!codexId) return null;
+  try {
+    const { syncCodexAppServerThreadMessages } = await import("./codex-app-server.js");
+    if (typeof syncCodexAppServerThreadMessages !== "function") return null;
+    return await syncCodexAppServerThreadMessages(thread, env, { force: true, recovery: true });
+  } catch (error) {
+    await appendEvent({
+      type: "codex_app_server_recovery_history_sync_failed",
+      threadId: thread.id || null,
+      codexThreadId: codexId,
+      error: publicError(error),
+    }, env).catch(() => {});
+    return null;
+  }
+}
+
 function recoveryScanMessages(messages = [], fullScan = false, env = process.env) {
   if (fullScan) return messages;
   const limit = staleRecoveryMessageScanLimit(env);
@@ -697,8 +715,24 @@ export async function recoverStaleCodexAppServerTurns(env = process.env, options
     let noticeMessages = messages;
     let freshNoticeTurn = noticeTurn;
     if (noticeTurn) {
+      const syncResult = await syncCodexHistoryBeforeRecoveryNotice(thread, env);
       noticeMessages = recoveryEligibleMessages(thread, await listThreadMessages(thread.id, env).catch(() => messages));
       freshNoticeTurn = refreshedTurnState(noticeMessages, noticeTurn);
+      if (!freshNoticeTurn && syncResult?.synced) {
+        await appendEvent({
+          type: "codex_app_server_recovery_history_sync_resolved",
+          threadId: thread.id,
+          codexThreadId: codexId,
+          latestUserMessageId: noticeTurn?.latestUser?.id || null,
+          count: syncResult.count || 0,
+          created: syncResult.created || 0,
+          updated: syncResult.updated || 0,
+          completedTurnId: syncResult.completedTurnId || null,
+        }, env).catch(() => {});
+        recovered += 1;
+        recoveryScanCache.delete(thread.id);
+        continue;
+      }
     }
     if (freshNoticeTurn) {
       const noticeCause = recoveryNoticeCause(options, shouldRecoverActiveTurn);
