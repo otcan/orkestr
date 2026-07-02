@@ -156,6 +156,7 @@ test("tenant slice provisioning builds a VM-backed plan", async () => {
   assert.equal(plan.vmName, "bob-vm");
   assert.equal(plan.cloudInitSecretName, "bob-vm-cloudinit");
   assert.equal(plan.runtimeEnv.ORKESTR_HOME, "/opt/orkestr/data");
+  assert.equal(plan.runtimeEnv.ORKESTR_HOST, "0.0.0.0");
   assert.equal(plan.runtimeEnv.ORKESTR_PORT, "24000");
   assert.equal(plan.runtimeEnv.ORKESTR_TENANT_SLICE_ID, "bob-slice");
   assert.equal(plan.runtimeEnv.ORKESTR_TENANT_VM_ID, "bob-slice-vm");
@@ -181,6 +182,7 @@ test("tenant slice provisioning builds a VM-backed plan", async () => {
   assert.equal(vm.spec.dataVolumeTemplates[0].spec.pvc.resources.requests.storage, "30Gi");
   assert.match(runtimeEnvFile, /^ORKESTR_TENANT_SLICE_ID='bob-slice'$/m);
   assert.match(runtimeEnvFile, /^ORKESTR_TENANT_VM_ID='bob-slice-vm'$/m);
+  assert.match(runtimeEnvFile, /^ORKESTR_HOST='0\.0\.0\.0'$/m);
   assert.match(runtimeEnvFile, /^ORKESTR_SHARED_CONTROL_PLANE='1'$/m);
   assert.match(runtimeEnvFile, /^ORKESTR_API_AGENT_TENANT_BUDGETS_JSON='\{"bob":\{"dailyUsd":2,"monthlyUsd":20\}\}'$/m);
   assert.deepEqual(plan.commands.apply, ["kubectl", "apply", "-f", "-"]);
@@ -232,6 +234,7 @@ test("tenant slice provisioning execute path and runtime status are observable",
     "base64",
   ).toString("utf8");
   assert.equal(appliedManifest.items.some((item) => item.kind === "VirtualMachine"), true);
+  assert.match(appliedRuntimeEnvFile, /^ORKESTR_HOST='0\.0\.0\.0'$/m);
   assert.match(appliedRuntimeEnvFile, /^ORKESTR_WHATSAPP_INBOUND_TOKEN='owt_[^']+'$/m);
   assert.equal(result.whatsappRoute.token, undefined);
   assert.equal(result.whatsappRoute.tokenSync, undefined);

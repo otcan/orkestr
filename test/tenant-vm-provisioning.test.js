@@ -32,10 +32,15 @@ test("tenant VM provisioning builds a public-safe KubeVirt plan", async () => {
   const cloudInitVolume = vm.spec.template.spec.volumes.find((volume) => volume.name === "cloudinitdisk").cloudInitNoCloud;
   const userData = cloudInitSecret.stringData.userdata;
   const profile = JSON.parse(Buffer.from(userData.match(/content: ([A-Za-z0-9+/=]+)/)[1], "base64").toString("utf8"));
+  const envFile = Buffer.from(
+    userData.match(/path: \/etc\/orkestr\/orkestr\.env[\s\S]*?content: ([A-Za-z0-9+/=]+)/)[1],
+    "base64",
+  ).toString("utf8");
 
   assert.equal(plan.namespace, "tenant-a");
   assert.equal(plan.vmName, "alice-vm");
   assert.equal(plan.cloudInitSecretName, "alice-vm-cloudinit");
+  assert.equal(plan.runtimeEnv.ORKESTR_HOST, "0.0.0.0");
   assert.equal(plan.bootstrapProfilePath, "/etc/orkestr/tenant-bootstrap-profile.json");
   assert.equal(plan.bootstrapProfile.firstChat.name, "Alice Launch");
   assert.equal(plan.bootstrapProfile.codex.model, "gpt-5.5");
@@ -60,6 +65,7 @@ test("tenant VM provisioning builds a public-safe KubeVirt plan", async () => {
   assert.match(userData, /--with-whatsapp/);
   assert.match(userData, /--tenant-bootstrap-profile' '\/etc\/orkestr\/tenant-bootstrap-profile\.json/);
   assert.match(userData, /ssh-ed25519/);
+  assert.match(envFile, /^ORKESTR_HOST='0\.0\.0\.0'$/m);
   assert.deepEqual(plan.commands.apply, ["kubectl", "apply", "-f", "-"]);
   assert.deepEqual(plan.commands.publicIpRoute.slice(0, 7), [
     "bash",
@@ -98,6 +104,7 @@ test("tenant VM demo cloud-init includes local Orkestr port for the notifier", a
   ).toString("utf8");
 
   assert.match(envFile, /^ORKESTR_HOME='\/opt\/orkestr\/data'$/m);
+  assert.match(envFile, /^ORKESTR_HOST='0\.0\.0\.0'$/m);
   assert.match(envFile, /^ORKESTR_PORT='19812'$/m);
   assert.match(envFile, /^PORT='19812'$/m);
   assert.match(envFile, /^ORKESTR_DEMO_WHATSAPP_NUMBER='\+49 176 123456'$/m);

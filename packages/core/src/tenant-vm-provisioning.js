@@ -87,6 +87,15 @@ function runtimeEnv(input = {}, env = process.env) {
     (!sliceTenant && clean(input.whatsappNumber)) ||
     (!sliceTenant && clean(input.brokerBaseUrl || input.demoBrokerBaseUrl || env.ORKESTR_DEMO_BROKER_BASE_URL || env.ORKESTR_BROKER_BASE_URL));
   const port = clean(input.port || input.orkestrPort || source.ORKESTR_PORT || env.ORKESTR_PORT || env.PORT || "19812");
+  const tenantVmRuntime = Boolean(input.tenantVmId || input.tenantSliceId);
+  const tenantVmBindHost = clean(
+    source.ORKESTR_HOST ||
+    input.host ||
+    input.orkestrHost ||
+    input.bindHost ||
+    env.ORKESTR_TENANT_VM_BIND_HOST ||
+    env.ORKESTR_TENANT_VM_HOST,
+  );
   const values = {
     ORKESTR_TENANT_VM_ID: input.tenantVmId || input.vmId || "",
     ORKESTR_TENANT_SLICE_ID: input.tenantSliceId || "",
@@ -111,6 +120,7 @@ function runtimeEnv(input = {}, env = process.env) {
     ORKESTR_UPDATE_REF: demoEnabled ? input.updateRef || env.ORKESTR_UPDATE_REF : "",
     ORKESTR_DEMO_CLOUDFLARE_DISABLE: demoEnabled ? input.demoCloudflareDisable ?? env.ORKESTR_DEMO_CLOUDFLARE_DISABLE ?? "1" : "",
     ...source,
+    ORKESTR_HOST: tenantVmRuntime ? tenantVmBindHost || "0.0.0.0" : tenantVmBindHost,
   };
   return Object.fromEntries(
     Object.entries(values)
