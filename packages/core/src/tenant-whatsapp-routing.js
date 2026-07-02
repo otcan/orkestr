@@ -8,7 +8,8 @@ function clean(value = "") {
   return String(value || "").trim();
 }
 
-function truthy(value) {
+function truthy(value, fallback = false) {
+  if (value === undefined || value === null || clean(value) === "") return fallback;
   return value === true || ["1", "true", "yes", "on"].includes(clean(value).toLowerCase());
 }
 
@@ -23,18 +24,23 @@ function tokenPreview(token = "") {
   return `${value.slice(0, 6)}...${value.slice(-6)}`;
 }
 
-function routeDiagnostics(routeTarget = {}, token = "") {
+function routeDiagnostics(routeTarget = {}, token = "", { enabled = false } = {}) {
   const missing = [];
   if (!routeTarget.target) missing.push(routeTarget.routeMode === "broker" ? "brokerBaseUrl" : "baseUrl");
   if (!clean(token)) missing.push("routeToken");
-  const status = missing.length ? "incomplete" : "configured";
+  const configured = missing.length === 0;
+  const status = configured ? (enabled ? "active" : "prepared") : "incomplete";
   const nextAction = !routeTarget.target
     ? (routeTarget.routeMode === "broker" ? "set_broker_base_url" : "set_target_base_url")
     : !clean(token)
       ? "configure_route_token"
-      : "sync_whatsapp_inbound_token_to_target";
-  const safeMessage = status === "configured"
-    ? "Route is configured. The target instance must also have the same WhatsApp inbound token."
+      : enabled
+        ? "sync_whatsapp_inbound_token_to_target"
+        : "enable_route_when_target_is_ready";
+  const safeMessage = configured
+    ? enabled
+      ? "Route is active. The target instance must also have the same WhatsApp inbound token."
+      : "Route is prepared but disabled. Enable it only after the target instance accepts the inbound token."
     : "Route is incomplete and cannot receive brokered WhatsApp messages yet.";
   return {
     status,
@@ -166,7 +172,8 @@ async function writeRouteSecrets(state, env = process.env) {
 function publicRoute(vm, secret = {}, { includeToken = false } = {}) {
   const token = clean(secret.token);
   const routeTarget = tenantRouteTarget(vm);
-  const diagnostics = routeDiagnostics(routeTarget, token);
+  const enabled = vm.connectors?.whatsappRouteEnabled === true;
+  const diagnostics = routeDiagnostics(routeTarget, token, { enabled });
   const tokenSync = includeToken ? tokenSyncPayload(token, routeTarget) : null;
   return {
     tenantVmId: vm.id,
@@ -174,7 +181,8 @@ function publicRoute(vm, secret = {}, { includeToken = false } = {}) {
     chatId: clean(vm.connectors?.whatsappChatId),
     chatName: clean(vm.connectors?.whatsappChatName),
     accountId: clean(vm.connectors?.whatsappAccountId),
-    enabled: vm.connectors?.whatsappRouteEnabled === true,
+    enabled,
+    forwardingReady: enabled && Boolean(routeTarget.target) && Boolean(token),
     target: routeTarget.target,
     routeMode: routeTarget.routeMode,
     targetSource: routeTarget.targetSource,
@@ -200,7 +208,10 @@ export async function configureTenantWhatsAppRoute(tenantVmId, input = {}, env =
     throw error;
   }
   const routeTarget = tenantRouteTarget(vm, input);
-  if (!routeTarget.target) {
+  const allowPending = truthy(input.allowPending || input.prepareOnly || input.stageOnly, false) ||
+    input.enabled === false ||
+    clean(input.enabled).toLowerCase() === "false";
+  if (!routeTarget.target && !allowPending) {
     const error = new Error(routeTarget.routeMode === "broker" ? "tenant_vm_broker_base_url_required" : "tenant_vm_base_url_required");
     error.statusCode = 400;
     throw error;
@@ -222,13 +233,15 @@ export async function configureTenantWhatsAppRoute(tenantVmId, input = {}, env =
       whatsappChatId: chatId,
       whatsappChatName: clean(input.chatName || input.displayName || vm.connectors.whatsappChatName),
       whatsappAccountId: clean(input.accountId || input.whatsappAccountId || vm.connectors.whatsappAccountId),
-      whatsappRouteEnabled: input.enabled === undefined ? true : truthy(input.enabled),
+      whatsappRouteEnabled: routeTarget.target
+        ? truthy(input.enabled, true)
+        : false,
       whatsappRouteMode: routeTarget.routeMode,
       whatsappBrokerBaseUrl: routeTarget.brokerBaseUrl || clean(vm.connectors?.whatsappBrokerBaseUrl),
     },
   }, env);
   await appendEvent({
-    type: "tenant_whatsapp_route_configured",
+    type: updated.connectors.whatsappRouteEnabled ? "tenant_whatsapp_route_configured" : "tenant_whatsapp_route_prepared",
     tenantVmId: updated.id,
     ownerUserId: updated.ownerUserId,
     chatId,

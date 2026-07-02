@@ -16,6 +16,7 @@ import {
   listTenantSlicesForPrincipal,
   publicTenantSlice,
 } from "../packages/core/src/tenant-slices.js";
+import { listTenantWhatsAppRoutes, tenantWhatsAppInboundForwardRoute } from "../packages/core/src/tenant-whatsapp-routing.js";
 import {
   buildTenantSliceProvisioningPlan,
   provisionTenantSlice,
@@ -148,6 +149,9 @@ test("tenant slice provisioning builds a VM-backed plan", async () => {
   assert.equal(plan.tenantVm.id, "bob-slice-vm");
   assert.equal(plan.tenantVm.resources.memoryMiB, 4096);
   assert.equal(plan.tenantVm.resources.diskGiB, 30);
+  assert.equal(plan.tenantVm.endpoint.brokerBaseUrl, "");
+  assert.equal(plan.tenantVm.connectors.whatsappRouteEnabled, false);
+  assert.equal(plan.tenantVm.connectors.whatsappBrokerBaseUrl, "");
   assert.equal(plan.namespace, "tenant-bob");
   assert.equal(plan.vmName, "bob-vm");
   assert.equal(plan.cloudInitSecretName, "bob-vm-cloudinit");
@@ -192,7 +196,11 @@ test("tenant slice provisioning execute path and runtime status are observable",
     ORKESTR_TENANT_SLICE_PORT_BASE: "25000",
     ORKESTR_AUTH_URL: "https://auth.example.test",
   };
-  await createTenantSlice({ id: "charlie-slice", ownerUserId: "charlie" }, env);
+  await createTenantSlice({
+    id: "charlie-slice",
+    ownerUserId: "charlie",
+    connectors: { whatsapp: { chatId: "charlie-wa@g.us", accountId: "sender" } },
+  }, env);
   const calls = [];
 
   const result = await provisionTenantSlice("charlie-slice", {
@@ -210,12 +218,18 @@ test("tenant slice provisioning execute path and runtime status are observable",
   assert.equal(result.dryRun, false);
   assert.equal(result.tenantSlice.status, "provisioning");
   assert.equal(result.tenantVm.status, "provisioning");
+  assert.equal(result.whatsappRoute.chatId, "charlie-wa@g.us");
+  assert.equal(result.whatsappRoute.enabled, false);
+  assert.equal(result.whatsappRoute.forwardingReady, false);
+  assert.equal(result.whatsappRoute.tokenConfigured, true);
   assert.equal(calls.length, 1);
   assert.equal(calls[0].command, "kubectl");
   assert.deepEqual(calls[0].args, ["apply", "-f", "-"]);
   assert.equal(JSON.parse(calls[0].input).items.some((item) => item.kind === "VirtualMachine"), true);
   assert.equal((await getTenantSlice("charlie-slice", env)).status, "provisioning");
   assert.equal((await getTenantVm("charlie-slice-vm", env)).status, "provisioning");
+  assert.equal(await tenantWhatsAppInboundForwardRoute({ chatId: "charlie-wa@g.us", accountId: "sender" }, env), null);
+  assert.equal((await listTenantWhatsAppRoutes(env)).find((route) => route.tenantVmId === "charlie-slice-vm").tokenConfigured, true);
 
   const status = await tenantSliceRuntimeStatus("charlie-slice", env);
   assert.equal(status.ok, true);

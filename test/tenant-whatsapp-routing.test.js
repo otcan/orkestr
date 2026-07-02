@@ -54,7 +54,7 @@ test("tenant WhatsApp routes store scoped tokens outside the public VM registry"
   assert.equal(configured.route.targetSource, "endpoint");
   assert.match(configured.route.token, /^owt_/);
   assert.equal(configured.route.tokenConfigured, true);
-  assert.equal(configured.route.diagnostics.status, "configured");
+  assert.equal(configured.route.diagnostics.status, "active");
   assert.equal(configured.route.diagnostics.nextAction, "sync_whatsapp_inbound_token_to_target");
   assert.equal(configured.route.tokenSync.recommendedEnv.ORKESTR_WHATSAPP_INBOUND_TOKEN, configured.route.token);
   assert.equal(vm.connectors.whatsappChatId, "wa-group-zero@g.us");
@@ -85,6 +85,43 @@ test("tenant WhatsApp routes store scoped tokens outside the public VM registry"
     () => configureTenantWhatsAppRoute("credentialed-tenant", { chatId: "wa-group-route-two@g.us" }, env),
     /tenant_vm_base_url_required/,
   );
+});
+
+test("tenant WhatsApp routes can be prepared before a VM target exists", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-tenant-wa-route-pending-"));
+  const env = { ORKESTR_HOME: home };
+  await createTenantVm({
+    id: "planned-tenant",
+    ownerUserId: "planned",
+    connectors: { whatsappChatName: "Planned WA", whatsappAccountId: "sender" },
+  }, env);
+
+  const prepared = await configureTenantWhatsAppRoute("planned-tenant", {
+    chatId: "wa-group-planned@g.us",
+    accountId: "sender",
+    allowPending: true,
+    enabled: false,
+  }, env);
+  const vm = await getTenantVm("planned-tenant", env);
+  const forwardRoute = await tenantWhatsAppInboundForwardRoute({
+    chatId: "wa-group-planned@g.us",
+    accountId: "sender",
+  }, env);
+  const listed = await listTenantWhatsAppRoutes(env);
+
+  assert.equal(prepared.route.enabled, false);
+  assert.equal(prepared.route.forwardingReady, false);
+  assert.equal(prepared.route.target, "");
+  assert.match(prepared.route.token, /^owt_/);
+  assert.equal(prepared.route.tokenConfigured, true);
+  assert.equal(prepared.route.diagnostics.status, "incomplete");
+  assert.equal(prepared.route.diagnostics.nextAction, "set_target_base_url");
+  assert.equal(vm.connectors.whatsappChatId, "wa-group-planned@g.us");
+  assert.equal(vm.connectors.whatsappRouteEnabled, false);
+  assert.equal(forwardRoute, null);
+  assert.equal(listed[0].token, undefined);
+  assert.equal(listed[0].tokenConfigured, true);
+  assert.equal(listed[0].forwardingReady, false);
 });
 
 test("local WhatsApp bridge forwards tenant-routed chats with the scoped tenant token", async () => {

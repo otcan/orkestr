@@ -96,15 +96,20 @@ function tenantVmWhatsAppRouteBody(body: Record<string, unknown> = {}) {
     "whatsappRouteMode",
     "brokerBaseUrl",
     "whatsappBrokerBaseUrl",
+    "routeBrokerBaseUrl",
     "controlPlaneBaseUrl",
     "internalBaseUrl",
     "baseUrl",
     "targetBaseUrl",
+    "whatsappTargetBaseUrl",
   ]) {
     if (body[key] !== undefined) output[key] = String(body[key] || "").trim();
   }
   if (body.enabled !== undefined) output.enabled = body.enabled;
   if (body.resetToken !== undefined) output.resetToken = body.resetToken;
+  for (const key of ["allowPending", "prepareOnly", "stageOnly"]) {
+    if (body[key] !== undefined) output[key] = body[key];
+  }
   return output;
 }
 

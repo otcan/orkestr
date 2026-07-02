@@ -16,6 +16,7 @@ import {
   updateTenantVm,
 } from "./tenant-vm-registry.js";
 import { buildTenantVmProvisioningPlan } from "./tenant-vm-provisioning.js";
+import { configureTenantWhatsAppRoute } from "./tenant-whatsapp-routing.js";
 
 function nowIso() {
   return new Date().toISOString();
@@ -62,9 +63,15 @@ function sharedControlPlane(slice, input = {}, env = process.env) {
 
 function tenantVmInputForSlice(sliceInput = {}, input = {}, env = process.env) {
   const slice = normalizeTenantSlice(sliceInput, env);
-  const controlPlane = sharedControlPlane(slice, input, env);
   const vm = slice.vm || {};
   const desktopSlug = clean(slice.connectors?.linkedin?.desktopSlug || "linkedin") || "linkedin";
+  const targetBaseUrl = clean(input.targetBaseUrl || input.whatsappTargetBaseUrl || vm.endpoint?.baseUrl);
+  const targetBrokerBaseUrl = clean(input.whatsappBrokerBaseUrl || input.routeBrokerBaseUrl || vm.endpoint?.brokerBaseUrl);
+  const whatsappRouteMode = targetBrokerBaseUrl
+    ? "broker"
+    : targetBaseUrl
+      ? "direct"
+      : clean(slice.connectors?.whatsapp?.routeMode || "parent-forward");
   return normalizeTenantVm({
     id: clean(input.tenantVmId || input.vmId || vm.tenantVmId || vm.id) || `${slice.id}-vm`,
     ownerUserId: slice.ownerUserId,
@@ -74,8 +81,8 @@ function tenantVmInputForSlice(sliceInput = {}, input = {}, env = process.env) {
     endpoint: {
       ...vm.endpoint,
       domain: clean(input.domain || vm.endpoint?.domain),
-      baseUrl: clean(input.baseUrl || input.url || vm.endpoint?.baseUrl),
-      brokerBaseUrl: clean(input.brokerBaseUrl || input.controlPlaneBaseUrl || controlPlane.brokerBaseUrl || vm.endpoint?.brokerBaseUrl),
+      baseUrl: targetBaseUrl,
+      brokerBaseUrl: targetBrokerBaseUrl,
       publicIp: clean(input.publicIp || vm.endpoint?.publicIp),
     },
     kubevirt: {
@@ -99,9 +106,9 @@ function tenantVmInputForSlice(sliceInput = {}, input = {}, env = process.env) {
     connectors: {
       whatsappChatId: clean(slice.connectors?.whatsapp?.chatId),
       whatsappAccountId: clean(slice.connectors?.whatsapp?.accountId),
-      whatsappRouteEnabled: slice.connectors?.whatsapp?.enabled !== false,
-      whatsappRouteMode: clean(slice.connectors?.whatsapp?.routeMode || "control-plane-forward"),
-      whatsappBrokerBaseUrl: clean(controlPlane.brokerBaseUrl),
+      whatsappRouteEnabled: false,
+      whatsappRouteMode,
+      whatsappBrokerBaseUrl: targetBrokerBaseUrl,
       gmailAccountId: clean(slice.connectors?.gmail?.accountId),
       linkedinDesktopSlug: desktopSlug,
     },
@@ -202,6 +209,24 @@ async function ensureTenantVm(tenantVm, env = process.env) {
   return createTenantVm(tenantVm, env);
 }
 
+async function stageTenantSliceWhatsAppRoute(slice, tenantVm, input = {}, env = process.env) {
+  if (slice.connectors?.whatsapp?.enabled === false) return null;
+  const chatId = clean(slice.connectors?.whatsapp?.chatId);
+  if (!chatId) return null;
+  const route = await configureTenantWhatsAppRoute(tenantVm.id, {
+    chatId,
+    chatName: clean(input.chatName || input.displayName || slice.displayName),
+    accountId: clean(slice.connectors?.whatsapp?.accountId),
+    routeMode: clean(tenantVm.connectors?.whatsappRouteMode),
+    brokerBaseUrl: clean(tenantVm.endpoint?.brokerBaseUrl || tenantVm.connectors?.whatsappBrokerBaseUrl),
+    baseUrl: clean(tenantVm.endpoint?.baseUrl),
+    enabled: false,
+    allowPending: true,
+  }, env);
+  const { token: _token, tokenSync: _tokenSync, ...safeRoute } = route.route || {};
+  return safeRoute;
+}
+
 export async function provisionTenantSlice(tenantSliceId, input = {}, env = process.env, options = {}) {
   const slice = await getTenantSlice(tenantSliceId, env);
   if (!slice) throw tenantSliceError("tenant_slice_not_found", 404);
@@ -212,6 +237,7 @@ export async function provisionTenantSlice(tenantSliceId, input = {}, env = proc
   await setTenantSliceStatus(slice.id, "provisioning", { lastError: "" }, env);
   try {
     registryVm = await ensureTenantVm(plan.tenantVm, env);
+    const whatsappRoute = await stageTenantSliceWhatsAppRoute(slice, registryVm, input, env);
     const [command, ...args] = plan.commands.apply;
     const runner = options.spawnWithInput || spawnWithInput;
     const output = await runner(command, args, {
@@ -227,6 +253,7 @@ export async function provisionTenantSlice(tenantSliceId, input = {}, env = proc
       dryRun: false,
       tenantSlice: publicTenantSlice(tenantSlice),
       tenantVm: publicTenantVm(tenantVm),
+      ...(whatsappRoute ? { whatsappRoute } : {}),
       output,
     };
   } catch (error) {
