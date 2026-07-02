@@ -19,7 +19,14 @@ function stringList(values = []) {
   return [...new Set(list.map(clean).filter(Boolean))];
 }
 
-function visibleDesktopSlugs(env = process.env, tenantVm = null) {
+function visibleDesktopSlugs(env = process.env, tenantVm = null, tenantSlice = null) {
+  if (tenantSlice) {
+    const linkedinSlug = clean(tenantSlice?.connectors?.linkedin?.desktopSlug || tenantSlice?.connectors?.linkedinDesktopSlug);
+    const desktopSlugs = stringList(tenantSlice?.desktops?.visibleSlugs || tenantSlice?.desktops?.slugs);
+    const bootstrapSlugs = stringList(tenantSlice?.bootstrap?.desks);
+    const slugs = [linkedinSlug, ...desktopSlugs, ...bootstrapSlugs].filter(Boolean);
+    return new Set(slugs.length ? slugs : ["linkedin"]);
+  }
   const envSlugs = stringList(env.ORKESTR_BROWSER_VISIBLE_SLUGS || env.ORKESTR_OPS_DESKTOP_SLUGS);
   if (envSlugs.length) return new Set(envSlugs);
   const desktopSlugs = stringList(tenantVm?.desktops?.visibleSlugs || tenantVm?.desktops?.slugs);
@@ -29,7 +36,14 @@ function visibleDesktopSlugs(env = process.env, tenantVm = null) {
   return null;
 }
 
-function desktopFallbackSlugs(env = process.env, tenantVm = null) {
+function desktopFallbackSlugs(env = process.env, tenantVm = null, tenantSlice = null) {
+  if (tenantSlice) {
+    return [
+      clean(tenantSlice?.connectors?.linkedin?.desktopSlug || tenantSlice?.connectors?.linkedinDesktopSlug),
+      clean(tenantSlice?.desktops?.defaultSlug),
+      "linkedin",
+    ].filter(Boolean);
+  }
   return [
     clean(env.ORKESTR_LINKEDIN_DESKTOP_SLUG || env.ORKESTR_LINKEDIN_BROWSER_SLUG),
     clean(tenantVm?.connectors?.linkedinDesktopSlug),
@@ -40,12 +54,12 @@ function desktopFallbackSlugs(env = process.env, tenantVm = null) {
   ].filter(Boolean);
 }
 
-function requiredDesktopAllowed(skillId = "", env = process.env, tenantVm = null) {
-  const visible = visibleDesktopSlugs(env, tenantVm);
+function requiredDesktopAllowed(skillId = "", env = process.env, tenantVm = null, tenantSlice = null) {
+  const visible = visibleDesktopSlugs(env, tenantVm, tenantSlice);
   if (!visible) return true;
   const id = lower(skillId);
   const candidates = id === "linkedin"
-    ? ["linkedin", ...desktopFallbackSlugs(env, tenantVm)]
+    ? ["linkedin", ...desktopFallbackSlugs(env, tenantVm, tenantSlice)]
     : [id];
   return candidates.some((slug) => visible.has(slug));
 }
@@ -89,6 +103,47 @@ function tenantDesktopHint(tenantVm = null) {
   };
 }
 
+function tenantSliceDesktopHint(tenantSlice = null) {
+  if (!tenantSlice) {
+    return {
+      hasDesktopCapability: false,
+      userProvisioned: null,
+      unhealthy: false,
+      status: "",
+      instanceEnabled: null,
+    };
+  }
+  const capabilities = new Set(stringList(tenantSlice.capabilities).map(lower));
+  const desktopStatus = lower(tenantSlice.desktops?.status);
+  const sliceStatus = lower(tenantSlice.status);
+  const linkedin = tenantSlice.connectors?.linkedin && typeof tenantSlice.connectors.linkedin === "object"
+    ? tenantSlice.connectors.linkedin
+    : {};
+  const instanceEnabled = linkedin.enabled !== false;
+  const desktopSlug = clean(linkedin.desktopSlug || tenantSlice.connectors?.linkedinDesktopSlug);
+  const hasDesktopCapability = Boolean(instanceEnabled && (
+    capabilities.has("desks") ||
+    capabilities.has("desktop") ||
+    capabilities.has("linkedin") ||
+    desktopSlug ||
+    stringList(tenantSlice.bootstrap?.desks).length ||
+    stringList(tenantSlice.desktops?.visibleSlugs || tenantSlice.desktops?.slugs).length
+  ));
+  const unhealthy = ["error", "unhealthy", "failed"].includes(desktopStatus) || ["error", "unhealthy", "failed"].includes(sliceStatus);
+  const readyStatus = ["ready", "running", "available", "provisioned"].includes(desktopStatus) ||
+    ["ready", "running", "available", "provisioned", "warming"].includes(sliceStatus);
+  const userProvisioned = instanceEnabled === false
+    ? false
+    : tenantSlice.desktops?.provisioned === true || readyStatus || tenantSlice.warm === true;
+  return {
+    hasDesktopCapability,
+    userProvisioned,
+    unhealthy,
+    status: desktopStatus || sliceStatus,
+    instanceEnabled,
+  };
+}
+
 export function desktopProvisioningMessage(setupState = "") {
   const state = clean(setupState);
   if (state === "instance_desktops_disabled") {
@@ -107,7 +162,7 @@ export function desktopProvisioningMessage(setupState = "") {
   return "Managed Desktop is not available for this chat.";
 }
 
-export function resolveDesktopProvisioningState({ skillId = "linkedin", userFound = true, tenantVm = null, env = process.env } = {}) {
+export function resolveDesktopProvisioningState({ skillId = "linkedin", userFound = true, tenantVm = null, tenantSlice = null, env = process.env } = {}) {
   const mode = lower(env.ORKESTR_BROWSER_DESKTOP_MODE);
   const userDesktopsEnabled = boolEnv(env.ORKESTR_USER_DESKTOPS_ENABLED, null);
   const instanceProvisioned = boolEnv(env.ORKESTR_INSTANCE_DESKTOPS_PROVISIONED, null);
@@ -115,19 +170,23 @@ export function resolveDesktopProvisioningState({ skillId = "linkedin", userFoun
   const backendStatus = lower(env.ORKESTR_DESKTOP_BACKEND_STATUS || env.ORKESTR_BROWSER_BACKEND_STATUS);
   const hasManagedBackend = explicitManagedBackend(env);
   const tenantHint = tenantDesktopHint(tenantVm);
+  const sliceHint = tenantSliceDesktopHint(tenantSlice);
   const profilesExplicit = mode === "profiles";
   const browserctlExplicit = mode === "browserctl";
-  const backendConfigured = hasManagedBackend || profilesExplicit || browserctlExplicit || tenantHint.hasDesktopCapability;
+  const backendConfigured = hasManagedBackend || profilesExplicit || browserctlExplicit || tenantHint.hasDesktopCapability || sliceHint.hasDesktopCapability;
 
   let setupState = "available";
   if (!userFound) setupState = "user_desktop_not_provisioned";
   else if (["disabled", "none", "off"].includes(mode)) setupState = "instance_desktops_disabled";
+  else if (tenantSlice && sliceHint.instanceEnabled === false) setupState = "instance_desktops_not_provisioned";
+  else if (tenantSlice && !sliceHint.hasDesktopCapability) setupState = "instance_desktops_not_provisioned";
   else if (userDesktopsEnabled === false) setupState = "instance_desktops_not_provisioned";
   else if (instanceProvisioned === false) setupState = "instance_desktops_not_provisioned";
   else if (!backendConfigured && launchDisabled) setupState = "instance_desktops_not_provisioned";
-  else if (["error", "unhealthy", "down", "offline"].includes(backendStatus) || tenantHint.unhealthy) setupState = "desktop_backend_unhealthy";
+  else if (["error", "unhealthy", "down", "offline"].includes(backendStatus) || tenantHint.unhealthy || sliceHint.unhealthy) setupState = "desktop_backend_unhealthy";
+  else if (sliceHint.userProvisioned === false) setupState = "user_desktop_not_provisioned";
   else if (tenantHint.userProvisioned === false) setupState = "user_desktop_not_provisioned";
-  else if (!requiredDesktopAllowed(skillId, env, tenantVm)) setupState = "user_desktop_not_provisioned";
+  else if (!requiredDesktopAllowed(skillId, env, tenantVm, tenantSlice)) setupState = "user_desktop_not_provisioned";
 
   return {
     available: setupState === "available",
@@ -143,8 +202,9 @@ export function resolveDesktopProvisioningState({ skillId = "linkedin", userFoun
     },
     user: {
       provisioned: setupState === "available",
-      requiredDesktopAllowed: requiredDesktopAllowed(skillId, env, tenantVm),
-      tenantDesktopStatus: tenantHint.status,
+      requiredDesktopAllowed: requiredDesktopAllowed(skillId, env, tenantVm, tenantSlice),
+      tenantDesktopStatus: sliceHint.status || tenantHint.status,
+      tenantSliceId: clean(tenantSlice?.id),
     },
   };
 }

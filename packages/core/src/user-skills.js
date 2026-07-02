@@ -6,6 +6,7 @@ import { userDataPaths } from "../../storage/src/paths.js";
 import { appendEvent, readJson, writeJson } from "../../storage/src/store.js";
 import { resolveDesktopProvisioningState } from "./desktop-provisioning.js";
 import { assertOwnerAccess, isAdminPrincipal } from "./policy.js";
+import { getTenantSliceForOwner } from "./tenant-slices.js";
 import { getTenantVmForOwner } from "./tenant-vm-registry.js";
 import { getUser, normalizeUserId } from "./users.js";
 
@@ -477,7 +478,29 @@ function tenantCapabilitySet(tenantVm = null) {
   return new Set(Array.isArray(tenantVm?.capabilities) ? tenantVm.capabilities.map((item) => clean(item).toLowerCase()).filter(Boolean) : []);
 }
 
-function tenantConnectorState(tenantVm = null) {
+function tenantSliceConnectorState(tenantSlice = null) {
+  if (!tenantSlice) return null;
+  const capabilities = new Set(Array.isArray(tenantSlice.capabilities) ? tenantSlice.capabilities.map((item) => clean(item).toLowerCase()).filter(Boolean) : []);
+  const connectors = tenantSlice.connectors && typeof tenantSlice.connectors === "object" ? tenantSlice.connectors : {};
+  const whatsapp = connectors.whatsapp && typeof connectors.whatsapp === "object" ? connectors.whatsapp : {};
+  const gmail = connectors.gmail && typeof connectors.gmail === "object" ? connectors.gmail : {};
+  const outlook = connectors.outlook && typeof connectors.outlook === "object" ? connectors.outlook : {};
+  const jira = connectors.jira && typeof connectors.jira === "object" ? connectors.jira : {};
+  const shopify = connectors.shopify && typeof connectors.shopify === "object" ? connectors.shopify : {};
+  const linkedin = connectors.linkedin && typeof connectors.linkedin === "object" ? connectors.linkedin : {};
+  return {
+    whatsapp: whatsapp.enabled !== false && Boolean(capabilities.has("whatsapp") || clean(whatsapp.chatId) || clean(whatsapp.accountId)),
+    gmail: gmail.enabled !== false && Boolean(capabilities.has("gmail") || clean(gmail.accountId)),
+    outlook: outlook.enabled !== false && Boolean(capabilities.has("outlook") || clean(outlook.accountId)),
+    jira: jira.enabled !== false && Boolean(capabilities.has("jira") || clean(jira.accountId)),
+    shopify: shopify.enabled !== false && Boolean(capabilities.has("shopify") || clean(shopify.accountId)),
+    linkedin: linkedin.enabled !== false && Boolean(capabilities.has("desks") || capabilities.has("desktop") || capabilities.has("linkedin") || clean(linkedin.desktopSlug)),
+  };
+}
+
+function tenantConnectorState(tenantVm = null, tenantSlice = null) {
+  const sliceState = tenantSliceConnectorState(tenantSlice);
+  if (sliceState) return sliceState;
   const capabilities = tenantCapabilitySet(tenantVm);
   const connectors = tenantVm?.connectors && typeof tenantVm.connectors === "object" ? tenantVm.connectors : {};
   return {
@@ -494,6 +517,13 @@ function tenantConnectorState(tenantVm = null) {
     shopify: Boolean(capabilities.has("shopify") || clean(connectors.shopifyAccountId)),
     linkedin: Boolean(capabilities.has("desks") || capabilities.has("linkedin") || clean(connectors.linkedinDesktopSlug)),
   };
+}
+
+function tenantSliceConnectorEnabled(tenantSlice = null, provider = "") {
+  if (!tenantSlice) return true;
+  const connectors = tenantSlice.connectors && typeof tenantSlice.connectors === "object" ? tenantSlice.connectors : {};
+  const state = connectors[provider] && typeof connectors[provider] === "object" ? connectors[provider] : {};
+  return state.enabled !== false;
 }
 
 async function userConnectorTokenExists(userId = "", connector = "", env = process.env) {
@@ -529,8 +559,11 @@ function publicSkillList(skills = []) {
 export async function userScopedCapabilityHints({ userId = "", thread = null } = {}, env = process.env) {
   const owner = normalizeUserId(userId || thread?.ownerUserId || thread?.userId || env.ORKESTR_ADMIN_USER_ID || "admin");
   const snapshot = await userSkillCapabilitySnapshot(owner, env);
-  const tenantVm = await getTenantVmForOwner(owner, env).catch(() => null);
-  const tenantConnectors = tenantConnectorState(tenantVm);
+  const [tenantVm, tenantSlice] = await Promise.all([
+    getTenantVmForOwner(owner, env).catch(() => null),
+    getTenantSliceForOwner(owner, env).catch(() => null),
+  ]);
+  const tenantConnectors = tenantConnectorState(tenantVm, tenantSlice);
   const [gmailToken, outlookToken, jiraToken, shopifyToken] = await Promise.all([
     userConnectorTokenExists(owner, "gmail", env),
     userConnectorTokenExists(owner, "outlook", env),
@@ -556,16 +589,17 @@ export async function userScopedCapabilityHints({ userId = "", thread = null } =
     skillId: "linkedin",
     userFound: snapshot.userFound === true,
     tenantVm,
+    tenantSlice,
     env,
   });
   const desktopLinkedinAvailable = desktopProvisioning.available;
   const scopedConnectors = {
     ...tenantConnectors,
-    whatsapp: tenantConnectors.whatsapp || hasThreadWhatsAppBinding,
-    gmail: tenantConnectors.gmail || gmailToken,
-    outlook: tenantConnectors.outlook || outlookToken,
-    jira: tenantConnectors.jira || jiraToken,
-    shopify: tenantConnectors.shopify || shopifyToken,
+    whatsapp: tenantConnectors.whatsapp || (tenantSliceConnectorEnabled(tenantSlice, "whatsapp") && hasThreadWhatsAppBinding),
+    gmail: tenantConnectors.gmail || (tenantSliceConnectorEnabled(tenantSlice, "gmail") && gmailToken),
+    outlook: tenantConnectors.outlook || (tenantSliceConnectorEnabled(tenantSlice, "outlook") && outlookToken),
+    jira: tenantConnectors.jira || (tenantSliceConnectorEnabled(tenantSlice, "jira") && jiraToken),
+    shopify: tenantConnectors.shopify || (tenantSliceConnectorEnabled(tenantSlice, "shopify") && shopifyToken),
     linkedin: desktopLinkedinAvailable,
   };
   const enabled = (skillId) => snapshot.skillEnabled[skillId] === true;

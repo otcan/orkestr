@@ -9,6 +9,7 @@ import { ensureRuntimeAgentsFile } from "../packages/core/src/agent-context.js";
 import { whereAmI } from "../packages/core/src/whereiam.js";
 import { createThread, getThread } from "../packages/core/src/threads.js";
 import { createTenantVm } from "../packages/core/src/tenant-vm-registry.js";
+import { createTenantSlice } from "../packages/core/src/tenant-slices.js";
 import { userPrincipal } from "../packages/core/src/principal.js";
 import { setUserSkillForPrincipal } from "../packages/core/src/user-skills.js";
 import { upsertUser } from "../packages/core/src/users.js";
@@ -223,6 +224,62 @@ test("whereAmI gates contained user capabilities through the user skill registry
   assert.ok(payload.capabilities.disabledSkills.includes("gmail"));
   assert.ok(payload.capabilities.disabledSkills.includes("timers"));
   assert.equal(payload.capabilities.skills.some((skill) => Object.hasOwn(skill, "token")), false);
+});
+
+test("whereAmI does not inherit parent managed desktops into local tenant slices", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-whereiam-slice-desktops-home-"));
+  const workspace = path.join(home, "users", "tenant-demo", "workspaces", "main");
+  await fs.mkdir(workspace, { recursive: true });
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_ADMIN_USER_ID: "admin",
+    ORKESTR_BROWSER_DESKTOP_MODE: "profiles",
+    ORKESTR_INSTANCE_DESKTOPS_PROVISIONED: "1",
+    ORKESTR_OPS_DESKTOP_SLUGS: "linkedin,pa,attended",
+  };
+  const principal = userPrincipal(await upsertUser({ id: "tenant-demo", role: "user", displayName: "Tenant Demo" }, env));
+  await createTenantSlice({
+    id: "tenant-demo-slice",
+    ownerUserId: "tenant-demo",
+    status: "planned",
+    capabilities: ["codex", "files", "timers", "whatsapp"],
+    connectors: {
+      whatsapp: { enabled: true, chatId: "tenant-demo@g.us", accountId: "sender" },
+      gmail: { enabled: false },
+      linkedin: { enabled: false },
+      oxrm: { enabled: false },
+    },
+  }, env);
+  await createThread({
+    id: "tenant-demo-chat",
+    ownerUserId: "tenant-demo",
+    name: "Tenant Demo",
+    cwd: workspace,
+    workspace,
+    securityProfile: "private-user",
+    binding: {
+      connector: "whatsapp",
+      chatId: "tenant-demo@g.us",
+      displayName: "Tenant Demo Slice",
+    },
+  }, env);
+
+  const payload = await whereAmI({ cwd: workspace, principal }, env);
+
+  assert.equal(payload.ok, true);
+  assert.equal(payload.tenancy.ownerUserId, "tenant-demo");
+  assert.equal(payload.capabilities.whatsapp, true);
+  assert.equal(payload.capabilities.scopedConnectors.whatsapp, true);
+  assert.equal(payload.capabilities.linkedin, false);
+  assert.equal(payload.capabilities.virtualBrowsers, false);
+  assert.equal(payload.capabilities.desktopLeases, false);
+  assert.equal(payload.capabilities.scopedConnectors.linkedin, false);
+  assert.equal(payload.capabilities.scopedConnectors.gmail, false);
+  assert.equal(payload.capabilities.desktopProvisioning.available, false);
+  assert.equal(payload.capabilities.desktopProvisioning.setupState, "instance_desktops_not_provisioned");
+  assert.equal(payload.capabilities.desktopProvisioning.user.tenantSliceId, "tenant-demo-slice");
+  assert.equal(payload.capabilities.hostSkills, false);
+  assert.equal(payload.capabilities.privateOperatorData, false);
 });
 
 test("whereAmI prefers live runtime Codex mode over stale stored mode", async () => {
