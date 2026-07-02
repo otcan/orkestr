@@ -224,7 +224,10 @@ async function stageTenantSliceWhatsAppRoute(slice, tenantVm, input = {}, env = 
     allowPending: true,
   }, env);
   const { token: _token, tokenSync: _tokenSync, ...safeRoute } = route.route || {};
-  return safeRoute;
+  return {
+    route: safeRoute,
+    token: clean(route.route?.token),
+  };
 }
 
 export async function provisionTenantSlice(tenantSliceId, input = {}, env = process.env, options = {}) {
@@ -237,13 +240,25 @@ export async function provisionTenantSlice(tenantSliceId, input = {}, env = proc
   await setTenantSliceStatus(slice.id, "provisioning", { lastError: "" }, env);
   try {
     registryVm = await ensureTenantVm(plan.tenantVm, env);
-    const whatsappRoute = await stageTenantSliceWhatsAppRoute(slice, registryVm, input, env);
-    const [command, ...args] = plan.commands.apply;
+    const stagedWhatsappRoute = await stageTenantSliceWhatsAppRoute(slice, registryVm, input, env);
+    const executionInput = stagedWhatsappRoute?.token
+      ? {
+        ...input,
+        runtimeEnv: {
+          ...(input.runtimeEnv && typeof input.runtimeEnv === "object" && !Array.isArray(input.runtimeEnv) ? input.runtimeEnv : {}),
+          ORKESTR_WHATSAPP_INBOUND_TOKEN: stagedWhatsappRoute.token,
+        },
+      }
+      : input;
+    const executionPlan = stagedWhatsappRoute?.token
+      ? buildTenantSliceProvisioningPlan(slice, executionInput, env)
+      : plan;
+    const [command, ...args] = executionPlan.commands.apply;
     const runner = options.spawnWithInput || spawnWithInput;
     const output = await runner(command, args, {
       env: { ...process.env, ...env, ...(input.kubeconfig ? { KUBECONFIG: clean(input.kubeconfig) } : {}) },
       maxBuffer: 1024 * 1024 * 16,
-    }, plan.manifest);
+    }, executionPlan.manifest);
     const [tenantSlice, tenantVm] = await Promise.all([
       setTenantSliceStatus(slice.id, "provisioning", { lastError: "" }, env),
       setTenantVmStatus(registryVm.id, "provisioning", { lastError: "" }, env),
@@ -253,7 +268,7 @@ export async function provisionTenantSlice(tenantSliceId, input = {}, env = proc
       dryRun: false,
       tenantSlice: publicTenantSlice(tenantSlice),
       tenantVm: publicTenantVm(tenantVm),
-      ...(whatsappRoute ? { whatsappRoute } : {}),
+      ...(stagedWhatsappRoute?.route ? { whatsappRoute: stagedWhatsappRoute.route } : {}),
       output,
     };
   } catch (error) {

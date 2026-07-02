@@ -225,7 +225,17 @@ test("tenant slice provisioning execute path and runtime status are observable",
   assert.equal(calls.length, 1);
   assert.equal(calls[0].command, "kubectl");
   assert.deepEqual(calls[0].args, ["apply", "-f", "-"]);
-  assert.equal(JSON.parse(calls[0].input).items.some((item) => item.kind === "VirtualMachine"), true);
+  const appliedManifest = JSON.parse(calls[0].input);
+  const appliedCloudInitSecret = appliedManifest.items.find((item) => item.kind === "Secret" && item.metadata.name === "charlie-vm-cloudinit");
+  const appliedRuntimeEnvFile = Buffer.from(
+    appliedCloudInitSecret.stringData.userdata.match(/path: \/etc\/orkestr\/orkestr\.env[\s\S]*?content: ([A-Za-z0-9+/=]+)/)[1],
+    "base64",
+  ).toString("utf8");
+  assert.equal(appliedManifest.items.some((item) => item.kind === "VirtualMachine"), true);
+  assert.match(appliedRuntimeEnvFile, /^ORKESTR_WHATSAPP_INBOUND_TOKEN='owt_[^']+'$/m);
+  assert.equal(result.whatsappRoute.token, undefined);
+  assert.equal(result.whatsappRoute.tokenSync, undefined);
+  assert.equal(result.manifest.includes("ORKESTR_WHATSAPP_INBOUND_TOKEN"), false);
   assert.equal((await getTenantSlice("charlie-slice", env)).status, "provisioning");
   assert.equal((await getTenantVm("charlie-slice-vm", env)).status, "provisioning");
   assert.equal(await tenantWhatsAppInboundForwardRoute({ chatId: "charlie-wa@g.us", accountId: "sender" }, env), null);
