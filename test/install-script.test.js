@@ -228,6 +228,9 @@ test("install script exposes a host-native systemd VPS path", async () => {
   assert.match(script, /run_initial_release_deploy/);
   assert.match(script, /Activating initial versioned Orkestr release/);
   assert.match(script, /\/usr\/local\/bin\/orkestr-deploy "\$\{deploy_args\[@\]\}"/);
+  assert.match(script, /bootstrap_tenant_vm_profile/);
+  assert.match(script, /node scripts\/bootstrap-tenant-vm\.mjs/);
+  assert.match(script, /ORKESTR_TENANT_BOOTSTRAP_PROFILE/);
   assert.match(script, /\$\{service_name\}\.timer/);
   assert.match(script, /ORKESTR_AUTH_REQUIRED=\$\{ORKESTR_AUTH_REQUIRED:-1\}/);
   assert.match(script, /bash scripts\/install-runtime-deps\.sh/);

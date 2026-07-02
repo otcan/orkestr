@@ -2359,6 +2359,29 @@ run_initial_release_deploy() {
   /usr/local/bin/orkestr-deploy "${deploy_args[@]}"
 }
 
+bootstrap_tenant_vm_profile() {
+  local profile bootstrap_cmd
+  profile="${ORKESTR_TENANT_BOOTSTRAP_PROFILE:-$(env_file_value ORKESTR_TENANT_BOOTSTRAP_PROFILE)}"
+  if [ -z "$profile" ]; then
+    return 0
+  fi
+  if [ ! -r "$profile" ]; then
+    echo "Warning: tenant bootstrap profile is not readable: $profile" >&2
+    return 0
+  fi
+  echo "Bootstrapping tenant VM first thread from $profile"
+  bootstrap_cmd="set -a; [ -r $(shell_quote "$env_file") ] && . $(shell_quote "$env_file"); set +a; cd $(shell_quote "$repo_dir"); node scripts/bootstrap-tenant-vm.mjs"
+  if [ "$(id -u)" -eq 0 ] && id "$run_user" >/dev/null 2>&1; then
+    if ! runuser -u "$run_user" --preserve-environment -- bash -lc "$bootstrap_cmd"; then
+      echo "Warning: tenant VM bootstrap did not complete. Check journalctl -u ${ORKESTR_SERVICE_NAME:-orkestr} and rerun scripts/bootstrap-tenant-vm.mjs." >&2
+    fi
+    return 0
+  fi
+  if ! bash -lc "$bootstrap_cmd"; then
+    echo "Warning: tenant VM bootstrap did not complete. Rerun scripts/bootstrap-tenant-vm.mjs after fixing runtime auth." >&2
+  fi
+}
+
 write_update_units() {
   local service_name interval
   service_name="${ORKESTR_UPDATE_SERVICE_NAME:-orkestr-update}"
@@ -2441,6 +2464,7 @@ EOF
   esac
   write_systemd_service
   run_initial_release_deploy
+  bootstrap_tenant_vm_profile
   if [ "${ORKESTR_AUTO_UPDATE:-$auto_update}" = "1" ]; then
     write_update_units
   fi

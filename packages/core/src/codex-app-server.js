@@ -425,7 +425,7 @@ export async function resumeCodexAppServerThread(thread, env = process.env) {
     return startCodexAppServerThread(freshThread, env);
   }
   const id = codexThreadId(thread);
-  if (!id) throw new Error("codex_thread_id_required");
+  if (!id) return startCodexAppServerThread(thread, env);
   const workspace = workspaceForThread(thread);
   if (workspace) await ensureRuntimeAgentsFile(workspace, env, { thread }).catch(() => {});
   await ensureContainedCodexRuntimeHome(thread, env);

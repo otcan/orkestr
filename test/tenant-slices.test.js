@@ -229,11 +229,18 @@ test("tenant slice provisioning execute path and runtime status are observable",
   assert.deepEqual(calls[0].args, ["apply", "-f", "-"]);
   const appliedManifest = JSON.parse(calls[0].input);
   const appliedCloudInitSecret = appliedManifest.items.find((item) => item.kind === "Secret" && item.metadata.name === "charlie-vm-cloudinit");
+  const appliedUserData = appliedCloudInitSecret.stringData.userdata;
+  const appliedBootstrapProfile = JSON.parse(Buffer.from(
+    appliedUserData.match(/path: \/etc\/orkestr\/tenant-bootstrap-profile\.json[\s\S]*?content: ([A-Za-z0-9+/=]+)/)[1],
+    "base64",
+  ).toString("utf8"));
   const appliedRuntimeEnvFile = Buffer.from(
-    appliedCloudInitSecret.stringData.userdata.match(/path: \/etc\/orkestr\/orkestr\.env[\s\S]*?content: ([A-Za-z0-9+/=]+)/)[1],
+    appliedUserData.match(/path: \/etc\/orkestr\/orkestr\.env[\s\S]*?content: ([A-Za-z0-9+/=]+)/)[1],
     "base64",
   ).toString("utf8");
   assert.equal(appliedManifest.items.some((item) => item.kind === "VirtualMachine"), true);
+  assert.equal(appliedBootstrapProfile.connectors.whatsapp.chatId, "charlie-wa@g.us");
+  assert.equal(appliedBootstrapProfile.connectors.whatsapp.accountId, "sender");
   assert.match(appliedRuntimeEnvFile, /^ORKESTR_HOST='0\.0\.0\.0'$/m);
   assert.match(appliedRuntimeEnvFile, /^ORKESTR_WHATSAPP_INBOUND_TOKEN='owt_[^']+'$/m);
   assert.equal(result.whatsappRoute.token, undefined);

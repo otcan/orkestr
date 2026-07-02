@@ -50,7 +50,7 @@ test("tenant VM provisioning builds a public-safe KubeVirt plan", async () => {
   assert.ok(plan.bootstrapProfile.skills.includes("learning"));
   assert.ok(plan.bootstrapProfile.skills.includes("whatsapp"));
   assert.ok(plan.bootstrapProfile.skills.includes("salesnav"));
-  assert.equal(plan.bootstrapProfile.connectors.whatsapp.chatId, undefined);
+  assert.equal(plan.bootstrapProfile.connectors.whatsapp.chatId, "");
   assert.deepEqual(profile, plan.bootstrapProfile);
   assert.equal(vm.spec.template.spec.domain.cpu.cores, 2);
   assert.equal(vm.spec.template.spec.domain.resources.requests.memory, "8192Mi");

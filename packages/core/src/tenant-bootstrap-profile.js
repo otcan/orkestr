@@ -174,6 +174,7 @@ export function buildTenantBootstrapProfile(vmInput, input = {}, env = process.e
     connectors: {
       whatsapp: {
         enabled: vm.capabilities.includes("whatsapp"),
+        chatId: clean(vm.connectors.whatsappChatId),
         chatName: clean(vm.connectors.whatsappChatName),
         accountId: clean(vm.connectors.whatsappAccountId),
         routeMode: vm.connectors.whatsappRouteEnabled ? "control-plane-forward" : "local",
