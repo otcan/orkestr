@@ -89,6 +89,38 @@ test("thread attachment policy allows temp artifacts for admin-owned threads onl
   assert.equal(resolved.attachments[0].mimetype, "image/png");
 });
 
+test("thread attachment policy can bypass ordinary path allowlist for admin threads", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-attachment-admin-any-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_ADMIN_USER_ID: "admin",
+    ORKESTR_ADMIN_THREAD_ATTACHMENT_ALLOW_ANY_PATH: "1",
+  };
+  const paths = dataPaths(env);
+  const arbitraryDir = path.join(home, "operator-data", "amazon-fba-prep");
+  await fs.mkdir(arbitraryDir, { recursive: true });
+  const arbitraryPath = path.join(arbitraryDir, "fba-labels.pdf");
+  await fs.writeFile(arbitraryPath, "pdf", "utf8");
+  await fs.mkdir(paths.secrets, { recursive: true });
+  const secretPath = path.join(paths.secrets, "token.txt");
+  await fs.writeFile(secretPath, "secret", "utf8");
+  const adminThread = { id: "admin-any-thread", ownerUserId: "admin" };
+  const userThread = { id: "user-any-thread", ownerUserId: "alice" };
+
+  assert.equal(classifyThreadAttachmentPath(arbitraryPath, { thread: adminThread, env }).ok, true);
+  assert.equal(classifyThreadAttachmentPath(arbitraryPath, { thread: userThread, env }).ok, false);
+  assert.equal(classifyThreadAttachmentPath(secretPath, { thread: adminThread, env }).ok, false);
+
+  const resolved = await resolveThreadAttachments({
+    thread: adminThread,
+    text: `Labels: ${arbitraryPath}\nSecret: ${secretPath}`,
+    env,
+  });
+  assert.equal(resolved.attachments.length, 1);
+  assert.equal(resolved.attachments[0].filename, "fba-labels.pdf");
+  assert.equal(resolved.skipped.some((item) => item.reason === "attachment_path_forbidden"), true);
+});
+
 test("thread attachment path extraction ignores registered slash commands", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-attachment-commands-"));
   const env = { ORKESTR_HOME: home };

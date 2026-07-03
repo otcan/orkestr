@@ -59,6 +59,10 @@ function pickString(...values) {
   return "";
 }
 
+function truthyEnv(value = "") {
+  return ["1", "true", "yes", "on"].includes(String(value || "").trim().toLowerCase());
+}
+
 function safeThreadId(threadId) {
   return String(threadId || "").replace(/[^a-zA-Z0-9_.-]/g, "_") || "default";
 }
@@ -114,6 +118,14 @@ function adminOwnedThread(thread = {}, env = process.env) {
   return normalizeUserId(resourceOwnerUserId(thread, env)) === normalizeUserId(env.ORKESTR_ADMIN_USER_ID || adminUserId);
 }
 
+function adminAttachmentAllowAnyPath(thread = {}, env = process.env) {
+  if (!adminOwnedThread(thread, env)) return false;
+  return truthyEnv(
+    env.ORKESTR_ADMIN_THREAD_ATTACHMENT_ALLOW_ANY_PATH ||
+      env.ORKESTR_THREAD_ATTACHMENT_ALLOW_ANY_PATH,
+  );
+}
+
 function threadAttachmentRoots(thread = {}, env = process.env) {
   const paths = dataPaths(env);
   const allowed = [];
@@ -158,6 +170,7 @@ export function classifyThreadAttachmentPath(filePath, { thread = {}, env = proc
   const deniedRoot = roots.denied.find((root) => pathInside(root, resolved));
   if (deniedRoot) return { ok: false, reason: "attachment_path_forbidden", path: resolved, deniedRoot };
   if (userPrivatePathDenied(resolved, roots.home)) return { ok: false, reason: "attachment_path_forbidden", path: resolved };
+  if (adminAttachmentAllowAnyPath(thread, env)) return { ok: true, path: resolved, allowedRoot: "", allowAnyPath: true };
   const allowedRoot = roots.allowed.find((root) => pathInside(root, resolved));
   if (!allowedRoot) return { ok: false, reason: "attachment_path_not_allowed", path: resolved };
   return { ok: true, path: resolved, allowedRoot };
