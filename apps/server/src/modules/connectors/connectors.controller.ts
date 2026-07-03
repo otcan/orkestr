@@ -995,6 +995,8 @@ function tenantCallbackTargetUrl(request: any, baseUrl = ""): string {
 async function forwardTenantOAuthCallbackIfNeeded(state = "", request: any = {}) {
   const tenantVmId = tenantVmIdFromOAuthState(state);
   if (!tenantVmId) return null;
+  if (clean(request?.headers?.["x-orkestr-oauth-forwarded"])) return null;
+  if (tenantVmId === clean(process.env.ORKESTR_TENANT_VM_ID)) return null;
   const tenantVm = await getTenantVm(tenantVmId, process.env);
   const baseUrl = clean(tenantVm?.endpoint?.baseUrl || (tenantVm?.endpoint as any)?.url);
   const target = tenantCallbackTargetUrl(request, baseUrl);
