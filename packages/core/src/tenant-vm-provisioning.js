@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { normalizeTenantControlPlane, publicTenantControlPlane, tenantControlPlaneRuntimeEnv } from "./tenant-control-plane.js";
 import { tenantBootstrapProfileJson, buildTenantBootstrapProfile } from "./tenant-bootstrap-profile.js";
 import { tenantDesktopShareUrlTemplate } from "./tenant-desktop-share-routing.js";
@@ -27,6 +28,35 @@ function safeLabelValue(value = "", fallback = "unknown") {
     .replace(/^[^A-Za-z0-9]+|[^A-Za-z0-9]+$/g, "")
     .slice(0, 63);
   return label || fallback;
+}
+
+function normalizeMacAddress(value = "") {
+  const normalized = clean(value).toLowerCase();
+  if (!normalized) return "";
+  if (!/^[0-9a-f]{2}(?::[0-9a-f]{2}){5}$/.test(normalized)) {
+    const error = new Error("tenant_vm_mac_address_invalid");
+    error.statusCode = 400;
+    throw error;
+  }
+  const firstOctet = Number.parseInt(normalized.slice(0, 2), 16);
+  if ((firstOctet & 1) === 1) {
+    const error = new Error("tenant_vm_mac_address_must_be_unicast");
+    error.statusCode = 400;
+    throw error;
+  }
+  return normalized;
+}
+
+function deterministicMacAddress(...parts) {
+  const hash = createHash("sha256").update(parts.map((part) => clean(part)).filter(Boolean).join(":")).digest();
+  return [0x02, hash[0], hash[1], hash[2], hash[3], hash[4]]
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join(":");
+}
+
+function tenantVmMacAddress(vm, input, namespace, vmName) {
+  return normalizeMacAddress(input.macAddress || input.vmMacAddress || vm.kubevirt?.macAddress) ||
+    deterministicMacAddress("orkestr-tenant-vm", namespace, vmName, vm.id);
 }
 
 function singleQuote(value = "") {
@@ -267,6 +297,7 @@ export function buildTenantVmProvisioningPlan(vm, input = {}, env = process.env)
   const vcpus = Number.isFinite(cpuInput) ? Math.max(1, cpuInput) : 2;
   const publicIp = clean(input.publicIp || vm.endpoint.publicIp);
   const publicIpPorts = clean(input.publicIpPorts || input.ports || "22,80,443");
+  const macAddress = tenantVmMacAddress(vm, input, namespace, vmName);
 
   const manifestObject = {
     apiVersion: "v1",
@@ -341,7 +372,7 @@ export function buildTenantVmProvisioningPlan(vm, input = {}, env = process.env)
                     { name: "rootdisk", disk: { bus: "virtio" } },
                     { name: "cloudinitdisk", disk: { bus: "virtio" } },
                   ],
-                  interfaces: [{ name: "default", bridge: {} }],
+                  interfaces: [{ name: "default", bridge: {}, macAddress }],
                 },
               },
               networks: [{ name: "default", pod: {} }],
@@ -359,6 +390,7 @@ export function buildTenantVmProvisioningPlan(vm, input = {}, env = process.env)
   return {
     namespace,
     vmName,
+    macAddress,
     cloudInitSecretName,
     bootstrapProfilePath: tenantBootstrapProfilePath(planInput, env),
     bootstrapProfile: buildTenantBootstrapProfile(vm, planInput, env),

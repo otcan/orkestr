@@ -39,6 +39,7 @@ test("tenant VM provisioning builds a public-safe KubeVirt plan", async () => {
 
   assert.equal(plan.namespace, "tenant-a");
   assert.equal(plan.vmName, "alice-vm");
+  assert.match(plan.macAddress, /^02(?::[0-9a-f]{2}){5}$/);
   assert.equal(plan.cloudInitSecretName, "alice-vm-cloudinit");
   assert.equal(plan.runtimeEnv.ORKESTR_HOST, "0.0.0.0");
   assert.equal(
@@ -58,6 +59,11 @@ test("tenant VM provisioning builds a public-safe KubeVirt plan", async () => {
   assert.deepEqual(profile, plan.bootstrapProfile);
   assert.equal(vm.spec.template.spec.domain.cpu.cores, 2);
   assert.equal(vm.spec.template.spec.domain.resources.requests.memory, "8192Mi");
+  assert.deepEqual(vm.spec.template.spec.domain.devices.interfaces[0], {
+    name: "default",
+    bridge: {},
+    macAddress: plan.macAddress,
+  });
   assert.equal(vm.spec.dataVolumeTemplates[0].spec.pvc.resources.requests.storage, "100Gi");
   assert.match(vm.spec.dataVolumeTemplates[0].spec.source.http.url, /noble-server-cloudimg-amd64\.img/);
   assert.deepEqual(cloudInitVolume, { secretRef: { name: "alice-vm-cloudinit" } });
