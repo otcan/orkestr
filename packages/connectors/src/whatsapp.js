@@ -1364,6 +1364,82 @@ function scheduleWhatsAppApiAgentThreadKick(thread, env = process.env) {
   whatsappApiAgentKickTimers.set(thread.id, timer);
 }
 
+function tenantVmInboundForwardAuthorized(input = {}) {
+  const context = input.machineAuthContext && typeof input.machineAuthContext === "object" ? input.machineAuthContext : null;
+  if (!context) return false;
+  const routeKind = pickString(context.routeKind, context.kind);
+  if (routeKind === "whatsapp_inbound") return true;
+  const scopes = Array.isArray(context.scopes) ? context.scopes.map((scope) => pickString(scope)).filter(Boolean) : [];
+  return scopes.includes("whatsapp:inbound");
+}
+
+function tenantVmRuntimeId(env = process.env) {
+  return pickString(env.ORKESTR_TENANT_VM_ID, env.ORKESTR_TENANT_SLICE_ID);
+}
+
+function tenantVmRuntimeEnabled(env = process.env) {
+  return Boolean(tenantVmRuntimeId(env) || pickString(env.ORKESTR_TENANT_BOUNDARY).toLowerCase() === "tenant-vm");
+}
+
+function tenantVmBootstrapThreadCandidate(thread = {}) {
+  const binding = thread?.binding && typeof thread.binding === "object" && !Array.isArray(thread.binding) ? thread.binding : {};
+  return binding.tenantVmBootstrap === true ||
+    thread?.executor?.metadata?.tenantVmBootstrap === true ||
+    thread?.runtime?.tenantVmBootstrap === true;
+}
+
+function tenantVmBootstrapReboundBinding(thread = {}, input = {}) {
+  const binding = thread?.binding && typeof thread.binding === "object" && !Array.isArray(thread.binding) ? thread.binding : {};
+  const chatId = pickString(input.chatId, input.chat?.id, input.fromChatId);
+  const accountId = pickString(input.accountId, binding.inboundAccountId, binding.senderAccountId, binding.responderAccountId, binding.outboundAccountId);
+  const displayName = pickString(input.chatName, input.displayName, binding.displayName, thread.bindingName, thread.name, chatId);
+  return {
+    ...binding,
+    connector: "whatsapp",
+    chatId,
+    displayName,
+    enabled: binding.enabled !== false,
+    routeEligible: binding.routeEligible !== false,
+    generated: binding.generated !== false,
+    tenantVmBootstrap: true,
+    mirrorToWhatsApp: binding.mirrorToWhatsApp !== false,
+    ...(accountId ? {
+      senderAccountId: pickString(binding.senderAccountId, accountId),
+      inboundAccountId: pickString(binding.inboundAccountId, accountId),
+      receivingAccountId: pickString(binding.receivingAccountId, accountId),
+      responderAccountId: pickString(binding.responderAccountId, accountId),
+      outboundAccountId: pickString(binding.outboundAccountId, accountId),
+    } : {}),
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+async function maybeRebindTenantVmBootstrapThread(input = {}, env = process.env) {
+  const chatId = pickString(input.chatId, input.chat?.id, input.fromChatId);
+  if (!chatId || !tenantVmRuntimeEnabled(env) || !tenantVmInboundForwardAuthorized(input)) return null;
+  const threads = await listThreads(env);
+  const candidates = threads.filter(tenantVmBootstrapThreadCandidate);
+  if (candidates.length !== 1) return null;
+  const thread = candidates[0];
+  const binding = thread.binding && typeof thread.binding === "object" && !Array.isArray(thread.binding) ? thread.binding : {};
+  if (!whatsappBindingIsRouteEligible(binding)) return null;
+  if (pickString(binding.chatId) === chatId) return { threadId: thread.id, binding };
+  const nextBinding = tenantVmBootstrapReboundBinding(thread, input);
+  const updated = await updateThread(thread.id, {
+    binding: nextBinding,
+    bindingName: nextBinding.displayName,
+  }, env);
+  await appendEvent({
+    type: "tenant_vm_whatsapp_bootstrap_binding_rebound",
+    tenantVmId: tenantVmRuntimeId(env),
+    threadId: updated.id,
+    previousChatId: pickString(binding.chatId),
+    chatId,
+    accountId: pickString(input.accountId),
+  }, env).catch(() => {});
+  return { threadId: updated.id, binding: updated.binding || nextBinding };
+}
+
 async function routeAutoProvisionedThread(input = {}, config = {}, env = process.env) {
   if (!whatsappAutoProvisionUsers(config, env)) return { threadId: "", binding: null };
   const chatId = pickString(input.chatId, input.chat?.id, input.fromChatId);
@@ -3179,6 +3255,10 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
   };
 
   threadRoute ||= await routeThread(input, config, env);
+  if (!threadRoute.threadId) {
+    const rebound = await maybeRebindTenantVmBootstrapThread(input, env);
+    if (rebound?.threadId) threadRoute = rebound;
+  }
   if (!threadRoute.threadId) {
     const restoredBrokerBinding = await maybeBindApprovedBrokerChat({
       input,

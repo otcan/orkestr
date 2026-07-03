@@ -60,6 +60,8 @@ test("tenant VM bootstrap creates an idempotent route target for forwarded Whats
   const env = {
     ORKESTR_HOME: home,
     ORKESTR_ADMIN_USER_ID: "tenant-demo",
+    ORKESTR_TENANT_VM_ID: "tenant-demo-slice-vm",
+    ORKESTR_TENANT_BOUNDARY: "tenant-vm",
     ORKESTR_TENANT_BOOTSTRAP_START_CODEX: "0",
   };
 
@@ -94,4 +96,43 @@ test("tenant VM bootstrap creates an idempotent route target for forwarded Whats
   assert.equal(messages.length, 1);
   assert.equal(messages[0].source, "whatsapp_inbound");
   assert.equal(messages[0].text, "hello from the tenant VM slice");
+});
+
+test("tenant VM bootstrap binding follows a new parent-forwarded WhatsApp chat", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-tenant-vm-rebind-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_ADMIN_USER_ID: "tenant-demo",
+    ORKESTR_TENANT_VM_ID: "tenant-demo-slice-vm",
+    ORKESTR_TENANT_BOUNDARY: "tenant-vm",
+    ORKESTR_TENANT_BOOTSTRAP_START_CODEX: "0",
+  };
+
+  await bootstrapTenantVmFromProfile(profile(), env);
+
+  const routed = await routeWhatsAppInbound({
+    eventId: "tenant-demo-forwarded-rebound-1",
+    chatId: "120363499999999999@g.us",
+    chatName: "Tenant Demo Slice New",
+    accountId: "sender",
+    from: "491700000001@c.us",
+    text: "hello after chat rotation",
+    machineAuthContext: {
+      routeKind: "whatsapp_inbound",
+      scopes: ["whatsapp:inbound"],
+      principalKind: "external_instance",
+      principalId: "configured-inbound-token",
+    },
+  }, env);
+
+  const thread = await getThread("tenant-demo-slice", env);
+  const messages = await listThreadMessages("tenant-demo-slice", env);
+
+  assert.equal(routed.threadId, "tenant-demo-slice");
+  assert.equal(thread.binding.chatId, "120363499999999999@g.us");
+  assert.equal(thread.binding.displayName, "Tenant Demo Slice New");
+  assert.equal(thread.binding.tenantVmBootstrap, true);
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].chatId, "120363499999999999@g.us");
+  assert.equal(messages[0].text, "hello after chat rotation");
 });
