@@ -3625,6 +3625,63 @@ test("Codex app-server safe reset checkpoints and starts a fresh thread", async 
   }
 });
 
+test("Codex app-server auto safe resets missing resumed thread before delivering queued input", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-missing-resume-"));
+  const fake = await createFakeCodex(home);
+  const env = {
+    ORKESTR_HOME: path.join(home, "orkestr"),
+    HOME: path.join(home, "runtime-home"),
+    PATH: `${fake.bin}${path.delimiter}${process.env.PATH || ""}`,
+    FAKE_CODEX_STATE: fake.stateFile,
+  };
+  try {
+    const thread = await createThread({ id: "app-server-missing-resume-thread", name: "App Server Missing Resume Thread", cwd: home, executorId: "codex", executor: { type: "codex" } }, env);
+    const started = await startCodexAppServerThread(thread, env);
+    const oldCodexThreadId = started.thread.codexThreadId;
+    const input = await enqueueThreadInput(started.thread.id, { text: "recover this queued input" }, env);
+    await updateThread(started.thread.id, {
+      state: "unloaded",
+      runtime: {
+        ...(started.thread.runtime || {}),
+        runtimeKind: "codex-app-server",
+        state: "unloaded",
+      },
+    }, env);
+
+    const rawState = JSON.parse(await fs.readFile(fake.stateFile, "utf8"));
+    rawState.threads = [{
+      id: "orphan-existing-thread",
+      sessionId: "sess_orphan",
+      name: "",
+      preview: "",
+      cwd: home,
+      status: { type: "idle" },
+      loaded: true,
+      turns: [],
+    }];
+    await fs.writeFile(fake.stateFile, JSON.stringify(rawState, null, 2));
+
+    const delivered = await deliverCodexAppServerPendingInputs(await getThread(started.thread.id, env), env);
+    const resetThread = await getThread(started.thread.id, env);
+    const messages = await listThreadMessages(started.thread.id, env);
+    const deliveredInput = messages.find((message) => message.id === input.id);
+    const reply = messages.find((message) => message.role === "assistant" && /Reply to: recover this queued input/.test(message.text || ""));
+    const finalState = JSON.parse(await fs.readFile(fake.stateFile, "utf8"));
+
+    assert.deepEqual(delivered, [input.id]);
+    assert.equal(deliveredInput.state, "completed");
+    assert.equal(deliveredInput.deliveryState, "delivered");
+    assert.ok(reply);
+    assert.notEqual(resetThread.codexThreadId, oldCodexThreadId);
+    assert.equal(resetThread.executor.metadata.lastSafeReset.reason, "codex_app_server_missing_thread_auto_safe_reset");
+    assert.ok(finalState.calls.some((call) => call.method === "thread/resume" && call.params.threadId === oldCodexThreadId));
+    assert.equal(finalState.calls.filter((call) => call.method === "thread/start").length, 2);
+    assert.ok(finalState.calls.some((call) => call.method === "turn/start" && call.params.threadId === resetThread.codexThreadId));
+  } finally {
+    stopCodexAppServerClients();
+  }
+});
+
 test("Codex app-server /safe-reset command starts fresh thread without delivering prompt", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-safe-reset-command-"));
   const fake = await createFakeCodex(home);

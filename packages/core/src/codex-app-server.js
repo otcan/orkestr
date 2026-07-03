@@ -174,6 +174,14 @@ function appServerStatusProgress({ thread, runtimeState, codexStatus, pendingReq
   return null;
 }
 
+function codexAppServerMissingThreadError(errorText) {
+  const text = clean(errorText).toLowerCase();
+  return Boolean(text && (
+    /no rollout found for thread id/.test(text) ||
+    /thread not found:/.test(text)
+  ));
+}
+
 function codexAppServerModePatch(mode, reason = "app-server-local-mode") {
   const desired = codexModeSetting(mode);
   if (!desired) return {};
@@ -798,15 +806,60 @@ async function deliverCodexAppServerPendingInputsUnlocked(thread, env = process.
       id = codexThreadId(thread);
     } catch (error) {
       const errorText = publicError(error);
-      await updateThreadMessage(thread.id, next.id, {
-        state: "queued",
-        deliveryState: "waiting_codex_resume",
-        deliveryLastAttemptAt: nowIso(),
-        error: errorText,
-      }, env).catch(() => {});
-      await updateThread(thread.id, { state: "unloaded", lastError: errorText }, env).catch(() => {});
-      await appendEvent({ type: "codex_app_server_resume_failed", threadId: thread.id, codexThreadId: id, error: errorText }, env).catch(() => {});
-      return delivered;
+      if (codexAppServerMissingThreadError(errorText)) {
+        try {
+          const reset = await performCodexAppServerSafeReset(thread, {
+            reason: "codex_app_server_missing_thread_auto_safe_reset",
+            interruptThread: interruptCodexAppServerThread,
+            startThread: startCodexAppServerThread,
+          }, env);
+          thread = reset.thread || await getThread(thread.id, env).catch(() => null) || thread;
+          runtimeEnv = codexRuntimeEnvForThread(thread, env);
+          client = await getCodexAppServerClient({ env: runtimeEnv, home: runtimeHome(runtimeEnv) });
+          id = codexThreadId(thread);
+          if (!id) throw new Error("codex_app_server_auto_safe_reset_missing_thread_id");
+          await updateThreadMessage(thread.id, next.id, {
+            state: "queued",
+            deliveryState: "codex_app_server_auto_safe_reset",
+            deliveryLastAttemptAt: nowIso(),
+            deliveryClaimId: null,
+            error: null,
+            oldCodexThreadId: reset.oldCodexThreadId || null,
+            newCodexThreadId: reset.newCodexThreadId || null,
+            manualCheckpointPath: reset.manualCheckpoint?.path || null,
+          }, env).catch(() => {});
+          await appendEvent({
+            type: "codex_app_server_missing_thread_auto_safe_reset",
+            threadId: thread.id,
+            messageId: next.id,
+            oldCodexThreadId: reset.oldCodexThreadId || null,
+            newCodexThreadId: reset.newCodexThreadId || null,
+            error: errorText,
+            manualCheckpointPath: reset.manualCheckpoint?.path || null,
+          }, env).catch(() => {});
+        } catch (resetError) {
+          const resetErrorText = publicError(resetError);
+          await updateThreadMessage(thread.id, next.id, {
+            state: "queued",
+            deliveryState: "waiting_codex_resume",
+            deliveryLastAttemptAt: nowIso(),
+            error: [errorText, `auto safe reset failed: ${resetErrorText}`].filter(Boolean).join("; "),
+          }, env).catch(() => {});
+          await updateThread(thread.id, { state: "unloaded", lastError: resetErrorText || errorText }, env).catch(() => {});
+          await appendEvent({ type: "codex_app_server_resume_failed", threadId: thread.id, codexThreadId: id, error: resetErrorText || errorText }, env).catch(() => {});
+          return delivered;
+        }
+      } else {
+        await updateThreadMessage(thread.id, next.id, {
+          state: "queued",
+          deliveryState: "waiting_codex_resume",
+          deliveryLastAttemptAt: nowIso(),
+          error: errorText,
+        }, env).catch(() => {});
+        await updateThread(thread.id, { state: "unloaded", lastError: errorText }, env).catch(() => {});
+        await appendEvent({ type: "codex_app_server_resume_failed", threadId: thread.id, codexThreadId: id, error: errorText }, env).catch(() => {});
+        return delivered;
+      }
     }
   }
   const approvalStatusState = appServerStateFromStatus(client.threadStates.get(id)?.status || thread.runtime?.codexStatus);
