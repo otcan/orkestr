@@ -88,3 +88,65 @@ test("parent WhatsApp bridge proxy forwards scoped upstream bearer tokens", asyn
     await new Promise((resolve) => upstream.close(resolve));
   }
 });
+
+test("parent WhatsApp bridge proxy lets upstream scoped bearer enforce recipient scope", async () => {
+  const upstreamRequests = [];
+  const upstream = http.createServer(async (req, res) => {
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    upstreamRequests.push({
+      method: req.method,
+      url: req.url,
+      authorization: req.headers.authorization,
+      body: chunks.length ? JSON.parse(Buffer.concat(chunks).toString("utf8")) : null,
+    });
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ ok: true, ids: ["sent-by-scoped-token"] }));
+  });
+  await new Promise((resolve) => upstream.listen(0, "127.0.0.1", resolve));
+  const upstreamPort = upstream.address().port;
+  const proxy = createParentWhatsAppBridgeProxy({
+    token: "proxy-token",
+    allowUpstreamBearer: true,
+    upstreamBase: `http://127.0.0.1:${upstreamPort}/api/connectors/whatsapp/bridge`,
+    policy: parentWhatsAppBridgePolicyFromEnv({
+      ORKESTR_PARENT_WA_BRIDGE_ALLOWED_ACCOUNTS: "sender",
+      ORKESTR_PARENT_WA_BRIDGE_ALLOWED_CHAT_IDS: "old-tenant-chat@g.us",
+    }),
+  });
+  await new Promise((resolve) => proxy.listen(0, "127.0.0.1", resolve));
+  const proxyPort = proxy.address().port;
+  try {
+    const masterTokenResponse = await fetch(`http://127.0.0.1:${proxyPort}/send-text`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: "Bearer proxy-token",
+      },
+      body: JSON.stringify({ to: "new-tenant-chat@g.us", accountId: "sender", text: "hello" }),
+    });
+    const masterTokenPayload = await masterTokenResponse.json();
+    assert.equal(masterTokenResponse.status, 403);
+    assert.equal(masterTokenPayload.error, "parent_wa_bridge_recipient_denied");
+    assert.equal(upstreamRequests.length, 0);
+
+    const scopedTokenResponse = await fetch(`http://127.0.0.1:${proxyPort}/send-text`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: "Bearer wa_scoped_tenant_token",
+      },
+      body: JSON.stringify({ to: "new-tenant-chat@g.us", accountId: "sender", text: "hello" }),
+    });
+    const scopedTokenPayload = await scopedTokenResponse.json();
+
+    assert.equal(scopedTokenResponse.status, 200);
+    assert.equal(scopedTokenPayload.ids[0], "sent-by-scoped-token");
+    assert.equal(upstreamRequests.length, 1);
+    assert.equal(upstreamRequests[0].authorization, "Bearer wa_scoped_tenant_token");
+    assert.equal(upstreamRequests[0].body.to, "new-tenant-chat@g.us");
+  } finally {
+    await new Promise((resolve) => proxy.close(resolve));
+    await new Promise((resolve) => upstream.close(resolve));
+  }
+});

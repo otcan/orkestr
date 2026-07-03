@@ -200,7 +200,10 @@ export function createParentWhatsAppBridgeProxy(options = {}) {
       const route = routeFor(req, { upstreamBase, defaultAccount });
       if (!route) return json(res, 404, { ok: false, error: "unsupported_whatsapp_bridge_route" });
       const body = ["POST", "PUT", "PATCH"].includes(route.method) ? await readBody(req) : undefined;
-      if (route.send && body) assertParentWhatsAppBridgeSendAllowed(JSON.parse(body.toString("utf8") || "{}"), policy);
+      // Forwarded scoped bearer tokens are enforced by the upstream Orkestr bridge.
+      if (route.send && body && !forwardAuthorization) {
+        assertParentWhatsAppBridgeSendAllowed(JSON.parse(body.toString("utf8") || "{}"), policy);
+      }
       const upstreamResponse = await fetch(route.url, {
         method: route.method,
         headers: {
