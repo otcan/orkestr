@@ -140,6 +140,7 @@ test("whereAmI exposes public tenant setup URL without wildcard bind API base", 
     ORKESTR_HOST: "0.0.0.0",
     ORKESTR_PORT: "21050",
     ORKESTR_TENANT_VM_ID: "firat-jobs-vm",
+    ORKESTR_BROKER_INSTANCE_ID: "broker-firat-001",
     ORKESTR_CONNECT_PUBLIC_URL: "https://connect.example.test",
   };
   await createThread({
@@ -153,7 +154,7 @@ test("whereAmI exposes public tenant setup URL without wildcard bind API base", 
   const payload = await whereAmI({ cwd: workspace }, env);
 
   assert.equal(payload.apiBase, "http://127.0.0.1:21050");
-  assert.equal(payload.publicUrls.setupUrl, "https://connect.example.test/i/firat-jobs-vm/setup");
+  assert.equal(payload.publicUrls.setupUrl, "https://connect.example.test/i/broker-firat-001/setup");
   assert.equal(payload.publicUrls.connectBaseUrl, "https://connect.example.test");
   assert.doesNotMatch(JSON.stringify(payload.publicUrls), /0\.0\.0\.0|127\.0\.0\.1|localhost|10\./);
 });

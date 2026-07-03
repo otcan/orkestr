@@ -44,13 +44,17 @@ function runtimeEnv(input = {}) {
     : {};
 }
 
-function appendInstanceSetup(baseUrl = "", tenantVmId = "") {
+function objectValue(value = {}) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
+
+function appendInstanceSetup(baseUrl = "", instanceId = "") {
   const base = publicHttpUrl(baseUrl);
-  const instanceId = clean(tenantVmId);
-  if (!base || !instanceId) return "";
+  const id = clean(instanceId);
+  if (!base || !id) return "";
   try {
     const parsed = new URL(base);
-    parsed.pathname = `${parsed.pathname.replace(/\/+$/, "")}/i/${encodeURIComponent(instanceId)}/setup`;
+    parsed.pathname = `${parsed.pathname.replace(/\/+$/, "")}/i/${encodeURIComponent(id)}/setup`;
     parsed.search = "";
     parsed.hash = "";
     return parsed.toString().replace(/\/+$/, "");
@@ -70,7 +74,17 @@ export function tenantPublicSetupUrl(input = {}, env = process.env) {
       env.ORKESTR_DEMO_PUBLIC_SETUP_URL,
   );
   if (explicit) return explicit;
+  const labels = objectValue(input.labels);
   const tenantVmId = clean(input.tenantVmId || input.vmId || source.ORKESTR_TENANT_VM_ID || env.ORKESTR_TENANT_VM_ID);
+  const brokerInstanceId = clean(
+    input.brokerInstanceId ||
+      input.instanceId ||
+      labels.brokerInstanceId ||
+      labels.instanceId ||
+      source.ORKESTR_BROKER_INSTANCE_ID ||
+      source.ORKESTR_INSTANCE_ID ||
+      (!tenantVmId ? env.ORKESTR_BROKER_INSTANCE_ID || env.ORKESTR_INSTANCE_ID : ""),
+  );
   const base = publicHttpUrl(
     input.connectPublicBaseUrl ||
       input.publicConnectBaseUrl ||
@@ -80,7 +94,7 @@ export function tenantPublicSetupUrl(input = {}, env = process.env) {
       env.ORKESTR_CONNECT_PUBLIC_BASE_URL ||
       env.ORKESTR_CONNECT_PUBLIC_URL,
   );
-  return appendInstanceSetup(base, tenantVmId);
+  return appendInstanceSetup(base, brokerInstanceId);
 }
 
 export function tenantPublicUrls(input = {}, env = process.env) {

@@ -132,6 +132,7 @@ test("tenant slice provisioning builds a VM-backed plan", async () => {
     vmName: "bob-vm",
     repoUrl: "https://github.com/example/orkestr.git",
     gitRef: "main",
+    brokerInstanceId: "broker-bob-001",
   }, env);
   const manifest = JSON.parse(plan.manifest);
   const vm = manifest.items.find((item) => item.kind === "VirtualMachine");
@@ -168,7 +169,9 @@ test("tenant slice provisioning builds a VM-backed plan", async () => {
   assert.equal(plan.runtimeEnv.ORKESTR_PAIRING_URL, "https://connect.example.test/setup/pairing");
   assert.equal(plan.runtimeEnv.ORKESTR_PUBLIC_URL, "https://connect.example.test");
   assert.equal(plan.runtimeEnv.ORKESTR_CONNECT_PUBLIC_BASE_URL, "https://connect.example.test");
-  assert.equal(plan.runtimeEnv.ORKESTR_CONNECT_PUBLIC_SETUP_URL, "https://connect.example.test/i/bob-slice-vm/setup");
+  assert.equal(plan.runtimeEnv.ORKESTR_CONNECT_PUBLIC_SETUP_URL, "https://connect.example.test/i/broker-bob-001/setup");
+  assert.equal(plan.runtimeEnv.ORKESTR_BROKER_INSTANCE_ID, "broker-bob-001");
+  assert.equal(plan.runtimeEnv.ORKESTR_INSTANCE_ID, "broker-bob-001");
   assert.equal(plan.runtimeEnv.ORKESTR_BROKER_BASE_URL, "https://broker.example.test");
   assert.equal(plan.runtimeEnv.ORKESTR_DEFAULT_DESKTOP_SLUG, "linkedin-bob");
   assert.deepEqual(JSON.parse(plan.runtimeEnv.ORKESTR_API_AGENT_TENANT_BUDGETS_JSON), {
@@ -187,7 +190,9 @@ test("tenant slice provisioning builds a VM-backed plan", async () => {
   assert.match(runtimeEnvFile, /^ORKESTR_TENANT_VM_ID='bob-slice-vm'$/m);
   assert.match(runtimeEnvFile, /^ORKESTR_HOST='0\.0\.0\.0'$/m);
   assert.match(runtimeEnvFile, /^ORKESTR_SHARED_CONTROL_PLANE='1'$/m);
-  assert.match(runtimeEnvFile, /^ORKESTR_CONNECT_PUBLIC_SETUP_URL='https:\/\/connect\.example\.test\/i\/bob-slice-vm\/setup'$/m);
+  assert.match(runtimeEnvFile, /^ORKESTR_CONNECT_PUBLIC_SETUP_URL='https:\/\/connect\.example\.test\/i\/broker-bob-001\/setup'$/m);
+  assert.match(runtimeEnvFile, /^ORKESTR_BROKER_INSTANCE_ID='broker-bob-001'$/m);
+  assert.match(runtimeEnvFile, /^ORKESTR_INSTANCE_ID='broker-bob-001'$/m);
   assert.match(runtimeEnvFile, /^ORKESTR_API_AGENT_TENANT_BUDGETS_JSON='\{"bob":\{"dailyUsd":2,"monthlyUsd":20\}\}'$/m);
   assert.deepEqual(plan.commands.apply, ["kubectl", "apply", "-f", "-"]);
   assert.equal(plan.manifest.includes("password"), false);
@@ -215,6 +220,7 @@ test("tenant slice provisioning execute path and runtime status are observable",
     namespace: "tenant-charlie",
     vmName: "charlie-vm",
     repoUrl: "https://github.com/example/orkestr.git",
+    brokerInstanceId: "broker-charlie-001",
   }, env, {
     spawnWithInput: async (command, args, options, input) => {
       calls.push({ command, args, options, input });
@@ -247,7 +253,9 @@ test("tenant slice provisioning execute path and runtime status are observable",
   assert.equal(appliedBootstrapProfile.connectors.whatsapp.chatId, "charlie-wa@g.us");
   assert.equal(appliedBootstrapProfile.connectors.whatsapp.accountId, "sender");
   assert.match(appliedRuntimeEnvFile, /^ORKESTR_HOST='0\.0\.0\.0'$/m);
-  assert.match(appliedRuntimeEnvFile, /^ORKESTR_CONNECT_PUBLIC_SETUP_URL='https:\/\/connect\.example\.test\/i\/charlie-slice-vm\/setup'$/m);
+  assert.match(appliedRuntimeEnvFile, /^ORKESTR_CONNECT_PUBLIC_SETUP_URL='https:\/\/connect\.example\.test\/i\/broker-charlie-001\/setup'$/m);
+  assert.match(appliedRuntimeEnvFile, /^ORKESTR_BROKER_INSTANCE_ID='broker-charlie-001'$/m);
+  assert.match(appliedRuntimeEnvFile, /^ORKESTR_INSTANCE_ID='broker-charlie-001'$/m);
   assert.match(appliedRuntimeEnvFile, /^ORKESTR_WHATSAPP_INBOUND_TOKEN='owt_[^']+'$/m);
   assert.match(appliedRuntimeEnvFile, /^WHATSAPP_BRIDGE_MODE='external'$/m);
   assert.match(appliedRuntimeEnvFile, /^ORKESTR_WHATSAPP_EXTERNAL_BRIDGE_ENABLED='1'$/m);
@@ -264,7 +272,7 @@ test("tenant slice provisioning execute path and runtime status are observable",
   assert.equal(await tenantWhatsAppInboundForwardRoute({ chatId: "charlie-wa@g.us", accountId: "sender" }, env), null);
   const preparedRoute = (await listTenantWhatsAppRoutes(env)).find((route) => route.tenantVmId === "charlie-slice-vm");
   assert.equal(preparedRoute.tokenConfigured, true);
-  assert.equal(preparedRoute.setupUrl, "https://connect.example.test/i/charlie-slice-vm/setup");
+  assert.equal(preparedRoute.setupUrl, "https://connect.example.test/i/broker-charlie-001/setup");
 
   const status = await tenantSliceRuntimeStatus("charlie-slice", env);
   assert.equal(status.ok, true);

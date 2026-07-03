@@ -297,7 +297,10 @@ export async function whereAmI(input = {}, env = process.env) {
     matchedBy: matchedBy || null,
     cwd,
     apiBase: apiBase(env),
-    publicUrls: tenantPublicUrls({ tenantVmId: env.ORKESTR_TENANT_VM_ID }, env),
+    publicUrls: tenantPublicUrls({
+      tenantVmId: env.ORKESTR_TENANT_VM_ID,
+      brokerInstanceId: env.ORKESTR_BROKER_INSTANCE_ID || env.ORKESTR_INSTANCE_ID,
+    }, env),
     dataHome: paths.home,
     thread: publicThread(thread, status),
     user: publicPrincipal(principal) || {

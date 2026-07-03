@@ -142,7 +142,16 @@ function runtimeEnv(input = {}, env = process.env) {
   const port = clean(input.port || input.orkestrPort || source.ORKESTR_PORT || env.ORKESTR_PORT || env.PORT || "19812");
   const tenantVmRuntime = Boolean(input.tenantVmId || input.tenantSliceId);
   const tenantVmId = clean(input.tenantVmId || input.vmId || "");
-  const publicUrls = tenantVmRuntime ? tenantPublicUrls({ ...input, runtimeEnv: source, tenantVmId }, env) : {};
+  const labels = input.labels && typeof input.labels === "object" && !Array.isArray(input.labels) ? input.labels : {};
+  const brokerInstanceId = clean(
+    input.brokerInstanceId ||
+      input.instanceId ||
+      labels.brokerInstanceId ||
+      labels.instanceId ||
+      source.ORKESTR_BROKER_INSTANCE_ID ||
+      source.ORKESTR_INSTANCE_ID,
+  );
+  const publicUrls = tenantVmRuntime ? tenantPublicUrls({ ...input, runtimeEnv: source, tenantVmId, brokerInstanceId, labels }, env) : {};
   const generatedDesktopShareUrlTemplate = tenantVmRuntime
     ? tenantDesktopShareUrlTemplate(tenantVmId, publicAppBaseUrl(input, env) || publicUrls.appUrl)
     : "";
@@ -184,6 +193,8 @@ function runtimeEnv(input = {}, env = process.env) {
       ORKESTR_CONNECT_PUBLIC_BASE_URL: publicUrls.connectBaseUrl || controlPlane.connectPublicBaseUrl,
       ORKESTR_CONNECT_PUBLIC_SETUP_URL: publicUrls.setupUrl,
       ORKESTR_PAIRING_URL: controlPlane.pairingUrl || publicUrls.pairingUrl || publicUrls.setupUrl,
+      ORKESTR_BROKER_INSTANCE_ID: brokerInstanceId,
+      ORKESTR_INSTANCE_ID: brokerInstanceId,
     } : {}),
     ORKESTR_DESKTOP_SHARE_URL_TEMPLATE: clean(source.ORKESTR_DESKTOP_SHARE_URL_TEMPLATE || input.desktopShareUrlTemplate || input.desktopSharePublicUrlTemplate || generatedDesktopShareUrlTemplate),
     ORKESTR_HOST: tenantVmRuntime ? tenantVmBindHost || "0.0.0.0" : tenantVmBindHost,
@@ -288,10 +299,19 @@ function cloudInitUserData(vm, input, env) {
 }
 
 export function buildTenantVmProvisioningPlan(vm, input = {}, env = process.env) {
+  const inputLabels = input.labels && typeof input.labels === "object" && !Array.isArray(input.labels) ? input.labels : {};
+  const vmLabels = vm.labels && typeof vm.labels === "object" && !Array.isArray(vm.labels) ? vm.labels : {};
   const planInput = {
     ...input,
     tenantVmId: input.tenantVmId || vm.id,
     ownerUserId: input.ownerUserId || vm.ownerUserId,
+    brokerInstanceId: input.brokerInstanceId || input.instanceId || inputLabels.brokerInstanceId || inputLabels.instanceId || vmLabels.brokerInstanceId || vmLabels.instanceId,
+    connectPublicBaseUrl: input.connectPublicBaseUrl || input.publicConnectBaseUrl || vm.endpoint?.connectBaseUrl,
+    connectPublicSetupUrl: input.connectPublicSetupUrl || input.publicSetupUrl || vm.endpoint?.setupUrl,
+    labels: {
+      ...vmLabels,
+      ...inputLabels,
+    },
   };
   const namespace = safeName(input.namespace || vm.kubevirt.namespace || "orkestr-tenants");
   const vmName = safeName(input.vmName || vm.kubevirt.vmName || vm.id);

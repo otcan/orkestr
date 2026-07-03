@@ -220,6 +220,8 @@ async function writeRouteSecrets(state, env = process.env) {
 function routeSetupUrl(vm = {}, env = process.env) {
   return tenantPublicSetupUrl({
     tenantVmId: vm.id,
+    brokerInstanceId: vm.labels?.brokerInstanceId || vm.labels?.instanceId,
+    labels: vm.labels,
     connectPublicBaseUrl: vm.endpoint?.connectBaseUrl,
     connectPublicSetupUrl: vm.endpoint?.setupUrl,
     publicAppBaseUrl: vm.endpoint?.publicBaseUrl,

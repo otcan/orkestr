@@ -123,7 +123,7 @@ test("tenant VM demo cloud-init includes local Orkestr port for the notifier", a
   assert.doesNotMatch(envFile, /whatsappChatHash|chatId/i);
 });
 
-test("tenant VM provisioning derives central setup URLs from connect base", async () => {
+test("tenant VM provisioning derives central setup URLs from broker instance id", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-tenant-vm-public-url-"));
   const env = {
     ORKESTR_HOME: home,
@@ -134,6 +134,7 @@ test("tenant VM provisioning derives central setup URLs from connect base", asyn
     id: "firat-jobs-vm",
     ownerUserId: "firat",
     kubevirt: { namespace: "tenant-firat", vmName: "firat-jobs-vm" },
+    labels: { brokerInstanceId: "broker-firat-001" },
   }, env);
 
   const plan = buildTenantVmProvisioningPlan(tenantVm, {}, env);
@@ -148,10 +149,33 @@ test("tenant VM provisioning derives central setup URLs from connect base", asyn
   assert.equal(plan.runtimeEnv.ORKESTR_PUBLIC_URL, "https://connect.example.test");
   assert.equal(plan.runtimeEnv.ORKESTR_PUBLIC_HTTPS_URL, "https://connect.example.test");
   assert.equal(plan.runtimeEnv.ORKESTR_CONNECT_PUBLIC_BASE_URL, "https://connect.example.test");
-  assert.equal(plan.runtimeEnv.ORKESTR_CONNECT_PUBLIC_SETUP_URL, "https://connect.example.test/i/firat-jobs-vm/setup");
+  assert.equal(plan.runtimeEnv.ORKESTR_CONNECT_PUBLIC_SETUP_URL, "https://connect.example.test/i/broker-firat-001/setup");
   assert.equal(plan.runtimeEnv.ORKESTR_PAIRING_URL, "https://connect.example.test/setup/pairing");
-  assert.match(envFile, /^ORKESTR_CONNECT_PUBLIC_SETUP_URL='https:\/\/connect\.example\.test\/i\/firat-jobs-vm\/setup'$/m);
+  assert.equal(plan.runtimeEnv.ORKESTR_BROKER_INSTANCE_ID, "broker-firat-001");
+  assert.equal(plan.runtimeEnv.ORKESTR_INSTANCE_ID, "broker-firat-001");
+  assert.match(envFile, /^ORKESTR_CONNECT_PUBLIC_SETUP_URL='https:\/\/connect\.example\.test\/i\/broker-firat-001\/setup'$/m);
+  assert.match(envFile, /^ORKESTR_BROKER_INSTANCE_ID='broker-firat-001'$/m);
+  assert.match(envFile, /^ORKESTR_INSTANCE_ID='broker-firat-001'$/m);
   assert.doesNotMatch(plan.runtimeEnv.ORKESTR_CONNECT_PUBLIC_SETUP_URL, /0\.0\.0\.0|127\.0\.0\.1|localhost|10\./);
+});
+
+test("tenant VM provisioning does not fabricate setup URLs from tenant IDs", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-tenant-vm-no-fake-public-url-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_CONNECT_PUBLIC_URL: "https://connect.example.test",
+  };
+  const tenantVm = await createTenantVm({
+    id: "no-broker-vm",
+    ownerUserId: "nobroker",
+    kubevirt: { namespace: "tenant-nobroker", vmName: "no-broker-vm" },
+  }, env);
+
+  const plan = buildTenantVmProvisioningPlan(tenantVm, {}, env);
+
+  assert.equal(plan.runtimeEnv.ORKESTR_CONNECT_PUBLIC_BASE_URL, "https://connect.example.test");
+  assert.equal(Object.hasOwn(plan.runtimeEnv, "ORKESTR_CONNECT_PUBLIC_SETUP_URL"), false);
+  assert.equal(JSON.stringify(plan.runtimeEnv).includes("/i/no-broker-vm/setup"), false);
 });
 
 test("tenant VM provisioning execute path applies manifest and updates registry status", async () => {

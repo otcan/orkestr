@@ -78,6 +78,15 @@ function sharedControlPlane(slice, input = {}, env = process.env) {
 function tenantVmInputForSlice(sliceInput = {}, input = {}, env = process.env) {
   const slice = normalizeTenantSlice(sliceInput, env);
   const vm = slice.vm || {};
+  const inputLabels = input.labels && typeof input.labels === "object" && !Array.isArray(input.labels) ? input.labels : {};
+  const brokerInstanceId = clean(
+    input.brokerInstanceId ||
+      input.instanceId ||
+      inputLabels.brokerInstanceId ||
+      inputLabels.instanceId ||
+      slice.labels?.brokerInstanceId ||
+      slice.labels?.instanceId,
+  );
   const desktopSlug = clean(slice.connectors?.linkedin?.desktopSlug || "linkedin") || "linkedin";
   const targetBaseUrl = clean(input.targetBaseUrl || input.whatsappTargetBaseUrl || vm.endpoint?.baseUrl);
   const targetBrokerBaseUrl = clean(input.whatsappBrokerBaseUrl || input.routeBrokerBaseUrl || vm.endpoint?.brokerBaseUrl);
@@ -97,6 +106,9 @@ function tenantVmInputForSlice(sliceInput = {}, input = {}, env = process.env) {
       domain: clean(input.domain || vm.endpoint?.domain),
       baseUrl: targetBaseUrl,
       brokerBaseUrl: targetBrokerBaseUrl,
+      connectBaseUrl: clean(input.connectPublicBaseUrl || input.publicConnectBaseUrl || vm.endpoint?.connectBaseUrl),
+      setupUrl: clean(input.connectPublicSetupUrl || input.publicSetupUrl || vm.endpoint?.setupUrl),
+      publicBaseUrl: clean(input.publicBaseUrl || input.publicAppBaseUrl || vm.endpoint?.publicBaseUrl),
       publicIp: clean(input.publicIp || vm.endpoint?.publicIp),
     },
     kubevirt: {
@@ -129,6 +141,8 @@ function tenantVmInputForSlice(sliceInput = {}, input = {}, env = process.env) {
     capabilities: vmCapabilities(slice),
     labels: {
       ...slice.labels,
+      ...inputLabels,
+      ...(brokerInstanceId ? { brokerInstanceId } : {}),
       tenantSliceId: slice.id,
       boundary: "tenant-vm",
     },
