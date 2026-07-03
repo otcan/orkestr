@@ -37,6 +37,7 @@ import { loginCodexWithApiKey, startCodexDeviceAuth } from "../../../../../packa
 import { requestThreadInputDelivery } from "../../../../../packages/core/src/runtime-leases.js";
 import { appendThreadMessage, getThread, getThreadForPrincipal } from "../../../../../packages/core/src/threads.js";
 import { processApiAgentThreadInput, threadUsesApiAgent } from "../../../../../packages/core/src/tenant-api-agent.js";
+import { getTenantVm } from "../../../../../packages/core/src/tenant-vm-registry.js";
 import { requestPrincipal } from "../../../../../packages/core/src/principal.js";
 import { publicRoutingFailurePayload } from "../../../../../packages/core/src/routing-failures.js";
 import {
@@ -809,6 +810,25 @@ export class GoogleMarketingCallbacksController {
   @Get("callback")
   async googleMarketingCallback(@Query() query: Record<string, string>, @Req() request: any, @Res() response: any) {
     const callbackState = String(query?.state || request?.query?.state || "").trim();
+    const tenantForward = await forwardTenantOAuthCallbackIfNeeded(callbackState, request).catch((error) => ({
+      status: Number((error as any)?.statusCode || 502) || 502,
+      contentType: "text/html; charset=utf-8",
+      body: googleOAuthHtml({
+        ok: false,
+        state: "error",
+        title: "Gmail auth failed",
+        message: String((error as Error)?.message || "tenant_oauth_forward_failed"),
+        setupHref: "/setup/gmail",
+        setupLabel: "Open Mail Setup",
+      }),
+    }));
+    if (tenantForward) {
+      return response
+        .status(tenantForward.status)
+        .header("cache-control", "no-store")
+        .type(tenantForward.contentType)
+        .send(tenantForward.body);
+    }
     const isGmailCallback = callbackState.startsWith("gmail:");
     try {
       const result = await finishGmailOAuth(queryParamsFromRequest(request, query));
@@ -941,6 +961,56 @@ function queryParamsFromRequest(request: any, fallback: Record<string, string> =
   const url = String(request?.originalUrl || request?.url || "");
   if (url.includes("?")) return new URL(url, "http://localhost").searchParams;
   return new URLSearchParams(fallback);
+}
+
+function tenantVmIdFromOAuthState(state = ""): string {
+  const match = clean(state).match(/^tenant:([^:]+):/);
+  return clean(match?.[1]);
+}
+
+function tenantCallbackTargetUrl(request: any, baseUrl = ""): string {
+  const base = clean(baseUrl).replace(/\/+$/, "");
+  if (!base) {
+    const error: any = new Error("tenant_oauth_endpoint_missing");
+    error.statusCode = 502;
+    throw error;
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(base);
+  } catch {
+    const error: any = new Error("tenant_oauth_endpoint_invalid");
+    error.statusCode = 502;
+    throw error;
+  }
+  if (!["http:", "https:"].includes(parsed.protocol) || parsed.username || parsed.password) {
+    const error: any = new Error("tenant_oauth_endpoint_unsupported");
+    error.statusCode = 502;
+    throw error;
+  }
+  const originalUrl = clean(request?.originalUrl || request?.url || "/");
+  return String(new URL(originalUrl.startsWith("/") ? originalUrl : `/${originalUrl}`, `${base}/`));
+}
+
+async function forwardTenantOAuthCallbackIfNeeded(state = "", request: any = {}) {
+  const tenantVmId = tenantVmIdFromOAuthState(state);
+  if (!tenantVmId) return null;
+  const tenantVm = await getTenantVm(tenantVmId, process.env);
+  const baseUrl = clean(tenantVm?.endpoint?.baseUrl || (tenantVm?.endpoint as any)?.url);
+  const target = tenantCallbackTargetUrl(request, baseUrl);
+  const upstream = await fetch(target, {
+    method: "GET",
+    headers: {
+      accept: clean(request?.headers?.accept) || "text/html",
+      "x-orkestr-oauth-forwarded": "1",
+      "x-orkestr-tenant-vm-id": tenantVmId,
+    },
+  });
+  return {
+    status: upstream.status,
+    contentType: upstream.headers.get("content-type") || "text/html; charset=utf-8",
+    body: await upstream.text(),
+  };
 }
 
 function googleMarketingOAuthHtml(payload: Record<string, unknown> = {}): string {

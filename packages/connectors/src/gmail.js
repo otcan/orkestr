@@ -47,6 +47,18 @@ function approvedTesterAccounts(config = {}) {
     .filter(Boolean);
 }
 
+function tenantVmIdForOAuth(env = process.env, options = {}) {
+  return clean(options.tenantVmId || env.ORKESTR_TENANT_VM_ID);
+}
+
+function newOAuthState(env = process.env, options = {}) {
+  const baseState = clean(options.state) || randomUUID();
+  const tenantVmId = tenantVmIdForOAuth(env, options);
+  if (!tenantVmId) return baseState;
+  const prefix = `tenant:${tenantVmId}:`;
+  return baseState.startsWith(prefix) ? baseState : `${prefix}${baseState}`;
+}
+
 function assertApprovedTesterAccount(account = "", config = {}) {
   const approved = approvedTesterAccounts(config);
   if (!approved.length) return;
@@ -150,7 +162,8 @@ export async function startGmailOAuth(env = process.env, options = {}) {
   const config = await readParentConnectorRuntimeConfig("gmail", env);
   const { clientId, redirectUri } = requireOAuthConfig(config);
   const scope = await connectorScopePaths(env, options);
-  const state = randomUUID();
+  const tenantVmId = tenantVmIdForOAuth(env, options);
+  const state = newOAuthState(env, options);
   const account = normalizeEmail(options.account || config.account || "");
   const capabilities = normalizeGoogleWorkspaceCapabilities(options.capabilities || options.requestedCapabilities, defaultGmailCapabilities);
   const requestedScopes = uniqueList(options.scopes || options.requestedScopes || googleWorkspaceScopesForCapabilities(capabilities));
@@ -164,6 +177,7 @@ export async function startGmailOAuth(env = process.env, options = {}) {
     connectId: clean(options.connectId),
     account,
     userId: scope.userId || "",
+    tenantVmId,
     threadId: clean(options.threadId || thread.id),
     chatId: clean(options.chatId || binding.chatId),
     accountId: clean(options.accountId || binding.responderAccountId || binding.outboundAccountId),

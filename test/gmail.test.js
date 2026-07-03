@@ -103,6 +103,29 @@ test("gmail oauth uses the public broker callback and exchanges with the started
   assert.equal((await readGmailToken(env)).accessToken, "broker-access");
 });
 
+test("tenant gmail oauth state is prefixed for callback routing", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-gmail-tenant-state-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_TENANT_VM_ID: "tenant-demo-vm",
+  };
+  await writeConnectorConfig("gmail", {
+    clientId: "client-id",
+    clientSecret: "client-secret",
+    redirectUri: "https://orkestr.example.test/oauth/gmail/callback",
+  }, env);
+
+  const started = await startGmailOAuth(env, { account: "person@example.com" });
+  const savedState = JSON.parse(await fs.readFile(path.join(home, "oauth", "gmail-state.json"), "utf8"));
+  const url = new URL(started.authorizeUrl);
+
+  assert.match(started.state, /^tenant:tenant-demo-vm:/);
+  assert.equal(savedState.state, started.state);
+  assert.equal(savedState.tenantVmId, "tenant-demo-vm");
+  assert.equal(url.searchParams.get("state"), started.state);
+  assert.equal(url.searchParams.get("redirect_uri"), "https://orkestr.example.test/oauth/gmail/callback");
+});
+
 test("gmail authorization code is exchanged and stored securely", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-gmail-exchange-"));
   const env = { ORKESTR_HOME: home };
