@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
+import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -19,6 +20,14 @@ import {
 async function read(response) {
   const text = await response.text();
   return text ? JSON.parse(text) : {};
+}
+
+function listen(server) {
+  return new Promise((resolve) => server.listen(0, "127.0.0.1", () => resolve(server.address())));
+}
+
+function close(server) {
+  return new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
 }
 
 test("tenant VM registry keeps one active tenant instance per owner", async () => {
@@ -236,6 +245,90 @@ test("tenant VM registry API is admin-only and returns public-safe records", asy
     assert.equal(deniedRoutePayload.error, "control_plane_admin_required");
   } finally {
     await new Promise((resolve) => server.close(resolve));
+    if (priorHome === undefined) delete process.env.ORKESTR_HOME;
+    else process.env.ORKESTR_HOME = priorHome;
+    if (priorAuth === undefined) delete process.env.ORKESTR_AUTH_REQUIRED;
+    else process.env.ORKESTR_AUTH_REQUIRED = priorAuth;
+    if (priorRecover === undefined) delete process.env.ORKESTR_RECOVER_RUNNING_ON_START;
+    else process.env.ORKESTR_RECOVER_RUNNING_ON_START = priorRecover;
+  }
+});
+
+test("tenant VM desktop-share proxy rewrites share and desktop URLs through the parent app", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-tenant-vms-desktop-proxy-"));
+  const priorHome = process.env.ORKESTR_HOME;
+  const priorAuth = process.env.ORKESTR_AUTH_REQUIRED;
+  const priorRecover = process.env.ORKESTR_RECOVER_RUNNING_ON_START;
+  const upstreamRequests = [];
+  const upstream = http.createServer((request, response) => {
+    upstreamRequests.push({ url: request.url, cookie: request.headers.cookie || "" });
+    if (request.url.startsWith("/api/desktop-shares/share-1/open")) {
+      response.writeHead(200, {
+        "content-type": "application/json",
+        "set-cookie": "orkestr_desktop_share=share-1%3Abrowser-token; Path=/; HttpOnly; SameSite=Lax",
+      });
+      response.end(JSON.stringify({
+        ok: true,
+        approved: true,
+        desktopUrl: "/desktop/gmail/vnc.html?autoconnect=1&resize=scale&path=desktop/gmail/websockify",
+      }));
+      return;
+    }
+    if (request.url.startsWith("/api/desktop-shares/share-1/status")) {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({
+        ok: true,
+        approved: true,
+        desktopUrl: "/desktop/gmail/vnc.html?autoconnect=1&resize=scale&path=desktop/gmail/websockify",
+      }));
+      return;
+    }
+    if (request.url.startsWith("/desktop/gmail/vnc.html")) {
+      response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      response.end("<!doctype html><title>Tenant desktop</title>");
+      return;
+    }
+    response.writeHead(404, { "content-type": "application/json" });
+    response.end(JSON.stringify({ ok: false, error: "not_found" }));
+  });
+  const upstreamAddress = await listen(upstream);
+  process.env.ORKESTR_HOME = home;
+  process.env.ORKESTR_AUTH_REQUIRED = "1";
+  process.env.ORKESTR_RECOVER_RUNNING_ON_START = "0";
+  await createTenantVm({
+    id: "alice-tenant",
+    ownerUserId: "alice",
+    status: "running",
+    endpoint: { baseUrl: `http://127.0.0.1:${upstreamAddress.port}` },
+  }, process.env);
+  const server = await startServer({ port: 0, host: "127.0.0.1" });
+  const { port } = server.address();
+  const baseUrl = `http://127.0.0.1:${port}`;
+
+  try {
+    const open = await fetch(`${baseUrl}/api/tenant-vms/alice-tenant/desktop-shares/share-1/open?key=secret&subdomain=d-abc123`);
+    const openPayload = await read(open);
+    const cookie = open.headers.get("set-cookie") || "";
+    assert.equal(open.status, 200);
+    assert.match(cookie, /orkestr_desktop_share=/);
+    assert.equal(
+      openPayload.desktopUrl,
+      "/tenant-vms/alice-tenant/desktop/gmail/vnc.html?autoconnect=1&resize=scale&path=tenant-vms%2Falice-tenant%2Fdesktop%2Fgmail%2Fwebsockify",
+    );
+
+    const status = await read(await fetch(`${baseUrl}/api/tenant-vms/alice-tenant/desktop-shares/share-1/status?key=secret&subdomain=d-abc123`, {
+      headers: { cookie },
+    }));
+    assert.equal(status.approved, true);
+    assert.match(status.desktopUrl, /^\/tenant-vms\/alice-tenant\/desktop\/gmail\/vnc\.html/);
+
+    const desktop = await fetch(`${baseUrl}${openPayload.desktopUrl}`, { headers: { cookie } });
+    assert.equal(desktop.status, 200);
+    assert.match(await desktop.text(), /Tenant desktop/);
+    assert.equal(upstreamRequests.some((item) => item.url.startsWith("/desktop/gmail/vnc.html") && /orkestr_desktop_share=/.test(item.cookie)), true);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    await close(upstream);
     if (priorHome === undefined) delete process.env.ORKESTR_HOME;
     else process.env.ORKESTR_HOME = priorHome;
     if (priorAuth === undefined) delete process.env.ORKESTR_AUTH_REQUIRED;

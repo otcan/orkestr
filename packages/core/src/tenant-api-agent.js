@@ -15,6 +15,7 @@ import { appendTurnLifecycleEvent, turnLifecycleFromRuntimeStatus } from "./turn
 import { actionRegistryInstructions } from "./action-registry.js";
 import { recordApiAgentFailureSuggestion } from "./api-agent-suggestions.js";
 import { desktopProvisioningMessage } from "./desktop-provisioning.js";
+import { tenantDesktopSharePath } from "./tenant-desktop-share-routing.js";
 
 export const API_AGENT_RUNTIME_KIND = "api-agent";
 
@@ -706,9 +707,60 @@ function publicAppBaseUrl(env = process.env) {
   return clean(env.ORKESTR_PUBLIC_URL || env.ORKESTR_APP_URL || env.ORKESTR_PUBLIC_HTTPS_URL || env.ORKESTR_CONNECT_PUBLIC_URL);
 }
 
+function privateHost(hostname = "") {
+  const host = lower(hostname).replace(/^\[|\]$/g, "");
+  if (!host) return false;
+  if (["localhost", "0.0.0.0", "127.0.0.1", "::1"].includes(host)) return true;
+  if (/^127\./.test(host)) return true;
+  if (/^10\./.test(host)) return true;
+  if (/^192\.168\./.test(host)) return true;
+  const private172 = host.match(/^172\.(\d+)\./);
+  return private172 ? Number(private172[1]) >= 16 && Number(private172[1]) <= 31 : false;
+}
+
+function tenantDesktopSharePublicUrlFromPrivate(raw = "", env = process.env) {
+  const tenantVmId = clean(env.ORKESTR_TENANT_VM_ID);
+  const base = publicAppBaseUrl(env);
+  if (!tenantVmId || !base) return "";
+  let parsed;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    return "";
+  }
+  if (!privateHost(parsed.hostname)) return "";
+  const parts = parsed.pathname.split("/").filter(Boolean);
+  if (parts[0] !== "desktop-share") return "";
+  const shareId = parts.length >= 3 ? parts[2] : parts[1];
+  const subdomain = parts.length >= 3 ? parts[1] : "";
+  const path = tenantDesktopSharePath({
+    tenantVmId,
+    subdomain,
+    shareId,
+    key: parsed.searchParams.get("key") || "",
+  });
+  if (!path) return "";
+  try {
+    return new URL(path, base).toString();
+  } catch {
+    return "";
+  }
+}
+
 function publicFacingUrl(value = "", env = process.env) {
   const raw = clean(value);
-  if (!raw || !raw.startsWith("/")) return raw;
+  if (!raw) return "";
+  if (!raw.startsWith("/")) {
+    const tenantDesktopShareUrl = tenantDesktopSharePublicUrlFromPrivate(raw, env);
+    if (tenantDesktopShareUrl) return tenantDesktopShareUrl;
+    try {
+      const parsed = new URL(raw);
+      if (privateHost(parsed.hostname) && parsed.pathname.startsWith("/desktop-share/")) return "";
+    } catch {
+      return raw;
+    }
+    return raw;
+  }
   const base = publicAppBaseUrl(env);
   if (!base) return raw;
   try {
@@ -899,7 +951,9 @@ function formatRunSkillActionTool(result = {}, context = {}) {
   }
   const desktop = output.desktop || {};
   const desktopLabel = clean(desktop.label || desktop.slug || label);
-  const shareUrl = publicFacingUrl(output.shareUrl || output.desktopShare?.url || "", context.env);
+  const rawShareUrl = clean(output.shareUrl || output.desktopShare?.url || "");
+  const shareUrl = publicFacingUrl(rawShareUrl, context.env);
+  const shareUrlBlocked = Boolean(rawShareUrl && !shareUrl);
   const actionUrl = publicFacingUrl(output.openedUrl || "", context.env);
   const url = shareUrl || publicFacingUrl(output.url || desktop.url, context.env);
   const lines = [];
@@ -912,6 +966,8 @@ function formatRunSkillActionTool(result = {}, context = {}) {
   if (shareUrl && ["open", "start", "open_url"].includes(action)) {
     lines.push(`Open this one-time desktop link: ${shareUrl}`);
     lines.push("The page will show an Orkestr desktop challenge. Paste that challenge back here to approve this browser.");
+  } else if (shareUrlBlocked && ["open", "start", "open_url"].includes(action)) {
+    lines.push("I could not create a public desktop link because this Orkestr VM does not have a public desktop-share route configured yet.");
   }
   if (/\blogged\s*in|login|signed\s*in/i.test(requestText)) {
     lines.push("The tool result only confirms the desktop action; it does not report login state, so I cannot confirm whether you are logged in.");

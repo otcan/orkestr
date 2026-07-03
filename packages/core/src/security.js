@@ -899,11 +899,12 @@ export async function securitySessionForToken(token, env = process.env, options 
 
 function isAllowedBeforePairing(request) {
   const method = String(request?.method || "GET").toUpperCase();
-  const url = String(request?.url || "").split("?")[0];
+  const url = String(request?.originalUrl || request?.url || "").split("?")[0];
   if (url.startsWith("/desktop/")) return false;
   if (!url.startsWith("/api/") && !url.startsWith("/oauth/")) return true;
   if (url.startsWith("/oauth/")) return true;
-  if (method === "GET" && /^\/api\/desktop-shares\/[^/]+\/(?:open|status)$/.test(url)) return true;
+  if (method === "GET" && /^\/(?:api\/)?desktop-shares\/[^/]+\/(?:open|status)$/.test(url)) return true;
+  if (method === "GET" && /^\/(?:api\/)?tenant-vms\/[^/]+\/desktop-shares\/[^/]+\/(?:open|status)$/.test(url)) return true;
   if (method === "GET" && ["/api/health", "/api/ready", "/api/version", "/api/setup/status"].some((path) => url.startsWith(path))) return true;
   if (method === "POST" && url === "/api/public/waitlist") return true;
   if (method === "POST" && (url === "/api/setup/security/challenge" || url === "/api/setup/security/challenges")) return true;

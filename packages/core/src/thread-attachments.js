@@ -12,25 +12,9 @@ const plainAbsolutePathPattern = /(^|[\s([{"'`])((?:\/[^\s()[\]{}<>"'`|]+)+)/g;
 const trailingPathPunctuationPattern = /[.,;:!?]+$/;
 const applicationRoutePrefixes = new Set(["api"]);
 const registeredSlashCommands = new Set([
-  "approve",
-  "code",
-  "codex",
-  "coding",
-  "connect",
-  "deny",
-  "hard-reset",
-  "hard_reset",
-  "help",
-  "implement",
-  "interrupt",
-  "now",
-  "plan",
-  "planning",
-  "reset",
-  "restart",
-  "safe-reset",
-  "safe_reset",
-  "stop",
+  "approve", "code", "codex", "coding", "connect", "deny", "hard-reset", "hard_reset",
+  "help", "implement", "interrupt", "now", "plan", "planning", "reset", "restart",
+  "safe-reset", "safe_reset", "stop",
 ]);
 
 const mimeByExtension = new Map([

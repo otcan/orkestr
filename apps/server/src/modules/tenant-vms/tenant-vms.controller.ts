@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, HttpCode, Param, Patch, Post, Req } from "@nestjs/common";
+import { Body, Controller, Delete, Get, HttpCode, Param, Patch, Post, Query, Req, Res } from "@nestjs/common";
 import {
   createTenantVm,
   deleteTenantVm,
@@ -11,6 +11,7 @@ import {
 } from "../../../../../packages/core/src/tenant-vm-registry.js";
 import { provisionTenantVm } from "../../../../../packages/core/src/tenant-vm-provisioning.js";
 import { configureTenantWhatsAppRoute, disableTenantWhatsAppRoute, listTenantWhatsAppRoutes } from "../../../../../packages/core/src/tenant-whatsapp-routing.js";
+import { rewriteTenantDesktopUrl } from "../../../../../packages/core/src/tenant-desktop-share-routing.js";
 import { isAdminPrincipal } from "../../../../../packages/core/src/policy.js";
 import { requestPrincipal } from "../../../../../packages/core/src/principal.js";
 import { httpError } from "../../common/http.js";
@@ -113,6 +114,40 @@ function tenantVmWhatsAppRouteBody(body: Record<string, unknown> = {}) {
   return output;
 }
 
+function normalizeProxyBaseUrl(value = "") {
+  const raw = String(value || "").trim().replace(/\/+$/, "");
+  if (!raw) return "";
+  const withProtocol = /^[a-z][a-z0-9+.-]*:\/\//i.test(raw) ? raw : `http://${raw}`;
+  try {
+    const parsed = new URL(withProtocol);
+    if (!["http:", "https:"].includes(parsed.protocol)) return "";
+    return parsed.origin;
+  } catch {
+    return "";
+  }
+}
+
+function tenantVmProxyBaseUrl(tenantVm: any) {
+  return normalizeProxyBaseUrl(tenantVm?.endpoint?.baseUrl || tenantVm?.endpoint?.brokerBaseUrl || tenantVm?.endpoint?.publicIp || "");
+}
+
+function forwardedShareHeaders(request: any) {
+  const headers: Record<string, string> = {};
+  for (const name of ["accept", "user-agent", "cookie"]) {
+    const value = request?.headers?.[name];
+    if (value) headers[name] = Array.isArray(value) ? value.join(", ") : String(value);
+  }
+  return headers;
+}
+
+function setUpstreamCookies(response: any, upstream: any) {
+  const getSetCookie = (upstream.headers as any).getSetCookie;
+  const cookies = typeof getSetCookie === "function"
+    ? getSetCookie.call(upstream.headers)
+    : [upstream.headers.get("set-cookie")].filter(Boolean);
+  if (cookies.length) response.setHeader("set-cookie", cookies);
+}
+
 @Controller("api/tenant-vms")
 export class TenantVmsController {
   @Get()
@@ -195,10 +230,72 @@ export class TenantVmsController {
     return disableTenantWhatsAppRoute(tenantVmId);
   }
 
+  @Get(":tenantVmId/desktop-shares/:shareId/open")
+  async openTenantDesktopShare(
+    @Req() request: any,
+    @Res({ passthrough: true }) response: any,
+    @Param("tenantVmId") tenantVmId: string,
+    @Param("shareId") shareId: string,
+    @Query("key") key = "",
+    @Query("subdomain") subdomain = "",
+  ) {
+    return this.proxyTenantDesktopShare(request, response, tenantVmId, shareId, "open", key, subdomain);
+  }
+
+  @Get(":tenantVmId/desktop-shares/:shareId/status")
+  async tenantDesktopShareStatus(
+    @Req() request: any,
+    @Res({ passthrough: true }) response: any,
+    @Param("tenantVmId") tenantVmId: string,
+    @Param("shareId") shareId: string,
+    @Query("key") key = "",
+    @Query("subdomain") subdomain = "",
+  ) {
+    return this.proxyTenantDesktopShare(request, response, tenantVmId, shareId, "status", key, subdomain);
+  }
+
   @Delete(":tenantVmId")
   async delete(@Req() request: any, @Param("tenantVmId") tenantVmId: string) {
     assertAdminRequest(request);
     const tenantVm = await deleteTenantVm(tenantVmId);
     return { ok: true, tenantVm: publicTenantVm(tenantVm) };
+  }
+
+  private async proxyTenantDesktopShare(
+    request: any,
+    response: any,
+    tenantVmId: string,
+    shareId: string,
+    action: "open" | "status",
+    key = "",
+    subdomain = "",
+  ) {
+    const tenantVm = await getTenantVm(tenantVmId);
+    if (!tenantVm || tenantVm.deletedAt || tenantVm.status === "deleted") throw httpError("tenant_vm_not_found", 404);
+    const baseUrl = tenantVmProxyBaseUrl(tenantVm);
+    if (!baseUrl) throw httpError("tenant_vm_endpoint_unavailable", 503);
+    const target = new URL(`/api/desktop-shares/${encodeURIComponent(shareId)}/${action}`, baseUrl);
+    target.searchParams.set("key", String(key || ""));
+    if (String(subdomain || "").trim()) target.searchParams.set("subdomain", String(subdomain || "").trim());
+
+    let upstream: Response;
+    try {
+      upstream = await fetch(target, { method: "GET", headers: forwardedShareHeaders(request) });
+    } catch (error) {
+      throw httpError(`tenant_vm_proxy_failed: ${String((error as Error)?.message || error || "fetch_failed")}`, 502);
+    }
+
+    setUpstreamCookies(response, upstream);
+    response.status(upstream.status);
+    const text = await upstream.text();
+    let payload: any = {};
+    try {
+      payload = text ? JSON.parse(text) : {};
+    } catch {
+      response.type(upstream.headers.get("content-type") || "text/plain; charset=utf-8");
+      return text;
+    }
+    if (payload?.desktopUrl) payload.desktopUrl = rewriteTenantDesktopUrl(payload.desktopUrl, tenantVm.id);
+    return payload;
   }
 }

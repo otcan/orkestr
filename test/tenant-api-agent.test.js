@@ -3391,6 +3391,8 @@ test("tenant api-agent answers desktop action requests from skill action tool re
     ORKESTR_BROWSER_DESKTOP_MODE: "profiles",
     ORKESTR_BROWSER_VISIBLE_SLUGS: "linkedin",
     ORKESTR_BROWSER_LAUNCH_DISABLED: "1",
+    ORKESTR_TENANT_VM_ID: "tenant-demo-vm",
+    ORKESTR_PUBLIC_URL: "https://app.example.test",
   });
   await upsertUser({ id: "otcan", role: "user", displayName: "Otcan" }, env);
   await createThread({
@@ -3459,7 +3461,8 @@ test("tenant api-agent answers desktop action requests from skill action tool re
   assert.equal(calls[0].tools.some((tool) => tool.name === "orkestr_run_skill_action"), true);
   assert.match(calls[0].instructions, /reason from skills first/i);
   assert.match(assistant.text, /LinkedIn is open/i);
-  assert.match(assistant.text, /Open this one-time desktop link: http:\/\/127\.0\.0\.1:19812\/desktop-share\//i);
+  assert.doesNotMatch(assistant.text, /127\.0\.0\.1|localhost|0\.0\.0\.0/i);
+  assert.match(assistant.text, /Open this one-time desktop link: https:\/\/app\.example\.test\/desktop-share\/tvm\/tenant-demo-vm\//i);
   assert.match(assistant.text, /cannot confirm whether you are logged in/i);
   assert.notEqual(assistant.text.trim(), "Done.");
 });
@@ -4012,10 +4015,10 @@ test("tenant api-agent confirmation of offered browser action cannot finalize as
   assert.equal(result.ok, true);
   assert.equal(calls.length, 3);
   assert.equal(current.state, "completed");
-  assert.match(assistant.text, /opened https:\/\/eksisozluk\.com\//i);
+  assert.match(assistant.text, /opened(?: the managed desktop to)? https:\/\/eksisozluk\.com\//i);
   assert.match(assistant.text, /eksisozluk\.com/i);
-  assert.match(assistant.text, /Open this one-time desktop link: http:\/\/127\.0\.0\.1:19812\/desktop-share\//i);
-  assert.match(assistant.text, /does not return page contents or research results/i);
+  assert.doesNotMatch(assistant.text, /127\.0\.0\.1|localhost|0\.0\.0\.0/i);
+  assert.match(assistant.text, /does not return page contents or research results|only confirms that the URL was opened/i);
   assert.match(assistant.text, /connect Codex/i);
   assert.doesNotMatch(assistant.text, /\/codex/i);
   assert.doesNotMatch(assistant.text, /^Done\.?$/i);

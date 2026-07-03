@@ -181,8 +181,10 @@ function serveDesktopSharePage(response: any) {
   </main>
   <script>
     const parts = location.pathname.split('/').filter(Boolean);
-    const shareId = parts[parts.length - 1] || '';
-    const subdomain = parts.length > 2 ? parts[1] : '';
+    const tenantShare = parts[0] === 'desktop-share' && parts[1] === 'tvm';
+    const tenantVmId = tenantShare ? decodeURIComponent(parts[2] || '') : '';
+    const subdomain = tenantShare ? decodeURIComponent(parts[3] || '') : (parts.length > 2 ? parts[1] : '');
+    const shareId = tenantShare ? decodeURIComponent(parts[4] || '') : (parts[parts.length - 1] || '');
     const key = new URLSearchParams(location.search).get('key') || '';
     const challenge = document.getElementById('challenge');
     const statusNode = document.getElementById('status');
@@ -190,12 +192,20 @@ function serveDesktopSharePage(response: any) {
     const open = document.getElementById('open');
     const mobile = document.getElementById('mobile');
     const copy = document.getElementById('copy');
-    const api = (action) => '/api/desktop-shares/' + encodeURIComponent(shareId) + '/' + action + '?key=' + encodeURIComponent(key) + (subdomain ? '&subdomain=' + encodeURIComponent(subdomain) : '');
+    const api = (action) => {
+      const base = tenantVmId
+        ? '/api/tenant-vms/' + encodeURIComponent(tenantVmId) + '/desktop-shares/' + encodeURIComponent(shareId) + '/' + action
+        : '/api/desktop-shares/' + encodeURIComponent(shareId) + '/' + action;
+      return base + '?key=' + encodeURIComponent(key) + (subdomain ? '&subdomain=' + encodeURIComponent(subdomain) : '');
+    };
     function mobileDestination(value) {
       const parsed = new URL(value, location.origin);
       const parts = parsed.pathname.split('/').filter(Boolean);
       if (parts[0] === 'desktop' && parts[1] && parts[2] === 'vnc.html') {
         return '/desktop/' + encodeURIComponent(decodeURIComponent(parts[1])) + '/mobile';
+      }
+      if (parts[0] === 'tenant-vms' && parts[1] && parts[2] === 'desktop' && parts[3] && parts[4] === 'vnc.html') {
+        return '/tenant-vms/' + encodeURIComponent(decodeURIComponent(parts[1])) + '/desktop/' + encodeURIComponent(decodeURIComponent(parts[3])) + '/mobile';
       }
       return value;
     }

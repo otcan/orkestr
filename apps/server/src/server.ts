@@ -30,6 +30,7 @@ import { isAdminPrincipal } from "../../../packages/core/src/policy.js";
 import { AppModule } from "./app.module.js";
 import { JsonErrorFilter } from "./common/json-error.filter.js";
 import { attachDesktopProxyUpgrade, registerDesktopProxy } from "./desktop-proxy.js";
+import { attachTenantVmDesktopProxyUpgrade, registerTenantVmDesktopProxy } from "./tenant-vm-desktop-proxy.js";
 import { registerStaticFallback } from "./static-fallback.js";
 import { attachThreadStreamUpgrade } from "./thread-stream.js";
 import { reportServerError } from "./watcher-reporting.js";
@@ -358,9 +359,11 @@ export async function startServer({ port = 19812, host = "127.0.0.1", openBrowse
     scheduleWhatsAppDeliveryFollowUp();
   });
 
+  registerTenantVmDesktopProxy(app);
   registerDesktopProxy(app);
   registerStaticFallback(app);
   await app.init();
+  attachTenantVmDesktopProxyUpgrade(app.getHttpServer());
   attachDesktopProxyUpgrade(app.getHttpServer());
   attachThreadStreamUpgrade(app.getHttpServer());
   await app.listen(port, host);

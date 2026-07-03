@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { normalizeTenantControlPlane, publicTenantControlPlane, tenantControlPlaneRuntimeEnv } from "./tenant-control-plane.js";
 import { tenantBootstrapProfileJson, buildTenantBootstrapProfile } from "./tenant-bootstrap-profile.js";
+import { tenantDesktopShareUrlTemplate } from "./tenant-desktop-share-routing.js";
 import { getTenantVm, publicTenantVm, setTenantVmStatus } from "./tenant-vm-registry.js";
 
 const defaultImageUrl = "https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img";
@@ -75,6 +76,27 @@ function commandList(...items) {
   return items.flat().filter(Boolean);
 }
 
+function publicAppBaseUrl(input = {}, env = process.env) {
+  const raw = clean(
+    input.publicAppBaseUrl ||
+    input.publicAppUrl ||
+    input.publicUrl ||
+    env.ORKESTR_PUBLIC_APP_URL ||
+    env.ORKESTR_PUBLIC_URL ||
+    env.ORKESTR_APP_URL ||
+    env.ORKESTR_PUBLIC_HTTPS_URL ||
+    env.ORKESTR_HTTPS_URL ||
+    "",
+  ).replace(/\/+$/, "");
+  if (!raw) return "";
+  try {
+    const parsed = new URL(raw);
+    return ["http:", "https:"].includes(parsed.protocol) ? raw : "";
+  } catch {
+    return "";
+  }
+}
+
 function runtimeEnv(input = {}, env = process.env) {
   const source = input.runtimeEnv && typeof input.runtimeEnv === "object" && !Array.isArray(input.runtimeEnv) ? input.runtimeEnv : {};
   const controlPlane = normalizeTenantControlPlane(input.controlPlane || input.sharedControlPlane || {}, env, {
@@ -88,6 +110,10 @@ function runtimeEnv(input = {}, env = process.env) {
     (!sliceTenant && clean(input.brokerBaseUrl || input.demoBrokerBaseUrl || env.ORKESTR_DEMO_BROKER_BASE_URL || env.ORKESTR_BROKER_BASE_URL));
   const port = clean(input.port || input.orkestrPort || source.ORKESTR_PORT || env.ORKESTR_PORT || env.PORT || "19812");
   const tenantVmRuntime = Boolean(input.tenantVmId || input.tenantSliceId);
+  const tenantVmId = clean(input.tenantVmId || input.vmId || "");
+  const generatedDesktopShareUrlTemplate = tenantVmRuntime
+    ? tenantDesktopShareUrlTemplate(tenantVmId, publicAppBaseUrl(input, env))
+    : "";
   const tenantVmBindHost = clean(
     source.ORKESTR_HOST ||
     input.host ||
@@ -97,7 +123,7 @@ function runtimeEnv(input = {}, env = process.env) {
     env.ORKESTR_TENANT_VM_HOST,
   );
   const values = {
-    ORKESTR_TENANT_VM_ID: input.tenantVmId || input.vmId || "",
+    ORKESTR_TENANT_VM_ID: tenantVmId,
     ORKESTR_TENANT_SLICE_ID: input.tenantSliceId || "",
     ORKESTR_ADMIN_USER_ID: input.ownerUserId || input.userId || "",
     ORKESTR_TENANT_BOUNDARY: input.tenantVmId || input.tenantSliceId ? "tenant-vm" : "",
@@ -120,6 +146,7 @@ function runtimeEnv(input = {}, env = process.env) {
     ORKESTR_UPDATE_REF: demoEnabled ? input.updateRef || env.ORKESTR_UPDATE_REF : "",
     ORKESTR_DEMO_CLOUDFLARE_DISABLE: demoEnabled ? input.demoCloudflareDisable ?? env.ORKESTR_DEMO_CLOUDFLARE_DISABLE ?? "1" : "",
     ...source,
+    ORKESTR_DESKTOP_SHARE_URL_TEMPLATE: clean(source.ORKESTR_DESKTOP_SHARE_URL_TEMPLATE || input.desktopShareUrlTemplate || input.desktopSharePublicUrlTemplate || generatedDesktopShareUrlTemplate),
     ORKESTR_HOST: tenantVmRuntime ? tenantVmBindHost || "0.0.0.0" : tenantVmBindHost,
   };
   return Object.fromEntries(

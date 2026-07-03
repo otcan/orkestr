@@ -11,6 +11,12 @@ import {
   desktopShareStatus,
   openDesktopShare,
 } from "../packages/core/src/desktop-shares.js";
+import {
+  parseTenantDesktopSharePath,
+  rewriteTenantDesktopUrl,
+  tenantDesktopSharePath,
+  tenantDesktopShareUrlTemplate,
+} from "../packages/core/src/tenant-desktop-share-routing.js";
 import { userPrincipal } from "../packages/core/src/principal.js";
 import { createThread, enqueueThreadInput } from "../packages/core/src/threads.js";
 import { completeThreadSecurityApproveCommand } from "../packages/core/src/security-thread-command.js";
@@ -107,6 +113,29 @@ test("desktop shares support path-based public challenge links", async () => {
   assert.equal(pending.desktopUrl, "");
   assert.equal(ready.approved, true);
   assert.equal(ready.desktopUrl, "/desktop/linkedin/vnc.html?autoconnect=1&resize=scale&path=desktop/linkedin/websockify");
+});
+
+test("tenant desktop share routing uses parent path and rewrites approved desktop URLs", () => {
+  const template = tenantDesktopShareUrlTemplate("Tenant Demo VM", "https://app.example.test/");
+  const sharePath = tenantDesktopSharePath({
+    tenantVmId: "Tenant Demo VM",
+    subdomain: "d-abc123",
+    shareId: "share-1",
+    key: "secret",
+  });
+  const parsed = parseTenantDesktopSharePath("/desktop-share/tvm/tenant-demo-vm/d-abc123/share-1");
+  const desktopUrl = rewriteTenantDesktopUrl(
+    "/desktop/gmail/vnc.html?autoconnect=1&resize=scale&path=desktop/gmail/websockify",
+    "tenant-demo-vm",
+  );
+
+  assert.equal(template, "https://app.example.test/desktop-share/tvm/tenant-demo-vm/{subdomain}/{shareId}?key={key}");
+  assert.equal(sharePath, "/desktop-share/tvm/tenant-demo-vm/d-abc123/share-1?key=secret");
+  assert.deepEqual(parsed, { tenantVmId: "tenant-demo-vm", subdomain: "d-abc123", shareId: "share-1" });
+  assert.equal(
+    desktopUrl,
+    "/tenant-vms/tenant-demo-vm/desktop/gmail/vnc.html?autoconnect=1&resize=scale&path=tenant-vms%2Ftenant-demo-vm%2Fdesktop%2Fgmail%2Fwebsockify",
+  );
 });
 
 test("desktop shares reject wrong path subdomains and link keys", async () => {

@@ -10,7 +10,7 @@ const fakePublicKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEPublicTenantProvisi
 
 test("tenant VM provisioning builds a public-safe KubeVirt plan", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-tenant-vm-provision-plan-"));
-  const env = { ORKESTR_HOME: home };
+  const env = { ORKESTR_HOME: home, ORKESTR_PUBLIC_URL: "https://app.example.test" };
   const tenantVm = await createTenantVm({
     id: "alice-tenant",
     ownerUserId: "alice",
@@ -41,6 +41,10 @@ test("tenant VM provisioning builds a public-safe KubeVirt plan", async () => {
   assert.equal(plan.vmName, "alice-vm");
   assert.equal(plan.cloudInitSecretName, "alice-vm-cloudinit");
   assert.equal(plan.runtimeEnv.ORKESTR_HOST, "0.0.0.0");
+  assert.equal(
+    plan.runtimeEnv.ORKESTR_DESKTOP_SHARE_URL_TEMPLATE,
+    "https://app.example.test/desktop-share/tvm/alice-tenant/{subdomain}/{shareId}?key={key}",
+  );
   assert.equal(plan.bootstrapProfilePath, "/etc/orkestr/tenant-bootstrap-profile.json");
   assert.equal(plan.bootstrapProfile.firstChat.name, "Alice Launch");
   assert.equal(plan.bootstrapProfile.codex.model, "gpt-5.5");
@@ -66,6 +70,7 @@ test("tenant VM provisioning builds a public-safe KubeVirt plan", async () => {
   assert.match(userData, /--tenant-bootstrap-profile' '\/etc\/orkestr\/tenant-bootstrap-profile\.json/);
   assert.match(userData, /ssh-ed25519/);
   assert.match(envFile, /^ORKESTR_HOST='0\.0\.0\.0'$/m);
+  assert.match(envFile, /^ORKESTR_DESKTOP_SHARE_URL_TEMPLATE='https:\/\/app\.example\.test\/desktop-share\/tvm\/alice-tenant\/\{subdomain\}\/\{shareId\}\?key=\{key\}'$/m);
   assert.deepEqual(plan.commands.apply, ["kubectl", "apply", "-f", "-"]);
   assert.deepEqual(plan.commands.publicIpRoute.slice(0, 7), [
     "bash",
