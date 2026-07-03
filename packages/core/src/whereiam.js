@@ -7,6 +7,7 @@ import { listRuntimeLeases, runtimeStatus } from "./runtime-leases.js";
 import { readRuntimeSettings } from "./runtime-settings.js";
 import { listThreads, listThreadsForPrincipal, updateThread } from "./threads.js";
 import { containedUserPolicyPath, tenantIsolationBoundary, threadUsesContainedUserPolicy } from "./tenant-policy.js";
+import { tenantPublicUrls } from "./tenant-public-urls.js";
 import { adminUserId, normalizeUserId } from "./users.js";
 import { builtinUserSkillDefinitions, userScopedCapabilityHints } from "./user-skills.js";
 
@@ -219,7 +220,8 @@ async function capabilityHints(thread = null, options = {}, env = process.env) {
 
 function apiBase(env = process.env) {
   if (env.ORKESTR_API_BASE) return clean(env.ORKESTR_API_BASE).replace(/\/+$/g, "");
-  const host = env.ORKESTR_HOST || "127.0.0.1";
+  const rawHost = clean(env.ORKESTR_HOST || "127.0.0.1").toLowerCase();
+  const host = !rawHost || ["0.0.0.0", "::", "[::]", "*"].includes(rawHost) ? "127.0.0.1" : env.ORKESTR_HOST || "127.0.0.1";
   const port = env.ORKESTR_PORT || env.PORT || "19812";
   return `http://${host}:${port}`;
 }
@@ -295,6 +297,7 @@ export async function whereAmI(input = {}, env = process.env) {
     matchedBy: matchedBy || null,
     cwd,
     apiBase: apiBase(env),
+    publicUrls: tenantPublicUrls({ tenantVmId: env.ORKESTR_TENANT_VM_ID }, env),
     dataHome: paths.home,
     thread: publicThread(thread, status),
     user: publicPrincipal(principal) || {

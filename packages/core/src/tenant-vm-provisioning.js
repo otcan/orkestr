@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { normalizeTenantControlPlane, publicTenantControlPlane, tenantControlPlaneRuntimeEnv } from "./tenant-control-plane.js";
 import { tenantBootstrapProfileJson, buildTenantBootstrapProfile } from "./tenant-bootstrap-profile.js";
 import { tenantDesktopShareUrlTemplate } from "./tenant-desktop-share-routing.js";
+import { tenantPublicUrls } from "./tenant-public-urls.js";
 import { getTenantVm, publicTenantVm, setTenantVmStatus } from "./tenant-vm-registry.js";
 
 const defaultImageUrl = "https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img";
@@ -141,8 +142,9 @@ function runtimeEnv(input = {}, env = process.env) {
   const port = clean(input.port || input.orkestrPort || source.ORKESTR_PORT || env.ORKESTR_PORT || env.PORT || "19812");
   const tenantVmRuntime = Boolean(input.tenantVmId || input.tenantSliceId);
   const tenantVmId = clean(input.tenantVmId || input.vmId || "");
+  const publicUrls = tenantVmRuntime ? tenantPublicUrls({ ...input, runtimeEnv: source, tenantVmId }, env) : {};
   const generatedDesktopShareUrlTemplate = tenantVmRuntime
-    ? tenantDesktopShareUrlTemplate(tenantVmId, publicAppBaseUrl(input, env))
+    ? tenantDesktopShareUrlTemplate(tenantVmId, publicAppBaseUrl(input, env) || publicUrls.appUrl)
     : "";
   const tenantVmBindHost = clean(
     source.ORKESTR_HOST ||
@@ -167,7 +169,7 @@ function runtimeEnv(input = {}, env = process.env) {
     ORKESTR_DEMO_WHATSAPP_NUMBER: demoEnabled ? input.whatsappNumber || input.demoWhatsappNumber || env.ORKESTR_DEMO_WHATSAPP_NUMBER : "",
     ORKESTR_DEMO_BROKER_BASE_URL: demoEnabled ? input.brokerBaseUrl || input.demoBrokerBaseUrl || env.ORKESTR_DEMO_BROKER_BASE_URL || env.ORKESTR_BROKER_BASE_URL : controlPlane.brokerBaseUrl,
     ORKESTR_DEMO_ENTRY_BASE_URL: demoEnabled ? input.entryBaseUrl || input.publicEntryBaseUrl || env.ORKESTR_DEMO_ENTRY_BASE_URL || env.ORKESTR_PUBLIC_SITE_URL || env.ORKESTR_PRIMARY_PUBLIC_URL : "",
-    ORKESTR_CONNECT_PUBLIC_BASE_URL: demoEnabled ? input.connectPublicBaseUrl || input.publicConnectBaseUrl || env.ORKESTR_CONNECT_PUBLIC_BASE_URL : controlPlane.connectPublicBaseUrl,
+    ORKESTR_CONNECT_PUBLIC_BASE_URL: demoEnabled ? input.connectPublicBaseUrl || input.publicConnectBaseUrl || env.ORKESTR_CONNECT_PUBLIC_BASE_URL : controlPlane.connectPublicBaseUrl || publicUrls.connectBaseUrl,
     ORKESTR_DEMO_BROKER_REGISTRATION_TOKEN: demoEnabled ? input.brokerRegistrationToken || env.ORKESTR_DEMO_BROKER_REGISTRATION_TOKEN || env.ORKESTR_BROKER_REGISTRATION_TOKEN : "",
     ORKESTR_INSTANCE_DESKTOPS_PROVISIONED: demoEnabled ? input.instanceDesktopsProvisioned ?? env.ORKESTR_INSTANCE_DESKTOPS_PROVISIONED ?? "0" : "",
     ORKESTR_BROKER_INSTANCE_STORE: demoEnabled ? input.brokerInstanceStore || env.ORKESTR_BROKER_INSTANCE_STORE || "sqlite" : "",
@@ -176,6 +178,13 @@ function runtimeEnv(input = {}, env = process.env) {
     ORKESTR_UPDATE_REF: demoEnabled ? input.updateRef || env.ORKESTR_UPDATE_REF : "",
     ORKESTR_DEMO_CLOUDFLARE_DISABLE: demoEnabled ? input.demoCloudflareDisable ?? env.ORKESTR_DEMO_CLOUDFLARE_DISABLE ?? "1" : "",
     ...source,
+    ...(tenantVmRuntime ? {
+      ORKESTR_PUBLIC_URL: publicUrls.appUrl,
+      ORKESTR_PUBLIC_HTTPS_URL: publicUrls.appUrl,
+      ORKESTR_CONNECT_PUBLIC_BASE_URL: publicUrls.connectBaseUrl || controlPlane.connectPublicBaseUrl,
+      ORKESTR_CONNECT_PUBLIC_SETUP_URL: publicUrls.setupUrl,
+      ORKESTR_PAIRING_URL: controlPlane.pairingUrl || publicUrls.pairingUrl || publicUrls.setupUrl,
+    } : {}),
     ORKESTR_DESKTOP_SHARE_URL_TEMPLATE: clean(source.ORKESTR_DESKTOP_SHARE_URL_TEMPLATE || input.desktopShareUrlTemplate || input.desktopSharePublicUrlTemplate || generatedDesktopShareUrlTemplate),
     ORKESTR_HOST: tenantVmRuntime ? tenantVmBindHost || "0.0.0.0" : tenantVmBindHost,
   };

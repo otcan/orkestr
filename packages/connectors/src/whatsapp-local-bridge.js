@@ -8,6 +8,7 @@ import { listTenantWhatsAppRoutes, tenantWhatsAppInboundForwardRoute } from "../
 import { attachRoutingFailure, normalizeRoutingFailure, routingFailureFromError } from "../../core/src/routing-failures.js";
 import { recordRouterTraceEvent, routerTraceIdFor, turnIdFor } from "../../core/src/router-traces.js";
 import { rawSecurityApproveChallengeId } from "../../core/src/raw-terminal-commands.js";
+import { tenantPublicSetupUrl } from "../../core/src/tenant-public-urls.js";
 import { getThread, listThreads } from "../../core/src/threads.js";
 import { setGeneratedLocalWhatsAppGroupPicture } from "./whatsapp-chat-picture.js";
 import {
@@ -1868,7 +1869,15 @@ function attachmentSummaryText(attachments = []) {
 }
 
 function publicHelpUrl(env = process.env) {
-  const configured = String(env.ORKESTR_PUBLIC_SITE_URL || env.ORKESTR_PUBLIC_HELP_URL || "").trim();
+  const configured = String(
+    tenantPublicSetupUrl({}, env) ||
+      env.ORKESTR_CONNECT_PUBLIC_SETUP_URL ||
+      env.ORKESTR_PAIRING_URL ||
+      env.ORKESTR_PUBLIC_AUTH_URL ||
+      env.ORKESTR_PUBLIC_SITE_URL ||
+      env.ORKESTR_PUBLIC_HELP_URL ||
+      "",
+  ).trim();
   const fallback = "https://orkestr.example.test/";
   try {
     const url = new URL(configured || fallback);

@@ -131,6 +131,33 @@ test("whereAmI resolves the current thread from a nested workspace path", async 
   assert.equal(payload.commands.connectorStatus, "orkestr status --json");
 });
 
+test("whereAmI exposes public tenant setup URL without wildcard bind API base", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-whereiam-public-url-"));
+  const workspace = path.join(home, "users", "firat", "workspaces", "jobs");
+  await fs.mkdir(workspace, { recursive: true });
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_HOST: "0.0.0.0",
+    ORKESTR_PORT: "21050",
+    ORKESTR_TENANT_VM_ID: "firat-jobs-vm",
+    ORKESTR_CONNECT_PUBLIC_URL: "https://connect.example.test",
+  };
+  await createThread({
+    id: "firat-jobs",
+    ownerUserId: "firat",
+    name: "Firat Jobs",
+    cwd: workspace,
+    workspace,
+  }, env);
+
+  const payload = await whereAmI({ cwd: workspace }, env);
+
+  assert.equal(payload.apiBase, "http://127.0.0.1:21050");
+  assert.equal(payload.publicUrls.setupUrl, "https://connect.example.test/i/firat-jobs-vm/setup");
+  assert.equal(payload.publicUrls.connectBaseUrl, "https://connect.example.test");
+  assert.doesNotMatch(JSON.stringify(payload.publicUrls), /0\.0\.0\.0|127\.0\.0\.1|localhost|10\./);
+});
+
 test("whereAmI exposes server-owned contained user runtime policy metadata", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-whereiam-contained-home-"));
   const workspace = path.join(home, "users", "otcan", "workspaces", "contained-chat");

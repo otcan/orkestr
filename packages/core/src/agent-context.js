@@ -89,6 +89,12 @@ Use dynamic discovery for live Orkestr context:
 - For contained users, \`whereiam.capabilities.enabledSkills\` is the allowed
   Orkestr skill list. Do not use disabled or missing capabilities through host
   fallbacks.
+- For tenant VMs, user-facing browser, setup, and pairing instructions must use
+  \`whereiam.publicUrls.setupUrl\`, \`ORKESTR_CONNECT_PUBLIC_SETUP_URL\`, or
+  \`ORKESTR_PAIRING_URL\`. Treat \`0.0.0.0\`, \`127.0.0.1\`, \`localhost\`,
+  private \`10.x\` / \`172.16-31.x\` / \`192.168.x\` addresses, and raw
+  \`ORKESTR_HOST:ORKESTR_PORT\` values as internal bind/API addresses only;
+  do not present them as links for a WhatsApp or browser user to open.
 
 Orkestr capabilities:
 

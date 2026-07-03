@@ -123,6 +123,37 @@ test("tenant VM demo cloud-init includes local Orkestr port for the notifier", a
   assert.doesNotMatch(envFile, /whatsappChatHash|chatId/i);
 });
 
+test("tenant VM provisioning derives central setup URLs from connect base", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-tenant-vm-public-url-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_CONNECT_PUBLIC_URL: "https://connect.example.test",
+    ORKESTR_PAIRING_URL: "https://connect.example.test/setup/pairing",
+  };
+  const tenantVm = await createTenantVm({
+    id: "firat-jobs-vm",
+    ownerUserId: "firat",
+    kubevirt: { namespace: "tenant-firat", vmName: "firat-jobs-vm" },
+  }, env);
+
+  const plan = buildTenantVmProvisioningPlan(tenantVm, {}, env);
+  const manifest = JSON.parse(plan.manifest);
+  const cloudInitSecret = manifest.items.find((item) => item.kind === "Secret" && item.metadata.name === "firat-jobs-vm-cloudinit");
+  const envFile = Buffer.from(
+    cloudInitSecret.stringData.userdata.match(/path: \/etc\/orkestr\/orkestr\.env[\s\S]*?content: ([A-Za-z0-9+/=]+)/)[1],
+    "base64",
+  ).toString("utf8");
+
+  assert.equal(plan.runtimeEnv.ORKESTR_HOST, "0.0.0.0");
+  assert.equal(plan.runtimeEnv.ORKESTR_PUBLIC_URL, "https://connect.example.test");
+  assert.equal(plan.runtimeEnv.ORKESTR_PUBLIC_HTTPS_URL, "https://connect.example.test");
+  assert.equal(plan.runtimeEnv.ORKESTR_CONNECT_PUBLIC_BASE_URL, "https://connect.example.test");
+  assert.equal(plan.runtimeEnv.ORKESTR_CONNECT_PUBLIC_SETUP_URL, "https://connect.example.test/i/firat-jobs-vm/setup");
+  assert.equal(plan.runtimeEnv.ORKESTR_PAIRING_URL, "https://connect.example.test/setup/pairing");
+  assert.match(envFile, /^ORKESTR_CONNECT_PUBLIC_SETUP_URL='https:\/\/connect\.example\.test\/i\/firat-jobs-vm\/setup'$/m);
+  assert.doesNotMatch(plan.runtimeEnv.ORKESTR_CONNECT_PUBLIC_SETUP_URL, /0\.0\.0\.0|127\.0\.0\.1|localhost|10\./);
+});
+
 test("tenant VM provisioning execute path applies manifest and updates registry status", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-tenant-vm-provision-exec-"));
   const env = { ORKESTR_HOME: home };

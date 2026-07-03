@@ -5086,6 +5086,20 @@ test("local whatsapp inbound failures explain missing user capabilities", () => 
   const pairing = inboundRoutingFailureNoticeText(new Error("browser_pairing_required"), {
     env: { ORKESTR_PUBLIC_SITE_URL: "https://orkestr.example.test/" },
   });
+  const tenantCodex = inboundRoutingFailureNoticeText(Object.assign(new Error("target_codex_not_configured"), {
+    routingFailure: {
+      code: "target_codex_not_configured",
+      userFacingCategory: "codex",
+      setupUrl: "https://connect.example.test/i/firat-jobs-vm/setup",
+    },
+  }));
+  const tenantPairing = inboundRoutingFailureNoticeText(new Error("browser_pairing_required"), {
+    env: {
+      ORKESTR_TENANT_VM_ID: "firat-jobs-vm",
+      ORKESTR_CONNECT_PUBLIC_URL: "https://connect.example.test",
+      ORKESTR_PUBLIC_SITE_URL: "http://0.0.0.0:21050",
+    },
+  });
 
   assert.match(gmail, /Gmail is not connected or enabled for this chat yet/i);
   assert.doesNotMatch(gmail, /safely handle|private connector|account identity/i);
@@ -5103,6 +5117,10 @@ test("local whatsapp inbound failures explain missing user capabilities", () => 
   assert.match(pairing, /needs browser pairing approval/i);
   assert.doesNotMatch(pairing, /browser_pairing_required/);
   assert.match(pairing, /https:\/\/orkestr\.example\.test\//);
+  assert.match(tenantCodex, /https:\/\/connect\.example\.test\/i\/firat-jobs-vm\/setup/);
+  assert.doesNotMatch(tenantCodex, /0\.0\.0\.0|127\.0\.0\.1|localhost|10\./);
+  assert.match(tenantPairing, /https:\/\/connect\.example\.test\/i\/firat-jobs-vm\/setup/);
+  assert.doesNotMatch(tenantPairing, /0\.0\.0\.0|127\.0\.0\.1|localhost|10\./);
 });
 
 test("local whatsapp inbound stays silent for unbound chats", async () => {

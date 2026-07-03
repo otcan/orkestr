@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { dataPaths, ensureDataDirs } from "../../storage/src/paths.js";
 import { appendEvent, readJson, writeSecretJson } from "../../storage/src/store.js";
 import { attachRoutingFailure } from "./routing-failures.js";
+import { tenantPublicSetupUrl } from "./tenant-public-urls.js";
 import { getTenantVm, listTenantVms, publicTenantVm, updateTenantVm } from "./tenant-vm-registry.js";
 import { ensureWhatsAppScopedTokens, readWhatsAppScopedTokenRecords } from "./whatsapp-scoped-tokens.js";
 
@@ -216,7 +217,16 @@ async function writeRouteSecrets(state, env = process.env) {
   });
 }
 
-function publicRoute(vm, secret = {}, { includeToken = false, bridgeSendToken = null } = {}) {
+function routeSetupUrl(vm = {}, env = process.env) {
+  return tenantPublicSetupUrl({
+    tenantVmId: vm.id,
+    connectPublicBaseUrl: vm.endpoint?.connectBaseUrl,
+    connectPublicSetupUrl: vm.endpoint?.setupUrl,
+    publicAppBaseUrl: vm.endpoint?.publicBaseUrl,
+  }, env);
+}
+
+function publicRoute(vm, secret = {}, { includeToken = false, bridgeSendToken = null, env = process.env } = {}) {
   const token = clean(secret.token);
   const bridgeToken = clean(bridgeSendToken?.token);
   const routeTarget = tenantRouteTarget(vm);
@@ -235,6 +245,7 @@ function publicRoute(vm, secret = {}, { includeToken = false, bridgeSendToken = 
     target: routeTarget.target,
     routeMode: routeTarget.routeMode,
     targetSource: routeTarget.targetSource,
+    setupUrl: routeSetupUrl(vm, env),
     tokenConfigured: Boolean(token),
     tokenPreview: tokenPreview(token),
     diagnostics,
@@ -308,7 +319,7 @@ export async function configureTenantWhatsAppRoute(tenantVmId, input = {}, env =
   return {
     ok: true,
     tenantVm: publicTenantVm(updated),
-    route: publicRoute(updated, state.routes[updated.id], { includeToken: true, bridgeSendToken }),
+    route: publicRoute(updated, state.routes[updated.id], { includeToken: true, bridgeSendToken, env }),
   };
 }
 
@@ -332,13 +343,13 @@ export async function disableTenantWhatsAppRoute(tenantVmId, env = process.env) 
     chatId: clean(updated.connectors?.whatsappChatId),
   }, env).catch(() => {});
   const state = await readRouteSecrets(env);
-  return { ok: true, tenantVm: publicTenantVm(updated), route: publicRoute(updated, state.routes[updated.id] || {}) };
+  return { ok: true, tenantVm: publicTenantVm(updated), route: publicRoute(updated, state.routes[updated.id] || {}, { env }) };
 }
 
 export async function listTenantWhatsAppRoutes(env = process.env) {
   const state = await readRouteSecrets(env);
   const vms = await listTenantVms(env);
-  return vms.map((vm) => publicRoute(vm, state.routes[vm.id] || {}));
+  return vms.map((vm) => publicRoute(vm, state.routes[vm.id] || {}, { env }));
 }
 
 export async function tenantWhatsAppInboundForwardRoute(input = {}, env = process.env) {
@@ -374,6 +385,7 @@ export async function tenantWhatsAppInboundForwardRoute(input = {}, env = proces
         capability: "whatsapp",
         target,
         instanceId: vm.id,
+        setupUrl: routeSetupUrl(vm, env),
         retryable: false,
         reason,
       });
@@ -394,6 +406,7 @@ export async function tenantWhatsAppInboundForwardRoute(input = {}, env = proces
       ownerUserId: vm.ownerUserId,
       target,
       token,
+      setupUrl: routeSetupUrl(vm, env),
       chatName: clean(vm.connectors?.whatsappChatName),
       accountId: routeAccountId,
       routeMode: routeTarget.routeMode,
