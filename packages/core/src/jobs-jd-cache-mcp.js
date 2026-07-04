@@ -1,10 +1,13 @@
 import crypto from "node:crypto";
+import fs from "node:fs/promises";
 import { dataPaths } from "../../storage/src/paths.js";
 import { appendEvent, readJson, writeJson } from "../../storage/src/store.js";
 
 const defaultMaxResults = 20;
 const maxDescriptionChars = 40_000;
 const defaultSources = ["gmail", "freelance_de", "9am"];
+let sqliteModulePromise = null;
+const freelanceDeDbCache = new Map();
 
 function nowIso() {
   return new Date().toISOString();
@@ -16,6 +19,12 @@ function clean(value = "") {
 
 function lower(value = "") {
   return clean(value).toLowerCase();
+}
+
+function redactContactText(value = "") {
+  return clean(value)
+    .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, "[redacted-email]")
+    .replace(/(?:\+|00)\d[\d\s()./-]{6,}\d/g, "[redacted-phone]");
 }
 
 function normalizeId(value = "") {
@@ -65,6 +74,14 @@ function accessPath(env = process.env) {
 
 function queuePath(env = process.env) {
   return dataPaths(env).jobsQueue;
+}
+
+function freelanceDeDbPath(env = process.env) {
+  return dataPaths(env).freelanceDeJobsDb;
+}
+
+function gmailSignalRecordsRoot(env = process.env) {
+  return dataPaths(env).gmailSignalJobRecordsRoot;
 }
 
 function normalizeGrant(input = {}) {
@@ -185,7 +202,183 @@ function normalizeQueueCandidate(candidate = {}) {
 
 async function readQueueCandidates(env = process.env) {
   const payload = await readJson(queuePath(env), { candidates: [] });
-  return Array.isArray(payload?.candidates) ? payload.candidates.map(normalizeQueueCandidate).filter((item) => item.id) : [];
+  return Array.isArray(payload?.candidates)
+    ? payload.candidates.map((candidate) => ({
+      ...normalizeQueueCandidate(candidate),
+      jdKind: "jobs-queue",
+    })).filter((item) => item.id)
+    : [];
+}
+
+async function loadSqlite() {
+  try {
+    sqliteModulePromise ||= import("node:sqlite");
+    return await sqliteModulePromise;
+  } catch {
+    return null;
+  }
+}
+
+async function openFreelanceDeDb(env = process.env) {
+  const dbPath = freelanceDeDbPath(env);
+  const exists = await fs.stat(dbPath).then((stat) => stat.isFile() && stat.size > 0, () => false);
+  if (!exists) return null;
+  const sqlite = await loadSqlite();
+  if (!sqlite) return null;
+  if (freelanceDeDbCache.has(dbPath)) return freelanceDeDbCache.get(dbPath);
+  const db = new sqlite.DatabaseSync(dbPath, { readOnly: true });
+  db.exec("pragma busy_timeout = 5000");
+  freelanceDeDbCache.set(dbPath, db);
+  return db;
+}
+
+function normalizeFreelanceDeRow(row = {}) {
+  const description = redactContactText(row.description).slice(0, maxDescriptionChars);
+  const fetchedAt = clean(row.fetched_at || row.updated_at || row.created_at);
+  return {
+    id: clean(row.project_id),
+    jdKind: "freelance-de",
+    source: "freelance_de",
+    title: clean(row.title),
+    sender: "freelance.de",
+    receivedAt: fetchedAt,
+    snippet: description.slice(0, 1000),
+    bodySnapshot: description,
+    canonicalJobUrls: [clean(row.url)].filter(Boolean),
+    extractedLinks: [],
+    createdAt: fetchedAt,
+    updatedAt: fetchedAt,
+  };
+}
+
+async function walkMarkdownFiles(dir, limit = 5000) {
+  const output = [];
+  async function walk(current) {
+    if (output.length >= limit) return;
+    const entries = await fs.readdir(current, { withFileTypes: true }).catch(() => []);
+    for (const entry of entries) {
+      if (output.length >= limit) break;
+      const fullPath = `${current}/${entry.name}`;
+      if (entry.isDirectory()) await walk(fullPath);
+      else if (entry.isFile() && entry.name.endsWith(".md")) output.push(fullPath);
+    }
+  }
+  await walk(dir);
+  return output;
+}
+
+function firstMarkdownHeading(raw = "") {
+  const match = String(raw || "").match(/^#\s+(.+)$/m);
+  return clean(match?.[1]);
+}
+
+function markdownField(raw = "", name = "") {
+  const escaped = String(name).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = String(raw || "").match(new RegExp(`^${escaped}:\\s*(.*)$`, "mi"));
+  return clean(match?.[1]);
+}
+
+function markdownSection(raw = "", heading = "") {
+  const escaped = String(heading).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = String(raw || "").match(new RegExp(`^##\\s+${escaped}\\s*\\n([\\s\\S]*?)(?:\\n##\\s+|$)`, "mi"));
+  return clean(match?.[1]);
+}
+
+function signalRecordSource(record = {}) {
+  const text = lower([record.title, record.company, record.url, record.sourceKind].join("\n"));
+  if (text.includes("9am")) return "9am";
+  return "";
+}
+
+function isApplicationStatusSignal(record = {}) {
+  const text = lower([record.stage, record.sourceKind, record.title, record.description].join("\n"));
+  return /\b(application|bewerbung)\s+(sent|submitted|viewed|received|confirmed|status|gesendet|eingegangen|erhalten|angesehen|bestätigt|bestaetigt)\b/.test(text)
+    || /\byour application was sent\b/.test(text)
+    || /\byour application (has been|was|is)\b/.test(text)
+    || /\bapplication_status_update\b/.test(text);
+}
+
+function hasUsefulDescription(description = "") {
+  const text = clean(description);
+  const comparable = lower(text);
+  return text.length >= 40
+    && comparable !== "not found"
+    && comparable !== "no description excerpt available.";
+}
+
+function normalizeGmailSignalRecord(raw = "", filePath = "", root = "") {
+  const title = firstMarkdownHeading(raw);
+  const stage = markdownField(raw, "Stage");
+  const company = markdownField(raw, "Company");
+  const url = markdownField(raw, "URL");
+  const imported = markdownField(raw, "Imported");
+  const sourceKind = markdownField(raw, "Source kind");
+  const description = redactContactText(markdownSection(raw, "Description Excerpt")).slice(0, maxDescriptionChars);
+  const relativePath = filePath.startsWith(root) ? filePath.slice(root.length).replace(/^\/+/, "") : filePath;
+  const record = {
+    stage,
+    title,
+    company,
+    url,
+    sourceKind,
+    description,
+  };
+  const source = signalRecordSource(record);
+  if (isApplicationStatusSignal(record)) return null;
+  if (!source || !title || !hasUsefulDescription(description)) return null;
+  return {
+    id: sha256(relativePath).slice(0, 24),
+    jdKind: "gmail-signal",
+    source,
+    title,
+    sender: company || "Gmail Signals",
+    receivedAt: imported,
+    snippet: description.slice(0, 1000),
+    bodySnapshot: description,
+    canonicalJobUrls: clean(url) && lower(url) !== "not found" ? [clean(url)] : [],
+    extractedLinks: [],
+    createdAt: imported,
+    updatedAt: imported,
+  };
+}
+
+async function readGmailSignalCandidates(env = process.env) {
+  const root = gmailSignalRecordsRoot(env);
+  const exists = await fs.stat(root).then((stat) => stat.isDirectory(), () => false);
+  if (!exists) return [];
+  const files = await walkMarkdownFiles(root);
+  const candidates = [];
+  for (const filePath of files) {
+    const raw = await fs.readFile(filePath, "utf8").catch(() => "");
+    const candidate = normalizeGmailSignalRecord(raw, filePath, root);
+    if (candidate) candidates.push(candidate);
+  }
+  return candidates;
+}
+
+async function readFreelanceDeCandidates(env = process.env) {
+  const db = await openFreelanceDeDb(env);
+  if (!db) return [];
+  try {
+    const rows = db.prepare(`
+      select project_id, url, title, description, fetched_at
+      from freelance_jobs
+      where coalesce(project_id, '') <> ''
+      order by fetched_at desc, project_id desc
+    `).all();
+    return rows.map(normalizeFreelanceDeRow).filter((item) => item.id && (item.title || item.bodySnapshot));
+  } catch {
+    return [];
+  }
+}
+
+async function readJdCandidates(env = process.env) {
+  const [queueCandidates, freelanceDeCandidates, gmailSignalCandidates] = await Promise.all([
+    readQueueCandidates(env),
+    readFreelanceDeCandidates(env),
+    readGmailSignalCandidates(env),
+  ]);
+  return [...queueCandidates, ...freelanceDeCandidates, ...gmailSignalCandidates];
 }
 
 function hostSource(url = "") {
@@ -201,6 +394,7 @@ function hostSource(url = "") {
 }
 
 function sourceForCandidate(candidate = {}) {
+  if (candidate.source) return normalizeSource(candidate.source);
   const links = [
     candidate.gmailUrl,
     ...(candidate.canonicalJobUrls || []),
@@ -218,16 +412,21 @@ function sourceForCandidate(candidate = {}) {
 }
 
 function titleForCandidate(candidate = {}) {
+  if (clean(candidate.title)) return clean(candidate.title).slice(0, 240);
   return clean(candidate.subject).replace(/^(new job|job alert|hiring|role|opportunity)[:\s-]+/i, "").slice(0, 240) || "Untitled job description";
 }
 
 function jdIdForCandidate(candidate = {}) {
-  return `jobs-queue:${candidate.id}`;
+  const kind = clean(candidate.jdKind) || "jobs-queue";
+  return `${kind}:${candidate.id}`;
 }
 
-function candidateIdFromJdId(jdId = "") {
+function candidateRefFromJdId(jdId = "") {
   const value = clean(jdId);
-  return value.startsWith("jobs-queue:") ? value.slice("jobs-queue:".length) : value;
+  if (value.startsWith("jobs-queue:")) return { kind: "jobs-queue", id: value.slice("jobs-queue:".length) };
+  if (value.startsWith("freelance-de:")) return { kind: "freelance-de", id: value.slice("freelance-de:".length) };
+  if (value.startsWith("gmail-signal:")) return { kind: "gmail-signal", id: value.slice("gmail-signal:".length) };
+  return { kind: "", id: value };
 }
 
 function sourceAllowed(source = "", grant = {}) {
@@ -255,7 +454,7 @@ function searchableText(candidate = {}) {
 
 function publicJdSummary(candidate = {}) {
   const source = sourceForCandidate(candidate);
-  const description = clean(candidate.bodySnapshot || candidate.snippet);
+  const description = redactContactText(candidate.bodySnapshot || candidate.snippet);
   return {
     jdId: jdIdForCandidate(candidate),
     source,
@@ -263,7 +462,7 @@ function publicJdSummary(candidate = {}) {
     sender: candidate.sender || "",
     receivedAt: candidate.receivedAt || "",
     cachedAt: candidate.updatedAt || candidate.createdAt || "",
-    snippet: clean(candidate.snippet || description).slice(0, 700),
+    snippet: redactContactText(candidate.snippet || description).slice(0, 700),
     sourceUrls: [...new Set([...(candidate.canonicalJobUrls || []), ...(candidate.extractedLinks || [])])].slice(0, 8),
     hasDescription: Boolean(description),
   };
@@ -272,7 +471,7 @@ function publicJdSummary(candidate = {}) {
 function publicJdDetail(candidate = {}) {
   return {
     ...publicJdSummary(candidate),
-    description: clean(candidate.bodySnapshot || candidate.snippet),
+    description: redactContactText(candidate.bodySnapshot || candidate.snippet),
     gmail: candidate.gmailMessageId
       ? {
           messageId: candidate.gmailMessageId,
@@ -340,7 +539,7 @@ export async function searchJobDescriptions(input = {}, grant = {}, env = proces
   const query = lower(input.query || "");
   const sourceFilter = clean(input.source) ? normalizeSource(input.source) : "";
   const limit = limitFor(input, grant);
-  const candidates = await readQueueCandidates(env);
+  const candidates = await readJdCandidates(env);
   const results = [];
   for (const candidate of candidates) {
     const source = sourceForCandidate(candidate);
@@ -363,10 +562,10 @@ export async function searchJobDescriptions(input = {}, grant = {}, env = proces
 
 export async function getJobDescription(input = {}, grant = {}, env = process.env) {
   assertScope(grant, ["jd:read"]);
-  const candidateId = candidateIdFromJdId(input.jdId || input.id);
-  if (!candidateId) throw Object.assign(new Error("jd_id_required"), { statusCode: 400 });
-  const candidates = await readQueueCandidates(env);
-  const candidate = candidates.find((item) => item.id === candidateId);
+  const ref = candidateRefFromJdId(input.jdId || input.id);
+  if (!ref.id) throw Object.assign(new Error("jd_id_required"), { statusCode: 400 });
+  const candidates = await readJdCandidates(env);
+  const candidate = candidates.find((item) => item.id === ref.id && (!ref.kind || item.jdKind === ref.kind));
   if (!candidate) throw Object.assign(new Error("job_description_not_found"), { statusCode: 404 });
   const source = sourceForCandidate(candidate);
   if (!sourceAllowed(source, grant)) throw Object.assign(new Error("job_description_source_forbidden"), { statusCode: 403 });
@@ -383,7 +582,7 @@ export async function getJobDescription(input = {}, grant = {}, env = process.en
 
 export async function listJobSources(_input = {}, grant = {}, env = process.env) {
   assertScope(grant, ["jd:read", "jd:search"]);
-  const candidates = await readQueueCandidates(env);
+  const candidates = await readJdCandidates(env);
   const counts = {};
   for (const candidate of candidates) {
     const source = sourceForCandidate(candidate);

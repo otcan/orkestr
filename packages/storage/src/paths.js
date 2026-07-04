@@ -8,8 +8,10 @@ export function appHome(env = process.env) {
 
 export function dataPaths(env = process.env) {
   const home = appHome(env);
+  const codexOpsHome = env.OPENCLAW_CODEX_OPS_HOME || path.join(path.dirname(home), ".codex-ops");
   return {
     home,
+    codexOpsHome,
     browsers: path.join(home, "browsers"),
     files: path.join(home, "files"),
     messages: path.join(home, "messages"),
@@ -32,6 +34,8 @@ export function dataPaths(env = process.env) {
     timers: path.join(home, "timers.json"),
     jobsQueue: env.ORKESTR_JOBS_QUEUE_FILE || path.join(home, "jobs-queue.json"),
     jobsJdCacheAccess: env.ORKESTR_JOBS_JD_CACHE_ACCESS_FILE || path.join(home, "jobs-jd-cache-access.json"),
+    freelanceDeJobsDb: env.ORKESTR_FREELANCE_DE_JOBS_DB || path.join(codexOpsHome, "data", "freelance-de", "freelance_jobs.db"),
+    gmailSignalJobRecordsRoot: env.ORKESTR_GMAIL_SIGNAL_RECORD_ROOT || path.join(path.dirname(home), ".openclaw", "workspace", "Orkestr", ".data", "workspaces", "157ea1bfc66836fd", "oxrm", "jobseeker-can", "files", "records", "job-search", "gmail"),
     connectorOutbox: path.join(home, "connector-outbox.json"),
     connectorOutboxDb: env.ORKESTR_CONNECTOR_OUTBOX_DB || path.join(home, "connector-outbox.sqlite"),
     connectorPromptPushes: path.join(home, "connector-prompt-pushes.json"),
