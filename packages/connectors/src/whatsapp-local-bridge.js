@@ -254,7 +254,36 @@ function normalizeLocalSecurityApprovalForwardTarget(target = "", env = process.
   return raw;
 }
 
-function localWhatsAppSecurityApprovalForwardToken({ chatId = "" } = {}, env = process.env) {
+function firstSecretValue(...values) {
+  for (const value of values) {
+    const token = String(value || "").split(/[\s,]+/g).map((item) => item.trim()).find(Boolean);
+    if (token) return token;
+  }
+  return "";
+}
+
+function localSecurityApprovalTargetIsSelf(target = "", env = process.env) {
+  try {
+    const parsed = new URL(String(target || "").trim());
+    if (!localSelfForwardHost(parsed.hostname)) return false;
+    if (parsed.pathname.replace(/\/+$/g, "") !== "/api/connectors/whatsapp/inbound") return false;
+    const current = new URL(localOrkestrInboundUrl(env));
+    return localSelfForwardHost(current.hostname) && parsed.port === current.port && parsed.protocol === current.protocol;
+  } catch {
+    return false;
+  }
+}
+
+function localWhatsAppSecurityApprovalForwardToken({ chatId = "", target = "" } = {}, env = process.env) {
+  if (localSecurityApprovalTargetIsSelf(target, env)) {
+    const inboundToken = firstSecretValue(
+      env.ORKESTR_WHATSAPP_INBOUND_TOKEN,
+      env.WHATSAPP_INBOUND_TOKEN,
+      env.ORKESTR_WHATSAPP_INBOUND_TOKENS,
+      env.WHATSAPP_INBOUND_TOKENS,
+    );
+    if (inboundToken) return inboundToken;
+  }
   const tokens = readJsonEnvMap(env.ORKESTR_WHATSAPP_SECURITY_APPROVAL_FORWARD_TOKEN_MAP_JSON || env.WHATSAPP_SECURITY_APPROVAL_FORWARD_TOKEN_MAP_JSON);
   const tokenChatId = String(env.ORKESTR_WHATSAPP_SECURITY_APPROVAL_FORWARD_TOKEN_CHAT_ID || env.WHATSAPP_SECURITY_APPROVAL_FORWARD_TOKEN_CHAT_ID || "").trim();
   return String(
@@ -615,7 +644,7 @@ export async function forwardLocalWhatsAppInbound(input = {}, env = process.env,
     }
     const headers = { "content-type": "application/json" };
     const token = targetSource === "security_approval_forward"
-      ? localWhatsAppSecurityApprovalForwardToken({ chatId }, env)
+      ? localWhatsAppSecurityApprovalForwardToken({ chatId, target }, env)
       : deliveryTenantRoute?.token || (
         localWhatsAppInboundForwardToken({ chatId }, env)
       );

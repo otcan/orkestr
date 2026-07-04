@@ -840,10 +840,11 @@ test("local whatsapp security approval forward self-target follows active orkest
     ORKESTR_HOME: home,
     ORKESTR_PORT: "18912",
     ORKESTR_HOST: "127.0.0.1",
+    ORKESTR_WHATSAPP_INBOUND_TOKEN: "current-inbound-secret",
     ORKESTR_WHATSAPP_SECURITY_APPROVAL_FORWARD_URL: "http://127.0.0.1:19812/api/connectors/whatsapp/inbound",
     ORKESTR_WHATSAPP_SECURITY_APPROVAL_FORWARD_TOKEN_CHAT_ID: "491700000000@c.us",
     ORKESTR_WHATSAPP_INBOUND_FORWARD_TOKEN_MAP_JSON: JSON.stringify({
-      "491700000000@c.us": "forward-secret",
+      "491700000000@c.us": "stale-forward-secret",
     }),
   };
   const calls = [];
@@ -867,7 +868,7 @@ test("local whatsapp security approval forward self-target follows active orkest
   assert.equal(forwarded.targetSource, "security_approval_forward");
   assert.equal(calls.length, 1);
   assert.equal(calls[0].url, "http://127.0.0.1:18912/api/connectors/whatsapp/inbound");
-  assert.equal(calls[0].options.headers.authorization, "Bearer forward-secret");
+  assert.equal(calls[0].options.headers.authorization, "Bearer current-inbound-secret");
 });
 
 test("local whatsapp approval commands prefer security approval target over managed tenant route", async () => {
