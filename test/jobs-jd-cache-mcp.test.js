@@ -260,6 +260,21 @@ test("jobs JD cache MCP includes neutral 9am Gmail signal records without fit ev
     "Java backend project with Spring Boot and remote delivery. Contact jane@example.com or +49 111 222333.",
     "",
   ].join("\n"), "utf8");
+  await fs.writeFile(path.join(recordRoot, "2026-07-04", "application-followup-9am.md"), [
+    "# Senior Fullstack Entwickler Java / Angular",
+    "",
+    "Stage: candidate",
+    "Source: Gmail job signal",
+    "Source kind: application_followup",
+    "Imported: 2026-07-04T10:00:00Z",
+    "Company: 9am Match",
+    "URL: https://app.9am.works/job/followup-456",
+    "",
+    "## Description Excerpt",
+    "",
+    "Applicant applied for Senior Fullstack Entwickler Java / Angular and is waiting for feedback from the hiring contact.",
+    "",
+  ].join("\n"), "utf8");
   const env = {
     ORKESTR_HOME: home,
     ORKESTR_AUTH_REQUIRED: "1",
@@ -278,6 +293,14 @@ test("jobs JD cache MCP includes neutral 9am Gmail signal records without fit ev
 
   const sources = await listJobSources({}, grant.grant, env);
   assert.deepEqual(sources.sources, [{ source: "9am", count: 1 }]);
+
+  const titleSearch = await searchJobDescriptions({ query: "Java Developer" }, grant.grant, env);
+  assert.equal(titleSearch.count, 1);
+  assert.equal(titleSearch.results[0].sourceJobIds.includes("java-123"), true);
+
+  const sourceIdSearch = await searchJobDescriptions({ source: "9am", sourceJobId: "java-123" }, grant.grant, env);
+  assert.equal(sourceIdSearch.count, 1);
+  assert.equal(sourceIdSearch.results[0].jdId, titleSearch.results[0].jdId);
 
   const search = await searchJobDescriptions({ query: "Spring Boot" }, grant.grant, env);
   assert.equal(search.count, 1);

@@ -27,6 +27,19 @@ function redactContactText(value = "") {
     .replace(/(?:\+|00)\d[\d\s()./-]{6,}\d/g, "[redacted-phone]");
 }
 
+function uniqueClean(values = []) {
+  const seen = new Set();
+  const output = [];
+  for (const value of values) {
+    const text = clean(value);
+    const comparable = lower(text);
+    if (!text || seen.has(comparable)) continue;
+    seen.add(comparable);
+    output.push(text);
+  }
+  return output;
+}
+
 function normalizeId(value = "") {
   return clean(value)
     .toLowerCase()
@@ -293,6 +306,11 @@ function signalRecordSource(record = {}) {
 function isApplicationStatusSignal(record = {}) {
   const text = lower([record.stage, record.sourceKind, record.title, record.description].join("\n"));
   return /\b(application|bewerbung)\s+(sent|submitted|viewed|received|confirmed|status|gesendet|eingegangen|erhalten|angesehen|bestätigt|bestaetigt)\b/.test(text)
+    || /\b(application|bewerbung)\s+(for|to)\b/.test(text)
+    || /\b(applicant|candidate)\s+(applied|applies|submitted)\b/.test(text)
+    || /\b(applied|submitted)\s+(for|to)\b/.test(text)
+    || /\b(follow[-\s]?up|feedback)\b[\s\S]{0,120}\b(application|bewerbung|applied|submitted|received feedback)\b/.test(text)
+    || /\b(application|bewerbung|applied|submitted)\b[\s\S]{0,120}\b(follow[-\s]?up|feedback)\b/.test(text)
     || /\byour application was sent\b/.test(text)
     || /\byour application (has been|was|is)\b/.test(text)
     || /\bapplication_status_update\b/.test(text);
@@ -393,6 +411,39 @@ function hostSource(url = "") {
   }
 }
 
+function sourceJobIdsFromText(value = "") {
+  const text = clean(value);
+  const ids = [];
+  for (const match of text.matchAll(/app\.9am\.works\/job\/([a-z0-9-]+)/gi)) {
+    ids.push(match[1]);
+  }
+  for (const match of text.matchAll(/linkedin\.com\/(?:comm\/)?jobs\/view\/(\d+)/gi)) {
+    ids.push(match[1]);
+  }
+  for (const match of text.matchAll(/\bjobid[_=-]?(\d{5,})\b/gi)) {
+    ids.push(match[1]);
+  }
+  for (const match of text.matchAll(/freelance\.de\/(?:projekte\/)?projekt[-/](\d+)/gi)) {
+    ids.push(match[1]);
+  }
+  return uniqueClean(ids).slice(0, 50);
+}
+
+function sourceJobIdsForCandidate(candidate = {}) {
+  const values = [
+    candidate.id,
+    candidate.subject,
+    candidate.snippet,
+    candidate.bodySnapshot,
+    candidate.gmailUrl,
+    ...(candidate.canonicalJobUrls || []),
+    ...(candidate.extractedLinks || []),
+  ].filter(Boolean);
+  const ids = values.flatMap(sourceJobIdsFromText);
+  if (candidate.jdKind === "freelance-de" && candidate.id) ids.push(candidate.id);
+  return uniqueClean(ids).slice(0, 50);
+}
+
 function sourceForCandidate(candidate = {}) {
   if (candidate.source) return normalizeSource(candidate.source);
   const links = [
@@ -443,12 +494,14 @@ function limitFor(input = {}, grant = {}) {
 
 function searchableText(candidate = {}) {
   return lower([
+    candidate.title,
     candidate.subject,
     candidate.sender,
     candidate.snippet,
     candidate.bodySnapshot,
     ...(candidate.canonicalJobUrls || []),
     ...(candidate.extractedLinks || []),
+    ...sourceJobIdsForCandidate(candidate),
   ].join("\n"));
 }
 
@@ -464,6 +517,7 @@ function publicJdSummary(candidate = {}) {
     cachedAt: candidate.updatedAt || candidate.createdAt || "",
     snippet: redactContactText(candidate.snippet || description).slice(0, 700),
     sourceUrls: [...new Set([...(candidate.canonicalJobUrls || []), ...(candidate.extractedLinks || [])])].slice(0, 8),
+    sourceJobIds: sourceJobIdsForCandidate(candidate).slice(0, 12),
     hasDescription: Boolean(description),
   };
 }
@@ -508,6 +562,7 @@ export function jobsJdCacheMcpTools() {
       description: "Search cached job descriptions exposed by the parent Jobs XRM. Returns sanitized summaries and stable jdId values only.",
       inputSchema: toolSchema({
         query: { type: "string", description: "Keyword query over title, source URLs, and cached job-description text." },
+        sourceJobId: { type: "string", description: "Optional exact source job id from portals such as 9am UUIDs, LinkedIn numeric job ids, or freelance.de project ids." },
         source: { type: "string", description: "Optional source filter such as gmail, freelance_de, or 9am." },
         limit: { type: "number", minimum: 1, maximum: 100, description: "Maximum results." },
       }),
@@ -537,6 +592,7 @@ function assertScope(grant = {}, accepted = []) {
 export async function searchJobDescriptions(input = {}, grant = {}, env = process.env) {
   assertScope(grant, ["jd:read", "jd:search"]);
   const query = lower(input.query || "");
+  const sourceJobId = lower(input.sourceJobId || input.externalJobId || input.jobId || "");
   const sourceFilter = clean(input.source) ? normalizeSource(input.source) : "";
   const limit = limitFor(input, grant);
   const candidates = await readJdCandidates(env);
@@ -545,6 +601,10 @@ export async function searchJobDescriptions(input = {}, grant = {}, env = proces
     const source = sourceForCandidate(candidate);
     if (!sourceAllowed(source, grant)) continue;
     if (sourceFilter && sourceFilter !== source) continue;
+    if (sourceJobId) {
+      const candidateJobIds = sourceJobIdsForCandidate(candidate).map(lower);
+      if (!candidateJobIds.includes(sourceJobId)) continue;
+    }
     if (query && !searchableText(candidate).includes(query)) continue;
     results.push(publicJdSummary(candidate));
     if (results.length >= limit) break;
@@ -554,6 +614,7 @@ export async function searchJobDescriptions(input = {}, grant = {}, env = proces
     tenantVmId: grant.tenantVmId || "",
     grantId: grant.id || "",
     queryPresent: Boolean(query),
+    sourceJobIdPresent: Boolean(sourceJobId),
     source: sourceFilter || "",
     count: results.length,
   }, env).catch(() => {});
