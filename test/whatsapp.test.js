@@ -778,7 +778,7 @@ test("local whatsapp forwarded security approval sends visible confirmation", as
     assert.equal(result.approvalNotice.sent, true);
     assert.deepEqual(sent, [{
       to: chatId,
-      body: "Orkestr setup approved. Return to the setup page to continue.",
+      body: "Orkestr access approved. Return to the Orkestr web UI to continue.",
     }]);
   } finally {
     globalThis.fetch = originalFetch;
@@ -986,7 +986,7 @@ test("local whatsapp forwarded unconfigured codex target sends setup notice", as
     assert.equal(result.noticeSent, true);
     assert.deepEqual(sent, [{
       to: chatId,
-      body: `This Orkestr VM is not ready for chat yet. Open ${setupUrl} and enable Codex on the VM, then resend your message.`,
+      body: `This Orkestr VM is not ready for chat yet. Open ${setupUrl} and enable Codex in the web UI, then resend your message.`,
     }]);
   } finally {
     globalThis.fetch = originalFetch;
@@ -5267,6 +5267,7 @@ test("local whatsapp inbound failures explain missing user capabilities", () => 
     routingFailure: {
       code: "target_codex_not_configured",
       userFacingCategory: "codex",
+      appUrl: "https://connect.example.test/i/firat-jobs-vm/app",
       setupUrl: "https://connect.example.test/i/firat-jobs-vm/setup",
     },
   }));
@@ -5294,7 +5295,8 @@ test("local whatsapp inbound failures explain missing user capabilities", () => 
   assert.match(pairing, /needs browser pairing approval/i);
   assert.doesNotMatch(pairing, /browser_pairing_required/);
   assert.match(pairing, /https:\/\/orkestr\.example\.test\//);
-  assert.match(tenantCodex, /https:\/\/connect\.example\.test\/i\/firat-jobs-vm\/setup/);
+  assert.match(tenantCodex, /https:\/\/connect\.example\.test\/i\/firat-jobs-vm\/app/);
+  assert.doesNotMatch(tenantCodex, /\/setup/);
   assert.doesNotMatch(tenantCodex, /0\.0\.0\.0|127\.0\.0\.1|localhost|10\./);
   assert.match(tenantPairing, /https:\/\/connect\.example\.test\/i\/firat-jobs-vm\/setup/);
   assert.doesNotMatch(tenantPairing, /0\.0\.0\.0|127\.0\.0\.1|localhost|10\./);

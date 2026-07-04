@@ -93,6 +93,7 @@ export function normalizeRoutingFailure(input = {}, fallback = {}) {
     principalKind: pickContext(source, fallback, "principalKind"),
     principalId: pickContext(source, fallback, "principalId"),
     target: redact(source.target || fallback.target, 500),
+    appUrl: redact(source.appUrl || fallback.appUrl, 800),
     setupUrl: redact(source.setupUrl || fallback.setupUrl, 800),
     retryable: retryable === null ? Boolean(fallback.retryable) : retryable,
     userFacingCategory: clean(source.userFacingCategory || fallback.userFacingCategory) || inferredCategory(message, code),

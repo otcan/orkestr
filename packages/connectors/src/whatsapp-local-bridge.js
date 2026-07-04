@@ -435,7 +435,10 @@ function targetInboundFailureSafeMessage(code = "", status = 0) {
 
 function targetInboundFailureSetupUrl({ payload = {}, tenantRoute = null, chatId = "", env = process.env } = {}) {
   return String(
-    payload?.routingFailure?.setupUrl ||
+    payload?.routingFailure?.appUrl ||
+      payload?.appUrl ||
+      tenantRoute?.appUrl ||
+      payload?.routingFailure?.setupUrl ||
       payload?.setupUrl ||
       tenantRoute?.setupUrl ||
       localWhatsAppInboundForwardSetupUrl({ chatId }, env) ||
@@ -1997,10 +2000,10 @@ export function inboundRoutingFailureNoticeText(error, { env = process.env } = {
     return "Orkestr could not safely verify this message because the isolated-user safety service was temporarily unavailable. Please resend it in a moment.";
   }
   if (failure.code === "target_codex_not_configured" || failure.userFacingCategory === "codex") {
-    const setupUrl = String(failure.setupUrl || "").trim();
-    return setupUrl
-      ? `This Orkestr VM is not ready for chat yet. Open ${setupUrl} and enable Codex on the VM, then resend your message.`
-      : "This Orkestr VM is not ready for chat yet. Open the setup page and enable Codex on the VM, then resend your message.";
+    const actionUrl = String(failure.appUrl || failure.setupUrl || "").trim();
+    return actionUrl
+      ? `This Orkestr VM is not ready for chat yet. Open ${actionUrl} and enable Codex in the web UI, then resend your message.`
+      : "This Orkestr VM is not ready for chat yet. Open the Orkestr web UI and enable Codex on the VM, then resend your message.";
   }
   if (failure.code === "target_instance_unhealthy" || failure.userFacingCategory === "instance_health") {
     return "This Orkestr instance is temporarily unavailable for this chat. Your message was not delivered; please resend it after the instance is healthy.";
@@ -2101,7 +2104,7 @@ async function sendInboundRoutingFailureNotice({ accountId = "", chatId = "", ev
 
 function forwardedSecurityApprovalNoticeText(payload = {}) {
   if (payload?.approvedSecurityChallenge !== true) return "";
-  return "Orkestr setup approved. Return to the setup page to continue.";
+  return "Orkestr access approved. Return to the Orkestr web UI to continue.";
 }
 
 async function sendForwardedSecurityApprovalNotice({ accountId = "", chatId = "", eventId = "", forwarded = null, client = null, env = process.env } = {}) {

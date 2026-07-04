@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import { dataPaths, ensureDataDirs } from "../../storage/src/paths.js";
 import { appendEvent, readJson, writeSecretJson } from "../../storage/src/store.js";
 import { attachRoutingFailure } from "./routing-failures.js";
-import { tenantPublicSetupUrl } from "./tenant-public-urls.js";
+import { tenantPublicSetupUrl, tenantPublicUrls } from "./tenant-public-urls.js";
 import { getTenantVm, listTenantVms, publicTenantVm, updateTenantVm } from "./tenant-vm-registry.js";
 import { ensureWhatsAppScopedTokens, readWhatsAppScopedTokenRecords } from "./whatsapp-scoped-tokens.js";
 
@@ -228,6 +228,17 @@ function routeSetupUrl(vm = {}, env = process.env) {
   }, env);
 }
 
+function routeAppUrl(vm = {}, env = process.env) {
+  return tenantPublicUrls({
+    tenantVmId: vm.id,
+    brokerInstanceId: vm.labels?.brokerInstanceId || vm.labels?.instanceId,
+    labels: vm.labels,
+    connectPublicBaseUrl: vm.endpoint?.connectBaseUrl,
+    connectPublicSetupUrl: vm.endpoint?.setupUrl,
+    publicAppBaseUrl: vm.endpoint?.publicBaseUrl,
+  }, env).appUrl;
+}
+
 function publicRoute(vm, secret = {}, { includeToken = false, bridgeSendToken = null, env = process.env } = {}) {
   const token = clean(secret.token);
   const bridgeToken = clean(bridgeSendToken?.token);
@@ -247,6 +258,7 @@ function publicRoute(vm, secret = {}, { includeToken = false, bridgeSendToken = 
     target: routeTarget.target,
     routeMode: routeTarget.routeMode,
     targetSource: routeTarget.targetSource,
+    appUrl: routeAppUrl(vm, env),
     setupUrl: routeSetupUrl(vm, env),
     tokenConfigured: Boolean(token),
     tokenPreview: tokenPreview(token),
@@ -387,6 +399,7 @@ export async function tenantWhatsAppInboundForwardRoute(input = {}, env = proces
         capability: "whatsapp",
         target,
         instanceId: vm.id,
+        appUrl: routeAppUrl(vm, env),
         setupUrl: routeSetupUrl(vm, env),
         retryable: false,
         reason,
@@ -408,6 +421,7 @@ export async function tenantWhatsAppInboundForwardRoute(input = {}, env = proces
       ownerUserId: vm.ownerUserId,
       target,
       token,
+      appUrl: routeAppUrl(vm, env),
       setupUrl: routeSetupUrl(vm, env),
       chatName: clean(vm.connectors?.whatsappChatName),
       accountId: routeAccountId,
