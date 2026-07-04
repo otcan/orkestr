@@ -4113,6 +4113,84 @@ test("whatsapp bridge injection ignores cross-account outbound text echoes", asy
   }
 });
 
+test("whatsapp bridge send-media accepts inline attachments and stages them locally", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-bridge-inline-media-"));
+  const priorHome = process.env.ORKESTR_HOME;
+  const priorAuth = process.env.ORKESTR_AUTH_REQUIRED;
+  const priorBridgeToken = process.env.ORKESTR_WHATSAPP_BRIDGE_TOKEN;
+  const priorAccountIds = process.env.ORKESTR_WHATSAPP_ACCOUNT_IDS;
+  const priorConfirmation = process.env.ORKESTR_WHATSAPP_SEND_CONFIRMATION_REQUIRED;
+  process.env.ORKESTR_HOME = home;
+  process.env.ORKESTR_AUTH_REQUIRED = "1";
+  process.env.ORKESTR_WHATSAPP_BRIDGE_TOKEN = "bridge-inline-secret";
+  process.env.ORKESTR_WHATSAPP_ACCOUNT_IDS = "responder";
+  process.env.ORKESTR_WHATSAPP_SEND_CONFIRMATION_REQUIRED = "0";
+  const chatId = "chat-bridge-inline-media@g.us";
+  const body = "inline report payload";
+  const sent = [];
+  const runtime = {
+    MessageMedia: {
+      fromFilePath(filePath) {
+        return { filePath, mimetype: "text/markdown" };
+      },
+    },
+    client: {
+      async sendMessage(to, media, options) {
+        sent.push({ to, media, options });
+        return { id: { _serialized: `true_${chatId}_inline-media` } };
+      },
+    },
+  };
+  const server = await startServer({ port: 0, host: "127.0.0.1" });
+  const { port } = server.address();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const distBridge = await import("../dist/server/packages/connectors/src/whatsapp-local-bridge.js");
+  distBridge.setLocalWhatsAppRuntimeForTest("responder", runtime, {}, process.env);
+  try {
+    const response = await fetch(`${baseUrl}/api/connectors/whatsapp/bridge/send-media`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: "Bearer bridge-inline-secret" },
+      body: JSON.stringify({
+        accountId: "responder",
+        chatId,
+        text: "Report attached.",
+        attachments: [{
+          filename: "report.md",
+          mimetype: "text/markdown",
+          size: Buffer.byteLength(body),
+          sha256: crypto.createHash("sha256").update(body).digest("hex"),
+          encoding: "base64",
+          data: Buffer.from(body).toString("base64"),
+        }],
+      }),
+    });
+    const payload = await response.json();
+
+    assert.equal(response.status, 200, JSON.stringify(payload));
+    assert.equal(payload.ok, true);
+    assert.equal(sent.length, 2);
+    assert.equal(sent[0].to, chatId);
+    assert.equal(sent[0].media, "Report attached.");
+    assert.equal(sent[1].to, chatId);
+    assert.equal(sent[1].options.sendMediaAsDocument, true);
+    assert.match(sent[1].media.filePath, /whatsapp-bridge\/outbound-media\/bridge-inline\/.+report\.md$/);
+    assert.equal(await fs.readFile(sent[1].media.filePath, "utf8"), body);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    await distBridge.resetLocalWhatsAppBridgeForTest(process.env);
+    if (priorHome === undefined) delete process.env.ORKESTR_HOME;
+    else process.env.ORKESTR_HOME = priorHome;
+    if (priorAuth === undefined) delete process.env.ORKESTR_AUTH_REQUIRED;
+    else process.env.ORKESTR_AUTH_REQUIRED = priorAuth;
+    if (priorBridgeToken === undefined) delete process.env.ORKESTR_WHATSAPP_BRIDGE_TOKEN;
+    else process.env.ORKESTR_WHATSAPP_BRIDGE_TOKEN = priorBridgeToken;
+    if (priorAccountIds === undefined) delete process.env.ORKESTR_WHATSAPP_ACCOUNT_IDS;
+    else process.env.ORKESTR_WHATSAPP_ACCOUNT_IDS = priorAccountIds;
+    if (priorConfirmation === undefined) delete process.env.ORKESTR_WHATSAPP_SEND_CONFIRMATION_REQUIRED;
+    else process.env.ORKESTR_WHATSAPP_SEND_CONFIRMATION_REQUIRED = priorConfirmation;
+  }
+});
+
 test("whatsapp bridge injection can enter through responder while routing as sender", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-bridge-inject-responder-route-sender-"));
   const priorHome = process.env.ORKESTR_HOME;
@@ -7818,7 +7896,7 @@ test("whatsapp delivery sends allowed local paths as media attachments and does 
   assert.equal(storedReply.attachments[0].filename, "report.txt");
 });
 
-test("whatsapp tenant relay sends local report links as text instead of parent bridge media paths", async () => {
+test("whatsapp tenant relay sends local report links as inline bridge media instead of parent bridge paths", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-tenant-relay-attachment-"));
   const env = await externalBridgeEnvWithAllowingSanitizer(home, {
     WHATSAPP_BRIDGE_MODE: "relay",
@@ -7862,8 +7940,14 @@ test("whatsapp tenant relay sends local report links as text instead of parent b
 
   assert.equal(delivery.delivered.length, 1);
   assert.equal(delivery.failed.length, 0);
-  assert.equal(calls[0].url.pathname, "/send-text");
+  assert.equal(calls[0].url.pathname, "/send-media");
   assert.equal(calls[0].body.paths, undefined);
+  assert.equal(calls[0].body.attachments.length, 1);
+  assert.equal(calls[0].body.attachments[0].filename, "job-search-report.md");
+  assert.equal(calls[0].body.attachments[0].mimetype, "text/markdown");
+  assert.equal(calls[0].body.attachments[0].size, "report payload".length);
+  assert.equal(calls[0].body.attachments[0].sha256, crypto.createHash("sha256").update("report payload").digest("hex"));
+  assert.equal(Buffer.from(calls[0].body.attachments[0].data, "base64").toString("utf8"), "report payload");
   assert.match(stripDebugFooter(calls[0].body.text), /job-search-report\.md/);
 });
 

@@ -1,3 +1,6 @@
+import crypto from "node:crypto";
+import fs from "node:fs/promises";
+import path from "node:path";
 import { Body, Controller, Get, HttpCode, Param, Post, Query, Req, Res } from "@nestjs/common";
 import { getSetupStatus } from "../../../../../packages/core/src/setup.js";
 import { readRuntimeSettings } from "../../../../../packages/core/src/runtime-settings.js";
@@ -59,6 +62,7 @@ import {
 import { runWithRoutedWhatsAppTyping } from "../../../../../packages/connectors/src/whatsapp-router-typing.js";
 import { findWhatsAppAccountByAnyId } from "../../../../../packages/connectors/src/whatsapp-account-identity.js";
 import { writeConnectorConfig } from "../../../../../packages/storage/src/config.js";
+import { dataPaths } from "../../../../../packages/storage/src/paths.js";
 import { ensureAttachmentsArray, httpError } from "../../common/http.js";
 import { reportServerError } from "../../watcher-reporting.js";
 
@@ -112,6 +116,60 @@ function errorSafeCode(error: any, fallback = "request_failed"): string {
     if (value) return value;
   }
   return String(error?.message || fallback).trim() || fallback;
+}
+
+function bridgeInlineAttachmentMaxBytes(): number {
+  const value = Number(
+    process.env.ORKESTR_WHATSAPP_BRIDGE_INLINE_ATTACHMENT_MAX_BYTES ||
+      process.env.ORKESTR_WHATSAPP_INLINE_ATTACHMENT_MAX_BYTES ||
+      process.env.ORKESTR_REMOTE_ARTIFACT_MAX_BYTES ||
+      25 * 1024 * 1024,
+  );
+  return Number.isFinite(value) && value > 0 ? value : 25 * 1024 * 1024;
+}
+
+function safeBridgeInlineFilename(value: unknown, fallback = "attachment"): string {
+  return path.basename(String(value || fallback)).replace(/[^a-zA-Z0-9_. -]/g, "_").slice(0, 240) || fallback;
+}
+
+async function materializeBridgeInlineAttachments(body: Record<string, unknown>): Promise<Array<Record<string, unknown>>> {
+  const source = Array.isArray(body.attachments) ? body.attachments : [];
+  if (!source.length) return [];
+  const maxBytes = bridgeInlineAttachmentMaxBytes();
+  const paths = dataPaths(process.env);
+  const dir = path.join(paths.home, "whatsapp-bridge", "outbound-media", "bridge-inline", new Date().toISOString().slice(0, 10));
+  await fs.mkdir(dir, { recursive: true, mode: 0o700 });
+  const materialized: Array<Record<string, unknown>> = [];
+  for (const item of source) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const attachment = item as Record<string, unknown>;
+    const encoding = String(attachment.encoding || "base64").trim().toLowerCase();
+    const data = String(attachment.data || attachment.base64 || attachment.dataBase64 || "").trim();
+    if (!data) continue;
+    if (encoding !== "base64") throw httpError("attachment_encoding_not_supported", 400);
+    const buffer = Buffer.from(data, "base64");
+    if (!buffer.length) throw httpError("attachment_empty", 400);
+    if (buffer.length > maxBytes) throw httpError("attachment_too_large", 413);
+    const declaredSize = Number(attachment.size || 0) || 0;
+    if (declaredSize > 0 && declaredSize !== buffer.length) throw httpError("attachment_size_mismatch", 400);
+    const sha256 = crypto.createHash("sha256").update(buffer).digest("hex");
+    const declaredSha256 = String(attachment.sha256 || "").trim().toLowerCase();
+    if (declaredSha256 && declaredSha256 !== sha256) throw httpError("attachment_checksum_mismatch", 400);
+    const filename = safeBridgeInlineFilename(attachment.filename || attachment.name, "attachment");
+    const filePath = path.join(dir, `${sha256.slice(0, 16)}-${filename}`);
+    await fs.writeFile(filePath, buffer, { mode: 0o600 });
+    materialized.push({
+      path: filePath,
+      filename,
+      name: String(attachment.name || filename).trim() || filename,
+      mimetype: String(attachment.mimetype || attachment.type || "application/octet-stream").trim() || "application/octet-stream",
+      kind: String(attachment.kind || "file").trim() || "file",
+      size: buffer.length,
+      sha256,
+      source: "bridge_inline_attachment",
+    });
+  }
+  return materialized;
 }
 
 function scopedBridgeAccounts(accounts: any[] = [], context: any = null): any[] {
@@ -478,11 +536,15 @@ export class ConnectorsController {
     const paths = Array.isArray(body.paths)
       ? body.paths.map((value) => String(value || "").trim()).filter(Boolean)
       : [String(body.path || "").trim()].filter(Boolean);
+    const inlineAttachments = await materializeBridgeInlineAttachments(body);
     return sendWhatsAppText({
       chatId: String(body.to || body.chatId || ""),
       text: String(body.text || ""),
       accountId: String(body.accountId || ""),
-      attachments: paths.map((filePath) => ({ path: filePath })),
+      attachments: [
+        ...paths.map((filePath) => ({ path: filePath })),
+        ...inlineAttachments,
+      ],
       crossAccountEchoSuppression: body.crossAccountEchoSuppression !== false,
       routeSentMessage: body.routeSentMessage === true,
     });

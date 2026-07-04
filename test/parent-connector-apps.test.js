@@ -83,6 +83,23 @@ test("external WhatsApp bridge status hides parent bridge internals", async () =
   assert.doesNotMatch(serialized, /sessionRoot|orkestr-production|clientId|must-not-leak|bridge-secret/);
 });
 
+test("external WhatsApp bridge scoped send tokens are not reported as broken when health is forbidden", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-parent-wa-scoped-status-"));
+  const env = isolatedExternalWhatsAppEnv(home, {
+    WHATSAPP_BRIDGE_URL: "http://wa.local",
+    WHATSAPP_BRIDGE_TOKEN: "send-only-secret",
+  });
+  const status = await getWhatsAppStatus(env, async (url, options = {}) => {
+    assert.equal(String(options.headers?.authorization || ""), "Bearer send-only-secret");
+    assert.equal(String(url), "http://wa.local/health");
+    return response({ ok: false, error: "forbidden" }, false, 403);
+  });
+
+  assert.equal(status.state, "send_ready_scoped");
+  assert.match(status.summary, /scoped sending/i);
+  assert.equal(status.qrAvailable, false);
+});
+
 test("parent connector statuses do not expose secrets", () => {
   const status = parentConnectorAppStatus({
     provider: "gmail",

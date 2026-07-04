@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { enqueueAgentMessage } from "../../core/src/messages.js";
@@ -276,6 +277,70 @@ function externalBridgeCanReadLocalAttachmentPaths(config = {}, env = process.en
   if (["relay", "parent-forward", "control-plane-forward", "control-plane", "controlplane", "broker"].includes(mode)) return false;
   if (pickString(env.ORKESTR_TENANT_VM_ID, env.ORKESTR_TENANT_SLICE_ID, env.ORKESTR_DEMO_VM_ID)) return false;
   return true;
+}
+
+function externalBridgeInlineAttachmentMaxBytes(env = process.env) {
+  const value = Number(
+    env.ORKESTR_WHATSAPP_EXTERNAL_BRIDGE_INLINE_ATTACHMENT_MAX_BYTES ||
+      env.ORKESTR_WHATSAPP_INLINE_ATTACHMENT_MAX_BYTES ||
+      env.ORKESTR_REMOTE_ARTIFACT_MAX_BYTES ||
+      25 * 1024 * 1024,
+  );
+  return Number.isFinite(value) && value > 0 ? value : 25 * 1024 * 1024;
+}
+
+function safeBridgeAttachmentFilename(value = "", fallback = "attachment") {
+  return path.basename(String(value || fallback)).replace(/[^a-zA-Z0-9_. -]/g, "_").slice(0, 240) || fallback;
+}
+
+async function prepareExternalBridgeInlineAttachments(attachments = [], env = process.env) {
+  const maxBytes = externalBridgeInlineAttachmentMaxBytes(env);
+  const prepared = [];
+  const skipped = [];
+  for (const attachment of Array.isArray(attachments) ? attachments : []) {
+    const filePath = pickString(attachment.path, attachment.saved_path, attachment.filePath, attachment.localPath);
+    if (!filePath) continue;
+    const filename = safeBridgeAttachmentFilename(pickString(attachment.filename, attachment.name, path.basename(filePath)));
+    let stats = null;
+    try {
+      stats = await fs.stat(filePath);
+    } catch {
+      skipped.push({ path: filePath, filename, reason: "attachment_path_missing" });
+      continue;
+    }
+    if (!stats.isFile()) {
+      skipped.push({ path: filePath, filename, reason: "attachment_path_not_file" });
+      continue;
+    }
+    if (stats.size > maxBytes) {
+      skipped.push({ path: filePath, filename, reason: "attachment_too_large" });
+      continue;
+    }
+    const buffer = await fs.readFile(filePath).catch(() => null);
+    if (!buffer) {
+      skipped.push({ path: filePath, filename, reason: "attachment_read_failed" });
+      continue;
+    }
+    if (!buffer.length) {
+      skipped.push({ path: filePath, filename, reason: "attachment_empty" });
+      continue;
+    }
+    if (buffer.length > maxBytes) {
+      skipped.push({ path: filePath, filename, reason: "attachment_too_large" });
+      continue;
+    }
+    prepared.push({
+      filename,
+      name: pickString(attachment.name, filename),
+      mimetype: pickString(attachment.mimetype, attachment.type, "application/octet-stream"),
+      kind: pickString(attachment.kind, "file"),
+      size: buffer.length,
+      sha256: crypto.createHash("sha256").update(buffer).digest("hex"),
+      encoding: "base64",
+      data: buffer.toString("base64"),
+    });
+  }
+  return { attachments: prepared, skipped };
 }
 
 function firstAccountError(accounts = []) {
@@ -602,6 +667,16 @@ export async function getWhatsAppStatus(env = process.env, fetchImpl = fetch) {
   try {
     const health = await fetchJson(whatsappBridgeEndpointUrl(bridgeUrl, "/health"), fetchImpl, { headers, env });
     if (!health.ok) {
+      if ([401, 403].includes(Number(health.status || 0)) && Object.keys(headers || {}).length) {
+        return {
+          state: "send_ready_scoped",
+          summary: "WhatsApp parent bridge is configured for scoped sending; status is not readable with this token.",
+          bridgeUrl,
+          health: publicExternalBridgeHealth(health.payload),
+          accounts: [],
+          qrAvailable: false,
+        };
+      }
       return {
         state: "failed",
         summary: `WhatsApp bridge returned HTTP ${health.status}.`,
@@ -4259,17 +4334,25 @@ export async function sendWhatsAppText({ chatId = "", text = "", accountId = "",
     return sendLocalWhatsAppMessage({ chatId, text, accountId, attachments: normalizedAttachments, env, crossAccountEchoSuppression, routeSentMessage });
   }
   if (!bridgeUrl) throw badRequest("whatsapp_bridge_not_configured");
-  const sendableAttachments = externalBridgeCanReadLocalAttachmentPaths(resolvedConfig, env) ? normalizedAttachments : [];
+  const externalBridgeCanReadPaths = externalBridgeCanReadLocalAttachmentPaths(resolvedConfig, env);
+  const inlineAttachments = externalBridgeCanReadPaths
+    ? { attachments: [], skipped: [] }
+    : await prepareExternalBridgeInlineAttachments(normalizedAttachments, env);
+  const sendablePathAttachments = externalBridgeCanReadPaths ? normalizedAttachments : [];
+  const sendableInlineAttachments = inlineAttachments.attachments;
+  const outboundText = appendLocalAttachmentFailureNotes(text, inlineAttachments.skipped);
   const headers = bridgeRequestHeaders(resolvedConfig, env, { "content-type": "application/json" });
   const runtimeAccountId = await resolveBridgeRuntimeAccountId(accountId, { config: resolvedConfig, env, fetchImpl });
-  const response = await fetchImpl(whatsappBridgeEndpointUrl(bridgeUrl, sendableAttachments.length ? "/send-media" : "/send-text"), {
+  const hasMedia = sendablePathAttachments.length || sendableInlineAttachments.length;
+  const response = await fetchImpl(whatsappBridgeEndpointUrl(bridgeUrl, hasMedia ? "/send-media" : "/send-text"), {
     method: "POST",
     headers,
     body: JSON.stringify({
       to: chatId,
-      text,
+      text: outboundText,
       ...(runtimeAccountId ? { accountId: runtimeAccountId } : {}),
-      ...(sendableAttachments.length ? { paths: sendableAttachments.map((attachment) => attachment.path) } : {}),
+      ...(sendablePathAttachments.length ? { paths: sendablePathAttachments.map((attachment) => attachment.path) } : {}),
+      ...(sendableInlineAttachments.length ? { attachments: sendableInlineAttachments } : {}),
       ...(crossAccountEchoSuppression === false ? { crossAccountEchoSuppression: false } : {}),
       ...(routeSentMessage === true ? { routeSentMessage: true } : {}),
     }),

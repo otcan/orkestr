@@ -295,7 +295,7 @@ export async function getConnectorStatuses({ env = process.env, home = os.homedi
       ? status("linkedin", "LinkedIn", "partial", "LinkedIn browser profile exists. Log in through the virtual browser.")
       : status("linkedin", "LinkedIn", "not_connected", "Prepare a LinkedIn virtual browser profile."),
     whatsapp:
-      whatsapp.state === "paired"
+      whatsapp.state === "paired" || whatsapp.state === "send_ready_scoped"
         ? status("whatsapp", "WhatsApp", "connected", whatsapp.summary, { ...whatsapp, parentConnector: parentWhatsApp })
         : whatsapp.state === "qr_needed" || whatsapp.state === "pairing_code" || whatsapp.state === "authenticating"
           ? status("whatsapp", "WhatsApp", "partial", whatsapp.summary, { ...whatsapp, parentConnector: parentWhatsApp })
