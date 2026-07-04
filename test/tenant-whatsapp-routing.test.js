@@ -172,6 +172,77 @@ test("local WhatsApp bridge forwards tenant-routed chats with the scoped tenant 
   assert.equal(calls[1].body.chatName, "Bob tenant WA");
 });
 
+test("local WhatsApp bridge uploads tenant-routed media before forwarding inbound JSON", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-tenant-wa-forward-media-"));
+  const env = { ORKESTR_HOME: home };
+  const parentAttachmentPath = path.join(home, "parent-report.txt");
+  await fs.writeFile(parentAttachmentPath, "tenant media payload", "utf8");
+  await createTenantVm({
+    id: "media-tenant",
+    ownerUserId: "media",
+    endpoint: { baseUrl: "https://media.example.test" },
+  }, env);
+  const configured = await configureTenantWhatsAppRoute("media-tenant", {
+    chatId: "wa-group-media@g.us",
+    chatName: "Media tenant WA",
+    accountId: "tenant-wa",
+  }, env);
+  const slicePath = "/opt/orkestr/data/whatsapp-bridge/inbound-media/broker/2026-07-04/report.txt";
+  const calls = [];
+
+  const forwarded = await forwardLocalWhatsAppInbound({
+    eventId: "tenant-wa-media-1",
+    chatId: "wa-group-media@g.us",
+    accountId: "tenant-wa",
+    from: "wa-contact-media@c.us",
+    text: "see attached",
+    attachments: [{ path: parentAttachmentPath, filename: "report.txt", mimetype: "text/plain", kind: "file" }],
+  }, env, async (url, options = {}) => {
+    const rawUrl = String(url);
+    if (rawUrl === "https://media.example.test/api/health") {
+      calls.push({ url: rawUrl });
+      return response({ ok: true }, true, 200);
+    }
+    if (rawUrl === "https://media.example.test/api/connectors/whatsapp/inbound-media") {
+      const metadata = JSON.parse(String(options.body.get("metadata") || "[]"));
+      const file = options.body.get("files");
+      calls.push({
+        url: rawUrl,
+        authorization: options.headers.authorization,
+        metadata,
+        fileText: Buffer.from(await file.arrayBuffer()).toString("utf8"),
+      });
+      return response({
+        ok: true,
+        attachments: [{
+          path: slicePath,
+          saved_path: slicePath,
+          filename: "report.txt",
+          mimetype: "text/plain",
+          size: "tenant media payload".length,
+          source: "broker_whatsapp_inbound_media_upload",
+        }],
+      }, true, 201);
+    }
+    calls.push({ url: rawUrl, authorization: options.headers.authorization, body: JSON.parse(options.body) });
+    return response({ ok: true, threadId: "tenant-thread", messageId: "tenant-message" }, true, 202);
+  });
+
+  assert.equal(forwarded.forwarded, true);
+  assert.deepEqual(calls.map((call) => call.url), [
+    "https://media.example.test/api/health",
+    "https://media.example.test/api/connectors/whatsapp/inbound-media",
+    "https://media.example.test/api/connectors/whatsapp/inbound",
+  ]);
+  assert.equal(calls[1].authorization, `Bearer ${configured.route.token}`);
+  assert.equal(calls[1].metadata[0].filename, "report.txt");
+  assert.equal(calls[1].fileText, "tenant media payload");
+  assert.equal(calls[2].authorization, `Bearer ${configured.route.token}`);
+  assert.equal(calls[2].body.attachmentsUploadedToTarget, true);
+  assert.equal(calls[2].body.attachments[0].path, slicePath);
+  assert.notEqual(calls[2].body.attachments[0].path, parentAttachmentPath);
+});
+
 test("local WhatsApp bridge suppresses duplicate tenant inbound forwards by source event", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-tenant-wa-forward-dupe-"));
   const env = { ORKESTR_HOME: home };

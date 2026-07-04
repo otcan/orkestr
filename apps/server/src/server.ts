@@ -163,7 +163,7 @@ function isPublicConnectorRoute(route: { method: string; connector: string; acti
   return route.method === "POST" &&
     route.connector === "whatsapp" &&
     route.action.length === 1 &&
-    route.action[0] === "inbound";
+    ["inbound", "inbound-media"].includes(route.action[0]);
 }
 
 function isUserConnectorRoute(route: { method: string; connector: string; action: string[] }) {

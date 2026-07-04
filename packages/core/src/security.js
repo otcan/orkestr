@@ -461,7 +461,7 @@ async function cliMachineTokens(env = process.env) {
 function isWhatsAppMachineRoute(request) {
   const method = String(request?.method || "GET").toUpperCase();
   const url = String(request?.originalUrl || request?.url || "").split("?")[0];
-  if (method === "POST" && url === "/api/connectors/whatsapp/inbound") {
+  if (method === "POST" && (url === "/api/connectors/whatsapp/inbound" || url === "/api/connectors/whatsapp/inbound-media")) {
     return { kind: "whatsapp_inbound", tokens: whatsappInboundTokens, requiredScopes: ["whatsapp:inbound"] };
   }
   if (url.startsWith("/api/connectors/whatsapp/bridge/")) {

@@ -446,6 +446,133 @@ function targetInboundFailureSetupUrl({ payload = {}, tenantRoute = null, chatId
   ).trim();
 }
 
+function attachmentLocalPath(attachment = {}) {
+  return String(
+    attachment?.path ||
+      attachment?.saved_path ||
+      attachment?.savedPath ||
+      attachment?.filePath ||
+      attachment?.localPath ||
+      "",
+  ).trim();
+}
+
+function inboundMediaForwardTarget(target = "") {
+  try {
+    const url = new URL(String(target || ""));
+    url.pathname = "/api/connectors/whatsapp/inbound-media";
+    url.search = "";
+    url.hash = "";
+    return String(url);
+  } catch {
+    return "";
+  }
+}
+
+function inboundMediaForwardMaxBytes(env = process.env) {
+  const parsed = Number(env.ORKESTR_WHATSAPP_INBOUND_MEDIA_FORWARD_MAX_BYTES || env.WHATSAPP_INBOUND_MEDIA_FORWARD_MAX_BYTES || 25 * 1024 * 1024);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 25 * 1024 * 1024;
+}
+
+function forwardedMediaFileName(attachment = {}, filePath = "", index = 0) {
+  return safeFilePart(
+    attachment.filename ||
+      attachment.name ||
+      (filePath ? path.basename(filePath) : "") ||
+      `attachment-${index + 1}.bin`,
+    `attachment-${index + 1}.bin`,
+  );
+}
+
+async function prepareInboundMediaForward({ input = {}, target = "", token = "", attachments = [], tenantRoute = null, env = process.env, fetchImpl = fetch } = {}) {
+  const items = Array.isArray(attachments) ? attachments : [];
+  if (!items.length) return { attachments: items, uploaded: 0 };
+  const uploadTarget = inboundMediaForwardTarget(target);
+  if (!uploadTarget) return { attachments: items, uploaded: 0, skipped: "upload_target_unavailable" };
+  if (typeof FormData !== "function" || typeof Blob !== "function") {
+    const error = new Error("whatsapp_inbound_media_upload_formdata_unavailable");
+    error.statusCode = 500;
+    throw error;
+  }
+  const maxBytes = inboundMediaForwardMaxBytes(env);
+  const slots = [];
+  const metadata = [];
+  const form = new FormData();
+  for (let index = 0; index < items.length; index += 1) {
+    const attachment = items[index] || {};
+    const localPath = attachmentLocalPath(attachment);
+    if (!localPath) continue;
+    const stat = await fs.stat(localPath).catch(() => null);
+    if (!stat?.isFile()) {
+      const error = new Error("whatsapp_inbound_media_source_missing");
+      error.statusCode = 502;
+      error.attachment = { index, path: localPath };
+      throw error;
+    }
+    if (stat.size > maxBytes) {
+      const error = new Error("whatsapp_inbound_media_source_too_large");
+      error.statusCode = 413;
+      error.attachment = { index, path: localPath, size: stat.size, maxBytes };
+      throw error;
+    }
+    const buffer = await fs.readFile(localPath);
+    const filename = forwardedMediaFileName(attachment, localPath, index);
+    const mimetype = String(attachment.mimetype || attachment.type || "application/octet-stream").trim() || "application/octet-stream";
+    form.append("files", new Blob([buffer], { type: mimetype }), filename);
+    metadata.push({
+      filename,
+      name: String(attachment.name || filename),
+      mimetype,
+      type: mimetype,
+      kind: String(attachment.kind || "file"),
+      size: buffer.length,
+      sourceEventId: String(input.eventId || input.id || input.messageId || ""),
+      chatId: String(input.chatId || input.chat?.id || input.fromChatId || ""),
+      accountId: String(input.accountId || ""),
+    });
+    slots.push(index);
+  }
+  if (!slots.length) return { attachments: items, uploaded: 0 };
+  form.append("metadata", JSON.stringify(metadata));
+  form.append("eventId", String(input.eventId || input.id || input.messageId || ""));
+  form.append("chatId", String(input.chatId || input.chat?.id || input.fromChatId || ""));
+  form.append("accountId", String(input.accountId || ""));
+  const response = await fetchImpl(uploadTarget, {
+    method: "POST",
+    headers: token ? { authorization: `Bearer ${token}` } : {},
+    body: form,
+    signal: AbortSignal.timeout(Number(env.WHATSAPP_INBOUND_FORWARD_TIMEOUT_MS || 60_000)),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok || payload?.ok === false) {
+    const error = new Error(payload?.error || payload?.message || `whatsapp_inbound_media_upload_http_${response.status}`);
+    error.statusCode = response.status || 502;
+    error.payload = payload;
+    throw error;
+  }
+  const uploaded = Array.isArray(payload.attachments) ? payload.attachments : [];
+  if (uploaded.length < slots.length) {
+    const error = new Error("whatsapp_inbound_media_upload_incomplete");
+    error.statusCode = 502;
+    error.payload = payload;
+    throw error;
+  }
+  let cursor = 0;
+  const replaced = items.map((attachment, index) => {
+    if (!slots.includes(index)) return attachment;
+    return uploaded[cursor++] || attachment;
+  });
+  await appendEvent({
+    type: "whatsapp_local_inbound_media_uploaded_to_target",
+    chatId: String(input.chatId || input.chat?.id || input.fromChatId || ""),
+    eventId: String(input.eventId || input.id || input.messageId || ""),
+    tenantVmId: tenantRoute?.tenantVmId || null,
+    target: uploadTarget,
+    count: uploaded.length,
+  }, env).catch(() => {});
+  return { attachments: replaced, uploaded: uploaded.length, target: uploadTarget };
+}
+
 function canonicalLocalWhatsAppEventId(value = "") {
   return String(value || "").trim().replace(/^(?:true|false)_/, "");
 }
@@ -652,9 +779,28 @@ export async function forwardLocalWhatsAppInbound(input = {}, env = process.env,
         localWhatsAppInboundForwardToken({ chatId }, env)
       );
     if (token) headers.authorization = `Bearer ${token}`;
-    const body = deliveryTenantRoute?.chatName && !input.displayName && !input.chatName
+    let body = deliveryTenantRoute?.chatName && !input.displayName && !input.chatName
       ? { ...input, displayName: deliveryTenantRoute.chatName, chatName: deliveryTenantRoute.chatName }
       : input;
+    const forwardedMedia = targetSource === "security_approval_forward"
+      ? { attachments: Array.isArray(body.attachments) ? body.attachments : [], uploaded: 0 }
+      : await prepareInboundMediaForward({
+        input: body,
+        target,
+        token,
+        attachments: Array.isArray(body.attachments) ? body.attachments : [],
+        tenantRoute: deliveryTenantRoute,
+        env,
+        fetchImpl,
+      });
+    if (forwardedMedia.uploaded) {
+      body = {
+        ...body,
+        attachments: forwardedMedia.attachments,
+        attachmentsUploadedToTarget: true,
+        attachmentUploadTarget: forwardedMedia.target || "",
+      };
+    }
     const response = await fetchImpl(target, {
       method: "POST",
       headers,

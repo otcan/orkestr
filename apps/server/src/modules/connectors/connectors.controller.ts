@@ -1,7 +1,8 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { Body, Controller, Get, HttpCode, Param, Post, Query, Req, Res } from "@nestjs/common";
+import { Body, Controller, Get, HttpCode, Param, Post, Query, Req, Res, UploadedFiles, UseInterceptors } from "@nestjs/common";
+import { AnyFilesInterceptor } from "@nestjs/platform-express";
 import { getSetupStatus } from "../../../../../packages/core/src/setup.js";
 import { readRuntimeSettings } from "../../../../../packages/core/src/runtime-settings.js";
 import { runOverlayConnectorAction } from "../../../../../packages/connectors/src/connectors.js";
@@ -79,6 +80,25 @@ function bodyStringArray(body: Record<string, unknown>, key: string): string[] {
     result.push(text);
   }
   return result;
+}
+
+function safeInboundUploadName(name: unknown): string {
+  const base = path.basename(String(name || "attachment.bin")).replace(/[^a-zA-Z0-9_.-]/g, "_");
+  return base || "attachment.bin";
+}
+
+function parseInboundUploadMetadata(body: Record<string, unknown> = {}): Array<Record<string, unknown>> {
+  const value = body.metadata || body.attachments || body.filesMetadata;
+  if (Array.isArray(value)) return value.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object" && !Array.isArray(item)));
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(String(value));
+    return Array.isArray(parsed)
+      ? parsed.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object" && !Array.isArray(item)))
+      : [];
+  } catch {
+    return [];
+  }
 }
 
 function envStringArray(...keys: string[]): string[] {
@@ -652,6 +672,53 @@ export class ConnectorsController {
         .type("application/json; charset=utf-8")
         .send(payload);
     }
+  }
+
+  @Post("whatsapp/inbound-media")
+  @HttpCode(201)
+  @UseInterceptors(AnyFilesInterceptor({ limits: { fileSize: 25 * 1024 * 1024, files: 20 } }))
+  async whatsappInboundMedia(
+    @Req() request: any,
+    @Body() body: Record<string, unknown> = {},
+    @UploadedFiles() uploadedFiles: any[] = [],
+  ) {
+    if (!uploadedFiles.length) throw httpError("whatsapp_inbound_media_files_required", 400);
+    const metadata = parseInboundUploadMetadata(body);
+    const paths = dataPaths(process.env);
+    const date = new Date().toISOString().slice(0, 10);
+    const uploadDir = path.join(paths.home, "whatsapp-bridge", "inbound-media", "broker", date);
+    await fs.mkdir(uploadDir, { recursive: true, mode: 0o700 });
+    const attachments: Array<Record<string, unknown>> = [];
+    for (let index = 0; index < uploadedFiles.length; index += 1) {
+      const file = uploadedFiles[index] || {};
+      const meta = metadata[index] || {};
+      const buffer = Buffer.isBuffer(file.buffer) ? file.buffer : Buffer.alloc(0);
+      if (!buffer.length) throw httpError("whatsapp_inbound_media_empty", 400);
+      if (buffer.length > 25 * 1024 * 1024) throw httpError("whatsapp_inbound_media_too_large", 413);
+      const name = safeInboundUploadName(file.originalname || meta.filename || meta.name);
+      const storedName = `${new Date().toISOString().replace(/[:.]/g, "-")}-${crypto.randomUUID().slice(0, 8)}-${name}`;
+      const savedPath = path.join(uploadDir, storedName);
+      await fs.writeFile(savedPath, buffer, { mode: 0o600 });
+      attachments.push({
+        name,
+        filename: name,
+        mimetype: String(file.mimetype || meta.mimetype || meta.type || "application/octet-stream"),
+        kind: String(meta.kind || "file"),
+        size: buffer.length,
+        path: savedPath,
+        saved_path: savedPath,
+        source: "broker_whatsapp_inbound_media_upload",
+        sourceEventId: String(body.eventId || meta.sourceEventId || ""),
+        chatId: String(body.chatId || meta.chatId || ""),
+        accountId: String(body.accountId || meta.accountId || ""),
+        uploadedAt: new Date().toISOString(),
+      });
+    }
+    return {
+      ok: true,
+      machineAuth: request.orkestrMachineAuth || null,
+      attachments,
+    };
   }
 
   @Post("whatsapp/deliver")
