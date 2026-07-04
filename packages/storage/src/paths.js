@@ -31,6 +31,7 @@ export function dataPaths(env = process.env) {
     workspaces: path.join(home, "workspaces"),
     timers: path.join(home, "timers.json"),
     jobsQueue: env.ORKESTR_JOBS_QUEUE_FILE || path.join(home, "jobs-queue.json"),
+    jobsJdCacheAccess: env.ORKESTR_JOBS_JD_CACHE_ACCESS_FILE || path.join(home, "jobs-jd-cache-access.json"),
     connectorOutbox: path.join(home, "connector-outbox.json"),
     connectorOutboxDb: env.ORKESTR_CONNECTOR_OUTBOX_DB || path.join(home, "connector-outbox.sqlite"),
     connectorPromptPushes: path.join(home, "connector-prompt-pushes.json"),

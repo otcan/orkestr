@@ -7,6 +7,7 @@ import { authorizeDesktopShareHttpRequest } from "./desktop-shares.js";
 import { adminPrincipal, principalFromSecuritySession } from "./principal.js";
 import { publicUrlConfig } from "./public-url-config.js";
 import { defaultAdminUser, getUser, normalizeUserId } from "./users.js";
+import { readJobsJdCacheAccessRecords } from "./jobs-jd-cache-mcp.js";
 import { readWhatsAppScopedTokenRecords } from "./whatsapp-scoped-tokens.js";
 
 const execFileAsync = promisify(execFile);
@@ -14,6 +15,7 @@ const cookieName = "orkestr_session";
 const challengeTtlMs = 10 * 60 * 1000;
 const challengeAuditTtlMs = 24 * 60 * 60 * 1000;
 const sessionTtlMs = 90 * 24 * 60 * 60 * 1000;
+const defaultJobsJdCacheSources = ["gmail", "freelance_de", "9am"];
 const commandStatusCache = new Map();
 
 function nowIso() {
@@ -423,12 +425,39 @@ function configuredInboundTokenContext(env = process.env, route = {}) {
   };
 }
 
+async function scopedJobsJdCacheTokens(env = process.env) {
+  return [
+    ...parseJsonTokens(env.ORKESTR_JOBS_JD_CACHE_SCOPED_TOKENS_JSON, { scopes: ["jd:read", "jd:search"] }),
+    ...parseJsonTokens(env.JOBS_JD_CACHE_SCOPED_TOKENS_JSON, { scopes: ["jd:read", "jd:search"] }),
+    ...(await readJobsJdCacheAccessRecords(env).catch(() => [])).map((grant) => ({
+      id: grant.tokenId || grant.id,
+      tokenHash: grant.tokenHash,
+      scopes: grant.scopes,
+      principalKind: "tenant_vm",
+      principalId: grant.tenantVmId || grant.id,
+      ownerUserId: grant.ownerUserId || "",
+      instanceId: grant.tenantVmId || grant.id,
+      disabled: grant.enabled === false,
+      grant,
+    })),
+  ];
+}
+
 function whatsappInboundTokens(env = process.env) {
   return [
     ...splitSecretList(env.ORKESTR_WHATSAPP_INBOUND_TOKEN),
     ...splitSecretList(env.WHATSAPP_INBOUND_TOKEN),
     ...splitSecretList(env.ORKESTR_WHATSAPP_INBOUND_TOKENS),
     ...splitSecretList(env.WHATSAPP_INBOUND_TOKENS),
+  ];
+}
+
+function jobsJdCacheTokens(env = process.env) {
+  return [
+    ...splitSecretList(env.ORKESTR_JOBS_JD_CACHE_TOKEN),
+    ...splitSecretList(env.JOBS_JD_CACHE_TOKEN),
+    ...splitSecretList(env.ORKESTR_JOBS_JD_CACHE_TOKENS),
+    ...splitSecretList(env.JOBS_JD_CACHE_TOKENS),
   ];
 }
 
@@ -470,6 +499,18 @@ function isWhatsAppMachineRoute(request) {
   return null;
 }
 
+function isJobsJdCacheMachineRoute(request) {
+  const method = String(request?.method || "GET").toUpperCase();
+  const url = String(request?.originalUrl || request?.url || "").split("?")[0];
+  if (method === "POST" && url === "/api/jobs/jd-cache/mcp") {
+    return { kind: "jobs_jd_cache", tokens: jobsJdCacheTokens, requiredScopes: ["jd:read", "jd:search"] };
+  }
+  if (method === "GET" && url === "/api/jobs/jd-cache/mcp/health") {
+    return { kind: "jobs_jd_cache", tokens: jobsJdCacheTokens, requiredScopes: ["jd:read"] };
+  }
+  return null;
+}
+
 function whatsappMachineAuthFailure(route, reason, statusCode) {
   const error = reason === "scope_denied" ? "wa_token_scope_denied" : `${route.kind}_token_${reason}`;
   const safeMessage = reason === "unconfigured"
@@ -488,6 +529,32 @@ function whatsappMachineAuthFailure(route, reason, statusCode) {
       code: error,
       capability: "whatsapp",
       provider: "whatsapp",
+      userFacingCategory: "connector",
+      retryable: reason === "unconfigured",
+      safeMessage,
+      reason: error,
+    },
+  };
+}
+
+function jobsJdCacheMachineAuthFailure(route, reason, statusCode) {
+  const error = reason === "scope_denied" ? "jobs_jd_cache_token_scope_denied" : `jobs_jd_cache_token_${reason}`;
+  const safeMessage = reason === "unconfigured"
+    ? "The parent Jobs JD cache has no slice access token configured."
+    : reason === "required"
+      ? "The request did not include a Jobs JD cache token."
+      : reason === "scope_denied"
+        ? "The Jobs JD cache token does not allow the requested operation."
+        : "The parent Jobs JD cache rejected the token.";
+  return {
+    ok: false,
+    statusCode,
+    error,
+    machineAuth: route.kind,
+    routingFailure: {
+      code: error,
+      capability: "jobs_jd_cache",
+      provider: "jobs_xrm",
       userFacingCategory: "connector",
       retryable: reason === "unconfigured",
       safeMessage,
@@ -541,6 +608,80 @@ async function authorizeWhatsAppMachineRequest(request, env = process.env) {
     principal: adminPrincipal(defaultAdminUser(env)),
     machineAuth: route.kind,
     ...(configuredContext ? { machineAuthContext: configuredContext } : {}),
+  };
+}
+
+function tokenAllowsJobsJdCacheScope(record, route) {
+  const scopes = splitScopeList(record?.scopes || []);
+  if (!scopes.length) return false;
+  if (scopes.includes("*") || scopes.includes("jd:*")) return true;
+  return (route.requiredScopes || []).some((scope) => scopes.includes(scope));
+}
+
+function publicJobsJdCacheTokenContext(record, route) {
+  const base = publicMachineTokenContext(record, route);
+  return {
+    ...base,
+    grant: record.grant ? {
+      id: record.grant.id || "",
+      tenantVmId: record.grant.tenantVmId || "",
+      displayName: record.grant.displayName || "",
+      ownerUserId: record.grant.ownerUserId || "",
+      tokenId: record.grant.tokenId || record.id || "",
+      scopes: splitScopeList(record.grant.scopes || record.scopes || []),
+      sources: Array.isArray(record.grant.sources) ? record.grant.sources : [],
+      maxResults: Number(record.grant.maxResults || 0) || undefined,
+      enabled: record.grant.enabled !== false,
+    } : null,
+  };
+}
+
+async function authorizeJobsJdCacheMachineRequest(request, env = process.env) {
+  const route = isJobsJdCacheMachineRoute(request);
+  if (!route) return null;
+  const token = bearerToken(request?.headers?.authorization || request?.headers?.Authorization || "");
+  const tokens = route.tokens(env);
+  const scopedTokens = await scopedJobsJdCacheTokens(env);
+  if (!tokens.length && !scopedTokens.length) return jobsJdCacheMachineAuthFailure(route, "unconfigured", 503);
+  if (!token) return jobsJdCacheMachineAuthFailure(route, "required", 401);
+  const scopedMatch = scopedTokens.find((candidate) => scopedTokenMatches(candidate, token));
+  if (scopedMatch) {
+    if (scopedMatch.disabled || scopedTokenExpired(scopedMatch)) return jobsJdCacheMachineAuthFailure(route, "invalid", 401);
+    if (!tokenAllowsJobsJdCacheScope(scopedMatch, route)) return jobsJdCacheMachineAuthFailure(route, "scope_denied", 403);
+    const principal = adminPrincipal(defaultAdminUser(env));
+    principal.source = "jobs-jd-cache-machine-token";
+    principal.machine = publicJobsJdCacheTokenContext(scopedMatch, route);
+    return {
+      ok: true,
+      principal,
+      machineAuth: route.kind,
+      machineAuthContext: publicJobsJdCacheTokenContext(scopedMatch, route),
+    };
+  }
+  const matched = tokens.some((candidate) => timingSafeSecretEqual(token, candidate));
+  if (!matched) return jobsJdCacheMachineAuthFailure(route, "invalid", 401);
+  return {
+    ok: true,
+    principal: adminPrincipal(defaultAdminUser(env)),
+    machineAuth: route.kind,
+    machineAuthContext: {
+      tokenId: "configured-jobs-jd-cache-token",
+      routeKind: route.kind,
+      scopes: route.requiredScopes || ["jd:read", "jd:search"],
+      principalKind: "external_instance",
+      principalId: String(env.ORKESTR_JOBS_JD_CACHE_PRINCIPAL_ID || env.JOBS_JD_CACHE_PRINCIPAL_ID || "configured-jobs-jd-cache-token").trim(),
+      ownerUserId: null,
+      instanceId: String(env.ORKESTR_JOBS_JD_CACHE_INSTANCE_ID || env.JOBS_JD_CACHE_INSTANCE_ID || "").trim() || null,
+      grant: {
+        id: "configured-jobs-jd-cache-token",
+        tenantVmId: String(env.ORKESTR_JOBS_JD_CACHE_INSTANCE_ID || env.JOBS_JD_CACHE_INSTANCE_ID || "").trim(),
+        tokenId: "configured-jobs-jd-cache-token",
+        scopes: route.requiredScopes || ["jd:read", "jd:search"],
+        sources: splitStringList(env.ORKESTR_JOBS_JD_CACHE_ALLOWED_SOURCES || env.JOBS_JD_CACHE_ALLOWED_SOURCES || defaultJobsJdCacheSources.join(",")),
+        maxResults: Number(env.ORKESTR_JOBS_JD_CACHE_MAX_RESULTS || env.JOBS_JD_CACHE_MAX_RESULTS || 100) || 100,
+        enabled: true,
+      },
+    },
   };
 }
 
@@ -941,6 +1082,15 @@ export async function authorizeHttpRequest(request, env = process.env) {
     machineAuthContext: whatsappInboundAuth.machineAuthContext || null,
   };
   if (whatsappInboundAuth && status.authEnabled) return { ...whatsappInboundAuth, status };
+  const jobsJdCacheAuth = await authorizeJobsJdCacheMachineRequest(request, env);
+  if (jobsJdCacheAuth?.ok) return {
+    ok: true,
+    status,
+    principal: jobsJdCacheAuth.principal,
+    machineAuth: jobsJdCacheAuth.machineAuth,
+    machineAuthContext: jobsJdCacheAuth.machineAuthContext || null,
+  };
+  if (jobsJdCacheAuth && status.authEnabled) return { ...jobsJdCacheAuth, status };
   if (!status.authEnabled) return { ok: true, status, principal: adminPrincipal(defaultAdminUser(env)) };
   const token = cookieValue(request?.headers?.cookie || "");
   const session = await securitySessionForToken(token, env, { request });

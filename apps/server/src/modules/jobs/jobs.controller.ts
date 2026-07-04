@@ -5,6 +5,7 @@ import {
   presentQueuedJobs,
   updateJobCandidateStateForPrincipal,
 } from "../../../../../packages/core/src/jobs-queue.js";
+import { handleJobsJdCacheMcpRequest as handleJobsJdCacheMcp } from "../../../../../packages/core/src/jobs-jd-cache-mcp.js";
 import { runGmailJobsPollForPrincipal } from "../../../../../packages/connectors/src/gmail-jobs-queue.js";
 import { requestPrincipal } from "../../../../../packages/core/src/principal.js";
 
@@ -13,6 +14,23 @@ export class JobsController {
   @Get("queue")
   async queue(@Req() request: any) {
     return listJobQueueForPrincipal(requestPrincipal(request));
+  }
+
+  @Get("jd-cache/mcp/health")
+  async jdCacheMcpHealth(@Req() request: any) {
+    const context = request.orkestrMachineAuthContext || {};
+    return {
+      ok: true,
+      service: "jobs-jd-cache-mcp",
+      machineAuth: request.orkestrMachineAuth || null,
+      grant: context.grant || null,
+    };
+  }
+
+  @Post("jd-cache/mcp")
+  @HttpCode(200)
+  async jdCacheMcp(@Req() request: any, @Body() body: Record<string, unknown> = {}) {
+    return handleJobsJdCacheMcp(body, request.orkestrMachineAuthContext || {}, process.env);
   }
 
   @Post("run")
