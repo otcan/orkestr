@@ -201,7 +201,57 @@ function localWhatsAppInboundForwardSetupUrl({ chatId = "" } = {}, env = process
 
 function localWhatsAppSecurityApprovalForwardTarget({ chatId = "" } = {}, env = process.env) {
   const targets = readJsonEnvMap(env.ORKESTR_WHATSAPP_SECURITY_APPROVAL_FORWARD_MAP_JSON || env.WHATSAPP_SECURITY_APPROVAL_FORWARD_MAP_JSON);
-  return String(targets[String(chatId || "").trim()] || env.ORKESTR_WHATSAPP_SECURITY_APPROVAL_FORWARD_URL || env.WHATSAPP_SECURITY_APPROVAL_FORWARD_URL || "").trim();
+  return normalizeLocalSecurityApprovalForwardTarget(
+    targets[String(chatId || "").trim()] ||
+      env.ORKESTR_WHATSAPP_SECURITY_APPROVAL_FORWARD_URL ||
+      env.WHATSAPP_SECURITY_APPROVAL_FORWARD_URL ||
+      "",
+    env,
+  );
+}
+
+function loopbackHostForSelfFetch(host = "") {
+  const value = String(host || "").trim().toLowerCase();
+  if (!value || ["0.0.0.0", "::", "[::]", "*"].includes(value)) return "127.0.0.1";
+  if (value === "localhost" || value === "127.0.0.1" || value === "::1" || value === "[::1]") return "127.0.0.1";
+  return value;
+}
+
+function localOrkestrInboundUrl(env = process.env) {
+  const configured = String(env.ORKESTR_LOCAL_API_BASE || env.ORKESTR_API_BASE || "").trim();
+  if (configured) {
+    try {
+      return String(new URL("/api/connectors/whatsapp/inbound", `${configured.replace(/\/+$/g, "")}/`));
+    } catch {
+      // Fall through to host/port derivation.
+    }
+  }
+  const host = loopbackHostForSelfFetch(env.ORKESTR_HOST || "127.0.0.1");
+  const port = String(env.ORKESTR_PORT || env.PORT || "19812").trim() || "19812";
+  return `http://${host}:${port}/api/connectors/whatsapp/inbound`;
+}
+
+function localSelfForwardHost(host = "") {
+  const value = String(host || "").trim().toLowerCase().replace(/^\[|\]$/g, "");
+  return ["127.0.0.1", "localhost", "::1", "0.0.0.0", "::", ""].includes(value);
+}
+
+function normalizeLocalSecurityApprovalForwardTarget(target = "", env = process.env) {
+  const raw = String(target || "").trim();
+  if (!raw) return "";
+  try {
+    const parsed = new URL(raw);
+    if (!localSelfForwardHost(parsed.hostname)) return raw;
+    if (parsed.pathname.replace(/\/+$/g, "") !== "/api/connectors/whatsapp/inbound") return raw;
+    const current = new URL(localOrkestrInboundUrl(env));
+    if (!localSelfForwardHost(current.hostname)) return raw;
+    if (parsed.protocol !== current.protocol || parsed.hostname !== current.hostname || parsed.port !== current.port) {
+      return String(current);
+    }
+  } catch {
+    return raw;
+  }
+  return raw;
 }
 
 function localWhatsAppSecurityApprovalForwardToken({ chatId = "" } = {}, env = process.env) {

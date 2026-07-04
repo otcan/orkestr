@@ -834,6 +834,42 @@ test("local whatsapp approval commands can forward to a security approval target
   assert.equal(calls[0].body.text, "orkestr connect approve ZFZBRW");
 });
 
+test("local whatsapp security approval forward self-target follows active orkestr port", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-forward-approval-self-port-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_PORT: "18912",
+    ORKESTR_HOST: "127.0.0.1",
+    ORKESTR_WHATSAPP_SECURITY_APPROVAL_FORWARD_URL: "http://127.0.0.1:19812/api/connectors/whatsapp/inbound",
+    ORKESTR_WHATSAPP_SECURITY_APPROVAL_FORWARD_TOKEN_CHAT_ID: "491700000000@c.us",
+    ORKESTR_WHATSAPP_INBOUND_FORWARD_TOKEN_MAP_JSON: JSON.stringify({
+      "491700000000@c.us": "forward-secret",
+    }),
+  };
+  const calls = [];
+
+  const forwarded = await forwardLocalWhatsAppInbound({
+    eventId: "event-approval-forward-active-port",
+    chatId: "group-main@g.us",
+    from: "491700000000@c.us",
+    accountId: "sender",
+    text: "orkestr connect approve ZFZBRW",
+  }, env, async (url, options) => {
+    calls.push({ url: String(url), options, body: JSON.parse(options.body) });
+    return response({
+      ok: true,
+      approvedSecurityChallenge: true,
+      challenge: { id: "challenge-public", status: "approved" },
+    }, true, 202);
+  });
+
+  assert.equal(forwarded.forwarded, true);
+  assert.equal(forwarded.targetSource, "security_approval_forward");
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, "http://127.0.0.1:18912/api/connectors/whatsapp/inbound");
+  assert.equal(calls[0].options.headers.authorization, "Bearer forward-secret");
+});
+
 test("local whatsapp approval commands prefer security approval target over managed tenant route", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-forward-approval-managed-route-"));
   const chatId = "wa-group-managed-approval@g.us";
