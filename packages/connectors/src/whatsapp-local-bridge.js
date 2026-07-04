@@ -2425,6 +2425,27 @@ export function localWhatsAppUnreadRecoveryBoundChats(threads = [], accountId = 
   return [...byChatId.values()];
 }
 
+async function localWhatsAppUnreadRecoveryTenantRouteChats(accountId = "", env = process.env) {
+  const selectedAccountId = normalizeAccountId(accountId, env);
+  const routes = await listTenantWhatsAppRoutes(env).catch(() => []);
+  const chats = [];
+  for (const route of Array.isArray(routes) ? routes : []) {
+    if (route?.enabled !== true || route?.forwardingReady !== true) continue;
+    const chatId = String(route.chatId || "").trim();
+    if (!chatId) continue;
+    const routeAccountId = String(route.accountId || "").trim();
+    if (routeAccountId && !localAccountMatches(routeAccountId, selectedAccountId, env)) continue;
+    chats.push({
+      chatId,
+      threadId: "",
+      accountId: selectedAccountId,
+      source: "tenant_whatsapp_route",
+      tenantVmId: String(route.tenantVmId || "").trim(),
+    });
+  }
+  return chats;
+}
+
 function optionMapLookup(collection, key) {
   if (!collection) return undefined;
   if (collection instanceof Map) return collection.get(key);
@@ -2447,7 +2468,11 @@ async function recoverUnreadLocalWhatsAppMessagesOnce(env = process.env, options
     const normalized = normalizeAccountId(accountId, env);
     const state = optionMapLookup(options.accountStates, normalized) || accountStates.get(normalized) || defaultAccountState(normalized);
     const client = optionMapLookup(options.clients, normalized) || optionMapLookup(options.runtimes, normalized)?.client || runtimes.get(normalized)?.client;
-    const boundChats = localWhatsAppUnreadRecoveryBoundChats(threads, normalized, env);
+    const boundChatMap = new Map(localWhatsAppUnreadRecoveryBoundChats(threads, normalized, env).map((chat) => [chat.chatId, chat]));
+    for (const chat of await localWhatsAppUnreadRecoveryTenantRouteChats(normalized, env)) {
+      if (!boundChatMap.has(chat.chatId)) boundChatMap.set(chat.chatId, chat);
+    }
+    const boundChats = [...boundChatMap.values()];
     checked.push({ accountId: normalized, boundChats: boundChats.length, ready: Boolean(client && state.ready) });
     if (!boundChats.length) continue;
     if (!client || !state.ready) {

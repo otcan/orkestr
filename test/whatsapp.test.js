@@ -2387,6 +2387,83 @@ test("local whatsapp recent recovery forwards missed messages for mapped externa
   }
 });
 
+test("local whatsapp recent recovery scans managed tenant route chats", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-tenant-forward-recovery-"));
+  const chatId = "wa-tenant-forward@g.us";
+  const nowSeconds = 1_780_000_000;
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "sender",
+    ORKESTR_WHATSAPP_RECENT_RECOVERY_MAX_AGE_MS: "600000",
+  };
+  await createTenantVm({
+    id: "tenant-recovery-wa",
+    ownerUserId: "firat",
+    endpoint: { baseUrl: "https://tenant-recovery.example.test" },
+    connectors: { whatsappChatName: "Firat Jobs", whatsappAccountId: "sender" },
+  }, env);
+  await configureTenantWhatsAppRoute("tenant-recovery-wa", {
+    chatId,
+    accountId: "sender",
+    enabled: true,
+  }, env);
+  const message = {
+    id: { _serialized: `false_${chatId}_missed-tenant_wa-contact-one@c.us`, remote: chatId },
+    fromMe: false,
+    from: chatId,
+    author: "wa-contact-one@c.us",
+    body: "missed tenant hello",
+    timestamp: nowSeconds,
+  };
+  const chat = {
+    id: { _serialized: chatId },
+    unreadCount: 0,
+    async fetchMessages() {
+      return [message];
+    },
+    async sendSeen() {
+      throw new Error("recent recovery should not mark managed tenant seen messages");
+    },
+  };
+  const client = {
+    async getChats() {
+      return [chat];
+    },
+  };
+  const calls = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url, options) => {
+    if (String(url).includes("/api/health")) return response({ ok: true }, true, 200);
+    calls.push({ url: String(url), options, body: JSON.parse(options.body) });
+    return response({ ok: true, threadId: "firat-jobs", messageId: "tenant-message" }, true, 202);
+  };
+
+  try {
+    const result = await recoverUnreadLocalWhatsAppMessages(env, {
+      force: true,
+      accountIds: ["sender"],
+      clients: new Map([["sender", client]]),
+      accountStates: new Map([["sender", { state: "ready", ready: true }]]),
+      threads: [],
+      limit: 20,
+      nowMs: nowSeconds * 1000 + 60_000,
+    });
+
+    assert.equal(result.routed, 1);
+    assert.equal(result.recovered.length, 1);
+    assert.equal(result.recovered[0].chatId, chatId);
+    assert.equal(result.recovered[0].recoveryMode, "recent");
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].url, "https://tenant-recovery.example.test/api/connectors/whatsapp/inbound");
+    assert.equal(calls[0].body.chatId, chatId);
+    assert.equal(calls[0].body.text, "missed tenant hello");
+    assert.equal(calls[0].body.eventId, `false_${chatId}_missed-tenant_wa-contact-one@c.us`);
+  } finally {
+    globalThis.fetch = originalFetch;
+    await resetLocalWhatsAppBridgeForTest(env);
+  }
+});
+
 test("local whatsapp recent recovery routes missed seen messages in bound chats", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-recent-recovery-"));
   const env = {
