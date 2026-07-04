@@ -167,7 +167,7 @@ test("tenant slice provisioning builds a VM-backed plan", async () => {
   assert.equal(plan.runtimeEnv.ORKESTR_SHARED_CONTROL_PLANE, "1");
   assert.equal(plan.runtimeEnv.ORKESTR_AUTH_URL, "https://auth.example.test");
   assert.equal(plan.runtimeEnv.ORKESTR_PAIRING_URL, "https://connect.example.test/setup/pairing");
-  assert.equal(plan.runtimeEnv.ORKESTR_PUBLIC_URL, "https://connect.example.test");
+  assert.equal(plan.runtimeEnv.ORKESTR_PUBLIC_URL, "https://connect.example.test/i/broker-bob-001/app");
   assert.equal(plan.runtimeEnv.ORKESTR_CONNECT_PUBLIC_BASE_URL, "https://connect.example.test");
   assert.equal(plan.runtimeEnv.ORKESTR_CONNECT_PUBLIC_SETUP_URL, "https://connect.example.test/i/broker-bob-001/setup");
   assert.equal(plan.runtimeEnv.ORKESTR_BROKER_INSTANCE_ID, "broker-bob-001");

@@ -155,6 +155,7 @@ test("whereAmI exposes public tenant setup URL without wildcard bind API base", 
 
   assert.equal(payload.apiBase, "http://127.0.0.1:21050");
   assert.equal(payload.publicUrls.setupUrl, "https://connect.example.test/i/broker-firat-001/setup");
+  assert.equal(payload.publicUrls.appUrl, "https://connect.example.test/i/broker-firat-001/app");
   assert.equal(payload.publicUrls.connectBaseUrl, "https://connect.example.test");
   assert.doesNotMatch(JSON.stringify(payload.publicUrls), /0\.0\.0\.0|127\.0\.0\.1|localhost|10\./);
 });

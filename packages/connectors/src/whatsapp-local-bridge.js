@@ -8,7 +8,7 @@ import { listTenantWhatsAppRoutes, tenantWhatsAppInboundForwardRoute } from "../
 import { attachRoutingFailure, normalizeRoutingFailure, routingFailureFromError } from "../../core/src/routing-failures.js";
 import { recordRouterTraceEvent, routerTraceIdFor, turnIdFor } from "../../core/src/router-traces.js";
 import { rawSecurityApproveChallengeId } from "../../core/src/raw-terminal-commands.js";
-import { tenantPublicSetupUrl } from "../../core/src/tenant-public-urls.js";
+import { publicHttpUrl, tenantPublicSetupUrl } from "../../core/src/tenant-public-urls.js";
 import { getThread, listThreads } from "../../core/src/threads.js";
 import { setGeneratedLocalWhatsAppGroupPicture } from "./whatsapp-chat-picture.js";
 import {
@@ -475,6 +475,7 @@ export async function forwardLocalWhatsAppInbound(input = {}, env = process.env,
   const chatId = String(input.chatId || input.chat?.id || input.fromChatId || "").trim();
   const trace = inboundForwardTraceContext(input, chatId);
   let tenantRoute = null;
+  let deliveryTenantRoute = null;
   let target = "";
   let targetSource = "";
   let routeMode = "";
@@ -527,17 +528,18 @@ export async function forwardLocalWhatsAppInbound(input = {}, env = process.env,
       }
     }
     const approvalChallengeId = rawSecurityApproveChallengeId(input.text || input.body || input.message || "");
-    target = tenantRoute?.target || localWhatsAppInboundForwardTarget({ chatId }, env);
-    if (!target && approvalChallengeId) {
-      target = localWhatsAppSecurityApprovalForwardTarget({ chatId }, env);
-      if (target) {
-        targetSource = "security_approval_forward";
-        routeMode = "security_approval";
-      }
+    const approvalTarget = approvalChallengeId ? localWhatsAppSecurityApprovalForwardTarget({ chatId }, env) : "";
+    if (approvalTarget) {
+      target = approvalTarget;
+      targetSource = "security_approval_forward";
+      routeMode = "security_approval";
+    } else {
+      target = tenantRoute?.target || localWhatsAppInboundForwardTarget({ chatId }, env);
     }
     if (!target) return null;
     targetSource ||= tenantRoute ? (tenantRoute.targetSource || "tenant_route") : "legacy_env_forward_map";
     routeMode ||= tenantRoute?.routeMode || (tenantRoute ? "managed" : "legacy_env");
+    deliveryTenantRoute = targetSource === "security_approval_forward" ? null : tenantRoute;
     await appendEvent({
       type: "whatsapp_local_inbound_forward_route_resolved",
       chatId,
@@ -545,7 +547,7 @@ export async function forwardLocalWhatsAppInbound(input = {}, env = process.env,
       target,
       targetSource,
       routeMode,
-      tenantVmId: tenantRoute?.tenantVmId || null,
+      tenantVmId: deliveryTenantRoute?.tenantVmId || null,
     }, env).catch(() => {});
     await recordRouterTraceEvent({
       routerTraceId: trace.routerTraceId,
@@ -556,20 +558,20 @@ export async function forwardLocalWhatsAppInbound(input = {}, env = process.env,
       sourceEventId: trace.eventId,
       phase: "delivery_started",
       reason: "broker_forward",
-      ownerProcess: tenantRoute?.tenantVmId || targetSource,
+      ownerProcess: deliveryTenantRoute?.tenantVmId || targetSource,
     }, env).catch(() => null);
-    if (inboundForwardHealthGateEnabled({ tenantRoute }, env)) {
-      await assertInboundForwardTargetHealthy(target, tenantRoute, env, fetchImpl);
+    if (inboundForwardHealthGateEnabled({ tenantRoute: deliveryTenantRoute }, env)) {
+      await assertInboundForwardTargetHealthy(target, deliveryTenantRoute, env, fetchImpl);
     }
     const headers = { "content-type": "application/json" };
-    const token = tenantRoute?.token || (
-      targetSource === "security_approval_forward"
-        ? localWhatsAppSecurityApprovalForwardToken({ chatId }, env)
-        : localWhatsAppInboundForwardToken({ chatId }, env)
-    );
+    const token = targetSource === "security_approval_forward"
+      ? localWhatsAppSecurityApprovalForwardToken({ chatId }, env)
+      : deliveryTenantRoute?.token || (
+        localWhatsAppInboundForwardToken({ chatId }, env)
+      );
     if (token) headers.authorization = `Bearer ${token}`;
-    const body = tenantRoute?.chatName && !input.displayName && !input.chatName
-      ? { ...input, displayName: tenantRoute.chatName, chatName: tenantRoute.chatName }
+    const body = deliveryTenantRoute?.chatName && !input.displayName && !input.chatName
+      ? { ...input, displayName: deliveryTenantRoute.chatName, chatName: deliveryTenantRoute.chatName }
       : input;
     const response = await fetchImpl(target, {
       method: "POST",
@@ -588,18 +590,18 @@ export async function forwardLocalWhatsAppInbound(input = {}, env = process.env,
         ...(payload?.routingFailure && typeof payload.routingFailure === "object" ? payload.routingFailure : {}),
         code,
         safeMessage,
-        setupUrl: targetInboundFailureSetupUrl({ payload, tenantRoute, chatId, env }),
+        setupUrl: targetInboundFailureSetupUrl({ payload, tenantRoute: deliveryTenantRoute, chatId, env }),
       }, {
         code,
         capability: "whatsapp",
         provider: "whatsapp",
         userFacingCategory: targetInboundFailureCategory(code, response.status),
         target,
-        instanceId: tenantRoute?.tenantVmId || "",
+        instanceId: deliveryTenantRoute?.tenantVmId || "",
         retryable: response.status >= 500,
         reason: code,
         safeMessage,
-        setupUrl: targetInboundFailureSetupUrl({ payload, tenantRoute, chatId, env }),
+        setupUrl: targetInboundFailureSetupUrl({ payload, tenantRoute: deliveryTenantRoute, chatId, env }),
       });
       throw error;
     }
@@ -610,7 +612,7 @@ export async function forwardLocalWhatsAppInbound(input = {}, env = process.env,
       target,
       targetSource,
       routeMode,
-      tenantVmId: tenantRoute?.tenantVmId || null,
+      tenantVmId: deliveryTenantRoute?.tenantVmId || null,
       status: response.status,
       threadId: payload.threadId || null,
       agentId: payload.agentId || null,
@@ -618,7 +620,7 @@ export async function forwardLocalWhatsAppInbound(input = {}, env = process.env,
     }, env).catch(() => {});
     await rememberInboundForwardLedgerEntry(input, {
       target,
-      tenantVmId: tenantRoute?.tenantVmId || null,
+      tenantVmId: deliveryTenantRoute?.tenantVmId || null,
       threadId: payload.threadId || null,
       messageId: payload.messageId || null,
       duplicate: payload?.duplicate === true,
@@ -634,7 +636,7 @@ export async function forwardLocalWhatsAppInbound(input = {}, env = process.env,
       messageId: payload.messageId || "",
       phase: "routed",
       reason: "forwarded_to_target",
-      ownerProcess: tenantRoute?.tenantVmId || targetSource,
+      ownerProcess: deliveryTenantRoute?.tenantVmId || targetSource,
     }, env).catch(() => null);
     return { forwarded: true, target, targetSource, routeMode, payload };
   } catch (error) {
@@ -643,7 +645,7 @@ export async function forwardLocalWhatsAppInbound(input = {}, env = process.env,
       userFacingCategory: "instance_health",
       capability: "whatsapp",
       target,
-      instanceId: tenantRoute?.tenantVmId || "",
+      instanceId: deliveryTenantRoute?.tenantVmId || "",
       retryable: true,
       reason: String(error?.message || error || "forward_failed"),
     });
@@ -655,7 +657,7 @@ export async function forwardLocalWhatsAppInbound(input = {}, env = process.env,
     const failure = routingFailureFromError(wrapped, {
       code: "whatsapp_inbound_forward_failed",
       target,
-      instanceId: tenantRoute?.tenantVmId || "",
+      instanceId: deliveryTenantRoute?.tenantVmId || "",
       retryable: true,
       reason: String(error?.message || error || "forward_failed"),
     });
@@ -666,7 +668,7 @@ export async function forwardLocalWhatsAppInbound(input = {}, env = process.env,
       target: failure.target || target,
       targetSource,
       routeMode,
-      tenantVmId: tenantRoute?.tenantVmId || failure.instanceId || null,
+      tenantVmId: deliveryTenantRoute?.tenantVmId || failure.instanceId || null,
       code: failure.code,
       reason: failure.reason,
       retryable: failure.retryable,
@@ -683,7 +685,7 @@ export async function forwardLocalWhatsAppInbound(input = {}, env = process.env,
         reason: failure.code,
         error: failure.safeMessage || failure.reason,
         retryable: failure.retryable,
-        ownerProcess: tenantRoute?.tenantVmId || targetSource,
+        ownerProcess: deliveryTenantRoute?.tenantVmId || targetSource,
         terminal: failure.retryable === false,
       }, env).catch(() => null);
     }
@@ -1869,21 +1871,35 @@ function attachmentSummaryText(attachments = []) {
 }
 
 function publicHelpUrl(env = process.env) {
-  const configured = String(
-    tenantPublicSetupUrl({}, env) ||
-      env.ORKESTR_CONNECT_PUBLIC_SETUP_URL ||
-      env.ORKESTR_PAIRING_URL ||
-      env.ORKESTR_PUBLIC_AUTH_URL ||
-      env.ORKESTR_PUBLIC_SITE_URL ||
-      env.ORKESTR_PUBLIC_HELP_URL ||
-      "",
-  ).trim();
+  const configured = [
+    tenantPublicSetupUrl({}, env),
+    publicTenantVmSetupUrl(env),
+    env.ORKESTR_CONNECT_PUBLIC_SETUP_URL,
+    env.ORKESTR_PAIRING_URL,
+    env.ORKESTR_PUBLIC_AUTH_URL,
+    env.ORKESTR_PUBLIC_SITE_URL,
+    env.ORKESTR_PUBLIC_HELP_URL,
+  ].map((value) => publicHttpUrl(value)).find(Boolean) || "";
   const fallback = "https://orkestr.example.test/";
   try {
-    const url = new URL(configured || fallback);
-    return ["http:", "https:"].includes(url.protocol) ? url.toString() : fallback;
+    return new URL(configured || fallback).toString();
   } catch {
     return fallback;
+  }
+}
+
+function publicTenantVmSetupUrl(env = process.env) {
+  const base = publicHttpUrl(env.ORKESTR_CONNECT_PUBLIC_BASE_URL || env.ORKESTR_CONNECT_PUBLIC_URL);
+  const tenantVmId = String(env.ORKESTR_TENANT_VM_ID || "").trim();
+  if (!base || !tenantVmId) return "";
+  try {
+    const url = new URL(base);
+    url.pathname = `${url.pathname.replace(/\/+$/, "")}/i/${encodeURIComponent(tenantVmId)}/setup`;
+    url.search = "";
+    url.hash = "";
+    return url.toString().replace(/\/+$/, "");
+  } catch {
+    return "";
   }
 }
 

@@ -45,7 +45,9 @@ export class RawTerminalController {
 
     const generation = ++this.generation;
     const protocol = location.protocol === "https:" ? "wss" : "ws";
-    const url = new URL(`${protocol}://${location.host}/api/threads/${encodeURIComponent(threadId)}/stream`);
+    const baseHref = document.querySelector("base")?.getAttribute("href") || "/";
+    const normalizedBase = baseHref.endsWith("/") ? baseHref.slice(0, -1) : baseHref;
+    const url = new URL(`${protocol}://${location.host}${normalizedBase}/api/threads/${encodeURIComponent(threadId)}/stream`);
     if (this.terminal) {
       url.searchParams.set("cols", String(this.terminal.cols));
       url.searchParams.set("rows", String(this.terminal.rows));

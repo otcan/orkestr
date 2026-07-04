@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
+import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { startServer } from "../apps/server/src/server.js";
 import { __brokerInstanceRegistryTestInternals, registerBrokerInstance } from "../packages/core/src/broker-instance-registry.js";
-import { approvePairingChallenge } from "../packages/core/src/security.js";
+import { approvePairingChallenge, createPairingChallenge, pairBrowser, sessionCookieHeader } from "../packages/core/src/security.js";
 
 const publicRuntimeEnvKeys = [
   "ORKESTR_PRIMARY_DOMAIN",
@@ -196,6 +197,87 @@ test("instance connect setup requires a registered broker UUID", async () => {
     await new Promise((resolve) => server.close(resolve));
     if (priorHome === undefined) delete process.env.ORKESTR_HOME;
     else process.env.ORKESTR_HOME = priorHome;
+  }
+});
+
+test("broker instance app path pairs on broker and proxies the VM WebUI", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-static-instance-app-"));
+  const priorHome = process.env.ORKESTR_HOME;
+  const priorAuthRequired = process.env.ORKESTR_AUTH_REQUIRED;
+  process.env.ORKESTR_HOME = home;
+  process.env.ORKESTR_AUTH_REQUIRED = "1";
+  const upstreamRequests = [];
+  const upstream = http.createServer((request, response) => {
+    upstreamRequests.push({ url: request.url, headers: request.headers });
+    if (request.url === "/") {
+      response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      response.end(`<!doctype html><html><head><base href="/" /><link rel="icon" type="image/svg+xml" href="/favicon.svg" /></head><body><ork-root>Loading Orkestr</ork-root><script src="main.js"></script></body></html>`);
+      return;
+    }
+    if (request.url === "/api/version") {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ ok: true, name: "tenant-vm", generatedAt: "2026-07-04T00:00:00.000Z" }));
+      return;
+    }
+    if (request.url === "/redirect-home") {
+      response.writeHead(302, { location: "/" });
+      response.end("redirecting");
+      return;
+    }
+    response.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
+    response.end("not found");
+  });
+  await new Promise((resolve) => upstream.listen(0, "127.0.0.1", resolve));
+  const upstreamPort = upstream.address().port;
+  const client = __brokerInstanceRegistryTestInternals.createX25519Identity();
+  const brokerRegistration = await registerBrokerInstance({
+    env: process.env,
+    trustedAdmin: true,
+    request: { ip: "127.0.0.1", headers: { "user-agent": "node:test" } },
+    body: {
+      encryptionPublicKey: client.publicKey,
+      displayName: "instance-app-demo",
+      endpointBaseUrl: `http://127.0.0.1:${upstreamPort}`,
+    },
+  });
+  const server = await startServer({ port: 0, host: "127.0.0.1" });
+  const { port } = server.address();
+  try {
+    const noSlash = await fetch(`http://127.0.0.1:${port}/i/${brokerRegistration.instanceId}/app`, { redirect: "manual" });
+    const unpaired = await fetch(`http://127.0.0.1:${port}/i/${brokerRegistration.instanceId}/app/`, { redirect: "manual" });
+    const challenge = await createPairingChallenge({ env: process.env, instanceId: brokerRegistration.instanceId });
+    await approvePairingChallenge(challenge.challengeId, { approvedBy: "node:test", env: process.env });
+    const paired = await pairBrowser({ challengeId: challenge.challengeId, env: process.env });
+    const cookie = sessionCookieHeader(paired.token, process.env);
+    const htmlResponse = await fetch(`http://127.0.0.1:${port}/i/${brokerRegistration.instanceId}/app/`, { headers: { cookie } });
+    const html = await htmlResponse.text();
+    const apiResponse = await fetch(`http://127.0.0.1:${port}/i/${brokerRegistration.instanceId}/app/api/version`, { headers: { cookie } });
+    const apiPayload = await apiResponse.json();
+    const redirectResponse = await fetch(`http://127.0.0.1:${port}/i/${brokerRegistration.instanceId}/app/redirect-home`, { headers: { cookie }, redirect: "manual" });
+
+    assert.equal(noSlash.status, 302);
+    assert.equal(noSlash.headers.get("location"), `/i/${brokerRegistration.instanceId}/app/`);
+    assert.equal(unpaired.status, 302);
+    assert.equal(unpaired.headers.get("location"), `/setup/pairing?instanceId=${brokerRegistration.instanceId}&return=%2Fi%2F${brokerRegistration.instanceId}%2Fapp%2F`);
+    assert.equal(htmlResponse.status, 200);
+    assert.match(html, new RegExp(`<base href="/i/${brokerRegistration.instanceId}/app/"`));
+    assert.match(html, new RegExp(`href="/i/${brokerRegistration.instanceId}/app/favicon\\.svg"`));
+    assert.equal(apiResponse.status, 200);
+    assert.equal(apiPayload.name, "tenant-vm");
+    assert.equal(redirectResponse.status, 302);
+    assert.equal(redirectResponse.headers.get("location"), `/i/${brokerRegistration.instanceId}/app/`);
+    assert.equal(upstreamRequests.some((item) => item.url === "/api/version"), true);
+    assert.equal(
+      upstreamRequests.some((item) => item.headers["x-orkestr-broker-instance-id"] === brokerRegistration.instanceId),
+      true,
+    );
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    await new Promise((resolve) => upstream.close(resolve));
+    if (priorHome === undefined) delete process.env.ORKESTR_HOME;
+    else process.env.ORKESTR_HOME = priorHome;
+    if (priorAuthRequired === undefined) delete process.env.ORKESTR_AUTH_REQUIRED;
+    else process.env.ORKESTR_AUTH_REQUIRED = priorAuthRequired;
   }
 });
 

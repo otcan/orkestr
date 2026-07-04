@@ -28,6 +28,7 @@ import { authorizeHttpRequest } from "../../../packages/core/src/security.js";
 import { getThreadForPrincipal, listThreads } from "../../../packages/core/src/threads.js";
 import { isAdminPrincipal } from "../../../packages/core/src/policy.js";
 import { AppModule } from "./app.module.js";
+import { attachBrokerInstanceAppProxyUpgrade, registerBrokerInstanceAppProxy } from "./broker-instance-app-proxy.js";
 import { JsonErrorFilter } from "./common/json-error.filter.js";
 import { attachDesktopProxyUpgrade, registerDesktopProxy } from "./desktop-proxy.js";
 import { attachTenantVmDesktopProxyUpgrade, registerTenantVmDesktopProxy } from "./tenant-vm-desktop-proxy.js";
@@ -360,9 +361,11 @@ export async function startServer({ port = 19812, host = "127.0.0.1", openBrowse
   });
 
   registerTenantVmDesktopProxy(app);
+  registerBrokerInstanceAppProxy(app);
   registerDesktopProxy(app);
   registerStaticFallback(app);
   await app.init();
+  attachBrokerInstanceAppProxyUpgrade(app.getHttpServer());
   attachTenantVmDesktopProxyUpgrade(app.getHttpServer());
   attachDesktopProxyUpgrade(app.getHttpServer());
   attachThreadStreamUpgrade(app.getHttpServer());

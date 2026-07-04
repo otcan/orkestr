@@ -146,13 +146,14 @@ test("tenant VM provisioning derives central setup URLs from broker instance id"
   ).toString("utf8");
 
   assert.equal(plan.runtimeEnv.ORKESTR_HOST, "0.0.0.0");
-  assert.equal(plan.runtimeEnv.ORKESTR_PUBLIC_URL, "https://connect.example.test");
-  assert.equal(plan.runtimeEnv.ORKESTR_PUBLIC_HTTPS_URL, "https://connect.example.test");
+  assert.equal(plan.runtimeEnv.ORKESTR_PUBLIC_URL, "https://connect.example.test/i/broker-firat-001/app");
+  assert.equal(plan.runtimeEnv.ORKESTR_PUBLIC_HTTPS_URL, "https://connect.example.test/i/broker-firat-001/app");
   assert.equal(plan.runtimeEnv.ORKESTR_CONNECT_PUBLIC_BASE_URL, "https://connect.example.test");
   assert.equal(plan.runtimeEnv.ORKESTR_CONNECT_PUBLIC_SETUP_URL, "https://connect.example.test/i/broker-firat-001/setup");
   assert.equal(plan.runtimeEnv.ORKESTR_PAIRING_URL, "https://connect.example.test/setup/pairing");
   assert.equal(plan.runtimeEnv.ORKESTR_BROKER_INSTANCE_ID, "broker-firat-001");
   assert.equal(plan.runtimeEnv.ORKESTR_INSTANCE_ID, "broker-firat-001");
+  assert.match(envFile, /^ORKESTR_PUBLIC_URL='https:\/\/connect\.example\.test\/i\/broker-firat-001\/app'$/m);
   assert.match(envFile, /^ORKESTR_CONNECT_PUBLIC_SETUP_URL='https:\/\/connect\.example\.test\/i\/broker-firat-001\/setup'$/m);
   assert.match(envFile, /^ORKESTR_BROKER_INSTANCE_ID='broker-firat-001'$/m);
   assert.match(envFile, /^ORKESTR_INSTANCE_ID='broker-firat-001'$/m);

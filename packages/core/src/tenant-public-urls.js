@@ -48,19 +48,48 @@ function objectValue(value = {}) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : {};
 }
 
-function appendInstanceSetup(baseUrl = "", instanceId = "") {
+function appendInstancePath(baseUrl = "", instanceId = "", leaf = "") {
   const base = publicHttpUrl(baseUrl);
   const id = clean(instanceId);
-  if (!base || !id) return "";
+  const name = clean(leaf).replace(/^\/+|\/+$/g, "");
+  if (!base || !id || !name) return "";
   try {
     const parsed = new URL(base);
-    parsed.pathname = `${parsed.pathname.replace(/\/+$/, "")}/i/${encodeURIComponent(id)}/setup`;
+    parsed.pathname = `${parsed.pathname.replace(/\/+$/, "")}/i/${encodeURIComponent(id)}/${encodeURIComponent(name)}`;
     parsed.search = "";
     parsed.hash = "";
     return parsed.toString().replace(/\/+$/, "");
   } catch {
     return "";
   }
+}
+
+function appendInstanceSetup(baseUrl = "", instanceId = "") {
+  return appendInstancePath(baseUrl, instanceId, "setup");
+}
+
+function appendInstanceApp(baseUrl = "", instanceId = "") {
+  return appendInstancePath(baseUrl, instanceId, "app");
+}
+
+function samePublicUrl(left = "", right = "") {
+  const a = publicHttpUrl(left);
+  const b = publicHttpUrl(right);
+  return Boolean(a && b && a === b);
+}
+
+function tenantBrokerInstanceId(input = {}, source = {}, env = process.env) {
+  const labels = objectValue(input.labels);
+  const tenantVmId = clean(input.tenantVmId || input.vmId || source.ORKESTR_TENANT_VM_ID || env.ORKESTR_TENANT_VM_ID);
+  return clean(
+    input.brokerInstanceId ||
+      input.instanceId ||
+      labels.brokerInstanceId ||
+      labels.instanceId ||
+      source.ORKESTR_BROKER_INSTANCE_ID ||
+      source.ORKESTR_INSTANCE_ID ||
+      (!tenantVmId ? env.ORKESTR_BROKER_INSTANCE_ID || env.ORKESTR_INSTANCE_ID : ""),
+  );
 }
 
 export function tenantPublicSetupUrl(input = {}, env = process.env) {
@@ -74,17 +103,7 @@ export function tenantPublicSetupUrl(input = {}, env = process.env) {
       env.ORKESTR_DEMO_PUBLIC_SETUP_URL,
   );
   if (explicit) return explicit;
-  const labels = objectValue(input.labels);
-  const tenantVmId = clean(input.tenantVmId || input.vmId || source.ORKESTR_TENANT_VM_ID || env.ORKESTR_TENANT_VM_ID);
-  const brokerInstanceId = clean(
-    input.brokerInstanceId ||
-      input.instanceId ||
-      labels.brokerInstanceId ||
-      labels.instanceId ||
-      source.ORKESTR_BROKER_INSTANCE_ID ||
-      source.ORKESTR_INSTANCE_ID ||
-      (!tenantVmId ? env.ORKESTR_BROKER_INSTANCE_ID || env.ORKESTR_INSTANCE_ID : ""),
-  );
+  const brokerInstanceId = tenantBrokerInstanceId(input, source, env);
   const base = publicHttpUrl(
     input.connectPublicBaseUrl ||
       input.publicConnectBaseUrl ||
@@ -100,6 +119,7 @@ export function tenantPublicSetupUrl(input = {}, env = process.env) {
 export function tenantPublicUrls(input = {}, env = process.env) {
   const source = runtimeEnv(input);
   const tenantVmId = clean(input.tenantVmId || input.vmId || source.ORKESTR_TENANT_VM_ID || env.ORKESTR_TENANT_VM_ID);
+  const brokerInstanceId = tenantBrokerInstanceId(input, source, env);
   const connectBaseUrl = publicHttpUrl(
     input.connectPublicBaseUrl ||
       input.publicConnectBaseUrl ||
@@ -117,20 +137,25 @@ export function tenantPublicUrls(input = {}, env = process.env) {
       env.ORKESTR_PAIRING_URL ||
       setupUrl,
   );
-  const appUrl = publicHttpUrl(
+  const tenantAppUrl = publicHttpUrl(
     input.publicAppBaseUrl ||
       input.publicAppUrl ||
       input.publicUrl ||
       source.ORKESTR_PUBLIC_APP_URL ||
       source.ORKESTR_PUBLIC_URL ||
       source.ORKESTR_PUBLIC_HTTPS_URL ||
-      source.ORKESTR_APP_URL ||
-      env.ORKESTR_PUBLIC_APP_URL ||
+      source.ORKESTR_APP_URL,
+  );
+  const envAppUrl = publicHttpUrl(
+    env.ORKESTR_PUBLIC_APP_URL ||
       env.ORKESTR_PUBLIC_URL ||
       env.ORKESTR_PUBLIC_HTTPS_URL ||
-      env.ORKESTR_APP_URL ||
-      connectBaseUrl,
+      env.ORKESTR_APP_URL,
   );
+  const brokerAppUrl = appendInstanceApp(connectBaseUrl, brokerInstanceId);
+  const appUrl = brokerAppUrl && (!tenantAppUrl || samePublicUrl(tenantAppUrl, connectBaseUrl))
+    ? brokerAppUrl
+    : tenantAppUrl || brokerAppUrl || envAppUrl || connectBaseUrl;
   return {
     connectBaseUrl,
     setupUrl,
