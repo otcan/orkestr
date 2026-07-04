@@ -691,8 +691,28 @@ export class ConnectorCallbacksController {
   }
 
   @Get("gmail/callback")
-  async gmailCallback(@Query() query: Record<string, string>, @Res() response: any) {
-    const result = await finishGmailOAuth(new URLSearchParams(query));
+  async gmailCallback(@Query() query: Record<string, string>, @Req() request: any, @Res() response: any) {
+    const callbackState = String(query?.state || request?.query?.state || "").trim();
+    const tenantForward = await forwardTenantOAuthCallbackIfNeeded(callbackState, request).catch((error) => ({
+      status: Number((error as any)?.statusCode || 502) || 502,
+      contentType: "text/html; charset=utf-8",
+      body: googleOAuthHtml({
+        ok: false,
+        state: "error",
+        title: "Gmail auth failed",
+        message: String((error as Error)?.message || "tenant_oauth_forward_failed"),
+        setupHref: "/setup/gmail",
+        setupLabel: "Open Mail Setup",
+      }),
+    }));
+    if (tenantForward) {
+      return response
+        .status(tenantForward.status)
+        .header("cache-control", "no-store")
+        .type(tenantForward.contentType)
+        .send(tenantForward.body);
+    }
+    const result = await finishGmailOAuth(queryParamsFromRequest(request, query));
     await notifyGmailOAuthCallback(result).catch(() => null);
     const payload = googleOAuthCallbackPayload(result);
     return response

@@ -12,8 +12,10 @@ import {
   normalizeGmailMessage,
   readGmailToken,
   refreshGmailAccessToken,
+  saveBrokeredGmailGrant,
   startGmailOAuth,
 } from "../packages/connectors/src/gmail.js";
+import { __brokerInstanceRegistryTestInternals } from "../packages/core/src/broker-instance-registry.js";
 import { userPrincipal } from "../packages/core/src/principal.js";
 import { getSetupStatus } from "../packages/core/src/setup.js";
 import { writeConnectorConfig } from "../packages/storage/src/config.js";
@@ -27,6 +29,23 @@ function jsonResponse(payload, ok = true, status = 200) {
       return payload;
     },
   };
+}
+
+async function writeBrokerClientRegistration(home, { instanceId = "instance-1", channelId = "channel-1", brokerBaseUrl = "https://broker.example.test" } = {}) {
+  const client = __brokerInstanceRegistryTestInternals.createX25519Identity();
+  const broker = __brokerInstanceRegistryTestInternals.createX25519Identity();
+  await fs.mkdir(path.join(home, "secrets"), { recursive: true });
+  await fs.writeFile(path.join(home, "secrets", "broker-client-identity.json"), JSON.stringify({
+    privateKey: client.privateKey,
+    publicKey: client.publicKey,
+  }));
+  await fs.writeFile(path.join(home, "secrets", "broker-client-registration.json"), JSON.stringify({
+    instanceId,
+    channelId,
+    brokerBaseUrl,
+    brokerPublicKey: broker.publicKey,
+  }));
+  return { client, broker };
 }
 
 test("gmail oauth start builds an authorize URL and saves state", async () => {
@@ -321,6 +340,55 @@ test("expired gmail tokens refresh with the stored refresh token", async () => {
   assert.equal(refreshed.accessToken, "access-new");
   assert.equal(refreshed.refreshToken, "refresh-old");
   assert.equal(await getGmailAccessToken(env), "access-new");
+});
+
+test("brokered gmail grants refresh through the parent broker without local OAuth config", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-gmail-broker-refresh-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_TENANT_VM_ID: "firat-jobs-vm",
+    ORKESTR_BROKER_BASE_URL: "https://broker.example.test",
+  };
+  await writeBrokerClientRegistration(home, {
+    instanceId: "instance-firat",
+    channelId: "channel-firat",
+    brokerBaseUrl: "https://broker.example.test",
+  });
+  await saveBrokeredGmailGrant({
+    userId: "firat",
+    provider: "google_workspace",
+    brokerInstanceId: "instance-firat",
+    requestedCapabilities: ["gmail_read"],
+    requestedScopes: ["https://www.googleapis.com/auth/gmail.readonly"],
+    token: {
+      accessToken: "access-old",
+      refreshToken: "refresh-owned-by-tenant",
+      expiresAt: 1,
+      grantedScopes: ["https://www.googleapis.com/auth/gmail.readonly"],
+    },
+  }, env);
+
+  const refreshed = await refreshGmailAccessToken(env, async (url, options = {}) => {
+    assert.equal(String(url), "https://broker.example.test/api/broker/instances/instance-firat/google-workspace/refresh-token");
+    const body = JSON.parse(options.body);
+    assert.equal(body.channelId, "channel-firat");
+    assert.ok(body.envelope);
+    return jsonResponse({
+      ok: true,
+      token: {
+        access_token: "access-new",
+        expires_in: 3600,
+        scope: "https://www.googleapis.com/auth/gmail.readonly",
+      },
+    });
+  }, { userId: "firat" });
+  const stored = await readGmailToken(env, { userId: "firat" });
+
+  assert.equal(refreshed.accessToken, "access-new");
+  assert.equal(refreshed.refreshToken, "refresh-owned-by-tenant");
+  assert.equal(stored.accessToken, "access-new");
+  assert.equal(stored.brokered, true);
+  assert.equal(stored.brokerInstanceId, "instance-firat");
 });
 
 test("gmail oauth token failures are reflected in setup status", async () => {

@@ -508,6 +508,45 @@ export async function encryptBrokerClientPayload(payload = {}, registration = {}
   };
 }
 
+export async function encryptBrokerInstancePayload(instanceId, payload = {}, env = process.env) {
+  const record = await brokerInstance(instanceId, env);
+  if (!record) throw Object.assign(new Error("broker_instance_not_found"), { statusCode: 404 });
+  if (record.disabledAt || ["disabled", "deleted", "revoked"].includes(clean(record.status).toLowerCase())) {
+    throw Object.assign(new Error("broker_instance_disabled"), { statusCode: 410 });
+  }
+  const brokerChannel = await ensureBrokerChannel(env);
+  return {
+    record,
+    body: {
+      channelId: record.channelId,
+      envelope: encryptBrokerChannelPayload(payload, {
+        clientPrivateKey: brokerChannel.privateKey,
+        brokerPublicKey: record.encryptionPublicKey,
+        channelId: record.channelId,
+      }),
+    },
+  };
+}
+
+export async function decryptBrokerClientPayload(body = {}, env = process.env) {
+  const paths = await ensureDataDirs(env);
+  const registration = await readJson(paths.brokerClientRegistration, null);
+  const client = await readJson(paths.brokerClientIdentity, null);
+  const channelId = clean(body.channelId);
+  if (!registration?.instanceId || !registration?.channelId || !registration?.brokerPublicKey || !client?.privateKey) {
+    throw Object.assign(new Error("broker_client_registration_missing"), { statusCode: 409 });
+  }
+  if (!channelId || channelId !== clean(registration.channelId)) {
+    throw Object.assign(new Error("broker_channel_denied"), { statusCode: 401 });
+  }
+  const payload = decryptBrokerChannelPayload(body.envelope || body, {
+    brokerPrivateKey: client.privateKey,
+    instancePublicKey: registration.brokerPublicKey,
+    channelId,
+  });
+  return { registration, payload };
+}
+
 export async function decryptBrokerInstanceRequest(instanceId, body = {}, env = process.env) {
   const record = await brokerInstance(instanceId, env);
   if (!record) throw Object.assign(new Error("broker_instance_not_found"), { statusCode: 404 });

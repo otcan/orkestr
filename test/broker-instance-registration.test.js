@@ -7,7 +7,9 @@ import test from "node:test";
 import {
   __brokerInstanceRegistryTestInternals,
   brokerWhatsAppRelayAccountId,
+  decryptBrokerClientPayload,
   encryptBrokerChannelPayload,
+  encryptBrokerInstancePayload,
   decryptBrokerInstanceRequest,
   ensureBrokerClientRegistration,
   heartbeatBrokerInstance,
@@ -322,6 +324,46 @@ test("broker instance WhatsApp requests are encrypted and scoped to registered W
   );
 });
 
+test("broker instance channel can deliver encrypted payloads back to the client", async () => {
+  const parentHome = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-broker-parent-send-"));
+  const tenantHome = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-broker-tenant-receive-"));
+  const client = __brokerInstanceRegistryTestInternals.createX25519Identity();
+  const env = {
+    ORKESTR_HOME: parentHome,
+    ORKESTR_BROKER_REGISTRATION_TOKEN: "register-secret",
+  };
+  const registration = await registerBrokerInstance({
+    env,
+    request: request({ authorization: "Bearer register-secret" }),
+    body: {
+      encryptionPublicKey: client.publicKey,
+      endpointBaseUrl: "https://tenant.example.test",
+    },
+  });
+  await fs.mkdir(path.join(tenantHome, "secrets"), { recursive: true });
+  await fs.writeFile(path.join(tenantHome, "secrets", "broker-client-identity.json"), JSON.stringify({
+    privateKey: client.privateKey,
+    publicKey: client.publicKey,
+  }));
+  await fs.writeFile(path.join(tenantHome, "secrets", "broker-client-registration.json"), JSON.stringify({
+    instanceId: registration.instanceId,
+    channelId: registration.channelId,
+    brokerBaseUrl: "https://broker.example.test",
+    brokerPublicKey: registration.broker.publicKey,
+  }));
+
+  const encrypted = await encryptBrokerInstancePayload(registration.instanceId, {
+    provider: "google_workspace",
+    token: { accessToken: "tenant-access" },
+  }, env);
+  const decrypted = await decryptBrokerClientPayload(encrypted.body, { ORKESTR_HOME: tenantHome });
+
+  assert.equal(encrypted.record.endpointBaseUrl, "https://tenant.example.test");
+  assert.equal(decrypted.registration.instanceId, registration.instanceId);
+  assert.equal(decrypted.payload.provider, "google_workspace");
+  assert.equal(decrypted.payload.token.accessToken, "tenant-access");
+});
+
 test("broker connect resolver fails closed for unknown and disabled instances", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-broker-connect-"));
   const client = __brokerInstanceRegistryTestInternals.createX25519Identity();
@@ -362,12 +404,18 @@ test("broker registration endpoints are allowed before browser pairing", async (
   const heartbeat = await authorizeHttpRequest({ method: "POST", url: "/api/broker/instances/demo/heartbeat", headers: {} }, env);
   const onboarding = await authorizeHttpRequest({ method: "POST", url: "/api/broker/instances/demo/whatsapp/onboarding", headers: {} }, env);
   const history = await authorizeHttpRequest({ method: "POST", url: "/api/broker/instances/demo/whatsapp/history", headers: {} }, env);
+  const googleConnect = await authorizeHttpRequest({ method: "POST", url: "/api/broker/instances/demo/google-workspace/connect-link", headers: {} }, env);
+  const googleRefresh = await authorizeHttpRequest({ method: "POST", url: "/api/broker/instances/demo/google-workspace/refresh-token", headers: {} }, env);
+  const googleGrant = await authorizeHttpRequest({ method: "POST", url: "/api/broker/google-workspace/grants", headers: {} }, env);
   const privateRoute = await authorizeHttpRequest({ method: "GET", url: "/api/broker/instances", headers: {} }, env);
 
   assert.equal(register.ok, true);
   assert.equal(heartbeat.ok, true);
   assert.equal(onboarding.ok, true);
   assert.equal(history.ok, true);
+  assert.equal(googleConnect.ok, true);
+  assert.equal(googleRefresh.ok, true);
+  assert.equal(googleGrant.ok, true);
   assert.equal(privateRoute.ok, false);
   assert.equal(privateRoute.statusCode, 401);
 });

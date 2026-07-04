@@ -23,6 +23,11 @@ import {
   normalizeGoogleWorkspaceCapabilities,
 } from "../packages/connectors/src/google-workspace-scopes.js";
 import { exchangeGmailCode, finishGmailOAuth, readGmailToken } from "../packages/connectors/src/gmail.js";
+import {
+  __brokerInstanceRegistryTestInternals,
+  decryptBrokerClientPayload,
+  registerBrokerInstance,
+} from "../packages/core/src/broker-instance-registry.js";
 import { userPrincipal } from "../packages/core/src/principal.js";
 import { connectorAuthStatus } from "../packages/connectors/src/connector-auth.js";
 import { writeConnectorConfig } from "../packages/storage/src/config.js";
@@ -59,6 +64,20 @@ async function configureGoogle(home) {
     redirectUri: "http://localhost/oauth/gmail/callback",
   }, env);
   return env;
+}
+
+async function writeTenantBrokerClientRegistration(home, client, registration, brokerBaseUrl = "https://broker.example.test") {
+  await fs.mkdir(path.join(home, "secrets"), { recursive: true });
+  await fs.writeFile(path.join(home, "secrets", "broker-client-identity.json"), JSON.stringify({
+    privateKey: client.privateKey,
+    publicKey: client.publicKey,
+  }));
+  await fs.writeFile(path.join(home, "secrets", "broker-client-registration.json"), JSON.stringify({
+    instanceId: registration.instanceId,
+    channelId: registration.channelId,
+    brokerBaseUrl,
+    brokerPublicKey: registration.broker.publicKey,
+  }));
 }
 
 async function storeToken(env, scope, principal = null) {
@@ -131,6 +150,139 @@ test("whatsapp google connect link starts user-scoped oauth with selected scopes
   assert.ok(scopes.includes("https://www.googleapis.com/auth/calendar.events.readonly"));
   assert.equal(scopes.includes("https://www.googleapis.com/auth/gmail.modify"), false);
   assert.equal(scopes.includes("https://www.googleapis.com/auth/drive.file"), false);
+});
+
+test("brokered google workspace oauth provisions the Gmail grant to the tenant VM", async () => {
+  const parentHome = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-google-workspace-broker-parent-"));
+  const tenantHome = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-google-workspace-broker-tenant-"));
+  const env = await configureGoogle(parentHome);
+  const client = __brokerInstanceRegistryTestInternals.createX25519Identity();
+  const registration = await registerBrokerInstance({
+    env: {
+      ...env,
+      ORKESTR_BROKER_REGISTRATION_TOKEN: "register-secret",
+    },
+    request: {
+      method: "POST",
+      url: "/api/broker/instances/register",
+      headers: { authorization: "Bearer register-secret" },
+    },
+    body: {
+      encryptionPublicKey: client.publicKey,
+      endpointBaseUrl: "https://tenant.example.test",
+    },
+  });
+  await writeTenantBrokerClientRegistration(tenantHome, client, registration);
+
+  const link = await createGoogleWorkspaceConnectLink({
+    principal: userPrincipal({ id: "firat" }),
+    thread: {
+      id: "firat-jobs",
+      binding: { chatId: "firat-wa", responderAccountId: "de-wa" },
+    },
+    brokerInstanceId: registration.instanceId,
+    brokerTenantVmId: "firat-jobs-vm",
+    brokerTenantUserId: "firat",
+    brokerTenantThreadId: "firat-jobs",
+    brokerTenantChatId: "firat-wa",
+    brokerTenantAccountId: "de-wa",
+  }, env);
+  const started = await startGoogleWorkspaceOAuth(env, {
+    connectId: link.connectId,
+    capabilities: ["gmail_read"],
+  });
+  const savedState = JSON.parse(await fs.readFile(path.join(userDataPaths("firat", env).oauth, "gmail-state.json"), "utf8"));
+  const calls = [];
+  const result = await finishGmailOAuth(
+    new URLSearchParams({ code: "broker-code", state: started.state }),
+    env,
+    async (url, options = {}) => {
+      calls.push(String(url));
+      if (String(url) === "https://oauth2.googleapis.com/token") {
+        const body = new URLSearchParams(options.body);
+        assert.equal(body.get("code"), "broker-code");
+        return jsonResponse({
+          access_token: "brokered-access",
+          refresh_token: "brokered-refresh",
+          expires_in: 3600,
+          scope: "https://www.googleapis.com/auth/gmail.readonly",
+        });
+      }
+      assert.equal(String(url), "https://tenant.example.test/api/broker/google-workspace/grants");
+      const decrypted = await decryptBrokerClientPayload(JSON.parse(options.body), { ORKESTR_HOME: tenantHome });
+      assert.equal(decrypted.payload.userId, "firat");
+      assert.equal(decrypted.payload.threadId, "firat-jobs");
+      assert.equal(decrypted.payload.chatId, "firat-wa");
+      assert.equal(decrypted.payload.token.accessToken, "brokered-access");
+      assert.equal(decrypted.payload.token.refreshToken, "brokered-refresh");
+      return jsonResponse({ ok: true, grant: { ok: true } });
+    },
+  );
+
+  assert.equal(savedState.brokerInstanceId, registration.instanceId);
+  assert.equal(savedState.brokerTenantVmId, "firat-jobs-vm");
+  assert.equal(result.brokered, true);
+  assert.equal(result.brokerInstanceId, registration.instanceId);
+  assert.deepEqual(calls, [
+    "https://oauth2.googleapis.com/token",
+    "https://tenant.example.test/api/broker/google-workspace/grants",
+  ]);
+  assert.deepEqual(await readGmailToken(env, { userId: "firat" }), {});
+});
+
+test("tenant google workspace connect link is created by the parent broker", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-google-workspace-tenant-broker-link-"));
+  const broker = __brokerInstanceRegistryTestInternals.createX25519Identity();
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_TENANT_VM_ID: "firat-jobs-vm",
+    ORKESTR_BROKER_BASE_URL: "https://broker.example.test",
+    ORKESTR_BROKER_REGISTRATION_TOKEN: "register-secret",
+  };
+  const originalFetch = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = async (url, options = {}) => {
+    const parsed = new URL(String(url));
+    calls.push({ url: parsed, options });
+    if (parsed.pathname === "/api/broker/instances/register") {
+      assert.equal(options.headers.authorization, "Bearer register-secret");
+      return jsonResponse({
+        ok: true,
+        instanceId: "instance-firat",
+        channelId: "channel-firat",
+        registeredAt: "2026-07-04T00:00:00.000Z",
+        broker: {
+          keyId: "broker-key",
+          publicKey: broker.publicKey,
+        },
+      });
+    }
+    assert.equal(parsed.pathname, "/api/broker/instances/instance-firat/google-workspace/connect-link");
+    assert.ok(JSON.parse(options.body).envelope);
+    return jsonResponse({
+      ok: true,
+      connectId: "parent-connect-id",
+      link: "https://connect.example.test/connect/google?connect=parent-connect-id",
+      expiresAt: "2026-07-04T01:00:00.000Z",
+      message: "parent broker connect message",
+    });
+  };
+
+  try {
+    const link = await createGoogleWorkspaceConnectLink({
+      principal: userPrincipal({ id: "firat" }),
+      thread: {
+        id: "firat-jobs",
+        binding: { chatId: "firat-wa", responderAccountId: "de-wa" },
+      },
+    }, env);
+
+    assert.equal(link.connectId, "parent-connect-id");
+    assert.equal(link.message, "parent broker connect message");
+    assert.equal(calls.length, 2);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test("google workspace callback stores only granted partial capabilities", async () => {

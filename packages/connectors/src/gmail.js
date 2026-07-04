@@ -3,6 +3,11 @@ import fs from "node:fs/promises";
 import { appendEvent, readJson, writeJson, writeSecretJson } from "../../storage/src/store.js";
 import { connectorFile, connectorScopePaths, listConnectorScopePaths } from "./connector-storage.js";
 import {
+  encryptBrokerClientPayload,
+  encryptBrokerInstancePayload,
+  ensureBrokerClientRegistration,
+} from "../../core/src/broker-instance-registry.js";
+import {
   googleWorkspaceCapabilitiesForScopes,
   googleWorkspaceScopesForCapabilities,
   normalizeGoogleWorkspaceCapabilities,
@@ -108,8 +113,7 @@ async function requestToken(params, fetchImpl = fetch) {
   return payload;
 }
 
-async function saveTokenPayload(payload, env, prior = {}, options = {}) {
-  const scope = await connectorScopePaths(env, options);
+function normalizeOAuthTokenPayload(payload, prior = {}, options = {}) {
   const accessToken = String(payload.access_token || "").trim();
   if (!accessToken) {
     const error = new Error("gmail_token_missing_access_token");
@@ -139,9 +143,82 @@ async function saveTokenPayload(payload, env, prior = {}, options = {}) {
     expiresAt: nowSeconds() + Math.max(1, expiresIn),
     updatedAt: new Date().toISOString(),
   };
+  const brokerInstanceId = clean(options.brokerInstanceId || prior.brokerInstanceId);
+  if (options.brokered === true || prior.brokered === true || brokerInstanceId) {
+    token.brokered = true;
+    token.brokerGrantSource = clean(options.brokerGrantSource || prior.brokerGrantSource || "parent_broker");
+    token.brokerInstanceId = brokerInstanceId;
+    token.brokerRefresh = options.brokerRefresh !== false && prior.brokerRefresh !== false;
+  }
+  return token;
+}
+
+async function writeGmailToken(token, env, options = {}) {
+  const scope = await connectorScopePaths(env, options);
   await writeSecretJson(connectorFile(scope, "secrets", "gmail-token.json"), token);
   await fs.rm(connectorFile(scope, "secrets", "gmail-error.json"), { force: true }).catch(() => {});
   return token;
+}
+
+async function saveTokenPayload(payload, env, prior = {}, options = {}) {
+  const token = normalizeOAuthTokenPayload(payload, prior, options);
+  return writeGmailToken(token, env, options);
+}
+
+function normalizeBrokerGrantToken(rawToken = {}, grant = {}, prior = {}) {
+  const accessToken = clean(rawToken.accessToken || rawToken.access_token);
+  if (!accessToken) {
+    const error = new Error("gmail_token_missing_access_token");
+    error.statusCode = 502;
+    throw error;
+  }
+  const requestedCapabilities = normalizeGoogleWorkspaceCapabilities(
+    grant.requestedCapabilities || rawToken.requestedCapabilities || prior.requestedCapabilities || [],
+    [],
+  );
+  const requestedScopes = uniqueList(grant.requestedScopes || rawToken.requestedScopes || prior.requestedScopes || []);
+  const grantedScopeInput = Array.isArray(rawToken.grantedScopes)
+    ? rawToken.grantedScopes
+    : splitList(rawToken.scope || rawToken.grantedScopes || requestedScopes.join(" "));
+  const grantedScopes = uniqueList(grantedScopeInput);
+  const expiresAt = Number(rawToken.expiresAt || 0);
+  return {
+    accessToken,
+    refreshToken: clean(rawToken.refreshToken || rawToken.refresh_token || prior.refreshToken),
+    scope: grantedScopes.join(" "),
+    grantedScopes,
+    capabilities: googleWorkspaceCapabilitiesForScopes(grantedScopes, requestedCapabilities),
+    requestedCapabilities,
+    requestedScopes,
+    provider: clean(grant.provider || rawToken.provider || prior.provider || "google_workspace"),
+    tokenType: clean(rawToken.tokenType || rawToken.token_type || prior.tokenType || "Bearer"),
+    expiresAt: Number.isFinite(expiresAt) && expiresAt > 0
+      ? expiresAt
+      : nowSeconds() + Math.max(1, Number(rawToken.expiresIn || rawToken.expires_in || 3600) || 3600),
+    updatedAt: new Date().toISOString(),
+    brokered: true,
+    brokerGrantSource: "parent_broker",
+    brokerInstanceId: clean(grant.brokerInstanceId || rawToken.brokerInstanceId || prior.brokerInstanceId),
+    brokerRefresh: true,
+  };
+}
+
+export async function saveBrokeredGmailGrant(grant = {}, env = process.env) {
+  const userId = clean(grant.userId || grant.tenantUserId);
+  const prior = await readGmailToken(env, userId ? { userId } : {});
+  const token = normalizeBrokerGrantToken(grant.token || grant, grant, prior);
+  await writeGmailToken(token, env, userId ? { userId } : {});
+  await appendEvent({ type: "gmail_broker_grant_saved", userId: userId || undefined, brokerInstanceId: token.brokerInstanceId || undefined }, env).catch(() => {});
+  return {
+    ok: true,
+    provider: token.provider,
+    userId,
+    account: clean(grant.account),
+    brokerInstanceId: token.brokerInstanceId,
+    capabilities: token.capabilities || [],
+    grantedScopes: token.grantedScopes || [],
+    expiresAt: token.expiresAt,
+  };
 }
 
 async function saveOAuthError(error, env, options = {}) {
@@ -181,6 +258,12 @@ export async function startGmailOAuth(env = process.env, options = {}) {
     threadId: clean(options.threadId || thread.id),
     chatId: clean(options.chatId || binding.chatId),
     accountId: clean(options.accountId || binding.responderAccountId || binding.outboundAccountId),
+    brokerInstanceId: clean(options.brokerInstanceId),
+    brokerTenantVmId: clean(options.brokerTenantVmId),
+    brokerTenantUserId: clean(options.brokerTenantUserId),
+    brokerTenantThreadId: clean(options.brokerTenantThreadId),
+    brokerTenantChatId: clean(options.brokerTenantChatId),
+    brokerTenantAccountId: clean(options.brokerTenantAccountId),
     requestedCapabilities: capabilities,
     requestedScopes,
     redirectUri,
@@ -219,7 +302,9 @@ export async function exchangeGmailCode(code, env = process.env, fetchImpl = fet
       },
       fetchImpl,
     );
-    const token = await saveTokenPayload(payload, env, {}, options);
+    const token = options.saveToken === false
+      ? normalizeOAuthTokenPayload(payload, {}, options)
+      : await saveTokenPayload(payload, env, {}, options);
     const scope = await connectorScopePaths(env, options);
     await appendEvent({ type: "gmail_oauth_token_exchanged", userId: scope.userId || undefined }, env);
     return token;
@@ -229,10 +314,86 @@ export async function exchangeGmailCode(code, env = process.env, fetchImpl = fet
   }
 }
 
-export async function refreshGmailAccessToken(env = process.env, fetchImpl = fetch, options = {}) {
+export async function refreshGmailBrokerToken(refreshToken, env = process.env, fetchImpl = fetch) {
   const config = await readParentConnectorRuntimeConfig("gmail", env);
   const { clientId, clientSecret } = requireOAuthConfig(config);
+  const token = clean(refreshToken);
+  if (!clientSecret || !token) {
+    const error = new Error("gmail_refresh_config_required");
+    error.statusCode = 400;
+    throw error;
+  }
+  return requestToken(
+    {
+      grant_type: "refresh_token",
+      client_id: clientId,
+      client_secret: clientSecret,
+      refresh_token: token,
+    },
+    fetchImpl,
+  );
+}
+
+async function refreshBrokeredGmailAccessToken(prior = {}, env = process.env, fetchImpl = fetch, options = {}) {
+  const refreshToken = clean(prior.refreshToken);
+  if (!refreshToken) {
+    const error = new Error("gmail_refresh_config_required");
+    error.statusCode = 400;
+    throw error;
+  }
+  const registration = await ensureBrokerClientRegistration(env);
+  if (registration?.ok === false || !registration?.instanceId || !registration?.brokerBaseUrl) {
+    const error = new Error(registration?.reason || "broker_google_workspace_registration_required");
+    error.statusCode = Number(registration?.status || 409) || 409;
+    throw error;
+  }
+  const expectedInstanceId = clean(prior.brokerInstanceId);
+  if (expectedInstanceId && expectedInstanceId !== clean(registration.instanceId)) {
+    const error = new Error("broker_google_workspace_instance_mismatch");
+    error.statusCode = 409;
+    throw error;
+  }
+  const body = await encryptBrokerClientPayload({
+    provider: clean(prior.provider || options.provider || "google_workspace"),
+    refreshToken,
+    requestedCapabilities: prior.requestedCapabilities || options.requestedCapabilities || options.capabilities || [],
+    requestedScopes: prior.requestedScopes || options.requestedScopes || options.scopes || [],
+  }, registration, env);
+  const url = new URL(`/api/broker/instances/${encodeURIComponent(registration.instanceId)}/google-workspace/refresh-token`, registration.brokerBaseUrl);
+  const response = await fetchImpl(url, {
+    method: "POST",
+    headers: { "content-type": "application/json", accept: "application/json" },
+    body: JSON.stringify(body),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok || payload?.ok === false) {
+    const error = new Error(payload?.error || payload?.message || `broker_google_workspace_refresh_http_${response.status}`);
+    error.statusCode = response.status || 502;
+    throw error;
+  }
+  const tokenPayload = payload.token || payload;
+  const token = await saveTokenPayload(tokenPayload, env, prior, {
+    ...options,
+    provider: prior.provider || options.provider || "google_workspace",
+    requestedCapabilities: prior.requestedCapabilities || options.requestedCapabilities || options.capabilities || [],
+    requestedScopes: prior.requestedScopes || options.requestedScopes || options.scopes || [],
+    brokered: true,
+    brokerGrantSource: "parent_broker",
+    brokerInstanceId: clean(prior.brokerInstanceId || registration.instanceId),
+    brokerRefresh: true,
+  });
+  const scope = await connectorScopePaths(env, options);
+  await appendEvent({ type: "gmail_broker_token_refreshed", userId: scope.userId || undefined }, env).catch(() => {});
+  return token;
+}
+
+export async function refreshGmailAccessToken(env = process.env, fetchImpl = fetch, options = {}) {
   const prior = await readGmailToken(env, options);
+  if (prior.brokered === true || prior.brokerRefresh === true) {
+    return refreshBrokeredGmailAccessToken(prior, env, fetchImpl, options);
+  }
+  const config = await readParentConnectorRuntimeConfig("gmail", env);
+  const { clientId, clientSecret } = requireOAuthConfig(config);
   const refreshToken = String(prior.refreshToken || "").trim();
   if (!clientSecret || !refreshToken) {
     const error = new Error("gmail_refresh_config_required");
@@ -294,6 +455,54 @@ async function findOAuthState(state, env = process.env) {
   return { savedState: {}, scopeOptions: {} };
 }
 
+async function provisionBrokeredGmailGrant(savedState = {}, token = {}, env = process.env, fetchImpl = fetch) {
+  const brokerInstanceId = clean(savedState.brokerInstanceId);
+  if (!brokerInstanceId) return null;
+  const { record, body } = await encryptBrokerInstancePayload(brokerInstanceId, {
+    provider: savedState.provider || "google_workspace",
+    account: savedState.account || "",
+    userId: savedState.brokerTenantUserId || savedState.userId || "",
+    tenantVmId: savedState.brokerTenantVmId || "",
+    threadId: savedState.brokerTenantThreadId || savedState.threadId || "",
+    chatId: savedState.brokerTenantChatId || savedState.chatId || "",
+    accountId: savedState.brokerTenantAccountId || savedState.accountId || "",
+    brokerInstanceId,
+    requestedCapabilities: savedState.requestedCapabilities || [],
+    requestedScopes: savedState.requestedScopes || [],
+    token: {
+      accessToken: token.accessToken || "",
+      refreshToken: token.refreshToken || "",
+      scope: token.scope || "",
+      grantedScopes: token.grantedScopes || [],
+      capabilities: token.capabilities || [],
+      requestedCapabilities: token.requestedCapabilities || savedState.requestedCapabilities || [],
+      requestedScopes: token.requestedScopes || savedState.requestedScopes || [],
+      provider: token.provider || savedState.provider || "google_workspace",
+      tokenType: token.tokenType || "Bearer",
+      expiresAt: token.expiresAt || 0,
+    },
+  }, env);
+  const baseUrl = clean(record.endpointBaseUrl || record.connectBaseUrl);
+  if (!baseUrl) {
+    const error = new Error("broker_google_workspace_grant_endpoint_missing");
+    error.statusCode = 502;
+    throw error;
+  }
+  const url = new URL("/api/broker/google-workspace/grants", baseUrl);
+  const response = await fetchImpl(url, {
+    method: "POST",
+    headers: { "content-type": "application/json", accept: "application/json" },
+    body: JSON.stringify(body),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok || payload?.ok === false) {
+    const error = new Error(payload?.error || payload?.message || `broker_google_workspace_grant_http_${response.status}`);
+    error.statusCode = response.status || 502;
+    throw error;
+  }
+  return payload;
+}
+
 export async function finishGmailOAuth(query, env = process.env, fetchImpl = fetch) {
   const code = String(query.get("code") || "").trim();
   const state = String(query.get("state") || "").trim();
@@ -303,6 +512,7 @@ export async function finishGmailOAuth(query, env = process.env, fetchImpl = fet
     throw error;
   }
   const { savedState, scopeOptions } = await findOAuthState(state, env);
+  const brokered = Boolean(clean(savedState.brokerInstanceId));
   const token = await exchangeGmailCode(code, env, fetchImpl, {
     ...scopeOptions,
     redirectUri: savedState.redirectUri || "",
@@ -310,10 +520,17 @@ export async function finishGmailOAuth(query, env = process.env, fetchImpl = fet
     connectId: savedState.connectId || "",
     requestedCapabilities: savedState.requestedCapabilities || [],
     requestedScopes: savedState.requestedScopes || [],
+    saveToken: !brokered,
   });
+  const brokerGrant = brokered
+    ? await provisionBrokeredGmailGrant(savedState, token, env, fetchImpl)
+    : null;
   return {
     ok: true,
     provider: savedState.provider || "gmail",
+    brokered,
+    brokerInstanceId: savedState.brokerInstanceId || "",
+    brokerGrant,
     state,
     connectId: savedState.connectId || "",
     account: savedState.account || "",

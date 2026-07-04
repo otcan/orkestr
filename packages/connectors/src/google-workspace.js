@@ -1,6 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { readJson, writeJson } from "../../storage/src/store.js";
 import { connectorFile, connectorScopePaths, listConnectorScopePaths } from "./connector-storage.js";
+import {
+  encryptBrokerClientPayload,
+  ensureBrokerClientRegistration,
+} from "../../core/src/broker-instance-registry.js";
 import { getGmailAccessToken, readGmailToken, startGmailOAuth } from "./gmail.js";
 import {
   googleWorkspaceCapabilityDefinitions,
@@ -75,6 +79,48 @@ function publicConnectUrl(pathname = "", env = process.env) {
   }
 }
 
+function brokeredGoogleWorkspaceConnectEnabled(env = process.env) {
+  if (!clean(env.ORKESTR_TENANT_VM_ID)) return false;
+  if (truthy(env.ORKESTR_GOOGLE_WORKSPACE_LOCAL_OAUTH)) return false;
+  return Boolean(clean(env.ORKESTR_BROKER_BASE_URL || env.ORKESTR_DEMO_BROKER_BASE_URL));
+}
+
+async function createBrokeredGoogleWorkspaceConnectLink({
+  principal = {},
+  thread = {},
+  chatId = "",
+  accountId = "",
+  account = "",
+} = {}, env = process.env) {
+  const registration = await ensureBrokerClientRegistration(env);
+  if (registration?.ok === false || !registration?.instanceId || !registration?.brokerBaseUrl) {
+    throw connectorError(registration?.reason || "broker_google_workspace_registration_required", Number(registration?.status || 409) || 409);
+  }
+  const scope = await connectorScopePaths(env, { principal });
+  const threadBinding = thread.binding && typeof thread.binding === "object" ? thread.binding : {};
+  const request = {
+    tenantVmId: clean(env.ORKESTR_TENANT_VM_ID),
+    userId: scope.userId || clean(principal?.userId),
+    threadId: clean(thread.id),
+    chatId: clean(chatId || threadBinding.chatId),
+    accountId: clean(accountId || threadBinding.responderAccountId || threadBinding.outboundAccountId),
+    account: clean(account).toLowerCase(),
+    source: "tenant_whatsapp",
+  };
+  const body = await encryptBrokerClientPayload(request, registration, env);
+  const url = new URL(`/api/broker/instances/${encodeURIComponent(registration.instanceId)}/google-workspace/connect-link`, registration.brokerBaseUrl);
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "content-type": "application/json", accept: "application/json" },
+    body: JSON.stringify(body),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok || payload?.ok === false) {
+    throw connectorError(payload?.error || payload?.message || `broker_google_workspace_connect_http_${response.status}`, response.status || 502);
+  }
+  return payload;
+}
+
 async function readConnectLedger(scope) {
   const ledger = await readJson(connectorFile(scope, "oauth", connectFileName), { requests: [] });
   return {
@@ -138,7 +184,16 @@ export async function createGoogleWorkspaceConnectLink({
   chatId = "",
   accountId = "",
   account = "",
+  brokerInstanceId = "",
+  brokerTenantVmId = "",
+  brokerTenantUserId = "",
+  brokerTenantThreadId = "",
+  brokerTenantChatId = "",
+  brokerTenantAccountId = "",
 } = {}, env = process.env) {
+  if (!clean(brokerInstanceId) && brokeredGoogleWorkspaceConnectEnabled(env)) {
+    return createBrokeredGoogleWorkspaceConnectLink({ principal, thread, chatId, accountId, account }, env);
+  }
   const scope = await connectorScopePaths(env, { principal });
   const connectId = randomUUID();
   const threadBinding = thread.binding && typeof thread.binding === "object" ? thread.binding : {};
@@ -150,6 +205,12 @@ export async function createGoogleWorkspaceConnectLink({
     accountId: clean(accountId || threadBinding.responderAccountId || threadBinding.outboundAccountId),
     account: clean(account).toLowerCase(),
     source: "whatsapp",
+    brokerInstanceId: clean(brokerInstanceId),
+    brokerTenantVmId: clean(brokerTenantVmId),
+    brokerTenantUserId: clean(brokerTenantUserId),
+    brokerTenantThreadId: clean(brokerTenantThreadId),
+    brokerTenantChatId: clean(brokerTenantChatId),
+    brokerTenantAccountId: clean(brokerTenantAccountId),
     createdAt: nowIso(),
     expiresAt: expiresAtIso(connectLinkTtlMs(env)),
   };
@@ -168,6 +229,7 @@ export async function createGoogleWorkspaceConnectLink({
     link,
     expiresAt: request.expiresAt,
     capabilities: googleWorkspaceCapabilityDefinitions(),
+    brokerInstanceId: request.brokerInstanceId,
     message: googleWorkspaceConnectMessage({ link, expiresAt: request.expiresAt }),
   };
 }
@@ -209,6 +271,12 @@ export async function startGoogleWorkspaceOAuth(env = process.env, options = {})
     connectId,
     capabilities,
     scopes: googleWorkspaceScopesForCapabilities(capabilities),
+    brokerInstanceId: request.brokerInstanceId,
+    brokerTenantVmId: request.brokerTenantVmId,
+    brokerTenantUserId: request.brokerTenantUserId,
+    brokerTenantThreadId: request.brokerTenantThreadId,
+    brokerTenantChatId: request.brokerTenantChatId,
+    brokerTenantAccountId: request.brokerTenantAccountId,
   });
   request.consumedAt = nowIso();
   request.selectedCapabilities = capabilities;

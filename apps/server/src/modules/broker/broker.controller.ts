@@ -1,6 +1,7 @@
 import { Body, Controller, Get, HttpCode, Param, Post, Req } from "@nestjs/common";
 import crypto from "node:crypto";
 import {
+  decryptBrokerClientPayload,
   decryptBrokerInstanceRequest,
   brokerWhatsAppRelayAccountId,
   heartbeatBrokerInstance,
@@ -8,9 +9,17 @@ import {
   registerBrokerInstance,
 } from "../../../../../packages/core/src/broker-instance-registry.js";
 import {
+  createGoogleWorkspaceConnectLink,
+} from "../../../../../packages/connectors/src/google-workspace.js";
+import {
+  refreshGmailBrokerToken,
+  saveBrokeredGmailGrant,
+} from "../../../../../packages/connectors/src/gmail.js";
+import {
   getWhatsAppChatMessages,
   sendWhatsAppText,
 } from "../../../../../packages/connectors/src/whatsapp.js";
+import { userPrincipal } from "../../../../../packages/core/src/principal.js";
 import { isAdminPrincipal } from "../../../../../packages/core/src/policy.js";
 import { requestPrincipal } from "../../../../../packages/core/src/principal.js";
 import { httpError } from "../../common/http.js";
@@ -121,5 +130,71 @@ export class BrokerController {
       limit: Number(payload.limit || 80) || 80,
     }, process.env));
     return { ok: true, instanceId: record.instanceId, accountId, chatId, messages: history.messages || [] };
+  }
+
+  @Post("instances/:instanceId/google-workspace/connect-link")
+  @HttpCode(200)
+  async googleWorkspaceConnectLink(
+    @Param("instanceId") instanceId: string,
+    @Body() body: Record<string, unknown> = {},
+  ) {
+    const { record, payload } = await brokerCall(() => decryptBrokerInstanceRequest(instanceId, body, process.env));
+    const userId = clean(payload.userId || record.instanceId);
+    const threadId = clean(payload.threadId);
+    const chatId = clean(payload.chatId);
+    const accountId = clean(payload.accountId);
+    const principal = userPrincipal({
+      id: userId,
+      role: "user",
+      source: "broker-instance",
+      displayName: clean(payload.displayName || record.displayName || userId),
+    });
+    const link = await brokerCall(() => createGoogleWorkspaceConnectLink({
+      principal,
+      thread: {
+        id: threadId,
+        ownerUserId: userId,
+        binding: {
+          connector: "whatsapp",
+          chatId,
+          responderAccountId: accountId,
+          outboundAccountId: accountId,
+        },
+      },
+      chatId,
+      accountId,
+      account: clean(payload.account),
+      brokerInstanceId: record.instanceId,
+      brokerTenantVmId: clean(payload.tenantVmId),
+      brokerTenantUserId: userId,
+      brokerTenantThreadId: threadId,
+      brokerTenantChatId: chatId,
+      brokerTenantAccountId: accountId,
+    }, process.env));
+    return { ...link, ok: true, instanceId: record.instanceId };
+  }
+
+  @Post("instances/:instanceId/google-workspace/refresh-token")
+  @HttpCode(200)
+  async googleWorkspaceRefreshToken(
+    @Param("instanceId") instanceId: string,
+    @Body() body: Record<string, unknown> = {},
+  ) {
+    const { record, payload } = await brokerCall(() => decryptBrokerInstanceRequest(instanceId, body, process.env));
+    const refreshToken = clean(payload.refreshToken);
+    if (!refreshToken) throw httpError("broker_google_workspace_refresh_token_required", 400);
+    const token = await brokerCall(() => refreshGmailBrokerToken(refreshToken, process.env));
+    return { ok: true, instanceId: record.instanceId, token };
+  }
+
+  @Post("google-workspace/grants")
+  @HttpCode(200)
+  async receiveGoogleWorkspaceGrant(@Body() body: Record<string, unknown> = {}) {
+    const { registration, payload } = await brokerCall(() => decryptBrokerClientPayload(body, process.env));
+    const saved = await brokerCall(() => saveBrokeredGmailGrant({
+      ...payload,
+      brokerInstanceId: clean(payload.brokerInstanceId || registration.instanceId),
+    }, process.env));
+    return { ok: true, instanceId: registration.instanceId, grant: saved };
   }
 }

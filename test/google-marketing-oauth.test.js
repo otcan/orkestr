@@ -6,6 +6,7 @@ import path from "node:path";
 import test from "node:test";
 import { startServer } from "../apps/server/src/server.js";
 import { readGmailToken, startGmailOAuth } from "../packages/connectors/src/gmail.js";
+import { createTenantVm } from "../packages/core/src/tenant-vm-registry.js";
 import { writeConnectorConfig } from "../packages/storage/src/config.js";
 
 function restoreEnvValue(name, value) {
@@ -242,6 +243,55 @@ test("shared Google callback completes Gmail OAuth when the state belongs to Gma
   } finally {
     globalThis.fetch = originalFetch;
     await new Promise((resolve) => server.close(resolve));
+    for (const [name, value] of Object.entries(priorEnv)) restoreEnvValue(name, value);
+  }
+});
+
+test("gmail oauth callback forwards tenant-prefixed states to the tenant VM", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-gmail-tenant-forward-"));
+  const forwarded = [];
+  const tenantServer = http.createServer((request, response) => {
+    forwarded.push({
+      url: request.url,
+      forwarded: request.headers["x-orkestr-oauth-forwarded"],
+      tenantVmId: request.headers["x-orkestr-tenant-vm-id"],
+    });
+    response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+    response.end("<!doctype html><title>tenant gmail complete</title>");
+  });
+  await new Promise((resolve) => tenantServer.listen(0, "127.0.0.1", resolve));
+  const { port: tenantPort } = tenantServer.address();
+  const priorEnv = {
+    ORKESTR_HOME: process.env.ORKESTR_HOME,
+    ORKESTR_OVERLAY_DIR: process.env.ORKESTR_OVERLAY_DIR,
+    ORKESTR_RECOVER_RUNNING_ON_START: process.env.ORKESTR_RECOVER_RUNNING_ON_START,
+  };
+  process.env.ORKESTR_HOME = home;
+  delete process.env.ORKESTR_OVERLAY_DIR;
+  process.env.ORKESTR_RECOVER_RUNNING_ON_START = "0";
+  await createTenantVm({
+    id: "tenant-demo-vm",
+    ownerUserId: "tenant-demo",
+    endpoint: { baseUrl: `http://127.0.0.1:${tenantPort}` },
+  }, process.env);
+  const server = await startServer({ port: 0, host: "127.0.0.1" });
+  const { port } = server.address();
+
+  try {
+    const response = await fetch(
+      `http://127.0.0.1:${port}/oauth/gmail/callback?code=tenant-code&state=${encodeURIComponent("tenant:tenant-demo-vm:state-1")}`,
+    );
+    const html = await response.text();
+
+    assert.equal(response.status, 200);
+    assert.match(html, /tenant gmail complete/);
+    assert.equal(forwarded.length, 1);
+    assert.equal(forwarded[0].url, "/oauth/gmail/callback?code=tenant-code&state=tenant%3Atenant-demo-vm%3Astate-1");
+    assert.equal(forwarded[0].forwarded, "1");
+    assert.equal(forwarded[0].tenantVmId, "tenant-demo-vm");
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    await new Promise((resolve) => tenantServer.close(resolve));
     for (const [name, value] of Object.entries(priorEnv)) restoreEnvValue(name, value);
   }
 });
