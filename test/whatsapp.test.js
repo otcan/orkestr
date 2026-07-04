@@ -7818,6 +7818,55 @@ test("whatsapp delivery sends allowed local paths as media attachments and does 
   assert.equal(storedReply.attachments[0].filename, "report.txt");
 });
 
+test("whatsapp tenant relay sends local report links as text instead of parent bridge media paths", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-tenant-relay-attachment-"));
+  const env = await externalBridgeEnvWithAllowingSanitizer(home, {
+    WHATSAPP_BRIDGE_MODE: "relay",
+    WHATSAPP_BRIDGE_URL: "http://wa.local",
+    ORKESTR_TENANT_VM_ID: "firat-jobs-vm",
+  });
+  const workspace = path.join(home, "workspace", "firat-jobs");
+  await fs.mkdir(workspace, { recursive: true });
+  const reportPath = path.join(workspace, "job-search-report.md");
+  await fs.writeFile(reportPath, "report payload", "utf8");
+  await createThread({
+    id: "thread-wa-tenant-relay-attachment",
+    ownerUserId: "firat",
+    name: "Firat Jobs",
+    cwd: workspace,
+    workspace,
+  }, env);
+  await writeConnectorConfig("whatsapp", {
+    bridgeMode: "relay",
+    bridgeUrl: "http://wa.local",
+    threadRoutes: { "chat-tenant-relay-attachment": "thread-wa-tenant-relay-attachment" },
+  }, env);
+
+  const routed = await routeWhatsAppInbound({ eventId: "wa-tenant-relay-attachment-1", chatId: "chat-tenant-relay-attachment", text: "send report" }, env);
+  await appendThreadMessage("thread-wa-tenant-relay-attachment", {
+    role: "assistant",
+    source: "codex-rollout",
+    phase: "final_answer",
+    state: "completed",
+    text: `Generated report: [job-search-report.md](${reportPath})`,
+    parentMessageId: routed.message.id,
+    connector: "whatsapp",
+    chatId: "chat-tenant-relay-attachment",
+  }, env);
+
+  const calls = [];
+  const delivery = await deliverWhatsAppReplies(env, async (url, options) => {
+    calls.push({ url, body: JSON.parse(options.body) });
+    return response({ ok: true, ids: ["sent-report-link"] });
+  });
+
+  assert.equal(delivery.delivered.length, 1);
+  assert.equal(delivery.failed.length, 0);
+  assert.equal(calls[0].url.pathname, "/send-text");
+  assert.equal(calls[0].body.paths, undefined);
+  assert.match(stripDebugFooter(calls[0].body.text), /job-search-report\.md/);
+});
+
 test("whatsapp delivery sends admin temp screenshots as media attachments", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-tmp-screenshot-"));
   const env = externalBridgeEnv(home, { ORKESTR_ADMIN_USER_ID: "admin" });

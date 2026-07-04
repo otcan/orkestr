@@ -252,6 +252,32 @@ function bridgeMode(config = {}, env = process.env) {
   return mode === "external" && externalBridgeEnabled(env) ? "external" : "local";
 }
 
+function bridgeModeRaw(config = {}, env = process.env) {
+  return String(env.WHATSAPP_BRIDGE_MODE || config.bridgeMode || "").trim().toLowerCase();
+}
+
+function explicitBoolean(value) {
+  const text = String(value || "").trim().toLowerCase();
+  if (!text) return null;
+  if (["1", "true", "yes", "on"].includes(text)) return true;
+  if (["0", "false", "no", "off"].includes(text)) return false;
+  return null;
+}
+
+function externalBridgeCanReadLocalAttachmentPaths(config = {}, env = process.env) {
+  const explicit = explicitBoolean(pickString(
+    env.ORKESTR_WHATSAPP_EXTERNAL_BRIDGE_LOCAL_ATTACHMENTS,
+    env.WHATSAPP_BRIDGE_LOCAL_ATTACHMENTS,
+    config.externalBridgeLocalAttachments,
+    config.localAttachments,
+  ));
+  if (explicit !== null) return explicit;
+  const mode = bridgeModeRaw(config, env);
+  if (["relay", "parent-forward", "control-plane-forward", "control-plane", "controlplane", "broker"].includes(mode)) return false;
+  if (pickString(env.ORKESTR_TENANT_VM_ID, env.ORKESTR_TENANT_SLICE_ID, env.ORKESTR_DEMO_VM_ID)) return false;
+  return true;
+}
+
 function firstAccountError(accounts = []) {
   return accounts.map((account) => account.error).find(Boolean) || "";
 }
@@ -4233,16 +4259,17 @@ export async function sendWhatsAppText({ chatId = "", text = "", accountId = "",
     return sendLocalWhatsAppMessage({ chatId, text, accountId, attachments: normalizedAttachments, env, crossAccountEchoSuppression, routeSentMessage });
   }
   if (!bridgeUrl) throw badRequest("whatsapp_bridge_not_configured");
+  const sendableAttachments = externalBridgeCanReadLocalAttachmentPaths(resolvedConfig, env) ? normalizedAttachments : [];
   const headers = bridgeRequestHeaders(resolvedConfig, env, { "content-type": "application/json" });
   const runtimeAccountId = await resolveBridgeRuntimeAccountId(accountId, { config: resolvedConfig, env, fetchImpl });
-  const response = await fetchImpl(whatsappBridgeEndpointUrl(bridgeUrl, normalizedAttachments.length ? "/send-media" : "/send-text"), {
+  const response = await fetchImpl(whatsappBridgeEndpointUrl(bridgeUrl, sendableAttachments.length ? "/send-media" : "/send-text"), {
     method: "POST",
     headers,
     body: JSON.stringify({
       to: chatId,
       text,
       ...(runtimeAccountId ? { accountId: runtimeAccountId } : {}),
-      ...(normalizedAttachments.length ? { paths: normalizedAttachments.map((attachment) => attachment.path) } : {}),
+      ...(sendableAttachments.length ? { paths: sendableAttachments.map((attachment) => attachment.path) } : {}),
       ...(crossAccountEchoSuppression === false ? { crossAccountEchoSuppression: false } : {}),
       ...(routeSentMessage === true ? { routeSentMessage: true } : {}),
     }),
