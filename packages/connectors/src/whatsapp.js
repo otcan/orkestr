@@ -1312,6 +1312,51 @@ function isCodexAppServerThread(thread = {}) {
     pickString(thread.executor?.transport).toLowerCase() === "app-server";
 }
 
+function deliveryModeRequestsInstantSteer(value = "") {
+  const mode = pickString(value).toLowerCase().replace(/[\s-]+/g, "_");
+  return ["instant_steer", "steer", "active_turn_steer", "steer_active_turn"].includes(mode);
+}
+
+function bindingRequestsWhatsAppInstantSteer(binding = {}) {
+  if (!binding || typeof binding !== "object" || Array.isArray(binding)) return false;
+  return binding.whatsappInboundInstantSteer === true ||
+    binding.instantSteerWhatsAppInbound === true ||
+    binding.steerWhatsAppInbound === true ||
+    binding.steerActiveTurn === true ||
+    deliveryModeRequestsInstantSteer(binding.inboundDeliveryMode) ||
+    deliveryModeRequestsInstantSteer(binding.whatsappInboundDeliveryMode) ||
+    deliveryModeRequestsInstantSteer(binding.codexDeliveryMode);
+}
+
+function whatsappInboundInstantSteerEnabled({ thread = null, binding = null, chatId = "", env = process.env } = {}) {
+  const configuredThreads = new Set(splitAccountList([
+    env.ORKESTR_WHATSAPP_INBOUND_INSTANT_STEER_THREAD_IDS,
+    env.ORKESTR_WHATSAPP_INSTANT_STEER_THREAD_IDS,
+    env.ORKESTR_WHATSAPP_INBOUND_INSTANT_STEER_THREADS,
+  ].filter(Boolean).join(",")));
+  const threadKeys = [
+    thread?.id,
+    thread?.name,
+    thread?.title,
+    thread?.bindingName,
+    binding?.threadId,
+    binding?.threadName,
+  ].map((value) => pickString(value)).filter(Boolean);
+  if (threadKeys.some((key) => configuredThreads.has(key))) return true;
+  const configuredChats = new Set(splitAccountList([
+    env.ORKESTR_WHATSAPP_INBOUND_INSTANT_STEER_CHAT_IDS,
+    env.ORKESTR_WHATSAPP_INSTANT_STEER_CHAT_IDS,
+  ].filter(Boolean).join(",")));
+  const bindingChatId = pickString(binding?.chatId, thread?.binding?.chatId, chatId);
+  if (bindingChatId && configuredChats.has(bindingChatId)) return true;
+  return [
+    binding,
+    thread?.binding,
+    thread?.runtime,
+    thread,
+  ].some((candidate) => bindingRequestsWhatsAppInstantSteer(candidate));
+}
+
 function shouldUseApiAgentForWhatsAppThread(thread = {}, env = process.env) {
   const owner = resourceOwnerUserId(thread, env);
   const adminId = normalizeUserId(env.ORKESTR_ADMIN_USER_ID || adminUserId);
@@ -3052,6 +3097,8 @@ async function coalesceWhatsAppInboundThreadMessage({ thread, messageInput, even
     coalescedAt: new Date().toISOString(),
     coalescedCount: coalescedEventIds.length,
   };
+  if (messageInput.steerActiveTurn === true) patch.steerActiveTurn = true;
+  if (pickString(messageInput.codexDeliveryMode)) patch.codexDeliveryMode = pickString(messageInput.codexDeliveryMode);
   const message = await updateThreadMessage(thread.id, existing.id, patch, env);
   await appendEvent({
     type: "whatsapp_inbound_coalesced",
@@ -3598,6 +3645,10 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
   messageInput.senderTrustLevel = inboundSecurity.trustLevel || "unknown";
   messageInput.senderPolicyMode = inboundSecurity.policyMode || "";
   messageInput.securityClassification = inboundSecurity.classified || null;
+  if (whatsappInboundInstantSteerEnabled({ thread, binding: threadRoute.binding, chatId, env })) {
+    messageInput.codexDeliveryMode = "instant_steer";
+    messageInput.steerActiveTurn = true;
+  }
   if (!inboundSecurity.allowed) {
     const blocked = inboundSecurity.action === "block";
     if (blocked) state = addWhatsAppInboundSecurityBlock(state, inboundSecurity);

@@ -3768,6 +3768,78 @@ test("Codex app-server queues WhatsApp input behind active turns", async () => {
   }
 });
 
+test("Codex app-server steers marked WhatsApp input into active turns", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-wa-steer-"));
+  const fake = await createFakeCodex(home);
+  const env = {
+    ORKESTR_HOME: path.join(home, "orkestr"),
+    HOME: path.join(home, "runtime-home"),
+    PATH: `${fake.bin}${path.delimiter}${process.env.PATH || ""}`,
+    FAKE_CODEX_STATE: fake.stateFile,
+    ORKESTR_CODEX_APP_SERVER_ACTIVE_TURN_RETRY_MS: "60000",
+  };
+  try {
+    const thread = await createThread({ id: "app-server-wa-steer-thread", name: "App Server WA Steer Thread", cwd: home, executorId: "codex", executor: { type: "codex" } }, env);
+    const started = await startCodexAppServerThread(thread, env);
+    const codexThreadId = started.thread.executor.codexThreadId;
+    const rawState = JSON.parse(await fs.readFile(fake.stateFile, "utf8"));
+    const codexThread = rawState.threads.find((item) => item.id === codexThreadId);
+    codexThread.activeTurnId = "active-turn";
+    codexThread.status = { type: "active", activeFlags: ["running"] };
+    codexThread.turns.push({
+      id: "active-turn",
+      threadId: codexThreadId,
+      status: "inProgress",
+      items: [
+        { type: "userMessage", id: "user_active_turn", content: [{ type: "text", text: "Keep working." }] },
+      ],
+    });
+    await fs.writeFile(fake.stateFile, JSON.stringify(rawState, null, 2));
+    await updateThread(started.thread.id, {
+      state: "working",
+      runtime: {
+        ...(started.thread.runtime || {}),
+        runtimeKind: "codex-app-server",
+        state: "working",
+        activeTurnId: "active-turn",
+      },
+    }, env);
+    await markAppServerTurnActive(started.thread, env);
+    const input = await enqueueThreadInput(started.thread.id, {
+      text: "steer this into the current turn",
+      source: "whatsapp_inbound",
+      connector: "whatsapp",
+      chatId: "chat-wa-steer",
+      codexDeliveryMode: "instant_steer",
+      steerActiveTurn: true,
+    }, env);
+
+    const delivered = await deliverCodexAppServerPendingInputs(await getThread(started.thread.id, env), env);
+    const messages = await listThreadMessages(started.thread.id, env);
+    const completed = messages.find((message) => message.id === input.id);
+    const rawStateAfter = JSON.parse(await fs.readFile(fake.stateFile, "utf8"));
+    const steerCall = rawStateAfter.calls.find((call) => call.method === "turn/steer");
+    const activeTurn = rawStateAfter.threads.find((item) => item.id === codexThreadId).turns.find((turn) => turn.id === "active-turn");
+
+    assert.deepEqual(delivered, [input.id]);
+    assert.equal(completed.state, "completed");
+    assert.equal(completed.deliveryState, "delivered");
+    assert.equal(completed.observedVia, "codex_app_server_turn_steer");
+    assert.equal(completed.codexTurnId, "active-turn");
+    assert.equal(steerCall.params.threadId, codexThreadId);
+    assert.equal(steerCall.params.expectedTurnId, "active-turn");
+    assert.equal(steerCall.params.input[0].text, "steer this into the current turn");
+    assert.ok(activeTurn.items.some((item) => item.id === "steer_active-turn"));
+    assert.ok(!rawStateAfter.calls.some((call) => call.method === "turn/interrupt"));
+    assert.ok(!rawStateAfter.calls.some((call) =>
+      call.method === "turn/start" &&
+      call.params?.input?.some((item) => item.text === "steer this into the current turn")
+    ));
+  } finally {
+    stopCodexAppServerClients();
+  }
+});
+
 test("Codex app-server delivers queued input when live status cleared a stale active turn", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-stale-active-delivery-"));
   const fake = await createFakeCodex(home);

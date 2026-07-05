@@ -8713,6 +8713,37 @@ test("whatsapp /now inputs report interrupting before normal queue notices", asy
   assertDebugFooter(calls[0].body.text, { messageType: "update", queueReason: "interrupting" });
 });
 
+test("whatsapp inbound can mark a thread for instant active-turn steer", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-instant-steer-"));
+  const env = externalBridgeEnv(home);
+  await createThread({
+    id: "thread-wa-instant-steer",
+    name: "WA Instant Steer Thread",
+    runtimeKind: "codex-app-server",
+    binding: {
+      connector: "whatsapp",
+      chatId: "chat-instant-steer",
+      enabled: true,
+      inboundDeliveryMode: "instant_steer",
+    },
+  }, env);
+  await writeConnectorConfig("whatsapp", {
+    bridgeMode: "external",
+    bridgeUrl: "http://wa.local",
+  }, env);
+
+  const routed = await routeWhatsAppInbound({
+    eventId: "wa-instant-steer-1",
+    chatId: "chat-instant-steer",
+    accountId: "account-1",
+    text: "this should steer the active turn",
+  }, env);
+
+  assert.equal(routed.threadId, "thread-wa-instant-steer");
+  assert.equal(routed.message.codexDeliveryMode, "instant_steer");
+  assert.equal(routed.message.steerActiveTurn, true);
+});
+
 test("whatsapp delivery reports waking queue notices", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-queue-waking-"));
   const env = externalBridgeEnv(home);
@@ -8749,6 +8780,11 @@ test("whatsapp queue notices use app-server runtime states", () => {
     runtimeKind: "codex-app-server",
     activeTurnId: "turn-1",
   }, { text: "queue behind the turn" }), "awaiting_active_turn");
+  assert.equal(initialQueueDeliveryState({
+    state: "working",
+    runtimeKind: "codex-app-server",
+    activeTurnId: "turn-1",
+  }, { text: "steer into the turn", codexDeliveryMode: "instant_steer", steerActiveTurn: true }), "");
   assert.equal(initialQueueDeliveryState({
     state: "sleeping",
     runtimeKind: "codex-app-server",

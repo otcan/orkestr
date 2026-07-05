@@ -154,6 +154,11 @@ function whatsappMessageOrigin(message, state = null) {
   return Boolean((state?.inboundEvents || []).some((event) => event.messageId === message.id));
 }
 
+function messageRequestsInstantSteer(message = null) {
+  return message?.steerActiveTurn === true ||
+    pickString(message?.codexDeliveryMode).toLowerCase() === "instant_steer";
+}
+
 export function initialQueueDeliveryState(status = null, message = null) {
   const parsed = parseThreadInputCommand({ text: message?.text || "" });
   if (parsed.command === "interrupt") return "interrupting";
@@ -164,7 +169,7 @@ export function initialQueueDeliveryState(status = null, message = null) {
     return state === "working" ? "awaiting_runtime_completion" : "waiting_runtime_ready";
   }
   const isCodexAppServer = runtimeKind === "codex-app-server";
-  if (isCodexAppServer && state === "working") return "awaiting_active_turn";
+  if (isCodexAppServer && state === "working") return messageRequestsInstantSteer(message) ? "" : "awaiting_active_turn";
   if (isCodexAppServer && state === "awaiting_approval") return "awaiting_approval";
   if (isCodexAppServer && ["sleeping", "waking", "unloaded", "notloaded", "failed", "migration_required"].includes(state)) {
     return "waking";

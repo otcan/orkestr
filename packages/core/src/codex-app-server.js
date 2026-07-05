@@ -69,6 +69,11 @@ function codexAppServerActiveTurnRetryMs(env = process.env) {
   return Number.isFinite(parsed) ? Math.max(250, parsed) : 15000;
 }
 
+function shouldSteerActiveTurnInput(message = {}) {
+  return message?.steerActiveTurn === true ||
+    clean(message?.codexDeliveryMode).toLowerCase() === "instant_steer";
+}
+
 function codexAppServerActiveTurnVerifyMs(env = process.env) {
   const raw = String(env.ORKESTR_CODEX_APP_SERVER_ACTIVE_TURN_VERIFY_MS ?? "15000").trim().toLowerCase();
   if (["0", "off", "false", "disabled"].includes(raw)) return 0;
@@ -700,6 +705,45 @@ export async function sendCodexAppServerInput(thread, message, env = process.env
   let result;
   let observedVia;
   let deliveryTurnId = activeTurnId;
+  if (activeTurnId && shouldSteerActiveTurnInput(pending)) {
+    try {
+      result = await client.request("turn/steer", {
+        threadId: id,
+        expectedTurnId: activeTurnId,
+        input: turnStartParams(thread, pending, runtimeEnv).input,
+      });
+      observedVia = "codex_app_server_turn_steer";
+      deliveryTurnId = clean(result?.turn?.id || result?.turnId || activeTurnId) || activeTurnId;
+      const completed = await updateThreadMessage(thread.id, pending.id, {
+        state: "completed",
+        deliveryState: "delivered",
+        deliveredAt: nowIso(),
+        observedVia,
+        deliveryClaimId: null,
+        codexThreadId: id,
+        codexTurnId: deliveryTurnId,
+        error: null,
+      }, env);
+      await appendEvent({
+        type: "codex_app_server_input_steered_active_turn",
+        threadId: thread.id,
+        codexThreadId: id,
+        messageId: pending.id,
+        activeTurnId: deliveryTurnId,
+      }, env).catch(() => {});
+      await appendEvent({ type: "thread_input_delivered", threadId: thread.id, messageId: message.id, observedVia }, env).catch(() => {});
+      return { message: completed, result, observedVia, steered: true };
+    } catch (error) {
+      await appendEvent({
+        type: "codex_app_server_input_steer_failed",
+        threadId: thread.id,
+        codexThreadId: id,
+        messageId: pending.id,
+        activeTurnId,
+        error: publicError(error),
+      }, env).catch(() => {});
+    }
+  }
   if (activeTurnId && pending.forceDeliveryAfterInterrupt === true) {
     await client.request("turn/interrupt", { threadId: id, turnId: activeTurnId }).catch(() => null);
     client.threadStates.set(id, { ...(client.threadStates.get(id) || {}), activeTurnId: "", activeTurnObservedAt: null, status: { type: "idle" }, statusObservedAt: nowIso() });

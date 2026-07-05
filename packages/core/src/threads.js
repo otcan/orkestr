@@ -28,6 +28,7 @@ const messageStringFields = [
   "turnId",
   "outboxId",
   "deliveryState",
+  "codexDeliveryMode",
   "observedVia",
   "runtimeLeaseId",
   "deliveredAt",
@@ -464,6 +465,7 @@ export async function appendThreadMessage(threadId, input, env = process.env) {
     }
     nextMessage = normalizeNoReplyAssistantMessage(nextMessage);
     if (input.forceDeliveryAfterInterrupt === true) nextMessage.forceDeliveryAfterInterrupt = true;
+    if (input.steerActiveTurn === true) nextMessage.steerActiveTurn = true;
     if (!nextMessage.text && !nextMessage.promptFile) {
       const error = new Error("message_text_required");
       error.statusCode = 400;
