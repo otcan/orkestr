@@ -205,6 +205,38 @@ test("CLI sanitizer check posts a server-owned sanitizer request", async () => {
   assert.match(stdout.text(), /"allow": true/);
 });
 
+test("CLI sanitizer check forwards thread id from runtime env", async () => {
+  const stdout = capture();
+  const seen = [];
+  const code = await runCli([
+    "--api",
+    "http://orkestr.test",
+    "sanitizer",
+    "check",
+    "--action",
+    "external.submit",
+    "--text",
+    "Submit the current user's StepStone application.",
+    "--json",
+  ], {
+    env: { ORKESTR_THREAD_ID: "firat-jobs" },
+    stdout,
+    stderr: capture(),
+    fetchImpl: fakeFetch({
+      "POST /api/sanitizer/check": {
+        ok: true,
+        allow: true,
+        decision: { allow: true, reason: "server-owned-allowed", unavailable: false },
+        thread: { id: "firat-jobs", ownerUserId: "firat" },
+      },
+    }, seen),
+  });
+
+  assert.equal(code, 0);
+  assert.equal(seen[0].body.threadId, "firat-jobs");
+  assert.match(stdout.text(), /"allow": true/);
+});
+
 test("CLI sanitizer check returns 2 when the server sanitizer is unavailable", async () => {
   const stdout = capture();
   const code = await runCli([

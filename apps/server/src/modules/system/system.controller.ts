@@ -25,7 +25,7 @@ import { createStateBackup, stateBackupStatus, stateRestorePlan } from "../../..
 import { migrateCodexThreadsToAppServer } from "../../../../../packages/core/src/codex-app-server-migration.js";
 import { createFolderForPrincipal, deleteFileForPrincipal, listFilesForPrincipal, listWorkspaceFoldersForPrincipal, saveFilesForPrincipal } from "../../../../../packages/core/src/workspace-files.js";
 import { assertSanitizedAction } from "../../../../../packages/core/src/llm-sanitizer.js";
-import { getThread } from "../../../../../packages/core/src/threads.js";
+import { getThread, listThreads, listThreadsForPrincipal } from "../../../../../packages/core/src/threads.js";
 import { userScopedCapabilityHints } from "../../../../../packages/core/src/user-skills.js";
 import { requestPrincipal } from "../../../../../packages/core/src/principal.js";
 import { isAdminPrincipal } from "../../../../../packages/core/src/policy.js";
@@ -69,6 +69,52 @@ const publicConnectorRuntimeConfigKeys = new Set([
   "tenantId",
   "tokenUrl",
 ]);
+
+function cleanText(value: unknown): string {
+  return String(value || "").trim();
+}
+
+function isTenantScopedRuntime(env = process.env): boolean {
+  return Boolean(
+    cleanText(env.ORKESTR_TENANT_VM_ID) ||
+      cleanText(env.ORKESTR_TENANT_SLICE_ID) ||
+      cleanText(env.ORKESTR_TENANT_BOUNDARY) === "tenant-vm",
+  );
+}
+
+function sanitizerFallbackScore(thread: any): number {
+  if (!thread?.id) return 0;
+  const runtimeKind = cleanText(thread.runtimeKind || thread.runtime?.runtimeKind || thread.executor?.metadata?.runtimeKind).toLowerCase();
+  const executorTransport = cleanText(thread.executor?.transport || thread.executor?.metadata?.transport).toLowerCase();
+  const usesAppServer = ["codex-app-server", "app-server"].includes(runtimeKind) || ["codex-app-server", "app-server"].includes(executorTransport);
+  const codexThreadId = cleanText(thread.executor?.codexThreadId || thread.codexThreadId || thread.runtime?.codexThreadId);
+  const workspace = cleanText(thread.cwd || thread.workspace || thread.repoPath || thread.worktreePath);
+  if (!usesAppServer || !codexThreadId || !workspace) return 0;
+  let score = 40;
+  const state = cleanText(thread.state).toLowerCase();
+  const runtimeState = cleanText(thread.runtime?.state).toLowerCase();
+  if (state === "working" || runtimeState === "working") score += 100;
+  if (cleanText(thread.runtime?.activeTurnId)) score += 80;
+  if (cleanText(thread.runtime?.pendingRequest)) score += 60;
+  if (cleanText(thread.runtime?.lastTurnStatus).toLowerCase() === "completed") score += 5;
+  return score;
+}
+
+async function resolveTenantSanitizerFallbackThread(principal: any, env = process.env) {
+  if (!isTenantScopedRuntime(env)) return null;
+  const threads = principal ? await listThreadsForPrincipal(principal, env) : await listThreads(env);
+  const scored = threads
+    .map((thread) => ({ thread, score: sanitizerFallbackScore(thread) }))
+    .filter((item) => item.score > 0)
+    .sort((left, right) => right.score - left.score);
+  if (!scored.length) return null;
+  const top = scored[0];
+  const tied = scored.filter((item) => item.score === top.score);
+  if (tied.length > 1) return null;
+  const owner = cleanText(env.ORKESTR_ADMIN_USER_ID);
+  if (owner && cleanText(top.thread.ownerUserId || top.thread.userId) !== owner) return null;
+  return top.thread;
+}
 
 async function gitValue(args: string[]): Promise<string> {
   try {
@@ -699,8 +745,9 @@ export class SystemController {
       principal,
     });
     const threadId = String(context.thread?.id || "").trim();
-    if (!threadId) throw httpError("sanitizer_thread_not_resolved", 404);
-    const thread = await getThread(threadId, process.env);
+    const fallbackThread = threadId ? null : await resolveTenantSanitizerFallbackThread(principal, process.env);
+    if (!threadId && !fallbackThread) throw httpError("sanitizer_thread_not_resolved", 404);
+    const thread = fallbackThread || await getThread(threadId, process.env);
     if (!thread) throw httpError("sanitizer_thread_not_found", 404);
     const ownerUserId = String(thread.ownerUserId || context.tenancy?.ownerUserId || principal?.userId || "").trim();
     const capabilities = await userScopedCapabilityHints({ userId: ownerUserId, thread }, process.env);

@@ -336,7 +336,7 @@ async function sanitizerCheckCommand(argv, ctx) {
   const body = {
     action: flagValue(argv, "--action") || "external.action",
     cwd: flagValue(argv, "--cwd") || ctx.cwd || process.cwd(),
-    threadId: flagValue(argv, "--thread") || flagValue(argv, "--thread-id"),
+    threadId: flagValue(argv, "--thread") || flagValue(argv, "--thread-id") || resolveThreadId(argv, ctx),
     apiSessionId: resolveApiSessionId(argv, ctx),
     text,
     reason: flagValue(argv, "--reason"),
@@ -480,6 +480,12 @@ function resolveApiSessionId(argv, ctx) {
     String(ctx.env?.CODEX_SESSION_ID || "").trim() ||
     String(ctx.env?.CODEX_CONVERSATION_ID || "").trim() ||
     String(ctx.env?.OPENAI_SESSION_ID || "").trim();
+}
+
+function resolveThreadId(argv, ctx) {
+  return String(ctx.env?.ORKESTR_THREAD_ID || "").trim() ||
+    String(ctx.env?.ORKESTR_CURRENT_THREAD_ID || "").trim() ||
+    String(ctx.env?.ORKESTR_RUNTIME_THREAD_ID || "").trim();
 }
 
 function requireApiSessionId(argv, ctx) {
