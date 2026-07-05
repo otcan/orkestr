@@ -256,6 +256,9 @@ test("tenant slice provisioning execute path and runtime status are observable",
   assert.match(appliedRuntimeEnvFile, /^ORKESTR_CONNECT_PUBLIC_SETUP_URL='https:\/\/connect\.example\.test\/i\/broker-charlie-001\/setup'$/m);
   assert.match(appliedRuntimeEnvFile, /^ORKESTR_BROKER_INSTANCE_ID='broker-charlie-001'$/m);
   assert.match(appliedRuntimeEnvFile, /^ORKESTR_INSTANCE_ID='broker-charlie-001'$/m);
+  assert.match(appliedRuntimeEnvFile, /^ORKESTR_LLM_SANITIZER_COMMAND_JSON='\["node","\/opt\/orkestr\/current\/scripts\/llm-sanitizer-codex\.mjs"\]'$/m);
+  assert.match(appliedRuntimeEnvFile, /^ORKESTR_LLM_SANITIZER_TIMEOUT_MS='90000'$/m);
+  assert.match(appliedRuntimeEnvFile, /^ORKESTR_LLM_SANITIZER_CODEX_TIMEOUT_MS='75000'$/m);
   assert.match(appliedRuntimeEnvFile, /^ORKESTR_WHATSAPP_INBOUND_TOKEN='owt_[^']+'$/m);
   assert.match(appliedRuntimeEnvFile, /^WHATSAPP_BRIDGE_MODE='external'$/m);
   assert.match(appliedRuntimeEnvFile, /^ORKESTR_WHATSAPP_EXTERNAL_BRIDGE_ENABLED='1'$/m);

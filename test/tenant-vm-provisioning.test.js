@@ -46,6 +46,11 @@ test("tenant VM provisioning builds a public-safe KubeVirt plan", async () => {
     plan.runtimeEnv.ORKESTR_DESKTOP_SHARE_URL_TEMPLATE,
     "https://app.example.test/desktop-share/tvm/alice-tenant/{subdomain}/{shareId}?key={key}",
   );
+  assert.equal(plan.runtimeEnv.ORKESTR_LLM_SANITIZER_COMMAND_JSON, "[\"node\",\"/opt/orkestr/current/scripts/llm-sanitizer-codex.mjs\"]");
+  assert.equal(plan.runtimeEnv.ORKESTR_LLM_SANITIZER_TIMEOUT_MS, "90000");
+  assert.equal(plan.runtimeEnv.ORKESTR_LLM_SANITIZER_CODEX_TIMEOUT_MS, "75000");
+  assert.equal(plan.runtimeEnv.ORKESTR_LLM_SANITIZER_MAX_ATTEMPTS, "2");
+  assert.equal(plan.runtimeEnv.ORKESTR_LLM_SANITIZER_RETRY_DELAY_MS, "1000");
   assert.equal(plan.bootstrapProfilePath, "/etc/orkestr/tenant-bootstrap-profile.json");
   assert.equal(plan.bootstrapProfile.firstChat.name, "Alice Launch");
   assert.equal(plan.bootstrapProfile.codex.model, "gpt-5.5");
@@ -77,6 +82,11 @@ test("tenant VM provisioning builds a public-safe KubeVirt plan", async () => {
   assert.match(userData, /ssh-ed25519/);
   assert.match(envFile, /^ORKESTR_HOST='0\.0\.0\.0'$/m);
   assert.match(envFile, /^ORKESTR_DESKTOP_SHARE_URL_TEMPLATE='https:\/\/app\.example\.test\/desktop-share\/tvm\/alice-tenant\/\{subdomain\}\/\{shareId\}\?key=\{key\}'$/m);
+  assert.match(envFile, /^ORKESTR_LLM_SANITIZER_COMMAND_JSON='\["node","\/opt\/orkestr\/current\/scripts\/llm-sanitizer-codex\.mjs"\]'$/m);
+  assert.match(envFile, /^ORKESTR_LLM_SANITIZER_TIMEOUT_MS='90000'$/m);
+  assert.match(envFile, /^ORKESTR_LLM_SANITIZER_CODEX_TIMEOUT_MS='75000'$/m);
+  assert.match(envFile, /^ORKESTR_LLM_SANITIZER_MAX_ATTEMPTS='2'$/m);
+  assert.match(envFile, /^ORKESTR_LLM_SANITIZER_RETRY_DELAY_MS='1000'$/m);
   assert.deepEqual(plan.commands.apply, ["kubectl", "apply", "-f", "-"]);
   assert.deepEqual(plan.commands.publicIpRoute.slice(0, 7), [
     "bash",
