@@ -54,6 +54,7 @@ test("CLI help exposes local service commands promised by the installer", async 
   assert.match(stdout.text(), /orkestr service \[status\|start\|stop\|restart\|logs\]/);
   assert.match(stdout.text(), /orkestr start\|stop\|restart/);
   assert.match(stdout.text(), /orkestr logs \[--service orkestr\]/);
+  assert.match(stdout.text(), /orkestr sanitizer check --action action --text text/);
 });
 
 test("CLI serve shutdown has a bounded force-exit fallback", async () => {
@@ -164,6 +165,72 @@ test("CLI falls back to the local Orkestr env file for cli-auth", async () => {
 
   assert.equal(code, 0);
   assert.equal(seen[0].headers.authorization, "Bearer env-file-cli-token");
+});
+
+test("CLI sanitizer check posts a server-owned sanitizer request", async () => {
+  const stdout = capture();
+  const seen = [];
+  const code = await runCli([
+    "--api",
+    "http://orkestr.test",
+    "sanitizer",
+    "check",
+    "--action",
+    "external.submit",
+    "--text",
+    "Submit the current user's StepStone application.",
+    "--url",
+    "https://www.stepstone.de/job/123",
+    "--cwd",
+    "/workspace/firat-jobs",
+    "--json",
+  ], {
+    stdout,
+    stderr: capture(),
+    fetchImpl: fakeFetch({
+      "POST /api/sanitizer/check": {
+        ok: true,
+        allow: true,
+        decision: { allow: true, reason: "server-owned-allowed", unavailable: false },
+        thread: { id: "firat-jobs", ownerUserId: "firat" },
+      },
+    }, seen),
+  });
+
+  assert.equal(code, 0);
+  assert.equal(seen[0].body.action, "external.submit");
+  assert.equal(seen[0].body.text, "Submit the current user's StepStone application.");
+  assert.equal(seen[0].body.url, "https://www.stepstone.de/job/123");
+  assert.equal(seen[0].body.cwd, "/workspace/firat-jobs");
+  assert.match(stdout.text(), /"allow": true/);
+});
+
+test("CLI sanitizer check returns 2 when the server sanitizer is unavailable", async () => {
+  const stdout = capture();
+  const code = await runCli([
+    "--api",
+    "http://orkestr.test",
+    "sanitizer",
+    "check",
+    "--action",
+    "external.submit",
+    "--text",
+    "Submit the current user's StepStone application.",
+  ], {
+    stdout,
+    stderr: capture(),
+    fetchImpl: fakeFetch({
+      "POST /api/sanitizer/check": {
+        ok: false,
+        allow: false,
+        decision: { allow: false, reason: "llm_sanitizer_http_401", unavailable: true },
+        thread: { id: "firat-jobs", ownerUserId: "firat" },
+      },
+    }),
+  });
+
+  assert.equal(code, 2);
+  assert.match(stdout.text(), /Sanitizer: blocked \(llm_sanitizer_http_401\)/);
 });
 
 test("CLI creates a missing local cli-auth token from the env-file data home", async () => {

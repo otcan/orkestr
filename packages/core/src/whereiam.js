@@ -173,6 +173,7 @@ function commandHints() {
     timerDoctor: "orkestr doctor timers",
     browserSessions: "curl \"$ORKESTR_API_BASE/api/browser-sessions\"",
     desktopLeases: "curl \"$ORKESTR_API_BASE/api/desktops/leases\"",
+    sanitizerCheck: "orkestr sanitizer check --action <action> --text <description> [--url <url>] --json",
     whatsappStatus: "orkestr whatsapp accounts list --json",
     connectorStatus: "orkestr status --json",
   };

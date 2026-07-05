@@ -28,6 +28,8 @@ test("runtime AGENTS.md points agents to dynamic whereiam discovery", async () =
   assert.match(body, /orkestr security approve <challenge-id>/);
   assert.match(body, /orkestr desktop share \[slug\]/);
   assert.match(body, /orkestr desktop approve <challenge-id>/);
+  assert.match(body, /orkestr sanitizer check --action <action> --text <description>/);
+  assert.match(body, /Do not run `scripts\/llm-sanitizer-\*` directly/);
   assert.match(body, /whereiam\.capabilities\.enabledSkills/);
   assert.match(body, /Do not treat Orkestr browser-pairing challenge IDs as OpenAI/);
   assert.doesNotMatch(body, /Thread:\s+thread-1/);
@@ -82,6 +84,8 @@ test("contained user runtime AGENTS.md points to server-owned policy outside the
   assert.match(policyBody, /capabilities\.enabledSkills/);
   assert.match(policyBody, /hard isolation\s+boundary is a dedicated tenant VM/);
   assert.match(policyBody, /defense-in-depth/);
+  assert.match(policyBody, /orkestr sanitizer check --action <action> --text <short description>/);
+  assert.match(policyBody, /Do not invoke `scripts\/llm-sanitizer-codex\.mjs`/);
   assert.equal(policyStats.mode & 0o222, 0);
 });
 
@@ -127,6 +131,7 @@ test("whereAmI resolves the current thread from a nested workspace path", async 
   assert.equal(payload.settings.desktops.gmailAuth, "gmail");
   assert.equal(payload.matchedBy, "thread.cwd");
   assert.match(payload.commands.postApiSessionMessage, /orkestr api-session message/);
+  assert.match(payload.commands.sanitizerCheck, /orkestr sanitizer check/);
   assert.equal(payload.commands.whatsappStatus, "orkestr whatsapp accounts list --json");
   assert.equal(payload.commands.connectorStatus, "orkestr status --json");
 });
@@ -371,6 +376,89 @@ test("GET /api/whereiam resolves thread context from cwd query", async () => {
     assert.equal(payload.ok, true);
     assert.equal(payload.thread.id, "api-whereiam-thread");
     assert.equal(payload.workspace.cwd, nested);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    for (const [name, value] of Object.entries(priorEnv)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  }
+});
+
+test("POST /api/sanitizer/check runs server-owned sanitizer for resolved thread owner", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-sanitizer-api-home-"));
+  const workspace = path.join(home, "users", "firat", "workspaces", "jobs");
+  const payloadLog = path.join(home, "sanitizer-payload.json");
+  const sanitizerScript = path.join(home, "sanitizer.mjs");
+  await fs.mkdir(workspace, { recursive: true });
+  await fs.writeFile(sanitizerScript, [
+    "import fs from 'node:fs';",
+    "let input = '';",
+    "process.stdin.setEncoding('utf8');",
+    "process.stdin.on('data', (chunk) => { input += chunk; });",
+    "process.stdin.on('end', () => {",
+    `  fs.writeFileSync(${JSON.stringify(payloadLog)}, input);`,
+    "  console.log(JSON.stringify({ allow: true, reason: 'server-owned-allowed', model: 'test-sanitizer' }));",
+    "});",
+    "",
+  ].join("\n"), "utf8");
+  const priorEnv = {
+    ORKESTR_HOME: process.env.ORKESTR_HOME,
+    ORKESTR_AUTH_REQUIRED: process.env.ORKESTR_AUTH_REQUIRED,
+    ORKESTR_UNSAFE_ALLOW_PUBLIC_UNAUTHENTICATED: process.env.ORKESTR_UNSAFE_ALLOW_PUBLIC_UNAUTHENTICATED,
+    ORKESTR_RECOVER_RUNNING_ON_START: process.env.ORKESTR_RECOVER_RUNNING_ON_START,
+    ORKESTR_STARTUP_RECOVERY: process.env.ORKESTR_STARTUP_RECOVERY,
+    ORKESTR_WHATSAPP_AUTOSTART: process.env.ORKESTR_WHATSAPP_AUTOSTART,
+    ORKESTR_LLM_SANITIZER_URL: process.env.ORKESTR_LLM_SANITIZER_URL,
+    ORKESTR_LLM_SANITIZER_PROVIDER: process.env.ORKESTR_LLM_SANITIZER_PROVIDER,
+    ORKESTR_LLM_SANITIZER_COMMAND_JSON: process.env.ORKESTR_LLM_SANITIZER_COMMAND_JSON,
+    ORKESTR_LLM_SANITIZER_MAX_ATTEMPTS: process.env.ORKESTR_LLM_SANITIZER_MAX_ATTEMPTS,
+  };
+  process.env.ORKESTR_HOME = home;
+  process.env.ORKESTR_AUTH_REQUIRED = "0";
+  process.env.ORKESTR_UNSAFE_ALLOW_PUBLIC_UNAUTHENTICATED = "1";
+  process.env.ORKESTR_RECOVER_RUNNING_ON_START = "0";
+  process.env.ORKESTR_STARTUP_RECOVERY = "0";
+  process.env.ORKESTR_WHATSAPP_AUTOSTART = "0";
+  delete process.env.ORKESTR_LLM_SANITIZER_URL;
+  delete process.env.ORKESTR_LLM_SANITIZER_PROVIDER;
+  process.env.ORKESTR_LLM_SANITIZER_COMMAND_JSON = JSON.stringify([process.execPath, sanitizerScript]);
+  process.env.ORKESTR_LLM_SANITIZER_MAX_ATTEMPTS = "1";
+  await createThread({
+    id: "firat-jobs",
+    ownerUserId: "firat",
+    name: "Firat Jobs",
+    cwd: workspace,
+    workspace,
+    securityProfile: "private-user",
+  }, process.env);
+  const server = await startServer({ port: 0, host: "127.0.0.1" });
+  const { port } = server.address();
+
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/api/sanitizer/check`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        cwd: workspace,
+        action: "external.submit",
+        text: "Submit the current user's StepStone application packet.",
+        url: "https://www.stepstone.de/job/123",
+      }),
+    });
+    const payload = await response.json();
+    const sanitizerPayload = JSON.parse(await fs.readFile(payloadLog, "utf8"));
+
+    assert.equal(response.status, 200);
+    assert.equal(payload.ok, true);
+    assert.equal(payload.allow, true);
+    assert.equal(payload.thread.id, "firat-jobs");
+    assert.equal(payload.thread.ownerUserId, "firat");
+    assert.equal(sanitizerPayload.action, "external.submit");
+    assert.equal(sanitizerPayload.principal.userId, "firat");
+    assert.equal(sanitizerPayload.principal.role, "user");
+    assert.equal(sanitizerPayload.resource.ownerUserId, "firat");
+    assert.equal(sanitizerPayload.input.url, "https://www.stepstone.de/job/123");
   } finally {
     await new Promise((resolve) => server.close(resolve));
     for (const [name, value] of Object.entries(priorEnv)) {

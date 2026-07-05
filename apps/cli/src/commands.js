@@ -47,6 +47,7 @@ export async function runCli(argv = process.argv.slice(2), context = {}) {
     if (command === "settings") return await settingsCommand(args, ctx);
     if (command === "secret" || command === "secrets") return await secretCommand(args, ctx);
     if (command === "doctor") return await doctorCommand(args, ctx);
+    if (command === "sanitizer" || command === "sanitize") return await sanitizerCommand(args, ctx);
     if (command === "api-session" || command === "api") return await apiSessionCommand(args, ctx);
     if (command === "whatsapp" || command === "wa") return await whatsappCommand(args, ctx);
     if (command === "timers" || command === "timer") return await timersCommand(args, ctx);
@@ -320,6 +321,54 @@ async function whereiamCommand(argv, ctx) {
   if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
   else ctx.stdout.write(`${formatWhereAmI(payload)}\n`);
   return payload?.ok === false ? 1 : 0;
+}
+
+async function sanitizerCommand(argv, ctx) {
+  const subcommand = argv[0]?.startsWith("--") ? "check" : argv[0] || "check";
+  const rest = subcommand === "check" && argv[0]?.startsWith("--") ? argv : argv.slice(1);
+  if (subcommand === "check" || subcommand === "allow") return sanitizerCheckCommand(rest, ctx);
+  throw new Error("Usage: orkestr sanitizer check --action action --text text [--url url] [--cwd path] [--json]");
+}
+
+async function sanitizerCheckCommand(argv, ctx) {
+  const json = argv.includes("--json");
+  const text = await sanitizerCheckText(argv, ctx);
+  const body = {
+    action: flagValue(argv, "--action") || "external.action",
+    cwd: flagValue(argv, "--cwd") || ctx.cwd || process.cwd(),
+    threadId: flagValue(argv, "--thread") || flagValue(argv, "--thread-id"),
+    apiSessionId: resolveApiSessionId(argv, ctx),
+    text,
+    reason: flagValue(argv, "--reason"),
+    url: flagValue(argv, "--url"),
+    href: flagValue(argv, "--href"),
+    domain: flagValue(argv, "--domain"),
+    source: flagValue(argv, "--source") || "orkestr-sanitizer-cli",
+  };
+  const payload = await requestJson("/api/sanitizer/check", {
+    ...ctx,
+    method: "POST",
+    body,
+  });
+  if (json) {
+    ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+  } else {
+    const decision = payload?.decision || {};
+    const label = payload?.allow === true ? "allowed" : "blocked";
+    const reason = decision.reason || payload?.error || "";
+    ctx.stdout.write(`Sanitizer: ${label}${reason ? ` (${reason})` : ""}\n`);
+  }
+  if (payload?.allow === true) return 0;
+  return payload?.decision?.unavailable === true ? 2 : 1;
+}
+
+async function sanitizerCheckText(argv, ctx) {
+  const explicit = flagValue(argv, "--text") || flagValue(argv, "--message");
+  if (explicit) return explicit;
+  const text = positional(argv).join(" ").trim();
+  if (text) return text;
+  if (argv.includes("--stdin")) return readStdin(ctx.stdin);
+  throw new Error("Usage: orkestr sanitizer check --action action --text text [--url url] [--cwd path] [--json]");
 }
 
 async function apiSessionCommand(argv, ctx) {
@@ -1768,6 +1817,7 @@ Common thread commands:
   orkestr list [--json] [--api http://127.0.0.1:19812]
   orkestr create <name> [--wa-participant jid]... [--no-wa] [--json]
   orkestr whereiam [--cwd path] [--api-session-id id] [--bind] [--json]
+  orkestr sanitizer check --action action --text text [--url url] [--cwd path] [--json]
   orkestr api-session bind [--api-session-id id] [--cwd path] [--thread thread-id] [--json]
   orkestr api-session message <text> [--api-session-id id] [--role assistant|user] [--phase final_answer] [--json]
   orkestr api-session status [--api-session-id id] [--json]
@@ -1934,12 +1984,15 @@ function positional(argv) {
     "--branch-name",
     "--account",
     "--account-id",
+    "--action",
     "--chat",
     "--chat-id",
     "--cmd",
     "--command",
     "--cwd",
     "--executor",
+    "--domain",
+    "--href",
     "--host",
     "--id",
     "--label",
@@ -1986,6 +2039,7 @@ function positional(argv) {
     "--to",
     "--timeout",
     "--active-timeout",
+    "--url",
     "--api-session",
     "--api-session-id",
     "--wa-admin",

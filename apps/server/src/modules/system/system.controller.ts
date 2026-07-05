@@ -24,6 +24,9 @@ import { listWatcherAlerts, updateWatcherAlertLifecycle } from "../../../../../p
 import { createStateBackup, stateBackupStatus, stateRestorePlan } from "../../../../../packages/core/src/state-backups.js";
 import { migrateCodexThreadsToAppServer } from "../../../../../packages/core/src/codex-app-server-migration.js";
 import { createFolderForPrincipal, deleteFileForPrincipal, listFilesForPrincipal, listWorkspaceFoldersForPrincipal, saveFilesForPrincipal } from "../../../../../packages/core/src/workspace-files.js";
+import { assertSanitizedAction } from "../../../../../packages/core/src/llm-sanitizer.js";
+import { getThread } from "../../../../../packages/core/src/threads.js";
+import { userScopedCapabilityHints } from "../../../../../packages/core/src/user-skills.js";
 import { requestPrincipal } from "../../../../../packages/core/src/principal.js";
 import { isAdminPrincipal } from "../../../../../packages/core/src/policy.js";
 import { distributionIdentity } from "../../../../../packages/core/src/distribution.js";
@@ -51,6 +54,7 @@ import {
 import { publicConfig } from "../../../../../packages/storage/src/config.js";
 import { ensureDataDirs } from "../../../../../packages/storage/src/paths.js";
 import { httpError } from "../../common/http.js";
+import { sanitizedThreadActionInput } from "../threads/thread-route-helpers.js";
 
 const execFileAsync = promisify(execFile);
 let lastCpuSample: { idle: number; total: number } | null = null;
@@ -682,6 +686,64 @@ export class SystemController {
       });
     }
     return payload;
+  }
+
+  @Post("sanitizer/check")
+  @HttpCode(200)
+  async sanitizerCheck(@Req() request: any, @Body() body: Record<string, unknown> = {}) {
+    const principal = requestPrincipal(request);
+    const context = await whereAmI({
+      cwd: String(body.cwd || ""),
+      threadId: String(body.threadId || body.thread || ""),
+      apiSessionId: String(body.apiSessionId || ""),
+      principal,
+    });
+    const threadId = String(context.thread?.id || "").trim();
+    if (!threadId) throw httpError("sanitizer_thread_not_resolved", 404);
+    const thread = await getThread(threadId, process.env);
+    if (!thread) throw httpError("sanitizer_thread_not_found", 404);
+    const ownerUserId = String(thread.ownerUserId || context.tenancy?.ownerUserId || principal?.userId || "").trim();
+    const capabilities = await userScopedCapabilityHints({ userId: ownerUserId, thread }, process.env);
+    const rawInput = body.input && typeof body.input === "object" && !Array.isArray(body.input)
+      ? (body.input as Record<string, unknown>)
+      : {};
+    const input = sanitizedThreadActionInput({
+      ...rawInput,
+      text: body.text ?? rawInput.text,
+      reason: body.reason ?? rawInput.reason,
+      url: body.url ?? rawInput.url,
+      href: body.href ?? rawInput.href,
+      domain: body.domain ?? rawInput.domain,
+      source: body.source ?? rawInput.source ?? "orkestr-sanitizer-cli",
+    });
+    const requestPayload = {
+      action: String(body.action || "external.action").trim().slice(0, 160) || "external.action",
+      principal: {
+        kind: "user",
+        userId: ownerUserId,
+        role: "user",
+        source: "thread-owner",
+      },
+      resource: {
+        type: "thread",
+        id: thread.id,
+        ownerUserId,
+        state: thread.state || "",
+        parentThreadId: thread.parentThreadId || null,
+        rootThreadId: thread.rootThreadId || null,
+        capabilities,
+      },
+      input,
+    };
+    try {
+      const decision = await assertSanitizedAction(requestPayload, process.env);
+      return { ok: true, allow: true, decision, thread: { id: thread.id, name: thread.name || "", ownerUserId } };
+    } catch (error: any) {
+      if (error?.sanitizer) {
+        return { ok: false, allow: false, decision: error.sanitizer, thread: { id: thread.id, name: thread.name || "", ownerUserId } };
+      }
+      throw httpError(error?.message || "sanitizer_check_failed", Number(error?.statusCode || 500));
+    }
   }
 
   @Post("session-bindings")
