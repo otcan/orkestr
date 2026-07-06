@@ -220,7 +220,7 @@ function normalizeGogMessage(summary = {}, detail = {}) {
 }
 
 async function collectGogJobMessages(input = {}, env = process.env) {
-  const maxResults = intValue(input.maxResults ?? input.maxItemsPerRun ?? env.ORKESTR_JOBS_MAX_ITEMS_PER_RUN, defaultMaxItemsPerRun, 1, 20);
+  const maxResults = intValue(input.maxResults ?? input.maxItemsPerRun ?? env.ORKESTR_JOBS_MAX_ITEMS_PER_RUN, defaultMaxItemsPerRun, 1, 250);
   const query = jobsQuery(input, env);
   const command = commandVector(input, env);
   const account = clean(input.gogAccount || input.account || env.ORKESTR_JOBS_GOG_ACCOUNT || env.GOG_ACCOUNT);
@@ -248,7 +248,7 @@ async function collectGogJobMessages(input = {}, env = process.env) {
 
 async function collectOAuthJobMessages(input = {}, env = process.env, fetchImpl = fetch, options = {}) {
   const ownerUserId = ownerUserIdFor(input, options.principal || null, env);
-  const maxResults = intValue(input.maxResults ?? input.maxItemsPerRun ?? env.ORKESTR_JOBS_MAX_ITEMS_PER_RUN, defaultMaxItemsPerRun, 1, 20);
+  const maxResults = intValue(input.maxResults ?? input.maxItemsPerRun ?? env.ORKESTR_JOBS_MAX_ITEMS_PER_RUN, defaultMaxItemsPerRun, 1, 250);
   const query = jobsQuery(input, env);
   const gmailOptions = gmailScopeOptions(options.principal || null, ownerUserId);
   const listed = await listGmailMessages({ maxResults, query }, env, fetchImpl, gmailOptions);
