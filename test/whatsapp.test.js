@@ -871,7 +871,7 @@ test("local whatsapp security approval forward self-target follows active orkest
   assert.equal(calls[0].options.headers.authorization, "Bearer current-inbound-secret");
 });
 
-test("local whatsapp approval commands prefer security approval target over managed tenant route", async () => {
+test("local whatsapp approval commands prefer managed tenant route over parent security approval target", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-forward-approval-managed-route-"));
   const chatId = "wa-group-managed-approval@g.us";
   const env = {
@@ -901,13 +901,13 @@ test("local whatsapp approval commands prefer security approval target over mana
     from: "491700000000@c.us",
     accountId: "sender",
     text: "orkestr connect approve ZFZBRW",
-  }, env, async (url, options) => {
+  }, env, async (url, options = {}) => {
+    if (String(url).includes("/api/health")) {
+      calls.push({ url: String(url), options, body: null });
+      return response({ ok: true }, true, 200);
+    }
     calls.push({ url: String(url), options, body: JSON.parse(options.body) });
-    return response({
-      ok: true,
-      approvedSecurityChallenge: true,
-      challenge: { id: "challenge-public", status: "approved" },
-    }, true, 202);
+    return response({ ok: true, threadId: "firat-jobs", messageId: "msg-approval" }, true, 202);
   });
   const normal = await forwardLocalWhatsAppInbound({
     eventId: "event-managed-normal-forward",
@@ -922,16 +922,18 @@ test("local whatsapp approval commands prefer security approval target over mana
   });
 
   assert.equal(forwarded.forwarded, true);
-  assert.equal(forwarded.targetSource, "security_approval_forward");
-  assert.equal(forwarded.routeMode, "security_approval");
+  assert.equal(forwarded.targetSource, "endpoint");
+  assert.equal(forwarded.routeMode, "direct");
   assert.equal(normal.forwarded, true);
   assert.equal(normal.targetSource, "endpoint");
   assert.equal(normal.routeMode, "direct");
-  assert.equal(calls.length, 2);
-  assert.equal(calls[0].url, "http://127.0.0.1:19812/api/connectors/whatsapp/inbound");
-  assert.equal(calls[0].options.headers.authorization, "Bearer forward-secret");
+  assert.equal(calls.length, 3);
+  assert.equal(calls[0].url, "https://tenant.example.test/api/health");
   assert.equal(calls[1].url, "https://tenant.example.test/api/connectors/whatsapp/inbound");
+  assert.equal(calls[1].body.text, "orkestr connect approve ZFZBRW");
   assert.notEqual(calls[1].options.headers.authorization, "Bearer forward-secret");
+  assert.equal(calls[2].url, "https://tenant.example.test/api/connectors/whatsapp/inbound");
+  assert.notEqual(calls[2].options.headers.authorization, "Bearer forward-secret");
 });
 
 test("local whatsapp forwarded unconfigured codex target sends setup notice", async () => {

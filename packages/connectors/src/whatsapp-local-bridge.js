@@ -737,7 +737,7 @@ export async function forwardLocalWhatsAppInbound(input = {}, env = process.env,
       }
     }
     const approvalChallengeId = rawSecurityApproveChallengeId(input.text || input.body || input.message || "");
-    const approvalTarget = approvalChallengeId ? localWhatsAppSecurityApprovalForwardTarget({ chatId }, env) : "";
+    const approvalTarget = approvalChallengeId && !tenantRoute ? localWhatsAppSecurityApprovalForwardTarget({ chatId }, env) : "";
     if (approvalTarget) {
       target = approvalTarget;
       targetSource = "security_approval_forward";
