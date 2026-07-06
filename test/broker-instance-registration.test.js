@@ -10,6 +10,7 @@ import {
   decryptBrokerClientPayload,
   encryptBrokerChannelPayload,
   encryptBrokerInstancePayload,
+  encryptBrokerInstanceProxyPayload,
   decryptBrokerInstanceRequest,
   ensureBrokerClientRegistration,
   heartbeatBrokerInstance,
@@ -362,6 +363,59 @@ test("broker instance channel can deliver encrypted payloads back to the client"
   assert.equal(decrypted.registration.instanceId, registration.instanceId);
   assert.equal(decrypted.payload.provider, "google_workspace");
   assert.equal(decrypted.payload.token.accessToken, "tenant-access");
+});
+
+test("broker proxy payloads use the freshest registration for the route endpoint", async () => {
+  const parentHome = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-broker-proxy-channel-parent-"));
+  const tenantHome = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-broker-proxy-channel-tenant-"));
+  const oldClient = __brokerInstanceRegistryTestInternals.createX25519Identity();
+  const currentClient = __brokerInstanceRegistryTestInternals.createX25519Identity();
+  const env = {
+    ORKESTR_HOME: parentHome,
+    ORKESTR_BROKER_REGISTRATION_TOKEN: "register-secret",
+  };
+  const endpointBaseUrl = "https://tenant.example.test";
+  const oldRegistration = await registerBrokerInstance({
+    env,
+    request: request({ authorization: "Bearer register-secret" }),
+    body: {
+      encryptionPublicKey: oldClient.publicKey,
+      endpointBaseUrl,
+      displayName: "Fırat Jobs VM",
+    },
+  });
+  const currentRegistration = await registerBrokerInstance({
+    env,
+    request: request({ authorization: "Bearer register-secret" }),
+    body: {
+      encryptionPublicKey: currentClient.publicKey,
+      endpointBaseUrl,
+      displayName: "firat-jobs-vm",
+    },
+  });
+  await fs.mkdir(path.join(tenantHome, "secrets"), { recursive: true });
+  await fs.writeFile(path.join(tenantHome, "secrets", "broker-client-identity.json"), JSON.stringify({
+    privateKey: currentClient.privateKey,
+    publicKey: currentClient.publicKey,
+  }));
+  await fs.writeFile(path.join(tenantHome, "secrets", "broker-client-registration.json"), JSON.stringify({
+    instanceId: currentRegistration.instanceId,
+    channelId: currentRegistration.channelId,
+    brokerBaseUrl: "https://broker.example.test",
+    brokerPublicKey: currentRegistration.broker.publicKey,
+  }));
+
+  const encrypted = await encryptBrokerInstanceProxyPayload(oldRegistration.instanceId, {
+    kind: "broker_app_proxy",
+    instanceId: oldRegistration.instanceId,
+    path: "/api/whereiam?cwd=%2Fworkspace",
+  }, env);
+  const decrypted = await decryptBrokerClientPayload(encrypted.body, { ORKESTR_HOME: tenantHome });
+
+  assert.equal(encrypted.record.instanceId, oldRegistration.instanceId);
+  assert.equal(encrypted.encryptionRecord.instanceId, currentRegistration.instanceId);
+  assert.equal(decrypted.registration.instanceId, currentRegistration.instanceId);
+  assert.equal(decrypted.payload.instanceId, oldRegistration.instanceId);
 });
 
 test("broker connect resolver fails closed for unknown and disabled instances", async () => {

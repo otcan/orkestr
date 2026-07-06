@@ -366,6 +366,35 @@ function publicConnectRecord(record) {
   };
 }
 
+function normalizedEndpointBaseUrl(value = "") {
+  const raw = clean(value).replace(/\/+$/, "");
+  if (!raw) return "";
+  try {
+    const parsed = new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(raw) ? raw : `http://${raw}`);
+    if (!["http:", "https:"].includes(parsed.protocol) || !parsed.hostname) return "";
+    parsed.hash = "";
+    parsed.search = "";
+    parsed.pathname = parsed.pathname.replace(/\/+$/, "") || "/";
+    return parsed.toString().replace(/\/+$/, "");
+  } catch {
+    return raw;
+  }
+}
+
+function brokerRecordSortTime(record = {}) {
+  for (const value of [record.lastHeartbeatAt, record.lastSeenAt, record.updatedAt, record.createdAt]) {
+    const parsed = Date.parse(clean(value));
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return 0;
+}
+
+function usableBrokerInstanceRecord(record = {}) {
+  if (!record?.instanceId || !record?.channelId || !record?.encryptionPublicKey) return false;
+  if (record.disabledAt || ["disabled", "deleted", "revoked"].includes(clean(record.status).toLowerCase())) return false;
+  return !expired(record);
+}
+
 export async function resolveBrokerConnectInstance(instanceId, env = process.env) {
   const record = await brokerInstance(instanceId, env);
   if (!record) throw Object.assign(new Error("broker_instance_not_found"), { statusCode: 404 });
@@ -523,6 +552,34 @@ export async function encryptBrokerInstancePayload(instanceId, payload = {}, env
         clientPrivateKey: brokerChannel.privateKey,
         brokerPublicKey: record.encryptionPublicKey,
         channelId: record.channelId,
+      }),
+    },
+  };
+}
+
+export async function encryptBrokerInstanceProxyPayload(instanceId, payload = {}, env = process.env) {
+  const registry = await readRegistry(env);
+  const record = registry.instances.find((instance) => instance.instanceId === clean(instanceId));
+  if (!record) throw Object.assign(new Error("broker_instance_not_found"), { statusCode: 404 });
+  if (!usableBrokerInstanceRecord(record)) {
+    throw Object.assign(new Error("broker_instance_disabled"), { statusCode: 410 });
+  }
+  const routeEndpoint = normalizedEndpointBaseUrl(record.endpointBaseUrl);
+  const candidates = routeEndpoint
+    ? registry.instances.filter((instance) => usableBrokerInstanceRecord(instance) && normalizedEndpointBaseUrl(instance.endpointBaseUrl) === routeEndpoint)
+    : [record];
+  const encryptionRecord = (candidates.length ? candidates : [record])
+    .sort((left, right) => brokerRecordSortTime(right) - brokerRecordSortTime(left))[0] || record;
+  const brokerChannel = await ensureBrokerChannel(env);
+  return {
+    record,
+    encryptionRecord,
+    body: {
+      channelId: encryptionRecord.channelId,
+      envelope: encryptBrokerChannelPayload(payload, {
+        clientPrivateKey: brokerChannel.privateKey,
+        brokerPublicKey: encryptionRecord.encryptionPublicKey,
+        channelId: encryptionRecord.channelId,
       }),
     },
   };

@@ -5,7 +5,7 @@ import tls from "node:tls";
 import type { INestApplication } from "@nestjs/common";
 import type { IncomingMessage, Server } from "node:http";
 import type { Duplex } from "node:stream";
-import { encryptBrokerInstancePayload, resolveBrokerConnectInstance } from "../../../packages/core/src/broker-instance-registry.js";
+import { encryptBrokerInstanceProxyPayload, resolveBrokerConnectInstance } from "../../../packages/core/src/broker-instance-registry.js";
 import { securityCookieName, securitySessionForToken } from "../../../packages/core/src/security.js";
 
 type BrokerAppRoute = {
@@ -162,7 +162,7 @@ function encodeBrokerAuthHeader(body: unknown): string {
 async function brokerProxyAuthHeader(request: any, target: BrokerAppTarget): Promise<string> {
   const session = request?.orkestrSecuritySession || {};
   const now = Date.now();
-  const assertion = await encryptBrokerInstancePayload(target.instanceId, {
+  const assertion = await encryptBrokerInstanceProxyPayload(target.instanceId, {
     kind: "broker_app_proxy",
     instanceId: target.instanceId,
     method: String(request?.method || "GET").toUpperCase(),
