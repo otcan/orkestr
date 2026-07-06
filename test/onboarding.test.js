@@ -80,9 +80,9 @@ test("onboarding focuses the starter setup on virtual desktop and WhatsApp", asy
   assert.ok(onboarding.includes('replaceState({}, "", "/setup")'));
   assert.ok(onboarding.includes("@if (isOnboardingMode())"));
   assert.ok(onboarding.includes("setupSections()"));
-  assert.ok(onboarding.includes('private readonly leanSetupConnectorIds: ConnectorStep[] = ["codex", "whatsapp", "browsers"];'));
-  assert.ok(onboarding.includes('retiredSetupSections = new Set(["google-marketing", "openai", "gmail", "linkedin", "mail", "outlook"])'));
-  assert.ok(onboarding.includes('return ["system", "security", "secrets", "maintenance", "codex", "whatsapp", "browsers"].includes(section)'));
+  assert.ok(onboarding.includes('private readonly leanSetupConnectorIds: ConnectorStep[] = ["codex", "gmail", "whatsapp", "browsers"];'));
+  assert.ok(onboarding.includes('retiredSetupSections = new Set(["google-marketing", "openai", "linkedin", "mail", "outlook"])'));
+  assert.ok(onboarding.includes('return ["system", "security", "secrets", "maintenance", "codex", "gmail", "whatsapp", "browsers"].includes(section)'));
   assert.ok(onboarding.includes('label: "Maintenance"'));
   assert.ok(onboarding.includes("Backup, Restore, Migration"));
   assert.ok(onboarding.includes("createBackup()"));
