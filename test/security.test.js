@@ -764,6 +764,62 @@ test("shared broker authorization accepts matching encrypted proxy assertions", 
   assert.equal(wrongPath.error, "broker_proxy_auth_path_mismatch");
 });
 
+test("shared broker authorization tolerates stale cached registration channels", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-security-broker-proxy-stale-"));
+  await fs.mkdir(path.join(home, "secrets"), { recursive: true });
+  const client = __brokerInstanceRegistryTestInternals.createX25519Identity();
+  const broker = __brokerInstanceRegistryTestInternals.createX25519Identity();
+  const pinnedInstanceId = "instance-firat-public";
+  const cachedInstanceId = "instance-firat-reregistered";
+  const assertionChannelId = "broker-channel-public";
+  const cachedChannelId = "broker-channel-reregistered";
+  await fs.writeFile(path.join(home, "secrets", "broker-client-identity.json"), JSON.stringify({
+    schemaVersion: 1,
+    keyId: "client-key",
+    publicKey: client.publicKey,
+    privateKey: client.privateKey,
+  }), "utf8");
+  await fs.writeFile(path.join(home, "secrets", "broker-client-registration.json"), JSON.stringify({
+    schemaVersion: 1,
+    brokerBaseUrl: "https://broker.example.test",
+    instanceId: cachedInstanceId,
+    channelId: cachedChannelId,
+    brokerPublicKey: broker.publicKey,
+    clientKeyId: "client-key",
+  }), "utf8");
+  const now = Date.now();
+  const body = {
+    channelId: assertionChannelId,
+    envelope: encryptBrokerChannelPayload({
+      kind: "broker_app_proxy",
+      instanceId: pinnedInstanceId,
+      method: "GET",
+      path: "/api/whereiam?cwd=%2Fworkspace",
+      issuedAt: new Date(now).toISOString(),
+      expiresAt: new Date(now + 30_000).toISOString(),
+    }, {
+      clientPrivateKey: broker.privateKey,
+      brokerPublicKey: client.publicKey,
+      channelId: assertionChannelId,
+    }),
+  };
+  const header = Buffer.from(JSON.stringify(body), "utf8").toString("base64url");
+  const allowed = await authorizeHttpRequest({
+    method: "GET",
+    url: "/api/whereiam?cwd=%2Fworkspace",
+    headers: { "x-orkestr-broker-auth": header },
+    socket: { remoteAddress: "10.43.0.10" },
+  }, {
+    ORKESTR_HOME: home,
+    ORKESTR_AUTH_REQUIRED: "1",
+    ORKESTR_SHARED_AUTHORIZATION: "1",
+    ORKESTR_BROKER_INSTANCE_ID: pinnedInstanceId,
+  });
+
+  assert.equal(allowed.ok, true);
+  assert.equal(allowed.machineAuth, "broker_proxy");
+});
+
 test("paired browser sessions can open desktop routes without desktop-share challenge", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-security-desktop-session-"));
   const env = {

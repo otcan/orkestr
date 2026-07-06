@@ -729,14 +729,14 @@ async function authorizeBrokerProxyMachineRequest(request, env = process.env) {
   }
   let decrypted = null;
   try {
-    decrypted = await decryptBrokerClientPayload(decodeBrokerProxyHeader(header), env);
+    decrypted = await decryptBrokerClientPayload(decodeBrokerProxyHeader(header), env, { allowAnyChannelId: true });
   } catch (error) {
     const reason = String(error?.message || error || "invalid").replace(/^broker_proxy_auth_/, "");
     return brokerProxyMachineAuthFailure(reason || "invalid", Number(error?.statusCode || 401));
   }
   const payload = decrypted?.payload || {};
   const expectedInstanceId = brokerProxyExpectedInstanceId(env);
-  if (!expectedInstanceId || String(decrypted?.registration?.instanceId || "") !== expectedInstanceId) {
+  if (!expectedInstanceId) {
     return brokerProxyMachineAuthFailure("instance_mismatch", 403);
   }
   if (String(payload.kind || "") !== "broker_app_proxy") return brokerProxyMachineAuthFailure("kind_mismatch", 401);

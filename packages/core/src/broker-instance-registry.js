@@ -528,7 +528,7 @@ export async function encryptBrokerInstancePayload(instanceId, payload = {}, env
   };
 }
 
-export async function decryptBrokerClientPayload(body = {}, env = process.env) {
+export async function decryptBrokerClientPayload(body = {}, env = process.env, options = {}) {
   const paths = await ensureDataDirs(env);
   const registration = await readJson(paths.brokerClientRegistration, null);
   const client = await readJson(paths.brokerClientIdentity, null);
@@ -536,7 +536,7 @@ export async function decryptBrokerClientPayload(body = {}, env = process.env) {
   if (!registration?.instanceId || !registration?.channelId || !registration?.brokerPublicKey || !client?.privateKey) {
     throw Object.assign(new Error("broker_client_registration_missing"), { statusCode: 409 });
   }
-  if (!channelId || channelId !== clean(registration.channelId)) {
+  if (!channelId || (!options.allowAnyChannelId && channelId !== clean(registration.channelId))) {
     throw Object.assign(new Error("broker_channel_denied"), { statusCode: 401 });
   }
   const payload = decryptBrokerChannelPayload(body.envelope || body, {
@@ -544,7 +544,7 @@ export async function decryptBrokerClientPayload(body = {}, env = process.env) {
     instancePublicKey: registration.brokerPublicKey,
     channelId,
   });
-  return { registration, payload };
+  return { registration, payload, channelId };
 }
 
 export async function decryptBrokerInstanceRequest(instanceId, body = {}, env = process.env) {
