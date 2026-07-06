@@ -70,6 +70,14 @@ of relying on static thread or workspace text in this file.
   intent: the external account owner must be recorded separately from owner/self
   admin numbers, the reply account must be verified after binding, and disabled
   chats must surface a visible warning instead of silently ignoring messages.
+- For WhatsApp-routed chats, use `NO_REPLY` as the exact whole assistant
+  message when the inbound message clearly needs no visible answer or action.
+  Typical cases include side conversation, a friend/third-party mention,
+  context-only chatter, duplicates, accidental fragments, or messages that are
+  irrelevant to the active Orkestr task. Do not reply with "OK", "Noted",
+  "Done", or similar acknowledgements in those cases. Do not use `NO_REPLY` for
+  questions, commands, error reports, safety/privacy issues, or ambiguous
+  messages where silence would look like a broken assistant.
 - When a browser desktop is needed, acquire the desktop lease first and release
   it when finished. Do not assume a desktop is free because a profile directory
   exists.
