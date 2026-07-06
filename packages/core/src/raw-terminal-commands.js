@@ -13,6 +13,10 @@ function approveCommandMatch(value) {
   return compactCommand(value).match(/^(?:sudo\s+)?(?:orkestr\s+(?:connect|security)\s+approve|\/?approve\s+challenge:?)\s+([A-Za-z0-9_-]{4,})$/i);
 }
 
+export function exactSecurityApproveChallengeId(value) {
+  return approveCommandMatch(value)?.[1] || "";
+}
+
 function pairingApprovalPasteContext(value) {
   const text = String(value || "").toLowerCase();
   return (
@@ -24,8 +28,8 @@ function pairingApprovalPasteContext(value) {
 }
 
 export function rawSecurityApproveChallengeId(value) {
-  const exact = approveCommandMatch(value);
-  if (exact) return exact[1];
+  const exact = exactSecurityApproveChallengeId(value);
+  if (exact) return exact;
   if (!pairingApprovalPasteContext(value)) return "";
   const ids = new Set(
     String(value || "")

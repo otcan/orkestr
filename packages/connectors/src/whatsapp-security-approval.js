@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { brokerInstance, brokerWhatsAppRelayAccountId } from "../../core/src/broker-instance-registry.js";
 import { ensureRouterTurn, recordRouterTraceEvent } from "../../core/src/router-traces.js";
-import { rawSecurityApproveChallengeId } from "../../core/src/raw-terminal-commands.js";
+import { exactSecurityApproveChallengeId } from "../../core/src/raw-terminal-commands.js";
 import { approvePairingChallenge, getPairingChallenge } from "../../core/src/security.js";
 import { listThreads } from "../../core/src/threads.js";
 import { appendEvent } from "../../storage/src/store.js";
@@ -313,7 +313,7 @@ export async function maybeApprovePairingChallengeFromWhatsApp({
   threadRoute = null,
 } = {}) {
   const text = stripWhatsAppDebugFooter(pickString(input.text, input.body, input.message));
-  const challengeId = rawSecurityApproveChallengeId(text);
+  const challengeId = exactSecurityApproveChallengeId(text);
   if (!challengeId) return null;
   if (typeof writeState !== "function") throw new Error("whatsapp_security_approval_write_state_required");
 

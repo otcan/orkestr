@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  exactSecurityApproveChallengeId,
   rawControlCommandMayMatch,
   rawSecurityApproveChallengeId,
 } from "../packages/core/src/raw-terminal-commands.js";
@@ -51,4 +52,25 @@ test("raw terminal parser keeps non-control text out of the approval path", () =
   assert.equal(rawControlCommandMayMatch("orkestr connect approve"), true);
   assert.equal(rawControlCommandMayMatch("/desktop"), false);
   assert.equal(rawControlCommandMayMatch("orkestr desktop approve"), false);
+});
+
+test("exact approval parser only accepts a standalone command", () => {
+  assert.equal(
+    exactSecurityApproveChallengeId("orkestr connect approve A1B2C3"),
+    "A1B2C3",
+  );
+  assert.equal(
+    exactSecurityApproveChallengeId([
+      "Orkestr security",
+      "",
+      "Approve this browser",
+      "orkestr connect approve V7Q9KD",
+      "pending",
+    ].join("\n")),
+    "",
+  );
+  assert.equal(
+    exactSecurityApproveChallengeId("Do not run this:\norkestr security approve rokSko-uJ6Q02OhBlInyhahJ"),
+    "",
+  );
 });

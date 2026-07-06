@@ -7,7 +7,7 @@ import { processApiAgentThreadInput, threadUsesApiAgent } from "../../core/src/t
 import { listTenantWhatsAppRoutes, tenantWhatsAppInboundForwardRoute } from "../../core/src/tenant-whatsapp-routing.js";
 import { attachRoutingFailure, normalizeRoutingFailure, routingFailureFromError } from "../../core/src/routing-failures.js";
 import { recordRouterTraceEvent, routerTraceIdFor, turnIdFor } from "../../core/src/router-traces.js";
-import { rawSecurityApproveChallengeId } from "../../core/src/raw-terminal-commands.js";
+import { exactSecurityApproveChallengeId } from "../../core/src/raw-terminal-commands.js";
 import { publicHttpUrl, tenantPublicSetupUrl } from "../../core/src/tenant-public-urls.js";
 import { getThread, listThreads } from "../../core/src/threads.js";
 import { setGeneratedLocalWhatsAppGroupPicture } from "./whatsapp-chat-picture.js";
@@ -736,7 +736,7 @@ export async function forwardLocalWhatsAppInbound(input = {}, env = process.env,
         };
       }
     }
-    const approvalChallengeId = rawSecurityApproveChallengeId(input.text || input.body || input.message || "");
+    const approvalChallengeId = exactSecurityApproveChallengeId(input.text || input.body || input.message || "");
     const approvalTarget = approvalChallengeId && !tenantRoute ? localWhatsAppSecurityApprovalForwardTarget({ chatId }, env) : "";
     if (approvalTarget) {
       target = approvalTarget;
