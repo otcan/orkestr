@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { startServer } from "../apps/server/src/server.js";
+import { __brokerInstanceRegistryTestInternals, encryptBrokerChannelPayload } from "../packages/core/src/broker-instance-registry.js";
 import { approvePairingChallenge, authorizeHttpRequest, createPairingChallenge, pairBrowser, securityStatus } from "../packages/core/src/security.js";
 import { writeConnectorConfig } from "../packages/storage/src/config.js";
 
@@ -685,6 +686,82 @@ test("local CLI machine token can operate WhatsApp bridge routes", async () => {
   assert.equal(allowed.machineAuth, "cli");
   assert.equal(badBridgeToken.ok, false);
   assert.equal(badBridgeToken.error, "whatsapp_bridge_token_invalid");
+});
+
+test("shared broker authorization accepts matching encrypted proxy assertions", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-security-broker-proxy-"));
+  await fs.mkdir(path.join(home, "secrets"), { recursive: true });
+  const client = __brokerInstanceRegistryTestInternals.createX25519Identity();
+  const broker = __brokerInstanceRegistryTestInternals.createX25519Identity();
+  const channelId = "broker-channel-one";
+  const instanceId = "instance-firat";
+  await fs.writeFile(path.join(home, "secrets", "broker-client-identity.json"), JSON.stringify({
+    schemaVersion: 1,
+    keyId: "client-key",
+    publicKey: client.publicKey,
+    privateKey: client.privateKey,
+  }), "utf8");
+  await fs.writeFile(path.join(home, "secrets", "broker-client-registration.json"), JSON.stringify({
+    schemaVersion: 1,
+    brokerBaseUrl: "https://broker.example.test",
+    instanceId,
+    channelId,
+    brokerPublicKey: broker.publicKey,
+    clientKeyId: "client-key",
+  }), "utf8");
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_AUTH_REQUIRED: "1",
+    ORKESTR_SHARED_AUTHORIZATION: "1",
+    ORKESTR_BROKER_INSTANCE_ID: instanceId,
+  };
+  const headerFor = (patch = {}) => {
+    const now = Date.now();
+    const body = {
+      channelId,
+      envelope: encryptBrokerChannelPayload({
+        kind: "broker_app_proxy",
+        instanceId,
+        method: "GET",
+        path: "/api/threads",
+        issuedAt: new Date(now).toISOString(),
+        expiresAt: new Date(now + 30_000).toISOString(),
+        ...patch,
+      }, {
+        clientPrivateKey: broker.privateKey,
+        brokerPublicKey: client.publicKey,
+        channelId,
+      }),
+    };
+    return Buffer.from(JSON.stringify(body), "utf8").toString("base64url");
+  };
+
+  const blocked = await authorizeHttpRequest({
+    method: "GET",
+    url: "/api/threads",
+    headers: {},
+    socket: { remoteAddress: "10.43.0.10" },
+  }, env);
+  const allowed = await authorizeHttpRequest({
+    method: "GET",
+    url: "/api/threads",
+    headers: { "x-orkestr-broker-auth": headerFor() },
+    socket: { remoteAddress: "10.43.0.10" },
+  }, env);
+  const wrongPath = await authorizeHttpRequest({
+    method: "GET",
+    url: "/api/threads",
+    headers: { "x-orkestr-broker-auth": headerFor({ path: "/api/users" }) },
+    socket: { remoteAddress: "10.43.0.10" },
+  }, env);
+
+  assert.equal(blocked.ok, false);
+  assert.equal(blocked.error, "browser_pairing_required");
+  assert.equal(allowed.ok, true);
+  assert.equal(allowed.machineAuth, "broker_proxy");
+  assert.equal(allowed.principal.userId, "admin");
+  assert.equal(wrongPath.ok, false);
+  assert.equal(wrongPath.error, "broker_proxy_auth_path_mismatch");
 });
 
 test("paired browser sessions can open desktop routes without desktop-share challenge", async () => {

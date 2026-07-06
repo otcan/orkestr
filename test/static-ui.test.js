@@ -271,6 +271,10 @@ test("broker instance app path pairs on broker and proxies the VM WebUI", async 
       upstreamRequests.some((item) => item.headers["x-orkestr-broker-instance-id"] === brokerRegistration.instanceId),
       true,
     );
+    assert.equal(
+      upstreamRequests.some((item) => typeof item.headers["x-orkestr-broker-auth"] === "string" && item.headers["x-orkestr-broker-auth"]),
+      true,
+    );
   } finally {
     await new Promise((resolve) => server.close(resolve));
     await new Promise((resolve) => upstream.close(resolve));

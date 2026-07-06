@@ -4,6 +4,7 @@ import { promisify } from "node:util";
 import { dataPaths, ensureDataDirs } from "../../storage/src/paths.js";
 import { appendEvent, readJson, writeSecretJson } from "../../storage/src/store.js";
 import { authorizeDesktopShareHttpRequest } from "./desktop-shares.js";
+import { decryptBrokerClientPayload } from "./broker-instance-registry.js";
 import { adminPrincipal, principalFromSecuritySession } from "./principal.js";
 import { publicUrlConfig } from "./public-url-config.js";
 import { defaultAdminUser, getUser, normalizeUserId } from "./users.js";
@@ -685,6 +686,86 @@ async function authorizeJobsJdCacheMachineRequest(request, env = process.env) {
   };
 }
 
+function brokerProxyHeaderValue(request) {
+  const raw = request?.headers?.["x-orkestr-broker-auth"] || request?.headers?.["X-Orkestr-Broker-Auth"] || "";
+  return Array.isArray(raw) ? String(raw[0] || "").trim() : String(raw || "").trim();
+}
+
+function brokerProxyMachineAuthFailure(reason, statusCode = 401) {
+  return {
+    ok: false,
+    statusCode,
+    error: `broker_proxy_auth_${reason}`,
+    machineAuth: "broker_proxy",
+  };
+}
+
+function brokerProxyExpectedInstanceId(env = process.env) {
+  return String(env.ORKESTR_BROKER_INSTANCE_ID || env.ORKESTR_INSTANCE_ID || "").trim();
+}
+
+function normalizeRequestPathForBrokerAuth(value = "") {
+  try {
+    const parsed = new URL(String(value || "/"), "http://orkestr.local");
+    return `${parsed.pathname || "/"}${parsed.search || ""}`;
+  } catch {
+    return String(value || "/").split("#")[0] || "/";
+  }
+}
+
+function decodeBrokerProxyHeader(value = "") {
+  try {
+    return JSON.parse(Buffer.from(String(value || ""), "base64url").toString("utf8"));
+  } catch {
+    throw Object.assign(new Error("broker_proxy_auth_malformed"), { statusCode: 401 });
+  }
+}
+
+async function authorizeBrokerProxyMachineRequest(request, env = process.env) {
+  const header = brokerProxyHeaderValue(request);
+  if (!header) return null;
+  if (!envFlag(env.ORKESTR_SHARED_AUTHORIZATION) && !envFlag(env.ORKESTR_SHARED_CONTROL_PLANE)) {
+    return brokerProxyMachineAuthFailure("disabled", 403);
+  }
+  let decrypted = null;
+  try {
+    decrypted = await decryptBrokerClientPayload(decodeBrokerProxyHeader(header), env);
+  } catch (error) {
+    const reason = String(error?.message || error || "invalid").replace(/^broker_proxy_auth_/, "");
+    return brokerProxyMachineAuthFailure(reason || "invalid", Number(error?.statusCode || 401));
+  }
+  const payload = decrypted?.payload || {};
+  const expectedInstanceId = brokerProxyExpectedInstanceId(env);
+  if (!expectedInstanceId || String(decrypted?.registration?.instanceId || "") !== expectedInstanceId) {
+    return brokerProxyMachineAuthFailure("instance_mismatch", 403);
+  }
+  if (String(payload.kind || "") !== "broker_app_proxy") return brokerProxyMachineAuthFailure("kind_mismatch", 401);
+  if (String(payload.instanceId || "") !== expectedInstanceId) return brokerProxyMachineAuthFailure("instance_mismatch", 403);
+  const now = Date.now();
+  const expiresAt = Date.parse(String(payload.expiresAt || ""));
+  if (!Number.isFinite(expiresAt) || expiresAt <= now) return brokerProxyMachineAuthFailure("expired", 401);
+  const issuedAt = Date.parse(String(payload.issuedAt || ""));
+  if (Number.isFinite(issuedAt) && issuedAt - now > 60_000) return brokerProxyMachineAuthFailure("not_yet_valid", 401);
+  const method = String(request?.method || "GET").toUpperCase();
+  if (String(payload.method || "").toUpperCase() !== method) return brokerProxyMachineAuthFailure("method_mismatch", 401);
+  const requestPath = normalizeRequestPathForBrokerAuth(request?.originalUrl || request?.url || "/");
+  if (normalizeRequestPathForBrokerAuth(payload.path || "/") !== requestPath) return brokerProxyMachineAuthFailure("path_mismatch", 401);
+  const principal = adminPrincipal(defaultAdminUser(env));
+  principal.source = "broker-proxy-machine-token";
+  principal.machine = {
+    routeKind: "broker_proxy",
+    instanceId: expectedInstanceId,
+    userId: String(payload.userId || ""),
+    role: String(payload.role || ""),
+  };
+  return {
+    ok: true,
+    principal,
+    machineAuth: "broker_proxy",
+    machineAuthContext: principal.machine,
+  };
+}
+
 export function securityCookieName() {
   return cookieName;
 }
@@ -1073,6 +1154,15 @@ export async function authorizeHttpRequest(request, env = process.env) {
   }
   const cliAuth = await authorizeCliMachineRequest(request, env);
   if (cliAuth?.ok) return { ok: true, status, principal: cliAuth.principal, machineAuth: cliAuth.machineAuth };
+  const brokerProxyAuth = await authorizeBrokerProxyMachineRequest(request, env);
+  if (brokerProxyAuth?.ok) return {
+    ok: true,
+    status,
+    principal: brokerProxyAuth.principal,
+    machineAuth: brokerProxyAuth.machineAuth,
+    machineAuthContext: brokerProxyAuth.machineAuthContext || null,
+  };
+  if (brokerProxyAuth && status.authEnabled) return { ...brokerProxyAuth, status };
   const whatsappInboundAuth = await authorizeWhatsAppMachineRequest(request, env);
   if (whatsappInboundAuth?.ok) return {
     ok: true,

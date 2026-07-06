@@ -5,7 +5,7 @@ import tls from "node:tls";
 import type { INestApplication } from "@nestjs/common";
 import type { IncomingMessage, Server } from "node:http";
 import type { Duplex } from "node:stream";
-import { resolveBrokerConnectInstance } from "../../../packages/core/src/broker-instance-registry.js";
+import { encryptBrokerInstancePayload, resolveBrokerConnectInstance } from "../../../packages/core/src/broker-instance-registry.js";
 import { securityCookieName, securitySessionForToken } from "../../../packages/core/src/security.js";
 
 type BrokerAppRoute = {
@@ -155,6 +155,26 @@ function responseHeaders(headers: http.IncomingHttpHeaders, target: BrokerAppTar
   return next;
 }
 
+function encodeBrokerAuthHeader(body: unknown): string {
+  return Buffer.from(JSON.stringify(body), "utf8").toString("base64url");
+}
+
+async function brokerProxyAuthHeader(request: any, target: BrokerAppTarget): Promise<string> {
+  const session = request?.orkestrSecuritySession || {};
+  const now = Date.now();
+  const assertion = await encryptBrokerInstancePayload(target.instanceId, {
+    kind: "broker_app_proxy",
+    instanceId: target.instanceId,
+    method: String(request?.method || "GET").toUpperCase(),
+    path: target.upstreamPath || "/",
+    userId: String(session.userId || ""),
+    role: String(session.role || ""),
+    issuedAt: new Date(now).toISOString(),
+    expiresAt: new Date(now + 30_000).toISOString(),
+  }, process.env);
+  return encodeBrokerAuthHeader(assertion.body);
+}
+
 async function proxyBrokerAppHttp(request: any, response: any): Promise<void> {
   const requestUrl = brokerRequestUrl(request);
   const route = parseBrokerAppUrl(requestUrl);
@@ -183,6 +203,13 @@ async function proxyBrokerAppHttp(request: any, response: any): Promise<void> {
     sendPlain(response, 404, "broker app route not found");
     return;
   }
+  let brokerAuth = "";
+  try {
+    brokerAuth = await brokerProxyAuthHeader(request, target);
+  } catch (error) {
+    sendPlain(response, Number((error as any)?.statusCode || 502), error instanceof Error ? error.message : String(error));
+    return;
+  }
 
   const headers = {
     ...request.headers,
@@ -192,6 +219,7 @@ async function proxyBrokerAppHttp(request: any, response: any): Promise<void> {
     "x-forwarded-proto": request.headers?.["x-forwarded-proto"] || request.protocol || "https",
     "x-forwarded-prefix": target.prefixPath.replace(/\/+$/, ""),
     "x-orkestr-broker-instance-id": target.instanceId,
+    "x-orkestr-broker-auth": brokerAuth,
   };
   delete (headers as Record<string, unknown>).connection;
   delete (headers as Record<string, unknown>).upgrade;
@@ -240,15 +268,18 @@ async function upgradeHasInstanceSession(request: IncomingMessage, instanceId: s
   return Boolean(session && String(session.instanceId || "") === instanceId);
 }
 
-function rawUpgradeHeaders(request: IncomingMessage, target: BrokerAppTarget): string {
+function rawUpgradeHeaders(request: IncomingMessage, target: BrokerAppTarget, brokerAuth = ""): string {
   const lines = [`${request.method || "GET"} ${target.upstreamPath} HTTP/${request.httpVersion || "1.1"}`];
   let sawHost = false;
   for (let index = 0; index < request.rawHeaders.length; index += 2) {
     const name = request.rawHeaders[index] || "";
     const value = request.rawHeaders[index + 1] || "";
-    if (name.toLowerCase() === "host") {
+    const lowered = name.toLowerCase();
+    if (lowered === "host") {
       sawHost = true;
       lines.push(`Host: ${target.baseUrl.host}`);
+    } else if (["x-forwarded-prefix", "x-orkestr-broker-instance-id", "x-orkestr-broker-auth"].includes(lowered)) {
+      continue;
     } else {
       lines.push(`${name}: ${value}`);
     }
@@ -256,6 +287,7 @@ function rawUpgradeHeaders(request: IncomingMessage, target: BrokerAppTarget): s
   if (!sawHost) lines.push(`Host: ${target.baseUrl.host}`);
   lines.push(`X-Forwarded-Prefix: ${target.prefixPath.replace(/\/+$/, "")}`);
   lines.push(`X-Orkestr-Broker-Instance-Id: ${target.instanceId}`);
+  if (brokerAuth) lines.push(`X-Orkestr-Broker-Auth: ${brokerAuth}`);
   lines.push("", "");
   return lines.join("\r\n");
 }
@@ -295,13 +327,20 @@ export function attachBrokerInstanceAppProxyUpgrade(server: Server): void {
       writeUpgradeError(socket, 404, "broker app route not found");
       return;
     }
+    let brokerAuth = "";
+    try {
+      brokerAuth = await brokerProxyAuthHeader(request, target);
+    } catch (error) {
+      writeUpgradeError(socket, Number((error as any)?.statusCode || 502), error instanceof Error ? error.message : String(error));
+      return;
+    }
 
     const secure = target.baseUrl.protocol === "https:";
     const connect = secure
       ? tls.connect({ host: target.baseUrl.hostname, port: targetPort(target.baseUrl), servername: target.baseUrl.hostname })
       : net.connect(targetPort(target.baseUrl), target.baseUrl.hostname);
     connect.on(secure ? "secureConnect" : "connect", () => {
-      connect.write(rawUpgradeHeaders(request, target));
+      connect.write(rawUpgradeHeaders(request, target, brokerAuth));
       if (head.length) connect.write(head);
       socket.pipe(connect).pipe(socket);
     });
