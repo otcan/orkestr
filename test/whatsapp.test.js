@@ -834,6 +834,34 @@ test("local whatsapp approval commands can forward to a security approval target
   assert.equal(calls[0].body.text, "orkestr connect approve ZFZBRW");
 });
 
+test("local whatsapp embedded approval examples do not use the security approval target", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-forward-approval-embedded-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_SECURITY_APPROVAL_FORWARD_URL: "http://127.0.0.1:19812/api/connectors/whatsapp/inbound",
+    ORKESTR_WHATSAPP_SECURITY_APPROVAL_FORWARD_TOKEN_CHAT_ID: "491700000000@c.us",
+    ORKESTR_WHATSAPP_INBOUND_FORWARD_TOKEN_MAP_JSON: JSON.stringify({
+      "491700000000@c.us": "forward-secret",
+    }),
+  };
+  const result = await forwardLocalWhatsAppInbound({
+    eventId: "event-embedded-approval-example",
+    chatId: "group-main@g.us",
+    from: "491700000000@c.us",
+    accountId: "sender",
+    text: [
+      "Example only:",
+      "```",
+      "orkestr connect approve ZFZBRW",
+      "```",
+    ].join("\n"),
+  }, env, async () => {
+    throw new Error("embedded approval examples should not use the security approval forward target");
+  });
+
+  assert.equal(result, null);
+});
+
 test("local whatsapp forwarded unconfigured codex target sends setup notice", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-forward-codex-notice-"));
   const chatId = "491700000001@c.us";
@@ -3261,6 +3289,42 @@ test("whatsapp inbound events route to configured agent and dedupe by event id",
   assert.equal(messages[0].chatId, "chat-1");
   assert.equal(messages[0].from, "sender-1");
   assert.equal(messages[0].attachments[0].kind, "image");
+});
+
+test("whatsapp embedded approval examples route as normal chat", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-embedded-approve-"));
+  const env = externalBridgeEnv(home);
+  const instanceId = "instance-embedded-approve-1";
+  const whatsappChatId = "491700000111@c.us";
+  await writeBrokerInstance(env, { instanceId, whatsappChatId });
+  await writeConnectorConfig("whatsapp", { routes: { [whatsappChatId]: "agent-embedded-approve" } }, env);
+  const created = await createPairingChallenge({
+    env,
+    instanceId,
+    request: { headers: { "user-agent": "node-test" }, socket: { remoteAddress: "127.0.0.1" } },
+  });
+  const text = [
+    "Do you know this command structure?",
+    "```",
+    `orkestr connect approve ${created.challenge.approveCode}`,
+    "```",
+    "It should be forwarded as normal text.",
+  ].join("\n");
+
+  const routed = await routeWhatsAppInbound({
+    eventId: "wa-embedded-approval-example-1",
+    chatId: whatsappChatId,
+    from: whatsappChatId,
+    text,
+  }, env);
+  const messages = await listAgentMessages("agent-embedded-approve", env);
+  const listed = await listPairingChallenges({ env, includeExpired: true });
+  const challenge = listed.challenges.find((item) => item.id === created.challenge.id);
+
+  assert.notEqual(routed.approvedSecurityChallenge, true);
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].text, text);
+  assert.equal(challenge.status, "pending");
 });
 
 test("whatsapp direct approval command approves matching instance pairing challenge", async () => {
