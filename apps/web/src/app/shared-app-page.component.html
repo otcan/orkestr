@@ -1,0 +1,73 @@
+<main class="shared-app-shell">
+  <header class="shared-app-header">
+    <div>
+      <p>Orkestr shared app</p>
+      <h1>{{ title() }}</h1>
+    </div>
+    <strong>{{ classifiedCount() }} / {{ people.length }}</strong>
+  </header>
+
+  @if (error) {
+    <section class="shared-app-state error">{{ error }}</section>
+  } @else if (busy) {
+    <section class="shared-app-state">Loading...</section>
+  } @else {
+    <section class="shared-app-layout">
+      <nav class="shared-people-list" aria-label="People">
+        @for (person of people; track person.id) {
+          <button type="button" [class.active]="selectedPerson()?.id === person.id" (click)="select(person)">
+            <span>{{ person.name }}</span>
+            <small>{{ labelText(person.currentClassification || "not_evaluated") }}</small>
+          </button>
+        }
+      </nav>
+
+      @if (selectedPerson(); as person) {
+        <article class="shared-person">
+          <header>
+            <div>
+              <h2>{{ person.name }}</h2>
+              @if (person.profileUrl) {
+                <a [href]="person.profileUrl" target="_blank" rel="noreferrer">Profile</a>
+              }
+            </div>
+            <span>{{ labelText(person.currentClassification || "not_evaluated") }}</span>
+          </header>
+
+          <section class="shared-message-timeline" aria-label="Message history">
+            @for (message of person.messageHistory || []; track message.id || $index) {
+              <article>
+                <small>
+                  {{ message.from || "Message" }}
+                  @if (message.at) {
+                    · {{ message.at | date: "medium" }}
+                  }
+                </small>
+                <p>{{ message.text }}</p>
+              </article>
+            } @empty {
+              <article><p>No message history included in this share.</p></article>
+            }
+          </section>
+
+          <footer class="shared-classifier">
+            @if (notice) {
+              <small>{{ notice }}</small>
+            }
+            @for (label of labels(); track label) {
+              <button
+                type="button"
+                [class.active]="person.currentClassification === label"
+                [disabled]="!canClassify() || savingPersonId === person.id"
+                (click)="setClassification(label)"
+              >{{ labelText(label) }}</button>
+            }
+            <button class="secondary" type="button" (click)="selectNext()">Next</button>
+          </footer>
+        </article>
+      } @else {
+        <section class="shared-app-state">No people included in this share.</section>
+      }
+    </section>
+  }
+</main>

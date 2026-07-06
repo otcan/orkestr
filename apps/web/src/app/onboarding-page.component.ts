@@ -150,7 +150,7 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
     { id: "whatsapp", label: "WhatsApp", eyebrow: "Messages" },
     { id: "browsers", label: "Desktops", eyebrow: "Browser runtime" },
   ];
-  private readonly leanSetupConnectorIds: ConnectorStep[] = ["codex", "whatsapp", "browsers"];
+  private readonly leanSetupConnectorIds: ConnectorStep[] = ["codex", "gmail", "whatsapp", "browsers"];
 
   ngOnInit(): void {
     this.detectedTimezone = this.browserTimezone();

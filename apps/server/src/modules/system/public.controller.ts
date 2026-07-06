@@ -2,6 +2,7 @@ import { Body, Controller, Get, HttpCode, Param, Post, Query, Req, Res } from "@
 import { resolveBrokerConnectInstance } from "../../../../../packages/core/src/broker-instance-registry.js";
 import { submitWaitlistEntry } from "../../../../../packages/core/src/user-waitlist.js";
 import { httpError } from "../../common/http.js";
+import { instanceSetupPairingRedirectPath, normalizeInstanceId } from "../../instance-connect-setup.js";
 
 const waitlistSubmitAttempts = new Map<string, number[]>();
 
@@ -33,20 +34,13 @@ export class PublicController {
   }
 }
 
-function normalizeInstanceId(value = ""): string {
-  return String(value || "")
-    .trim()
-    .replace(/[^A-Za-z0-9._:-]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 120);
-}
-
 @Controller("i")
 export class InstanceConnectController {
   @Get(":instanceId/setup")
   async instanceSetup(
     @Param("instanceId") rawInstanceId: string,
-    @Query("return") returnTo = "/setup/codex?compact=1",
+    @Query("return") returnTo = "",
+    @Query("connector") connector = "",
     @Res() response: any,
   ) {
     const instanceId = normalizeInstanceId(rawInstanceId);
@@ -56,13 +50,10 @@ export class InstanceConnectController {
     } catch (error: any) {
       throw httpError(String(error?.message || "broker_instance_unavailable"), Number(error?.statusCode || 404));
     }
-    const target = new URL("/setup/pairing", "http://localhost");
-    target.searchParams.set("instanceId", instanceId);
-    target.searchParams.set("return", String(returnTo || "/setup/codex?compact=1").trim() || "/setup/codex?compact=1");
     return response
       .status(302)
       .header("cache-control", "no-store")
-      .header("location", `${target.pathname}${target.search}`)
+      .header("location", instanceSetupPairingRedirectPath(instanceId, returnTo, connector))
       .send("Redirecting to Orkestr connect setup.");
   }
 }

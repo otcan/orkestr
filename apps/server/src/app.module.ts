@@ -11,6 +11,7 @@ import { ReleaseModule } from "./modules/release/release.module.js";
 import { RouterTracesModule } from "./modules/router-traces/router-traces.module.js";
 import { SystemModule } from "./modules/system/system.module.js";
 import { SecureInputModule } from "./modules/secure-input/secure-input.module.js";
+import { SharedAppsModule } from "./modules/shared-apps/shared-apps.module.js";
 import { ThreadsModule } from "./modules/threads/threads.module.js";
 import { TimersModule } from "./modules/timers/timers.module.js";
 import { TenantSlicesModule } from "./modules/tenant-slices/tenant-slices.module.js";
@@ -29,6 +30,7 @@ import { UsersModule } from "./modules/users/users.module.js";
     RouterTracesModule,
     BrokerModule,
     SecureInputModule,
+    SharedAppsModule,
     BrowsersModule,
     AgentsModule,
     ThreadsModule,

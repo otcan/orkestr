@@ -8,6 +8,7 @@ import { OnboardingPageComponent } from "./onboarding-page.component";
 import { PairingRequiredPageComponent } from "./pairing-required-page.component";
 import { OpsPageComponent, ToolsView } from "./ops-page.component";
 import { RawTerminalController } from "./raw-terminal.controller";
+import { SharedAppPageComponent } from "./shared-app-page.component";
 import { ConnectorStore } from "./stores/connector.store";
 import { RuntimeStore } from "./stores/runtime.store";
 import { ThreadStore } from "./stores/thread.store";
@@ -49,7 +50,7 @@ import { appendPendingFiles, messageWithAttachmentPaths, PendingFile, removePend
 type Panel = "chat" | "history" | "delivery" | "timers" | "attach" | "settings" | "workers" | "runtime" | "raw" | "ops" | "files" | "userTimers" | "userDesk" | "userConnectors";
 type CodexRateLimitKey = "primary" | "secondary";
 type SetupPageMode = "setup" | "onboarding";
-type SetupSection = "system" | "security" | "secrets" | "maintenance" | "codex" | "whatsapp" | "browsers";
+type SetupSection = "system" | "security" | "secrets" | "maintenance" | "codex" | "gmail" | "whatsapp" | "browsers";
 type PersistedThreadTextField =
   | "draft"
   | "sidebarWorkerTask"
@@ -71,7 +72,7 @@ const MESSAGE_PAGE_LIMIT = 100;
 
 @Component({
   selector: "ork-root",
-  imports: [DatePipe, FormsModule, FirstThreadWizardComponent, FilesPageComponent, OpsPageComponent, OnboardingPageComponent, PairingRequiredPageComponent, ThreadComposerComponent, ThreadMessageListComponent, UserConnectorsPageComponent, UserDeskPageComponent, UserTimersPageComponent],
+  imports: [DatePipe, FormsModule, FirstThreadWizardComponent, FilesPageComponent, OpsPageComponent, OnboardingPageComponent, PairingRequiredPageComponent, SharedAppPageComponent, ThreadComposerComponent, ThreadMessageListComponent, UserConnectorsPageComponent, UserDeskPageComponent, UserTimersPageComponent],
   templateUrl: "./app.component.html",
 })
 export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
@@ -310,6 +311,13 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   async refresh(showBusy = true): Promise<void> {
+    if (this.sharedAppActive()) {
+      this.appReady = true;
+      this.apiOnline = true;
+      this.closeRawStream();
+      this.updateDocumentTitle();
+      return;
+    }
     if (showBusy) this.busy = true;
     try {
       const [threadsResult, systemResult, setupResult, timersResult, whatsappResult, userResult, versionResult] = await Promise.allSettled([
@@ -4298,6 +4306,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   private onboardingFromPath(): boolean {
     const parts = globalThis.location?.pathname?.split("/").filter(Boolean) || [];
+    if (this.sharedAppParts(parts)) return false;
     return parts[0] === "setup" || parts[0] === "onboarding" || (parts[0] === "ng" && parts[1] === "onboarding");
   }
 
@@ -4312,6 +4321,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   private panelFromPath(): Panel {
     const parts = globalThis.location?.pathname?.split("/").filter(Boolean) || [];
+    if (this.sharedAppParts(parts)) return "chat";
     if (parts[0] === "ops" || (parts[0] === "ng" && parts[1] === "ops")) return "ops";
     if (parts[0] === "files" || (parts[0] === "ng" && parts[1] === "files")) return "files";
     if (parts[0] === "timers" || (parts[0] === "ng" && parts[1] === "timers")) return "userTimers";
@@ -4333,7 +4343,8 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   private normalizeLegacyRoutePath(): void {
     const parts = globalThis.location?.pathname?.split("/").filter(Boolean) || [];
-    const retiredSetupSections = new Set(["google-marketing", "openai", "gmail", "linkedin", "mail", "outlook"]);
+    if (this.sharedAppParts(parts)) return;
+    const retiredSetupSections = new Set(["google-marketing", "openai", "linkedin", "mail", "outlook"]);
     if (parts[0] === "setup" && retiredSetupSections.has(String(parts[1] || "").toLowerCase())) {
       globalThis.history?.replaceState({}, "", "/setup");
       return;
@@ -4440,9 +4451,18 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   private normalizeSetupSection(value: unknown): SetupSection {
     const section = String(value || "").trim().toLowerCase();
-    return ["system", "security", "secrets", "maintenance", "codex", "whatsapp", "browsers"].includes(section)
+    return ["system", "security", "secrets", "maintenance", "codex", "gmail", "whatsapp", "browsers"].includes(section)
       ? section as SetupSection
       : "system";
+  }
+
+  sharedAppActive(): boolean {
+    const parts = globalThis.location?.pathname?.split("/").filter(Boolean) || [];
+    return Boolean(this.sharedAppParts(parts));
+  }
+
+  private sharedAppParts(parts: string[] = []): boolean {
+    return parts.length >= 6 && parts[0] === "i" && parts[2] === "a" && parts[4] === "s";
   }
 
   private pathForPanel(id: string, panel: Panel): string {
@@ -4672,6 +4692,10 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   private updateDocumentTitle(): void {
     if (this.pairingRequired) {
       globalThis.document.title = "Pairing Required · Orkestr";
+      return;
+    }
+    if (this.sharedAppActive()) {
+      globalThis.document.title = "Shared App · Orkestr";
       return;
     }
     if (this.onboardingActive) {

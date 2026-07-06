@@ -1,0 +1,199 @@
+.shared-app-shell {
+  min-height: 100vh;
+  background: #f6f8f5;
+  color: #172019;
+  display: grid;
+  grid-template-rows: auto 1fr;
+}
+
+.shared-app-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px clamp(16px, 4vw, 32px);
+  border-bottom: 1px solid #d7dfd4;
+  background: #ffffff;
+}
+
+.shared-app-header p,
+.shared-app-header h1 {
+  margin: 0;
+}
+
+.shared-app-header p {
+  color: #607064;
+  font-size: 12px;
+  text-transform: uppercase;
+  font-weight: 800;
+}
+
+.shared-app-header h1 {
+  font-size: 22px;
+}
+
+.shared-app-layout {
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(240px, 320px) minmax(0, 1fr);
+}
+
+.shared-people-list {
+  overflow: auto;
+  border-right: 1px solid #d7dfd4;
+  background: #edf2ec;
+  padding: 10px;
+}
+
+.shared-people-list button {
+  width: 100%;
+  display: grid;
+  gap: 4px;
+  text-align: left;
+  padding: 12px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+}
+
+.shared-people-list button.active {
+  background: #ffffff;
+  border-color: #b8c6b8;
+}
+
+.shared-people-list small,
+.shared-person small,
+.shared-classifier small {
+  color: #607064;
+}
+
+.shared-person {
+  min-width: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+}
+
+.shared-person > header {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px clamp(16px, 4vw, 32px);
+  border-bottom: 1px solid #d7dfd4;
+  background: #ffffff;
+}
+
+.shared-person h2 {
+  margin: 0 0 6px;
+  font-size: 20px;
+}
+
+.shared-person a {
+  color: #186443;
+  font-weight: 700;
+}
+
+.shared-person header span {
+  align-self: start;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: #e1eee5;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.shared-message-timeline {
+  overflow: auto;
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  padding: 16px clamp(16px, 4vw, 32px) 120px;
+}
+
+.shared-message-timeline article {
+  max-width: 820px;
+  padding: 12px;
+  border: 1px solid #d7dfd4;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.shared-message-timeline p {
+  margin: 6px 0 0;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+.shared-classifier {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  padding: 12px clamp(16px, 4vw, 32px);
+  border-top: 1px solid #d7dfd4;
+  background: rgba(255, 255, 255, .96);
+}
+
+.shared-classifier button {
+  min-height: 38px;
+  padding: 0 12px;
+  border-radius: 8px;
+  border: 1px solid #aebcaf;
+  background: #ffffff;
+  color: #172019;
+  font-weight: 800;
+}
+
+.shared-classifier button.active {
+  background: #1f7a52;
+  color: #ffffff;
+  border-color: #1f7a52;
+}
+
+.shared-classifier button.secondary {
+  margin-left: auto;
+  background: #233228;
+  color: #ffffff;
+}
+
+.shared-app-state {
+  margin: 24px;
+  padding: 16px;
+  border: 1px solid #d7dfd4;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.shared-app-state.error {
+  border-color: #e8a29a;
+  color: #8d261d;
+}
+
+@media (max-width: 760px) {
+  .shared-app-layout {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .shared-people-list {
+    display: flex;
+    gap: 8px;
+    overflow-x: auto;
+    border-right: 0;
+    border-bottom: 1px solid #d7dfd4;
+  }
+
+  .shared-people-list button {
+    min-width: 180px;
+  }
+
+  .shared-person > header {
+    align-items: start;
+  }
+
+  .shared-classifier button.secondary {
+    margin-left: 0;
+  }
+}

@@ -2,7 +2,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { INestApplication } from "@nestjs/common";
 import { resolveBrokerConnectInstance } from "../../../packages/core/src/broker-instance-registry.js";
-import { securityCookieName, verifySecurityToken } from "../../../packages/core/src/security.js";
+import { createPairingChallenge, securityCookieName, verifySecurityToken } from "../../../packages/core/src/security.js";
+import { resolveSharedAppShare } from "../../../packages/core/src/shared-apps.js";
+import { instanceSetupPairingRedirectPath, normalizeInstanceId } from "./instance-connect-setup.js";
 import { publicPairingUrl, publicSiteAllowedForHost, publicSitePath, renderPublicSite } from "./public-site.js";
 
 const publicDir = path.resolve(process.cwd(), "dist/web/browser");
@@ -29,6 +31,8 @@ export function registerStaticFallback(app: INestApplication): void {
     if (url.startsWith("/desktop-share/")) {
       return serveDesktopSharePage(response);
     }
+    const sharedAppHandled = await maybeHandleSharedAppRoute(request, response, url);
+    if (sharedAppHandled) return;
     let instanceSetupRedirect = "";
     try {
       instanceSetupRedirect = await instanceSetupRedirectUrl(request, url);
@@ -72,6 +76,105 @@ export function registerStaticFallback(app: INestApplication): void {
   });
 }
 
+async function maybeHandleSharedAppRoute(request: any, response: any, requestUrl: string): Promise<boolean> {
+  const route = parseSharedAppRoute(requestUrl);
+  if (!route) return false;
+  let resolved: any = null;
+  try {
+    resolved = await resolveSharedAppShare(route.instanceId, route.appSlug, route.shareToken, { includeDenied: true });
+  } catch (error: any) {
+    return sendSharedAppDenied(response, "Share link not found.", Number(error?.statusCode || 404));
+  }
+  if (resolved.deniedReason) {
+    return sendSharedAppDenied(response, resolved.deniedReason === "expired" ? "This share link has expired." : "This share link has been revoked.", 403);
+  }
+  if (requestHasScopedShareSession(request, resolved.share)) return false;
+  const challenge = await createPairingChallenge({
+    request,
+    instanceId: resolved.share.instanceId,
+    shareId: resolved.share.id,
+    appSlug: resolved.share.appSlug,
+    requestedPath: route.fullPath,
+    allowedActions: resolved.share.allowedActionsJson || [],
+  } as any);
+  const target = new URL("/setup/pairing", "http://localhost");
+  target.searchParams.set("instanceId", resolved.share.instanceId);
+  target.searchParams.set("challengeId", challenge.challengeId);
+  target.searchParams.set("return", route.fullPath);
+  return response
+    .status(302)
+    .header("cache-control", "no-store")
+    .header("location", `${target.pathname}${target.search}`)
+    .type("text/plain; charset=utf-8")
+    .send("Redirecting to Orkestr pairing.");
+}
+
+function parseSharedAppRoute(requestUrl: string) {
+  const url = new URL(requestUrl || "/", "http://localhost");
+  const parts = url.pathname.split("/").filter(Boolean);
+  if (parts.length < 6 || parts[0] !== "i" || parts[2] !== "a" || parts[4] !== "s") return null;
+  const instanceId = safeDecode(parts[1]);
+  const appSlug = safeDecode(parts[3]);
+  const shareToken = safeDecode(parts[5]);
+  if (!instanceId || !appSlug || !shareToken) return null;
+  return {
+    instanceId,
+    appSlug,
+    shareToken,
+    fullPath: `${url.pathname}${url.search}`,
+  };
+}
+
+function safeDecode(value = "") {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
+function requestHasScopedShareSession(request: any, share: Record<string, unknown> = {}): boolean {
+  const session = request?.orkestrSecuritySession || null;
+  return Boolean(
+    session &&
+    String(session.instanceId || "") === String(share.instanceId || "") &&
+    String(session.appSlug || "") === String(share.appSlug || "") &&
+    String(session.shareId || "") === String(share.id || "")
+  );
+}
+
+function sendSharedAppDenied(response: any, message: string, statusCode = 403): boolean {
+  response
+    .status(statusCode)
+    .header("cache-control", "no-store")
+    .type("text/html; charset=utf-8")
+    .send(`<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Share unavailable</title>
+  <style>
+    :root { color-scheme: light dark; font-family: Inter, ui-sans-serif, system-ui, sans-serif; }
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #111814; color: #eef8ef; }
+    main { width: min(520px, calc(100% - 32px)); }
+    h1 { margin: 0 0 10px; font-size: 24px; }
+    p { margin: 0; color: #b8c9ba; line-height: 1.5; }
+  </style>
+</head>
+<body><main><h1>Share unavailable</h1><p>${escapeHtml(message)}</p></main></body>
+</html>`);
+  return true;
+}
+
+function escapeHtml(value = ""): string {
+  return String(value || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
 async function instanceSetupRedirectUrl(request: any, requestUrl: string): Promise<string> {
   const url = new URL(requestUrl || "/", "http://localhost");
   const parts = url.pathname.split("/").filter(Boolean);
@@ -79,24 +182,13 @@ async function instanceSetupRedirectUrl(request: any, requestUrl: string): Promi
   const instanceId = normalizeInstanceId(parts[1]);
   if (!instanceId) return "";
   await resolveBrokerConnectInstance(instanceId, process.env);
-  const target = new URL("/setup/pairing", originalRequestOrigin(request));
-  target.searchParams.set("instanceId", instanceId);
-  target.searchParams.set("return", url.searchParams.get("return") || "/setup/codex?compact=1");
-  return `${target.pathname}${target.search}`;
+  return instanceSetupPairingRedirectPath(instanceId, url.searchParams.get("return") || "", url.searchParams.get("connector") || "");
 }
 
 function isInstanceSetupPath(requestUrl: string): boolean {
   const url = new URL(requestUrl || "/", "http://localhost");
   const parts = url.pathname.split("/").filter(Boolean);
   return parts.length === 3 && parts[0] === "i" && parts[2] === "setup";
-}
-
-function normalizeInstanceId(value = ""): string {
-  return String(value || "")
-    .trim()
-    .replace(/[^A-Za-z0-9._:-]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 120);
 }
 
 async function privatePublicPathRedirectUrl(request: any, requestUrl: string, env = process.env) {

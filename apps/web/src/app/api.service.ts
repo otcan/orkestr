@@ -525,6 +525,43 @@ export interface SecurityStatus {
   };
 }
 
+export interface SharedAppPersonMessage {
+  id?: string;
+  at?: string;
+  from?: string;
+  text?: string;
+}
+
+export interface SharedAppPerson {
+  id: string;
+  name: string;
+  profileUrl?: string;
+  messageHistory?: SharedAppPersonMessage[];
+  currentClassification?: string;
+}
+
+export interface SharedAppPayload {
+  ok?: boolean;
+  app?: {
+    id?: string;
+    instanceId?: string;
+    appSlug?: string;
+    appType?: string;
+    title?: string;
+    description?: string;
+  };
+  share?: {
+    id?: string;
+    allowedActionsJson?: string[];
+    expiresAt?: string;
+  };
+  data?: {
+    people?: SharedAppPerson[];
+    labels?: string[];
+    allowedActions?: string[];
+  };
+}
+
 export interface ConnectorConfigResponse {
   config: Record<string, string>;
 }
@@ -1849,9 +1886,10 @@ export class ApiService {
     return this.http.get<CreditUsageResponse>(this.api("/users/me/credit-usage"));
   }
 
-  createSecurityChallenge(instanceId = ""): Observable<SecurityChallengeResponse> {
+  createSecurityChallenge(instanceId = "", scope: Record<string, unknown> = {}): Observable<SecurityChallengeResponse> {
     return this.http.post<SecurityChallengeResponse>(this.api("/setup/security/challenges"), {
       ...(instanceId ? { instanceId } : {}),
+      ...scope,
     });
   }
 
@@ -2397,5 +2435,16 @@ export class ApiService {
 
   createDesktopShare(slug: string): Observable<DesktopShareResponse> {
     return this.http.post<DesktopShareResponse>(this.api(`/desktops/${encodeURIComponent(slug)}/share`), {});
+  }
+
+  sharedApp(instanceId: string, appSlug: string, shareToken: string): Observable<SharedAppPayload> {
+    return this.http.get<SharedAppPayload>(this.api(`/shared-apps/i/${encodeURIComponent(instanceId)}/a/${encodeURIComponent(appSlug)}/s/${encodeURIComponent(shareToken)}`));
+  }
+
+  sharedAppAction(instanceId: string, appSlug: string, shareToken: string, action: string, body: Record<string, unknown>): Observable<SharedAppPayload> {
+    return this.http.post<SharedAppPayload>(
+      this.api(`/shared-apps/i/${encodeURIComponent(instanceId)}/a/${encodeURIComponent(appSlug)}/s/${encodeURIComponent(shareToken)}/actions/${encodeURIComponent(action)}`),
+      body,
+    );
   }
 }

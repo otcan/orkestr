@@ -51,6 +51,28 @@ function normalizeInstanceId(value = "") {
     .slice(0, 120);
 }
 
+function normalizeAppSlug(value = "") {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 120);
+}
+
+function normalizeShareId(value = "") {
+  return String(value || "")
+    .trim()
+    .replace(/[^A-Za-z0-9._:-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 160);
+}
+
+function normalizeAllowedActions(value = []) {
+  const items = Array.isArray(value) ? value : String(value || "").split(",");
+  return [...new Set(items.map((item) => String(item || "").trim()).filter(Boolean))].slice(0, 50);
+}
+
 function remoteAuthSignal(env = process.env, urls = publicUrlConfig(env), host = bindHost(env)) {
   const publicUrlConfigured = Boolean(
     urls.primaryDomain ||
@@ -138,6 +160,10 @@ function publicChallenge(challenge = {}, now = Date.now()) {
     requestedIp: normalized.requestedIp || "",
     userId: normalized.userId || "",
     role: normalized.role || "",
+    shareId: normalized.shareId || "",
+    appSlug: normalized.appSlug || "",
+    requestedPath: normalized.requestedPath || "",
+    allowedActions: Array.isArray(normalized.allowedActions) ? normalized.allowedActions : [],
     approvedAt: normalized.approvedAt || "",
     approvedBy: normalized.approvedBy || "",
     rejectedAt: normalized.rejectedAt || "",
@@ -157,6 +183,9 @@ function publicSession(session = {}) {
     createdAt: session.createdAt || "",
     lastAccessedAt: session.lastAccessedAt || session.createdAt || "",
     lastIp: session.lastIp || "",
+    shareId: session.shareId || "",
+    appSlug: session.appSlug || "",
+    allowedActions: Array.isArray(session.allowedActions) ? session.allowedActions : [],
     expiresAt: session.expiresAt || "",
   };
 }
@@ -842,11 +871,13 @@ export async function securityStatus(env = process.env) {
   };
 }
 
-export async function createPairingChallenge({ request, env = process.env, userId = "", role = "", instanceId = "" } = {}) {
+export async function createPairingChallenge({ request, env = process.env, userId = "", role = "", instanceId = "", shareId = "", appSlug = "", requestedPath = "", allowedActions = [] } = {}) {
   const config = await readSecurityConfig(env);
   const normalizedRole = String(role || "").trim().toLowerCase() === "user" ? "user" : "admin";
   const normalizedUserId = userId ? normalizeUserId(userId) : "";
   const normalizedInstanceId = normalizeInstanceId(instanceId);
+  const normalizedShareId = normalizeShareId(shareId);
+  const normalizedAppSlug = normalizeAppSlug(appSlug);
   const existingCodes = new Set((config.challenges || []).map((item) => String(item.approveCode || "").trim().toUpperCase()).filter(Boolean));
   let approveCode = "";
   for (let attempt = 0; attempt < 20 && !approveCode; attempt += 1) {
@@ -865,12 +896,24 @@ export async function createPairingChallenge({ request, env = process.env, userI
     requestedIp: requestIp(request).slice(0, 80),
     userId: normalizedUserId,
     role: normalizedUserId ? normalizedRole : "",
+    shareId: normalizedShareId,
+    appSlug: normalizedAppSlug,
+    requestedPath: String(requestedPath || "").slice(0, 1000),
+    allowedActions: normalizeAllowedActions(allowedActions),
   };
   await writeSecurityConfig({
     ...config,
     challenges: [...(config.challenges || []), challenge],
   }, env);
-  await appendEvent({ type: "security_pairing_challenge_created", challengeId: challenge.id, instanceId: challenge.instanceId || null, userId: challenge.userId || null, role: challenge.role || null }, env).catch(() => {});
+  await appendEvent({
+    type: "security_pairing_challenge_created",
+    challengeId: challenge.id,
+    instanceId: challenge.instanceId || null,
+    shareId: challenge.shareId || null,
+    appSlug: challenge.appSlug || null,
+    userId: challenge.userId || null,
+    role: challenge.role || null,
+  }, env).catch(() => {});
   return {
     ok: true,
     challengeId: challenge.id,
@@ -1070,6 +1113,9 @@ export async function pairBrowser({ challengeId, userAgent = "", ip = "", env = 
     createdAt,
     lastAccessedAt: createdAt,
     lastIp: String(ip || "").slice(0, 80),
+    shareId: challenge.shareId || "",
+    appSlug: challenge.appSlug || "",
+    allowedActions: normalizeAllowedActions(challenge.allowedActions || []),
     expiresAt: new Date(Date.now() + sessionTtlMs).toISOString(),
   };
   await writeSecurityConfig({
@@ -1087,6 +1133,8 @@ export async function pairBrowser({ challengeId, userAgent = "", ip = "", env = 
     sessionId: session.id,
     challengeId: challenge.id,
     instanceId: session.instanceId || null,
+    shareId: session.shareId || null,
+    appSlug: session.appSlug || null,
     userId: session.userId,
     role: session.role,
   }, env).catch(() => {});

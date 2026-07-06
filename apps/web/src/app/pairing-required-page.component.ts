@@ -22,7 +22,9 @@ export class PairingRequiredPageComponent implements OnInit, OnDestroy {
   notice = "";
 
   ngOnInit(): void {
-    void this.createChallenge();
+    const challengeId = this.challengeId();
+    if (challengeId) void this.loadExistingChallenge(challengeId);
+    else void this.createChallenge();
   }
 
   ngOnDestroy(): void {
@@ -47,6 +49,24 @@ export class PairingRequiredPageComponent implements OnInit, OnDestroy {
       };
       this.notice = "Paste the command below into WhatsApp or a trusted terminal.";
       this.startPolling();
+    } catch (error) {
+      this.error = this.errorText(error);
+    } finally {
+      this.busy = false;
+      this.renderNow();
+    }
+  }
+
+  async loadExistingChallenge(challengeId: string): Promise<void> {
+    this.busy = true;
+    this.error = "";
+    this.renderNow();
+    try {
+      const result = await firstValueFrom(this.api.securityChallenge(challengeId));
+      this.challenge = result.challenge;
+      this.notice = "Paste the command below into WhatsApp or a trusted terminal.";
+      if (this.challenge.status === "approved") await this.consumeChallenge();
+      else this.startPolling();
     } catch (error) {
       this.error = this.errorText(error);
     } finally {
@@ -102,6 +122,11 @@ export class PairingRequiredPageComponent implements OnInit, OnDestroy {
   instanceId(): string {
     const params = new URLSearchParams(globalThis.location?.search || "");
     return String(params.get("instanceId") || params.get("instance") || params.get("orkestrInstanceId") || "").trim();
+  }
+
+  challengeId(): string {
+    const params = new URLSearchParams(globalThis.location?.search || "");
+    return String(params.get("challengeId") || params.get("challenge") || "").trim();
   }
 
   private async consumeChallenge(): Promise<void> {

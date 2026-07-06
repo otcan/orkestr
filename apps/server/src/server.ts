@@ -74,6 +74,13 @@ export async function createApp(): Promise<INestApplication> {
         (request as any).orkestrSecuritySession = result.session || null;
         (request as any).orkestrMachineAuth = (result as any).machineAuth || null;
         (request as any).orkestrMachineAuthContext = (result as any).machineAuthContext || null;
+        const scopedShareAuth = authorizeScopedShareSessionRequest(request, result.session || null);
+        if (!scopedShareAuth.ok) {
+          return response
+            .status(scopedShareAuth.statusCode || 403)
+            .type("application/json")
+            .send(JSON.stringify({ ok: false, error: scopedShareAuth.error || "forbidden" }));
+        }
         const resourceAuth = await authorizeThreadResourceRequest(request, result.principal);
         if (!resourceAuth.ok) {
           return response
@@ -137,6 +144,33 @@ export async function createApp(): Promise<INestApplication> {
     });
   }));
   return app;
+}
+
+function authorizeScopedShareSessionRequest(request: any, session: any) {
+  if (!session?.shareId) return { ok: true };
+  const method = String(request?.method || "GET").toUpperCase();
+  const parts = routePartsFromApiRequest(request);
+  if (parts[0] !== "api") return { ok: true };
+  const [surface] = parts.slice(1).map((part) => part.toLowerCase());
+  if (surface === "version" && method === "GET") return { ok: true };
+  if (surface === "setup" && parts[2]?.toLowerCase() === "status" && method === "GET") return { ok: true };
+  if (surface !== "shared-apps") return { ok: false, statusCode: 403, error: "shared_app_session_scope_denied" };
+  const route = sharedAppApiRoute(parts);
+  if (!route) return { ok: false, statusCode: 403, error: "shared_app_session_scope_denied" };
+  const matchingScope =
+    route.instanceId === String(session.instanceId || "") &&
+    route.appSlug === String(session.appSlug || "");
+  if (!matchingScope) return { ok: false, statusCode: 403, error: "shared_app_session_scope_denied" };
+  return { ok: true };
+}
+
+function sharedAppApiRoute(parts: string[]) {
+  if (parts[0] !== "api" || parts[1] !== "shared-apps" || parts[2] !== "i" || parts[4] !== "a" || parts[6] !== "s") return null;
+  return {
+    instanceId: parts[3] || "",
+    appSlug: parts[5] || "",
+    shareToken: parts[7] || "",
+  };
 }
 
 function authorizeConnectorResourceRequest(request: any, principal: any) {

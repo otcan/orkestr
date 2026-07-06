@@ -3,6 +3,8 @@
     [setupStatus]="setupStatus"
     (paired)="handleBrowserPaired()"
   ></ork-pairing-required-page>
+} @else if (sharedAppActive()) {
+  <ork-shared-app-page></ork-shared-app-page>
 } @else if (onboardingActive) {
   <ork-onboarding-page
     [mode]="setupPageMode"
