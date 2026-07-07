@@ -287,6 +287,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.toolsView = this.toolsViewFromPath();
     this.sidebarWidth = this.loadSidebarWidth();
     this.normalizeLegacyRoutePath();
+    this.updateDocumentTitle();
     globalThis.addEventListener?.("popstate", this.popStateHandler);
     void this.refresh(true);
     if (!this.sharedAppActive() && !this.pairingRequired) {
@@ -321,6 +322,10 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       this.closeRawStream();
       this.disconnectSummaryStream();
       this.updateDocumentTitle();
+      return;
+    }
+    if (this.connectorLoginActive()) {
+      await this.refreshConnectorLogin(showBusy);
       return;
     }
     if (showBusy) this.busy = true;
@@ -410,6 +415,39 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   private isPairingRequiredFromSetup(setup: SetupStatus | null = this.setupStatus): boolean {
     const security = setup?.security;
     return Boolean((security?.authEnabled || security?.authRequired) && !security?.paired);
+  }
+
+  private async refreshConnectorLogin(showBusy = true): Promise<void> {
+    if (showBusy) this.busy = true;
+    try {
+      const setup = await firstValueFrom(this.api.setupStatus());
+      this.setupStatus = setup;
+      this.appReady = true;
+      this.apiOnline = true;
+      if (this.isPairingRequiredFromSetup(setup)) {
+        this.enterPairingRequired(setup);
+        return;
+      }
+      this.pairingRequired = false;
+      this.onboardingActive = false;
+      this.activePanel = "userConnectors";
+      this.closeRawStream();
+      this.disconnectSummaryStream();
+      this.updateDocumentTitle();
+      this.error = "";
+    } catch (error) {
+      if (this.isPairingRequiredError(error)) {
+        this.enterPairingRequired();
+        return;
+      }
+      this.apiOnline = false;
+      this.error = this.errorText(error);
+      this.appReady = true;
+      this.updateDocumentTitle();
+    } finally {
+      this.busy = false;
+      this.renderNow();
+    }
   }
 
   private isPairingRequiredError(error: unknown): boolean {
