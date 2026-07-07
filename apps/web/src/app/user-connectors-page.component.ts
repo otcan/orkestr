@@ -1,4 +1,4 @@
-import { Component, OnInit, inject } from "@angular/core";
+import { Component, OnDestroy, OnInit, inject } from "@angular/core";
 import { FormsModule } from "@angular/forms";
 import { firstValueFrom } from "rxjs";
 import { ApiService, ConnectorStatus, GmailOAuthStartResponse, OrkestrUser, OutlookOAuthStartResponse, SetupStatus } from "./api.service";
@@ -8,9 +8,11 @@ import { ApiService, ConnectorStatus, GmailOAuthStartResponse, OrkestrUser, Outl
   imports: [FormsModule],
   templateUrl: "./user-connectors-page.component.html",
 })
-export class UserConnectorsPageComponent implements OnInit {
+export class UserConnectorsPageComponent implements OnDestroy, OnInit {
   private readonly api = inject(ApiService);
   private readonly connectorOrder = ["whatsapp", "gmail", "outlook", "jira", "shopify", "linkedin", "browsers"];
+  private retryTimer: ReturnType<typeof setTimeout> | null = null;
+  private retryAttempts = 0;
 
   busy = false;
   actionBusy = "";
@@ -27,18 +29,29 @@ export class UserConnectorsPageComponent implements OnInit {
     void this.load();
   }
 
-  async load(): Promise<void> {
-    this.busy = true;
+  ngOnDestroy(): void {
+    this.clearRetry();
+  }
+
+  async load(showBusy = true): Promise<void> {
+    this.clearRetry();
+    if (showBusy) this.busy = true;
     try {
-      const [setup, user] = await Promise.all([
+      const [setup, user] = await Promise.allSettled([
         firstValueFrom(this.api.setupStatus()),
         firstValueFrom(this.api.currentUser()),
       ]);
-      this.setupStatus = setup;
-      this.currentUser = user.user;
-      this.error = "";
+      if (setup.status === "fulfilled") this.setupStatus = setup.value;
+      if (user.status === "fulfilled") this.currentUser = user.value.user;
+      if (setup.status === "rejected" && user.status === "rejected") {
+        this.error = this.errorText(user.reason || setup.reason);
+      } else {
+        this.error = "";
+      }
+      this.scheduleRetryIfNeeded();
     } catch (error) {
       this.error = this.errorText(error);
+      this.scheduleRetryIfNeeded();
     } finally {
       this.busy = false;
     }
@@ -140,9 +153,59 @@ export class UserConnectorsPageComponent implements OnInit {
   }
 
   routeConnectorId(): string {
-    const parts = globalThis.location?.pathname?.split("/").filter(Boolean) || [];
+    const parts = this.locationPathParts();
     const candidate = parts[0] === "connectors" ? String(parts[1] || "").toLowerCase() : "";
     return this.connectorOrder.includes(candidate) ? candidate : "";
+  }
+
+  deskPath(): string {
+    return this.appPath("/desk");
+  }
+
+  private appBasePath(): string {
+    const raw = globalThis.document?.querySelector("base")?.getAttribute("href") || "/";
+    try {
+      const parsed = new URL(raw, globalThis.location?.origin || "http://localhost");
+      const path = parsed.pathname.replace(/\/+$/, "");
+      return path === "/" ? "" : path;
+    } catch {
+      const path = String(raw || "/").split("?")[0].split("#")[0].replace(/\/+$/, "");
+      return path === "/" ? "" : path;
+    }
+  }
+
+  private locationPathParts(): string[] {
+    const pathname = globalThis.location?.pathname || "/";
+    const base = this.appBasePath();
+    const path = base && (pathname === base || pathname.startsWith(`${base}/`))
+      ? pathname.slice(base.length) || "/"
+      : pathname;
+    return path.split("/").filter(Boolean);
+  }
+
+  private appPath(path: string): string {
+    const normalized = path.startsWith("/") ? path : `/${path}`;
+    const base = this.appBasePath();
+    return base ? `${base}${normalized}` : normalized;
+  }
+
+  private scheduleRetryIfNeeded(): void {
+    if (this.setupStatus && this.currentUser) {
+      this.retryAttempts = 0;
+      return;
+    }
+    if (this.retryTimer || this.retryAttempts >= 45) return;
+    this.retryTimer = setTimeout(() => {
+      this.retryTimer = null;
+      this.retryAttempts += 1;
+      void this.load(false);
+    }, 2000);
+  }
+
+  private clearRetry(): void {
+    if (!this.retryTimer) return;
+    clearTimeout(this.retryTimer);
+    this.retryTimer = null;
   }
 
   private errorText(error: unknown): string {

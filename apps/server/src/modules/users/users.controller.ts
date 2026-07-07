@@ -129,6 +129,19 @@ function requestedUserId(value: string, request: any) {
   return String(value || "").trim();
 }
 
+function brokerProxyUserOverride(request: any, principal: any, user: any, fallback: any) {
+  const context = request?.orkestrMachineAuthContext || {};
+  if (request?.orkestrMachineAuth !== "broker_proxy") return user || fallback;
+  if (String(context.role || principal?.role || "").trim().toLowerCase() !== "user") return user || fallback;
+  return {
+    ...(user && user.role !== "admin" ? user : fallback),
+    id: principal.userId,
+    role: "user",
+    displayName: String(principal.displayName || context.displayName || (user?.role !== "admin" ? user?.displayName : "") || principal.userId).trim(),
+    limits: user && user.role !== "admin" ? user.limits : fallback.limits,
+  };
+}
+
 @Controller("api/users")
 export class UsersController {
   @Get()
@@ -177,7 +190,7 @@ export class UsersController {
       status: "active",
       limits: { maxThreads: principal.role === "admin" ? null : 1 },
     };
-    return { ok: true, user: userSummary(user || fallback, threads, timers) };
+    return { ok: true, user: userSummary(brokerProxyUserOverride(request, principal, user, fallback), threads, timers) };
   }
 
   @Get("me/skills")

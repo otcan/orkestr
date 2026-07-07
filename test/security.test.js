@@ -6,6 +6,8 @@ import test from "node:test";
 import { startServer } from "../apps/server/src/server.js";
 import { __brokerInstanceRegistryTestInternals, encryptBrokerChannelPayload } from "../packages/core/src/broker-instance-registry.js";
 import { approvePairingChallenge, authorizeHttpRequest, createPairingChallenge, pairBrowser, securityStatus } from "../packages/core/src/security.js";
+import { createTenantVm } from "../packages/core/src/tenant-vm-registry.js";
+import { createUser } from "../packages/core/src/users.js";
 import { writeConnectorConfig } from "../packages/storage/src/config.js";
 
 function saveEnv(keys) {
@@ -828,6 +830,12 @@ test("shared broker authorization accepts matching encrypted proxy assertions", 
     headers: { "x-orkestr-broker-auth": headerFor() },
     socket: { remoteAddress: "10.43.0.10" },
   }, env);
+  const allowedUser = await authorizeHttpRequest({
+    method: "GET",
+    url: "/api/threads",
+    headers: { "x-orkestr-broker-auth": headerFor({ userId: "firat", role: "user" }) },
+    socket: { remoteAddress: "10.43.0.10" },
+  }, env);
   const wrongPath = await authorizeHttpRequest({
     method: "GET",
     url: "/api/threads",
@@ -840,6 +848,11 @@ test("shared broker authorization accepts matching encrypted proxy assertions", 
   assert.equal(allowed.ok, true);
   assert.equal(allowed.machineAuth, "broker_proxy");
   assert.equal(allowed.principal.userId, "admin");
+  assert.equal(allowedUser.ok, true);
+  assert.equal(allowedUser.machineAuth, "broker_proxy");
+  assert.equal(allowedUser.principal.userId, "firat");
+  assert.equal(allowedUser.principal.role, "user");
+  assert.equal(allowedUser.machineAuthContext.userId, "firat");
   assert.equal(wrongPath.ok, false);
   assert.equal(wrongPath.error, "broker_proxy_auth_path_mismatch");
 });
@@ -853,6 +866,7 @@ test("broker proxy setup status is treated as paired for tenant WebUI", async ()
     "ORKESTR_SHARED_AUTHORIZATION",
     "ORKESTR_BROKER_INSTANCE_ID",
     "ORKESTR_RECOVER_RUNNING_ON_START",
+    "ORKESTR_ADMIN_USER_ID",
   ]);
   const client = __brokerInstanceRegistryTestInternals.createX25519Identity();
   const broker = __brokerInstanceRegistryTestInternals.createX25519Identity();
@@ -877,22 +891,29 @@ test("broker proxy setup status is treated as paired for tenant WebUI", async ()
   process.env.ORKESTR_SHARED_AUTHORIZATION = "1";
   process.env.ORKESTR_BROKER_INSTANCE_ID = instanceId;
   process.env.ORKESTR_RECOVER_RUNNING_ON_START = "0";
-  const now = Date.now();
-  const header = Buffer.from(JSON.stringify({
-    channelId,
-    envelope: encryptBrokerChannelPayload({
-      kind: "broker_app_proxy",
-      instanceId,
-      method: "GET",
-      path: "/api/setup/status",
-      issuedAt: new Date(now).toISOString(),
-      expiresAt: new Date(now + 30_000).toISOString(),
-    }, {
-      clientPrivateKey: broker.privateKey,
-      brokerPublicKey: client.publicKey,
+  process.env.ORKESTR_ADMIN_USER_ID = "firat";
+  const headerFor = (patch = {}) => {
+    const now = Date.now();
+    return Buffer.from(JSON.stringify({
       channelId,
-    }),
-  }), "utf8").toString("base64url");
+      envelope: encryptBrokerChannelPayload({
+        kind: "broker_app_proxy",
+        instanceId,
+        method: "GET",
+        path: "/api/setup/status",
+        issuedAt: new Date(now).toISOString(),
+        expiresAt: new Date(now + 30_000).toISOString(),
+        ...patch,
+      }, {
+        clientPrivateKey: broker.privateKey,
+        brokerPublicKey: client.publicKey,
+        channelId,
+      }),
+    }), "utf8").toString("base64url");
+  };
+  const header = headerFor();
+  const userHeader = headerFor({ userId: "firat", role: "user", displayName: "Fırat" });
+  const userMeHeader = headerFor({ userId: "firat", role: "user", displayName: "Fırat", path: "/api/users/me" });
 
   const server = await startServer({ port: 0, host: "127.0.0.1" });
   const { port } = server.address();
@@ -901,6 +922,12 @@ test("broker proxy setup status is treated as paired for tenant WebUI", async ()
     const proxied = await json(await fetch(`http://127.0.0.1:${port}/api/setup/status`, {
       headers: { "x-orkestr-broker-auth": header },
     }));
+    const proxiedUser = await json(await fetch(`http://127.0.0.1:${port}/api/setup/status`, {
+      headers: { "x-orkestr-broker-auth": userHeader },
+    }));
+    const proxiedMe = await json(await fetch(`http://127.0.0.1:${port}/api/users/me`, {
+      headers: { "x-orkestr-broker-auth": userMeHeader },
+    }));
 
     assert.equal(unpaired.redacted, true);
     assert.equal(unpaired.security.paired, false);
@@ -908,6 +935,55 @@ test("broker proxy setup status is treated as paired for tenant WebUI", async ()
     assert.equal(proxied.security.authEnabled, true);
     assert.equal(proxied.security.paired, true);
     assert.equal(proxied.security.remoteReady, true);
+    assert.notEqual(proxiedUser.redacted, true);
+    assert.equal(proxiedUser.security.paired, true);
+    assert.equal(proxiedUser.security.remoteReady, true);
+    assert.equal(proxiedMe.user.id, "firat");
+    assert.equal(proxiedMe.user.role, "user");
+    assert.equal(proxiedMe.user.displayName, "Fırat");
+    assert.equal(proxiedMe.user.limits.maxThreads, 1);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    restoreEnv(prior);
+  }
+});
+
+test("broker instance pairing challenge is scoped to the tenant VM owner", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-security-broker-owner-pairing-"));
+  const prior = saveEnv([
+    "ORKESTR_HOME",
+    "ORKESTR_AUTH_REQUIRED",
+    "ORKESTR_RECOVER_RUNNING_ON_START",
+  ]);
+  process.env.ORKESTR_HOME = home;
+  process.env.ORKESTR_AUTH_REQUIRED = "1";
+  process.env.ORKESTR_RECOVER_RUNNING_ON_START = "0";
+
+  await createUser({ id: "firat", role: "user", displayName: "Fırat" }, process.env);
+  await createTenantVm({
+    id: "firat-jobs-vm",
+    ownerUserId: "firat",
+    labels: { brokerInstanceId: "instance-firat" },
+  }, process.env);
+
+  const server = await startServer({ port: 0, host: "127.0.0.1" });
+  const { port } = server.address();
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/api/setup/security/challenges`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        instanceId: "instance-firat",
+        requestedPath: "/i/instance-firat/app/connectors/gmail",
+      }),
+    });
+    const body = await json(response);
+
+    assert.equal(response.status, 200);
+    assert.equal(body.challenge.userId, "firat");
+    assert.equal(body.challenge.role, "user");
+    assert.equal(body.challenge.instanceId, "instance-firat");
+    assert.equal(body.challenge.requestedPath, "/i/instance-firat/app/connectors/gmail");
   } finally {
     await new Promise((resolve) => server.close(resolve));
     restoreEnv(prior);
