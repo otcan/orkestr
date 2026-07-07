@@ -109,7 +109,7 @@ test("demo VM notifier sends one broker-routed readiness message and seeds relay
   assert.equal(settings.connectors.whatsapp.bridgeMode, "relay");
   assert.equal(state.sent, true);
   assert.equal(state.state, "sent");
-  assert.equal(state.setupUrl, `https://orkestr.example.test/i/${BROKER_UUID}/setup`);
+  assert.equal(state.setupUrl, `https://orkestr.example.test/i/${BROKER_UUID}/app/`);
   assert.equal(state.setupUrlSource, "public_base_url");
   assert.equal(state.instanceId, BROKER_UUID);
   assert.equal(state.targetKey.length, 64);
@@ -199,7 +199,7 @@ test("demo VM notifier rewrites explicit setup URLs to the fresh broker UUID", a
 
   assert.equal(result.ok, true);
   assert.equal(result.sent, true);
-  assert.equal(state.setupUrl, `https://connect.orkestr.de/i/${BROKER_UUID}/setup`);
+  assert.equal(state.setupUrl, `https://connect.orkestr.de/i/${BROKER_UUID}/app/`);
   assert.equal(state.instanceId, BROKER_UUID);
 });
 
@@ -228,7 +228,7 @@ test("demo VM notifier does not require a pre-provisioned relay URL", async () =
   assert.equal(result.sent, true);
   assert.equal(settings.connectors.whatsapp.accessMode, "relay");
   assert.equal(state.sent, true);
-  assert.equal(state.setupUrl, `https://demo-public.example.test/i/${BROKER_UUID}/setup`);
+  assert.equal(state.setupUrl, `https://demo-public.example.test/i/${BROKER_UUID}/app/`);
   assert.equal(state.instanceId, BROKER_UUID);
   assert.equal(calls.filter((call) => call.url.pathname.endsWith("/whatsapp/onboarding")).length, 1);
 });

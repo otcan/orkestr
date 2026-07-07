@@ -2961,6 +2961,11 @@ ork-first-thread-wizard.first-thread-host {
   background: var(--panel);
 }
 
+.connector-card.route-active {
+  border-color: #4b8f6f;
+  box-shadow: inset 3px 0 0 #4b8f6f;
+}
+
 .connector-action {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;

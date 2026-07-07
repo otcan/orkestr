@@ -5442,7 +5442,7 @@ test("local whatsapp inbound failures explain missing user capabilities", () => 
   assert.match(tenantCodex, /https:\/\/connect\.example\.test\/i\/firat-jobs-vm\/app/);
   assert.doesNotMatch(tenantCodex, /\/setup/);
   assert.doesNotMatch(tenantCodex, /0\.0\.0\.0|127\.0\.0\.1|localhost|10\./);
-  assert.match(tenantPairing, /https:\/\/connect\.example\.test\/i\/firat-jobs-vm\/setup/);
+  assert.match(tenantPairing, /https:\/\/connect\.example\.test\/i\/firat-jobs-vm\/app/);
   assert.doesNotMatch(tenantPairing, /0\.0\.0\.0|127\.0\.0\.1|localhost|10\./);
 });
 

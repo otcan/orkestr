@@ -94,15 +94,35 @@ function setupReturnPathFromUrl(value = "") {
   }
 }
 
+function instanceAppPathFromReturn(instanceId = "", returnTo = "") {
+  const normalizedInstanceId = normalizeInstanceId(instanceId);
+  const appRoot = `/i/${encodeURIComponent(normalizedInstanceId)}/app`;
+  if (!normalizedInstanceId) return "/setup/pairing";
+  try {
+    const parsed = new URL(clean(returnTo) || "/setup", "http://localhost");
+    const parts = parsed.pathname.split("/").filter(Boolean);
+    const search = parsed.search || "";
+    if (parts[0] === "setup" && ["gmail", "mail", "outlook", "whatsapp", "wa"].includes(String(parts[1] || "").toLowerCase())) {
+      const connector = String(parts[1] || "").toLowerCase().replace(/^mail$/, "gmail").replace(/^wa$/, "whatsapp");
+      return `${appRoot}/connectors/${encodeURIComponent(connector)}${search}`;
+    }
+    if (parts[0] === "connectors" && parts[1]) return `${appRoot}/connectors/${encodeURIComponent(parts[1])}${search}`;
+    if (parts[0] === "desk") return `${appRoot}/desk${search}`;
+  } catch {
+    // Fall through to the normal app entry.
+  }
+  return `${appRoot}/`;
+}
+
 function pairingSetupUrl(baseOrUrl = "", { returnTo = "/setup", instanceId = "" } = {}) {
   const base = normalizePublicBaseUrl(baseOrUrl);
   if (!base) return "";
   try {
     const normalizedInstanceId = normalizeInstanceId(instanceId);
-    const path = normalizedInstanceId ? `/i/${encodeURIComponent(normalizedInstanceId)}/setup` : "/setup/pairing";
+    const path = normalizedInstanceId ? instanceAppPathFromReturn(normalizedInstanceId, returnTo) : "/setup/pairing";
     const url = new URL(path, base);
     const normalizedReturn = clean(returnTo) || "/setup";
-    if (!normalizedInstanceId || normalizedReturn !== "/setup") url.searchParams.set("return", normalizedReturn);
+    if (!normalizedInstanceId) url.searchParams.set("return", normalizedReturn);
     return url.toString();
   } catch {
     return "";
@@ -194,7 +214,7 @@ function positiveTimeoutMs(value, fallback) {
 
 export function readyMessage({ setupUrl }) {
   return [
-    "Orkestr setup:",
+    "Orkestr app access:",
     setupUrl,
     "",
     "Open it, then paste the one shown `orkestr connect approve ...` command here or in a terminal.",

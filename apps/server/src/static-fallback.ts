@@ -51,7 +51,7 @@ export function registerStaticFallback(app: INestApplication): void {
         .status(302)
         .header("cache-control", "no-store")
         .header("location", instanceSetupRedirect)
-        .send("Redirecting to Orkestr connect setup.");
+        .send("Redirecting to Orkestr app access.");
     }
     if (url.startsWith("/public-assets/")) {
       return servePublicAsset(url, response);

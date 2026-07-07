@@ -15,7 +15,7 @@
 
   <div class="connector-grid user-connector-grid">
     @for (connector of userConnectors(); track connector.id) {
-      <article class="connector-card user-connector-card">
+      <article class="connector-card user-connector-card" [class.route-active]="connector.id === routeConnectorId()">
         <div class="desktop-head">
           <div>
             <h4>{{ connector.label || connectorLabel(connector.id) }}</h4>

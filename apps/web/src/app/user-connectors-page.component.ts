@@ -45,7 +45,10 @@ export class UserConnectorsPageComponent implements OnInit {
   }
 
   userConnectors(): ConnectorStatus[] {
-    return this.connectorOrder.map((id) => this.connectorStatus(id));
+    const active = this.routeConnectorId();
+    const connectors = this.connectorOrder.map((id) => this.connectorStatus(id));
+    if (!active) return connectors;
+    return connectors.sort((a, b) => (a.id === active ? -1 : 0) + (b.id === active ? 1 : 0));
   }
 
   connectorStatus(id: string): ConnectorStatus {
@@ -134,6 +137,12 @@ export class UserConnectorsPageComponent implements OnInit {
 
   currentUserLabel(): string {
     return String(this.currentUser?.displayName || this.currentUser?.id || "User");
+  }
+
+  routeConnectorId(): string {
+    const parts = globalThis.location?.pathname?.split("/").filter(Boolean) || [];
+    const candidate = parts[0] === "connectors" ? String(parts[1] || "").toLowerCase() : "";
+    return this.connectorOrder.includes(candidate) ? candidate : "";
   }
 
   private errorText(error: unknown): string {

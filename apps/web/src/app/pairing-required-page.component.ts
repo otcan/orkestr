@@ -134,7 +134,7 @@ export class PairingRequiredPageComponent implements OnInit, OnDestroy {
     this.stopPolling();
     try {
       const result = await firstValueFrom(this.api.pairSecurityBrowser(this.challenge.id));
-      this.notice = "Approved. Opening setup.";
+      this.notice = "Approved. Opening Orkestr.";
       this.renderNow();
       this.paired.emit(result.redirectPath || "");
     } catch (error) {

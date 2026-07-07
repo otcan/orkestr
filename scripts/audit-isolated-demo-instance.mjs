@@ -119,7 +119,7 @@ function setupUrlAuditDetails(setupUrl = "", expectedInstanceId = "") {
   if (!text) return { ok: false, reason: "setup_url_missing" };
   try {
     const parsed = new URL(text);
-    const match = parsed.pathname.match(/^\/i\/([^/]+)\/setup\/?$/i);
+    const match = parsed.pathname.match(/^\/i\/([^/]+)\/(?:app|setup)\/?$/i);
     const instanceId = match ? decodeURIComponent(match[1]) : "";
     if (!["http:", "https:"].includes(parsed.protocol)) {
       return { ok: false, reason: "setup_url_invalid_protocol", setupUrl: text };

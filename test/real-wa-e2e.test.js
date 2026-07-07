@@ -393,10 +393,10 @@ test("real WhatsApp demo onboarding sends through broker registered WA router", 
         messages: [{ id: "sent-1", fromMe: true, timestamp: new Date().toISOString(), body: "broker sent" }],
       }), { status: 200, headers: { "content-type": "application/json" } });
     }
-    if (parsed.href === `https://connect.example.test/i/${instanceId}/setup`) {
+    if (parsed.href === `https://connect.example.test/i/${instanceId}/app/`) {
       return new Response("", {
         status: 302,
-        headers: { location: `/setup/pairing?instanceId=${instanceId}&return=%2Fi%2F${instanceId}%2Fapp%2Fsetup%2Fcodex%3Fcompact%3D1` },
+        headers: { location: `/setup/pairing?instanceId=${instanceId}&return=%2Fi%2F${instanceId}%2Fapp%2F` },
       });
     }
     throw new Error(`unexpected_fetch:${parsed.href}`);
@@ -420,7 +420,7 @@ test("real WhatsApp demo onboarding sends through broker registered WA router", 
     assert.equal(result.ok, true);
     assert.equal(result.preflight.mode, "broker");
     assert.equal(result.preflight.localWhatsAppRequired, false);
-    assert.equal(result.setupUrl, `https://connect.example.test/i/${instanceId}/setup`);
+    assert.equal(result.setupUrl, `https://connect.example.test/i/${instanceId}/app/`);
     assert.equal(result.sentMessageId, "sent-1");
     assert.equal(result.observedMessageId, "sent-1");
     assert.ok(calls.some((call) => call.url.pathname.endsWith("/whatsapp/onboarding")));

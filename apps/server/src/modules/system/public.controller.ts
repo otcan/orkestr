@@ -54,6 +54,6 @@ export class InstanceConnectController {
       .status(302)
       .header("cache-control", "no-store")
       .header("location", instanceSetupPairingRedirectPath(instanceId, returnTo, connector))
-      .send("Redirecting to Orkestr connect setup.");
+      .send("Redirecting to Orkestr app access.");
   }
 }

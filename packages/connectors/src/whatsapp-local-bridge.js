@@ -2122,10 +2122,10 @@ function publicTenantVmSetupUrl(env = process.env) {
   if (!base || !tenantVmId) return "";
   try {
     const url = new URL(base);
-    url.pathname = `${url.pathname.replace(/\/+$/, "")}/i/${encodeURIComponent(tenantVmId)}/setup`;
+    url.pathname = `${url.pathname.replace(/\/+$/, "")}/i/${encodeURIComponent(tenantVmId)}/app/`;
     url.search = "";
     url.hash = "";
-    return url.toString().replace(/\/+$/, "");
+    return url.toString();
   } catch {
     return "";
   }
