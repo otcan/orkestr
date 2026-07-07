@@ -82,6 +82,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   private readonly runtimeStore = inject(RuntimeStore);
   private readonly threadStore = inject(ThreadStore);
   private readonly popStateHandler = () => {
+    if (this.pairingPathActive()) this.pairingRequired = true;
     this.onboardingActive = this.onboardingFromPath();
     this.setupPageMode = this.setupPageModeFromPath();
     this.setupSection = this.setupSectionFromPath();
@@ -277,6 +278,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   };
 
   ngOnInit(): void {
+    this.pairingRequired = this.pairingPathActive();
     this.onboardingActive = this.onboardingFromPath();
     this.setupPageMode = this.setupPageModeFromPath();
     this.setupSection = this.setupSectionFromPath();
@@ -287,7 +289,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.normalizeLegacyRoutePath();
     globalThis.addEventListener?.("popstate", this.popStateHandler);
     void this.refresh(true);
-    if (!this.sharedAppActive()) {
+    if (!this.sharedAppActive() && !this.pairingRequired) {
       this.connectSummaryStream();
       this.systemPoller = setInterval(() => void this.loadSystemSummarySilent(), 30_000);
     }
@@ -4316,7 +4318,16 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   private onboardingFromPath(): boolean {
     const parts = globalThis.location?.pathname?.split("/").filter(Boolean) || [];
     if (this.sharedAppParts(parts)) return false;
+    if (this.pairingPathParts(parts)) return false;
     return parts[0] === "setup" || parts[0] === "onboarding" || (parts[0] === "ng" && parts[1] === "onboarding");
+  }
+
+  private pairingPathActive(): boolean {
+    return this.pairingPathParts(globalThis.location?.pathname?.split("/").filter(Boolean) || []);
+  }
+
+  private pairingPathParts(parts: string[] = []): boolean {
+    return parts[0] === "setup" && parts[1] === "pairing";
   }
 
   private setupPageModeFromPath(): SetupPageMode {

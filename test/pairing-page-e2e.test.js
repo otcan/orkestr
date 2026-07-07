@@ -140,6 +140,22 @@ test("pairing page redirects to challenge path after pairing", async (t) => {
     const page = await browser.newPage();
     const errors = [];
     page.on("pageerror", (error) => errors.push(error.message || String(error)));
+    await page.evaluateOnNewDocument(() => {
+      window.__orkestrPairingSnapshots = [];
+      const record = () => {
+        window.__orkestrPairingSnapshots.push(document.body?.innerText || "");
+      };
+      const install = () => {
+        record();
+        new MutationObserver(record).observe(document.body || document.documentElement, {
+          childList: true,
+          subtree: true,
+          characterData: true,
+        });
+      };
+      if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", install, { once: true });
+      else install();
+    });
 
     await page.goto(`${baseUrl}/setup/pairing?instanceId=main&challengeId=${encodeURIComponent(existing.challengeId)}&return=%2F`, { waitUntil: "networkidle2" });
     await page.waitForFunction(() => document.body.innerText.includes("Approve this browser"));
@@ -153,6 +169,8 @@ test("pairing page redirects to challenge path after pairing", async (t) => {
 
     const command = await page.$eval(".command code", (node) => node.textContent.trim());
     assert.equal(command, `orkestr connect approve ${existing.challenge.approveCode}`);
+    const snapshots = await page.evaluate(() => window.__orkestrPairingSnapshots || []);
+    assert.equal(snapshots.some((text) => String(text || "").includes("Orkestr Setup")), false);
 
     await approvePairingChallenge(existing.challengeId);
     await page.waitForFunction(() => !document.body.innerText.includes("Approve this browser"), { timeout: 15_000 });
