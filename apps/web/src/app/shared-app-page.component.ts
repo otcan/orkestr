@@ -101,15 +101,19 @@ export class SharedAppPageComponent implements OnInit, OnDestroy {
   }
 
   challengeStatusClass(): string {
-    const status = String(this.challenge?.status || "idle");
+    const status = this.challengeStatus();
     if (status === "approved" || status === "consumed") return "ready";
     if (status === "pending") return "partial";
     if (status === "rejected" || status === "expired") return "bad";
     return "idle";
   }
 
+  challengeStatus(): string {
+    return String(this.challenge?.status || "idle");
+  }
+
   challengeClosed(): boolean {
-    return ["consumed", "expired", "rejected"].includes(String(this.challenge?.status || ""));
+    return ["consumed", "expired", "rejected"].includes(this.challengeStatus());
   }
 
   expiryLabel(): string {
@@ -171,8 +175,12 @@ export class SharedAppPageComponent implements OnInit, OnDestroy {
       const result = await firstValueFrom(this.api.sharedAppChallenge(route.instanceId, route.appSlug, route.shareToken, this.challenge.id));
       this.challenge = result.challenge;
       this.pairingError = "";
-      if (this.challenge.status === "approved") await this.consumeChallenge();
-      if (["consumed", "expired", "rejected"].includes(this.challenge.status)) this.stopPolling();
+      const status = this.challengeStatus();
+      if (status === "approved") {
+        await this.consumeChallenge();
+        return;
+      }
+      if (["consumed", "expired", "rejected"].includes(status)) this.stopPolling();
     } catch (error) {
       this.pairingError = this.errorText(error);
       this.stopPolling();

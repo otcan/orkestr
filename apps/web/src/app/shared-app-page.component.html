@@ -25,7 +25,7 @@
           <code>{{ approveCommand() }}</code>
         </button>
         <div class="shared-access-status">
-          <span [class]="challengeStatusClass()">{{ challenge.status }}</span>
+          <span [class]="challengeStatusClass()">{{ challengeStatus() }}</span>
           <small>Expires {{ expiryLabel() }}</small>
         </div>
         <button class="secondary" type="button" (click)="refreshChallenge()" [disabled]="pairingBusy">Check</button>

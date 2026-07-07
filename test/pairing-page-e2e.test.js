@@ -247,6 +247,9 @@ test("unauthenticated shared app approval stays on the shared route", async (t) 
     assert.match(approveCode, /^[A-Z0-9]{4,8}$/);
     await approvePairingChallenge(approveCode, { env: process.env });
     await page.waitForFunction(() => document.body.innerText.includes("Betul Y."), { timeout: 20_000 });
+    const bodyAfterApproval = await page.$eval("body", (node) => node.innerText);
+    assert.equal(bodyAfterApproval.includes("Cannot read properties"), false);
+    assert.equal(bodyAfterApproval.includes("Approve this shared review"), false);
     assert.equal(new URL(page.url()).pathname, requestedPath);
     const wsUrls = await page.evaluate(() => window.__orkestrWsUrls || []);
     assert.deepEqual(wsUrls.filter((url) => url.includes("/api/threads/summary/stream")), []);
