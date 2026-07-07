@@ -3,7 +3,8 @@ import { randomUUID } from "node:crypto";
 import { dataPaths } from "../../storage/src/paths.js";
 import { appendEvent, readJson, writeJson } from "../../storage/src/store.js";
 import { assertOwnerAccess, canAccessOwner, isAdminPrincipal } from "./policy.js";
-import { getThread, listThreads, appendThreadMessage } from "./threads.js";
+import { appendThreadSignal, normalizeThreadSignalDeliveryMode } from "./thread-signals.js";
+import { getThread, listThreads } from "./threads.js";
 import { adminUserId, normalizeUserId } from "./users.js";
 
 const minuteMs = 60_000;
@@ -307,6 +308,10 @@ function jobsTargetThreadId(input = {}, env = process.env) {
   return clean(input.targetThreadId || input.threadId || env.ORKESTR_JOBS_TARGET_THREAD_ID || env.ORKESTR_JOBS_THREAD_ID);
 }
 
+function jobsSignalMode(input = {}, env = process.env) {
+  return normalizeThreadSignalDeliveryMode(input.signalMode || input.signalDeliveryMode || env.ORKESTR_JOBS_SIGNAL_DELIVERY_MODE);
+}
+
 async function resolveJobsTargetThread(targetThreadId = "", env = process.env) {
   const requested = clean(targetThreadId);
   if (requested) {
@@ -406,16 +411,16 @@ export async function presentQueuedJobs(input = {}, env = process.env, options =
   if (!candidates.length) return { ok: true, presented: [], message: null };
   const now = options.now instanceof Date ? options.now : new Date();
   const text = formatJobDigest(candidates, now);
-  const message = await appendThreadMessage(targetThread.id, threadDeliveryDefaults(targetThread, {
+  const signalMode = jobsSignalMode(input, env);
+  const message = await appendThreadSignal(targetThread.id, threadDeliveryDefaults(targetThread, {
     source: "jobs_queue",
     connector: "gmail",
+    signalKind: "jobs",
+    signalMode,
     originSurface: "jobs",
-    originTransport: "jobs-notification",
+    originTransport: signalMode === "notify_passively" ? "jobs-passive-signal-notify" : "jobs-passive-signal",
     externalId: candidates.map((candidate) => candidate.id).join(",").slice(0, 500),
     ownerUserId,
-    role: "assistant",
-    state: "completed",
-    phase: "notification",
     text,
   }), env);
   for (const candidate of candidates) {
@@ -441,7 +446,12 @@ export async function processJobCandidateMessages(input = {}, messages = [], env
   const shouldPresent = input.present !== false;
   let presentation = { ok: true, presented: [], message: null };
   if (shouldPresent) {
-    presentation = await presentQueuedJobs({ ownerUserId, targetThreadId, limit: maxResults }, env, { ...options, now }).catch((error) => ({ ok: false, presented: [], error: clean(error?.message || error) }));
+    presentation = await presentQueuedJobs({
+      ownerUserId,
+      targetThreadId,
+      limit: maxResults,
+      signalMode: input.signalMode || input.signalDeliveryMode,
+    }, env, { ...options, now }).catch((error) => ({ ok: false, presented: [], error: clean(error?.message || error) }));
   }
   await appendEvent({
     type: "jobs_candidate_batch_run",

@@ -49,6 +49,7 @@ export class ThreadMessageListComponent {
   messageRoleLabel(message: ThreadMessage): string {
     const role = String(message.role || "assistant").toLowerCase();
     if (role === "user") return "You";
+    if (this.messagePhase(message) === "signal") return "Signal";
     if (this.isFinalAssistantMessage(message)) return "Assistant";
     if (this.messagePhase(message) === "plan") return "Plan";
     return "Update";
@@ -60,6 +61,7 @@ export class ThreadMessageListComponent {
     if (!phase || phase === "final_answer" || phase === "final") return "Final answer";
     if (phase === "commentary") return "Info";
     if (phase === "plan") return "Plan";
+    if (phase === "signal") return "Passive";
     return phase.replace(/_/g, " ");
   }
 

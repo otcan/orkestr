@@ -68,6 +68,8 @@ const messageStringFields = [
   "apiSessionId",
   "clientMessageId",
   "idempotencyKey",
+  "signalKind",
+  "signalMode",
 ];
 
 function safeThreadId(threadId) {

@@ -11,6 +11,7 @@
       [class.assistant-final]="isFinalAssistantMessage(message)"
       [class.assistant-info]="isInfoAssistantMessage(message)"
       [class.assistant-plan]="messagePhase(message) === 'plan'"
+      [class.signal]="messagePhase(message) === 'signal'"
       [class.failed]="message.state === 'failed'"
     >
       <div class="message-meta">

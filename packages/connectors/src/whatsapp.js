@@ -4523,7 +4523,10 @@ function whatsappOutboundMirrorCursorPassed(state = null, messageSetKey = "", me
 }
 
 function outOfBandNotificationBypassesMirrorCursor(message = {}) {
-  return pickString(message.phase).toLowerCase() === "notification" && Boolean(pickString(message.chatId));
+  const phase = pickString(message.phase).toLowerCase();
+  return ["notification", "signal"].includes(phase) &&
+    Boolean(pickString(message.chatId)) &&
+    shouldMirrorWhatsAppReply(message);
 }
 
 function recoveredCodexHistoryFinalBypassesMirrorCursor(message = {}, parent = null) {
@@ -5424,7 +5427,8 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
       const accountId = kind === "thread"
         ? pickString(thread?.binding?.replyAccountId, thread?.binding?.bridgeAccountId, thread?.binding?.responderConnectorAccountId, thread?.binding?.responderAccountId, thread?.binding?.outboundAccountId, message.accountId, parent?.accountId)
         : pickString(message.accountId, parent?.accountId);
-      const deliveryType = message.source === "orkestr_runtime" ? "router_update" : "final";
+      const messagePhase = pickString(message.phase || "final_answer").toLowerCase();
+      const deliveryType = messagePhase === "signal" ? "signal" : message.source === "orkestr_runtime" ? "router_update" : "final";
       const existingIntent = findWhatsAppOutboundIntent(outboundIntents, {
         kind,
         deliveryType,

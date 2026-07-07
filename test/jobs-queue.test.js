@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { runGmailJobsPoll } from "../packages/connectors/src/gmail-jobs-queue.js";
-import { listJobQueueForPrincipal } from "../packages/core/src/jobs-queue.js";
+import { listJobQueueForPrincipal, processJobCandidateMessages } from "../packages/core/src/jobs-queue.js";
 import { adminPrincipal } from "../packages/core/src/principal.js";
 import { createThread, listThreadMessages } from "../packages/core/src/threads.js";
 import { visibleThreadMessages } from "../packages/core/src/thread-message-visibility.js";
@@ -43,7 +43,7 @@ function gmailMessage({ id, subject, from, snippet, text }) {
   };
 }
 
-test("Gmail jobs poll dedupes, classifies, and posts fits as notifications", async () => {
+test("Gmail jobs poll dedupes, classifies, and posts fits as passive signals", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-jobs-queue-"));
   const env = {
     ORKESTR_HOME: home,
@@ -153,9 +153,13 @@ test("Gmail jobs poll dedupes, classifies, and posts fits as notifications", asy
   assert.equal(messages.some((message) => message.role === "user" && message.state === "queued"), false);
   assert.equal(messages[0].role, "assistant");
   assert.equal(messages[0].state, "completed");
-  assert.equal(messages[0].phase, "notification");
+  assert.equal(messages[0].phase, "signal");
   assert.equal(messages[0].source, "jobs_queue");
   assert.equal(messages[0].connector, "gmail");
+  assert.equal(messages[0].signalKind, "jobs");
+  assert.equal(messages[0].signalMode, "notify_passively");
+  assert.equal(messages[0].codexDeliveryMode, "passive");
+  assert.equal(messages[0].originTransport, "jobs-passive-signal-notify");
   assert.equal(messages[0].chatId, "chat-jobs");
   assert.equal(messages[0].accountId, "wa-jobs");
   assert.match(messages[0].text, /1 new job fit/);
@@ -163,9 +167,60 @@ test("Gmail jobs poll dedupes, classifies, and posts fits as notifications", asy
   assert.match(messages[0].text, /https:\/\/jobs\.example\.com\/acme\/agent-lead/);
   assert.doesNotMatch(messages[0].text, /utm_source/);
   assert.equal(whatsappDelivery.delivered.length, 1);
+  assert.equal(whatsappDelivery.delivered[0].deliveryType, "signal");
   assert.equal(whatsappCalls[0].url.pathname, "/send-text");
   assert.equal(whatsappCalls[0].body.to, "chat-jobs");
   assert.match(whatsappCalls[0].body.text, /AI Agent Lead at Acme/);
+});
+
+test("Gmail job signals can be recorded without WhatsApp delivery", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-jobs-record-only-"));
+  const env = {
+    ORKESTR_HOME: home,
+    WHATSAPP_BRIDGE_MODE: "external",
+  };
+  await createThread({
+    id: "jobs-record-thread",
+    name: "Jobs Record Only",
+    binding: { connector: "whatsapp", chatId: "chat-jobs-record", outboundAccountId: "wa-jobs" },
+  }, env);
+  await writeConnectorConfig("whatsapp", { bridgeMode: "external", bridgeUrl: "http://wa.local" }, env);
+
+  const result = await processJobCandidateMessages({
+    threadId: "jobs-record-thread",
+    maxResults: 1,
+    signalMode: "record_only",
+  }, [{
+    id: "job-record-1",
+    threadId: "gmail-thread-job-record-1",
+    subject: "AI Platform Engineer at RecordCo",
+    from: "jobs@recordco.example",
+    snippet: "Remote AI platform role",
+    text: "Remote AI platform role https://jobs.example.com/recordco/platform",
+    internalDate: String(Date.parse("2026-06-30T10:00:00Z")),
+  }], env, {
+    classifyImpl: () => ({
+      fit_score: 8,
+      role: "AI Platform Engineer",
+      company: "RecordCo",
+      reason: "Strong platform match",
+    }),
+  });
+  const messages = await listThreadMessages("jobs-record-thread", env);
+  const whatsappCalls = [];
+  const whatsappDelivery = await deliverWhatsAppReplies(env, async (url, options = {}) => {
+    whatsappCalls.push({ url, body: JSON.parse(options.body) });
+    return jsonResponse({ ok: true, ids: ["unexpected-record-only-send"] });
+  });
+
+  assert.equal(result.presentation.presented.length, 1);
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].phase, "signal");
+  assert.equal(messages[0].signalMode, "record_only");
+  assert.equal(messages[0].codexDeliveryMode, "passive");
+  assert.equal(messages.some((message) => message.role === "user" && message.state === "queued"), false);
+  assert.equal(whatsappDelivery.delivered.length, 0);
+  assert.equal(whatsappCalls.length, 0);
 });
 
 test("Gmail jobs poll supports host-native gog collection", async () => {
