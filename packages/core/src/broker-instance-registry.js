@@ -625,12 +625,12 @@ export async function ensureBrokerClientRegistration(env = process.env, options 
     version: clean(env.ORKESTR_VERSION || env.npm_package_version),
     capabilities: brokerClientCapabilities(env),
     encryptionPublicKey: client.publicKey,
-    brokerInstanceId: desiredInstanceId,
-    endpointBaseUrl: clean(env.ORKESTR_DEMO_INTERNAL_BASE_URL || env.ORKESTR_API_BASE || env.ORKESTR_PUBLIC_APP_URL),
-    connectBaseUrl: clean(env.ORKESTR_CONNECT_PUBLIC_BASE_URL || env.ORKESTR_DEMO_PUBLIC_BASE_URL),
-    setupUrl: clean(env.ORKESTR_CONNECT_PUBLIC_SETUP_URL || env.ORKESTR_DEMO_PUBLIC_SETUP_URL),
-    relayAccountId: brokerClientRelayAccountId(env),
-    whatsappNumber,
+    brokerInstanceId: desiredInstanceId || undefined,
+    endpointBaseUrl: clean(env.ORKESTR_DEMO_INTERNAL_BASE_URL || env.ORKESTR_API_BASE || env.ORKESTR_PUBLIC_APP_URL) || undefined,
+    connectBaseUrl: clean(env.ORKESTR_CONNECT_PUBLIC_BASE_URL || env.ORKESTR_DEMO_PUBLIC_BASE_URL) || undefined,
+    setupUrl: clean(env.ORKESTR_CONNECT_PUBLIC_SETUP_URL || env.ORKESTR_DEMO_PUBLIC_SETUP_URL) || undefined,
+    relayAccountId: brokerClientRelayAccountId(env) || undefined,
+    whatsappNumber: whatsappNumber || undefined,
   };
   const response = await fetchImpl(url, {
     method: "POST",
