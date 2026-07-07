@@ -210,14 +210,17 @@ function assertRegistrationToken({ body = {}, request = {}, env = process.env, t
   return { tokenHash, open: false };
 }
 
-function assertLimits(registry, { tokenHash, ip, env = process.env } = {}) {
+function assertLimits(registry, { tokenHash, ip, env = process.env, replacingInstanceId = "" } = {}) {
+  const instances = clean(replacingInstanceId)
+    ? registry.instances.filter((instance) => instance.instanceId !== clean(replacingInstanceId))
+    : registry.instances;
   const maxInstances = numberEnv(env.ORKESTR_BROKER_REGISTRATION_MAX_INSTANCES, DEFAULT_MAX_INSTANCES, 1);
-  if (registry.instances.length >= maxInstances) {
+  if (instances.length >= maxInstances) {
     throw Object.assign(new Error("broker_registration_instance_limit"), { statusCode: 429 });
   }
 
   const tokenMaxUses = numberEnv(env.ORKESTR_BROKER_REGISTRATION_TOKEN_MAX_USES, DEFAULT_TOKEN_MAX_USES, 1);
-  const tokenUses = registry.instances.filter((instance) => instance.registrationTokenHash === tokenHash).length;
+  const tokenUses = instances.filter((instance) => instance.registrationTokenHash === tokenHash).length;
   if (tokenHash && tokenHash !== "authenticated-admin" && tokenUses >= tokenMaxUses) {
     throw Object.assign(new Error("broker_registration_token_use_limit"), { statusCode: 429 });
   }
@@ -225,7 +228,7 @@ function assertLimits(registry, { tokenHash, ip, env = process.env } = {}) {
   const windowMs = numberEnv(env.ORKESTR_BROKER_REGISTRATION_RATE_WINDOW_MS, DEFAULT_RATE_WINDOW_MS, 1000);
   const maxPerIp = numberEnv(env.ORKESTR_BROKER_REGISTRATION_RATE_LIMIT, DEFAULT_RATE_LIMIT, 1);
   const cutoff = Date.now() - windowMs;
-  const recent = registry.instances.filter((instance) => {
+  const recent = instances.filter((instance) => {
     return instance.requestIp === ip && Date.parse(instance.createdAt || "") >= cutoff;
   }).length;
   if (recent >= maxPerIp) {
@@ -245,13 +248,30 @@ function instanceResponse(record, brokerChannel, encryptedWelcome) {
   };
 }
 
+function requestedBrokerInstanceId(body = {}, token = {}) {
+  const requested = clean(body.brokerInstanceId || body.requestedInstanceId);
+  if (!requested) return "";
+  if (token.open && !token.trustedAdmin) {
+    throw Object.assign(new Error("broker_requested_instance_id_requires_token"), { statusCode: 401 });
+  }
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(requested)) {
+    throw Object.assign(new Error("broker_requested_instance_id_invalid"), { statusCode: 400 });
+  }
+  return requested;
+}
+
 export async function registerBrokerInstance({ body = {}, request = {}, env = process.env, trustedAdmin = false } = {}) {
   const token = assertRegistrationToken({ body, request, env, trustedAdmin });
   const encryptionPublicKey = clean(body.encryptionPublicKey || body.publicKey);
   parsePublicKey(encryptionPublicKey);
   const ip = requestIp(request);
   const registry = await readRegistry(env);
-  assertLimits(registry, { tokenHash: token.tokenHash, ip, env });
+  const requestedInstanceId = requestedBrokerInstanceId(body, token);
+  const existingIndex = requestedInstanceId
+    ? registry.instances.findIndex((instance) => instance.instanceId === requestedInstanceId)
+    : -1;
+  const existing = existingIndex >= 0 ? registry.instances[existingIndex] : null;
+  assertLimits(registry, { tokenHash: token.tokenHash, ip, env, replacingInstanceId: requestedInstanceId });
 
   const brokerChannel = await ensureBrokerChannel(env);
   registry.broker = publicBrokerRecord(brokerChannel);
@@ -260,6 +280,7 @@ export async function registerBrokerInstance({ body = {}, request = {}, env = pr
   const channelKey = deriveChannelKey(sharedSecret, channelId);
   const createdAt = nowIso();
   const record = {
+    ...(existing || {}),
     instanceId: crypto.randomUUID(),
     channelId,
     status: "registered",
@@ -284,7 +305,11 @@ export async function registerBrokerInstance({ body = {}, request = {}, env = pr
       heartbeatTtlSeconds: numberEnv(env.ORKESTR_BROKER_HEARTBEAT_TTL_SECONDS, 300, 30),
     },
   };
-  registry.instances.push(record);
+  record.instanceId = requestedInstanceId || record.instanceId;
+  record.createdAt = existing?.createdAt || createdAt;
+  record.lastSeenAt = createdAt;
+  if (existingIndex >= 0) registry.instances[existingIndex] = record;
+  else registry.instances.push(record);
   await writeRegistry(registry, env);
   await appendEvent({
     type: "broker_instance_registered",
@@ -576,11 +601,13 @@ export async function ensureBrokerClientRegistration(env = process.env, options 
   const paths = await ensureDataDirs(env);
   const brokerBaseUrl = clean(env.ORKESTR_DEMO_BROKER_BASE_URL || env.ORKESTR_BROKER_BASE_URL || options.brokerBaseUrl);
   if (!brokerBaseUrl) return { ok: false, reason: "broker_base_url_missing" };
+  const desiredInstanceId = clean(env.ORKESTR_BROKER_INSTANCE_ID || env.ORKESTR_INSTANCE_ID || options.instanceId);
   const whatsappNumber = clean(env.ORKESTR_DEMO_WHATSAPP_NUMBER || env.ORKESTR_DEMO_WA_NUMBER);
   const whatsappTargetHash = brokerWhatsAppChatHash({ whatsappNumber });
   const cached = await readJson(paths.brokerClientRegistration, null);
   const cacheMatchesTarget = !whatsappTargetHash || cached?.whatsappTargetHash === whatsappTargetHash;
-  if (cached?.instanceId && cached?.channelId && cached?.brokerBaseUrl === brokerBaseUrl && cacheMatchesTarget && !truthy(env.ORKESTR_BROKER_FORCE_REREGISTER)) {
+  const cacheMatchesInstance = !desiredInstanceId || cached?.instanceId === desiredInstanceId;
+  if (cached?.instanceId && cached?.channelId && cached?.brokerBaseUrl === brokerBaseUrl && cacheMatchesTarget && cacheMatchesInstance && !truthy(env.ORKESTR_BROKER_FORCE_REREGISTER)) {
     return { ok: true, reused: true, ...cached };
   }
   const client = await ensureClientIdentity(env);
@@ -598,6 +625,7 @@ export async function ensureBrokerClientRegistration(env = process.env, options 
     version: clean(env.ORKESTR_VERSION || env.npm_package_version),
     capabilities: brokerClientCapabilities(env),
     encryptionPublicKey: client.publicKey,
+    brokerInstanceId: desiredInstanceId,
     endpointBaseUrl: clean(env.ORKESTR_DEMO_INTERNAL_BASE_URL || env.ORKESTR_API_BASE || env.ORKESTR_PUBLIC_APP_URL),
     connectBaseUrl: clean(env.ORKESTR_CONNECT_PUBLIC_BASE_URL || env.ORKESTR_DEMO_PUBLIC_BASE_URL),
     setupUrl: clean(env.ORKESTR_CONNECT_PUBLIC_SETUP_URL || env.ORKESTR_DEMO_PUBLIC_SETUP_URL),

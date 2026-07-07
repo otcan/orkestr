@@ -297,7 +297,7 @@ test("broker heartbeat requires encrypted channel payload", async () => {
   assert.ok(instances.instances[0].lastHeartbeatAt);
 });
 
-test("broker client heartbeat registers over HTTP and refreshes instance auth state", async () => {
+test("broker client heartbeat registers stable instance id over HTTP and refreshes auth state", async () => {
   const brokerHome = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-broker-heartbeat-http-"));
   const tenantHome = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-broker-heartbeat-client-"));
   const envKeys = [
@@ -325,26 +325,38 @@ test("broker client heartbeat registers over HTTP and refreshes instance auth st
       ORKESTR_HOME: tenantHome,
       ORKESTR_DEMO_BROKER_BASE_URL: `http://127.0.0.1:${port}`,
       ORKESTR_DEMO_BROKER_REGISTRATION_TOKEN: "register-secret",
+      ORKESTR_BROKER_INSTANCE_ID: "11111111-2222-4333-8444-555555555555",
       ORKESTR_SERVICE_NAME: "tenant-heartbeat-e2e",
       ORKESTR_VERSION: "tenant-v1",
       ORKESTR_TENANT_VM_ID: "tenant-heartbeat-e2e",
       ORKESTR_API_BASE: "http://10.43.10.12",
       ORKESTR_CONNECT_PUBLIC_BASE_URL: "https://connect.example.test",
-      ORKESTR_CONNECT_PUBLIC_SETUP_URL: "https://connect.example.test/i/tenant-heartbeat-e2e/setup",
+      ORKESTR_CONNECT_PUBLIC_SETUP_URL: "https://connect.example.test/i/11111111-2222-4333-8444-555555555555/setup",
       ORKESTR_BROKER_WHATSAPP_RELAY_ACCOUNT_ID: "sender",
     };
+    const staleResult = await sendBrokerClientHeartbeat({
+      ...tenantEnv,
+      ORKESTR_BROKER_INSTANCE_ID: "",
+    });
+    assert.equal(staleResult.ok, true);
+    assert.notEqual(staleResult.registration.instanceId, tenantEnv.ORKESTR_BROKER_INSTANCE_ID);
+
     const result = await sendBrokerClientHeartbeat(tenantEnv);
     const listed = await listBrokerInstances({ ORKESTR_HOME: brokerHome });
-    const instance = listed.instances[0];
+    const instance = listed.instances.find((candidate) => candidate.instanceId === tenantEnv.ORKESTR_BROKER_INSTANCE_ID);
 
     assert.equal(result.ok, true);
-    assert.equal(listed.instances.length, 1);
+    assert.equal(result.registration.instanceId, tenantEnv.ORKESTR_BROKER_INSTANCE_ID);
+    assert.equal(result.registration.reused, false);
+    assert.equal(listed.instances.length, 2);
+    assert.ok(instance);
+    assert.equal(instance.instanceId, "11111111-2222-4333-8444-555555555555");
     assert.equal(instance.status, "online");
     assert.equal(instance.displayName, "tenant-heartbeat-e2e");
     assert.equal(instance.version, "tenant-v1");
     assert.equal(instance.endpointBaseUrl, "http://10.43.10.12");
     assert.equal(instance.connectBaseUrl, "https://connect.example.test");
-    assert.equal(instance.setupUrl, "https://connect.example.test/i/tenant-heartbeat-e2e/setup");
+    assert.equal(instance.setupUrl, "https://connect.example.test/i/11111111-2222-4333-8444-555555555555/setup");
     assert.equal(instance.relayAccountId, "sender");
     assert.deepEqual(instance.capabilities, ["tenant-vm", "pairing-challenge", "whatsapp", "codex", "gmail", "desks"]);
     assert.ok(instance.lastHeartbeatAt);
