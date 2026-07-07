@@ -4,7 +4,9 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { startServer } from "../apps/server/src/server.js";
-import { approvePairingChallenge, createPairingChallenge } from "../packages/core/src/security.js";
+import { approvePairingChallenge, createPairingChallenge, pairBrowser, securityCookieName } from "../packages/core/src/security.js";
+import { createAppShare } from "../packages/core/src/shared-apps.js";
+import { adminPrincipal } from "../packages/core/src/principal.js";
 
 const envKeys = ["ORKESTR_HOME", "ORKESTR_AUTH_REQUIRED", "ORKESTR_RECOVER_RUNNING_ON_START"];
 
@@ -155,6 +157,89 @@ test("pairing page redirects to challenge path after pairing", async (t) => {
     await approvePairingChallenge(existing.challengeId);
     await page.waitForFunction(() => !document.body.innerText.includes("Approve this browser"), { timeout: 15_000 });
     assert.equal(new URL(page.url()).pathname, requestedPath);
+    assert.deepEqual(errors, []);
+  } finally {
+    if (browser) await browser.close();
+    await new Promise((resolve) => server.close(resolve));
+    restoreEnv(prior);
+  }
+});
+
+test("shared app page does not connect the normal thread summary stream", async (t) => {
+  const puppeteer = await loadPuppeteer(t);
+  if (!puppeteer) return;
+  const chrome = await findChrome();
+  if (!chrome) {
+    t.skip("No Chrome or Chromium executable available for browser e2e.");
+    return;
+  }
+
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-shared-app-no-thread-stream-"));
+  const prior = saveEnv();
+  process.env.ORKESTR_HOME = home;
+  process.env.ORKESTR_AUTH_REQUIRED = "1";
+  process.env.ORKESTR_RECOVER_RUNNING_ON_START = "0";
+
+  const principal = adminPrincipal({ id: "admin", displayName: "Admin" });
+  const created = await createAppShare("main", "outreach-review", {
+    shareToken: "share-one",
+    title: "Outreach Review",
+    filtersJson: { people: [{ id: "betul", name: "Betul Y." }] },
+  }, { principal, env: process.env });
+  const requestedPath = "/i/main/a/outreach-review/s/share-one";
+  const challenge = await createPairingChallenge({
+    env: process.env,
+    instanceId: "main",
+    shareId: created.share.id,
+    appSlug: "outreach-review",
+    requestedPath,
+    allowedActions: ["setClassification"],
+  });
+  await approvePairingChallenge(challenge.challengeId, { env: process.env });
+  const paired = await pairBrowser({ challengeId: challenge.challengeId, env: process.env });
+
+  const server = await startServer({ port: 0, host: "127.0.0.1" });
+  const { port } = server.address();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  let browser;
+
+  try {
+    browser = await puppeteer.launch({
+      headless: "new",
+      executablePath: chrome,
+      args: ["--no-sandbox", "--disable-setuid-sandbox"],
+    });
+    const page = await browser.newPage();
+    const errors = [];
+    page.on("pageerror", (error) => errors.push(error.message || String(error)));
+    await page.setCookie({
+      url: baseUrl,
+      name: securityCookieName(),
+      value: paired.token,
+      path: "/",
+    });
+    await page.evaluateOnNewDocument(() => {
+      const NativeWebSocket = window.WebSocket;
+      Object.defineProperty(window, "__orkestrWsUrls", { value: [], configurable: true });
+      function RecordingWebSocket(url, protocols) {
+        window.__orkestrWsUrls.push(String(url));
+        return protocols === undefined ? new NativeWebSocket(url) : new NativeWebSocket(url, protocols);
+      }
+      Object.setPrototypeOf(RecordingWebSocket, NativeWebSocket);
+      RecordingWebSocket.prototype = NativeWebSocket.prototype;
+      window.WebSocket = RecordingWebSocket;
+    });
+
+    const sharedAppResponse = page.waitForResponse((response) =>
+      response.url().includes("/api/shared-apps/i/main/a/outreach-review/s/share-one") && response.status() === 200,
+      { timeout: 10_000 },
+    );
+    await page.goto(`${baseUrl}${requestedPath}`, { waitUntil: "networkidle2" });
+    await sharedAppResponse;
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    const wsUrls = await page.evaluate(() => window.__orkestrWsUrls || []);
+    assert.equal(new URL(page.url()).pathname, requestedPath);
+    assert.deepEqual(wsUrls.filter((url) => url.includes("/api/threads/summary/stream")), []);
     assert.deepEqual(errors, []);
   } finally {
     if (browser) await browser.close();

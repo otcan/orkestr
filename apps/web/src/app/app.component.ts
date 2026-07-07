@@ -287,8 +287,10 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.normalizeLegacyRoutePath();
     globalThis.addEventListener?.("popstate", this.popStateHandler);
     void this.refresh(true);
-    this.connectSummaryStream();
-    this.systemPoller = setInterval(() => void this.loadSystemSummarySilent(), 30_000);
+    if (!this.sharedAppActive()) {
+      this.connectSummaryStream();
+      this.systemPoller = setInterval(() => void this.loadSystemSummarySilent(), 30_000);
+    }
   }
 
   ngOnDestroy(): void {
@@ -315,6 +317,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       this.appReady = true;
       this.apiOnline = true;
       this.closeRawStream();
+      this.disconnectSummaryStream();
       this.updateDocumentTitle();
       return;
     }
@@ -605,6 +608,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   private connectSummaryStream(): void {
+    if (this.sharedAppActive()) return;
     if (!this.appReady || this.pairingRequired || !this.uiRuntimeReady()) return;
     if (this.destroyed || typeof globalThis.WebSocket === "undefined") {
       this.startFallbackPolling();
@@ -634,6 +638,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   private scheduleSummaryReconnect(): void {
+    if (this.sharedAppActive()) return;
     if (this.destroyed || this.pairingRequired || !this.appReady || !this.uiRuntimeReady() || this.summaryReconnectTimer) return;
     this.summaryReconnectTimer = setTimeout(() => {
       this.summaryReconnectTimer = undefined;
@@ -642,6 +647,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   private startFallbackPolling(): void {
+    if (this.sharedAppActive()) return;
     if (this.pairingRequired || !this.appReady || !this.uiRuntimeReady()) return;
     if (this.fallbackPoller) return;
     this.fallbackPoller = setInterval(() => void this.refresh(false), 30_000);
@@ -665,6 +671,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   private async loadSystemSummarySilent(): Promise<void> {
+    if (this.sharedAppActive()) return;
     if (!this.onboardingActive && !this.pairingRequired && !this.uiRuntimeReady()) return;
     try {
       this.opsSystem = await firstValueFrom(this.api.systemSummary());
@@ -675,6 +682,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   private async handleSummaryStreamMessage(raw: unknown): Promise<void> {
+    if (this.sharedAppActive()) return;
     if (this.pairingRequired || !this.uiRuntimeReady()) return;
     let payload: { type?: string; threads?: ThreadSummary[] };
     try {
@@ -687,6 +695,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   private async applyThreadSummaryStream(threads: ThreadSummary[]): Promise<void> {
+    if (this.sharedAppActive()) return;
     if (this.pairingRequired || !this.uiRuntimeReady()) return;
     if (this.applyingSummary) return;
     this.applyingSummary = true;

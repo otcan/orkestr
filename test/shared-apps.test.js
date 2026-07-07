@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import WebSocket from "ws";
 import { startServer } from "../apps/server/src/server.js";
 import { approvePairingChallenge } from "../packages/core/src/security.js";
 import { createAppShare } from "../packages/core/src/shared-apps.js";
@@ -26,6 +27,29 @@ function restoreEnv(snapshot) {
 function redirectParam(location, key) {
   const parsed = new URL(location, "http://127.0.0.1");
   return parsed.searchParams.get(key) || "";
+}
+
+async function rejectedWebSocket(url, headers = {}) {
+  return new Promise((resolve, reject) => {
+    const ws = new WebSocket(url, { headers });
+    const timer = setTimeout(() => {
+      ws.close();
+      reject(new Error("websocket_rejection_timeout"));
+    }, 5000);
+    ws.on("open", () => {
+      clearTimeout(timer);
+      ws.close();
+      reject(new Error("websocket_unexpectedly_opened"));
+    });
+    ws.on("unexpected-response", (_request, response) => {
+      clearTimeout(timer);
+      resolve({ statusCode: response.statusCode, statusMessage: response.statusMessage || "" });
+    });
+    ws.on("error", (error) => {
+      clearTimeout(timer);
+      resolve({ statusCode: 0, error: String(error?.message || error) });
+    });
+  });
 }
 
 test("shared app URL creates scoped pairing and limits the approved session", async () => {
@@ -129,6 +153,9 @@ test("shared app URL creates scoped pairing and limits the approved session", as
     const normalApi = await fetch(`${baseUrl}/api/threads`, { headers: { cookie } });
     assert.equal(normalApi.status, 403);
     assert.equal((await readJson(normalApi)).error, "shared_app_session_scope_denied");
+
+    const summaryStream = await rejectedWebSocket(`ws://127.0.0.1:${port}/api/threads/summary/stream`, { cookie });
+    assert.equal(summaryStream.statusCode, 403);
   } finally {
     await new Promise((resolve) => server.close(resolve));
     restoreEnv(prior);

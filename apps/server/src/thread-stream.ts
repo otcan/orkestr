@@ -28,6 +28,11 @@ type SummaryClient = {
   lastSummaryBody: string;
 };
 
+type UpgradeAuthContext = {
+  principal: Record<string, any>;
+  session: Record<string, any> | null;
+};
+
 function wsSend(ws: WebSocket, payload: Record<string, unknown>): void {
   if (ws.readyState === ws.OPEN) {
     ws.send(JSON.stringify(payload));
@@ -393,15 +398,25 @@ function handleRawTakeoverPrompt(
   });
 }
 
-async function authorizeUpgradeRequest(request: IncomingMessage, socket: Duplex): Promise<Record<string, any> | null> {
+async function authorizeUpgradeRequest(request: IncomingMessage, socket: Duplex): Promise<UpgradeAuthContext | null> {
   const result: any = await authorizeHttpRequest(request).catch((error) => ({
     ok: false,
     statusCode: Number(error?.statusCode || 500) || 500,
     error: error?.message || "unauthorized",
   }));
-  if (result.ok) return result.principal || {};
+  if (result.ok) return { principal: result.principal || {}, session: result.session || null };
   writeUpgradeError(socket, Number(result.statusCode || 401) || 401, String(result.error || "browser_pairing_required"));
   return null;
+}
+
+async function authorizeThreadUpgradeRequest(request: IncomingMessage, socket: Duplex): Promise<UpgradeAuthContext | null> {
+  const context = await authorizeUpgradeRequest(request, socket);
+  if (!context) return null;
+  if (context.session?.shareId) {
+    writeUpgradeError(socket, 403, "shared_app_session_scope_denied");
+    return null;
+  }
+  return context;
 }
 
 export function attachThreadStreamUpgrade(server: Server): void {
@@ -448,10 +463,10 @@ export function attachThreadStreamUpgrade(server: Server): void {
 
   server.on("upgrade", async (request, socket, head) => {
     if (summaryStreamPath(request.url)) {
-      const principal = await authorizeUpgradeRequest(request, socket);
-      if (!principal) return;
+      const context = await authorizeThreadUpgradeRequest(request, socket);
+      if (!context) return;
       wss.handleUpgrade(request, socket, head, (ws) => {
-        summaryClients.set(ws, { principal, lastSummaryBody: "" });
+        summaryClients.set(ws, { principal: context.principal, lastSummaryBody: "" });
         ensureSummaryTimer();
         wsSend(ws, {
           type: "transport_ready",
@@ -477,8 +492,9 @@ export function attachThreadStreamUpgrade(server: Server): void {
     const target = upgradePath(request.url);
     if (!target) return;
 
-    const principal = await authorizeUpgradeRequest(request, socket);
-    if (!principal) return;
+    const context = await authorizeThreadUpgradeRequest(request, socket);
+    if (!context) return;
+    const principal = context.principal;
     if (!isAdminPrincipal(principal)) {
       writeUpgradeError(socket, 403, "raw_terminal_admin_required");
       return;
