@@ -176,8 +176,8 @@ test("shared app URL creates scoped pairing and limits the approved session", as
     assert.equal(after.data.people[0].currentClassification, "to_contact");
 
     const otherShare = await fetch(`${baseUrl}/api/shared-apps/i/main/a/outreach-review/s/share-two`, { headers: { cookie: sessionCookie } });
-    assert.equal(otherShare.status, 403);
-    assert.equal((await readJson(otherShare)).error, "shared_app_session_scope_denied");
+    assert.equal(otherShare.status, 401);
+    assert.equal((await readJson(otherShare)).error, "shared_app_session_required");
 
     const normalApi = await fetch(`${baseUrl}/api/threads`, { headers: { cookie: sessionCookie } });
     assert.equal(normalApi.status, 403);
