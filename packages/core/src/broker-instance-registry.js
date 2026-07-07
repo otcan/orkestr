@@ -14,6 +14,9 @@ function clean(value) {
 function truthy(value) {
   return ["1", "true", "yes", "on"].includes(clean(value).toLowerCase());
 }
+function falsey(value) {
+  return ["0", "false", "no", "off"].includes(clean(value).toLowerCase());
+}
 function numberEnv(value, fallback, min = 0, max = Number.MAX_SAFE_INTEGER) {
   const text = clean(value);
   if (!text) return fallback;
@@ -440,6 +443,20 @@ export async function heartbeatBrokerInstance(instanceId, { body = {}, request =
   record.lastSeenAt = now;
   record.lastHeartbeatAt = now;
   record.version = clean(payload.version || record.version).slice(0, 80);
+  const capabilities = Array.isArray(payload.capabilities)
+    ? payload.capabilities.map((value) => clean(value)).filter(Boolean).slice(0, 30)
+    : [];
+  if (capabilities.length) record.capabilities = capabilities;
+  const displayName = clean(payload.displayName || payload.name).slice(0, 120);
+  if (displayName) record.displayName = displayName;
+  const endpointBaseUrl = clean(payload.endpointBaseUrl || payload.baseUrl || payload.apiBaseUrl).slice(0, 500);
+  if (endpointBaseUrl) record.endpointBaseUrl = endpointBaseUrl;
+  const connectBaseUrl = clean(payload.connectBaseUrl || payload.publicBaseUrl || payload.publicUrl).slice(0, 500);
+  if (connectBaseUrl) record.connectBaseUrl = connectBaseUrl;
+  const setupUrl = clean(payload.setupUrl || payload.publicSetupUrl).slice(0, 800);
+  if (setupUrl) record.setupUrl = setupUrl;
+  const relayAccountId = clean(payload.relayAccountId || payload.whatsappRelayAccountId).slice(0, 120);
+  if (relayAccountId) record.relayAccountId = relayAccountId;
   record.lastHeartbeatIp = requestIp(request);
   await writeRegistry(registry, env);
   return {
@@ -448,6 +465,110 @@ export async function heartbeatBrokerInstance(instanceId, { body = {}, request =
     channelId: record.channelId,
     acceptedAt: now,
     brokerTime: now,
+  };
+}
+
+export function brokerClientHeartbeatConfigured(env = process.env) {
+  if (falsey(env.ORKESTR_BROKER_CLIENT_HEARTBEAT)) return false;
+  return Boolean(clean(env.ORKESTR_DEMO_BROKER_BASE_URL || env.ORKESTR_BROKER_BASE_URL));
+}
+
+export function brokerClientHeartbeatIntervalMs(env = process.env) {
+  return numberEnv(env.ORKESTR_BROKER_CLIENT_HEARTBEAT_INTERVAL_MS, 60_000, 5_000, 3_600_000);
+}
+
+export function brokerClientHeartbeatStartupDelayMs(env = process.env) {
+  return numberEnv(env.ORKESTR_BROKER_CLIENT_HEARTBEAT_STARTUP_DELAY_MS, 2_000, 0, 300_000);
+}
+
+function brokerClientCapabilities(env = process.env) {
+  const explicit = clean(
+    env.ORKESTR_BROKER_CLIENT_CAPABILITIES ||
+      env.ORKESTR_INSTANCE_CAPABILITIES ||
+      env.ORKESTR_TENANT_VM_CAPABILITIES,
+  );
+  if (explicit) {
+    return [...new Set(explicit.split(/[,\s]+/).map((value) => clean(value)).filter(Boolean))].slice(0, 30);
+  }
+  if (clean(env.ORKESTR_TENANT_VM_ID || env.ORKESTR_TENANT_SLICE_ID || env.ORKESTR_TENANT_BOUNDARY)) {
+    return ["tenant-vm", "pairing-challenge", "whatsapp", "codex", "gmail", "desks"];
+  }
+  return ["demo-onboarding", "pairing-challenge"];
+}
+
+function brokerClientVersion(env = process.env) {
+  return clean(
+    env.ORKESTR_RELEASE_ID ||
+      env.ORKESTR_BUILD_ID ||
+      env.ORKESTR_VERSION ||
+      env.npm_package_version,
+  ).slice(0, 80);
+}
+
+function brokerClientRelayAccountId(env = process.env) {
+  return clean(
+    env.ORKESTR_BROKER_WHATSAPP_RELAY_ACCOUNT_ID ||
+      env.ORKESTR_WHATSAPP_SENDER_ACCOUNT_ID ||
+      env.WHATSAPP_SENDER_ACCOUNT_ID,
+  ).slice(0, 120);
+}
+
+function brokerClientHeartbeatPayload(env = process.env) {
+  return {
+    displayName: clean(env.ORKESTR_DEMO_INSTANCE_NAME || env.ORKESTR_INSTANCE_NAME || env.ORKESTR_SERVICE_NAME || os.hostname()).slice(0, 120),
+    version: brokerClientVersion(env),
+    capabilities: brokerClientCapabilities(env),
+    endpointBaseUrl: clean(env.ORKESTR_DEMO_INTERNAL_BASE_URL || env.ORKESTR_API_BASE).slice(0, 500),
+    connectBaseUrl: clean(env.ORKESTR_CONNECT_PUBLIC_BASE_URL || env.ORKESTR_DEMO_PUBLIC_BASE_URL).slice(0, 500),
+    setupUrl: clean(env.ORKESTR_CONNECT_PUBLIC_SETUP_URL || env.ORKESTR_DEMO_PUBLIC_SETUP_URL).slice(0, 800),
+    relayAccountId: brokerClientRelayAccountId(env),
+    heartbeatAt: nowIso(),
+  };
+}
+
+export async function sendBrokerClientHeartbeat(env = process.env, options = {}) {
+  if (!brokerClientHeartbeatConfigured(env)) {
+    return { ok: false, skipped: true, reason: "broker_base_url_missing" };
+  }
+  const registration = await ensureBrokerClientRegistration(env, options);
+  if (!registration.ok) {
+    return {
+      ok: false,
+      reason: registration.reason || "broker_registration_unavailable",
+      registration,
+      status: registration.status || 0,
+    };
+  }
+  const fetchImpl = options.fetchImpl || globalThis.fetch;
+  if (typeof fetchImpl !== "function") return { ok: false, reason: "fetch_unavailable", registration };
+  const payload = brokerClientHeartbeatPayload(env);
+  const body = await encryptBrokerClientPayload(payload, registration, env);
+  const url = new URL(`/api/broker/instances/${encodeURIComponent(registration.instanceId)}/heartbeat`, registration.brokerBaseUrl);
+  const response = await fetchImpl(url, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  let responseBody = null;
+  try {
+    responseBody = await response.json();
+  } catch {
+    responseBody = null;
+  }
+  if (!response.ok || responseBody?.ok === false) {
+    return {
+      ok: false,
+      reason: responseBody?.error || responseBody?.message || `broker_heartbeat_http_${response.status || "failed"}`,
+      status: response.status || 0,
+      registration,
+      response: responseBody,
+    };
+  }
+  return {
+    ok: true,
+    registration,
+    heartbeat: responseBody,
+    payload,
   };
 }
 
@@ -475,11 +596,12 @@ export async function ensureBrokerClientRegistration(env = process.env, options 
   const registrationBody = {
     displayName: clean(env.ORKESTR_DEMO_INSTANCE_NAME || env.ORKESTR_SERVICE_NAME || os.hostname()),
     version: clean(env.ORKESTR_VERSION || env.npm_package_version),
-    capabilities: ["demo-onboarding", "pairing-challenge"],
+    capabilities: brokerClientCapabilities(env),
     encryptionPublicKey: client.publicKey,
     endpointBaseUrl: clean(env.ORKESTR_DEMO_INTERNAL_BASE_URL || env.ORKESTR_API_BASE || env.ORKESTR_PUBLIC_APP_URL),
     connectBaseUrl: clean(env.ORKESTR_CONNECT_PUBLIC_BASE_URL || env.ORKESTR_DEMO_PUBLIC_BASE_URL),
     setupUrl: clean(env.ORKESTR_CONNECT_PUBLIC_SETUP_URL || env.ORKESTR_DEMO_PUBLIC_SETUP_URL),
+    relayAccountId: brokerClientRelayAccountId(env),
     whatsappNumber,
   };
   const response = await fetchImpl(url, {

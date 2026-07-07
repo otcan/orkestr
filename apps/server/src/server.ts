@@ -28,6 +28,7 @@ import { authorizeHttpRequest } from "../../../packages/core/src/security.js";
 import { getThreadForPrincipal, listThreads } from "../../../packages/core/src/threads.js";
 import { isAdminPrincipal } from "../../../packages/core/src/policy.js";
 import { AppModule } from "./app.module.js";
+import { startBrokerClientHeartbeat } from "./broker-client-heartbeat.js";
 import { attachBrokerInstanceAppProxyUpgrade, registerBrokerInstanceAppProxy } from "./broker-instance-app-proxy.js";
 import { JsonErrorFilter } from "./common/json-error.filter.js";
 import { attachDesktopProxyUpgrade, registerDesktopProxy } from "./desktop-proxy.js";
@@ -373,6 +374,7 @@ export async function startServer({ port = 19812, host = "127.0.0.1", openBrowse
     whatsappDeliveryScheduler.schedule();
   }, whatsappDeliveryPollIntervalMs(serverEnv));
   whatsappDeliveryPoll.unref?.();
+  const brokerClientHeartbeat = startBrokerClientHeartbeat(serverEnv);
   const scheduleWhatsAppDeliveryFollowUp = () => {
     clearWhatsAppDeliveryIdleCache();
     const timer = setTimeout(() => whatsappDeliveryScheduler.schedule(), whatsAppDeliveryFollowUpDelayMs(serverEnv));
@@ -419,6 +421,7 @@ export async function startServer({ port = 19812, host = "127.0.0.1", openBrowse
     clearDeliveryFailureHandler();
     clearCodexAppServerMessageHandler();
     if (startupRecoveryTimer) clearTimeout(startupRecoveryTimer);
+    brokerClientHeartbeat.close();
     clearInterval(whatsappDeliveryPoll);
     whatsappDeliveryScheduler.close();
     stopCodexAppServerClients();

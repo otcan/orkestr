@@ -17,8 +17,10 @@ import {
   listBrokerInstances,
   registerBrokerInstance,
   resolveBrokerConnectInstance,
+  sendBrokerClientHeartbeat,
 } from "../packages/core/src/broker-instance-registry.js";
 import { authorizeHttpRequest } from "../packages/core/src/security.js";
+import { startServer } from "../apps/server/src/server.js";
 
 function request(headers = {}) {
   return {
@@ -34,6 +36,17 @@ function request(headers = {}) {
 
 function uuidLike(value) {
   assert.match(value, /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
+}
+
+function saveEnv(keys) {
+  return Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+}
+
+function restoreEnv(prior) {
+  for (const [key, value] of Object.entries(prior)) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
 }
 
 test("broker registration issues broker UUID and encrypted channel bootstrap", async () => {
@@ -282,6 +295,63 @@ test("broker heartbeat requires encrypted channel payload", async () => {
   assert.equal(instances.instances[0].status, "online");
   assert.equal(instances.instances[0].version, "after");
   assert.ok(instances.instances[0].lastHeartbeatAt);
+});
+
+test("broker client heartbeat registers over HTTP and refreshes instance auth state", async () => {
+  const brokerHome = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-broker-heartbeat-http-"));
+  const tenantHome = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-broker-heartbeat-client-"));
+  const envKeys = [
+    "ORKESTR_HOME",
+    "ORKESTR_AUTH_REQUIRED",
+    "ORKESTR_RECOVER_RUNNING_ON_START",
+    "ORKESTR_BROKER_REGISTRATION_TOKEN",
+    "ORKESTR_BROKER_CLIENT_HEARTBEAT",
+    "ORKESTR_DEMO_BROKER_BASE_URL",
+    "ORKESTR_BROKER_BASE_URL",
+  ];
+  const prior = saveEnv(envKeys);
+  process.env.ORKESTR_HOME = brokerHome;
+  process.env.ORKESTR_AUTH_REQUIRED = "1";
+  process.env.ORKESTR_RECOVER_RUNNING_ON_START = "0";
+  process.env.ORKESTR_BROKER_REGISTRATION_TOKEN = "register-secret";
+  delete process.env.ORKESTR_BROKER_CLIENT_HEARTBEAT;
+  delete process.env.ORKESTR_DEMO_BROKER_BASE_URL;
+  delete process.env.ORKESTR_BROKER_BASE_URL;
+
+  const server = await startServer({ port: 0, host: "127.0.0.1" });
+  const { port } = server.address();
+  try {
+    const tenantEnv = {
+      ORKESTR_HOME: tenantHome,
+      ORKESTR_DEMO_BROKER_BASE_URL: `http://127.0.0.1:${port}`,
+      ORKESTR_DEMO_BROKER_REGISTRATION_TOKEN: "register-secret",
+      ORKESTR_SERVICE_NAME: "tenant-heartbeat-e2e",
+      ORKESTR_VERSION: "tenant-v1",
+      ORKESTR_TENANT_VM_ID: "tenant-heartbeat-e2e",
+      ORKESTR_API_BASE: "http://10.43.10.12",
+      ORKESTR_CONNECT_PUBLIC_BASE_URL: "https://connect.example.test",
+      ORKESTR_CONNECT_PUBLIC_SETUP_URL: "https://connect.example.test/i/tenant-heartbeat-e2e/setup",
+      ORKESTR_BROKER_WHATSAPP_RELAY_ACCOUNT_ID: "sender",
+    };
+    const result = await sendBrokerClientHeartbeat(tenantEnv);
+    const listed = await listBrokerInstances({ ORKESTR_HOME: brokerHome });
+    const instance = listed.instances[0];
+
+    assert.equal(result.ok, true);
+    assert.equal(listed.instances.length, 1);
+    assert.equal(instance.status, "online");
+    assert.equal(instance.displayName, "tenant-heartbeat-e2e");
+    assert.equal(instance.version, "tenant-v1");
+    assert.equal(instance.endpointBaseUrl, "http://10.43.10.12");
+    assert.equal(instance.connectBaseUrl, "https://connect.example.test");
+    assert.equal(instance.setupUrl, "https://connect.example.test/i/tenant-heartbeat-e2e/setup");
+    assert.equal(instance.relayAccountId, "sender");
+    assert.deepEqual(instance.capabilities, ["tenant-vm", "pairing-challenge", "whatsapp", "codex", "gmail", "desks"]);
+    assert.ok(instance.lastHeartbeatAt);
+  } finally {
+    await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    restoreEnv(prior);
+  }
 });
 
 test("broker instance WhatsApp requests are encrypted and scoped to registered WhatsApp number", async () => {
