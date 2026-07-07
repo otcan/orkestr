@@ -37,7 +37,9 @@ export class PairingRequiredPageComponent implements OnInit, OnDestroy {
     this.error = "";
     this.renderNow();
     try {
-      const result = await firstValueFrom(this.api.createSecurityChallenge(this.instanceId()));
+      const result = await firstValueFrom(this.api.createSecurityChallenge(this.instanceId(), {
+        requestedPath: this.requestedPath(),
+      }));
       const returnedChallenge = result.challenge;
       this.challenge = returnedChallenge || {
         id: result.challengeId,
@@ -127,6 +129,19 @@ export class PairingRequiredPageComponent implements OnInit, OnDestroy {
   challengeId(): string {
     const params = new URLSearchParams(globalThis.location?.search || "");
     return String(params.get("challengeId") || params.get("challenge") || "").trim();
+  }
+
+  requestedPath(): string {
+    const raw = new URLSearchParams(globalThis.location?.search || "").get("return") || "";
+    if (!raw) return "";
+    try {
+      const current = new URL(globalThis.location?.href || "http://localhost/");
+      const target = new URL(raw, current);
+      if (target.origin !== current.origin) return "";
+      return `${target.pathname}${target.search}${target.hash}`;
+    } catch {
+      return "";
+    }
   }
 
   private async consumeChallenge(): Promise<void> {
