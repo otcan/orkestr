@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import WebSocket from "ws";
 import { startServer } from "../apps/server/src/server.js";
-import { approvePairingChallenge } from "../packages/core/src/security.js";
+import { approvePairingChallenge, createPairingChallenge, pairBrowser, sessionCookieHeader } from "../packages/core/src/security.js";
 import { createAppShare } from "../packages/core/src/shared-apps.js";
 import { adminPrincipal } from "../packages/core/src/principal.js";
 
@@ -120,6 +120,11 @@ test("shared app URL creates scoped pairing and limits the approved session", as
     assert.equal(repeatedChallenge.challengeId, challengeId);
     assert.equal(repeatedChallenge.reused, true);
 
+    const adminChallenge = await createPairingChallenge({ requestedPath: "/", env: process.env });
+    await approvePairingChallenge(adminChallenge.challengeId, { approvedBy: "node:test", env: process.env });
+    const adminPair = await pairBrowser({ challengeId: adminChallenge.challengeId, env: process.env });
+    const adminCookie = sessionCookieHeader(adminPair.token, process.env);
+
     await approvePairingChallenge(challengeId, { approvedBy: "node:test", env: process.env });
     const approvedChallenge = await readJson(await fetch(`${baseUrl}/api/shared-apps/i/main/a/outreach-review/s/share-one/challenges/${encodeURIComponent(challengeId)}`));
     assert.equal(approvedChallenge.challenge.status, "approved");
@@ -131,6 +136,7 @@ test("shared app URL creates scoped pairing and limits the approved session", as
     });
     assert.equal(pair.status, 200);
     const cookie = pair.headers.get("set-cookie") || "";
+    const sessionCookie = cookie.split(";")[0];
     const paired = await readJson(pair.clone());
     assert.equal(paired.session.instanceId, "main");
     assert.equal(paired.session.appSlug, "outreach-review");
@@ -138,36 +144,46 @@ test("shared app URL creates scoped pairing and limits the approved session", as
     assert.deepEqual(paired.session.allowedActions, ["setClassification"]);
     assert.equal(paired.redirectPath, "/i/main/a/outreach-review/s/share-one");
 
-    const html = await fetch(`${baseUrl}/i/main/a/outreach-review/s/share-one`, { headers: { cookie } });
+    const html = await fetch(`${baseUrl}/i/main/a/outreach-review/s/share-one`, { headers: { cookie: sessionCookie } });
     assert.equal(html.status, 200);
     assert.match(await html.text(), /<ork-root/);
 
-    const data = await readJson(await fetch(`${baseUrl}/api/shared-apps/i/main/a/outreach-review/s/share-one`, { headers: { cookie } }));
+    const data = await readJson(await fetch(`${baseUrl}/api/shared-apps/i/main/a/outreach-review/s/share-one`, { headers: { cookie: sessionCookie } }));
     assert.equal(data.app.appType, "people-message-labeling");
     assert.equal(data.data.people[0].id, "betul");
     assert.equal(data.data.people[0].currentClassification, "not_evaluated");
 
+    const dataWithStaleCookieFirst = await readJson(await fetch(`${baseUrl}/api/shared-apps/i/main/a/outreach-review/s/share-one`, {
+      headers: { cookie: `orkestr_session=stale-token; ${sessionCookie}` },
+    }));
+    assert.equal(dataWithStaleCookieFirst.data.people[0].id, "betul");
+
+    const dataWithAppCookieFirst = await readJson(await fetch(`${baseUrl}/api/shared-apps/i/main/a/outreach-review/s/share-one`, {
+      headers: { cookie: `${adminCookie.split(";")[0]}; ${sessionCookie}` },
+    }));
+    assert.equal(dataWithAppCookieFirst.data.people[0].id, "betul");
+
     const update = await readJson(await fetch(`${baseUrl}/api/shared-apps/i/main/a/outreach-review/s/share-one/actions/setClassification`, {
       method: "POST",
-      headers: { "content-type": "application/json", cookie },
+      headers: { "content-type": "application/json", cookie: sessionCookie },
       body: JSON.stringify({ personId: "betul", classification: "to_contact" }),
     }));
     assert.equal(update.personId, "betul");
     assert.equal(update.classification, "to_contact");
     assert.equal(update.data.people[0].currentClassification, "to_contact");
 
-    const after = await readJson(await fetch(`${baseUrl}/api/shared-apps/i/main/a/outreach-review/s/share-one`, { headers: { cookie } }));
+    const after = await readJson(await fetch(`${baseUrl}/api/shared-apps/i/main/a/outreach-review/s/share-one`, { headers: { cookie: sessionCookie } }));
     assert.equal(after.data.people[0].currentClassification, "to_contact");
 
-    const otherShare = await fetch(`${baseUrl}/api/shared-apps/i/main/a/outreach-review/s/share-two`, { headers: { cookie } });
+    const otherShare = await fetch(`${baseUrl}/api/shared-apps/i/main/a/outreach-review/s/share-two`, { headers: { cookie: sessionCookie } });
     assert.equal(otherShare.status, 403);
     assert.equal((await readJson(otherShare)).error, "shared_app_session_scope_denied");
 
-    const normalApi = await fetch(`${baseUrl}/api/threads`, { headers: { cookie } });
+    const normalApi = await fetch(`${baseUrl}/api/threads`, { headers: { cookie: sessionCookie } });
     assert.equal(normalApi.status, 403);
     assert.equal((await readJson(normalApi)).error, "shared_app_session_scope_denied");
 
-    const summaryStream = await rejectedWebSocket(`ws://127.0.0.1:${port}/api/threads/summary/stream`, { cookie });
+    const summaryStream = await rejectedWebSocket(`ws://127.0.0.1:${port}/api/threads/summary/stream`, { cookie: sessionCookie });
     assert.equal(summaryStream.statusCode, 403);
   } finally {
     await new Promise((resolve) => server.close(resolve));

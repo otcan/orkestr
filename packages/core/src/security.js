@@ -264,13 +264,18 @@ function isLocalRequest(request) {
   return ["127.0.0.1", "::1", "localhost", ""].includes(ip);
 }
 
-function cookieValue(header, name = cookieName) {
+function cookieValues(header, name = cookieName) {
   const raw = String(header || "");
+  const values = [];
   for (const part of raw.split(";")) {
     const [key, ...rest] = part.trim().split("=");
-    if (key === name) return decodeURIComponent(rest.join("=") || "");
+    if (key === name) values.push(decodeURIComponent(rest.join("=") || ""));
   }
-  return "";
+  return values.filter(Boolean);
+}
+
+function cookieValue(header, name = cookieName) {
+  return cookieValues(header, name)[0] || "";
 }
 
 function bearerToken(header) {
@@ -1221,6 +1226,40 @@ export async function securitySessionForToken(token, env = process.env, options 
   };
 }
 
+function sharedAppRequestRoute(request) {
+  const url = String(request?.originalUrl || request?.url || "").split("?")[0];
+  const parts = url.split("/").filter(Boolean);
+  if (parts[0] !== "api" || parts[1] !== "shared-apps" || parts[2] !== "i" || parts[4] !== "a" || parts[6] !== "s") return null;
+  return {
+    instanceId: String(parts[3] || ""),
+    appSlug: String(parts[5] || ""),
+  };
+}
+
+async function securitySessionForRequest(request, env = process.env) {
+  const tokens = [...new Set(cookieValues(request?.headers?.cookie || ""))];
+  if (!tokens.length) return null;
+  const route = sharedAppRequestRoute(request);
+  const candidates = [];
+  for (const token of tokens) {
+    const session = await securitySessionForToken(token, env, { request, touch: false }).catch(() => null);
+    if (session) candidates.push({ token, session });
+  }
+  if (!candidates.length) return null;
+  let selected = null;
+  if (route) {
+    selected = candidates
+      .filter(({ session }) =>
+        session.shareId &&
+        String(session.instanceId || "") === route.instanceId &&
+        String(session.appSlug || "") === route.appSlug
+      )
+      .sort((a, b) => Date.parse(b.session.createdAt || "") - Date.parse(a.session.createdAt || ""))[0] || null;
+  }
+  selected ||= candidates.find(({ session }) => !session.shareId) || candidates[0];
+  return await securitySessionForToken(selected.token, env, { request }).catch(() => null) || selected.session;
+}
+
 function isAllowedBeforePairing(request) {
   const method = String(request?.method || "GET").toUpperCase();
   const url = String(request?.originalUrl || request?.url || "").split("?")[0];
@@ -1287,8 +1326,7 @@ export async function authorizeHttpRequest(request, env = process.env) {
   };
   if (jobsJdCacheAuth && status.authEnabled) return { ...jobsJdCacheAuth, status };
   if (!status.authEnabled) return { ok: true, status, principal: adminPrincipal(defaultAdminUser(env)) };
-  const token = cookieValue(request?.headers?.cookie || "");
-  const session = await securitySessionForToken(token, env, { request });
+  const session = await securitySessionForRequest(request, env);
   if (session) {
     const user = await getUser(session.userId, env);
     if (user?.status === "disabled") {
