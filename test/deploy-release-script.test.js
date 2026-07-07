@@ -21,6 +21,7 @@ async function firstExisting(paths) {
 test("release deploy script exposes versioned install, status, and rollback", async () => {
   const script = await fs.readFile("scripts/deploy-git-release.sh", "utf8");
   const manifest = await fs.readFile("scripts/release-manifest.mjs", "utf8");
+  const smoke = await fs.readFile("scripts/smoke.mjs", "utf8");
   const { stdout } = await execFileAsync("bash", ["scripts/deploy-git-release.sh", "--help"]);
 
   await execFileAsync("bash", ["-n", "scripts/deploy-git-release.sh"]);
@@ -42,6 +43,8 @@ test("release deploy script exposes versioned install, status, and rollback", as
   assert.match(script, /bash scripts\/install-runtime-deps\.sh/);
   assert.match(script, /npm --prefix "\$release_dir" run build:runtime/);
   assert.match(script, /npm --prefix "\$release_dir" run smoke/);
+  assert.match(smoke, /ORKESTR_UNSAFE_ALLOW_PUBLIC_UNAUTHENTICATED: "1"/);
+  assert.match(smoke, /ORKESTR_PUBLIC_URL: ""/);
   assert.match(script, /backup_state/);
   assert.match(script, /ORKESTR_DEPLOY_BACKUP_STATE/);
   assert.match(script, /ORKESTR_DEPLOY_BACKUP_EXCLUDES/);
