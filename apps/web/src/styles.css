@@ -1292,6 +1292,7 @@ ork-first-thread-wizard.first-thread-host {
 
 .system-mini-card,
 .codex-mode-toggle,
+.runtime-surface-toggle,
 .codex-capacity-card,
 .runtime-surface-pill,
 .model-pill {
@@ -1678,15 +1679,24 @@ ork-first-thread-wizard.first-thread-host {
   color: #cfffca;
 }
 
-.codex-mode-toggle {
+.codex-mode-toggle,
+.runtime-surface-toggle {
   display: grid;
-  grid-template-columns: 1fr 1fr;
   overflow: hidden;
   min-height: 42px;
   border-radius: 999px;
 }
 
-.codex-mode-toggle button {
+.codex-mode-toggle {
+  grid-template-columns: 1fr 1fr;
+}
+
+.runtime-surface-toggle {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.codex-mode-toggle button,
+.runtime-surface-toggle button {
   display: grid;
   place-items: center;
   gap: 1px;
@@ -1703,7 +1713,13 @@ ork-first-thread-wizard.first-thread-host {
   color: #061006;
 }
 
-.codex-mode-toggle button small {
+.runtime-surface-toggle button.active {
+  background: #68acdb;
+  color: #031018;
+}
+
+.codex-mode-toggle button small,
+.runtime-surface-toggle button small {
   font-size: 10px;
   line-height: 1;
   color: inherit;
@@ -1884,6 +1900,10 @@ ork-first-thread-wizard.first-thread-host {
   min-width: 122px;
 }
 
+.codex-control-scroll .runtime-surface-toggle {
+  min-width: 220px;
+}
+
 .codex-control-scroll .secondary {
   min-width: 72px;
 }
@@ -1905,6 +1925,15 @@ ork-first-thread-wizard.first-thread-host {
 .panel-tabs .codex-mode-toggle button.active {
   background: #63d471;
   color: #061006;
+}
+
+.runtime-panel-toggle {
+  grid-column: 1 / -1;
+  width: min(420px, 100%);
+}
+
+.runtime-panel-toggle button {
+  min-height: 36px;
 }
 
 .messages,

@@ -208,6 +208,9 @@ function assertDebugFooter(text, { mode = "", messageType = "final", model = "[^
   const queuePart = queueReason
     ? ` · queue:\\d+ · reason:${queueReason}`
     : " · q:\\d+";
+  const runtimeSwitch = runtime
+    ? ` · rt-switch:${runtime === "api" ? "/switch-terminal" : "/switch-api"}`
+    : "(?: · rt-switch:/switch-[a-z-]+)?";
   const pattern = new RegExp(
     `\\n\\ndbg: m:${model === "[^·\\n]+" ? model : escapedModel}` +
       (mode ? ` · mode:${mode}` : "") +
@@ -216,7 +219,8 @@ function assertDebugFooter(text, { mode = "", messageType = "final", model = "[^
       (fiveHour ? ` · 5h:${fiveHour}` : "(?: · 5h:\\d+%)?") +
       (weekly ? ` · wk:${weekly}` : "(?: · wk:\\d+%)?") +
       `${queuePart} · load:\\d+% · api:\\d+% · help:/help` +
-      (mode === "plan" ? " · switch:/code" : " · switch:/plan") +
+      (mode === "plan" ? " · mode-switch:/code" : " · mode-switch:/plan") +
+      runtimeSwitch +
       "$",
   );
   assert.match(text, pattern);
@@ -7023,7 +7027,7 @@ test("whatsapp debug footer ignores stale stored plan mode when live mode is cod
   assert.equal(stripDebugFooter(calls[0].body.text), "Milestone: checking it.");
   assertDebugFooter(calls[0].body.text, { messageType: "update", model: "gpt-5.5/xh" });
   assert.doesNotMatch(calls[0].body.text, /mode:plan/);
-  assert.doesNotMatch(calls[0].body.text, /switch:\/code/);
+  assert.doesNotMatch(calls[0].body.text, /mode-switch:\/code/);
 });
 
 test("whatsapp inbound suppresses duplicate active thread inputs by content", async () => {

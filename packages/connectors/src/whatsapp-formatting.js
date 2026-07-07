@@ -260,9 +260,17 @@ function footerMessageType(deliveryType = "") {
     : "final";
 }
 
+function runtimeSwitchHint(runtimeSurface = "") {
+  const surface = String(runtimeSurface || "").trim().toLowerCase();
+  if (!surface) return "";
+  if (surface === "api") return "/switch-terminal";
+  return "/switch-api";
+}
+
 export function whatsappDebugFooter({ message = {}, thread = {}, messages = [], deliveryType = "final", env = process.env } = {}) {
   const mode = codexModeDebugValue(message, thread);
   const runtimeSurface = runtimeSurfaceDebugValue(thread);
+  const runtimeSwitch = runtimeSwitchHint(runtimeSurface);
   const queueNotice = String(deliveryType || "").trim() === "queue_notice";
   const fiveHourRemaining = codexRateLimitsDebugValue(thread, "primary");
   const weeklyRemaining = codexRateLimitsDebugValue(thread, "secondary");
@@ -279,7 +287,8 @@ export function whatsappDebugFooter({ message = {}, thread = {}, messages = [], 
     `load:${loadDebugPercent()}%`,
     `api:${processCpuDebugPercent()}%`,
     "help:/help",
-    ...(mode === "plan" ? ["switch:/code"] : ["switch:/plan"]),
+    ...(mode === "plan" ? ["mode-switch:/code"] : ["mode-switch:/plan"]),
+    ...(runtimeSwitch ? [`rt-switch:${runtimeSwitch}`] : []),
   ];
   return `dbg: ${parts.join(" · ")}`;
 }
