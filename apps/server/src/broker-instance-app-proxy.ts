@@ -99,6 +99,10 @@ function redirect(response: any, location: string, message = "Redirecting."): vo
     .send(message);
 }
 
+function brokerAppApiRequest(route: BrokerAppRoute): boolean {
+  return route.upstreamPath === "/api" || route.upstreamPath.startsWith("/api/") || route.upstreamPath.startsWith("/api?");
+}
+
 function pairingRedirectUrl(request: any, route: BrokerAppRoute, requestUrl = ""): string {
   const target = new URL("/setup/pairing", "http://localhost");
   target.searchParams.set("instanceId", route.instanceId);
@@ -188,6 +192,10 @@ async function proxyBrokerAppHttp(request: any, response: any): Promise<void> {
     return;
   }
   if (!requestHasInstanceSession(request, route.instanceId)) {
+    if (brokerAppApiRequest(route)) {
+      sendPlain(response, 401, "broker_instance_pairing_required");
+      return;
+    }
     redirect(response, pairingRedirectUrl(request, route, requestUrl), "Redirecting to Orkestr pairing.");
     return;
   }

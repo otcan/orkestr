@@ -251,6 +251,7 @@ test("broker instance app path pairs on broker and proxies the VM WebUI", async 
   try {
     const noSlash = await fetch(`http://127.0.0.1:${port}/i/${brokerRegistration.instanceId}/app`, { redirect: "manual" });
     const unpaired = await fetch(`http://127.0.0.1:${port}/i/${brokerRegistration.instanceId}/app/`, { redirect: "manual" });
+    const unpairedApi = await fetch(`http://127.0.0.1:${port}/i/${brokerRegistration.instanceId}/app/api/threads`, { redirect: "manual" });
     const challenge = await createPairingChallenge({ env: process.env, instanceId: brokerRegistration.instanceId });
     await approvePairingChallenge(challenge.challengeId, { approvedBy: "node:test", env: process.env });
     const paired = await pairBrowser({ challengeId: challenge.challengeId, env: process.env });
@@ -265,6 +266,8 @@ test("broker instance app path pairs on broker and proxies the VM WebUI", async 
     assert.equal(noSlash.headers.get("location"), `/i/${brokerRegistration.instanceId}/app/`);
     assert.equal(unpaired.status, 302);
     assert.equal(unpaired.headers.get("location"), `/setup/pairing?instanceId=${brokerRegistration.instanceId}&return=%2Fi%2F${brokerRegistration.instanceId}%2Fapp%2F`);
+    assert.equal(unpairedApi.status, 401);
+    assert.equal(await unpairedApi.text(), "broker_instance_pairing_required");
     assert.equal(htmlResponse.status, 200);
     assert.match(html, new RegExp(`<base href="/i/${brokerRegistration.instanceId}/app/"`));
     assert.match(html, new RegExp(`href="/i/${brokerRegistration.instanceId}/app/favicon\\.svg"`));
