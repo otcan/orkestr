@@ -844,6 +844,76 @@ test("shared broker authorization accepts matching encrypted proxy assertions", 
   assert.equal(wrongPath.error, "broker_proxy_auth_path_mismatch");
 });
 
+test("broker proxy setup status is treated as paired for tenant WebUI", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-security-broker-setup-status-"));
+  await fs.mkdir(path.join(home, "secrets"), { recursive: true });
+  const prior = saveEnv([
+    "ORKESTR_HOME",
+    "ORKESTR_AUTH_REQUIRED",
+    "ORKESTR_SHARED_AUTHORIZATION",
+    "ORKESTR_BROKER_INSTANCE_ID",
+    "ORKESTR_RECOVER_RUNNING_ON_START",
+  ]);
+  const client = __brokerInstanceRegistryTestInternals.createX25519Identity();
+  const broker = __brokerInstanceRegistryTestInternals.createX25519Identity();
+  const channelId = "broker-channel-setup-status";
+  const instanceId = "instance-firat";
+  await fs.writeFile(path.join(home, "secrets", "broker-client-identity.json"), JSON.stringify({
+    schemaVersion: 1,
+    keyId: "client-key",
+    publicKey: client.publicKey,
+    privateKey: client.privateKey,
+  }), "utf8");
+  await fs.writeFile(path.join(home, "secrets", "broker-client-registration.json"), JSON.stringify({
+    schemaVersion: 1,
+    brokerBaseUrl: "https://broker.example.test",
+    instanceId,
+    channelId,
+    brokerPublicKey: broker.publicKey,
+    clientKeyId: "client-key",
+  }), "utf8");
+  process.env.ORKESTR_HOME = home;
+  process.env.ORKESTR_AUTH_REQUIRED = "1";
+  process.env.ORKESTR_SHARED_AUTHORIZATION = "1";
+  process.env.ORKESTR_BROKER_INSTANCE_ID = instanceId;
+  process.env.ORKESTR_RECOVER_RUNNING_ON_START = "0";
+  const now = Date.now();
+  const header = Buffer.from(JSON.stringify({
+    channelId,
+    envelope: encryptBrokerChannelPayload({
+      kind: "broker_app_proxy",
+      instanceId,
+      method: "GET",
+      path: "/api/setup/status",
+      issuedAt: new Date(now).toISOString(),
+      expiresAt: new Date(now + 30_000).toISOString(),
+    }, {
+      clientPrivateKey: broker.privateKey,
+      brokerPublicKey: client.publicKey,
+      channelId,
+    }),
+  }), "utf8").toString("base64url");
+
+  const server = await startServer({ port: 0, host: "127.0.0.1" });
+  const { port } = server.address();
+  try {
+    const unpaired = await json(await fetch(`http://127.0.0.1:${port}/api/setup/status`));
+    const proxied = await json(await fetch(`http://127.0.0.1:${port}/api/setup/status`, {
+      headers: { "x-orkestr-broker-auth": header },
+    }));
+
+    assert.equal(unpaired.redacted, true);
+    assert.equal(unpaired.security.paired, false);
+    assert.notEqual(proxied.redacted, true);
+    assert.equal(proxied.security.authEnabled, true);
+    assert.equal(proxied.security.paired, true);
+    assert.equal(proxied.security.remoteReady, true);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    restoreEnv(prior);
+  }
+});
+
 test("shared broker authorization tolerates stale cached registration channels", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-security-broker-proxy-stale-"));
   await fs.mkdir(path.join(home, "secrets"), { recursive: true });

@@ -359,8 +359,20 @@ function sameOriginRequestedPath(body: Record<string, unknown> = {}, instanceId 
 
 function shouldRedactSetupStatus(request: any, status: any): boolean {
   if (!status?.security?.authEnabled) return false;
-  if (!request?.orkestrSecuritySession && request?.orkestrMachineAuth !== "cli") return true;
+  if (!request?.orkestrSecuritySession && !["cli", "broker_proxy"].includes(String(request?.orkestrMachineAuth || ""))) return true;
   return !isAdminPrincipal(requestPrincipal(request));
+}
+
+function setupStatusForRequest(request: any, status: any): any {
+  if (request?.orkestrMachineAuth !== "broker_proxy") return status;
+  return {
+    ...status,
+    security: {
+      ...(status?.security || {}),
+      paired: true,
+      remoteReady: true,
+    },
+  };
 }
 
 function normalizeWhatsAppAccessMode(value: unknown) {
@@ -513,14 +525,14 @@ export class SystemController {
 
   @Get("setup/status")
   async setupStatus(@Req() request: any) {
-    const status = {
+    const status = setupStatusForRequest(request, {
       ...(await getSetupStatus({ principal: requestPrincipal(request) })),
       config: await publicEffectiveConfig(),
       whatsappDefaults: {
         chatNamePrefix: configuredWhatsAppChatNamePrefix(),
         replyPrefix: defaultWhatsAppReplyPrefix(),
       },
-    };
+    });
     return shouldRedactSetupStatus(request, status) ? publicSetupStatus(status) : status;
   }
 
