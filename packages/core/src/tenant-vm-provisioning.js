@@ -128,6 +128,31 @@ function publicAppBaseUrl(input = {}, env = process.env) {
   }
 }
 
+const publicOauthRedirectEnvKeys = [
+  "GMAIL_OAUTH_REDIRECT_URI",
+  "GOOGLE_OAUTH_REDIRECT_URI",
+  "JIRA_OAUTH_REDIRECT_URI",
+  "ATLASSIAN_OAUTH_REDIRECT_URI",
+  "SHOPIFY_OAUTH_REDIRECT_URI",
+  "SHOPIFY_REDIRECT_URI",
+];
+
+function publicOauthRedirectRuntimeEnv(env = process.env) {
+  const entries = {};
+  for (const key of publicOauthRedirectEnvKeys) {
+    const value = clean(env[key]);
+    if (!value) continue;
+    try {
+      const parsed = new URL(value);
+      if (!["http:", "https:"].includes(parsed.protocol) || parsed.username || parsed.password) continue;
+      entries[key] = value;
+    } catch {
+      // Ignore invalid parent redirect overrides; tenant provisioning should not fail on stale env.
+    }
+  }
+  return entries;
+}
+
 function runtimeEnv(input = {}, env = process.env) {
   const source = input.runtimeEnv && typeof input.runtimeEnv === "object" && !Array.isArray(input.runtimeEnv) ? input.runtimeEnv : {};
   const controlPlane = normalizeTenantControlPlane(input.controlPlane || input.sharedControlPlane || {}, env, {
@@ -175,6 +200,7 @@ function runtimeEnv(input = {}, env = process.env) {
     ORKESTR_LLM_SANITIZER_CODEX_TIMEOUT_MS: tenantVmRuntime ? "75000" : "",
     ORKESTR_LLM_SANITIZER_MAX_ATTEMPTS: tenantVmRuntime ? "2" : "",
     ORKESTR_LLM_SANITIZER_RETRY_DELAY_MS: tenantVmRuntime ? "1000" : "",
+    ...publicOauthRedirectRuntimeEnv(env),
     ...tenantControlPlaneRuntimeEnv(controlPlane),
     ORKESTR_DEMO_MODE: demoEnabled ? "1" : "",
     ORKESTR_HOME: demoEnabled || input.tenantVmId || input.tenantSliceId ? input.orkestrHome || source.ORKESTR_HOME || "/opt/orkestr/data" : "",

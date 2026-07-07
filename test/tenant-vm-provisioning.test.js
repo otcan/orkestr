@@ -139,6 +139,8 @@ test("tenant VM provisioning derives central setup URLs from broker instance id"
     ORKESTR_HOME: home,
     ORKESTR_CONNECT_PUBLIC_URL: "https://connect.example.test",
     ORKESTR_PAIRING_URL: "https://connect.example.test/setup/pairing",
+    GMAIL_OAUTH_REDIRECT_URI: "https://ops-health.example.test/google-marketing/oauth/callback",
+    GMAIL_OAUTH_CLIENT_SECRET: "must-not-copy",
   };
   const tenantVm = await createTenantVm({
     id: "firat-jobs-vm",
@@ -163,10 +165,14 @@ test("tenant VM provisioning derives central setup URLs from broker instance id"
   assert.equal(plan.runtimeEnv.ORKESTR_PAIRING_URL, "https://connect.example.test/setup/pairing");
   assert.equal(plan.runtimeEnv.ORKESTR_BROKER_INSTANCE_ID, "broker-firat-001");
   assert.equal(plan.runtimeEnv.ORKESTR_INSTANCE_ID, "broker-firat-001");
+  assert.equal(plan.runtimeEnv.GMAIL_OAUTH_REDIRECT_URI, "https://ops-health.example.test/google-marketing/oauth/callback");
+  assert.equal(Object.hasOwn(plan.runtimeEnv, "GMAIL_OAUTH_CLIENT_SECRET"), false);
   assert.match(envFile, /^ORKESTR_PUBLIC_URL='https:\/\/connect\.example\.test\/i\/broker-firat-001\/app'$/m);
   assert.match(envFile, /^ORKESTR_CONNECT_PUBLIC_SETUP_URL='https:\/\/connect\.example\.test\/i\/broker-firat-001\/setup'$/m);
   assert.match(envFile, /^ORKESTR_BROKER_INSTANCE_ID='broker-firat-001'$/m);
   assert.match(envFile, /^ORKESTR_INSTANCE_ID='broker-firat-001'$/m);
+  assert.match(envFile, /^GMAIL_OAUTH_REDIRECT_URI='https:\/\/ops-health\.example\.test\/google-marketing\/oauth\/callback'$/m);
+  assert.equal(envFile.includes("must-not-copy"), false);
   assert.doesNotMatch(plan.runtimeEnv.ORKESTR_CONNECT_PUBLIC_SETUP_URL, /0\.0\.0\.0|127\.0\.0\.1|localhost|10\./);
 });
 
