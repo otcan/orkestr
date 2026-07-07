@@ -231,6 +231,76 @@ test("non-local bind requires pairing by default", async () => {
   }
 });
 
+test("browser pairing challenges reuse the same client scope and rate-limit pending spam", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-security-challenge-limits-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_SECURITY_CHALLENGE_CLIENT_PENDING_LIMIT: "1",
+  };
+  const request = {
+    ip: "203.0.113.10",
+    headers: { "user-agent": "node:test pairing limits" },
+  };
+
+  const first = await createPairingChallenge({
+    env,
+    request,
+    instanceId: "demo-vm-001",
+    requestedPath: "/app/",
+    reusePending: true,
+  });
+  const reused = await createPairingChallenge({
+    env,
+    request,
+    instanceId: "demo-vm-001",
+    requestedPath: "/app/",
+    reusePending: true,
+  });
+  assert.equal(reused.reused, true);
+  assert.equal(reused.challengeId, first.challengeId);
+
+  await assert.rejects(
+    () => createPairingChallenge({
+      env,
+      request,
+      instanceId: "demo-vm-002",
+      requestedPath: "/app/",
+      reusePending: true,
+    }),
+    (error) => {
+      assert.equal(error.statusCode, 429);
+      assert.equal(error.message, "pairing_challenge_rate_limited");
+      assert.equal(error.reason, "client_pending_limit");
+      return true;
+    },
+  );
+});
+
+test("browser pairing attempts are rate-limited by client IP", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-security-pair-limits-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_SECURITY_PAIR_ATTEMPT_IP_LIMIT: "1",
+  };
+
+  await assert.rejects(
+    () => pairBrowser({ env, challengeId: "missing", ip: "203.0.113.20" }),
+    (error) => {
+      assert.equal(error.statusCode, 401);
+      assert.equal(error.message, "invalid_or_expired_pairing_challenge");
+      return true;
+    },
+  );
+  await assert.rejects(
+    () => pairBrowser({ env, challengeId: "missing", ip: "203.0.113.20" }),
+    (error) => {
+      assert.equal(error.statusCode, 429);
+      assert.equal(error.message, "pairing_attempt_rate_limited");
+      return true;
+    },
+  );
+});
+
 test("browser pairing protects API routes when auth is required", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-security-"));
   const codexHome = path.join(home, "private-codex-home");
@@ -292,6 +362,9 @@ test("browser pairing protects API routes when auth is required", async () => {
     assert.equal(challenge.challenge.instanceId, "demo-vm-001");
     assert.equal(challenge.code, undefined);
 
+    const codeStatus = await fetch(`${baseUrl}/api/setup/security/challenges/${challenge.challenge.approveCode}`);
+    assert.equal(codeStatus.status, 404);
+
     const badPair = await fetch(`${baseUrl}/api/setup/security/pair`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -308,10 +381,17 @@ test("browser pairing protects API routes when auth is required", async () => {
 
     await approvePairingChallenge(challenge.challenge.approveCode);
 
-    const pairResponse = await fetch(`${baseUrl}/api/setup/security/pair`, {
+    const codePairResponse = await fetch(`${baseUrl}/api/setup/security/pair`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ challengeId: challenge.challenge.approveCode }),
+    });
+    assert.equal(codePairResponse.status, 401);
+
+    const pairResponse = await fetch(`${baseUrl}/api/setup/security/pair`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ challengeId: challenge.challengeId }),
     });
     assert.equal(pairResponse.status, 200);
     const pairPayload = await json(pairResponse.clone());

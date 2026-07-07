@@ -18,6 +18,7 @@ const challengeAuditTtlMs = 24 * 60 * 60 * 1000;
 const sessionTtlMs = 90 * 24 * 60 * 60 * 1000;
 const defaultJobsJdCacheSources = ["gmail", "freelance_de", "9am"];
 const commandStatusCache = new Map();
+const pairAttemptCache = new Map();
 
 function nowIso() {
   return new Date().toISOString();
@@ -36,7 +37,7 @@ function randomToken(bytes = 32) {
 }
 
 function randomApproveCode() {
-  return crypto.randomBytes(4).toString("base64url").replace(/[^A-Za-z0-9]/g, "").slice(0, 6).toUpperCase();
+  return crypto.randomBytes(6).toString("base64url").replace(/[^A-Za-z0-9]/g, "").slice(0, 8).toUpperCase();
 }
 
 function envFlag(value) {
@@ -216,6 +217,145 @@ function activePendingChallenges(config, now = Date.now()) {
   return (config.challenges || [])
     .map((challenge) => normalizeChallenge(challenge, now))
     .filter((challenge) => challenge.status === "pending" && Date.parse(challenge.expiresAt || "") > now);
+}
+
+function positiveIntegerEnv(env = process.env, key = "", fallback = 0, minimum = 0) {
+  const parsed = Number(env[key]);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(minimum, Math.floor(parsed));
+}
+
+function challengeCreateWindowMs(env = process.env) {
+  return positiveIntegerEnv(env, "ORKESTR_SECURITY_CHALLENGE_CREATE_WINDOW_MS", 10 * 60 * 1000, 1000);
+}
+
+function challengeClientCreateLimit(env = process.env) {
+  return positiveIntegerEnv(env, "ORKESTR_SECURITY_CHALLENGE_CLIENT_CREATE_LIMIT", 30, 0);
+}
+
+function challengeClientPendingLimit(env = process.env) {
+  return positiveIntegerEnv(env, "ORKESTR_SECURITY_CHALLENGE_CLIENT_PENDING_LIMIT", 5, 0);
+}
+
+function challengeInstancePendingLimit(env = process.env) {
+  return positiveIntegerEnv(env, "ORKESTR_SECURITY_CHALLENGE_INSTANCE_PENDING_LIMIT", 50, 0);
+}
+
+function challengeGlobalPendingLimit(env = process.env) {
+  return positiveIntegerEnv(env, "ORKESTR_SECURITY_CHALLENGE_GLOBAL_PENDING_LIMIT", 200, 0);
+}
+
+function pairAttemptWindowMs(env = process.env) {
+  return positiveIntegerEnv(env, "ORKESTR_SECURITY_PAIR_ATTEMPT_WINDOW_MS", 10 * 60 * 1000, 1000);
+}
+
+function pairAttemptIpLimit(env = process.env) {
+  return positiveIntegerEnv(env, "ORKESTR_SECURITY_PAIR_ATTEMPT_IP_LIMIT", 120, 0);
+}
+
+function sameChallengeClient(challenge = {}, requestedIp = "", requestedUserAgent = "") {
+  if (!requestedIp && !requestedUserAgent) return false;
+  return String(challenge.requestedIp || "") === String(requestedIp || "") &&
+    String(challenge.requestedUserAgent || "") === String(requestedUserAgent || "");
+}
+
+function sameChallengeScope(challenge = {}, scope = {}) {
+  return String(challenge.instanceId || "") === String(scope.instanceId || "") &&
+    String(challenge.userId || "") === String(scope.userId || "") &&
+    String(challenge.role || "") === String(scope.role || "") &&
+    String(challenge.shareId || "") === String(scope.shareId || "") &&
+    String(challenge.appSlug || "") === String(scope.appSlug || "") &&
+    String(challenge.requestedPath || "") === String(scope.requestedPath || "") &&
+    sameStringList(normalizeAllowedActions(challenge.allowedActions || []), normalizeAllowedActions(scope.allowedActions || []));
+}
+
+function createdInsideWindow(challenge = {}, now = Date.now(), windowMs = 0) {
+  const createdAt = Date.parse(challenge.createdAt || "");
+  return Number.isFinite(createdAt) && now - createdAt < windowMs;
+}
+
+function pairingChallengeRateLimitError(reason = "rate_limited") {
+  const error = challengeError("pairing_challenge_rate_limited", 429);
+  error.reason = reason;
+  return error;
+}
+
+async function throwPairingChallengeRateLimit(reason, context = {}, env = process.env) {
+  await appendEvent({
+    type: "security_pairing_challenge_rate_limited",
+    reason,
+    instanceId: context.instanceId || null,
+    shareId: context.shareId || null,
+    appSlug: context.appSlug || null,
+    userId: context.userId || null,
+  }, env).catch(() => {});
+  throw pairingChallengeRateLimitError(reason);
+}
+
+async function assertPairingChallengeCreateAllowed(config, context = {}, env = process.env) {
+  const now = context.now || Date.now();
+  const pending = activePendingChallenges(config, now);
+  const hasClient = Boolean(context.requestedIp || context.requestedUserAgent);
+  const globalLimit = challengeGlobalPendingLimit(env);
+  if (globalLimit > 0 && pending.length >= globalLimit) {
+    await throwPairingChallengeRateLimit("global_pending_limit", context, env);
+  }
+
+  const clientPendingLimit = challengeClientPendingLimit(env);
+  if (hasClient && clientPendingLimit > 0) {
+    const clientPending = pending.filter((challenge) => sameChallengeClient(challenge, context.requestedIp, context.requestedUserAgent));
+    if (clientPending.length >= clientPendingLimit) {
+      await throwPairingChallengeRateLimit("client_pending_limit", context, env);
+    }
+  }
+
+  const instancePendingLimit = challengeInstancePendingLimit(env);
+  if (context.instanceId && instancePendingLimit > 0) {
+    const instancePending = pending.filter((challenge) => String(challenge.instanceId || "") === String(context.instanceId || ""));
+    if (instancePending.length >= instancePendingLimit) {
+      await throwPairingChallengeRateLimit("instance_pending_limit", context, env);
+    }
+  }
+
+  const windowMs = challengeCreateWindowMs(env);
+  const clientCreateLimit = challengeClientCreateLimit(env);
+  if (hasClient && windowMs > 0 && clientCreateLimit > 0) {
+    const recentClientCreates = (config.challenges || [])
+      .map((challenge) => normalizeChallenge(challenge, now))
+      .filter((challenge) =>
+        sameChallengeClient(challenge, context.requestedIp, context.requestedUserAgent) &&
+        createdInsideWindow(challenge, now, windowMs)
+      );
+    if (recentClientCreates.length >= clientCreateLimit) {
+      await throwPairingChallengeRateLimit("client_create_limit", context, env);
+    }
+  }
+}
+
+function pairAttemptCacheKey(env = process.env, ip = "") {
+  const home = String(env.ORKESTR_HOME || "default");
+  return sha256(`${home}\n${String(ip || "")}`).slice(0, 32);
+}
+
+function assertPairingAttemptAllowed({ env = process.env, ip = "" } = {}) {
+  const normalizedIp = String(ip || "").trim();
+  if (!normalizedIp) return;
+  const limit = pairAttemptIpLimit(env);
+  if (limit <= 0) return;
+  const now = Date.now();
+  const windowMs = pairAttemptWindowMs(env);
+  const key = pairAttemptCacheKey(env, normalizedIp);
+  const recent = (pairAttemptCache.get(key) || []).filter((timestamp) => now - timestamp < windowMs);
+  if (recent.length >= limit) throw challengeError("pairing_attempt_rate_limited", 429);
+  recent.push(now);
+  pairAttemptCache.set(key, recent);
+  if (pairAttemptCache.size > 1000) {
+    for (const [cacheKey, timestamps] of pairAttemptCache.entries()) {
+      const kept = timestamps.filter((timestamp) => now - timestamp < windowMs);
+      if (kept.length) pairAttemptCache.set(cacheKey, kept);
+      else pairAttemptCache.delete(cacheKey);
+    }
+  }
 }
 
 function commandStatusCacheTtlMs(env = process.env) {
@@ -904,18 +1044,20 @@ export async function createPairingChallenge({ request, env = process.env, userI
   const requestedUserAgent = String(request?.headers?.["user-agent"] || "").slice(0, 240);
   const requestedIp = requestIp(request).slice(0, 80);
   const now = Date.now();
-  if (reusePending && normalizedShareId && normalizedAppSlug && normalizedRequestedPath) {
-    const reusable = (config.challenges || [])
-      .map((challenge) => normalizeChallenge(challenge, now))
+  const scope = {
+    instanceId: normalizedInstanceId,
+    userId: normalizedUserId,
+    role: normalizedUserId ? normalizedRole : "",
+    shareId: normalizedShareId,
+    appSlug: normalizedAppSlug,
+    requestedPath: normalizedRequestedPath,
+    allowedActions: normalizedAllowedActions,
+  };
+  if (reusePending) {
+    const reusable = activePendingChallenges(config, now)
       .find((challenge) =>
-        challenge.status === "pending" &&
-        String(challenge.instanceId || "") === normalizedInstanceId &&
-        String(challenge.userId || "") === normalizedUserId &&
-        String(challenge.role || "") === (normalizedUserId ? normalizedRole : "") &&
-        String(challenge.shareId || "") === normalizedShareId &&
-        String(challenge.appSlug || "") === normalizedAppSlug &&
-        String(challenge.requestedPath || "") === normalizedRequestedPath &&
-        sameStringList(normalizeAllowedActions(challenge.allowedActions || []), normalizedAllowedActions)
+        sameChallengeScope(challenge, scope) &&
+        sameChallengeClient(challenge, requestedIp, requestedUserAgent)
       );
     if (reusable) {
       await appendEvent({
@@ -936,6 +1078,15 @@ export async function createPairingChallenge({ request, env = process.env, userI
       };
     }
   }
+  await assertPairingChallengeCreateAllowed(config, {
+    now,
+    requestedIp,
+    requestedUserAgent,
+    instanceId: normalizedInstanceId,
+    userId: normalizedUserId,
+    shareId: normalizedShareId,
+    appSlug: normalizedAppSlug,
+  }, env);
   const existingCodes = new Set((config.challenges || []).map((item) => String(item.approveCode || "").trim().toUpperCase()).filter(Boolean));
   let approveCode = "";
   for (let attempt = 0; attempt < 20 && !approveCode; attempt += 1) {
@@ -991,18 +1142,21 @@ export async function listPairingChallenges({ env = process.env, includeExpired 
   return { challenges };
 }
 
-export async function getPairingChallenge(challengeId, { env = process.env } = {}) {
+export async function getPairingChallenge(challengeId, { env = process.env, allowApproveCode = true } = {}) {
   const id = String(challengeId || "").trim();
   const config = await readSecurityConfig(env);
-  const challenge = (config.challenges || []).find((item) => challengeMatchesId(item, id));
+  const challenge = (config.challenges || []).find((item) => challengeMatchesId(item, id, { allowApproveCode }));
   if (!challenge) throw challengeError("pairing_challenge_not_found", 404);
   return publicChallenge(challenge);
 }
 
-function challengeMatchesId(challenge = {}, id = "") {
+function challengeMatchesId(challenge = {}, id = "", { allowApproveCode = true } = {}) {
   const value = String(id || "").trim();
   if (!value) return false;
-  return challenge.id === value || String(challenge.approveCode || "").trim().toUpperCase() === value.toUpperCase();
+  return challenge.id === value || (
+    allowApproveCode &&
+    String(challenge.approveCode || "").trim().toUpperCase() === value.toUpperCase()
+  );
 }
 
 export async function listSecuritySessions({ env = process.env } = {}) {
@@ -1148,12 +1302,13 @@ async function touchSecuritySession(config, session, { env = process.env, reques
   }, env);
 }
 
-export async function pairBrowser({ challengeId, userAgent = "", ip = "", env = process.env } = {}) {
+export async function pairBrowser({ challengeId, userAgent = "", ip = "", env = process.env, allowApproveCode = true } = {}) {
   const id = String(challengeId || "").trim();
+  assertPairingAttemptAllowed({ env, ip });
   const config = await readSecurityConfig(env);
   const now = Date.now();
   const challenges = (config.challenges || []).map((challenge) => normalizeChallenge(challenge, now));
-  const challenge = challenges.find((item) => challengeMatchesId(item, id));
+  const challenge = challenges.find((item) => challengeMatchesId(item, id, { allowApproveCode }));
   if (!challenge) throw challengeError("invalid_or_expired_pairing_challenge", 401);
   if (challenge.status === "pending") throw challengeError("pairing_challenge_not_approved", 409);
   if (challenge.status !== "approved") throw challengeError(`pairing_challenge_${challenge.status}`, 401);

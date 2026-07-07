@@ -167,7 +167,7 @@ export class SharedAppsController {
     @Param("challengeId") challengeId: string,
   ) {
     const { share } = await resolveSharedAppShare(instanceId, appSlug, shareToken);
-    const challenge = await getPairingChallenge(challengeId);
+    const challenge = await getPairingChallenge(challengeId, { allowApproveCode: false } as any);
     assertChallengeForShare(challenge, share);
     return { ok: true, challenge };
   }
@@ -184,12 +184,13 @@ export class SharedAppsController {
   ) {
     const { share } = await resolveSharedAppShare(instanceId, appSlug, shareToken);
     const challengeId = String(body.challengeId || "");
-    const challenge = await getPairingChallenge(challengeId);
+    const challenge = await getPairingChallenge(challengeId, { allowApproveCode: false } as any);
     assertChallengeForShare(challenge, share);
     const result = await pairBrowser({
       challengeId,
       userAgent: String(request?.headers?.["user-agent"] || ""),
       ip: String(request?.ip || request?.socket?.remoteAddress || request?.connection?.remoteAddress || "").replace(/^::ffff:/, ""),
+      allowApproveCode: false,
     } as any);
     response.setHeader("set-cookie", sessionCookieHeader(result.token, process.env, {
       requestHost: String(request?.headers?.["x-forwarded-host"] || request?.headers?.host || ""),

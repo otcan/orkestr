@@ -46,6 +46,7 @@ const largeFileAllowlist = new Set([
   "packages/core/src/runtime-leases.js",
   "packages/core/src/security.js",
   "packages/core/src/secure-secrets.js",
+  "packages/core/src/shared-apps.js",
   "packages/core/src/system-doctor.js",
   "packages/core/src/tenant-api-agent-tools.js",
   "packages/core/src/tenant-api-agent.js",

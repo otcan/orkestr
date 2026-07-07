@@ -570,13 +570,13 @@ export class SystemController {
   @Post("setup/security/challenge")
   @HttpCode(200)
   async setupSecurityChallenge(@Req() request: any, @Body() body: Record<string, unknown> = {}) {
-    return createPairingChallenge({ request, ...(await pairingChallengeTarget(body, request)) } as any);
+    return createPairingChallenge({ request, reusePending: true, ...(await pairingChallengeTarget(body, request)) } as any);
   }
 
   @Post("setup/security/challenges")
   @HttpCode(200)
   async setupSecurityChallenges(@Req() request: any, @Body() body: Record<string, unknown> = {}) {
-    return createPairingChallenge({ request, ...(await pairingChallengeTarget(body, request)) } as any);
+    return createPairingChallenge({ request, reusePending: true, ...(await pairingChallengeTarget(body, request)) } as any);
   }
 
   @Get("setup/security/challenges")
@@ -591,7 +591,7 @@ export class SystemController {
 
   @Get("setup/security/challenges/:challengeId")
   async setupSecurityChallengeStatus(@Param("challengeId") challengeId: string) {
-    return { ok: true, challenge: await getPairingChallenge(challengeId) };
+    return { ok: true, challenge: await getPairingChallenge(challengeId, { allowApproveCode: false } as any) };
   }
 
   @Post("setup/security/challenges/:challengeId/approve")
@@ -636,6 +636,7 @@ export class SystemController {
       challengeId: String(body.challengeId || ""),
       userAgent: String(request?.headers?.["user-agent"] || ""),
       ip: String(request?.ip || request?.socket?.remoteAddress || request?.connection?.remoteAddress || "").replace(/^::ffff:/, ""),
+      allowApproveCode: false,
     } as any);
     response.setHeader("set-cookie", sessionCookieHeader(result.token, process.env, {
       requestHost: String(request?.headers?.["x-forwarded-host"] || request?.headers?.host || ""),
