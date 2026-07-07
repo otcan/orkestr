@@ -7,6 +7,7 @@ import type { IncomingMessage, Server } from "node:http";
 import type { Duplex } from "node:stream";
 import { encryptBrokerInstanceProxyPayload, resolveBrokerConnectInstance } from "../../../packages/core/src/broker-instance-registry.js";
 import { securityCookieName, securitySessionForToken } from "../../../packages/core/src/security.js";
+import { instanceSetupReturnPath } from "./instance-connect-setup.js";
 
 type BrokerAppRoute = {
   instanceId: string;
@@ -106,7 +107,10 @@ function brokerAppApiRequest(route: BrokerAppRoute): boolean {
 function pairingRedirectUrl(request: any, route: BrokerAppRoute, requestUrl = ""): string {
   const target = new URL("/setup/pairing", "http://localhost");
   target.searchParams.set("instanceId", route.instanceId);
-  target.searchParams.set("return", String(requestUrl || request.originalUrl || request.url || route.prefixPath));
+  target.searchParams.set("return", instanceSetupReturnPath(
+    route.instanceId,
+    String(requestUrl || request.originalUrl || request.url || route.prefixPath),
+  ));
   return `${target.pathname}${target.search}`;
 }
 

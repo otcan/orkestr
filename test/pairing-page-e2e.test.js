@@ -127,7 +127,8 @@ test("pairing page stores tenant app return path on generated challenge", async 
   const server = await startServer({ port: 0, host: "127.0.0.1" });
   const { port } = server.address();
   const baseUrl = `http://127.0.0.1:${port}`;
-  const requestedPath = "/i/main/app/";
+  const requestedPath = "/i/main/app/setup/gmail";
+  const expectedPath = "/i/main/app/connectors/gmail";
   let browser;
 
   try {
@@ -147,7 +148,7 @@ test("pairing page stores tenant app return path on generated challenge", async 
     const challenges = await listPairingChallenges({ env: process.env, includeExpired: true });
     const challenge = challenges.challenges.find((item) => item.instanceId === "main");
     assert.ok(challenge);
-    assert.equal(challenge.requestedPath, requestedPath);
+    assert.equal(challenge.requestedPath, expectedPath);
     assert.equal(challenge.status, "pending");
     assert.deepEqual(errors, []);
   } finally {

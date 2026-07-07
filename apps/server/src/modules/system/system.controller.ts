@@ -53,6 +53,7 @@ import {
 } from "../../../../../packages/core/src/security.js";
 import { publicConfig } from "../../../../../packages/storage/src/config.js";
 import { ensureDataDirs } from "../../../../../packages/storage/src/paths.js";
+import { instanceSetupReturnPath } from "../../instance-connect-setup.js";
 import { httpError } from "../../common/http.js";
 import { sanitizedThreadActionInput } from "../threads/thread-route-helpers.js";
 
@@ -330,7 +331,7 @@ async function systemSnapshot() {
 async function pairingChallengeTarget(body: Record<string, unknown> = {}, request: any) {
   const userId = String(body.userId || body.targetUserId || "").trim();
   const instanceId = String(body.instanceId || body.instance || body.orkestrInstanceId || "").trim();
-  const requestedPath = sameOriginRequestedPath(body);
+  const requestedPath = sameOriginRequestedPath(body, instanceId);
   if (!userId) return { instanceId, requestedPath };
   const principal = requestPrincipal(request);
   const status = await securityStatus();
@@ -344,9 +345,10 @@ async function pairingChallengeTarget(body: Record<string, unknown> = {}, reques
   return { userId: user.id, role: user.role, instanceId, requestedPath };
 }
 
-function sameOriginRequestedPath(body: Record<string, unknown> = {}): string {
+function sameOriginRequestedPath(body: Record<string, unknown> = {}, instanceId = ""): string {
   const raw = String(body.requestedPath || body.return || body.returnTo || "").trim().slice(0, 1000);
   if (!raw || !raw.startsWith("/") || raw.startsWith("//")) return "";
+  if (instanceId) return instanceSetupReturnPath(instanceId, raw);
   try {
     const target = new URL(raw, "http://localhost");
     return `${target.pathname}${target.search}${target.hash}`;
