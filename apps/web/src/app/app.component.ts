@@ -998,8 +998,8 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     await this.refresh(false);
   }
 
-  async handleBrowserPaired(): Promise<void> {
-    const returnUrl = this.sameOriginPairingReturnUrl();
+  async handleBrowserPaired(redirectPath = ""): Promise<void> {
+    const returnUrl = this.sameOriginUrl(redirectPath) || this.sameOriginPairingReturnUrl();
     if (returnUrl) {
       globalThis.location.replace(returnUrl);
       return;
@@ -4440,6 +4440,10 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   private sameOriginPairingReturnUrl(): string {
     const raw = new URLSearchParams(globalThis.location?.search || "").get("return") || "";
+    return this.sameOriginUrl(raw);
+  }
+
+  private sameOriginUrl(raw = ""): string {
     if (!raw) return "";
     try {
       const current = new URL(globalThis.location?.href || "http://localhost/");

@@ -1,7 +1,7 @@
 @if (pairingRequired) {
   <ork-pairing-required-page
     [setupStatus]="setupStatus"
-    (paired)="handleBrowserPaired()"
+    (paired)="handleBrowserPaired($event)"
   ></ork-pairing-required-page>
 } @else if (sharedAppActive()) {
   <ork-shared-app-page></ork-shared-app-page>

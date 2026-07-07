@@ -620,6 +620,7 @@ export interface SecuritySession {
 export interface SecurityPairResponse {
   ok: boolean;
   security: SecurityStatus;
+  redirectPath?: string;
   session?: {
     id: string;
     expiresAt: string;

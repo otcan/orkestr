@@ -107,7 +107,7 @@ test("pairing required page generates and consumes a challenge in a real browser
   }
 });
 
-test("pairing page preserves an existing challenge while normalizing the URL", async (t) => {
+test("pairing page redirects to challenge path after pairing", async (t) => {
   const puppeteer = await loadPuppeteer(t);
   if (!puppeteer) return;
   const chrome = await findChrome();
@@ -122,7 +122,8 @@ test("pairing page preserves an existing challenge while normalizing the URL", a
   process.env.ORKESTR_AUTH_REQUIRED = "1";
   process.env.ORKESTR_RECOVER_RUNNING_ON_START = "0";
 
-  const existing = await createPairingChallenge({ env: process.env, instanceId: "main" });
+  const requestedPath = "/i/main/a/outreach-review/s/share-one";
+  const existing = await createPairingChallenge({ env: process.env, instanceId: "main", requestedPath });
   const server = await startServer({ port: 0, host: "127.0.0.1" });
   const { port } = server.address();
   const baseUrl = `http://127.0.0.1:${port}`;
@@ -153,7 +154,7 @@ test("pairing page preserves an existing challenge while normalizing the URL", a
 
     await approvePairingChallenge(existing.challengeId);
     await page.waitForFunction(() => !document.body.innerText.includes("Approve this browser"), { timeout: 15_000 });
-    assert.equal(new URL(page.url()).pathname, "/");
+    assert.equal(new URL(page.url()).pathname, requestedPath);
     assert.deepEqual(errors, []);
   } finally {
     if (browser) await browser.close();

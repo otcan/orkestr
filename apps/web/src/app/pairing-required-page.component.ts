@@ -14,7 +14,7 @@ export class PairingRequiredPageComponent implements OnInit, OnDestroy {
   private destroyed = false;
 
   @Input() setupStatus: SetupStatus | null = null;
-  @Output() paired = new EventEmitter<void>();
+  @Output() paired = new EventEmitter<string>();
 
   challenge: SecurityChallenge | null = null;
   busy = false;
@@ -133,10 +133,10 @@ export class PairingRequiredPageComponent implements OnInit, OnDestroy {
     if (!this.challenge?.id) return;
     this.stopPolling();
     try {
-      await firstValueFrom(this.api.pairSecurityBrowser(this.challenge.id));
+      const result = await firstValueFrom(this.api.pairSecurityBrowser(this.challenge.id));
       this.notice = "Approved. Opening setup.";
       this.renderNow();
-      this.paired.emit();
+      this.paired.emit(result.redirectPath || "");
     } catch (error) {
       this.error = this.errorText(error);
       this.renderNow();

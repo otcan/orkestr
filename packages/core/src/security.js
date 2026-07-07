@@ -195,6 +195,17 @@ function publicSession(session = {}) {
   };
 }
 
+function sameOriginRedirectPath(value = "") {
+  const text = String(value || "").trim();
+  if (!text.startsWith("/") || text.startsWith("//")) return "";
+  try {
+    const target = new URL(text, "http://localhost");
+    return `${target.pathname}${target.search}${target.hash}`;
+  } catch {
+    return "";
+  }
+}
+
 function challengeError(message, statusCode = 400) {
   const error = new Error(message);
   error.statusCode = statusCode;
@@ -1184,6 +1195,7 @@ export async function pairBrowser({ challengeId, userAgent = "", ip = "", env = 
     ok: true,
     token,
     session: publicSession(session),
+    redirectPath: sameOriginRedirectPath(challenge.requestedPath || ""),
   };
 }
 

@@ -643,6 +643,7 @@ export class SystemController {
     return {
       ok: true,
       session: result.session,
+      redirectPath: result.redirectPath || "",
       security: await securityStatus(),
     };
   }

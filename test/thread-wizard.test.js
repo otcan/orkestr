@@ -78,7 +78,7 @@ test("main UI exposes a guided first thread generation flow", async () => {
   assert.ok(sources.includes("orkestr connect approve"));
   assert.ok(sources.includes("browser_pairing_required"));
   assert.ok(sources.includes("enterPairingRequired"));
-  assert.ok(sources.includes("(paired)=\"handleBrowserPaired()\""));
+  assert.ok(sources.includes("(paired)=\"handleBrowserPaired($event)\""));
   assert.ok(sources.includes("Connect receiving account"));
   assert.ok(sources.includes("Connect reply account"));
   assert.ok(sources.includes("connectedWhatsAppAccounts()"));

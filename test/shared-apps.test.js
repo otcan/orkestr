@@ -99,6 +99,7 @@ test("shared app URL creates scoped pairing and limits the approved session", as
     assert.equal(paired.session.appSlug, "outreach-review");
     assert.equal(paired.session.shareId, first.share.id);
     assert.deepEqual(paired.session.allowedActions, ["setClassification"]);
+    assert.equal(paired.redirectPath, "/i/main/a/outreach-review/s/share-one");
 
     const html = await fetch(`${baseUrl}/i/main/a/outreach-review/s/share-one`, { headers: { cookie } });
     assert.equal(html.status, 200);
