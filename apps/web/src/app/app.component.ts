@@ -4427,7 +4427,8 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       return;
     }
     if (parts[0] === "ng" && parts[1] === "connectors") {
-      globalThis.history?.replaceState({}, "", this.appPath("/connectors"));
+      const suffix = parts[2] ? `/${parts[2]}` : "";
+      globalThis.history?.replaceState({}, "", this.appPath(`/connectors${suffix}`));
       return;
     }
     if (parts[0] === "ng" && parts[1] === "skills") {
@@ -4517,6 +4518,19 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   sharedAppActive(): boolean {
     const parts = globalThis.location?.pathname?.split("/").filter(Boolean) || [];
     return Boolean(this.sharedAppParts(parts));
+  }
+
+  connectorLoginActive(): boolean {
+    return Boolean(this.connectorLoginProvider());
+  }
+
+  private connectorLoginProvider(parts: string[] = this.locationPathParts()): string {
+    const candidate = parts[0] === "connectors"
+      ? String(parts[1] || "").toLowerCase()
+      : parts[0] === "ng" && parts[1] === "connectors"
+        ? String(parts[2] || "").toLowerCase()
+        : "";
+    return ["gmail", "outlook", "jira", "shopify", "linkedin", "browsers"].includes(candidate) ? candidate : "";
   }
 
   private sharedAppParts(parts: string[] = []): boolean {
@@ -4754,6 +4768,12 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     }
     if (this.sharedAppActive()) {
       globalThis.document.title = "Shared App · Orkestr";
+      return;
+    }
+    if (this.connectorLoginActive()) {
+      const provider = this.connectorLoginProvider();
+      const label = provider ? `${provider.slice(0, 1).toUpperCase()}${provider.slice(1)}` : "";
+      globalThis.document.title = `${label ? `Connect ${label}` : "Connect"} · Orkestr`;
       return;
     }
     if (this.onboardingActive) {

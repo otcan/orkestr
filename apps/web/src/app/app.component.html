@@ -14,6 +14,10 @@
     (complete)="leaveOnboarding(true)"
     (openAppRequested)="leaveCompactSetup()"
   ></ork-onboarding-page>
+} @else if (connectorLoginActive()) {
+  <main class="connector-login-shell">
+    <ork-user-connectors-page></ork-user-connectors-page>
+  </main>
 } @else if (appReady) {
 <main class="app-shell" [class.sidebar-resizing]="sidebarResizing" [class.user-mode]="isUserMode()" [style.--sidebar-width.px]="sidebarWidth">
   <aside class="sidebar">

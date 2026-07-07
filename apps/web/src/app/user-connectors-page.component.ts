@@ -13,6 +13,7 @@ export class UserConnectorsPageComponent implements OnDestroy, OnInit {
   private readonly connectorOrder = ["whatsapp", "gmail", "outlook", "jira", "shopify", "linkedin", "browsers"];
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
   private retryAttempts = 0;
+  private autoStartedRoute = "";
 
   busy = false;
   actionBusy = "";
@@ -49,6 +50,7 @@ export class UserConnectorsPageComponent implements OnDestroy, OnInit {
         this.error = "";
       }
       this.scheduleRetryIfNeeded();
+      this.maybeAutoStartRouteLogin();
     } catch (error) {
       this.error = this.errorText(error);
       this.scheduleRetryIfNeeded();
@@ -60,8 +62,8 @@ export class UserConnectorsPageComponent implements OnDestroy, OnInit {
   userConnectors(): ConnectorStatus[] {
     const active = this.routeConnectorId();
     const connectors = this.connectorOrder.map((id) => this.connectorStatus(id));
-    if (!active) return connectors;
-    return connectors.sort((a, b) => (a.id === active ? -1 : 0) + (b.id === active ? 1 : 0));
+    if (active) return connectors.filter((connector) => connector.id === active);
+    return connectors;
   }
 
   connectorStatus(id: string): ConnectorStatus {
@@ -114,13 +116,18 @@ export class UserConnectorsPageComponent implements OnDestroy, OnInit {
     return "";
   }
 
-  async startGmail(): Promise<void> {
+  async startGmail(options: { autoRedirect?: boolean } = {}): Promise<void> {
     if (this.actionBusy) return;
     this.actionBusy = "gmail";
     try {
       this.gmailAuth = await firstValueFrom(this.api.startGmailOAuth(this.gmailAccount));
       this.notice = this.gmailAuth.authorizeUrl ? "Gmail sign-in ready." : "Gmail sign-in started.";
       this.error = "";
+      if (options.autoRedirect && this.gmailAuth.authorizeUrl) {
+        this.notice = "Opening Gmail sign-in...";
+        globalThis.location.href = this.gmailAuth.authorizeUrl;
+        return;
+      }
       await this.load();
     } catch (error) {
       this.error = this.errorText(error);
@@ -152,6 +159,15 @@ export class UserConnectorsPageComponent implements OnDestroy, OnInit {
     return String(this.currentUser?.displayName || this.currentUser?.id || "User");
   }
 
+  loginOnly(): boolean {
+    return Boolean(this.routeConnectorId());
+  }
+
+  loginTitle(): string {
+    const active = this.routeConnectorId();
+    return active === "gmail" ? "Connect Gmail" : active ? `Connect ${this.connectorLabel(active)}` : "Connect Account";
+  }
+
   routeConnectorId(): string {
     const parts = this.locationPathParts();
     const candidate = parts[0] === "connectors" ? String(parts[1] || "").toLowerCase() : "";
@@ -160,6 +176,20 @@ export class UserConnectorsPageComponent implements OnDestroy, OnInit {
 
   deskPath(): string {
     return this.appPath("/desk");
+  }
+
+  private maybeAutoStartRouteLogin(): void {
+    const active = this.routeConnectorId();
+    if (active !== "gmail") return;
+    if (this.autoStartedRoute === active) return;
+    if (this.actionBusy || this.autoLoginDisabled()) return;
+    this.autoStartedRoute = active;
+    void this.startGmail({ autoRedirect: true });
+  }
+
+  private autoLoginDisabled(): boolean {
+    const params = new URLSearchParams(globalThis.location?.search || "");
+    return params.get("manual") === "1" || params.get("auto") === "0";
   }
 
   private appBasePath(): string {

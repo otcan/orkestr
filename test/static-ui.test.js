@@ -431,6 +431,11 @@ test("server keeps public pages on the configured public site host only", async 
     publicSiteUrl: process.env.ORKESTR_PUBLIC_SITE_URL,
     primaryDomain: process.env.ORKESTR_PRIMARY_DOMAIN,
     publicUrl: process.env.ORKESTR_PUBLIC_URL,
+    publicAppUrl: process.env.ORKESTR_PUBLIC_APP_URL,
+    publicAuthUrl: process.env.ORKESTR_PUBLIC_AUTH_URL,
+    publicHttpsUrl: process.env.ORKESTR_PUBLIC_HTTPS_URL,
+    connectPublicUrl: process.env.ORKESTR_CONNECT_PUBLIC_URL,
+    pairingUrl: process.env.ORKESTR_PAIRING_URL,
     authRequired: process.env.ORKESTR_AUTH_REQUIRED,
   };
   process.env.ORKESTR_HOME = home;
@@ -439,6 +444,11 @@ test("server keeps public pages on the configured public site host only", async 
   process.env.ORKESTR_PUBLIC_URL = "https://app.orkestr.example.test";
   process.env.ORKESTR_AUTH_REQUIRED = "1";
   delete process.env.ORKESTR_OVERLAY_DIR;
+  delete process.env.ORKESTR_PUBLIC_APP_URL;
+  delete process.env.ORKESTR_PUBLIC_AUTH_URL;
+  delete process.env.ORKESTR_PUBLIC_HTTPS_URL;
+  delete process.env.ORKESTR_CONNECT_PUBLIC_URL;
+  delete process.env.ORKESTR_PAIRING_URL;
   const server = await startServer({ port: 0, host: "127.0.0.1" });
   const { port } = server.address();
   try {
@@ -513,6 +523,16 @@ test("server keeps public pages on the configured public site host only", async 
     else process.env.ORKESTR_PRIMARY_DOMAIN = prior.primaryDomain;
     if (prior.publicUrl === undefined) delete process.env.ORKESTR_PUBLIC_URL;
     else process.env.ORKESTR_PUBLIC_URL = prior.publicUrl;
+    if (prior.publicAppUrl === undefined) delete process.env.ORKESTR_PUBLIC_APP_URL;
+    else process.env.ORKESTR_PUBLIC_APP_URL = prior.publicAppUrl;
+    if (prior.publicAuthUrl === undefined) delete process.env.ORKESTR_PUBLIC_AUTH_URL;
+    else process.env.ORKESTR_PUBLIC_AUTH_URL = prior.publicAuthUrl;
+    if (prior.publicHttpsUrl === undefined) delete process.env.ORKESTR_PUBLIC_HTTPS_URL;
+    else process.env.ORKESTR_PUBLIC_HTTPS_URL = prior.publicHttpsUrl;
+    if (prior.connectPublicUrl === undefined) delete process.env.ORKESTR_CONNECT_PUBLIC_URL;
+    else process.env.ORKESTR_CONNECT_PUBLIC_URL = prior.connectPublicUrl;
+    if (prior.pairingUrl === undefined) delete process.env.ORKESTR_PAIRING_URL;
+    else process.env.ORKESTR_PAIRING_URL = prior.pairingUrl;
     if (prior.authRequired === undefined) delete process.env.ORKESTR_AUTH_REQUIRED;
     else process.env.ORKESTR_AUTH_REQUIRED = prior.authRequired;
   }
@@ -1095,16 +1115,25 @@ test("web shell exposes a user connector management page", async () => {
   assert.match(component, /type Panel = .*"userConnectors"/);
   assert.match(component, /parts\[0\] === "connectors"/);
   assert.match(component, /parts\[0\] === "ng" && parts\[1\] === "connectors"/);
+  assert.match(component, /connectorLoginActive\(\): boolean/);
+  assert.match(component, /private connectorLoginProvider\(parts: string\[\] = this\.locationPathParts\(\)\): string/);
+  assert.match(component, /this\.appPath\(`\/connectors\$\{suffix\}`\)/);
   assert.match(component, /panel === "userConnectors"\) return this\.appPath\("\/connectors"\)/);
   assert.match(component, /globalThis\.document\.title = "Connectors · Orkestr"/);
+  assert.match(template, /@else if \(connectorLoginActive\(\)\)/);
+  assert.match(template, /class="connector-login-shell"/);
   assert.match(template, /<ork-user-connectors-page><\/ork-user-connectors-page>/);
   assert.match(template, /\(click\)="openPanel\('userConnectors'\)"/);
   assert.match(connectorsComponent, /selector: "ork-user-connectors-page"/);
   assert.match(connectorsComponent, /imports: \[FormsModule\]/);
+  assert.match(connectorsComponent, /private autoStartedRoute = ""/);
   assert.match(connectorsComponent, /this\.api\.setupStatus\(\)/);
   assert.match(connectorsComponent, /this\.api\.currentUser\(\)/);
   assert.match(connectorsComponent, /Promise\.allSettled/);
   assert.match(connectorsComponent, /scheduleRetryIfNeeded\(\): void/);
+  assert.match(connectorsComponent, /maybeAutoStartRouteLogin\(\): void/);
+  assert.match(connectorsComponent, /startGmail\(options: \{ autoRedirect\?: boolean \} = \{\}\)/);
+  assert.match(connectorsComponent, /globalThis\.location\.href = this\.gmailAuth\.authorizeUrl/);
   assert.match(connectorsComponent, /void this\.load\(false\)/);
   assert.match(connectorsComponent, /this\.api\.startGmailOAuth\(this\.gmailAccount\)/);
   assert.match(connectorsComponent, /this\.api\.startOutlookOAuth\(this\.outlookAccount\)/);
@@ -1112,6 +1141,8 @@ test("web shell exposes a user connector management page", async () => {
   assert.match(connectorsComponent, /private appBasePath\(\): string/);
   assert.match(connectorsComponent, /private locationPathParts\(\): string\[\]/);
   assert.match(connectorsComponent, /deskPath\(\): string/);
+  assert.match(connectorsTemplate, /\[class\.login-only\]="loginOnly\(\)"/);
+  assert.match(connectorsTemplate, /loginOnly\(\) \? "Secure sign-in" : "Connectors"/);
   assert.match(connectorsTemplate, /name="user-gmail-account"/);
   assert.match(connectorsTemplate, /name="user-outlook-account"/);
   assert.match(connectorsTemplate, /Open Gmail sign-in/);
@@ -1120,6 +1151,8 @@ test("web shell exposes a user connector management page", async () => {
   assert.match(api, /startGmailOAuth\(account = ""\)/);
   assert.match(api, /startOutlookOAuth\(account = ""\)/);
   assert.match(styles, /\.user-connector-grid/);
+  assert.match(styles, /\.connector-login-shell/);
+  assert.match(styles, /\.user-connectors-page\.login-only \.user-connector-grid/);
   assert.match(styles, /\.connector-action/);
   assert.match(styles, /\.connector-device-code/);
 });

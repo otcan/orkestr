@@ -68,6 +68,32 @@ test("gmail oauth start builds an authorize URL and saves state", async () => {
   assert.equal(state.account, "person@example.com");
 });
 
+test("gmail oauth start clears stale user-scoped oauth errors", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-gmail-clear-error-"));
+  const env = { ORKESTR_HOME: home };
+  const principal = userPrincipal({ id: "firat", displayName: "Firat" });
+  await writeConnectorConfig("gmail", {
+    clientId: "client-id",
+    clientSecret: "client-secret",
+    redirectUri: "http://localhost:19812/oauth/gmail/callback",
+  }, env);
+
+  const paths = userDataPaths("firat", env);
+  const errorPath = path.join(paths.secrets, "gmail-error.json");
+  await fs.mkdir(paths.secrets, { recursive: true });
+  await fs.writeFile(errorPath, JSON.stringify({ message: "Malformed auth code.", updatedAt: new Date().toISOString() }));
+
+  const before = await getSetupStatus({ env, principal });
+  assert.equal(before.connectors.find((connector) => connector.id === "gmail")?.state, "broken");
+
+  const started = await startGmailOAuth(env, { principal, account: "person@example.com" });
+  assert.equal(new URL(started.authorizeUrl).hostname, "accounts.google.com");
+  await assert.rejects(fs.access(errorPath), /ENOENT/);
+
+  const after = await getSetupStatus({ env, principal });
+  assert.equal(after.connectors.find((connector) => connector.id === "gmail")?.state, "partial");
+});
+
 test("gmail oauth start can use service env app credentials", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-gmail-env-start-"));
   const env = {

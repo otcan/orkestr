@@ -269,6 +269,7 @@ export async function startGmailOAuth(env = process.env, options = {}) {
     redirectUri,
     createdAt: new Date().toISOString(),
   });
+  await fs.rm(connectorFile(scope, "secrets", "gmail-error.json"), { force: true }).catch(() => {});
   const url = new URL("https://accounts.google.com/o/oauth2/v2/auth");
   url.searchParams.set("client_id", clientId);
   url.searchParams.set("redirect_uri", redirectUri);

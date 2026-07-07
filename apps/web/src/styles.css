@@ -2944,11 +2944,44 @@ ork-first-thread-wizard.first-thread-host {
   margin-top: 22px;
 }
 
+.connector-login-shell {
+  min-height: 100dvh;
+  display: grid;
+  align-items: center;
+  justify-items: center;
+  padding: 24px;
+  background:
+    linear-gradient(180deg, rgba(246, 250, 244, 0.96), rgba(229, 237, 226, 0.96)),
+    var(--bg);
+}
+
+.connector-login-shell .user-connectors-page {
+  width: min(100%, 520px);
+  max-height: none;
+  overflow: visible;
+  padding: 0;
+}
+
+.user-connectors-page.login-only .panel-title {
+  align-items: start;
+}
+
+.user-connectors-page.login-only .panel-title small {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-weight: 700;
+}
+
 .user-connector-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
   gap: 14px;
   margin-top: 14px;
+}
+
+.user-connectors-page.login-only .user-connector-grid {
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .connector-card {
@@ -2964,6 +2997,11 @@ ork-first-thread-wizard.first-thread-host {
 .connector-card.route-active {
   border-color: #4b8f6f;
   box-shadow: inset 3px 0 0 #4b8f6f;
+}
+
+.user-connectors-page.login-only .connector-card.route-active {
+  border-color: var(--line);
+  box-shadow: none;
 }
 
 .connector-action {
@@ -4022,7 +4060,13 @@ ork-first-thread-wizard.first-thread-host {
     max-width: 100%;
   }
 
+  .connector-login-shell {
+    align-items: start;
+    padding: 16px;
+  }
+
   .wa-summary-strip,
+  .connector-action,
   .timer-editor,
   .runtime-actions,
   .workspace-choice-grid,

@@ -1,10 +1,15 @@
-<section class="panel-body user-connectors-page">
+<section class="panel-body user-connectors-page" [class.login-only]="loginOnly()">
   <div class="panel-title">
     <div>
-      <p class="eyebrow">Connectors</p>
-      <h3>{{ currentUserLabel() }}</h3>
+      <p class="eyebrow">{{ loginOnly() ? "Secure sign-in" : "Connectors" }}</p>
+      <h3>{{ loginOnly() ? loginTitle() : currentUserLabel() }}</h3>
+      @if (loginOnly()) {
+        <small>{{ currentUserLabel() }}</small>
+      }
     </div>
-    <button class="secondary" type="button" (click)="load()" [disabled]="busy">Reload</button>
+    @if (!loginOnly()) {
+      <button class="secondary" type="button" (click)="load()" [disabled]="busy">Reload</button>
+    }
   </div>
 
   @if (error) {
@@ -36,7 +41,7 @@
               <input name="user-gmail-account" [(ngModel)]="gmailAccount" placeholder="name@example.com" autocomplete="email" />
             </label>
             <button type="submit" [disabled]="actionDisabled('gmail')">
-              {{ actionBusy === "gmail" ? "Starting" : "Connect Gmail" }}
+              {{ actionBusy === "gmail" ? "Starting" : loginOnly() ? "Open Gmail Sign-in" : "Connect Gmail" }}
             </button>
           </form>
           @if (gmailAuth?.authorizeUrl) {
