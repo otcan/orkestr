@@ -1106,11 +1106,14 @@ test("web shell exposes a user connector management page", async () => {
   assert.match(connectorsComponent, /this\.api\.startGmailOAuth\(this\.gmailAccount\)/);
   assert.match(connectorsComponent, /this\.api\.startOutlookOAuth\(this\.outlookAccount\)/);
   assert.match(connectorsComponent, /private readonly connectorOrder = \["whatsapp", "gmail", "outlook", "jira", "shopify", "linkedin", "browsers"\]/);
+  assert.match(connectorsComponent, /private appBasePath\(\): string/);
+  assert.match(connectorsComponent, /private locationPathParts\(\): string\[\]/);
+  assert.match(connectorsComponent, /deskPath\(\): string/);
   assert.match(connectorsTemplate, /name="user-gmail-account"/);
   assert.match(connectorsTemplate, /name="user-outlook-account"/);
   assert.match(connectorsTemplate, /Open Gmail sign-in/);
   assert.match(connectorsTemplate, /Open Microsoft sign-in/);
-  assert.match(connectorsTemplate, /href="\/desk"/);
+  assert.match(connectorsTemplate, /\[href\]="deskPath\(\)"/);
   assert.match(api, /startGmailOAuth\(account = ""\)/);
   assert.match(api, /startOutlookOAuth\(account = ""\)/);
   assert.match(styles, /\.user-connector-grid/);

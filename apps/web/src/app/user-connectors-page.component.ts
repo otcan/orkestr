@@ -140,9 +140,40 @@ export class UserConnectorsPageComponent implements OnInit {
   }
 
   routeConnectorId(): string {
-    const parts = globalThis.location?.pathname?.split("/").filter(Boolean) || [];
+    const parts = this.locationPathParts();
     const candidate = parts[0] === "connectors" ? String(parts[1] || "").toLowerCase() : "";
     return this.connectorOrder.includes(candidate) ? candidate : "";
+  }
+
+  deskPath(): string {
+    return this.appPath("/desk");
+  }
+
+  private appBasePath(): string {
+    const raw = globalThis.document?.querySelector("base")?.getAttribute("href") || "/";
+    try {
+      const parsed = new URL(raw, globalThis.location?.origin || "http://localhost");
+      const path = parsed.pathname.replace(/\/+$/, "");
+      return path === "/" ? "" : path;
+    } catch {
+      const path = String(raw || "/").split("?")[0].split("#")[0].replace(/\/+$/, "");
+      return path === "/" ? "" : path;
+    }
+  }
+
+  private locationPathParts(): string[] {
+    const pathname = globalThis.location?.pathname || "/";
+    const base = this.appBasePath();
+    const path = base && (pathname === base || pathname.startsWith(`${base}/`))
+      ? pathname.slice(base.length) || "/"
+      : pathname;
+    return path.split("/").filter(Boolean);
+  }
+
+  private appPath(path: string): string {
+    const normalized = path.startsWith("/") ? path : `/${path}`;
+    const base = this.appBasePath();
+    return base ? `${base}${normalized}` : normalized;
   }
 
   private errorText(error: unknown): string {

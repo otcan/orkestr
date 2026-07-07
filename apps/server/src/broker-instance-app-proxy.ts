@@ -7,6 +7,7 @@ import type { IncomingMessage, Server } from "node:http";
 import type { Duplex } from "node:stream";
 import { encryptBrokerInstanceProxyPayload, resolveBrokerConnectInstance } from "../../../packages/core/src/broker-instance-registry.js";
 import { securityCookieName, securitySessionForToken } from "../../../packages/core/src/security.js";
+import { listTenantVms } from "../../../packages/core/src/tenant-vm-registry.js";
 import { instanceSetupReturnPath } from "./instance-connect-setup.js";
 
 type BrokerAppRoute = {
@@ -169,18 +170,32 @@ function encodeBrokerAuthHeader(body: unknown): string {
 
 async function brokerProxyAuthHeader(request: any, target: BrokerAppTarget): Promise<string> {
   const session = request?.orkestrSecuritySession || {};
+  const tenantOwnerUserId = await ownerUserIdForBrokerInstance(target.instanceId);
+  const userId = tenantOwnerUserId || String(session.userId || "");
+  const role = tenantOwnerUserId ? "user" : String(session.role || "");
   const now = Date.now();
   const assertion = await encryptBrokerInstanceProxyPayload(target.instanceId, {
     kind: "broker_app_proxy",
     instanceId: target.instanceId,
     method: String(request?.method || "GET").toUpperCase(),
     path: target.upstreamPath || "/",
-    userId: String(session.userId || ""),
-    role: String(session.role || ""),
+    userId,
+    role,
     issuedAt: new Date(now).toISOString(),
     expiresAt: new Date(now + 30_000).toISOString(),
   }, process.env);
   return encodeBrokerAuthHeader(assertion.body);
+}
+
+async function ownerUserIdForBrokerInstance(instanceId = ""): Promise<string> {
+  const id = String(instanceId || "").trim();
+  if (!id) return "";
+  const vms = await listTenantVms(process.env).catch(() => []);
+  const vm = vms.find((item: any) =>
+    String(item?.labels?.brokerInstanceId || item?.labels?.instanceId || "").trim() === id ||
+    String(item?.endpoint?.brokerInstanceId || "").trim() === id,
+  );
+  return String(vm?.ownerUserId || "").trim();
 }
 
 async function proxyBrokerAppHttp(request: any, response: any): Promise<void> {
