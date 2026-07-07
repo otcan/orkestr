@@ -77,7 +77,7 @@ test("onboarding focuses the starter setup on virtual desktop and WhatsApp", asy
   assert.ok(onboarding.includes("Send test message"));
   assert.ok(onboarding.includes('type SetupPageMode = "setup" | "onboarding"'));
   assert.ok(onboarding.includes("after the installer has prepared the local Orkestr runtime"));
-  assert.ok(onboarding.includes('replaceState({}, "", "/setup")'));
+  assert.ok(onboarding.includes('replaceState({}, "", this.appPath("/setup"))'));
   assert.ok(onboarding.includes("@if (isOnboardingMode())"));
   assert.ok(onboarding.includes("setupSections()"));
   assert.ok(onboarding.includes('private readonly leanSetupConnectorIds: ConnectorStep[] = ["codex", "gmail", "whatsapp", "browsers"];'));

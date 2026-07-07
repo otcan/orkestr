@@ -1002,7 +1002,7 @@ test("web shell exposes a user automation management page", async () => {
   assert.match(component, /parts\[0\] === "timers"/);
   assert.match(component, /parts\[0\] === "ng" && parts\[1\] === "timers"/);
   assert.match(component, /!this\.isRouteLevelUserPanel\(this\.activePanel\) && !this\.selectedId && this\.threads\.length/);
-  assert.match(component, /panel === "userTimers"\) return "\/timers"/);
+  assert.match(component, /panel === "userTimers"\) return this\.appPath\("\/timers"\)/);
   assert.match(component, /globalThis\.document\.title = "Automations · Orkestr"/);
   assert.match(template, /<ork-user-timers-page><\/ork-user-timers-page>/);
   assert.match(template, /\(click\)="openPanel\('userTimers'\)"/);
@@ -1059,7 +1059,7 @@ test("web shell exposes a user desktop desk page", async () => {
   assert.match(component, /type Panel = .*"userDesk"/);
   assert.match(component, /parts\[0\] === "desk"/);
   assert.match(component, /parts\[0\] === "ng" && parts\[1\] === "desk"/);
-  assert.match(component, /panel === "userDesk"\) return "\/desk"/);
+  assert.match(component, /panel === "userDesk"\) return this\.appPath\("\/desk"\)/);
   assert.match(component, /globalThis\.document\.title = "Desk · Orkestr"/);
   assert.match(template, /<ork-user-desk-page><\/ork-user-desk-page>/);
   assert.match(template, /\(click\)="openPanel\('userDesk'\)"/);
@@ -1095,7 +1095,7 @@ test("web shell exposes a user connector management page", async () => {
   assert.match(component, /type Panel = .*"userConnectors"/);
   assert.match(component, /parts\[0\] === "connectors"/);
   assert.match(component, /parts\[0\] === "ng" && parts\[1\] === "connectors"/);
-  assert.match(component, /panel === "userConnectors"\) return "\/connectors"/);
+  assert.match(component, /panel === "userConnectors"\) return this\.appPath\("\/connectors"\)/);
   assert.match(component, /globalThis\.document\.title = "Connectors · Orkestr"/);
   assert.match(template, /<ork-user-connectors-page><\/ork-user-connectors-page>/);
   assert.match(template, /\(click\)="openPanel\('userConnectors'\)"/);
@@ -1164,7 +1164,7 @@ test("web shell exposes a user-scoped files page", async () => {
   assert.match(component, /parts\[0\] === "files"/);
   assert.match(component, /parts\[0\] === "ng" && parts\[1\] === "files"/);
   assert.match(component, /!this\.isRouteLevelUserPanel\(this\.activePanel\) && !this\.selectedId && this\.threads\.length/);
-  assert.match(component, /panel === "files"\) return "\/files"/);
+  assert.match(component, /panel === "files"\) return this\.appPath\("\/files"\)/);
   assert.match(component, /globalThis\.document\.title = "Files · Orkestr"/);
   assert.match(template, /<ork-files-page><\/ork-files-page>/);
   assert.match(template, /\(click\)="openPanel\('files'\)"/);
@@ -1183,6 +1183,18 @@ test("web shell exposes a user-scoped files page", async () => {
   assert.match(controller, /@Delete\("files"\)/);
   assert.match(styles, /\.files-page/);
   assert.match(styles, /\.file-row/);
+});
+
+test("web shell keeps broker-mounted tenant routes under base href", async () => {
+  const component = await fs.readFile("apps/web/src/app/app.component.ts", "utf8");
+
+  assert.match(component, /private appBasePath\(\): string/);
+  assert.match(component, /private locationPathParts\(\): string\[\]/);
+  assert.match(component, /private appPath\(path: string\): string/);
+  assert.match(component, /const parts = this\.locationPathParts\(\)/);
+  assert.match(component, /if \(panel === "userConnectors"\) return this\.appPath\("\/connectors"\)/);
+  assert.match(component, /return this\.appPath\(`\/thread\/\$\{encodeURIComponent\(id\)\}\$\{suffix\}`\)/);
+  assert.match(component, /return this\.appPath\(view === "system" \? "\/ops" : `\/ops\/\$\{view\}`\)/);
 });
 
 test("mobile desktop shell wraps noVNC with phone-first controls", async () => {
