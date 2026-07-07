@@ -227,10 +227,10 @@ export class SharedAppPageComponent implements OnInit, OnDestroy {
     this.renderNow();
     try {
       const route = this.route();
-      await firstValueFrom(this.api.pairSharedAppBrowser(route.instanceId, route.appSlug, route.shareToken, this.challenge.id));
+      const result = await firstValueFrom(this.api.pairSharedAppBrowser(route.instanceId, route.appSlug, route.shareToken, this.challenge.id));
       this.challenge = null;
       this.pairingRequired = false;
-      await this.load();
+      this.openPairedSharedApp(result.redirectPath || this.currentSharedPath());
     } catch (error) {
       this.pairingError = this.errorText(error);
     } finally {
@@ -257,6 +257,29 @@ export class SharedAppPageComponent implements OnInit, OnDestroy {
       appSlug: decodeURIComponent(parts[3] || ""),
       shareToken: decodeURIComponent(parts[5] || ""),
     };
+  }
+
+  private openPairedSharedApp(redirectPath = ""): void {
+    const target = this.sameOriginPath(redirectPath) || this.currentSharedPath() || "/";
+    globalThis.location?.replace(target);
+  }
+
+  private currentSharedPath(): string {
+    return `${globalThis.location?.pathname || ""}${globalThis.location?.search || ""}${globalThis.location?.hash || ""}`;
+  }
+
+  private sameOriginPath(raw = ""): string {
+    const value = String(raw || "").trim();
+    if (!value) return "";
+    const current = globalThis.location;
+    if (!current?.origin) return "";
+    try {
+      const url = new URL(value, current.origin);
+      if (url.origin !== current.origin) return "";
+      return `${url.pathname}${url.search}${url.hash}`;
+    } catch {
+      return "";
+    }
   }
 
   private renderNow(): void {

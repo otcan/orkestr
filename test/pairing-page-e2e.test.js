@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { startServer } from "../apps/server/src/server.js";
-import { approvePairingChallenge, createPairingChallenge, pairBrowser, securityCookieName } from "../packages/core/src/security.js";
+import { approvePairingChallenge, createPairingChallenge, listPairingChallenges, pairBrowser, securityCookieName } from "../packages/core/src/security.js";
 import { createAppShare } from "../packages/core/src/shared-apps.js";
 import { adminPrincipal } from "../packages/core/src/principal.js";
 
@@ -248,6 +248,14 @@ test("unauthenticated shared app approval stays on the shared route", async (t) 
     await approvePairingChallenge(approveCode, { env: process.env });
     await page.waitForFunction(() => document.body.innerText.includes("Betul Y."), { timeout: 20_000 });
     const bodyAfterApproval = await page.$eval("body", (node) => node.innerText);
+    const challenges = await listPairingChallenges({ env: process.env, includeExpired: true });
+    const routeChallenges = challenges.challenges.filter((challenge) =>
+      challenge.instanceId === "main" &&
+      challenge.appSlug === "outreach-review" &&
+      challenge.requestedPath === requestedPath
+    );
+    assert.equal(routeChallenges.filter((challenge) => challenge.status === "pending").length, 0);
+    assert.equal(routeChallenges.filter((challenge) => challenge.status === "consumed").length, 1);
     assert.equal(bodyAfterApproval.includes("Cannot read properties"), false);
     assert.equal(bodyAfterApproval.includes("Approve this shared review"), false);
     assert.equal(new URL(page.url()).pathname, requestedPath);
