@@ -2301,6 +2301,10 @@ export class ApiService {
     return this.http.post<ThreadInputResponse>(this.api(`/threads/${encodeURIComponent(id)}/input`), body);
   }
 
+  setRuntimeSurface(id: string, runtime: "api" | "terminal" | "agent"): Observable<ThreadInputResponse> {
+    return this.sendThreadInput(id, `/switch ${runtime}`);
+  }
+
   wakeThread(id: string): Observable<unknown> {
     return this.http.post(this.api(`/threads/${encodeURIComponent(id)}/wake`), { reason: "ui_wake" });
   }

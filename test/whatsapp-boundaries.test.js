@@ -82,7 +82,8 @@ test("WhatsApp debug footer is gated and marks progress as update", () => {
   assert.match(enabled, /mode:plan/);
   assert.match(enabled, /rt:tmux/);
   assert.match(enabled, /msg:update/);
-  assert.match(enabled, /switch:\/code/);
+  assert.match(enabled, /mode-switch:\/code/);
+  assert.match(enabled, /rt-switch:\/switch-api/);
 
   const apiRuntime = appendWhatsAppDebugFooter("Done", {
     env: { ORKESTR_WHATSAPP_DEBUG_FOOTER: "1" },
@@ -90,7 +91,8 @@ test("WhatsApp debug footer is gated and marks progress as update", () => {
     thread: { runtimeKind: "codex-app-server" },
   });
   assert.match(apiRuntime, /rt:api/);
-  assert.match(apiRuntime, /switch:\/plan/);
+  assert.match(apiRuntime, /mode-switch:\/plan/);
+  assert.match(apiRuntime, /rt-switch:\/switch-terminal/);
 });
 
 test("WhatsApp mirror policy forwards Codex final replies and progress updates", () => {

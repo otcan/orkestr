@@ -919,9 +919,13 @@ test("web shell exposes runtime surface and Codex mode shortcuts", async () => {
   const component = await fs.readFile("apps/web/src/app/app.component.ts", "utf8");
   const styles = await fs.readFile("apps/web/src/styles.css", "utf8");
 
-  assert.match(template, /class="runtime-surface-pill"/);
-  assert.match(template, /threadRuntimeModeShortLabel\(thread\)/);
-  assert.match(template, /threadRuntimeModeLabel\(thread\)/);
+  assert.match(template, /class="runtime-surface-toggle"/);
+  assert.match(template, /switchRuntimeSurface\('api'\)/);
+  assert.match(template, /switchRuntimeSurface\('terminal'\)/);
+  assert.match(template, /switchRuntimeSurface\('agent'\)/);
+  assert.match(template, /\/switch api/);
+  assert.match(template, /\/switch term/);
+  assert.match(template, /\/switch agent/);
   assert.match(template, /codexModeShortcutTitle\(thread\)/);
   assert.match(template, /Switch to Code mode with \/code/);
   assert.match(template, /Switch to Plan mode with \/plan/);
@@ -937,9 +941,13 @@ test("web shell exposes runtime surface and Codex mode shortcuts", async () => {
   assert.match(component, /version\.buildId \|\| version\.releaseId/);
   assert.match(component, /deploymentTrackLabel\(\): string/);
   assert.match(component, /deploymentVersionTitle\(\): string/);
+  assert.match(component, /switchRuntimeSurface\(runtime: "api" \| "terminal" \| "agent"\): Promise<void>/);
+  assert.match(component, /runtimeSurfaceSwitchDisabled\(runtime: "api" \| "terminal" \| "agent"\): boolean/);
+  assert.match(component, /runtimeSurfaceShortcutTitle\(thread: ThreadSummary \| null\): string/);
   assert.match(component, /Shortcuts: \/code, \/plan/);
-  assert.match(component, /Runtime: \$\{this\.threadRuntimeModeLabel\(thread\)\}/);
+  assert.match(component, /Switch: \/switch api, \/switch terminal, \/switch agent/);
   assert.match(styles, /\.runtime-surface-pill/);
+  assert.match(styles, /\.runtime-surface-toggle/);
   assert.match(styles, /\.runtime-surface-pill\.codex-api/);
   assert.match(styles, /\.runtime-surface-pill\.codex-tmux/);
   assert.match(styles, /\.runtime-surface-pill\.attached-terminal/);

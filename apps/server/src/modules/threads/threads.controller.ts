@@ -106,7 +106,7 @@ function runtimeTypeForceRequested(text: string): boolean {
 }
 
 function runtimeTypeCommandHelp() {
-  return "Use /rt api, /rt agent, or /rt terminal. Shortcuts: /api, /agent, /terminal.";
+  return "Use /switch api, /switch agent, or /switch terminal. Shortcuts: /api, /agent, /term, /terminal.";
 }
 
 function queuedInputResponse(thread: Record<string, any>, message: Record<string, any>, reason = "pending_delivery") {
@@ -391,7 +391,7 @@ export class ThreadsController {
         state: "failed",
         deliveryState: "failed",
         observedVia: "orkestr_runtime_type_command_blocked",
-        error: "Active Codex API turn is running. Use /rt terminal interrupt or /rt agent interrupt to force the switch.",
+        error: "Active Codex API turn is running. Use /switch terminal interrupt or /switch agent interrupt to force the switch.",
       });
       return {
         ok: false,
