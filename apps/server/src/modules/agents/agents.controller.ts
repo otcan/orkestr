@@ -52,8 +52,9 @@ export class AgentsController {
   @Post("agents/:agentId/run-next")
   @HttpCode(200)
   async runNext(@Param("agentId") agentId: string, @Body() body: Record<string, unknown> = {}) {
-    const execution = await runNextAgentMessage(agentId, body);
-    const whatsappDelivery = await deliverWhatsAppReplies().catch((error) => ({ error: error.message || String(error) }));
+    const env = { ...process.env };
+    const execution = await runNextAgentMessage(agentId, body, env);
+    const whatsappDelivery = await deliverWhatsAppReplies(env).catch((error) => ({ error: error.message || String(error) }));
     return { execution, whatsappDelivery };
   }
 }

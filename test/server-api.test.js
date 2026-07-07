@@ -32,6 +32,18 @@ async function waitForMessage(threadId, predicate, { attempts = 20, intervalMs =
   return null;
 }
 
+async function waitForFile(filePath, { attempts = 50, intervalMs = 10 } = {}) {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      await fs.access(filePath);
+      return true;
+    } catch {
+      await new Promise((resolve) => setTimeout(resolve, intervalMs));
+    }
+  }
+  return false;
+}
+
 async function createFakeCodexAppServer(home) {
   const bin = path.join(home, "bin");
   await fs.mkdir(bin, { recursive: true });
@@ -411,6 +423,70 @@ test("server exposes health, readiness, version, and agent message APIs", async 
     else process.env.ORKESTR_RUNTIME_CODEX_COMMAND = priorRuntimeCodexCommand;
     if (priorPath === undefined) delete process.env.PATH;
     else process.env.PATH = priorPath;
+  }
+});
+
+test("agent run-next keeps its request env while executor work is in flight", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-env-snapshot-"));
+  const otherHome = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-env-other-"));
+  const overlayDir = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-env-overlay-"));
+  const startedFile = path.join(home, "slow-executor-started");
+  await fs.mkdir(path.join(overlayDir, "executors"), { recursive: true });
+  await fs.writeFile(
+    path.join(overlayDir, "overlay.json"),
+    JSON.stringify({ executors: { default: "slow-env", modules: ["./executors/slow-env.js"] } }, null, 2),
+  );
+  await fs.writeFile(
+    path.join(overlayDir, "executors", "slow-env.js"),
+    `import fs from "node:fs/promises";
+export const executorAdapter = {
+  id: "slow-env",
+  label: "Slow Env",
+  async run({ env, message }) {
+    await fs.writeFile(env.SLOW_EXECUTOR_STARTED_FILE, "started", "utf8");
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    return { output: "slow:" + message.text };
+  }
+};
+`,
+  );
+  const priorHome = process.env.ORKESTR_HOME;
+  const priorOverlay = process.env.ORKESTR_OVERLAY_DIR;
+  const priorStartedFile = process.env.SLOW_EXECUTOR_STARTED_FILE;
+  process.env.ORKESTR_HOME = home;
+  process.env.ORKESTR_OVERLAY_DIR = overlayDir;
+  process.env.SLOW_EXECUTOR_STARTED_FILE = startedFile;
+  const server = await startServer({ port: 0, host: "127.0.0.1" });
+  const { port } = server.address();
+  const baseUrl = `http://127.0.0.1:${port}`;
+
+  try {
+    await request(baseUrl, "/api/agents/coding-agent/messages", {
+      method: "POST",
+      body: JSON.stringify({ text: "snapshot me" }),
+    });
+    const runPromise = request(baseUrl, "/api/agents/coding-agent/run-next", {
+      method: "POST",
+      body: JSON.stringify({}),
+    });
+    assert.equal(await waitForFile(startedFile), true);
+    process.env.ORKESTR_HOME = otherHome;
+    const run = await runPromise;
+    process.env.ORKESTR_HOME = home;
+    const messages = await request(baseUrl, "/api/agents/coding-agent/messages");
+
+    assert.equal(run.execution.state, "completed");
+    assert.equal(messages.messages.length, 2);
+    assert.equal(messages.messages[0].state, "completed");
+    assert.equal(messages.messages[1].text, "slow:snapshot me");
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    if (priorHome === undefined) delete process.env.ORKESTR_HOME;
+    else process.env.ORKESTR_HOME = priorHome;
+    if (priorOverlay === undefined) delete process.env.ORKESTR_OVERLAY_DIR;
+    else process.env.ORKESTR_OVERLAY_DIR = priorOverlay;
+    if (priorStartedFile === undefined) delete process.env.SLOW_EXECUTOR_STARTED_FILE;
+    else process.env.SLOW_EXECUTOR_STARTED_FILE = priorStartedFile;
   }
 });
 
