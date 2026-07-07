@@ -80,6 +80,12 @@ test("shared app URL creates scoped pairing and limits the approved session", as
     const challengeId = redirectParam(location, "challengeId");
     assert.ok(challengeId);
 
+    const repeatedOpen = await fetch(`${baseUrl}/i/main/a/outreach-review/s/share-one`, { redirect: "manual" });
+    assert.equal(repeatedOpen.status, 302);
+    const repeatedLocation = repeatedOpen.headers.get("location") || "";
+    assert.equal(redirectParam(repeatedLocation, "challengeId"), challengeId);
+    assert.equal(redirectParam(repeatedLocation, "return"), "/i/main/a/outreach-review/s/share-one");
+
     await approvePairingChallenge(challengeId, { approvedBy: "node:test", env: process.env });
     const pair = await fetch(`${baseUrl}/api/setup/security/pair`, {
       method: "POST",

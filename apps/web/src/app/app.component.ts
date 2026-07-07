@@ -4428,6 +4428,8 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     const params = new URLSearchParams();
     const instanceId = source.get("instanceId") || source.get("instance") || source.get("orkestrInstanceId") || "";
     if (instanceId) params.set("instanceId", instanceId);
+    const challengeId = source.get("challengeId") || source.get("challenge") || "";
+    if (challengeId) params.set("challengeId", challengeId);
     const returnTo = source.get("return");
     if (returnTo) params.set("return", returnTo);
     const query = params.toString();

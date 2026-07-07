@@ -96,6 +96,7 @@ async function maybeHandleSharedAppRoute(request: any, response: any, requestUrl
     appSlug: resolved.share.appSlug,
     requestedPath: route.fullPath,
     allowedActions: resolved.share.allowedActionsJson || [],
+    reusePending: true,
   } as any);
   const target = new URL("/setup/pairing", "http://localhost");
   target.searchParams.set("instanceId", resolved.share.instanceId);

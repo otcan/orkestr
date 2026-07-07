@@ -73,6 +73,11 @@ function normalizeAllowedActions(value = []) {
   return [...new Set(items.map((item) => String(item || "").trim()).filter(Boolean))].slice(0, 50);
 }
 
+function sameStringList(left = [], right = []) {
+  if (left.length !== right.length) return false;
+  return left.every((item, index) => item === right[index]);
+}
+
 function remoteAuthSignal(env = process.env, urls = publicUrlConfig(env), host = bindHost(env)) {
   const publicUrlConfigured = Boolean(
     urls.primaryDomain ||
@@ -871,13 +876,50 @@ export async function securityStatus(env = process.env) {
   };
 }
 
-export async function createPairingChallenge({ request, env = process.env, userId = "", role = "", instanceId = "", shareId = "", appSlug = "", requestedPath = "", allowedActions = [] } = {}) {
+export async function createPairingChallenge({ request, env = process.env, userId = "", role = "", instanceId = "", shareId = "", appSlug = "", requestedPath = "", allowedActions = [], reusePending = false } = {}) {
   const config = await readSecurityConfig(env);
   const normalizedRole = String(role || "").trim().toLowerCase() === "user" ? "user" : "admin";
   const normalizedUserId = userId ? normalizeUserId(userId) : "";
   const normalizedInstanceId = normalizeInstanceId(instanceId);
   const normalizedShareId = normalizeShareId(shareId);
   const normalizedAppSlug = normalizeAppSlug(appSlug);
+  const normalizedRequestedPath = String(requestedPath || "").slice(0, 1000);
+  const normalizedAllowedActions = normalizeAllowedActions(allowedActions);
+  const requestedUserAgent = String(request?.headers?.["user-agent"] || "").slice(0, 240);
+  const requestedIp = requestIp(request).slice(0, 80);
+  const now = Date.now();
+  if (reusePending && normalizedShareId && normalizedAppSlug && normalizedRequestedPath) {
+    const reusable = (config.challenges || [])
+      .map((challenge) => normalizeChallenge(challenge, now))
+      .find((challenge) =>
+        challenge.status === "pending" &&
+        String(challenge.instanceId || "") === normalizedInstanceId &&
+        String(challenge.userId || "") === normalizedUserId &&
+        String(challenge.role || "") === (normalizedUserId ? normalizedRole : "") &&
+        String(challenge.shareId || "") === normalizedShareId &&
+        String(challenge.appSlug || "") === normalizedAppSlug &&
+        String(challenge.requestedPath || "") === normalizedRequestedPath &&
+        sameStringList(normalizeAllowedActions(challenge.allowedActions || []), normalizedAllowedActions)
+      );
+    if (reusable) {
+      await appendEvent({
+        type: "security_pairing_challenge_reused",
+        challengeId: reusable.id,
+        instanceId: reusable.instanceId || null,
+        shareId: reusable.shareId || null,
+        appSlug: reusable.appSlug || null,
+        userId: reusable.userId || null,
+        role: reusable.role || null,
+      }, env).catch(() => {});
+      return {
+        ok: true,
+        challengeId: reusable.id,
+        challenge: publicChallenge(reusable, now),
+        expiresAt: reusable.expiresAt,
+        reused: true,
+      };
+    }
+  }
   const existingCodes = new Set((config.challenges || []).map((item) => String(item.approveCode || "").trim().toUpperCase()).filter(Boolean));
   let approveCode = "";
   for (let attempt = 0; attempt < 20 && !approveCode; attempt += 1) {
@@ -892,14 +934,14 @@ export async function createPairingChallenge({ request, env = process.env, userI
     createdAt: nowIso(),
     expiresAt: new Date(Date.now() + challengeTtlMs).toISOString(),
     instanceId: normalizedInstanceId,
-    requestedUserAgent: String(request?.headers?.["user-agent"] || "").slice(0, 240),
-    requestedIp: requestIp(request).slice(0, 80),
+    requestedUserAgent,
+    requestedIp,
     userId: normalizedUserId,
     role: normalizedUserId ? normalizedRole : "",
     shareId: normalizedShareId,
     appSlug: normalizedAppSlug,
-    requestedPath: String(requestedPath || "").slice(0, 1000),
-    allowedActions: normalizeAllowedActions(allowedActions),
+    requestedPath: normalizedRequestedPath,
+    allowedActions: normalizedAllowedActions,
   };
   await writeSecurityConfig({
     ...config,
