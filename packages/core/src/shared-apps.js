@@ -353,8 +353,8 @@ export async function sharedAppData(instanceId, appSlug, shareToken, { env = pro
 
 export function assertSessionScope(session = null, share = {}) {
   if (!session?.id) throw sharedAppError("shared_app_session_required", 401);
-  if (String(session.instanceId || "") !== String(share.instanceId || "")) throw sharedAppError("shared_app_session_scope_denied", 403);
-  if (String(session.appSlug || "") !== String(share.appSlug || "")) throw sharedAppError("shared_app_session_scope_denied", 403);
+  if (String(session.instanceId || "") !== String(share.instanceId || "")) throw sharedAppError("shared_app_session_required", 401);
+  if (String(session.appSlug || "") !== String(share.appSlug || "")) throw sharedAppError("shared_app_session_required", 401);
   if (String(session.shareId || "") !== String(share.id || "")) throw sharedAppError("shared_app_session_required", 401);
 }
 

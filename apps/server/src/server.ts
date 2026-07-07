@@ -157,10 +157,9 @@ function authorizeScopedShareSessionRequest(request: any, session: any) {
   if (surface !== "shared-apps") return { ok: false, statusCode: 403, error: "shared_app_session_scope_denied" };
   const route = sharedAppApiRoute(parts);
   if (!route) return { ok: false, statusCode: 403, error: "shared_app_session_scope_denied" };
-  const matchingScope =
-    route.instanceId === String(session.instanceId || "") &&
-    route.appSlug === String(session.appSlug || "");
-  if (!matchingScope) return { ok: false, statusCode: 403, error: "shared_app_session_scope_denied" };
+  // Let shared-app controllers decide whether the current share session matches
+  // the requested share. A stale share cookie for another shared URL should show
+  // the pairing UI, not hard-fail the page before it can recover.
   return { ok: true };
 }
 

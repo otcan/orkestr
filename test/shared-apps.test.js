@@ -70,12 +70,17 @@ test("shared app URL creates scoped pairing and limits the approved session", as
     shareToken: "share-two",
     filtersJson: { people: [{ id: "hilal", name: "Hilal O." }] },
   }, { principal, env: process.env });
+  const third = await createAppShare("main", "ayk-review", {
+    shareToken: "share-three",
+    filtersJson: { people: [{ id: "ayk", name: "AYK" }] },
+  }, { principal, env: process.env });
   const expired = await createAppShare("main", "outreach-review", {
     shareToken: "expired-share",
     expiresAt: new Date(Date.now() - 60_000).toISOString(),
   }, { principal, env: process.env });
   assert.equal(first.share.shareToken, "share-one");
   assert.equal(second.share.shareToken, "share-two");
+  assert.equal(third.share.shareToken, "share-three");
   assert.equal(expired.share.shareToken, "expired-share");
 
   const server = await startServer({ port: 0, host: "127.0.0.1" });
@@ -178,6 +183,10 @@ test("shared app URL creates scoped pairing and limits the approved session", as
     const otherShare = await fetch(`${baseUrl}/api/shared-apps/i/main/a/outreach-review/s/share-two`, { headers: { cookie: sessionCookie } });
     assert.equal(otherShare.status, 401);
     assert.equal((await readJson(otherShare)).error, "shared_app_session_required");
+
+    const otherAppShare = await fetch(`${baseUrl}/api/shared-apps/i/main/a/ayk-review/s/share-three`, { headers: { cookie: sessionCookie } });
+    assert.equal(otherAppShare.status, 401);
+    assert.equal((await readJson(otherAppShare)).error, "shared_app_session_required");
 
     const normalApi = await fetch(`${baseUrl}/api/threads`, { headers: { cookie: sessionCookie } });
     assert.equal(normalApi.status, 403);
