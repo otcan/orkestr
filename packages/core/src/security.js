@@ -1232,6 +1232,9 @@ function isAllowedBeforePairing(request) {
   if (method === "GET" && ["/api/health", "/api/ready", "/api/version", "/api/setup/status"].some((path) => url.startsWith(path))) return true;
   if (method === "POST" && url === "/api/public/waitlist") return true;
   if (method === "POST" && (url === "/api/setup/security/challenge" || url === "/api/setup/security/challenges")) return true;
+  if (method === "POST" && /^\/api\/shared-apps\/i\/[^/]+\/a\/[^/]+\/s\/[^/]+\/challenge$/.test(url)) return true;
+  if (method === "GET" && /^\/api\/shared-apps\/i\/[^/]+\/a\/[^/]+\/s\/[^/]+\/challenges\/[^/]+$/.test(url)) return true;
+  if (method === "POST" && /^\/api\/shared-apps\/i\/[^/]+\/a\/[^/]+\/s\/[^/]+\/pair$/.test(url)) return true;
   if (method === "POST" && (url === "/api/broker/instances/register" || /^\/api\/broker\/instances\/[^/]+\/heartbeat$/.test(url))) return true;
   if (method === "POST" && /^\/api\/broker\/instances\/[^/]+\/whatsapp\/(?:onboarding|history)$/.test(url)) return true;
   if (method === "POST" && /^\/api\/broker\/instances\/[^/]+\/google-workspace\/(?:connect-link|refresh-token)$/.test(url)) return true;

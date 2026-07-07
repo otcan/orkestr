@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { INestApplication } from "@nestjs/common";
 import { resolveBrokerConnectInstance } from "../../../packages/core/src/broker-instance-registry.js";
-import { createPairingChallenge, securityCookieName, verifySecurityToken } from "../../../packages/core/src/security.js";
+import { securityCookieName, verifySecurityToken } from "../../../packages/core/src/security.js";
 import { resolveSharedAppShare } from "../../../packages/core/src/shared-apps.js";
 import { instanceSetupPairingRedirectPath, normalizeInstanceId } from "./instance-connect-setup.js";
 import { publicPairingUrl, publicSiteAllowedForHost, publicSitePath, renderPublicSite } from "./public-site.js";
@@ -88,26 +88,7 @@ async function maybeHandleSharedAppRoute(request: any, response: any, requestUrl
   if (resolved.deniedReason) {
     return sendSharedAppDenied(response, resolved.deniedReason === "expired" ? "This share link has expired." : "This share link has been revoked.", 403);
   }
-  if (requestHasScopedShareSession(request, resolved.share)) return false;
-  const challenge = await createPairingChallenge({
-    request,
-    instanceId: resolved.share.instanceId,
-    shareId: resolved.share.id,
-    appSlug: resolved.share.appSlug,
-    requestedPath: route.fullPath,
-    allowedActions: resolved.share.allowedActionsJson || [],
-    reusePending: true,
-  } as any);
-  const target = new URL("/setup/pairing", "http://localhost");
-  target.searchParams.set("instanceId", resolved.share.instanceId);
-  target.searchParams.set("challengeId", challenge.challengeId);
-  target.searchParams.set("return", route.fullPath);
-  return response
-    .status(302)
-    .header("cache-control", "no-store")
-    .header("location", `${target.pathname}${target.search}`)
-    .type("text/plain; charset=utf-8")
-    .send("Redirecting to Orkestr pairing.");
+  return false;
 }
 
 function parseSharedAppRoute(requestUrl: string) {
@@ -132,16 +113,6 @@ function safeDecode(value = "") {
   } catch {
     return value;
   }
-}
-
-function requestHasScopedShareSession(request: any, share: Record<string, unknown> = {}): boolean {
-  const session = request?.orkestrSecuritySession || null;
-  return Boolean(
-    session &&
-    String(session.instanceId || "") === String(share.instanceId || "") &&
-    String(session.appSlug || "") === String(share.appSlug || "") &&
-    String(session.shareId || "") === String(share.id || "")
-  );
 }
 
 function sendSharedAppDenied(response: any, message: string, statusCode = 403): boolean {

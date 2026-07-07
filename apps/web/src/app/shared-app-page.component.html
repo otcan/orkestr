@@ -7,7 +7,35 @@
     <strong>{{ classifiedCount() }} / {{ people.length }}</strong>
   </header>
 
-  @if (error) {
+  @if (pairingRequired) {
+    <section class="shared-app-access" aria-label="Shared App Access">
+      <div>
+        <p>Shared review access</p>
+        <h2>Approve this shared review</h2>
+      </div>
+
+      @if (pairingError) {
+        <div class="shared-access-notice error">{{ pairingError }}</div>
+      } @else if (pairingNotice) {
+        <div class="shared-access-notice">{{ pairingNotice }}</div>
+      }
+
+      @if (challenge && !challengeClosed()) {
+        <button class="shared-access-command" type="button" (click)="copyCommand()" [attr.aria-label]="'Copy ' + approveCommand()">
+          <code>{{ approveCommand() }}</code>
+        </button>
+        <div class="shared-access-status">
+          <span [class]="challengeStatusClass()">{{ challenge.status }}</span>
+          <small>Expires {{ expiryLabel() }}</small>
+        </div>
+        <button class="secondary" type="button" (click)="refreshChallenge()" [disabled]="pairingBusy">Check</button>
+      } @else {
+        <button type="button" (click)="ensureChallenge()" [disabled]="pairingBusy">
+          {{ pairingBusy ? "Creating" : "Create approval command" }}
+        </button>
+      }
+    </section>
+  } @else if (error) {
     <section class="shared-app-state error">{{ error }}</section>
   } @else if (busy) {
     <section class="shared-app-state">Loading...</section>

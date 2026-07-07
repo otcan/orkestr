@@ -165,6 +165,99 @@ test("pairing page redirects to challenge path after pairing", async (t) => {
   }
 });
 
+test("unauthenticated shared app approval stays on the shared route", async (t) => {
+  const puppeteer = await loadPuppeteer(t);
+  if (!puppeteer) return;
+  const chrome = await findChrome();
+  if (!chrome) {
+    t.skip("No Chrome or Chromium executable available for browser e2e.");
+    return;
+  }
+
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-shared-app-inline-pairing-"));
+  const prior = saveEnv();
+  process.env.ORKESTR_HOME = home;
+  process.env.ORKESTR_AUTH_REQUIRED = "1";
+  process.env.ORKESTR_RECOVER_RUNNING_ON_START = "0";
+
+  const principal = adminPrincipal({ id: "admin", displayName: "Admin" });
+  await createAppShare("main", "outreach-review", {
+    shareToken: "share-one",
+    title: "Outreach Review",
+    filtersJson: { people: [{ id: "betul", name: "Betul Y." }] },
+  }, { principal, env: process.env });
+  const requestedPath = "/i/main/a/outreach-review/s/share-one";
+
+  const server = await startServer({ port: 0, host: "127.0.0.1" });
+  const { port } = server.address();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  let browser;
+
+  try {
+    browser = await puppeteer.launch({
+      headless: "new",
+      executablePath: chrome,
+      args: ["--no-sandbox", "--disable-setuid-sandbox"],
+    });
+    const page = await browser.newPage();
+    const errors = [];
+    page.on("pageerror", (error) => errors.push(error.message || String(error)));
+    await page.evaluateOnNewDocument(() => {
+      Object.defineProperty(window, "__orkestrSharedSnapshots", { value: [], configurable: true });
+      const record = () => {
+        const list = window.__orkestrSharedSnapshots;
+        if (!Array.isArray(list) || list.length > 500) return;
+        list.push({
+          path: location.pathname,
+          text: (document.body?.innerText || "").slice(0, 1200),
+        });
+      };
+      const install = () => {
+        record();
+        new MutationObserver(record).observe(document.body || document.documentElement, {
+          childList: true,
+          subtree: true,
+          characterData: true,
+        });
+      };
+      if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", install, { once: true });
+      else install();
+      const NativeWebSocket = window.WebSocket;
+      Object.defineProperty(window, "__orkestrWsUrls", { value: [], configurable: true });
+      function RecordingWebSocket(url, protocols) {
+        window.__orkestrWsUrls.push(String(url));
+        return protocols === undefined ? new NativeWebSocket(url) : new NativeWebSocket(url, protocols);
+      }
+      Object.setPrototypeOf(RecordingWebSocket, NativeWebSocket);
+      RecordingWebSocket.prototype = NativeWebSocket.prototype;
+      window.WebSocket = RecordingWebSocket;
+    });
+
+    await page.goto(`${baseUrl}${requestedPath}`, { waitUntil: "networkidle2" });
+    await page.waitForFunction(() => document.body.innerText.includes("Approve this shared review"), { timeout: 10_000 });
+    await page.waitForFunction(() => document.body.innerText.includes("orkestr connect approve"), { timeout: 10_000 });
+    assert.equal(new URL(page.url()).pathname, requestedPath);
+    const snapshots = await page.evaluate(() => window.__orkestrSharedSnapshots || []);
+    assert.equal(snapshots.some((snapshot) => snapshot.path === "/setup/pairing"), false);
+    assert.equal(snapshots.some((snapshot) => snapshot.text.includes("Approve this browser")), false);
+    assert.equal(snapshots.some((snapshot) => snapshot.text.includes("Orkestr Setup")), false);
+
+    const command = await page.$eval(".shared-access-command code", (node) => node.textContent.trim());
+    const approveCode = command.split(/\s+/).at(-1) || "";
+    assert.match(approveCode, /^[A-Z0-9]{4,8}$/);
+    await approvePairingChallenge(approveCode, { env: process.env });
+    await page.waitForFunction(() => document.body.innerText.includes("Betul Y."), { timeout: 20_000 });
+    assert.equal(new URL(page.url()).pathname, requestedPath);
+    const wsUrls = await page.evaluate(() => window.__orkestrWsUrls || []);
+    assert.deepEqual(wsUrls.filter((url) => url.includes("/api/threads/summary/stream")), []);
+    assert.deepEqual(errors, []);
+  } finally {
+    if (browser) await browser.close();
+    await new Promise((resolve) => server.close(resolve));
+    restoreEnv(prior);
+  }
+});
+
 test("shared app page does not connect the normal thread summary stream", async (t) => {
   const puppeteer = await loadPuppeteer(t);
   if (!puppeteer) return;

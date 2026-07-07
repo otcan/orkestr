@@ -24,11 +24,6 @@ function restoreEnv(snapshot) {
   }
 }
 
-function redirectParam(location, key) {
-  const parsed = new URL(location, "http://127.0.0.1");
-  return parsed.searchParams.get(key) || "";
-}
-
 async function rejectedWebSocket(url, headers = {}) {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(url, { headers });
@@ -96,22 +91,40 @@ test("shared app URL creates scoped pairing and limits the approved session", as
     assert.match(await expiredResponse.text(), /expired/);
 
     const open = await fetch(`${baseUrl}/i/main/a/outreach-review/s/share-one`, { redirect: "manual" });
-    assert.equal(open.status, 302);
-    const location = open.headers.get("location") || "";
-    assert.match(location, /^\/setup\/pairing\?/);
-    assert.equal(redirectParam(location, "instanceId"), "main");
-    assert.equal(redirectParam(location, "return"), "/i/main/a/outreach-review/s/share-one");
-    const challengeId = redirectParam(location, "challengeId");
-    assert.ok(challengeId);
+    assert.equal(open.status, 200);
+    assert.equal(open.headers.get("location"), null);
+    assert.match(await open.text(), /<ork-root/);
 
-    const repeatedOpen = await fetch(`${baseUrl}/i/main/a/outreach-review/s/share-one`, { redirect: "manual" });
-    assert.equal(repeatedOpen.status, 302);
-    const repeatedLocation = repeatedOpen.headers.get("location") || "";
-    assert.equal(redirectParam(repeatedLocation, "challengeId"), challengeId);
-    assert.equal(redirectParam(repeatedLocation, "return"), "/i/main/a/outreach-review/s/share-one");
+    const unauthData = await fetch(`${baseUrl}/api/shared-apps/i/main/a/outreach-review/s/share-one`);
+    assert.equal(unauthData.status, 401);
+    assert.equal((await readJson(unauthData)).error, "browser_pairing_required");
+
+    const createdChallenge = await readJson(await fetch(`${baseUrl}/api/shared-apps/i/main/a/outreach-review/s/share-one/challenge`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ requestedPath: "/i/main/a/outreach-review/s/share-one" }),
+    }));
+    assert.equal(createdChallenge.ok, true);
+    const challengeId = createdChallenge.challengeId;
+    assert.ok(challengeId);
+    assert.equal(createdChallenge.challenge.instanceId, "main");
+    assert.equal(createdChallenge.challenge.appSlug, "outreach-review");
+    assert.equal(createdChallenge.challenge.shareId, first.share.id);
+    assert.equal(createdChallenge.challenge.requestedPath, "/i/main/a/outreach-review/s/share-one");
+
+    const repeatedChallenge = await readJson(await fetch(`${baseUrl}/api/shared-apps/i/main/a/outreach-review/s/share-one/challenge`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ requestedPath: "/i/main/a/outreach-review/s/share-one" }),
+    }));
+    assert.equal(repeatedChallenge.challengeId, challengeId);
+    assert.equal(repeatedChallenge.reused, true);
 
     await approvePairingChallenge(challengeId, { approvedBy: "node:test", env: process.env });
-    const pair = await fetch(`${baseUrl}/api/setup/security/pair`, {
+    const approvedChallenge = await readJson(await fetch(`${baseUrl}/api/shared-apps/i/main/a/outreach-review/s/share-one/challenges/${encodeURIComponent(challengeId)}`));
+    assert.equal(approvedChallenge.challenge.status, "approved");
+
+    const pair = await fetch(`${baseUrl}/api/shared-apps/i/main/a/outreach-review/s/share-one/pair`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ challengeId }),

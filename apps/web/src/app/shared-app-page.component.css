@@ -171,6 +171,108 @@
   color: #8d261d;
 }
 
+.shared-app-access {
+  width: min(560px, calc(100% - 32px));
+  align-self: start;
+  margin: 24px;
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+  border: 1px solid #d7dfd4;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 12px 36px rgba(23, 32, 25, .08);
+}
+
+.shared-app-access p,
+.shared-app-access h2 {
+  margin: 0;
+}
+
+.shared-app-access p {
+  color: #607064;
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.shared-app-access h2 {
+  font-size: 22px;
+}
+
+.shared-access-notice {
+  padding: 10px 12px;
+  border: 1px solid #c7d6c5;
+  border-radius: 8px;
+  background: #edf6ec;
+  color: #25482d;
+}
+
+.shared-access-notice.error {
+  border-color: #e8a29a;
+  background: #fff2f0;
+  color: #8d261d;
+}
+
+.shared-access-command {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid #9caf9b;
+  border-radius: 8px;
+  background: #172019;
+  color: #f3fff1;
+  text-align: left;
+}
+
+.shared-access-command code {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.shared-access-status {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.shared-access-status span {
+  padding: 5px 9px;
+  border-radius: 8px;
+  background: #e9eee7;
+  color: #314237;
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.shared-access-status span.ready {
+  background: #d9f1de;
+  color: #1f6b3c;
+}
+
+.shared-access-status span.partial {
+  background: #fff4cc;
+  color: #765900;
+}
+
+.shared-access-status span.bad {
+  background: #ffe0dc;
+  color: #8d261d;
+}
+
+.shared-app-access button.secondary,
+.shared-app-access > button {
+  justify-self: start;
+  min-height: 38px;
+  padding: 0 12px;
+  border-radius: 8px;
+  border: 1px solid #aebcaf;
+  background: #ffffff;
+  color: #172019;
+  font-weight: 800;
+}
+
 @media (max-width: 760px) {
   .shared-app-layout {
     grid-template-columns: 1fr;

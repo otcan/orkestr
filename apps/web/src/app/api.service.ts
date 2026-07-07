@@ -595,6 +595,10 @@ export interface SecurityChallenge {
   instanceId?: string;
   userId?: string;
   role?: string;
+  shareId?: string;
+  appSlug?: string;
+  requestedPath?: string;
+  allowedActions?: string[];
   requestedUserAgent?: string;
   requestedIp?: string;
   approvedAt?: string;
@@ -2440,6 +2444,26 @@ export class ApiService {
 
   sharedApp(instanceId: string, appSlug: string, shareToken: string): Observable<SharedAppPayload> {
     return this.http.get<SharedAppPayload>(this.api(`/shared-apps/i/${encodeURIComponent(instanceId)}/a/${encodeURIComponent(appSlug)}/s/${encodeURIComponent(shareToken)}`));
+  }
+
+  createSharedAppChallenge(instanceId: string, appSlug: string, shareToken: string, body: Record<string, unknown> = {}): Observable<SecurityChallengeResponse> {
+    return this.http.post<SecurityChallengeResponse>(
+      this.api(`/shared-apps/i/${encodeURIComponent(instanceId)}/a/${encodeURIComponent(appSlug)}/s/${encodeURIComponent(shareToken)}/challenge`),
+      body,
+    );
+  }
+
+  sharedAppChallenge(instanceId: string, appSlug: string, shareToken: string, challengeId: string): Observable<SecurityChallengeStatusResponse> {
+    return this.http.get<SecurityChallengeStatusResponse>(
+      this.api(`/shared-apps/i/${encodeURIComponent(instanceId)}/a/${encodeURIComponent(appSlug)}/s/${encodeURIComponent(shareToken)}/challenges/${encodeURIComponent(challengeId)}`),
+    );
+  }
+
+  pairSharedAppBrowser(instanceId: string, appSlug: string, shareToken: string, challengeId: string): Observable<SecurityPairResponse> {
+    return this.http.post<SecurityPairResponse>(
+      this.api(`/shared-apps/i/${encodeURIComponent(instanceId)}/a/${encodeURIComponent(appSlug)}/s/${encodeURIComponent(shareToken)}/pair`),
+      { challengeId },
+    );
   }
 
   sharedAppAction(instanceId: string, appSlug: string, shareToken: string, action: string, body: Record<string, unknown>): Observable<SharedAppPayload> {
