@@ -1251,6 +1251,29 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     }
   }
 
+  async switchRuntimeSurface(runtime: "api" | "terminal" | "agent"): Promise<void> {
+    const thread = this.selectedThread();
+    if (!thread) return;
+    if (runtime === "api" && !this.guardCodexRuntime()) return;
+    this.busy = true;
+    try {
+      const result = await firstValueFrom(this.api.setRuntimeSurface(thread.id, runtime));
+      const updated = result["thread"] as ThreadSummary | undefined;
+      if (updated?.id) this.replaceThread(updated);
+      await this.refresh(false);
+    } catch (error) {
+      this.error = this.errorText(error);
+    } finally {
+      this.busy = false;
+    }
+  }
+
+  runtimeSurfaceSwitchDisabled(runtime: "api" | "terminal" | "agent"): boolean {
+    if (this.busy) return true;
+    if (runtime === "api") return !this.threadInputReady();
+    return false;
+  }
+
   openModelDetails(event?: Event): void {
     event?.preventDefault();
     event?.stopPropagation();
@@ -3104,6 +3127,15 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       String(thread?.runtimeControlPath || this.objectValue(thread?.runtime, "runtimeControlPath") || "").trim() ? `Control: ${thread?.runtimeControlPath || this.objectValue(thread?.runtime, "runtimeControlPath")}` : "",
       String(thread?.sessionName || this.objectValue(thread?.runtime, "sessionName") || "").trim() ? `Session: ${thread?.sessionName || this.objectValue(thread?.runtime, "sessionName")}` : "",
       String(thread?.paneId || thread?.tmuxTarget || this.objectValue(thread?.runtime, "paneId") || "").trim() ? `Pane: ${thread?.paneId || thread?.tmuxTarget || this.objectValue(thread?.runtime, "paneId")}` : "",
+    ].filter(Boolean);
+    return details.join("\n");
+  }
+
+  runtimeSurfaceShortcutTitle(thread: ThreadSummary | null): string {
+    const details = [
+      "Runtime surface for this Orkestr thread",
+      "Switch: /switch api, /switch terminal, /switch agent",
+      this.threadRuntimeModeLabel(thread) ? `Current: ${this.threadRuntimeModeLabel(thread)}` : "",
     ].filter(Boolean);
     return details.join("\n");
   }

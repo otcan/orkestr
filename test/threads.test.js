@@ -5838,10 +5838,35 @@ test("thread input commands strip /now before runtime delivery", () => {
     rawCommand: "rt",
     text: "agent",
   });
+  assert.deepEqual(parseThreadInputCommand({ text: "/switch api" }), {
+    command: "runtime_type",
+    rawCommand: "switch",
+    text: "api",
+  });
+  assert.deepEqual(parseThreadInputCommand({ text: "/switch term" }), {
+    command: "runtime_type",
+    rawCommand: "switch",
+    text: "term",
+  });
+  assert.deepEqual(parseThreadInputCommand({ text: "/switch plan write tests" }), {
+    command: "plan",
+    rawCommand: "switch",
+    text: "write tests",
+  });
+  assert.deepEqual(parseThreadInputCommand({ text: "/switch code" }), {
+    command: "code",
+    rawCommand: "switch",
+    text: "",
+  });
   assert.deepEqual(parseThreadInputCommand({ text: "/terminal interrupt" }), {
     command: "runtime_type",
     rawCommand: "terminal",
     text: "terminal interrupt",
+  });
+  assert.deepEqual(parseThreadInputCommand({ text: "/term" }), {
+    command: "runtime_type",
+    rawCommand: "term",
+    text: "term",
   });
   assert.equal(parseThreadInputCommand({ text: "normal message" }).command, null);
 });
