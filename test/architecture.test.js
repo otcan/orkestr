@@ -42,6 +42,7 @@ const largeFileAllowlist = new Set([
   "packages/core/src/codex-app-server-recovery.js",
   "packages/core/src/codex-app-server.js",
   "packages/core/src/broker-instance-registry.js",
+  "packages/core/src/jobs-queue.js",
   "packages/core/src/jobs-jd-cache-mcp.js",
   "packages/core/src/runtime-leases.js",
   "packages/core/src/security.js",
