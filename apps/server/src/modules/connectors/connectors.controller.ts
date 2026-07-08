@@ -43,6 +43,9 @@ import { appendThreadMessage, getThread, getThreadForPrincipal } from "../../../
 import { processApiAgentThreadInput, threadUsesApiAgent } from "../../../../../packages/core/src/tenant-api-agent.js";
 import { getTenantVm } from "../../../../../packages/core/src/tenant-vm-registry.js";
 import { requestPrincipal } from "../../../../../packages/core/src/principal.js";
+import { isAdminPrincipal } from "../../../../../packages/core/src/policy.js";
+import { createPairingChallenge, securityStatus } from "../../../../../packages/core/src/security.js";
+import { normalizeUserId } from "../../../../../packages/core/src/users.js";
 import { publicRoutingFailurePayload } from "../../../../../packages/core/src/routing-failures.js";
 import {
   addLocalWhatsAppGroupParticipants,
@@ -80,6 +83,60 @@ function bodyStringArray(body: Record<string, unknown>, key: string): string[] {
     result.push(text);
   }
   return result;
+}
+
+function requestPathWithQuery(request: any, fallback = "/connect/google"): string {
+  const raw = String(request?.originalUrl || request?.url || fallback).trim() || fallback;
+  return raw.startsWith("/") ? raw : `/${raw}`;
+}
+
+function googleWorkspacePairingRedirect(challengeId: string, returnPath: string): string {
+  const target = new URL("/setup/pairing", "http://localhost");
+  if (challengeId) target.searchParams.set("challengeId", challengeId);
+  target.searchParams.set("return", returnPath);
+  return `${target.pathname}${target.search}`;
+}
+
+function googleWorkspaceConnectRequestExists(payload: any): boolean {
+  return Boolean(payload?.request && Object.keys(payload.request).length);
+}
+
+async function googleWorkspaceConnectAccess(request: any, payload: any, response: any): Promise<boolean> {
+  const connectRequest = payload?.request || {};
+  const ownerUserId = normalizeUserId(connectRequest.userId || "");
+  const status = await securityStatus();
+  const trustedContext = !status.authEnabled || Boolean(request?.orkestrSecuritySession || request?.orkestrMachineAuth);
+  const currentPath = requestPathWithQuery(request);
+  if (!trustedContext) {
+    const challenge = await createPairingChallenge({
+      request,
+      reusePending: true,
+      userId: ownerUserId,
+      role: ownerUserId ? "user" : "admin",
+      requestedPath: currentPath,
+    } as any);
+    response
+      .status(302)
+      .header("location", googleWorkspacePairingRedirect(String(challenge.challengeId || ""), currentPath))
+      .type("text/plain; charset=utf-8")
+      .send("Redirecting to Orkestr pairing.");
+    return false;
+  }
+  const principal = requestPrincipal(request);
+  const principalUserId = normalizeUserId(principal?.userId || "");
+  if (ownerUserId && !isAdminPrincipal(principal) && principalUserId !== ownerUserId) {
+    response
+      .status(403)
+      .header("cache-control", "no-store")
+      .type("text/html; charset=utf-8")
+      .send(googleWorkspaceConnectHtml({
+        connectId: String(connectRequest.connectId || ""),
+        request: connectRequest,
+        error: "google_workspace_connect_pairing_user_mismatch",
+      }));
+    return false;
+  }
+  return true;
 }
 
 function safeInboundUploadName(name: unknown): string {
@@ -855,7 +912,7 @@ export class ConnectorCallbacksController {
 @Controller("connect")
 export class GoogleWorkspaceConnectController {
   @Get("google")
-  async googleConnect(@Query("connect") connect = "", @Res() response: any) {
+  async googleConnect(@Req() request: any, @Query("connect") connect = "", @Res() response: any) {
     let payload: any = null;
     try {
       payload = await getGoogleWorkspaceConnectRequest(connect, process.env);
@@ -863,6 +920,7 @@ export class GoogleWorkspaceConnectController {
       payload = { ok: false, state: "error", error: String((error as Error)?.message || "google_workspace_connect_failed") };
     }
     const ok = payload?.ok === true;
+    if (googleWorkspaceConnectRequestExists(payload) && !(await googleWorkspaceConnectAccess(request, payload, response))) return;
     return response
       .status(ok ? 200 : Number((payload as any)?.statusCode || 400) || 400)
       .header("cache-control", "no-store")
@@ -875,13 +933,16 @@ export class GoogleWorkspaceConnectController {
   }
 
   @Get("google/start")
-  async googleStart(@Query() query: Record<string, string | string[]>, @Res() response: any) {
+  async googleStart(@Req() request: any, @Query() query: Record<string, string | string[]>, @Res() response: any) {
     const capabilities = Array.isArray(query.capability)
       ? query.capability
       : String(query.capability || "").split(/[\s,]+/g).filter(Boolean);
     try {
+      const connectId = String(query.connect || "");
+      const payload = await getGoogleWorkspaceConnectRequest(connectId, process.env);
+      if (googleWorkspaceConnectRequestExists(payload) && !(await googleWorkspaceConnectAccess(request, payload, response))) return;
       const started = await startGoogleWorkspaceOAuth(process.env, {
-        connectId: String(query.connect || ""),
+        connectId,
         capabilities,
         account: String(query.account || ""),
       });

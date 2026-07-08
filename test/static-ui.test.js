@@ -5,8 +5,10 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { startServer } from "../apps/server/src/server.js";
+import { createGoogleWorkspaceConnectLink } from "../packages/connectors/src/google-workspace.js";
 import { __brokerInstanceRegistryTestInternals, registerBrokerInstance } from "../packages/core/src/broker-instance-registry.js";
 import { approvePairingChallenge, createPairingChallenge, pairBrowser, sessionCookieHeader } from "../packages/core/src/security.js";
+import { userPrincipal } from "../packages/core/src/principal.js";
 
 const publicRuntimeEnvKeys = [
   "ORKESTR_PRIMARY_DOMAIN",
@@ -209,6 +211,72 @@ test("instance connect setup requires a registered broker UUID", async () => {
     await new Promise((resolve) => server.close(resolve));
     if (priorHome === undefined) delete process.env.ORKESTR_HOME;
     else process.env.ORKESTR_HOME = priorHome;
+  }
+});
+
+test("google workspace connect links require owner-scoped browser pairing", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-static-google-connect-pairing-"));
+  const envKeys = [...publicRuntimeEnvKeys, "ORKESTR_HOME"];
+  const prior = snapshotEnv(envKeys);
+  clearEnv(envKeys);
+  process.env.ORKESTR_HOME = home;
+  process.env.ORKESTR_AUTH_REQUIRED = "1";
+  process.env.ORKESTR_CONNECT_PUBLIC_URL = "https://connect.example.test";
+
+  const connect = await createGoogleWorkspaceConnectLink({
+    principal: userPrincipal({ id: "firat", displayName: "Firat" }),
+    thread: {
+      id: "firat-thread",
+      binding: { chatId: "firat-chat", outboundAccountId: "sender" },
+    },
+  }, process.env);
+  const connectUrl = new URL(connect.link);
+  const connectPath = `${connectUrl.pathname}${connectUrl.search}`;
+  const startPath = `/connect/google/start?connect=${encodeURIComponent(connect.connectId)}&capability=gmail_read`;
+  const server = await startServer({ port: 0, host: "127.0.0.1" });
+  const { port } = server.address();
+
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}${connectPath}`, { redirect: "manual" });
+    assert.equal(response.status, 302);
+    const location = response.headers.get("location") || "";
+    const redirect = new URL(location, `http://127.0.0.1:${port}`);
+    assert.equal(redirect.pathname, "/setup/pairing");
+    assert.equal(redirect.searchParams.get("return"), connectPath);
+    const challengeId = redirect.searchParams.get("challengeId") || "";
+    assert.ok(challengeId);
+
+    const challengeStatus = await fetch(`http://127.0.0.1:${port}/api/setup/security/challenges/${challengeId}`);
+    const challengePayload = await challengeStatus.json();
+    assert.equal(challengePayload.challenge.userId, "firat");
+    assert.equal(challengePayload.challenge.role, "user");
+    assert.equal(challengePayload.challenge.requestedPath, connectPath);
+
+    const startResponse = await fetch(`http://127.0.0.1:${port}${startPath}`, { redirect: "manual" });
+    assert.equal(startResponse.status, 302);
+    const startRedirect = new URL(startResponse.headers.get("location") || "", `http://127.0.0.1:${port}`);
+    assert.equal(startRedirect.pathname, "/setup/pairing");
+    assert.equal(startRedirect.searchParams.get("return"), startPath);
+
+    const otherChallenge = await createPairingChallenge({ env: process.env, userId: "mallory", role: "user" });
+    await approvePairingChallenge(otherChallenge.challengeId, { env: process.env, approvedBy: "node:test" });
+    const otherPaired = await pairBrowser({ challengeId: otherChallenge.challengeId, env: process.env });
+    const otherCookie = sessionCookieHeader(otherPaired.token, process.env);
+    const wrongUser = await fetch(`http://127.0.0.1:${port}${connectPath}`, { headers: { cookie: otherCookie } });
+    const wrongUserHtml = await wrongUser.text();
+    assert.equal(wrongUser.status, 403);
+    assert.match(wrongUserHtml, /google_workspace_connect_pairing_user_mismatch/);
+
+    await approvePairingChallenge(challengeId, { env: process.env, approvedBy: "node:test" });
+    const paired = await pairBrowser({ challengeId, env: process.env });
+    const cookie = sessionCookieHeader(paired.token, process.env);
+    const pairedResponse = await fetch(`http://127.0.0.1:${port}${connectPath}`, { headers: { cookie } });
+    const pairedHtml = await pairedResponse.text();
+    assert.equal(pairedResponse.status, 200);
+    assert.match(pairedHtml, /Connect Google Workspace/);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    restoreEnv(prior);
   }
 });
 

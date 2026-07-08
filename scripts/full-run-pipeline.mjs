@@ -14,6 +14,11 @@ function truthy(value) {
   return ["1", "true", "yes", "on"].includes(clean(value).toLowerCase());
 }
 
+function positiveInteger(value, fallback, minimum = 1) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? Math.max(minimum, Math.floor(parsed)) : fallback;
+}
+
 function timestampId(date = new Date()) {
   return date.toISOString().replace(/[:.]/g, "-");
 }
@@ -57,6 +62,9 @@ Default stages:
 Options:
   --plan                         Print the stage plan without running it.
   --artifact-dir DIR             Summary output directory. Defaults to ORKESTR_HOME/full-run-pipeline/<timestamp> or .orkestr/full-run-pipeline/<timestamp>.
+  --serial                       Run every stage one at a time. By default, local gates run with bounded parallelism.
+  --parallel                     Keep bounded parallelism enabled. This is the default.
+  --parallelism N                Maximum local gates to run at once. Defaults to 3.
   --include-launch-check         Also run npm run launch:check. This duplicates some gates but catches docs/privacy drift.
   --skip-build                   Skip npm run build.
   --skip-test-ci                 Skip npm run test:ci.
@@ -93,6 +101,8 @@ Options:
 
 Environment:
   ORKESTR_FULL_RUN_LAUNCH_CHECK=1
+  ORKESTR_FULL_RUN_SERIAL=1
+  ORKESTR_FULL_RUN_PARALLELISM=3
   ORKESTR_FULL_RUN_LIVE_K3S=1
   ORKESTR_FULL_RUN_VPS_AWS=1
   ORKESTR_FULL_RUN_DEMO_RELEASE=1
@@ -116,6 +126,8 @@ export function parseFullRunPipelineArgs(argv = process.argv.slice(2), env = pro
     help: hasFlag(argv, "--help") || hasFlag(argv, "-h"),
     plan: hasFlag(argv, "--plan"),
     artifactDir: flagValue(argv, "--artifact-dir", clean(env.ORKESTR_FULL_RUN_ARTIFACT_DIR)),
+    parallel: hasFlag(argv, "--parallel") || (!hasFlag(argv, "--serial") && !truthy(env.ORKESTR_FULL_RUN_SERIAL)),
+    parallelism: positiveInteger(flagValue(argv, "--parallelism", clean(env.ORKESTR_FULL_RUN_PARALLELISM || "3")), 3),
     includeLaunchCheck: hasFlag(argv, "--include-launch-check") || truthy(env.ORKESTR_FULL_RUN_LAUNCH_CHECK),
     skipBuild: hasFlag(argv, "--skip-build"),
     skipTestCi: hasFlag(argv, "--skip-test-ci"),
@@ -310,6 +322,60 @@ function runStage(stage) {
   });
 }
 
+const parallelEligibleStageIds = new Set([
+  "test-ci",
+  "oss-boundary",
+  "k3s-oss-demo-contract",
+  "demo-vm",
+  "smoke",
+  "coding-agent-demo",
+  "launch-check",
+]);
+
+function parallelEligible(stage = {}) {
+  return parallelEligibleStageIds.has(stage.id);
+}
+
+async function runStagesParallel(stages = [], concurrency = 1) {
+  const limit = positiveInteger(concurrency, 1);
+  const results = new Array(stages.length);
+  let nextIndex = 0;
+  async function worker() {
+    while (nextIndex < stages.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      results[index] = await runStage(stages[index]);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, stages.length) }, () => worker()));
+  return results;
+}
+
+async function runPipelineStages(stages = [], options = {}) {
+  const results = [];
+  const parallel = options.parallel !== false && positiveInteger(options.parallelism, 1) > 1;
+  for (let index = 0; index < stages.length;) {
+    const stage = stages[index];
+    if (!parallel || !parallelEligible(stage)) {
+      const result = await runStage(stage);
+      results.push(result);
+      index += 1;
+      if (result.status !== "passed") return results;
+      continue;
+    }
+
+    const group = [];
+    while (index < stages.length && parallelEligible(stages[index])) {
+      group.push(stages[index]);
+      index += 1;
+    }
+    const groupResults = await runStagesParallel(group, options.parallelism);
+    results.push(...groupResults);
+    if (groupResults.some((result) => result.status !== "passed")) return results;
+  }
+  return results;
+}
+
 export async function runFullRunPipeline(options = {}, env = process.env) {
   const artifactDir = path.resolve(options.artifactDir || defaultArtifactDir(env));
   const allStages = fullRunPipelineStages({ ...options, artifactDir });
@@ -325,6 +391,8 @@ export async function runFullRunPipeline(options = {}, env = process.env) {
     generatedAt: new Date().toISOString(),
     artifactDir,
     repoRoot,
+    parallel: options.parallel !== false,
+    parallelism: positiveInteger(options.parallelism, 3),
     stages: [],
     skipped,
   };
@@ -346,15 +414,15 @@ export async function runFullRunPipeline(options = {}, env = process.env) {
     return summary;
   }
 
-  for (const stage of stages) {
-    const result = await runStage(stage);
+  const results = await runPipelineStages(stages, options);
+  for (const result of results) {
     summary.stages.push(result);
+    if (result.status !== "passed" && !summary.failedStage) summary.failedStage = result.id;
     await writeSummary(artifactDir, summary);
-    if (result.status !== "passed") {
-      summary.failedStage = result.id;
-      await writeSummary(artifactDir, summary);
-      return summary;
-    }
+  }
+  if (summary.failedStage) {
+    await writeSummary(artifactDir, summary);
+    return summary;
   }
   summary.ok = true;
   summary.completedAt = new Date().toISOString();
@@ -374,6 +442,8 @@ if (import.meta.url === `file://${process.argv[1]}`) {
         console.log(JSON.stringify({
           ok: true,
           artifactDir: summary.artifactDir,
+          parallel: summary.parallel,
+          parallelism: summary.parallelism,
           planned: summary.planned,
           skipped: summary.skipped,
         }, null, 2));
