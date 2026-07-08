@@ -6,7 +6,22 @@ on:
     branches: [main]
 
 jobs:
-  test:
+  syntax:
+    runs-on: ubuntu-latest
+    env:
+      ORKESTR_BROWSER_LAUNCH_DISABLED: "1"
+      ORKESTR_RECOVER_RUNNING_ON_START: "0"
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+      - name: Syntax check
+        run: |
+          find apps packages scripts examples -path '*/node_modules/*' -prune -o \( -name '*.js' -o -name '*.mjs' \) -print |
+            while read -r file; do node --check "$file"; done
+
+  build:
     runs-on: ubuntu-latest
     env:
       ORKESTR_BROWSER_LAUNCH_DISABLED: "1"
@@ -18,13 +33,42 @@ jobs:
           node-version: "22"
           cache: npm
       - run: npm ci
-      - name: Syntax check
-        run: |
-          find apps packages scripts examples -path '*/node_modules/*' -prune -o \( -name '*.js' -o -name '*.mjs' \) -print |
-            while read -r file; do node --check "$file"; done
       - name: Build
         run: npm run build
+
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    env:
+      ORKESTR_BROWSER_LAUNCH_DISABLED: "1"
+      ORKESTR_RECOVER_RUNNING_ON_START: "0"
+      ORKESTR_TEST_SHARD_TOTAL: "4"
+      ORKESTR_TEST_SHARD_INDEX: ${{ matrix.shard }}
+      ORKESTR_TEST_CONCURRENCY: "1"
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
       - name: Test
         run: npm run test:ci
+
+  smoke:
+    runs-on: ubuntu-latest
+    env:
+      ORKESTR_BROWSER_LAUNCH_DISABLED: "1"
+      ORKESTR_RECOVER_RUNNING_ON_START: "0"
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
       - run: npm run smoke
       - run: npm run demo:coding-agent

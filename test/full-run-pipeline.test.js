@@ -23,6 +23,8 @@ test("full run pipeline defaults to local release gates without live side effect
   const options = parseFullRunPipelineArgs([], {});
   const ids = stageIds(options);
 
+  assert.equal(options.parallel, true);
+  assert.equal(options.parallelism, 3);
   assert.deepEqual(ids, [
     "build",
     "test-ci",
@@ -36,6 +38,17 @@ test("full run pipeline defaults to local release gates without live side effect
   assert.equal(ids.includes("vps-aws"), false);
   assert.equal(ids.includes("whatsapp-real"), false);
   assert.equal(ids.includes("deploy"), false);
+});
+
+test("full run pipeline can force serial execution or tune local gate parallelism", () => {
+  const serial = parseFullRunPipelineArgs(["--serial"], {});
+  const tuned = parseFullRunPipelineArgs(["--parallelism", "2"], {});
+  const envSerialOverride = parseFullRunPipelineArgs(["--parallel"], { ORKESTR_FULL_RUN_SERIAL: "1" });
+
+  assert.equal(serial.parallel, false);
+  assert.equal(tuned.parallel, true);
+  assert.equal(tuned.parallelism, 2);
+  assert.equal(envSerialOverride.parallel, true);
 });
 
 test("full run pipeline can include launch, regression, live smoke, and deploy gates explicitly", () => {
@@ -217,6 +230,8 @@ test("full run pipeline CLI prints an inspectable plan", async () => {
   const payload = JSON.parse(stdout);
 
   assert.equal(payload.ok, true);
+  assert.equal(payload.parallel, true);
+  assert.equal(payload.parallelism, 3);
   assert.equal(payload.planned[0].id, "build");
   assert.equal(payload.planned.some((stage) => stage.id === "test-ci"), true);
   assert.equal(payload.planned.some((stage) => stage.id === "deploy"), false);

@@ -87,7 +87,10 @@ function usage() {
   return `Usage:
   scripts/release-instance-broker.mjs list [--probe] [--json]
   scripts/release-instance-broker.mjs plan [--ref REF] [--channel CHANNEL] [--json]
-  scripts/release-instance-broker.mjs deploy [--ref REF] [--channel CHANNEL] [--include-local] [--dry-run] [--no-connectivity-check] [--json]
+  scripts/release-instance-broker.mjs deploy [--ref REF] [--channel CHANNEL] [--concurrency N] [--include-local] [--dry-run] [--no-connectivity-check] [--json]
+
+Environment:
+  ORKESTR_RELEASE_FANOUT_CONCURRENCY controls deploy and connectivity fan-out. Defaults to 4.
 `;
 }
 
@@ -101,6 +104,7 @@ async function main() {
   const json = hasFlag(argv, "--json");
   const ref = flagValue(argv, "--ref", process.env.ORKESTR_DEPLOY_REF || process.env.ORKESTR_UPDATE_REF || "main");
   const channel = flagValue(argv, "--channel", process.env.ORKESTR_DEPLOY_CHANNEL || "production");
+  const concurrency = flagValue(argv, "--concurrency", process.env.ORKESTR_RELEASE_FANOUT_CONCURRENCY || "");
   const instances = await listReleaseInstances(process.env, {
     probe: hasFlag(argv, "--probe"),
     fetchImpl: globalThis.fetch,
@@ -123,6 +127,7 @@ async function main() {
       channel,
       dryRun: command === "plan" || hasFlag(argv, "--dry-run"),
       skipLocal: !hasFlag(argv, "--include-local"),
+      ...(concurrency ? { concurrency: positiveInteger(concurrency, 4) } : {}),
       spawnImpl: spawn,
       fetchImpl: globalThis.fetch,
     }, process.env);
@@ -133,6 +138,7 @@ async function main() {
         skipLocal: !hasFlag(argv, "--include-local"),
         connectivityAttempts: positiveInteger(process.env.ORKESTR_RELEASE_CONNECTIVITY_ATTEMPTS, 6),
         connectivityRetryDelayMs: positiveInteger(process.env.ORKESTR_RELEASE_CONNECTIVITY_RETRY_DELAY_MS, 15_000, 0),
+        ...(concurrency ? { concurrency: positiveInteger(concurrency, 4) } : {}),
         connectivityRecoveryCommand: process.env.ORKESTR_RELEASE_CONNECTIVITY_RECOVERY_COMMAND || "",
         spawnImpl: spawn,
         fetchImpl: globalThis.fetch,
