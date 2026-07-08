@@ -1,3 +1,4 @@
+import { createReadStream } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -54,6 +55,7 @@ import {
 } from "../../../../../packages/core/src/security.js";
 import { publicConfig } from "../../../../../packages/storage/src/config.js";
 import { ensureDataDirs } from "../../../../../packages/storage/src/paths.js";
+import { eventArchiveDownloadPath, eventStorageStatus, listEventArchives, rotateEvents } from "../../../../../packages/storage/src/store.js";
 import { instanceSetupReturnPath } from "../../instance-connect-setup.js";
 import { httpError } from "../../common/http.js";
 import { sanitizedThreadActionInput } from "../threads/thread-route-helpers.js";
@@ -74,6 +76,10 @@ const publicConnectorRuntimeConfigKeys = new Set([
 
 function cleanText(value: unknown): string {
   return String(value || "").trim();
+}
+
+function contentDispositionFilename(name: string): string {
+  return path.basename(String(name || "events.jsonl")).replace(/["\r\n\\]/g, "_") || "events.jsonl";
 }
 
 function isTenantScopedRuntime(env = process.env): boolean {
@@ -710,6 +716,43 @@ export class SystemController {
         outcome,
       }),
     };
+  }
+
+  @Get("events/archives")
+  async eventArchives(@Req() request: any) {
+    if (!isAdminPrincipal(requestPrincipal(request))) throw httpError("admin_required", 403);
+    return {
+      storage: await eventStorageStatus(process.env),
+      archives: await listEventArchives(process.env),
+    };
+  }
+
+  @Post("events/rotate")
+  @HttpCode(200)
+  async rotateEventLog(@Req() request: any) {
+    if (!isAdminPrincipal(requestPrincipal(request))) throw httpError("admin_required", 403);
+    const rotation = await rotateEvents(process.env, { force: true });
+    return {
+      ok: true,
+      rotation,
+      storage: await eventStorageStatus(process.env),
+    };
+  }
+
+  @Get("events/archives/:name/download")
+  async downloadEventArchive(@Param("name") name: string, @Req() request: any, @Res() response: any) {
+    if (!isAdminPrincipal(requestPrincipal(request))) throw httpError("admin_required", 403);
+    try {
+      const archive = await eventArchiveDownloadPath(name, process.env);
+      response.setHeader("content-type", archive.name.endsWith(".gz") ? "application/gzip" : "application/x-ndjson");
+      response.setHeader("content-length", String(archive.stat.size));
+      response.setHeader("content-disposition", `attachment; filename="${contentDispositionFilename(archive.name)}"`);
+      return createReadStream(archive.path).pipe(response);
+    } catch (error: any) {
+      const message = String(error?.message || error || "event_archive_error");
+      if (message === "event_archive_not_found") throw httpError(message, 404);
+      throw httpError(message, 400);
+    }
   }
 
   @Get("system/alerts")

@@ -153,6 +153,70 @@ test("whatsapp connector outbox backs off retryable bridge failures", async () =
   assert.equal(retry.delivered.length, 1);
 });
 
+test("whatsapp connector outbox dead-letters unknown account failures", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-connector-outbox-unknown-account-"));
+  const runtimeEnv = env(home, { ORKESTR_CONNECTOR_OUTBOX_RETRY_BACKOFF_MS: "60000" });
+  await writeConnectorConfig("whatsapp", { bridgeMode: "external", bridgeUrl: "http://wa.local" }, runtimeEnv);
+  await createThread({
+    id: "thread-wa-outbox-unknown-account",
+    ownerUserId: "tenant-a",
+    name: "WA Connector Outbox Unknown Account Thread",
+    binding: {
+      connector: "whatsapp",
+      chatId: "shared-chat",
+      responderAccountId: "missing-account",
+      outboundAccountId: "missing-account",
+      mirrorToWhatsApp: true,
+    },
+  }, runtimeEnv);
+  const parent = await appendThreadMessage("thread-wa-outbox-unknown-account", {
+    role: "user",
+    source: "whatsapp_inbound",
+    state: "completed",
+    connector: "whatsapp",
+    chatId: "shared-chat",
+    accountId: "missing-account",
+    text: "status?",
+  }, runtimeEnv);
+  const reply = await appendThreadMessage("thread-wa-outbox-unknown-account", {
+    role: "assistant",
+    source: "codex-app-server",
+    phase: "final_answer",
+    state: "completed",
+    parentMessageId: parent.id,
+    chatId: "shared-chat",
+    accountId: "missing-account",
+    text: "This cannot be sent.",
+  }, runtimeEnv);
+
+  const delivery = await deliverWhatsAppReplies(runtimeEnv, async () => {
+    throw new Error("unknown_whatsapp_account");
+  });
+  const outbox = await readConnectorOutbox(runtimeEnv);
+  const job = outbox.jobs.find((item) => item.sourceMessageId === reply.id);
+  const state = await readJson(dataPaths(runtimeEnv).whatsapp, { outboundIntents: [] });
+  const intent = (state.outboundIntents || []).find((item) => item.messageId === reply.id);
+
+  assert.equal(delivery.failed.length, 1);
+  assert.equal(job?.state, "dead_letter");
+  assert.equal(job.claimedBy, "");
+  assert.equal(job.claimExpiresAt, "");
+  assert.equal(job.terminalAt.length > 0, true);
+  assert.equal(job.metadata.nonRetryable, true);
+  assert.equal(intent?.status, "skipped");
+  assert.equal(intent?.error, "unknown_whatsapp_account");
+
+  let retryBridgeCalls = 0;
+  const second = await deliverWhatsAppReplies(runtimeEnv, async () => {
+    retryBridgeCalls += 1;
+    throw new Error("dead-lettered unknown account should not be retried");
+  });
+  assert.equal(retryBridgeCalls, 0);
+  assert.equal(second.delivered.length, 0);
+  assert.equal(second.failed.length, 0);
+  assert.equal(second.skipped.find((item) => item.messageId === reply.id)?.reason, "unknown_whatsapp_account");
+});
+
 test("whatsapp connector outbox does not mirror watcher alerts", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-connector-outbox-watcher-"));
   const runtimeEnv = env(home);

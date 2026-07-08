@@ -911,6 +911,32 @@ export interface EventRecord {
   [key: string]: unknown;
 }
 
+export interface EventArchive {
+  name: string;
+  size: number;
+  compressed: boolean;
+  createdAt: string;
+  modifiedAt: string;
+}
+
+export interface EventStorageStatus {
+  currentPath: string;
+  currentSize: number;
+  maxBytes: number;
+  maxEventBytes: number;
+  archiveCount: number;
+  archiveBytes: number;
+  latestArchiveAt?: string;
+  gzipBacklog: number;
+  truncationRecent: boolean;
+  archives?: EventArchive[];
+}
+
+export interface EventArchivesResponse {
+  storage: EventStorageStatus;
+  archives: EventArchive[];
+}
+
 export interface ThreadSummary {
   id: string;
   ownerUserId?: string;
@@ -2176,6 +2202,18 @@ export class ApiService {
       if (String(value || "").trim()) params.set(key, String(value).trim());
     }
     return this.http.get<{ events: EventRecord[] }>(this.api(`/events?${params.toString()}`));
+  }
+
+  eventArchives(): Observable<EventArchivesResponse> {
+    return this.http.get<EventArchivesResponse>(this.api("/events/archives"));
+  }
+
+  rotateEvents(): Observable<{ ok: boolean; rotation: Record<string, unknown>; storage: EventStorageStatus }> {
+    return this.http.post<{ ok: boolean; rotation: Record<string, unknown>; storage: EventStorageStatus }>(this.api("/events/rotate"), {});
+  }
+
+  eventArchiveDownloadUrl(name: string): string {
+    return this.api(`/events/archives/${encodeURIComponent(name)}/download`);
   }
 
   watcherAlerts(limit = 20): Observable<WatcherAlertsResponse> {

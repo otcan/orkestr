@@ -695,8 +695,10 @@ export class CodexAppServerClient {
       timestamp,
       ...whatsappProjectionFields(whatsappParent, thread),
     }, this.env);
-    notifyMessageHandler({ thread, message });
-    markConnectorDeliverySignal(message);
+    if (!message?.coalescedUpdate) {
+      notifyMessageHandler({ thread, message });
+      markConnectorDeliverySignal(message);
+    }
     const finalAnswer = clean(phase).toLowerCase() === "final_answer";
     const completedKey = finalAnswer ? this.turnParentKey(codexId, turnId) : "";
     if (completedKey) {

@@ -29,7 +29,7 @@ import {
   setThreadConnectorDeliverySignalHandler,
   sleepThread,
 } from "../packages/core/src/runtime-leases.js";
-import { appServerStateFromStatus, containedCodexRuntimePaths, effortForThread, modelForThread, threadStartParams, turnStartParams } from "../packages/core/src/codex-app-server-common.js";
+import { appendOrUpdateEventMessage, appServerStateFromStatus, containedCodexRuntimePaths, effortForThread, modelForThread, threadEventId, threadStartParams, turnStartParams } from "../packages/core/src/codex-app-server-common.js";
 import { appendThreadMessage, createThread, enqueueThreadInput, getThread, listThreadMessages, updateThread, updateThreadMessage } from "../packages/core/src/threads.js";
 import { deliverWhatsAppReplies } from "../packages/connectors/src/whatsapp.js";
 import { writeConnectorConfig } from "../packages/storage/src/config.js";
@@ -353,6 +353,74 @@ test("Codex app-server clamps non-admin threads away from root danger access", (
     if (previousAdmin === undefined) delete process.env.ORKESTR_ADMIN_USER_ID;
     else process.env.ORKESTR_ADMIN_USER_ID = previousAdmin;
   }
+});
+
+test("Codex app-server event messages match stable item identity when text-derived event ids change", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-event-identity-"));
+  const env = { ORKESTR_HOME: path.join(home, "orkestr") };
+  const thread = await createThread({ id: "event-identity-thread", name: "Event Identity Thread" }, env);
+  const base = {
+    role: "assistant",
+    source: "codex-app-server",
+    phase: "final_answer",
+    state: "completed",
+    codexThreadId: "codex-thread-1",
+    codexTurnId: "turn-1",
+    codexItemId: "item-1",
+  };
+
+  const first = await appendOrUpdateEventMessage(thread, {
+    ...base,
+    text: "Short answer.",
+    eventId: threadEventId({ codexThreadId: "codex-thread-1", turnId: "turn-1", itemId: "item-1", type: "agentMessage", role: "assistant", text: "Short answer." }),
+  }, env);
+  const second = await appendOrUpdateEventMessage(thread, {
+    ...base,
+    text: "Short answer with more useful detail.",
+    eventId: threadEventId({ codexThreadId: "codex-thread-1", turnId: "turn-1", itemId: "item-1", type: "agentMessage", role: "assistant", text: "Short answer with more useful detail." }),
+  }, env);
+  const messages = await listThreadMessages(thread.id, env);
+
+  assert.equal(first.id, second.id);
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].text, "Short answer with more useful detail.");
+});
+
+test("Codex app-server coalesces rapid non-final text growth without a disk edit", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-event-coalesce-"));
+  const env = {
+    ORKESTR_HOME: path.join(home, "orkestr"),
+    ORKESTR_CODEX_APP_SERVER_MESSAGE_EDIT_MIN_MS: "60000",
+    ORKESTR_CODEX_APP_SERVER_MESSAGE_EDIT_MIN_CHARS: "1000",
+  };
+  const thread = await createThread({ id: "event-coalesce-thread", name: "Event Coalesce Thread" }, env);
+  const base = {
+    role: "assistant",
+    source: "codex-app-server",
+    phase: "commentary",
+    state: "completed",
+    eventId: "codex-progress-event",
+    codexThreadId: "codex-thread-2",
+    codexTurnId: "turn-2",
+    codexItemId: "item-2",
+  };
+
+  const first = await appendOrUpdateEventMessage(thread, { ...base, text: "Working on it." }, env);
+  const coalesced = await appendOrUpdateEventMessage(thread, { ...base, text: "Working on it. Still checking the slow path." }, env);
+  const messagesAfterCoalesce = await listThreadMessages(thread.id, env);
+  const flushed = await appendOrUpdateEventMessage(thread, {
+    ...base,
+    text: "Working on it. Still checking the slow path. Persist this update.",
+  }, { ...env, ORKESTR_CODEX_APP_SERVER_MESSAGE_EDIT_MIN_MS: "0" });
+  const messagesAfterFlush = await listThreadMessages(thread.id, env);
+
+  assert.equal(coalesced.id, first.id);
+  assert.equal(coalesced.coalescedUpdate, true);
+  assert.equal(messagesAfterCoalesce.length, 1);
+  assert.equal(messagesAfterCoalesce[0].text, "Working on it.");
+  assert.equal(flushed.id, first.id);
+  assert.equal(messagesAfterFlush.length, 1);
+  assert.equal(messagesAfterFlush[0].text, "Working on it. Still checking the slow path. Persist this update.");
 });
 
 test("Codex app-server injects contained user policy on start and resume", async () => {

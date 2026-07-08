@@ -871,6 +871,11 @@ function pickString(...values) {
   return "";
 }
 
+function nonRetryableWhatsAppOutboundError(error) {
+  const message = pickString(error?.message, error);
+  return /\bunknown_whatsapp_account\b/i.test(message);
+}
+
 function canonicalWhatsAppEventId(value = "") {
   return String(value || "").trim().replace(/^(?:true|false)_/, "");
 }
@@ -2913,42 +2918,52 @@ async function sendClaimedWhatsAppText({
     }
     return { delivery };
   } catch (error) {
-    const retryBackoffMs = connectorOutboxRetryBackoffMs(env);
+    const errorText = error.message || String(error);
+    const terminalFailure = nonRetryableWhatsAppOutboundError(error);
+    const now = new Date().toISOString();
+    const retryBackoffMs = terminalFailure ? 0 : connectorOutboxRetryBackoffMs(env);
     const retryAt = retryBackoffMs > 0 ? new Date(Date.now() + retryBackoffMs).toISOString() : "";
     if (intent?.intentId) {
       const previousAttempts = Number(intent.attempts || 0) || 0;
-      const marked = markWhatsAppOutboundIntent(outboundIntents, intent.intentId, {
+      const marked = markWhatsAppOutboundIntent(outboundIntents, intent.intentId, terminalFailure ? {
+        status: "skipped",
+        attempts: previousAttempts + 1,
+        skippedAt: now,
+        failedAt: now,
+        error: errorText,
+      } : {
         status: "pending",
         attempts: previousAttempts + 1,
-        failedAt: new Date().toISOString(),
-        error: error.message || String(error),
+        failedAt: now,
+        error: errorText,
       });
       outboundIntents.splice(0, outboundIntents.length, ...marked);
       state.outboundIntents = outboundIntents;
     }
-    await finishOutboundDeliveryClaim({ state, claim: claimResult.claim, filePath: claimResult.filePath, status: "failed", error: error.message || String(error) }, env, { persistState: writeWhatsAppState }).catch(() => {});
+    await finishOutboundDeliveryClaim({ state, claim: claimResult.claim, filePath: claimResult.filePath, status: "failed", error: errorText }, env, { persistState: writeWhatsAppState }).catch(() => {});
     await markConnectorOutboxJob(outboxClaim.job.id, {
-      state: "failed_retryable",
-      failedAt: new Date().toISOString(),
-      error: error.message || String(error),
+      state: terminalFailure ? "dead_letter" : "failed_retryable",
+      failedAt: now,
+      error: errorText,
       claimExpiresAt: retryAt,
       claimedBy: retryAt ? "retry_backoff" : "",
       claimedAt: "",
+      ...(terminalFailure ? { terminalAt: now } : {}),
       metadata: {
         ...(outboxClaim.job.metadata || {}),
-        retryAfterAt: retryAt,
+        ...(terminalFailure ? { nonRetryable: true } : { retryAfterAt: retryAt }),
       },
     }, env).catch(() => null);
     await markRouterOutboxItem(intent?.outboxId, {
-      status: "failed",
+      status: terminalFailure ? "skipped" : "failed",
       attempts: Number(intent?.attempts || 0) + 1,
-      error: error.message || String(error),
+      error: errorText,
     }, env).catch(() => null);
     await recordRouterTraceEvent({
       routerTraceId,
       turnId,
       connector: "whatsapp",
-      phase: "mirror_failed",
+      phase: terminalFailure ? "skipped" : "mirror_failed",
       threadId,
       messageId,
       chatId,
@@ -2958,6 +2973,7 @@ async function sendClaimedWhatsAppText({
       outboxId: intent?.outboxId,
       connectorOutboxJobId: outboxClaim.job.id,
       error,
+      terminal: terminalFailure || undefined,
     }, env).catch(() => {});
     return { failure: { error } };
   }

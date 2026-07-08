@@ -154,6 +154,86 @@ export function threadEventId({ codexThreadId, turnId = "", itemId = "", type = 
   ].join(":");
 }
 
+const codexEventMessageSources = new Set(["codex-app-server", "codex-app-server-import"]);
+const immediateEventMessagePhases = new Set([
+  "awaiting_approval",
+  "context_compaction",
+  "final_answer",
+  "need_input",
+  "review",
+  "runtime_interrupted",
+  "runtime_recovered",
+]);
+
+function codexEventMessageSource(value) {
+  return codexEventMessageSources.has(clean(value).toLowerCase());
+}
+
+function codexEventMessageEditThrottleMs(env = process.env) {
+  const parsed = Number(env.ORKESTR_CODEX_APP_SERVER_MESSAGE_EDIT_MIN_MS ?? 1500);
+  return Number.isFinite(parsed) ? Math.max(0, parsed) : 1500;
+}
+
+function codexEventMessageEditMinChars(env = process.env) {
+  const parsed = Number(env.ORKESTR_CODEX_APP_SERVER_MESSAGE_EDIT_MIN_CHARS ?? 512);
+  return Number.isFinite(parsed) ? Math.max(0, parsed) : 512;
+}
+
+function eventMessageIdentity(value = {}) {
+  const role = clean(value.role).toLowerCase();
+  const codexThreadIdValue = clean(value.codexThreadId || value.executorThreadId);
+  const turnId = clean(value.codexTurnId || value.executorTurnId);
+  const itemId = clean(value.codexItemId || value.executorItemId);
+  const phase = clean(value.phase || (role === "assistant" ? "final_answer" : "")).toLowerCase();
+  if (!codexEventMessageSource(value.source) || !role || !codexThreadIdValue || !turnId || !itemId) return "";
+  return [codexThreadIdValue, turnId, itemId, role, phase].join(":");
+}
+
+function findExistingEventMessage(messages = [], input = {}) {
+  const eventId = clean(input.eventId);
+  if (eventId) {
+    const existing = messages.find((message) => message.eventId === eventId);
+    if (existing) return existing;
+  }
+  const identity = eventMessageIdentity(input);
+  if (!identity) return null;
+  return messages.find((message) => eventMessageIdentity(message) === identity) || null;
+}
+
+function eventMessagePatchChanged(existing = {}, patch = {}) {
+  for (const [key, value] of Object.entries(patch || {})) {
+    if (value === undefined) continue;
+    const left = existing?.[key];
+    if (Array.isArray(left) || Array.isArray(value) || (left && typeof left === "object") || (value && typeof value === "object")) {
+      if (JSON.stringify(left ?? null) !== JSON.stringify(value ?? null)) return true;
+      continue;
+    }
+    const leftText = left === undefined || left === null ? "" : String(left);
+    const rightText = value === undefined || value === null ? "" : String(value);
+    if (leftText !== rightText) return true;
+  }
+  return false;
+}
+
+function shouldCoalesceCodexEventMessageUpdate(existing = {}, patch = {}, env = process.env) {
+  if (!codexEventMessageSource(existing.source || patch.source)) return false;
+  if (clean(existing.role || patch.role).toLowerCase() !== "assistant") return false;
+  const phase = clean(patch.phase || existing.phase || "final_answer").toLowerCase();
+  if (immediateEventMessagePhases.has(phase)) return false;
+  if (!Object.prototype.hasOwnProperty.call(patch, "text")) return false;
+  const previousText = clean(existing.text);
+  const nextText = clean(patch.text);
+  if (!previousText || !nextText || previousText === nextText) return false;
+  if (!nextText.startsWith(previousText)) return false;
+  const throttleMs = codexEventMessageEditThrottleMs(env);
+  if (throttleMs <= 0) return false;
+  const updatedMs = Date.parse(clean(existing.updatedAt || existing.createdAt));
+  if (!Number.isFinite(updatedMs)) return false;
+  if (Date.now() - updatedMs >= throttleMs) return false;
+  const minChars = codexEventMessageEditMinChars(env);
+  return nextText.length - previousText.length < minChars;
+}
+
 export function codexThreadId(thread) {
   return clean(thread?.executor?.codexThreadId || thread?.codexThreadId);
 }
@@ -366,14 +446,18 @@ export async function threadForCodexThreadId(codexId, env = process.env) {
 }
 
 export async function appendOrUpdateEventMessage(thread, input, env = process.env) {
-  const eventId = clean(input.eventId);
   const messages = await listThreadMessages(thread.id, env).catch(() => []);
-  const existing = eventId ? messages.find((message) => message.eventId === eventId) : null;
+  const existing = findExistingEventMessage(messages, input);
   if (existing) {
-    return updateThreadMessage(thread.id, existing.id, {
+    const patch = {
       ...input,
       state: input.state || existing.state || "completed",
-    }, env).catch(() => existing);
+    };
+    if (!eventMessagePatchChanged(existing, patch)) return existing;
+    if (shouldCoalesceCodexEventMessageUpdate(existing, patch, env)) {
+      return { ...existing, coalescedUpdate: true, coalescedText: clean(patch.text) };
+    }
+    return updateThreadMessage(thread.id, existing.id, patch, env).catch(() => existing);
   }
   return appendThreadMessage(thread.id, input, env);
 }
