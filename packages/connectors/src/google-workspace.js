@@ -162,6 +162,7 @@ async function createBrokeredGoogleWorkspaceConnectLink({
     tenantVmId: clean(env.ORKESTR_TENANT_VM_ID),
     userId: scope.userId || clean(principal?.userId),
     threadId: clean(thread.id),
+    threadName: clean(thread.name || thread.title || thread.displayName),
     chatId: clean(chatId || threadBinding.chatId),
     accountId: clean(accountId || threadBinding.responderAccountId || threadBinding.outboundAccountId),
     account: clean(account).toLowerCase(),
@@ -248,6 +249,7 @@ export async function createGoogleWorkspaceConnectLink({
   brokerTenantVmId = "",
   brokerTenantUserId = "",
   brokerTenantThreadId = "",
+  brokerTenantThreadName = "",
   brokerTenantChatId = "",
   brokerTenantAccountId = "",
 } = {}, env = process.env) {
@@ -261,6 +263,7 @@ export async function createGoogleWorkspaceConnectLink({
     connectId,
     userId: scope.userId || "",
     threadId: clean(thread.id),
+    threadName: clean(thread.name || thread.title || thread.displayName),
     chatId: clean(chatId || threadBinding.chatId),
     accountId: clean(accountId || threadBinding.responderAccountId || threadBinding.outboundAccountId),
     account: clean(account).toLowerCase(),
@@ -269,6 +272,7 @@ export async function createGoogleWorkspaceConnectLink({
     brokerTenantVmId: clean(brokerTenantVmId),
     brokerTenantUserId: clean(brokerTenantUserId),
     brokerTenantThreadId: clean(brokerTenantThreadId),
+    brokerTenantThreadName: clean(brokerTenantThreadName),
     brokerTenantChatId: clean(brokerTenantChatId),
     brokerTenantAccountId: clean(brokerTenantAccountId),
     createdAt: nowIso(),
@@ -297,11 +301,10 @@ export async function createGoogleWorkspaceConnectLink({
 export function googleWorkspaceConnectMessage({ link = "", expiresAt = "" } = {}) {
   return [
     "Google Workspace is optional. To start it from chat, send this exact command: /connect google",
-    "Then open this one-time link and choose exactly what Orkestr may access:",
+    "Then open this one-time link to approve Google sign-in for this Orkestr instance:",
     clean(link),
     "",
-    "Available capabilities: Gmail read, Gmail actions, Gmail send and drafts, Calendar read, Calendar actions, Drive selected files.",
-    "Drive access uses drive.file only; Orkestr will not request broad Drive access.",
+    "Requested provider: google_workspace. Requested service: gmail.",
     clean(expiresAt) ? `This one-time link expires at ${clean(expiresAt)}.` : "",
   ].filter((line) => line !== "").join("\n");
 }

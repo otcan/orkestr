@@ -2029,6 +2029,12 @@ export class ApiService {
     return this.http.get<GmailOAuthStartResponse>(this.api(`/connectors/gmail/oauth/start${suffix}`));
   }
 
+  disconnectGmailAuth(): Observable<{ ok: boolean; provider: string; state: string; status?: Record<string, unknown> }> {
+    return this.http.delete<{ ok: boolean; provider: string; state: string; status?: Record<string, unknown> }>(
+      this.api("/connectors/gmail/auth"),
+    );
+  }
+
   startOutlookOAuth(account = ""): Observable<OutlookOAuthStartResponse> {
     return this.http.post<OutlookOAuthStartResponse>(this.api("/connectors/outlook/oauth/start"), { account });
   }

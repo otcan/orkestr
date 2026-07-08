@@ -60,6 +60,9 @@ function oauthConnectorSetupStatus(auth = {}, label = "", summaries = {}) {
   const parent = auth.parentConnector || {};
   const safeAuthDetails = {
     parentConnector: parent,
+    ...(auth.provider ? { provider: auth.provider } : {}),
+    ...(auth.account ? { account: auth.account } : {}),
+    ...(auth.shop ? { shop: auth.shop } : {}),
     ...(Array.isArray(auth.capabilities) ? { capabilities: auth.capabilities } : {}),
     ...(Array.isArray(auth.capabilityLabels) ? { capabilityLabels: auth.capabilityLabels } : {}),
     ...(Array.isArray(auth.grantedScopes) ? { grantedScopes: auth.grantedScopes } : {}),

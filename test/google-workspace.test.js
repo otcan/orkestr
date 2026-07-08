@@ -472,20 +472,24 @@ test("calendar and drive helpers build scoped google workspace requests", async 
   assert.equal(file.content, "Drive file contents");
 });
 
-test("google workspace disclosure html names capabilities and drive.file limit", () => {
-  const html = googleWorkspaceConnectHtml({ connectId: "connect-1", request: { account: "user@example.com" } });
+test("google workspace connect html shows MCP context without duplicate account or scope controls", () => {
+  const html = googleWorkspaceConnectHtml({
+    connectId: "connect-1",
+    request: { account: "user@example.com", brokerInstanceId: "instance-firat", userId: "firat", threadName: "firat-jobs" },
+  });
   assert.match(html, /Connect Google Workspace/);
-  assert.match(html, /name="account"/);
-  assert.match(html, /type="email"/);
-  assert.match(html, /value="user@example\.com"/);
-  assert.match(html, /required/);
-  assert.match(html, /Gmail read/);
-  assert.match(html, /Calendar read/);
-  assert.match(html, /Calendar actions/);
-  assert.match(html, /Drive selected files/);
-  assert.match(html, /Drive uses selected-file access only/);
+  assert.match(html, /name="connect"/);
+  assert.match(html, /Continue to Google/);
   assert.match(html, /orkestr_auth/);
   assert.match(html, /google_workspace/);
+  assert.match(html, /instance-firat/);
+  assert.match(html, /firat/);
+  assert.match(html, /firat-jobs/);
+  assert.doesNotMatch(html, /name="account"/);
+  assert.doesNotMatch(html, /type="email"/);
+  assert.doesNotMatch(html, /name="capability"/);
+  assert.doesNotMatch(html, /Gmail read/);
+  assert.doesNotMatch(html, /Drive selected files/);
 });
 
 test("google workspace preview html does not expose the OAuth start form", () => {

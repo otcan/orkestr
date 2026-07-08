@@ -61,6 +61,7 @@ export class UserConnectorsPageComponent implements OnDestroy, OnInit {
   }
 
   userConnectors(): ConnectorStatus[] {
+    if (!this.setupStatus) return [];
     const active = this.routeConnectorId();
     const connectors = this.connectorOrder.map((id) => this.connectorStatus(id));
     if (active) return connectors.filter((connector) => connector.id === active);
@@ -121,6 +122,14 @@ export class UserConnectorsPageComponent implements OnDestroy, OnInit {
     return String(connector.state || "").toLowerCase() === "connected";
   }
 
+  connectedAccount(connector: ConnectorStatus): string {
+    return this.detailString(connector, "account") || this.detailString(connector, "email") || this.detailString(connector, "loginHint");
+  }
+
+  connectedCapabilityLabels(connector: ConnectorStatus): string[] {
+    return this.detailStringArray(connector, "capabilityLabels");
+  }
+
   async startGmail(options: { autoRedirect?: boolean } = {}): Promise<void> {
     if (this.actionBusy) return;
     this.actionBusy = "gmail";
@@ -134,6 +143,23 @@ export class UserConnectorsPageComponent implements OnDestroy, OnInit {
         return;
       }
       await this.load();
+    } catch (error) {
+      this.error = this.errorText(error);
+    } finally {
+      this.actionBusy = "";
+    }
+  }
+
+  async disconnectGmail(): Promise<void> {
+    if (this.actionBusy) return;
+    this.actionBusy = "gmail-disconnect";
+    try {
+      await firstValueFrom(this.api.disconnectGmailAuth());
+      this.gmailAuth = null;
+      this.gmailAccount = "";
+      this.notice = "Gmail auth deleted.";
+      this.error = "";
+      await this.load(false);
     } catch (error) {
       this.error = this.errorText(error);
     } finally {
@@ -161,7 +187,13 @@ export class UserConnectorsPageComponent implements OnDestroy, OnInit {
   }
 
   currentUserLabel(): string {
-    return String(this.currentUser?.displayName || this.currentUser?.id || "User");
+    return String(
+      this.currentUser?.displayName ||
+        this.currentUser?.id ||
+        this.routeQueryParam("user_id") ||
+        this.routeQueryParam("user") ||
+        (this.busy ? "Loading user" : "User"),
+    );
   }
 
   loginOnly(): boolean {
@@ -185,6 +217,14 @@ export class UserConnectorsPageComponent implements OnDestroy, OnInit {
     return this.routeQueryParam("tool") || "orkestr_auth";
   }
 
+  connectorIntentProvider(): string {
+    return this.routeQueryParam("provider") || "google_workspace";
+  }
+
+  connectorIntentAction(): string {
+    return this.routeQueryParam("action") || "connect";
+  }
+
   connectorIntentServiceLabel(): string {
     return this.connectorLabel(this.connectorIntentService());
   }
@@ -194,7 +234,7 @@ export class UserConnectorsPageComponent implements OnDestroy, OnInit {
   }
 
   connectorIntentAccountLabel(): string {
-    return this.gmailAccount.trim() || this.routeQueryParam("account") || "Choose during Google sign-in";
+    return this.routeQueryParam("account") || this.connectedAccount(this.connectorStatus("gmail")) || "Choose during Google sign-in";
   }
 
   routeConnectorId(): string {
@@ -210,6 +250,7 @@ export class UserConnectorsPageComponent implements OnDestroy, OnInit {
   private maybeAutoStartRouteLogin(): void {
     const active = this.routeConnectorId();
     if (active !== "gmail") return;
+    if (!this.setupStatus) return;
     if (this.autoStartedRoute === active) return;
     if (this.actionBusy || this.autoLoginDisabled()) return;
     if (String(this.connectorStatus("gmail").state || "").toLowerCase() === "connected") return;
@@ -277,6 +318,18 @@ export class UserConnectorsPageComponent implements OnDestroy, OnInit {
     const normalized = path.startsWith("/") ? path : `/${path}`;
     const base = this.appBasePath();
     return base ? `${base}${normalized}` : normalized;
+  }
+
+  private detailString(connector: ConnectorStatus, key: string): string {
+    const details = connector.details || {};
+    const value = details[key];
+    return typeof value === "string" || typeof value === "number" ? String(value).trim() : "";
+  }
+
+  private detailStringArray(connector: ConnectorStatus, key: string): string[] {
+    const details = connector.details || {};
+    const value = details[key];
+    return Array.isArray(value) ? value.map((item) => String(item || "").trim()).filter(Boolean) : [];
   }
 
   private scheduleRetryIfNeeded(): void {

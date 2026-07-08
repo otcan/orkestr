@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { Body, Controller, Get, HttpCode, Param, Post, Query, Req, Res, UploadedFiles, UseInterceptors } from "@nestjs/common";
+import { Body, Controller, Delete, Get, HttpCode, Param, Post, Query, Req, Res, UploadedFiles, UseInterceptors } from "@nestjs/common";
 import { AnyFilesInterceptor } from "@nestjs/platform-express";
 import { getSetupStatus } from "../../../../../packages/core/src/setup.js";
 import { readRuntimeSettings } from "../../../../../packages/core/src/runtime-settings.js";
@@ -22,6 +22,7 @@ import {
 import {
   googleWorkspaceCapabilityLabels,
 } from "../../../../../packages/connectors/src/google-workspace-scopes.js";
+import { disconnectConnectorAuth } from "../../../../../packages/connectors/src/connector-auth.js";
 import {
   pollOutlookDeviceOAuth,
   startOutlookDeviceOAuth,
@@ -434,6 +435,12 @@ export class ConnectorsController {
   @Get("gmail/oauth/start")
   async startGmailOAuth(@Req() request: any, @Query("account") account = "") {
     return beginGmailOAuth(process.env, { account, principal: requestPrincipal(request) });
+  }
+
+  @Delete("gmail/auth")
+  @HttpCode(200)
+  async disconnectGmailAuth(@Req() request: any) {
+    return disconnectConnectorAuth({ provider: "gmail" }, requestPrincipal(request), process.env);
   }
 
   @Get("gmail/messages")

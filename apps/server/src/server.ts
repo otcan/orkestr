@@ -237,6 +237,7 @@ function authIntentBrokerAppApiRouteAllowed(method: string, rest: string[]) {
   if (method === "GET" && ["health", "ready", "version"].includes(surface)) return true;
   if (method === "GET" && surface === "setup" && second === "status") return true;
   if (method === "GET" && surface === "users" && second === "me") return true;
+  if (method === "DELETE" && surface === "connectors" && second === "gmail" && rest[3]?.toLowerCase() === "auth") return true;
   return false;
 }
 

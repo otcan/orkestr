@@ -397,6 +397,11 @@ test("broker instance app path pairs on broker and proxies the VM WebUI", async 
       response.end(JSON.stringify({ ok: true, user: { id: "firat", role: "user" } }));
       return;
     }
+    if (request.method === "DELETE" && request.url === "/api/connectors/gmail/auth") {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ ok: true, provider: "gmail", state: "disconnected" }));
+      return;
+    }
     if (request.url === "/redirect-home") {
       response.writeHead(302, { location: "/" });
       response.end("redirecting");
@@ -468,6 +473,8 @@ test("broker instance app path pairs on broker and proxies the VM WebUI", async 
     const intentSetupPayload = await intentSetupResponse.json();
     const intentUserResponse = await fetch(`http://127.0.0.1:${port}/i/${brokerRegistration.instanceId}/app/api/users/me`, { headers: { cookie: authIntentCookie } });
     const intentUserPayload = await intentUserResponse.json();
+    const intentDisconnectResponse = await fetch(`http://127.0.0.1:${port}/i/${brokerRegistration.instanceId}/app/api/connectors/gmail/auth`, { method: "DELETE", headers: { cookie: authIntentCookie } });
+    const intentDisconnectPayload = await intentDisconnectResponse.json();
     const intentThreadsResponse = await fetch(`http://127.0.0.1:${port}/i/${brokerRegistration.instanceId}/app/api/threads`, { headers: { cookie: authIntentCookie }, redirect: "manual" });
     const intentThreadsPayload = await intentThreadsResponse.json();
     const parentAppResponse = await fetch(`http://127.0.0.1:${port}/app`, { headers: { cookie: authIntentCookie }, redirect: "manual" });
@@ -493,6 +500,8 @@ test("broker instance app path pairs on broker and proxies the VM WebUI", async 
     assert.equal(intentSetupPayload.connectors[0].state, "connected");
     assert.equal(intentUserResponse.status, 200);
     assert.equal(intentUserPayload.user.id, "firat");
+    assert.equal(intentDisconnectResponse.status, 200);
+    assert.equal(intentDisconnectPayload.provider, "gmail");
     assert.equal(intentThreadsResponse.status, 403);
     assert.equal(intentThreadsPayload.error, "auth_intent_session_scope_denied");
     assert.equal(parentAppResponse.status, 403);
@@ -1360,19 +1369,26 @@ test("web shell exposes a user connector management page", async () => {
   assert.match(connectorsComponent, /this\.api\.setupStatus\(\)/);
   assert.match(connectorsComponent, /this\.api\.currentUser\(\)/);
   assert.match(connectorsComponent, /Promise\.allSettled/);
+  assert.match(connectorsComponent, /if \(!this\.setupStatus\) return \[\]/);
   assert.match(connectorsComponent, /scheduleRetryIfNeeded\(\): void/);
   assert.match(connectorsComponent, /maybeAutoStartRouteLogin\(\): void/);
   assert.match(connectorsComponent, /startGmail\(options: \{ autoRedirect\?: boolean \} = \{\}\)/);
+  assert.match(connectorsComponent, /disconnectGmail\(\): Promise<void>/);
   assert.match(connectorsComponent, /connectorConnected\(connector: ConnectorStatus\): boolean/);
+  assert.match(connectorsComponent, /connectedAccount\(connector: ConnectorStatus\): string/);
+  assert.match(connectorsComponent, /connectedCapabilityLabels\(connector: ConnectorStatus\): string\[\]/);
   assert.match(connectorsComponent, /globalThis\.location\.href = this\.gmailAuth\.authorizeUrl/);
   assert.match(connectorsComponent, /connectorIntentActive\(\): boolean/);
   assert.match(connectorsComponent, /connectorIntentMethod\(\): string/);
   assert.match(connectorsComponent, /connectorIntentTool\(\): string/);
+  assert.match(connectorsComponent, /connectorIntentProvider\(\): string/);
+  assert.match(connectorsComponent, /connectorIntentAction\(\): string/);
   assert.match(connectorsComponent, /connectorIntentServiceLabel\(\): string/);
   assert.match(connectorsComponent, /connectorIntentAccountLabel\(\): string/);
   assert.match(connectorsComponent, /routeQueryParam\(name: string\): string/);
   assert.match(connectorsComponent, /void this\.load\(false\)/);
   assert.match(connectorsComponent, /this\.api\.startGmailOAuth\(this\.gmailAccount\)/);
+  assert.match(connectorsComponent, /this\.api\.disconnectGmailAuth\(\)/);
   assert.match(connectorsComponent, /this\.api\.startOutlookOAuth\(this\.outlookAccount\)/);
   assert.match(connectorsComponent, /private readonly connectorOrder = \["whatsapp", "gmail", "outlook", "jira", "shopify", "linkedin", "browsers"\]/);
   assert.match(connectorsComponent, /private appBasePath\(\): string/);
@@ -1381,23 +1397,35 @@ test("web shell exposes a user connector management page", async () => {
   assert.match(connectorsTemplate, /\[class\.login-only\]="loginOnly\(\)"/);
   assert.match(connectorsTemplate, /\[attr\.data-mcp\]="connectorIntentActive\(\) \? connectorIntentMethod\(\) : null"/);
   assert.match(connectorsTemplate, /\[attr\.data-service\]="connectorIntentActive\(\) \? 'gmail' : null"/);
+  assert.match(connectorsTemplate, /\[attr\.data-provider\]="connectorIntentActive\(\) \? connectorIntentProvider\(\) : null"/);
+  assert.match(connectorsTemplate, /\[attr\.data-action\]="connectorIntentActive\(\) \? connectorIntentAction\(\) : null"/);
   assert.match(connectorsTemplate, /Connection context/);
   assert.match(connectorsTemplate, /connectorIntentTool\(\)/);
   assert.match(connectorsTemplate, /Service/);
+  assert.match(connectorsTemplate, /Provider/);
+  assert.match(connectorsTemplate, /Action/);
+  assert.match(connectorsTemplate, /User/);
   assert.match(connectorsTemplate, /connector\.id === "gmail" && !connectorConnected\(connector\)/);
   assert.match(connectorsTemplate, /connectorIntentTargetInstanceId\(\)/);
   assert.match(connectorsTemplate, /loginOnly\(\) \? "Secure sign-in" : "Connectors"/);
+  assert.match(connectorsTemplate, /Google account/);
+  assert.match(connectorsTemplate, /connectedAccount\(connector\)/);
+  assert.match(connectorsTemplate, /Delete Gmail auth/);
+  assert.match(connectorsTemplate, /disconnectGmail\(\)/);
+  assert.match(connectorsTemplate, /class="connector-details"/);
   assert.match(connectorsTemplate, /name="user-gmail-account"/);
   assert.match(connectorsTemplate, /name="user-outlook-account"/);
   assert.match(connectorsTemplate, /Open Gmail sign-in/);
   assert.match(connectorsTemplate, /Open Microsoft sign-in/);
   assert.match(connectorsTemplate, /\[href\]="deskPath\(\)"/);
   assert.match(api, /startGmailOAuth\(account = ""\)/);
+  assert.match(api, /disconnectGmailAuth\(\)/);
   assert.match(api, /startOutlookOAuth\(account = ""\)/);
   assert.match(styles, /\.user-connector-grid/);
   assert.match(styles, /\.connector-login-shell/);
   assert.match(styles, /\.user-connectors-page\.login-only \.user-connector-grid/);
   assert.match(styles, /\.connector-intent/);
+  assert.match(styles, /\.connector-details/);
   assert.match(styles, /\.connector-action/);
   assert.match(styles, /\.connector-device-code/);
 });

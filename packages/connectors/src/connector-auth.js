@@ -219,7 +219,7 @@ export async function connectorAuthStatus(providerId = "", env = process.env, op
     state,
     connected: tokenExists,
     pending: state === "pending" || state === "authorization_url_ready",
-    account: clean(pending.account || oauthState.account),
+    account: clean(token.account || pending.account || oauthState.account),
     shop: clean(oauthState.shop),
     parentConnector,
     userConnectionRequired: true,

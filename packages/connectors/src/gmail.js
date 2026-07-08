@@ -181,6 +181,7 @@ function normalizeOAuthTokenPayload(payload, prior = {}, options = {}) {
   const token = {
     accessToken,
     refreshToken: String(payload.refresh_token || prior.refreshToken || "").trim(),
+    account: normalizeEmail(options.account || prior.account || ""),
     scope: grantedScopes.join(" "),
     grantedScopes,
     capabilities,
@@ -233,6 +234,7 @@ function normalizeBrokerGrantToken(rawToken = {}, grant = {}, prior = {}) {
   return {
     accessToken,
     refreshToken: clean(rawToken.refreshToken || rawToken.refresh_token || prior.refreshToken),
+    account: normalizeEmail(grant.account || rawToken.account || prior.account || ""),
     scope: grantedScopes.join(" "),
     grantedScopes,
     capabilities: googleWorkspaceCapabilitiesForScopes(grantedScopes, requestedCapabilities),
@@ -568,6 +570,7 @@ export async function finishGmailOAuth(query, env = process.env, fetchImpl = fet
   const brokered = Boolean(clean(savedState.brokerInstanceId));
   const token = await exchangeGmailCode(code, env, fetchImpl, {
     ...scopeOptions,
+    account: savedState.account || "",
     redirectUri: savedState.redirectUri || "",
     provider: savedState.provider || "gmail",
     connectId: savedState.connectId || "",

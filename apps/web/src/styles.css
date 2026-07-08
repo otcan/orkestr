@@ -3145,6 +3145,36 @@ ork-first-thread-wizard.first-thread-host {
   text-transform: uppercase;
 }
 
+.connector-details {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 8px 0 0;
+  border-top: 1px solid var(--line);
+}
+
+.connector-details div {
+  display: grid;
+  gap: 3px;
+}
+
+.connector-details dt {
+  color: #91ad8b;
+  font-size: 0.75rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.connector-details dd {
+  margin: 0;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.connector-details code {
+  color: var(--text);
+}
+
 .connector-device-code {
   display: flex;
   flex-wrap: wrap;

@@ -382,6 +382,7 @@ test("brokered gmail grants refresh through the parent broker without local OAut
   });
   await saveBrokeredGmailGrant({
     userId: "firat",
+    account: "firat@example.com",
     provider: "google_workspace",
     brokerInstanceId: "instance-firat",
     requestedCapabilities: ["gmail_read"],
@@ -413,6 +414,7 @@ test("brokered gmail grants refresh through the parent broker without local OAut
   assert.equal(refreshed.accessToken, "access-new");
   assert.equal(refreshed.refreshToken, "refresh-owned-by-tenant");
   assert.equal(stored.accessToken, "access-new");
+  assert.equal(stored.account, "firat@example.com");
   assert.equal(stored.brokered, true);
   assert.equal(stored.brokerInstanceId, "instance-firat");
 });
@@ -455,17 +457,22 @@ test("successful gmail oauth clears previous token error status", async () => {
     /Bad code/,
   );
 
-  await exchangeGmailCode("good-code", env, async () =>
-    jsonResponse({
-      access_token: "access-ok",
-      refresh_token: "refresh-ok",
-      expires_in: 3600,
-    }),
+  await exchangeGmailCode(
+    "good-code",
+    env,
+    async () =>
+      jsonResponse({
+        access_token: "access-ok",
+        refresh_token: "refresh-ok",
+        expires_in: 3600,
+      }),
+    { account: "person@example.com" },
   );
 
   const status = await getSetupStatus({ env, home });
   const gmail = status.connectors.find((connector) => connector.id === "gmail");
   assert.equal(gmail.state, "connected");
+  assert.equal(gmail.details.account, "person@example.com");
   assert.equal(gmail.details.error, undefined);
 });
 
