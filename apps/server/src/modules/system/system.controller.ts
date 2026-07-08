@@ -809,8 +809,16 @@ export class SystemController {
       domain: body.domain ?? rawInput.domain,
       source: body.source ?? rawInput.source ?? "orkestr-sanitizer-cli",
     });
+    const actor = {
+      kind: String(principal?.kind || "user"),
+      userId: String(principal?.userId || "").trim(),
+      role: isAdminPrincipal(principal) ? "admin" : "user",
+      source: String(principal?.source || "").trim(),
+      displayName: String(principal?.displayName || "").trim(),
+    };
     const requestPayload = {
       action: String(body.action || "external.action").trim().slice(0, 160) || "external.action",
+      actor,
       principal: {
         kind: "user",
         userId: ownerUserId,

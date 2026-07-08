@@ -455,6 +455,8 @@ test("POST /api/sanitizer/check runs server-owned sanitizer for resolved thread 
     assert.equal(payload.thread.id, "firat-jobs");
     assert.equal(payload.thread.ownerUserId, "firat");
     assert.equal(sanitizerPayload.action, "external.submit");
+    assert.equal(sanitizerPayload.actor.userId, "admin");
+    assert.equal(sanitizerPayload.actor.role, "admin");
     assert.equal(sanitizerPayload.principal.userId, "firat");
     assert.equal(sanitizerPayload.principal.role, "user");
     assert.equal(sanitizerPayload.resource.ownerUserId, "firat");
