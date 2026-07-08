@@ -5,7 +5,12 @@ import tls from "node:tls";
 import type { INestApplication } from "@nestjs/common";
 import type { IncomingMessage, Server } from "node:http";
 import type { Duplex } from "node:stream";
+import {
+  createGoogleWorkspaceConnectLink,
+  startGoogleWorkspaceOAuth,
+} from "../../../packages/connectors/src/google-workspace.js";
 import { encryptBrokerInstanceProxyPayload, resolveBrokerConnectInstance } from "../../../packages/core/src/broker-instance-registry.js";
+import { userPrincipal } from "../../../packages/core/src/principal.js";
 import { securityCookieName, securitySessionForToken } from "../../../packages/core/src/security.js";
 import { listTenantVms } from "../../../packages/core/src/tenant-vm-registry.js";
 import { getUser } from "../../../packages/core/src/users.js";
@@ -93,6 +98,14 @@ function sendPlain(response: any, statusCode: number, message: string): void {
   response.end(message);
 }
 
+function sendJson(response: any, statusCode: number, body: Record<string, unknown>): void {
+  response
+    .status(statusCode)
+    .header("cache-control", "no-store")
+    .type("application/json; charset=utf-8")
+    .send(JSON.stringify(body));
+}
+
 function redirect(response: any, location: string, message = "Redirecting."): void {
   response
     .status(302)
@@ -119,6 +132,117 @@ function pairingRedirectUrl(request: any, route: BrokerAppRoute, requestUrl = ""
 function requestHasInstanceSession(request: any, instanceId: string): boolean {
   const session = request?.orkestrSecuritySession;
   return Boolean(session && String(session.instanceId || "") === instanceId);
+}
+
+function clean(value: unknown): string {
+  return String(value || "").trim();
+}
+
+function stringArray(value: unknown): string[] {
+  const values = Array.isArray(value) ? value : clean(value).split(/[\s,]+/g);
+  const result: string[] = [];
+  const seen = new Set<string>();
+  for (const item of values) {
+    const text = clean(item);
+    const key = text.toLowerCase();
+    if (!text || seen.has(key)) continue;
+    seen.add(key);
+    result.push(text);
+  }
+  return result;
+}
+
+function authIntentAllowsGoogleConnect(session: any, instanceId: string): boolean {
+  if (!session || clean(session.instanceId) !== instanceId) return false;
+  const intent = session.authIntent && typeof session.authIntent === "object" ? session.authIntent : {};
+  const allowedActions = Array.isArray(session.allowedActions) ? session.allowedActions : [];
+  return clean(intent.service).toLowerCase() === "gmail" &&
+    clean(intent.provider).toLowerCase() === "google_workspace" &&
+    clean(intent.action).toLowerCase() === "connect" &&
+    allowedActions.some((action: string) => /^orkestr_auth\.google\.connect(?::|$)/.test(clean(action)));
+}
+
+function brokerGoogleWorkspaceStartRequest(request: any, route: BrokerAppRoute): URL | null {
+  if (String(request?.method || "GET").toUpperCase() !== "GET") return null;
+  const parsed = new URL(route.upstreamPath || "/", "http://tenant.local");
+  return parsed.pathname === "/api/connectors/gmail/oauth/start" ? parsed : null;
+}
+
+async function handleBrokerGoogleWorkspaceStart(request: any, response: any, route: BrokerAppRoute): Promise<boolean> {
+  const parsed = brokerGoogleWorkspaceStartRequest(request, route);
+  if (!parsed) return false;
+  const session = request?.orkestrSecuritySession || null;
+  if (!authIntentAllowsGoogleConnect(session, route.instanceId)) return false;
+  const intent = session.authIntent && typeof session.authIntent === "object" ? session.authIntent : {};
+  const owner = await ownerUserForBrokerInstance(route.instanceId);
+  const userId = clean(owner.userId || intent.userId || session.userId);
+  const displayName = clean(owner.displayName || intent.userId || userId);
+  const account = clean(parsed.searchParams.get("account") || intent.account).toLowerCase();
+  const capabilities = stringArray(parsed.searchParams.getAll("capability").length
+    ? parsed.searchParams.getAll("capability")
+    : parsed.searchParams.get("capabilities") || "gmail_read");
+  let connectId = clean(intent.connectId);
+  let connectorLink = "";
+  let connectLink = "";
+  try {
+    if (!connectId) {
+      const threadId = clean(intent.threadId);
+      const threadName = clean(intent.thread || intent.threadName || threadId);
+      const chatId = clean(intent.chatId);
+      const accountId = clean(intent.accountId);
+      const link = await createGoogleWorkspaceConnectLink({
+        principal: userPrincipal({
+          id: userId || route.instanceId,
+          role: userId ? "user" : "admin",
+          source: "broker-app-proxy",
+          displayName: displayName || userId || route.instanceId,
+        }),
+        thread: {
+          id: threadId,
+          name: threadName,
+          ownerUserId: userId,
+          binding: {
+            connector: "whatsapp",
+            chatId,
+            responderAccountId: accountId,
+            outboundAccountId: accountId,
+          },
+        },
+        chatId,
+        accountId,
+        account,
+        brokerInstanceId: route.instanceId,
+        brokerTenantVmId: clean(intent.tenantVmId),
+        brokerTenantUserId: userId,
+        brokerTenantThreadId: threadId,
+        brokerTenantThreadName: threadName,
+        brokerTenantChatId: chatId,
+        brokerTenantAccountId: accountId,
+      }, process.env);
+      connectId = clean(link.connectId);
+      connectorLink = clean(link.connectorLink);
+      connectLink = clean(link.connectLink);
+    }
+    const started = await startGoogleWorkspaceOAuth(process.env, {
+      connectId,
+      capabilities,
+      account,
+    });
+    sendJson(response, 200, {
+      ...started,
+      ok: true,
+      provider: "google_workspace",
+      connectId,
+      connectorLink,
+      connectLink,
+    });
+  } catch (error) {
+    sendJson(response, Number((error as any)?.statusCode || 400) || 400, {
+      ok: false,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+  return true;
 }
 
 function targetPort(baseUrl: URL): number {
@@ -224,6 +348,7 @@ async function proxyBrokerAppHttp(request: any, response: any): Promise<void> {
     redirect(response, pairingRedirectUrl(request, route, requestUrl), "Redirecting to Orkestr pairing.");
     return;
   }
+  if (await handleBrokerGoogleWorkspaceStart(request, response, route)) return;
 
   let target: BrokerAppTarget | null = null;
   try {

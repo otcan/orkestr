@@ -1,4 +1,4 @@
-import { Component, OnDestroy, OnInit, inject } from "@angular/core";
+import { ChangeDetectorRef, Component, OnDestroy, OnInit, inject } from "@angular/core";
 import { FormsModule } from "@angular/forms";
 import { firstValueFrom } from "rxjs";
 import { ApiService, ConnectorStatus, GmailOAuthStartResponse, OrkestrUser, OutlookOAuthStartResponse, SetupStatus } from "./api.service";
@@ -10,10 +10,13 @@ import { ApiService, ConnectorStatus, GmailOAuthStartResponse, OrkestrUser, Outl
 })
 export class UserConnectorsPageComponent implements OnDestroy, OnInit {
   private readonly api = inject(ApiService);
+  private readonly cdr = inject(ChangeDetectorRef);
   private readonly connectorOrder = ["whatsapp", "gmail", "outlook", "jira", "shopify", "linkedin", "browsers"];
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
   private retryAttempts = 0;
   private autoStartedRoute = "";
+  private destroyed = false;
+  private renderQueued = false;
 
   busy = false;
   actionBusy = "";
@@ -32,12 +35,16 @@ export class UserConnectorsPageComponent implements OnDestroy, OnInit {
   }
 
   ngOnDestroy(): void {
+    this.destroyed = true;
     this.clearRetry();
   }
 
   async load(showBusy = true): Promise<void> {
     this.clearRetry();
-    if (showBusy) this.busy = true;
+    if (showBusy) {
+      this.busy = true;
+      this.renderNow();
+    }
     try {
       const [setup, user] = await Promise.allSettled([
         firstValueFrom(this.api.setupStatus()),
@@ -45,8 +52,10 @@ export class UserConnectorsPageComponent implements OnDestroy, OnInit {
       ]);
       if (setup.status === "fulfilled") this.setupStatus = setup.value;
       if (user.status === "fulfilled") this.currentUser = user.value.user;
-      if (setup.status === "rejected" && user.status === "rejected") {
-        this.error = this.errorText(user.reason || setup.reason);
+      if (setup.status === "rejected") {
+        this.error = this.errorText(setup.reason);
+      } else if (user.status === "rejected" && !this.currentUser) {
+        this.error = this.errorText(user.reason);
       } else {
         this.error = "";
       }
@@ -57,6 +66,7 @@ export class UserConnectorsPageComponent implements OnDestroy, OnInit {
       this.scheduleRetryIfNeeded();
     } finally {
       this.busy = false;
+      this.renderNow();
     }
   }
 
@@ -133,6 +143,7 @@ export class UserConnectorsPageComponent implements OnDestroy, OnInit {
   async startGmail(options: { autoRedirect?: boolean } = {}): Promise<void> {
     if (this.actionBusy) return;
     this.actionBusy = "gmail";
+    this.renderNow();
     try {
       this.gmailAuth = await firstValueFrom(this.api.startGmailOAuth(this.gmailAccount));
       this.notice = this.gmailAuth.authorizeUrl ? "Gmail sign-in ready." : "Gmail sign-in started.";
@@ -147,12 +158,14 @@ export class UserConnectorsPageComponent implements OnDestroy, OnInit {
       this.error = this.errorText(error);
     } finally {
       this.actionBusy = "";
+      this.renderNow();
     }
   }
 
   async disconnectGmail(): Promise<void> {
     if (this.actionBusy) return;
     this.actionBusy = "gmail-disconnect";
+    this.renderNow();
     try {
       await firstValueFrom(this.api.disconnectGmailAuth());
       this.gmailAuth = null;
@@ -164,12 +177,14 @@ export class UserConnectorsPageComponent implements OnDestroy, OnInit {
       this.error = this.errorText(error);
     } finally {
       this.actionBusy = "";
+      this.renderNow();
     }
   }
 
   async startOutlook(): Promise<void> {
     if (this.actionBusy) return;
     this.actionBusy = "outlook";
+    this.renderNow();
     try {
       this.outlookAuth = await firstValueFrom(this.api.startOutlookOAuth(this.outlookAccount));
       this.notice = this.outlookAuth.userCode ? "Outlook sign-in ready." : "Outlook sign-in started.";
@@ -179,6 +194,7 @@ export class UserConnectorsPageComponent implements OnDestroy, OnInit {
       this.error = this.errorText(error);
     } finally {
       this.actionBusy = "";
+      this.renderNow();
     }
   }
 
@@ -357,6 +373,18 @@ export class UserConnectorsPageComponent implements OnDestroy, OnInit {
     if (!this.retryTimer) return;
     clearTimeout(this.retryTimer);
     this.retryTimer = null;
+  }
+
+  private renderNow(): void {
+    if (this.destroyed || this.renderQueued) return;
+    this.renderQueued = true;
+    const run = () => {
+      this.renderQueued = false;
+      if (this.destroyed) return;
+      this.cdr.detectChanges();
+    };
+    if (typeof globalThis.queueMicrotask === "function") globalThis.queueMicrotask(run);
+    else void Promise.resolve().then(run);
   }
 
   private errorText(error: unknown): string {

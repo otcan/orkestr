@@ -257,7 +257,10 @@ test("google workspace brokered connect links require instance and owner scoped 
     brokerTenantChatId: "firat-chat",
     brokerTenantAccountId: "sender",
   }, process.env);
-  const connectUrl = new URL(connect.link);
+  const connectorUrl = new URL(connect.link);
+  assert.equal(connectorUrl.origin, "https://connect.orkestr.de");
+  assert.equal(connectorUrl.pathname, "/i/instance-firat/app/connectors/gmail");
+  const connectUrl = new URL(connect.connectLink);
   assert.equal(connectUrl.origin, "https://connect.orkestr.de");
   const connectPath = `${connectUrl.pathname}${connectUrl.search}`;
   const startPath = `/connect/google/start?connect=${encodeURIComponent(connect.connectId)}&capability=gmail_read`;
@@ -289,7 +292,7 @@ test("google workspace brokered connect links require instance and owner scoped 
     assert.equal(challengePayload.challenge.authIntent.connectId, connect.connectId);
     assert.equal(challengePayload.challenge.authIntent.instanceId, "instance-firat");
     assert.equal(challengePayload.challenge.authIntent.userId, "firat");
-    assert.equal(challengePayload.challenge.authIntent.thread, "firat-jobs");
+    assert.equal(challengePayload.challenge.authIntent.thread, "firat-thread");
 
     const beforePreview = await listPairingChallenges({ env: process.env, includeExpired: true });
     const previewResponse = await fetch(`http://127.0.0.1:${port}${connectPath}`, {
@@ -370,10 +373,23 @@ test("google workspace brokered connect links require instance and owner scoped 
 
 test("broker instance app path pairs on broker and proxies the VM WebUI", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-static-instance-app-"));
-  const priorHome = process.env.ORKESTR_HOME;
-  const priorAuthRequired = process.env.ORKESTR_AUTH_REQUIRED;
+  const envKeys = [
+    ...publicRuntimeEnvKeys,
+    "ORKESTR_HOME",
+    "GMAIL_OAUTH_CLIENT_ID",
+    "GMAIL_OAUTH_CLIENT_SECRET",
+    "GMAIL_OAUTH_REDIRECT_URI",
+    "GOOGLE_OAUTH_REDIRECT_URI",
+    "ORKESTR_GOOGLE_WORKSPACE_CONNECT_PUBLIC_URL",
+  ];
+  const prior = snapshotEnv(envKeys);
+  clearEnv(envKeys);
   process.env.ORKESTR_HOME = home;
   process.env.ORKESTR_AUTH_REQUIRED = "1";
+  process.env.ORKESTR_CONNECT_PUBLIC_URL = "https://connect.crawlerai.de";
+  process.env.ORKESTR_PUBLIC_AUTH_URL = "https://connect.orkestr.de/setup/pairing";
+  process.env.GMAIL_OAUTH_CLIENT_ID = "gmail-client";
+  process.env.GMAIL_OAUTH_REDIRECT_URI = "https://app.orkestr.de/oauth/gmail/callback";
   const upstreamRequests = [];
   const upstream = http.createServer((request, response) => {
     upstreamRequests.push({ url: request.url, headers: request.headers });
@@ -455,14 +471,13 @@ test("broker instance app path pairs on broker and proxies the VM WebUI", async 
       userId: "firat",
       role: "user",
       requestedPath: `/i/${brokerRegistration.instanceId}/app/connectors/gmail`,
-      allowedActions: ["orkestr_auth.google.connect:connect-test"],
+      allowedActions: ["orkestr_auth.google.connect"],
       authIntent: {
         mcp: "tools/call",
         tool: "orkestr_auth",
         service: "gmail",
         provider: "google_workspace",
         action: "connect",
-        connectId: "connect-test",
         instanceId: brokerRegistration.instanceId,
         userId: "firat",
       },
@@ -515,7 +530,11 @@ test("broker instance app path pairs on broker and proxies the VM WebUI", async 
     assert.equal(intentUserResponse.status, 200);
     assert.equal(intentUserPayload.user.id, "firat");
     assert.equal(intentStartResponse.status, 200);
-    assert.equal(intentStartPayload.authorizeUrl, "https://accounts.google.test/oauth");
+    assert.equal(intentStartPayload.provider, "google_workspace");
+    assert.ok(intentStartPayload.connectId);
+    const intentAuthorizeUrl = new URL(intentStartPayload.authorizeUrl);
+    assert.equal(intentAuthorizeUrl.origin, "https://accounts.google.com");
+    assert.equal(intentAuthorizeUrl.searchParams.get("redirect_uri"), "https://connect.orkestr.de/oauth/gmail/callback");
     assert.equal(intentDisconnectResponse.status, 200);
     assert.equal(intentDisconnectPayload.provider, "gmail");
     assert.equal(intentThreadsResponse.status, 403);
@@ -531,13 +550,14 @@ test("broker instance app path pairs on broker and proxies the VM WebUI", async 
       upstreamRequests.some((item) => typeof item.headers["x-orkestr-broker-auth"] === "string" && item.headers["x-orkestr-broker-auth"]),
       true,
     );
+    assert.equal(
+      upstreamRequests.some((item) => String(item.url || "").startsWith("/api/connectors/gmail/oauth/start")),
+      false,
+    );
   } finally {
     await new Promise((resolve) => server.close(resolve));
     await new Promise((resolve) => upstream.close(resolve));
-    if (priorHome === undefined) delete process.env.ORKESTR_HOME;
-    else process.env.ORKESTR_HOME = priorHome;
-    if (priorAuthRequired === undefined) delete process.env.ORKESTR_AUTH_REQUIRED;
-    else process.env.ORKESTR_AUTH_REQUIRED = priorAuthRequired;
+    restoreEnv(prior);
   }
 });
 
