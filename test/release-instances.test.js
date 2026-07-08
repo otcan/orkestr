@@ -180,6 +180,73 @@ test("release instance deploy verifies configured connectivity commands", async 
   assert.equal(spawned[1].env.ORKESTR_RELEASE_REQUIRED_WHATSAPP_ACCOUNTS, "sender,responder");
 });
 
+test("release instance deploy fans out with bounded concurrency", async () => {
+  const spawned = [];
+  const children = [];
+  const instances = ["edge-a", "edge-b", "edge-c"].map((id) => ({
+    id,
+    kind: "remote-service",
+    releaseTrainEnabled: true,
+    deployCommand: ["deploy-edge", "{{id}}"],
+  }));
+  const pending = deployReleaseInstances({
+    instances,
+    concurrency: 2,
+    spawnImpl(command, args) {
+      spawned.push({ command, args });
+      const child = new EventEmitter();
+      children.push(child);
+      return child;
+    },
+  });
+
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(spawned.map((entry) => entry.args[0]), ["edge-a", "edge-b"]);
+  children[0].emit("exit", 0);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(spawned.map((entry) => entry.args[0]), ["edge-a", "edge-b", "edge-c"]);
+  children[1].emit("exit", 0);
+  children[2].emit("exit", 0);
+
+  const report = await pending;
+  assert.equal(report.ok, true);
+  assert.deepEqual(report.results.map((result) => result.id), ["edge-a", "edge-b", "edge-c"]);
+  assert.equal(report.counts.deployed, 3);
+});
+
+test("release connectivity fans out with bounded concurrency", async () => {
+  const spawned = [];
+  const children = [];
+  const instances = ["edge-a", "edge-b", "edge-c"].map((id) => ({
+    id,
+    kind: "remote-service",
+    releaseTrainEnabled: true,
+    connectivityCommand: ["check-edge", "{{id}}"],
+  }));
+  const pending = verifyReleaseInstanceConnectivity(instances, {
+    concurrency: 2,
+    spawnImpl(command, args) {
+      spawned.push({ command, args });
+      const child = new EventEmitter();
+      children.push(child);
+      return child;
+    },
+  });
+
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(spawned.map((entry) => entry.args[0]), ["edge-a", "edge-b"]);
+  children[0].emit("exit", 0);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(spawned.map((entry) => entry.args[0]), ["edge-a", "edge-b", "edge-c"]);
+  children[1].emit("exit", 0);
+  children[2].emit("exit", 0);
+
+  const report = await pending;
+  assert.equal(report.ok, true);
+  assert.deepEqual(report.results.map((result) => result.id), ["edge-a", "edge-b", "edge-c"]);
+  assert.equal(report.counts.connected, 3);
+});
+
 test("release deploy scopes required WhatsApp account env to WhatsApp-routed instances", async () => {
   const spawned = [];
   const instances = [

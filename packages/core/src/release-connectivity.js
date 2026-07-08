@@ -219,6 +219,30 @@ function releaseConnectivityRetryDelayMs(options = {}, env = process.env) {
   );
 }
 
+function releaseConnectivityConcurrency(options = {}, env = process.env) {
+  return positiveInteger(
+    options.connectivityConcurrency ??
+      options.concurrency ??
+      env.ORKESTR_RELEASE_CONNECTIVITY_CONCURRENCY ??
+      env.ORKESTR_RELEASE_FANOUT_CONCURRENCY,
+    4,
+  );
+}
+
+async function mapWithConcurrency(items = [], concurrency = 1, task) {
+  const results = new Array(items.length);
+  let nextIndex = 0;
+  async function worker() {
+    while (nextIndex < items.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      results[index] = await task(items[index], index);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(positiveInteger(concurrency, 1), items.length) }, () => worker()));
+  return results;
+}
+
 function wait(ms) {
   const delay = Math.max(0, Number(ms) || 0);
   if (!delay) return Promise.resolve();
@@ -398,8 +422,11 @@ function releaseConnectivityTargets(instances = [], options = {}, env = process.
 
 export async function verifyReleaseInstanceConnectivity(instances = [], options = {}, env = process.env) {
   const targets = releaseConnectivityTargets(instances, options, env);
-  const results = [];
-  for (const instance of targets) results.push(await verifyInstanceConnectivityWithRetries(instance, options, env));
+  const results = await mapWithConcurrency(
+    targets,
+    releaseConnectivityConcurrency(options, env),
+    (instance) => verifyInstanceConnectivityWithRetries(instance, options, env),
+  );
   const counts = results.reduce((acc, result) => {
     acc[result.status] = (acc[result.status] || 0) + 1;
     return acc;

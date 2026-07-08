@@ -12,6 +12,11 @@ function clean(value = "") {
   return String(value || "").trim();
 }
 
+function positiveInteger(value, fallback, minimum = 1) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? Math.max(minimum, Math.floor(parsed)) : fallback;
+}
+
 export function releaseCommandConfigured(command) {
   return Array.isArray(command) ? command.length > 0 : Boolean(clean(command));
 }
@@ -78,51 +83,69 @@ function skippedResult(instance, reason) {
   };
 }
 
+function releaseInstanceDeployConcurrency(options = {}, env = process.env) {
+  return positiveInteger(
+    options.deployConcurrency ??
+      options.concurrency ??
+      env.ORKESTR_RELEASE_INSTANCE_DEPLOY_CONCURRENCY ??
+      env.ORKESTR_RELEASE_FANOUT_CONCURRENCY,
+    4,
+  );
+}
+
+async function mapWithConcurrency(items = [], concurrency = 1, task) {
+  const results = new Array(items.length);
+  let nextIndex = 0;
+  async function worker() {
+    while (nextIndex < items.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      results[index] = await task(items[index], index);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(positiveInteger(concurrency, 1), items.length) }, () => worker()));
+  return results;
+}
+
 export async function deployReleaseInstancesWithResolver({ listReleaseInstances, normalizeReleaseInstance }, options = {}, env = process.env) {
   const instances = options.instances || await listReleaseInstances(env, { probe: false });
-  const results = [];
-  for (const instanceInput of instances) {
+  const results = await mapWithConcurrency(instances, releaseInstanceDeployConcurrency(options, env), async (instanceInput) => {
     const instance = normalizeReleaseInstance(instanceInput, env);
     if (instance.enabled === false) {
-      results.push(skippedResult(instance, "disabled"));
-      continue;
+      return skippedResult(instance, "disabled");
     }
     if (options.skipLocal !== false && instance.kind === "local-service") {
-      results.push(skippedResult(instance, "local_already_deployed"));
-      continue;
+      return skippedResult(instance, "local_already_deployed");
     }
     if (!instance.releaseTrainEnabled) {
-      results.push(skippedResult(instance, "release_train_disabled"));
-      continue;
+      return skippedResult(instance, "release_train_disabled");
     }
     if (!releaseCommandConfigured(instance.deployCommand)) {
-      results.push(skippedResult(instance, "missing_deploy_command"));
-      continue;
+      return skippedResult(instance, "missing_deploy_command");
     }
     if (options.dryRun) {
-      results.push({ id: instance.id, displayName: instance.displayName, kind: instance.kind, status: "planned", reason: "dry_run" });
-      continue;
+      return { id: instance.id, displayName: instance.displayName, kind: instance.kind, status: "planned", reason: "dry_run" };
     }
     try {
       const outcome = await spawnReleaseCommand(instance.deployCommand, instance, { ...options, env });
-      results.push({
+      return {
         id: instance.id,
         displayName: instance.displayName,
         kind: instance.kind,
         status: outcome.code === 0 ? "deployed" : "failed",
         code: outcome.code,
         signal: outcome.signal,
-      });
+      };
     } catch (error) {
-      results.push({
+      return {
         id: instance.id,
         displayName: instance.displayName,
         kind: instance.kind,
         status: "failed",
         error: error instanceof Error ? error.message : String(error),
-      });
+      };
     }
-  }
+  });
   const counts = results.reduce((acc, result) => {
     acc[result.status] = (acc[result.status] || 0) + 1;
     return acc;

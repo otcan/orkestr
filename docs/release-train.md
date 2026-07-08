@@ -240,6 +240,11 @@ Use `--all-instances` when you want the default fan-out to be explicit in logs:
 orkestr update --release --ref <tag-or-main-or-sha> --channel <channel> --all-instances
 ```
 
+Release fan-out deploys and post-deploy connectivity checks run with bounded
+parallelism by default. Set `ORKESTR_RELEASE_FANOUT_CONCURRENCY=1` for strictly
+serial fan-out, or raise it for large instance sets after confirming the host can
+handle the parallel restarts and health checks.
+
 Use `--no-all-instances` only for an intentional local-only deploy. Skipped,
 disabled, or commandless instances are still visible in the broker deploy log.
 
