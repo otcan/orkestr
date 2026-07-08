@@ -2697,6 +2697,68 @@ test("local whatsapp phone pairing accepts configured account ids", async () => 
   );
 });
 
+test("local whatsapp start serializes concurrent starts for the same account", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-start-serialize-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "responder",
+  };
+  const calls = [];
+  let releaseDependencies;
+  const dependenciesReady = new Promise((resolve) => {
+    releaseDependencies = resolve;
+  });
+
+  class LocalAuth {}
+
+  class Client {
+    constructor() {
+      calls.push("client");
+    }
+
+    on() {
+      return this;
+    }
+
+    initialize() {
+      calls.push("initialize");
+      return Promise.resolve();
+    }
+
+    async destroy() {
+      calls.push("destroy");
+    }
+  }
+
+  const options = {
+    listChromeProcesses: async () => [],
+    loadBridgeDependencies: async () => {
+      calls.push("load");
+      await dependenciesReady;
+      return {
+        whatsapp: { Client, LocalAuth },
+        qrcode: {},
+      };
+    },
+  };
+
+  try {
+    const first = startLocalWhatsAppAccount("responder", env, options);
+    const second = startLocalWhatsAppAccount("responder", env, options);
+    await new Promise((resolve) => setImmediate(resolve));
+    releaseDependencies();
+    const [firstResult, secondResult] = await Promise.all([first, second]);
+
+    assert.equal(firstResult.state, "starting");
+    assert.equal(secondResult.state, "starting");
+    assert.equal(calls.filter((call) => call === "load").length, 1);
+    assert.equal(calls.filter((call) => call === "client").length, 1);
+    assert.equal(calls.filter((call) => call === "initialize").length, 1);
+  } finally {
+    await resetLocalWhatsAppBridgeForTest(env);
+  }
+});
+
 test("local whatsapp phone pairing replaces an existing qr runtime", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-phone-replaces-qr-runtime-"));
   const env = {
@@ -3060,6 +3122,70 @@ test("local whatsapp chat creation recovers unstarted Web comms before retrying 
     const events = await listEvents(env);
     assert.ok(events.find((event) => event.type === "whatsapp_local_chat_create_runtime_recovery_start"));
     assert.ok(events.find((event) => event.type === "whatsapp_local_chat_create_runtime_recovery_started"));
+  } finally {
+    await resetLocalWhatsAppBridgeForTest(env);
+  }
+});
+
+test("local whatsapp start reaps only orphan Chrome using the account profile", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-orphan-chrome-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "responder,other",
+    ORKESTR_WHATSAPP_ACCOUNT_CLIENT_IDS: "responder:codex-whatsapp-responder,other:codex-whatsapp-other",
+  };
+  const responderProfile = path.join(home, "whatsapp-bridge", "sessions", "session-codex-whatsapp-responder");
+  const otherProfile = path.join(home, "whatsapp-bridge", "sessions", "session-codex-whatsapp-other");
+  const calls = [];
+
+  class LocalAuth {}
+
+  class Client {
+    on() {
+      return this;
+    }
+
+    initialize() {
+      calls.push("initialize");
+      return Promise.resolve();
+    }
+
+    async destroy() {
+      calls.push("destroy");
+    }
+  }
+
+  try {
+    const result = await startLocalWhatsAppAccount("responder", env, {
+      listChromeProcesses: async () => [
+        { pid: 43101, argv: ["/usr/bin/chromium", `--user-data-dir=${responderProfile}`] },
+        { pid: 43102, argv: ["/usr/bin/chromium", `--user-data-dir=${otherProfile}`] },
+        { pid: 43103, argv: [process.execPath, `--user-data-dir=${responderProfile}`] },
+      ],
+      killChromeProcess: async (pid, signal) => {
+        calls.push(["kill", pid, signal]);
+      },
+      isChromeProcessAlive: () => false,
+      loadBridgeDependencies: async () => {
+        calls.push("load");
+        return {
+          whatsapp: { Client, LocalAuth },
+          qrcode: {},
+        };
+      },
+    });
+
+    assert.deepEqual(calls.filter((call) => Array.isArray(call)), [["kill", 43101, "SIGTERM"]]);
+    assert.equal(calls.indexOf("load") > calls.findIndex((call) => Array.isArray(call)), true);
+    assert.equal(calls.includes("initialize"), true);
+    assert.equal(result.recoveredChromeProcesses, 1);
+    assert.equal(result.lastRecoveryReason, "orphan_chrome_recovered");
+    const events = await listEvents(env);
+    assert.ok(events.find((event) =>
+      event.type === "whatsapp_local_orphan_chrome_cleanup" &&
+      event.accountId === "responder" &&
+      event.killed === 1
+    ));
   } finally {
     await resetLocalWhatsAppBridgeForTest(env);
   }

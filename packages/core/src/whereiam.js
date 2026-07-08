@@ -5,6 +5,7 @@ import { getApiSessionBinding } from "./api-session-bindings.js";
 import { publicPrincipal } from "./principal.js";
 import { listRuntimeLeases, runtimeStatus } from "./runtime-leases.js";
 import { readRuntimeSettings } from "./runtime-settings.js";
+import { isAdminPrincipal } from "./policy.js";
 import { listThreads, listThreadsForPrincipal, updateThread } from "./threads.js";
 import { containedUserPolicyPath, tenantIsolationBoundary, threadUsesContainedUserPolicy } from "./tenant-policy.js";
 import { tenantPublicUrls } from "./tenant-public-urls.js";
@@ -290,7 +291,8 @@ export async function whereAmI(input = {}, env = process.env) {
   thread = await syncLiveCodexMode(thread, status, env);
   const principalIsUser = principal && String(principal.role || "").toLowerCase() !== "admin";
   const owner = normalizeUserId(thread?.ownerUserId || (principalIsUser ? principal.userId : "") || env.ORKESTR_ADMIN_USER_ID || adminUserId);
-  const scoped = Boolean(principal && String(principal.role || "").toLowerCase() !== "admin");
+  const scoped = Boolean(principal && !isAdminPrincipal(principal));
+  const sanitizerRequired = scoped;
   const containedPolicy = threadUsesContainedUserPolicy(thread || { ownerUserId: owner }, env);
   return {
     ok: Boolean(thread),
@@ -314,7 +316,7 @@ export async function whereAmI(input = {}, env = process.env) {
     tenancy: {
       ownerUserId: owner,
       scoped,
-      sanitizerRequired: true,
+      sanitizerRequired,
       sanitizerFallback: false,
       isolationBoundary: tenantIsolationBoundary(thread || { ownerUserId: owner }, env),
       runtimePolicy: containedPolicy

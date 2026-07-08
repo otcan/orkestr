@@ -32,6 +32,7 @@ const typingSessions = new Map();
 const typingStartPromises = new Map();
 const typingClearRetryTimers = new Map();
 const inboundForwardHealthCache = new Map();
+const localWhatsAppStartPromises = new Map();
 let runtimeRecoveryHooksForTest = null;
 let typingSessionGeneration = 0;
 
@@ -118,6 +119,21 @@ function sessionRootAlreadyIncludesClient(accountId, env = process.env) {
   const root = sessionRootForAccount(accountId, env);
   const clientId = clientIdForAccount(accountId, env);
   return path.basename(root) === `session-${clientId}`;
+}
+
+function sameOrInsidePath(parent, child) {
+  const base = path.resolve(String(parent || ""));
+  const candidate = path.resolve(String(child || ""));
+  if (!base || !candidate) return false;
+  if (candidate === base) return true;
+  const relative = path.relative(base, candidate);
+  return Boolean(relative) && !relative.startsWith("..") && !path.isAbsolute(relative);
+}
+
+function localWhatsAppChromeProfileDirsForAccount(accountId, env = process.env) {
+  const dirs = [localAuthSessionDirForAccount(accountId, env)];
+  if (sessionRootAlreadyIncludesClient(accountId, env)) dirs.push(sessionRootForAccount(accountId, env));
+  return [...new Set(dirs.map((dir) => path.resolve(dir)))];
 }
 
 function legacyResponderRole(env = process.env) {
@@ -1165,6 +1181,7 @@ function defaultAccountState(accountId) {
     lastRecoveryReason: "",
     lastRecoveryAt: null,
     recoveredChromeLocks: 0,
+    recoveredChromeProcesses: 0,
     updatedAt: null,
   };
 }
@@ -1977,6 +1994,7 @@ export async function resetLocalWhatsAppBridgeForTest(env = process.env) {
   inboundForwardLedgerKeys.clear();
   typingStartPromises.clear();
   typingClearRetryTimers.clear();
+  localWhatsAppStartPromises.clear();
   runtimeRecoveryHooksForTest = null;
 }
 
@@ -2775,6 +2793,138 @@ async function moveStaleChromeLock(filePath, index, nowMs) {
   return destination;
 }
 
+function chromeUserDataDirFromArgv(argv = []) {
+  const args = Array.isArray(argv) ? argv.map((item) => String(item || "")) : [];
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg.startsWith("--user-data-dir=")) return arg.slice("--user-data-dir=".length).trim();
+    if (arg === "--user-data-dir") return String(args[index + 1] || "").trim();
+  }
+  return "";
+}
+
+function chromeProcessCommand(argv = [], command = "") {
+  return path.basename(String(argv?.[0] || command || "").trim()).toLowerCase();
+}
+
+function localWhatsAppChromeProcess(processInfo = {}, profileDirs = []) {
+  const argv = Array.isArray(processInfo.argv)
+    ? processInfo.argv
+    : Array.isArray(processInfo.cmdline)
+      ? processInfo.cmdline
+      : String(processInfo.cmdline || "")
+        .split(/\0|\s+/g)
+        .filter(Boolean);
+  const command = chromeProcessCommand(argv, processInfo.command);
+  if (!/(?:^|-)chrome(?:$|-)|chromium|google-chrome/.test(command)) return null;
+  const userDataDir = chromeUserDataDirFromArgv(argv);
+  if (!userDataDir) return null;
+  const matchedProfileDir = profileDirs.find((dir) => sameOrInsidePath(dir, userDataDir));
+  if (!matchedProfileDir) return null;
+  const pid = Number(processInfo.pid);
+  if (!Number.isInteger(pid) || pid <= 1 || pid === process.pid) return null;
+  return { pid, command, userDataDir: path.resolve(userDataDir), profileDir: matchedProfileDir };
+}
+
+async function listLocalChromeProcessesFromProc(procRoot = "/proc") {
+  const entries = await fs.readdir(procRoot, { withFileTypes: true }).catch(() => []);
+  const processes = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !/^\d+$/.test(entry.name)) continue;
+    const pid = Number(entry.name);
+    const cmdlinePath = path.join(procRoot, entry.name, "cmdline");
+    const raw = await fs.readFile(cmdlinePath).catch(() => null);
+    if (!raw?.length) continue;
+    const argv = raw.toString("utf8").split("\0").filter(Boolean);
+    processes.push({ pid, argv, command: argv[0] || "" });
+  }
+  return processes;
+}
+
+async function waitForProcessExit(pid, options = {}) {
+  const processAlive = options.processAlive || pidAlive;
+  const timeoutMs = Math.max(0, Number(options.timeoutMs || 1500) || 0);
+  const intervalMs = Math.max(25, Math.min(250, Number(options.intervalMs || 100) || 100));
+  const startedAt = Date.now();
+  while (processAlive(pid)) {
+    if (Date.now() - startedAt >= timeoutMs) return false;
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+  return true;
+}
+
+async function terminateChromeProcess(pid, options = {}) {
+  const killProcess = options.killProcess || ((targetPid, signal) => process.kill(targetPid, signal));
+  const processAlive = options.processAlive || pidAlive;
+  try {
+    await killProcess(pid, "SIGTERM");
+  } catch (error) {
+    if (error?.code === "ESRCH") return { terminated: false, alreadyExited: true };
+    throw error;
+  }
+  const exited = await waitForProcessExit(pid, {
+    processAlive,
+    timeoutMs: options.graceMs,
+    intervalMs: options.pollMs,
+  });
+  if (exited || !processAlive(pid)) return { terminated: true, signal: "SIGTERM" };
+  try {
+    await killProcess(pid, "SIGKILL");
+    await waitForProcessExit(pid, {
+      processAlive,
+      timeoutMs: Math.min(1000, Math.max(100, Number(options.graceMs || 1000) || 1000)),
+      intervalMs: options.pollMs,
+    });
+    return { terminated: true, signal: "SIGKILL" };
+  } catch (error) {
+    if (error?.code === "ESRCH") return { terminated: true, signal: "SIGTERM", alreadyExited: true };
+    throw error;
+  }
+}
+
+export async function cleanupLocalWhatsAppOrphanChromeProcesses(accountId = "", env = process.env, options = {}) {
+  const normalized = await normalizeManagedAccountId(accountId, env);
+  if (runtimes.get(normalized)?.client) {
+    return { accountId: normalized, killed: [], skipped: [{ reason: "active_runtime" }] };
+  }
+  const profileDirs = localWhatsAppChromeProfileDirsForAccount(normalized, env);
+  const listProcesses = options.listChromeProcesses || options.listProcesses || listLocalChromeProcessesFromProc;
+  const processes = await listProcesses(options.procRoot || "/proc");
+  const matches = [];
+  const seenPids = new Set();
+  for (const processInfo of processes || []) {
+    const match = localWhatsAppChromeProcess(processInfo, profileDirs);
+    if (!match || seenPids.has(match.pid)) continue;
+    seenPids.add(match.pid);
+    matches.push(match);
+  }
+  const killed = [];
+  const skipped = [];
+  for (const match of matches) {
+    try {
+      const result = await terminateChromeProcess(match.pid, {
+        killProcess: options.killChromeProcess || options.killProcess,
+        processAlive: options.isChromeProcessAlive || options.processAlive,
+        graceMs: options.orphanChromeGraceMs ?? options.graceMs,
+        pollMs: options.orphanChromePollMs ?? options.pollMs,
+      });
+      if (result.terminated || result.alreadyExited) killed.push({ ...match, signal: result.signal || null, alreadyExited: result.alreadyExited === true });
+    } catch (error) {
+      skipped.push({ ...match, reason: error?.message || String(error) });
+    }
+  }
+  if (killed.length || skipped.length) {
+    await appendEvent({
+      type: "whatsapp_local_orphan_chrome_cleanup",
+      accountId: normalized,
+      killed: killed.length,
+      skipped: skipped.length,
+      pids: killed.map((item) => item.pid),
+    }, env).catch(() => {});
+  }
+  return { accountId: normalized, profileDirs, killed, skipped };
+}
+
 function recoverableLocalWhatsAppFailure(account = {}) {
   const state = String(account?.state || "").trim();
   if (recoverableLocalWhatsAppStates.has(state)) return true;
@@ -2868,6 +3018,7 @@ export async function restartRecoverableLocalWhatsAppAccount(accountId = "", env
     clearTypingSessionTimers(session);
     typingSessions.delete(typingKey(session.accountId, session.chatId));
   }
+  const orphanCleanup = await cleanupLocalWhatsAppOrphanChromeProcesses(normalized, env, options);
   const cleanup = await cleanupLocalWhatsAppChromeLocks(normalized, env);
   setAccountState(normalized, {
     state: "idle",
@@ -2888,9 +3039,15 @@ export async function restartRecoverableLocalWhatsAppAccount(accountId = "", env
     accountId: normalized,
     reason: String(options.reason || "auto_recover"),
     hadRuntime: Boolean(runtime?.client),
+    killedChromeProcesses: orphanCleanup.killed.length,
     removedChromeLocks: cleanup.removed.length,
   }, env).catch(() => {});
-  return { accountId: normalized, hadRuntime: Boolean(runtime?.client), removedChromeLocks: cleanup.removed.length };
+  return {
+    accountId: normalized,
+    hadRuntime: Boolean(runtime?.client),
+    killedChromeProcesses: orphanCleanup.killed.length,
+    removedChromeLocks: cleanup.removed.length,
+  };
 }
 
 export async function recoverConfiguredLocalWhatsAppAccounts(env = process.env, options = {}) {
@@ -2954,6 +3111,16 @@ export async function startLocalWhatsAppAccount(accountId = "", env = process.en
     error.statusCode = 400;
     throw error;
   }
+  const inFlight = localWhatsAppStartPromises.get(normalized);
+  if (inFlight) return inFlight;
+  const promise = startLocalWhatsAppAccountOnce(normalized, env, options, pairingPhoneNumber).finally(() => {
+    if (localWhatsAppStartPromises.get(normalized) === promise) localWhatsAppStartPromises.delete(normalized);
+  });
+  localWhatsAppStartPromises.set(normalized, promise);
+  return promise;
+}
+
+async function startLocalWhatsAppAccountOnce(normalized, env = process.env, options = {}, pairingPhoneNumber = "") {
   const existingRuntime = runtimes.get(normalized);
   if (existingRuntime) {
     const state = accountStates.get(normalized) || defaultAccountState(normalized);
@@ -2975,6 +3142,7 @@ export async function startLocalWhatsAppAccount(accountId = "", env = process.en
     }, env).catch(() => {});
   }
   await ensureBridgeDirs(env);
+  const orphanCleanup = await cleanupLocalWhatsAppOrphanChromeProcesses(normalized, env, options);
   const staleLockCleanup = await cleanupLocalWhatsAppChromeLocks(normalized, env);
   setAccountState(normalized, {
     state: "starting",
@@ -2984,9 +3152,16 @@ export async function startLocalWhatsAppAccount(accountId = "", env = process.en
     pairingCodeUpdatedAt: null,
     pairingPhoneNumber: maskPairingPhoneNumber(pairingPhoneNumber),
     error: "",
+    ...(orphanCleanup.killed.length
+      ? {
+          lastRecoveryReason: "orphan_chrome_recovered",
+          lastRecoveryAt: nowIso(),
+          recoveredChromeProcesses: orphanCleanup.killed.length,
+        }
+      : {}),
     ...(staleLockCleanup.moved.length
       ? {
-          lastRecoveryReason: "stale_lock_recovered",
+          lastRecoveryReason: orphanCleanup.killed.length ? "orphan_chrome_and_stale_lock_recovered" : "stale_lock_recovered",
           lastRecoveryAt: nowIso(),
           recoveredChromeLocks: staleLockCleanup.moved.length,
         }

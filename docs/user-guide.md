@@ -287,8 +287,12 @@ managed `~/.orkestr-src` install directory.
 6. The agent reply is mirrored back when complete.
 
 For non-admin or contained-user WhatsApp threads, configure an LLM sanitizer.
-The sanitizer is fail-closed: if no provider is configured, Orkestr rejects the
-message and notifies the WhatsApp chat instead of silently dropping it.
+Admin sessions skip this sanitizer. Non-admin messages are fail-closed: if no
+provider is configured, Orkestr rejects the message and notifies the WhatsApp
+chat instead of silently dropping it. Non-admin users may request user-scoped
+setup, browser pairing, desktop share, connector auth, or verification
+challenges. The sanitizer still denies requests to approve, consume, bypass, or
+forge those challenges.
 
 Codex-backed sanitizer:
 
