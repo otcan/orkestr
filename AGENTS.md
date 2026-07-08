@@ -20,6 +20,13 @@ Rules:
 - Release, tag, merge-to-main, and deploy work must follow
   `docs/release-train.md`. Worker and parent threads may commit and push their
   own branches, but deployments must go through the release train.
+- A release train must not leave corresponding parent, worker, or release
+  branches silently stale. After `main` moves, immediately fast-forward and push
+  every clean corresponding worker/release branch whose tip is an ancestor of
+  the released commit, refresh Orkestr git state, and verify the WebUI reports
+  no parent/remote drift. If a corresponding branch has unique unmerged commits
+  or local edits, stop and report the exact blocker before calling the train
+  complete.
 - Real WhatsApp E2E is an optional diagnostic, not a release/deploy gate. Do not
   block releases on WA2WA availability unless a user explicitly asks for that
   check in the current release.

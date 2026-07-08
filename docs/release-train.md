@@ -15,6 +15,9 @@ release", or "collect workers and release".
 - Do not deploy from a worker or parent thread as a side effect of normal coding.
   Deployments go through this release train so tests, CI, tags, and release
   metadata stay coherent.
+- The release train owns branch alignment after `main` moves. It must not report
+  success while corresponding worker or release branches are merely "behind" the
+  released commit and could have been fast-forwarded safely.
 
 ## Safety Rules
 
@@ -203,6 +206,19 @@ git push origin main
 git push origin <tag>
 ```
 
+Immediately after `main` is pushed, apply the no-drift invariant:
+
+- Fast-forward and push every clean corresponding worker or release branch whose
+  tip is an ancestor of the released commit.
+- Do not rewrite, reset, or force-push branches with unique unmerged commits or
+  local edits.
+- Refresh Orkestr git state after the pushes and verify the parent and worker
+  WebUI counters report no parent or remote drift for every branch that was
+  safely fast-forwarded.
+- If any corresponding branch cannot be fast-forwarded, report its branch name,
+  local dirty state, unique commit count, and missing released commit before the
+  train can be called complete.
+
 Then watch CI. Prefer the repository's standard CI visibility:
 
 - If GitHub CLI is available and authenticated, use `gh run list` and
@@ -337,6 +353,8 @@ After main is released:
 - The versioned deployer runs a post-deploy safe worker sync by default
   (`ORKESTR_DEPLOY_SYNC_WORKERS=1`).
 - Fast-forward workers that are ancestors of the released parent or `main`.
+- Fast-forward corresponding release branches by the same rule when they only
+  trail the released commit.
 - Skip active workers, workers with local edits, and workers with unique
   unmerged commits.
 - Do not rewrite workers that still have unique unmerged commits.
