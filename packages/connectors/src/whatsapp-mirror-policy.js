@@ -1,4 +1,5 @@
 import { isNoReplyAssistantMessage } from "../../core/src/no-reply.js";
+import { isThreadSignalMessage, threadSignalMirrorsToConnector } from "../../core/src/thread-signals.js";
 
 function clean(value) {
   return String(value || "").trim();
@@ -77,6 +78,7 @@ const codexSuppressedPhases = new Set(["context_compaction"]);
 export function shouldMirrorWhatsAppReply(message = {}) {
   if (isNoReplyAssistantMessage(message)) return false;
   if (internalAssistantSource(message)) return false;
+  if (isThreadSignalMessage(message)) return threadSignalMirrorsToConnector(message);
   if (codexAssistantSource(message)) {
     const phase = codexAssistantPhase(message);
     return !codexProgressPhases.has(phase) && !codexSuppressedPhases.has(phase);

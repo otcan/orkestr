@@ -323,6 +323,7 @@ function runStage(stage) {
 }
 
 const parallelEligibleStageIds = new Set([
+  "build",
   "test-ci",
   "oss-boundary",
   "k3s-oss-demo-contract",

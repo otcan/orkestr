@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { threadSignalMirrorsToConnector } from "../../core/src/thread-signals.js";
 import { whatsappBindingIsRouteEligible } from "./whatsapp-inbound-routing.js";
 
 function pickString(...values) {
@@ -176,7 +177,8 @@ function historySyncedCodexFinalRecoveryAllowed({ message = {}, parent = null, s
 }
 
 function freshOutOfBandNotification({ message = {}, thread = null, kind = "", env = process.env } = {}) {
-  if (clean(message.phase).toLowerCase() !== "notification") return false;
+  const phase = clean(message.phase).toLowerCase();
+  if (phase !== "notification" && !(phase === "signal" && threadSignalMirrorsToConnector(message))) return false;
   if (!pickString(message.chatId)) return false;
   if (!boundThreadOrigin({ message, thread, kind })) return false;
   const windowMs = whatsappOutboundIntentBootstrapWindowMs(env);

@@ -2067,6 +2067,27 @@ ork-first-thread-wizard.first-thread-host {
   font-size: 0.88rem;
 }
 
+.message.signal {
+  border-color: rgba(246, 190, 84, 0.34);
+  background:
+    linear-gradient(180deg, rgba(246, 190, 84, 0.1), transparent 44%),
+    rgba(29, 25, 12, 0.92);
+}
+
+.message.signal .message-meta,
+.message.signal .message-meta .phase-badge {
+  color: #ffe0a3;
+}
+
+.message.signal .message-meta .phase-badge {
+  border-color: rgba(246, 190, 84, 0.34);
+  background: rgba(118, 80, 19, 0.32);
+}
+
+.message.signal .message-body {
+  color: #f5ead2;
+}
+
 .assistant-final .message-body {
   color: #edffef;
 }
