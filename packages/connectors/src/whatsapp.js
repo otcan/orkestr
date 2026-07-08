@@ -1308,6 +1308,7 @@ function threadHasActionableStoredPendingRequest(thread = {}) {
 }
 
 function isCodexAppServerThread(thread = {}) {
+  if (!thread || typeof thread !== "object" || Array.isArray(thread)) return false;
   return pickString(
     thread.runtimeKind,
     thread.runtime?.runtimeKind,
