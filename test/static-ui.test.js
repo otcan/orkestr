@@ -402,6 +402,11 @@ test("broker instance app path pairs on broker and proxies the VM WebUI", async 
       response.end(JSON.stringify({ ok: true, user: { id: "firat", role: "user" } }));
       return;
     }
+    if (request.method === "GET" && String(request.url || "").startsWith("/api/connectors/gmail/oauth/start")) {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ ok: true, authorizeUrl: "https://accounts.google.test/oauth" }));
+      return;
+    }
     if (request.method === "DELETE" && request.url === "/api/connectors/gmail/auth") {
       response.writeHead(200, { "content-type": "application/json" });
       response.end(JSON.stringify({ ok: true, provider: "gmail", state: "disconnected" }));
@@ -469,6 +474,8 @@ test("broker instance app path pairs on broker and proxies the VM WebUI", async 
       mcp: "tools/call",
       tool: "orkestr_auth",
       service: "gmail",
+      provider: "google_workspace",
+      action: "connect",
       instance_id: brokerRegistration.instanceId,
       auto: "0",
     });
@@ -478,6 +485,8 @@ test("broker instance app path pairs on broker and proxies the VM WebUI", async 
     const intentSetupPayload = await intentSetupResponse.json();
     const intentUserResponse = await fetch(`http://127.0.0.1:${port}/i/${brokerRegistration.instanceId}/app/api/users/me`, { headers: { cookie: authIntentCookie } });
     const intentUserPayload = await intentUserResponse.json();
+    const intentStartResponse = await fetch(`http://127.0.0.1:${port}/i/${brokerRegistration.instanceId}/app/api/connectors/gmail/oauth/start`, { headers: { cookie: authIntentCookie } });
+    const intentStartPayload = await intentStartResponse.json();
     const intentDisconnectResponse = await fetch(`http://127.0.0.1:${port}/i/${brokerRegistration.instanceId}/app/api/connectors/gmail/auth`, { method: "DELETE", headers: { cookie: authIntentCookie } });
     const intentDisconnectPayload = await intentDisconnectResponse.json();
     const intentThreadsResponse = await fetch(`http://127.0.0.1:${port}/i/${brokerRegistration.instanceId}/app/api/threads`, { headers: { cookie: authIntentCookie }, redirect: "manual" });
@@ -505,6 +514,8 @@ test("broker instance app path pairs on broker and proxies the VM WebUI", async 
     assert.equal(intentSetupPayload.connectors[0].state, "connected");
     assert.equal(intentUserResponse.status, 200);
     assert.equal(intentUserPayload.user.id, "firat");
+    assert.equal(intentStartResponse.status, 200);
+    assert.equal(intentStartPayload.authorizeUrl, "https://accounts.google.test/oauth");
     assert.equal(intentDisconnectResponse.status, 200);
     assert.equal(intentDisconnectPayload.provider, "gmail");
     assert.equal(intentThreadsResponse.status, 403);
@@ -1393,6 +1404,8 @@ test("web shell exposes a user connector management page", async () => {
   assert.match(connectorsComponent, /connectorIntentAction\(\): string/);
   assert.match(connectorsComponent, /connectorIntentServiceLabel\(\): string/);
   assert.match(connectorsComponent, /connectorIntentAccountLabel\(\): string/);
+  assert.match(connectorsComponent, /connectorIntentUserLabel\(\): string/);
+  assert.match(connectorsComponent, /connectorIntentThreadLabel\(\): string/);
   assert.match(connectorsComponent, /routeQueryParam\(name: string\): string/);
   assert.match(connectorsComponent, /void this\.load\(false\)/);
   assert.match(connectorsComponent, /this\.api\.startGmailOAuth\(this\.gmailAccount\)/);
@@ -1413,6 +1426,7 @@ test("web shell exposes a user connector management page", async () => {
   assert.match(connectorsTemplate, /Provider/);
   assert.match(connectorsTemplate, /Action/);
   assert.match(connectorsTemplate, /User/);
+  assert.match(connectorsTemplate, /Thread/);
   assert.match(connectorsTemplate, /connector\.id === "gmail" && !connectorConnected\(connector\)/);
   assert.match(connectorsTemplate, /connectorIntentTargetInstanceId\(\)/);
   assert.match(connectorsTemplate, /loginOnly\(\) \? "Secure sign-in" : "Connectors"/);

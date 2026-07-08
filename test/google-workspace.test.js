@@ -191,7 +191,15 @@ test("brokered google workspace oauth provisions the Gmail grant to the tenant V
     brokerTenantChatId: "firat-wa",
     brokerTenantAccountId: "de-wa",
   }, env);
-  assert.match(link.link, /^https:\/\/connect\.orkestr\.de\/connect\/google\?connect=/);
+  const connectorTarget = new URL(link.link);
+  assert.equal(connectorTarget.origin, "https://connect.orkestr.de");
+  assert.equal(connectorTarget.pathname, `/i/${registration.instanceId}/app/connectors/gmail`);
+  assert.equal(connectorTarget.searchParams.get("provider"), "google_workspace");
+  assert.equal(connectorTarget.searchParams.get("action"), "connect");
+  assert.equal(connectorTarget.searchParams.get("instance_id"), registration.instanceId);
+  assert.equal(connectorTarget.searchParams.get("user_id"), "firat");
+  assert.equal(connectorTarget.searchParams.get("thread"), "firat-jobs");
+  assert.match(link.connectLink, /^https:\/\/connect\.orkestr\.de\/connect\/google\?connect=/);
   const started = await startGoogleWorkspaceOAuth(env, {
     connectId: link.connectId,
     capabilities: ["gmail_read"],
@@ -241,6 +249,8 @@ test("brokered google workspace callback target returns to the instance connecto
   const href = googleWorkspaceBrokeredConnectorSetupHref({
     brokered: true,
     brokerInstanceId: "instance-firat",
+    brokerTenantUserId: "firat",
+    brokerTenantThreadName: "firat-jobs",
   }, {
     ORKESTR_CONNECT_PUBLIC_URL: "https://connect.crawlerai.de",
     ORKESTR_PUBLIC_AUTH_URL: "https://connect.orkestr.de/setup/pairing",
@@ -255,6 +265,8 @@ test("brokered google workspace callback target returns to the instance connecto
   assert.equal(target.searchParams.get("provider"), "google_workspace");
   assert.equal(target.searchParams.get("action"), "connect");
   assert.equal(target.searchParams.get("instance_id"), "instance-firat");
+  assert.equal(target.searchParams.get("user_id"), "firat");
+  assert.equal(target.searchParams.get("thread"), "firat-jobs");
   assert.equal(target.searchParams.get("auto"), "0");
   assert.doesNotMatch(href, /crawlerai|app\.orkestr\.de|\/setup\/gmail/);
 });

@@ -124,6 +124,8 @@ export function googleWorkspaceBrokeredConnectorSetupPath(result = {}, connector
   const instanceId = clean(result.brokerInstanceId || result.instanceId);
   if (!instanceId) return "";
   const service = clean(connector) || "gmail";
+  const userId = clean(result.brokerTenantUserId || result.userId);
+  const thread = clean(result.brokerTenantThreadName || result.threadName || result.threadTitle || result.brokerTenantThreadId || result.threadId);
   const target = new URL(`/i/${encodeURIComponent(instanceId)}/app/connectors/${encodeURIComponent(service)}`, "http://localhost");
   target.searchParams.set("mcp", "tools/call");
   target.searchParams.set("tool", "orkestr_auth");
@@ -133,6 +135,8 @@ export function googleWorkspaceBrokeredConnectorSetupPath(result = {}, connector
     target.searchParams.set("action", "connect");
   }
   target.searchParams.set("instance_id", instanceId);
+  if (userId) target.searchParams.set("user_id", userId);
+  if (thread) target.searchParams.set("thread", thread);
   target.searchParams.set("auto", "0");
   return `${target.pathname}${target.search}`;
 }
@@ -290,22 +294,32 @@ export async function createGoogleWorkspaceConnectLink({
   ];
   await writeConnectLedger(scope, ledger);
   const path = `/connect/google?connect=${encodeURIComponent(connectId)}`;
-  const link = publicConnectUrl(path, env, { brokered: Boolean(request.brokerInstanceId || request.brokerTenantVmId) });
+  const connectLink = publicConnectUrl(path, env, { brokered: Boolean(request.brokerInstanceId || request.brokerTenantVmId) });
+  const connectorLink = googleWorkspaceBrokeredConnectorSetupHref(request, env, "gmail");
+  const link = connectorLink || connectLink;
   return {
     ok: true,
     connectId,
+    connectLink,
+    connectorLink,
     link,
     expiresAt: request.expiresAt,
     capabilities: googleWorkspaceCapabilityDefinitions(),
     brokerInstanceId: request.brokerInstanceId,
-    message: googleWorkspaceConnectMessage({ link, expiresAt: request.expiresAt }),
+    message: googleWorkspaceConnectMessage({
+      link,
+      expiresAt: connectorLink ? "" : request.expiresAt,
+      connectorPage: Boolean(connectorLink),
+    }),
   };
 }
 
-export function googleWorkspaceConnectMessage({ link = "", expiresAt = "" } = {}) {
+export function googleWorkspaceConnectMessage({ link = "", expiresAt = "", connectorPage = false } = {}) {
   return [
     "Google Workspace is optional. To start it from chat, send this exact command: /connect google",
-    "Then open this one-time link to approve Google sign-in for this Orkestr instance:",
+    connectorPage
+      ? "Then open this connector page to view Gmail status or start Google sign-in for this Orkestr instance:"
+      : "Then open this one-time link to approve Google sign-in for this Orkestr instance:",
     clean(link),
     "",
     "Requested provider: google_workspace. Requested service: gmail.",

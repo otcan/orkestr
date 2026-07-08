@@ -354,7 +354,13 @@ async function pairingChallengeTarget(body: Record<string, unknown> = {}, reques
   const user = await getUser(userId);
   if (!user) throw httpError("user_not_found", 404);
   if (user.status === "disabled") throw httpError("user_disabled", 409);
-  return { userId: user.id, role: user.role, instanceId, requestedPath };
+  return {
+    userId: user.id,
+    role: user.role,
+    instanceId,
+    requestedPath,
+    ...connectorAuthIntentForRequestedPath(requestedPath, instanceId, user.id),
+  };
 }
 
 async function ownerUserIdForBrokerInstance(instanceId = ""): Promise<string> {
@@ -378,6 +384,43 @@ function sameOriginRequestedPath(body: Record<string, unknown> = {}, instanceId 
   } catch {
     return "";
   }
+}
+
+function connectorAuthIntentForRequestedPath(requestedPath = "", instanceId = "", userId = "") {
+  if (!requestedPath) return {};
+  let target: URL;
+  try {
+    target = new URL(requestedPath, "http://localhost");
+  } catch {
+    return {};
+  }
+  const parts = target.pathname.split("/").filter(Boolean);
+  if (parts[0] !== "i" || parts[1] !== instanceId || parts[2] !== "app" || parts[3] !== "connectors") return {};
+  const service = String(parts[4] || target.searchParams.get("service") || "").trim().toLowerCase();
+  if (service !== "gmail") return {};
+  if (target.searchParams.get("mcp") !== "tools/call") return {};
+  if (target.searchParams.get("tool") !== "orkestr_auth") return {};
+  if (target.searchParams.get("service") !== "gmail") return {};
+  if (target.searchParams.get("provider") !== "google_workspace") return {};
+  if (target.searchParams.get("action") !== "connect") return {};
+  if (target.searchParams.get("instance_id") !== instanceId) return {};
+  const thread = String(target.searchParams.get("thread") || target.searchParams.get("thread_id") || "").trim();
+  return {
+    allowedActions: ["orkestr_auth.google.connect"],
+    authIntent: {
+      mcp: "tools/call",
+      tool: "orkestr_auth",
+      service: "gmail",
+      provider: "google_workspace",
+      action: "connect",
+      actionLabel: "Connect Gmail",
+      title: "Approve Gmail connection",
+      description: `Approve Google Workspace access for instance ${instanceId}.`,
+      instanceId,
+      userId,
+      thread,
+    },
+  };
 }
 
 function shouldRedactSetupStatus(request: any, status: any): boolean {

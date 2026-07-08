@@ -987,6 +987,12 @@ test("broker instance pairing challenge is scoped to the tenant VM owner", async
       body.challenge.requestedPath,
       "/i/instance-firat/app/connectors/gmail?mcp=tools%2Fcall&tool=orkestr_auth&service=gmail&provider=google_workspace&action=connect&instance_id=instance-firat",
     );
+    assert.deepEqual(body.challenge.allowedActions, ["orkestr_auth.google.connect"]);
+    assert.equal(body.challenge.authIntent.tool, "orkestr_auth");
+    assert.equal(body.challenge.authIntent.provider, "google_workspace");
+    assert.equal(body.challenge.authIntent.action, "connect");
+    assert.equal(body.challenge.authIntent.instanceId, "instance-firat");
+    assert.equal(body.challenge.authIntent.userId, "firat");
   } finally {
     await new Promise((resolve) => server.close(resolve));
     restoreEnv(prior);
@@ -1032,6 +1038,12 @@ test("broker instance pairing challenge is scoped to the tenant VM owner", async
       body.challenge.requestedPath,
       "/i/instance-firat/app/connectors/gmail?mcp=tools%2Fcall&tool=orkestr_auth&service=gmail&provider=google_workspace&action=connect&instance_id=instance-firat",
     );
+    assert.deepEqual(body.challenge.allowedActions, ["orkestr_auth.google.connect"]);
+    assert.equal(body.challenge.authIntent.tool, "orkestr_auth");
+    assert.equal(body.challenge.authIntent.provider, "google_workspace");
+    assert.equal(body.challenge.authIntent.action, "connect");
+    assert.equal(body.challenge.authIntent.instanceId, "instance-firat");
+    assert.equal(body.challenge.authIntent.userId, "firat");
   } finally {
     await new Promise((resolve) => server.close(resolve));
     restoreEnv(prior);

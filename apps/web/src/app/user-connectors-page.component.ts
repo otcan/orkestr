@@ -237,6 +237,14 @@ export class UserConnectorsPageComponent implements OnDestroy, OnInit {
     return this.routeQueryParam("account") || this.connectedAccount(this.connectorStatus("gmail")) || "Choose during Google sign-in";
   }
 
+  connectorIntentUserLabel(): string {
+    return this.routeQueryParam("user_id") || this.routeQueryParam("user") || this.currentUserLabel();
+  }
+
+  connectorIntentThreadLabel(): string {
+    return this.routeQueryParam("thread") || this.routeQueryParam("thread_id") || "";
+  }
+
   routeConnectorId(): string {
     const parts = this.locationPathParts();
     const candidate = parts[0] === "connectors" ? String(parts[1] || "").toLowerCase() : "";

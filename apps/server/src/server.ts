@@ -209,7 +209,7 @@ function authorizeAuthIntentBrokerAppRequest(request: any, session: any, parts: 
   const restPath = `/${rest.join("/")}`;
   if (method === "GET" && isStaticAssetRequestPath(restPath)) return { matched: true, ok: true };
   if (authIntentConnectorAppRouteAllowed(request, session, instanceId, method, rest)) return { matched: true, ok: true };
-  if (authIntentBrokerAppApiRouteAllowed(method, rest)) return { matched: true, ok: true };
+  if (authIntentBrokerAppApiRouteAllowed(method, rest, session)) return { matched: true, ok: true };
   return { matched: true, ok: false, statusCode: 403, error: "auth_intent_session_scope_denied" };
 }
 
@@ -227,16 +227,30 @@ function authIntentConnectorAppRouteAllowed(request: any, session: any, instance
   if (params.get("mcp") !== "tools/call") return false;
   if (params.get("tool") !== "orkestr_auth") return false;
   if (params.get("service") !== service) return false;
+  if (params.get("provider") !== "google_workspace") return false;
+  if (params.get("action") !== "connect") return false;
   if (params.get("instance_id") !== instanceId) return false;
   return true;
 }
 
-function authIntentBrokerAppApiRouteAllowed(method: string, rest: string[]) {
+function authIntentAllowsGoogleConnect(session: any): boolean {
+  const intent = session?.authIntent && typeof session.authIntent === "object" ? session.authIntent : {};
+  const allowedActions = Array.isArray(session?.allowedActions) ? session.allowedActions : [];
+  return String(intent.service || "").trim().toLowerCase() === "gmail" &&
+    String(intent.provider || "").trim().toLowerCase() === "google_workspace" &&
+    String(intent.action || "").trim().toLowerCase() === "connect" &&
+    allowedActions.some((action: string) => /^orkestr_auth\.google\.connect(?::|$)/.test(String(action || "")));
+}
+
+function authIntentBrokerAppApiRouteAllowed(method: string, rest: string[], session: any) {
   if (rest[0]?.toLowerCase() !== "api") return false;
-  const [surface, second] = rest.slice(1).map((part) => part.toLowerCase());
+  const [surface, second, third, fourth] = rest.slice(1).map((part) => part.toLowerCase());
   if (method === "GET" && ["health", "ready", "version"].includes(surface)) return true;
   if (method === "GET" && surface === "setup" && second === "status") return true;
   if (method === "GET" && surface === "users" && second === "me") return true;
+  if (method === "GET" && surface === "connectors" && second === "gmail" && third === "oauth" && fourth === "start") {
+    return authIntentAllowsGoogleConnect(session);
+  }
   if (method === "DELETE" && surface === "connectors" && second === "gmail" && rest[3]?.toLowerCase() === "auth") return true;
   return false;
 }

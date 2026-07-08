@@ -56,8 +56,14 @@
         </div>
         <div>
           <dt>User</dt>
-          <dd><code>{{ currentUserLabel() }}</code></dd>
+          <dd><code>{{ connectorIntentUserLabel() }}</code></dd>
         </div>
+        @if (connectorIntentThreadLabel()) {
+          <div>
+            <dt>Thread</dt>
+            <dd><code>{{ connectorIntentThreadLabel() }}</code></dd>
+          </div>
+        }
       </dl>
     </div>
   }
