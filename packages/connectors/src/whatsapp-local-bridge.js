@@ -754,11 +754,20 @@ export async function forwardLocalWhatsAppInbound(input = {}, env = process.env,
       }
     }
     const approvalChallengeId = exactSecurityApproveChallengeId(input.text || input.body || input.message || "");
-    const approvalTarget = approvalChallengeId && !tenantRoute ? localWhatsAppSecurityApprovalForwardTarget({ chatId }, env) : "";
+    const approvalTarget = approvalChallengeId ? localWhatsAppSecurityApprovalForwardTarget({ chatId }, env) : "";
     if (approvalTarget) {
       target = approvalTarget;
       targetSource = "security_approval_forward";
       routeMode = "security_approval";
+    } else if (approvalChallengeId) {
+      await appendEvent({
+        type: "whatsapp_local_security_approval_forward_unconfigured",
+        chatId,
+        eventId: String(input.eventId || input.id || input.messageId || ""),
+        accountId: String(input.accountId || ""),
+        tenantVmId: tenantRoute?.tenantVmId || null,
+      }, env).catch(() => {});
+      return null;
     } else {
       target = tenantRoute?.target || localWhatsAppInboundForwardTarget({ chatId }, env);
     }
@@ -2268,8 +2277,36 @@ async function sendInboundRoutingFailureNotice({ accountId = "", chatId = "", ev
 }
 
 function forwardedSecurityApprovalNoticeText(payload = {}) {
-  if (payload?.approvedSecurityChallenge !== true) return "";
-  return "Orkestr access approved. Return to the Orkestr web UI to continue.";
+  if (payload?.approvedSecurityChallenge === true) {
+    return "Orkestr access approved. Return to the Orkestr web UI to continue.";
+  }
+  const reason = String(
+    payload?.skipped ||
+      payload?.event?.ignoredReason ||
+      payload?.routingFailure?.code ||
+      payload?.error ||
+      "",
+  ).trim();
+  if (!reason.startsWith("security_approval_")) return "";
+  if (reason === "security_approval_challenge_not_found") {
+    return "That Orkestr approval code is not pending here. Open a fresh Orkestr link and approve the new code.";
+  }
+  if (reason === "security_approval_sender_denied") {
+    return "This WhatsApp sender or chat is not allowed to approve that Orkestr access request.";
+  }
+  if (reason === "security_approval_challenge_expired") {
+    return "That Orkestr approval code has expired. Open the Orkestr link again and approve the new code.";
+  }
+  if (reason === "security_approval_challenge_rejected") {
+    return "That Orkestr approval request was already rejected. Open the Orkestr link again to create a new code.";
+  }
+  if (reason === "security_approval_challenge_consumed") {
+    return "That Orkestr approval code was already used. Return to the browser where you opened the Orkestr link.";
+  }
+  if (reason === "security_approval_challenge_approved") {
+    return "That Orkestr access request is already approved. Return to the browser where you opened the Orkestr link.";
+  }
+  return "Orkestr could not approve that access request. Open the Orkestr link again and use the newest approval code.";
 }
 
 async function sendForwardedSecurityApprovalNotice({ accountId = "", chatId = "", eventId = "", forwarded = null, client = null, env = process.env } = {}) {

@@ -108,6 +108,17 @@ function whatsappApprovalRoutedBindingAllowed({ input = {}, chatId = "", threadR
   return true;
 }
 
+function whatsappApprovalAuthIntentChatAllowed({ input = {}, challenge = {}, chatId = "", accountId = "" } = {}) {
+  const authIntent = challenge?.authIntent && typeof challenge.authIntent === "object" ? challenge.authIntent : {};
+  const expectedChatId = pickString(authIntent.chatId);
+  if (!expectedChatId) return false;
+  if (expectedChatId !== pickString(chatId, input.chatId, input.chat?.id, input.fromChatId)) return false;
+  const expectedAccountId = pickString(authIntent.accountId);
+  const actualAccountId = pickString(accountId, input.accountId);
+  if (expectedAccountId && actualAccountId && expectedAccountId !== actualAccountId) return false;
+  return true;
+}
+
 function whatsappApprovalBrokeredUnscopedAllowed({ input = {}, challenge = {}, env = process.env } = {}) {
   if (challenge?.instanceId) return false;
   if (!truthy(env.ORKESTR_WHATSAPP_SECURITY_APPROVAL_ALLOW_BROKERED_UNSCOPED || env.WHATSAPP_SECURITY_APPROVAL_ALLOW_BROKERED_UNSCOPED)) return false;
@@ -416,10 +427,11 @@ export async function maybeApprovePairingChallengeFromWhatsApp({
     accountId,
     env,
   });
+  const senderMatchesAuthIntentChat = whatsappApprovalAuthIntentChatAllowed({ input, challenge, chatId, accountId });
   const senderMatchesRegisteredTarget = instance?.whatsappChatHash &&
     whatsappApprovalSenderMatchesHash(input, instance.whatsappChatHash);
   const senderMatchesBrokeredUnscoped = whatsappApprovalBrokeredUnscopedAllowed({ input, challenge, env });
-  if (!senderMatchesRegisteredTarget && !senderMatchesRoutedThread && !senderMatchesPriorRoutedThread && !senderMatchesBrokeredUnscoped) {
+  if (!senderMatchesRegisteredTarget && !senderMatchesRoutedThread && !senderMatchesPriorRoutedThread && !senderMatchesAuthIntentChat && !senderMatchesBrokeredUnscoped) {
     const event = await recordSkipped("security_approval_sender_denied", {
       challengeId: challenge.id || challengeId,
       instanceId: challenge.instanceId || null,

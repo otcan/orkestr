@@ -156,12 +156,26 @@ function whatsappBridgeStatusTimeoutMs(env = process.env) {
   );
 }
 
+async function fetchWithTimeout(url, fetchImpl, fetchOptions = {}, timeoutMs = 45_000) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => {
+    const error = new Error(`WhatsApp bridge request timeout after ${timeoutMs}ms`);
+    error.name = "TimeoutError";
+    controller.abort(error);
+  }, timeoutMs);
+  try {
+    return await fetchImpl(url, {
+      ...fetchOptions,
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 async function fetchJson(url, fetchImpl, options = {}) {
   const { env, timeoutMs, ...fetchOptions } = options;
-  const response = await fetchImpl(url, {
-    ...fetchOptions,
-    signal: AbortSignal.timeout(positiveInteger(timeoutMs, whatsappBridgeStatusTimeoutMs(env), 1)),
-  });
+  const response = await fetchWithTimeout(url, fetchImpl, fetchOptions, positiveInteger(timeoutMs, whatsappBridgeStatusTimeoutMs(env), 1));
   const payload = await response.json().catch(() => ({}));
   return { ok: response.ok, status: response.status, payload };
 }
@@ -169,10 +183,7 @@ async function fetchJson(url, fetchImpl, options = {}) {
 async function fetchOk(url, fetchImpl, options = {}) {
   const { env, timeoutMs, ...fetchOptions } = options;
   try {
-    const response = await fetchImpl(url, {
-      ...fetchOptions,
-      signal: AbortSignal.timeout(positiveInteger(timeoutMs, whatsappBridgeStatusTimeoutMs(env), 1)),
-    });
+    const response = await fetchWithTimeout(url, fetchImpl, fetchOptions, positiveInteger(timeoutMs, whatsappBridgeStatusTimeoutMs(env), 1));
     return response.ok;
   } catch {
     return false;
@@ -3342,19 +3353,6 @@ async function handleWhatsAppRouterStatusCommand({
     deliveredAt: new Date().toISOString(),
     observedVia: "whatsapp_router_status_command",
   }, env);
-  const reply = await appendThreadMessage(thread.id, {
-    role: "assistant",
-    source: "whatsapp_router",
-    phase: "final_answer",
-    text: replyText,
-    state: "completed",
-    parentMessageId: message.id,
-    connector: "whatsapp",
-    routerTraceId,
-    turnId,
-    chatId,
-    accountId,
-  }, env);
   const event = {
     eventId,
     canonicalEventId,
@@ -3370,6 +3368,60 @@ async function handleWhatsAppRouterStatusCommand({
     ...(inboundDedupeKey ? { inboundDedupeKey } : {}),
     receivedAt: pickString(input.timestamp, input.receivedAt) || new Date().toISOString(),
   };
+  if (message.duplicate) {
+    const existingReply = messages.find((candidate) =>
+      candidate?.role === "assistant" &&
+      candidate?.source === "whatsapp_router" &&
+      candidate?.parentMessageId === message.id &&
+      sameOptionalEventField(candidate, { connector: "whatsapp" }, "connector") &&
+      sameOptionalEventField(candidate, { chatId }, "chatId") &&
+      sameOptionalEventField(candidate, { accountId }, "accountId")
+    ) || null;
+    if (existingReply) {
+      state.inboundEvents = [...(state.inboundEvents || []), event];
+      await writeWhatsAppState(state, env);
+      await ensureRouterTurn({ routerTraceId, turnId, connector: "whatsapp", accountId, chatId, eventId, threadId, messageId: message.id, state: "completed" }, env).catch(() => null);
+      await recordRouterTraceEvent({ routerTraceId, turnId, connector: "whatsapp", accountId, chatId, sourceEventId: eventId, threadId, messageId: message.id, phase: "skipped", reason: "duplicate_status_command", terminal: true }, env).catch(() => {});
+      await appendEvent({
+        type: "whatsapp_inbound_duplicate",
+        eventId,
+        canonicalEventId,
+        routerTraceId,
+        agentId: null,
+        threadId,
+        messageId: message.id,
+        replyMessageId: existingReply.id,
+        duplicateReason: "duplicate_status_command",
+      }, env).catch(() => {});
+      return {
+        duplicate: true,
+        handledCommand: "status",
+        event,
+        agentId: null,
+        threadId,
+        ownerUserId: resourceOwnerUserId(thread, env),
+        autoProvisioned: threadRoute.autoProvisioned === true,
+        createdThread: threadRoute.createdThread === true,
+        userId: threadRoute.user?.id || null,
+        message,
+        assistantMessage: existingReply,
+        status,
+      };
+    }
+  }
+  const reply = await appendThreadMessage(thread.id, {
+    role: "assistant",
+    source: "whatsapp_router",
+    phase: "final_answer",
+    text: replyText,
+    state: "completed",
+    parentMessageId: message.id,
+    connector: "whatsapp",
+    routerTraceId,
+    turnId,
+    chatId,
+    accountId,
+  }, env);
   state.inboundEvents = [...(state.inboundEvents || []), event];
   await writeWhatsAppState(state, env);
   await ensureRouterTurn({ routerTraceId, turnId, connector: "whatsapp", accountId, chatId, eventId, threadId, messageId: message.id, state: "completed" }, env).catch(() => null);

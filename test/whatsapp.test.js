@@ -762,10 +762,8 @@ test("local whatsapp forwarded security approval sends visible confirmation", as
     ORKESTR_HOME: home,
     ORKESTR_WHATSAPP_ACCOUNT_IDS: "sender",
     ORKESTR_WHATSAPP_SEND_CONFIRMATION_REQUIRED: "0",
-    ORKESTR_WHATSAPP_INBOUND_FORWARD_MAP_JSON: JSON.stringify({
-      [chatId]: "http://127.0.0.1:19812/api/connectors/whatsapp/inbound",
-    }),
-    ORKESTR_WHATSAPP_INBOUND_FORWARD_TOKEN: "forward-secret",
+    ORKESTR_WHATSAPP_SECURITY_APPROVAL_FORWARD_URL: "http://127.0.0.1:19812/api/connectors/whatsapp/inbound",
+    ORKESTR_WHATSAPP_INBOUND_TOKEN: "forward-secret",
   };
   const sent = [];
   const fetchCalls = [];
@@ -804,6 +802,53 @@ test("local whatsapp forwarded security approval sends visible confirmation", as
     assert.deepEqual(sent, [{
       to: chatId,
       body: "Orkestr access approved. Return to the Orkestr web UI to continue.",
+    }]);
+  } finally {
+    globalThis.fetch = originalFetch;
+    await resetLocalWhatsAppBridgeForTest(env);
+  }
+});
+
+test("local whatsapp forwarded security approval sends visible failure notice", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-forward-approval-failed-notice-"));
+  const chatId = "491700000000@c.us";
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "sender",
+    ORKESTR_WHATSAPP_SEND_CONFIRMATION_REQUIRED: "0",
+    ORKESTR_WHATSAPP_SECURITY_APPROVAL_FORWARD_URL: "http://127.0.0.1:19812/api/connectors/whatsapp/inbound",
+    ORKESTR_WHATSAPP_INBOUND_TOKEN: "forward-secret",
+  };
+  const sent = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => response({
+    duplicate: false,
+    skipped: "security_approval_challenge_not_found",
+    event: { ignoredReason: "security_approval_challenge_not_found" },
+  }, true, 202);
+
+  try {
+    const result = await handleInboundMessage("sender", {
+      id: { _serialized: `false_${chatId}_approval-failed`, remote: chatId },
+      fromMe: false,
+      from: chatId,
+      to: "491700000999@c.us",
+      body: "orkestr connect approve UNKNOWN1",
+      timestamp: 1_780_000_000,
+    }, env, {
+      client: {
+        async sendMessage(to, body) {
+          sent.push({ to, body });
+          return { id: { _serialized: `true_${chatId}_approval-failed-notice` } };
+        },
+      },
+    });
+
+    assert.equal(result.forwarded, true);
+    assert.equal(result.approvalNotice.sent, true);
+    assert.deepEqual(sent, [{
+      to: chatId,
+      body: "That Orkestr approval code is not pending here. Open a fresh Orkestr link and approve the new code.",
     }]);
   } finally {
     globalThis.fetch = originalFetch;
@@ -924,7 +969,7 @@ test("local whatsapp embedded approval examples do not use the security approval
   assert.equal(result, null);
 });
 
-test("local whatsapp approval commands prefer managed tenant route over parent security approval target", async () => {
+test("local whatsapp approval commands prefer parent security approval target over managed tenant route", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-forward-approval-managed-route-"));
   const chatId = "wa-group-managed-approval@g.us";
   const env = {
@@ -955,6 +1000,14 @@ test("local whatsapp approval commands prefer managed tenant route over parent s
     accountId: "sender",
     text: "orkestr connect approve ZFZBRW",
   }, env, async (url, options = {}) => {
+    if (String(url).includes("127.0.0.1:19812")) {
+      calls.push({ url: String(url), options, body: JSON.parse(options.body) });
+      return response({
+        ok: true,
+        approvedSecurityChallenge: true,
+        challenge: { id: "challenge-public", status: "approved" },
+      }, true, 202);
+    }
     if (String(url).includes("/api/health")) {
       calls.push({ url: String(url), options, body: null });
       return response({ ok: true }, true, 200);
@@ -975,18 +1028,59 @@ test("local whatsapp approval commands prefer managed tenant route over parent s
   });
 
   assert.equal(forwarded.forwarded, true);
-  assert.equal(forwarded.targetSource, "endpoint");
-  assert.equal(forwarded.routeMode, "direct");
+  assert.equal(forwarded.targetSource, "security_approval_forward");
+  assert.equal(forwarded.routeMode, "security_approval");
+  assert.equal(forwarded.payload.approvedSecurityChallenge, true);
   assert.equal(normal.forwarded, true);
   assert.equal(normal.targetSource, "endpoint");
   assert.equal(normal.routeMode, "direct");
-  assert.equal(calls.length, 3);
-  assert.equal(calls[0].url, "https://tenant.example.test/api/health");
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].url, "http://127.0.0.1:19812/api/connectors/whatsapp/inbound");
+  assert.equal(calls[0].options.headers.authorization, "Bearer forward-secret");
+  assert.equal(calls[0].body.text, "orkestr connect approve ZFZBRW");
   assert.equal(calls[1].url, "https://tenant.example.test/api/connectors/whatsapp/inbound");
-  assert.equal(calls[1].body.text, "orkestr connect approve ZFZBRW");
   assert.notEqual(calls[1].options.headers.authorization, "Bearer forward-secret");
-  assert.equal(calls[2].url, "https://tenant.example.test/api/connectors/whatsapp/inbound");
-  assert.notEqual(calls[2].options.headers.authorization, "Bearer forward-secret");
+});
+
+test("local whatsapp approval commands do not forward to tenant route when parent approval target is not configured", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-forward-approval-managed-no-parent-"));
+  const chatId = "wa-group-managed-approval-no-parent@g.us";
+  const env = { ORKESTR_HOME: home };
+  await createTenantVm({
+    id: "tenant-managed-approval-wa-no-parent",
+    ownerUserId: "firat",
+    endpoint: { baseUrl: "https://tenant.example.test" },
+    connectors: { whatsappChatName: "Firat Jobs", whatsappAccountId: "sender" },
+  }, env);
+  await configureTenantWhatsAppRoute("tenant-managed-approval-wa-no-parent", {
+    chatId,
+    accountId: "sender",
+    enabled: true,
+  }, env);
+
+  const approval = await forwardLocalWhatsAppInbound({
+    eventId: "event-managed-approval-no-parent",
+    chatId,
+    from: "491700000000@c.us",
+    accountId: "sender",
+    text: "orkestr connect approve ZFZBRW",
+  }, env, async () => {
+    throw new Error("approval commands must not be forwarded to the tenant");
+  });
+  const normal = await forwardLocalWhatsAppInbound({
+    eventId: "event-managed-normal-no-parent",
+    chatId,
+    from: "491700000000@c.us",
+    accountId: "sender",
+    text: "hi",
+  }, env, async (url, options = {}) => {
+    if (String(url).includes("/api/health")) return response({ ok: true }, true, 200);
+    return response({ ok: true, threadId: "firat-jobs", messageId: "msg-normal" }, true, 202);
+  });
+
+  assert.equal(approval, null);
+  assert.equal(normal.forwarded, true);
+  assert.equal(normal.targetSource, "endpoint");
 });
 
 test("local whatsapp forwarded unconfigured codex target sends setup notice", async () => {
@@ -3838,6 +3932,97 @@ test("whatsapp approval command accepts routed group binding for registered targ
   assert.equal(routed.threadId, null);
   assert.equal(challenge.status, "approved");
   assert.equal(challenge.approvedBy, "whatsapp");
+});
+
+test("whatsapp approval command accepts parent auth intent chat for tenant connect challenge", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-approve-auth-intent-chat-"));
+  const env = externalBridgeEnv(home);
+  const instanceId = "82f83473-4fce-4c63-ae22-08d3cd0c148a";
+  const chatId = "120363428493624197@g.us";
+  const connectId = "connect-firat-google";
+  const created = await createPairingChallenge({
+    env,
+    instanceId,
+    userId: "firat",
+    role: "user",
+    requestedPath: `/connect/google?connect=${connectId}`,
+    allowedActions: [`orkestr_auth.google.connect:${connectId}`],
+    authIntent: {
+      mcp: "tools/call",
+      tool: "orkestr_auth",
+      service: "gmail",
+      provider: "google_workspace",
+      action: "connect",
+      connectId,
+      instanceId,
+      userId: "firat",
+      threadId: "firat-jobs",
+      chatId,
+      accountId: "sender",
+      source: "whatsapp",
+    },
+    request: { headers: { "user-agent": "node-test" }, socket: { remoteAddress: "127.0.0.1" } },
+  });
+
+  const routed = await routeWhatsAppInbound({
+    eventId: "wa-approval-command-auth-intent-chat-1",
+    chatId,
+    accountId: "sender",
+    from: "66378837028965@lid",
+    text: `orkestr connect approve ${created.challenge.approveCode}`,
+  }, env);
+  const listed = await listPairingChallenges({ env, includeExpired: true });
+  const challenge = listed.challenges.find((item) => item.id === created.challenge.id);
+
+  assert.equal(routed.approvedSecurityChallenge, true);
+  assert.equal(routed.threadId, null);
+  assert.equal(challenge.status, "approved");
+  assert.equal(challenge.approvedBy, "whatsapp");
+});
+
+test("whatsapp approval command rejects parent auth intent from wrong account", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-approve-auth-intent-wrong-account-"));
+  const env = externalBridgeEnv(home);
+  const instanceId = "82f83473-4fce-4c63-ae22-08d3cd0c148a";
+  const chatId = "120363428493624197@g.us";
+  const connectId = "connect-firat-google-wrong-account";
+  const created = await createPairingChallenge({
+    env,
+    instanceId,
+    userId: "firat",
+    role: "user",
+    requestedPath: `/connect/google?connect=${connectId}`,
+    allowedActions: [`orkestr_auth.google.connect:${connectId}`],
+    authIntent: {
+      mcp: "tools/call",
+      tool: "orkestr_auth",
+      service: "gmail",
+      provider: "google_workspace",
+      action: "connect",
+      connectId,
+      instanceId,
+      userId: "firat",
+      threadId: "firat-jobs",
+      chatId,
+      accountId: "sender",
+      source: "whatsapp",
+    },
+    request: { headers: { "user-agent": "node-test" }, socket: { remoteAddress: "127.0.0.1" } },
+  });
+
+  const routed = await routeWhatsAppInbound({
+    eventId: "wa-approval-command-auth-intent-chat-wrong-account-1",
+    chatId,
+    accountId: "other-account",
+    from: "66378837028965@lid",
+    text: `orkestr connect approve ${created.challenge.approveCode}`,
+  }, env);
+  const listed = await listPairingChallenges({ env, includeExpired: true });
+  const challenge = listed.challenges.find((item) => item.id === created.challenge.id);
+
+  assert.equal(routed.skipped, "security_approval_sender_denied");
+  assert.equal(routed.threadId, null);
+  assert.equal(challenge.status, "pending");
 });
 
 test("whatsapp approval command accepts routed direct lid binding for unscoped challenge", async () => {
@@ -9051,6 +9236,61 @@ test("whatsapp /status replies from the router without queuing runtime work", as
   assert.equal(delivery.delivered.length, 1);
   assert.equal(calls[0].body.to, "chat-status-command");
   assert.match(stripDebugFooter(calls[0].body.text), /^Thread: WA Status Command Thread\nStatus: /);
+});
+
+test("whatsapp /status reuses the first router reply when inbound state misses a duplicate", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-status-command-duplicate-"));
+  const env = externalBridgeEnv(home);
+  await createThread({
+    id: "thread-wa-status-command-duplicate",
+    name: "WA Status Command Duplicate Thread",
+    runtimeKind: "codex-app-server",
+    binding: {
+      connector: "whatsapp",
+      chatId: "chat-status-command-duplicate",
+      enabled: true,
+    },
+  }, env);
+  await writeConnectorConfig("whatsapp", {
+    bridgeMode: "external",
+    bridgeUrl: "http://wa.local",
+  }, env);
+  const inbound = {
+    eventId: "false_chat-status-command-duplicate_msg-1_sender",
+    chatId: "chat-status-command-duplicate",
+    from: "sender",
+    accountId: "account-1",
+    text: "/status",
+  };
+
+  const first = await routeWhatsAppInbound(inbound, env);
+  await fs.writeFile(dataPaths(env).whatsapp, JSON.stringify({ inboundEvents: [] }, null, 2));
+  const second = await routeWhatsAppInbound(inbound, env);
+  const calls = [];
+  const delivery = await deliverWhatsAppReplies(env, async (url, options) => {
+    calls.push({ url, body: JSON.parse(options.body) });
+    return response({ ok: true, ids: ["sent-status-command-duplicate"] });
+  });
+  const duplicateDelivery = await deliverWhatsAppReplies(env, async () => {
+    throw new Error("should not resend duplicate status command reply");
+  });
+  const messages = await listThreadMessages("thread-wa-status-command-duplicate", env);
+  const replies = messages.filter((message) =>
+    message.role === "assistant" &&
+    message.source === "whatsapp_router" &&
+    message.parentMessageId === first.message.id
+  );
+
+  assert.equal(first.duplicate, false);
+  assert.equal(second.duplicate, true);
+  assert.equal(second.message.id, first.message.id);
+  assert.equal(second.assistantMessage.id, first.assistantMessage.id);
+  assert.equal(messages.filter((message) => message.role === "user" && message.observedVia === "whatsapp_router_status_command").length, 1);
+  assert.equal(replies.length, 1);
+  assert.equal(delivery.delivered.length, 1);
+  assert.equal(duplicateDelivery.delivered.length, 0);
+  assert.equal(calls.length, 1);
+  assert.match(stripDebugFooter(calls[0].body.text), /^Thread: WA Status Command Duplicate Thread\nStatus: /);
 });
 
 test("whatsapp /now inputs default to steer without interrupt queue notices", async () => {
