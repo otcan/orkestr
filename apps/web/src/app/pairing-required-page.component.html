@@ -1,8 +1,11 @@
 <main class="pairing-shell">
   <section class="pairing-panel" aria-label="Pairing Required">
     <header>
-      <p>Orkestr</p>
-      <h1>Approve this browser</h1>
+      <p>{{ approvalEyebrow() }}</p>
+      <h1>{{ approvalTitle() }}</h1>
+      @if (approvalDescription()) {
+        <span class="intent-summary">{{ approvalDescription() }}</span>
+      }
     </header>
 
     @if (error) {
@@ -12,6 +15,16 @@
     }
 
     @if (challenge) {
+      @if (approvalContextRows().length) {
+        <dl class="intent-context">
+          @for (row of approvalContextRows(); track row.label) {
+            <div>
+              <dt>{{ row.label }}</dt>
+              <dd>{{ row.value }}</dd>
+            </div>
+          }
+        </dl>
+      }
       <button class="command" type="button" (click)="copyCommand()" [attr.aria-label]="'Copy ' + approveCommand()">
         <code>{{ approveCommand() }}</code>
       </button>

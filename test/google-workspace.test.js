@@ -460,4 +460,18 @@ test("google workspace disclosure html names capabilities and drive.file limit",
   assert.match(html, /Calendar actions/);
   assert.match(html, /Drive selected files/);
   assert.match(html, /Drive uses selected-file access only/);
+  assert.match(html, /orkestr_auth/);
+  assert.match(html, /google_workspace/);
+});
+
+test("google workspace preview html does not expose the OAuth start form", () => {
+  const html = googleWorkspaceConnectHtml({
+    connectId: "connect-1",
+    request: { account: "user@example.com", brokerInstanceId: "instance-firat", userId: "firat" },
+    previewOnly: true,
+  });
+  assert.match(html, /Open this link in a browser/);
+  assert.match(html, /orkestr_auth/);
+  assert.match(html, /instance-firat/);
+  assert.doesNotMatch(html, /action="\/connect\/google\/start"/);
 });

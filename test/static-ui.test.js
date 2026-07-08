@@ -7,7 +7,7 @@ import test from "node:test";
 import { startServer } from "../apps/server/src/server.js";
 import { createGoogleWorkspaceConnectLink } from "../packages/connectors/src/google-workspace.js";
 import { __brokerInstanceRegistryTestInternals, registerBrokerInstance } from "../packages/core/src/broker-instance-registry.js";
-import { approvePairingChallenge, createPairingChallenge, pairBrowser, sessionCookieHeader } from "../packages/core/src/security.js";
+import { approvePairingChallenge, createPairingChallenge, listPairingChallenges, pairBrowser, sessionCookieHeader } from "../packages/core/src/security.js";
 import { userPrincipal } from "../packages/core/src/principal.js";
 
 const publicRuntimeEnvKeys = [
@@ -276,6 +276,26 @@ test("google workspace brokered connect links require instance and owner scoped 
     assert.equal(challengePayload.challenge.userId, "firat");
     assert.equal(challengePayload.challenge.role, "user");
     assert.equal(challengePayload.challenge.requestedPath, connectPath);
+    assert.deepEqual(challengePayload.challenge.allowedActions, [`orkestr_auth.google.connect:${connect.connectId}`]);
+    assert.equal(challengePayload.challenge.authIntent.tool, "orkestr_auth");
+    assert.equal(challengePayload.challenge.authIntent.mcp, "tools/call");
+    assert.equal(challengePayload.challenge.authIntent.service, "gmail");
+    assert.equal(challengePayload.challenge.authIntent.provider, "google_workspace");
+    assert.equal(challengePayload.challenge.authIntent.action, "connect");
+    assert.equal(challengePayload.challenge.authIntent.connectId, connect.connectId);
+    assert.equal(challengePayload.challenge.authIntent.instanceId, "instance-firat");
+    assert.equal(challengePayload.challenge.authIntent.userId, "firat");
+
+    const beforePreview = await listPairingChallenges({ env: process.env, includeExpired: true });
+    const previewResponse = await fetch(`http://127.0.0.1:${port}${connectPath}`, {
+      headers: { "user-agent": "facebookexternalhit/1.1" },
+      redirect: "manual",
+    });
+    const previewHtml = await previewResponse.text();
+    assert.equal(previewResponse.status, 200);
+    assert.match(previewHtml, /Open this link in a browser/);
+    const afterPreview = await listPairingChallenges({ env: process.env, includeExpired: true });
+    assert.equal(afterPreview.challenges.length, beforePreview.challenges.length);
 
     const startResponse = await fetch(`http://127.0.0.1:${port}${startPath}`, { redirect: "manual" });
     assert.equal(startResponse.status, 302);
@@ -299,7 +319,14 @@ test("google workspace brokered connect links require instance and owner scoped 
     assert.equal(regularStartRedirect.pathname, "/setup/pairing");
     assert.equal(regularStartRedirect.searchParams.get("return"), startPath);
 
-    const otherChallenge = await createPairingChallenge({ env: process.env, instanceId: "instance-firat", userId: "mallory", role: "user" });
+    const otherChallenge = await createPairingChallenge({
+      env: process.env,
+      instanceId: "instance-firat",
+      userId: "mallory",
+      role: "user",
+      allowedActions: [`orkestr_auth.google.connect:${connect.connectId}`],
+      authIntent: challengePayload.challenge.authIntent,
+    });
     await approvePairingChallenge(otherChallenge.challengeId, { env: process.env, approvedBy: "node:test" });
     const otherPaired = await pairBrowser({ challengeId: otherChallenge.challengeId, env: process.env });
     const otherCookie = sessionCookieHeader(otherPaired.token, process.env);
@@ -310,11 +337,26 @@ test("google workspace brokered connect links require instance and owner scoped 
 
     await approvePairingChallenge(challengeId, { env: process.env, approvedBy: "node:test" });
     const paired = await pairBrowser({ challengeId, env: process.env });
+    assert.deepEqual(paired.session.allowedActions, [`orkestr_auth.google.connect:${connect.connectId}`]);
+    assert.equal(paired.session.authIntent.tool, "orkestr_auth");
+    assert.equal(paired.session.authIntent.service, "gmail");
     const cookie = sessionCookieHeader(paired.token, process.env);
     const pairedResponse = await fetch(`http://127.0.0.1:${port}${connectPath}`, { headers: { cookie } });
     const pairedHtml = await pairedResponse.text();
     assert.equal(pairedResponse.status, 200);
     assert.match(pairedHtml, /Connect Google Workspace/);
+    assert.match(pairedHtml, /orkestr_auth/);
+    assert.match(pairedHtml, /google_workspace/);
+
+    const appResponse = await fetch(`http://127.0.0.1:${port}/app`, { headers: { cookie }, redirect: "manual" });
+    const appPayload = await appResponse.json();
+    assert.equal(appResponse.status, 403);
+    assert.equal(appPayload.error, "auth_intent_session_scope_denied");
+
+    const apiResponse = await fetch(`http://127.0.0.1:${port}/api/threads`, { headers: { cookie }, redirect: "manual" });
+    const apiPayload = await apiResponse.json();
+    assert.equal(apiResponse.status, 403);
+    assert.equal(apiPayload.error, "auth_intent_session_scope_denied");
   } finally {
     await new Promise((resolve) => server.close(resolve));
     restoreEnv(prior);

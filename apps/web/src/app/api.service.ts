@@ -627,6 +627,7 @@ export interface SecurityChallenge {
   appSlug?: string;
   requestedPath?: string;
   allowedActions?: string[];
+  authIntent?: Record<string, string>;
   requestedUserAgent?: string;
   requestedIp?: string;
   approvedAt?: string;
@@ -646,6 +647,8 @@ export interface SecuritySession {
   createdAt?: string;
   lastAccessedAt?: string;
   lastIp?: string;
+  allowedActions?: string[];
+  authIntent?: Record<string, string>;
   expiresAt?: string;
 }
 

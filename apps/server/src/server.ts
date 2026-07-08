@@ -82,6 +82,13 @@ export async function createApp(): Promise<INestApplication> {
             .type("application/json")
             .send(JSON.stringify({ ok: false, error: scopedShareAuth.error || "forbidden" }));
         }
+        const authIntentAuth = authorizeAuthIntentSessionRequest(request, result.session || null);
+        if (!authIntentAuth.ok) {
+          return response
+            .status(authIntentAuth.statusCode || 403)
+            .type("application/json")
+            .send(JSON.stringify({ ok: false, error: authIntentAuth.error || "forbidden" }));
+        }
         const resourceAuth = await authorizeThreadResourceRequest(request, result.principal);
         if (!resourceAuth.ok) {
           return response
@@ -162,6 +169,37 @@ function authorizeScopedShareSessionRequest(request: any, session: any) {
   // the requested share. A stale share cookie for another shared URL should show
   // the pairing UI, not hard-fail the page before it can recover.
   return { ok: true };
+}
+
+function authorizeAuthIntentSessionRequest(request: any, session: any) {
+  if (!session?.id || session?.shareId) return { ok: true };
+  const allowedActions = Array.isArray(session.allowedActions) ? session.allowedActions : [];
+  if (!allowedActions.some((action: string) => String(action || "").startsWith("orkestr_auth."))) return { ok: true };
+  const method = String(request?.method || "GET").toUpperCase();
+  const url = String(request?.originalUrl || request?.url || "").split("?")[0];
+  const parts = routePartsFromApiRequest(request);
+  if (method === "GET" && (url === "/connect/google" || url === "/connect/google/start")) return { ok: true };
+  if (method === "GET" && url === "/setup/pairing") return { ok: true };
+  if (method === "GET" && isStaticAssetRequestPath(url)) return { ok: true };
+  if (parts[0] !== "api") return { ok: false, statusCode: 403, error: "auth_intent_session_scope_denied" };
+  const [surface, second, third, fourth] = parts.slice(1).map((part) => part.toLowerCase());
+  if (method === "GET" && ["health", "ready", "version"].includes(surface)) return { ok: true };
+  if (method === "GET" && surface === "setup" && second === "status") return { ok: true };
+  if (
+    surface === "setup" &&
+    second === "security" &&
+    (
+      (method === "GET" && third === "challenges" && Boolean(fourth)) ||
+      (method === "POST" && ["challenge", "challenges", "pair"].includes(third || ""))
+    )
+  ) return { ok: true };
+  return { ok: false, statusCode: 403, error: "auth_intent_session_scope_denied" };
+}
+
+function isStaticAssetRequestPath(url: string) {
+  if (url === "/favicon.ico" || url === "/manifest.webmanifest") return true;
+  if (url.startsWith("/assets/") || url.startsWith("/media/")) return true;
+  return /^\/[^/]+\.(?:css|js|mjs|map|ico|png|jpg|jpeg|svg|webp|woff|woff2)$/.test(url);
 }
 
 function sharedAppApiRoute(parts: string[]) {
