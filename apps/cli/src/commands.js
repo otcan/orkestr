@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import fs from "node:fs";
 import path from "node:path";
 import readline from "node:readline";
 import { fileURLToPath } from "node:url";
@@ -1402,6 +1403,15 @@ async function updateInstallCommand(argv, ctx) {
     : [...(checkOnly ? ["--check-only"] : [])];
   const label = release && !inPlace ? "versioned release update" : "in-place update";
   if (!argv.includes("--json")) ctx.stdout.write(`Starting Orkestr ${label}${ref ? ` for ${ref}` : ""}...\n`);
+  if (release && !inPlace) {
+    const systemdRun = releaseUpdateSystemdRunCommand(script, args, env);
+    if (systemdRun) {
+      if (!argv.includes("--json")) {
+        ctx.stdout.write(`Running release outside ${systemdRun.serviceUnit}; follow logs with: journalctl -u ${systemdRun.unitName} -f\n`);
+      }
+      return spawnInherited(ctx.spawnImpl, systemdRun.command, systemdRun.args, { env });
+    }
+  }
   return spawnInherited(ctx.spawnImpl, "bash", [script, ...args], { env });
 }
 
@@ -2236,6 +2246,98 @@ function repoRoot() {
 
 function updateScriptPath(scriptName) {
   return path.join(repoRoot(), "scripts", scriptName);
+}
+
+function releaseUpdateSystemdRunCommand(script, args, env) {
+  if (env.ORKESTR_UPDATE_SYSTEMD_RUN === "0") return null;
+  if (serviceManager(env) !== "systemd") return null;
+  const cgroup = currentProcessCgroup(env);
+  const inferredUnit = currentSystemdServiceUnit(cgroup);
+  const serviceUnit = serviceUnitName(env.ORKESTR_SERVICE_NAME || (inferredUnit.startsWith("orkestr") ? inferredUnit : "") || "orkestr");
+  if (!cgroupIncludesUnit(cgroup, serviceUnit)) return null;
+  const unitName = transientReleaseUnitName();
+  return {
+    command: "systemd-run",
+    unitName,
+    serviceUnit,
+    args: [
+      "--collect",
+      "--same-dir",
+      `--unit=${unitName}`,
+      `--description=Orkestr release update for ${env.ORKESTR_DEPLOY_REF || args.join(" ") || "current ref"}`,
+      ...systemdRunEnvArgs(env),
+      "bash",
+      script,
+      ...args,
+    ],
+  };
+}
+
+function currentProcessCgroup(env) {
+  if (env.ORKESTR_TEST_PROC_CGROUP) return String(env.ORKESTR_TEST_PROC_CGROUP);
+  try {
+    return fs.readFileSync("/proc/self/cgroup", "utf8");
+  } catch {
+    return "";
+  }
+}
+
+function currentSystemdServiceUnit(cgroup) {
+  return String(cgroup || "").match(/(?:^|\/)([^/\n]+\.service)(?:\/|$)/)?.[1] || "";
+}
+
+function cgroupIncludesUnit(cgroup, unit) {
+  const serviceUnit = serviceUnitName(unit);
+  return String(cgroup || "").split("\n").some((line) => line.includes(`/${serviceUnit}`) || line.endsWith(serviceUnit));
+}
+
+function transientReleaseUnitName() {
+  return `orkestr-release-${Date.now()}-${process.pid}`;
+}
+
+function systemdRunEnvArgs(env) {
+  return systemdRunEnvironment(env).map(([key, value]) => `--setenv=${key}=${value}`);
+}
+
+function systemdRunEnvironment(env) {
+  const entries = new Map();
+  for (const key of Object.keys(env || {}).sort()) {
+    const value = env[key];
+    if (!isSystemdRunEnvKey(key, value)) continue;
+    entries.set(key, String(value));
+  }
+  entries.set("ORKESTR_UPDATE_SYSTEMD_RUN", "0");
+  return [...entries.entries()];
+}
+
+function isSystemdRunEnvKey(key, value) {
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) return false;
+  if (value == null || String(value).includes("\0")) return false;
+  if (/^(ORKESTR_DEPLOY_|ORKESTR_RELEASE_|ORKESTR_UPDATE_|ORKESTR_CODEX_APP_SERVER_)/.test(key)) return true;
+  return [
+    "CI",
+    "GIT_SSH_COMMAND",
+    "HOME",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "LOGNAME",
+    "NODE_COMPILE_CACHE",
+    "NODE_OPTIONS",
+    "NO_COLOR",
+    "ORKESTR_APP_DIR",
+    "ORKESTR_CURRENT_LINK",
+    "ORKESTR_ENV_FILE",
+    "ORKESTR_HOME",
+    "ORKESTR_HOST",
+    "ORKESTR_PORT",
+    "ORKESTR_SERVICE_NAME",
+    "ORKESTR_SERVICE_TIMEOUT_STOP_SEC",
+    "PATH",
+    "SHELL",
+    "SSH_AUTH_SOCK",
+    "USER",
+  ].includes(key);
 }
 
 async function spawnInherited(spawnImpl, command, args, options = {}) {
