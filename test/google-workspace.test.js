@@ -10,6 +10,7 @@ import {
   deleteGoogleCalendarEvent,
   getGoogleDriveFile,
   getGoogleWorkspaceConnectRequest,
+  googleWorkspaceBrokeredConnectorSetupHref,
   googleWorkspaceConnectHtml,
   listGoogleCalendarEvents,
   modifyGmailMessage,
@@ -231,6 +232,25 @@ test("brokered google workspace oauth provisions the Gmail grant to the tenant V
     "https://tenant.example.test/api/broker/google-workspace/grants",
   ]);
   assert.deepEqual(await readGmailToken(env, { userId: "firat" }), {});
+});
+
+test("brokered google workspace callback target returns to the instance connector", () => {
+  const href = googleWorkspaceBrokeredConnectorSetupHref({
+    brokered: true,
+    brokerInstanceId: "instance-firat",
+  }, {
+    ORKESTR_CONNECT_PUBLIC_URL: "https://connect.crawlerai.de",
+    ORKESTR_PUBLIC_AUTH_URL: "https://connect.orkestr.de/setup/pairing",
+  });
+  const target = new URL(href);
+
+  assert.equal(target.origin, "https://connect.orkestr.de");
+  assert.equal(target.pathname, "/i/instance-firat/app/connectors/gmail");
+  assert.equal(target.searchParams.get("mcp"), "tools/call");
+  assert.equal(target.searchParams.get("tool"), "orkestr_auth");
+  assert.equal(target.searchParams.get("service"), "gmail");
+  assert.equal(target.searchParams.get("instance_id"), "instance-firat");
+  assert.doesNotMatch(href, /crawlerai|app\.orkestr\.de|\/setup\/gmail/);
 });
 
 test("tenant google workspace connect link is created by the parent broker", async () => {

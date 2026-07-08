@@ -120,6 +120,24 @@ function publicConnectUrl(pathname = "", env = process.env, options = {}) {
   }
 }
 
+export function googleWorkspaceBrokeredConnectorSetupPath(result = {}, connector = "gmail") {
+  const instanceId = clean(result.brokerInstanceId || result.instanceId);
+  if (!instanceId) return "";
+  const service = clean(connector) || "gmail";
+  const target = new URL(`/i/${encodeURIComponent(instanceId)}/app/connectors/${encodeURIComponent(service)}`, "http://localhost");
+  target.searchParams.set("mcp", "tools/call");
+  target.searchParams.set("tool", "orkestr_auth");
+  target.searchParams.set("service", service);
+  target.searchParams.set("instance_id", instanceId);
+  return `${target.pathname}${target.search}`;
+}
+
+export function googleWorkspaceBrokeredConnectorSetupHref(result = {}, env = process.env, connector = "gmail") {
+  const path = googleWorkspaceBrokeredConnectorSetupPath(result, connector);
+  if (!path) return "";
+  return publicConnectUrl(path, env, { brokered: true });
+}
+
 function brokeredGoogleWorkspaceConnectEnabled(env = process.env) {
   if (!clean(env.ORKESTR_TENANT_VM_ID)) return false;
   if (truthy(env.ORKESTR_GOOGLE_WORKSPACE_LOCAL_OAUTH)) return false;

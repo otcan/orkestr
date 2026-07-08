@@ -15,6 +15,7 @@ import {
 } from "../../../../../packages/connectors/src/gmail.js";
 import {
   getGoogleWorkspaceConnectRequest,
+  googleWorkspaceBrokeredConnectorSetupHref,
   googleWorkspaceConnectHtml,
   startGoogleWorkspaceOAuth,
 } from "../../../../../packages/connectors/src/google-workspace.js";
@@ -1234,6 +1235,7 @@ function googleOAuthCallbackPayload(result: Record<string, unknown> = {}) {
   if (provider === "google_workspace") {
     const capabilities = stringArray(result.capabilities);
     const labels = googleWorkspaceCapabilityLabels(capabilities);
+    const brokeredSetupHref = googleWorkspaceBrokeredConnectorSetupHref(result, process.env, "gmail");
     return {
       ok: true,
       state: clean(result.state) || "ok",
@@ -1241,8 +1243,11 @@ function googleOAuthCallbackPayload(result: Record<string, unknown> = {}) {
       message: labels.length
         ? `Google Workspace authorization is complete. Enabled capabilities: ${labels.join(", ")}.`
         : "Google Workspace authorization is complete, but no optional Workspace capabilities were granted.",
-      setupHref: "/setup/gmail",
-      setupLabel: "Open Connectors",
+      setupHref: brokeredSetupHref || "/setup/gmail",
+      setupLabel: brokeredSetupHref ? "Open Instance Connector" : "Open Connectors",
+      setupReturnText: brokeredSetupHref
+        ? "Return to this instance connector page to refresh the connection status."
+        : "Return to setup to refresh the connector status.",
     };
   }
   return {
