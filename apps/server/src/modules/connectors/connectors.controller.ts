@@ -120,6 +120,14 @@ function googleWorkspaceAuthIntent(connectRequest: any): Record<string, string> 
   const instanceId = googleWorkspaceBrokerInstanceId(connectRequest);
   const userId = normalizeUserId(connectRequest?.userId || "");
   const account = String(connectRequest?.account || "").trim().toLowerCase();
+  const thread = String(
+    connectRequest?.threadName ||
+      connectRequest?.threadTitle ||
+      connectRequest?.brokerTenantThreadName ||
+      connectRequest?.threadId ||
+      connectRequest?.brokerTenantThreadId ||
+      "",
+  ).trim();
   return {
     mcp: "tools/call",
     tool: "orkestr_auth",
@@ -134,6 +142,7 @@ function googleWorkspaceAuthIntent(connectRequest: any): Record<string, string> 
     connectId: String(connectRequest?.connectId || "").trim(),
     instanceId,
     userId,
+    thread,
     threadId: String(connectRequest?.threadId || connectRequest?.brokerTenantThreadId || "").trim(),
     chatId: String(connectRequest?.chatId || connectRequest?.brokerTenantChatId || "").trim(),
     accountId: String(connectRequest?.accountId || connectRequest?.brokerTenantAccountId || "").trim(),

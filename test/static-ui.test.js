@@ -75,6 +75,10 @@ function assertConnectorIntentReturn(returnTo, { instanceId, connector = "gmail"
   assert.equal(target.searchParams.get("mcp"), "tools/call");
   assert.equal(target.searchParams.get("tool"), "orkestr_auth");
   assert.equal(target.searchParams.get("service"), connector);
+  if (connector === "gmail") {
+    assert.equal(target.searchParams.get("provider"), "google_workspace");
+    assert.equal(target.searchParams.get("action"), "connect");
+  }
   assert.equal(target.searchParams.get("instance_id"), instanceId);
   assert.equal(target.searchParams.has("compact"), false);
 }
@@ -285,6 +289,7 @@ test("google workspace brokered connect links require instance and owner scoped 
     assert.equal(challengePayload.challenge.authIntent.connectId, connect.connectId);
     assert.equal(challengePayload.challenge.authIntent.instanceId, "instance-firat");
     assert.equal(challengePayload.challenge.authIntent.userId, "firat");
+    assert.equal(challengePayload.challenge.authIntent.thread, "firat-jobs");
 
     const beforePreview = await listPairingChallenges({ env: process.env, includeExpired: true });
     const previewResponse = await fetch(`http://127.0.0.1:${port}${connectPath}`, {
@@ -1372,12 +1377,15 @@ test("web shell exposes a user connector management page", async () => {
   assert.match(connectorsComponent, /if \(!this\.setupStatus\) return \[\]/);
   assert.match(connectorsComponent, /scheduleRetryIfNeeded\(\): void/);
   assert.match(connectorsComponent, /maybeAutoStartRouteLogin\(\): void/);
+  assert.match(connectorsComponent, /if \(!this\.setupStatus\) return/);
   assert.match(connectorsComponent, /startGmail\(options: \{ autoRedirect\?: boolean \} = \{\}\)/);
   assert.match(connectorsComponent, /disconnectGmail\(\): Promise<void>/);
   assert.match(connectorsComponent, /connectorConnected\(connector: ConnectorStatus\): boolean/);
   assert.match(connectorsComponent, /connectedAccount\(connector: ConnectorStatus\): string/);
   assert.match(connectorsComponent, /connectedCapabilityLabels\(connector: ConnectorStatus\): string\[\]/);
   assert.match(connectorsComponent, /globalThis\.location\.href = this\.gmailAuth\.authorizeUrl/);
+  assert.match(connectorsComponent, /this\.connectorStatus\("gmail"\)\.state/);
+  assert.match(connectorsComponent, /=== "connected"\) return/);
   assert.match(connectorsComponent, /connectorIntentActive\(\): boolean/);
   assert.match(connectorsComponent, /connectorIntentMethod\(\): string/);
   assert.match(connectorsComponent, /connectorIntentTool\(\): string/);

@@ -252,6 +252,8 @@ test("brokered google workspace callback target returns to the instance connecto
   assert.equal(target.searchParams.get("mcp"), "tools/call");
   assert.equal(target.searchParams.get("tool"), "orkestr_auth");
   assert.equal(target.searchParams.get("service"), "gmail");
+  assert.equal(target.searchParams.get("provider"), "google_workspace");
+  assert.equal(target.searchParams.get("action"), "connect");
   assert.equal(target.searchParams.get("instance_id"), "instance-firat");
   assert.equal(target.searchParams.get("auto"), "0");
   assert.doesNotMatch(href, /crawlerai|app\.orkestr\.de|\/setup\/gmail/);

@@ -128,6 +128,10 @@ export function googleWorkspaceBrokeredConnectorSetupPath(result = {}, connector
   target.searchParams.set("mcp", "tools/call");
   target.searchParams.set("tool", "orkestr_auth");
   target.searchParams.set("service", service);
+  if (service === "gmail") {
+    target.searchParams.set("provider", "google_workspace");
+    target.searchParams.set("action", "connect");
+  }
   target.searchParams.set("instance_id", instanceId);
   target.searchParams.set("auto", "0");
   return `${target.pathname}${target.search}`;

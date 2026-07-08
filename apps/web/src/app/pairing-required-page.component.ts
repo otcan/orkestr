@@ -119,10 +119,11 @@ export class PairingRequiredPageComponent implements OnInit, OnDestroy {
     return [
       { label: "Tool", value: intent.tool || "" },
       { label: "Service", value: intent.service || "" },
+      { label: "Provider", value: intent.provider || "" },
       { label: "Action", value: intent.action || "" },
       { label: "Instance", value: intent.instanceId || "" },
       { label: "User", value: intent.userId || "" },
-      { label: "Account", value: intent.account || "" },
+      { label: "Thread", value: intent.thread || intent.threadId || "" },
     ].map((row) => ({ ...row, value: String(row.value || "").trim() })).filter((row) => row.value);
   }
 

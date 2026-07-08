@@ -30,6 +30,10 @@ function connectorIntentSearch(instanceId: string, connector: string, search = "
   params.set("mcp", "tools/call");
   params.set("tool", "orkestr_auth");
   params.set("service", connector);
+  if (connector === "gmail") {
+    params.set("provider", "google_workspace");
+    params.set("action", "connect");
+  }
   params.set("instance_id", instanceId);
   const query = params.toString();
   return query ? `?${query}` : "";

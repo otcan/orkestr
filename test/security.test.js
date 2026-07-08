@@ -985,7 +985,7 @@ test("broker instance pairing challenge is scoped to the tenant VM owner", async
     assert.equal(body.challenge.instanceId, "instance-firat");
     assert.equal(
       body.challenge.requestedPath,
-      "/i/instance-firat/app/connectors/gmail?mcp=tools%2Fcall&tool=orkestr_auth&service=gmail&instance_id=instance-firat",
+      "/i/instance-firat/app/connectors/gmail?mcp=tools%2Fcall&tool=orkestr_auth&service=gmail&provider=google_workspace&action=connect&instance_id=instance-firat",
     );
   } finally {
     await new Promise((resolve) => server.close(resolve));
@@ -1030,7 +1030,7 @@ test("broker instance pairing challenge is scoped to the tenant VM owner", async
     assert.equal(body.challenge.instanceId, "instance-firat");
     assert.equal(
       body.challenge.requestedPath,
-      "/i/instance-firat/app/connectors/gmail?mcp=tools%2Fcall&tool=orkestr_auth&service=gmail&instance_id=instance-firat",
+      "/i/instance-firat/app/connectors/gmail?mcp=tools%2Fcall&tool=orkestr_auth&service=gmail&provider=google_workspace&action=connect&instance_id=instance-firat",
     );
   } finally {
     await new Promise((resolve) => server.close(resolve));

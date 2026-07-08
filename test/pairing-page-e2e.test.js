@@ -132,6 +132,8 @@ test("pairing page stores tenant app return path on generated challenge", async 
     mcp: "tools/call",
     tool: "orkestr_auth",
     service: "gmail",
+    provider: "google_workspace",
+    action: "connect",
     instance_id: "main",
   });
   const expectedPath = `/i/main/app/connectors/gmail?${expectedParams}`;
