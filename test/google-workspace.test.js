@@ -159,6 +159,7 @@ test("brokered google workspace oauth provisions the Gmail grant to the tenant V
   const env = await configureGoogle(parentHome);
   env.ORKESTR_CONNECT_PUBLIC_URL = "https://connect.crawlerai.de";
   env.ORKESTR_PUBLIC_AUTH_URL = "https://connect.orkestr.de/setup/pairing";
+  env.GMAIL_OAUTH_REDIRECT_URI = "https://app.orkestr.de/oauth/gmail/callback";
   const client = __brokerInstanceRegistryTestInternals.createX25519Identity();
   const registration = await registerBrokerInstance({
     env: {
@@ -195,7 +196,9 @@ test("brokered google workspace oauth provisions the Gmail grant to the tenant V
     connectId: link.connectId,
     capabilities: ["gmail_read"],
   });
+  assert.equal(started.redirectUri, "https://connect.orkestr.de/oauth/gmail/callback");
   const savedState = JSON.parse(await fs.readFile(path.join(userDataPaths("firat", env).oauth, "gmail-state.json"), "utf8"));
+  assert.equal(savedState.redirectUri, "https://connect.orkestr.de/oauth/gmail/callback");
   const calls = [];
   const result = await finishGmailOAuth(
     new URLSearchParams({ code: "broker-code", state: started.state }),

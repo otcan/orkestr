@@ -56,6 +56,48 @@ function tenantVmIdForOAuth(env = process.env, options = {}) {
   return clean(options.tenantVmId || env.ORKESTR_TENANT_VM_ID);
 }
 
+function normalizePublicBaseUrl(value = "") {
+  const text = clean(value).replace(/\/+$/g, "");
+  if (!text) return "";
+  try {
+    const parsed = new URL(/^https?:\/\//i.test(text) ? text : `https://${text}`);
+    if (!["http:", "https:"].includes(parsed.protocol) || !parsed.hostname) return "";
+    parsed.hash = "";
+    parsed.search = "";
+    parsed.pathname = parsed.pathname.replace(/\/+$/g, "");
+    return parsed.toString().replace(/\/+$/g, "");
+  } catch {
+    return "";
+  }
+}
+
+function publicUrlOrigin(value = "") {
+  const normalized = normalizePublicBaseUrl(value);
+  if (!normalized) return "";
+  try {
+    return new URL(normalized).origin.replace(/\/+$/g, "");
+  } catch {
+    return "";
+  }
+}
+
+function brokeredGmailOAuthRedirectUri(env = process.env, fallback = "") {
+  const base =
+    normalizePublicBaseUrl(env.ORKESTR_GOOGLE_WORKSPACE_CONNECT_PUBLIC_URL) ||
+    publicUrlOrigin(env.ORKESTR_PUBLIC_AUTH_URL || env.ORKESTR_AUTH_ENTRY_URL || env.ORKESTR_PAIRING_URL || env.ORKESTR_AUTH_URL) ||
+    normalizePublicBaseUrl(env.ORKESTR_CONNECT_PUBLIC_URL || env.ORKESTR_CONNECT_BASE_URL) ||
+    normalizePublicBaseUrl(
+      env.ORKESTR_PUBLIC_APP_URL ||
+        env.ORKESTR_PUBLIC_URL ||
+        env.ORKESTR_APP_URL ||
+        env.ORKESTR_PUBLIC_HTTPS_URL ||
+        env.ORKESTR_HTTPS_URL ||
+        env.ORKESTR_TAILSCALE_HTTPS_NAME ||
+        env.ORKESTR_BASE_URL,
+    );
+  return base ? `${base}/oauth/gmail/callback` : clean(fallback);
+}
+
 function newOAuthState(env = process.env, options = {}) {
   const baseState = clean(options.state) || randomUUID();
   const tenantVmId = tenantVmIdForOAuth(env, options);
@@ -237,7 +279,11 @@ export async function readGmailToken(env = process.env, options = {}) {
 
 export async function startGmailOAuth(env = process.env, options = {}) {
   const config = await readParentConnectorRuntimeConfig("gmail", env);
-  const { clientId, redirectUri } = requireOAuthConfig(config);
+  const brokered = Boolean(clean(options.brokerInstanceId || options.brokerTenantVmId));
+  const redirectUri = brokered
+    ? brokeredGmailOAuthRedirectUri(env, config.redirectUri)
+    : clean(config.redirectUri);
+  const { clientId } = requireOAuthConfig({ ...config, redirectUri });
   const scope = await connectorScopePaths(env, options);
   const tenantVmId = tenantVmIdForOAuth(env, options);
   const state = newOAuthState(env, options);
