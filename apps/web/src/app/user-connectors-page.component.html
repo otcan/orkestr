@@ -71,7 +71,7 @@
         }
 
         @if (connector.id === "linkedin" || connector.id === "browsers") {
-          <a class="button-link" href="/desk">Open Desk</a>
+          <a class="button-link" [href]="deskPath()">Open Desk</a>
         }
       </article>
     } @empty {

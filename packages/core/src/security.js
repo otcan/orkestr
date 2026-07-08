@@ -5,7 +5,7 @@ import { dataPaths, ensureDataDirs } from "../../storage/src/paths.js";
 import { appendEvent, readJson, writeSecretJson } from "../../storage/src/store.js";
 import { authorizeDesktopShareHttpRequest } from "./desktop-shares.js";
 import { decryptBrokerClientPayload } from "./broker-instance-registry.js";
-import { adminPrincipal, principalFromSecuritySession } from "./principal.js";
+import { adminPrincipal, principalFromSecuritySession, userPrincipal } from "./principal.js";
 import { publicUrlConfig } from "./public-url-config.js";
 import { defaultAdminUser, getUser, normalizeUserId } from "./users.js";
 import { readJobsJdCacheAccessRecords } from "./jobs-jd-cache-mcp.js";
@@ -940,13 +940,17 @@ async function authorizeBrokerProxyMachineRequest(request, env = process.env) {
   if (String(payload.method || "").toUpperCase() !== method) return brokerProxyMachineAuthFailure("method_mismatch", 401);
   const requestPath = normalizeRequestPathForBrokerAuth(request?.originalUrl || request?.url || "/");
   if (normalizeRequestPathForBrokerAuth(payload.path || "/") !== requestPath) return brokerProxyMachineAuthFailure("path_mismatch", 401);
-  const principal = adminPrincipal(defaultAdminUser(env));
+  const payloadUserId = normalizeUserId(payload.userId || "");
+  const payloadRole = String(payload.role || "").trim().toLowerCase() === "user" ? "user" : "admin";
+  const principal = payloadUserId && payloadRole === "user"
+    ? userPrincipal({ id: payloadUserId, role: "user", source: "broker-proxy-machine-token", displayName: payloadUserId })
+    : adminPrincipal(defaultAdminUser(env));
   principal.source = "broker-proxy-machine-token";
   principal.machine = {
     routeKind: "broker_proxy",
     instanceId: expectedInstanceId,
-    userId: String(payload.userId || ""),
-    role: String(payload.role || ""),
+    userId: payloadUserId,
+    role: payloadRole,
   };
   return {
     ok: true,

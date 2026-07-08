@@ -31,6 +31,7 @@ import { requestPrincipal } from "../../../../../packages/core/src/principal.js"
 import { isAdminPrincipal } from "../../../../../packages/core/src/policy.js";
 import { distributionIdentity } from "../../../../../packages/core/src/distribution.js";
 import { getUser } from "../../../../../packages/core/src/users.js";
+import { listTenantVms } from "../../../../../packages/core/src/tenant-vm-registry.js";
 import { configuredWhatsAppChatNamePrefix, defaultWhatsAppReplyPrefix } from "../../../../../packages/core/src/whatsapp-defaults.js";
 import {
   parentConnectorProviderDefinitions,
@@ -329,20 +330,36 @@ async function systemSnapshot() {
 }
 
 async function pairingChallengeTarget(body: Record<string, unknown> = {}, request: any) {
-  const userId = String(body.userId || body.targetUserId || "").trim();
+  let userId = String(body.userId || body.targetUserId || "").trim();
   const instanceId = String(body.instanceId || body.instance || body.orkestrInstanceId || "").trim();
   const requestedPath = sameOriginRequestedPath(body, instanceId);
+  let derivedFromInstanceOwner = false;
+  if (!userId && instanceId) {
+    userId = await ownerUserIdForBrokerInstance(instanceId);
+    derivedFromInstanceOwner = Boolean(userId);
+  }
   if (!userId) return { instanceId, requestedPath };
   const principal = requestPrincipal(request);
   const status = await securityStatus();
   const trustedAdminContext = isAdminPrincipal(principal) && (request?.orkestrSecuritySession || !status.authEnabled);
-  if (!trustedAdminContext) {
+  if (!trustedAdminContext && !derivedFromInstanceOwner) {
     throw httpError("admin_pairing_required", 403);
   }
   const user = await getUser(userId);
   if (!user) throw httpError("user_not_found", 404);
   if (user.status === "disabled") throw httpError("user_disabled", 409);
   return { userId: user.id, role: user.role, instanceId, requestedPath };
+}
+
+async function ownerUserIdForBrokerInstance(instanceId = ""): Promise<string> {
+  const id = String(instanceId || "").trim();
+  if (!id) return "";
+  const vms = await listTenantVms().catch(() => []);
+  const vm = vms.find((item: any) =>
+    String(item?.labels?.brokerInstanceId || item?.labels?.instanceId || "").trim() === id ||
+    String(item?.endpoint?.brokerInstanceId || "").trim() === id,
+  );
+  return String(vm?.ownerUserId || "").trim();
 }
 
 function sameOriginRequestedPath(body: Record<string, unknown> = {}, instanceId = ""): string {
@@ -359,8 +376,20 @@ function sameOriginRequestedPath(body: Record<string, unknown> = {}, instanceId 
 
 function shouldRedactSetupStatus(request: any, status: any): boolean {
   if (!status?.security?.authEnabled) return false;
-  if (!request?.orkestrSecuritySession && request?.orkestrMachineAuth !== "cli") return true;
+  if (!request?.orkestrSecuritySession && !["cli", "broker_proxy"].includes(String(request?.orkestrMachineAuth || ""))) return true;
   return !isAdminPrincipal(requestPrincipal(request));
+}
+
+function setupStatusForRequest(request: any, status: any): any {
+  if (request?.orkestrMachineAuth !== "broker_proxy") return status;
+  return {
+    ...status,
+    security: {
+      ...(status?.security || {}),
+      paired: true,
+      remoteReady: true,
+    },
+  };
 }
 
 function normalizeWhatsAppAccessMode(value: unknown) {
@@ -513,14 +542,14 @@ export class SystemController {
 
   @Get("setup/status")
   async setupStatus(@Req() request: any) {
-    const status = {
+    const status = setupStatusForRequest(request, {
       ...(await getSetupStatus({ principal: requestPrincipal(request) })),
       config: await publicEffectiveConfig(),
       whatsappDefaults: {
         chatNamePrefix: configuredWhatsAppChatNamePrefix(),
         replyPrefix: defaultWhatsAppReplyPrefix(),
       },
-    };
+    });
     return shouldRedactSetupStatus(request, status) ? publicSetupStatus(status) : status;
   }
 

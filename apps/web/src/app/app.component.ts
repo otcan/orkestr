@@ -968,7 +968,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.threadWizardOpen = false;
     this.activePanel = "chat";
     this.writeOnboardingFlag("skipped");
-    globalThis.history?.pushState({}, "", "/");
+    globalThis.history?.pushState({}, "", this.appPath("/"));
     this.updateDocumentTitle();
     await this.refresh(false);
   }
@@ -998,7 +998,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     if (completed) {
       this.threadWizardOpen = true;
       this.activePanel = "chat";
-      globalThis.history?.pushState({}, "", "/");
+      globalThis.history?.pushState({}, "", this.appPath("/"));
     } else {
       this.threadWizardOpen = false;
       this.activePanel = "ops";
@@ -1018,7 +1018,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.pairingRequired = false;
     this.appReady = true;
     this.onboardingActive = false;
-    globalThis.history?.replaceState({}, "", "/");
+    globalThis.history?.replaceState({}, "", this.appPath("/"));
     await this.refresh(false);
   }
 
@@ -1978,7 +1978,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       await this.refresh(false);
       if (!this.threads.length) {
         this.threadWizardOpen = true;
-        globalThis.history?.pushState({}, "", "/");
+        globalThis.history?.pushState({}, "", this.appPath("/"));
       }
     } catch (error) {
       this.error = this.errorText(error);
@@ -4311,25 +4311,57 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   private idFromPath(): string {
-    const parts = globalThis.location?.pathname?.split("/").filter(Boolean) || [];
+    const parts = this.locationPathParts();
     const threadIndex = parts.indexOf("thread");
     if (threadIndex >= 0 && parts[threadIndex + 1]) return decodeURIComponent(parts[threadIndex + 1]);
     return "";
   }
 
   private onboardingFromPath(): boolean {
-    const parts = globalThis.location?.pathname?.split("/").filter(Boolean) || [];
+    const parts = this.locationPathParts();
     if (this.sharedAppParts(parts)) return false;
     if (this.pairingPathParts(parts)) return false;
     return parts[0] === "setup" || parts[0] === "onboarding" || (parts[0] === "ng" && parts[1] === "onboarding");
   }
 
   private pairingPathActive(): boolean {
-    return this.pairingPathParts(globalThis.location?.pathname?.split("/").filter(Boolean) || []);
+    return this.pairingPathParts(this.locationPathParts());
   }
 
   private pairingPathParts(parts: string[] = []): boolean {
     return parts[0] === "setup" && parts[1] === "pairing";
+  }
+
+  private appBasePath(): string {
+    const raw = globalThis.document?.querySelector("base")?.getAttribute("href") || "/";
+    try {
+      const parsed = new URL(raw, globalThis.location?.origin || "http://localhost");
+      const path = parsed.pathname.replace(/\/+$/, "");
+      return path === "/" ? "" : path;
+    } catch {
+      const path = String(raw || "/").split("?")[0].split("#")[0].replace(/\/+$/, "");
+      return path === "/" ? "" : path;
+    }
+  }
+
+  private locationPath(): string {
+    const pathname = globalThis.location?.pathname || "/";
+    const base = this.appBasePath();
+    if (base && (pathname === base || pathname.startsWith(`${base}/`))) {
+      return pathname.slice(base.length) || "/";
+    }
+    return pathname || "/";
+  }
+
+  private locationPathParts(): string[] {
+    return this.locationPath().split("/").filter(Boolean);
+  }
+
+  private appPath(path: string): string {
+    const normalized = String(path || "/").startsWith("/") ? String(path || "/") : `/${path}`;
+    const base = this.appBasePath();
+    if (!base) return normalized;
+    return normalized === "/" ? `${base}/` : `${base}${normalized}`;
   }
 
   private setupPageModeFromPath(): SetupPageMode {
@@ -4337,12 +4369,12 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   private setupSectionFromPath(): SetupSection {
-    const parts = globalThis.location?.pathname?.split("/").filter(Boolean) || [];
+    const parts = this.locationPathParts();
     return parts[0] === "setup" ? this.normalizeSetupSection(parts[1]) : "system";
   }
 
   private panelFromPath(): Panel {
-    const parts = globalThis.location?.pathname?.split("/").filter(Boolean) || [];
+    const parts = this.locationPathParts();
     if (this.sharedAppParts(parts)) return "chat";
     if (parts[0] === "ops" || (parts[0] === "ng" && parts[1] === "ops")) return "ops";
     if (parts[0] === "files" || (parts[0] === "ng" && parts[1] === "files")) return "files";
@@ -4356,7 +4388,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   private toolsViewFromPath(): ToolsView {
-    const parts = globalThis.location?.pathname?.split("/").filter(Boolean) || [];
+    const parts = this.locationPathParts();
     const candidate = parts[0] === "ops"
       ? String(parts[1] || "system")
       : parts[0] === "ng" && parts[1] === "ops" ? String(parts[2] || "system") : "system";
@@ -4364,49 +4396,49 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   private normalizeLegacyRoutePath(): void {
-    const parts = globalThis.location?.pathname?.split("/").filter(Boolean) || [];
+    const parts = this.locationPathParts();
     if (this.sharedAppParts(parts)) return;
     const retiredSetupSections = new Set(["google-marketing", "openai", "linkedin", "mail", "outlook"]);
     if (parts[0] === "setup" && retiredSetupSections.has(String(parts[1] || "").toLowerCase())) {
-      globalThis.history?.replaceState({}, "", "/setup");
+      globalThis.history?.replaceState({}, "", this.appPath("/setup"));
       return;
     }
     if (parts[0] === "onboarding") {
-      globalThis.history?.replaceState({}, "", "/setup");
+      globalThis.history?.replaceState({}, "", this.appPath("/setup"));
       return;
     }
     if (parts[0] === "ng" && parts[1] === "onboarding") {
-      globalThis.history?.replaceState({}, "", "/setup");
+      globalThis.history?.replaceState({}, "", this.appPath("/setup"));
       return;
     }
     if (parts[0] === "ng" && parts[1] === "ops") {
       const suffix = parts[2] ? `/${parts[2]}` : "";
-      globalThis.history?.replaceState({}, "", `/ops${suffix}`);
+      globalThis.history?.replaceState({}, "", this.appPath(`/ops${suffix}`));
       return;
     }
     if (parts[0] === "ng" && parts[1] === "files") {
-      globalThis.history?.replaceState({}, "", "/files");
+      globalThis.history?.replaceState({}, "", this.appPath("/files"));
       return;
     }
     if (parts[0] === "ng" && parts[1] === "timers") {
-      globalThis.history?.replaceState({}, "", "/timers");
+      globalThis.history?.replaceState({}, "", this.appPath("/timers"));
       return;
     }
     if (parts[0] === "ng" && parts[1] === "desk") {
-      globalThis.history?.replaceState({}, "", "/desk");
+      globalThis.history?.replaceState({}, "", this.appPath("/desk"));
       return;
     }
     if (parts[0] === "ng" && parts[1] === "connectors") {
-      globalThis.history?.replaceState({}, "", "/connectors");
+      globalThis.history?.replaceState({}, "", this.appPath("/connectors"));
       return;
     }
     if (parts[0] === "ng" && parts[1] === "skills") {
-      globalThis.history?.replaceState({}, "", "/");
+      globalThis.history?.replaceState({}, "", this.appPath("/"));
       return;
     }
     if (parts[0] === "ng" && parts[1] === "thread" && parts[2]) {
       const suffix = parts[3] ? `/${parts[3]}` : "";
-      globalThis.history?.replaceState({}, "", `/thread/${parts[2]}${suffix}`);
+      globalThis.history?.replaceState({}, "", this.appPath(`/thread/${parts[2]}${suffix}`));
       return;
     }
     const threadIndex = parts.indexOf("thread");
@@ -4434,13 +4466,13 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   private pushSetupPath(section: SetupSection = this.setupSection): void {
-    const next = `/setup/${section}`;
+    const next = this.appPath(`/setup/${section}`);
     if (globalThis.location?.pathname === next) return;
     globalThis.history?.pushState({}, "", next);
   }
 
   private replaceSetupPath(section: SetupSection = this.setupSection): void {
-    const next = `/setup/${section}`;
+    const next = this.appPath(`/setup/${section}`);
     if (globalThis.location?.pathname === next) return;
     globalThis.history?.replaceState({}, "", next);
   }
@@ -4495,12 +4527,12 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   private pathForPanel(id: string, panel: Panel): string {
     if (panel === "ops") return this.opsPath(this.toolsView);
-    if (panel === "files") return "/files";
-    if (panel === "userTimers") return "/timers";
-    if (panel === "userDesk") return "/desk";
-    if (panel === "userConnectors") return "/connectors";
+    if (panel === "files") return this.appPath("/files");
+    if (panel === "userTimers") return this.appPath("/timers");
+    if (panel === "userDesk") return this.appPath("/desk");
+    if (panel === "userConnectors") return this.appPath("/connectors");
     const suffix = panel === "chat" ? "" : `/${panel}`;
-    return `/thread/${encodeURIComponent(id)}${suffix}`;
+    return this.appPath(`/thread/${encodeURIComponent(id)}${suffix}`);
   }
 
   private pushOpsPath(view: ToolsView): void {
@@ -4510,14 +4542,14 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   private opsPath(view: ToolsView): string {
-    return view === "system" ? "/ops" : `/ops/${view}`;
+    return this.appPath(view === "system" ? "/ops" : `/ops/${view}`);
   }
 
   private shouldAutoOpenOnboarding(): boolean {
     if (this.isUserMode()) return false;
     if (this.onboardingActive || !this.setupStatus || this.setupStatus.setupState === "ready") return false;
     if (this.readOnboardingFlag("skipped") || this.readOnboardingFlag("completed")) return false;
-    const parts = globalThis.location?.pathname?.split("/").filter(Boolean) || [];
+    const parts = this.locationPathParts();
     return parts.length === 0 || (parts.length === 1 && parts[0] === "ng");
   }
 
