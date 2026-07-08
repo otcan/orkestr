@@ -181,6 +181,8 @@ function authorizeAuthIntentSessionRequest(request: any, session: any) {
   if (method === "GET" && (url === "/connect/google" || url === "/connect/google/start")) return { ok: true };
   if (method === "GET" && url === "/setup/pairing") return { ok: true };
   if (method === "GET" && isStaticAssetRequestPath(url)) return { ok: true };
+  const brokerAppAuth = authorizeAuthIntentBrokerAppRequest(request, session, parts);
+  if (brokerAppAuth.matched) return brokerAppAuth;
   if (parts[0] !== "api") return { ok: false, statusCode: 403, error: "auth_intent_session_scope_denied" };
   const [surface, second, third, fourth] = parts.slice(1).map((part) => part.toLowerCase());
   if (method === "GET" && ["health", "ready", "version"].includes(surface)) return { ok: true };
@@ -194,6 +196,48 @@ function authorizeAuthIntentSessionRequest(request: any, session: any) {
     )
   ) return { ok: true };
   return { ok: false, statusCode: 403, error: "auth_intent_session_scope_denied" };
+}
+
+function authorizeAuthIntentBrokerAppRequest(request: any, session: any, parts: string[]) {
+  if (parts[0] !== "i" || !parts[1] || parts[2] !== "app") return { matched: false, ok: false };
+  const method = String(request?.method || "GET").toUpperCase();
+  const instanceId = String(parts[1] || "").trim();
+  if (!session?.instanceId || instanceId !== String(session.instanceId || "").trim()) {
+    return { matched: true, ok: false, statusCode: 403, error: "auth_intent_session_scope_denied" };
+  }
+  const rest = parts.slice(3);
+  const restPath = `/${rest.join("/")}`;
+  if (method === "GET" && isStaticAssetRequestPath(restPath)) return { matched: true, ok: true };
+  if (authIntentConnectorAppRouteAllowed(request, session, instanceId, method, rest)) return { matched: true, ok: true };
+  if (authIntentBrokerAppApiRouteAllowed(method, rest)) return { matched: true, ok: true };
+  return { matched: true, ok: false, statusCode: 403, error: "auth_intent_session_scope_denied" };
+}
+
+function authIntentConnectorAppRouteAllowed(request: any, session: any, instanceId: string, method: string, rest: string[]) {
+  if (method !== "GET") return false;
+  if (rest.length !== 2 || rest[0]?.toLowerCase() !== "connectors") return false;
+  const service = String(rest[1] || "").trim().toLowerCase();
+  if (service !== "gmail") return false;
+  const intent = session?.authIntent && typeof session.authIntent === "object" ? session.authIntent : {};
+  const intentService = String(intent.service || "").trim().toLowerCase();
+  if (intentService && intentService !== service) return false;
+  const allowedActions = Array.isArray(session.allowedActions) ? session.allowedActions : [];
+  if (!allowedActions.some((action: string) => /^orkestr_auth\.google\.connect(?::|$)/.test(String(action || "")))) return false;
+  const params = new URL(String(request?.originalUrl || request?.url || "/"), "http://localhost").searchParams;
+  if (params.get("mcp") !== "tools/call") return false;
+  if (params.get("tool") !== "orkestr_auth") return false;
+  if (params.get("service") !== service) return false;
+  if (params.get("instance_id") !== instanceId) return false;
+  return true;
+}
+
+function authIntentBrokerAppApiRouteAllowed(method: string, rest: string[]) {
+  if (rest[0]?.toLowerCase() !== "api") return false;
+  const [surface, second] = rest.slice(1).map((part) => part.toLowerCase());
+  if (method === "GET" && ["health", "ready", "version"].includes(surface)) return true;
+  if (method === "GET" && surface === "setup" && second === "status") return true;
+  if (method === "GET" && surface === "users" && second === "me") return true;
+  return false;
 }
 
 function isStaticAssetRequestPath(url: string) {

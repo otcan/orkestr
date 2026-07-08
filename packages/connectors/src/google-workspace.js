@@ -129,6 +129,7 @@ export function googleWorkspaceBrokeredConnectorSetupPath(result = {}, connector
   target.searchParams.set("tool", "orkestr_auth");
   target.searchParams.set("service", service);
   target.searchParams.set("instance_id", instanceId);
+  target.searchParams.set("auto", "0");
   return `${target.pathname}${target.search}`;
 }
 

@@ -377,9 +377,24 @@ test("broker instance app path pairs on broker and proxies the VM WebUI", async 
       response.end(`<!doctype html><html><head><base href="/" /><link rel="icon" type="image/svg+xml" href="/favicon.svg" /></head><body><ork-root>Loading Orkestr</ork-root><script src="main.js"></script></body></html>`);
       return;
     }
+    if (String(request.url || "").startsWith("/connectors/gmail")) {
+      response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      response.end(`<!doctype html><html><head><base href="/" /></head><body><ork-root>Connect Gmail</ork-root><script src="main.js"></script></body></html>`);
+      return;
+    }
     if (request.url === "/api/version") {
       response.writeHead(200, { "content-type": "application/json" });
       response.end(JSON.stringify({ ok: true, name: "tenant-vm", generatedAt: "2026-07-04T00:00:00.000Z" }));
+      return;
+    }
+    if (request.url === "/api/setup/status") {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ ok: true, connectors: [{ id: "gmail", state: "connected" }], generatedAt: "2026-07-04T00:00:00.000Z" }));
+      return;
+    }
+    if (request.url === "/api/users/me") {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ ok: true, user: { id: "firat", role: "user" } }));
       return;
     }
     if (request.url === "/redirect-home") {
@@ -419,6 +434,44 @@ test("broker instance app path pairs on broker and proxies the VM WebUI", async 
     const apiResponse = await fetch(`http://127.0.0.1:${port}/i/${brokerRegistration.instanceId}/app/api/version`, { headers: { cookie } });
     const apiPayload = await apiResponse.json();
     const redirectResponse = await fetch(`http://127.0.0.1:${port}/i/${brokerRegistration.instanceId}/app/redirect-home`, { headers: { cookie }, redirect: "manual" });
+    const authIntentChallenge = await createPairingChallenge({
+      env: process.env,
+      instanceId: brokerRegistration.instanceId,
+      userId: "firat",
+      role: "user",
+      requestedPath: `/i/${brokerRegistration.instanceId}/app/connectors/gmail`,
+      allowedActions: ["orkestr_auth.google.connect:connect-test"],
+      authIntent: {
+        mcp: "tools/call",
+        tool: "orkestr_auth",
+        service: "gmail",
+        provider: "google_workspace",
+        action: "connect",
+        connectId: "connect-test",
+        instanceId: brokerRegistration.instanceId,
+        userId: "firat",
+      },
+    });
+    await approvePairingChallenge(authIntentChallenge.challengeId, { approvedBy: "node:test", env: process.env });
+    const authIntentPaired = await pairBrowser({ challengeId: authIntentChallenge.challengeId, env: process.env });
+    const authIntentCookie = sessionCookieHeader(authIntentPaired.token, process.env);
+    const intentParams = new URLSearchParams({
+      mcp: "tools/call",
+      tool: "orkestr_auth",
+      service: "gmail",
+      instance_id: brokerRegistration.instanceId,
+      auto: "0",
+    });
+    const intentConnectorResponse = await fetch(`http://127.0.0.1:${port}/i/${brokerRegistration.instanceId}/app/connectors/gmail?${intentParams}`, { headers: { cookie: authIntentCookie } });
+    const intentConnectorHtml = await intentConnectorResponse.text();
+    const intentSetupResponse = await fetch(`http://127.0.0.1:${port}/i/${brokerRegistration.instanceId}/app/api/setup/status`, { headers: { cookie: authIntentCookie } });
+    const intentSetupPayload = await intentSetupResponse.json();
+    const intentUserResponse = await fetch(`http://127.0.0.1:${port}/i/${brokerRegistration.instanceId}/app/api/users/me`, { headers: { cookie: authIntentCookie } });
+    const intentUserPayload = await intentUserResponse.json();
+    const intentThreadsResponse = await fetch(`http://127.0.0.1:${port}/i/${brokerRegistration.instanceId}/app/api/threads`, { headers: { cookie: authIntentCookie }, redirect: "manual" });
+    const intentThreadsPayload = await intentThreadsResponse.json();
+    const parentAppResponse = await fetch(`http://127.0.0.1:${port}/app`, { headers: { cookie: authIntentCookie }, redirect: "manual" });
+    const parentAppPayload = await parentAppResponse.json();
 
     assert.equal(noSlash.status, 302);
     assert.equal(noSlash.headers.get("location"), `/i/${brokerRegistration.instanceId}/app/`);
@@ -434,6 +487,16 @@ test("broker instance app path pairs on broker and proxies the VM WebUI", async 
     assert.equal(apiPayload.name, "tenant-vm");
     assert.equal(redirectResponse.status, 302);
     assert.equal(redirectResponse.headers.get("location"), `/i/${brokerRegistration.instanceId}/app/`);
+    assert.equal(intentConnectorResponse.status, 200);
+    assert.match(intentConnectorHtml, /Connect Gmail/);
+    assert.equal(intentSetupResponse.status, 200);
+    assert.equal(intentSetupPayload.connectors[0].state, "connected");
+    assert.equal(intentUserResponse.status, 200);
+    assert.equal(intentUserPayload.user.id, "firat");
+    assert.equal(intentThreadsResponse.status, 403);
+    assert.equal(intentThreadsPayload.error, "auth_intent_session_scope_denied");
+    assert.equal(parentAppResponse.status, 403);
+    assert.equal(parentAppPayload.error, "auth_intent_session_scope_denied");
     assert.equal(upstreamRequests.some((item) => item.url === "/api/version"), true);
     assert.equal(
       upstreamRequests.some((item) => item.headers["x-orkestr-broker-instance-id"] === brokerRegistration.instanceId),

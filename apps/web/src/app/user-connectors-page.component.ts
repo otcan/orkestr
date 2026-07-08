@@ -208,6 +208,7 @@ export class UserConnectorsPageComponent implements OnDestroy, OnInit {
     if (active !== "gmail") return;
     if (this.autoStartedRoute === active) return;
     if (this.actionBusy || this.autoLoginDisabled()) return;
+    if (String(this.connectorStatus("gmail").state || "").toLowerCase() === "connected") return;
     this.autoStartedRoute = active;
     void this.startGmail({ autoRedirect: true });
   }
