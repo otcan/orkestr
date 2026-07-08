@@ -2660,6 +2660,17 @@ ork-first-thread-wizard.first-thread-host {
   text-transform: uppercase;
 }
 
+.event-storage-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.event-archive-row .button-like {
+  width: fit-content;
+}
+
 .broker-rollout-controls {
   align-items: end;
 }

@@ -8,11 +8,11 @@ import { codexLoginStatus, defaultCodexHome } from "../../connectors/src/codex.j
 import { dataPaths } from "../../storage/src/paths.js";
 import { activeCodexRuntimeAuthInvalid } from "./codex-auth-health.js";
 import { codexAppServerStatus } from "./codex-app-server-client.js";
+import { eventStorageCheck } from "./event-storage-doctor.js";
 import { publicUrlIdentityConfigNames, publicUrlIdentityDiagnostics, publicUrlIdentityRecords } from "./public-url-config.js";
 import { securityStatus } from "./security.js";
 
 const execFileAsync = promisify(execFile);
-
 function nowIso() {
   return new Date().toISOString();
 }
@@ -469,7 +469,7 @@ export async function systemDoctor({ env = process.env, home = os.homedir() } = 
   }
 
   const urlDropInCheck = await publicUrlDropInIdentityCheck(env);
-  const checks = [...pathChecks, ...commandChecks, publicUrlIdentityCheck(env), urlDropInCheck, ...securityDoctorChecks];
+  const checks = [...pathChecks, ...commandChecks, publicUrlIdentityCheck(env), urlDropInCheck, await eventStorageCheck(env), ...securityDoctorChecks];
   const { counts, status, summary } = summarize(checks);
   const issues = checks
     .filter((check) => check.status !== "ok")

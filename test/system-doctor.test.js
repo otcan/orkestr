@@ -50,6 +50,24 @@ test("system doctor reports a healthy host when required commands and paths are 
   assert.equal(doctor.paths.home, env.ORKESTR_HOME);
 });
 
+test("system doctor warns when the current event log exceeds the rotation threshold", async () => {
+  const { home, env } = await fakeHost();
+  await fs.mkdir(env.ORKESTR_HOME, { recursive: true });
+  await fs.writeFile(path.join(env.ORKESTR_HOME, "events.jsonl"), `${JSON.stringify({ type: "large_event", filler: "x".repeat(200) })}\n`);
+
+  const doctor = await systemDoctor({
+    env: {
+      ...env,
+      ORKESTR_EVENTS_MAX_BYTES: "100",
+    },
+    home,
+  });
+  const check = doctor.checks.find((item) => item.id === "event_storage");
+
+  assert.equal(check?.status, "warning");
+  assert.match(check?.summary || "", /above the 100 byte rotation threshold/);
+});
+
 test("system doctor warns when active URL drop-ins mix public and private instances", async () => {
   const { home, env } = await fakeHost();
   const dropInDir = path.join(home, "dropins");

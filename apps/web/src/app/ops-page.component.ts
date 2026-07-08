@@ -2,7 +2,7 @@ import { DatePipe } from "@angular/common";
 import { ChangeDetectorRef, Component, EventEmitter, Input, OnDestroy, OnInit, Output, inject } from "@angular/core";
 import { FormsModule } from "@angular/forms";
 import { firstValueFrom } from "rxjs";
-import { Agent, AgentTemplate, ApiService, BrowserSession, ConnectorStatus, DesktopLeaseRecord, EventRecord, OrkestrUser, OutlookOAuthPollResponse, ReleaseInstance, ReleaseInstancesResponse, ReleaseRolloutResponse, SecureSecretMetadata, SecurityChallenge, SecuritySession, SetupStatus, TenantVm, TimerDoctorResponse, TimerRecord, ThreadSummary, UserIdentity, UserOutlookOAuthStartResponse, VersionResponse, WatcherAlert, WhatsAppDoctorAccount, WhatsAppDoctorBinding, WhatsAppDoctorResponse, WhatsAppOutboxJob } from "./api.service";
+import { Agent, AgentTemplate, ApiService, BrowserSession, ConnectorStatus, DesktopLeaseRecord, EventArchive, EventRecord, EventStorageStatus, OrkestrUser, OutlookOAuthPollResponse, ReleaseInstance, ReleaseInstancesResponse, ReleaseRolloutResponse, SecureSecretMetadata, SecurityChallenge, SecuritySession, SetupStatus, TenantVm, TimerDoctorResponse, TimerRecord, ThreadSummary, UserIdentity, UserOutlookOAuthStartResponse, VersionResponse, WatcherAlert, WhatsAppDoctorAccount, WhatsAppDoctorBinding, WhatsAppDoctorResponse, WhatsAppOutboxJob } from "./api.service";
 import { OpsWaitlistComponent } from "./ops-waitlist.component";
 
 export type ToolsView = "system" | "broker" | "timers" | "desktops" | "models" | "settings" | "connectors" | "users" | "waitlist" | "audit";
@@ -108,6 +108,10 @@ export class OpsPageComponent implements OnInit, OnDestroy {
   opsTimers: TimerRecord[] = [];
   opsTimerDoctor: TimerDoctorResponse | null = null;
   opsEvents: EventRecord[] = [];
+  opsEventStorage: EventStorageStatus | null = null;
+  opsEventArchives: EventArchive[] = [];
+  opsEventArchivesError = "";
+  opsEventRotateBusy = false;
   opsBrowsers: BrowserSession[] = [];
   opsBrowsersLoading = false;
   opsBrowsersLoaded = false;
@@ -205,7 +209,7 @@ export class OpsPageComponent implements OnInit, OnDestroy {
       await this.loadOpsVersion();
       const managed = this.managedOpsEnabled();
       const secretsRequest = this.loadOpsSecrets();
-      const [releaseInstances, tenantVms, threads, watcherAlerts, setup, whatsapp, whatsappDoctor, whatsappOutbox, agents, templates, timers, timerDoctor, events, browsers, desktopLeases, runtimeLeases, executors, executions, system, processes, models, users, securityChallenges, securitySessions] = await Promise.allSettled([
+      const [releaseInstances, tenantVms, threads, watcherAlerts, setup, whatsapp, whatsappDoctor, whatsappOutbox, agents, templates, timers, timerDoctor, events, eventArchives, browsers, desktopLeases, runtimeLeases, executors, executions, system, processes, models, users, securityChallenges, securitySessions] = await Promise.allSettled([
         managed ? firstValueFrom(this.api.releaseInstances(true)) : Promise.resolve({ instances: [], counts: {}, generatedAt: "" } as ReleaseInstancesResponse),
         managed ? firstValueFrom(this.api.tenantVms()) : Promise.resolve({ tenantVms: [], vms: [] }),
         firstValueFrom(this.api.threads({ includeAllUsers: true })),
@@ -219,6 +223,7 @@ export class OpsPageComponent implements OnInit, OnDestroy {
         firstValueFrom(this.api.timers()),
         firstValueFrom(this.api.timerDoctor()),
         firstValueFrom(this.api.events(120)),
+        firstValueFrom(this.api.eventArchives()),
         browsersRequest,
         firstValueFrom(this.api.desktopLeases()),
         firstValueFrom(this.api.runtimeLeases()),
@@ -280,6 +285,15 @@ export class OpsPageComponent implements OnInit, OnDestroy {
       if (timers.status === "fulfilled") this.opsTimers = timers.value.timers || [];
       if (timerDoctor.status === "fulfilled") this.opsTimerDoctor = timerDoctor.value;
       if (events.status === "fulfilled") this.opsEvents = events.value.events || [];
+      if (eventArchives.status === "fulfilled") {
+        this.opsEventStorage = eventArchives.value.storage || null;
+        this.opsEventArchives = eventArchives.value.archives || [];
+        this.opsEventArchivesError = "";
+      } else {
+        this.opsEventStorage = null;
+        this.opsEventArchives = [];
+        this.opsEventArchivesError = this.errorText(eventArchives.reason);
+      }
       if (browsers.status === "fulfilled") {
         this.applyBrowserSessions(browsers.value);
       } else {
@@ -734,6 +748,32 @@ export class OpsPageComponent implements OnInit, OnDestroy {
     if (bytes < 1024 * 1024) return `${Math.round(bytes / 102.4) / 10} KB`;
     if (bytes < 1024 * 1024 * 1024) return `${Math.round(bytes / 1024 / 102.4) / 10} MB`;
     return `${Math.round(bytes / 1024 / 1024 / 102.4) / 10} GB`;
+  }
+
+  eventStorageUsage(): string {
+    const size = Number(this.opsEventStorage?.currentSize || 0);
+    const max = Number(this.opsEventStorage?.maxBytes || 0);
+    if (!Number.isFinite(size) || !Number.isFinite(max) || max <= 0) return "0%";
+    return `${Math.min(999, Math.round((size / max) * 100))}%`;
+  }
+
+  eventArchiveUrl(archive: EventArchive): string {
+    return this.api.eventArchiveDownloadUrl(archive.name);
+  }
+
+  async rotateEventLog(): Promise<void> {
+    this.opsEventRotateBusy = true;
+    try {
+      const result = await firstValueFrom(this.api.rotateEvents());
+      this.opsEventStorage = result.storage || null;
+      await this.loadOps(false);
+      this.error = "";
+    } catch (error) {
+      this.error = this.errorText(error);
+    } finally {
+      this.opsEventRotateBusy = false;
+      this.renderNow();
+    }
   }
 
   formatPercent(value: unknown): string {
