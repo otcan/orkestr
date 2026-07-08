@@ -6783,7 +6783,7 @@ test("whatsapp delivery appends compact debug footer for plan-mode Codex updates
   assert.equal(stripDebugFooter(calls[0].body.text), "Milestone: routing check started.");
   assert.match(
     calls[0].body.text,
-    /\n\ndbg: m:gpt-5\.5\/xh · mode:plan · msg:update · 5h:88% · wk:66% · q:0 · load:\d+% · api:\d+% · help:\/help · switch:\/code$/,
+    /\n\ndbg: m:gpt-5\.5\/xh · mode:plan · msg:update · 5h:88% · wk:66% · q:0 · load:\d+% · api:\d+% · help:\/help · mode-switch:\/code$/,
   );
 });
 
