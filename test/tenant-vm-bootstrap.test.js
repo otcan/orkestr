@@ -53,6 +53,7 @@ test("tenant VM bootstrap builds the first WhatsApp-bound Codex thread input", (
   assert.equal(input.binding.chatId, "120363425486269879@g.us");
   assert.equal(input.binding.senderAccountId, "sender");
   assert.equal(input.binding.acl.receive.mode, "all-users");
+  assert.equal(input.binding.inboundSecurity.mode, "all-users");
 });
 
 test("tenant VM bootstrap creates an idempotent route target for forwarded WhatsApp inbound", async () => {
@@ -76,6 +77,7 @@ test("tenant VM bootstrap creates an idempotent route target for forwarded Whats
   const thread = await getThread("tenant-demo-slice", env);
   assert.equal(thread.binding.chatId, "120363425486269879@g.us");
   assert.equal(thread.binding.tenantVmBootstrap, true);
+  assert.equal(thread.binding.inboundSecurity.mode, "all-users");
   assert.equal(thread.runtimeKind, "codex-app-server");
 
   const routed = await routeWhatsAppInbound({

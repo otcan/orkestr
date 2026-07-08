@@ -113,6 +113,9 @@ function whatsappBootstrapBinding({ threadId = "", threadName = "", whatsapp = {
       send: { mode: "owner-only" },
       manage: { mode: "owner-only" },
     },
+    inboundSecurity: {
+      mode: "all-users",
+    },
     updatedAt: new Date().toISOString(),
   };
 }

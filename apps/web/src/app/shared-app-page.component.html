@@ -4,7 +4,7 @@
       <p>Orkestr shared app</p>
       <h1>{{ title() }}</h1>
     </div>
-    <strong>{{ classifiedCount() }} / {{ people.length }}</strong>
+    <strong>{{ batchLabel() }}</strong>
   </header>
 
   @if (pairingRequired) {
@@ -40,12 +40,35 @@
   } @else if (busy) {
     <section class="shared-app-state">Loading...</section>
   } @else {
+    <section class="shared-app-toolbar" aria-label="Review controls">
+      <div class="shared-status-tabs">
+        @for (option of statusOptions(); track option.value) {
+          <button type="button" [class.active]="statusFilter === option.value" (click)="setStatusFilter(option.value)">
+            {{ option.label }}
+          </button>
+        }
+      </div>
+      <form class="shared-search" (submit)="$event.preventDefault(); applySearch()">
+        <input type="search" placeholder="Search people or messages" [value]="searchText" (input)="onSearchInput($event)" />
+        <button type="submit">Search</button>
+      </form>
+      <div class="shared-batch-controls">
+        <button type="button" (click)="previousBatch()" [disabled]="batchOffset <= 0 || busy">Previous</button>
+        <button type="button" (click)="nextBatch()" [disabled]="!hasNextBatch || busy">Next</button>
+      </div>
+    </section>
     <section class="shared-app-layout">
       <nav class="shared-people-list" aria-label="People">
         @for (person of people; track person.id) {
           <button type="button" [class.active]="selectedPerson()?.id === person.id" (click)="select(person)">
             <span>{{ person.name }}</span>
-            <small>{{ labelText(person.currentClassification || "not_evaluated") }}</small>
+            @if (person.headline) {
+              <em>{{ person.headline }}</em>
+            }
+            <small>{{ labelText(person.currentClassification || "not_evaluated") }} · {{ messageCount(person) }}</small>
+            @if (person.lastMessagePreview) {
+              <p>{{ person.lastMessagePreview }}</p>
+            }
           </button>
         }
       </nav>
@@ -55,6 +78,9 @@
           <header>
             <div>
               <h2>{{ person.name }}</h2>
+              @if (person.headline) {
+                <p>{{ person.headline }}</p>
+              }
               @if (person.profileUrl) {
                 <a [href]="person.profileUrl" target="_blank" rel="noreferrer">Profile</a>
               }
@@ -63,6 +89,9 @@
           </header>
 
           <section class="shared-message-timeline" aria-label="Message history">
+            @if (messagesLoading(person)) {
+              <article><p>Loading conversation...</p></article>
+            }
             @for (message of person.messageHistory || []; track message.id || $index) {
               <article>
                 <small>
@@ -74,7 +103,9 @@
                 <p>{{ message.text }}</p>
               </article>
             } @empty {
-              <article><p>No message history included in this share.</p></article>
+              @if (!messagesLoading(person)) {
+                <article><p>No conversation messages found for this person.</p></article>
+              }
             }
           </section>
 

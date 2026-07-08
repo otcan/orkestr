@@ -75,6 +75,9 @@ test("tenant VM provisioning builds a public-safe KubeVirt plan", async () => {
   assert.ok(userData.length > 2048);
   assert.match(userData, /bootstrap-vps\.sh/);
   assert.match(userData, /write_files:/);
+  assert.match(userData, /docker\.io/);
+  assert.match(userData, /enable, --now, docker/);
+  assert.match(userData, /ln, -sfn, \/opt\/orkestr\/app, \/opt\/orkestr\/current/);
   assert.match(userData, /\/etc\/orkestr\/tenant-bootstrap-profile\.json/);
   assert.match(userData, /--domain' 'alice\.example\.test/);
   assert.match(userData, /--with-whatsapp/);

@@ -18,10 +18,18 @@ export class SharedAppPageComponent implements OnInit, OnDestroy {
   payload: SharedAppPayload | null = null;
   people: SharedAppPerson[] = [];
   selectedId = "";
+  statusFilter = "all";
+  searchText = "";
+  batchLimit = 50;
+  batchOffset = 0;
+  pagingTotal = 0;
+  hasNextBatch = false;
   busy = false;
   error = "";
   notice = "";
   savingPersonId = "";
+  messagesLoadingPersonId = "";
+  private readonly loadedMessageIds = new Set<string>();
   pairingRequired = false;
   pairingBusy = false;
   pairingNotice = "";
@@ -43,9 +51,20 @@ export class SharedAppPageComponent implements OnInit, OnDestroy {
     this.renderNow();
     try {
       const route = this.route();
-      this.payload = await firstValueFrom(this.api.sharedApp(route.instanceId, route.appSlug, route.shareToken));
+      this.payload = await firstValueFrom(this.api.sharedApp(route.instanceId, route.appSlug, route.shareToken, {
+        status: this.statusFilter,
+        q: this.searchText,
+        limit: this.batchLimit,
+        offset: this.batchOffset,
+      }));
       this.people = this.payload.data?.people || [];
-      if (!this.selectedId && this.people.length) this.selectedId = this.people[0].id;
+      const paging = this.payload.data?.paging || {};
+      this.pagingTotal = Number(paging.total || this.people.length || 0);
+      this.batchLimit = Number(paging.limit || this.batchLimit);
+      this.batchOffset = Number(paging.offset || this.batchOffset);
+      this.hasNextBatch = Boolean(paging.hasNext);
+      if (!this.people.some((person) => person.id === this.selectedId)) this.selectedId = this.people[0]?.id || "";
+      if (this.selectedId) void this.loadMessages(this.selectedPerson());
       this.pairingRequired = false;
       this.pairingError = "";
       this.pairingNotice = "";
@@ -77,6 +96,7 @@ export class SharedAppPageComponent implements OnInit, OnDestroy {
   select(person: SharedAppPerson): void {
     this.selectedId = person.id;
     this.notice = "";
+    void this.loadMessages(person);
   }
 
   labels(): string[] {
@@ -89,6 +109,66 @@ export class SharedAppPageComponent implements OnInit, OnDestroy {
 
   classifiedCount(): number {
     return this.people.filter((person) => person.currentClassification && person.currentClassification !== "not_evaluated").length;
+  }
+
+  batchLabel(): string {
+    if (!this.pagingTotal) return "0 / 0";
+    const start = this.batchOffset + 1;
+    const end = Math.min(this.batchOffset + this.people.length, this.pagingTotal);
+    return `${start}-${end} / ${this.pagingTotal}`;
+  }
+
+  statusOptions(): Array<{ value: string; label: string }> {
+    return [
+      { value: "all", label: "All" },
+      { value: "not_evaluated", label: "Not evaluated" },
+      { value: "to_contact", label: "To contact" },
+      { value: "to_skip", label: "To skip" },
+    ];
+  }
+
+  onSearchInput(event: Event): void {
+    this.searchText = String((event.target as HTMLInputElement | null)?.value || "");
+  }
+
+  async applySearch(): Promise<void> {
+    this.batchOffset = 0;
+    this.selectedId = "";
+    await this.load();
+  }
+
+  async setStatusFilter(status: string): Promise<void> {
+    if (this.statusFilter === status) return;
+    this.statusFilter = status;
+    this.batchOffset = 0;
+    this.selectedId = "";
+    await this.load();
+  }
+
+  async nextBatch(): Promise<void> {
+    if (!this.hasNextBatch) return;
+    this.batchOffset += this.batchLimit;
+    this.selectedId = "";
+    await this.load();
+  }
+
+  async previousBatch(): Promise<void> {
+    if (this.batchOffset <= 0) return;
+    this.batchOffset = Math.max(0, this.batchOffset - this.batchLimit);
+    this.selectedId = "";
+    await this.load();
+  }
+
+  messageCount(person: SharedAppPerson): string {
+    const total = Number(person.messageCount || person.messageHistory?.length || 0);
+    const matched = Number(person.matchedMessageCount || 0);
+    if (total && matched && matched !== total) return `${total} messages, ${matched} matched`;
+    if (total === 1) return "1 message";
+    return `${total} messages`;
+  }
+
+  messagesLoading(person: SharedAppPerson): boolean {
+    return this.messagesLoadingPersonId === person.id;
   }
 
   canClassify(): boolean {
@@ -193,22 +273,28 @@ export class SharedAppPageComponent implements OnInit, OnDestroy {
     const person = this.selectedPerson();
     if (!person || !this.canClassify()) return;
     const route = this.route();
+    const previousClassification = person.currentClassification || "not_evaluated";
+    const previousSelectedId = this.selectedId;
     this.savingPersonId = person.id;
     this.error = "";
-    this.notice = "";
+    this.notice = "Saving...";
+    this.people = this.people.map((item) => item.id === person.id ? { ...item, currentClassification: label } : item);
+    this.selectNext();
+    this.renderNow();
     try {
       const result = await firstValueFrom(this.api.sharedAppAction(route.instanceId, route.appSlug, route.shareToken, "setClassification", {
         personId: person.id,
         classification: label,
       }));
-      this.payload = { ...this.payload, data: result.data || this.payload?.data };
-      this.people = result.data?.people || this.people.map((item) => item.id === person.id ? { ...item, currentClassification: label } : item);
+      if (result.data) this.payload = { ...this.payload, data: result.data };
       this.notice = "Saved.";
-      this.selectNext();
     } catch (error) {
+      this.people = this.people.map((item) => item.id === person.id ? { ...item, currentClassification: previousClassification } : item);
+      this.selectedId = previousSelectedId;
       this.error = this.errorText(error);
     } finally {
       this.savingPersonId = "";
+      this.renderNow();
     }
   }
 
@@ -216,6 +302,24 @@ export class SharedAppPageComponent implements OnInit, OnDestroy {
     if (!this.people.length) return;
     const index = Math.max(0, this.people.findIndex((person) => person.id === this.selectedId));
     this.selectedId = this.people[Math.min(this.people.length - 1, index + 1)]?.id || this.people[0].id;
+    void this.loadMessages(this.selectedPerson());
+  }
+
+  private async loadMessages(person: SharedAppPerson | null): Promise<void> {
+    if (!person?.id || this.loadedMessageIds.has(person.id)) return;
+    const route = this.route();
+    this.messagesLoadingPersonId = person.id;
+    this.renderNow();
+    try {
+      const result = await firstValueFrom(this.api.sharedAppPersonMessages(route.instanceId, route.appSlug, route.shareToken, person.id));
+      this.people = this.people.map((item) => item.id === person.id ? { ...item, messageHistory: result.messages || [] } : item);
+      this.loadedMessageIds.add(person.id);
+    } catch (error) {
+      this.error = this.errorText(error);
+    } finally {
+      if (this.messagesLoadingPersonId === person.id) this.messagesLoadingPersonId = "";
+      this.renderNow();
+    }
   }
 
   private async consumeChallenge(): Promise<void> {

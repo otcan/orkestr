@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, HttpCode, Param, Post, Req, Res } from "@nestjs/common";
+import { Body, Controller, Delete, Get, HttpCode, Param, Post, Query, Req, Res } from "@nestjs/common";
 import {
   createAppShare,
   createSharedApp,
@@ -9,6 +9,7 @@ import {
   resolveSharedAppShare,
   runSharedAppAction,
   sharedAppData,
+  sharedAppPersonMessages,
 } from "../../../../../packages/core/src/shared-apps.js";
 import {
   createPairingChallenge,
@@ -134,8 +135,9 @@ export class SharedAppsController {
     @Param("instanceId") instanceId: string,
     @Param("appSlug") appSlug: string,
     @Param("shareToken") shareToken: string,
+    @Query() query: Record<string, unknown> = {},
   ) {
-    return sharedAppData(instanceId, appSlug, shareToken, { session: request?.orkestrSecuritySession || null });
+    return sharedAppData(instanceId, appSlug, shareToken, { session: request?.orkestrSecuritySession || null, query });
   }
 
   @Post("shared-apps/i/:instanceId/a/:appSlug/s/:shareToken/challenge")
@@ -209,8 +211,20 @@ export class SharedAppsController {
     @Param("instanceId") instanceId: string,
     @Param("appSlug") appSlug: string,
     @Param("shareToken") shareToken: string,
+    @Query() query: Record<string, unknown> = {},
   ) {
-    return sharedAppData(instanceId, appSlug, shareToken, { session: request?.orkestrSecuritySession || null });
+    return sharedAppData(instanceId, appSlug, shareToken, { session: request?.orkestrSecuritySession || null, query });
+  }
+
+  @Get("shared-apps/i/:instanceId/a/:appSlug/s/:shareToken/people/:personId/messages")
+  async messages(
+    @Req() request: any,
+    @Param("instanceId") instanceId: string,
+    @Param("appSlug") appSlug: string,
+    @Param("shareToken") shareToken: string,
+    @Param("personId") personId: string,
+  ) {
+    return sharedAppPersonMessages(instanceId, appSlug, shareToken, personId, { session: request?.orkestrSecuritySession || null });
   }
 
   @Post("shared-apps/i/:instanceId/a/:appSlug/s/:shareToken/actions/:action")

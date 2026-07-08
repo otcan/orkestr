@@ -530,12 +530,21 @@ export interface SharedAppPersonMessage {
   at?: string;
   from?: string;
   text?: string;
+  direction?: string;
+  channel?: string;
+  matched?: boolean;
 }
 
 export interface SharedAppPerson {
   id: string;
   name: string;
   profileUrl?: string;
+  headline?: string;
+  messageCount?: number;
+  matchedMessageCount?: number;
+  firstMatchAt?: string;
+  lastMatchAt?: string;
+  lastMessagePreview?: string;
   messageHistory?: SharedAppPersonMessage[];
   currentClassification?: string;
 }
@@ -559,7 +568,26 @@ export interface SharedAppPayload {
     people?: SharedAppPerson[];
     labels?: string[];
     allowedActions?: string[];
+    liveSource?: {
+      backingSystem?: string;
+      queueKey?: string;
+      generatedAt?: string;
+    };
+    paging?: {
+      total?: number;
+      limit?: number;
+      offset?: number;
+      hasNext?: boolean;
+      status?: string;
+      q?: string;
+    };
   };
+}
+
+export interface SharedAppMessagesResponse {
+  ok?: boolean;
+  personId?: string;
+  messages?: SharedAppPersonMessage[];
 }
 
 export interface ConnectorConfigResponse {
@@ -1696,6 +1724,16 @@ export class ApiService {
     return `${this.apiBase}${path}`;
   }
 
+  private query(params: Record<string, unknown> = {}): string {
+    const search = new URLSearchParams();
+    for (const [key, value] of Object.entries(params)) {
+      if (value === undefined || value === null || value === "") continue;
+      search.set(key, String(value));
+    }
+    const text = search.toString();
+    return text ? `?${text}` : "";
+  }
+
   threadSummaryStreamUrl(): string {
     const base = globalThis.location?.href || "http://localhost/";
     const url = new URL(this.api("/threads/summary/stream"), base);
@@ -2484,8 +2522,14 @@ export class ApiService {
     return this.http.post<DesktopShareResponse>(this.api(`/desktops/${encodeURIComponent(slug)}/share`), {});
   }
 
-  sharedApp(instanceId: string, appSlug: string, shareToken: string): Observable<SharedAppPayload> {
-    return this.http.get<SharedAppPayload>(this.api(`/shared-apps/i/${encodeURIComponent(instanceId)}/a/${encodeURIComponent(appSlug)}/s/${encodeURIComponent(shareToken)}`));
+  sharedApp(instanceId: string, appSlug: string, shareToken: string, params: Record<string, unknown> = {}): Observable<SharedAppPayload> {
+    return this.http.get<SharedAppPayload>(this.api(`/shared-apps/i/${encodeURIComponent(instanceId)}/a/${encodeURIComponent(appSlug)}/s/${encodeURIComponent(shareToken)}${this.query(params)}`));
+  }
+
+  sharedAppPersonMessages(instanceId: string, appSlug: string, shareToken: string, personId: string): Observable<SharedAppMessagesResponse> {
+    return this.http.get<SharedAppMessagesResponse>(
+      this.api(`/shared-apps/i/${encodeURIComponent(instanceId)}/a/${encodeURIComponent(appSlug)}/s/${encodeURIComponent(shareToken)}/people/${encodeURIComponent(personId)}/messages`),
+    );
   }
 
   createSharedAppChallenge(instanceId: string, appSlug: string, shareToken: string, body: Record<string, unknown> = {}): Observable<SecurityChallengeResponse> {

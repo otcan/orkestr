@@ -59,6 +59,12 @@ of relying on static thread or workspace text in this file.
   participants from prior chats, projects, or examples. If additional people or
   accounts are ambiguous, ask the user before creating the group or promoting
   anyone.
+- When a user asks for an isolated "slice", treat that as a tenant-slice and
+  tenant-VM provisioning request, not as a normal Orkestr thread. Use the
+  tenant-slices and tenant-vms registries/provisioning flow, keep it out of the
+  parent Orkestr thread list, and verify the tenant VM, LLM sanitizer runtime
+  env, Docker bootstrap, and explicit WhatsApp forwarding route before calling
+  the slice ready.
 - When provisioning repeatable LinkedIn account bundles for friends, clients, or
   collaborators, do not hand-create the WhatsApp chat, thread, browser desktop,
   CRM/oXRM instance, repo, and timer as unrelated one-off steps. Use a private
