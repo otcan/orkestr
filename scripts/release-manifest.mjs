@@ -39,9 +39,11 @@ if (hasFlag(argv, "--help") || hasFlag(argv, "-h")) {
 const cwd = path.resolve(flagValue(argv, "--cwd", process.cwd()));
 const output = flagValue(argv, "--output", "");
 const packageJson = JSON.parse(await fs.readFile(path.join(cwd, "package.json"), "utf8"));
-const commit = safeJsonValue(flagValue(argv, "--commit")) || await gitValue(["rev-parse", "HEAD"], cwd);
+const explicitCommit = safeJsonValue(flagValue(argv, "--commit"));
+const commit = explicitCommit || await gitValue(["rev-parse", "HEAD"], cwd);
 const branch = safeJsonValue(flagValue(argv, "--branch")) || await gitValue(["branch", "--show-current"], cwd);
-const tag = safeJsonValue(flagValue(argv, "--tag")) || await gitValue(["describe", "--tags", "--exact-match", "HEAD"], cwd);
+const explicitTag = safeJsonValue(flagValue(argv, "--tag"));
+const tag = explicitTag || (commit ? await gitValue(["describe", "--tags", "--exact-match", commit], cwd) : "");
 const describe = safeJsonValue(flagValue(argv, "--describe")) || await gitValue(["describe", "--tags", "--always", "--dirty", "--long"], cwd);
 const dirty = safeJsonValue(await gitValue(["status", "--porcelain"], cwd)) !== "";
 const generatedAt = new Date().toISOString();
