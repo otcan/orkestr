@@ -1,4 +1,11 @@
-<section class="panel-body user-connectors-page" [class.login-only]="loginOnly()">
+<section
+  class="panel-body user-connectors-page"
+  [class.login-only]="loginOnly()"
+  [attr.data-mcp]="connectorIntentActive() ? connectorIntentMethod() : null"
+  [attr.data-mcp-tool]="connectorIntentActive() ? connectorIntentTool() : null"
+  [attr.data-service]="connectorIntentActive() ? 'gmail' : null"
+  [attr.data-instance-id]="connectorIntentActive() ? connectorIntentTargetInstanceId() : null"
+>
   <div class="panel-title">
     <div>
       <p class="eyebrow">{{ loginOnly() ? "Secure sign-in" : "Connectors" }}</p>
@@ -16,6 +23,33 @@
     <div class="notice error">{{ error }}</div>
   } @else if (notice) {
     <div class="notice">{{ notice }}</div>
+  }
+
+  @if (connectorIntentActive()) {
+    <div class="connector-intent">
+      <div class="connector-intent-head">
+        <span>Connection context</span>
+        <strong>{{ connectorIntentServiceLabel() }} -> Orkestr instance</strong>
+      </div>
+      <dl>
+        <div>
+          <dt>Tool</dt>
+          <dd><code>{{ connectorIntentTool() }}</code></dd>
+        </div>
+        <div>
+          <dt>Service</dt>
+          <dd><code>gmail</code></dd>
+        </div>
+        <div>
+          <dt>Instance</dt>
+          <dd><code>{{ connectorIntentTargetInstanceId() }}</code></dd>
+        </div>
+        <div>
+          <dt>Account</dt>
+          <dd><code>{{ connectorIntentAccountLabel() }}</code></dd>
+        </div>
+      </dl>
+    </div>
   }
 
   <div class="connector-grid user-connector-grid">

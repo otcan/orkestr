@@ -128,7 +128,13 @@ test("pairing page stores tenant app return path on generated challenge", async 
   const { port } = server.address();
   const baseUrl = `http://127.0.0.1:${port}`;
   const requestedPath = "/i/main/app/setup/gmail";
-  const expectedPath = "/i/main/app/connectors/gmail";
+  const expectedParams = new URLSearchParams({
+    mcp: "tools/call",
+    tool: "orkestr_auth",
+    service: "gmail",
+    instance_id: "main",
+  });
+  const expectedPath = `/i/main/app/connectors/gmail?${expectedParams}`;
   let browser;
 
   try {

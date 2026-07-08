@@ -69,6 +69,26 @@ function assertPublicShell(html) {
   assert.doesNotMatch(html, /<ork-root(?:\s|>)/);
 }
 
+function assertConnectorIntentReturn(returnTo, { instanceId, connector = "gmail" } = {}) {
+  const target = new URL(returnTo, "http://localhost");
+  assert.equal(target.pathname, `/i/${instanceId}/app/connectors/${connector}`);
+  assert.equal(target.searchParams.get("mcp"), "tools/call");
+  assert.equal(target.searchParams.get("tool"), "orkestr_auth");
+  assert.equal(target.searchParams.get("service"), connector);
+  assert.equal(target.searchParams.get("instance_id"), instanceId);
+  assert.equal(target.searchParams.has("compact"), false);
+}
+
+function assertInstancePairingRedirect(response, { instanceId, returnPath = "", connector = "" } = {}) {
+  assert.equal(response.status, 302);
+  const redirect = new URL(response.headers.get("location") || "", "http://localhost");
+  assert.equal(redirect.pathname, "/setup/pairing");
+  assert.equal(redirect.searchParams.get("instanceId"), instanceId);
+  const returnTo = redirect.searchParams.get("return") || "";
+  if (connector) assertConnectorIntentReturn(returnTo, { instanceId, connector });
+  else assert.equal(returnTo, returnPath);
+}
+
 test("server serves the public site at root and Angular UI at app routes", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-static-ui-"));
   const priorHome = process.env.ORKESTR_HOME;
@@ -197,16 +217,11 @@ test("instance connect setup requires a registered broker UUID", async () => {
     const staleGmailReturn = await fetch(`http://127.0.0.1:${port}/i/${brokerRegistration.instanceId}/setup?return=%2Fi%2F${brokerRegistration.instanceId}%2Fapp%2Fsetup%2Fgmail%3Fcompact%3D1`, { redirect: "manual" });
     const unknown = await fetch(`http://127.0.0.1:${port}/i/demo-vm-001/setup`, { redirect: "manual" });
 
-    assert.equal(registered.status, 302);
-    assert.equal(registered.headers.get("location"), `/setup/pairing?instanceId=${brokerRegistration.instanceId}&return=%2Fi%2F${brokerRegistration.instanceId}%2Fapp%2F`);
-    assert.equal(gmailReturn.status, 302);
-    assert.equal(gmailReturn.headers.get("location"), `/setup/pairing?instanceId=${brokerRegistration.instanceId}&return=%2Fi%2F${brokerRegistration.instanceId}%2Fapp%2Fconnectors%2Fgmail`);
-    assert.equal(gmailConnector.status, 302);
-    assert.equal(gmailConnector.headers.get("location"), `/setup/pairing?instanceId=${brokerRegistration.instanceId}&return=%2Fi%2F${brokerRegistration.instanceId}%2Fapp%2Fconnectors%2Fgmail`);
-    assert.equal(staleCodexReturn.status, 302);
-    assert.equal(staleCodexReturn.headers.get("location"), `/setup/pairing?instanceId=${brokerRegistration.instanceId}&return=%2Fi%2F${brokerRegistration.instanceId}%2Fapp%2F`);
-    assert.equal(staleGmailReturn.status, 302);
-    assert.equal(staleGmailReturn.headers.get("location"), `/setup/pairing?instanceId=${brokerRegistration.instanceId}&return=%2Fi%2F${brokerRegistration.instanceId}%2Fapp%2Fconnectors%2Fgmail`);
+    assertInstancePairingRedirect(registered, { instanceId: brokerRegistration.instanceId, returnPath: `/i/${brokerRegistration.instanceId}/app/` });
+    assertInstancePairingRedirect(gmailReturn, { instanceId: brokerRegistration.instanceId, connector: "gmail" });
+    assertInstancePairingRedirect(gmailConnector, { instanceId: brokerRegistration.instanceId, connector: "gmail" });
+    assertInstancePairingRedirect(staleCodexReturn, { instanceId: brokerRegistration.instanceId, returnPath: `/i/${brokerRegistration.instanceId}/app/` });
+    assertInstancePairingRedirect(staleGmailReturn, { instanceId: brokerRegistration.instanceId, connector: "gmail" });
     assert.equal(unknown.status, 404);
   } finally {
     await new Promise((resolve) => server.close(resolve));
@@ -367,11 +382,7 @@ test("broker instance app path pairs on broker and proxies the VM WebUI", async 
     assert.equal(noSlash.headers.get("location"), `/i/${brokerRegistration.instanceId}/app/`);
     assert.equal(unpaired.status, 302);
     assert.equal(unpaired.headers.get("location"), `/setup/pairing?instanceId=${brokerRegistration.instanceId}&return=%2Fi%2F${brokerRegistration.instanceId}%2Fapp%2F`);
-    assert.equal(unpairedLegacyGmailSetup.status, 302);
-    assert.equal(
-      unpairedLegacyGmailSetup.headers.get("location"),
-      `/setup/pairing?instanceId=${brokerRegistration.instanceId}&return=%2Fi%2F${brokerRegistration.instanceId}%2Fapp%2Fconnectors%2Fgmail`,
-    );
+    assertInstancePairingRedirect(unpairedLegacyGmailSetup, { instanceId: brokerRegistration.instanceId, connector: "gmail" });
     assert.equal(unpairedApi.status, 401);
     assert.equal(await unpairedApi.text(), "broker_instance_pairing_required");
     assert.equal(htmlResponse.status, 200);
@@ -1247,6 +1258,12 @@ test("web shell exposes a user connector management page", async () => {
   assert.match(connectorsComponent, /maybeAutoStartRouteLogin\(\): void/);
   assert.match(connectorsComponent, /startGmail\(options: \{ autoRedirect\?: boolean \} = \{\}\)/);
   assert.match(connectorsComponent, /globalThis\.location\.href = this\.gmailAuth\.authorizeUrl/);
+  assert.match(connectorsComponent, /connectorIntentActive\(\): boolean/);
+  assert.match(connectorsComponent, /connectorIntentMethod\(\): string/);
+  assert.match(connectorsComponent, /connectorIntentTool\(\): string/);
+  assert.match(connectorsComponent, /connectorIntentServiceLabel\(\): string/);
+  assert.match(connectorsComponent, /connectorIntentAccountLabel\(\): string/);
+  assert.match(connectorsComponent, /routeQueryParam\(name: string\): string/);
   assert.match(connectorsComponent, /void this\.load\(false\)/);
   assert.match(connectorsComponent, /this\.api\.startGmailOAuth\(this\.gmailAccount\)/);
   assert.match(connectorsComponent, /this\.api\.startOutlookOAuth\(this\.outlookAccount\)/);
@@ -1255,6 +1272,12 @@ test("web shell exposes a user connector management page", async () => {
   assert.match(connectorsComponent, /private locationPathParts\(\): string\[\]/);
   assert.match(connectorsComponent, /deskPath\(\): string/);
   assert.match(connectorsTemplate, /\[class\.login-only\]="loginOnly\(\)"/);
+  assert.match(connectorsTemplate, /\[attr\.data-mcp\]="connectorIntentActive\(\) \? connectorIntentMethod\(\) : null"/);
+  assert.match(connectorsTemplate, /\[attr\.data-service\]="connectorIntentActive\(\) \? 'gmail' : null"/);
+  assert.match(connectorsTemplate, /Connection context/);
+  assert.match(connectorsTemplate, /connectorIntentTool\(\)/);
+  assert.match(connectorsTemplate, /Service/);
+  assert.match(connectorsTemplate, /connectorIntentTargetInstanceId\(\)/);
   assert.match(connectorsTemplate, /loginOnly\(\) \? "Secure sign-in" : "Connectors"/);
   assert.match(connectorsTemplate, /name="user-gmail-account"/);
   assert.match(connectorsTemplate, /name="user-outlook-account"/);
@@ -1266,6 +1289,7 @@ test("web shell exposes a user connector management page", async () => {
   assert.match(styles, /\.user-connector-grid/);
   assert.match(styles, /\.connector-login-shell/);
   assert.match(styles, /\.user-connectors-page\.login-only \.user-connector-grid/);
+  assert.match(styles, /\.connector-intent/);
   assert.match(styles, /\.connector-action/);
   assert.match(styles, /\.connector-device-code/);
 });

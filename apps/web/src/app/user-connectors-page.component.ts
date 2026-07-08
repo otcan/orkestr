@@ -27,6 +27,7 @@ export class UserConnectorsPageComponent implements OnDestroy, OnInit {
   outlookAuth: OutlookOAuthStartResponse | null = null;
 
   ngOnInit(): void {
+    this.applyRouteHints();
     void this.load();
   }
 
@@ -168,6 +169,30 @@ export class UserConnectorsPageComponent implements OnDestroy, OnInit {
     return active === "gmail" ? "Connect Gmail" : active ? `Connect ${this.connectorLabel(active)}` : "Connect Account";
   }
 
+  connectorIntentActive(): boolean {
+    return this.loginOnly() && this.routeConnectorId() === "gmail";
+  }
+
+  connectorIntentMethod(): string {
+    return this.routeQueryParam("mcp") || "tools/call";
+  }
+
+  connectorIntentTool(): string {
+    return this.routeQueryParam("tool") || "orkestr_auth";
+  }
+
+  connectorIntentServiceLabel(): string {
+    return this.connectorLabel(this.connectorIntentService());
+  }
+
+  connectorIntentTargetInstanceId(): string {
+    return this.routeQueryParam("instance_id") || this.routeInstanceId() || "current";
+  }
+
+  connectorIntentAccountLabel(): string {
+    return this.gmailAccount.trim() || this.routeQueryParam("account") || "Choose during Google sign-in";
+  }
+
   routeConnectorId(): string {
     const parts = this.locationPathParts();
     const candidate = parts[0] === "connectors" ? String(parts[1] || "").toLowerCase() : "";
@@ -190,6 +215,36 @@ export class UserConnectorsPageComponent implements OnDestroy, OnInit {
   private autoLoginDisabled(): boolean {
     const params = new URLSearchParams(globalThis.location?.search || "");
     return params.get("manual") === "1" || params.get("auto") === "0";
+  }
+
+  private applyRouteHints(): void {
+    const account = this.routeQueryParam("account") || this.routeQueryParam("email") || this.routeQueryParam("login_hint");
+    if (this.routeConnectorId() === "gmail" && account && !this.gmailAccount) this.gmailAccount = account;
+  }
+
+  private connectorIntentService(): string {
+    return this.routeQueryParam("service") || this.routeConnectorId() || "gmail";
+  }
+
+  private routeQueryParam(name: string): string {
+    return new URLSearchParams(globalThis.location?.search || "").get(name) || "";
+  }
+
+  private routeInstanceId(): string {
+    const baseParts = this.appBasePath().split("/").filter(Boolean);
+    const baseCandidate = baseParts[0] === "i" && baseParts[2] === "app" ? baseParts[1] : "";
+    if (baseCandidate) return this.decodePathSegment(baseCandidate);
+    const pathParts = (globalThis.location?.pathname || "").split("/").filter(Boolean);
+    const pathCandidate = pathParts[0] === "i" && pathParts[2] === "app" ? pathParts[1] : "";
+    return pathCandidate ? this.decodePathSegment(pathCandidate) : "";
+  }
+
+  private decodePathSegment(value = ""): string {
+    try {
+      return decodeURIComponent(value);
+    } catch {
+      return value;
+    }
   }
 
   private appBasePath(): string {

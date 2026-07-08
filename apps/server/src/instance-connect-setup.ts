@@ -1,5 +1,6 @@
 const setupSections = new Set(["system", "security", "secrets", "maintenance", "codex", "gmail", "outlook", "whatsapp", "browsers"]);
 const appRouteRoots = new Set(["connectors", "desk", "files", "ops", "skills", "thread", "timers"]);
+const connectorAuthIntentSections = new Set(["gmail"]);
 
 export function normalizeInstanceId(value = ""): string {
   return String(value || "")
@@ -23,13 +24,32 @@ function tenantAppPath(instanceId: string, suffix = ""): string {
   return route ? `${prefix}/${route}` : `${prefix}/`;
 }
 
-function setupSectionAppPath(instanceId: string, section = ""): string {
+function connectorIntentSearch(instanceId: string, connector: string, search = ""): string {
+  const params = new URLSearchParams(search || "");
+  params.delete("compact");
+  params.set("mcp", "tools/call");
+  params.set("tool", "orkestr_auth");
+  params.set("service", connector);
+  params.set("instance_id", instanceId);
+  const query = params.toString();
+  return query ? `?${query}` : "";
+}
+
+function connectorAppPath(instanceId: string, connector: string, search = ""): string {
+  const normalizedConnector = normalizeSetupSection(connector);
+  const path = tenantAppPath(instanceId, `connectors/${normalizedConnector}`);
+  return connectorAuthIntentSections.has(normalizedConnector)
+    ? `${path}${connectorIntentSearch(instanceId, normalizedConnector, search)}`
+    : `${path}${searchWithoutCompact(search)}`;
+}
+
+function setupSectionAppPath(instanceId: string, section = "", search = ""): string {
   const normalizedSection = normalizeSetupSection(section);
-  if (["gmail", "outlook", "whatsapp"].includes(normalizedSection)) return tenantAppPath(instanceId, `connectors/${normalizedSection}`);
-  if (normalizedSection === "browsers") return tenantAppPath(instanceId, "desk");
-  if (["security", "secrets", "maintenance"].includes(normalizedSection)) return tenantAppPath(instanceId, "ops/settings");
-  if (normalizedSection === "system") return tenantAppPath(instanceId, "ops");
-  return tenantAppPath(instanceId);
+  if (["gmail", "outlook", "whatsapp"].includes(normalizedSection)) return connectorAppPath(instanceId, normalizedSection, search);
+  if (normalizedSection === "browsers") return `${tenantAppPath(instanceId, "desk")}${searchWithoutCompact(search)}`;
+  if (["security", "secrets", "maintenance"].includes(normalizedSection)) return `${tenantAppPath(instanceId, "ops/settings")}${searchWithoutCompact(search)}`;
+  if (normalizedSection === "system") return `${tenantAppPath(instanceId, "ops")}${searchWithoutCompact(search)}`;
+  return `${tenantAppPath(instanceId)}${searchWithoutCompact(search)}`;
 }
 
 function searchWithoutCompact(search = ""): string {
@@ -47,7 +67,10 @@ function normalizeScopedAppReturn(instanceId: string, path: string, search = "")
   const parts = path.split("/").filter(Boolean);
   const routeRoot = String(parts[3] || "");
   if (routeRoot === "setup") {
-    return `${setupSectionAppPath(instanceId, parts[4] || "")}${searchWithoutCompact(search)}`;
+    return setupSectionAppPath(instanceId, parts[4] || "", search);
+  }
+  if (routeRoot === "connectors" && connectorAuthIntentSections.has(normalizeSetupSection(parts[4] || ""))) {
+    return connectorAppPath(instanceId, parts[4] || "", search);
   }
   return `${path}${search}`;
 }
@@ -55,9 +78,11 @@ function normalizeScopedAppReturn(instanceId: string, path: string, search = "")
 function normalizeUnscopedAppReturn(instanceId: string, path: string, search = ""): string {
   const parts = path.split("/").filter(Boolean);
   const root = String(parts[0] || "");
-  if (root === "setup") return `${setupSectionAppPath(instanceId, parts[1] || "")}${searchWithoutCompact(search)}`;
+  if (root === "setup") return setupSectionAppPath(instanceId, parts[1] || "", search);
   if (root === "onboarding" || (root === "ng" && parts[1] === "onboarding")) return tenantAppPath(instanceId);
+  if (root === "connectors" && connectorAuthIntentSections.has(normalizeSetupSection(parts[1] || ""))) return connectorAppPath(instanceId, parts[1] || "", search);
   if (appRouteRoots.has(root)) return `${tenantAppPath(instanceId, parts.join("/"))}${search}`;
+  if (root === "ng" && parts[1] === "connectors" && connectorAuthIntentSections.has(normalizeSetupSection(parts[2] || ""))) return connectorAppPath(instanceId, parts[2] || "", search);
   if (root === "ng" && appRouteRoots.has(String(parts[1] || ""))) return `${tenantAppPath(instanceId, parts.slice(1).join("/"))}${search}`;
   return "";
 }

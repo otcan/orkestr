@@ -3045,6 +3045,67 @@ ork-first-thread-wizard.first-thread-host {
   grid-template-columns: minmax(0, 1fr);
 }
 
+.connector-intent {
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
+  padding: 12px;
+  border: 1px solid #d7e3d2;
+  border-radius: 8px;
+  background: #f7faf5;
+}
+
+.connector-intent-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.connector-intent-head strong {
+  color: #26382d;
+  font-size: 0.95rem;
+  text-align: right;
+}
+
+.connector-intent span {
+  color: #52705d;
+  font-size: 0.75rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.connector-intent dl {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+}
+
+.connector-intent dl div {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: 10px;
+  align-items: baseline;
+}
+
+.connector-intent dt {
+  color: #6f8373;
+  font-size: 0.78rem;
+  font-weight: 900;
+}
+
+.connector-intent dd {
+  margin: 0;
+  min-width: 0;
+}
+
+.connector-intent code {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  color: #2e4136;
+  font-size: 0.78rem;
+}
+
 .connector-card {
   display: flex;
   flex-direction: column;
