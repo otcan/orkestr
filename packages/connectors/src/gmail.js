@@ -81,7 +81,13 @@ function publicUrlOrigin(value = "") {
   }
 }
 
+function explicitGmailOAuthRedirectUri(env = process.env) {
+  return clean(env.GMAIL_OAUTH_REDIRECT_URI || env.GOOGLE_OAUTH_REDIRECT_URI);
+}
+
 function brokeredGmailOAuthRedirectUri(env = process.env, fallback = "") {
+  const explicit = explicitGmailOAuthRedirectUri(env);
+  if (explicit) return explicit;
   const base =
     normalizePublicBaseUrl(env.ORKESTR_GOOGLE_WORKSPACE_CONNECT_PUBLIC_URL) ||
     publicUrlOrigin(env.ORKESTR_PUBLIC_AUTH_URL || env.ORKESTR_AUTH_ENTRY_URL || env.ORKESTR_PAIRING_URL || env.ORKESTR_AUTH_URL) ||
