@@ -17,8 +17,10 @@ profiles, or user files.
 - Fail-closed rule: non-admin flows must have an explicit owner and contained
   security profile before they can create threads, timers, connector state, or
   runtime work.
-- Sanitizer rule: the LLM sanitizer has no fallback. If it is unavailable,
-  unclear, or denied, the action is blocked.
+- Sanitizer rule: the LLM sanitizer can be disabled with
+  `ORKESTR_LLM_SANITIZER_DISABLED=1` while the isolation flow is being
+  stabilized. When enabled, it has no fallback: if it is unavailable, unclear,
+  or denied, the action is blocked.
 - Runtime rule: `orkestr whereiam --json` is the source of truth for contained
   agents. Static `AGENTS.md` text cannot grant more access than `whereiam`.
 - Skill rule: contained agents may only use skills listed in

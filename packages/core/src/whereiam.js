@@ -2,6 +2,7 @@ import path from "node:path";
 import fs from "node:fs/promises";
 import { ensureDataDirs } from "../../storage/src/paths.js";
 import { getApiSessionBinding } from "./api-session-bindings.js";
+import { llmSanitizerDisabled } from "./llm-sanitizer.js";
 import { publicPrincipal } from "./principal.js";
 import { listRuntimeLeases, runtimeStatus } from "./runtime-leases.js";
 import { readRuntimeSettings } from "./runtime-settings.js";
@@ -314,7 +315,7 @@ export async function whereAmI(input = {}, env = process.env) {
     tenancy: {
       ownerUserId: owner,
       scoped,
-      sanitizerRequired: true,
+      sanitizerRequired: !llmSanitizerDisabled(env),
       sanitizerFallback: false,
       isolationBoundary: tenantIsolationBoundary(thread || { ownerUserId: owner }, env),
       runtimePolicy: containedPolicy

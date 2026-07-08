@@ -29,6 +29,10 @@ function lower(value) {
   return clean(value).toLowerCase();
 }
 
+function truthy(value) {
+  return ["1", "true", "yes", "on"].includes(lower(value));
+}
+
 function delay(ms = 0) {
   return ms > 0 ? new Promise((resolve) => setTimeout(resolve, ms)) : Promise.resolve();
 }
@@ -101,6 +105,20 @@ function denied(reason, raw = {}) {
     raw: { allow: false, reason, category: "local_policy_denial", ...raw },
     unavailable: false,
   };
+}
+
+function disabledDecision() {
+  return {
+    allow: true,
+    reason: "llm_sanitizer_disabled",
+    model: "disabled",
+    raw: null,
+    unavailable: false,
+  };
+}
+
+export function llmSanitizerDisabled(env = process.env) {
+  return truthy(env.ORKESTR_LLM_SANITIZER_DISABLED || env.ORKESTR_DISABLE_LLM_SANITIZER);
 }
 
 function objectOrNull(value) {
@@ -432,6 +450,7 @@ async function runHttpSanitizer(payload, env = process.env) {
 }
 
 export async function sanitizeAction(request = {}, env = process.env) {
+  if (llmSanitizerDisabled(env)) return disabledDecision();
   const payload = {
     schemaVersion: 1,
     requestedAt: nowIso(),

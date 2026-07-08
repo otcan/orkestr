@@ -286,9 +286,16 @@ managed `~/.orkestr-src` install directory.
 5. Orkestr queues the message into the bound thread.
 6. The agent reply is mirrored back when complete.
 
-For non-admin or contained-user WhatsApp threads, configure an LLM sanitizer.
-The sanitizer is fail-closed: if no provider is configured, Orkestr rejects the
-message and notifies the WhatsApp chat instead of silently dropping it.
+For non-admin or contained-user WhatsApp threads, the LLM sanitizer can be
+disabled while the isolation flow is being stabilized:
+
+```bash
+ORKESTR_LLM_SANITIZER_DISABLED=1
+```
+
+When the sanitizer is enabled, configure a provider. The enabled sanitizer is
+fail-closed: if no provider is configured, Orkestr rejects the message and
+notifies the WhatsApp chat instead of silently dropping it.
 
 Codex-backed sanitizer:
 
