@@ -23,6 +23,7 @@ const publicRuntimeEnvKeys = [
   "ORKESTR_AUTH_ENTRY_URL",
   "ORKESTR_PAIRING_URL",
   "ORKESTR_AUTH_URL",
+  "ORKESTR_GOOGLE_WORKSPACE_CONNECT_PUBLIC_URL",
   "ORKESTR_APP_URL",
   "ORKESTR_PUBLIC_HTTPS_URL",
   "ORKESTR_HTTPS_URL",
@@ -214,14 +215,15 @@ test("instance connect setup requires a registered broker UUID", async () => {
   }
 });
 
-test("google workspace connect links require owner-scoped browser pairing", async () => {
+test("google workspace brokered connect links require instance and owner scoped browser pairing", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-static-google-connect-pairing-"));
   const envKeys = [...publicRuntimeEnvKeys, "ORKESTR_HOME"];
   const prior = snapshotEnv(envKeys);
   clearEnv(envKeys);
   process.env.ORKESTR_HOME = home;
   process.env.ORKESTR_AUTH_REQUIRED = "1";
-  process.env.ORKESTR_CONNECT_PUBLIC_URL = "https://connect.example.test";
+  process.env.ORKESTR_CONNECT_PUBLIC_URL = "https://connect.crawlerai.de";
+  process.env.ORKESTR_PUBLIC_AUTH_URL = "https://connect.orkestr.de/setup/pairing";
 
   const connect = await createGoogleWorkspaceConnectLink({
     principal: userPrincipal({ id: "firat", displayName: "Firat" }),
@@ -229,8 +231,15 @@ test("google workspace connect links require owner-scoped browser pairing", asyn
       id: "firat-thread",
       binding: { chatId: "firat-chat", outboundAccountId: "sender" },
     },
+    brokerInstanceId: "instance-firat",
+    brokerTenantVmId: "firat-jobs-vm",
+    brokerTenantUserId: "firat",
+    brokerTenantThreadId: "firat-thread",
+    brokerTenantChatId: "firat-chat",
+    brokerTenantAccountId: "sender",
   }, process.env);
   const connectUrl = new URL(connect.link);
+  assert.equal(connectUrl.origin, "https://connect.orkestr.de");
   const connectPath = `${connectUrl.pathname}${connectUrl.search}`;
   const startPath = `/connect/google/start?connect=${encodeURIComponent(connect.connectId)}&capability=gmail_read`;
   const server = await startServer({ port: 0, host: "127.0.0.1" });
@@ -248,6 +257,7 @@ test("google workspace connect links require owner-scoped browser pairing", asyn
 
     const challengeStatus = await fetch(`http://127.0.0.1:${port}/api/setup/security/challenges/${challengeId}`);
     const challengePayload = await challengeStatus.json();
+    assert.equal(challengePayload.challenge.instanceId, "instance-firat");
     assert.equal(challengePayload.challenge.userId, "firat");
     assert.equal(challengePayload.challenge.role, "user");
     assert.equal(challengePayload.challenge.requestedPath, connectPath);
@@ -258,7 +268,23 @@ test("google workspace connect links require owner-scoped browser pairing", asyn
     assert.equal(startRedirect.pathname, "/setup/pairing");
     assert.equal(startRedirect.searchParams.get("return"), startPath);
 
-    const otherChallenge = await createPairingChallenge({ env: process.env, userId: "mallory", role: "user" });
+    const adminChallenge = await createPairingChallenge({ env: process.env });
+    await approvePairingChallenge(adminChallenge.challengeId, { env: process.env, approvedBy: "node:test" });
+    const adminPaired = await pairBrowser({ challengeId: adminChallenge.challengeId, env: process.env });
+    const adminCookie = sessionCookieHeader(adminPaired.token, process.env);
+    const regularSession = await fetch(`http://127.0.0.1:${port}${connectPath}`, { headers: { cookie: adminCookie }, redirect: "manual" });
+    assert.equal(regularSession.status, 302);
+    const regularRedirect = new URL(regularSession.headers.get("location") || "", `http://127.0.0.1:${port}`);
+    assert.equal(regularRedirect.pathname, "/setup/pairing");
+    assert.equal(regularRedirect.searchParams.get("return"), connectPath);
+
+    const regularStartSession = await fetch(`http://127.0.0.1:${port}${startPath}`, { headers: { cookie: adminCookie }, redirect: "manual" });
+    assert.equal(regularStartSession.status, 302);
+    const regularStartRedirect = new URL(regularStartSession.headers.get("location") || "", `http://127.0.0.1:${port}`);
+    assert.equal(regularStartRedirect.pathname, "/setup/pairing");
+    assert.equal(regularStartRedirect.searchParams.get("return"), startPath);
+
+    const otherChallenge = await createPairingChallenge({ env: process.env, instanceId: "instance-firat", userId: "mallory", role: "user" });
     await approvePairingChallenge(otherChallenge.challengeId, { env: process.env, approvedBy: "node:test" });
     const otherPaired = await pairBrowser({ challengeId: otherChallenge.challengeId, env: process.env });
     const otherCookie = sessionCookieHeader(otherPaired.token, process.env);

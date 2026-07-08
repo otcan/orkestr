@@ -156,6 +156,8 @@ test("brokered google workspace oauth provisions the Gmail grant to the tenant V
   const parentHome = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-google-workspace-broker-parent-"));
   const tenantHome = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-google-workspace-broker-tenant-"));
   const env = await configureGoogle(parentHome);
+  env.ORKESTR_CONNECT_PUBLIC_URL = "https://connect.crawlerai.de";
+  env.ORKESTR_PUBLIC_AUTH_URL = "https://connect.orkestr.de/setup/pairing";
   const client = __brokerInstanceRegistryTestInternals.createX25519Identity();
   const registration = await registerBrokerInstance({
     env: {
@@ -187,6 +189,7 @@ test("brokered google workspace oauth provisions the Gmail grant to the tenant V
     brokerTenantChatId: "firat-wa",
     brokerTenantAccountId: "de-wa",
   }, env);
+  assert.match(link.link, /^https:\/\/connect\.orkestr\.de\/connect\/google\?connect=/);
   const started = await startGoogleWorkspaceOAuth(env, {
     connectId: link.connectId,
     capabilities: ["gmail_read"],

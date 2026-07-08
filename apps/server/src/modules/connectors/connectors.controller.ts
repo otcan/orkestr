@@ -101,12 +101,68 @@ function googleWorkspaceConnectRequestExists(payload: any): boolean {
   return Boolean(payload?.request && Object.keys(payload.request).length);
 }
 
+function googleWorkspaceBrokerInstanceId(connectRequest: any): string {
+  return String(connectRequest?.brokerInstanceId || connectRequest?.brokerTenantVmId || "").trim();
+}
+
+function googleWorkspaceBrokeredConnectRequest(connectRequest: any): boolean {
+  return Boolean(googleWorkspaceBrokerInstanceId(connectRequest));
+}
+
+function googleWorkspaceSessionUserMatches(session: any, ownerUserId: string): boolean {
+  if (!ownerUserId) return true;
+  return normalizeUserId(session?.userId || "") === ownerUserId;
+}
+
+function googleWorkspaceSessionInstanceMatches(session: any, connectRequest: any): boolean {
+  const instanceId = googleWorkspaceBrokerInstanceId(connectRequest);
+  if (!instanceId) return true;
+  return String(session?.instanceId || "").trim() === instanceId;
+}
+
+function googleWorkspacePairingError(response: any, connectRequest: any, error: string): void {
+  response
+    .status(403)
+    .header("cache-control", "no-store")
+    .type("text/html; charset=utf-8")
+    .send(googleWorkspaceConnectHtml({
+      connectId: String(connectRequest.connectId || ""),
+      request: connectRequest,
+      error,
+    }));
+}
+
 async function googleWorkspaceConnectAccess(request: any, payload: any, response: any): Promise<boolean> {
   const connectRequest = payload?.request || {};
   const ownerUserId = normalizeUserId(connectRequest.userId || "");
   const status = await securityStatus();
-  const trustedContext = !status.authEnabled || Boolean(request?.orkestrSecuritySession || request?.orkestrMachineAuth);
   const currentPath = requestPathWithQuery(request);
+  const brokered = googleWorkspaceBrokeredConnectRequest(connectRequest);
+  const session = request?.orkestrSecuritySession || null;
+  const trustedContext = !status.authEnabled || Boolean(session || request?.orkestrMachineAuth);
+  if (brokered && status.authEnabled) {
+    if (!session || !googleWorkspaceSessionInstanceMatches(session, connectRequest)) {
+      const challenge = await createPairingChallenge({
+        request,
+        reusePending: true,
+        instanceId: googleWorkspaceBrokerInstanceId(connectRequest),
+        userId: ownerUserId,
+        role: ownerUserId ? "user" : "admin",
+        requestedPath: currentPath,
+      } as any);
+      response
+        .status(302)
+        .header("location", googleWorkspacePairingRedirect(String(challenge.challengeId || ""), currentPath))
+        .type("text/plain; charset=utf-8")
+        .send("Redirecting to Orkestr pairing.");
+      return false;
+    }
+    if (!googleWorkspaceSessionUserMatches(session, ownerUserId)) {
+      googleWorkspacePairingError(response, connectRequest, "google_workspace_connect_pairing_user_mismatch");
+      return false;
+    }
+    return true;
+  }
   if (!trustedContext) {
     const challenge = await createPairingChallenge({
       request,
@@ -125,15 +181,7 @@ async function googleWorkspaceConnectAccess(request: any, payload: any, response
   const principal = requestPrincipal(request);
   const principalUserId = normalizeUserId(principal?.userId || "");
   if (ownerUserId && !isAdminPrincipal(principal) && principalUserId !== ownerUserId) {
-    response
-      .status(403)
-      .header("cache-control", "no-store")
-      .type("text/html; charset=utf-8")
-      .send(googleWorkspaceConnectHtml({
-        connectId: String(connectRequest.connectId || ""),
-        request: connectRequest,
-        error: "google_workspace_connect_pairing_user_mismatch",
-      }));
+    googleWorkspacePairingError(response, connectRequest, "google_workspace_connect_pairing_user_mismatch");
     return false;
   }
   return true;

@@ -58,6 +58,31 @@ function connectorError(message, statusCode = 400) {
   return error;
 }
 
+function normalizePublicUrl(value = "") {
+  const text = clean(value).replace(/\/+$/g, "");
+  if (!text) return "";
+  try {
+    const parsed = new URL(/^https?:\/\//i.test(text) ? text : `https://${text}`);
+    if (!["http:", "https:"].includes(parsed.protocol) || !parsed.hostname) return "";
+    parsed.hash = "";
+    parsed.search = "";
+    parsed.pathname = parsed.pathname.replace(/\/+$/g, "");
+    return parsed.toString().replace(/\/+$/g, "");
+  } catch {
+    return "";
+  }
+}
+
+function publicUrlOrigin(value = "") {
+  const normalized = normalizePublicUrl(value);
+  if (!normalized) return "";
+  try {
+    return new URL(normalized).origin.replace(/\/+$/g, "");
+  } catch {
+    return "";
+  }
+}
+
 function publicAppBaseUrl(env = process.env) {
   return clean(
     env.ORKESTR_CONNECT_PUBLIC_URL ||
@@ -68,9 +93,25 @@ function publicAppBaseUrl(env = process.env) {
   ).replace(/\/+$/g, "");
 }
 
-function publicConnectUrl(pathname = "", env = process.env) {
+function publicBrokeredGoogleWorkspaceBaseUrl(env = process.env) {
+  return normalizePublicUrl(env.ORKESTR_GOOGLE_WORKSPACE_CONNECT_PUBLIC_URL) ||
+    publicUrlOrigin(env.ORKESTR_PUBLIC_AUTH_URL || env.ORKESTR_AUTH_ENTRY_URL || env.ORKESTR_PAIRING_URL || env.ORKESTR_AUTH_URL) ||
+    normalizePublicUrl(
+      env.ORKESTR_PUBLIC_APP_URL ||
+        env.ORKESTR_PUBLIC_URL ||
+        env.ORKESTR_APP_URL ||
+        env.ORKESTR_PUBLIC_HTTPS_URL ||
+        env.ORKESTR_HTTPS_URL ||
+        env.ORKESTR_TAILSCALE_HTTPS_NAME ||
+        env.ORKESTR_BASE_URL,
+    );
+}
+
+function publicConnectUrl(pathname = "", env = process.env, options = {}) {
   const path = pathname.startsWith("/") ? pathname : `/${pathname}`;
-  const base = publicAppBaseUrl(env);
+  const base = options.brokered === true
+    ? publicBrokeredGoogleWorkspaceBaseUrl(env) || publicAppBaseUrl(env)
+    : publicAppBaseUrl(env);
   if (!base) return path;
   try {
     return new URL(path, `${base}/`).toString();
@@ -222,7 +263,7 @@ export async function createGoogleWorkspaceConnectLink({
   ];
   await writeConnectLedger(scope, ledger);
   const path = `/connect/google?connect=${encodeURIComponent(connectId)}`;
-  const link = publicConnectUrl(path, env);
+  const link = publicConnectUrl(path, env, { brokered: Boolean(request.brokerInstanceId || request.brokerTenantVmId) });
   return {
     ok: true,
     connectId,
