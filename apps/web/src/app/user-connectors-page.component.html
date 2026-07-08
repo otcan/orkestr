@@ -68,7 +68,7 @@
         </div>
         <p>{{ connector.summary || connectorSummary(connector.id) }}</p>
 
-        @if (connector.id === "gmail") {
+        @if (connector.id === "gmail" && !connectorConnected(connector)) {
           <form class="connector-action" (submit)="startGmail(); $event.preventDefault()">
             <label>
               <span>Gmail account</span>

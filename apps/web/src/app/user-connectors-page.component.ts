@@ -117,6 +117,10 @@ export class UserConnectorsPageComponent implements OnDestroy, OnInit {
     return "";
   }
 
+  connectorConnected(connector: ConnectorStatus): boolean {
+    return String(connector.state || "").toLowerCase() === "connected";
+  }
+
   async startGmail(options: { autoRedirect?: boolean } = {}): Promise<void> {
     if (this.actionBusy) return;
     this.actionBusy = "gmail";

@@ -1363,6 +1363,7 @@ test("web shell exposes a user connector management page", async () => {
   assert.match(connectorsComponent, /scheduleRetryIfNeeded\(\): void/);
   assert.match(connectorsComponent, /maybeAutoStartRouteLogin\(\): void/);
   assert.match(connectorsComponent, /startGmail\(options: \{ autoRedirect\?: boolean \} = \{\}\)/);
+  assert.match(connectorsComponent, /connectorConnected\(connector: ConnectorStatus\): boolean/);
   assert.match(connectorsComponent, /globalThis\.location\.href = this\.gmailAuth\.authorizeUrl/);
   assert.match(connectorsComponent, /connectorIntentActive\(\): boolean/);
   assert.match(connectorsComponent, /connectorIntentMethod\(\): string/);
@@ -1383,6 +1384,7 @@ test("web shell exposes a user connector management page", async () => {
   assert.match(connectorsTemplate, /Connection context/);
   assert.match(connectorsTemplate, /connectorIntentTool\(\)/);
   assert.match(connectorsTemplate, /Service/);
+  assert.match(connectorsTemplate, /connector\.id === "gmail" && !connectorConnected\(connector\)/);
   assert.match(connectorsTemplate, /connectorIntentTargetInstanceId\(\)/);
   assert.match(connectorsTemplate, /loginOnly\(\) \? "Secure sign-in" : "Connectors"/);
   assert.match(connectorsTemplate, /name="user-gmail-account"/);
