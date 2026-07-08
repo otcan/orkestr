@@ -160,6 +160,8 @@ export async function runCodingAgentDemo({ port = Number(process.env.ORKESTR_COD
     ORKESTR_HOME: process.env.ORKESTR_HOME,
     ORKESTR_PORT: process.env.ORKESTR_PORT,
     ORKESTR_HOST: process.env.ORKESTR_HOST,
+    ORKESTR_AUTH_REQUIRED: process.env.ORKESTR_AUTH_REQUIRED,
+    ORKESTR_UNSAFE_ALLOW_PUBLIC_UNAUTHENTICATED: process.env.ORKESTR_UNSAFE_ALLOW_PUBLIC_UNAUTHENTICATED,
     ORKESTR_BROWSER_LAUNCH_DISABLED: process.env.ORKESTR_BROWSER_LAUNCH_DISABLED,
     ORKESTR_BROWSER_DESKTOP_MODE: process.env.ORKESTR_BROWSER_DESKTOP_MODE,
     ORKESTR_RECOVER_RUNNING_ON_START: process.env.ORKESTR_RECOVER_RUNNING_ON_START,
@@ -175,6 +177,8 @@ export async function runCodingAgentDemo({ port = Number(process.env.ORKESTR_COD
     process.env.ORKESTR_HOME = home;
     process.env.ORKESTR_PORT = String(port);
     process.env.ORKESTR_HOST = "127.0.0.1";
+    process.env.ORKESTR_AUTH_REQUIRED = "0";
+    process.env.ORKESTR_UNSAFE_ALLOW_PUBLIC_UNAUTHENTICATED = "1";
     process.env.ORKESTR_BROWSER_LAUNCH_DISABLED = "1";
     process.env.ORKESTR_BROWSER_DESKTOP_MODE = "profiles";
     process.env.ORKESTR_RECOVER_RUNNING_ON_START = "0";
