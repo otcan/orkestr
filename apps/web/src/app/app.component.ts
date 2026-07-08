@@ -1289,7 +1289,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     }
   }
 
-  async switchRuntimeSurface(runtime: "api" | "terminal" | "agent"): Promise<void> {
+  async switchRuntimeSurface(runtime: "api" | "terminal"): Promise<void> {
     const thread = this.selectedThread();
     if (!thread) return;
     if (runtime === "api" && !this.guardCodexRuntime()) return;
@@ -1306,7 +1306,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     }
   }
 
-  runtimeSurfaceSwitchDisabled(runtime: "api" | "terminal" | "agent"): boolean {
+  runtimeSurfaceSwitchDisabled(runtime: "api" | "terminal"): boolean {
     if (this.busy) return true;
     if (runtime === "api") return !this.threadInputReady();
     return false;
@@ -3172,7 +3172,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   runtimeSurfaceShortcutTitle(thread: ThreadSummary | null): string {
     const details = [
       "Runtime surface for this Orkestr thread",
-      "Switch: /switch api, /switch terminal, /switch agent",
+      "Switch: /switch api, /switch terminal",
       this.threadRuntimeModeLabel(thread) ? `Current: ${this.threadRuntimeModeLabel(thread)}` : "",
     ].filter(Boolean);
     return details.join("\n");

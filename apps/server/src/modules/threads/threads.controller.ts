@@ -75,7 +75,7 @@ import {
 
 const execFileAsync = promisify(execFile);
 
-type RuntimeTypeTarget = "codex-app-server" | "api-agent" | "raw-terminal";
+type RuntimeTypeTarget = "codex-app-server" | "raw-terminal";
 
 function shouldInterruptRuntime(status: Record<string, any> | null | undefined): boolean {
   if (!status) return false;
@@ -95,7 +95,6 @@ function cleanRuntimeToken(value: unknown): string {
 function runtimeTypeTarget(text: string): RuntimeTypeTarget | null {
   const token = cleanRuntimeToken(String(text || "").split(/\s+/)[0]);
   if (["api", "codex", "codex-api", "app", "app-server", "appserver", "structured"].includes(token)) return "codex-app-server";
-  if (["agent", "api-agent", "tenant-agent"].includes(token)) return "api-agent";
   if (["terminal", "term", "tmux", "attached", "attach", "raw", "raw-terminal"].includes(token)) return "raw-terminal";
   return null;
 }
@@ -106,7 +105,7 @@ function runtimeTypeForceRequested(text: string): boolean {
 }
 
 function runtimeTypeCommandHelp() {
-  return "Use /switch api, /switch agent, or /switch terminal. Shortcuts: /api, /agent, /term, /terminal.";
+  return "Use /switch api or /switch terminal. Shortcuts: /api, /term, /terminal.";
 }
 
 function queuedInputResponse(thread: Record<string, any>, message: Record<string, any>, reason = "pending_delivery") {
@@ -391,7 +390,7 @@ export class ThreadsController {
         state: "failed",
         deliveryState: "failed",
         observedVia: "orkestr_runtime_type_command_blocked",
-        error: "Active Codex API turn is running. Use /switch terminal interrupt or /switch agent interrupt to force the switch.",
+        error: "Active Codex API turn is running. Use /switch terminal interrupt to force the switch.",
       });
       return {
         ok: false,
@@ -448,40 +447,9 @@ export class ThreadsController {
       const started = await startCodexAppServerThread(current).catch(() => null);
       current = (started as any)?.thread || await getThread(current.id) || current;
       runtime = await this.threadRuntimeService.status(current.id).catch(() => null);
-    } else {
-      if (threadUsesCodexAppServer(current)) {
-        if (force) await interruptCodexAppServerThread(current).catch(() => null);
-        await archiveCodexAppServerThread(current).catch(() => null);
-      } else if (current.runtimeKind === "raw-terminal" || current.terminalMode === "raw-terminal") {
-        await sleepThread(current.id, { reason: "runtime_type_switch_to_agent", kill: true }).catch(() => null);
-        current = await getThread(current.id) || current;
-      }
-      current = await updateThread(current.id, {
-        state: "ready",
-        runtimeKind: API_AGENT_RUNTIME_KIND,
-        terminalMode: null,
-        executorId: API_AGENT_RUNTIME_KIND,
-        executor: {
-          ...(current.executor || {}),
-          id: API_AGENT_RUNTIME_KIND,
-          type: API_AGENT_RUNTIME_KIND,
-          transport: API_AGENT_RUNTIME_KIND,
-          metadata: {
-            ...(current.executor?.metadata || {}),
-            transport: API_AGENT_RUNTIME_KIND,
-            runtimeKind: API_AGENT_RUNTIME_KIND,
-            terminalMode: null,
-          },
-        },
-        runtime: {
-          state: "ready",
-          runtimeKind: API_AGENT_RUNTIME_KIND,
-        },
-      });
-      runtime = await this.threadRuntimeService.status(current.id).catch(() => null);
     }
 
-    const label = target === "codex-app-server" ? "Codex API" : target === "api-agent" ? "API agent" : "attached terminal";
+    const label = target === "codex-app-server" ? "Codex API" : "attached terminal";
     const message = await appendThreadMessage(thread.id, {
       role: "user",
       source,

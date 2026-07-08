@@ -2278,7 +2278,7 @@ ExecStart=/usr/local/bin/orkestr serve
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=$timeout_stop_sec
-KillMode=mixed
+KillMode=process
 PrivateTmp=true
 
 [Install]

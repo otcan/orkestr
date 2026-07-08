@@ -119,10 +119,10 @@ test("release deploy script exposes versioned install, status, and rollback", as
   assert.match(script, /ExecStart=\$node_bin dist\/server\/apps\/server\/src\/server\.js/);
   assert.match(script, /50-shutdown-timeout\.conf/);
   assert.match(script, /TimeoutStopSec=\$timeout/);
-  assert.match(script, /KillMode=mixed/);
+  assert.match(script, /KillMode=process/);
   assert.match(script, /Deploy drain active: new inputs will queue/);
   assert.match(script, /Deploy drain cleared after \$\{service_name\}\.service passed health checks/);
-  assert.match(script, /service-local child processes are reaped after the stop timeout/);
+  assert.match(script, /service-local tmux children are not killed with the UI process/);
   assert.match(script, /systemctl restart "\$\{service_name\}\.service"/);
   assert.doesNotMatch(script, /systemctl stop "\$\{service_name\}\.service"[\s\S]*systemctl start "\$\{service_name\}\.service"/);
   assert.match(script, /send_release_whatsapp_notifications/);

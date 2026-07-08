@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import crypto from "node:crypto";
+import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -127,6 +128,26 @@ async function waitForWatcherAlerts(home, attempts = 25) {
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
   return [];
+}
+
+async function waitForLocalWhatsAppAccount(env, accountId, predicate, attempts = 25) {
+  let last = null;
+  for (let index = 0; index < attempts; index += 1) {
+    const status = await getLocalWhatsAppBridgeStatus(env);
+    const account = status.accounts.find((item) => item.accountId === accountId) || null;
+    last = { status, account };
+    if (account && predicate(account, status)) return last;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  return last;
+}
+
+async function waitForTestCondition(predicate, attempts = 25) {
+  for (let index = 0; index < attempts; index += 1) {
+    if (predicate()) return true;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  return false;
 }
 
 function binaryResponse(body, headers = {}, status = 200) {
@@ -2881,6 +2902,113 @@ test("local whatsapp startup timeout fails a pre-qr hang and makes it recoverabl
     assert.ok(calls.includes("destroy"));
     const events = await listEvents(env);
     assert.ok(events.find((event) => event.type === "whatsapp_local_startup_timeout"));
+  } finally {
+    await resetLocalWhatsAppBridgeForTest(env);
+  }
+});
+
+test("local whatsapp client target closure becomes recoverable disconnected", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-target-close-client-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "responder",
+  };
+  const calls = [];
+  let clientInstance = null;
+
+  class LocalAuth {}
+
+  class Client extends EventEmitter {
+    constructor() {
+      super();
+      clientInstance = this;
+    }
+
+    initialize() {
+      calls.push("initialize");
+      return Promise.resolve();
+    }
+
+    async destroy() {
+      calls.push("destroy");
+    }
+  }
+
+  try {
+    const result = await startLocalWhatsAppAccount("responder", env, {
+      loadBridgeDependencies: async () => ({
+        whatsapp: { Client, LocalAuth },
+        qrcode: {},
+      }),
+    });
+    assert.equal(result.state, "starting");
+
+    clientInstance.emit("error", new Error("Protocol error (Runtime.callFunctionOn): Target closed"));
+    const { status, account } = await waitForLocalWhatsAppAccount(
+      env,
+      "responder",
+      (item) => item.state === "disconnected",
+    );
+
+    assert.equal(status.state, "disconnected");
+    assert.equal(account.ready, false);
+    assert.match(account.error, /Target closed/);
+    assert.deepEqual(recoverableLocalWhatsAppAccountIds(status.accounts, ["responder"]), ["responder"]);
+    assert.equal(await waitForTestCondition(() => calls.includes("destroy")), true);
+    const events = await listEvents(env);
+    const event = events.find((entry) => entry.type === "whatsapp_local_client_runtime_closed");
+    assert.equal(event?.source, "client_error");
+    assert.equal(event?.recoverable, true);
+  } finally {
+    await resetLocalWhatsAppBridgeForTest(env);
+  }
+});
+
+test("local whatsapp initialize target closure becomes recoverable disconnected", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-target-close-start-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "responder",
+  };
+  const calls = [];
+  const targetClosed = new Error("Protocol error (Runtime.addBinding): Target closed");
+
+  class LocalAuth {}
+
+  class Client extends EventEmitter {
+    initialize() {
+      calls.push("initialize");
+      return Promise.reject(targetClosed);
+    }
+
+    async destroy() {
+      calls.push("destroy");
+    }
+  }
+
+  try {
+    await startLocalWhatsAppAccount("responder", env, {
+      loadBridgeDependencies: async () => ({
+        whatsapp: { Client, LocalAuth },
+        qrcode: {},
+      }),
+    });
+    const { status, account } = await waitForLocalWhatsAppAccount(
+      env,
+      "responder",
+      (item) => item.state === "disconnected",
+    );
+
+    assert.equal(status.state, "disconnected");
+    assert.equal(account.ready, false);
+    assert.match(account.error, /Target closed/);
+    assert.deepEqual(recoverableLocalWhatsAppAccountIds(status.accounts, ["responder"]), ["responder"]);
+    assert.equal(await waitForTestCondition(() => calls.includes("destroy")), true);
+    assert.deepEqual(calls, ["initialize", "destroy"]);
+    const events = await listEvents(env);
+    const event = events.find((entry) => entry.type === "whatsapp_local_start_runtime_closed");
+    assert.equal(event?.source, "initialize");
+    assert.equal(event?.recoverable, true);
   } finally {
     await resetLocalWhatsAppBridgeForTest(env);
   }
@@ -8879,10 +9007,61 @@ test("whatsapp delivery reports mirror-disabled routed inputs once", async () =>
   assertDebugFooter(calls[0].body.text, { messageType: "update" });
 });
 
-test("whatsapp /now inputs report interrupting before normal queue notices", async () => {
+test("whatsapp /status replies from the router without queuing runtime work", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-status-command-"));
+  const env = externalBridgeEnv(home);
+  await createThread({
+    id: "thread-wa-status-command",
+    name: "WA Status Command Thread",
+    runtimeKind: "codex-app-server",
+    binding: {
+      connector: "whatsapp",
+      chatId: "chat-status-command",
+      enabled: true,
+    },
+  }, env);
+  await writeConnectorConfig("whatsapp", {
+    bridgeMode: "external",
+    bridgeUrl: "http://wa.local",
+  }, env);
+
+  const routed = await routeWhatsAppInbound({
+    eventId: "wa-status-command-1",
+    chatId: "chat-status-command",
+    accountId: "account-1",
+    text: "/status",
+  }, env);
+
+  const calls = [];
+  const delivery = await deliverWhatsAppReplies(env, async (url, options) => {
+    calls.push({ url, body: JSON.parse(options.body) });
+    return response({ ok: true, ids: ["sent-status-command"] });
+  });
+  const messages = await listThreadMessages("thread-wa-status-command", env);
+  const userMessage = messages.find((message) => message.id === routed.message.id);
+  const reply = messages.find((message) => message.parentMessageId === routed.message.id && message.source === "whatsapp_router");
+
+  assert.equal(routed.handledCommand, "status");
+  assert.equal(userMessage.state, "completed");
+  assert.equal(userMessage.observedVia, "whatsapp_router_status_command");
+  assert.ok(reply);
+  assert.match(reply.text, /^Thread: WA Status Command Thread\nStatus: /);
+  assert.match(reply.text, /\nRuntime: Codex API\n/);
+  assert.equal(messages.some((message) => message.role === "user" && message.state === "queued"), false);
+  assert.equal(delivery.delivered.length, 1);
+  assert.equal(calls[0].body.to, "chat-status-command");
+  assert.match(stripDebugFooter(calls[0].body.text), /^Thread: WA Status Command Thread\nStatus: /);
+});
+
+test("whatsapp /now inputs default to steer without interrupt queue notices", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-now-notice-"));
   const env = externalBridgeEnv(home);
-  await createThread({ id: "thread-wa-now-notice", name: "WA Now Notice Thread" }, env);
+  await createThread({
+    id: "thread-wa-now-notice",
+    name: "WA Now Notice Thread",
+    runtimeKind: "codex-app-server",
+    executor: { transport: "app-server", metadata: { runtimeKind: "codex-app-server" } },
+  }, env);
   await writeConnectorConfig("whatsapp", {
     bridgeMode: "external",
     bridgeUrl: "http://wa.local",
@@ -8901,15 +9080,14 @@ test("whatsapp /now inputs report interrupting before normal queue notices", asy
     return response({ ok: true, ids: ["sent-now-notice"] });
   });
 
-  assert.equal(routed.message.deliveryState, "interrupting");
-  assert.equal(delivery.delivered.length, 1);
-  assert.equal(delivery.delivered[0].deliveryType, "queue_notice");
-  assert.match(stripDebugFooter(calls[0].body.text), /^Interrupting the current Codex turn and queued your message: "fix the pairing number"\./);
-  assert.doesNotMatch(stripDebugFooter(calls[0].body.text), /\/now/);
-  assertDebugFooter(calls[0].body.text, { messageType: "update", queueReason: "interrupting" });
+  assert.equal(routed.message.codexDeliveryMode, "instant_steer");
+  assert.equal(routed.message.steerActiveTurn, true);
+  assert.notEqual(routed.message.deliveryState, "interrupting");
+  assert.equal(delivery.delivered.length, 0);
+  assert.equal(calls.length, 0);
 });
 
-test("whatsapp inbound can mark a thread for instant active-turn steer", async () => {
+test("whatsapp inbound marks Codex API threads for default active-turn steer", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-instant-steer-"));
   const env = externalBridgeEnv(home);
   await createThread({
@@ -8920,7 +9098,6 @@ test("whatsapp inbound can mark a thread for instant active-turn steer", async (
       connector: "whatsapp",
       chatId: "chat-instant-steer",
       enabled: true,
-      inboundDeliveryMode: "instant_steer",
     },
   }, env);
   await writeConnectorConfig("whatsapp", {
@@ -8998,7 +9175,7 @@ test("whatsapp queue notices strip pasted debug footers from previews", () => {
     text: "Codex compacted the conversation context.\n\ndbg: m:gpt-5.5/xh · msg:update · q:0 · load:25% · api:122% · help:/help",
   }, "awaiting_active_turn");
 
-  assert.equal(notice, 'Added after the current Codex turn: "Codex compacted the conversation context.". Use /now to interrupt.');
+  assert.equal(notice, 'Added after the current Codex turn: "Codex compacted the conversation context.". Use /now to steer into the active turn.');
   assert.doesNotMatch(notice, /dbg:/);
 });
 
@@ -9016,7 +9193,7 @@ test("whatsapp queue notices unwrap nested queue notice previews", () => {
     text: 'Queued for the next Codex turn: "Queued for the next Codex turn: "Queued your message while Orkestr prepares this thread: "I’m treating this as a release hygiene issue: WA mi...".".".',
   }, "awaiting_active_turn");
 
-  assert.equal(notice, 'Added after the current Codex turn: "I’m treating this as a release hygiene issue: WA mi...". Use /now to interrupt.');
+  assert.equal(notice, 'Added after the current Codex turn: "I’m treating this as a release hygiene issue: WA mi...". Use /now to steer into the active turn.');
 });
 
 test("whatsapp queue notices unwrap malformed nested queue notice previews", () => {
@@ -9024,7 +9201,7 @@ test("whatsapp queue notices unwrap malformed nested queue notice previews", () 
     text: 'Queued your message while Orkestr prepares this thread: "Queued for the next Codex turn: "Queued for the next Codex turn: "Codex compacted the conversation context.".',
   }, "awaiting_active_turn");
 
-  assert.equal(notice, 'Added after the current Codex turn: "Codex compacted the conversation context.". Use /now to interrupt.');
+  assert.equal(notice, 'Added after the current Codex turn: "Codex compacted the conversation context.". Use /now to steer into the active turn.');
 });
 
 test("whatsapp queue notices suppress generated truncated queue previews", () => {
@@ -9032,7 +9209,7 @@ test("whatsapp queue notices suppress generated truncated queue previews", () =>
     text: 'Queued your message while Orkestr prepares this thread: "Queued for the next Codex turn: "Queued for the next Codex turn: "Queued for the next Codex turn: "Queued for the nex...".',
   }, "awaiting_active_turn");
 
-  assert.equal(notice, "Added after the current Codex turn. Use /now to interrupt.");
+  assert.equal(notice, "Added after the current Codex turn. Use /now to steer into the active turn.");
 });
 
 test("whatsapp delivery reports app-server active-turn queue notices", async () => {
@@ -9073,7 +9250,7 @@ test("whatsapp delivery reports app-server active-turn queue notices", async () 
   assert.equal(delivery.delivered[0].sourceMessageId, routed.message.id);
   assert.equal(duplicate.delivered.length, 0);
   assert.equal(calls[0].body.to, "chat-app-server-active-queue-notice");
-  assert.match(stripDebugFooter(calls[0].body.text), /^Added after the current Codex turn: "queue behind app server turn"\. Use \/now to interrupt\./);
+  assert.match(stripDebugFooter(calls[0].body.text), /^Added after the current Codex turn: "queue behind app server turn"\. Use \/now to steer into the active turn\./);
   assertDebugFooter(calls[0].body.text, { messageType: "update", queueReason: "active-turn" });
   assert.equal(messages.find((entry) => entry.id === routed.message.id).state, "queued");
 });
@@ -9093,7 +9270,7 @@ test("whatsapp inbound ignores generated queue notices with trace and debug foot
   }, env);
 
   const notices = [
-    `Added after the current Codex turn: "queue behind app server turn". Use /now to interrupt.
+    `Added after the current Codex turn: "queue behind app server turn". Use /now to steer into the active turn.
 Trace: rt_trace_123
 
 dbg: m:unknown · rt:api · msg:update · queue:20 · reason:active-turn`,

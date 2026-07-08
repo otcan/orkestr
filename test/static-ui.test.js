@@ -1058,10 +1058,10 @@ test("web shell exposes runtime surface and Codex mode shortcuts", async () => {
   assert.match(template, /class="runtime-surface-toggle"/);
   assert.match(template, /switchRuntimeSurface\('api'\)/);
   assert.match(template, /switchRuntimeSurface\('terminal'\)/);
-  assert.match(template, /switchRuntimeSurface\('agent'\)/);
+  assert.doesNotMatch(template, /switchRuntimeSurface\('agent'\)/);
   assert.match(template, /\/switch api/);
   assert.match(template, /\/switch term/);
-  assert.match(template, /\/switch agent/);
+  assert.doesNotMatch(template, /\/switch agent/);
   assert.match(template, /codexModeShortcutTitle\(thread\)/);
   assert.match(template, /Switch to Code mode with \/code/);
   assert.match(template, /Switch to Plan mode with \/plan/);
@@ -1077,11 +1077,12 @@ test("web shell exposes runtime surface and Codex mode shortcuts", async () => {
   assert.match(component, /version\.buildId \|\| version\.releaseId/);
   assert.match(component, /deploymentTrackLabel\(\): string/);
   assert.match(component, /deploymentVersionTitle\(\): string/);
-  assert.match(component, /switchRuntimeSurface\(runtime: "api" \| "terminal" \| "agent"\): Promise<void>/);
-  assert.match(component, /runtimeSurfaceSwitchDisabled\(runtime: "api" \| "terminal" \| "agent"\): boolean/);
+  assert.match(component, /switchRuntimeSurface\(runtime: "api" \| "terminal"\): Promise<void>/);
+  assert.match(component, /runtimeSurfaceSwitchDisabled\(runtime: "api" \| "terminal"\): boolean/);
   assert.match(component, /runtimeSurfaceShortcutTitle\(thread: ThreadSummary \| null\): string/);
   assert.match(component, /Shortcuts: \/code, \/plan/);
-  assert.match(component, /Switch: \/switch api, \/switch terminal, \/switch agent/);
+  assert.match(component, /Switch: \/switch api, \/switch terminal/);
+  assert.doesNotMatch(component, /Switch: \/switch api, \/switch terminal, \/switch agent/);
   assert.match(styles, /\.runtime-surface-pill/);
   assert.match(styles, /\.runtime-surface-toggle/);
   assert.match(styles, /\.runtime-surface-pill\.codex-api/);

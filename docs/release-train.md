@@ -311,10 +311,11 @@ active until the new UI/API process passes health checks; startup recovery
 defers while that marker is active so continuing Codex app-server turns are not
 misclassified as restart interruptions. The deployer also writes a versioned
 systemd drop-in that makes the API `node` process the service main process; this
-avoids `npm start` wrapper orphans. The systemd unit uses `KillMode=mixed` so
-the release restart gives the UI/API process a normal shutdown window while
-still reaping service-local child processes, such as WhatsApp bridge Chrome, if
-they outlive the stop timeout. Browserctl-managed desktops and active Codex
+avoids `npm start` wrapper orphans. The systemd unit uses `KillMode=process` so
+the release restart gives the UI/API process a normal shutdown window without
+killing service-local tmux/Codex children that are still active. WhatsApp bridge
+Chrome cleanup is handled by the local bridge orphan-profile recovery path
+instead of by UI service shutdown. Browserctl-managed desktops and active Codex
 app-server turns run outside the UI service cgroup. A Codex
 turn is treated as restart-safe only when `/api/threads?scope=all` reports both
 `runtime=codex-app-server` and `appServer=websocket` or `appServer=proxy`. First-time migrations from the

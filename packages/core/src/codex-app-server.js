@@ -960,6 +960,38 @@ async function deliverCodexAppServerPendingInputsUnlocked(thread, env = process.
       error: null,
     }, env).catch(() => ({ ...next, text: payloadText, state: "queued", deliveryState: "mode_recorded" }));
   }
+  if (parsedCommand.command === "steer") {
+    const payloadText = clean(parsedCommand.text);
+    if (!payloadText && !clean(next.promptFile)) {
+      await updateThreadMessage(thread.id, next.id, {
+        state: "completed",
+        deliveryState: "delivered",
+        deliveredAt: nowIso(),
+        observedVia: "codex_app_server_steer",
+        steerActiveTurn: true,
+        codexDeliveryMode: "instant_steer",
+        error: null,
+      }, env);
+      delivered.push(next.id);
+      return delivered;
+    }
+    next = await updateThreadMessage(thread.id, next.id, {
+      text: payloadText,
+      state: "queued",
+      deliveryState: "steering_active_turn",
+      observedVia: "codex_app_server_steer",
+      steerActiveTurn: true,
+      codexDeliveryMode: "instant_steer",
+      error: null,
+    }, env).catch(() => ({
+      ...next,
+      text: payloadText,
+      state: "queued",
+      deliveryState: "steering_active_turn",
+      steerActiveTurn: true,
+      codexDeliveryMode: "instant_steer",
+    }));
+  }
   if (parsedCommand.command === "interrupt") {
     const interrupted = await interruptCodexAppServerThread(thread, env).catch(() => ({ interrupted: false }));
     const payloadText = clean(parsedCommand.text);

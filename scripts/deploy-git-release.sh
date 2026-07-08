@@ -846,7 +846,7 @@ deploy_guard_before_restart() {
     begin_deploy_drain
     deploy_guard_active_work unsafe
     echo "No-interrupt deploy guard: external Codex app-server is active; codex-app-server turns may continue during the UI restart."
-    echo "No-interrupt deploy preservation: external Codex app-server turns are preserved while service-local child processes are reaped after the stop timeout."
+    echo "No-interrupt deploy preservation: external Codex app-server turns are preserved and service-local tmux children are not killed with the UI process."
     return 0
   fi
   deploy_guard_active_work
@@ -1001,7 +1001,7 @@ EOF
   cat > "$dropin_dir/50-shutdown-timeout.conf" <<EOF
 [Service]
 TimeoutStopSec=$timeout
-KillMode=mixed
+KillMode=process
 EOF
   systemctl daemon-reload
 }

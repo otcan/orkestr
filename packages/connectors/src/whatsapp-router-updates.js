@@ -48,7 +48,7 @@ function whatsappQueueNoticeOrigin(message, thread, state) {
 function queueNoticePreview(message) {
   const text = stripQueuePreviewDebugFooter(pickString(message?.text, message?.promptFile ? "message from prompt file" : "message"));
   const parsed = parseThreadInputCommand({ text });
-  const previewText = stripQueuePreviewDebugFooter(parsed.command === "interrupt" && parsed.text ? parsed.text : text);
+  const previewText = stripQueuePreviewDebugFooter((parsed.command === "interrupt" || parsed.command === "steer") && parsed.text ? parsed.text : text);
   const normalized = previewText.replace(/\s+/g, " ").trim();
   return normalized.length > 120 ? `${normalized.slice(0, 117)}...` : normalized;
 }

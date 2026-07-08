@@ -2377,7 +2377,7 @@ export class ApiService {
     return this.http.post<ThreadInputResponse>(this.api(`/threads/${encodeURIComponent(id)}/input`), body);
   }
 
-  setRuntimeSurface(id: string, runtime: "api" | "terminal" | "agent"): Observable<ThreadInputResponse> {
+  setRuntimeSurface(id: string, runtime: "api" | "terminal"): Observable<ThreadInputResponse> {
     return this.sendThreadInput(id, `/switch ${runtime}`);
   }
 

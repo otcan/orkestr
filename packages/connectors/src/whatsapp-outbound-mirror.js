@@ -453,7 +453,7 @@ export function queuedInputWhatsAppDeliveryTarget(message, thread, state) {
 function queueNoticePreview(message) {
   const text = stripQueuePreviewDebugFooter(pickString(message?.text, message?.promptFile ? "message from prompt file" : "message"));
   const parsed = parseThreadInputCommand({ text });
-  const previewText = stripQueuePreviewNoticeWrappers(stripQueuePreviewDebugFooter(parsed.command === "interrupt" && parsed.text ? parsed.text : text));
+  const previewText = stripQueuePreviewNoticeWrappers(stripQueuePreviewDebugFooter((parsed.command === "interrupt" || parsed.command === "steer") && parsed.text ? parsed.text : text));
   const normalized = previewText.replace(/\s+/g, " ").trim();
   if (generatedQueueNoticePreviewFragment(normalized)) return "";
   return normalized.length > 120 ? `${normalized.slice(0, 117)}...` : normalized;
@@ -477,7 +477,7 @@ function stripQueuePreviewNoticeWrapper(text) {
   const value = String(text || "").trim();
   const patterns = [
     /^Queued for the next Codex turn:\s*["“](.*)["”]\.?\s*$/i,
-    /^Added after the current Codex turn:\s*["“](.*)["”]\.\s*Use \/now to interrupt\.?\s*$/i,
+    /^Added after the current Codex turn:\s*["“](.*)["”]\.\s*Use \/now to (?:interrupt|steer into the active turn)\.?\s*$/i,
     /^Queued your message while Orkestr prepares this thread:\s*["“](.*)["”]\.?\s*$/i,
     /^Runtime handoff is taking longer than expected:\s*["“](.*)["”]\.?\s*$/i,
     /^Waking this Orkestr thread and queued your message:\s*["“](.*)["”]\.?\s*$/i,
@@ -515,7 +515,7 @@ function stripQueuePreviewNoticeWrapper(text) {
         .replace(prefix, "")
         .replace(/\s*Send \/approve or \/deny to answer the approval request\.?\s*$/i, "")
         .replace(/\s*Send \/approve or \/deny\.?\s*$/i, "")
-        .replace(/\s*Use \/now to interrupt\.?\s*$/i, "")
+        .replace(/\s*Use \/now to (?:interrupt|steer into the active turn)\.?\s*$/i, "")
         .replace(/["”]\.?\s*$/, "")
         .trim();
     }
@@ -563,7 +563,7 @@ export function formatWhatsAppQueueNotice(message, reason = "") {
   const normalizedReason = String(reason || "").trim().toLowerCase();
   let notice = "";
   if (normalizedReason === "awaiting_active_turn") {
-    notice = `Added after the current Codex turn${queueNoticePreviewClause(preview)} Use /now to interrupt.`;
+    notice = `Added after the current Codex turn${queueNoticePreviewClause(preview)} Use /now to steer into the active turn.`;
     return appendTraceReference(notice, message);
   }
   if (normalizedReason === "awaiting_approval") {

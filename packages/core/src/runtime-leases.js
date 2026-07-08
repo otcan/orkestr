@@ -3506,7 +3506,7 @@ export async function deliverPendingThreadInputs(threadId, env = process.env, op
         break;
       }
 
-      const next = messages.find((message) => message.role === "user" && ["queued", "pending_delivery", "awaiting_ack"].includes(message.state));
+      let next = messages.find((message) => message.role === "user" && ["queued", "pending_delivery", "awaiting_ack"].includes(message.state));
       if (!next) break;
       const parsedCommand = parseThreadInputCommand({ text: next.text });
       if ((parsedCommand.command === "plan" || parsedCommand.command === "code") && parsedCommand.text) {
@@ -3535,6 +3535,38 @@ export async function deliverPendingThreadInputs(threadId, env = process.env, op
         if (completed?.deferred) break;
         if (completed?.messageId) delivered.push(completed.messageId);
         continue;
+      }
+      if (parsedCommand.command === "steer") {
+        const payloadText = String(parsedCommand.text || "").trim();
+        if (!payloadText && !String(next.promptFile || "").trim()) {
+          const updated = await updateThreadMessage(thread.id, next.id, {
+            state: "completed",
+            deliveryState: "delivered",
+            deliveredAt: nowIso(),
+            observedVia: "orkestr_steer_command",
+            steerActiveTurn: true,
+            codexDeliveryMode: "instant_steer",
+            error: null,
+          }, env);
+          delivered.push(updated.id);
+          continue;
+        }
+        next = await updateThreadMessage(thread.id, next.id, {
+          text: payloadText,
+          state: "queued",
+          deliveryState: "steering_active_turn",
+          observedVia: "orkestr_steer_command",
+          steerActiveTurn: true,
+          codexDeliveryMode: "instant_steer",
+          error: null,
+        }, env).catch(() => ({
+          ...next,
+          text: payloadText,
+          state: "queued",
+          deliveryState: "steering_active_turn",
+          steerActiveTurn: true,
+          codexDeliveryMode: "instant_steer",
+        }));
       }
       await recordMessageRouterTrace(next, "queued", { threadId: thread.id }, env);
       await updateThreadMessage(thread.id, next.id, {
