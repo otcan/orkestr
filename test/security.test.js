@@ -11,6 +11,7 @@ import { approvePairingChallenge, authorizeHttpRequest, createPairingChallenge, 
 import { createTenantVm } from "../packages/core/src/tenant-vm-registry.js";
 import { createUser, getUser } from "../packages/core/src/users.js";
 import { writeConnectorConfig } from "../packages/storage/src/config.js";
+import { userDataPaths } from "../packages/storage/src/paths.js";
 
 function saveEnv(keys) {
   return Object.fromEntries(keys.map((key) => [key, process.env[key]]));
@@ -770,6 +771,87 @@ test("local CLI machine token can operate WhatsApp bridge routes", async () => {
   assert.equal(allowed.machineAuth, "cli");
   assert.equal(badBridgeToken.ok, false);
   assert.equal(badBridgeToken.error, "whatsapp_bridge_token_invalid");
+});
+
+test("tenant CLI setup status uses tenant owner connector scope", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-security-tenant-cli-setup-"));
+  const overlayDir = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-security-tenant-cli-overlay-"));
+  const prior = saveEnv([
+    "ORKESTR_HOME",
+    "ORKESTR_AUTH_REQUIRED",
+    "ORKESTR_RECOVER_RUNNING_ON_START",
+    "ORKESTR_TENANT_VM_ID",
+    "ORKESTR_ADMIN_USER_ID",
+    "ORKESTR_CLI_AUTH_TOKEN",
+    "ORKESTR_OVERLAY_DIR",
+  ]);
+  let server;
+  try {
+    process.env.ORKESTR_HOME = home;
+    process.env.ORKESTR_AUTH_REQUIRED = "1";
+    process.env.ORKESTR_RECOVER_RUNNING_ON_START = "0";
+    process.env.ORKESTR_TENANT_VM_ID = "firat-jobs-vm";
+    process.env.ORKESTR_ADMIN_USER_ID = "firat";
+    process.env.ORKESTR_CLI_AUTH_TOKEN = "cli-secret";
+    process.env.ORKESTR_OVERLAY_DIR = overlayDir;
+
+    await writeConnectorConfig("gmail", {
+      clientId: "gmail-client",
+      clientSecret: "gmail-secret",
+      redirectUri: "https://app.orkestr.de/oauth/gmail/callback",
+    }, process.env);
+    await fs.writeFile(path.join(overlayDir, "overlay.json"), JSON.stringify({
+      connectors: {
+        gmail: {
+          label: "Host Gmail",
+          state: "partial",
+          summary: "Global overlay Gmail must not override tenant user setup status.",
+          details: { overlay: true },
+        },
+      },
+    }), "utf8");
+    await fs.mkdir(path.join(home, "oauth"), { recursive: true });
+    await fs.writeFile(path.join(home, "oauth", "gmail-state.json"), JSON.stringify({
+      state: "stale-global-oauth-state",
+      provider: "google_workspace",
+    }), "utf8");
+    const firatPaths = userDataPaths("firat", process.env);
+    await fs.mkdir(firatPaths.secrets, { recursive: true });
+    await fs.writeFile(path.join(firatPaths.secrets, "gmail-token.json"), JSON.stringify({
+      provider: "google_workspace",
+      accessToken: `ya29.${"t".repeat(90)}`,
+      refreshToken: "refresh-token",
+      account: "oguzcanunver@gmail.com",
+      email: "oguzcanunver@gmail.com",
+      capabilities: ["gmail_read", "gmail_actions", "gmail_send"],
+      grantedScopes: [
+        "openid",
+        "https://www.googleapis.com/auth/userinfo.email",
+        "https://www.googleapis.com/auth/userinfo.profile",
+        "https://www.googleapis.com/auth/gmail.readonly",
+        "https://www.googleapis.com/auth/gmail.modify",
+        "https://www.googleapis.com/auth/gmail.send",
+        "https://www.googleapis.com/auth/gmail.compose",
+      ],
+      expiresAt: Math.floor(Date.now() / 1000) + 3600,
+    }), "utf8");
+
+    server = await startServer({ port: 0, host: "127.0.0.1" });
+    const { port } = server.address();
+    const status = await json(await fetch(`http://127.0.0.1:${port}/api/setup/status`, {
+      headers: { authorization: "Bearer cli-secret" },
+    }));
+    const gmail = status.connectors.find((connector) => connector.id === "gmail");
+
+    assert.notEqual(status.redacted, true);
+    assert.equal(gmail.state, "connected");
+    assert.equal(gmail.details.account, "oguzcanunver@gmail.com");
+    assert.notEqual(gmail.details.overlay, true);
+    assert.deepEqual(gmail.details.capabilities, ["gmail_read", "gmail_actions", "gmail_send"]);
+  } finally {
+    if (server) await new Promise((resolve) => server.close(resolve));
+    restoreEnv(prior);
+  }
 });
 
 test("shared broker authorization accepts matching encrypted proxy assertions", async () => {

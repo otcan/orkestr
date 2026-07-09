@@ -28,7 +28,7 @@ import { createFolderForPrincipal, deleteFileForPrincipal, listFilesForPrincipal
 import { assertSanitizedAction } from "../../../../../packages/core/src/llm-sanitizer.js";
 import { getThread, listThreads, listThreadsForPrincipal } from "../../../../../packages/core/src/threads.js";
 import { userScopedCapabilityHints } from "../../../../../packages/core/src/user-skills.js";
-import { requestPrincipal } from "../../../../../packages/core/src/principal.js";
+import { requestPrincipal, userPrincipal } from "../../../../../packages/core/src/principal.js";
 import { isAdminPrincipal } from "../../../../../packages/core/src/policy.js";
 import { distributionIdentity } from "../../../../../packages/core/src/distribution.js";
 import { getUser, upsertUser } from "../../../../../packages/core/src/users.js";
@@ -479,6 +479,20 @@ function setupStatusForRequest(request: any, status: any): any {
   };
 }
 
+function setupStatusPrincipalForRequest(request: any, env = process.env): any {
+  const principal = requestPrincipal(request, env);
+  if (request?.orkestrMachineAuth === "broker_proxy") return principal;
+  if (!isTenantScopedRuntime(env) || !isAdminPrincipal(principal)) return principal;
+  const ownerUserId = cleanText(env.ORKESTR_ADMIN_USER_ID);
+  if (!ownerUserId) return principal;
+  return userPrincipal({
+    id: ownerUserId,
+    role: "user",
+    source: "tenant-owner",
+    displayName: ownerUserId,
+  });
+}
+
 function normalizeWhatsAppAccessMode(value: unknown) {
   const normalized = String(value || "").trim().toLowerCase();
   if (["own", "self", "self-managed", "self_managed", "local"].includes(normalized)) return "own";
@@ -629,8 +643,9 @@ export class SystemController {
 
   @Get("setup/status")
   async setupStatus(@Req() request: any) {
+    const principal = setupStatusPrincipalForRequest(request);
     const status = setupStatusForRequest(request, {
-      ...(await getSetupStatus({ principal: requestPrincipal(request) })),
+      ...(await getSetupStatus({ principal })),
       config: await publicEffectiveConfig(),
       whatsappDefaults: {
         chatNamePrefix: configuredWhatsAppChatNamePrefix(),

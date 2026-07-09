@@ -176,7 +176,7 @@ export async function getConnectorStatuses({ env = process.env, home = os.homedi
     connectorAuthStatus("jira", env, { principal }),
     connectorAuthStatus("shopify", env, { principal }),
   ]);
-  const overlay = await readOverlay(env);
+  const overlay = scopedPaths.global ? await readOverlay(env) : { connectors: {} };
 
   const connectors = {
     openai: openaiKey
