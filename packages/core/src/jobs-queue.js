@@ -23,6 +23,31 @@ function intValue(value, fallback, min, max) {
   return Math.max(min, Math.min(max, numeric));
 }
 
+function fitScore100Value(raw = {}, fitScore = 5) {
+  const explicit = raw.fit_score_100 ?? raw.fitScore100 ?? raw.score100;
+  if (explicit !== undefined && explicit !== null && explicit !== "") {
+    return intValue(explicit, fitScore * 10, 1, 100);
+  }
+  return intValue(fitScore * 10, 50, 1, 100);
+}
+
+function fitScoreBand(score100) {
+  const score = intValue(score100, 50, 1, 100);
+  if (score >= 90) return "exceptional";
+  if (score >= 75) return "strong";
+  if (score >= 60) return "possible";
+  return "weak";
+}
+
+function fitScore100ForDisplay(fit = {}) {
+  if (!fit || typeof fit !== "object") return null;
+  const hasExplicitScore = fit.fitScore100 !== undefined || fit.fit_score_100 !== undefined || fit.score100 !== undefined
+    || fit.fitScore !== undefined || fit.fit_score !== undefined || fit.score !== undefined;
+  if (!hasExplicitScore) return null;
+  const score100 = fitScore100Value(fit, intValue(fit.fitScore ?? fit.fit_score ?? fit.score, 5, 1, 10));
+  return Number.isFinite(score100) ? score100 : null;
+}
+
 function parseIntervalMs(value, fallbackMs) {
   if (typeof value === "number" && Number.isFinite(value)) return Math.max(1, Math.floor(value));
   const text = lower(value);
@@ -204,10 +229,12 @@ async function upsertCandidatesFromMessages(messages = [], context = {}, env = p
 function normalizeFitResult(raw = {}, candidate = {}, env = process.env) {
   const result = raw && typeof raw === "object" ? raw : {};
   const fitScore = intValue(result.fit_score ?? result.fitScore ?? result.score, 5, 1, 10);
+  const fitScore100 = fitScore100Value(result, fitScore);
   const subjectRole = clean(candidate.subject).replace(/^(new job|job alert|hiring|role)[:\s-]+/i, "").slice(0, 160);
   const senderDomain = clean(candidate.sender).match(/@([^>\s]+)/)?.[1] || "";
   return {
     fitScore,
+    fitScore100,
     reason: clean(result.reason).slice(0, 800),
     role: clean(result.role || result.title || subjectRole || "Unknown role").slice(0, 160),
     company: clean(result.company || senderDomain.replace(/^mail\./, "") || "Unknown company").slice(0, 120),
@@ -383,11 +410,14 @@ export async function classifyQueuedJobCandidates(input = {}, env = process.env,
 function formatJobDigest(candidates = [], now = new Date()) {
   const plural = candidates.length === 1 ? "fit" : "fits";
   const lines = [`${candidates.length} new job ${plural} queued at ${now.toLocaleString("en-GB", { hour12: false })}.`];
+  lines.push("Fit rubric: 90-100 exceptional, 75-89 strong, 60-74 possible, below 60 weak.");
   candidates.forEach((candidate, index) => {
     const fit = candidate.fit || {};
+    const score100 = fitScore100ForDisplay(fit);
+    const scoreLabel = score100 ? `${score100}/100 (${fitScoreBand(score100)})` : "score unavailable";
     const links = [...new Set([candidate.gmailUrl, ...(candidate.canonicalJobUrls || [])].filter(Boolean))].slice(0, 3);
     lines.push("");
-    lines.push(`${index + 1}. ${fit.role || candidate.subject || "Unknown role"} at ${fit.company || "Unknown company"} — ${fit.fitScore || "?"}/10`);
+    lines.push(`${index + 1}. ${fit.role || candidate.subject || "Unknown role"} at ${fit.company || "Unknown company"} — ${scoreLabel}`);
     if (fit.location || fit.remote || fit.salary) lines.push(`   ${[fit.location, fit.remote, fit.salary].filter(Boolean).join(" | ")}`);
     if (fit.reason) lines.push(`   Reason: ${fit.reason}`);
     if (fit.whyFit) lines.push(`   Why fit: ${fit.whyFit}`);

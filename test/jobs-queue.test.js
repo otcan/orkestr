@@ -143,6 +143,7 @@ test("Gmail jobs poll dedupes, classifies, and posts fits as passive signals", a
   assert.equal(first.upserted.created.length, 2);
   assert.equal(first.classified.classified.length, 2);
   assert.equal(first.presentation.presented.length, 1);
+  assert.equal(first.presentation.presented[0].fit.fitScore100, 80);
   assert.equal(duplicate.upserted.created.length, 0);
   assert.equal(duplicate.upserted.duplicates.length, 2);
   assert.equal(duplicate.classified.classified.length, 0);
@@ -163,7 +164,9 @@ test("Gmail jobs poll dedupes, classifies, and posts fits as passive signals", a
   assert.equal(messages[0].chatId, "chat-jobs");
   assert.equal(messages[0].accountId, "wa-jobs");
   assert.match(messages[0].text, /1 new job fit/);
+  assert.match(messages[0].text, /Fit rubric: 90-100 exceptional/);
   assert.match(messages[0].text, /AI Agent Lead at Acme/);
+  assert.match(messages[0].text, /80\/100 \(strong\)/);
   assert.match(messages[0].text, /https:\/\/jobs\.example\.com\/acme\/agent-lead/);
   assert.doesNotMatch(messages[0].text, /utm_source/);
   assert.equal(whatsappDelivery.delivered.length, 1);
@@ -214,6 +217,7 @@ test("Gmail job signals can be recorded without WhatsApp delivery", async () => 
   });
 
   assert.equal(result.presentation.presented.length, 1);
+  assert.equal(result.presentation.presented[0].fit.fitScore100, 80);
   assert.equal(messages.length, 1);
   assert.equal(messages[0].phase, "signal");
   assert.equal(messages[0].signalMode, "record_only");
@@ -225,9 +229,8 @@ test("Gmail job signals can be recorded without WhatsApp delivery", async () => 
 
 test("Gmail jobs poll supports host-native gog collection", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-jobs-gog-"));
-  const fakeGog = path.join(home, "fake-gog.mjs");
-  await fs.writeFile(fakeGog, [
-    "const args = process.argv.slice(2);",
+  const fakeGogScript = [
+    "const args = process.argv.slice(1);",
     "if (args.includes('search')) {",
     "  console.log(JSON.stringify({ messages: [{ id: 'gog-job-1', threadId: 'gog-thread-1', subject: 'Remote Platform Lead at GogCo', from: 'jobs@gogco.example', date: '2026-06-30 12:00', snippet: 'AI remote platform role' }] }));",
     "} else if (args.includes('get')) {",
@@ -236,11 +239,11 @@ test("Gmail jobs poll supports host-native gog collection", async () => {
     "  process.exit(2);",
     "}",
     "",
-  ].join("\n"), "utf8");
+  ].join("\n");
   const env = {
     ORKESTR_HOME: home,
     ORKESTR_JOBS_GMAIL_SOURCE: "gog",
-    ORKESTR_JOBS_GOG_COMMAND_JSON: JSON.stringify([process.execPath, fakeGog]),
+    ORKESTR_JOBS_GOG_COMMAND_JSON: JSON.stringify([process.execPath, "--input-type=module", "--eval", fakeGogScript, "--"]),
   };
   await createThread({ id: "gog-jobs-thread", name: "Gog Jobs" }, env);
 
@@ -263,6 +266,7 @@ test("Gmail jobs poll supports host-native gog collection", async () => {
   assert.equal(result.presentation.presented.length, 1);
   assert.equal(queue.counts.presented, 1);
   assert.match(messages[0].text, /Remote Platform Lead at GogCo/);
+  assert.match(messages[0].text, /90\/100 \(exceptional\)/);
   assert.match(messages[0].text, /https:\/\/boards\.example\/gogco\/platform/);
   assert.doesNotMatch(messages[0].text, /utm_source/);
 });

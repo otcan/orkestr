@@ -1313,13 +1313,17 @@ async function runJobsCommand(argv, ctx) {
   });
   if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
   else {
-    ctx.stdout.write([
+    const lines = [
       "Gmail jobs poll completed",
       `Collected: ${Number(payload.collected || 0)}`,
       `Created: ${Number(payload.upserted?.created?.length || 0)}`,
       `Classified: ${Number(payload.classified?.classified?.length || 0)}`,
       `Presented: ${Number(payload.presentation?.presented?.length || 0)}`,
-    ].join("\n") + "\n");
+    ];
+    if (payload.presentation?.message?.text) {
+      lines.push("", String(payload.presentation.message.text));
+    }
+    ctx.stdout.write(lines.join("\n") + "\n");
   }
   return payload?.ok === false ? 1 : 0;
 }
