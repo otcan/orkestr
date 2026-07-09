@@ -338,13 +338,25 @@ export async function getGmailProfileEmail(accessToken = "", fetchImpl = fetch, 
 async function tokenWithResolvedAccount(token = {}, env = process.env, fetchImpl = fetch, options = {}) {
   const account = normalizeEmail(token.account || token.email || token.loginHint);
   if (account) return { token: { ...token, account }, account, updated: false };
-  const resolved = await getGmailProfileEmail(token.accessToken || token.access_token, fetchImpl, { ...options, env }).catch(() => "");
+  const accessToken = token.accessToken || token.access_token;
+  let resolved = await getGmailProfileEmail(accessToken, fetchImpl, { ...options, env }).catch(() => "");
+  let baseToken = token;
+  if (!resolved && options.refreshIfNeeded === true && clean(token.refreshToken || token.refresh_token)) {
+    const refreshFetch = timeoutFetch(fetchImpl, profileLookupTimeoutMs(env));
+    const refreshedAccessToken = await getGmailAccessToken(env, refreshFetch, options).catch(() => "");
+    if (refreshedAccessToken && refreshedAccessToken !== accessToken) {
+      resolved = await getGmailProfileEmail(refreshedAccessToken, fetchImpl, { ...options, env }).catch(() => "");
+      if (resolved) {
+        baseToken = await readGmailToken(env, options).catch(() => token);
+      }
+    }
+  }
   if (!resolved) return { token, account: "", updated: false };
   return {
     token: {
-      ...token,
+      ...baseToken,
       account: resolved,
-      email: normalizeEmail(token.email) || resolved,
+      email: normalizeEmail(baseToken.email) || resolved,
       updatedAt: new Date().toISOString(),
     },
     account: resolved,
@@ -354,7 +366,7 @@ async function tokenWithResolvedAccount(token = {}, env = process.env, fetchImpl
 
 export async function enrichGmailTokenAccount(env = process.env, fetchImpl = fetch, options = {}) {
   const token = await readGmailToken(env, options);
-  const resolved = await tokenWithResolvedAccount(token, env, fetchImpl, options);
+  const resolved = await tokenWithResolvedAccount(token, env, fetchImpl, { ...options, refreshIfNeeded: true });
   if (resolved.updated) {
     await writeGmailToken(resolved.token, env, options);
   }

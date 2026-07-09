@@ -484,6 +484,65 @@ test("brokered gmail grants refresh through the parent broker without local OAut
   assert.equal(stored.brokerInstanceId, "instance-firat");
 });
 
+test("gmail connector status refreshes expired brokered tokens before account lookup", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-gmail-broker-profile-refresh-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_TENANT_VM_ID: "firat-jobs-vm",
+    ORKESTR_BROKER_BASE_URL: "https://broker.example.test",
+  };
+  await writeBrokerClientRegistration(home, {
+    instanceId: "instance-firat",
+    channelId: "channel-firat",
+    brokerBaseUrl: "https://broker.example.test",
+  });
+  await saveBrokeredGmailGrant({
+    userId: "firat",
+    provider: "google_workspace",
+    brokerInstanceId: "instance-firat",
+    requestedCapabilities: ["gmail_read"],
+    requestedScopes: ["https://www.googleapis.com/auth/gmail.readonly"],
+    token: {
+      accessToken: "expired-access",
+      refreshToken: "refresh-owned-by-tenant",
+      expiresAt: 1,
+      grantedScopes: ["https://www.googleapis.com/auth/gmail.readonly"],
+    },
+  }, env);
+  const refreshedAccessToken = `ya29.${"d".repeat(90)}`;
+  const calls = [];
+
+  const status = await connectorAuthStatus("gmail", env, {
+    userId: "firat",
+    fetchImpl: async (url, options = {}) => {
+      calls.push(String(url));
+      if (String(url) === "https://broker.example.test/api/broker/instances/instance-firat/google-workspace/refresh-token") {
+        return jsonResponse({
+          ok: true,
+          token: {
+            access_token: refreshedAccessToken,
+            expires_in: 3600,
+            scope: "https://www.googleapis.com/auth/gmail.readonly",
+          },
+        });
+      }
+      if (String(url) === "https://gmail.googleapis.com/gmail/v1/users/me/profile") {
+        assert.equal(options.headers.authorization, `Bearer ${refreshedAccessToken}`);
+        return jsonResponse({ emailAddress: "Firat@Example.COM" });
+      }
+      throw new Error(`unexpected_url:${url}`);
+    },
+  });
+  const stored = await readGmailToken(env, { userId: "firat" });
+
+  assert.equal(status.account, "firat@example.com");
+  assert.equal(stored.account, "firat@example.com");
+  assert.deepEqual(calls, [
+    "https://broker.example.test/api/broker/instances/instance-firat/google-workspace/refresh-token",
+    "https://gmail.googleapis.com/gmail/v1/users/me/profile",
+  ]);
+});
+
 test("gmail oauth token failures are reflected in setup status", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-gmail-error-"));
   const env = { ORKESTR_HOME: home };
