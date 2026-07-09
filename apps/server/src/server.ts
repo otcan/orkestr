@@ -251,7 +251,9 @@ function authIntentBrokerAppApiRouteAllowed(method: string, rest: string[], sess
   if (method === "GET" && surface === "connectors" && second === "gmail" && third === "oauth" && fourth === "start") {
     return authIntentAllowsGoogleConnect(session);
   }
-  if (method === "DELETE" && surface === "connectors" && second === "gmail" && rest[3]?.toLowerCase() === "auth") return true;
+  if (method === "DELETE" && surface === "connectors" && second === "gmail" && third === "auth") {
+    return authIntentAllowsGoogleConnect(session);
+  }
   return false;
 }
 
@@ -300,6 +302,7 @@ function isPublicConnectorRoute(route: { method: string; connector: string; acti
 function isUserConnectorRoute(route: { method: string; connector: string; action: string[] }) {
   if (route.connector === "gmail") {
     if (route.method === "GET" && route.action.length === 2 && route.action[0] === "oauth" && route.action[1] === "start") return true;
+    if (route.method === "DELETE" && route.action.length === 1 && route.action[0] === "auth") return true;
     if (route.method === "GET" && route.action[0] === "messages" && route.action.length <= 2) return true;
     if (route.method === "POST" && route.action.length === 1 && route.action[0] === "test") return true;
   }
