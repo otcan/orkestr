@@ -15,7 +15,7 @@ import {
   saveBrokeredGmailGrant,
   startGmailOAuth,
 } from "../packages/connectors/src/gmail.js";
-import { connectorAuthStatus } from "../packages/connectors/src/connector-auth.js";
+import { connectorAuthStatus, disconnectConnectorAuth } from "../packages/connectors/src/connector-auth.js";
 import { __brokerInstanceRegistryTestInternals } from "../packages/core/src/broker-instance-registry.js";
 import { userPrincipal } from "../packages/core/src/principal.js";
 import { getSetupStatus } from "../packages/core/src/setup.js";
@@ -580,6 +580,51 @@ test("brokered gmail grants refresh through the parent broker without local OAut
   assert.equal(stored.brokered, true);
   assert.equal(stored.brokerInstanceId, "instance-firat");
   assert.deepEqual(capabilities.connectorAuth.gmail.capabilities, ["gmail_read"]);
+});
+
+test("tenant owner gmail status adopts legacy global token into user scope", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-gmail-tenant-owner-global-adopt-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_TENANT_VM_ID: "firat-jobs-vm",
+    ORKESTR_ADMIN_USER_ID: "firat",
+  };
+  await saveBrokeredGmailGrant({
+    account: "firat@example.com",
+    provider: "google_workspace",
+    brokerInstanceId: "instance-firat",
+    requestedCapabilities: ["gmail_read", "gmail_actions", "gmail_send"],
+    requestedScopes: [
+      "https://www.googleapis.com/auth/gmail.readonly",
+      "https://www.googleapis.com/auth/gmail.modify",
+      "https://www.googleapis.com/auth/gmail.send",
+    ],
+    token: {
+      accessToken: "legacy-global-access",
+      refreshToken: "legacy-global-refresh",
+      expiresAt: Math.floor(Date.now() / 1000) + 3600,
+      grantedScopes: [
+        "https://www.googleapis.com/auth/gmail.readonly",
+        "https://www.googleapis.com/auth/gmail.modify",
+        "https://www.googleapis.com/auth/gmail.send",
+      ],
+    },
+  }, env);
+
+  assert.equal((await readGmailToken(env, { userId: "firat" })).accessToken, undefined);
+
+  const status = await connectorAuthStatus("gmail", env, { principal: userPrincipal({ id: "firat" }) });
+  const adopted = await readGmailToken(env, { userId: "firat" });
+
+  assert.equal(status.state, "connected");
+  assert.equal(status.account, "firat@example.com");
+  assert.equal(adopted.accessToken, "legacy-global-access");
+  assert.equal(adopted.tenantOwnerScopeAdoptedFrom, "global");
+
+  await disconnectConnectorAuth({ provider: "gmail" }, userPrincipal({ id: "firat" }), env);
+
+  assert.equal((await readGmailToken(env)).accessToken, undefined);
+  assert.equal((await readGmailToken(env, { userId: "firat" })).accessToken, undefined);
 });
 
 test("gmail status does not treat base Google identity scopes as Gmail access", async () => {

@@ -1,5 +1,21 @@
 import { defaultAdminUser, getUser, normalizeUserId } from "./users.js";
 
+function clean(value = "") {
+  return String(value || "").trim();
+}
+
+function isAdminLikePrincipal(principal = {}) {
+  return principal?.kind === "system" || clean(principal?.role).toLowerCase() === "admin";
+}
+
+function isTenantScopedRuntime(env = process.env) {
+  return Boolean(
+    clean(env.ORKESTR_TENANT_VM_ID) ||
+      clean(env.ORKESTR_TENANT_SLICE_ID) ||
+      clean(env.ORKESTR_TENANT_BOUNDARY) === "tenant-vm",
+  );
+}
+
 export function systemPrincipal() {
   return {
     kind: "system",
@@ -56,6 +72,24 @@ export function requestPrincipal(request, env = process.env) {
   const principal = request?.orkestrPrincipal || request?.principal || null;
   if (principal?.userId) return principal;
   return adminPrincipal(defaultAdminUser(env));
+}
+
+export function tenantOwnerPrincipalForLocalAdmin(principal = null, env = process.env) {
+  if (!isTenantScopedRuntime(env) || !isAdminLikePrincipal(principal)) return principal;
+  const ownerUserId = clean(env.ORKESTR_ADMIN_USER_ID);
+  if (!ownerUserId) return principal;
+  return userPrincipal({
+    id: ownerUserId,
+    role: "user",
+    source: "tenant-owner",
+    displayName: ownerUserId,
+  });
+}
+
+export function requestPrincipalForTenantOwner(request, env = process.env) {
+  const principal = requestPrincipal(request, env);
+  if (request?.orkestrMachineAuth === "broker_proxy") return principal;
+  return tenantOwnerPrincipalForLocalAdmin(principal, env);
 }
 
 export function publicPrincipal(principal = null) {

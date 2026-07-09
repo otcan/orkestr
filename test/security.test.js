@@ -848,6 +848,16 @@ test("tenant CLI setup status uses tenant owner connector scope", async () => {
     assert.equal(gmail.details.account, "oguzcanunver@gmail.com");
     assert.notEqual(gmail.details.overlay, true);
     assert.deepEqual(gmail.details.capabilities, ["gmail_read", "gmail_actions", "gmail_send"]);
+
+    const oauth = await json(await fetch(`http://127.0.0.1:${port}/api/connectors/gmail/oauth/start`, {
+      headers: { authorization: "Bearer cli-secret" },
+    }));
+    const userOauthState = JSON.parse(await fs.readFile(path.join(firatPaths.oauth, "gmail-state.json"), "utf8"));
+    const globalOauthState = JSON.parse(await fs.readFile(path.join(home, "oauth", "gmail-state.json"), "utf8"));
+
+    assert.match(oauth.authorizeUrl, /^https:\/\/accounts\.google\.com\//);
+    assert.equal(userOauthState.userId, "firat");
+    assert.equal(globalOauthState.state, "stale-global-oauth-state");
   } finally {
     if (server) await new Promise((resolve) => server.close(resolve));
     restoreEnv(prior);
