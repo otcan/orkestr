@@ -534,7 +534,7 @@ test("broker instance app path pairs on broker and proxies the VM WebUI", async 
     assert.ok(intentStartPayload.connectId);
     const intentAuthorizeUrl = new URL(intentStartPayload.authorizeUrl);
     assert.equal(intentAuthorizeUrl.origin, "https://accounts.google.com");
-    assert.equal(intentAuthorizeUrl.searchParams.get("redirect_uri"), "https://connect.orkestr.de/oauth/gmail/callback");
+    assert.equal(intentAuthorizeUrl.searchParams.get("redirect_uri"), "https://app.orkestr.de/oauth/gmail/callback");
     assert.equal(intentDisconnectResponse.status, 200);
     assert.equal(intentDisconnectPayload.provider, "gmail");
     assert.equal(intentThreadsResponse.status, 403);

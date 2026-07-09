@@ -205,9 +205,9 @@ test("brokered google workspace oauth provisions the Gmail grant to the tenant V
     connectId: link.connectId,
     capabilities: ["gmail_read"],
   });
-  assert.equal(started.redirectUri, "https://connect.orkestr.de/oauth/gmail/callback");
+  assert.equal(started.redirectUri, "https://app.orkestr.de/oauth/gmail/callback");
   const savedState = JSON.parse(await fs.readFile(path.join(userDataPaths("firat", env).oauth, "gmail-state.json"), "utf8"));
-  assert.equal(savedState.redirectUri, "https://connect.orkestr.de/oauth/gmail/callback");
+  assert.equal(savedState.redirectUri, "https://app.orkestr.de/oauth/gmail/callback");
   const calls = [];
   const brokeredAccessToken = `ya29.${"c".repeat(90)}`;
   const result = await finishGmailOAuth(
@@ -218,6 +218,7 @@ test("brokered google workspace oauth provisions the Gmail grant to the tenant V
       if (String(url) === "https://oauth2.googleapis.com/token") {
         const body = new URLSearchParams(options.body);
         assert.equal(body.get("code"), "broker-code");
+        assert.equal(body.get("redirect_uri"), "https://app.orkestr.de/oauth/gmail/callback");
         return jsonResponse({
           access_token: brokeredAccessToken,
           refresh_token: "brokered-refresh",

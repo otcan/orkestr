@@ -113,10 +113,16 @@ function explicitGmailOAuthRedirectUri(env = process.env) {
 }
 
 function brokeredGmailOAuthRedirectUri(env = process.env, fallback = "") {
+  const explicit = explicitGmailOAuthRedirectUri(env);
+  if (explicit) return explicit;
   const base =
-    normalizePublicBaseUrl(env.ORKESTR_GOOGLE_WORKSPACE_CONNECT_PUBLIC_URL) ||
-    publicUrlOrigin(env.ORKESTR_PUBLIC_AUTH_URL || env.ORKESTR_AUTH_ENTRY_URL || env.ORKESTR_PAIRING_URL || env.ORKESTR_AUTH_URL) ||
-    normalizePublicBaseUrl(env.ORKESTR_CONNECT_PUBLIC_URL || env.ORKESTR_CONNECT_BASE_URL) ||
+    normalizePublicBaseUrl(
+      env.ORKESTR_GOOGLE_WORKSPACE_OAUTH_PUBLIC_BASE_URL ||
+        env.ORKESTR_GMAIL_OAUTH_PUBLIC_BASE_URL ||
+        env.GMAIL_OAUTH_PUBLIC_BASE_URL ||
+        env.ORKESTR_OAUTH_PUBLIC_BASE_URL ||
+        env.ORKESTR_OAUTH_CALLBACK_BASE_URL,
+    ) ||
     normalizePublicBaseUrl(
       env.ORKESTR_PUBLIC_APP_URL ||
         env.ORKESTR_PUBLIC_URL ||
@@ -125,10 +131,11 @@ function brokeredGmailOAuthRedirectUri(env = process.env, fallback = "") {
         env.ORKESTR_HTTPS_URL ||
         env.ORKESTR_TAILSCALE_HTTPS_NAME ||
         env.ORKESTR_BASE_URL,
-    );
+    ) ||
+    normalizePublicBaseUrl(env.ORKESTR_GOOGLE_WORKSPACE_CONNECT_PUBLIC_URL) ||
+    publicUrlOrigin(env.ORKESTR_PUBLIC_AUTH_URL || env.ORKESTR_AUTH_ENTRY_URL || env.ORKESTR_PAIRING_URL || env.ORKESTR_AUTH_URL) ||
+    normalizePublicBaseUrl(env.ORKESTR_CONNECT_PUBLIC_URL || env.ORKESTR_CONNECT_BASE_URL);
   if (base) return `${base}/oauth/gmail/callback`;
-  const explicit = explicitGmailOAuthRedirectUri(env);
-  if (explicit) return explicit;
   return clean(fallback);
 }
 
