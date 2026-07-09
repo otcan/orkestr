@@ -142,6 +142,27 @@ test("paused timers do not fire automatically but can run once manually", async 
   assert.equal(after[0].nextRunAt, null);
 });
 
+test("manual timer runs are deduped inside a short window", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-manual-timer-dedupe-"));
+  const env = { ORKESTR_HOME: home, ORKESTR_TIMER_MANUAL_RUN_DEDUPE_MS: "120000" };
+  const timer = await createTimer({ label: "Manual once", prompt: "Run once only", cadence: "interval", every: "1h" }, env);
+
+  const first = await runTimerNow(timer.id, env, new Date("2026-05-15T10:01:00Z"));
+  const second = await runTimerNow(timer.id, env, new Date("2026-05-15T10:01:10Z"));
+  const messages = await listAgentMessages("coding-agent", env);
+  const after = await listTimers(env);
+
+  assert.equal(first.type, "timer_manual_run");
+  assert.equal(second.type, "timer_manual_run");
+  assert.equal(second.deduped, true);
+  assert.equal(second.skipReason, "recent_manual_run");
+  assert.equal(second.messageId, first.messageId);
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].source, "timer_manual_run");
+  assert.equal(after[0].lastManualRunAt, "2026-05-15T10:01:00.000Z");
+  assert.equal(after[0].lastManualRunMessageId, first.messageId);
+});
+
 test("thread timers queue input on the target thread", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-timers-"));
   const env = { ORKESTR_HOME: home };

@@ -13,6 +13,7 @@ import { adminUserId, normalizeUserId } from "./users.js";
 const hourMs = 60 * 60 * 1000;
 const dayMs = 24 * hourMs;
 const timerDoctorGraceMs = 2 * 60 * 1000;
+const defaultManualRunDedupeMs = 2 * 60 * 1000;
 const timerCadences = new Set(["once", "daily", "weekly", "interval"]);
 
 function parseClock(time = "09:00") {
@@ -157,6 +158,27 @@ function clockFromIso(value, fallback = "09:00") {
 
 function cleanOptionalMetadata(value = "") {
   return String(value || "").trim().slice(0, 120);
+}
+
+function manualRunDedupeMs(env = process.env) {
+  const parsed = Number(env.ORKESTR_TIMER_MANUAL_RUN_DEDUPE_MS || env.ORKESTR_TIMER_MANUAL_DEDUPE_MS || "");
+  if (Number.isFinite(parsed) && parsed >= 0) return parsed;
+  return defaultManualRunDedupeMs;
+}
+
+function recentManualRun(timer, now = new Date(), env = process.env) {
+  const windowMs = manualRunDedupeMs(env);
+  if (windowMs <= 0) return null;
+  const lastMs = Date.parse(String(timer.lastManualRunAt || ""));
+  if (!Number.isFinite(lastMs)) return null;
+  const ageMs = now.getTime() - lastMs;
+  if (ageMs < 0 || ageMs >= windowMs) return null;
+  return {
+    lastManualRunAt: String(timer.lastManualRunAt || ""),
+    lastManualRunMessageId: String(timer.lastManualRunMessageId || ""),
+    ageMs,
+    windowMs,
+  };
 }
 
 function timerOwnerUserId(timer, env = process.env) {
@@ -672,8 +694,32 @@ export async function runTimerNow(id, env = process.env, now = new Date(), optio
     error.statusCode = 404;
     throw error;
   }
+  const duplicate = options.allowDuplicate === true ? null : recentManualRun(timer, now, env);
+  if (duplicate) {
+    return appendEvent(
+      {
+        type: "timer_manual_run",
+        timerId: timer.id,
+        ownerUserId: timer.ownerUserId,
+        target: timer.target,
+        messageId: duplicate.lastManualRunMessageId,
+        label: timer.label,
+        prompt: timer.prompt ? timer.prompt.slice(0, 240) : "",
+        promptFile: timer.promptFile || "",
+        deduped: true,
+        skipped: true,
+        skipReason: "recent_manual_run",
+        lastManualRunAt: duplicate.lastManualRunAt,
+        ageMs: duplicate.ageMs,
+        dedupeWindowMs: duplicate.windowMs,
+      },
+      env,
+    );
+  }
   const message = await enqueueTimerMessage(timer, "timer_manual_run", env, options.principal || null);
   timer.lastRunAt = now.toISOString();
+  timer.lastManualRunAt = now.toISOString();
+  timer.lastManualRunMessageId = message.id;
   timer.nextRunAt = timer.cadence === "once" ? null : nextRunAt(timer, now);
   if (timer.cadence === "once") timer.enabled = false;
   delete timer.lastError;
