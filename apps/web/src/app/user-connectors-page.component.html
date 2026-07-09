@@ -74,7 +74,7 @@
         <div class="desktop-head">
           <div>
             <h4>{{ connector.label || connectorLabel(connector.id) }}</h4>
-            <small>{{ connectorSummary(connector.id) }}</small>
+            <small>{{ loginOnly() && connector.id === "gmail" ? "Start Google sign-in for this instance." : connectorSummary(connector.id) }}</small>
           </div>
           <div class="desktop-pills">
             <span [class.live]="connectorTone(connector) === 'live'" [class.ready]="connectorTone(connector) === 'ready'" [class.bad]="connectorTone(connector) === 'bad'">
@@ -82,7 +82,9 @@
             </span>
           </div>
         </div>
-        <p>{{ connector.summary || connectorSummary(connector.id) }}</p>
+        @if (!loginOnly()) {
+          <p>{{ connector.summary || connectorSummary(connector.id) }}</p>
+        }
 
         @if (connector.id === "gmail" && connectorConnected(connector)) {
           <dl class="connector-details">
