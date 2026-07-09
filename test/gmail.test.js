@@ -344,6 +344,44 @@ test("gmail connector status backfills a missing account from the Gmail profile"
   assert.equal(stored.account, "connected@example.com");
 });
 
+test("gmail connector status backfills a missing account from Google userinfo", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-gmail-userinfo-status-"));
+  const env = { ORKESTR_HOME: home };
+  const accessToken = `ya29.${"u".repeat(90)}`;
+  await writeConnectorConfig("gmail", {
+    clientId: "client-id",
+    clientSecret: "client-secret",
+    redirectUri: "http://localhost/callback",
+  }, env);
+  await exchangeGmailCode("code-123", env, async () =>
+    jsonResponse({
+      access_token: accessToken,
+      refresh_token: "refresh-1",
+      expires_in: 3600,
+      scope: "openid https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile",
+      token_type: "Bearer",
+    }),
+  );
+
+  const status = await connectorAuthStatus("gmail", env, {
+    fetchImpl: async (url) => {
+      if (String(url) === "https://gmail.googleapis.com/gmail/v1/users/me/profile") {
+        return jsonResponse({ error: { message: "Request had insufficient authentication scopes." } }, false, 403);
+      }
+      if (String(url) === "https://www.googleapis.com/oauth2/v3/userinfo") {
+        return jsonResponse({ email: "Selected@Example.COM" });
+      }
+      throw new Error(`unexpected_url:${url}`);
+    },
+  });
+  const stored = await readGmailToken(env);
+
+  assert.equal(status.state, "partial");
+  assert.equal(status.connected, false);
+  assert.equal(status.account, "selected@example.com");
+  assert.equal(stored.account, "selected@example.com");
+});
+
 test("gmail oauth remembers the originating thread for callback notifications", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-gmail-callback-thread-"));
   const env = { ORKESTR_HOME: home };

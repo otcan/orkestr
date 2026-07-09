@@ -8,6 +8,7 @@ import type { Duplex } from "node:stream";
 import { randomUUID } from "node:crypto";
 import { startGmailOAuth } from "../../../packages/connectors/src/gmail.js";
 import { googleWorkspaceBrokeredConnectorSetupPath } from "../../../packages/connectors/src/google-workspace.js";
+import { googleWorkspaceDefaultGmailCapabilities } from "../../../packages/connectors/src/google-workspace-scopes.js";
 import { encryptBrokerInstanceProxyPayload, resolveBrokerConnectInstance } from "../../../packages/core/src/broker-instance-registry.js";
 import { securityCookieName, securitySessionForToken } from "../../../packages/core/src/security.js";
 import { listTenantVms } from "../../../packages/core/src/tenant-vm-registry.js";
@@ -191,7 +192,7 @@ async function handleBrokerGoogleWorkspaceStart(request: any, response: any, rou
   const account = clean(parsed.searchParams.get("account")).toLowerCase();
   const capabilities = stringArray(parsed.searchParams.getAll("capability").length
     ? parsed.searchParams.getAll("capability")
-    : parsed.searchParams.get("capabilities") || "gmail_read");
+    : parsed.searchParams.get("capabilities") || googleWorkspaceDefaultGmailCapabilities());
   const connectId = clean(intent.connectId || session.challengeId || session.id) || randomUUID();
   try {
     const threadId = clean(intent.threadId);

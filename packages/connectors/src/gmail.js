@@ -9,6 +9,7 @@ import {
 } from "../../core/src/broker-instance-registry.js";
 import {
   googleWorkspaceCapabilitiesForScopes,
+  googleWorkspaceDefaultGmailCapabilities,
   googleWorkspaceScopesForCapabilities,
   normalizeGoogleWorkspaceCapabilities,
 } from "./google-workspace-scopes.js";
@@ -16,7 +17,8 @@ import { readParentConnectorRuntimeConfig } from "./parent-connector-apps.js";
 
 const tokenUrl = "https://oauth2.googleapis.com/token";
 const gmailApiBase = "https://gmail.googleapis.com/gmail/v1/users/me";
-const defaultGmailCapabilities = ["gmail_read", "gmail_actions"];
+const googleUserInfoUrl = "https://www.googleapis.com/oauth2/v3/userinfo";
+const defaultGmailCapabilities = googleWorkspaceDefaultGmailCapabilities();
 
 function nowSeconds() {
   return Math.floor(Date.now() / 1000);
@@ -342,12 +344,40 @@ export async function getGmailProfileEmail(accessToken = "", fetchImpl = fetch, 
   return normalizeEmail(payload.emailAddress || payload.email || "");
 }
 
+export async function getGoogleUserInfoEmail(accessToken = "", fetchImpl = fetch, options = {}) {
+  const token = clean(accessToken);
+  if (!token) return "";
+  if (!options.forceProfileLookup && !looksLikeGoogleAccessToken(token)) return "";
+  const response = await timeoutFetch(fetchImpl, positiveInteger(options.timeoutMs, profileLookupTimeoutMs(options.env || process.env)))(
+    googleUserInfoUrl,
+    {
+      headers: {
+        authorization: `Bearer ${token}`,
+        accept: "application/json",
+      },
+    },
+  );
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const error = new Error(payload.error_description || payload.error?.message || payload.error || `google_userinfo_http_${response.status}`);
+    error.statusCode = 502;
+    throw error;
+  }
+  return normalizeEmail(payload.email || "");
+}
+
+async function getGoogleAccountEmail(accessToken = "", fetchImpl = fetch, options = {}) {
+  const profileEmail = await getGmailProfileEmail(accessToken, fetchImpl, options).catch(() => "");
+  if (profileEmail) return profileEmail;
+  return getGoogleUserInfoEmail(accessToken, fetchImpl, options).catch(() => "");
+}
+
 async function tokenWithResolvedAccount(token = {}, env = process.env, fetchImpl = fetch, options = {}) {
   const account = normalizeEmail(token.account || token.email || token.loginHint);
   const accessToken = token.accessToken || token.access_token;
   let resolved = (account && options.verifyAccount !== true)
     ? ""
-    : await getGmailProfileEmail(accessToken, fetchImpl, { ...options, env }).catch(() => "");
+    : await getGoogleAccountEmail(accessToken, fetchImpl, { ...options, env }).catch(() => "");
   if (account && resolved && resolved !== account) {
     const error = new Error("gmail_account_mismatch");
     error.statusCode = 403;
@@ -371,7 +401,7 @@ async function tokenWithResolvedAccount(token = {}, env = process.env, fetchImpl
     const refreshFetch = timeoutFetch(fetchImpl, profileLookupTimeoutMs(env));
     const refreshedAccessToken = await getGmailAccessToken(env, refreshFetch, options).catch(() => "");
     if (refreshedAccessToken && refreshedAccessToken !== accessToken) {
-      resolved = await getGmailProfileEmail(refreshedAccessToken, fetchImpl, { ...options, env }).catch(() => "");
+      resolved = await getGoogleAccountEmail(refreshedAccessToken, fetchImpl, { ...options, env }).catch(() => "");
       if (resolved) {
         baseToken = await readGmailToken(env, options).catch(() => token);
       }

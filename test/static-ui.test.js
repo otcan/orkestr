@@ -581,10 +581,16 @@ test("broker instance app path pairs on broker and proxies the VM WebUI", async 
     assert.equal(intentStartResponse.status, 200);
     assert.equal(intentStartPayload.provider, "google_workspace");
     assert.ok(intentStartPayload.connectId);
+    assert.deepEqual(intentStartPayload.capabilities, ["gmail_read", "gmail_actions", "gmail_send"]);
     const intentAuthorizeUrl = new URL(intentStartPayload.authorizeUrl);
+    const intentScopes = String(intentAuthorizeUrl.searchParams.get("scope") || "").split(/\s+/g);
     assert.equal(intentAuthorizeUrl.origin, "https://accounts.google.com");
     assert.equal(intentAuthorizeUrl.searchParams.get("redirect_uri"), "https://app.orkestr.de/oauth/gmail/callback");
     assert.equal(intentAuthorizeUrl.searchParams.get("login_hint"), null);
+    assert.ok(intentScopes.includes("https://www.googleapis.com/auth/gmail.readonly"));
+    assert.ok(intentScopes.includes("https://www.googleapis.com/auth/gmail.modify"));
+    assert.ok(intentScopes.includes("https://www.googleapis.com/auth/gmail.send"));
+    assert.ok(intentScopes.includes("https://www.googleapis.com/auth/gmail.compose"));
     assert.equal(intentDisconnectResponse.status, 200);
     assert.equal(intentDisconnectPayload.provider, "gmail");
     assert.equal(intentThreadsResponse.status, 403);

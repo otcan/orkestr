@@ -11,6 +11,7 @@ import {
   googleWorkspaceCapabilityDisclosure,
   googleWorkspaceCapabilityLabels,
   googleWorkspaceCapabilitiesForScopes,
+  googleWorkspaceDefaultGmailCapabilities,
   googleWorkspaceScopesForCapabilities,
   normalizeGoogleWorkspaceCapabilities,
 } from "./google-workspace-scopes.js";
@@ -358,7 +359,7 @@ export async function startGoogleWorkspaceOAuth(env = process.env, options = {})
   const connectId = clean(options.connectId || options.connect);
   const { scope, ledger, request } = await findConnectRequest(connectId, env);
   assertConnectRequestUsable(request);
-  const capabilities = normalizeGoogleWorkspaceCapabilities(options.capabilities, ["gmail_read"]);
+  const capabilities = normalizeGoogleWorkspaceCapabilities(options.capabilities, googleWorkspaceDefaultGmailCapabilities());
   const account = clean(options.account).toLowerCase();
   const started = await startGmailOAuth(env, {
     userId: scope.userId || "",

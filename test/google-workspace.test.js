@@ -158,6 +158,25 @@ test("whatsapp google connect link starts user-scoped oauth with selected scopes
   assert.equal(scopes.includes("https://www.googleapis.com/auth/drive.file"), false);
 });
 
+test("google workspace oauth defaults to full Gmail access", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-google-workspace-default-gmail-"));
+  const env = await configureGoogle(home);
+  const alice = userPrincipal({ id: "alice" });
+  const link = await createGoogleWorkspaceConnectLink({ principal: alice, thread: { id: "thread-1" } }, env);
+
+  const started = await startGoogleWorkspaceOAuth(env, { connectId: link.connectId });
+  const statePath = path.join(userDataPaths("alice", env).oauth, "gmail-state.json");
+  const savedState = JSON.parse(await fs.readFile(statePath, "utf8"));
+  const scopes = new URL(started.authorizeUrl).searchParams.get("scope").split(/\s+/g);
+
+  assert.deepEqual(started.capabilities, ["gmail_read", "gmail_actions", "gmail_send"]);
+  assert.deepEqual(savedState.requestedCapabilities, ["gmail_read", "gmail_actions", "gmail_send"]);
+  assert.ok(scopes.includes("https://www.googleapis.com/auth/gmail.readonly"));
+  assert.ok(scopes.includes("https://www.googleapis.com/auth/gmail.modify"));
+  assert.ok(scopes.includes("https://www.googleapis.com/auth/gmail.send"));
+  assert.ok(scopes.includes("https://www.googleapis.com/auth/gmail.compose"));
+});
+
 test("brokered google workspace oauth provisions the Gmail grant to the tenant VM", async () => {
   const parentHome = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-google-workspace-broker-parent-"));
   const tenantHome = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-google-workspace-broker-tenant-"));

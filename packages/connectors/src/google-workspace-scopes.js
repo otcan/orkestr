@@ -46,6 +46,7 @@ const capabilityDefinitions = [
   },
 ];
 
+const defaultGmailCapabilities = ["gmail_read", "gmail_actions", "gmail_send"];
 const definitionById = new Map(capabilityDefinitions.map((definition) => [definition.id, definition]));
 
 function clean(value) {
@@ -72,6 +73,10 @@ export function googleWorkspaceCapabilityDefinitions() {
     ...definition,
     scopes: [...definition.scopes],
   }));
+}
+
+export function googleWorkspaceDefaultGmailCapabilities() {
+  return [...defaultGmailCapabilities];
 }
 
 export function normalizeGoogleWorkspaceCapabilities(input = [], fallback = ["gmail_read"]) {
