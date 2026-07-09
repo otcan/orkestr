@@ -453,6 +453,26 @@ test("broker instance app path pairs on broker and proxies the VM WebUI", async 
   const server = await startServer({ port: 0, host: "127.0.0.1" });
   const { port } = server.address();
   try {
+    const brokeredConnect = await createGoogleWorkspaceConnectLink({
+      principal: userPrincipal({ id: "firat", displayName: "Firat" }),
+      thread: {
+        id: "firat-thread",
+        name: "Firat Jobs",
+        binding: { chatId: "firat-chat", outboundAccountId: "sender" },
+      },
+      brokerInstanceId: brokerRegistration.instanceId,
+      brokerTenantUserId: "firat",
+      brokerTenantThreadId: "firat-thread",
+      brokerTenantThreadName: "Firat Jobs",
+      brokerTenantChatId: "firat-chat",
+      brokerTenantAccountId: "sender",
+      brokerServerRequest: true,
+    }, process.env);
+    const brokeredConnectUrl = new URL(brokeredConnect.connectLink);
+    const topLevelBrokeredConnect = await fetch(
+      `http://127.0.0.1:${port}${brokeredConnectUrl.pathname}${brokeredConnectUrl.search}`,
+      { redirect: "manual" },
+    );
     const noSlash = await fetch(`http://127.0.0.1:${port}/i/${brokerRegistration.instanceId}/app`, { redirect: "manual" });
     const unpaired = await fetch(`http://127.0.0.1:${port}/i/${brokerRegistration.instanceId}/app/`, { redirect: "manual" });
     const unpairedLegacyGmailSetup = await fetch(`http://127.0.0.1:${port}/i/${brokerRegistration.instanceId}/app/setup/gmail`, { redirect: "manual" });
@@ -514,6 +534,14 @@ test("broker instance app path pairs on broker and proxies the VM WebUI", async 
     const parentAppResponse = await fetch(`http://127.0.0.1:${port}/app`, { headers: { cookie: authIntentCookie }, redirect: "manual" });
     const parentAppPayload = await parentAppResponse.json();
 
+    assert.equal(topLevelBrokeredConnect.status, 302);
+    {
+      const brokeredRedirect = new URL(topLevelBrokeredConnect.headers.get("location") || "", "http://localhost");
+      assert.equal(brokeredRedirect.pathname, `/i/${brokerRegistration.instanceId}/app/connectors/gmail`);
+      assert.equal(brokeredRedirect.searchParams.get("connect"), brokeredConnect.connectId);
+      assert.equal(brokeredRedirect.searchParams.get("user_id"), "firat");
+      assert.equal(brokeredRedirect.searchParams.get("thread"), "Firat Jobs");
+    }
     assert.equal(noSlash.status, 302);
     assert.equal(noSlash.headers.get("location"), `/i/${brokerRegistration.instanceId}/app/`);
     assert.equal(unpaired.status, 302);

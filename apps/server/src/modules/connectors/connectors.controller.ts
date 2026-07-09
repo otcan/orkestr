@@ -47,6 +47,7 @@ import { getTenantVm } from "../../../../../packages/core/src/tenant-vm-registry
 import { requestPrincipal } from "../../../../../packages/core/src/principal.js";
 import { isAdminPrincipal } from "../../../../../packages/core/src/policy.js";
 import { createPairingChallenge, securityStatus } from "../../../../../packages/core/src/security.js";
+import { resolveBrokerConnectInstance } from "../../../../../packages/core/src/broker-instance-registry.js";
 import { normalizeUserId } from "../../../../../packages/core/src/users.js";
 import { publicRoutingFailurePayload } from "../../../../../packages/core/src/routing-failures.js";
 import {
@@ -109,6 +110,12 @@ function googleWorkspaceBrokerInstanceId(connectRequest: any): string {
 
 function googleWorkspaceBrokeredConnectRequest(connectRequest: any): boolean {
   return Boolean(googleWorkspaceBrokerInstanceId(connectRequest));
+}
+
+async function googleWorkspaceBrokerInstanceReachable(connectRequest: any): Promise<boolean> {
+  const instanceId = googleWorkspaceBrokerInstanceId(connectRequest);
+  if (!instanceId) return false;
+  return Boolean(await resolveBrokerConnectInstance(instanceId, process.env).catch(() => null));
 }
 
 function googleWorkspaceAuthIntentAction(connectRequest: any): string {
@@ -1068,6 +1075,23 @@ export class GoogleWorkspaceConnectController {
       payload = { ok: false, state: "error", error: String((error as Error)?.message || "google_workspace_connect_failed") };
     }
     const ok = payload?.ok === true;
+    if (
+      ok &&
+      googleWorkspaceConnectRequestExists(payload) &&
+      googleWorkspaceBrokeredConnectRequest(payload.request) &&
+      await googleWorkspaceBrokerInstanceReachable(payload.request) &&
+      !googleWorkspaceLinkPreviewRequest(request)
+    ) {
+      const connectorHref = googleWorkspaceBrokeredConnectorSetupHref(payload.request, process.env, "gmail");
+      if (connectorHref) {
+        return response
+          .status(302)
+          .header("cache-control", "no-store")
+          .header("location", connectorHref)
+          .type("text/plain; charset=utf-8")
+          .send("Redirecting to Orkestr instance connector page.");
+      }
+    }
     if (googleWorkspaceConnectRequestExists(payload) && !(await googleWorkspaceConnectAccess(request, payload, response))) return;
     return response
       .status(ok ? 200 : Number((payload as any)?.statusCode || 400) || 400)
