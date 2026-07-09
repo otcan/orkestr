@@ -505,6 +505,7 @@ test("broker instance app path pairs on broker and proxies the VM WebUI", async 
         action: "connect",
         instanceId: brokerRegistration.instanceId,
         userId: "firat",
+        account: "old-hint@example.com",
       },
     });
     await approvePairingChallenge(authIntentChallenge.challengeId, { approvedBy: "node:test", env: process.env });
@@ -583,6 +584,7 @@ test("broker instance app path pairs on broker and proxies the VM WebUI", async 
     const intentAuthorizeUrl = new URL(intentStartPayload.authorizeUrl);
     assert.equal(intentAuthorizeUrl.origin, "https://accounts.google.com");
     assert.equal(intentAuthorizeUrl.searchParams.get("redirect_uri"), "https://app.orkestr.de/oauth/gmail/callback");
+    assert.equal(intentAuthorizeUrl.searchParams.get("login_hint"), null);
     assert.equal(intentDisconnectResponse.status, 200);
     assert.equal(intentDisconnectPayload.provider, "gmail");
     assert.equal(intentThreadsResponse.status, 403);

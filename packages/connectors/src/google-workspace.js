@@ -370,6 +370,7 @@ export async function startGoogleWorkspaceOAuth(env = process.env, options = {})
     connectId,
     capabilities,
     scopes: googleWorkspaceScopesForCapabilities(capabilities),
+    ignoreConfiguredAccount: true,
     brokerInstanceId: request.brokerInstanceId,
     brokerTenantVmId: request.brokerTenantVmId,
     brokerTenantUserId: request.brokerTenantUserId,

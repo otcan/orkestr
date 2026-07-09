@@ -188,7 +188,7 @@ async function handleBrokerGoogleWorkspaceStart(request: any, response: any, rou
   const intent = session.authIntent && typeof session.authIntent === "object" ? session.authIntent : {};
   const owner = await ownerUserForBrokerInstance(route.instanceId);
   const userId = clean(owner.userId || intent.userId || session.userId);
-  const account = clean(parsed.searchParams.get("account") || intent.account).toLowerCase();
+  const account = clean(parsed.searchParams.get("account")).toLowerCase();
   const capabilities = stringArray(parsed.searchParams.getAll("capability").length
     ? parsed.searchParams.getAll("capability")
     : parsed.searchParams.get("capabilities") || "gmail_read");
@@ -202,6 +202,7 @@ async function handleBrokerGoogleWorkspaceStart(request: any, response: any, rou
       provider: "google_workspace",
       capabilities,
       account,
+      ignoreConfiguredAccount: true,
       connectId,
       threadId,
       chatId,

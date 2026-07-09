@@ -409,7 +409,7 @@ export async function startGmailOAuth(env = process.env, options = {}) {
   const scope = await connectorScopePaths(env, options);
   const tenantVmId = tenantVmIdForOAuth(env, options);
   const state = newOAuthState(env, options);
-  const account = normalizeEmail(options.account || config.account || "");
+  const account = normalizeEmail(options.account || (options.ignoreConfiguredAccount === true ? "" : config.account) || "");
   const capabilities = normalizeGoogleWorkspaceCapabilities(options.capabilities || options.requestedCapabilities, defaultGmailCapabilities);
   const requestedScopes = uniqueList(options.scopes || options.requestedScopes || googleWorkspaceScopesForCapabilities(capabilities));
   const provider = clean(options.provider || "gmail");
