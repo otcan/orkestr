@@ -7,6 +7,7 @@ import type { IncomingMessage, Server } from "node:http";
 import type { Duplex } from "node:stream";
 import { randomUUID } from "node:crypto";
 import { startGmailOAuth } from "../../../packages/connectors/src/gmail.js";
+import { googleWorkspaceBrokeredConnectorSetupPath } from "../../../packages/connectors/src/google-workspace.js";
 import { encryptBrokerInstanceProxyPayload, resolveBrokerConnectInstance } from "../../../packages/core/src/broker-instance-registry.js";
 import { securityCookieName, securitySessionForToken } from "../../../packages/core/src/security.js";
 import { listTenantVms } from "../../../packages/core/src/tenant-vm-registry.js";
@@ -116,12 +117,26 @@ function brokerAppApiRequest(route: BrokerAppRoute): boolean {
   return route.upstreamPath === "/api" || route.upstreamPath.startsWith("/api/") || route.upstreamPath.startsWith("/api?");
 }
 
+function canonicalBrokerGoogleWorkspaceConnectorPath(route: BrokerAppRoute): string {
+  const parsed = new URL(route.upstreamPath || "/", "http://tenant.local");
+  if (parsed.pathname !== "/connect/google") return "";
+  const connectId = clean(parsed.searchParams.get("connect") || parsed.searchParams.get("connect_id"));
+  if (!connectId) return "";
+  return googleWorkspaceBrokeredConnectorSetupPath({
+    instanceId: route.instanceId,
+    connectId,
+    brokerTenantUserId: parsed.searchParams.get("user_id") || parsed.searchParams.get("user") || "",
+    brokerTenantThreadName: parsed.searchParams.get("thread") || "",
+  }, "gmail");
+}
+
 function pairingRedirectUrl(request: any, route: BrokerAppRoute, requestUrl = ""): string {
+  const canonicalPath = canonicalBrokerGoogleWorkspaceConnectorPath(route);
   const target = new URL("/setup/pairing", "http://localhost");
   target.searchParams.set("instanceId", route.instanceId);
   target.searchParams.set("return", instanceSetupReturnPath(
     route.instanceId,
-    String(requestUrl || request.originalUrl || request.url || route.prefixPath),
+    canonicalPath || String(requestUrl || request.originalUrl || request.url || route.prefixPath),
   ));
   return `${target.pathname}${target.search}`;
 }
@@ -306,6 +321,11 @@ async function proxyBrokerAppHttp(request: any, response: any): Promise<void> {
   if (route.exactWithoutSlash) {
     const parsed = new URL(requestUrl, "http://orkestr.local");
     redirect(response, `${route.prefixPath}${parsed.search}`, "Redirecting to Orkestr VM WebUI.");
+    return;
+  }
+  const canonicalGoogleConnectorPath = canonicalBrokerGoogleWorkspaceConnectorPath(route);
+  if (canonicalGoogleConnectorPath) {
+    redirect(response, canonicalGoogleConnectorPath, "Redirecting to the Orkestr instance connector page.");
     return;
   }
   if (!requestHasInstanceSession(request, route.instanceId)) {

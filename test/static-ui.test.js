@@ -456,6 +456,10 @@ test("broker instance app path pairs on broker and proxies the VM WebUI", async 
     const noSlash = await fetch(`http://127.0.0.1:${port}/i/${brokerRegistration.instanceId}/app`, { redirect: "manual" });
     const unpaired = await fetch(`http://127.0.0.1:${port}/i/${brokerRegistration.instanceId}/app/`, { redirect: "manual" });
     const unpairedLegacyGmailSetup = await fetch(`http://127.0.0.1:${port}/i/${brokerRegistration.instanceId}/app/setup/gmail`, { redirect: "manual" });
+    const unpairedLegacyGoogleConnect = await fetch(
+      `http://127.0.0.1:${port}/i/${brokerRegistration.instanceId}/app/connect/google?connect=legacy-connect-id&user_id=firat&thread=Firat%20Jobs`,
+      { redirect: "manual" },
+    );
     const unpairedApi = await fetch(`http://127.0.0.1:${port}/i/${brokerRegistration.instanceId}/app/api/threads`, { redirect: "manual" });
     const challenge = await createPairingChallenge({ env: process.env, instanceId: brokerRegistration.instanceId });
     await approvePairingChallenge(challenge.challengeId, { approvedBy: "node:test", env: process.env });
@@ -515,6 +519,21 @@ test("broker instance app path pairs on broker and proxies the VM WebUI", async 
     assert.equal(unpaired.status, 302);
     assert.equal(unpaired.headers.get("location"), `/setup/pairing?instanceId=${brokerRegistration.instanceId}&return=%2Fi%2F${brokerRegistration.instanceId}%2Fapp%2F`);
     assertInstancePairingRedirect(unpairedLegacyGmailSetup, { instanceId: brokerRegistration.instanceId, connector: "gmail" });
+    assert.equal(unpairedLegacyGoogleConnect.status, 302);
+    {
+      const legacyRedirect = new URL(unpairedLegacyGoogleConnect.headers.get("location") || "", "http://localhost");
+      assert.equal(legacyRedirect.pathname, `/i/${brokerRegistration.instanceId}/app/connectors/gmail`);
+      assert.equal(legacyRedirect.searchParams.get("mcp"), "tools/call");
+      assert.equal(legacyRedirect.searchParams.get("tool"), "orkestr_auth");
+      assert.equal(legacyRedirect.searchParams.get("service"), "gmail");
+      assert.equal(legacyRedirect.searchParams.get("provider"), "google_workspace");
+      assert.equal(legacyRedirect.searchParams.get("action"), "connect");
+      assert.equal(legacyRedirect.searchParams.get("instance_id"), brokerRegistration.instanceId);
+      assert.equal(legacyRedirect.searchParams.get("user_id"), "firat");
+      assert.equal(legacyRedirect.searchParams.get("thread"), "Firat Jobs");
+      assert.equal(legacyRedirect.searchParams.get("connect"), "legacy-connect-id");
+      assert.equal(legacyRedirect.searchParams.get("auto"), "0");
+    }
     assert.equal(unpairedApi.status, 401);
     assert.equal(await unpairedApi.text(), "broker_instance_pairing_required");
     assert.equal(htmlResponse.status, 200);
