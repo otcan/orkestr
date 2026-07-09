@@ -4,6 +4,7 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import vm from "node:vm";
 import { startServer } from "../apps/server/src/server.js";
 import { approvePairingChallenge, createPairingChallenge, pairBrowser, sessionCookieHeader } from "../packages/core/src/security.js";
 import { userPrincipal } from "../packages/core/src/principal.js";
@@ -20,6 +21,45 @@ import {
 async function read(response) {
   const text = await response.text();
   return text ? JSON.parse(text) : {};
+}
+
+async function desktopShareApiCallsFromHtml(html, pathname) {
+  const script = /<script>([\s\S]*?)<\/script>/.exec(html)?.[1] || "";
+  assert.ok(script);
+  const calls = [];
+  const nodes = new Map();
+  const element = (id) => {
+    if (!nodes.has(id)) {
+      nodes.set(id, {
+        textContent: "",
+        className: "",
+        href: "#",
+        hidden: false,
+        addEventListener() {},
+      });
+    }
+    return nodes.get(id);
+  };
+  vm.runInNewContext(script, {
+    location: { pathname, search: "?key=secret", origin: "http://127.0.0.1" },
+    document: { getElementById: element },
+    navigator: { clipboard: { writeText: async () => null } },
+    fetch: async (url) => {
+      calls.push(String(url));
+      return {
+        ok: true,
+        json: async () => ({ ok: true, approved: false, attempt: { challenge: "desk-test" } }),
+      };
+    },
+    setTimeout() {},
+    URL,
+    URLSearchParams,
+    encodeURIComponent,
+    decodeURIComponent,
+    Error,
+  }, { timeout: 1000 });
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  return calls;
 }
 
 function listen(server) {
@@ -330,6 +370,22 @@ test("tenant VM desktop-share proxy rewrites share and desktop URLs through the 
     const authIntentShareHtml = await authIntentSharePage.text();
     assert.equal(authIntentSharePage.status, 200);
     assert.match(authIntentShareHtml, /Orkestr Desktop Access/);
+    const directShareCalls = await desktopShareApiCallsFromHtml(
+      authIntentShareHtml,
+      "/desktop-share/tvm/alice-tenant/d-abc123/share-1",
+    );
+    assert.equal(
+      directShareCalls[0],
+      "/api/tenant-vms/alice-tenant/desktop-shares/share-1/open?key=secret&subdomain=d-abc123",
+    );
+    const prefixedShareCalls = await desktopShareApiCallsFromHtml(
+      authIntentShareHtml,
+      "/i/instance-firat/app/desktop-share/tvm/alice-tenant/d-abc123/share-1",
+    );
+    assert.equal(
+      prefixedShareCalls[0],
+      "/api/tenant-vms/alice-tenant/desktop-shares/share-1/open?key=secret&subdomain=d-abc123",
+    );
 
     const open = await fetch(`${baseUrl}/api/tenant-vms/alice-tenant/desktop-shares/share-1/open?key=secret&subdomain=d-abc123`);
     const openPayload = await read(open);

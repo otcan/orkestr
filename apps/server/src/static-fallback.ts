@@ -245,10 +245,12 @@ function serveDesktopSharePage(response: any) {
   </main>
   <script>
     const parts = location.pathname.split('/').filter(Boolean);
-    const tenantShare = parts[0] === 'desktop-share' && parts[1] === 'tvm';
-    const tenantVmId = tenantShare ? decodeURIComponent(parts[2] || '') : '';
-    const subdomain = tenantShare ? decodeURIComponent(parts[3] || '') : (parts.length > 2 ? parts[1] : '');
-    const shareId = tenantShare ? decodeURIComponent(parts[4] || '') : (parts[parts.length - 1] || '');
+    const shareIndex = parts.indexOf('desktop-share');
+    const shareParts = shareIndex >= 0 ? parts.slice(shareIndex) : parts;
+    const tenantShare = shareParts[0] === 'desktop-share' && shareParts[1] === 'tvm';
+    const tenantVmId = tenantShare ? decodeURIComponent(shareParts[2] || '') : '';
+    const subdomain = tenantShare ? decodeURIComponent(shareParts[3] || '') : (shareParts.length > 2 ? shareParts[1] : '');
+    const shareId = tenantShare ? decodeURIComponent(shareParts[4] || '') : (shareParts[shareParts.length - 1] || '');
     const key = new URLSearchParams(location.search).get('key') || '';
     const challenge = document.getElementById('challenge');
     const statusNode = document.getElementById('status');
