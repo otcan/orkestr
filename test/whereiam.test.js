@@ -25,6 +25,7 @@ test("runtime AGENTS.md points agents to dynamic whereiam discovery", async () =
   assert.match(body, /orkestr whereiam --json/);
   assert.match(body, /orkestr api-session message/);
   assert.match(body, /orkestr settings --json/);
+  assert.match(body, /whereiam\.desktops/);
   assert.match(body, /Orkestr is the host application around this Codex session/);
   assert.match(body, /orkestr security approve <challenge-id>/);
   assert.match(body, /orkestr desktop share \[slug\]/);
@@ -165,6 +166,46 @@ test("whereAmI exposes public tenant setup URL without wildcard bind API base", 
   assert.equal(payload.publicUrls.appUrl, "https://connect.example.test/i/broker-firat-001/app");
   assert.equal(payload.publicUrls.connectBaseUrl, "https://connect.example.test");
   assert.doesNotMatch(JSON.stringify(payload.publicUrls), /0\.0\.0\.0|127\.0\.0\.1|localhost|10\./);
+});
+
+test("whereAmI exposes configured managed desktop catalog with local control context", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-whereiam-desktop-catalog-"));
+  const workspace = path.join(home, "users", "firat", "workspaces", "firat-jobs");
+  await fs.mkdir(workspace, { recursive: true });
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_ADMIN_USER_ID: "firat",
+    ORKESTR_BROWSER_DESKTOP_MODE: "profiles",
+    ORKESTR_BROWSER_LAUNCH_DISABLED: "1",
+    ORKESTR_BROWSER_VISIBLE_SLUGS: "desktop",
+    ORKESTR_DESKTOP_CATALOG_JSON: JSON.stringify([
+      {
+        slug: "desktop",
+        label: "Firat Jobs StepStone",
+        purpose: "Logged-in browser for Firat job applications.",
+        cdpUrl: "http://127.0.0.1:9222",
+        workspacePath: "/opt/orkestr/workspace/firat-jobs",
+      },
+    ]),
+  };
+  await createThread({
+    id: "firat-jobs",
+    ownerUserId: "firat",
+    name: "Firat Jobs",
+    cwd: workspace,
+    workspace,
+  }, env);
+
+  const payload = await whereAmI({ cwd: workspace }, env);
+  const desktop = payload.desktops.desktops.find((item) => item.slug === "desktop");
+
+  assert.equal(payload.ok, true);
+  assert.equal(payload.desktops.defaults.default, "desktop");
+  assert.equal(payload.desktops.known[0].label, "Firat Jobs StepStone");
+  assert.equal(desktop.label, "Firat Jobs StepStone");
+  assert.equal(desktop.localControl.cdpUrl, "http://127.0.0.1:9222/");
+  assert.equal(desktop.workspacePath, "/opt/orkestr/workspace/firat-jobs");
+  assert.ok(desktop.availableActions.includes("observe"));
 });
 
 test("whereAmI exposes server-owned contained user runtime policy metadata", async () => {
@@ -361,11 +402,15 @@ test("GET /api/whereiam resolves thread context from cwd query", async () => {
   await fs.mkdir(nested, { recursive: true });
   const priorEnv = {
     ORKESTR_HOME: process.env.ORKESTR_HOME,
+    ORKESTR_AUTH_REQUIRED: process.env.ORKESTR_AUTH_REQUIRED,
+    ORKESTR_UNSAFE_ALLOW_PUBLIC_UNAUTHENTICATED: process.env.ORKESTR_UNSAFE_ALLOW_PUBLIC_UNAUTHENTICATED,
     ORKESTR_RECOVER_RUNNING_ON_START: process.env.ORKESTR_RECOVER_RUNNING_ON_START,
     ORKESTR_STARTUP_RECOVERY: process.env.ORKESTR_STARTUP_RECOVERY,
     ORKESTR_WHATSAPP_AUTOSTART: process.env.ORKESTR_WHATSAPP_AUTOSTART,
   };
   process.env.ORKESTR_HOME = home;
+  process.env.ORKESTR_AUTH_REQUIRED = "0";
+  process.env.ORKESTR_UNSAFE_ALLOW_PUBLIC_UNAUTHENTICATED = "1";
   process.env.ORKESTR_RECOVER_RUNNING_ON_START = "0";
   process.env.ORKESTR_STARTUP_RECOVERY = "0";
   process.env.ORKESTR_WHATSAPP_AUTOSTART = "0";

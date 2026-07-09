@@ -5,6 +5,7 @@ import { promisify } from "node:util";
 import { dataPaths, ensureDataDirs, userDataPaths } from "../../storage/src/paths.js";
 import { appendEvent, readJson, writeJson } from "../../storage/src/store.js";
 import { isAdminPrincipal } from "../../core/src/policy.js";
+import { desktopCatalogFromEnv } from "../../core/src/runtime-settings.js";
 import { normalizeUserId } from "../../core/src/users.js";
 import { attachDesktopStateToSessions } from "./desktop-leases.js";
 import { isBrowserctlUnavailableError, listManagedDesktopSessions, managedDesktopAction, managedDesktopOpenUrl } from "./browserctl.js";
@@ -124,51 +125,38 @@ export async function listBrowserSessions(env = process.env, options = {}) {
   return { ok: true, source: "profiles", sessions };
 }
 
-const browserCatalog = [
-  {
-    slug: "desktop",
-    label: "Desktop",
-    purpose: "General-purpose local browser desktop for agent-driven web tasks.",
-    startUrl: "about:blank",
-  },
-  {
-    slug: "linkedin",
-    label: "LinkedIn",
-    purpose: "Log in to LinkedIn with an owned local browser profile.",
-    startUrl: "https://www.linkedin.com/",
-  },
-  {
-    slug: "gmail",
-    label: "Gmail",
-    purpose: "Optional Gmail browser profile for accounts that need browser access.",
-    startUrl: "https://mail.google.com/",
-  },
-];
-
-function configuredVisibleBrowserSlugs(env = process.env) {
-  const raw = String(env.ORKESTR_BROWSER_VISIBLE_SLUGS || env.ORKESTR_OPS_DESKTOP_SLUGS || "").trim();
-  if (!raw) return null;
-  const slugs = raw
-    .split(/[\s,]+/g)
-    .map((slug) => slug.trim())
-    .filter(Boolean);
-  return slugs.length ? new Set(slugs) : null;
-}
-
 export function filterVisibleBrowserSessions(sessions = [], env = process.env) {
-  const visible = configuredVisibleBrowserSlugs(env);
-  if (!visible) return sessions;
+  const configuredVisible = String(env.ORKESTR_BROWSER_VISIBLE_SLUGS || env.ORKESTR_OPS_DESKTOP_SLUGS || "").trim();
+  if (!configuredVisible) return sessions;
+  const visible = new Set(visibleBrowserCatalog(env).map((browser) => browser.slug));
   return sessions.filter((session) => visible.has(String(session?.slug || session?.id || "").trim()));
 }
 
 function visibleBrowserCatalog(env = process.env) {
-  const visible = configuredVisibleBrowserSlugs(env);
-  return visible ? browserCatalog.filter((browser) => visible.has(browser.slug)) : browserCatalog;
+  return desktopCatalogFromEnv(env)
+    .filter((browser) => browser.enabled !== false)
+    .map((browser) => ({
+      slug: browser.slug,
+      label: browser.label,
+      purpose: browser.purpose || "",
+      startUrl: browser.startUrl || "about:blank",
+    }));
 }
 
-function browserBySlug(slug) {
+function fullBrowserCatalog(env = process.env) {
+  return desktopCatalogFromEnv(env, {}, { includeHidden: true })
+    .filter((browser) => browser.enabled !== false)
+    .map((browser) => ({
+      slug: browser.slug,
+      label: browser.label,
+      purpose: browser.purpose || "",
+      startUrl: browser.startUrl || "about:blank",
+    }));
+}
+
+function browserBySlug(slug, env = process.env) {
   const id = String(slug || "").trim();
-  const browser = browserCatalog.find((item) => item.slug === id);
+  const browser = fullBrowserCatalog(env).find((item) => item.slug === id);
   if (!browser) {
     const error = new Error("browser_not_found");
     error.statusCode = 404;
@@ -234,14 +222,14 @@ function profileDir(slug, env = process.env, options = {}) {
   return `${browserScope(options, env).root}/${slug}`;
 }
 
-function browserIndex(slug) {
-  return Math.max(0, browserCatalog.findIndex((browser) => browser.slug === slug));
+function browserIndex(slug, env = process.env) {
+  return Math.max(0, fullBrowserCatalog(env).findIndex((browser) => browser.slug === slug));
 }
 
 function debugPortForSlug(slug, env = process.env, options = {}) {
   const base = Number(env.ORKESTR_BROWSER_DEBUG_PORT_BASE || 9222);
   const safeBase = Number.isFinite(base) && base > 0 ? base : 9222;
-  return safeBase + browserScope(options, env).portOffset + browserIndex(slug);
+  return safeBase + browserScope(options, env).portOffset + browserIndex(slug, env);
 }
 
 function isPidRunning(pid) {
@@ -375,7 +363,7 @@ export async function prepareVirtualBrowser(slug, env = process.env, options = {
       if (!shouldFallbackAfterBrowserctlError(error, env)) throw error;
     }
   }
-  const browser = browserBySlug(slug);
+  const browser = browserBySlug(slug, env);
   await ensureDataDirs(env);
   const scope = browserScope(options, env);
   const dir = profileDir(browser.slug, env, options);
@@ -410,7 +398,7 @@ export async function openVirtualBrowser(slug, env = process.env, targetUrl = ""
       if (!shouldFallbackAfterBrowserctlError(error, env)) throw error;
     }
   }
-  const browser = browserBySlug(slug);
+  const browser = browserBySlug(slug, env);
   const prepared = await prepareVirtualBrowser(slug, env, options);
   const startUrl = String(targetUrl || browser.startUrl || "about:blank").trim();
   const launchDisabled = String(env.ORKESTR_BROWSER_LAUNCH_DISABLED || "").trim() === "1";
@@ -498,7 +486,7 @@ export async function stopVirtualBrowser(slug, env = process.env, options = {}) 
       if (!shouldFallbackAfterBrowserctlError(error, env)) throw error;
     }
   }
-  const browser = browserBySlug(slug);
+  const browser = browserBySlug(slug, env);
   const dir = profileDir(browser.slug, env, options);
   const configured = await pathExists(dir);
   const metadata = await readBrowserMetadata(browser.slug, env, options);
@@ -561,7 +549,7 @@ export async function cleanupVirtualBrowser(slug, env = process.env, options = {
       if (!shouldFallbackAfterBrowserctlError(error, env)) throw error;
     }
   }
-  const browser = browserBySlug(slug);
+  const browser = browserBySlug(slug, env);
   const current = await publicBrowserRecord(browser, env, options);
   if (current.root_pid) {
     const error = new Error("browser_running");

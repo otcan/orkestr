@@ -82,6 +82,10 @@ Use dynamic discovery for live Orkestr context:
 - Runtime settings are included in \`orkestr whereiam --json\` and can also be
   inspected with \`orkestr settings --json\`. Use those settings for managed
   desktop slugs, Gmail/Outlook auth routes, and permission-routing behavior.
+- Managed desktop context is included in \`whereiam.desktops\`. Use
+  \`whereiam.desktops.desktops\` for the configured desktop catalog merged with
+  live session state, and distinguish local-only control endpoints from
+  user-facing share/app URLs.
 - \`whereiam\` includes the current Orkestr user and tenancy owner. Treat that
   owner as the only user whose files, timers, connectors, desktops, and chat
   messages this runtime may operate on unless an Orkestr API explicitly returns

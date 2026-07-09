@@ -153,6 +153,16 @@ function publicOauthRedirectRuntimeEnv(env = process.env) {
   return entries;
 }
 
+function desktopCatalogRuntimeEnv(profile = {}, input = {}) {
+  const desks = Array.isArray(profile.desks) ? profile.desks.filter((desk) => desk?.enabled !== false && clean(desk?.slug)) : [];
+  if (!desks.length) return {};
+  return {
+    ORKESTR_DESKTOP_CATALOG_JSON: JSON.stringify(desks),
+    ORKESTR_BROWSER_VISIBLE_SLUGS: desks.map((desk) => clean(desk.slug)).filter(Boolean).join(","),
+    ORKESTR_INSTANCE_DESKTOPS_PROVISIONED: input.instanceDesktopsProvisioned ?? "1",
+  };
+}
+
 function runtimeEnv(input = {}, env = process.env) {
   const source = input.runtimeEnv && typeof input.runtimeEnv === "object" && !Array.isArray(input.runtimeEnv) ? input.runtimeEnv : {};
   const controlPlane = normalizeTenantControlPlane(input.controlPlane || input.sharedControlPlane || {}, env, {
@@ -211,7 +221,11 @@ function runtimeEnv(input = {}, env = process.env) {
     ORKESTR_DEMO_ENTRY_BASE_URL: demoEnabled ? input.entryBaseUrl || input.publicEntryBaseUrl || env.ORKESTR_DEMO_ENTRY_BASE_URL || env.ORKESTR_PUBLIC_SITE_URL || env.ORKESTR_PRIMARY_PUBLIC_URL : "",
     ORKESTR_CONNECT_PUBLIC_BASE_URL: demoEnabled ? input.connectPublicBaseUrl || input.publicConnectBaseUrl || env.ORKESTR_CONNECT_PUBLIC_BASE_URL : controlPlane.connectPublicBaseUrl || publicUrls.connectBaseUrl,
     ORKESTR_DEMO_BROKER_REGISTRATION_TOKEN: demoEnabled ? input.brokerRegistrationToken || env.ORKESTR_DEMO_BROKER_REGISTRATION_TOKEN || env.ORKESTR_BROKER_REGISTRATION_TOKEN : "",
-    ORKESTR_INSTANCE_DESKTOPS_PROVISIONED: demoEnabled ? input.instanceDesktopsProvisioned ?? env.ORKESTR_INSTANCE_DESKTOPS_PROVISIONED ?? "0" : "",
+    ORKESTR_INSTANCE_DESKTOPS_PROVISIONED: tenantVmRuntime
+      ? input.instanceDesktopsProvisioned ?? source.ORKESTR_INSTANCE_DESKTOPS_PROVISIONED ?? "1"
+      : demoEnabled
+        ? input.instanceDesktopsProvisioned ?? env.ORKESTR_INSTANCE_DESKTOPS_PROVISIONED ?? "0"
+        : "",
     ORKESTR_BROKER_INSTANCE_STORE: demoEnabled ? input.brokerInstanceStore || env.ORKESTR_BROKER_INSTANCE_STORE || "sqlite" : "",
     ORKESTR_DEPLOY_CHANNEL: demoEnabled ? input.deployChannel || env.ORKESTR_DEPLOY_CHANNEL : "",
     ORKESTR_DEPLOY_TAGS_ONLY: demoEnabled ? input.deployTagsOnly ?? env.ORKESTR_DEPLOY_TAGS_ONLY : "",
@@ -347,6 +361,14 @@ export function buildTenantVmProvisioningPlan(vm, input = {}, env = process.env)
       ...inputLabels,
     },
   };
+  const bootstrapProfile = buildTenantBootstrapProfile(vm, planInput, env);
+  const planInputWithDesktopCatalog = {
+    ...planInput,
+    runtimeEnv: {
+      ...desktopCatalogRuntimeEnv(bootstrapProfile, planInput),
+      ...(planInput.runtimeEnv && typeof planInput.runtimeEnv === "object" && !Array.isArray(planInput.runtimeEnv) ? planInput.runtimeEnv : {}),
+    },
+  };
   const namespace = safeName(input.namespace || vm.kubevirt.namespace || "orkestr-tenants");
   const vmName = safeName(input.vmName || vm.kubevirt.vmName || vm.id);
   const cloudInitSecretName = safeName(`${vmName}-cloudinit`, "orkestr-cloudinit");
@@ -393,7 +415,7 @@ export function buildTenantVmProvisioningPlan(vm, input = {}, env = process.env)
         },
         type: "Opaque",
         stringData: {
-          userdata: cloudInitUserData(vm, planInput, env),
+          userdata: cloudInitUserData(vm, planInputWithDesktopCatalog, env),
         },
       },
       {
@@ -455,12 +477,12 @@ export function buildTenantVmProvisioningPlan(vm, input = {}, env = process.env)
     vmName,
     macAddress,
     cloudInitSecretName,
-    bootstrapProfilePath: tenantBootstrapProfilePath(planInput, env),
-    bootstrapProfile: buildTenantBootstrapProfile(vm, planInput, env),
-    sharedControlPlane: publicTenantControlPlane(normalizeTenantControlPlane(planInput.controlPlane || planInput.sharedControlPlane || {}, env, {
-      defaultEnabled: Boolean(planInput.controlPlane || planInput.sharedControlPlane || planInput.tenantSliceId),
+    bootstrapProfilePath: tenantBootstrapProfilePath(planInputWithDesktopCatalog, env),
+    bootstrapProfile,
+    sharedControlPlane: publicTenantControlPlane(normalizeTenantControlPlane(planInputWithDesktopCatalog.controlPlane || planInputWithDesktopCatalog.sharedControlPlane || {}, env, {
+      defaultEnabled: Boolean(planInputWithDesktopCatalog.controlPlane || planInputWithDesktopCatalog.sharedControlPlane || planInputWithDesktopCatalog.tenantSliceId),
     })),
-    runtimeEnv: runtimeEnv(planInput, env),
+    runtimeEnv: runtimeEnv(planInputWithDesktopCatalog, env),
     manifestObject,
     manifest: `${JSON.stringify(manifestObject, null, 2)}\n`,
     commands: {

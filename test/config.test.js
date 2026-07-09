@@ -72,6 +72,31 @@ test("runtime settings persist non-secret Codex, desktop, and connector routing"
   assert.equal(raw.connectors.gmail.clientSecret, undefined);
 });
 
+test("runtime settings include configured managed desktop catalog", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-runtime-desktop-catalog-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_BROWSER_VISIBLE_SLUGS: "desktop",
+    ORKESTR_DESKTOP_CATALOG_JSON: JSON.stringify([
+      {
+        slug: "desktop",
+        label: "Firat Jobs StepStone",
+        purpose: "Logged-in browser for Firat job applications.",
+        cdpUrl: "http://127.0.0.1:9222",
+        workspacePath: "/opt/orkestr/workspace/firat-jobs",
+      },
+    ]),
+  };
+
+  const settings = await readRuntimeSettings(env);
+
+  assert.equal(settings.desktops.items.length, 1);
+  assert.equal(settings.desktops.items[0].slug, "desktop");
+  assert.equal(settings.desktops.items[0].label, "Firat Jobs StepStone");
+  assert.equal(settings.desktops.items[0].cdpUrl, "http://127.0.0.1:9222/");
+  assert.equal(settings.desktops.items[0].workspacePath, "/opt/orkestr/workspace/firat-jobs");
+});
+
 test("legacy runtime profiles still map to Codex safety settings", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-runtime-legacy-profile-"));
   const env = { ORKESTR_HOME: home, ORKESTR_INSTALL_PROFILE: "local-trusted" };

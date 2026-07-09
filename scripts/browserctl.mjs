@@ -7,7 +7,7 @@ import { randomUUID } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
 import { execFileSync, spawn } from "node:child_process";
 
-const catalog = [
+const defaultCatalog = [
   {
     slug: "desktop",
     label: "Desktop",
@@ -28,6 +28,89 @@ const catalog = [
   },
 ];
 
+function cleanText(value) {
+  return String(value || "").trim();
+}
+
+function titleFromSlug(value = "") {
+  return cleanSlug(value)
+    .split(/[-_.]+/g)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ") || "Desktop";
+}
+
+function safeUrl(value = "", { allowAboutBlank = false } = {}) {
+  const text = cleanText(value);
+  if (!text) return "";
+  if (allowAboutBlank && text === "about:blank") return text;
+  try {
+    const parsed = new URL(text);
+    if (!["http:", "https:"].includes(parsed.protocol)) return "";
+    if (parsed.username || parsed.password) return "";
+    return parsed.toString();
+  } catch {
+    return "";
+  }
+}
+
+function jsonDesktopRows(value = "") {
+  const text = cleanText(value);
+  if (!text) return [];
+  try {
+    const parsed = JSON.parse(text);
+    if (Array.isArray(parsed)) return parsed;
+    if (Array.isArray(parsed?.desktops)) return parsed.desktops;
+    if (Array.isArray(parsed?.items)) return parsed.items;
+    if (Array.isArray(parsed?.catalog)) return parsed.catalog;
+    if (Array.isArray(parsed?.desks)) return parsed.desks;
+    return [];
+  } catch {
+    return [];
+  }
+}
+
+function normalizeCatalogRows(rows = []) {
+  const input = Array.isArray(rows) ? rows : String(rows || "").split(/[\s,]+/g);
+  const output = [];
+  for (const item of input) {
+    const source = typeof item === "string" ? { slug: item } : item && typeof item === "object" ? item : {};
+    const slug = cleanSlug(source.slug || source.id || source.name);
+    if (!slug) continue;
+    output.push({
+      slug,
+      label: cleanText(source.label || source.title) || titleFromSlug(slug),
+      purpose: cleanText(source.purpose || source.notes || source.description) || "Managed browser desktop.",
+      startUrl: safeUrl(source.startUrl || source.start_url || source.url, { allowAboutBlank: true }) || "about:blank",
+      enabled: source.enabled !== false,
+    });
+  }
+  return output;
+}
+
+function visibleDesktopSlugs() {
+  const raw = cleanText(process.env.ORKESTR_BROWSER_VISIBLE_SLUGS || process.env.ORKESTR_OPS_DESKTOP_SLUGS);
+  if (!raw) return null;
+  return new Set(raw.split(/[\s,]+/g).map(cleanSlug).filter(Boolean));
+}
+
+function catalog(options = {}) {
+  const configured = [
+    ...jsonDesktopRows(process.env.ORKESTR_DESKTOP_CATALOG_JSON),
+    ...jsonDesktopRows(process.env.ORKESTR_MANAGED_DESKTOPS_JSON),
+    ...jsonDesktopRows(process.env.ORKESTR_DESKTOPS_JSON),
+  ];
+  const visible = options.includeHidden === true ? null : visibleDesktopSlugs();
+  const visibleRows = visible ? [...visible].map((slug) => ({ slug, label: titleFromSlug(slug) })) : [];
+  const merged = new Map();
+  for (const row of normalizeCatalogRows([...defaultCatalog, ...visibleRows, ...configured])) {
+    if (row.enabled === false) continue;
+    if (visible && !visible.has(row.slug)) continue;
+    merged.set(row.slug, { ...(merged.get(row.slug) || {}), ...row });
+  }
+  return [...merged.values()];
+}
+
 function appHome(env = process.env) {
   return path.resolve(env.ORKESTR_HOME || path.join(os.homedir(), ".orkestr"));
 }
@@ -43,13 +126,13 @@ function cleanSlug(value) {
 
 function desktopBySlug(value) {
   const slug = cleanSlug(value);
-  const desktop = catalog.find((item) => item.slug === slug);
+  const desktop = catalog({ includeHidden: true }).find((item) => item.slug === slug);
   if (!desktop) throw Object.assign(new Error("browser_not_found"), { statusCode: 404 });
   return desktop;
 }
 
 function desktopIndex(slug) {
-  return Math.max(0, catalog.findIndex((item) => item.slug === slug));
+  return Math.max(0, catalog({ includeHidden: true }).findIndex((item) => item.slug === slug));
 }
 
 function numberEnv(name, fallback) {
@@ -510,7 +593,7 @@ async function sessionRecord(value) {
 
 async function listSessions() {
   await fs.mkdir(browserRoot(), { recursive: true, mode: 0o700 });
-  return Promise.all(catalog.map((desktop) => sessionRecord(desktop.slug)));
+  return Promise.all(catalog().map((desktop) => sessionRecord(desktop.slug)));
 }
 
 async function startDesktop(value) {

@@ -1,5 +1,6 @@
 import path from "node:path";
 import fs from "node:fs/promises";
+import { listBrowserSessions } from "../../browsers/src/browsers.js";
 import { ensureDataDirs } from "../../storage/src/paths.js";
 import { getApiSessionBinding } from "./api-session-bindings.js";
 import { publicPrincipal } from "./principal.js";
@@ -180,6 +181,196 @@ function commandHints() {
   };
 }
 
+function safeUrl(value = "", { localOnly = false } = {}) {
+  const text = clean(value);
+  if (!text) return "";
+  let parsed;
+  try {
+    parsed = new URL(text);
+  } catch {
+    return "";
+  }
+  if (!["http:", "https:", "ws:", "wss:"].includes(parsed.protocol)) return "";
+  if (parsed.username || parsed.password) return "";
+  if (localOnly) {
+    const host = parsed.hostname.toLowerCase();
+    if (!["127.0.0.1", "localhost", "::1", "[::1]"].includes(host)) return "";
+  }
+  return parsed.toString();
+}
+
+function safeLease(lease = null) {
+  if (!lease || typeof lease !== "object") return null;
+  return {
+    desktopSlug: clean(lease.desktopSlug),
+    ownerUserId: clean(lease.ownerUserId),
+    threadId: clean(lease.threadId),
+    threadName: clean(lease.threadName || lease.ownerThreadLabel),
+    mode: clean(lease.mode),
+    stale: lease.stale === true,
+    stealable: lease.stealable === true,
+    acquiredAt: clean(lease.acquiredAt),
+    heartbeatAt: clean(lease.heartbeatAt),
+    expiresAt: clean(lease.expiresAt),
+  };
+}
+
+function desktopActions(session = {}) {
+  const control = session.control && typeof session.control === "object" ? session.control : {};
+  const actions = new Set(["status"]);
+  const openUrl = safeUrl(session.desk_url || session.url);
+  const cdpUrl = safeUrl(session.cdp_url || session.cdpUrl, { localOnly: true });
+  const controllable = Boolean(cdpUrl || control.start === true);
+  if (openUrl || control.start === true) actions.add("open");
+  if (control.prepare === true || control.health === true) actions.add("prepare");
+  if (control.start === true) actions.add("start");
+  if (control.stop === true) actions.add("stop");
+  if (control.restart === true) actions.add("restart");
+  if (control.start === true) actions.add("open_url");
+  if (controllable) {
+    actions.add("observe");
+    actions.add("navigate");
+    actions.add("click");
+    actions.add("type");
+    actions.add("extract");
+  }
+  return [...actions];
+}
+
+function publicDesktopRecord(session = {}) {
+  const slug = clean(session.slug || session.id);
+  const cdpUrl = safeUrl(session.cdp_url || session.cdpUrl, { localOnly: true });
+  return {
+    slug,
+    id: slug,
+    label: clean(session.label || slug || "Desktop"),
+    type: clean(session.type || "desktop"),
+    access: clean(session.access || "desktop"),
+    state: clean(session.state || session.status || "unknown"),
+    status: clean(session.status || session.state || "unknown"),
+    url: safeUrl(session.desk_url || session.url),
+    localControl: cdpUrl ? { cdpUrl, localOnly: true } : null,
+    debugPort: Number(session.debugPort || session.debug_port || 0) || null,
+    availableActions: desktopActions(session),
+    control: {
+      prepare: session.control?.prepare === true || session.control?.health === true,
+      start: session.control?.start === true,
+      stop: session.control?.stop === true,
+      restart: session.control?.restart === true,
+    },
+    lease: safeLease(session.lease),
+    leased: session.leased === true,
+    leaseOwnerThreadId: clean(session.leaseOwnerThreadId),
+    leaseOwnerLabel: clean(session.leaseOwnerLabel),
+    notes: clean(session.notes || session.purpose).slice(0, 1000),
+    workspacePath: clean(session.workspacePath || session.workspace),
+    source: clean(session.source),
+  };
+}
+
+function configuredDesktopRecord(item = {}, settings = {}) {
+  const slug = clean(item.slug || item.id);
+  const cdpUrl = safeUrl(item.cdpUrl || item.cdp_url, { localOnly: true });
+  const availableActions = new Set(["status"]);
+  if (safeUrl(item.url || item.deskUrl || item.desk_url)) availableActions.add("open");
+  if (cdpUrl) {
+    for (const action of ["observe", "navigate", "click", "type", "extract"]) availableActions.add(action);
+  }
+  return {
+    slug,
+    id: slug,
+    label: clean(item.label || item.title || slug || "Desktop"),
+    type: clean(item.type || "desktop"),
+    access: clean(item.access || "desktop"),
+    state: settings?.enabled === false || settings?.provisioned === false ? "not_provisioned" : clean(item.state || item.status || "known"),
+    status: settings?.enabled === false || settings?.provisioned === false ? "not_provisioned" : clean(item.status || item.state || "known"),
+    url: safeUrl(item.url || item.deskUrl || item.desk_url),
+    localControl: cdpUrl ? { cdpUrl, localOnly: true } : null,
+    debugPort: Number(item.debugPort || item.debug_port || 0) || null,
+    availableActions: [...availableActions],
+    control: {
+      prepare: item.control?.prepare === true,
+      start: item.control?.start === true,
+      stop: item.control?.stop === true,
+      restart: item.control?.restart === true,
+    },
+    lease: null,
+    leased: false,
+    leaseOwnerThreadId: "",
+    leaseOwnerLabel: "",
+    notes: clean(item.purpose || item.notes || item.description).slice(0, 1000),
+    workspacePath: clean(item.workspacePath || item.workspace),
+    source: "runtime-settings",
+  };
+}
+
+function desktopSettingsItems(settings = {}) {
+  const desktops = settings?.desktops && typeof settings.desktops === "object" ? settings.desktops : {};
+  const items = Array.isArray(desktops.items)
+    ? desktops.items
+    : Array.isArray(desktops.catalog)
+      ? desktops.catalog
+      : Array.isArray(desktops.desktops)
+        ? desktops.desktops
+        : [];
+  return items
+    .map((item) => configuredDesktopRecord(item, desktops))
+    .filter((desktop) => desktop.slug);
+}
+
+function mergeDesktopRecords(known = [], live = []) {
+  const bySlug = new Map();
+  for (const desktop of known) bySlug.set(desktop.slug, desktop);
+  for (const desktop of live) {
+    const prior = bySlug.get(desktop.slug) || {};
+    bySlug.set(desktop.slug, {
+      ...prior,
+      ...desktop,
+      label: clean(desktop.label) || clean(prior.label) || desktop.slug,
+      notes: clean(desktop.notes) || clean(prior.notes),
+      workspacePath: clean(desktop.workspacePath) || clean(prior.workspacePath),
+      localControl: desktop.localControl || prior.localControl || null,
+      availableActions: [...new Set([...(prior.availableActions || []), ...(desktop.availableActions || [])])],
+    });
+  }
+  return [...bySlug.values()];
+}
+
+async function desktopInventoryContext(principal = null, settings = {}, env = process.env) {
+  const desktopSettings = settings?.desktops && typeof settings.desktops === "object" ? settings.desktops : {};
+  const known = desktopSettingsItems(settings);
+  let payload = null;
+  let live = [];
+  let error = "";
+  let message = "";
+  try {
+    payload = await listBrowserSessions(env, { principal });
+    live = (payload?.sessions || []).map(publicDesktopRecord).filter((desktop) => desktop.slug);
+  } catch (caught) {
+    error = clean(caught?.message || caught || "desktop_inventory_failed");
+    message = clean(caught?.publicMessage || caught?.message || caught || "Desktop inventory failed.");
+  }
+  const desktops = mergeDesktopRecords(known, live);
+  return {
+    ok: payload ? payload.ok !== false : known.length > 0,
+    liveOk: Boolean(payload && payload.ok !== false),
+    source: clean(payload?.source) || (known.length ? "runtime-settings" : "browser"),
+    error: clean(payload?.error) || error,
+    message: clean(payload?.message) || message,
+    defaults: {
+      default: clean(desktopSettings.default),
+      gmailAuth: clean(desktopSettings.gmailAuth),
+      manualIntervention: clean(desktopSettings.manualIntervention),
+      mode: clean(desktopSettings.mode),
+      enabled: desktopSettings.enabled !== false,
+      provisioned: desktopSettings.provisioned !== false,
+    },
+    desktops,
+    known,
+    live,
+  };
+}
+
 async function capabilityHints(thread = null, options = {}, env = process.env) {
   const ownerUserId = normalizeUserId(options.ownerUserId || thread?.ownerUserId || thread?.userId || env.ORKESTR_ADMIN_USER_ID || adminUserId);
   if (threadUsesContainedUserPolicy(thread || { ownerUserId }, env)) {
@@ -294,6 +485,7 @@ export async function whereAmI(input = {}, env = process.env) {
   const scoped = Boolean(principal && !isAdminPrincipal(principal));
   const sanitizerRequired = scoped;
   const containedPolicy = threadUsesContainedUserPolicy(thread || { ownerUserId: owner }, env);
+  const desktops = await desktopInventoryContext(principal, settings, env);
   return {
     ok: Boolean(thread),
     matched: Boolean(thread),
@@ -331,6 +523,7 @@ export async function whereAmI(input = {}, env = process.env) {
     },
     workspace: publicWorkspace(thread, lease, cwd),
     runtime: publicRuntime(lease, status),
+    desktops,
     settings,
     capabilities: await capabilityHints(thread || { ownerUserId: owner }, { ownerUserId: owner }, env),
     apiSession: requestedApiSessionId

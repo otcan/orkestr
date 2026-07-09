@@ -57,6 +57,9 @@ test("tenant VM provisioning builds a public-safe KubeVirt plan", async () => {
   assert.equal(plan.bootstrapProfile.codex.reasoningEffort, "medium");
   assert.equal(plan.bootstrapProfile.policy.singleThreadLimit, true);
   assert.deepEqual(plan.bootstrapProfile.desks.map((desk) => desk.slug), ["linkedin"]);
+  assert.equal(plan.runtimeEnv.ORKESTR_BROWSER_VISIBLE_SLUGS, "linkedin");
+  assert.equal(plan.runtimeEnv.ORKESTR_INSTANCE_DESKTOPS_PROVISIONED, "1");
+  assert.deepEqual(JSON.parse(plan.runtimeEnv.ORKESTR_DESKTOP_CATALOG_JSON).map((desk) => desk.slug), ["linkedin"]);
   assert.ok(plan.bootstrapProfile.skills.includes("learning"));
   assert.ok(plan.bootstrapProfile.skills.includes("whatsapp"));
   assert.ok(plan.bootstrapProfile.skills.includes("salesnav"));
@@ -84,6 +87,9 @@ test("tenant VM provisioning builds a public-safe KubeVirt plan", async () => {
   assert.match(userData, /--tenant-bootstrap-profile' '\/etc\/orkestr\/tenant-bootstrap-profile\.json/);
   assert.match(userData, /ssh-ed25519/);
   assert.match(envFile, /^ORKESTR_HOST='0\.0\.0\.0'$/m);
+  assert.match(envFile, /^ORKESTR_BROWSER_VISIBLE_SLUGS='linkedin'$/m);
+  assert.match(envFile, /^ORKESTR_INSTANCE_DESKTOPS_PROVISIONED='1'$/m);
+  assert.match(envFile, /^ORKESTR_DESKTOP_CATALOG_JSON='\[/m);
   assert.match(envFile, /^ORKESTR_DESKTOP_SHARE_URL_TEMPLATE='https:\/\/app\.example\.test\/desktop-share\/tvm\/alice-tenant\/\{subdomain\}\/\{shareId\}\?key=\{key\}'$/m);
   assert.match(envFile, /^ORKESTR_LLM_SANITIZER_COMMAND_JSON='\["node","\/opt\/orkestr\/current\/scripts\/llm-sanitizer-codex\.mjs"\]'$/m);
   assert.match(envFile, /^ORKESTR_LLM_SANITIZER_TIMEOUT_MS='90000'$/m);
