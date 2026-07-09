@@ -279,6 +279,38 @@ test("gmail callback resolves missing account from the Gmail profile", async () 
   assert.equal(stored.account, "person@example.com");
 });
 
+test("gmail callback rejects a Google account that does not match the requested account", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-gmail-account-mismatch-"));
+  const env = { ORKESTR_HOME: home };
+  await writeConnectorConfig("gmail", {
+    clientId: "client-id",
+    clientSecret: "client-secret",
+    redirectUri: "http://localhost/callback",
+  }, env);
+  const accessToken = `ya29.${"m".repeat(90)}`;
+  const started = await startGmailOAuth(env, { account: "person@example.com" });
+  const query = new URLSearchParams({ code: "callback-code", state: started.state });
+
+  await assert.rejects(
+    finishGmailOAuth(query, env, async (url) => {
+      if (String(url) === "https://oauth2.googleapis.com/token") {
+        return jsonResponse({
+          access_token: accessToken,
+          refresh_token: "refresh-callback",
+          expires_in: 60,
+          scope: "https://www.googleapis.com/auth/gmail.readonly",
+        });
+      }
+      if (String(url) === "https://gmail.googleapis.com/gmail/v1/users/me/profile") {
+        return jsonResponse({ emailAddress: "other@example.com" });
+      }
+      throw new Error(`unexpected_url:${url}`);
+    }),
+    /gmail_account_mismatch/,
+  );
+  assert.deepEqual(await readGmailToken(env), {});
+});
+
 test("gmail connector status backfills a missing account from the Gmail profile", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-gmail-profile-status-"));
   const env = { ORKESTR_HOME: home };

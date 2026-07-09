@@ -344,9 +344,28 @@ export async function getGmailProfileEmail(accessToken = "", fetchImpl = fetch, 
 
 async function tokenWithResolvedAccount(token = {}, env = process.env, fetchImpl = fetch, options = {}) {
   const account = normalizeEmail(token.account || token.email || token.loginHint);
-  if (account) return { token: { ...token, account }, account, updated: false };
   const accessToken = token.accessToken || token.access_token;
-  let resolved = await getGmailProfileEmail(accessToken, fetchImpl, { ...options, env }).catch(() => "");
+  let resolved = (account && options.verifyAccount !== true)
+    ? ""
+    : await getGmailProfileEmail(accessToken, fetchImpl, { ...options, env }).catch(() => "");
+  if (account && resolved && resolved !== account) {
+    const error = new Error("gmail_account_mismatch");
+    error.statusCode = 403;
+    error.expectedAccount = account;
+    error.actualAccount = resolved;
+    throw error;
+  }
+  if (account) {
+    return {
+      token: {
+        ...token,
+        account,
+        ...(resolved ? { email: resolved, updatedAt: new Date().toISOString() } : {}),
+      },
+      account,
+      updated: Boolean(resolved),
+    };
+  }
   let baseToken = token;
   if (!resolved && options.refreshIfNeeded === true && clean(token.refreshToken || token.refresh_token)) {
     const refreshFetch = timeoutFetch(fetchImpl, profileLookupTimeoutMs(env));
@@ -674,10 +693,13 @@ export async function finishGmailOAuth(query, env = process.env, fetchImpl = fet
     connectId: savedState.connectId || "",
     requestedCapabilities: savedState.requestedCapabilities || [],
     requestedScopes: savedState.requestedScopes || [],
-    saveToken: !brokered,
+    saveToken: false,
   });
-  const resolved = await tokenWithResolvedAccount(token, env, fetchImpl, scopeOptions);
-  if (!brokered && resolved.updated) {
+  const resolved = await tokenWithResolvedAccount(token, env, fetchImpl, {
+    ...scopeOptions,
+    verifyAccount: Boolean(savedState.account),
+  });
+  if (!brokered) {
     await writeGmailToken(resolved.token, env, scopeOptions);
   }
   const brokerGrant = brokered

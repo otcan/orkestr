@@ -195,6 +195,7 @@ test("brokered google workspace oauth provisions the Gmail grant to the tenant V
     brokerTenantThreadId: "firat-jobs",
     brokerTenantChatId: "firat-wa",
     brokerTenantAccountId: "de-wa",
+    account: "firatkahya@gmail.com",
     brokerServerRequest: true,
   }, env);
   const connectorTarget = new URL(link.link);
@@ -212,8 +213,10 @@ test("brokered google workspace oauth provisions the Gmail grant to the tenant V
     capabilities: ["gmail_read"],
   });
   assert.equal(started.redirectUri, "https://app.orkestr.de/oauth/gmail/callback");
+  assert.equal(new URL(started.authorizeUrl).searchParams.get("login_hint"), "firatkahya@gmail.com");
   const savedState = JSON.parse(await fs.readFile(path.join(userDataPaths("firat", env).oauth, "gmail-state.json"), "utf8"));
   assert.equal(savedState.redirectUri, "https://app.orkestr.de/oauth/gmail/callback");
+  assert.equal(savedState.account, "firatkahya@gmail.com");
   const calls = [];
   const brokeredAccessToken = `ya29.${"c".repeat(90)}`;
   const result = await finishGmailOAuth(
@@ -233,18 +236,18 @@ test("brokered google workspace oauth provisions the Gmail grant to the tenant V
         });
       }
       if (String(url) === "https://gmail.googleapis.com/gmail/v1/users/me/profile") {
-        return jsonResponse({ emailAddress: "Firat@Example.COM" });
+        return jsonResponse({ emailAddress: "FiratKahya@Gmail.com" });
       }
       assert.equal(String(url), "https://tenant.example.test/api/broker/google-workspace/grants");
       const decrypted = await decryptBrokerClientPayload(JSON.parse(options.body), { ORKESTR_HOME: tenantHome });
       assert.equal(decrypted.payload.userId, "firat");
       assert.equal(decrypted.payload.threadId, "firat-jobs");
       assert.equal(decrypted.payload.chatId, "firat-wa");
-      assert.equal(decrypted.payload.account, "firat@example.com");
+      assert.equal(decrypted.payload.account, "firatkahya@gmail.com");
       assert.equal(decrypted.payload.token.accessToken, brokeredAccessToken);
       assert.equal(decrypted.payload.token.refreshToken, "brokered-refresh");
-      assert.equal(decrypted.payload.token.account, "firat@example.com");
-      assert.equal(decrypted.payload.token.email, "firat@example.com");
+      assert.equal(decrypted.payload.token.account, "firatkahya@gmail.com");
+      assert.equal(decrypted.payload.token.email, "firatkahya@gmail.com");
       return jsonResponse({ ok: true, grant: { ok: true } });
     },
   );

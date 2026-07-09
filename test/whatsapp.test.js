@@ -10039,6 +10039,17 @@ test("whatsapp /connect google creates a user-scoped workspace oauth link", asyn
   const env = externalBridgeEnv(home, {
     ORKESTR_CONNECT_PUBLIC_URL: "https://connect.example.test",
   });
+  await createUser({
+    id: "alice",
+    displayName: "Alice",
+    email: "alice-profile@example.com",
+    phoneNumber: "+15550100",
+  }, env);
+  await linkUserPrivateIdentity("alice", {
+    provider: "gmail",
+    accountId: "alice-gmail@example.com",
+    externalId: "alice-gmail@example.com",
+  }, { env });
   await createThread({
     id: "google-connect-thread",
     name: "Google Connect Thread",
@@ -10077,6 +10088,7 @@ test("whatsapp /connect google creates a user-scoped workspace oauth link", asyn
   assert.equal(ledger.requests[0].connectId, routed.connectId);
   assert.equal(ledger.requests[0].userId, "alice");
   assert.equal(ledger.requests[0].threadId, "google-connect-thread");
+  assert.equal(ledger.requests[0].account, "alice-gmail@example.com");
 });
 
 test("direct whatsapp thread inputs inherit binding delivery metadata", async () => {
