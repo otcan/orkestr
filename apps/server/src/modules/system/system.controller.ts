@@ -28,7 +28,7 @@ import { createFolderForPrincipal, deleteFileForPrincipal, listFilesForPrincipal
 import { assertSanitizedAction } from "../../../../../packages/core/src/llm-sanitizer.js";
 import { getThread, listThreads, listThreadsForPrincipal } from "../../../../../packages/core/src/threads.js";
 import { userScopedCapabilityHints } from "../../../../../packages/core/src/user-skills.js";
-import { requestPrincipal, requestPrincipalForTenantOwner } from "../../../../../packages/core/src/principal.js";
+import { requestPrincipal } from "../../../../../packages/core/src/principal.js";
 import { isAdminPrincipal } from "../../../../../packages/core/src/policy.js";
 import { distributionIdentity } from "../../../../../packages/core/src/distribution.js";
 import { getUser, upsertUser } from "../../../../../packages/core/src/users.js";
@@ -629,9 +629,8 @@ export class SystemController {
 
   @Get("setup/status")
   async setupStatus(@Req() request: any) {
-    const principal = requestPrincipalForTenantOwner(request, process.env);
     const status = setupStatusForRequest(request, {
-      ...(await getSetupStatus({ principal })),
+      ...(await getSetupStatus({ principal: requestPrincipal(request) })),
       config: await publicEffectiveConfig(),
       whatsappDefaults: {
         chatNamePrefix: configuredWhatsAppChatNamePrefix(),

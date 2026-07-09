@@ -44,7 +44,7 @@ import { requestThreadInputDelivery } from "../../../../../packages/core/src/run
 import { appendThreadMessage, getThread, getThreadForPrincipal } from "../../../../../packages/core/src/threads.js";
 import { processApiAgentThreadInput, threadUsesApiAgent } from "../../../../../packages/core/src/tenant-api-agent.js";
 import { getTenantVm } from "../../../../../packages/core/src/tenant-vm-registry.js";
-import { requestPrincipal, requestPrincipalForTenantOwner } from "../../../../../packages/core/src/principal.js";
+import { requestPrincipal } from "../../../../../packages/core/src/principal.js";
 import { isAdminPrincipal } from "../../../../../packages/core/src/policy.js";
 import { createPairingChallenge, securityStatus } from "../../../../../packages/core/src/security.js";
 import { resolveBrokerConnectInstance } from "../../../../../packages/core/src/broker-instance-registry.js";
@@ -293,10 +293,6 @@ function safeInboundUploadName(name: unknown): string {
   return base || "attachment.bin";
 }
 
-function connectorPrincipal(request: any): any {
-  return requestPrincipalForTenantOwner(request, process.env);
-}
-
 function parseInboundUploadMetadata(body: Record<string, unknown> = {}): Array<Record<string, unknown>> {
   const value = body.metadata || body.attachments || body.filesMetadata;
   if (Array.isArray(value)) return value.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object" && !Array.isArray(item)));
@@ -454,25 +450,25 @@ export class ConnectorsController {
 
   @Get("gmail/oauth/start")
   async startGmailOAuth(@Req() request: any, @Query("account") account = "") {
-    return beginGmailOAuth(process.env, { account, principal: connectorPrincipal(request) });
+    return beginGmailOAuth(process.env, { account, principal: requestPrincipal(request) });
   }
 
   @Delete("gmail/auth")
   @HttpCode(200)
   async disconnectGmailAuth(@Req() request: any) {
-    return disconnectConnectorAuth({ provider: "gmail" }, connectorPrincipal(request), process.env);
+    return disconnectConnectorAuth({ provider: "gmail" }, requestPrincipal(request), process.env);
   }
 
   @Get("gmail/messages")
   async gmailMessages(@Req() request: any, @Query("maxResults") maxResults = "10", @Query("q") query = "") {
     return listGmailMessages({ maxResults: Number(maxResults || 10), query }, process.env, fetch, {
-      principal: connectorPrincipal(request),
+      principal: requestPrincipal(request),
     });
   }
 
   @Get("gmail/messages/:id")
   async gmailMessage(@Req() request: any, @Param("id") id: string) {
-    return { message: await getGmailMessage(id, process.env, fetch, { principal: connectorPrincipal(request) }) };
+    return { message: await getGmailMessage(id, process.env, fetch, { principal: requestPrincipal(request) }) };
   }
 
   @Post("outlook/oauth/start")
@@ -480,7 +476,7 @@ export class ConnectorsController {
   async startOutlookOAuth(@Req() request: any, @Body() body: Record<string, unknown> = {}) {
     return startOutlookDeviceOAuth(process.env, {
       account: String(body.account || ""),
-      principal: connectorPrincipal(request),
+      principal: requestPrincipal(request),
     });
   }
 
@@ -488,7 +484,7 @@ export class ConnectorsController {
   @HttpCode(200)
   async pollOutlookOAuth(@Req() request: any, @Body() body: Record<string, unknown> = {}) {
     return pollOutlookDeviceOAuth(String(body.pendingId || ""), process.env, fetch, {
-      principal: connectorPrincipal(request),
+      principal: requestPrincipal(request),
     });
   }
 
@@ -953,7 +949,7 @@ export class ConnectorsController {
   @Post(":id/test")
   @HttpCode(200)
   async testConnector(@Req() request: any, @Param("id") id: string) {
-    const status = await getSetupStatus({ principal: connectorPrincipal(request) });
+    const status = await getSetupStatus({ principal: requestPrincipal(request) });
     const connector = status.connectors.find((item) => item.id === id);
     if (!connector) throw httpError("unknown_connector", 404);
     return connector;

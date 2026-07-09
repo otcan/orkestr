@@ -106,52 +106,6 @@ function normalizeShop(value = "") {
   return raw.includes(".") ? raw : `${raw}.myshopify.com`;
 }
 
-function tenantOwnerUserId(env = process.env) {
-  const tenantScoped = clean(env.ORKESTR_TENANT_VM_ID) ||
-    clean(env.ORKESTR_TENANT_SLICE_ID) ||
-    clean(env.ORKESTR_TENANT_BOUNDARY).toLowerCase() === "tenant-vm";
-  return tenantScoped ? clean(env.ORKESTR_ADMIN_USER_ID) : "";
-}
-
-function isTenantOwnerScope(scope = {}, env = process.env) {
-  const owner = tenantOwnerUserId(env);
-  return Boolean(owner && !scope.global && clean(scope.userId) === owner);
-}
-
-async function adoptTenantOwnerGlobalToken(provider, env = process.env, scope = {}) {
-  if (!isTenantOwnerScope(scope, env)) return false;
-  const targetPath = tokenFile(provider, scope);
-  if (!targetPath || await fileExists(targetPath)) return false;
-  const globalScope = await connectorScopePaths(env);
-  const sourcePath = tokenFile(provider, globalScope);
-  if (!sourcePath || !await fileExists(sourcePath)) return false;
-  const token = await readJson(sourcePath, {});
-  if (!token || typeof token !== "object" || Array.isArray(token) || !Object.keys(token).length) return false;
-  await writeJson(targetPath, {
-    ...token,
-    tenantOwnerScopeAdoptedAt: nowIso(),
-    tenantOwnerScopeAdoptedFrom: "global",
-  });
-  await appendEvent({
-    type: `${provider}_tenant_owner_global_token_adopted`,
-    provider,
-    userId: scope.userId,
-  }, env).catch(() => {});
-  return true;
-}
-
-async function connectorScopesForDisconnect(env = process.env, scope = {}) {
-  const scopes = [scope];
-  if (isTenantOwnerScope(scope, env)) scopes.push(await connectorScopePaths(env));
-  const seen = new Set();
-  return scopes.filter((item) => {
-    const root = clean(item.root);
-    if (!root || seen.has(root)) return false;
-    seen.add(root);
-    return true;
-  });
-}
-
 function jiraAuthorizationUrl(config = {}, state = "") {
   const clientId = clean(config.clientId);
   const redirectUri = clean(config.redirectUri);
@@ -241,7 +195,6 @@ export async function connectorAuthStatus(providerId = "", env = process.env, op
   }
 
   const tokenPath = tokenFile(provider, scope);
-  await adoptTenantOwnerGlobalToken(provider, env, scope);
   const [tokenExists, pending, oauthState, error, token] = await Promise.all([
     fileExists(tokenPath),
     readJson(pendingFile(provider, scope), {}),
@@ -337,15 +290,13 @@ export async function disconnectConnectorAuth(args = {}, principal = {}, env = p
   if (provider === "whatsapp") throw connectorError("whatsapp_disconnect_not_supported_here", 400);
   const scope = await connectorScopePaths(env, { principal });
   const removedFiles = [];
-  for (const targetScope of await connectorScopesForDisconnect(env, scope)) {
-    for (const filePath of [
-      tokenFile(provider, targetScope),
-      errorFile(provider, targetScope),
-      pendingFile(provider, targetScope),
-      oauthStateFile(provider, targetScope),
-    ].filter(Boolean)) {
-      if (await unlinkIfExists(filePath)) removedFiles.push(filePath.replace(targetScope.root, "").replace(/^\/+/, ""));
-    }
+  for (const filePath of [
+    tokenFile(provider, scope),
+    errorFile(provider, scope),
+    pendingFile(provider, scope),
+    oauthStateFile(provider, scope),
+  ].filter(Boolean)) {
+    if (await unlinkIfExists(filePath)) removedFiles.push(filePath.replace(scope.root, "").replace(/^\/+/, ""));
   }
   await appendEvent({
     type: `${provider}_oauth_disconnected`,

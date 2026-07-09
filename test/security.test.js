@@ -773,7 +773,7 @@ test("local CLI machine token can operate WhatsApp bridge routes", async () => {
   assert.equal(badBridgeToken.error, "whatsapp_bridge_token_invalid");
 });
 
-test("tenant CLI setup status uses tenant owner connector scope", async () => {
+test("tenant CLI setup status uses instance connector scope", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-security-tenant-cli-setup-"));
   const overlayDir = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-security-tenant-cli-overlay-"));
   const prior = saveEnv([
@@ -805,7 +805,7 @@ test("tenant CLI setup status uses tenant owner connector scope", async () => {
         gmail: {
           label: "Host Gmail",
           state: "partial",
-          summary: "Global overlay Gmail must not override tenant user setup status.",
+          summary: "Overlay Gmail must not override tenant instance setup status.",
           details: { overlay: true },
         },
       },
@@ -816,8 +816,8 @@ test("tenant CLI setup status uses tenant owner connector scope", async () => {
       provider: "google_workspace",
     }), "utf8");
     const firatPaths = userDataPaths("firat", process.env);
-    await fs.mkdir(firatPaths.secrets, { recursive: true });
-    await fs.writeFile(path.join(firatPaths.secrets, "gmail-token.json"), JSON.stringify({
+    await fs.mkdir(path.join(home, "secrets"), { recursive: true });
+    await fs.writeFile(path.join(home, "secrets", "gmail-token.json"), JSON.stringify({
       provider: "google_workspace",
       accessToken: `ya29.${"t".repeat(90)}`,
       refreshToken: "refresh-token",
@@ -852,14 +852,17 @@ test("tenant CLI setup status uses tenant owner connector scope", async () => {
     const oauth = await json(await fetch(`http://127.0.0.1:${port}/api/connectors/gmail/oauth/start`, {
       headers: { authorization: "Bearer cli-secret" },
     }));
-    const userOauthState = JSON.parse(await fs.readFile(path.join(firatPaths.oauth, "gmail-state.json"), "utf8"));
     const globalOauthState = JSON.parse(await fs.readFile(path.join(home, "oauth", "gmail-state.json"), "utf8"));
 
     assert.match(oauth.authorizeUrl, /^https:\/\/accounts\.google\.com\//);
-    assert.equal(userOauthState.userId, "firat");
-    assert.equal(globalOauthState.state, "stale-global-oauth-state");
+    await assert.rejects(fs.stat(path.join(firatPaths.oauth, "gmail-state.json")));
+    assert.equal(globalOauthState.userId, "");
+    assert.notEqual(globalOauthState.state, "stale-global-oauth-state");
   } finally {
-    if (server) await new Promise((resolve) => server.close(resolve));
+    if (server) {
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      await new Promise((resolve) => server.close(resolve));
+    }
     restoreEnv(prior);
   }
 });

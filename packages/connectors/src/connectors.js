@@ -23,6 +23,18 @@ function commandVersionCacheTtlMs(env = process.env) {
   return Number.isFinite(parsed) ? Math.max(0, parsed) : 30000;
 }
 
+function clean(value = "") {
+  return String(value || "").trim();
+}
+
+function isTenantScopedRuntime(env = process.env) {
+  return Boolean(
+    clean(env.ORKESTR_TENANT_VM_ID) ||
+      clean(env.ORKESTR_TENANT_SLICE_ID) ||
+      clean(env.ORKESTR_TENANT_BOUNDARY) === "tenant-vm",
+  );
+}
+
 async function pathExists(filePath) {
   try {
     await fs.access(filePath);
@@ -176,7 +188,7 @@ export async function getConnectorStatuses({ env = process.env, home = os.homedi
     connectorAuthStatus("jira", env, { principal }),
     connectorAuthStatus("shopify", env, { principal }),
   ]);
-  const overlay = scopedPaths.global ? await readOverlay(env) : { connectors: {} };
+  const overlay = scopedPaths.global && !isTenantScopedRuntime(env) ? await readOverlay(env) : { connectors: {} };
 
   const connectors = {
     openai: openaiKey

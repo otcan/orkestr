@@ -582,8 +582,8 @@ test("brokered gmail grants refresh through the parent broker without local OAut
   assert.deepEqual(capabilities.connectorAuth.gmail.capabilities, ["gmail_read"]);
 });
 
-test("tenant owner gmail status adopts legacy global token into user scope", async () => {
-  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-gmail-tenant-owner-global-adopt-"));
+test("tenant gmail status uses instance connector scope for any principal", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-gmail-tenant-instance-scope-"));
   const env = {
     ORKESTR_HOME: home,
     ORKESTR_TENANT_VM_ID: "firat-jobs-vm",
@@ -610,21 +610,24 @@ test("tenant owner gmail status adopts legacy global token into user scope", asy
       ],
     },
   }, env);
+  const userTokenPath = path.join(userDataPaths("firat", env).secrets, "gmail-token.json");
 
-  assert.equal((await readGmailToken(env, { userId: "firat" })).accessToken, undefined);
+  assert.equal((await readGmailToken(env)).accessToken, "legacy-global-access");
+  await assert.rejects(fs.stat(userTokenPath));
 
   const status = await connectorAuthStatus("gmail", env, { principal: userPrincipal({ id: "firat" }) });
-  const adopted = await readGmailToken(env, { userId: "firat" });
+  const sameInstanceToken = await readGmailToken(env, { userId: "firat" });
 
   assert.equal(status.state, "connected");
   assert.equal(status.account, "firat@example.com");
-  assert.equal(adopted.accessToken, "legacy-global-access");
-  assert.equal(adopted.tenantOwnerScopeAdoptedFrom, "global");
+  assert.equal(sameInstanceToken.accessToken, "legacy-global-access");
+  await assert.rejects(fs.stat(userTokenPath));
 
   await disconnectConnectorAuth({ provider: "gmail" }, userPrincipal({ id: "firat" }), env);
 
   assert.equal((await readGmailToken(env)).accessToken, undefined);
   assert.equal((await readGmailToken(env, { userId: "firat" })).accessToken, undefined);
+  await assert.rejects(fs.stat(userTokenPath));
 });
 
 test("gmail status does not treat base Google identity scopes as Gmail access", async () => {

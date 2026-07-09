@@ -6,7 +6,20 @@ function isAdminLikePrincipal(principal = {}) {
   return principal?.kind === "system" || String(principal?.role || "").trim().toLowerCase() === "admin";
 }
 
-export function scopedPrincipalUserId(options = {}) {
+function clean(value = "") {
+  return String(value || "").trim();
+}
+
+function isTenantScopedRuntime(env = process.env) {
+  return Boolean(
+    clean(env.ORKESTR_TENANT_VM_ID) ||
+      clean(env.ORKESTR_TENANT_SLICE_ID) ||
+      clean(env.ORKESTR_TENANT_BOUNDARY) === "tenant-vm",
+  );
+}
+
+export function scopedPrincipalUserId(options = {}, env = process.env) {
+  if (isTenantScopedRuntime(env)) return "";
   const explicitUserId = String(options.userId || "").trim();
   if (explicitUserId) return explicitUserId;
   const principal = options.principal || null;
@@ -16,7 +29,7 @@ export function scopedPrincipalUserId(options = {}) {
 
 export async function connectorScopePaths(env = process.env, options = {}) {
   const paths = await ensureDataDirs(env);
-  const userId = scopedPrincipalUserId(options);
+  const userId = scopedPrincipalUserId(options, env);
   if (!userId) {
     return {
       global: true,
@@ -42,7 +55,7 @@ export async function connectorScopePaths(env = process.env, options = {}) {
 }
 
 export async function listConnectorScopePaths(env = process.env, options = {}) {
-  const scopedUserId = scopedPrincipalUserId(options);
+  const scopedUserId = scopedPrincipalUserId(options, env);
   if (scopedUserId) return [await connectorScopePaths(env, { userId: scopedUserId })];
 
   const paths = await ensureDataDirs(env);
