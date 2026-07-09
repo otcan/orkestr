@@ -227,6 +227,39 @@ test("Gmail job signals can be recorded without WhatsApp delivery", async () => 
   assert.equal(whatsappCalls.length, 0);
 });
 
+test("Gmail jobs poll rejects LinkedIn network suggestions", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-jobs-linkedin-network-"));
+  const env = {
+    ORKESTR_HOME: home,
+    WHATSAPP_BRIDGE_MODE: "external",
+  };
+  await createThread({ id: "jobs-network-thread", name: "Jobs Network Suggestions" }, env);
+
+  const result = await processJobCandidateMessages({
+    threadId: "jobs-network-thread",
+    maxResults: 1,
+    signalMode: "record_only",
+  }, [{
+    id: "linkedin-network-1",
+    threadId: "gmail-thread-linkedin-network-1",
+    subject: "Firat, add Venkatesh Meka to your network at linkedin.com",
+    from: "messages-noreply@linkedin.com",
+    snippet: "People you may know",
+    text: "People you may know. Connect on LinkedIn https://www.linkedin.com/comm/mynetwork/send-invite/venkatesh-meka/",
+    internalDate: String(Date.parse("2026-06-30T10:00:00Z")),
+  }], env);
+  const queue = await listJobQueueForPrincipal(adminPrincipal(), env);
+  const messages = await listThreadMessages("jobs-network-thread", env);
+
+  assert.equal(result.classified.classified.length, 1);
+  assert.equal(result.classified.classified[0].state, "queued_reject");
+  assert.equal(result.classified.classified[0].fit.classifier, "non_job_filter");
+  assert.equal(result.classified.classified[0].fit.fitScore100, 10);
+  assert.equal(result.presentation.presented.length, 0);
+  assert.equal(queue.counts.queued_reject, 1);
+  assert.equal(messages.length, 0);
+});
+
 test("Gmail jobs poll supports host-native gog collection", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-jobs-gog-"));
   const fakeGogScript = [

@@ -204,6 +204,27 @@ function candidateMatches(left = {}, right = {}) {
   const leftKeys = new Set(dedupeKeysFor(left));
   return dedupeKeysFor(right).some((key) => leftKeys.has(key));
 }
+
+function obviousNonJobReason(candidate = {}) {
+  const text = lower([
+    candidate.subject,
+    candidate.sender,
+    candidate.snippet,
+    candidate.bodySnapshot,
+    ...(candidate.extractedLinks || []),
+    ...(candidate.canonicalJobUrls || []),
+  ].join("\n"));
+  const linkedinNetworkSuggestion = text.includes("linkedin")
+    && (
+      /\badd .{1,120} to your network\b/.test(text)
+      || text.includes("people you may know")
+      || text.includes("/mynetwork/send-invite/")
+      || text.includes("email_email_pymk")
+    );
+  if (linkedinNetworkSuggestion) return "LinkedIn network suggestion, not a job opportunity.";
+  return "";
+}
+
 async function upsertCandidatesFromMessages(messages = [], context = {}, env = process.env, now = new Date()) {
   const store = await readQueueStore(env);
   const created = [];
@@ -316,6 +337,19 @@ async function runFitAgentCommand(command, payload, timeoutMs = 45_000) {
 }
 
 export async function classifyJobCandidate(candidate = {}, preferences = {}, env = process.env, options = {}) {
+  const nonJobReason = obviousNonJobReason(candidate);
+  if (nonJobReason) {
+    return normalizeFitResult({
+      fitScore: 1,
+      fitScore100: 10,
+      reason: nonJobReason,
+      role: clean(candidate.subject) || "Non-job Gmail notification",
+      company: clean(candidate.sender).match(/@([^>\s]+)/)?.[1] || "Unknown sender",
+      risks: "Non-job Gmail notification.",
+      nextAction: "archive",
+      classifier: "non_job_filter",
+    }, candidate, env);
+  }
   if (typeof options.classifyImpl === "function") {
     return normalizeFitResult(await options.classifyImpl(candidate, preferences), candidate, env);
   }
