@@ -5,12 +5,9 @@ import tls from "node:tls";
 import type { INestApplication } from "@nestjs/common";
 import type { IncomingMessage, Server } from "node:http";
 import type { Duplex } from "node:stream";
-import {
-  createGoogleWorkspaceConnectLink,
-  startGoogleWorkspaceOAuth,
-} from "../../../packages/connectors/src/google-workspace.js";
+import { randomUUID } from "node:crypto";
+import { startGmailOAuth } from "../../../packages/connectors/src/gmail.js";
 import { encryptBrokerInstanceProxyPayload, resolveBrokerConnectInstance } from "../../../packages/core/src/broker-instance-registry.js";
-import { userPrincipal } from "../../../packages/core/src/principal.js";
 import { securityCookieName, securitySessionForToken } from "../../../packages/core/src/security.js";
 import { listTenantVms } from "../../../packages/core/src/tenant-vm-registry.js";
 import { getUser } from "../../../packages/core/src/users.js";
@@ -176,65 +173,36 @@ async function handleBrokerGoogleWorkspaceStart(request: any, response: any, rou
   const intent = session.authIntent && typeof session.authIntent === "object" ? session.authIntent : {};
   const owner = await ownerUserForBrokerInstance(route.instanceId);
   const userId = clean(owner.userId || intent.userId || session.userId);
-  const displayName = clean(owner.displayName || intent.userId || userId);
   const account = clean(parsed.searchParams.get("account") || intent.account).toLowerCase();
   const capabilities = stringArray(parsed.searchParams.getAll("capability").length
     ? parsed.searchParams.getAll("capability")
     : parsed.searchParams.get("capabilities") || "gmail_read");
-  let connectId = clean(intent.connectId);
-  let connectorLink = "";
-  let connectLink = "";
+  const connectId = clean(intent.connectId || session.challengeId || session.id) || randomUUID();
   try {
-    if (!connectId) {
-      const threadId = clean(intent.threadId);
-      const threadName = clean(intent.thread || intent.threadName || threadId);
-      const chatId = clean(intent.chatId);
-      const accountId = clean(intent.accountId);
-      const link = await createGoogleWorkspaceConnectLink({
-        principal: userPrincipal({
-          id: userId || route.instanceId,
-          role: userId ? "user" : "admin",
-          source: "broker-app-proxy",
-          displayName: displayName || userId || route.instanceId,
-        }),
-        thread: {
-          id: threadId,
-          name: threadName,
-          ownerUserId: userId,
-          binding: {
-            connector: "whatsapp",
-            chatId,
-            responderAccountId: accountId,
-            outboundAccountId: accountId,
-          },
-        },
-        chatId,
-        accountId,
-        account,
-        brokerInstanceId: route.instanceId,
-        brokerTenantVmId: clean(intent.tenantVmId),
-        brokerTenantUserId: userId,
-        brokerTenantThreadId: threadId,
-        brokerTenantThreadName: threadName,
-        brokerTenantChatId: chatId,
-        brokerTenantAccountId: accountId,
-      }, process.env);
-      connectId = clean(link.connectId);
-      connectorLink = clean(link.connectorLink);
-      connectLink = clean(link.connectLink);
-    }
-    const started = await startGoogleWorkspaceOAuth(process.env, {
-      connectId,
+    const threadId = clean(intent.threadId);
+    const chatId = clean(intent.chatId);
+    const accountId = clean(intent.accountId);
+    const started = await startGmailOAuth(process.env, {
+      userId,
+      provider: "google_workspace",
       capabilities,
       account,
+      connectId,
+      threadId,
+      chatId,
+      accountId,
+      brokerInstanceId: route.instanceId,
+      brokerTenantVmId: clean(intent.tenantVmId),
+      brokerTenantUserId: userId,
+      brokerTenantThreadId: threadId,
+      brokerTenantChatId: chatId,
+      brokerTenantAccountId: accountId,
     });
     sendJson(response, 200, {
       ...started,
       ok: true,
       provider: "google_workspace",
       connectId,
-      connectorLink,
-      connectLink,
     });
   } catch (error) {
     sendJson(response, Number((error as any)?.statusCode || 400) || 400, {
