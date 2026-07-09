@@ -324,6 +324,13 @@ test("tenant VM desktop-share proxy rewrites share and desktop URLs through the 
     const authIntentSession = await pairBrowser({ challengeId: authIntentChallenge.challengeId, env: process.env });
     const authIntentCookie = sessionCookieHeader(authIntentSession.token, process.env);
 
+    const authIntentSharePage = await fetch(`${baseUrl}/desktop-share/tvm/alice-tenant/d-abc123/share-1?key=secret`, {
+      headers: { cookie: authIntentCookie },
+    });
+    const authIntentShareHtml = await authIntentSharePage.text();
+    assert.equal(authIntentSharePage.status, 200);
+    assert.match(authIntentShareHtml, /Orkestr Desktop Access/);
+
     const open = await fetch(`${baseUrl}/api/tenant-vms/alice-tenant/desktop-shares/share-1/open?key=secret&subdomain=d-abc123`);
     const openPayload = await read(open);
     const cookie = open.headers.get("set-cookie") || "";
@@ -357,6 +364,9 @@ test("tenant VM desktop-share proxy rewrites share and desktop URLs through the 
     const desktop = await fetch(`${baseUrl}${openPayload.desktopUrl}`, { headers: { cookie } });
     assert.equal(desktop.status, 200);
     assert.match(await desktop.text(), /Tenant desktop/);
+    const desktopWithAuthIntentCookie = await fetch(`${baseUrl}${openPayload.desktopUrl}`, { headers: { cookie: `${authIntentCookie}; ${cookie}` } });
+    assert.equal(desktopWithAuthIntentCookie.status, 200);
+    assert.match(await desktopWithAuthIntentCookie.text(), /Tenant desktop/);
     assert.equal(upstreamRequests.some((item) => item.url.startsWith("/desktop/gmail/vnc.html") && /orkestr_desktop_share=/.test(item.cookie)), true);
   } finally {
     await new Promise((resolve) => server.close(resolve));

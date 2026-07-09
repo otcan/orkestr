@@ -159,7 +159,7 @@ function authorizeScopedShareSessionRequest(request: any, session: any) {
   const method = String(request?.method || "GET").toUpperCase();
   const parts = routePartsFromApiRequest(request);
   if (parts[0] !== "api") return { ok: true };
-  if (desktopShareApiRouteAllowed(method, parts)) return { ok: true };
+  if (desktopShareRouteAllowed(method, parts)) return { ok: true };
   const [surface] = parts.slice(1).map((part) => part.toLowerCase());
   if (surface === "version" && method === "GET") return { ok: true };
   if (surface === "setup" && parts[2]?.toLowerCase() === "status" && method === "GET") return { ok: true };
@@ -182,10 +182,10 @@ function authorizeAuthIntentSessionRequest(request: any, session: any) {
   if (method === "GET" && (url === "/connect/google" || url === "/connect/google/start")) return { ok: true };
   if (method === "GET" && url === "/setup/pairing") return { ok: true };
   if (method === "GET" && isStaticAssetRequestPath(url)) return { ok: true };
+  if (desktopShareRouteAllowed(method, parts)) return { ok: true };
   const brokerAppAuth = authorizeAuthIntentBrokerAppRequest(request, session, parts);
   if (brokerAppAuth.matched) return brokerAppAuth;
   if (parts[0] !== "api") return { ok: false, statusCode: 403, error: "auth_intent_session_scope_denied" };
-  if (desktopShareApiRouteAllowed(method, parts)) return { ok: true };
   const [surface, second, third, fourth] = parts.slice(1).map((part) => part.toLowerCase());
   if (method === "GET" && ["health", "ready", "version"].includes(surface)) return { ok: true };
   if (method === "GET" && surface === "setup" && second === "status") return { ok: true };
@@ -285,6 +285,18 @@ function desktopShareApiRouteAllowed(method: string, parts: string[]) {
     ["open", "status"].includes(normalized[5] || "");
 }
 
+function desktopShareRouteAllowed(method: string, parts: string[]) {
+  if (method !== "GET") return false;
+  if (desktopShareApiRouteAllowed(method, parts)) return true;
+  const normalized = parts.map((part) => part.toLowerCase());
+  if (normalized[0] === "desktop-share" && parts[1]) return true;
+  if (normalized[0] === "desktop" && parts[1]) return true;
+  return normalized[0] === "tenant-vms" &&
+    Boolean(parts[1]) &&
+    normalized[2] === "desktop" &&
+    Boolean(parts[3]);
+}
+
 function authorizeConnectorResourceRequest(request: any, principal: any) {
   const route = connectorRouteFromApiRequest(request);
   if (!route) return { ok: true };
@@ -353,7 +365,7 @@ function authorizeControlPlaneRequest(request: any, principal: any) {
   const [surface, second, third, fourth] = parts.slice(1).map((part) => part.toLowerCase());
 
   if (surface === "codex") return { ok: false, statusCode: 403, error: "control_plane_admin_required" };
-  if (desktopShareApiRouteAllowed(method, parts)) return { ok: true };
+  if (desktopShareRouteAllowed(method, parts)) return { ok: true };
   if (surface === "users") {
     if (second === "me" && (!third || ["skills", "credit-usage", "support", "onboarding"].includes(third))) return { ok: true };
     if (third === "skills" || third === "credit-usage" || third === "onboarding") return { ok: true };
