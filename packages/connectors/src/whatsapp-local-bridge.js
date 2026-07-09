@@ -2182,6 +2182,12 @@ export function inboundRoutingFailureNoticeText(error, { env = process.env } = {
   if (failure.code === "target_instance_unhealthy" || failure.userFacingCategory === "instance_health") {
     return "This Orkestr instance is temporarily unavailable for this chat. Your message was not delivered; please resend it after the instance is healthy.";
   }
+  if (failure.code === "whatsapp_inbound_route_failed") {
+    if (failureText.includes("eacces") || failureText.includes("permission denied")) {
+      return "The target Orkestr instance could not write its local chat state. Your message was not delivered; ask the admin to repair the instance data ownership, then resend.";
+    }
+    return failure.safeMessage || "The target Orkestr instance could not accept this WhatsApp message. Your message was not delivered; ask the admin to check the instance route, then resend.";
+  }
   if (failure.code === "whatsapp_binding_disabled" || failure.code === "disabled_whatsapp_binding" || reason === "whatsapp_binding_disabled") {
     return "This WhatsApp chat is connected to Orkestr, but inbound messages are currently disabled for the bound thread. Your message was not delivered; ask the admin to enable the WhatsApp binding, then resend.";
   }

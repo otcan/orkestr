@@ -1126,7 +1126,7 @@ repair_runtime_ownership() {
   if [ "$(id -u)" -ne 0 ]; then
     return 0
   fi
-  local run_user run_group runtime_home runtime_run_dir codex_home
+  local run_user run_group runtime_home runtime_run_dir codex_home target
   run_user="$(runtime_run_user)"
   if ! id "$run_user" >/dev/null 2>&1; then
     return 0
@@ -1137,6 +1137,37 @@ repair_runtime_ownership() {
   codex_home="${CODEX_HOME:-$runtime_home/codex}"
   mkdir -p "$runtime_home" "$runtime_run_dir"
   chown "$run_user:$run_group" "$runtime_home" "$runtime_run_dir"
+  for target in \
+    "$runtime_home/agents.json" \
+    "$runtime_home/api-session-bindings.json" \
+    "$runtime_home/broker-instances.json" \
+    "$runtime_home/connector-outbox.json" \
+    "$runtime_home/connector-prompt-pushes.json" \
+    "$runtime_home/config.json" \
+    "$runtime_home/desktop-leases.json" \
+    "$runtime_home/events.jsonl" \
+    "$runtime_home/jobs-jd-cache-access.json" \
+    "$runtime_home/jobs-queue.json" \
+    "$runtime_home/messages" \
+    "$runtime_home/oauth" \
+    "$runtime_home/release-instances.json" \
+    "$runtime_home/router-traces.json" \
+    "$runtime_home/runtime-leases.json" \
+    "$runtime_home/runtime-settings.json" \
+    "$runtime_home/secrets" \
+    "$runtime_home/tenant-slices.json" \
+    "$runtime_home/tenant-vms.json" \
+    "$runtime_home/thread-messages" \
+    "$runtime_home/threads.json" \
+    "$runtime_home/timers.json" \
+    "$runtime_home/users" \
+    "$runtime_home/users.json" \
+    "$runtime_home/waitlist.json" \
+    "$runtime_home/watcher-alerts.json" \
+    "$runtime_home/whatsapp.json"; do
+    [ -e "$target" ] || continue
+    chown -R "$run_user:$run_group" "$target" || true
+  done
   mkdir -p "$codex_home"
   chown -R "$run_user:$run_group" "$codex_home"
   chmod 0700 "$codex_home"

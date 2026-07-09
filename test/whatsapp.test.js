@@ -5831,6 +5831,14 @@ test("local whatsapp inbound failures explain missing user capabilities", () => 
   const unhealthy = inboundRoutingFailureNoticeText(Object.assign(new Error("target_instance_unhealthy"), {
     routingFailure: { code: "target_instance_unhealthy", userFacingCategory: "instance_health", retryable: true },
   }));
+  const routeWriteDenied = inboundRoutingFailureNoticeText(Object.assign(new Error("whatsapp_inbound_route_failed"), {
+    routingFailure: {
+      code: "whatsapp_inbound_route_failed",
+      reason: "EACCES: permission denied, open '[redacted-path]'",
+      userFacingCategory: "connector",
+      safeMessage: "Target instance could not accept the brokered WhatsApp message.",
+    },
+  }));
   const token = inboundRoutingFailureNoticeText(Object.assign(new Error("whatsapp_inbound_token_invalid"), {
     routingFailure: {
       code: "whatsapp_inbound_token_invalid",
@@ -5874,6 +5882,8 @@ test("local whatsapp inbound failures explain missing user capabilities", () => 
   assert.doesNotMatch(timer, /safely handle|private connector|account identity|admin/i);
   assert.match(unhealthy, /temporarily unavailable/i);
   assert.doesNotMatch(unhealthy, /safely handle|private connector|account identity|admin/i);
+  assert.match(routeWriteDenied, /could not write its local chat state/i);
+  assert.doesNotMatch(routeWriteDenied, /missing a required Orkestr capability|connector setup/i);
   assert.match(token, /target Orkestr instance rejected or is missing the broker WhatsApp token/i);
   assert.equal(senderDenied, "This WhatsApp sender is not allowed to control this Orkestr chat.");
   assert.doesNotMatch(senderDenied, /missing a required Orkestr capability|connector setup/i);
