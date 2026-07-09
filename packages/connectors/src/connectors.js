@@ -188,7 +188,8 @@ export async function getConnectorStatuses({ env = process.env, home = os.homedi
     connectorAuthStatus("jira", env, { principal }),
     connectorAuthStatus("shopify", env, { principal }),
   ]);
-  const overlay = scopedPaths.global && !isTenantScopedRuntime(env) ? await readOverlay(env) : { connectors: {} };
+  const tenantScoped = isTenantScopedRuntime(env);
+  const overlay = scopedPaths.global && !tenantScoped ? await readOverlay(env) : { connectors: {} };
 
   const connectors = {
     openai: openaiKey
@@ -280,30 +281,30 @@ export async function getConnectorStatuses({ env = process.env, home = os.homedi
     gmail: gmailProfileExists && gmailAuth.state === "parent_config_missing"
       ? status("gmail", "Gmail", "partial", "Gmail browser profile exists. OAuth can be added from chat after the parent app is configured.", { parentConnector: gmailAuth.parentConnector })
       : oauthConnectorSetupStatus(gmailAuth, "Gmail", {
-          connected: "User Gmail OAuth token is stored locally.",
+          connected: tenantScoped ? "Instance Gmail OAuth token is stored locally." : "User Gmail OAuth token is stored locally.",
           broken: "Gmail OAuth failed. Restart Gmail sign-in from chat after fixing the parent app config.",
           pending: "Gmail sign-in is in progress. Finish the Google authorization link from chat.",
-          ready: "Parent Gmail app is configured. Connect this user's Gmail from chat.",
+          ready: tenantScoped ? "Parent Gmail app is configured. Connect Gmail for this instance from chat." : "Parent Gmail app is configured. Connect this user's Gmail from chat.",
           partial: "Parent Gmail app can start sign-in, but is missing required callback credentials.",
           missing: "Configure the parent Gmail app once; users can then connect Gmail from chat.",
         }),
     outlook: oauthConnectorSetupStatus(outlookAuth, "Outlook", {
-      connected: "User Outlook OAuth token is stored locally.",
+      connected: tenantScoped ? "Instance Outlook OAuth token is stored locally." : "User Outlook OAuth token is stored locally.",
       broken: "Outlook OAuth failed. Restart Outlook sign-in from chat after fixing the parent app config.",
       pending: "Outlook device sign-in is waiting for user approval.",
-      ready: "Parent Outlook app is configured. Connect this user's Outlook from chat.",
+      ready: tenantScoped ? "Parent Outlook app is configured. Connect Outlook for this instance from chat." : "Parent Outlook app is configured. Connect this user's Outlook from chat.",
       missing: "Configure the parent Outlook app once; users can then connect Outlook from chat.",
     }),
     jira: oauthConnectorSetupStatus(jiraAuth, "Jira", {
-      connected: "User Jira OAuth token is stored locally.",
+      connected: tenantScoped ? "Instance Jira OAuth token is stored locally." : "User Jira OAuth token is stored locally.",
       pending: "Jira sign-in is in progress. Finish Atlassian authorization from chat.",
-      ready: "Parent Jira app is configured. Connect this user's Jira account from chat.",
+      ready: tenantScoped ? "Parent Jira app is configured. Connect Jira for this instance from chat." : "Parent Jira app is configured. Connect this user's Jira account from chat.",
       missing: "Configure the parent Jira app once; users can then connect Jira from chat.",
     }),
     shopify: oauthConnectorSetupStatus(shopifyAuth, "Shopify", {
-      connected: "User Shopify OAuth token is stored locally.",
+      connected: tenantScoped ? "Instance Shopify OAuth token is stored locally." : "User Shopify OAuth token is stored locally.",
       pending: "Shopify sign-in is in progress. Finish store authorization from chat.",
-      ready: "Parent Shopify app is configured. Connect this user's Shopify store from chat.",
+      ready: tenantScoped ? "Parent Shopify app is configured. Connect Shopify for this instance from chat." : "Parent Shopify app is configured. Connect this user's Shopify store from chat.",
       missing: "Configure the parent Shopify app once; users can then connect Shopify from chat.",
     }),
     linkedin: linkedinProfileExists

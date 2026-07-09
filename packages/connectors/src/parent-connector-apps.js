@@ -4,6 +4,14 @@ function clean(value) {
   return String(value || "").trim();
 }
 
+function isTenantScopedRuntime(env = process.env) {
+  return Boolean(
+    clean(env.ORKESTR_TENANT_VM_ID) ||
+      clean(env.ORKESTR_TENANT_SLICE_ID) ||
+      clean(env.ORKESTR_TENANT_BOUNDARY) === "tenant-vm",
+  );
+}
+
 function firstEnv(env = process.env, keys = []) {
   for (const key of keys) {
     const value = clean(env[key]);
@@ -203,6 +211,7 @@ function whatsappParentConfigState(runtimeConfig, runtimeStatus = null) {
 export function parentConnectorAppStatus({ provider, config = {}, env = process.env, runtimeStatus = null } = {}) {
   const definition = parentConnectorProvider(provider);
   if (!definition) return null;
+  const instanceScoped = isTenantScopedRuntime(env) && Boolean(definition.tokenFile);
   const runtimeConfig = parentConnectorRuntimeConfig(definition.provider, config, env);
   const configState = definition.provider === "whatsapp"
     ? whatsappParentConfigState(runtimeConfig, runtimeStatus)
@@ -217,13 +226,15 @@ export function parentConnectorAppStatus({ provider, config = {}, env = process.
     setupSurface: definition.setupSurface,
     userSurface: definition.userSurface,
     authMode: definition.authMode,
-    userBindingKind: definition.userBindingKind,
+    userBindingKind: instanceScoped ? "instance_oauth_token" : definition.userBindingKind,
     userTokenFile: definition.tokenFile,
     parentConfigState: configState,
     parentAppConfigured: configState === "ready",
     parentAppPartiallyConfigured: configState === "partial",
     userConnectionRequired: Boolean(definition.tokenFile),
     missingParentConfigKeys: missingKeys,
-    summary: definition.summary,
+    summary: instanceScoped
+      ? `Parent Orkestr owns the ${definition.label} connector app; this instance stores one shared ${definition.label} token.`
+      : definition.summary,
   };
 }
