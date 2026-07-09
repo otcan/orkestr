@@ -231,10 +231,14 @@ export function googleWorkspaceConnectCommand(text = "") {
 }
 
 export function googleWorkspaceCapabilitiesFromToken(token = {}, fallback = []) {
+  const grantedScopes = Array.isArray(token.grantedScopes)
+    ? token.grantedScopes.map(clean).filter(Boolean)
+    : clean(token.scope).split(/[\s,]+/g).map(clean).filter(Boolean);
+  if (grantedScopes.length) return googleWorkspaceCapabilitiesForScopes(grantedScopes, fallback);
   if (Array.isArray(token.capabilities) && token.capabilities.length) {
     return normalizeGoogleWorkspaceCapabilities(token.capabilities, []);
   }
-  return googleWorkspaceCapabilitiesForScopes(token.scope || token.grantedScopes || "", fallback);
+  return googleWorkspaceCapabilitiesForScopes("", fallback);
 }
 
 export function publicGoogleWorkspaceTokenStatus(token = {}) {

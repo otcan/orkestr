@@ -19,6 +19,7 @@ import { connectorAuthStatus } from "../packages/connectors/src/connector-auth.j
 import { __brokerInstanceRegistryTestInternals } from "../packages/core/src/broker-instance-registry.js";
 import { userPrincipal } from "../packages/core/src/principal.js";
 import { getSetupStatus } from "../packages/core/src/setup.js";
+import { userScopedCapabilityHints } from "../packages/core/src/user-skills.js";
 import { writeConnectorConfig } from "../packages/storage/src/config.js";
 import { userDataPaths } from "../packages/storage/src/paths.js";
 
@@ -408,7 +409,7 @@ test("gmail oauth stores non-admin user tokens outside global secrets", async ()
         access_token: "alice-access",
         refresh_token: "alice-refresh",
         expires_in: 3600,
-        scope: "gmail",
+        scope: "https://www.googleapis.com/auth/gmail.readonly",
       }),
   );
 
@@ -500,6 +501,7 @@ test("brokered gmail grants refresh through the parent broker without local OAut
     });
   }, { userId: "firat" });
   const stored = await readGmailToken(env, { userId: "firat" });
+  const capabilities = await userScopedCapabilityHints({ userId: "firat" }, env);
 
   assert.equal(refreshed.accessToken, "access-new");
   assert.equal(refreshed.refreshToken, "refresh-owned-by-tenant");
@@ -507,6 +509,54 @@ test("brokered gmail grants refresh through the parent broker without local OAut
   assert.equal(stored.account, "firat@example.com");
   assert.equal(stored.brokered, true);
   assert.equal(stored.brokerInstanceId, "instance-firat");
+  assert.deepEqual(capabilities.connectorAuth.gmail.capabilities, ["gmail_read"]);
+});
+
+test("gmail status does not treat base Google identity scopes as Gmail access", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-gmail-base-scopes-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_TENANT_VM_ID: "firat-jobs-vm",
+    ORKESTR_BROKER_BASE_URL: "https://broker.example.test",
+  };
+  await writeBrokerClientRegistration(home, {
+    instanceId: "instance-firat",
+    channelId: "channel-firat",
+    brokerBaseUrl: "https://broker.example.test",
+  });
+  await saveBrokeredGmailGrant({
+    userId: "firat",
+    account: "firat@example.com",
+    provider: "google_workspace",
+    brokerInstanceId: "instance-firat",
+    requestedCapabilities: ["gmail_read"],
+    requestedScopes: ["https://www.googleapis.com/auth/gmail.readonly"],
+    token: {
+      accessToken: "access-profile-only",
+      refreshToken: "refresh-owned-by-tenant",
+      expiresAt: Math.floor(Date.now() / 1000) + 3600,
+      grantedScopes: [
+        "openid",
+        "https://www.googleapis.com/auth/userinfo.email",
+        "https://www.googleapis.com/auth/userinfo.profile",
+      ],
+    },
+  }, env);
+
+  const status = await connectorAuthStatus("gmail", env, { userId: "firat" });
+  const capabilities = await userScopedCapabilityHints({ userId: "firat" }, env);
+
+  assert.equal(status.state, "partial");
+  assert.equal(status.connected, false);
+  assert.deepEqual(status.capabilities, []);
+  assert.deepEqual(status.grantedScopes, [
+    "openid",
+    "https://www.googleapis.com/auth/userinfo.email",
+    "https://www.googleapis.com/auth/userinfo.profile",
+  ]);
+  assert.equal(capabilities.gmail, false);
+  assert.equal(capabilities.scopedConnectors.gmail, false);
+  assert.deepEqual(capabilities.connectorAuth.gmail.capabilities, []);
 });
 
 test("gmail connector status refreshes expired brokered tokens before account lookup", async () => {

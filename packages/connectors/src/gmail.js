@@ -206,7 +206,7 @@ function normalizeOAuthTokenPayload(payload, prior = {}, options = {}) {
   const expiresIn = Number(payload.expires_in || 3600);
   const requestedCapabilities = normalizeGoogleWorkspaceCapabilities(
     options.capabilities || options.requestedCapabilities || prior.requestedCapabilities || [],
-    [],
+    defaultGmailCapabilities,
   );
   const requestedScopes = uniqueList(options.scopes || options.requestedScopes || prior.requestedScopes || []);
   const grantedScopes = uniqueList(
@@ -258,7 +258,7 @@ function normalizeBrokerGrantToken(rawToken = {}, grant = {}, prior = {}) {
   }
   const requestedCapabilities = normalizeGoogleWorkspaceCapabilities(
     grant.requestedCapabilities || rawToken.requestedCapabilities || prior.requestedCapabilities || [],
-    [],
+    defaultGmailCapabilities,
   );
   const requestedScopes = uniqueList(grant.requestedScopes || rawToken.requestedScopes || prior.requestedScopes || []);
   const grantedScopeInput = Array.isArray(rawToken.grantedScopes)

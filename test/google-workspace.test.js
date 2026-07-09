@@ -114,6 +114,11 @@ test("google workspace scope selection maps only requested capabilities", () => 
     googleWorkspaceCapabilitiesForScopes("openid https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/calendar.events.readonly"),
     ["gmail_read", "calendar_read"],
   );
+  assert.deepEqual(
+    googleWorkspaceCapabilitiesForScopes("openid https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile", ["gmail_read"]),
+    [],
+  );
+  assert.deepEqual(googleWorkspaceCapabilitiesForScopes("", ["gmail_read"]), ["gmail_read"]);
 });
 
 test("whatsapp google connect link starts user-scoped oauth with selected scopes", async () => {

@@ -92,14 +92,15 @@ export function googleWorkspaceScopesForCapabilities(input = []) {
 }
 
 export function googleWorkspaceCapabilitiesForScopes(scopeValue = "", fallback = []) {
-  const scopes = new Set(Array.isArray(scopeValue)
+  const values = Array.isArray(scopeValue)
     ? scopeValue.map(clean).filter(Boolean)
-    : clean(scopeValue).split(/[\s,]+/g).map(clean).filter(Boolean));
+    : clean(scopeValue).split(/[\s,]+/g).map(clean).filter(Boolean);
+  const scopes = new Set(values);
   const capabilities = [];
   for (const definition of capabilityDefinitions) {
     if (definition.scopes.some((scope) => scopes.has(scope))) capabilities.push(definition.id);
   }
-  return capabilities.length ? capabilities : [...fallback];
+  return capabilities.length ? capabilities : (values.length ? [] : [...fallback]);
 }
 
 export function googleWorkspaceCapabilityDisclosure(input = []) {
