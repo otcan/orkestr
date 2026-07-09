@@ -199,6 +199,7 @@ test("brokered google workspace oauth provisions the Gmail grant to the tenant V
   assert.equal(connectorTarget.searchParams.get("instance_id"), registration.instanceId);
   assert.equal(connectorTarget.searchParams.get("user_id"), "firat");
   assert.equal(connectorTarget.searchParams.get("thread"), "firat-jobs");
+  assert.equal(connectorTarget.searchParams.get("connect"), link.connectId);
   assert.match(link.connectLink, /^https:\/\/connect\.orkestr\.de\/connect\/google\?connect=/);
   const started = await startGoogleWorkspaceOAuth(env, {
     connectId: link.connectId,

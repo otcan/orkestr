@@ -137,6 +137,7 @@ export function googleWorkspaceBrokeredConnectorSetupPath(result = {}, connector
   target.searchParams.set("instance_id", instanceId);
   if (userId) target.searchParams.set("user_id", userId);
   if (thread) target.searchParams.set("thread", thread);
+  if (clean(result.connectId)) target.searchParams.set("connect", clean(result.connectId));
   target.searchParams.set("auto", "0");
   return `${target.pathname}${target.search}`;
 }

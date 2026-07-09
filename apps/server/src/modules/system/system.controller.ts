@@ -38,6 +38,7 @@ import {
   parentConnectorProviderDefinitions,
   parentConnectorRuntimeConfig,
 } from "../../../../../packages/connectors/src/parent-connector-apps.js";
+import { getGoogleWorkspaceConnectRequest } from "../../../../../packages/connectors/src/google-workspace.js";
 import {
   approvePairingChallenge,
   createPairingChallenge,
@@ -359,7 +360,7 @@ async function pairingChallengeTarget(body: Record<string, unknown> = {}, reques
     role: user.role,
     instanceId,
     requestedPath,
-    ...connectorAuthIntentForRequestedPath(requestedPath, instanceId, user.id),
+    ...(await connectorAuthIntentForRequestedPath(requestedPath, instanceId, user.id)),
   };
 }
 
@@ -386,7 +387,7 @@ function sameOriginRequestedPath(body: Record<string, unknown> = {}, instanceId 
   }
 }
 
-function connectorAuthIntentForRequestedPath(requestedPath = "", instanceId = "", userId = "") {
+async function connectorAuthIntentForRequestedPath(requestedPath = "", instanceId = "", userId = "") {
   if (!requestedPath) return {};
   let target: URL;
   try {
@@ -404,9 +405,20 @@ function connectorAuthIntentForRequestedPath(requestedPath = "", instanceId = ""
   if (target.searchParams.get("provider") !== "google_workspace") return {};
   if (target.searchParams.get("action") !== "connect") return {};
   if (target.searchParams.get("instance_id") !== instanceId) return {};
+  const connectId = String(target.searchParams.get("connect") || target.searchParams.get("connect_id") || "").trim();
+  const connectRequest = await googleWorkspaceConnectRequestForPairingIntent(connectId, instanceId);
   const thread = String(target.searchParams.get("thread") || target.searchParams.get("thread_id") || "").trim();
+  const trustedThread = String(
+    connectRequest?.threadName ||
+      connectRequest?.brokerTenantThreadName ||
+      connectRequest?.threadTitle ||
+      connectRequest?.threadId ||
+      connectRequest?.brokerTenantThreadId ||
+      thread,
+  ).trim();
+  const trustedConnectId = String(connectRequest?.connectId || connectId).trim();
   return {
-    allowedActions: ["orkestr_auth.google.connect"],
+    allowedActions: [trustedConnectId ? `orkestr_auth.google.connect:${trustedConnectId}` : "orkestr_auth.google.connect"],
     authIntent: {
       mcp: "tools/call",
       tool: "orkestr_auth",
@@ -416,11 +428,28 @@ function connectorAuthIntentForRequestedPath(requestedPath = "", instanceId = ""
       actionLabel: "Connect Gmail",
       title: "Approve Gmail connection",
       description: `Approve Google Workspace access for instance ${instanceId}.`,
+      connectId: trustedConnectId,
       instanceId,
       userId,
-      thread,
+      thread: trustedThread,
+      threadId: String(connectRequest?.threadId || connectRequest?.brokerTenantThreadId || "").trim(),
+      chatId: String(connectRequest?.chatId || connectRequest?.brokerTenantChatId || "").trim(),
+      accountId: String(connectRequest?.accountId || connectRequest?.brokerTenantAccountId || "").trim(),
+      account: String(connectRequest?.account || "").trim().toLowerCase(),
+      source: String(connectRequest?.source || (trustedConnectId ? "connect_link" : "")).trim(),
     },
   };
+}
+
+async function googleWorkspaceConnectRequestForPairingIntent(connectId = "", instanceId = "") {
+  const id = String(connectId || "").trim();
+  if (!id) return null;
+  const payload = await getGoogleWorkspaceConnectRequest(id).catch(() => null);
+  const request = payload?.request && typeof payload.request === "object" ? payload.request : null;
+  if (!request) return null;
+  const requestInstanceId = String(request.brokerInstanceId || request.instanceId || "").trim();
+  if (requestInstanceId && requestInstanceId !== instanceId) return null;
+  return request;
 }
 
 function shouldRedactSetupStatus(request: any, status: any): boolean {

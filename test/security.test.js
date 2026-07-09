@@ -4,7 +4,9 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { startServer } from "../apps/server/src/server.js";
+import { createGoogleWorkspaceConnectLink } from "../packages/connectors/src/google-workspace.js";
 import { __brokerInstanceRegistryTestInternals, encryptBrokerChannelPayload } from "../packages/core/src/broker-instance-registry.js";
+import { userPrincipal } from "../packages/core/src/principal.js";
 import { approvePairingChallenge, authorizeHttpRequest, createPairingChallenge, pairBrowser, securityStatus } from "../packages/core/src/security.js";
 import { createTenantVm } from "../packages/core/src/tenant-vm-registry.js";
 import { createUser } from "../packages/core/src/users.js";
@@ -1044,6 +1046,81 @@ test("broker instance pairing challenge is scoped to the tenant VM owner", async
     assert.equal(body.challenge.authIntent.action, "connect");
     assert.equal(body.challenge.authIntent.instanceId, "instance-firat");
     assert.equal(body.challenge.authIntent.userId, "firat");
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    restoreEnv(prior);
+  }
+});
+
+test("broker instance connector challenge preserves trusted Google Workspace approval origin", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-security-broker-google-origin-"));
+  const prior = saveEnv([
+    "ORKESTR_HOME",
+    "ORKESTR_AUTH_REQUIRED",
+    "ORKESTR_RECOVER_RUNNING_ON_START",
+    "ORKESTR_CONNECT_PUBLIC_URL",
+    "ORKESTR_PUBLIC_AUTH_URL",
+  ]);
+  process.env.ORKESTR_HOME = home;
+  process.env.ORKESTR_AUTH_REQUIRED = "1";
+  process.env.ORKESTR_RECOVER_RUNNING_ON_START = "0";
+  process.env.ORKESTR_CONNECT_PUBLIC_URL = "https://connect.orkestr.de";
+  process.env.ORKESTR_PUBLIC_AUTH_URL = "https://connect.orkestr.de/setup/pairing";
+
+  const instanceId = "instance-firat";
+  const chatId = "120363428493624197@g.us";
+  await createUser({ id: "firat", role: "user", displayName: "Fırat" }, process.env);
+  await createTenantVm({
+    id: "firat-jobs-vm",
+    ownerUserId: "firat",
+    labels: { brokerInstanceId: instanceId },
+  }, process.env);
+  const connect = await createGoogleWorkspaceConnectLink({
+    principal: userPrincipal({ id: "firat", role: "user" }),
+    thread: {
+      id: "firat-jobs",
+      name: "Fırat Jobs",
+      binding: {
+        connector: "whatsapp",
+        chatId,
+        responderAccountId: "sender",
+        outboundAccountId: "sender",
+      },
+    },
+    chatId,
+    accountId: "sender",
+    brokerInstanceId: instanceId,
+    brokerTenantUserId: "firat",
+    brokerTenantThreadId: "firat-jobs",
+    brokerTenantThreadName: "Fırat Jobs",
+    brokerTenantChatId: chatId,
+    brokerTenantAccountId: "sender",
+  }, process.env);
+  const connectorUrl = new URL(connect.connectorLink);
+
+  const server = await startServer({ port: 0, host: "127.0.0.1" });
+  const { port } = server.address();
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/api/setup/security/challenges`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        instanceId,
+        requestedPath: `${connectorUrl.pathname}${connectorUrl.search}`,
+      }),
+    });
+    const body = await json(response);
+
+    assert.equal(response.status, 200);
+    assert.equal(body.challenge.userId, "firat");
+    assert.equal(body.challenge.instanceId, instanceId);
+    assert.equal(body.challenge.requestedPath, `${connectorUrl.pathname}${connectorUrl.search}`);
+    assert.equal(body.challenge.authIntent.connectId, connect.connectId);
+    assert.equal(body.challenge.authIntent.chatId, chatId);
+    assert.equal(body.challenge.authIntent.accountId, "sender");
+    assert.equal(body.challenge.authIntent.threadId, "firat-jobs");
+    assert.equal(body.challenge.authIntent.thread, "Fırat Jobs");
+    assert.deepEqual(body.challenge.allowedActions, [`orkestr_auth.google.connect:${connect.connectId}`]);
   } finally {
     await new Promise((resolve) => server.close(resolve));
     restoreEnv(prior);
