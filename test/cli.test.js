@@ -1005,6 +1005,50 @@ test("CLI lists timers from the public API", async () => {
   assert.match(stdout.text(), /thread-1/);
 });
 
+test("CLI runs Gmail jobs poll through the server API", async () => {
+  const stdout = capture();
+  const seen = [];
+  const code = await runCli([
+    "jobs",
+    "run",
+    "--owner-user-id",
+    "firat",
+    "--target-thread",
+    "firat-jobs",
+    "--max-results",
+    "5",
+    "--gmail-source",
+    "oauth",
+    "--no-gog-fallback",
+  ], {
+    stdout,
+    stderr: capture(),
+    fetchImpl: fakeFetch({
+      "POST /api/jobs/run": {
+        ok: true,
+        collected: 2,
+        upserted: { created: [{ id: "job-1" }] },
+        classified: { classified: [{ id: "job-1" }] },
+        presentation: { presented: [] },
+      },
+    }, seen),
+  });
+
+  assert.equal(code, 0);
+  assert.deepEqual(seen[0].body, {
+    ownerUserId: "firat",
+    targetThreadId: "firat-jobs",
+    gmailSource: "oauth",
+    maxResults: 5,
+    present: true,
+    gogFallback: false,
+  });
+  assert.match(stdout.text(), /Collected: 2/);
+  assert.match(stdout.text(), /Created: 1/);
+  assert.match(stdout.text(), /Classified: 1/);
+  assert.match(stdout.text(), /Presented: 0/);
+});
+
 test("CLI doctors timers through the public API", async () => {
   const stdout = capture();
   const code = await runCli(["doctor", "timers"], {

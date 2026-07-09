@@ -52,6 +52,7 @@ export async function runCli(argv = process.argv.slice(2), context = {}) {
     if (command === "api-session" || command === "api") return await apiSessionCommand(args, ctx);
     if (command === "whatsapp" || command === "wa") return await whatsappCommand(args, ctx);
     if (command === "timers" || command === "timer") return await timersCommand(args, ctx);
+    if (command === "jobs" || command === "job") return await jobsCommand(args, ctx);
     if (command === "connect") return await connectCommand(args, ctx);
     if (command === "security") return await securityCommand(args, ctx);
     if (command === "desktop" || command === "desktops") return await desktopCommand(args, ctx);
@@ -631,6 +632,13 @@ async function timersCommand(argv, ctx) {
   if (subcommand === "doctor") return doctorTimersCommand(rest, ctx);
   if (subcommand === "run") return runTimerCommand(rest, ctx);
   throw new Error("Usage: orkestr timers [list|doctor|run <timer-id>] [--json]");
+}
+
+async function jobsCommand(argv, ctx) {
+  const subcommand = argv[0]?.startsWith("--") ? "run" : argv[0] || "run";
+  const rest = subcommand === "run" && argv[0]?.startsWith("--") ? argv : argv.slice(1);
+  if (subcommand === "run" || subcommand === "poll") return runJobsCommand(rest, ctx);
+  throw new Error("Usage: orkestr jobs run [--owner-user-id user] [--target-thread thread] [--max-results N] [--json]");
 }
 
 async function whatsappCommand(argv, ctx) {
@@ -1282,6 +1290,40 @@ async function runTimerCommand(argv, ctx) {
   return 0;
 }
 
+async function runJobsCommand(argv, ctx) {
+  const json = argv.includes("--json");
+  const maxResults = flagValue(argv, "--max-results") || flagValue(argv, "--max") || "";
+  const body = {
+    ownerUserId: flagValue(argv, "--owner-user-id") || flagValue(argv, "--user-id") || "",
+    targetThreadId: flagValue(argv, "--target-thread") || flagValue(argv, "--thread") || "",
+    query: flagValue(argv, "--query") || "",
+    gmailSource: flagValue(argv, "--gmail-source") || "",
+    maxResults: maxResults ? Number(maxResults) : undefined,
+    fitThreshold: flagValue(argv, "--fit-threshold") || "",
+    present: argv.includes("--no-present") ? false : true,
+    gogFallback: argv.includes("--no-gog-fallback") ? false : undefined,
+  };
+  for (const key of Object.keys(body)) {
+    if (body[key] === "" || body[key] === undefined || Number.isNaN(body[key])) delete body[key];
+  }
+  const payload = await requestJson("/api/jobs/run", {
+    ...ctx,
+    method: "POST",
+    body,
+  });
+  if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+  else {
+    ctx.stdout.write([
+      "Gmail jobs poll completed",
+      `Collected: ${Number(payload.collected || 0)}`,
+      `Created: ${Number(payload.upserted?.created?.length || 0)}`,
+      `Classified: ${Number(payload.classified?.classified?.length || 0)}`,
+      `Presented: ${Number(payload.presentation?.presented?.length || 0)}`,
+    ].join("\n") + "\n");
+  }
+  return payload?.ok === false ? 1 : 0;
+}
+
 async function securityCommand(argv, ctx) {
   const subcommand = argv[0]?.startsWith("--") ? "challenges" : argv[0] || "challenges";
   const rest = subcommand === "challenges" && argv[0]?.startsWith("--") ? argv : argv.slice(1);
@@ -1857,6 +1899,7 @@ Advanced:
   orkestr whatsapp codex [status|connect] --thread <thread> [--account id] [--json]
   orkestr whatsapp bind-thread <thread> --name <group name> [--wa-participant jid]... [--json]
   orkestr timers [list|doctor|run <timer-id>] [--json]
+  orkestr jobs run [--owner-user-id user] [--target-thread thread] [--max-results N] [--json]
   orkestr connect approve <code> [--json]
   orkestr security [challenges|sessions|approve <challenge-id>|reject <challenge-id>|revoke <session-id|all>] [--json]
   orkestr desktop [share [slug]|approve <challenge-id>] [--json]
