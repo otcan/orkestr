@@ -627,7 +627,7 @@ async function findOAuthState(state, env = process.env) {
 async function provisionBrokeredGmailGrant(savedState = {}, token = {}, env = process.env, fetchImpl = fetch) {
   const brokerInstanceId = clean(savedState.brokerInstanceId);
   if (!brokerInstanceId) return null;
-  const account = normalizeEmail(token.account || savedState.account);
+  const account = normalizeEmail(token.account || token.email);
   const { record, body } = await encryptBrokerInstancePayload(brokerInstanceId, {
     provider: savedState.provider || "google_workspace",
     account,
@@ -687,7 +687,7 @@ export async function finishGmailOAuth(query, env = process.env, fetchImpl = fet
   const brokered = Boolean(clean(savedState.brokerInstanceId));
   const token = await exchangeGmailCode(code, env, fetchImpl, {
     ...scopeOptions,
-    account: savedState.account || "",
+    account: "",
     redirectUri: savedState.redirectUri || "",
     provider: savedState.provider || "gmail",
     connectId: savedState.connectId || "",
@@ -695,10 +695,7 @@ export async function finishGmailOAuth(query, env = process.env, fetchImpl = fet
     requestedScopes: savedState.requestedScopes || [],
     saveToken: false,
   });
-  const resolved = await tokenWithResolvedAccount(token, env, fetchImpl, {
-    ...scopeOptions,
-    verifyAccount: Boolean(savedState.account),
-  });
+  const resolved = await tokenWithResolvedAccount(token, env, fetchImpl, scopeOptions);
   if (!brokered) {
     await writeGmailToken(resolved.token, env, scopeOptions);
   }

@@ -359,7 +359,7 @@ export async function startGoogleWorkspaceOAuth(env = process.env, options = {})
   const { scope, ledger, request } = await findConnectRequest(connectId, env);
   assertConnectRequestUsable(request);
   const capabilities = normalizeGoogleWorkspaceCapabilities(options.capabilities, ["gmail_read"]);
-  const account = clean(options.account || request.account).toLowerCase();
+  const account = clean(options.account).toLowerCase();
   const started = await startGmailOAuth(env, {
     userId: scope.userId || "",
     account,

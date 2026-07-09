@@ -20,7 +20,7 @@ import {
   turnIdFor,
 } from "../../core/src/router-traces.js";
 import { appendThreadMessage, createThreadForPrincipal, enqueueThreadInputForPrincipal, getThread, listThreadMessages, listThreads, listThreadsForPrincipal, updateThread, updateThreadMessage } from "../../core/src/threads.js";
-import { adminUserId, findOrCreateExternalUser, getUser, normalizeUserId, readUserPrivateIdentities } from "../../core/src/users.js";
+import { adminUserId, findOrCreateExternalUser, getUser, normalizeUserId } from "../../core/src/users.js";
 import { dataPaths, ensureDataDirs } from "../../storage/src/paths.js";
 import { readConnectorConfig } from "../../storage/src/config.js";
 import { appendEvent, readJson, writeJson } from "../../storage/src/store.js";
@@ -1298,25 +1298,6 @@ async function principalForThread(thread = {}, env = process.env) {
     return adminPrincipal({ id: ownerUserId, displayName: user.displayName || ownerUserId });
   }
   return userPrincipal({ id: ownerUserId, role: "user", displayName: user?.displayName || ownerUserId, source: "whatsapp-owner" });
-}
-
-function normalizedMailAccount(value = "") {
-  const text = pickString(value).toLowerCase();
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(text) ? text : "";
-}
-
-async function gmailAccountForThreadOwner(thread = {}, env = process.env) {
-  const ownerUserId = resourceOwnerUserId(thread, env);
-  if (!ownerUserId) return "";
-  const [user, identities] = await Promise.all([
-    getUser(ownerUserId, env).catch(() => null),
-    readUserPrivateIdentities(ownerUserId, env).catch(() => []),
-  ]);
-  const gmailIdentity = (Array.isArray(identities) ? identities : []).find((identity) =>
-    pickString(identity?.provider).toLowerCase() === "gmail"
-  );
-  return normalizedMailAccount(gmailIdentity?.accountId || gmailIdentity?.externalId) ||
-    normalizedMailAccount(user?.email);
 }
 
 function explicitWhatsAppApprovalReply(text = "") {
@@ -4191,7 +4172,6 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
       thread,
       chatId,
       accountId,
-      account: await gmailAccountForThreadOwner(thread, env),
     }, env);
     await appendThreadMessage(thread.id, {
       role: "assistant",

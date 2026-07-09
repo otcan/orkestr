@@ -213,10 +213,10 @@ test("brokered google workspace oauth provisions the Gmail grant to the tenant V
     capabilities: ["gmail_read"],
   });
   assert.equal(started.redirectUri, "https://app.orkestr.de/oauth/gmail/callback");
-  assert.equal(new URL(started.authorizeUrl).searchParams.get("login_hint"), "firatkahya@gmail.com");
+  assert.equal(new URL(started.authorizeUrl).searchParams.get("login_hint"), null);
   const savedState = JSON.parse(await fs.readFile(path.join(userDataPaths("firat", env).oauth, "gmail-state.json"), "utf8"));
   assert.equal(savedState.redirectUri, "https://app.orkestr.de/oauth/gmail/callback");
-  assert.equal(savedState.account, "firatkahya@gmail.com");
+  assert.equal(savedState.account, "");
   const calls = [];
   const brokeredAccessToken = `ya29.${"c".repeat(90)}`;
   const result = await finishGmailOAuth(

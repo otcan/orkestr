@@ -10088,7 +10088,7 @@ test("whatsapp /connect google creates a user-scoped workspace oauth link", asyn
   assert.equal(ledger.requests[0].connectId, routed.connectId);
   assert.equal(ledger.requests[0].userId, "alice");
   assert.equal(ledger.requests[0].threadId, "google-connect-thread");
-  assert.equal(ledger.requests[0].account, "alice-gmail@example.com");
+  assert.equal(ledger.requests[0].account, "");
 });
 
 test("direct whatsapp thread inputs inherit binding delivery metadata", async () => {
