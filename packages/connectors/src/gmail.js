@@ -46,6 +46,33 @@ function normalizeEmail(value = "") {
   return clean(value).toLowerCase();
 }
 
+function positiveInteger(value, fallback) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
+}
+
+function looksLikeGoogleAccessToken(value = "") {
+  const token = clean(value);
+  return token.startsWith("ya29.") || token.startsWith("ya29_") || token.length >= 80;
+}
+
+function profileLookupTimeoutMs(env = process.env) {
+  return Math.max(250, Math.min(5000, positiveInteger(env.ORKESTR_GMAIL_PROFILE_LOOKUP_TIMEOUT_MS, 1500)));
+}
+
+function timeoutFetch(fetchImpl = fetch, timeoutMs = 1500) {
+  return async (url, options = {}) => {
+    if (!timeoutMs || options.signal) return fetchImpl(url, options);
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      return await fetchImpl(url, { ...options, signal: controller.signal });
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+}
+
 function approvedTesterAccounts(config = {}) {
   return splitList(config.approvedTesters || config.approvedTesterAccounts || config.allowedAccounts)
     .map(normalizeEmail)
@@ -264,7 +291,7 @@ export async function saveBrokeredGmailGrant(grant = {}, env = process.env) {
     ok: true,
     provider: token.provider,
     userId,
-    account: clean(grant.account),
+    account: token.account || clean(grant.account),
     brokerInstanceId: token.brokerInstanceId,
     capabilities: token.capabilities || [],
     grantedScopes: token.grantedScopes || [],
@@ -284,6 +311,54 @@ async function saveOAuthError(error, env, options = {}) {
 export async function readGmailToken(env = process.env, options = {}) {
   const scope = await connectorScopePaths(env, options);
   return readJson(connectorFile(scope, "secrets", "gmail-token.json"), {});
+}
+
+export async function getGmailProfileEmail(accessToken = "", fetchImpl = fetch, options = {}) {
+  const token = clean(accessToken);
+  if (!token) return "";
+  if (!options.forceProfileLookup && !looksLikeGoogleAccessToken(token)) return "";
+  const response = await timeoutFetch(fetchImpl, positiveInteger(options.timeoutMs, profileLookupTimeoutMs(options.env || process.env)))(
+    `${gmailApiBase}/profile`,
+    {
+      headers: {
+        authorization: `Bearer ${token}`,
+        accept: "application/json",
+      },
+    },
+  );
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const error = new Error(payload.error?.message || payload.error || `gmail_profile_http_${response.status}`);
+    error.statusCode = 502;
+    throw error;
+  }
+  return normalizeEmail(payload.emailAddress || payload.email || "");
+}
+
+async function tokenWithResolvedAccount(token = {}, env = process.env, fetchImpl = fetch, options = {}) {
+  const account = normalizeEmail(token.account || token.email || token.loginHint);
+  if (account) return { token: { ...token, account }, account, updated: false };
+  const resolved = await getGmailProfileEmail(token.accessToken || token.access_token, fetchImpl, { ...options, env }).catch(() => "");
+  if (!resolved) return { token, account: "", updated: false };
+  return {
+    token: {
+      ...token,
+      account: resolved,
+      email: normalizeEmail(token.email) || resolved,
+      updatedAt: new Date().toISOString(),
+    },
+    account: resolved,
+    updated: true,
+  };
+}
+
+export async function enrichGmailTokenAccount(env = process.env, fetchImpl = fetch, options = {}) {
+  const token = await readGmailToken(env, options);
+  const resolved = await tokenWithResolvedAccount(token, env, fetchImpl, options);
+  if (resolved.updated) {
+    await writeGmailToken(resolved.token, env, options);
+  }
+  return resolved;
 }
 
 export async function startGmailOAuth(env = process.env, options = {}) {
@@ -514,9 +589,10 @@ async function findOAuthState(state, env = process.env) {
 async function provisionBrokeredGmailGrant(savedState = {}, token = {}, env = process.env, fetchImpl = fetch) {
   const brokerInstanceId = clean(savedState.brokerInstanceId);
   if (!brokerInstanceId) return null;
+  const account = normalizeEmail(token.account || savedState.account);
   const { record, body } = await encryptBrokerInstancePayload(brokerInstanceId, {
     provider: savedState.provider || "google_workspace",
-    account: savedState.account || "",
+    account,
     userId: savedState.brokerTenantUserId || savedState.userId || "",
     tenantVmId: savedState.brokerTenantVmId || "",
     threadId: savedState.brokerTenantThreadId || savedState.threadId || "",
@@ -528,6 +604,8 @@ async function provisionBrokeredGmailGrant(savedState = {}, token = {}, env = pr
     token: {
       accessToken: token.accessToken || "",
       refreshToken: token.refreshToken || "",
+      account,
+      email: account,
       scope: token.scope || "",
       grantedScopes: token.grantedScopes || [],
       capabilities: token.capabilities || [],
@@ -579,9 +657,14 @@ export async function finishGmailOAuth(query, env = process.env, fetchImpl = fet
     requestedScopes: savedState.requestedScopes || [],
     saveToken: !brokered,
   });
+  const resolved = await tokenWithResolvedAccount(token, env, fetchImpl, scopeOptions);
+  if (!brokered && resolved.updated) {
+    await writeGmailToken(resolved.token, env, scopeOptions);
+  }
   const brokerGrant = brokered
-    ? await provisionBrokeredGmailGrant(savedState, token, env, fetchImpl)
+    ? await provisionBrokeredGmailGrant(savedState, resolved.token, env, fetchImpl)
     : null;
+  const account = resolved.account || savedState.account || "";
   return {
     ok: true,
     provider: savedState.provider || "gmail",
@@ -590,16 +673,16 @@ export async function finishGmailOAuth(query, env = process.env, fetchImpl = fet
     brokerGrant,
     state,
     connectId: savedState.connectId || "",
-    account: savedState.account || "",
+    account,
     userId: savedState.userId || "",
     threadId: savedState.threadId || "",
     chatId: savedState.chatId || "",
     accountId: savedState.accountId || "",
-    scope: token.scope,
-    grantedScopes: token.grantedScopes || [],
+    scope: resolved.token.scope,
+    grantedScopes: resolved.token.grantedScopes || [],
     requestedCapabilities: savedState.requestedCapabilities || [],
-    capabilities: token.capabilities || [],
-    expiresAt: token.expiresAt,
+    capabilities: resolved.token.capabilities || [],
+    expiresAt: resolved.token.expiresAt,
     receivedAt: new Date().toISOString(),
   };
 }

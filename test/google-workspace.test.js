@@ -208,6 +208,7 @@ test("brokered google workspace oauth provisions the Gmail grant to the tenant V
   const savedState = JSON.parse(await fs.readFile(path.join(userDataPaths("firat", env).oauth, "gmail-state.json"), "utf8"));
   assert.equal(savedState.redirectUri, "https://connect.orkestr.de/oauth/gmail/callback");
   const calls = [];
+  const brokeredAccessToken = `ya29.${"c".repeat(90)}`;
   const result = await finishGmailOAuth(
     new URLSearchParams({ code: "broker-code", state: started.state }),
     env,
@@ -217,19 +218,25 @@ test("brokered google workspace oauth provisions the Gmail grant to the tenant V
         const body = new URLSearchParams(options.body);
         assert.equal(body.get("code"), "broker-code");
         return jsonResponse({
-          access_token: "brokered-access",
+          access_token: brokeredAccessToken,
           refresh_token: "brokered-refresh",
           expires_in: 3600,
           scope: "https://www.googleapis.com/auth/gmail.readonly",
         });
+      }
+      if (String(url) === "https://gmail.googleapis.com/gmail/v1/users/me/profile") {
+        return jsonResponse({ emailAddress: "Firat@Example.COM" });
       }
       assert.equal(String(url), "https://tenant.example.test/api/broker/google-workspace/grants");
       const decrypted = await decryptBrokerClientPayload(JSON.parse(options.body), { ORKESTR_HOME: tenantHome });
       assert.equal(decrypted.payload.userId, "firat");
       assert.equal(decrypted.payload.threadId, "firat-jobs");
       assert.equal(decrypted.payload.chatId, "firat-wa");
-      assert.equal(decrypted.payload.token.accessToken, "brokered-access");
+      assert.equal(decrypted.payload.account, "firat@example.com");
+      assert.equal(decrypted.payload.token.accessToken, brokeredAccessToken);
       assert.equal(decrypted.payload.token.refreshToken, "brokered-refresh");
+      assert.equal(decrypted.payload.token.account, "firat@example.com");
+      assert.equal(decrypted.payload.token.email, "firat@example.com");
       return jsonResponse({ ok: true, grant: { ok: true } });
     },
   );
@@ -240,6 +247,7 @@ test("brokered google workspace oauth provisions the Gmail grant to the tenant V
   assert.equal(result.brokerInstanceId, registration.instanceId);
   assert.deepEqual(calls, [
     "https://oauth2.googleapis.com/token",
+    "https://gmail.googleapis.com/gmail/v1/users/me/profile",
     "https://tenant.example.test/api/broker/google-workspace/grants",
   ]);
   assert.deepEqual(await readGmailToken(env, { userId: "firat" }), {});

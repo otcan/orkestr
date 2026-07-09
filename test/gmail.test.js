@@ -15,6 +15,7 @@ import {
   saveBrokeredGmailGrant,
   startGmailOAuth,
 } from "../packages/connectors/src/gmail.js";
+import { connectorAuthStatus } from "../packages/connectors/src/connector-auth.js";
 import { __brokerInstanceRegistryTestInternals } from "../packages/core/src/broker-instance-registry.js";
 import { userPrincipal } from "../packages/core/src/principal.js";
 import { getSetupStatus } from "../packages/core/src/setup.js";
@@ -219,6 +220,70 @@ test("gmail callback validates state and exchanges tokens", async () => {
 
   assert.equal(result.ok, true);
   assert.equal((await readGmailToken(env)).accessToken, "access-callback");
+});
+
+test("gmail callback resolves missing account from the Gmail profile", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-gmail-profile-callback-"));
+  const env = { ORKESTR_HOME: home };
+  await writeConnectorConfig("gmail", {
+    clientId: "client-id",
+    clientSecret: "client-secret",
+    redirectUri: "http://localhost/callback",
+  }, env);
+  const accessToken = `ya29.${"a".repeat(90)}`;
+  const started = await startGmailOAuth(env);
+  const query = new URLSearchParams({ code: "callback-code", state: started.state });
+
+  const result = await finishGmailOAuth(query, env, async (url) => {
+    if (String(url) === "https://oauth2.googleapis.com/token") {
+      return jsonResponse({
+        access_token: accessToken,
+        refresh_token: "refresh-callback",
+        expires_in: 60,
+      });
+    }
+    if (String(url) === "https://gmail.googleapis.com/gmail/v1/users/me/profile") {
+      return jsonResponse({ emailAddress: "Person@Example.COM" });
+    }
+    throw new Error(`unexpected_url:${url}`);
+  });
+  const stored = await readGmailToken(env);
+
+  assert.equal(result.account, "person@example.com");
+  assert.equal(stored.account, "person@example.com");
+});
+
+test("gmail connector status backfills a missing account from the Gmail profile", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-gmail-profile-status-"));
+  const env = { ORKESTR_HOME: home };
+  const accessToken = `ya29.${"b".repeat(90)}`;
+  await writeConnectorConfig("gmail", {
+    clientId: "client-id",
+    clientSecret: "client-secret",
+    redirectUri: "http://localhost/callback",
+  }, env);
+  await exchangeGmailCode("code-123", env, async () =>
+    jsonResponse({
+      access_token: accessToken,
+      refresh_token: "refresh-1",
+      expires_in: 3600,
+      scope: "https://www.googleapis.com/auth/gmail.readonly",
+      token_type: "Bearer",
+    }),
+  );
+
+  const status = await connectorAuthStatus("gmail", env, {
+    forceProfileLookup: true,
+    fetchImpl: async (url) => {
+      assert.equal(String(url), "https://gmail.googleapis.com/gmail/v1/users/me/profile");
+      return jsonResponse({ emailAddress: "Connected@Example.COM" });
+    },
+  });
+  const stored = await readGmailToken(env);
+
+  assert.equal(status.state, "connected");
+  assert.equal(status.account, "connected@example.com");
+  assert.equal(stored.account, "connected@example.com");
 });
 
 test("gmail oauth remembers the originating thread for callback notifications", async () => {

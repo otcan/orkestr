@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { appendEvent, readJson, writeJson } from "../../storage/src/store.js";
 import { connectorFile, connectorScopePaths } from "./connector-storage.js";
-import { startGmailOAuth } from "./gmail.js";
+import { enrichGmailTokenAccount, startGmailOAuth } from "./gmail.js";
 import {
   googleWorkspaceCapabilityLabels,
   googleWorkspaceCapabilitiesForScopes,
@@ -213,17 +213,26 @@ export async function connectorAuthStatus(providerId = "", env = process.env, op
             : parentConnector.parentAppPartiallyConfigured
               ? "parent_config_partial"
               : "parent_config_missing";
+  let statusToken = token;
+  let account = clean(token.account || pending.account || oauthState.account);
+  if (provider === "gmail" && tokenExists && !account) {
+    const resolved = await enrichGmailTokenAccount(env, options.fetchImpl || fetch, options).catch(() => null);
+    if (resolved?.account) {
+      account = resolved.account;
+      statusToken = resolved.token || { ...token, account };
+    }
+  }
   return {
     ok: true,
     provider,
     state,
     connected: tokenExists,
     pending: state === "pending" || state === "authorization_url_ready",
-    account: clean(token.account || pending.account || oauthState.account),
+    account,
     shop: clean(oauthState.shop),
     parentConnector,
     userConnectionRequired: true,
-    ...(provider === "gmail" && tokenExists ? publicGmailTokenDetails(token) : {}),
+    ...(provider === "gmail" && tokenExists ? publicGmailTokenDetails(statusToken) : {}),
     error: clean(error.message),
     updatedAt: clean(error.updatedAt),
     message: tokenExists
