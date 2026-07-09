@@ -192,6 +192,41 @@ test("broker client registration cache is scoped to the declared WhatsApp number
   assert.equal(JSON.stringify(cached).includes("49176"), false);
 });
 
+test("broker client registration prefers canonical broker base over demo fallback", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-broker-client-base-precedence-"));
+  const calls = [];
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_BROKER_BASE_URL: "https://broker.orkestr.test",
+    ORKESTR_DEMO_BROKER_BASE_URL: "https://connect.crawlerai.de",
+  };
+  const fetchImpl = async (url, options = {}) => {
+    calls.push({ url: String(url), body: JSON.parse(options.body) });
+    return {
+      ok: true,
+      status: 200,
+      async json() {
+        return {
+          ok: true,
+          instanceId: "instance-canonical",
+          channelId: "channel-canonical",
+          registeredAt: "2026-06-11T00:00:00.000Z",
+          broker: {
+            keyId: "broker-key-1",
+            publicKey: "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VuAyEA2IFd3Rdi7NTih5q0Glq82pzgjEycOnu/MpuxJdGzGn4=\n-----END PUBLIC KEY-----\n",
+          },
+        };
+      },
+    };
+  };
+
+  const registered = await ensureBrokerClientRegistration(env, { fetchImpl });
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, "https://broker.orkestr.test/api/broker/instances/register");
+  assert.equal(registered.brokerBaseUrl, "https://broker.orkestr.test");
+});
+
 test("broker registration rejects missing token and enforces use/rate limits", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-broker-limits-"));
   const client = __brokerInstanceRegistryTestInternals.createX25519Identity();

@@ -261,9 +261,22 @@ export async function createGoogleWorkspaceConnectLink({
   brokerTenantThreadName = "",
   brokerTenantChatId = "",
   brokerTenantAccountId = "",
+  brokerServerRequest = false,
 } = {}, env = process.env) {
   if (brokeredGoogleWorkspaceConnectEnabled(env)) {
     return createBrokeredGoogleWorkspaceConnectLink({ principal, thread, chatId, accountId, account }, env);
+  }
+  const brokerContextProvided = Boolean(clean(
+    brokerInstanceId ||
+      brokerTenantVmId ||
+      brokerTenantUserId ||
+      brokerTenantThreadId ||
+      brokerTenantThreadName ||
+      brokerTenantChatId ||
+      brokerTenantAccountId,
+  ));
+  if (brokerContextProvided && brokerServerRequest !== true) {
+    throw connectorError("broker_google_workspace_connect_requires_parent_broker", 409);
   }
   const scope = await connectorScopePaths(env, { principal });
   const connectId = randomUUID();

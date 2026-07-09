@@ -256,6 +256,7 @@ test("google workspace brokered connect links require instance and owner scoped 
     brokerTenantThreadId: "firat-thread",
     brokerTenantChatId: "firat-chat",
     brokerTenantAccountId: "sender",
+    brokerServerRequest: true,
   }, process.env);
   const connectorUrl = new URL(connect.link);
   assert.equal(connectorUrl.origin, "https://connect.orkestr.de");

@@ -1095,6 +1095,7 @@ test("broker instance connector challenge preserves trusted Google Workspace app
     brokerTenantThreadName: "Fırat Jobs",
     brokerTenantChatId: chatId,
     brokerTenantAccountId: "sender",
+    brokerServerRequest: true,
   }, process.env);
   const connectorUrl = new URL(connect.connectorLink);
 

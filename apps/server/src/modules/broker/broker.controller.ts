@@ -172,6 +172,7 @@ export class BrokerController {
       brokerTenantThreadName: clean(payload.threadName || payload.threadTitle || threadId),
       brokerTenantChatId: chatId,
       brokerTenantAccountId: accountId,
+      brokerServerRequest: true,
     }, process.env));
     return { ...link, ok: true, instanceId: record.instanceId };
   }

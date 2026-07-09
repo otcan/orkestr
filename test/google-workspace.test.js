@@ -190,6 +190,7 @@ test("brokered google workspace oauth provisions the Gmail grant to the tenant V
     brokerTenantThreadId: "firat-jobs",
     brokerTenantChatId: "firat-wa",
     brokerTenantAccountId: "de-wa",
+    brokerServerRequest: true,
   }, env);
   const connectorTarget = new URL(link.link);
   assert.equal(connectorTarget.origin, "https://connect.orkestr.de");
@@ -336,6 +337,32 @@ test("tenant google workspace connect link is created by the parent broker", asy
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test("google workspace connect rejects tenant broker metadata without broker routing", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-google-workspace-local-broker-denied-"));
+  const env = await configureGoogle(home);
+
+  await assert.rejects(
+    createGoogleWorkspaceConnectLink({
+      principal: userPrincipal({ id: "eren" }),
+      thread: {
+        id: "eren-jobs-slice",
+        binding: { chatId: "eren-wa", responderAccountId: "sender" },
+      },
+      brokerInstanceId: "stale-instance-from-agent-memory",
+      brokerTenantVmId: "eren-jobs-slice",
+      brokerTenantUserId: "eren",
+      brokerTenantThreadId: "eren-jobs-slice",
+      brokerTenantChatId: "eren-wa",
+      brokerTenantAccountId: "sender",
+    }, env),
+    /broker_google_workspace_connect_requires_parent_broker/,
+  );
+  await assert.rejects(
+    fs.access(path.join(home, "oauth", "google-workspace-connect.json")),
+    /ENOENT/,
+  );
 });
 
 test("google workspace callback stores only granted partial capabilities", async () => {

@@ -509,7 +509,7 @@ export async function heartbeatBrokerInstance(instanceId, { body = {}, request =
 
 export function brokerClientHeartbeatConfigured(env = process.env) {
   if (falsey(env.ORKESTR_BROKER_CLIENT_HEARTBEAT)) return false;
-  return Boolean(clean(env.ORKESTR_DEMO_BROKER_BASE_URL || env.ORKESTR_BROKER_BASE_URL));
+  return Boolean(clean(env.ORKESTR_BROKER_BASE_URL || env.ORKESTR_DEMO_BROKER_BASE_URL));
 }
 
 export function brokerClientHeartbeatIntervalMs(env = process.env) {
@@ -613,7 +613,7 @@ export async function sendBrokerClientHeartbeat(env = process.env, options = {})
 
 export async function ensureBrokerClientRegistration(env = process.env, options = {}) {
   const paths = await ensureDataDirs(env);
-  const brokerBaseUrl = clean(env.ORKESTR_DEMO_BROKER_BASE_URL || env.ORKESTR_BROKER_BASE_URL || options.brokerBaseUrl);
+  const brokerBaseUrl = clean(env.ORKESTR_BROKER_BASE_URL || env.ORKESTR_DEMO_BROKER_BASE_URL || options.brokerBaseUrl);
   if (!brokerBaseUrl) return { ok: false, reason: "broker_base_url_missing" };
   const desiredInstanceId = clean(env.ORKESTR_BROKER_INSTANCE_ID || env.ORKESTR_INSTANCE_ID || options.instanceId);
   const whatsappNumber = clean(env.ORKESTR_DEMO_WHATSAPP_NUMBER || env.ORKESTR_DEMO_WA_NUMBER);

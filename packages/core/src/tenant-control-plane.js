@@ -21,7 +21,7 @@ export function normalizeTenantControlPlane(input = {}, env = process.env, optio
   const connectPublicUrl = clean(source.connectPublicUrl || source.publicConnectUrl || env.ORKESTR_CONNECT_PUBLIC_URL);
   const connectPublicBaseUrl = clean(source.connectPublicBaseUrl || source.publicConnectBaseUrl || env.ORKESTR_CONNECT_PUBLIC_BASE_URL);
   const connectPublicSetupUrl = clean(source.connectPublicSetupUrl || source.publicSetupUrl || env.ORKESTR_CONNECT_PUBLIC_SETUP_URL);
-  const brokerBaseUrl = clean(source.brokerBaseUrl || source.controlPlaneBaseUrl || source.baseUrl || env.ORKESTR_DEMO_BROKER_BASE_URL || env.ORKESTR_BROKER_BASE_URL);
+  const brokerBaseUrl = clean(source.brokerBaseUrl || source.controlPlaneBaseUrl || source.baseUrl || env.ORKESTR_BROKER_BASE_URL || env.ORKESTR_DEMO_BROKER_BASE_URL);
   const hasPublicCoordinate = Boolean(
     authUrl ||
     publicAuthUrl ||

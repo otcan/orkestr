@@ -72,8 +72,8 @@ async function demoBrokerRegistration(env = process.env, options = {}) {
     if (instanceId) return { ok: true, instanceId, source: "static_instance_id" };
   }
   const brokerBaseUrl = firstValue(
-    env.ORKESTR_DEMO_BROKER_BASE_URL,
     env.ORKESTR_BROKER_BASE_URL,
+    env.ORKESTR_DEMO_BROKER_BASE_URL,
     demoInternalUrl(env),
   );
   return ensureBrokerClientRegistration({

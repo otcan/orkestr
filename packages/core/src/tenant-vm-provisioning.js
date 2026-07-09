@@ -173,7 +173,7 @@ function runtimeEnv(input = {}, env = process.env) {
     clean(source.ORKESTR_DEMO_MODE) ||
     clean(input.demoWhatsappNumber || env.ORKESTR_DEMO_WHATSAPP_NUMBER) ||
     (!sliceTenant && clean(input.whatsappNumber)) ||
-    (!sliceTenant && clean(input.brokerBaseUrl || input.demoBrokerBaseUrl || env.ORKESTR_DEMO_BROKER_BASE_URL || env.ORKESTR_BROKER_BASE_URL));
+    (!sliceTenant && clean(input.brokerBaseUrl || input.demoBrokerBaseUrl || env.ORKESTR_BROKER_BASE_URL || env.ORKESTR_DEMO_BROKER_BASE_URL));
   const port = clean(input.port || input.orkestrPort || source.ORKESTR_PORT || env.ORKESTR_PORT || env.PORT || "19812");
   const tenantVmRuntime = Boolean(input.tenantVmId || input.tenantSliceId);
   const tenantVmId = clean(input.tenantVmId || input.vmId || "");
@@ -217,7 +217,7 @@ function runtimeEnv(input = {}, env = process.env) {
     ORKESTR_PORT: demoEnabled || input.tenantVmId || input.tenantSliceId ? port : "",
     PORT: demoEnabled || input.tenantVmId || input.tenantSliceId ? source.PORT || port : "",
     ORKESTR_DEMO_WHATSAPP_NUMBER: demoEnabled ? input.whatsappNumber || input.demoWhatsappNumber || env.ORKESTR_DEMO_WHATSAPP_NUMBER : "",
-    ORKESTR_DEMO_BROKER_BASE_URL: demoEnabled ? input.brokerBaseUrl || input.demoBrokerBaseUrl || env.ORKESTR_DEMO_BROKER_BASE_URL || env.ORKESTR_BROKER_BASE_URL : controlPlane.brokerBaseUrl,
+    ORKESTR_DEMO_BROKER_BASE_URL: demoEnabled ? input.brokerBaseUrl || input.demoBrokerBaseUrl || env.ORKESTR_BROKER_BASE_URL || env.ORKESTR_DEMO_BROKER_BASE_URL : controlPlane.brokerBaseUrl,
     ORKESTR_DEMO_ENTRY_BASE_URL: demoEnabled ? input.entryBaseUrl || input.publicEntryBaseUrl || env.ORKESTR_DEMO_ENTRY_BASE_URL || env.ORKESTR_PUBLIC_SITE_URL || env.ORKESTR_PRIMARY_PUBLIC_URL : "",
     ORKESTR_CONNECT_PUBLIC_BASE_URL: demoEnabled ? input.connectPublicBaseUrl || input.publicConnectBaseUrl || env.ORKESTR_CONNECT_PUBLIC_BASE_URL : controlPlane.connectPublicBaseUrl || publicUrls.connectBaseUrl,
     ORKESTR_DEMO_BROKER_REGISTRATION_TOKEN: demoEnabled ? input.brokerRegistrationToken || env.ORKESTR_DEMO_BROKER_REGISTRATION_TOKEN || env.ORKESTR_BROKER_REGISTRATION_TOKEN : "",
