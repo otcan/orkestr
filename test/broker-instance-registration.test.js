@@ -267,7 +267,14 @@ test("broker heartbeat requires encrypted channel payload", async () => {
   const registration = await registerBrokerInstance({
     env,
     request: request({ authorization: "Bearer register-secret" }),
-    body: { encryptionPublicKey: client.publicKey, version: "before" },
+    body: {
+      encryptionPublicKey: client.publicKey,
+      version: "before",
+      endpointBaseUrl: "http://10.43.10.12",
+      connectBaseUrl: "https://connect.crawlerai.de",
+      setupUrl: "https://connect.crawlerai.de/setup/pairing?return=%2Fsetup",
+      relayAccountId: "sender",
+    },
   });
 
   await assert.rejects(
@@ -279,7 +286,12 @@ test("broker heartbeat requires encrypted channel payload", async () => {
     /invalid_encrypted_payload|Unsupported state|unable to authenticate/i,
   );
 
-  const envelope = encryptBrokerChannelPayload({ version: "after" }, {
+  const envelope = encryptBrokerChannelPayload({
+    version: "after",
+    connectBaseUrl: "https://connect.orkestr.de",
+    setupUrl: "",
+    relayAccountId: "",
+  }, {
     clientPrivateKey: client.privateKey,
     brokerPublicKey: registration.broker.publicKey,
     channelId: registration.channelId,
@@ -294,6 +306,10 @@ test("broker heartbeat requires encrypted channel payload", async () => {
   const instances = await listBrokerInstances(env);
   assert.equal(instances.instances[0].status, "online");
   assert.equal(instances.instances[0].version, "after");
+  assert.equal(instances.instances[0].endpointBaseUrl, "http://10.43.10.12");
+  assert.equal(instances.instances[0].connectBaseUrl, "https://connect.orkestr.de");
+  assert.equal(instances.instances[0].setupUrl, "");
+  assert.equal(instances.instances[0].relayAccountId, "");
   assert.ok(instances.instances[0].lastHeartbeatAt);
 });
 

@@ -475,13 +475,27 @@ export async function heartbeatBrokerInstance(instanceId, { body = {}, request =
   const displayName = clean(payload.displayName || payload.name).slice(0, 120);
   if (displayName) record.displayName = displayName;
   const endpointBaseUrl = clean(payload.endpointBaseUrl || payload.baseUrl || payload.apiBaseUrl).slice(0, 500);
-  if (endpointBaseUrl) record.endpointBaseUrl = endpointBaseUrl;
+  if (Object.prototype.hasOwnProperty.call(payload, "endpointBaseUrl") ||
+    Object.prototype.hasOwnProperty.call(payload, "baseUrl") ||
+    Object.prototype.hasOwnProperty.call(payload, "apiBaseUrl")) {
+    record.endpointBaseUrl = endpointBaseUrl;
+  }
   const connectBaseUrl = clean(payload.connectBaseUrl || payload.publicBaseUrl || payload.publicUrl).slice(0, 500);
-  if (connectBaseUrl) record.connectBaseUrl = connectBaseUrl;
+  if (Object.prototype.hasOwnProperty.call(payload, "connectBaseUrl") ||
+    Object.prototype.hasOwnProperty.call(payload, "publicBaseUrl") ||
+    Object.prototype.hasOwnProperty.call(payload, "publicUrl")) {
+    record.connectBaseUrl = connectBaseUrl;
+  }
   const setupUrl = clean(payload.setupUrl || payload.publicSetupUrl).slice(0, 800);
-  if (setupUrl) record.setupUrl = setupUrl;
+  if (Object.prototype.hasOwnProperty.call(payload, "setupUrl") ||
+    Object.prototype.hasOwnProperty.call(payload, "publicSetupUrl")) {
+    record.setupUrl = setupUrl;
+  }
   const relayAccountId = clean(payload.relayAccountId || payload.whatsappRelayAccountId).slice(0, 120);
-  if (relayAccountId) record.relayAccountId = relayAccountId;
+  if (Object.prototype.hasOwnProperty.call(payload, "relayAccountId") ||
+    Object.prototype.hasOwnProperty.call(payload, "whatsappRelayAccountId")) {
+    record.relayAccountId = relayAccountId;
+  }
   record.lastHeartbeatIp = requestIp(request);
   await writeRegistry(registry, env);
   return {
