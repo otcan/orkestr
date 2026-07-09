@@ -262,7 +262,7 @@ export async function createGoogleWorkspaceConnectLink({
   brokerTenantChatId = "",
   brokerTenantAccountId = "",
 } = {}, env = process.env) {
-  if (!clean(brokerInstanceId) && brokeredGoogleWorkspaceConnectEnabled(env)) {
+  if (brokeredGoogleWorkspaceConnectEnabled(env)) {
     return createBrokeredGoogleWorkspaceConnectLink({ principal, thread, chatId, accountId, account }, env);
   }
   const scope = await connectorScopePaths(env, { principal });

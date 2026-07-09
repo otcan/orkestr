@@ -326,11 +326,13 @@ test("tenant google workspace connect link is created by the parent broker", asy
         id: "firat-jobs",
         binding: { chatId: "firat-wa", responderAccountId: "de-wa" },
       },
+      brokerInstanceId: "stale-instance-from-agent-memory",
     }, env);
 
     assert.equal(link.connectId, "parent-connect-id");
     assert.equal(link.message, "parent broker connect message");
     assert.equal(calls.length, 2);
+    assert.equal(calls[1].url.pathname, "/api/broker/instances/instance-firat/google-workspace/connect-link");
   } finally {
     globalThis.fetch = originalFetch;
   }
