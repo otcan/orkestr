@@ -9,7 +9,7 @@ import { __brokerInstanceRegistryTestInternals, encryptBrokerChannelPayload } fr
 import { userPrincipal } from "../packages/core/src/principal.js";
 import { approvePairingChallenge, authorizeHttpRequest, createPairingChallenge, pairBrowser, securityStatus } from "../packages/core/src/security.js";
 import { createTenantVm } from "../packages/core/src/tenant-vm-registry.js";
-import { createUser } from "../packages/core/src/users.js";
+import { createUser, getUser } from "../packages/core/src/users.js";
 import { writeConnectorConfig } from "../packages/storage/src/config.js";
 
 function saveEnv(keys) {
@@ -1046,6 +1046,54 @@ test("broker instance pairing challenge is scoped to the tenant VM owner", async
     assert.equal(body.challenge.authIntent.action, "connect");
     assert.equal(body.challenge.authIntent.instanceId, "instance-firat");
     assert.equal(body.challenge.authIntent.userId, "firat");
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    restoreEnv(prior);
+  }
+});
+
+test("broker instance pairing challenge registers a missing tenant VM owner", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-security-broker-owner-register-"));
+  const prior = saveEnv([
+    "ORKESTR_HOME",
+    "ORKESTR_AUTH_REQUIRED",
+    "ORKESTR_RECOVER_RUNNING_ON_START",
+  ]);
+  process.env.ORKESTR_HOME = home;
+  process.env.ORKESTR_AUTH_REQUIRED = "1";
+  process.env.ORKESTR_RECOVER_RUNNING_ON_START = "0";
+
+  await createTenantVm({
+    id: "eren-jobs-vm",
+    ownerUserId: "eren",
+    displayName: "Eren",
+    labels: { brokerInstanceId: "instance-eren" },
+  }, process.env);
+
+  const server = await startServer({ port: 0, host: "127.0.0.1" });
+  const { port } = server.address();
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/api/setup/security/challenges`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        instanceId: "instance-eren",
+        requestedPath: "/i/instance-eren/app/connectors/gmail",
+      }),
+    });
+    const body = await json(response);
+    const user = await getUser("eren", process.env);
+
+    assert.equal(response.status, 200);
+    assert.equal(user?.id, "eren");
+    assert.equal(user?.role, "user");
+    assert.equal(user?.displayName, "Eren");
+    assert.equal(body.challenge.userId, "eren");
+    assert.equal(body.challenge.role, "user");
+    assert.equal(body.challenge.instanceId, "instance-eren");
+    assert.deepEqual(body.challenge.allowedActions, ["orkestr_auth.google.connect"]);
+    assert.equal(body.challenge.authIntent.instanceId, "instance-eren");
+    assert.equal(body.challenge.authIntent.userId, "eren");
   } finally {
     await new Promise((resolve) => server.close(resolve));
     restoreEnv(prior);

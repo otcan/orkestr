@@ -31,7 +31,7 @@ import { userScopedCapabilityHints } from "../../../../../packages/core/src/user
 import { requestPrincipal } from "../../../../../packages/core/src/principal.js";
 import { isAdminPrincipal } from "../../../../../packages/core/src/policy.js";
 import { distributionIdentity } from "../../../../../packages/core/src/distribution.js";
-import { getUser } from "../../../../../packages/core/src/users.js";
+import { getUser, upsertUser } from "../../../../../packages/core/src/users.js";
 import { listTenantVms } from "../../../../../packages/core/src/tenant-vm-registry.js";
 import { configuredWhatsAppChatNamePrefix, defaultWhatsAppReplyPrefix } from "../../../../../packages/core/src/whatsapp-defaults.js";
 import {
@@ -341,8 +341,10 @@ async function pairingChallengeTarget(body: Record<string, unknown> = {}, reques
   const instanceId = String(body.instanceId || body.instance || body.orkestrInstanceId || "").trim();
   const requestedPath = sameOriginRequestedPath(body, instanceId);
   let derivedFromInstanceOwner = false;
+  let ownerVm: any = null;
   if (!userId && instanceId) {
-    userId = await ownerUserIdForBrokerInstance(instanceId);
+    ownerVm = await tenantVmForBrokerInstance(instanceId);
+    userId = String(ownerVm?.ownerUserId || "").trim();
     derivedFromInstanceOwner = Boolean(userId);
   }
   if (!userId) return { instanceId, requestedPath };
@@ -352,7 +354,14 @@ async function pairingChallengeTarget(body: Record<string, unknown> = {}, reques
   if (!trustedAdminContext && !derivedFromInstanceOwner) {
     throw httpError("admin_pairing_required", 403);
   }
-  const user = await getUser(userId);
+  let user = await getUser(userId);
+  if (!user && derivedFromInstanceOwner) {
+    user = await upsertUser({
+      id: userId,
+      role: "user",
+      displayName: cleanText(ownerVm?.displayName) || userId,
+    });
+  }
   if (!user) throw httpError("user_not_found", 404);
   if (user.status === "disabled") throw httpError("user_disabled", 409);
   return {
@@ -364,15 +373,14 @@ async function pairingChallengeTarget(body: Record<string, unknown> = {}, reques
   };
 }
 
-async function ownerUserIdForBrokerInstance(instanceId = ""): Promise<string> {
+async function tenantVmForBrokerInstance(instanceId = ""): Promise<any> {
   const id = String(instanceId || "").trim();
-  if (!id) return "";
+  if (!id) return null;
   const vms = await listTenantVms().catch(() => []);
-  const vm = vms.find((item: any) =>
+  return vms.find((item: any) =>
     String(item?.labels?.brokerInstanceId || item?.labels?.instanceId || "").trim() === id ||
     String(item?.endpoint?.brokerInstanceId || "").trim() === id,
-  );
-  return String(vm?.ownerUserId || "").trim();
+  ) || null;
 }
 
 function sameOriginRequestedPath(body: Record<string, unknown> = {}, instanceId = ""): string {
