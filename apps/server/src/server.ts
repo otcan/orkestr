@@ -159,6 +159,7 @@ function authorizeScopedShareSessionRequest(request: any, session: any) {
   const method = String(request?.method || "GET").toUpperCase();
   const parts = routePartsFromApiRequest(request);
   if (parts[0] !== "api") return { ok: true };
+  if (desktopShareApiRouteAllowed(method, parts)) return { ok: true };
   const [surface] = parts.slice(1).map((part) => part.toLowerCase());
   if (surface === "version" && method === "GET") return { ok: true };
   if (surface === "setup" && parts[2]?.toLowerCase() === "status" && method === "GET") return { ok: true };
@@ -184,6 +185,7 @@ function authorizeAuthIntentSessionRequest(request: any, session: any) {
   const brokerAppAuth = authorizeAuthIntentBrokerAppRequest(request, session, parts);
   if (brokerAppAuth.matched) return brokerAppAuth;
   if (parts[0] !== "api") return { ok: false, statusCode: 403, error: "auth_intent_session_scope_denied" };
+  if (desktopShareApiRouteAllowed(method, parts)) return { ok: true };
   const [surface, second, third, fourth] = parts.slice(1).map((part) => part.toLowerCase());
   if (method === "GET" && ["health", "ready", "version"].includes(surface)) return { ok: true };
   if (method === "GET" && surface === "setup" && second === "status") return { ok: true };
@@ -272,6 +274,17 @@ function sharedAppApiRoute(parts: string[]) {
   };
 }
 
+function desktopShareApiRouteAllowed(method: string, parts: string[]) {
+  if (method !== "GET" || parts[0] !== "api") return false;
+  const normalized = parts.map((part) => part.toLowerCase());
+  if (normalized[1] === "desktop-shares" && parts[2] && ["open", "status"].includes(normalized[3] || "")) return true;
+  return normalized[1] === "tenant-vms" &&
+    Boolean(parts[2]) &&
+    normalized[3] === "desktop-shares" &&
+    Boolean(parts[4]) &&
+    ["open", "status"].includes(normalized[5] || "");
+}
+
 function authorizeConnectorResourceRequest(request: any, principal: any) {
   const route = connectorRouteFromApiRequest(request);
   if (!route) return { ok: true };
@@ -340,6 +353,7 @@ function authorizeControlPlaneRequest(request: any, principal: any) {
   const [surface, second, third, fourth] = parts.slice(1).map((part) => part.toLowerCase());
 
   if (surface === "codex") return { ok: false, statusCode: 403, error: "control_plane_admin_required" };
+  if (desktopShareApiRouteAllowed(method, parts)) return { ok: true };
   if (surface === "users") {
     if (second === "me" && (!third || ["skills", "credit-usage", "support", "onboarding"].includes(third))) return { ok: true };
     if (third === "skills" || third === "credit-usage" || third === "onboarding") return { ok: true };

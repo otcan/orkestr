@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { startServer } from "../apps/server/src/server.js";
-import { approvePairingChallenge } from "../packages/core/src/security.js";
+import { approvePairingChallenge, createPairingChallenge, pairBrowser, sessionCookieHeader } from "../packages/core/src/security.js";
 import { userPrincipal } from "../packages/core/src/principal.js";
 import { createUser } from "../packages/core/src/users.js";
 import {
@@ -306,6 +306,24 @@ test("tenant VM desktop-share proxy rewrites share and desktop URLs through the 
   const baseUrl = `http://127.0.0.1:${port}`;
 
   try {
+    const authIntentChallenge = await createPairingChallenge({
+      env: process.env,
+      instanceId: "instance-firat",
+      userId: "alice",
+      role: "user",
+      allowedActions: ["orkestr_auth.google.connect:connect-1"],
+      authIntent: {
+        tool: "orkestr_auth",
+        service: "gmail",
+        provider: "google_workspace",
+        action: "connect",
+        instanceId: "instance-firat",
+      },
+    });
+    await approvePairingChallenge(authIntentChallenge.challengeId, { env: process.env, approvedBy: "node:test" });
+    const authIntentSession = await pairBrowser({ challengeId: authIntentChallenge.challengeId, env: process.env });
+    const authIntentCookie = sessionCookieHeader(authIntentSession.token, process.env);
+
     const open = await fetch(`${baseUrl}/api/tenant-vms/alice-tenant/desktop-shares/share-1/open?key=secret&subdomain=d-abc123`);
     const openPayload = await read(open);
     const cookie = open.headers.get("set-cookie") || "";
@@ -321,6 +339,20 @@ test("tenant VM desktop-share proxy rewrites share and desktop URLs through the 
     }));
     assert.equal(status.approved, true);
     assert.match(status.desktopUrl, /^\/tenant-vms\/alice-tenant\/desktop\/gmail\/vnc\.html/);
+
+    const authIntentOpen = await fetch(`${baseUrl}/api/tenant-vms/alice-tenant/desktop-shares/share-1/open?key=secret&subdomain=d-abc123`, {
+      headers: { cookie: authIntentCookie },
+    });
+    const authIntentOpenPayload = await read(authIntentOpen);
+    assert.equal(authIntentOpen.status, 200, JSON.stringify(authIntentOpenPayload));
+    assert.match(authIntentOpenPayload.desktopUrl, /^\/tenant-vms\/alice-tenant\/desktop\/gmail\/vnc\.html/);
+
+    const authIntentStatus = await fetch(`${baseUrl}/api/tenant-vms/alice-tenant/desktop-shares/share-1/status?key=secret&subdomain=d-abc123`, {
+      headers: { cookie: authIntentCookie },
+    });
+    const authIntentStatusPayload = await read(authIntentStatus);
+    assert.equal(authIntentStatus.status, 200, JSON.stringify(authIntentStatusPayload));
+    assert.equal(authIntentStatusPayload.approved, true);
 
     const desktop = await fetch(`${baseUrl}${openPayload.desktopUrl}`, { headers: { cookie } });
     assert.equal(desktop.status, 200);
