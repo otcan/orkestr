@@ -43,6 +43,13 @@ function backupExcludes(env = process.env) {
     .filter(Boolean);
 }
 
+function backupRetentionKeep(env = process.env) {
+  const raw = clean(env.ORKESTR_DEPLOY_BACKUP_KEEP) || "3";
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed < 1) throw backupError("backup_retention_invalid", 400);
+  return Math.min(parsed, 3);
+}
+
 function assertSafeHome(home) {
   const resolved = path.resolve(home);
   if (!resolved || resolved === path.parse(resolved).root) throw backupError("unsafe_orkestr_home", 400);
@@ -93,6 +100,7 @@ export async function stateBackupStatus(env = process.env) {
   const home = assertSafeHome(appHome(env));
   const backupDir = stateBackupDir(env);
   const backups = await listStateBackups(env);
+  const keep = backupRetentionKeep(env);
   return {
     ok: true,
     home,
@@ -101,6 +109,10 @@ export async function stateBackupStatus(env = process.env) {
     latestBackup: backups[0] || null,
     backups,
     excludes: backupExcludes(env),
+    retention: {
+      keep,
+      max: 3,
+    },
     restoreSupported: "plan-only",
     migration: {
       codexAppServer: {
@@ -114,10 +126,31 @@ export async function stateBackupStatus(env = process.env) {
   };
 }
 
+export async function pruneStateBackups({ keep = null } = {}, env = process.env) {
+  const dir = stateBackupDir(env);
+  const limit = keep === null || keep === undefined ? backupRetentionKeep(env) : Number(keep);
+  if (!Number.isInteger(limit) || limit < 0) throw backupError("backup_retention_invalid", 400);
+  const backups = await listStateBackups(env);
+  const removed = [];
+  for (const backup of backups.slice(limit)) {
+    await fs.rm(backup.path, { force: true }).catch(() => {});
+    removed.push(backup);
+  }
+  return {
+    ok: true,
+    backupDir: dir,
+    keep: limit,
+    removedCount: removed.length,
+    removed,
+  };
+}
+
 export async function createStateBackup({ label = "" } = {}, env = process.env) {
   const home = assertSafeHome(appHome(env));
   const dir = stateBackupDir(env);
   await fs.mkdir(dir, { recursive: true });
+  const keep = backupRetentionKeep(env);
+  await pruneStateBackups({ keep: keep - 1 }, env);
   const target = path.join(dir, backupName(label || path.basename(home)));
   const parent = path.dirname(home);
   const base = path.basename(home);
@@ -138,6 +171,7 @@ export async function createStateBackup({ label = "" } = {}, env = process.env) 
     }
   }
   const stats = await fs.stat(target);
+  await pruneStateBackups({ keep }, env);
   return {
     ok: true,
     backup: publicBackup(target, stats),

@@ -422,7 +422,8 @@ With `ORKESTR_RELEASE_DEPLOY=1`, `orkestr-update` delegates to
 - creates a fresh release directory under `/opt/orkestr/releases`
 - runs `npm ci`, `npm run build`, and `npm run smoke`
 - writes `release-manifest.json` into the release
-- backs up `ORKESTR_HOME` under `/opt/orkestr/backups`
+- backs up `ORKESTR_HOME` under `/opt/orkestr/backups` and retains at most
+  three completed state backups per device
 - keeps Codex app-server in a separate systemd service and connects through a
   local Unix-socket proxy, so active Codex turns survive UI/API restarts
 - checks `/api/threads?scope=all` and refuses to restart only when unsafe

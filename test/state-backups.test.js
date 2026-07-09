@@ -42,6 +42,31 @@ test("state backups create archives, exclude volatile runtime paths, and prepare
   assert.ok(plan.commands.some((command) => command.includes("tar -xzf")));
 });
 
+test("state backups prune to at most three archives", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-state-backup-retention-"));
+  const home = path.join(root, "home");
+  const backupDir = path.join(root, "backups");
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_DEPLOY_BACKUP_DIR: backupDir,
+    ORKESTR_DEPLOY_BACKUP_KEEP: "3",
+  };
+  await fs.mkdir(path.join(home, "config"), { recursive: true });
+
+  for (let index = 0; index < 5; index += 1) {
+    await fs.writeFile(path.join(home, "config", "settings.json"), JSON.stringify({ index }), "utf8");
+    await createStateBackup({ label: `setup-${index}` }, env);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+
+  const status = await stateBackupStatus(env);
+  const files = await fs.readdir(backupDir);
+
+  assert.equal(status.retention.keep, 3);
+  assert.equal(status.backupCount, 3);
+  assert.equal(files.filter((file) => file.endsWith(".tar.gz")).length, 3);
+});
+
 test("state restore plans reject backups outside the configured backup directory", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-state-restore-forbidden-"));
   const env = {
