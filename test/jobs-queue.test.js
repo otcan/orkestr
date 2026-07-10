@@ -167,7 +167,9 @@ test("Gmail jobs poll dedupes, classifies, and posts fits as passive signals", a
   assert.match(messages[0].text, /Fit rubric: 90-100 exceptional/);
   assert.match(messages[0].text, /AI Agent Lead at Acme/);
   assert.match(messages[0].text, /80\/100 \(strong\)/);
-  assert.match(messages[0].text, /https:\/\/jobs\.example\.com\/acme\/agent-lead/);
+  assert.match(messages[0].text, /Queue ID: job_/);
+  assert.doesNotMatch(messages[0].text, /Links:/);
+  assert.doesNotMatch(messages[0].text, /https:\/\/jobs\.example\.com\/acme\/agent-lead/);
   assert.doesNotMatch(messages[0].text, /utm_source/);
   assert.equal(whatsappDelivery.delivered.length, 1);
   assert.equal(whatsappDelivery.delivered[0].deliveryType, "signal");
@@ -300,6 +302,8 @@ test("Gmail jobs poll supports host-native gog collection", async () => {
   assert.equal(queue.counts.presented, 1);
   assert.match(messages[0].text, /Remote Platform Lead at GogCo/);
   assert.match(messages[0].text, /90\/100 \(exceptional\)/);
-  assert.match(messages[0].text, /https:\/\/boards\.example\/gogco\/platform/);
+  assert.match(messages[0].text, /Queue ID: job_/);
+  assert.doesNotMatch(messages[0].text, /Links:/);
+  assert.doesNotMatch(messages[0].text, /https:\/\/boards\.example\/gogco\/platform/);
   assert.doesNotMatch(messages[0].text, /utm_source/);
 });

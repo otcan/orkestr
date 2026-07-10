@@ -449,7 +449,6 @@ function formatJobDigest(candidates = [], now = new Date()) {
     const fit = candidate.fit || {};
     const score100 = fitScore100ForDisplay(fit);
     const scoreLabel = score100 ? `${score100}/100 (${fitScoreBand(score100)})` : "score unavailable";
-    const links = [...new Set([candidate.gmailUrl, ...(candidate.canonicalJobUrls || [])].filter(Boolean))].slice(0, 3);
     lines.push("");
     lines.push(`${index + 1}. ${fit.role || candidate.subject || "Unknown role"} at ${fit.company || "Unknown company"} — ${scoreLabel}`);
     if (fit.location || fit.remote || fit.salary) lines.push(`   ${[fit.location, fit.remote, fit.salary].filter(Boolean).join(" | ")}`);
@@ -457,7 +456,6 @@ function formatJobDigest(candidates = [], now = new Date()) {
     if (fit.whyFit) lines.push(`   Why fit: ${fit.whyFit}`);
     if (fit.risks) lines.push(`   Risks: ${fit.risks}`);
     if (fit.nextAction) lines.push(`   Next: ${fit.nextAction}`);
-    if (links.length) lines.push(`   Links: ${links.join(" ")}`);
     lines.push(`   Queue ID: ${candidate.id}`);
   });
   return lines.join("\n").slice(0, 8000);
