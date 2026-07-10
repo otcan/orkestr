@@ -153,9 +153,32 @@ function pairingRedirectUrl(request: any, route: BrokerAppRoute, requestUrl = ""
   return `${target.pathname}${target.search}`;
 }
 
-function requestHasInstanceSession(request: any, instanceId: string): boolean {
+function brokerGoogleWorkspaceConnectorConnectId(route: BrokerAppRoute): string {
+  const parsed = new URL(route.upstreamPath || "/", "http://tenant.local");
+  if (parsed.pathname !== "/connectors/gmail") return "";
+  if (parsed.searchParams.get("mcp") !== "tools/call") return "";
+  if (parsed.searchParams.get("tool") !== "orkestr_auth") return "";
+  if (parsed.searchParams.get("service") !== "gmail") return "";
+  if (parsed.searchParams.get("provider") !== "google_workspace") return "";
+  if (parsed.searchParams.get("action") !== "connect") return "";
+  if (parsed.searchParams.get("instance_id") !== route.instanceId) return "";
+  return clean(parsed.searchParams.get("connect") || parsed.searchParams.get("connect_id"));
+}
+
+function authIntentGoogleConnectActionMatches(session: any, connectId = ""): boolean {
+  const id = clean(connectId);
+  if (!id) return true;
+  const allowedActions = Array.isArray(session?.allowedActions) ? session.allowedActions : [];
+  if (!allowedActions.some((action: string) => /^orkestr_auth\.google\.connect(?::|$)/.test(clean(action)))) return true;
+  if (allowedActions.includes(`orkestr_auth.google.connect:${id}`)) return true;
+  const intent = session?.authIntent && typeof session.authIntent === "object" ? session.authIntent : {};
+  return allowedActions.includes("orkestr_auth.google.connect") && !clean(intent.connectId);
+}
+
+function requestHasInstanceSession(request: any, route: BrokerAppRoute): boolean {
   const session = request?.orkestrSecuritySession;
-  return Boolean(session && String(session.instanceId || "") === instanceId);
+  if (!session || String(session.instanceId || "") !== route.instanceId) return false;
+  return authIntentGoogleConnectActionMatches(session, brokerGoogleWorkspaceConnectorConnectId(route));
 }
 
 function clean(value: unknown): string {
@@ -343,7 +366,7 @@ async function proxyBrokerAppHttp(request: any, response: any): Promise<void> {
     redirect(response, canonicalGoogleConnectorPath, "Redirecting to the Orkestr instance connector page.");
     return;
   }
-  if (!requestHasInstanceSession(request, route.instanceId)) {
+  if (!requestHasInstanceSession(request, route)) {
     if (brokerAppApiRequest(route)) {
       sendPlain(response, 401, "broker_instance_pairing_required");
       return;

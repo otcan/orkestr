@@ -201,13 +201,19 @@ function authorizeAuthIntentSessionRequest(request: any, session: any) {
 }
 
 function authorizeAuthIntentBrokerAppRequest(request: any, session: any, parts: string[]) {
-  if (parts[0] !== "i" || !parts[1] || parts[2] !== "app") return { matched: false, ok: false };
+  const mounted = parts[0] !== "i" && parts[1] === "app";
+  if (!mounted && (parts[0] !== "i" || !parts[1] || parts[2] !== "app")) return { matched: false, ok: false };
   const method = String(request?.method || "GET").toUpperCase();
-  const instanceId = String(parts[1] || "").trim();
-  const rest = parts.slice(3);
+  const instanceId = String(mounted ? parts[0] : parts[1] || "").trim();
+  const rest = parts.slice(mounted ? 2 : 3);
   if (desktopShareRouteAllowed(method, rest)) return { matched: true, ok: true };
+  const googleConnectEntry = googleConnectConnectorEntryRequest(request, instanceId, method, rest);
   if (!session?.instanceId || instanceId !== String(session.instanceId || "").trim()) {
+    if (googleConnectEntry.ok) return { matched: true, ok: true };
     return { matched: true, ok: false, statusCode: 403, error: "auth_intent_session_scope_denied" };
+  }
+  if (googleConnectEntry.ok && !authIntentGoogleConnectActionMatches(session, googleConnectEntry.connectId)) {
+    return { matched: true, ok: true };
   }
   const restPath = `/${rest.join("/")}`;
   if (method === "GET" && isStaticAssetRequestPath(restPath)) return { matched: true, ok: true };
@@ -216,24 +222,37 @@ function authorizeAuthIntentBrokerAppRequest(request: any, session: any, parts: 
   return { matched: true, ok: false, statusCode: 403, error: "auth_intent_session_scope_denied" };
 }
 
-function authIntentConnectorAppRouteAllowed(request: any, session: any, instanceId: string, method: string, rest: string[]) {
-  if (method !== "GET") return false;
-  if (rest.length !== 2 || rest[0]?.toLowerCase() !== "connectors") return false;
+function googleConnectConnectorEntryRequest(request: any, instanceId: string, method: string, rest: string[]) {
+  if (method !== "GET") return { ok: false, connectId: "" };
+  if (rest.length !== 2 || rest[0]?.toLowerCase() !== "connectors") return { ok: false, connectId: "" };
   const service = String(rest[1] || "").trim().toLowerCase();
-  if (service !== "gmail") return false;
+  if (service !== "gmail") return { ok: false, connectId: "" };
+  const params = new URL(String(request?.originalUrl || request?.url || "/"), "http://localhost").searchParams;
+  if (params.get("mcp") !== "tools/call") return { ok: false, connectId: "" };
+  if (params.get("tool") !== "orkestr_auth") return { ok: false, connectId: "" };
+  if (params.get("service") !== service) return { ok: false, connectId: "" };
+  if (params.get("provider") !== "google_workspace") return { ok: false, connectId: "" };
+  if (params.get("action") !== "connect") return { ok: false, connectId: "" };
+  if (params.get("instance_id") !== instanceId) return { ok: false, connectId: "" };
+  return { ok: true, connectId: String(params.get("connect") || params.get("connect_id") || "").trim() };
+}
+
+function authIntentGoogleConnectActionMatches(session: any, connectId = "") {
+  const allowedActions = Array.isArray(session?.allowedActions) ? session.allowedActions : [];
+  const id = String(connectId || "").trim();
+  if (!id) return allowedActions.some((action: string) => /^orkestr_auth\.google\.connect(?::|$)/.test(String(action || "")));
+  if (allowedActions.includes(`orkestr_auth.google.connect:${id}`)) return true;
+  const intent = session?.authIntent && typeof session.authIntent === "object" ? session.authIntent : {};
+  return allowedActions.includes("orkestr_auth.google.connect") && !String(intent.connectId || "").trim();
+}
+
+function authIntentConnectorAppRouteAllowed(request: any, session: any, instanceId: string, method: string, rest: string[]) {
+  const googleConnectEntry = googleConnectConnectorEntryRequest(request, instanceId, method, rest);
+  if (!googleConnectEntry.ok) return false;
   const intent = session?.authIntent && typeof session.authIntent === "object" ? session.authIntent : {};
   const intentService = String(intent.service || "").trim().toLowerCase();
-  if (intentService && intentService !== service) return false;
-  const allowedActions = Array.isArray(session.allowedActions) ? session.allowedActions : [];
-  if (!allowedActions.some((action: string) => /^orkestr_auth\.google\.connect(?::|$)/.test(String(action || "")))) return false;
-  const params = new URL(String(request?.originalUrl || request?.url || "/"), "http://localhost").searchParams;
-  if (params.get("mcp") !== "tools/call") return false;
-  if (params.get("tool") !== "orkestr_auth") return false;
-  if (params.get("service") !== service) return false;
-  if (params.get("provider") !== "google_workspace") return false;
-  if (params.get("action") !== "connect") return false;
-  if (params.get("instance_id") !== instanceId) return false;
-  return true;
+  if (intentService && intentService !== "gmail") return false;
+  return authIntentGoogleConnectActionMatches(session, googleConnectEntry.connectId);
 }
 
 function authIntentAllowsGoogleConnect(session: any): boolean {

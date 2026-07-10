@@ -494,6 +494,56 @@ test("broker instance app path pairs on broker and proxies the VM WebUI", async 
       { redirect: "manual" },
     );
     const unpairedApi = await fetch(`http://127.0.0.1:${port}/i/${brokerRegistration.instanceId}/app/api/threads`, { redirect: "manual" });
+    const staleOtherChallenge = await createPairingChallenge({
+      env: process.env,
+      instanceId: "stale-instance",
+      userId: "mallory",
+      role: "user",
+      requestedPath: "/i/stale-instance/app/connectors/gmail",
+      allowedActions: ["orkestr_auth.google.connect:stale-connect"],
+      authIntent: {
+        mcp: "tools/call",
+        tool: "orkestr_auth",
+        service: "gmail",
+        provider: "google_workspace",
+        action: "connect",
+        connectId: "stale-connect",
+        instanceId: "stale-instance",
+        userId: "mallory",
+      },
+    });
+    await approvePairingChallenge(staleOtherChallenge.challengeId, { approvedBy: "node:test", env: process.env });
+    const staleOtherPaired = await pairBrowser({ challengeId: staleOtherChallenge.challengeId, env: process.env });
+    const staleOtherCookie = sessionCookieHeader(staleOtherPaired.token, process.env);
+    const staleOtherConnect = await fetch(`http://127.0.0.1:${port}${brokeredConnectUrl.pathname}${brokeredConnectUrl.search}`, {
+      headers: { cookie: staleOtherCookie },
+      redirect: "manual",
+    });
+    const staleSameChallenge = await createPairingChallenge({
+      env: process.env,
+      instanceId: brokerRegistration.instanceId,
+      userId: "firat",
+      role: "user",
+      requestedPath: `/i/${brokerRegistration.instanceId}/app/connectors/gmail`,
+      allowedActions: ["orkestr_auth.google.connect:old-connect"],
+      authIntent: {
+        mcp: "tools/call",
+        tool: "orkestr_auth",
+        service: "gmail",
+        provider: "google_workspace",
+        action: "connect",
+        connectId: "old-connect",
+        instanceId: brokerRegistration.instanceId,
+        userId: "firat",
+      },
+    });
+    await approvePairingChallenge(staleSameChallenge.challengeId, { approvedBy: "node:test", env: process.env });
+    const staleSamePaired = await pairBrowser({ challengeId: staleSameChallenge.challengeId, env: process.env });
+    const staleSameCookie = sessionCookieHeader(staleSamePaired.token, process.env);
+    const staleSameConnect = await fetch(`http://127.0.0.1:${port}${brokeredConnectUrl.pathname}${brokeredConnectUrl.search}`, {
+      headers: { cookie: staleSameCookie },
+      redirect: "manual",
+    });
     const challenge = await createPairingChallenge({ env: process.env, instanceId: brokerRegistration.instanceId });
     await approvePairingChallenge(challenge.challengeId, { approvedBy: "node:test", env: process.env });
     const paired = await pairBrowser({ challengeId: challenge.challengeId, env: process.env });
@@ -579,6 +629,16 @@ test("broker instance app path pairs on broker and proxies the VM WebUI", async 
     }
     assert.equal(unpairedApi.status, 401);
     assert.equal(await unpairedApi.text(), "broker_instance_pairing_required");
+    for (const [name, response] of [["other", staleOtherConnect], ["same", staleSameConnect]]) {
+      const body = await response.text();
+      assert.equal(response.status, 302, `${name}: ${body}`);
+      const redirect = new URL(response.headers.get("location") || "", "http://localhost");
+      assert.equal(redirect.pathname, "/setup/pairing");
+      assert.equal(redirect.searchParams.get("instanceId"), brokerRegistration.instanceId);
+      const returnUrl = new URL(redirect.searchParams.get("return") || "", "http://localhost");
+      assert.equal(returnUrl.pathname, `/i/${brokerRegistration.instanceId}/app/connectors/gmail`);
+      assert.equal(returnUrl.searchParams.get("connect"), brokeredConnect.connectId);
+    }
     assert.equal(htmlResponse.status, 200);
     assert.match(html, new RegExp(`<base href="/i/${brokerRegistration.instanceId}/app/"`));
     assert.match(html, new RegExp(`href="/i/${brokerRegistration.instanceId}/app/favicon\\.svg"`));
