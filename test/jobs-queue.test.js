@@ -262,6 +262,88 @@ test("Gmail jobs poll rejects LinkedIn network suggestions", async () => {
   assert.equal(messages.length, 0);
 });
 
+test("Gmail jobs poll rejects LinkedIn account notifications with profile keyword footers", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-jobs-linkedin-notifications-"));
+  const env = {
+    ORKESTR_HOME: home,
+    WHATSAPP_BRIDGE_MODE: "external",
+  };
+  await createThread({ id: "jobs-linkedin-notifications-thread", name: "Jobs LinkedIn Notifications" }, env);
+
+  const result = await processJobCandidateMessages({
+    threadId: "jobs-linkedin-notifications-thread",
+    maxResults: 3,
+    signalMode: "record_only",
+  }, [
+    {
+      id: "linkedin-accepted-1",
+      threadId: "gmail-thread-linkedin-accepted-1",
+      subject: "Maya accepted your invitation",
+      from: "messages-noreply@linkedin.com",
+      snippet: "Maya accepted your invitation to connect.",
+      text: "Maya accepted your invitation to connect on LinkedIn.\n\nYour profile: AI Automation Engineer, Agent Workflows, Platform Product.",
+      internalDate: String(Date.parse("2026-06-30T10:00:00Z")),
+    },
+    {
+      id: "linkedin-searches-1",
+      threadId: "gmail-thread-linkedin-searches-1",
+      subject: "You appeared in 12 searches this week",
+      from: "messages-noreply@linkedin.com",
+      snippet: "See your search appearances.",
+      text: "You appeared in 12 searches this week. Manage your email preferences.\nAI Automation Engineer. Agent Workflows.",
+      internalDate: String(Date.parse("2026-06-30T10:01:00Z")),
+    },
+    {
+      id: "linkedin-profile-views-1",
+      threadId: "gmail-thread-linkedin-profile-views-1",
+      subject: "Someone viewed your profile",
+      from: "messages-noreply@linkedin.com",
+      snippet: "See who viewed your profile.",
+      text: "Who viewed your profile? LinkedIn Corporation. Unsubscribe.\nAI automation and platform work.",
+      internalDate: String(Date.parse("2026-06-30T10:02:00Z")),
+    },
+  ], env);
+  const queue = await listJobQueueForPrincipal(adminPrincipal(), env);
+  const messages = await listThreadMessages("jobs-linkedin-notifications-thread", env);
+
+  assert.equal(result.classified.classified.length, 3);
+  assert.deepEqual(result.classified.classified.map((entry) => entry.state), ["queued_reject", "queued_reject", "queued_reject"]);
+  assert.deepEqual(result.classified.classified.map((entry) => entry.fit.classifier), ["non_job_filter", "non_job_filter", "non_job_filter"]);
+  assert.equal(result.presentation.presented.length, 0);
+  assert.equal(queue.counts.queued_reject, 3);
+  assert.equal(messages.length, 0);
+});
+
+test("Gmail jobs poll keeps real LinkedIn job alerts", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-jobs-linkedin-alert-"));
+  const env = {
+    ORKESTR_HOME: home,
+    WHATSAPP_BRIDGE_MODE: "external",
+  };
+  await createThread({ id: "jobs-linkedin-alert-thread", name: "Jobs LinkedIn Alert" }, env);
+
+  const result = await processJobCandidateMessages({
+    threadId: "jobs-linkedin-alert-thread",
+    maxResults: 1,
+    signalMode: "record_only",
+  }, [{
+    id: "linkedin-job-alert-1",
+    threadId: "gmail-thread-linkedin-job-alert-1",
+    subject: "New job alert: AI Platform Engineer",
+    from: "jobs-noreply@linkedin.com",
+    snippet: "Remote AI automation role. Apply now.",
+    text: "New job alert: AI Platform Engineer at LinkedCo. Remote automation platform role. Apply now https://www.linkedin.com/jobs/view/123456/",
+    internalDate: String(Date.parse("2026-06-30T10:00:00Z")),
+  }], env);
+  const queue = await listJobQueueForPrincipal(adminPrincipal(), env);
+
+  assert.equal(result.classified.classified.length, 1);
+  assert.equal(result.classified.classified[0].state, "queued_fit");
+  assert.equal(result.classified.classified[0].fit.classifier, "heuristic");
+  assert.equal(result.presentation.presented.length, 1);
+  assert.equal(queue.counts.presented, 1);
+});
+
 test("Gmail jobs poll supports host-native gog collection", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-jobs-gog-"));
   const fakeGogScript = [

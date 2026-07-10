@@ -205,6 +205,34 @@ function candidateMatches(left = {}, right = {}) {
   return dedupeKeysFor(right).some((key) => leftKeys.has(key));
 }
 
+function hasJobPostingSignal(text = "") {
+  return [
+    /\bjob(?:s)?\b/,
+    /\bjob alert\b/,
+    /\bnew role\b/,
+    /\bopen role\b/,
+    /\brole at\b/,
+    /\bhiring\b/,
+    /\brecruiter\b/,
+    /\bopportunit(?:y|ies)\b/,
+    /\bapply(?: now)?\b/,
+    /\bsalary\b/,
+    /\bremote\b/,
+    /\bhybrid\b/,
+    /\bonsite\b/,
+    /\/jobs\/view\//,
+    /\/jobs\/search\//,
+    /\/comm\/jobs\//,
+    /\/job\//,
+    /\/careers?\//,
+    /\/positions?\//,
+    /\/openings?\//,
+    /greenhouse\.io/,
+    /lever\.co/,
+    /workdayjobs\.com/,
+  ].some((pattern) => pattern.test(text));
+}
+
 function obviousNonJobReason(candidate = {}) {
   const text = lower([
     candidate.subject,
@@ -222,6 +250,30 @@ function obviousNonJobReason(candidate = {}) {
       || text.includes("email_email_pymk")
     );
   if (linkedinNetworkSuggestion) return "LinkedIn network suggestion, not a job opportunity.";
+  const linkedinNonJobNotification = text.includes("linkedin")
+    && (
+      /\baccepted your invitation\b/.test(text)
+      || /\binvitation (?:was )?accepted\b/.test(text)
+      || /\byour invitation to connect\b/.test(text)
+      || /\bappeared in \d+ searches\b/.test(text)
+      || /\byou appeared in searches\b/.test(text)
+      || /\bsearch appearances\b/.test(text)
+      || /\bviewed your profile\b/.test(text)
+      || /\bwho viewed your profile\b/.test(text)
+      || /\bwho'?s viewed your profile\b/.test(text)
+      || /\bprofile views\b/.test(text)
+    );
+  if (linkedinNonJobNotification) return "LinkedIn account notification, not a job opportunity.";
+  const linkedinWithoutJobSignal = text.includes("linkedin")
+    && !hasJobPostingSignal(text)
+    && (
+      text.includes("unsubscribe")
+      || text.includes("manage your email preferences")
+      || text.includes("linkedin corporation")
+      || text.includes("linkedin member")
+      || /messages?-noreply@linkedin\.com/.test(text)
+    );
+  if (linkedinWithoutJobSignal) return "LinkedIn notification without job-posting signals.";
   return "";
 }
 
