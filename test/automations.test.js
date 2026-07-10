@@ -143,6 +143,7 @@ test("automation doctor checks connector status in the automation owner scope", 
   await fs.writeFile(path.join(paths.secrets, "gmail-token.json"), JSON.stringify({
     accessToken: "otcan-gmail-access",
     refreshToken: "otcan-gmail-refresh",
+    scope: "https://www.googleapis.com/auth/gmail.readonly",
     expiresAt: Math.floor(Date.now() / 1000) + 3600,
   }), "utf8");
   await createThread({ id: "automation-owner-thread", name: "Owner Thread", ownerUserId: "otcan" }, env);

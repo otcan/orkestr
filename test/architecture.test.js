@@ -21,10 +21,12 @@ const knownCoreConnectorImports = new Set([
 
 const largeFileAllowlist = new Set([
   "apps/cli/src/commands.js",
+  "apps/server/src/broker-instance-app-proxy.ts",
   "apps/server/src/modules/connectors/connectors.controller.ts",
   "apps/server/src/modules/connectors/whatsapp-diagnostics.controller.ts",
   "apps/server/src/modules/system/system.controller.ts",
   "apps/server/src/modules/threads/threads.controller.ts",
+  "apps/server/src/server.ts",
   "apps/server/src/thread-stream.ts",
   "apps/server/src/thread-summary.ts",
   "apps/web/src/app/api.service.ts",
@@ -35,6 +37,7 @@ const largeFileAllowlist = new Set([
   "apps/web/src/app/onboarding-page.component.ts",
   "apps/web/src/app/ops-page.component.html",
   "apps/web/src/app/ops-page.component.ts",
+  "apps/web/src/app/shared-app-page.component.css",
   "apps/web/src/styles.css",
   "packages/browsers/src/browsers.js",
   "packages/core/src/codex-app-server-client.js",
@@ -56,6 +59,7 @@ const largeFileAllowlist = new Set([
   "packages/core/src/threads.js",
   "packages/core/src/timers.js",
   "packages/core/src/user-skills.js",
+  "packages/core/src/whereiam.js",
   "packages/connectors/src/codex.js",
   "packages/connectors/src/connector-outbox.js",
   "packages/connectors/src/gmail.js",

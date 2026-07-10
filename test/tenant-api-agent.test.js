@@ -627,6 +627,7 @@ test("tenant api-agent creates a persisted Gmail notification rule from chat", a
   await fs.writeFile(path.join(paths.secrets, "gmail-token.json"), JSON.stringify({
     accessToken: "user-gmail-notification-access",
     refreshToken: "user-gmail-notification-refresh",
+    scope: "https://www.googleapis.com/auth/gmail.readonly",
     expiresAt: Math.floor(Date.now() / 1000) + 3600,
   }), "utf8");
   await createThread({
@@ -725,6 +726,7 @@ test("tenant api-agent reports disabled Gmail notifications from tool results", 
   await fs.writeFile(path.join(paths.secrets, "gmail-token.json"), JSON.stringify({
     accessToken: "user-gmail-notification-disabled-access",
     refreshToken: "user-gmail-notification-disabled-refresh",
+    scope: "https://www.googleapis.com/auth/gmail.readonly",
     expiresAt: Math.floor(Date.now() / 1000) + 3600,
   }), "utf8");
   await createThread({
@@ -806,6 +808,7 @@ test("tenant api-agent repair retry can call Gmail notification tools", async ()
   await fs.writeFile(path.join(paths.secrets, "gmail-token.json"), JSON.stringify({
     accessToken: "user-gmail-notification-repair-access",
     refreshToken: "user-gmail-notification-repair-refresh",
+    scope: "https://www.googleapis.com/auth/gmail.readonly",
     expiresAt: Math.floor(Date.now() / 1000) + 3600,
   }), "utf8");
   await createThread({
@@ -908,6 +911,7 @@ test("tenant api-agent Gmail notification tools list and delete scoped rules", a
   await fs.writeFile(path.join(paths.secrets, "gmail-token.json"), JSON.stringify({
     accessToken: "user-gmail-notification-tool-access",
     refreshToken: "user-gmail-notification-tool-refresh",
+    scope: "https://www.googleapis.com/auth/gmail.readonly",
     expiresAt: Math.floor(Date.now() / 1000) + 3600,
   }), "utf8");
   await createThread({
@@ -1738,6 +1742,7 @@ test("tenant api-agent pauses a Gmail watch through the generic action router", 
   await fs.writeFile(path.join(paths.secrets, "gmail-token.json"), JSON.stringify({
     accessToken: "pause-gmail-watch-access",
     refreshToken: "pause-gmail-watch-refresh",
+    scope: "https://www.googleapis.com/auth/gmail.readonly",
     expiresAt: Math.floor(Date.now() / 1000) + 3600,
   }), "utf8");
   await createThread({
@@ -2368,6 +2373,7 @@ test("tenant api-agent reads scoped Gmail directly without repeated confirmation
   await fs.writeFile(path.join(paths.secrets, "gmail-token.json"), JSON.stringify({
     accessToken: "user-scoped-access-token",
     refreshToken: "user-scoped-refresh-token",
+    scope: "https://www.googleapis.com/auth/gmail.readonly",
     expiresAt: Math.floor(Date.now() / 1000) + 3600,
   }), "utf8");
   await createThread({
@@ -2489,6 +2495,7 @@ test("tenant api-agent uses Gmail prompt-push message id for follow-up actions",
   await fs.writeFile(path.join(paths.secrets, "gmail-token.json"), JSON.stringify({
     accessToken: "user-push-followup-token",
     refreshToken: "user-push-followup-refresh",
+    scope: "https://www.googleapis.com/auth/gmail.readonly",
     expiresAt: Math.floor(Date.now() / 1000) + 3600,
   }), "utf8");
   await createThread({
@@ -2615,6 +2622,7 @@ test("tenant api-agent does not let stale Gmail context override notification re
   await fs.writeFile(path.join(paths.secrets, "gmail-token.json"), JSON.stringify({
     accessToken: "user-context-notification-token",
     refreshToken: "user-context-notification-refresh",
+    scope: "https://www.googleapis.com/auth/gmail.readonly",
     expiresAt: Math.floor(Date.now() / 1000) + 3600,
   }), "utf8");
   await createThread({
@@ -3261,7 +3269,7 @@ test("tenant api-agent fallback summarizes skill actions without raw capability 
   await upsertUser({ id: "otcan", role: "user", displayName: "Otcan" }, env);
   const secrets = path.join(userDataPaths("otcan", env).secrets);
   await fs.mkdir(secrets, { recursive: true });
-  await fs.writeFile(path.join(secrets, "gmail-token.json"), JSON.stringify({ access_token: "fake", scope: "https://www.googleapis.com/auth/gmail.readonly" }), "utf8");
+  await fs.writeFile(path.join(secrets, "gmail-token.json"), JSON.stringify({ accessToken: "fake", scope: "https://www.googleapis.com/auth/gmail.readonly" }), "utf8");
   await createThread({
     id: "otcantest-skill-summary-fallback",
     ownerUserId: "otcan",
@@ -4975,7 +4983,10 @@ test("tenant connector status and disconnect tools are user-scoped", async () =>
   const principal = userPrincipal({ id: "otcan", role: "user" });
   const paths = userDataPaths("otcan", env);
   await fs.mkdir(paths.secrets, { recursive: true });
-  await fs.writeFile(path.join(paths.secrets, "gmail-token.json"), JSON.stringify({ accessToken: "user-token" }), "utf8");
+  await fs.writeFile(path.join(paths.secrets, "gmail-token.json"), JSON.stringify({
+    accessToken: "user-token",
+    scope: "https://www.googleapis.com/auth/gmail.readonly",
+  }), "utf8");
 
   const connected = await runTenantApiAgentTool("orkestr_connector_status", {
     provider: "gmail",
