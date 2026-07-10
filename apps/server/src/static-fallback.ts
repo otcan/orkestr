@@ -28,7 +28,7 @@ export function registerStaticFallback(app: INestApplication): void {
     if (url.startsWith("/api/") || url.startsWith("/oauth/") || url.startsWith("/connect/") || url.startsWith("/google-marketing/oauth/")) {
       return next();
     }
-    if (url.startsWith("/desktop-share/")) {
+    if (isDesktopSharePagePath(url)) {
       return serveDesktopSharePage(response);
     }
     const sharedAppHandled = await maybeHandleSharedAppRoute(request, response, url);
@@ -74,6 +74,13 @@ export function registerStaticFallback(app: INestApplication): void {
     }
     return serveStaticPath(url || "/", response);
   });
+}
+
+function isDesktopSharePagePath(requestUrl: string) {
+  const pathname = new URL(requestUrl || "/", "http://localhost").pathname;
+  if (pathname.startsWith("/desktop-share/")) return true;
+  const parts = pathname.split("/").filter(Boolean);
+  return parts[0] === "i" && Boolean(parts[1]) && parts[2] === "app" && parts[3] === "desktop-share";
 }
 
 async function maybeHandleSharedAppRoute(request: any, response: any, requestUrl: string): Promise<boolean> {

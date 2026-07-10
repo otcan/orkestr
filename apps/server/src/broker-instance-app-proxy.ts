@@ -118,6 +118,11 @@ function brokerAppApiRequest(route: BrokerAppRoute): boolean {
   return route.upstreamPath === "/api" || route.upstreamPath.startsWith("/api/") || route.upstreamPath.startsWith("/api?");
 }
 
+function parentOwnedBrokerAppRoute(route: BrokerAppRoute): boolean {
+  const parsed = new URL(route.upstreamPath || "/", "http://tenant.local");
+  return parsed.pathname === "/desktop-share" || parsed.pathname.startsWith("/desktop-share/");
+}
+
 function canonicalBrokerGoogleWorkspaceConnectorPath(route: BrokerAppRoute): string {
   const parsed = new URL(route.upstreamPath || "/", "http://tenant.local");
   if (parsed.pathname !== "/connect/google") return "";
@@ -450,7 +455,9 @@ function writeUpgradeError(socket: Duplex, statusCode: number, message: string):
 export function registerBrokerInstanceAppProxy(app: INestApplication): void {
   const expressApp = app.getHttpAdapter().getInstance();
   expressApp.use("/i", (request: any, response: any, next: () => void) => {
-    if (!parseBrokerAppUrl(brokerRequestUrl(request))) return next();
+    const route = parseBrokerAppUrl(brokerRequestUrl(request));
+    if (!route) return next();
+    if (parentOwnedBrokerAppRoute(route)) return next();
     void proxyBrokerAppHttp(request, response);
   });
 }
