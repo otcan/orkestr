@@ -9,6 +9,8 @@ import { createGoogleWorkspaceConnectLink } from "../packages/connectors/src/goo
 import { __brokerInstanceRegistryTestInternals, registerBrokerInstance } from "../packages/core/src/broker-instance-registry.js";
 import { approvePairingChallenge, createPairingChallenge, listPairingChallenges, pairBrowser, sessionCookieHeader } from "../packages/core/src/security.js";
 import { userPrincipal } from "../packages/core/src/principal.js";
+import { createTenantVm } from "../packages/core/src/tenant-vm-registry.js";
+import { userDataPaths } from "../packages/storage/src/paths.js";
 
 const publicRuntimeEnvKeys = [
   "ORKESTR_PRIMARY_DOMAIN",
@@ -294,6 +296,7 @@ test("google workspace brokered connect links require instance and owner scoped 
     assert.equal(challengePayload.challenge.authIntent.action, "connect");
     assert.equal(challengePayload.challenge.authIntent.connectId, connect.connectId);
     assert.equal(challengePayload.challenge.authIntent.instanceId, "instance-firat");
+    assert.equal(challengePayload.challenge.authIntent.tenantVmId, "firat-jobs-vm");
     assert.equal(challengePayload.challenge.authIntent.userId, "firat");
     assert.equal(challengePayload.challenge.authIntent.thread, "firat-thread");
 
@@ -452,6 +455,11 @@ test("broker instance app path pairs on broker and proxies the VM WebUI", async 
       endpointBaseUrl: `http://127.0.0.1:${upstreamPort}`,
     },
   });
+  await createTenantVm({
+    id: "firat-jobs-vm",
+    ownerUserId: "firat",
+    labels: { brokerInstanceId: brokerRegistration.instanceId },
+  }, process.env);
   const server = await startServer({ port: 0, host: "127.0.0.1" });
   const { port } = server.address();
   try {
@@ -533,6 +541,7 @@ test("broker instance app path pairs on broker and proxies the VM WebUI", async 
     const intentUserPayload = await intentUserResponse.json();
     const intentStartResponse = await fetch(`http://127.0.0.1:${port}/i/${brokerRegistration.instanceId}/app/api/connectors/gmail/oauth/start`, { headers: { cookie: authIntentCookie } });
     const intentStartPayload = await intentStartResponse.json();
+    const intentSavedState = JSON.parse(await fs.readFile(path.join(userDataPaths("firat", process.env).oauth, "gmail-state.json"), "utf8"));
     const intentDisconnectResponse = await fetch(`http://127.0.0.1:${port}/i/${brokerRegistration.instanceId}/app/api/connectors/gmail/auth`, { method: "DELETE", headers: { cookie: authIntentCookie } });
     const intentDisconnectPayload = await intentDisconnectResponse.json();
     const intentThreadsResponse = await fetch(`http://127.0.0.1:${port}/i/${brokerRegistration.instanceId}/app/api/threads`, { headers: { cookie: authIntentCookie }, redirect: "manual" });
@@ -592,6 +601,10 @@ test("broker instance app path pairs on broker and proxies the VM WebUI", async 
     assert.equal(intentAuthorizeUrl.origin, "https://accounts.google.com");
     assert.equal(intentAuthorizeUrl.searchParams.get("redirect_uri"), "https://app.orkestr.de/oauth/gmail/callback");
     assert.equal(intentAuthorizeUrl.searchParams.get("login_hint"), null);
+    assert.doesNotMatch(intentStartPayload.state, /^tenant:/);
+    assert.equal(intentSavedState.state, intentStartPayload.state);
+    assert.equal(intentSavedState.tenantVmId, "");
+    assert.equal(intentSavedState.brokerTenantVmId, "firat-jobs-vm");
     assert.ok(intentScopes.includes("https://www.googleapis.com/auth/gmail.readonly"));
     assert.ok(intentScopes.includes("https://www.googleapis.com/auth/gmail.modify"));
     assert.ok(intentScopes.includes("https://www.googleapis.com/auth/gmail.send"));

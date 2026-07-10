@@ -26,6 +26,12 @@ type BrokerAppTarget = BrokerAppRoute & {
   baseUrl: URL;
 };
 
+type BrokerInstanceOwner = {
+  userId: string;
+  displayName: string;
+  tenantVmId: string;
+};
+
 function normalizeProxyBaseUrl(value = ""): URL | null {
   const raw = String(value || "").trim().replace(/\/+$/, "");
   if (!raw) return null;
@@ -194,6 +200,7 @@ async function handleBrokerGoogleWorkspaceStart(request: any, response: any, rou
   const intent = session.authIntent && typeof session.authIntent === "object" ? session.authIntent : {};
   const owner = await ownerUserForBrokerInstance(route.instanceId);
   const userId = clean(owner.userId || intent.userId || session.userId);
+  const tenantVmId = clean(intent.tenantVmId || owner.tenantVmId);
   const account = clean(parsed.searchParams.get("account")).toLowerCase();
   const capabilities = stringArray(parsed.searchParams.getAll("capability").length
     ? parsed.searchParams.getAll("capability")
@@ -214,7 +221,7 @@ async function handleBrokerGoogleWorkspaceStart(request: any, response: any, rou
       chatId,
       accountId,
       brokerInstanceId: route.instanceId,
-      brokerTenantVmId: clean(intent.tenantVmId),
+      brokerTenantVmId: tenantVmId,
       brokerTenantUserId: userId,
       brokerTenantThreadId: threadId,
       brokerTenantChatId: chatId,
@@ -304,18 +311,19 @@ async function brokerProxyAuthHeader(request: any, target: BrokerAppTarget): Pro
   return encodeBrokerAuthHeader(assertion.body);
 }
 
-async function ownerUserForBrokerInstance(instanceId = ""): Promise<{ userId: string; displayName: string }> {
+async function ownerUserForBrokerInstance(instanceId = ""): Promise<BrokerInstanceOwner> {
   const id = String(instanceId || "").trim();
-  if (!id) return { userId: "", displayName: "" };
+  if (!id) return { userId: "", displayName: "", tenantVmId: "" };
   const vms = await listTenantVms(process.env).catch(() => []);
   const vm = vms.find((item: any) =>
     String(item?.labels?.brokerInstanceId || item?.labels?.instanceId || "").trim() === id ||
     String(item?.endpoint?.brokerInstanceId || "").trim() === id,
   );
+  const tenantVmId = String(vm?.id || "").trim();
   const userId = String(vm?.ownerUserId || "").trim();
-  if (!userId) return { userId: "", displayName: "" };
+  if (!userId) return { userId: "", displayName: "", tenantVmId };
   const user = await getUser(userId, process.env).catch(() => null);
-  return { userId, displayName: String(user?.displayName || userId).trim() };
+  return { userId, displayName: String(user?.displayName || userId).trim(), tenantVmId };
 }
 
 async function proxyBrokerAppHttp(request: any, response: any): Promise<void> {

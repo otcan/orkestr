@@ -1089,6 +1089,7 @@ test("broker instance pairing challenge is scoped to the tenant VM owner", async
     assert.equal(body.challenge.authIntent.provider, "google_workspace");
     assert.equal(body.challenge.authIntent.action, "connect");
     assert.equal(body.challenge.authIntent.instanceId, "instance-firat");
+    assert.equal(body.challenge.authIntent.tenantVmId, "firat-jobs-vm");
     assert.equal(body.challenge.authIntent.userId, "firat");
   } finally {
     await new Promise((resolve) => server.close(resolve));
@@ -1140,6 +1141,7 @@ test("broker instance pairing challenge is scoped to the tenant VM owner", async
     assert.equal(body.challenge.authIntent.provider, "google_workspace");
     assert.equal(body.challenge.authIntent.action, "connect");
     assert.equal(body.challenge.authIntent.instanceId, "instance-firat");
+    assert.equal(body.challenge.authIntent.tenantVmId, "firat-jobs-vm");
     assert.equal(body.challenge.authIntent.userId, "firat");
   } finally {
     await new Promise((resolve) => server.close(resolve));
