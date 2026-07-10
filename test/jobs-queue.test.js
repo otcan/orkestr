@@ -344,6 +344,51 @@ test("Gmail jobs poll keeps real LinkedIn job alerts", async () => {
   assert.equal(queue.counts.presented, 1);
 });
 
+test("Gmail jobs poll uses configured fit agent command instead of heuristic", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-jobs-fit-agent-command-"));
+  const fakeFitAgentScript = [
+    "let input = '';",
+    "process.stdin.setEncoding('utf8');",
+    "for await (const chunk of process.stdin) input += chunk;",
+    "const payload = JSON.parse(input);",
+    "if (!payload.candidate || !payload.candidate.subject.includes('AI Platform Engineer')) process.exit(2);",
+    "console.log(JSON.stringify({",
+    "  fit_score: 9,",
+    "  fit_score_100: 91,",
+    "  role: 'AI Platform Engineer',",
+    "  company: 'FitAgentCo',",
+    "  reason: 'Semantic LLM-style fit from external classifier.',",
+    "  why_fit: 'Direct AI platform role match.',",
+    "  classifier: 'llm_fake'",
+    "}));",
+  ].join("\n");
+  const env = {
+    ORKESTR_HOME: home,
+    WHATSAPP_BRIDGE_MODE: "external",
+    ORKESTR_JOBS_FIT_AGENT_COMMAND_JSON: JSON.stringify([process.execPath, "--input-type=module", "--eval", fakeFitAgentScript]),
+  };
+  await createThread({ id: "jobs-fit-agent-command-thread", name: "Jobs Fit Agent Command" }, env);
+
+  const result = await processJobCandidateMessages({
+    threadId: "jobs-fit-agent-command-thread",
+    maxResults: 1,
+    signalMode: "record_only",
+  }, [{
+    id: "fit-agent-job-1",
+    threadId: "gmail-thread-fit-agent-job-1",
+    subject: "AI Platform Engineer at FitAgentCo",
+    from: "jobs@fitagent.example",
+    snippet: "Remote AI platform role.",
+    text: "Remote AI platform role. Apply now https://jobs.example.com/fit-agent",
+    internalDate: String(Date.parse("2026-06-30T10:00:00Z")),
+  }], env);
+
+  assert.equal(result.classified.classified.length, 1);
+  assert.equal(result.classified.classified[0].state, "queued_fit");
+  assert.equal(result.classified.classified[0].fit.classifier, "llm_fake");
+  assert.equal(result.classified.classified[0].fit.fitScore100, 91);
+});
+
 test("Gmail jobs poll supports host-native gog collection", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-jobs-gog-"));
   const fakeGogScript = [

@@ -51,6 +51,8 @@ test("tenant VM provisioning builds a public-safe KubeVirt plan", async () => {
   assert.equal(plan.runtimeEnv.ORKESTR_LLM_SANITIZER_CODEX_TIMEOUT_MS, "75000");
   assert.equal(plan.runtimeEnv.ORKESTR_LLM_SANITIZER_MAX_ATTEMPTS, "2");
   assert.equal(plan.runtimeEnv.ORKESTR_LLM_SANITIZER_RETRY_DELAY_MS, "1000");
+  assert.equal(plan.runtimeEnv.ORKESTR_JOBS_FIT_AGENT_COMMAND_JSON, "[\"node\",\"/opt/orkestr/current/scripts/jobs-fit-agent-codex.mjs\"]");
+  assert.equal(plan.runtimeEnv.ORKESTR_JOBS_FIT_AGENT_CODEX_TIMEOUT_MS, "90000");
   assert.equal(plan.bootstrapProfilePath, "/etc/orkestr/tenant-bootstrap-profile.json");
   assert.equal(plan.bootstrapProfile.firstChat.name, "Alice Launch");
   assert.equal(plan.bootstrapProfile.codex.model, "gpt-5.5");
@@ -96,6 +98,8 @@ test("tenant VM provisioning builds a public-safe KubeVirt plan", async () => {
   assert.match(envFile, /^ORKESTR_LLM_SANITIZER_CODEX_TIMEOUT_MS='75000'$/m);
   assert.match(envFile, /^ORKESTR_LLM_SANITIZER_MAX_ATTEMPTS='2'$/m);
   assert.match(envFile, /^ORKESTR_LLM_SANITIZER_RETRY_DELAY_MS='1000'$/m);
+  assert.match(envFile, /^ORKESTR_JOBS_FIT_AGENT_COMMAND_JSON='\["node","\/opt\/orkestr\/current\/scripts\/jobs-fit-agent-codex\.mjs"\]'$/m);
+  assert.match(envFile, /^ORKESTR_JOBS_FIT_AGENT_CODEX_TIMEOUT_MS='90000'$/m);
   assert.deepEqual(plan.commands.apply, ["kubectl", "apply", "-f", "-"]);
   assert.deepEqual(plan.commands.publicIpRoute.slice(0, 7), [
     "bash",
@@ -174,12 +178,14 @@ test("tenant VM provisioning derives central setup URLs from broker instance id"
   assert.equal(plan.runtimeEnv.ORKESTR_PAIRING_URL, "https://connect.example.test/setup/pairing");
   assert.equal(plan.runtimeEnv.ORKESTR_BROKER_INSTANCE_ID, "broker-firat-001");
   assert.equal(plan.runtimeEnv.ORKESTR_INSTANCE_ID, "broker-firat-001");
+  assert.equal(plan.runtimeEnv.ORKESTR_JOBS_FIT_AGENT_COMMAND_JSON, "[\"node\",\"/opt/orkestr/current/scripts/jobs-fit-agent-codex.mjs\"]");
   assert.equal(plan.runtimeEnv.GMAIL_OAUTH_REDIRECT_URI, "https://ops-health.example.test/google-marketing/oauth/callback");
   assert.equal(Object.hasOwn(plan.runtimeEnv, "GMAIL_OAUTH_CLIENT_SECRET"), false);
   assert.match(envFile, /^ORKESTR_PUBLIC_URL='https:\/\/connect\.example\.test\/i\/broker-firat-001\/app'$/m);
   assert.match(envFile, /^ORKESTR_CONNECT_PUBLIC_SETUP_URL='https:\/\/connect\.example\.test\/i\/broker-firat-001\/setup'$/m);
   assert.match(envFile, /^ORKESTR_BROKER_INSTANCE_ID='broker-firat-001'$/m);
   assert.match(envFile, /^ORKESTR_INSTANCE_ID='broker-firat-001'$/m);
+  assert.match(envFile, /^ORKESTR_JOBS_FIT_AGENT_COMMAND_JSON='\["node","\/opt\/orkestr\/current\/scripts\/jobs-fit-agent-codex\.mjs"\]'$/m);
   assert.match(envFile, /^GMAIL_OAUTH_REDIRECT_URI='https:\/\/ops-health\.example\.test\/google-marketing\/oauth\/callback'$/m);
   assert.equal(envFile.includes("must-not-copy"), false);
   assert.doesNotMatch(plan.runtimeEnv.ORKESTR_CONNECT_PUBLIC_SETUP_URL, /0\.0\.0\.0|127\.0\.0\.1|localhost|10\./);

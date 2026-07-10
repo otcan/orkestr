@@ -210,6 +210,8 @@ function runtimeEnv(input = {}, env = process.env) {
     ORKESTR_LLM_SANITIZER_CODEX_TIMEOUT_MS: tenantVmRuntime ? "75000" : "",
     ORKESTR_LLM_SANITIZER_MAX_ATTEMPTS: tenantVmRuntime ? "2" : "",
     ORKESTR_LLM_SANITIZER_RETRY_DELAY_MS: tenantVmRuntime ? "1000" : "",
+    ORKESTR_JOBS_FIT_AGENT_COMMAND_JSON: tenantVmRuntime ? "[\"node\",\"/opt/orkestr/current/scripts/jobs-fit-agent-codex.mjs\"]" : "",
+    ORKESTR_JOBS_FIT_AGENT_CODEX_TIMEOUT_MS: tenantVmRuntime ? "90000" : "",
     ...publicOauthRedirectRuntimeEnv(env),
     ...tenantControlPlaneRuntimeEnv(controlPlane),
     ORKESTR_DEMO_MODE: demoEnabled ? "1" : "",
