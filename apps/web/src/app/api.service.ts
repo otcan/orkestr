@@ -547,6 +547,7 @@ export interface SharedAppPerson {
   lastMessagePreview?: string;
   messageHistory?: SharedAppPersonMessage[];
   currentClassification?: string;
+  reviewNote?: string;
 }
 
 export interface SharedAppPayload {
@@ -2561,8 +2562,20 @@ export class ApiService {
     );
   }
 
-  sharedAppAction(instanceId: string, appSlug: string, shareToken: string, action: string, body: Record<string, unknown>): Observable<SharedAppPayload> {
-    return this.http.post<SharedAppPayload>(
+  sharedAppAction(instanceId: string, appSlug: string, shareToken: string, action: string, body: Record<string, unknown>): Observable<SharedAppPayload & {
+    personId?: string;
+    classification?: string;
+    currentClassification?: string;
+    note?: string;
+    reviewNote?: string;
+  }> {
+    return this.http.post<SharedAppPayload & {
+      personId?: string;
+      classification?: string;
+      currentClassification?: string;
+      note?: string;
+      reviewNote?: string;
+    }>(
       this.api(`/shared-apps/i/${encodeURIComponent(instanceId)}/a/${encodeURIComponent(appSlug)}/s/${encodeURIComponent(shareToken)}/actions/${encodeURIComponent(action)}`),
       body,
     );

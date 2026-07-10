@@ -7,7 +7,9 @@ import { normalizeUserId } from "./users.js";
 
 const appTypes = new Set(["people-message-labeling"]);
 const defaultLabels = ["not_evaluated", "to_contact", "to_skip"];
-const defaultAction = "setClassification";
+const actionSetClassification = "setClassification";
+const actionSetNote = "setNote";
+const defaultActions = [actionSetClassification, actionSetNote];
 const defaultXrmReviewApiBaseUrl = "http://127.0.0.1:25995";
 
 function nowIso() {
@@ -125,17 +127,11 @@ function xrmInstanceApiBaseUrl(app = {}, share = {}, env = process.env) {
   const filters = shareFilters(share);
   const instanceId = clean(app.backingInstanceId || filters.backingInstanceId || filters.xrmInstanceId).toLowerCase();
   const configured = objectValue(jsonObject(env.ORKESTR_SHARED_APPS_XRM_REVIEW_API_BASE_URLS_JSON, {}));
-  const defaults = {
-    "otcanclaw-linkedin": "http://127.0.0.1:25995",
-    "oguzcan-unver-linkedin": "http://127.0.0.1:25995",
-    "saim-linkedin": "http://127.0.0.1:48772",
-  };
   return clean(
     configured[instanceId] ||
     filters.apiBaseUrl ||
     env.ORKESTR_SHARED_APPS_XRM_REVIEW_API_BASE_URL ||
     env.ORKESTR_XRM_REVIEW_API_BASE_URL ||
-    defaults[instanceId] ||
     defaultXrmReviewApiBaseUrl
   ).replace(/\/+$/g, "");
 }
@@ -182,6 +178,7 @@ function mapXrmReviewItem(item = {}) {
     lastMatchAt: clean(item.lastMatchAt || ""),
     lastMessagePreview: clean(item.lastMessagePreview || ""),
     currentClassification: normalizeReviewStatus(item.reviewStatus, "not_evaluated"),
+    reviewNote: clean(item.reviewNote || item.reviewReason || item.note || ""),
     messageHistory: [],
   };
 }
@@ -264,6 +261,20 @@ async function writeXrmReviewClassification(app = {}, share = {}, personId = "",
   });
 }
 
+async function writeXrmReviewNote(app = {}, share = {}, personId = "", note = "", env = process.env) {
+  const queueKey = xrmQueueKey(share);
+  const id = normalizeId(personId);
+  if (!queueKey) throw sharedAppError("xrm_review_queue_required", 400);
+  if (!id) throw sharedAppError("person_id_required", 400);
+  const baseUrl = xrmInstanceApiBaseUrl(app, share, env);
+  const url = `${baseUrl}/api/review/queues/${encodeURIComponent(queueKey)}/items/${encodeURIComponent(id)}/note`;
+  return fetchJson(url, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ note }),
+  });
+}
+
 async function readState(env = process.env) {
   const state = await readJson(statePath(env), { apps: [], shares: [] });
   return {
@@ -325,7 +336,7 @@ function normalizeShare(input = {}, app = {}, existing = {}) {
     viewType: clean(input.viewType || existing.viewType || "people-message-labeling").slice(0, 120),
     filtersJson: jsonObject(input.filtersJson ?? input.filters ?? existing.filtersJson, {}),
     visibleFieldsJson: listValue(input.visibleFieldsJson ?? input.visibleFields ?? existing.visibleFieldsJson),
-    allowedActionsJson: allowedActions.length ? allowedActions : [defaultAction],
+    allowedActionsJson: allowedActions.length ? allowedActions : defaultActions,
     expiresAt: clean(input.expiresAt || existing.expiresAt),
     revokedAt: clean(input.revokedAt || existing.revokedAt),
     createdBy: normalizeUserId(input.createdBy || existing.createdBy || ""),
@@ -482,6 +493,7 @@ function basePeopleFromShare(share = {}) {
   const people = jsonArray(filters.people || filters.records || filters.items);
   const state = objectValue(share.stateJson);
   const classifications = objectValue(state.classifications);
+  const notes = objectValue(state.notes);
   return people.map((person, index) => {
     const source = objectValue(person);
     const id = normalizeId(source.id || source.personId || source.profileUrl || `person-${index + 1}`);
@@ -497,6 +509,7 @@ function basePeopleFromShare(share = {}) {
         text: clean(message.text || message.body || message.message),
       })),
       currentClassification: clean(classifications[id] || source.currentClassification || source.classification || "not_evaluated") || "not_evaluated",
+      reviewNote: clean(notes[id] || source.reviewNote || source.reviewReason || source.note),
     };
   });
 }
@@ -580,11 +593,52 @@ export async function runSharedAppAction(instanceId, appSlug, shareToken, action
   const { app, share } = await resolveSharedAppShare(instanceId, appSlug, shareToken, { env });
   assertSessionScope(session, share);
   const actionName = clean(action);
-  if (actionName !== defaultAction || !sessionAllowsShareAction(session, actionName)) throw sharedAppError("shared_app_action_forbidden", 403);
+  if (![actionSetClassification, actionSetNote].includes(actionName) || !sessionAllowsShareAction(session, actionName)) {
+    throw sharedAppError("shared_app_action_forbidden", 403);
+  }
   if (app.appType !== "people-message-labeling") throw sharedAppError("unsupported_shared_app_type", 400);
   const personId = normalizeId(body.personId || body.id);
-  const classification = clean(body.classification || body.value);
   if (!personId) throw sharedAppError("person_id_required", 400);
+
+  if (actionName === actionSetNote) {
+    const note = clean(body.note || body.value).slice(0, 5000);
+    if (isXrmBackedShare(app, share)) {
+      const updated = await writeXrmReviewNote(app, share, personId, note, env);
+      await appendEvent({ type: "shared_app_action", instanceId: share.instanceId, appSlug: share.appSlug, shareId: share.id, action: actionName, personId, backingSystem: "xrm" }, env).catch(() => {});
+      return {
+        ok: true,
+        personId,
+        note,
+        reviewNote: clean(updated?.reviewReason || note),
+        currentClassification: normalizeReviewStatus(updated?.reviewStatus, "not_evaluated"),
+      };
+    }
+    const state = await readState(env);
+    let updated = null;
+    const shares = state.shares.map((item) => {
+      if (item.id !== share.id) return item;
+      const stateJson = objectValue(item.stateJson);
+      const notes = objectValue(stateJson.notes);
+      updated = {
+        ...item,
+        stateJson: {
+          ...stateJson,
+          notes: {
+            ...notes,
+            [personId]: note,
+          },
+        },
+        updatedAt: nowIso(),
+      };
+      return updated;
+    });
+    if (!updated) throw sharedAppError("shared_app_share_not_found", 404);
+    await writeState({ ...state, shares }, env);
+    await appendEvent({ type: "shared_app_action", instanceId: share.instanceId, appSlug: share.appSlug, shareId: share.id, action: actionName, personId }, env).catch(() => {});
+    return { ok: true, personId, note, reviewNote: note };
+  }
+
+  const classification = clean(body.classification || body.value);
   if (!defaultLabels.includes(classification)) throw sharedAppError("invalid_classification", 400);
   if (isXrmBackedShare(app, share)) {
     await writeXrmReviewClassification(app, share, personId, classification, env);
