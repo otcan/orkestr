@@ -313,8 +313,8 @@ export async function createGoogleWorkspaceConnectLink({
   ];
   await writeConnectLedger(scope, ledger);
   const path = `/connect/google?connect=${encodeURIComponent(connectId)}`;
-  const connectLink = publicConnectUrl(path, env, { brokered: Boolean(request.brokerInstanceId || request.brokerTenantVmId) });
   const connectorLink = googleWorkspaceBrokeredConnectorSetupHref(request, env, "gmail");
+  const connectLink = connectorLink || publicConnectUrl(path, env, { brokered: Boolean(request.brokerInstanceId || request.brokerTenantVmId) });
   const link = connectorLink || connectLink;
   return {
     ok: true,

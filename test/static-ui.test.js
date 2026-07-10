@@ -263,7 +263,9 @@ test("google workspace brokered connect links require instance and owner scoped 
   assert.equal(connectorUrl.pathname, "/i/instance-firat/app/connectors/gmail");
   const connectUrl = new URL(connect.connectLink);
   assert.equal(connectUrl.origin, "https://connect.orkestr.de");
-  const connectPath = `${connectUrl.pathname}${connectUrl.search}`;
+  assert.equal(connectUrl.pathname, "/i/instance-firat/app/connectors/gmail");
+  assert.equal(connectUrl.searchParams.get("connect"), connect.connectId);
+  const connectPath = `/connect/google?connect=${encodeURIComponent(connect.connectId)}`;
   const startPath = `/connect/google/start?connect=${encodeURIComponent(connect.connectId)}&capability=gmail_read`;
   const server = await startServer({ port: 0, host: "127.0.0.1" });
   const { port } = server.address();
@@ -469,8 +471,11 @@ test("broker instance app path pairs on broker and proxies the VM WebUI", async 
       brokerServerRequest: true,
     }, process.env);
     const brokeredConnectUrl = new URL(brokeredConnect.connectLink);
+    assert.equal(brokeredConnectUrl.pathname, `/i/${brokerRegistration.instanceId}/app/connectors/gmail`);
+    assert.equal(brokeredConnectUrl.searchParams.get("connect"), brokeredConnect.connectId);
+    const rawBrokeredConnectUrl = new URL(`/connect/google?connect=${encodeURIComponent(brokeredConnect.connectId)}`, "https://connect.orkestr.de");
     const topLevelBrokeredConnect = await fetch(
-      `http://127.0.0.1:${port}${brokeredConnectUrl.pathname}${brokeredConnectUrl.search}`,
+      `http://127.0.0.1:${port}${rawBrokeredConnectUrl.pathname}${rawBrokeredConnectUrl.search}`,
       { redirect: "manual" },
     );
     const noSlash = await fetch(`http://127.0.0.1:${port}/i/${brokerRegistration.instanceId}/app`, { redirect: "manual" });
