@@ -376,6 +376,12 @@ test("tenant VM desktop-share proxy rewrites share and desktop URLs through the 
     const authIntentBrokerShareHtml = await authIntentBrokerSharePage.text();
     assert.equal(authIntentBrokerSharePage.status, 200, authIntentBrokerShareHtml);
     assert.match(authIntentBrokerShareHtml, /Orkestr Desktop Access/);
+    const otherInstanceAuthIntentBrokerSharePage = await fetch(`${baseUrl}/i/instance-eren/app/desktop-share/tvm/alice-tenant/d-abc123/share-1?key=secret`, {
+      headers: { cookie: authIntentCookie },
+    });
+    const otherInstanceAuthIntentBrokerShareHtml = await otherInstanceAuthIntentBrokerSharePage.text();
+    assert.equal(otherInstanceAuthIntentBrokerSharePage.status, 200, otherInstanceAuthIntentBrokerShareHtml);
+    assert.match(otherInstanceAuthIntentBrokerShareHtml, /Orkestr Desktop Access/);
     const directShareCalls = await desktopShareApiCallsFromHtml(
       authIntentShareHtml,
       "/desktop-share/tvm/alice-tenant/d-abc123/share-1",

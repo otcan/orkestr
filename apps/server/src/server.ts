@@ -204,13 +204,13 @@ function authorizeAuthIntentBrokerAppRequest(request: any, session: any, parts: 
   if (parts[0] !== "i" || !parts[1] || parts[2] !== "app") return { matched: false, ok: false };
   const method = String(request?.method || "GET").toUpperCase();
   const instanceId = String(parts[1] || "").trim();
+  const rest = parts.slice(3);
+  if (desktopShareRouteAllowed(method, rest)) return { matched: true, ok: true };
   if (!session?.instanceId || instanceId !== String(session.instanceId || "").trim()) {
     return { matched: true, ok: false, statusCode: 403, error: "auth_intent_session_scope_denied" };
   }
-  const rest = parts.slice(3);
   const restPath = `/${rest.join("/")}`;
   if (method === "GET" && isStaticAssetRequestPath(restPath)) return { matched: true, ok: true };
-  if (desktopShareRouteAllowed(method, rest)) return { matched: true, ok: true };
   if (authIntentConnectorAppRouteAllowed(request, session, instanceId, method, rest)) return { matched: true, ok: true };
   if (authIntentBrokerAppApiRouteAllowed(method, rest, session)) return { matched: true, ok: true };
   return { matched: true, ok: false, statusCode: 403, error: "auth_intent_session_scope_denied" };
