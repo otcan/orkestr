@@ -10,6 +10,7 @@ import { startServer } from "../apps/server/src/server.js";
 import { resetThreadSummaryCachesForTest, threadRuntimeSummary, threadSummaryPayload, threadSummaryRuntimeSnapshot } from "../apps/server/src/thread-summary.ts";
 import { runNextThreadMessage } from "../packages/core/src/executors.js";
 import { applyRuntimeCodexMode, consumeThreadConnectorDeliverySignalCount, deliverPendingThreadInputs, doctorRuntimeResources, drainAllPendingThreadInputs, hardResetThreadRuntime, listRuntimeLeases, recoverStalePendingThreadInputs, resetThreadInputDeliveryTimersForTest, resetThreadRuntime, resolveCodexThreadMetadata, runtimeStatus, setThreadConnectorDeliverySignalHandler, sleepThread, syncRuntimeLeases, syncRuntimeWindowName, takeoverRawTerminalThread, wakeThread } from "../packages/core/src/runtime-leases.js";
+import { completeThreadSecurityApproveCommand } from "../packages/core/src/security-thread-command.js";
 import { ensureDataDirs } from "../packages/storage/src/paths.js";
 import { parseThreadInputCommand } from "../packages/core/src/thread-commands.js";
 import { createPairingChallenge, getPairingChallenge } from "../packages/core/src/security.js";
@@ -6001,6 +6002,48 @@ test("thread input approves a pasted Orkestr pairing page locally before Codex d
   assert.equal(approved.status, "approved");
   assert.equal(user.observedVia, "orkestr_security_approve_command");
   assert.match(reply.text, new RegExp(`Approved pairing challenge ${challenge.challengeId}`));
+});
+
+test("thread input does not approve quoted assistant approval prose", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-security-quoted-prose-"));
+  const env = { ORKESTR_HOME: home };
+  const thread = await createThread({
+    id: "thread-security-quoted-prose",
+    name: "Thread Security Quoted Prose",
+    cwd: home,
+    runtimeKind: "codex-app-server",
+    executor: {
+      id: "codex",
+      type: "codex",
+      codexThreadId: "codex-security-quoted-prose-thread",
+      metadata: {
+        transport: "app-server",
+        runtimeKind: "codex-app-server",
+      },
+    },
+  }, env);
+  const challenge = await createPairingChallenge({ env });
+  const input = await enqueueThreadInput(thread.id, {
+    text: [
+      "Fresh approval command:",
+      "",
+      "```bash",
+      `orkestr connect approve ${challenge.challengeId}`,
+      "```",
+      "",
+      "How are you able to give this? It should come from the session, not generic.",
+    ].join("\n"),
+    source: "whatsapp_inbound",
+    connector: "whatsapp",
+  }, env);
+
+  const handled = await completeThreadSecurityApproveCommand(thread, input, env);
+  const pending = await getPairingChallenge(challenge.challengeId, { env });
+  const messages = await listThreadMessages(thread.id, env);
+
+  assert.equal(handled, null);
+  assert.equal(pending.status, "pending");
+  assert.equal(messages.some((message) => message.source === "security_command" && message.parentMessageId === input.id), false);
 });
 
 test("thread runtime summary reads Codex model and limits from live metadata", async (t) => {

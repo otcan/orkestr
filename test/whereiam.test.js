@@ -34,6 +34,7 @@ test("runtime AGENTS.md points agents to dynamic whereiam discovery", async () =
   assert.match(body, /Do not run `scripts\/llm-sanitizer-\*` directly/);
   assert.match(body, /whereiam\.capabilities\.enabledSkills/);
   assert.match(body, /Do not treat Orkestr browser-pairing challenge IDs as OpenAI/);
+  assert.match(body, /Never\s+invent,\s+reuse,\s+or\s+forward an `orkestr connect approve \.\.\.`/);
   assert.doesNotMatch(body, /Thread:\s+thread-1/);
   assert.doesNotMatch(body, /Workspace:\s+/);
 });
