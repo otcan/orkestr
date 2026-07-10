@@ -180,6 +180,41 @@ test("thread timers queue input on the target thread", async () => {
   assert.equal(messages[0].text, "Run thread timer");
 });
 
+test("thread timer prompts default to editable files in the thread workspace", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-timer-prompt-file-"));
+  const env = { ORKESTR_HOME: home };
+  const workspace = path.join(home, "workspaces", "timer-thread");
+  await fs.mkdir(workspace, { recursive: true });
+  await createThread({ id: "timer-thread", name: "Timer Thread", workspace }, env);
+
+  const timer = await createTimer({
+    label: "Daily Review",
+    threadId: "timer-thread",
+    prompt: "Run workspace prompt.",
+    cadence: "daily",
+  }, env);
+
+  assert.equal(timer.prompt, "");
+  assert.equal(timer.promptFile.startsWith(path.join(workspace, "timer-prompts")), true);
+  assert.equal(await fs.readFile(timer.promptFile, "utf8"), "Run workspace prompt.\n");
+
+  await updateTimer(timer.id, { prompt: "Run updated workspace prompt." }, env);
+  const [updated] = await listTimers(env);
+
+  assert.equal(updated.prompt, "");
+  assert.equal(updated.promptFile, timer.promptFile);
+  assert.equal(await fs.readFile(updated.promptFile, "utf8"), "Run updated workspace prompt.\n");
+
+  updated.nextRunAt = "2020-01-01T00:00:00.000Z";
+  await fs.writeFile(path.join(home, "timers.json"), `${JSON.stringify([updated], null, 2)}\n`);
+  await markDueTimers(env, new Date("2026-05-15T10:00:00Z"));
+  const messages = await listThreadMessages("timer-thread", env);
+
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].text, "");
+  assert.equal(messages[0].promptFile, timer.promptFile);
+});
+
 test("legacy dueAt timers are normalized as due work", () => {
   const timer = normalizeStoredTimer({
     id: "legacy-daily",
