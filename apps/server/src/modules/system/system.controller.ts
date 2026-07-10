@@ -369,7 +369,7 @@ async function pairingChallengeTarget(body: Record<string, unknown> = {}, reques
     role: user.role,
     instanceId,
     requestedPath,
-    ...(await connectorAuthIntentForRequestedPath(requestedPath, instanceId, user.id)),
+    ...(await connectorAuthIntentForRequestedPath(requestedPath, instanceId, user.id, ownerVm)),
   };
 }
 
@@ -395,7 +395,7 @@ function sameOriginRequestedPath(body: Record<string, unknown> = {}, instanceId 
   }
 }
 
-async function connectorAuthIntentForRequestedPath(requestedPath = "", instanceId = "", userId = "") {
+async function connectorAuthIntentForRequestedPath(requestedPath = "", instanceId = "", userId = "", ownerVm: any = null) {
   if (!requestedPath) return {};
   let target: URL;
   try {
@@ -415,6 +415,7 @@ async function connectorAuthIntentForRequestedPath(requestedPath = "", instanceI
   if (target.searchParams.get("instance_id") !== instanceId) return {};
   const connectId = String(target.searchParams.get("connect") || target.searchParams.get("connect_id") || "").trim();
   const connectRequest = await googleWorkspaceConnectRequestForPairingIntent(connectId, instanceId);
+  const tenantVmId = String(connectRequest?.tenantVmId || connectRequest?.brokerTenantVmId || ownerVm?.id || "").trim();
   const thread = String(target.searchParams.get("thread") || target.searchParams.get("thread_id") || "").trim();
   const trustedThread = String(
     connectRequest?.threadName ||
@@ -438,6 +439,7 @@ async function connectorAuthIntentForRequestedPath(requestedPath = "", instanceI
       description: `Approve Google Workspace access for instance ${instanceId}.`,
       connectId: trustedConnectId,
       instanceId,
+      tenantVmId,
       userId,
       thread: trustedThread,
       threadId: String(connectRequest?.threadId || connectRequest?.brokerTenantThreadId || "").trim(),

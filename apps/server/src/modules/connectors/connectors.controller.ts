@@ -126,6 +126,7 @@ function googleWorkspaceAuthIntentAction(connectRequest: any): string {
 function googleWorkspaceAuthIntent(connectRequest: any): Record<string, string> {
   const instanceId = googleWorkspaceBrokerInstanceId(connectRequest);
   const userId = normalizeUserId(connectRequest?.userId || "");
+  const tenantVmId = String(connectRequest?.tenantVmId || connectRequest?.brokerTenantVmId || "").trim();
   const account = String(connectRequest?.account || "").trim().toLowerCase();
   const thread = String(
     connectRequest?.threadName ||
@@ -148,6 +149,7 @@ function googleWorkspaceAuthIntent(connectRequest: any): Record<string, string> 
       : "Approve Google Workspace access for this Orkestr user.",
     connectId: String(connectRequest?.connectId || "").trim(),
     instanceId,
+    tenantVmId,
     userId,
     thread,
     threadId: String(connectRequest?.threadId || connectRequest?.brokerTenantThreadId || "").trim(),
