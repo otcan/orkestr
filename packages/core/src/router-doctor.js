@@ -106,7 +106,7 @@ function accountReady(status = {}, accountId = "") {
   const accounts = Array.isArray(status.accounts) ? status.accounts : [];
   const id = clean(accountId);
   const relevant = id ? accounts.filter((account) => accountMatchesId(account, id)) : accounts;
-  if (!relevant.length) return Boolean(status.ready || status.state === "ready");
+  if (!relevant.length) return Boolean(status.ready || ["ready", "send_ready_scoped"].includes(lower(status.state || status.status)));
   return relevant.some((account) => account.ready === true || lower(account.state) === "ready" || lower(account.status) === "ready");
 }
 

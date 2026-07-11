@@ -2430,13 +2430,31 @@ function shouldDeferRuntimeDelivery(error) {
   if (!error || String(error.message || error) !== "runtime_not_ready") return false;
   const status = error.status || {};
   return Boolean(
-    status.working ||
-    status.state === "working" ||
+    runtimeBlocksThreadInput(status) ||
     status.state === "waking" ||
     status.promptReady === false ||
     status.planImplementationMenuVisible ||
     status.pendingCount > 0,
   );
+}
+
+function staleWorkingPromptReady(status = {}) {
+  return Boolean(
+    status?.promptReady === true &&
+    status?.progress?.staleWorkingPrompt === true &&
+    status?.foregroundWorking !== true &&
+    status?.backgroundWork !== true &&
+    status?.frozen !== true &&
+    status?.state !== "frozen"
+  );
+}
+
+function runtimeBlocksThreadInput(status = {}) {
+  if (!status) return true;
+  if (status.frozen === true || status.state === "frozen") return true;
+  if (status.foregroundWorking === true || status.backgroundWork === true || status.planImplementationMenuVisible === true) return true;
+  if (staleWorkingPromptReady(status)) return false;
+  return Boolean(status.working === true || status.state === "working" || status.state === "running");
 }
 
 async function deferThreadInputDelivery(thread, message, error, env = process.env) {
@@ -2549,6 +2567,7 @@ function runtimeInterruptionNoticeText(reason) {
 
 function runtimeStatusNeedsInterrupt(status = null) {
   if (!status) return false;
+  if (staleWorkingPromptReady(status)) return false;
   return Boolean(
     status.working ||
     status.foregroundWorking ||
@@ -3282,7 +3301,7 @@ async function cancelNeedInputForRawDelivery(thread, message, pendingQuestion, s
 }
 
 async function sendThreadInputToPane(thread, message, status, env = process.env) {
-  if (!status?.paneId || status.working || !status.promptReady || status.planImplementationMenuVisible) {
+  if (!status?.paneId || runtimeBlocksThreadInput(status) || !status.promptReady || status.planImplementationMenuVisible) {
     const error = new Error("runtime_not_ready");
     error.statusCode = 504;
     error.status = status;
@@ -3606,7 +3625,7 @@ export async function deliverPendingThreadInputs(threadId, env = process.env, op
           status = await cancelNeedInputForRawDelivery(thread, currentNext, pendingNeedInput, needInputStatus, env);
         }
         if (!status) status = await waitForRuntimeReady(thread.id, env);
-        if (currentNext.forceDeliveryAfterInterrupt && (!status?.promptReady || status.working)) {
+        if (currentNext.forceDeliveryAfterInterrupt && (!status?.promptReady || runtimeBlocksThreadInput(status))) {
           if (runtimeStatusNeedsInterrupt(status)) {
             await interruptRuntimeStatus(status, env);
             await sleep(interruptSettleMs(env));
@@ -4635,7 +4654,7 @@ function stalePendingInputAgeMs(message = {}) {
 
 function runtimeReadyForPendingRecovery(status = {}) {
   if (!status?.paneId) return false;
-  if (status.working === true || status.foregroundWorking === true || status.backgroundWork === true) return false;
+  if (runtimeBlocksThreadInput(status)) return false;
   if (status.frozen === true || status.state === "frozen") return false;
   return status.promptReady === true || status.state === "ready";
 }
