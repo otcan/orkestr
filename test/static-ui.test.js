@@ -544,6 +544,42 @@ test("broker instance app path pairs on broker and proxies the VM WebUI", async 
       headers: { cookie: staleSameCookie },
       redirect: "manual",
     });
+    const freshConnectChallenge = await createPairingChallenge({
+      env: process.env,
+      instanceId: brokerRegistration.instanceId,
+      userId: "firat",
+      role: "user",
+      requestedPath: `/i/${brokerRegistration.instanceId}/app/connectors/gmail`,
+      allowedActions: [`orkestr_auth.google.connect:${brokeredConnect.connectId}`],
+      authIntent: {
+        mcp: "tools/call",
+        tool: "orkestr_auth",
+        service: "gmail",
+        provider: "google_workspace",
+        action: "connect",
+        connectId: brokeredConnect.connectId,
+        instanceId: brokerRegistration.instanceId,
+        tenantVmId: "firat-jobs-vm",
+        userId: "firat",
+        thread: "Firat Jobs",
+        threadId: "firat-thread",
+      },
+    });
+    await approvePairingChallenge(freshConnectChallenge.challengeId, { approvedBy: "node:test", env: process.env });
+    const freshConnectPaired = await pairBrowser({ challengeId: freshConnectChallenge.challengeId, env: process.env });
+    const staleFirstDuplicateCookie = [
+      staleSameCookie.split(";")[0],
+      sessionCookieHeader(freshConnectPaired.token, process.env).split(";")[0],
+    ].join("; ");
+    const staleFirstConnect = await fetch(`http://127.0.0.1:${port}${brokeredConnectUrl.pathname}${brokeredConnectUrl.search}`, {
+      headers: { cookie: staleFirstDuplicateCookie },
+      redirect: "manual",
+    });
+    const staleFirstConnectHtml = await staleFirstConnect.text();
+    const staleFirstStartResponse = await fetch(`http://127.0.0.1:${port}/i/${brokerRegistration.instanceId}/app/api/connectors/gmail/oauth/start`, {
+      headers: { cookie: staleFirstDuplicateCookie },
+    });
+    const staleFirstStartPayload = await staleFirstStartResponse.json();
     const challenge = await createPairingChallenge({ env: process.env, instanceId: brokerRegistration.instanceId });
     await approvePairingChallenge(challenge.challengeId, { approvedBy: "node:test", env: process.env });
     const paired = await pairBrowser({ challengeId: challenge.challengeId, env: process.env });
@@ -639,6 +675,11 @@ test("broker instance app path pairs on broker and proxies the VM WebUI", async 
       assert.equal(returnUrl.pathname, `/i/${brokerRegistration.instanceId}/app/connectors/gmail`);
       assert.equal(returnUrl.searchParams.get("connect"), brokeredConnect.connectId);
     }
+    assert.equal(staleFirstConnect.status, 200);
+    assert.match(staleFirstConnectHtml, /Connect Gmail/);
+    assert.equal(staleFirstStartResponse.status, 200);
+    assert.equal(staleFirstStartPayload.provider, "google_workspace");
+    assert.equal(staleFirstStartPayload.connectId, brokeredConnect.connectId);
     assert.equal(htmlResponse.status, 200);
     assert.match(html, new RegExp(`<base href="/i/${brokerRegistration.instanceId}/app/"`));
     assert.match(html, new RegExp(`href="/i/${brokerRegistration.instanceId}/app/favicon\\.svg"`));
