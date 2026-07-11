@@ -48,7 +48,12 @@ test("release deploy script exposes versioned install, status, and rollback", as
   assert.match(script, /backup_state/);
   assert.match(script, /ORKESTR_DEPLOY_BACKUP_STATE/);
   assert.match(script, /ORKESTR_DEPLOY_BACKUP_EXCLUDES/);
+  assert.match(script, /ORKESTR_DEPLOY_BACKUP_KEEP/);
   assert.match(script, /backup_excludes="\$\{ORKESTR_DEPLOY_BACKUP_EXCLUDES:-run tmp whatsapp-bridge\/sessions wa-skills\/\*\/session wa-skills\/\*\/state\}"/);
+  assert.match(script, /backup_keep="\$\{ORKESTR_DEPLOY_BACKUP_KEEP:-3\}"/);
+  assert.match(script, /prune_state_backups "\$backup_keep"/);
+  assert.match(script, /prune_state_backups "\$\(\(backup_keep - 1\)\)"/);
+  assert.match(script, /Pruned \$removed old state backup\(s\), keeping max \$keep/);
   assert.match(script, /--exclude="\$data_base\/\$exclude"/);
   assert.match(script, /--ignore-failed-read/);
   assert.match(script, /--warning=no-file-changed/);
@@ -62,6 +67,7 @@ test("release deploy script exposes versioned install, status, and rollback", as
   assert.match(script, /syncSafeThreadWorkersWithParents/);
   assert.match(script, /Post-deploy worker sync/);
   assert.match(script, /backup_state_arg/);
+  assert.match(script, /ORKESTR_DEPLOY_BACKUP_KEEP must be an integer from 1 to 3/);
   assert.match(script, /health_check/);
   assert.match(script, /health_check "\$health_url" 40\s+deploy_public_exposure_check/);
   assert.match(script, /ORKESTR_DEPLOY_EXPOSURE_CHECK/);
@@ -119,10 +125,10 @@ test("release deploy script exposes versioned install, status, and rollback", as
   assert.match(script, /ExecStart=\$node_bin dist\/server\/apps\/server\/src\/server\.js/);
   assert.match(script, /50-shutdown-timeout\.conf/);
   assert.match(script, /TimeoutStopSec=\$timeout/);
-  assert.match(script, /KillMode=mixed/);
+  assert.match(script, /KillMode=process/);
   assert.match(script, /Deploy drain active: new inputs will queue/);
   assert.match(script, /Deploy drain cleared after \$\{service_name\}\.service passed health checks/);
-  assert.match(script, /service-local child processes are reaped after the stop timeout/);
+  assert.match(script, /service-local tmux children are not killed with the UI process/);
   assert.match(script, /systemctl restart "\$\{service_name\}\.service"/);
   assert.doesNotMatch(script, /systemctl stop "\$\{service_name\}\.service"[\s\S]*systemctl start "\$\{service_name\}\.service"/);
   assert.match(script, /send_release_whatsapp_notifications/);

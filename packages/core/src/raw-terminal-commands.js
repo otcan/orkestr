@@ -19,10 +19,17 @@ export function exactSecurityApproveChallengeId(value) {
 
 function pairingApprovalPasteContext(value) {
   const text = String(value || "").toLowerCase();
+  const hasApprovalCommand =
+    text.includes("orkestr connect approve") ||
+    text.includes("orkestr security approve") ||
+    text.includes("approve challenge");
+  if (!hasApprovalCommand) return false;
   return (
     text.includes("pairing required") ||
-    text.includes("orkestr connect approve") ||
+    text.includes("approve this browser") ||
+    text.includes("approve this shared review") ||
     text.includes("approve from ssh") ||
+    text.includes("approve from this server") ||
     (text.includes("challenge id") && text.includes("orkestr security approve"))
   );
 }

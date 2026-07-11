@@ -101,9 +101,40 @@ function normalizeBootstrap(bootstrap = {}) {
     codexReasoningEffort: clean(source.codexReasoningEffort || ""),
     codexMode: clean(source.codexMode || ""),
     autoWakeFirstThread: source.autoWakeFirstThread !== false,
-    desks: normalizeStringList(source.desks || []),
+    desks: normalizeBootstrapDesks(source.desks || []),
     skills: normalizeStringList(source.skills || source.learningSkills || []),
   };
+}
+
+function normalizeBootstrapDesks(values = []) {
+  const input = Array.isArray(values) ? values : String(values || "").split(",");
+  const output = [];
+  const seen = new Set();
+  for (const item of input) {
+    if (typeof item === "string") {
+      const slug = clean(item);
+      if (!slug || seen.has(slug)) continue;
+      seen.add(slug);
+      output.push(slug);
+      continue;
+    }
+    const source = item && typeof item === "object" ? item : {};
+    const slug = clean(source.slug || source.id || source.name);
+    if (!slug || seen.has(slug)) continue;
+    seen.add(slug);
+    output.push({
+      slug,
+      label: clean(source.label || source.title),
+      connector: clean(source.connector || source.service),
+      purpose: clean(source.purpose || source.notes || source.description),
+      startUrl: clean(source.startUrl || source.start_url || source.url),
+      url: clean(source.deskUrl || source.desk_url || source.publicUrl || source.public_url),
+      cdpUrl: clean(source.cdpUrl || source.cdp_url || source.localCdpUrl || source.local_cdp_url),
+      workspacePath: clean(source.workspacePath || source.workspace || source.runtimeWorkspace),
+      enabled: source.enabled !== false,
+    });
+  }
+  return output;
 }
 
 function normalizeDesktops(desktops = {}, input = {}) {

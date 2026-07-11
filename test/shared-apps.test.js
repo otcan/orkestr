@@ -70,9 +70,9 @@ test("shared app URL creates scoped pairing and limits the approved session", as
     shareToken: "share-two",
     filtersJson: { people: [{ id: "hilal", name: "Hilal O." }] },
   }, { principal, env: process.env });
-  const third = await createAppShare("main", "ayk-review", {
+  const third = await createAppShare("main", "demo-review", {
     shareToken: "share-three",
-    filtersJson: { people: [{ id: "ayk", name: "AYK" }] },
+    filtersJson: { people: [{ id: "demo", name: "Demo Contact" }] },
   }, { principal, env: process.env });
   const expired = await createAppShare("main", "outreach-review", {
     shareToken: "expired-share",
@@ -146,7 +146,7 @@ test("shared app URL creates scoped pairing and limits the approved session", as
     assert.equal(paired.session.instanceId, "main");
     assert.equal(paired.session.appSlug, "outreach-review");
     assert.equal(paired.session.shareId, first.share.id);
-    assert.deepEqual(paired.session.allowedActions, ["setClassification"]);
+    assert.deepEqual(paired.session.allowedActions, ["setClassification", "setNote"]);
     assert.equal(paired.redirectPath, "/i/main/a/outreach-review/s/share-one");
 
     const html = await fetch(`${baseUrl}/i/main/a/outreach-review/s/share-one`, { headers: { cookie: sessionCookie } });
@@ -180,11 +180,22 @@ test("shared app URL creates scoped pairing and limits the approved session", as
     const after = await readJson(await fetch(`${baseUrl}/api/shared-apps/i/main/a/outreach-review/s/share-one`, { headers: { cookie: sessionCookie } }));
     assert.equal(after.data.people[0].currentClassification, "to_contact");
 
+    const noteUpdate = await readJson(await fetch(`${baseUrl}/api/shared-apps/i/main/a/outreach-review/s/share-one/actions/setNote`, {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: sessionCookie },
+      body: JSON.stringify({ personId: "betul", note: "Follow up next week." }),
+    }));
+    assert.equal(noteUpdate.personId, "betul");
+    assert.equal(noteUpdate.reviewNote, "Follow up next week.");
+
+    const afterNote = await readJson(await fetch(`${baseUrl}/api/shared-apps/i/main/a/outreach-review/s/share-one`, { headers: { cookie: sessionCookie } }));
+    assert.equal(afterNote.data.people[0].reviewNote, "Follow up next week.");
+
     const otherShare = await fetch(`${baseUrl}/api/shared-apps/i/main/a/outreach-review/s/share-two`, { headers: { cookie: sessionCookie } });
     assert.equal(otherShare.status, 401);
     assert.equal((await readJson(otherShare)).error, "shared_app_session_required");
 
-    const otherAppShare = await fetch(`${baseUrl}/api/shared-apps/i/main/a/ayk-review/s/share-three`, { headers: { cookie: sessionCookie } });
+    const otherAppShare = await fetch(`${baseUrl}/api/shared-apps/i/main/a/demo-review/s/share-three`, { headers: { cookie: sessionCookie } });
     assert.equal(otherAppShare.status, 401);
     assert.equal((await readJson(otherAppShare)).error, "shared_app_session_required");
 

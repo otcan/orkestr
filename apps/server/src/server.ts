@@ -82,6 +82,13 @@ export async function createApp(): Promise<INestApplication> {
             .type("application/json")
             .send(JSON.stringify({ ok: false, error: scopedShareAuth.error || "forbidden" }));
         }
+        const authIntentAuth = authorizeAuthIntentSessionRequest(request, result.session || null);
+        if (!authIntentAuth.ok) {
+          return response
+            .status(authIntentAuth.statusCode || 403)
+            .type("application/json")
+            .send(JSON.stringify({ ok: false, error: authIntentAuth.error || "forbidden" }));
+        }
         const resourceAuth = await authorizeThreadResourceRequest(request, result.principal);
         if (!resourceAuth.ok) {
           return response
@@ -152,6 +159,7 @@ function authorizeScopedShareSessionRequest(request: any, session: any) {
   const method = String(request?.method || "GET").toUpperCase();
   const parts = routePartsFromApiRequest(request);
   if (parts[0] !== "api") return { ok: true };
+  if (desktopShareRouteAllowed(method, parts)) return { ok: true };
   const [surface] = parts.slice(1).map((part) => part.toLowerCase());
   if (surface === "version" && method === "GET") return { ok: true };
   if (surface === "setup" && parts[2]?.toLowerCase() === "status" && method === "GET") return { ok: true };
@@ -164,6 +172,119 @@ function authorizeScopedShareSessionRequest(request: any, session: any) {
   return { ok: true };
 }
 
+function authorizeAuthIntentSessionRequest(request: any, session: any) {
+  if (!session?.id || session?.shareId) return { ok: true };
+  const allowedActions = Array.isArray(session.allowedActions) ? session.allowedActions : [];
+  if (!allowedActions.some((action: string) => String(action || "").startsWith("orkestr_auth."))) return { ok: true };
+  const method = String(request?.method || "GET").toUpperCase();
+  const url = String(request?.originalUrl || request?.url || "").split("?")[0];
+  const parts = routePartsFromApiRequest(request);
+  if (method === "GET" && (url === "/connect/google" || url === "/connect/google/start")) return { ok: true };
+  if (method === "GET" && url === "/setup/pairing") return { ok: true };
+  if (method === "GET" && isStaticAssetRequestPath(url)) return { ok: true };
+  if (desktopShareRouteAllowed(method, parts)) return { ok: true };
+  const brokerAppAuth = authorizeAuthIntentBrokerAppRequest(request, session, parts);
+  if (brokerAppAuth.matched) return brokerAppAuth;
+  if (parts[0] !== "api") return { ok: false, statusCode: 403, error: "auth_intent_session_scope_denied" };
+  const [surface, second, third, fourth] = parts.slice(1).map((part) => part.toLowerCase());
+  if (method === "GET" && ["health", "ready", "version"].includes(surface)) return { ok: true };
+  if (method === "GET" && surface === "setup" && second === "status") return { ok: true };
+  if (
+    surface === "setup" &&
+    second === "security" &&
+    (
+      (method === "GET" && third === "challenges" && Boolean(fourth)) ||
+      (method === "POST" && ["challenge", "challenges", "pair"].includes(third || ""))
+    )
+  ) return { ok: true };
+  return { ok: false, statusCode: 403, error: "auth_intent_session_scope_denied" };
+}
+
+function authorizeAuthIntentBrokerAppRequest(request: any, session: any, parts: string[]) {
+  const mounted = parts[0] !== "i" && parts[1] === "app";
+  if (!mounted && (parts[0] !== "i" || !parts[1] || parts[2] !== "app")) return { matched: false, ok: false };
+  const method = String(request?.method || "GET").toUpperCase();
+  const instanceId = String(mounted ? parts[0] : parts[1] || "").trim();
+  const rest = parts.slice(mounted ? 2 : 3);
+  if (desktopShareRouteAllowed(method, rest)) return { matched: true, ok: true };
+  const googleConnectEntry = googleConnectConnectorEntryRequest(request, instanceId, method, rest);
+  if (!session?.instanceId || instanceId !== String(session.instanceId || "").trim()) {
+    if (googleConnectEntry.ok) return { matched: true, ok: true };
+    return { matched: true, ok: false, statusCode: 403, error: "auth_intent_session_scope_denied" };
+  }
+  if (googleConnectEntry.ok && !authIntentGoogleConnectActionMatches(session, googleConnectEntry.connectId)) {
+    return { matched: true, ok: true };
+  }
+  const restPath = `/${rest.join("/")}`;
+  if (method === "GET" && isStaticAssetRequestPath(restPath)) return { matched: true, ok: true };
+  if (authIntentConnectorAppRouteAllowed(request, session, instanceId, method, rest)) return { matched: true, ok: true };
+  if (authIntentBrokerAppApiRouteAllowed(method, rest, session)) return { matched: true, ok: true };
+  return { matched: true, ok: false, statusCode: 403, error: "auth_intent_session_scope_denied" };
+}
+
+function googleConnectConnectorEntryRequest(request: any, instanceId: string, method: string, rest: string[]) {
+  if (method !== "GET") return { ok: false, connectId: "" };
+  if (rest.length !== 2 || rest[0]?.toLowerCase() !== "connectors") return { ok: false, connectId: "" };
+  const service = String(rest[1] || "").trim().toLowerCase();
+  if (service !== "gmail") return { ok: false, connectId: "" };
+  const params = new URL(String(request?.originalUrl || request?.url || "/"), "http://localhost").searchParams;
+  if (params.get("mcp") !== "tools/call") return { ok: false, connectId: "" };
+  if (params.get("tool") !== "orkestr_auth") return { ok: false, connectId: "" };
+  if (params.get("service") !== service) return { ok: false, connectId: "" };
+  if (params.get("provider") !== "google_workspace") return { ok: false, connectId: "" };
+  if (params.get("action") !== "connect") return { ok: false, connectId: "" };
+  if (params.get("instance_id") !== instanceId) return { ok: false, connectId: "" };
+  return { ok: true, connectId: String(params.get("connect") || params.get("connect_id") || "").trim() };
+}
+
+function authIntentGoogleConnectActionMatches(session: any, connectId = "") {
+  const allowedActions = Array.isArray(session?.allowedActions) ? session.allowedActions : [];
+  const id = String(connectId || "").trim();
+  if (!id) return allowedActions.some((action: string) => /^orkestr_auth\.google\.connect(?::|$)/.test(String(action || "")));
+  if (allowedActions.includes(`orkestr_auth.google.connect:${id}`)) return true;
+  const intent = session?.authIntent && typeof session.authIntent === "object" ? session.authIntent : {};
+  return allowedActions.includes("orkestr_auth.google.connect") && !String(intent.connectId || "").trim();
+}
+
+function authIntentConnectorAppRouteAllowed(request: any, session: any, instanceId: string, method: string, rest: string[]) {
+  const googleConnectEntry = googleConnectConnectorEntryRequest(request, instanceId, method, rest);
+  if (!googleConnectEntry.ok) return false;
+  const intent = session?.authIntent && typeof session.authIntent === "object" ? session.authIntent : {};
+  const intentService = String(intent.service || "").trim().toLowerCase();
+  if (intentService && intentService !== "gmail") return false;
+  return authIntentGoogleConnectActionMatches(session, googleConnectEntry.connectId);
+}
+
+function authIntentAllowsGoogleConnect(session: any): boolean {
+  const intent = session?.authIntent && typeof session.authIntent === "object" ? session.authIntent : {};
+  const allowedActions = Array.isArray(session?.allowedActions) ? session.allowedActions : [];
+  return String(intent.service || "").trim().toLowerCase() === "gmail" &&
+    String(intent.provider || "").trim().toLowerCase() === "google_workspace" &&
+    String(intent.action || "").trim().toLowerCase() === "connect" &&
+    allowedActions.some((action: string) => /^orkestr_auth\.google\.connect(?::|$)/.test(String(action || "")));
+}
+
+function authIntentBrokerAppApiRouteAllowed(method: string, rest: string[], session: any) {
+  if (rest[0]?.toLowerCase() !== "api") return false;
+  const [surface, second, third, fourth] = rest.slice(1).map((part) => part.toLowerCase());
+  if (method === "GET" && ["health", "ready", "version"].includes(surface)) return true;
+  if (method === "GET" && surface === "setup" && second === "status") return true;
+  if (method === "GET" && surface === "users" && second === "me") return true;
+  if (method === "GET" && surface === "connectors" && second === "gmail" && third === "oauth" && fourth === "start") {
+    return authIntentAllowsGoogleConnect(session);
+  }
+  if (method === "DELETE" && surface === "connectors" && second === "gmail" && third === "auth") {
+    return authIntentAllowsGoogleConnect(session);
+  }
+  return false;
+}
+
+function isStaticAssetRequestPath(url: string) {
+  if (url === "/favicon.ico" || url === "/manifest.webmanifest") return true;
+  if (url.startsWith("/assets/") || url.startsWith("/media/")) return true;
+  return /^\/[^/]+\.(?:css|js|mjs|map|ico|png|jpg|jpeg|svg|webp|woff|woff2)$/.test(url);
+}
+
 function sharedAppApiRoute(parts: string[]) {
   if (parts[0] !== "api" || parts[1] !== "shared-apps" || parts[2] !== "i" || parts[4] !== "a" || parts[6] !== "s") return null;
   return {
@@ -171,6 +292,29 @@ function sharedAppApiRoute(parts: string[]) {
     appSlug: parts[5] || "",
     shareToken: parts[7] || "",
   };
+}
+
+function desktopShareApiRouteAllowed(method: string, parts: string[]) {
+  if (method !== "GET" || parts[0] !== "api") return false;
+  const normalized = parts.map((part) => part.toLowerCase());
+  if (normalized[1] === "desktop-shares" && parts[2] && ["open", "status"].includes(normalized[3] || "")) return true;
+  return normalized[1] === "tenant-vms" &&
+    Boolean(parts[2]) &&
+    normalized[3] === "desktop-shares" &&
+    Boolean(parts[4]) &&
+    ["open", "status"].includes(normalized[5] || "");
+}
+
+function desktopShareRouteAllowed(method: string, parts: string[]) {
+  if (method !== "GET") return false;
+  if (desktopShareApiRouteAllowed(method, parts)) return true;
+  const normalized = parts.map((part) => part.toLowerCase());
+  if (normalized[0] === "desktop-share" && parts[1]) return true;
+  if (normalized[0] === "desktop" && parts[1]) return true;
+  return normalized[0] === "tenant-vms" &&
+    Boolean(parts[1]) &&
+    normalized[2] === "desktop" &&
+    Boolean(parts[3]);
 }
 
 function authorizeConnectorResourceRequest(request: any, principal: any) {
@@ -203,6 +347,7 @@ function isPublicConnectorRoute(route: { method: string; connector: string; acti
 function isUserConnectorRoute(route: { method: string; connector: string; action: string[] }) {
   if (route.connector === "gmail") {
     if (route.method === "GET" && route.action.length === 2 && route.action[0] === "oauth" && route.action[1] === "start") return true;
+    if (route.method === "DELETE" && route.action.length === 1 && route.action[0] === "auth") return true;
     if (route.method === "GET" && route.action[0] === "messages" && route.action.length <= 2) return true;
     if (route.method === "POST" && route.action.length === 1 && route.action[0] === "test") return true;
   }
@@ -240,6 +385,7 @@ function authorizeControlPlaneRequest(request: any, principal: any) {
   const [surface, second, third, fourth] = parts.slice(1).map((part) => part.toLowerCase());
 
   if (surface === "codex") return { ok: false, statusCode: 403, error: "control_plane_admin_required" };
+  if (desktopShareRouteAllowed(method, parts)) return { ok: true };
   if (surface === "users") {
     if (second === "me" && (!third || ["skills", "credit-usage", "support", "onboarding"].includes(third))) return { ok: true };
     if (third === "skills" || third === "credit-usage" || third === "onboarding") return { ok: true };

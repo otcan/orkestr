@@ -41,6 +41,7 @@ test("desktop shares require a random subdomain, link key, and per-browser chat 
 
   const created = await createDesktopShare({ desktopSlug: "linkedin", principal, env });
   const { parsed, shareId, key } = urlParts(created.url);
+  const linkTtlMs = Date.parse(created.share.expiresAt) - Date.parse(created.share.createdAt);
   const opened = await openDesktopShare({ shareId, key, subdomain: created.subdomain, env, request: { headers: { "user-agent": "test" } } });
   const secondBrowser = await openDesktopShare({ shareId, key, subdomain: created.subdomain, env, request: { headers: { "user-agent": "other" } } });
   const pending = await desktopShareStatus({
@@ -65,6 +66,7 @@ test("desktop shares require a random subdomain, link key, and per-browser chat 
 
   assert.equal(parsed.hostname, `${created.subdomain}.desktop.example.test`);
   assert.equal(created.share.ownerUserId, "alice");
+  assert.ok(linkTtlMs >= 55 * 60 * 1000 && linkTtlMs <= 65 * 60 * 1000);
   assert.match(key, /^[A-Za-z0-9_-]{30,}$/);
   assert.match(opened.attempt.challenge, /^desk-[A-Za-z0-9_-]{20,}$/);
   assert.notEqual(opened.attempt.challenge, secondBrowser.attempt.challenge);

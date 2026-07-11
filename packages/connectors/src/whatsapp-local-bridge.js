@@ -32,6 +32,8 @@ const typingSessions = new Map();
 const typingStartPromises = new Map();
 const typingClearRetryTimers = new Map();
 const inboundForwardHealthCache = new Map();
+const localWhatsAppStartPromises = new Map();
+const localWhatsAppRuntimeUnhandledRejections = new WeakSet();
 let runtimeRecoveryHooksForTest = null;
 let typingSessionGeneration = 0;
 
@@ -118,6 +120,21 @@ function sessionRootAlreadyIncludesClient(accountId, env = process.env) {
   const root = sessionRootForAccount(accountId, env);
   const clientId = clientIdForAccount(accountId, env);
   return path.basename(root) === `session-${clientId}`;
+}
+
+function sameOrInsidePath(parent, child) {
+  const base = path.resolve(String(parent || ""));
+  const candidate = path.resolve(String(child || ""));
+  if (!base || !candidate) return false;
+  if (candidate === base) return true;
+  const relative = path.relative(base, candidate);
+  return Boolean(relative) && !relative.startsWith("..") && !path.isAbsolute(relative);
+}
+
+function localWhatsAppChromeProfileDirsForAccount(accountId, env = process.env) {
+  const dirs = [localAuthSessionDirForAccount(accountId, env)];
+  if (sessionRootAlreadyIncludesClient(accountId, env)) dirs.push(sessionRootForAccount(accountId, env));
+  return [...new Set(dirs.map((dir) => path.resolve(dir)))];
 }
 
 function legacyResponderRole(env = process.env) {
@@ -737,11 +754,20 @@ export async function forwardLocalWhatsAppInbound(input = {}, env = process.env,
       }
     }
     const approvalChallengeId = exactSecurityApproveChallengeId(input.text || input.body || input.message || "");
-    const approvalTarget = approvalChallengeId && !tenantRoute ? localWhatsAppSecurityApprovalForwardTarget({ chatId }, env) : "";
+    const approvalTarget = approvalChallengeId ? localWhatsAppSecurityApprovalForwardTarget({ chatId }, env) : "";
     if (approvalTarget) {
       target = approvalTarget;
       targetSource = "security_approval_forward";
       routeMode = "security_approval";
+    } else if (approvalChallengeId) {
+      await appendEvent({
+        type: "whatsapp_local_security_approval_forward_unconfigured",
+        chatId,
+        eventId: String(input.eventId || input.id || input.messageId || ""),
+        accountId: String(input.accountId || ""),
+        tenantVmId: tenantRoute?.tenantVmId || null,
+      }, env).catch(() => {});
+      return null;
     } else {
       target = tenantRoute?.target || localWhatsAppInboundForwardTarget({ chatId }, env);
     }
@@ -1165,6 +1191,7 @@ function defaultAccountState(accountId) {
     lastRecoveryReason: "",
     lastRecoveryAt: null,
     recoveredChromeLocks: 0,
+    recoveredChromeProcesses: 0,
     updatedAt: null,
   };
 }
@@ -1977,6 +2004,7 @@ export async function resetLocalWhatsAppBridgeForTest(env = process.env) {
   inboundForwardLedgerKeys.clear();
   typingStartPromises.clear();
   typingClearRetryTimers.clear();
+  localWhatsAppStartPromises.clear();
   runtimeRecoveryHooksForTest = null;
 }
 
@@ -2154,6 +2182,12 @@ export function inboundRoutingFailureNoticeText(error, { env = process.env } = {
   if (failure.code === "target_instance_unhealthy" || failure.userFacingCategory === "instance_health") {
     return "This Orkestr instance is temporarily unavailable for this chat. Your message was not delivered; please resend it after the instance is healthy.";
   }
+  if (failure.code === "whatsapp_inbound_route_failed") {
+    if (failureText.includes("eacces") || failureText.includes("permission denied")) {
+      return "The target Orkestr instance could not write its local chat state. Your message was not delivered; ask the admin to repair the instance data ownership, then resend.";
+    }
+    return failure.safeMessage || "The target Orkestr instance could not accept this WhatsApp message. Your message was not delivered; ask the admin to check the instance route, then resend.";
+  }
   if (failure.code === "whatsapp_binding_disabled" || failure.code === "disabled_whatsapp_binding" || reason === "whatsapp_binding_disabled") {
     return "This WhatsApp chat is connected to Orkestr, but inbound messages are currently disabled for the bound thread. Your message was not delivered; ask the admin to enable the WhatsApp binding, then resend.";
   }
@@ -2249,8 +2283,36 @@ async function sendInboundRoutingFailureNotice({ accountId = "", chatId = "", ev
 }
 
 function forwardedSecurityApprovalNoticeText(payload = {}) {
-  if (payload?.approvedSecurityChallenge !== true) return "";
-  return "Orkestr access approved. Return to the Orkestr web UI to continue.";
+  if (payload?.approvedSecurityChallenge === true) {
+    return "Orkestr access approved. Return to the Orkestr web UI to continue.";
+  }
+  const reason = String(
+    payload?.skipped ||
+      payload?.event?.ignoredReason ||
+      payload?.routingFailure?.code ||
+      payload?.error ||
+      "",
+  ).trim();
+  if (!reason.startsWith("security_approval_")) return "";
+  if (reason === "security_approval_challenge_not_found") {
+    return "That Orkestr approval code is not pending here. Open a fresh Orkestr link and approve the new code.";
+  }
+  if (reason === "security_approval_sender_denied") {
+    return "This WhatsApp sender or chat is not allowed to approve that Orkestr access request.";
+  }
+  if (reason === "security_approval_challenge_expired") {
+    return "That Orkestr approval code has expired. Open the Orkestr link again and approve the new code.";
+  }
+  if (reason === "security_approval_challenge_rejected") {
+    return "That Orkestr approval request was already rejected. Open the Orkestr link again to create a new code.";
+  }
+  if (reason === "security_approval_challenge_consumed") {
+    return "That Orkestr approval code was already used. Return to the browser where you opened the Orkestr link.";
+  }
+  if (reason === "security_approval_challenge_approved") {
+    return "That Orkestr access request is already approved. Return to the browser where you opened the Orkestr link.";
+  }
+  return "Orkestr could not approve that access request. Open the Orkestr link again and use the newest approval code.";
 }
 
 async function sendForwardedSecurityApprovalNotice({ accountId = "", chatId = "", eventId = "", forwarded = null, client = null, env = process.env } = {}) {
@@ -2775,6 +2837,138 @@ async function moveStaleChromeLock(filePath, index, nowMs) {
   return destination;
 }
 
+function chromeUserDataDirFromArgv(argv = []) {
+  const args = Array.isArray(argv) ? argv.map((item) => String(item || "")) : [];
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg.startsWith("--user-data-dir=")) return arg.slice("--user-data-dir=".length).trim();
+    if (arg === "--user-data-dir") return String(args[index + 1] || "").trim();
+  }
+  return "";
+}
+
+function chromeProcessCommand(argv = [], command = "") {
+  return path.basename(String(argv?.[0] || command || "").trim()).toLowerCase();
+}
+
+function localWhatsAppChromeProcess(processInfo = {}, profileDirs = []) {
+  const argv = Array.isArray(processInfo.argv)
+    ? processInfo.argv
+    : Array.isArray(processInfo.cmdline)
+      ? processInfo.cmdline
+      : String(processInfo.cmdline || "")
+        .split(/\0|\s+/g)
+        .filter(Boolean);
+  const command = chromeProcessCommand(argv, processInfo.command);
+  if (!/(?:^|-)chrome(?:$|-)|chromium|google-chrome/.test(command)) return null;
+  const userDataDir = chromeUserDataDirFromArgv(argv);
+  if (!userDataDir) return null;
+  const matchedProfileDir = profileDirs.find((dir) => sameOrInsidePath(dir, userDataDir));
+  if (!matchedProfileDir) return null;
+  const pid = Number(processInfo.pid);
+  if (!Number.isInteger(pid) || pid <= 1 || pid === process.pid) return null;
+  return { pid, command, userDataDir: path.resolve(userDataDir), profileDir: matchedProfileDir };
+}
+
+async function listLocalChromeProcessesFromProc(procRoot = "/proc") {
+  const entries = await fs.readdir(procRoot, { withFileTypes: true }).catch(() => []);
+  const processes = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !/^\d+$/.test(entry.name)) continue;
+    const pid = Number(entry.name);
+    const cmdlinePath = path.join(procRoot, entry.name, "cmdline");
+    const raw = await fs.readFile(cmdlinePath).catch(() => null);
+    if (!raw?.length) continue;
+    const argv = raw.toString("utf8").split("\0").filter(Boolean);
+    processes.push({ pid, argv, command: argv[0] || "" });
+  }
+  return processes;
+}
+
+async function waitForProcessExit(pid, options = {}) {
+  const processAlive = options.processAlive || pidAlive;
+  const timeoutMs = Math.max(0, Number(options.timeoutMs || 1500) || 0);
+  const intervalMs = Math.max(25, Math.min(250, Number(options.intervalMs || 100) || 100));
+  const startedAt = Date.now();
+  while (processAlive(pid)) {
+    if (Date.now() - startedAt >= timeoutMs) return false;
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+  return true;
+}
+
+async function terminateChromeProcess(pid, options = {}) {
+  const killProcess = options.killProcess || ((targetPid, signal) => process.kill(targetPid, signal));
+  const processAlive = options.processAlive || pidAlive;
+  try {
+    await killProcess(pid, "SIGTERM");
+  } catch (error) {
+    if (error?.code === "ESRCH") return { terminated: false, alreadyExited: true };
+    throw error;
+  }
+  const exited = await waitForProcessExit(pid, {
+    processAlive,
+    timeoutMs: options.graceMs,
+    intervalMs: options.pollMs,
+  });
+  if (exited || !processAlive(pid)) return { terminated: true, signal: "SIGTERM" };
+  try {
+    await killProcess(pid, "SIGKILL");
+    await waitForProcessExit(pid, {
+      processAlive,
+      timeoutMs: Math.min(1000, Math.max(100, Number(options.graceMs || 1000) || 1000)),
+      intervalMs: options.pollMs,
+    });
+    return { terminated: true, signal: "SIGKILL" };
+  } catch (error) {
+    if (error?.code === "ESRCH") return { terminated: true, signal: "SIGTERM", alreadyExited: true };
+    throw error;
+  }
+}
+
+export async function cleanupLocalWhatsAppOrphanChromeProcesses(accountId = "", env = process.env, options = {}) {
+  const normalized = await normalizeManagedAccountId(accountId, env);
+  if (runtimes.get(normalized)?.client) {
+    return { accountId: normalized, killed: [], skipped: [{ reason: "active_runtime" }] };
+  }
+  const profileDirs = localWhatsAppChromeProfileDirsForAccount(normalized, env);
+  const listProcesses = options.listChromeProcesses || options.listProcesses || listLocalChromeProcessesFromProc;
+  const processes = await listProcesses(options.procRoot || "/proc");
+  const matches = [];
+  const seenPids = new Set();
+  for (const processInfo of processes || []) {
+    const match = localWhatsAppChromeProcess(processInfo, profileDirs);
+    if (!match || seenPids.has(match.pid)) continue;
+    seenPids.add(match.pid);
+    matches.push(match);
+  }
+  const killed = [];
+  const skipped = [];
+  for (const match of matches) {
+    try {
+      const result = await terminateChromeProcess(match.pid, {
+        killProcess: options.killChromeProcess || options.killProcess,
+        processAlive: options.isChromeProcessAlive || options.processAlive,
+        graceMs: options.orphanChromeGraceMs ?? options.graceMs,
+        pollMs: options.orphanChromePollMs ?? options.pollMs,
+      });
+      if (result.terminated || result.alreadyExited) killed.push({ ...match, signal: result.signal || null, alreadyExited: result.alreadyExited === true });
+    } catch (error) {
+      skipped.push({ ...match, reason: error?.message || String(error) });
+    }
+  }
+  if (killed.length || skipped.length) {
+    await appendEvent({
+      type: "whatsapp_local_orphan_chrome_cleanup",
+      accountId: normalized,
+      killed: killed.length,
+      skipped: skipped.length,
+      pids: killed.map((item) => item.pid),
+    }, env).catch(() => {});
+  }
+  return { accountId: normalized, profileDirs, killed, skipped };
+}
+
 function recoverableLocalWhatsAppFailure(account = {}) {
   const state = String(account?.state || "").trim();
   if (recoverableLocalWhatsAppStates.has(state)) return true;
@@ -2868,6 +3062,7 @@ export async function restartRecoverableLocalWhatsAppAccount(accountId = "", env
     clearTypingSessionTimers(session);
     typingSessions.delete(typingKey(session.accountId, session.chatId));
   }
+  const orphanCleanup = await cleanupLocalWhatsAppOrphanChromeProcesses(normalized, env, options);
   const cleanup = await cleanupLocalWhatsAppChromeLocks(normalized, env);
   setAccountState(normalized, {
     state: "idle",
@@ -2888,9 +3083,15 @@ export async function restartRecoverableLocalWhatsAppAccount(accountId = "", env
     accountId: normalized,
     reason: String(options.reason || "auto_recover"),
     hadRuntime: Boolean(runtime?.client),
+    killedChromeProcesses: orphanCleanup.killed.length,
     removedChromeLocks: cleanup.removed.length,
   }, env).catch(() => {});
-  return { accountId: normalized, hadRuntime: Boolean(runtime?.client), removedChromeLocks: cleanup.removed.length };
+  return {
+    accountId: normalized,
+    hadRuntime: Boolean(runtime?.client),
+    killedChromeProcesses: orphanCleanup.killed.length,
+    removedChromeLocks: cleanup.removed.length,
+  };
 }
 
 export async function recoverConfiguredLocalWhatsAppAccounts(env = process.env, options = {}) {
@@ -2954,6 +3155,16 @@ export async function startLocalWhatsAppAccount(accountId = "", env = process.en
     error.statusCode = 400;
     throw error;
   }
+  const inFlight = localWhatsAppStartPromises.get(normalized);
+  if (inFlight) return inFlight;
+  const promise = startLocalWhatsAppAccountOnce(normalized, env, options, pairingPhoneNumber).finally(() => {
+    if (localWhatsAppStartPromises.get(normalized) === promise) localWhatsAppStartPromises.delete(normalized);
+  });
+  localWhatsAppStartPromises.set(normalized, promise);
+  return promise;
+}
+
+async function startLocalWhatsAppAccountOnce(normalized, env = process.env, options = {}, pairingPhoneNumber = "") {
   const existingRuntime = runtimes.get(normalized);
   if (existingRuntime) {
     const state = accountStates.get(normalized) || defaultAccountState(normalized);
@@ -2965,6 +3176,7 @@ export async function startLocalWhatsAppAccount(accountId = "", env = process.en
     existingRuntime.clearStartupTimer?.();
     existingRuntime.clearAuthReadyTimer?.();
     existingRuntime.clearPairingCodeUnhandledRejectionHandler?.();
+    existingRuntime.clearRuntimeCloseUnhandledRejectionHandler?.();
     await existingRuntime.client?.destroy?.().catch(() => {});
     runtimes.delete(normalized);
     await clearQr(normalized, env).catch(() => {});
@@ -2975,6 +3187,7 @@ export async function startLocalWhatsAppAccount(accountId = "", env = process.en
     }, env).catch(() => {});
   }
   await ensureBridgeDirs(env);
+  const orphanCleanup = await cleanupLocalWhatsAppOrphanChromeProcesses(normalized, env, options);
   const staleLockCleanup = await cleanupLocalWhatsAppChromeLocks(normalized, env);
   setAccountState(normalized, {
     state: "starting",
@@ -2984,9 +3197,16 @@ export async function startLocalWhatsAppAccount(accountId = "", env = process.en
     pairingCodeUpdatedAt: null,
     pairingPhoneNumber: maskPairingPhoneNumber(pairingPhoneNumber),
     error: "",
+    ...(orphanCleanup.killed.length
+      ? {
+          lastRecoveryReason: "orphan_chrome_recovered",
+          lastRecoveryAt: nowIso(),
+          recoveredChromeProcesses: orphanCleanup.killed.length,
+        }
+      : {}),
     ...(staleLockCleanup.moved.length
       ? {
-          lastRecoveryReason: "stale_lock_recovered",
+          lastRecoveryReason: orphanCleanup.killed.length ? "orphan_chrome_and_stale_lock_recovered" : "stale_lock_recovered",
           lastRecoveryAt: nowIso(),
           recoveredChromeLocks: staleLockCleanup.moved.length,
         }
@@ -3011,6 +3231,7 @@ export async function startLocalWhatsAppAccount(accountId = "", env = process.en
   const { Client, LocalAuth } = dependencies.whatsapp;
   const authTimeoutMs = authReadyTimeoutMs(env, options);
   const startTimeoutMs = startupTimeoutMs(env, options);
+  let client = null;
   let startupTimer = null;
   let startupSettled = false;
   const clearStartupTimer = () => {
@@ -3035,6 +3256,7 @@ export async function startLocalWhatsAppAccount(accountId = "", env = process.en
     pairingCodeUnhandledRejectionHandler = (error) => {
       if (!pairingCodeRequestError(error)) return;
       clearPairingCodeUnhandledRejectionHandler();
+      clearRuntimeCloseUnhandledRejectionHandler();
       clearAuthReadyTimer();
       clearReadyFallbackTimer();
       clearConnectedPageReadyFallbackTimer();
@@ -3059,6 +3281,80 @@ export async function startLocalWhatsAppAccount(accountId = "", env = process.en
       void client.destroy().catch(() => {});
     };
     process.on("unhandledRejection", pairingCodeUnhandledRejectionHandler);
+  };
+  let runtimeFailureHandling = false;
+  let runtimeCloseUnhandledRejectionHandler = null;
+  const clearRuntimeCloseUnhandledRejectionHandler = () => {
+    if (!runtimeCloseUnhandledRejectionHandler) return;
+    process.off("unhandledRejection", runtimeCloseUnhandledRejectionHandler);
+    runtimeCloseUnhandledRejectionHandler = null;
+  };
+  const handleClientRuntimeFailure = async (error, source = "client_error") => {
+    const runtime = runtimes.get(normalized);
+    if (!runtime || runtime.client !== client || runtimeFailureHandling) return;
+    runtimeFailureHandling = true;
+    startupSettled = true;
+    clearStartupTimer();
+    clearPairingCodeUnhandledRejectionHandler();
+    clearAuthReadyTimer();
+    clearReadyFallbackTimer();
+    clearConnectedPageReadyFallbackTimer();
+    const recoverable = recoverableLocalWhatsAppRuntimeError(error);
+    const message = error?.message || String(error);
+    const current = accountStates.get(normalized) || defaultAccountState(normalized);
+    setAccountState(normalized, {
+      state: recoverable ? "disconnected" : "failed",
+      ready: false,
+      authenticated: recoverable ? Boolean(current.authenticated) : false,
+      started: false,
+      qrAvailable: false,
+      pairingCode: "",
+      pairingCodeUpdatedAt: null,
+      error: message,
+      ...(recoverable
+        ? {
+            lastRecoveryReason: "runtime_closed",
+            lastRecoveryAt: nowIso(),
+          }
+        : {}),
+    });
+    runtimes.delete(normalized);
+    await clearQr(normalized, env).catch(() => {});
+    await appendEvent({
+      type: recoverable
+        ? (source === "initialize" ? "whatsapp_local_start_runtime_closed" : "whatsapp_local_client_runtime_closed")
+        : (source === "initialize" ? "whatsapp_local_start_failed" : "whatsapp_local_client_error"),
+      accountId: normalized,
+      source: String(source || "client_error"),
+      recoverable,
+      error: message,
+    }, env).catch(() => {});
+    await client?.destroy?.().catch(() => {});
+    clearRuntimeCloseUnhandledRejectionHandler();
+  };
+  const armRuntimeCloseUnhandledRejectionHandler = () => {
+    if (runtimeCloseUnhandledRejectionHandler) return;
+    runtimeCloseUnhandledRejectionHandler = (error, promise) => {
+      if (!recoverableLocalWhatsAppRuntimeError(error)) return;
+      const rejectionKey = promise && (typeof promise === "object" || typeof promise === "function") ? promise : null;
+      if (rejectionKey) {
+        if (localWhatsAppRuntimeUnhandledRejections.has(rejectionKey)) return;
+        localWhatsAppRuntimeUnhandledRejections.add(rejectionKey);
+      }
+      const activeRuntimes = [...runtimes.entries()]
+        .filter(([, runtime]) => typeof runtime?.clearRuntimeCloseUnhandledRejectionHandler === "function");
+      if (activeRuntimes.length !== 1 || activeRuntimes[0]?.[0] !== normalized || activeRuntimes[0]?.[1]?.client !== client) {
+        void appendEvent({
+          type: "whatsapp_local_runtime_unhandled_rejection_ambiguous",
+          accountId: normalized,
+          activeAccounts: activeRuntimes.map(([accountId]) => accountId),
+          error: error?.message || String(error),
+        }, env).catch(() => {});
+        return;
+      }
+      void handleClientRuntimeFailure(error, "unhandled_rejection");
+    };
+    process.on("unhandledRejection", runtimeCloseUnhandledRejectionHandler);
   };
   const scheduleAuthReadyTimer = () => {
     clearAuthReadyTimer();
@@ -3092,6 +3388,7 @@ export async function startLocalWhatsAppAccount(accountId = "", env = process.en
       timeoutMs: startTimeoutMs,
     }, env).catch(() => {});
     await client.destroy().catch(() => {});
+    clearRuntimeCloseUnhandledRejectionHandler();
   };
   const handleAuthReadyTimeout = async () => {
     const state = accountStates.get(normalized) || defaultAccountState(normalized);
@@ -3118,6 +3415,7 @@ export async function startLocalWhatsAppAccount(accountId = "", env = process.en
       loadingMessage: state.loadingMessage || "",
     }, env).catch(() => {});
     await client.destroy().catch(() => {});
+    clearRuntimeCloseUnhandledRejectionHandler();
   };
   let readyFallbackTriggered = false;
   let readyFallbackTimer = null;
@@ -3206,7 +3504,7 @@ export async function startLocalWhatsAppAccount(accountId = "", env = process.en
     }, connectedPageReadyFallbackDelayMs(env));
     if (typeof connectedPageReadyFallbackTimer.unref === "function") connectedPageReadyFallbackTimer.unref();
   };
-  const client = new Client({
+  client = new Client({
     authStrategy: new LocalAuth({ clientId: clientIdForAccount(normalized, env), dataPath: sessionRootForAccount(normalized, env) }),
     puppeteer: puppeteerOptions(env),
     userAgent: whatsappUserAgent(env),
@@ -3309,6 +3607,7 @@ export async function startLocalWhatsAppAccount(accountId = "", env = process.en
     startupSettled = true;
     clearStartupTimer();
     clearPairingCodeUnhandledRejectionHandler();
+    clearRuntimeCloseUnhandledRejectionHandler();
     clearAuthReadyTimer();
     clearReadyFallbackTimer();
     clearConnectedPageReadyFallbackTimer();
@@ -3329,6 +3628,7 @@ export async function startLocalWhatsAppAccount(accountId = "", env = process.en
     startupSettled = true;
     clearStartupTimer();
     clearPairingCodeUnhandledRejectionHandler();
+    clearRuntimeCloseUnhandledRejectionHandler();
     clearAuthReadyTimer();
     clearReadyFallbackTimer();
     clearConnectedPageReadyFallbackTimer();
@@ -3371,24 +3671,7 @@ export async function startLocalWhatsAppAccount(accountId = "", env = process.en
   });
 
   client.on("error", async (error) => {
-    startupSettled = true;
-    clearStartupTimer();
-    clearPairingCodeUnhandledRejectionHandler();
-    clearAuthReadyTimer();
-    clearReadyFallbackTimer();
-    clearConnectedPageReadyFallbackTimer();
-    setAccountState(normalized, {
-      state: "failed",
-      ready: false,
-      authenticated: false,
-      started: false,
-      pairingCode: "",
-      pairingCodeUpdatedAt: null,
-      error: error?.message || String(error),
-    });
-    runtimes.delete(normalized);
-    await appendEvent({ type: "whatsapp_local_client_error", accountId: normalized, error: error?.message || String(error) }, env).catch(() => {});
-    await client.destroy().catch(() => {});
+    await handleClientRuntimeFailure(error, "client_error");
   });
 
   client.on("message", (message) => {
@@ -3400,29 +3683,30 @@ export async function startLocalWhatsAppAccount(accountId = "", env = process.en
   });
 
   armPairingCodeUnhandledRejectionHandler();
+  armRuntimeCloseUnhandledRejectionHandler();
   startupTimer = setTimeout(() => {
     void handleStartupTimeout();
   }, startTimeoutMs);
   if (typeof startupTimer.unref === "function") startupTimer.unref();
-  const initializePromise = client.initialize().catch(async (error) => {
-    startupSettled = true;
-    clearStartupTimer();
-    clearPairingCodeUnhandledRejectionHandler();
-    clearAuthReadyTimer();
-    clearReadyFallbackTimer();
-    clearConnectedPageReadyFallbackTimer();
-    await client.destroy().catch(() => {});
-    setAccountState(normalized, {
-      state: "failed",
-      ready: false,
-      authenticated: false,
-      started: false,
-      error: error.message || String(error),
-    });
-    runtimes.delete(normalized);
-    await appendEvent({ type: "whatsapp_local_start_failed", accountId: normalized, error: error.message || String(error) }, env);
+  const runtimeRecord = {
+    client,
+    initializePromise: null,
+    clearStartupTimer,
+    clearAuthReadyTimer,
+    clearPairingCodeUnhandledRejectionHandler,
+    clearRuntimeCloseUnhandledRejectionHandler,
+  };
+  runtimes.set(normalized, runtimeRecord);
+  let initializeResult;
+  try {
+    initializeResult = client.initialize();
+  } catch (error) {
+    initializeResult = Promise.reject(error);
+  }
+  const initializePromise = Promise.resolve(initializeResult).catch(async (error) => {
+    await handleClientRuntimeFailure(error, "initialize");
   });
-  runtimes.set(normalized, { client, initializePromise, clearStartupTimer, clearAuthReadyTimer, clearPairingCodeUnhandledRejectionHandler });
+  runtimeRecord.initializePromise = initializePromise;
   scheduleConnectedPageReadyFallback("startup_connected_page");
   await appendEvent({ type: "whatsapp_local_start_requested", accountId: normalized }, env);
   return accountSnapshot(normalized, env);
@@ -3442,6 +3726,7 @@ export async function logoutLocalWhatsAppAccount(accountId = "", env = process.e
     runtime.clearStartupTimer?.();
     runtime.clearAuthReadyTimer?.();
     runtime.clearPairingCodeUnhandledRejectionHandler?.();
+    runtime.clearRuntimeCloseUnhandledRejectionHandler?.();
     await runtime.client.logout().catch(() => {});
     await runtime.client.destroy().catch(() => {});
   }
@@ -3479,6 +3764,8 @@ export async function stopLocalWhatsAppBridge(env = process.env) {
     if (runtime?.client) {
       runtime.clearStartupTimer?.();
       runtime.clearAuthReadyTimer?.();
+      runtime.clearPairingCodeUnhandledRejectionHandler?.();
+      runtime.clearRuntimeCloseUnhandledRejectionHandler?.();
       await runtime.client.destroy().catch(() => {});
     }
     await clearQr(accountId, env).catch(() => {});

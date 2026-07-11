@@ -1,4 +1,13 @@
-<section class="panel-body user-connectors-page" [class.login-only]="loginOnly()">
+<section
+  class="panel-body user-connectors-page"
+  [class.login-only]="loginOnly()"
+  [attr.data-mcp]="connectorIntentActive() ? connectorIntentMethod() : null"
+  [attr.data-mcp-tool]="connectorIntentActive() ? connectorIntentTool() : null"
+  [attr.data-service]="connectorIntentActive() ? 'gmail' : null"
+  [attr.data-provider]="connectorIntentActive() ? connectorIntentProvider() : null"
+  [attr.data-action]="connectorIntentActive() ? connectorIntentAction() : null"
+  [attr.data-instance-id]="connectorIntentActive() ? connectorIntentTargetInstanceId() : null"
+>
   <div class="panel-title">
     <div>
       <p class="eyebrow">{{ loginOnly() ? "Secure sign-in" : "Connectors" }}</p>
@@ -18,13 +27,54 @@
     <div class="notice">{{ notice }}</div>
   }
 
+  @if (connectorIntentActive()) {
+    <div class="connector-intent">
+      <div class="connector-intent-head">
+        <span>Connection context</span>
+        <strong>{{ connectorIntentServiceLabel() }} -> Orkestr instance</strong>
+      </div>
+      <dl>
+        <div>
+          <dt>Tool</dt>
+          <dd><code>{{ connectorIntentTool() }}</code></dd>
+        </div>
+        <div>
+          <dt>Service</dt>
+          <dd><code>gmail</code></dd>
+        </div>
+        <div>
+          <dt>Provider</dt>
+          <dd><code>{{ connectorIntentProvider() }}</code></dd>
+        </div>
+        <div>
+          <dt>Action</dt>
+          <dd><code>{{ connectorIntentAction() }}</code></dd>
+        </div>
+        <div>
+          <dt>Instance</dt>
+          <dd><code>{{ connectorIntentTargetInstanceId() }}</code></dd>
+        </div>
+        <div>
+          <dt>User</dt>
+          <dd><code>{{ connectorIntentUserLabel() }}</code></dd>
+        </div>
+        @if (connectorIntentThreadLabel()) {
+          <div>
+            <dt>Thread</dt>
+            <dd><code>{{ connectorIntentThreadLabel() }}</code></dd>
+          </div>
+        }
+      </dl>
+    </div>
+  }
+
   <div class="connector-grid user-connector-grid">
     @for (connector of userConnectors(); track connector.id) {
       <article class="connector-card user-connector-card" [class.route-active]="connector.id === routeConnectorId()">
         <div class="desktop-head">
           <div>
             <h4>{{ connector.label || connectorLabel(connector.id) }}</h4>
-            <small>{{ connectorSummary(connector.id) }}</small>
+            <small>{{ loginOnly() && connector.id === "gmail" ? "Start Google sign-in for this instance." : connectorSummary(connector.id) }}</small>
           </div>
           <div class="desktop-pills">
             <span [class.live]="connectorTone(connector) === 'live'" [class.ready]="connectorTone(connector) === 'ready'" [class.bad]="connectorTone(connector) === 'bad'">
@@ -32,18 +82,44 @@
             </span>
           </div>
         </div>
-        <p>{{ connector.summary || connectorSummary(connector.id) }}</p>
+        @if (!loginOnly()) {
+          <p>{{ connector.summary || connectorSummary(connector.id) }}</p>
+        }
 
-        @if (connector.id === "gmail") {
-          <form class="connector-action" (submit)="startGmail(); $event.preventDefault()">
-            <label>
-              <span>Gmail account</span>
-              <input name="user-gmail-account" [(ngModel)]="gmailAccount" placeholder="name@example.com" autocomplete="email" />
-            </label>
-            <button type="submit" [disabled]="actionDisabled('gmail')">
-              {{ actionBusy === "gmail" ? "Starting" : loginOnly() ? "Open Gmail Sign-in" : "Connect Gmail" }}
+        @if (connector.id === "gmail" && connectorConnected(connector)) {
+          <dl class="connector-details">
+            <div>
+              <dt>Google account</dt>
+              <dd><code>{{ connectedAccount(connector) || "Not reported" }}</code></dd>
+            </div>
+            @if (connectedCapabilityLabels(connector).length) {
+              <div>
+                <dt>Capabilities</dt>
+                <dd>{{ connectedCapabilityLabels(connector).join(", ") }}</dd>
+              </div>
+            }
+          </dl>
+          <button class="secondary danger-soft" type="button" (click)="disconnectGmail()" [disabled]="actionDisabled('gmail')">
+            {{ actionBusy === "gmail-disconnect" ? "Deleting" : "Delete Gmail auth" }}
+          </button>
+        }
+
+        @if (connector.id === "gmail" && !connectorConnected(connector)) {
+          @if (loginOnly()) {
+            <button type="button" (click)="startGmail({ autoRedirect: true })" [disabled]="actionDisabled('gmail')">
+              {{ actionBusy === "gmail" ? "Opening" : "Open Gmail Sign-in" }}
             </button>
-          </form>
+          } @else {
+            <form class="connector-action" (submit)="startGmail(); $event.preventDefault()">
+              <label>
+                <span>Gmail account</span>
+                <input name="user-gmail-account" [(ngModel)]="gmailAccount" placeholder="name@example.com" autocomplete="email" />
+              </label>
+              <button type="submit" [disabled]="actionDisabled('gmail')">
+                {{ actionBusy === "gmail" ? "Starting" : "Connect Gmail" }}
+              </button>
+            </form>
+          }
           @if (gmailAuth?.authorizeUrl) {
             <a class="button-link" [href]="gmailAuth?.authorizeUrl" target="_blank" rel="noreferrer">Open Gmail sign-in</a>
           }
@@ -80,7 +156,7 @@
         }
       </article>
     } @empty {
-      <p class="empty">{{ busy ? "Loading connectors..." : "No connectors available." }}</p>
+      <p class="empty">{{ !setupStatus || busy ? "Loading connectors..." : "No connectors available." }}</p>
     }
   </div>
 </section>

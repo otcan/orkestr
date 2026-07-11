@@ -46,6 +46,7 @@ const capabilityDefinitions = [
   },
 ];
 
+const defaultGmailCapabilities = ["gmail_read", "gmail_actions", "gmail_send"];
 const definitionById = new Map(capabilityDefinitions.map((definition) => [definition.id, definition]));
 
 function clean(value) {
@@ -74,6 +75,10 @@ export function googleWorkspaceCapabilityDefinitions() {
   }));
 }
 
+export function googleWorkspaceDefaultGmailCapabilities() {
+  return [...defaultGmailCapabilities];
+}
+
 export function normalizeGoogleWorkspaceCapabilities(input = [], fallback = ["gmail_read"]) {
   const values = Array.isArray(input)
     ? input
@@ -92,14 +97,15 @@ export function googleWorkspaceScopesForCapabilities(input = []) {
 }
 
 export function googleWorkspaceCapabilitiesForScopes(scopeValue = "", fallback = []) {
-  const scopes = new Set(Array.isArray(scopeValue)
+  const values = Array.isArray(scopeValue)
     ? scopeValue.map(clean).filter(Boolean)
-    : clean(scopeValue).split(/[\s,]+/g).map(clean).filter(Boolean));
+    : clean(scopeValue).split(/[\s,]+/g).map(clean).filter(Boolean);
+  const scopes = new Set(values);
   const capabilities = [];
   for (const definition of capabilityDefinitions) {
     if (definition.scopes.some((scope) => scopes.has(scope))) capabilities.push(definition.id);
   }
-  return capabilities.length ? capabilities : [...fallback];
+  return capabilities.length ? capabilities : (values.length ? [] : [...fallback]);
 }
 
 export function googleWorkspaceCapabilityDisclosure(input = []) {

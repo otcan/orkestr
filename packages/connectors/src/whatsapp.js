@@ -156,12 +156,26 @@ function whatsappBridgeStatusTimeoutMs(env = process.env) {
   );
 }
 
+async function fetchWithTimeout(url, fetchImpl, fetchOptions = {}, timeoutMs = 45_000) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => {
+    const error = new Error(`WhatsApp bridge request timeout after ${timeoutMs}ms`);
+    error.name = "TimeoutError";
+    controller.abort(error);
+  }, timeoutMs);
+  try {
+    return await fetchImpl(url, {
+      ...fetchOptions,
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 async function fetchJson(url, fetchImpl, options = {}) {
   const { env, timeoutMs, ...fetchOptions } = options;
-  const response = await fetchImpl(url, {
-    ...fetchOptions,
-    signal: AbortSignal.timeout(positiveInteger(timeoutMs, whatsappBridgeStatusTimeoutMs(env), 1)),
-  });
+  const response = await fetchWithTimeout(url, fetchImpl, fetchOptions, positiveInteger(timeoutMs, whatsappBridgeStatusTimeoutMs(env), 1));
   const payload = await response.json().catch(() => ({}));
   return { ok: response.ok, status: response.status, payload };
 }
@@ -169,10 +183,7 @@ async function fetchJson(url, fetchImpl, options = {}) {
 async function fetchOk(url, fetchImpl, options = {}) {
   const { env, timeoutMs, ...fetchOptions } = options;
   try {
-    const response = await fetchImpl(url, {
-      ...fetchOptions,
-      signal: AbortSignal.timeout(positiveInteger(timeoutMs, whatsappBridgeStatusTimeoutMs(env), 1)),
-    });
+    const response = await fetchWithTimeout(url, fetchImpl, fetchOptions, positiveInteger(timeoutMs, whatsappBridgeStatusTimeoutMs(env), 1));
     return response.ok;
   } catch {
     return false;
@@ -1308,6 +1319,7 @@ function threadHasActionableStoredPendingRequest(thread = {}) {
 }
 
 function isCodexAppServerThread(thread = {}) {
+  if (!thread || typeof thread !== "object" || Array.isArray(thread)) return false;
   return pickString(
     thread.runtimeKind,
     thread.runtime?.runtimeKind,
@@ -1322,6 +1334,11 @@ function deliveryModeRequestsInstantSteer(value = "") {
   return ["instant_steer", "steer", "active_turn_steer", "steer_active_turn"].includes(mode);
 }
 
+function deliveryModeDisablesInstantSteer(value = "") {
+  const mode = pickString(value).toLowerCase().replace(/[\s-]+/g, "_");
+  return ["0", "false", "off", "no", "disabled", "disable", "none", "normal", "queue", "queued", "defer", "deferred"].includes(mode);
+}
+
 function bindingRequestsWhatsAppInstantSteer(binding = {}) {
   if (!binding || typeof binding !== "object" || Array.isArray(binding)) return false;
   return binding.whatsappInboundInstantSteer === true ||
@@ -1333,7 +1350,33 @@ function bindingRequestsWhatsAppInstantSteer(binding = {}) {
     deliveryModeRequestsInstantSteer(binding.codexDeliveryMode);
 }
 
+function bindingDisablesWhatsAppInstantSteer(binding = {}) {
+  if (!binding || typeof binding !== "object" || Array.isArray(binding)) return false;
+  return binding.whatsappInboundInstantSteer === false ||
+    binding.instantSteerWhatsAppInbound === false ||
+    binding.steerWhatsAppInbound === false ||
+    binding.steerActiveTurn === false ||
+    deliveryModeDisablesInstantSteer(binding.inboundDeliveryMode) ||
+    deliveryModeDisablesInstantSteer(binding.whatsappInboundDeliveryMode) ||
+    deliveryModeDisablesInstantSteer(binding.codexDeliveryMode);
+}
+
+function whatsappInboundInstantSteerDefaultEnabled(env = process.env) {
+  return ![
+    env.ORKESTR_WHATSAPP_INBOUND_STEER_DEFAULT,
+    env.ORKESTR_WHATSAPP_INBOUND_INSTANT_STEER_DEFAULT,
+    env.ORKESTR_WHATSAPP_DEFAULT_STEER,
+  ].some((value) => deliveryModeDisablesInstantSteer(value));
+}
+
 function whatsappInboundInstantSteerEnabled({ thread = null, binding = null, chatId = "", env = process.env } = {}) {
+  const candidates = [
+    binding,
+    thread?.binding,
+    thread?.runtime,
+    thread,
+  ];
+  if (candidates.some((candidate) => bindingDisablesWhatsAppInstantSteer(candidate))) return false;
   const configuredThreads = new Set(splitAccountList([
     env.ORKESTR_WHATSAPP_INBOUND_INSTANT_STEER_THREAD_IDS,
     env.ORKESTR_WHATSAPP_INSTANT_STEER_THREAD_IDS,
@@ -1354,12 +1397,8 @@ function whatsappInboundInstantSteerEnabled({ thread = null, binding = null, cha
   ].filter(Boolean).join(",")));
   const bindingChatId = pickString(binding?.chatId, thread?.binding?.chatId, chatId);
   if (bindingChatId && configuredChats.has(bindingChatId)) return true;
-  return [
-    binding,
-    thread?.binding,
-    thread?.runtime,
-    thread,
-  ].some((candidate) => bindingRequestsWhatsAppInstantSteer(candidate));
+  if (candidates.some((candidate) => bindingRequestsWhatsAppInstantSteer(candidate))) return true;
+  return isCodexAppServerThread(thread) && whatsappInboundInstantSteerDefaultEnabled(env);
 }
 
 function shouldUseApiAgentForWhatsAppThread(thread = {}, env = process.env) {
@@ -3022,6 +3061,152 @@ function generatedWhatsAppQueueNoticeText(text = "") {
   ].some((pattern) => pattern.test(value));
 }
 
+function whatsappRouterStatusCommand(text = "") {
+  return /^\/status(?:\s|$)/i.test(pickString(text));
+}
+
+function numberCount(value) {
+  const parsed = Number(value || 0);
+  return Number.isFinite(parsed) ? Math.max(0, Math.floor(parsed)) : 0;
+}
+
+function compactDuration(ms) {
+  const totalSeconds = Math.max(0, Math.floor(Number(ms || 0) / 1000));
+  if (totalSeconds < 5) return "just now";
+  if (totalSeconds < 60) return `${totalSeconds}s`;
+  const totalMinutes = Math.floor(totalSeconds / 60);
+  if (totalMinutes < 60) return `${totalMinutes}m`;
+  const totalHours = Math.floor(totalMinutes / 60);
+  if (totalHours < 48) {
+    const minutes = totalMinutes % 60;
+    return minutes ? `${totalHours}h ${minutes}m` : `${totalHours}h`;
+  }
+  const days = Math.floor(totalHours / 24);
+  return `${days}d`;
+}
+
+function timestampValueMs(value) {
+  const parsed = Date.parse(String(value || ""));
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function messageTimestampMs(message = {}) {
+  return timestampValueMs(message.deliveredAt || message.updatedAt || message.createdAt || message.timestamp);
+}
+
+function latestMessageBy(messages = [], predicate = () => false) {
+  return [...(Array.isArray(messages) ? messages : [])].reverse().find(predicate) || null;
+}
+
+function earliestMessageBy(messages = [], predicate = () => false) {
+  return (Array.isArray(messages) ? messages : []).find(predicate) || null;
+}
+
+function relativeTimestamp(value, nowMs = Date.now()) {
+  const ms = timestampValueMs(value);
+  if (!ms) return "";
+  const delta = nowMs - ms;
+  if (delta < -1000) {
+    const future = compactDuration(Math.abs(delta));
+    return future === "just now" ? "soon" : `in ${future}`;
+  }
+  const past = compactDuration(delta);
+  return past === "just now" ? past : `${past} ago`;
+}
+
+function shortStatusId(value = "") {
+  const text = pickString(value);
+  return text.length > 18 ? `${text.slice(0, 18)}...` : text;
+}
+
+function whatsappStatusRuntimeLabel(thread = {}, status = {}) {
+  const kind = pickString(
+    status.runtimeKind,
+    status.runtimeState,
+    thread.runtimeKind,
+    thread.runtime?.runtimeKind,
+    thread.executor?.metadata?.runtimeKind,
+    thread.executor?.transport,
+    thread.executor?.type,
+  ).toLowerCase();
+  if (kind === "codex-app-server" || kind === "app-server") return "Codex API";
+  if (kind === "raw-terminal") return "Terminal";
+  if (kind === "api-agent") return "API agent";
+  if (kind === "codex-tmux" || kind === "live") return "Terminal";
+  if (kind === "none") return "Not started";
+  return kind || "Unknown";
+}
+
+function whatsappStatusLabel(status = {}) {
+  const state = pickString(status.state, status.status).toLowerCase();
+  const lifecycle = status.turnLifecycle || {};
+  if (status.error) return "Status unavailable";
+  if (lifecycle.awaitingApproval === true || state === "awaiting_approval") return "Awaiting approval";
+  if (status.frozen === true || state === "frozen") return "Frozen";
+  if (status.working === true || lifecycle.running === true || state === "working" || state === "running") return "Working";
+  if (state === "waking") return "Waking";
+  if (numberCount(status.pendingCount) || numberCount(status.awaitingAckCount) || lifecycle.queued === true) return "Queued";
+  if (state === "sleeping" || state === "unloaded" || status.hibernated === true) return "Sleeping";
+  if (state === "ready") return "Ready";
+  if (state === "failed") return "Failed";
+  if (state === "migration_required") return "Migration required";
+  return state ? state.replace(/_/g, " ") : "Unknown";
+}
+
+function whatsappStatusSinceMs({ label = "", status = {}, thread = {}, messages = [] } = {}) {
+  const activeTurnId = pickString(status.activeTurnId, status.turnId, status.turnLifecycle?.activeTurnId);
+  if (activeTurnId) {
+    const activeMessage = latestMessageBy(messages, (message) =>
+      message?.role === "user" &&
+      [message.codexTurnId, message.executorTurnId].some((value) => pickString(value) === activeTurnId)
+    );
+    const activeMs = messageTimestampMs(activeMessage);
+    if (activeMs) return activeMs;
+  }
+  const normalized = pickString(label).toLowerCase();
+  if (normalized === "working") {
+    const running = latestMessageBy(messages, (message) => message?.role === "user" && message.state === "running");
+    const runningMs = messageTimestampMs(running);
+    if (runningMs) return runningMs;
+  }
+  if (normalized === "queued" || normalized === "waking" || normalized === "awaiting approval") {
+    const pending = earliestMessageBy(messages, (message) =>
+      message?.role === "user" &&
+      ["queued", "pending_delivery", "awaiting_ack", "running"].includes(String(message.state || ""))
+    );
+    const pendingMs = messageTimestampMs(pending);
+    if (pendingMs) return pendingMs;
+  }
+  return timestampValueMs(status.lease?.startedAt || thread.runtime?.activeTurnObservedAt || thread.runtime?.updatedAt || thread.updatedAt);
+}
+
+function formatWhatsAppRouterStatus({ thread = {}, status = {}, messages = [], nowMs = Date.now() } = {}) {
+  const label = whatsappStatusLabel(status);
+  const sinceMs = whatsappStatusSinceMs({ label, status, thread, messages });
+  const statusLine = sinceMs ? `${label} for ${compactDuration(nowMs - sinceMs)}` : label;
+  const pendingCount = numberCount(status.pendingCount) || messages.filter((message) => message?.role === "user" && ["queued", "pending_delivery"].includes(String(message.state || ""))).length;
+  const runningCount = numberCount(status.runningCount) || messages.filter((message) => message?.role === "user" && message.state === "running").length;
+  const awaitingAckCount = numberCount(status.awaitingAckCount) || messages.filter((message) => message?.role === "user" && message.state === "awaiting_ack").length;
+  const activeTurnId = pickString(status.activeTurnId, status.turnId, status.turnLifecycle?.activeTurnId);
+  const lastInput = latestMessageBy(messages, (message) => message?.role === "user");
+  const lastReply = latestMessageBy(messages, (message) => message?.role === "assistant" && message.state === "completed");
+  const lines = [
+    `Thread: ${pickString(thread.name, thread.title, thread.id)}`,
+    `Status: ${statusLine}`,
+    `Runtime: ${whatsappStatusRuntimeLabel(thread, status)}`,
+    `Queue: ${pendingCount} pending, ${runningCount} running, ${awaitingAckCount} awaiting ack`,
+  ];
+  if (activeTurnId) lines.push(`Active turn: ${shortStatusId(activeTurnId)}`);
+  const lastInputText = relativeTimestamp(lastInput?.createdAt || lastInput?.deliveredAt || lastInput?.updatedAt, nowMs);
+  if (lastInputText) lines.push(`Last input: ${lastInputText}`);
+  const lastReplyText = relativeTimestamp(lastReply?.createdAt || lastReply?.deliveredAt || lastReply?.updatedAt, nowMs);
+  if (lastReplyText) lines.push(`Last reply: ${lastReplyText}`);
+  const retryText = relativeTimestamp(status.nextDeliveryAttemptAt, nowMs);
+  if (retryText) lines.push(`Next retry: ${retryText}`);
+  if (status.error) lines.push(`Error: ${String(status.error || "").slice(0, 180)}`);
+  return lines.join("\n");
+}
+
 function timestampMs(value) {
   const ms = Date.parse(String(value || ""));
   return Number.isFinite(ms) ? ms : 0;
@@ -3129,6 +3314,146 @@ async function coalesceWhatsAppInboundThreadMessage({ thread, messageInput, even
     coalescedCount: patch.coalescedCount,
   }, env).catch(() => {});
   return message;
+}
+
+async function handleWhatsAppRouterStatusCommand({
+  input = {},
+  thread,
+  messageInput,
+  state,
+  eventId,
+  canonicalEventId,
+  routerTraceId,
+  turnId,
+  threadId,
+  chatId,
+  from,
+  accountId,
+  inboundDedupeKey,
+  threadRoute = {},
+  env = process.env,
+} = {}) {
+  const messages = await listThreadMessages(thread.id, env).catch(() => []);
+  const status = await runtimeStatus(thread.id, env, messages).catch((error) => ({
+    state: "unknown",
+    status: "unknown",
+    runtimeState: "unknown",
+    runtimeKind: pickString(thread.runtimeKind, thread.runtime?.runtimeKind, thread.executor?.metadata?.runtimeKind),
+    pendingCount: messages.filter((message) => message?.role === "user" && ["queued", "pending_delivery"].includes(String(message.state || ""))).length,
+    awaitingAckCount: messages.filter((message) => message?.role === "user" && message.state === "awaiting_ack").length,
+    runningCount: messages.filter((message) => message?.role === "user" && message.state === "running").length,
+    error: String(error?.message || error || "status_unavailable").slice(0, 200),
+  }));
+  const replyText = formatWhatsAppRouterStatus({ thread, status, messages });
+  const message = await appendThreadMessage(thread.id, {
+    ...messageInput,
+    role: "user",
+    state: "completed",
+    deliveryState: "delivered",
+    deliveredAt: new Date().toISOString(),
+    observedVia: "whatsapp_router_status_command",
+  }, env);
+  const event = {
+    eventId,
+    canonicalEventId,
+    routerTraceId,
+    turnId,
+    agentId: null,
+    threadId,
+    messageId: message.id,
+    chatId,
+    from,
+    accountId,
+    attachments: Array.isArray(input.attachments) ? input.attachments : [],
+    ...(inboundDedupeKey ? { inboundDedupeKey } : {}),
+    receivedAt: pickString(input.timestamp, input.receivedAt) || new Date().toISOString(),
+  };
+  if (message.duplicate) {
+    const existingReply = messages.find((candidate) =>
+      candidate?.role === "assistant" &&
+      candidate?.source === "whatsapp_router" &&
+      candidate?.parentMessageId === message.id &&
+      sameOptionalEventField(candidate, { connector: "whatsapp" }, "connector") &&
+      sameOptionalEventField(candidate, { chatId }, "chatId") &&
+      sameOptionalEventField(candidate, { accountId }, "accountId")
+    ) || null;
+    if (existingReply) {
+      state.inboundEvents = [...(state.inboundEvents || []), event];
+      await writeWhatsAppState(state, env);
+      await ensureRouterTurn({ routerTraceId, turnId, connector: "whatsapp", accountId, chatId, eventId, threadId, messageId: message.id, state: "completed" }, env).catch(() => null);
+      await recordRouterTraceEvent({ routerTraceId, turnId, connector: "whatsapp", accountId, chatId, sourceEventId: eventId, threadId, messageId: message.id, phase: "skipped", reason: "duplicate_status_command", terminal: true }, env).catch(() => {});
+      await appendEvent({
+        type: "whatsapp_inbound_duplicate",
+        eventId,
+        canonicalEventId,
+        routerTraceId,
+        agentId: null,
+        threadId,
+        messageId: message.id,
+        replyMessageId: existingReply.id,
+        duplicateReason: "duplicate_status_command",
+      }, env).catch(() => {});
+      return {
+        duplicate: true,
+        handledCommand: "status",
+        event,
+        agentId: null,
+        threadId,
+        ownerUserId: resourceOwnerUserId(thread, env),
+        autoProvisioned: threadRoute.autoProvisioned === true,
+        createdThread: threadRoute.createdThread === true,
+        userId: threadRoute.user?.id || null,
+        message,
+        assistantMessage: existingReply,
+        status,
+      };
+    }
+  }
+  const reply = await appendThreadMessage(thread.id, {
+    role: "assistant",
+    source: "whatsapp_router",
+    phase: "final_answer",
+    text: replyText,
+    state: "completed",
+    parentMessageId: message.id,
+    connector: "whatsapp",
+    routerTraceId,
+    turnId,
+    chatId,
+    accountId,
+  }, env);
+  state.inboundEvents = [...(state.inboundEvents || []), event];
+  await writeWhatsAppState(state, env);
+  await ensureRouterTurn({ routerTraceId, turnId, connector: "whatsapp", accountId, chatId, eventId, threadId, messageId: message.id, state: "completed" }, env).catch(() => null);
+  await recordRouterTraceEvent({ routerTraceId, turnId, connector: "whatsapp", accountId, chatId, sourceEventId: eventId, threadId, messageId: message.id, phase: "routed" }, env).catch(() => {});
+  await recordRouterTraceEvent({ routerTraceId, turnId, connector: "whatsapp", accountId, chatId, sourceEventId: eventId, threadId, messageId: message.id, phase: "completed", reason: "status_command", terminal: true }, env).catch(() => {});
+  await appendEvent({
+    type: "whatsapp_router_status_command",
+    eventId,
+    canonicalEventId,
+    routerTraceId,
+    threadId,
+    messageId: message.id,
+    replyMessageId: reply.id,
+    chatId,
+    accountId,
+    runtimeKind: status.runtimeKind || null,
+    runtimeState: status.state || status.status || null,
+  }, env).catch(() => {});
+  return {
+    duplicate: false,
+    handledCommand: "status",
+    event,
+    agentId: null,
+    threadId,
+    ownerUserId: resourceOwnerUserId(thread, env),
+    autoProvisioned: threadRoute.autoProvisioned === true,
+    createdThread: threadRoute.createdThread === true,
+    userId: threadRoute.user?.id || null,
+    message,
+    assistantMessage: reply,
+    status,
+  };
 }
 
 export async function routeWhatsAppInbound(input = {}, env = process.env, fetchImpl = fetch) {
@@ -3661,10 +3986,6 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
   messageInput.senderTrustLevel = inboundSecurity.trustLevel || "unknown";
   messageInput.senderPolicyMode = inboundSecurity.policyMode || "";
   messageInput.securityClassification = inboundSecurity.classified || null;
-  if (whatsappInboundInstantSteerEnabled({ thread, binding: threadRoute.binding, chatId, env })) {
-    messageInput.codexDeliveryMode = "instant_steer";
-    messageInput.steerActiveTurn = true;
-  }
   if (!inboundSecurity.allowed) {
     const blocked = inboundSecurity.action === "block";
     if (blocked) state = addWhatsAppInboundSecurityBlock(state, inboundSecurity);
@@ -3737,6 +4058,25 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
     state: "received",
     mirrorPolicy: "reply_to_source",
   }, env).catch(() => null);
+  if (threadId && thread && whatsappRouterStatusCommand(text)) {
+    return handleWhatsAppRouterStatusCommand({
+      input,
+      thread,
+      messageInput,
+      state,
+      eventId,
+      canonicalEventId,
+      routerTraceId,
+      turnId,
+      threadId,
+      chatId,
+      from,
+      accountId,
+      inboundDedupeKey,
+      threadRoute,
+      env,
+    });
+  }
   const desktopApproveChallenge = desktopShareApproveChallengeId(text);
   if (threadId && thread && desktopApproveChallenge) {
     const message = await appendThreadMessage(thread.id, {
@@ -4088,6 +4428,10 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
       approvalHandled: false,
       reason: "no_pending_request",
     };
+  }
+  if (whatsappInboundInstantSteerEnabled({ thread, binding: threadRoute.binding, chatId, env })) {
+    messageInput.codexDeliveryMode = "instant_steer";
+    messageInput.steerActiveTurn = true;
   }
   const coalescedMessage = threadId && thread
     ? await coalesceWhatsAppInboundThreadMessage({

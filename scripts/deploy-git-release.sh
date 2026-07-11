@@ -28,6 +28,7 @@ Environment:
   ORKESTR_DEPLOY_RUN_SMOKE      Run npm smoke before activation. Defaults to 1.
   ORKESTR_DEPLOY_BACKUP_STATE   Back up ORKESTR_HOME before activation. Defaults to 1.
   ORKESTR_DEPLOY_BACKUP_EXCLUDES Space-separated paths under ORKESTR_HOME to omit from backups. Defaults to live runtime/session dirs.
+  ORKESTR_DEPLOY_BACKUP_KEEP    Completed state backups to keep per device. Defaults to 3 and is capped at 3.
   ORKESTR_DEPLOY_SYNC_WORKERS   Fast-forward and push safe stale worker branches after deploy. Defaults to 1.
   ORKESTR_RELEASE_TRAIN_FANOUT  Deploy eligible broker-listed instances after local deploy. Defaults to 1.
   ORKESTR_RELEASE_REQUIRED_WHATSAPP_ACCOUNTS Space/comma-separated WA accounts that must be ready after restart.
@@ -371,6 +372,7 @@ backup_state() {
     return 0
   fi
   mkdir -p "$backup_dir"
+  prune_state_backups "$((backup_keep - 1))"
   stamp="$(date -u +%Y%m%dT%H%M%SZ)"
   target="$(sanitize_id "$release_id")"
   backup_name="$backup_dir/${stamp}-${target}-state.tar.gz"
@@ -392,7 +394,29 @@ backup_state() {
   if [ "$tar_status" -eq 1 ]; then
     echo "State backup completed with non-fatal live-file changes." >&2
   fi
+  prune_state_backups "$backup_keep"
   echo "$backup_name"
+}
+
+prune_state_backups() {
+  local keep count removed file
+  keep="${1:-$backup_keep}"
+  [ -d "$backup_dir" ] || return 0
+  count=0
+  removed=0
+  while IFS= read -r file; do
+    [ -n "$file" ] || continue
+    count=$((count + 1))
+    if [ "$count" -le "$keep" ]; then
+      continue
+    fi
+    if rm -f -- "$file"; then
+      removed=$((removed + 1))
+    fi
+  done < <(find "$backup_dir" -maxdepth 1 -type f -name '*.tar.gz' -printf '%T@\t%p\n' | sort -rn | cut -f2-)
+  if [ "$removed" -gt 0 ]; then
+    echo "Pruned $removed old state backup(s), keeping max $keep in $backup_dir." >&2
+  fi
 }
 
 activate_release() {
@@ -846,7 +870,7 @@ deploy_guard_before_restart() {
     begin_deploy_drain
     deploy_guard_active_work unsafe
     echo "No-interrupt deploy guard: external Codex app-server is active; codex-app-server turns may continue during the UI restart."
-    echo "No-interrupt deploy preservation: external Codex app-server turns are preserved while service-local child processes are reaped after the stop timeout."
+    echo "No-interrupt deploy preservation: external Codex app-server turns are preserved and service-local tmux children are not killed with the UI process."
     return 0
   fi
   deploy_guard_active_work
@@ -1001,7 +1025,7 @@ EOF
   cat > "$dropin_dir/50-shutdown-timeout.conf" <<EOF
 [Service]
 TimeoutStopSec=$timeout
-KillMode=mixed
+KillMode=process
 EOF
   systemctl daemon-reload
 }
@@ -1102,7 +1126,7 @@ repair_runtime_ownership() {
   if [ "$(id -u)" -ne 0 ]; then
     return 0
   fi
-  local run_user run_group runtime_home runtime_run_dir codex_home
+  local run_user run_group runtime_home runtime_run_dir codex_home target
   run_user="$(runtime_run_user)"
   if ! id "$run_user" >/dev/null 2>&1; then
     return 0
@@ -1113,6 +1137,37 @@ repair_runtime_ownership() {
   codex_home="${CODEX_HOME:-$runtime_home/codex}"
   mkdir -p "$runtime_home" "$runtime_run_dir"
   chown "$run_user:$run_group" "$runtime_home" "$runtime_run_dir"
+  for target in \
+    "$runtime_home/agents.json" \
+    "$runtime_home/api-session-bindings.json" \
+    "$runtime_home/broker-instances.json" \
+    "$runtime_home/connector-outbox.json" \
+    "$runtime_home/connector-prompt-pushes.json" \
+    "$runtime_home/config.json" \
+    "$runtime_home/desktop-leases.json" \
+    "$runtime_home/events.jsonl" \
+    "$runtime_home/jobs-jd-cache-access.json" \
+    "$runtime_home/jobs-queue.json" \
+    "$runtime_home/messages" \
+    "$runtime_home/oauth" \
+    "$runtime_home/release-instances.json" \
+    "$runtime_home/router-traces.json" \
+    "$runtime_home/runtime-leases.json" \
+    "$runtime_home/runtime-settings.json" \
+    "$runtime_home/secrets" \
+    "$runtime_home/tenant-slices.json" \
+    "$runtime_home/tenant-vms.json" \
+    "$runtime_home/thread-messages" \
+    "$runtime_home/threads.json" \
+    "$runtime_home/timers.json" \
+    "$runtime_home/users" \
+    "$runtime_home/users.json" \
+    "$runtime_home/waitlist.json" \
+    "$runtime_home/watcher-alerts.json" \
+    "$runtime_home/whatsapp.json"; do
+    [ -e "$target" ] || continue
+    chown -R "$run_user:$run_group" "$target" || true
+  done
   mkdir -p "$codex_home"
   chown -R "$run_user:$run_group" "$codex_home"
   chmod 0700 "$codex_home"
@@ -1267,6 +1322,7 @@ exposure_curl_insecure="$(bool_value "${ORKESTR_DEPLOY_EXPOSURE_CURL_INSECURE:-0
 run_smoke="${run_smoke_arg:-${ORKESTR_DEPLOY_RUN_SMOKE:-1}}"
 run_backup="${backup_state_arg:-${ORKESTR_DEPLOY_BACKUP_STATE:-1}}"
 backup_excludes="${ORKESTR_DEPLOY_BACKUP_EXCLUDES:-run tmp whatsapp-bridge/sessions wa-skills/*/session wa-skills/*/state}"
+backup_keep="${ORKESTR_DEPLOY_BACKUP_KEEP:-3}"
 sync_workers="$(bool_value "${sync_workers_arg:-${ORKESTR_DEPLOY_SYNC_WORKERS:-1}}")"
 lock_file="${ORKESTR_DEPLOY_LOCK_FILE:-/var/lock/orkestr-deploy.lock}"
 lock_busy_exit_code="${ORKESTR_DEPLOY_LOCK_BUSY_EXIT_CODE:-0}"
@@ -1300,6 +1356,16 @@ case "$exposure_curl_insecure" in
   0|1) ;;
   *) echo "ORKESTR_DEPLOY_EXPOSURE_CURL_INSECURE must be 0 or 1." >&2; exit 2 ;;
 esac
+case "$backup_keep" in
+  ''|*[!0-9]*) echo "ORKESTR_DEPLOY_BACKUP_KEEP must be an integer from 1 to 3." >&2; exit 2 ;;
+esac
+if [ "$backup_keep" -lt 1 ]; then
+  echo "ORKESTR_DEPLOY_BACKUP_KEEP must be an integer from 1 to 3." >&2
+  exit 2
+fi
+if [ "$backup_keep" -gt 3 ]; then
+  backup_keep=3
+fi
 case "$active_timeout_seconds" in
   ''|*[!0-9]*) echo "ORKESTR_DEPLOY_ACTIVE_TIMEOUT_SECONDS must be a non-negative integer." >&2; exit 2 ;;
 esac

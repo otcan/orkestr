@@ -475,13 +475,27 @@ export async function heartbeatBrokerInstance(instanceId, { body = {}, request =
   const displayName = clean(payload.displayName || payload.name).slice(0, 120);
   if (displayName) record.displayName = displayName;
   const endpointBaseUrl = clean(payload.endpointBaseUrl || payload.baseUrl || payload.apiBaseUrl).slice(0, 500);
-  if (endpointBaseUrl) record.endpointBaseUrl = endpointBaseUrl;
+  if (Object.prototype.hasOwnProperty.call(payload, "endpointBaseUrl") ||
+    Object.prototype.hasOwnProperty.call(payload, "baseUrl") ||
+    Object.prototype.hasOwnProperty.call(payload, "apiBaseUrl")) {
+    record.endpointBaseUrl = endpointBaseUrl;
+  }
   const connectBaseUrl = clean(payload.connectBaseUrl || payload.publicBaseUrl || payload.publicUrl).slice(0, 500);
-  if (connectBaseUrl) record.connectBaseUrl = connectBaseUrl;
+  if (Object.prototype.hasOwnProperty.call(payload, "connectBaseUrl") ||
+    Object.prototype.hasOwnProperty.call(payload, "publicBaseUrl") ||
+    Object.prototype.hasOwnProperty.call(payload, "publicUrl")) {
+    record.connectBaseUrl = connectBaseUrl;
+  }
   const setupUrl = clean(payload.setupUrl || payload.publicSetupUrl).slice(0, 800);
-  if (setupUrl) record.setupUrl = setupUrl;
+  if (Object.prototype.hasOwnProperty.call(payload, "setupUrl") ||
+    Object.prototype.hasOwnProperty.call(payload, "publicSetupUrl")) {
+    record.setupUrl = setupUrl;
+  }
   const relayAccountId = clean(payload.relayAccountId || payload.whatsappRelayAccountId).slice(0, 120);
-  if (relayAccountId) record.relayAccountId = relayAccountId;
+  if (Object.prototype.hasOwnProperty.call(payload, "relayAccountId") ||
+    Object.prototype.hasOwnProperty.call(payload, "whatsappRelayAccountId")) {
+    record.relayAccountId = relayAccountId;
+  }
   record.lastHeartbeatIp = requestIp(request);
   await writeRegistry(registry, env);
   return {
@@ -495,7 +509,7 @@ export async function heartbeatBrokerInstance(instanceId, { body = {}, request =
 
 export function brokerClientHeartbeatConfigured(env = process.env) {
   if (falsey(env.ORKESTR_BROKER_CLIENT_HEARTBEAT)) return false;
-  return Boolean(clean(env.ORKESTR_DEMO_BROKER_BASE_URL || env.ORKESTR_BROKER_BASE_URL));
+  return Boolean(clean(env.ORKESTR_BROKER_BASE_URL || env.ORKESTR_DEMO_BROKER_BASE_URL));
 }
 
 export function brokerClientHeartbeatIntervalMs(env = process.env) {
@@ -599,7 +613,7 @@ export async function sendBrokerClientHeartbeat(env = process.env, options = {})
 
 export async function ensureBrokerClientRegistration(env = process.env, options = {}) {
   const paths = await ensureDataDirs(env);
-  const brokerBaseUrl = clean(env.ORKESTR_DEMO_BROKER_BASE_URL || env.ORKESTR_BROKER_BASE_URL || options.brokerBaseUrl);
+  const brokerBaseUrl = clean(env.ORKESTR_BROKER_BASE_URL || env.ORKESTR_DEMO_BROKER_BASE_URL || options.brokerBaseUrl);
   if (!brokerBaseUrl) return { ok: false, reason: "broker_base_url_missing" };
   const desiredInstanceId = clean(env.ORKESTR_BROKER_INSTANCE_ID || env.ORKESTR_INSTANCE_ID || options.instanceId);
   const whatsappNumber = clean(env.ORKESTR_DEMO_WHATSAPP_NUMBER || env.ORKESTR_DEMO_WA_NUMBER);

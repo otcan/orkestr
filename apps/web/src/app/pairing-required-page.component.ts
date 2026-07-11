@@ -49,7 +49,7 @@ export class PairingRequiredPageComponent implements OnInit, OnDestroy {
         expiresAt: result.expiresAt,
         instanceId: this.instanceId(),
       };
-      this.notice = "Paste the command below into WhatsApp or a trusted terminal.";
+      this.notice = this.defaultApprovalNotice();
       this.startPolling();
     } catch (error) {
       this.error = this.errorText(error);
@@ -66,7 +66,7 @@ export class PairingRequiredPageComponent implements OnInit, OnDestroy {
     try {
       const result = await firstValueFrom(this.api.securityChallenge(challengeId));
       this.challenge = result.challenge;
-      this.notice = "Paste the command below into WhatsApp or a trusted terminal.";
+      this.notice = this.defaultApprovalNotice();
       if (this.challenge.status === "approved") await this.consumeChallenge();
       else this.startPolling();
     } catch (error) {
@@ -96,6 +96,35 @@ export class PairingRequiredPageComponent implements OnInit, OnDestroy {
   approveCommand(): string {
     const code = this.challenge?.approveCode || this.challenge?.id || "<code>";
     return `orkestr connect approve ${code}`;
+  }
+
+  approvalEyebrow(): string {
+    const intent = this.challenge?.authIntent || {};
+    const service = String(intent.service || "").trim();
+    return service === "gmail" ? "Gmail approval" : "Orkestr";
+  }
+
+  approvalTitle(): string {
+    const intent = this.challenge?.authIntent || {};
+    return String(intent.title || "").trim() || "Approve this browser";
+  }
+
+  approvalDescription(): string {
+    const intent = this.challenge?.authIntent || {};
+    return String(intent.description || "").trim();
+  }
+
+  approvalContextRows(): Array<{ label: string; value: string }> {
+    const intent = this.challenge?.authIntent || {};
+    return [
+      { label: "Tool", value: intent.tool || "" },
+      { label: "Service", value: intent.service || "" },
+      { label: "Provider", value: intent.provider || "" },
+      { label: "Action", value: intent.action || "" },
+      { label: "Instance", value: intent.instanceId || "" },
+      { label: "User", value: intent.userId || "" },
+      { label: "Thread", value: intent.thread || intent.threadId || "" },
+    ].map((row) => ({ ...row, value: String(row.value || "").trim() })).filter((row) => row.value);
   }
 
   challengeStatusClass(): string {
@@ -149,7 +178,7 @@ export class PairingRequiredPageComponent implements OnInit, OnDestroy {
     this.stopPolling();
     try {
       const result = await firstValueFrom(this.api.pairSecurityBrowser(this.challenge.id));
-      this.notice = "Approved. Opening Orkestr.";
+      this.notice = this.challenge.authIntent ? "Approved. Continuing to Google." : "Approved. Opening Orkestr.";
       this.renderNow();
       this.paired.emit(result.redirectPath || "");
     } catch (error) {
@@ -172,6 +201,12 @@ export class PairingRequiredPageComponent implements OnInit, OnDestroy {
   private renderNow(): void {
     if (this.destroyed) return;
     this.cdr.detectChanges();
+  }
+
+  private defaultApprovalNotice(): string {
+    return this.challenge?.authIntent
+      ? "Paste the command below to approve this exact connection."
+      : "Paste the command below into WhatsApp or a trusted terminal.";
   }
 
   private errorText(error: unknown): string {

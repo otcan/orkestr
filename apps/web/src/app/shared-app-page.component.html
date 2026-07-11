@@ -4,7 +4,7 @@
       <p>Orkestr shared app</p>
       <h1>{{ title() }}</h1>
     </div>
-    <strong>{{ batchLabel() }}</strong>
+    <strong>{{ pagingTotal || 0 }} people</strong>
   </header>
 
   @if (pairingRequired) {
@@ -40,38 +40,43 @@
   } @else if (busy) {
     <section class="shared-app-state">Loading...</section>
   } @else {
-    <section class="shared-app-toolbar" aria-label="Review controls">
-      <div class="shared-status-tabs">
-        @for (option of statusOptions(); track option.value) {
-          <button type="button" [class.active]="statusFilter === option.value" (click)="setStatusFilter(option.value)">
-            {{ option.label }}
-          </button>
-        }
-      </div>
-      <form class="shared-search" (submit)="$event.preventDefault(); applySearch()">
-        <input type="search" placeholder="Search people or messages" [value]="searchText" (input)="onSearchInput($event)" />
-        <button type="submit">Search</button>
-      </form>
-      <div class="shared-batch-controls">
-        <button type="button" (click)="previousBatch()" [disabled]="batchOffset <= 0 || busy">Previous</button>
-        <button type="button" (click)="nextBatch()" [disabled]="!hasNextBatch || busy">Next</button>
-      </div>
-    </section>
     <section class="shared-app-layout">
-      <nav class="shared-people-list" aria-label="People">
-        @for (person of people; track person.id) {
-          <button type="button" [class.active]="selectedPerson()?.id === person.id" (click)="select(person)">
-            <span>{{ person.name }}</span>
-            @if (person.headline) {
-              <em>{{ person.headline }}</em>
+      <aside class="shared-sidebar">
+        <section class="shared-app-toolbar" aria-label="Review controls">
+          <form class="shared-search" (submit)="$event.preventDefault(); applySearch()">
+            <input type="search" placeholder="Search all messages" [value]="searchText" (input)="onSearchInput($event)" />
+            <button type="submit">Search</button>
+          </form>
+          <div class="shared-status-tabs">
+            @for (option of statusOptions(); track option.value) {
+              <button type="button" [class.active]="statusFilter === option.value" (click)="setStatusFilter(option.value)">
+                {{ option.label }}
+              </button>
             }
-            <small>{{ labelText(person.currentClassification || "not_evaluated") }} · {{ messageCount(person) }}</small>
-            @if (person.lastMessagePreview) {
-              <p>{{ person.lastMessagePreview }}</p>
-            }
-          </button>
-        }
-      </nav>
+          </div>
+          <div class="shared-batch-controls">
+            <strong>{{ batchLabel() }}</strong>
+            <span>
+              <button type="button" (click)="previousBatch()" [disabled]="batchOffset <= 0 || busy">Previous</button>
+              <button type="button" (click)="nextBatch()" [disabled]="!hasNextBatch || busy">Next</button>
+            </span>
+          </div>
+        </section>
+
+        <nav class="shared-people-list" aria-label="People">
+          @for (person of people; track person.id) {
+            <button type="button" [class.active]="selectedPerson()?.id === person.id" (click)="select(person)">
+              <span>{{ person.name }}</span>
+              @if (person.headline) {
+                <em>{{ person.headline }}</em>
+              }
+              <small>{{ labelText(person.currentClassification || "not_evaluated") }} · {{ messageCount(person) }}</small>
+            </button>
+          } @empty {
+            <div class="shared-empty-list">No people match this view.</div>
+          }
+        </nav>
+      </aside>
 
       @if (selectedPerson(); as person) {
         <article class="shared-person">
@@ -87,6 +92,32 @@
             </div>
             <span>{{ labelText(person.currentClassification || "not_evaluated") }}</span>
           </header>
+
+          <section class="shared-notes" aria-label="Reviewer notes">
+            <label for="shared-review-note">Notes</label>
+            <textarea
+              id="shared-review-note"
+              rows="4"
+              maxlength="5000"
+              placeholder="Add context, next step, objection, or reason for this classification."
+              [value]="noteDraft"
+              (input)="onNoteInput($event)"
+            ></textarea>
+            <div>
+              @if (noteNotice) {
+                <small>{{ noteNotice }}</small>
+              } @else if (person.reviewNote) {
+                <small>Saved note available for this person.</small>
+              } @else {
+                <small>Private reviewer note saved to oXRM.</small>
+              }
+              <button
+                type="button"
+                [disabled]="!canSaveNote() || noteSavingPersonId === person.id"
+                (click)="saveNote()"
+              >{{ noteSavingPersonId === person.id ? "Saving" : "Save note" }}</button>
+            </div>
+          </section>
 
           <section class="shared-message-timeline" aria-label="Message history">
             @if (messagesLoading(person)) {

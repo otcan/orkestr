@@ -1,4 +1,4 @@
-import { Component, OnDestroy, OnInit, inject } from "@angular/core";
+import { ChangeDetectorRef, Component, OnDestroy, OnInit, inject } from "@angular/core";
 import { FormsModule } from "@angular/forms";
 import { firstValueFrom } from "rxjs";
 import { ApiService, ConnectorStatus, GmailOAuthStartResponse, OrkestrUser, OutlookOAuthStartResponse, SetupStatus } from "./api.service";
@@ -10,10 +10,13 @@ import { ApiService, ConnectorStatus, GmailOAuthStartResponse, OrkestrUser, Outl
 })
 export class UserConnectorsPageComponent implements OnDestroy, OnInit {
   private readonly api = inject(ApiService);
+  private readonly cdr = inject(ChangeDetectorRef);
   private readonly connectorOrder = ["whatsapp", "gmail", "outlook", "jira", "shopify", "linkedin", "browsers"];
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
   private retryAttempts = 0;
   private autoStartedRoute = "";
+  private destroyed = false;
+  private renderQueued = false;
 
   busy = false;
   actionBusy = "";
@@ -27,16 +30,21 @@ export class UserConnectorsPageComponent implements OnDestroy, OnInit {
   outlookAuth: OutlookOAuthStartResponse | null = null;
 
   ngOnInit(): void {
+    this.applyRouteHints();
     void this.load();
   }
 
   ngOnDestroy(): void {
+    this.destroyed = true;
     this.clearRetry();
   }
 
   async load(showBusy = true): Promise<void> {
     this.clearRetry();
-    if (showBusy) this.busy = true;
+    if (showBusy) {
+      this.busy = true;
+      this.renderNow();
+    }
     try {
       const [setup, user] = await Promise.allSettled([
         firstValueFrom(this.api.setupStatus()),
@@ -44,8 +52,10 @@ export class UserConnectorsPageComponent implements OnDestroy, OnInit {
       ]);
       if (setup.status === "fulfilled") this.setupStatus = setup.value;
       if (user.status === "fulfilled") this.currentUser = user.value.user;
-      if (setup.status === "rejected" && user.status === "rejected") {
-        this.error = this.errorText(user.reason || setup.reason);
+      if (setup.status === "rejected") {
+        this.error = this.errorText(setup.reason);
+      } else if (user.status === "rejected" && !this.currentUser) {
+        this.error = this.errorText(user.reason);
       } else {
         this.error = "";
       }
@@ -56,10 +66,12 @@ export class UserConnectorsPageComponent implements OnDestroy, OnInit {
       this.scheduleRetryIfNeeded();
     } finally {
       this.busy = false;
+      this.renderNow();
     }
   }
 
   userConnectors(): ConnectorStatus[] {
+    if (!this.setupStatus) return [];
     const active = this.routeConnectorId();
     const connectors = this.connectorOrder.map((id) => this.connectorStatus(id));
     if (active) return connectors.filter((connector) => connector.id === active);
@@ -116,9 +128,22 @@ export class UserConnectorsPageComponent implements OnDestroy, OnInit {
     return "";
   }
 
+  connectorConnected(connector: ConnectorStatus): boolean {
+    return String(connector.state || "").toLowerCase() === "connected";
+  }
+
+  connectedAccount(connector: ConnectorStatus): string {
+    return this.detailString(connector, "account") || this.detailString(connector, "email") || this.detailString(connector, "loginHint");
+  }
+
+  connectedCapabilityLabels(connector: ConnectorStatus): string[] {
+    return this.detailStringArray(connector, "capabilityLabels");
+  }
+
   async startGmail(options: { autoRedirect?: boolean } = {}): Promise<void> {
     if (this.actionBusy) return;
     this.actionBusy = "gmail";
+    this.renderNow();
     try {
       this.gmailAuth = await firstValueFrom(this.api.startGmailOAuth(this.gmailAccount));
       this.notice = this.gmailAuth.authorizeUrl ? "Gmail sign-in ready." : "Gmail sign-in started.";
@@ -133,12 +158,33 @@ export class UserConnectorsPageComponent implements OnDestroy, OnInit {
       this.error = this.errorText(error);
     } finally {
       this.actionBusy = "";
+      this.renderNow();
+    }
+  }
+
+  async disconnectGmail(): Promise<void> {
+    if (this.actionBusy) return;
+    this.actionBusy = "gmail-disconnect";
+    this.renderNow();
+    try {
+      await firstValueFrom(this.api.disconnectGmailAuth());
+      this.gmailAuth = null;
+      this.gmailAccount = "";
+      this.notice = "Gmail auth deleted.";
+      this.error = "";
+      await this.load(false);
+    } catch (error) {
+      this.error = this.errorText(error);
+    } finally {
+      this.actionBusy = "";
+      this.renderNow();
     }
   }
 
   async startOutlook(): Promise<void> {
     if (this.actionBusy) return;
     this.actionBusy = "outlook";
+    this.renderNow();
     try {
       this.outlookAuth = await firstValueFrom(this.api.startOutlookOAuth(this.outlookAccount));
       this.notice = this.outlookAuth.userCode ? "Outlook sign-in ready." : "Outlook sign-in started.";
@@ -148,6 +194,7 @@ export class UserConnectorsPageComponent implements OnDestroy, OnInit {
       this.error = this.errorText(error);
     } finally {
       this.actionBusy = "";
+      this.renderNow();
     }
   }
 
@@ -156,7 +203,13 @@ export class UserConnectorsPageComponent implements OnDestroy, OnInit {
   }
 
   currentUserLabel(): string {
-    return String(this.currentUser?.displayName || this.currentUser?.id || "User");
+    return String(
+      this.currentUser?.displayName ||
+        this.currentUser?.id ||
+        this.routeQueryParam("user_id") ||
+        this.routeQueryParam("user") ||
+        (this.busy ? "Loading user" : "User"),
+    );
   }
 
   loginOnly(): boolean {
@@ -166,6 +219,46 @@ export class UserConnectorsPageComponent implements OnDestroy, OnInit {
   loginTitle(): string {
     const active = this.routeConnectorId();
     return active === "gmail" ? "Connect Gmail" : active ? `Connect ${this.connectorLabel(active)}` : "Connect Account";
+  }
+
+  connectorIntentActive(): boolean {
+    return this.loginOnly() && this.routeConnectorId() === "gmail";
+  }
+
+  connectorIntentMethod(): string {
+    return this.routeQueryParam("mcp") || "tools/call";
+  }
+
+  connectorIntentTool(): string {
+    return this.routeQueryParam("tool") || "orkestr_auth";
+  }
+
+  connectorIntentProvider(): string {
+    return this.routeQueryParam("provider") || "google_workspace";
+  }
+
+  connectorIntentAction(): string {
+    return this.routeQueryParam("action") || "connect";
+  }
+
+  connectorIntentServiceLabel(): string {
+    return this.connectorLabel(this.connectorIntentService());
+  }
+
+  connectorIntentTargetInstanceId(): string {
+    return this.routeQueryParam("instance_id") || this.routeInstanceId() || "current";
+  }
+
+  connectorIntentAccountLabel(): string {
+    return this.routeQueryParam("account") || this.connectedAccount(this.connectorStatus("gmail")) || "Choose during Google sign-in";
+  }
+
+  connectorIntentUserLabel(): string {
+    return this.routeQueryParam("user_id") || this.routeQueryParam("user") || this.currentUserLabel();
+  }
+
+  connectorIntentThreadLabel(): string {
+    return this.routeQueryParam("thread") || this.routeQueryParam("thread_id") || "";
   }
 
   routeConnectorId(): string {
@@ -181,8 +274,10 @@ export class UserConnectorsPageComponent implements OnDestroy, OnInit {
   private maybeAutoStartRouteLogin(): void {
     const active = this.routeConnectorId();
     if (active !== "gmail") return;
+    if (!this.setupStatus) return;
     if (this.autoStartedRoute === active) return;
     if (this.actionBusy || this.autoLoginDisabled()) return;
+    if (String(this.connectorStatus("gmail").state || "").toLowerCase() === "connected") return;
     this.autoStartedRoute = active;
     void this.startGmail({ autoRedirect: true });
   }
@@ -190,6 +285,36 @@ export class UserConnectorsPageComponent implements OnDestroy, OnInit {
   private autoLoginDisabled(): boolean {
     const params = new URLSearchParams(globalThis.location?.search || "");
     return params.get("manual") === "1" || params.get("auto") === "0";
+  }
+
+  private applyRouteHints(): void {
+    const account = this.routeQueryParam("account") || this.routeQueryParam("email") || this.routeQueryParam("login_hint");
+    if (this.routeConnectorId() === "gmail" && account && !this.gmailAccount) this.gmailAccount = account;
+  }
+
+  private connectorIntentService(): string {
+    return this.routeQueryParam("service") || this.routeConnectorId() || "gmail";
+  }
+
+  private routeQueryParam(name: string): string {
+    return new URLSearchParams(globalThis.location?.search || "").get(name) || "";
+  }
+
+  private routeInstanceId(): string {
+    const baseParts = this.appBasePath().split("/").filter(Boolean);
+    const baseCandidate = baseParts[0] === "i" && baseParts[2] === "app" ? baseParts[1] : "";
+    if (baseCandidate) return this.decodePathSegment(baseCandidate);
+    const pathParts = (globalThis.location?.pathname || "").split("/").filter(Boolean);
+    const pathCandidate = pathParts[0] === "i" && pathParts[2] === "app" ? pathParts[1] : "";
+    return pathCandidate ? this.decodePathSegment(pathCandidate) : "";
+  }
+
+  private decodePathSegment(value = ""): string {
+    try {
+      return decodeURIComponent(value);
+    } catch {
+      return value;
+    }
   }
 
   private appBasePath(): string {
@@ -219,6 +344,18 @@ export class UserConnectorsPageComponent implements OnDestroy, OnInit {
     return base ? `${base}${normalized}` : normalized;
   }
 
+  private detailString(connector: ConnectorStatus, key: string): string {
+    const details = connector.details || {};
+    const value = details[key];
+    return typeof value === "string" || typeof value === "number" ? String(value).trim() : "";
+  }
+
+  private detailStringArray(connector: ConnectorStatus, key: string): string[] {
+    const details = connector.details || {};
+    const value = details[key];
+    return Array.isArray(value) ? value.map((item) => String(item || "").trim()).filter(Boolean) : [];
+  }
+
   private scheduleRetryIfNeeded(): void {
     if (this.setupStatus && this.currentUser) {
       this.retryAttempts = 0;
@@ -236,6 +373,18 @@ export class UserConnectorsPageComponent implements OnDestroy, OnInit {
     if (!this.retryTimer) return;
     clearTimeout(this.retryTimer);
     this.retryTimer = null;
+  }
+
+  private renderNow(): void {
+    if (this.destroyed || this.renderQueued) return;
+    this.renderQueued = true;
+    const run = () => {
+      this.renderQueued = false;
+      if (this.destroyed) return;
+      this.cdr.detectChanges();
+    };
+    if (typeof globalThis.queueMicrotask === "function") globalThis.queueMicrotask(run);
+    else void Promise.resolve().then(run);
   }
 
   private errorText(error: unknown): string {

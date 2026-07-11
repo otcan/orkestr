@@ -153,6 +153,7 @@ export class BrokerController {
       principal,
       thread: {
         id: threadId,
+        name: clean(payload.threadName || payload.threadTitle || threadId),
         ownerUserId: userId,
         binding: {
           connector: "whatsapp",
@@ -168,8 +169,10 @@ export class BrokerController {
       brokerTenantVmId: clean(payload.tenantVmId),
       brokerTenantUserId: userId,
       brokerTenantThreadId: threadId,
+      brokerTenantThreadName: clean(payload.threadName || payload.threadTitle || threadId),
       brokerTenantChatId: chatId,
       brokerTenantAccountId: accountId,
+      brokerServerRequest: true,
     }, process.env));
     return { ...link, ok: true, instanceId: record.instanceId };
   }

@@ -12,15 +12,16 @@ profiles, or user files.
 ## Baseline
 
 - Hard boundary: one tenant VM or tenant instance per public user or customer.
-- Shared-process policy: `ownerUserId`, scoped APIs, LLM sanitizer checks,
-  contained runtime policy, and UI filtering are defense-in-depth.
+- Shared-process policy: `ownerUserId`, scoped APIs, non-admin LLM sanitizer
+  checks, contained runtime policy, and UI filtering are defense-in-depth.
 - Fail-closed rule: non-admin flows must have an explicit owner and contained
   security profile before they can create threads, timers, connector state, or
   runtime work.
-- Sanitizer rule: the LLM sanitizer can be disabled with
-  `ORKESTR_LLM_SANITIZER_DISABLED=1` while the isolation flow is being
-  stabilized. When enabled, it has no fallback: if it is unavailable, unclear,
-  or denied, the action is blocked.
+- Sanitizer rule: admin sessions skip the sanitizer. For non-admin users, the
+  LLM sanitizer has no fallback. If it is unavailable, unclear, or denied, the
+  action is blocked. User-scoped challenge creation, display, resend, and status
+  requests may route through the sanitizer, but challenge approval, consumption,
+  bypass, or forgery is denied.
 - Runtime rule: `orkestr whereiam --json` is the source of truth for contained
   agents. Static `AGENTS.md` text cannot grant more access than `whereiam`.
 - Skill rule: contained agents may only use skills listed in

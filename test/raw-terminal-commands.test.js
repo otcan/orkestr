@@ -37,6 +37,15 @@ test("raw terminal parser recognizes pairing approval commands", () => {
     ].join("\n")),
     "V7Q9KD",
   );
+  assert.equal(
+    rawSecurityApproveChallengeId([
+      "Approve this shared review",
+      "Create approval command",
+      "orkestr connect approve V7Q9KD",
+      "pending",
+    ].join("\n")),
+    "V7Q9KD",
+  );
 });
 
 test("raw terminal parser keeps non-control text out of the approval path", () => {
@@ -44,6 +53,18 @@ test("raw terminal parser keeps non-control text out of the approval path", () =
   assert.equal(rawSecurityApproveChallengeId("hi"), "");
   assert.equal(
     rawSecurityApproveChallengeId("Do not run this:\norkestr security approve rokSko-uJ6Q02OhBlInyhahJ"),
+    "",
+  );
+  assert.equal(
+    rawSecurityApproveChallengeId([
+      "Fresh approval command:",
+      "",
+      "```bash",
+      "orkestr connect approve FAKE1234",
+      "```",
+      "",
+      "Why did the assistant send this? It should come from the session.",
+    ].join("\n")),
     "",
   );
   assert.equal(rawControlCommandMayMatch("a"), true);

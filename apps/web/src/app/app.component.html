@@ -369,10 +369,6 @@
               <span>TERM</span>
               <small>/switch term</small>
             </button>
-            <button type="button" [class.active]="threadRuntimeMode(thread) === 'agent'" (click)="switchRuntimeSurface('agent')" [disabled]="runtimeSurfaceSwitchDisabled('agent')" aria-label="Switch runtime to API agent with /switch agent">
-              <span>AGENT</span>
-              <small>/switch agent</small>
-            </button>
           </div>
           <button
             class="codex-capacity-card"
@@ -1298,7 +1294,6 @@
             <div class="runtime-surface-toggle runtime-panel-toggle" [title]="runtimeSurfaceShortcutTitle(thread)">
               <button type="button" [class.active]="threadRuntimeMode(thread) === 'codex-api'" (click)="switchRuntimeSurface('api')" [disabled]="runtimeSurfaceSwitchDisabled('api')">API</button>
               <button type="button" [class.active]="threadRuntimeMode(thread) === 'attached-terminal'" (click)="switchRuntimeSurface('terminal')" [disabled]="runtimeSurfaceSwitchDisabled('terminal')">TERM</button>
-              <button type="button" [class.active]="threadRuntimeMode(thread) === 'agent'" (click)="switchRuntimeSurface('agent')" [disabled]="runtimeSurfaceSwitchDisabled('agent')">AGENT</button>
             </div>
             <button
               class="danger stop-button"

@@ -10,6 +10,7 @@ import { startServer } from "../apps/server/src/server.js";
 import { resetThreadSummaryCachesForTest, threadRuntimeSummary, threadSummaryPayload, threadSummaryRuntimeSnapshot } from "../apps/server/src/thread-summary.ts";
 import { runNextThreadMessage } from "../packages/core/src/executors.js";
 import { applyRuntimeCodexMode, consumeThreadConnectorDeliverySignalCount, deliverPendingThreadInputs, doctorRuntimeResources, drainAllPendingThreadInputs, hardResetThreadRuntime, listRuntimeLeases, recoverStalePendingThreadInputs, resetThreadInputDeliveryTimersForTest, resetThreadRuntime, resolveCodexThreadMetadata, runtimeStatus, setThreadConnectorDeliverySignalHandler, sleepThread, syncRuntimeLeases, syncRuntimeWindowName, takeoverRawTerminalThread, wakeThread } from "../packages/core/src/runtime-leases.js";
+import { completeThreadSecurityApproveCommand } from "../packages/core/src/security-thread-command.js";
 import { ensureDataDirs } from "../packages/storage/src/paths.js";
 import { parseThreadInputCommand } from "../packages/core/src/thread-commands.js";
 import { createPairingChallenge, getPairingChallenge } from "../packages/core/src/security.js";
@@ -2051,7 +2052,7 @@ test("thread input delivery waits for runtime acknowledgement before completing"
   }
 });
 
-test("queued /now input strips the command and jumps ahead of stale awaiting ack", async () => {
+test("queued /interrupt input strips the command and jumps ahead of stale awaiting ack", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-now-command-"));
   const fakeTmux = await createFakeTmux(home);
   const captureFile = path.join(home, "pane.txt");
@@ -2097,7 +2098,7 @@ test("queued /now input strips the command and jumps ahead of stale awaiting ack
       connector: "whatsapp",
       chatId: "chat-now",
       from: "owner",
-      text: "/now not KDP desk. It's Reddit desk",
+      text: "/interrupt not KDP desk. It's Reddit desk",
     }, env);
 
     assert.deepEqual(await deliverPendingThreadInputs("now-command-thread", env), []);
@@ -2109,13 +2110,13 @@ test("queued /now input strips the command and jumps ahead of stale awaiting ack
     assert.equal(staleAfter.state, "failed");
     assert.equal(staleAfter.deliveryState, "superseded");
     assert.equal(staleAfter.observedVia, "thread_control_command_superseded_ack");
-    assert.match(staleAfter.error, /Superseded by \/now/);
+    assert.match(staleAfter.error, /Superseded by \/interrupt/);
     assert.equal(urgentAfter.text, "not KDP desk. It's Reddit desk");
     assert.equal(urgentAfter.state, "awaiting_ack");
     assert.equal(urgentAfter.deliveryState, "awaiting_ack");
     assert.equal(urgentAfter.forceDeliveryAfterInterrupt, true);
     assert.match(deliveredPrompt, /\[WhatsApp: owner\]\n\nnot KDP desk\. It's Reddit desk/);
-    assert.doesNotMatch(deliveredPrompt, /\/now/);
+    assert.doesNotMatch(deliveredPrompt, /\/interrupt/);
   } finally {
     restoreEnvValue("PATH", priorPath);
     restoreEnvValue("TMUX_LOG", priorTmuxLog);
@@ -5774,14 +5775,19 @@ test("thread summary keeps inline proposed plan mentions as final answers", asyn
 
 test("thread input commands strip /now before runtime delivery", () => {
   assert.deepEqual(parseThreadInputCommand({ text: "/now run this immediately" }), {
-    command: "interrupt",
+    command: "steer",
     rawCommand: "now",
     text: "run this immediately",
   });
   assert.deepEqual(parseThreadInputCommand({ text: "/now \nI want this handled immediately" }), {
-    command: "interrupt",
+    command: "steer",
     rawCommand: "now",
     text: "I want this handled immediately",
+  });
+  assert.deepEqual(parseThreadInputCommand({ text: "/steer keep going with this detail" }), {
+    command: "steer",
+    rawCommand: "steer",
+    text: "keep going with this detail",
   });
   assert.deepEqual(parseThreadInputCommand({ text: "/implement" }), {
     command: "implement",
@@ -5871,7 +5877,7 @@ test("thread input commands strip /now before runtime delivery", () => {
   assert.equal(parseThreadInputCommand({ text: "normal message" }).command, null);
 });
 
-test("thread input /agent shortcut switches runtime type for admins", async () => {
+test("thread input /agent shortcut rejects removed runtime type for admins", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-rt-agent-"));
   const priorHome = process.env.ORKESTR_HOME;
   const priorRecoverOnStart = process.env.ORKESTR_RECOVER_RUNNING_ON_START;
@@ -5894,15 +5900,17 @@ test("thread input /agent shortcut switches runtime type for admins", async () =
     const command = messages.find((message) => message.text === "/agent");
 
     assert.equal(response.status, 202);
-    assert.equal(payload.ok, true, JSON.stringify(payload));
+    assert.equal(payload.ok, false, JSON.stringify(payload));
     assert.equal(payload.commandHandled, true);
-    assert.equal(payload.target, "api-agent");
-    assert.equal(payload.replyText, "Runtime switched to API agent.");
-    assert.equal(thread.runtimeKind, "api-agent");
-    assert.equal(thread.executorId, "api-agent");
-    assert.equal(thread.executor.type, "api-agent");
-    assert.equal(command.state, "completed");
-    assert.equal(command.observedVia, "orkestr_runtime_type_command");
+    assert.equal(payload.applied, false);
+    assert.match(payload.replyText, /Use \/switch api or \/switch terminal/);
+    assert.doesNotMatch(payload.replyText, /\/switch agent/);
+    assert.notEqual(thread.runtimeKind, "api-agent");
+    assert.notEqual(thread.executorId, "api-agent");
+    assert.notEqual(thread.executor?.type, "api-agent");
+    assert.equal(command.state, "failed");
+    assert.equal(command.observedVia, "orkestr_runtime_type_command_invalid");
+    assert.match(command.error, /Use \/switch api or \/switch terminal/);
   } finally {
     if (server) await new Promise((resolve) => server.close(resolve));
     restoreEnvValue("ORKESTR_HOME", priorHome);
@@ -5994,6 +6002,48 @@ test("thread input approves a pasted Orkestr pairing page locally before Codex d
   assert.equal(approved.status, "approved");
   assert.equal(user.observedVia, "orkestr_security_approve_command");
   assert.match(reply.text, new RegExp(`Approved pairing challenge ${challenge.challengeId}`));
+});
+
+test("thread input does not approve quoted assistant approval prose", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-security-quoted-prose-"));
+  const env = { ORKESTR_HOME: home };
+  const thread = await createThread({
+    id: "thread-security-quoted-prose",
+    name: "Thread Security Quoted Prose",
+    cwd: home,
+    runtimeKind: "codex-app-server",
+    executor: {
+      id: "codex",
+      type: "codex",
+      codexThreadId: "codex-security-quoted-prose-thread",
+      metadata: {
+        transport: "app-server",
+        runtimeKind: "codex-app-server",
+      },
+    },
+  }, env);
+  const challenge = await createPairingChallenge({ env });
+  const input = await enqueueThreadInput(thread.id, {
+    text: [
+      "Fresh approval command:",
+      "",
+      "```bash",
+      `orkestr connect approve ${challenge.challengeId}`,
+      "```",
+      "",
+      "How are you able to give this? It should come from the session, not generic.",
+    ].join("\n"),
+    source: "whatsapp_inbound",
+    connector: "whatsapp",
+  }, env);
+
+  const handled = await completeThreadSecurityApproveCommand(thread, input, env);
+  const pending = await getPairingChallenge(challenge.challengeId, { env });
+  const messages = await listThreadMessages(thread.id, env);
+
+  assert.equal(handled, null);
+  assert.equal(pending.status, "pending");
+  assert.equal(messages.some((message) => message.source === "security_command" && message.parentMessageId === input.id), false);
 });
 
 test("thread runtime summary reads Codex model and limits from live metadata", async (t) => {

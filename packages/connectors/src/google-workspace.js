@@ -11,6 +11,7 @@ import {
   googleWorkspaceCapabilityDisclosure,
   googleWorkspaceCapabilityLabels,
   googleWorkspaceCapabilitiesForScopes,
+  googleWorkspaceDefaultGmailCapabilities,
   googleWorkspaceScopesForCapabilities,
   normalizeGoogleWorkspaceCapabilities,
 } from "./google-workspace-scopes.js";
@@ -120,6 +121,34 @@ function publicConnectUrl(pathname = "", env = process.env, options = {}) {
   }
 }
 
+export function googleWorkspaceBrokeredConnectorSetupPath(result = {}, connector = "gmail") {
+  const instanceId = clean(result.brokerInstanceId || result.instanceId);
+  if (!instanceId) return "";
+  const service = clean(connector) || "gmail";
+  const userId = clean(result.brokerTenantUserId || result.userId);
+  const thread = clean(result.brokerTenantThreadName || result.threadName || result.threadTitle || result.brokerTenantThreadId || result.threadId);
+  const target = new URL(`/i/${encodeURIComponent(instanceId)}/app/connectors/${encodeURIComponent(service)}`, "http://localhost");
+  target.searchParams.set("mcp", "tools/call");
+  target.searchParams.set("tool", "orkestr_auth");
+  target.searchParams.set("service", service);
+  if (service === "gmail") {
+    target.searchParams.set("provider", "google_workspace");
+    target.searchParams.set("action", "connect");
+  }
+  target.searchParams.set("instance_id", instanceId);
+  if (userId) target.searchParams.set("user_id", userId);
+  if (thread) target.searchParams.set("thread", thread);
+  if (clean(result.connectId)) target.searchParams.set("connect", clean(result.connectId));
+  target.searchParams.set("auto", "0");
+  return `${target.pathname}${target.search}`;
+}
+
+export function googleWorkspaceBrokeredConnectorSetupHref(result = {}, env = process.env, connector = "gmail") {
+  const path = googleWorkspaceBrokeredConnectorSetupPath(result, connector);
+  if (!path) return "";
+  return publicConnectUrl(path, env, { brokered: true });
+}
+
 function brokeredGoogleWorkspaceConnectEnabled(env = process.env) {
   if (!clean(env.ORKESTR_TENANT_VM_ID)) return false;
   if (truthy(env.ORKESTR_GOOGLE_WORKSPACE_LOCAL_OAUTH)) return false;
@@ -143,6 +172,7 @@ async function createBrokeredGoogleWorkspaceConnectLink({
     tenantVmId: clean(env.ORKESTR_TENANT_VM_ID),
     userId: scope.userId || clean(principal?.userId),
     threadId: clean(thread.id),
+    threadName: clean(thread.name || thread.title || thread.displayName),
     chatId: clean(chatId || threadBinding.chatId),
     accountId: clean(accountId || threadBinding.responderAccountId || threadBinding.outboundAccountId),
     account: clean(account).toLowerCase(),
@@ -202,10 +232,14 @@ export function googleWorkspaceConnectCommand(text = "") {
 }
 
 export function googleWorkspaceCapabilitiesFromToken(token = {}, fallback = []) {
+  const grantedScopes = Array.isArray(token.grantedScopes)
+    ? token.grantedScopes.map(clean).filter(Boolean)
+    : clean(token.scope).split(/[\s,]+/g).map(clean).filter(Boolean);
+  if (grantedScopes.length) return googleWorkspaceCapabilitiesForScopes(grantedScopes, fallback);
   if (Array.isArray(token.capabilities) && token.capabilities.length) {
     return normalizeGoogleWorkspaceCapabilities(token.capabilities, []);
   }
-  return googleWorkspaceCapabilitiesForScopes(token.scope || token.grantedScopes || "", fallback);
+  return googleWorkspaceCapabilitiesForScopes("", fallback);
 }
 
 export function publicGoogleWorkspaceTokenStatus(token = {}) {
@@ -229,11 +263,25 @@ export async function createGoogleWorkspaceConnectLink({
   brokerTenantVmId = "",
   brokerTenantUserId = "",
   brokerTenantThreadId = "",
+  brokerTenantThreadName = "",
   brokerTenantChatId = "",
   brokerTenantAccountId = "",
+  brokerServerRequest = false,
 } = {}, env = process.env) {
-  if (!clean(brokerInstanceId) && brokeredGoogleWorkspaceConnectEnabled(env)) {
+  if (brokeredGoogleWorkspaceConnectEnabled(env)) {
     return createBrokeredGoogleWorkspaceConnectLink({ principal, thread, chatId, accountId, account }, env);
+  }
+  const brokerContextProvided = Boolean(clean(
+    brokerInstanceId ||
+      brokerTenantVmId ||
+      brokerTenantUserId ||
+      brokerTenantThreadId ||
+      brokerTenantThreadName ||
+      brokerTenantChatId ||
+      brokerTenantAccountId,
+  ));
+  if (brokerContextProvided && brokerServerRequest !== true) {
+    throw connectorError("broker_google_workspace_connect_requires_parent_broker", 409);
   }
   const scope = await connectorScopePaths(env, { principal });
   const connectId = randomUUID();
@@ -242,6 +290,7 @@ export async function createGoogleWorkspaceConnectLink({
     connectId,
     userId: scope.userId || "",
     threadId: clean(thread.id),
+    threadName: clean(thread.name || thread.title || thread.displayName),
     chatId: clean(chatId || threadBinding.chatId),
     accountId: clean(accountId || threadBinding.responderAccountId || threadBinding.outboundAccountId),
     account: clean(account).toLowerCase(),
@@ -250,6 +299,7 @@ export async function createGoogleWorkspaceConnectLink({
     brokerTenantVmId: clean(brokerTenantVmId),
     brokerTenantUserId: clean(brokerTenantUserId),
     brokerTenantThreadId: clean(brokerTenantThreadId),
+    brokerTenantThreadName: clean(brokerTenantThreadName),
     brokerTenantChatId: clean(brokerTenantChatId),
     brokerTenantAccountId: clean(brokerTenantAccountId),
     createdAt: nowIso(),
@@ -263,26 +313,35 @@ export async function createGoogleWorkspaceConnectLink({
   ];
   await writeConnectLedger(scope, ledger);
   const path = `/connect/google?connect=${encodeURIComponent(connectId)}`;
-  const link = publicConnectUrl(path, env, { brokered: Boolean(request.brokerInstanceId || request.brokerTenantVmId) });
+  const connectorLink = googleWorkspaceBrokeredConnectorSetupHref(request, env, "gmail");
+  const connectLink = connectorLink || publicConnectUrl(path, env, { brokered: Boolean(request.brokerInstanceId || request.brokerTenantVmId) });
+  const link = connectorLink || connectLink;
   return {
     ok: true,
     connectId,
+    connectLink,
+    connectorLink,
     link,
     expiresAt: request.expiresAt,
     capabilities: googleWorkspaceCapabilityDefinitions(),
     brokerInstanceId: request.brokerInstanceId,
-    message: googleWorkspaceConnectMessage({ link, expiresAt: request.expiresAt }),
+    message: googleWorkspaceConnectMessage({
+      link,
+      expiresAt: connectorLink ? "" : request.expiresAt,
+      connectorPage: Boolean(connectorLink),
+    }),
   };
 }
 
-export function googleWorkspaceConnectMessage({ link = "", expiresAt = "" } = {}) {
+export function googleWorkspaceConnectMessage({ link = "", expiresAt = "", connectorPage = false } = {}) {
   return [
     "Google Workspace is optional. To start it from chat, send this exact command: /connect google",
-    "Then open this one-time link and choose exactly what Orkestr may access:",
+    connectorPage
+      ? "Then open this connector page to view Gmail status or start Google sign-in for this Orkestr instance:"
+      : "Then open this one-time link to approve Google sign-in for this Orkestr instance:",
     clean(link),
     "",
-    "Available capabilities: Gmail read, Gmail actions, Gmail send and drafts, Calendar read, Calendar actions, Drive selected files.",
-    "Drive access uses drive.file only; Orkestr will not request broad Drive access.",
+    "Requested provider: google_workspace. Requested service: gmail.",
     clean(expiresAt) ? `This one-time link expires at ${clean(expiresAt)}.` : "",
   ].filter((line) => line !== "").join("\n");
 }
@@ -300,8 +359,8 @@ export async function startGoogleWorkspaceOAuth(env = process.env, options = {})
   const connectId = clean(options.connectId || options.connect);
   const { scope, ledger, request } = await findConnectRequest(connectId, env);
   assertConnectRequestUsable(request);
-  const capabilities = normalizeGoogleWorkspaceCapabilities(options.capabilities, ["gmail_read"]);
-  const account = clean(options.account || request.account).toLowerCase();
+  const capabilities = normalizeGoogleWorkspaceCapabilities(options.capabilities, googleWorkspaceDefaultGmailCapabilities());
+  const account = clean(options.account).toLowerCase();
   const started = await startGmailOAuth(env, {
     userId: scope.userId || "",
     account,
@@ -312,6 +371,7 @@ export async function startGoogleWorkspaceOAuth(env = process.env, options = {})
     connectId,
     capabilities,
     scopes: googleWorkspaceScopesForCapabilities(capabilities),
+    ignoreConfiguredAccount: true,
     brokerInstanceId: request.brokerInstanceId,
     brokerTenantVmId: request.brokerTenantVmId,
     brokerTenantUserId: request.brokerTenantUserId,

@@ -74,9 +74,35 @@ function normalizeAllowedActions(value = []) {
   return [...new Set(items.map((item) => String(item || "").trim()).filter(Boolean))].slice(0, 50);
 }
 
+function normalizeAuthIntent(value = null) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const result = {};
+  for (const [key, raw] of Object.entries(value)) {
+    const cleanKey = String(key || "")
+      .trim()
+      .replace(/[^A-Za-z0-9._:-]+/g, "_")
+      .slice(0, 80);
+    if (!cleanKey) continue;
+    const cleanValue = String(raw || "").trim().slice(0, 500);
+    if (!cleanValue) continue;
+    result[cleanKey] = cleanValue;
+  }
+  return Object.keys(result).length ? result : null;
+}
+
 function sameStringList(left = [], right = []) {
   if (left.length !== right.length) return false;
   return left.every((item, index) => item === right[index]);
+}
+
+function sameAuthIntent(left = null, right = null) {
+  const normalizedLeft = normalizeAuthIntent(left);
+  const normalizedRight = normalizeAuthIntent(right);
+  if (!normalizedLeft && !normalizedRight) return true;
+  if (!normalizedLeft || !normalizedRight) return false;
+  const leftKeys = Object.keys(normalizedLeft).sort();
+  const rightKeys = Object.keys(normalizedRight).sort();
+  return sameStringList(leftKeys, rightKeys) && leftKeys.every((key) => normalizedLeft[key] === normalizedRight[key]);
 }
 
 function remoteAuthSignal(env = process.env, urls = publicUrlConfig(env), host = bindHost(env)) {
@@ -170,6 +196,7 @@ function publicChallenge(challenge = {}, now = Date.now()) {
     appSlug: normalized.appSlug || "",
     requestedPath: normalized.requestedPath || "",
     allowedActions: Array.isArray(normalized.allowedActions) ? normalized.allowedActions : [],
+    authIntent: normalizeAuthIntent(normalized.authIntent),
     approvedAt: normalized.approvedAt || "",
     approvedBy: normalized.approvedBy || "",
     rejectedAt: normalized.rejectedAt || "",
@@ -192,6 +219,7 @@ function publicSession(session = {}) {
     shareId: session.shareId || "",
     appSlug: session.appSlug || "",
     allowedActions: Array.isArray(session.allowedActions) ? session.allowedActions : [],
+    authIntent: normalizeAuthIntent(session.authIntent),
     expiresAt: session.expiresAt || "",
   };
 }
@@ -266,7 +294,8 @@ function sameChallengeScope(challenge = {}, scope = {}) {
     String(challenge.shareId || "") === String(scope.shareId || "") &&
     String(challenge.appSlug || "") === String(scope.appSlug || "") &&
     String(challenge.requestedPath || "") === String(scope.requestedPath || "") &&
-    sameStringList(normalizeAllowedActions(challenge.allowedActions || []), normalizeAllowedActions(scope.allowedActions || []));
+    sameStringList(normalizeAllowedActions(challenge.allowedActions || []), normalizeAllowedActions(scope.allowedActions || [])) &&
+    sameAuthIntent(challenge.authIntent || null, scope.authIntent || null);
 }
 
 function createdInsideWindow(challenge = {}, now = Date.now(), windowMs = 0) {
@@ -1038,7 +1067,7 @@ export async function securityStatus(env = process.env) {
   };
 }
 
-export async function createPairingChallenge({ request, env = process.env, userId = "", role = "", instanceId = "", shareId = "", appSlug = "", requestedPath = "", allowedActions = [], reusePending = false } = {}) {
+export async function createPairingChallenge({ request, env = process.env, userId = "", role = "", instanceId = "", shareId = "", appSlug = "", requestedPath = "", allowedActions = [], authIntent = null, reusePending = false } = {}) {
   const config = await readSecurityConfig(env);
   const normalizedRole = String(role || "").trim().toLowerCase() === "user" ? "user" : "admin";
   const normalizedUserId = userId ? normalizeUserId(userId) : "";
@@ -1047,6 +1076,7 @@ export async function createPairingChallenge({ request, env = process.env, userI
   const normalizedAppSlug = normalizeAppSlug(appSlug);
   const normalizedRequestedPath = String(requestedPath || "").slice(0, 1000);
   const normalizedAllowedActions = normalizeAllowedActions(allowedActions);
+  const normalizedAuthIntent = normalizeAuthIntent(authIntent);
   const requestedUserAgent = String(request?.headers?.["user-agent"] || "").slice(0, 240);
   const requestedIp = requestIp(request).slice(0, 80);
   const now = Date.now();
@@ -1058,6 +1088,7 @@ export async function createPairingChallenge({ request, env = process.env, userI
     appSlug: normalizedAppSlug,
     requestedPath: normalizedRequestedPath,
     allowedActions: normalizedAllowedActions,
+    authIntent: normalizedAuthIntent,
   };
   if (reusePending) {
     const reusable = activePendingChallenges(config, now)
@@ -1115,6 +1146,7 @@ export async function createPairingChallenge({ request, env = process.env, userI
     appSlug: normalizedAppSlug,
     requestedPath: normalizedRequestedPath,
     allowedActions: normalizedAllowedActions,
+    authIntent: normalizedAuthIntent,
   };
   await writeSecurityConfig({
     ...config,
@@ -1335,6 +1367,7 @@ export async function pairBrowser({ challengeId, userAgent = "", ip = "", env = 
     shareId: challenge.shareId || "",
     appSlug: challenge.appSlug || "",
     allowedActions: normalizeAllowedActions(challenge.allowedActions || []),
+    authIntent: normalizeAuthIntent(challenge.authIntent),
     expiresAt: new Date(Date.now() + sessionTtlMs).toISOString(),
   };
   await writeSecurityConfig({

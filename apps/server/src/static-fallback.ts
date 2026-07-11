@@ -28,7 +28,7 @@ export function registerStaticFallback(app: INestApplication): void {
     if (url.startsWith("/api/") || url.startsWith("/oauth/") || url.startsWith("/connect/") || url.startsWith("/google-marketing/oauth/")) {
       return next();
     }
-    if (url.startsWith("/desktop-share/")) {
+    if (isDesktopSharePagePath(url)) {
       return serveDesktopSharePage(response);
     }
     const sharedAppHandled = await maybeHandleSharedAppRoute(request, response, url);
@@ -74,6 +74,13 @@ export function registerStaticFallback(app: INestApplication): void {
     }
     return serveStaticPath(url || "/", response);
   });
+}
+
+function isDesktopSharePagePath(requestUrl: string) {
+  const pathname = new URL(requestUrl || "/", "http://localhost").pathname;
+  if (pathname.startsWith("/desktop-share/")) return true;
+  const parts = pathname.split("/").filter(Boolean);
+  return parts[0] === "i" && Boolean(parts[1]) && parts[2] === "app" && parts[3] === "desktop-share";
 }
 
 async function maybeHandleSharedAppRoute(request: any, response: any, requestUrl: string): Promise<boolean> {
@@ -245,10 +252,12 @@ function serveDesktopSharePage(response: any) {
   </main>
   <script>
     const parts = location.pathname.split('/').filter(Boolean);
-    const tenantShare = parts[0] === 'desktop-share' && parts[1] === 'tvm';
-    const tenantVmId = tenantShare ? decodeURIComponent(parts[2] || '') : '';
-    const subdomain = tenantShare ? decodeURIComponent(parts[3] || '') : (parts.length > 2 ? parts[1] : '');
-    const shareId = tenantShare ? decodeURIComponent(parts[4] || '') : (parts[parts.length - 1] || '');
+    const shareIndex = parts.indexOf('desktop-share');
+    const shareParts = shareIndex >= 0 ? parts.slice(shareIndex) : parts;
+    const tenantShare = shareParts[0] === 'desktop-share' && shareParts[1] === 'tvm';
+    const tenantVmId = tenantShare ? decodeURIComponent(shareParts[2] || '') : '';
+    const subdomain = tenantShare ? decodeURIComponent(shareParts[3] || '') : (shareParts.length > 2 ? shareParts[1] : '');
+    const shareId = tenantShare ? decodeURIComponent(shareParts[4] || '') : (shareParts[shareParts.length - 1] || '');
     const key = new URLSearchParams(location.search).get('key') || '';
     const challenge = document.getElementById('challenge');
     const statusNode = document.getElementById('status');

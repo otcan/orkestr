@@ -7,8 +7,10 @@ import test from "node:test";
 import { startServer } from "../apps/server/src/server.js";
 import { createGoogleWorkspaceConnectLink } from "../packages/connectors/src/google-workspace.js";
 import { __brokerInstanceRegistryTestInternals, registerBrokerInstance } from "../packages/core/src/broker-instance-registry.js";
-import { approvePairingChallenge, createPairingChallenge, pairBrowser, sessionCookieHeader } from "../packages/core/src/security.js";
+import { approvePairingChallenge, createPairingChallenge, listPairingChallenges, pairBrowser, sessionCookieHeader } from "../packages/core/src/security.js";
 import { userPrincipal } from "../packages/core/src/principal.js";
+import { createTenantVm } from "../packages/core/src/tenant-vm-registry.js";
+import { userDataPaths } from "../packages/storage/src/paths.js";
 
 const publicRuntimeEnvKeys = [
   "ORKESTR_PRIMARY_DOMAIN",
@@ -67,6 +69,30 @@ function assertPublicShell(html) {
   assert.match(html, /href="\/terms"/);
   assert.doesNotMatch(html, />Open app</);
   assert.doesNotMatch(html, /<ork-root(?:\s|>)/);
+}
+
+function assertConnectorIntentReturn(returnTo, { instanceId, connector = "gmail" } = {}) {
+  const target = new URL(returnTo, "http://localhost");
+  assert.equal(target.pathname, `/i/${instanceId}/app/connectors/${connector}`);
+  assert.equal(target.searchParams.get("mcp"), "tools/call");
+  assert.equal(target.searchParams.get("tool"), "orkestr_auth");
+  assert.equal(target.searchParams.get("service"), connector);
+  if (connector === "gmail") {
+    assert.equal(target.searchParams.get("provider"), "google_workspace");
+    assert.equal(target.searchParams.get("action"), "connect");
+  }
+  assert.equal(target.searchParams.get("instance_id"), instanceId);
+  assert.equal(target.searchParams.has("compact"), false);
+}
+
+function assertInstancePairingRedirect(response, { instanceId, returnPath = "", connector = "" } = {}) {
+  assert.equal(response.status, 302);
+  const redirect = new URL(response.headers.get("location") || "", "http://localhost");
+  assert.equal(redirect.pathname, "/setup/pairing");
+  assert.equal(redirect.searchParams.get("instanceId"), instanceId);
+  const returnTo = redirect.searchParams.get("return") || "";
+  if (connector) assertConnectorIntentReturn(returnTo, { instanceId, connector });
+  else assert.equal(returnTo, returnPath);
 }
 
 test("server serves the public site at root and Angular UI at app routes", async () => {
@@ -197,16 +223,11 @@ test("instance connect setup requires a registered broker UUID", async () => {
     const staleGmailReturn = await fetch(`http://127.0.0.1:${port}/i/${brokerRegistration.instanceId}/setup?return=%2Fi%2F${brokerRegistration.instanceId}%2Fapp%2Fsetup%2Fgmail%3Fcompact%3D1`, { redirect: "manual" });
     const unknown = await fetch(`http://127.0.0.1:${port}/i/demo-vm-001/setup`, { redirect: "manual" });
 
-    assert.equal(registered.status, 302);
-    assert.equal(registered.headers.get("location"), `/setup/pairing?instanceId=${brokerRegistration.instanceId}&return=%2Fi%2F${brokerRegistration.instanceId}%2Fapp%2F`);
-    assert.equal(gmailReturn.status, 302);
-    assert.equal(gmailReturn.headers.get("location"), `/setup/pairing?instanceId=${brokerRegistration.instanceId}&return=%2Fi%2F${brokerRegistration.instanceId}%2Fapp%2Fconnectors%2Fgmail`);
-    assert.equal(gmailConnector.status, 302);
-    assert.equal(gmailConnector.headers.get("location"), `/setup/pairing?instanceId=${brokerRegistration.instanceId}&return=%2Fi%2F${brokerRegistration.instanceId}%2Fapp%2Fconnectors%2Fgmail`);
-    assert.equal(staleCodexReturn.status, 302);
-    assert.equal(staleCodexReturn.headers.get("location"), `/setup/pairing?instanceId=${brokerRegistration.instanceId}&return=%2Fi%2F${brokerRegistration.instanceId}%2Fapp%2F`);
-    assert.equal(staleGmailReturn.status, 302);
-    assert.equal(staleGmailReturn.headers.get("location"), `/setup/pairing?instanceId=${brokerRegistration.instanceId}&return=%2Fi%2F${brokerRegistration.instanceId}%2Fapp%2Fconnectors%2Fgmail`);
+    assertInstancePairingRedirect(registered, { instanceId: brokerRegistration.instanceId, returnPath: `/i/${brokerRegistration.instanceId}/app/` });
+    assertInstancePairingRedirect(gmailReturn, { instanceId: brokerRegistration.instanceId, connector: "gmail" });
+    assertInstancePairingRedirect(gmailConnector, { instanceId: brokerRegistration.instanceId, connector: "gmail" });
+    assertInstancePairingRedirect(staleCodexReturn, { instanceId: brokerRegistration.instanceId, returnPath: `/i/${brokerRegistration.instanceId}/app/` });
+    assertInstancePairingRedirect(staleGmailReturn, { instanceId: brokerRegistration.instanceId, connector: "gmail" });
     assert.equal(unknown.status, 404);
   } finally {
     await new Promise((resolve) => server.close(resolve));
@@ -237,10 +258,16 @@ test("google workspace brokered connect links require instance and owner scoped 
     brokerTenantThreadId: "firat-thread",
     brokerTenantChatId: "firat-chat",
     brokerTenantAccountId: "sender",
+    brokerServerRequest: true,
   }, process.env);
-  const connectUrl = new URL(connect.link);
+  const connectorUrl = new URL(connect.link);
+  assert.equal(connectorUrl.origin, "https://connect.orkestr.de");
+  assert.equal(connectorUrl.pathname, "/i/instance-firat/app/connectors/gmail");
+  const connectUrl = new URL(connect.connectLink);
   assert.equal(connectUrl.origin, "https://connect.orkestr.de");
-  const connectPath = `${connectUrl.pathname}${connectUrl.search}`;
+  assert.equal(connectUrl.pathname, "/i/instance-firat/app/connectors/gmail");
+  assert.equal(connectUrl.searchParams.get("connect"), connect.connectId);
+  const connectPath = `/connect/google?connect=${encodeURIComponent(connect.connectId)}`;
   const startPath = `/connect/google/start?connect=${encodeURIComponent(connect.connectId)}&capability=gmail_read`;
   const server = await startServer({ port: 0, host: "127.0.0.1" });
   const { port } = server.address();
@@ -261,6 +288,28 @@ test("google workspace brokered connect links require instance and owner scoped 
     assert.equal(challengePayload.challenge.userId, "firat");
     assert.equal(challengePayload.challenge.role, "user");
     assert.equal(challengePayload.challenge.requestedPath, connectPath);
+    assert.deepEqual(challengePayload.challenge.allowedActions, [`orkestr_auth.google.connect:${connect.connectId}`]);
+    assert.equal(challengePayload.challenge.authIntent.tool, "orkestr_auth");
+    assert.equal(challengePayload.challenge.authIntent.mcp, "tools/call");
+    assert.equal(challengePayload.challenge.authIntent.service, "gmail");
+    assert.equal(challengePayload.challenge.authIntent.provider, "google_workspace");
+    assert.equal(challengePayload.challenge.authIntent.action, "connect");
+    assert.equal(challengePayload.challenge.authIntent.connectId, connect.connectId);
+    assert.equal(challengePayload.challenge.authIntent.instanceId, "instance-firat");
+    assert.equal(challengePayload.challenge.authIntent.tenantVmId, "firat-jobs-vm");
+    assert.equal(challengePayload.challenge.authIntent.userId, "firat");
+    assert.equal(challengePayload.challenge.authIntent.thread, "firat-thread");
+
+    const beforePreview = await listPairingChallenges({ env: process.env, includeExpired: true });
+    const previewResponse = await fetch(`http://127.0.0.1:${port}${connectPath}`, {
+      headers: { "user-agent": "facebookexternalhit/1.1" },
+      redirect: "manual",
+    });
+    const previewHtml = await previewResponse.text();
+    assert.equal(previewResponse.status, 200);
+    assert.match(previewHtml, /Open this link in a browser/);
+    const afterPreview = await listPairingChallenges({ env: process.env, includeExpired: true });
+    assert.equal(afterPreview.challenges.length, beforePreview.challenges.length);
 
     const startResponse = await fetch(`http://127.0.0.1:${port}${startPath}`, { redirect: "manual" });
     assert.equal(startResponse.status, 302);
@@ -284,7 +333,14 @@ test("google workspace brokered connect links require instance and owner scoped 
     assert.equal(regularStartRedirect.pathname, "/setup/pairing");
     assert.equal(regularStartRedirect.searchParams.get("return"), startPath);
 
-    const otherChallenge = await createPairingChallenge({ env: process.env, instanceId: "instance-firat", userId: "mallory", role: "user" });
+    const otherChallenge = await createPairingChallenge({
+      env: process.env,
+      instanceId: "instance-firat",
+      userId: "mallory",
+      role: "user",
+      allowedActions: [`orkestr_auth.google.connect:${connect.connectId}`],
+      authIntent: challengePayload.challenge.authIntent,
+    });
     await approvePairingChallenge(otherChallenge.challengeId, { env: process.env, approvedBy: "node:test" });
     const otherPaired = await pairBrowser({ challengeId: otherChallenge.challengeId, env: process.env });
     const otherCookie = sessionCookieHeader(otherPaired.token, process.env);
@@ -295,11 +351,26 @@ test("google workspace brokered connect links require instance and owner scoped 
 
     await approvePairingChallenge(challengeId, { env: process.env, approvedBy: "node:test" });
     const paired = await pairBrowser({ challengeId, env: process.env });
+    assert.deepEqual(paired.session.allowedActions, [`orkestr_auth.google.connect:${connect.connectId}`]);
+    assert.equal(paired.session.authIntent.tool, "orkestr_auth");
+    assert.equal(paired.session.authIntent.service, "gmail");
     const cookie = sessionCookieHeader(paired.token, process.env);
     const pairedResponse = await fetch(`http://127.0.0.1:${port}${connectPath}`, { headers: { cookie } });
     const pairedHtml = await pairedResponse.text();
     assert.equal(pairedResponse.status, 200);
     assert.match(pairedHtml, /Connect Google Workspace/);
+    assert.match(pairedHtml, /orkestr_auth/);
+    assert.match(pairedHtml, /google_workspace/);
+
+    const appResponse = await fetch(`http://127.0.0.1:${port}/app`, { headers: { cookie }, redirect: "manual" });
+    const appPayload = await appResponse.json();
+    assert.equal(appResponse.status, 403);
+    assert.equal(appPayload.error, "auth_intent_session_scope_denied");
+
+    const apiResponse = await fetch(`http://127.0.0.1:${port}/api/threads`, { headers: { cookie }, redirect: "manual" });
+    const apiPayload = await apiResponse.json();
+    assert.equal(apiResponse.status, 403);
+    assert.equal(apiPayload.error, "auth_intent_session_scope_denied");
   } finally {
     await new Promise((resolve) => server.close(resolve));
     restoreEnv(prior);
@@ -308,10 +379,23 @@ test("google workspace brokered connect links require instance and owner scoped 
 
 test("broker instance app path pairs on broker and proxies the VM WebUI", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-static-instance-app-"));
-  const priorHome = process.env.ORKESTR_HOME;
-  const priorAuthRequired = process.env.ORKESTR_AUTH_REQUIRED;
+  const envKeys = [
+    ...publicRuntimeEnvKeys,
+    "ORKESTR_HOME",
+    "GMAIL_OAUTH_CLIENT_ID",
+    "GMAIL_OAUTH_CLIENT_SECRET",
+    "GMAIL_OAUTH_REDIRECT_URI",
+    "GOOGLE_OAUTH_REDIRECT_URI",
+    "ORKESTR_GOOGLE_WORKSPACE_CONNECT_PUBLIC_URL",
+  ];
+  const prior = snapshotEnv(envKeys);
+  clearEnv(envKeys);
   process.env.ORKESTR_HOME = home;
   process.env.ORKESTR_AUTH_REQUIRED = "1";
+  process.env.ORKESTR_CONNECT_PUBLIC_URL = "https://connect.crawlerai.de";
+  process.env.ORKESTR_PUBLIC_AUTH_URL = "https://connect.orkestr.de/setup/pairing";
+  process.env.GMAIL_OAUTH_CLIENT_ID = "gmail-client";
+  process.env.GMAIL_OAUTH_REDIRECT_URI = "https://app.orkestr.de/oauth/gmail/callback";
   const upstreamRequests = [];
   const upstream = http.createServer((request, response) => {
     upstreamRequests.push({ url: request.url, headers: request.headers });
@@ -320,9 +404,34 @@ test("broker instance app path pairs on broker and proxies the VM WebUI", async 
       response.end(`<!doctype html><html><head><base href="/" /><link rel="icon" type="image/svg+xml" href="/favicon.svg" /></head><body><ork-root>Loading Orkestr</ork-root><script src="main.js"></script></body></html>`);
       return;
     }
+    if (String(request.url || "").startsWith("/connectors/gmail")) {
+      response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      response.end(`<!doctype html><html><head><base href="/" /></head><body><ork-root>Connect Gmail</ork-root><script src="main.js"></script></body></html>`);
+      return;
+    }
     if (request.url === "/api/version") {
       response.writeHead(200, { "content-type": "application/json" });
       response.end(JSON.stringify({ ok: true, name: "tenant-vm", generatedAt: "2026-07-04T00:00:00.000Z" }));
+      return;
+    }
+    if (request.url === "/api/setup/status") {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ ok: true, connectors: [{ id: "gmail", state: "connected" }], generatedAt: "2026-07-04T00:00:00.000Z" }));
+      return;
+    }
+    if (request.url === "/api/users/me") {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ ok: true, user: { id: "firat", role: "user" } }));
+      return;
+    }
+    if (request.method === "GET" && String(request.url || "").startsWith("/api/connectors/gmail/oauth/start")) {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ ok: true, authorizeUrl: "https://accounts.google.test/oauth" }));
+      return;
+    }
+    if (request.method === "DELETE" && request.url === "/api/connectors/gmail/auth") {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ ok: true, provider: "gmail", state: "disconnected" }));
       return;
     }
     if (request.url === "/redirect-home") {
@@ -346,13 +455,95 @@ test("broker instance app path pairs on broker and proxies the VM WebUI", async 
       endpointBaseUrl: `http://127.0.0.1:${upstreamPort}`,
     },
   });
+  await createTenantVm({
+    id: "firat-jobs-vm",
+    ownerUserId: "firat",
+    labels: { brokerInstanceId: brokerRegistration.instanceId },
+  }, process.env);
   const server = await startServer({ port: 0, host: "127.0.0.1" });
   const { port } = server.address();
   try {
+    const brokeredConnect = await createGoogleWorkspaceConnectLink({
+      principal: userPrincipal({ id: "firat", displayName: "Firat" }),
+      thread: {
+        id: "firat-thread",
+        name: "Firat Jobs",
+        binding: { chatId: "firat-chat", outboundAccountId: "sender" },
+      },
+      brokerInstanceId: brokerRegistration.instanceId,
+      brokerTenantUserId: "firat",
+      brokerTenantThreadId: "firat-thread",
+      brokerTenantThreadName: "Firat Jobs",
+      brokerTenantChatId: "firat-chat",
+      brokerTenantAccountId: "sender",
+      brokerServerRequest: true,
+    }, process.env);
+    const brokeredConnectUrl = new URL(brokeredConnect.connectLink);
+    assert.equal(brokeredConnectUrl.pathname, `/i/${brokerRegistration.instanceId}/app/connectors/gmail`);
+    assert.equal(brokeredConnectUrl.searchParams.get("connect"), brokeredConnect.connectId);
+    const rawBrokeredConnectUrl = new URL(`/connect/google?connect=${encodeURIComponent(brokeredConnect.connectId)}`, "https://connect.orkestr.de");
+    const topLevelBrokeredConnect = await fetch(
+      `http://127.0.0.1:${port}${rawBrokeredConnectUrl.pathname}${rawBrokeredConnectUrl.search}`,
+      { redirect: "manual" },
+    );
     const noSlash = await fetch(`http://127.0.0.1:${port}/i/${brokerRegistration.instanceId}/app`, { redirect: "manual" });
     const unpaired = await fetch(`http://127.0.0.1:${port}/i/${brokerRegistration.instanceId}/app/`, { redirect: "manual" });
     const unpairedLegacyGmailSetup = await fetch(`http://127.0.0.1:${port}/i/${brokerRegistration.instanceId}/app/setup/gmail`, { redirect: "manual" });
+    const unpairedLegacyGoogleConnect = await fetch(
+      `http://127.0.0.1:${port}/i/${brokerRegistration.instanceId}/app/connect/google?connect=legacy-connect-id&user_id=firat&thread=Firat%20Jobs`,
+      { redirect: "manual" },
+    );
     const unpairedApi = await fetch(`http://127.0.0.1:${port}/i/${brokerRegistration.instanceId}/app/api/threads`, { redirect: "manual" });
+    const staleOtherChallenge = await createPairingChallenge({
+      env: process.env,
+      instanceId: "stale-instance",
+      userId: "mallory",
+      role: "user",
+      requestedPath: "/i/stale-instance/app/connectors/gmail",
+      allowedActions: ["orkestr_auth.google.connect:stale-connect"],
+      authIntent: {
+        mcp: "tools/call",
+        tool: "orkestr_auth",
+        service: "gmail",
+        provider: "google_workspace",
+        action: "connect",
+        connectId: "stale-connect",
+        instanceId: "stale-instance",
+        userId: "mallory",
+      },
+    });
+    await approvePairingChallenge(staleOtherChallenge.challengeId, { approvedBy: "node:test", env: process.env });
+    const staleOtherPaired = await pairBrowser({ challengeId: staleOtherChallenge.challengeId, env: process.env });
+    const staleOtherCookie = sessionCookieHeader(staleOtherPaired.token, process.env);
+    const staleOtherConnect = await fetch(`http://127.0.0.1:${port}${brokeredConnectUrl.pathname}${brokeredConnectUrl.search}`, {
+      headers: { cookie: staleOtherCookie },
+      redirect: "manual",
+    });
+    const staleSameChallenge = await createPairingChallenge({
+      env: process.env,
+      instanceId: brokerRegistration.instanceId,
+      userId: "firat",
+      role: "user",
+      requestedPath: `/i/${brokerRegistration.instanceId}/app/connectors/gmail`,
+      allowedActions: ["orkestr_auth.google.connect:old-connect"],
+      authIntent: {
+        mcp: "tools/call",
+        tool: "orkestr_auth",
+        service: "gmail",
+        provider: "google_workspace",
+        action: "connect",
+        connectId: "old-connect",
+        instanceId: brokerRegistration.instanceId,
+        userId: "firat",
+      },
+    });
+    await approvePairingChallenge(staleSameChallenge.challengeId, { approvedBy: "node:test", env: process.env });
+    const staleSamePaired = await pairBrowser({ challengeId: staleSameChallenge.challengeId, env: process.env });
+    const staleSameCookie = sessionCookieHeader(staleSamePaired.token, process.env);
+    const staleSameConnect = await fetch(`http://127.0.0.1:${port}${brokeredConnectUrl.pathname}${brokeredConnectUrl.search}`, {
+      headers: { cookie: staleSameCookie },
+      redirect: "manual",
+    });
     const challenge = await createPairingChallenge({ env: process.env, instanceId: brokerRegistration.instanceId });
     await approvePairingChallenge(challenge.challengeId, { approvedBy: "node:test", env: process.env });
     const paired = await pairBrowser({ challengeId: challenge.challengeId, env: process.env });
@@ -362,18 +553,92 @@ test("broker instance app path pairs on broker and proxies the VM WebUI", async 
     const apiResponse = await fetch(`http://127.0.0.1:${port}/i/${brokerRegistration.instanceId}/app/api/version`, { headers: { cookie } });
     const apiPayload = await apiResponse.json();
     const redirectResponse = await fetch(`http://127.0.0.1:${port}/i/${brokerRegistration.instanceId}/app/redirect-home`, { headers: { cookie }, redirect: "manual" });
+    const authIntentChallenge = await createPairingChallenge({
+      env: process.env,
+      instanceId: brokerRegistration.instanceId,
+      userId: "firat",
+      role: "user",
+      requestedPath: `/i/${brokerRegistration.instanceId}/app/connectors/gmail`,
+      allowedActions: ["orkestr_auth.google.connect"],
+      authIntent: {
+        mcp: "tools/call",
+        tool: "orkestr_auth",
+        service: "gmail",
+        provider: "google_workspace",
+        action: "connect",
+        instanceId: brokerRegistration.instanceId,
+        userId: "firat",
+        account: "old-hint@example.com",
+      },
+    });
+    await approvePairingChallenge(authIntentChallenge.challengeId, { approvedBy: "node:test", env: process.env });
+    const authIntentPaired = await pairBrowser({ challengeId: authIntentChallenge.challengeId, env: process.env });
+    const authIntentCookie = sessionCookieHeader(authIntentPaired.token, process.env);
+    const intentParams = new URLSearchParams({
+      mcp: "tools/call",
+      tool: "orkestr_auth",
+      service: "gmail",
+      provider: "google_workspace",
+      action: "connect",
+      instance_id: brokerRegistration.instanceId,
+      auto: "0",
+    });
+    const intentConnectorResponse = await fetch(`http://127.0.0.1:${port}/i/${brokerRegistration.instanceId}/app/connectors/gmail?${intentParams}`, { headers: { cookie: authIntentCookie } });
+    const intentConnectorHtml = await intentConnectorResponse.text();
+    const intentSetupResponse = await fetch(`http://127.0.0.1:${port}/i/${brokerRegistration.instanceId}/app/api/setup/status`, { headers: { cookie: authIntentCookie } });
+    const intentSetupPayload = await intentSetupResponse.json();
+    const intentUserResponse = await fetch(`http://127.0.0.1:${port}/i/${brokerRegistration.instanceId}/app/api/users/me`, { headers: { cookie: authIntentCookie } });
+    const intentUserPayload = await intentUserResponse.json();
+    const intentStartResponse = await fetch(`http://127.0.0.1:${port}/i/${brokerRegistration.instanceId}/app/api/connectors/gmail/oauth/start`, { headers: { cookie: authIntentCookie } });
+    const intentStartPayload = await intentStartResponse.json();
+    const intentSavedState = JSON.parse(await fs.readFile(path.join(userDataPaths("firat", process.env).oauth, "gmail-state.json"), "utf8"));
+    const intentDisconnectResponse = await fetch(`http://127.0.0.1:${port}/i/${brokerRegistration.instanceId}/app/api/connectors/gmail/auth`, { method: "DELETE", headers: { cookie: authIntentCookie } });
+    const intentDisconnectPayload = await intentDisconnectResponse.json();
+    const intentThreadsResponse = await fetch(`http://127.0.0.1:${port}/i/${brokerRegistration.instanceId}/app/api/threads`, { headers: { cookie: authIntentCookie }, redirect: "manual" });
+    const intentThreadsPayload = await intentThreadsResponse.json();
+    const parentAppResponse = await fetch(`http://127.0.0.1:${port}/app`, { headers: { cookie: authIntentCookie }, redirect: "manual" });
+    const parentAppPayload = await parentAppResponse.json();
 
+    assert.equal(topLevelBrokeredConnect.status, 302);
+    {
+      const brokeredRedirect = new URL(topLevelBrokeredConnect.headers.get("location") || "", "http://localhost");
+      assert.equal(brokeredRedirect.pathname, `/i/${brokerRegistration.instanceId}/app/connectors/gmail`);
+      assert.equal(brokeredRedirect.searchParams.get("connect"), brokeredConnect.connectId);
+      assert.equal(brokeredRedirect.searchParams.get("user_id"), "firat");
+      assert.equal(brokeredRedirect.searchParams.get("thread"), "Firat Jobs");
+    }
     assert.equal(noSlash.status, 302);
     assert.equal(noSlash.headers.get("location"), `/i/${brokerRegistration.instanceId}/app/`);
     assert.equal(unpaired.status, 302);
     assert.equal(unpaired.headers.get("location"), `/setup/pairing?instanceId=${brokerRegistration.instanceId}&return=%2Fi%2F${brokerRegistration.instanceId}%2Fapp%2F`);
-    assert.equal(unpairedLegacyGmailSetup.status, 302);
-    assert.equal(
-      unpairedLegacyGmailSetup.headers.get("location"),
-      `/setup/pairing?instanceId=${brokerRegistration.instanceId}&return=%2Fi%2F${brokerRegistration.instanceId}%2Fapp%2Fconnectors%2Fgmail`,
-    );
+    assertInstancePairingRedirect(unpairedLegacyGmailSetup, { instanceId: brokerRegistration.instanceId, connector: "gmail" });
+    assert.equal(unpairedLegacyGoogleConnect.status, 302);
+    {
+      const legacyRedirect = new URL(unpairedLegacyGoogleConnect.headers.get("location") || "", "http://localhost");
+      assert.equal(legacyRedirect.pathname, `/i/${brokerRegistration.instanceId}/app/connectors/gmail`);
+      assert.equal(legacyRedirect.searchParams.get("mcp"), "tools/call");
+      assert.equal(legacyRedirect.searchParams.get("tool"), "orkestr_auth");
+      assert.equal(legacyRedirect.searchParams.get("service"), "gmail");
+      assert.equal(legacyRedirect.searchParams.get("provider"), "google_workspace");
+      assert.equal(legacyRedirect.searchParams.get("action"), "connect");
+      assert.equal(legacyRedirect.searchParams.get("instance_id"), brokerRegistration.instanceId);
+      assert.equal(legacyRedirect.searchParams.get("user_id"), "firat");
+      assert.equal(legacyRedirect.searchParams.get("thread"), "Firat Jobs");
+      assert.equal(legacyRedirect.searchParams.get("connect"), "legacy-connect-id");
+      assert.equal(legacyRedirect.searchParams.get("auto"), "0");
+    }
     assert.equal(unpairedApi.status, 401);
     assert.equal(await unpairedApi.text(), "broker_instance_pairing_required");
+    for (const [name, response] of [["other", staleOtherConnect], ["same", staleSameConnect]]) {
+      const body = await response.text();
+      assert.equal(response.status, 302, `${name}: ${body}`);
+      const redirect = new URL(response.headers.get("location") || "", "http://localhost");
+      assert.equal(redirect.pathname, "/setup/pairing");
+      assert.equal(redirect.searchParams.get("instanceId"), brokerRegistration.instanceId);
+      const returnUrl = new URL(redirect.searchParams.get("return") || "", "http://localhost");
+      assert.equal(returnUrl.pathname, `/i/${brokerRegistration.instanceId}/app/connectors/gmail`);
+      assert.equal(returnUrl.searchParams.get("connect"), brokeredConnect.connectId);
+    }
     assert.equal(htmlResponse.status, 200);
     assert.match(html, new RegExp(`<base href="/i/${brokerRegistration.instanceId}/app/"`));
     assert.match(html, new RegExp(`href="/i/${brokerRegistration.instanceId}/app/favicon\\.svg"`));
@@ -381,6 +646,35 @@ test("broker instance app path pairs on broker and proxies the VM WebUI", async 
     assert.equal(apiPayload.name, "tenant-vm");
     assert.equal(redirectResponse.status, 302);
     assert.equal(redirectResponse.headers.get("location"), `/i/${brokerRegistration.instanceId}/app/`);
+    assert.equal(intentConnectorResponse.status, 200);
+    assert.match(intentConnectorHtml, /Connect Gmail/);
+    assert.equal(intentSetupResponse.status, 200);
+    assert.equal(intentSetupPayload.connectors[0].state, "connected");
+    assert.equal(intentUserResponse.status, 200);
+    assert.equal(intentUserPayload.user.id, "firat");
+    assert.equal(intentStartResponse.status, 200);
+    assert.equal(intentStartPayload.provider, "google_workspace");
+    assert.ok(intentStartPayload.connectId);
+    assert.deepEqual(intentStartPayload.capabilities, ["gmail_read", "gmail_actions", "gmail_send"]);
+    const intentAuthorizeUrl = new URL(intentStartPayload.authorizeUrl);
+    const intentScopes = String(intentAuthorizeUrl.searchParams.get("scope") || "").split(/\s+/g);
+    assert.equal(intentAuthorizeUrl.origin, "https://accounts.google.com");
+    assert.equal(intentAuthorizeUrl.searchParams.get("redirect_uri"), "https://app.orkestr.de/oauth/gmail/callback");
+    assert.equal(intentAuthorizeUrl.searchParams.get("login_hint"), null);
+    assert.doesNotMatch(intentStartPayload.state, /^tenant:/);
+    assert.equal(intentSavedState.state, intentStartPayload.state);
+    assert.equal(intentSavedState.tenantVmId, "");
+    assert.equal(intentSavedState.brokerTenantVmId, "firat-jobs-vm");
+    assert.ok(intentScopes.includes("https://www.googleapis.com/auth/gmail.readonly"));
+    assert.ok(intentScopes.includes("https://www.googleapis.com/auth/gmail.modify"));
+    assert.ok(intentScopes.includes("https://www.googleapis.com/auth/gmail.send"));
+    assert.ok(intentScopes.includes("https://www.googleapis.com/auth/gmail.compose"));
+    assert.equal(intentDisconnectResponse.status, 200);
+    assert.equal(intentDisconnectPayload.provider, "gmail");
+    assert.equal(intentThreadsResponse.status, 403);
+    assert.equal(intentThreadsPayload.error, "auth_intent_session_scope_denied");
+    assert.equal(parentAppResponse.status, 403);
+    assert.equal(parentAppPayload.error, "auth_intent_session_scope_denied");
     assert.equal(upstreamRequests.some((item) => item.url === "/api/version"), true);
     assert.equal(
       upstreamRequests.some((item) => item.headers["x-orkestr-broker-instance-id"] === brokerRegistration.instanceId),
@@ -390,13 +684,14 @@ test("broker instance app path pairs on broker and proxies the VM WebUI", async 
       upstreamRequests.some((item) => typeof item.headers["x-orkestr-broker-auth"] === "string" && item.headers["x-orkestr-broker-auth"]),
       true,
     );
+    assert.equal(
+      upstreamRequests.some((item) => String(item.url || "").startsWith("/api/connectors/gmail/oauth/start")),
+      false,
+    );
   } finally {
     await new Promise((resolve) => server.close(resolve));
     await new Promise((resolve) => upstream.close(resolve));
-    if (priorHome === undefined) delete process.env.ORKESTR_HOME;
-    else process.env.ORKESTR_HOME = priorHome;
-    if (priorAuthRequired === undefined) delete process.env.ORKESTR_AUTH_REQUIRED;
-    else process.env.ORKESTR_AUTH_REQUIRED = priorAuthRequired;
+    restoreEnv(prior);
   }
 });
 
@@ -1047,10 +1342,10 @@ test("web shell exposes runtime surface and Codex mode shortcuts", async () => {
   assert.match(template, /class="runtime-surface-toggle"/);
   assert.match(template, /switchRuntimeSurface\('api'\)/);
   assert.match(template, /switchRuntimeSurface\('terminal'\)/);
-  assert.match(template, /switchRuntimeSurface\('agent'\)/);
+  assert.doesNotMatch(template, /switchRuntimeSurface\('agent'\)/);
   assert.match(template, /\/switch api/);
   assert.match(template, /\/switch term/);
-  assert.match(template, /\/switch agent/);
+  assert.doesNotMatch(template, /\/switch agent/);
   assert.match(template, /codexModeShortcutTitle\(thread\)/);
   assert.match(template, /Switch to Code mode with \/code/);
   assert.match(template, /Switch to Plan mode with \/plan/);
@@ -1066,11 +1361,12 @@ test("web shell exposes runtime surface and Codex mode shortcuts", async () => {
   assert.match(component, /version\.buildId \|\| version\.releaseId/);
   assert.match(component, /deploymentTrackLabel\(\): string/);
   assert.match(component, /deploymentVersionTitle\(\): string/);
-  assert.match(component, /switchRuntimeSurface\(runtime: "api" \| "terminal" \| "agent"\): Promise<void>/);
-  assert.match(component, /runtimeSurfaceSwitchDisabled\(runtime: "api" \| "terminal" \| "agent"\): boolean/);
+  assert.match(component, /switchRuntimeSurface\(runtime: "api" \| "terminal"\): Promise<void>/);
+  assert.match(component, /runtimeSurfaceSwitchDisabled\(runtime: "api" \| "terminal"\): boolean/);
   assert.match(component, /runtimeSurfaceShortcutTitle\(thread: ThreadSummary \| null\): string/);
   assert.match(component, /Shortcuts: \/code, \/plan/);
-  assert.match(component, /Switch: \/switch api, \/switch terminal, \/switch agent/);
+  assert.match(component, /Switch: \/switch api, \/switch terminal/);
+  assert.doesNotMatch(component, /Switch: \/switch api, \/switch terminal, \/switch agent/);
   assert.match(styles, /\.runtime-surface-pill/);
   assert.match(styles, /\.runtime-surface-toggle/);
   assert.match(styles, /\.runtime-surface-pill\.codex-api/);
@@ -1243,29 +1539,69 @@ test("web shell exposes a user connector management page", async () => {
   assert.match(connectorsComponent, /this\.api\.setupStatus\(\)/);
   assert.match(connectorsComponent, /this\.api\.currentUser\(\)/);
   assert.match(connectorsComponent, /Promise\.allSettled/);
+  assert.match(connectorsComponent, /if \(!this\.setupStatus\) return \[\]/);
   assert.match(connectorsComponent, /scheduleRetryIfNeeded\(\): void/);
   assert.match(connectorsComponent, /maybeAutoStartRouteLogin\(\): void/);
+  assert.match(connectorsComponent, /if \(!this\.setupStatus\) return/);
   assert.match(connectorsComponent, /startGmail\(options: \{ autoRedirect\?: boolean \} = \{\}\)/);
+  assert.match(connectorsComponent, /disconnectGmail\(\): Promise<void>/);
+  assert.match(connectorsComponent, /connectorConnected\(connector: ConnectorStatus\): boolean/);
+  assert.match(connectorsComponent, /connectedAccount\(connector: ConnectorStatus\): string/);
+  assert.match(connectorsComponent, /connectedCapabilityLabels\(connector: ConnectorStatus\): string\[\]/);
   assert.match(connectorsComponent, /globalThis\.location\.href = this\.gmailAuth\.authorizeUrl/);
+  assert.match(connectorsComponent, /this\.connectorStatus\("gmail"\)\.state/);
+  assert.match(connectorsComponent, /=== "connected"\) return/);
+  assert.match(connectorsComponent, /connectorIntentActive\(\): boolean/);
+  assert.match(connectorsComponent, /connectorIntentMethod\(\): string/);
+  assert.match(connectorsComponent, /connectorIntentTool\(\): string/);
+  assert.match(connectorsComponent, /connectorIntentProvider\(\): string/);
+  assert.match(connectorsComponent, /connectorIntentAction\(\): string/);
+  assert.match(connectorsComponent, /connectorIntentServiceLabel\(\): string/);
+  assert.match(connectorsComponent, /connectorIntentAccountLabel\(\): string/);
+  assert.match(connectorsComponent, /connectorIntentUserLabel\(\): string/);
+  assert.match(connectorsComponent, /connectorIntentThreadLabel\(\): string/);
+  assert.match(connectorsComponent, /routeQueryParam\(name: string\): string/);
   assert.match(connectorsComponent, /void this\.load\(false\)/);
   assert.match(connectorsComponent, /this\.api\.startGmailOAuth\(this\.gmailAccount\)/);
+  assert.match(connectorsComponent, /this\.api\.disconnectGmailAuth\(\)/);
   assert.match(connectorsComponent, /this\.api\.startOutlookOAuth\(this\.outlookAccount\)/);
   assert.match(connectorsComponent, /private readonly connectorOrder = \["whatsapp", "gmail", "outlook", "jira", "shopify", "linkedin", "browsers"\]/);
   assert.match(connectorsComponent, /private appBasePath\(\): string/);
   assert.match(connectorsComponent, /private locationPathParts\(\): string\[\]/);
   assert.match(connectorsComponent, /deskPath\(\): string/);
   assert.match(connectorsTemplate, /\[class\.login-only\]="loginOnly\(\)"/);
+  assert.match(connectorsTemplate, /\[attr\.data-mcp\]="connectorIntentActive\(\) \? connectorIntentMethod\(\) : null"/);
+  assert.match(connectorsTemplate, /\[attr\.data-service\]="connectorIntentActive\(\) \? 'gmail' : null"/);
+  assert.match(connectorsTemplate, /\[attr\.data-provider\]="connectorIntentActive\(\) \? connectorIntentProvider\(\) : null"/);
+  assert.match(connectorsTemplate, /\[attr\.data-action\]="connectorIntentActive\(\) \? connectorIntentAction\(\) : null"/);
+  assert.match(connectorsTemplate, /Connection context/);
+  assert.match(connectorsTemplate, /connectorIntentTool\(\)/);
+  assert.match(connectorsTemplate, /Service/);
+  assert.match(connectorsTemplate, /Provider/);
+  assert.match(connectorsTemplate, /Action/);
+  assert.match(connectorsTemplate, /User/);
+  assert.match(connectorsTemplate, /Thread/);
+  assert.match(connectorsTemplate, /connector\.id === "gmail" && !connectorConnected\(connector\)/);
+  assert.match(connectorsTemplate, /connectorIntentTargetInstanceId\(\)/);
   assert.match(connectorsTemplate, /loginOnly\(\) \? "Secure sign-in" : "Connectors"/);
+  assert.match(connectorsTemplate, /Google account/);
+  assert.match(connectorsTemplate, /connectedAccount\(connector\)/);
+  assert.match(connectorsTemplate, /Delete Gmail auth/);
+  assert.match(connectorsTemplate, /disconnectGmail\(\)/);
+  assert.match(connectorsTemplate, /class="connector-details"/);
   assert.match(connectorsTemplate, /name="user-gmail-account"/);
   assert.match(connectorsTemplate, /name="user-outlook-account"/);
   assert.match(connectorsTemplate, /Open Gmail sign-in/);
   assert.match(connectorsTemplate, /Open Microsoft sign-in/);
   assert.match(connectorsTemplate, /\[href\]="deskPath\(\)"/);
   assert.match(api, /startGmailOAuth\(account = ""\)/);
+  assert.match(api, /disconnectGmailAuth\(\)/);
   assert.match(api, /startOutlookOAuth\(account = ""\)/);
   assert.match(styles, /\.user-connector-grid/);
   assert.match(styles, /\.connector-login-shell/);
   assert.match(styles, /\.user-connectors-page\.login-only \.user-connector-grid/);
+  assert.match(styles, /\.connector-intent/);
+  assert.match(styles, /\.connector-details/);
   assert.match(styles, /\.connector-action/);
   assert.match(styles, /\.connector-device-code/);
 });
@@ -1367,8 +1703,10 @@ test("mobile desktop shell wraps noVNC with phone-first controls", async () => {
   assert.match(sharePage, /mobileDestination/);
   assert.match(sharePage, /id="mobile"/);
   assert.match(sharePage, /const desktopUrl = body\.desktopUrl/);
-  assert.match(sharePage, /const tenantShare = parts\[0\] === 'desktop-share' && parts\[1\] === 'tvm'/);
-  assert.match(sharePage, /const subdomain = tenantShare \? decodeURIComponent\(parts\[3\]/);
+  assert.match(sharePage, /const shareIndex = parts\.indexOf\('desktop-share'\)/);
+  assert.match(sharePage, /const shareParts = shareIndex >= 0 \? parts\.slice\(shareIndex\) : parts/);
+  assert.match(sharePage, /const tenantShare = shareParts\[0\] === 'desktop-share' && shareParts\[1\] === 'tvm'/);
+  assert.match(sharePage, /const subdomain = tenantShare \? decodeURIComponent\(shareParts\[3\]/);
   assert.match(sharePage, /\/api\/tenant-vms\//);
   assert.match(sharePage, /subdomain \? '&subdomain='/);
   assert.match(sharePage, /desktop\/.*\/mobile/);

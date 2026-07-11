@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { appendEvent, readJson, writeJson } from "../../storage/src/store.js";
 import { connectorFile, connectorScopePaths } from "./connector-storage.js";
-import { startGmailOAuth } from "./gmail.js";
+import { enrichGmailTokenAccount, startGmailOAuth } from "./gmail.js";
 import {
   googleWorkspaceCapabilityLabels,
   googleWorkspaceCapabilitiesForScopes,
@@ -62,12 +62,14 @@ function pendingFile(provider, scope) {
 }
 
 function publicGmailTokenDetails(token = {}) {
-  const capabilities = Array.isArray(token.capabilities) && token.capabilities.length
-    ? normalizeGoogleWorkspaceCapabilities(token.capabilities, [])
-    : googleWorkspaceCapabilitiesForScopes(token.scope || token.grantedScopes || "", []);
   const grantedScopes = Array.isArray(token.grantedScopes)
     ? token.grantedScopes.map(clean).filter(Boolean)
     : splitScopes(token.scope);
+  const capabilities = grantedScopes.length
+    ? googleWorkspaceCapabilitiesForScopes(grantedScopes, [])
+    : Array.isArray(token.capabilities) && token.capabilities.length
+      ? normalizeGoogleWorkspaceCapabilities(token.capabilities, [])
+      : [];
   return {
     capabilities,
     capabilityLabels: googleWorkspaceCapabilityLabels(capabilities),
@@ -200,8 +202,19 @@ export async function connectorAuthStatus(providerId = "", env = process.env, op
     readJson(errorFile(provider, scope), {}),
     readJson(tokenPath, {}),
   ]);
+  let statusToken = token;
+  let account = clean(token.account || pending.account || oauthState.account);
+  if (provider === "gmail" && tokenExists && !account) {
+    const resolved = await enrichGmailTokenAccount(env, options.fetchImpl || fetch, options).catch(() => null);
+    if (resolved?.account) {
+      account = resolved.account;
+      statusToken = resolved.token || { ...token, account };
+    }
+  }
+  const gmailDetails = provider === "gmail" && tokenExists ? publicGmailTokenDetails(statusToken) : {};
+  const gmailHasGrantedCapabilities = provider !== "gmail" || !tokenExists || (Array.isArray(gmailDetails.capabilities) && gmailDetails.capabilities.length > 0);
   const state = tokenExists
-    ? "connected"
+    ? gmailHasGrantedCapabilities ? "connected" : "partial"
     : clean(error.message)
       ? "broken"
       : clean(pending.pendingId || pending.deviceCode)
@@ -217,17 +230,19 @@ export async function connectorAuthStatus(providerId = "", env = process.env, op
     ok: true,
     provider,
     state,
-    connected: tokenExists,
+    connected: tokenExists && gmailHasGrantedCapabilities,
     pending: state === "pending" || state === "authorization_url_ready",
-    account: clean(pending.account || oauthState.account),
+    account,
     shop: clean(oauthState.shop),
     parentConnector,
     userConnectionRequired: true,
-    ...(provider === "gmail" && tokenExists ? publicGmailTokenDetails(token) : {}),
+    ...(provider === "gmail" && tokenExists ? gmailDetails : {}),
     error: clean(error.message),
     updatedAt: clean(error.updatedAt),
     message: tokenExists
-      ? `${definition?.label || provider} is connected for this user.`
+      ? gmailHasGrantedCapabilities
+        ? `${definition?.label || provider} is connected for this user.`
+        : `${definition?.label || provider} token is present, but no Google Workspace capabilities were granted. Reconnect and select the required access.`
       : parentConnector.parentAppConfigured || parentConnector.parentAppPartiallyConfigured
         ? `${definition?.label || provider} is not connected for this user yet.`
         : `${definition?.label || provider} parent app configuration is missing.`,

@@ -4120,7 +4120,7 @@ test("Codex app-server interrupt reads live active turns before reporting no act
   }
 });
 
-test("Codex app-server /now interrupts the active turn and starts the next turn", async () => {
+test("Codex app-server /now steers the active turn without interrupting", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-wa-now-"));
   const fake = await createFakeCodex(home);
   const env = {
@@ -4141,6 +4141,19 @@ test("Codex app-server /now interrupts the active turn and starts the next turn"
         activeTurnId: "active-turn",
       },
     }, env);
+    const initialState = JSON.parse(await fs.readFile(fake.stateFile, "utf8"));
+    const codexThread = initialState.threads.find((item) => item.id === started.thread.codexThreadId);
+    codexThread.status = { type: "active", activeFlags: ["running"] };
+    codexThread.activeTurnId = "active-turn";
+    codexThread.turns.push({
+      id: "active-turn",
+      threadId: started.thread.codexThreadId,
+      status: "inProgress",
+      items: [
+        { type: "userMessage", id: "active-user", content: [{ type: "text", text: "previous active turn" }] },
+      ],
+    });
+    await fs.writeFile(fake.stateFile, JSON.stringify(initialState, null, 2));
     await markAppServerTurnActive(started.thread, env);
     const input = await enqueueThreadInput(started.thread.id, {
       text: "/now urgent next turn",
@@ -4152,17 +4165,24 @@ test("Codex app-server /now interrupts the active turn and starts the next turn"
     const delivered = await deliverCodexAppServerPendingInputs(await getThread(started.thread.id, env), env);
     const messages = await listThreadMessages(started.thread.id, env);
     const completed = messages.find((message) => message.id === input.id);
-    const reply = messages.find((message) => message.source === "codex-app-server" && /Reply to: urgent next turn/.test(message.text));
     const rawState = JSON.parse(await fs.readFile(fake.stateFile, "utf8"));
+    const steerCall = rawState.calls.find((call) => call.method === "turn/steer");
+    const activeTurn = rawState.threads.find((item) => item.id === started.thread.codexThreadId).turns.find((turn) => turn.id === "active-turn");
 
     assert.deepEqual(delivered, [input.id]);
     assert.equal(completed.text, "urgent next turn");
     assert.equal(completed.state, "completed");
-    assert.equal(completed.observedVia, "codex_app_server_turn_start");
-    assert.ok(reply);
-    assert.ok(rawState.calls.some((call) => call.method === "turn/interrupt" && call.params.turnId === "active-turn"));
-    assert.ok(rawState.calls.some((call) => call.method === "turn/start"));
-    assert.ok(!rawState.calls.some((call) => call.method === "turn/steer"));
+    assert.equal(completed.observedVia, "codex_app_server_turn_steer");
+    assert.equal(completed.codexDeliveryMode, "instant_steer");
+    assert.equal(completed.steerActiveTurn, true);
+    assert.equal(steerCall.params.expectedTurnId, "active-turn");
+    assert.equal(steerCall.params.input[0].text, "urgent next turn");
+    assert.ok(activeTurn.items.some((item) => item.id === "steer_active-turn"));
+    assert.ok(!rawState.calls.some((call) => call.method === "turn/interrupt" && call.params.turnId === "active-turn"));
+    assert.ok(!rawState.calls.some((call) =>
+      call.method === "turn/start" &&
+      call.params?.input?.some((item) => item.text === "urgent next turn")
+    ));
   } finally {
     stopCodexAppServerClients();
   }

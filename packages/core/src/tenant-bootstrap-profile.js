@@ -43,6 +43,25 @@ function safeWorkspacePath(value = "", fallback = "") {
   return normalized.startsWith("/") ? normalized : fallback;
 }
 
+function safeUrl(value = "", { allowAboutBlank = false, localOnly = false } = {}) {
+  const raw = clean(value);
+  if (!raw) return "";
+  if (allowAboutBlank && raw === "about:blank") return raw;
+  let parsed;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    return "";
+  }
+  if (!["http:", "https:", "ws:", "wss:"].includes(parsed.protocol)) return "";
+  if (parsed.username || parsed.password) return "";
+  if (localOnly) {
+    const host = parsed.hostname.toLowerCase();
+    if (!["127.0.0.1", "localhost", "::1", "[::1]"].includes(host)) return "";
+  }
+  return parsed.toString();
+}
+
 function normalizeReasoningEffort(value = "") {
   const effort = clean(value).toLowerCase();
   return new Set(["none", "minimal", "low", "medium", "high", "xhigh"]).has(effort)
@@ -80,6 +99,11 @@ function normalizeDesks(values = [], vm) {
         slug,
         label: clean(source.label || source.title) || titleFromSlug(slug),
         connector: safeId(source.connector || (slug === "linkedin" ? "linkedin" : "desktop"), "desktop"),
+        purpose: clean(source.purpose || source.notes || source.description),
+        startUrl: safeUrl(source.startUrl || source.start_url || source.url, { allowAboutBlank: true }),
+        url: safeUrl(source.deskUrl || source.desk_url || source.publicUrl || source.public_url),
+        cdpUrl: safeUrl(source.cdpUrl || source.cdp_url || source.localCdpUrl || source.local_cdp_url, { localOnly: true }),
+        workspacePath: safeWorkspacePath(source.workspacePath || source.workspace || source.runtimeWorkspace, ""),
         enabled: source.enabled !== false,
       };
     })

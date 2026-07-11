@@ -269,6 +269,7 @@ test("connector prompt push sanitizer receives scoped connector capabilities", a
   await fs.writeFile(path.join(paths.secrets, "gmail-token.json"), JSON.stringify({
     accessToken: "alice-gmail-access",
     refreshToken: "alice-gmail-refresh",
+    scope: "https://www.googleapis.com/auth/gmail.readonly",
     expiresAt: Math.floor(Date.now() / 1000) + 3600,
   }), "utf8");
   await createThread({ id: "alice-thread", name: "Alice Thread", ownerUserId: "alice" }, env);

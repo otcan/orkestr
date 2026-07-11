@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import fs from "node:fs";
 import path from "node:path";
 import readline from "node:readline";
 import { fileURLToPath } from "node:url";
@@ -51,6 +52,7 @@ export async function runCli(argv = process.argv.slice(2), context = {}) {
     if (command === "api-session" || command === "api") return await apiSessionCommand(args, ctx);
     if (command === "whatsapp" || command === "wa") return await whatsappCommand(args, ctx);
     if (command === "timers" || command === "timer") return await timersCommand(args, ctx);
+    if (command === "jobs" || command === "job") return await jobsCommand(args, ctx);
     if (command === "connect") return await connectCommand(args, ctx);
     if (command === "security") return await securityCommand(args, ctx);
     if (command === "desktop" || command === "desktops") return await desktopCommand(args, ctx);
@@ -630,6 +632,13 @@ async function timersCommand(argv, ctx) {
   if (subcommand === "doctor") return doctorTimersCommand(rest, ctx);
   if (subcommand === "run") return runTimerCommand(rest, ctx);
   throw new Error("Usage: orkestr timers [list|doctor|run <timer-id>] [--json]");
+}
+
+async function jobsCommand(argv, ctx) {
+  const subcommand = argv[0]?.startsWith("--") ? "run" : argv[0] || "run";
+  const rest = subcommand === "run" && argv[0]?.startsWith("--") ? argv : argv.slice(1);
+  if (subcommand === "run" || subcommand === "poll") return runJobsCommand(rest, ctx);
+  throw new Error("Usage: orkestr jobs run [--owner-user-id user] [--target-thread thread] [--max-results N] [--json]");
 }
 
 async function whatsappCommand(argv, ctx) {
@@ -1281,6 +1290,44 @@ async function runTimerCommand(argv, ctx) {
   return 0;
 }
 
+async function runJobsCommand(argv, ctx) {
+  const json = argv.includes("--json");
+  const maxResults = flagValue(argv, "--max-results") || flagValue(argv, "--max") || "";
+  const body = {
+    ownerUserId: flagValue(argv, "--owner-user-id") || flagValue(argv, "--user-id") || "",
+    targetThreadId: flagValue(argv, "--target-thread") || flagValue(argv, "--thread") || "",
+    query: flagValue(argv, "--query") || "",
+    gmailSource: flagValue(argv, "--gmail-source") || "",
+    maxResults: maxResults ? Number(maxResults) : undefined,
+    fitThreshold: flagValue(argv, "--fit-threshold") || "",
+    present: argv.includes("--no-present") ? false : true,
+    gogFallback: argv.includes("--no-gog-fallback") ? false : undefined,
+  };
+  for (const key of Object.keys(body)) {
+    if (body[key] === "" || body[key] === undefined || Number.isNaN(body[key])) delete body[key];
+  }
+  const payload = await requestJson("/api/jobs/run", {
+    ...ctx,
+    method: "POST",
+    body,
+  });
+  if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+  else {
+    const lines = [
+      "Gmail jobs poll completed",
+      `Collected: ${Number(payload.collected || 0)}`,
+      `Created: ${Number(payload.upserted?.created?.length || 0)}`,
+      `Classified: ${Number(payload.classified?.classified?.length || 0)}`,
+      `Presented: ${Number(payload.presentation?.presented?.length || 0)}`,
+    ];
+    if (payload.presentation?.message?.text) {
+      lines.push("", String(payload.presentation.message.text));
+    }
+    ctx.stdout.write(lines.join("\n") + "\n");
+  }
+  return payload?.ok === false ? 1 : 0;
+}
+
 async function securityCommand(argv, ctx) {
   const subcommand = argv[0]?.startsWith("--") ? "challenges" : argv[0] || "challenges";
   const rest = subcommand === "challenges" && argv[0]?.startsWith("--") ? argv : argv.slice(1);
@@ -1402,6 +1449,15 @@ async function updateInstallCommand(argv, ctx) {
     : [...(checkOnly ? ["--check-only"] : [])];
   const label = release && !inPlace ? "versioned release update" : "in-place update";
   if (!argv.includes("--json")) ctx.stdout.write(`Starting Orkestr ${label}${ref ? ` for ${ref}` : ""}...\n`);
+  if (release && !inPlace) {
+    const systemdRun = releaseUpdateSystemdRunCommand(script, args, env);
+    if (systemdRun) {
+      if (!argv.includes("--json")) {
+        ctx.stdout.write(`Running release outside ${systemdRun.serviceUnit}; follow logs with: journalctl -u ${systemdRun.unitName} -f\n`);
+      }
+      return spawnInherited(ctx.spawnImpl, systemdRun.command, systemdRun.args, { env });
+    }
+  }
   return spawnInherited(ctx.spawnImpl, "bash", [script, ...args], { env });
 }
 
@@ -1847,6 +1903,7 @@ Advanced:
   orkestr whatsapp codex [status|connect] --thread <thread> [--account id] [--json]
   orkestr whatsapp bind-thread <thread> --name <group name> [--wa-participant jid]... [--json]
   orkestr timers [list|doctor|run <timer-id>] [--json]
+  orkestr jobs run [--owner-user-id user] [--target-thread thread] [--max-results N] [--json]
   orkestr connect approve <code> [--json]
   orkestr security [challenges|sessions|approve <challenge-id>|reject <challenge-id>|revoke <session-id|all>] [--json]
   orkestr desktop [share [slug]|approve <challenge-id>] [--json]
@@ -2236,6 +2293,98 @@ function repoRoot() {
 
 function updateScriptPath(scriptName) {
   return path.join(repoRoot(), "scripts", scriptName);
+}
+
+function releaseUpdateSystemdRunCommand(script, args, env) {
+  if (env.ORKESTR_UPDATE_SYSTEMD_RUN === "0") return null;
+  if (serviceManager(env) !== "systemd") return null;
+  const cgroup = currentProcessCgroup(env);
+  const inferredUnit = currentSystemdServiceUnit(cgroup);
+  const serviceUnit = serviceUnitName(env.ORKESTR_SERVICE_NAME || (inferredUnit.startsWith("orkestr") ? inferredUnit : "") || "orkestr");
+  if (!cgroupIncludesUnit(cgroup, serviceUnit)) return null;
+  const unitName = transientReleaseUnitName();
+  return {
+    command: "systemd-run",
+    unitName,
+    serviceUnit,
+    args: [
+      "--collect",
+      "--same-dir",
+      `--unit=${unitName}`,
+      `--description=Orkestr release update for ${env.ORKESTR_DEPLOY_REF || args.join(" ") || "current ref"}`,
+      ...systemdRunEnvArgs(env),
+      "bash",
+      script,
+      ...args,
+    ],
+  };
+}
+
+function currentProcessCgroup(env) {
+  if (env.ORKESTR_TEST_PROC_CGROUP) return String(env.ORKESTR_TEST_PROC_CGROUP);
+  try {
+    return fs.readFileSync("/proc/self/cgroup", "utf8");
+  } catch {
+    return "";
+  }
+}
+
+function currentSystemdServiceUnit(cgroup) {
+  return String(cgroup || "").match(/(?:^|\/)([^/\n]+\.service)(?:\/|$)/)?.[1] || "";
+}
+
+function cgroupIncludesUnit(cgroup, unit) {
+  const serviceUnit = serviceUnitName(unit);
+  return String(cgroup || "").split("\n").some((line) => line.includes(`/${serviceUnit}`) || line.endsWith(serviceUnit));
+}
+
+function transientReleaseUnitName() {
+  return `orkestr-release-${Date.now()}-${process.pid}`;
+}
+
+function systemdRunEnvArgs(env) {
+  return systemdRunEnvironment(env).map(([key, value]) => `--setenv=${key}=${value}`);
+}
+
+function systemdRunEnvironment(env) {
+  const entries = new Map();
+  for (const key of Object.keys(env || {}).sort()) {
+    const value = env[key];
+    if (!isSystemdRunEnvKey(key, value)) continue;
+    entries.set(key, String(value));
+  }
+  entries.set("ORKESTR_UPDATE_SYSTEMD_RUN", "0");
+  return [...entries.entries()];
+}
+
+function isSystemdRunEnvKey(key, value) {
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) return false;
+  if (value == null || String(value).includes("\0")) return false;
+  if (/^(ORKESTR_DEPLOY_|ORKESTR_RELEASE_|ORKESTR_UPDATE_|ORKESTR_CODEX_APP_SERVER_)/.test(key)) return true;
+  return [
+    "CI",
+    "GIT_SSH_COMMAND",
+    "HOME",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "LOGNAME",
+    "NODE_COMPILE_CACHE",
+    "NODE_OPTIONS",
+    "NO_COLOR",
+    "ORKESTR_APP_DIR",
+    "ORKESTR_CURRENT_LINK",
+    "ORKESTR_ENV_FILE",
+    "ORKESTR_HOME",
+    "ORKESTR_HOST",
+    "ORKESTR_PORT",
+    "ORKESTR_SERVICE_NAME",
+    "ORKESTR_SERVICE_TIMEOUT_STOP_SEC",
+    "PATH",
+    "SHELL",
+    "SSH_AUTH_SOCK",
+    "USER",
+  ].includes(key);
 }
 
 async function spawnInherited(spawnImpl, command, args, options = {}) {

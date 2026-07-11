@@ -1336,6 +1336,22 @@ test("user management API is admin-only and can pair a browser to a managed user
     assert.equal(userGmailStatusResponse.status, 200);
     assert.equal(userGmailStatus.id, "gmail");
 
+    const aliceGmailToken = path.join(userDataPaths("alice-example.test", process.env).secrets, "gmail-token.json");
+    const bobGmailToken = path.join(userDataPaths("bob-example.test", process.env).secrets, "gmail-token.json");
+    await fs.mkdir(path.dirname(aliceGmailToken), { recursive: true });
+    await fs.mkdir(path.dirname(bobGmailToken), { recursive: true });
+    await fs.writeFile(aliceGmailToken, JSON.stringify({ accessToken: "alice-token" }), "utf8");
+    await fs.writeFile(bobGmailToken, JSON.stringify({ accessToken: "bob-token" }), "utf8");
+    const userGmailDeleteResponse = await fetch(`${baseUrl}/api/connectors/gmail/auth`, {
+      method: "DELETE",
+      headers: { cookie: userCookie, connection: "close" },
+    });
+    const userGmailDelete = await read(userGmailDeleteResponse);
+    assert.equal(userGmailDeleteResponse.status, 200);
+    assert.equal(userGmailDelete.provider, "gmail");
+    await assert.rejects(fs.access(aliceGmailToken), /ENOENT/);
+    await fs.access(bobGmailToken);
+
     const userBrowsers = await read(await fetch(`${baseUrl}/api/browser-sessions`, { headers: { cookie: userCookie } }));
     assert.equal(userBrowsers.ok, true);
     assert.ok(userBrowsers.sessions.length > 0);

@@ -46,18 +46,22 @@ test("tenant VM provisioning builds a public-safe KubeVirt plan", async () => {
     plan.runtimeEnv.ORKESTR_DESKTOP_SHARE_URL_TEMPLATE,
     "https://app.example.test/desktop-share/tvm/alice-tenant/{subdomain}/{shareId}?key={key}",
   );
-  assert.equal(plan.runtimeEnv.ORKESTR_LLM_SANITIZER_DISABLED, "1");
-  assert.equal("ORKESTR_LLM_SANITIZER_COMMAND_JSON" in plan.runtimeEnv, false);
-  assert.equal("ORKESTR_LLM_SANITIZER_TIMEOUT_MS" in plan.runtimeEnv, false);
-  assert.equal("ORKESTR_LLM_SANITIZER_CODEX_TIMEOUT_MS" in plan.runtimeEnv, false);
-  assert.equal("ORKESTR_LLM_SANITIZER_MAX_ATTEMPTS" in plan.runtimeEnv, false);
-  assert.equal("ORKESTR_LLM_SANITIZER_RETRY_DELAY_MS" in plan.runtimeEnv, false);
+  assert.equal(plan.runtimeEnv.ORKESTR_LLM_SANITIZER_COMMAND_JSON, "[\"node\",\"/opt/orkestr/current/scripts/llm-sanitizer-codex.mjs\"]");
+  assert.equal(plan.runtimeEnv.ORKESTR_LLM_SANITIZER_TIMEOUT_MS, "90000");
+  assert.equal(plan.runtimeEnv.ORKESTR_LLM_SANITIZER_CODEX_TIMEOUT_MS, "75000");
+  assert.equal(plan.runtimeEnv.ORKESTR_LLM_SANITIZER_MAX_ATTEMPTS, "2");
+  assert.equal(plan.runtimeEnv.ORKESTR_LLM_SANITIZER_RETRY_DELAY_MS, "1000");
+  assert.equal(plan.runtimeEnv.ORKESTR_JOBS_FIT_AGENT_COMMAND_JSON, "[\"node\",\"/opt/orkestr/current/scripts/jobs-fit-agent-codex.mjs\"]");
+  assert.equal(plan.runtimeEnv.ORKESTR_JOBS_FIT_AGENT_CODEX_TIMEOUT_MS, "90000");
   assert.equal(plan.bootstrapProfilePath, "/etc/orkestr/tenant-bootstrap-profile.json");
   assert.equal(plan.bootstrapProfile.firstChat.name, "Alice Launch");
   assert.equal(plan.bootstrapProfile.codex.model, "gpt-5.5");
   assert.equal(plan.bootstrapProfile.codex.reasoningEffort, "medium");
   assert.equal(plan.bootstrapProfile.policy.singleThreadLimit, true);
   assert.deepEqual(plan.bootstrapProfile.desks.map((desk) => desk.slug), ["linkedin"]);
+  assert.equal(plan.runtimeEnv.ORKESTR_BROWSER_VISIBLE_SLUGS, "linkedin");
+  assert.equal(plan.runtimeEnv.ORKESTR_INSTANCE_DESKTOPS_PROVISIONED, "1");
+  assert.deepEqual(JSON.parse(plan.runtimeEnv.ORKESTR_DESKTOP_CATALOG_JSON).map((desk) => desk.slug), ["linkedin"]);
   assert.ok(plan.bootstrapProfile.skills.includes("learning"));
   assert.ok(plan.bootstrapProfile.skills.includes("whatsapp"));
   assert.ok(plan.bootstrapProfile.skills.includes("salesnav"));
@@ -85,13 +89,17 @@ test("tenant VM provisioning builds a public-safe KubeVirt plan", async () => {
   assert.match(userData, /--tenant-bootstrap-profile' '\/etc\/orkestr\/tenant-bootstrap-profile\.json/);
   assert.match(userData, /ssh-ed25519/);
   assert.match(envFile, /^ORKESTR_HOST='0\.0\.0\.0'$/m);
+  assert.match(envFile, /^ORKESTR_BROWSER_VISIBLE_SLUGS='linkedin'$/m);
+  assert.match(envFile, /^ORKESTR_INSTANCE_DESKTOPS_PROVISIONED='1'$/m);
+  assert.match(envFile, /^ORKESTR_DESKTOP_CATALOG_JSON='\[/m);
   assert.match(envFile, /^ORKESTR_DESKTOP_SHARE_URL_TEMPLATE='https:\/\/app\.example\.test\/desktop-share\/tvm\/alice-tenant\/\{subdomain\}\/\{shareId\}\?key=\{key\}'$/m);
-  assert.match(envFile, /^ORKESTR_LLM_SANITIZER_DISABLED='1'$/m);
-  assert.doesNotMatch(envFile, /^ORKESTR_LLM_SANITIZER_COMMAND_JSON=/m);
-  assert.doesNotMatch(envFile, /^ORKESTR_LLM_SANITIZER_TIMEOUT_MS=/m);
-  assert.doesNotMatch(envFile, /^ORKESTR_LLM_SANITIZER_CODEX_TIMEOUT_MS=/m);
-  assert.doesNotMatch(envFile, /^ORKESTR_LLM_SANITIZER_MAX_ATTEMPTS=/m);
-  assert.doesNotMatch(envFile, /^ORKESTR_LLM_SANITIZER_RETRY_DELAY_MS=/m);
+  assert.match(envFile, /^ORKESTR_LLM_SANITIZER_COMMAND_JSON='\["node","\/opt\/orkestr\/current\/scripts\/llm-sanitizer-codex\.mjs"\]'$/m);
+  assert.match(envFile, /^ORKESTR_LLM_SANITIZER_TIMEOUT_MS='90000'$/m);
+  assert.match(envFile, /^ORKESTR_LLM_SANITIZER_CODEX_TIMEOUT_MS='75000'$/m);
+  assert.match(envFile, /^ORKESTR_LLM_SANITIZER_MAX_ATTEMPTS='2'$/m);
+  assert.match(envFile, /^ORKESTR_LLM_SANITIZER_RETRY_DELAY_MS='1000'$/m);
+  assert.match(envFile, /^ORKESTR_JOBS_FIT_AGENT_COMMAND_JSON='\["node","\/opt\/orkestr\/current\/scripts\/jobs-fit-agent-codex\.mjs"\]'$/m);
+  assert.match(envFile, /^ORKESTR_JOBS_FIT_AGENT_CODEX_TIMEOUT_MS='90000'$/m);
   assert.deepEqual(plan.commands.apply, ["kubectl", "apply", "-f", "-"]);
   assert.deepEqual(plan.commands.publicIpRoute.slice(0, 7), [
     "bash",
@@ -170,12 +178,14 @@ test("tenant VM provisioning derives central setup URLs from broker instance id"
   assert.equal(plan.runtimeEnv.ORKESTR_PAIRING_URL, "https://connect.example.test/setup/pairing");
   assert.equal(plan.runtimeEnv.ORKESTR_BROKER_INSTANCE_ID, "broker-firat-001");
   assert.equal(plan.runtimeEnv.ORKESTR_INSTANCE_ID, "broker-firat-001");
+  assert.equal(plan.runtimeEnv.ORKESTR_JOBS_FIT_AGENT_COMMAND_JSON, "[\"node\",\"/opt/orkestr/current/scripts/jobs-fit-agent-codex.mjs\"]");
   assert.equal(plan.runtimeEnv.GMAIL_OAUTH_REDIRECT_URI, "https://ops-health.example.test/google-marketing/oauth/callback");
   assert.equal(Object.hasOwn(plan.runtimeEnv, "GMAIL_OAUTH_CLIENT_SECRET"), false);
   assert.match(envFile, /^ORKESTR_PUBLIC_URL='https:\/\/connect\.example\.test\/i\/broker-firat-001\/app'$/m);
   assert.match(envFile, /^ORKESTR_CONNECT_PUBLIC_SETUP_URL='https:\/\/connect\.example\.test\/i\/broker-firat-001\/setup'$/m);
   assert.match(envFile, /^ORKESTR_BROKER_INSTANCE_ID='broker-firat-001'$/m);
   assert.match(envFile, /^ORKESTR_INSTANCE_ID='broker-firat-001'$/m);
+  assert.match(envFile, /^ORKESTR_JOBS_FIT_AGENT_COMMAND_JSON='\["node","\/opt\/orkestr\/current\/scripts\/jobs-fit-agent-codex\.mjs"\]'$/m);
   assert.match(envFile, /^GMAIL_OAUTH_REDIRECT_URI='https:\/\/ops-health\.example\.test\/google-marketing\/oauth\/callback'$/m);
   assert.equal(envFile.includes("must-not-copy"), false);
   assert.doesNotMatch(plan.runtimeEnv.ORKESTR_CONNECT_PUBLIC_SETUP_URL, /0\.0\.0\.0|127\.0\.0\.1|localhost|10\./);

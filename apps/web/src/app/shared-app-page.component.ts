@@ -28,6 +28,9 @@ export class SharedAppPageComponent implements OnInit, OnDestroy {
   error = "";
   notice = "";
   savingPersonId = "";
+  noteDraft = "";
+  noteSavingPersonId = "";
+  noteNotice = "";
   messagesLoadingPersonId = "";
   private readonly loadedMessageIds = new Set<string>();
   pairingRequired = false;
@@ -64,6 +67,7 @@ export class SharedAppPageComponent implements OnInit, OnDestroy {
       this.batchOffset = Number(paging.offset || this.batchOffset);
       this.hasNextBatch = Boolean(paging.hasNext);
       if (!this.people.some((person) => person.id === this.selectedId)) this.selectedId = this.people[0]?.id || "";
+      this.syncNoteDraft(this.selectedPerson());
       if (this.selectedId) void this.loadMessages(this.selectedPerson());
       this.pairingRequired = false;
       this.pairingError = "";
@@ -96,6 +100,8 @@ export class SharedAppPageComponent implements OnInit, OnDestroy {
   select(person: SharedAppPerson): void {
     this.selectedId = person.id;
     this.notice = "";
+    this.noteNotice = "";
+    this.syncNoteDraft(person);
     void this.loadMessages(person);
   }
 
@@ -173,6 +179,15 @@ export class SharedAppPageComponent implements OnInit, OnDestroy {
 
   canClassify(): boolean {
     return (this.payload?.data?.allowedActions || this.payload?.share?.allowedActionsJson || []).includes("setClassification");
+  }
+
+  canSaveNote(): boolean {
+    return (this.payload?.data?.allowedActions || this.payload?.share?.allowedActionsJson || []).includes("setNote");
+  }
+
+  onNoteInput(event: Event): void {
+    this.noteDraft = String((event.target as HTMLTextAreaElement | null)?.value || "");
+    this.noteNotice = "";
   }
 
   approveCommand(): string {
@@ -298,11 +313,52 @@ export class SharedAppPageComponent implements OnInit, OnDestroy {
     }
   }
 
+  async saveNote(): Promise<void> {
+    const person = this.selectedPerson();
+    if (!person || !this.canSaveNote()) return;
+    const route = this.route();
+    const previousNote = person.reviewNote || "";
+    const note = this.noteDraft.trim();
+    this.noteSavingPersonId = person.id;
+    this.noteNotice = "Saving note...";
+    this.error = "";
+    this.people = this.people.map((item) => item.id === person.id ? { ...item, reviewNote: note } : item);
+    this.renderNow();
+    try {
+      const result = await firstValueFrom(this.api.sharedAppAction(route.instanceId, route.appSlug, route.shareToken, "setNote", {
+        personId: person.id,
+        note,
+      }));
+      const savedNote = String(result.reviewNote ?? result.note ?? note);
+      const savedClassification = result.currentClassification || person.currentClassification;
+      this.people = this.people.map((item) => item.id === person.id ? {
+        ...item,
+        reviewNote: savedNote,
+        currentClassification: savedClassification,
+      } : item);
+      this.noteDraft = savedNote;
+      this.noteNotice = savedNote ? "Note saved." : "Note cleared.";
+    } catch (error) {
+      this.people = this.people.map((item) => item.id === person.id ? { ...item, reviewNote: previousNote } : item);
+      this.noteDraft = previousNote;
+      this.error = this.errorText(error);
+    } finally {
+      this.noteSavingPersonId = "";
+      this.renderNow();
+    }
+  }
+
   selectNext(): void {
     if (!this.people.length) return;
     const index = Math.max(0, this.people.findIndex((person) => person.id === this.selectedId));
     this.selectedId = this.people[Math.min(this.people.length - 1, index + 1)]?.id || this.people[0].id;
+    this.noteNotice = "";
+    this.syncNoteDraft(this.selectedPerson());
     void this.loadMessages(this.selectedPerson());
+  }
+
+  private syncNoteDraft(person: SharedAppPerson | null): void {
+    this.noteDraft = person?.reviewNote || "";
   }
 
   private async loadMessages(person: SharedAppPerson | null): Promise<void> {

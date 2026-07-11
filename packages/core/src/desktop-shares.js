@@ -7,6 +7,8 @@ import { defaultAdminUser, normalizeUserId } from "./users.js";
 
 const shareCookieName = "orkestr_desktop_share";
 const shareAuditTtlMs = 24 * 60 * 60 * 1000;
+const defaultShareTtlMs = 60 * 60 * 1000;
+const defaultAccessTtlMs = 30 * 60 * 1000;
 
 function nowIso() {
   return new Date().toISOString();
@@ -41,13 +43,13 @@ function cleanSlug(value) {
 }
 
 function shareTtlMs(env = process.env) {
-  const parsed = Number(env.ORKESTR_DESKTOP_SHARE_TTL_MS || 15 * 60 * 1000);
-  return Number.isFinite(parsed) ? Math.max(60_000, parsed) : 15 * 60 * 1000;
+  const parsed = Number(env.ORKESTR_DESKTOP_SHARE_TTL_MS || defaultShareTtlMs);
+  return Number.isFinite(parsed) ? Math.max(60_000, parsed) : defaultShareTtlMs;
 }
 
 function accessTtlMs(env = process.env) {
-  const parsed = Number(env.ORKESTR_DESKTOP_SHARE_ACCESS_TTL_MS || 30 * 60 * 1000);
-  return Number.isFinite(parsed) ? Math.max(60_000, parsed) : 30 * 60 * 1000;
+  const parsed = Number(env.ORKESTR_DESKTOP_SHARE_ACCESS_TTL_MS || defaultAccessTtlMs);
+  return Number.isFinite(parsed) ? Math.max(60_000, parsed) : defaultAccessTtlMs;
 }
 
 function requestIp(request) {

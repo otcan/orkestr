@@ -1005,6 +1005,50 @@ test("CLI lists timers from the public API", async () => {
   assert.match(stdout.text(), /thread-1/);
 });
 
+test("CLI runs Gmail jobs poll through the server API", async () => {
+  const stdout = capture();
+  const seen = [];
+  const code = await runCli([
+    "jobs",
+    "run",
+    "--owner-user-id",
+    "firat",
+    "--target-thread",
+    "firat-jobs",
+    "--max-results",
+    "5",
+    "--gmail-source",
+    "oauth",
+    "--no-gog-fallback",
+  ], {
+    stdout,
+    stderr: capture(),
+    fetchImpl: fakeFetch({
+      "POST /api/jobs/run": {
+        ok: true,
+        collected: 2,
+        upserted: { created: [{ id: "job-1" }] },
+        classified: { classified: [{ id: "job-1" }] },
+        presentation: { presented: [] },
+      },
+    }, seen),
+  });
+
+  assert.equal(code, 0);
+  assert.deepEqual(seen[0].body, {
+    ownerUserId: "firat",
+    targetThreadId: "firat-jobs",
+    gmailSource: "oauth",
+    maxResults: 5,
+    present: true,
+    gogFallback: false,
+  });
+  assert.match(stdout.text(), /Collected: 2/);
+  assert.match(stdout.text(), /Created: 1/);
+  assert.match(stdout.text(), /Classified: 1/);
+  assert.match(stdout.text(), /Presented: 0/);
+});
+
 test("CLI doctors timers through the public API", async () => {
   const stdout = capture();
   const code = await runCli(["doctor", "timers"], {
@@ -2074,6 +2118,46 @@ test("CLI update can run the versioned release deployer", async () => {
   assert.equal(spawned[0].env.ORKESTR_DEPLOY_REF, "v0.1.0-alpha.10");
   assert.equal(spawned[0].env.ORKESTR_DEPLOY_CHANNEL, "stage");
   assert.match(stdout.text(), /versioned release update for v0\.1\.0-alpha\.10/);
+});
+
+test("CLI update escapes the target systemd service cgroup for release deploys", async () => {
+  const stdout = capture();
+  const spawned = [];
+  const code = await runCli(["update", "--release", "--ref", "main", "--allow-untagged", "--no-smoke"], {
+    env: {
+      ORKESTR_SERVICE_NAME: "orkestr-ui",
+      ORKESTR_TEST_PROC_CGROUP: "0::/system.slice/orkestr-ui.service",
+      ORKESTR_RELEASE_REQUIRED_WHATSAPP_ACCOUNTS: "sender",
+      PATH: "/usr/bin",
+    },
+    stdout,
+    stderr: capture(),
+    spawnImpl(command, args, options) {
+      spawned.push({ command, args, env: options.env });
+      const child = new EventEmitter();
+      queueMicrotask(() => child.emit("exit", 0));
+      return child;
+    },
+  });
+
+  assert.equal(code, 0);
+  assert.equal(spawned.length, 1);
+  assert.equal(spawned[0].command, "systemd-run");
+  assert.ok(spawned[0].args.includes("--collect"));
+  assert.ok(spawned[0].args.includes("--same-dir"));
+  assert.ok(!spawned[0].args.includes("--wait"));
+  assert.ok(!spawned[0].args.includes("--pipe"));
+  assert.ok(spawned[0].args.some((arg) => arg.startsWith("--unit=orkestr-release-")));
+  assert.ok(spawned[0].args.includes("--setenv=ORKESTR_SERVICE_NAME=orkestr-ui"));
+  assert.ok(spawned[0].args.includes("--setenv=ORKESTR_RELEASE_REQUIRED_WHATSAPP_ACCOUNTS=sender"));
+  assert.ok(spawned[0].args.includes("--setenv=ORKESTR_UPDATE_SYSTEMD_RUN=0"));
+  assert.ok(!spawned[0].args.some((arg) => arg.includes("ORKESTR_TEST_PROC_CGROUP")));
+  const bashIndex = spawned[0].args.indexOf("bash");
+  assert.notEqual(bashIndex, -1);
+  assert.match(spawned[0].args[bashIndex + 1], /scripts\/deploy-git-release\.sh$/);
+  assert.deepEqual(spawned[0].args.slice(bashIndex + 2), ["install", "--ref", "main", "--allow-untagged", "--no-smoke", "--all-instances"]);
+  assert.match(stdout.text(), /outside orkestr-ui\.service/);
+  assert.match(stdout.text(), /journalctl -u orkestr-release-/);
 });
 
 test("CLI update forwards no-interrupt deploy guard flags", async () => {

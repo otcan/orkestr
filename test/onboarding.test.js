@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import test from "node:test";
+import { desktopCatalogFromEnv } from "../packages/core/src/runtime-settings.js";
 
 const onboardingSources = [
   "apps/web/src/app/app.component.ts",
@@ -127,5 +128,6 @@ test("onboarding focuses the starter setup on virtual desktop and WhatsApp", asy
   assert.ok(onboarding.includes("WhatsApp sender"));
   assert.ok(onboarding.includes("WhatsApp receiver"));
   assert.ok(onboarding.includes("whatsappAccountPurpose"));
-  assert.ok(browsers.includes('slug: "desktop"'));
+  assert.ok(browsers.includes("visibleBrowserCatalog"));
+  assert.equal(desktopCatalogFromEnv({}).some((desktop) => desktop.slug === "desktop"), true);
 });

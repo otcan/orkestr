@@ -15,9 +15,11 @@ import {
   saveBrokeredGmailGrant,
   startGmailOAuth,
 } from "../packages/connectors/src/gmail.js";
+import { connectorAuthStatus, disconnectConnectorAuth } from "../packages/connectors/src/connector-auth.js";
 import { __brokerInstanceRegistryTestInternals } from "../packages/core/src/broker-instance-registry.js";
 import { userPrincipal } from "../packages/core/src/principal.js";
 import { getSetupStatus } from "../packages/core/src/setup.js";
+import { userScopedCapabilityHints } from "../packages/core/src/user-skills.js";
 import { writeConnectorConfig } from "../packages/storage/src/config.js";
 import { userDataPaths } from "../packages/storage/src/paths.js";
 
@@ -148,6 +150,31 @@ test("gmail oauth uses the public broker callback and exchanges with the started
   assert.equal((await readGmailToken(env)).accessToken, "broker-access");
 });
 
+test("brokered gmail oauth uses app callback instead of connector auth host", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-gmail-brokered-app-callback-"));
+  const env = {
+    ORKESTR_HOME: home,
+    GMAIL_OAUTH_CLIENT_ID: "env-client-id",
+    GMAIL_OAUTH_CLIENT_SECRET: "env-client-secret",
+    ORKESTR_PUBLIC_APP_URL: "https://app.orkestr.de",
+    ORKESTR_PUBLIC_AUTH_URL: "https://connect.orkestr.de/setup/pairing",
+    ORKESTR_CONNECT_PUBLIC_URL: "https://connect.orkestr.de",
+  };
+
+  const started = await startGmailOAuth(env, {
+    account: "person@example.com",
+    brokerInstanceId: "instance-firat",
+    brokerTenantVmId: "firat-jobs-vm",
+    brokerTenantUserId: "firat",
+  });
+  const savedState = JSON.parse(await fs.readFile(path.join(home, "oauth", "gmail-state.json"), "utf8"));
+  const url = new URL(started.authorizeUrl);
+
+  assert.equal(started.redirectUri, "https://app.orkestr.de/oauth/gmail/callback");
+  assert.equal(url.searchParams.get("redirect_uri"), "https://app.orkestr.de/oauth/gmail/callback");
+  assert.equal(savedState.redirectUri, "https://app.orkestr.de/oauth/gmail/callback");
+});
+
 test("tenant gmail oauth state is prefixed for callback routing", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-gmail-tenant-state-"));
   const env = {
@@ -219,6 +246,140 @@ test("gmail callback validates state and exchanges tokens", async () => {
 
   assert.equal(result.ok, true);
   assert.equal((await readGmailToken(env)).accessToken, "access-callback");
+});
+
+test("gmail callback resolves missing account from the Gmail profile", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-gmail-profile-callback-"));
+  const env = { ORKESTR_HOME: home };
+  await writeConnectorConfig("gmail", {
+    clientId: "client-id",
+    clientSecret: "client-secret",
+    redirectUri: "http://localhost/callback",
+  }, env);
+  const accessToken = `ya29.${"a".repeat(90)}`;
+  const started = await startGmailOAuth(env);
+  const query = new URLSearchParams({ code: "callback-code", state: started.state });
+
+  const result = await finishGmailOAuth(query, env, async (url) => {
+    if (String(url) === "https://oauth2.googleapis.com/token") {
+      return jsonResponse({
+        access_token: accessToken,
+        refresh_token: "refresh-callback",
+        expires_in: 60,
+      });
+    }
+    if (String(url) === "https://gmail.googleapis.com/gmail/v1/users/me/profile") {
+      return jsonResponse({ emailAddress: "Person@Example.COM" });
+    }
+    throw new Error(`unexpected_url:${url}`);
+  });
+  const stored = await readGmailToken(env);
+
+  assert.equal(result.account, "person@example.com");
+  assert.equal(stored.account, "person@example.com");
+});
+
+test("gmail callback stores the Google account actually selected by the user", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-gmail-selected-account-"));
+  const env = { ORKESTR_HOME: home };
+  await writeConnectorConfig("gmail", {
+    clientId: "client-id",
+    clientSecret: "client-secret",
+    redirectUri: "http://localhost/callback",
+  }, env);
+  const accessToken = `ya29.${"m".repeat(90)}`;
+  const started = await startGmailOAuth(env, { account: "person@example.com" });
+  const query = new URLSearchParams({ code: "callback-code", state: started.state });
+
+  const result = await finishGmailOAuth(query, env, async (url) => {
+    if (String(url) === "https://oauth2.googleapis.com/token") {
+      return jsonResponse({
+        access_token: accessToken,
+        refresh_token: "refresh-callback",
+        expires_in: 60,
+        scope: "https://www.googleapis.com/auth/gmail.readonly",
+      });
+    }
+    if (String(url) === "https://gmail.googleapis.com/gmail/v1/users/me/profile") {
+      return jsonResponse({ emailAddress: "other@example.com" });
+    }
+    throw new Error(`unexpected_url:${url}`);
+  });
+  const stored = await readGmailToken(env);
+
+  assert.equal(result.account, "other@example.com");
+  assert.equal(stored.account, "other@example.com");
+});
+
+test("gmail connector status backfills a missing account from the Gmail profile", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-gmail-profile-status-"));
+  const env = { ORKESTR_HOME: home };
+  const accessToken = `ya29.${"b".repeat(90)}`;
+  await writeConnectorConfig("gmail", {
+    clientId: "client-id",
+    clientSecret: "client-secret",
+    redirectUri: "http://localhost/callback",
+  }, env);
+  await exchangeGmailCode("code-123", env, async () =>
+    jsonResponse({
+      access_token: accessToken,
+      refresh_token: "refresh-1",
+      expires_in: 3600,
+      scope: "https://www.googleapis.com/auth/gmail.readonly",
+      token_type: "Bearer",
+    }),
+  );
+
+  const status = await connectorAuthStatus("gmail", env, {
+    forceProfileLookup: true,
+    fetchImpl: async (url) => {
+      assert.equal(String(url), "https://gmail.googleapis.com/gmail/v1/users/me/profile");
+      return jsonResponse({ emailAddress: "Connected@Example.COM" });
+    },
+  });
+  const stored = await readGmailToken(env);
+
+  assert.equal(status.state, "connected");
+  assert.equal(status.account, "connected@example.com");
+  assert.equal(stored.account, "connected@example.com");
+});
+
+test("gmail connector status backfills a missing account from Google userinfo", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-gmail-userinfo-status-"));
+  const env = { ORKESTR_HOME: home };
+  const accessToken = `ya29.${"u".repeat(90)}`;
+  await writeConnectorConfig("gmail", {
+    clientId: "client-id",
+    clientSecret: "client-secret",
+    redirectUri: "http://localhost/callback",
+  }, env);
+  await exchangeGmailCode("code-123", env, async () =>
+    jsonResponse({
+      access_token: accessToken,
+      refresh_token: "refresh-1",
+      expires_in: 3600,
+      scope: "openid https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile",
+      token_type: "Bearer",
+    }),
+  );
+
+  const status = await connectorAuthStatus("gmail", env, {
+    fetchImpl: async (url) => {
+      if (String(url) === "https://gmail.googleapis.com/gmail/v1/users/me/profile") {
+        return jsonResponse({ error: { message: "Request had insufficient authentication scopes." } }, false, 403);
+      }
+      if (String(url) === "https://www.googleapis.com/oauth2/v3/userinfo") {
+        return jsonResponse({ email: "Selected@Example.COM" });
+      }
+      throw new Error(`unexpected_url:${url}`);
+    },
+  });
+  const stored = await readGmailToken(env);
+
+  assert.equal(status.state, "partial");
+  assert.equal(status.connected, false);
+  assert.equal(status.account, "selected@example.com");
+  assert.equal(stored.account, "selected@example.com");
 });
 
 test("gmail oauth remembers the originating thread for callback notifications", async () => {
@@ -318,7 +479,7 @@ test("gmail oauth stores non-admin user tokens outside global secrets", async ()
         access_token: "alice-access",
         refresh_token: "alice-refresh",
         expires_in: 3600,
-        scope: "gmail",
+        scope: "https://www.googleapis.com/auth/gmail.readonly",
       }),
   );
 
@@ -382,6 +543,7 @@ test("brokered gmail grants refresh through the parent broker without local OAut
   });
   await saveBrokeredGmailGrant({
     userId: "firat",
+    account: "firat@example.com",
     provider: "google_workspace",
     brokerInstanceId: "instance-firat",
     requestedCapabilities: ["gmail_read"],
@@ -409,12 +571,169 @@ test("brokered gmail grants refresh through the parent broker without local OAut
     });
   }, { userId: "firat" });
   const stored = await readGmailToken(env, { userId: "firat" });
+  const capabilities = await userScopedCapabilityHints({ userId: "firat" }, env);
 
   assert.equal(refreshed.accessToken, "access-new");
   assert.equal(refreshed.refreshToken, "refresh-owned-by-tenant");
   assert.equal(stored.accessToken, "access-new");
+  assert.equal(stored.account, "firat@example.com");
   assert.equal(stored.brokered, true);
   assert.equal(stored.brokerInstanceId, "instance-firat");
+  assert.deepEqual(capabilities.connectorAuth.gmail.capabilities, ["gmail_read"]);
+});
+
+test("tenant gmail status uses instance connector scope for any principal", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-gmail-tenant-instance-scope-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_TENANT_VM_ID: "firat-jobs-vm",
+    ORKESTR_ADMIN_USER_ID: "firat",
+  };
+  await saveBrokeredGmailGrant({
+    account: "firat@example.com",
+    provider: "google_workspace",
+    brokerInstanceId: "instance-firat",
+    requestedCapabilities: ["gmail_read", "gmail_actions", "gmail_send"],
+    requestedScopes: [
+      "https://www.googleapis.com/auth/gmail.readonly",
+      "https://www.googleapis.com/auth/gmail.modify",
+      "https://www.googleapis.com/auth/gmail.send",
+    ],
+    token: {
+      accessToken: "legacy-global-access",
+      refreshToken: "legacy-global-refresh",
+      expiresAt: Math.floor(Date.now() / 1000) + 3600,
+      grantedScopes: [
+        "https://www.googleapis.com/auth/gmail.readonly",
+        "https://www.googleapis.com/auth/gmail.modify",
+        "https://www.googleapis.com/auth/gmail.send",
+      ],
+    },
+  }, env);
+  const userTokenPath = path.join(userDataPaths("firat", env).secrets, "gmail-token.json");
+
+  assert.equal((await readGmailToken(env)).accessToken, "legacy-global-access");
+  await assert.rejects(fs.stat(userTokenPath));
+
+  const status = await connectorAuthStatus("gmail", env, { principal: userPrincipal({ id: "firat" }) });
+  const sameInstanceToken = await readGmailToken(env, { userId: "firat" });
+
+  assert.equal(status.state, "connected");
+  assert.equal(status.account, "firat@example.com");
+  assert.equal(sameInstanceToken.accessToken, "legacy-global-access");
+  await assert.rejects(fs.stat(userTokenPath));
+
+  await disconnectConnectorAuth({ provider: "gmail" }, userPrincipal({ id: "firat" }), env);
+
+  assert.equal((await readGmailToken(env)).accessToken, undefined);
+  assert.equal((await readGmailToken(env, { userId: "firat" })).accessToken, undefined);
+  await assert.rejects(fs.stat(userTokenPath));
+});
+
+test("gmail status does not treat base Google identity scopes as Gmail access", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-gmail-base-scopes-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_TENANT_VM_ID: "firat-jobs-vm",
+    ORKESTR_BROKER_BASE_URL: "https://broker.example.test",
+  };
+  await writeBrokerClientRegistration(home, {
+    instanceId: "instance-firat",
+    channelId: "channel-firat",
+    brokerBaseUrl: "https://broker.example.test",
+  });
+  await saveBrokeredGmailGrant({
+    userId: "firat",
+    account: "firat@example.com",
+    provider: "google_workspace",
+    brokerInstanceId: "instance-firat",
+    requestedCapabilities: ["gmail_read"],
+    requestedScopes: ["https://www.googleapis.com/auth/gmail.readonly"],
+    token: {
+      accessToken: "access-profile-only",
+      refreshToken: "refresh-owned-by-tenant",
+      expiresAt: Math.floor(Date.now() / 1000) + 3600,
+      grantedScopes: [
+        "openid",
+        "https://www.googleapis.com/auth/userinfo.email",
+        "https://www.googleapis.com/auth/userinfo.profile",
+      ],
+    },
+  }, env);
+
+  const status = await connectorAuthStatus("gmail", env, { userId: "firat" });
+  const capabilities = await userScopedCapabilityHints({ userId: "firat" }, env);
+
+  assert.equal(status.state, "partial");
+  assert.equal(status.connected, false);
+  assert.deepEqual(status.capabilities, []);
+  assert.deepEqual(status.grantedScopes, [
+    "openid",
+    "https://www.googleapis.com/auth/userinfo.email",
+    "https://www.googleapis.com/auth/userinfo.profile",
+  ]);
+  assert.equal(capabilities.gmail, false);
+  assert.equal(capabilities.scopedConnectors.gmail, false);
+  assert.deepEqual(capabilities.connectorAuth.gmail.capabilities, []);
+});
+
+test("gmail connector status refreshes expired brokered tokens before account lookup", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-gmail-broker-profile-refresh-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_TENANT_VM_ID: "firat-jobs-vm",
+    ORKESTR_BROKER_BASE_URL: "https://broker.example.test",
+  };
+  await writeBrokerClientRegistration(home, {
+    instanceId: "instance-firat",
+    channelId: "channel-firat",
+    brokerBaseUrl: "https://broker.example.test",
+  });
+  await saveBrokeredGmailGrant({
+    userId: "firat",
+    provider: "google_workspace",
+    brokerInstanceId: "instance-firat",
+    requestedCapabilities: ["gmail_read"],
+    requestedScopes: ["https://www.googleapis.com/auth/gmail.readonly"],
+    token: {
+      accessToken: "expired-access",
+      refreshToken: "refresh-owned-by-tenant",
+      expiresAt: 1,
+      grantedScopes: ["https://www.googleapis.com/auth/gmail.readonly"],
+    },
+  }, env);
+  const refreshedAccessToken = `ya29.${"d".repeat(90)}`;
+  const calls = [];
+
+  const status = await connectorAuthStatus("gmail", env, {
+    userId: "firat",
+    fetchImpl: async (url, options = {}) => {
+      calls.push(String(url));
+      if (String(url) === "https://broker.example.test/api/broker/instances/instance-firat/google-workspace/refresh-token") {
+        return jsonResponse({
+          ok: true,
+          token: {
+            access_token: refreshedAccessToken,
+            expires_in: 3600,
+            scope: "https://www.googleapis.com/auth/gmail.readonly",
+          },
+        });
+      }
+      if (String(url) === "https://gmail.googleapis.com/gmail/v1/users/me/profile") {
+        assert.equal(options.headers.authorization, `Bearer ${refreshedAccessToken}`);
+        return jsonResponse({ emailAddress: "Firat@Example.COM" });
+      }
+      throw new Error(`unexpected_url:${url}`);
+    },
+  });
+  const stored = await readGmailToken(env, { userId: "firat" });
+
+  assert.equal(status.account, "firat@example.com");
+  assert.equal(stored.account, "firat@example.com");
+  assert.deepEqual(calls, [
+    "https://broker.example.test/api/broker/instances/instance-firat/google-workspace/refresh-token",
+    "https://gmail.googleapis.com/gmail/v1/users/me/profile",
+  ]);
 });
 
 test("gmail oauth token failures are reflected in setup status", async () => {
@@ -455,17 +774,22 @@ test("successful gmail oauth clears previous token error status", async () => {
     /Bad code/,
   );
 
-  await exchangeGmailCode("good-code", env, async () =>
-    jsonResponse({
-      access_token: "access-ok",
-      refresh_token: "refresh-ok",
-      expires_in: 3600,
-    }),
+  await exchangeGmailCode(
+    "good-code",
+    env,
+    async () =>
+      jsonResponse({
+        access_token: "access-ok",
+        refresh_token: "refresh-ok",
+        expires_in: 3600,
+      }),
+    { account: "person@example.com" },
   );
 
   const status = await getSetupStatus({ env, home });
   const gmail = status.connectors.find((connector) => connector.id === "gmail");
   assert.equal(gmail.state, "connected");
+  assert.equal(gmail.details.account, "person@example.com");
   assert.equal(gmail.details.error, undefined);
 });
 

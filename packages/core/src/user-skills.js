@@ -579,9 +579,12 @@ export async function userScopedCapabilityHints({ userId = "", thread = null } =
         parentAppConfigured: status.parentConnector?.parentAppConfigured === true,
         parentAppPartiallyConfigured: status.parentConnector?.parentAppPartiallyConfigured === true,
         userConnectionRequired: status.userConnectionRequired === true,
+        capabilities: Array.isArray(status.capabilities) ? status.capabilities.map(clean).filter(Boolean) : [],
+        capabilityLabels: Array.isArray(status.capabilityLabels) ? status.capabilityLabels.map(clean).filter(Boolean) : [],
       } : { provider, state: "unknown", connected: false }];
     }),
   ));
+  const connectorConnected = (provider) => connectorAuth[provider]?.connected === true;
   const hasThreadWhatsAppBinding = threadHasWhatsAppBinding(thread || {});
   const desktopProvisioning = resolveDesktopProvisioningState({
     skillId: "linkedin",
@@ -595,10 +598,10 @@ export async function userScopedCapabilityHints({ userId = "", thread = null } =
   const scopedConnectors = {
     ...tenantConnectors,
     whatsapp: tenantConnectors.whatsapp || hasThreadWhatsAppBinding,
-    gmail: tenantConnectors.gmail || gmailToken,
-    outlook: tenantConnectors.outlook || outlookToken,
-    jira: tenantConnectors.jira || jiraToken,
-    shopify: tenantConnectors.shopify || shopifyToken,
+    gmail: tenantConnectors.gmail || connectorConnected("gmail"),
+    outlook: tenantConnectors.outlook || connectorConnected("outlook") || outlookToken,
+    jira: tenantConnectors.jira || connectorConnected("jira") || jiraToken,
+    shopify: tenantConnectors.shopify || connectorConnected("shopify") || shopifyToken,
     linkedin: desktopLinkedinAvailable,
   };
   const enabled = (skillId) => snapshot.skillEnabled[skillId] === true;

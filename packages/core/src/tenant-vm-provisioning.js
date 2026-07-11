@@ -153,6 +153,16 @@ function publicOauthRedirectRuntimeEnv(env = process.env) {
   return entries;
 }
 
+function desktopCatalogRuntimeEnv(profile = {}, input = {}) {
+  const desks = Array.isArray(profile.desks) ? profile.desks.filter((desk) => desk?.enabled !== false && clean(desk?.slug)) : [];
+  if (!desks.length) return {};
+  return {
+    ORKESTR_DESKTOP_CATALOG_JSON: JSON.stringify(desks),
+    ORKESTR_BROWSER_VISIBLE_SLUGS: desks.map((desk) => clean(desk.slug)).filter(Boolean).join(","),
+    ORKESTR_INSTANCE_DESKTOPS_PROVISIONED: input.instanceDesktopsProvisioned ?? "1",
+  };
+}
+
 function runtimeEnv(input = {}, env = process.env) {
   const source = input.runtimeEnv && typeof input.runtimeEnv === "object" && !Array.isArray(input.runtimeEnv) ? input.runtimeEnv : {};
   const controlPlane = normalizeTenantControlPlane(input.controlPlane || input.sharedControlPlane || {}, env, {
@@ -163,7 +173,7 @@ function runtimeEnv(input = {}, env = process.env) {
     clean(source.ORKESTR_DEMO_MODE) ||
     clean(input.demoWhatsappNumber || env.ORKESTR_DEMO_WHATSAPP_NUMBER) ||
     (!sliceTenant && clean(input.whatsappNumber)) ||
-    (!sliceTenant && clean(input.brokerBaseUrl || input.demoBrokerBaseUrl || env.ORKESTR_DEMO_BROKER_BASE_URL || env.ORKESTR_BROKER_BASE_URL));
+    (!sliceTenant && clean(input.brokerBaseUrl || input.demoBrokerBaseUrl || env.ORKESTR_BROKER_BASE_URL || env.ORKESTR_DEMO_BROKER_BASE_URL));
   const port = clean(input.port || input.orkestrPort || source.ORKESTR_PORT || env.ORKESTR_PORT || env.PORT || "19812");
   const tenantVmRuntime = Boolean(input.tenantVmId || input.tenantSliceId);
   const tenantVmId = clean(input.tenantVmId || input.vmId || "");
@@ -195,12 +205,13 @@ function runtimeEnv(input = {}, env = process.env) {
     ORKESTR_TENANT_BOUNDARY: input.tenantVmId || input.tenantSliceId ? "tenant-vm" : "",
     ORKESTR_CONTAINED_USER_RUNTIME_POLICY: input.tenantVmId || input.tenantSliceId || controlPlane.enabled ? "1" : "",
     ORKESTR_DEPLOYMENT_TRACK: input.deploymentTrack || input.deployTrack || (input.tenantSliceId ? "tenant-vm-slice" : ""),
-    ORKESTR_LLM_SANITIZER_DISABLED: tenantVmRuntime ? "1" : "",
-    ORKESTR_LLM_SANITIZER_COMMAND_JSON: "",
-    ORKESTR_LLM_SANITIZER_TIMEOUT_MS: "",
-    ORKESTR_LLM_SANITIZER_CODEX_TIMEOUT_MS: "",
-    ORKESTR_LLM_SANITIZER_MAX_ATTEMPTS: "",
-    ORKESTR_LLM_SANITIZER_RETRY_DELAY_MS: "",
+    ORKESTR_LLM_SANITIZER_COMMAND_JSON: tenantVmRuntime ? "[\"node\",\"/opt/orkestr/current/scripts/llm-sanitizer-codex.mjs\"]" : "",
+    ORKESTR_LLM_SANITIZER_TIMEOUT_MS: tenantVmRuntime ? "90000" : "",
+    ORKESTR_LLM_SANITIZER_CODEX_TIMEOUT_MS: tenantVmRuntime ? "75000" : "",
+    ORKESTR_LLM_SANITIZER_MAX_ATTEMPTS: tenantVmRuntime ? "2" : "",
+    ORKESTR_LLM_SANITIZER_RETRY_DELAY_MS: tenantVmRuntime ? "1000" : "",
+    ORKESTR_JOBS_FIT_AGENT_COMMAND_JSON: tenantVmRuntime ? "[\"node\",\"/opt/orkestr/current/scripts/jobs-fit-agent-codex.mjs\"]" : "",
+    ORKESTR_JOBS_FIT_AGENT_CODEX_TIMEOUT_MS: tenantVmRuntime ? "90000" : "",
     ...publicOauthRedirectRuntimeEnv(env),
     ...tenantControlPlaneRuntimeEnv(controlPlane),
     ORKESTR_DEMO_MODE: demoEnabled ? "1" : "",
@@ -208,11 +219,15 @@ function runtimeEnv(input = {}, env = process.env) {
     ORKESTR_PORT: demoEnabled || input.tenantVmId || input.tenantSliceId ? port : "",
     PORT: demoEnabled || input.tenantVmId || input.tenantSliceId ? source.PORT || port : "",
     ORKESTR_DEMO_WHATSAPP_NUMBER: demoEnabled ? input.whatsappNumber || input.demoWhatsappNumber || env.ORKESTR_DEMO_WHATSAPP_NUMBER : "",
-    ORKESTR_DEMO_BROKER_BASE_URL: demoEnabled ? input.brokerBaseUrl || input.demoBrokerBaseUrl || env.ORKESTR_DEMO_BROKER_BASE_URL || env.ORKESTR_BROKER_BASE_URL : controlPlane.brokerBaseUrl,
+    ORKESTR_DEMO_BROKER_BASE_URL: demoEnabled ? input.brokerBaseUrl || input.demoBrokerBaseUrl || env.ORKESTR_BROKER_BASE_URL || env.ORKESTR_DEMO_BROKER_BASE_URL : controlPlane.brokerBaseUrl,
     ORKESTR_DEMO_ENTRY_BASE_URL: demoEnabled ? input.entryBaseUrl || input.publicEntryBaseUrl || env.ORKESTR_DEMO_ENTRY_BASE_URL || env.ORKESTR_PUBLIC_SITE_URL || env.ORKESTR_PRIMARY_PUBLIC_URL : "",
     ORKESTR_CONNECT_PUBLIC_BASE_URL: demoEnabled ? input.connectPublicBaseUrl || input.publicConnectBaseUrl || env.ORKESTR_CONNECT_PUBLIC_BASE_URL : controlPlane.connectPublicBaseUrl || publicUrls.connectBaseUrl,
     ORKESTR_DEMO_BROKER_REGISTRATION_TOKEN: demoEnabled ? input.brokerRegistrationToken || env.ORKESTR_DEMO_BROKER_REGISTRATION_TOKEN || env.ORKESTR_BROKER_REGISTRATION_TOKEN : "",
-    ORKESTR_INSTANCE_DESKTOPS_PROVISIONED: demoEnabled ? input.instanceDesktopsProvisioned ?? env.ORKESTR_INSTANCE_DESKTOPS_PROVISIONED ?? "0" : "",
+    ORKESTR_INSTANCE_DESKTOPS_PROVISIONED: tenantVmRuntime
+      ? input.instanceDesktopsProvisioned ?? source.ORKESTR_INSTANCE_DESKTOPS_PROVISIONED ?? "1"
+      : demoEnabled
+        ? input.instanceDesktopsProvisioned ?? env.ORKESTR_INSTANCE_DESKTOPS_PROVISIONED ?? "0"
+        : "",
     ORKESTR_BROKER_INSTANCE_STORE: demoEnabled ? input.brokerInstanceStore || env.ORKESTR_BROKER_INSTANCE_STORE || "sqlite" : "",
     ORKESTR_DEPLOY_CHANNEL: demoEnabled ? input.deployChannel || env.ORKESTR_DEPLOY_CHANNEL : "",
     ORKESTR_DEPLOY_TAGS_ONLY: demoEnabled ? input.deployTagsOnly ?? env.ORKESTR_DEPLOY_TAGS_ONLY : "",
@@ -348,6 +363,14 @@ export function buildTenantVmProvisioningPlan(vm, input = {}, env = process.env)
       ...inputLabels,
     },
   };
+  const bootstrapProfile = buildTenantBootstrapProfile(vm, planInput, env);
+  const planInputWithDesktopCatalog = {
+    ...planInput,
+    runtimeEnv: {
+      ...desktopCatalogRuntimeEnv(bootstrapProfile, planInput),
+      ...(planInput.runtimeEnv && typeof planInput.runtimeEnv === "object" && !Array.isArray(planInput.runtimeEnv) ? planInput.runtimeEnv : {}),
+    },
+  };
   const namespace = safeName(input.namespace || vm.kubevirt.namespace || "orkestr-tenants");
   const vmName = safeName(input.vmName || vm.kubevirt.vmName || vm.id);
   const cloudInitSecretName = safeName(`${vmName}-cloudinit`, "orkestr-cloudinit");
@@ -394,7 +417,7 @@ export function buildTenantVmProvisioningPlan(vm, input = {}, env = process.env)
         },
         type: "Opaque",
         stringData: {
-          userdata: cloudInitUserData(vm, planInput, env),
+          userdata: cloudInitUserData(vm, planInputWithDesktopCatalog, env),
         },
       },
       {
@@ -456,12 +479,12 @@ export function buildTenantVmProvisioningPlan(vm, input = {}, env = process.env)
     vmName,
     macAddress,
     cloudInitSecretName,
-    bootstrapProfilePath: tenantBootstrapProfilePath(planInput, env),
-    bootstrapProfile: buildTenantBootstrapProfile(vm, planInput, env),
-    sharedControlPlane: publicTenantControlPlane(normalizeTenantControlPlane(planInput.controlPlane || planInput.sharedControlPlane || {}, env, {
-      defaultEnabled: Boolean(planInput.controlPlane || planInput.sharedControlPlane || planInput.tenantSliceId),
+    bootstrapProfilePath: tenantBootstrapProfilePath(planInputWithDesktopCatalog, env),
+    bootstrapProfile,
+    sharedControlPlane: publicTenantControlPlane(normalizeTenantControlPlane(planInputWithDesktopCatalog.controlPlane || planInputWithDesktopCatalog.sharedControlPlane || {}, env, {
+      defaultEnabled: Boolean(planInputWithDesktopCatalog.controlPlane || planInputWithDesktopCatalog.sharedControlPlane || planInputWithDesktopCatalog.tenantSliceId),
     })),
-    runtimeEnv: runtimeEnv(planInput, env),
+    runtimeEnv: runtimeEnv(planInputWithDesktopCatalog, env),
     manifestObject,
     manifest: `${JSON.stringify(manifestObject, null, 2)}\n`,
     commands: {

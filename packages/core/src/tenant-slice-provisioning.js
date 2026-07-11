@@ -88,6 +88,16 @@ function tenantVmInputForSlice(sliceInput = {}, input = {}, env = process.env) {
       slice.labels?.instanceId,
   );
   const desktopSlug = clean(slice.connectors?.linkedin?.desktopSlug || "linkedin") || "linkedin";
+  const firstThreadId = clean(input.firstThreadId || slice.id);
+  const workspacePath = `/opt/orkestr/workspace/${firstThreadId}`;
+  const desktopEntry = {
+    slug: desktopSlug,
+    label: clean(input.desktopLabel || vm.desktopLabel || `${slice.displayName || slice.ownerUserId} Desktop`),
+    connector: "desktop",
+    purpose: clean(input.desktopPurpose || vm.desktopPurpose || `Managed browser desktop for ${slice.displayName || slice.ownerUserId}.`),
+    workspacePath,
+    startUrl: "about:blank",
+  };
   const targetBaseUrl = clean(input.targetBaseUrl || input.whatsappTargetBaseUrl || vm.endpoint?.baseUrl);
   const targetBrokerBaseUrl = clean(input.whatsappBrokerBaseUrl || input.routeBrokerBaseUrl || vm.endpoint?.brokerBaseUrl);
   const whatsappRouteMode = targetBrokerBaseUrl
@@ -118,8 +128,8 @@ function tenantVmInputForSlice(sliceInput = {}, input = {}, env = process.env) {
     },
     bootstrap: {
       firstThreadName: clean(input.firstThreadName || slice.displayName || slice.ownerUserId),
-      firstThreadId: clean(input.firstThreadId || slice.id),
-      desks: slice.connectors?.linkedin?.enabled === false ? [] : [desktopSlug],
+      firstThreadId,
+      desks: slice.connectors?.linkedin?.enabled === false ? [] : [desktopEntry],
       skills: vmCapabilities(slice),
     },
     desktops: {

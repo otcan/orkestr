@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { Body, Controller, Get, HttpCode, Param, Post, Query, Req, Res, UploadedFiles, UseInterceptors } from "@nestjs/common";
+import { Body, Controller, Delete, Get, HttpCode, Param, Post, Query, Req, Res, UploadedFiles, UseInterceptors } from "@nestjs/common";
 import { AnyFilesInterceptor } from "@nestjs/platform-express";
 import { getSetupStatus } from "../../../../../packages/core/src/setup.js";
 import { readRuntimeSettings } from "../../../../../packages/core/src/runtime-settings.js";
@@ -15,12 +15,14 @@ import {
 } from "../../../../../packages/connectors/src/gmail.js";
 import {
   getGoogleWorkspaceConnectRequest,
+  googleWorkspaceBrokeredConnectorSetupHref,
   googleWorkspaceConnectHtml,
   startGoogleWorkspaceOAuth,
 } from "../../../../../packages/connectors/src/google-workspace.js";
 import {
   googleWorkspaceCapabilityLabels,
 } from "../../../../../packages/connectors/src/google-workspace-scopes.js";
+import { disconnectConnectorAuth } from "../../../../../packages/connectors/src/connector-auth.js";
 import {
   pollOutlookDeviceOAuth,
   startOutlookDeviceOAuth,
@@ -45,6 +47,7 @@ import { getTenantVm } from "../../../../../packages/core/src/tenant-vm-registry
 import { requestPrincipal } from "../../../../../packages/core/src/principal.js";
 import { isAdminPrincipal } from "../../../../../packages/core/src/policy.js";
 import { createPairingChallenge, securityStatus } from "../../../../../packages/core/src/security.js";
+import { resolveBrokerConnectInstance } from "../../../../../packages/core/src/broker-instance-registry.js";
 import { normalizeUserId } from "../../../../../packages/core/src/users.js";
 import { publicRoutingFailurePayload } from "../../../../../packages/core/src/routing-failures.js";
 import {
@@ -109,6 +112,59 @@ function googleWorkspaceBrokeredConnectRequest(connectRequest: any): boolean {
   return Boolean(googleWorkspaceBrokerInstanceId(connectRequest));
 }
 
+async function googleWorkspaceBrokerInstanceReachable(connectRequest: any): Promise<boolean> {
+  const instanceId = googleWorkspaceBrokerInstanceId(connectRequest);
+  if (!instanceId) return false;
+  return Boolean(await resolveBrokerConnectInstance(instanceId, process.env).catch(() => null));
+}
+
+function googleWorkspaceAuthIntentAction(connectRequest: any): string {
+  const connectId = String(connectRequest?.connectId || "").trim();
+  return connectId ? `orkestr_auth.google.connect:${connectId}` : "orkestr_auth.google.connect";
+}
+
+function googleWorkspaceAuthIntent(connectRequest: any): Record<string, string> {
+  const instanceId = googleWorkspaceBrokerInstanceId(connectRequest);
+  const userId = normalizeUserId(connectRequest?.userId || "");
+  const tenantVmId = String(connectRequest?.tenantVmId || connectRequest?.brokerTenantVmId || "").trim();
+  const account = String(connectRequest?.account || "").trim().toLowerCase();
+  const thread = String(
+    connectRequest?.threadName ||
+      connectRequest?.threadTitle ||
+      connectRequest?.brokerTenantThreadName ||
+      connectRequest?.threadId ||
+      connectRequest?.brokerTenantThreadId ||
+      "",
+  ).trim();
+  return {
+    mcp: "tools/call",
+    tool: "orkestr_auth",
+    service: "gmail",
+    provider: "google_workspace",
+    action: "connect",
+    actionLabel: "Connect Gmail",
+    title: "Approve Gmail connection",
+    description: instanceId
+      ? `Approve Google Workspace access for instance ${instanceId}.`
+      : "Approve Google Workspace access for this Orkestr user.",
+    connectId: String(connectRequest?.connectId || "").trim(),
+    instanceId,
+    tenantVmId,
+    userId,
+    thread,
+    threadId: String(connectRequest?.threadId || connectRequest?.brokerTenantThreadId || "").trim(),
+    chatId: String(connectRequest?.chatId || connectRequest?.brokerTenantChatId || "").trim(),
+    accountId: String(connectRequest?.accountId || connectRequest?.brokerTenantAccountId || "").trim(),
+    account,
+    source: String(connectRequest?.source || "connect_link").trim(),
+  };
+}
+
+function googleWorkspaceAuthSessionHasAction(session: any, connectRequest: any): boolean {
+  const allowed = Array.isArray(session?.allowedActions) ? session.allowedActions : [];
+  return allowed.includes(googleWorkspaceAuthIntentAction(connectRequest));
+}
+
 function googleWorkspaceSessionUserMatches(session: any, ownerUserId: string): boolean {
   if (!ownerUserId) return true;
   return normalizeUserId(session?.userId || "") === ownerUserId;
@@ -132,37 +188,73 @@ function googleWorkspacePairingError(response: any, connectRequest: any, error: 
     }));
 }
 
+function requestHeader(request: any, name: string): string {
+  const headers = request?.headers || {};
+  const value = headers[name] ?? headers[name.toLowerCase()];
+  return Array.isArray(value) ? String(value[0] || "") : String(value || "");
+}
+
+function googleWorkspaceLinkPreviewRequest(request: any): boolean {
+  const method = String(request?.method || "GET").toUpperCase();
+  if (method === "HEAD") return true;
+  const purpose = `${requestHeader(request, "purpose")} ${requestHeader(request, "sec-purpose")} ${requestHeader(request, "x-purpose")}`.toLowerCase();
+  if (/\b(prefetch|preview|prerender)\b/.test(purpose)) return true;
+  const userAgent = requestHeader(request, "user-agent").toLowerCase();
+  return /facebookexternalhit|facebot|slackbot|twitterbot|telegrambot|discordbot|linkedinbot|skypeuripreview|teamsbot|google-read-aloud|bingpreview/.test(userAgent);
+}
+
+function googleWorkspacePreviewResponse(response: any, connectRequest: any): void {
+  response
+    .status(200)
+    .header("cache-control", "no-store")
+    .type("text/html; charset=utf-8")
+    .send(googleWorkspaceConnectHtml({
+      connectId: String(connectRequest.connectId || ""),
+      request: connectRequest,
+      previewOnly: true,
+    } as any));
+}
+
 async function googleWorkspaceConnectAccess(request: any, payload: any, response: any): Promise<boolean> {
   const connectRequest = payload?.request || {};
   const ownerUserId = normalizeUserId(connectRequest.userId || "");
   const status = await securityStatus();
   const currentPath = requestPathWithQuery(request);
-  const brokered = googleWorkspaceBrokeredConnectRequest(connectRequest);
   const session = request?.orkestrSecuritySession || null;
-  const trustedContext = !status.authEnabled || Boolean(session || request?.orkestrMachineAuth);
-  if (brokered && status.authEnabled) {
-    if (!session || !googleWorkspaceSessionInstanceMatches(session, connectRequest)) {
-      const challenge = await createPairingChallenge({
-        request,
-        reusePending: true,
-        instanceId: googleWorkspaceBrokerInstanceId(connectRequest),
-        userId: ownerUserId,
-        role: ownerUserId ? "user" : "admin",
-        requestedPath: currentPath,
-      } as any);
-      response
-        .status(302)
-        .header("location", googleWorkspacePairingRedirect(String(challenge.challengeId || ""), currentPath))
-        .type("text/plain; charset=utf-8")
-        .send("Redirecting to Orkestr pairing.");
+  if (status.authEnabled) {
+    if (session && googleWorkspaceAuthSessionHasAction(session, connectRequest)) {
+      if (!googleWorkspaceSessionInstanceMatches(session, connectRequest)) {
+        googleWorkspacePairingError(response, connectRequest, "google_workspace_connect_pairing_instance_mismatch");
+        return false;
+      }
+      if (!googleWorkspaceSessionUserMatches(session, ownerUserId)) {
+        googleWorkspacePairingError(response, connectRequest, "google_workspace_connect_pairing_user_mismatch");
+        return false;
+      }
+      return true;
+    }
+    if (googleWorkspaceLinkPreviewRequest(request)) {
+      googleWorkspacePreviewResponse(response, connectRequest);
       return false;
     }
-    if (!googleWorkspaceSessionUserMatches(session, ownerUserId)) {
-      googleWorkspacePairingError(response, connectRequest, "google_workspace_connect_pairing_user_mismatch");
-      return false;
-    }
-    return true;
+    const challenge = await createPairingChallenge({
+      request,
+      reusePending: true,
+      instanceId: googleWorkspaceBrokerInstanceId(connectRequest),
+      userId: ownerUserId,
+      role: ownerUserId ? "user" : "admin",
+      requestedPath: currentPath,
+      allowedActions: [googleWorkspaceAuthIntentAction(connectRequest)],
+      authIntent: googleWorkspaceAuthIntent(connectRequest),
+    } as any);
+    response
+      .status(302)
+      .header("location", googleWorkspacePairingRedirect(String(challenge.challengeId || ""), currentPath))
+      .type("text/plain; charset=utf-8")
+      .send("Redirecting to Orkestr pairing.");
+    return false;
   }
+  const trustedContext = !status.authEnabled || Boolean(session || request?.orkestrMachineAuth);
   if (!trustedContext) {
     const challenge = await createPairingChallenge({
       request,
@@ -177,6 +269,17 @@ async function googleWorkspaceConnectAccess(request: any, payload: any, response
       .type("text/plain; charset=utf-8")
       .send("Redirecting to Orkestr pairing.");
     return false;
+  }
+  if (googleWorkspaceBrokeredConnectRequest(connectRequest)) {
+    if (!googleWorkspaceSessionInstanceMatches(session, connectRequest)) {
+      googleWorkspacePairingError(response, connectRequest, "google_workspace_connect_pairing_instance_mismatch");
+      return false;
+    }
+    if (!googleWorkspaceSessionUserMatches(session, ownerUserId)) {
+      googleWorkspacePairingError(response, connectRequest, "google_workspace_connect_pairing_user_mismatch");
+      return false;
+    }
+    return true;
   }
   const principal = requestPrincipal(request);
   const principalUserId = normalizeUserId(principal?.userId || "");
@@ -350,6 +453,12 @@ export class ConnectorsController {
   @Get("gmail/oauth/start")
   async startGmailOAuth(@Req() request: any, @Query("account") account = "") {
     return beginGmailOAuth(process.env, { account, principal: requestPrincipal(request) });
+  }
+
+  @Delete("gmail/auth")
+  @HttpCode(200)
+  async disconnectGmailAuth(@Req() request: any) {
+    return disconnectConnectorAuth({ provider: "gmail" }, requestPrincipal(request), process.env);
   }
 
   @Get("gmail/messages")
@@ -968,6 +1077,23 @@ export class GoogleWorkspaceConnectController {
       payload = { ok: false, state: "error", error: String((error as Error)?.message || "google_workspace_connect_failed") };
     }
     const ok = payload?.ok === true;
+    if (
+      ok &&
+      googleWorkspaceConnectRequestExists(payload) &&
+      googleWorkspaceBrokeredConnectRequest(payload.request) &&
+      await googleWorkspaceBrokerInstanceReachable(payload.request) &&
+      !googleWorkspaceLinkPreviewRequest(request)
+    ) {
+      const connectorHref = googleWorkspaceBrokeredConnectorSetupHref(payload.request, process.env, "gmail");
+      if (connectorHref) {
+        return response
+          .status(302)
+          .header("cache-control", "no-store")
+          .header("location", connectorHref)
+          .type("text/plain; charset=utf-8")
+          .send("Redirecting to Orkestr instance connector page.");
+      }
+    }
     if (googleWorkspaceConnectRequestExists(payload) && !(await googleWorkspaceConnectAccess(request, payload, response))) return;
     return response
       .status(ok ? 200 : Number((payload as any)?.statusCode || 400) || 400)
@@ -1151,6 +1277,7 @@ function googleOAuthCallbackPayload(result: Record<string, unknown> = {}) {
   if (provider === "google_workspace") {
     const capabilities = stringArray(result.capabilities);
     const labels = googleWorkspaceCapabilityLabels(capabilities);
+    const brokeredSetupHref = googleWorkspaceBrokeredConnectorSetupHref(result, process.env, "gmail");
     return {
       ok: true,
       state: clean(result.state) || "ok",
@@ -1158,8 +1285,11 @@ function googleOAuthCallbackPayload(result: Record<string, unknown> = {}) {
       message: labels.length
         ? `Google Workspace authorization is complete. Enabled capabilities: ${labels.join(", ")}.`
         : "Google Workspace authorization is complete, but no optional Workspace capabilities were granted.",
-      setupHref: "/setup/gmail",
-      setupLabel: "Open Connectors",
+      setupHref: brokeredSetupHref || "/setup/gmail",
+      setupLabel: brokeredSetupHref ? "Open Instance Connector" : "Open Connectors",
+      setupReturnText: brokeredSetupHref
+        ? "Return to this instance connector page to refresh the connection status."
+        : "Return to setup to refresh the connector status.",
     };
   }
   return {

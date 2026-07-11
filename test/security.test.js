@@ -4,11 +4,14 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { startServer } from "../apps/server/src/server.js";
+import { createGoogleWorkspaceConnectLink } from "../packages/connectors/src/google-workspace.js";
 import { __brokerInstanceRegistryTestInternals, encryptBrokerChannelPayload } from "../packages/core/src/broker-instance-registry.js";
+import { userPrincipal } from "../packages/core/src/principal.js";
 import { approvePairingChallenge, authorizeHttpRequest, createPairingChallenge, pairBrowser, securityStatus } from "../packages/core/src/security.js";
 import { createTenantVm } from "../packages/core/src/tenant-vm-registry.js";
-import { createUser } from "../packages/core/src/users.js";
+import { createUser, getUser } from "../packages/core/src/users.js";
 import { writeConnectorConfig } from "../packages/storage/src/config.js";
+import { userDataPaths } from "../packages/storage/src/paths.js";
 
 function saveEnv(keys) {
   return Object.fromEntries(keys.map((key) => [key, process.env[key]]));
@@ -770,6 +773,100 @@ test("local CLI machine token can operate WhatsApp bridge routes", async () => {
   assert.equal(badBridgeToken.error, "whatsapp_bridge_token_invalid");
 });
 
+test("tenant CLI setup status uses instance connector scope", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-security-tenant-cli-setup-"));
+  const overlayDir = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-security-tenant-cli-overlay-"));
+  const prior = saveEnv([
+    "ORKESTR_HOME",
+    "ORKESTR_AUTH_REQUIRED",
+    "ORKESTR_RECOVER_RUNNING_ON_START",
+    "ORKESTR_TENANT_VM_ID",
+    "ORKESTR_ADMIN_USER_ID",
+    "ORKESTR_CLI_AUTH_TOKEN",
+    "ORKESTR_OVERLAY_DIR",
+  ]);
+  let server;
+  try {
+    process.env.ORKESTR_HOME = home;
+    process.env.ORKESTR_AUTH_REQUIRED = "1";
+    process.env.ORKESTR_RECOVER_RUNNING_ON_START = "0";
+    process.env.ORKESTR_TENANT_VM_ID = "firat-jobs-vm";
+    process.env.ORKESTR_ADMIN_USER_ID = "firat";
+    process.env.ORKESTR_CLI_AUTH_TOKEN = "cli-secret";
+    process.env.ORKESTR_OVERLAY_DIR = overlayDir;
+
+    await writeConnectorConfig("gmail", {
+      clientId: "gmail-client",
+      clientSecret: "gmail-secret",
+      redirectUri: "https://app.orkestr.de/oauth/gmail/callback",
+    }, process.env);
+    await fs.writeFile(path.join(overlayDir, "overlay.json"), JSON.stringify({
+      connectors: {
+        gmail: {
+          label: "Host Gmail",
+          state: "partial",
+          summary: "Overlay Gmail must not override tenant instance setup status.",
+          details: { overlay: true },
+        },
+      },
+    }), "utf8");
+    await fs.mkdir(path.join(home, "oauth"), { recursive: true });
+    await fs.writeFile(path.join(home, "oauth", "gmail-state.json"), JSON.stringify({
+      state: "stale-global-oauth-state",
+      provider: "google_workspace",
+    }), "utf8");
+    const firatPaths = userDataPaths("firat", process.env);
+    await fs.mkdir(path.join(home, "secrets"), { recursive: true });
+    await fs.writeFile(path.join(home, "secrets", "gmail-token.json"), JSON.stringify({
+      provider: "google_workspace",
+      accessToken: `ya29.${"t".repeat(90)}`,
+      refreshToken: "refresh-token",
+      account: "oguzcanunver@gmail.com",
+      email: "oguzcanunver@gmail.com",
+      capabilities: ["gmail_read", "gmail_actions", "gmail_send"],
+      grantedScopes: [
+        "openid",
+        "https://www.googleapis.com/auth/userinfo.email",
+        "https://www.googleapis.com/auth/userinfo.profile",
+        "https://www.googleapis.com/auth/gmail.readonly",
+        "https://www.googleapis.com/auth/gmail.modify",
+        "https://www.googleapis.com/auth/gmail.send",
+        "https://www.googleapis.com/auth/gmail.compose",
+      ],
+      expiresAt: Math.floor(Date.now() / 1000) + 3600,
+    }), "utf8");
+
+    server = await startServer({ port: 0, host: "127.0.0.1" });
+    const { port } = server.address();
+    const status = await json(await fetch(`http://127.0.0.1:${port}/api/setup/status`, {
+      headers: { authorization: "Bearer cli-secret" },
+    }));
+    const gmail = status.connectors.find((connector) => connector.id === "gmail");
+
+    assert.notEqual(status.redacted, true);
+    assert.equal(gmail.state, "connected");
+    assert.equal(gmail.details.account, "oguzcanunver@gmail.com");
+    assert.notEqual(gmail.details.overlay, true);
+    assert.deepEqual(gmail.details.capabilities, ["gmail_read", "gmail_actions", "gmail_send"]);
+
+    const oauth = await json(await fetch(`http://127.0.0.1:${port}/api/connectors/gmail/oauth/start`, {
+      headers: { authorization: "Bearer cli-secret" },
+    }));
+    const globalOauthState = JSON.parse(await fs.readFile(path.join(home, "oauth", "gmail-state.json"), "utf8"));
+
+    assert.match(oauth.authorizeUrl, /^https:\/\/accounts\.google\.com\//);
+    await assert.rejects(fs.stat(path.join(firatPaths.oauth, "gmail-state.json")));
+    assert.equal(globalOauthState.userId, "");
+    assert.notEqual(globalOauthState.state, "stale-global-oauth-state");
+  } finally {
+    if (server) {
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      await new Promise((resolve) => server.close(resolve));
+    }
+    restoreEnv(prior);
+  }
+});
+
 test("shared broker authorization accepts matching encrypted proxy assertions", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-security-broker-proxy-"));
   await fs.mkdir(path.join(home, "secrets"), { recursive: true });
@@ -983,7 +1080,17 @@ test("broker instance pairing challenge is scoped to the tenant VM owner", async
     assert.equal(body.challenge.userId, "firat");
     assert.equal(body.challenge.role, "user");
     assert.equal(body.challenge.instanceId, "instance-firat");
-    assert.equal(body.challenge.requestedPath, "/i/instance-firat/app/connectors/gmail");
+    assert.equal(
+      body.challenge.requestedPath,
+      "/i/instance-firat/app/connectors/gmail?mcp=tools%2Fcall&tool=orkestr_auth&service=gmail&provider=google_workspace&action=connect&instance_id=instance-firat",
+    );
+    assert.deepEqual(body.challenge.allowedActions, ["orkestr_auth.google.connect"]);
+    assert.equal(body.challenge.authIntent.tool, "orkestr_auth");
+    assert.equal(body.challenge.authIntent.provider, "google_workspace");
+    assert.equal(body.challenge.authIntent.action, "connect");
+    assert.equal(body.challenge.authIntent.instanceId, "instance-firat");
+    assert.equal(body.challenge.authIntent.tenantVmId, "firat-jobs-vm");
+    assert.equal(body.challenge.authIntent.userId, "firat");
   } finally {
     await new Promise((resolve) => server.close(resolve));
     restoreEnv(prior);
@@ -1025,7 +1132,141 @@ test("broker instance pairing challenge is scoped to the tenant VM owner", async
     assert.equal(body.challenge.userId, "firat");
     assert.equal(body.challenge.role, "user");
     assert.equal(body.challenge.instanceId, "instance-firat");
-    assert.equal(body.challenge.requestedPath, "/i/instance-firat/app/connectors/gmail");
+    assert.equal(
+      body.challenge.requestedPath,
+      "/i/instance-firat/app/connectors/gmail?mcp=tools%2Fcall&tool=orkestr_auth&service=gmail&provider=google_workspace&action=connect&instance_id=instance-firat",
+    );
+    assert.deepEqual(body.challenge.allowedActions, ["orkestr_auth.google.connect"]);
+    assert.equal(body.challenge.authIntent.tool, "orkestr_auth");
+    assert.equal(body.challenge.authIntent.provider, "google_workspace");
+    assert.equal(body.challenge.authIntent.action, "connect");
+    assert.equal(body.challenge.authIntent.instanceId, "instance-firat");
+    assert.equal(body.challenge.authIntent.tenantVmId, "firat-jobs-vm");
+    assert.equal(body.challenge.authIntent.userId, "firat");
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    restoreEnv(prior);
+  }
+});
+
+test("broker instance pairing challenge registers a missing tenant VM owner", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-security-broker-owner-register-"));
+  const prior = saveEnv([
+    "ORKESTR_HOME",
+    "ORKESTR_AUTH_REQUIRED",
+    "ORKESTR_RECOVER_RUNNING_ON_START",
+  ]);
+  process.env.ORKESTR_HOME = home;
+  process.env.ORKESTR_AUTH_REQUIRED = "1";
+  process.env.ORKESTR_RECOVER_RUNNING_ON_START = "0";
+
+  await createTenantVm({
+    id: "eren-jobs-vm",
+    ownerUserId: "eren",
+    displayName: "Eren",
+    labels: { brokerInstanceId: "instance-eren" },
+  }, process.env);
+
+  const server = await startServer({ port: 0, host: "127.0.0.1" });
+  const { port } = server.address();
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/api/setup/security/challenges`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        instanceId: "instance-eren",
+        requestedPath: "/i/instance-eren/app/connectors/gmail",
+      }),
+    });
+    const body = await json(response);
+    const user = await getUser("eren", process.env);
+
+    assert.equal(response.status, 200);
+    assert.equal(user?.id, "eren");
+    assert.equal(user?.role, "user");
+    assert.equal(user?.displayName, "Eren");
+    assert.equal(body.challenge.userId, "eren");
+    assert.equal(body.challenge.role, "user");
+    assert.equal(body.challenge.instanceId, "instance-eren");
+    assert.deepEqual(body.challenge.allowedActions, ["orkestr_auth.google.connect"]);
+    assert.equal(body.challenge.authIntent.instanceId, "instance-eren");
+    assert.equal(body.challenge.authIntent.userId, "eren");
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    restoreEnv(prior);
+  }
+});
+
+test("broker instance connector challenge preserves trusted Google Workspace approval origin", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-security-broker-google-origin-"));
+  const prior = saveEnv([
+    "ORKESTR_HOME",
+    "ORKESTR_AUTH_REQUIRED",
+    "ORKESTR_RECOVER_RUNNING_ON_START",
+    "ORKESTR_CONNECT_PUBLIC_URL",
+    "ORKESTR_PUBLIC_AUTH_URL",
+  ]);
+  process.env.ORKESTR_HOME = home;
+  process.env.ORKESTR_AUTH_REQUIRED = "1";
+  process.env.ORKESTR_RECOVER_RUNNING_ON_START = "0";
+  process.env.ORKESTR_CONNECT_PUBLIC_URL = "https://connect.orkestr.de";
+  process.env.ORKESTR_PUBLIC_AUTH_URL = "https://connect.orkestr.de/setup/pairing";
+
+  const instanceId = "instance-firat";
+  const chatId = "120363428493624197@g.us";
+  await createUser({ id: "firat", role: "user", displayName: "Fırat" }, process.env);
+  await createTenantVm({
+    id: "firat-jobs-vm",
+    ownerUserId: "firat",
+    labels: { brokerInstanceId: instanceId },
+  }, process.env);
+  const connect = await createGoogleWorkspaceConnectLink({
+    principal: userPrincipal({ id: "firat", role: "user" }),
+    thread: {
+      id: "firat-jobs",
+      name: "Fırat Jobs",
+      binding: {
+        connector: "whatsapp",
+        chatId,
+        responderAccountId: "sender",
+        outboundAccountId: "sender",
+      },
+    },
+    chatId,
+    accountId: "sender",
+    brokerInstanceId: instanceId,
+    brokerTenantUserId: "firat",
+    brokerTenantThreadId: "firat-jobs",
+    brokerTenantThreadName: "Fırat Jobs",
+    brokerTenantChatId: chatId,
+    brokerTenantAccountId: "sender",
+    brokerServerRequest: true,
+  }, process.env);
+  const connectorUrl = new URL(connect.connectorLink);
+
+  const server = await startServer({ port: 0, host: "127.0.0.1" });
+  const { port } = server.address();
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/api/setup/security/challenges`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        instanceId,
+        requestedPath: `${connectorUrl.pathname}${connectorUrl.search}`,
+      }),
+    });
+    const body = await json(response);
+
+    assert.equal(response.status, 200);
+    assert.equal(body.challenge.userId, "firat");
+    assert.equal(body.challenge.instanceId, instanceId);
+    assert.equal(body.challenge.requestedPath, `${connectorUrl.pathname}${connectorUrl.search}`);
+    assert.equal(body.challenge.authIntent.connectId, connect.connectId);
+    assert.equal(body.challenge.authIntent.chatId, chatId);
+    assert.equal(body.challenge.authIntent.accountId, "sender");
+    assert.equal(body.challenge.authIntent.threadId, "firat-jobs");
+    assert.equal(body.challenge.authIntent.thread, "Fırat Jobs");
+    assert.deepEqual(body.challenge.allowedActions, [`orkestr_auth.google.connect:${connect.connectId}`]);
   } finally {
     await new Promise((resolve) => server.close(resolve));
     restoreEnv(prior);

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
+import path from "node:path";
 import { ensureDataDirs } from "../../storage/src/paths.js";
 import { createTimerRepository } from "../../storage/src/repositories.js";
 import { appendEvent } from "../../storage/src/store.js";
@@ -13,6 +14,7 @@ import { adminUserId, normalizeUserId } from "./users.js";
 const hourMs = 60 * 60 * 1000;
 const dayMs = 24 * hourMs;
 const timerDoctorGraceMs = 2 * 60 * 1000;
+const defaultManualRunDedupeMs = 2 * 60 * 1000;
 const timerCadences = new Set(["once", "daily", "weekly", "interval"]);
 
 function parseClock(time = "09:00") {
@@ -157,6 +159,78 @@ function clockFromIso(value, fallback = "09:00") {
 
 function cleanOptionalMetadata(value = "") {
   return String(value || "").trim().slice(0, 120);
+}
+
+function hasOwn(value = {}, key = "") {
+  return Object.prototype.hasOwnProperty.call(value || {}, key);
+}
+
+function safeTimerPromptSlug(value = "") {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 60) || "timer";
+}
+
+function pathIsInside(basePath = "", candidatePath = "") {
+  const base = path.resolve(basePath);
+  const candidate = path.resolve(candidatePath);
+  const relative = path.relative(base, candidate);
+  return relative === "" || (relative && !relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+async function targetThreadWorkspace(timer = {}, env = process.env) {
+  if (String(timer.targetType || "").trim().toLowerCase() !== "thread") return "";
+  const thread = await getThread(timer.target, env).catch(() => null);
+  const workspace = String(thread?.workspace || thread?.cwd || "").trim();
+  return workspace && path.isAbsolute(workspace) ? workspace : "";
+}
+
+async function materializeWorkspacePromptFile(timer = {}, env = process.env, options = {}) {
+  const prompt = String(timer.prompt || "").trim();
+  if (!prompt) return timer;
+  const workspace = await targetThreadWorkspace(timer, env);
+  if (!workspace) return timer;
+
+  const existingPromptFile = String(timer.promptFile || "").trim();
+  let promptFile = "";
+  if (existingPromptFile) {
+    if (!options.rewriteExisting || !pathIsInside(workspace, existingPromptFile)) return timer;
+    promptFile = existingPromptFile;
+  } else {
+    promptFile = path.join(
+      workspace,
+      "timer-prompts",
+      `${safeTimerPromptSlug(timer.label)}-${safeTimerPromptSlug(timer.id)}.md`,
+    );
+  }
+
+  await fs.mkdir(path.dirname(promptFile), { recursive: true });
+  await fs.writeFile(promptFile, `${prompt}\n`, { mode: 0o644 });
+  return { ...timer, prompt: "", promptFile };
+}
+
+function manualRunDedupeMs(env = process.env) {
+  const parsed = Number(env.ORKESTR_TIMER_MANUAL_RUN_DEDUPE_MS || env.ORKESTR_TIMER_MANUAL_DEDUPE_MS || "");
+  if (Number.isFinite(parsed) && parsed >= 0) return parsed;
+  return defaultManualRunDedupeMs;
+}
+
+function recentManualRun(timer, now = new Date(), env = process.env) {
+  const windowMs = manualRunDedupeMs(env);
+  if (windowMs <= 0) return null;
+  const lastMs = Date.parse(String(timer.lastManualRunAt || ""));
+  if (!Number.isFinite(lastMs)) return null;
+  const ageMs = now.getTime() - lastMs;
+  if (ageMs < 0 || ageMs >= windowMs) return null;
+  return {
+    lastManualRunAt: String(timer.lastManualRunAt || ""),
+    lastManualRunMessageId: String(timer.lastManualRunMessageId || ""),
+    ageMs,
+    windowMs,
+  };
 }
 
 function timerOwnerUserId(timer, env = process.env) {
@@ -453,7 +527,7 @@ export async function createTimer(input, env = process.env) {
     error.statusCode = 400;
     throw error;
   }
-  const timer = {
+  let timer = {
     id: randomUUID(),
     ownerUserId: normalizeUserId(input.ownerUserId || input.userId || env.ORKESTR_ADMIN_USER_ID || adminUserId),
     label: String(input.label || "Recurring agent task").trim(),
@@ -471,6 +545,7 @@ export async function createTimer(input, env = process.env) {
     enabled: input.enabled !== false,
     createdAt: new Date().toISOString(),
   };
+  timer = await materializeWorkspacePromptFile(timer, env);
   timer.nextRunAt = nextRunAt(timer);
   timers.push(timer);
   await timerRepository.save(timers);
@@ -611,11 +686,17 @@ export async function updateTimer(id, patch = {}, env = process.env, now = new D
   const timerId = String(id || patch?.timerId || "").trim();
   const timers = await listTimers(env);
   let updated = null;
-  const next = timers.map((timer) => {
-    if (timer.id !== timerId) return timer;
+  const next = [];
+  const promptChanged = hasOwn(patch, "prompt");
+  for (const timer of timers) {
+    if (timer.id !== timerId) {
+      next.push(timer);
+      continue;
+    }
     updated = timerUpdatePatch(timer, patch, now);
-    return updated;
-  });
+    updated = await materializeWorkspacePromptFile(updated, env, { rewriteExisting: promptChanged });
+    next.push(updated);
+  }
   if (!updated) {
     const error = new Error("timer_not_found");
     error.statusCode = 404;
@@ -672,8 +753,32 @@ export async function runTimerNow(id, env = process.env, now = new Date(), optio
     error.statusCode = 404;
     throw error;
   }
+  const duplicate = options.allowDuplicate === true ? null : recentManualRun(timer, now, env);
+  if (duplicate) {
+    return appendEvent(
+      {
+        type: "timer_manual_run",
+        timerId: timer.id,
+        ownerUserId: timer.ownerUserId,
+        target: timer.target,
+        messageId: duplicate.lastManualRunMessageId,
+        label: timer.label,
+        prompt: timer.prompt ? timer.prompt.slice(0, 240) : "",
+        promptFile: timer.promptFile || "",
+        deduped: true,
+        skipped: true,
+        skipReason: "recent_manual_run",
+        lastManualRunAt: duplicate.lastManualRunAt,
+        ageMs: duplicate.ageMs,
+        dedupeWindowMs: duplicate.windowMs,
+      },
+      env,
+    );
+  }
   const message = await enqueueTimerMessage(timer, "timer_manual_run", env, options.principal || null);
   timer.lastRunAt = now.toISOString();
+  timer.lastManualRunAt = now.toISOString();
+  timer.lastManualRunMessageId = message.id;
   timer.nextRunAt = timer.cadence === "once" ? null : nextRunAt(timer, now);
   if (timer.cadence === "once") timer.enabled = false;
   delete timer.lastError;

@@ -31,13 +31,14 @@ import { userScopedCapabilityHints } from "../../../../../packages/core/src/user
 import { requestPrincipal } from "../../../../../packages/core/src/principal.js";
 import { isAdminPrincipal } from "../../../../../packages/core/src/policy.js";
 import { distributionIdentity } from "../../../../../packages/core/src/distribution.js";
-import { getUser } from "../../../../../packages/core/src/users.js";
+import { getUser, upsertUser } from "../../../../../packages/core/src/users.js";
 import { listTenantVms } from "../../../../../packages/core/src/tenant-vm-registry.js";
 import { configuredWhatsAppChatNamePrefix, defaultWhatsAppReplyPrefix } from "../../../../../packages/core/src/whatsapp-defaults.js";
 import {
   parentConnectorProviderDefinitions,
   parentConnectorRuntimeConfig,
 } from "../../../../../packages/connectors/src/parent-connector-apps.js";
+import { getGoogleWorkspaceConnectRequest } from "../../../../../packages/connectors/src/google-workspace.js";
 import {
   approvePairingChallenge,
   createPairingChallenge,
@@ -340,8 +341,10 @@ async function pairingChallengeTarget(body: Record<string, unknown> = {}, reques
   const instanceId = String(body.instanceId || body.instance || body.orkestrInstanceId || "").trim();
   const requestedPath = sameOriginRequestedPath(body, instanceId);
   let derivedFromInstanceOwner = false;
+  let ownerVm: any = null;
   if (!userId && instanceId) {
-    userId = await ownerUserIdForBrokerInstance(instanceId);
+    ownerVm = await tenantVmForBrokerInstance(instanceId);
+    userId = String(ownerVm?.ownerUserId || "").trim();
     derivedFromInstanceOwner = Boolean(userId);
   }
   if (!userId) return { instanceId, requestedPath };
@@ -351,21 +354,33 @@ async function pairingChallengeTarget(body: Record<string, unknown> = {}, reques
   if (!trustedAdminContext && !derivedFromInstanceOwner) {
     throw httpError("admin_pairing_required", 403);
   }
-  const user = await getUser(userId);
+  let user = await getUser(userId);
+  if (!user && derivedFromInstanceOwner) {
+    user = await upsertUser({
+      id: userId,
+      role: "user",
+      displayName: cleanText(ownerVm?.displayName) || userId,
+    });
+  }
   if (!user) throw httpError("user_not_found", 404);
   if (user.status === "disabled") throw httpError("user_disabled", 409);
-  return { userId: user.id, role: user.role, instanceId, requestedPath };
+  return {
+    userId: user.id,
+    role: user.role,
+    instanceId,
+    requestedPath,
+    ...(await connectorAuthIntentForRequestedPath(requestedPath, instanceId, user.id, ownerVm)),
+  };
 }
 
-async function ownerUserIdForBrokerInstance(instanceId = ""): Promise<string> {
+async function tenantVmForBrokerInstance(instanceId = ""): Promise<any> {
   const id = String(instanceId || "").trim();
-  if (!id) return "";
+  if (!id) return null;
   const vms = await listTenantVms().catch(() => []);
-  const vm = vms.find((item: any) =>
+  return vms.find((item: any) =>
     String(item?.labels?.brokerInstanceId || item?.labels?.instanceId || "").trim() === id ||
     String(item?.endpoint?.brokerInstanceId || "").trim() === id,
-  );
-  return String(vm?.ownerUserId || "").trim();
+  ) || null;
 }
 
 function sameOriginRequestedPath(body: Record<string, unknown> = {}, instanceId = ""): string {
@@ -378,6 +393,73 @@ function sameOriginRequestedPath(body: Record<string, unknown> = {}, instanceId 
   } catch {
     return "";
   }
+}
+
+async function connectorAuthIntentForRequestedPath(requestedPath = "", instanceId = "", userId = "", ownerVm: any = null) {
+  if (!requestedPath) return {};
+  let target: URL;
+  try {
+    target = new URL(requestedPath, "http://localhost");
+  } catch {
+    return {};
+  }
+  const parts = target.pathname.split("/").filter(Boolean);
+  if (parts[0] !== "i" || parts[1] !== instanceId || parts[2] !== "app" || parts[3] !== "connectors") return {};
+  const service = String(parts[4] || target.searchParams.get("service") || "").trim().toLowerCase();
+  if (service !== "gmail") return {};
+  if (target.searchParams.get("mcp") !== "tools/call") return {};
+  if (target.searchParams.get("tool") !== "orkestr_auth") return {};
+  if (target.searchParams.get("service") !== "gmail") return {};
+  if (target.searchParams.get("provider") !== "google_workspace") return {};
+  if (target.searchParams.get("action") !== "connect") return {};
+  if (target.searchParams.get("instance_id") !== instanceId) return {};
+  const connectId = String(target.searchParams.get("connect") || target.searchParams.get("connect_id") || "").trim();
+  const connectRequest = await googleWorkspaceConnectRequestForPairingIntent(connectId, instanceId);
+  const tenantVmId = String(connectRequest?.tenantVmId || connectRequest?.brokerTenantVmId || ownerVm?.id || "").trim();
+  const thread = String(target.searchParams.get("thread") || target.searchParams.get("thread_id") || "").trim();
+  const trustedThread = String(
+    connectRequest?.threadName ||
+      connectRequest?.brokerTenantThreadName ||
+      connectRequest?.threadTitle ||
+      connectRequest?.threadId ||
+      connectRequest?.brokerTenantThreadId ||
+      thread,
+  ).trim();
+  const trustedConnectId = String(connectRequest?.connectId || connectId).trim();
+  return {
+    allowedActions: [trustedConnectId ? `orkestr_auth.google.connect:${trustedConnectId}` : "orkestr_auth.google.connect"],
+    authIntent: {
+      mcp: "tools/call",
+      tool: "orkestr_auth",
+      service: "gmail",
+      provider: "google_workspace",
+      action: "connect",
+      actionLabel: "Connect Gmail",
+      title: "Approve Gmail connection",
+      description: `Approve Google Workspace access for instance ${instanceId}.`,
+      connectId: trustedConnectId,
+      instanceId,
+      tenantVmId,
+      userId,
+      thread: trustedThread,
+      threadId: String(connectRequest?.threadId || connectRequest?.brokerTenantThreadId || "").trim(),
+      chatId: String(connectRequest?.chatId || connectRequest?.brokerTenantChatId || "").trim(),
+      accountId: String(connectRequest?.accountId || connectRequest?.brokerTenantAccountId || "").trim(),
+      account: String(connectRequest?.account || "").trim().toLowerCase(),
+      source: String(connectRequest?.source || (trustedConnectId ? "connect_link" : "")).trim(),
+    },
+  };
+}
+
+async function googleWorkspaceConnectRequestForPairingIntent(connectId = "", instanceId = "") {
+  const id = String(connectId || "").trim();
+  if (!id) return null;
+  const payload = await getGoogleWorkspaceConnectRequest(id).catch(() => null);
+  const request = payload?.request && typeof payload.request === "object" ? payload.request : null;
+  if (!request) return null;
+  const requestInstanceId = String(request.brokerInstanceId || request.instanceId || "").trim();
+  if (requestInstanceId && requestInstanceId !== instanceId) return null;
+  return request;
 }
 
 function shouldRedactSetupStatus(request: any, status: any): boolean {
