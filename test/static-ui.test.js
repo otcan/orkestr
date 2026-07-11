@@ -544,6 +544,18 @@ test("broker instance app path pairs on broker and proxies the VM WebUI", async 
       headers: { cookie: staleSameCookie },
       redirect: "manual",
     });
+    const globalChallenge = await createPairingChallenge({ env: process.env });
+    await approvePairingChallenge(globalChallenge.challengeId, { approvedBy: "node:test", env: process.env });
+    const globalPaired = await pairBrowser({ challengeId: globalChallenge.challengeId, env: process.env });
+    const globalCookie = sessionCookieHeader(globalPaired.token, process.env);
+    const globalSessionScopeResponse = await fetch(`http://127.0.0.1:${port}/api/setup/security/session-scope?instanceId=${encodeURIComponent(brokerRegistration.instanceId)}&return=${encodeURIComponent(`${brokeredConnectUrl.pathname}${brokeredConnectUrl.search}`)}`, {
+      headers: { cookie: globalCookie },
+    });
+    const globalSessionScope = await globalSessionScopeResponse.json();
+    const globalCookieConnect = await fetch(`http://127.0.0.1:${port}${brokeredConnectUrl.pathname}${brokeredConnectUrl.search}`, {
+      headers: { cookie: globalCookie },
+      redirect: "manual",
+    });
     const freshConnectChallenge = await createPairingChallenge({
       env: process.env,
       instanceId: brokerRegistration.instanceId,
@@ -675,6 +687,13 @@ test("broker instance app path pairs on broker and proxies the VM WebUI", async 
       assert.equal(returnUrl.pathname, `/i/${brokerRegistration.instanceId}/app/connectors/gmail`);
       assert.equal(returnUrl.searchParams.get("connect"), brokeredConnect.connectId);
     }
+    assert.equal(globalSessionScopeResponse.status, 200);
+    assert.equal(globalSessionScope.paired, true);
+    assert.equal(globalSessionScope.validForReturn, false);
+    assert.equal(globalSessionScope.reason, "instance_mismatch");
+    assert.equal(globalCookieConnect.status, 302);
+    assert.match(globalCookieConnect.headers.get("set-cookie") || "", /orkestr_session=; Path=\//);
+    assert.match(globalCookieConnect.headers.get("set-cookie") || "", new RegExp(`Path=/i/${brokerRegistration.instanceId}/app`));
     assert.equal(staleFirstConnect.status, 200);
     assert.match(staleFirstConnectHtml, /Connect Gmail/);
     assert.equal(staleFirstStartResponse.status, 200);

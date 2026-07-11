@@ -24,6 +24,11 @@ function restoreEnv(prior) {
   }
 }
 
+const priorWhatsappAutostart = saveEnv(["ORKESTR_WHATSAPP_AUTOSTART", "WHATSAPP_LOCAL_AUTOSTART"]);
+process.env.ORKESTR_WHATSAPP_AUTOSTART = "0";
+process.env.WHATSAPP_LOCAL_AUTOSTART = "0";
+test.after(() => restoreEnv(priorWhatsappAutostart));
+
 async function json(response) {
   return response.json();
 }
@@ -403,6 +408,7 @@ test("browser pairing protects API routes when auth is required", async () => {
     assert.equal(pairPayload.session.instanceId, "demo-vm-001");
     const cookie = pairResponse.headers.get("set-cookie") || "";
     assert.match(cookie, /orkestr_session=/);
+    assert.match(cookie, /Path=\/i\/demo-vm-001\/app/);
 
     const allowed = await fetch(`${baseUrl}/api/threads`, { headers: { cookie } });
     assert.equal(allowed.status, 200);

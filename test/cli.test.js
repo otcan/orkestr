@@ -885,6 +885,25 @@ test("CLI prints non-secret runtime settings from local state", async () => {
   assert.equal(payload.settings.codex.permissionPrompts.alwaysApprove.requiresExplicitScope, true);
 });
 
+test("CLI creates a Google Workspace connect link for agents", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-cli-connect-google-"));
+  const stdout = capture();
+  const code = await runCli(["connect", "google", "--json"], {
+    env: {
+      ORKESTR_HOME: home,
+      ORKESTR_PUBLIC_URL: "https://app.example.test",
+    },
+    stdout,
+    stderr: capture(),
+  });
+  const payload = JSON.parse(stdout.text());
+
+  assert.equal(code, 0);
+  assert.equal(payload.ok, true);
+  assert.match(payload.link, /^https:\/\/app\.example\.test\/connect\/google\?connect=/);
+  assert.match(payload.message, /Requested provider: google_workspace/);
+});
+
 test("CLI manages secure input secrets without echoing values", async () => {
   const stdout = capture();
   const seen = [];

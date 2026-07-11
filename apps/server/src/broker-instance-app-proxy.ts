@@ -10,7 +10,7 @@ import { startGmailOAuth } from "../../../packages/connectors/src/gmail.js";
 import { googleWorkspaceBrokeredConnectorSetupPath } from "../../../packages/connectors/src/google-workspace.js";
 import { googleWorkspaceDefaultGmailCapabilities } from "../../../packages/connectors/src/google-workspace-scopes.js";
 import { encryptBrokerInstanceProxyPayload, resolveBrokerConnectInstance } from "../../../packages/core/src/broker-instance-registry.js";
-import { securityCookieName, securitySessionForToken } from "../../../packages/core/src/security.js";
+import { clearSessionCookieHeaders, instanceAppSessionCookiePath, securityCookieName, securitySessionForToken } from "../../../packages/core/src/security.js";
 import { listTenantVms } from "../../../packages/core/src/tenant-vm-registry.js";
 import { getUser } from "../../../packages/core/src/users.js";
 import { instanceSetupReturnPath } from "./instance-connect-setup.js";
@@ -111,11 +111,15 @@ function sendJson(response: any, statusCode: number, body: Record<string, unknow
     .send(JSON.stringify(body));
 }
 
-function redirect(response: any, location: string, message = "Redirecting."): void {
-  response
+function redirect(response: any, location: string, message = "Redirecting.", headers: Record<string, unknown> = {}): void {
+  const next = response
     .status(302)
     .header("cache-control", "no-store")
-    .header("location", location)
+    .header("location", location);
+  for (const [name, value] of Object.entries(headers)) {
+    if (value !== undefined && value !== null && value !== "") next.header(name, value as any);
+  }
+  next
     .type("text/plain; charset=utf-8")
     .send(message);
 }
@@ -179,6 +183,15 @@ function requestHasInstanceSession(request: any, route: BrokerAppRoute): boolean
   const session = request?.orkestrSecuritySession;
   if (!session || String(session.instanceId || "") !== route.instanceId) return false;
   return authIntentGoogleConnectActionMatches(session, brokerGoogleWorkspaceConnectorConnectId(route));
+}
+
+function wrongScopeCookieClearHeaders(request: any, route: BrokerAppRoute): string[] {
+  if (!request?.orkestrSecuritySession) return [];
+  const requestHost = String(request?.headers?.["x-forwarded-host"] || request?.headers?.host || "");
+  return clearSessionCookieHeaders(process.env, {
+    requestHost,
+    paths: [instanceAppSessionCookiePath(route.instanceId)],
+  });
 }
 
 function clean(value: unknown): string {
@@ -371,7 +384,9 @@ async function proxyBrokerAppHttp(request: any, response: any): Promise<void> {
       sendPlain(response, 401, "broker_instance_pairing_required");
       return;
     }
-    redirect(response, pairingRedirectUrl(request, route, requestUrl), "Redirecting to Orkestr pairing.");
+    redirect(response, pairingRedirectUrl(request, route, requestUrl), "Redirecting to Orkestr pairing.", {
+      "set-cookie": wrongScopeCookieClearHeaders(request, route),
+    });
     return;
   }
   if (await handleBrokerGoogleWorkspaceStart(request, response, route)) return;

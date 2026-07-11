@@ -352,7 +352,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
         return;
       }
       this.pairingRequired = false;
-      if (this.redirectPairedBrowserFromPairingPath()) return;
+      if (await this.redirectPairedBrowserFromPairingPath()) return;
       if (!this.uiRuntimeReady() && !this.onboardingActive) {
         this.apiOnline = true;
         this.threadWizardOpen = false;
@@ -1060,12 +1060,59 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     await this.refresh(false);
   }
 
-  private redirectPairedBrowserFromPairingPath(): boolean {
+  private async redirectPairedBrowserFromPairingPath(): Promise<boolean> {
     const parts = globalThis.location?.pathname?.split("/").filter(Boolean) || [];
     if (parts[0] !== "setup" || parts[1] !== "pairing") return false;
     const returnUrl = this.sameOriginPairingReturnUrl();
+    if (returnUrl) {
+      const scope = await this.pairingReturnSessionScope(returnUrl);
+      if (scope && scope.validForReturn === false) {
+        this.enterPairingRequired();
+        return true;
+      }
+      if (!scope && this.isBrokerInstanceReturnUrl(returnUrl)) {
+        this.enterPairingRequired();
+        return true;
+      }
+    }
     globalThis.location.replace(returnUrl || "/");
     return true;
+  }
+
+  private async pairingReturnSessionScope(returnUrl = ""): Promise<{ validForReturn?: boolean } | null> {
+    if (!returnUrl) return null;
+    let target: URL;
+    try {
+      target = new URL(returnUrl, globalThis.location?.href || "http://localhost/");
+    } catch {
+      return null;
+    }
+    const returnPath = `${target.pathname}${target.search}${target.hash}`;
+    const instanceId = this.instanceIdFromPairingReturn(target);
+    if (!instanceId && !this.isBrokerInstanceReturnUrl(returnUrl)) return null;
+    try {
+      return await firstValueFrom(this.api.securitySessionScope(returnPath, instanceId));
+    } catch {
+      return null;
+    }
+  }
+
+  private instanceIdFromPairingReturn(target: URL): string {
+    const source = new URLSearchParams(globalThis.location?.search || "");
+    const explicit = source.get("instanceId") || source.get("instance") || source.get("orkestrInstanceId") || "";
+    if (explicit) return explicit;
+    const parts = target.pathname.split("/").filter(Boolean);
+    return parts[0] === "i" && parts[2] === "app" ? parts[1] || "" : "";
+  }
+
+  private isBrokerInstanceReturnUrl(returnUrl = ""): boolean {
+    try {
+      const target = new URL(returnUrl, globalThis.location?.href || "http://localhost/");
+      const parts = target.pathname.split("/").filter(Boolean);
+      return parts[0] === "i" && Boolean(parts[1]) && parts[2] === "app";
+    } catch {
+      return false;
+    }
   }
 
   openThreadWizard(): void {

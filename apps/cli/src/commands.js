@@ -13,6 +13,10 @@ import {
   revokeSecuritySession,
 } from "../../../packages/core/src/security.js";
 import { readRuntimeSettings } from "../../../packages/core/src/runtime-settings.js";
+import { getThread } from "../../../packages/core/src/threads.js";
+import { adminPrincipal, userPrincipal } from "../../../packages/core/src/principal.js";
+import { createGoogleWorkspaceConnectLink } from "../../../packages/connectors/src/google-workspace.js";
+import { closeThreadRegistryCache } from "../../../packages/storage/src/thread-registry.js";
 import { rawAttachWatchText } from "../../../packages/core/src/raw-terminal-watch.js";
 import { defaultApiBase, requestJson } from "./api-client.js";
 import { createCommand } from "./create-command.js";
@@ -1343,7 +1347,61 @@ async function connectCommand(argv, ctx) {
   const subcommand = argv[0] || "";
   const rest = argv.slice(1);
   if (subcommand === "approve") return approveSecurityChallenge(rest, ctx, "connect");
-  throw new Error("Usage: orkestr connect approve <code> [--json]");
+  if (["google", "google-workspace", "workspace", "gmail"].includes(subcommand)) return connectGoogleWorkspaceCommand(rest, ctx);
+  throw new Error("Usage: orkestr connect [google|approve <code>] [--thread thread-id] [--account email] [--json]");
+}
+
+async function connectGoogleWorkspaceCommand(argv, ctx) {
+  const json = argv.includes("--json");
+  try {
+    const cwd = flagValue(argv, "--cwd") || ctx.cwd || process.cwd();
+    const explicitThreadId = flagValue(argv, "--thread") || flagValue(argv, "--thread-id") || "";
+    const where = explicitThreadId ? null : await googleConnectWhereAmI(cwd, ctx);
+    const threadId = explicitThreadId || where?.thread?.id || "";
+    const thread = await googleConnectThread(threadId, where, ctx);
+    const principal = await googleConnectPrincipal(thread, where, ctx);
+    const connect = await createGoogleWorkspaceConnectLink({
+      principal,
+      thread,
+      chatId: flagValue(argv, "--chat-id") || flagValue(argv, "--chat") || "",
+      accountId: flagValue(argv, "--account-id") || flagValue(argv, "--wa-account") || "",
+      account: flagValue(argv, "--account") || flagValue(argv, "--email") || "",
+    }, ctx.env);
+    if (json) ctx.stdout.write(`${JSON.stringify(connect, null, 2)}\n`);
+    else ctx.stdout.write(`${connect.message || connect.link || connect.connectLink || ""}\n`);
+    return connect?.ok === false ? 1 : 0;
+  } finally {
+    await closeThreadRegistryCache(ctx.env).catch(() => {});
+  }
+}
+
+async function googleConnectWhereAmI(cwd = "", ctx = {}) {
+  const params = new URLSearchParams();
+  if (cwd) params.set("cwd", cwd);
+  return await requestJson(`/api/whereiam?${params.toString()}`, ctx).catch(() => null);
+}
+
+async function googleConnectThread(threadId = "", where = null, ctx = {}) {
+  const id = String(threadId || "").trim();
+  if (id) {
+    const thread = await getThread(id, ctx.env).catch(() => null);
+    if (thread) return thread;
+  }
+  const publicThread = where?.thread && typeof where.thread === "object" ? where.thread : {};
+  return {
+    id: String(publicThread.id || id || "").trim(),
+    name: String(publicThread.name || publicThread.title || publicThread.displayName || "").trim(),
+    title: String(publicThread.title || publicThread.name || publicThread.displayName || "").trim(),
+    ownerUserId: String(publicThread.ownerUserId || where?.tenancy?.ownerUserId || where?.user?.userId || "").trim(),
+  };
+}
+
+async function googleConnectPrincipal(thread = {}, where = null, ctx = {}) {
+  const userId = String(thread.ownerUserId || where?.tenancy?.ownerUserId || where?.user?.userId || ctx.env?.ORKESTR_ADMIN_USER_ID || "admin").trim();
+  const displayName = String(where?.user?.displayName || userId).trim();
+  const role = String(where?.user?.role || "").trim().toLowerCase();
+  if (role === "admin" && userId === String(where?.user?.userId || "").trim()) return adminPrincipal({ id: userId, displayName });
+  return userPrincipal({ id: userId, role: "user", displayName, source: "connect-cli" });
 }
 
 async function codexCommand(argv, ctx) {
@@ -1883,6 +1941,7 @@ Common thread commands:
   orkestr api-session bind [--api-session-id id] [--cwd path] [--thread thread-id] [--json]
   orkestr api-session message <text> [--api-session-id id] [--role assistant|user] [--phase final_answer] [--json]
   orkestr api-session status [--api-session-id id] [--json]
+  orkestr connect google [--account email] [--json]
   orkestr attach [thread-name-or-id] [--print] [--read-only] [--takeover] [--interrupt] [--yes] [--interval seconds] [--timeout duration] [--json]
   orkestr send <thread-name-or-id> "<message>" [--json]
   orkestr wake <thread-name-or-id> [--json]
@@ -2055,6 +2114,7 @@ function positional(argv) {
     "--cwd",
     "--executor",
     "--domain",
+    "--email",
     "--href",
     "--host",
     "--id",
@@ -2106,6 +2166,7 @@ function positional(argv) {
     "--api-session",
     "--api-session-id",
     "--wa-admin",
+    "--wa-account",
     "--admin-participant",
     "--wa-participant",
     "--participant",

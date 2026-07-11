@@ -1438,10 +1438,10 @@ function decodeRouteSegment(value = "") {
   }
 }
 
-function brokerAppRequestRoute(request) {
+function brokerAppRouteFromUrl(value = "") {
   let parsed;
   try {
-    parsed = new URL(String(request?.originalUrl || request?.url || "/"), "http://localhost");
+    parsed = new URL(String(value || "/"), "http://localhost");
   } catch {
     return null;
   }
@@ -1455,6 +1455,10 @@ function brokerAppRequestRoute(request) {
     instanceId,
     connectId: brokerGoogleWorkspaceConnectorConnectId(parsed, instanceId, rest),
   };
+}
+
+function brokerAppRequestRoute(request) {
+  return brokerAppRouteFromUrl(request?.originalUrl || request?.url || "/");
 }
 
 function brokerGoogleWorkspaceConnectorConnectId(parsed, instanceId = "", rest = []) {
@@ -1484,6 +1488,35 @@ function sessionMatchesBrokerAppRoute(session = {}, route = null) {
   if (!route || session.shareId) return false;
   if (String(session.instanceId || "").trim() !== route.instanceId) return false;
   return authIntentGoogleConnectActionMatches(session, route.connectId);
+}
+
+export function securitySessionReturnScope(session = null, returnPath = "", options = {}) {
+  const route = brokerAppRouteFromUrl(returnPath || "");
+  const expectedInstanceId = String(options.instanceId || "").trim();
+  const hasSession = Boolean(session?.id);
+  if (!route) {
+    return {
+      scoped: false,
+      validForReturn: hasSession,
+      reason: hasSession ? "session_valid" : "session_missing",
+    };
+  }
+  const instanceId = route.instanceId || expectedInstanceId;
+  const result = {
+    scoped: true,
+    kind: "broker_app",
+    instanceId,
+    connectId: route.connectId || "",
+    validForReturn: false,
+    reason: "session_missing",
+  };
+  if (!hasSession) return result;
+  if (session.shareId) return { ...result, reason: "share_session_not_valid_for_instance_app" };
+  if (String(session.instanceId || "").trim() !== instanceId) return { ...result, reason: "instance_mismatch" };
+  if (!authIntentGoogleConnectActionMatches(session, route.connectId)) {
+    return { ...result, reason: "google_connect_scope_mismatch" };
+  }
+  return { ...result, validForReturn: true, reason: "session_valid" };
 }
 
 function sessionCreatedAtMs(session = {}) {
@@ -1532,7 +1565,7 @@ function isAllowedBeforePairing(request) {
   if (url.startsWith("/oauth/")) return true;
   if (method === "GET" && /^\/(?:api\/)?desktop-shares\/[^/]+\/(?:open|status)$/.test(url)) return true;
   if (method === "GET" && /^\/(?:api\/)?tenant-vms\/[^/]+\/desktop-shares\/[^/]+\/(?:open|status)$/.test(url)) return true;
-  if (method === "GET" && ["/api/health", "/api/ready", "/api/version", "/api/setup/status"].some((path) => url.startsWith(path))) return true;
+  if (method === "GET" && ["/api/health", "/api/ready", "/api/version", "/api/setup/status", "/api/setup/security/session-scope"].some((path) => url.startsWith(path))) return true;
   if (method === "POST" && url === "/api/public/waitlist") return true;
   if (method === "POST" && (url === "/api/setup/security/challenge" || url === "/api/setup/security/challenges")) return true;
   if (method === "POST" && /^\/api\/shared-apps\/i\/[^/]+\/a\/[^/]+\/s\/[^/]+\/challenge$/.test(url)) return true;
@@ -1641,13 +1674,55 @@ export function sessionCookieHeader(token, env = process.env, options = {}) {
   const cookieDomain = cookieDomainMatchesHost(urls.cookieDomain, options.requestHost) ? urls.cookieDomain : "";
   const secure = String(env.ORKESTR_COOKIE_SECURE || "").trim() === "1" ||
     Boolean(String(urls.appUrl || env.ORKESTR_PUBLIC_HTTPS_URL || "").startsWith("https://"));
+  const cookiePath = normalizeCookiePath(options.path || "/");
   return [
     `${cookieName}=${encodeURIComponent(token)}`,
-    "Path=/",
+    `Path=${cookiePath}`,
     cookieDomain ? `Domain=${cookieDomain}` : "",
     "HttpOnly",
     "SameSite=Lax",
     `Max-Age=${Math.floor(sessionTtlMs / 1000)}`,
     secure ? "Secure" : "",
   ].filter(Boolean).join("; ");
+}
+
+function normalizeCookiePath(value = "/") {
+  const path = String(value || "/").trim();
+  if (!path.startsWith("/") || path.startsWith("//")) return "/";
+  return path.replace(/[\r\n;]/g, "") || "/";
+}
+
+export function instanceAppSessionCookiePath(instanceId = "") {
+  const id = String(instanceId || "").trim();
+  return id ? `/i/${encodeURIComponent(id)}/app` : "/";
+}
+
+export function clearSessionCookieHeaders(env = process.env, options = {}) {
+  const urls = publicUrlConfig(env);
+  const cookieDomain = cookieDomainMatchesHost(urls.cookieDomain, options.requestHost) ? urls.cookieDomain : "";
+  const secure = String(env.ORKESTR_COOKIE_SECURE || "").trim() === "1" ||
+    Boolean(String(urls.appUrl || env.ORKESTR_PUBLIC_HTTPS_URL || "").startsWith("https://"));
+  const paths = [
+    "/",
+    normalizeCookiePath(options.path || ""),
+    ...(Array.isArray(options.paths) ? options.paths.map(normalizeCookiePath) : []),
+  ].filter(Boolean);
+  const uniquePaths = [...new Set(paths)];
+  const domains = cookieDomain ? ["", cookieDomain] : [""];
+  const headers = [];
+  for (const path of uniquePaths) {
+    for (const domain of domains) {
+      headers.push([
+        `${cookieName}=`,
+        `Path=${path}`,
+        domain ? `Domain=${domain}` : "",
+        "HttpOnly",
+        "SameSite=Lax",
+        "Max-Age=0",
+        "Expires=Thu, 01 Jan 1970 00:00:00 GMT",
+        secure ? "Secure" : "",
+      ].filter(Boolean).join("; "));
+    }
+  }
+  return headers;
 }

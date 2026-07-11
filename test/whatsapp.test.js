@@ -36,9 +36,23 @@ import { dataPaths, userDataPaths } from "../packages/storage/src/paths.js";
 import { listEvents } from "../packages/storage/src/store.js";
 
 const execFileAsync = promisify(execFile);
+const priorWhatsappAutostart = {
+  ORKESTR_WHATSAPP_AUTOSTART: process.env.ORKESTR_WHATSAPP_AUTOSTART,
+  WHATSAPP_LOCAL_AUTOSTART: process.env.WHATSAPP_LOCAL_AUTOSTART,
+};
+
+process.env.ORKESTR_WHATSAPP_AUTOSTART = "0";
+process.env.WHATSAPP_LOCAL_AUTOSTART = "0";
 
 afterEach(() => {
   stopCodexAppServerClients();
+});
+
+test.after(() => {
+  for (const [key, value] of Object.entries(priorWhatsappAutostart)) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
 });
 
 test("whatsapp outbound intent state merge is monotonic", () => {

@@ -243,6 +243,16 @@ function defaultConnectorSettings(env = process.env) {
       enabled: truthy(env.ORKESTR_GMAIL_ENABLED) || Boolean(firstValue(env.GMAIL_OAUTH_CLIENT_ID)),
       authDesktop: gmailAuthDesktop,
       needsAuthAction: "gmail.oauth.start",
+      googleWorkspaceConnectCommand: "orkestr connect google --json",
+      whatsappConnectCommand: "/connect google",
+    },
+    googleWorkspace: {
+      enabled: truthy(env.ORKESTR_GMAIL_ENABLED) || Boolean(firstValue(env.GMAIL_OAUTH_CLIENT_ID)) || Boolean(firstValue(env.ORKESTR_TENANT_VM_ID)),
+      provider: "google_workspace",
+      service: "gmail",
+      authMode: "brokered_whatsapp_command",
+      connectCommand: "orkestr connect google --json",
+      chatCommand: "/connect google",
     },
     outlook: {
       enabled: truthy(env.ORKESTR_OUTLOOK_ENABLED) || Boolean(firstValue(env.OUTLOOK_OAUTH_CLIENT_ID, env.MICROSOFT_OAUTH_CLIENT_ID)),

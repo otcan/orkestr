@@ -28,6 +28,7 @@ orkestr api-session bind --api-session-id "$ORKESTR_API_SESSION_ID" --cwd "$PWD"
 orkestr api-session message "Visible assistant update" --api-session-id "$ORKESTR_API_SESSION_ID"
 orkestr api-session status --api-session-id "$ORKESTR_API_SESSION_ID"
 orkestr settings --json
+orkestr connect google --json
 orkestr doctor timers
 orkestr security challenges
 orkestr security approve <challenge-id>
@@ -73,6 +74,12 @@ OAuth desktop slug, and WhatsApp receiving/reply aliases. WhatsApp account
 records should use numeric WhatsApp identities when available; old role names
 are compatibility aliases only. Secrets and OAuth
 tokens are never returned by this command.
+
+`orkestr connect google` creates the brokered Google Workspace/Gmail connect
+link for the current Orkestr thread. In tenant VMs this is the preferred
+agent-side command for user requests such as "connect Google"; it does not need
+a Gmail login hint. Use `/connect google` when the request is handled directly
+inside WhatsApp.
 
 `orkestr api-session` is the stable bridge for API-driven agents that are not
 already running inside Orkestr's Codex app-server transport. `bind` attaches a

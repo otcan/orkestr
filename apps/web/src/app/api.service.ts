@@ -615,6 +615,17 @@ export interface SecuritySessionListResponse {
   sessions: SecuritySession[];
 }
 
+export interface SecuritySessionScopeResponse {
+  ok: boolean;
+  paired: boolean;
+  scoped?: boolean;
+  kind?: string;
+  instanceId?: string;
+  connectId?: string;
+  validForReturn?: boolean;
+  reason?: string;
+}
+
 export interface SecurityChallenge {
   id: string;
   approveCode?: string;
@@ -1996,6 +2007,13 @@ export class ApiService {
 
   securitySessions(): Observable<SecuritySessionListResponse> {
     return this.http.get<SecuritySessionListResponse>(this.api("/setup/security/sessions"));
+  }
+
+  securitySessionScope(returnPath = "", instanceId = ""): Observable<SecuritySessionScopeResponse> {
+    const params = new URLSearchParams();
+    if (returnPath) params.set("return", returnPath);
+    if (instanceId) params.set("instanceId", instanceId);
+    return this.http.get<SecuritySessionScopeResponse>(this.api(`/setup/security/session-scope${params.toString() ? `?${params.toString()}` : ""}`));
   }
 
   revokeSecuritySession(sessionId: string): Observable<{ ok: boolean; revoked: string[] }> {
