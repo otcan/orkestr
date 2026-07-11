@@ -31,6 +31,27 @@ export async function saveThreadRecords(threads, env = process.env) {
   return records;
 }
 
+export async function closeThreadRegistryCache(env = null) {
+  const selected = new Set();
+  if (env) {
+    try {
+      const paths = await ensureDataDirs(env);
+      if (paths.threadsDb) selected.add(paths.threadsDb);
+    } catch {
+      // Fall back to closing all cached databases below.
+    }
+  }
+  for (const [dbPath, db] of dbCache.entries()) {
+    if (selected.size && !selected.has(dbPath)) continue;
+    dbCache.delete(dbPath);
+    try {
+      db.close();
+    } catch {
+      // Closing is best-effort for one-shot CLI cleanup.
+    }
+  }
+}
+
 export function dedupeThreadRecords(threads) {
   if (!Array.isArray(threads) || threads.length < 2) return Array.isArray(threads) ? threads : [];
   const selected = new Map();

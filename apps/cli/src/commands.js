@@ -14,9 +14,9 @@ import {
 } from "../../../packages/core/src/security.js";
 import { readRuntimeSettings } from "../../../packages/core/src/runtime-settings.js";
 import { getThread } from "../../../packages/core/src/threads.js";
-import { whereAmI } from "../../../packages/core/src/whereiam.js";
 import { adminPrincipal, userPrincipal } from "../../../packages/core/src/principal.js";
 import { createGoogleWorkspaceConnectLink } from "../../../packages/connectors/src/google-workspace.js";
+import { closeThreadRegistryCache } from "../../../packages/storage/src/thread-registry.js";
 import { rawAttachWatchText } from "../../../packages/core/src/raw-terminal-watch.js";
 import { defaultApiBase, requestJson } from "./api-client.js";
 import { createCommand } from "./create-command.js";
@@ -1353,21 +1353,32 @@ async function connectCommand(argv, ctx) {
 
 async function connectGoogleWorkspaceCommand(argv, ctx) {
   const json = argv.includes("--json");
-  const cwd = flagValue(argv, "--cwd") || ctx.cwd || process.cwd();
-  const where = await whereAmI({ cwd }, ctx.env).catch(() => null);
-  const threadId = flagValue(argv, "--thread") || flagValue(argv, "--thread-id") || where?.thread?.id || "";
-  const thread = await googleConnectThread(threadId, where, ctx);
-  const principal = await googleConnectPrincipal(thread, where, ctx);
-  const connect = await createGoogleWorkspaceConnectLink({
-    principal,
-    thread,
-    chatId: flagValue(argv, "--chat-id") || flagValue(argv, "--chat") || "",
-    accountId: flagValue(argv, "--account-id") || flagValue(argv, "--wa-account") || "",
-    account: flagValue(argv, "--account") || flagValue(argv, "--email") || "",
-  }, ctx.env);
-  if (json) ctx.stdout.write(`${JSON.stringify(connect, null, 2)}\n`);
-  else ctx.stdout.write(`${connect.message || connect.link || connect.connectLink || ""}\n`);
-  return connect?.ok === false ? 1 : 0;
+  try {
+    const cwd = flagValue(argv, "--cwd") || ctx.cwd || process.cwd();
+    const explicitThreadId = flagValue(argv, "--thread") || flagValue(argv, "--thread-id") || "";
+    const where = explicitThreadId ? null : await googleConnectWhereAmI(cwd, ctx);
+    const threadId = explicitThreadId || where?.thread?.id || "";
+    const thread = await googleConnectThread(threadId, where, ctx);
+    const principal = await googleConnectPrincipal(thread, where, ctx);
+    const connect = await createGoogleWorkspaceConnectLink({
+      principal,
+      thread,
+      chatId: flagValue(argv, "--chat-id") || flagValue(argv, "--chat") || "",
+      accountId: flagValue(argv, "--account-id") || flagValue(argv, "--wa-account") || "",
+      account: flagValue(argv, "--account") || flagValue(argv, "--email") || "",
+    }, ctx.env);
+    if (json) ctx.stdout.write(`${JSON.stringify(connect, null, 2)}\n`);
+    else ctx.stdout.write(`${connect.message || connect.link || connect.connectLink || ""}\n`);
+    return connect?.ok === false ? 1 : 0;
+  } finally {
+    await closeThreadRegistryCache(ctx.env).catch(() => {});
+  }
+}
+
+async function googleConnectWhereAmI(cwd = "", ctx = {}) {
+  const params = new URLSearchParams();
+  if (cwd) params.set("cwd", cwd);
+  return await requestJson(`/api/whereiam?${params.toString()}`, ctx).catch(() => null);
 }
 
 async function googleConnectThread(threadId = "", where = null, ctx = {}) {
