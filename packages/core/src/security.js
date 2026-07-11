@@ -1430,10 +1430,77 @@ function sharedAppRequestRoute(request) {
   };
 }
 
+function decodeRouteSegment(value = "") {
+  try {
+    return decodeURIComponent(value).trim();
+  } catch {
+    return String(value || "").trim();
+  }
+}
+
+function brokerAppRequestRoute(request) {
+  let parsed;
+  try {
+    parsed = new URL(String(request?.originalUrl || request?.url || "/"), "http://localhost");
+  } catch {
+    return null;
+  }
+  const parts = parsed.pathname.split("/").filter(Boolean).map(decodeRouteSegment);
+  const mounted = parts[0] !== "i" && parts[1] === "app";
+  if (!mounted && (parts[0] !== "i" || !parts[1] || parts[2] !== "app")) return null;
+  const instanceId = String(mounted ? parts[0] : parts[1] || "").trim();
+  if (!instanceId) return null;
+  const rest = parts.slice(mounted ? 2 : 3);
+  return {
+    instanceId,
+    connectId: brokerGoogleWorkspaceConnectorConnectId(parsed, instanceId, rest),
+  };
+}
+
+function brokerGoogleWorkspaceConnectorConnectId(parsed, instanceId = "", rest = []) {
+  if (rest.length !== 2 || String(rest[0] || "").toLowerCase() !== "connectors") return "";
+  if (String(rest[1] || "").toLowerCase() !== "gmail") return "";
+  const params = parsed.searchParams;
+  if (params.get("mcp") !== "tools/call") return "";
+  if (params.get("tool") !== "orkestr_auth") return "";
+  if (params.get("service") !== "gmail") return "";
+  if (params.get("provider") !== "google_workspace") return "";
+  if (params.get("action") !== "connect") return "";
+  if (params.get("instance_id") !== instanceId) return "";
+  return String(params.get("connect") || params.get("connect_id") || "").trim();
+}
+
+function authIntentGoogleConnectActionMatches(session, connectId = "") {
+  const id = String(connectId || "").trim();
+  if (!id) return true;
+  const allowedActions = Array.isArray(session?.allowedActions) ? session.allowedActions : [];
+  if (!allowedActions.some((action) => /^orkestr_auth\.google\.connect(?::|$)/.test(String(action || "").trim()))) return true;
+  if (allowedActions.includes(`orkestr_auth.google.connect:${id}`)) return true;
+  const intent = session?.authIntent && typeof session.authIntent === "object" ? session.authIntent : {};
+  return allowedActions.includes("orkestr_auth.google.connect") && !String(intent.connectId || "").trim();
+}
+
+function sessionMatchesBrokerAppRoute(session = {}, route = null) {
+  if (!route || session.shareId) return false;
+  if (String(session.instanceId || "").trim() !== route.instanceId) return false;
+  return authIntentGoogleConnectActionMatches(session, route.connectId);
+}
+
+function sessionCreatedAtMs(session = {}) {
+  const timestamp = Date.parse(session.createdAt || "");
+  return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
+function newestSessionCandidate(candidates = []) {
+  return [...candidates]
+    .sort((a, b) => sessionCreatedAtMs(b.session) - sessionCreatedAtMs(a.session))[0] || null;
+}
+
 async function securitySessionForRequest(request, env = process.env) {
   const tokens = [...new Set(cookieValues(request?.headers?.cookie || ""))];
   if (!tokens.length) return null;
   const route = sharedAppRequestRoute(request);
+  const brokerRoute = brokerAppRequestRoute(request);
   const candidates = [];
   for (const token of tokens) {
     const session = await securitySessionForToken(token, env, { request, touch: false }).catch(() => null);
@@ -1450,7 +1517,10 @@ async function securitySessionForRequest(request, env = process.env) {
       )
       .sort((a, b) => Date.parse(b.session.createdAt || "") - Date.parse(a.session.createdAt || ""))[0] || null;
   }
-  selected ||= candidates.find(({ session }) => !session.shareId) || candidates[0];
+  if (!selected && brokerRoute) {
+    selected = newestSessionCandidate(candidates.filter(({ session }) => sessionMatchesBrokerAppRoute(session, brokerRoute)));
+  }
+  selected ||= newestSessionCandidate(candidates.filter(({ session }) => !session.shareId)) || candidates[0];
   return await securitySessionForToken(selected.token, env, { request }).catch(() => null) || selected.session;
 }
 

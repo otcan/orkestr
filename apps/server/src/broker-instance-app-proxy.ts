@@ -438,18 +438,28 @@ async function proxyBrokerAppHttp(request: any, response: any): Promise<void> {
   request.pipe(upstream);
 }
 
-function cookieValue(header: string, name: string): string {
+function cookieValues(header: string, name: string): string[] {
+  const values: string[] = [];
   for (const part of String(header || "").split(";")) {
     const [key, ...rest] = part.trim().split("=");
-    if (key === name) return decodeURIComponent(rest.join("=") || "");
+    if (key === name) values.push(decodeURIComponent(rest.join("=") || ""));
   }
-  return "";
+  return values.filter(Boolean);
+}
+
+function sessionCreatedAtMs(session: any): number {
+  const timestamp = Date.parse(String(session?.createdAt || ""));
+  return Number.isFinite(timestamp) ? timestamp : 0;
 }
 
 async function upgradeHasInstanceSession(request: IncomingMessage, instanceId: string): Promise<boolean> {
-  const token = cookieValue(String(request.headers.cookie || ""), securityCookieName());
-  const session = await securitySessionForToken(token, process.env, { request, touch: false }).catch(() => null);
-  return Boolean(session && String(session.instanceId || "") === instanceId);
+  const tokens = [...new Set(cookieValues(String(request.headers.cookie || ""), securityCookieName()))];
+  const sessions: any[] = [];
+  for (const token of tokens) {
+    const session = await securitySessionForToken(token, process.env, { request, touch: false }).catch(() => null);
+    if (session && !session.shareId && String(session.instanceId || "") === instanceId) sessions.push(session);
+  }
+  return Boolean(sessions.sort((a, b) => sessionCreatedAtMs(b) - sessionCreatedAtMs(a))[0]);
 }
 
 function rawUpgradeHeaders(request: IncomingMessage, target: BrokerAppTarget, brokerAuth = ""): string {
