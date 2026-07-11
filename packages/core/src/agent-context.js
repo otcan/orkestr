@@ -133,8 +133,13 @@ Orkestr capabilities:
   \`orkestr whatsapp accounts list --json\` for local operator WhatsApp status
   because it carries the local CLI auth header; an unauthenticated
   \`/api/connectors/whatsapp/status\` probe can fail with browser-pairing auth
-  even when both WhatsApp accounts are connected. Do not read connector session
-  files or tokens directly.
+  even when both WhatsApp accounts are connected. For Google Workspace/Gmail
+  connection requests from a WhatsApp-bound or tenant-VM user, create the
+  brokered connector link with \`orkestr connect google --json\` and send the
+  returned link/message; the direct WhatsApp command is \`/connect google\`.
+  Do not ask for a Gmail login hint unless the user is intentionally starting a
+  raw Gmail OAuth flow outside the brokered Google Workspace connector. Do not
+  read connector session files or tokens directly.
 
 Safety rules:
 

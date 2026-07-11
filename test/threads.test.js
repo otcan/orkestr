@@ -19,6 +19,21 @@ import { appendThreadMessage, createThread, deleteThread, enqueueThreadInput, en
 import { adminPrincipal } from "../packages/core/src/principal.js";
 
 const execFileAsync = promisify(execFile);
+const priorThreadTestEnv = {
+  ORKESTR_AUTH_REQUIRED: process.env.ORKESTR_AUTH_REQUIRED,
+  ORKESTR_WHATSAPP_AUTOSTART: process.env.ORKESTR_WHATSAPP_AUTOSTART,
+  WHATSAPP_LOCAL_AUTOSTART: process.env.WHATSAPP_LOCAL_AUTOSTART,
+};
+
+process.env.ORKESTR_AUTH_REQUIRED = "0";
+process.env.ORKESTR_WHATSAPP_AUTOSTART = "0";
+process.env.WHATSAPP_LOCAL_AUTOSTART = "0";
+
+test.after(() => {
+  for (const [key, value] of Object.entries(priorThreadTestEnv)) {
+    restoreEnvValue(key, value);
+  }
+});
 
 async function createTempGitRepo(prefix = "orkestr-worker-repo-") {
   const repo = await fs.mkdtemp(path.join(os.tmpdir(), prefix));

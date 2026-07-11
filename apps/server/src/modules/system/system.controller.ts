@@ -51,6 +51,8 @@ import {
   revokeAllSecuritySessions,
   revokeSecuritySession,
   securityStatus,
+  securitySessionReturnScope,
+  instanceAppSessionCookiePath,
   sessionCookieHeader,
   setSecurityPairingEnabled,
 } from "../../../../../packages/core/src/security.js";
@@ -699,6 +701,16 @@ export class SystemController {
     return { security: await securityStatus() };
   }
 
+  @Get("setup/security/session-scope")
+  async setupSecuritySessionScope(@Req() request: any, @Query("return") returnPath = "", @Query("instanceId") instanceId = "") {
+    const session = request?.orkestrSecuritySession || null;
+    return {
+      ok: true,
+      paired: Boolean(session),
+      ...securitySessionReturnScope(session, String(returnPath || ""), { instanceId: String(instanceId || "") }),
+    };
+  }
+
   @Post("setup/security/challenge")
   @HttpCode(200)
   async setupSecurityChallenge(@Req() request: any, @Body() body: Record<string, unknown> = {}) {
@@ -772,6 +784,7 @@ export class SystemController {
     } as any);
     response.setHeader("set-cookie", sessionCookieHeader(result.token, process.env, {
       requestHost: String(request?.headers?.["x-forwarded-host"] || request?.headers?.host || ""),
+      path: result.session?.instanceId ? instanceAppSessionCookiePath(result.session.instanceId) : "/",
     }));
     return {
       ok: true,
