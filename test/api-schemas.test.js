@@ -18,6 +18,32 @@ import {
   whatsappInboundSchema,
 } from "../packages/shared/src/api-schemas.js";
 
+const serverEnvKeys = [
+  "ORKESTR_HOME",
+  "ORKESTR_RECOVER_RUNNING_ON_START",
+  "ORKESTR_WHATSAPP_AUTOSTART",
+  "WHATSAPP_LOCAL_AUTOSTART",
+];
+
+function snapshotEnv(keys) {
+  return new Map(keys.map((key) => [key, process.env[key]]));
+}
+
+function restoreEnv(snapshot) {
+  for (const [key, value] of snapshot.entries()) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+}
+
+async function startIsolatedSchemaServer(home) {
+  process.env.ORKESTR_HOME = home;
+  process.env.ORKESTR_RECOVER_RUNNING_ON_START = "0";
+  process.env.ORKESTR_WHATSAPP_AUTOSTART = "0";
+  process.env.WHATSAPP_LOCAL_AUTOSTART = "0";
+  return startServer({ port: 0, host: "127.0.0.1" });
+}
+
 test("shared API schemas expose high-value request contracts", () => {
   assert.equal(whatsappInboundSchema.body.properties.eventId.type, "string");
   assert.equal(whatsappInboundSchema.body.properties.attachments.type, "array");
@@ -39,9 +65,8 @@ test("shared API schemas expose high-value request contracts", () => {
 
 test("NestJS validates WhatsApp inbound request schema", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-schema-api-"));
-  const priorHome = process.env.ORKESTR_HOME;
-  process.env.ORKESTR_HOME = home;
-  const server = await startServer({ port: 0, host: "127.0.0.1" });
+  const priorEnv = snapshotEnv(serverEnvKeys);
+  const server = await startIsolatedSchemaServer(home);
   const { port } = server.address();
   try {
     const response = await fetch(`http://127.0.0.1:${port}/api/connectors/whatsapp/inbound`, {
@@ -60,16 +85,14 @@ test("NestJS validates WhatsApp inbound request schema", async () => {
     assert.match(payload.error, /attachments/);
   } finally {
     await new Promise((resolve) => server.close(resolve));
-    if (priorHome === undefined) delete process.env.ORKESTR_HOME;
-    else process.env.ORKESTR_HOME = priorHome;
+    restoreEnv(priorEnv);
   }
 });
 
 test("NestJS validates thread route request schemas before use-case execution", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-schema-api-"));
-  const priorHome = process.env.ORKESTR_HOME;
-  process.env.ORKESTR_HOME = home;
-  const server = await startServer({ port: 0, host: "127.0.0.1" });
+  const priorEnv = snapshotEnv(serverEnvKeys);
+  const server = await startIsolatedSchemaServer(home);
   const { port } = server.address();
   try {
     const created = await fetch(`http://127.0.0.1:${port}/api/threads`, {
@@ -106,7 +129,6 @@ test("NestJS validates thread route request schemas before use-case execution", 
     assert.match(compatiblePayload.error, /thread_not_found/);
   } finally {
     await new Promise((resolve) => server.close(resolve));
-    if (priorHome === undefined) delete process.env.ORKESTR_HOME;
-    else process.env.ORKESTR_HOME = priorHome;
+    restoreEnv(priorEnv);
   }
 });
