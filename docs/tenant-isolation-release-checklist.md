@@ -44,7 +44,8 @@ The tenant isolation suite must cover these boundaries:
 
 - Non-admin thread visibility, thread limits, and thread ownership checks.
 - Per-user workspace and file roots, including path traversal denial.
-- LLM sanitizer fail-closed behavior for non-admin thread and timer actions.
+- LLM sanitizer fail-closed behavior when enabled, plus disabled flag behavior
+  for non-admin thread and timer actions.
 - User-scoped Gmail and Outlook OAuth state, tokens, errors, and message APIs.
 - Browser desktop profile and lease isolation by user.
 - Contained user Codex runtime policy injection and host-skill denial.
