@@ -1,7 +1,7 @@
 import { appendEvent } from "../../storage/src/store.js";
 import { deliverPendingThreadInputs, runtimeStatus, wakeThread } from "./runtime-leases.js";
 import { getThread, listThreadMessages, listThreads, updateThreadMessage } from "./threads.js";
-import { listRouterOutbox, listRouterTraces, recordRouterTraceEvent } from "./router-traces.js";
+import { backfillRouterTracePhases, listRouterOutbox, listRouterTraces, recordRouterTraceEvent } from "./router-traces.js";
 
 function clean(value = "") {
   return String(value || "").trim();
@@ -80,6 +80,90 @@ function phaseSet(trace = {}) {
 function phaseTime(trace = {}, phaseName = "") {
   const phase = (Array.isArray(trace.phases) ? trace.phases : []).find((entry) => lower(entry.phase) === lower(phaseName));
   return dateMs(phase?.ts);
+}
+
+function firstPhaseTime(trace = {}, phaseNames = []) {
+  const names = new Set(phaseNames.map(lower));
+  const times = (Array.isArray(trace.phases) ? trace.phases : [])
+    .filter((entry) => names.has(lower(entry.phase)))
+    .map((entry) => dateMs(entry.ts))
+    .filter(Boolean);
+  return times.length ? Math.min(...times) : 0;
+}
+
+function phaseReasons(trace = {}) {
+  return new Set((Array.isArray(trace.phases) ? trace.phases : [])
+    .map((entry) => lower(entry.reason || entry.status || entry.terminalState))
+    .filter(Boolean));
+}
+
+function traceHasAnyPhase(trace = {}, phaseNames = []) {
+  const phases = phaseSet(trace);
+  return phaseNames.some((phase) => phases.has(lower(phase)));
+}
+
+function traceHasRuntimeReplyEvidence(trace = {}) {
+  return traceHasAnyPhase(trace, ["assistant_seen", "mirror_claimed", "mirror_sent"]) ||
+    (phaseSet(trace).has("completed") && phaseSet(trace).has("queued"));
+}
+
+function traceShortCircuitedBeforeRuntime(trace = {}) {
+  const phases = phaseSet(trace);
+  if (traceHasRuntimeReplyEvidence(trace) || phases.has("delivery_started") || phases.has("delivered_to_runtime")) return false;
+  if (phases.has("queued")) return false;
+  const reasons = phaseReasons(trace);
+  const knownLocalTerminalReasons = new Set([
+    "approval_not_pending",
+    "desktop_share_approved",
+    "desktop_share_approve_failed",
+    "duplicate_event_id",
+    "duplicate_status_command",
+    "google_workspace_connect",
+    "status_command",
+  ]);
+  if ([...reasons].some((reason) => knownLocalTerminalReasons.has(reason))) return true;
+  return trace.terminal === true && lower(trace.currentPhase) === "skipped";
+}
+
+function requiredTracePhases(trace = {}) {
+  if (traceShortCircuitedBeforeRuntime(trace)) return [];
+  const phases = phaseSet(trace);
+  const required = ["received", "routed"];
+  const needsRuntime = traceHasRuntimeReplyEvidence(trace) ||
+    phases.has("delivery_started") ||
+    phases.has("delivered_to_runtime") ||
+    (phases.has("queued") && (trace.terminal === true || ["completed", "delivered_to_runtime", "assistant_seen"].includes(lower(trace.currentPhase))));
+  if (needsRuntime || phases.has("queued")) required.push("queued");
+  if (needsRuntime) required.push("delivery_started", "delivered_to_runtime");
+  if (needsRuntime && (traceHasAnyPhase(trace, ["assistant_seen", "mirror_claimed", "mirror_sent", "completed"]) || trace.terminal === true)) {
+    required.push("assistant_seen");
+  }
+  return [...new Set(required)];
+}
+
+function isoAt(ms, fallback = Date.now()) {
+  const value = Number.isFinite(ms) && ms > 0 ? ms : fallback;
+  return new Date(value).toISOString();
+}
+
+function inferredRuntimeBackfillPhases(trace = {}, missingPhases = []) {
+  const missing = new Set((Array.isArray(missingPhases) ? missingPhases : []).map(lower));
+  const phases = phaseSet(trace);
+  const additions = [];
+  const queuedMs = phaseTime(trace, "queued") || phaseTime(trace, "routed") || phaseTime(trace, "received") || dateMs(trace.createdAt);
+  const replyMs = firstPhaseTime(trace, ["assistant_seen", "mirror_claimed", "mirror_sent", "completed"]) || dateMs(trace.updatedAt) || Date.now();
+  const startMs = queuedMs ? queuedMs + 1 : Math.max(1, replyMs - 2);
+  const deliveredMs = replyMs > startMs + 1 ? Math.min(startMs + 1, replyMs - 1) : startMs + 1;
+  if (missing.has("delivery_started") && !phases.has("delivery_started")) {
+    additions.push({ phase: "delivery_started", ts: isoAt(startMs), reason: "router_doctor_inferred_from_assistant_reply" });
+  }
+  if (missing.has("delivered_to_runtime") && !phases.has("delivered_to_runtime")) {
+    additions.push({ phase: "delivered_to_runtime", ts: isoAt(deliveredMs), reason: "router_doctor_inferred_from_assistant_reply" });
+  }
+  if (missing.has("assistant_seen") && !phases.has("assistant_seen") && traceHasAnyPhase(trace, ["mirror_claimed", "mirror_sent", "completed"])) {
+    additions.push({ phase: "assistant_seen", ts: isoAt(replyMs), reason: "router_doctor_inferred_from_mirror_reply" });
+  }
+  return additions;
 }
 
 function traceForMessage(message = {}, traces = []) {
@@ -192,6 +276,30 @@ async function repairIssue(item = {}, context = {}) {
     }, env).catch(() => null);
     return { code: "requeue_swallowed_input", ok: true, threadId: thread.id, messageId: item.messageId, state: updated?.state || "" };
   }
+  if (item.code === "missing_router_trace_phase" && repairSafe !== false) {
+    const routerTraceId = clean(item.routerTraceId);
+    if (!routerTraceId) return null;
+    const trace = (await listRouterTraces({ routerTraceId, connector: "whatsapp" }, env))[0] || null;
+    if (!trace || traceShortCircuitedBeforeRuntime(trace) || !traceHasRuntimeReplyEvidence(trace)) return null;
+    const additions = inferredRuntimeBackfillPhases(trace, item.missingPhases);
+    if (!additions.length) return null;
+    const result = await backfillRouterTracePhases({
+      routerTraceId,
+      phases: additions,
+      reason: "router_doctor_backfill_missing_runtime_delivery",
+    }, env);
+    const added = Array.isArray(result?.addedPhases) ? result.addedPhases.map((phase) => phase.phase) : [];
+    if (!added.length) return null;
+    return {
+      code: "backfill_router_trace_phases",
+      ok: true,
+      threadId: thread.id,
+      messageId: item.messageId || trace.messageId || "",
+      routerTraceId,
+      phases: added,
+      currentPhase: result?.trace?.currentPhase || trace.currentPhase || "",
+    };
+  }
   return null;
 }
 
@@ -226,11 +334,7 @@ async function inspectThread(thread, options = {}) {
 
   for (const trace of traces) {
     const phases = phaseSet(trace);
-    const required = ["received", "routed", "queued"];
-    if (trace.terminal === true || ["completed", "delivered_to_runtime", "assistant_seen"].includes(lower(trace.currentPhase))) {
-      required.push("delivery_started", "delivered_to_runtime");
-    }
-    if (trace.terminal === true || lower(trace.currentPhase) === "completed") required.push("assistant_seen");
+    const required = requiredTracePhases(trace);
     const missing = required.filter((phase) => !phases.has(phase));
     if (missing.length) {
       checks.push(issue("missing_router_trace_phase", trace.terminal === true ? "error" : "warn", `Router trace is missing phase(s): ${missing.join(", ")}.`, {
@@ -245,9 +349,10 @@ async function inspectThread(thread, options = {}) {
 
   for (const message of messages.filter((item) => whatsappMessage(item) && item.role === "user")) {
     const trace = traceForMessage(message, traces);
+    const shortCircuitTrace = trace ? traceShortCircuitedBeforeRuntime(trace) : false;
     const phases = trace ? phaseSet(trace) : new Set();
     const assistant = newerAssistant(messages, message);
-    if (terminalUserMessage(message) && !phases.has("delivered_to_runtime") && !assistant) {
+    if (!shortCircuitTrace && terminalUserMessage(message) && !phases.has("delivered_to_runtime") && !assistant) {
       const older = olderAssistant(messages, message);
       checks.push(issue("queued_whatsapp_input_marked_terminal_without_runtime_delivery", "error", "WhatsApp user input is terminal without runtime delivery evidence or a newer same-chat assistant reply.", {
         threadId: thread.id,
@@ -258,7 +363,7 @@ async function inspectThread(thread, options = {}) {
         olderAssistantMessageId: older?.id || "",
       }));
     }
-    if (terminalUserMessage(message) && !assistant && olderAssistant(messages, message)) {
+    if (!shortCircuitTrace && terminalUserMessage(message) && !assistant && olderAssistant(messages, message)) {
       checks.push(issue("older_reply_completed_newer_user_message", "error", "A reply/notice older than the WhatsApp user message appears to be the only completion evidence.", {
         threadId: thread.id,
         messageId: message.id,
