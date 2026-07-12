@@ -2623,6 +2623,7 @@ test("Codex app-server recovery auto safe-resets repeated stale delivered turns"
       },
     });
     const messages = await listThreadMessages(thread.id, env);
+    const updated = await getThread(thread.id, env);
     const notices = messages.filter((message) => message.source === "orkestr_runtime" && message.phase === "runtime_interrupted");
     const recoveryNotice = messages.find((message) => message.source === "orkestr_runtime" && message.phase === "runtime_recovered");
     const continuation = messages.find((message) =>
@@ -2656,10 +2657,416 @@ test("Codex app-server recovery auto safe-resets repeated stale delivered turns"
     assert.equal(continuation.connector, "whatsapp");
     assert.equal(continuation.chatId, "chat-repeat-stale");
     assert.equal(continuation.accountId, "account-repeat-stale");
+    assert.equal(continuation.recoveryContinuation, true);
+    assert.equal(continuation.replayedFromMessageId, latestInput.id);
+    assert.equal(continuation.previousCodexThreadId, "repeat-stale-codex-thread");
+    assert.equal(continuation.previousRecoveryNoticeId, notices.at(-1).id);
+    assert.equal(updated.runtime.staleTurnRecoveryStreak, 1);
+    assert.equal(updated.runtime.lastStaleTurnRecoveryNoticeId, notices.at(-1).id);
+    assert.equal(updated.runtime.lastStaleTurnRecoveryCodexThreadId, "repeat-stale-codex-thread");
+    assert.equal(updated.runtime.lastStaleTurnRecoveryLatestUserMessageId, latestInput.id);
+    assert.equal(updated.runtime.lastStaleTurnRecoveryAutoSafeReset, true);
+    assert.equal(updated.runtime.lastStaleTurnRecoveryAutoSafeResetNewCodexThreadId, "repeat-stale-new-codex-thread");
     assert.equal(autoEvent.oldCodexThreadId, "repeat-stale-codex-thread");
     assert.equal(autoEvent.newCodexThreadId, "repeat-stale-new-codex-thread");
     assert.equal(recoveryEvent.autoSafeReset, true);
     assert.equal(recoveryEvent.autoSafeResetError, null);
+  } finally {
+    stopCodexAppServerClients();
+  }
+});
+
+test("Codex app-server recovery auto safe-resets stale continuations across safe reset sessions", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-repeat-stale-reset-continuation-"));
+  const fake = await createFakeCodex(home);
+  const oldAt = new Date(Date.now() - 10 * 60_000).toISOString();
+  const resetAt = new Date(Date.now() - 5 * 60_000).toISOString();
+  const env = {
+    ORKESTR_HOME: path.join(home, "orkestr"),
+    HOME: path.join(home, "runtime-home"),
+    PATH: `${fake.bin}${path.delimiter}${process.env.PATH || ""}`,
+    FAKE_CODEX_STATE: fake.stateFile,
+    ORKESTR_CODEX_APP_SERVER_STALE_FINAL_GRACE_MS: "0",
+    ORKESTR_CODEX_APP_SERVER_STALE_RECOVERY_SCAN_CACHE_MS: "0",
+    ORKESTR_CODEX_APP_SERVER_AUTO_SAFE_RESET_COOLDOWN_MS: "0",
+  };
+  try {
+    const thread = await createThread({
+      id: "app-server-repeat-stale-reset-continuation-thread",
+      name: "App Server Repeat Stale Reset Continuation Thread",
+      state: "ready",
+      executorId: "codex",
+      executor: {
+        type: "codex",
+        transport: "app-server",
+        codexThreadId: "repeat-stale-reset-new-codex-thread",
+        codexSessionId: "repeat-stale-reset-new-codex-thread",
+        metadata: {
+          lastSafeReset: {
+            resetAt,
+            codexThreadId: "repeat-stale-reset-old-codex-thread",
+            reason: "stale_turn_auto_safe_reset",
+          },
+        },
+      },
+      runtimeKind: "codex-app-server",
+      codexThreadId: "repeat-stale-reset-new-codex-thread",
+      codexSessionId: "repeat-stale-reset-new-codex-thread",
+      binding: {
+        connector: "whatsapp",
+        chatId: "chat-repeat-stale-continuation",
+        responderAccountId: "account-repeat-stale-continuation",
+      },
+      runtime: {
+        runtimeKind: "codex-app-server",
+        state: "ready",
+        activeTurnId: null,
+        codexStatus: { type: "idle" },
+        staleTurnRecoveryStreak: 1,
+        lastStaleTurnRecoveryAt: oldAt,
+        lastStaleTurnRecoveryNoticeId: "old-runtime-notice",
+        lastStaleTurnRecoveryCodexThreadId: "repeat-stale-reset-old-codex-thread",
+        safeReset: {
+          resetAt,
+          codexThreadId: "repeat-stale-reset-old-codex-thread",
+          reason: "stale_turn_auto_safe_reset",
+        },
+      },
+    }, env);
+    const previousInput = await appendThreadMessage(thread.id, {
+      role: "user",
+      source: "whatsapp",
+      connector: "whatsapp",
+      chatId: "chat-repeat-stale-continuation",
+      accountId: "account-repeat-stale-continuation",
+      text: "Original delivered turn before safe reset.",
+      state: "completed",
+      deliveryState: "delivered",
+      observedVia: "codex_app_server_turn_start",
+      timestamp: oldAt,
+      deliveredAt: oldAt,
+      codexThreadId: "repeat-stale-reset-old-codex-thread",
+      codexTurnId: "repeat-stale-reset-old-turn",
+    }, env);
+    const oldNotice = await appendThreadMessage(thread.id, {
+      role: "assistant",
+      source: "orkestr_runtime",
+      phase: "runtime_interrupted",
+      text: "Codex response missing",
+      state: "completed",
+      parentMessageId: previousInput.id,
+      timestamp: oldAt,
+      codexThreadId: "repeat-stale-reset-old-codex-thread",
+      codexTurnId: "repeat-stale-reset-old-turn",
+    }, env);
+    const replayedInput = await appendThreadMessage(thread.id, {
+      role: "user",
+      source: "whatsapp",
+      connector: "whatsapp",
+      chatId: "chat-repeat-stale-continuation",
+      accountId: "account-repeat-stale-continuation",
+      text: "Original delivered turn before safe reset.",
+      state: "completed",
+      deliveryState: "delivered",
+      observedVia: "codex_app_server_turn_start",
+      codexThreadId: "repeat-stale-reset-new-codex-thread",
+      codexTurnId: "repeat-stale-reset-replayed-turn",
+      recoveryContinuation: true,
+      replayedFromMessageId: previousInput.id,
+      previousCodexThreadId: "repeat-stale-reset-old-codex-thread",
+      previousRecoveryNoticeId: oldNotice.id,
+    }, env);
+    const resets = [];
+
+    const result = await recoverStaleCodexAppServerTurns(env, {
+      autoSafeResetThread: async (threadId, context = {}) => {
+        resets.push({ threadId, context });
+        return {
+          ok: true,
+          reset: true,
+          safeReset: true,
+          oldCodexThreadId: context.codexThreadId,
+          newCodexThreadId: "repeat-stale-reset-newer-codex-thread",
+          manualCheckpoint: { path: path.join(home, "repeat-stale-reset-continuation.md") },
+        };
+      },
+    });
+    const messages = await listThreadMessages(thread.id, env);
+    const updated = await getThread(thread.id, env);
+    const notices = messages.filter((message) => message.source === "orkestr_runtime" && message.phase === "runtime_interrupted");
+    const latestNotice = notices.at(-1);
+    const continuation = messages.find((message) =>
+      message.role === "user" &&
+      message.parentMessageId === replayedInput.id &&
+      message.codexThreadId === "repeat-stale-reset-newer-codex-thread"
+    );
+    const events = (await fs.readFile(path.join(env.ORKESTR_HOME, "events.jsonl"), "utf8"))
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line));
+    const recoveryEvent = events.find((event) =>
+      event.type === "codex_app_server_stale_turn_recovered" &&
+      event.latestUserMessageId === replayedInput.id
+    );
+
+    assert.equal(result.recovered, 1);
+    assert.equal(result.appended, 1);
+    assert.equal(result.autoSafeReset, 1);
+    assert.equal(result.continued, 1);
+    assert.equal(resets.length, 1);
+    assert.equal(resets[0].context.reason, "stale_turn_auto_safe_reset");
+    assert.equal(resets[0].context.codexThreadId, "repeat-stale-reset-new-codex-thread");
+    assert.equal(resets[0].context.latestUserMessageId, replayedInput.id);
+    assert.equal(notices.length, 2);
+    assert.equal(latestNotice.parentMessageId, replayedInput.id);
+    assert.match(latestNotice.text, /escalating across the fresh Codex session/);
+    assert.ok(continuation);
+    assert.equal(continuation.recoveryContinuation, true);
+    assert.equal(continuation.replayedFromMessageId, replayedInput.id);
+    assert.equal(continuation.previousCodexThreadId, "repeat-stale-reset-new-codex-thread");
+    assert.equal(continuation.previousRecoveryNoticeId, latestNotice.id);
+    assert.equal(updated.runtime.staleTurnRecoveryStreak, 2);
+    assert.equal(updated.runtime.lastStaleTurnRecoveryNoticeId, latestNotice.id);
+    assert.equal(updated.runtime.lastStaleTurnRecoveryCodexThreadId, "repeat-stale-reset-new-codex-thread");
+    assert.equal(updated.runtime.lastStaleTurnRecoveryLatestUserMessageId, replayedInput.id);
+    assert.equal(updated.runtime.lastStaleTurnRecoveryAutoSafeReset, true);
+    assert.equal(updated.runtime.lastStaleTurnRecoveryAutoSafeResetNewCodexThreadId, "repeat-stale-reset-newer-codex-thread");
+    assert.equal(recoveryEvent.recoveryContinuation, true);
+    assert.equal(recoveryEvent.staleTurnRecoveryStreak, 2);
+    assert.equal(recoveryEvent.autoSafeReset, true);
+  } finally {
+    stopCodexAppServerClients();
+  }
+});
+
+test("Codex app-server recovery respects auto safe-reset cooldown for stale continuations", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-repeat-stale-reset-cooldown-"));
+  const fake = await createFakeCodex(home);
+  const resetAt = new Date().toISOString();
+  const env = {
+    ORKESTR_HOME: path.join(home, "orkestr"),
+    HOME: path.join(home, "runtime-home"),
+    PATH: `${fake.bin}${path.delimiter}${process.env.PATH || ""}`,
+    FAKE_CODEX_STATE: fake.stateFile,
+    ORKESTR_CODEX_APP_SERVER_STALE_FINAL_GRACE_MS: "0",
+    ORKESTR_CODEX_APP_SERVER_STALE_RECOVERY_SCAN_CACHE_MS: "0",
+    ORKESTR_CODEX_APP_SERVER_AUTO_SAFE_RESET_COOLDOWN_MS: "600000",
+  };
+  try {
+    const thread = await createThread({
+      id: "app-server-repeat-stale-reset-cooldown-thread",
+      name: "App Server Repeat Stale Reset Cooldown Thread",
+      state: "ready",
+      executorId: "codex",
+      executor: {
+        type: "codex",
+        transport: "app-server",
+        codexThreadId: "repeat-stale-cooldown-codex-thread",
+        codexSessionId: "repeat-stale-cooldown-codex-thread",
+      },
+      runtimeKind: "codex-app-server",
+      codexThreadId: "repeat-stale-cooldown-codex-thread",
+      codexSessionId: "repeat-stale-cooldown-codex-thread",
+      runtime: {
+        runtimeKind: "codex-app-server",
+        state: "ready",
+        activeTurnId: null,
+        codexStatus: { type: "idle" },
+        staleTurnRecoveryStreak: 1,
+        safeReset: {
+          resetAt,
+          codexThreadId: "repeat-stale-cooldown-old-codex-thread",
+          reason: "stale_turn_auto_safe_reset",
+        },
+      },
+    }, env);
+    await appendThreadMessage(thread.id, {
+      role: "user",
+      source: "manual",
+      text: "Replay should not safe reset during cooldown.",
+      state: "completed",
+      deliveryState: "delivered",
+      observedVia: "codex_app_server_turn_start",
+      codexThreadId: "repeat-stale-cooldown-codex-thread",
+      codexTurnId: "repeat-stale-cooldown-turn",
+      recoveryContinuation: true,
+      replayedFromMessageId: "previous-cooldown-input",
+      previousCodexThreadId: "repeat-stale-cooldown-old-codex-thread",
+      previousRecoveryNoticeId: "previous-cooldown-notice",
+    }, env);
+    const resets = [];
+
+    const result = await recoverStaleCodexAppServerTurns(env, {
+      autoSafeResetThread: async (threadId, context = {}) => {
+        resets.push({ threadId, context });
+        return { ok: true, reset: true, safeReset: true };
+      },
+    });
+    const updated = await getThread(thread.id, env);
+
+    assert.equal(result.recovered, 1);
+    assert.equal(result.appended, 1);
+    assert.equal(result.autoSafeReset, 0);
+    assert.equal(result.continued, 0);
+    assert.equal(resets.length, 0);
+    assert.equal(updated.runtime.staleTurnRecoveryStreak, 2);
+    assert.equal(updated.runtime.lastStaleTurnRecoveryAutoSafeResetAttempted, false);
+  } finally {
+    stopCodexAppServerClients();
+  }
+});
+
+test("Codex app-server recovery does not recover stale turns while approval is pending", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-repeat-stale-reset-approval-"));
+  const fake = await createFakeCodex(home);
+  const env = {
+    ORKESTR_HOME: path.join(home, "orkestr"),
+    HOME: path.join(home, "runtime-home"),
+    PATH: `${fake.bin}${path.delimiter}${process.env.PATH || ""}`,
+    FAKE_CODEX_STATE: fake.stateFile,
+    ORKESTR_CODEX_APP_SERVER_STALE_FINAL_GRACE_MS: "0",
+    ORKESTR_CODEX_APP_SERVER_STALE_RECOVERY_SCAN_CACHE_MS: "0",
+    ORKESTR_CODEX_APP_SERVER_AUTO_SAFE_RESET_COOLDOWN_MS: "0",
+  };
+  try {
+    const pendingRequest = {
+      requestId: "pending-approval-repeat-stale",
+      threadId: "app-server-repeat-stale-reset-approval-thread",
+      codexThreadId: "repeat-stale-approval-codex-thread",
+      turnId: "repeat-stale-approval-turn",
+    };
+    const thread = await createThread({
+      id: "app-server-repeat-stale-reset-approval-thread",
+      name: "App Server Repeat Stale Reset Approval Thread",
+      state: "awaiting_approval",
+      executorId: "codex",
+      executor: {
+        type: "codex",
+        transport: "app-server",
+        codexThreadId: "repeat-stale-approval-codex-thread",
+        codexSessionId: "repeat-stale-approval-codex-thread",
+      },
+      runtimeKind: "codex-app-server",
+      codexThreadId: "repeat-stale-approval-codex-thread",
+      codexSessionId: "repeat-stale-approval-codex-thread",
+      runtime: {
+        runtimeKind: "codex-app-server",
+        state: "awaiting_approval",
+        activeTurnId: "repeat-stale-approval-turn",
+        pendingRequest,
+        codexStatus: { type: "active", activeFlags: ["waitingOnApproval"] },
+        staleTurnRecoveryStreak: 1,
+      },
+    }, env);
+    await appendThreadMessage(thread.id, {
+      role: "user",
+      source: "manual",
+      text: "Replay is waiting on approval.",
+      state: "completed",
+      deliveryState: "delivered",
+      observedVia: "codex_app_server_turn_start",
+      codexThreadId: "repeat-stale-approval-codex-thread",
+      codexTurnId: "repeat-stale-approval-turn",
+      recoveryContinuation: true,
+      replayedFromMessageId: "previous-approval-input",
+      previousCodexThreadId: "repeat-stale-approval-old-codex-thread",
+      previousRecoveryNoticeId: "previous-approval-notice",
+    }, env);
+    const resets = [];
+
+    const result = await recoverStaleCodexAppServerTurns(env, {
+      autoSafeResetThread: async (threadId, context = {}) => {
+        resets.push({ threadId, context });
+        return { ok: true, reset: true, safeReset: true };
+      },
+    });
+    const updated = await getThread(thread.id, env);
+    const messages = await listThreadMessages(thread.id, env);
+
+    assert.equal(result.recovered, 0);
+    assert.equal(result.appended, 0);
+    assert.equal(result.autoSafeReset, 0);
+    assert.equal(resets.length, 0);
+    assert.equal(updated.state, "awaiting_approval");
+    assert.equal(updated.runtime.pendingRequest.requestId, pendingRequest.requestId);
+    assert.equal(updated.runtime.staleTurnRecoveryStreak, 1);
+    assert.equal(messages.some((message) => message.source === "orkestr_runtime" && message.phase === "runtime_interrupted"), false);
+  } finally {
+    stopCodexAppServerClients();
+  }
+});
+
+test("Codex app-server recovery clears stale recovery streak after a terminal answer", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-repeat-stale-reset-final-"));
+  const fake = await createFakeCodex(home);
+  const env = {
+    ORKESTR_HOME: path.join(home, "orkestr"),
+    HOME: path.join(home, "runtime-home"),
+    PATH: `${fake.bin}${path.delimiter}${process.env.PATH || ""}`,
+    FAKE_CODEX_STATE: fake.stateFile,
+    ORKESTR_CODEX_APP_SERVER_STALE_FINAL_GRACE_MS: "0",
+    ORKESTR_CODEX_APP_SERVER_STALE_RECOVERY_SCAN_CACHE_MS: "0",
+  };
+  try {
+    const thread = await createThread({
+      id: "app-server-repeat-stale-reset-final-thread",
+      name: "App Server Repeat Stale Reset Final Thread",
+      state: "ready",
+      executorId: "codex",
+      executor: {
+        type: "codex",
+        transport: "app-server",
+        codexThreadId: "repeat-stale-final-codex-thread",
+        codexSessionId: "repeat-stale-final-codex-thread",
+      },
+      runtimeKind: "codex-app-server",
+      codexThreadId: "repeat-stale-final-codex-thread",
+      codexSessionId: "repeat-stale-final-codex-thread",
+      runtime: {
+        runtimeKind: "codex-app-server",
+        state: "ready",
+        activeTurnId: null,
+        codexStatus: { type: "idle" },
+        staleTurnRecoveryStreak: 2,
+        lastStaleTurnRecoveryNoticeId: "previous-final-notice",
+      },
+    }, env);
+    const input = await appendThreadMessage(thread.id, {
+      role: "user",
+      source: "manual",
+      text: "This replay completed.",
+      state: "completed",
+      deliveryState: "delivered",
+      observedVia: "codex_app_server_turn_start",
+      codexThreadId: "repeat-stale-final-codex-thread",
+      codexTurnId: "repeat-stale-final-turn",
+      recoveryContinuation: true,
+      replayedFromMessageId: "previous-final-input",
+      previousCodexThreadId: "repeat-stale-final-old-codex-thread",
+      previousRecoveryNoticeId: "previous-final-notice",
+    }, env);
+    const final = await appendThreadMessage(thread.id, {
+      role: "assistant",
+      source: "codex-app-server",
+      phase: "final_answer",
+      text: "Done.",
+      state: "completed",
+      parentMessageId: input.id,
+      codexThreadId: "repeat-stale-final-codex-thread",
+      codexTurnId: "repeat-stale-final-turn",
+    }, env);
+
+    const result = await recoverStaleCodexAppServerTurns(env);
+    const updated = await getThread(thread.id, env);
+    const messages = await listThreadMessages(thread.id, env);
+
+    assert.equal(result.recovered, 0);
+    assert.equal(result.appended, 0);
+    assert.equal(updated.runtime.staleTurnRecoveryStreak, 0);
+    assert.equal(updated.runtime.lastSuccessfulTerminalAnswerMessageId, final.id);
+    assert.equal(updated.runtime.lastSuccessfulTerminalAnswerUserMessageId, input.id);
+    assert.equal(messages.some((message) => message.source === "orkestr_runtime" && message.phase === "runtime_interrupted"), false);
   } finally {
     stopCodexAppServerClients();
   }

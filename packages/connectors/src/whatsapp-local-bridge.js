@@ -3147,6 +3147,37 @@ export async function recoverConfiguredLocalWhatsAppAccounts(env = process.env, 
   return { enabled: true, recovered, skipped };
 }
 
+async function recoverOutboundAfterLocalWhatsAppReady(accountId = "", env = process.env) {
+  try {
+    const { retryRecoverableWhatsAppOutboxJobsForAccounts } = await import("./whatsapp-outbox-recovery.js");
+    const outbox = await retryRecoverableWhatsAppOutboxJobsForAccounts({
+      accountIds: [accountId],
+      reason: "whatsapp_local_account_ready",
+    }, env);
+    if (!outbox.retried.length) return outbox;
+    const { deliverWhatsAppReplies } = await import("./whatsapp.js");
+    const delivery = await deliverWhatsAppReplies(env).catch((error) => ({
+      delivered: [],
+      failed: [{ error: error?.message || String(error) }],
+    }));
+    await appendEvent({
+      type: "whatsapp_local_ready_outbox_delivery",
+      accountId,
+      retried: outbox.retried.length,
+      delivered: Number(delivery?.delivered?.length || 0),
+      failed: Number(delivery?.failed?.length || 0),
+    }, env).catch(() => {});
+    return { ...outbox, delivery };
+  } catch (error) {
+    await appendEvent({
+      type: "whatsapp_local_ready_outbox_recovery_failed",
+      accountId,
+      error: error?.message || String(error),
+    }, env).catch(() => {});
+    return { ok: false, error: error?.message || String(error), retried: [] };
+  }
+}
+
 export async function startLocalWhatsAppAccount(accountId = "", env = process.env, options = {}) {
   const normalized = await normalizeManagedAccountId(accountId, env);
   const pairingPhoneNumber = normalizePairingPhoneNumber(options.phoneNumber);
@@ -3601,6 +3632,7 @@ async function startLocalWhatsAppAccountOnce(normalized, env = process.env, opti
       ...runtimeAccountIdentity({ client }),
     });
     await appendEvent({ type: "whatsapp_local_ready", accountId: normalized }, env);
+    void recoverOutboundAfterLocalWhatsAppReady(normalized, env);
   });
 
   client.on("auth_failure", async (message) => {

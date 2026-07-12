@@ -599,10 +599,25 @@ async function doctorWhatsAppRouterCommand(argv, ctx) {
   if (argv.includes("--repair") || argv.includes("--repair-safe")) params.set("repair", "1");
   if (argv.includes("--unsafe")) params.set("unsafe", "1");
   if (staleMs) params.set("staleMs", staleMs);
+  const requestDoctor = () => requestJson(`/api/router-traces/doctor/whatsapp${params.size ? `?${params.toString()}` : ""}`, ctx);
   if (argv.includes("--watch")) {
-    throw new Error("orkestr doctor whatsapp --watch is planned in ORK-290; run the command repeatedly or via a service timer for now.");
+    const intervalMs = Math.max(1000, Number(flagValue(argv, "--watch-interval-ms") || flagValue(argv, "--interval-ms") || 30000) || 30000);
+    const count = Math.max(0, Number(flagValue(argv, "--watch-count") || 0) || 0);
+    let iteration = 0;
+    while (!count || iteration < count) {
+      iteration += 1;
+      const payload = await requestDoctor();
+      if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+      else {
+        ctx.stdout.write(`[${new Date().toISOString()}] `);
+        ctx.stdout.write(formatRouterDoctor(payload));
+      }
+      if (count && iteration >= count) return payload.ok ? 0 : 1;
+      await sleep(ctx, intervalMs);
+    }
+    return 0;
   }
-  const payload = await requestJson(`/api/router-traces/doctor/whatsapp${params.size ? `?${params.toString()}` : ""}`, ctx);
+  const payload = await requestDoctor();
   if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
   else ctx.stdout.write(formatRouterDoctor(payload));
   return payload.ok ? 0 : 1;
@@ -1931,7 +1946,7 @@ function writeUsage(stream) {
   orkestr update
   orkestr rollback [--to release-id]
   orkestr logs [--service orkestr] [--lines 100] [--no-follow]
-  orkestr doctor [system|timers|resources] [--repair] [--json]
+  orkestr doctor [system|timers|resources|whatsapp|router] [--repair] [--watch] [--json]
 
 Common thread commands:
   orkestr list [--json] [--api http://127.0.0.1:19812]

@@ -38,6 +38,9 @@ const messageStringFields = [
   "noticeCause",
   "recoverySource",
   "recoveryReason",
+  "replayedFromMessageId",
+  "previousCodexThreadId",
+  "previousRecoveryNoticeId",
   "originSurface",
   "originTransport",
   "senderParticipantId",
@@ -468,6 +471,7 @@ export async function appendThreadMessage(threadId, input, env = process.env) {
     nextMessage = normalizeNoReplyAssistantMessage(nextMessage);
     if (input.forceDeliveryAfterInterrupt === true) nextMessage.forceDeliveryAfterInterrupt = true;
     if (input.steerActiveTurn === true) nextMessage.steerActiveTurn = true;
+    if (input.recoveryContinuation === true) nextMessage.recoveryContinuation = true;
     if (!nextMessage.text && !nextMessage.promptFile) {
       const error = new Error("message_text_required");
       error.statusCode = 400;

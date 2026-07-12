@@ -16,6 +16,10 @@ import {
   recoverConfiguredLocalWhatsAppAccounts,
   recoverUnreadLocalWhatsAppMessages,
 } from "../../../packages/connectors/src/whatsapp-local-bridge.js";
+import {
+  readyRecoveredWhatsAppAccountIds,
+  retryRecoverableWhatsAppOutboxJobsForAccounts,
+} from "../../../packages/connectors/src/whatsapp-outbox-recovery.js";
 import { appendEvent } from "../../../packages/storage/src/store.js";
 import { reportServerError, reportWhatsAppDeliveryAnomalies } from "./watcher-reporting.js";
 import {
@@ -144,6 +148,15 @@ export function createRuntimeWhatsAppSyncRunner(env = process.env) {
   return run;
 }
 
+async function recoverWhatsAppAccountsAndOutbox(env = process.env, reason = "runtime_sync") {
+  const recovery = await recoverConfiguredLocalWhatsAppAccounts(env);
+  const accountIds = readyRecoveredWhatsAppAccountIds(recovery);
+  const outbox = accountIds.length
+    ? await retryRecoverableWhatsAppOutboxJobsForAccounts({ accountIds, reason }, env)
+    : { ok: true, retried: [], skipped: [] };
+  return { recovery, outbox };
+}
+
 async function syncRuntimeAndDeliverWhatsApp(env = process.env, options: { forceWhatsapp?: boolean; recoveryCause?: string } = {}) {
   const pendingConnectorDeliveries = consumeThreadConnectorDeliverySignalCount();
   const synced = await syncRuntimeLeases(env);
@@ -171,13 +184,14 @@ async function syncRuntimeAndDeliverWhatsApp(env = process.env, options: { force
     });
     return { recovered: 0, appended: 0 };
   });
-  await recoverConfiguredLocalWhatsAppAccounts(env).catch((error) => {
+  const whatsappRecovery = await recoverWhatsAppAccountsAndOutbox(env, "runtime_sync_whatsapp_recovery").catch((error) => {
     reportServerError(env, {
       source: "server.recoverWhatsAppAccounts",
       code: "whatsapp_account_recovery_failed",
       message: error?.message || String(error),
       error,
     });
+    return { recovery: { recovered: [], skipped: [{ reason: error?.message || String(error) }] }, outbox: { retried: [], skipped: [] } };
   });
   const unreadRecovery = await recoverUnreadLocalWhatsAppMessages(env).catch((error) => {
     reportServerError(env, {
@@ -198,7 +212,9 @@ async function syncRuntimeAndDeliverWhatsApp(env = process.env, options: { force
   });
   const connectorDeliveries = pendingConnectorDeliveries + consumeThreadConnectorDeliverySignalCount();
   const appended = (synced.appended || 0) + (recovered.appended || 0);
-  if (options.forceWhatsapp || appended > 0 || connectorDeliveries > 0 || recoveredPendingInputs.length > 0 || Number(unreadRecovery.routed || 0) > 0) {
+  const recoveredWhatsAppAccounts = Array.isArray(whatsappRecovery?.recovery?.recovered) ? whatsappRecovery.recovery.recovered.length : 0;
+  const retriedWhatsAppOutbox = Array.isArray(whatsappRecovery?.outbox?.retried) ? whatsappRecovery.outbox.retried.length : 0;
+  if (options.forceWhatsapp || appended > 0 || connectorDeliveries > 0 || recoveredPendingInputs.length > 0 || Number(unreadRecovery.routed || 0) > 0 || recoveredWhatsAppAccounts > 0 || retriedWhatsAppOutbox > 0) {
     const delivery = await deliverWhatsAppReplies(env).catch((error) => {
       reportServerError(env, {
         source: "server.deliverWhatsAppReplies",
@@ -210,7 +226,14 @@ async function syncRuntimeAndDeliverWhatsApp(env = process.env, options: { force
     });
     reportWhatsAppDeliveryAnomalies(env, "server.deliverWhatsAppReplies", delivery);
   }
-  return { ...synced, appended, recoveredAppServerTurns: recovered.recovered || 0, recoveredPendingInputs };
+  return {
+    ...synced,
+    appended,
+    recoveredAppServerTurns: recovered.recovered || 0,
+    recoveredPendingInputs,
+    recoveredWhatsAppAccounts,
+    retriedWhatsAppOutbox,
+  };
 }
 
 export function createWhatsAppDeliveryScheduler(env = process.env) {
@@ -231,6 +254,18 @@ export function createWhatsAppDeliveryScheduler(env = process.env) {
         reason.includes("econnrefused") ||
         reason.includes("timeout");
     });
+  };
+  const recoverBeforeRetry = async (reason: string) => {
+    const recovery = await recoverWhatsAppAccountsAndOutbox(env, reason).catch((error) => {
+      reportServerError(env, {
+        source: "server.whatsappDeliveryScheduler.recover",
+        code: "whatsapp_account_recovery_failed",
+        message: error?.message || String(error),
+        error,
+      }, { deliverWatcher: false });
+      return null;
+    });
+    return recovery;
   };
   const run = () => {
     if (running) {
@@ -253,8 +288,10 @@ export function createWhatsAppDeliveryScheduler(env = process.env) {
       .then((result) => {
         reportWhatsAppDeliveryAnomalies(env, "server.whatsappDeliveryScheduler", result);
         if (shouldRetry(result)) {
-          scheduler.schedule(retryDelayMs);
+          return recoverBeforeRetry("delivery_scheduler_retry")
+            .finally(() => scheduler.schedule(retryDelayMs));
         }
+        return null;
       })
       .catch((error) => {
         reportServerError(env, {

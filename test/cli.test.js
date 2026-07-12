@@ -1577,6 +1577,31 @@ test("CLI runs invariant WhatsApp/router doctor with repair options", async () =
   assert.equal(JSON.parse(stdout.text()).checks[0].code, "queue_notice_without_runtime_delivery");
 });
 
+test("CLI watches invariant WhatsApp/router doctor with bounded iterations", async () => {
+  const stdout = capture();
+  const seen = [];
+  const code = await runCli(["doctor", "whatsapp", "--repair", "--watch", "--watch-count", "1", "--watch-interval-ms", "1", "--json"], {
+    stdout,
+    stderr: capture(),
+    sleepImpl: async () => {},
+    fetchImpl: fakeFetch({
+      "GET /api/router-traces/doctor/whatsapp": {
+        ok: true,
+        status: "ok",
+        summary: "WhatsApp/router invariants passed.",
+        checks: [],
+        repairs: [],
+      },
+    }, seen),
+  });
+
+  assert.equal(code, 0);
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].key, "GET /api/router-traces/doctor/whatsapp");
+  assert.equal(seen[0].search, "?repair=1");
+  assert.equal(JSON.parse(stdout.text()).status, "ok");
+});
+
 test("CLI runs router trace doctor by trace id", async () => {
   const stdout = capture();
   const seen = [];

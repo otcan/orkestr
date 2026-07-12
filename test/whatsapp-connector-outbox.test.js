@@ -6,6 +6,7 @@ import test from "node:test";
 import { appendThreadMessage, createThread, deleteThreadMessage, updateThreadMessage } from "../packages/core/src/threads.js";
 import { applyConnectorOutboxJobAction, readConnectorOutbox } from "../packages/connectors/src/connector-outbox.js";
 import { applyWhatsAppConnectorOutboxAction, deliverWhatsAppReplies } from "../packages/connectors/src/whatsapp.js";
+import { retryRecoverableWhatsAppOutboxJobsForAccounts } from "../packages/connectors/src/whatsapp-outbox-recovery.js";
 import { dataPaths } from "../packages/storage/src/paths.js";
 import { writeConnectorConfig } from "../packages/storage/src/config.js";
 import { readJson, writeJson } from "../packages/storage/src/store.js";
@@ -151,6 +152,77 @@ test("whatsapp connector outbox backs off retryable bridge failures", async () =
 
   assert.equal(calls.filter((item) => item === "/send-text").length, 2);
   assert.equal(retry.delivered.length, 1);
+});
+
+test("whatsapp connector outbox auto-retries recoverable bridge failures after account recovery", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-connector-outbox-auto-retry-"));
+  const runtimeEnv = env(home, { ORKESTR_CONNECTOR_OUTBOX_RETRY_BACKOFF_MS: "60000" });
+  await writeConnectorConfig("whatsapp", { bridgeMode: "external", bridgeUrl: "http://wa.local" }, runtimeEnv);
+  await createThread({
+    id: "thread-wa-outbox-auto-retry",
+    ownerUserId: "tenant-a",
+    name: "WA Connector Outbox Auto Retry Thread",
+    binding: {
+      connector: "whatsapp",
+      chatId: "shared-chat",
+      responderAccountId: "responder",
+      outboundAccountId: "responder",
+      mirrorToWhatsApp: true,
+    },
+  }, runtimeEnv);
+  const parent = await appendThreadMessage("thread-wa-outbox-auto-retry", {
+    role: "user",
+    source: "whatsapp_inbound",
+    state: "completed",
+    connector: "whatsapp",
+    chatId: "shared-chat",
+    accountId: "responder",
+    text: "status?",
+  }, runtimeEnv);
+  const reply = await appendThreadMessage("thread-wa-outbox-auto-retry", {
+    role: "assistant",
+    source: "codex-app-server",
+    phase: "final_answer",
+    state: "completed",
+    parentMessageId: parent.id,
+    chatId: "shared-chat",
+    accountId: "responder",
+    text: "Recovered automatically.",
+  }, runtimeEnv);
+
+  const calls = [];
+  const failed = await deliverWhatsAppReplies(runtimeEnv, async (url) => {
+    calls.push(url.pathname);
+    throw new Error("whatsapp_local_bridge_not_ready");
+  });
+  const outboxAfterFailure = await readConnectorOutbox(runtimeEnv);
+  const failedJob = outboxAfterFailure.jobs.find((item) => item.sourceMessageId === reply.id);
+
+  assert.equal(failed.failed.length, 1);
+  assert.equal(failedJob?.state, "failed_retryable");
+  assert.equal(failedJob.claimedBy, "retry_backoff");
+
+  const autoRetry = await retryRecoverableWhatsAppOutboxJobsForAccounts({
+    accountIds: ["responder"],
+    reason: "test_account_recovered",
+  }, runtimeEnv);
+  const outboxAfterRecovery = await readConnectorOutbox(runtimeEnv);
+  const retriedJob = outboxAfterRecovery.jobs.find((item) => item.id === failedJob.id);
+
+  assert.equal(autoRetry.retried.length, 1);
+  assert.equal(retriedJob.state, "pending");
+  assert.equal(retriedJob.claimedBy, "");
+  assert.equal(retriedJob.claimExpiresAt, "");
+
+  const delivered = await deliverWhatsAppReplies(runtimeEnv, async (url) => {
+    calls.push(url.pathname);
+    return response({ ok: true, ids: ["wa-sent-after-auto-retry"] });
+  });
+
+  assert.equal(calls.filter((item) => item === "/send-text").length, 2);
+  assert.equal(delivered.delivered.length, 1);
+  const outboxAfterDelivery = await readConnectorOutbox(runtimeEnv);
+  assert.equal(outboxAfterDelivery.jobs.find((item) => item.id === failedJob.id)?.state, "delivered");
 });
 
 test("whatsapp connector outbox dead-letters unknown account failures", async () => {
