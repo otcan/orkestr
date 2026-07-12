@@ -31,6 +31,7 @@ import {
 } from "../packages/core/src/runtime-leases.js";
 import { appendOrUpdateEventMessage, appServerStateFromStatus, containedCodexRuntimePaths, effortForThread, modelForThread, threadEventId, threadStartParams, turnStartParams } from "../packages/core/src/codex-app-server-common.js";
 import { appendThreadMessage, createThread, enqueueThreadInput, getThread, listThreadMessages, updateThread, updateThreadMessage } from "../packages/core/src/threads.js";
+import { listRouterTraces } from "../packages/core/src/router-traces.js";
 import { deliverWhatsAppReplies } from "../packages/connectors/src/whatsapp.js";
 import { writeConnectorConfig } from "../packages/storage/src/config.js";
 
@@ -4285,6 +4286,8 @@ test("Codex app-server steers marked WhatsApp input into active turns", async ()
       source: "whatsapp_inbound",
       connector: "whatsapp",
       chatId: "chat-wa-steer",
+      routerTraceId: "rt_codex_app_server_steer",
+      turnId: "turn_codex_app_server_steer",
       codexDeliveryMode: "instant_steer",
       steerActiveTurn: true,
     }, env);
@@ -4301,6 +4304,11 @@ test("Codex app-server steers marked WhatsApp input into active turns", async ()
     assert.equal(completed.deliveryState, "delivered");
     assert.equal(completed.observedVia, "codex_app_server_turn_steer");
     assert.equal(completed.codexTurnId, "active-turn");
+    const trace = (await listRouterTraces({ routerTraceId: "rt_codex_app_server_steer" }, env))[0];
+    assert.deepEqual(
+      trace.phases.map((phase) => phase.phase),
+      ["delivery_started", "delivered_to_runtime"],
+    );
     assert.equal(steerCall.params.threadId, codexThreadId);
     assert.equal(steerCall.params.expectedTurnId, "active-turn");
     assert.equal(steerCall.params.input[0].text, "steer this into the current turn");

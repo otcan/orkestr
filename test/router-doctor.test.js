@@ -190,6 +190,63 @@ test("WhatsApp router doctor does not require runtime delivery for local termina
   assert.equal(report.checks.some((check) => check.code === "queued_whatsapp_input_marked_terminal_without_runtime_delivery" && check.routerTraceId === routerTraceId), false);
 });
 
+test("WhatsApp router doctor backfills app-server delivered input without requiring an assistant reply", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-router-doctor-app-server-delivered-"));
+  const env = runtimeEnv(home);
+  const thread = await createWhatsAppThread(env);
+  const routerTraceId = "rt_app_server_delivered";
+  const deliveredAt = "2026-07-12T18:00:20.000Z";
+  const user = await appendThreadMessage(thread.id, {
+    id: "wa-app-server-1",
+    role: "user",
+    source: "whatsapp_inbound",
+    connector: "whatsapp",
+    chatId: "chat-1",
+    accountId: "responder",
+    externalId: "wa-app-server-1",
+    routerTraceId,
+    text: "You did not fix it yet",
+    state: "completed",
+    deliveryState: "delivered",
+    deliveredAt,
+    observedVia: "codex_app_server_turn_steer",
+    codexThreadId: "codex-thread-1",
+    codexTurnId: "codex-turn-1",
+    steerActiveTurn: true,
+    createdAt: "2026-07-12T18:00:00.000Z",
+    updatedAt: deliveredAt,
+  }, env);
+  const traceBase = {
+    routerTraceId,
+    turnId: "turn_app_server_delivered",
+    connector: "whatsapp",
+    accountId: "responder",
+    chatId: "chat-1",
+    sourceEventId: "wa-app-server-1",
+    threadId: thread.id,
+    messageId: user.id,
+  };
+  await recordRouterTraceEvent({ ...traceBase, phase: "received", ts: "2026-07-12T18:00:00.000Z" }, env);
+  await recordRouterTraceEvent({ ...traceBase, phase: "routed", ts: "2026-07-12T18:00:00.100Z" }, env);
+  await recordRouterTraceEvent({ ...traceBase, phase: "queued", ts: "2026-07-12T18:00:00.200Z" }, env);
+  await recordRouterTraceEvent({ ...traceBase, phase: "skipped", reason: "duplicate_event_id", ts: "2026-07-12T18:00:30.000Z", terminal: true }, env);
+
+  const before = await doctorWhatsAppRouter({ thread: thread.id, env, whatsappStatusFn: readyWhatsAppStatus });
+  assert.deepEqual(
+    before.checks.find((check) => check.routerTraceId === routerTraceId)?.missingPhases,
+    ["delivery_started", "delivered_to_runtime"],
+  );
+  assert.equal(before.checks.some((check) => check.code === "queued_whatsapp_input_marked_terminal_without_runtime_delivery" && check.routerTraceId === routerTraceId), false);
+  assert.equal(before.checks.some((check) => check.code === "older_reply_completed_newer_user_message" && check.routerTraceId === routerTraceId), false);
+
+  const repaired = await doctorWhatsAppRouter({ thread: thread.id, repair: true, env, whatsappStatusFn: readyWhatsAppStatus });
+  const repair = repaired.repairs.find((item) => item.code === "backfill_router_trace_phases" && item.routerTraceId === routerTraceId);
+  assert.deepEqual(repair?.phases, ["delivery_started", "delivered_to_runtime"]);
+
+  const after = await doctorWhatsAppRouter({ thread: thread.id, env, whatsappStatusFn: readyWhatsAppStatus });
+  assert.equal(after.checks.some((check) => check.routerTraceId === routerTraceId), false);
+});
+
 test("WhatsApp router doctor detects and requeues terminal user input without runtime evidence", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-router-doctor-terminal-"));
   const env = runtimeEnv(home);

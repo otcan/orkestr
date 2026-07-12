@@ -73,7 +73,7 @@ export function requiredTracePhases(trace = {}) {
     (phases.has("queued") && (trace.terminal === true || ["completed", "delivered_to_runtime", "assistant_seen"].includes(lower(trace.currentPhase))));
   if (needsRuntime || phases.has("queued")) required.push("queued");
   if (needsRuntime) required.push("delivery_started", "delivered_to_runtime");
-  if (needsRuntime && (traceHasAnyPhase(trace, ["assistant_seen", "mirror_claimed", "mirror_sent", "completed"]) || trace.terminal === true)) {
+  if (needsRuntime && traceHasAnyPhase(trace, ["assistant_seen", "mirror_claimed", "mirror_sent"])) {
     required.push("assistant_seen");
   }
   return [...new Set(required)];

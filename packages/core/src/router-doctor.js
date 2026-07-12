@@ -69,6 +69,48 @@ function terminalUserMessage(message = {}) {
     ["completed", "delivered"].includes(lower(message.deliveryState));
 }
 
+function runtimeDeliveryObservedVia(value = "") {
+  const observed = lower(value);
+  if (!observed) return false;
+  if (observed.startsWith("codex_app_server_turn_")) return true;
+  if (observed.startsWith("tmux_send")) return true;
+  if (observed.startsWith("tmux_submit")) return true;
+  return new Set([
+    "assistant_after_input",
+    "codex_app_server_user_input",
+    "codex_request_user_input",
+    "codex_rollout_growth",
+    "orkestr_steer_command",
+    "runtime_working",
+    "thread_input_delivery",
+  ]).has(observed);
+}
+
+function messageRuntimeDeliveryEvidence(message = {}) {
+  if (!terminalUserMessage(message)) return false;
+  if (runtimeDeliveryObservedVia(message.observedVia)) return true;
+  if (message.steerActiveTurn === true && clean(message.codexTurnId)) return true;
+  if (clean(message.codexTurnId) && clean(message.codexThreadId)) return true;
+  return false;
+}
+
+function inferredMessageRuntimeBackfillPhases(trace = {}, message = {}, missingPhases = []) {
+  const missing = new Set((Array.isArray(missingPhases) ? missingPhases : []).map(lower));
+  const phases = phaseSet(trace);
+  const additions = [];
+  const queuedMs = phaseTime(trace, "queued") || phaseTime(trace, "routed") || phaseTime(trace, "received") || dateMs(trace.createdAt);
+  const deliveredMs = dateMs(message.deliveredAt || message.deliveryLastAttemptAt || message.updatedAt) || dateMs(trace.updatedAt) || Date.now();
+  const startMs = queuedMs && queuedMs < deliveredMs ? Math.max(queuedMs + 1, deliveredMs - 2) : Math.max(1, deliveredMs - 2);
+  const reason = `router_doctor_inferred_from_${lower(message.observedVia) || "message_delivery"}`.slice(0, 200);
+  if (missing.has("delivery_started") && !phases.has("delivery_started")) {
+    additions.push({ phase: "delivery_started", ts: new Date(startMs).toISOString(), reason });
+  }
+  if (missing.has("delivered_to_runtime") && !phases.has("delivered_to_runtime")) {
+    additions.push({ phase: "delivered_to_runtime", ts: new Date(Math.max(startMs + 1, deliveredMs)).toISOString(), reason });
+  }
+  return additions;
+}
+
 function deliveredAssistantMessage(message = {}) {
   if (message.role !== "assistant") return false;
   if (lower(message.deliveryState) === "failed") return false;
@@ -196,8 +238,11 @@ async function repairIssue(item = {}, context = {}) {
     const routerTraceId = clean(item.routerTraceId);
     if (!routerTraceId) return null;
     const trace = (await listRouterTraces({ routerTraceId, connector: "whatsapp" }, env))[0] || null;
-    if (!trace || traceShortCircuitedBeforeRuntime(trace) || !traceHasRuntimeReplyEvidence(trace)) return null;
-    const additions = inferredRuntimeBackfillPhases(trace, item.missingPhases);
+    if (!trace || traceShortCircuitedBeforeRuntime(trace)) return null;
+    const message = (Array.isArray(context.messages) ? context.messages : []).find((entry) => clean(entry.id) === clean(item.messageId || trace.messageId)) || {};
+    const additions = traceHasRuntimeReplyEvidence(trace)
+      ? inferredRuntimeBackfillPhases(trace, item.missingPhases)
+      : inferredMessageRuntimeBackfillPhases(trace, message, item.missingPhases);
     if (!additions.length) return null;
     const result = await backfillRouterTracePhases({
       routerTraceId,
@@ -268,7 +313,8 @@ async function inspectThread(thread, options = {}) {
     const shortCircuitTrace = trace ? traceShortCircuitedBeforeRuntime(trace) : false;
     const phases = trace ? phaseSet(trace) : new Set();
     const assistant = newerAssistant(messages, message);
-    if (!shortCircuitTrace && terminalUserMessage(message) && !phases.has("delivered_to_runtime") && !assistant) {
+    const runtimeDelivered = phases.has("delivered_to_runtime") || messageRuntimeDeliveryEvidence(message);
+    if (!shortCircuitTrace && terminalUserMessage(message) && !runtimeDelivered && !assistant) {
       const older = olderAssistant(messages, message);
       checks.push(issue("queued_whatsapp_input_marked_terminal_without_runtime_delivery", "error", "WhatsApp user input is terminal without runtime delivery evidence or a newer same-chat assistant reply.", {
         threadId: thread.id,
@@ -279,7 +325,7 @@ async function inspectThread(thread, options = {}) {
         olderAssistantMessageId: older?.id || "",
       }));
     }
-    if (!shortCircuitTrace && terminalUserMessage(message) && !assistant && olderAssistant(messages, message)) {
+    if (!shortCircuitTrace && terminalUserMessage(message) && !runtimeDelivered && !assistant && olderAssistant(messages, message)) {
       checks.push(issue("older_reply_completed_newer_user_message", "error", "A reply/notice older than the WhatsApp user message appears to be the only completion evidence.", {
         threadId: thread.id,
         messageId: message.id,
@@ -344,7 +390,7 @@ async function inspectThread(thread, options = {}) {
 
   if (repair) {
     for (const item of checks) {
-      const repaired = await repairIssue(item, { env, thread, repairSafe, releaseConnectorOutboxClaimFn }).catch((error) => ({
+      const repaired = await repairIssue(item, { env, thread, messages, repairSafe, releaseConnectorOutboxClaimFn }).catch((error) => ({
         code: "repair_failed",
         ok: false,
         issueCode: item.code,

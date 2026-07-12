@@ -49,6 +49,7 @@ import { performCodexAppServerSafeReset } from "./codex-safe-reset.js";
 import { completeThreadSecurityApproveCommand } from "./security-thread-command.js";
 import { appendTurnLifecycleEvent, turnLifecycleFromRuntimeStatus } from "./turn-lifecycle.js";
 import { markConnectorDeliverySignal } from "./connector-delivery-signals.js";
+import { recordRouterTraceEvent } from "./router-traces.js";
 
 const appServerDeliveryTimers = new Map();
 const appServerHistorySyncTimes = new Map();
@@ -72,6 +73,25 @@ function codexAppServerActiveTurnRetryMs(env = process.env) {
 function shouldSteerActiveTurnInput(message = {}) {
   return message?.steerActiveTurn === true ||
     clean(message?.codexDeliveryMode).toLowerCase() === "instant_steer";
+}
+
+async function recordMessageRouterTrace(message = {}, phase, context = {}, env = process.env) {
+  if (!message?.routerTraceId) return null;
+  return recordRouterTraceEvent({
+    routerTraceId: message.routerTraceId,
+    turnId: message.turnId || "",
+    connector: message.connector || "",
+    accountId: message.accountId || "",
+    chatId: message.chatId || "",
+    sourceEventId: message.sourceEventId || message.eventId || message.externalId || "",
+    threadId: context.threadId || "",
+    messageId: message.id || "",
+    phase,
+    reason: context.reason || "",
+    error: context.error || "",
+    attempt: context.attempt,
+    ownerProcess: context.ownerProcess || "",
+  }, env).catch(() => null);
 }
 
 function codexAppServerActiveTurnVerifyMs(env = process.env) {
@@ -707,6 +727,11 @@ export async function sendCodexAppServerInput(thread, message, env = process.env
   let deliveryTurnId = activeTurnId;
   if (activeTurnId && shouldSteerActiveTurnInput(pending)) {
     try {
+      await recordMessageRouterTrace(pending, "delivery_started", {
+        threadId: thread.id,
+        ownerProcess: activeTurnId,
+        reason: "codex_app_server_turn_steer",
+      }, env);
       result = await client.request("turn/steer", {
         threadId: id,
         expectedTurnId: activeTurnId,
@@ -731,6 +756,11 @@ export async function sendCodexAppServerInput(thread, message, env = process.env
         messageId: pending.id,
         activeTurnId: deliveryTurnId,
       }, env).catch(() => {});
+      await recordMessageRouterTrace(completed, "delivered_to_runtime", {
+        threadId: thread.id,
+        ownerProcess: deliveryTurnId || activeTurnId,
+        reason: observedVia,
+      }, env);
       await appendEvent({ type: "thread_input_delivered", threadId: thread.id, messageId: message.id, observedVia }, env).catch(() => {});
       return { message: completed, result, observedVia, steered: true };
     } catch (error) {
@@ -778,6 +808,11 @@ export async function sendCodexAppServerInput(thread, message, env = process.env
     scheduleCodexAppServerInputDelivery(thread.id, env, retryMs);
     return { message: { ...pending, state: "queued", deliveryState: "awaiting_active_turn" }, result: null, observedVia: "codex_app_server_awaiting_active_turn", deferred: true };
   }
+  await recordMessageRouterTrace(pending, "delivery_started", {
+    threadId: thread.id,
+    ownerProcess: id,
+    reason: "codex_app_server_turn_start",
+  }, env);
   const started = await startCodexAppServerTurn({ client, thread, id, pending, env, runtimeEnv });
   result = started.result;
   observedVia = started.observedVia;
@@ -796,6 +831,11 @@ export async function sendCodexAppServerInput(thread, message, env = process.env
     codexThreadId: id,
     codexTurnId: result?.turn?.id || result?.turnId || deliveryTurnId || null,
     error: null,
+  }, env);
+  await recordMessageRouterTrace(completed, "delivered_to_runtime", {
+    threadId: thread.id,
+    ownerProcess: deliveryTurnId || id,
+    reason: observedVia,
   }, env);
   await appendEvent({ type: "thread_input_delivered", threadId: thread.id, messageId: message.id, observedVia }, env).catch(() => {});
   return { message: completed, result, observedVia };
