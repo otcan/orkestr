@@ -313,63 +313,6 @@ export async function recordRouterTraceEvent(input = {}, env = process.env) {
   return publicTrace(next, env);
 }
 
-export async function backfillRouterTracePhases(input = {}, env = process.env) {
-  const routerTraceId = clean(input.routerTraceId);
-  if (!routerTraceId) return null;
-  const requested = Array.isArray(input.phases) ? input.phases : [];
-  if (!requested.length) return null;
-  const store = await readRouterTraceStore(env);
-  const traces = [...store.traces];
-  const index = traces.findIndex((trace) => clean(trace.routerTraceId) === routerTraceId);
-  if (index < 0) return null;
-  const previous = traces[index] || {};
-  const previousPhases = Array.isArray(previous.phases) ? previous.phases : [];
-  const existing = new Set(previousPhases.map((phase) => lower(phase.phase)).filter(Boolean));
-  const additions = [];
-  for (const requestedPhase of requested) {
-    const raw = typeof requestedPhase === "string" ? { phase: requestedPhase } : { ...(requestedPhase || {}) };
-    const phase = publicPhase({
-      ...raw,
-      reason: clean(raw.reason || input.reason || "router_doctor_backfill"),
-    });
-    if (!knownPhases.has(phase.phase) || existing.has(phase.phase)) continue;
-    additions.push(phase);
-    existing.add(phase.phase);
-  }
-  if (!additions.length) {
-    return { trace: publicTrace(previous, env), addedPhases: [] };
-  }
-  const mergedPhases = [...previousPhases, ...additions]
-    .sort((left, right) => {
-      const leftMs = Date.parse(clean(left.ts));
-      const rightMs = Date.parse(clean(right.ts));
-      const safeLeft = Number.isFinite(leftMs) ? leftMs : 0;
-      const safeRight = Number.isFinite(rightMs) ? rightMs : 0;
-      return safeLeft - safeRight;
-    })
-    .slice(-200);
-  const next = {
-    ...previous,
-    updatedAt: nowIso(),
-    phases: mergedPhases,
-  };
-  traces[index] = next;
-  await writeRouterTraceStore({ ...store, traces }, env);
-  for (const phase of additions) {
-    await appendEvent({
-      type: "router_trace_phase_backfilled",
-      routerTraceId,
-      turnId: clean(previous.turnId),
-      phase: phase.phase,
-      connector: clean(previous.connector),
-      threadId: clean(previous.threadId),
-      messageId: clean(previous.messageId),
-      reason: phase.reason || "",
-    }, env).catch(() => {});
-  }
-  return { trace: publicTrace(next, env), addedPhases: additions };
-}
-
 export async function ensureRouterTurn(input = {}, env = process.env) {
   const routerTraceId = clean(input.routerTraceId) || routerTraceIdFor(input);
   if (!routerTraceId) return null;
