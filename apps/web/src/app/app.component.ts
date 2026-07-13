@@ -3715,7 +3715,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   codexRateRemaining(thread: ThreadSummary | null, key: CodexRateLimitKey): number | null {
-    const used = Number(thread?.codexRateLimits?.[key]?.used_percent);
+    const used = Number(this.codexRateLimitRecord(thread, key)?.used_percent);
     if (!Number.isFinite(used)) return null;
     return Math.max(0, Math.min(100, 100 - used));
   }
@@ -3730,12 +3730,12 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   codexRateUsedLabel(thread: ThreadSummary | null, key: CodexRateLimitKey): string {
-    const used = Number(thread?.codexRateLimits?.[key]?.used_percent);
+    const used = Number(this.codexRateLimitRecord(thread, key)?.used_percent);
     return Number.isFinite(used) ? `${Math.round(Math.max(0, Math.min(100, used)))}%` : "--";
   }
 
   codexRateWindowLabel(thread: ThreadSummary | null, key: CodexRateLimitKey): string {
-    const minutes = Number(thread?.codexRateLimits?.[key]?.window_minutes);
+    const minutes = Number(this.codexRateLimitRecord(thread, key)?.window_minutes);
     if (!Number.isFinite(minutes) || minutes <= 0) return "--";
     return this.formatDurationMinutes(minutes);
   }
@@ -3824,11 +3824,33 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   private codexRateResetDate(thread: ThreadSummary | null, key: CodexRateLimitKey): Date | null {
-    const raw = Number(thread?.codexRateLimits?.[key]?.resets_at);
+    const raw = Number(this.codexRateLimitRecord(thread, key)?.resets_at);
     if (!Number.isFinite(raw) || raw <= 0) return null;
     const millis = raw > 1_000_000_000_000 ? raw : raw * 1000;
     const date = new Date(millis);
     return Number.isFinite(date.getTime()) ? date : null;
+  }
+
+  private codexRateLimitRecord(thread: ThreadSummary | null, key: CodexRateLimitKey): { used_percent?: number; window_minutes?: number; resets_at?: number } | null {
+    const limits = thread?.codexRateLimits;
+    if (!limits) return null;
+    const entries = (["primary", "secondary"] as CodexRateLimitKey[])
+      .map((entryKey) => ({ key: entryKey, record: limits[entryKey] || null }))
+      .filter((entry): entry is { key: CodexRateLimitKey; record: { used_percent?: number; window_minutes?: number; resets_at?: number } } => !!entry.record);
+    const wantsWeekly = key === "secondary";
+    const byWindow = entries.find((entry) => {
+      const minutes = this.codexRateLimitWindowMinutes(entry.record);
+      if (minutes === null) return false;
+      return wantsWeekly ? minutes >= 10080 : minutes <= 360;
+    });
+    if (byWindow) return byWindow.record;
+    const fallback = limits[key] || null;
+    return this.codexRateLimitWindowMinutes(fallback) === null ? fallback : null;
+  }
+
+  private codexRateLimitWindowMinutes(record: { window_minutes?: number } | null | undefined): number | null {
+    const minutes = Number(record?.window_minutes);
+    return Number.isFinite(minutes) && minutes > 0 ? minutes : null;
   }
 
   private formatDurationMinutes(totalMinutes: number): string {

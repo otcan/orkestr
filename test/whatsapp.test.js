@@ -7297,6 +7297,48 @@ test("whatsapp delivery appends debug footer for app-server final replies", asyn
   assertDebugFooter(calls[0].body.text, { messageType: "final", model: "gpt-5.5/xh", runtime: "api", fiveHour: "75%", weekly: "40%" });
 });
 
+test("whatsapp debug footer classifies a single weekly Codex limit by window", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-debug-footer-weekly-primary-"));
+  const env = externalBridgeEnv(home);
+  await createThread({
+    id: "thread-wa-debug-footer-weekly-primary",
+    name: "WA Debug Footer Weekly Primary Thread",
+    codexModel: "gpt-5.5",
+    codexReasoningEffort: "xhigh",
+    codexRateLimits: {
+      primary: { used_percent: 4, window_minutes: 10080 },
+      secondary: null,
+    },
+  }, env);
+  await writeConnectorConfig("whatsapp", {
+    bridgeMode: "external",
+    bridgeUrl: "http://wa.local",
+    threadRoutes: { "chat-debug-footer-weekly-primary": "thread-wa-debug-footer-weekly-primary" },
+  }, env);
+
+  const routed = await routeWhatsAppInbound({ eventId: "wa-debug-footer-weekly-primary-1", chatId: "chat-debug-footer-weekly-primary", text: "status?" }, env);
+  await appendThreadMessage("thread-wa-debug-footer-weekly-primary", {
+    role: "assistant",
+    source: "codex-rollout",
+    phase: "final_answer",
+    state: "completed",
+    text: "Final with weekly-only rate metadata.",
+    parentMessageId: routed.message.id,
+    connector: "whatsapp",
+    chatId: "chat-debug-footer-weekly-primary",
+  }, env);
+
+  const calls = [];
+  const delivery = await deliverWhatsAppReplies(env, async (url, options) => {
+    calls.push({ url, body: JSON.parse(options.body) });
+    return response({ ok: true, ids: ["sent-debug-footer-weekly-primary"] });
+  });
+
+  assert.equal(delivery.delivered.length, 1);
+  assert.match(calls[0].body.text, / · wk:96% · /);
+  assert.doesNotMatch(calls[0].body.text, / · 5h:\d+%/);
+});
+
 test("whatsapp debug footer reads live Codex rate limits when thread metadata is stale", async (t) => {
   try {
     await execFileAsync("sqlite3", ["--version"]);

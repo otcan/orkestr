@@ -233,14 +233,41 @@ function processCpuDebugPercent() {
   return Math.max(0, Math.min(999, percent));
 }
 
-function codexRateLimitsDebugValue(thread = {}, key = "") {
+function codexRateLimitsRecord(thread = {}) {
   const metadata = thread?.executor?.metadata && typeof thread.executor.metadata === "object" ? thread.executor.metadata : {};
-  const limits = thread?.codexRateLimits && typeof thread.codexRateLimits === "object"
+  return thread?.codexRateLimits && typeof thread.codexRateLimits === "object"
     ? thread.codexRateLimits
     : metadata.codexRateLimits && typeof metadata.codexRateLimits === "object"
       ? metadata.codexRateLimits
       : null;
-  const used = Number(limits?.[key]?.used_percent);
+}
+
+function codexRateLimitWindowMinutes(record = null) {
+  const minutes = Number(record?.window_minutes);
+  return Number.isFinite(minutes) && minutes > 0 ? minutes : null;
+}
+
+function codexRateLimitRecordForPeriod(thread = {}, period = "") {
+  const limits = codexRateLimitsRecord(thread);
+  if (!limits) return null;
+  const entries = ["primary", "secondary"]
+    .map((key) => ({ key, record: limits?.[key] && typeof limits[key] === "object" ? limits[key] : null }))
+    .filter((entry) => entry.record);
+  const weekly = period === "weekly";
+  const byWindow = entries.find((entry) => {
+    const minutes = codexRateLimitWindowMinutes(entry.record);
+    if (!minutes) return false;
+    return weekly ? minutes >= 10080 : minutes <= 360;
+  });
+  if (byWindow) return byWindow.record;
+  const fallbackKey = weekly ? "secondary" : "primary";
+  const fallback = limits?.[fallbackKey] && typeof limits[fallbackKey] === "object" ? limits[fallbackKey] : null;
+  return codexRateLimitWindowMinutes(fallback) ? null : fallback;
+}
+
+function codexRateLimitsDebugValue(thread = {}, period = "") {
+  const limit = codexRateLimitRecordForPeriod(thread, period);
+  const used = Number(limit?.used_percent);
   if (!Number.isFinite(used)) return "";
   const remaining = Math.max(0, Math.min(100, 100 - used));
   return `${Math.round(remaining)}%`;
@@ -272,8 +299,8 @@ export function whatsappDebugFooter({ message = {}, thread = {}, messages = [], 
   const runtimeSurface = runtimeSurfaceDebugValue(thread);
   const runtimeSwitch = runtimeSwitchHint(runtimeSurface);
   const queueNotice = String(deliveryType || "").trim() === "queue_notice";
-  const fiveHourRemaining = codexRateLimitsDebugValue(thread, "primary");
-  const weeklyRemaining = codexRateLimitsDebugValue(thread, "secondary");
+  const fiveHourRemaining = codexRateLimitsDebugValue(thread, "fiveHour");
+  const weeklyRemaining = codexRateLimitsDebugValue(thread, "weekly");
   const parts = [
     `m:${codexModelDebugLabel(message, thread, env)}`,
     ...(mode ? [`mode:${mode}`] : []),
