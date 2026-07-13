@@ -1,17 +1,10 @@
 import { appendEvent } from "../../storage/src/store.js";
-import { resourceOwnerUserId } from "./policy.js";
 import { deliverPendingThreadInputs, runtimeStatus, wakeThread } from "./runtime-leases.js";
 import { getThread, listThreadMessages, listThreads, updateThreadMessage } from "./threads.js";
 import { listRouterOutbox, listRouterTraces, recordRouterTraceEvent } from "./router-traces.js";
 import { backfillRouterTracePhases } from "./router-trace-backfill.js";
-import {
-  inferredRuntimeBackfillPhases,
-  phaseSet,
-  phaseTime,
-  requiredTracePhases,
-  traceHasRuntimeReplyEvidence,
-  traceShortCircuitedBeforeRuntime,
-} from "./router-doctor-trace-rules.js";
+import { inferredRuntimeBackfillPhases, phaseSet, phaseTime, requiredTracePhases, traceHasRuntimeReplyEvidence, traceShortCircuitedBeforeRuntime } from "./router-doctor-trace-rules.js";
+import { orphanedWhatsAppFinalAnswerIssues, repairOrphanedWhatsAppFinalAnswer } from "./router-doctor-whatsapp-final-mirror.js";
 
 function clean(value = "") {
   return String(value || "").trim();
@@ -145,32 +138,6 @@ function accountIdForThread(thread = {}) {
   );
 }
 
-function sourceRevisionForMessage(message = {}) {
-  const parsed = Number(message.revision || 1);
-  return String(Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : 1);
-}
-
-function whatsappAssistantFinal(message = {}) {
-  return message.role === "assistant" &&
-    lower(message.state) === "completed" &&
-    lower(message.phase || "final_answer") === "final_answer" &&
-    whatsappMessage(message) &&
-    Boolean(clean(message.chatId));
-}
-
-function deliveredWhatsAppMirrorMessage(message = {}) {
-  return lower(message.deliveryState) === "delivered" || Boolean(clean(message.deliveredAt || message.mirrorOutboxJobId));
-}
-
-function outboxJobForFinalMessage(jobs = [], message = {}) {
-  const messageId = clean(message.id);
-  return (jobs || []).find((job) =>
-    lower(job.connector) === "whatsapp" &&
-    lower(job.deliveryType) === "final" &&
-    clean(job.sourceMessageId) === messageId
-  ) || null;
-}
-
 function accountReady(status = {}, accountId = "") {
   const accounts = Array.isArray(status.accounts) ? status.accounts : [];
   const id = clean(accountId);
@@ -245,61 +212,11 @@ async function repairIssue(item = {}, context = {}) {
     return { code: "release_stale_outbox_claim", ok: Boolean(released), outboxJobId: item.outboxJobId, state: released?.state || "" };
   }
   if (item.code === "orphaned_whatsapp_final_answer" && repairSafe !== false) {
-    if (typeof ensureConnectorOutboxJobFn !== "function") return null;
-    const message = (Array.isArray(context.messages) ? context.messages : []).find((entry) => clean(entry.id) === clean(item.messageId));
-    if (!message) return null;
-    const chatId = clean(item.chatId || message.chatId || thread?.binding?.chatId);
-    if (!chatId) return null;
-    const accountId = clean(item.accountId || message.accountId || accountIdForThread(thread));
-    const ownerUserId = resourceOwnerUserId(thread || {}, env);
-    const sourceRevision = sourceRevisionForMessage(message);
-    const result = await ensureConnectorOutboxJobFn({
-      tenantId: ownerUserId,
-      ownerUserId,
-      connector: "whatsapp",
-      accountId,
-      chatId,
-      threadId: thread.id,
-      sourceEventId: clean(message.eventId || message.sourceEventId || message.id),
-      sourceMessageId: clean(message.id),
-      sourceRevision,
-      deliveryType: "final",
-      payload: { text: clean(message.text) },
-      metadata: {
-        kind: "thread",
-        parentMessageId: clean(message.parentMessageId),
-        routerTraceId: clean(message.routerTraceId),
-        repairedBy: "router_doctor_whatsapp",
-      },
-    }, env);
-    await updateThreadMessage(thread.id, message.id, {
-      mirrorOutboxJobId: result.job.id,
-      mirrorDeliveryType: "final",
-      deliveryState: "pending_whatsapp_mirror",
-      deliveryLastAttemptAt: nowIso(),
-      deliveryError: "",
-    }, env).catch(() => null);
-    await recordRouterTraceEvent({
-      routerTraceId: clean(message.routerTraceId),
-      connector: "whatsapp",
-      threadId: thread.id,
-      messageId: message.id,
-      phase: "assistant_seen",
-      reason: "router_doctor_enqueued_orphaned_final_answer",
-      deliveryType: "final",
-      chatId,
-      accountId,
-      connectorOutboxJobId: result.job.id,
-    }, env).catch(() => null);
-    return {
-      code: "enqueue_orphaned_final_answer_mirror",
-      ok: true,
-      threadId: thread.id,
-      messageId: message.id,
-      outboxJobId: result.job.id,
-      state: result.job.state,
-      created: result.created === true,
-    };
+    return repairOrphanedWhatsAppFinalAnswer(item, {
+      ...context,
+      ensureConnectorOutboxJobFn,
+      accountIdForThreadFn: accountIdForThread,
+    });
   }
   if (item.code === "queued_whatsapp_input_marked_terminal_without_runtime_delivery" && repairSafe !== false) {
     const updated = await updateThreadMessage(thread.id, item.messageId, {
@@ -461,19 +378,14 @@ async function inspectThread(thread, options = {}) {
     ? await listConnectorOutboxJobsFn({ connector: "whatsapp", threadId: thread.id, limit: 5000 }, env)
     : { jobs: [] };
   const connectorOutboxJobs = connectorOutbox.jobs || [];
-  for (const message of messages.filter(whatsappAssistantFinal)) {
-    const job = outboxJobForFinalMessage(connectorOutboxJobs, message);
-    if (!job && !deliveredWhatsAppMirrorMessage(message)) {
-      checks.push(issue("orphaned_whatsapp_final_answer", "error", "Completed WhatsApp assistant final has no mirror delivery marker or connector outbox job.", {
-        threadId: thread.id,
-        messageId: message.id,
-        routerTraceId: clean(message.routerTraceId),
-        chatId: clean(message.chatId),
-        accountId: clean(message.accountId || accountIdForThread(thread)),
-        sourceRevision: sourceRevisionForMessage(message),
-      }));
-    }
-  }
+  checks.push(...orphanedWhatsAppFinalAnswerIssues({
+    messages,
+    connectorOutboxJobs,
+    thread,
+    whatsappMessageFn: whatsappMessage,
+    accountIdForThreadFn: accountIdForThread,
+    issueFn: issue,
+  }));
   for (const job of connectorOutboxJobs.filter((item) => ["claimed", "sent_to_broker"].includes(lower(item.state)))) {
     const claimAge = ageMs(job.claimedAt || job.updatedAt);
     const expired = clean(job.claimExpiresAt) ? dateMs(job.claimExpiresAt) <= Date.now() : claimAge >= outboxClaimTimeoutMs(env);
