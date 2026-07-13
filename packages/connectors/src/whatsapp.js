@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { enqueueAgentMessage } from "../../core/src/messages.js";
+import { enqueueAgentMessage, updateAgentMessage } from "../../core/src/messages.js";
 import { resourceOwnerUserId } from "../../core/src/policy.js";
 import { adminPrincipal, userPrincipal } from "../../core/src/principal.js";
 import { appServerStateFromStatus } from "../../core/src/codex-app-server-common.js";
@@ -1092,6 +1092,36 @@ function outboundDeliveryAckIds(delivery = {}) {
         : []
     ),
   ].map((value) => pickString(value)).filter(Boolean);
+}
+
+function shouldPatchAssistantMirrorDelivery(message = {}, deliveryType = "") {
+  if (pickString(message?.role).toLowerCase() !== "assistant") return false;
+  return ["final", "router_update", "signal"].includes(pickString(deliveryType).toLowerCase());
+}
+
+async function patchAssistantMirrorDeliveryState({
+  kind = "",
+  agentId = "",
+  threadId = "",
+  message = {},
+  deliveryType = "",
+  patch = {},
+  env = process.env,
+} = {}) {
+  if (!shouldPatchAssistantMirrorDelivery(message, deliveryType)) return null;
+  const messageId = pickString(message?.id);
+  if (!messageId) return null;
+  const nextPatch = {
+    mirrorDeliveryType: pickString(deliveryType),
+    ...patch,
+  };
+  if (kind === "thread" && pickString(threadId)) {
+    return updateThreadMessage(threadId, messageId, nextPatch, env).catch(() => null);
+  }
+  if (kind === "agent" && pickString(agentId)) {
+    return updateAgentMessage(agentId, messageId, nextPatch, env).catch(() => null);
+  }
+  return null;
 }
 
 function outboundEchoDeliveryRecord(job = {}) {
@@ -2770,7 +2800,7 @@ async function sendClaimedWhatsAppText({
     agentId: agentId || "",
     sourceEventId: pickString(message?.eventId, message?.sourceEventId, sourceMessageId, messageId),
     sourceMessageId: pickString(sourceMessageId, messageId),
-    sourceRevision: pickString(message?.revision, message?.updatedAt, message?.createdAt, "1"),
+    sourceRevision: String(messageSourceRevision(message)),
     deliveryType,
     payload: {
       text,
@@ -2804,6 +2834,41 @@ async function sendClaimedWhatsAppText({
       outboundIntents.splice(0, outboundIntents.length, ...marked);
       state.outboundIntents = outboundIntents;
       await writeWhatsAppState(state, env);
+    }
+    if (outboxState === "delivered") {
+      const deliveredAt = pickString(outboxResult.job?.deliveredAt, outboxResult.job?.terminalAt, outboxResult.job?.updatedAt, new Date().toISOString());
+      const ackIds = outboundDeliveryAckIds({ brokerAck: outboxResult.job?.brokerAck });
+      await patchAssistantMirrorDeliveryState({
+        kind,
+        agentId,
+        threadId,
+        message,
+        deliveryType,
+        patch: {
+          mirrorOutboxJobId: outboxResult.job.id,
+          deliveryState: "delivered",
+          deliveryLastAttemptAt: deliveredAt,
+          deliveredAt,
+          deliveryError: "",
+          ...(ackIds.length ? { whatsappMessageId: ackIds[0], whatsappMessageIds: ackIds } : {}),
+        },
+        env,
+      });
+    } else {
+      await patchAssistantMirrorDeliveryState({
+        kind,
+        agentId,
+        threadId,
+        message,
+        deliveryType,
+        patch: {
+          mirrorOutboxJobId: outboxResult.job.id,
+          deliveryState: outboxState || "skipped",
+          deliveryLastAttemptAt: pickString(outboxResult.job?.terminalAt, outboxResult.job?.updatedAt, new Date().toISOString()),
+          deliveryError: pickString(outboxResult.job?.error),
+        },
+        env,
+      });
     }
     await recordRouterTraceEvent({
       routerTraceId,
@@ -2878,6 +2943,20 @@ async function sendClaimedWhatsAppText({
     outboxId: intent?.outboxId,
     connectorOutboxJobId: outboxClaim.job.id,
   }, env).catch(() => {});
+  await patchAssistantMirrorDeliveryState({
+    kind,
+    agentId,
+    threadId,
+    message,
+    deliveryType,
+    patch: {
+      mirrorOutboxJobId: outboxClaim.job.id,
+      deliveryState: "mirror_claimed",
+      deliveryLastAttemptAt: new Date().toISOString(),
+      deliveryError: "",
+    },
+    env,
+  });
   await markRouterOutboxItem(intent?.outboxId, { status: "claimed" }, env).catch(() => null);
 
   try {
@@ -2926,6 +3005,23 @@ async function sendClaimedWhatsAppText({
       brokerAck: payload,
       error: "",
     }, env).catch(() => null);
+    const ackIds = outboundDeliveryAckIds(delivery);
+    await patchAssistantMirrorDeliveryState({
+      kind,
+      agentId,
+      threadId,
+      message,
+      deliveryType,
+      patch: {
+        mirrorOutboxJobId: outboxClaim.job.id,
+        deliveryState: "delivered",
+        deliveryLastAttemptAt: delivery.deliveredAt,
+        deliveredAt: delivery.deliveredAt,
+        deliveryError: "",
+        ...(ackIds.length ? { whatsappMessageId: ackIds[0], whatsappMessageIds: ackIds } : {}),
+      },
+      env,
+    });
     await markRouterOutboxItem(intent?.outboxId, { status: "delivered", deliveredAt: delivery.deliveredAt }, env).catch(() => null);
     await recordRouterTraceEvent({
       routerTraceId,
@@ -2993,6 +3089,20 @@ async function sendClaimedWhatsAppText({
         ...(terminalFailure ? { nonRetryable: true } : { retryAfterAt: retryAt }),
       },
     }, env).catch(() => null);
+    await patchAssistantMirrorDeliveryState({
+      kind,
+      agentId,
+      threadId,
+      message,
+      deliveryType,
+      patch: {
+        mirrorOutboxJobId: outboxClaim.job.id,
+        deliveryState: terminalFailure ? "failed" : "failed_retryable",
+        deliveryLastAttemptAt: now,
+        deliveryError: errorText,
+      },
+      env,
+    });
     await markRouterOutboxItem(intent?.outboxId, {
       status: terminalFailure ? "skipped" : "failed",
       attempts: Number(intent?.attempts || 0) + 1,

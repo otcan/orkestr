@@ -1,4 +1,5 @@
 import { appendEvent } from "../../storage/src/store.js";
+import { resourceOwnerUserId } from "./policy.js";
 import { deliverPendingThreadInputs, runtimeStatus, wakeThread } from "./runtime-leases.js";
 import { getThread, listThreadMessages, listThreads, updateThreadMessage } from "./threads.js";
 import { listRouterOutbox, listRouterTraces, recordRouterTraceEvent } from "./router-traces.js";
@@ -144,6 +145,32 @@ function accountIdForThread(thread = {}) {
   );
 }
 
+function sourceRevisionForMessage(message = {}) {
+  const parsed = Number(message.revision || 1);
+  return String(Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : 1);
+}
+
+function whatsappAssistantFinal(message = {}) {
+  return message.role === "assistant" &&
+    lower(message.state) === "completed" &&
+    lower(message.phase || "final_answer") === "final_answer" &&
+    whatsappMessage(message) &&
+    Boolean(clean(message.chatId));
+}
+
+function deliveredWhatsAppMirrorMessage(message = {}) {
+  return lower(message.deliveryState) === "delivered" || Boolean(clean(message.deliveredAt || message.mirrorOutboxJobId));
+}
+
+function outboxJobForFinalMessage(jobs = [], message = {}) {
+  const messageId = clean(message.id);
+  return (jobs || []).find((job) =>
+    lower(job.connector) === "whatsapp" &&
+    lower(job.deliveryType) === "final" &&
+    clean(job.sourceMessageId) === messageId
+  ) || null;
+}
+
 function accountReady(status = {}, accountId = "") {
   const accounts = Array.isArray(status.accounts) ? status.accounts : [];
   const id = clean(accountId);
@@ -192,7 +219,7 @@ function runtimeReady(status = {}) {
 }
 
 async function repairIssue(item = {}, context = {}) {
-  const { env, thread, repairSafe, releaseConnectorOutboxClaimFn } = context;
+  const { env, thread, repairSafe, releaseConnectorOutboxClaimFn, ensureConnectorOutboxJobFn } = context;
   if (item.code === "sleeping_thread_has_queued_whatsapp_input") {
     const result = await wakeThread(thread.id, { reason: "router_doctor_whatsapp_repair" }, env);
     return { code: "wake_thread", ok: true, threadId: thread.id, messageId: item.messageId, status: result.status || null };
@@ -216,6 +243,63 @@ async function repairIssue(item = {}, context = {}) {
       ? await releaseConnectorOutboxClaimFn(item.outboxJobId, { reason: "router_doctor_stale_claim" }, env)
       : null;
     return { code: "release_stale_outbox_claim", ok: Boolean(released), outboxJobId: item.outboxJobId, state: released?.state || "" };
+  }
+  if (item.code === "orphaned_whatsapp_final_answer" && repairSafe !== false) {
+    if (typeof ensureConnectorOutboxJobFn !== "function") return null;
+    const message = (Array.isArray(context.messages) ? context.messages : []).find((entry) => clean(entry.id) === clean(item.messageId));
+    if (!message) return null;
+    const chatId = clean(item.chatId || message.chatId || thread?.binding?.chatId);
+    if (!chatId) return null;
+    const accountId = clean(item.accountId || message.accountId || accountIdForThread(thread));
+    const ownerUserId = resourceOwnerUserId(thread || {}, env);
+    const sourceRevision = sourceRevisionForMessage(message);
+    const result = await ensureConnectorOutboxJobFn({
+      tenantId: ownerUserId,
+      ownerUserId,
+      connector: "whatsapp",
+      accountId,
+      chatId,
+      threadId: thread.id,
+      sourceEventId: clean(message.eventId || message.sourceEventId || message.id),
+      sourceMessageId: clean(message.id),
+      sourceRevision,
+      deliveryType: "final",
+      payload: { text: clean(message.text) },
+      metadata: {
+        kind: "thread",
+        parentMessageId: clean(message.parentMessageId),
+        routerTraceId: clean(message.routerTraceId),
+        repairedBy: "router_doctor_whatsapp",
+      },
+    }, env);
+    await updateThreadMessage(thread.id, message.id, {
+      mirrorOutboxJobId: result.job.id,
+      mirrorDeliveryType: "final",
+      deliveryState: "pending_whatsapp_mirror",
+      deliveryLastAttemptAt: nowIso(),
+      deliveryError: "",
+    }, env).catch(() => null);
+    await recordRouterTraceEvent({
+      routerTraceId: clean(message.routerTraceId),
+      connector: "whatsapp",
+      threadId: thread.id,
+      messageId: message.id,
+      phase: "assistant_seen",
+      reason: "router_doctor_enqueued_orphaned_final_answer",
+      deliveryType: "final",
+      chatId,
+      accountId,
+      connectorOutboxJobId: result.job.id,
+    }, env).catch(() => null);
+    return {
+      code: "enqueue_orphaned_final_answer_mirror",
+      ok: true,
+      threadId: thread.id,
+      messageId: message.id,
+      outboxJobId: result.job.id,
+      state: result.job.state,
+      created: result.created === true,
+    };
   }
   if (item.code === "queued_whatsapp_input_marked_terminal_without_runtime_delivery" && repairSafe !== false) {
     const updated = await updateThreadMessage(thread.id, item.messageId, {
@@ -270,6 +354,7 @@ async function inspectThread(thread, options = {}) {
   const repairSafe = options.repairSafe !== false;
   const listConnectorOutboxJobsFn = typeof options.listConnectorOutboxJobsFn === "function" ? options.listConnectorOutboxJobsFn : null;
   const releaseConnectorOutboxClaimFn = typeof options.releaseConnectorOutboxClaimFn === "function" ? options.releaseConnectorOutboxClaimFn : null;
+  const ensureConnectorOutboxJobFn = typeof options.ensureConnectorOutboxJobFn === "function" ? options.ensureConnectorOutboxJobFn : null;
   const thresholdMs = Number(options.staleMs || 0) || staleQueueMs(env);
   const messages = await listThreadMessages(thread.id, env);
   const traces = await listRouterTraces({ threadId: thread.id, connector: "whatsapp" }, env);
@@ -373,9 +458,23 @@ async function inspectThread(thread, options = {}) {
   }
 
   const connectorOutbox = listConnectorOutboxJobsFn
-    ? await listConnectorOutboxJobsFn({ connector: "whatsapp", threadId: thread.id, state: "claimed sent_to_broker" }, env)
+    ? await listConnectorOutboxJobsFn({ connector: "whatsapp", threadId: thread.id, limit: 5000 }, env)
     : { jobs: [] };
-  for (const job of connectorOutbox.jobs || []) {
+  const connectorOutboxJobs = connectorOutbox.jobs || [];
+  for (const message of messages.filter(whatsappAssistantFinal)) {
+    const job = outboxJobForFinalMessage(connectorOutboxJobs, message);
+    if (!job && !deliveredWhatsAppMirrorMessage(message)) {
+      checks.push(issue("orphaned_whatsapp_final_answer", "error", "Completed WhatsApp assistant final has no mirror delivery marker or connector outbox job.", {
+        threadId: thread.id,
+        messageId: message.id,
+        routerTraceId: clean(message.routerTraceId),
+        chatId: clean(message.chatId),
+        accountId: clean(message.accountId || accountIdForThread(thread)),
+        sourceRevision: sourceRevisionForMessage(message),
+      }));
+    }
+  }
+  for (const job of connectorOutboxJobs.filter((item) => ["claimed", "sent_to_broker"].includes(lower(item.state)))) {
     const claimAge = ageMs(job.claimedAt || job.updatedAt);
     const expired = clean(job.claimExpiresAt) ? dateMs(job.claimExpiresAt) <= Date.now() : claimAge >= outboxClaimTimeoutMs(env);
     if (expired) {
@@ -390,7 +489,14 @@ async function inspectThread(thread, options = {}) {
 
   if (repair) {
     for (const item of checks) {
-      const repaired = await repairIssue(item, { env, thread, messages, repairSafe, releaseConnectorOutboxClaimFn }).catch((error) => ({
+      const repaired = await repairIssue(item, {
+        env,
+        thread,
+        messages,
+        repairSafe,
+        releaseConnectorOutboxClaimFn,
+        ensureConnectorOutboxJobFn,
+      }).catch((error) => ({
         code: "repair_failed",
         ok: false,
         issueCode: item.code,

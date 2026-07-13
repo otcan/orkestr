@@ -3,8 +3,9 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { appendThreadMessage, createThread } from "../packages/core/src/threads.js";
+import { appendThreadMessage, createThread, listThreadMessages } from "../packages/core/src/threads.js";
 import { deliverWhatsAppReplies } from "../packages/connectors/src/whatsapp.js";
+import { readConnectorOutbox } from "../packages/connectors/src/connector-outbox.js";
 import { outboundIntentKey, outboundMirrorMessageSetKey } from "../packages/connectors/src/whatsapp-outbound-intents.js";
 import { writeConnectorConfig } from "../packages/storage/src/config.js";
 
@@ -119,6 +120,84 @@ test("whatsapp delivery recovers missed live app-server final output after the m
   assert.deepEqual(calls.map((call) => call.body.accountId), ["account-live-recovery"]);
   assert.deepEqual(calls.map((call) => call.body.text), ["Routing is fixed."]);
   assert.deepEqual(reasons, ["live_bound_recovery"]);
+});
+
+test("whatsapp delivery recovers cursor-passed final from message WhatsApp context after duplicate inbound skip", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-message-scoped-final-recovery-"));
+  const runtimeEnv = env(home);
+  await writeConnectorConfig("whatsapp", { bridgeMode: "external", bridgeUrl: "http://wa.local" }, runtimeEnv);
+  await createThread({
+    id: "thread-message-scoped-final-recovery",
+    name: "message scoped recovery",
+    binding: {
+      connector: "whatsapp",
+      outboundAccountId: "account-live-recovery",
+      mirrorToWhatsApp: true,
+    },
+  }, runtimeEnv);
+  const now = new Date().toISOString();
+  const parent = await appendThreadMessage("thread-message-scoped-final-recovery", {
+    role: "user",
+    source: "whatsapp_inbound",
+    state: "completed",
+    connector: "whatsapp",
+    chatId: "chat-live-recovery",
+    accountId: "account-live-recovery",
+    routerTraceId: "rt_duplicate_before_final",
+    text: "please reply after duplicate skip",
+    createdAt: now,
+  }, runtimeEnv);
+  const final = await appendThreadMessage("thread-message-scoped-final-recovery", {
+    role: "assistant",
+    source: "codex-app-server",
+    phase: "final_answer",
+    state: "completed",
+    connector: "whatsapp",
+    chatId: "chat-live-recovery",
+    accountId: "account-live-recovery",
+    routerTraceId: "rt_duplicate_before_final",
+    parentMessageId: parent.id,
+    text: "This final must still mirror.",
+    createdAt: now,
+  }, runtimeEnv);
+  await writeCursorPast(home, "thread-message-scoped-final-recovery", Number(final.cursor) + 1, {
+    inboundEvents: [{
+      messageId: parent.id,
+      eventId: "wa-duplicate-event",
+      chatId: "chat-live-recovery",
+      accountId: "account-live-recovery",
+      status: "skipped",
+      reason: "duplicate_event_id",
+      updatedAt: now,
+    }],
+  });
+
+  const calls = [];
+  const delivery = await deliverWhatsAppReplies(runtimeEnv, async (url, options) => {
+    calls.push({ url, body: JSON.parse(options.body) });
+    return response({ ok: true, ids: [`sent-${calls.length}`] });
+  });
+  const messages = await listThreadMessages("thread-message-scoped-final-recovery", runtimeEnv);
+  const updatedFinal = messages.find((message) => message.id === final.id);
+  const outbox = await readConnectorOutbox(runtimeEnv);
+  const finalJobs = outbox.jobs.filter((job) => job.sourceMessageId === final.id && job.deliveryType === "final");
+  const state = JSON.parse(await fs.readFile(path.join(home, "whatsapp.json"), "utf8"));
+  const intent = state.outboundIntents.find((item) => item.messageId === final.id);
+
+  assert.equal(delivery.delivered.length, 1);
+  assert.deepEqual(calls.map((call) => call.body.text), ["This final must still mirror."]);
+  assert.equal(intent?.createdReason, "live_bound_recovery");
+  assert.equal(finalJobs.length, 1);
+  assert.equal(finalJobs[0].state, "delivered");
+  assert.equal(updatedFinal.deliveryState, "delivered");
+  assert.equal(Boolean(updatedFinal.deliveredAt), true);
+  assert.equal(updatedFinal.mirrorOutboxJobId, finalJobs[0].id);
+  assert.equal(updatedFinal.whatsappMessageId, "sent-1");
+
+  const secondDelivery = await deliverWhatsAppReplies(runtimeEnv, async () => {
+    throw new Error("already delivered final should not be sent twice");
+  });
+  assert.equal(secondDelivery.delivered.length, 0);
 });
 
 test("whatsapp delivery does not recover stale live progress outside the default recovery window", async () => {

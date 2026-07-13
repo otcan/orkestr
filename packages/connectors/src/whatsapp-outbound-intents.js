@@ -131,7 +131,7 @@ export function outboundMirrorCursorMap(cursors = []) {
 
 function whatsappMessageOrigin(message = {}, state = null) {
   if (!message) return false;
-  if (message.connector === "whatsapp" || message.source === "whatsapp_inbound" || message.source === "whatsapp_client") return true;
+  if (clean(message.connector).toLowerCase() === "whatsapp" || message.source === "whatsapp_inbound" || message.source === "whatsapp_client") return true;
   return Boolean((state?.inboundEvents || []).some((event) => event.messageId === message.id));
 }
 
@@ -140,6 +140,12 @@ function recoverableCurrentAssistantOutput(message = {}) {
   return clean(message?.role).toLowerCase() === "assistant" &&
     clean(message?.state).toLowerCase() === "completed" &&
     (source === "codex-app-server" || source === "api-session");
+}
+
+function finalAssistantOutput(message = {}) {
+  return clean(message?.role).toLowerCase() === "assistant" &&
+    clean(message?.state).toLowerCase() === "completed" &&
+    clean(message?.phase || "final_answer").toLowerCase() === "final_answer";
 }
 
 function threadAllowsLiveRecovery(thread = null) {
@@ -156,6 +162,12 @@ function boundThreadOrigin({ message = {}, thread = null, kind = "" } = {}) {
   const bindingChatId = pickString(binding.chatId);
   const messageChatId = pickString(message.chatId, bindingChatId);
   return Boolean(bindingChatId && messageChatId === bindingChatId);
+}
+
+function messageScopedWhatsAppFinalOrigin({ message = {}, state = null } = {}) {
+  if (!finalAssistantOutput(message)) return false;
+  if (!pickString(message.chatId)) return false;
+  return whatsappMessageOrigin(message, state);
 }
 
 function liveRecoveryWindowAllowed(message = {}, env = process.env) {
@@ -202,8 +214,11 @@ export function canRecoverLiveWhatsAppOutboundIntent({
   if (!existingCursor || cursor > Number(existingCursor.cursor || 0)) return false;
   if (!recoverableCurrentAssistantOutput(message)) return false;
   if (!threadAllowsLiveRecovery(thread)) return false;
-  if (!boundThreadOrigin({ message, thread, kind })) return false;
-  if (!whatsappMessageOrigin(parent, state) && !whatsappMessageOrigin(message, state)) return false;
+  const boundOrigin = boundThreadOrigin({ message, thread, kind });
+  const messageScopedFinal = messageScopedWhatsAppFinalOrigin({ message, state });
+  if (!boundOrigin && !messageScopedFinal) return false;
+  if (!boundOrigin && !whatsappMessageOrigin(message, state)) return false;
+  if (!messageScopedFinal && !whatsappMessageOrigin(parent, state) && !whatsappMessageOrigin(message, state)) return false;
   return liveRecoveryWindowAllowed(message, env);
 }
 

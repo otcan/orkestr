@@ -9,6 +9,7 @@ import {
 } from "../../../../../packages/core/src/router-traces.js";
 import { doctorWhatsAppRouter } from "../../../../../packages/core/src/router-doctor.js";
 import {
+  ensureConnectorOutboxJob,
   listConnectorOutboxJobs,
   releaseConnectorOutboxClaim,
 } from "../../../../../packages/connectors/src/connector-outbox.js";
@@ -84,6 +85,7 @@ export class RouterTracesController {
       repairSafe: !boolQuery(query.unsafe),
       staleMs: numberQuery(query.staleMs),
       whatsappStatusFn: () => getWhatsAppStatus(),
+      ensureConnectorOutboxJobFn: ensureConnectorOutboxJob,
       listConnectorOutboxJobsFn: listConnectorOutboxJobs,
       releaseConnectorOutboxClaimFn: releaseConnectorOutboxClaim,
     });

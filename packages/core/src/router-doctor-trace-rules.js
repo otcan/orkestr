@@ -45,6 +45,16 @@ export function traceHasRuntimeReplyEvidence(trace = {}) {
     (phaseSet(trace).has("completed") && phaseSet(trace).has("queued"));
 }
 
+export function traceHasOutboundMirrorEvidence(trace = {}) {
+  return traceHasAnyPhase(trace, ["assistant_seen", "mirror_claimed", "mirror_sent", "mirror_failed"]);
+}
+
+export function traceIsOutboundOnlyMirror(trace = {}) {
+  const phases = phaseSet(trace);
+  if (!traceHasOutboundMirrorEvidence(trace)) return false;
+  return !["received", "routed", "queued", "delivery_started", "delivered_to_runtime"].some((phase) => phases.has(phase));
+}
+
 export function traceShortCircuitedBeforeRuntime(trace = {}) {
   const phases = phaseSet(trace);
   if (traceHasRuntimeReplyEvidence(trace) || phases.has("delivery_started") || phases.has("delivered_to_runtime")) return false;
@@ -66,6 +76,12 @@ export function traceShortCircuitedBeforeRuntime(trace = {}) {
 export function requiredTracePhases(trace = {}) {
   if (traceShortCircuitedBeforeRuntime(trace)) return [];
   const phases = phaseSet(trace);
+  if (traceIsOutboundOnlyMirror(trace)) {
+    const required = [];
+    if (traceHasAnyPhase(trace, ["mirror_claimed", "mirror_sent", "completed"])) required.push("assistant_seen");
+    if (phases.has("completed")) required.push("mirror_sent", "completed");
+    return [...new Set(required)];
+  }
   const required = ["received", "routed"];
   const needsRuntime = traceHasRuntimeReplyEvidence(trace) ||
     phases.has("delivery_started") ||

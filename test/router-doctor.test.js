@@ -152,6 +152,31 @@ test("WhatsApp router doctor backfills missing runtime delivery phases from assi
   assert.equal(phaseNames.includes("delivered_to_runtime"), true);
 });
 
+test("WhatsApp router doctor does not require inbound phases for outbound-only mirror traces", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-router-doctor-outbound-only-"));
+  const env = runtimeEnv(home);
+  const thread = await createWhatsAppThread(env);
+  const routerTraceId = "rt_outbound_only_mirror";
+  const traceBase = {
+    routerTraceId,
+    turnId: "turn_outbound_only_mirror",
+    connector: "whatsapp",
+    accountId: "responder",
+    chatId: "chat-1",
+    threadId: thread.id,
+    messageId: "assistant-outbound-only-1",
+    deliveryType: "final",
+  };
+  await recordRouterTraceEvent({ ...traceBase, phase: "assistant_seen", ts: "2026-07-12T18:00:30.000Z" }, env);
+  await recordRouterTraceEvent({ ...traceBase, phase: "mirror_claimed", ts: "2026-07-12T18:00:30.500Z" }, env);
+  await recordRouterTraceEvent({ ...traceBase, phase: "mirror_sent", ts: "2026-07-12T18:00:31.000Z" }, env);
+  await recordRouterTraceEvent({ ...traceBase, phase: "completed", ts: "2026-07-12T18:00:31.500Z", terminal: true }, env);
+
+  const report = await doctorWhatsAppRouter({ thread: thread.id, env, whatsappStatusFn: readyWhatsAppStatus });
+
+  assert.equal(report.checks.some((check) => check.code === "missing_router_trace_phase" && check.routerTraceId === routerTraceId), false);
+});
+
 test("WhatsApp router doctor does not require runtime delivery for local terminal commands", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-router-doctor-local-terminal-"));
   const env = runtimeEnv(home);
@@ -322,6 +347,69 @@ test("WhatsApp router doctor releases stale connector outbox claims", async () =
   assert.equal(repaired.repairs.some((repair) => repair.code === "release_stale_outbox_claim" && repair.outboxJobId === created.job.id), true);
   assert.equal(job.state, "pending");
   assert.equal(job.claimedBy, "");
+});
+
+test("WhatsApp router doctor repairs orphaned WhatsApp final answers by enqueuing one outbox job", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-router-doctor-orphan-final-"));
+  const env = runtimeEnv(home);
+  const thread = await createWhatsAppThread(env);
+  const final = await appendThreadMessage(thread.id, {
+    id: "wa-final-orphan-1",
+    role: "assistant",
+    source: "codex-app-server",
+    connector: "whatsapp",
+    chatId: "chat-1",
+    accountId: "responder",
+    phase: "final_answer",
+    state: "completed",
+    text: "This final was never mirrored.",
+    routerTraceId: "rt_orphan_final",
+    createdAt: "2026-07-12T18:00:30.000Z",
+    updatedAt: "2026-07-12T18:00:30.000Z",
+  }, env);
+
+  const before = await doctorWhatsAppRouter({
+    thread: thread.id,
+    env,
+    whatsappStatusFn: readyWhatsAppStatus,
+    listConnectorOutboxJobsFn: listConnectorOutboxJobs,
+  });
+  assert.equal(before.checks.some((check) => check.code === "orphaned_whatsapp_final_answer" && check.messageId === final.id), true);
+
+  const repaired = await doctorWhatsAppRouter({
+    thread: thread.id,
+    repair: true,
+    env,
+    whatsappStatusFn: readyWhatsAppStatus,
+    listConnectorOutboxJobsFn: listConnectorOutboxJobs,
+    ensureConnectorOutboxJobFn: ensureConnectorOutboxJob,
+  });
+  const repair = repaired.repairs.find((item) => item.code === "enqueue_orphaned_final_answer_mirror" && item.messageId === final.id);
+  const outbox = await readConnectorOutbox(env);
+  const finalJobs = outbox.jobs.filter((job) => job.sourceMessageId === final.id && job.deliveryType === "final");
+  const messages = await listThreadMessages(thread.id, env);
+  const updatedFinal = messages.find((message) => message.id === final.id);
+
+  assert.equal(Boolean(repair), true);
+  assert.equal(finalJobs.length, 1);
+  assert.equal(finalJobs[0].state, "pending");
+  assert.equal(finalJobs[0].payload.text, "This final was never mirrored.");
+  assert.equal(updatedFinal.mirrorOutboxJobId, finalJobs[0].id);
+  assert.equal(updatedFinal.deliveryState, "pending_whatsapp_mirror");
+
+  const repairedAgain = await doctorWhatsAppRouter({
+    thread: thread.id,
+    repair: true,
+    env,
+    whatsappStatusFn: readyWhatsAppStatus,
+    listConnectorOutboxJobsFn: listConnectorOutboxJobs,
+    ensureConnectorOutboxJobFn: ensureConnectorOutboxJob,
+  });
+  const outboxAgain = await readConnectorOutbox(env);
+  const finalJobsAgain = outboxAgain.jobs.filter((job) => job.sourceMessageId === final.id && job.deliveryType === "final");
+
+  assert.equal(repairedAgain.checks.some((check) => check.code === "orphaned_whatsapp_final_answer" && check.messageId === final.id), false);
+  assert.equal(finalJobsAgain.length, 1);
 });
 
 test("WhatsApp router doctor reports queued input while runtime is sleeping", async () => {
