@@ -30,6 +30,22 @@ import { isAdminPrincipal, resourceOwnerUserId } from "../../../../../packages/c
 import { getThreadForPrincipal } from "../../../../../packages/core/src/threads.js";
 import { httpError } from "../../common/http.js";
 
+function desktopShareReady(browser: any): boolean {
+  if (!browser) return false;
+  const status = String(browser.status || browser.state || "").trim().toLowerCase();
+  const statusReady = ["running", "active", "open"].includes(status);
+  if (!statusReady) return false;
+  if (browser.readiness && typeof browser.readiness === "object" && browser.readiness.ok === false) return false;
+  if (browser.visual_ok === false || browser.bridge_ok === false || browser.web_ok === false) return false;
+  return true;
+}
+
+function desktopShareNotReadyReason(browser: any, fallback = "desktop_share_not_ready"): string {
+  if (!browser) return fallback;
+  const readiness = browser.readiness && typeof browser.readiness === "object" ? browser.readiness : null;
+  return String(readiness?.status || browser.launchError || browser.status || browser.state || fallback).trim() || fallback;
+}
+
 @Controller("api")
 export class BrowsersController {
   @Get("browsers")
@@ -129,6 +145,8 @@ export class BrowsersController {
       } catch (error) {
         startError = String((error as Error)?.message || error || "desktop_start_failed");
       }
+      if (startError) throw httpError(startError, 503);
+      if (!desktopShareReady(browser)) throw httpError(desktopShareNotReadyReason(browser), 503);
     }
     const share = await createDesktopShare({
       desktopSlug: slug,

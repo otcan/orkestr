@@ -165,7 +165,7 @@ async function writeSecurityConfig(config, env = process.env) {
 
 function keepChallengeInAuditLog(challenge, now = Date.now()) {
   if (challenge.status === "pending") return Date.parse(challenge.expiresAt || "") > now;
-  const auditAnchor = Date.parse(challenge.consumedAt || challenge.rejectedAt || challenge.approvedAt || challenge.expiresAt || "");
+  const auditAnchor = Date.parse(challenge.consumedAt || challenge.rejectedAt || challenge.supersededAt || challenge.approvedAt || challenge.expiresAt || "");
   return Number.isFinite(auditAnchor) && auditAnchor + challengeAuditTtlMs > now;
 }
 
@@ -201,6 +201,8 @@ function publicChallenge(challenge = {}, now = Date.now()) {
     approvedBy: normalized.approvedBy || "",
     rejectedAt: normalized.rejectedAt || "",
     rejectedBy: normalized.rejectedBy || "",
+    supersededAt: normalized.supersededAt || "",
+    supersededBy: normalized.supersededBy || "",
     consumedAt: normalized.consumedAt || "",
   };
 }
@@ -296,6 +298,23 @@ function sameChallengeScope(challenge = {}, scope = {}) {
     String(challenge.requestedPath || "") === String(scope.requestedPath || "") &&
     sameStringList(normalizeAllowedActions(challenge.allowedActions || []), normalizeAllowedActions(scope.allowedActions || [])) &&
     sameAuthIntent(challenge.authIntent || null, scope.authIntent || null);
+}
+
+function supersedePendingChallengesInScope(challenges = [], scope = {}, nextChallengeId = "", now = Date.now()) {
+  const supersededAt = nowIso();
+  let count = 0;
+  const next = challenges.map((item) => {
+    const challenge = normalizeChallenge(item, now);
+    if (challenge.status !== "pending" || !sameChallengeScope(challenge, scope)) return challenge;
+    count += 1;
+    return {
+      ...challenge,
+      status: "superseded",
+      supersededAt,
+      supersededBy: nextChallengeId,
+    };
+  });
+  return { challenges: next, count };
 }
 
 function createdInsideWindow(challenge = {}, now = Date.now(), windowMs = 0) {
@@ -1090,32 +1109,13 @@ export async function createPairingChallenge({ request, env = process.env, userI
     allowedActions: normalizedAllowedActions,
     authIntent: normalizedAuthIntent,
   };
-  if (reusePending) {
-    const reusable = activePendingChallenges(config, now)
-      .find((challenge) =>
-        sameChallengeScope(challenge, scope) &&
-        sameChallengeClient(challenge, requestedIp, requestedUserAgent)
-      );
-    if (reusable) {
-      await appendEvent({
-        type: "security_pairing_challenge_reused",
-        challengeId: reusable.id,
-        instanceId: reusable.instanceId || null,
-        shareId: reusable.shareId || null,
-        appSlug: reusable.appSlug || null,
-        userId: reusable.userId || null,
-        role: reusable.role || null,
-      }, env).catch(() => {});
-      return {
-        ok: true,
-        challengeId: reusable.id,
-        challenge: publicChallenge(reusable, now),
-        expiresAt: reusable.expiresAt,
-        reused: true,
-      };
-    }
-  }
-  await assertPairingChallengeCreateAllowed(config, {
+  const rateLimitConfig = {
+    ...config,
+    challenges: (config.challenges || [])
+      .map((challenge) => normalizeChallenge(challenge, now))
+      .filter((challenge) => challenge.status !== "pending" || !sameChallengeScope(challenge, scope)),
+  };
+  await assertPairingChallengeCreateAllowed(rateLimitConfig, {
     now,
     requestedIp,
     requestedUserAgent,
@@ -1148,10 +1148,24 @@ export async function createPairingChallenge({ request, env = process.env, userI
     allowedActions: normalizedAllowedActions,
     authIntent: normalizedAuthIntent,
   };
+  const superseded = supersedePendingChallengesInScope(config.challenges || [], scope, challenge.id, now);
   await writeSecurityConfig({
     ...config,
-    challenges: [...(config.challenges || []), challenge],
+    challenges: [...superseded.challenges, challenge],
   }, env);
+  if (superseded.count > 0) {
+    await appendEvent({
+      type: "security_pairing_challenge_superseded",
+      challengeId: challenge.id,
+      supersededCount: superseded.count,
+      instanceId: challenge.instanceId || null,
+      shareId: challenge.shareId || null,
+      appSlug: challenge.appSlug || null,
+      userId: challenge.userId || null,
+      role: challenge.role || null,
+      reusePendingRequested: Boolean(reusePending),
+    }, env).catch(() => {});
+  }
   await appendEvent({
     type: "security_pairing_challenge_created",
     challengeId: challenge.id,

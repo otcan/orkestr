@@ -94,6 +94,8 @@ function normalizeShare(share = {}, now = Date.now()) {
     status: status === "pending" && expired ? "expired" : status,
     createdAt: String(share.createdAt || "").trim() || nowIso(),
     expiresAt,
+    supersededAt: String(share.supersededAt || "").trim() || null,
+    supersededBy: String(share.supersededBy || "").trim() || null,
     createdBy: String(share.createdBy || "").trim() || null,
     label: String(share.label || "").trim() || null,
     attempts: Array.isArray(share.attempts) ? share.attempts.map((attempt) => normalizeAttempt(attempt, now)) : [],
@@ -135,6 +137,8 @@ function publicShare(share) {
     status: share.status,
     createdAt: share.createdAt,
     expiresAt: share.expiresAt,
+    supersededAt: share.supersededAt || null,
+    supersededBy: share.supersededBy || null,
     label: share.label,
   };
 }
@@ -195,6 +199,7 @@ function assertShareActive(share, now = Date.now()) {
     throw desktopShareError("desktop_share_expired", 401);
   }
   if (share.status === "revoked") throw desktopShareError("desktop_share_revoked", 401);
+  if (share.status === "superseded") throw desktopShareError("desktop_share_superseded", 409);
 }
 
 function assertShareKey(share, key) {
@@ -269,6 +274,7 @@ export async function createDesktopShare({ desktopSlug = "", slug = "", ownerUse
   const normalizedSlug = cleanSlug(desktopSlug || slug);
   if (!normalizedSlug) throw desktopShareError("desktop_slug_required", 400);
   const key = randomToken(32);
+  const state = await readState(env);
   const share = normalizeShare({
     id: randomToken(12),
     desktopSlug: normalizedSlug,
@@ -282,10 +288,25 @@ export async function createDesktopShare({ desktopSlug = "", slug = "", ownerUse
     label,
     attempts: [],
   });
-  const state = await readState(env);
-  await writeState({ desktopShares: [share, ...state.desktopShares] }, env);
+  const supersededAt = nowIso();
+  let supersededCount = 0;
+  const desktopShares = state.desktopShares.map((item) => {
+    if (
+      item.desktopSlug !== share.desktopSlug ||
+      item.ownerUserId !== share.ownerUserId ||
+      ["expired", "revoked", "superseded"].includes(item.status)
+    ) return item;
+    supersededCount += 1;
+    return {
+      ...item,
+      status: "superseded",
+      supersededAt,
+      supersededBy: share.id,
+    };
+  });
+  await writeState({ desktopShares: [share, ...desktopShares] }, env);
   const url = desktopShareUrl(share, key, env);
-  await appendEvent({ type: "desktop_share_created", desktopSlug: share.desktopSlug, ownerUserId: share.ownerUserId, shareId: share.id }, env).catch(() => {});
+  await appendEvent({ type: "desktop_share_created", desktopSlug: share.desktopSlug, ownerUserId: share.ownerUserId, shareId: share.id, supersededCount }, env).catch(() => {});
   return {
     ok: true,
     share: publicShare(share),
@@ -366,7 +387,7 @@ export async function approveDesktopShareChallenge(challenge = "", { env = proce
   const now = Date.now();
   let approved = null;
   for (const share of state.desktopShares) {
-    if (share.status === "expired" || share.status === "revoked" || Date.parse(share.expiresAt || "") <= now) continue;
+    if (["expired", "revoked", "superseded"].includes(share.status) || Date.parse(share.expiresAt || "") <= now) continue;
     for (const attempt of share.attempts) {
       if (attempt.challenge !== value || attempt.status !== "pending" || Date.parse(attempt.expiresAt || "") <= now) continue;
       attempt.status = "approved";

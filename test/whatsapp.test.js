@@ -3896,12 +3896,19 @@ test("whatsapp direct approval command approves matching instance pairing challe
     from: whatsappChatId,
     text: `orkestr connect approve ${created.challenge.approveCode}`,
   }, env);
+  const replay = await routeWhatsAppInbound({
+    eventId: "wa-approval-command-replay-1",
+    chatId: whatsappChatId,
+    from: whatsappChatId,
+    text: `orkestr connect approve ${created.challenge.approveCode}`,
+  }, env);
   const listed = await listPairingChallenges({ env, includeExpired: true });
   const challenge = listed.challenges.find((item) => item.id === created.challenge.id);
 
   assert.equal(routed.approvedSecurityChallenge, true);
   assert.equal(routed.threadId, null);
   assert.equal(duplicate.duplicate, true);
+  assert.equal(replay.skipped, "security_approval_challenge_approved");
   assert.equal(challenge.status, "approved");
   assert.equal(challenge.approvedBy, "whatsapp");
 });

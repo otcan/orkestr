@@ -7,7 +7,7 @@ import { startServer } from "../apps/server/src/server.js";
 import { createGoogleWorkspaceConnectLink } from "../packages/connectors/src/google-workspace.js";
 import { __brokerInstanceRegistryTestInternals, encryptBrokerChannelPayload } from "../packages/core/src/broker-instance-registry.js";
 import { userPrincipal } from "../packages/core/src/principal.js";
-import { approvePairingChallenge, authorizeHttpRequest, createPairingChallenge, pairBrowser, securityStatus } from "../packages/core/src/security.js";
+import { approvePairingChallenge, authorizeHttpRequest, createPairingChallenge, listPairingChallenges, pairBrowser, securityStatus } from "../packages/core/src/security.js";
 import { createTenantVm } from "../packages/core/src/tenant-vm-registry.js";
 import { createUser, getUser } from "../packages/core/src/users.js";
 import { writeConnectorConfig } from "../packages/storage/src/config.js";
@@ -241,7 +241,7 @@ test("non-local bind requires pairing by default", async () => {
   }
 });
 
-test("browser pairing challenges reuse the same client scope and rate-limit pending spam", async () => {
+test("browser pairing challenges supersede the same scope and rate-limit pending spam", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-security-challenge-limits-"));
   const env = {
     ORKESTR_HOME: home,
@@ -259,15 +259,24 @@ test("browser pairing challenges reuse the same client scope and rate-limit pend
     requestedPath: "/app/",
     reusePending: true,
   });
-  const reused = await createPairingChallenge({
+  const second = await createPairingChallenge({
     env,
     request,
     instanceId: "demo-vm-001",
     requestedPath: "/app/",
     reusePending: true,
   });
-  assert.equal(reused.reused, true);
-  assert.equal(reused.challengeId, first.challengeId);
+  const listed = await listPairingChallenges({ env, includeExpired: true });
+  const oldChallenge = listed.challenges.find((challenge) => challenge.id === first.challengeId);
+  assert.notEqual(second.challengeId, first.challengeId);
+  assert.equal(second.reused, undefined);
+  assert.equal(oldChallenge.status, "superseded");
+  assert.equal(oldChallenge.supersededBy, second.challengeId);
+
+  await assert.rejects(
+    () => approvePairingChallenge(first.challengeId, { env }),
+    /pairing_challenge_superseded/,
+  );
 
   await assert.rejects(
     () => createPairingChallenge({
@@ -1097,6 +1106,8 @@ test("broker instance pairing challenge is scoped to the tenant VM owner", async
     assert.equal(body.challenge.authIntent.instanceId, "instance-firat");
     assert.equal(body.challenge.authIntent.tenantVmId, "firat-jobs-vm");
     assert.equal(body.challenge.authIntent.userId, "firat");
+    assert.equal(body.challenge.authIntent.restartCommand, "/connect google");
+    assert.equal(body.challenge.authIntent.restartSurface, "whatsapp");
   } finally {
     await new Promise((resolve) => server.close(resolve));
     restoreEnv(prior);
@@ -1272,6 +1283,8 @@ test("broker instance connector challenge preserves trusted Google Workspace app
     assert.equal(body.challenge.authIntent.accountId, "sender");
     assert.equal(body.challenge.authIntent.threadId, "firat-jobs");
     assert.equal(body.challenge.authIntent.thread, "Fırat Jobs");
+    assert.equal(body.challenge.authIntent.restartCommand, "/connect google");
+    assert.equal(body.challenge.authIntent.restartSurface, "whatsapp");
     assert.deepEqual(body.challenge.allowedActions, [`orkestr_auth.google.connect:${connect.connectId}`]);
   } finally {
     await new Promise((resolve) => server.close(resolve));

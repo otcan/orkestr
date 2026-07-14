@@ -450,7 +450,7 @@ export async function maybeApprovePairingChallengeFromWhatsApp({
     return { duplicate: false, skipped: "security_approval_sender_denied", event, agentId: null, threadId: null, messageId: null };
   }
 
-  if (challenge.status && challenge.status !== "pending" && challenge.status !== "approved") {
+  if (challenge.status && challenge.status !== "pending") {
     const reason = `security_approval_challenge_${challenge.status}`;
     const event = await recordSkipped(reason, {
       challengeId: challenge.id || challengeId,
@@ -470,9 +470,7 @@ export async function maybeApprovePairingChallengeFromWhatsApp({
     return { duplicate: false, skipped: reason, event, agentId: null, threadId: null, messageId: null };
   }
 
-  const result = challenge.status === "approved"
-    ? { ok: true, challenge }
-    : await approvePairingChallenge(challengeId, { env, approvedBy: "whatsapp" });
+  const result = await approvePairingChallenge(challengeId, { env, approvedBy: "whatsapp" });
   const autoBinding = await bindBrokerApprovalChat({
     input,
     challenge: result.challenge || challenge,
@@ -544,7 +542,7 @@ export async function maybeApprovePairingChallengeFromWhatsApp({
     accountId,
     challengeId: result.challenge?.id || challenge.id || challengeId,
     instanceId: result.challenge?.instanceId || challenge.instanceId || null,
-    alreadyApproved: challenge.status === "approved",
+    alreadyApproved: false,
   }, env).catch(() => {});
   return {
     duplicate: false,

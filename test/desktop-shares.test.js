@@ -81,6 +81,57 @@ test("desktop shares require a random subdomain, link key, and per-browser chat 
   }, env), /desktop_share_slug_forbidden/);
 });
 
+test("desktop shares supersede older pending and active shares for the same owner desktop", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-desktop-share-supersede-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_PUBLIC_HTTPS_URL: "https://app.example.test",
+  };
+  const principal = userPrincipal({ id: "alice", role: "user" });
+
+  const first = await createDesktopShare({ desktopSlug: "linkedin", principal, env });
+  const firstParts = urlParts(first.url);
+  const firstOpened = await openDesktopShare({
+    shareId: firstParts.shareId,
+    key: firstParts.key,
+    subdomain: first.subdomain,
+    env,
+  });
+  const second = await createDesktopShare({ desktopSlug: "linkedin", principal, env });
+  const secondParts = urlParts(second.url);
+
+  await assert.rejects(
+    () => approveDesktopShareChallenge(firstOpened.attempt.challenge, { env, approvedBy: "stale-thread" }),
+    /desktop_share_challenge_not_found/,
+  );
+  await assert.rejects(
+    () => openDesktopShare({ shareId: firstParts.shareId, key: firstParts.key, subdomain: first.subdomain, env }),
+    /desktop_share_superseded/,
+  );
+
+  const secondOpened = await openDesktopShare({
+    shareId: secondParts.shareId,
+    key: secondParts.key,
+    subdomain: second.subdomain,
+    env,
+  });
+  await approveDesktopShareChallenge(secondOpened.attempt.challenge, { env, approvedBy: "whatsapp-thread" });
+  const authorized = await authorizeDesktopShareHttpRequest({
+    url: "/desktop/linkedin/vnc.html?autoconnect=1",
+    headers: { cookie: `orkestr_desktop_share=${encodeURIComponent(secondOpened.cookie.value)}` },
+  }, env);
+  assert.equal(authorized.principal.userId, "alice");
+
+  await createDesktopShare({ desktopSlug: "linkedin", principal, env });
+  await assert.rejects(
+    () => authorizeDesktopShareHttpRequest({
+      url: "/desktop/linkedin/vnc.html?autoconnect=1",
+      headers: { cookie: `orkestr_desktop_share=${encodeURIComponent(secondOpened.cookie.value)}` },
+    }, env),
+    /desktop_share_superseded/,
+  );
+});
+
 test("desktop shares support path-based public challenge links", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-desktop-share-path-"));
   const env = {

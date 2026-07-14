@@ -299,6 +299,8 @@ test("google workspace brokered connect links require instance and owner scoped 
     assert.equal(challengePayload.challenge.authIntent.tenantVmId, "firat-jobs-vm");
     assert.equal(challengePayload.challenge.authIntent.userId, "firat");
     assert.equal(challengePayload.challenge.authIntent.thread, "firat-thread");
+    assert.equal(challengePayload.challenge.authIntent.restartCommand, "/connect google");
+    assert.equal(challengePayload.challenge.authIntent.restartSurface, "whatsapp");
 
     const beforePreview = await listPairingChallenges({ env: process.env, includeExpired: true });
     const previewResponse = await fetch(`http://127.0.0.1:${port}${connectPath}`, {
@@ -349,8 +351,22 @@ test("google workspace brokered connect links require instance and owner scoped 
     assert.equal(wrongUser.status, 403);
     assert.match(wrongUserHtml, /google_workspace_connect_pairing_user_mismatch/);
 
-    await approvePairingChallenge(challengeId, { env: process.env, approvedBy: "node:test" });
-    const paired = await pairBrowser({ challengeId, env: process.env });
+    const currentChallenges = await listPairingChallenges({ env: process.env, includeExpired: true });
+    const currentConnectChallenge = currentChallenges.challenges.find((challenge) =>
+      challenge.status === "pending" &&
+      challenge.instanceId === "instance-firat" &&
+      challenge.userId === "firat" &&
+      challenge.authIntent?.connectId === connect.connectId &&
+      challenge.requestedPath === connectPath
+    );
+    assert.ok(currentConnectChallenge);
+    assert.notEqual(currentConnectChallenge.id, challengeId);
+    await assert.rejects(
+      () => approvePairingChallenge(challengeId, { env: process.env, approvedBy: "node:test" }),
+      /pairing_challenge_superseded/,
+    );
+    await approvePairingChallenge(currentConnectChallenge.id, { env: process.env, approvedBy: "node:test" });
+    const paired = await pairBrowser({ challengeId: currentConnectChallenge.id, env: process.env });
     assert.deepEqual(paired.session.allowedActions, [`orkestr_auth.google.connect:${connect.connectId}`]);
     assert.equal(paired.session.authIntent.tool, "orkestr_auth");
     assert.equal(paired.session.authIntent.service, "gmail");

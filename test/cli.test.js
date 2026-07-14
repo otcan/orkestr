@@ -661,31 +661,26 @@ test("CLI desktop share chooses the configured desktop and calls the public API"
   assert.match(stdout.text(), /desktop-share\/share-1/);
 });
 
-test("CLI desktop share warns when desktop start fails after link creation", async () => {
-  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-cli-desktop-share-start-warning-"));
+test("CLI desktop share fails when the API refuses an unready desktop", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-cli-desktop-share-start-failed-"));
   const env = { ORKESTR_HOME: home };
   const stdout = capture();
+  const stderr = capture();
 
   const code = await runCli(["--api", "http://orkestr.test", "desktop", "share", "linkedin"], {
     env,
     stdout,
-    stderr: capture(),
+    stderr,
     fetchImpl: fakeFetch({
-      "POST /api/desktops/linkedin/share": {
-        url: "https://desktop.example.test/desktop-share/share-1?key=secret",
-        share: { desktopSlug: "linkedin", label: "LinkedIn" },
-        desktopStart: {
-          requested: true,
-          ok: false,
-          error: "browserctl_root_requires_run_user_or_explicit_no_sandbox",
-        },
-      },
+      "POST /api/desktops/linkedin/share": jsonResponse({
+        error: "browserctl_root_requires_run_user_or_explicit_no_sandbox",
+      }, 503),
     }),
   });
 
-  assert.equal(code, 0);
-  assert.match(stdout.text(), /Desktop link for LinkedIn/);
-  assert.match(stdout.text(), /Warning: desktop start failed: browserctl_root_requires_run_user_or_explicit_no_sandbox/);
+  assert.equal(code, 1);
+  assert.equal(stdout.text(), "");
+  assert.match(stderr.text(), /browserctl_root_requires_run_user_or_explicit_no_sandbox/);
 });
 
 test("CLI desktop approve approves a pasted mobile desktop challenge", async () => {

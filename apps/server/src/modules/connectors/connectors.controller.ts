@@ -156,6 +156,8 @@ function googleWorkspaceAuthIntent(connectRequest: any): Record<string, string> 
     chatId: String(connectRequest?.chatId || connectRequest?.brokerTenantChatId || "").trim(),
     accountId: String(connectRequest?.accountId || connectRequest?.brokerTenantAccountId || "").trim(),
     account,
+    restartCommand: "/connect google",
+    restartSurface: "whatsapp",
     source: String(connectRequest?.source || "connect_link").trim(),
   };
 }
@@ -239,7 +241,6 @@ async function googleWorkspaceConnectAccess(request: any, payload: any, response
     }
     const challenge = await createPairingChallenge({
       request,
-      reusePending: true,
       instanceId: googleWorkspaceBrokerInstanceId(connectRequest),
       userId: ownerUserId,
       role: ownerUserId ? "user" : "admin",
@@ -258,7 +259,6 @@ async function googleWorkspaceConnectAccess(request: any, payload: any, response
   if (!trustedContext) {
     const challenge = await createPairingChallenge({
       request,
-      reusePending: true,
       userId: ownerUserId,
       role: ownerUserId ? "user" : "admin",
       requestedPath: currentPath,

@@ -427,14 +427,19 @@ if (["list", "health", "start", "stop", "restart"].includes(command)) {
 test("oss browserctl exposes real noVNC desktop sessions in dry run", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-real-desktop-"));
   const script = path.resolve("scripts/browserctl.mjs");
+  const portSeed = 32_000 + Math.floor(Math.random() * 1000);
+  const debugBase = portSeed;
+  const webBase = portSeed + 4000;
+  const vncBase = portSeed + 8000;
+  const displayBase = 390 + Math.floor(Math.random() * 100);
   const env = {
     ...process.env,
     ORKESTR_HOME: home,
     ORKESTR_BROWSERCTL_DRY_RUN: "1",
-    ORKESTR_BROWSER_DEBUG_PORT_BASE: "19322",
-    ORKESTR_DESKTOP_WEB_PORT_BASE: "16080",
-    ORKESTR_DESKTOP_VNC_PORT_BASE: "15901",
-    ORKESTR_DESKTOP_DISPLAY_BASE: "190",
+    ORKESTR_BROWSER_DEBUG_PORT_BASE: String(debugBase),
+    ORKESTR_DESKTOP_WEB_PORT_BASE: String(webBase),
+    ORKESTR_DESKTOP_VNC_PORT_BASE: String(vncBase),
+    ORKESTR_DESKTOP_DISPLAY_BASE: String(displayBase),
   };
   const run = async (...args) => {
     const { stdout } = await execFileAsync(process.execPath, [script, ...args], { env });
@@ -453,15 +458,56 @@ test("oss browserctl exposes real noVNC desktop sessions in dry run", async () =
   const started = await run("start", "linkedin");
   assert.equal(started.session.status, "running");
   assert.equal(started.session.access, "desk");
-  assert.equal(started.session.debugPort, 19323);
-  assert.equal(started.session.web_port, 16081);
-  assert.equal(started.session.cdp_url, "http://127.0.0.1:19323");
+  assert.equal(started.session.debugPort, debugBase + 1);
+  assert.equal(started.session.web_port, webBase + 1);
+  assert.equal(started.session.cdp_url, `http://127.0.0.1:${debugBase + 1}`);
 
   const stopped = await run("stop", "linkedin");
   assert.equal(stopped.session.status, "prepared");
   const cleaned = await run("cleanup", "linkedin", "--safe");
   assert.equal(cleaned.session.cleaned, true);
   assert.equal(cleaned.session.status, "not_prepared");
+});
+
+test("oss browserctl marks stale tracked desktop state degraded and restarts cleanly", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-real-desktop-stale-"));
+  const script = path.resolve("scripts/browserctl.mjs");
+  const env = {
+    ...process.env,
+    ORKESTR_HOME: home,
+    ORKESTR_BROWSERCTL_DRY_RUN: "1",
+  };
+  const run = async (...args) => {
+    const { stdout } = await execFileAsync(process.execPath, [script, ...args], { env });
+    return JSON.parse(stdout);
+  };
+
+  await run("health", "linkedin");
+  const stateFile = path.join(home, "browsers", "linkedin", "desktop.json");
+  const state = JSON.parse(await fs.readFile(stateFile, "utf8"));
+  await fs.writeFile(stateFile, `${JSON.stringify({
+    ...state,
+    startedAt: new Date(Date.now() - 60_000).toISOString(),
+    dryRunRunning: false,
+    xvfbPid: 999991,
+    windowManagerPid: 999992,
+    x11vncPid: 999993,
+    websockifyPid: 999994,
+    chromePid: 999995,
+  }, null, 2)}\n`);
+
+  const listed = await run("list", "--json");
+  const stale = listed.sessions.find((session) => session.slug === "linkedin");
+  const restarted = await run("start", "linkedin");
+
+  assert.equal(stale.status, "degraded");
+  assert.equal(stale.state_drift, true);
+  assert.equal(stale.readiness.ok, false);
+  assert.ok(stale.readiness.issues.includes("stale_state"));
+  assert.equal(stale.control.restart, true);
+  assert.equal(stale.control.stop, true);
+  assert.equal(restarted.session.status, "running");
+  assert.equal(restarted.session.readiness.ok, true);
 });
 
 test("oss browserctl stops idle demo desktops and removes runtime cache files", async () => {
