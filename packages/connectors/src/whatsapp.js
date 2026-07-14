@@ -907,10 +907,12 @@ async function findPriorUncertainWhatsAppConnectorOutboxJob({
   accountId = "",
   sourceMessageId = "",
   messageId = "",
+  parentMessageId = "",
   textKey = "",
 } = {}, env = process.env) {
   const sourceId = pickString(sourceMessageId, messageId);
-  if (!sourceId || !chatId) return null;
+  const parentId = pickString(parentMessageId);
+  if ((!sourceId && !parentId) || !chatId) return null;
   const listed = await listConnectorOutboxJobs({
     connector: "whatsapp",
     state: "delivery_uncertain failed_retryable",
@@ -923,9 +925,11 @@ async function findPriorUncertainWhatsAppConnectorOutboxJob({
     if (jobState === "failed_retryable" && !uncertainWhatsAppConnectorOutboxJob(job)) return false;
     if (jobState !== "delivery_uncertain" && jobState !== "failed_retryable") return false;
     const jobSourceId = pickString(job.sourceMessageId, job.sourceEventId);
-    if (jobSourceId !== sourceId) return false;
+    const sameSource = Boolean(sourceId && jobSourceId === sourceId);
+    const sameParent = Boolean(parentId && pickString(job.metadata?.parentMessageId) === parentId);
+    if (!sameSource && !sameParent) return false;
     if (accountId && pickString(job.accountId) && pickString(job.accountId) !== pickString(accountId)) return false;
-    if (textKey && pickString(job.metadata?.textKey) && pickString(job.metadata.textKey) !== pickString(textKey)) return false;
+    if (sameSource && textKey && pickString(job.metadata?.textKey) && pickString(job.metadata.textKey) !== pickString(textKey)) return false;
     return true;
   }) || null;
 }
@@ -2936,6 +2940,7 @@ async function sendClaimedWhatsAppText({
         accountId,
         sourceMessageId,
         messageId,
+        parentMessageId,
         textKey,
       }, env);
   if (uncertainSourceJob) {

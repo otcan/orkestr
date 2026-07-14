@@ -307,6 +307,81 @@ test("whatsapp connector outbox quarantines uncertain sends instead of retrying"
   }
 });
 
+test("whatsapp connector outbox suppresses later progress for an uncertain turn", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-connector-outbox-progress-turn-"));
+  const runtimeEnv = env(home, { ORKESTR_CONNECTOR_OUTBOX_RETRY_BACKOFF_MS: "0" });
+  await writeConnectorConfig("whatsapp", { bridgeMode: "external", bridgeUrl: "http://wa.local" }, runtimeEnv);
+  await createThread({
+    id: "thread-wa-outbox-progress-turn",
+    ownerUserId: "tenant-a",
+    name: "WA Connector Outbox Progress Turn Thread",
+    binding: {
+      connector: "whatsapp",
+      chatId: "shared-chat",
+      responderAccountId: "responder",
+      outboundAccountId: "responder",
+      mirrorToWhatsApp: true,
+    },
+  }, runtimeEnv);
+  const parent = await appendThreadMessage("thread-wa-outbox-progress-turn", {
+    role: "user",
+    source: "whatsapp_inbound",
+    state: "completed",
+    connector: "whatsapp",
+    chatId: "shared-chat",
+    accountId: "responder",
+    text: "status?",
+  }, runtimeEnv);
+  const firstProgress = await appendThreadMessage("thread-wa-outbox-progress-turn", {
+    role: "assistant",
+    source: "codex-app-server",
+    phase: "commentary",
+    state: "completed",
+    parentMessageId: parent.id,
+    chatId: "shared-chat",
+    accountId: "responder",
+    text: "Still working.",
+  }, runtimeEnv);
+
+  const sentTexts = [];
+  const failed = await deliverWhatsAppReplies(runtimeEnv, async (_url, init = {}) => {
+    const body = JSON.parse(String(init.body || "{}"));
+    sentTexts.push(body.text || "");
+    throw new Error("whatsapp_local_bridge_not_ready_recovered_after_send_runtime_error");
+  });
+  const outboxAfterFailure = await readConnectorOutbox(runtimeEnv);
+  const firstJob = outboxAfterFailure.jobs.find((job) => job.sourceMessageId === firstProgress.id);
+
+  assert.equal(failed.failed.length, 1);
+  assert.equal(sentTexts.includes("Still working."), true);
+  assert.equal(firstJob?.state, "delivery_uncertain");
+  assert.equal(firstJob.metadata.parentMessageId, parent.id);
+
+  const secondProgress = await appendThreadMessage("thread-wa-outbox-progress-turn", {
+    role: "assistant",
+    source: "codex-app-server",
+    phase: "commentary",
+    state: "completed",
+    parentMessageId: parent.id,
+    chatId: "shared-chat",
+    accountId: "responder",
+    text: "Still working, more context.",
+  }, runtimeEnv);
+  const second = await deliverWhatsAppReplies(runtimeEnv, async (_url, init = {}) => {
+    const body = JSON.parse(String(init.body || "{}"));
+    sentTexts.push(body.text || "");
+    throw new Error("later same-turn progress must not be sent");
+  });
+  const outboxAfterSecond = await readConnectorOutbox(runtimeEnv);
+  const secondJob = outboxAfterSecond.jobs.find((job) => job.sourceMessageId === secondProgress.id);
+
+  assert.equal(sentTexts.includes("Still working, more context."), false);
+  assert.equal(second.failed.length, 0);
+  assert.equal(second.skipped.find((entry) => entry.messageId === secondProgress.id)?.reason, "connector_outbox_delivery_uncertain");
+  assert.equal(secondJob?.state, "delivery_uncertain");
+  assert.equal(secondJob.metadata.priorDeliveryUncertainJobId, firstJob.id);
+});
+
 test("whatsapp connector outbox terminalizes legacy uncertain retry rows before claim", async () => {
   const cases = [
     { name: "unconfirmed", error: "whatsapp_send_not_confirmed" },
