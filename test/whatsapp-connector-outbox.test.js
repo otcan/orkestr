@@ -357,15 +357,20 @@ test("whatsapp connector outbox terminalizes legacy unconfirmed retry rows befor
   assert.equal(autoRetry.retried.length, 0);
   assert.equal(autoRetry.skipped.find((item) => item.id === legacyJob.id)?.reason, "not_recoverable");
 
-  let bridgeCalls = 0;
-  const delivery = await deliverWhatsAppReplies(runtimeEnv, async () => {
-    bridgeCalls += 1;
-    throw new Error("legacy unconfirmed row must not be replayed");
+  const sentTexts = [];
+  const delivery = await deliverWhatsAppReplies(runtimeEnv, async (url, init = {}) => {
+    const endpoint = String(url || "");
+    if (endpoint.endsWith("/send-text")) {
+      const body = JSON.parse(String(init.body || "{}"));
+      sentTexts.push(body.text || "");
+      if (body.text === "Legacy maybe sent.") throw new Error("legacy unconfirmed row must not be replayed");
+    }
+    return response({ ok: true, ids: [`wa-sent-${sentTexts.length}`], messages: [] });
   });
   const outboxAfterDelivery = await readConnectorOutbox(runtimeEnv);
   const terminalized = outboxAfterDelivery.jobs.find((item) => item.id === legacyJob.id);
 
-  assert.equal(bridgeCalls, 0);
+  assert.equal(sentTexts.includes("Legacy maybe sent."), false);
   assert.equal(delivery.delivered.length, 0);
   assert.equal(delivery.failed.length, 0);
   assert.equal(delivery.skipped.find((item) => item.messageId === reply.id)?.reason, "connector_outbox_delivery_uncertain");

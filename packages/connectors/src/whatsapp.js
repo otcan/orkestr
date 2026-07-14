@@ -912,12 +912,15 @@ async function findPriorUncertainWhatsAppConnectorOutboxJob({
   if (!sourceId || !chatId) return null;
   const listed = await listConnectorOutboxJobs({
     connector: "whatsapp",
-    state: "delivery_uncertain",
+    state: "delivery_uncertain failed_retryable",
     chatId,
     threadId,
     deliveryType,
   }, env).catch(() => ({ jobs: [] }));
   return (listed.jobs || []).find((job) => {
+    const jobState = pickString(job.state).toLowerCase();
+    if (jobState === "failed_retryable" && !uncertainWhatsAppConnectorOutboxJob(job)) return false;
+    if (jobState !== "delivery_uncertain" && jobState !== "failed_retryable") return false;
     const jobSourceId = pickString(job.sourceMessageId, job.sourceEventId);
     if (jobSourceId !== sourceId) return false;
     if (accountId && pickString(job.accountId) && pickString(job.accountId) !== pickString(accountId)) return false;
@@ -2937,6 +2940,20 @@ async function sendClaimedWhatsAppText({
   if (uncertainSourceJob) {
     const now = new Date().toISOString();
     const errorText = pickString(uncertainSourceJob.error, "whatsapp_send_not_confirmed");
+    if (uncertainSourceJob.id !== outboxResult.job.id) {
+      await markConnectorOutboxJob(uncertainSourceJob.id, {
+        state: "delivery_uncertain",
+        failedAt: pickString(uncertainSourceJob.failedAt) || now,
+        terminalAt: now,
+        error: errorText,
+        metadata: {
+          ...(uncertainSourceJob.metadata || {}),
+          deliveryUncertain: true,
+          retrySuppressed: true,
+          terminalizedAt: now,
+        },
+      }, env).catch(() => null);
+    }
     await markConnectorOutboxJob(outboxResult.job.id, {
       state: "delivery_uncertain",
       failedAt: pickString(outboxResult.job.failedAt, uncertainSourceJob.failedAt) || now,
@@ -2961,6 +2978,20 @@ async function sendClaimedWhatsAppText({
       state.outboundIntents = outboundIntents;
       await writeWhatsAppState(state, env);
     }
+    await patchAssistantMirrorDeliveryState({
+      kind,
+      agentId,
+      threadId,
+      message,
+      deliveryType,
+      patch: {
+        mirrorOutboxJobId: outboxResult.job.id,
+        deliveryState: "delivery_uncertain",
+        deliveryLastAttemptAt: now,
+        deliveryError: errorText,
+      },
+      env,
+    });
     await markRouterOutboxItem(intent?.outboxId, {
       status: "skipped",
       error: errorText,
@@ -3204,7 +3235,7 @@ async function sendClaimedWhatsAppText({
       deliveryType,
       patch: {
         mirrorOutboxJobId: outboxClaim.job.id,
-        deliveryState: terminalFailure ? "failed" : "failed_retryable",
+        deliveryState: terminalFailure ? "failed" : uncertainDelivery ? "delivery_uncertain" : "failed_retryable",
         deliveryLastAttemptAt: now,
         deliveryError: errorText,
       },
