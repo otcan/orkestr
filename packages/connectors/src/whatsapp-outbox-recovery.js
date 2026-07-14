@@ -25,6 +25,7 @@ function unique(values = []) {
 export function recoverableWhatsAppOutboxError(value = "") {
   const reason = lower(value);
   if (!reason) return false;
+  if (uncertainWhatsAppOutboxError(reason)) return false;
   return reason.includes("whatsapp_local_bridge_not_ready") ||
     reason.includes("whatsapp_local_bridge_stale_runtime") ||
     reason.includes("whatsapp_local_bridge_not_ready_recovered") ||
@@ -40,10 +41,21 @@ export function recoverableWhatsAppOutboxError(value = "") {
     reason.includes("whatsapp_send_media_timeout");
 }
 
+export function uncertainWhatsAppOutboxError(value = "") {
+  const reason = lower(value);
+  return reason.includes("whatsapp_send_not_confirmed") ||
+    reason.includes("whatsapp_local_bridge_not_ready_recovered_after_send_runtime_error");
+}
+
 function recoverableJob(job = {}) {
   if (lower(job.connector) !== "whatsapp") return false;
   if (lower(job.state) !== "failed_retryable") return false;
   if (job.metadata?.nonRetryable === true) return false;
+  if (
+    uncertainWhatsAppOutboxError(job.error) ||
+    uncertainWhatsAppOutboxError(job.metadata?.lastError) ||
+    uncertainWhatsAppOutboxError(job.metadata?.failureReason)
+  ) return false;
   return recoverableWhatsAppOutboxError(job.error) ||
     recoverableWhatsAppOutboxError(job.metadata?.lastError) ||
     recoverableWhatsAppOutboxError(job.metadata?.failureReason);

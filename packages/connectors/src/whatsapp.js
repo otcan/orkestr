@@ -889,7 +889,8 @@ function nonRetryableWhatsAppOutboundError(error) {
 
 function uncertainWhatsAppOutboundDeliveryError(error) {
   const message = pickString(error?.message, error);
-  return /\bwhatsapp_send_not_confirmed\b/i.test(message);
+  return /\bwhatsapp_send_not_confirmed\b/i.test(message) ||
+    /\bwhatsapp_local_bridge_not_ready_recovered_after_send_runtime_error\b/i.test(message);
 }
 
 function uncertainWhatsAppConnectorOutboxJob(job = {}) {

@@ -225,157 +225,173 @@ test("whatsapp connector outbox auto-retries recoverable bridge failures after a
   assert.equal(outboxAfterDelivery.jobs.find((item) => item.id === failedJob.id)?.state, "delivered");
 });
 
-test("whatsapp connector outbox quarantines unconfirmed sends instead of retrying", async () => {
-  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-connector-outbox-uncertain-"));
-  const runtimeEnv = env(home, { ORKESTR_CONNECTOR_OUTBOX_RETRY_BACKOFF_MS: "0" });
-  await writeConnectorConfig("whatsapp", { bridgeMode: "external", bridgeUrl: "http://wa.local" }, runtimeEnv);
-  await createThread({
-    id: "thread-wa-outbox-uncertain",
-    ownerUserId: "tenant-a",
-    name: "WA Connector Outbox Uncertain Thread",
-    binding: {
+test("whatsapp connector outbox quarantines uncertain sends instead of retrying", async () => {
+  const cases = [
+    { name: "unconfirmed", error: "whatsapp_send_not_confirmed" },
+    { name: "send-recovery", error: "whatsapp_local_bridge_not_ready_recovered_after_send_runtime_error" },
+  ];
+  for (const item of cases) {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), `orkestr-wa-connector-outbox-${item.name}-`));
+    const runtimeEnv = env(home, { ORKESTR_CONNECTOR_OUTBOX_RETRY_BACKOFF_MS: "0" });
+    await writeConnectorConfig("whatsapp", { bridgeMode: "external", bridgeUrl: "http://wa.local" }, runtimeEnv);
+    const threadId = `thread-wa-outbox-${item.name}`;
+    await createThread({
+      id: threadId,
+      ownerUserId: "tenant-a",
+      name: `WA Connector Outbox ${item.name} Thread`,
+      binding: {
+        connector: "whatsapp",
+        chatId: "shared-chat",
+        responderAccountId: "responder",
+        outboundAccountId: "responder",
+        mirrorToWhatsApp: true,
+      },
+    }, runtimeEnv);
+    const parent = await appendThreadMessage(threadId, {
+      role: "user",
+      source: "whatsapp_inbound",
+      state: "completed",
       connector: "whatsapp",
       chatId: "shared-chat",
-      responderAccountId: "responder",
-      outboundAccountId: "responder",
-      mirrorToWhatsApp: true,
-    },
-  }, runtimeEnv);
-  const parent = await appendThreadMessage("thread-wa-outbox-uncertain", {
-    role: "user",
-    source: "whatsapp_inbound",
-    state: "completed",
-    connector: "whatsapp",
-    chatId: "shared-chat",
-    accountId: "responder",
-    text: "status?",
-  }, runtimeEnv);
-  const reply = await appendThreadMessage("thread-wa-outbox-uncertain", {
-    role: "assistant",
-    source: "codex-app-server",
-    phase: "final_answer",
-    state: "completed",
-    parentMessageId: parent.id,
-    chatId: "shared-chat",
-    accountId: "responder",
-    text: "Maybe sent once.",
-  }, runtimeEnv);
-
-  const sentTexts = [];
-  const failed = await deliverWhatsAppReplies(runtimeEnv, async (_url, init = {}) => {
-    const body = JSON.parse(String(init.body || "{}"));
-    sentTexts.push(body.text || "");
-    if (body.text === "Maybe sent once.") throw new Error("whatsapp_send_not_confirmed");
-    return response({ ok: true, ids: [`wa-sent-${sentTexts.length}`] });
-  });
-  const outboxAfterFailure = await readConnectorOutbox(runtimeEnv);
-  const uncertainJob = outboxAfterFailure.jobs.find((item) => item.sourceMessageId === reply.id);
-  const stateAfterFailure = await readJson(dataPaths(runtimeEnv).whatsapp, { outboundIntents: [] });
-  const intent = (stateAfterFailure.outboundIntents || []).find((item) => item.messageId === reply.id);
-
-  assert.equal(failed.failed.length, 1);
-  assert.equal(sentTexts.filter((text) => text === "Maybe sent once.").length, 1);
-  assert.equal(uncertainJob?.state, "delivery_uncertain");
-  assert.equal(uncertainJob.claimedBy, "");
-  assert.equal(uncertainJob.claimExpiresAt, "");
-  assert.equal(uncertainJob.terminalAt.length > 0, true);
-  assert.equal(uncertainJob.metadata.deliveryUncertain, true);
-  assert.equal(uncertainJob.metadata.retrySuppressed, true);
-  assert.equal(intent?.status, "skipped");
-  assert.equal(intent?.error, "whatsapp_send_not_confirmed");
-
-  const second = await deliverWhatsAppReplies(runtimeEnv, async (_url, init = {}) => {
-    const body = JSON.parse(String(init.body || "{}"));
-    sentTexts.push(body.text || "");
-    if (body.text === "Maybe sent once.") throw new Error("unconfirmed send must not be replayed");
-    return response({ ok: true, ids: [`wa-sent-${sentTexts.length}`] });
-  });
-
-  assert.equal(sentTexts.filter((text) => text === "Maybe sent once.").length, 1);
-  assert.equal(second.failed.length, 0);
-  assert.ok(second.skipped.some((item) =>
-    item.messageId === reply.id &&
-    ["whatsapp_send_not_confirmed", "connector_outbox_delivery_uncertain"].includes(item.reason)
-  ));
-});
-
-test("whatsapp connector outbox terminalizes legacy unconfirmed retry rows before claim", async () => {
-  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-connector-outbox-legacy-uncertain-"));
-  const runtimeEnv = env(home, { ORKESTR_CONNECTOR_OUTBOX_RETRY_BACKOFF_MS: "0" });
-  await writeConnectorConfig("whatsapp", { bridgeMode: "external", bridgeUrl: "http://wa.local" }, runtimeEnv);
-  await createThread({
-    id: "thread-wa-outbox-legacy-uncertain",
-    ownerUserId: "tenant-a",
-    name: "WA Connector Outbox Legacy Uncertain Thread",
-    binding: {
-      connector: "whatsapp",
+      accountId: "responder",
+      text: "status?",
+    }, runtimeEnv);
+    const outboundText = `Maybe sent once ${item.name}.`;
+    const reply = await appendThreadMessage(threadId, {
+      role: "assistant",
+      source: "codex-app-server",
+      phase: "final_answer",
+      state: "completed",
+      parentMessageId: parent.id,
       chatId: "shared-chat",
-      responderAccountId: "responder",
-      outboundAccountId: "responder",
-      mirrorToWhatsApp: true,
-    },
-  }, runtimeEnv);
-  const parent = await appendThreadMessage("thread-wa-outbox-legacy-uncertain", {
-    role: "user",
-    source: "whatsapp_inbound",
-    state: "completed",
-    connector: "whatsapp",
-    chatId: "shared-chat",
-    accountId: "responder",
-    text: "status?",
-  }, runtimeEnv);
-  const reply = await appendThreadMessage("thread-wa-outbox-legacy-uncertain", {
-    role: "assistant",
-    source: "codex-app-server",
-    phase: "final_answer",
-    state: "completed",
-    parentMessageId: parent.id,
-    chatId: "shared-chat",
-    accountId: "responder",
-    text: "Legacy maybe sent.",
-  }, runtimeEnv);
-  const { job: legacyJob } = await ensureConnectorOutboxJob({
-    tenantId: "tenant-a",
-    ownerUserId: "tenant-a",
-    connector: "whatsapp",
-    accountId: "responder",
-    chatId: "shared-chat",
-    threadId: "thread-wa-outbox-legacy-uncertain",
-    sourceMessageId: reply.id,
-    sourceRevision: reply.revision || reply.updatedAt || reply.createdAt || "1",
-    deliveryType: "final",
-    payload: { text: "Legacy maybe sent." },
-    state: "failed_retryable",
-    failedAt: new Date().toISOString(),
-    error: "whatsapp_send_not_confirmed",
-  }, runtimeEnv);
+      accountId: "responder",
+      text: outboundText,
+    }, runtimeEnv);
 
-  const autoRetry = await retryRecoverableWhatsAppOutboxJobsForAccounts({
-    accountIds: ["responder"],
-    reason: "account_ready",
-  }, runtimeEnv);
-  assert.equal(autoRetry.retried.length, 0);
-  assert.equal(autoRetry.skipped.find((item) => item.id === legacyJob.id)?.reason, "not_recoverable");
-
-  const sentTexts = [];
-  const delivery = await deliverWhatsAppReplies(runtimeEnv, async (url, init = {}) => {
-    const endpoint = String(url || "");
-    if (endpoint.endsWith("/send-text")) {
+    const sentTexts = [];
+    const failed = await deliverWhatsAppReplies(runtimeEnv, async (_url, init = {}) => {
       const body = JSON.parse(String(init.body || "{}"));
       sentTexts.push(body.text || "");
-      if (body.text === "Legacy maybe sent.") throw new Error("legacy unconfirmed row must not be replayed");
-    }
-    return response({ ok: true, ids: [`wa-sent-${sentTexts.length}`], messages: [] });
-  });
-  const outboxAfterDelivery = await readConnectorOutbox(runtimeEnv);
-  const terminalized = outboxAfterDelivery.jobs.find((item) => item.id === legacyJob.id);
+      if (body.text === outboundText) throw new Error(item.error);
+      return response({ ok: true, ids: [`wa-sent-${sentTexts.length}`] });
+    });
+    const outboxAfterFailure = await readConnectorOutbox(runtimeEnv);
+    const uncertainJob = outboxAfterFailure.jobs.find((job) => job.sourceMessageId === reply.id);
+    const stateAfterFailure = await readJson(dataPaths(runtimeEnv).whatsapp, { outboundIntents: [] });
+    const intent = (stateAfterFailure.outboundIntents || []).find((entry) => entry.messageId === reply.id);
 
-  assert.equal(sentTexts.includes("Legacy maybe sent."), false);
-  assert.equal(delivery.delivered.length, 0);
-  assert.equal(delivery.failed.length, 0);
-  assert.equal(delivery.skipped.find((item) => item.messageId === reply.id)?.reason, "connector_outbox_delivery_uncertain");
-  assert.equal(terminalized.state, "delivery_uncertain");
-  assert.equal(terminalized.metadata.deliveryUncertain, true);
+    assert.equal(failed.failed.length, 1);
+    assert.equal(sentTexts.filter((text) => text === outboundText).length, 1);
+    assert.equal(uncertainJob?.state, "delivery_uncertain");
+    assert.equal(uncertainJob.claimedBy, "");
+    assert.equal(uncertainJob.claimExpiresAt, "");
+    assert.equal(uncertainJob.terminalAt.length > 0, true);
+    assert.equal(uncertainJob.metadata.deliveryUncertain, true);
+    assert.equal(uncertainJob.metadata.retrySuppressed, true);
+    assert.equal(intent?.status, "skipped");
+    assert.equal(intent?.error, item.error);
+
+    const second = await deliverWhatsAppReplies(runtimeEnv, async (_url, init = {}) => {
+      const body = JSON.parse(String(init.body || "{}"));
+      sentTexts.push(body.text || "");
+      if (body.text === outboundText) throw new Error(`${item.name} send must not be replayed`);
+      return response({ ok: true, ids: [`wa-sent-${sentTexts.length}`] });
+    });
+
+    assert.equal(sentTexts.filter((text) => text === outboundText).length, 1);
+    assert.equal(second.failed.length, 0);
+    assert.ok(second.skipped.some((entry) =>
+      entry.messageId === reply.id &&
+      [item.error, "connector_outbox_delivery_uncertain"].includes(entry.reason)
+    ));
+  }
+});
+
+test("whatsapp connector outbox terminalizes legacy uncertain retry rows before claim", async () => {
+  const cases = [
+    { name: "unconfirmed", error: "whatsapp_send_not_confirmed" },
+    { name: "send-recovery", error: "whatsapp_local_bridge_not_ready_recovered_after_send_runtime_error" },
+  ];
+  for (const item of cases) {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), `orkestr-wa-connector-outbox-legacy-${item.name}-`));
+    const runtimeEnv = env(home, { ORKESTR_CONNECTOR_OUTBOX_RETRY_BACKOFF_MS: "0" });
+    await writeConnectorConfig("whatsapp", { bridgeMode: "external", bridgeUrl: "http://wa.local" }, runtimeEnv);
+    const threadId = `thread-wa-outbox-legacy-${item.name}`;
+    await createThread({
+      id: threadId,
+      ownerUserId: "tenant-a",
+      name: `WA Connector Outbox Legacy ${item.name} Thread`,
+      binding: {
+        connector: "whatsapp",
+        chatId: "shared-chat",
+        responderAccountId: "responder",
+        outboundAccountId: "responder",
+        mirrorToWhatsApp: true,
+      },
+    }, runtimeEnv);
+    const parent = await appendThreadMessage(threadId, {
+      role: "user",
+      source: "whatsapp_inbound",
+      state: "completed",
+      connector: "whatsapp",
+      chatId: "shared-chat",
+      accountId: "responder",
+      text: "status?",
+    }, runtimeEnv);
+    const outboundText = `Legacy maybe sent ${item.name}.`;
+    const reply = await appendThreadMessage(threadId, {
+      role: "assistant",
+      source: "codex-app-server",
+      phase: "final_answer",
+      state: "completed",
+      parentMessageId: parent.id,
+      chatId: "shared-chat",
+      accountId: "responder",
+      text: outboundText,
+    }, runtimeEnv);
+    const { job: legacyJob } = await ensureConnectorOutboxJob({
+      tenantId: "tenant-a",
+      ownerUserId: "tenant-a",
+      connector: "whatsapp",
+      accountId: "responder",
+      chatId: "shared-chat",
+      threadId,
+      sourceMessageId: reply.id,
+      sourceRevision: reply.revision || reply.updatedAt || reply.createdAt || "1",
+      deliveryType: "final",
+      payload: { text: outboundText },
+      state: "failed_retryable",
+      failedAt: new Date().toISOString(),
+      error: item.error,
+    }, runtimeEnv);
+
+    const autoRetry = await retryRecoverableWhatsAppOutboxJobsForAccounts({
+      accountIds: ["responder"],
+      reason: "account_ready",
+    }, runtimeEnv);
+    assert.equal(autoRetry.retried.length, 0);
+    assert.equal(autoRetry.skipped.find((entry) => entry.id === legacyJob.id)?.reason, "not_recoverable");
+
+    const sentTexts = [];
+    const delivery = await deliverWhatsAppReplies(runtimeEnv, async (url, init = {}) => {
+      const endpoint = String(url || "");
+      if (endpoint.endsWith("/send-text")) {
+        const body = JSON.parse(String(init.body || "{}"));
+        sentTexts.push(body.text || "");
+        if (body.text === outboundText) throw new Error(`${item.name} legacy row must not be replayed`);
+      }
+      return response({ ok: true, ids: [`wa-sent-${sentTexts.length}`], messages: [] });
+    });
+    const outboxAfterDelivery = await readConnectorOutbox(runtimeEnv);
+    const terminalized = outboxAfterDelivery.jobs.find((entry) => entry.id === legacyJob.id);
+
+    assert.equal(sentTexts.includes(outboundText), false);
+    assert.equal(delivery.delivered.length, 0);
+    assert.equal(delivery.failed.length, 0);
+    assert.equal(delivery.skipped.find((entry) => entry.messageId === reply.id)?.reason, "connector_outbox_delivery_uncertain");
+    assert.equal(terminalized.state, "delivery_uncertain");
+    assert.equal(terminalized.metadata.deliveryUncertain, true);
+  }
 });
 
 test("whatsapp connector outbox dead-letters unknown account failures", async () => {
