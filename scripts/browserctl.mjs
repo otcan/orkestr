@@ -261,6 +261,52 @@ async function isTcpPortOpen(port) {
   });
 }
 
+function runtimePidChecks(state = {}) {
+  return {
+    xvfb: { pid: Number(state.xvfbPid || 0) || null, ok: isPidRunning(state.xvfbPid) },
+    windowManager: { pid: Number(state.windowManagerPid || 0) || null, ok: isPidRunning(state.windowManagerPid) },
+    x11vnc: { pid: Number(state.x11vncPid || 0) || null, ok: isPidRunning(state.x11vncPid) },
+    websockify: { pid: Number(state.websockifyPid || 0) || null, ok: isPidRunning(state.websockifyPid) },
+    chrome: { pid: Number(state.chromePid || 0) || null, ok: isPidRunning(state.chromePid) },
+  };
+}
+
+function desktopReadiness({ state = {}, prepared = false, dryRunning = false, webOpen = false, cdpOpen = false } = {}) {
+  const pids = runtimePidChecks(state);
+  const required = ["xvfb", "windowManager", "x11vnc", "websockify", "chrome"];
+  const startedMs = Date.parse(String(state.startedAt || ""));
+  const stoppedMs = Date.parse(String(state.stoppedAt || ""));
+  const stoppedAfterStart = Number.isFinite(startedMs) && Number.isFinite(stoppedMs) && stoppedMs >= startedMs;
+  const hasRuntimeState = !stoppedAfterStart && Boolean(state.startedAt || required.some((name) => pids[name].pid));
+  const completePidState = required.every((name) => Boolean(pids[name].pid));
+  const missingPids = required.filter((name) => pids[name].pid && !pids[name].ok);
+  const pidOk = dryRunning || (hasRuntimeState && completePidState && missingPids.length === 0);
+  const bridgeOk = dryRunning || (pids.x11vnc.ok && pids.websockify.ok && webOpen);
+  const browserOk = dryRunning || (pids.chrome.ok && cdpOpen);
+  const issues = [];
+  if (!prepared) issues.push("not_prepared");
+  if (hasRuntimeState && !pidOk) issues.push("stale_state");
+  if (hasRuntimeState && !bridgeOk) issues.push("desktop_bridge_unreachable");
+  if (hasRuntimeState && !browserOk) issues.push("desktop_browser_unreachable");
+  const ok = dryRunning || (pidOk && bridgeOk && browserOk);
+  return {
+    ok,
+    status: ok ? "ready" : issues[0] || "not_running",
+    issues,
+    pidOk,
+    bridgeOk,
+    browserOk,
+    checks: {
+      prepared,
+      webOpen,
+      cdpOpen,
+      pids,
+      missingPids,
+      completePidState,
+    },
+  };
+}
+
 async function commandPath(configName, candidates) {
   const configured = String(process.env[configName] || "").trim();
   if (configured) return configured;
@@ -501,6 +547,38 @@ async function writeState(slug, patch) {
   return next;
 }
 
+async function chromeSingletonLockPid(slug) {
+  const lockPath = path.join(profileDir(slug), "SingletonLock");
+  try {
+    const target = await fs.readlink(lockPath);
+    const match = String(target || "").match(/-(\d+)$/);
+    const pid = match ? Number(match[1]) : 0;
+    return Number.isInteger(pid) && pid > 0 ? pid : 0;
+  } catch {
+    return 0;
+  }
+}
+
+async function clearDeadChromeSingletons(slug, state = {}) {
+  const profile = profileDir(slug);
+  const lockPath = path.join(profile, "SingletonLock");
+  const lockPid = await chromeSingletonLockPid(slug);
+  if ((lockPid && isPidRunning(lockPid)) || isPidRunning(state.chromePid)) return false;
+  const removable = [
+    lockPath,
+    path.join(profile, "SingletonSocket"),
+    path.join(profile, "SingletonCookie"),
+    path.join(profile, "DevToolsActivePort"),
+  ];
+  let removed = false;
+  for (const filePath of removable) {
+    if (!await pathExists(filePath)) continue;
+    await fs.rm(filePath, { force: true }).catch(() => {});
+    removed = true;
+  }
+  return removed;
+}
+
 async function ensurePrepared(slug) {
   const desktop = desktopBySlug(slug);
   const ports = portsForSlug(desktop.slug);
@@ -535,8 +613,16 @@ async function sessionRecord(value) {
   const dryRunning = dryRun() && state.dryRunRunning === true;
   const webOpen = await isTcpPortOpen(state.webPort || portsForSlug(slug).webPort);
   const cdpOpen = await isTcpPortOpen(state.debugPort || portsForSlug(slug).debugPort);
-  const running = dryRunning || webOpen || isPidRunning(state.websockifyPid) || isPidRunning(state.chromePid);
-  const status = running ? "running" : prepared ? "prepared" : "not_prepared";
+  const readiness = desktopReadiness({ state, prepared, dryRunning, webOpen, cdpOpen });
+  const running = readiness.ok;
+  const degraded = prepared && !running && (
+    webOpen ||
+    cdpOpen ||
+    readiness.issues.includes("stale_state") ||
+    readiness.issues.includes("desktop_bridge_unreachable") ||
+    readiness.issues.includes("desktop_browser_unreachable")
+  );
+  const status = running ? "running" : degraded ? "degraded" : prepared ? "prepared" : "not_prepared";
   const ports = portsForSlug(slug);
   const debugPort = Number(state.debugPort || ports.debugPort);
   const vncPort = Number(state.vncPort || ports.vncPort);
@@ -561,6 +647,11 @@ async function sessionRecord(value) {
     cdp_url: running || state.startedAt ? `http://127.0.0.1:${debugPort}` : null,
     cdp_ok: cdpOpen,
     web_ok: webOpen,
+    visual_ok: readiness.ok,
+    bridge_ok: readiness.bridgeOk,
+    browser_ok: readiness.browserOk,
+    state_drift: readiness.issues.includes("stale_state"),
+    readiness,
     owner_service: "orkestr-oss",
     profileDir: profileDir(slug),
     profile: profileDir(slug),
@@ -578,7 +669,7 @@ async function sessionRecord(value) {
       health: true,
       prepare: true,
       start: true,
-      stop: running,
+      stop: Boolean(running || state.startedAt),
       restart: prepared,
       cleanup: prepared && !running,
     },
@@ -601,6 +692,9 @@ async function startDesktop(value) {
   const slug = desktop.slug;
   const current = await sessionRecord(slug);
   if (current.status === "running") return current;
+  if (current.status === "degraded" || current.state_drift) {
+    await stopDesktop(slug, { quiet: true });
+  }
   const state = await ensurePrepared(slug);
   const ports = portsForSlug(slug);
   const debugPort = Number(state.debugPort || ports.debugPort);
@@ -651,6 +745,9 @@ async function startDesktop(value) {
       "-localhost",
       "-forever",
       "-shared",
+      "-noxdamage",
+      "-repeat",
+      "-cursor", "arrow",
       "-rfbport", String(vncPort),
       "-nopw",
       "-quiet",
@@ -664,6 +761,9 @@ async function startDesktop(value) {
       `--user-data-dir=${profileDir(slug)}`,
       `--disk-cache-dir=${chromeCacheDir(slug)}`,
       `--media-cache-dir=${chromeMediaCacheDir(slug)}`,
+      "--ozone-platform=x11",
+      "--disable-gpu",
+      "--disable-gpu-compositing",
       "--remote-debugging-address=127.0.0.1",
       `--remote-debugging-port=${debugPort}`,
       "--no-first-run",
@@ -674,6 +774,7 @@ async function startDesktop(value) {
       "--disable-logging",
       "--log-level=3",
       `--window-size=${windowSize}`,
+      "--force-device-scale-factor=1",
       "--start-maximized",
       "--new-window",
     ];
@@ -681,6 +782,7 @@ async function startDesktop(value) {
       chromeArgs.push("--no-sandbox");
     }
     chromeArgs.push(startUrl);
+    await clearDeadChromeSingletons(slug, state);
     const chromePid = await spawnManaged(chrome, chromeArgs, { DISPLAY: display });
     const webReady = await waitUntil(() => isTcpPortOpen(webPort), 7000);
     const cdpReady = await waitUntil(() => isTcpPortOpen(debugPort), 7000);

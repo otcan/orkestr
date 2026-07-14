@@ -37,8 +37,7 @@ export function recoverableWhatsAppOutboxError(value = "") {
     reason.includes("userdatadir") ||
     reason.includes("sendiq called before startcomms") ||
     reason.includes("whatsapp_send_message_timeout") ||
-    reason.includes("whatsapp_send_media_timeout") ||
-    reason.includes("whatsapp_send_not_confirmed");
+    reason.includes("whatsapp_send_media_timeout");
 }
 
 function recoverableJob(job = {}) {

@@ -448,6 +448,8 @@ async function connectorAuthIntentForRequestedPath(requestedPath = "", instanceI
       chatId: String(connectRequest?.chatId || connectRequest?.brokerTenantChatId || "").trim(),
       accountId: String(connectRequest?.accountId || connectRequest?.brokerTenantAccountId || "").trim(),
       account: String(connectRequest?.account || "").trim().toLowerCase(),
+      restartCommand: "/connect google",
+      restartSurface: "whatsapp",
       source: String(connectRequest?.source || (trustedConnectId ? "connect_link" : "")).trim(),
     },
   };
@@ -714,13 +716,13 @@ export class SystemController {
   @Post("setup/security/challenge")
   @HttpCode(200)
   async setupSecurityChallenge(@Req() request: any, @Body() body: Record<string, unknown> = {}) {
-    return createPairingChallenge({ request, reusePending: true, ...(await pairingChallengeTarget(body, request)) } as any);
+    return createPairingChallenge({ request, ...(await pairingChallengeTarget(body, request)) } as any);
   }
 
   @Post("setup/security/challenges")
   @HttpCode(200)
   async setupSecurityChallenges(@Req() request: any, @Body() body: Record<string, unknown> = {}) {
-    return createPairingChallenge({ request, reusePending: true, ...(await pairingChallengeTarget(body, request)) } as any);
+    return createPairingChallenge({ request, ...(await pairingChallengeTarget(body, request)) } as any);
   }
 
   @Get("setup/security/challenges")

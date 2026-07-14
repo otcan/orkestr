@@ -157,7 +157,6 @@ export class SharedAppsController {
       appSlug: share.appSlug,
       requestedPath: requestedSharedAppPath(body, instanceId, appSlug, shareToken),
       allowedActions: share.allowedActionsJson || [],
-      reusePending: true,
     } as any);
   }
 

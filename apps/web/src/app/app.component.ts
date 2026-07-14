@@ -3916,7 +3916,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   outboxJobActions(job: WhatsAppOutboxJob): string[] {
     const state = String(job.state || "pending").toLowerCase();
     if (state === "delivered") return ["replay"];
-    if (["suppressed", "dead_letter", "skipped", "skipped_policy", "cancelled"].includes(state)) return ["retry", "replay", "mark-delivered"];
+    if (["suppressed", "dead_letter", "skipped", "skipped_policy", "cancelled", "delivery_uncertain"].includes(state)) return ["retry", "replay", "mark-delivered"];
     if (state === "failed_retryable") return ["retry", "suppress", "mark-delivered", "dead-letter"];
     if (["pending", "claimed", "sent_to_broker"].includes(state)) return ["suppress", "mark-delivered", "dead-letter"];
     return ["retry", "suppress", "mark-delivered"];
