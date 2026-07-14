@@ -1698,6 +1698,7 @@ export class OpsPageComponent implements OnInit, OnDestroy {
   whatsappOutboxStateClass(job: WhatsAppOutboxJob): string {
     const state = String(job.state || "").trim().toLowerCase();
     if (["delivered", "skipped", "suppressed"].includes(state)) return "ready";
+    if (state === "delivery_uncertain") return "warn";
     if (["failed", "dead", "dead_letter", "dead-letter", "failed_terminal"].includes(state)) return "bad";
     return "";
   }

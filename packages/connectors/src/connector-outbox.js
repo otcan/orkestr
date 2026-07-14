@@ -15,7 +15,7 @@ import {
   withPostgresTransaction,
 } from "./connector-outbox-postgres.js";
 
-export const terminalStates = new Set(["delivered", "skipped", "skipped_policy", "suppressed", "dead_letter", "cancelled"]);
+export const terminalStates = new Set(["delivered", "skipped", "skipped_policy", "suppressed", "dead_letter", "cancelled", "delivery_uncertain"]);
 const operatorActions = new Set(["retry", "suppress", "mark_delivered", "mark-delivered", "replay", "dead_letter", "dead-letter"]);
 const dbCache = new Map();
 let sqliteModulePromise = null;
@@ -76,7 +76,7 @@ export function connectorOutboxPostgresMode(env = process.env) {
 function statusRank(value) {
   const status = clean(value || "pending").toLowerCase();
   if (status === "delivered") return 6;
-  if (status === "dead_letter" || status === "suppressed" || status === "skipped" || status === "skipped_policy" || status === "cancelled") return 5;
+  if (status === "dead_letter" || status === "suppressed" || status === "skipped" || status === "skipped_policy" || status === "cancelled" || status === "delivery_uncertain") return 5;
   if (status === "claimed" || status === "sent_to_broker") return 4;
   if (status === "failed_retryable") return 3;
   if (status === "pending") return 2;
