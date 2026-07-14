@@ -110,8 +110,8 @@ test("shared app URL creates scoped pairing and limits the approved session", as
       body: JSON.stringify({ requestedPath: "/i/main/a/outreach-review/s/share-one" }),
     }));
     assert.equal(createdChallenge.ok, true);
-    const challengeId = createdChallenge.challengeId;
-    assert.ok(challengeId);
+    const firstChallengeId = createdChallenge.challengeId;
+    assert.ok(firstChallengeId);
     assert.equal(createdChallenge.challenge.instanceId, "main");
     assert.equal(createdChallenge.challenge.appSlug, "outreach-review");
     assert.equal(createdChallenge.challenge.shareId, first.share.id);
@@ -122,8 +122,13 @@ test("shared app URL creates scoped pairing and limits the approved session", as
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ requestedPath: "/i/main/a/outreach-review/s/share-one" }),
     }));
-    assert.equal(repeatedChallenge.challengeId, challengeId);
-    assert.equal(repeatedChallenge.reused, true);
+    const challengeId = repeatedChallenge.challengeId;
+    assert.ok(challengeId);
+    assert.notEqual(challengeId, firstChallengeId);
+    assert.equal(repeatedChallenge.reused, undefined);
+    const supersededChallenge = await readJson(await fetch(`${baseUrl}/api/shared-apps/i/main/a/outreach-review/s/share-one/challenges/${encodeURIComponent(firstChallengeId)}`));
+    assert.equal(supersededChallenge.challenge.status, "superseded");
+    assert.equal(supersededChallenge.challenge.supersededBy, challengeId);
 
     const adminChallenge = await createPairingChallenge({ requestedPath: "/", env: process.env });
     await approvePairingChallenge(adminChallenge.challengeId, { approvedBy: "node:test", env: process.env });
