@@ -1590,6 +1590,13 @@ function localWhatsAppChatOpsProbeReadEnabled(env = process.env, options = {}) {
   return ["1", "true", "yes", "on"].includes(raw);
 }
 
+function localWhatsAppStatusChatOpsProbeEnabled(env = process.env, options = {}) {
+  if (options.probeChatOps === true || options.deep === true || options.read === true) return true;
+  if (options.probeChatOps === false) return false;
+  const raw = String(env.ORKESTR_WHATSAPP_STATUS_CHAT_OPS_PROBE || env.WA_STATUS_CHAT_OPS_PROBE || "").trim().toLowerCase();
+  return ["1", "true", "yes", "on"].includes(raw);
+}
+
 function withLocalWhatsAppProbeTimeout(promise, label = "whatsapp_chat_ops_probe", env = process.env) {
   return Promise.race([
     promise,
@@ -1654,9 +1661,11 @@ async function probeLocalWhatsAppAccountChatOps(accountId = "", env = process.en
   }
 }
 
-export async function getLocalWhatsAppBridgeStatus(env = process.env) {
+export async function getLocalWhatsAppBridgeStatus(env = process.env, options = {}) {
   const accountIds = await managedLocalWhatsAppAccountIds(env);
-  await Promise.all(accountIds.map((accountId) => probeLocalWhatsAppAccountChatOps(accountId, env).catch(() => null)));
+  if (localWhatsAppStatusChatOpsProbeEnabled(env, options)) {
+    await Promise.all(accountIds.map((accountId) => probeLocalWhatsAppAccountChatOps(accountId, env, options).catch(() => null)));
+  }
   const accounts = await Promise.all(accountIds.map((accountId) => accountSnapshot(accountId, env)));
   const state = reduceLocalWhatsAppBridgeState(accounts);
   const qrAccount = accounts.find((account) => account.qrAvailable);
