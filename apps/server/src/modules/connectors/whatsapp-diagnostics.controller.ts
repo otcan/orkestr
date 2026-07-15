@@ -43,6 +43,9 @@ function clean(value: unknown): string {
 
 function whatsappAccountNotReadyReason(account: Record<string, any> = {}) {
   const error = clean(account.error);
+  if (account.chatOpsReady === false || account.runtimeUsable === false) {
+    return error || clean(account.lastChatOpsError) || "whatsapp_chat_ops_unavailable";
+  }
   if (!error) return "account_not_ready";
   if (/navigating frame was detached/i.test(error)) return "account_not_ready";
   if (/execution context was destroyed/i.test(error)) return "account_not_ready";
@@ -226,7 +229,7 @@ function whatsappDoctorPayload(accounts: any[] = [], bindings: any[] = [], accou
     const id = clean(account.accountId || account.id);
     const selected = Boolean(selectedAccount && whatsappAccountLookupKeys(account).includes(selectedAccount.toLowerCase()));
     const pairable = Boolean(account.qrRequired || account.pairingCode || account.state === "pairing_code");
-    const ready = Boolean(account.ready);
+    const ready = Boolean(account.ready && account.chatOpsReady !== false && account.runtimeUsable !== false);
     const acceptable = ready || (!selected && pairable);
     const required = accountRequiredByBroker(account, bindings, selectedAccount);
     const skipped = !acceptable && !required;
