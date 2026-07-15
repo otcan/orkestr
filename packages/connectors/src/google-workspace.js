@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import fs from "node:fs/promises";
+import path from "node:path";
 import { readJson, writeJson } from "../../storage/src/store.js";
 import { connectorFile, connectorScopePaths, listConnectorScopePaths } from "./connector-storage.js";
 import {
@@ -470,13 +472,72 @@ function rfc822Headers(args = {}) {
   ].filter(([, value]) => value);
 }
 
-function gmailRawMessage(args = {}) {
+function rfc822HeaderValue(value = "") {
+  return clean(value).replace(/\r?\n/g, " ");
+}
+
+function attachmentDescriptors(args = {}) {
+  const values = Array.isArray(args.attachments) ? args.attachments : [];
+  return values.map((value, index) => {
+    const filePath = clean(
+      typeof value === "string"
+        ? value
+        : value?.path || value?.filePath || value?.localPath || value?.savedPath || value?.saved_path,
+    );
+    const filename = rfc822HeaderValue(
+      typeof value === "string"
+        ? path.basename(filePath)
+        : value?.filename || value?.name || path.basename(filePath) || `attachment-${index + 1}`,
+    );
+    const mimetype = clean(typeof value === "string" ? "" : value?.mimetype || value?.contentType || value?.type) || "application/octet-stream";
+    return filePath ? { filePath, filename, mimetype } : null;
+  }).filter(Boolean);
+}
+
+function base64MimeLines(buffer) {
+  return buffer.toString("base64").replace(/(.{76})/g, "$1\r\n");
+}
+
+async function gmailAttachmentPart(attachment) {
+  const buffer = await fs.readFile(attachment.filePath);
+  return [
+    `Content-Type: ${attachment.mimetype}; name="${attachment.filename}"`,
+    "Content-Transfer-Encoding: base64",
+    `Content-Disposition: attachment; filename="${attachment.filename}"`,
+    "",
+    base64MimeLines(buffer),
+  ].join("\r\n");
+}
+
+async function gmailRawMessage(args = {}) {
   const body = clean(args.body || args.text);
   const headers = rfc822Headers(args);
+  const attachments = attachmentDescriptors(args);
   if (!headers.some(([name]) => name === "To")) throw connectorError("gmail_to_required", 400);
   if (!body && !clean(args.subject)) throw connectorError("gmail_message_content_required", 400);
+  if (attachments.length) {
+    const boundary = `orkestr-${randomUUID()}`;
+    const parts = [
+      [
+        "Content-Type: text/plain; charset=UTF-8",
+        "Content-Transfer-Encoding: 7bit",
+        "",
+        body,
+      ].join("\r\n"),
+      ...(await Promise.all(attachments.map(gmailAttachmentPart))),
+    ];
+    const message = [
+      ...headers.map(([name, value]) => `${name}: ${rfc822HeaderValue(value)}`),
+      `Content-Type: multipart/mixed; boundary="${boundary}"`,
+      "",
+      ...parts.flatMap((part) => [`--${boundary}`, part]),
+      `--${boundary}--`,
+      "",
+    ].join("\r\n");
+    return Buffer.from(message, "utf8").toString("base64url");
+  }
   const message = [
-    ...headers.map(([name, value]) => `${name}: ${value.replace(/\r?\n/g, " ")}`),
+    ...headers.map(([name, value]) => `${name}: ${rfc822HeaderValue(value)}`),
     "Content-Type: text/plain; charset=UTF-8",
     "",
     body,
@@ -488,7 +549,7 @@ export async function createGmailDraft(args = {}, env = process.env, fetchImpl =
   const accessToken = await accessTokenWithCapability("gmail_send", env, fetchImpl, options);
   const draft = await jsonApiRequest(`${gmailApiBase}/drafts`, {
     method: "POST",
-    body: { message: { raw: gmailRawMessage(args) } },
+    body: { message: { raw: await gmailRawMessage(args) } },
     accessToken,
     fetchImpl,
   });
@@ -512,7 +573,7 @@ export async function sendGmailMessage(args = {}, env = process.env, fetchImpl =
   const accessToken = await accessTokenWithCapability("gmail_send", env, fetchImpl, options);
   const sent = await jsonApiRequest(`${gmailApiBase}/messages/send`, {
     method: "POST",
-    body: { raw: gmailRawMessage(args) },
+    body: { raw: await gmailRawMessage(args) },
     accessToken,
     fetchImpl,
   });

@@ -41,6 +41,7 @@ const inboundForwardHealthCache = new Map();
 const localWhatsAppStartPromises = new Map();
 const localWhatsAppRuntimeUnhandledRejections = new WeakSet();
 const localWhatsAppPairingRequiredNotificationAttempts = new Map();
+const localWhatsAppRepairQrEmailAttempts = new Map();
 let runtimeRecoveryHooksForTest = null;
 let typingSessionGeneration = 0;
 
@@ -312,17 +313,33 @@ function localWhatsAppRepairNotificationCooldownMs(env = process.env) {
   return Number.isFinite(parsed) ? Math.max(60_000, parsed) : 30 * 60_000;
 }
 
+function localWhatsAppRepairQrEmailCooldownMs(env = process.env) {
+  const parsed = Number(env.ORKESTR_WHATSAPP_REPAIR_QR_EMAIL_COOLDOWN_MS || 2 * 60_000);
+  return Number.isFinite(parsed) ? Math.max(30_000, parsed) : 2 * 60_000;
+}
+
+function localWhatsAppRepairPagePath(accountId = "") {
+  return `${localWhatsAppBridgeBasePath}/repair?accountId=${encodeURIComponent(accountId)}`;
+}
+
 function localWhatsAppRepairLink(accountId = "", env = process.env) {
+  const path = localWhatsAppRepairPagePath(accountId);
   const setupUrl = tenantPublicSetupUrl({}, env);
-  if (setupUrl) return setupUrl;
+  if (setupUrl) {
+    try {
+      const url = new URL(path, setupUrl);
+      return url.toString();
+    } catch {
+      return path;
+    }
+  }
   const base = publicHttpUrl(env.ORKESTR_PUBLIC_APP_URL || env.ORKESTR_PUBLIC_URL || env.ORKESTR_CONNECT_PUBLIC_URL || "");
-  if (!base) return `${localWhatsAppBridgeBasePath}/qr.svg?accountId=${encodeURIComponent(accountId)}`;
+  if (!base) return path;
   try {
-    const url = new URL(`${localWhatsAppBridgeBasePath}/qr.svg`, base);
-    url.searchParams.set("accountId", accountId);
+    const url = new URL(path, base);
     return url.toString();
   } catch {
-    return `${base.replace(/\/+$/, "")}${localWhatsAppBridgeBasePath}/qr.svg?accountId=${encodeURIComponent(accountId)}`;
+    return `${base.replace(/\/+$/, "")}${path}`;
   }
 }
 
@@ -361,7 +378,7 @@ export async function notifyLocalWhatsAppPairingRequired(input = {}, env = proce
     `Reason: ${reason}`,
     `Detected: ${nowIso()}`,
     "",
-    `Reconnect WhatsApp: ${link}`,
+    `Open repair page: ${link}`,
     "",
     "Until this is repaired, WhatsApp inbound and outbound delivery for this account is offline.",
   ];
@@ -408,6 +425,150 @@ export async function notifyLocalWhatsAppPairingRequired(input = {}, env = proce
       error: error?.message || String(error),
     }, env).catch(() => {});
     return { ok: false, configured: true, recipients, error: error?.message || String(error) };
+  }
+}
+
+async function waitForLocalWhatsAppQrAttachmentPath(accountId = "", env = process.env, options = {}) {
+  const deadlineMs = Date.now() + Math.max(1_000, Number(options.timeoutMs || 45_000) || 45_000);
+  const intervalMs = Math.max(100, Number(options.intervalMs || 500) || 500);
+  while (Date.now() <= deadlineMs) {
+    const filePath = await getLocalWhatsAppQrPngPath(accountId, env);
+    if (filePath) return filePath;
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+  return "";
+}
+
+function localWhatsAppQrAttachmentFilename(accountId = "") {
+  return `${safeFilePart(accountId, "whatsapp")}-qr.png`;
+}
+
+export async function sendLocalWhatsAppRepairQrEmail(input = {}, env = process.env, options = {}) {
+  const accountId = await normalizeManagedAccountId(input.accountId || "", env);
+  const targets = await localWhatsAppRepairNotifyTargets(env, options);
+  const recipients = localWhatsAppRepairNotifyRecipients(targets);
+  const nowMs = Number(options.nowMs || Date.now());
+  const key = `${accountId}:repair_qr_email`;
+  const cooldownMs = localWhatsAppRepairQrEmailCooldownMs(env);
+  const lastSentMs = Number(localWhatsAppRepairQrEmailAttempts.get(key) || 0);
+  if (!recipients.length) {
+    await appendEvent({
+      type: "whatsapp_local_repair_qr_email_skipped",
+      accountId,
+      reason: "recipient_missing",
+    }, env).catch(() => {});
+    return { ok: false, configured: false, skippedReason: "recipient_missing", statusCode: 409 };
+  }
+  if (lastSentMs && nowMs - lastSentMs < cooldownMs) {
+    await appendEvent({
+      type: "whatsapp_local_repair_qr_email_skipped",
+      accountId,
+      reason: "cooldown",
+      cooldownMs,
+    }, env).catch(() => {});
+    return { ok: true, skipped: true, skippedReason: "cooldown", recipients };
+  }
+  const statusReader = options.getLocalWhatsAppBridgeStatus || getLocalWhatsAppBridgeStatus;
+  const currentStatus = await statusReader(env).catch(() => null);
+  const currentAccount = Array.isArray(currentStatus?.accounts)
+    ? currentStatus.accounts.find((account) => account.accountId === accountId || account.id === accountId)
+    : null;
+  if (currentAccount?.ready) {
+    await appendEvent({
+      type: "whatsapp_local_repair_qr_email_skipped",
+      accountId,
+      reason: "already_ready",
+    }, env).catch(() => {});
+    return { ok: true, skipped: true, skippedReason: "already_ready", recipients };
+  }
+
+  const getAttachmentPath = options.getQrAttachmentPath || ((id, runtimeEnv) => getLocalWhatsAppQrPngPath(id, runtimeEnv));
+  let attachmentPath = await getAttachmentPath(accountId, env);
+  if (!attachmentPath) {
+    const starter = options.startLocalWhatsAppAccount || startLocalWhatsAppAccount;
+    await starter(accountId, env, {
+      ...(options.startOptions || {}),
+      resetRuntime: input.force !== false,
+      repairNotification: false,
+    });
+    attachmentPath = options.getQrAttachmentPath
+      ? await getAttachmentPath(accountId, env)
+      : await waitForLocalWhatsAppQrAttachmentPath(accountId, env, {
+          timeoutMs: options.waitTimeoutMs,
+          intervalMs: options.waitIntervalMs,
+        });
+  }
+  if (!attachmentPath) {
+    await appendEvent({
+      type: "whatsapp_local_repair_qr_email_failed",
+      accountId,
+      recipients,
+      reason: "qr_unavailable",
+    }, env).catch(() => {});
+    return { ok: false, configured: true, recipients, error: "whatsapp_qr_not_available", statusCode: 409 };
+  }
+
+  const label = accountLabel(accountId);
+  const reason = String(input.reason || "manual_repair_page").trim();
+  const body = [
+    "A fresh Orkestr WhatsApp pairing QR is attached.",
+    "",
+    `Account: ${label}`,
+    `Reason: ${reason}`,
+    `Generated: ${nowIso()}`,
+    "",
+    "Open WhatsApp on the phone, go to Linked Devices, and scan the attached QR.",
+    "The QR expires quickly; generate a new one from the repair page if it is no longer valid.",
+  ].join("\n");
+  const message = {
+    to: recipients.join(", "),
+    subject: `Orkestr WhatsApp QR: ${label}`,
+    body,
+    text: body,
+    attachments: [{
+      path: attachmentPath,
+      filename: localWhatsAppQrAttachmentFilename(accountId),
+      mimetype: "image/png",
+    }],
+  };
+  try {
+    const sent = [];
+    for (const group of localWhatsAppRepairNotifySendGroups(targets)) {
+      const groupMessage = { ...message, to: group.recipients.join(", ") };
+      if (group.sendMode === "host_native_gog") {
+        const sendHostNative = options.sendHostNativeGmailMessage || sendHostNativeGmailMessage;
+        sent.push(await sendHostNative({
+          ...groupMessage,
+          account: group.senderAccount,
+        }, env, {
+          ...(options.gmailOptions || {}),
+          ...(group.senderAccount ? { account: group.senderAccount } : {}),
+        }));
+      } else {
+        const send = options.sendGmailMessage || sendGmailMessage;
+        sent.push(await send(groupMessage, env, options.fetchImpl || fetch, {
+          ...(options.gmailOptions || {}),
+          ...(group.userId ? { userId: group.userId } : {}),
+        }));
+      }
+    }
+    localWhatsAppRepairQrEmailAttempts.set(key, nowMs);
+    await appendEvent({
+      type: "whatsapp_local_repair_qr_email_sent",
+      accountId,
+      recipients,
+      reason,
+    }, env).catch(() => {});
+    return { ok: true, configured: true, accountId, recipients, sent };
+  } catch (error) {
+    await appendEvent({
+      type: "whatsapp_local_repair_qr_email_failed",
+      accountId,
+      recipients,
+      reason,
+      error: error?.message || String(error),
+    }, env).catch(() => {});
+    return { ok: false, configured: true, recipients, error: error?.message || String(error), statusCode: error?.statusCode || 502 };
   }
 }
 
@@ -1355,6 +1516,14 @@ function bridgeRoot(env = process.env) {
 
 function qrPath(accountId, env = process.env) {
   return path.join(bridgeRoot(env), "qrs", `${accountId}.svg`);
+}
+
+function qrPngPath(accountId, env = process.env) {
+  return path.join(bridgeRoot(env), "qrs", `${accountId}.png`);
+}
+
+function qrRawPath(accountId, env = process.env) {
+  return path.join(bridgeRoot(env), "qrs", `${accountId}.txt`);
 }
 
 function sessionRoot(env = process.env) {
@@ -2487,6 +2656,7 @@ export async function resetLocalWhatsAppBridgeForTest(env = process.env) {
   localWhatsAppRecoveryAttempts.clear();
   localWhatsAppStartPromises.clear();
   localWhatsAppPairingRequiredNotificationAttempts.clear();
+  localWhatsAppRepairQrEmailAttempts.clear();
   runtimeRecoveryHooksForTest = null;
 }
 
@@ -2840,12 +3010,20 @@ async function sendForwardedSecurityApprovalNotice({ accountId = "", chatId = ""
 
 async function clearQr(accountId, env = process.env) {
   await fs.unlink(qrPath(accountId, env)).catch(() => {});
+  await fs.unlink(qrPngPath(accountId, env)).catch(() => {});
+  await fs.unlink(qrRawPath(accountId, env)).catch(() => {});
 }
 
 async function writeQr(accountId, qr, qrcode, env = process.env) {
   await ensureBridgeDirs(env);
   const svg = await qrcode.toString(qr, { type: "svg", margin: 1, width: 320 });
   await fs.writeFile(qrPath(accountId, env), svg);
+  await fs.writeFile(qrRawPath(accountId, env), String(qr || ""), "utf8");
+  if (typeof qrcode.toFile === "function") {
+    await qrcode.toFile(qrPngPath(accountId, env), qr, { type: "png", margin: 1, width: 512 });
+  } else if (typeof qrcode.toBuffer === "function") {
+    await fs.writeFile(qrPngPath(accountId, env), await qrcode.toBuffer(qr, { type: "png", margin: 1, width: 512 }));
+  }
 }
 
 function localWhatsAppApiAgentAutoRun(env = process.env) {
@@ -4172,10 +4350,12 @@ async function startLocalWhatsAppAccountOnce(normalized, env = process.env, opti
         error: "",
       });
       await appendEvent({ type: "whatsapp_local_qr_ready", accountId: normalized }, env);
-      await notifyLocalWhatsAppPairingRequired({
-        accountId: normalized,
-        reason: "qr_required",
-      }, env, options.repairNotifyOptions || {}).catch(() => {});
+      if (options.repairNotification !== false) {
+        await notifyLocalWhatsAppPairingRequired({
+          accountId: normalized,
+          reason: "qr_required",
+        }, env, options.repairNotifyOptions || {}).catch(() => {});
+      }
     } catch (error) {
       setAccountState(normalized, { state: "failed", error: error.message || String(error) });
       await appendEvent({ type: "whatsapp_local_qr_failed", accountId: normalized, error: error.message || String(error) }, env);
@@ -4264,10 +4444,12 @@ async function startLocalWhatsAppAccountOnce(normalized, env = process.env, opti
     });
     runtimes.delete(normalized);
     await appendEvent({ type: "whatsapp_local_auth_failure", accountId: normalized }, env);
-    await notifyLocalWhatsAppPairingRequired({
-      accountId: normalized,
-      reason: "auth_failure",
-    }, env, options.repairNotifyOptions || {}).catch(() => {});
+    if (options.repairNotification !== false) {
+      await notifyLocalWhatsAppPairingRequired({
+        accountId: normalized,
+        reason: "auth_failure",
+      }, env, options.repairNotifyOptions || {}).catch(() => {});
+    }
   });
 
   client.on("disconnected", async (reason) => {
@@ -4296,10 +4478,12 @@ async function startLocalWhatsAppAccountOnce(normalized, env = process.env, opti
     runtimes.delete(normalized);
     const disconnectReason = String(reason || "").trim();
     await appendEvent({ type: "whatsapp_local_disconnected", accountId: normalized, reason: disconnectReason }, env);
-    await notifyLocalWhatsAppPairingRequired({
-      accountId: normalized,
-      reason: disconnectReason ? `disconnected:${disconnectReason}` : "disconnected",
-    }, env, options.repairNotifyOptions || {}).catch(() => {});
+    if (options.repairNotification !== false) {
+      await notifyLocalWhatsAppPairingRequired({
+        accountId: normalized,
+        reason: disconnectReason ? `disconnected:${disconnectReason}` : "disconnected",
+      }, env, options.repairNotifyOptions || {}).catch(() => {});
+    }
   });
 
   client.on("loading_screen", async (percent, message) => {
@@ -4449,6 +4633,12 @@ export async function stopLocalWhatsAppBridge(env = process.env) {
 export async function getLocalWhatsAppQrSvg(accountId = "", env = process.env) {
   const normalized = await normalizeManagedAccountId(accountId, env);
   return fs.readFile(qrPath(normalized, env), "utf8").catch(() => "");
+}
+
+export async function getLocalWhatsAppQrPngPath(accountId = "", env = process.env) {
+  const normalized = await normalizeManagedAccountId(accountId, env);
+  const filePath = qrPngPath(normalized, env);
+  return (await exists(filePath)) ? filePath : "";
 }
 
 export async function listLocalWhatsAppChats(accountId = "", env = process.env) {

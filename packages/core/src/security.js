@@ -732,6 +732,12 @@ function isWhatsAppMachineRoute(request) {
   if (method === "POST" && (url === "/api/connectors/whatsapp/inbound" || url === "/api/connectors/whatsapp/inbound-media")) {
     return { kind: "whatsapp_inbound", tokens: whatsappInboundTokens, requiredScopes: ["whatsapp:inbound"] };
   }
+  if (
+    (method === "GET" && url === "/api/connectors/whatsapp/bridge/repair") ||
+    (method === "POST" && url === "/api/connectors/whatsapp/bridge/repair/send-email")
+  ) {
+    return null;
+  }
   if (url.startsWith("/api/connectors/whatsapp/bridge/")) {
     return { kind: "whatsapp_bridge", tokens: whatsappBridgeTokens, requiredScopes: whatsappBridgeRequiredScopes(method, url) };
   }
@@ -1589,6 +1595,8 @@ function isAllowedBeforePairing(request) {
   if (method === "POST" && /^\/api\/broker\/instances\/[^/]+\/whatsapp\/(?:onboarding|history)$/.test(url)) return true;
   if (method === "POST" && /^\/api\/broker\/instances\/[^/]+\/google-workspace\/(?:connect-link|refresh-token)$/.test(url)) return true;
   if (method === "POST" && url === "/api/broker/google-workspace/grants") return true;
+  if (method === "GET" && url === "/api/connectors/whatsapp/bridge/repair") return true;
+  if (method === "POST" && url === "/api/connectors/whatsapp/bridge/repair/send-email") return true;
   if (method === "GET" && /^\/api\/setup\/security\/challenges\/[^/]+$/.test(url)) return true;
   if (method === "POST" && url === "/api/setup/security/pair") return true;
   return false;

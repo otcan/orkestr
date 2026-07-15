@@ -62,6 +62,7 @@ import {
   logoutLocalWhatsAppAccount,
   promoteLocalWhatsAppGroupParticipants,
   recoverLocalWhatsAppChatMessages,
+  sendLocalWhatsAppRepairQrEmail,
   startLocalWhatsAppTyping,
   startLocalWhatsAppAccount,
   stopLocalWhatsAppTyping,
@@ -72,6 +73,7 @@ import { writeConnectorConfig } from "../../../../../packages/storage/src/config
 import { dataPaths } from "../../../../../packages/storage/src/paths.js";
 import { ensureAttachmentsArray, httpError } from "../../common/http.js";
 import { reportServerError } from "../../watcher-reporting.js";
+import { whatsappRepairPageHtml } from "./whatsapp-repair-page.js";
 
 function bodyStringArray(body: Record<string, unknown>, key: string): string[] {
   const value = body[key];
@@ -160,6 +162,14 @@ function googleWorkspaceAuthIntent(connectRequest: any): Record<string, string> 
     restartSurface: "whatsapp",
     source: String(connectRequest?.source || "connect_link").trim(),
   };
+}
+
+function maskEmail(value: unknown): string {
+  const text = String(value || "").trim();
+  const [local, domain] = text.split("@");
+  if (!local || !domain) return "";
+  const prefix = local.slice(0, Math.min(2, local.length));
+  return `${prefix}${local.length > 2 ? "***" : "*"}@${domain}`;
 }
 
 function googleWorkspaceAuthSessionHasAction(session: any, connectRequest: any): boolean {
@@ -725,6 +735,35 @@ export class ConnectorsController {
       accountId: await resolveLocalWhatsAppRuntimeAccountId(String(body.accountId || "")),
       chatId: String(body.chatId || body.to || ""),
     });
+  }
+
+  @Get("whatsapp/bridge/repair")
+  async whatsappBridgeRepairPage(@Query("accountId") accountId = "", @Res() response: any) {
+    return response
+      .status(200)
+      .header("cache-control", "no-store")
+      .type("text/html; charset=utf-8")
+      .send(whatsappRepairPageHtml(accountId));
+  }
+
+  @Post("whatsapp/bridge/repair/send-email")
+  @HttpCode(200)
+  async whatsappBridgeRepairSendEmail(@Body() body: Record<string, unknown> = {}) {
+    const result = await sendLocalWhatsAppRepairQrEmail({
+      accountId: String(body.accountId || ""),
+      reason: "manual_repair_page",
+      force: body.force !== false,
+    }, process.env);
+    if (!result.ok && !result.skipped) {
+      throw httpError(String(result.error || result.skippedReason || "whatsapp_qr_email_failed"), Number(result.statusCode || 500) || 500);
+    }
+    return {
+      ok: result.ok,
+      skipped: Boolean(result.skipped),
+      skippedReason: result.skippedReason || "",
+      accountId: result.accountId || String(body.accountId || ""),
+      recipients: Array.isArray(result.recipients) ? result.recipients.map(maskEmail).filter(Boolean) : [],
+    };
   }
 
   @Get("whatsapp/bridge/qr.svg")

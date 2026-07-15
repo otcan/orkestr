@@ -649,6 +649,16 @@ test("whatsapp bridge machine token bypasses browser pairing only for bridge rou
     url: "/api/connectors/whatsapp/bridge/health",
     headers: {},
   }, env);
+  const repairPage = await authorizeHttpRequest({
+    method: "GET",
+    url: "/api/connectors/whatsapp/bridge/repair?accountId=sender",
+    headers: {},
+  }, env);
+  const repairSend = await authorizeHttpRequest({
+    method: "POST",
+    url: "/api/connectors/whatsapp/bridge/repair/send-email",
+    headers: {},
+  }, env);
   const badToken = await authorizeHttpRequest({
     method: "GET",
     url: "/api/connectors/whatsapp/bridge/health",
@@ -673,6 +683,8 @@ test("whatsapp bridge machine token bypasses browser pairing only for bridge rou
   assert.equal(blocked.ok, false);
   assert.equal(blocked.error, "whatsapp_bridge_token_required");
   assert.equal(blocked.routingFailure.code, "whatsapp_bridge_token_required");
+  assert.equal(repairPage.ok, true);
+  assert.equal(repairSend.ok, true);
   assert.equal(badToken.ok, false);
   assert.equal(badToken.error, "whatsapp_bridge_token_invalid");
   assert.equal(badToken.routingFailure.code, "whatsapp_bridge_token_invalid");

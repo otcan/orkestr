@@ -180,6 +180,28 @@ function hostNativeGmailAccountFromEnv(env = process.env) {
   );
 }
 
+function attachmentPaths(args = {}, options = {}) {
+  const values = [
+    ...(Array.isArray(args.attachments) ? args.attachments : []),
+    ...(Array.isArray(options.attachments) ? options.attachments : []),
+    args.attachmentPath,
+    options.attachmentPath,
+  ];
+  const seen = new Set();
+  const result = [];
+  for (const value of values) {
+    const filePath = clean(
+      typeof value === "string"
+        ? value
+        : value?.path || value?.filePath || value?.localPath || value?.savedPath || value?.saved_path,
+    );
+    if (!filePath || seen.has(filePath)) continue;
+    seen.add(filePath);
+    result.push(filePath);
+  }
+  return result;
+}
+
 function hostNativeSourceEnabled(env = process.env, overlayConnector = null) {
   const source = lower(env.ORKESTR_WHATSAPP_REPAIR_GMAIL_SOURCE || env.ORKESTR_GMAIL_SOURCE || env.ORKESTR_JOBS_GMAIL_SOURCE);
   if (source === "gog" || source === "host-native") return true;
@@ -232,6 +254,7 @@ export async function sendHostNativeGmailMessage(args = {}, env = process.env, o
     "--to", to,
     "--subject", subject,
     "--body-file", "-",
+    ...attachmentPaths(args, options).flatMap((filePath) => ["--attach", filePath]),
   ];
   const command = commandVector(options, env);
   const commandEnv = await hostNativeGmailEnv(options, env);

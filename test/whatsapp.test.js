@@ -21,7 +21,7 @@ import { configureTenantWhatsAppRoute } from "../packages/core/src/tenant-whatsa
 import { appendThreadMessage, createThread, enqueueThreadInput, getThread, listThreadMessages, listThreads, updateThreadMessage } from "../packages/core/src/threads.js";
 import { createUser, linkUserPrivateIdentity } from "../packages/core/src/users.js";
 import { deliverWhatsAppReplies, formatWhatsAppOutboundText, getWhatsAppChatMessages, getWhatsAppChatParticipants, getWhatsAppStatus, initialQueueDeliveryState, mapLocalWhatsAppStatusFromHealth, routeWhatsAppInbound, sendWhatsAppText, syncWhatsAppTypingIndicators } from "../packages/connectors/src/whatsapp.js";
-import { addLocalWhatsAppGroupParticipants, cleanupLocalWhatsAppChromeLocks, clearLocalWhatsAppChatTypingState, createLocalWhatsAppChat, demoteLocalWhatsAppGroupParticipants, forwardLocalWhatsAppInbound, getLocalWhatsAppBridgeStatus, handleInboundMessage, inboundRoutingFailureNoticeText, listLocalWhatsAppChats, listLocalWhatsAppChatParticipants, localWhatsAppAccountIdsForEnv, localWhatsAppConnectedPageReadyFallbackEligible, localWhatsAppInboundForwardTarget, localWhatsAppMessageRouteFields, localWhatsAppReadyFallbackEligible, localWhatsAppTypingClearRetryDelaysMs, localWhatsAppUnreadRecoveryBoundChats, localWhatsAppUnreadRecoveryIntervalMs, normalizeGroupParticipantIds, notifyLocalWhatsAppPairingRequired, promoteLocalWhatsAppGroupParticipants, recoverConfiguredLocalWhatsAppAccounts, recoverUnreadLocalWhatsAppMessages, recoverableLocalWhatsAppAccountIds, reduceLocalWhatsAppBridgeState, resetLocalWhatsAppBridgeForTest, sendLocalWhatsAppMessage, sendWhatsAppTextWithConfirmation, setLocalWhatsAppRuntimeForTest, setLocalWhatsAppRuntimeRecoveryHooksForTest, startLocalWhatsAppAccount, startLocalWhatsAppTyping, stopLocalWhatsAppTyping, syncLocalWhatsAppTypingTargets, webCacheRoot } from "../packages/connectors/src/whatsapp-local-bridge.js";
+import { addLocalWhatsAppGroupParticipants, cleanupLocalWhatsAppChromeLocks, clearLocalWhatsAppChatTypingState, createLocalWhatsAppChat, demoteLocalWhatsAppGroupParticipants, forwardLocalWhatsAppInbound, getLocalWhatsAppBridgeStatus, handleInboundMessage, inboundRoutingFailureNoticeText, listLocalWhatsAppChats, listLocalWhatsAppChatParticipants, localWhatsAppAccountIdsForEnv, localWhatsAppConnectedPageReadyFallbackEligible, localWhatsAppInboundForwardTarget, localWhatsAppMessageRouteFields, localWhatsAppReadyFallbackEligible, localWhatsAppTypingClearRetryDelaysMs, localWhatsAppUnreadRecoveryBoundChats, localWhatsAppUnreadRecoveryIntervalMs, normalizeGroupParticipantIds, notifyLocalWhatsAppPairingRequired, promoteLocalWhatsAppGroupParticipants, recoverConfiguredLocalWhatsAppAccounts, recoverUnreadLocalWhatsAppMessages, recoverableLocalWhatsAppAccountIds, reduceLocalWhatsAppBridgeState, resetLocalWhatsAppBridgeForTest, sendLocalWhatsAppMessage, sendLocalWhatsAppRepairQrEmail, sendWhatsAppTextWithConfirmation, setLocalWhatsAppRuntimeForTest, setLocalWhatsAppRuntimeRecoveryHooksForTest, startLocalWhatsAppAccount, startLocalWhatsAppTyping, stopLocalWhatsAppTyping, syncLocalWhatsAppTypingTargets, webCacheRoot } from "../packages/connectors/src/whatsapp-local-bridge.js";
 import { routedWhatsAppTypingTarget, runWithRoutedWhatsAppTyping } from "../packages/connectors/src/whatsapp-router-typing.js";
 import { upsertWhatsAppBinding } from "../packages/connectors/src/whatsapp-account-bindings.js";
 import { createAndBindWhatsAppThreadGroup } from "../packages/connectors/src/whatsapp-thread-groups.js";
@@ -3201,7 +3201,7 @@ test("local whatsapp pairing-required notification sends Gmail disconnect email 
     assert.match(sent[0].args.subject, /WhatsApp disconnected/);
     assert.match(sent[0].args.body, /needs to be paired again/);
     assert.match(sent[0].args.body, /Reason: qr_required/);
-    assert.match(sent[0].args.body, /https:\/\/connect\.example\.test\/setup/);
+    assert.match(sent[0].args.body, /https:\/\/connect\.example\.test\/api\/connectors\/whatsapp\/bridge\/repair\?accountId=responder/);
     const events = await listEvents(env, 20);
     assert.equal(events.some((event) => event.type === "whatsapp_local_pairing_required_email_sent"), true);
     assert.equal(events.some((event) => event.type === "whatsapp_local_pairing_required_email_skipped" && event.reason === "cooldown"), true);
@@ -3350,6 +3350,55 @@ test("local whatsapp pairing-required notification uses host-native Gmail fallba
     assert.equal(sent[0].args.to, "owner@example.test");
     assert.equal(sent[0].args.account, "owner@example.test");
     assert.equal(sent[0].options.account, "owner@example.test");
+  } finally {
+    await resetLocalWhatsAppBridgeForTest(env);
+  }
+});
+
+test("local whatsapp repair QR email sends PNG attachment to configured mailbox", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-repair-qr-email-"));
+  const qrPath = path.join(home, "sender-qr.png");
+  await fs.writeFile(qrPath, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "sender",
+  };
+  const sent = [];
+
+  try {
+    const result = await sendLocalWhatsAppRepairQrEmail({
+      accountId: "sender",
+      reason: "manual_repair_page",
+    }, env, {
+      nowMs: 1_780_000_000_000,
+      getLocalWhatsAppBridgeStatus: async () => ({
+        accounts: [{ accountId: "sender", ready: false, state: "qr_required" }],
+      }),
+      getQrAttachmentPath: async () => qrPath,
+      listConnectorScopePaths: async () => [{ userId: "" }],
+      connectorAuthStatus: async () => ({ connected: false }),
+      listHostNativeGmailAccounts: async () => [
+        { account: "owner@example.test", primary: true, source: "test" },
+      ],
+      sendHostNativeGmailMessage: async (args, actualEnv, options) => {
+        sent.push({ args, actualEnv, options });
+        return { ok: true, provider: "gmail", transport: "host_native_gog", message: { id: "gog-qr-1" } };
+      },
+    });
+
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.recipients, ["owner@example.test"]);
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0].actualEnv, env);
+    assert.equal(sent[0].args.to, "owner@example.test");
+    assert.equal(sent[0].args.account, "owner@example.test");
+    assert.equal(sent[0].args.attachments.length, 1);
+    assert.equal(sent[0].args.attachments[0].path, qrPath);
+    assert.equal(sent[0].args.attachments[0].filename, "sender-qr.png");
+    assert.equal(sent[0].args.attachments[0].mimetype, "image/png");
+    assert.match(sent[0].args.subject, /WhatsApp QR/);
+    const events = await listEvents(env);
+    assert.ok(events.find((event) => event.type === "whatsapp_local_repair_qr_email_sent" && event.reason === "manual_repair_page"));
   } finally {
     await resetLocalWhatsAppBridgeForTest(env);
   }
