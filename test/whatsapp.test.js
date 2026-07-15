@@ -819,6 +819,43 @@ test("local whatsapp active status chat ops probe keeps send runtime ready when 
   }
 });
 
+test("local whatsapp status repairs stale chat ops r degradation as send-ready", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-chatops-stale-r-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "responder",
+    ORKESTR_WHATSAPP_CHAT_OPS_PROBE_INTERVAL_MS: "1000",
+  };
+  const runtime = { client: {} };
+
+  try {
+    setLocalWhatsAppRuntimeForTest("responder", runtime, {
+      state: "ready",
+      ready: true,
+      authenticated: true,
+      started: true,
+      chatOpsReady: false,
+      runtimeUsable: false,
+      lastChatOpsError: "r",
+      error: "",
+    }, env);
+
+    const status = await getLocalWhatsAppBridgeStatus(env);
+    const account = status.accounts.find((item) => item.accountId === "responder");
+
+    assert.equal(status.state, "ready");
+    assert.equal(status.ready, true);
+    assert.equal(account.state, "ready");
+    assert.equal(account.ready, true);
+    assert.equal(account.chatOpsReady, false);
+    assert.equal(account.runtimeUsable, true);
+    assert.equal(account.error, "");
+    assert.deepEqual(recoverableLocalWhatsAppAccountIds(status.accounts, ["responder"]), []);
+  } finally {
+    await resetLocalWhatsAppBridgeForTest(env);
+  }
+});
+
 test("local whatsapp send continues when chat ops probe is unavailable", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-chatops-r-send-ready-"));
   const env = {
@@ -961,7 +998,7 @@ test("local whatsapp deep chat ops probe marks chat ops unavailable when chat re
   }
 });
 
-test("local whatsapp deep chat ops probe defers bare r reset during ready warmup", async () => {
+test("local whatsapp deep chat ops probe keeps send runtime ready during ready warmup", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-chatops-ready-grace-r-"));
   const nowMs = Date.parse("2026-07-15T17:09:47.000Z");
   const env = {
@@ -1010,12 +1047,12 @@ test("local whatsapp deep chat ops probe defers bare r reset during ready warmup
     const account = status.accounts.find((item) => item.accountId === "responder");
     const events = await listEvents(env, 50);
 
-    assert.equal(status.state, "authenticated");
-    assert.equal(account.state, "chat_ops_warming");
-    assert.equal(account.ready, false);
+    assert.equal(status.state, "ready");
+    assert.equal(account.state, "ready");
+    assert.equal(account.ready, true);
     assert.equal(account.chatOpsReady, false);
-    assert.equal(account.runtimeUsable, false);
-    assert.equal(account.error, "r");
+    assert.equal(account.runtimeUsable, true);
+    assert.equal(account.error, "");
     assert.deepEqual(calls, [
       ["getChats"],
       ["getChatById", "warmup-sample@g.us"],
