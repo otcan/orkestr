@@ -2756,6 +2756,67 @@ function localWhatsAppMessageTimestampMs(message = {}) {
   return raw > 1_000_000_000_000 ? raw : raw * 1000;
 }
 
+async function readCachedLocalWhatsAppChatMessages(client, chatId = "", limit = 20) {
+  if (!client?.pupPage || typeof client.pupPage.evaluate !== "function") return null;
+  const id = String(chatId || "").trim();
+  if (!id) return null;
+  const max = Math.max(1, Math.min(100, Number(limit || 20) || 20));
+  return client.pupPage.evaluate((targetChatId, targetLimit) => {
+    const serialized = (value) => {
+      if (!value) return "";
+      if (typeof value === "string") return value;
+      return String(value._serialized || value.id?._serialized || value.user || value.toString?.() || "");
+    };
+    const serializeMessage = (message) => {
+      let model = null;
+      try {
+        model = window.WWebJS?.getMessageModel ? window.WWebJS.getMessageModel(message) : null;
+      } catch {
+        model = null;
+      }
+      if (!model) {
+        try {
+          model = typeof message?.serialize === "function" ? message.serialize() : message;
+        } catch {
+          model = message || {};
+        }
+      }
+      const messageId = model?.id || message?.id || {};
+      return {
+        id: {
+          ...messageId,
+          _serialized: serialized(messageId) || serialized(message?.id),
+          remote: serialized(messageId.remote || message?.id?.remote || targetChatId),
+        },
+        body: String(model?.body || model?.caption || model?.pollName || model?.eventName || ""),
+        type: String(model?.type || message?.type || ""),
+        fromMe: Boolean(model?.id?.fromMe ?? message?.id?.fromMe ?? model?.fromMe),
+        from: serialized(model?.from || message?.from || messageId.remote || targetChatId),
+        to: serialized(model?.to || message?.to || targetChatId),
+        author: serialized(model?.author || message?.author || messageId.participant || message?.id?.participant),
+        timestamp: Number(model?.t || model?.timestamp || message?.t || message?.timestamp || 0) || 0,
+        hasMedia: Boolean(model?.directPath || model?.hasMedia || message?.directPath || message?.mediaKey),
+        isStatus: Boolean(model?.isStatus || message?.isStatus),
+      };
+    };
+    const collections = window.require?.("WAWebCollections");
+    const widFactory = window.require?.("WAWebWidFactory");
+    const chatWid = widFactory?.createWid ? widFactory.createWid(targetChatId) : targetChatId;
+    const chat = collections?.Chat?.get?.(chatWid) || collections?.Chat?.get?.(targetChatId);
+    if (!chat) return { found: false, unreadCount: 0, messages: [] };
+    const models = typeof chat.msgs?.getModelsArray === "function" ? chat.msgs.getModelsArray() : [];
+    const messages = models
+      .filter((message) => message && !message.isNotification)
+      .slice(-targetLimit)
+      .map(serializeMessage);
+    return {
+      found: true,
+      unreadCount: Number(chat.unreadCount || 0) || 0,
+      messages,
+    };
+  }, id, max);
+}
+
 async function recoverLocalWhatsAppChatMessagesWithClient({ accountId = "", chatId = "", limit = 20, unreadOnly = true, markSeen = true, sinceMs = 0 } = {}, env = process.env, options = {}) {
   const normalized = normalizeAccountId(accountId, env);
   const id = String(chatId || "").trim();
@@ -2773,6 +2834,19 @@ async function recoverLocalWhatsAppChatMessagesWithClient({ accountId = "", chat
   try {
     chat = options.chat || await client.getChatById(id);
   } catch (error) {
+    const cached = await readCachedLocalWhatsAppChatMessages(client, id, limit).catch(() => null);
+    if (cached?.found) {
+      return recoverLocalWhatsAppChatMessagesWithClient({ accountId: normalized, chatId: id, limit, unreadOnly, markSeen: false, sinceMs }, env, {
+        ...options,
+        chat: {
+          id: { _serialized: id },
+          unreadCount: cached.unreadCount,
+          async fetchMessages() {
+            return cached.messages;
+          },
+        },
+      });
+    }
     await handleRecoverableLocalWhatsAppRuntimeInvalidation(normalized, error, env, {
       source: "chat_message_recovery",
       reason: "chat_read_runtime_error",
@@ -2785,12 +2859,21 @@ async function recoverLocalWhatsAppChatMessagesWithClient({ accountId = "", chat
   try {
     messages = await chat.fetchMessages({ limit: fetchLimit });
   } catch (error) {
-    await handleRecoverableLocalWhatsAppRuntimeInvalidation(normalized, error, env, {
-      source: "chat_message_recovery",
-      reason: "chat_read_runtime_error",
-      force: true,
-    });
-    return { ok: false, accountId: normalized, chatId: id, ready: false, state: "degraded", routed: [], skipped: [], error: error?.message || String(error) };
+    const cached = await readCachedLocalWhatsAppChatMessages(client, id, fetchLimit).catch(() => null);
+    if (cached?.found) {
+      chat = {
+        id: { _serialized: id },
+        unreadCount: cached.unreadCount,
+      };
+      messages = cached.messages;
+    } else {
+      await handleRecoverableLocalWhatsAppRuntimeInvalidation(normalized, error, env, {
+        source: "chat_message_recovery",
+        reason: "chat_read_runtime_error",
+        force: true,
+      });
+      return { ok: false, accountId: normalized, chatId: id, ready: false, state: "degraded", routed: [], skipped: [], error: error?.message || String(error) };
+    }
   }
   const unreadCount = Number(chat?.unreadCount || 0) || 0;
   let candidates = unreadOnly && unreadCount > 0
