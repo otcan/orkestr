@@ -98,6 +98,30 @@ test("connector outbox idempotency is scoped by source revision and delivery typ
   assert.notEqual(first.job.idempotencyKey, editedRevision.job.idempotencyKey);
 });
 
+test("connector outbox preserves original creation time across idempotent active merges", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-connector-outbox-created-at-"));
+  const runtimeEnv = env(home);
+  const createdAt = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+  const first = await ensureConnectorOutboxJob(whatsappJob({
+    tenantId: "tenant-a",
+    state: "pending",
+    createdAt,
+    updatedAt: createdAt,
+    payload: { text: "old pending body" },
+  }), runtimeEnv);
+
+  const duplicate = await ensureConnectorOutboxJob(whatsappJob({
+    tenantId: "tenant-a",
+    state: "pending",
+    payload: { text: "new scan body" },
+  }), runtimeEnv);
+
+  assert.equal(first.created, true);
+  assert.equal(duplicate.created, false);
+  assert.equal(duplicate.job.createdAt, createdAt);
+  assert.equal(duplicate.job.payload.text, "new scan body");
+});
+
 test("connector outbox expired claims are retryable after broker downtime", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-connector-outbox-expired-"));
   const runtimeEnv = env(home);

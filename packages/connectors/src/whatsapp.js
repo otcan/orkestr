@@ -2941,6 +2941,68 @@ async function sendClaimedWhatsAppText({
     }, env).catch(() => {});
     return { skipped: { reason: `connector_outbox_${outboxResult.job.state}` } };
   }
+  if (stalePendingWhatsAppConnectorOutboxJob(outboxResult.job, env)) {
+    const now = new Date().toISOString();
+    const reason = "connector_outbox_pending_stale";
+    const maxAgeMs = whatsappPendingOutboxMaxAgeMs(env);
+    await markConnectorOutboxJob(outboxResult.job.id, {
+      state: "suppressed",
+      skippedAt: now,
+      terminalAt: now,
+      error: reason,
+      metadata: {
+        ...(outboxResult.job.metadata || {}),
+        stalePendingSuppressed: true,
+        stalePendingSuppressedAt: now,
+        stalePendingMaxAgeMs: maxAgeMs,
+      },
+    }, env).catch(() => null);
+    if (intent?.intentId) {
+      const marked = markWhatsAppOutboundIntent(outboundIntents, intent.intentId, {
+        status: "skipped",
+        skippedAt: now,
+        error: reason,
+      });
+      outboundIntents.splice(0, outboundIntents.length, ...marked);
+      state.outboundIntents = outboundIntents;
+      await writeWhatsAppState(state, env);
+    }
+    await patchAssistantMirrorDeliveryState({
+      kind,
+      agentId,
+      threadId,
+      message,
+      deliveryType,
+      patch: {
+        mirrorOutboxJobId: outboxResult.job.id,
+        deliveryState: "suppressed",
+        deliveryLastAttemptAt: now,
+        deliveryError: reason,
+      },
+      env,
+    });
+    await markRouterOutboxItem(intent?.outboxId, {
+      status: "skipped",
+      error: reason,
+    }, env).catch(() => null);
+    await recordRouterTraceEvent({
+      routerTraceId,
+      turnId,
+      connector: "whatsapp",
+      phase: "skipped",
+      reason,
+      threadId,
+      messageId,
+      chatId,
+      accountId,
+      deliveryType,
+      routerUpdateType,
+      outboxId: intent?.outboxId,
+      connectorOutboxJobId: outboxResult.job.id,
+      terminal: true,
+    }, env).catch(() => {});
+    return { skipped: { reason } };
+  }
   const uncertainSourceJob = uncertainWhatsAppConnectorOutboxJob(outboxResult.job)
     ? outboxResult.job
     : await findPriorUncertainWhatsAppConnectorOutboxJob({
@@ -5183,6 +5245,22 @@ function staleTerminalWhatsAppOutboundIntentPassedCursor({
   const terminalMs = whatsappIntentTerminalMs(intent);
   if (!terminalMs) return false;
   return Date.now() - terminalMs > whatsappTerminalIntentVisibilityWindowMs(env);
+}
+
+function whatsappPendingOutboxMaxAgeMs(env = process.env) {
+  return positiveInteger(
+    pickString(env.ORKESTR_WHATSAPP_OUTBOX_PENDING_MAX_AGE_MS, env.ORKESTR_WHATSAPP_PENDING_OUTBOX_MAX_AGE_MS),
+    15 * 60 * 1000,
+    0,
+  );
+}
+
+function stalePendingWhatsAppConnectorOutboxJob(job = {}, env = process.env) {
+  if (pickString(job.state).toLowerCase() !== "pending") return false;
+  const maxAgeMs = whatsappPendingOutboxMaxAgeMs(env);
+  if (maxAgeMs <= 0) return false;
+  const createdMs = timeMs(job.createdAt);
+  return createdMs > 0 && Date.now() - createdMs > maxAgeMs;
 }
 
 export async function syncWhatsAppTypingIndicators(env = process.env, options = {}) {
