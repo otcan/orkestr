@@ -13,6 +13,7 @@ import { getThread, listThreads } from "../../core/src/threads.js";
 import { setGeneratedLocalWhatsAppGroupPicture } from "./whatsapp-chat-picture.js";
 import { sendGmailMessage } from "./google-workspace.js";
 import { enrichGmailTokenAccount, readGmailToken } from "./gmail.js";
+import { listHostNativeGmailAccounts, sendHostNativeGmailMessage } from "./gmail-host-native.js";
 import { connectorAuthStatus } from "./connector-auth.js";
 import { listConnectorScopePaths } from "./connector-storage.js";
 import {
@@ -208,18 +209,23 @@ function normalizeEmailRecipient(value = "") {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(text) ? text : "";
 }
 
-function localWhatsAppRepairNotifyTarget(email = "", userId = "") {
+function localWhatsAppRepairNotifyTarget(email = "", userId = "", sendMode = "google_workspace", senderAccount = "") {
   const normalized = normalizeEmailRecipient(email);
-  return normalized ? { email: normalized, userId: String(userId || "").trim() } : null;
+  return normalized ? {
+    email: normalized,
+    userId: String(userId || "").trim(),
+    sendMode: String(sendMode || "google_workspace").trim() || "google_workspace",
+    senderAccount: normalizeEmailRecipient(senderAccount),
+  } : null;
 }
 
 function uniqueLocalWhatsAppRepairNotifyTargets(targets = []) {
   const seen = new Set();
   const result = [];
   for (const target of targets) {
-    const normalized = localWhatsAppRepairNotifyTarget(target?.email, target?.userId);
+    const normalized = localWhatsAppRepairNotifyTarget(target?.email, target?.userId, target?.sendMode, target?.senderAccount);
     if (!normalized) continue;
-    const key = `${normalized.userId}\u0000${normalized.email}`;
+    const key = `${normalized.sendMode}\u0000${normalized.userId}\u0000${normalized.senderAccount}\u0000${normalized.email}`;
     if (seen.has(key)) continue;
     seen.add(key);
     result.push(normalized);
@@ -248,14 +254,30 @@ async function localWhatsAppGmailRepairNotifyTargets(env = process.env, options 
   return uniqueLocalWhatsAppRepairNotifyTargets(targets);
 }
 
+async function localWhatsAppHostNativeGmailRepairNotifyTargets(env = process.env, options = {}) {
+  const lister = options.listHostNativeGmailAccounts || listHostNativeGmailAccounts;
+  const accounts = await lister(env, options).catch(() => []);
+  const primary = accounts.find((account) => account?.primary && normalizeEmailRecipient(account.account)) ||
+    accounts.find((account) => normalizeEmailRecipient(account?.account));
+  const account = normalizeEmailRecipient(primary?.account || "");
+  return account ? [localWhatsAppRepairNotifyTarget(account, "", "host_native_gog", account)] : [];
+}
+
 async function localWhatsAppRepairNotifyTargets(env = process.env, options = {}) {
   const configured = localWhatsAppRepairNotifyRecipientEnv(env).map(normalizeEmailRecipient).filter(Boolean);
   const gmailTargets = await localWhatsAppGmailRepairNotifyTargets(env, options);
+  const hostNativeTargets = await localWhatsAppHostNativeGmailRepairNotifyTargets(env, options);
   if (configured.length) {
-    const senderUserId = String(options.gmailUserId || gmailTargets[0]?.userId || "").trim();
-    return uniqueLocalWhatsAppRepairNotifyTargets([...new Set(configured)].map((email) => ({ email, userId: senderUserId })));
+    const sender = gmailTargets[0] || hostNativeTargets[0] || { userId: String(options.gmailUserId || "").trim() };
+    return uniqueLocalWhatsAppRepairNotifyTargets([...new Set(configured)].map((email) => ({
+      email,
+      userId: sender.userId || "",
+      sendMode: sender.sendMode || "google_workspace",
+      senderAccount: sender.senderAccount || "",
+    })));
   }
   if (gmailTargets.length) return gmailTargets;
+  if (hostNativeTargets.length) return hostNativeTargets;
   const reader = options.readGmailToken || readGmailToken;
   const token = await reader(env).catch(() => ({}));
   const gmailAccount = normalizeEmailRecipient(token?.account || token?.email || token?.emailAddress || "");
@@ -273,11 +295,16 @@ function localWhatsAppRepairNotifyRecipients(targets = []) {
 function localWhatsAppRepairNotifySendGroups(targets = []) {
   const groups = new Map();
   for (const target of uniqueLocalWhatsAppRepairNotifyTargets(targets)) {
-    const key = target.userId;
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key).push(target.email);
+    const key = `${target.sendMode}\u0000${target.userId}\u0000${target.senderAccount}`;
+    if (!groups.has(key)) groups.set(key, {
+      sendMode: target.sendMode,
+      userId: target.userId,
+      senderAccount: target.senderAccount,
+      recipients: [],
+    });
+    groups.get(key).recipients.push(target.email);
   }
-  return [...groups.entries()].map(([userId, recipients]) => ({ userId, recipients }));
+  return [...groups.values()];
 }
 
 function localWhatsAppRepairNotificationCooldownMs(env = process.env) {
@@ -339,18 +366,30 @@ export async function notifyLocalWhatsAppPairingRequired(input = {}, env = proce
     "Until this is repaired, WhatsApp inbound and outbound delivery for this account is offline.",
   ];
   try {
-    const send = options.sendGmailMessage || sendGmailMessage;
     const sent = [];
     for (const group of localWhatsAppRepairNotifySendGroups(targets)) {
-      sent.push(await send({
+      const message = {
         to: group.recipients.join(", "),
         subject: `Orkestr WhatsApp disconnected: ${label} needs pairing`,
         body: lines.join("\n"),
         text: lines.join("\n"),
-      }, env, options.fetchImpl || fetch, {
-        ...(options.gmailOptions || {}),
-        ...(group.userId ? { userId: group.userId } : {}),
-      }));
+      };
+      if (group.sendMode === "host_native_gog") {
+        const sendHostNative = options.sendHostNativeGmailMessage || sendHostNativeGmailMessage;
+        sent.push(await sendHostNative({
+          ...message,
+          account: group.senderAccount,
+        }, env, {
+          ...(options.gmailOptions || {}),
+          ...(group.senderAccount ? { account: group.senderAccount } : {}),
+        }));
+      } else {
+        const send = options.sendGmailMessage || sendGmailMessage;
+        sent.push(await send(message, env, options.fetchImpl || fetch, {
+          ...(options.gmailOptions || {}),
+          ...(group.userId ? { userId: group.userId } : {}),
+        }));
+      }
     }
     localWhatsAppPairingRequiredNotificationAttempts.set(key, nowMs);
     await appendEvent({

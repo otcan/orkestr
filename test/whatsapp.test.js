@@ -3318,6 +3318,43 @@ test("local whatsapp pairing-required notification uses user-scoped Gmail sender
   }
 });
 
+test("local whatsapp pairing-required notification uses host-native Gmail fallback", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-pairing-email-host-native-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "responder",
+  };
+  const sent = [];
+
+  try {
+    const result = await notifyLocalWhatsAppPairingRequired({
+      accountId: "responder",
+      reason: "qr_required",
+    }, env, {
+      nowMs: 1_780_000_000_000,
+      listConnectorScopePaths: async () => [{ userId: "" }],
+      connectorAuthStatus: async () => ({ connected: false }),
+      listHostNativeGmailAccounts: async () => [
+        { account: "owner@example.test", primary: true, source: "overlay" },
+      ],
+      sendHostNativeGmailMessage: async (args, actualEnv, options) => {
+        sent.push({ args, actualEnv, options });
+        return { ok: true, provider: "gmail", transport: "host_native_gog", message: { id: "gog-sent-1" } };
+      },
+    });
+
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.recipients, ["owner@example.test"]);
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0].actualEnv, env);
+    assert.equal(sent[0].args.to, "owner@example.test");
+    assert.equal(sent[0].args.account, "owner@example.test");
+    assert.equal(sent[0].options.account, "owner@example.test");
+  } finally {
+    await resetLocalWhatsAppBridgeForTest(env);
+  }
+});
+
 test("local whatsapp recent recovery skips already forwarded broker messages", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-recent-recovery-forward-dedupe-"));
   const chatId = "wa-group-forward-dedupe@g.us";
