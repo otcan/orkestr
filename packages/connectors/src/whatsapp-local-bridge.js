@@ -4175,7 +4175,7 @@ async function startLocalWhatsAppAccountOnce(normalized, env = process.env, opti
       await notifyLocalWhatsAppPairingRequired({
         accountId: normalized,
         reason: "qr_required",
-      }, env).catch(() => {});
+      }, env, options.repairNotifyOptions || {}).catch(() => {});
     } catch (error) {
       setAccountState(normalized, { state: "failed", error: error.message || String(error) });
       await appendEvent({ type: "whatsapp_local_qr_failed", accountId: normalized, error: error.message || String(error) }, env);
@@ -4267,7 +4267,7 @@ async function startLocalWhatsAppAccountOnce(normalized, env = process.env, opti
     await notifyLocalWhatsAppPairingRequired({
       accountId: normalized,
       reason: "auth_failure",
-    }, env).catch(() => {});
+    }, env, options.repairNotifyOptions || {}).catch(() => {});
   });
 
   client.on("disconnected", async (reason) => {
@@ -4294,7 +4294,12 @@ async function startLocalWhatsAppAccountOnce(normalized, env = process.env, opti
       error: String(reason || ""),
     });
     runtimes.delete(normalized);
-    await appendEvent({ type: "whatsapp_local_disconnected", accountId: normalized, reason: String(reason || "") }, env);
+    const disconnectReason = String(reason || "").trim();
+    await appendEvent({ type: "whatsapp_local_disconnected", accountId: normalized, reason: disconnectReason }, env);
+    await notifyLocalWhatsAppPairingRequired({
+      accountId: normalized,
+      reason: disconnectReason ? `disconnected:${disconnectReason}` : "disconnected",
+    }, env, options.repairNotifyOptions || {}).catch(() => {});
   });
 
   client.on("loading_screen", async (percent, message) => {

@@ -3797,6 +3797,68 @@ test("local whatsapp client target closure becomes recoverable disconnected", as
   }
 });
 
+test("local whatsapp disconnected event sends Gmail repair email", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-disconnected-email-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "responder",
+  };
+  const sent = [];
+  let clientInstance = null;
+
+  class LocalAuth {}
+
+  class Client extends EventEmitter {
+    constructor() {
+      super();
+      clientInstance = this;
+    }
+
+    initialize() {
+      return Promise.resolve();
+    }
+  }
+
+  try {
+    await startLocalWhatsAppAccount("responder", env, {
+      loadBridgeDependencies: async () => ({
+        whatsapp: { Client, LocalAuth },
+        qrcode: {},
+      }),
+      repairNotifyOptions: {
+        listConnectorScopePaths: async () => [{ userId: "" }],
+        connectorAuthStatus: async () => ({ connected: false }),
+        listHostNativeGmailAccounts: async () => [
+          { account: "owner@example.test", primary: true, source: "test" },
+        ],
+        sendHostNativeGmailMessage: async (args, actualEnv, options) => {
+          sent.push({ args, actualEnv, options });
+          return { ok: true, provider: "gmail", transport: "host_native_gog", message: { id: "gog-disconnected-1" } };
+        },
+      },
+    });
+
+    clientInstance.emit("disconnected", "LOGOUT");
+    const { account } = await waitForLocalWhatsAppAccount(
+      env,
+      "responder",
+      (item) => item.state === "disconnected",
+    );
+
+    assert.equal(account.ready, false);
+    assert.equal(await waitForTestCondition(() => sent.length === 1), true);
+    assert.equal(sent[0].actualEnv, env);
+    assert.equal(sent[0].args.to, "owner@example.test");
+    assert.match(sent[0].args.subject, /WhatsApp disconnected/);
+    assert.match(sent[0].args.body, /Reason: disconnected:LOGOUT/);
+    const events = await listEvents(env);
+    assert.ok(events.find((event) => event.type === "whatsapp_local_disconnected" && event.reason === "LOGOUT"));
+    assert.ok(events.find((event) => event.type === "whatsapp_local_pairing_required_email_sent" && event.reason === "disconnected:LOGOUT"));
+  } finally {
+    await resetLocalWhatsAppBridgeForTest(env);
+  }
+});
+
 test("local whatsapp initialize target closure becomes recoverable disconnected", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-target-close-start-"));
   const env = {
