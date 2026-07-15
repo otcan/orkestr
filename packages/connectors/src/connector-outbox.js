@@ -396,11 +396,13 @@ function mergeJob(existing = {}, next = {}) {
   const existingRank = statusRank(existing.state);
   const nextRank = statusRank(next.state);
   if (existingRank > nextRank && connectorOutboxTerminalState(existing.state)) return existing;
-  if (nextRank > existingRank) return { ...existing, ...next };
-  if (existingRank > nextRank) return { ...next, ...existing };
+  if (nextRank > existingRank) return { ...existing, ...next, createdAt: existing.createdAt || next.createdAt };
+  if (existingRank > nextRank) return { ...next, ...existing, createdAt: existing.createdAt || next.createdAt };
   const existingUpdated = dateMs(existing.updatedAt || existing.terminalAt || existing.createdAt);
   const nextUpdated = dateMs(next.updatedAt || next.terminalAt || next.createdAt);
-  return nextUpdated >= existingUpdated ? { ...existing, ...next } : { ...next, ...existing };
+  return nextUpdated >= existingUpdated
+    ? { ...existing, ...next, createdAt: existing.createdAt || next.createdAt }
+    : { ...next, ...existing, createdAt: existing.createdAt || next.createdAt };
 }
 
 export function mergeConnectorOutboxJobs(existing = [], next = [], env = process.env) {

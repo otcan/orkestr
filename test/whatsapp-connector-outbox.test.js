@@ -469,6 +469,76 @@ test("whatsapp connector outbox terminalizes legacy uncertain retry rows before 
   }
 });
 
+test("whatsapp connector outbox suppresses stale pending final jobs without resending", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-connector-outbox-stale-pending-"));
+  const runtimeEnv = env(home, { ORKESTR_WHATSAPP_OUTBOX_PENDING_MAX_AGE_MS: "60000" });
+  await writeConnectorConfig("whatsapp", { bridgeMode: "external", bridgeUrl: "http://wa.local" }, runtimeEnv);
+  await createThread({
+    id: "thread-wa-outbox-stale-pending",
+    ownerUserId: "tenant-a",
+    name: "WA Connector Outbox Stale Pending Thread",
+    binding: {
+      connector: "whatsapp",
+      chatId: "shared-chat",
+      responderAccountId: "responder",
+      outboundAccountId: "responder",
+      mirrorToWhatsApp: true,
+    },
+  }, runtimeEnv);
+  const parent = await appendThreadMessage("thread-wa-outbox-stale-pending", {
+    role: "user",
+    source: "whatsapp_inbound",
+    state: "completed",
+    connector: "whatsapp",
+    chatId: "shared-chat",
+    accountId: "responder",
+    text: "status?",
+  }, runtimeEnv);
+  const reply = await appendThreadMessage("thread-wa-outbox-stale-pending", {
+    role: "assistant",
+    source: "codex-app-server",
+    phase: "final_answer",
+    state: "completed",
+    parentMessageId: parent.id,
+    chatId: "shared-chat",
+    accountId: "responder",
+    text: "This stale answer must not be replayed.",
+  }, runtimeEnv);
+  const old = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+  const { job } = await ensureConnectorOutboxJob({
+    tenantId: "tenant-a",
+    ownerUserId: "tenant-a",
+    connector: "whatsapp",
+    accountId: "responder",
+    chatId: "shared-chat",
+    threadId: "thread-wa-outbox-stale-pending",
+    sourceMessageId: reply.id,
+    sourceRevision: "1",
+    deliveryType: "final",
+    payload: { text: "This stale answer must not be replayed." },
+    state: "pending",
+    createdAt: old,
+    updatedAt: old,
+  }, runtimeEnv);
+
+  const calls = [];
+  const delivery = await deliverWhatsAppReplies(runtimeEnv, async (url, options = {}) => {
+    calls.push({ url, body: JSON.parse(String(options.body || "{}")) });
+    return response({ ok: true, ids: ["unexpected-stale-send"] });
+  });
+  const outboxAfterDelivery = await readConnectorOutbox(runtimeEnv);
+  const suppressed = outboxAfterDelivery.jobs.find((entry) => entry.id === job.id);
+
+  assert.equal(calls.length, 0);
+  assert.equal(delivery.delivered.length, 0);
+  assert.equal(delivery.failed.length, 0);
+  assert.equal(delivery.skipped.find((entry) => entry.messageId === reply.id)?.reason, "connector_outbox_pending_stale");
+  assert.equal(suppressed.state, "suppressed");
+  assert.equal(suppressed.createdAt, old);
+  assert.equal(suppressed.error, "connector_outbox_pending_stale");
+  assert.equal(suppressed.metadata.stalePendingSuppressed, true);
+});
+
 test("whatsapp connector outbox dead-letters unknown account failures", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-connector-outbox-unknown-account-"));
   const runtimeEnv = env(home, { ORKESTR_CONNECTOR_OUTBOX_RETRY_BACKOFF_MS: "60000" });
