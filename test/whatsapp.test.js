@@ -21,7 +21,7 @@ import { configureTenantWhatsAppRoute } from "../packages/core/src/tenant-whatsa
 import { appendThreadMessage, createThread, enqueueThreadInput, getThread, listThreadMessages, listThreads, updateThreadMessage } from "../packages/core/src/threads.js";
 import { createUser, linkUserPrivateIdentity } from "../packages/core/src/users.js";
 import { deliverWhatsAppReplies, formatWhatsAppOutboundText, getWhatsAppChatMessages, getWhatsAppChatParticipants, getWhatsAppStatus, initialQueueDeliveryState, mapLocalWhatsAppStatusFromHealth, routeWhatsAppInbound, sendWhatsAppText, syncWhatsAppTypingIndicators } from "../packages/connectors/src/whatsapp.js";
-import { addLocalWhatsAppGroupParticipants, cleanupLocalWhatsAppChromeLocks, clearLocalWhatsAppChatTypingState, createLocalWhatsAppChat, demoteLocalWhatsAppGroupParticipants, forwardLocalWhatsAppInbound, getLocalWhatsAppBridgeStatus, handleInboundMessage, inboundRoutingFailureNoticeText, listLocalWhatsAppChats, listLocalWhatsAppChatParticipants, localWhatsAppAccountIdsForEnv, localWhatsAppConnectedPageReadyFallbackEligible, localWhatsAppInboundForwardTarget, localWhatsAppMessageRouteFields, localWhatsAppReadyFallbackEligible, localWhatsAppTypingClearRetryDelaysMs, localWhatsAppUnreadRecoveryBoundChats, localWhatsAppUnreadRecoveryIntervalMs, normalizeGroupParticipantIds, promoteLocalWhatsAppGroupParticipants, recoverConfiguredLocalWhatsAppAccounts, recoverUnreadLocalWhatsAppMessages, recoverableLocalWhatsAppAccountIds, reduceLocalWhatsAppBridgeState, resetLocalWhatsAppBridgeForTest, sendLocalWhatsAppMessage, sendWhatsAppTextWithConfirmation, setLocalWhatsAppRuntimeForTest, setLocalWhatsAppRuntimeRecoveryHooksForTest, startLocalWhatsAppAccount, startLocalWhatsAppTyping, stopLocalWhatsAppTyping, syncLocalWhatsAppTypingTargets, webCacheRoot } from "../packages/connectors/src/whatsapp-local-bridge.js";
+import { addLocalWhatsAppGroupParticipants, cleanupLocalWhatsAppChromeLocks, clearLocalWhatsAppChatTypingState, createLocalWhatsAppChat, demoteLocalWhatsAppGroupParticipants, forwardLocalWhatsAppInbound, getLocalWhatsAppBridgeStatus, handleInboundMessage, inboundRoutingFailureNoticeText, listLocalWhatsAppChats, listLocalWhatsAppChatParticipants, localWhatsAppAccountIdsForEnv, localWhatsAppConnectedPageReadyFallbackEligible, localWhatsAppInboundForwardTarget, localWhatsAppMessageRouteFields, localWhatsAppReadyFallbackEligible, localWhatsAppTypingClearRetryDelaysMs, localWhatsAppUnreadRecoveryBoundChats, localWhatsAppUnreadRecoveryIntervalMs, normalizeGroupParticipantIds, notifyLocalWhatsAppPairingRequired, promoteLocalWhatsAppGroupParticipants, recoverConfiguredLocalWhatsAppAccounts, recoverUnreadLocalWhatsAppMessages, recoverableLocalWhatsAppAccountIds, reduceLocalWhatsAppBridgeState, resetLocalWhatsAppBridgeForTest, sendLocalWhatsAppMessage, sendWhatsAppTextWithConfirmation, setLocalWhatsAppRuntimeForTest, setLocalWhatsAppRuntimeRecoveryHooksForTest, startLocalWhatsAppAccount, startLocalWhatsAppTyping, stopLocalWhatsAppTyping, syncLocalWhatsAppTypingTargets, webCacheRoot } from "../packages/connectors/src/whatsapp-local-bridge.js";
 import { routedWhatsAppTypingTarget, runWithRoutedWhatsAppTyping } from "../packages/connectors/src/whatsapp-router-typing.js";
 import { upsertWhatsAppBinding } from "../packages/connectors/src/whatsapp-account-bindings.js";
 import { createAndBindWhatsAppThreadGroup } from "../packages/connectors/src/whatsapp-thread-groups.js";
@@ -3089,7 +3089,7 @@ test("local whatsapp recent recovery routes missed seen messages in bound chats"
   assert.equal(getChatByIdCalls, 0);
 });
 
-test("local whatsapp unread recovery resets r-state chat reads even during recovery cooldown", async () => {
+test("local whatsapp unread recovery keeps bare r chat reads chat-scoped", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-unread-r-reset-"));
   const env = {
     ORKESTR_HOME: home,
@@ -3149,16 +3149,62 @@ test("local whatsapp unread recovery resets r-state chat reads even during recov
 
     assert.equal(first.recovered[0].ok, false);
     assert.equal(second.recovered[0].ok, false);
+    assert.equal(first.recovered[0].ready, true);
+    assert.equal(second.recovered[0].ready, true);
+    assert.equal(first.recovered[0].state, "ready");
+    assert.equal(second.recovered[0].state, "ready");
     assert.equal(first.recovered[0].error, "r");
     assert.equal(second.recovered[0].error, "r");
-    assert.deepEqual(calls.filter((call) => call[0] === "restart"), [
-      ["restart", "responder", true, "chat_read_runtime_error"],
-      ["restart", "responder", true, "chat_read_runtime_error"],
-    ]);
-    assert.deepEqual(calls.filter((call) => call[0] === "start"), [
-      ["start", "responder", true, false],
-      ["start", "responder", true, false],
-    ]);
+    assert.deepEqual(calls.filter((call) => call[0] === "restart"), []);
+    assert.deepEqual(calls.filter((call) => call[0] === "start"), []);
+    const events = await listEvents(env, 20);
+    assert.equal(events.filter((event) => event.type === "whatsapp_local_chat_read_failed").length, 2);
+    assert.equal(events.some((event) => event.type === "whatsapp_local_runtime_recovery_start"), false);
+  } finally {
+    await resetLocalWhatsAppBridgeForTest(env);
+  }
+});
+
+test("local whatsapp pairing-required notification sends Gmail disconnect email once per cooldown", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-pairing-email-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "responder",
+    ORKESTR_WHATSAPP_REPAIR_NOTIFY_EMAIL: "admin@example.test",
+    ORKESTR_CONNECT_PUBLIC_SETUP_URL: "https://connect.example.test/setup",
+  };
+  const sent = [];
+
+  try {
+    const sendGmailMessage = async (args, actualEnv) => {
+      sent.push({ args, sameEnv: actualEnv === env });
+      return { ok: true, message: { id: "gmail-sent-1" } };
+    };
+
+    const first = await notifyLocalWhatsAppPairingRequired({
+      accountId: "responder",
+      reason: "qr_required",
+    }, env, { nowMs: 1_780_000_000_000, sendGmailMessage });
+    const second = await notifyLocalWhatsAppPairingRequired({
+      accountId: "responder",
+      reason: "qr_required",
+    }, env, { nowMs: 1_780_000_001_000, sendGmailMessage });
+
+    assert.equal(first.ok, true);
+    assert.equal(first.configured, true);
+    assert.equal(second.ok, true);
+    assert.equal(second.skipped, true);
+    assert.equal(second.skippedReason, "cooldown");
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0].sameEnv, true);
+    assert.equal(sent[0].args.to, "admin@example.test");
+    assert.match(sent[0].args.subject, /WhatsApp disconnected/);
+    assert.match(sent[0].args.body, /needs to be paired again/);
+    assert.match(sent[0].args.body, /Reason: qr_required/);
+    assert.match(sent[0].args.body, /https:\/\/connect\.example\.test\/setup/);
+    const events = await listEvents(env, 20);
+    assert.equal(events.some((event) => event.type === "whatsapp_local_pairing_required_email_sent"), true);
+    assert.equal(events.some((event) => event.type === "whatsapp_local_pairing_required_email_skipped" && event.reason === "cooldown"), true);
   } finally {
     await resetLocalWhatsAppBridgeForTest(env);
   }
