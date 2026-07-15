@@ -11,6 +11,7 @@ import { exactSecurityApproveChallengeId } from "../../core/src/raw-terminal-com
 import { publicHttpUrl, tenantPublicSetupUrl } from "../../core/src/tenant-public-urls.js";
 import { getThread, listThreads } from "../../core/src/threads.js";
 import { setGeneratedLocalWhatsAppGroupPicture } from "./whatsapp-chat-picture.js";
+import { sendGmailMessage } from "./google-workspace.js";
 import {
   bindingAccountIds as whatsappBindingAccountIds,
   whatsappBindingIsRouteEligible,
@@ -35,6 +36,7 @@ const localWhatsAppRuntimeRecoveryInFlight = new Map();
 const inboundForwardHealthCache = new Map();
 const localWhatsAppStartPromises = new Map();
 const localWhatsAppRuntimeUnhandledRejections = new WeakSet();
+const localWhatsAppPairingRequiredNotificationAttempts = new Map();
 let runtimeRecoveryHooksForTest = null;
 let typingSessionGeneration = 0;
 
@@ -187,6 +189,100 @@ function defaultResponderAccountId(env = process.env) {
 function accountLabel(accountId) {
   if (!localWhatsAppAccountIds.includes(accountId)) return accountId;
   return accountId === "account-2" ? "WhatsApp 2" : "WhatsApp 1";
+}
+
+function localWhatsAppRepairNotifyRecipients(env = process.env) {
+  return [...new Set(splitAccountList(
+    env.ORKESTR_WHATSAPP_REPAIR_NOTIFY_EMAILS ||
+      env.ORKESTR_WHATSAPP_REPAIR_NOTIFY_EMAIL ||
+      env.ORKESTR_ADMIN_EMAIL ||
+      "",
+  ))];
+}
+
+function localWhatsAppRepairNotificationCooldownMs(env = process.env) {
+  const parsed = Number(env.ORKESTR_WHATSAPP_REPAIR_NOTIFY_COOLDOWN_MS || 30 * 60_000);
+  return Number.isFinite(parsed) ? Math.max(60_000, parsed) : 30 * 60_000;
+}
+
+function localWhatsAppRepairLink(accountId = "", env = process.env) {
+  const setupUrl = tenantPublicSetupUrl({}, env);
+  if (setupUrl) return setupUrl;
+  const base = publicHttpUrl(env.ORKESTR_PUBLIC_APP_URL || env.ORKESTR_PUBLIC_URL || env.ORKESTR_CONNECT_PUBLIC_URL || "");
+  if (!base) return `${localWhatsAppBridgeBasePath}/qr.svg?accountId=${encodeURIComponent(accountId)}`;
+  try {
+    const url = new URL(`${localWhatsAppBridgeBasePath}/qr.svg`, base);
+    url.searchParams.set("accountId", accountId);
+    return url.toString();
+  } catch {
+    return `${base.replace(/\/+$/, "")}${localWhatsAppBridgeBasePath}/qr.svg?accountId=${encodeURIComponent(accountId)}`;
+  }
+}
+
+export async function notifyLocalWhatsAppPairingRequired(input = {}, env = process.env, options = {}) {
+  const accountId = normalizeAccountId(input.accountId || "", env);
+  const recipients = localWhatsAppRepairNotifyRecipients(env);
+  const nowMs = Number(options.nowMs || Date.now());
+  const key = `${accountId}:pairing_required`;
+  const cooldownMs = localWhatsAppRepairNotificationCooldownMs(env);
+  const lastSentMs = Number(localWhatsAppPairingRequiredNotificationAttempts.get(key) || 0);
+  if (!recipients.length) {
+    await appendEvent({
+      type: "whatsapp_local_pairing_required_email_skipped",
+      accountId,
+      reason: "recipient_missing",
+    }, env).catch(() => {});
+    return { ok: false, configured: false, skippedReason: "recipient_missing" };
+  }
+  if (lastSentMs && nowMs - lastSentMs < cooldownMs) {
+    await appendEvent({
+      type: "whatsapp_local_pairing_required_email_skipped",
+      accountId,
+      reason: "cooldown",
+      cooldownMs,
+    }, env).catch(() => {});
+    return { ok: true, skipped: true, skippedReason: "cooldown", recipients };
+  }
+  const reason = String(input.reason || "pairing_required").trim();
+  const label = accountLabel(accountId);
+  const link = String(input.repairUrl || localWhatsAppRepairLink(accountId, env));
+  const lines = [
+    "Orkestr WhatsApp is disconnected and needs to be paired again.",
+    "",
+    `Account: ${label}`,
+    `Reason: ${reason}`,
+    `Detected: ${nowIso()}`,
+    "",
+    `Reconnect WhatsApp: ${link}`,
+    "",
+    "Until this is repaired, WhatsApp inbound and outbound delivery for this account is offline.",
+  ];
+  try {
+    const send = options.sendGmailMessage || sendGmailMessage;
+    const sent = await send({
+      to: recipients.join(", "),
+      subject: `Orkestr WhatsApp disconnected: ${label} needs pairing`,
+      body: lines.join("\n"),
+      text: lines.join("\n"),
+    }, env, options.fetchImpl || fetch, options.gmailOptions || {});
+    localWhatsAppPairingRequiredNotificationAttempts.set(key, nowMs);
+    await appendEvent({
+      type: "whatsapp_local_pairing_required_email_sent",
+      accountId,
+      recipients,
+      reason,
+    }, env).catch(() => {});
+    return { ok: true, configured: true, recipients, sent };
+  } catch (error) {
+    await appendEvent({
+      type: "whatsapp_local_pairing_required_email_failed",
+      accountId,
+      recipients,
+      reason,
+      error: error?.message || String(error),
+    }, env).catch(() => {});
+    return { ok: false, configured: true, recipients, error: error?.message || String(error) };
+  }
 }
 
 function readJsonEnvMap(value) {
@@ -1845,6 +1941,30 @@ function recoverableRuntimeReasonText(error) {
   return runtimeErrorText(error).toLowerCase();
 }
 
+function localWhatsAppBareRRuntimeError(error) {
+  const reason = recoverableRuntimeReasonText(error);
+  const trimmed = reason.trim();
+  return trimmed === "r" ||
+    trimmed === "error: r" ||
+    reason.includes("\nerror: r\n") ||
+    reason.endsWith("\nerror: r");
+}
+
+function recoverableLocalWhatsAppChatReadRuntimeError(error) {
+  return recoverableLocalWhatsAppRuntimeError(error) && !localWhatsAppBareRRuntimeError(error);
+}
+
+async function appendLocalWhatsAppChatReadFailure(accountId = "", chatId = "", error, env = process.env, options = {}) {
+  await appendEvent({
+    type: "whatsapp_local_chat_read_failed",
+    accountId: String(accountId || ""),
+    chatId: String(chatId || ""),
+    source: String(options.source || ""),
+    reason: String(options.reason || "chat_read_runtime_error"),
+    error: error?.message || String(error),
+  }, env).catch(() => {});
+}
+
 async function handleRecoverableLocalWhatsAppRuntimeInvalidation(accountId = "", error, env = process.env, options = {}) {
   const normalized = String(accountId || "").trim();
   if (!normalized || !recoverableLocalWhatsAppRuntimeError(error)) return false;
@@ -2240,6 +2360,7 @@ export async function resetLocalWhatsAppBridgeForTest(env = process.env) {
   localWhatsAppRuntimeRecoveryInFlight.clear();
   localWhatsAppRecoveryAttempts.clear();
   localWhatsAppStartPromises.clear();
+  localWhatsAppPairingRequiredNotificationAttempts.clear();
   runtimeRecoveryHooksForTest = null;
 }
 
@@ -2847,12 +2968,16 @@ async function recoverLocalWhatsAppChatMessagesWithClient({ accountId = "", chat
         },
       });
     }
-    await handleRecoverableLocalWhatsAppRuntimeInvalidation(normalized, error, env, {
-      source: "chat_message_recovery",
-      reason: "chat_read_runtime_error",
-      force: true,
-    });
-    return { ok: false, accountId: normalized, chatId: id, ready: false, state: "degraded", routed: [], skipped: [], error: error?.message || String(error) };
+    if (recoverableLocalWhatsAppChatReadRuntimeError(error)) {
+      await handleRecoverableLocalWhatsAppRuntimeInvalidation(normalized, error, env, {
+        source: "chat_message_recovery",
+        reason: "chat_read_runtime_error",
+        force: true,
+      });
+      return { ok: false, accountId: normalized, chatId: id, ready: false, state: "degraded", routed: [], skipped: [], error: error?.message || String(error) };
+    }
+    await appendLocalWhatsAppChatReadFailure(normalized, id, error, env, { source: "chat_message_recovery" });
+    return { ok: false, accountId: normalized, chatId: id, ready: true, state: state.state || "ready", routed: [], skipped: [], error: error?.message || String(error) };
   }
   const fetchLimit = Math.max(1, Math.min(100, Number(limit || 20) || 20));
   let messages;
@@ -2867,12 +2992,16 @@ async function recoverLocalWhatsAppChatMessagesWithClient({ accountId = "", chat
       };
       messages = cached.messages;
     } else {
-      await handleRecoverableLocalWhatsAppRuntimeInvalidation(normalized, error, env, {
-        source: "chat_message_recovery",
-        reason: "chat_read_runtime_error",
-        force: true,
-      });
-      return { ok: false, accountId: normalized, chatId: id, ready: false, state: "degraded", routed: [], skipped: [], error: error?.message || String(error) };
+      if (recoverableLocalWhatsAppChatReadRuntimeError(error)) {
+        await handleRecoverableLocalWhatsAppRuntimeInvalidation(normalized, error, env, {
+          source: "chat_message_recovery",
+          reason: "chat_read_runtime_error",
+          force: true,
+        });
+        return { ok: false, accountId: normalized, chatId: id, ready: false, state: "degraded", routed: [], skipped: [], error: error?.message || String(error) };
+      }
+      await appendLocalWhatsAppChatReadFailure(normalized, id, error, env, { source: "chat_message_recovery" });
+      return { ok: false, accountId: normalized, chatId: id, ready: true, state: state.state || "ready", routed: [], skipped: [], error: error?.message || String(error) };
     }
   }
   const unreadCount = Number(chat?.unreadCount || 0) || 0;
@@ -3917,6 +4046,10 @@ async function startLocalWhatsAppAccountOnce(normalized, env = process.env, opti
         error: "",
       });
       await appendEvent({ type: "whatsapp_local_qr_ready", accountId: normalized }, env);
+      await notifyLocalWhatsAppPairingRequired({
+        accountId: normalized,
+        reason: "qr_required",
+      }, env).catch(() => {});
     } catch (error) {
       setAccountState(normalized, { state: "failed", error: error.message || String(error) });
       await appendEvent({ type: "whatsapp_local_qr_failed", accountId: normalized, error: error.message || String(error) }, env);
@@ -4005,6 +4138,10 @@ async function startLocalWhatsAppAccountOnce(normalized, env = process.env, opti
     });
     runtimes.delete(normalized);
     await appendEvent({ type: "whatsapp_local_auth_failure", accountId: normalized }, env);
+    await notifyLocalWhatsAppPairingRequired({
+      accountId: normalized,
+      reason: "auth_failure",
+    }, env).catch(() => {});
   });
 
   client.on("disconnected", async (reason) => {
@@ -4256,12 +4393,16 @@ export async function listLocalWhatsAppChatMessages({ accountId = "", chatId = "
     chat = await runtime.client.getChatById(id);
     messages = await chat.fetchMessages({ limit: max });
   } catch (error) {
-    await handleRecoverableLocalWhatsAppRuntimeInvalidation(normalized, error, env, {
-      source: "chat_history",
-      reason: "chat_read_runtime_error",
-      force: true,
-    });
-    return { accountId: normalized, chatId: id, ready: false, messages: [], error: error?.message || String(error) };
+    if (recoverableLocalWhatsAppChatReadRuntimeError(error)) {
+      await handleRecoverableLocalWhatsAppRuntimeInvalidation(normalized, error, env, {
+        source: "chat_history",
+        reason: "chat_read_runtime_error",
+        force: true,
+      });
+      return { accountId: normalized, chatId: id, ready: false, messages: [], error: error?.message || String(error) };
+    }
+    await appendLocalWhatsAppChatReadFailure(normalized, id, error, env, { source: "chat_history" });
+    return { accountId: normalized, chatId: id, ready: true, messages: [], error: error?.message || String(error) };
   }
   return {
     accountId: normalized,
@@ -4687,11 +4828,7 @@ export async function demoteLocalWhatsAppGroupParticipants({ accountId = "", cha
 
 function recoverableLocalWhatsAppRuntimeError(error) {
   const reason = recoverableRuntimeReasonText(error);
-  const trimmed = reason.trim();
-  return trimmed === "r" ||
-    trimmed === "error: r" ||
-    reason.includes("\nerror: r\n") ||
-    reason.endsWith("\nerror: r") ||
+  return localWhatsAppBareRRuntimeError(error) ||
     reason.includes("whatsapp_local_runtime_missing") ||
     reason.includes("whatsapp_local_bridge_stale_runtime") ||
     reason.includes("execution context was destroyed") ||
