@@ -1611,18 +1611,17 @@ async function accountSnapshot(accountId, env = process.env) {
   const runtime = runtimes.get(accountId);
   const hasClient = Boolean(runtime?.client);
   const runtimeMissing = Boolean(!hasClient && (state.ready || state.state === "authenticated" || (state.authenticated && state.started)));
-  const chatOpsUnavailable = state.chatOpsReady === false || state.runtimeUsable === false;
-  const chatOpsReady = !chatOpsUnavailable;
+  const runtimeUnavailable = state.runtimeUsable === false;
   const staleReadyRuntime = Boolean((state.ready || runtimeMissing) && !hasClient);
-  const ready = Boolean(state.ready && hasClient && chatOpsReady);
+  const ready = Boolean(state.ready && hasClient && !runtimeUnavailable);
   const accountState = staleReadyRuntime ? "stale_runtime" : state.state;
   const qrAvailable = Boolean(state.qrAvailable || (await exists(qrPath(accountId, env))));
   return {
     ...state,
     state: accountState,
     ready,
-    chatOpsReady: ready ? true : chatOpsUnavailable ? false : null,
-    runtimeUsable: ready ? true : chatOpsUnavailable ? false : null,
+    chatOpsReady: state.chatOpsReady === false ? false : ready ? true : runtimeUnavailable ? false : null,
+    runtimeUsable: ready ? true : runtimeUnavailable ? false : null,
     error: staleReadyRuntime ? "whatsapp_local_runtime_missing" : state.error,
     clientId: clientIdForAccount(accountId, env),
     sessionRoot: sessionRootForAccount(accountId, env),
@@ -2309,6 +2308,32 @@ async function handleRecoverableLocalWhatsAppRuntimeInvalidation(accountId = "",
       error: message,
       graceMs: localWhatsAppChatOpsReadyGraceMs(env),
       ageMs: nowMs - Date.parse(String(current.readyAt || current.authenticatedAt || "")),
+    }, env).catch(() => {});
+    return true;
+  }
+  if (String(options.source || "") === "chat_ops_probe" && localWhatsAppBareRRuntimeError(error)) {
+    setAccountState(normalized, {
+      state: "ready",
+      ready: true,
+      authenticated: Boolean(current.authenticated),
+      started: Boolean(current.started || runtimes.has(normalized)),
+      qrAvailable: false,
+      pairingCode: "",
+      pairingCodeUpdatedAt: null,
+      error: "",
+      chatOpsReady: false,
+      runtimeUsable: true,
+      lastChatOpsProbeAt: nowIso(),
+      lastChatOpsError: message,
+      lastRecoveryReason: "chat_ops_probe_unavailable",
+      lastRecoveryAt: nowIso(),
+    });
+    await appendEvent({
+      type: "whatsapp_local_chat_ops_probe_unavailable",
+      accountId: normalized,
+      reason: String(options.reason || "chat_ops_runtime_error"),
+      source: String(options.source || ""),
+      error: message,
     }, env).catch(() => {});
     return true;
   }
@@ -3796,7 +3821,7 @@ function recoverableLocalWhatsAppFailure(account = {}) {
   const state = String(account?.state || "").trim();
   if (state === "chat_ops_warming") return false;
   if (recoverableLocalWhatsAppStates.has(state)) return true;
-  if (account?.chatOpsReady === false || account?.runtimeUsable === false) return true;
+  if (account?.runtimeUsable === false) return true;
   if (state !== "failed") return false;
   const error = String(account?.error || "").toLowerCase();
   return error.includes("target closed") ||
@@ -3985,7 +4010,10 @@ async function recoverOutboundAfterLocalWhatsAppReady(accountId = "", env = proc
       read: true,
       nowMs: Date.now(),
     }).catch((error) => ({ ok: false, error: error?.message || String(error) }));
-    if (!probe?.ok) {
+    const runtime = runtimes.get(accountId);
+    const state = accountStates.get(accountId) || defaultAccountState(accountId);
+    const sendReady = Boolean(runtime?.client && state?.ready && state?.runtimeUsable !== false);
+    if (!probe?.ok && !sendReady) {
       const reason = String(probe?.reason || probe?.error || "chat_ops_not_ready");
       await appendEvent({
         type: "whatsapp_local_ready_outbox_recovery_skipped",
@@ -3994,6 +4022,14 @@ async function recoverOutboundAfterLocalWhatsAppReady(accountId = "", env = proc
         recoverable: probe?.recoverable === true,
       }, env).catch(() => {});
       return { ok: false, retried: [], skipped: [{ accountId, reason }], probe };
+    }
+    if (!probe?.ok) {
+      await appendEvent({
+        type: "whatsapp_local_ready_outbox_recovery_chat_ops_degraded",
+        accountId,
+        reason: String(probe?.reason || probe?.error || "chat_ops_not_ready"),
+        recoverable: probe?.recoverable === true,
+      }, env).catch(() => {});
     }
     const { retryRecoverableWhatsAppOutboxJobsForAccounts } = await import("./whatsapp-outbox-recovery.js");
     const outbox = await retryRecoverableWhatsAppOutboxJobsForAccounts({
@@ -5310,10 +5346,13 @@ async function recoverLocalWhatsAppAccountAfterGroupAdminError(accountId, error,
 export async function sendLocalWhatsAppMessage({ chatId = "", text = "", accountId = "", attachments = [], env = process.env, crossAccountEchoSuppression = true, routeSentMessage = false } = {}) {
   const selectedAccountId = accountId
     ? await normalizeManagedAccountId(accountId, env)
-    : localWhatsAppAccountIdsForEnv(env).find((id) => accountStates.get(id)?.ready);
+    : localWhatsAppAccountIdsForEnv(env).find((id) => {
+        const state = accountStates.get(id);
+        return state?.ready && state?.runtimeUsable !== false;
+      });
   const runtime = selectedAccountId ? runtimes.get(selectedAccountId) : null;
   const state = selectedAccountId ? accountStates.get(selectedAccountId) : null;
-  if (!runtime?.client || !state?.ready || state?.chatOpsReady === false || state?.runtimeUsable === false) {
+  if (!runtime?.client || !state?.ready || state?.runtimeUsable === false) {
     const error = new Error("whatsapp_local_bridge_not_ready");
     error.statusCode = 400;
     throw error;

@@ -171,8 +171,11 @@ function accountReadiness(account = {}, status = {}, { runtimeConfigured = true 
   }
   const state = accountState(account, status);
   const authenticated = Boolean(account.authenticated || account.ready || state === "authenticated" || state === "ready" || state === "paired");
-  const chatOpsReady = account.chatOpsReady !== false && account.runtimeUsable !== false;
-  const ready = Boolean((account.ready || state === "ready" || (status.state === "paired" && authenticated)) && chatOpsReady);
+  const runtimeUsable = account.runtimeUsable !== false;
+  const chatOpsReady = account.chatOpsReady !== false && runtimeUsable;
+  const readySignal = Boolean(account.ready || state === "ready" || (status.state === "paired" && authenticated));
+  const sendReady = Boolean(readySignal && runtimeUsable);
+  const ready = sendReady;
   const qrAvailable = Boolean(account.qrAvailable || state === "qr_required");
   return {
     state,
@@ -181,10 +184,10 @@ function accountReadiness(account = {}, status = {}, { runtimeConfigured = true 
     started: Boolean(account.started || ready || authenticated),
     ready,
     chatOpsReady,
-    runtimeUsable: chatOpsReady,
-    commsReady: ready,
-    sendReady: ready,
-    inboundReady: ready,
+    runtimeUsable,
+    commsReady: sendReady,
+    sendReady,
+    inboundReady: sendReady,
     qrAvailable,
     qrRequired: qrAvailable || state === "qr_required",
     nextAction: ready

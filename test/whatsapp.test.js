@@ -768,7 +768,7 @@ test("local whatsapp passive status does not run chat ops probes that throw r", 
   }
 });
 
-test("local whatsapp active status chat ops probe degrades authenticated ready runtimes that throw r", async () => {
+test("local whatsapp active status chat ops probe keeps send runtime ready when getChats throws r", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-chatops-active-r-"));
   const env = {
     ORKESTR_HOME: home,
@@ -804,19 +804,66 @@ test("local whatsapp active status chat ops probe degrades authenticated ready r
     const account = status.accounts.find((item) => item.accountId === "responder");
     const events = await listEvents(env, 50);
 
-    assert.equal(status.state, "failed");
-    assert.equal(status.ready, false);
-    assert.equal(account.state, "degraded");
-    assert.equal(account.ready, false);
+    assert.equal(status.state, "ready");
+    assert.equal(status.ready, true);
+    assert.equal(account.state, "ready");
+    assert.equal(account.ready, true);
     assert.equal(account.chatOpsReady, false);
-    assert.equal(account.runtimeUsable, false);
-    assert.equal(account.error, "r");
+    assert.equal(account.runtimeUsable, true);
+    assert.equal(account.lastChatOpsError, "r");
+    assert.deepEqual(calls, [["getChats"]]);
+    assert.equal(events.some((event) => event.type === "whatsapp_local_runtime_degraded" && event.source === "chat_ops_probe"), false);
+    assert.ok(events.find((event) => event.type === "whatsapp_local_chat_ops_probe_unavailable" && event.accountId === "responder"));
+  } finally {
+    await resetLocalWhatsAppBridgeForTest(env);
+  }
+});
+
+test("local whatsapp send continues when chat ops probe is unavailable", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-chatops-r-send-ready-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "responder",
+    ORKESTR_WHATSAPP_STATUS_CHAT_OPS_PROBE: "1",
+    ORKESTR_WHATSAPP_CHAT_OPS_PROBE_INTERVAL_MS: "1000",
+    ORKESTR_WHATSAPP_SEND_CONFIRMATION_REQUIRED: "0",
+  };
+  const calls = [];
+  const runtime = {
+    client: {
+      async getChats() {
+        calls.push(["getChats"]);
+        throw new Error("r");
+      },
+      async sendMessage(chatId, text) {
+        calls.push(["send", chatId, text]);
+        return { id: { _serialized: "sent-after-chatops-r" } };
+      },
+    },
+  };
+
+  try {
+    setLocalWhatsAppRuntimeForTest("responder", runtime, { lastChatOpsProbeAt: null }, env);
+
+    const status = await getLocalWhatsAppBridgeStatus(env);
+    const account = status.accounts.find((item) => item.accountId === "responder");
+    assert.equal(account.ready, true);
+    assert.equal(account.chatOpsReady, false);
+    assert.equal(account.runtimeUsable, true);
+
+    const sent = await sendLocalWhatsAppMessage({
+      accountId: "responder",
+      chatId: "chat-send-ready@g.us",
+      text: "still send",
+      env,
+    });
+
+    assert.equal(sent.ok, true);
+    assert.equal(sent.id, "sent-after-chatops-r");
     assert.deepEqual(calls, [
       ["getChats"],
-      ["restart", "responder", true, "chat_ops_runtime_error"],
-      ["start", "responder", true, false],
+      ["send", "chat-send-ready@g.us", "still send"],
     ]);
-    assert.ok(events.find((event) => event.type === "whatsapp_local_runtime_degraded" && event.source === "chat_ops_probe"));
   } finally {
     await resetLocalWhatsAppBridgeForTest(env);
   }
@@ -860,7 +907,7 @@ test("local whatsapp active status chat ops probe does not dereference arbitrary
   }
 });
 
-test("local whatsapp deep chat ops probe degrades when chat read throws r", async () => {
+test("local whatsapp deep chat ops probe marks chat ops unavailable when chat read throws r", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-chatops-deep-r-"));
   const env = {
     ORKESTR_HOME: home,
@@ -899,17 +946,15 @@ test("local whatsapp deep chat ops probe degrades when chat read throws r", asyn
     const status = await getLocalWhatsAppBridgeStatus(env);
     const account = status.accounts.find((item) => item.accountId === "responder");
 
-    assert.equal(status.state, "failed");
-    assert.equal(account.state, "degraded");
-    assert.equal(account.ready, false);
+    assert.equal(status.state, "ready");
+    assert.equal(account.state, "ready");
+    assert.equal(account.ready, true);
     assert.equal(account.chatOpsReady, false);
-    assert.equal(account.runtimeUsable, false);
-    assert.equal(account.error, "r");
+    assert.equal(account.runtimeUsable, true);
+    assert.equal(account.lastChatOpsError, "r");
     assert.deepEqual(calls, [
       ["getChats"],
       ["getChatById", "unstable-sample@g.us"],
-      ["restart", "responder", true, "chat_ops_runtime_error"],
-      ["start", "responder", true, false],
     ]);
   } finally {
     await resetLocalWhatsAppBridgeForTest(env);

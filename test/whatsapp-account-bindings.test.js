@@ -67,6 +67,42 @@ test("WhatsApp connector accounts use phone identities while preserving legacy r
   assert.equal(Object.hasOwn(accounts[0], "sessionRoot"), false);
 });
 
+test("WhatsApp connector accounts can be send-ready while chat ops are degraded", () => {
+  const accounts = listWhatsAppConnectorAccounts({
+    env: {
+      ORKESTR_WHATSAPP_ACCOUNT_IDS: "sender",
+      ORKESTR_ADMIN_USER_ID: "admin",
+    },
+    status: {
+      mode: "local",
+      state: "paired",
+      accounts: [
+        {
+          accountId: "sender",
+          label: "Sender",
+          state: "ready",
+          ready: true,
+          authenticated: true,
+          chatOpsReady: false,
+          runtimeUsable: true,
+          phoneNumber: "+15550001111",
+          contactId: "15550001111@c.us",
+        },
+      ],
+    },
+  });
+
+  const sender = accounts.find((account) => account.runtimeAccountId === "sender");
+  assert.ok(sender);
+  assert.equal(sender.ready, true);
+  assert.equal(sender.sendReady, true);
+  assert.equal(sender.commsReady, true);
+  assert.equal(sender.inboundReady, true);
+  assert.equal(sender.chatOpsReady, false);
+  assert.equal(sender.runtimeUsable, true);
+  assert.equal(sender.nextAction, "none");
+});
+
 test("WhatsApp bindings resolve numeric identities and legacy runtime aliases", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-account-identity-binding-"));
   const env = {
