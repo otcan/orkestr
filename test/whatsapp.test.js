@@ -2752,6 +2752,114 @@ test("local whatsapp unread recovery routes missed unread messages", async () =>
   assert.equal(getChatByIdCalls, 0);
 });
 
+test("local whatsapp unread recovery falls back to cached browser messages on r-state fetch", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-unread-cache-fallback-"));
+  const env = { ORKESTR_HOME: home, ORKESTR_WHATSAPP_ACCOUNT_IDS: "responder" };
+  const chatId = "wa-group-cache-fallback@g.us";
+  const messageModel = {
+    id: { _serialized: "cached-r-message-1", remote: chatId, fromMe: false, participant: "wa-contact-one@c.us" },
+    body: "cached hello after r",
+    from: chatId,
+    author: "wa-contact-one@c.us",
+    type: "chat",
+    t: 1_780_000_000,
+  };
+  const chat = {
+    id: { _serialized: chatId },
+    unreadCount: 1,
+    async fetchMessages() {
+      throw new Error("r");
+    },
+  };
+  const previousWindow = globalThis.window;
+  const client = {
+    pupPage: {
+      async evaluate(fn, targetChatId, targetLimit) {
+        const cachedChat = {
+          unreadCount: 1,
+          msgs: {
+            getModelsArray() {
+              return [{
+                id: messageModel.id,
+                isNotification: false,
+                serialize() {
+                  return messageModel;
+                },
+              }];
+            },
+          },
+        };
+        globalThis.window = {
+          require(name) {
+            if (name === "WAWebCollections") {
+              return {
+                Chat: {
+                  get(value) {
+                    return String(value?._serialized || value || "") === targetChatId ? cachedChat : null;
+                  },
+                },
+              };
+            }
+            if (name === "WAWebWidFactory") {
+              return {
+                createWid(value) {
+                  return { _serialized: value };
+                },
+              };
+            }
+            throw new Error(`unexpected require ${name}`);
+          },
+          WWebJS: {
+            getMessageModel(message) {
+              return message.serialize();
+            },
+          },
+        };
+        try {
+          return await fn(targetChatId, targetLimit);
+        } finally {
+          globalThis.window = previousWindow;
+        }
+      },
+    },
+    async getChats() {
+      return [chat];
+    },
+  };
+  const thread = await createThread({
+    id: "cache-fallback-thread",
+    name: "Cache Fallback",
+    binding: {
+      connector: "whatsapp",
+      chatId,
+      displayName: "Cache Fallback",
+      responderAccountId: "responder",
+      outboundAccountId: "responder",
+      enabled: true,
+    },
+  }, env);
+
+  try {
+    const result = await recoverUnreadLocalWhatsAppMessages(env, {
+      force: true,
+      accountIds: ["responder"],
+      clients: new Map([["responder", client]]),
+      accountStates: new Map([["responder", { state: "ready", ready: true }]]),
+      threads: [thread],
+      limit: 20,
+    });
+    const messages = await listThreadMessages("cache-fallback-thread", env);
+
+    assert.equal(result.routed, 1);
+    assert.equal(result.recovered[0].ok, true);
+    assert.equal(result.recovered[0].fetched, 1);
+    assert.equal(messages.at(-1).text, "cached hello after r");
+    assert.equal(messages.at(-1).source, "whatsapp_inbound");
+  } finally {
+    globalThis.window = previousWindow;
+  }
+});
+
 test("local whatsapp recent recovery forwards missed messages for mapped external chats", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-forward-recovery-"));
   const chatId = "wa-forward-public@g.us";
