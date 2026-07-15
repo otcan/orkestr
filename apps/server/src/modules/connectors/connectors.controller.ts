@@ -514,6 +514,7 @@ export class ConnectorsController {
     return {
       account: await startLocalWhatsAppAccount(runtimeAccountId, process.env, {
         phoneNumber: String(body.phoneNumber || body.phone || ""),
+        resetRuntime: body.reset === true || body.resetRuntime === true || body.force === true,
         showNotification: body.showNotification !== false,
         intervalMs: Number(body.intervalMs || 0) || undefined,
         authReadyTimeoutMs: Number(body.authReadyTimeoutMs || body.authTimeoutMs || 0) || undefined,
