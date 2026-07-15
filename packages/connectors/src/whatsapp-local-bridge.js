@@ -1584,6 +1584,12 @@ function localWhatsAppChatOpsProbeTimeoutMs(env = process.env) {
   return Number.isFinite(parsed) ? Math.max(500, parsed) : 2500;
 }
 
+function localWhatsAppChatOpsProbeReadEnabled(env = process.env, options = {}) {
+  if (options.deep === true || options.read === true) return true;
+  const raw = String(env.ORKESTR_WHATSAPP_CHAT_OPS_PROBE_READ || env.WA_CHAT_OPS_PROBE_READ || "").trim().toLowerCase();
+  return ["1", "true", "yes", "on"].includes(raw);
+}
+
 function withLocalWhatsAppProbeTimeout(promise, label = "whatsapp_chat_ops_probe", env = process.env) {
   return Promise.race([
     promise,
@@ -1618,7 +1624,7 @@ async function probeLocalWhatsAppAccountChatOps(accountId = "", env = process.en
     const chats = await withLocalWhatsAppProbeTimeout(Promise.resolve(runtime.client.getChats()), "whatsapp_get_chats", env);
     const sample = (Array.isArray(chats) ? chats : []).find((chat) => String(chat?.id?._serialized || chat?.id || "").trim());
     const sampleId = String(sample?.id?._serialized || sample?.id || "").trim();
-    if (sampleId && typeof runtime.client.getChatById === "function") {
+    if (localWhatsAppChatOpsProbeReadEnabled(env, options) && sampleId && typeof runtime.client.getChatById === "function") {
       await withLocalWhatsAppProbeTimeout(Promise.resolve(runtime.client.getChatById(sampleId)), "whatsapp_get_chat_by_id", env);
     }
     setAccountState(normalized, {
