@@ -120,6 +120,27 @@ test("whatsapp send failures preserve structured bridge error reasons", async ()
   );
 });
 
+test("whatsapp relay mode without bridge URL does not fall back to local bridge", async () => {
+  const runtimeEnv = externalBridgeEnv(await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-relay-missing-url-")));
+  let fetchCalls = 0;
+
+  await assert.rejects(
+    () => sendWhatsAppText({
+      chatId: "chat-relay-missing-url",
+      text: "hello",
+      accountId: "sender",
+      config: { bridgeMode: "relay" },
+      env: runtimeEnv,
+      fetchImpl: async () => {
+        fetchCalls += 1;
+        return response({ ok: true });
+      },
+    }),
+    /whatsapp_bridge_not_configured/,
+  );
+  assert.equal(fetchCalls, 0);
+});
+
 function response(payload, ok = true, status = 200) {
   return {
     ok,

@@ -539,6 +539,83 @@ test("whatsapp connector outbox suppresses stale pending final jobs without rese
   assert.equal(suppressed.metadata.stalePendingSuppressed, true);
 });
 
+test("whatsapp connector outbox suppresses over-retried bridge failures without resending", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-connector-outbox-retry-limit-"));
+  const runtimeEnv = env(home, { ORKESTR_WHATSAPP_OUTBOX_MAX_RETRY_ATTEMPTS: "20" });
+  await writeConnectorConfig("whatsapp", { bridgeMode: "external", bridgeUrl: "http://wa.local" }, runtimeEnv);
+  await createThread({
+    id: "thread-wa-outbox-retry-limit",
+    ownerUserId: "tenant-a",
+    name: "WA Connector Outbox Retry Limit Thread",
+    binding: {
+      connector: "whatsapp",
+      chatId: "shared-chat",
+      responderAccountId: "responder",
+      outboundAccountId: "responder",
+      mirrorToWhatsApp: true,
+    },
+  }, runtimeEnv);
+  const parent = await appendThreadMessage("thread-wa-outbox-retry-limit", {
+    role: "user",
+    source: "whatsapp_inbound",
+    state: "completed",
+    connector: "whatsapp",
+    chatId: "shared-chat",
+    accountId: "responder",
+    text: "status?",
+  }, runtimeEnv);
+  const reply = await appendThreadMessage("thread-wa-outbox-retry-limit", {
+    role: "assistant",
+    source: "codex-app-server",
+    phase: "final_answer",
+    state: "completed",
+    parentMessageId: parent.id,
+    chatId: "shared-chat",
+    accountId: "responder",
+    text: "This over-retried answer must not be replayed.",
+  }, runtimeEnv);
+  const old = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+  const { job } = await ensureConnectorOutboxJob({
+    tenantId: "tenant-a",
+    ownerUserId: "tenant-a",
+    connector: "whatsapp",
+    accountId: "responder",
+    chatId: "shared-chat",
+    threadId: "thread-wa-outbox-retry-limit",
+    sourceMessageId: reply.id,
+    sourceRevision: "1",
+    deliveryType: "final",
+    payload: { text: "This over-retried answer must not be replayed." },
+    state: "failed_retryable",
+    attemptCount: 35,
+    failedAt: old,
+    claimExpiresAt: old,
+    error: "whatsapp_local_bridge_not_ready",
+    createdAt: old,
+    updatedAt: old,
+    metadata: { retryAfterAt: old },
+  }, runtimeEnv);
+
+  let sendTextCalls = 0;
+  const delivery = await deliverWhatsAppReplies(runtimeEnv, async (url) => {
+    if (url.pathname === "/send-text") sendTextCalls += 1;
+    return response({ ok: true, ids: ["unexpected-retry-limit-send"], messages: [] });
+  });
+  const outboxAfterDelivery = await readConnectorOutbox(runtimeEnv);
+  const suppressed = outboxAfterDelivery.jobs.find((entry) => entry.id === job.id);
+
+  assert.equal(sendTextCalls, 0);
+  assert.equal(delivery.delivered.length, 0);
+  assert.equal(delivery.failed.length, 0);
+  assert.equal(delivery.skipped.find((entry) => entry.messageId === reply.id)?.reason, "connector_outbox_retry_limit_exceeded");
+  assert.equal(suppressed.state, "suppressed");
+  assert.equal(suppressed.attemptCount, 35);
+  assert.equal(suppressed.error, "connector_outbox_retry_limit_exceeded");
+  assert.equal(suppressed.metadata.staleRetryableSuppressed, true);
+  assert.equal(suppressed.metadata.retryAttemptCount, 35);
+  assert.equal(suppressed.metadata.maxRetryAttempts, 20);
+});
+
 test("whatsapp connector outbox dead-letters unknown account failures", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-connector-outbox-unknown-account-"));
   const runtimeEnv = env(home, { ORKESTR_CONNECTOR_OUTBOX_RETRY_BACKOFF_MS: "60000" });

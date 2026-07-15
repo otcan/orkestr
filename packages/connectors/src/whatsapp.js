@@ -263,7 +263,7 @@ function externalBridgeEnabled(env = process.env) {
 function bridgeMode(config = {}, env = process.env) {
   const mode = String(env.WHATSAPP_BRIDGE_MODE || config.bridgeMode || "local").trim().toLowerCase();
   if (["relay", "parent-forward", "control-plane-forward", "control-plane", "controlplane", "broker"].includes(mode)) {
-    return String(env.WHATSAPP_BRIDGE_URL || config.bridgeUrl || "").trim() ? "external" : "local";
+    return "external";
   }
   return mode === "external" && externalBridgeEnabled(env) ? "external" : "local";
 }
@@ -894,7 +894,8 @@ function pickString(...values) {
 
 function nonRetryableWhatsAppOutboundError(error) {
   const message = pickString(error?.message, error);
-  return /\bunknown_whatsapp_account\b/i.test(message);
+  return /\bunknown_whatsapp_account\b/i.test(message) ||
+    /\bwhatsapp_bridge_not_configured\b/i.test(message);
 }
 
 function uncertainWhatsAppOutboundDeliveryError(error) {
@@ -2941,10 +2942,12 @@ async function sendClaimedWhatsAppText({
     }, env).catch(() => {});
     return { skipped: { reason: `connector_outbox_${outboxResult.job.state}` } };
   }
-  if (stalePendingWhatsAppConnectorOutboxJob(outboxResult.job, env)) {
+  const staleRetryable = staleRetryableWhatsAppConnectorOutboxJob(outboxResult.job, env);
+  if (stalePendingWhatsAppConnectorOutboxJob(outboxResult.job, env) || staleRetryable) {
     const now = new Date().toISOString();
-    const reason = "connector_outbox_pending_stale";
-    const maxAgeMs = whatsappPendingOutboxMaxAgeMs(env);
+    const pendingStale = !staleRetryable;
+    const reason = staleRetryable?.reason || "connector_outbox_pending_stale";
+    const maxAgeMs = pendingStale ? whatsappPendingOutboxMaxAgeMs(env) : 0;
     await markConnectorOutboxJob(outboxResult.job.id, {
       state: "suppressed",
       skippedAt: now,
@@ -2952,9 +2955,14 @@ async function sendClaimedWhatsAppText({
       error: reason,
       metadata: {
         ...(outboxResult.job.metadata || {}),
-        stalePendingSuppressed: true,
-        stalePendingSuppressedAt: now,
-        stalePendingMaxAgeMs: maxAgeMs,
+        ...(pendingStale ? {
+          stalePendingSuppressed: true,
+          stalePendingSuppressedAt: now,
+          stalePendingMaxAgeMs: maxAgeMs,
+        } : {
+          ...(staleRetryable.metadata || {}),
+          staleRetryableSuppressedAt: now,
+        }),
       },
     }, env).catch(() => null);
     if (intent?.intentId) {
@@ -5255,12 +5263,61 @@ function whatsappPendingOutboxMaxAgeMs(env = process.env) {
   );
 }
 
+function whatsappRetryableOutboxMaxAgeMs(env = process.env) {
+  return positiveInteger(
+    pickString(
+      env.ORKESTR_WHATSAPP_OUTBOX_RETRYABLE_MAX_AGE_MS,
+      env.ORKESTR_WHATSAPP_RETRYABLE_OUTBOX_MAX_AGE_MS,
+      env.ORKESTR_WHATSAPP_OUTBOX_PENDING_MAX_AGE_MS,
+      env.ORKESTR_WHATSAPP_PENDING_OUTBOX_MAX_AGE_MS,
+    ),
+    15 * 60 * 1000,
+    0,
+  );
+}
+
+function whatsappOutboxMaxRetryAttempts(env = process.env) {
+  return positiveInteger(
+    pickString(env.ORKESTR_WHATSAPP_OUTBOX_MAX_RETRY_ATTEMPTS, env.ORKESTR_WHATSAPP_MAX_OUTBOX_RETRY_ATTEMPTS),
+    20,
+    0,
+  );
+}
+
 function stalePendingWhatsAppConnectorOutboxJob(job = {}, env = process.env) {
   if (pickString(job.state).toLowerCase() !== "pending") return false;
   const maxAgeMs = whatsappPendingOutboxMaxAgeMs(env);
   if (maxAgeMs <= 0) return false;
   const createdMs = timeMs(job.createdAt);
   return createdMs > 0 && Date.now() - createdMs > maxAgeMs;
+}
+
+function staleRetryableWhatsAppConnectorOutboxJob(job = {}, env = process.env) {
+  if (pickString(job.state).toLowerCase() !== "failed_retryable") return null;
+  const maxAttempts = whatsappOutboxMaxRetryAttempts(env);
+  const attemptCount = Number(job.attemptCount || 0) || 0;
+  if (maxAttempts > 0 && attemptCount >= maxAttempts) {
+    return {
+      reason: "connector_outbox_retry_limit_exceeded",
+      metadata: {
+        staleRetryableSuppressed: true,
+        retryAttemptCount: attemptCount,
+        maxRetryAttempts: maxAttempts,
+      },
+    };
+  }
+  const maxAgeMs = whatsappRetryableOutboxMaxAgeMs(env);
+  const createdMs = timeMs(job.createdAt);
+  if (maxAgeMs > 0 && createdMs > 0 && Date.now() - createdMs > maxAgeMs) {
+    return {
+      reason: "connector_outbox_retryable_stale",
+      metadata: {
+        staleRetryableSuppressed: true,
+        staleRetryableMaxAgeMs: maxAgeMs,
+      },
+    };
+  }
+  return null;
 }
 
 export async function syncWhatsAppTypingIndicators(env = process.env, options = {}) {
