@@ -43,8 +43,7 @@ export function recoverableWhatsAppOutboxError(value = "") {
 
 export function uncertainWhatsAppOutboxError(value = "") {
   const reason = lower(value);
-  return reason.includes("whatsapp_send_not_confirmed") ||
-    reason.includes("whatsapp_local_bridge_not_ready_recovered_after_send_runtime_error");
+  return reason.includes("whatsapp_send_not_confirmed");
 }
 
 function recoverableJob(job = {}) {

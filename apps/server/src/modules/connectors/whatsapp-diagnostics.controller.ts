@@ -365,7 +365,7 @@ export class WhatsAppDiagnosticsController {
   @Get("accounts/:accountId/status")
   async accountStatus(@Req() request: any, @Param("accountId") accountId: string) {
     const principal = requestPrincipal(request);
-    const status = await getWhatsAppStatus();
+    const status = await getWhatsAppStatus(process.env, fetch, { probeChatOps: true, read: true, force: true });
     const accounts = await listPersistentWhatsAppConnectorAccounts({ status });
     const account = assertAccountForPrincipal(findAccount(accounts, accountId), principal, "wa_account_read");
     return { account, status: filterStatusAccounts(status, [account]) };
@@ -474,7 +474,11 @@ export class WhatsAppDiagnosticsController {
   @Get("doctor")
   async doctor(@Query("account") account = "", @Query("accountId") accountId = "") {
     const selectedAccount = clean(account || accountId);
-    const status = await getWhatsAppStatus();
+    const status = await getWhatsAppStatus(process.env, fetch, {
+      probeChatOps: true,
+      read: true,
+      force: Boolean(selectedAccount),
+    });
     const accounts = await listPersistentWhatsAppConnectorAccounts({ status });
     const bindingPayload = await listWhatsAppBindingStatuses({ status });
     const visibleAccounts = selectedAccount

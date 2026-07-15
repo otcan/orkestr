@@ -666,16 +666,16 @@ export function mapLocalWhatsAppStatusFromHealth(health) {
   };
 }
 
-async function getLocalStatus(env) {
-  const health = await getLocalWhatsAppBridgeStatus(env);
+async function getLocalStatus(env, options = {}) {
+  const health = await getLocalWhatsAppBridgeStatus(env, options);
   return mapLocalWhatsAppStatusFromHealth(health);
 }
 
-export async function getWhatsAppStatus(env = process.env, fetchImpl = fetch) {
+export async function getWhatsAppStatus(env = process.env, fetchImpl = fetch, options = {}) {
   const config = await readConnectorConfig("whatsapp", env);
   const bridgeUrl = configuredBridgeUrl(config, env);
   if (!bridgeUrl) {
-    if (bridgeMode(config, env) === "local") return getLocalStatus(env);
+    if (bridgeMode(config, env) === "local") return getLocalStatus(env, options);
     return {
       state: "not_configured",
       summary: "Configure a WhatsApp bridge or enable the built-in local bridge.",
@@ -900,8 +900,7 @@ function nonRetryableWhatsAppOutboundError(error) {
 
 function uncertainWhatsAppOutboundDeliveryError(error) {
   const message = pickString(error?.message, error);
-  return /\bwhatsapp_send_not_confirmed\b/i.test(message) ||
-    /\bwhatsapp_local_bridge_not_ready_recovered_after_send_runtime_error\b/i.test(message);
+  return /\bwhatsapp_send_not_confirmed\b/i.test(message);
 }
 
 function uncertainWhatsAppConnectorOutboxJob(job = {}) {
@@ -937,7 +936,11 @@ async function findPriorUncertainWhatsAppConnectorOutboxJob({
     if (jobState !== "delivery_uncertain" && jobState !== "failed_retryable") return false;
     const jobSourceId = pickString(job.sourceMessageId, job.sourceEventId);
     const sameSource = Boolean(sourceId && jobSourceId === sourceId);
-    const sameParent = Boolean(parentId && pickString(job.metadata?.parentMessageId) === parentId);
+    const sameParent = Boolean(
+      parentId &&
+      pickString(deliveryType).toLowerCase() !== "progress" &&
+      pickString(job.metadata?.parentMessageId) === parentId,
+    );
     if (!sameSource && !sameParent) return false;
     if (accountId && pickString(job.accountId) && pickString(job.accountId) !== pickString(accountId)) return false;
     if (sameSource && textKey && pickString(job.metadata?.textKey) && pickString(job.metadata.textKey) !== pickString(textKey)) return false;

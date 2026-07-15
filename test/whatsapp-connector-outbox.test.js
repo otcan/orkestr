@@ -193,7 +193,7 @@ test("whatsapp connector outbox auto-retries recoverable bridge failures after a
   const calls = [];
   const failed = await deliverWhatsAppReplies(runtimeEnv, async (url) => {
     calls.push(url.pathname);
-    throw new Error("whatsapp_local_bridge_not_ready");
+    throw new Error("whatsapp_local_bridge_not_ready_recovered_after_send_runtime_error");
   });
   const outboxAfterFailure = await readConnectorOutbox(runtimeEnv);
   const failedJob = outboxAfterFailure.jobs.find((item) => item.sourceMessageId === reply.id);
@@ -225,10 +225,10 @@ test("whatsapp connector outbox auto-retries recoverable bridge failures after a
   assert.equal(outboxAfterDelivery.jobs.find((item) => item.id === failedJob.id)?.state, "delivered");
 });
 
-test("whatsapp connector outbox quarantines uncertain sends instead of retrying", async () => {
+test("whatsapp connector outbox quarantines unconfirmed sends but retries send-runtime recovery", async () => {
   const cases = [
-    { name: "unconfirmed", error: "whatsapp_send_not_confirmed" },
-    { name: "send-recovery", error: "whatsapp_local_bridge_not_ready_recovered_after_send_runtime_error" },
+    { name: "unconfirmed", error: "whatsapp_send_not_confirmed", uncertain: true },
+    { name: "send-recovery", error: "whatsapp_local_bridge_not_ready_recovered_after_send_runtime_error", uncertain: false },
   ];
   for (const item of cases) {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), `orkestr-wa-connector-outbox-${item.name}-`));
@@ -282,32 +282,40 @@ test("whatsapp connector outbox quarantines uncertain sends instead of retrying"
 
     assert.equal(failed.failed.length, 1);
     assert.equal(sentTexts.filter((text) => text === outboundText).length, 1);
-    assert.equal(uncertainJob?.state, "delivery_uncertain");
+    assert.equal(uncertainJob?.state, item.uncertain ? "delivery_uncertain" : "failed_retryable");
     assert.equal(uncertainJob.claimedBy, "");
     assert.equal(uncertainJob.claimExpiresAt, "");
-    assert.equal(uncertainJob.terminalAt.length > 0, true);
-    assert.equal(uncertainJob.metadata.deliveryUncertain, true);
-    assert.equal(uncertainJob.metadata.retrySuppressed, true);
-    assert.equal(intent?.status, "skipped");
+    assert.equal(Boolean(uncertainJob.terminalAt), item.uncertain);
+    assert.equal(uncertainJob.metadata.deliveryUncertain === true, item.uncertain);
+    assert.equal(uncertainJob.metadata.retrySuppressed === true, item.uncertain);
+    assert.equal(intent?.status, item.uncertain ? "skipped" : "pending");
     assert.equal(intent?.error, item.error);
 
     const second = await deliverWhatsAppReplies(runtimeEnv, async (_url, init = {}) => {
       const body = JSON.parse(String(init.body || "{}"));
       sentTexts.push(body.text || "");
-      if (body.text === outboundText) throw new Error(`${item.name} send must not be replayed`);
+      if (body.text === outboundText && item.uncertain) throw new Error(`${item.name} send must not be replayed`);
       return response({ ok: true, ids: [`wa-sent-${sentTexts.length}`] });
     });
+    const outboxAfterSecond = await readConnectorOutbox(runtimeEnv);
+    const jobAfterSecond = outboxAfterSecond.jobs.find((job) => job.sourceMessageId === reply.id);
 
-    assert.equal(sentTexts.filter((text) => text === outboundText).length, 1);
+    assert.equal(sentTexts.filter((text) => text === outboundText).length, item.uncertain ? 1 : 2);
     assert.equal(second.failed.length, 0);
-    assert.ok(second.skipped.some((entry) =>
-      entry.messageId === reply.id &&
-      [item.error, "connector_outbox_delivery_uncertain"].includes(entry.reason)
-    ));
+    if (item.uncertain) {
+      assert.ok(second.skipped.some((entry) =>
+        entry.messageId === reply.id &&
+        [item.error, "connector_outbox_delivery_uncertain"].includes(entry.reason)
+      ));
+      assert.equal(jobAfterSecond?.state, "delivery_uncertain");
+    } else {
+      assert.equal(second.delivered.length, 1);
+      assert.equal(jobAfterSecond?.state, "delivered");
+    }
   }
 });
 
-test("whatsapp connector outbox suppresses later progress for an uncertain turn", async () => {
+test("whatsapp connector outbox retries send-runtime recovery without poisoning later progress", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-connector-outbox-progress-turn-"));
   const runtimeEnv = env(home, { ORKESTR_CONNECTOR_OUTBOX_RETRY_BACKOFF_MS: "0" });
   await writeConnectorConfig("whatsapp", { bridgeMode: "external", bridgeUrl: "http://wa.local" }, runtimeEnv);
@@ -354,7 +362,7 @@ test("whatsapp connector outbox suppresses later progress for an uncertain turn"
 
   assert.equal(failed.failed.length, 1);
   assert.equal(sentTexts.includes("Still working."), true);
-  assert.equal(firstJob?.state, "delivery_uncertain");
+  assert.equal(firstJob?.state, "failed_retryable");
   assert.equal(firstJob.metadata.parentMessageId, parent.id);
 
   const secondProgress = await appendThreadMessage("thread-wa-outbox-progress-turn", {
@@ -370,16 +378,16 @@ test("whatsapp connector outbox suppresses later progress for an uncertain turn"
   const second = await deliverWhatsAppReplies(runtimeEnv, async (_url, init = {}) => {
     const body = JSON.parse(String(init.body || "{}"));
     sentTexts.push(body.text || "");
-    throw new Error("later same-turn progress must not be sent");
+    return response({ ok: true, ids: [`wa-sent-${sentTexts.length}`] });
   });
   const outboxAfterSecond = await readConnectorOutbox(runtimeEnv);
   const secondJob = outboxAfterSecond.jobs.find((job) => job.sourceMessageId === secondProgress.id);
 
-  assert.equal(sentTexts.includes("Still working, more context."), false);
+  assert.equal(sentTexts.includes("Still working, more context."), true);
   assert.equal(second.failed.length, 0);
-  assert.equal(second.skipped.find((entry) => entry.messageId === secondProgress.id)?.reason, "connector_outbox_delivery_uncertain");
-  assert.equal(secondJob?.state, "delivery_uncertain");
-  assert.equal(secondJob.metadata.priorDeliveryUncertainJobId, firstJob.id);
+  assert.equal(second.delivered.length, 2);
+  assert.equal(secondJob?.state, "delivered");
+  assert.equal(secondJob.metadata.priorDeliveryUncertainJobId, undefined);
 });
 
 test("whatsapp connector outbox suppresses repeated progress body after an uncertain send", async () => {
@@ -422,7 +430,7 @@ test("whatsapp connector outbox suppresses repeated progress body after an uncer
   const first = await deliverWhatsAppReplies(runtimeEnv, async (_url, init = {}) => {
     const body = JSON.parse(String(init.body || "{}"));
     sentTexts.push(body.text || "");
-    throw new Error("whatsapp_local_bridge_not_ready_recovered_after_send_runtime_error");
+    throw new Error("whatsapp_send_not_confirmed");
   });
   const outboxAfterFirst = await readConnectorOutbox(runtimeEnv);
   const firstJob = outboxAfterFirst.jobs.find((job) => job.sourceMessageId === firstProgress.id);
@@ -454,7 +462,7 @@ test("whatsapp connector outbox suppresses repeated progress body after an uncer
   const second = await deliverWhatsAppReplies(runtimeEnv, async (_url, init = {}) => {
     const body = JSON.parse(String(init.body || "{}"));
     sentTexts.push(body.text || "");
-    throw new Error("same body after uncertain send must not be sent again");
+    throw new Error("same body after unconfirmed send must not be sent again");
   });
   const outboxAfterSecond = await readConnectorOutbox(runtimeEnv);
 
@@ -467,7 +475,6 @@ test("whatsapp connector outbox suppresses repeated progress body after an uncer
 test("whatsapp connector outbox terminalizes legacy uncertain retry rows before claim", async () => {
   const cases = [
     { name: "unconfirmed", error: "whatsapp_send_not_confirmed" },
-    { name: "send-recovery", error: "whatsapp_local_bridge_not_ready_recovered_after_send_runtime_error" },
   ];
   for (const item of cases) {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), `orkestr-wa-connector-outbox-legacy-${item.name}-`));

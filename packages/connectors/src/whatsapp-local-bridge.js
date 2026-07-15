@@ -2246,7 +2246,7 @@ function localWhatsAppBareRRuntimeError(error) {
 }
 
 function recoverableLocalWhatsAppChatReadRuntimeError(error) {
-  return recoverableLocalWhatsAppRuntimeError(error) && !localWhatsAppBareRRuntimeError(error);
+  return recoverableLocalWhatsAppRuntimeError(error);
 }
 
 async function appendLocalWhatsAppChatReadFailure(accountId = "", chatId = "", error, env = process.env, options = {}) {
@@ -3876,7 +3876,11 @@ export async function restartRecoverableLocalWhatsAppAccount(accountId = "", env
 export async function recoverConfiguredLocalWhatsAppAccounts(env = process.env, options = {}) {
   const selected = localWhatsAppAutostartAccountIds(env);
   if (!selected.length) return { enabled: false, recovered: [], skipped: [] };
-  const status = options.status || await getLocalWhatsAppBridgeStatus(env);
+  const status = options.status || await getLocalWhatsAppBridgeStatus(env, {
+    probeChatOps: true,
+    read: true,
+    nowMs: options.nowMs,
+  });
   const resetCandidates = recoverableLocalWhatsAppAccountIds(status.accounts || [], selected);
   const resetCandidateSet = new Set(resetCandidates);
   const selectedSet = new Set(selected.map((accountId) => String(accountId || "").trim()).filter(Boolean));
