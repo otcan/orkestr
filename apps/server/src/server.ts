@@ -159,6 +159,7 @@ function authorizeScopedShareSessionRequest(request: any, session: any) {
   const method = String(request?.method || "GET").toUpperCase();
   const parts = routePartsFromApiRequest(request);
   if (parts[0] !== "api") return { ok: true };
+  if (whatsappRepairRouteAllowed(method, parts)) return { ok: true };
   if (desktopShareRouteAllowed(method, parts)) return { ok: true };
   const [surface] = parts.slice(1).map((part) => part.toLowerCase());
   if (surface === "version" && method === "GET") return { ok: true };
@@ -182,6 +183,7 @@ function authorizeAuthIntentSessionRequest(request: any, session: any) {
   if (method === "GET" && (url === "/connect/google" || url === "/connect/google/start")) return { ok: true };
   if (method === "GET" && url === "/setup/pairing") return { ok: true };
   if (method === "GET" && isStaticAssetRequestPath(url)) return { ok: true };
+  if (whatsappRepairRouteAllowed(method, parts)) return { ok: true };
   if (desktopShareRouteAllowed(method, parts)) return { ok: true };
   const brokerAppAuth = authorizeAuthIntentBrokerAppRequest(request, session, parts);
   if (brokerAppAuth.matched) return brokerAppAuth;
@@ -321,6 +323,7 @@ function authorizeConnectorResourceRequest(request: any, principal: any) {
   const route = connectorRouteFromApiRequest(request);
   if (!route) return { ok: true };
   if (isPublicConnectorRoute(route)) return { ok: true };
+  if (isWhatsAppRepairConnectorRoute(route)) return { ok: true };
   if (isAdminPrincipal(principal)) return { ok: true };
   if (isUserConnectorRoute(route)) return { ok: true };
   return { ok: false, statusCode: 403, error: "connector_admin_required" };
@@ -342,6 +345,26 @@ function isPublicConnectorRoute(route: { method: string; connector: string; acti
     route.connector === "whatsapp" &&
     route.action.length === 1 &&
     ["inbound", "inbound-media"].includes(route.action[0]);
+}
+
+function isWhatsAppRepairConnectorRoute(route: { method: string; connector: string; action: string[] }) {
+  return route.connector === "whatsapp" &&
+    route.action[0] === "bridge" &&
+    route.action[1] === "repair" &&
+    (
+      (route.method === "GET" && route.action.length === 2) ||
+      (route.method === "POST" && route.action.length === 3 && route.action[2] === "send-email")
+    );
+}
+
+function whatsappRepairRouteAllowed(method: string, parts: string[]) {
+  const [api, connectors, whatsapp] = parts.slice(0, 3).map((part) => String(part || "").trim().toLowerCase());
+  if (api !== "api" || connectors !== "connectors" || whatsapp !== "whatsapp") return false;
+  return isWhatsAppRepairConnectorRoute({
+    method,
+    connector: "whatsapp",
+    action: parts.slice(3).map((part) => String(part || "").trim().toLowerCase()),
+  });
 }
 
 function isUserConnectorRoute(route: { method: string; connector: string; action: string[] }) {

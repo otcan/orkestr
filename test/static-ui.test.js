@@ -238,13 +238,29 @@ test("instance connect setup requires a registered broker UUID", async () => {
 
 test("google workspace brokered connect links require instance and owner scoped browser pairing", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-static-google-connect-pairing-"));
-  const envKeys = [...publicRuntimeEnvKeys, "ORKESTR_HOME"];
+  const envKeys = [
+    ...publicRuntimeEnvKeys,
+    "ORKESTR_HOME",
+    "ORKESTR_OVERLAY_DIR",
+    "ORKESTR_ADMIN_EMAIL",
+    "ORKESTR_WHATSAPP_REPAIR_NOTIFY_EMAILS",
+    "ORKESTR_WHATSAPP_REPAIR_NOTIFY_EMAIL",
+    "ORKESTR_WHATSAPP_ACCOUNT_IDS",
+    "ORKESTR_WHATSAPP_REPAIR_GMAIL_SOURCE",
+    "ORKESTR_GMAIL_SOURCE",
+    "ORKESTR_JOBS_GMAIL_SOURCE",
+    "ORKESTR_WHATSAPP_REPAIR_GOG_ACCOUNT",
+    "ORKESTR_GMAIL_GOG_ACCOUNT",
+    "ORKESTR_JOBS_GOG_ACCOUNT",
+    "GOG_ACCOUNT",
+  ];
   const prior = snapshotEnv(envKeys);
   clearEnv(envKeys);
   process.env.ORKESTR_HOME = home;
   process.env.ORKESTR_AUTH_REQUIRED = "1";
   process.env.ORKESTR_CONNECT_PUBLIC_URL = "https://connect.crawlerai.de";
   process.env.ORKESTR_PUBLIC_AUTH_URL = "https://connect.orkestr.de/setup/pairing";
+  process.env.ORKESTR_WHATSAPP_ACCOUNT_IDS = "sender";
 
   const connect = await createGoogleWorkspaceConnectLink({
     principal: userPrincipal({ id: "firat", displayName: "Firat" }),
@@ -377,6 +393,21 @@ test("google workspace brokered connect links require instance and owner scoped 
     assert.match(pairedHtml, /Connect Google Workspace/);
     assert.match(pairedHtml, /orkestr_auth/);
     assert.match(pairedHtml, /google_workspace/);
+
+    const waRepairResponse = await fetch(`http://127.0.0.1:${port}/api/connectors/whatsapp/bridge/repair?accountId=sender`, { headers: { cookie } });
+    const waRepairHtml = await waRepairResponse.text();
+    assert.equal(waRepairResponse.status, 200);
+    assert.match(waRepairHtml, /WhatsApp Repair/);
+    assert.match(waRepairHtml, /Email Fresh QR/);
+
+    const waRepairPostResponse = await fetch(`http://127.0.0.1:${port}/api/connectors/whatsapp/bridge/repair/send-email`, {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({ accountId: "sender" }),
+    });
+    const waRepairPostPayload = await waRepairPostResponse.json();
+    assert.equal(waRepairPostResponse.status, 409);
+    assert.equal(waRepairPostPayload.error, "recipient_missing");
 
     const appResponse = await fetch(`http://127.0.0.1:${port}/app`, { headers: { cookie }, redirect: "manual" });
     const appPayload = await appResponse.json();
