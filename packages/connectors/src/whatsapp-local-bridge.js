@@ -12,6 +12,7 @@ import { publicHttpUrl, tenantPublicSetupUrl } from "../../core/src/tenant-publi
 import { getThread, listThreads } from "../../core/src/threads.js";
 import { setGeneratedLocalWhatsAppGroupPicture } from "./whatsapp-chat-picture.js";
 import { sendGmailMessage } from "./google-workspace.js";
+import { readGmailToken } from "./gmail.js";
 import {
   bindingAccountIds as whatsappBindingAccountIds,
   whatsappBindingIsRouteEligible,
@@ -191,13 +192,27 @@ function accountLabel(accountId) {
   return accountId === "account-2" ? "WhatsApp 2" : "WhatsApp 1";
 }
 
-function localWhatsAppRepairNotifyRecipients(env = process.env) {
-  return [...new Set(splitAccountList(
+function localWhatsAppRepairNotifyRecipientEnv(env = process.env) {
+  return splitAccountList(
     env.ORKESTR_WHATSAPP_REPAIR_NOTIFY_EMAILS ||
       env.ORKESTR_WHATSAPP_REPAIR_NOTIFY_EMAIL ||
       env.ORKESTR_ADMIN_EMAIL ||
       "",
-  ))];
+  );
+}
+
+function normalizeEmailRecipient(value = "") {
+  const text = String(value || "").trim();
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(text) ? text : "";
+}
+
+async function localWhatsAppRepairNotifyRecipients(env = process.env, options = {}) {
+  const configured = localWhatsAppRepairNotifyRecipientEnv(env).map(normalizeEmailRecipient).filter(Boolean);
+  if (configured.length) return [...new Set(configured)];
+  const reader = options.readGmailToken || readGmailToken;
+  const token = await reader(env).catch(() => ({}));
+  const gmailAccount = normalizeEmailRecipient(token?.account || token?.email || token?.emailAddress || "");
+  return gmailAccount ? [gmailAccount] : [];
 }
 
 function localWhatsAppRepairNotificationCooldownMs(env = process.env) {
@@ -221,7 +236,7 @@ function localWhatsAppRepairLink(accountId = "", env = process.env) {
 
 export async function notifyLocalWhatsAppPairingRequired(input = {}, env = process.env, options = {}) {
   const accountId = normalizeAccountId(input.accountId || "", env);
-  const recipients = localWhatsAppRepairNotifyRecipients(env);
+  const recipients = await localWhatsAppRepairNotifyRecipients(env, options);
   const nowMs = Number(options.nowMs || Date.now());
   const key = `${accountId}:pairing_required`;
   const cooldownMs = localWhatsAppRepairNotificationCooldownMs(env);
