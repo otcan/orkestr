@@ -196,7 +196,11 @@ function hasReadySignal(payload) {
       payload?.ok && payload?.state === "ready" ||
       payload?.status === "ready" ||
       payload?.clientReady ||
-      payload?.accounts?.some?.((account) => account.ready || account.state === "ready" || account.status === "ready"),
+      payload?.accounts?.some?.((account) =>
+        (account.ready || account.state === "ready" || account.status === "ready") &&
+          account.chatOpsReady !== false &&
+          account.runtimeUsable !== false
+      ),
   );
 }
 
@@ -380,6 +384,10 @@ function publicBridgeAccount(account = {}) {
     loadingPercent: account.loadingPercent ?? null,
     loadingMessage: pickString(account.loadingMessage),
     error: pickString(account.error),
+    chatOpsReady: account.chatOpsReady !== false,
+    runtimeUsable: account.runtimeUsable !== false,
+    lastChatOpsProbeAt: pickString(account.lastChatOpsProbeAt),
+    lastChatOpsError: pickString(account.lastChatOpsError),
     updatedAt: pickString(account.updatedAt),
     runtimeAccountId: pickString(account.runtimeAccountId, rawId),
     legacyRoleAliases: id !== rawId && rawId ? [rawId] : [],
@@ -394,6 +402,8 @@ function publicLocalBridgeHealth(health = {}) {
     ready: Boolean(health.ready),
     clientReady: Boolean(health.clientReady),
     authenticated: Boolean(health.authenticated),
+    chatOpsReady: health.chatOpsReady !== false,
+    runtimeUsable: health.runtimeUsable !== false,
     qrAvailable: Boolean(health.qrAvailable),
     qrUrl: pickString(health.qrUrl),
     maxAccounts: Number.isFinite(Number(health.maxAccounts)) ? Number(health.maxAccounts) : undefined,

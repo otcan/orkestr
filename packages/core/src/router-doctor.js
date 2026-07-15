@@ -143,7 +143,11 @@ function accountReady(status = {}, accountId = "") {
   const id = clean(accountId);
   const relevant = id ? accounts.filter((account) => accountMatchesId(account, id)) : accounts;
   if (!relevant.length) return Boolean(status.ready || ["ready", "send_ready_scoped"].includes(lower(status.state || status.status)));
-  return relevant.some((account) => account.ready === true || lower(account.state) === "ready" || lower(account.status) === "ready");
+  return relevant.some((account) =>
+    (account.ready === true || lower(account.state) === "ready" || lower(account.status) === "ready") &&
+      account.chatOpsReady !== false &&
+      account.runtimeUsable !== false
+  );
 }
 
 function accountMatchesId(account = {}, id = "") {
