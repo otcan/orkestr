@@ -1576,6 +1576,7 @@ function defaultAccountState(accountId) {
     contactId: "",
     pushName: "",
     authenticatedAt: null,
+    readyAt: null,
     loadingPercent: null,
     loadingMessage: "",
     waState: "",
@@ -1975,6 +1976,11 @@ function localWhatsAppChatOpsProbeTimeoutMs(env = process.env) {
   return Number.isFinite(parsed) ? Math.max(500, parsed) : 2500;
 }
 
+function localWhatsAppChatOpsReadyGraceMs(env = process.env) {
+  const parsed = Number(env.ORKESTR_WHATSAPP_CHAT_OPS_READY_GRACE_MS || env.WA_CHAT_OPS_READY_GRACE_MS || 30_000);
+  return Number.isFinite(parsed) ? Math.max(0, parsed) : 30_000;
+}
+
 function localWhatsAppChatOpsProbeReadEnabled(env = process.env, options = {}) {
   if (options.deep === true || options.read === true) return true;
   const raw = String(env.ORKESTR_WHATSAPP_CHAT_OPS_PROBE_READ || env.WA_CHAT_OPS_PROBE_READ || "").trim().toLowerCase();
@@ -2249,6 +2255,19 @@ function recoverableLocalWhatsAppChatReadRuntimeError(error) {
   return recoverableLocalWhatsAppRuntimeError(error);
 }
 
+function localWhatsAppChatOpsReadyGraceActive(state = {}, error, env = process.env, options = {}) {
+  if (String(options.source || "") !== "chat_ops_probe") return false;
+  if (!localWhatsAppBareRRuntimeError(error)) return false;
+  if (state.ready !== true) return false;
+  const graceMs = localWhatsAppChatOpsReadyGraceMs(env);
+  if (graceMs <= 0) return false;
+  const nowMs = Number(options.nowMs || Date.now());
+  const referenceMs = Date.parse(String(state.readyAt || state.authenticatedAt || ""));
+  if (!Number.isFinite(nowMs) || !Number.isFinite(referenceMs) || referenceMs <= 0) return false;
+  const ageMs = nowMs - referenceMs;
+  return ageMs >= 0 && ageMs <= graceMs;
+}
+
 async function appendLocalWhatsAppChatReadFailure(accountId = "", chatId = "", error, env = process.env, options = {}) {
   await appendEvent({
     type: "whatsapp_local_chat_read_failed",
@@ -2265,6 +2284,34 @@ async function handleRecoverableLocalWhatsAppRuntimeInvalidation(accountId = "",
   if (!normalized || !recoverableLocalWhatsAppRuntimeError(error)) return false;
   const message = error?.message || String(error) || "whatsapp_local_runtime_degraded";
   const current = accountStates.get(normalized) || defaultAccountState(normalized);
+  const nowMs = Number(options.nowMs || Date.now());
+  if (localWhatsAppChatOpsReadyGraceActive(current, error, env, options)) {
+    setAccountState(normalized, {
+      state: "chat_ops_warming",
+      ready: true,
+      authenticated: Boolean(current.authenticated),
+      started: Boolean(current.started || runtimes.has(normalized)),
+      qrAvailable: false,
+      pairingCode: "",
+      pairingCodeUpdatedAt: null,
+      error: message,
+      chatOpsReady: false,
+      runtimeUsable: false,
+      lastChatOpsProbeAt: nowIso(),
+      lastChatOpsError: message,
+      lastRecoveryReason: "chat_ops_probe_ready_grace",
+    });
+    await appendEvent({
+      type: "whatsapp_local_chat_ops_probe_ready_grace",
+      accountId: normalized,
+      reason: String(options.reason || "runtime_invalidated"),
+      source: String(options.source || ""),
+      error: message,
+      graceMs: localWhatsAppChatOpsReadyGraceMs(env),
+      ageMs: nowMs - Date.parse(String(current.readyAt || current.authenticatedAt || "")),
+    }, env).catch(() => {});
+    return true;
+  }
   clearAccountTypingRuntimeState(normalized);
   setAccountState(normalized, {
     state: "degraded",
@@ -2292,7 +2339,6 @@ async function handleRecoverableLocalWhatsAppRuntimeInvalidation(accountId = "",
 
   if (localWhatsAppRuntimeRecoveryInFlight.has(normalized)) return true;
   const cooldownMs = localWhatsAppRecoveryCooldownMs(env);
-  const nowMs = Number(options.nowMs || Date.now());
   const lastAttemptMs = Number(localWhatsAppRecoveryAttempts.get(normalized) || 0);
   if (!options.force && lastAttemptMs && nowMs - lastAttemptMs < cooldownMs) {
     await appendEvent({
@@ -3748,6 +3794,7 @@ export async function cleanupLocalWhatsAppOrphanChromeProcesses(accountId = "", 
 
 function recoverableLocalWhatsAppFailure(account = {}) {
   const state = String(account?.state || "").trim();
+  if (state === "chat_ops_warming") return false;
   if (recoverableLocalWhatsAppStates.has(state)) return true;
   if (account?.chatOpsReady === false || account?.runtimeUsable === false) return true;
   if (state !== "failed") return false;
@@ -3849,6 +3896,7 @@ export async function restartRecoverableLocalWhatsAppAccount(accountId = "", env
     pairingCode: "",
     pairingCodeUpdatedAt: null,
     authenticatedAt: null,
+    readyAt: null,
     loadingPercent: null,
     loadingMessage: "",
     waState: "",
@@ -4413,6 +4461,7 @@ async function startLocalWhatsAppAccountOnce(normalized, env = process.env, opti
       ready: true,
       authenticated: true,
       started: true,
+      readyAt: nowIso(),
       qrAvailable: false,
       pairingCode: "",
       pairingCodeUpdatedAt: null,
