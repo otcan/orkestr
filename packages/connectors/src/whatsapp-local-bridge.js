@@ -3980,6 +3980,21 @@ export async function recoverConfiguredLocalWhatsAppAccounts(env = process.env, 
 
 async function recoverOutboundAfterLocalWhatsAppReady(accountId = "", env = process.env) {
   try {
+    const probe = await probeLocalWhatsAppAccountChatOps(accountId, env, {
+      force: true,
+      read: true,
+      nowMs: Date.now(),
+    }).catch((error) => ({ ok: false, error: error?.message || String(error) }));
+    if (!probe?.ok) {
+      const reason = String(probe?.reason || probe?.error || "chat_ops_not_ready");
+      await appendEvent({
+        type: "whatsapp_local_ready_outbox_recovery_skipped",
+        accountId,
+        reason,
+        recoverable: probe?.recoverable === true,
+      }, env).catch(() => {});
+      return { ok: false, retried: [], skipped: [{ accountId, reason }], probe };
+    }
     const { retryRecoverableWhatsAppOutboxJobsForAccounts } = await import("./whatsapp-outbox-recovery.js");
     const outbox = await retryRecoverableWhatsAppOutboxJobsForAccounts({
       accountIds: [accountId],
@@ -5220,8 +5235,7 @@ function recoverableLocalWhatsAppRuntimeError(error) {
     reason.includes("deprecatedsendstanzaandreturnack") ||
     reason.includes("sendiq called before startcomms") ||
     reason.includes("whatsapp_send_message_timeout") ||
-    reason.includes("whatsapp_send_media_timeout") ||
-    reason.includes("whatsapp_send_not_confirmed");
+    reason.includes("whatsapp_send_media_timeout");
 }
 
 async function recoverLocalWhatsAppAccountAfterRuntimeError(accountId, error, env = process.env, options = {}) {

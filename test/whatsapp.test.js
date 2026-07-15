@@ -4379,6 +4379,62 @@ test("local whatsapp send recovers unstarted Web comms before retrying later", a
   }
 });
 
+test("local whatsapp unconfirmed sends do not reset the runtime", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-send-unconfirmed-no-reset-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "responder",
+    ORKESTR_WHATSAPP_SEND_CONFIRMATION_ATTEMPTS: "1",
+    ORKESTR_WHATSAPP_SEND_CONFIRMATION_DELAY_MS: "0",
+  };
+  const calls = [];
+  const runtime = {
+    client: {
+      async sendMessage(chatId, text) {
+        calls.push(["send", chatId, text]);
+        return { id: { _serialized: `unconfirmed-${calls.length}` } };
+      },
+      async getChatById(chatId) {
+        calls.push(["getChatById", chatId]);
+        return {
+          async fetchMessages(options = {}) {
+            calls.push(["fetchMessages", options.limit]);
+            return [];
+          },
+        };
+      },
+    },
+  };
+
+  try {
+    setLocalWhatsAppRuntimeForTest("responder", runtime, {}, env);
+    setLocalWhatsAppRuntimeRecoveryHooksForTest({
+      async restartAccount(accountId, actualEnv, options) {
+        calls.push(["restart", accountId, actualEnv === env, options.reason]);
+      },
+      async startAccount(accountId, actualEnv, options) {
+        calls.push(["start", accountId, actualEnv === env, options.showNotification]);
+        return { accountId, state: "starting", ready: false };
+      },
+    });
+
+    await assert.rejects(
+      () => sendLocalWhatsAppMessage({ accountId: "responder", chatId: "chat-unconfirmed@g.us", text: "not visible", env }),
+      (error) => {
+        assert.equal(error.message, "whatsapp_send_not_confirmed");
+        return true;
+      },
+    );
+
+    assert.equal(calls.filter((call) => call[0] === "restart").length, 0);
+    assert.equal(calls.filter((call) => call[0] === "start").length, 0);
+    const events = await listEvents(env);
+    assert.equal(events.some((event) => event.type === "whatsapp_local_send_runtime_recovery_start"), false);
+  } finally {
+    await resetLocalWhatsAppBridgeForTest(env);
+  }
+});
+
 test("local whatsapp chat creation recovers unstarted Web comms before retrying later", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-chat-comms-recover-"));
   const env = {
