@@ -2776,6 +2776,7 @@ async function recoverLocalWhatsAppChatMessagesWithClient({ accountId = "", chat
     await handleRecoverableLocalWhatsAppRuntimeInvalidation(normalized, error, env, {
       source: "chat_message_recovery",
       reason: "chat_read_runtime_error",
+      force: true,
     });
     return { ok: false, accountId: normalized, chatId: id, ready: false, state: "degraded", routed: [], skipped: [], error: error?.message || String(error) };
   }
@@ -2787,6 +2788,7 @@ async function recoverLocalWhatsAppChatMessagesWithClient({ accountId = "", chat
     await handleRecoverableLocalWhatsAppRuntimeInvalidation(normalized, error, env, {
       source: "chat_message_recovery",
       reason: "chat_read_runtime_error",
+      force: true,
     });
     return { ok: false, accountId: normalized, chatId: id, ready: false, state: "degraded", routed: [], skipped: [], error: error?.message || String(error) };
   }
@@ -2951,6 +2953,7 @@ async function recoverUnreadLocalWhatsAppMessagesOnce(env = process.env, options
       await handleRecoverableLocalWhatsAppRuntimeInvalidation(normalized, error, env, {
         source: "unread_recovery",
         reason: "chat_list_runtime_error",
+        force: true,
       });
       failed.push({ accountId: normalized, reason: "list_chats_failed", error: error?.message || String(error) });
       continue;
@@ -3459,11 +3462,12 @@ async function startLocalWhatsAppAccountOnce(normalized, env = process.env, opti
   const existingRuntime = runtimes.get(normalized);
   if (existingRuntime) {
     const state = accountStates.get(normalized) || defaultAccountState(normalized);
+    const shouldResetRuntime = options.resetRuntime === true || options.reset === true || options.force === true;
     const shouldReplaceRuntime = Boolean(pairingPhoneNumber) &&
       !state.ready &&
       !state.authenticated &&
       state.state !== "pairing_code";
-    if (!shouldReplaceRuntime) return accountSnapshot(normalized, env);
+    if (!shouldResetRuntime && !shouldReplaceRuntime) return accountSnapshot(normalized, env);
     existingRuntime.clearStartupTimer?.();
     existingRuntime.clearAuthReadyTimer?.();
     existingRuntime.clearPairingCodeUnhandledRejectionHandler?.();
@@ -3472,7 +3476,7 @@ async function startLocalWhatsAppAccountOnce(normalized, env = process.env, opti
     runtimes.delete(normalized);
     await clearQr(normalized, env).catch(() => {});
     await appendEvent({
-      type: "whatsapp_local_pairing_runtime_replaced",
+      type: shouldResetRuntime ? "whatsapp_local_runtime_reset_requested" : "whatsapp_local_pairing_runtime_replaced",
       accountId: normalized,
       previousState: String(state.state || ""),
     }, env).catch(() => {});
@@ -4172,6 +4176,7 @@ export async function listLocalWhatsAppChatMessages({ accountId = "", chatId = "
     await handleRecoverableLocalWhatsAppRuntimeInvalidation(normalized, error, env, {
       source: "chat_history",
       reason: "chat_read_runtime_error",
+      force: true,
     });
     return { accountId: normalized, chatId: id, ready: false, messages: [], error: error?.message || String(error) };
   }

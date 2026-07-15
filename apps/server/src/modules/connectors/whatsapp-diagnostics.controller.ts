@@ -450,7 +450,7 @@ export class WhatsAppDiagnosticsController {
     const status = await getWhatsAppStatus();
     assertAccountForPrincipal(findAccount(await listPersistentWhatsAppConnectorAccounts({ status }), accountId), principal, "wa_account_reconnect");
     if (!localStatusMode(status)) throw httpError("wa_account_reconnect_not_supported_for_external_bridge", 400);
-    await startLocalWhatsAppAccount(accountId, process.env, { showNotification: true });
+    await startLocalWhatsAppAccount(accountId, process.env, { showNotification: true, resetRuntime: true });
     const nextStatus = await getWhatsAppStatus();
     const accounts = await listPersistentWhatsAppConnectorAccounts({ status: nextStatus });
     const account = assertAccountForPrincipal(findAccount(accounts, accountId), principal, "wa_account_read");

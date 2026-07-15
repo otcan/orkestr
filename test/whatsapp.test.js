@@ -2981,6 +2981,81 @@ test("local whatsapp recent recovery routes missed seen messages in bound chats"
   assert.equal(getChatByIdCalls, 0);
 });
 
+test("local whatsapp unread recovery resets r-state chat reads even during recovery cooldown", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-unread-r-reset-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "responder",
+    ORKESTR_WHATSAPP_AUTO_RECOVER_MS: "60000",
+  };
+  const chatId = "wa-group-r-state@g.us";
+  const calls = [];
+  const chat = {
+    id: { _serialized: chatId },
+    unreadCount: 1,
+    async fetchMessages() {
+      calls.push(["fetchMessages"]);
+      throw new Error("r");
+    },
+  };
+  const client = {
+    async getChats() {
+      calls.push(["getChats"]);
+      return [chat];
+    },
+  };
+  const thread = await createThread({
+    id: "r-state-thread",
+    name: "R State",
+    binding: {
+      connector: "whatsapp",
+      chatId,
+      responderAccountId: "responder",
+      outboundAccountId: "responder",
+      enabled: true,
+    },
+  }, env);
+
+  try {
+    setLocalWhatsAppRuntimeRecoveryHooksForTest({
+      async restartAccount(accountId, actualEnv, options) {
+        calls.push(["restart", accountId, actualEnv === env, options.reason]);
+      },
+      async startAccount(accountId, actualEnv, options) {
+        calls.push(["start", accountId, actualEnv === env, options.showNotification]);
+        return { accountId, state: "starting", ready: false };
+      },
+    });
+    const options = {
+      force: true,
+      accountIds: ["responder"],
+      clients: new Map([["responder", client]]),
+      accountStates: new Map([["responder", { state: "ready", ready: true }]]),
+      threads: [thread],
+      limit: 20,
+      nowMs: 1_780_000_000_000,
+    };
+
+    const first = await recoverUnreadLocalWhatsAppMessages(env, options);
+    const second = await recoverUnreadLocalWhatsAppMessages(env, options);
+
+    assert.equal(first.recovered[0].ok, false);
+    assert.equal(second.recovered[0].ok, false);
+    assert.equal(first.recovered[0].error, "r");
+    assert.equal(second.recovered[0].error, "r");
+    assert.deepEqual(calls.filter((call) => call[0] === "restart"), [
+      ["restart", "responder", true, "chat_read_runtime_error"],
+      ["restart", "responder", true, "chat_read_runtime_error"],
+    ]);
+    assert.deepEqual(calls.filter((call) => call[0] === "start"), [
+      ["start", "responder", true, false],
+      ["start", "responder", true, false],
+    ]);
+  } finally {
+    await resetLocalWhatsAppBridgeForTest(env);
+  }
+});
+
 test("local whatsapp recent recovery skips already forwarded broker messages", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-recent-recovery-forward-dedupe-"));
   const chatId = "wa-group-forward-dedupe@g.us";
@@ -3231,6 +3306,85 @@ test("local whatsapp phone pairing replaces an existing qr runtime", async () =>
     assert.equal(result.state, "starting");
     const events = await listEvents(env);
     assert.ok(events.find((event) => event.type === "whatsapp_local_pairing_runtime_replaced"));
+  } finally {
+    await resetLocalWhatsAppBridgeForTest(env);
+  }
+});
+
+test("local whatsapp reset start replaces an existing ready runtime without logging out", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-reset-start-runtime-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "sender",
+  };
+  const calls = [];
+  const existingRuntime = {
+    clearStartupTimer() {
+      calls.push("clear-startup-timer");
+    },
+    clearAuthReadyTimer() {
+      calls.push("clear-auth-timer");
+    },
+    clearPairingCodeUnhandledRejectionHandler() {
+      calls.push("clear-pairing-handler");
+    },
+    clearRuntimeCloseUnhandledRejectionHandler() {
+      calls.push("clear-runtime-close-handler");
+    },
+    client: {
+      async destroy() {
+        calls.push("destroy-existing");
+      },
+    },
+  };
+
+  class LocalAuth {
+    constructor(options) {
+      calls.push(["local-auth", options.clientId, options.dataPath]);
+    }
+  }
+
+  class Client {
+    constructor(options) {
+      calls.push(["client", Boolean(options.pairWithPhoneNumber)]);
+    }
+
+    on(event) {
+      calls.push(["on", event]);
+      return this;
+    }
+
+    initialize() {
+      calls.push("initialize");
+      return Promise.resolve();
+    }
+
+    async destroy() {
+      calls.push("destroy-new");
+    }
+  }
+
+  try {
+    setLocalWhatsAppRuntimeForTest("sender", existingRuntime, {
+      state: "ready",
+      ready: true,
+      authenticated: true,
+      started: true,
+    }, env);
+    const result = await startLocalWhatsAppAccount("sender", env, {
+      resetRuntime: true,
+      loadBridgeDependencies: async () => ({
+        whatsapp: { Client, LocalAuth },
+        qrcode: {},
+      }),
+    });
+
+    assert.equal(calls.includes("destroy-existing"), true);
+    assert.deepEqual(calls.find((call) => Array.isArray(call) && call[0] === "client"), ["client", false]);
+    assert.equal(calls.includes("initialize"), true);
+    assert.equal(result.state, "starting");
+    const events = await listEvents(env);
+    assert.ok(events.find((event) => event.type === "whatsapp_local_runtime_reset_requested" && event.previousState === "ready"));
   } finally {
     await resetLocalWhatsAppBridgeForTest(env);
   }
