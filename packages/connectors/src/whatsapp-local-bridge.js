@@ -1443,6 +1443,8 @@ export async function sendWhatsAppTextWithConfirmation({
   retryDelayMs = 500,
   env = process.env,
   operationTimeoutMs = null,
+  allowUnconfirmed = false,
+  confirmationSkipReason = "",
 } = {}) {
   let lastError = null;
   const attempts = Math.max(1, Number(maxAttempts || 1));
@@ -1463,6 +1465,15 @@ export async function sendWhatsAppTextWithConfirmation({
         operationTimeoutMs,
       ).catch(() => null);
       if (confirmed) return confirmed;
+      if (allowUnconfirmed) {
+        await appendEvent({
+          type: "whatsapp_local_send_confirmation_skipped",
+          chatId,
+          reason: confirmationSkipReason || "confirmation_unavailable",
+          messageId: serializedMessageId(sentMessage),
+        }, env).catch(() => {});
+        return sentMessage;
+      }
       throw unconfirmedSendError(chatId);
     } catch (error) {
       lastError = error;
@@ -5402,6 +5413,8 @@ export async function sendLocalWhatsAppMessage({ chatId = "", text = "", account
         chatId,
         text: cleanText,
         env,
+        allowUnconfirmed: state.chatOpsReady === false && state.runtimeUsable !== false,
+        confirmationSkipReason: "chat_ops_degraded",
       });
       const messageId = serializedMessageId(message);
       if (routeOwnText) {

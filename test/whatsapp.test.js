@@ -4517,6 +4517,65 @@ test("local whatsapp unconfirmed sends do not reset the runtime", async () => {
   }
 });
 
+test("local whatsapp send skips confirmation when chat ops are degraded", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-send-chatops-degraded-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "responder",
+    ORKESTR_WHATSAPP_SEND_CONFIRMATION_ATTEMPTS: "1",
+    ORKESTR_WHATSAPP_SEND_CONFIRMATION_DELAY_MS: "0",
+  };
+  const calls = [];
+  const runtime = {
+    client: {
+      async sendMessage(chatId, text) {
+        calls.push(["send", chatId, text]);
+        return { id: { _serialized: "sent-with-chatops-degraded" } };
+      },
+      async getChatById(chatId) {
+        calls.push(["getChatById", chatId]);
+        return {
+          async fetchMessages(options = {}) {
+            calls.push(["fetchMessages", options.limit]);
+            return [];
+          },
+        };
+      },
+    },
+  };
+
+  try {
+    setLocalWhatsAppRuntimeForTest("responder", runtime, {
+      chatOpsReady: false,
+      runtimeUsable: true,
+      lastChatOpsError: "r",
+    }, env);
+
+    const sent = await sendLocalWhatsAppMessage({
+      accountId: "responder",
+      chatId: "chat-confirmation-degraded@g.us",
+      text: "sent while chat ops degraded",
+      env,
+    });
+
+    assert.equal(sent.ok, true);
+    assert.equal(sent.id, "sent-with-chatops-degraded");
+    assert.deepEqual(calls, [
+      ["send", "chat-confirmation-degraded@g.us", "sent while chat ops degraded"],
+      ["getChatById", "chat-confirmation-degraded@g.us"],
+      ["fetchMessages", 20],
+    ]);
+    const events = await listEvents(env);
+    assert.ok(events.find((event) =>
+      event.type === "whatsapp_local_send_confirmation_skipped" &&
+      event.reason === "chat_ops_degraded" &&
+      event.messageId === "sent-with-chatops-degraded"
+    ));
+  } finally {
+    await resetLocalWhatsAppBridgeForTest(env);
+  }
+});
+
 test("local whatsapp chat creation recovers unstarted Web comms before retrying later", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-chat-comms-recover-"));
   const env = {
