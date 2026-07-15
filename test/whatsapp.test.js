@@ -698,11 +698,61 @@ test("local whatsapp typing clear degrades runtime and suppresses r retry loop",
   }
 });
 
-test("local whatsapp chat ops probe degrades authenticated ready runtimes that throw r", async () => {
+test("local whatsapp passive status does not run chat ops probes that throw r", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-chatops-r-"));
   const env = {
     ORKESTR_HOME: home,
     ORKESTR_WHATSAPP_ACCOUNT_IDS: "responder",
+    ORKESTR_WHATSAPP_CHAT_OPS_PROBE_INTERVAL_MS: "1000",
+    ORKESTR_WHATSAPP_CHAT_OPS_PROBE_TIMEOUT_MS: "500",
+    ORKESTR_WHATSAPP_AUTO_RECOVER_MS: "5000",
+  };
+  const calls = [];
+  const runtime = {
+    client: {
+      async getChats() {
+        calls.push(["getChats"]);
+        throw new Error("r");
+      },
+    },
+  };
+
+  try {
+    setLocalWhatsAppRuntimeForTest("responder", runtime, { lastChatOpsProbeAt: null }, env);
+    setLocalWhatsAppRuntimeRecoveryHooksForTest({
+      async restartAccount(accountId, actualEnv, options) {
+        calls.push(["restart", accountId, actualEnv === env, options.reason]);
+      },
+      async startAccount(accountId, actualEnv, options) {
+        calls.push(["start", accountId, actualEnv === env, options.showNotification]);
+        return { accountId, state: "starting", ready: false };
+      },
+    });
+
+    const status = await getLocalWhatsAppBridgeStatus(env);
+    const account = status.accounts.find((item) => item.accountId === "responder");
+    const events = await listEvents(env, 50);
+
+    assert.equal(status.state, "ready");
+    assert.equal(status.ready, true);
+    assert.equal(account.state, "ready");
+    assert.equal(account.ready, true);
+    assert.equal(account.chatOpsReady, true);
+    assert.equal(account.runtimeUsable, true);
+    assert.equal(account.error, "");
+    assert.deepEqual(calls, []);
+    assert.equal(events.some((event) => event.type === "whatsapp_local_runtime_degraded" && event.source === "chat_ops_probe"), false);
+  } finally {
+    await resetLocalWhatsAppBridgeForTest(env);
+  }
+});
+
+test("local whatsapp active status chat ops probe degrades authenticated ready runtimes that throw r", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-chatops-active-r-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "responder",
+    ORKESTR_WHATSAPP_STATUS_CHAT_OPS_PROBE: "1",
     ORKESTR_WHATSAPP_CHAT_OPS_PROBE_INTERVAL_MS: "1000",
     ORKESTR_WHATSAPP_CHAT_OPS_PROBE_TIMEOUT_MS: "500",
     ORKESTR_WHATSAPP_AUTO_RECOVER_MS: "5000",
@@ -751,11 +801,12 @@ test("local whatsapp chat ops probe degrades authenticated ready runtimes that t
   }
 });
 
-test("local whatsapp status probe does not dereference arbitrary chats by default", async () => {
+test("local whatsapp active status chat ops probe does not dereference arbitrary chats by default", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-chatops-list-only-"));
   const env = {
     ORKESTR_HOME: home,
     ORKESTR_WHATSAPP_ACCOUNT_IDS: "responder",
+    ORKESTR_WHATSAPP_STATUS_CHAT_OPS_PROBE: "1",
     ORKESTR_WHATSAPP_CHAT_OPS_PROBE_INTERVAL_MS: "1000",
   };
   const calls = [];
@@ -793,6 +844,7 @@ test("local whatsapp deep chat ops probe degrades when chat read throws r", asyn
   const env = {
     ORKESTR_HOME: home,
     ORKESTR_WHATSAPP_ACCOUNT_IDS: "responder",
+    ORKESTR_WHATSAPP_STATUS_CHAT_OPS_PROBE: "1",
     ORKESTR_WHATSAPP_CHAT_OPS_PROBE_INTERVAL_MS: "1000",
     ORKESTR_WHATSAPP_CHAT_OPS_PROBE_READ: "1",
     ORKESTR_WHATSAPP_AUTO_RECOVER_MS: "5000",
