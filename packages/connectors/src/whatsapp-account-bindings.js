@@ -145,9 +145,9 @@ function accountState(account = {}, status = {}) {
   const raw = pickString(account.state, account.status, account.ready ? "ready" : "");
   if (account.ready) return "ready";
   if (account.qrAvailable) return "qr_required";
-  if (account.authenticated) return "authenticated";
   if (account.started && (!raw || raw === "idle")) return "connecting";
   if (raw) return raw;
+  if (account.authenticated) return "authenticated";
   if (status.state === "paired") return "paired";
   if (status.state === "qr_needed") return "qr_required";
   return "inactive";
@@ -171,7 +171,8 @@ function accountReadiness(account = {}, status = {}, { runtimeConfigured = true 
   }
   const state = accountState(account, status);
   const authenticated = Boolean(account.authenticated || account.ready || state === "authenticated" || state === "ready" || state === "paired");
-  const ready = Boolean(account.ready || state === "ready" || (status.state === "paired" && authenticated));
+  const chatOpsReady = account.chatOpsReady !== false && account.runtimeUsable !== false;
+  const ready = Boolean((account.ready || state === "ready" || (status.state === "paired" && authenticated)) && chatOpsReady);
   const qrAvailable = Boolean(account.qrAvailable || state === "qr_required");
   return {
     state,
@@ -179,6 +180,8 @@ function accountReadiness(account = {}, status = {}, { runtimeConfigured = true 
     authenticated,
     started: Boolean(account.started || ready || authenticated),
     ready,
+    chatOpsReady,
+    runtimeUsable: chatOpsReady,
     commsReady: ready,
     sendReady: ready,
     inboundReady: ready,
@@ -223,6 +226,8 @@ export function normalizeWhatsAppConnectorAccount(accountId, account = {}, { sta
     commsReady: readiness.commsReady,
     sendReady: readiness.sendReady,
     inboundReady: readiness.inboundReady,
+    chatOpsReady: readiness.chatOpsReady,
+    runtimeUsable: readiness.runtimeUsable,
     qrAvailable: readiness.qrAvailable,
     qrRequired: readiness.qrRequired,
     qrUrl: pickString(account.qrUrl),
@@ -235,6 +240,8 @@ export function normalizeWhatsAppConnectorAccount(accountId, account = {}, { sta
     loadingPercent: account.loadingPercent ?? null,
     loadingMessage: pickString(account.loadingMessage),
     error: pickString(account.error),
+    lastChatOpsProbeAt: pickString(account.lastChatOpsProbeAt) || null,
+    lastChatOpsError: pickString(account.lastChatOpsError),
     updatedAt: pickString(account.updatedAt) || null,
     capabilities: Array.isArray(account.capabilities) && account.capabilities.length ? account.capabilities : ["status", "send", "receive", "pair"],
     sessionRef: pickString(account.sessionRef) || (id ? `whatsapp:${id}` : ""),

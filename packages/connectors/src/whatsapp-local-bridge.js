@@ -31,6 +31,7 @@ const inboundForwardLedgerKeys = new Set();
 const typingSessions = new Map();
 const typingStartPromises = new Map();
 const typingClearRetryTimers = new Map();
+const localWhatsAppRuntimeRecoveryInFlight = new Map();
 const inboundForwardHealthCache = new Map();
 const localWhatsAppStartPromises = new Map();
 const localWhatsAppRuntimeUnhandledRejections = new WeakSet();
@@ -1188,6 +1189,10 @@ function defaultAccountState(accountId) {
     loadingMessage: "",
     waState: "",
     error: "",
+    chatOpsReady: null,
+    runtimeUsable: null,
+    lastChatOpsProbeAt: null,
+    lastChatOpsError: "",
     lastRecoveryReason: "",
     lastRecoveryAt: null,
     recoveredChromeLocks: 0,
@@ -1213,14 +1218,19 @@ async function accountSnapshot(accountId, env = process.env) {
   const state = accountStates.get(accountId) || defaultAccountState(accountId);
   const runtime = runtimes.get(accountId);
   const hasClient = Boolean(runtime?.client);
-  const staleReadyRuntime = Boolean(state.ready && !hasClient);
-  const ready = Boolean(state.ready && hasClient);
+  const runtimeMissing = Boolean(!hasClient && (state.ready || state.state === "authenticated" || (state.authenticated && state.started)));
+  const chatOpsUnavailable = state.chatOpsReady === false || state.runtimeUsable === false;
+  const chatOpsReady = !chatOpsUnavailable;
+  const staleReadyRuntime = Boolean((state.ready || runtimeMissing) && !hasClient);
+  const ready = Boolean(state.ready && hasClient && chatOpsReady);
   const accountState = staleReadyRuntime ? "stale_runtime" : state.state;
   const qrAvailable = Boolean(state.qrAvailable || (await exists(qrPath(accountId, env))));
   return {
     ...state,
     state: accountState,
     ready,
+    chatOpsReady: ready ? true : chatOpsUnavailable ? false : null,
+    runtimeUsable: ready ? true : chatOpsUnavailable ? false : null,
     error: staleReadyRuntime ? "whatsapp_local_runtime_missing" : state.error,
     clientId: clientIdForAccount(accountId, env),
     sessionRoot: sessionRootForAccount(accountId, env),
@@ -1237,7 +1247,7 @@ export function reduceLocalWhatsAppBridgeState(accounts) {
   if (accounts.some((account) => account.pairingCode || account.state === "pairing_code")) return "pairing_code";
   if (accounts.some((account) => account.qrAvailable)) return "qr_needed";
   if (accounts.some((account) => account.state === "starting")) return "starting";
-  if (accounts.some((account) => ["startup_timeout", "auth_failure", "auth_ready_timeout", "dependency_missing", "failed", "stale_runtime"].includes(account.state))) return "failed";
+  if (accounts.some((account) => ["startup_timeout", "auth_failure", "auth_ready_timeout", "dependency_missing", "failed", "stale_runtime", "degraded"].includes(account.state))) return "failed";
   if (accounts.some((account) => account.authenticated || account.state === "authenticated")) return "authenticated";
   if (accounts.some((account) => account.state === "disconnected")) return "disconnected";
   return "idle";
@@ -1564,8 +1574,83 @@ async function suppressedLocalWhatsAppChatIds(accountId, env = process.env) {
   return suppressed;
 }
 
+function localWhatsAppChatOpsProbeIntervalMs(env = process.env) {
+  const parsed = Number(env.ORKESTR_WHATSAPP_CHAT_OPS_PROBE_INTERVAL_MS || env.WA_CHAT_OPS_PROBE_INTERVAL_MS || 30_000);
+  return Number.isFinite(parsed) ? Math.max(1000, parsed) : 30_000;
+}
+
+function localWhatsAppChatOpsProbeTimeoutMs(env = process.env) {
+  const parsed = Number(env.ORKESTR_WHATSAPP_CHAT_OPS_PROBE_TIMEOUT_MS || env.WA_CHAT_OPS_PROBE_TIMEOUT_MS || 2500);
+  return Number.isFinite(parsed) ? Math.max(500, parsed) : 2500;
+}
+
+function withLocalWhatsAppProbeTimeout(promise, label = "whatsapp_chat_ops_probe", env = process.env) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => {
+      const timer = setTimeout(() => reject(new Error(`${label}_timeout`)), localWhatsAppChatOpsProbeTimeoutMs(env));
+      if (typeof timer.unref === "function") timer.unref();
+    }),
+  ]);
+}
+
+async function probeLocalWhatsAppAccountChatOps(accountId = "", env = process.env, options = {}) {
+  const normalized = String(accountId || "").trim();
+  if (!normalized) return { ok: false, reason: "missing_account" };
+  const runtime = runtimes.get(normalized);
+  const state = accountStates.get(normalized) || defaultAccountState(normalized);
+  if (!runtime?.client || !state.ready) return { ok: false, reason: !runtime?.client ? "missing_client" : "not_ready" };
+  const nowMs = Number(options.nowMs || Date.now());
+  const lastProbeMs = Date.parse(String(state.lastChatOpsProbeAt || ""));
+  if (!options.force && Number.isFinite(lastProbeMs) && lastProbeMs > 0 && nowMs - lastProbeMs < localWhatsAppChatOpsProbeIntervalMs(env)) {
+    return { ok: state.chatOpsReady !== false && state.runtimeUsable !== false, cached: true };
+  }
+  if (typeof runtime.client.getChats !== "function") {
+    setAccountState(normalized, {
+      chatOpsReady: true,
+      runtimeUsable: true,
+      lastChatOpsProbeAt: nowIso(),
+      lastChatOpsError: "",
+    });
+    return { ok: true, skipped: "getChats_unavailable" };
+  }
+  try {
+    const chats = await withLocalWhatsAppProbeTimeout(Promise.resolve(runtime.client.getChats()), "whatsapp_get_chats", env);
+    const sample = (Array.isArray(chats) ? chats : []).find((chat) => String(chat?.id?._serialized || chat?.id || "").trim());
+    const sampleId = String(sample?.id?._serialized || sample?.id || "").trim();
+    if (sampleId && typeof runtime.client.getChatById === "function") {
+      await withLocalWhatsAppProbeTimeout(Promise.resolve(runtime.client.getChatById(sampleId)), "whatsapp_get_chat_by_id", env);
+    }
+    setAccountState(normalized, {
+      chatOpsReady: true,
+      runtimeUsable: true,
+      lastChatOpsProbeAt: nowIso(),
+      lastChatOpsError: "",
+      error: "",
+    });
+    return { ok: true, chatCount: Array.isArray(chats) ? chats.length : 0, sampleChatId: sampleId };
+  } catch (error) {
+    const recoverable = await handleRecoverableLocalWhatsAppRuntimeInvalidation(normalized, error, env, {
+      source: "chat_ops_probe",
+      reason: "chat_ops_runtime_error",
+      force: options.force === true,
+      nowMs,
+    });
+    if (!recoverable) {
+      setAccountState(normalized, {
+        chatOpsReady: false,
+        runtimeUsable: false,
+        lastChatOpsProbeAt: nowIso(),
+        lastChatOpsError: error?.message || String(error),
+      });
+    }
+    return { ok: false, error: error?.message || String(error), recoverable };
+  }
+}
+
 export async function getLocalWhatsAppBridgeStatus(env = process.env) {
   const accountIds = await managedLocalWhatsAppAccountIds(env);
+  await Promise.all(accountIds.map((accountId) => probeLocalWhatsAppAccountChatOps(accountId, env).catch(() => null)));
   const accounts = await Promise.all(accountIds.map((accountId) => accountSnapshot(accountId, env)));
   const state = reduceLocalWhatsAppBridgeState(accounts);
   const qrAccount = accounts.find((account) => account.qrAvailable);
@@ -1719,6 +1804,112 @@ function clearAccountTypingStartPromises(accountId = "") {
   }
 }
 
+function clearAccountTypingRuntimeState(accountId = "") {
+  const normalized = String(accountId || "").trim();
+  if (!normalized) return;
+  clearAccountTypingStartPromises(normalized);
+  for (const key of [...typingClearRetryTimers.keys()].filter((item) => item.startsWith(`${normalized}:`))) {
+    clearTypingClearRetryTimers(key);
+  }
+  for (const session of [...typingSessions.values()].filter((item) => item.accountId === normalized)) {
+    clearTypingSessionTimers(session);
+    typingSessions.delete(typingKey(session.accountId, session.chatId));
+  }
+}
+
+function runtimeErrorText(error) {
+  return [
+    error?.message,
+    error?.stack,
+    error?.cause?.message,
+    String(error || ""),
+  ].filter(Boolean).join("\n");
+}
+
+function recoverableRuntimeReasonText(error) {
+  return runtimeErrorText(error).toLowerCase();
+}
+
+async function handleRecoverableLocalWhatsAppRuntimeInvalidation(accountId = "", error, env = process.env, options = {}) {
+  const normalized = String(accountId || "").trim();
+  if (!normalized || !recoverableLocalWhatsAppRuntimeError(error)) return false;
+  const message = error?.message || String(error) || "whatsapp_local_runtime_degraded";
+  const current = accountStates.get(normalized) || defaultAccountState(normalized);
+  clearAccountTypingRuntimeState(normalized);
+  setAccountState(normalized, {
+    state: "degraded",
+    ready: false,
+    authenticated: Boolean(current.authenticated),
+    started: Boolean(current.started || runtimes.has(normalized)),
+    qrAvailable: false,
+    pairingCode: "",
+    pairingCodeUpdatedAt: null,
+    error: message,
+    chatOpsReady: false,
+    runtimeUsable: false,
+    lastChatOpsProbeAt: nowIso(),
+    lastChatOpsError: message,
+    lastRecoveryReason: String(options.reason || "runtime_invalidated"),
+    lastRecoveryAt: nowIso(),
+  });
+  await appendEvent({
+    type: "whatsapp_local_runtime_degraded",
+    accountId: normalized,
+    source: String(options.source || ""),
+    reason: String(options.reason || "runtime_invalidated"),
+    error: message,
+  }, env).catch(() => {});
+
+  if (localWhatsAppRuntimeRecoveryInFlight.has(normalized)) return true;
+  const cooldownMs = localWhatsAppRecoveryCooldownMs(env);
+  const nowMs = Number(options.nowMs || Date.now());
+  const lastAttemptMs = Number(localWhatsAppRecoveryAttempts.get(normalized) || 0);
+  if (!options.force && lastAttemptMs && nowMs - lastAttemptMs < cooldownMs) {
+    await appendEvent({
+      type: "whatsapp_local_runtime_recovery_skipped",
+      accountId: normalized,
+      reason: "cooldown",
+      cooldownMs,
+      source: String(options.source || ""),
+    }, env).catch(() => {});
+    return true;
+  }
+  localWhatsAppRecoveryAttempts.set(normalized, nowMs);
+  const hooks = runtimeRecoveryHooksForTest || {};
+  const restartAccount = options.restartAccount || hooks.restartAccount || restartRecoverableLocalWhatsAppAccount;
+  const startAccount = options.startAccount || hooks.startAccount || startLocalWhatsAppAccount;
+  const recovery = (async () => {
+    await appendEvent({
+      type: "whatsapp_local_runtime_recovery_start",
+      accountId: normalized,
+      reason: String(options.reason || "runtime_invalidated"),
+      source: String(options.source || ""),
+      error: message,
+    }, env).catch(() => {});
+    await restartAccount(normalized, env, { reason: String(options.reason || "runtime_invalidated") });
+    const account = await startAccount(normalized, env, { showNotification: false });
+    await appendEvent({
+      type: "whatsapp_local_runtime_recovery_started",
+      accountId: normalized,
+      state: account?.state || "",
+      ready: account?.ready === true,
+    }, env).catch(() => {});
+  })().catch(async (recoveryError) => {
+    await appendEvent({
+      type: "whatsapp_local_runtime_recovery_failed",
+      accountId: normalized,
+      error: recoveryError?.message || String(recoveryError),
+    }, env).catch(() => {});
+  }).finally(() => {
+    if (localWhatsAppRuntimeRecoveryInFlight.get(normalized) === recovery) {
+      localWhatsAppRuntimeRecoveryInFlight.delete(normalized);
+    }
+  });
+  localWhatsAppRuntimeRecoveryInFlight.set(normalized, recovery);
+  await recovery;
+  return true;
+}
+
 function armTypingSessionTtl(session, key, env = process.env) {
   if (!session) return;
   if (session.ttlTimer) clearTimeout(session.ttlTimer);
@@ -1753,6 +1944,10 @@ async function refreshTypingSession(session, key, runtime, env = process.env) {
     session.lastSyncedAt = Date.now();
     armTypingSessionTtl(session, key, env);
   } catch (error) {
+    if (await handleRecoverableLocalWhatsAppRuntimeInvalidation(session.accountId, error, env, {
+      source: "typing_refresh",
+      reason: "typing_refresh_runtime_error",
+    })) return;
     session.refreshFailureCount = Number(session.refreshFailureCount || 0) + 1;
     await appendEvent({
       type: "whatsapp_local_typing_refresh_failed",
@@ -1823,6 +2018,8 @@ function scheduleTypingClearRetries({ accountId = "", chatId = "", env = process
   const selectedAccountId = String(accountId || "").trim();
   const id = String(chatId || "").trim();
   if (!selectedAccountId || !id) return;
+  const account = accountStates.get(selectedAccountId);
+  if (account?.chatOpsReady === false || account?.runtimeUsable === false) return;
   const key = typingKey(selectedAccountId, id);
   const delays = localWhatsAppTypingClearRetryDelaysMs(env);
   clearTypingClearRetryTimers(key);
@@ -1835,11 +2032,15 @@ function scheduleTypingClearRetries({ accountId = "", chatId = "", env = process
       if (typingSessions.has(key)) return;
       const runtime = runtimes.get(selectedAccountId);
       const state = accountStates.get(selectedAccountId);
-      if (!runtime?.client || !state?.ready) return;
+      if (!runtime?.client || !state?.ready || state?.chatOpsReady === false || state?.runtimeUsable === false) return;
       sendChatTypingState(runtime, id, false, env)
         .then(() => appendEvent({ type: "whatsapp_local_typing_clear_retry", accountId: selectedAccountId, chatId: id, delayMs }, env).catch(() => {}))
-        .catch((error) => {
+        .catch(async (error) => {
           appendEvent({ type: "whatsapp_local_typing_clear_retry_failed", accountId: selectedAccountId, chatId: id, delayMs, error: error.message || String(error) }, env).catch(() => {});
+          await handleRecoverableLocalWhatsAppRuntimeInvalidation(selectedAccountId, error, env, {
+            source: "typing_clear_retry",
+            reason: "typing_clear_runtime_error",
+          });
         });
     }, delayMs);
     if (typeof timer.unref === "function") timer.unref();
@@ -1855,7 +2056,7 @@ export async function startLocalWhatsAppTyping({ chatId = "", accountId = "", en
   const id = String(chatId || "").trim();
   const runtime = selectedAccountId ? runtimes.get(selectedAccountId) : null;
   const state = selectedAccountId ? accountStates.get(selectedAccountId) : null;
-  if (!id || !runtime?.client || !state?.ready) return { ok: false, reason: !id ? "missing_chat_id" : "whatsapp_local_bridge_not_ready" };
+  if (!id || !runtime?.client || !state?.ready || state?.chatOpsReady === false || state?.runtimeUsable === false) return { ok: false, reason: !id ? "missing_chat_id" : "whatsapp_local_bridge_not_ready" };
   const key = typingKey(selectedAccountId, id);
   const inFlight = typingStartPromises.get(key);
   if (inFlight) {
@@ -1886,14 +2087,22 @@ export async function startLocalWhatsAppTyping({ chatId = "", accountId = "", en
     } catch (error) {
       if (typingSessions.get(key) === session) typingSessions.delete(key);
       clearTypingSessionTimers(session);
+      await handleRecoverableLocalWhatsAppRuntimeInvalidation(selectedAccountId, error, env, {
+        source: "typing_start",
+        reason: "typing_start_runtime_error",
+      });
       throw error;
     }
     const currentSession = typingSessions.get(key);
     if (currentSession !== session) {
       clearTypingSessionTimers(session);
       if (!currentSession) {
-        await sendChatTypingState(runtime, id, false, env).catch((error) => {
+        await sendChatTypingState(runtime, id, false, env).catch(async (error) => {
           appendEvent({ type: "whatsapp_local_typing_clear_failed", accountId: selectedAccountId, chatId: id, error: error.message || String(error) }, env).catch(() => {});
+          await handleRecoverableLocalWhatsAppRuntimeInvalidation(selectedAccountId, error, env, {
+            source: "typing_start_cancel_clear",
+            reason: "typing_clear_runtime_error",
+          });
         });
       }
       return { ok: true, active: false, cancelled: true, reused: false, accountId: selectedAccountId, chatId: id };
@@ -1928,11 +2137,16 @@ export async function stopLocalWhatsAppTyping({ chatId = "", accountId = "", env
   typingSessions.delete(key);
   const runtime = runtimes.get(selectedAccountId);
   const state = accountStates.get(selectedAccountId);
-  if (runtime?.client && state?.ready) {
-    await sendChatTypingState(runtime, id, false, env).catch((error) => {
+  if (runtime?.client && state?.ready && state?.chatOpsReady !== false && state?.runtimeUsable !== false) {
+    let recoverableClearFailure = false;
+    await sendChatTypingState(runtime, id, false, env).catch(async (error) => {
       appendEvent({ type: "whatsapp_local_typing_clear_failed", accountId: selectedAccountId, chatId: id, error: error.message || String(error) }, env).catch(() => {});
+      recoverableClearFailure = await handleRecoverableLocalWhatsAppRuntimeInvalidation(selectedAccountId, error, env, {
+        source: "typing_clear",
+        reason: "typing_clear_runtime_error",
+      });
     });
-    scheduleTypingClearRetries({ accountId: selectedAccountId, chatId: id, env });
+    if (!recoverableClearFailure) scheduleTypingClearRetries({ accountId: selectedAccountId, chatId: id, env });
   }
   if (session) await appendEvent({ type: "whatsapp_local_typing_stopped", accountId: selectedAccountId, chatId: id }, env).catch(() => {});
   return { ok: true, active: false, accountId: selectedAccountId, chatId: id };
@@ -1988,6 +2202,10 @@ export function setLocalWhatsAppRuntimeForTest(accountId = "", runtime = {}, sta
     started: true,
     qrAvailable: false,
     error: "",
+    chatOpsReady: true,
+    runtimeUsable: true,
+    lastChatOpsProbeAt: nowIso(),
+    lastChatOpsError: "",
     ...runtimeAccountIdentity(runtime),
     ...statePatch,
   });
@@ -2004,6 +2222,8 @@ export async function resetLocalWhatsAppBridgeForTest(env = process.env) {
   inboundForwardLedgerKeys.clear();
   typingStartPromises.clear();
   typingClearRetryTimers.clear();
+  localWhatsAppRuntimeRecoveryInFlight.clear();
+  localWhatsAppRecoveryAttempts.clear();
   localWhatsAppStartPromises.clear();
   runtimeRecoveryHooksForTest = null;
 }
@@ -2531,12 +2751,30 @@ async function recoverLocalWhatsAppChatMessagesWithClient({ accountId = "", chat
   }
   const client = options.client || runtimes.get(normalized)?.client;
   const state = options.state || accountStates.get(normalized) || defaultAccountState(normalized);
-  if (!client || !state.ready) {
+  if (!client || !state.ready || state.chatOpsReady === false || state.runtimeUsable === false) {
     return { ok: false, accountId: normalized, chatId: id, ready: false, state: state.state || "idle", routed: [], skipped: [] };
   }
-  const chat = options.chat || await client.getChatById(id);
+  let chat;
+  try {
+    chat = options.chat || await client.getChatById(id);
+  } catch (error) {
+    await handleRecoverableLocalWhatsAppRuntimeInvalidation(normalized, error, env, {
+      source: "chat_message_recovery",
+      reason: "chat_read_runtime_error",
+    });
+    return { ok: false, accountId: normalized, chatId: id, ready: false, state: "degraded", routed: [], skipped: [], error: error?.message || String(error) };
+  }
   const fetchLimit = Math.max(1, Math.min(100, Number(limit || 20) || 20));
-  const messages = await chat.fetchMessages({ limit: fetchLimit });
+  let messages;
+  try {
+    messages = await chat.fetchMessages({ limit: fetchLimit });
+  } catch (error) {
+    await handleRecoverableLocalWhatsAppRuntimeInvalidation(normalized, error, env, {
+      source: "chat_message_recovery",
+      reason: "chat_read_runtime_error",
+    });
+    return { ok: false, accountId: normalized, chatId: id, ready: false, state: "degraded", routed: [], skipped: [], error: error?.message || String(error) };
+  }
   const unreadCount = Number(chat?.unreadCount || 0) || 0;
   let candidates = unreadOnly && unreadCount > 0
     ? messages.slice(-Math.min(unreadCount, messages.length))
@@ -2684,9 +2922,10 @@ async function recoverUnreadLocalWhatsAppMessagesOnce(env = process.env, options
       if (!boundChatMap.has(chat.chatId)) boundChatMap.set(chat.chatId, chat);
     }
     const boundChats = [...boundChatMap.values()];
-    checked.push({ accountId: normalized, boundChats: boundChats.length, ready: Boolean(client && state.ready) });
+    const ready = Boolean(client && state.ready && state.chatOpsReady !== false && state.runtimeUsable !== false);
+    checked.push({ accountId: normalized, boundChats: boundChats.length, ready });
     if (!boundChats.length) continue;
-    if (!client || !state.ready) {
+    if (!ready) {
       skipped.push({ accountId: normalized, reason: "not_ready" });
       continue;
     }
@@ -2694,6 +2933,10 @@ async function recoverUnreadLocalWhatsAppMessagesOnce(env = process.env, options
     try {
       chats = optionMapLookup(options.chatsByAccount, normalized) || await client.getChats();
     } catch (error) {
+      await handleRecoverableLocalWhatsAppRuntimeInvalidation(normalized, error, env, {
+        source: "unread_recovery",
+        reason: "chat_list_runtime_error",
+      });
       failed.push({ accountId: normalized, reason: "list_chats_failed", error: error?.message || String(error) });
       continue;
     }
@@ -2972,9 +3215,15 @@ export async function cleanupLocalWhatsAppOrphanChromeProcesses(accountId = "", 
 function recoverableLocalWhatsAppFailure(account = {}) {
   const state = String(account?.state || "").trim();
   if (recoverableLocalWhatsAppStates.has(state)) return true;
+  if (account?.chatOpsReady === false || account?.runtimeUsable === false) return true;
   if (state !== "failed") return false;
   const error = String(account?.error || "").toLowerCase();
   return error.includes("target closed") ||
+    error.trim() === "r" ||
+    error.includes("whatsapp_local_runtime_missing") ||
+    error.includes("execution context was destroyed") ||
+    error.includes("browser has disconnected") ||
+    error.includes("page closed") ||
     error.includes("runtime.addbinding") ||
     error.includes("browser is already running") ||
     error.includes("userdatadir");
@@ -3054,14 +3303,7 @@ export async function restartRecoverableLocalWhatsAppAccount(accountId = "", env
     await runtime.client.destroy().catch(() => {});
   }
   runtimes.delete(normalized);
-  clearAccountTypingStartPromises(normalized);
-  for (const key of [...typingClearRetryTimers.keys()].filter((item) => item.startsWith(`${normalized}:`))) {
-    clearTypingClearRetryTimers(key);
-  }
-  for (const session of [...typingSessions.values()].filter((item) => item.accountId === normalized)) {
-    clearTypingSessionTimers(session);
-    typingSessions.delete(typingKey(session.accountId, session.chatId));
-  }
+  clearAccountTypingRuntimeState(normalized);
   const orphanCleanup = await cleanupLocalWhatsAppOrphanChromeProcesses(normalized, env, options);
   const cleanup = await cleanupLocalWhatsAppChromeLocks(normalized, env);
   setAccountState(normalized, {
@@ -3077,6 +3319,9 @@ export async function restartRecoverableLocalWhatsAppAccount(accountId = "", env
     loadingMessage: "",
     waState: "",
     error: "",
+    chatOpsReady: null,
+    runtimeUsable: null,
+    lastChatOpsError: "",
   });
   await appendEvent({
     type: "whatsapp_local_auto_recover_reset",
@@ -3629,6 +3874,10 @@ async function startLocalWhatsAppAccountOnce(normalized, env = process.env, opti
       loadingPercent: null,
       loadingMessage: "",
       error: "",
+      chatOpsReady: true,
+      runtimeUsable: true,
+      lastChatOpsProbeAt: nowIso(),
+      lastChatOpsError: "",
       ...runtimeAccountIdentity({ client }),
     });
     await appendEvent({ type: "whatsapp_local_ready", accountId: normalized }, env);
@@ -3778,6 +4027,9 @@ export async function logoutLocalWhatsAppAccount(accountId = "", env = process.e
     loadingMessage: "",
     waState: "",
     error: "",
+    chatOpsReady: null,
+    runtimeUsable: null,
+    lastChatOpsError: "",
   });
   await appendEvent({ type: "whatsapp_local_logged_out", accountId: normalized }, env);
   return accountSnapshot(normalized, env);
@@ -3814,6 +4066,9 @@ export async function stopLocalWhatsAppBridge(env = process.env) {
       loadingMessage: "",
       waState: "",
       error: "",
+      chatOpsReady: null,
+      runtimeUsable: null,
+      lastChatOpsError: "",
     });
   }));
   if (entries.length > 0) {
@@ -3832,7 +4087,7 @@ export async function listLocalWhatsAppChats(accountId = "", env = process.env) 
   const state = accountStates.get(normalized) || defaultAccountState(normalized);
   const knownChats = await knownLocalWhatsAppChats(normalized, env);
   const suppressedChatIds = await suppressedLocalWhatsAppChatIds(normalized, env);
-  if (!runtime?.client || !state.ready) {
+  if (!runtime?.client || !state.ready || state.chatOpsReady === false || state.runtimeUsable === false) {
     return {
       accountId: normalized,
       state: state.state || "idle",
@@ -3840,7 +4095,22 @@ export async function listLocalWhatsAppChats(accountId = "", env = process.env) 
       chats: knownChats,
     };
   }
-  const chats = await runtime.client.getChats();
+  let chats;
+  try {
+    chats = await runtime.client.getChats();
+  } catch (error) {
+    await handleRecoverableLocalWhatsAppRuntimeInvalidation(normalized, error, env, {
+      source: "chat_list",
+      reason: "chat_list_runtime_error",
+    });
+    return {
+      accountId: normalized,
+      state: "degraded",
+      ready: false,
+      chats: knownChats,
+      error: error?.message || String(error),
+    };
+  }
   const merged = new Map();
   for (const chat of knownChats) addChat(merged, chat);
   for (const chat of chats) {
@@ -3874,12 +4144,22 @@ export async function listLocalWhatsAppChatMessages({ accountId = "", chatId = "
   }
   const runtime = runtimes.get(normalized);
   const state = accountStates.get(normalized) || defaultAccountState(normalized);
-  if (!runtime?.client || !state.ready) {
+  if (!runtime?.client || !state.ready || state.chatOpsReady === false || state.runtimeUsable === false) {
     return { accountId: normalized, chatId: id, ready: false, messages: [] };
   }
   const max = Math.max(1, Math.min(100, Number(limit || 30) || 30));
-  const chat = await runtime.client.getChatById(id);
-  const messages = await chat.fetchMessages({ limit: max });
+  let chat;
+  let messages;
+  try {
+    chat = await runtime.client.getChatById(id);
+    messages = await chat.fetchMessages({ limit: max });
+  } catch (error) {
+    await handleRecoverableLocalWhatsAppRuntimeInvalidation(normalized, error, env, {
+      source: "chat_history",
+      reason: "chat_read_runtime_error",
+    });
+    return { accountId: normalized, chatId: id, ready: false, messages: [], error: error?.message || String(error) };
+  }
   return {
     accountId: normalized,
     chatId: id,
@@ -3904,7 +4184,7 @@ function localWhatsAppOperationRuntime(normalized = "") {
   return {
     runtime,
     state,
-    ready: Boolean(runtime?.client && state.ready),
+    ready: Boolean(runtime?.client && state.ready && state.chatOpsReady !== false && state.runtimeUsable !== false),
     staleReadyRuntime: Boolean(state.ready && !runtime?.client),
   };
 }
@@ -3954,7 +4234,7 @@ export async function listLocalWhatsAppChatParticipants({ accountId = "", chatId
   return {
     accountId: normalized,
     chatId: id,
-    ready: Boolean(state.ready),
+    ready: Boolean(state.ready && state.chatOpsReady !== false && state.runtimeUsable !== false),
     participants,
   };
 }
@@ -4169,7 +4449,7 @@ export async function generateLocalWhatsAppChatPicture({ accountId = "", chatId 
   }
   const runtime = runtimes.get(normalized);
   const state = accountStates.get(normalized) || defaultAccountState(normalized);
-  if (!runtime?.client || !state.ready) {
+  if (!runtime?.client || !state.ready || state.chatOpsReady === false || state.runtimeUsable === false) {
     const error = new Error("whatsapp_local_bridge_not_ready");
     error.statusCode = 400;
     throw error;
@@ -4303,13 +4583,20 @@ export async function demoteLocalWhatsAppGroupParticipants({ accountId = "", cha
 }
 
 function recoverableLocalWhatsAppRuntimeError(error) {
-  const reason = [
-    error?.message,
-    error?.stack,
-    error?.cause?.message,
-    String(error || ""),
-  ].filter(Boolean).join("\n").toLowerCase();
-  return reason.includes("detached frame") ||
+  const reason = recoverableRuntimeReasonText(error);
+  const trimmed = reason.trim();
+  return trimmed === "r" ||
+    trimmed === "error: r" ||
+    reason.includes("\nerror: r\n") ||
+    reason.endsWith("\nerror: r") ||
+    reason.includes("whatsapp_local_runtime_missing") ||
+    reason.includes("whatsapp_local_bridge_stale_runtime") ||
+    reason.includes("execution context was destroyed") ||
+    reason.includes("context destroyed") ||
+    reason.includes("browser has disconnected") ||
+    reason.includes("page closed") ||
+    reason.includes("target destroyed") ||
+    reason.includes("detached frame") ||
     reason.includes("frame was detached") ||
     reason.includes("target closed") ||
     reason.includes("session closed") ||
@@ -4398,7 +4685,7 @@ export async function sendLocalWhatsAppMessage({ chatId = "", text = "", account
     : localWhatsAppAccountIdsForEnv(env).find((id) => accountStates.get(id)?.ready);
   const runtime = selectedAccountId ? runtimes.get(selectedAccountId) : null;
   const state = selectedAccountId ? accountStates.get(selectedAccountId) : null;
-  if (!runtime?.client || !state?.ready) {
+  if (!runtime?.client || !state?.ready || state?.chatOpsReady === false || state?.runtimeUsable === false) {
     const error = new Error("whatsapp_local_bridge_not_ready");
     error.statusCode = 400;
     throw error;
