@@ -7911,6 +7911,125 @@ test("whatsapp delivery skips delayed progress overtaken by a final answer", asy
   assert.deepEqual(delivery.skipped.find((item) => item.messageId === progress.id)?.reason, "overtaken_by_final");
 });
 
+test("whatsapp delivery can suppress repeated final body when configured", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-repeated-final-body-"));
+  const env = externalBridgeEnv(home, {
+    ORKESTR_WHATSAPP_RECENT_BODY_DUPLICATE_TTL_MS: "600000",
+    ORKESTR_WHATSAPP_RECENT_BODY_DUPLICATE_FINALS: "1",
+  });
+  await createThread({ id: "thread-wa-repeated-final-body", name: "WA Repeated Final Body Thread" }, env);
+  await writeConnectorConfig("whatsapp", {
+    bridgeMode: "external",
+    bridgeUrl: "http://wa.local",
+    threadRoutes: { "chat-repeated-final-body": "thread-wa-repeated-final-body" },
+  }, env);
+
+  const routed = await routeWhatsAppInbound({ eventId: "wa-repeated-final-body-1", chatId: "chat-repeated-final-body", text: "status?" }, env);
+  const first = await appendThreadMessage("thread-wa-repeated-final-body", {
+    role: "assistant",
+    source: "codex-rollout",
+    phase: "final_answer",
+    state: "completed",
+    text: "The current status is unchanged.",
+    parentMessageId: routed.message.id,
+    connector: "whatsapp",
+    chatId: "chat-repeated-final-body",
+  }, env);
+
+  const firstCalls = [];
+  const firstDelivery = await deliverWhatsAppReplies(env, async (url, options) => {
+    firstCalls.push({ url, body: JSON.parse(options.body) });
+    return response({ ok: true, ids: ["sent-repeated-final-body-1"] });
+  });
+
+  assert.equal(firstDelivery.delivered.length, 1);
+  assert.equal(firstDelivery.delivered[0].messageId, first.id);
+  assert.deepEqual(firstCalls.map((call) => stripDebugFooter(call.body.text)), ["The current status is unchanged."]);
+
+  const secondRouted = await routeWhatsAppInbound({ eventId: "wa-repeated-final-body-2", chatId: "chat-repeated-final-body", text: "status again?" }, env);
+  const second = await appendThreadMessage("thread-wa-repeated-final-body", {
+    role: "assistant",
+    source: "codex-rollout",
+    phase: "final_answer",
+    state: "completed",
+    text: "The current status is unchanged.",
+    parentMessageId: secondRouted.message.id,
+    connector: "whatsapp",
+    chatId: "chat-repeated-final-body",
+  }, env);
+
+  const secondCalls = [];
+  const secondDelivery = await deliverWhatsAppReplies(env, async (url, options) => {
+    secondCalls.push({ url, body: JSON.parse(options.body) });
+    return response({ ok: true, ids: ["sent-repeated-final-body-2"] });
+  });
+  const outbox = await readConnectorOutbox(env);
+
+  assert.equal(secondDelivery.delivered.length, 0);
+  assert.equal(secondCalls.length, 0);
+  assert.equal(secondDelivery.skipped.find((item) => item.messageId === second.id)?.reason, "duplicate_recent_body");
+  assert.equal(outbox.jobs.some((job) => job.sourceMessageId === second.id), false);
+});
+
+test("whatsapp delivery suppresses repeated progress body across new assistant messages", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-repeated-progress-body-"));
+  const env = externalBridgeEnv(home, {
+    ORKESTR_WHATSAPP_MIRROR_PROGRESS_UPDATES: "1",
+    ORKESTR_WHATSAPP_RECENT_BODY_DUPLICATE_TTL_MS: "600000",
+  });
+  await createThread({ id: "thread-wa-repeated-progress-body", name: "WA Repeated Progress Body Thread" }, env);
+  await writeConnectorConfig("whatsapp", {
+    bridgeMode: "external",
+    bridgeUrl: "http://wa.local",
+    threadRoutes: { "chat-repeated-progress-body": "thread-wa-repeated-progress-body" },
+  }, env);
+
+  const routed = await routeWhatsAppInbound({ eventId: "wa-repeated-progress-body-1", chatId: "chat-repeated-progress-body", text: "status?" }, env);
+  const first = await appendThreadMessage("thread-wa-repeated-progress-body", {
+    role: "assistant",
+    source: "codex-rollout",
+    phase: "commentary",
+    state: "completed",
+    text: "I am still checking the WA runtime.",
+    parentMessageId: routed.message.id,
+    connector: "whatsapp",
+    chatId: "chat-repeated-progress-body",
+  }, env);
+
+  const firstCalls = [];
+  const firstDelivery = await deliverWhatsAppReplies(env, async (url, options) => {
+    firstCalls.push({ url, body: JSON.parse(options.body) });
+    return response({ ok: true, ids: ["sent-repeated-progress-body-1"] });
+  });
+
+  assert.equal(firstDelivery.delivered.length, 1);
+  assert.equal(firstDelivery.delivered[0].messageId, first.id);
+  assert.deepEqual(firstCalls.map((call) => stripDebugFooter(call.body.text)), ["I am still checking the WA runtime."]);
+
+  const second = await appendThreadMessage("thread-wa-repeated-progress-body", {
+    role: "assistant",
+    source: "codex-rollout",
+    phase: "commentary",
+    state: "completed",
+    text: "I am still checking the WA runtime.",
+    parentMessageId: routed.message.id,
+    connector: "whatsapp",
+    chatId: "chat-repeated-progress-body",
+  }, env);
+
+  const secondCalls = [];
+  const secondDelivery = await deliverWhatsAppReplies(env, async (url, options) => {
+    secondCalls.push({ url, body: JSON.parse(options.body) });
+    return response({ ok: true, ids: ["sent-repeated-progress-body-2"] });
+  });
+  const outbox = await readConnectorOutbox(env);
+
+  assert.equal(secondDelivery.delivered.length, 0);
+  assert.equal(secondCalls.length, 0);
+  assert.equal(secondDelivery.skipped.find((item) => item.messageId === second.id)?.reason, "duplicate_recent_body");
+  assert.equal(outbox.jobs.some((job) => job.sourceMessageId === second.id), false);
+});
+
 test("whatsapp delivery suppresses retryable progress once final answer is delivered", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-retry-progress-after-final-"));
   const env = externalBridgeEnv(home, {

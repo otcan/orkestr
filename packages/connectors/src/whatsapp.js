@@ -1236,6 +1236,80 @@ function outboundDeliveryRecentlySent(delivery = {}, env = process.env, nowMs = 
   return Math.abs(nowMs - deliveredAtMs) <= outboundTextEchoTtlMs(env);
 }
 
+function recentOutboundBodyDuplicateTtlMs(env = process.env) {
+  const raw = pickString(
+    env.ORKESTR_WHATSAPP_RECENT_BODY_DUPLICATE_TTL_MS,
+    env.ORKESTR_WHATSAPP_DUPLICATE_BODY_TTL_MS,
+  );
+  if (raw === "0") return 0;
+  const parsed = Number(raw || 10 * 60 * 1000);
+  return Number.isFinite(parsed) ? Math.max(1_000, Math.floor(parsed)) : 10 * 60 * 1000;
+}
+
+function recentOutboundBodyDuplicateApplies(deliveryType = "", env = process.env) {
+  const type = pickString(deliveryType).toLowerCase();
+  if (!["final", "signal"].includes(type)) return true;
+  return truthyEnv(env.ORKESTR_WHATSAPP_RECENT_BODY_DUPLICATE_FINALS);
+}
+
+function whatsappOutboundBodyKey({ chatId = "", text = "", attachments = [] } = {}) {
+  const attachmentKey = (attachments || []).map(attachmentDeliveryKey).filter(Boolean).join("\n");
+  const visibleBody = pickString(text);
+  if (!pickString(chatId) || (!visibleBody && !attachmentKey)) return "";
+  return deliveryTextKey(chatId, attachmentKey ? `${visibleBody}\nattachments:\n${attachmentKey}` : visibleBody);
+}
+
+function outboundDeliveryBodyKey(delivery = {}) {
+  return pickString(delivery.bodyKey) || whatsappOutboundBodyKey({
+    chatId: delivery.chatId,
+    text: deliveredWhatsAppPayloadText(delivery),
+    attachments: delivery.attachments,
+  });
+}
+
+function connectorOutboxBodyDuplicateRecord(job = {}) {
+  const state = pickString(job.state).toLowerCase();
+  const deliveryUncertain = state === "delivery_uncertain" || job.metadata?.deliveryUncertain === true;
+  if (state !== "delivered" && !deliveryUncertain) return null;
+  return {
+    kind: pickString(job.metadata?.kind, "thread"),
+    deliveryType: pickString(job.deliveryType),
+    threadId: pickString(job.threadId),
+    messageId: pickString(job.sourceMessageId),
+    sourceMessageId: pickString(job.sourceMessageId, job.sourceEventId),
+    connectorOutboxJobId: pickString(job.id),
+    chatId: pickString(job.chatId),
+    accountId: pickString(job.accountId),
+    bodyKey: pickString(job.metadata?.bodyKey) || whatsappOutboundBodyKey({
+      chatId: job.chatId,
+      text: job.payload?.text,
+      attachments: job.payload?.attachments,
+    }),
+    payloadText: pickString(job.payload?.text),
+    attachments: Array.isArray(job.payload?.attachments) ? job.payload.attachments : [],
+    deliveredAt: pickString(job.deliveredAt, job.terminalAt, job.updatedAt, job.failedAt, job.createdAt),
+    deliveryUncertain,
+  };
+}
+
+function recentOutboundBodyDuplicate(outboundDeliveries = [], input = {}, env = process.env) {
+  const ttlMs = recentOutboundBodyDuplicateTtlMs(env);
+  if (!ttlMs) return null;
+  if (!recentOutboundBodyDuplicateApplies(input.deliveryType, env)) return null;
+  const bodyKey = whatsappOutboundBodyKey(input);
+  if (!bodyKey) return null;
+  const nowMs = Date.now();
+  const records = [
+    ...(outboundDeliveries || []),
+    ...(input.connectorOutboxJobs || []).map((job) => connectorOutboxBodyDuplicateRecord(job)).filter(Boolean),
+  ];
+  return records.reverse().find((delivery) => {
+    if (outboundDeliveryBodyKey(delivery) !== bodyKey) return false;
+    const deliveredAtMs = Date.parse(pickString(delivery.deliveredAt, delivery.sentAt, delivery.createdAt));
+    return Number.isFinite(deliveredAtMs) && nowMs - deliveredAtMs <= ttlMs;
+  }) || null;
+}
+
 function comparableWhatsAppEchoText(value = "") {
   return comparableWhatsAppBody(comparableWhatsAppVisibleText(value));
 }
@@ -2810,6 +2884,24 @@ async function sendWhatsAppOutboundCandidate(input = {}) {
       routerUpdateType: input.routerUpdateType,
     }, input.env).catch(() => {});
   }
+  const duplicateDelivery = recentOutboundBodyDuplicate(input.outboundDeliveries, input, input.env);
+  if (duplicateDelivery) {
+    await recordRouterTraceEvent({
+      routerTraceId: pickString(input.message?.routerTraceId, input.parent?.routerTraceId),
+      turnId: pickString(input.message?.turnId, input.parent?.turnId),
+      connector: "whatsapp",
+      accountId: pickString(input.accountId, input.message?.accountId, input.parent?.accountId),
+      chatId: pickString(input.chatId, input.message?.chatId, input.parent?.chatId),
+      threadId: input.threadId || "",
+      messageId: input.messageId || input.message?.id || "",
+      phase: "skipped",
+      reason: "duplicate_recent_body",
+      deliveryType: input.deliveryType,
+      routerUpdateType: input.routerUpdateType,
+      terminal: true,
+    }, input.env).catch(() => {});
+    return { skipped: { reason: "duplicate_recent_body", duplicateOfMessageId: duplicateDelivery.messageId || "" } };
+  }
   const intentResult = await ensureWhatsAppOutboundIntent(input);
   if (intentResult.skipped) return intentResult;
   return sendClaimedWhatsAppText({
@@ -2870,6 +2962,7 @@ async function sendClaimedWhatsAppText({
       routerUpdateType: routerUpdateType || "",
       parentMessageId: parentMessageId || "",
       textKey,
+      bodyKey: whatsappOutboundBodyKey({ chatId, text, attachments }),
       routerTraceId,
       turnId,
       routerOutboxId: intent?.outboxId || "",
@@ -3194,6 +3287,7 @@ async function sendClaimedWhatsAppText({
       chatId,
       accountId,
       textKey,
+      bodyKey: whatsappOutboundBodyKey({ chatId, text, attachments }),
       payloadText: text,
       deliveredAt: new Date().toISOString(),
       bridgeResponse: payload,
@@ -5438,6 +5532,7 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
           state,
           outboundDeliveries,
           outboundIntents,
+          connectorOutboxJobs,
           deliveredIds,
           deliveredTextKeys,
           batchTextKeys,
@@ -5552,6 +5647,7 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
           state,
           outboundDeliveries,
           outboundIntents,
+          connectorOutboxJobs,
           deliveredIds,
           deliveredTextKeys,
           batchTextKeys,
@@ -5719,6 +5815,7 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
           state,
           outboundDeliveries,
           outboundIntents,
+          connectorOutboxJobs,
           deliveredIds,
           deliveredTextKeys,
           batchTextKeys,
@@ -5840,6 +5937,7 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
           state,
           outboundDeliveries,
           outboundIntents,
+          connectorOutboxJobs,
           deliveredIds,
           deliveredTextKeys,
           batchTextKeys,
@@ -5964,6 +6062,7 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
           state,
           outboundDeliveries,
           outboundIntents,
+          connectorOutboxJobs,
           deliveredIds,
           deliveredTextKeys,
           batchTextKeys,
@@ -6127,6 +6226,7 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
           state,
           outboundDeliveries,
           outboundIntents,
+          connectorOutboxJobs,
           deliveredIds,
           deliveredTextKeys,
           batchTextKeys,
@@ -6316,6 +6416,7 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
         state,
         outboundDeliveries,
         outboundIntents,
+        connectorOutboxJobs,
         deliveredIds,
         deliveredTextKeys,
         batchTextKeys,
