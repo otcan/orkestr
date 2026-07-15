@@ -3241,6 +3241,38 @@ test("local whatsapp pairing-required notification falls back to connected Gmail
   }
 });
 
+test("local whatsapp pairing-required notification resolves missing Gmail account metadata", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-pairing-email-gmail-resolved-account-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "responder",
+  };
+  const sent = [];
+
+  try {
+    const result = await notifyLocalWhatsAppPairingRequired({
+      accountId: "responder",
+      reason: "qr_required",
+    }, env, {
+      nowMs: 1_780_000_000_000,
+      readGmailToken: async () => ({ refreshToken: "refresh-token-present" }),
+      enrichGmailTokenAccount: async () => ({ account: "owner@example.test" }),
+      sendGmailMessage: async (args) => {
+        sent.push(args);
+        return { ok: true, message: { id: "gmail-sent-3" } };
+      },
+    });
+
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.recipients, ["owner@example.test"]);
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0].to, "owner@example.test");
+    assert.match(sent[0].args?.body || sent[0].body, /Reason: qr_required/);
+  } finally {
+    await resetLocalWhatsAppBridgeForTest(env);
+  }
+});
+
 test("local whatsapp recent recovery skips already forwarded broker messages", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-recent-recovery-forward-dedupe-"));
   const chatId = "wa-group-forward-dedupe@g.us";

@@ -12,7 +12,7 @@ import { publicHttpUrl, tenantPublicSetupUrl } from "../../core/src/tenant-publi
 import { getThread, listThreads } from "../../core/src/threads.js";
 import { setGeneratedLocalWhatsAppGroupPicture } from "./whatsapp-chat-picture.js";
 import { sendGmailMessage } from "./google-workspace.js";
-import { readGmailToken } from "./gmail.js";
+import { enrichGmailTokenAccount, readGmailToken } from "./gmail.js";
 import {
   bindingAccountIds as whatsappBindingAccountIds,
   whatsappBindingIsRouteEligible,
@@ -212,7 +212,11 @@ async function localWhatsAppRepairNotifyRecipients(env = process.env, options = 
   const reader = options.readGmailToken || readGmailToken;
   const token = await reader(env).catch(() => ({}));
   const gmailAccount = normalizeEmailRecipient(token?.account || token?.email || token?.emailAddress || "");
-  return gmailAccount ? [gmailAccount] : [];
+  if (gmailAccount) return [gmailAccount];
+  const enricher = options.enrichGmailTokenAccount || enrichGmailTokenAccount;
+  const resolved = await enricher(env, options.fetchImpl || fetch, options).catch(() => null);
+  const resolvedAccount = normalizeEmailRecipient(resolved?.account || resolved?.token?.account || resolved?.token?.email || "");
+  return resolvedAccount ? [resolvedAccount] : [];
 }
 
 function localWhatsAppRepairNotificationCooldownMs(env = process.env) {
