@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 import fs from "node:fs/promises";
+import { realpathSync } from "node:fs";
 import http from "node:http";
-import { URL } from "node:url";
+import { fileURLToPath, URL } from "node:url";
 
 function clean(value = "") {
   return String(value || "").trim();
@@ -245,7 +246,16 @@ export function createParentWhatsAppBridgeProxy(options = {}) {
   });
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+export function parentWhatsAppBridgeProxyLaunchedAsMain(argvEntry = process.argv[1], moduleUrl = import.meta.url) {
+  if (!argvEntry) return false;
+  try {
+    return realpathSync(argvEntry) === realpathSync(fileURLToPath(moduleUrl));
+  } catch {
+    return false;
+  }
+}
+
+if (parentWhatsAppBridgeProxyLaunchedAsMain()) {
   const env = process.env;
   const listenHost = clean(env.ORKESTR_PARENT_WA_BRIDGE_LISTEN_HOST) || "10.42.0.1";
   const listenPort = Number(env.ORKESTR_PARENT_WA_BRIDGE_LISTEN_PORT || 18913);

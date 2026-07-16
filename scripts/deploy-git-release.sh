@@ -942,9 +942,11 @@ deploy_guard_before_restart() {
 }
 
 refresh_parent_whatsapp_bridge_proxy() {
-  local bridge_service bridge_script dropin_dir dropin_file
+  local bridge_service bridge_script current_release dropin_dir dropin_file
   bridge_service="${ORKESTR_PARENT_WA_BRIDGE_SERVICE_NAME:-orkestr-parent-wa-bridge}"
-  bridge_script="$current_link/scripts/parent-whatsapp-bridge-proxy.mjs"
+  current_release="$(readlink -f "$current_link" 2>/dev/null || true)"
+  [ -n "$current_release" ] || current_release="$current_link"
+  bridge_script="$current_release/scripts/parent-whatsapp-bridge-proxy.mjs"
   [ -f "$bridge_script" ] || return 0
   systemctl cat "${bridge_service}.service" >/dev/null 2>&1 || return 0
 

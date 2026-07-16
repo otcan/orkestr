@@ -1,11 +1,27 @@
 import assert from "node:assert/strict";
+import fs from "node:fs/promises";
 import http from "node:http";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 import {
   assertParentWhatsAppBridgeSendAllowed,
   createParentWhatsAppBridgeProxy,
+  parentWhatsAppBridgeProxyLaunchedAsMain,
   parentWhatsAppBridgePolicyFromEnv,
 } from "../scripts/parent-whatsapp-bridge-proxy.mjs";
+
+test("parent WhatsApp bridge proxy recognizes a symlinked executable path", async () => {
+  const temp = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-parent-wa-proxy-"));
+  const target = path.resolve("scripts/parent-whatsapp-bridge-proxy.mjs");
+  const link = path.join(temp, "parent-whatsapp-bridge-proxy.mjs");
+  try {
+    await fs.symlink(target, link);
+    assert.equal(parentWhatsAppBridgeProxyLaunchedAsMain(link), true);
+  } finally {
+    await fs.rm(temp, { recursive: true, force: true });
+  }
+});
 
 test("parent WhatsApp bridge proxy enforces account and recipient allowlists", () => {
   const policy = parentWhatsAppBridgePolicyFromEnv({

@@ -140,6 +140,7 @@ test("release deploy script exposes versioned install, status, and rollback", as
   assert.match(script, /systemctl restart "\$\{service_name\}\.service"/);
   assert.doesNotMatch(script, /systemctl stop "\$\{service_name\}\.service"[\s\S]*systemctl start "\$\{service_name\}\.service"/);
   assert.match(script, /refresh_parent_whatsapp_bridge_proxy/);
+  assert.match(script, /current_release="\$\(readlink -f "\$current_link"/);
   assert.match(script, /ExecStart=\/usr\/bin\/node \$bridge_script/);
   assert.match(script, /systemctl restart "\$\{bridge_service\}\.service"/);
   assert.match(script, /send_release_whatsapp_notifications/);
