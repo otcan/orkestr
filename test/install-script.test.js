@@ -330,6 +330,8 @@ test("install script provisions isolated connector MCP and WhatsApp worker servi
   assert.match(migrationScript, /--activate/);
   assert.match(migrationScript, /Connector MCP cutover failed; embedded UI routing was restored/);
   assert.match(migrationScript, /ORKESTR_WHATSAPP_AUTOSTART=0/);
+  assert.match(migrationScript, /set_env_value "\$ui_env" WHATSAPP_BRIDGE_MODE "external"/);
+  assert.match(migrationScript, /set_env_value "\$ui_env" ORKESTR_WHATSAPP_AUTOSTART "0"/);
   assert.match(migrationScript, /orkestr-connectors-doctor\.mjs/);
 });
 

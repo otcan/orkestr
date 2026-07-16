@@ -179,6 +179,11 @@ set_env_value "$ui_env" ORKESTR_CONNECTORS_MCP_TOKEN "$mcp_token"
 set_env_value "$ui_env" ORKESTR_CONNECTORS_MCP_BEARER_TOKEN "$mcp_token"
 set_env_value "$ui_env" WHATSAPP_BRIDGE_TOKEN "$mcp_token"
 set_env_value "$ui_env" ORKESTR_WHATSAPP_BRIDGE_TOKEN "$mcp_token"
+set_env_value "$ui_env" WHATSAPP_BRIDGE_MODE "external"
+set_env_value "$ui_env" ORKESTR_WHATSAPP_EXTERNAL_BRIDGE_ENABLED "1"
+set_env_value "$ui_env" WHATSAPP_BRIDGE_URL "http://127.0.0.1:18914"
+set_env_value "$ui_env" ORKESTR_WHATSAPP_AUTOSTART "0"
+set_env_value "$ui_env" WHATSAPP_LOCAL_AUTOSTART "0"
 
 shared_env_directives=""
 for candidate in \
