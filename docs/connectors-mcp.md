@@ -85,6 +85,20 @@ and retains at most three connector releases.
 
 ## Migration
 
+For an existing embedded deployment, first review and then run the attended
+cutover. It preserves the existing data home, waits for the worker account to
+become usable, and restores embedded routing if verification fails:
+
+```bash
+sudo ORKESTR_HOME=/opt/orkestr/data scripts/migrate-connectors-mcp.sh \
+  --run-user orkestr
+sudo ORKESTR_HOME=/opt/orkestr/data scripts/migrate-connectors-mcp.sh \
+  --run-user orkestr --activate
+```
+
+After the one-time migration, use `scripts/deploy-connectors-release.sh` for
+connector-only releases.
+
 1. Stage and test the connector release without activation.
 2. Configure separate gateway, worker, event, and scoped bearer tokens.
 3. Drain new inputs and let active turns finish.

@@ -25,9 +25,18 @@ function healthToken(env = process.env) {
 export function assessConnectorHealth(payload = {}, env = process.env) {
   const requiredAccounts = list(env.ORKESTR_CONNECTORS_REQUIRED_WA_ACCOUNTS || "sender");
   const accounts = Array.isArray(payload.accounts) ? payload.accounts : [];
-  const missingAccounts = requiredAccounts.filter((id) => !accounts.some((account) => clean(account.accountId || account.id) === id));
+  const matchesAccount = (account, id) => [
+    account.accountId,
+    account.id,
+    account.runtimeAccountId,
+    ...(Array.isArray(account.legacyRoleAliases) ? account.legacyRoleAliases : []),
+  ].map(clean).includes(id);
+  const accountReady = (account) => account.ready === true || (
+    account.runtimeUsable === true && account.sendReady === true && account.inboundReady === true
+  );
+  const missingAccounts = requiredAccounts.filter((id) => !accounts.some((account) => matchesAccount(account, id)));
   const unavailableAccounts = requiredAccounts.filter((id) => accounts.some((account) =>
-    clean(account.accountId || account.id) === id && account.ready !== true
+    matchesAccount(account, id) && !accountReady(account)
   ));
   const issues = [
     ...(payload.ok === false ? ["gateway_unhealthy"] : []),

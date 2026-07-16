@@ -307,8 +307,10 @@ test("install script accepts optional JSON config before help", async () => {
 test("install script provisions isolated connector MCP and WhatsApp worker services", async () => {
   const script = await fs.readFile("scripts/install.sh", "utf8");
   const releaseScript = await fs.readFile("scripts/deploy-connectors-release.sh", "utf8");
+  const migrationScript = await fs.readFile("scripts/migrate-connectors-mcp.sh", "utf8");
 
   await execFileAsync("bash", ["-n", "scripts/deploy-connectors-release.sh"]);
+  await execFileAsync("bash", ["-n", "scripts/migrate-connectors-mcp.sh"]);
   assert.match(script, /ORKESTR_INSTALL_CONNECTORS_MCP/);
   assert.match(script, /scripts\/orkestr-connectors-mcp\.mjs/);
   assert.match(script, /scripts\/orkestr-wa-worker\.mjs/);
@@ -319,6 +321,10 @@ test("install script provisions isolated connector MCP and WhatsApp worker servi
   assert.match(releaseScript, /restoring the previous release/);
   assert.match(releaseScript, /ORKESTR_CONNECTORS_RELEASE_RETENTION:-3/);
   assert.doesNotMatch(releaseScript, /systemctl (?:stop|restart) orkestr(?:-ui)?\.service/);
+  assert.match(migrationScript, /--activate/);
+  assert.match(migrationScript, /Connector MCP cutover failed; embedded UI routing was restored/);
+  assert.match(migrationScript, /ORKESTR_WHATSAPP_AUTOSTART=0/);
+  assert.match(migrationScript, /orkestr-connectors-doctor\.mjs/);
 });
 
 test("bootstrap script provides an opinionated fresh VPS path", async () => {

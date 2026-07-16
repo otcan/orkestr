@@ -264,6 +264,27 @@ test("connector doctor evaluates the worker and queue rather than UI process hea
   ]);
 });
 
+test("connector doctor recognizes phone identities through their runtime alias", () => {
+  const result = assessConnectorHealth({
+    ok: true,
+    gateway: { ok: true },
+    worker: { ok: true, state: "ready" },
+    accounts: [{
+      accountId: "905555154214",
+      runtimeAccountId: "sender",
+      legacyRoleAliases: ["sender"],
+      ready: false,
+      runtimeUsable: true,
+      sendReady: true,
+      inboundReady: true,
+    }],
+    queue: { deadLetter: 0 },
+  }, { ORKESTR_CONNECTORS_REQUIRED_WA_ACCOUNTS: "sender" });
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.missingAccounts, []);
+  assert.deepEqual(result.unavailableAccounts, []);
+});
+
 test("connector doctor leaves dead letters for explicit recovery", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-connectors-doctor-"));
   const result = await runConnectorDoctor({
