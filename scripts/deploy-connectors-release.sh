@@ -30,6 +30,7 @@ retention="${ORKESTR_CONNECTORS_RELEASE_RETENTION:-3}"
 connectors_env="${ORKESTR_CONNECTORS_ENV_FILE:-/etc/orkestr/orkestr-connectors.env}"
 gateway_service="${ORKESTR_CONNECTORS_MCP_SERVICE_NAME:-orkestr-connectors-mcp}"
 worker_service="${ORKESTR_WA_WORKER_SERVICE_NAME:-orkestr-wa-worker}@sender"
+doctor_service="${ORKESTR_CONNECTORS_DOCTOR_SERVICE_NAME:-${gateway_service}-doctor}"
 node_bin="$(command -v node || echo /usr/bin/node)"
 revision="$(git -C "$source_dir" rev-parse --verify HEAD)"
 release_id="$(date -u +%Y%m%dT%H%M%SZ)-${revision:0:12}"
@@ -66,11 +67,13 @@ previous_release="$(readlink -f "$current_link" 2>/dev/null || true)"
 systemctl stop "${gateway_service}.service" "${worker_service}.service"
 switch_current_release "$release_dir"
 
-mkdir -p "/etc/systemd/system/${gateway_service}.service.d" "/etc/systemd/system/${worker_service}.service.d"
+mkdir -p "/etc/systemd/system/${gateway_service}.service.d" "/etc/systemd/system/${worker_service}.service.d" "/etc/systemd/system/${doctor_service}.service.d"
 printf '[Service]\nWorkingDirectory=%s\nExecStart=\nExecStart=%s %s/scripts/orkestr-connectors-mcp.mjs\n' \
   "$current_link" "$node_bin" "$current_link" > "/etc/systemd/system/${gateway_service}.service.d/release.conf"
 printf '[Service]\nWorkingDirectory=%s\nExecStart=\nExecStart=%s %s/scripts/orkestr-wa-worker.mjs\n' \
   "$current_link" "$node_bin" "$current_link" > "/etc/systemd/system/${worker_service}.service.d/release.conf"
+printf '[Service]\nWorkingDirectory=%s\nExecStart=\nExecStart=%s %s/scripts/orkestr-connectors-doctor.mjs --repair\n' \
+  "$current_link" "$node_bin" "$current_link" > "/etc/systemd/system/${doctor_service}.service.d/release.conf"
 systemctl daemon-reload
 systemctl start "${worker_service}.service"
 systemctl start "${gateway_service}.service"
