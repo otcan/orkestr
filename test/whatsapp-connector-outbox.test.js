@@ -864,6 +864,14 @@ test("whatsapp connector outbox replay resets intent and delivered ledger", asyn
   const job = outbox.jobs.find((item) => item.sourceMessageId === reply.id);
   assert.equal(job?.state, "delivered");
 
+  const whatsappStatePath = path.join(home, "whatsapp.json");
+  const whatsappState = JSON.parse(await fs.readFile(whatsappStatePath, "utf8"));
+  const legacyDelivery = whatsappState.outboundDeliveries.find((item) => item.messageId === reply.id);
+  delete legacyDelivery.connectorOutboxJobId;
+  delete legacyDelivery.outboxId;
+  legacyDelivery.textKey = "legacy-rendered-text-key";
+  await fs.writeFile(whatsappStatePath, JSON.stringify(whatsappState, null, 2));
+
   for (let index = 0; index < 40; index += 1) {
     await appendThreadMessage("thread-wa-outbox-replay", {
       role: "user",

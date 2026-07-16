@@ -2156,7 +2156,7 @@ function connectorOutboxJobIntentMatches(job = {}, intent = {}) {
     (!job.deliveryType || pickString(intent.deliveryType) === pickString(job.deliveryType));
 }
 
-function connectorOutboxJobDeliveryMatches(job = {}, delivery = {}) {
+function connectorOutboxJobDeliveryMatches(job = {}, delivery = {}, { ignoreTextKey = false } = {}) {
   const jobId = pickString(job.id);
   if (jobId && pickString(delivery.connectorOutboxJobId) === jobId) return true;
   const routerOutboxId = pickString(job.metadata?.routerOutboxId);
@@ -2168,7 +2168,7 @@ function connectorOutboxJobDeliveryMatches(job = {}, delivery = {}) {
     (!job.chatId || pickString(delivery.chatId) === pickString(job.chatId)) &&
     (!job.accountId || pickString(delivery.accountId) === pickString(job.accountId)) &&
     (!job.deliveryType || pickString(delivery.deliveryType) === pickString(job.deliveryType)) &&
-    (!job.metadata?.textKey || pickString(delivery.textKey) === pickString(job.metadata.textKey));
+    (ignoreTextKey || !job.metadata?.textKey || pickString(delivery.textKey) === pickString(job.metadata.textKey));
 }
 
 function deliveredConnectorOutboxEvidence(job = {}, outboundDeliveries = [], outboundIntents = []) {
@@ -2340,7 +2340,7 @@ export async function applyWhatsAppConnectorOutboxAction(job = {}, action = "", 
   let removedDeliveries = 0;
   const nextDeliveries = normalized === "retry" || normalized === "replay"
     ? outboundDeliveries.filter((delivery) => {
-        const matched = connectorOutboxJobDeliveryMatches(job, delivery);
+        const matched = connectorOutboxJobDeliveryMatches(job, delivery, { ignoreTextKey: true });
         if (matched) removedDeliveries += 1;
         return !matched;
       })
