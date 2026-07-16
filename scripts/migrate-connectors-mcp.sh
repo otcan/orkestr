@@ -70,7 +70,11 @@ if [ "$(id -u)" -ne 0 ]; then
   echo "--activate must run as root." >&2
   exit 1
 fi
-if [ -z "$run_user" ] || ! id "$run_user" >/dev/null 2>&1; then
+if [ -z "$run_user" ]; then
+  run_user="$(systemctl show "${ui_service}.service" --property=User --value)"
+  run_user="${run_user:-root}"
+fi
+if ! id "$run_user" >/dev/null 2>&1; then
   echo "A valid --run-user is required." >&2
   exit 1
 fi

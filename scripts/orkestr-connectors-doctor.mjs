@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { isMainModule } from "./main-module.mjs";
 
 const execFileAsync = promisify(execFile);
 
@@ -115,7 +116,7 @@ export async function runConnectorDoctor({ repair = false, env = process.env, fe
   return { ...assessment, repaired: true, repairedServices, health: payload };
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (isMainModule(import.meta.url)) {
   const result = await runConnectorDoctor({ repair: process.argv.includes("--repair") });
   console.log(JSON.stringify(result));
   if (!result.ok && !result.repaired) process.exitCode = 1;

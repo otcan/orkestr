@@ -35,6 +35,14 @@ revision="$(git -C "$source_dir" rev-parse --verify HEAD)"
 release_id="$(date -u +%Y%m%dT%H%M%SZ)-${revision:0:12}"
 release_dir="$releases_dir/$release_id"
 
+switch_current_release() {
+  local target="$1"
+  rm -f "${current_link}.next"
+  ln -s "$target" "${current_link}.next"
+  mv -Tf "${current_link}.next" "$current_link"
+  [ "$(readlink -f "$current_link" 2>/dev/null || true)" = "$(readlink -f "$target")" ]
+}
+
 if ! git -C "$source_dir" diff --quiet || ! git -C "$source_dir" diff --cached --quiet; then
   echo "Connector releases must be built from a committed worktree." >&2
   exit 1
@@ -56,8 +64,7 @@ fi
 
 previous_release="$(readlink -f "$current_link" 2>/dev/null || true)"
 systemctl stop "${gateway_service}.service" "${worker_service}.service"
-ln -sfn "$release_dir" "${current_link}.next"
-mv -Tf "${current_link}.next" "$current_link"
+switch_current_release "$release_dir"
 
 mkdir -p "/etc/systemd/system/${gateway_service}.service.d" "/etc/systemd/system/${worker_service}.service.d"
 printf '[Service]\nWorkingDirectory=%s\nExecStart=\nExecStart=%s %s/scripts/orkestr-connectors-mcp.mjs\n' \
@@ -78,12 +85,19 @@ if [ -z "$token" ] && [ -r "$connectors_env" ]; then
 fi
 curl_args=(--fail --silent --show-error --max-time 10)
 if [ -n "$token" ]; then curl_args+=(-H "Authorization: Bearer $token"); fi
-if ! curl "${curl_args[@]}" "${ORKESTR_CONNECTORS_MCP_HEALTH_URL:-http://127.0.0.1:18914/health}" >/dev/null; then
+health_ready=0
+for _ in $(seq 1 30); do
+  if curl "${curl_args[@]}" "${ORKESTR_CONNECTORS_MCP_HEALTH_URL:-http://127.0.0.1:18914/health}" >/dev/null 2>&1; then
+    health_ready=1
+    break
+  fi
+  sleep 1
+done
+if [ "$health_ready" -ne 1 ]; then
   echo "Connector health verification failed; restoring the previous release." >&2
   systemctl stop "${gateway_service}.service" "${worker_service}.service" || true
   if [ -n "$previous_release" ] && [ -d "$previous_release" ]; then
-    ln -sfn "$previous_release" "${current_link}.next"
-    mv -Tf "${current_link}.next" "$current_link"
+    switch_current_release "$previous_release"
     systemctl start "${worker_service}.service" "${gateway_service}.service" || true
   fi
   exit 1

@@ -8,6 +8,7 @@ import { callConnectorsMcpTool, listConnectorsMcpTools } from "../packages/conne
 import { listConnectorInboxEvents, resetConnectorInboxForTest } from "../packages/connectors/src/connector-inbox.js";
 import { deliverConnectorInboxEvent, routeWhatsAppInboundFromWorker } from "../packages/connectors/src/connectors-mcp-router.js";
 import { approvePairingChallenge } from "../packages/core/src/security.js";
+import { isMainModule } from "../scripts/main-module.mjs";
 import { createConnectorsMcpGateway } from "../scripts/orkestr-connectors-mcp.mjs";
 import { assessConnectorHealth, runConnectorDoctor } from "../scripts/orkestr-connectors-doctor.mjs";
 
@@ -241,6 +242,15 @@ test("connector MCP gateway modules remain browser-free", async () => {
   ];
   const source = (await Promise.all(files.map((file) => fs.readFile(new URL(`../${file}`, import.meta.url), "utf8")))).join("\n");
   assert.doesNotMatch(source, /whatsapp-local-bridge|whatsapp-web\.js/);
+});
+
+test("connector service entrypoints remain executable through a release symlink", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-connectors-main-"));
+  const target = path.join(root, "target.mjs");
+  const current = path.join(root, "current.mjs");
+  await fs.writeFile(target, "export default true;\n");
+  await fs.symlink(target, current);
+  assert.equal(isMainModule(new URL(`file://${target}`).href, current), true);
 });
 
 test("connector doctor evaluates the worker and queue rather than UI process health", () => {

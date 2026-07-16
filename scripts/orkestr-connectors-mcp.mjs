@@ -8,6 +8,7 @@ import { listConnectorInboxEvents } from "../packages/connectors/src/connector-i
 import { retryConnectorInbox, routeWhatsAppInboundFromWorker } from "../packages/connectors/src/connectors-mcp-router.js";
 import { requestWhatsAppWorker, whatsappWorkerHealth } from "../packages/connectors/src/whatsapp-worker-client.js";
 import { requireWaServicePolicy } from "./orkestr-wa-policy.mjs";
+import { isMainModule } from "./main-module.mjs";
 
 function clean(value = "") {
   return String(value || "").trim();
@@ -190,7 +191,7 @@ export async function runConnectorsMcpGateway(env = process.env) {
   return server;
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (isMainModule(import.meta.url)) {
   runConnectorsMcpGateway().catch((error) => {
     console.error(error?.stack || error?.message || String(error));
     process.exit(1);
