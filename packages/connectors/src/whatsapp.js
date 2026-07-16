@@ -190,13 +190,21 @@ async function fetchOk(url, fetchImpl, options = {}) {
   }
 }
 
+function hasChatOpsDegradation(accounts = []) {
+  return Array.isArray(accounts) && accounts.some((account) =>
+    account?.chatOpsReady === false || account?.runtimeUsable === false
+  );
+}
+
 function hasReadySignal(payload) {
+  const accounts = Array.isArray(payload?.accounts) ? payload.accounts : [];
+  const payloadRuntimeReady = payload?.chatOpsReady !== false && payload?.runtimeUsable !== false && !hasChatOpsDegradation(accounts);
   return Boolean(
-    payload?.ready ||
-      payload?.ok && payload?.state === "ready" ||
-      payload?.status === "ready" ||
-      payload?.clientReady ||
-      payload?.accounts?.some?.((account) =>
+    payload?.ready && payloadRuntimeReady ||
+      payload?.ok && payload?.state === "ready" && payloadRuntimeReady ||
+      payload?.status === "ready" && payloadRuntimeReady ||
+      payload?.clientReady && payloadRuntimeReady ||
+      !hasChatOpsDegradation(accounts) && payload?.accounts?.some?.((account) =>
         (account.ready || account.state === "ready" || account.status === "ready") &&
           account.chatOpsReady !== false &&
           account.runtimeUsable !== false
@@ -359,7 +367,7 @@ async function prepareExternalBridgeInlineAttachments(attachments = [], env = pr
 }
 
 function firstAccountError(accounts = []) {
-  return accounts.map((account) => account.error).find(Boolean) || "";
+  return accounts.map((account) => pickString(account.error, account.lastChatOpsError)).find(Boolean) || "";
 }
 
 function publicBridgeAccount(account = {}) {
@@ -388,6 +396,9 @@ function publicBridgeAccount(account = {}) {
     runtimeUsable: account.runtimeUsable !== false,
     lastChatOpsProbeAt: pickString(account.lastChatOpsProbeAt),
     lastChatOpsError: pickString(account.lastChatOpsError),
+    chatOpsUnavailableSince: pickString(account.chatOpsUnavailableSince),
+    lastRecoveryReason: pickString(account.lastRecoveryReason),
+    lastRecoveryAt: pickString(account.lastRecoveryAt),
     updatedAt: pickString(account.updatedAt),
     runtimeAccountId: pickString(account.runtimeAccountId, rawId),
     legacyRoleAliases: id !== rawId && rawId ? [rawId] : [],
@@ -395,19 +406,22 @@ function publicBridgeAccount(account = {}) {
 }
 
 function publicLocalBridgeHealth(health = {}) {
+  const accounts = Array.isArray(health.accounts) ? health.accounts.map(publicBridgeAccount) : [];
+  const chatOpsReady = health.chatOpsReady === false || accounts.some((account) => account.chatOpsReady === false) ? false : true;
+  const runtimeUsable = health.runtimeUsable === false || accounts.some((account) => account.runtimeUsable === false) ? false : true;
   return {
     ok: health.ok === true,
     mode: pickString(health.mode),
     state: pickString(health.state, health.status),
-    ready: Boolean(health.ready),
+    ready: Boolean(health.ready) && chatOpsReady && runtimeUsable,
     clientReady: Boolean(health.clientReady),
     authenticated: Boolean(health.authenticated),
-    chatOpsReady: health.chatOpsReady !== false,
-    runtimeUsable: health.runtimeUsable !== false,
+    chatOpsReady,
+    runtimeUsable,
     qrAvailable: Boolean(health.qrAvailable),
     qrUrl: pickString(health.qrUrl),
     maxAccounts: Number.isFinite(Number(health.maxAccounts)) ? Number(health.maxAccounts) : undefined,
-    accounts: Array.isArray(health.accounts) ? health.accounts.map(publicBridgeAccount) : [],
+    accounts,
     activeTypingCount: Number.isFinite(Number(health.activeTypingCount)) ? Number(health.activeTypingCount) : undefined,
     activeTyping: Array.isArray(health.activeTyping) ? health.activeTyping.map((session) => ({
       accountId: pickString(session.accountId),
@@ -589,6 +603,17 @@ export function mapLocalWhatsAppStatusFromHealth(health) {
     return {
       state: "paired",
       summary: "Built-in WhatsApp bridge is paired.",
+      mode: "local",
+      bridgeUrl: localWhatsAppBridgeBasePath,
+      health: publicHealth,
+      accounts,
+      qrAvailable: false,
+    };
+  }
+  if (publicHealth.chatOpsReady === false || publicHealth.runtimeUsable === false) {
+    return {
+      state: "unreachable",
+      summary: firstAccountError(health.accounts) || "Built-in WhatsApp bridge chat operations are unavailable.",
       mode: "local",
       bridgeUrl: localWhatsAppBridgeBasePath,
       health: publicHealth,

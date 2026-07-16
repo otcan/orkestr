@@ -94,13 +94,13 @@ test("WhatsApp connector accounts can be send-ready while chat ops are degraded"
 
   const sender = accounts.find((account) => account.runtimeAccountId === "sender");
   assert.ok(sender);
-  assert.equal(sender.ready, true);
+  assert.equal(sender.ready, false);
   assert.equal(sender.sendReady, true);
-  assert.equal(sender.commsReady, true);
-  assert.equal(sender.inboundReady, true);
+  assert.equal(sender.commsReady, false);
+  assert.equal(sender.inboundReady, false);
   assert.equal(sender.chatOpsReady, false);
   assert.equal(sender.runtimeUsable, true);
-  assert.equal(sender.nextAction, "none");
+  assert.equal(sender.nextAction, "recover_chat_ops");
 });
 
 test("WhatsApp bindings resolve numeric identities and legacy runtime aliases", async () => {

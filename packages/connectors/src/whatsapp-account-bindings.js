@@ -175,7 +175,8 @@ function accountReadiness(account = {}, status = {}, { runtimeConfigured = true 
   const chatOpsReady = account.chatOpsReady !== false && runtimeUsable;
   const readySignal = Boolean(account.ready || state === "ready" || (status.state === "paired" && authenticated));
   const sendReady = Boolean(readySignal && runtimeUsable);
-  const ready = sendReady;
+  const inboundReady = Boolean(sendReady && chatOpsReady);
+  const ready = inboundReady;
   const qrAvailable = Boolean(account.qrAvailable || state === "qr_required");
   return {
     state,
@@ -185,14 +186,16 @@ function accountReadiness(account = {}, status = {}, { runtimeConfigured = true 
     ready,
     chatOpsReady,
     runtimeUsable,
-    commsReady: sendReady,
+    commsReady: inboundReady,
     sendReady,
-    inboundReady: sendReady,
+    inboundReady,
     qrAvailable,
     qrRequired: qrAvailable || state === "qr_required",
     nextAction: ready
       ? "none"
-      : state === "pairing_code"
+      : sendReady && !chatOpsReady
+        ? "recover_chat_ops"
+        : state === "pairing_code"
         ? "enter_pairing_code"
         : qrAvailable || state === "qr_required"
           ? "pair_account"
@@ -245,6 +248,9 @@ export function normalizeWhatsAppConnectorAccount(accountId, account = {}, { sta
     error: pickString(account.error),
     lastChatOpsProbeAt: pickString(account.lastChatOpsProbeAt) || null,
     lastChatOpsError: pickString(account.lastChatOpsError),
+    chatOpsUnavailableSince: pickString(account.chatOpsUnavailableSince) || null,
+    lastRecoveryReason: pickString(account.lastRecoveryReason),
+    lastRecoveryAt: pickString(account.lastRecoveryAt) || null,
     updatedAt: pickString(account.updatedAt) || null,
     capabilities: Array.isArray(account.capabilities) && account.capabilities.length ? account.capabilities : ["status", "send", "receive", "pair"],
     sessionRef: pickString(account.sessionRef) || (id ? `whatsapp:${id}` : ""),
@@ -281,17 +287,27 @@ export function listWhatsAppConnectorAccounts({ status = {}, env = process.env, 
     const key = pickString(account.accountId, account.id).toLowerCase();
     if (!key) continue;
     const prior = byCanonicalId.get(key) || {};
+    const chatOpsReady = prior.chatOpsReady === false || account.chatOpsReady === false
+      ? false
+      : Boolean(prior.chatOpsReady || account.chatOpsReady);
+    const runtimeUsable = prior.runtimeUsable === false || account.runtimeUsable === false
+      ? false
+      : Boolean(prior.runtimeUsable || account.runtimeUsable);
+    const sendReady = Boolean(prior.sendReady || account.sendReady) && runtimeUsable;
+    const inboundReady = Boolean(prior.inboundReady || account.inboundReady) && runtimeUsable && chatOpsReady;
     byCanonicalId.set(key, {
       ...prior,
       ...account,
       state: prior.ready && !account.ready ? prior.state : account.state,
-      ready: Boolean(prior.ready || account.ready),
+      ready: Boolean(prior.ready || account.ready) && runtimeUsable && chatOpsReady,
       authenticated: Boolean(prior.authenticated || account.authenticated),
       paired: Boolean(prior.paired || account.paired),
       started: Boolean(prior.started || account.started),
-      commsReady: Boolean(prior.commsReady || account.commsReady),
-      sendReady: Boolean(prior.sendReady || account.sendReady),
-      inboundReady: Boolean(prior.inboundReady || account.inboundReady),
+      commsReady: inboundReady,
+      sendReady,
+      inboundReady,
+      chatOpsReady,
+      runtimeUsable,
       qrAvailable: Boolean(prior.qrAvailable || account.qrAvailable),
       runtimeConfigured: prior.runtimeConfigured === undefined
         ? account.runtimeConfigured !== false

@@ -1657,6 +1657,7 @@ async function accountSnapshot(accountId, env = process.env) {
 }
 
 export function reduceLocalWhatsAppBridgeState(accounts) {
+  if (accounts.some((account) => account.ready && (account.chatOpsReady === false || account.runtimeUsable === false))) return "failed";
   if (accounts.some((account) => account.ready)) return "ready";
   if (accounts.some((account) => account.pairingCode || account.state === "pairing_code")) return "pairing_code";
   if (accounts.some((account) => account.qrAvailable)) return "qr_needed";
@@ -2096,6 +2097,8 @@ export async function getLocalWhatsAppBridgeStatus(env = process.env, options = 
   }
   const accounts = await Promise.all(accountIds.map((accountId) => accountSnapshot(accountId, env)));
   const state = reduceLocalWhatsAppBridgeState(accounts);
+  const chatOpsReady = !accounts.some((account) => account.chatOpsReady === false);
+  const runtimeUsable = !accounts.some((account) => account.runtimeUsable === false);
   const qrAccount = accounts.find((account) => account.qrAvailable);
   const activeTyping = [...typingSessions.values()].map((session) => ({
     accountId: session.accountId,
@@ -2107,9 +2110,11 @@ export async function getLocalWhatsAppBridgeStatus(env = process.env, options = 
     ok: true,
     mode: "local",
     state,
-    ready: state === "ready",
-    clientReady: state === "ready",
+    ready: state === "ready" && chatOpsReady && runtimeUsable,
+    clientReady: state === "ready" && runtimeUsable,
     authenticated: accounts.some((account) => account.authenticated || account.ready),
+    chatOpsReady,
+    runtimeUsable,
     qrAvailable: Boolean(qrAccount),
     qrUrl: qrAccount?.qrUrl || "",
     maxAccounts: accountIds.length,
@@ -2345,6 +2350,7 @@ async function handleRecoverableLocalWhatsAppRuntimeInvalidation(accountId = "",
   const current = accountStates.get(normalized) || defaultAccountState(normalized);
   const nowMs = Number(options.nowMs || Date.now());
   if (localWhatsAppChatOpsReadyGraceActive(current, error, env, options)) {
+    const unavailableSince = current.chatOpsUnavailableSince || (Number.isFinite(nowMs) && nowMs > 0 ? new Date(nowMs).toISOString() : nowIso());
     setAccountState(normalized, {
       state: "ready",
       ready: true,
@@ -2358,6 +2364,7 @@ async function handleRecoverableLocalWhatsAppRuntimeInvalidation(accountId = "",
       runtimeUsable: true,
       lastChatOpsProbeAt: nowIso(),
       lastChatOpsError: message,
+      chatOpsUnavailableSince: unavailableSince,
       lastRecoveryReason: "chat_ops_probe_ready_grace",
     });
     await appendEvent({
@@ -2368,6 +2375,7 @@ async function handleRecoverableLocalWhatsAppRuntimeInvalidation(accountId = "",
       error: message,
       graceMs: localWhatsAppChatOpsReadyGraceMs(env),
       ageMs: nowMs - Date.parse(String(current.readyAt || current.authenticatedAt || "")),
+      unavailableSince,
     }, env).catch(() => {});
     return true;
   }
