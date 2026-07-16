@@ -9,6 +9,10 @@ Builds an isolated connector release under /opt/orkestr-connectors. Without
 --activate it only stages and verifies the release. Activation stops only the
 connector gateway/worker, updates their symlink and systemd overrides, then
 starts and verifies them. It never restarts orkestr-ui.
+
+Environment:
+  ORKESTR_CONNECTORS_HEALTH_ATTEMPTS     Health attempts after activation. Defaults to 90.
+  ORKESTR_CONNECTORS_HEALTH_RETRY_DELAY  Whole seconds between attempts. Defaults to 1.
 EOF
 }
 
@@ -32,10 +36,19 @@ gateway_service="${ORKESTR_CONNECTORS_MCP_SERVICE_NAME:-orkestr-connectors-mcp}"
 worker_service="${ORKESTR_WA_WORKER_SERVICE_NAME:-orkestr-wa-worker}@sender"
 doctor_service="${ORKESTR_CONNECTORS_DOCTOR_SERVICE_NAME:-${gateway_service}-doctor}"
 doctor_timer="${ORKESTR_CONNECTORS_DOCTOR_TIMER_NAME:-${doctor_service}}"
+health_attempts="${ORKESTR_CONNECTORS_HEALTH_ATTEMPTS:-90}"
+health_retry_delay="${ORKESTR_CONNECTORS_HEALTH_RETRY_DELAY:-1}"
 node_bin="$(command -v node || echo /usr/bin/node)"
 revision="$(git -C "$source_dir" rev-parse --verify HEAD)"
 release_id="$(date -u +%Y%m%dT%H%M%SZ)-${revision:0:12}"
 release_dir="$releases_dir/$release_id"
+
+case "$health_attempts" in
+  ''|*[!0-9]*|0) echo "ORKESTR_CONNECTORS_HEALTH_ATTEMPTS must be a positive integer." >&2; exit 2 ;;
+esac
+case "$health_retry_delay" in
+  ''|*[!0-9]*|0) echo "ORKESTR_CONNECTORS_HEALTH_RETRY_DELAY must be a positive integer." >&2; exit 2 ;;
+esac
 
 switch_current_release() {
   local target="$1"
@@ -99,14 +112,14 @@ if [ -z "$token" ] && [ -r "$connectors_env" ]; then
   token="${token#\'}"
 fi
 health_ready=0
-for _ in $(seq 1 30); do
+for _ in $(seq 1 "$health_attempts"); do
   if ORKESTR_CONNECTORS_MCP_TOKEN="$token" \
       ORKESTR_CONNECTORS_MCP_HEALTH_URL="${ORKESTR_CONNECTORS_MCP_HEALTH_URL:-http://127.0.0.1:18914/health}" \
       "$node_bin" "$release_dir/scripts/orkestr-connectors-doctor.mjs" >/dev/null 2>&1; then
     health_ready=1
     break
   fi
-  sleep 1
+  sleep "$health_retry_delay"
 done
 if [ "$health_ready" -ne 1 ]; then
   echo "Connector health verification failed; restoring the previous release." >&2
