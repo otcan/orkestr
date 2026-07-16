@@ -5078,6 +5078,29 @@ export async function listLocalWhatsAppChats(accountId = "", env = process.env) 
   try {
     chats = await runtime.client.getChats();
   } catch (error) {
+    const browserStore = localWhatsAppBareRRuntimeError(error)
+      ? await probeLocalWhatsAppBrowserStore(runtime.client, env)
+      : null;
+    if (browserStore?.ok) {
+      markLocalWhatsAppAccountReady(normalized, runtime.client, {
+        lastRecoveryReason: "browser_store_chat_list_fallback",
+        lastRecoveryAt: nowIso(),
+      });
+      await appendEvent({
+        type: "whatsapp_local_chat_list_browser_store_ready",
+        accountId: normalized,
+        chatCount: browserStore.chatCount ?? null,
+        knownChatCount: knownChats.length,
+        appState: String(browserStore.appState || ""),
+      }, env).catch(() => {});
+      return {
+        accountId: normalized,
+        state: "ready",
+        ready: true,
+        chats: knownChats,
+        fallback: "browser_store",
+      };
+    }
     await handleRecoverableLocalWhatsAppRuntimeInvalidation(normalized, error, env, {
       source: "chat_list",
       reason: "chat_list_runtime_error",

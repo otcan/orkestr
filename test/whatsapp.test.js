@@ -892,6 +892,75 @@ test("local whatsapp active status accepts browser store when getChats throws r"
   }
 });
 
+test("local whatsapp chat list accepts browser store when getChats throws r", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-chat-list-store-fallback-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "responder",
+    ORKESTR_WHATSAPP_CHAT_OPS_PROBE_TIMEOUT_MS: "500",
+  };
+  const calls = [];
+  const previousWindow = globalThis.window;
+  const runtime = {
+    client: {
+      async getChats() {
+        calls.push(["getChats"]);
+        throw new Error("r");
+      },
+      pupPage: {
+        async evaluate(fn) {
+          calls.push(["browserStore"]);
+          globalThis.window = {
+            require(name) {
+              if (name === "WAWebCollections") {
+                return {
+                  Chat: {
+                    getModelsArray() {
+                      return [{ id: { _serialized: "chat-one@g.us" } }];
+                    },
+                  },
+                  Msg: {},
+                };
+              }
+              throw new Error(`unexpected require ${name}`);
+            },
+            AuthStore: { AppState: { state: "CONNECTED" } },
+            WWebJS: {},
+          };
+          try {
+            return await fn();
+          } finally {
+            globalThis.window = previousWindow;
+          }
+        },
+      },
+    },
+  };
+
+  try {
+    setLocalWhatsAppRuntimeForTest("responder", runtime, { lastChatOpsProbeAt: null }, env);
+
+    const chats = await listLocalWhatsAppChats("responder", env);
+    const status = await getLocalWhatsAppBridgeStatus(env);
+    const account = status.accounts.find((item) => item.accountId === "responder");
+    const events = await listEvents(env, 50);
+
+    assert.equal(chats.ready, true);
+    assert.equal(chats.state, "ready");
+    assert.equal(chats.fallback, "browser_store");
+    assert.equal(status.state, "ready");
+    assert.equal(account.ready, true);
+    assert.equal(account.runtimeUsable, true);
+    assert.equal(account.lastChatOpsError, "");
+    assert.deepEqual(calls, [["getChats"], ["browserStore"]]);
+    assert.ok(events.find((event) => event.type === "whatsapp_local_chat_list_browser_store_ready" && event.accountId === "responder"));
+    assert.equal(events.some((event) => event.type === "whatsapp_local_runtime_degraded" && event.source === "chat_list"), false);
+  } finally {
+    globalThis.window = previousWindow;
+    await resetLocalWhatsAppBridgeForTest(env);
+  }
+});
+
 test("local whatsapp active status resets stale chat ops r degradation", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-chatops-stale-r-reset-"));
   const nowMs = Date.parse("2026-07-16T07:45:00.000Z");
