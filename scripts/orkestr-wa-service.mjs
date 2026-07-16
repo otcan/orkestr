@@ -11,7 +11,9 @@ import {
   listLocalWhatsAppChats,
   listLocalWhatsAppChatParticipants,
   logoutLocalWhatsAppAccount,
+  localWhatsAppUnreadRecoveryIntervalMs,
   recoverLocalWhatsAppChatMessages,
+  recoverUnreadLocalWhatsAppMessages,
   sendLocalWhatsAppMessage,
   startConfiguredLocalWhatsAppAccounts,
   startLocalWhatsAppAccount,
@@ -232,6 +234,7 @@ const defaultBridge = {
   listLocalWhatsAppChatParticipants,
   logoutLocalWhatsAppAccount,
   recoverLocalWhatsAppChatMessages,
+  recoverUnreadLocalWhatsAppMessages,
   sendLocalWhatsAppMessage,
   startLocalWhatsAppAccount,
 };
@@ -409,7 +412,14 @@ export function createOrkestrWaService({ env = process.env, bridge = defaultBrid
 export async function runOrkestrWaService(env = process.env) {
   const server = createOrkestrWaService({ env });
   const socketPath = waWorkerSocketPath(env);
+  const recoveryTimer = setInterval(() => {
+    void recoverUnreadLocalWhatsAppMessages(env).catch((error) => {
+      console.error(`orkestr-wa inbound recovery failed: ${error?.message || String(error)}`);
+    });
+  }, localWhatsAppUnreadRecoveryIntervalMs(env));
+  recoveryTimer.unref?.();
   const shutdown = async () => {
+    clearInterval(recoveryTimer);
     server.close();
     await stopLocalWhatsAppBridge(env).catch(() => {});
     if (socketPath) await fs.unlink(socketPath).catch(() => {});
@@ -419,6 +429,9 @@ export async function runOrkestrWaService(env = process.env) {
   process.once("SIGTERM", shutdown);
   await startConfiguredLocalWhatsAppAccounts(env).catch((error) => {
     console.error(`orkestr-wa autostart failed: ${error?.stack || error?.message || String(error)}`);
+  });
+  void recoverUnreadLocalWhatsAppMessages(env, { force: true }).catch((error) => {
+    console.error(`orkestr-wa startup inbound recovery failed: ${error?.message || String(error)}`);
   });
   if (socketPath) {
     await fs.mkdir(path.dirname(socketPath), { recursive: true, mode: 0o750 });

@@ -657,7 +657,7 @@ async function jobsCommand(argv, ctx) {
   const subcommand = argv[0]?.startsWith("--") ? "run" : argv[0] || "run";
   const rest = subcommand === "run" && argv[0]?.startsWith("--") ? argv : argv.slice(1);
   if (subcommand === "run" || subcommand === "poll") return runJobsCommand(rest, ctx);
-  throw new Error("Usage: orkestr jobs run [--owner-user-id user] [--target-thread thread] [--max-results N] [--json]");
+  throw new Error("Usage: orkestr jobs run [--owner-user-id user] [--target-thread thread] [--max-results N] [--signal-mode record_only|notify_passively] [--json]");
 }
 
 async function whatsappCommand(argv, ctx) {
@@ -1319,6 +1319,7 @@ async function runJobsCommand(argv, ctx) {
     gmailSource: flagValue(argv, "--gmail-source") || "",
     maxResults: maxResults ? Number(maxResults) : undefined,
     fitThreshold: flagValue(argv, "--fit-threshold") || "",
+    signalMode: flagValue(argv, "--signal-mode") || flagValue(argv, "--signal-delivery-mode") || "",
     present: argv.includes("--no-present") ? false : true,
     gogFallback: argv.includes("--no-gog-fallback") ? false : undefined,
   };
@@ -1977,7 +1978,7 @@ Advanced:
   orkestr whatsapp codex [status|connect] --thread <thread> [--account id] [--json]
   orkestr whatsapp bind-thread <thread> --name <group name> [--wa-participant jid]... [--json]
   orkestr timers [list|doctor|run <timer-id>] [--json]
-  orkestr jobs run [--owner-user-id user] [--target-thread thread] [--max-results N] [--json]
+  orkestr jobs run [--owner-user-id user] [--target-thread thread] [--max-results N] [--signal-mode record_only|notify_passively] [--json]
   orkestr connect approve <code> [--json]
   orkestr security [challenges|sessions|approve <challenge-id>|reject <challenge-id>|revoke <session-id|all>] [--json]
   orkestr desktop [share [slug]|approve <challenge-id>] [--json]

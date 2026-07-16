@@ -412,6 +412,34 @@ test("WhatsApp router doctor repairs orphaned WhatsApp final answers by enqueuin
   assert.equal(finalJobsAgain.length, 1);
 });
 
+test("WhatsApp router doctor ignores historical finals without live mirror intent", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-router-doctor-historical-final-"));
+  const env = runtimeEnv(home);
+  const thread = await createWhatsAppThread(env);
+  const final = await appendThreadMessage(thread.id, {
+    id: "wa-historical-final-1",
+    role: "assistant",
+    source: "codex-app-server-import",
+    connector: "whatsapp",
+    chatId: "chat-1",
+    accountId: "responder",
+    phase: "final_answer",
+    state: "completed",
+    text: "Historical final with no routed WhatsApp turn.",
+    createdAt: "2026-06-01T10:00:00.000Z",
+    updatedAt: "2026-06-01T10:00:00.000Z",
+  }, env);
+
+  const report = await doctorWhatsAppRouter({
+    thread: thread.id,
+    env,
+    whatsappStatusFn: readyWhatsAppStatus,
+    listConnectorOutboxJobsFn: listConnectorOutboxJobs,
+  });
+
+  assert.equal(report.checks.some((check) => check.code === "orphaned_whatsapp_final_answer" && check.messageId === final.id), false);
+});
+
 test("WhatsApp router doctor reports queued input while runtime is sleeping", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-router-doctor-sleeping-"));
   const env = runtimeEnv(home);

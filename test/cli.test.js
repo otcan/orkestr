@@ -1033,6 +1033,8 @@ test("CLI runs Gmail jobs poll through the server API", async () => {
     "5",
     "--gmail-source",
     "oauth",
+    "--signal-mode",
+    "record_only",
     "--no-gog-fallback",
   ], {
     stdout,
@@ -1054,6 +1056,7 @@ test("CLI runs Gmail jobs poll through the server API", async () => {
     targetThreadId: "firat-jobs",
     gmailSource: "oauth",
     maxResults: 5,
+    signalMode: "record_only",
     present: true,
     gogFallback: false,
   });

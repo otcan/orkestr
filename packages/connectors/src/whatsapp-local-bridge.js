@@ -1381,7 +1381,13 @@ function withSendOperationTimeout(promise, label, env = process.env, overrideMs 
 }
 
 function serializedMessageId(message = {}) {
-  return String(message?.id?._serialized || message?.id || "");
+  const direct = serializedId(message?.id);
+  if (direct) return direct;
+  const remote = serializedId(message?.id?.remote || message?.from || message?.to);
+  const local = serializedId(message?.id?.id || message?.messageId);
+  const participant = serializedId(message?.id?.participant || message?.author);
+  if (!remote && !local && !participant) return "";
+  return [message?.fromMe === true ? "true" : "false", remote, local, participant].filter(Boolean).join("_");
 }
 
 function pairingCodeRequestError(error) {
@@ -1954,7 +1960,18 @@ function hasInboundFailureNotice(accountId, eventId) {
 function serializedId(value) {
   if (!value) return "";
   if (typeof value === "string") return value.trim();
-  return String(value._serialized || value.user || value.id || "").trim();
+  if (typeof value === "number" || typeof value === "bigint") return String(value);
+  for (const candidate of [value._serialized, value.user]) {
+    if (typeof candidate !== "string" && typeof candidate !== "number" && typeof candidate !== "bigint") continue;
+    const text = String(candidate).trim();
+    if (text && text !== "[object Object]") return text;
+  }
+  if (value.id && value.id !== value) {
+    const nested = serializedId(value.id);
+    if (nested) return nested;
+  }
+  const rendered = typeof value.toString === "function" ? String(value.toString()).trim() : "";
+  return rendered && rendered !== "[object Object]" ? rendered : "";
 }
 
 function runtimeAccountIdentity(runtime = {}) {
@@ -2635,6 +2652,16 @@ async function handleRecoverableLocalWhatsAppRuntimeInvalidation(accountId = "",
       }, env).catch(() => {});
       return true;
     }
+  }
+  if (source.startsWith("typing_")) {
+    await appendEvent({
+      type: "whatsapp_local_typing_runtime_recovery_deferred",
+      accountId: normalized,
+      source,
+      reason: String(options.reason || "typing_runtime_error"),
+      error: message,
+    }, env).catch(() => {});
+    return false;
   }
   clearAccountTypingRuntimeState(normalized);
   setAccountState(normalized, {
@@ -3577,7 +3604,18 @@ async function readCachedLocalWhatsAppChatMessages(client, chatId = "", limit = 
     const serialized = (value) => {
       if (!value) return "";
       if (typeof value === "string") return value;
-      return String(value._serialized || value.id?._serialized || value.user || value.toString?.() || "");
+      const candidates = [value._serialized, value.id?._serialized, value.user];
+      for (const candidate of candidates) {
+        if (typeof candidate !== "string" && typeof candidate !== "number") continue;
+        const text = String(candidate).trim();
+        if (text && text !== "[object Object]") return text;
+      }
+      if (value.id && value.id !== value) {
+        const nested = serialized(value.id);
+        if (nested) return nested;
+      }
+      const rendered = typeof value.toString === "function" ? String(value.toString()).trim() : "";
+      return rendered && rendered !== "[object Object]" ? rendered : "";
     };
     const serializeMessage = (message) => {
       let model = null;
@@ -3594,11 +3632,20 @@ async function readCachedLocalWhatsAppChatMessages(client, chatId = "", limit = 
         }
       }
       const messageId = model?.id || message?.id || {};
+      const remote = serialized(messageId.remote || message?.id?.remote || model?.from || message?.from || targetChatId);
+      const local = serialized(messageId.id || model?.messageId || message?.messageId);
+      const participant = serialized(messageId.participant || model?.author || message?.author);
+      const stableMessageId = serialized(messageId) || [
+        Boolean(model?.id?.fromMe ?? message?.id?.fromMe ?? model?.fromMe) ? "true" : "false",
+        remote,
+        local,
+        participant,
+      ].filter(Boolean).join("_");
       return {
         id: {
           ...messageId,
-          _serialized: serialized(messageId) || serialized(message?.id),
-          remote: serialized(messageId.remote || message?.id?.remote || targetChatId),
+          _serialized: stableMessageId,
+          remote,
         },
         body: String(model?.body || model?.caption || model?.pollName || model?.eventName || ""),
         type: String(model?.type || message?.type || ""),
@@ -4977,6 +5024,14 @@ async function startLocalWhatsAppAccountOnce(normalized, env = process.env, opti
     markLocalWhatsAppAccountReady(normalized, client);
     await appendEvent({ type: "whatsapp_local_ready", accountId: normalized }, env);
     void recoverOutboundAfterLocalWhatsAppReady(normalized, env);
+    void recoverUnreadLocalWhatsAppMessages(env, {
+      force: true,
+      accountIds: [normalized],
+    }).catch((error) => appendEvent({
+      type: "whatsapp_local_ready_inbound_recovery_failed",
+      accountId: normalized,
+      error: error?.message || String(error),
+    }, env).catch(() => {}));
   });
 
   client.on("auth_failure", async (message) => {

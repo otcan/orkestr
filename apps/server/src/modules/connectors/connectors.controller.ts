@@ -69,6 +69,7 @@ import {
 } from "../../../../../packages/connectors/src/whatsapp-local-bridge.js";
 import { runWithRoutedWhatsAppTyping } from "../../../../../packages/connectors/src/whatsapp-router-typing.js";
 import { findWhatsAppAccountByAnyId } from "../../../../../packages/connectors/src/whatsapp-account-identity.js";
+import { whatsappWorkerConversation } from "../../../../../packages/connectors/src/whatsapp-worker-client.js";
 import { writeConnectorConfig } from "../../../../../packages/storage/src/config.js";
 import { dataPaths } from "../../../../../packages/storage/src/paths.js";
 import { ensureAttachmentsArray, httpError } from "../../common/http.js";
@@ -689,13 +690,18 @@ export class ConnectorsController {
   @HttpCode(200)
   async whatsappBridgeRecoverChat(@Req() request: any, @Param("accountId") accountId: string, @Param("chatId") chatId: string, @Body() body: Record<string, unknown> = {}) {
     await assertWhatsAppBridgeBindingAcl("manage", { accountId, chatId }, request.orkestrMachineAuthContext);
-    return recoverLocalWhatsAppChatMessages({
-      accountId: await resolveLocalWhatsAppRuntimeAccountId(accountId),
-      chatId,
+    const runtimeAccountId = await resolveLocalWhatsAppRuntimeAccountId(accountId);
+    const options = {
       limit: Number(body.limit || 20) || 20,
       unreadOnly: body.unreadOnly !== false,
       markSeen: body.markSeen !== false,
-    });
+    };
+    try {
+      return await whatsappWorkerConversation(runtimeAccountId, chatId, "recover", options, process.env);
+    } catch (error: any) {
+      if (!["whatsapp_worker_unavailable", "whatsapp_worker_unconfigured"].includes(String(error?.message || ""))) throw error;
+      return recoverLocalWhatsAppChatMessages({ accountId: runtimeAccountId, chatId, ...options });
+    }
   }
 
   @Post("whatsapp/bridge/accounts/:accountId/chats/:chatId/admins")

@@ -24,7 +24,11 @@ export function whatsappAssistantFinal(message = {}, whatsappMessageFn = null) {
     lower(message.state) === "completed" &&
     lower(message.phase || "final_answer") === "final_answer" &&
     (typeof whatsappMessageFn === "function" ? whatsappMessageFn(message) : lower(message.connector) === "whatsapp") &&
-    Boolean(clean(message.chatId));
+    Boolean(clean(message.chatId)) &&
+    Boolean(
+      clean(message.routerTraceId || message.turnId || message.mirrorOutboxJobId) ||
+      ["pending_whatsapp_mirror", "delivered", "delivery_uncertain", "failed_retryable"].includes(lower(message.deliveryState))
+    );
 }
 
 export function deliveredWhatsAppMirrorMessage(message = {}) {

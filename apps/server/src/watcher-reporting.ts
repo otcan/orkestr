@@ -80,7 +80,6 @@ export function reportWhatsAppDeliveryAnomalies(env = process.env, source: strin
     ? result.skippedSummary.reasons
     : null;
   const badReasons = new Set([
-    "missing_outbound_intent",
     "missing_chat_id",
     "missing_text",
     "mirroring_disabled",

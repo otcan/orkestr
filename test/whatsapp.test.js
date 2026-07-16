@@ -683,7 +683,7 @@ test("local whatsapp typing refresh exhaustion stops stale sessions", async () =
   }
 });
 
-test("local whatsapp typing clear degrades runtime and suppresses r retry loop", async () => {
+test("local whatsapp typing clear failure never restarts the inbound transport", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-typing-clear-r-"));
   const env = {
     ORKESTR_HOME: home,
@@ -744,15 +744,16 @@ test("local whatsapp typing clear degrades runtime and suppresses r retry loop",
     const events = await listEvents(env, 50);
 
     assert.equal(status.activeTypingCount, 0);
-    assert.equal(account.ready, false);
-    assert.equal(account.chatOpsReady, false);
-    assert.equal(account.runtimeUsable, false);
-    assert.equal(account.error, "r");
-    assert.deepEqual(calls.filter((call) => call[0] === "restart"), [["restart", "responder", true, "typing_clear_runtime_error"]]);
-    assert.deepEqual(calls.filter((call) => call[0] === "start"), [["start", "responder", true, false]]);
+    assert.equal(account.ready, true);
+    assert.equal(account.chatOpsReady, true);
+    assert.equal(account.runtimeUsable, true);
+    assert.equal(account.error, "");
+    assert.deepEqual(calls.filter((call) => call[0] === "restart"), []);
+    assert.deepEqual(calls.filter((call) => call[0] === "start"), []);
     assert.ok(events.find((event) => event.type === "whatsapp_local_typing_clear_failed" && event.error === "r"));
-    assert.ok(events.find((event) => event.type === "whatsapp_local_runtime_degraded" && event.source === "typing_clear"));
-    assert.equal(events.some((event) => event.type === "whatsapp_local_typing_clear_retry_failed"), false);
+    assert.ok(events.find((event) => event.type === "whatsapp_local_typing_runtime_recovery_deferred" && event.source === "typing_clear"));
+    assert.equal(events.some((event) => event.type === "whatsapp_local_runtime_degraded" && event.source === "typing_clear"), false);
+    assert.equal(events.filter((event) => event.type === "whatsapp_local_typing_clear_retry_failed").length, 3);
   } finally {
     await resetLocalWhatsAppBridgeForTest(env);
   }
@@ -3834,7 +3835,12 @@ test("local whatsapp unread recovery falls back to cached browser messages on r-
   const env = { ORKESTR_HOME: home, ORKESTR_WHATSAPP_ACCOUNT_IDS: "responder" };
   const chatId = "wa-group-cache-fallback@g.us";
   const messageModel = {
-    id: { _serialized: "cached-r-message-1", remote: chatId, fromMe: false, participant: "wa-contact-one@c.us" },
+    id: {
+      id: "cached-r-message-1",
+      remote: { _serialized: chatId },
+      fromMe: false,
+      participant: { _serialized: "wa-contact-one@c.us" },
+    },
     body: "cached hello after r",
     from: chatId,
     author: "wa-contact-one@c.us",
@@ -3932,6 +3938,7 @@ test("local whatsapp unread recovery falls back to cached browser messages on r-
     assert.equal(result.recovered[0].fetched, 1);
     assert.equal(messages.at(-1).text, "cached hello after r");
     assert.equal(messages.at(-1).source, "whatsapp_inbound");
+    assert.equal(messages.at(-1).externalId, "cached-r-message-1");
   } finally {
     globalThis.window = previousWindow;
   }
