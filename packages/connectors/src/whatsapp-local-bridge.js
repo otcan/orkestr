@@ -4285,10 +4285,16 @@ async function startLocalWhatsAppAccountOnce(normalized, env = process.env, opti
   };
   let runtimeFailureHandling = false;
   let runtimeCloseUnhandledRejectionHandler = null;
+  let runtimeCloseUncaughtExceptionHandler = null;
   const clearRuntimeCloseUnhandledRejectionHandler = () => {
-    if (!runtimeCloseUnhandledRejectionHandler) return;
-    process.off("unhandledRejection", runtimeCloseUnhandledRejectionHandler);
-    runtimeCloseUnhandledRejectionHandler = null;
+    if (runtimeCloseUnhandledRejectionHandler) {
+      process.off("unhandledRejection", runtimeCloseUnhandledRejectionHandler);
+      runtimeCloseUnhandledRejectionHandler = null;
+    }
+    if (runtimeCloseUncaughtExceptionHandler) {
+      process.off("uncaughtException", runtimeCloseUncaughtExceptionHandler);
+      runtimeCloseUncaughtExceptionHandler = null;
+    }
   };
   const handleClientRuntimeFailure = async (error, source = "client_error") => {
     const runtime = runtimes.get(normalized);
@@ -4334,8 +4340,7 @@ async function startLocalWhatsAppAccountOnce(normalized, env = process.env, opti
     clearRuntimeCloseUnhandledRejectionHandler();
   };
   const armRuntimeCloseUnhandledRejectionHandler = () => {
-    if (runtimeCloseUnhandledRejectionHandler) return;
-    runtimeCloseUnhandledRejectionHandler = (error, promise) => {
+    const handleRuntimeCloseProcessError = (error, source = "unhandled_rejection", promise = null) => {
       if (!recoverableLocalWhatsAppRuntimeError(error)) return;
       const rejectionKey = promise && (typeof promise === "object" || typeof promise === "function") ? promise : null;
       if (rejectionKey) {
@@ -4353,9 +4358,25 @@ async function startLocalWhatsAppAccountOnce(normalized, env = process.env, opti
         }, env).catch(() => {});
         return;
       }
-      void handleClientRuntimeFailure(error, "unhandled_rejection");
+      void handleClientRuntimeFailure(error, source);
+      return true;
     };
-    process.on("unhandledRejection", runtimeCloseUnhandledRejectionHandler);
+    if (!runtimeCloseUnhandledRejectionHandler) {
+      runtimeCloseUnhandledRejectionHandler = (error, promise) => {
+        handleRuntimeCloseProcessError(error, "unhandled_rejection", promise);
+      };
+      process.on("unhandledRejection", runtimeCloseUnhandledRejectionHandler);
+    }
+    if (!runtimeCloseUncaughtExceptionHandler) {
+      runtimeCloseUncaughtExceptionHandler = (error) => {
+        if (handleRuntimeCloseProcessError(error, "uncaught_exception")) return;
+        clearRuntimeCloseUnhandledRejectionHandler();
+        process.nextTick(() => {
+          throw error;
+        });
+      };
+      process.prependListener("uncaughtException", runtimeCloseUncaughtExceptionHandler);
+    };
   };
   const scheduleAuthReadyTimer = () => {
     clearAuthReadyTimer();
