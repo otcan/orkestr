@@ -2653,12 +2653,14 @@ async function handleRecoverableLocalWhatsAppRuntimeInvalidation(accountId = "",
       return true;
     }
   }
-  if (source.startsWith("typing_")) {
+  if (source.startsWith("typing_") || source === "unread_recovery") {
     await appendEvent({
-      type: "whatsapp_local_typing_runtime_recovery_deferred",
+      type: source === "unread_recovery"
+        ? "whatsapp_local_unread_runtime_recovery_deferred"
+        : "whatsapp_local_typing_runtime_recovery_deferred",
       accountId: normalized,
       source,
-      reason: String(options.reason || "typing_runtime_error"),
+      reason: String(options.reason || (source === "unread_recovery" ? "unread_recovery_runtime_error" : "typing_runtime_error")),
       error: message,
     }, env).catch(() => {});
     return false;
@@ -3686,6 +3688,7 @@ async function recoverLocalWhatsAppChatMessagesWithClient({ accountId = "", chat
   }
   const client = options.client || runtimes.get(normalized)?.client;
   const state = options.state || accountStates.get(normalized) || defaultAccountState(normalized);
+  const failureSource = String(options.failureSource || "chat_message_recovery");
   if (!client || !state.ready || state.chatOpsReady === false || state.runtimeUsable === false) {
     return { ok: false, accountId: normalized, chatId: id, ready: false, state: state.state || "idle", routed: [], skipped: [] };
   }
@@ -3708,13 +3711,14 @@ async function recoverLocalWhatsAppChatMessagesWithClient({ accountId = "", chat
     }
     if (recoverableLocalWhatsAppChatReadRuntimeError(error)) {
       await handleRecoverableLocalWhatsAppRuntimeInvalidation(normalized, error, env, {
-        source: "chat_message_recovery",
+        source: failureSource,
         reason: "chat_read_runtime_error",
         force: true,
       });
-      return { ok: false, accountId: normalized, chatId: id, ready: false, state: "degraded", routed: [], skipped: [], error: error?.message || String(error) };
+      const recoveryDeferred = failureSource === "unread_recovery";
+      return { ok: false, accountId: normalized, chatId: id, ready: recoveryDeferred, state: recoveryDeferred ? (state.state || "ready") : "degraded", routed: [], skipped: [], error: error?.message || String(error) };
     }
-    await appendLocalWhatsAppChatReadFailure(normalized, id, error, env, { source: "chat_message_recovery" });
+    await appendLocalWhatsAppChatReadFailure(normalized, id, error, env, { source: failureSource });
     return { ok: false, accountId: normalized, chatId: id, ready: true, state: state.state || "ready", routed: [], skipped: [], error: error?.message || String(error) };
   }
   const fetchLimit = Math.max(1, Math.min(100, Number(limit || 20) || 20));
@@ -3732,13 +3736,14 @@ async function recoverLocalWhatsAppChatMessagesWithClient({ accountId = "", chat
     } else {
       if (recoverableLocalWhatsAppChatReadRuntimeError(error)) {
         await handleRecoverableLocalWhatsAppRuntimeInvalidation(normalized, error, env, {
-          source: "chat_message_recovery",
+          source: failureSource,
           reason: "chat_read_runtime_error",
           force: true,
         });
-        return { ok: false, accountId: normalized, chatId: id, ready: false, state: "degraded", routed: [], skipped: [], error: error?.message || String(error) };
+        const recoveryDeferred = failureSource === "unread_recovery";
+        return { ok: false, accountId: normalized, chatId: id, ready: recoveryDeferred, state: recoveryDeferred ? (state.state || "ready") : "degraded", routed: [], skipped: [], error: error?.message || String(error) };
       }
-      await appendLocalWhatsAppChatReadFailure(normalized, id, error, env, { source: "chat_message_recovery" });
+      await appendLocalWhatsAppChatReadFailure(normalized, id, error, env, { source: failureSource });
       return { ok: false, accountId: normalized, chatId: id, ready: true, state: state.state || "ready", routed: [], skipped: [], error: error?.message || String(error) };
     }
   }
@@ -3930,7 +3935,7 @@ async function recoverUnreadLocalWhatsAppMessagesOnce(env = process.env, options
           limit,
           unreadOnly: true,
           markSeen: true,
-        }, env, { client, state, chat: entry.chat });
+        }, env, { client, state, chat: entry.chat, failureSource: "unread_recovery" });
         recovered.push(result);
       } catch (error) {
         failed.push({ accountId: normalized, chatId: entry.chatId, error: error?.message || String(error) });
@@ -3945,7 +3950,7 @@ async function recoverUnreadLocalWhatsAppMessagesOnce(env = process.env, options
           unreadOnly: false,
           markSeen: false,
           sinceMs: recentSinceMs,
-        }, env, { client, state, chat: entry.chat });
+        }, env, { client, state, chat: entry.chat, failureSource: "unread_recovery" });
         if (result.candidates > 0 || result.routed.length > 0) recovered.push({ ...result, recoveryMode: "recent" });
       } catch (error) {
         failed.push({ accountId: normalized, chatId: entry.chatId, error: error?.message || String(error) });

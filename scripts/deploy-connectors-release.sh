@@ -13,6 +13,7 @@ starts and verifies them. It never restarts orkestr-ui.
 Environment:
   ORKESTR_CONNECTORS_HEALTH_ATTEMPTS     Health attempts after activation. Defaults to 90.
   ORKESTR_CONNECTORS_HEALTH_RETRY_DELAY  Whole seconds between attempts. Defaults to 1.
+  ORKESTR_CONNECTORS_HEALTH_STABLE_SUCCESSES Consecutive healthy checks required. Defaults to 3.
 EOF
 }
 
@@ -38,6 +39,7 @@ doctor_service="${ORKESTR_CONNECTORS_DOCTOR_SERVICE_NAME:-${gateway_service}-doc
 doctor_timer="${ORKESTR_CONNECTORS_DOCTOR_TIMER_NAME:-${doctor_service}}"
 health_attempts="${ORKESTR_CONNECTORS_HEALTH_ATTEMPTS:-90}"
 health_retry_delay="${ORKESTR_CONNECTORS_HEALTH_RETRY_DELAY:-1}"
+health_stable_successes="${ORKESTR_CONNECTORS_HEALTH_STABLE_SUCCESSES:-3}"
 node_bin="$(command -v node || echo /usr/bin/node)"
 revision="$(git -C "$source_dir" rev-parse --verify HEAD)"
 release_id="$(date -u +%Y%m%dT%H%M%SZ)-${revision:0:12}"
@@ -48,6 +50,9 @@ case "$health_attempts" in
 esac
 case "$health_retry_delay" in
   ''|*[!0-9]*|0) echo "ORKESTR_CONNECTORS_HEALTH_RETRY_DELAY must be a positive integer." >&2; exit 2 ;;
+esac
+case "$health_stable_successes" in
+  ''|*[!0-9]*|0) echo "ORKESTR_CONNECTORS_HEALTH_STABLE_SUCCESSES must be a positive integer." >&2; exit 2 ;;
 esac
 
 switch_current_release() {
@@ -112,12 +117,18 @@ if [ -z "$token" ] && [ -r "$connectors_env" ]; then
   token="${token#\'}"
 fi
 health_ready=0
+health_successes=0
 for _ in $(seq 1 "$health_attempts"); do
   if ORKESTR_CONNECTORS_MCP_TOKEN="$token" \
       ORKESTR_CONNECTORS_MCP_HEALTH_URL="${ORKESTR_CONNECTORS_MCP_HEALTH_URL:-http://127.0.0.1:18914/health}" \
       "$node_bin" "$release_dir/scripts/orkestr-connectors-doctor.mjs" >/dev/null 2>&1; then
-    health_ready=1
-    break
+    health_successes=$((health_successes + 1))
+    if [ "$health_successes" -ge "$health_stable_successes" ]; then
+      health_ready=1
+      break
+    fi
+  else
+    health_successes=0
   fi
   sleep "$health_retry_delay"
 done
