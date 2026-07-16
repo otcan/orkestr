@@ -5112,6 +5112,20 @@ function messagesAfterMirrorCursor(messages = [], cursor = 0, env = process.env)
   return mergeCursorScanMessages(cursorMessages, recentApiSessionReplies);
 }
 
+function activeWhatsAppOutboundIntentMessageIds(state = null, messageSetKey = "") {
+  const ids = new Set();
+  for (const intent of state?.outboundIntents || []) {
+    if (String(intent?.messageSetKey || "") !== String(messageSetKey || "")) continue;
+    const status = String(intent?.status || "pending").trim().toLowerCase();
+    if (status === "delivered" || status === "skipped" || status === "cancelled") continue;
+    for (const value of [intent?.messageId, intent?.sourceMessageId, intent?.parentMessageId]) {
+      const id = pickString(value);
+      if (id) ids.add(id);
+    }
+  }
+  return ids;
+}
+
 async function readWhatsAppMirrorMessageSet(filePath, messageSetKey, state = null, env = process.env) {
   const cursor = Number(outboundMirrorCursorMap(state?.outboundMirrorCursors || []).get(messageSetKey)?.cursor || 0) || 0;
   const stat = await fs.stat(filePath).catch(() => null);
@@ -5127,7 +5141,11 @@ async function readWhatsAppMirrorMessageSet(filePath, messageSetKey, state = nul
   ) return null;
   const messages = await readJson(filePath, []);
   whatsappMirrorMessageFileCache.set(cacheKey, { signature, stateSignature });
-  return messagesAfterMirrorCursor(messages, cursor, env);
+  const activeMessageIds = activeWhatsAppOutboundIntentMessageIds(state, messageSetKey);
+  const activeIntentMessages = activeMessageIds.size
+    ? messages.filter((message) => activeMessageIds.has(pickString(message?.id)))
+    : [];
+  return mergeCursorScanMessages(messagesAfterMirrorCursor(messages, cursor, env), activeIntentMessages);
 }
 
 function messageSetHasActiveWhatsAppOutboundIntent(state = null, messageSetKey = "") {

@@ -848,6 +848,18 @@ test("whatsapp connector outbox replay resets intent and delivered ledger", asyn
   const job = outbox.jobs.find((item) => item.sourceMessageId === reply.id);
   assert.equal(job?.state, "delivered");
 
+  for (let index = 0; index < 40; index += 1) {
+    await appendThreadMessage("thread-wa-outbox-replay", {
+      role: "user",
+      source: "web",
+      state: "completed",
+      text: `later message ${index}`,
+    }, runtimeEnv);
+  }
+  await deliverWhatsAppReplies(runtimeEnv, async () => {
+    throw new Error("cursor advancement should not send unrelated messages");
+  });
+
   const replay = await applyConnectorOutboxJobAction(job.id, "replay", { reason: "operator replay", operator: "tester" }, runtimeEnv);
   const whatsapp = await applyWhatsAppConnectorOutboxAction(replay.job, "replay", { reason: "operator replay" }, runtimeEnv);
   assert.equal(replay.job.state, "pending");
