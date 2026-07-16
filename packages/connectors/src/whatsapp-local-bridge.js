@@ -1618,6 +1618,35 @@ function setAccountState(accountId, patch) {
   return next;
 }
 
+function markLocalWhatsAppAccountReady(accountId, client, patch = {}) {
+  const current = accountStates.get(accountId) || defaultAccountState(accountId);
+  const timestamp = nowIso();
+  const identity = runtimeAccountIdentity({ client });
+  return setAccountState(accountId, {
+    state: "ready",
+    ready: true,
+    authenticated: true,
+    started: true,
+    authenticatedAt: current.authenticatedAt || timestamp,
+    readyAt: timestamp,
+    qrAvailable: false,
+    pairingCode: "",
+    pairingCodeUpdatedAt: null,
+    loadingPercent: null,
+    loadingMessage: "",
+    error: "",
+    chatOpsReady: true,
+    runtimeUsable: true,
+    lastChatOpsProbeAt: timestamp,
+    lastChatOpsError: "",
+    chatOpsUnavailableSince: null,
+    phoneNumber: identity.phoneNumber || current.phoneNumber || "",
+    contactId: identity.contactId || current.contactId || "",
+    pushName: identity.pushName || current.pushName || "",
+    ...patch,
+  });
+}
+
 async function accountSnapshot(accountId, env = process.env, options = {}) {
   let state = accountStates.get(accountId) || defaultAccountState(accountId);
   const runtime = runtimes.get(accountId);
@@ -1660,6 +1689,21 @@ async function accountSnapshot(accountId, env = process.env, options = {}) {
       });
       state = accountStates.get(accountId) || defaultAccountState(accountId);
     }
+  }
+  if (
+    hasClient &&
+    state.ready !== true &&
+    state.authenticated === true &&
+    state.chatOpsReady === true &&
+    state.runtimeUsable === true &&
+    !state.qrAvailable &&
+    !state.pairingCode &&
+    !state.error
+  ) {
+    state = markLocalWhatsAppAccountReady(accountId, runtime.client, {
+      lastRecoveryReason: state.lastRecoveryReason || "chat_ops_ready_promoted",
+      lastRecoveryAt: state.lastRecoveryAt || nowIso(),
+    });
   }
   const runtimeMissing = Boolean(!hasClient && (state.ready || state.state === "authenticated" || (state.authenticated && state.started)));
   const runtimeUnavailable = state.runtimeUsable === false;
@@ -2120,8 +2164,37 @@ async function probeLocalWhatsAppAccountChatOps(accountId = "", env = process.en
   if (!normalized) return { ok: false, reason: "missing_account" };
   const runtime = runtimes.get(normalized);
   const state = accountStates.get(normalized) || defaultAccountState(normalized);
-  if (!runtime?.client || !state.ready) return { ok: false, reason: !runtime?.client ? "missing_client" : "not_ready" };
+  if (!runtime?.client) return { ok: false, reason: "missing_client" };
   const nowMs = Number(options.nowMs || Date.now());
+  if (!state.ready) {
+    if (state.authenticated || state.started) {
+      const browserStore = await probeLocalWhatsAppBrowserStore(runtime.client, env);
+      const appStateConnected = String(browserStore?.appState || "").trim().toUpperCase() === "CONNECTED";
+      if (browserStore?.ok && (state.authenticated || appStateConnected)) {
+        markLocalWhatsAppAccountReady(normalized, runtime.client, {
+          lastRecoveryReason: "browser_store_ready_fallback",
+          lastRecoveryAt: nowIso(),
+        });
+        await appendEvent({
+          type: "whatsapp_local_browser_store_ready_promoted",
+          accountId: normalized,
+          source: String(options.source || "chat_ops_probe"),
+          previousState: String(state.state || ""),
+          authenticated: Boolean(state.authenticated),
+          chatCount: browserStore.chatCount ?? null,
+          appState: String(browserStore.appState || ""),
+        }, env).catch(() => {});
+        return { ok: true, fallback: "browser_store_ready", chatCount: browserStore.chatCount ?? null };
+      }
+      return {
+        ok: false,
+        reason: "not_ready",
+        browserStoreReason: String(browserStore?.reason || ""),
+        appState: String(browserStore?.appState || ""),
+      };
+    }
+    return { ok: false, reason: "not_ready" };
+  }
   const lastProbeMs = Date.parse(String(state.lastChatOpsProbeAt || ""));
   if (!options.force && Number.isFinite(lastProbeMs) && lastProbeMs > 0 && nowMs - lastProbeMs < localWhatsAppChatOpsProbeIntervalMs(env)) {
     return { ok: state.chatOpsReady !== false && state.runtimeUsable !== false, cached: true };
@@ -2157,13 +2230,9 @@ async function probeLocalWhatsAppAccountChatOps(accountId = "", env = process.en
       ? await probeLocalWhatsAppBrowserStore(runtime.client, env)
       : null;
     if (browserStore?.ok) {
-      setAccountState(normalized, {
-        chatOpsReady: true,
-        runtimeUsable: true,
-        lastChatOpsProbeAt: nowIso(),
-        lastChatOpsError: "",
-        chatOpsUnavailableSince: null,
-        error: "",
+      markLocalWhatsAppAccountReady(normalized, runtime.client, {
+        lastRecoveryReason: state.lastRecoveryReason || "browser_store_chat_ops_fallback",
+        lastRecoveryAt: state.lastRecoveryAt || nowIso(),
       });
       await appendEvent({
         type: "whatsapp_local_chat_ops_probe_browser_store_ready",
@@ -4766,25 +4835,7 @@ async function startLocalWhatsAppAccountOnce(normalized, env = process.env, opti
     clearReadyFallbackTimer();
     clearConnectedPageReadyFallbackTimer();
     await clearQr(normalized, env);
-    setAccountState(normalized, {
-      state: "ready",
-      ready: true,
-      authenticated: true,
-      started: true,
-      readyAt: nowIso(),
-      qrAvailable: false,
-      pairingCode: "",
-      pairingCodeUpdatedAt: null,
-      loadingPercent: null,
-      loadingMessage: "",
-      error: "",
-      chatOpsReady: true,
-      runtimeUsable: true,
-      lastChatOpsProbeAt: nowIso(),
-      lastChatOpsError: "",
-      chatOpsUnavailableSince: null,
-      ...runtimeAccountIdentity({ client }),
-    });
+    markLocalWhatsAppAccountReady(normalized, client);
     await appendEvent({ type: "whatsapp_local_ready", accountId: normalized }, env);
     void recoverOutboundAfterLocalWhatsAppReady(normalized, env);
   });

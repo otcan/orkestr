@@ -1607,6 +1607,108 @@ test("local whatsapp ready fallback accepts an already connected page after rest
   assert.equal(localWhatsAppConnectedPageReadyFallbackEligible({ ready: false, state: "starting" }, { hasSynced: "function", appState: "OPENING" }), false);
 });
 
+test("local whatsapp status promotes an authenticated degraded account after chat ops recover", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-degraded-chatops-ready-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "sender",
+  };
+  const runtime = {
+    client: {
+      info: {
+        wid: { _serialized: "491763240000@c.us", user: "491763240000", server: "c.us" },
+        pushname: "Sender",
+      },
+    },
+  };
+
+  try {
+    setLocalWhatsAppRuntimeForTest("sender", runtime, {
+      state: "degraded",
+      ready: false,
+      authenticated: true,
+      started: true,
+      error: "",
+      chatOpsReady: true,
+      runtimeUsable: true,
+      lastRecoveryReason: "typing_clear_runtime_error",
+      lastRecoveryAt: "2026-07-16T09:00:52.296Z",
+    }, env);
+
+    const status = await getLocalWhatsAppBridgeStatus(env);
+    const account = status.accounts.find((item) => item.accountId === "sender");
+
+    assert.equal(status.state, "ready");
+    assert.equal(status.ready, true);
+    assert.equal(account.state, "ready");
+    assert.equal(account.ready, true);
+    assert.equal(account.chatOpsReady, true);
+    assert.equal(account.runtimeUsable, true);
+    assert.equal(account.lastRecoveryReason, "typing_clear_runtime_error");
+  } finally {
+    await resetLocalWhatsAppBridgeForTest(env);
+  }
+});
+
+test("local whatsapp status promotes a connected browser store when ready event stalls", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-browser-store-ready-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "sender",
+    ORKESTR_WHATSAPP_CHAT_OPS_PROBE_TIMEOUT_MS: "500",
+  };
+  const calls = [];
+  const runtime = {
+    client: {
+      info: {
+        wid: { _serialized: "491763240000@c.us", user: "491763240000", server: "c.us" },
+        pushname: "Sender",
+      },
+      pupPage: {
+        async evaluate() {
+          calls.push("browser-store");
+          return {
+            ok: true,
+            appState: "CONNECTED",
+            chatCount: 7,
+            hasChatStore: true,
+            hasMsgStore: true,
+          };
+        },
+      },
+    },
+  };
+
+  try {
+    setLocalWhatsAppRuntimeForTest("sender", runtime, {
+      state: "authenticated",
+      ready: false,
+      authenticated: true,
+      started: true,
+      error: "",
+      chatOpsReady: null,
+      runtimeUsable: null,
+      lastChatOpsProbeAt: null,
+    }, env);
+
+    const status = await getLocalWhatsAppBridgeStatus(env, { probeChatOps: true, force: true });
+    const account = status.accounts.find((item) => item.accountId === "sender");
+    const events = await listEvents(env, 20);
+
+    assert.deepEqual(calls, ["browser-store"]);
+    assert.equal(status.state, "ready");
+    assert.equal(status.ready, true);
+    assert.equal(account.state, "ready");
+    assert.equal(account.ready, true);
+    assert.equal(account.chatOpsReady, true);
+    assert.equal(account.runtimeUsable, true);
+    assert.equal(account.lastRecoveryReason, "browser_store_ready_fallback");
+    assert.ok(events.find((event) => event.type === "whatsapp_local_browser_store_ready_promoted" && event.accountId === "sender"));
+  } finally {
+    await resetLocalWhatsAppBridgeForTest(env);
+  }
+});
+
 test("stored external whatsapp bridge config is ignored unless the host opts in", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-external-disabled-"));
   const env = { ORKESTR_HOME: home };
