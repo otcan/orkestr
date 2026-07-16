@@ -1633,6 +1633,32 @@ async function accountSnapshot(accountId, env = process.env) {
       lastRecoveryAt: state.lastRecoveryAt || nowIso(),
     });
   }
+  if (
+    hasClient &&
+    state.ready === true &&
+    state.chatOpsReady === false &&
+    state.runtimeUsable !== false &&
+    localWhatsAppBareRRuntimeError(state.lastChatOpsError || state.error || "")
+  ) {
+    const nowMs = Date.now();
+    const error = new Error(state.lastChatOpsError || state.error || "r");
+    const resetAfterMs = localWhatsAppChatOpsResetAfterMs(env);
+    const lastProbeMs = Date.parse(String(state.lastChatOpsProbeAt || ""));
+    const recentlyMarkedGrace = state.lastRecoveryReason === "chat_ops_probe_ready_grace" &&
+      Number.isFinite(resetAfterMs) &&
+      Number.isFinite(lastProbeMs) &&
+      lastProbeMs > 0 &&
+      nowMs - lastProbeMs < resetAfterMs;
+    if (!recentlyMarkedGrace && localWhatsAppChatOpsResetDue(state, error, env, { source: "chat_ops_probe", nowMs })) {
+      await handleRecoverableLocalWhatsAppRuntimeInvalidation(accountId, error, env, {
+        source: "chat_ops_probe",
+        reason: "chat_ops_runtime_error",
+        force: true,
+        nowMs,
+      });
+      state = accountStates.get(accountId) || defaultAccountState(accountId);
+    }
+  }
   const runtimeMissing = Boolean(!hasClient && (state.ready || state.state === "authenticated" || (state.authenticated && state.started)));
   const runtimeUnavailable = state.runtimeUsable === false;
   const staleReadyRuntime = Boolean((state.ready || runtimeMissing) && !hasClient);
