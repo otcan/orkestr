@@ -393,16 +393,25 @@ export function normalizeConnectorOutboxJob(input = {}, env = process.env) {
 }
 
 function mergeJob(existing = {}, next = {}) {
+  const withWinner = (winner, loser) => ({
+    ...loser,
+    ...winner,
+    createdAt: existing.createdAt || next.createdAt,
+    metadata: {
+      ...(loser.metadata || {}),
+      ...(winner.metadata || {}),
+    },
+  });
   const existingRank = statusRank(existing.state);
   const nextRank = statusRank(next.state);
   if (existingRank > nextRank && connectorOutboxTerminalState(existing.state)) return existing;
-  if (nextRank > existingRank) return { ...existing, ...next, createdAt: existing.createdAt || next.createdAt };
-  if (existingRank > nextRank) return { ...next, ...existing, createdAt: existing.createdAt || next.createdAt };
+  if (nextRank > existingRank) return withWinner(next, existing);
+  if (existingRank > nextRank) return withWinner(existing, next);
   const existingUpdated = dateMs(existing.updatedAt || existing.terminalAt || existing.createdAt);
   const nextUpdated = dateMs(next.updatedAt || next.terminalAt || next.createdAt);
   return nextUpdated >= existingUpdated
-    ? { ...existing, ...next, createdAt: existing.createdAt || next.createdAt }
-    : { ...next, ...existing, createdAt: existing.createdAt || next.createdAt };
+    ? withWinner(next, existing)
+    : withWinner(existing, next);
 }
 
 export function mergeConnectorOutboxJobs(existing = [], next = [], env = process.env) {

@@ -5445,12 +5445,20 @@ function whatsappOutboxMaxRetryAttempts(env = process.env) {
   );
 }
 
+function whatsappConnectorOutboxGenerationMs(job = {}) {
+  return Math.max(
+    timeMs(job.createdAt),
+    timeMs(job.metadata?.retryRequestedAt),
+    timeMs(job.metadata?.replayRequestedAt),
+  );
+}
+
 function stalePendingWhatsAppConnectorOutboxJob(job = {}, env = process.env) {
   if (pickString(job.state).toLowerCase() !== "pending") return false;
   const maxAgeMs = whatsappPendingOutboxMaxAgeMs(env);
   if (maxAgeMs <= 0) return false;
-  const createdMs = timeMs(job.createdAt);
-  return createdMs > 0 && Date.now() - createdMs > maxAgeMs;
+  const generationMs = whatsappConnectorOutboxGenerationMs(job);
+  return generationMs > 0 && Date.now() - generationMs > maxAgeMs;
 }
 
 function staleRetryableWhatsAppConnectorOutboxJob(job = {}, env = process.env) {
@@ -5468,8 +5476,8 @@ function staleRetryableWhatsAppConnectorOutboxJob(job = {}, env = process.env) {
     };
   }
   const maxAgeMs = whatsappRetryableOutboxMaxAgeMs(env);
-  const createdMs = timeMs(job.createdAt);
-  if (maxAgeMs > 0 && createdMs > 0 && Date.now() - createdMs > maxAgeMs) {
+  const generationMs = whatsappConnectorOutboxGenerationMs(job);
+  if (maxAgeMs > 0 && generationMs > 0 && Date.now() - generationMs > maxAgeMs) {
     return {
       reason: "connector_outbox_retryable_stale",
       metadata: {

@@ -626,6 +626,22 @@ test("whatsapp connector outbox suppresses stale pending final jobs without rese
   assert.equal(suppressed.createdAt, old);
   assert.equal(suppressed.error, "connector_outbox_pending_stale");
   assert.equal(suppressed.metadata.stalePendingSuppressed, true);
+
+  const replay = await applyConnectorOutboxJobAction(job.id, "replay", { reason: "confirmed missing", operator: "tester" }, runtimeEnv);
+  await applyWhatsAppConnectorOutboxAction(replay.job, "replay", { reason: "confirmed missing" }, runtimeEnv);
+  const replayCalls = [];
+  const replayDelivery = await deliverWhatsAppReplies(runtimeEnv, async (url, options = {}) => {
+    if (String(url).endsWith("/send-text")) {
+      replayCalls.push({ url, body: JSON.parse(String(options.body || "{}")) });
+    }
+    return response({ ok: true, ids: ["replayed-stale-send"] });
+  });
+  const outboxAfterReplay = await readConnectorOutbox(runtimeEnv);
+  const delivered = outboxAfterReplay.jobs.find((entry) => entry.id === job.id);
+
+  assert.equal(replayDelivery.delivered.length, 1, JSON.stringify(replayDelivery));
+  assert.equal(replayCalls.length, 1);
+  assert.equal(delivered.state, "delivered");
 });
 
 test("whatsapp connector outbox suppresses over-retried bridge failures without resending", async () => {
