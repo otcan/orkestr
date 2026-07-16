@@ -258,7 +258,7 @@ test("connector doctor evaluates the worker and queue rather than UI process hea
     ok: true,
     gateway: { ok: true },
     worker: { ok: true, state: "ready" },
-    accounts: [{ accountId: "sender", ready: true }],
+    accounts: [{ accountId: "sender", ready: true, runtimeUsable: true, sendReady: true, inboundReady: true }],
     queue: { deadLetter: 0 },
   }, { ORKESTR_CONNECTORS_REQUIRED_WA_ACCOUNTS: "sender" }).issues, []);
   assert.deepEqual(assessConnectorHealth({
@@ -271,6 +271,15 @@ test("connector doctor evaluates the worker and queue rather than UI process hea
     "worker_unhealthy",
     "required_accounts_unavailable",
     "dead_letter_events",
+  ]);
+  assert.deepEqual(assessConnectorHealth({
+    ok: true,
+    gateway: { ok: true },
+    worker: { ok: true, state: "ready" },
+    accounts: [{ accountId: "sender", ready: true, runtimeUsable: true, sendReady: false, inboundReady: false }],
+    queue: { deadLetter: 0 },
+  }, { ORKESTR_CONNECTORS_REQUIRED_WA_ACCOUNTS: "sender" }).issues, [
+    "required_accounts_unavailable",
   ]);
 });
 
@@ -309,7 +318,7 @@ test("connector doctor leaves dead letters for explicit recovery", async () => {
         ok: true,
         gateway: { ok: true },
         worker: { ok: true, state: "ready" },
-        accounts: [{ accountId: "sender", ready: true }],
+        accounts: [{ accountId: "sender", ready: true, runtimeUsable: true, sendReady: true, inboundReady: true }],
         queue: { deadLetter: 1 },
       }),
     }),

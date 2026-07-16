@@ -70,6 +70,33 @@ test("standalone WA service exposes sanitized health for configured accounts", a
   });
 });
 
+test("standalone WA service derives operational readiness from a ready live account", async () => {
+  const home = await testHome("orkestr-wa-service-operational-readiness-");
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WA_SERVICE_AUTH_DISABLED: "1",
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "sender",
+  };
+
+  await withWaService(env, async ({ bridgeUrl }) => {
+    const response = await fetch(`${bridgeUrl}/health`);
+    assert.equal(response.status, 200);
+    const payload = await response.json();
+    assert.equal(payload.accounts[0].ready, true);
+    assert.equal(payload.accounts[0].runtimeUsable, true);
+    assert.equal(payload.accounts[0].chatOpsReady, true);
+    assert.equal(payload.accounts[0].sendReady, true);
+    assert.equal(payload.accounts[0].inboundReady, true);
+  }, mockBridge({
+    getLocalWhatsAppBridgeStatus: async () => ({
+      ok: true,
+      ready: true,
+      state: "ready",
+      accounts: [{ accountId: "sender", ready: true, runtimeUsable: true, chatOpsReady: true }],
+    }),
+  }));
+});
+
 test("standalone WA service routing policy honors configured sender and responder roles", () => {
   assert.deepEqual(waServiceRoutingPolicy({
     ORKESTR_WHATSAPP_SENDER_ROLE: "inbound-phone",

@@ -143,12 +143,21 @@ function requireAuth(req, env) {
 }
 
 function publicAccount(account = {}) {
+  const ready = account.ready === true;
+  const runtimeUsable = account.runtimeUsable !== false && ready;
+  const chatOpsReady = account.chatOpsReady !== false && runtimeUsable;
+  const sendReady = typeof account.sendReady === "boolean"
+    ? account.sendReady && runtimeUsable
+    : runtimeUsable;
+  const inboundReady = typeof account.inboundReady === "boolean"
+    ? account.inboundReady && chatOpsReady
+    : sendReady && chatOpsReady;
   return {
     id: clean(account.id || account.accountId),
     accountId: clean(account.accountId || account.id),
     label: clean(account.label || account.name || account.accountId || account.id),
     state: clean(account.state || account.status),
-    ready: account.ready === true,
+    ready,
     authenticated: account.authenticated === true,
     started: account.started === true,
     qrAvailable: account.qrAvailable === true,
@@ -162,10 +171,10 @@ function publicAccount(account = {}) {
     loadingPercent: account.loadingPercent ?? null,
     loadingMessage: clean(account.loadingMessage),
     error: clean(account.error),
-    chatOpsReady: account.chatOpsReady === true,
-    runtimeUsable: account.runtimeUsable === true,
-    sendReady: account.sendReady === true,
-    inboundReady: account.inboundReady === true,
+    chatOpsReady,
+    runtimeUsable,
+    sendReady,
+    inboundReady,
     updatedAt: clean(account.updatedAt),
     runtimeAccountId: clean(account.runtimeAccountId || account.accountId || account.id),
     legacyRoleAliases: Array.isArray(account.legacyRoleAliases) ? account.legacyRoleAliases.map(clean).filter(Boolean) : [],

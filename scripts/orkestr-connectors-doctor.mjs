@@ -32,9 +32,9 @@ export function assessConnectorHealth(payload = {}, env = process.env) {
     account.runtimeAccountId,
     ...(Array.isArray(account.legacyRoleAliases) ? account.legacyRoleAliases : []),
   ].map(clean).includes(id);
-  const accountReady = (account) => account.ready === true || (
-    account.runtimeUsable === true && account.sendReady === true && account.inboundReady === true
-  );
+  const accountReady = (account) => account.runtimeUsable === true &&
+    account.sendReady === true &&
+    account.inboundReady === true;
   const missingAccounts = requiredAccounts.filter((id) => !accounts.some((account) => matchesAccount(account, id)));
   const unavailableAccounts = requiredAccounts.filter((id) => accounts.some((account) =>
     matchesAccount(account, id) && !accountReady(account)
