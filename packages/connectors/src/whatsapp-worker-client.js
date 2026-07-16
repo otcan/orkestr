@@ -115,6 +115,17 @@ export function whatsappWorkerSend({ accountId = "", conversationId = "", text =
   }, env);
 }
 
+export function whatsappWorkerTyping({ accountId = "", conversationId = "", state = "paused" } = {}, env = process.env) {
+  return requestWhatsAppWorker("/typing", {
+    method: "POST",
+    body: {
+      accountId: clean(accountId || "sender"),
+      to: clean(conversationId),
+      state: clean(state || "paused"),
+    },
+  }, env);
+}
+
 export function whatsappWorkerCreateConversation({ accountId = "", name = "", participantIds = [] } = {}, env = process.env) {
   return requestWhatsAppWorker("/chats", {
     method: "POST",

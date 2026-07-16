@@ -636,6 +636,40 @@ test("local whatsapp typing sync can clear immediately when stop grace is disabl
   }
 });
 
+test("local whatsapp typing expires when its desired-state lease is not renewed", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-typing-ttl-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "responder",
+    ORKESTR_WHATSAPP_TYPING_REFRESH_MS: "60000",
+    ORKESTR_WHATSAPP_TYPING_MAX_TTL_MS: "1000",
+    ORKESTR_WHATSAPP_TYPING_OPERATION_TIMEOUT_MS: "500",
+    ORKESTR_WHATSAPP_TYPING_CLEAR_RETRY_MS: "0",
+  };
+  const runtime = {
+    client: {
+      async getChatById() {
+        return { async sendStateTyping() {}, async clearState() {} };
+      },
+      async sendPresenceAvailable() {},
+      pupPage: { async evaluate() { return true; } },
+    },
+  };
+
+  try {
+    setLocalWhatsAppRuntimeForTest("responder", runtime, {}, env);
+    await startLocalWhatsAppTyping({ accountId: "responder", chatId: "chat-typing-ttl", env });
+    assert.equal((await getLocalWhatsAppBridgeStatus(env)).activeTypingCount, 1);
+
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+
+    assert.equal((await getLocalWhatsAppBridgeStatus(env)).activeTypingCount, 0);
+    assert.ok((await listEvents(env)).some((event) => event.type === "whatsapp_local_typing_ttl_expired"));
+  } finally {
+    await resetLocalWhatsAppBridgeForTest(env);
+  }
+});
+
 test("local whatsapp typing refresh exhaustion stops stale sessions", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-typing-exhausted-"));
   const env = {

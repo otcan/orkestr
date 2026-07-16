@@ -23,7 +23,7 @@ The server uses stateless Streamable HTTP, protocol `2025-11-25`, and the
 official TypeScript SDK. The canonical tools are:
 
 - `orkestr_auth`: `status`, `connect`, `reconnect`, `disconnect`, `logout`
-- `orkestr_messaging`: idempotent `send_text`
+- `orkestr_messaging`: idempotent `send_text` and transient `set_typing`
 - `orkestr_conversation`: `list`, `history`, `participants`, `recover`, `create`
 - `orkestr_routing`: `status`, `bind`, `unbind`, `pause`, `resume`, `retry`
 
@@ -35,6 +35,9 @@ Account changes, route changes, new chats, and first-time recipients return an
 attended Orkestr challenge. Existing scoped chat sends do not. Unconfirmed
 WhatsApp delivery is not automatically resent. MCP attachment inputs accept
 only opaque Orkestr-staged `att_...` references, never paths or URLs.
+Typing state is cosmetic and bypasses the durable outbox. The worker refreshes
+active presence behind a short lease and clears it after completion or lease
+expiry, so UI failures cannot leave a conversation typing indefinitely.
 
 ## Configuration
 

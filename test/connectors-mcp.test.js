@@ -6,6 +6,7 @@ import path from "node:path";
 import test from "node:test";
 import { callConnectorsMcpTool, listConnectorsMcpTools } from "../packages/connectors/src/connectors-mcp-client.js";
 import { listConnectorInboxEvents, resetConnectorInboxForTest } from "../packages/connectors/src/connector-inbox.js";
+import { listConnectorOutboxJobs } from "../packages/connectors/src/connector-outbox.js";
 import { deliverConnectorInboxEvent, routeWhatsAppInboundFromWorker } from "../packages/connectors/src/connectors-mcp-router.js";
 import { approvePairingChallenge } from "../packages/core/src/security.js";
 import { createThread } from "../packages/core/src/threads.js";
@@ -39,6 +40,10 @@ function fakeWorker() {
     }
     if (req.url === "/send-text") {
       res.end(JSON.stringify({ ok: true, messageId: "wa-message-1", chatId: body.to }));
+      return;
+    }
+    if (req.url === "/typing") {
+      res.end(JSON.stringify({ ok: true, active: body.state === "composing", chatId: body.to }));
       return;
     }
     if (req.url === "/accounts/sender/logout") {
@@ -137,6 +142,40 @@ test("connector MCP messaging uses the durable idempotency ledger", async () => 
     assert.equal(second.status, "delivered");
     assert.equal(second.data.duplicate, true);
     assert.equal(item.worker.calls.filter((call) => call.url === "/send-text").length, 1);
+  } finally {
+    await item.close();
+  }
+});
+
+test("connector MCP typing is transient and scoped to the existing conversation", async () => {
+  const item = await fixture({ scoped: true });
+  try {
+    const composing = await callConnectorsMcpTool("orkestr_messaging", {
+      service: "whatsapp",
+      action: "set_typing",
+      account_id: "sender",
+      instance_id: "vm-firat",
+      user_id: "firat",
+      conversation_id: "firat-jobs@g.us",
+      typing_state: "composing",
+    }, item.env);
+    const paused = await callConnectorsMcpTool("orkestr_messaging", {
+      service: "whatsapp",
+      action: "set_typing",
+      account_id: "sender",
+      instance_id: "vm-firat",
+      user_id: "firat",
+      conversation_id: "firat-jobs@g.us",
+      typing_state: "paused",
+    }, item.env);
+
+    assert.equal(composing.status, "active");
+    assert.equal(composing.data.active, true);
+    assert.equal(paused.status, "inactive");
+    assert.equal(paused.data.active, false);
+    assert.deepEqual(item.worker.calls.filter((call) => call.url === "/typing").map((call) => call.body.state), ["composing", "paused"]);
+    assert.equal(item.worker.calls.some((call) => call.url === "/send-text"), false);
+    assert.deepEqual((await listConnectorOutboxJobs({ connector: "whatsapp" }, item.env)).jobs, []);
   } finally {
     await item.close();
   }

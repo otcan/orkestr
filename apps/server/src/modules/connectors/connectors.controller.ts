@@ -63,11 +63,11 @@ import {
   promoteLocalWhatsAppGroupParticipants,
   recoverLocalWhatsAppChatMessages,
   sendLocalWhatsAppRepairQrEmail,
-  startLocalWhatsAppTyping,
   startLocalWhatsAppAccount,
   stopLocalWhatsAppTyping,
 } from "../../../../../packages/connectors/src/whatsapp-local-bridge.js";
 import { runWithRoutedWhatsAppTyping } from "../../../../../packages/connectors/src/whatsapp-router-typing.js";
+import { startWhatsAppTyping, stopWhatsAppTyping } from "../../../../../packages/connectors/src/whatsapp-typing.js";
 import { findWhatsAppAccountByAnyId } from "../../../../../packages/connectors/src/whatsapp-account-identity.js";
 import { whatsappWorkerConversation } from "../../../../../packages/connectors/src/whatsapp-worker-client.js";
 import { writeConnectorConfig } from "../../../../../packages/storage/src/config.js";
@@ -879,8 +879,8 @@ export class ConnectorsController {
             await deliverWhatsAppReplies().catch(() => {});
             return { ...routed, runtimeKind: "api-agent" };
           }, {
-            startTyping: startLocalWhatsAppTyping,
-            stopTyping: stopLocalWhatsAppTyping,
+            startTyping: startWhatsAppTyping,
+            stopTyping: stopWhatsAppTyping,
           });
           return response
             .status(202)

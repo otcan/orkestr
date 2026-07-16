@@ -25,6 +25,7 @@ import {
   whatsappWorkerCreateConversation,
   whatsappWorkerHealth,
   whatsappWorkerSend,
+  whatsappWorkerTyping,
 } from "./whatsapp-worker-client.js";
 import {
   consumeApprovedPairingChallengeForAction,
@@ -67,6 +68,7 @@ async function challengeRequired(tool = "", input = {}, auth = {}, env = process
   if (tool === "orkestr_auth") return input.action !== "status";
   if (tool === "orkestr_conversation") return input.action === "create";
   if (tool === "orkestr_routing") return input.action !== "status";
+  if (tool === "orkestr_messaging" && input.action === "set_typing") return false;
   if (tool !== "orkestr_messaging" || !auth.operator) return false;
   const statuses = await listWhatsAppBindingStatuses({ env }).catch(() => ({ bindings: [] }));
   return !statuses.bindings.some((binding) =>
@@ -188,6 +190,34 @@ async function runAuth(input, auth, env) {
 
 async function runMessaging(input, auth, env) {
   const accountId = auth.accountId || clean(input.account_id) || "sender";
+  if (input.action === "set_typing") {
+    if (!input.typing_state) throw Object.assign(new Error("connector_typing_state_required"), { statusCode: 400 });
+    if (auth.operator) {
+      const statuses = await listWhatsAppBindingStatuses({ env }).catch(() => ({ bindings: [] }));
+      const routed = statuses.bindings.some((binding) =>
+        clean(binding.chatId).toLowerCase() === clean(input.conversation_id).toLowerCase() &&
+        binding.enabled !== false &&
+        binding.routeEligible !== false
+      );
+      if (!routed) throw Object.assign(new Error("connector_typing_route_not_found"), { statusCode: 403 });
+    }
+    const active = input.typing_state === "composing";
+    const payload = await whatsappWorkerTyping({
+      accountId,
+      conversationId: input.conversation_id,
+      state: input.typing_state,
+    }, env);
+    return connectorMcpStructuredResult({
+      service: input.service,
+      action: input.action,
+      status: active ? "active" : "inactive",
+      accountId,
+      conversationId: input.conversation_id,
+      data: { ...payload, active },
+    });
+  }
+  if (typeof input.text !== "string") throw Object.assign(new Error("connector_message_text_required"), { statusCode: 400 });
+  if (!clean(input.idempotency_key)) throw Object.assign(new Error("connector_idempotency_key_required"), { statusCode: 400 });
   const ensured = await ensureConnectorOutboxJob({
     connector: input.service,
     tenantId: auth.instanceId || auth.ownerUserId || "admin",

@@ -30,8 +30,8 @@ import {
   listLocalWhatsAppChatMessages,
   listLocalWhatsAppChatParticipants,
   sendLocalWhatsAppMessage,
-  syncLocalWhatsAppTypingTargets,
 } from "./whatsapp-local-bridge.js";
+import { syncWhatsAppTypingTargets } from "./whatsapp-typing.js";
 import { routerUpdateWhatsAppDeliveryTarget } from "./whatsapp-router-updates.js";
 import { attachmentDeliveryKey, prepareWhatsAppTableAttachments } from "./whatsapp-table-attachments.js";
 import { appendWhatsAppDebugFooter, formatWhatsAppOutboundText, stripWhatsAppDebugFooter } from "./whatsapp-formatting.js";
@@ -5491,17 +5491,16 @@ function staleRetryableWhatsAppConnectorOutboxJob(job = {}, env = process.env) {
 
 export async function syncWhatsAppTypingIndicators(env = process.env, options = {}) {
   const config = await readConnectorConfig("whatsapp", env);
-  if (bridgeMode(config, env) !== "local") return { ok: true, active: 0, skipped: "external_bridge" };
   const state = await readWhatsAppState(env);
   const statusImpl = options.statusImpl || runtimeStatus;
-  const syncImpl = options.syncImpl || syncLocalWhatsAppTypingTargets;
+  const syncImpl = options.syncImpl || syncWhatsAppTypingTargets;
   const targets = [];
   for (const { threadId, thread, messages } of await listThreadMessageSets(env, state, config)) {
     const status = await statusImpl(threadId, env, messages).catch(() => null);
     const target = whatsappTypingTargetForThread({ thread, messages, status, state, env });
     if (target) targets.push(target);
   }
-  return syncImpl(targets, env);
+  return syncImpl(targets, env, { ...options, config });
 }
 
 async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) {

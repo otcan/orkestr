@@ -17,7 +17,9 @@ import {
   sendLocalWhatsAppMessage,
   startConfiguredLocalWhatsAppAccounts,
   startLocalWhatsAppAccount,
+  startLocalWhatsAppTyping,
   stopLocalWhatsAppBridge,
+  stopLocalWhatsAppTyping,
 } from "../packages/connectors/src/whatsapp-local-bridge.js";
 import {
   publicAccessPolicy,
@@ -237,6 +239,8 @@ const defaultBridge = {
   recoverUnreadLocalWhatsAppMessages,
   sendLocalWhatsAppMessage,
   startLocalWhatsAppAccount,
+  startLocalWhatsAppTyping,
+  stopLocalWhatsAppTyping,
 };
 
 async function handleRequest(req, res, env = process.env, bridge = defaultBridge) {
@@ -368,6 +372,28 @@ async function handleRequest(req, res, env = process.env, bridge = defaultBridge
       crossAccountEchoSuppression: body.crossAccountEchoSuppression !== false,
       env,
     }));
+  }
+
+  if (method === "POST" && url.pathname === "/typing") {
+    requireAuth(req, env);
+    const body = await readJsonBody(req);
+    const accountId = clean(body.accountId);
+    const chatId = clean(body.to || body.chatId);
+    const state = clean(body.state).toLowerCase();
+    if (!chatId) {
+      const error = new Error("whatsapp_chat_id_required");
+      error.statusCode = 400;
+      throw error;
+    }
+    if (!["composing", "paused"].includes(state)) {
+      const error = new Error("whatsapp_typing_state_invalid");
+      error.statusCode = 400;
+      throw error;
+    }
+    requireServicePolicy(req, url, env, body, { accounts: [accountId], recipients: [chatId], recipientScope: "send" });
+    return json(res, 200, state === "composing"
+      ? await bridge.startLocalWhatsAppTyping({ accountId, chatId, env })
+      : await bridge.stopLocalWhatsAppTyping({ accountId, chatId, env }));
   }
 
   if (method === "POST" && url.pathname === "/chats") {

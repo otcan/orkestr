@@ -37,6 +37,8 @@ function mockBridge(overrides = {}) {
     recoverLocalWhatsAppChatMessages: async () => ({ ok: true, messages: [] }),
     sendLocalWhatsAppMessage: async (payload) => ({ ok: true, id: "sent-1", ...payload }),
     startLocalWhatsAppAccount: async (accountId) => ({ accountId, ready: true }),
+    startLocalWhatsAppTyping: async ({ accountId, chatId }) => ({ ok: true, active: true, accountId, chatId }),
+    stopLocalWhatsAppTyping: async ({ accountId, chatId }) => ({ ok: true, active: false, accountId, chatId }),
     ...overrides,
   };
 }
@@ -224,6 +226,44 @@ test("standalone WA service allows demo onboarding send within routing policy", 
     sendLocalWhatsAppMessage: async (payload) => {
       sent.push(payload);
       return { ok: true, id: "sent-demo-onboarding" };
+    },
+  }));
+});
+
+test("standalone WA service applies transient typing without sending a message", async () => {
+  const home = await testHome("orkestr-wa-service-typing-");
+  const calls = [];
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WA_SERVICE_AUTH_DISABLED: "1",
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "sender",
+  };
+
+  await withWaService(env, async ({ bridgeUrl }) => {
+    const composing = await fetch(`${bridgeUrl}/typing`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ accountId: "sender", to: "jobs@g.us", state: "composing" }),
+    });
+    const paused = await fetch(`${bridgeUrl}/typing`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ accountId: "sender", to: "jobs@g.us", state: "paused" }),
+    });
+
+    assert.equal(composing.status, 200);
+    assert.equal((await composing.json()).active, true);
+    assert.equal(paused.status, 200);
+    assert.equal((await paused.json()).active, false);
+    assert.deepEqual(calls, [["start", "sender", "jobs@g.us"], ["stop", "sender", "jobs@g.us"]]);
+  }, mockBridge({
+    startLocalWhatsAppTyping: async ({ accountId, chatId }) => {
+      calls.push(["start", accountId, chatId]);
+      return { ok: true, active: true, accountId, chatId };
+    },
+    stopLocalWhatsAppTyping: async ({ accountId, chatId }) => {
+      calls.push(["stop", accountId, chatId]);
+      return { ok: true, active: false, accountId, chatId };
     },
   }));
 });

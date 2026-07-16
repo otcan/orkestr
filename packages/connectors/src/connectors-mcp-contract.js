@@ -23,11 +23,12 @@ export const connectorsMcpInputSchemas = {
   }).strict(),
   orkestr_messaging: z.object({
     ...contextShape,
-    action: z.enum(["send_text"]),
+    action: z.enum(["send_text", "set_typing"]),
     conversation_id: cleanString.min(1).describe("Existing connector conversation id."),
-    text: z.string().max(100_000),
+    text: z.string().max(100_000).nullish(),
     attachment_refs: z.array(cleanString.min(1)).max(20).nullish().describe("Opaque Orkestr-staged attachment references. Filesystem paths and URLs are rejected."),
-    idempotency_key: cleanString.min(1).max(240).describe("Stable caller-generated key used to prevent duplicate sends."),
+    idempotency_key: cleanString.min(1).max(240).nullish().describe("Stable caller-generated key used to prevent duplicate sends."),
+    typing_state: z.enum(["composing", "paused"]).nullish().describe("Transient typing state. It is never written to the message outbox."),
   }).strict(),
   orkestr_conversation: z.object({
     ...contextShape,
@@ -154,7 +155,7 @@ export function connectorMcpCapabilities() {
       whatsapp: {
         status: "available",
         auth: ["status", "connect", "reconnect", "disconnect", "logout"],
-        messaging: ["send_text"],
+        messaging: ["send_text", "set_typing"],
         conversation: ["list", "history", "participants", "recover", "create"],
         routing: ["status", "bind", "unbind", "pause", "resume", "retry"],
       },

@@ -2380,8 +2380,8 @@ function typingOperationTimeoutMs(env = process.env) {
 }
 
 function typingMaxTtlMs(env = process.env) {
-  const parsed = Number(env.ORKESTR_WHATSAPP_TYPING_MAX_TTL_MS || env.WA_TYPING_MAX_TTL_MS || 120_000);
-  return Number.isFinite(parsed) ? Math.max(1000, parsed) : 120_000;
+  const parsed = Number(env.ORKESTR_WHATSAPP_TYPING_MAX_TTL_MS || env.WA_TYPING_MAX_TTL_MS || 30_000);
+  return Number.isFinite(parsed) ? Math.max(1000, parsed) : 30_000;
 }
 
 function typingStopGraceMs(env = process.env) {
@@ -2758,20 +2758,23 @@ async function handleRecoverableLocalWhatsAppRuntimeInvalidation(accountId = "",
 function armTypingSessionTtl(session, key, env = process.env) {
   if (!session) return;
   if (session.ttlTimer) clearTimeout(session.ttlTimer);
-  session.lastSyncedAt = Date.now();
+  session.lastDesiredAt = Date.now();
   const ttlMs = typingMaxTtlMs(env);
-  const timer = setTimeout(() => {
+  const expire = () => {
     const current = typingSessions.get(key);
     if (!current || current !== session) return;
-    const ageMs = Date.now() - Number(current.lastSyncedAt || 0);
+    const ageMs = Date.now() - Number(current.lastDesiredAt || current.startedAt || 0);
     if (ageMs < ttlMs) {
-      armTypingSessionTtl(current, key, env);
+      const timer = setTimeout(expire, Math.max(1, ttlMs - ageMs));
+      if (typeof timer.unref === "function") timer.unref();
+      current.ttlTimer = timer;
       return;
     }
     stopLocalWhatsAppTyping({ accountId: current.accountId, chatId: current.chatId, env })
       .then(() => appendEvent({ type: "whatsapp_local_typing_ttl_expired", accountId: current.accountId, chatId: current.chatId, ttlMs }, env).catch(() => {}))
       .catch((error) => appendEvent({ type: "whatsapp_local_typing_ttl_expire_failed", accountId: current.accountId, chatId: current.chatId, ttlMs, error: error.message || String(error) }, env).catch(() => {}));
-  }, ttlMs);
+  };
+  const timer = setTimeout(expire, ttlMs);
   if (typeof timer.unref === "function") timer.unref();
   session.ttlTimer = timer;
 }
@@ -2787,7 +2790,6 @@ async function refreshTypingSession(session, key, runtime, env = process.env) {
     await sendChatTypingState(runtime, session.chatId, true, env);
     session.refreshFailureCount = 0;
     session.lastSyncedAt = Date.now();
-    armTypingSessionTtl(session, key, env);
   } catch (error) {
     if (await handleRecoverableLocalWhatsAppRuntimeInvalidation(session.accountId, error, env, {
       source: "typing_refresh",
@@ -2920,6 +2922,7 @@ export async function startLocalWhatsAppTyping({ chatId = "", accountId = "", en
       interval: null,
       startedAt: Date.now(),
       lastSyncedAt: Date.now(),
+      lastDesiredAt: Date.now(),
       ttlTimer: null,
       generation: ++typingSessionGeneration,
       refreshFailureCount: 0,
@@ -3024,7 +3027,7 @@ export async function syncLocalWhatsAppTypingTargets(targets = [], env = process
   }
   for (const session of [...typingSessions.values()]) {
     if (active.has(typingKey(session.accountId, session.chatId))) continue;
-    const ageMs = now - Number(session.lastSyncedAt || session.startedAt || now);
+    const ageMs = now - Number(session.lastDesiredAt || session.startedAt || now);
     if (stopGraceMs > 0 && ageMs < stopGraceMs) {
       const key = typingKey(session.accountId, session.chatId);
       active.add(key);

@@ -72,7 +72,7 @@ function legacyCompatibilityEnabled(env = process.env) {
 
 function legacyPolicyChecks(req, url, body = {}) {
   const parts = url.pathname.split("/").filter(Boolean);
-  if (url.pathname === "/send-text" || url.pathname === "/send-media") {
+  if (url.pathname === "/send-text" || url.pathname === "/send-media" || url.pathname === "/typing") {
     return { accounts: [body.accountId], recipients: [body.to || body.chatId], recipientScope: "send" };
   }
   if (url.pathname === "/chats" && req.method === "POST") {
