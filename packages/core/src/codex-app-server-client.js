@@ -43,6 +43,7 @@ import {
 import { requestUserInputAnswers } from "./codex-app-server-user-input.js";
 import { appendTurnLifecycleEvent } from "./turn-lifecycle.js";
 import { markConnectorDeliverySignal } from "./connector-delivery-signals.js";
+import { recordCodexRuntimeAuthFailureSignal } from "./codex-auth-health.js";
 
 const execFileAsync = promisify(execFile);
 const clients = new Map();
@@ -542,6 +543,7 @@ export class CodexAppServerClient {
       const threadId = clean(turn.threadId || codexId);
       const turnId = clean(turn.id);
       const status = clean(turn.status || "completed");
+      const errorText = publicError(turn.error);
       if (threadId) {
         const completedKey = this.turnParentKey(threadId, turnId);
         if (completedKey) {
@@ -560,7 +562,7 @@ export class CodexAppServerClient {
         if (thread) {
           await updateThread(thread.id, {
             state: status === "failed" ? "failed" : "ready",
-            lastError: status === "failed" ? publicError(turn.error) : null,
+            lastError: status === "failed" ? errorText : null,
             runtime: {
               ...(thread.runtime || {}),
               runtimeKind: "codex-app-server",
@@ -573,13 +575,16 @@ export class CodexAppServerClient {
               updatedAt: nowIso(),
             },
           }, this.env).catch(() => {});
+          if (status === "failed") {
+            await recordCodexRuntimeAuthFailureSignal({ thread, error: errorText, turnId }, this.env).catch(() => {});
+          }
           await appendTurnLifecycleEvent(codexTurnConversationInterrupted(turn) ? "interrupted" : status === "failed" ? "failed" : "completed", {
             threadId: thread.id,
             runtimeKind: "codex-app-server",
             turnId,
             state: codexTurnConversationInterrupted(turn) ? "interrupted" : status === "failed" ? "failed" : "completed",
             source: "codex-app-server",
-            reason: publicError(turn.error),
+            reason: errorText,
           }, this.env).catch(() => {});
           if (codexTurnConversationInterrupted(turn)) {
             const existingRecoveryNotice = existingRecoveryNoticeForTurn(await listThreadMessages(thread.id, this.env).catch(() => []), turnId);

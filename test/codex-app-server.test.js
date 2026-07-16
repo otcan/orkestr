@@ -34,6 +34,7 @@ import { appendThreadMessage, createThread, enqueueThreadInput, getThread, listT
 import { listRouterTraces } from "../packages/core/src/router-traces.js";
 import { deliverWhatsAppReplies } from "../packages/connectors/src/whatsapp.js";
 import { writeConnectorConfig } from "../packages/storage/src/config.js";
+import { readCodexAuthHealth } from "../packages/core/src/codex-auth-health.js";
 
 function response(payload, ok = true, status = 200) {
   return {
@@ -1188,6 +1189,44 @@ test("Codex app-server completed turns clear persisted approval requests", async
     assert.equal(updated.runtime.pendingRequest, null);
     assert.equal(updated.runtime.activeTurnId, null);
     assert.deepEqual(updated.runtime.codexStatus, { type: "idle" });
+  } finally {
+    stopCodexAppServerClients();
+  }
+});
+
+test("Codex app-server failed turns record reused refresh tokens as broken auth", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-auth-failed-"));
+  const fake = await createFakeCodex(home);
+  const env = {
+    ORKESTR_HOME: path.join(home, "orkestr"),
+    HOME: path.join(home, "runtime-home"),
+    PATH: `${fake.bin}${path.delimiter}${process.env.PATH || ""}`,
+    FAKE_CODEX_STATE: fake.stateFile,
+  };
+  try {
+    const thread = await createThread({ id: "app-server-auth-failed-thread", name: "Auth Failed Thread", cwd: home, executorId: "codex", executor: { type: "codex" } }, env);
+    const started = await startCodexAppServerThread(thread, env);
+    const client = await getCodexAppServerClient({ env, home: env.HOME });
+
+    await client.handleNotification({
+      method: "turn/completed",
+      params: {
+        turn: {
+          id: "turn-auth-failed",
+          threadId: started.thread.executor.codexThreadId,
+          status: "failed",
+          error: { message: "Your access token could not be refreshed because your refresh token was already used. Please log out and sign in again." },
+        },
+      },
+    });
+
+    const updated = await getThread(started.thread.id, env);
+    const health = await readCodexAuthHealth(env);
+    assert.equal(updated.state, "failed");
+    assert.equal(health.state, "broken");
+    assert.equal(health.reason, "codex_refresh_token_reused");
+    assert.equal(health.threadId, started.thread.id);
+    assert.equal(health.turnId, "turn-auth-failed");
   } finally {
     stopCodexAppServerClients();
   }

@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { codexRuntimeAuthInvalidReason } from "./codex-auth-health.js";
 
 const execFileAsync = promisify(execFile);
 const progressCache = new Map();
@@ -201,19 +202,6 @@ function paneHasRecentError(lines) {
   ));
 }
 
-function codexAuthInvalidReason(text) {
-  const body = String(text || "");
-  if (/\btoken_invalidated\b/i.test(body)) return "codex_token_invalidated";
-  if (/authentication token has been invalidated/i.test(body)) return "codex_token_invalidated";
-  if (/MCP client for [`'"]?codex_apps[`'"]?\s+failed to start/i.test(body) && /\b(?:401|auth|token|sign in)\b/i.test(body)) {
-    return "codex_apps_auth_invalid";
-  }
-  if (/MCP startup incomplete\s*\(failed:\s*codex_apps\)/i.test(body) && /\b(?:401|auth|token|sign in)\b/i.test(body)) {
-    return "codex_apps_auth_invalid";
-  }
-  return "";
-}
-
 function summaryForProgress({ stateHint, codexMode, planImplementationReady, planImplementationMenuVisible, codexAuthInvalid }) {
   if (codexAuthInvalid) return "Codex sign-in expired";
   if (planImplementationReady || planImplementationMenuVisible) return "Implement plan?";
@@ -237,7 +225,7 @@ export function paneProgressFromText(text, options = {}) {
   const codexUpdatePromptChoice = paneCodexUpdatePromptChoice(text);
   const needsCodexUpdatePromptSkip = Boolean(codexUpdatePromptChoice);
   const conversationInterrupted = paneConversationInterrupted(text);
-  const codexAuthInvalid = codexAuthInvalidReason(text);
+  const codexAuthInvalid = codexRuntimeAuthInvalidReason(text);
   const backgroundWork = paneBackgroundWork(text);
   const working = paneWorking(text) || backgroundWork;
   const staleWorkingPrompt = paneStaleWorkingPrompt(text);

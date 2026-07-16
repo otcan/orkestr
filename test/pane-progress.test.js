@@ -182,3 +182,25 @@ test("pane progress marks invalidated codex_apps auth as an auth error", () => {
   assert.equal(progress.codexAuthInvalid, true);
   assert.equal(progress.codexAuthInvalidReason, "codex_token_invalidated");
 });
+
+test("pane progress marks a reused Codex refresh token as an auth error", () => {
+  const progress = paneProgressFromText(
+    "Your access token could not be refreshed because your refresh token was already used. Please log out and sign in again.",
+  );
+
+  assert.equal(progress.stateHint, "error");
+  assert.equal(progress.summary, "Codex sign-in expired");
+  assert.equal(progress.codexAuthInvalid, true);
+  assert.equal(progress.codexAuthInvalidReason, "codex_refresh_token_reused");
+});
+
+test("pane progress marks a revoked Codex refresh token as an auth error", () => {
+  const progress = paneProgressFromText(
+    "Your access token could not be refreshed because your refresh token was revoked. Please log out and sign in again.",
+  );
+
+  assert.equal(progress.stateHint, "error");
+  assert.equal(progress.summary, "Codex sign-in expired");
+  assert.equal(progress.codexAuthInvalid, true);
+  assert.equal(progress.codexAuthInvalidReason, "codex_refresh_token_invalid");
+});
