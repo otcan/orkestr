@@ -6,8 +6,9 @@ function clean(value = "") {
 }
 
 export function connectorsMcpClientConfig(env = process.env) {
+  const bridgeUrl = clean(env.WHATSAPP_BRIDGE_URL || env.ORKESTR_WHATSAPP_BRIDGE_URL).replace(/\/+$/g, "");
   return {
-    url: clean(env.ORKESTR_CONNECTORS_MCP_URL || "http://127.0.0.1:18914/mcp"),
+    url: clean(env.ORKESTR_CONNECTORS_MCP_URL || (bridgeUrl ? `${bridgeUrl}/mcp` : "http://127.0.0.1:18914/mcp")),
     token: clean(
       env.ORKESTR_CONNECTORS_MCP_BEARER_TOKEN ||
       env.ORKESTR_CONNECTORS_MCP_TOKEN ||

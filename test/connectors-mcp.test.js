@@ -4,7 +4,7 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { callConnectorsMcpTool, listConnectorsMcpTools } from "../packages/connectors/src/connectors-mcp-client.js";
+import { callConnectorsMcpTool, connectorsMcpClientConfig, listConnectorsMcpTools } from "../packages/connectors/src/connectors-mcp-client.js";
 import { listConnectorInboxEvents, resetConnectorInboxForTest } from "../packages/connectors/src/connector-inbox.js";
 import { listConnectorOutboxJobs } from "../packages/connectors/src/connector-outbox.js";
 import { deliverConnectorInboxEvent, routeWhatsAppInboundFromWorker } from "../packages/connectors/src/connectors-mcp-router.js";
@@ -99,6 +99,28 @@ async function fixture({ scoped = false } = {}) {
     },
   };
 }
+
+test("connector MCP derives its endpoint from the parent bridge for legacy tenant slices", () => {
+  const derived = connectorsMcpClientConfig({
+    WHATSAPP_BRIDGE_URL: "http://10.42.0.1:18913/",
+    WHATSAPP_BRIDGE_TOKEN: "scoped-token",
+  });
+  assert.deepEqual(derived, {
+    url: "http://10.42.0.1:18913/mcp",
+    token: "scoped-token",
+  });
+
+  const explicit = connectorsMcpClientConfig({
+    ORKESTR_CONNECTORS_MCP_URL: "http://mcp.internal/mcp",
+    ORKESTR_CONNECTORS_MCP_BEARER_TOKEN: "mcp-token",
+    WHATSAPP_BRIDGE_URL: "http://bridge.internal",
+    WHATSAPP_BRIDGE_TOKEN: "bridge-token",
+  });
+  assert.deepEqual(explicit, {
+    url: "http://mcp.internal/mcp",
+    token: "mcp-token",
+  });
+});
 
 test("connector MCP exposes the canonical tools and scoped account status", async () => {
   const item = await fixture();
