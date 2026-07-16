@@ -29,6 +29,7 @@ Environment:
   ORKESTR_DEPLOY_BACKUP_STATE   Back up ORKESTR_HOME before activation. Defaults to 1.
   ORKESTR_DEPLOY_BACKUP_EXCLUDES Space-separated paths under ORKESTR_HOME to omit from backups. Defaults to live runtime/session dirs.
   ORKESTR_DEPLOY_BACKUP_KEEP    Completed state backups to keep per device. Defaults to 3 and is capped at 3.
+  ORKESTR_DEPLOY_RELEASE_KEEP   Completed release directories to keep per device. Defaults to 3 and is capped at 3.
   ORKESTR_DEPLOY_SYNC_WORKERS   Fast-forward and push safe stale worker branches after deploy. Defaults to 1.
   ORKESTR_RELEASE_TRAIN_FANOUT  Deploy eligible broker-listed instances after local deploy. Defaults to 1.
   ORKESTR_RELEASE_REQUIRED_WHATSAPP_ACCOUNTS Space/comma-separated WA accounts that must be ready after restart.
@@ -416,6 +417,45 @@ prune_state_backups() {
   done < <(find "$backup_dir" -maxdepth 1 -type f -name '*.tar.gz' -printf '%T@\t%p\n' | sort -rn | cut -f2-)
   if [ "$removed" -gt 0 ]; then
     echo "Pruned $removed old state backup(s), keeping max $keep in $backup_dir." >&2
+  fi
+}
+
+prune_release_directories() {
+  bash "$script_dir/prune-release-directories.sh" \
+    --releases-dir "$releases_dir" \
+    --current-link "$current_link" \
+    --keep "$release_keep"
+  if [ -d "$repo_cache/.git" ]; then
+    git -C "$repo_cache" worktree prune
+  fi
+}
+
+cleanup_incomplete_release() {
+  local release_dir releases_root resolved current_resolved
+  release_dir="$1"
+  [ -n "$release_dir" ] || return 0
+  releases_root="$(readlink -f "$releases_dir")"
+  resolved="$(readlink -m "$release_dir")"
+  if [ "$(dirname "$resolved")" != "$releases_root" ]; then
+    echo "Refusing to clean release outside $releases_root: $resolved" >&2
+    return 1
+  fi
+  current_resolved=""
+  if [ -L "$current_link" ]; then
+    current_resolved="$(readlink -f "$current_link")"
+  fi
+  if [ "$resolved" = "$current_resolved" ]; then
+    echo "Refusing to clean active release: $resolved" >&2
+    return 1
+  fi
+  if [ -d "$repo_cache/.git" ]; then
+    git -C "$repo_cache" worktree remove --force "$resolved" >/dev/null 2>&1 || true
+  fi
+  if [ -e "$resolved" ]; then
+    rm -rf --one-file-system -- "$resolved"
+  fi
+  if [ -d "$repo_cache/.git" ]; then
+    git -C "$repo_cache" worktree prune
   fi
 }
 
@@ -807,6 +847,18 @@ cleanup_deploy_drain_on_exit() {
   fi
 }
 
+cleanup_deploy_on_exit() {
+  local status
+  status=$?
+  cleanup_deploy_drain_on_exit || true
+  if [ "$status" -ne 0 ] && [ -n "${staging_release_dir:-}" ]; then
+    echo "Cleaning failed release staging directory: $staging_release_dir" >&2
+    cleanup_incomplete_release "$staging_release_dir" || true
+  fi
+  trap - EXIT
+  exit "$status"
+}
+
 deploy_guard_active_work() {
   local mode
   mode="${1:-all}"
@@ -1175,6 +1227,8 @@ repair_runtime_ownership() {
 
 install_command() {
   local target_ref target_tag target_describe short_sha tag_required release_dir previous_release backup_path deployed_at fanout_status
+  mkdir -p "$releases_dir"
+  prune_release_directories
   prepare_repo_cache
   target_ref="$(resolve_target_ref "$deploy_ref")"
   target_tag="$(git -C "$repo_cache" describe --tags --exact-match "$target_ref" 2>/dev/null || true)"
@@ -1204,8 +1258,14 @@ install_command() {
     return 0
   fi
 
+  if [ -e "$release_dir" ] && [ ! -f "$release_dir/release-manifest.json" ]; then
+    echo "Removing incomplete release before retry: $release_dir" >&2
+    cleanup_incomplete_release "$release_dir"
+  fi
+
   if [ ! -e "$release_dir/.git" ]; then
     mkdir -p "$releases_dir"
+    staging_release_dir="$release_dir"
     git -C "$repo_cache" worktree add --detach "$release_dir" "$target_ref"
     (cd "$release_dir" && bash scripts/install-runtime-deps.sh)
     npm --prefix "$release_dir" run build:runtime
@@ -1226,6 +1286,7 @@ install_command() {
       npm --prefix "$release_dir" run smoke
     fi
     npm --prefix "$release_dir" prune --omit=dev
+    staging_release_dir=""
   fi
 
   repair_runtime_ownership
@@ -1244,6 +1305,7 @@ install_command() {
     send_release_whatsapp_notifications "$release_dir" "$target_ref" "$deployed_at"
     sync_safe_workers_after_deploy "$release_dir"
     write_history_event "success" "$release_id" "$deploy_ref" "$target_ref" "$previous_release" "$release_dir" "$backup_path"
+    prune_release_directories
     echo "Orkestr deployed $release_id ($target_ref)."
     if [ "$fanout_status" -ne 0 ]; then
       echo "Release instance broker failed for one or more remote instances." >&2
@@ -1289,6 +1351,7 @@ NODE
   sync_versioned_env
   if restart_and_verify; then
     write_history_event "rollback" "$target" "$target" "$commit" "$previous_release" "$release_dir" "$backup_path"
+    prune_release_directories
     echo "Orkestr rolled back to $target."
   else
     write_history_event "rollback_failed" "$target" "$target" "$commit" "$previous_release" "$release_dir" "$backup_path" "health_check_failed"
@@ -1323,6 +1386,7 @@ run_smoke="${run_smoke_arg:-${ORKESTR_DEPLOY_RUN_SMOKE:-1}}"
 run_backup="${backup_state_arg:-${ORKESTR_DEPLOY_BACKUP_STATE:-1}}"
 backup_excludes="${ORKESTR_DEPLOY_BACKUP_EXCLUDES:-run tmp whatsapp-bridge/sessions wa-skills/*/session wa-skills/*/state}"
 backup_keep="${ORKESTR_DEPLOY_BACKUP_KEEP:-3}"
+release_keep="${ORKESTR_DEPLOY_RELEASE_KEEP:-3}"
 sync_workers="$(bool_value "${sync_workers_arg:-${ORKESTR_DEPLOY_SYNC_WORKERS:-1}}")"
 lock_file="${ORKESTR_DEPLOY_LOCK_FILE:-/var/lock/orkestr-deploy.lock}"
 lock_busy_exit_code="${ORKESTR_DEPLOY_LOCK_BUSY_EXIT_CODE:-0}"
@@ -1335,6 +1399,7 @@ deploy_drain_file="${ORKESTR_DEPLOY_DRAIN_FILE:-${ORKESTR_HOME:-$deploy_root/dat
 deploy_drain_ttl_seconds="${ORKESTR_DEPLOY_DRAIN_TTL_SECONDS:-1800}"
 deploy_drain_started=0
 release_id=""
+staging_release_dir=""
 
 case "$no_interrupt" in
   0|1) ;;
@@ -1366,6 +1431,16 @@ fi
 if [ "$backup_keep" -gt 3 ]; then
   backup_keep=3
 fi
+case "$release_keep" in
+  ''|*[!0-9]*) echo "ORKESTR_DEPLOY_RELEASE_KEEP must be an integer from 1 to 3." >&2; exit 2 ;;
+esac
+if [ "$release_keep" -lt 1 ]; then
+  echo "ORKESTR_DEPLOY_RELEASE_KEEP must be an integer from 1 to 3." >&2
+  exit 2
+fi
+if [ "$release_keep" -gt 3 ]; then
+  release_keep=3
+fi
 case "$active_timeout_seconds" in
   ''|*[!0-9]*) echo "ORKESTR_DEPLOY_ACTIVE_TIMEOUT_SECONDS must be a non-negative integer." >&2; exit 2 ;;
 esac
@@ -1382,7 +1457,7 @@ case "$deploy_drain_ttl_seconds" in
   ''|*[!0-9]*) echo "ORKESTR_DEPLOY_DRAIN_TTL_SECONDS must be a positive integer." >&2; exit 2 ;;
 esac
 
-trap cleanup_deploy_drain_on_exit EXIT
+trap cleanup_deploy_on_exit EXIT
 
 if [ "$command" = "status" ]; then
   if [ "$json_output" -eq 1 ]; then
