@@ -430,6 +430,17 @@ prune_release_directories() {
   fi
 }
 
+release_is_complete() {
+  local release_dir deploy_script
+  release_dir="$1"
+  [ -f "$release_dir/release-manifest.json" ] || return 1
+  deploy_script="$release_dir/scripts/deploy-git-release.sh"
+  if [ -f "$deploy_script" ] && grep -q '\.orkestr-release-ready' "$deploy_script"; then
+    [ -f "$release_dir/.orkestr-release-ready" ] || return 1
+  fi
+  return 0
+}
+
 cleanup_incomplete_release() {
   local release_dir releases_root resolved current_resolved
   release_dir="$1"
@@ -1253,17 +1264,21 @@ install_command() {
     fi
   fi
   if [ "$previous_release" = "$release_id" ] && [ -d "$release_dir" ]; then
-    repair_runtime_ownership
-    echo "Orkestr already at $release_id ($target_ref)."
-    return 0
+    if release_is_complete "$release_dir"; then
+      repair_runtime_ownership
+      echo "Orkestr already at $release_id ($target_ref)."
+      return 0
+    fi
+    echo "Active release staging is incomplete; roll back before retrying: $release_dir" >&2
+    exit 1
   fi
 
-  if [ -e "$release_dir" ] && [ ! -f "$release_dir/release-manifest.json" ]; then
+  if [ -e "$release_dir" ] && ! release_is_complete "$release_dir"; then
     echo "Removing incomplete release before retry: $release_dir" >&2
     cleanup_incomplete_release "$release_dir"
   fi
 
-  if [ ! -e "$release_dir/.git" ]; then
+  if ! release_is_complete "$release_dir"; then
     mkdir -p "$releases_dir"
     staging_release_dir="$release_dir"
     git -C "$repo_cache" worktree add --detach "$release_dir" "$target_ref"
@@ -1286,6 +1301,7 @@ install_command() {
       npm --prefix "$release_dir" run smoke
     fi
     npm --prefix "$release_dir" prune --omit=dev
+    printf 'ready\n' > "$release_dir/.orkestr-release-ready"
     staging_release_dir=""
   fi
 

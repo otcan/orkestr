@@ -74,6 +74,8 @@ test("release deploy script exposes versioned install, status, and rollback", as
   assert.match(script, /prune-release-directories\.sh/);
   assert.match(script, /cleanup_incomplete_release/);
   assert.match(script, /Cleaning failed release staging directory/);
+  assert.match(script, /\.orkestr-release-ready/);
+  assert.match(script, /Active release staging is incomplete; roll back before retrying/);
   assert.match(script, /health_check/);
   assert.match(script, /health_check "\$health_url" 40\s+deploy_public_exposure_check/);
   assert.match(script, /ORKESTR_DEPLOY_EXPOSURE_CHECK/);
@@ -148,7 +150,7 @@ test("release deploy script exposes versioned install, status, and rollback", as
   assert.match(script, /--allow-untagged\|--allow-untagged-releases/);
   assert.match(script, /--require-tagged\|--require-tagged-releases/);
   assert.match(script, /--release-label "\$\{ORKESTR_RELEASE_LABEL:-\}"/);
-  assert.match(script, /if \[ ! -e "\$release_dir\/\.git" \]/);
+  assert.match(script, /if ! release_is_complete "\$release_dir"/);
   assert.match(script, /worktree add --detach/);
   assert.match(script, /LC_ALL=C tr -c 'A-Za-z0-9\._\+-' '-'/);
   assert.match(manifest, /schemaVersion/);

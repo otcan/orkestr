@@ -8,11 +8,19 @@ import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 
-async function createRelease(releasesDir, name, modifiedSeconds, { complete = true } = {}) {
+async function createRelease(releasesDir, name, modifiedSeconds, { complete = true, ready = true, requiresReady = false } = {}) {
   const releaseDir = path.join(releasesDir, name);
   await fs.mkdir(releaseDir, { recursive: true });
   if (complete) {
     await fs.writeFile(path.join(releaseDir, "release-manifest.json"), "{}\n", "utf8");
+  }
+  if (requiresReady) {
+    const scriptsDir = path.join(releaseDir, "scripts");
+    await fs.mkdir(scriptsDir, { recursive: true });
+    await fs.writeFile(path.join(scriptsDir, "deploy-git-release.sh"), "ready=.orkestr-release-ready\n", "utf8");
+    if (ready) {
+      await fs.writeFile(path.join(releaseDir, ".orkestr-release-ready"), "ready\n", "utf8");
+    }
   }
   const modified = new Date(modifiedSeconds * 1000);
   await fs.utimes(releaseDir, modified, modified);
@@ -30,6 +38,7 @@ test("release retention preserves the active release and removes incomplete or s
   await createRelease(releasesDir, "recent", 30);
   await createRelease(releasesDir, "newest", 40);
   await createRelease(releasesDir, "failed-partial", 50, { complete: false });
+  await createRelease(releasesDir, "manifest-before-prune", 60, { requiresReady: true, ready: false });
   await fs.symlink(active, currentLink);
 
   await execFileAsync("bash", [

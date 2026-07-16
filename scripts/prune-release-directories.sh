@@ -83,13 +83,24 @@ if [ -L "$current_link" ]; then
 fi
 protect_release "$preserve"
 
+release_is_complete() {
+  local release_dir deploy_script
+  release_dir="$1"
+  [ -f "$release_dir/release-manifest.json" ] || return 1
+  deploy_script="$release_dir/scripts/deploy-git-release.sh"
+  if [ -f "$deploy_script" ] && grep -q '\.orkestr-release-ready' "$deploy_script"; then
+    [ -f "$release_dir/.orkestr-release-ready" ] || return 1
+  fi
+  return 0
+}
+
 removed=0
 while IFS= read -r release_dir; do
   [ -n "$release_dir" ] || continue
   if [ "${protected[$release_dir]:-0}" = "1" ]; then
     continue
   fi
-  if [ ! -f "$release_dir/release-manifest.json" ]; then
+  if ! release_is_complete "$release_dir"; then
     rm -rf --one-file-system -- "$release_dir"
     removed=$((removed + 1))
   fi
