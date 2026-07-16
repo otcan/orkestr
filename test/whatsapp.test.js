@@ -92,11 +92,50 @@ test("whatsapp outbound intent state merge is monotonic", () => {
       updatedAt: "2026-06-02T13:00:00.000Z",
     }],
   );
+  const replayedIntent = mergeWhatsAppOutboundIntents(
+    [{
+      intentId: "intent-3",
+      status: "skipped",
+      messageId: "message-3",
+      replayRequestedAt: "2026-06-02T12:00:00.000Z",
+      updatedAt: "2026-06-02T12:01:00.000Z",
+    }],
+    [{
+      intentId: "intent-3",
+      status: "pending",
+      messageId: "message-3",
+      replayRequestedAt: "2026-06-02T13:00:00.000Z",
+      updatedAt: "2026-06-02T13:00:00.000Z",
+    }],
+  );
+  const staleTerminalAfterReplay = mergeWhatsAppOutboundIntents(
+    replayedIntent,
+    [{
+      intentId: "intent-3",
+      status: "skipped",
+      messageId: "message-3",
+      replayRequestedAt: "2026-06-02T12:00:00.000Z",
+      updatedAt: "2026-06-02T12:01:00.000Z",
+    }],
+  );
+  const currentTerminalAfterReplay = mergeWhatsAppOutboundIntents(
+    replayedIntent,
+    [{
+      intentId: "intent-3",
+      status: "delivered",
+      messageId: "message-3",
+      replayRequestedAt: "2026-06-02T13:00:00.000Z",
+      updatedAt: "2026-06-02T13:01:00.000Z",
+    }],
+  );
 
   assert.equal(cursors[0].cursor, 42);
   assert.equal(unchangedCursors[0].updatedAt, "2026-06-02T12:00:00.000Z");
   assert.equal(intents[0].status, "delivered");
   assert.equal(skippedIntents[0].status, "skipped");
+  assert.equal(replayedIntent[0].status, "pending");
+  assert.equal(staleTerminalAfterReplay[0].status, "pending");
+  assert.equal(currentTerminalAfterReplay[0].status, "delivered");
 });
 
 test("whatsapp send failures preserve structured bridge error reasons", async () => {

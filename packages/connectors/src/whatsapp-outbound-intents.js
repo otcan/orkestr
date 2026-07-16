@@ -32,6 +32,10 @@ function statusRank(value) {
   return 0;
 }
 
+function operatorResetMs(intent = {}) {
+  return Math.max(dateMs(intent.replayRequestedAt), dateMs(intent.retryRequestedAt));
+}
+
 export function whatsappOutboundIntentRetentionLimit(env = process.env) {
   const parsed = Number(env.ORKESTR_WHATSAPP_OUTBOUND_INTENT_RETENTION || env.ORKESTR_WHATSAPP_OUTBOUND_DELIVERY_RETENTION || 5000);
   return Number.isFinite(parsed) ? Math.max(500, Math.floor(parsed)) : 5000;
@@ -72,6 +76,9 @@ export function outboundIntentKey(input = {}) {
 }
 
 function mergedIntent(existing = {}, next = {}) {
+  const existingReset = operatorResetMs(existing);
+  const nextReset = operatorResetMs(next);
+  if (existingReset !== nextReset) return nextReset > existingReset ? { ...existing, ...next } : { ...next, ...existing };
   const existingRank = statusRank(existing.status);
   const nextRank = statusRank(next.status);
   if (nextRank > existingRank) return { ...existing, ...next };
