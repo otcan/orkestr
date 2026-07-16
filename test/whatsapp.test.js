@@ -468,6 +468,73 @@ test("local whatsapp typing clear falls back to direct chatstate stop", async ()
   ]);
 });
 
+test("local whatsapp typing clear bypasses a broken chat lookup", async () => {
+  const calls = [];
+  const runtime = {
+    client: {
+      async getChatById(chatId) {
+        calls.push(["getChatById", chatId]);
+        throw new Error("r");
+      },
+      pupPage: {
+        async evaluate(_fn, chatId, state) {
+          calls.push(["directChatstate", chatId, state]);
+          return true;
+        },
+      },
+    },
+  };
+
+  const result = await clearLocalWhatsAppChatTypingState(runtime, "chat-typing-clear", {
+    ORKESTR_WHATSAPP_TYPING_OPERATION_TIMEOUT_MS: "1000",
+  });
+
+  assert.deepEqual(result, { ok: true, chatApiOk: false, directOk: true });
+  assert.deepEqual(calls, [
+    ["getChatById", "chat-typing-clear"],
+    ["directChatstate", "chat-typing-clear", "stop"],
+  ]);
+});
+
+test("local whatsapp typing start bypasses a broken chat lookup", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-typing-chat-lookup-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "responder",
+    ORKESTR_WHATSAPP_TYPING_REFRESH_MS: "60000",
+    ORKESTR_WHATSAPP_TYPING_OPERATION_TIMEOUT_MS: "1000",
+  };
+  const calls = [];
+  const runtime = {
+    client: {
+      async getChatById(chatId) {
+        calls.push(["getChatById", chatId]);
+        throw new Error("r");
+      },
+      pupPage: {
+        async evaluate(_fn, chatId, state) {
+          calls.push(["directChatstate", chatId, state]);
+          return true;
+        },
+      },
+    },
+  };
+
+  try {
+    setLocalWhatsAppRuntimeForTest("responder", runtime, { lastChatOpsProbeAt: null }, env);
+    const result = await startLocalWhatsAppTyping({ accountId: "responder", chatId: "chat-typing-start", env });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.active, true);
+    assert.deepEqual(calls, [
+      ["getChatById", "chat-typing-start"],
+      ["directChatstate", "chat-typing-start", "typing"],
+    ]);
+  } finally {
+    await resetLocalWhatsAppBridgeForTest(env);
+  }
+});
+
 test("local whatsapp typing starts are single-flight per chat", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-typing-single-flight-"));
   const env = {
@@ -694,6 +761,7 @@ test("local whatsapp typing refresh exhaustion stops stale sessions", async () =
       async sendPresenceAvailable() {},
       pupPage: {
         async evaluate() {
+          if (failRefresh) throw new Error("typing_direct_timeout");
           return true;
         },
       },

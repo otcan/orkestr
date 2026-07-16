@@ -2822,30 +2822,42 @@ async function sendChatTypingState(runtime, chatId, active, env = process.env) {
     await clearLocalWhatsAppChatTypingState(runtime, chatId, env);
     return;
   }
-  const chat = await withTypingOperationTimeout(runtime.client.getChatById(chatId), "typing_get_chat", env);
-  await runtime.client.sendPresenceAvailable?.().catch(() => {});
+  let chatApiError = "";
+  let directError = "";
   try {
+    const chat = await withTypingOperationTimeout(runtime.client.getChatById(chatId), "typing_get_chat", env);
+    await runtime.client.sendPresenceAvailable?.().catch(() => {});
     await withTypingOperationTimeout(chat.sendStateTyping(), "typing_send_state", env);
+    return;
   } catch (error) {
-    if (!(await directChatstate(runtime, chatId, "typing", env).catch(() => false))) throw error;
+    chatApiError = error?.message || String(error);
   }
+  try {
+    if (await directChatstate(runtime, chatId, "typing", env)) return;
+  } catch (error) {
+    directError = error?.message || String(error);
+  }
+  const error = new Error(directError || chatApiError || "typing_start_failed");
+  error.chatApiError = chatApiError;
+  error.directError = directError;
+  throw error;
 }
 
 export async function clearLocalWhatsAppChatTypingState(runtime, chatId, env = process.env) {
   const id = String(chatId || "").trim();
   if (!runtime?.client || !id) return { ok: false, chatApiOk: false, directOk: false, reason: !id ? "missing_chat_id" : "missing_client" };
-  const chat = await withTypingOperationTimeout(runtime.client.getChatById(id), "typing_get_chat", env);
   let chatApiOk = false;
   let directOk = false;
   let chatApiError = "";
   let directError = "";
-  if (typeof chat?.clearState === "function") {
-    try {
+  try {
+    const chat = await withTypingOperationTimeout(runtime.client.getChatById(id), "typing_get_chat", env);
+    if (typeof chat?.clearState === "function") {
       await withTypingOperationTimeout(chat.clearState(), "typing_clear_state", env);
       chatApiOk = true;
-    } catch (error) {
-      chatApiError = error?.message || String(error);
     }
+  } catch (error) {
+    chatApiError = error?.message || String(error);
   }
   try {
     directOk = await directChatstate(runtime, id, "stop", env);
