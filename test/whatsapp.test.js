@@ -822,6 +822,76 @@ test("local whatsapp active status chat ops probe keeps send runtime ready when 
   }
 });
 
+test("local whatsapp active status accepts browser store when getChats throws r", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-chatops-store-fallback-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "responder",
+    ORKESTR_WHATSAPP_STATUS_CHAT_OPS_PROBE: "1",
+    ORKESTR_WHATSAPP_CHAT_OPS_PROBE_INTERVAL_MS: "1000",
+    ORKESTR_WHATSAPP_CHAT_OPS_PROBE_TIMEOUT_MS: "500",
+  };
+  const calls = [];
+  const previousWindow = globalThis.window;
+  const runtime = {
+    client: {
+      async getChats() {
+        calls.push(["getChats"]);
+        throw new Error("r");
+      },
+      pupPage: {
+        async evaluate(fn) {
+          calls.push(["browserStore"]);
+          globalThis.window = {
+            require(name) {
+              if (name === "WAWebCollections") {
+                return {
+                  Chat: {
+                    getModelsArray() {
+                      return [{ id: { _serialized: "chat-one@g.us" } }];
+                    },
+                  },
+                  Msg: {},
+                };
+              }
+              throw new Error(`unexpected require ${name}`);
+            },
+            AuthStore: { AppState: { state: "CONNECTED" } },
+            WWebJS: {},
+          };
+          try {
+            return await fn();
+          } finally {
+            globalThis.window = previousWindow;
+          }
+        },
+      },
+    },
+  };
+
+  try {
+    setLocalWhatsAppRuntimeForTest("responder", runtime, { lastChatOpsProbeAt: null }, env);
+
+    const status = await getLocalWhatsAppBridgeStatus(env);
+    const account = status.accounts.find((item) => item.accountId === "responder");
+    const events = await listEvents(env, 50);
+
+    assert.equal(status.state, "ready");
+    assert.equal(status.ready, true);
+    assert.equal(status.chatOpsReady, true);
+    assert.equal(account.ready, true);
+    assert.equal(account.chatOpsReady, true);
+    assert.equal(account.runtimeUsable, true);
+    assert.equal(account.lastChatOpsError, "");
+    assert.equal(account.chatOpsUnavailableSince, null);
+    assert.deepEqual(calls, [["getChats"], ["browserStore"]]);
+    assert.ok(events.find((event) => event.type === "whatsapp_local_chat_ops_probe_browser_store_ready" && event.accountId === "responder"));
+  } finally {
+    globalThis.window = previousWindow;
+    await resetLocalWhatsAppBridgeForTest(env);
+  }
+});
+
 test("local whatsapp active status resets stale chat ops r degradation", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-chatops-stale-r-reset-"));
   const nowMs = Date.parse("2026-07-16T07:45:00.000Z");
@@ -4365,6 +4435,93 @@ test("local whatsapp reset start replaces an existing ready runtime without logg
     assert.equal(result.state, "starting");
     const events = await listEvents(env);
     assert.ok(events.find((event) => event.type === "whatsapp_local_runtime_reset_requested" && event.previousState === "ready"));
+  } finally {
+    await resetLocalWhatsAppBridgeForTest(env);
+  }
+});
+
+test("local whatsapp reset start does not hang on wedged destroy", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-reset-destroy-timeout-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "sender",
+    ORKESTR_WHATSAPP_RUNTIME_DESTROY_TIMEOUT_MS: "10",
+  };
+  const calls = [];
+  const existingRuntime = {
+    clearStartupTimer() {
+      calls.push("clear-startup-timer");
+    },
+    clearAuthReadyTimer() {
+      calls.push("clear-auth-timer");
+    },
+    clearPairingCodeUnhandledRejectionHandler() {
+      calls.push("clear-pairing-handler");
+    },
+    clearRuntimeCloseUnhandledRejectionHandler() {
+      calls.push("clear-runtime-close-handler");
+    },
+    client: {
+      destroy() {
+        calls.push("destroy-existing");
+        return new Promise(() => {});
+      },
+    },
+  };
+
+  class LocalAuth {}
+
+  class Client {
+    constructor() {
+      calls.push("client");
+    }
+
+    on() {
+      return this;
+    }
+
+    initialize() {
+      calls.push("initialize");
+      return Promise.resolve();
+    }
+
+    async destroy() {
+      calls.push("destroy-new");
+    }
+  }
+
+  try {
+    setLocalWhatsAppRuntimeForTest("sender", existingRuntime, {
+      state: "ready",
+      ready: true,
+      authenticated: true,
+      started: true,
+      chatOpsReady: false,
+      runtimeUsable: true,
+      lastChatOpsError: "r",
+      chatOpsUnavailableSince: new Date(Date.now() - 60_000).toISOString(),
+    }, env);
+
+    const result = await startLocalWhatsAppAccount("sender", env, {
+      resetRuntime: true,
+      listChromeProcesses: async () => [],
+      loadBridgeDependencies: async () => ({
+        whatsapp: { Client, LocalAuth },
+        qrcode: {},
+      }),
+    });
+    const status = await getLocalWhatsAppBridgeStatus(env);
+    const account = status.accounts.find((item) => item.accountId === "sender");
+    const events = await listEvents(env);
+
+    assert.equal(result.state, "starting");
+    assert.equal(account.state, "starting");
+    assert.equal(account.chatOpsReady, null);
+    assert.equal(account.chatOpsUnavailableSince, null);
+    assert.equal(calls.includes("destroy-existing"), true);
+    assert.equal(calls.includes("client"), true);
+    assert.equal(calls.includes("initialize"), true);
+    assert.ok(events.find((event) => event.type === "whatsapp_local_runtime_destroy_timeout" && event.accountId === "sender"));
   } finally {
     await resetLocalWhatsAppBridgeForTest(env);
   }
