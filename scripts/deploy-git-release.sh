@@ -941,6 +941,27 @@ deploy_guard_before_restart() {
   deploy_guard_active_work hard
 }
 
+refresh_parent_whatsapp_bridge_proxy() {
+  local bridge_service bridge_script dropin_dir dropin_file
+  bridge_service="${ORKESTR_PARENT_WA_BRIDGE_SERVICE_NAME:-orkestr-parent-wa-bridge}"
+  bridge_script="$current_link/scripts/parent-whatsapp-bridge-proxy.mjs"
+  [ -f "$bridge_script" ] || return 0
+  systemctl cat "${bridge_service}.service" >/dev/null 2>&1 || return 0
+
+  dropin_dir="/etc/systemd/system/${bridge_service}.service.d"
+  dropin_file="$dropin_dir/release.conf"
+  mkdir -p "$dropin_dir"
+  cat > "$dropin_file" <<EOF
+[Service]
+ExecStart=
+ExecStart=/usr/bin/node $bridge_script
+EOF
+  systemctl daemon-reload
+  systemctl restart "${bridge_service}.service"
+  systemctl is-active --quiet "${bridge_service}.service"
+  echo "Parent WhatsApp bridge proxy refreshed from the active Orkestr release."
+}
+
 restart_and_verify() {
   configure_service_shutdown_timeout
   # Keep restart as one systemd transaction. A split stop/start can kill the
@@ -948,6 +969,7 @@ restart_and_verify() {
   systemctl restart "${service_name}.service"
   systemctl is-active --quiet "${service_name}.service"
   health_check "$health_url" 40
+  refresh_parent_whatsapp_bridge_proxy
   deploy_public_exposure_check
   if [ "$deploy_drain_started" = "1" ]; then
     clear_deploy_drain

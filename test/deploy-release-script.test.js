@@ -77,7 +77,7 @@ test("release deploy script exposes versioned install, status, and rollback", as
   assert.match(script, /\.orkestr-release-ready/);
   assert.match(script, /Active release staging is incomplete; roll back before retrying/);
   assert.match(script, /health_check/);
-  assert.match(script, /health_check "\$health_url" 40\s+deploy_public_exposure_check/);
+  assert.match(script, /health_check "\$health_url" 40\s+refresh_parent_whatsapp_bridge_proxy\s+deploy_public_exposure_check/);
   assert.match(script, /ORKESTR_DEPLOY_EXPOSURE_CHECK/);
   assert.match(script, /ORKESTR_DEPLOY_PUBLIC_BASE_URL/);
   assert.match(script, /ORKESTR_DEPLOY_EXPOSURE_PRIVATE_PATHS/);
@@ -139,6 +139,9 @@ test("release deploy script exposes versioned install, status, and rollback", as
   assert.match(script, /service-local tmux children are not killed with the UI process/);
   assert.match(script, /systemctl restart "\$\{service_name\}\.service"/);
   assert.doesNotMatch(script, /systemctl stop "\$\{service_name\}\.service"[\s\S]*systemctl start "\$\{service_name\}\.service"/);
+  assert.match(script, /refresh_parent_whatsapp_bridge_proxy/);
+  assert.match(script, /ExecStart=\/usr\/bin\/node \$bridge_script/);
+  assert.match(script, /systemctl restart "\$\{bridge_service\}\.service"/);
   assert.match(script, /send_release_whatsapp_notifications/);
   assert.match(script, /release-whatsapp-notify\.mjs/);
   assert.match(script, /ORKESTR_RELEASE_WA_NOTIFICATIONS/);
