@@ -98,6 +98,11 @@ Environment:
   ORKESTR_WA_SERVICE_NAME     systemd unit name for standalone WhatsApp service. Defaults to <service>-wa.
   ORKESTR_WA_SERVICE_HOME     Data root for standalone WhatsApp service. Defaults to <ORKESTR_HOME>/wa-service.
   ORKESTR_WA_SERVICE_ENV_FILE Private env file for standalone WhatsApp service. Defaults to /etc/orkestr/orkestr-wa.env.
+  ORKESTR_INSTALL_CONNECTORS_MCP Install the isolated connector MCP gateway and WhatsApp worker. Defaults to ORKESTR_INSTALL_WA_SERVICE.
+  ORKESTR_CONNECTORS_MCP_SERVICE_NAME systemd unit name for the connector gateway. Defaults to <service>-connectors-mcp.
+  ORKESTR_CONNECTORS_ENV_FILE Private gateway/worker env file. Defaults to /etc/orkestr/orkestr-connectors.env.
+  ORKESTR_INSTALL_PERSONAL_CONNECTORS_MCP Install an isolated personal +49 connector deployment. Defaults to 0.
+  ORKESTR_PERSONAL_CONNECTORS_ENV_FILE Private personal deployment env. Defaults to /etc/orkestr/orkestr-connectors-personal.env.
   ORKESTR_LOCAL_ENV_FILE    Local env file written for non-systemd installs. Defaults to $ORKESTR_HOME/orkestr.env.
   ORKESTR_SKIP_SYSTEM_PACKAGES  Skip apt package installation when set to 1.
   ORKESTR_FRESH_INSTALL     Set to 1 to stop the local service and remove local Orkestr state before install.
@@ -636,6 +641,22 @@ codex_app_server_service_name() {
 
 wa_service_name() {
   echo "${ORKESTR_WA_SERVICE_NAME:-$(systemd_service_name)-wa}"
+}
+
+connectors_mcp_service_name() {
+  echo "${ORKESTR_CONNECTORS_MCP_SERVICE_NAME:-$(systemd_service_name)-connectors-mcp}"
+}
+
+wa_worker_service_name() {
+  echo "${ORKESTR_WA_WORKER_SERVICE_NAME:-$(systemd_service_name)-wa-worker}"
+}
+
+personal_connectors_mcp_service_name() {
+  echo "${ORKESTR_PERSONAL_CONNECTORS_MCP_SERVICE_NAME:-$(systemd_service_name)-connectors-personal-mcp}"
+}
+
+personal_wa_worker_service_name() {
+  echo "${ORKESTR_PERSONAL_WA_WORKER_SERVICE_NAME:-$(systemd_service_name)-wa-worker-personal-49}"
 }
 
 codex_cli_version() {
@@ -1247,7 +1268,12 @@ write_env_file() {
     cookie_domain="$primary_domain"
   fi
   public_https_url="${ORKESTR_PUBLIC_HTTPS_URL:-$public_url}"
-  if [ "$(normalize_bool "${ORKESTR_INSTALL_WA_SERVICE:-0}")" = "1" ]; then
+  if [ "$(normalize_bool "${ORKESTR_INSTALL_CONNECTORS_MCP:-${ORKESTR_INSTALL_WA_SERVICE:-0}}")" = "1" ]; then
+    wa_bridge_mode="${WHATSAPP_BRIDGE_MODE:-external}"
+    wa_external_enabled="${ORKESTR_WHATSAPP_EXTERNAL_BRIDGE_ENABLED:-1}"
+    wa_bridge_url="${WHATSAPP_BRIDGE_URL:-http://127.0.0.1:${ORKESTR_CONNECTORS_MCP_PORT:-18914}}"
+    wa_autostart="${ORKESTR_WHATSAPP_AUTOSTART:-0}"
+  elif [ "$(normalize_bool "${ORKESTR_INSTALL_WA_SERVICE:-0}")" = "1" ]; then
     wa_bridge_mode="${WHATSAPP_BRIDGE_MODE:-external}"
     wa_external_enabled="${ORKESTR_WHATSAPP_EXTERNAL_BRIDGE_ENABLED:-1}"
     wa_bridge_url="${WHATSAPP_BRIDGE_URL:-http://127.0.0.1:${ORKESTR_WA_SERVICE_PORT:-18914}}"
@@ -1328,6 +1354,8 @@ ORKESTR_WHATSAPP_SENDER_ROLE=${ORKESTR_WHATSAPP_SENDER_ROLE:-sender}
 ORKESTR_WHATSAPP_RESPONDER_ROLE=${ORKESTR_WHATSAPP_RESPONDER_ROLE:-responder}
 ORKESTR_WHATSAPP_EXTERNAL_BRIDGE_ENABLED=$wa_external_enabled
 WHATSAPP_BRIDGE_URL=$wa_bridge_url
+ORKESTR_CONNECTORS_MCP_URL=${ORKESTR_CONNECTORS_MCP_URL:-http://127.0.0.1:18914/mcp}
+# ORKESTR_CONNECTORS_MCP_TOKEN=replace-with-private-operator-token
 ORKESTR_WHATSAPP_AUTOSTART=$wa_autostart
 WHATSAPP_LOCAL_AUTOSTART=$wa_autostart
 OPENAI_API_KEY=
@@ -1382,6 +1410,39 @@ env_file_value() {
   value="${value%\'}"
   value="${value#\'}"
   printf '%s' "$value"
+}
+
+named_env_file_value() {
+  local file name value
+  file="$1"
+  name="$2"
+  value="$(sed -n "s/^${name}=//p" "$file" 2>/dev/null | tail -1)"
+  value="${value%\"}"
+  value="${value#\"}"
+  value="${value%\'}"
+  value="${value#\'}"
+  printf '%s' "$value"
+}
+
+set_named_env_assignment() {
+  local file name value escaped
+  file="$1"
+  name="$2"
+  value="$3"
+  escaped="$(sed_replacement_value "$value")"
+  if grep -q "^${name}=" "$file" 2>/dev/null; then
+    sed -i "s|^${name}=.*|${name}=${escaped}|" "$file"
+  else
+    printf '%s=%s\n' "$name" "$value" >> "$file"
+  fi
+}
+
+random_private_token() {
+  if command -v openssl >/dev/null 2>&1; then
+    openssl rand -hex 32
+  else
+    node -e 'console.log(require("node:crypto").randomBytes(32).toString("hex"))'
+  fi
 }
 
 sed_replacement_value() {
@@ -2345,6 +2406,240 @@ EOF
   systemctl restart "${service_name}.service"
 }
 
+write_systemd_connectors_services() {
+  local gateway_service worker_service group_name connectors_env node_bin timeout_stop_sec mcp_token worker_token event_token
+  gateway_service="$(connectors_mcp_service_name)"
+  worker_service="$(wa_worker_service_name)"
+  group_name="$(id -gn "$run_user")"
+  connectors_env="${ORKESTR_CONNECTORS_ENV_FILE:-/etc/orkestr/orkestr-connectors.env}"
+  node_bin="$(command -v node || echo /usr/bin/node)"
+  timeout_stop_sec="${ORKESTR_CONNECTORS_TIMEOUT_STOP_SEC:-30s}"
+  mkdir -p "$(dirname "$connectors_env")" "$data_dir/connectors" "$data_dir/wa-worker"
+  chown -R "$run_user:$group_name" "$data_dir/connectors" "$data_dir/wa-worker"
+  if [ ! -f "$connectors_env" ]; then
+    cat > "$connectors_env" <<EOF
+# Private Orkestr connector gateway and WhatsApp worker environment.
+ORKESTR_HOME=$data_dir
+ORKESTR_CONNECTORS_MCP_HOST=127.0.0.1
+ORKESTR_CONNECTORS_MCP_PORT=18914
+ORKESTR_WA_WORKER_SOCKET=/run/orkestr-wa/sender.sock
+ORKESTR_WA_WORKER_EVENT_SINK_URL=http://127.0.0.1:18914/internal/whatsapp/inbound
+ORKESTR_WHATSAPP_AUTOSTART=1
+ORKESTR_WHATSAPP_AUTOSTART_ACCOUNT_IDS=sender
+ORKESTR_WHATSAPP_ACCOUNT_IDS=sender
+# ORKESTR_CONNECTORS_MCP_TOKENS_JSON=
+# ORKESTR_WA_SERVICE_POLICY_JSON=
+EOF
+    chmod 0600 "$connectors_env"
+    chgrp "$group_name" "$connectors_env" || true
+  fi
+  mcp_token="$(named_env_file_value "$connectors_env" ORKESTR_CONNECTORS_MCP_TOKEN)"
+  worker_token="$(named_env_file_value "$connectors_env" ORKESTR_WA_WORKER_TOKEN)"
+  event_token="$(named_env_file_value "$connectors_env" ORKESTR_WA_WORKER_EVENT_TOKEN)"
+  [ -n "$mcp_token" ] || mcp_token="$(random_private_token)"
+  [ -n "$worker_token" ] || worker_token="$(random_private_token)"
+  [ -n "$event_token" ] || event_token="$(random_private_token)"
+  set_named_env_assignment "$connectors_env" ORKESTR_CONNECTORS_MCP_TOKEN "$mcp_token"
+  set_named_env_assignment "$connectors_env" ORKESTR_WA_SERVICE_TOKEN "$mcp_token"
+  set_named_env_assignment "$connectors_env" ORKESTR_WA_WORKER_TOKEN "$worker_token"
+  set_named_env_assignment "$connectors_env" ORKESTR_WA_WORKER_EVENT_TOKEN "$event_token"
+  set_env_assignment ORKESTR_CONNECTORS_MCP_URL "http://127.0.0.1:18914/mcp"
+  set_env_assignment ORKESTR_CONNECTORS_MCP_TOKEN "$mcp_token"
+  set_env_assignment WHATSAPP_BRIDGE_MODE "external"
+  set_env_assignment ORKESTR_WHATSAPP_EXTERNAL_BRIDGE_ENABLED "1"
+  set_env_assignment WHATSAPP_BRIDGE_URL "http://127.0.0.1:18914"
+  set_env_assignment WHATSAPP_BRIDGE_TOKEN "$mcp_token"
+  cat > "/etc/systemd/system/${gateway_service}.service" <<EOF
+[Unit]
+Description=Orkestr connector MCP gateway
+Documentation=https://github.com/otcan/orkestr
+After=network-online.target ${worker_service}@sender.service
+Wants=network-online.target ${worker_service}@sender.service
+
+[Service]
+Type=simple
+User=$run_user
+Group=$group_name
+WorkingDirectory=$repo_dir
+EnvironmentFile=-$env_file
+EnvironmentFile=-$connectors_env
+ExecStart=$node_bin scripts/orkestr-connectors-mcp.mjs
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=$timeout_stop_sec
+KillMode=mixed
+PrivateTmp=true
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  cat > "/etc/systemd/system/${worker_service}@.service" <<EOF
+[Unit]
+Description=Orkestr WhatsApp worker (%i)
+Documentation=https://github.com/otcan/orkestr
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=$run_user
+Group=$group_name
+WorkingDirectory=$repo_dir
+EnvironmentFile=-$connectors_env
+Environment=ORKESTR_WA_WORKER_SOCKET=/run/orkestr-wa/%i.sock
+Environment=ORKESTR_WHATSAPP_AUTOSTART_ACCOUNT_IDS=%i
+Environment=ORKESTR_WHATSAPP_ACCOUNT_IDS=%i
+ExecStart=$node_bin scripts/orkestr-wa-worker.mjs
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=$timeout_stop_sec
+KillMode=mixed
+RuntimeDirectory=orkestr-wa
+RuntimeDirectoryMode=0750
+PrivateTmp=true
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  cat > "/etc/systemd/system/${gateway_service}-doctor.service" <<EOF
+[Unit]
+Description=Orkestr connector health and bounded repair
+After=${gateway_service}.service ${worker_service}@sender.service
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=$repo_dir
+EnvironmentFile=-$env_file
+EnvironmentFile=-$connectors_env
+Environment=ORKESTR_CONNECTORS_MCP_SYSTEMD_SERVICE=$gateway_service
+Environment=ORKESTR_WA_WORKER_SYSTEMD_SERVICE=${worker_service}@sender
+ExecStart=$node_bin scripts/orkestr-connectors-doctor.mjs --repair
+EOF
+  cat > "/etc/systemd/system/${gateway_service}-doctor.timer" <<EOF
+[Unit]
+Description=Check Orkestr connector services every minute
+
+[Timer]
+OnBootSec=60s
+OnUnitActiveSec=60s
+Unit=${gateway_service}-doctor.service
+
+[Install]
+WantedBy=timers.target
+EOF
+  systemctl daemon-reload
+  systemctl enable "${worker_service}@sender.service" "${gateway_service}.service" "${gateway_service}-doctor.timer"
+  systemctl restart "${worker_service}@sender.service"
+  systemctl restart "${gateway_service}.service"
+  systemctl restart "${gateway_service}-doctor.timer"
+}
+
+write_systemd_personal_connectors_services() {
+  local gateway_service worker_service group_name personal_env personal_home node_bin mcp_token worker_token
+  gateway_service="$(personal_connectors_mcp_service_name)"
+  worker_service="$(personal_wa_worker_service_name)"
+  group_name="$(id -gn "$run_user")"
+  personal_env="${ORKESTR_PERSONAL_CONNECTORS_ENV_FILE:-/etc/orkestr/orkestr-connectors-personal.env}"
+  personal_home="${ORKESTR_PERSONAL_CONNECTORS_HOME:-$data_dir/personal-connectors}"
+  node_bin="$(command -v node || echo /usr/bin/node)"
+  mkdir -p "$personal_home" "$(dirname "$personal_env")"
+  chown -R "$run_user:$group_name" "$personal_home"
+  if [ ! -f "$personal_env" ]; then
+    cat > "$personal_env" <<EOF
+# Isolated personal connector deployment. Do not reuse main Orkestr tokens or state paths here.
+ORKESTR_HOME=$personal_home
+ORKESTR_CONNECTORS_MCP_HOST=127.0.0.1
+ORKESTR_CONNECTORS_MCP_PORT=${ORKESTR_PERSONAL_CONNECTORS_MCP_PORT:-18749}
+ORKESTR_WA_WORKER_SOCKET=/run/orkestr-wa-personal/personal-49.sock
+ORKESTR_WHATSAPP_AUTOSTART=1
+ORKESTR_WHATSAPP_AUTOSTART_ACCOUNT_IDS=personal-49
+ORKESTR_WHATSAPP_ACCOUNT_IDS=personal-49
+ORKESTR_CONNECTORS_REQUIRED_WA_ACCOUNTS=personal-49
+# ORKESTR_CONNECTORS_MCP_TOKENS_JSON=
+# ORKESTR_WA_SERVICE_POLICY_JSON=
+EOF
+    chmod 0600 "$personal_env"
+    chgrp "$group_name" "$personal_env" || true
+  fi
+  mcp_token="$(named_env_file_value "$personal_env" ORKESTR_CONNECTORS_MCP_TOKEN)"
+  worker_token="$(named_env_file_value "$personal_env" ORKESTR_WA_WORKER_TOKEN)"
+  [ -n "$mcp_token" ] || mcp_token="$(random_private_token)"
+  [ -n "$worker_token" ] || worker_token="$(random_private_token)"
+  set_named_env_assignment "$personal_env" ORKESTR_CONNECTORS_MCP_TOKEN "$mcp_token"
+  set_named_env_assignment "$personal_env" ORKESTR_WA_SERVICE_TOKEN "$mcp_token"
+  set_named_env_assignment "$personal_env" ORKESTR_WA_WORKER_TOKEN "$worker_token"
+  cat > "/etc/systemd/system/${worker_service}.service" <<EOF
+[Unit]
+Description=Orkestr isolated personal +49 WhatsApp worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=$run_user
+Group=$group_name
+WorkingDirectory=$repo_dir
+EnvironmentFile=-$personal_env
+ExecStart=$node_bin scripts/orkestr-wa-worker.mjs
+Restart=on-failure
+RestartSec=5
+KillMode=mixed
+RuntimeDirectory=orkestr-wa-personal
+RuntimeDirectoryMode=0750
+PrivateTmp=true
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  cat > "/etc/systemd/system/${gateway_service}.service" <<EOF
+[Unit]
+Description=Orkestr isolated personal connector MCP gateway
+After=network-online.target ${worker_service}.service
+Wants=network-online.target ${worker_service}.service
+
+[Service]
+Type=simple
+User=$run_user
+Group=$group_name
+WorkingDirectory=$repo_dir
+EnvironmentFile=-$personal_env
+ExecStart=$node_bin scripts/orkestr-connectors-mcp.mjs
+Restart=on-failure
+RestartSec=5
+KillMode=mixed
+PrivateTmp=true
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  systemctl daemon-reload
+  systemctl enable "${worker_service}.service" "${gateway_service}.service"
+  systemctl restart "${worker_service}.service"
+  systemctl restart "${gateway_service}.service"
+}
+
+register_codex_connectors_mcp() {
+  local codex_command codex_home mcp_url bearer_env
+  codex_command="${ORKESTR_CODEX_BIN:-$(codex_bin_default)}"
+  codex_home="${CODEX_HOME:-$data_dir/codex}"
+  mcp_url="${ORKESTR_CONNECTORS_MCP_URL:-$(env_file_value ORKESTR_CONNECTORS_MCP_URL)}"
+  [ -n "$mcp_url" ] || return 0
+  bearer_env="${ORKESTR_CONNECTORS_MCP_BEARER_ENV_VAR:-ORKESTR_CONNECTORS_MCP_TOKEN}"
+  if [ -n "${ORKESTR_CONNECTORS_MCP_BEARER_TOKEN:-$(env_file_value ORKESTR_CONNECTORS_MCP_BEARER_TOKEN)}" ]; then
+    bearer_env="ORKESTR_CONNECTORS_MCP_BEARER_TOKEN"
+  fi
+  [ -x "$codex_command" ] || command -v "$codex_command" >/dev/null 2>&1 || return 0
+  runuser -u "$run_user" -- env CODEX_HOME="$codex_home" "$codex_command" mcp remove orkestr_connectors >/dev/null 2>&1 || true
+  runuser -u "$run_user" -- env CODEX_HOME="$codex_home" "$codex_command" mcp add orkestr_connectors \
+    --url "$mcp_url" \
+    --bearer-token-env-var "$bearer_env" >/dev/null
+}
+
 run_initial_release_deploy() {
   if [ "${ORKESTR_RELEASE_DEPLOY:-$release_update}" != "1" ]; then
     return 0
@@ -2459,10 +2754,19 @@ EOF
   prepare_default_desktop_profiles
   write_codex_app_server_wrapper
   write_systemd_codex_app_server_service
-  case "$(normalize_bool "${ORKESTR_INSTALL_WA_SERVICE:-0}")" in
-    1) write_systemd_wa_service ;;
+  case "$(normalize_bool "${ORKESTR_INSTALL_CONNECTORS_MCP:-${ORKESTR_INSTALL_WA_SERVICE:-0}}")" in
+    1) write_systemd_connectors_services ;;
+    *)
+      case "$(normalize_bool "${ORKESTR_INSTALL_WA_SERVICE:-0}")" in
+        1) write_systemd_wa_service ;;
+      esac
+      ;;
+  esac
+  case "$(normalize_bool "${ORKESTR_INSTALL_PERSONAL_CONNECTORS_MCP:-0}")" in
+    1) write_systemd_personal_connectors_services ;;
   esac
   write_systemd_service
+  register_codex_connectors_mcp
   run_initial_release_deploy
   bootstrap_tenant_vm_profile
   if [ "${ORKESTR_AUTO_UPDATE:-$auto_update}" = "1" ]; then
@@ -2568,6 +2872,7 @@ Orkestr host-native service installed.
 Service:
   systemctl status ${ORKESTR_SERVICE_NAME:-orkestr}
   $([ "$(normalize_bool "${ORKESTR_INSTALL_WA_SERVICE:-0}")" = "1" ] && echo "systemctl status $(wa_service_name)" || true)
+  $([ "$(normalize_bool "${ORKESTR_INSTALL_CONNECTORS_MCP:-${ORKESTR_INSTALL_WA_SERVICE:-0}}")" = "1" ] && echo "systemctl status $(connectors_mcp_service_name) $(wa_worker_service_name)@sender" || true)
   journalctl -u ${ORKESTR_SERVICE_NAME:-orkestr} -f
   $([ "$(normalize_bool "${ORKESTR_INSTALL_WA_SERVICE:-0}")" = "1" ] && echo "journalctl -u $(wa_service_name) -f" || true)
   journalctl -u ${ORKESTR_UPDATE_SERVICE_NAME:-orkestr-update} -f

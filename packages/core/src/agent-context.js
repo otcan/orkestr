@@ -129,14 +129,20 @@ Orkestr capabilities:
   pasted \`desk-...\` challenge with \`orkestr desktop approve <challenge-id>\`.
   Choose the manual/default desktop from \`orkestr whereiam --json\` when the
   user does not name a slug.
-- WhatsApp and Gmail: use connector status APIs and Orkestr routing. Prefer
+- Connector operations use one MCP vocabulary regardless of provider:
+  \`orkestr_auth\`, \`orkestr_messaging\`, \`orkestr_conversation\`, and
+  \`orkestr_routing\`. The bearer token is authoritative; service, instance,
+  user, thread, account, and conversation arguments are context that must match
+  its scope. Administrative writes return an attended Orkestr challenge.
+- WhatsApp and Gmail: use the connector MCP tools and Orkestr routing. Prefer
   \`orkestr whatsapp accounts list --json\` for local operator WhatsApp status
   because it carries the local CLI auth header; an unauthenticated
   \`/api/connectors/whatsapp/status\` probe can fail with browser-pairing auth
   even when both WhatsApp accounts are connected. For Google Workspace/Gmail
-  connection requests from a WhatsApp-bound or tenant-VM user, create the
-  brokered connector link with \`orkestr connect google --json\` and send the
-  returned link/message; the direct WhatsApp command is \`/connect google\`.
+  connection requests from a WhatsApp-bound or tenant-VM user, call
+  \`orkestr_auth\` with service \`gmail\` and action \`connect\`. The direct
+  WhatsApp compatibility command remains \`/connect google\` for one transition
+  cycle.
   Do not ask for a Gmail login hint unless the user is intentionally starting a
   raw Gmail OAuth flow outside the brokered Google Workspace connector. Do not
   read connector session files or tokens directly.

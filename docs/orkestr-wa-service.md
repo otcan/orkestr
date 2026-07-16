@@ -1,5 +1,10 @@
 # Orkestr WA Service
 
+> Transition note: new deployments should use the browser-free connector MCP
+> gateway and private WhatsApp worker described in
+> [connectors-mcp.md](./connectors-mcp.md). This direct HTTP service remains a
+> loopback-only compatibility surface for one release cycle.
+
 The extracted `orkestr-wa` service runs the WhatsApp Web bridge outside the
 Orkestr UI/API process. Orkestr instances then use `WHATSAPP_BRIDGE_MODE=external`
 and call the service over HTTP.
