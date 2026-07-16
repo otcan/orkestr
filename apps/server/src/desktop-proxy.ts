@@ -3,7 +3,7 @@ import net from "node:net";
 import type { INestApplication } from "@nestjs/common";
 import type { IncomingMessage, Server } from "node:http";
 import type { Duplex } from "node:stream";
-import { listBrowserSessions } from "../../../packages/browsers/src/browsers.js";
+import { ensureVirtualBrowserReady } from "../../../packages/browsers/src/browsers.js";
 import { requestPrincipal } from "../../../packages/core/src/principal.js";
 import { authorizeHttpRequest } from "../../../packages/core/src/security.js";
 import { isMobileDesktopRoute, serveMobileDesktopShell } from "./mobile-desktop-shell.js";
@@ -57,12 +57,9 @@ async function desktopTarget(rawUrl: string | undefined, principal: any): Promis
   const cacheKey = principalCacheKey(principal, request.slug);
   const cached = targetCache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) return { ...request, port: cached.port };
-  const payload = await listBrowserSessions(process.env, { principal });
-  const session = (payload.sessions || []).find((item: any) => String(item.slug || "") === request.slug);
+  const session = await ensureVirtualBrowserReady(request.slug, process.env, { principal });
   const port = session ? sessionWebPort(session) : 0;
-  const status = String(session?.status || session?.state || "").toLowerCase();
-  const stopped = ["not_prepared", "prepared", "stopped", "stopping"].includes(status);
-  if (!session || !port || stopped) {
+  if (!port) {
     const error = new Error("desktop_not_running");
     Object.assign(error, { statusCode: 409 });
     throw error;

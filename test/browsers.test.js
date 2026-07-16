@@ -9,6 +9,7 @@ import { promisify } from "node:util";
 import { WebSocketServer } from "ws";
 import {
   cleanupVirtualBrowser,
+  ensureVirtualBrowserReady,
   listBrowserSessions,
   listVirtualBrowsers,
   openUrlInVirtualBrowser,
@@ -508,6 +509,51 @@ test("oss browserctl marks stale tracked desktop state degraded and restarts cle
   assert.equal(stale.control.stop, true);
   assert.equal(restarted.session.status, "running");
   assert.equal(restarted.session.readiness.ok, true);
+});
+
+test("desktop readiness recovery restarts a degraded browserctl session", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-browser-recovery-"));
+  const marker = path.join(home, "started.txt");
+  const browserctl = path.join(home, "browserctl.js");
+  await fs.writeFile(browserctl, `#!/usr/bin/env node
+const fs = require("node:fs");
+const [command, slug] = process.argv.slice(2);
+const desktopSlug = !slug || slug === "--json" ? "desktop" : slug;
+const ready = {
+  slug: desktopSlug,
+  status: "running",
+  web_port: 16080,
+  readiness: { ok: true, status: "ready" },
+  visual_ok: true,
+  bridge_ok: true,
+  web_ok: true,
+};
+const degraded = {
+  ...ready,
+  status: "degraded",
+  readiness: { ok: false, status: "stale_state" },
+  visual_ok: false,
+};
+if (command === "list") console.log(JSON.stringify({ ok: true, sessions: [degraded] }));
+else if (command === "start") {
+  fs.writeFileSync(${JSON.stringify(marker)}, "started");
+  console.log(JSON.stringify({ ok: true, session: ready }));
+} else process.exit(2);
+`);
+  await fs.chmod(browserctl, 0o755);
+  const env = {
+    ...process.env,
+    ORKESTR_HOME: home,
+    ORKESTR_BROWSERCTL_PATH: browserctl,
+    ORKESTR_BROWSER_DESKTOP_MODE: "browserctl",
+    ORKESTR_BROWSER_VISIBLE_SLUGS: "desktop",
+  };
+
+  const recovered = await ensureVirtualBrowserReady("desktop", env);
+
+  assert.equal(recovered.status, "running");
+  assert.equal(recovered.readiness.ok, true);
+  assert.equal(await fs.readFile(marker, "utf8"), "started");
 });
 
 test("oss browserctl stops idle demo desktops and removes runtime cache files", async () => {

@@ -353,6 +353,36 @@ export async function listVirtualBrowsers(env = process.env, options = {}) {
   return (await listBrowserSessions(env, options)).sessions;
 }
 
+export function virtualBrowserReady(browser = null) {
+  if (!browser) return false;
+  const status = String(browser.status || browser.state || "").trim().toLowerCase();
+  if (!["running", "active", "open"].includes(status)) return false;
+  if (browser.readiness && typeof browser.readiness === "object" && browser.readiness.ok === false) return false;
+  if (browser.visual_ok === false || browser.bridge_ok === false || browser.web_ok === false) return false;
+  return true;
+}
+
+export async function ensureVirtualBrowserReady(slug, env = process.env, options = {}) {
+  const id = String(slug || "").trim();
+  const listed = await listBrowserSessions(env, options);
+  const current = (listed.sessions || []).find((browser) => String(browser.slug || browser.id || "").trim() === id);
+  if (!current) {
+    const error = new Error("browser_session_not_found");
+    error.statusCode = 404;
+    throw error;
+  }
+  if (virtualBrowserReady(current)) return current;
+
+  const recovered = await openVirtualBrowser(id, env, "", options);
+  if (virtualBrowserReady(recovered)) return recovered;
+  const reason = String(
+    recovered?.readiness?.status || recovered?.launchError || recovered?.status || recovered?.state || "desktop_recovery_failed",
+  ).trim() || "desktop_recovery_failed";
+  const error = new Error(reason);
+  error.statusCode = 503;
+  throw error;
+}
+
 export async function prepareVirtualBrowser(slug, env = process.env, options = {}) {
   const unavailable = desktopUnavailableError(env);
   if (unavailable) throw unavailable;

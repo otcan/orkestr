@@ -1799,6 +1799,7 @@ test("mobile desktop shell wraps noVNC with phone-first controls", async () => {
 
   assert.match(proxy, /isMobileDesktopRoute/);
   assert.match(proxy, /serveMobileDesktopShell/);
+  assert.match(proxy, /ensureVirtualBrowserReady/);
   assert.match(proxy, /portFromEndpoint\(session\.upstream\)/);
   assert.ok(shell.includes('import RFB from "/desktop/${encodedSlug}/core/rfb.js"'));
   assert.match(shell, /id="touchpad">Touchpad/);
