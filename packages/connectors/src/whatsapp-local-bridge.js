@@ -37,6 +37,7 @@ const typingSessions = new Map();
 const typingStartPromises = new Map();
 const typingClearRetryTimers = new Map();
 const localWhatsAppRuntimeRecoveryInFlight = new Map();
+const localWhatsAppScheduledRecoveryTimers = new Map();
 const inboundForwardHealthCache = new Map();
 const localWhatsAppStartPromises = new Map();
 const localWhatsAppRuntimeUnhandledRejections = new WeakSet();
@@ -2594,6 +2595,27 @@ async function handleRecoverableLocalWhatsAppRuntimeInvalidation(accountId = "",
   }
   // Persistent chat-ops bare-r failures fall through to the normal runtime
   // recovery path below.
+  const source = String(options.source || "");
+  if (source.startsWith("typing_") && localWhatsAppBareRRuntimeError(error)) {
+    const runtime = runtimes.get(normalized);
+    const browserStore = runtime?.client ? await probeLocalWhatsAppBrowserStore(runtime.client, env) : null;
+    if (browserStore?.ok) {
+      markLocalWhatsAppAccountReady(normalized, runtime.client, {
+        lastRecoveryReason: "browser_store_typing_runtime_fallback",
+        lastRecoveryAt: nowIso(),
+      });
+      await appendEvent({
+        type: "whatsapp_local_typing_runtime_browser_store_ready",
+        accountId: normalized,
+        source,
+        reason: String(options.reason || "typing_runtime_error"),
+        error: message,
+        chatCount: browserStore.chatCount ?? null,
+        appState: String(browserStore.appState || ""),
+      }, env).catch(() => {});
+      return true;
+    }
+  }
   clearAccountTypingRuntimeState(normalized);
   setAccountState(normalized, {
     state: "degraded",
@@ -2620,10 +2642,17 @@ async function handleRecoverableLocalWhatsAppRuntimeInvalidation(accountId = "",
     error: message,
   }, env).catch(() => {});
 
-  if (localWhatsAppRuntimeRecoveryInFlight.has(normalized)) return true;
+  if (localWhatsAppRuntimeRecoveryInFlight.has(normalized)) {
+    scheduleLocalWhatsAppRuntimeRecovery(normalized, error, env, {
+      source: String(options.source || "runtime_invalidated"),
+      delayMs: localWhatsAppRecoveryDelayMs(env),
+    });
+    return true;
+  }
   const cooldownMs = localWhatsAppRecoveryCooldownMs(env);
   const lastAttemptMs = Number(localWhatsAppRecoveryAttempts.get(normalized) || 0);
   if (!options.force && lastAttemptMs && nowMs - lastAttemptMs < cooldownMs) {
+    const remainingMs = Math.max(0, cooldownMs - (nowMs - lastAttemptMs));
     await appendEvent({
       type: "whatsapp_local_runtime_recovery_skipped",
       accountId: normalized,
@@ -2631,6 +2660,10 @@ async function handleRecoverableLocalWhatsAppRuntimeInvalidation(accountId = "",
       cooldownMs,
       source: String(options.source || ""),
     }, env).catch(() => {});
+    scheduleLocalWhatsAppRuntimeRecovery(normalized, error, env, {
+      source: String(options.source || "runtime_invalidated"),
+      delayMs: remainingMs + localWhatsAppRecoveryDelayMs(env),
+    });
     return true;
   }
   localWhatsAppRecoveryAttempts.set(normalized, nowMs);
@@ -2659,6 +2692,10 @@ async function handleRecoverableLocalWhatsAppRuntimeInvalidation(accountId = "",
       accountId: normalized,
       error: recoveryError?.message || String(recoveryError),
     }, env).catch(() => {});
+    scheduleLocalWhatsAppRuntimeRecovery(normalized, recoveryError, env, {
+      source: String(options.source || "runtime_invalidated"),
+      delayMs: localWhatsAppRecoveryCooldownMs(env) + localWhatsAppRecoveryDelayMs(env),
+    });
   }).finally(() => {
     if (localWhatsAppRuntimeRecoveryInFlight.get(normalized) === recovery) {
       localWhatsAppRuntimeRecoveryInFlight.delete(normalized);
@@ -2982,6 +3019,7 @@ export async function resetLocalWhatsAppBridgeForTest(env = process.env) {
   typingStartPromises.clear();
   typingClearRetryTimers.clear();
   localWhatsAppRuntimeRecoveryInFlight.clear();
+  for (const key of [...localWhatsAppScheduledRecoveryTimers.keys()]) clearScheduledLocalWhatsAppRecovery(key);
   localWhatsAppRecoveryAttempts.clear();
   localWhatsAppStartPromises.clear();
   localWhatsAppPairingRequiredNotificationAttempts.clear();
@@ -4099,6 +4137,82 @@ function localWhatsAppRecoveryCooldownMs(env = process.env) {
   return Number.isFinite(parsed) ? Math.max(5000, parsed) : 60_000;
 }
 
+function localWhatsAppRecoveryDelayMs(env = process.env) {
+  const parsed = Number(env.ORKESTR_WHATSAPP_AUTO_RECOVER_DELAY_MS || env.WHATSAPP_LOCAL_AUTO_RECOVER_DELAY_MS || 1500);
+  return Number.isFinite(parsed) ? Math.max(0, parsed) : 1500;
+}
+
+function localWhatsAppAutostartAccountSelected(accountId = "", env = process.env) {
+  const normalized = String(accountId || "").trim();
+  if (!normalized || !localWhatsAppAutostartEnabled(env)) return false;
+  const selected = localWhatsAppAutostartAccountIds(env);
+  if (selected.includes(normalized)) return true;
+  const ids = localWhatsAppAccountIdsForEnv(env);
+  try {
+    return selected.includes(resolveLocalAccountAlias(normalized, env, ids));
+  } catch {
+    return false;
+  }
+}
+
+function clearScheduledLocalWhatsAppRecovery(accountId = "") {
+  const normalized = String(accountId || "").trim();
+  if (!normalized) return;
+  const timer = localWhatsAppScheduledRecoveryTimers.get(normalized);
+  if (timer) clearTimeout(timer);
+  localWhatsAppScheduledRecoveryTimers.delete(normalized);
+}
+
+function scheduleLocalWhatsAppRuntimeRecovery(accountId = "", error, env = process.env, options = {}) {
+  const normalized = String(accountId || "").trim();
+  if (!normalized || !localWhatsAppAutostartAccountSelected(normalized, env)) return false;
+  if (localWhatsAppScheduledRecoveryTimers.has(normalized)) return true;
+  const requestedDelayMs = Number(options.delayMs);
+  const delayMs = Number.isFinite(requestedDelayMs) ? Math.max(0, requestedDelayMs) : localWhatsAppRecoveryDelayMs(env);
+  const source = String(options.source || "runtime_closed");
+  const message = error?.message || String(error || "");
+  const timer = setTimeout(async () => {
+    localWhatsAppScheduledRecoveryTimers.delete(normalized);
+    if (localWhatsAppRuntimeRecoveryInFlight.has(normalized)) {
+      scheduleLocalWhatsAppRuntimeRecovery(normalized, error, env, {
+        ...options,
+        source,
+        delayMs: localWhatsAppRecoveryDelayMs(env),
+      });
+      return;
+    }
+    const hooks = runtimeRecoveryHooksForTest || {};
+    await appendEvent({
+      type: "whatsapp_local_runtime_auto_recover_run",
+      accountId: normalized,
+      source,
+      error: message,
+    }, env).catch(() => {});
+    await recoverConfiguredLocalWhatsAppAccounts(env, {
+      ...(typeof hooks.restartAccount === "function" ? { restartAccount: hooks.restartAccount } : {}),
+      ...(typeof hooks.startAccount === "function" ? { startAccount: hooks.startAccount } : {}),
+      startOptions: { showNotification: false },
+    }).catch(async (recoverError) => {
+      await appendEvent({
+        type: "whatsapp_local_runtime_auto_recover_failed",
+        accountId: normalized,
+        source,
+        error: recoverError?.message || String(recoverError),
+      }, env).catch(() => {});
+    });
+  }, delayMs);
+  if (typeof timer.unref === "function") timer.unref();
+  localWhatsAppScheduledRecoveryTimers.set(normalized, timer);
+  void appendEvent({
+    type: "whatsapp_local_runtime_auto_recover_scheduled",
+    accountId: normalized,
+    source,
+    delayMs,
+    error: message,
+  }, env).catch(() => {});
+  return true;
+}
+
 async function destroyLocalWhatsAppClient(client, accountId = "", env = process.env, options = {}) {
   if (!client || typeof client.destroy !== "function") return { ok: true, skipped: true };
   const timeoutMs = Number(options.timeoutMs ?? localWhatsAppRuntimeDestroyTimeoutMs(env));
@@ -4558,6 +4672,9 @@ async function startLocalWhatsAppAccountOnce(normalized, env = process.env, opti
     }, env).catch(() => {});
     await destroyLocalWhatsAppClient(client, normalized, env, { source });
     clearRuntimeCloseUnhandledRejectionHandler();
+    if (recoverable) {
+      scheduleLocalWhatsAppRuntimeRecovery(normalized, error, env, { source });
+    }
   };
   const armRuntimeCloseUnhandledRejectionHandler = () => {
     const handleRuntimeCloseProcessError = (error, source = "unhandled_rejection", promise = null) => {
@@ -5008,6 +5125,7 @@ export async function logoutLocalWhatsAppAccount(accountId = "", env = process.e
 
 export async function stopLocalWhatsAppBridge(env = process.env) {
   const entries = [...runtimes.entries()];
+  for (const key of [...localWhatsAppScheduledRecoveryTimers.keys()]) clearScheduledLocalWhatsAppRecovery(key);
   for (const session of [...typingSessions.values()]) {
     clearTypingSessionTimers(session);
   }

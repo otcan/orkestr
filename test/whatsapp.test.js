@@ -719,6 +719,89 @@ test("local whatsapp typing clear degrades runtime and suppresses r retry loop",
   }
 });
 
+test("local whatsapp typing clear keeps runtime ready when browser store is connected", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-typing-clear-store-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "responder",
+    ORKESTR_WHATSAPP_TYPING_REFRESH_MS: "60000",
+    ORKESTR_WHATSAPP_TYPING_OPERATION_TIMEOUT_MS: "500",
+    ORKESTR_WHATSAPP_TYPING_STOP_GRACE_MS: "0",
+    ORKESTR_WHATSAPP_CHAT_OPS_PROBE_TIMEOUT_MS: "500",
+  };
+  const calls = [];
+  let failClear = false;
+  const chat = {
+    async sendStateTyping() {
+      calls.push(["sendStateTyping"]);
+    },
+    async clearState() {
+      calls.push(["clearState"]);
+      if (failClear) throw new Error("r");
+    },
+  };
+  const runtime = {
+    client: {
+      async getChatById(chatId) {
+        calls.push(["getChatById", chatId]);
+        return chat;
+      },
+      async sendPresenceAvailable() {},
+      pupPage: {
+        async evaluate(_fn, chatId, state) {
+          if (arguments.length >= 3) {
+            calls.push(["directChatstate", chatId, state]);
+            if (failClear && state === "stop") throw new Error("r");
+            return true;
+          }
+          calls.push(["browserStore"]);
+          return {
+            ok: true,
+            appState: "CONNECTED",
+            chatCount: 3,
+            hasChatStore: true,
+            hasMsgStore: true,
+          };
+        },
+      },
+    },
+  };
+
+  try {
+    setLocalWhatsAppRuntimeForTest("responder", runtime, { lastChatOpsProbeAt: null }, env);
+    setLocalWhatsAppRuntimeRecoveryHooksForTest({
+      async restartAccount(accountId) {
+        calls.push(["restart", accountId]);
+      },
+      async startAccount(accountId) {
+        calls.push(["start", accountId]);
+        return { accountId, state: "starting", ready: false };
+      },
+    });
+    await startLocalWhatsAppTyping({ accountId: "responder", chatId: "chat-typing-store@g.us", env });
+
+    failClear = true;
+    await stopLocalWhatsAppTyping({ accountId: "responder", chatId: "chat-typing-store@g.us", env });
+
+    const status = await getLocalWhatsAppBridgeStatus(env);
+    const account = status.accounts.find((item) => item.accountId === "responder");
+    const events = await listEvents(env, 50);
+
+    assert.equal(status.activeTypingCount, 0);
+    assert.equal(status.state, "ready");
+    assert.equal(account.ready, true);
+    assert.equal(account.chatOpsReady, true);
+    assert.equal(account.runtimeUsable, true);
+    assert.equal(account.lastRecoveryReason, "browser_store_typing_runtime_fallback");
+    assert.equal(calls.some((call) => call[0] === "restart"), false);
+    assert.equal(calls.some((call) => call[0] === "start"), false);
+    assert.ok(events.find((event) => event.type === "whatsapp_local_typing_runtime_browser_store_ready" && event.accountId === "responder"));
+    assert.equal(events.some((event) => event.type === "whatsapp_local_runtime_degraded" && event.source === "typing_clear"), false);
+  } finally {
+    await resetLocalWhatsAppBridgeForTest(env);
+  }
+});
+
 test("local whatsapp passive status does not run chat ops probes that throw r", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-chatops-r-"));
   const env = {
@@ -4801,6 +4884,70 @@ test("local whatsapp client target closure becomes recoverable disconnected", as
     const event = events.find((entry) => entry.type === "whatsapp_local_client_runtime_closed");
     assert.equal(event?.source, "client_error");
     assert.equal(event?.recoverable, true);
+  } finally {
+    await resetLocalWhatsAppBridgeForTest(env);
+  }
+});
+
+test("local whatsapp autostart account recovers after target closure", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-target-close-autorecover-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "responder",
+    ORKESTR_WHATSAPP_AUTOSTART: "1",
+    ORKESTR_WHATSAPP_AUTOSTART_ACCOUNT_IDS: "responder",
+    ORKESTR_WHATSAPP_AUTO_RECOVER_DELAY_MS: "5",
+    ORKESTR_WHATSAPP_AUTO_RECOVER_MS: "5000",
+  };
+  const calls = [];
+  let clientInstance = null;
+
+  class LocalAuth {}
+
+  class Client extends EventEmitter {
+    constructor() {
+      super();
+      clientInstance = this;
+    }
+
+    initialize() {
+      calls.push(["initialize"]);
+      return Promise.resolve();
+    }
+
+    async destroy() {
+      calls.push(["destroy"]);
+    }
+  }
+
+  try {
+    setLocalWhatsAppRuntimeRecoveryHooksForTest({
+      async restartAccount(accountId, actualEnv, options) {
+        calls.push(["restart", accountId, actualEnv === env, options.reason]);
+      },
+      async startAccount(accountId, actualEnv, options) {
+        calls.push(["start", accountId, actualEnv === env, options.showNotification]);
+        return { accountId, state: "starting", ready: false };
+      },
+    });
+    const result = await startLocalWhatsAppAccount("responder", env, {
+      loadBridgeDependencies: async () => ({
+        whatsapp: { Client, LocalAuth },
+        qrcode: {},
+      }),
+    });
+    assert.equal(result.state, "starting");
+
+    clientInstance.emit("error", new Error("Protocol error (Runtime.callFunctionOn): Target closed"));
+    assert.equal(await waitForTestCondition(() => calls.some((call) => call[0] === "start"), 50), true);
+
+    assert.ok(calls.some((call) => call[0] === "destroy"));
+    assert.deepEqual(calls.filter((call) => call[0] === "restart"), [["restart", "responder", true, "auto_recover"]]);
+    assert.deepEqual(calls.filter((call) => call[0] === "start"), [["start", "responder", true, false]]);
+    const events = await listEvents(env, 50);
+    assert.ok(events.find((event) => event.type === "whatsapp_local_runtime_auto_recover_scheduled" && event.accountId === "responder"));
+    assert.ok(events.find((event) => event.type === "whatsapp_local_runtime_auto_recover_run" && event.accountId === "responder"));
+    assert.ok(events.find((event) => event.type === "whatsapp_local_auto_recover_started" && event.accountId === "responder"));
   } finally {
     await resetLocalWhatsAppBridgeForTest(env);
   }
