@@ -1596,6 +1596,7 @@ function defaultAccountState(accountId) {
     runtimeUsable: null,
     lastChatOpsProbeAt: null,
     lastChatOpsError: "",
+    chatOpsUnavailableSince: null,
     lastRecoveryReason: "",
     lastRecoveryAt: null,
     recoveredChromeLocks: 0,
@@ -2002,6 +2003,13 @@ function localWhatsAppChatOpsReadyGraceMs(env = process.env) {
   return Number.isFinite(parsed) ? Math.max(0, parsed) : 30_000;
 }
 
+function localWhatsAppChatOpsResetAfterMs(env = process.env) {
+  const raw = String(env.ORKESTR_WHATSAPP_CHAT_OPS_RESET_AFTER_MS || env.WA_CHAT_OPS_RESET_AFTER_MS || "30000").trim().toLowerCase();
+  if (["0", "false", "no", "off", "never"].includes(raw)) return Infinity;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? Math.max(0, parsed) : 30_000;
+}
+
 function localWhatsAppChatOpsProbeReadEnabled(env = process.env, options = {}) {
   if (options.deep === true || options.read === true) return true;
   const raw = String(env.ORKESTR_WHATSAPP_CHAT_OPS_PROBE_READ || env.WA_CHAT_OPS_PROBE_READ || "").trim().toLowerCase();
@@ -2042,6 +2050,7 @@ async function probeLocalWhatsAppAccountChatOps(accountId = "", env = process.en
       runtimeUsable: true,
       lastChatOpsProbeAt: nowIso(),
       lastChatOpsError: "",
+      chatOpsUnavailableSince: null,
     });
     return { ok: true, skipped: "getChats_unavailable" };
   }
@@ -2057,6 +2066,7 @@ async function probeLocalWhatsAppAccountChatOps(accountId = "", env = process.en
       runtimeUsable: true,
       lastChatOpsProbeAt: nowIso(),
       lastChatOpsError: "",
+      chatOpsUnavailableSince: null,
       error: "",
     });
     return { ok: true, chatCount: Array.isArray(chats) ? chats.length : 0, sampleChatId: sampleId };
@@ -2293,6 +2303,19 @@ function localWhatsAppChatOpsReadyGraceActive(state = {}, error, env = process.e
   return ageMs >= 0 && ageMs <= graceMs;
 }
 
+function localWhatsAppChatOpsResetDue(state = {}, error, env = process.env, options = {}) {
+  if (String(options.source || "") !== "chat_ops_probe") return false;
+  if (!localWhatsAppBareRRuntimeError(error)) return false;
+  if (localWhatsAppChatOpsReadyGraceActive(state, error, env, options)) return false;
+  if (options.force === true && localWhatsAppChatOpsProbeReadEnabled(env, options)) return true;
+  const resetAfterMs = localWhatsAppChatOpsResetAfterMs(env);
+  if (!Number.isFinite(resetAfterMs)) return false;
+  const nowMs = Number(options.nowMs || Date.now());
+  const unavailableSinceMs = Date.parse(String(state.chatOpsUnavailableSince || ""));
+  if (!Number.isFinite(nowMs) || !Number.isFinite(unavailableSinceMs) || unavailableSinceMs <= 0) return false;
+  return nowMs - unavailableSinceMs >= resetAfterMs;
+}
+
 function localWhatsAppChatOpsOnlyRuntimeDegradation(state = {}) {
   const stateName = String(state?.state || "").trim();
   return Boolean(
@@ -2349,31 +2372,48 @@ async function handleRecoverableLocalWhatsAppRuntimeInvalidation(accountId = "",
     return true;
   }
   if (String(options.source || "") === "chat_ops_probe" && localWhatsAppBareRRuntimeError(error)) {
-    setAccountState(normalized, {
-      state: "ready",
-      ready: true,
-      authenticated: Boolean(current.authenticated),
-      started: Boolean(current.started || runtimes.has(normalized)),
-      qrAvailable: false,
-      pairingCode: "",
-      pairingCodeUpdatedAt: null,
-      error: "",
-      chatOpsReady: false,
-      runtimeUsable: true,
-      lastChatOpsProbeAt: nowIso(),
-      lastChatOpsError: message,
-      lastRecoveryReason: "chat_ops_probe_unavailable",
-      lastRecoveryAt: nowIso(),
-    });
-    await appendEvent({
-      type: "whatsapp_local_chat_ops_probe_unavailable",
-      accountId: normalized,
-      reason: String(options.reason || "chat_ops_runtime_error"),
-      source: String(options.source || ""),
-      error: message,
-    }, env).catch(() => {});
-    return true;
+    if (localWhatsAppChatOpsResetDue(current, error, env, options)) {
+      await appendEvent({
+        type: "whatsapp_local_chat_ops_probe_recovery_due",
+        accountId: normalized,
+        reason: String(options.reason || "chat_ops_runtime_error"),
+        source: String(options.source || ""),
+        error: message,
+        forced: options.force === true,
+        unavailableSince: current.chatOpsUnavailableSince || null,
+      }, env).catch(() => {});
+    } else {
+      const unavailableSince = current.chatOpsUnavailableSince || nowIso();
+      setAccountState(normalized, {
+        state: "ready",
+        ready: true,
+        authenticated: Boolean(current.authenticated),
+        started: Boolean(current.started || runtimes.has(normalized)),
+        qrAvailable: false,
+        pairingCode: "",
+        pairingCodeUpdatedAt: null,
+        error: "",
+        chatOpsReady: false,
+        runtimeUsable: true,
+        lastChatOpsProbeAt: nowIso(),
+        lastChatOpsError: message,
+        chatOpsUnavailableSince: unavailableSince,
+        lastRecoveryReason: "chat_ops_probe_unavailable",
+        lastRecoveryAt: nowIso(),
+      });
+      await appendEvent({
+        type: "whatsapp_local_chat_ops_probe_unavailable",
+        accountId: normalized,
+        reason: String(options.reason || "chat_ops_runtime_error"),
+        source: String(options.source || ""),
+        error: message,
+        unavailableSince,
+      }, env).catch(() => {});
+      return true;
+    }
   }
+  // Persistent chat-ops bare-r failures fall through to the normal runtime
+  // recovery path below.
   clearAccountTypingRuntimeState(normalized);
   setAccountState(normalized, {
     state: "degraded",
@@ -2388,6 +2428,7 @@ async function handleRecoverableLocalWhatsAppRuntimeInvalidation(accountId = "",
     runtimeUsable: false,
     lastChatOpsProbeAt: nowIso(),
     lastChatOpsError: message,
+    chatOpsUnavailableSince: current.chatOpsUnavailableSince || nowIso(),
     lastRecoveryReason: String(options.reason || "runtime_invalidated"),
     lastRecoveryAt: nowIso(),
   });
