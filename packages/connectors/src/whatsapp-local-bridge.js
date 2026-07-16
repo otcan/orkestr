@@ -1423,8 +1423,13 @@ function messageTimestampMs(message = {}) {
 async function recentOwnTextMessage(client, chatId, text, options = {}) {
   if (!client || !chatId || !String(text || "")) return null;
   const chat = await client.getChatById(chatId).catch(() => null);
-  if (!chat || typeof chat.fetchMessages !== "function") return null;
-  const messages = await chat.fetchMessages({ limit: 20 }).catch(() => []);
+  let messages = chat && typeof chat.fetchMessages === "function"
+    ? await chat.fetchMessages({ limit: 20 }).catch(() => [])
+    : [];
+  if (!messages.length) {
+    const cached = await readCachedLocalWhatsAppChatMessages(client, chatId, 20).catch(() => null);
+    if (cached?.found) messages = cached.messages;
+  }
   const sinceMs = Number(options.sinceMs || 0);
   return [...(Array.isArray(messages) ? messages : [])].reverse().find((message) =>
     Boolean(message?.fromMe) &&
@@ -4329,8 +4334,10 @@ export async function restartRecoverableLocalWhatsAppAccount(accountId = "", env
   const normalized = await normalizeManagedAccountId(accountId, env);
   const runtime = runtimes.get(normalized);
   if (runtime?.client) {
+    runtime.clearStartupTimer?.();
     runtime.clearAuthReadyTimer?.();
     runtime.clearPairingCodeUnhandledRejectionHandler?.();
+    runtime.clearRuntimeCloseUnhandledRejectionHandler?.();
   }
   runtimes.delete(normalized);
   if (runtime?.client) {
@@ -5289,6 +5296,26 @@ export async function listLocalWhatsAppChatMessages({ accountId = "", chatId = "
     chat = await runtime.client.getChatById(id);
     messages = await chat.fetchMessages({ limit: max });
   } catch (error) {
+    const cached = await readCachedLocalWhatsAppChatMessages(runtime.client, id, max).catch(() => null);
+    if (cached?.found) {
+      return {
+        accountId: normalized,
+        chatId: id,
+        ready: true,
+        fallback: "browser_store",
+        messages: cached.messages.map((message) => ({
+          id: serializedMessageId(message),
+          body: String(message?.body || ""),
+          type: String(message?.type || ""),
+          fromMe: Boolean(message?.fromMe),
+          from: serializedId(message?.from),
+          to: serializedId(message?.to),
+          author: serializedId(message?.author),
+          timestamp: message?.timestamp ? new Date(Number(message.timestamp) * 1000).toISOString() : null,
+          hasMedia: Boolean(message?.hasMedia),
+        })),
+      };
+    }
     if (recoverableLocalWhatsAppChatReadRuntimeError(error)) {
       await handleRecoverableLocalWhatsAppRuntimeInvalidation(normalized, error, env, {
         source: "chat_history",
@@ -5746,25 +5773,43 @@ function recoverableLocalWhatsAppRuntimeError(error) {
 }
 
 async function recoverLocalWhatsAppAccountAfterRuntimeError(accountId, error, env = process.env, options = {}) {
+  const normalized = String(accountId || "").trim();
   const eventPrefix = String(options.eventPrefix || "whatsapp_local_runtime_recovery");
   const reason = String(options.reason || "runtime_error");
   const retryMessage = String(options.retryMessage || "whatsapp_local_bridge_not_ready_recovered_after_runtime_error");
   const hooks = runtimeRecoveryHooksForTest || {};
   const restartAccount = hooks.restartAccount || restartRecoverableLocalWhatsAppAccount;
   const startAccount = hooks.startAccount || startLocalWhatsAppAccount;
-  await appendEvent({
-    type: `${eventPrefix}_start`,
-    accountId,
-    error: error?.message || String(error),
-  }, env).catch(() => {});
-  await restartAccount(accountId, env, { reason });
-  const account = await startAccount(accountId, env, { showNotification: false });
-  await appendEvent({
-    type: `${eventPrefix}_started`,
-    accountId,
-    state: account?.state || "",
-    ready: account?.ready === true,
-  }, env).catch(() => {});
+  let recovery = localWhatsAppRuntimeRecoveryInFlight.get(normalized);
+  if (!recovery) {
+    recovery = (async () => {
+      await appendEvent({
+        type: `${eventPrefix}_start`,
+        accountId: normalized,
+        error: error?.message || String(error),
+      }, env).catch(() => {});
+      await restartAccount(normalized, env, { reason });
+      const account = await startAccount(normalized, env, { showNotification: false });
+      await appendEvent({
+        type: `${eventPrefix}_started`,
+        accountId: normalized,
+        state: account?.state || "",
+        ready: account?.ready === true,
+      }, env).catch(() => {});
+    })().finally(() => {
+      if (localWhatsAppRuntimeRecoveryInFlight.get(normalized) === recovery) {
+        localWhatsAppRuntimeRecoveryInFlight.delete(normalized);
+      }
+    });
+    localWhatsAppRuntimeRecoveryInFlight.set(normalized, recovery);
+  } else {
+    await appendEvent({
+      type: `${eventPrefix}_joined`,
+      accountId: normalized,
+      error: error?.message || String(error),
+    }, env).catch(() => {});
+  }
+  await recovery;
   const retry = new Error(retryMessage);
   retry.statusCode = 503;
   retry.cause = error;

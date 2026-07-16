@@ -8,6 +8,7 @@ import { callConnectorsMcpTool, listConnectorsMcpTools } from "../packages/conne
 import { listConnectorInboxEvents, resetConnectorInboxForTest } from "../packages/connectors/src/connector-inbox.js";
 import { deliverConnectorInboxEvent, routeWhatsAppInboundFromWorker } from "../packages/connectors/src/connectors-mcp-router.js";
 import { approvePairingChallenge } from "../packages/core/src/security.js";
+import { createThread } from "../packages/core/src/threads.js";
 import { isMainModule } from "../scripts/main-module.mjs";
 import { createConnectorsMcpGateway } from "../scripts/orkestr-connectors-mcp.mjs";
 import { assessConnectorHealth, runConnectorDoctor } from "../scripts/orkestr-connectors-doctor.mjs";
@@ -136,6 +137,39 @@ test("connector MCP messaging uses the durable idempotency ledger", async () => 
     assert.equal(second.status, "delivered");
     assert.equal(second.data.duplicate, true);
     assert.equal(item.worker.calls.filter((call) => call.url === "/send-text").length, 1);
+  } finally {
+    await item.close();
+  }
+});
+
+test("connector MCP routing evaluates bindings against live worker health", async () => {
+  const item = await fixture();
+  try {
+    await createThread({
+      id: "thread-live-routing",
+      name: "Live routing",
+      binding: {
+        connector: "whatsapp",
+        chatId: "live-routing@g.us",
+        responderAccountId: "sender",
+        outboundAccountId: "sender",
+        enabled: true,
+        routeEligible: true,
+        mirrorToWhatsApp: true,
+      },
+    }, item.env);
+
+    const status = await callConnectorsMcpTool("orkestr_routing", {
+      service: "whatsapp",
+      action: "status",
+      account_id: "sender",
+    }, item.env);
+    const binding = status.data.bindings.find((item) => item.threadId === "thread-live-routing");
+
+    assert.equal(binding.state, "ready");
+    assert.equal(binding.reason, "ready");
+    assert.equal(binding.account.ready, true);
+    assert.ok(item.worker.calls.some((call) => call.url === "/health"));
   } finally {
     await item.close();
   }
@@ -302,6 +336,43 @@ test("connector doctor recognizes phone identities through their runtime alias",
   assert.equal(result.ok, true);
   assert.deepEqual(result.missingAccounts, []);
   assert.deepEqual(result.unavailableAccounts, []);
+});
+
+test("connector doctor does not restart an authenticated account during startup grace", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-connectors-doctor-startup-"));
+  const updatedAt = new Date().toISOString();
+  const result = await runConnectorDoctor({
+    repair: true,
+    env: {
+      ORKESTR_HOME: home,
+      ORKESTR_CONNECTORS_REQUIRED_WA_ACCOUNTS: "sender",
+      ORKESTR_CONNECTORS_DOCTOR_STARTUP_GRACE_MS: "180000",
+    },
+    fetchImpl: async () => ({
+      ok: true,
+      json: async () => ({
+        ok: true,
+        gateway: { ok: true },
+        worker: { ok: true, state: "authenticated" },
+        accounts: [{
+          accountId: "sender",
+          state: "authenticated",
+          ready: false,
+          authenticated: true,
+          runtimeUsable: false,
+          sendReady: false,
+          inboundReady: false,
+          updatedAt,
+        }],
+        queue: { deadLetter: 0 },
+      }),
+    }),
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.repaired, false);
+  assert.equal(result.repairSuppressed, "startup_grace");
+  assert.deepEqual(result.recoveringAccounts, ["sender"]);
 });
 
 test("connector doctor leaves dead letters for explicit recovery", async () => {

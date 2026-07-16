@@ -57,6 +57,26 @@ export function assessConnectorHealth(payload = {}, env = process.env) {
   };
 }
 
+function connectorStartupGraceMs(env = process.env) {
+  const parsed = Number(env.ORKESTR_CONNECTORS_DOCTOR_STARTUP_GRACE_MS || 180_000);
+  return Number.isFinite(parsed) ? Math.max(0, parsed) : 180_000;
+}
+
+function recoveringRequiredAccounts(payload = {}, assessment = {}, env = process.env, nowMs = Date.now()) {
+  const graceMs = connectorStartupGraceMs(env);
+  if (!graceMs) return [];
+  const accounts = Array.isArray(payload.accounts) ? payload.accounts : [];
+  const recoveringStates = new Set(["starting", "authenticated", "loading", "chat_ops_warming"]);
+  return assessment.unavailableAccounts.filter((id) => accounts.some((account) => {
+    const aliases = [account.accountId, account.id, account.runtimeAccountId, ...(Array.isArray(account.legacyRoleAliases) ? account.legacyRoleAliases : [])]
+      .map(clean);
+    if (!aliases.includes(id) || !recoveringStates.has(clean(account.state))) return false;
+    const updatedMs = Date.parse(clean(account.updatedAt || account.authenticatedAt || account.startedAt));
+    const ageMs = nowMs - updatedMs;
+    return Number.isFinite(updatedMs) && ageMs >= 0 && ageMs <= graceMs;
+  }));
+}
+
 async function loadRepairState(env = process.env) {
   const filePath = clean(env.ORKESTR_CONNECTORS_DOCTOR_STATE_FILE) || path.join(clean(env.ORKESTR_HOME || "/opt/orkestr/data"), "connectors-doctor.json");
   const state = await fs.readFile(filePath, "utf8").then(JSON.parse, () => ({ repairs: [] }));
@@ -96,6 +116,19 @@ export async function runConnectorDoctor({ repair = false, env = process.env, fe
   const assessment = assessConnectorHealth(payload, env);
   if (assessment.ok || !repair) return { ...assessment, repaired: false, health: payload };
 
+  const recoveringAccounts = recoveringRequiredAccounts(payload, assessment, env);
+  if (assessment.issues.length === 1 &&
+    assessment.issues[0] === "required_accounts_unavailable" &&
+    recoveringAccounts.length === assessment.unavailableAccounts.length) {
+    return {
+      ...assessment,
+      repaired: false,
+      repairSuppressed: "startup_grace",
+      recoveringAccounts,
+      health: payload,
+    };
+  }
+
   const state = await repairAllowed(env);
   if (!state.allowed) return { ...assessment, repaired: false, repairSuppressed: "hourly_limit", health: payload };
   const workerService = clean(env.ORKESTR_WA_WORKER_SYSTEMD_SERVICE || "orkestr-wa-worker@sender");
@@ -119,5 +152,5 @@ export async function runConnectorDoctor({ repair = false, env = process.env, fe
 if (isMainModule(import.meta.url)) {
   const result = await runConnectorDoctor({ repair: process.argv.includes("--repair") });
   console.log(JSON.stringify(result));
-  if (!result.ok && !result.repaired) process.exitCode = 1;
+  if (!result.ok && !result.repaired && result.repairSuppressed !== "startup_grace") process.exitCode = 1;
 }

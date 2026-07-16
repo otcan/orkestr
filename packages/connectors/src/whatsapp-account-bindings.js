@@ -28,6 +28,7 @@ import {
   whatsappBindingLevelRank,
   whatsappBindingPrecedence,
 } from "./whatsapp-binding-registry.js";
+import { whatsappWorkerHealth } from "./whatsapp-worker-client.js";
 
 function pickString(...values) {
   for (const value of values) {
@@ -677,14 +678,17 @@ function whatsappThreads(threads = []) {
 }
 
 export async function listWhatsAppBindingStatuses({ env = process.env, status = {}, threads = null } = {}) {
-  const accounts = await listPersistentWhatsAppConnectorAccounts({ status, env });
+  const liveStatus = status && typeof status === "object" && Object.keys(status).length
+    ? status
+    : await whatsappWorkerHealth(env).catch(() => ({}));
+  const accounts = await listPersistentWhatsAppConnectorAccounts({ status: liveStatus, env });
   const sourceThreads = Array.isArray(threads) ? threads : await listThreads(env);
   const [registryBindings] = await Promise.all([
     readWhatsAppBindingRecords(env),
   ]);
   const bindings = [
-    ...registryBindings.map((binding) => normalizeWhatsAppBinding(binding, { accounts, env, source: "registry", status })),
-    ...whatsappThreads(sourceThreads).map((thread) => normalizeWhatsAppBinding(thread, { accounts, env, source: "thread", status })),
+    ...registryBindings.map((binding) => normalizeWhatsAppBinding(binding, { accounts, env, source: "registry", status: liveStatus })),
+    ...whatsappThreads(sourceThreads).map((thread) => normalizeWhatsAppBinding(thread, { accounts, env, source: "thread", status: liveStatus })),
   ].sort(compareWhatsAppBindings);
   return {
     accounts,
