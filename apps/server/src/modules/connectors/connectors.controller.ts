@@ -66,7 +66,7 @@ import {
   startLocalWhatsAppAccount,
   stopLocalWhatsAppTyping,
 } from "../../../../../packages/connectors/src/whatsapp-local-bridge.js";
-import { runWithRoutedWhatsAppTyping } from "../../../../../packages/connectors/src/whatsapp-router-typing.js";
+import { routedWhatsAppTypingTarget, runWithRoutedWhatsAppTyping } from "../../../../../packages/connectors/src/whatsapp-router-typing.js";
 import { startWhatsAppTyping, stopWhatsAppTyping } from "../../../../../packages/connectors/src/whatsapp-typing.js";
 import { findWhatsAppAccountByAnyId } from "../../../../../packages/connectors/src/whatsapp-account-identity.js";
 import { whatsappWorkerConversation } from "../../../../../packages/connectors/src/whatsapp-worker-client.js";
@@ -888,7 +888,11 @@ export class ConnectorsController {
             .type("application/json; charset=utf-8")
             .send(payload);
         }
-          await deliverWhatsAppReplies().catch(() => {});
+        const typingTarget = routedWhatsAppTypingTarget({ thread, input: body });
+        if (typingTarget) {
+          await startWhatsAppTyping({ ...typingTarget, env: process.env }).catch(() => null);
+        }
+        await deliverWhatsAppReplies().catch(() => {});
         if (!(routed as any).remoteRuntime) requestThreadInputDelivery(routed.threadId);
       }
       return response

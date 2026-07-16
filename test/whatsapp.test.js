@@ -3000,21 +3000,21 @@ test("routed whatsapp typing wraps api-agent work for the bound chat", async () 
     return { ok: true };
   }, {
     async startTyping(input) {
-      calls.push(["start", input.accountId, input.chatId]);
+      calls.push(["start", input.accountId, input.chatId, input.threadId]);
       return { ok: true, active: true };
     },
     async stopTyping(input) {
-      calls.push(["stop", input.accountId, input.chatId]);
+      calls.push(["stop", input.accountId, input.chatId, input.threadId]);
       return { ok: true, active: false };
     },
   });
 
-  assert.deepEqual(target, { accountId: "account-2", chatId: "wa-group-four@g.us" });
+  assert.deepEqual(target, { accountId: "account-2", chatId: "wa-group-four@g.us", threadId: "tenant-thread" });
   assert.deepEqual(result, { ok: true });
   assert.deepEqual(calls, [
-    ["start", "account-2", "wa-group-four@g.us"],
+    ["start", "account-2", "wa-group-four@g.us", "tenant-thread"],
     ["work"],
-    ["stop", "account-2", "wa-group-four@g.us"],
+    ["stop", "account-2", "wa-group-four@g.us", "tenant-thread"],
   ]);
 });
 

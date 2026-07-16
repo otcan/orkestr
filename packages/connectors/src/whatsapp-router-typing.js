@@ -9,6 +9,7 @@ export function routedWhatsAppTypingTarget({ thread = {}, input = {} } = {}) {
   return {
     chatId,
     accountId: clean(binding.responderAccountId || binding.outboundAccountId || binding.senderAccountId || input.accountId),
+    threadId: clean(thread.id),
   };
 }
 
