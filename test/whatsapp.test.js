@@ -883,6 +883,71 @@ test("local whatsapp active status resets stale chat ops r degradation", async (
   }
 });
 
+test("local whatsapp ready grace does not defer stale chat ops r outage", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-chatops-stale-grace-"));
+  const nowMs = Date.parse("2026-07-16T08:32:00.000Z");
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "responder",
+    ORKESTR_WHATSAPP_STATUS_CHAT_OPS_PROBE: "1",
+    ORKESTR_WHATSAPP_CHAT_OPS_PROBE_INTERVAL_MS: "1000",
+    ORKESTR_WHATSAPP_CHAT_OPS_PROBE_TIMEOUT_MS: "500",
+    ORKESTR_WHATSAPP_CHAT_OPS_READY_GRACE_MS: "30000",
+    ORKESTR_WHATSAPP_CHAT_OPS_RESET_AFTER_MS: "30000",
+    ORKESTR_WHATSAPP_AUTO_RECOVER_MS: "5000",
+  };
+  const calls = [];
+  const runtime = {
+    client: {
+      async getChats() {
+        calls.push(["getChats"]);
+        throw new Error("r");
+      },
+    },
+  };
+
+  try {
+    setLocalWhatsAppRuntimeForTest("responder", runtime, {
+      readyAt: new Date(nowMs - 1000).toISOString(),
+      lastChatOpsProbeAt: null,
+      chatOpsReady: false,
+      runtimeUsable: true,
+      lastChatOpsError: "r",
+      chatOpsUnavailableSince: new Date(nowMs - 31_000).toISOString(),
+      lastRecoveryReason: "chat_ops_probe_ready_grace",
+    }, env);
+    setLocalWhatsAppRuntimeRecoveryHooksForTest({
+      async restartAccount(accountId, actualEnv, options) {
+        calls.push(["restart", accountId, actualEnv === env, options.reason]);
+      },
+      async startAccount(accountId, actualEnv, options) {
+        calls.push(["start", accountId, actualEnv === env, options.showNotification]);
+        return { accountId, state: "starting", ready: false };
+      },
+    });
+
+    const status = await getLocalWhatsAppBridgeStatus(env, { nowMs });
+    const account = status.accounts.find((item) => item.accountId === "responder");
+    const events = await listEvents(env, 50);
+
+    assert.equal(status.state, "failed");
+    assert.equal(account.state, "degraded");
+    assert.equal(account.ready, false);
+    assert.equal(account.chatOpsReady, false);
+    assert.equal(account.runtimeUsable, false);
+    assert.equal(account.chatOpsUnavailableSince, new Date(nowMs - 31_000).toISOString());
+    assert.deepEqual(calls, [
+      ["getChats"],
+      ["restart", "responder", true, "chat_ops_runtime_error"],
+      ["start", "responder", true, false],
+    ]);
+    assert.ok(events.find((event) => event.type === "whatsapp_local_chat_ops_probe_recovery_due" && event.accountId === "responder"));
+    assert.equal(events.some((event) => event.type === "whatsapp_local_chat_ops_probe_ready_grace" && event.accountId === "responder"), false);
+  } finally {
+    await resetLocalWhatsAppBridgeForTest(env);
+  }
+});
+
 test("local whatsapp forced deep chat ops probe resets bare r after ready grace", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-chatops-forced-r-reset-"));
   const nowMs = Date.parse("2026-07-16T07:48:00.000Z");
@@ -4408,6 +4473,65 @@ test("local whatsapp client target closure becomes recoverable disconnected", as
     const event = events.find((entry) => entry.type === "whatsapp_local_client_runtime_closed");
     assert.equal(event?.source, "client_error");
     assert.equal(event?.recoverable, true);
+  } finally {
+    await resetLocalWhatsAppBridgeForTest(env);
+  }
+});
+
+test("local whatsapp ready event clears previous chat ops outage timestamp", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-ready-clears-chatops-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "responder",
+  };
+  let clientInstance = null;
+
+  class LocalAuth {}
+
+  class Client extends EventEmitter {
+    constructor() {
+      super();
+      clientInstance = this;
+      this.info = { wid: { _serialized: "responder@c.us" }, pushname: "Responder" };
+    }
+
+    initialize() {
+      return Promise.resolve();
+    }
+
+    async destroy() {}
+  }
+
+  try {
+    const result = await startLocalWhatsAppAccount("responder", env, {
+      loadBridgeDependencies: async () => ({
+        whatsapp: { Client, LocalAuth },
+        qrcode: {},
+      }),
+    });
+    assert.equal(result.state, "starting");
+
+    setLocalWhatsAppRuntimeForTest("responder", { client: clientInstance }, {
+      state: "ready",
+      ready: true,
+      authenticated: true,
+      started: true,
+      chatOpsReady: false,
+      runtimeUsable: true,
+      lastChatOpsError: "r",
+      chatOpsUnavailableSince: "2026-07-16T08:20:00.000Z",
+    }, env);
+    assert.equal(clientInstance.listenerCount("ready"), 1);
+    assert.equal(clientInstance.emit("ready"), true);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    const { account } = await waitForLocalWhatsAppAccount(
+      env,
+      "responder",
+      (item) => item.ready === true && item.chatOpsReady === true && item.chatOpsUnavailableSince === null,
+    );
+    assert.equal(account.lastChatOpsError, "");
+    assert.equal(account.chatOpsUnavailableSince, null);
   } finally {
     await resetLocalWhatsAppBridgeForTest(env);
   }

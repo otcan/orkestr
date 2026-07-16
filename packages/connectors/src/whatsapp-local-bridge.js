@@ -1618,7 +1618,7 @@ function setAccountState(accountId, patch) {
   return next;
 }
 
-async function accountSnapshot(accountId, env = process.env) {
+async function accountSnapshot(accountId, env = process.env, options = {}) {
   let state = accountStates.get(accountId) || defaultAccountState(accountId);
   const runtime = runtimes.get(accountId);
   const hasClient = Boolean(runtime?.client);
@@ -1640,11 +1640,13 @@ async function accountSnapshot(accountId, env = process.env) {
     state.runtimeUsable !== false &&
     localWhatsAppBareRRuntimeError(state.lastChatOpsError || state.error || "")
   ) {
-    const nowMs = Date.now();
+    const nowMs = Number(options.nowMs || Date.now());
     const error = new Error(state.lastChatOpsError || state.error || "r");
     const resetAfterMs = localWhatsAppChatOpsResetAfterMs(env);
     const lastProbeMs = Date.parse(String(state.lastChatOpsProbeAt || ""));
+    const staleOutageDue = localWhatsAppChatOpsOutageExpired(state, env, nowMs);
     const recentlyMarkedGrace = state.lastRecoveryReason === "chat_ops_probe_ready_grace" &&
+      !staleOutageDue &&
       Number.isFinite(resetAfterMs) &&
       Number.isFinite(lastProbeMs) &&
       lastProbeMs > 0 &&
@@ -2037,6 +2039,14 @@ function localWhatsAppChatOpsResetAfterMs(env = process.env) {
   return Number.isFinite(parsed) ? Math.max(0, parsed) : 30_000;
 }
 
+function localWhatsAppChatOpsOutageExpired(state = {}, env = process.env, nowMs = Date.now()) {
+  const resetAfterMs = localWhatsAppChatOpsResetAfterMs(env);
+  if (!Number.isFinite(resetAfterMs)) return false;
+  const unavailableSinceMs = Date.parse(String(state.chatOpsUnavailableSince || ""));
+  if (!Number.isFinite(nowMs) || !Number.isFinite(unavailableSinceMs) || unavailableSinceMs <= 0) return false;
+  return nowMs - unavailableSinceMs >= resetAfterMs;
+}
+
 function localWhatsAppChatOpsProbeReadEnabled(env = process.env, options = {}) {
   if (options.deep === true || options.read === true) return true;
   const raw = String(env.ORKESTR_WHATSAPP_CHAT_OPS_PROBE_READ || env.WA_CHAT_OPS_PROBE_READ || "").trim().toLowerCase();
@@ -2121,7 +2131,7 @@ export async function getLocalWhatsAppBridgeStatus(env = process.env, options = 
   if (localWhatsAppStatusChatOpsProbeEnabled(env, options)) {
     await Promise.all(accountIds.map((accountId) => probeLocalWhatsAppAccountChatOps(accountId, env, options).catch(() => null)));
   }
-  const accounts = await Promise.all(accountIds.map((accountId) => accountSnapshot(accountId, env)));
+  const accounts = await Promise.all(accountIds.map((accountId) => accountSnapshot(accountId, env, options)));
   const state = reduceLocalWhatsAppBridgeState(accounts);
   const chatOpsReady = !accounts.some((account) => account.chatOpsReady === false);
   const runtimeUsable = !accounts.some((account) => account.runtimeUsable === false);
@@ -2328,6 +2338,7 @@ function localWhatsAppChatOpsReadyGraceActive(state = {}, error, env = process.e
   const graceMs = localWhatsAppChatOpsReadyGraceMs(env);
   if (graceMs <= 0) return false;
   const nowMs = Number(options.nowMs || Date.now());
+  if (localWhatsAppChatOpsOutageExpired(state, env, nowMs)) return false;
   const referenceMs = Date.parse(String(state.readyAt || state.authenticatedAt || ""));
   if (!Number.isFinite(nowMs) || !Number.isFinite(referenceMs) || referenceMs <= 0) return false;
   const ageMs = nowMs - referenceMs;
@@ -4657,6 +4668,7 @@ async function startLocalWhatsAppAccountOnce(normalized, env = process.env, opti
       runtimeUsable: true,
       lastChatOpsProbeAt: nowIso(),
       lastChatOpsError: "",
+      chatOpsUnavailableSince: null,
       ...runtimeAccountIdentity({ client }),
     });
     await appendEvent({ type: "whatsapp_local_ready", accountId: normalized }, env);
