@@ -321,7 +321,10 @@ test("install script provisions isolated connector MCP and WhatsApp worker servi
   assert.match(releaseScript, /restoring the previous release/);
   assert.match(releaseScript, /ORKESTR_CONNECTORS_RELEASE_RETENTION:-3/);
   assert.match(releaseScript, /switch_current_release/);
-  assert.match(releaseScript, /for _ in \$\(seq 1 30\)/);
+  assert.match(releaseScript, /ORKESTR_CONNECTORS_HEALTH_ATTEMPTS:-90/);
+  assert.match(releaseScript, /ORKESTR_CONNECTORS_HEALTH_STABLE_SUCCESSES:-3/);
+  assert.match(releaseScript, /for _ in \$\(seq 1 "\$health_attempts"\)/);
+  assert.match(releaseScript, /health_successes=\$\(\(health_successes \+ 1\)\)/);
   assert.match(releaseScript, /orkestr-connectors-doctor\.mjs --repair/);
   assert.match(releaseScript, /systemctl stop "\$\{doctor_timer\}\.timer" "\$\{doctor_service\}\.service"/);
   assert.match(releaseScript, /"\$node_bin" "\$release_dir\/scripts\/orkestr-connectors-doctor\.mjs"/);
