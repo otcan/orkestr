@@ -323,6 +323,9 @@ test("install script provisions isolated connector MCP and WhatsApp worker servi
   assert.match(releaseScript, /switch_current_release/);
   assert.match(releaseScript, /for _ in \$\(seq 1 30\)/);
   assert.match(releaseScript, /orkestr-connectors-doctor\.mjs --repair/);
+  assert.match(releaseScript, /systemctl stop "\$\{doctor_timer\}\.timer" "\$\{doctor_service\}\.service"/);
+  assert.match(releaseScript, /"\$node_bin" "\$release_dir\/scripts\/orkestr-connectors-doctor\.mjs"/);
+  assert.match(releaseScript, /restore_doctor_timer/);
   assert.doesNotMatch(releaseScript, /systemctl (?:stop|restart) orkestr(?:-ui)?\.service/);
   assert.match(migrationScript, /--activate/);
   assert.match(migrationScript, /Connector MCP cutover failed; embedded UI routing was restored/);

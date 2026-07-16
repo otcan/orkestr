@@ -31,6 +31,7 @@ connectors_env="${ORKESTR_CONNECTORS_ENV_FILE:-/etc/orkestr/orkestr-connectors.e
 gateway_service="${ORKESTR_CONNECTORS_MCP_SERVICE_NAME:-orkestr-connectors-mcp}"
 worker_service="${ORKESTR_WA_WORKER_SERVICE_NAME:-orkestr-wa-worker}@sender"
 doctor_service="${ORKESTR_CONNECTORS_DOCTOR_SERVICE_NAME:-${gateway_service}-doctor}"
+doctor_timer="${ORKESTR_CONNECTORS_DOCTOR_TIMER_NAME:-${doctor_service}}"
 node_bin="$(command -v node || echo /usr/bin/node)"
 revision="$(git -C "$source_dir" rev-parse --verify HEAD)"
 release_id="$(date -u +%Y%m%dT%H%M%SZ)-${revision:0:12}"
@@ -64,6 +65,17 @@ if [ "$activate" -ne 1 ]; then
 fi
 
 previous_release="$(readlink -f "$current_link" 2>/dev/null || true)"
+doctor_timer_was_active=0
+if systemctl is-active --quiet "${doctor_timer}.timer"; then
+  doctor_timer_was_active=1
+fi
+restore_doctor_timer() {
+  if [ "$doctor_timer_was_active" -eq 1 ]; then
+    systemctl start "${doctor_timer}.timer" || true
+  fi
+}
+trap restore_doctor_timer EXIT
+systemctl stop "${doctor_timer}.timer" "${doctor_service}.service" || true
 systemctl stop "${gateway_service}.service" "${worker_service}.service"
 switch_current_release "$release_dir"
 
@@ -86,11 +98,11 @@ if [ -z "$token" ] && [ -r "$connectors_env" ]; then
   token="${token%\'}"
   token="${token#\'}"
 fi
-curl_args=(--fail --silent --show-error --max-time 10)
-if [ -n "$token" ]; then curl_args+=(-H "Authorization: Bearer $token"); fi
 health_ready=0
 for _ in $(seq 1 30); do
-  if curl "${curl_args[@]}" "${ORKESTR_CONNECTORS_MCP_HEALTH_URL:-http://127.0.0.1:18914/health}" >/dev/null 2>&1; then
+  if ORKESTR_CONNECTORS_MCP_TOKEN="$token" \
+      ORKESTR_CONNECTORS_MCP_HEALTH_URL="${ORKESTR_CONNECTORS_MCP_HEALTH_URL:-http://127.0.0.1:18914/health}" \
+      "$node_bin" "$release_dir/scripts/orkestr-connectors-doctor.mjs" >/dev/null 2>&1; then
     health_ready=1
     break
   fi
@@ -105,6 +117,10 @@ if [ "$health_ready" -ne 1 ]; then
   fi
   exit 1
 fi
+
+restore_doctor_timer
+doctor_timer_was_active=0
+trap - EXIT
 
 find "$releases_dir" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' \
   | sort -nr \
