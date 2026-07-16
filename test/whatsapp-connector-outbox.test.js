@@ -869,6 +869,83 @@ test("whatsapp connector outbox replay resets intent and delivered ledger", asyn
   assert.equal(replayedJob.brokerAck.ids[0], "wa-sent-2");
 });
 
+test("whatsapp connector outbox replay overrides prior uncertainty for the same final lineage", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-connector-outbox-replay-uncertain-"));
+  const runtimeEnv = env(home, { ORKESTR_CONNECTOR_OUTBOX_RETRY_BACKOFF_MS: "0" });
+  await writeConnectorConfig("whatsapp", { bridgeMode: "external", bridgeUrl: "http://wa.local" }, runtimeEnv);
+  const threadId = "thread-wa-outbox-replay-uncertain";
+  await createThread({
+    id: threadId,
+    ownerUserId: "tenant-a",
+    name: "WA Connector Outbox Replay Uncertain Thread",
+    binding: {
+      connector: "whatsapp",
+      chatId: "shared-chat",
+      responderAccountId: "responder",
+      outboundAccountId: "responder",
+      mirrorToWhatsApp: true,
+    },
+  }, runtimeEnv);
+  const parent = await appendThreadMessage(threadId, {
+    role: "user",
+    source: "whatsapp_inbound",
+    state: "completed",
+    connector: "whatsapp",
+    chatId: "shared-chat",
+    accountId: "responder",
+    text: "final status?",
+  }, runtimeEnv);
+  const firstReply = await appendThreadMessage(threadId, {
+    role: "assistant",
+    source: "codex-app-server",
+    phase: "final_answer",
+    state: "completed",
+    parentMessageId: parent.id,
+    chatId: "shared-chat",
+    accountId: "responder",
+    text: "Unconfirmed older final.",
+  }, runtimeEnv);
+
+  await deliverWhatsAppReplies(runtimeEnv, async () => {
+    throw new Error("whatsapp_send_not_confirmed");
+  });
+  let outbox = await readConnectorOutbox(runtimeEnv);
+  const priorJob = outbox.jobs.find((item) => item.sourceMessageId === firstReply.id);
+  assert.equal(priorJob?.state, "delivery_uncertain");
+
+  const replayReply = await appendThreadMessage(threadId, {
+    role: "assistant",
+    source: "codex-app-server",
+    phase: "final_answer",
+    state: "completed",
+    parentMessageId: parent.id,
+    chatId: "shared-chat",
+    accountId: "responder",
+    text: "Operator-approved replay final.",
+  }, runtimeEnv);
+  await deliverWhatsAppReplies(runtimeEnv, async () => {
+    throw new Error("prior uncertainty must prevent automatic send");
+  });
+  outbox = await readConnectorOutbox(runtimeEnv);
+  const replayJob = outbox.jobs.find((item) => item.sourceMessageId === replayReply.id);
+  assert.equal(replayJob?.state, "delivery_uncertain");
+
+  const replay = await applyConnectorOutboxJobAction(replayJob.id, "replay", { reason: "confirmed missing", operator: "tester" }, runtimeEnv);
+  await applyWhatsAppConnectorOutboxAction(replay.job, "replay", { reason: "confirmed missing" }, runtimeEnv);
+  const calls = [];
+  const delivered = await deliverWhatsAppReplies(runtimeEnv, async (url, options) => {
+    calls.push({ url, body: JSON.parse(options.body) });
+    return response({ ok: true, ids: ["wa-replayed-after-uncertainty"] });
+  });
+  outbox = await readConnectorOutbox(runtimeEnv);
+  const deliveredJob = outbox.jobs.find((item) => item.id === replayJob.id);
+
+  assert.equal(delivered.delivered.length, 1);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].body.text, "Operator-approved replay final.");
+  assert.equal(deliveredJob.state, "delivered");
+});
+
 test("whatsapp connector outbox retry reconciles already-delivered ledger without resending", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-connector-outbox-reconcile-"));
   const runtimeEnv = env(home);

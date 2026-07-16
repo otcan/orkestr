@@ -2319,6 +2319,24 @@ export async function applyWhatsAppConnectorOutboxAction(job = {}, action = "", 
     };
   });
   const normalized = pickString(action).toLowerCase().replace(/-/g, "_");
+  let sourceMessageUpdated = false;
+  if ((normalized === "retry" || normalized === "replay") && pickString(job.sourceMessageId)) {
+    const messagePatch = {
+      mirrorOutboxJobId: pickString(job.id),
+      deliveryState: "pending_whatsapp_mirror",
+      deliveryError: "",
+      deliveryLastAttemptAt: "",
+      deliveredAt: "",
+      whatsappMessageId: "",
+      whatsappMessageIds: [],
+    };
+    const updated = pickString(job.threadId)
+      ? await updateThreadMessage(job.threadId, job.sourceMessageId, messagePatch, env).catch(() => null)
+      : pickString(job.agentId)
+        ? await updateAgentMessage(job.agentId, job.sourceMessageId, messagePatch, env).catch(() => null)
+        : null;
+    sourceMessageUpdated = Boolean(updated);
+  }
   let removedDeliveries = 0;
   const nextDeliveries = normalized === "retry" || normalized === "replay"
     ? outboundDeliveries.filter((delivery) => {
@@ -2328,7 +2346,7 @@ export async function applyWhatsAppConnectorOutboxAction(job = {}, action = "", 
       })
     : outboundDeliveries;
   if (!matchedIntents && !removedDeliveries) {
-    return { ok: true, matchedIntents: 0, removedDeliveries: 0 };
+    return { ok: true, matchedIntents: 0, removedDeliveries: 0, sourceMessageUpdated };
   }
   await writeWhatsAppStateForOperatorAction({
     ...state,
@@ -2345,7 +2363,7 @@ export async function applyWhatsAppConnectorOutboxAction(job = {}, action = "", 
     matchedIntents,
     removedDeliveries,
   }, env).catch(() => {});
-  return { ok: true, matchedIntents, removedDeliveries };
+  return { ok: true, matchedIntents, removedDeliveries, sourceMessageUpdated };
 }
 
 async function ensureWhatsAppOutboundIntent({
@@ -3132,9 +3150,12 @@ async function sendClaimedWhatsAppText({
     }, env).catch(() => {});
     return { skipped: { reason } };
   }
+  const operatorReplay = Boolean(outboxResult.job.metadata?.replayRequestedAt || intent?.replayRequestedAt);
   const uncertainSourceJob = uncertainWhatsAppConnectorOutboxJob(outboxResult.job)
     ? outboxResult.job
-    : await findPriorUncertainWhatsAppConnectorOutboxJob({
+    : operatorReplay
+      ? null
+      : await findPriorUncertainWhatsAppConnectorOutboxJob({
         chatId,
         threadId,
         deliveryType,
@@ -3143,7 +3164,7 @@ async function sendClaimedWhatsAppText({
         messageId,
         parentMessageId,
         textKey,
-      }, env);
+        }, env);
   if (uncertainSourceJob) {
     const now = new Date().toISOString();
     const errorText = pickString(uncertainSourceJob.error, "whatsapp_send_not_confirmed");
