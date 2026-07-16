@@ -304,6 +304,23 @@ test("install script accepts optional JSON config before help", async () => {
   assert.match(stdout, /curl -fsSL https:\/\/raw\.githubusercontent\.com\/otcan\/orkestr\/main\/scripts\/install\.sh \| bash/);
 });
 
+test("install script provisions isolated connector MCP and WhatsApp worker services", async () => {
+  const script = await fs.readFile("scripts/install.sh", "utf8");
+  const releaseScript = await fs.readFile("scripts/deploy-connectors-release.sh", "utf8");
+
+  await execFileAsync("bash", ["-n", "scripts/deploy-connectors-release.sh"]);
+  assert.match(script, /ORKESTR_INSTALL_CONNECTORS_MCP/);
+  assert.match(script, /scripts\/orkestr-connectors-mcp\.mjs/);
+  assert.match(script, /scripts\/orkestr-wa-worker\.mjs/);
+  assert.match(script, /orkestr-connectors-doctor\.mjs --repair/);
+  assert.match(script, /ORKESTR_INSTALL_PERSONAL_CONNECTORS_MCP/);
+  assert.match(script, /ORKESTR_PERSONAL_CONNECTORS_HOME/);
+  assert.match(releaseScript, /git -C "\$source_dir" archive/);
+  assert.match(releaseScript, /restoring the previous release/);
+  assert.match(releaseScript, /ORKESTR_CONNECTORS_RELEASE_RETENTION:-3/);
+  assert.doesNotMatch(releaseScript, /systemctl (?:stop|restart) orkestr(?:-ui)?\.service/);
+});
+
 test("bootstrap script provides an opinionated fresh VPS path", async () => {
   const script = await fs.readFile("scripts/bootstrap-vps.sh", "utf8");
 

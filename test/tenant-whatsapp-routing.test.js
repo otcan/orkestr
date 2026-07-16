@@ -57,6 +57,7 @@ test("tenant WhatsApp routes store scoped tokens outside the public VM registry"
   assert.match(configured.route.token, /^owt_/);
   assert.match(configured.route.bridgeSendToken, /^wa_/);
   assert.equal(configured.route.bridgeTokenSync.recommendedEnv.WHATSAPP_BRIDGE_TOKEN, configured.route.bridgeSendToken);
+  assert.equal(configured.route.bridgeTokenSync.recommendedEnv.ORKESTR_CONNECTORS_MCP_BEARER_TOKEN, configured.route.bridgeSendToken);
   assert.equal(configured.route.tokenConfigured, true);
   assert.equal(configured.route.diagnostics.status, "active");
   assert.equal(configured.route.diagnostics.nextAction, "sync_whatsapp_inbound_token_to_target");
@@ -81,7 +82,12 @@ test("tenant WhatsApp routes store scoped tokens outside the public VM registry"
   assert.equal(bridgeSendToken.accountId, "responder");
   assert.equal(bridgeSendToken.chatId, "wa-group-zero@g.us");
   assert.deepEqual(bridgeSendToken.allowedChatIds, ["wa-group-zero@g.us"]);
-  assert.deepEqual(bridgeSendToken.scopes, ["whatsapp:bridge:send"]);
+  assert.deepEqual(bridgeSendToken.scopes, [
+    "whatsapp:bridge:send",
+    "connectors:read",
+    "connectors:manage",
+    "connectors:send",
+  ]);
 
   const disabled = await disableTenantWhatsAppRoute("alice-tenant", env);
   assert.equal(disabled.route.enabled, false);
@@ -170,6 +176,30 @@ test("local WhatsApp bridge forwards tenant-routed chats with the scoped tenant 
   assert.equal(calls[1].body.accountId, "tenant-wa");
   assert.equal(calls[1].body.displayName, "Bob tenant WA");
   assert.equal(calls[1].body.chatName, "Bob tenant WA");
+});
+
+test("WhatsApp worker forwards inbound events to the connector MCP gateway before route resolution", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-worker-sink-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WA_WORKER_EVENT_SINK_URL: "http://127.0.0.1:18914/internal/whatsapp/inbound",
+    ORKESTR_WA_WORKER_EVENT_TOKEN: "worker-event-token",
+  };
+  const calls = [];
+  const forwarded = await forwardLocalWhatsAppInbound({
+    eventId: "worker-sink-event-1",
+    chatId: "worker-sink@g.us",
+    accountId: "sender",
+    text: "route me durably",
+  }, env, async (url, options = {}) => {
+    calls.push({ url: String(url), options, body: JSON.parse(options.body) });
+    return response({ ok: true, eventId: "worker-sink-event-1", state: "delivered" }, true, 200);
+  });
+  assert.equal(forwarded.forwarded, true);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, "http://127.0.0.1:18914/internal/whatsapp/inbound");
+  assert.equal(calls[0].options.headers.authorization, "Bearer worker-event-token");
+  assert.equal(calls[0].body.chatId, "worker-sink@g.us");
 });
 
 test("local WhatsApp bridge uploads tenant-routed media before forwarding inbound JSON", async () => {

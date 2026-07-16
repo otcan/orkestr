@@ -298,6 +298,8 @@ export async function provisionTenantSlice(tenantSliceId, input = {}, env = proc
             ORKESTR_WHATSAPP_EXTERNAL_BRIDGE_ENABLED: "1",
             WHATSAPP_BRIDGE_URL: whatsappBridgeUrl,
             WHATSAPP_BRIDGE_TOKEN: stagedWhatsappRoute.bridgeSendToken,
+            ORKESTR_CONNECTORS_MCP_URL: `${whatsappBridgeUrl.replace(/\/+$/g, "")}/mcp`,
+            ORKESTR_CONNECTORS_MCP_BEARER_TOKEN: stagedWhatsappRoute.bridgeSendToken,
           } : {}),
         },
       }

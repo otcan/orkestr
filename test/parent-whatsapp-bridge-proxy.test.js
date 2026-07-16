@@ -150,3 +150,44 @@ test("parent WhatsApp bridge proxy lets upstream scoped bearer enforce recipient
     await new Promise((resolve) => upstream.close(resolve));
   }
 });
+
+test("parent WhatsApp bridge proxy exposes the connector MCP endpoint with the tenant bearer", async () => {
+  const upstreamRequests = [];
+  const upstream = http.createServer(async (req, res) => {
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    upstreamRequests.push({
+      url: req.url,
+      authorization: req.headers.authorization,
+      protocolVersion: req.headers["mcp-protocol-version"],
+      body: JSON.parse(Buffer.concat(chunks).toString("utf8")),
+    });
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ jsonrpc: "2.0", id: 1, result: { tools: [] } }));
+  });
+  await new Promise((resolve) => upstream.listen(0, "127.0.0.1", resolve));
+  const proxy = createParentWhatsAppBridgeProxy({
+    token: "proxy-token",
+    allowUpstreamBearer: true,
+    mcpUpstream: `http://127.0.0.1:${upstream.address().port}/mcp`,
+  });
+  await new Promise((resolve) => proxy.listen(0, "127.0.0.1", resolve));
+  try {
+    const response = await fetch(`http://127.0.0.1:${proxy.address().port}/mcp`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "mcp-protocol-version": "2025-11-25",
+        authorization: "Bearer wa_scoped_tenant_token",
+      },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} }),
+    });
+    assert.equal(response.status, 200);
+    assert.equal(upstreamRequests[0].url, "/mcp");
+    assert.equal(upstreamRequests[0].authorization, "Bearer wa_scoped_tenant_token");
+    assert.equal(upstreamRequests[0].protocolVersion, "2025-11-25");
+  } finally {
+    await new Promise((resolve) => proxy.close(resolve));
+    await new Promise((resolve) => upstream.close(resolve));
+  }
+});

@@ -89,10 +89,12 @@ function bridgeSendTokenSyncPayload(token = "") {
       WHATSAPP_BRIDGE_MODE: "external",
       ORKESTR_WHATSAPP_EXTERNAL_BRIDGE_ENABLED: "1",
       WHATSAPP_BRIDGE_TOKEN: value,
+      ORKESTR_CONNECTORS_MCP_BEARER_TOKEN: value,
     },
     acceptedEnvKeys: [
       "WHATSAPP_BRIDGE_TOKEN",
       "WA_HTTP_TOKEN",
+      "ORKESTR_CONNECTORS_MCP_BEARER_TOKEN",
     ],
     targetEnvFile: "/etc/orkestr/orkestr.env",
     authHeader: "Authorization: Bearer <WHATSAPP_BRIDGE_TOKEN>",
@@ -122,7 +124,7 @@ async function ensureTenantBridgeSendToken(vm = {}, { chatId = "", accountId = "
     accountId: clean(accountId),
     chatId: clean(chatId),
     allowedChatIds: [clean(chatId)],
-    scopes: ["whatsapp:bridge:send"],
+    scopes: ["whatsapp:bridge:send", "connectors:read", "connectors:manage", "connectors:send"],
     routeKind: "whatsapp_bridge",
     purpose: "tenant-whatsapp-outbound",
   }], env);

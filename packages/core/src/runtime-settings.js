@@ -232,6 +232,13 @@ function defaultDesktopSettings(env = process.env) {
 function defaultConnectorSettings(env = process.env) {
   const gmailAuthDesktop = firstValue(env.ORKESTR_GMAIL_AUTH_DESKTOP_SLUG, env.ORKESTR_GOOGLE_AUTH_DESKTOP_SLUG) || "gmail";
   return {
+    mcp: {
+      enabled: Boolean(firstValue(env.ORKESTR_CONNECTORS_MCP_URL, env.ORKESTR_CONNECTORS_MCP_TOKEN, env.ORKESTR_CONNECTORS_MCP_BEARER_TOKEN)),
+      transport: "streamable-http",
+      url: firstValue(env.ORKESTR_CONNECTORS_MCP_URL) || "http://127.0.0.1:18914/mcp",
+      tools: ["orkestr_auth", "orkestr_messaging", "orkestr_conversation", "orkestr_routing"],
+      authority: "bearer_scope",
+    },
     whatsapp: {
       enabled: true,
       bridgeMode: firstValue(env.WHATSAPP_BRIDGE_MODE) || "local",

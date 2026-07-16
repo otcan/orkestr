@@ -7,6 +7,8 @@ import {
   disconnectConnectorAuth,
   startConnectorAuth as beginConnectorAuth,
 } from "../../connectors/src/connector-auth.js";
+import { callConnectorsMcpTool } from "../../connectors/src/connectors-mcp-client.js";
+import { connectorsMcpOpenAiToolDefinitions } from "../../connectors/src/connectors-mcp-contract.js";
 import { startCodexAppServerThread } from "./codex-app-server.js";
 import {
   listBrowserSessions,
@@ -1029,6 +1031,7 @@ async function updateGmailNotification(args = {}, principal = {}, thread = null,
 
 export function tenantApiAgentToolDefinitions() {
   return [
+    ...connectorsMcpOpenAiToolDefinitions(),
     {
       type: "function",
       name: "orkestr_whereiam",
@@ -1641,6 +1644,14 @@ export async function runTenantApiAgentTool(name = "", args = {}, context = {}, 
   const principal = context.principal || null;
   const thread = context.thread || null;
   const tool = clean(name);
+  if (["orkestr_auth", "orkestr_messaging", "orkestr_conversation", "orkestr_routing"].includes(tool)) {
+    return callConnectorsMcpTool(tool, {
+      ...args,
+      instance_id: clean(principal?.instanceId || principal?.tenantVmId || env.ORKESTR_TENANT_VM_ID || args.instance_id),
+      user_id: principalUserId(principal) || clean(args.user_id),
+      thread_id: clean(thread?.id || args.thread_id),
+    }, env, { fetchImpl: context.connectorMcpFetchImpl });
+  }
   if (tool === "orkestr_whereiam") {
     return whereAmI({ threadId: thread?.id || "", cwd: thread?.cwd || thread?.workspace || "", principal }, env);
   }
@@ -1773,9 +1784,29 @@ export async function runTenantApiAgentTool(name = "", args = {}, context = {}, 
   const googleWorkspaceTool = await runTenantApiAgentGoogleWorkspaceTool(tool, args, { principal, thread, fetchImpl: context.fetchImpl || fetch }, env);
   if (googleWorkspaceTool.handled) return googleWorkspaceTool.result;
   if (tool === "orkestr_start_connector_auth") {
+    if (clean(env.ORKESTR_CONNECTORS_MCP_URL) && clean(env.ORKESTR_CONNECTORS_MCP_BEARER_TOKEN || env.ORKESTR_CONNECTORS_MCP_TOKEN)) {
+      return callConnectorsMcpTool("orkestr_auth", {
+        service: args.provider,
+        action: "connect",
+        account_hint: args.account,
+        target: args.shop,
+        instance_id: clean(principal?.instanceId || principal?.tenantVmId || env.ORKESTR_TENANT_VM_ID),
+        user_id: principalUserId(principal),
+        thread_id: clean(thread?.id),
+      }, env, { fetchImpl: context.connectorMcpFetchImpl });
+    }
     return startConnectorAuth(args, principal, env, context.fetchImpl || fetch, context);
   }
   if (tool === "orkestr_connector_status") {
+    if (clean(env.ORKESTR_CONNECTORS_MCP_URL) && clean(env.ORKESTR_CONNECTORS_MCP_BEARER_TOKEN || env.ORKESTR_CONNECTORS_MCP_TOKEN)) {
+      return callConnectorsMcpTool("orkestr_auth", {
+        service: args.provider,
+        action: "status",
+        instance_id: clean(principal?.instanceId || principal?.tenantVmId || env.ORKESTR_TENANT_VM_ID),
+        user_id: principalUserId(principal),
+        thread_id: clean(thread?.id),
+      }, env, { fetchImpl: context.connectorMcpFetchImpl });
+    }
     return connectorAuthStatus(args.provider, env, { principal });
   }
   if (tool === "orkestr_search_gmail") {
@@ -1803,6 +1834,16 @@ export async function runTenantApiAgentTool(name = "", args = {}, context = {}, 
     return runGmailNotificationNowForPrincipal(args.notificationId, principal, env, context.fetchImpl || fetch);
   }
   if (tool === "orkestr_disconnect_connector") {
+    if (clean(env.ORKESTR_CONNECTORS_MCP_URL) && clean(env.ORKESTR_CONNECTORS_MCP_BEARER_TOKEN || env.ORKESTR_CONNECTORS_MCP_TOKEN)) {
+      return callConnectorsMcpTool("orkestr_auth", {
+        service: args.provider,
+        action: "disconnect",
+        account_hint: args.account,
+        instance_id: clean(principal?.instanceId || principal?.tenantVmId || env.ORKESTR_TENANT_VM_ID),
+        user_id: principalUserId(principal),
+        thread_id: clean(thread?.id),
+      }, env, { fetchImpl: context.connectorMcpFetchImpl });
+    }
     return disconnectConnectorAuth(args, principal, env);
   }
   const error = new Error("api_agent_tool_not_allowed");

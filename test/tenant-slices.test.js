@@ -272,6 +272,8 @@ test("tenant slice provisioning execute path and runtime status are observable",
   assert.match(appliedRuntimeEnvFile, /^ORKESTR_WHATSAPP_EXTERNAL_BRIDGE_ENABLED='1'$/m);
   assert.match(appliedRuntimeEnvFile, /^WHATSAPP_BRIDGE_URL='http:\/\/10\.42\.0\.1:18913'$/m);
   assert.match(appliedRuntimeEnvFile, /^WHATSAPP_BRIDGE_TOKEN='wa_[^']+'$/m);
+  assert.match(appliedRuntimeEnvFile, /^ORKESTR_CONNECTORS_MCP_URL='http:\/\/10\.42\.0\.1:18913\/mcp'$/m);
+  assert.match(appliedRuntimeEnvFile, /^ORKESTR_CONNECTORS_MCP_BEARER_TOKEN='wa_[^']+'$/m);
   assert.equal(result.whatsappRoute.token, undefined);
   assert.equal(result.whatsappRoute.tokenSync, undefined);
   assert.equal(result.whatsappRoute.bridgeSendToken, undefined);

@@ -1294,6 +1294,45 @@ export async function approvePairingChallenge(challengeId, { env = process.env, 
   return { ok: true, challenge: publicChallenge(approved) };
 }
 
+export async function consumeApprovedPairingChallengeForAction(challengeId, { env = process.env, action = "", authIntent = null, consumedBy = "connector-mcp" } = {}) {
+  const id = String(challengeId || "").trim();
+  const requiredAction = String(action || "").trim();
+  if (!id) throw challengeError("pairing_challenge_id_required", 400);
+  if (!requiredAction) throw challengeError("pairing_challenge_action_required", 400);
+  const config = await readSecurityConfig(env);
+  const now = Date.now();
+  let consumed = null;
+  const challenges = (config.challenges || []).map((item) => {
+    const challenge = normalizeChallenge(item, now);
+    if (!challengeMatchesId(challenge, id)) return challenge;
+    if (challenge.status === "pending") throw challengeError("pairing_challenge_not_approved", 409);
+    if (challenge.status !== "approved") throw challengeError(`pairing_challenge_${challenge.status}`, 409);
+    if (Date.parse(challenge.expiresAt || "") <= now) throw challengeError("pairing_challenge_expired", 401);
+    if (!normalizeAllowedActions(challenge.allowedActions || []).includes(requiredAction)) {
+      throw challengeError("pairing_challenge_action_scope_denied", 403);
+    }
+    if (!sameAuthIntent(challenge.authIntent, authIntent)) {
+      throw challengeError("pairing_challenge_intent_scope_denied", 403);
+    }
+    consumed = {
+      ...challenge,
+      status: "consumed",
+      consumedAt: nowIso(),
+      consumedBy: String(consumedBy || "connector-mcp").slice(0, 80),
+    };
+    return consumed;
+  });
+  if (!consumed) throw challengeError("pairing_challenge_not_found", 404);
+  await writeSecurityConfig({ ...config, challenges }, env);
+  await appendEvent({
+    type: "security_pairing_challenge_consumed_for_action",
+    challengeId: consumed.id,
+    action: requiredAction,
+    consumedBy: consumed.consumedBy,
+  }, env).catch(() => {});
+  return { ok: true, challenge: publicChallenge(consumed) };
+}
+
 export async function rejectPairingChallenge(challengeId, { env = process.env, rejectedBy = "browser" } = {}) {
   const id = String(challengeId || "").trim();
   if (!id) throw challengeError("pairing_challenge_id_required", 400);

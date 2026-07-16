@@ -1,5 +1,7 @@
 #!/usr/bin/env node
+import fs from "node:fs/promises";
 import http from "node:http";
+import path from "node:path";
 import { URL } from "node:url";
 import {
   createLocalWhatsAppChat,
@@ -33,8 +35,13 @@ function listenPort(env = process.env) {
   return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : 18914;
 }
 
+export function waWorkerSocketPath(env = process.env) {
+  return clean(env.ORKESTR_WA_WORKER_SOCKET);
+}
+
 function authToken(env = process.env) {
   return clean(
+    env.ORKESTR_WA_WORKER_TOKEN ||
     env.ORKESTR_WA_SERVICE_TOKEN ||
     env.WHATSAPP_BRIDGE_TOKEN ||
     env.WA_HTTP_TOKEN ||
@@ -44,6 +51,16 @@ function authToken(env = process.env) {
 
 function authDisabled(env = process.env) {
   return ["1", "true", "yes", "on"].includes(clean(env.ORKESTR_WA_SERVICE_AUTH_DISABLED).toLowerCase());
+}
+
+function privateWorkerPolicyBypass(env = process.env) {
+  const enabled = clean(env.ORKESTR_WA_WORKER_TRUST_PRIVATE_SOCKET || "1").toLowerCase();
+  return Boolean(waWorkerSocketPath(env) && !["0", "false", "no", "off"].includes(enabled));
+}
+
+function requireServicePolicy(req, url, env, body = {}, checks = {}) {
+  if (privateWorkerPolicyBypass(env)) return { clientId: "connector-mcp-gateway", enforced: true };
+  return requireWaServicePolicy(req, url, env, body, checks);
 }
 
 function firstConfigured(env = process.env, keys = [], fallback = "") {
@@ -220,7 +237,7 @@ async function handleRequest(req, res, env = process.env, bridge = defaultBridge
   }
   if (method === "GET" && url.pathname === "/qr.svg") {
     requireAuth(req, env);
-    requireWaServicePolicy(req, url, env, {}, { accounts: [maybeAccountId(url)], pairing: true });
+    requireServicePolicy(req, url, env, {}, { accounts: [maybeAccountId(url)], pairing: true });
     const svg = await bridge.getLocalWhatsAppQrSvg(maybeAccountId(url), env);
     if (!svg) return json(res, 404, { ok: false, error: "whatsapp_qr_not_available" });
     return sendText(res, 200, svg, "image/svg+xml; charset=utf-8");
@@ -233,7 +250,7 @@ async function handleRequest(req, res, env = process.env, bridge = defaultBridge
   if (method === "POST" && params) {
     requireAuth(req, env);
     const body = await readJsonBody(req);
-    requireWaServicePolicy(req, url, env, body, { accounts: [params.accountId], pairing: true });
+    requireServicePolicy(req, url, env, body, { accounts: [params.accountId], pairing: true });
     const account = await bridge.startLocalWhatsAppAccount(params.accountId, env, {
       phoneNumber: clean(body.phoneNumber || body.phone),
       showNotification: body.showNotification !== false,
@@ -247,21 +264,21 @@ async function handleRequest(req, res, env = process.env, bridge = defaultBridge
     routeMatch(url.pathname, "/accounts/:accountId/disconnect");
   if (method === "POST" && params) {
     requireAuth(req, env);
-    requireWaServicePolicy(req, url, env, {}, { accounts: [params.accountId], manageAccounts: true });
+    requireServicePolicy(req, url, env, {}, { accounts: [params.accountId], manageAccounts: true });
     return json(res, 200, { ok: true, account: publicAccount(await bridge.logoutLocalWhatsAppAccount(params.accountId, env)) });
   }
 
   params = routeMatch(url.pathname, "/accounts/:accountId/chats");
   if (method === "GET" && params) {
     requireAuth(req, env);
-    requireWaServicePolicy(req, url, env, {}, { accounts: [params.accountId] });
+    requireServicePolicy(req, url, env, {}, { accounts: [params.accountId] });
     return json(res, 200, await bridge.listLocalWhatsAppChats(params.accountId, env));
   }
 
   params = routeMatch(url.pathname, "/accounts/:accountId/chats/:chatId/history");
   if (method === "GET" && params) {
     requireAuth(req, env);
-    requireWaServicePolicy(req, url, env, {}, { accounts: [params.accountId], recipients: [params.chatId], recipientScope: "history" });
+    requireServicePolicy(req, url, env, {}, { accounts: [params.accountId], recipients: [params.chatId], recipientScope: "history" });
     return json(res, 200, await bridge.listLocalWhatsAppChatMessages({
       accountId: params.accountId,
       chatId: params.chatId,
@@ -273,7 +290,7 @@ async function handleRequest(req, res, env = process.env, bridge = defaultBridge
   params = routeMatch(url.pathname, "/accounts/:accountId/chats/:chatId/participants");
   if (method === "GET" && params) {
     requireAuth(req, env);
-    requireWaServicePolicy(req, url, env, {}, { accounts: [params.accountId], recipients: [params.chatId], recipientScope: "history" });
+    requireServicePolicy(req, url, env, {}, { accounts: [params.accountId], recipients: [params.chatId], recipientScope: "history" });
     return json(res, 200, await bridge.listLocalWhatsAppChatParticipants({
       accountId: params.accountId,
       chatId: params.chatId,
@@ -285,7 +302,7 @@ async function handleRequest(req, res, env = process.env, bridge = defaultBridge
   if (method === "POST" && params) {
     requireAuth(req, env);
     const body = await readJsonBody(req);
-    requireWaServicePolicy(req, url, env, body, { accounts: [params.accountId], recipients: [params.chatId], recipientScope: "history" });
+    requireServicePolicy(req, url, env, body, { accounts: [params.accountId], recipients: [params.chatId], recipientScope: "history" });
     return json(res, 200, await bridge.recoverLocalWhatsAppChatMessages({
       accountId: params.accountId,
       chatId: params.chatId,
@@ -299,7 +316,7 @@ async function handleRequest(req, res, env = process.env, bridge = defaultBridge
   params = routeMatch(url.pathname, "/api/chats/:chatId/history");
   if (method === "GET" && params) {
     requireAuth(req, env);
-    requireWaServicePolicy(req, url, env, {}, { accounts: [maybeAccountId(url)], recipients: [params.chatId], recipientScope: "history" });
+    requireServicePolicy(req, url, env, {}, { accounts: [maybeAccountId(url)], recipients: [params.chatId], recipientScope: "history" });
     return json(res, 200, await bridge.listLocalWhatsAppChatMessages({
       accountId: maybeAccountId(url),
       chatId: params.chatId,
@@ -311,7 +328,7 @@ async function handleRequest(req, res, env = process.env, bridge = defaultBridge
   params = routeMatch(url.pathname, "/api/chats/:chatId/meta");
   if (method === "GET" && params) {
     requireAuth(req, env);
-    requireWaServicePolicy(req, url, env, {}, { accounts: [maybeAccountId(url)], recipients: [params.chatId], recipientScope: "history" });
+    requireServicePolicy(req, url, env, {}, { accounts: [maybeAccountId(url)], recipients: [params.chatId], recipientScope: "history" });
     const payload = await bridge.listLocalWhatsAppChatParticipants({
       accountId: maybeAccountId(url),
       chatId: params.chatId,
@@ -326,7 +343,7 @@ async function handleRequest(req, res, env = process.env, bridge = defaultBridge
     const paths = Array.isArray(body.paths)
       ? body.paths.map(clean).filter(Boolean)
       : [clean(body.path)].filter(Boolean);
-    requireWaServicePolicy(req, url, env, body, { accounts: [body.accountId], recipients: [body.to || body.chatId], recipientScope: "send" });
+    requireServicePolicy(req, url, env, body, { accounts: [body.accountId], recipients: [body.to || body.chatId], recipientScope: "send" });
     return json(res, 200, await bridge.sendLocalWhatsAppMessage({
       accountId: clean(body.accountId),
       chatId: clean(body.to || body.chatId),
@@ -341,7 +358,7 @@ async function handleRequest(req, res, env = process.env, bridge = defaultBridge
     requireAuth(req, env);
     const body = await readJsonBody(req);
     const participants = Array.isArray(body.participantIds) ? body.participantIds.map(clean).filter(Boolean) : [];
-    requireWaServicePolicy(req, url, env, body, {
+    requireServicePolicy(req, url, env, body, {
       accounts: [body.senderAccountId || body.accountId, body.responderAccountId].filter(Boolean),
       recipients: participants,
       recipientScope: "createChat",
@@ -376,12 +393,13 @@ export function createOrkestrWaService({ env = process.env, bridge = defaultBrid
   });
 }
 
-async function main() {
-  const env = process.env;
+export async function runOrkestrWaService(env = process.env) {
   const server = createOrkestrWaService({ env });
+  const socketPath = waWorkerSocketPath(env);
   const shutdown = async () => {
     server.close();
     await stopLocalWhatsAppBridge(env).catch(() => {});
+    if (socketPath) await fs.unlink(socketPath).catch(() => {});
     process.exit(0);
   };
   process.once("SIGINT", shutdown);
@@ -389,13 +407,24 @@ async function main() {
   await startConfiguredLocalWhatsAppAccounts(env).catch((error) => {
     console.error(`orkestr-wa autostart failed: ${error?.stack || error?.message || String(error)}`);
   });
-  server.listen(listenPort(env), listenHost(env), () => {
-    console.log(`orkestr-wa service listening on ${listenHost(env)}:${listenPort(env)}`);
-  });
+  if (socketPath) {
+    await fs.mkdir(path.dirname(socketPath), { recursive: true, mode: 0o750 });
+    await fs.unlink(socketPath).catch((error) => {
+      if (error?.code !== "ENOENT") throw error;
+    });
+    server.listen(socketPath, async () => {
+      await fs.chmod(socketPath, 0o660).catch(() => {});
+      console.log(`orkestr-wa worker listening on ${socketPath}`);
+    });
+  } else {
+    server.listen(listenPort(env), listenHost(env), () => {
+      console.log(`orkestr-wa service listening on ${listenHost(env)}:${listenPort(env)}`);
+    });
+  }
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  main().catch((error) => {
+  runOrkestrWaService().catch((error) => {
     console.error(error?.stack || error?.message || String(error));
     process.exit(1);
   });

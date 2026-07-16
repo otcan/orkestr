@@ -111,9 +111,10 @@ function upstreamUrl(upstreamBase, pathname, search = "") {
   return url;
 }
 
-function routeFor(req, { upstreamBase, defaultAccount }) {
+function routeFor(req, { upstreamBase, defaultAccount, mcpUpstream }) {
   const url = new URL(req.url || "/", "http://orkestr-parent-wa-bridge.local");
   const method = String(req.method || "GET").toUpperCase();
+  if (method === "POST" && url.pathname === "/mcp" && mcpUpstream) return { method, url: new URL(mcpUpstream), mcp: true };
   if (method === "GET" && url.pathname === "/health") return { method, url: upstreamUrl(upstreamBase, "/health", url.search) };
   if (method === "GET" && url.pathname === "/qr.svg") return { method, url: upstreamUrl(upstreamBase, "/qr.svg", url.search) };
   if (method === "GET" && url.pathname === "/api/dashboard") return { method, url: upstreamUrl(upstreamBase, "/accounts", url.search), dashboard: true };
@@ -188,6 +189,8 @@ export function createParentWhatsAppBridgeProxy(options = {}) {
   );
   const upstreamBase = clean(options.upstreamBase ?? options.env?.ORKESTR_PARENT_WA_BRIDGE_UPSTREAM ?? process.env.ORKESTR_PARENT_WA_BRIDGE_UPSTREAM) ||
     "http://127.0.0.1:18912/api/connectors/whatsapp/bridge";
+  const mcpUpstream = clean(options.mcpUpstream ?? options.env?.ORKESTR_PARENT_CONNECTORS_MCP_UPSTREAM ?? process.env.ORKESTR_PARENT_CONNECTORS_MCP_UPSTREAM) ||
+    "http://127.0.0.1:18914/mcp";
   const defaultAccount = clean(policy.defaultAccount) || "responder";
   return http.createServer(async (req, res) => {
     try {
@@ -197,7 +200,7 @@ export function createParentWhatsAppBridgeProxy(options = {}) {
       if (token && !proxyTokenAuthorized && !forwardAuthorization) {
         return json(res, 401, { ok: false, error: "unauthorized" });
       }
-      const route = routeFor(req, { upstreamBase, defaultAccount });
+      const route = routeFor(req, { upstreamBase, defaultAccount, mcpUpstream });
       if (!route) return json(res, 404, { ok: false, error: "unsupported_whatsapp_bridge_route" });
       const body = ["POST", "PUT", "PATCH"].includes(route.method) ? await readBody(req) : undefined;
       // Forwarded scoped bearer tokens are enforced by the upstream Orkestr bridge.
@@ -208,6 +211,8 @@ export function createParentWhatsAppBridgeProxy(options = {}) {
         method: route.method,
         headers: {
           ...(body ? { "content-type": String(req.headers["content-type"] || "application/json") } : {}),
+          ...(route.mcp && req.headers.accept ? { accept: String(req.headers.accept) } : {}),
+          ...(route.mcp && req.headers["mcp-protocol-version"] ? { "mcp-protocol-version": String(req.headers["mcp-protocol-version"]) } : {}),
           ...(await upstreamAuthHeaders({
             upstreamToken: clean(options.upstreamToken ?? options.env?.ORKESTR_PARENT_WA_BRIDGE_UPSTREAM_TOKEN ?? process.env.ORKESTR_PARENT_WA_BRIDGE_UPSTREAM_TOKEN),
             upstreamCookie: clean(options.upstreamCookie ?? options.env?.ORKESTR_PARENT_WA_BRIDGE_UPSTREAM_COOKIE ?? process.env.ORKESTR_PARENT_WA_BRIDGE_UPSTREAM_COOKIE),

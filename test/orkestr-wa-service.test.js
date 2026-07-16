@@ -220,6 +220,28 @@ test("standalone WA service requires bearer auth when a token is configured", as
   });
 });
 
+test("private WA worker token takes precedence over the legacy service token", async () => {
+  const home = await testHome("orkestr-wa-worker-auth-");
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WA_WORKER_TOKEN: "worker-secret",
+    ORKESTR_WA_SERVICE_TOKEN: "gateway-secret",
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "sender",
+  };
+
+  await withWaService(env, async ({ bridgeUrl }) => {
+    const legacy = await fetch(`${bridgeUrl}/health`, {
+      headers: { authorization: "Bearer gateway-secret" },
+    });
+    assert.equal(legacy.status, 401);
+
+    const worker = await fetch(`${bridgeUrl}/health`, {
+      headers: { authorization: "Bearer worker-secret" },
+    });
+    assert.equal(worker.status, 200);
+  });
+});
+
 test("WA readiness checker reports missing and unready required accounts", () => {
   const result = evaluateWaServiceReadiness({
     ok: true,

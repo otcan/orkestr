@@ -852,6 +852,36 @@ function formatConnectorAuthTool(result = {}) {
   return `${provider} sign-in flow was started.`;
 }
 
+function formatConnectorMcpTool(result = {}) {
+  const output = result.output || {};
+  const data = output.data || {};
+  const provider = providerLabel(output.service || result.args?.service);
+  if (output.status === "approval_required") {
+    const command = clean(output.challenge?.approve_command);
+    return [
+      `${provider} needs an attended Orkestr approval before this action can continue.`,
+      command ? `Approve this exact challenge: ${command}` : "Open the current Orkestr approval challenge and approve it, then retry.",
+    ].join("\n");
+  }
+  if (output.status === "error" || output.error) {
+    return `${provider} action failed: ${clean(output.error?.code || output.error || "connector_operation_failed")}.`;
+  }
+  if (result.name === "orkestr_auth") {
+    const legacy = { ...result, args: { ...result.args, provider: output.service }, output: data };
+    return ["connect", "reconnect"].includes(clean(output.action))
+      ? formatConnectorAuthTool(legacy)
+      : formatConnectorStatusTool(legacy);
+  }
+  if (result.name === "orkestr_messaging") {
+    if (output.status === "delivered") return `${provider} message delivered.`;
+    if (output.status === "queued") return `${provider} message is durably queued for delivery.`;
+    if (output.status === "delivery_uncertain") return `${provider} delivery could not be confirmed; it was not automatically resent.`;
+  }
+  if (result.name === "orkestr_conversation") return `${provider} conversation action completed.`;
+  if (result.name === "orkestr_routing") return `${provider} routing action completed.`;
+  return `${provider} connector action completed.`;
+}
+
 function skillLabel(skill = {}) {
   return clean(skill.name || skill.label || skill.id || "Skill");
 }
@@ -1277,7 +1307,9 @@ function formatToolResultFallback(toolResults = [], context = {}) {
   for (const result of toolResults) {
     if (hasRunSkillAction && result.name === "orkestr_list_skill_actions") continue;
     let formatted = "";
-    if (result.name === "orkestr_connector_status") formatted = formatConnectorStatusTool(result);
+    if (clean(result.output?.contract_version)) formatted = formatConnectorMcpTool({ ...result, name: result.name.startsWith("orkestr_") && ["orkestr_start_connector_auth", "orkestr_connector_status", "orkestr_disconnect_connector"].includes(result.name) ? "orkestr_auth" : result.name });
+    else if (["orkestr_auth", "orkestr_messaging", "orkestr_conversation", "orkestr_routing"].includes(result.name)) formatted = formatConnectorMcpTool(result);
+    else if (result.name === "orkestr_connector_status") formatted = formatConnectorStatusTool(result);
     else if (result.name === "orkestr_start_connector_auth") formatted = formatConnectorAuthTool(result);
     else if (result.name === "orkestr_disconnect_connector") formatted = formatConnectorStatusTool({ ...result, output: result.output?.status || result.output });
     else if (result.name === "orkestr_list_skill_actions") formatted = formatSkillActionsTool(result, context);
@@ -1676,8 +1708,8 @@ export async function buildTenantApiAgentInstructions(thread = {}, messages = []
       ? "If the user asks how you can help, what you can do, or what skills you have, answer with a short capability summary grounded in the Tenant context and enabled skills. Do not mention Codex, slash commands, workspace runtimes, or escalation in a normal capability summary."
       : "If the user asks how you can help, what you can do, or what skills you have, answer with a short capability summary grounded in the Tenant context and enabled skills. Do not mention slash commands, workspace runtimes, or escalation in a normal capability summary.",
     "Never answer a normal chat question, introduction, or capability question with only 'Done', 'OK', 'Sure', or another bare acknowledgement.",
-    "Use the provided Orkestr tools for tenant-scoped resources. If the user asks whether Gmail, Outlook, Jira, Shopify, or WhatsApp is connected, available, enabled, or accessible, use the connector status tool before answering.",
-    "If the user asks to connect, sign in, log in, set up, disconnect, or reconnect Gmail, Outlook, Jira, or Shopify, use the connector auth/disconnect tools and give the returned sign-in instructions. If they ask for Google Workspace with selectable Gmail, Calendar, or Drive permissions from WhatsApp, tell them to send /connect google.",
+    "Use the provided Orkestr tools for tenant-scoped resources. For every connector provider, use orkestr_auth for status, connect, reconnect, disconnect, or logout; do not invent provider-specific auth commands.",
+    "Use orkestr_messaging, orkestr_conversation, and orkestr_routing for connector messages, conversations, and bindings. Treat bearer scope as authority and pass instance/user/thread/account fields only as matching context. If an administrative write returns approval_required, show only that current challenge and retry the exact tool call after approval.",
     "For Gmail sign-in, if the user did not provide the exact Gmail address they want to connect, ask for that address before starting auth. If Orkestr reports that the address is not approved for Google testing, explain that it must be added as a Google OAuth test user first and do not send a sign-in link.",
     "Connector setup is user-owned by default. When a connector is not connected or a matching capability is false, say that it is not connected for this chat yet and that you can help set it up here.",
     "Only say setup is unavailable on this Orkestr installation if a tool or Tenant context explicitly reports missing parent app/platform configuration. Even then, do not offer an admin note or tell the user to contact an admin unless the user explicitly asks how to escalate setup.",

@@ -596,6 +596,14 @@ function localWhatsAppInboundForwardToken({ chatId = "" } = {}, env = process.en
   return String(tokens[String(chatId || "").trim()] || env.ORKESTR_WHATSAPP_INBOUND_FORWARD_TOKEN || env.WHATSAPP_INBOUND_FORWARD_TOKEN || "").trim();
 }
 
+function localWhatsAppWorkerEventSink(env = process.env) {
+  return String(env.ORKESTR_WA_WORKER_EVENT_SINK_URL || "").trim();
+}
+
+function localWhatsAppWorkerEventSinkToken(env = process.env) {
+  return String(env.ORKESTR_WA_WORKER_EVENT_TOKEN || "").trim();
+}
+
 function localWhatsAppInboundForwardSetupUrl({ chatId = "" } = {}, env = process.env) {
   const urls = readJsonEnvMap(env.ORKESTR_WHATSAPP_INBOUND_FORWARD_SETUP_URL_MAP_JSON || env.WHATSAPP_INBOUND_FORWARD_SETUP_URL_MAP_JSON);
   return String(urls[String(chatId || "").trim()] || env.ORKESTR_WHATSAPP_INBOUND_FORWARD_SETUP_URL || env.WHATSAPP_INBOUND_FORWARD_SETUP_URL || "").trim();
@@ -1118,8 +1126,9 @@ export async function forwardLocalWhatsAppInbound(input = {}, env = process.env,
         },
       };
     }
-    tenantRoute = await tenantWhatsAppInboundForwardRoute(input, env);
-    if (!tenantRoute) {
+    const workerEventSink = localWhatsAppWorkerEventSink(env);
+    tenantRoute = workerEventSink ? null : await tenantWhatsAppInboundForwardRoute(input, env);
+    if (!workerEventSink && !tenantRoute) {
       const mismatchRoute = await managedTenantRouteAccountMismatch(input, chatId, env);
       if (mismatchRoute) {
         await appendEvent({
@@ -1138,9 +1147,13 @@ export async function forwardLocalWhatsAppInbound(input = {}, env = process.env,
         };
       }
     }
-    const approvalChallengeId = exactSecurityApproveChallengeId(input.text || input.body || input.message || "");
+    const approvalChallengeId = workerEventSink ? "" : exactSecurityApproveChallengeId(input.text || input.body || input.message || "");
     const approvalTarget = approvalChallengeId ? localWhatsAppSecurityApprovalForwardTarget({ chatId }, env) : "";
-    if (approvalTarget) {
+    if (workerEventSink) {
+      target = workerEventSink;
+      targetSource = "connector_mcp_gateway";
+      routeMode = "connector_mcp";
+    } else if (approvalTarget) {
       target = approvalTarget;
       targetSource = "security_approval_forward";
       routeMode = "security_approval";
@@ -1184,7 +1197,9 @@ export async function forwardLocalWhatsAppInbound(input = {}, env = process.env,
       await assertInboundForwardTargetHealthy(target, deliveryTenantRoute, env, fetchImpl);
     }
     const headers = { "content-type": "application/json" };
-    const token = targetSource === "security_approval_forward"
+    const token = targetSource === "connector_mcp_gateway"
+      ? localWhatsAppWorkerEventSinkToken(env)
+      : targetSource === "security_approval_forward"
       ? localWhatsAppSecurityApprovalForwardToken({ chatId, target }, env)
       : deliveryTenantRoute?.token || (
         localWhatsAppInboundForwardToken({ chatId }, env)
