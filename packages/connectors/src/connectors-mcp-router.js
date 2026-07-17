@@ -3,6 +3,8 @@ import {
   listConnectorInboxEvents,
   markConnectorInboxEvent,
 } from "./connector-inbox.js";
+import { exactSecurityApproveChallengeId } from "../../core/src/raw-terminal-commands.js";
+import { getPairingChallenge } from "../../core/src/security.js";
 import { tenantWhatsAppInboundForwardRoute } from "../../core/src/tenant-whatsapp-routing.js";
 
 function clean(value = "") {
@@ -34,9 +36,34 @@ function maxAttempts(env = process.env) {
 }
 
 async function deliveryTarget(payload = {}, env = process.env) {
+  const approvalCode = exactSecurityApproveChallengeId(payload.text || payload.body || payload.message || "");
+  if (approvalCode) {
+    const parentChallenge = await getPairingChallenge(approvalCode, { env }).catch(() => null);
+    if (parentChallenge) {
+      return {
+        target: localInboundTarget(env),
+        token: localInboundToken(env),
+        route: { routeMode: "parent_security_approval", tenantVmId: "" },
+      };
+    }
+  }
   const tenant = await tenantWhatsAppInboundForwardRoute(payload, env);
   if (tenant?.target) return { target: tenant.target, token: clean(tenant.token), route: tenant };
   return { target: localInboundTarget(env), token: localInboundToken(env), route: null };
+}
+
+function securityApprovalResponse(response = {}) {
+  const reason = clean(response.skipped || response.event?.ignoredReason || response.error);
+  if (response.approvedSecurityChallenge === true) {
+    return { approvedSecurityChallenge: true };
+  }
+  if (reason.startsWith("security_approval_")) {
+    return {
+      skipped: reason,
+      ...(response.event && typeof response.event === "object" ? { event: response.event } : {}),
+    };
+  }
+  return {};
 }
 
 export async function deliverConnectorInboxEvent(event = {}, env = process.env, fetchImpl = fetch) {
@@ -93,9 +120,17 @@ export async function routeWhatsAppInboundFromWorker(payload = {}, env = process
     payload,
   }, env);
   if (!ensured.created && ensured.event.state === "delivered") {
-    return { ok: true, duplicate: true, state: "delivered", eventId: id, result: ensured.event.result };
+    return {
+      ok: true,
+      duplicate: true,
+      state: "delivered",
+      eventId: id,
+      result: ensured.event.result,
+      ...securityApprovalResponse(ensured.event.result?.response || {}),
+    };
   }
   const delivered = await deliverConnectorInboxEvent(ensured.event, env, fetchImpl);
+  const response = delivered?.result?.response || {};
   return {
     ok: delivered?.state === "delivered",
     queued: delivered?.state === "failed_retryable",
@@ -104,6 +139,7 @@ export async function routeWhatsAppInboundFromWorker(payload = {}, env = process
     attemptCount: delivered?.attemptCount || 0,
     error: delivered?.error || "",
     result: delivered?.result || null,
+    ...securityApprovalResponse(response),
   };
 }
 

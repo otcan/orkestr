@@ -8,7 +8,9 @@ import { callConnectorsMcpTool, connectorsMcpClientConfig, listConnectorsMcpTool
 import { listConnectorInboxEvents, resetConnectorInboxForTest } from "../packages/connectors/src/connector-inbox.js";
 import { listConnectorOutboxJobs } from "../packages/connectors/src/connector-outbox.js";
 import { deliverConnectorInboxEvent, routeWhatsAppInboundFromWorker } from "../packages/connectors/src/connectors-mcp-router.js";
-import { approvePairingChallenge } from "../packages/core/src/security.js";
+import { approvePairingChallenge, createPairingChallenge } from "../packages/core/src/security.js";
+import { configureTenantWhatsAppRoute } from "../packages/core/src/tenant-whatsapp-routing.js";
+import { createTenantVm } from "../packages/core/src/tenant-vm-registry.js";
 import { createThread } from "../packages/core/src/threads.js";
 import { isMainModule } from "../scripts/main-module.mjs";
 import { createConnectorsMcpGateway } from "../scripts/orkestr-connectors-mcp.mjs";
@@ -322,6 +324,89 @@ test("connector MCP inbound routing is idempotent and has a finite retry budget"
     });
     assert.equal(terminal.state, "dead_letter");
     assert.equal(terminal.attemptCount, 2);
+  } finally {
+    resetConnectorInboxForTest();
+  }
+});
+
+test("connector MCP keeps parent-owned approvals out of tenant routes and exposes the acknowledgement", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-connectors-parent-approval-"));
+  const chatId = "firat-jobs@g.us";
+  const env = {
+    ...process.env,
+    ORKESTR_HOME: home,
+    ORKESTR_CONNECTORS_MCP_INBOUND_TARGET_URL: "http://orkestr-parent.test/api/connectors/whatsapp/inbound",
+    ORKESTR_CONNECTORS_MCP_INBOUND_TARGET_TOKEN: "parent-token",
+  };
+  await createTenantVm({
+    id: "firat-jobs-vm",
+    ownerUserId: "firat",
+    endpoint: { baseUrl: "http://firat-jobs.test" },
+    connectors: { whatsappChatName: "Firat Jobs", whatsappAccountId: "sender" },
+  }, env);
+  await configureTenantWhatsAppRoute("firat-jobs-vm", {
+    chatId,
+    accountId: "sender",
+    routeMode: "direct",
+    enabled: true,
+  }, env);
+  const created = await createPairingChallenge({
+    env,
+    instanceId: "firat-broker-instance",
+    userId: "firat",
+    authIntent: { chatId, accountId: "sender", tenantVmId: "firat-jobs-vm" },
+    request: { headers: { "user-agent": "node-test" }, socket: { remoteAddress: "127.0.0.1" } },
+  });
+  const calls = [];
+
+  try {
+    const parentApproval = await routeWhatsAppInboundFromWorker({
+      eventId: "wa-parent-approval-1",
+      accountId: "sender",
+      chatId,
+      from: "491700000001@c.us",
+      text: `orkestr connect approve ${created.challenge.approveCode}`,
+    }, env, async (url, options) => {
+      calls.push({ url: String(url), options });
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ ok: true, approvedSecurityChallenge: true }),
+      };
+    });
+    const replayedApproval = await routeWhatsAppInboundFromWorker({
+      eventId: "wa-parent-approval-1",
+      accountId: "sender",
+      chatId,
+      from: "491700000001@c.us",
+      text: `orkestr connect approve ${created.challenge.approveCode}`,
+    }, env, async () => {
+      throw new Error("delivered approval replay must not be forwarded again");
+    });
+    const tenantApproval = await routeWhatsAppInboundFromWorker({
+      eventId: "wa-tenant-approval-1",
+      accountId: "sender",
+      chatId,
+      from: "491700000001@c.us",
+      text: "orkestr connect approve TENANT1",
+    }, env, async (url, options) => {
+      calls.push({ url: String(url), options });
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ skipped: "security_approval_challenge_not_found", event: { ignoredReason: "security_approval_challenge_not_found" } }),
+      };
+    });
+
+    assert.equal(calls[0].url, "http://orkestr-parent.test/api/connectors/whatsapp/inbound");
+    assert.equal(calls[0].options.headers.authorization, "Bearer parent-token");
+    assert.equal(parentApproval.result.routeMode, "parent_security_approval");
+    assert.equal(parentApproval.approvedSecurityChallenge, true);
+    assert.equal(replayedApproval.duplicate, true);
+    assert.equal(replayedApproval.approvedSecurityChallenge, true);
+    assert.equal(calls[1].url, "http://firat-jobs.test/api/connectors/whatsapp/inbound");
+    assert.equal(tenantApproval.result.routeMode, "direct");
+    assert.equal(tenantApproval.skipped, "security_approval_challenge_not_found");
   } finally {
     resetConnectorInboxForTest();
   }
