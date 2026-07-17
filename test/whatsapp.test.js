@@ -3433,6 +3433,62 @@ test("local whatsapp inbound retries a transient media download with a refreshed
   assert.equal(await fs.readFile(attachment.path, "utf8"), "candidate cv");
 });
 
+test("local whatsapp cached inbound media downloads through the browser message store", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-media-browser-store-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "sender",
+    ORKESTR_WHATSAPP_INBOUND_MEDIA_DOWNLOAD_ATTEMPTS: "1",
+    ORKESTR_WHATSAPP_INBOUND_MEDIA_DOWNLOAD_RETRY_MS: "0",
+    ORKESTR_WHATSAPP_INBOUND_MEDIA_DOWNLOAD_TIMEOUT_MS: "100",
+  };
+  const chatId = "chat-media-browser-store@g.us";
+  const eventId = `false_${chatId}_media-browser-store-1`;
+  let browserStoreDownloads = 0;
+  const client = {
+    pupPage: {
+      async evaluate(_callback, id) {
+        browserStoreDownloads += 1;
+        assert.equal(id, eventId);
+        return {
+          data: Buffer.from("cached candidate cv").toString("base64"),
+          filename: "cached-candidate.docx",
+          mimetype: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        };
+      },
+    },
+  };
+  await createThread({
+    id: "media-browser-store-thread",
+    name: "Media browser store",
+    binding: {
+      connector: "whatsapp",
+      chatId,
+      responderAccountId: "sender",
+      outboundAccountId: "sender",
+      enabled: true,
+    },
+  }, env);
+
+  const result = await handleInboundMessage("sender", {
+    id: { _serialized: eventId, remote: chatId },
+    from: chatId,
+    author: "279611011236064@lid",
+    fromMe: false,
+    body: "cached-candidate.docx",
+    hasMedia: true,
+    type: "document",
+    timestamp: 1_780_000_002,
+  }, env, { client });
+  const messages = await listThreadMessages("media-browser-store-thread", env);
+  const attachment = messages.at(-1)?.attachments?.[0];
+
+  assert.equal(result.routed.threadId, "media-browser-store-thread");
+  assert.equal(browserStoreDownloads, 1);
+  assert.equal(attachment.filename, "cached-candidate.docx");
+  assert.equal(await fs.readFile(attachment.path, "utf8"), "cached candidate cv");
+});
+
 test("local whatsapp inbound does not route a caption when media download retries are exhausted", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-media-failed-"));
   const env = {

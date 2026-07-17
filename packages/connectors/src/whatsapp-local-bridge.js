@@ -3223,6 +3223,39 @@ async function refreshedInboundMediaMessage(message, client = null) {
   return refreshed?.hasMedia && typeof refreshed.downloadMedia === "function" ? refreshed : message;
 }
 
+async function downloadInboundMediaFromBrowserStore(message, client = null, env = process.env) {
+  const eventId = serializedMessageId(message);
+  if (!eventId || !client?.pupPage || typeof client.pupPage.evaluate !== "function") return null;
+  return withInboundMediaDownloadTimeout(client.pupPage.evaluate(async (messageId) => {
+    const collections = window.require?.("WAWebCollections");
+    let model = collections?.Msg?.get?.(messageId) || null;
+    if (!model && typeof collections?.Msg?.getMessagesById === "function") {
+      model = (await collections.Msg.getMessagesById([messageId]))?.messages?.[0] || null;
+    }
+    if (!model?.directPath || !model?.mediaKey) return null;
+    const mockQpl = {
+      addAnnotations() { return this; },
+      addPoint() { return this; },
+    };
+    const decrypted = await window.require("WAWebDownloadManager").downloadManager.downloadAndMaybeDecrypt({
+      directPath: model.directPath,
+      encFilehash: model.encFilehash,
+      filehash: model.filehash,
+      mediaKey: model.mediaKey,
+      mediaKeyTimestamp: model.mediaKeyTimestamp,
+      type: model.type,
+      signal: new AbortController().signal,
+      downloadQpl: mockQpl,
+    });
+    return {
+      data: await window.WWebJS.arrayBufferToBase64Async(decrypted),
+      mimetype: String(model.mimetype || ""),
+      filename: String(model.filename || ""),
+      filesize: Number(model.size || 0) || undefined,
+    };
+  }, eventId), env);
+}
+
 async function downloadInboundMedia(accountId, message, env = process.env, { client = null } = {}) {
   const attempts = inboundMediaDownloadAttempts(env);
   const retryMs = inboundMediaDownloadRetryMs(env);
@@ -3231,7 +3264,32 @@ async function downloadInboundMedia(accountId, message, env = process.env, { cli
   let lastError = null;
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
-      const media = await withInboundMediaDownloadTimeout(candidate.downloadMedia(), env);
+      let media = null;
+      let primaryError = null;
+      if (typeof candidate?.downloadMedia === "function") {
+        try {
+          media = await withInboundMediaDownloadTimeout(candidate.downloadMedia(), env);
+        } catch (error) {
+          primaryError = error;
+        }
+      }
+      if (!media?.data) {
+        try {
+          media = await downloadInboundMediaFromBrowserStore(candidate || message, client, env);
+          if (media?.data) {
+            await appendEvent({
+              type: "whatsapp_local_inbound_media_download_browser_store_recovered",
+              accountId,
+              eventId,
+              attempt,
+              primaryError: primaryError?.message || "",
+            }, env).catch(() => {});
+          }
+        } catch (fallbackError) {
+          if (!primaryError) primaryError = fallbackError;
+        }
+      }
+      if (primaryError && !media?.data) throw primaryError;
       if (!media?.data) throw new Error("whatsapp_inbound_media_not_ready");
       if (attempt > 1) {
         await appendEvent({
@@ -3271,7 +3329,7 @@ async function downloadInboundMedia(accountId, message, env = process.env, { cli
 }
 
 async function saveInboundMedia(accountId, message, env = process.env, options = {}) {
-  if (!message?.hasMedia || typeof message.downloadMedia !== "function") return [];
+  if (!message?.hasMedia) return [];
   const media = await downloadInboundMedia(accountId, message, env, options);
   const date = new Date().toISOString().slice(0, 10);
   const outDir = path.join(inboundMediaRoot(env), date);
