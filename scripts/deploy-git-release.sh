@@ -28,6 +28,8 @@ Environment:
   ORKESTR_DEPLOY_RUN_SMOKE      Run npm smoke before activation. Defaults to 1.
   ORKESTR_DEPLOY_BACKUP_STATE   Back up ORKESTR_HOME before activation. Defaults to 1.
   ORKESTR_DEPLOY_BACKUP_EXCLUDES Space-separated paths under ORKESTR_HOME to omit from backups. Defaults to live runtime/session dirs.
+  ORKESTR_DEPLOY_BACKUP_COMPRESSOR Backup compressor: auto, pigz, gzip, zstd, or none. Defaults to auto.
+  ORKESTR_DEPLOY_BACKUP_GZIP_LEVEL gzip/pigz compression level. Defaults to 1 for faster deploys.
   ORKESTR_DEPLOY_BACKUP_KEEP    Completed state backups to keep per device. Defaults to 3 and is capped at 3.
   ORKESTR_DEPLOY_RELEASE_KEEP   Completed release directories to keep per device. Defaults to 3 and is capped at 3.
   ORKESTR_DEPLOY_SYNC_WORKERS   Fast-forward and push safe stale worker branches after deploy. Defaults to 1.
@@ -35,7 +37,9 @@ Environment:
   ORKESTR_RELEASE_REQUIRED_WHATSAPP_ACCOUNTS Space/comma-separated WA accounts that must be ready after restart.
   ORKESTR_RELEASE_WHATSAPP_ACCOUNT_ATTEMPTS Required WhatsApp account retry attempts. Defaults to 12.
   ORKESTR_RELEASE_WHATSAPP_ACCOUNT_RETRY_DELAY_MS Required WhatsApp account retry delay. Defaults to 15000.
+  ORKESTR_RELEASE_WHATSAPP_ACCOUNT_PROBE_TIMEOUT_SECONDS Timeout for each required account status probe. Defaults to 8.
   ORKESTR_RELEASE_CONNECTIVITY_RECOVERY_COMMAND Command to run between required-account retry attempts.
+  ORKESTR_RELEASE_CONNECTIVITY_RECOVERY_TIMEOUT_SECONDS Timeout for each recovery command run. Defaults to 20.
   ORKESTR_DEPLOY_LOCK_BUSY_EXIT_CODE Exit code when another deploy holds the lock. Defaults to 0.
   ORKESTR_DEPLOY_HEALTH_URL     Health URL. Defaults to http://$ORKESTR_HOST:$ORKESTR_PORT/api/health.
   ORKESTR_DEPLOY_EXPOSURE_CHECK Check public no-cookie API exposure after restart. Defaults to 1.
@@ -361,8 +365,42 @@ prepare_repo_cache() {
   fi
 }
 
+resolve_backup_compressor() {
+  local requested
+  requested="$(printf '%s' "${ORKESTR_DEPLOY_BACKUP_COMPRESSOR:-auto}" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+  case "$requested" in
+    ""|auto)
+      if command -v pigz >/dev/null 2>&1; then
+        echo "pigz"
+      elif command -v gzip >/dev/null 2>&1; then
+        echo "gzip"
+      elif command -v zstd >/dev/null 2>&1; then
+        echo "zstd"
+      else
+        echo "none"
+      fi
+      ;;
+    pigz|gzip|zstd)
+      if ! command -v "$requested" >/dev/null 2>&1; then
+        echo "Requested backup compressor is not installed: $requested" >&2
+        return 2
+      fi
+      echo "$requested"
+      ;;
+    none)
+      echo "none"
+      ;;
+    *)
+      echo "Unsupported ORKESTR_DEPLOY_BACKUP_COMPRESSOR: $requested" >&2
+      return 2
+      ;;
+  esac
+}
+
 backup_state() {
-  local stamp target backup_name data_dir data_base data_parent exclude tar_args tar_status
+  local stamp target backup_name data_dir data_base data_parent exclude tar_args tar_status compressor_status
+  local compressor gzip_level extension start_ts end_ts elapsed size
+  local -a compressor_cmd statuses
   if [ "$run_backup" != "1" ]; then
     echo ""
     return 0
@@ -376,10 +414,33 @@ backup_state() {
   prune_state_backups "$((backup_keep - 1))"
   stamp="$(date -u +%Y%m%dT%H%M%SZ)"
   target="$(sanitize_id "$release_id")"
-  backup_name="$backup_dir/${stamp}-${target}-state.tar.gz"
+  compressor="$(resolve_backup_compressor)"
+  gzip_level="$(positive_integer_env "${ORKESTR_DEPLOY_BACKUP_GZIP_LEVEL:-}" 1 1)"
+  if [ "$gzip_level" -gt 9 ]; then
+    gzip_level=9
+  fi
+  case "$compressor" in
+    pigz)
+      extension="tar.gz"
+      compressor_cmd=(pigz "-$gzip_level" -c)
+      ;;
+    gzip)
+      extension="tar.gz"
+      compressor_cmd=(gzip "-$gzip_level" -c)
+      ;;
+    zstd)
+      extension="tar.zst"
+      compressor_cmd=(zstd -3 -q -c)
+      ;;
+    none)
+      extension="tar"
+      compressor_cmd=(cat)
+      ;;
+  esac
+  backup_name="$backup_dir/${stamp}-${target}-state.$extension"
   data_parent="$(dirname "$data_dir")"
   data_base="$(basename "$data_dir")"
-  tar_args=(-C "$data_parent" -czf "$backup_name" --ignore-failed-read --warning=no-file-changed --warning=no-file-removed --warning=no-failed-read)
+  tar_args=(-C "$data_parent" -cf - --ignore-failed-read --warning=no-file-changed --warning=no-file-removed --warning=no-failed-read)
   for exclude in $backup_excludes; do
     [ -n "$exclude" ] || continue
     case "$exclude" in
@@ -387,14 +448,31 @@ backup_state() {
       *) tar_args+=(--exclude="$data_base/$exclude") ;;
     esac
   done
+  echo "State backup started: $backup_name using $compressor." >&2
+  start_ts="$(date +%s)"
   tar_status=0
-  tar "${tar_args[@]}" "$data_base" || tar_status=$?
+  compressor_status=0
+  set +e
+  tar "${tar_args[@]}" "$data_base" | "${compressor_cmd[@]}" > "$backup_name"
+  statuses=("${PIPESTATUS[@]}")
+  set -e
+  tar_status="${statuses[0]:-1}"
+  compressor_status="${statuses[1]:-0}"
   if [ "$tar_status" -gt 1 ]; then
+    rm -f -- "$backup_name"
     return "$tar_status"
+  fi
+  if [ "$compressor_status" -ne 0 ]; then
+    rm -f -- "$backup_name"
+    return "$compressor_status"
   fi
   if [ "$tar_status" -eq 1 ]; then
     echo "State backup completed with non-fatal live-file changes." >&2
   fi
+  end_ts="$(date +%s)"
+  elapsed="$((end_ts - start_ts))"
+  size="$(du -h "$backup_name" 2>/dev/null | awk '{print $1}' || true)"
+  echo "State backup completed in ${elapsed}s: $backup_name${size:+ ($size)}." >&2
   prune_state_backups "$backup_keep"
   echo "$backup_name"
 }
@@ -414,7 +492,7 @@ prune_state_backups() {
     if rm -f -- "$file"; then
       removed=$((removed + 1))
     fi
-  done < <(find "$backup_dir" -maxdepth 1 -type f -name '*.tar.gz' -printf '%T@\t%p\n' | sort -rn | cut -f2-)
+  done < <(find "$backup_dir" -maxdepth 1 -type f \( -name '*.tar.gz' -o -name '*.tar.zst' -o -name '*.tar' \) -printf '%T@\t%p\n' | sort -rn | cut -f2-)
   if [ "$removed" -gt 0 ]; then
     echo "Pruned $removed old state backup(s), keeping max $keep in $backup_dir." >&2
   fi
@@ -1033,16 +1111,24 @@ positive_integer_env() {
 }
 
 whatsapp_account_ready() {
-  local account payload cli_bin
+  local account payload cli_bin probe_timeout api_base
+  local -a status_cmd
   account="$1"
   cli_bin="${ORKESTR_CLI_BIN:-}"
   if [ -z "$cli_bin" ] && [ -f "$current_link/apps/cli/bin/orkestr-oss.js" ]; then
     cli_bin="$current_link/apps/cli/bin/orkestr-oss.js"
   fi
+  probe_timeout="$(positive_integer_env "${ORKESTR_RELEASE_WHATSAPP_ACCOUNT_PROBE_TIMEOUT_SECONDS:-}" 8 1)"
+  api_base="${ORKESTR_API_BASE:-http://$host:$port}"
   if [ -n "$cli_bin" ]; then
-    payload="$(ORKESTR_API_BASE="${ORKESTR_API_BASE:-http://$host:$port}" "$cli_bin" whatsapp accounts status "$account" --json 2>/dev/null)" || return 1
+    status_cmd=("$cli_bin" whatsapp accounts status "$account" --json)
   else
-    payload="$(ORKESTR_API_BASE="${ORKESTR_API_BASE:-http://$host:$port}" orkestr whatsapp accounts status "$account" --json 2>/dev/null)" || return 1
+    status_cmd=(orkestr whatsapp accounts status "$account" --json)
+  fi
+  if command -v timeout >/dev/null 2>&1; then
+    payload="$(timeout "${probe_timeout}s" env ORKESTR_API_BASE="$api_base" "${status_cmd[@]}" 2>/dev/null)" || return 1
+  else
+    payload="$(ORKESTR_API_BASE="$api_base" "${status_cmd[@]}" 2>/dev/null)" || return 1
   fi
   printf '%s' "$payload" | node -e '
 const wanted = String(process.argv[1] || "").trim().toLowerCase();
@@ -1076,16 +1162,27 @@ process.stdin.on("end", () => {
 }
 
 run_release_connectivity_recovery() {
-  local attempt error
+  local attempt error recovery_timeout
   attempt="$1"
   error="$2"
   [ -n "${ORKESTR_RELEASE_CONNECTIVITY_RECOVERY_COMMAND:-}" ] || return 0
-  ORKESTR_RELEASE_CONNECTIVITY_RECOVERY=1 \
-  ORKESTR_RELEASE_CONNECTIVITY_CHECK=0 \
-  ORKESTR_RELEASE_CONNECTIVITY_ATTEMPT="$attempt" \
-  ORKESTR_RELEASE_CONNECTIVITY_NEXT_ATTEMPT="$((attempt + 1))" \
-  ORKESTR_RELEASE_CONNECTIVITY_ERROR="$error" \
-    sh -lc "$ORKESTR_RELEASE_CONNECTIVITY_RECOVERY_COMMAND" || true
+  recovery_timeout="$(positive_integer_env "${ORKESTR_RELEASE_CONNECTIVITY_RECOVERY_TIMEOUT_SECONDS:-}" 20 1)"
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "${recovery_timeout}s" env \
+      ORKESTR_RELEASE_CONNECTIVITY_RECOVERY=1 \
+      ORKESTR_RELEASE_CONNECTIVITY_CHECK=0 \
+      ORKESTR_RELEASE_CONNECTIVITY_ATTEMPT="$attempt" \
+      ORKESTR_RELEASE_CONNECTIVITY_NEXT_ATTEMPT="$((attempt + 1))" \
+      ORKESTR_RELEASE_CONNECTIVITY_ERROR="$error" \
+      sh -lc "$ORKESTR_RELEASE_CONNECTIVITY_RECOVERY_COMMAND" || true
+  else
+    ORKESTR_RELEASE_CONNECTIVITY_RECOVERY=1 \
+    ORKESTR_RELEASE_CONNECTIVITY_CHECK=0 \
+    ORKESTR_RELEASE_CONNECTIVITY_ATTEMPT="$attempt" \
+    ORKESTR_RELEASE_CONNECTIVITY_NEXT_ATTEMPT="$((attempt + 1))" \
+    ORKESTR_RELEASE_CONNECTIVITY_ERROR="$error" \
+      sh -lc "$ORKESTR_RELEASE_CONNECTIVITY_RECOVERY_COMMAND" || true
+  fi
 }
 
 verify_required_whatsapp_accounts() {
