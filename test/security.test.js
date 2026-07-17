@@ -803,6 +803,7 @@ test("local CLI machine token can operate WhatsApp bridge routes", async () => {
 test("tenant CLI setup status uses instance connector scope", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-security-tenant-cli-setup-"));
   const overlayDir = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-security-tenant-cli-overlay-"));
+  const priorFetch = globalThis.fetch;
   const prior = saveEnv([
     "ORKESTR_HOME",
     "ORKESTR_AUTH_REQUIRED",
@@ -862,6 +863,17 @@ test("tenant CLI setup status uses instance connector scope", async () => {
       ],
       expiresAt: Math.floor(Date.now() / 1000) + 3600,
     }), "utf8");
+    globalThis.fetch = async (input, options = {}) => {
+      const url = String(input instanceof Request ? input.url : input);
+      if (url === "https://gmail.googleapis.com/gmail/v1/users/me/profile") {
+        assert.equal(options.headers?.authorization, `Bearer ya29.${"t".repeat(90)}`);
+        return new Response(JSON.stringify({ emailAddress: "oguzcanunver@gmail.com" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return priorFetch(input, options);
+    };
 
     server = await startServer({ port: 0, host: "127.0.0.1" });
     const { port } = server.address();
@@ -886,6 +898,7 @@ test("tenant CLI setup status uses instance connector scope", async () => {
     assert.equal(globalOauthState.userId, "");
     assert.notEqual(globalOauthState.state, "stale-global-oauth-state");
   } finally {
+    globalThis.fetch = priorFetch;
     if (server) {
       await new Promise((resolve) => setTimeout(resolve, 1000));
       await new Promise((resolve) => server.close(resolve));
