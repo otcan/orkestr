@@ -3489,6 +3489,27 @@ test("local whatsapp cached inbound media downloads through the browser message 
   assert.equal(await fs.readFile(attachment.path, "utf8"), "cached candidate cv");
 });
 
+test("local whatsapp skips invalid sentinel conversations before media download", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-invalid-conversation-"));
+  let downloads = 0;
+  const result = await handleInboundMessage("sender", {
+    id: { _serialized: "false_0@c.us_invalid-media-1", remote: "0@c.us" },
+    from: "0@c.us",
+    fromMe: false,
+    body: "/9j/4AAQSkZJRgABAQAAAQABAAD",
+    hasMedia: true,
+    type: "image",
+    async downloadMedia() {
+      downloads += 1;
+      return { data: "ignored", mimetype: "image/jpeg" };
+    },
+  }, { ORKESTR_HOME: home, ORKESTR_WHATSAPP_ACCOUNT_IDS: "sender" });
+
+  assert.equal(result.skipped, "invalid_conversation_id");
+  assert.equal(result.chatId, "0@c.us");
+  assert.equal(downloads, 0);
+});
+
 test("local whatsapp exact recovery loads and routes one scoped media event by id", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-media-exact-recovery-"));
   const env = {

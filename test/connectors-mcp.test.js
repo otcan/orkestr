@@ -409,6 +409,30 @@ test("connector MCP inbound routing is idempotent and has a finite retry budget"
   }
 });
 
+test("connector MCP rejects malformed WhatsApp conversations before queueing", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-connectors-invalid-inbound-"));
+  const env = { ...process.env, ORKESTR_HOME: home };
+  let deliveries = 0;
+  try {
+    await assert.rejects(
+      routeWhatsAppInboundFromWorker({
+        eventId: "invalid-wa-event-1",
+        accountId: "sender",
+        chatId: "0@c.us",
+        text: "/9j/4AAQSkZJRgABAQAAAQABAAD",
+      }, env, async () => {
+        deliveries += 1;
+        return { ok: true, status: 200, json: async () => ({ ok: true }) };
+      }),
+      (error) => error?.message === "whatsapp_conversation_id_invalid" && error?.statusCode === 400,
+    );
+    assert.equal(deliveries, 0);
+    assert.deepEqual(await listConnectorInboxEvents({}, env), []);
+  } finally {
+    resetConnectorInboxForTest();
+  }
+});
+
 test("connector MCP uploads staged media into the resolved tenant before inbound delivery", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-connectors-inbox-media-"));
   const env = {

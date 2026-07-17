@@ -5,6 +5,7 @@ import {
   markConnectorInboxEvent,
 } from "./connector-inbox.js";
 import { prepareConnectorInboxMediaDelivery } from "./connector-inbox-media.js";
+import { isRoutableWhatsAppConversationId } from "./whatsapp-identifiers.js";
 import { exactSecurityApproveChallengeId } from "../../core/src/raw-terminal-commands.js";
 import { getPairingChallenge } from "../../core/src/security.js";
 import { tenantWhatsAppInboundForwardRoute } from "../../core/src/tenant-whatsapp-routing.js";
@@ -130,13 +131,17 @@ export async function deliverConnectorInboxEvent(event = {}, env = process.env, 
 
 export async function routeWhatsAppInboundFromWorker(payload = {}, env = process.env, fetchImpl = fetch) {
   const id = clean(payload.eventId || payload.id || payload.messageId);
+  const conversationId = clean(payload.chatId || payload.fromChatId);
+  if (!isRoutableWhatsAppConversationId(conversationId)) {
+    throw Object.assign(new Error("whatsapp_conversation_id_invalid"), { statusCode: 400 });
+  }
   let inboxId = id;
   let deliveryPayload = payload;
   let ensured = await ensureConnectorInboxEvent({
     id,
     connector: "whatsapp",
     accountId: payload.accountId,
-    conversationId: payload.chatId || payload.fromChatId,
+    conversationId,
     payload,
   }, env);
   const previousAttachmentCount = attachmentCount(ensured.event?.payload);
@@ -160,7 +165,7 @@ export async function routeWhatsAppInboundFromWorker(payload = {}, env = process
       id: inboxId,
       connector: "whatsapp",
       accountId: payload.accountId,
-      conversationId: payload.chatId || payload.fromChatId,
+      conversationId,
       payload: deliveryPayload,
     }, env);
   }

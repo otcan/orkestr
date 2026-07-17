@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { dataPaths, ensureDataDirs } from "../../storage/src/paths.js";
 import { appendEvent, readJson, writeJson } from "../../storage/src/store.js";
+import { isRoutableWhatsAppConversationId } from "./whatsapp-identifiers.js";
 import { requestThreadInputDelivery } from "../../core/src/runtime-leases.js";
 import { processApiAgentThreadInput, threadUsesApiAgent } from "../../core/src/tenant-api-agent.js";
 import { listTenantWhatsAppRoutes, tenantWhatsAppInboundForwardRoute } from "../../core/src/tenant-whatsapp-routing.js";
@@ -3622,6 +3623,15 @@ export async function handleInboundMessage(accountId, message, env = process.env
   const text = String(message?.body || "").trim();
   const { chatId, from, fromMe: routeFromMe } = localWhatsAppMessageRouteFields(message);
   const eventId = String(serializedMessageId(message) || `${accountId}:${chatId}:${message.timestamp || Date.now()}`).trim();
+  if (!isRoutableWhatsAppConversationId(chatId)) {
+    await appendEvent({
+      type: "whatsapp_local_inbound_invalid_conversation_skipped",
+      accountId,
+      eventId,
+      chatId,
+    }, env).catch(() => {});
+    return { skipped: "invalid_conversation_id", eventId, chatId, from, fromMe: routeFromMe };
+  }
   if (fromMe && outboundMessageIds.has(eventId)) return { skipped: "outbound_echo_id", eventId, chatId };
   if (outboundTextRecentlySent(accountId, chatId, text, env)) {
     return { skipped: fromMe ? "outbound_echo_text" : "outbound_echo_cross_account_text", eventId, chatId };
