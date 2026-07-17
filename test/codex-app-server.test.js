@@ -17,6 +17,7 @@ import {
   listCodexAppServerThreads,
   recoverStaleCodexAppServerTurns,
   resumeCodexAppServerThread,
+  sendCodexAppServerInput,
   startCodexAppServerThread,
   stopCodexAppServerClients,
   syncCodexAppServerThreadMessages,
@@ -107,6 +108,11 @@ rl.on("line", (line) => {
   if (message.method === "initialize") return send({ id, result: { userAgent: "fake", platformFamily: "linux", platformOs: "linux" } });
   if (message.method === "initialized") return;
   if (message.method === "thread/start") {
+    if (Number(state.failThreadStartCount || 0) > 0) {
+      state.failThreadStartCount -= 1;
+      writeState(state);
+      return send({ id, error: { code: -32000, message: "forced thread/start failure" } });
+    }
     const thread = { id: "thr_" + String(state.threads.length + 1).padStart(3, "0"), sessionId: "sess_001", name: "", preview: "", cwd: params.cwd || "", status: { type: "idle" }, loaded: true, turns: [] };
     state.threads.push(thread);
     writeState(state);
@@ -4197,6 +4203,467 @@ test("Codex app-server auto safe resets missing resumed thread before delivering
   }
 });
 
+test("Codex app-server verifies stale ready external threads and safe resets before delivery", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-stale-ready-delivery-"));
+  const fake = await createFakeCodex(home);
+  const env = {
+    ORKESTR_HOME: path.join(home, "orkestr"),
+    HOME: path.join(home, "runtime-home"),
+    PATH: `${fake.bin}${path.delimiter}${process.env.PATH || ""}`,
+    FAKE_CODEX_STATE: fake.stateFile,
+  };
+  try {
+    const thread = await createThread({ id: "app-server-stale-ready-external-thread", name: "App Server Stale Ready External Thread", cwd: home, executorId: "codex", executor: { type: "codex" } }, env);
+    const started = await startCodexAppServerThread(thread, env);
+    const oldCodexThreadId = started.thread.codexThreadId;
+    const input = await enqueueThreadInput(started.thread.id, {
+      text: "recover stale ready runtime",
+      source: "whatsapp_inbound",
+      connector: "whatsapp",
+      chatId: "chat-stale-ready-runtime",
+    }, env);
+
+    const rawState = JSON.parse(await fs.readFile(fake.stateFile, "utf8"));
+    rawState.threads = [{
+      id: "unrelated-live-thread",
+      sessionId: "sess_unrelated",
+      name: "",
+      preview: "",
+      cwd: home,
+      status: { type: "idle" },
+      loaded: true,
+      turns: [],
+    }];
+    await fs.writeFile(fake.stateFile, JSON.stringify(rawState, null, 2));
+
+    const delivered = await deliverCodexAppServerPendingInputs(await getThread(started.thread.id, env), env);
+    const resetThread = await getThread(started.thread.id, env);
+    const messages = await listThreadMessages(started.thread.id, env);
+    const deliveredInput = messages.find((message) => message.id === input.id);
+    const finalState = JSON.parse(await fs.readFile(fake.stateFile, "utf8"));
+
+    assert.deepEqual(delivered, [input.id]);
+    assert.equal(deliveredInput.state, "completed");
+    assert.equal(deliveredInput.deliveryState, "delivered");
+    assert.equal(deliveredInput.deliveryRecoveryAttempt, 1);
+    assert.equal(deliveredInput.deliveryRecoveryMethod, "safe_reset");
+    assert.equal(deliveredInput.deliveryRecoveryReason, "runtime_safe_reset_and_verified");
+    assert.notEqual(resetThread.codexThreadId, oldCodexThreadId);
+    assert.equal(resetThread.executor.metadata.lastSafeReset.reason, "codex_app_server_missing_thread_auto_safe_reset");
+    assert.ok(finalState.calls.some((call) => call.method === "thread/read" && call.params.threadId === oldCodexThreadId));
+    assert.ok(finalState.calls.some((call) => call.method === "thread/resume" && call.params.threadId === oldCodexThreadId));
+    assert.ok(finalState.calls.some((call) => call.method === "turn/start" && call.params.threadId === resetThread.codexThreadId));
+  } finally {
+    stopCodexAppServerClients();
+  }
+});
+
+test("Codex app-server resumes and verifies unloaded external threads before delivery", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-unloaded-external-delivery-"));
+  const fake = await createFakeCodex(home);
+  const env = {
+    ORKESTR_HOME: path.join(home, "orkestr"),
+    HOME: path.join(home, "runtime-home"),
+    PATH: `${fake.bin}${path.delimiter}${process.env.PATH || ""}`,
+    FAKE_CODEX_STATE: fake.stateFile,
+  };
+  try {
+    const thread = await createThread({ id: "app-server-unloaded-external-thread", name: "App Server Unloaded External Thread", cwd: home, executorId: "codex", executor: { type: "codex" } }, env);
+    const started = await startCodexAppServerThread(thread, env);
+    const codexId = started.thread.codexThreadId;
+    const input = await enqueueThreadInput(started.thread.id, {
+      text: "wake and verify this runtime",
+      source: "whatsapp_inbound",
+      connector: "whatsapp",
+      chatId: "chat-unloaded-runtime",
+    }, env);
+
+    const rawState = JSON.parse(await fs.readFile(fake.stateFile, "utf8"));
+    const codexThread = rawState.threads.find((item) => item.id === codexId);
+    codexThread.loaded = false;
+    codexThread.status = { type: "notLoaded" };
+    await fs.writeFile(fake.stateFile, JSON.stringify(rawState, null, 2));
+
+    const delivered = await deliverCodexAppServerPendingInputs(await getThread(started.thread.id, env), env);
+    const currentThread = await getThread(started.thread.id, env);
+    const messages = await listThreadMessages(started.thread.id, env);
+    const deliveredInput = messages.find((message) => message.id === input.id);
+    const finalState = JSON.parse(await fs.readFile(fake.stateFile, "utf8"));
+
+    assert.deepEqual(delivered, [input.id]);
+    assert.equal(deliveredInput.state, "completed");
+    assert.equal(deliveredInput.deliveryState, "delivered");
+    assert.equal(deliveredInput.deliveryRecoveryAttempt, 0);
+    assert.equal(deliveredInput.deliveryRecoveryMethod, "resume");
+    assert.equal(deliveredInput.deliveryRecoveryReason, "runtime_resumed_and_verified");
+    assert.equal(currentThread.codexThreadId, codexId);
+    assert.ok(finalState.calls.some((call) => call.method === "thread/resume" && call.params.threadId === codexId));
+    assert.equal(finalState.calls.filter((call) => call.method === "thread/start").length, 1);
+    assert.ok(finalState.calls.some((call) => call.method === "turn/start" && call.params.threadId === codexId));
+  } finally {
+    stopCodexAppServerClients();
+  }
+});
+
+test("Codex app-server keeps external input queued when bounded runtime recovery fails", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-runtime-recovery-failed-"));
+  const fake = await createFakeCodex(home);
+  const env = {
+    ORKESTR_HOME: path.join(home, "orkestr"),
+    HOME: path.join(home, "runtime-home"),
+    PATH: `${fake.bin}${path.delimiter}${process.env.PATH || ""}`,
+    FAKE_CODEX_STATE: fake.stateFile,
+  };
+  try {
+    const thread = await createThread({ id: "app-server-runtime-recovery-failed-thread", name: "App Server Runtime Recovery Failed Thread", cwd: home, executorId: "codex", executor: { type: "codex" } }, env);
+    const started = await startCodexAppServerThread(thread, env);
+    const input = await enqueueThreadInput(started.thread.id, {
+      text: "retain this external input",
+      source: "whatsapp_inbound",
+      connector: "whatsapp",
+      chatId: "chat-runtime-recovery-failed",
+    }, env);
+
+    const rawState = JSON.parse(await fs.readFile(fake.stateFile, "utf8"));
+    rawState.threads = [];
+    rawState.failThreadStartCount = 1;
+    await fs.writeFile(fake.stateFile, JSON.stringify(rawState, null, 2));
+
+    const delivered = await deliverCodexAppServerPendingInputs(await getThread(started.thread.id, env), env);
+    const failedThread = await getThread(started.thread.id, env);
+    const messages = await listThreadMessages(started.thread.id, env);
+    const queuedInput = messages.find((message) => message.id === input.id);
+    const finalState = JSON.parse(await fs.readFile(fake.stateFile, "utf8"));
+
+    assert.deepEqual(delivered, []);
+    assert.equal(queuedInput.state, "queued");
+    assert.equal(queuedInput.deliveryState, "operator_required");
+    assert.equal(queuedInput.deliveryRecoveryAttempt, 1);
+    assert.equal(queuedInput.deliveryRecoveryMethod, "safe_reset");
+    assert.match(queuedInput.error, /forced thread\/start failure/);
+    assert.equal(failedThread.state, "operator_required");
+    assert.equal(failedThread.runtime.state, "operator_required");
+    assert.equal(failedThread.runtime.deliveryRecovery.state, "operator_required");
+    assert.ok(!finalState.calls.some((call) => call.method === "turn/start" && call.params?.input?.some((item) => item.text === "retain this external input")));
+  } finally {
+    stopCodexAppServerClients();
+  }
+});
+
+test("Codex app-server defers external delivery behind a recent durable recovery claim", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-recovery-claim-busy-"));
+  const fake = await createFakeCodex(home);
+  const env = {
+    ORKESTR_HOME: path.join(home, "orkestr"),
+    HOME: path.join(home, "runtime-home"),
+    PATH: `${fake.bin}${path.delimiter}${process.env.PATH || ""}`,
+    FAKE_CODEX_STATE: fake.stateFile,
+    ORKESTR_CODEX_APP_SERVER_DELIVERY_RECOVERY_CLAIM_STALE_MS: "60000",
+  };
+  try {
+    const thread = await createThread({ id: "app-server-recovery-claim-busy-thread", name: "App Server Recovery Claim Busy Thread", cwd: home, executorId: "codex", executor: { type: "codex" } }, env);
+    const started = await startCodexAppServerThread(thread, env);
+    const input = await enqueueThreadInput(started.thread.id, {
+      text: "wait for the recovery owner",
+      source: "whatsapp_inbound",
+      connector: "whatsapp",
+      chatId: "chat-recovery-claim-busy",
+    }, env);
+    await updateThreadMessage(started.thread.id, input.id, {
+      deliveryRecoveryClaimId: "other-process-recovery",
+      deliveryRecoveryClaimedAt: new Date().toISOString(),
+      deliveryRecoveryClaimOwner: "pid:999999",
+    }, env);
+    const callsBefore = (JSON.parse(await fs.readFile(fake.stateFile, "utf8")).calls || []).length;
+
+    const delivered = await deliverCodexAppServerPendingInputs(await getThread(started.thread.id, env), env);
+    const messages = await listThreadMessages(started.thread.id, env);
+    const queued = messages.find((message) => message.id === input.id);
+    const callsAfter = (JSON.parse(await fs.readFile(fake.stateFile, "utf8")).calls || []).length;
+
+    assert.deepEqual(delivered, []);
+    assert.equal(queued.state, "queued");
+    assert.equal(queued.deliveryRecoveryClaimId, "other-process-recovery");
+    assert.equal(callsAfter, callsBefore);
+  } finally {
+    stopCodexAppServerClients();
+  }
+});
+
+test("Codex app-server reclaims stale recovery ownership and delivers exactly once", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-recovery-claim-stale-"));
+  const fake = await createFakeCodex(home);
+  const env = {
+    ORKESTR_HOME: path.join(home, "orkestr"),
+    HOME: path.join(home, "runtime-home"),
+    PATH: `${fake.bin}${path.delimiter}${process.env.PATH || ""}`,
+    FAKE_CODEX_STATE: fake.stateFile,
+    ORKESTR_CODEX_APP_SERVER_DELIVERY_RECOVERY_CLAIM_STALE_MS: "250",
+  };
+  try {
+    const thread = await createThread({ id: "app-server-recovery-claim-stale-thread", name: "App Server Recovery Claim Stale Thread", cwd: home, executorId: "codex", executor: { type: "codex" } }, env);
+    const started = await startCodexAppServerThread(thread, env);
+    const input = await enqueueThreadInput(started.thread.id, {
+      text: "reclaim and deliver once",
+      source: "whatsapp_inbound",
+      connector: "whatsapp",
+      chatId: "chat-recovery-claim-stale",
+    }, env);
+    await updateThreadMessage(started.thread.id, input.id, {
+      deliveryRecoveryClaimId: "dead-process-recovery",
+      deliveryRecoveryClaimedAt: new Date(Date.now() - 60_000).toISOString(),
+      deliveryRecoveryClaimOwner: "pid:999999",
+    }, env);
+
+    const delivered = await deliverCodexAppServerPendingInputs(await getThread(started.thread.id, env), env);
+    const messages = await listThreadMessages(started.thread.id, env);
+    const completed = messages.find((message) => message.id === input.id);
+    const state = JSON.parse(await fs.readFile(fake.stateFile, "utf8"));
+    const matchingTurns = state.calls.filter((call) => call.method === "turn/start" && call.params?.input?.some((item) => item.text === "reclaim and deliver once"));
+
+    assert.deepEqual(delivered, [input.id]);
+    assert.equal(completed.state, "completed");
+    assert.equal(completed.deliveryRecoveryClaimId, null);
+    assert.ok(completed.deliveryRecoveryClaimReleasedAt);
+    assert.equal(matchingTurns.length, 1);
+  } finally {
+    stopCodexAppServerClients();
+  }
+});
+
+test("Codex app-server reconciles runtime acceptance after a crash without starting a duplicate turn", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-acceptance-reconcile-"));
+  const fake = await createFakeCodex(home);
+  const env = {
+    ORKESTR_HOME: path.join(home, "orkestr"),
+    HOME: path.join(home, "runtime-home"),
+    PATH: `${fake.bin}${path.delimiter}${process.env.PATH || ""}`,
+    FAKE_CODEX_STATE: fake.stateFile,
+  };
+  try {
+    const thread = await createThread({ id: "app-server-acceptance-reconcile-thread", name: "App Server Acceptance Reconcile Thread", cwd: home, executorId: "codex", executor: { type: "codex" } }, env);
+    const started = await startCodexAppServerThread(thread, env);
+    const input = await enqueueThreadInput(started.thread.id, {
+      text: "already accepted before restart",
+      source: "whatsapp_inbound",
+      connector: "whatsapp",
+      chatId: "chat-acceptance-reconcile",
+    }, env);
+    await updateThreadMessage(started.thread.id, input.id, {
+      state: "pending_delivery",
+      deliveryState: "codex_app_server_sending",
+      deliveryLastAttemptAt: new Date().toISOString(),
+      deliveryClaimId: "crashed-process-claim",
+    }, env);
+    const rawState = JSON.parse(await fs.readFile(fake.stateFile, "utf8"));
+    const codexThread = rawState.threads.find((item) => item.id === started.thread.codexThreadId);
+    codexThread.turns.push({
+      id: "turn_accepted_before_restart",
+      threadId: started.thread.codexThreadId,
+      status: "completed",
+      items: [{ type: "userMessage", id: "user_accepted_before_restart", content: [{ type: "text", text: "already accepted before restart" }] }],
+    });
+    await fs.writeFile(fake.stateFile, JSON.stringify(rawState, null, 2));
+
+    const delivered = await deliverCodexAppServerPendingInputs(await getThread(started.thread.id, env), env);
+    const messages = await listThreadMessages(started.thread.id, env);
+    const completed = messages.find((message) => message.id === input.id);
+    const finalState = JSON.parse(await fs.readFile(fake.stateFile, "utf8"));
+    const duplicateTurns = finalState.calls.filter((call) => call.method === "turn/start" && call.params?.input?.some((item) => item.text === "already accepted before restart"));
+
+    assert.deepEqual(delivered, [input.id]);
+    assert.equal(completed.state, "completed");
+    assert.equal(completed.deliveryState, "delivered");
+    assert.equal(completed.observedVia, "codex_app_server_history_acceptance");
+    assert.equal(completed.codexTurnId, "turn_accepted_before_restart");
+    assert.equal(duplicateTurns.length, 0);
+  } finally {
+    stopCodexAppServerClients();
+  }
+});
+
+test("Codex app-server resumes a reset interrupted by process restart", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-interrupted-reset-"));
+  const fake = await createFakeCodex(home);
+  const env = {
+    ORKESTR_HOME: path.join(home, "orkestr"),
+    HOME: path.join(home, "runtime-home"),
+    PATH: `${fake.bin}${path.delimiter}${process.env.PATH || ""}`,
+    FAKE_CODEX_STATE: fake.stateFile,
+  };
+  try {
+    const thread = await createThread({ id: "app-server-interrupted-reset-thread", name: "App Server Interrupted Reset Thread", cwd: home, executorId: "codex", executor: { type: "codex" } }, env);
+    const started = await startCodexAppServerThread(thread, env);
+    const oldCodexThreadId = started.thread.codexThreadId;
+    const input = await enqueueThreadInput(started.thread.id, {
+      text: "resume the interrupted reset",
+      source: "whatsapp_inbound",
+      connector: "whatsapp",
+      chatId: "chat-interrupted-reset",
+    }, env);
+    await updateThreadMessage(started.thread.id, input.id, {
+      deliveryRecoveryState: "resetting",
+      deliveryRecoveryAttempt: 1,
+      deliveryRecoveryMethod: "safe_reset",
+    }, env);
+    const rawState = JSON.parse(await fs.readFile(fake.stateFile, "utf8"));
+    rawState.threads = [{
+      id: "unrelated-interrupted-reset-thread",
+      sessionId: "sess_unrelated",
+      name: "",
+      preview: "",
+      cwd: home,
+      status: { type: "idle" },
+      loaded: true,
+      turns: [],
+    }];
+    await fs.writeFile(fake.stateFile, JSON.stringify(rawState, null, 2));
+
+    const delivered = await deliverCodexAppServerPendingInputs(await getThread(started.thread.id, env), env);
+    const currentThread = await getThread(started.thread.id, env);
+    const messages = await listThreadMessages(started.thread.id, env);
+    const completed = messages.find((message) => message.id === input.id);
+
+    assert.deepEqual(delivered, [input.id]);
+    assert.equal(completed.deliveryState, "delivered");
+    assert.equal(completed.deliveryRecoveryAttempt, 1);
+    assert.equal(completed.deliveryRecoveryReason, "runtime_safe_reset_and_verified");
+    assert.notEqual(currentThread.codexThreadId, oldCodexThreadId);
+  } finally {
+    stopCodexAppServerClients();
+  }
+});
+
+test("Codex app-server does not reset an unverified runtime with pending approval", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-approval-recovery-guard-"));
+  const fake = await createFakeCodex(home);
+  const env = {
+    ORKESTR_HOME: path.join(home, "orkestr"),
+    HOME: path.join(home, "runtime-home"),
+    PATH: `${fake.bin}${path.delimiter}${process.env.PATH || ""}`,
+    FAKE_CODEX_STATE: fake.stateFile,
+  };
+  try {
+    const thread = await createThread({ id: "app-server-approval-recovery-guard-thread", name: "App Server Approval Recovery Guard Thread", cwd: home, executorId: "codex", executor: { type: "codex" } }, env);
+    const started = await startCodexAppServerThread(thread, env);
+    const input = await enqueueThreadInput(started.thread.id, {
+      text: "approve",
+      source: "whatsapp_inbound",
+      connector: "whatsapp",
+      chatId: "chat-approval-recovery-guard",
+    }, env);
+    await updateThread(started.thread.id, {
+      state: "awaiting_approval",
+      runtime: {
+        ...(started.thread.runtime || {}),
+        state: "awaiting_approval",
+        pendingRequest: { requestId: "approval-guard-request", method: "item/commandExecution/requestApproval" },
+        codexStatus: { type: "active", activeFlags: ["waitingOnApproval"] },
+      },
+    }, env);
+    const rawState = JSON.parse(await fs.readFile(fake.stateFile, "utf8"));
+    rawState.threads = [];
+    const callsBefore = rawState.calls.length;
+    await fs.writeFile(fake.stateFile, JSON.stringify(rawState, null, 2));
+
+    const delivered = await deliverCodexAppServerPendingInputs(await getThread(started.thread.id, env), env);
+    const currentThread = await getThread(started.thread.id, env);
+    const messages = await listThreadMessages(started.thread.id, env);
+    const guarded = messages.find((message) => message.id === input.id);
+    const finalState = JSON.parse(await fs.readFile(fake.stateFile, "utf8"));
+
+    assert.deepEqual(delivered, []);
+    assert.equal(guarded.state, "queued");
+    assert.equal(guarded.deliveryState, "operator_required");
+    assert.equal(guarded.deliveryRecoveryMethod, "approval_guard");
+    assert.equal(currentThread.runtime.pendingRequest.requestId, "approval-guard-request");
+    assert.equal(finalState.calls.filter((call) => call.method === "thread/start").length, 1);
+    assert.ok(finalState.calls.length > callsBefore);
+    assert.ok(!finalState.calls.some((call) => call.method === "thread/resume"));
+  } finally {
+    stopCodexAppServerClients();
+  }
+});
+
+test("Codex app-server requeues stale-runtime input before runtime acceptance", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-runtime-identity-"));
+  const fake = await createFakeCodex(home);
+  const env = {
+    ORKESTR_HOME: path.join(home, "orkestr"),
+    HOME: path.join(home, "runtime-home"),
+    PATH: `${fake.bin}${path.delimiter}${process.env.PATH || ""}`,
+    FAKE_CODEX_STATE: fake.stateFile,
+  };
+  try {
+    const thread = await createThread({ id: "app-server-runtime-identity-thread", name: "App Server Runtime Identity Thread", cwd: home, executorId: "codex", executor: { type: "codex" } }, env);
+    const started = await startCodexAppServerThread(thread, env);
+    const oldCodexThreadId = started.thread.codexThreadId;
+    const input = await enqueueThreadInput(started.thread.id, {
+      text: "deliver only to the current runtime",
+      source: "whatsapp_inbound",
+      connector: "whatsapp",
+      chatId: "chat-runtime-identity",
+    }, env);
+    const reset = await safeResetThreadRuntime(started.thread.id, { reason: "test_runtime_identity_change" }, env);
+
+    const staleResult = await sendCodexAppServerInput(started.thread, input, env);
+    const afterStaleAttempt = (await listThreadMessages(started.thread.id, env)).find((message) => message.id === input.id);
+    const delivered = await deliverCodexAppServerPendingInputs(await getThread(started.thread.id, env), env);
+    const finalState = JSON.parse(await fs.readFile(fake.stateFile, "utf8"));
+    const matchingTurns = finalState.calls.filter((call) => call.method === "turn/start" && call.params?.input?.some((item) => item.text === "deliver only to the current runtime"));
+
+    assert.equal(staleResult.skipped, true);
+    assert.equal(staleResult.deferred, true);
+    assert.equal(afterStaleAttempt.state, "queued");
+    assert.equal(afterStaleAttempt.deliveryState, "runtime_identity_changed");
+    assert.deepEqual(delivered, [input.id]);
+    assert.equal(matchingTurns.length, 1);
+    assert.equal(matchingTurns[0].params.threadId, reset.newCodexThreadId);
+    assert.notEqual(matchingTurns[0].params.threadId, oldCodexThreadId);
+  } finally {
+    stopCodexAppServerClients();
+  }
+});
+
+test("Codex app-server drains burst external inputs in order after one delivery wins the lock", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-external-burst-"));
+  const fake = await createFakeCodex(home);
+  const env = {
+    ORKESTR_HOME: path.join(home, "orkestr"),
+    HOME: path.join(home, "runtime-home"),
+    PATH: `${fake.bin}${path.delimiter}${process.env.PATH || ""}`,
+    FAKE_CODEX_STATE: fake.stateFile,
+  };
+  try {
+    const thread = await createThread({ id: "app-server-external-burst-thread", name: "App Server External Burst Thread", cwd: home, executorId: "codex", executor: { type: "codex" } }, env);
+    const started = await startCodexAppServerThread(thread, env);
+    const first = await enqueueThreadInput(started.thread.id, { text: "burst message one", source: "whatsapp_inbound", connector: "whatsapp", chatId: "chat-external-burst" }, env);
+    const second = await enqueueThreadInput(started.thread.id, { text: "burst message two", source: "whatsapp_inbound", connector: "whatsapp", chatId: "chat-external-burst" }, env);
+
+    await Promise.all([
+      deliverCodexAppServerPendingInputs(await getThread(started.thread.id, env), env),
+      deliverCodexAppServerPendingInputs(await getThread(started.thread.id, env), env),
+    ]);
+    let messages = [];
+    for (let attempt = 0; attempt < 50; attempt += 1) {
+      messages = await listThreadMessages(started.thread.id, env);
+      if ([first.id, second.id].every((id) => messages.find((message) => message.id === id)?.state === "completed")) break;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    const state = JSON.parse(await fs.readFile(fake.stateFile, "utf8"));
+    const turnTexts = state.calls
+      .filter((call) => call.method === "turn/start")
+      .map((call) => call.params?.input?.find((item) => item.type === "text")?.text)
+      .filter((text) => text?.startsWith("burst message"));
+
+    assert.equal(messages.find((message) => message.id === first.id)?.state, "completed");
+    assert.equal(messages.find((message) => message.id === second.id)?.state, "completed");
+    assert.deepEqual(turnTexts, ["burst message one", "burst message two"]);
+  } finally {
+    stopCodexAppServerClients();
+  }
+});
+
 test("Codex app-server /safe-reset command starts fresh thread without delivering prompt", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-safe-reset-command-"));
   const fake = await createFakeCodex(home);
@@ -4261,6 +4728,17 @@ test("Codex app-server queues WhatsApp input behind active turns", async () => {
       },
     }, env);
     await markAppServerTurnActive(started.thread, env);
+    const setupState = JSON.parse(await fs.readFile(fake.stateFile, "utf8"));
+    const setupThread = setupState.threads.find((item) => item.id === started.thread.codexThreadId);
+    setupThread.activeTurnId = "active-turn";
+    setupThread.status = { type: "active", activeFlags: ["running"] };
+    setupThread.turns.push({
+      id: "active-turn",
+      threadId: started.thread.codexThreadId,
+      status: "inProgress",
+      items: [{ type: "userMessage", id: "user_active-turn", content: [{ type: "text", text: "Existing task" }] }],
+    });
+    await fs.writeFile(fake.stateFile, JSON.stringify(setupState, null, 2));
     const input = await enqueueThreadInput(started.thread.id, {
       text: "queue this behind the current turn",
       source: "whatsapp_inbound",
@@ -4664,6 +5142,17 @@ test("Codex app-server /stop interrupts the active turn without sleeping the thr
       },
     }, env);
     await markAppServerTurnActive(started.thread, env);
+    const setupState = JSON.parse(await fs.readFile(fake.stateFile, "utf8"));
+    const setupThread = setupState.threads.find((item) => item.id === started.thread.codexThreadId);
+    setupThread.activeTurnId = "active-turn";
+    setupThread.status = { type: "active", activeFlags: ["running"] };
+    setupThread.turns.push({
+      id: "active-turn",
+      threadId: started.thread.codexThreadId,
+      status: "inProgress",
+      items: [{ type: "userMessage", id: "user_active-turn", content: [{ type: "text", text: "Existing task" }] }],
+    });
+    await fs.writeFile(fake.stateFile, JSON.stringify(setupState, null, 2));
     const input = await enqueueThreadInput(started.thread.id, {
       text: "/stop",
       source: "whatsapp_inbound",

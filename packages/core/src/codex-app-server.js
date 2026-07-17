@@ -12,6 +12,7 @@ import {
   appServerStateFromStatus,
   clean,
   codexAppServerEnabled,
+  codexInputText,
   codexRuntimeEnvForThread,
   codexSessionId,
   codexThreadId,
@@ -33,7 +34,7 @@ import {
   userInputText,
 } from "./codex-app-server-common.js";
 import { getCodexAppServerClient, stopCodexAppServerClients as stopCodexAppServerRuntimeClients } from "./codex-app-server-client.js";
-import { readLiveCodexThreadState } from "./codex-app-server-live-state.js";
+import { probeLiveCodexThreadState, readLiveCodexThreadState } from "./codex-app-server-live-state.js";
 import { codexAppServerSocket, codexAppServerTransport } from "../../connectors/src/codex-app-server-transport.js";
 import {
   codexAppServerMessageFields,
@@ -153,6 +154,393 @@ function isoAfter(ms) {
 function codexAppServerInputClaimStaleMs(env = process.env) {
   const parsed = Number(env.ORKESTR_CODEX_APP_SERVER_INPUT_CLAIM_STALE_MS || 30000);
   return Number.isFinite(parsed) ? Math.max(1000, parsed) : 30000;
+}
+
+function codexAppServerDeliveryRecoveryMax(env = process.env) {
+  const parsed = Number(env.ORKESTR_CODEX_APP_SERVER_DELIVERY_RECOVERY_MAX ?? 1);
+  return Number.isFinite(parsed) ? Math.max(0, Math.floor(parsed)) : 1;
+}
+
+function externalChatInput(message = {}) {
+  const connector = clean(message.connector).toLowerCase();
+  const originSurface = clean(message.originSurface).toLowerCase();
+  const source = clean(message.source).toLowerCase();
+  return Boolean(
+    connector ||
+    originSurface === "whatsapp" ||
+    source === "whatsapp" ||
+    source.includes("whatsapp_inbound") ||
+    source.includes("external_chat")
+  );
+}
+
+function codexAppServerDeliveryRecoveryClaimStaleMs(env = process.env) {
+  const parsed = Number(env.ORKESTR_CODEX_APP_SERVER_DELIVERY_RECOVERY_CLAIM_STALE_MS ?? 30_000);
+  return Number.isFinite(parsed) ? Math.max(250, parsed) : 30_000;
+}
+
+async function claimExternalDeliveryRecovery(thread, message, env = process.env) {
+  if (!externalChatInput(message)) return { claimed: true, claimId: "", message };
+  const messages = await listThreadMessages(thread.id, env).catch(() => []);
+  const current = messages.find((item) => item.id === message.id);
+  if (!current || !pendingInputStates.has(clean(current.state))) {
+    return { claimed: false, reason: "message_not_pending", message: current || message };
+  }
+  const staleMs = codexAppServerDeliveryRecoveryClaimStaleMs(env);
+  const claimedAtMs = timestampMs(current.deliveryRecoveryClaimedAt);
+  const claimAgeMs = claimedAtMs ? Math.max(0, Date.now() - claimedAtMs) : staleMs;
+  if (clean(current.deliveryRecoveryClaimId) && claimAgeMs < staleMs) {
+    const retryMs = Math.max(250, staleMs - claimAgeMs);
+    scheduleCodexAppServerInputDelivery(thread.id, env, retryMs);
+    await appendEvent({
+      type: "codex_app_server_delivery_recovery_claim_busy",
+      threadId: thread.id,
+      messageId: current.id,
+      claimId: current.deliveryRecoveryClaimId,
+      claimAgeMs,
+      retryMs,
+    }, env).catch(() => {});
+    return { claimed: false, reason: "recovery_claim_busy", message: current, retryMs };
+  }
+  const claimId = randomUUID();
+  const claimedAt = nowIso();
+  await updateThreadMessage(thread.id, current.id, {
+    deliveryRecoveryClaimId: claimId,
+    deliveryRecoveryClaimedAt: claimedAt,
+    deliveryRecoveryClaimOwner: `pid:${process.pid}`,
+  }, env);
+  const confirmedMessages = await listThreadMessages(thread.id, env).catch(() => []);
+  const confirmed = confirmedMessages.find((item) => item.id === current.id);
+  if (clean(confirmed?.deliveryRecoveryClaimId) !== claimId) {
+    await appendEvent({
+      type: "codex_app_server_delivery_recovery_claim_lost",
+      threadId: thread.id,
+      messageId: current.id,
+      claimId,
+      winningClaimId: clean(confirmed?.deliveryRecoveryClaimId) || null,
+    }, env).catch(() => {});
+    return { claimed: false, reason: "recovery_claim_lost", message: confirmed || current };
+  }
+  await appendEvent({
+    type: "codex_app_server_delivery_recovery_claimed",
+    threadId: thread.id,
+    messageId: current.id,
+    claimId,
+    replacedStaleClaim: Boolean(clean(current.deliveryRecoveryClaimId)),
+  }, env).catch(() => {});
+  return { claimed: true, claimId, message: confirmed };
+}
+
+async function releaseExternalDeliveryRecoveryClaim(thread, messageId, claimId, env = process.env) {
+  if (!claimId || !messageId) return;
+  const messages = await listThreadMessages(thread.id, env).catch(() => []);
+  const current = messages.find((item) => item.id === messageId);
+  if (!current || clean(current.deliveryRecoveryClaimId) !== claimId) return;
+  await updateThreadMessage(thread.id, messageId, {
+    deliveryRecoveryClaimId: null,
+    deliveryRecoveryClaimedAt: null,
+    deliveryRecoveryClaimOwner: null,
+    deliveryRecoveryClaimReleasedAt: nowIso(),
+  }, env).catch(() => {});
+  await appendEvent({
+    type: "codex_app_server_delivery_recovery_claim_released",
+    threadId: thread.id,
+    messageId,
+    claimId,
+  }, env).catch(() => {});
+}
+
+function deliveryRecoveryAttempt(message = {}) {
+  const parsed = Number(message.deliveryRecoveryAttempt || 0);
+  return Number.isFinite(parsed) ? Math.max(0, Math.floor(parsed)) : 0;
+}
+
+function liveDeliveryRuntimeState(probe = {}) {
+  if (!probe?.ok || !probe.state) return "unverified";
+  const state = appServerStateFromStatus(probe.state.status);
+  if (state) return state;
+  return clean(probe.state.activeTurnId) ? "working" : "unverified";
+}
+
+function usableLiveDeliveryRuntime(probe = {}) {
+  return ["ready", "working", "awaiting_approval"].includes(liveDeliveryRuntimeState(probe));
+}
+
+function uncertainCodexRuntimeAcceptance(message = {}) {
+  return clean(message.state).toLowerCase() === "pending_delivery" &&
+    clean(message.deliveryState).toLowerCase() === "codex_app_server_sending" &&
+    Boolean(timestampMs(message.deliveryLastAttemptAt));
+}
+
+function acceptedCodexTurnForMessage(probe = {}, message = {}) {
+  if (!probe?.ok || !uncertainCodexRuntimeAcceptance(message)) return null;
+  const expectedText = codexInputText(message);
+  if (!expectedText) return null;
+  const turns = Array.isArray(probe.thread?.turns) ? probe.thread.turns : [];
+  for (let index = turns.length - 1; index >= 0; index -= 1) {
+    const turn = turns[index] || {};
+    const accepted = (Array.isArray(turn.items) ? turn.items : []).some((item) =>
+      item?.type === "userMessage" && itemText(item) === expectedText
+    );
+    if (accepted) return turn;
+  }
+  return null;
+}
+
+async function reconcileAcceptedExternalInput(thread, message, probe, env = process.env) {
+  const turn = acceptedCodexTurnForMessage(probe, message);
+  if (!turn) return null;
+  const turnId = clean(turn.id);
+  const completed = await updateThreadMessage(thread.id, message.id, {
+    state: "completed",
+    deliveryState: "delivered",
+    deliveredAt: nowIso(),
+    observedVia: "codex_app_server_history_acceptance",
+    deliveryClaimId: null,
+    codexThreadId: codexThreadId(thread) || null,
+    codexTurnId: turnId || null,
+    error: null,
+  }, env);
+  await recordMessageRouterTrace(completed, "delivered_to_runtime", {
+    threadId: thread.id,
+    ownerProcess: turnId || codexThreadId(thread),
+    reason: "codex_app_server_history_acceptance",
+  }, env);
+  await appendEvent({
+    type: "codex_app_server_input_acceptance_reconciled",
+    threadId: thread.id,
+    messageId: message.id,
+    codexThreadId: codexThreadId(thread) || null,
+    codexTurnId: turnId || null,
+  }, env).catch(() => {});
+  await appendEvent({ type: "thread_input_delivered", threadId: thread.id, messageId: message.id, observedVia: "codex_app_server_history_acceptance" }, env).catch(() => {});
+  return completed;
+}
+
+async function updateDeliveryRecoveryState(thread, message, state, context = {}, env = process.env) {
+  const checkedAt = nowIso();
+  const currentThread = await getThread(thread.id, env).catch(() => null) || thread;
+  const currentMessage = message?.id
+    ? (await listThreadMessages(thread.id, env).catch(() => [])).find((item) => item.id === message.id) || message
+    : message;
+  const recovery = {
+    state,
+    checkedAt,
+    messageId: currentMessage?.id || null,
+    reason: context.reason || null,
+    method: context.method || null,
+    attempt: context.attempt ?? deliveryRecoveryAttempt(currentMessage),
+    codexThreadId: context.codexThreadId || codexThreadId(currentThread) || null,
+    error: context.error || null,
+  };
+  const runtimeState = state === "operator_required"
+    ? "operator_required"
+    : ["waking", "resetting"].includes(state)
+      ? "recovering"
+      : context.runtimeState || currentThread.runtime?.state || currentThread.state;
+  const threadState = state === "operator_required"
+    ? "operator_required"
+    : ["waking", "resetting"].includes(state)
+      ? "recovering"
+      : context.runtimeState || currentThread.state;
+  const updatedThread = await updateThread(thread.id, {
+    state: threadState,
+    lastError: state === "operator_required" ? context.error || context.reason || "runtime_recovery_required" : null,
+    runtime: {
+      ...(currentThread.runtime || {}),
+      runtimeKind: "codex-app-server",
+      state: runtimeState,
+      activeTurnId: state === "ready" && context.runtimeState === "ready" ? null : currentThread.runtime?.activeTurnId || null,
+      pendingRequest: state === "ready" && context.runtimeState !== "awaiting_approval" ? null : currentThread.runtime?.pendingRequest || null,
+      deliveryRecovery: recovery,
+      updatedAt: checkedAt,
+    },
+  }, env).catch(() => currentThread);
+  let updatedMessage = currentMessage;
+  if (currentMessage?.id) {
+    const deliveryState = {
+      checking: "checking_runtime",
+      waking: "waking_runtime",
+      resetting: "resetting_runtime",
+      ready: "runtime_ready",
+      operator_required: "operator_required",
+    }[state] || currentMessage.deliveryState;
+    updatedMessage = await updateThreadMessage(thread.id, currentMessage.id, {
+      state: "queued",
+      deliveryState,
+      deliveryRecoveryState: state,
+      deliveryRecoveryAttempt: recovery.attempt,
+      deliveryRecoveryCheckedAt: checkedAt,
+      deliveryRecoveryMethod: recovery.method,
+      deliveryRecoveryReason: recovery.reason,
+      deliveryClaimId: null,
+      error: state === "operator_required" ? recovery.error || recovery.reason : null,
+    }, env).catch(() => currentMessage);
+  }
+  await appendEvent({
+    type: `codex_app_server_delivery_runtime_${state}`,
+    threadId: thread.id,
+    messageId: currentMessage?.id || null,
+    codexThreadId: recovery.codexThreadId,
+    method: recovery.method,
+    reason: recovery.reason,
+    attempt: recovery.attempt,
+    error: recovery.error,
+  }, env).catch(() => {});
+  return { thread: updatedThread, message: updatedMessage, recovery };
+}
+
+async function operatorRequiredForDeliveryRecovery(thread, message, context = {}, env = process.env) {
+  return updateDeliveryRecoveryState(thread, message, "operator_required", {
+    ...context,
+    error: context.error || context.reason || "codex_runtime_recovery_failed",
+  }, env);
+}
+
+async function verifiedExternalDeliveryRuntime(thread, message, client, env = process.env) {
+  if (!externalChatInput(message)) return { ok: true, thread, message, client, verified: false };
+  let currentThread = await getThread(thread.id, env).catch(() => null) || thread;
+  let currentMessage = message;
+  let currentClient = client;
+  let id = codexThreadId(currentThread);
+  const acceptanceCandidate = currentMessage;
+  const interruptedRecoveryState = clean(currentMessage.deliveryRecoveryState).toLowerCase();
+  ({ thread: currentThread, message: currentMessage } = await updateDeliveryRecoveryState(
+    currentThread,
+    currentMessage,
+    "checking",
+    { reason: "external_message_delivery", codexThreadId: id },
+    env,
+  ));
+
+  let probe = id
+    ? await probeLiveCodexThreadState(currentClient, id).catch((error) => ({ ok: false, reason: "live_thread_read_failed", error }))
+    : { ok: false, reason: "codex_thread_id_required" };
+  if (usableLiveDeliveryRuntime(probe)) {
+    const acceptedMessage = await reconcileAcceptedExternalInput(currentThread, acceptanceCandidate, probe, env);
+    if (acceptedMessage) {
+      return { ok: true, thread: currentThread, message: acceptedMessage, client: currentClient, probe, verified: true, accepted: true };
+    }
+    const runtimeState = liveDeliveryRuntimeState(probe);
+    ({ thread: currentThread, message: currentMessage } = await updateDeliveryRecoveryState(
+      currentThread,
+      currentMessage,
+      "ready",
+      { reason: "live_thread_read", method: "none", runtimeState, codexThreadId: id },
+      env,
+    ));
+    return { ok: true, thread: currentThread, message: currentMessage, client: currentClient, probe, verified: true };
+  }
+
+  if (currentThread.runtime?.pendingRequest) {
+    const stopped = await operatorRequiredForDeliveryRecovery(currentThread, currentMessage, {
+      reason: "pending_approval_runtime_unverified",
+      method: "approval_guard",
+      codexThreadId: id,
+      error: publicError(probe?.error || probe?.reason || "runtime_unverified_with_pending_approval"),
+    }, env);
+    return { ok: false, ...stopped, client: currentClient, reason: "operator_required" };
+  }
+
+  ({ thread: currentThread, message: currentMessage } = await updateDeliveryRecoveryState(
+    currentThread,
+    currentMessage,
+    "waking",
+    { reason: probe.reason || "runtime_not_verified", method: "resume", codexThreadId: id },
+    env,
+  ));
+  let resumeError = null;
+  try {
+    const resumed = await resumeCodexAppServerThread(currentThread, env);
+    currentThread = resumed.thread || currentThread;
+    currentClient = resumed.client || currentClient;
+    id = codexThreadId(currentThread);
+    probe = id
+      ? await probeLiveCodexThreadState(currentClient, id).catch((error) => ({ ok: false, reason: "live_thread_read_failed_after_resume", error }))
+      : { ok: false, reason: "codex_thread_id_required_after_resume" };
+    if (usableLiveDeliveryRuntime(probe)) {
+      const acceptedMessage = await reconcileAcceptedExternalInput(currentThread, acceptanceCandidate, probe, env);
+      if (acceptedMessage) {
+        return { ok: true, thread: currentThread, message: acceptedMessage, client: currentClient, probe, verified: true, accepted: true, recovered: true };
+      }
+      const runtimeState = liveDeliveryRuntimeState(probe);
+      ({ thread: currentThread, message: currentMessage } = await updateDeliveryRecoveryState(
+        currentThread,
+        currentMessage,
+        "ready",
+        { reason: "runtime_resumed_and_verified", method: "resume", runtimeState, codexThreadId: id },
+        env,
+      ));
+      return { ok: true, thread: currentThread, message: currentMessage, client: currentClient, probe, verified: true, recovered: true };
+    }
+  } catch (error) {
+    resumeError = error;
+  }
+
+  const attempt = deliveryRecoveryAttempt(currentMessage);
+  const maxAttempts = codexAppServerDeliveryRecoveryMax(env);
+  const resumeInterruptedReset = interruptedRecoveryState === "resetting" && attempt > 0 && attempt <= maxAttempts;
+  if (attempt >= maxAttempts && !resumeInterruptedReset) {
+    const errorText = publicError(resumeError || probe?.error || probe?.reason || "runtime_unverified_after_resume");
+    const stopped = await operatorRequiredForDeliveryRecovery(currentThread, currentMessage, {
+      reason: "runtime_recovery_exhausted",
+      method: "safe_reset",
+      attempt,
+      codexThreadId: id,
+      error: errorText,
+    }, env);
+    return { ok: false, ...stopped, client: currentClient, reason: "operator_required" };
+  }
+
+  ({ thread: currentThread, message: currentMessage } = await updateDeliveryRecoveryState(
+    currentThread,
+    currentMessage,
+    "resetting",
+    {
+      reason: resumeError ? publicError(resumeError) : probe?.reason || "runtime_unverified_after_resume",
+      method: "safe_reset",
+      attempt: resumeInterruptedReset ? attempt : attempt + 1,
+      codexThreadId: id,
+    },
+    env,
+  ));
+  try {
+    const reset = await performCodexAppServerSafeReset(currentThread, {
+      reason: codexAppServerMissingThreadError(publicError(resumeError))
+        ? "codex_app_server_missing_thread_auto_safe_reset"
+        : "external_delivery_runtime_auto_safe_reset",
+      interruptThread: interruptCodexAppServerThread,
+      startThread: startCodexAppServerThread,
+    }, env);
+    currentThread = reset.thread || await getThread(currentThread.id, env).catch(() => null) || currentThread;
+    const runtimeEnv = codexRuntimeEnvForThread(currentThread, env);
+    currentClient = await getCodexAppServerClient({ env: runtimeEnv, home: runtimeHome(runtimeEnv) });
+    id = codexThreadId(currentThread);
+    probe = id
+      ? await probeLiveCodexThreadState(currentClient, id).catch((error) => ({ ok: false, reason: "live_thread_read_failed_after_safe_reset", error }))
+      : { ok: false, reason: "codex_thread_id_required_after_safe_reset" };
+    if (!usableLiveDeliveryRuntime(probe)) {
+      throw probe.error || new Error(probe.reason || "runtime_unverified_after_safe_reset");
+    }
+    const runtimeState = liveDeliveryRuntimeState(probe);
+    ({ thread: currentThread, message: currentMessage } = await updateDeliveryRecoveryState(
+      currentThread,
+      currentMessage,
+      "ready",
+      { reason: "runtime_safe_reset_and_verified", method: "safe_reset", attempt: resumeInterruptedReset ? attempt : attempt + 1, runtimeState, codexThreadId: id },
+      env,
+    ));
+    return { ok: true, thread: currentThread, message: currentMessage, client: currentClient, probe, verified: true, recovered: true, reset };
+  } catch (error) {
+    const stopped = await operatorRequiredForDeliveryRecovery(currentThread, currentMessage, {
+      reason: "runtime_safe_reset_failed",
+      method: "safe_reset",
+      attempt: resumeInterruptedReset ? attempt : attempt + 1,
+      codexThreadId: id,
+      error: publicError(error),
+    }, env);
+    return { ok: false, ...stopped, client: currentClient, reason: "operator_required" };
+  }
 }
 
 function recentDeliveryClaim(message = {}, env = process.env) {
@@ -603,6 +991,10 @@ async function startCodexAppServerTurn({ client, thread, id, pending, env, runti
     until: completedKey ? () => Boolean(client.completedTurns?.has(completedKey)) : null,
   });
   const alreadyCompleted = Boolean(completedKey && client.completedTurns?.has(completedKey));
+  const runtimeIdentity = await currentCodexDeliveryRuntime(thread, id, env);
+  if (!runtimeIdentity.matches) {
+    return { result, observedVia, turnId, staleRuntime: true };
+  }
   if (turnId && !terminalResult && !alreadyCompleted) {
     client.threadStates.set(id, { ...(client.threadStates.get(id) || {}), activeTurnId: turnId, activeTurnObservedAt: nowIso(), status: { type: "active", activeFlags: ["running"] }, statusObservedAt: nowIso() });
     await updateThread(thread.id, {
@@ -667,6 +1059,38 @@ async function claimCodexAppServerPendingInput(thread, message, env = process.en
   return claimed;
 }
 
+async function currentCodexDeliveryRuntime(thread, expectedCodexThreadId, env = process.env) {
+  const current = await getThread(thread.id, env).catch(() => null);
+  const currentCodexThreadId = codexThreadId(current || thread);
+  return {
+    current: current || thread,
+    currentCodexThreadId,
+    matches: Boolean(currentCodexThreadId && currentCodexThreadId === clean(expectedCodexThreadId)),
+  };
+}
+
+async function requeueInputForReplacedRuntime(thread, message, expectedCodexThreadId, runtimeIdentity, env = process.env) {
+  const nextAttemptAt = isoAfter(250);
+  const updated = await updateThreadMessage(thread.id, message.id, {
+    state: "queued",
+    deliveryState: "runtime_identity_changed",
+    deliveryClaimId: null,
+    deliveryNextAttemptAt: nextAttemptAt,
+    expectedCodexThreadId: clean(expectedCodexThreadId) || null,
+    currentCodexThreadId: runtimeIdentity.currentCodexThreadId || null,
+    error: null,
+  }, env).catch(() => message);
+  await appendEvent({
+    type: "codex_app_server_delivery_runtime_identity_changed",
+    threadId: thread.id,
+    messageId: message.id,
+    expectedCodexThreadId: clean(expectedCodexThreadId) || null,
+    currentCodexThreadId: runtimeIdentity.currentCodexThreadId || null,
+  }, env).catch(() => {});
+  scheduleCodexAppServerInputDelivery(thread.id, env, 250);
+  return updated;
+}
+
 export async function sendCodexAppServerInput(thread, message, env = process.env) {
   if (!containedCodexRuntimeIsCurrent(thread, env)) {
     const restarted = await resumeCodexAppServerThread(thread, env);
@@ -680,6 +1104,11 @@ export async function sendCodexAppServerInput(thread, message, env = process.env
   const pending = await claimCodexAppServerPendingInput(thread, message, env);
   if (!pending) {
     return { message, result: null, observedVia: "codex_app_server_stale_claim", skipped: true };
+  }
+  let runtimeIdentity = await currentCodexDeliveryRuntime(thread, id, env);
+  if (!runtimeIdentity.matches) {
+    const requeued = await requeueInputForReplacedRuntime(thread, pending, id, runtimeIdentity, env);
+    return { message: requeued, result: null, observedVia: "codex_app_server_runtime_identity_changed", skipped: true, deferred: true };
   }
   let clientState = client.threadStates.get(id) || {};
   let clientStatusState = appServerStateFromStatus(clientState.status);
@@ -817,6 +1246,35 @@ export async function sendCodexAppServerInput(thread, message, env = process.env
   result = started.result;
   observedVia = started.observedVia;
   deliveryTurnId = started.turnId;
+  runtimeIdentity = await currentCodexDeliveryRuntime(thread, id, env);
+  if (started.staleRuntime === true || !runtimeIdentity.matches) {
+    const acceptedByReplacedRuntime = await updateThreadMessage(thread.id, pending.id, {
+      state: "completed",
+      deliveryState: "delivered",
+      deliveredAt: nowIso(),
+      observedVia: "codex_app_server_replaced_runtime_accepted",
+      deliveryClaimId: null,
+      codexThreadId: id,
+      codexTurnId: deliveryTurnId || null,
+      replacedByCodexThreadId: runtimeIdentity.currentCodexThreadId || null,
+      error: null,
+    }, env);
+    await recordMessageRouterTrace(acceptedByReplacedRuntime, "delivered_to_runtime", {
+      threadId: thread.id,
+      ownerProcess: deliveryTurnId || id,
+      reason: "codex_app_server_replaced_runtime_accepted",
+    }, env);
+    await appendEvent({
+      type: "codex_app_server_replaced_runtime_result_ignored",
+      threadId: thread.id,
+      messageId: pending.id,
+      codexThreadId: id,
+      codexTurnId: deliveryTurnId || null,
+      currentCodexThreadId: runtimeIdentity.currentCodexThreadId || null,
+    }, env).catch(() => {});
+    await appendEvent({ type: "thread_input_delivered", threadId: thread.id, messageId: pending.id, observedVia: "codex_app_server_replaced_runtime_accepted" }, env).catch(() => {});
+    return { message: acceptedByReplacedRuntime, result, observedVia: "codex_app_server_replaced_runtime_accepted", staleRuntime: true };
+  }
   const resultTurn = result?.turn || {};
   for (const item of Array.isArray(resultTurn.items) ? resultTurn.items : []) {
     const turnId = resultTurn.id || result?.turnId || deliveryTurnId;
@@ -849,11 +1307,19 @@ export async function deliverCodexAppServerPendingInputs(thread, env = process.e
     return [];
   }
   appServerDeliveryLocks.add(lockKey);
+  let delivered = [];
   try {
-    return await deliverCodexAppServerPendingInputsUnlocked(thread, env);
+    delivered = await deliverCodexAppServerPendingInputsUnlocked(thread, env);
   } finally {
     appServerDeliveryLocks.delete(lockKey);
   }
+  if (delivered.length) {
+    const messages = await listThreadMessages(lockKey, env).catch(() => []);
+    if (messages.some((message) => message.role === "user" && pendingInputStates.has(clean(message.state)))) {
+      scheduleCodexAppServerInputDelivery(lockKey, env, 0);
+    }
+  }
+  return delivered;
 }
 
 async function deliverCodexAppServerPendingInputsUnlocked(thread, env = process.env) {
@@ -867,6 +1333,16 @@ async function deliverCodexAppServerPendingInputsUnlocked(thread, env = process.
     delivered.push(next.id);
     return delivered;
   }
+  const recoveryClaim = await claimExternalDeliveryRecovery(thread, next, env);
+  if (!recoveryClaim.claimed) return delivered;
+  try {
+    return await deliverCodexAppServerClaimedPendingInput(thread, recoveryClaim.message || next, env, delivered);
+  } finally {
+    await releaseExternalDeliveryRecoveryClaim(thread, next.id, recoveryClaim.claimId, env);
+  }
+}
+
+async function deliverCodexAppServerClaimedPendingInput(thread, next, env = process.env, delivered = []) {
   let client;
   let runtimeEnv = env;
   try {
@@ -875,14 +1351,36 @@ async function deliverCodexAppServerPendingInputsUnlocked(thread, env = process.
     client = await getCodexAppServerClient({ env: runtimeEnv, home: runtimeHome(runtimeEnv) });
   } catch (error) {
     const errorText = publicError(error);
+    if (externalChatInput(next)) {
+      await operatorRequiredForDeliveryRecovery(thread, next, {
+        reason: "codex_app_server_unavailable",
+        method: "connect",
+        error: errorText,
+      }, env);
+      await appendEvent({ type: "codex_app_server_unavailable", threadId: thread.id, messageId: next.id, error: errorText }, env).catch(() => {});
+      return delivered;
+    }
     await updateThread(thread.id, { state: "failed", lastError: errorText }, env).catch(() => {});
     await appendEvent({ type: "codex_app_server_unavailable", threadId: thread.id, error: errorText }, env).catch(() => {});
     return delivered;
   }
   let id = codexThreadId(thread);
+  if (externalChatInput(next)) {
+    const readiness = await verifiedExternalDeliveryRuntime(thread, next, client, env);
+    if (!readiness.ok) return delivered;
+    if (readiness.accepted) {
+      delivered.push(readiness.message.id);
+      return delivered;
+    }
+    thread = readiness.thread || thread;
+    next = readiness.message || next;
+    client = readiness.client || client;
+    runtimeEnv = codexRuntimeEnvForThread(thread, env);
+    id = codexThreadId(thread);
+  }
   const statusType = clean(client.threadStates.get(id)?.status?.type);
   const threadState = clean(thread.state);
-  if (id && (!statusType || statusType === "notLoaded" || threadState === "sleeping" || threadState === "unloaded" || threadState === "failed")) {
+  if (!externalChatInput(next) && id && (!statusType || statusType === "notLoaded" || threadState === "sleeping" || threadState === "unloaded" || threadState === "failed")) {
     try {
       const resumed = await resumeCodexAppServerThread(thread, env);
       thread = resumed.thread || thread;
@@ -1199,8 +1697,8 @@ export async function codexAppServerThreadStatus(thread, env = process.env, coun
   const threadState = clean(thread.state);
   const fallbackState = threadState === "sleeping" || threadState === "unloaded"
     ? "unloaded"
-    : threadState === "failed"
-      ? "failed"
+    : ["failed", "operator_required", "recovering", "waking"].includes(threadState)
+      ? threadState
       : "ready";
   const runtimeState = pendingRequest ? "awaiting_approval" : activeTurnId ? "working" : finalAnswerCompletedActiveTurn ? "ready" : statusState || fallbackState;
   const codexStatus = finalAnswerCompletedActiveTurn
