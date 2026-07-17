@@ -48,6 +48,10 @@ function fakeWorker() {
       res.end(JSON.stringify({ ok: true, active: body.state === "composing", chatId: body.to }));
       return;
     }
+    if (req.url === "/accounts/sender/chats/firat-jobs%40g.us/recover") {
+      res.end(JSON.stringify({ ok: true, exact: true, requested: body.eventIds?.length || 0, routed: [] }));
+      return;
+    }
     if (req.url === "/accounts/sender/logout") {
       res.end(JSON.stringify({ ok: true, account: { accountId: "sender", state: "idle" } }));
       return;
@@ -77,7 +81,7 @@ async function fixture({ scoped = false } = {}) {
     ORKESTR_CONNECTORS_MCP_TOKENS_JSON: scoped ? JSON.stringify({
       tenant: {
         token,
-        scopes: ["connectors:read", "connectors:send"],
+        scopes: ["connectors:read", "connectors:send", "connectors:manage"],
         principalKind: "tenant_vm",
         ownerUserId: "firat",
         instanceId: "vm-firat",
@@ -252,6 +256,30 @@ test("connector MCP typing is transient and scoped to the existing conversation"
     assert.deepEqual(item.worker.calls.filter((call) => call.url === "/typing").map((call) => call.body.state), ["composing", "paused"]);
     assert.equal(item.worker.calls.some((call) => call.url === "/send-text"), false);
     assert.deepEqual((await listConnectorOutboxJobs({ connector: "whatsapp" }, item.env)).jobs, []);
+  } finally {
+    await item.close();
+  }
+});
+
+test("connector MCP conversation recovery passes exact scoped event ids to the worker", async () => {
+  const item = await fixture({ scoped: true });
+  try {
+    const recovered = await callConnectorsMcpTool("orkestr_conversation", {
+      service: "whatsapp",
+      action: "recover",
+      account_id: "sender",
+      instance_id: "vm-firat",
+      user_id: "firat",
+      conversation_id: "firat-jobs@g.us",
+      event_ids: ["3EB0A781A2AE024E4B6FE4"],
+      mark_seen: false,
+    }, item.env);
+    const call = item.worker.calls.find((entry) => entry.url === "/accounts/sender/chats/firat-jobs%40g.us/recover");
+
+    assert.equal(recovered.status, "ok", JSON.stringify(recovered));
+    assert.equal(recovered.data.exact, true);
+    assert.deepEqual(call.body.eventIds, ["3EB0A781A2AE024E4B6FE4"]);
+    assert.equal(call.body.markSeen, false);
   } finally {
     await item.close();
   }

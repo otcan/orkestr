@@ -329,6 +329,7 @@ async function handleRequest(req, res, env = process.env, bridge = defaultBridge
       limit: Number(body.limit || 20) || 20,
       unreadOnly: body.unreadOnly !== false,
       markSeen: body.markSeen !== false,
+      eventIds: Array.isArray(body.eventIds) ? body.eventIds : [],
       env,
     }));
   }

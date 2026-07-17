@@ -297,6 +297,7 @@ async function runConversation(input, auth, env) {
       limit: input.limit,
       unreadOnly: input.unread_only,
       markSeen: input.mark_seen,
+      eventIds: input.event_ids,
     }, env);
   }
   return connectorMcpStructuredResult({

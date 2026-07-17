@@ -3768,7 +3768,11 @@ export async function handleInboundMessage(accountId, message, env = process.env
   }
 }
 
-export async function recoverLocalWhatsAppChatMessages({ accountId = "", chatId = "", limit = 20, unreadOnly = true, markSeen = true, sinceMs = 0 } = {}, env = process.env) {
+export async function recoverLocalWhatsAppChatMessages({ accountId = "", chatId = "", limit = 20, unreadOnly = true, markSeen = true, sinceMs = 0, eventIds = [] } = {}, env = process.env) {
+  const exactEventIds = [...new Set((Array.isArray(eventIds) ? eventIds : []).map((value) => String(value || "").trim()).filter(Boolean))].slice(0, 20);
+  if (exactEventIds.length) {
+    return recoverLocalWhatsAppMessagesById({ accountId, chatId, eventIds: exactEventIds }, env);
+  }
   return recoverLocalWhatsAppChatMessagesWithClient({ accountId, chatId, limit, unreadOnly, markSeen, sinceMs }, env);
 }
 
@@ -3857,6 +3861,100 @@ async function readCachedLocalWhatsAppChatMessages(client, chatId = "", limit = 
       messages,
     };
   }, id, max);
+}
+
+async function readCachedLocalWhatsAppMessageById(client, eventId = "", chatId = "") {
+  if (!client?.pupPage || typeof client.pupPage.evaluate !== "function") return null;
+  const id = String(eventId || "").trim();
+  const targetChatId = String(chatId || "").trim();
+  if (!id || !targetChatId) return null;
+  return client.pupPage.evaluate(async (messageId, expectedChatId) => {
+    const serialized = (value) => {
+      if (!value) return "";
+      if (typeof value === "string") return value;
+      const direct = value._serialized || value.id?._serialized || value.user;
+      if (typeof direct === "string" || typeof direct === "number") return String(direct);
+      return "";
+    };
+    const collections = window.require?.("WAWebCollections");
+    let message = collections?.Msg?.get?.(messageId) || null;
+    if (!message && typeof collections?.Msg?.getMessagesById === "function") {
+      message = (await collections.Msg.getMessagesById([messageId]))?.messages?.[0] || null;
+    }
+    if (!message) return null;
+    let model = null;
+    try {
+      model = window.WWebJS?.getMessageModel ? window.WWebJS.getMessageModel(message) : null;
+    } catch {
+      model = null;
+    }
+    if (!model) model = message;
+    const messageIdModel = model?.id || message?.id || {};
+    const remote = serialized(messageIdModel.remote || model?.from || message?.from || expectedChatId);
+    return {
+      id: { ...messageIdModel, _serialized: messageId, remote },
+      body: String(model?.body || model?.caption || model?.pollName || model?.eventName || ""),
+      type: String(model?.type || message?.type || ""),
+      fromMe: Boolean(model?.id?.fromMe ?? message?.id?.fromMe ?? model?.fromMe),
+      from: serialized(model?.from || message?.from || messageIdModel.remote || expectedChatId),
+      to: serialized(model?.to || message?.to || expectedChatId),
+      author: serialized(model?.author || message?.author || messageIdModel.participant || message?.id?.participant),
+      timestamp: Number(model?.t || model?.timestamp || message?.t || message?.timestamp || 0) || 0,
+      hasMedia: Boolean(model?.directPath || model?.hasMedia || message?.directPath || message?.mediaKey),
+      isStatus: Boolean(model?.isStatus || message?.isStatus),
+    };
+  }, id, targetChatId);
+}
+
+async function recoverLocalWhatsAppMessagesById({ accountId = "", chatId = "", eventIds = [] } = {}, env = process.env) {
+  const normalized = normalizeAccountId(accountId, env);
+  const id = String(chatId || "").trim();
+  if (!id) {
+    const error = new Error("whatsapp_chat_id_required");
+    error.statusCode = 400;
+    throw error;
+  }
+  const runtime = runtimes.get(normalized);
+  const state = accountStates.get(normalized) || defaultAccountState(normalized);
+  if (!runtime?.client || !state.ready || state.runtimeUsable === false) {
+    return { ok: false, accountId: normalized, chatId: id, ready: false, state: state.state || "idle", routed: [], skipped: [] };
+  }
+  const routed = [];
+  const skipped = [];
+  for (const eventId of eventIds) {
+    let message = typeof runtime.client.getMessageById === "function"
+      ? await runtime.client.getMessageById(eventId).catch(() => null)
+      : null;
+    if (!message) message = await readCachedLocalWhatsAppMessageById(runtime.client, eventId, id).catch(() => null);
+    if (!message) {
+      skipped.push({ eventId, reason: "message_not_found" });
+      continue;
+    }
+    const route = localWhatsAppMessageRouteFields(message);
+    if (route.chatId !== id) {
+      skipped.push({ eventId, reason: "conversation_scope_mismatch" });
+      continue;
+    }
+    if (message.fromMe) {
+      skipped.push({ eventId, reason: "from_me" });
+      continue;
+    }
+    const result = await handleInboundMessage(normalized, message, env, { client: runtime.client });
+    if (result?.forwarded || (result?.routed && !result.routed.duplicate)) {
+      routed.push({ eventId, threadId: result?.routed?.threadId || "", messageId: result?.routed?.messageId || "" });
+    } else {
+      skipped.push({ eventId, reason: result?.routed?.duplicate ? "duplicate" : result?.skipped || result?.error || "not_routed" });
+    }
+  }
+  await appendEvent({
+    type: "whatsapp_local_exact_messages_recovered",
+    accountId: normalized,
+    chatId: id,
+    requested: eventIds.length,
+    routed: routed.length,
+    skipped: skipped.length,
+  }, env).catch(() => {});
+  return { ok: true, accountId: normalized, chatId: id, exact: true, requested: eventIds.length, routed, skipped };
 }
 
 async function recoverLocalWhatsAppChatMessagesWithClient({ accountId = "", chatId = "", limit = 20, unreadOnly = true, markSeen = true, sinceMs = 0 } = {}, env = process.env, options = {}) {

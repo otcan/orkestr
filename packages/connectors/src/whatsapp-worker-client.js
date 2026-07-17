@@ -97,7 +97,7 @@ export function whatsappWorkerConversation(accountId = "", conversationId = "", 
   if (action === "recover") {
     return requestWhatsAppWorker(`/accounts/${account}/chats/${conversation}/recover`, {
       method: "POST",
-      body: { limit: options.limit, unreadOnly: options.unreadOnly, markSeen: options.markSeen },
+      body: { limit: options.limit, unreadOnly: options.unreadOnly, markSeen: options.markSeen, eventIds: options.eventIds },
     }, env);
   }
   throw Object.assign(new Error("whatsapp_worker_conversation_action_unsupported"), { statusCode: 400 });

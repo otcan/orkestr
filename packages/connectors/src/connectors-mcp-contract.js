@@ -39,6 +39,7 @@ export const connectorsMcpInputSchemas = {
     limit: z.number().int().min(1).max(200).nullish(),
     unread_only: z.boolean().nullish(),
     mark_seen: z.boolean().nullish(),
+    event_ids: z.array(cleanString.min(1).max(240)).max(20).nullish().describe("Exact connector event ids to recover within the scoped conversation."),
   }).strict(),
   orkestr_routing: z.object({
     ...contextShape,

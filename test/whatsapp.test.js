@@ -3489,6 +3489,77 @@ test("local whatsapp cached inbound media downloads through the browser message 
   assert.equal(await fs.readFile(attachment.path, "utf8"), "cached candidate cv");
 });
 
+test("local whatsapp exact recovery loads and routes one scoped media event by id", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-media-exact-recovery-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "sender",
+    ORKESTR_WHATSAPP_INBOUND_MEDIA_DOWNLOAD_ATTEMPTS: "1",
+    ORKESTR_WHATSAPP_INBOUND_MEDIA_DOWNLOAD_TIMEOUT_MS: "100",
+  };
+  const chatId = "chat-media-exact-recovery@g.us";
+  const eventId = `false_${chatId}_media-exact-recovery-1`;
+  const client = {
+    async getMessageById(id) {
+      assert.equal(id, eventId);
+      return {
+        id: { _serialized: eventId, remote: chatId },
+        from: chatId,
+        author: "279611011236064@lid",
+        fromMe: false,
+        body: "exact-candidate.docx",
+        hasMedia: true,
+        type: "document",
+        timestamp: 1_780_000_003,
+        async downloadMedia() {
+          throw new Error("r");
+        },
+      };
+    },
+    pupPage: {
+      async evaluate(_callback, id) {
+        assert.equal(id, eventId);
+        return {
+          data: Buffer.from("exact candidate cv").toString("base64"),
+          filename: "exact-candidate.docx",
+          mimetype: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        };
+      },
+    },
+  };
+  await createThread({
+    id: "media-exact-recovery-thread",
+    name: "Media exact recovery",
+    binding: {
+      connector: "whatsapp",
+      chatId,
+      responderAccountId: "sender",
+      outboundAccountId: "sender",
+      enabled: true,
+    },
+  }, env);
+
+  try {
+    setLocalWhatsAppRuntimeForTest("sender", { client }, { ready: true }, env);
+    const result = await recoverLocalWhatsAppChatMessages({
+      accountId: "sender",
+      chatId,
+      eventIds: [eventId],
+      markSeen: false,
+    }, env);
+    const messages = await listThreadMessages("media-exact-recovery-thread", env);
+    const attachment = messages.at(-1)?.attachments?.[0];
+
+    assert.equal(result.exact, true);
+    assert.equal(result.routed.length, 1);
+    assert.equal(result.routed[0].eventId, eventId);
+    assert.equal(attachment.filename, "exact-candidate.docx");
+    assert.equal(await fs.readFile(attachment.path, "utf8"), "exact candidate cv");
+  } finally {
+    await resetLocalWhatsAppBridgeForTest(env);
+  }
+});
+
 test("local whatsapp inbound does not route a caption when media download retries are exhausted", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-media-failed-"));
   const env = {
