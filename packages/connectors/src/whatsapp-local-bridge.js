@@ -3226,12 +3226,30 @@ async function refreshedInboundMediaMessage(message, client = null) {
 
 async function downloadInboundMediaFromBrowserStore(message, client = null, env = process.env) {
   const eventId = serializedMessageId(message);
+  const chatId = localWhatsAppMessageRouteFields(message).chatId;
   if (!eventId || !client?.pupPage || typeof client.pupPage.evaluate !== "function") return null;
-  return withInboundMediaDownloadTimeout(client.pupPage.evaluate(async (messageId) => {
+  return withInboundMediaDownloadTimeout(client.pupPage.evaluate(async (messageId, expectedChatId) => {
+    const idValues = (value) => {
+      if (!value) return [];
+      if (typeof value === "string" || typeof value === "number") return [String(value)];
+      return [value._serialized, value.id, value.id?._serialized, value.id?.id]
+        .filter((candidate) => typeof candidate === "string" || typeof candidate === "number")
+        .map(String);
+    };
+    const matchesMessageId = (candidate) => [candidate?.id, candidate?.__x_id]
+      .flatMap(idValues)
+      .includes(messageId);
     const collections = window.require?.("WAWebCollections");
     let model = collections?.Msg?.get?.(messageId) || null;
     if (!model && typeof collections?.Msg?.getMessagesById === "function") {
       model = (await collections.Msg.getMessagesById([messageId]))?.messages?.[0] || null;
+    }
+    if (!model && expectedChatId) {
+      const widFactory = window.require?.("WAWebWidFactory");
+      const chatWid = widFactory?.createWid ? widFactory.createWid(expectedChatId) : expectedChatId;
+      const chat = collections?.Chat?.get?.(chatWid) || collections?.Chat?.get?.(expectedChatId);
+      const messages = typeof chat?.msgs?.getModelsArray === "function" ? chat.msgs.getModelsArray() : [];
+      model = messages.find(matchesMessageId) || null;
     }
     if (!model?.directPath || !model?.mediaKey) return null;
     const mockQpl = {
@@ -3254,7 +3272,7 @@ async function downloadInboundMediaFromBrowserStore(message, client = null, env 
       filename: String(model.filename || ""),
       filesize: Number(model.size || 0) || undefined,
     };
-  }, eventId), env);
+  }, eventId, chatId), env);
 }
 
 async function downloadInboundMedia(accountId, message, env = process.env, { client = null } = {}) {
@@ -3887,9 +3905,26 @@ async function readCachedLocalWhatsAppMessageById(client, eventId = "", chatId =
       return "";
     };
     const collections = window.require?.("WAWebCollections");
+    const idValues = (value) => {
+      if (!value) return [];
+      if (typeof value === "string" || typeof value === "number") return [String(value)];
+      return [value._serialized, value.id, value.id?._serialized, value.id?.id]
+        .filter((candidate) => typeof candidate === "string" || typeof candidate === "number")
+        .map(String);
+    };
+    const matchesMessageId = (candidate) => [candidate?.id, candidate?.__x_id]
+      .flatMap(idValues)
+      .includes(messageId);
     let message = collections?.Msg?.get?.(messageId) || null;
     if (!message && typeof collections?.Msg?.getMessagesById === "function") {
       message = (await collections.Msg.getMessagesById([messageId]))?.messages?.[0] || null;
+    }
+    if (!message) {
+      const widFactory = window.require?.("WAWebWidFactory");
+      const chatWid = widFactory?.createWid ? widFactory.createWid(expectedChatId) : expectedChatId;
+      const chat = collections?.Chat?.get?.(chatWid) || collections?.Chat?.get?.(expectedChatId);
+      const messages = typeof chat?.msgs?.getModelsArray === "function" ? chat.msgs.getModelsArray() : [];
+      message = messages.find(matchesMessageId) || null;
     }
     if (!message) return null;
     let model = null;
@@ -3901,8 +3936,17 @@ async function readCachedLocalWhatsAppMessageById(client, eventId = "", chatId =
     if (!model) model = message;
     const messageIdModel = model?.id || message?.id || {};
     const remote = serialized(messageIdModel.remote || model?.from || message?.from || expectedChatId);
+    const local = typeof messageIdModel === "string"
+      ? messageIdModel
+      : serialized(messageIdModel.id || model?.messageId || message?.messageId);
+    const stableMessageId = serialized(messageIdModel) || messageId;
     return {
-      id: { ...messageIdModel, _serialized: messageId, remote },
+      id: {
+        ...(messageIdModel && typeof messageIdModel === "object" ? messageIdModel : {}),
+        id: local || messageId,
+        _serialized: stableMessageId,
+        remote,
+      },
       body: String(model?.body || model?.caption || model?.pollName || model?.eventName || ""),
       type: String(model?.type || message?.type || ""),
       fromMe: Boolean(model?.id?.fromMe ?? message?.id?.fromMe ?? model?.fromMe),
