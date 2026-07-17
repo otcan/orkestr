@@ -1242,11 +1242,13 @@ export async function forwardLocalWhatsAppInbound(input = {}, env = process.env,
         fetchImpl,
       });
     if (forwardedMedia.uploaded) {
+      const stagedForConnectorGateway = targetSource === "connector_mcp_gateway";
       body = {
         ...body,
         attachments: forwardedMedia.attachments,
-        attachmentsUploadedToTarget: true,
+        attachmentsUploadedToTarget: !stagedForConnectorGateway,
         attachmentUploadTarget: forwardedMedia.target || "",
+        attachmentsStagedForConnectorGateway: stagedForConnectorGateway,
       };
     }
     const response = await fetchImpl(target, {

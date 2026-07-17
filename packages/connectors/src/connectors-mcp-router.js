@@ -146,7 +146,11 @@ export async function routeWhatsAppInboundFromWorker(payload = {}, env = process
   }, env);
   const previousAttachmentCount = attachmentCount(ensured.event?.payload);
   const currentAttachmentCount = attachmentCount(payload);
-  if (!ensured.created && currentAttachmentCount > previousAttachmentCount) {
+  const stagedForConnectorGateway = payload.attachmentsStagedForConnectorGateway === true;
+  if (!ensured.created && (
+    currentAttachmentCount > previousAttachmentCount ||
+    (currentAttachmentCount > 0 && stagedForConnectorGateway && ensured.event.state === "delivered")
+  )) {
     inboxId = attachmentRevisionId(id, payload);
     deliveryPayload = {
       ...payload,

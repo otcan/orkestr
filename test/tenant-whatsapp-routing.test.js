@@ -248,7 +248,8 @@ test("WhatsApp worker stages inbound media at the connector MCP gateway before f
   ]);
   assert.equal(calls[0].authorization, "Bearer worker-event-token");
   assert.equal(calls[0].text, "candidate cv");
-  assert.equal(calls[1].body.attachmentsUploadedToTarget, true);
+  assert.equal(calls[1].body.attachmentsUploadedToTarget, false);
+  assert.equal(calls[1].body.attachmentsStagedForConnectorGateway, true);
   assert.equal(calls[1].body.attachments[0].path, stagedPath);
 });
 

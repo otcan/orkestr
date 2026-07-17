@@ -122,9 +122,10 @@ export async function stageConnectorInboxMedia(files = [], metadata = [], body =
 
 export async function prepareConnectorInboxMediaDelivery(payload = {}, route = {}, env = process.env, fetchImpl = fetch) {
   const attachments = Array.isArray(payload.attachments) ? payload.attachments : [];
-  if (!attachments.length || payload.attachmentsUploadedToTarget === true) return payload;
+  if (!attachments.length) return payload;
   const target = inboundMediaTarget(route.target);
   if (!target) throw Object.assign(new Error("connector_inbox_media_target_missing"), { statusCode: 503 });
+  if (payload.attachmentsUploadedToTarget === true && clean(payload.attachmentUploadTarget) === target) return payload;
   if (typeof FormData !== "function" || typeof Blob !== "function") {
     throw Object.assign(new Error("connector_inbox_media_formdata_unavailable"), { statusCode: 500 });
   }

@@ -473,6 +473,9 @@ test("connector MCP uploads staged media into the resolved tenant before inbound
         kind: "document",
         source: "connector_mcp_inbound_media_upload",
       }],
+      attachmentsUploadedToTarget: true,
+      attachmentUploadTarget: "http://127.0.0.1:18914/api/connectors/whatsapp/inbound-media",
+      attachmentsStagedForConnectorGateway: true,
     }, env, async (url, options = {}) => {
       const target = String(url);
       if (target.endsWith("/api/connectors/whatsapp/inbound-media")) {
@@ -559,6 +562,57 @@ test("connector MCP delivers recovered attachments as one deterministic inbox re
     assert.equal(duplicate.duplicate, true);
     assert.equal(duplicate.eventId, recovered.eventId);
     assert.equal(calls.length, 2);
+  } finally {
+    resetConnectorInboxForTest();
+  }
+});
+
+test("connector MCP revisions an already delivered event when media was only staged at the gateway", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-connectors-inbox-media-gateway-revision-"));
+  const env = {
+    ...process.env,
+    ORKESTR_HOME: home,
+    ORKESTR_CONNECTORS_MCP_INBOUND_TARGET_URL: "http://orkestr-ui.test/api/connectors/whatsapp/inbound",
+  };
+  const stagedDir = path.join(home, "data", "connector-inbox-media", "2026-07-17");
+  const stagedPath = path.join(stagedDir, "candidate.txt");
+  await fs.mkdir(stagedDir, { recursive: true });
+  await fs.writeFile(stagedPath, "candidate cv", "utf8");
+  const payload = {
+    eventId: "wa-gateway-media-revision-1",
+    accountId: "sender",
+    chatId: "jobs@g.us",
+    text: "candidate.txt",
+    attachments: [{ path: stagedPath, filename: "candidate.txt", mimetype: "text/plain", size: 12 }],
+    attachmentsUploadedToTarget: false,
+    attachmentUploadTarget: "http://127.0.0.1:18914/api/connectors/whatsapp/inbound-media",
+    attachmentsStagedForConnectorGateway: true,
+  };
+  const calls = [];
+  const fetchImpl = async (url, options = {}) => {
+    const target = String(url);
+    if (target.endsWith("/inbound-media")) {
+      calls.push({ target, type: "media" });
+      return {
+        ok: true,
+        status: 201,
+        json: async () => ({ ok: true, attachments: [{ path: "/opt/orkestr/data/candidate.txt", filename: "candidate.txt", mimetype: "text/plain", size: 12 }] }),
+      };
+    }
+    calls.push({ target, type: "json", body: JSON.parse(options.body) });
+    return { ok: true, status: 202, json: async () => ({ ok: true, threadId: "jobs" }) };
+  };
+  try {
+    const first = await routeWhatsAppInboundFromWorker(payload, env, fetchImpl);
+    const recovered = await routeWhatsAppInboundFromWorker(payload, env, fetchImpl);
+    const duplicate = await routeWhatsAppInboundFromWorker(payload, env, fetchImpl);
+
+    assert.equal(first.ok, true);
+    assert.equal(recovered.attachmentRecovery, true);
+    assert.equal(duplicate.duplicate, true);
+    assert.equal(calls.filter((call) => call.type === "media").length, 2);
+    assert.equal(calls.filter((call) => call.type === "json").length, 2);
+    assert.equal(calls.at(-1).body.attachments[0].path, "/opt/orkestr/data/candidate.txt");
   } finally {
     resetConnectorInboxForTest();
   }
