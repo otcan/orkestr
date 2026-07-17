@@ -3083,6 +3083,7 @@ export async function resetLocalWhatsAppBridgeForTest(env = process.env) {
   typingStartPromises.clear();
   typingClearRetryTimers.clear();
   localWhatsAppRuntimeRecoveryInFlight.clear();
+  localWhatsAppUnreadRecoveryCursorByAccount.clear();
   for (const key of [...localWhatsAppScheduledRecoveryTimers.keys()]) clearScheduledLocalWhatsAppRecovery(key);
   localWhatsAppRecoveryAttempts.clear();
   localWhatsAppStartPromises.clear();
@@ -3888,6 +3889,44 @@ function optionMapLookup(collection, key) {
   return collection[key];
 }
 
+function rotatingUnreadRecoveryChats(accountId = "", boundChats = [], maxChats = 10) {
+  const chats = Array.isArray(boundChats) ? boundChats : [];
+  if (!chats.length) return [];
+  const count = Math.max(1, Math.min(chats.length, Number(maxChats || 10) || 10));
+  const start = Math.max(0, Number(localWhatsAppUnreadRecoveryCursorByAccount.get(accountId) || 0)) % chats.length;
+  const selected = Array.from({ length: count }, (_, index) => chats[(start + index) % chats.length]);
+  localWhatsAppUnreadRecoveryCursorByAccount.set(accountId, (start + count) % chats.length);
+  return selected;
+}
+
+async function recoverBoundChatsAfterListFailure({
+  accountId = "",
+  boundChats = [],
+  client = null,
+  state = {},
+  maxChats = 10,
+  limit = 20,
+  recentEnabled = true,
+  recentSinceMs = 0,
+  env = process.env,
+} = {}) {
+  if (typeof client?.getChatById !== "function" && typeof client?.pupPage?.evaluate !== "function") return null;
+  const selected = rotatingUnreadRecoveryChats(accountId, boundChats, maxChats);
+  const results = [];
+  for (const target of selected) {
+    const result = await recoverLocalWhatsAppChatMessagesWithClient({
+      accountId,
+      chatId: target.chatId,
+      limit,
+      unreadOnly: false,
+      markSeen: false,
+      sinceMs: recentEnabled ? recentSinceMs : 0,
+    }, env, { client, state, failureSource: "unread_recovery" });
+    results.push({ ...result, recoveryMode: "bound_chat_fallback" });
+  }
+  return results;
+}
+
 async function recoverUnreadLocalWhatsAppMessagesOnce(env = process.env, options = {}) {
   const accountIds = options.accountIds || localWhatsAppAccountIdsForEnv(env);
   const threads = options.threads || await listThreads(env).catch(() => []);
@@ -3920,6 +3959,41 @@ async function recoverUnreadLocalWhatsAppMessagesOnce(env = process.env, options
     try {
       chats = optionMapLookup(options.chatsByAccount, normalized) || await client.getChats();
     } catch (error) {
+      const fallback = localWhatsAppBareRRuntimeError(error)
+        ? await recoverBoundChatsAfterListFailure({
+            accountId: normalized,
+            boundChats,
+            client,
+            state,
+            maxChats,
+            limit,
+            recentEnabled,
+            recentSinceMs,
+            env,
+          })
+        : null;
+      const successful = (fallback || []).filter((result) => result.ok === true);
+      if (successful.length) {
+        recovered.push(...successful);
+        const fallbackFailed = (fallback || []).filter((result) => result.ok !== true);
+        failed.push(...fallbackFailed.map((result) => ({
+          accountId: normalized,
+          chatId: result.chatId,
+          reason: "bound_chat_fallback_failed",
+          error: result.error || "chat_read_failed",
+        })));
+        await appendEvent({
+          type: "whatsapp_local_unread_chat_list_fallback",
+          accountId: normalized,
+          scanned: fallback.length,
+          recovered: successful.length,
+          routed: successful.reduce((count, result) => count + Number(result?.routed?.length || 0), 0),
+          failed: fallbackFailed.length,
+          reason: "chat_list_runtime_error",
+          error: error?.message || String(error),
+        }, env).catch(() => {});
+        continue;
+      }
       await handleRecoverableLocalWhatsAppRuntimeInvalidation(normalized, error, env, {
         source: "unread_recovery",
         reason: "chat_list_runtime_error",
@@ -4025,6 +4099,7 @@ const recoverableLocalWhatsAppStates = new Set(["startup_timeout", "auth_ready_t
 const localWhatsAppChromeLockFiles = new Set(["SingletonCookie", "SingletonLock", "SingletonSocket"]);
 let localWhatsAppUnreadRecoveryInFlight = null;
 let localWhatsAppUnreadRecoveryLastRunMs = 0;
+const localWhatsAppUnreadRecoveryCursorByAccount = new Map();
 
 function chromeLockPidFromText(value = "") {
   const matches = String(value || "").match(/\b[1-9]\d{1,9}\b/g) || [];

@@ -4335,6 +4335,77 @@ test("local whatsapp unread recovery defers bare r chat-list failures without re
   }
 });
 
+test("local whatsapp unread recovery scans bound chats when the bulk chat list returns bare r", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-unread-list-r-fallback-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "responder",
+    ORKESTR_WHATSAPP_UNREAD_RECOVERY_MAX_CHATS: "1",
+  };
+  const chatId = "wa-group-list-r-fallback@g.us";
+  const calls = [];
+  const message = {
+    id: { _serialized: "missed-list-r-message-1", remote: chatId },
+    fromMe: false,
+    from: chatId,
+    author: "wa-contact-one@c.us",
+    body: "recovered after bulk chat failure",
+    timestamp: 1_780_000_000,
+  };
+  const client = {
+    async getChats() {
+      calls.push(["getChats"]);
+      throw new Error("r");
+    },
+    async getChatById(id) {
+      calls.push(["getChatById", id]);
+      return {
+        id: { _serialized: id },
+        unreadCount: 1,
+        async fetchMessages() {
+          return [message];
+        },
+      };
+    },
+  };
+  const thread = await createThread({
+    id: "list-r-fallback-thread",
+    name: "List R Fallback",
+    binding: {
+      connector: "whatsapp",
+      chatId,
+      responderAccountId: "responder",
+      outboundAccountId: "responder",
+      enabled: true,
+    },
+  }, env);
+
+  try {
+    const result = await recoverUnreadLocalWhatsAppMessages(env, {
+      force: true,
+      accountIds: ["responder"],
+      clients: new Map([["responder", client]]),
+      accountStates: new Map([["responder", { state: "ready", ready: true }]]),
+      threads: [thread],
+      recentSinceMs: 1_779_999_000_000,
+      nowMs: 1_780_000_060_000,
+    });
+    const messages = await listThreadMessages(thread.id, env);
+    const events = await listEvents(env, 20);
+
+    assert.deepEqual(calls, [["getChats"], ["getChatById", chatId]]);
+    assert.equal(result.failed.length, 0);
+    assert.equal(result.recovered.length, 1);
+    assert.equal(result.routed, 1);
+    assert.equal(result.recovered[0].recoveryMode, "bound_chat_fallback");
+    assert.equal(messages.at(-1).text, "recovered after bulk chat failure");
+    assert.equal(events.some((event) => event.type === "whatsapp_local_unread_chat_list_fallback" && event.routed === 1), true);
+    assert.equal(events.some((event) => event.type === "whatsapp_local_unread_runtime_recovery_deferred"), false);
+  } finally {
+    await resetLocalWhatsAppBridgeForTest(env);
+  }
+});
+
 test("local whatsapp unread recovery defers bare r chat reads without restarting transport", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-unread-r-reset-"));
   const env = {
