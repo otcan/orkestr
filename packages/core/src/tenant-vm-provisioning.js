@@ -60,6 +60,35 @@ function tenantVmMacAddress(vm, input, namespace, vmName) {
     deterministicMacAddress("orkestr-tenant-vm", namespace, vmName, vm.id);
 }
 
+function normalizePortNumber(value, fallback = 0) {
+  const number = Number(value ?? fallback);
+  if (!Number.isFinite(number)) return 0;
+  return Math.max(0, Math.min(65535, Math.trunc(number)));
+}
+
+function tenantServicePorts(input = {}, env = process.env) {
+  const runtimeSource = input.runtimeEnv && typeof input.runtimeEnv === "object" && !Array.isArray(input.runtimeEnv) ? input.runtimeEnv : {};
+  const source = input.servicePorts && typeof input.servicePorts === "object" && !Array.isArray(input.servicePorts) ? input.servicePorts : {};
+  const ports = [
+    ["ssh", 22],
+    ["orkestr", source.orkestr ?? input.port ?? input.orkestrPort ?? runtimeSource.ORKESTR_PORT ?? env.ORKESTR_PORT ?? env.PORT ?? "19812"],
+    ["oxrm-web", source.oxrmWeb],
+    ["oxrm-api", source.oxrmApi],
+    ["oxrm-mcp", source.oxrmMcp],
+    ["novnc", source.desktopNoVnc],
+    ["chrome-debug", source.desktopChromeDebug],
+  ];
+  const seenNames = new Set();
+  const seenPorts = new Set();
+  return ports.flatMap(([name, rawPort]) => {
+    const port = normalizePortNumber(rawPort);
+    if (!port || seenNames.has(name) || seenPorts.has(port)) return [];
+    seenNames.add(name);
+    seenPorts.add(port);
+    return [{ name, port, protocol: "TCP" }];
+  });
+}
+
 function singleQuote(value = "") {
   return `'${String(value).replace(/'/g, "'\"'\"'")}'`;
 }
@@ -385,6 +414,9 @@ export function buildTenantVmProvisioningPlan(vm, input = {}, env = process.env)
   const publicIp = clean(input.publicIp || vm.endpoint.publicIp);
   const publicIpPorts = clean(input.publicIpPorts || input.ports || "22,80,443");
   const macAddress = tenantVmMacAddress(vm, input, namespace, vmName);
+  const serviceName = safeName(`${vmName}-svc`, "orkestr-tenant-svc");
+  const servicePorts = tenantServicePorts(planInputWithDesktopCatalog, env);
+  const interfacePorts = servicePorts.map((item) => ({ name: item.name, port: item.port, protocol: item.protocol }));
 
   const manifestObject = {
     apiVersion: "v1",
@@ -418,6 +450,25 @@ export function buildTenantVmProvisioningPlan(vm, input = {}, env = process.env)
         type: "Opaque",
         stringData: {
           userdata: cloudInitUserData(vm, planInputWithDesktopCatalog, env),
+        },
+      },
+      {
+        apiVersion: "v1",
+        kind: "Service",
+        metadata: {
+          name: serviceName,
+          namespace,
+          labels: {
+            app: vmName,
+            "app.kubernetes.io/name": "orkestr-tenant",
+            "orkestr.example.test/tenant-vm-id": safeLabelValue(vm.id),
+            "orkestr.example.test/owner-user-id": safeLabelValue(vm.ownerUserId),
+          },
+        },
+        spec: {
+          type: "ClusterIP",
+          selector: { app: vmName, "kubevirt.io/domain": vmName },
+          ports: servicePorts,
         },
       },
       {
@@ -459,7 +510,7 @@ export function buildTenantVmProvisioningPlan(vm, input = {}, env = process.env)
                     { name: "rootdisk", disk: { bus: "virtio" } },
                     { name: "cloudinitdisk", disk: { bus: "virtio" } },
                   ],
-                  interfaces: [{ name: "default", bridge: {}, macAddress }],
+                  interfaces: [{ name: "default", masquerade: {}, macAddress, ports: interfacePorts }],
                 },
               },
               networks: [{ name: "default", pod: {} }],
@@ -478,6 +529,8 @@ export function buildTenantVmProvisioningPlan(vm, input = {}, env = process.env)
     namespace,
     vmName,
     macAddress,
+    serviceName,
+    servicePorts,
     cloudInitSecretName,
     bootstrapProfilePath: tenantBootstrapProfilePath(planInputWithDesktopCatalog, env),
     bootstrapProfile,

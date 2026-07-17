@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { createOrkestrWaService, waServiceRoutingPolicy } from "../scripts/orkestr-wa-service.mjs";
+import { whatsappWorkerConversation } from "../packages/connectors/src/whatsapp-worker-client.js";
 import {
   checkWaServiceReadiness,
   evaluateWaServiceReadiness,
@@ -28,12 +29,14 @@ async function testHome(prefix) {
 function mockBridge(overrides = {}) {
   return {
     createLocalWhatsAppChat: async (payload) => ({ ok: true, chatId: "demo-group@g.us", ...payload }),
+    demoteLocalWhatsAppGroupParticipants: async (payload) => ({ ok: true, ...payload }),
     getLocalWhatsAppBridgeStatus: async () => ({ ok: true, ready: true, state: "ready", accounts: [] }),
     getLocalWhatsAppQrSvg: async () => "<svg></svg>",
     listLocalWhatsAppChatMessages: async () => ({ ok: true, messages: [] }),
     listLocalWhatsAppChats: async () => ({ ok: true, chats: [] }),
     listLocalWhatsAppChatParticipants: async () => ({ ok: true, participants: [] }),
     logoutLocalWhatsAppAccount: async (accountId) => ({ accountId, ready: false }),
+    promoteLocalWhatsAppGroupParticipants: async (payload) => ({ ok: true, ...payload }),
     recoverLocalWhatsAppChatMessages: async () => ({ ok: true, messages: [] }),
     sendLocalWhatsAppMessage: async (payload) => ({ ok: true, id: "sent-1", ...payload }),
     startLocalWhatsAppAccount: async (accountId) => ({ accountId, ready: true }),
@@ -70,6 +73,32 @@ test("standalone WA service exposes sanitized health for configured accounts", a
     });
     assert.doesNotMatch(JSON.stringify(payload), /private-client|private-responder|sessionRoot|clientId/);
   });
+});
+
+test("standalone WA service health actively probes chat operations", async () => {
+  const home = await testHome("orkestr-wa-service-health-probe-");
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WA_SERVICE_AUTH_DISABLED: "1",
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "sender",
+  };
+  const calls = [];
+
+  await withWaService(env, async ({ bridgeUrl }) => {
+    const health = await fetch(`${bridgeUrl}/health`);
+    const dashboard = await fetch(`${bridgeUrl}/api/dashboard`);
+    assert.equal(health.status, 200);
+    assert.equal(dashboard.status, 200);
+    assert.deepEqual(calls, [
+      [env, { probeChatOps: true }],
+      [env, { probeChatOps: true }],
+    ]);
+  }, mockBridge({
+    getLocalWhatsAppBridgeStatus: async (...args) => {
+      calls.push(args);
+      return { ok: true, ready: true, state: "ready", accounts: [] };
+    },
+  }));
 });
 
 test("standalone WA service derives operational readiness from a ready live account", async () => {
@@ -264,6 +293,40 @@ test("standalone WA service applies transient typing without sending a message",
     stopLocalWhatsAppTyping: async ({ accountId, chatId }) => {
       calls.push(["stop", accountId, chatId]);
       return { ok: true, active: false, accountId, chatId };
+    },
+  }));
+});
+
+test("standalone WA service promotes and demotes group admins inside the worker", async () => {
+  const home = await testHome("orkestr-wa-service-group-admins-");
+  const calls = [];
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WA_SERVICE_AUTH_DISABLED: "1",
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "sender",
+  };
+  const chatId = "120363400000000001@g.us";
+  const participantId = "15550100001@c.us";
+
+  await withWaService(env, async ({ bridgeUrl }) => {
+    const workerEnv = { ...env, ORKESTR_WA_WORKER_URL: bridgeUrl };
+    const promote = await whatsappWorkerConversation("sender", chatId, "promote-admins", { participantIds: [participantId] }, workerEnv);
+    const demote = await whatsappWorkerConversation("sender", chatId, "demote-admins", { participantIds: [participantId] }, workerEnv);
+
+    assert.equal(promote.ok, true);
+    assert.equal(demote.ok, true);
+    assert.deepEqual(calls, [
+      ["promote", "sender", chatId, [participantId]],
+      ["demote", "sender", chatId, [participantId]],
+    ]);
+  }, mockBridge({
+    promoteLocalWhatsAppGroupParticipants: async ({ accountId, chatId: targetChatId, participantIds }) => {
+      calls.push(["promote", accountId, targetChatId, participantIds]);
+      return { ok: true, accountId, chatId: targetChatId, participantIds };
+    },
+    demoteLocalWhatsAppGroupParticipants: async ({ accountId, chatId: targetChatId, participantIds }) => {
+      calls.push(["demote", accountId, targetChatId, participantIds]);
+      return { ok: true, accountId, chatId: targetChatId, participantIds };
     },
   }));
 });

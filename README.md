@@ -228,6 +228,44 @@ For a live k3s smoke on a host with Docker, Helm, and kubectl:
 ORKESTR_K3S_OSS_DEMO_EXECUTE=1 npm run smoke:k3s:oss-demo
 ```
 
+### Tenant VM Slice Provisioning
+
+Operators can create and provision an isolated tenant VM slice from the CLI. The
+command is idempotent for an existing slice id or existing owner slice, and it
+returns a dry-run KubeVirt plan by default:
+
+```bash
+orkestr vm-slice create alice \
+  --id alice-slice \
+  --namespace tenant-alice \
+  --vm-name alice-vm \
+  --wa-participant owner-contact@c.us \
+  --repo-url https://github.com/otcan/orkestr.git
+```
+
+WhatsApp participants supplied during slice creation are also stored as admin
+participants by default. Use `--no-wa-admin` only when the contact should be a
+regular participant.
+
+Apply the generated KubeVirt manifest only when ready:
+
+```bash
+orkestr vm-slice create alice \
+  --id alice-slice \
+  --namespace tenant-alice \
+  --vm-name alice-vm \
+  --repo-url https://github.com/otcan/orkestr.git \
+  --execute
+```
+
+Useful follow-ups:
+
+```bash
+orkestr vm-slice list
+orkestr vm-slice status alice-slice
+orkestr vm-slice provision alice-slice --execute
+```
+
 The deterministic coding-agent demo is still available for local development
 and CI. It uses a temporary `ORKESTR_HOME`, a fake Codex app-server, and does
 not require Codex sign-in or connector credentials:

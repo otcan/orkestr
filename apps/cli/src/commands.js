@@ -23,6 +23,7 @@ import { createCommand } from "./create-command.js";
 import { desktopCommand } from "./desktop-command.js";
 import { formatRuntimeResources, formatSystemDoctor, formatThreadTable, formatTimerDoctor, formatTimerTable, threadName } from "./format.js";
 import { jiraCommand } from "./jira-command.js";
+import { tenantSliceCommand } from "./tenant-slice-command.js";
 import { pickThread as defaultPickThread } from "./thread-picker.js";
 
 export async function runCli(argv = process.argv.slice(2), context = {}) {
@@ -61,6 +62,7 @@ export async function runCli(argv = process.argv.slice(2), context = {}) {
     if (command === "security") return await securityCommand(args, ctx);
     if (command === "desktop" || command === "desktops") return await desktopCommand(args, ctx);
     if (command === "jira") return await jiraCommand(args, ctx);
+    if (command === "tenant-slice" || command === "tenant-slices" || command === "vm-slice" || command === "vm-slices") return await tenantSliceCommand(args, ctx);
     if (command === "codex") return await codexCommand(args, ctx);
     if (command === "service" || command === "services") return await serviceCommand(args, ctx);
     if (command === "start" || command === "stop" || command === "restart") return await serviceCommand([command, ...args], ctx);
@@ -1075,12 +1077,15 @@ async function whatsappBindThreadCommand(argv, ctx) {
     threadId,
     name,
     participantIds: repeatedFlagValues(argv, ["--wa-participant", "--participant"]),
-    adminParticipantIds: repeatedFlagValues(argv, ["--wa-admin", "--admin-participant"]),
     promoteParticipantsAsAdmins: !argv.includes("--no-wa-admin") && !argv.includes("--no-admin"),
     generatePicture: !argv.includes("--no-picture"),
     mirrorToWhatsApp: !argv.includes("--no-mirror"),
     forceNew: argv.includes("--force-new"),
   };
+  body.adminParticipantIds = uniqueList([
+    ...(body.promoteParticipantsAsAdmins ? body.participantIds : []),
+    ...repeatedFlagValues(argv, ["--wa-admin", "--admin-participant"]),
+  ]);
   const senderAccountId = flagValue(argv, "--receiving-account") || flagValue(argv, "--sender-account") || flagValue(argv, "--inbound-account");
   const responderAccountId = flagValue(argv, "--reply-account") || flagValue(argv, "--bridge-account") || flagValue(argv, "--outbound-account") || flagValue(argv, "--responder-account");
   const replyPrefix = flagValue(argv, "--reply-prefix");
@@ -1983,6 +1988,8 @@ Advanced:
   orkestr security [challenges|sessions|approve <challenge-id>|reject <challenge-id>|revoke <session-id|all>] [--json]
   orkestr desktop [share [slug]|approve <challenge-id>] [--json]
   orkestr jira draft <thread> [--max N] [--json]
+  orkestr vm-slice create <owner-user-id> [--id slice-id] [--namespace ns] [--vm-name name] [--execute] [--json]
+  orkestr vm-slice [list|status <slice-id>|provision <slice-id>] [--json]
   orkestr thread create <name> [--id id] [--cwd path] [--command command] [--executor id] [--json]
   orkestr worker create <parent-thread> [task text] [--task text] [--blank] [--label label] [--repo path] [--branch branch] [--no-wake] [--json]
   orkestr sleep <legacy-tmux-thread-name-or-id> [--json]
@@ -2270,6 +2277,10 @@ function repeatedFlagValues(argv, flags) {
     if (flags.includes(argv[index])) values.push(argv[index + 1] || "");
   }
   return values.map((value) => String(value || "").trim()).filter(Boolean);
+}
+
+function uniqueList(values = []) {
+  return [...new Set(values.map((value) => String(value || "").trim()).filter(Boolean))];
 }
 
 function formatSecurityChallengeTable(challenges) {

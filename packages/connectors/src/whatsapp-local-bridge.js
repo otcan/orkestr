@@ -2677,7 +2677,12 @@ async function handleRecoverableLocalWhatsAppRuntimeInvalidation(accountId = "",
       return true;
     }
   }
-  if (source.startsWith("typing_") || source === "unread_recovery") {
+  // Read-only recovery can tolerate whatsapp-web.js' transient bare `r`
+  // evaluation failure. A detached frame or closed browser runtime cannot
+  // recover without replacing the client, so let those errors fall through
+  // to the normal runtime recovery path.
+  const deferUnreadRecovery = source === "unread_recovery" && localWhatsAppBareRRuntimeError(error);
+  if (source.startsWith("typing_") || deferUnreadRecovery) {
     await appendEvent({
       type: source === "unread_recovery"
         ? "whatsapp_local_unread_runtime_recovery_deferred"
@@ -5978,6 +5983,7 @@ export async function createLocalWhatsAppChat({ name = "", senderAccountId = "",
 
   let chatId = "";
   let createdGroup = null;
+  let autoAddedParticipantIds = [];
   try {
     if (participants.length) {
       createdGroup = await responderRuntime.client.createGroup(title, participants, { announce: false });
@@ -5991,6 +5997,7 @@ export async function createLocalWhatsAppChat({ name = "", senderAccountId = "",
         throw error;
       }
       createdGroup = await responderRuntime.client.createGroup(title, [senderContactId]);
+      autoAddedParticipantIds = [senderContactId];
       chatId = groupIdFromCreateResult(createdGroup);
     }
   } catch (error) {
@@ -6005,6 +6012,7 @@ export async function createLocalWhatsAppChat({ name = "", senderAccountId = "",
     throw error;
   }
   const promoteIds = normalizeGroupParticipantIds([
+    ...autoAddedParticipantIds,
     ...(promoteParticipantsAsAdmins ? participants : []),
     ...adminParticipants,
   ]);
@@ -6047,6 +6055,7 @@ export async function createLocalWhatsAppChat({ name = "", senderAccountId = "",
     senderAccountId: sender,
     responderAccountId: responder,
     participantIds: participants,
+    autoAddedParticipantIds,
     adminParticipantIds: adminParticipants,
     promotedParticipantIds: promoteIds,
   }, env);
@@ -6063,7 +6072,9 @@ export async function createLocalWhatsAppChat({ name = "", senderAccountId = "",
     senderContactId,
     responderContactId,
     participantIds: participants,
+    autoAddedParticipantIds,
     adminParticipantIds: adminParticipants,
+    promotedParticipantIds: promoteIds,
     adminPromotion,
     picture,
     bridgeResponse: createdGroup,

@@ -2805,6 +2805,64 @@ test("local whatsapp group participant ids are normalized for created test chats
   );
 });
 
+test("local whatsapp chat creation promotes the automatically added sender as an admin", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-create-sender-admin-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "sender,responder",
+    ORKESTR_WHATSAPP_DEFAULT_RESPONDER_ACCOUNT_ID: "responder",
+  };
+  const calls = [];
+  const senderContactId = "15550100001@c.us";
+  const groupId = "120363400000000001@g.us";
+
+  try {
+    setLocalWhatsAppRuntimeForTest("sender", {
+      client: {
+        info: { wid: { _serialized: senderContactId } },
+      },
+    }, {}, env);
+    setLocalWhatsAppRuntimeForTest("responder", {
+      client: {
+        info: { wid: { _serialized: "15550100002@c.us" } },
+        async createGroup(title, participantIds, options) {
+          calls.push(["createGroup", title, participantIds, options]);
+          return { gid: { _serialized: groupId } };
+        },
+        async getChatById(chatId) {
+          calls.push(["getChatById", chatId]);
+          return {
+            isGroup: true,
+            async promoteParticipants(participantIds) {
+              calls.push(["promoteParticipants", participantIds]);
+              return { status: 200 };
+            },
+          };
+        },
+      },
+    }, {}, env);
+
+    const result = await createLocalWhatsAppChat({
+      name: "Owner admin",
+      senderAccountId: "sender",
+      responderAccountId: "responder",
+      generatePicture: false,
+      env,
+    });
+
+    assert.deepEqual(calls, [
+      ["createGroup", "Owner admin", [senderContactId], undefined],
+      ["getChatById", groupId],
+      ["promoteParticipants", [senderContactId]],
+    ]);
+    assert.deepEqual(result.autoAddedParticipantIds, [senderContactId]);
+    assert.deepEqual(result.promotedParticipantIds, [senderContactId]);
+    assert.deepEqual(result.adminPromotion?.participantIds, [senderContactId]);
+  } finally {
+    await resetLocalWhatsAppBridgeForTest(env);
+  }
+});
+
 test("local whatsapp group participant add validates participant input before browser work", async () => {
   await assert.rejects(
     () => addLocalWhatsAppGroupParticipants({ accountId: "responder", chatId: "fixture-group@g.us" }),
@@ -4669,6 +4727,66 @@ test("local whatsapp unread recovery defers bare r chat-list failures without re
     assert.equal(account.runtimeUsable, true);
     assert.equal(events.some((event) => event.type === "whatsapp_local_unread_runtime_recovery_deferred" && event.source === "unread_recovery"), true);
     assert.equal(events.some((event) => event.type === "whatsapp_local_runtime_degraded"), false);
+  } finally {
+    await resetLocalWhatsAppBridgeForTest(env);
+  }
+});
+
+test("local whatsapp unread recovery restarts transport after a detached frame", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-unread-detached-frame-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "responder",
+  };
+  const chatId = "wa-group-detached-frame@g.us";
+  const calls = [];
+  const client = {
+    async getChats() {
+      calls.push(["getChats"]);
+      throw new Error("Attempted to use detached Frame 'FRAME-1'.");
+    },
+  };
+  const thread = await createThread({
+    id: "detached-frame-thread",
+    name: "Detached Frame",
+    binding: {
+      connector: "whatsapp",
+      chatId,
+      responderAccountId: "responder",
+      outboundAccountId: "responder",
+      enabled: true,
+    },
+  }, env);
+
+  try {
+    setLocalWhatsAppRuntimeForTest("responder", { client }, {}, env);
+    setLocalWhatsAppRuntimeRecoveryHooksForTest({
+      async restartAccount(accountId, actualEnv, options) {
+        calls.push(["restart", accountId, actualEnv === env, options.reason]);
+      },
+      async startAccount(accountId, actualEnv, options) {
+        calls.push(["start", accountId, actualEnv === env, options.showNotification]);
+        return { accountId, state: "starting", ready: false };
+      },
+    });
+
+    const result = await recoverUnreadLocalWhatsAppMessages(env, {
+      force: true,
+      accountIds: ["responder"],
+      threads: [thread],
+      nowMs: 1_780_000_000_000,
+    });
+    const events = await listEvents(env, 30);
+
+    assert.equal(result.failed.length, 1);
+    assert.deepEqual(calls, [
+      ["getChats"],
+      ["restart", "responder", true, "chat_list_runtime_error"],
+      ["start", "responder", true, false],
+    ]);
+    assert.equal(events.some((event) => event.type === "whatsapp_local_unread_runtime_recovery_deferred"), false);
+    assert.equal(events.some((event) => event.type === "whatsapp_local_runtime_degraded" && event.source === "unread_recovery"), true);
+    assert.equal(events.some((event) => event.type === "whatsapp_local_runtime_recovery_start" && event.source === "unread_recovery"), true);
   } finally {
     await resetLocalWhatsAppBridgeForTest(env);
   }

@@ -36,6 +36,12 @@ function normalizeStringList(values = []) {
   return [...new Set(list.map((value) => clean(value)).filter(Boolean))];
 }
 
+function normalizeBoolean(value, fallback = false) {
+  if (value === undefined || value === null || value === "") return fallback;
+  if (typeof value === "boolean") return value;
+  return ["1", "true", "yes", "on"].includes(clean(value).toLowerCase());
+}
+
 function normalizeLabels(labels = {}) {
   if (!labels || typeof labels !== "object" || Array.isArray(labels)) return {};
   return Object.fromEntries(
@@ -203,12 +209,22 @@ function normalizeSystem(system = {}, id = "") {
 
 function normalizeConnectors(connectors = {}) {
   const source = connectors && typeof connectors === "object" && !Array.isArray(connectors) ? connectors : {};
+  const whatsapp = source.whatsapp && typeof source.whatsapp === "object" && !Array.isArray(source.whatsapp) ? source.whatsapp : {};
+  const whatsappParticipantIds = normalizeStringList(whatsapp.participantIds || whatsapp.participants || source.whatsappParticipantIds || source.waParticipantIds);
+  const promoteParticipantsAsAdmins = normalizeBoolean(whatsapp.promoteParticipantsAsAdmins ?? source.whatsappPromoteParticipantsAsAdmins, whatsappParticipantIds.length > 0);
+  const whatsappAdminParticipantIds = normalizeStringList([
+    ...(promoteParticipantsAsAdmins ? whatsappParticipantIds : []),
+    ...normalizeStringList(whatsapp.adminParticipantIds || whatsapp.adminParticipants || source.whatsappAdminParticipantIds || source.waAdminParticipantIds),
+  ]);
   return {
     whatsapp: {
-      enabled: source.whatsapp?.enabled ?? source.whatsappEnabled ?? true,
-      chatId: clean(source.whatsapp?.chatId || source.whatsappChatId || source.waChatId),
-      accountId: clean(source.whatsapp?.accountId || source.whatsappAccountId || source.waAccountId || "sender"),
-      routeMode: clean(source.whatsapp?.routeMode || source.whatsappRouteMode || "parent-forward") || "parent-forward",
+      enabled: whatsapp.enabled ?? source.whatsappEnabled ?? true,
+      chatId: clean(whatsapp.chatId || source.whatsappChatId || source.waChatId),
+      accountId: clean(whatsapp.accountId || source.whatsappAccountId || source.waAccountId || "sender"),
+      routeMode: clean(whatsapp.routeMode || source.whatsappRouteMode || "parent-forward") || "parent-forward",
+      participantIds: whatsappParticipantIds,
+      adminParticipantIds: whatsappAdminParticipantIds,
+      promoteParticipantsAsAdmins,
     },
     gmail: {
       enabled: source.gmail?.enabled ?? source.gmailEnabled ?? true,

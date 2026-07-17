@@ -46,7 +46,11 @@ test("tenant slice registry keeps one active tenant VM slice per owner", async (
     resources: { memoryHighMiB: 4096, memoryMaxMiB: 6144, cpuQuotaPercent: 150, tasksMax: 1024, diskSoftGiB: 60 },
     budget: { dailyUsd: 3.5, monthlyUsd: 42 },
     connectors: {
-      whatsapp: { chatId: "alice-chat@g.us", accountId: "sender" },
+      whatsapp: {
+        chatId: "alice-chat@g.us",
+        accountId: "sender",
+        participantIds: ["alice-primary@c.us", "alice-secondary@c.us"],
+      },
       linkedin: { desktopSlug: "linkedin-alice" },
     },
   }, env);
@@ -79,6 +83,9 @@ test("tenant slice registry keeps one active tenant VM slice per owner", async (
   assert.equal(slice.budget.dailyUsd, 3.5);
   assert.equal(slice.budget.monthlyUsd, 42);
   assert.equal(slice.connectors.whatsapp.chatId, "alice-chat@g.us");
+  assert.deepEqual(slice.connectors.whatsapp.participantIds, ["alice-primary@c.us", "alice-secondary@c.us"]);
+  assert.deepEqual(slice.connectors.whatsapp.adminParticipantIds, ["alice-primary@c.us", "alice-secondary@c.us"]);
+  assert.equal(slice.connectors.whatsapp.promoteParticipantsAsAdmins, true);
   assert.equal(slice.connectors.linkedin.desktopSlug, "linkedin-alice");
   assert.equal(slice.oxrm.composeProject, "oxrm-tenant-alice-slice");
   assert.equal(slice.oxrm.webUrl, "http://127.0.0.1:23010");
@@ -136,6 +143,7 @@ test("tenant slice provisioning builds a VM-backed plan", async () => {
   }, env);
   const manifest = JSON.parse(plan.manifest);
   const vm = manifest.items.find((item) => item.kind === "VirtualMachine");
+  const service = manifest.items.find((item) => item.kind === "Service" && item.metadata.name === "bob-vm-svc");
   const cloudInitSecret = manifest.items.find((item) => item.kind === "Secret" && item.metadata.name === "bob-vm-cloudinit");
   const userData = cloudInitSecret.stringData.userdata;
   const runtimeEnvFile = Buffer.from(
@@ -155,6 +163,16 @@ test("tenant slice provisioning builds a VM-backed plan", async () => {
   assert.equal(plan.tenantVm.connectors.whatsappBrokerBaseUrl, "");
   assert.equal(plan.namespace, "tenant-bob");
   assert.equal(plan.vmName, "bob-vm");
+  assert.equal(plan.serviceName, "bob-vm-svc");
+  assert.deepEqual(plan.servicePorts, [
+    { name: "ssh", port: 22, protocol: "TCP" },
+    { name: "orkestr", port: 24000, protocol: "TCP" },
+    { name: "oxrm-web", port: 24010, protocol: "TCP" },
+    { name: "oxrm-api", port: 24011, protocol: "TCP" },
+    { name: "oxrm-mcp", port: 24012, protocol: "TCP" },
+    { name: "novnc", port: 24020, protocol: "TCP" },
+    { name: "chrome-debug", port: 24021, protocol: "TCP" },
+  ]);
   assert.equal(plan.cloudInitSecretName, "bob-vm-cloudinit");
   assert.equal(plan.runtimeEnv.ORKESTR_HOME, "/opt/orkestr/data");
   assert.equal(plan.runtimeEnv.ORKESTR_HOST, "0.0.0.0");
@@ -188,6 +206,9 @@ test("tenant slice provisioning builds a VM-backed plan", async () => {
   assert.deepEqual(plan.bootstrapProfile.desks.map((desk) => desk.slug), ["linkedin-bob"]);
   assert.equal(vm.spec.template.spec.domain.cpu.cores, 2);
   assert.equal(vm.spec.template.spec.domain.resources.requests.memory, "4096Mi");
+  assert.deepEqual(vm.spec.template.spec.domain.devices.interfaces[0].ports, plan.servicePorts);
+  assert.deepEqual(service.spec.selector, { app: "bob-vm", "kubevirt.io/domain": "bob-vm" });
+  assert.deepEqual(service.spec.ports, plan.servicePorts);
   assert.equal(vm.spec.dataVolumeTemplates[0].spec.pvc.resources.requests.storage, "30Gi");
   assert.match(runtimeEnvFile, /^ORKESTR_TENANT_SLICE_ID='bob-slice'$/m);
   assert.match(runtimeEnvFile, /^ORKESTR_TENANT_VM_ID='bob-slice-vm'$/m);
@@ -256,6 +277,7 @@ test("tenant slice provisioning execute path and runtime status are observable",
     "base64",
   ).toString("utf8");
   assert.equal(appliedManifest.items.some((item) => item.kind === "VirtualMachine"), true);
+  assert.equal(appliedManifest.items.some((item) => item.kind === "Service"), true);
   assert.equal(appliedBootstrapProfile.connectors.whatsapp.chatId, "charlie-wa@g.us");
   assert.equal(appliedBootstrapProfile.connectors.whatsapp.accountId, "sender");
   assert.match(appliedRuntimeEnvFile, /^ORKESTR_HOST='0\.0\.0\.0'$/m);

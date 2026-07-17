@@ -28,6 +28,7 @@ test("tenant VM provisioning builds a public-safe KubeVirt plan", async () => {
   }, env);
   const manifest = JSON.parse(plan.manifest);
   const vm = manifest.items.find((item) => item.kind === "VirtualMachine");
+  const service = manifest.items.find((item) => item.kind === "Service" && item.metadata.name === "alice-vm-svc");
   const cloudInitSecret = manifest.items.find((item) => item.kind === "Secret" && item.metadata.name === "alice-vm-cloudinit");
   const cloudInitVolume = vm.spec.template.spec.volumes.find((volume) => volume.name === "cloudinitdisk").cloudInitNoCloud;
   const userData = cloudInitSecret.stringData.userdata;
@@ -40,6 +41,11 @@ test("tenant VM provisioning builds a public-safe KubeVirt plan", async () => {
   assert.equal(plan.namespace, "tenant-a");
   assert.equal(plan.vmName, "alice-vm");
   assert.match(plan.macAddress, /^02(?::[0-9a-f]{2}){5}$/);
+  assert.equal(plan.serviceName, "alice-vm-svc");
+  assert.deepEqual(plan.servicePorts, [
+    { name: "ssh", port: 22, protocol: "TCP" },
+    { name: "orkestr", port: 19812, protocol: "TCP" },
+  ]);
   assert.equal(plan.cloudInitSecretName, "alice-vm-cloudinit");
   assert.equal(plan.runtimeEnv.ORKESTR_HOST, "0.0.0.0");
   assert.equal(
@@ -71,9 +77,12 @@ test("tenant VM provisioning builds a public-safe KubeVirt plan", async () => {
   assert.equal(vm.spec.template.spec.domain.resources.requests.memory, "8192Mi");
   assert.deepEqual(vm.spec.template.spec.domain.devices.interfaces[0], {
     name: "default",
-    bridge: {},
+    masquerade: {},
     macAddress: plan.macAddress,
+    ports: plan.servicePorts,
   });
+  assert.deepEqual(service.spec.selector, { app: "alice-vm", "kubevirt.io/domain": "alice-vm" });
+  assert.deepEqual(service.spec.ports, plan.servicePorts);
   assert.equal(vm.spec.dataVolumeTemplates[0].spec.pvc.resources.requests.storage, "100Gi");
   assert.match(vm.spec.dataVolumeTemplates[0].spec.source.http.url, /noble-server-cloudimg-amd64\.img/);
   assert.deepEqual(cloudInitVolume, { secretRef: { name: "alice-vm-cloudinit" } });
@@ -242,6 +251,7 @@ test("tenant VM provisioning execute path applies manifest and updates registry 
   assert.deepEqual(calls[0].args, ["apply", "-f", "-"]);
   assert.equal(calls[0].options.env.KUBECONFIG, "/tmp/k3s.yaml");
   assert.equal(JSON.parse(calls[0].input).items.some((item) => item.kind === "VirtualMachine"), true);
+  assert.equal(JSON.parse(calls[0].input).items.some((item) => item.kind === "Service"), true);
   assert.equal((await getTenantVm("bob-tenant", env)).status, "provisioning");
 });
 

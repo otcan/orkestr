@@ -173,6 +173,10 @@ function vmProvisionInput(slice, tenantVm, input = {}, env = process.env) {
     connectPublicBaseUrl: input.connectPublicBaseUrl || input.publicConnectBaseUrl || controlPlane.connectPublicBaseUrl,
     connectPublicSetupUrl: input.connectPublicSetupUrl || input.publicSetupUrl || controlPlane.connectPublicSetupUrl,
     port: input.port || input.orkestrPort || slice.portBlock?.ports?.orkestr || "19812",
+    servicePorts: {
+      ...slice.portBlock?.ports,
+      ...(input.servicePorts && typeof input.servicePorts === "object" && !Array.isArray(input.servicePorts) ? input.servicePorts : {}),
+    },
     instanceDesktopsProvisioned: slice.connectors?.linkedin?.enabled === false ? "0" : "1",
     runtimeEnv: {
       ORKESTR_TENANT_SLICE_ID: slice.id,
@@ -228,6 +232,8 @@ export function buildTenantSliceProvisioningPlan(sliceInput = {}, input = {}, en
     sharedControlPlane: publicTenantControlPlane(provisionInput.sharedControlPlane),
     namespace: vmPlan.namespace,
     vmName: vmPlan.vmName,
+    serviceName: vmPlan.serviceName,
+    servicePorts: vmPlan.servicePorts,
     cloudInitSecretName: vmPlan.cloudInitSecretName,
     bootstrapProfilePath: vmPlan.bootstrapProfilePath,
     bootstrapProfile: vmPlan.bootstrapProfile,

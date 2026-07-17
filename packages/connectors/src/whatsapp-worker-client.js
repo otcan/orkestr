@@ -94,6 +94,13 @@ export function whatsappWorkerConversation(accountId = "", conversationId = "", 
     return requestWhatsAppWorker(`/accounts/${account}/chats/${conversation}/history?limit=${Math.max(1, Number(options.limit || 30) || 30)}`, {}, env);
   }
   if (action === "participants") return requestWhatsAppWorker(`/accounts/${account}/chats/${conversation}/participants`, {}, env);
+  if (action === "promote-admins" || action === "demote-admins") {
+    const suffix = action === "demote-admins" ? "/admins/demote" : "/admins";
+    return requestWhatsAppWorker(`/accounts/${account}/chats/${conversation}${suffix}`, {
+      method: "POST",
+      body: { participantIds: options.participantIds || [] },
+    }, env);
+  }
   if (action === "recover") {
     return requestWhatsAppWorker(`/accounts/${account}/chats/${conversation}/recover`, {
       method: "POST",

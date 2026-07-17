@@ -708,10 +708,17 @@ export class ConnectorsController {
   @HttpCode(200)
   async whatsappBridgePromoteGroupAdmins(@Req() request: any, @Param("accountId") accountId: string, @Param("chatId") chatId: string, @Body() body: Record<string, unknown> = {}) {
     await assertWhatsAppBridgeBindingAcl("manage", { accountId, chatId }, request.orkestrMachineAuthContext);
+    const runtimeAccountId = await resolveLocalWhatsAppRuntimeAccountId(accountId);
+    const participantIds = bodyStringArray(body, "participantIds").concat(bodyStringArray(body, "participants"));
+    try {
+      return await whatsappWorkerConversation(runtimeAccountId, chatId, "promote-admins", { participantIds }, process.env);
+    } catch (error: any) {
+      if (!["whatsapp_worker_unavailable", "whatsapp_worker_unconfigured"].includes(String(error?.message || ""))) throw error;
+    }
     return promoteLocalWhatsAppGroupParticipants({
-      accountId: await resolveLocalWhatsAppRuntimeAccountId(accountId),
+      accountId: runtimeAccountId,
       chatId,
-      participantIds: bodyStringArray(body, "participantIds").concat(bodyStringArray(body, "participants")),
+      participantIds,
     });
   }
 
@@ -719,10 +726,17 @@ export class ConnectorsController {
   @HttpCode(200)
   async whatsappBridgeDemoteGroupAdmins(@Req() request: any, @Param("accountId") accountId: string, @Param("chatId") chatId: string, @Body() body: Record<string, unknown> = {}) {
     await assertWhatsAppBridgeBindingAcl("manage", { accountId, chatId }, request.orkestrMachineAuthContext);
+    const runtimeAccountId = await resolveLocalWhatsAppRuntimeAccountId(accountId);
+    const participantIds = bodyStringArray(body, "participantIds").concat(bodyStringArray(body, "participants"));
+    try {
+      return await whatsappWorkerConversation(runtimeAccountId, chatId, "demote-admins", { participantIds }, process.env);
+    } catch (error: any) {
+      if (!["whatsapp_worker_unavailable", "whatsapp_worker_unconfigured"].includes(String(error?.message || ""))) throw error;
+    }
     return demoteLocalWhatsAppGroupParticipants({
-      accountId: await resolveLocalWhatsAppRuntimeAccountId(accountId),
+      accountId: runtimeAccountId,
       chatId,
-      participantIds: bodyStringArray(body, "participantIds").concat(bodyStringArray(body, "participants")),
+      participantIds,
     });
   }
 

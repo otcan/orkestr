@@ -55,6 +55,7 @@ test("CLI help exposes local service commands promised by the installer", async 
   assert.match(stdout.text(), /orkestr start\|stop\|restart/);
   assert.match(stdout.text(), /orkestr logs \[--service orkestr\]/);
   assert.match(stdout.text(), /orkestr sanitizer check --action action --text text/);
+  assert.match(stdout.text(), /orkestr vm-slice create <owner-user-id>/);
 });
 
 test("CLI serve shutdown has a bounded force-exit fallback", async () => {
@@ -119,6 +120,182 @@ test("CLI lists release instances from the broker API", async () => {
   assert.match(stdout.text(), /local/);
   assert.match(stdout.text(), /vm-tenant/);
   assert.match(stdout.text(), /ready/);
+});
+
+test("CLI creates a tenant VM slice and returns a dry-run provisioning plan by default", async () => {
+  const stdout = capture();
+  const seen = [];
+  const code = await runCli([
+    "--api",
+    "http://orkestr.test",
+    "vm-slice",
+    "create",
+    "alice",
+    "--id",
+    "alice-slice",
+    "--name",
+    "Alice slice",
+    "--namespace",
+    "tenant-alice",
+    "--vm-name",
+    "alice-vm",
+    "--repo-url",
+    "https://github.com/example/orkestr.git",
+    "--git-ref",
+    "main",
+    "--memory",
+    "4096",
+    "--disk",
+    "40",
+    "--cpu",
+    "150",
+    "--whatsapp-chat-id",
+    "alice@g.us",
+    "--wa-participant",
+    "wa-contact-primary@c.us",
+    "--wa-participant",
+    "wa-contact-secondary@c.us",
+  ], {
+    stdout,
+    stderr: capture(),
+    fetchImpl: fakeFetch({
+      "POST /api/tenant-slices": {
+        ok: true,
+        tenantSlice: {
+          id: "alice-slice",
+          ownerUserId: "alice",
+          displayName: "Alice slice",
+          status: "planned",
+          vm: { tenantVmId: "alice-slice-vm", namespace: "orkestr-tenants", vmName: "alice-slice-vm" },
+        },
+      },
+      "POST /api/tenant-slices/alice-slice/provision": {
+        ok: true,
+        dryRun: true,
+        tenantSlice: { id: "alice-slice", ownerUserId: "alice", status: "planned" },
+        tenantVm: {
+          id: "alice-slice-vm",
+          resources: { vcpus: 2, memoryMiB: 4096, diskGiB: 40 },
+          kubevirt: { namespace: "tenant-alice", vmName: "alice-vm" },
+        },
+        namespace: "tenant-alice",
+        vmName: "alice-vm",
+        runtimeEnv: { ORKESTR_CONNECT_PUBLIC_SETUP_URL: "https://connect.example.test/i/alice/setup" },
+        commands: { apply: ["kubectl", "apply", "-f", "-"] },
+      },
+    }, seen),
+  });
+
+  assert.equal(code, 0);
+  assert.equal(seen[0].key, "POST /api/tenant-slices");
+  assert.equal(seen[0].body.ownerUserId, "alice");
+  assert.equal(seen[0].body.id, "alice-slice");
+  assert.equal(seen[0].body.resources.memoryMaxMiB, 4096);
+  assert.equal(seen[0].body.resources.diskSoftGiB, 40);
+  assert.equal(seen[0].body.resources.cpuQuotaPercent, 150);
+  assert.equal(seen[0].body.connectors.whatsapp.chatId, "alice@g.us");
+  assert.deepEqual(seen[0].body.connectors.whatsapp.participantIds, ["wa-contact-primary@c.us", "wa-contact-secondary@c.us"]);
+  assert.deepEqual(seen[0].body.connectors.whatsapp.adminParticipantIds, ["wa-contact-primary@c.us", "wa-contact-secondary@c.us"]);
+  assert.equal(seen[0].body.connectors.whatsapp.promoteParticipantsAsAdmins, true);
+  assert.equal(seen[1].key, "POST /api/tenant-slices/alice-slice/provision");
+  assert.equal(seen[1].body.execute, false);
+  assert.equal(seen[1].body.dryRun, true);
+  assert.equal(seen[1].body.namespace, "tenant-alice");
+  assert.equal(seen[1].body.vmName, "alice-vm");
+  assert.equal(seen[1].body.repoUrl, "https://github.com/example/orkestr.git");
+  assert.equal(seen[1].body.gitRef, "main");
+  assert.match(stdout.text(), /dry-run plan/);
+  assert.match(stdout.text(), /rerun with --execute/);
+});
+
+test("CLI reuses an existing tenant VM slice and can execute provisioning", async () => {
+  const stdout = capture();
+  const seen = [];
+  const code = await runCli([
+    "--api",
+    "http://orkestr.test",
+    "vm-slice",
+    "create",
+    "--owner",
+    "alice",
+    "--id",
+    "alice-slice",
+    "--namespace",
+    "tenant-alice",
+    "--vm-name",
+    "alice-vm",
+    "--execute",
+    "--json",
+  ], {
+    stdout,
+    stderr: capture(),
+    fetchImpl: fakeFetch({
+      "POST /api/tenant-slices": jsonResponse({ error: "tenant_slice_already_exists" }, 409),
+      "GET /api/tenant-slices/alice-slice": {
+        tenantSlice: {
+          id: "alice-slice",
+          ownerUserId: "alice",
+          status: "planned",
+          vm: { tenantVmId: "alice-slice-vm" },
+        },
+      },
+      "POST /api/tenant-slices/alice-slice/provision": {
+        ok: true,
+        dryRun: false,
+        tenantSlice: { id: "alice-slice", ownerUserId: "alice", status: "provisioning" },
+        tenantVm: {
+          id: "alice-slice-vm",
+          status: "provisioning",
+          resources: { vcpus: 2, memoryMiB: 8192, diskGiB: 100 },
+          kubevirt: { namespace: "tenant-alice", vmName: "alice-vm" },
+        },
+        namespace: "tenant-alice",
+        vmName: "alice-vm",
+        output: { stdout: "applied", stderr: "" },
+      },
+    }, seen),
+  });
+
+  assert.equal(code, 0);
+  assert.deepEqual(seen.map((item) => item.key), [
+    "POST /api/tenant-slices",
+    "GET /api/tenant-slices/alice-slice",
+    "POST /api/tenant-slices/alice-slice/provision",
+  ]);
+  assert.equal(seen[2].body.execute, true);
+  assert.equal(seen[2].body.dryRun, false);
+  const payload = JSON.parse(stdout.text());
+  assert.equal(payload.reused, true);
+  assert.equal(payload.provisioned.dryRun, false);
+});
+
+test("CLI vm-slice apply is a short execute alias", async () => {
+  const stdout = capture();
+  const seen = [];
+  const code = await runCli([
+    "--api",
+    "http://orkestr.test",
+    "vm-slice",
+    "apply",
+    "alice-slice",
+    "--json",
+  ], {
+    stdout,
+    stderr: capture(),
+    fetchImpl: fakeFetch({
+      "POST /api/tenant-slices/alice-slice/provision": {
+        ok: true,
+        dryRun: false,
+        tenantSlice: { id: "alice-slice", ownerUserId: "alice", status: "provisioning" },
+        tenantVm: { id: "alice-slice-vm", resources: { vcpus: 2, memoryMiB: 8192, diskGiB: 100 } },
+      },
+    }, seen),
+  });
+
+  assert.equal(code, 0);
+  assert.equal(seen[0].body.execute, true);
+  assert.equal(seen[0].body.dryRun, false);
+  assert.equal(JSON.parse(stdout.text()).dryRun, false);
 });
 
 test("CLI sends local cli-auth bearer token when ORKESTR_HOME has one", async () => {
@@ -1308,6 +1485,7 @@ test("CLI creates Orkestr threads with integrated WhatsApp binding", async () =>
   assert.deepEqual(seen[0].body, {
     name: "Project Fitness",
     participantIds: ["wa-contact-alice@c.us"],
+    adminParticipantIds: ["wa-contact-alice@c.us"],
     promoteParticipantsAsAdmins: true,
     replyAccountId: "responder",
     bridgeAccountId: "responder",
@@ -1358,7 +1536,7 @@ test("CLI binds an existing thread to a generated WhatsApp group", async () => {
     threadId: "sample-linkedin",
     name: "Sample-Linkedin",
     participantIds: ["wa-contact-primary@c.us"],
-    adminParticipantIds: [],
+    adminParticipantIds: ["wa-contact-primary@c.us"],
     promoteParticipantsAsAdmins: true,
     generatePicture: true,
     mirrorToWhatsApp: true,

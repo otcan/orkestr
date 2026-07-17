@@ -2,7 +2,7 @@ import { requestJson } from "./api-client.js";
 import { threadName } from "./format.js";
 import { applyWhatsAppChatNamePrefix, defaultWhatsAppReplyPrefix } from "../../../packages/core/src/whatsapp-defaults.js";
 
-const CREATE_USAGE = "Usage: orkestr create <name> [--prompt text] [--cwd path] [--command command] [--executor id] [--wa-title title] [--wa-participant jid]... [--chat-id jid] [--reply-account id] [--receiving-account id] [--reply-prefix text] [--no-wa] [--no-wa-admin] [--json]";
+const CREATE_USAGE = "Usage: orkestr create <name> [--prompt text] [--cwd path] [--command command] [--executor id] [--wa-title title] [--wa-participant jid]... [--wa-admin jid]... [--chat-id jid] [--reply-account id] [--receiving-account id] [--reply-prefix text] [--no-wa] [--no-wa-admin] [--json]";
 
 export async function createCommand(argv, ctx) {
   const json = argv.includes("--json");
@@ -73,10 +73,16 @@ export async function createCommand(argv, ctx) {
 
 function createWhatsAppGroup({ argv, ctx, displayName, outboundAccountId, senderAccountId }) {
   const participantIds = repeatedFlagValues(argv, ["--wa-participant", "--participant"]);
+  const promoteParticipantsAsAdmins = !argv.includes("--no-wa-admin") && !argv.includes("--no-admin");
+  const adminParticipantIds = uniqueList([
+    ...(promoteParticipantsAsAdmins ? participantIds : []),
+    ...repeatedFlagValues(argv, ["--wa-admin", "--admin-participant"]),
+  ]);
   const body = {
     name: displayName,
     participantIds,
-    promoteParticipantsAsAdmins: !argv.includes("--no-wa-admin") && !argv.includes("--no-admin"),
+    adminParticipantIds,
+    promoteParticipantsAsAdmins,
   };
   if (outboundAccountId) {
     body.replyAccountId = outboundAccountId;
@@ -170,6 +176,10 @@ function repeatedFlagValues(argv, flags) {
     if (flags.includes(argv[index])) values.push(argv[index + 1] || "");
   }
   return values.map((value) => String(value || "").trim()).filter(Boolean);
+}
+
+function uniqueList(values = []) {
+  return [...new Set(values.map((value) => String(value || "").trim()).filter(Boolean))];
 }
 
 const booleanFlags = new Set([
