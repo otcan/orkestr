@@ -117,7 +117,14 @@ export async function runTenantApiAgentTimerTool(name = "", args = {}, context =
     return { handled: true, result: { ok: await deleteTimerForPrincipal(args.timerId, principal, env) } };
   }
   if (tool === "orkestr_run_timer") {
-    return { handled: true, result: { event: await runTimerNowForPrincipal(args.timerId, principal, env) } };
+    return {
+      handled: true,
+      result: {
+        event: await runTimerNowForPrincipal(args.timerId, principal, env, new Date(), {
+          connectorStatusProvider: context.connectorStatusProvider,
+        }),
+      },
+    };
   }
   return { handled: false, result: null };
 }

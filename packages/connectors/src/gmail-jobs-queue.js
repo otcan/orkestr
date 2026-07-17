@@ -272,6 +272,7 @@ export async function collectGmailJobMessages(input = {}, env = process.env, fet
   try {
     return await collectOAuthJobMessages(input, env, fetchImpl, options);
   } catch (error) {
+    if (error?.connectorState === "reauth_required") throw error;
     const fallbackEnabled = input.gogFallback !== false && env.ORKESTR_JOBS_GOG_FALLBACK !== "0";
     if (source === "oauth" || !fallbackEnabled) throw error;
     const collected = await collectGogJobMessages(input, env);
@@ -334,6 +335,9 @@ export async function runDueGmailJobsAutomation(env = process.env, now = new Dat
       nextPollAt: new Date(now.getTime() + intervalMs).toISOString(),
       digestIntervalMs: parseIntervalMs(env.ORKESTR_JOBS_DIGEST_INTERVAL_MS || "2h", defaultDigestIntervalMs),
       lastError: "",
+      lastErrorAt: "",
+      blockedReason: "",
+      connectorState: "",
     }, env);
     return [result];
   } catch (error) {
@@ -343,8 +347,20 @@ export async function runDueGmailJobsAutomation(env = process.env, now = new Dat
       nextPollAt: new Date(now.getTime() + intervalMs).toISOString(),
       lastError,
       lastErrorAt: now.toISOString(),
+      blockedReason: error?.connectorState === "reauth_required" ? "blocked_auth" : "",
+      connectorState: clean(error?.connectorState),
     }, env);
-    await appendEvent({ type: "jobs_gmail_poll_failed", error: lastError }, env).catch(() => {});
-    return [{ ok: false, error: lastError }];
+    await appendEvent({
+      type: "jobs_gmail_poll_failed",
+      error: lastError,
+      blockedReason: error?.connectorState === "reauth_required" ? "blocked_auth" : undefined,
+      connectorState: clean(error?.connectorState) || undefined,
+    }, env).catch(() => {});
+    return [{
+      ok: false,
+      error: lastError,
+      blockedReason: error?.connectorState === "reauth_required" ? "blocked_auth" : "",
+      connectorState: clean(error?.connectorState),
+    }];
   }
 }

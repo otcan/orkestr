@@ -24,9 +24,9 @@ function setupState(connectors) {
   return ready ? "ready" : "partial";
 }
 
-export async function getSetupStatus({ env = process.env, home, principal = null } = {}) {
+export async function getSetupStatus({ env = process.env, home, principal = null, validateConnectors = false } = {}) {
   const paths = dataPaths(env);
-  const connectors = await getConnectorStatuses({ env, home, principal });
+  const connectors = await getConnectorStatuses({ env, home, principal, validateGmail: validateConnectors === true });
   const overlay = await readOverlay(env);
   const security = await securityStatus(env);
   const auth = publicAuthStatus(env);

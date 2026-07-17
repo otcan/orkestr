@@ -28,6 +28,53 @@ function clean(value) {
   return String(value || "").trim();
 }
 
+function lower(value) {
+  return clean(value).toLowerCase();
+}
+
+function providerStatus(error = {}) {
+  const value = Number(error.providerStatus || error.httpStatus || 0);
+  return Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+function providerCode(error = {}) {
+  return lower(error.providerCode || error.errorCode || "");
+}
+
+export function classifyGmailConnectorError(error = {}, options = {}) {
+  const context = clean(options.errorContext || error.errorContext);
+  const status = providerStatus(error);
+  const code = providerCode(error);
+  const message = lower(error.message || error);
+  const terminalCode = ["invalid_grant", "invalid_token", "unauthenticated", "token_expired", "token_revoked"].includes(code);
+  const terminalMessage = /token (?:has been |is )?(?:expired|revoked)|expired or revoked|invalid credentials|invalid token|token_revoked/.test(message);
+  const terminalAuth = status === 401 || terminalCode || terminalMessage;
+  if (terminalAuth && context !== "oauth_exchange") {
+    return {
+      state: "reauth_required",
+      code: "gmail_reauthorization_required",
+      retryable: false,
+      nextAction: "reconnect",
+    };
+  }
+  const retryable = status === 408 || status === 429 || status >= 500 ||
+    error?.name === "AbortError" || /\b(?:timeout|timed out|network|fetch failed|econnreset|econnrefused|enotfound)\b/.test(message);
+  if (retryable) {
+    return {
+      state: "degraded",
+      code: "gmail_provider_unavailable",
+      retryable: true,
+      nextAction: "retry",
+    };
+  }
+  return {
+    state: "broken",
+    code: "gmail_request_failed",
+    retryable: false,
+    nextAction: "inspect",
+  };
+}
+
 function splitList(value = "") {
   if (Array.isArray(value)) return value.map(clean).filter(Boolean);
   return clean(value).split(/[\s,]+/g).map(clean).filter(Boolean);
@@ -192,7 +239,9 @@ async function requestToken(params, fetchImpl = fetch) {
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
     const error = new Error(payload.error_description || payload.error || `gmail_token_http_${response.status}`);
-    error.statusCode = 502;
+    error.statusCode = response.status === 401 || clean(payload.error) === "invalid_grant" ? 401 : 502;
+    error.providerStatus = response.status;
+    error.providerCode = clean(payload.error);
     throw error;
   }
   return payload;
@@ -310,11 +359,31 @@ export async function saveBrokeredGmailGrant(grant = {}, env = process.env) {
 
 async function saveOAuthError(error, env, options = {}) {
   const scope = await connectorScopePaths(env, options);
-  await writeSecretJson(connectorFile(scope, "secrets", "gmail-error.json"), {
+  const errorContext = clean(options.errorContext || error?.errorContext);
+  const classification = classifyGmailConnectorError(error, { errorContext });
+  const record = {
     message: error.message || String(error),
     statusCode: error.statusCode || 500,
+    providerStatus: providerStatus(error) || undefined,
+    providerCode: providerCode(error) || undefined,
+    errorContext: errorContext || undefined,
+    ...classification,
     updatedAt: new Date().toISOString(),
-  });
+  };
+  await writeSecretJson(connectorFile(scope, "secrets", "gmail-error.json"), record);
+  if (error && typeof error === "object") {
+    error.connectorState = classification.state;
+    error.connectorCode = classification.code;
+    error.retryable = classification.retryable;
+    error.nextAction = classification.nextAction;
+    error.errorContext = errorContext;
+  }
+  return record;
+}
+
+async function clearOAuthError(env, options = {}) {
+  const scope = await connectorScopePaths(env, options);
+  await fs.rm(connectorFile(scope, "secrets", "gmail-error.json"), { force: true }).catch(() => {});
 }
 
 export async function readGmailToken(env = process.env, options = {}) {
@@ -467,7 +536,8 @@ export async function startGmailOAuth(env = process.env, options = {}) {
     redirectUri,
     createdAt: new Date().toISOString(),
   });
-  await fs.rm(connectorFile(scope, "secrets", "gmail-error.json"), { force: true }).catch(() => {});
+  const existingToken = await readGmailToken(env, options);
+  if (!clean(existingToken.accessToken)) await clearOAuthError(env, options);
   const url = new URL("https://accounts.google.com/o/oauth2/v2/auth");
   url.searchParams.set("client_id", clientId);
   url.searchParams.set("redirect_uri", redirectUri);
@@ -508,7 +578,7 @@ export async function exchangeGmailCode(code, env = process.env, fetchImpl = fet
     await appendEvent({ type: "gmail_oauth_token_exchanged", userId: scope.userId || undefined }, env);
     return token;
   } catch (error) {
-    await saveOAuthError(error, env, options);
+    await saveOAuthError(error, env, { ...options, errorContext: "oauth_exchange" });
     throw error;
   }
 }
@@ -568,6 +638,8 @@ async function refreshBrokeredGmailAccessToken(prior = {}, env = process.env, fe
   if (!response.ok || payload?.ok === false) {
     const error = new Error(payload?.error || payload?.message || `broker_google_workspace_refresh_http_${response.status}`);
     error.statusCode = response.status || 502;
+    error.providerStatus = response.status;
+    error.providerCode = clean(payload?.code || payload?.error);
     throw error;
   }
   const tokenPayload = payload.token || payload;
@@ -587,19 +659,19 @@ async function refreshBrokeredGmailAccessToken(prior = {}, env = process.env, fe
 }
 
 export async function refreshGmailAccessToken(env = process.env, fetchImpl = fetch, options = {}) {
-  const prior = await readGmailToken(env, options);
-  if (prior.brokered === true || prior.brokerRefresh === true) {
-    return refreshBrokeredGmailAccessToken(prior, env, fetchImpl, options);
-  }
-  const config = await readParentConnectorRuntimeConfig("gmail", env);
-  const { clientId, clientSecret } = requireOAuthConfig(config);
-  const refreshToken = String(prior.refreshToken || "").trim();
-  if (!clientSecret || !refreshToken) {
-    const error = new Error("gmail_refresh_config_required");
-    error.statusCode = 400;
-    throw error;
-  }
   try {
+    const prior = await readGmailToken(env, options);
+    if (prior.brokered === true || prior.brokerRefresh === true) {
+      return await refreshBrokeredGmailAccessToken(prior, env, fetchImpl, options);
+    }
+    const config = await readParentConnectorRuntimeConfig("gmail", env);
+    const { clientId, clientSecret } = requireOAuthConfig(config);
+    const refreshToken = String(prior.refreshToken || "").trim();
+    if (!clientSecret || !refreshToken) {
+      const error = new Error("gmail_refresh_config_required");
+      error.statusCode = 400;
+      throw error;
+    }
     const payload = await requestToken(
       {
         grant_type: "refresh_token",
@@ -619,14 +691,14 @@ export async function refreshGmailAccessToken(env = process.env, fetchImpl = fet
     await appendEvent({ type: "gmail_oauth_token_refreshed", userId: scope.userId || undefined }, env);
     return token;
   } catch (error) {
-    await saveOAuthError(error, env, options);
+    await saveOAuthError(error, env, { ...options, errorContext: "token_refresh" });
     throw error;
   }
 }
 
 export async function getGmailAccessToken(env = process.env, fetchImpl = fetch, options = {}) {
   const token = await readGmailToken(env, options);
-  if (token.accessToken && Number(token.expiresAt || 0) - 120 > nowSeconds()) {
+  if (options.forceRefresh !== true && token.accessToken && Number(token.expiresAt || 0) - 120 > nowSeconds()) {
     return token.accessToken;
   }
   const refreshed = await refreshGmailAccessToken(env, fetchImpl, options);
@@ -793,26 +865,68 @@ export function normalizeGmailMessage(message) {
 }
 
 async function gmailApiGet(resourcePath, params, env, fetchImpl, options = {}) {
-  const accessToken = await getGmailAccessToken(env, fetchImpl, options);
   const url = new URL(`${gmailApiBase}${resourcePath}`);
   for (const [key, value] of Object.entries(params || {})) {
     if (value !== undefined && value !== null && String(value) !== "") {
       url.searchParams.set(key, String(value));
     }
   }
-  const response = await fetchImpl(url, {
-    headers: {
-      authorization: `Bearer ${accessToken}`,
-      accept: "application/json",
-    },
-  });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) {
+  const request = async (accessToken) => {
+    const response = await fetchImpl(url, {
+      headers: {
+        authorization: `Bearer ${accessToken}`,
+        accept: "application/json",
+      },
+    });
+    const payload = await response.json().catch(() => ({}));
+    return { response, payload };
+  };
+  const apiError = (response, payload) => {
     const error = new Error(payload.error?.message || payload.error || `gmail_api_http_${response.status}`);
-    error.statusCode = 502;
+    error.statusCode = response.status === 401 ? 401 : 502;
+    error.providerStatus = response.status;
+    error.providerCode = clean(payload.error?.status || payload.error?.errors?.[0]?.reason || payload.error);
+    return error;
+  };
+
+  const performRequest = async (accessToken) => {
+    try {
+      return await request(accessToken);
+    } catch (error) {
+      await saveOAuthError(error, env, { ...options, errorContext: "api_request" });
+      throw error;
+    }
+  };
+
+  let accessToken = await getGmailAccessToken(env, fetchImpl, options);
+  let result = await performRequest(accessToken);
+  if (result.response.status === 401) {
+    try {
+      const refreshed = await refreshGmailAccessToken(env, fetchImpl, { ...options, forceRefresh: true });
+      accessToken = refreshed.accessToken;
+      result = await performRequest(accessToken);
+    } catch (error) {
+      if (!error.connectorState) {
+        await saveOAuthError(error, env, { ...options, errorContext: "token_refresh" });
+      }
+      throw error;
+    }
+  }
+  if (!result.response.ok) {
+    const error = apiError(result.response, result.payload);
+    await saveOAuthError(error, env, { ...options, errorContext: "api_request" });
     throw error;
   }
-  return payload;
+  await clearOAuthError(env, options);
+  return result.payload;
+}
+
+export async function validateGmailConnection(env = process.env, fetchImpl = fetch, options = {}) {
+  const profile = await gmailApiGet("/profile", {}, env, fetchImpl, options);
+  return {
+    ok: true,
+    account: normalizeEmail(profile.emailAddress || profile.email || ""),
+  };
 }
 
 export async function listGmailMessages({ maxResults = 10, query = "" } = {}, env = process.env, fetchImpl = fetch, options = {}) {

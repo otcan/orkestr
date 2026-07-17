@@ -2,7 +2,12 @@ import fs from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { appendEvent, readJson, writeJson } from "../../storage/src/store.js";
 import { connectorFile, connectorScopePaths } from "./connector-storage.js";
-import { enrichGmailTokenAccount, startGmailOAuth } from "./gmail.js";
+import {
+  classifyGmailConnectorError,
+  enrichGmailTokenAccount,
+  startGmailOAuth,
+  validateGmailConnection,
+} from "./gmail.js";
 import {
   googleWorkspaceCapabilityLabels,
   googleWorkspaceCapabilitiesForScopes,
@@ -195,8 +200,17 @@ export async function connectorAuthStatus(providerId = "", env = process.env, op
   }
 
   const tokenPath = tokenFile(provider, scope);
-  const [tokenExists, pending, oauthState, error, token] = await Promise.all([
+  const [tokenExists, priorError] = await Promise.all([
     fileExists(tokenPath),
+    readJson(errorFile(provider, scope), {}),
+  ]);
+  const priorGmailFailure = provider === "gmail" && clean(priorError.message)
+    ? { ...classifyGmailConnectorError(priorError, { errorContext: priorError.errorContext }), ...priorError }
+    : null;
+  if (provider === "gmail" && tokenExists && options.validate === true && priorGmailFailure?.state !== "reauth_required") {
+    await validateGmailConnection(env, options.fetchImpl || fetch, options).catch(() => null);
+  }
+  const [pending, oauthState, error, token] = await Promise.all([
     readJson(pendingFile(provider, scope), {}),
     readJson(oauthStateFile(provider, scope), {}),
     readJson(errorFile(provider, scope), {}),
@@ -213,8 +227,17 @@ export async function connectorAuthStatus(providerId = "", env = process.env, op
   }
   const gmailDetails = provider === "gmail" && tokenExists ? publicGmailTokenDetails(statusToken) : {};
   const gmailHasGrantedCapabilities = provider !== "gmail" || !tokenExists || (Array.isArray(gmailDetails.capabilities) && gmailDetails.capabilities.length > 0);
-  const state = tokenExists
-    ? gmailHasGrantedCapabilities ? "connected" : "partial"
+  const gmailFailure = provider === "gmail" && clean(error.message)
+    ? { ...classifyGmailConnectorError(error, { errorContext: error.errorContext }), ...error }
+    : null;
+  const gmailFailureState = clean(gmailFailure?.state);
+  const gmailFailureBlocksToken = gmailFailureState === "reauth_required" ||
+    gmailFailureState === "degraded" ||
+    (gmailFailureState === "broken" && clean(error.errorContext) !== "oauth_exchange");
+  const state = tokenExists && gmailFailureBlocksToken
+    ? gmailFailureState
+      : tokenExists
+        ? gmailHasGrantedCapabilities ? "connected" : "partial"
     : clean(error.message)
       ? "broken"
       : clean(pending.pendingId || pending.deviceCode)
@@ -230,7 +253,7 @@ export async function connectorAuthStatus(providerId = "", env = process.env, op
     ok: true,
     provider,
     state,
-    connected: tokenExists && gmailHasGrantedCapabilities,
+    connected: state === "connected",
     pending: state === "pending" || state === "authorization_url_ready",
     account,
     shop: clean(oauthState.shop),
@@ -238,11 +261,18 @@ export async function connectorAuthStatus(providerId = "", env = process.env, op
     userConnectionRequired: true,
     ...(provider === "gmail" && tokenExists ? gmailDetails : {}),
     error: clean(error.message),
+    reason: clean(error.code),
+    retryable: error.retryable === true,
+    nextAction: clean(error.nextAction),
     updatedAt: clean(error.updatedAt),
-    message: tokenExists
-      ? gmailHasGrantedCapabilities
-        ? `${definition?.label || provider} is connected for this user.`
-        : `${definition?.label || provider} token is present, but no Google Workspace capabilities were granted. Reconnect and select the required access.`
+    message: state === "reauth_required"
+      ? `${definition?.label || provider} access is no longer accepted by the provider. Reconnect this user's account.`
+      : state === "degraded"
+        ? `${definition?.label || provider} is temporarily unavailable. The stored connection has not been discarded.`
+        : tokenExists
+          ? gmailHasGrantedCapabilities
+            ? `${definition?.label || provider} is connected for this user.`
+            : `${definition?.label || provider} token is present, but no Google Workspace capabilities were granted. Reconnect and select the required access.`
       : parentConnector.parentAppConfigured || parentConnector.parentAppPartiallyConfigured
         ? `${definition?.label || provider} is not connected for this user yet.`
         : `${definition?.label || provider} parent app configuration is missing.`,

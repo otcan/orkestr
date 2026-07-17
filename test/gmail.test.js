@@ -823,6 +823,153 @@ test("gmail message list uses stored access token", async () => {
   assert.equal(result.messages[0].id, "m1");
 });
 
+test("gmail API authentication failures force one refresh and retry", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-gmail-api-recover-"));
+  const env = { ORKESTR_HOME: home };
+  await writeConnectorConfig("gmail", {
+    clientId: "client-id",
+    clientSecret: "client-secret",
+    redirectUri: "http://localhost/callback",
+  }, env);
+  await exchangeGmailCode("code-123", env, async () => jsonResponse({
+    access_token: "access-stale",
+    refresh_token: "refresh-valid",
+    expires_in: 3600,
+  }), { account: "firat@example.com" });
+  const calls = [];
+
+  const result = await listGmailMessages({ maxResults: 1 }, env, async (url, options = {}) => {
+    calls.push({ url: String(url), authorization: options.headers?.authorization || "" });
+    if (String(url) === "https://oauth2.googleapis.com/token") {
+      return jsonResponse({ access_token: "access-refreshed", expires_in: 3600 });
+    }
+    if (options.headers?.authorization === "Bearer access-stale") {
+      return jsonResponse({ error: { status: "UNAUTHENTICATED", message: "Invalid Credentials" } }, false, 401);
+    }
+    assert.equal(options.headers?.authorization, "Bearer access-refreshed");
+    return jsonResponse({ messages: [{ id: "m1" }], resultSizeEstimate: 1 });
+  });
+  const status = await connectorAuthStatus("gmail", env);
+
+  assert.equal(result.messages[0].id, "m1");
+  assert.equal(calls.length, 3);
+  assert.deepEqual(calls.map((call) => call.authorization), ["Bearer access-stale", "", "Bearer access-refreshed"]);
+  assert.equal(status.state, "connected");
+  assert.equal(status.connected, true);
+  assert.equal((await readGmailToken(env)).accessToken, "access-refreshed");
+});
+
+test("revoked brokered Gmail refreshes become reauth_required without repeated retries", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-gmail-broker-revoked-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_TENANT_VM_ID: "firat-jobs-vm",
+    ORKESTR_BROKER_BASE_URL: "https://broker.example.test",
+  };
+  await writeBrokerClientRegistration(home, {
+    instanceId: "instance-firat",
+    channelId: "channel-firat",
+    brokerBaseUrl: "https://broker.example.test",
+  });
+  await saveBrokeredGmailGrant({
+    account: "firat@example.com",
+    provider: "google_workspace",
+    brokerInstanceId: "instance-firat",
+    requestedCapabilities: ["gmail_read"],
+    requestedScopes: ["https://www.googleapis.com/auth/gmail.readonly"],
+    token: {
+      accessToken: "access-stale",
+      refreshToken: "refresh-revoked",
+      expiresAt: Math.floor(Date.now() / 1000) + 3600,
+      grantedScopes: ["https://www.googleapis.com/auth/gmail.readonly"],
+    },
+  }, env);
+  const calls = [];
+
+  await assert.rejects(
+    () => listGmailMessages({ maxResults: 1 }, env, async (url) => {
+      calls.push(String(url));
+      if (String(url).includes("/google-workspace/refresh-token")) {
+        return jsonResponse({ error: "invalid_grant", message: "Token has been expired or revoked." }, false, 401);
+      }
+      return jsonResponse({ error: { status: "UNAUTHENTICATED", message: "Invalid Credentials" } }, false, 401);
+    }),
+    /invalid_grant/,
+  );
+  const status = await connectorAuthStatus("gmail", env, {
+    validate: true,
+    fetchImpl: async (url) => {
+      calls.push(`unexpected:${url}`);
+      throw new Error("known revoked state must not be retried by validation");
+    },
+  });
+
+  assert.equal(calls.length, 2);
+  assert.equal(status.state, "reauth_required");
+  assert.equal(status.connected, false);
+  assert.equal(status.account, "firat@example.com");
+  assert.equal(status.reason, "gmail_reauthorization_required");
+  assert.equal(status.nextAction, "reconnect");
+  assert.equal(status.retryable, false);
+});
+
+test("a second Gmail API 401 after refresh stops after one retry", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-gmail-api-still-revoked-"));
+  const env = { ORKESTR_HOME: home };
+  await writeConnectorConfig("gmail", {
+    clientId: "client-id",
+    clientSecret: "client-secret",
+    redirectUri: "http://localhost/callback",
+  }, env);
+  await exchangeGmailCode("code-123", env, async () => jsonResponse({
+    access_token: "access-stale",
+    refresh_token: "refresh-valid",
+    expires_in: 3600,
+  }), { account: "firat@example.com" });
+  let calls = 0;
+
+  await assert.rejects(() => listGmailMessages({ maxResults: 1 }, env, async (url) => {
+    calls += 1;
+    if (String(url) === "https://oauth2.googleapis.com/token") {
+      return jsonResponse({ access_token: "access-refreshed", expires_in: 3600 });
+    }
+    return jsonResponse({ error: { status: "UNAUTHENTICATED", message: "Invalid Credentials" } }, false, 401);
+  }), /Invalid Credentials/);
+  const status = await connectorAuthStatus("gmail", env);
+
+  assert.equal(calls, 3);
+  assert.equal(status.state, "reauth_required");
+  assert.equal(status.connected, false);
+});
+
+test("temporary Gmail provider failures are degraded rather than revoked", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-gmail-api-degraded-"));
+  const env = { ORKESTR_HOME: home };
+  await writeConnectorConfig("gmail", {
+    clientId: "client-id",
+    clientSecret: "client-secret",
+    redirectUri: "http://localhost/callback",
+  }, env);
+  await exchangeGmailCode("code-123", env, async () => jsonResponse({
+    access_token: "access-valid",
+    refresh_token: "refresh-valid",
+    expires_in: 3600,
+  }), { account: "firat@example.com" });
+
+  await assert.rejects(
+    () => listGmailMessages({ maxResults: 1 }, env, async () => jsonResponse({ error: { message: "Backend unavailable" } }, false, 503)),
+    /Backend unavailable/,
+  );
+  const status = await connectorAuthStatus("gmail", env);
+
+  assert.equal(status.state, "degraded");
+  assert.equal(status.connected, false);
+  assert.equal(status.account, "firat@example.com");
+  assert.equal(status.reason, "gmail_provider_unavailable");
+  assert.equal(status.retryable, true);
+  assert.equal(status.nextAction, "retry");
+});
+
 test("gmail message list reads the scoped user access token", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-gmail-user-list-"));
   const env = { ORKESTR_HOME: home };

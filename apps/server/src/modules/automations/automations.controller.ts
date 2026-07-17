@@ -53,7 +53,11 @@ export class AutomationsController {
   @Post(":automationId/run")
   @HttpCode(200)
   async run(@Req() request: any, @Param("automationId") automationId: string, @Body() body: Record<string, unknown> = {}) {
-    return runAutomationForPrincipal({ ...body, automationId }, requestPrincipal(request));
+    const principal = requestPrincipal(request);
+    return runAutomationForPrincipal({ ...body, automationId }, principal, process.env, {
+      connectorStatusProvider: (provider: string, actualEnv: NodeJS.ProcessEnv, options: any = {}) =>
+        connectorAuthStatus(provider, actualEnv, options),
+    });
   }
 
   @Delete(":automationId")

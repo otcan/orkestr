@@ -434,3 +434,35 @@ test("Gmail jobs poll supports host-native gog collection", async () => {
   assert.doesNotMatch(messages[0].text, /https:\/\/boards\.example\/gogco\/platform/);
   assert.doesNotMatch(messages[0].text, /utm_source/);
 });
+
+test("Gmail jobs poll does not hide revoked OAuth behind host-native fallback", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-jobs-revoked-oauth-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_JOBS_GOG_COMMAND: path.join(home, "missing-gog"),
+  };
+  await writeConnectorConfig("gmail", {
+    clientId: "client-id",
+    clientSecret: "client-secret",
+    redirectUri: "http://localhost/callback",
+  }, env);
+  await exchangeGmailCode("code-123", env, async () => jsonResponse({
+    access_token: "jobs-access-stale",
+    refresh_token: "jobs-refresh-revoked",
+    expires_in: 3600,
+  }));
+  let calls = 0;
+
+  await assert.rejects(
+    () => runGmailJobsPoll({ maxResults: 1 }, env, async (url) => {
+      calls += 1;
+      if (String(url) === "https://oauth2.googleapis.com/token") {
+        return jsonResponse({ error: "invalid_grant", error_description: "Token has been expired or revoked." }, false, 400);
+      }
+      return jsonResponse({ error: { status: "UNAUTHENTICATED", message: "Invalid Credentials" } }, false, 401);
+    }),
+    /expired or revoked/,
+  );
+
+  assert.equal(calls, 2);
+});

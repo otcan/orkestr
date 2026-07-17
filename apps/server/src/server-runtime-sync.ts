@@ -9,6 +9,7 @@ import {
 import { markDueTimers } from "../../../packages/core/src/timers.js";
 import { runDueGmailNotifications } from "../../../packages/core/src/gmail-notifications.js";
 import { runDueGmailJobsAutomation } from "../../../packages/connectors/src/gmail-jobs-queue.js";
+import { connectorAuthStatus } from "../../../packages/connectors/src/connector-auth.js";
 import { recoverStaleCodexAppServerTurns } from "../../../packages/core/src/codex-app-server.js";
 import { deployDrainActiveSync } from "../../../packages/core/src/deploy-drain.js";
 import { deliverWhatsAppReplies, syncWhatsAppTypingIndicators } from "../../../packages/connectors/src/whatsapp.js";
@@ -100,7 +101,10 @@ export async function runTimerLoop(
   syncImpl: (options?: { forceWhatsapp?: boolean; recoveryCause?: string }) => Promise<any> =
     (options = {}) => syncRuntimeAndDeliverWhatsApp(env, options),
 ) {
-  const dueTimers = await markDueTimers(env);
+  const dueTimers = await markDueTimers(env, new Date(), {
+    connectorStatusProvider: (provider: string, actualEnv: NodeJS.ProcessEnv, options: any = {}) =>
+      connectorAuthStatus(provider, actualEnv, options),
+  });
   const gmailNotificationRuns = await runDueGmailNotifications(env);
   const jobsRuns = await runDueGmailJobsAutomation(env);
   const drained = await drainAllPendingThreadInputs(env);

@@ -78,9 +78,26 @@ function oauthConnectorSetupStatus(auth = {}, label = "", summaries = {}) {
     ...(Array.isArray(auth.capabilities) ? { capabilities: auth.capabilities } : {}),
     ...(Array.isArray(auth.capabilityLabels) ? { capabilityLabels: auth.capabilityLabels } : {}),
     ...(Array.isArray(auth.grantedScopes) ? { grantedScopes: auth.grantedScopes } : {}),
+    ...(auth.reason ? { reason: auth.reason } : {}),
+    ...(auth.nextAction ? { nextAction: auth.nextAction } : {}),
+    ...(auth.retryable === true ? { retryable: true } : {}),
   };
   if (auth.connected || auth.state === "connected") {
     return status(auth.provider, label || parent.label || auth.provider, "connected", summaries.connected || `User ${label || auth.provider} OAuth token is stored locally.`, safeAuthDetails);
+  }
+  if (auth.state === "reauth_required") {
+    return status(auth.provider, label || parent.label || auth.provider, "reauth_required", summaries.reauthRequired || `${label || auth.provider} needs to be reconnected.`, {
+      ...safeAuthDetails,
+      error: auth.error || "",
+      updatedAt: auth.updatedAt || null,
+    });
+  }
+  if (auth.state === "degraded") {
+    return status(auth.provider, label || parent.label || auth.provider, "degraded", summaries.degraded || `${label || auth.provider} is temporarily unavailable.`, {
+      ...safeAuthDetails,
+      error: auth.error || "",
+      updatedAt: auth.updatedAt || null,
+    });
   }
   if (auth.state === "broken" || auth.error) {
     return status(auth.provider, label || parent.label || auth.provider, "broken", summaries.broken || `${label || auth.provider} OAuth failed. Restart sign-in after fixing the parent app config.`, {
@@ -148,7 +165,7 @@ async function overlayConnectorStatus(id, overlay) {
   );
 }
 
-export async function getConnectorStatuses({ env = process.env, home = os.homedir(), principal = null } = {}) {
+export async function getConnectorStatuses({ env = process.env, home = os.homedir(), principal = null, validateGmail = false } = {}) {
   const paths = dataPaths(env);
   const scopedPaths = await connectorScopePaths(env, { principal });
   const [openaiConfig, whatsappConfig] = await Promise.all([
@@ -183,7 +200,7 @@ export async function getConnectorStatuses({ env = process.env, home = os.homedi
   const whatsapp = await getWhatsAppStatus(env);
   const parentWhatsApp = parentConnectorAppStatus({ provider: "whatsapp", config: whatsappConfig, env, runtimeStatus: whatsapp });
   const [gmailAuth, outlookAuth, jiraAuth, shopifyAuth] = await Promise.all([
-    connectorAuthStatus("gmail", env, { principal }),
+    connectorAuthStatus("gmail", env, { principal, validate: validateGmail === true }),
     connectorAuthStatus("outlook", env, { principal }),
     connectorAuthStatus("jira", env, { principal }),
     connectorAuthStatus("shopify", env, { principal }),
@@ -282,6 +299,8 @@ export async function getConnectorStatuses({ env = process.env, home = os.homedi
       ? status("gmail", "Gmail", "partial", "Gmail browser profile exists. OAuth can be added from chat after the parent app is configured.", { parentConnector: gmailAuth.parentConnector })
       : oauthConnectorSetupStatus(gmailAuth, "Gmail", {
           connected: tenantScoped ? "Instance Gmail OAuth token is stored locally." : "User Gmail OAuth token is stored locally.",
+          reauthRequired: "Gmail needs to be reconnected before Gmail automations can run.",
+          degraded: "Gmail is temporarily unavailable. Orkestr will retry without discarding the stored connection.",
           broken: "Gmail OAuth failed. Restart Gmail sign-in from chat after fixing the parent app config.",
           pending: "Gmail sign-in is in progress. Finish the Google authorization link from chat.",
           ready: tenantScoped ? "Parent Gmail app is configured. Connect Gmail for this instance from chat." : "Parent Gmail app is configured. Connect this user's Gmail from chat.",

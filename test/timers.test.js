@@ -180,6 +180,78 @@ test("thread timers queue input on the target thread", async () => {
   assert.equal(messages[0].text, "Run thread timer");
 });
 
+test("Gmail timers block before prompt execution and dedupe reconnect notices", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-gmail-timer-auth-block-"));
+  const env = { ORKESTR_HOME: home, ORKESTR_TIMER_AUTH_NOTICE_COOLDOWN_MS: "86400000" };
+  await createThread({
+    id: "firat-jobs",
+    name: "Firat Jobs",
+    ownerUserId: "firat",
+    binding: { connector: "whatsapp", chatId: "firat-chat", outboundAccountId: "orkestr" },
+  }, env);
+  await createTimer({
+    label: "Firat jobs morning",
+    ownerUserId: "firat",
+    threadId: "firat-jobs",
+    prompt: "Run Gmail jobs prompt",
+    requiredConnector: "gmail",
+    cadence: "interval",
+    every: "1h",
+  }, env);
+  await createTimer({
+    label: "Firat jobs noon",
+    ownerUserId: "firat",
+    threadId: "firat-jobs",
+    prompt: "Run Gmail jobs prompt again",
+    requiredConnector: "gmail",
+    cadence: "interval",
+    every: "1h",
+  }, env);
+  const timers = await listTimers(env);
+  timers.forEach((timer) => { timer.nextRunAt = "2020-01-01T00:00:00.000Z"; });
+  await fs.writeFile(path.join(home, "timers.json"), `${JSON.stringify(timers, null, 2)}\n`);
+  let statusCalls = 0;
+  const now = new Date("2026-05-15T10:00:00.000Z");
+
+  const due = await markDueTimers(env, now, {
+    connectorStatusProvider: async (_connector, _env, options = {}) => {
+      statusCalls += 1;
+      assert.equal(options.validate, true);
+      return {
+        ok: true,
+        state: "reauth_required",
+        connected: false,
+        account: "firat@example.com",
+        reason: "gmail_reauthorization_required",
+      };
+    },
+  });
+  const after = await listTimers(env);
+  const messages = await listThreadMessages("firat-jobs", env);
+  const doctor = await doctorTimers(env, now);
+
+  assert.equal(due.length, 0);
+  assert.equal(statusCalls, 2);
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].role, "assistant");
+  assert.equal(messages[0].source, "timer_connector_health");
+  assert.equal(messages[0].phase, "signal");
+  assert.match(messages[0].text, /Gmail access for firat@example.com needs to be reconnected/);
+  assert.equal(after.every((timer) => timer.lastError === "gmail_reauth_required"), true);
+  assert.equal(after.every((timer) => timer.blockedReason === "blocked_auth"), true);
+  assert.equal(after.every((timer) => timer.blockedConnector === "gmail"), true);
+  assert.equal(after.every((timer) => timer.connectorState === "reauth_required"), true);
+  assert.equal(after.every((timer) => timer.nextRunAt === "2026-05-15T11:00:00.000Z"), true);
+  assert.equal(doctor.issues.filter((issue) => issue.code === "timer_blocked_auth").length, 2);
+
+  await markDueTimers(env, new Date("2026-05-15T10:01:00.000Z"), {
+    connectorStatusProvider: async () => {
+      throw new Error("blocked timer should not be retried before nextRunAt");
+    },
+  });
+  assert.equal((await listThreadMessages("firat-jobs", env)).length, 1);
+});
+
 test("thread timer prompts default to editable files in the thread workspace", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-timer-prompt-file-"));
   const env = { ORKESTR_HOME: home };

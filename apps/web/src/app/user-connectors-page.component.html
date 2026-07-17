@@ -86,7 +86,7 @@
           <p>{{ connector.summary || connectorSummary(connector.id) }}</p>
         }
 
-        @if (connector.id === "gmail" && connectorConnected(connector)) {
+        @if (connector.id === "gmail" && (connectorConnected(connector) || connectedAccount(connector) || connectedCapabilityLabels(connector).length)) {
           <dl class="connector-details">
             <div>
               <dt>Google account</dt>
@@ -99,26 +99,22 @@
               </div>
             }
           </dl>
-          <button class="secondary danger-soft" type="button" (click)="disconnectGmail()" [disabled]="actionDisabled('gmail')">
-            {{ actionBusy === "gmail-disconnect" ? "Deleting" : "Delete Gmail auth" }}
-          </button>
+          @if (connectorConnected(connector)) {
+            <button class="secondary danger-soft" type="button" (click)="disconnectGmail()" [disabled]="actionDisabled('gmail')">
+              {{ actionBusy === "gmail-disconnect" ? "Deleting" : "Delete Gmail auth" }}
+            </button>
+          }
         }
 
         @if (connector.id === "gmail" && !connectorConnected(connector)) {
           @if (loginOnly()) {
             <button type="button" (click)="startGmail({ autoRedirect: true })" [disabled]="actionDisabled('gmail')">
-              {{ actionBusy === "gmail" ? "Opening" : "Open Gmail Sign-in" }}
+              {{ actionBusy === "gmail" ? "Opening" : connectorNeedsReconnect(connector) ? "Reconnect Gmail" : "Open Gmail Sign-in" }}
             </button>
           } @else {
-            <form class="connector-action" (submit)="startGmail(); $event.preventDefault()">
-              <label>
-                <span>Gmail account</span>
-                <input name="user-gmail-account" [(ngModel)]="gmailAccount" placeholder="name@example.com" autocomplete="email" />
-              </label>
-              <button type="submit" [disabled]="actionDisabled('gmail')">
-                {{ actionBusy === "gmail" ? "Starting" : "Connect Gmail" }}
-              </button>
-            </form>
+            <button type="button" (click)="startGmail()" [disabled]="actionDisabled('gmail')">
+              {{ actionBusy === "gmail" ? "Starting" : connectorNeedsReconnect(connector) ? "Reconnect Gmail" : "Connect Gmail" }}
+            </button>
           }
           @if (gmailAuth?.authorizeUrl) {
             <a class="button-link" [href]="gmailAuth?.authorizeUrl" target="_blank" rel="noreferrer">Open Gmail sign-in</a>

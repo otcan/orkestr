@@ -184,8 +184,14 @@ export async function doctorAutomationsForPrincipal(principal, env = process.env
     }
 
     if (clean(automation.lastError)) {
-      issues.push(automationIssue(automation, "warning", "last_automation_error", "Automation recorded a previous run error.", {
+      const blockedAuth = clean(automation.blockedReason) === "blocked_auth";
+      issues.push(automationIssue(automation, "warning", blockedAuth ? "automation_blocked_auth" : "last_automation_error", blockedAuth
+        ? "Automation is waiting for its required connector to be reauthenticated."
+        : "Automation recorded a previous run error.", {
         lastError: clean(automation.lastError),
+        blockedReason: clean(automation.blockedReason),
+        connector: clean(automation.blockedConnector),
+        connectorState: clean(automation.connectorState),
       }));
     }
   }

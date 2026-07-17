@@ -22,7 +22,6 @@ export class UserConnectorsPageComponent implements OnDestroy, OnInit {
   actionBusy = "";
   error = "";
   notice = "";
-  gmailAccount = "";
   outlookAccount = "";
   setupStatus: SetupStatus | null = null;
   currentUser: OrkestrUser | null = null;
@@ -30,7 +29,6 @@ export class UserConnectorsPageComponent implements OnDestroy, OnInit {
   outlookAuth: OutlookOAuthStartResponse | null = null;
 
   ngOnInit(): void {
-    this.applyRouteHints();
     void this.load();
   }
 
@@ -106,7 +104,7 @@ export class UserConnectorsPageComponent implements OnDestroy, OnInit {
   connectorSummary(id: string): string {
     const summaries: Record<string, string> = {
       whatsapp: "Messages arrive through your assigned chat.",
-      gmail: "Connect the Gmail account assigned to this user.",
+      gmail: "Connect a Gmail account for this user.",
       outlook: "Connect the Outlook account assigned to this user.",
       jira: "Connect Jira from chat when the parent Atlassian app is configured.",
       shopify: "Connect a Shopify store from chat when the parent app is configured.",
@@ -123,13 +121,17 @@ export class UserConnectorsPageComponent implements OnDestroy, OnInit {
   connectorTone(connector: ConnectorStatus): string {
     const state = String(connector.state || "").toLowerCase();
     if (state === "connected") return "live";
-    if (state === "broken" || state === "error") return "bad";
-    if (state === "partial") return "ready";
+    if (state === "broken" || state === "error" || state === "reauth_required") return "bad";
+    if (state === "partial" || state === "degraded") return "ready";
     return "";
   }
 
   connectorConnected(connector: ConnectorStatus): boolean {
     return String(connector.state || "").toLowerCase() === "connected";
+  }
+
+  connectorNeedsReconnect(connector: ConnectorStatus): boolean {
+    return String(connector.state || "").toLowerCase() === "reauth_required";
   }
 
   connectedAccount(connector: ConnectorStatus): string {
@@ -145,7 +147,7 @@ export class UserConnectorsPageComponent implements OnDestroy, OnInit {
     this.actionBusy = "gmail";
     this.renderNow();
     try {
-      this.gmailAuth = await firstValueFrom(this.api.startGmailOAuth(this.gmailAccount));
+      this.gmailAuth = await firstValueFrom(this.api.startGmailOAuth());
       this.notice = this.gmailAuth.authorizeUrl ? "Gmail sign-in ready." : "Gmail sign-in started.";
       this.error = "";
       if (options.autoRedirect && this.gmailAuth.authorizeUrl) {
@@ -169,7 +171,6 @@ export class UserConnectorsPageComponent implements OnDestroy, OnInit {
     try {
       await firstValueFrom(this.api.disconnectGmailAuth());
       this.gmailAuth = null;
-      this.gmailAccount = "";
       this.notice = "Gmail auth deleted.";
       this.error = "";
       await this.load(false);
@@ -277,7 +278,7 @@ export class UserConnectorsPageComponent implements OnDestroy, OnInit {
     if (!this.setupStatus) return;
     if (this.autoStartedRoute === active) return;
     if (this.actionBusy || this.autoLoginDisabled()) return;
-    if (String(this.connectorStatus("gmail").state || "").toLowerCase() === "connected") return;
+    if (["connected", "degraded"].includes(String(this.connectorStatus("gmail").state || "").toLowerCase())) return;
     this.autoStartedRoute = active;
     void this.startGmail({ autoRedirect: true });
   }
@@ -285,11 +286,6 @@ export class UserConnectorsPageComponent implements OnDestroy, OnInit {
   private autoLoginDisabled(): boolean {
     const params = new URLSearchParams(globalThis.location?.search || "");
     return params.get("manual") === "1" || params.get("auto") === "0";
-  }
-
-  private applyRouteHints(): void {
-    const account = this.routeQueryParam("account") || this.routeQueryParam("email") || this.routeQueryParam("login_hint");
-    if (this.routeConnectorId() === "gmail" && account && !this.gmailAccount) this.gmailAccount = account;
   }
 
   private connectorIntentService(): string {

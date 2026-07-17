@@ -182,7 +182,11 @@ async function runAction(args = {}, context = {}, env = process.env) {
         return { ok: false, error: "invalid_source_items_json", action };
       }
     }
-    result = await runAutomationForPrincipal({ ...automationIdArgsForAction(action, parameters), sourceItems }, principal, env, { thread, fetchImpl });
+    result = await runAutomationForPrincipal({ ...automationIdArgsForAction(action, parameters), sourceItems }, principal, env, {
+      thread,
+      fetchImpl,
+      connectorStatusProvider: context.connectorStatusProvider,
+    });
   } else {
     const googleWorkspaceTool = await runTenantApiAgentGoogleWorkspaceTool(action.handler, parameters, { principal, thread, fetchImpl }, env);
     if (googleWorkspaceTool.handled) result = googleWorkspaceTool.result;
@@ -1740,13 +1744,20 @@ export async function runTenantApiAgentTool(name = "", args = {}, context = {}, 
     const stats = await fs.stat(filePath).catch(() => null);
     return { ok: true, path: filePath, size: stats?.size ?? null };
   }
-  const timerTool = await runTenantApiAgentTimerTool(tool, args, { principal, thread }, env);
+  const connectorStatusProvider = (provider, actualEnv, options = {}) =>
+    connectorAuthStatus(provider, actualEnv, options);
+  const timerTool = await runTenantApiAgentTimerTool(tool, args, { principal, thread, connectorStatusProvider }, env);
   if (timerTool.handled) return timerTool.result;
   if (tool === "orkestr_list_actions" || tool === "orkestr_list_action_registry") {
     return { ok: true, actions: listActionRegistry(args) };
   }
   if (tool === "orkestr_run_action") {
-    return runAction(args, { principal, thread, fetchImpl: context.fetchImpl || fetch }, env);
+    return runAction(args, {
+      principal,
+      thread,
+      fetchImpl: context.fetchImpl || fetch,
+      connectorStatusProvider,
+    }, env);
   }
   if (tool === "orkestr_list_automations") {
     return { ok: true, automations: await listAutomationsForPrincipal(principal, env) };
@@ -1770,7 +1781,11 @@ export async function runTenantApiAgentTool(name = "", args = {}, context = {}, 
         return { ok: false, error: "invalid_source_items_json" };
       }
     }
-    return runAutomationForPrincipal({ ...args, sourceItems }, principal, env, { thread, fetchImpl: context.fetchImpl || fetch });
+    return runAutomationForPrincipal({ ...args, sourceItems }, principal, env, {
+      thread,
+      fetchImpl: context.fetchImpl || fetch,
+      connectorStatusProvider,
+    });
   }
   if (tool === "orkestr_pause_automation") {
     return setAutomationEnabledForPrincipal(args, false, principal, env);

@@ -7,7 +7,8 @@ import { appendEvent } from "../../storage/src/store.js";
 import { assertSanitizedAction } from "./llm-sanitizer.js";
 import { enqueueAgentMessage } from "./messages.js";
 import { principalForUserId, userPrincipal } from "./principal.js";
-import { enqueueThreadInput, getThread, getThreadForPrincipal, listThreads, listThreadsForPrincipal } from "./threads.js";
+import { appendThreadSignal } from "./thread-signals.js";
+import { enqueueThreadInput, getThread, getThreadForPrincipal, listThreadMessages, listThreads, listThreadsForPrincipal } from "./threads.js";
 import { assertResourceAccess, filterResourcesForPrincipal, isAdminPrincipal, policyError } from "./policy.js";
 import { adminUserId, normalizeUserId } from "./users.js";
 
@@ -15,6 +16,7 @@ const hourMs = 60 * 60 * 1000;
 const dayMs = 24 * hourMs;
 const timerDoctorGraceMs = 2 * 60 * 1000;
 const defaultManualRunDedupeMs = 2 * 60 * 1000;
+const defaultAuthNoticeCooldownMs = 24 * hourMs;
 const timerCadences = new Set(["once", "daily", "weekly", "interval"]);
 
 function parseClock(time = "09:00") {
@@ -247,6 +249,86 @@ async function principalForTimerOwner(timer, env = process.env) {
     userPrincipal({ id: ownerUserId, role: "user", source: "timer-owner", displayName: ownerUserId });
 }
 
+function timerRequiredConnector(timer = {}) {
+  return String(timer.requiredConnector || timer.connector || timer.requiresConnector || "").trim().toLowerCase();
+}
+
+function authNoticeCooldownMs(env = process.env) {
+  const parsed = Number(env.ORKESTR_TIMER_AUTH_NOTICE_COOLDOWN_MS || "");
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : defaultAuthNoticeCooldownMs;
+}
+
+function authNoticeDue(timer = {}, now = new Date(), env = process.env) {
+  const lastNoticeMs = Date.parse(String(timer.lastAuthNoticeAt || ""));
+  return !Number.isFinite(lastNoticeMs) || now.getTime() - lastNoticeMs >= authNoticeCooldownMs(env);
+}
+
+function nextBlockedAuthRunAt(timer = {}, now = new Date(), env = process.env) {
+  if (String(timer.cadence || "").toLowerCase() !== "once") return nextRunAt(timer, now);
+  return new Date(now.getTime() + authNoticeCooldownMs(env)).toISOString();
+}
+
+async function appendTimerAuthNotice(timer, connectorStatus, env = process.env, now = new Date()) {
+  if (String(timer.targetType || "").toLowerCase() !== "thread" || !authNoticeDue(timer, now, env)) return null;
+  const thread = await getThread(timer.target, env).catch(() => null);
+  if (!thread) return null;
+  const cutoffMs = now.getTime() - authNoticeCooldownMs(env);
+  const recentNotice = (await listThreadMessages(thread.id, env).catch(() => [])).some((message) =>
+    message.source === "timer_connector_health" &&
+    message.connector === "gmail" &&
+    Date.parse(String(message.createdAt || message.updatedAt || "")) >= cutoffMs
+  );
+  if (recentNotice) return null;
+  const account = String(connectorStatus.account || "").trim();
+  const accountText = account ? ` for ${account}` : "";
+  return appendThreadSignal(thread.id, whatsappTimerThreadDefaults(thread, {
+    source: "timer_connector_health",
+    connector: "gmail",
+    signalKind: "connector_auth",
+    signalMode: "notify_passively",
+    originSurface: "timer",
+    originTransport: "timer-connector-auth-notify",
+    ownerUserId: timer.ownerUserId,
+    externalId: `timer-auth:${timer.id}:${connectorStatus.reason || connectorStatus.state || "blocked"}`,
+    text: `Gmail access${accountText} needs to be reconnected before this timer can run. In this chat, ask: "Connect Google".`,
+  }), env).catch(() => null);
+}
+
+async function assertTimerRequiredConnector(timer, env = process.env, principal = null, options = {}) {
+  const connector = timerRequiredConnector(timer);
+  if (!connector || connector !== "gmail") return null;
+  const ownerPrincipal = principal && !isAdminPrincipal(principal) ? principal : await principalForTimerOwner(timer, env);
+  const statusProvider = options.connectorStatusProvider;
+  if (typeof statusProvider !== "function") {
+    const error = new Error("gmail_status_unavailable");
+    error.statusCode = 503;
+    error.blockedReason = "blocked_auth";
+    error.blockedConnector = connector;
+    error.connectorState = "unavailable";
+    throw error;
+  }
+  const status = await statusProvider(connector, env, {
+    principal: ownerPrincipal,
+    validate: true,
+  });
+  if (status.connected) return status;
+  const now = new Date();
+  const notice = status.state === "reauth_required"
+    ? await appendTimerAuthNotice(timer, status, env, now)
+    : null;
+  const error = new Error(status.state === "reauth_required" ? "gmail_reauth_required" : `gmail_${status.state || "not_connected"}`);
+  error.statusCode = 409;
+  error.blockedReason = "blocked_auth";
+  error.blockedConnector = connector;
+  error.connectorState = status.state || "not_connected";
+  error.connectorStatus = status;
+  if (notice) {
+    error.authNoticeAt = now.toISOString();
+    error.authNoticeMessageId = notice.id;
+  }
+  throw error;
+}
+
 async function assertTimerExecutionSanitized(timer, source, env = process.env, principal = null) {
   if (timerOwnerIsAdmin(timer, env)) return null;
   const ownerPrincipal = principal && !isAdminPrincipal(principal) ? principal : await principalForTimerOwner(timer, env);
@@ -461,10 +543,16 @@ export async function doctorTimers(env = process.env, now = new Date(), options 
       }));
     }
     if (timer.lastError) {
-      issues.push(timerIssue(timer, "warning", "last_timer_error", "Timer recorded a previous delivery error.", {
+      const blockedAuth = String(timer.blockedReason || "").trim() === "blocked_auth";
+      issues.push(timerIssue(timer, "warning", blockedAuth ? "timer_blocked_auth" : "last_timer_error", blockedAuth
+        ? "Timer is waiting for its required connector to be reauthenticated."
+        : "Timer recorded a previous delivery error.", {
         lastError: timer.lastError,
         lastErrorAt: timer.lastErrorAt || null,
         failureCount: Number(timer.failureCount || 0) || 0,
+        blockedReason: timer.blockedReason || null,
+        connector: timer.blockedConnector || null,
+        connectorState: timer.connectorState || null,
       }));
     }
   }
@@ -585,7 +673,8 @@ export async function createTimerForPrincipal(input, principal, env = process.en
   }, env);
 }
 
-async function enqueueTimerMessage(timer, source, env, principal = null) {
+async function enqueueTimerMessage(timer, source, env, principal = null, options = {}) {
+  await assertTimerRequiredConnector(timer, env, principal, options);
   await assertTimerExecutionSanitized(timer, source, env, principal);
   const input = {
     source,
@@ -775,7 +864,33 @@ export async function runTimerNow(id, env = process.env, now = new Date(), optio
       env,
     );
   }
-  const message = await enqueueTimerMessage(timer, "timer_manual_run", env, options.principal || null);
+  let message;
+  try {
+    message = await enqueueTimerMessage(timer, "timer_manual_run", env, options.principal || null, options);
+  } catch (error) {
+    timer.lastError = error?.message || String(error);
+    timer.lastErrorAt = now.toISOString();
+    timer.failureCount = Number(timer.failureCount || 0) + 1;
+    timer.blockedReason = error?.blockedReason || null;
+    timer.blockedConnector = error?.blockedConnector || null;
+    timer.connectorState = error?.connectorState || null;
+    if (error?.authNoticeAt) timer.lastAuthNoticeAt = error.authNoticeAt;
+    if (error?.authNoticeMessageId) timer.lastAuthNoticeMessageId = error.authNoticeMessageId;
+    await timerRepository.save(timers);
+    await appendEvent({
+      ts: now.toISOString(),
+      type: "timer_manual_run_failed",
+      timerId: timer.id,
+      ownerUserId: timer.ownerUserId,
+      target: timer.target,
+      label: timer.label,
+      error: timer.lastError,
+      blockedReason: timer.blockedReason,
+      blockedConnector: timer.blockedConnector,
+      connectorState: timer.connectorState,
+    }, env).catch(() => {});
+    throw error;
+  }
   timer.lastRunAt = now.toISOString();
   timer.lastManualRunAt = now.toISOString();
   timer.lastManualRunMessageId = message.id;
@@ -783,6 +898,11 @@ export async function runTimerNow(id, env = process.env, now = new Date(), optio
   if (timer.cadence === "once") timer.enabled = false;
   delete timer.lastError;
   delete timer.lastErrorAt;
+  delete timer.blockedReason;
+  delete timer.blockedConnector;
+  delete timer.connectorState;
+  delete timer.lastAuthNoticeAt;
+  delete timer.lastAuthNoticeMessageId;
   await timerRepository.save(timers);
   return appendEvent(
     {
@@ -799,7 +919,7 @@ export async function runTimerNow(id, env = process.env, now = new Date(), optio
   );
 }
 
-export async function runTimerNowForPrincipal(id, principal, env = process.env, now = new Date()) {
+export async function runTimerNowForPrincipal(id, principal, env = process.env, now = new Date(), options = {}) {
   const timer = (await listTimers(env)).find((entry) => entry.id === id);
   if (!timer) {
     const error = new Error("timer_not_found");
@@ -807,10 +927,10 @@ export async function runTimerNowForPrincipal(id, principal, env = process.env, 
     throw error;
   }
   assertResourceAccess(principal, timer, "timer_run", env);
-  return runTimerNow(id, env, now, { principal });
+  return runTimerNow(id, env, now, { ...options, principal });
 }
 
-export async function markDueTimers(env = process.env, now = new Date()) {
+export async function markDueTimers(env = process.env, now = new Date(), options = {}) {
   const timerRepository = createTimerRepository(env);
   const timers = await listTimers(env);
   let changed = false;
@@ -822,7 +942,7 @@ export async function markDueTimers(env = process.env, now = new Date()) {
       continue;
     }
     try {
-      const message = await enqueueTimerMessage(timer, "timer_due", env);
+      const message = await enqueueTimerMessage(timer, "timer_due", env, null, options);
       due.push(timer);
       changed = true;
       next.push({
@@ -832,6 +952,11 @@ export async function markDueTimers(env = process.env, now = new Date()) {
         nextRunAt: timer.cadence === "once" ? null : nextRunAt(timer, now),
         lastError: null,
         lastErrorAt: null,
+        blockedReason: null,
+        blockedConnector: null,
+        connectorState: null,
+        lastAuthNoticeAt: null,
+        lastAuthNoticeMessageId: null,
       });
       await appendEvent(
         {
@@ -850,9 +975,17 @@ export async function markDueTimers(env = process.env, now = new Date()) {
       changed = true;
       next.push({
         ...timer,
+        nextRunAt: error?.blockedReason === "blocked_auth"
+          ? nextBlockedAuthRunAt(timer, now, env)
+          : timer.nextRunAt,
         lastError: error?.message || String(error),
         lastErrorAt: now.toISOString(),
         failureCount: Number(timer.failureCount || 0) + 1,
+        blockedReason: error?.blockedReason || null,
+        blockedConnector: error?.blockedConnector || null,
+        connectorState: error?.connectorState || null,
+        lastAuthNoticeAt: error?.authNoticeAt || timer.lastAuthNoticeAt || null,
+        lastAuthNoticeMessageId: error?.authNoticeMessageId || timer.lastAuthNoticeMessageId || null,
       });
       await appendEvent(
         {
@@ -864,6 +997,9 @@ export async function markDueTimers(env = process.env, now = new Date()) {
           targetType: timer.targetType || "agent",
           label: timer.label,
           error: error?.message || String(error),
+          blockedReason: error?.blockedReason || null,
+          blockedConnector: error?.blockedConnector || null,
+          connectorState: error?.connectorState || null,
         },
         env,
       ).catch(() => {});

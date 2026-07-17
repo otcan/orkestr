@@ -635,8 +635,11 @@ export class SystemController {
 
   @Get("setup/status")
   async setupStatus(@Req() request: any) {
+    const validateConnectors = Boolean(
+      request?.orkestrSecuritySession || ["cli", "broker_proxy"].includes(String(request?.orkestrMachineAuth || "")),
+    );
     const status = setupStatusForRequest(request, {
-      ...(await getSetupStatus({ principal: requestPrincipal(request) })),
+      ...(await getSetupStatus({ principal: requestPrincipal(request), validateConnectors })),
       config: await publicEffectiveConfig(),
       whatsappDefaults: {
         chatNamePrefix: configuredWhatsAppChatNamePrefix(),

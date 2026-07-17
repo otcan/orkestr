@@ -68,6 +68,10 @@ function timerAutomation(timer = {}) {
     updatedAt: clean(timer.updatedAt),
     lastRunAt: clean(timer.lastRunAt),
     lastError: clean(timer.lastError),
+    lastErrorAt: clean(timer.lastErrorAt),
+    blockedReason: clean(timer.blockedReason),
+    blockedConnector: clean(timer.blockedConnector),
+    connectorState: clean(timer.connectorState),
   };
 }
 
@@ -321,7 +325,13 @@ export async function deleteAutomationForPrincipal(args = {}, principal, env = p
 export async function runAutomationForPrincipal(args = {}, principal, env = process.env, context = {}) {
   const parsed = splitAutomationId(args.automationId || args.id, args.type || args.automationType);
   if (parsed.type === "timer") {
-    return { ok: true, event: await runTimerNowForPrincipal(parsed.id, principal, env), automationId: `timer:${parsed.id}` };
+    return {
+      ok: true,
+      event: await runTimerNowForPrincipal(parsed.id, principal, env, new Date(), {
+        connectorStatusProvider: context.connectorStatusProvider,
+      }),
+      automationId: `timer:${parsed.id}`,
+    };
   }
   if (parsed.type === "gmail_notification") {
     return runGmailNotificationNowForPrincipal(parsed.id, principal, env, context.fetchImpl || fetch);

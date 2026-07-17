@@ -1653,11 +1653,12 @@ test("web shell exposes a user connector management page", async () => {
   assert.match(connectorsComponent, /startGmail\(options: \{ autoRedirect\?: boolean \} = \{\}\)/);
   assert.match(connectorsComponent, /disconnectGmail\(\): Promise<void>/);
   assert.match(connectorsComponent, /connectorConnected\(connector: ConnectorStatus\): boolean/);
+  assert.match(connectorsComponent, /connectorNeedsReconnect\(connector: ConnectorStatus\): boolean/);
   assert.match(connectorsComponent, /connectedAccount\(connector: ConnectorStatus\): string/);
   assert.match(connectorsComponent, /connectedCapabilityLabels\(connector: ConnectorStatus\): string\[\]/);
   assert.match(connectorsComponent, /globalThis\.location\.href = this\.gmailAuth\.authorizeUrl/);
   assert.match(connectorsComponent, /this\.connectorStatus\("gmail"\)\.state/);
-  assert.match(connectorsComponent, /=== "connected"\) return/);
+  assert.match(connectorsComponent, /\["connected", "degraded"\]\.includes/);
   assert.match(connectorsComponent, /connectorIntentActive\(\): boolean/);
   assert.match(connectorsComponent, /connectorIntentMethod\(\): string/);
   assert.match(connectorsComponent, /connectorIntentTool\(\): string/);
@@ -1669,7 +1670,7 @@ test("web shell exposes a user connector management page", async () => {
   assert.match(connectorsComponent, /connectorIntentThreadLabel\(\): string/);
   assert.match(connectorsComponent, /routeQueryParam\(name: string\): string/);
   assert.match(connectorsComponent, /void this\.load\(false\)/);
-  assert.match(connectorsComponent, /this\.api\.startGmailOAuth\(this\.gmailAccount\)/);
+  assert.match(connectorsComponent, /this\.api\.startGmailOAuth\(\)/);
   assert.match(connectorsComponent, /this\.api\.disconnectGmailAuth\(\)/);
   assert.match(connectorsComponent, /this\.api\.startOutlookOAuth\(this\.outlookAccount\)/);
   assert.match(connectorsComponent, /private readonly connectorOrder = \["whatsapp", "gmail", "outlook", "jira", "shopify", "linkedin", "browsers"\]/);
@@ -1696,7 +1697,8 @@ test("web shell exposes a user connector management page", async () => {
   assert.match(connectorsTemplate, /Delete Gmail auth/);
   assert.match(connectorsTemplate, /disconnectGmail\(\)/);
   assert.match(connectorsTemplate, /class="connector-details"/);
-  assert.match(connectorsTemplate, /name="user-gmail-account"/);
+  assert.doesNotMatch(connectorsTemplate, /name="user-gmail-account"/);
+  assert.match(connectorsTemplate, /Reconnect Gmail/);
   assert.match(connectorsTemplate, /name="user-outlook-account"/);
   assert.match(connectorsTemplate, /Open Gmail sign-in/);
   assert.match(connectorsTemplate, /Open Microsoft sign-in/);

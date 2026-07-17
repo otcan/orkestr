@@ -1,6 +1,7 @@
 import { Body, Controller, Delete, Get, HttpCode, Param, Patch, Post, Req } from "@nestjs/common";
 import { createTimerForPrincipal, deleteTimerForPrincipal, doctorTimersForPrincipal, listTimersForPrincipal, runTimerNowForPrincipal, updateTimerForPrincipal } from "../../../../../packages/core/src/timers.js";
 import { requestPrincipal } from "../../../../../packages/core/src/principal.js";
+import { connectorAuthStatus } from "../../../../../packages/connectors/src/connector-auth.js";
 
 @Controller("api/timers")
 export class TimersController {
@@ -44,6 +45,12 @@ export class TimersController {
   @Post(":timerId/run")
   @HttpCode(200)
   async run(@Req() request: any, @Param("timerId") timerId: string) {
-    return { event: await runTimerNowForPrincipal(timerId, requestPrincipal(request)) };
+    const principal = requestPrincipal(request);
+    return {
+      event: await runTimerNowForPrincipal(timerId, principal, process.env, new Date(), {
+        connectorStatusProvider: (provider: string, actualEnv: NodeJS.ProcessEnv, options: any = {}) =>
+          connectorAuthStatus(provider, actualEnv, options),
+      }),
+    };
   }
 }
