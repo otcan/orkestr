@@ -104,10 +104,11 @@ function adminOwnedThread(thread = {}, env = process.env) {
 
 function adminAttachmentAllowAnyPath(thread = {}, env = process.env) {
   if (!adminOwnedThread(thread, env)) return false;
-  return truthyEnv(
+  const configured = pickString(
     env.ORKESTR_ADMIN_THREAD_ATTACHMENT_ALLOW_ANY_PATH ||
       env.ORKESTR_THREAD_ATTACHMENT_ALLOW_ANY_PATH,
   );
+  return configured ? truthyEnv(configured) : true;
 }
 
 function threadAttachmentRoots(thread = {}, env = process.env) {

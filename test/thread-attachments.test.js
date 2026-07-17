@@ -47,7 +47,7 @@ test("thread attachment policy denies secrets and arbitrary paths by default", a
   await fs.writeFile(path.join(workspace, "public.txt"), "public", "utf8");
   await fs.mkdir(paths.secrets, { recursive: true });
   await fs.writeFile(path.join(paths.secrets, "token.txt"), "secret", "utf8");
-  const thread = { id: "policy-thread", cwd: workspace };
+  const thread = { id: "policy-thread", cwd: workspace, ownerUserId: "alice" };
 
   assert.equal(classifyThreadAttachmentPath(path.join(workspace, "public.txt"), { thread, env }).ok, true);
   assert.equal(classifyThreadAttachmentPath(path.join(paths.secrets, "token.txt"), { thread, env }).ok, false);
@@ -89,12 +89,11 @@ test("thread attachment policy allows temp artifacts for admin-owned threads onl
   assert.equal(resolved.attachments[0].mimetype, "image/png");
 });
 
-test("thread attachment policy can bypass ordinary path allowlist for admin threads", async () => {
+test("thread attachment policy allows any ordinary path for admin threads by default", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-attachment-admin-any-"));
   const env = {
     ORKESTR_HOME: home,
     ORKESTR_ADMIN_USER_ID: "admin",
-    ORKESTR_ADMIN_THREAD_ATTACHMENT_ALLOW_ANY_PATH: "1",
   };
   const paths = dataPaths(env);
   const arbitraryDir = path.join(home, "operator-data", "amazon-fba-prep");
@@ -104,12 +103,19 @@ test("thread attachment policy can bypass ordinary path allowlist for admin thre
   await fs.mkdir(paths.secrets, { recursive: true });
   const secretPath = path.join(paths.secrets, "token.txt");
   await fs.writeFile(secretPath, "secret", "utf8");
+  const outsideAllowlistPath = await fs.realpath(process.execPath);
   const adminThread = { id: "admin-any-thread", ownerUserId: "admin" };
   const userThread = { id: "user-any-thread", ownerUserId: "alice" };
 
   assert.equal(classifyThreadAttachmentPath(arbitraryPath, { thread: adminThread, env }).ok, true);
   assert.equal(classifyThreadAttachmentPath(arbitraryPath, { thread: userThread, env }).ok, false);
   assert.equal(classifyThreadAttachmentPath(secretPath, { thread: adminThread, env }).ok, false);
+  assert.equal(classifyThreadAttachmentPath(outsideAllowlistPath, { thread: adminThread, env }).ok, true);
+  assert.equal(classifyThreadAttachmentPath(outsideAllowlistPath, { thread: userThread, env }).ok, false);
+  assert.equal(classifyThreadAttachmentPath(outsideAllowlistPath, {
+    thread: adminThread,
+    env: { ...env, ORKESTR_ADMIN_THREAD_ATTACHMENT_ALLOW_ANY_PATH: "0" },
+  }).ok, false);
 
   const resolved = await resolveThreadAttachments({
     thread: adminThread,

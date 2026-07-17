@@ -11668,8 +11668,8 @@ test("whatsapp delivery sends admin temp screenshots as media attachments", asyn
 
 test("whatsapp delivery reports skipped local attachments in the outgoing text", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-skipped-attachment-"));
-  const env = externalBridgeEnv(home);
-  await createThread({ id: "thread-wa-skipped-attachment", name: "WA Skipped Attachment" }, env);
+  const env = await externalBridgeEnvWithAllowingSanitizer(home);
+  await createThread({ id: "thread-wa-skipped-attachment", ownerUserId: "alice", name: "WA Skipped Attachment" }, env);
   await writeConnectorConfig("whatsapp", {
     bridgeMode: "external",
     bridgeUrl: "http://wa.local",
