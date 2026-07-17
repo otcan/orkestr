@@ -72,6 +72,8 @@ test("release deploy script exposes versioned install, status, and rollback", as
   assert.match(script, /ORKESTR_DEPLOY_BACKUP_KEEP must be an integer from 1 to 3/);
   assert.match(script, /ORKESTR_DEPLOY_RELEASE_KEEP must be an integer from 1 to 3/);
   assert.match(script, /prune-release-directories\.sh/);
+  assert.match(script, /preserve="\$\(codex_app_server_release_cwd\)"/);
+  assert.match(script, /args\+=\(--preserve "\$preserve"\)/);
   assert.match(script, /cleanup_incomplete_release/);
   assert.match(script, /Cleaning failed release staging directory/);
   assert.match(script, /\.orkestr-release-ready/);
@@ -125,6 +127,8 @@ test("release deploy script exposes versioned install, status, and rollback", as
   assert.match(script, /Environment=ORKESTR_CODEX_APP_SERVER_MODE=external/);
   assert.match(script, /\/usr\/local\/bin\/orkestr-codex-app-server/);
   assert.match(script, /ExecStart=\/usr\/local\/bin\/orkestr-codex-app-server/);
+  assert.match(script, /workdir="\$deploy_root"/);
+  assert.match(script, /write_codex_app_server_systemd_service 0/);
   assert.match(script, /codexAppServerTransport/);
   assert.match(script, /appServerTransport/);
   assert.match(script, /deploy_guard_before_restart/);

@@ -74,3 +74,31 @@ test("release retention rejects counts outside the product-wide maximum", async 
     },
   );
 });
+
+test("release retention counts a live runtime release inside the maximum", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-release-retention-live-"));
+  const releasesDir = path.join(root, "releases");
+  const currentLink = path.join(root, "current");
+  await fs.mkdir(releasesDir);
+
+  const liveRuntime = await createRelease(releasesDir, "live-runtime-old", 10);
+  await createRelease(releasesDir, "stale", 20);
+  const recent = await createRelease(releasesDir, "recent", 30);
+  const active = await createRelease(releasesDir, "active", 40);
+  await fs.symlink(active, currentLink);
+
+  await execFileAsync("bash", [
+    "scripts/prune-release-directories.sh",
+    "--releases-dir",
+    releasesDir,
+    "--current-link",
+    currentLink,
+    "--keep",
+    "3",
+    "--preserve",
+    liveRuntime,
+  ]);
+
+  const retained = (await fs.readdir(releasesDir)).sort();
+  assert.deepEqual(retained, ["active", "live-runtime-old", path.basename(recent)]);
+});

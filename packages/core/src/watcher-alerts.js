@@ -104,7 +104,13 @@ async function readAlertStore(env = process.env) {
 
 async function writeAlertStore(store, env = process.env) {
   const next = alertStoreDefaults(store);
-  next.alerts = [...next.alerts]
+  const alertsById = new Map();
+  for (const [index, alert] of [...next.alerts]
+    .sort((left, right) => Date.parse(clean(left.createdAt)) - Date.parse(clean(right.createdAt)))
+    .entries()) {
+    alertsById.set(clean(alert.id) || `anonymous:${index}`, alert);
+  }
+  next.alerts = [...alertsById.values()]
     .sort((left, right) => Date.parse(clean(left.createdAt)) - Date.parse(clean(right.createdAt)))
     .slice(-watcherRetention(env));
   next.updatedAt = nowIso();
@@ -248,17 +254,25 @@ export async function recordWatcherAlert(input = {}, env = process.env) {
     createdAt,
   };
   const store = await readAlertStore(env);
-  const latest = [...store.alerts].reverse().find((item) => clean(item.id) === alert.id);
+  const matchingAlerts = store.alerts.filter((item) => clean(item.id) === alert.id);
+  const latest = matchingAlerts.at(-1);
   const dedupeMs = watcherDedupeWindowMs(env);
-  if (latest && dedupeMs > 0 && Date.now() - Date.parse(clean(latest.createdAt)) <= dedupeMs) {
-    await appendEvent({
-      type: "watcher_alert_deduped",
-      alertId: alert.id,
-      source: alert.source,
-      code: alert.code,
-      threadId: alert.threadId || "",
-    }, env).catch(() => {});
-    return { ok: true, skipped: true, reason: "deduped", alert: latest };
+  const withinDedupeWindow = latest && dedupeMs > 0 && Date.now() - Date.parse(clean(latest.createdAt)) <= dedupeMs;
+  const unresolvedDuplicate = latest && lower(latest.status || "recorded") !== "resolved";
+  if (withinDedupeWindow || unresolvedDuplicate) {
+    if (matchingAlerts.length > 1) {
+      await writeAlertStore(store, env);
+    }
+    if (withinDedupeWindow) {
+      await appendEvent({
+        type: "watcher_alert_deduped",
+        alertId: alert.id,
+        source: alert.source,
+        code: alert.code,
+        threadId: alert.threadId || "",
+      }, env).catch(() => {});
+    }
+    return { ok: true, skipped: true, reason: withinDedupeWindow ? "deduped" : "active_alert", alert: latest };
   }
 
   const thread = await resolveWatcherThread(env);
@@ -280,7 +294,10 @@ export async function recordWatcherAlert(input = {}, env = process.env) {
     watcherMessageId: message?.id || null,
     status: message ? "recorded" : "thread_unavailable",
   };
-  await writeAlertStore({ ...store, alerts: [...store.alerts, recorded] }, env);
+  await writeAlertStore({
+    ...store,
+    alerts: [...store.alerts.filter((item) => clean(item.id) !== recorded.id), recorded],
+  }, env);
   await appendEvent({
     type: "watcher_alert_recorded",
     alertId: recorded.id,
@@ -304,7 +321,7 @@ export async function updateWatcherAlertLifecycle(alertId, action, options = {},
     throw error;
   }
   const store = await readAlertStore(env);
-  const index = store.alerts.findIndex((alert) => clean(alert.id) === id);
+  const index = store.alerts.findLastIndex((alert) => clean(alert.id) === id);
   if (index === -1) {
     const error = new Error("watcher_alert_not_found");
     error.statusCode = 404;

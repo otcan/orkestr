@@ -270,6 +270,73 @@ test("watcher alerts create the configured watcher thread, redact secrets, and d
   assert.doesNotMatch(JSON.stringify(listed), /must-not-render|secret-value/);
 });
 
+test("watcher alerts group unresolved repeats beyond the time window and reopen after resolution", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-watcher-alert-active-"));
+  const runtimeEnv = env(home, {
+    ORKESTR_WATCHER_THREAD_NAME: "test-watcher-active",
+    ORKESTR_WATCHER_DEDUPE_MS: "1",
+  });
+  const input = {
+    source: "test.delivery",
+    code: "stale_untracked_reply",
+    message: "same unresolved delivery anomaly",
+    threadId: "thread-1",
+  };
+
+  const first = await recordWatcherAlert(input, runtimeEnv);
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  const repeated = await recordWatcherAlert(input, runtimeEnv);
+  const grouped = await listWatcherAlerts({ limit: 10 }, runtimeEnv);
+  await updateWatcherAlertLifecycle(first.alert.id, "resolve", { actorUserId: "ops-admin" }, runtimeEnv);
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  const reopened = await recordWatcherAlert(input, runtimeEnv);
+  const finalList = await listWatcherAlerts({ limit: 10 }, runtimeEnv);
+  const messages = await listThreadMessages(first.thread.id, runtimeEnv);
+
+  assert.equal(repeated.skipped, true);
+  assert.equal(repeated.reason, "active_alert");
+  assert.equal(grouped.total, 1);
+  assert.equal(reopened.skipped, undefined);
+  assert.equal(reopened.alert.status, "recorded");
+  assert.equal(finalList.total, 1);
+  assert.equal(messages.length, 2);
+});
+
+test("watcher alerts compact persisted duplicate rows during an active repeat", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-watcher-alert-compact-"));
+  const runtimeEnv = env(home, {
+    ORKESTR_WATCHER_THREAD_NAME: "test-watcher-compact",
+    ORKESTR_WATCHER_DEDUPE_MS: "1",
+  });
+  const input = {
+    source: "test.delivery",
+    code: "stale_untracked_reply",
+    message: "same persisted delivery anomaly",
+    threadId: "thread-1",
+  };
+
+  const first = await recordWatcherAlert(input, runtimeEnv);
+  const storePath = path.join(home, "watcher-alerts.json");
+  const stored = JSON.parse(await fs.readFile(storePath, "utf8"));
+  await fs.writeFile(storePath, JSON.stringify({
+    ...stored,
+    alerts: [
+      stored.alerts[0],
+      { ...stored.alerts[0], createdAt: new Date(Date.parse(stored.alerts[0].createdAt) + 1).toISOString() },
+    ],
+  }, null, 2), "utf8");
+  await new Promise((resolve) => setTimeout(resolve, 5));
+
+  const repeated = await recordWatcherAlert(input, runtimeEnv);
+  const compacted = JSON.parse(await fs.readFile(storePath, "utf8"));
+
+  assert.equal(repeated.skipped, true);
+  assert.equal(repeated.reason, "active_alert");
+  assert.equal(repeated.alert.id, first.alert.id);
+  assert.equal(compacted.alerts.length, 1);
+  assert.equal(compacted.alerts[0].id, first.alert.id);
+});
+
 test("watcher alert lifecycle actions update status and escalate to watcher thread", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-watcher-alert-lifecycle-"));
   const runtimeEnv = env(home, {

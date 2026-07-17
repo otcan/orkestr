@@ -421,10 +421,17 @@ prune_state_backups() {
 }
 
 prune_release_directories() {
-  bash "$script_dir/prune-release-directories.sh" \
-    --releases-dir "$releases_dir" \
-    --current-link "$current_link" \
+  local preserve args
+  preserve="$(codex_app_server_release_cwd)"
+  args=(
+    --releases-dir "$releases_dir"
+    --current-link "$current_link"
     --keep "$release_keep"
+  )
+  if [ -n "$preserve" ]; then
+    args+=(--preserve "$preserve")
+  fi
+  bash "$script_dir/prune-release-directories.sh" "${args[@]}"
   if [ -d "$repo_cache/.git" ]; then
     git -C "$repo_cache" worktree prune
   fi
@@ -645,6 +652,27 @@ codex_app_server_service_is_active() {
   systemctl is-active --quiet "${codex_app_server_service_name}.service" >/dev/null 2>&1
 }
 
+codex_app_server_release_cwd() {
+  local pid cwd releases_root relative release_dir
+  command -v systemctl >/dev/null 2>&1 || return 0
+  pid="$(systemctl show -p MainPID --value "${codex_app_server_service_name}.service" 2>/dev/null || true)"
+  [ -n "$pid" ] && [ "$pid" != "0" ] || return 0
+  cwd="$(readlink "/proc/$pid/cwd" 2>/dev/null || true)"
+  case "$cwd" in
+    *" (deleted)") return 0 ;;
+  esac
+  [ -d "$cwd" ] || return 0
+  releases_root="$(readlink -f "$releases_dir" 2>/dev/null || true)"
+  [ -n "$releases_root" ] || return 0
+  case "$cwd" in
+    "$releases_root"/*)
+      relative="${cwd#"$releases_root"/}"
+      release_dir="$releases_root/${relative%%/*}"
+      [ -d "$release_dir" ] && printf '%s\n' "$release_dir"
+      ;;
+  esac
+}
+
 codex_app_server_external_enabled() {
   case "$codex_app_server_mode" in
     external|proxy|daemon)
@@ -685,15 +713,16 @@ EOF
 }
 
 write_codex_app_server_systemd_service() {
-  local run_user run_group workdir
+  local restart_service run_user run_group workdir
+  restart_service="${1:-1}"
   run_user="$(runtime_run_user)"
   if ! id "$run_user" >/dev/null 2>&1; then
     echo "Cannot configure external Codex app-server: run user does not exist: $run_user" >&2
     return 1
   fi
   run_group="$(id -gn "$run_user")"
-  workdir="$current_link"
-  [ -d "$workdir" ] || workdir="$deploy_root"
+  workdir="$deploy_root"
+  mkdir -p "$workdir"
   cat > "/etc/systemd/system/${codex_app_server_service_name}.service" <<EOF
 [Unit]
 Description=Orkestr Codex app-server runtime
@@ -717,7 +746,9 @@ WantedBy=multi-user.target
 EOF
   systemctl daemon-reload
   systemctl enable "${codex_app_server_service_name}.service"
-  systemctl restart "${codex_app_server_service_name}.service"
+  if [ "$restart_service" = "1" ]; then
+    systemctl restart "${codex_app_server_service_name}.service"
+  fi
 }
 
 write_codex_app_server_main_service_dropin() {
@@ -746,6 +777,7 @@ ensure_codex_app_server_split_for_target() {
   esac
   if [ "$mode_external_requested" = "1" ] && codex_app_server_service_is_active; then
     if [ "$(id -u)" -eq 0 ]; then
+      write_codex_app_server_systemd_service 0
       write_codex_app_server_main_service_dropin
     fi
     return 0
