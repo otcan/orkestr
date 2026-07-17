@@ -1,14 +1,31 @@
+import crypto from "node:crypto";
 import {
   ensureConnectorInboxEvent,
   listConnectorInboxEvents,
   markConnectorInboxEvent,
 } from "./connector-inbox.js";
+import { prepareConnectorInboxMediaDelivery } from "./connector-inbox-media.js";
 import { exactSecurityApproveChallengeId } from "../../core/src/raw-terminal-commands.js";
 import { getPairingChallenge } from "../../core/src/security.js";
 import { tenantWhatsAppInboundForwardRoute } from "../../core/src/tenant-whatsapp-routing.js";
 
 function clean(value = "") {
   return String(value || "").trim();
+}
+
+function attachmentCount(payload = {}) {
+  return Array.isArray(payload.attachments) ? payload.attachments.length : 0;
+}
+
+function attachmentRevisionId(id = "", payload = {}) {
+  const signature = (Array.isArray(payload.attachments) ? payload.attachments : []).map((attachment, index) => ({
+    index,
+    filename: clean(attachment?.filename || attachment?.name),
+    mimetype: clean(attachment?.mimetype || attachment?.type),
+    size: Math.max(0, Number(attachment?.size || 0) || 0),
+  }));
+  const digest = crypto.createHash("sha256").update(JSON.stringify(signature)).digest("hex").slice(0, 16);
+  return `${id}:attachments:${digest}`;
 }
 
 function localInboundTarget(env = process.env) {
@@ -71,13 +88,14 @@ export async function deliverConnectorInboxEvent(event = {}, env = process.env, 
   try {
     const route = await deliveryTarget(event.payload, env);
     if (!route.target) throw Object.assign(new Error("connector_inbound_target_missing"), { statusCode: 503 });
+    const payloadForTarget = await prepareConnectorInboxMediaDelivery(event.payload, route, env, fetchImpl);
     const response = await fetchImpl(route.target, {
       method: "POST",
       headers: {
         "content-type": "application/json",
         ...(route.token ? { authorization: `Bearer ${route.token}` } : {}),
       },
-      body: JSON.stringify(event.payload),
+      body: JSON.stringify(payloadForTarget),
       signal: AbortSignal.timeout(Math.max(1000, Number(env.ORKESTR_CONNECTOR_INBOX_DELIVERY_TIMEOUT_MS || 60_000) || 60_000)),
     });
     const payload = await response.json().catch(() => ({}));
@@ -112,19 +130,46 @@ export async function deliverConnectorInboxEvent(event = {}, env = process.env, 
 
 export async function routeWhatsAppInboundFromWorker(payload = {}, env = process.env, fetchImpl = fetch) {
   const id = clean(payload.eventId || payload.id || payload.messageId);
-  const ensured = await ensureConnectorInboxEvent({
+  let inboxId = id;
+  let deliveryPayload = payload;
+  let ensured = await ensureConnectorInboxEvent({
     id,
     connector: "whatsapp",
     accountId: payload.accountId,
     conversationId: payload.chatId || payload.fromChatId,
     payload,
   }, env);
+  const previousAttachmentCount = attachmentCount(ensured.event?.payload);
+  const currentAttachmentCount = attachmentCount(payload);
+  if (!ensured.created && currentAttachmentCount > previousAttachmentCount) {
+    inboxId = attachmentRevisionId(id, payload);
+    deliveryPayload = {
+      ...payload,
+      eventId: inboxId,
+      sourceEventId: clean(payload.sourceEventId) || id,
+      attachmentRecovery: true,
+    };
+    if (ensured.event.state !== "delivered") {
+      await markConnectorInboxEvent(ensured.event.id, {
+        state: "dead_letter",
+        nextAttemptAt: "",
+        error: `superseded_by_${inboxId}`,
+      }, env);
+    }
+    ensured = await ensureConnectorInboxEvent({
+      id: inboxId,
+      connector: "whatsapp",
+      accountId: payload.accountId,
+      conversationId: payload.chatId || payload.fromChatId,
+      payload: deliveryPayload,
+    }, env);
+  }
   if (!ensured.created && ensured.event.state === "delivered") {
     return {
       ok: true,
       duplicate: true,
       state: "delivered",
-      eventId: id,
+      eventId: inboxId,
       result: ensured.event.result,
       ...securityApprovalResponse(ensured.event.result?.response || {}),
     };
@@ -134,7 +179,9 @@ export async function routeWhatsAppInboundFromWorker(payload = {}, env = process
   return {
     ok: delivered?.state === "delivered",
     queued: delivered?.state === "failed_retryable",
-    eventId: id,
+    eventId: inboxId,
+    sourceEventId: inboxId === id ? "" : id,
+    attachmentRecovery: inboxId !== id,
     state: delivered?.state || "unknown",
     attemptCount: delivered?.attemptCount || 0,
     error: delivered?.error || "",

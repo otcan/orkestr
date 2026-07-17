@@ -1,10 +1,12 @@
 #!/usr/bin/env node
 import crypto from "node:crypto";
+import multer from "multer";
 import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { authorizeConnectorMcpRequest, authorizeConnectorMcpToken } from "../packages/connectors/src/connectors-mcp-auth.js";
 import { createConnectorsMcpServer } from "../packages/connectors/src/connectors-mcp-server.js";
 import { listConnectorInboxEvents } from "../packages/connectors/src/connector-inbox.js";
+import { parseConnectorInboxMediaMetadata, stageConnectorInboxMedia } from "../packages/connectors/src/connector-inbox-media.js";
 import { retryConnectorInbox, routeWhatsAppInboundFromWorker } from "../packages/connectors/src/connectors-mcp-router.js";
 import { requestWhatsAppWorker, whatsappWorkerHealth } from "../packages/connectors/src/whatsapp-worker-client.js";
 import { requireWaServicePolicy } from "./orkestr-wa-policy.mjs";
@@ -129,6 +131,27 @@ export function createConnectorsMcpGateway({ env = process.env, fetchImpl = fetc
     } catch (error) {
       return res.status(Number(error?.statusCode || 500)).json({ ok: false, error: clean(error?.message) || "connector_inbound_failed" });
     }
+  });
+
+  const mediaUpload = multer({
+    storage: multer.memoryStorage(),
+    limits: {
+      fileSize: Math.max(1, Number(env.ORKESTR_CONNECTOR_INBOX_MEDIA_MAX_BYTES || 25 * 1024 * 1024) || 25 * 1024 * 1024),
+      files: 20,
+    },
+  }).array("files", 20);
+  app.post("/api/connectors/whatsapp/inbound-media", (req, res) => {
+    if (!workerEventTokenAllowed(req, env)) return res.status(401).json({ ok: false, error: "whatsapp_worker_event_token_invalid" });
+    return mediaUpload(req, res, async (uploadError) => {
+      if (uploadError) return res.status(Number(uploadError?.statusCode || 413)).json({ ok: false, error: clean(uploadError?.message) || "connector_inbox_media_upload_failed" });
+      try {
+        const metadata = parseConnectorInboxMediaMetadata(req.body?.metadata || req.body?.attachments || req.body?.filesMetadata);
+        const attachments = await stageConnectorInboxMedia(req.files || [], metadata, req.body || {}, env);
+        return res.status(201).json({ ok: true, attachments });
+      } catch (error) {
+        return res.status(Number(error?.statusCode || 500)).json({ ok: false, error: clean(error?.message) || "connector_inbox_media_upload_failed" });
+      }
+    });
   });
 
   app.get("/health", async (req, res) => {

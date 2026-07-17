@@ -202,6 +202,56 @@ test("WhatsApp worker forwards inbound events to the connector MCP gateway befor
   assert.equal(calls[0].body.chatId, "worker-sink@g.us");
 });
 
+test("WhatsApp worker stages inbound media at the connector MCP gateway before forwarding JSON", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-worker-sink-media-"));
+  const attachmentPath = path.join(home, "whatsapp-bridge", "inbound-media", "2026-07-17", "candidate.txt");
+  await fs.mkdir(path.dirname(attachmentPath), { recursive: true });
+  await fs.writeFile(attachmentPath, "candidate cv", "utf8");
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WA_WORKER_EVENT_SINK_URL: "http://127.0.0.1:18914/internal/whatsapp/inbound",
+    ORKESTR_WA_WORKER_EVENT_TOKEN: "worker-event-token",
+  };
+  const stagedPath = path.join(home, "data", "connector-inbox-media", "2026-07-17", "candidate.txt");
+  const calls = [];
+
+  const forwarded = await forwardLocalWhatsAppInbound({
+    eventId: "worker-sink-media-1",
+    chatId: "firat-jobs@g.us",
+    accountId: "sender",
+    text: "save the attachment",
+    attachments: [{ path: attachmentPath, filename: "candidate.txt", mimetype: "text/plain", kind: "document" }],
+  }, env, async (url, options = {}) => {
+    const target = String(url);
+    if (target.endsWith("/api/connectors/whatsapp/inbound-media")) {
+      const file = options.body.get("files");
+      calls.push({ target, authorization: options.headers.authorization, text: Buffer.from(await file.arrayBuffer()).toString("utf8") });
+      return response({
+        ok: true,
+        attachments: [{
+          path: stagedPath,
+          saved_path: stagedPath,
+          filename: "candidate.txt",
+          mimetype: "text/plain",
+          source: "connector_mcp_inbound_media_upload",
+        }],
+      }, true, 201);
+    }
+    calls.push({ target, authorization: options.headers.authorization, body: JSON.parse(options.body) });
+    return response({ ok: true, eventId: "worker-sink-media-1", state: "delivered" }, true, 200);
+  });
+
+  assert.equal(forwarded.forwarded, true);
+  assert.deepEqual(calls.map((call) => call.target), [
+    "http://127.0.0.1:18914/api/connectors/whatsapp/inbound-media",
+    "http://127.0.0.1:18914/internal/whatsapp/inbound",
+  ]);
+  assert.equal(calls[0].authorization, "Bearer worker-event-token");
+  assert.equal(calls[0].text, "candidate cv");
+  assert.equal(calls[1].body.attachmentsUploadedToTarget, true);
+  assert.equal(calls[1].body.attachments[0].path, stagedPath);
+});
+
 test("local WhatsApp bridge uploads tenant-routed media before forwarding inbound JSON", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-tenant-wa-forward-media-"));
   const env = { ORKESTR_HOME: home };
@@ -315,6 +365,52 @@ test("local WhatsApp bridge suppresses duplicate tenant inbound forwards by sour
   assert.equal(duplicate.payload.threadId, "tenant-thread");
   assert.equal(duplicate.payload.messageId, "tenant-message");
   assert.equal(calls.length, 2);
+});
+
+test("local WhatsApp bridge forwards an attachment recovered after a text-only source event", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-tenant-wa-attachment-recovery-"));
+  const env = { ORKESTR_HOME: home };
+  await createTenantVm({
+    id: "attachment-recovery-tenant",
+    ownerUserId: "firat",
+    endpoint: { baseUrl: "https://attachment-recovery.example.test" },
+  }, env);
+  await configureTenantWhatsAppRoute("attachment-recovery-tenant", {
+    chatId: "wa-group-attachment-recovery@g.us",
+    accountId: "sender",
+  }, env);
+  const calls = [];
+  const fetchImpl = async (url, options = {}) => {
+    calls.push({ url: String(url), body: options.body ? JSON.parse(options.body) : null });
+    if (String(url).endsWith("/api/health")) return response({ ok: true }, true, 200);
+    return response({ ok: true, threadId: "firat-jobs", messageId: `tenant-message-${calls.length}` }, true, 202);
+  };
+  const source = {
+    eventId: "false_wa-group-attachment-recovery@g.us_msg-1",
+    chatId: "wa-group-attachment-recovery@g.us",
+    accountId: "sender",
+    from: "279611011236064@lid",
+    text: "Candidate CV",
+  };
+
+  const first = await forwardLocalWhatsAppInbound(source, env, fetchImpl);
+  const recovered = await forwardLocalWhatsAppInbound({
+    ...source,
+    eventId: "true_wa-group-attachment-recovery@g.us_msg-1",
+    attachments: [{ filename: "candidate.pdf", mimetype: "application/pdf", size: 1234 }],
+  }, env, fetchImpl);
+  const duplicate = await forwardLocalWhatsAppInbound({
+    ...source,
+    attachments: [{ filename: "candidate.pdf", mimetype: "application/pdf", size: 1234 }],
+  }, env, async () => {
+    throw new Error("recovered attachment should only be forwarded once");
+  });
+
+  assert.equal(first.forwarded, true);
+  assert.equal(recovered.forwarded, true);
+  assert.equal(recovered.duplicate, undefined);
+  assert.equal(duplicate.duplicate, true);
+  assert.equal(calls.filter((call) => call.url.endsWith("/api/connectors/whatsapp/inbound")).length, 2);
 });
 
 test("local WhatsApp bridge skips managed tenant routes for the wrong account", async () => {

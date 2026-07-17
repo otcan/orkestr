@@ -72,6 +72,7 @@ async function fixture({ scoped = false } = {}) {
     ORKESTR_WA_WORKER_URL: workerUrl,
     ORKESTR_WA_WORKER_SOCKET: "",
     ORKESTR_WA_WORKER_TOKEN: "worker-token",
+    ORKESTR_WA_WORKER_EVENT_TOKEN: "worker-event-token",
     ORKESTR_CONNECTORS_MCP_TOKEN: scoped ? "" : token,
     ORKESTR_CONNECTORS_MCP_TOKENS_JSON: scoped ? JSON.stringify({
       tenant: {
@@ -94,6 +95,7 @@ async function fixture({ scoped = false } = {}) {
   return {
     env,
     worker,
+    gatewayUrl,
     async close() {
       gateway.close();
       await close(gatewayServer);
@@ -101,6 +103,56 @@ async function fixture({ scoped = false } = {}) {
     },
   };
 }
+
+test("connector MCP stages authenticated worker media before durable routing", async () => {
+  const item = await fixture();
+  try {
+    const form = new FormData();
+    form.append("files", new Blob(["candidate cv"], { type: "text/plain" }), "candidate.txt");
+    form.append("metadata", JSON.stringify([{
+      filename: "candidate.txt",
+      mimetype: "text/plain",
+      kind: "document",
+      sourceEventId: "wa-media-stage-1",
+      chatId: "firat-jobs@g.us",
+      accountId: "sender",
+    }]));
+    form.append("eventId", "wa-media-stage-1");
+    form.append("chatId", "firat-jobs@g.us");
+    form.append("accountId", "sender");
+    const response = await fetch(`${item.gatewayUrl}/api/connectors/whatsapp/inbound-media`, {
+      method: "POST",
+      headers: { authorization: "Bearer worker-event-token" },
+      body: form,
+    });
+    const payload = await response.json();
+
+    assert.equal(response.status, 201);
+    assert.equal(payload.ok, true);
+    assert.equal(payload.attachments[0].filename, "candidate.txt");
+    assert.equal(payload.attachments[0].source, "connector_mcp_inbound_media_upload");
+    assert.match(payload.attachments[0].path, /connector-inbox-media/);
+    assert.equal(await fs.readFile(payload.attachments[0].path, "utf8"), "candidate cv");
+  } finally {
+    await item.close();
+  }
+});
+
+test("connector MCP rejects unauthenticated worker media", async () => {
+  const item = await fixture();
+  try {
+    const form = new FormData();
+    form.append("files", new Blob(["blocked"], { type: "text/plain" }), "blocked.txt");
+    const response = await fetch(`${item.gatewayUrl}/api/connectors/whatsapp/inbound-media`, {
+      method: "POST",
+      body: form,
+    });
+    assert.equal(response.status, 401);
+    assert.equal((await response.json()).error, "whatsapp_worker_event_token_invalid");
+  } finally {
+    await item.close();
+  }
+});
 
 test("connector MCP derives its endpoint from the parent bridge for legacy tenant slices", () => {
   const derived = connectorsMcpClientConfig({
@@ -329,6 +381,137 @@ test("connector MCP inbound routing is idempotent and has a finite retry budget"
   }
 });
 
+test("connector MCP uploads staged media into the resolved tenant before inbound delivery", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-connectors-inbox-media-"));
+  const env = {
+    ...process.env,
+    ORKESTR_HOME: home,
+  };
+  const chatId = "firat-jobs-media@g.us";
+  await createTenantVm({
+    id: "firat-jobs-media-vm",
+    ownerUserId: "firat",
+    endpoint: { baseUrl: "https://firat-media.example.test" },
+  }, env);
+  const configured = await configureTenantWhatsAppRoute("firat-jobs-media-vm", {
+    chatId,
+    accountId: "sender",
+    routeMode: "direct",
+    enabled: true,
+  }, env);
+  const stagedDir = path.join(home, "data", "connector-inbox-media", "2026-07-17");
+  const stagedPath = path.join(stagedDir, "candidate.txt");
+  await fs.mkdir(stagedDir, { recursive: true });
+  await fs.writeFile(stagedPath, "candidate cv", "utf8");
+  const tenantPath = "/opt/orkestr/data/whatsapp-bridge/inbound-media/broker/2026-07-17/candidate.txt";
+  const calls = [];
+
+  try {
+    const result = await routeWhatsAppInboundFromWorker({
+      eventId: "wa-tenant-media-1",
+      accountId: "sender",
+      chatId,
+      from: "firat@lid",
+      text: "please save the attachment",
+      attachments: [{
+        path: stagedPath,
+        saved_path: stagedPath,
+        filename: "candidate.txt",
+        mimetype: "text/plain",
+        kind: "document",
+        source: "connector_mcp_inbound_media_upload",
+      }],
+    }, env, async (url, options = {}) => {
+      const target = String(url);
+      if (target.endsWith("/api/connectors/whatsapp/inbound-media")) {
+        const file = options.body.get("files");
+        calls.push({
+          target,
+          authorization: options.headers.authorization,
+          text: Buffer.from(await file.arrayBuffer()).toString("utf8"),
+        });
+        return {
+          ok: true,
+          status: 201,
+          json: async () => ({
+            ok: true,
+            attachments: [{
+              path: tenantPath,
+              saved_path: tenantPath,
+              filename: "candidate.txt",
+              mimetype: "text/plain",
+              source: "broker_whatsapp_inbound_media_upload",
+            }],
+          }),
+        };
+      }
+      const body = JSON.parse(options.body);
+      calls.push({ target, authorization: options.headers.authorization, body });
+      return { ok: true, status: 202, json: async () => ({ ok: true, threadId: "firat-jobs", messageId: "message-1" }) };
+    });
+
+    assert.equal(result.ok, true);
+    assert.deepEqual(calls.map((call) => call.target), [
+      "https://firat-media.example.test/api/connectors/whatsapp/inbound-media",
+      "https://firat-media.example.test/api/connectors/whatsapp/inbound",
+    ]);
+    assert.equal(calls[0].authorization, `Bearer ${configured.route.token}`);
+    assert.equal(calls[0].text, "candidate cv");
+    assert.equal(calls[1].authorization, `Bearer ${configured.route.token}`);
+    assert.equal(calls[1].body.attachmentsUploadedToTarget, true);
+    assert.equal(calls[1].body.attachments[0].path, tenantPath);
+    assert.notEqual(calls[1].body.attachments[0].path, stagedPath);
+  } finally {
+    resetConnectorInboxForTest();
+  }
+});
+
+test("connector MCP delivers recovered attachments as one deterministic inbox revision", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-connectors-inbox-media-revision-"));
+  const env = {
+    ...process.env,
+    ORKESTR_HOME: home,
+    ORKESTR_CONNECTORS_MCP_INBOUND_TARGET_URL: "http://orkestr-ui.test/api/connectors/whatsapp/inbound",
+  };
+  const base = {
+    eventId: "wa-media-revision-1",
+    accountId: "sender",
+    chatId: "firat-jobs@g.us",
+    text: "Candidate CV",
+  };
+  const calls = [];
+  const fetchImpl = async (_url, options = {}) => {
+    calls.push(JSON.parse(options.body));
+    return { ok: true, status: 202, json: async () => ({ ok: true, threadId: "firat-jobs", messageId: `message-${calls.length}` }) };
+  };
+
+  try {
+    const textOnly = await routeWhatsAppInboundFromWorker(base, env, fetchImpl);
+    const recovered = await routeWhatsAppInboundFromWorker({
+      ...base,
+      attachments: [{ filename: "candidate.pdf", mimetype: "application/pdf", size: 1234 }],
+    }, env, fetchImpl);
+    const duplicate = await routeWhatsAppInboundFromWorker({
+      ...base,
+      attachments: [{ filename: "candidate.pdf", mimetype: "application/pdf", size: 1234 }],
+    }, env, fetchImpl);
+
+    assert.equal(textOnly.ok, true);
+    assert.equal(recovered.ok, true);
+    assert.equal(recovered.attachmentRecovery, true);
+    assert.equal(recovered.sourceEventId, base.eventId);
+    assert.match(recovered.eventId, /^wa-media-revision-1:attachments:[a-f0-9]{16}$/);
+    assert.equal(calls[1].eventId, recovered.eventId);
+    assert.equal(calls[1].sourceEventId, base.eventId);
+    assert.equal(calls[1].attachmentRecovery, true);
+    assert.equal(duplicate.duplicate, true);
+    assert.equal(duplicate.eventId, recovered.eventId);
+    assert.equal(calls.length, 2);
+  } finally {
+    resetConnectorInboxForTest();
+  }
+});
+
 test("connector MCP keeps parent-owned approvals out of tenant routes and exposes the acknowledgement", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-connectors-parent-approval-"));
   const chatId = "firat-jobs@g.us";
@@ -418,6 +601,7 @@ test("connector MCP gateway modules remain browser-free", async () => {
     "packages/connectors/src/connectors-mcp-server.js",
     "packages/connectors/src/connectors-mcp-operations.js",
     "packages/connectors/src/connectors-mcp-router.js",
+    "packages/connectors/src/connector-inbox-media.js",
     "packages/connectors/src/whatsapp-worker-client.js",
   ];
   const source = (await Promise.all(files.map((file) => fs.readFile(new URL(`../${file}`, import.meta.url), "utf8")))).join("\n");

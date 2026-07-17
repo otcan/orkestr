@@ -1018,6 +1018,15 @@ async function findInboundForwardLedgerEntry({ chatId = "", eventId = "" } = {},
   return null;
 }
 
+function inboundAttachmentCount(input = {}) {
+  return Array.isArray(input.attachments) ? input.attachments.length : 0;
+}
+
+function inboundForwardIsAttachmentRecovery(input = {}, ledgerEntry = null) {
+  if (!ledgerEntry || ledgerEntry.memoryOnly === true) return false;
+  return inboundAttachmentCount(input) > Math.max(0, Number(ledgerEntry.attachmentCount || 0) || 0);
+}
+
 async function rememberInboundForwardLedgerEntry(input = {}, details = {}, env = process.env) {
   const chatId = String(input.chatId || input.chat?.id || input.fromChatId || "").trim();
   const eventId = String(input.eventId || input.id || input.messageId || "").trim();
@@ -1042,6 +1051,7 @@ async function rememberInboundForwardLedgerEntry(input = {}, details = {}, env =
     threadId: details.threadId || null,
     messageId: details.messageId || null,
     duplicate: details.duplicate === true,
+    attachmentCount: inboundAttachmentCount(input),
     forwardedAt: nowIso(),
   };
   const merged = new Map(existing.map((entry) => [String(entry?.key || ""), entry]).filter(([entryKey]) => entryKey));
@@ -1103,7 +1113,7 @@ export async function forwardLocalWhatsAppInbound(input = {}, env = process.env,
       chatId,
       eventId: String(input.eventId || input.id || input.messageId || ""),
     }, env);
-    if (ledgerEntry) {
+    if (ledgerEntry && !inboundForwardIsAttachmentRecovery(input, ledgerEntry)) {
       await appendEvent({
         type: "whatsapp_local_inbound_forward_duplicate",
         chatId,
@@ -1125,6 +1135,17 @@ export async function forwardLocalWhatsAppInbound(input = {}, env = process.env,
           eventId: ledgerEntry.eventId || null,
         },
       };
+    }
+    if (ledgerEntry) {
+      await appendEvent({
+        type: "whatsapp_local_inbound_forward_attachment_recovery",
+        chatId,
+        eventId: String(input.eventId || input.id || input.messageId || ""),
+        accountId: String(input.accountId || ""),
+        previousAttachmentCount: Math.max(0, Number(ledgerEntry.attachmentCount || 0) || 0),
+        attachmentCount: inboundAttachmentCount(input),
+        tenantVmId: ledgerEntry.tenantVmId || null,
+      }, env).catch(() => {});
     }
     const workerEventSink = localWhatsAppWorkerEventSink(env);
     tenantRoute = workerEventSink ? null : await tenantWhatsAppInboundForwardRoute(input, env);
@@ -3163,25 +3184,99 @@ function extensionForMime(mimetype = "") {
   return ".bin";
 }
 
-async function saveInboundMedia(accountId, message, env = process.env) {
-  if (!message?.hasMedia || typeof message.downloadMedia !== "function") return [];
-  let media = null;
-  try {
-    media = await message.downloadMedia();
-  } catch (error) {
-    await appendEvent({
-      type: "whatsapp_local_inbound_media_download_failed",
-      accountId,
-      eventId: String(message.id?._serialized || ""),
-      error: error.message || String(error),
-    }, env).catch(() => {});
-    return [];
+function inboundMediaDownloadAttempts(env = process.env) {
+  const raw = env.ORKESTR_WHATSAPP_INBOUND_MEDIA_DOWNLOAD_ATTEMPTS ?? env.WHATSAPP_INBOUND_MEDIA_DOWNLOAD_ATTEMPTS;
+  const parsed = raw === undefined ? 4 : Number(raw);
+  return Number.isFinite(parsed) ? Math.max(1, Math.min(8, Math.floor(parsed))) : 4;
+}
+
+function inboundMediaDownloadRetryMs(env = process.env) {
+  const raw = env.ORKESTR_WHATSAPP_INBOUND_MEDIA_DOWNLOAD_RETRY_MS ?? env.WHATSAPP_INBOUND_MEDIA_DOWNLOAD_RETRY_MS;
+  const parsed = raw === undefined ? 1_000 : Number(raw);
+  return Number.isFinite(parsed) ? Math.max(0, Math.min(10_000, Math.floor(parsed))) : 1_000;
+}
+
+function inboundMediaDownloadTimeoutMs(env = process.env) {
+  const raw = env.ORKESTR_WHATSAPP_INBOUND_MEDIA_DOWNLOAD_TIMEOUT_MS ?? env.WHATSAPP_INBOUND_MEDIA_DOWNLOAD_TIMEOUT_MS;
+  const parsed = raw === undefined ? 30_000 : Number(raw);
+  return Number.isFinite(parsed) ? Math.max(100, Math.min(120_000, Math.floor(parsed))) : 30_000;
+}
+
+function withInboundMediaDownloadTimeout(promise, env = process.env) {
+  const timeoutMs = inboundMediaDownloadTimeoutMs(env);
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      const error = new Error("whatsapp_inbound_media_download_timeout");
+      error.statusCode = 504;
+      reject(error);
+    }, timeoutMs);
+    Promise.resolve(promise)
+      .then(resolve, reject)
+      .finally(() => clearTimeout(timer));
+  });
+}
+
+async function refreshedInboundMediaMessage(message, client = null) {
+  const eventId = serializedMessageId(message);
+  if (!eventId || typeof client?.getMessageById !== "function") return message;
+  const refreshed = await client.getMessageById(eventId).catch(() => null);
+  return refreshed?.hasMedia && typeof refreshed.downloadMedia === "function" ? refreshed : message;
+}
+
+async function downloadInboundMedia(accountId, message, env = process.env, { client = null } = {}) {
+  const attempts = inboundMediaDownloadAttempts(env);
+  const retryMs = inboundMediaDownloadRetryMs(env);
+  const eventId = serializedMessageId(message);
+  let candidate = message;
+  let lastError = null;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      const media = await withInboundMediaDownloadTimeout(candidate.downloadMedia(), env);
+      if (!media?.data) throw new Error("whatsapp_inbound_media_not_ready");
+      if (attempt > 1) {
+        await appendEvent({
+          type: "whatsapp_local_inbound_media_download_recovered",
+          accountId,
+          eventId,
+          attempt,
+        }, env).catch(() => {});
+      }
+      return media;
+    } catch (error) {
+      lastError = error;
+      if (attempt >= attempts) break;
+      await appendEvent({
+        type: "whatsapp_local_inbound_media_download_retry",
+        accountId,
+        eventId,
+        attempt,
+        error: error?.message || String(error),
+      }, env).catch(() => {});
+      if (retryMs > 0) await wait(retryMs);
+      candidate = await refreshedInboundMediaMessage(message, client);
+    }
   }
-  if (!media?.data) return [];
+  await appendEvent({
+    type: "whatsapp_local_inbound_media_download_failed",
+    accountId,
+    eventId,
+    attempts,
+    error: lastError?.message || String(lastError || "whatsapp_inbound_media_not_ready"),
+  }, env).catch(() => {});
+  const error = new Error("whatsapp_inbound_media_download_failed");
+  error.statusCode = 503;
+  error.retryable = true;
+  error.cause = lastError;
+  throw error;
+}
+
+async function saveInboundMedia(accountId, message, env = process.env, options = {}) {
+  if (!message?.hasMedia || typeof message.downloadMedia !== "function") return [];
+  const media = await downloadInboundMedia(accountId, message, env, options);
   const date = new Date().toISOString().slice(0, 10);
   const outDir = path.join(inboundMediaRoot(env), date);
   await fs.mkdir(outDir, { recursive: true });
-  const eventId = safeFilePart(String(message.id?._serialized || `${accountId}-${Date.now()}`), "message");
+  const eventId = safeFilePart(serializedMessageId(message) || `${accountId}-${Date.now()}`, "message");
   const originalName = safeFilePart(media.filename || message._data?.filename || "", "");
   const ext = path.extname(originalName) || extensionForMime(media.mimetype);
   const baseName = originalName
@@ -3468,7 +3563,7 @@ export async function handleInboundMessage(accountId, message, env = process.env
   if (message?.isStatus) return { skipped: "status_message" };
   const text = String(message?.body || "").trim();
   const { chatId, from, fromMe: routeFromMe } = localWhatsAppMessageRouteFields(message);
-  const eventId = String(message.id?._serialized || `${accountId}:${chatId}:${message.timestamp || Date.now()}`).trim();
+  const eventId = String(serializedMessageId(message) || `${accountId}:${chatId}:${message.timestamp || Date.now()}`).trim();
   if (fromMe && outboundMessageIds.has(eventId)) return { skipped: "outbound_echo_id", eventId, chatId };
   if (outboundTextRecentlySent(accountId, chatId, text, env)) {
     return { skipped: fromMe ? "outbound_echo_text" : "outbound_echo_cross_account_text", eventId, chatId };
@@ -3476,15 +3571,27 @@ export async function handleInboundMessage(accountId, message, env = process.env
   if (outboundAttachmentsRecentlySent(accountId, chatId, inboundAttachmentEchoCandidates(message), env)) {
     return { skipped: fromMe ? "outbound_echo_attachment" : "outbound_echo_cross_account_attachment", eventId, chatId };
   }
-  const attachments = await saveInboundMedia(accountId, message, env).catch((error) => {
-    void appendEvent({
+  let attachments;
+  try {
+    attachments = await saveInboundMedia(accountId, message, env, { client: options.client || null });
+  } catch (error) {
+    await appendEvent({
       type: "whatsapp_local_inbound_media_save_failed",
       accountId,
-      eventId: String(message?.id?._serialized || ""),
-      error: error.message || String(error),
+      eventId,
+      chatId,
+      error: error?.message || String(error),
+      retryable: error?.retryable === true,
     }, env).catch(() => {});
-    return [];
-  });
+    return {
+      error: error?.message || String(error),
+      retryable: error?.retryable === true,
+      eventId,
+      chatId,
+      from,
+      fromMe: routeFromMe,
+    };
+  }
   if (!text && !attachments.length) return { skipped: "empty_message" };
   if (outboundAttachmentsRecentlySent(accountId, chatId, attachments, env, { allowSizeOnly: fromMe })) {
     return { skipped: fromMe ? "outbound_echo_attachment" : "outbound_echo_cross_account_attachment", eventId, chatId };

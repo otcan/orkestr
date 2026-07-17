@@ -3360,6 +3360,124 @@ test("local whatsapp inbound ignores recent outbound attachment echoes", async (
   }
 });
 
+test("local whatsapp inbound retries a transient media download with a refreshed message", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-media-retry-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "sender",
+    ORKESTR_WHATSAPP_INBOUND_MEDIA_DOWNLOAD_ATTEMPTS: "3",
+    ORKESTR_WHATSAPP_INBOUND_MEDIA_DOWNLOAD_RETRY_MS: "0",
+    ORKESTR_WHATSAPP_INBOUND_MEDIA_DOWNLOAD_TIMEOUT_MS: "100",
+  };
+  const chatId = "chat-media-retry@g.us";
+  const eventId = `false_${chatId}_media-retry-1`;
+  let initialAttempts = 0;
+  let refreshedAttempts = 0;
+  let refreshes = 0;
+  const baseMessage = {
+    id: { _serialized: eventId, remote: chatId },
+    from: chatId,
+    author: "279611011236064@lid",
+    fromMe: false,
+    body: "Candidate CV",
+    hasMedia: true,
+    type: "document",
+    timestamp: 1_780_000_000,
+    _data: { filename: "candidate.txt" },
+    async downloadMedia() {
+      initialAttempts += 1;
+      throw new Error("r");
+    },
+  };
+  const client = {
+    async getMessageById(id) {
+      refreshes += 1;
+      assert.equal(id, eventId);
+      return {
+        ...baseMessage,
+        async downloadMedia() {
+          refreshedAttempts += 1;
+          return {
+            data: Buffer.from("candidate cv").toString("base64"),
+            filename: "candidate.txt",
+            mimetype: "text/plain",
+          };
+        },
+      };
+    },
+  };
+
+  await createThread({
+    id: "media-retry-thread",
+    name: "Media retry",
+    binding: {
+      connector: "whatsapp",
+      chatId,
+      responderAccountId: "sender",
+      outboundAccountId: "sender",
+      enabled: true,
+    },
+  }, env);
+
+  const result = await handleInboundMessage("sender", baseMessage, env, { client });
+  const messages = await listThreadMessages("media-retry-thread", env);
+  const attachment = messages.at(-1)?.attachments?.[0];
+
+  assert.equal(result.routed.threadId, "media-retry-thread");
+  assert.equal(initialAttempts, 1);
+  assert.equal(refreshedAttempts, 1);
+  assert.equal(refreshes, 1);
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].text, "Candidate CV");
+  assert.equal(attachment.filename, "candidate.txt");
+  assert.equal(await fs.readFile(attachment.path, "utf8"), "candidate cv");
+});
+
+test("local whatsapp inbound does not route a caption when media download retries are exhausted", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-media-failed-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "sender",
+    ORKESTR_WHATSAPP_INBOUND_MEDIA_DOWNLOAD_ATTEMPTS: "2",
+    ORKESTR_WHATSAPP_INBOUND_MEDIA_DOWNLOAD_RETRY_MS: "0",
+    ORKESTR_WHATSAPP_INBOUND_MEDIA_DOWNLOAD_TIMEOUT_MS: "100",
+  };
+  const chatId = "chat-media-failed@g.us";
+  let attempts = 0;
+  await createThread({
+    id: "media-failed-thread",
+    name: "Media failed",
+    binding: {
+      connector: "whatsapp",
+      chatId,
+      responderAccountId: "sender",
+      outboundAccountId: "sender",
+      enabled: true,
+    },
+  }, env);
+
+  const result = await handleInboundMessage("sender", {
+    id: { _serialized: `false_${chatId}_media-failed-1`, remote: chatId },
+    from: chatId,
+    author: "279611011236064@lid",
+    fromMe: false,
+    body: "Do not route without this file",
+    hasMedia: true,
+    type: "document",
+    timestamp: 1_780_000_001,
+    async downloadMedia() {
+      attempts += 1;
+      throw new Error("r");
+    },
+  }, env);
+  const messages = await listThreadMessages("media-failed-thread", env);
+
+  assert.equal(result.error, "whatsapp_inbound_media_download_failed");
+  assert.equal(result.retryable, true);
+  assert.equal(attempts, 2);
+  assert.equal(messages.length, 0);
+});
+
 test("local whatsapp inbound ignores fromMe attachment echoes with rewritten filenames", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-attachment-size-echo-"));
   const env = {
