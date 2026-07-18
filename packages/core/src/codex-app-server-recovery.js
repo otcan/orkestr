@@ -759,7 +759,6 @@ function recoveryScanKey(thread, clientState, messagesFingerprint, options = {},
   return JSON.stringify({
     home: dataPaths(env).home,
     id: thread?.id || "",
-    updatedAt: thread?.updatedAt || "",
     state: thread?.state || "",
     lastError: thread?.lastError || "",
     runtimeState: runtime.state || "",

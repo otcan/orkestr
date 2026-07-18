@@ -4272,16 +4272,19 @@ async function syncDetachedCodexRollouts(activeLeaseThreadIds = new Set(), env =
       completedTurnId = String(projected?.completedTurnId || "").trim();
     }
     const completionPatch = await reconcileDetachedRolloutCompletion(currentThread, runtime, completedTurnId, env);
-    await updateThread(currentThread.id, {
-      ...(completionPatch || {}),
-      runtime: {
-        ...(completionPatch?.runtime || runtime),
-        runtimeKind: runtime.runtimeKind || currentThread.runtimeKind || "codex-app-server",
-        operatorRolloutPath: rolloutPath,
-        operatorRolloutOffset: size,
-        operatorRolloutSyncedAt: nowIso(),
-      },
-    }, env).catch(() => {});
+    const rolloutChanged = storedPath !== rolloutPath || storedOffset !== size;
+    if (completionPatch || rolloutChanged) {
+      await updateThread(currentThread.id, {
+        ...(completionPatch || {}),
+        runtime: {
+          ...(completionPatch?.runtime || runtime),
+          runtimeKind: runtime.runtimeKind || currentThread.runtimeKind || "codex-app-server",
+          operatorRolloutPath: rolloutPath,
+          operatorRolloutOffset: size,
+          operatorRolloutSyncedAt: nowIso(),
+        },
+      }, env).catch(() => {});
+    }
   }
   return { appended };
 }

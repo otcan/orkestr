@@ -114,12 +114,17 @@ test("detached app-server WhatsApp threads project direct Codex rollout replies"
     const stored = await getThread("detached-rollout-thread", env);
     assert.equal(stored.runtime.operatorRolloutPath, rolloutPath);
     assert.ok(stored.runtime.operatorRolloutOffset > 0);
+    const firstSyncedAt = stored.runtime.operatorRolloutSyncedAt;
+    const firstUpdatedAt = stored.updatedAt;
 
     const second = await syncRuntimeLeases(env);
     const afterSecond = await listThreadMessages("detached-rollout-thread", env);
+    const storedAfterSecond = await getThread("detached-rollout-thread", env);
 
     assert.equal(second.appended, 0);
     assert.equal(afterSecond.filter((message) => message.text === "Projected reply").length, 1);
+    assert.equal(storedAfterSecond.runtime.operatorRolloutSyncedAt, firstSyncedAt);
+    assert.equal(storedAfterSecond.updatedAt, firstUpdatedAt);
   } finally {
     clearSignalHandler();
   }
