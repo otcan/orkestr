@@ -130,6 +130,32 @@ test("thread registry migrates JSON records into SQLite", async () => {
   assert.equal((await readJson(path.join(home, "threads.json"), []))[0].state, "ready");
 });
 
+test("thread registry cache observes commits from another SQLite connection", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-storage-cache-"));
+  const env = { ORKESTR_HOME: home, ORKESTR_THREAD_STORE: "sqlite" };
+  await saveThreadRecords([{ id: "thread-1", name: "Thread One", state: "ready" }], env);
+
+  const first = await listThreadRecords(env);
+  const cached = await listThreadRecords(env);
+  assert.notEqual(first, cached);
+  assert.equal(cached[0].state, "ready");
+
+  const external = new DatabaseSync(path.join(home, "threads.sqlite"));
+  try {
+    const updated = { ...cached[0], state: "working" };
+    external.prepare("update orkestr_threads set data = ?, updated_at = ? where id = ?").run(
+      JSON.stringify(updated),
+      "2026-01-01T00:00:00.000Z",
+      "thread-1",
+    );
+  } finally {
+    external.close();
+  }
+
+  const refreshed = await listThreadRecords(env);
+  assert.equal(refreshed[0].state, "working");
+});
+
 test("thread registry deduplicates visible thread names", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-storage-dedupe-"));
   const env = { ORKESTR_HOME: home, ORKESTR_THREAD_STORE: "json" };

@@ -3,6 +3,8 @@ import { ensureDataDirs } from "./paths.js";
 import { readJson, writeJson } from "./store.js";
 
 const dbCache = new Map();
+const dbPaths = new WeakMap();
+const threadListCache = new Map();
 let sqliteModulePromise = null;
 
 export async function listThreadRecords(env = process.env) {
@@ -11,10 +13,16 @@ export async function listThreadRecords(env = process.env) {
     const paths = await ensureDataDirs(env);
     return dedupeThreadRecords(await readJson(paths.threads, []));
   }
+  const dbPath = dbPaths.get(db);
+  const dataVersion = threadDatabaseVersion(db);
+  const cached = dbPath ? threadListCache.get(dbPath) : null;
+  if (cached?.dataVersion === dataVersion) return cached.records.slice();
   const rows = db
     .prepare("select data from orkestr_threads order by created_at asc, id asc")
     .all();
-  return dedupeThreadRecords(rows.map((row) => JSON.parse(row.data)));
+  const records = dedupeThreadRecords(rows.map((row) => JSON.parse(row.data)));
+  if (dbPath) threadListCache.set(dbPath, { dataVersion, records });
+  return records.slice();
 }
 
 export async function saveThreadRecords(threads, env = process.env) {
@@ -26,6 +34,7 @@ export async function saveThreadRecords(threads, env = process.env) {
     return records;
   }
   replaceThreadRows(db, records);
+  cacheThreadRecords(db, records);
   const paths = await ensureDataDirs(env);
   await writeJson(paths.threads, records);
   return records;
@@ -44,6 +53,7 @@ export async function closeThreadRegistryCache(env = null) {
   for (const [dbPath, db] of dbCache.entries()) {
     if (selected.size && !selected.has(dbPath)) continue;
     dbCache.delete(dbPath);
+    threadListCache.delete(dbPath);
     try {
       db.close();
     } catch {
@@ -120,6 +130,7 @@ async function openThreadDatabase(env) {
   db.exec("pragma busy_timeout = 5000");
   ensureSchema(db);
   dbCache.set(paths.threadsDb, db);
+  dbPaths.set(db, paths.threadsDb);
   await migrateJsonThreadsIfNeeded(db, paths, existed);
   return db;
 }
@@ -188,6 +199,19 @@ function replaceThreadRows(db, threads) {
     db.exec("rollback");
     throw error;
   }
+}
+
+function threadDatabaseVersion(db) {
+  return Number(db.prepare("pragma data_version").get()?.data_version || 0);
+}
+
+function cacheThreadRecords(db, records) {
+  const dbPath = dbPaths.get(db);
+  if (!dbPath) return;
+  threadListCache.set(dbPath, {
+    dataVersion: threadDatabaseVersion(db),
+    records: Array.isArray(records) ? records.slice() : [],
+  });
 }
 
 function setMeta(db, key, value) {
