@@ -56,6 +56,10 @@ function ensureSchema(db) {
       on orkestr_thread_messages(thread_id, cursor, position);
     create index if not exists idx_orkestr_thread_messages_state
       on orkestr_thread_messages(thread_id, state, position);
+    create index if not exists idx_orkestr_thread_messages_phase
+      on orkestr_thread_messages(thread_id, phase, position);
+    create index if not exists idx_orkestr_thread_messages_recent_delivery
+      on orkestr_thread_messages(thread_id, source, connector, role, state, created_at, position);
     create index if not exists idx_orkestr_thread_messages_client
       on orkestr_thread_messages(thread_id, client_message_id);
     create index if not exists idx_orkestr_thread_messages_external
@@ -288,15 +292,23 @@ export async function listThreadMessageCandidates(threadId, options = {}, env = 
     const connector = String(options.recentConnector || "").trim();
     const role = String(options.recentRole || "").trim();
     const state = String(options.recentState || "").trim();
+    const clauses = ["thread_id = ?", "created_at >= ?"];
+    const values = [threadId, String(options.recentSince)];
+    for (const [column, value] of [
+      ["source", source],
+      ["connector", connector],
+      ["role", role],
+      ["state", state],
+    ]) {
+      if (!value) continue;
+      clauses.push(`${column} = ?`);
+      values.push(value);
+    }
     addRows(db.prepare(`
       select position, data from orkestr_thread_messages
-      where thread_id = ? and created_at >= ?
-        and (? = '' or source = ?)
-        and (? = '' or connector = ?)
-        and (? = '' or role = ?)
-        and (? = '' or state = ?)
+      where ${clauses.join(" and ")}
       order by position asc
-    `).all(threadId, String(options.recentSince), source, source, connector, connector, role, role, state, state));
+    `).all(...values));
   }
   return [...selected.values()].sort((left, right) => left.position - right.position).map((row) => row.message);
 }

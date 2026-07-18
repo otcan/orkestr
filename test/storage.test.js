@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import { appendEvent, eventArchiveDownloadPath, eventStorageStatus, listEventArchives, listEvents, readJson, rotateEvents, writeJson } from "../packages/storage/src/store.js";
 import { listThreadRecords, saveThreadRecords } from "../packages/storage/src/thread-registry.js";
@@ -205,4 +206,18 @@ test("thread message repository migrates JSON once and serves bounded SQLite can
   const reopened = createThreadMessageRepository(env);
   assert.equal((await reopened.list("thread-a")).at(-1).id, "message-13");
   await closeThreadMessageRegistryCache();
+
+  const db = new DatabaseSync(path.join(home, "thread-messages.sqlite"), { readOnly: true });
+  const phasePlan = db.prepare(`
+    explain query plan select position, data from orkestr_thread_messages
+    where thread_id = ? and phase in (?) order by position asc
+  `).all("thread-a", "need_input");
+  const recentPlan = db.prepare(`
+    explain query plan select position, data from orkestr_thread_messages
+    where thread_id = ? and source = ? and connector = ? and role = ? and state = ? and created_at >= ?
+    order by position asc
+  `).all("thread-a", "api-session", "whatsapp", "assistant", "completed", "2026-01-01T00:00:00.000Z");
+  assert.match(phasePlan.map((row) => row.detail).join("\n"), /idx_orkestr_thread_messages_phase/);
+  assert.match(recentPlan.map((row) => row.detail).join("\n"), /idx_orkestr_thread_messages_recent_delivery/);
+  db.close();
 });

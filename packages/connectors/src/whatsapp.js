@@ -5586,7 +5586,13 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
   ];
   await recoverParentsForAlreadyMirroredReplies(messageSets, deliveredIds, outboundDeliveries, state, env);
   for (const { agentId, threadId, thread, messages, kind } of messageSets) {
-    const debugThread = kind === "thread" ? await threadWithLiveCodexDebugMetadata(thread, env) : thread;
+    let debugThreadPromise = null;
+    const debugThread = () => {
+      debugThreadPromise ||= kind === "thread"
+        ? threadWithLiveCodexDebugMetadata(thread, env)
+        : Promise.resolve(thread);
+      return debugThreadPromise;
+    };
     const messageSetKey = outboundMirrorMessageSetKey({ kind, agentId, threadId });
     for (const [messageIndex, message] of messages.entries()) {
       const messageCursor = outboundMirrorMessageCursor(message, messageIndex);
@@ -5643,7 +5649,7 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
         }
         const text = appendWhatsAppDebugFooter(routerUpdateTarget.text, {
           message,
-          thread: debugThread,
+          thread: await debugThread(),
           messages,
           deliveryType: "router_update",
           env,
@@ -5709,7 +5715,7 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
         const chatId = queuedModeTarget.chatId;
         const text = appendWhatsAppDebugFooter(formatWhatsAppModeQueued(queuedModeTarget.mode), {
           message,
-          thread: debugThread,
+          thread: await debugThread(),
           messages,
           deliveryType: "mode_queued",
           env,
@@ -5926,7 +5932,7 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
         }
         const text = appendWhatsAppDebugFooter(formatWhatsAppQueueNotice(queueMessage, queueTarget.reason), {
           message: queueMessage,
-          thread: debugThread,
+          thread: await debugThread(),
           messages: queueMessages,
           deliveryType: "queue_notice",
           env,
@@ -6048,7 +6054,7 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
         }
         const text = appendWhatsAppDebugFooter(formatWhatsAppDeliveryFailure(message), {
           message,
-          thread: debugThread,
+          thread: await debugThread(),
           messages,
           deliveryType: "delivery_error",
           env,
@@ -6169,7 +6175,7 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
         const noticeText = formatWhatsAppMutationNotice(message, mutationTarget);
         const text = appendWhatsAppDebugFooter(noticeText, {
           message,
-          thread: debugThread,
+          thread: await debugThread(),
           messages,
           deliveryType: mutationTarget.deliveryType,
           env,
@@ -6331,7 +6337,7 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
         }
         const text = appendWhatsAppDebugFooter(formatWhatsAppOutboundText(pickString(message.text)), {
           message,
-          thread: debugThread,
+          thread: await debugThread(),
           messages,
           deliveryType: "progress",
           env,
@@ -6519,7 +6525,7 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
       }));
       const text = appendWhatsAppDebugFooter(appendRemoteAttachmentFailureNotes(formattedText, remoteMaterialized.skipped), {
         message,
-        thread: debugThread,
+        thread: await debugThread(),
         messages,
         deliveryType,
         env,
