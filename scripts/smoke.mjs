@@ -37,6 +37,7 @@ function start(home, port) {
     env: {
       ...process.env,
       ORKESTR_HOME: home,
+      PORT: String(port),
       ORKESTR_PORT: String(port),
       ORKESTR_AUTH_REQUIRED: process.env.ORKESTR_SMOKE_AUTH_REQUIRED || "0",
       ORKESTR_UNSAFE_ALLOW_PUBLIC_UNAUTHENTICATED: "1",
