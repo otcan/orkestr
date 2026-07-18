@@ -170,6 +170,7 @@ test("thread message repository migrates JSON once and serves bounded SQLite can
     cursor: index + 1,
     role: index % 2 ? "assistant" : "user",
     state: index === 2 ? "queued" : "completed",
+    phase: index === 7 ? "need_input" : "",
     text: `message ${index + 1}`,
     createdAt: `2026-01-01T00:00:${String(index).padStart(2, "0")}.000Z`,
   }));
@@ -179,13 +180,15 @@ test("thread message repository migrates JSON once and serves bounded SQLite can
   const candidates = await repository.listCandidates("thread-a", {
     afterCursor: 9,
     tailLimit: 2,
-    states: ["queued"],
+    states: ["queued", "awaiting_ack"],
+    phases: ["need_input", "question"],
     ids: ["message-6"],
   });
 
   assert.deepEqual(candidates.map((message) => message.id), [
     "message-3",
     "message-6",
+    "message-8",
     "message-10",
     "message-11",
     "message-12",
@@ -210,14 +213,19 @@ test("thread message repository migrates JSON once and serves bounded SQLite can
   const db = new DatabaseSync(path.join(home, "thread-messages.sqlite"), { readOnly: true });
   const phasePlan = db.prepare(`
     explain query plan select position, data from orkestr_thread_messages
-    where thread_id = ? and phase in (?) order by position asc
+    where thread_id = ? and phase = ? order by position asc
   `).all("thread-a", "need_input");
+  const statePlan = db.prepare(`
+    explain query plan select position, data from orkestr_thread_messages
+    where thread_id = ? and state = ? order by position asc
+  `).all("thread-a", "queued");
   const recentPlan = db.prepare(`
     explain query plan select position, data from orkestr_thread_messages
     where thread_id = ? and source = ? and connector = ? and role = ? and state = ? and created_at >= ?
     order by position asc
   `).all("thread-a", "api-session", "whatsapp", "assistant", "completed", "2026-01-01T00:00:00.000Z");
   assert.match(phasePlan.map((row) => row.detail).join("\n"), /idx_orkestr_thread_messages_phase/);
+  assert.match(statePlan.map((row) => row.detail).join("\n"), /idx_orkestr_thread_messages_state/);
   assert.match(recentPlan.map((row) => row.detail).join("\n"), /idx_orkestr_thread_messages_recent_delivery/);
   db.close();
 });

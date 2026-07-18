@@ -272,20 +272,18 @@ export async function listThreadMessageCandidates(threadId, options = {}, env = 
     `).all(threadId, ...ids));
   }
   const states = [...new Set((options.states || []).map((value) => String(value || "").trim()).filter(Boolean))];
-  if (states.length) {
-    const placeholders = states.map(() => "?").join(",");
+  for (const state of states) {
     addRows(db.prepare(`
       select position, data from orkestr_thread_messages
-      where thread_id = ? and state in (${placeholders}) order by position asc
-    `).all(threadId, ...states));
+      where thread_id = ? and state = ? order by position asc
+    `).all(threadId, state));
   }
   const phases = [...new Set((options.phases || []).map((value) => String(value || "").trim()).filter(Boolean))];
-  if (phases.length) {
-    const placeholders = phases.map(() => "?").join(",");
+  for (const phase of phases) {
     addRows(db.prepare(`
       select position, data from orkestr_thread_messages
-      where thread_id = ? and phase in (${placeholders}) order by position asc
-    `).all(threadId, ...phases));
+      where thread_id = ? and phase = ? order by position asc
+    `).all(threadId, phase));
   }
   if (options.recentSince) {
     const source = String(options.recentSource || "").trim();
