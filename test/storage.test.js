@@ -5,6 +5,8 @@ import path from "node:path";
 import test from "node:test";
 import { appendEvent, eventArchiveDownloadPath, eventStorageStatus, listEventArchives, listEvents, readJson, rotateEvents, writeJson } from "../packages/storage/src/store.js";
 import { listThreadRecords, saveThreadRecords } from "../packages/storage/src/thread-registry.js";
+import { createThreadMessageRepository } from "../packages/storage/src/repositories.js";
+import { closeThreadMessageRegistryCache } from "../packages/storage/src/thread-message-registry.js";
 
 test("readJson recovers a valid JSON value with trailing garbage", async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-storage-"));
@@ -154,4 +156,53 @@ test("thread registry deduplicates visible thread names", async () => {
   assert.equal(listed[0].id, "test-old");
   assert.equal(stored.length, 1);
   assert.equal(stored[0].id, "test-old");
+});
+
+test("thread message repository migrates JSON once and serves bounded SQLite candidates", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-message-storage-"));
+  const env = { ORKESTR_HOME: home, ORKESTR_THREAD_STORE: "sqlite" };
+  const messageDir = path.join(home, "thread-messages");
+  const messageFile = path.join(messageDir, "thread-a.json");
+  await fs.mkdir(messageDir, { recursive: true });
+  const legacy = Array.from({ length: 12 }, (_, index) => ({
+    id: `message-${index + 1}`,
+    cursor: index + 1,
+    role: index % 2 ? "assistant" : "user",
+    state: index === 2 ? "queued" : "completed",
+    text: `message ${index + 1}`,
+    createdAt: `2026-01-01T00:00:${String(index).padStart(2, "0")}.000Z`,
+  }));
+  await fs.writeFile(messageFile, JSON.stringify(legacy));
+
+  const repository = createThreadMessageRepository(env);
+  const candidates = await repository.listCandidates("thread-a", {
+    afterCursor: 9,
+    tailLimit: 2,
+    states: ["queued"],
+    ids: ["message-6"],
+  });
+
+  assert.deepEqual(candidates.map((message) => message.id), [
+    "message-3",
+    "message-6",
+    "message-10",
+    "message-11",
+    "message-12",
+  ]);
+
+  await repository.append("thread-a", {
+    id: "message-13",
+    cursor: 13,
+    role: "assistant",
+    state: "completed",
+    text: "database only",
+    createdAt: "2026-01-01T00:00:13.000Z",
+  });
+  assert.equal((await readJson(messageFile, [])).length, 12);
+  assert.equal((await repository.list("thread-a")).at(-1).id, "message-13");
+
+  await closeThreadMessageRegistryCache();
+  const reopened = createThreadMessageRepository(env);
+  assert.equal((await reopened.list("thread-a")).at(-1).id, "message-13");
+  await closeThreadMessageRegistryCache();
 });

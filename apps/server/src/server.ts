@@ -19,6 +19,7 @@ import {
   stopLocalWhatsAppBridge,
 } from "../../../packages/connectors/src/whatsapp-local-bridge.js";
 import { clearWhatsAppDeliveryIdleCache } from "../../../packages/connectors/src/whatsapp.js";
+import { migrateThreadMessageStore } from "../../../packages/storage/src/thread-message-registry.js";
 import {
   createConnectorRuntimeSyncSignalHandler,
   whatsAppDeliveryFollowUpDelayMs,
@@ -491,6 +492,7 @@ function threadIdFromApiRequest(request: any) {
 export async function startServer({ port = 19812, host = "127.0.0.1", openBrowser = false } = {}) {
   const serverEnv = { ...process.env };
   await ensureDataDirs(serverEnv);
+  await migrateThreadMessageStore(serverEnv);
   if (serverEnv.ORKESTR_RECOVER_RUNNING_ON_START !== "0") {
     await recoverInterruptedExecutions(serverEnv);
   }

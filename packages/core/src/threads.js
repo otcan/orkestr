@@ -399,6 +399,63 @@ export async function listThreadMessages(threadId, env = process.env) {
   return createThreadMessageRepository(env).list(id);
 }
 
+export async function listThreadMessageCandidates(threadId, options = {}, env = process.env) {
+  const thread = await getThread(threadId, env);
+  const id = thread?.id || normalizeThreadId(threadId);
+  const repository = createThreadMessageRepository(env);
+  const stored = await repository.listCandidates(id, options);
+  if (Array.isArray(stored)) return stored;
+  const messages = await repository.list(id);
+  const selected = new Map();
+  const add = (message, index) => selected.set(String(message?.id || index), { message, index });
+  const tailLimit = Math.max(0, Number(options.tailLimit || 0) || 0);
+  if (tailLimit) {
+    const start = Math.max(0, messages.length - tailLimit);
+    messages.slice(start).forEach((message, index) => add(message, start + index));
+  }
+  if (Object.prototype.hasOwnProperty.call(options, "afterCursor")) {
+    const threshold = Math.max(0, Number(options.afterCursor || 0) || 0);
+    messages.forEach((message, index) => {
+      if ((Number(message?.cursor || 0) || index + 1) > threshold) add(message, index);
+    });
+  }
+  const ids = new Set((options.ids || []).map((value) => String(value || "").trim()).filter(Boolean));
+  const states = new Set((options.states || []).map((value) => String(value || "").trim()).filter(Boolean));
+  const phases = new Set((options.phases || []).map((value) => String(value || "").trim()).filter(Boolean));
+  messages.forEach((message, index) => {
+    if (ids.has(String(message?.id || "")) || states.has(String(message?.state || "")) || phases.has(String(message?.phase || ""))) add(message, index);
+  });
+  return [...selected.values()].sort((left, right) => left.index - right.index).map((entry) => entry.message);
+}
+
+export async function getThreadMessage(threadId, messageId, env = process.env) {
+  const thread = await getThread(threadId, env);
+  const id = thread?.id || normalizeThreadId(threadId);
+  const repository = createThreadMessageRepository(env);
+  if (await repository.usesSqlite()) return repository.get(id, messageId);
+  return (await repository.list(id)).find((message) => message.id === messageId) || null;
+}
+
+export async function findThreadMessage(threadId, fields = {}, env = process.env) {
+  const thread = await getThread(threadId, env);
+  const id = thread?.id || normalizeThreadId(threadId);
+  const repository = createThreadMessageRepository(env);
+  if (await repository.usesSqlite()) return repository.find(id, fields);
+  const messages = await repository.list(id);
+  return [...messages].reverse().find((message) => Object.entries(fields).every(([key, value]) => {
+    const expected = String(value || "").trim();
+    if (!expected) return true;
+    const actual = key === "codexThreadId"
+      ? message?.codexThreadId || message?.executorThreadId
+      : key === "codexTurnId"
+        ? message?.codexTurnId || message?.executorTurnId
+        : key === "codexItemId"
+          ? message?.codexItemId || message?.executorItemId
+          : message?.[key];
+    return String(actual || "").trim() === expected;
+  })) || null;
+}
+
 export async function listThreadMessagesForPrincipal(threadId, principal, env = process.env) {
   const thread = await getThreadForPrincipal(threadId, principal, env);
   return listThreadMessages(thread.id, env);
@@ -414,30 +471,40 @@ export async function appendThreadMessage(threadId, input, env = process.env) {
   const messageRepository = createThreadMessageRepository(env);
   const filePath = await messageRepository.pathForThread(thread.id);
   const message = await enqueueMessageMutation(filePath, async () => {
-    const messages = await messageRepository.list(thread.id);
+    const sqlite = await messageRepository.usesSqlite();
+    const messages = sqlite ? null : await messageRepository.list(thread.id);
     const role = String(input.role || "assistant");
     const source = String(input.source || "manual");
     const clientMessageId = clientInputIdempotencyKey(input);
     if (role === "user" && clientMessageId) {
-      const duplicate = [...messages].reverse().find((existing) =>
-        existing.role === "user" &&
-        clientInputIdempotencyKey(existing) === clientMessageId
-      );
+      const duplicate = sqlite
+        ? await messageRepository.find(thread.id, { clientMessageId, role: "user" })
+        : [...messages].reverse().find((existing) =>
+            existing.role === "user" &&
+            clientInputIdempotencyKey(existing) === clientMessageId
+          );
       if (duplicate) return { ...duplicate, duplicate: true, duplicateReason: "client_message_id" };
     }
     const externalId = String(input.externalId || "").trim();
     if (role === "user" && externalId && whatsappOrigin({ ...input, role, source })) {
-      const duplicate = [...messages].reverse().find((existing) =>
-        existing.role === "user" &&
-        whatsappOrigin(existing) &&
-        String(existing.externalId || "").trim() === externalId &&
-        sameOptionalMessageField(existing, input, "chatId")
-      );
+      const candidate = sqlite
+        ? await messageRepository.find(thread.id, { externalId, role: "user" })
+        : null;
+      const duplicate = sqlite
+        ? candidate && whatsappOrigin(candidate) && sameOptionalMessageField(candidate, input, "chatId") ? candidate : null
+        : [...messages].reverse().find((existing) =>
+            existing.role === "user" &&
+            whatsappOrigin(existing) &&
+            String(existing.externalId || "").trim() === externalId &&
+            sameOptionalMessageField(existing, input, "chatId")
+          );
       if (duplicate) return { ...duplicate, duplicate: true, duplicateReason: "external_id" };
     }
     const cursor =
       Number(input.cursor || 0) ||
-      Math.max(0, ...messages.map((item) => Number(item.cursor || 0)).filter(Number.isFinite)) + 1;
+      (sqlite
+        ? await messageRepository.nextCursor(thread.id)
+        : Math.max(0, ...messages.map((item) => Number(item.cursor || 0)).filter(Number.isFinite)) + 1);
     let nextMessage = {
       id: randomUUID(),
       ownerUserId: normalizeUserId(input.ownerUserId || thread.ownerUserId || env.ORKESTR_ADMIN_USER_ID || adminUserId),
@@ -487,8 +554,8 @@ export async function appendThreadMessage(threadId, input, env = process.env) {
     if (resolvedAttachments.attachments.length) {
       nextMessage.attachments = resolvedAttachments.attachments;
     }
-    const next = [...messages, nextMessage];
-    await messageRepository.save(thread.id, next);
+    if (sqlite) await messageRepository.append(thread.id, nextMessage);
+    else await messageRepository.save(thread.id, [...messages, nextMessage]);
     return nextMessage;
   });
   if (message.duplicate) {
@@ -560,7 +627,10 @@ async function activeDuplicateThreadInput(threadId, input, env = process.env) {
   const text = compactInputText(input.text);
   const promptFile = String(input.promptFile || "").trim();
   if (!text && !promptFile) return null;
-  const messages = await listThreadMessages(threadId, env);
+  const repository = createThreadMessageRepository(env);
+  const messages = await repository.usesSqlite()
+    ? await repository.listByStates(threadId, [...activeInputStates])
+    : await listThreadMessages(threadId, env);
   return [...messages].reverse().find((message) =>
     message.role === "user" &&
     activeInputStates.has(message.state) &&
@@ -648,7 +718,9 @@ export async function updateThreadMessage(threadId, messageId, patch, env = proc
   const messageRepository = createThreadMessageRepository(env);
   const filePath = await messageRepository.pathForThread(thread.id);
   return enqueueMessageMutation(filePath, async () => {
-    const messages = await messageRepository.list(thread.id);
+    const sqlite = await messageRepository.usesSqlite();
+    const storedMessage = sqlite ? await messageRepository.get(thread.id, messageId) : null;
+    const messages = sqlite ? (storedMessage ? [storedMessage] : []) : await messageRepository.list(thread.id);
     let updated = null;
     let previous = null;
     const normalizeAttachments = Object.prototype.hasOwnProperty.call(patch || {}, "text") ||
@@ -688,7 +760,8 @@ export async function updateThreadMessage(threadId, messageId, patch, env = proc
       error.statusCode = 404;
       throw error;
     }
-    await messageRepository.save(thread.id, next);
+    if (sqlite) await messageRepository.update(thread.id, messageId, updated);
+    else await messageRepository.save(thread.id, next);
     if (visibleMutationFields.length) {
       const deleted = Boolean(patch?.deletedAt);
       await appendEvent({
@@ -720,7 +793,7 @@ export async function deleteThreadMessage(threadId, messageId, options = {}, env
 }
 
 export async function nextQueuedThreadMessage(threadId, env = process.env) {
-  const messages = await listThreadMessages(threadId, env);
+  const messages = await listThreadMessageCandidates(threadId, { states: ["queued"] }, env);
   return messages.find((message) => message.role === "user" && message.state === "queued") || null;
 }
 

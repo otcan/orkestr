@@ -13,6 +13,7 @@ import {
 import { threadUsesRawTerminalMode } from "./raw-terminal-mode.js";
 import {
   appendThreadMessage,
+  findThreadMessage,
   listThreadMessages,
   listThreads,
   updateThread,
@@ -446,8 +447,20 @@ export async function threadForCodexThreadId(codexId, env = process.env) {
 }
 
 export async function appendOrUpdateEventMessage(thread, input, env = process.env) {
-  const messages = await listThreadMessages(thread.id, env).catch(() => []);
-  const existing = findExistingEventMessage(messages, input);
+  const eventId = clean(input.eventId);
+  let existing = eventId ? await findThreadMessage(thread.id, { eventId }, env).catch(() => null) : null;
+  if (!existing) {
+    const identity = eventMessageIdentity(input);
+    if (identity) {
+      existing = await findThreadMessage(thread.id, {
+        codexThreadId: clean(input.codexThreadId || input.executorThreadId),
+        codexTurnId: clean(input.codexTurnId || input.executorTurnId),
+        codexItemId: clean(input.codexItemId || input.executorItemId),
+        role: clean(input.role).toLowerCase(),
+        phase: clean(input.phase || (clean(input.role).toLowerCase() === "assistant" ? "final_answer" : "")).toLowerCase(),
+      }, env).catch(() => null);
+    }
+  }
   if (existing) {
     const patch = {
       ...input,

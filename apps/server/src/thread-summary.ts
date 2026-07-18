@@ -363,6 +363,19 @@ async function listThreadSummaryScope(principal: Record<string, any> | null, inc
 async function listThreadMessagesForSummary(threadId: string) {
   const limit = threadSummaryMessagesLimit();
   const repository = createThreadMessageRepository(process.env);
+  const storeFingerprint = await repository.fingerprint(threadId);
+  if (storeFingerprint) {
+    const cacheKey = JSON.stringify({ threadId, storeFingerprint, limit });
+    const cached = threadSummaryMessagesCache.get(threadId);
+    if (cached?.cacheKey === cacheKey) return cached.messages;
+    const messages = await repository.listCandidates(threadId, {
+      tailLimit: limit,
+      states: ["queued", "pending_delivery", "awaiting_ack", "running"],
+      phases: [...needInputPhases],
+    }) || [];
+    threadSummaryMessagesCache.set(threadId, { cacheKey, messages });
+    return messages;
+  }
   const filePath = await repository.pathForThread(threadId);
   const fileStat = await stat(filePath).catch(() => null);
   const statToken = fileStat ? `${Math.trunc(fileStat.mtimeMs)}:${fileStat.size}` : "missing";

@@ -14,7 +14,9 @@ import { assertCodexAuthenticated } from "../../connectors/src/codex.js";
 import { clearPaneProgressCache, paneBackgroundWork, publicPaneProgress, samplePaneProgress } from "./pane-progress.js";
 import {
   appendThreadMessage,
+  getThreadMessage,
   getThread,
+  listThreadMessageCandidates,
   listThreadMessages,
   listThreads,
   updateThread,
@@ -468,12 +470,17 @@ async function cachedPassiveRuntimeThreadMessages(threadId, env = process.env) {
   if (!id) return [];
   const repository = createThreadMessageRepository(env);
   const filePath = await repository.pathForThread(id);
-  const fileStat = await fs.stat(filePath).catch(() => null);
-  const statToken = fileStat ? `${Math.trunc(fileStat.mtimeMs)}:${fileStat.size}` : "missing";
-  const cacheKey = `${runtimeCacheScope(env)}:${id}:${filePath}:${statToken}`;
+  const storeFingerprint = await repository.fingerprint(id);
+  const fileStat = storeFingerprint ? null : await fs.stat(filePath).catch(() => null);
+  const statToken = storeFingerprint || (fileStat ? `${Math.trunc(fileStat.mtimeMs)}:${fileStat.size}` : "missing");
+  const cacheKey = `${runtimeCacheScope(env)}:${id}:${statToken}`;
   const cached = passiveRuntimeThreadMessagesCache.get(id);
   if (cached?.cacheKey === cacheKey) return cached.messages;
-  const messages = await listThreadMessages(id, env).catch(() => []);
+  const messages = await listThreadMessageCandidates(id, {
+    tailLimit: 200,
+    states: [...pendingInputStates],
+    phases: ["need_input", "awaiting_input", "question", "request_user_input"],
+  }, env).catch(() => []);
   passiveRuntimeThreadMessagesCache.set(id, { cacheKey, messages });
   return messages;
 }
@@ -3262,8 +3269,7 @@ async function waitForThreadInputAck(thread, messageId, env = process.env) {
   const waitMs = deliveryAckWaitMs(env);
   const deadline = Date.now() + waitMs;
   do {
-    const messages = await listThreadMessages(thread.id, env);
-    const message = messages.find((item) => item.id === messageId);
+    const message = await getThreadMessage(thread.id, messageId, env);
     if (!message || message.state !== "awaiting_ack") return message?.state === "completed" ? message.id : null;
     const status = await runtimeStatus(thread.id, env).catch(() => null);
     const acknowledged = await acknowledgeThreadInputDelivery(thread, message, status, env);
@@ -3573,7 +3579,7 @@ export async function deliverPendingThreadInputs(threadId, env = process.env, op
   const delivered = [];
   try {
     for (;;) {
-      const messages = await listThreadMessages(thread.id, env);
+      const messages = await listThreadMessageCandidates(thread.id, { states: [...pendingInputStates] }, env);
       const splitModeCommand = messages
         .map((message) => ({ message, parsed: codexModeCommandWithText(message) }))
         .find((item) => item.parsed);
@@ -3727,7 +3733,11 @@ export async function deliverPendingThreadInputs(threadId, env = process.env, op
       await updateThread(thread.id, { state: "waking" }, env);
       try {
         await wakeThread(thread.id, { reason: next.source || "message" }, env);
-        const currentMessages = await listThreadMessages(thread.id, env);
+        const currentMessages = await listThreadMessageCandidates(thread.id, {
+          tailLimit: 200,
+          states: [...pendingInputStates],
+          phases: ["need_input", "awaiting_input", "question", "request_user_input"],
+        }, env);
         const currentNext = currentMessages.find((item) => item.id === next.id) || next;
         let status = await runtimeStatus(thread.id, env).catch(() => null);
         if (status?.planImplementationMenuVisible) {
@@ -3783,7 +3793,7 @@ export async function deliverPendingThreadInputs(threadId, env = process.env, op
           delivered.push(acknowledged);
           continue;
         }
-        const current = (await listThreadMessages(thread.id, env)).find((item) => item.id === currentNext.id) || currentNext;
+        const current = await getThreadMessage(thread.id, currentNext.id, env) || currentNext;
         if (await failRejectedThreadInputDelivery(thread, current, status, env)) continue;
         await updateThread(thread.id, { state: "working", lastError: null }, env);
         scheduleThreadInputDelivery(thread.id, env, deliveryDueInMs({ deliveryNextAttemptAt: attempt.nextAttemptAt }));
@@ -4772,7 +4782,7 @@ export async function drainAllPendingThreadInputs(env = process.env) {
   const threads = await listThreads(env);
   const results = [];
   for (const thread of threads) {
-    const messages = await listThreadMessages(thread.id, env);
+    const messages = await listThreadMessageCandidates(thread.id, { states: [...pendingInputStates] }, env);
     if (messages.some((message) => message.role === "user" && pendingInputStates.has(message.state))) {
       results.push({ threadId: thread.id, delivered: await deliverPendingThreadInputs(thread.id, env, { processApiAgent: true }) });
     }
@@ -4852,7 +4862,7 @@ export async function recoverStalePendingThreadInputs(env = process.env, options
   const threads = await listThreads(env);
   const results = [];
   for (const thread of threads) {
-    const messages = await listThreadMessages(thread.id, env).catch(() => []);
+    const messages = await listThreadMessageCandidates(thread.id, { states: [...pendingInputStates] }, env).catch(() => []);
     const active = messages
       .filter((message) => message.role === "user" && pendingInputStates.has(String(message.state || "")))
       .sort((left, right) => {

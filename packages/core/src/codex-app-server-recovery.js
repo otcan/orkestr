@@ -2,7 +2,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { dataPaths } from "../../storage/src/paths.js";
 import { appendEvent } from "../../storage/src/store.js";
-import { enqueueThreadInput, getThread, listThreadMessages, listThreads, updateThread } from "./threads.js";
+import { createThreadMessageRepository } from "../../storage/src/repositories.js";
+import { enqueueThreadInput, getThread, listThreadMessageCandidates, listThreadMessages, listThreads, updateThread } from "./threads.js";
 import { getCodexAppServerClient } from "./codex-app-server-client.js";
 import {
   appendOrUpdateEventMessage,
@@ -743,6 +744,9 @@ function recoveryEligibleMessages(thread = {}, messages = []) {
 }
 
 async function threadMessagesFingerprint(threadId, env = process.env) {
+  const repository = createThreadMessageRepository(env);
+  const storeFingerprint = await repository.fingerprint(threadId);
+  if (storeFingerprint) return storeFingerprint;
   const filePath = path.join(dataPaths(env).threadMessages, `${safeThreadId(threadId)}.json`);
   const stats = await fs.stat(filePath).catch(() => null);
   if (!stats?.isFile()) return "missing";
@@ -813,7 +817,11 @@ export async function recoverStaleCodexAppServerTurns(env = process.env, options
     const initialScanKey = recoveryScanKey(thread, clientState, messagesFingerprint, options, env);
     if (recoveryCacheHit(thread.id, initialScanKey, env)) continue;
     const staleRuntimeCandidate = staleAppServerRuntime(thread, clientState);
-    const messages = recoveryEligibleMessages(thread, await listThreadMessages(thread.id, env).catch(() => []));
+    const messages = recoveryEligibleMessages(thread, await listThreadMessageCandidates(thread.id, {
+      tailLimit: staleRecoveryMessageScanLimit(env),
+      states: ["queued", "pending_delivery", "awaiting_ack", "running"],
+      phases: ["need_input", "awaiting_input", "question", "request_user_input"],
+    }, env).catch(() => []));
     const clearPatch = staleRecoveryClearPatch(thread, messages);
     if (clearPatch) {
       const updated = await updateThread(thread.id, {

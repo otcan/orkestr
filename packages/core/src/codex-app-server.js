@@ -2,7 +2,9 @@ import { randomUUID } from "node:crypto";
 import { appendEvent } from "../../storage/src/store.js";
 import {
   appendThreadMessage,
+  getThreadMessage,
   getThread,
+  listThreadMessageCandidates,
   listThreadMessages,
   updateThread,
   updateThreadMessage,
@@ -183,8 +185,7 @@ function codexAppServerDeliveryRecoveryClaimStaleMs(env = process.env) {
 
 async function claimExternalDeliveryRecovery(thread, message, env = process.env) {
   if (!externalChatInput(message)) return { claimed: true, claimId: "", message };
-  const messages = await listThreadMessages(thread.id, env).catch(() => []);
-  const current = messages.find((item) => item.id === message.id);
+  const current = await getThreadMessage(thread.id, message.id, env).catch(() => null);
   if (!current || !pendingInputStates.has(clean(current.state))) {
     return { claimed: false, reason: "message_not_pending", message: current || message };
   }
@@ -211,8 +212,7 @@ async function claimExternalDeliveryRecovery(thread, message, env = process.env)
     deliveryRecoveryClaimedAt: claimedAt,
     deliveryRecoveryClaimOwner: `pid:${process.pid}`,
   }, env);
-  const confirmedMessages = await listThreadMessages(thread.id, env).catch(() => []);
-  const confirmed = confirmedMessages.find((item) => item.id === current.id);
+  const confirmed = await getThreadMessage(thread.id, current.id, env).catch(() => null);
   if (clean(confirmed?.deliveryRecoveryClaimId) !== claimId) {
     await appendEvent({
       type: "codex_app_server_delivery_recovery_claim_lost",
@@ -235,8 +235,7 @@ async function claimExternalDeliveryRecovery(thread, message, env = process.env)
 
 async function releaseExternalDeliveryRecoveryClaim(thread, messageId, claimId, env = process.env) {
   if (!claimId || !messageId) return;
-  const messages = await listThreadMessages(thread.id, env).catch(() => []);
-  const current = messages.find((item) => item.id === messageId);
+  const current = await getThreadMessage(thread.id, messageId, env).catch(() => null);
   if (!current || clean(current.deliveryRecoveryClaimId) !== claimId) return;
   await updateThreadMessage(thread.id, messageId, {
     deliveryRecoveryClaimId: null,
@@ -323,7 +322,7 @@ async function updateDeliveryRecoveryState(thread, message, state, context = {},
   const checkedAt = nowIso();
   const currentThread = await getThread(thread.id, env).catch(() => null) || thread;
   const currentMessage = message?.id
-    ? (await listThreadMessages(thread.id, env).catch(() => [])).find((item) => item.id === message.id) || message
+    ? await getThreadMessage(thread.id, message.id, env).catch(() => null) || message
     : message;
   const recovery = {
     state,
@@ -1101,8 +1100,7 @@ async function startCodexAppServerTurn({ client, thread, id, pending, env, runti
 }
 
 async function claimCodexAppServerPendingInput(thread, message, env = process.env) {
-  const messages = await listThreadMessages(thread.id, env).catch(() => []);
-  const current = messages.find((item) => item.id === message.id);
+  const current = await getThreadMessage(thread.id, message.id, env).catch(() => null);
   if (!current || current.role !== "user" || !pendingInputStates.has(clean(current.state))) {
     await appendEvent({
       type: "codex_app_server_input_stale_claim_ignored",
@@ -1131,8 +1129,7 @@ async function claimCodexAppServerPendingInput(thread, message, env = process.en
     deliveryLastAttemptAt: nowIso(),
     deliveryClaimId,
   }, env);
-  const claimedMessages = await listThreadMessages(thread.id, env).catch(() => []);
-  const claimed = claimedMessages.find((item) => item.id === current.id);
+  const claimed = await getThreadMessage(thread.id, current.id, env).catch(() => null);
   if (clean(claimed?.deliveryClaimId) !== deliveryClaimId || clean(claimed?.deliveryState) !== "codex_app_server_sending") {
     await appendEvent({
       type: "codex_app_server_input_claim_lost",
@@ -1408,7 +1405,7 @@ export async function deliverCodexAppServerPendingInputs(thread, env = process.e
     appServerDeliveryLocks.delete(lockKey);
   }
   if (delivered.length) {
-    const messages = await listThreadMessages(lockKey, env).catch(() => []);
+    const messages = await listThreadMessageCandidates(lockKey, { states: [...pendingInputStates] }, env).catch(() => []);
     if (messages.some((message) => message.role === "user" && pendingInputStates.has(clean(message.state)))) {
       scheduleCodexAppServerInputDelivery(lockKey, env, 0);
     }
@@ -1418,7 +1415,7 @@ export async function deliverCodexAppServerPendingInputs(thread, env = process.e
 
 async function deliverCodexAppServerPendingInputsUnlocked(thread, env = process.env) {
   const delivered = [];
-  const messages = await listThreadMessages(thread.id, env);
+  const messages = await listThreadMessageCandidates(thread.id, { states: [...pendingInputStates] }, env);
   const pendingMessages = messages.filter((message) => message.role === "user" && pendingInputStates.has(message.state));
   const stopMessage = pendingMessages.find((message) => parseThreadInputCommand({ text: message.text }).command === "stop");
   let next = stopMessage || pendingMessages[0];

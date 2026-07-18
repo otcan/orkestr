@@ -28,6 +28,7 @@ import { adminUserId, findOrCreateExternalUser, getUser, normalizeUserId } from 
 import { dataPaths, ensureDataDirs } from "../../storage/src/paths.js";
 import { readConnectorConfig } from "../../storage/src/config.js";
 import { appendEvent, readJson, writeJson } from "../../storage/src/store.js";
+import { createThreadMessageRepository } from "../../storage/src/repositories.js";
 import {
   getLocalWhatsAppBridgeStatus,
   localWhatsAppBridgeBasePath,
@@ -5241,11 +5242,32 @@ function whatsappSendFailureMessage(payload = {}, status = 0) {
 async function listThreadMessageSets(env, state = null, config = {}) {
   const paths = await ensureDataDirs(env);
   const sets = [];
+  const repository = createThreadMessageRepository(env);
   for (const thread of await listThreads(env)) {
     if (!threadEligibleForWhatsAppMirrorScan(thread, config)) continue;
     const messageSetKey = outboundMirrorMessageSetKey({ kind: "thread", threadId: thread.id });
     const filePath = path.join(paths.threadMessages, `${safeMessageFileId(thread.id)}.json`);
-    const messages = await readWhatsAppMirrorMessageSet(filePath, messageSetKey, state, env);
+    const cursor = Number(outboundMirrorCursorMap(state?.outboundMirrorCursors || []).get(messageSetKey)?.cursor || 0) || 0;
+    const activeMessageIds = activeWhatsAppOutboundIntentMessageIds(state, messageSetKey);
+    const recoveryWindowMs = whatsappLiveOutputRecoveryWindowMs(env);
+    const candidates = await repository.listCandidates(thread.id, {
+      ...(cursor > 0 ? { afterCursor: Math.max(0, cursor - whatsappMirrorScanOverlap(env)) } : {}),
+      tailLimit: cursor > 0 ? 0 : whatsappMirrorInitialTailLimit(env),
+      ids: [...activeMessageIds],
+      ...(recoveryWindowMs > 0 ? {
+        recentSince: new Date(Date.now() - recoveryWindowMs).toISOString(),
+        recentSource: "api-session",
+        recentConnector: "whatsapp",
+        recentRole: "assistant",
+        recentState: "completed",
+      } : {}),
+    });
+    const messages = Array.isArray(candidates)
+      ? mergeCursorScanMessages(
+          messagesAfterMirrorCursor(candidates, cursor, env),
+          candidates.filter((message) => activeMessageIds.has(pickString(message?.id))),
+        )
+      : await readWhatsAppMirrorMessageSet(filePath, messageSetKey, state, env);
     if (Array.isArray(messages)) sets.push({ threadId: thread.id, thread, messages });
   }
   return sets;
@@ -5392,6 +5414,8 @@ async function whatsappDeliveryIdleSignature(env = process.env) {
     fileSignature(paths.threads),
     fileSignature(paths.whatsapp),
     fileSignature(paths.connectorOutbox),
+    fileSignature(paths.threadMessagesDb),
+    fileSignature(`${paths.threadMessagesDb}-wal`),
     jsonDirSignature(paths.messages),
     jsonDirSignature(paths.threadMessages),
   ]);
