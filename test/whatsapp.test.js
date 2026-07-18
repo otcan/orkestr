@@ -3757,6 +3757,52 @@ test("local whatsapp inbound does not route a caption when media download retrie
   assert.equal(messages.length, 0);
 });
 
+test("local whatsapp inbound routes link text when generated preview media cannot download", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-link-preview-failed-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "sender",
+    ORKESTR_WHATSAPP_INBOUND_MEDIA_DOWNLOAD_ATTEMPTS: "2",
+    ORKESTR_WHATSAPP_INBOUND_MEDIA_DOWNLOAD_RETRY_MS: "0",
+    ORKESTR_WHATSAPP_INBOUND_MEDIA_DOWNLOAD_TIMEOUT_MS: "100",
+  };
+  const chatId = "chat-link-preview-failed@g.us";
+  let attempts = 0;
+  await createThread({
+    id: "link-preview-failed-thread",
+    name: "Link preview failed",
+    binding: {
+      connector: "whatsapp",
+      chatId,
+      responderAccountId: "sender",
+      outboundAccountId: "sender",
+      enabled: true,
+    },
+  }, env);
+
+  const result = await handleInboundMessage("sender", {
+    id: { _serialized: `false_${chatId}_link-preview-failed-1`, remote: chatId },
+    from: chatId,
+    author: "279611011236064@lid",
+    fromMe: false,
+    body: "Read https://example.test/challenge and assess it",
+    hasMedia: true,
+    type: "chat",
+    timestamp: 1_780_000_002,
+    async downloadMedia() {
+      attempts += 1;
+      throw new Error("preview unavailable");
+    },
+  }, env);
+  const messages = await listThreadMessages("link-preview-failed-thread", env);
+
+  assert.equal(result.routed.threadId, "link-preview-failed-thread");
+  assert.equal(attempts, 2);
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].text, "Read https://example.test/challenge and assess it");
+  assert.deepEqual(messages[0].attachments || [], []);
+});
+
 test("local whatsapp inbound ignores fromMe attachment echoes with rewritten filenames", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-attachment-size-echo-"));
   const env = {

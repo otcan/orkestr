@@ -3641,6 +3641,11 @@ function localWhatsAppApiAgentAutoRun(env = process.env) {
   return String(env.ORKESTR_WHATSAPP_API_AGENT_AUTORUN || "1").trim().toLowerCase() !== "0";
 }
 
+function failedInboundMediaCanRouteAsLinkText(message = {}, text = "") {
+  const type = String(message?.type || message?._data?.type || "").trim().toLowerCase();
+  return type === "chat" && /\bhttps?:\/\/\S+/i.test(String(text || ""));
+}
+
 export async function handleInboundMessage(accountId, message, env = process.env, options = {}) {
   const fromMe = Boolean(message?.fromMe);
   if (options.ownOnly && !fromMe) return { skipped: "not_own_message" };
@@ -3676,14 +3681,24 @@ export async function handleInboundMessage(accountId, message, env = process.env
       error: error?.message || String(error),
       retryable: error?.retryable === true,
     }, env).catch(() => {});
-    return {
-      error: error?.message || String(error),
-      retryable: error?.retryable === true,
+    if (!failedInboundMediaCanRouteAsLinkText(message, text)) {
+      return {
+        error: error?.message || String(error),
+        retryable: error?.retryable === true,
+        eventId,
+        chatId,
+        from,
+        fromMe: routeFromMe,
+      };
+    }
+    attachments = [];
+    await appendEvent({
+      type: "whatsapp_local_inbound_link_preview_media_skipped",
+      accountId,
       eventId,
       chatId,
-      from,
-      fromMe: routeFromMe,
-    };
+      error: error?.message || String(error),
+    }, env).catch(() => {});
   }
   if (!text && !attachments.length) return { skipped: "empty_message" };
   if (outboundAttachmentsRecentlySent(accountId, chatId, attachments, env, { allowSizeOnly: fromMe })) {
