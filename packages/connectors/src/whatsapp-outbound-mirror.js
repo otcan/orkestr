@@ -563,7 +563,7 @@ export function formatWhatsAppQueueNotice(message, reason = "") {
   const normalizedReason = String(reason || "").trim().toLowerCase();
   let notice = "";
   if (normalizedReason === "awaiting_active_turn") {
-    notice = `Added after the current Codex turn${queueNoticePreviewClause(preview)} Use /now to steer into the active turn.`;
+    notice = `Added after the current Codex turn${queueNoticePreviewClause(preview)}`;
     return appendTraceReference(notice, message);
   }
   if (normalizedReason === "awaiting_approval") {

@@ -16,10 +16,14 @@ import { actionRegistryInstructions } from "./action-registry.js";
 import { recordApiAgentFailureSuggestion } from "./api-agent-suggestions.js";
 import { desktopProvisioningMessage } from "./desktop-provisioning.js";
 import { tenantDesktopSharePath } from "./tenant-desktop-share-routing.js";
+import { parseThreadInputCommand } from "./thread-commands.js";
+import { completeRuntimeLiveness, recordRuntimeLiveness } from "./runtime-liveness.js";
+import { markRuntimeFinalDeliveryPending } from "./runtime-final-delivery.js";
 
 export const API_AGENT_RUNTIME_KIND = "api-agent";
 
 const apiAgentRunning = new Set();
+const apiAgentRequestControllers = new Map();
 
 function nowIso() {
   return new Date().toISOString();
@@ -193,8 +197,10 @@ function maxOutputTokens(env = process.env) {
 }
 
 function apiAgentTimeoutMs(env = process.env) {
-  const parsed = Number(env.ORKESTR_API_AGENT_TIMEOUT_MS || 45_000);
-  return Number.isFinite(parsed) ? Math.max(1000, parsed) : 45_000;
+  const raw = clean(env.ORKESTR_API_AGENT_TIMEOUT_MS || "off").toLowerCase();
+  if (["", "0", "off", "false", "disabled", "none"].includes(raw)) return 0;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? Math.max(1000, parsed) : 0;
 }
 
 function apiAgentBudgetPreflightUsd(env = process.env) {
@@ -879,6 +885,11 @@ function formatConnectorMcpTool(result = {}) {
   }
   if (result.name === "orkestr_conversation") return `${provider} conversation action completed.`;
   if (result.name === "orkestr_routing") return `${provider} routing action completed.`;
+  if (result.name === "orkestr_runtime") {
+    if (output.status === "blocked") return "The current execution checkpoint was saved as blocked.";
+    if (["completed", "cancelled", "failed"].includes(clean(output.status))) return `The current execution was marked ${clean(output.status)}.`;
+    return output.action === "checkpoint" ? "The current execution checkpoint was saved." : "The current execution progress was recorded.";
+  }
   return `${provider} connector action completed.`;
 }
 
@@ -1308,7 +1319,7 @@ function formatToolResultFallback(toolResults = [], context = {}) {
     if (hasRunSkillAction && result.name === "orkestr_list_skill_actions") continue;
     let formatted = "";
     if (clean(result.output?.contract_version)) formatted = formatConnectorMcpTool({ ...result, name: result.name.startsWith("orkestr_") && ["orkestr_start_connector_auth", "orkestr_connector_status", "orkestr_disconnect_connector"].includes(result.name) ? "orkestr_auth" : result.name });
-    else if (["orkestr_auth", "orkestr_messaging", "orkestr_conversation", "orkestr_routing"].includes(result.name)) formatted = formatConnectorMcpTool(result);
+    else if (["orkestr_auth", "orkestr_messaging", "orkestr_conversation", "orkestr_routing", "orkestr_runtime"].includes(result.name)) formatted = formatConnectorMcpTool(result);
     else if (result.name === "orkestr_connector_status") formatted = formatConnectorStatusTool(result);
     else if (result.name === "orkestr_start_connector_auth") formatted = formatConnectorAuthTool(result);
     else if (result.name === "orkestr_disconnect_connector") formatted = formatConnectorStatusTool({ ...result, output: result.output?.status || result.output });
@@ -1710,6 +1721,7 @@ export async function buildTenantApiAgentInstructions(thread = {}, messages = []
     "Never answer a normal chat question, introduction, or capability question with only 'Done', 'OK', 'Sure', or another bare acknowledgement.",
     "Use the provided Orkestr tools for tenant-scoped resources. For every connector provider, use orkestr_auth for status, connect, reconnect, disconnect, or logout; do not invent provider-specific auth commands.",
     "Use orkestr_messaging, orkestr_conversation, and orkestr_routing for connector messages, conversations, and bindings. Treat bearer scope as authority and pass instance/user/thread/account fields only as matching context. If an administrative write returns approval_required, show only that current challenge and retry the exact tool call after approval.",
+    "For long-running work, use orkestr_runtime to report meaningful progress, save bounded resumable checkpoints, record a real blocked state, and mark completion. Do not treat elapsed wall-clock time by itself as failure or blockage.",
     "For Gmail sign-in, if the user did not provide the exact Gmail address they want to connect, ask for that address before starting auth. If Orkestr reports that the address is not approved for Google testing, explain that it must be added as a Google OAuth test user first and do not send a sign-in link.",
     "Connector setup is user-owned by default. When a connector is not connected or a matching capability is false, say that it is not connected for this chat yet and that you can help set it up here.",
     "Only say setup is unavailable on this Orkestr installation if a tool or Tenant context explicitly reports missing parent app/platform configuration. Even then, do not offer an admin note or tell the user to contact an admin unless the user explicitly asks how to escalate setup.",
@@ -1743,7 +1755,7 @@ export async function buildTenantApiAgentInstructions(thread = {}, messages = []
   ].join("\n");
 }
 
-async function postOpenAIResponse(body, env = process.env, fetchImpl = fetch, idempotencyKey = "") {
+async function postOpenAIResponse(body, env = process.env, fetchImpl = fetch, idempotencyKey = "", threadId = "") {
   const apiKey = clean(env.OPENAI_API_KEY || env.ORKESTR_OPENAI_API_KEY);
   if (!apiKey) {
     const error = new Error("openai_api_key_required");
@@ -1751,7 +1763,14 @@ async function postOpenAIResponse(body, env = process.env, fetchImpl = fetch, id
     throw error;
   }
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), apiAgentTimeoutMs(env));
+  const controllerKey = clean(threadId);
+  if (controllerKey) {
+    const controllers = apiAgentRequestControllers.get(controllerKey) || new Set();
+    controllers.add(controller);
+    apiAgentRequestControllers.set(controllerKey, controllers);
+  }
+  const timeoutMs = apiAgentTimeoutMs(env);
+  const timer = timeoutMs > 0 ? setTimeout(() => controller.abort(), timeoutMs) : null;
   try {
     const response = await fetchImpl(`${openAIBaseUrl(env)}/responses`, {
       method: "POST",
@@ -1773,13 +1792,23 @@ async function postOpenAIResponse(body, env = process.env, fetchImpl = fetch, id
     return payload;
   } catch (error) {
     if (error?.name === "AbortError") {
+      if (controller.signal.reason === "orkestr_stop") {
+        const stopped = new Error("api_agent_stopped");
+        stopped.code = "api_agent_stopped";
+        throw stopped;
+      }
       const timeout = new Error("openai_response_timeout");
       timeout.statusCode = 504;
       throw timeout;
     }
     throw error;
   } finally {
-    clearTimeout(timer);
+    if (timer) clearTimeout(timer);
+    if (controllerKey) {
+      const controllers = apiAgentRequestControllers.get(controllerKey);
+      controllers?.delete(controller);
+      if (!controllers?.size) apiAgentRequestControllers.delete(controllerKey);
+    }
   }
 }
 
@@ -1969,7 +1998,7 @@ async function repairWeakTenantApiAgentResponse({
   } else if (requireTools) {
     repairBody.tool_choice = "required";
   }
-  const response = await postOpenAIResponse(repairBody, env, fetchImpl, `orkestr-${thread.id}-${message.id}-repair`);
+  const response = await postOpenAIResponse(repairBody, env, fetchImpl, `orkestr-${thread.id}-${message.id}-repair`, thread.id);
   await recordResponseUsage({ response, thread, message, callKind: "assistant_repair" }, env);
   if (allowTools && responseFunctionCalls(response).length) {
     return runTenantApiAgentToolResultResponse({
@@ -2093,7 +2122,7 @@ async function runTenantApiAgentToolResultResponse({
   const second = await postOpenAIResponse({
     ...baseBody,
     input: toolInput,
-  }, env, fetchImpl, `orkestr-${thread.id}-${message.id}-${idempotencySuffix}`);
+  }, env, fetchImpl, `orkestr-${thread.id}-${message.id}-${idempotencySuffix}`, thread.id);
   await recordResponseUsage({ response: second, thread, message, callKind }, env);
   if (responseFunctionCalls(second).length && toolDepth < 3) {
     return runTenantApiAgentToolResultResponse({
@@ -2182,7 +2211,7 @@ async function retryPendingActionConfirmationWithTools({ baseBody, inputItems, t
       },
     ],
   };
-  const retry = await postOpenAIResponse(retryBody, env, fetchImpl, `orkestr-${thread.id}-${message.id}-action-retry`);
+  const retry = await postOpenAIResponse(retryBody, env, fetchImpl, `orkestr-${thread.id}-${message.id}-action-retry`, thread.id);
   await recordResponseUsage({ response: retry, thread, message, callKind: "assistant_action_retry" }, env);
   if (responseFunctionCalls(retry).length) {
     return runTenantApiAgentToolResultResponse({
@@ -2237,7 +2266,7 @@ async function runTenantApiAgentResponse({ thread, messages, message, env, fetch
     store: false,
   };
 
-  const first = await postOpenAIResponse(baseBody, env, fetchImpl, `orkestr-${thread.id}-${message.id}-1`);
+  const first = await postOpenAIResponse(baseBody, env, fetchImpl, `orkestr-${thread.id}-${message.id}-1`, thread.id);
   await recordResponseUsage({ response: first, thread, message, callKind: "assistant" }, env);
   const calls = responseFunctionCalls(first);
   if (!calls.length) {
@@ -2394,6 +2423,26 @@ async function failApiAgentMessage(thread, error, env = process.env) {
     routerTraceId: message.routerTraceId || "",
     turnId: message.turnId || "",
   }, env).catch(() => null);
+  if (assistant && lower(message.connector) === "whatsapp") {
+    await markRuntimeFinalDeliveryPending(thread.id, {
+      messageId: assistant.id,
+      parentMessageId: message.id,
+      runtimeGeneration: API_AGENT_RUNTIME_KIND,
+      turnId: message.id,
+      connector: "whatsapp",
+      chatId: message.chatId,
+      accountId: message.accountId,
+      completionStatus: "failed",
+    }, env).catch(() => {});
+  } else {
+    await completeRuntimeLiveness(thread.id, {
+      runtimeGeneration: API_AGENT_RUNTIME_KIND,
+      turnId: message.id,
+      status: "failed",
+      phase: "failed",
+      summary: clean(error?.message || error),
+    }, env).catch(() => {});
+  }
   await recordCreditUsage({
     tenantId: threadOwnerUserId(thread, env),
     threadId: thread.id,
@@ -2433,6 +2482,26 @@ async function completeApiAgentMessage(thread, message, text, env = process.env,
     routerTraceId: message.routerTraceId || "",
     turnId: message.turnId || "",
   }, env);
+  if (lower(message.connector) === "whatsapp") {
+    await markRuntimeFinalDeliveryPending(thread.id, {
+      messageId: assistant.id,
+      parentMessageId: message.id,
+      runtimeGeneration: API_AGENT_RUNTIME_KIND,
+      turnId: message.id,
+      connector: "whatsapp",
+      chatId: message.chatId,
+      accountId: message.accountId,
+      completionStatus: "completed",
+    }, env).catch(() => {});
+  } else {
+    await completeRuntimeLiveness(thread.id, {
+      runtimeGeneration: API_AGENT_RUNTIME_KIND,
+      turnId: message.id,
+      status: "completed",
+      phase: "complete",
+      summary: "API-agent response completed",
+    }, env).catch(() => {});
+  }
   await updateThread(thread.id, { state: "ready" }, env).catch(() => {});
   await appendTurnLifecycleEvent("completed", {
     threadId: thread.id,
@@ -2450,6 +2519,82 @@ async function completeApiAgentMessage(thread, message, text, env = process.env,
     ...(options.event || {}),
   }, env).catch(() => {});
   return { ok: true, processed: true, message: current, assistant, response: options.response || null };
+}
+
+export async function stopApiAgentThread(threadId, options = {}, env = process.env) {
+  const thread = await getThread(threadId, env);
+  if (!thread) return { ok: false, stopped: false, reason: "thread_not_found" };
+  const messages = await listThreadMessages(thread.id, env);
+  const controlMessage = clean(options.messageId)
+    ? messages.find((message) => message.id === clean(options.messageId))
+    : messages.find((message) =>
+      lower(message.role) === "user" &&
+      ["queued", "pending_delivery"].includes(lower(message.state)) &&
+      parseThreadInputCommand({ text: message.text }).command === "stop"
+    );
+  const parsed = parseThreadInputCommand({ text: controlMessage?.text || "/stop" });
+  const controlIndex = controlMessage ? messages.findIndex((message) => message.id === controlMessage.id) : messages.length;
+  const controllers = apiAgentRequestControllers.get(thread.id) || new Set();
+  for (const controller of controllers) controller.abort("orkestr_stop");
+  const cancelledMessageIds = [];
+  for (let index = 0; index < messages.length; index += 1) {
+    const message = messages[index];
+    if (message?.id === controlMessage?.id || lower(message?.role) !== "user") continue;
+    if (index > controlIndex) continue;
+    if (!["queued", "pending_delivery", "running"].includes(lower(message.state))) continue;
+    await updateThreadMessage(thread.id, message.id, {
+      state: "failed",
+      deliveryState: "cancelled",
+      deliveryFailedAt: nowIso(),
+      observedVia: "api_agent_stop",
+      error: `Cancelled by /${parsed.rawCommand || "stop"}.`,
+    }, env).catch(() => {});
+    cancelledMessageIds.push(message.id);
+    await appendTurnLifecycleEvent("interrupted", {
+      threadId: thread.id,
+      messageId: message.id,
+      runtimeKind: API_AGENT_RUNTIME_KIND,
+      state: "cancelled",
+      source: "api-agent",
+      reason: parsed.rawCommand || "stop",
+    }, env).catch(() => {});
+  }
+  let completed = null;
+  if (controlMessage) {
+    completed = await updateThreadMessage(thread.id, controlMessage.id, {
+      state: "completed",
+      deliveryState: "delivered",
+      deliveredAt: nowIso(),
+      observedVia: "api_agent_stop",
+      stopCommand: parsed.rawCommand || "stop",
+      interruptSent: controllers.size > 0,
+      error: null,
+    }, env);
+  }
+  await updateThread(thread.id, { state: "ready", lastError: null }, env).catch(() => {});
+  await completeRuntimeLiveness(thread.id, {
+    runtimeGeneration: API_AGENT_RUNTIME_KIND,
+    turnId: cancelledMessageIds.at(-1) || controlMessage?.id,
+    status: "cancelled",
+    phase: "cancelled",
+    summary: "Stopped by user",
+  }, env).catch(() => {});
+  await appendEvent({
+    type: "api_agent_stopped",
+    threadId: thread.id,
+    messageId: controlMessage?.id || null,
+    command: parsed.rawCommand || "stop",
+    requestAborted: controllers.size > 0,
+    cancelledMessageIds,
+    ownerUserId: threadOwnerUserId(thread, env),
+  }, env).catch(() => {});
+  return {
+    ok: true,
+    stopped: true,
+    requestAborted: controllers.size > 0,
+    cancelledMessageIds,
+    message: completed,
+  };
 }
 
 async function processNextApiAgentMessage(thread, env = process.env, options = {}) {
@@ -2506,6 +2651,14 @@ async function processNextApiAgentMessage(thread, env = process.env, options = {
     state: "running",
     source: "api-agent",
   }, env).catch(() => {});
+  await recordRuntimeLiveness(thread.id, {
+    runtimeGeneration: API_AGENT_RUNTIME_KIND,
+    executionId: message.id,
+    turnId: message.id,
+    evidenceType: "model_started",
+    phase: "executing",
+    summary: "API-agent response started",
+  }, env).catch(() => {});
   const latestMessages = await listThreadMessages(thread.id, env);
   const result = await runTenantApiAgentResponse({
     thread,
@@ -2528,6 +2681,13 @@ export async function processApiAgentThreadInput(threadId, env = process.env, op
     throw error;
   }
   if (!threadUsesApiAgent(thread, env)) return { ok: false, skipped: true, reason: "not_api_agent" };
+  const messages = await listThreadMessages(thread.id, env);
+  const stopMessage = messages.find((message) =>
+    lower(message.role) === "user" &&
+    ["queued", "pending_delivery"].includes(lower(message.state)) &&
+    parseThreadInputCommand({ text: message.text }).command === "stop"
+  );
+  if (stopMessage) return stopApiAgentThread(thread.id, { messageId: stopMessage.id }, env);
   if (apiAgentRunning.has(thread.id)) return { ok: true, running: true };
   apiAgentRunning.add(thread.id);
   try {
@@ -2541,6 +2701,9 @@ export async function processApiAgentThreadInput(threadId, env = process.env, op
     }
     return { ok: true, processed: true, results, processedCount: results.length, batchLimitReached: true };
   } catch (error) {
+    if (error?.code === "api_agent_stopped" || error?.message === "api_agent_stopped") {
+      return { ok: true, stopped: true, reason: "stop_requested" };
+    }
     return failApiAgentMessage(thread, error, env);
   } finally {
     apiAgentRunning.delete(thread.id);

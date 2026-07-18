@@ -8787,6 +8787,47 @@ test("whatsapp explicit approve command is local when no Codex approval is pendi
   assert.match(calls[0].body.text, /No Codex approval request is pending/);
 });
 
+test("whatsapp stop aliases bypass approval parsing and instant-steer annotation", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-preemptive-stop-"));
+  const env = externalBridgeEnv(home);
+  await createThread({
+    id: "thread-wa-preemptive-stop",
+    name: "WA Preemptive Stop",
+    executorId: "codex",
+    runtimeKind: "codex-app-server",
+    codexThreadId: "codex-wa-preemptive-stop",
+    executor: {
+      type: "codex",
+      transport: "app-server",
+      codexThreadId: "codex-wa-preemptive-stop",
+    },
+    runtime: {
+      runtimeKind: "codex-app-server",
+      state: "ready",
+      codexStatus: { type: "idle" },
+    },
+  }, env);
+  await writeConnectorConfig("whatsapp", {
+    bridgeMode: "external",
+    bridgeUrl: "http://wa.local",
+    threadRoutes: { "chat-preemptive-stop": "thread-wa-preemptive-stop" },
+  }, env);
+
+  const routed = await routeWhatsAppInbound({
+    eventId: "wa-preemptive-stop-1",
+    chatId: "chat-preemptive-stop",
+    accountId: "responder",
+    text: "/quit never forward this",
+  }, env);
+  const messages = await listThreadMessages("thread-wa-preemptive-stop", env);
+
+  assert.notEqual(routed.reason, "no_pending_request");
+  assert.equal(routed.message.text, "/quit never forward this");
+  assert.equal(routed.message.codexDeliveryMode, undefined);
+  assert.equal(routed.message.steerActiveTurn, undefined);
+  assert.equal(messages.some((message) => message.role === "assistant" && /No Codex approval request is pending/.test(message.text)), false);
+});
+
 test("whatsapp inbound can auto-provision a scoped user thread", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-auto-user-thread-"));
   const env = await externalBridgeEnvWithAllowingSanitizer(home, {
@@ -12578,7 +12619,7 @@ test("whatsapp /status reuses the first router reply when inbound state misses a
   assert.match(stripDebugFooter(calls[0].body.text), /^Thread: WA Status Command Duplicate Thread\nStatus: /);
 });
 
-test("whatsapp /now inputs default to steer without interrupt queue notices", async () => {
+test("whatsapp treats removed /now syntax as ordinary default-steer text", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-now-notice-"));
   const env = externalBridgeEnv(home);
   await createThread({
@@ -12607,6 +12648,7 @@ test("whatsapp /now inputs default to steer without interrupt queue notices", as
 
   assert.equal(routed.message.codexDeliveryMode, "instant_steer");
   assert.equal(routed.message.steerActiveTurn, true);
+  assert.equal(routed.message.text, "/now fix the pairing number");
   assert.notEqual(routed.message.deliveryState, "interrupting");
   assert.equal(delivery.delivered.length, 0);
   assert.equal(calls.length, 0);
@@ -12700,7 +12742,7 @@ test("whatsapp queue notices strip pasted debug footers from previews", () => {
     text: "Codex compacted the conversation context.\n\ndbg: m:gpt-5.5/xh · msg:update · q:0 · load:25% · api:122% · help:/help",
   }, "awaiting_active_turn");
 
-  assert.equal(notice, 'Added after the current Codex turn: "Codex compacted the conversation context.". Use /now to steer into the active turn.');
+  assert.equal(notice, 'Added after the current Codex turn: "Codex compacted the conversation context.".');
   assert.doesNotMatch(notice, /dbg:/);
 });
 
@@ -12718,7 +12760,7 @@ test("whatsapp queue notices unwrap nested queue notice previews", () => {
     text: 'Queued for the next Codex turn: "Queued for the next Codex turn: "Queued your message while Orkestr prepares this thread: "I’m treating this as a release hygiene issue: WA mi...".".".',
   }, "awaiting_active_turn");
 
-  assert.equal(notice, 'Added after the current Codex turn: "I’m treating this as a release hygiene issue: WA mi...". Use /now to steer into the active turn.');
+  assert.equal(notice, 'Added after the current Codex turn: "I’m treating this as a release hygiene issue: WA mi...".');
 });
 
 test("whatsapp queue notices unwrap malformed nested queue notice previews", () => {
@@ -12726,7 +12768,7 @@ test("whatsapp queue notices unwrap malformed nested queue notice previews", () 
     text: 'Queued your message while Orkestr prepares this thread: "Queued for the next Codex turn: "Queued for the next Codex turn: "Codex compacted the conversation context.".',
   }, "awaiting_active_turn");
 
-  assert.equal(notice, 'Added after the current Codex turn: "Codex compacted the conversation context.". Use /now to steer into the active turn.');
+  assert.equal(notice, 'Added after the current Codex turn: "Codex compacted the conversation context.".');
 });
 
 test("whatsapp queue notices suppress generated truncated queue previews", () => {
@@ -12734,7 +12776,7 @@ test("whatsapp queue notices suppress generated truncated queue previews", () =>
     text: 'Queued your message while Orkestr prepares this thread: "Queued for the next Codex turn: "Queued for the next Codex turn: "Queued for the next Codex turn: "Queued for the nex...".',
   }, "awaiting_active_turn");
 
-  assert.equal(notice, "Added after the current Codex turn. Use /now to steer into the active turn.");
+  assert.equal(notice, "Added after the current Codex turn.");
 });
 
 test("whatsapp delivery reports app-server active-turn queue notices", async () => {
@@ -12775,7 +12817,7 @@ test("whatsapp delivery reports app-server active-turn queue notices", async () 
   assert.equal(delivery.delivered[0].sourceMessageId, routed.message.id);
   assert.equal(duplicate.delivered.length, 0);
   assert.equal(calls[0].body.to, "chat-app-server-active-queue-notice");
-  assert.match(stripDebugFooter(calls[0].body.text), /^Added after the current Codex turn: "queue behind app server turn"\. Use \/now to steer into the active turn\./);
+  assert.match(stripDebugFooter(calls[0].body.text), /^Added after the current Codex turn: "queue behind app server turn"\./);
   assertDebugFooter(calls[0].body.text, { messageType: "update", queueReason: "active-turn" });
   assert.equal(messages.find((entry) => entry.id === routed.message.id).state, "queued");
 });

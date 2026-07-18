@@ -145,6 +145,9 @@ function includesComparable(values = [], actual = "") {
 }
 
 function requiredScopes(tool = "", action = "", service = "") {
+  if (tool === "orkestr_runtime") {
+    return ["*", "runtime:*", "runtime:write", "connectors:manage"];
+  }
   const read = action === "status" || ["list", "history", "participants"].includes(action);
   const kind = tool === "orkestr_messaging" ? "send" : read ? "read" : "manage";
   return [

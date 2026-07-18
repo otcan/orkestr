@@ -1,7 +1,7 @@
 const CONTROL_COMMANDS = new Set([
-  "now",
-  "steer",
   "interrupt",
+  "cancel",
+  "quit",
   "implement",
   "stop",
   "reset",
@@ -59,8 +59,8 @@ export function parseThreadInputCommand(input = {}) {
   return {
     command: runtimeAlias || command === "rt" || command === "runtime"
       ? "runtime_type"
-      : command === "now"
-        ? "steer"
+      : command === "interrupt" || command === "cancel" || command === "quit"
+        ? "stop"
         : command === "restart"
           ? "reset"
           : command === "hard-reset"

@@ -149,6 +149,6 @@ Manual smoke before deployment:
 
 - Open the Angular UI and verify chat loading, sending, and plan message actions.
 - Send a WhatsApp-routed message and confirm one update/final mirror only.
-- Send `/now <message>` to a working Codex app-server thread and confirm it is
-  treated as turn interruption, not a wake-from-sleep flow.
+- Send a normal message to a working Codex app-server thread and confirm it is
+  steered into the verified live turn without interrupting it.
 - Confirm timers and worker creation still work from the split thread routes.

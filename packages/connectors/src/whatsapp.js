@@ -9,6 +9,10 @@ import { clearRuntimeLeasesForThread, resolveCodexThreadMetadata, runtimeStatus 
 import { classifyApprovalReply } from "../../core/src/runtime-settings.js";
 import { processApiAgentThreadInput, threadUsesApiAgent } from "../../core/src/tenant-api-agent.js";
 import { parseThreadInputCommand } from "../../core/src/thread-commands.js";
+import {
+  acknowledgeRuntimeFinalDelivery,
+  recordRuntimeFinalDeliveryFailure,
+} from "../../core/src/runtime-final-delivery.js";
 import { isRemoteThreadAttachmentDescriptor, redactDeniedThreadAttachmentPaths, resolveThreadAttachments } from "../../core/src/thread-attachments.js";
 import { approveDesktopShareChallenge } from "../../core/src/desktop-shares.js";
 import {
@@ -1202,7 +1206,28 @@ async function patchAssistantMirrorDeliveryState({
     ...patch,
   };
   if (kind === "thread" && pickString(threadId)) {
-    return updateThreadMessage(threadId, messageId, nextPatch, env).catch(() => null);
+    const updated = await updateThreadMessage(threadId, messageId, nextPatch, env).catch(() => null);
+    if (pickString(deliveryType).toLowerCase() === "final") {
+      const deliveryState = pickString(nextPatch.deliveryState).toLowerCase();
+      if (deliveryState === "delivered") {
+        await acknowledgeRuntimeFinalDelivery(threadId, {
+          messageId,
+          turnId: pickString(message?.codexTurnId, message?.executorTurnId, message?.turnId),
+          deliveredAt: nextPatch.deliveredAt,
+          outboxJobId: nextPatch.mirrorOutboxJobId,
+          connectorMessageId: Array.isArray(nextPatch.whatsappMessageIds) ? nextPatch.whatsappMessageIds[0] : nextPatch.whatsappMessageId,
+        }, env).catch(() => {});
+      } else if (["failed_retryable", "delivery_uncertain", "failed", "dead_letter", "suppressed", "skipped"].includes(deliveryState)) {
+        await recordRuntimeFinalDeliveryFailure(threadId, {
+          messageId,
+          turnId: pickString(message?.codexTurnId, message?.executorTurnId, message?.turnId),
+          status: deliveryState,
+          outboxJobId: nextPatch.mirrorOutboxJobId,
+          error: nextPatch.deliveryError,
+        }, env).catch(() => {});
+      }
+    }
+    return updated;
   }
   if (kind === "agent" && pickString(agentId)) {
     return updateAgentMessage(agentId, messageId, nextPatch, env).catch(() => null);
@@ -4842,7 +4867,9 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
       message,
     };
   }
-  const approvalReply = explicitWhatsAppApprovalReply(text);
+  const parsedThreadCommand = parseThreadInputCommand({ text });
+  const preemptiveStop = parsedThreadCommand.command === "stop";
+  const approvalReply = preemptiveStop ? null : explicitWhatsAppApprovalReply(text);
   if (threadId && thread && isCodexAppServerThread(thread) && approvalReply && !threadHasActionableStoredPendingRequest(thread)) {
     const message = await appendThreadMessage(thread.id, {
       ...messageInput,
@@ -4906,11 +4933,11 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
       reason: "no_pending_request",
     };
   }
-  if (whatsappInboundInstantSteerEnabled({ thread, binding: threadRoute.binding, chatId, env })) {
+  if (!preemptiveStop && whatsappInboundInstantSteerEnabled({ thread, binding: threadRoute.binding, chatId, env })) {
     messageInput.codexDeliveryMode = "instant_steer";
     messageInput.steerActiveTurn = true;
   }
-  const coalescedMessage = threadId && thread
+  const coalescedMessage = threadId && thread && !preemptiveStop
     ? await coalesceWhatsAppInboundThreadMessage({
         thread,
         messageInput,

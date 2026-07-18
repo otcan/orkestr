@@ -124,7 +124,7 @@ async function ensureTenantBridgeSendToken(vm = {}, { chatId = "", accountId = "
     accountId: clean(accountId),
     chatId: clean(chatId),
     allowedChatIds: [clean(chatId)],
-    scopes: ["whatsapp:bridge:send", "connectors:read", "connectors:manage", "connectors:send"],
+    scopes: ["whatsapp:bridge:send", "connectors:read", "connectors:manage", "connectors:send", "runtime:write"],
     routeKind: "whatsapp_bridge",
     purpose: "tenant-whatsapp-outbound",
   }], env);

@@ -3,7 +3,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { appendThreadMessage, createThread, deleteThreadMessage, updateThreadMessage } from "../packages/core/src/threads.js";
+import { appendThreadMessage, createThread, deleteThreadMessage, getThread, updateThreadMessage } from "../packages/core/src/threads.js";
+import { markRuntimeFinalDeliveryPending } from "../packages/core/src/runtime-final-delivery.js";
 import { applyConnectorOutboxJobAction, ensureConnectorOutboxJob, readConnectorOutbox } from "../packages/connectors/src/connector-outbox.js";
 import { applyWhatsAppConnectorOutboxAction, deliverWhatsAppReplies } from "../packages/connectors/src/whatsapp.js";
 import { retryRecoverableWhatsAppOutboxJobsForAccounts } from "../packages/connectors/src/whatsapp-outbox-recovery.js";
@@ -66,10 +67,19 @@ test("whatsapp delivery terminalizes a tenant-scoped connector outbox job", asyn
     accountId: "responder",
     text: "All routed messages are accounted for.",
   }, runtimeEnv);
+  await markRuntimeFinalDeliveryPending("thread-wa-outbox", {
+    messageId: reply.id,
+    parentMessageId: parent.id,
+    runtimeGeneration: "runtime-generation-1",
+    turnId: "turn-1",
+    connector: "whatsapp",
+    chatId: "shared-chat",
+  }, runtimeEnv);
 
   const delivery = await deliverWhatsAppReplies(runtimeEnv, async () => response({ ok: true, ids: ["wa-sent-1"] }));
   const outbox = await readConnectorOutbox(runtimeEnv);
   const job = outbox.jobs.find((item) => item.sourceMessageId === reply.id);
+  const thread = await getThread("thread-wa-outbox", runtimeEnv);
 
   assert.equal(delivery.delivered.length, 1);
   assert.equal(job?.state, "delivered");
@@ -81,6 +91,9 @@ test("whatsapp delivery terminalizes a tenant-scoped connector outbox job", asyn
   assert.equal(job.deliveryType, "final");
   assert.equal(job.payload.text, "All routed messages are accounted for.");
   assert.equal(job.brokerAck.ids[0], "wa-sent-1");
+  assert.equal(thread.runtime.finalDelivery.status, "delivered");
+  assert.equal(thread.runtime.finalDelivery.connectorMessageId, "wa-sent-1");
+  assert.equal(thread.runtime.liveness.completionStatus, "completed");
 });
 
 test("whatsapp connector outbox backs off retryable bridge failures", async () => {

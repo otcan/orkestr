@@ -130,10 +130,12 @@ Orkestr capabilities:
   Choose the manual/default desktop from \`orkestr whereiam --json\` when the
   user does not name a slug.
 - Connector operations use one MCP vocabulary regardless of provider:
-  \`orkestr_auth\`, \`orkestr_messaging\`, \`orkestr_conversation\`, and
-  \`orkestr_routing\`. The bearer token is authoritative; service, instance,
+  \`orkestr_auth\`, \`orkestr_messaging\`, \`orkestr_conversation\`,
+  \`orkestr_routing\`, and \`orkestr_runtime\`. The bearer token is authoritative; service, instance,
   user, thread, account, and conversation arguments are context that must match
   its scope. Administrative writes return an attended Orkestr challenge.
+  Long-running work uses \`orkestr_runtime\` for progress, checkpoints, blocked
+  state, and completion; elapsed time alone is not a failure signal.
 - WhatsApp and Gmail: use the connector MCP tools and Orkestr routing. Prefer
   \`orkestr whatsapp accounts list --json\` for local operator WhatsApp status
   because it carries the local CLI auth header; an unauthenticated
