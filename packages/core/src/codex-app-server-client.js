@@ -409,7 +409,7 @@ export class CodexAppServerClient {
       }, this.env).catch(() => {});
       return;
     }
-    if (isCodexApprovalRequestMethod(message.method) && threadAutoAcceptsCodexApprovals(thread, this.env)) {
+    if (isCodexApprovalRequestMethod(message.method, params) && threadAutoAcceptsCodexApprovals(thread, this.env)) {
       this.respond(message.id, { decision: "accept" });
       this.pendingRequests.delete(String(message.id));
       await appendEvent({

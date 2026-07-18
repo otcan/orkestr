@@ -360,6 +360,23 @@ test("Codex app-server clamps non-admin threads away from root danger access", (
     assert.equal(threadStartParams(trustedThread).approvalPolicy, "never");
     assert.equal(threadStartParams(trustedThread).developerInstructions, undefined);
     assert.deepEqual(turnStartParams(trustedThread, { text: "hello" }).sandboxPolicy, { type: "dangerFullAccess" });
+
+    const staleTrustedThread = {
+      ...trustedThread,
+      codexSandbox: "workspace-write",
+      codexApprovalPolicy: "on-request",
+      executor: {
+        metadata: {
+          codexSandbox: "workspace-write",
+          codexApprovalPolicy: "on-request",
+        },
+      },
+    };
+
+    assert.equal(threadStartParams(staleTrustedThread).sandbox, "danger-full-access");
+    assert.equal(threadStartParams(staleTrustedThread).approvalPolicy, "never");
+    assert.deepEqual(turnStartParams(staleTrustedThread, { text: "hello" }).sandboxPolicy, { type: "dangerFullAccess" });
+    assert.equal(turnStartParams(staleTrustedThread, { text: "hello" }).approvalPolicy, "never");
   } finally {
     if (previousSandbox === undefined) delete process.env.ORKESTR_CODEX_SANDBOX;
     else process.env.ORKESTR_CODEX_SANDBOX = previousSandbox;
@@ -1143,6 +1160,63 @@ test("Codex app-server auto-accepts command approvals for YOLO threads", async (
 
     assert.deepEqual(writes, [{ id: 7, result: { decision: "accept" } }]);
     assert.equal(client.pendingRequests.has("7"), false);
+    assert.notEqual(updated.state, "awaiting_approval");
+    assert.equal(updated.runtime?.pendingRequest, undefined);
+    assert.equal(messages.some((message) => message.phase === "awaiting_approval"), false);
+  } finally {
+    stopCodexAppServerClients();
+  }
+});
+
+test("Codex app-server auto-accepts MCP tool-call approvals for YOLO threads", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-yolo-mcp-approval-"));
+  const fake = await createFakeCodex(home);
+  const env = {
+    ORKESTR_HOME: path.join(home, "orkestr"),
+    HOME: path.join(home, "runtime-home"),
+    PATH: `${fake.bin}${path.delimiter}${process.env.PATH || ""}`,
+    FAKE_CODEX_STATE: fake.stateFile,
+    ORKESTR_RUNTIME_CODEX_COMMAND: "codex --dangerously-bypass-approvals-and-sandbox",
+  };
+  try {
+    const thread = await createThread({
+      id: "app-server-yolo-mcp-approval-thread",
+      name: "YOLO MCP Approval Thread",
+      cwd: home,
+      codexSandbox: "workspace-write",
+      codexApprovalPolicy: "on-request",
+      executorId: "codex",
+      executor: {
+        type: "codex",
+        metadata: {
+          codexSandbox: "workspace-write",
+          codexApprovalPolicy: "on-request",
+        },
+      },
+    }, env);
+    const started = await startCodexAppServerThread(thread, env);
+    const client = await getCodexAppServerClient({ env, home: env.HOME });
+    const writes = [];
+    client.write = (payload) => writes.push(payload);
+
+    await client.handleServerRequest({
+      id: 8,
+      method: "mcpServer/elicitation/request",
+      params: {
+        threadId: started.thread.executor.codexThreadId,
+        turnId: "turn-yolo-mcp",
+        serverName: "codex_apps",
+        mode: "form",
+        _meta: { codex_approval_kind: "mcp_tool_call", tool_title: "send_email" },
+        requestedSchema: { type: "object", properties: {} },
+      },
+    });
+
+    const updated = await getThread(started.thread.id, env);
+    const messages = await listThreadMessages(started.thread.id, env);
+
+    assert.deepEqual(writes, [{ id: 8, result: { decision: "accept" } }]);
+    assert.equal(client.pendingRequests.has("8"), false);
     assert.notEqual(updated.state, "awaiting_approval");
     assert.equal(updated.runtime?.pendingRequest, undefined);
     assert.equal(messages.some((message) => message.phase === "awaiting_approval"), false);

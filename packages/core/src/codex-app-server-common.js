@@ -19,6 +19,7 @@ import {
   updateThread,
   updateThreadMessage,
 } from "./threads.js";
+import { defaultRuntimeSettings } from "./runtime-settings.js";
 
 export const appServerTransports = new Set(["app-server", "codex-app-server"]);
 export const tmuxTransports = new Set(["tmux", "legacy", "codex-tmux"]);
@@ -288,7 +289,9 @@ export function threadUsesRestrictedCodexPolicy(thread = {}, env = process.env) 
 
 export function codexSandboxForThread(thread = {}, env = process.env) {
   if (threadUsesRestrictedCodexPolicy(thread, env)) return "workspace-write";
-  const requested = clean(thread.codexSandbox || thread.executor?.metadata?.codexSandbox || env.ORKESTR_CODEX_SANDBOX || "workspace-write") || "workspace-write";
+  const configured = defaultRuntimeSettings(env).codex || {};
+  if (configured.bypassApprovalsAndSandbox === true) return "danger-full-access";
+  const requested = clean(thread.codexSandbox || thread.executor?.metadata?.codexSandbox || configured.sandbox || "workspace-write") || "workspace-write";
   return requested;
 }
 
@@ -323,7 +326,9 @@ export function sandboxPolicyForTurn(thread, env = process.env) {
 
 export function approvalPolicyForThread(thread, env = process.env) {
   if (threadUsesRestrictedCodexPolicy(thread, env)) return "never";
-  const requested = clean(thread.codexApprovalPolicy || thread.executor?.metadata?.codexApprovalPolicy || env.ORKESTR_CODEX_APPROVAL_POLICY || "on-request") || "on-request";
+  const configured = defaultRuntimeSettings(env).codex || {};
+  if (configured.bypassApprovalsAndSandbox === true) return "never";
+  const requested = clean(thread.codexApprovalPolicy || thread.executor?.metadata?.codexApprovalPolicy || configured.approvalPolicy || "on-request") || "on-request";
   return requested;
 }
 
@@ -332,11 +337,15 @@ export function threadAutoAcceptsCodexApprovals(thread = {}, env = process.env) 
   return codexSandboxForThread(thread, env) === "danger-full-access" && approvalPolicyForThread(thread, env) === "never";
 }
 
-export function isCodexApprovalRequestMethod(method = "") {
-  return [
+export function isCodexApprovalRequestMethod(method = "", params = {}) {
+  const normalized = clean(method);
+  if ([
     "item/commandExecution/requestApproval",
     "item/fileChange/requestApproval",
-  ].includes(clean(method));
+  ].includes(normalized)) return true;
+  if (normalized !== "mcpServer/elicitation/request") return false;
+  const metadata = params?._meta || {};
+  return clean(metadata.codex_approval_kind || metadata.codexApprovalKind) === "mcp_tool_call";
 }
 
 const codexReasoningEfforts = new Set(["none", "minimal", "low", "medium", "high", "xhigh"]);
