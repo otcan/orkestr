@@ -255,3 +255,18 @@ test("thread message repository migrates JSON once and serves bounded SQLite can
   assert.match(recentPlan.map((row) => row.detail).join("\n"), /idx_orkestr_thread_messages_recent_delivery/);
   db.close();
 });
+
+test("thread message repository batches per-thread SQLite revisions", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-message-revisions-"));
+  const env = { ORKESTR_HOME: home, ORKESTR_THREAD_STORE: "sqlite" };
+  const repository = createThreadMessageRepository(env);
+  await repository.append("thread-a", { id: "a-1", text: "one" });
+  await repository.append("thread-b", { id: "b-1", text: "one" });
+
+  const first = await repository.fingerprints(["thread-a", "thread-b"]);
+  await repository.append("thread-a", { id: "a-2", text: "two" });
+  const second = await repository.fingerprints(["thread-a", "thread-b"]);
+
+  assert.notEqual(second.get("thread-a"), first.get("thread-a"));
+  assert.equal(second.get("thread-b"), first.get("thread-b"));
+});

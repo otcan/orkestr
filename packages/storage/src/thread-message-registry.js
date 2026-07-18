@@ -192,14 +192,14 @@ function touchMeta(db, threadId, { source = null, migrated = false } = {}) {
 async function ensureMigrated(db, threadId, env = process.env) {
   const dbPath = dataPaths(env).threadMessagesDb;
   const cacheKey = `${dbPath}:${threadId}`;
-  const signature = await sourceSignature(threadId, env);
-  if (migratedThreads.get(cacheKey) === signature) return;
+  if (migratedThreads.has(cacheKey)) return;
   const meta = db.prepare("select source_signature from orkestr_thread_message_meta where thread_id = ?").get(threadId);
-  if (meta && String(meta.source_signature || "") === signature) {
-    migratedThreads.set(cacheKey, signature);
+  if (meta) {
+    migratedThreads.set(cacheKey, String(meta.source_signature || ""));
     return;
   }
 
+  const signature = await sourceSignature(threadId, env);
   const messages = signature === "missing" ? [] : await readJson(sourcePath(threadId, env), []);
   db.exec("begin immediate");
   try {
@@ -444,6 +444,26 @@ export async function threadMessageStoreFingerprint(threadId, env = process.env)
     select revision, updated_at from orkestr_thread_message_meta where thread_id = ?
   `).get(threadId);
   return `sqlite:${Number(row?.revision || 0)}:${String(row?.updated_at || "")}`;
+}
+
+export async function threadMessageStoreFingerprints(threadIds = [], env = process.env) {
+  const db = await openDatabase(env);
+  if (!db) return null;
+  const ids = [...new Set((threadIds || []).map((value) => String(value || "").trim()).filter(Boolean))];
+  for (const threadId of ids) await ensureMigrated(db, threadId, env);
+  const selected = new Set(ids);
+  const fingerprints = new Map();
+  for (const row of db.prepare(`
+    select thread_id, revision, updated_at from orkestr_thread_message_meta
+  `).all()) {
+    const threadId = String(row.thread_id || "");
+    if (!selected.has(threadId)) continue;
+    fingerprints.set(threadId, `sqlite:${Number(row.revision || 0)}:${String(row.updated_at || "")}`);
+  }
+  for (const threadId of ids) {
+    if (!fingerprints.has(threadId)) fingerprints.set(threadId, "sqlite:0:");
+  }
+  return fingerprints;
 }
 
 export async function migrateThreadMessageStore(env = process.env) {

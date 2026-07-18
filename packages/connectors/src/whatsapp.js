@@ -132,6 +132,7 @@ const whatsappOutboundMirrorWorker = createWhatsAppOutboundMirrorWorker();
 let whatsappDeliveryIdleCache = null;
 let whatsappDeliveryRunCache = null;
 const whatsappMirrorMessageFileCache = new Map();
+const whatsappMirrorSqliteRevisionCache = new Map();
 const suppressibleWhatsAppUpdateDeliveryTypes = new Set([
   "delivery_error",
   "mode_queued",
@@ -5219,6 +5220,26 @@ function threadEligibleForWhatsAppMirrorScan(thread = {}, config = {}) {
   return threadConfiguredForWhatsAppRoute(thread, config);
 }
 
+function whatsappMirrorSqliteScanKey({ thread = {}, config = {}, state = null, messageSetKey = "", cursor = 0, fingerprint = "" } = {}) {
+  const intents = (state?.outboundIntents || [])
+    .filter((intent) => String(intent?.messageSetKey || "") === String(messageSetKey || ""))
+    .map((intent) => [
+      intent?.messageId || "",
+      intent?.sourceMessageId || "",
+      intent?.status || "pending",
+      intent?.error || "",
+      intent?.updatedAt || "",
+    ]);
+  return JSON.stringify({
+    fingerprint,
+    cursor,
+    intents,
+    binding: thread?.binding || null,
+    defaultThreadId: config.defaultThreadId || "",
+    route: Object.values(config.threadRoutes || config.threads || {}).map((value) => String(value || "").trim()).sort(),
+  });
+}
+
 function bridgeErrorText(value) {
   if (!value) return "";
   if (typeof value === "string") return value.trim();
@@ -5243,12 +5264,24 @@ async function listThreadMessageSets(env, state = null, config = {}) {
   const paths = await ensureDataDirs(env);
   const sets = [];
   const repository = createThreadMessageRepository(env);
-  for (const thread of await listThreads(env)) {
-    if (!threadEligibleForWhatsAppMirrorScan(thread, config)) continue;
+  const threads = (await listThreads(env)).filter((thread) => threadEligibleForWhatsAppMirrorScan(thread, config));
+  const fingerprints = await repository.fingerprints(threads.map((thread) => thread.id)).catch(() => null);
+  const cachePrefix = `${paths.home}:`;
+  const activeCacheKeys = new Set(threads.map((thread) => `${cachePrefix}${thread.id}`));
+  for (const cacheKey of whatsappMirrorSqliteRevisionCache.keys()) {
+    if (cacheKey.startsWith(cachePrefix) && !activeCacheKeys.has(cacheKey)) {
+      whatsappMirrorSqliteRevisionCache.delete(cacheKey);
+    }
+  }
+  for (const thread of threads) {
+    const cacheKey = `${cachePrefix}${thread.id}`;
     const messageSetKey = outboundMirrorMessageSetKey({ kind: "thread", threadId: thread.id });
     const filePath = path.join(paths.threadMessages, `${safeMessageFileId(thread.id)}.json`);
     const cursor = Number(outboundMirrorCursorMap(state?.outboundMirrorCursors || []).get(messageSetKey)?.cursor || 0) || 0;
     const activeMessageIds = activeWhatsAppOutboundIntentMessageIds(state, messageSetKey);
+    const fingerprint = fingerprints?.get(thread.id) || "";
+    const scanKey = fingerprint ? whatsappMirrorSqliteScanKey({ thread, config, state, messageSetKey, cursor, fingerprint }) : "";
+    if (scanKey && whatsappMirrorSqliteRevisionCache.get(cacheKey) === scanKey) continue;
     const recoveryWindowMs = whatsappLiveOutputRecoveryWindowMs(env);
     const candidates = await repository.listCandidates(thread.id, {
       ...(cursor > 0 ? { afterCursor: Math.max(0, cursor - whatsappMirrorScanOverlap(env)) } : {}),
@@ -5268,6 +5301,7 @@ async function listThreadMessageSets(env, state = null, config = {}) {
           candidates.filter((message) => activeMessageIds.has(pickString(message?.id))),
         )
       : await readWhatsAppMirrorMessageSet(filePath, messageSetKey, state, env);
+    if (scanKey) whatsappMirrorSqliteRevisionCache.set(cacheKey, scanKey);
     if (Array.isArray(messages)) sets.push({ threadId: thread.id, thread, messages });
   }
   return sets;

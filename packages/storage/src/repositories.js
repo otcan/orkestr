@@ -14,6 +14,7 @@ import {
   threadMessageRecord,
   threadMessageRecordsByStates,
   threadMessageStoreFingerprint,
+  threadMessageStoreFingerprints,
   threadMessageStoreEnabled,
   updateThreadMessageRecord,
 } from "./thread-message-registry.js";
@@ -72,6 +73,9 @@ export function createThreadMessageRepository(env = process.env) {
     },
     fingerprint(threadId) {
       return threadMessageStoreFingerprint(threadId, env);
+    },
+    fingerprints(threadIds) {
+      return threadMessageStoreFingerprints(threadIds, env);
     },
     async save(threadId, messages) {
       if (await replaceThreadMessageRecords(threadId, messages, env)) return messages;
