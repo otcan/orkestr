@@ -87,6 +87,7 @@ test("tenant WhatsApp routes store scoped tokens outside the public VM registry"
     "connectors:read",
     "connectors:manage",
     "connectors:send",
+    "runtime:write",
   ]);
 
   const disabled = await disableTenantWhatsAppRoute("alice-tenant", env);
