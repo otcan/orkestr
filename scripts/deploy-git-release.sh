@@ -40,6 +40,7 @@ Environment:
   ORKESTR_RELEASE_WHATSAPP_ACCOUNT_PROBE_TIMEOUT_SECONDS Timeout for each required account status probe. Defaults to 8.
   ORKESTR_RELEASE_CONNECTIVITY_RECOVERY_COMMAND Command to run between required-account retry attempts.
   ORKESTR_RELEASE_CONNECTIVITY_RECOVERY_TIMEOUT_SECONDS Timeout for each recovery command run. Defaults to 20.
+  ORKESTR_RELEASE_SYNC_CONNECTORS Reconcile standalone connector services to the active Orkestr revision. Defaults to 1.
   ORKESTR_DEPLOY_LOCK_BUSY_EXIT_CODE Exit code when another deploy holds the lock. Defaults to 0.
   ORKESTR_DEPLOY_HEALTH_URL     Health URL. Defaults to http://$ORKESTR_HOST:$ORKESTR_PORT/api/health.
   ORKESTR_DEPLOY_EXPOSURE_CHECK Check public no-cookie API exposure after restart. Defaults to 1.
@@ -1074,6 +1075,39 @@ EOF
   echo "Parent WhatsApp bridge proxy refreshed from the active Orkestr release."
 }
 
+sync_standalone_connectors_release() {
+  local enabled gateway_service worker_service release_dir script expected_revision active_revision revision_file
+  enabled="$(bool_value "${ORKESTR_RELEASE_SYNC_CONNECTORS:-1}")"
+  if [ "$enabled" != "1" ]; then
+    echo "Standalone connector release sync disabled."
+    return 0
+  fi
+  gateway_service="${ORKESTR_CONNECTORS_MCP_SERVICE_NAME:-orkestr-connectors-mcp}"
+  worker_service="${ORKESTR_WA_WORKER_SERVICE_NAME:-orkestr-wa-worker}@sender"
+  if ! systemctl cat "${gateway_service}.service" >/dev/null 2>&1 ||
+      ! systemctl cat "${worker_service}.service" >/dev/null 2>&1; then
+    echo "Standalone connector release sync skipped: connector services are not installed."
+    return 0
+  fi
+  release_dir="$(readlink -f "$current_link" 2>/dev/null || true)"
+  [ -n "$release_dir" ] || release_dir="$current_link"
+  script="$release_dir/scripts/deploy-connectors-release.sh"
+  [ -f "$script" ] || {
+    echo "Standalone connector release sync skipped: $script is unavailable."
+    return 0
+  }
+  expected_revision="$(node -e 'try { const fs = require("fs"); const j = JSON.parse(fs.readFileSync(process.argv[1], "utf8")); process.stdout.write(String(j.git?.commit || j.components?.orkestr?.commit || "")); } catch {}' "$release_dir/release-manifest.json" 2>/dev/null || true)"
+  [ -n "$expected_revision" ] || expected_revision="$(git -C "$release_dir" rev-parse HEAD 2>/dev/null || true)"
+  revision_file="${ORKESTR_CONNECTORS_REVISION_FILE:-${ORKESTR_CONNECTORS_DEPLOY_ROOT:-/opt/orkestr-connectors}/current/REVISION}"
+  active_revision="$(head -n 1 "$revision_file" 2>/dev/null | tr -d '[:space:]' || true)"
+  if [ -n "$expected_revision" ] && [ "$active_revision" = "$expected_revision" ]; then
+    echo "Standalone connector release already matches active Orkestr revision ${expected_revision:0:12}."
+    return 0
+  fi
+  echo "Reconciling standalone connector release ${active_revision:0:12} -> ${expected_revision:0:12}."
+  bash "$script" --activate --source "$release_dir"
+}
+
 restart_and_verify() {
   configure_service_shutdown_timeout
   # Keep restart as one systemd transaction. A split stop/start can kill the
@@ -1081,6 +1115,7 @@ restart_and_verify() {
   systemctl restart "${service_name}.service"
   systemctl is-active --quiet "${service_name}.service"
   health_check "$health_url" 40
+  sync_standalone_connectors_release
   refresh_parent_whatsapp_bridge_proxy
   deploy_public_exposure_check
   if [ "$deploy_drain_started" = "1" ]; then
@@ -1419,6 +1454,7 @@ install_command() {
   if [ "$previous_release" = "$release_id" ] && [ -d "$release_dir" ]; then
     if release_is_complete "$release_dir"; then
       repair_runtime_ownership
+      sync_standalone_connectors_release
       echo "Orkestr already at $release_id ($target_ref)."
       return 0
     fi

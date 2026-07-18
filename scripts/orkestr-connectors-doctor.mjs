@@ -23,7 +23,7 @@ function healthToken(env = process.env) {
   return clean(env.ORKESTR_CONNECTORS_MCP_TOKEN || env.ORKESTR_WA_SERVICE_TOKEN || env.ORKESTR_WA_WORKER_EVENT_TOKEN);
 }
 
-export function assessConnectorHealth(payload = {}, env = process.env) {
+export function assessConnectorHealth(payload = {}, env = process.env, release = {}) {
   const requiredAccounts = list(env.ORKESTR_CONNECTORS_REQUIRED_WA_ACCOUNTS || "sender");
   const accounts = Array.isArray(payload.accounts) ? payload.accounts : [];
   const matchesAccount = (account, id) => [
@@ -46,6 +46,7 @@ export function assessConnectorHealth(payload = {}, env = process.env) {
     ...(missingAccounts.length ? ["required_accounts_missing"] : []),
     ...(unavailableAccounts.length ? ["required_accounts_unavailable"] : []),
     ...(Number(payload.queue?.deadLetter || 0) > 0 ? ["dead_letter_events"] : []),
+    ...(release.drift === true ? ["connector_release_drift"] : []),
   ];
   return {
     ok: issues.length === 0,
@@ -54,6 +55,36 @@ export function assessConnectorHealth(payload = {}, env = process.env) {
     unavailableAccounts,
     queue: payload.queue || {},
     workerState: clean(payload.worker?.state || payload.state),
+    release,
+  };
+}
+
+async function readText(filePath = "") {
+  if (!clean(filePath)) return "";
+  return fs.readFile(filePath, "utf8").then(clean, () => "");
+}
+
+export async function connectorReleaseState(env = process.env) {
+  if (clean(env.ORKESTR_CONNECTORS_DOCTOR_REVISION_CHECK || "1") === "0") {
+    return { checked: false, drift: false, reason: "disabled" };
+  }
+  const manifestPath = clean(env.ORKESTR_EXPECTED_RELEASE_MANIFEST) || "/opt/orkestr/current/release-manifest.json";
+  const revisionPath = clean(env.ORKESTR_CONNECTORS_REVISION_FILE) || "/opt/orkestr-connectors/current/REVISION";
+  const expectedOverride = clean(env.ORKESTR_CONNECTORS_EXPECTED_REVISION);
+  const activeOverride = clean(env.ORKESTR_CONNECTORS_ACTIVE_REVISION);
+  const manifest = expectedOverride ? null : await fs.readFile(manifestPath, "utf8").then(JSON.parse, () => null);
+  const expectedRevision = expectedOverride || clean(manifest?.git?.commit || manifest?.components?.orkestr?.commit);
+  const activeRevision = activeOverride || await readText(revisionPath);
+  if (!expectedRevision) {
+    return { checked: false, drift: false, reason: "expected_revision_unavailable", expectedRevision, activeRevision, manifestPath, revisionPath };
+  }
+  return {
+    checked: true,
+    drift: activeRevision !== expectedRevision,
+    expectedRevision,
+    activeRevision,
+    manifestPath,
+    revisionPath,
   };
 }
 
@@ -100,7 +131,24 @@ async function restartService(name = "") {
   await execFileAsync("systemctl", ["restart", `${clean(name)}.service`], { timeout: 30_000 });
 }
 
-export async function runConnectorDoctor({ repair = false, env = process.env, fetchImpl = fetch } = {}) {
+async function scheduleReleaseReconcile(env = process.env) {
+  const source = clean(env.ORKESTR_CONNECTORS_RECONCILE_SOURCE) || "/opt/orkestr/current";
+  const script = clean(env.ORKESTR_CONNECTORS_RECONCILE_SCRIPT) || path.join(source, "scripts/deploy-connectors-release.sh");
+  const unit = `orkestr-connectors-reconcile-${Date.now()}`;
+  await execFileAsync("systemd-run", [
+    "--unit", unit,
+    "--collect",
+    "--no-block",
+    "/bin/bash",
+    script,
+    "--activate",
+    "--source",
+    source,
+  ], { timeout: 15_000 });
+  return { unit, source, script };
+}
+
+export async function runConnectorDoctor({ repair = false, env = process.env, fetchImpl = fetch, scheduleReleaseReconcileFn = scheduleReleaseReconcile } = {}) {
   let payload;
   try {
     const token = healthToken(env);
@@ -113,7 +161,8 @@ export async function runConnectorDoctor({ repair = false, env = process.env, fe
   } catch (error) {
     payload = { ok: false, gateway: { ok: false }, worker: { ok: false }, error: clean(error?.message) || "health_unreachable" };
   }
-  const assessment = assessConnectorHealth(payload, env);
+  const release = await connectorReleaseState(env);
+  const assessment = assessConnectorHealth(payload, env, release);
   if (assessment.ok || !repair) return { ...assessment, repaired: false, health: payload };
 
   const recoveringAccounts = recoveringRequiredAccounts(payload, assessment, env);
@@ -131,6 +180,11 @@ export async function runConnectorDoctor({ repair = false, env = process.env, fe
 
   const state = await repairAllowed(env);
   if (!state.allowed) return { ...assessment, repaired: false, repairSuppressed: "hourly_limit", health: payload };
+  if (assessment.issues.includes("connector_release_drift") && clean(env.ORKESTR_CONNECTORS_DOCTOR_RECONCILE || "1") !== "0") {
+    const reconcile = await scheduleReleaseReconcileFn(env);
+    await rememberRepair(state, env);
+    return { ...assessment, repaired: true, repairAction: "connector_release_reconcile_scheduled", reconcile, health: payload };
+  }
   const workerService = clean(env.ORKESTR_WA_WORKER_SYSTEMD_SERVICE || "orkestr-wa-worker@sender");
   const gatewayService = clean(env.ORKESTR_CONNECTORS_MCP_SYSTEMD_SERVICE || "orkestr-connectors-mcp");
   const repairedServices = [];

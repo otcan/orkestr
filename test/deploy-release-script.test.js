@@ -94,7 +94,11 @@ test("release deploy script exposes versioned install, status, and rollback", as
   assert.match(script, /\.orkestr-release-ready/);
   assert.match(script, /Active release staging is incomplete; roll back before retrying/);
   assert.match(script, /health_check/);
-  assert.match(script, /health_check "\$health_url" 40\s+refresh_parent_whatsapp_bridge_proxy\s+deploy_public_exposure_check/);
+  assert.match(script, /health_check "\$health_url" 40\s+sync_standalone_connectors_release\s+refresh_parent_whatsapp_bridge_proxy\s+deploy_public_exposure_check/);
+  assert.match(script, /ORKESTR_RELEASE_SYNC_CONNECTORS/);
+  assert.match(script, /deploy-connectors-release\.sh/);
+  assert.match(script, /Standalone connector release already matches active Orkestr revision/);
+  assert.match(script, /bash "\$script" --activate --source "\$release_dir"/);
   assert.match(script, /ORKESTR_DEPLOY_EXPOSURE_CHECK/);
   assert.match(script, /ORKESTR_DEPLOY_PUBLIC_BASE_URL/);
   assert.match(script, /ORKESTR_DEPLOY_EXPOSURE_PRIVATE_PATHS/);

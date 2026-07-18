@@ -440,6 +440,83 @@ test("WhatsApp router doctor ignores historical finals without live mirror inten
   assert.equal(report.checks.some((check) => check.code === "orphaned_whatsapp_final_answer" && check.messageId === final.id), false);
 });
 
+test("WhatsApp router doctor scopes orphan checks to the selected trace", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-router-doctor-trace-scope-"));
+  const env = runtimeEnv(home);
+  const thread = await createWhatsAppThread(env);
+  const user = await appendThreadMessage(thread.id, {
+    id: "wa-selected-user",
+    role: "user",
+    source: "whatsapp_inbound",
+    connector: "whatsapp",
+    chatId: "chat-1",
+    routerTraceId: "rt_selected",
+    text: "Selected trace",
+    state: "completed",
+    deliveryState: "delivered",
+    observedVia: "codex_app_server_user_input",
+  }, env);
+  await recordRouterTraceEvent({ routerTraceId: "rt_selected", connector: "whatsapp", threadId: thread.id, messageId: user.id, phase: "received" }, env);
+  await recordRouterTraceEvent({ routerTraceId: "rt_selected", connector: "whatsapp", threadId: thread.id, messageId: user.id, phase: "routed" }, env);
+  await recordRouterTraceEvent({ routerTraceId: "rt_selected", connector: "whatsapp", threadId: thread.id, messageId: user.id, phase: "queued" }, env);
+  await recordRouterTraceEvent({ routerTraceId: "rt_selected", connector: "whatsapp", threadId: thread.id, messageId: user.id, phase: "delivery_started" }, env);
+  await recordRouterTraceEvent({ routerTraceId: "rt_selected", connector: "whatsapp", threadId: thread.id, messageId: user.id, phase: "delivered_to_runtime" }, env);
+  await appendThreadMessage(thread.id, {
+    id: "wa-unrelated-orphan",
+    role: "assistant",
+    source: "codex-app-server",
+    connector: "whatsapp",
+    chatId: "chat-1",
+    phase: "final_answer",
+    state: "completed",
+    routerTraceId: "rt_unrelated",
+    text: "Unrelated orphan final",
+  }, env);
+
+  const report = await doctorWhatsAppRouter({
+    trace: "rt_selected",
+    env,
+    runtimeStatusFn: async () => ({ state: "working", working: true }),
+    whatsappStatusFn: readyWhatsAppStatus,
+    listConnectorOutboxJobsFn: listConnectorOutboxJobs,
+  });
+
+  assert.equal(report.checks.some((check) => check.messageId === "wa-unrelated-orphan"), false);
+});
+
+test("WhatsApp router doctor requeues runtime-delivered input after an idle turn produced no answer", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-router-doctor-missing-answer-"));
+  const env = runtimeEnv(home);
+  const thread = await createWhatsAppThread(env);
+  const stale = new Date(Date.now() - 60_000).toISOString();
+  const user = await appendThreadMessage(thread.id, {
+    id: "wa-runtime-no-answer",
+    role: "user",
+    source: "whatsapp_inbound",
+    connector: "whatsapp",
+    chatId: "chat-1",
+    routerTraceId: "rt_runtime_no_answer",
+    text: "This reached Codex but got no answer",
+    state: "completed",
+    deliveryState: "delivered",
+    observedVia: "codex_app_server_user_input",
+    createdAt: stale,
+    updatedAt: stale,
+  }, env);
+  for (const phase of ["received", "routed", "queued", "delivery_started", "delivered_to_runtime"]) {
+    await recordRouterTraceEvent({ routerTraceId: "rt_runtime_no_answer", connector: "whatsapp", threadId: thread.id, messageId: user.id, phase }, env);
+  }
+  const status = async () => ({ state: "ready", promptReady: true, working: false });
+  const before = await doctorWhatsAppRouter({ thread: thread.id, env, runtimeStatusFn: status, whatsappStatusFn: readyWhatsAppStatus });
+  assert.equal(before.checks.some((check) => check.code === "runtime_delivery_completed_without_assistant" && check.messageId === user.id), true);
+
+  const repaired = await doctorWhatsAppRouter({ thread: thread.id, repair: true, env, runtimeStatusFn: status, whatsappStatusFn: readyWhatsAppStatus });
+  const messages = await listThreadMessages(thread.id, env);
+  const updated = messages.find((message) => message.id === user.id);
+  assert.equal(repaired.repairs.some((item) => item.code === "requeue_runtime_delivery_without_assistant" && item.messageId === user.id), true);
+  assert.equal(["queued", "running"].includes(updated.state), true);
+});
+
 test("WhatsApp router doctor reports queued input while runtime is sleeping", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-router-doctor-sleeping-"));
   const env = runtimeEnv(home);

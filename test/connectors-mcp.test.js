@@ -14,7 +14,7 @@ import { createTenantVm } from "../packages/core/src/tenant-vm-registry.js";
 import { createThread, getThread } from "../packages/core/src/threads.js";
 import { isMainModule } from "../scripts/main-module.mjs";
 import { createConnectorsMcpGateway } from "../scripts/orkestr-connectors-mcp.mjs";
-import { assessConnectorHealth, runConnectorDoctor } from "../scripts/orkestr-connectors-doctor.mjs";
+import { assessConnectorHealth, connectorReleaseState, runConnectorDoctor } from "../scripts/orkestr-connectors-doctor.mjs";
 
 async function listen(server) {
   await new Promise((resolve, reject) => {
@@ -884,4 +884,62 @@ test("connector doctor leaves dead letters for explicit recovery", async () => {
   assert.equal(result.repaired, false);
   assert.equal(result.repairSuppressed, "manual_intervention");
   assert.deepEqual(result.issues, ["dead_letter_events"]);
+});
+
+test("connector doctor detects and schedules repair for standalone release drift", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-connectors-doctor-revision-"));
+  const manifestPath = path.join(home, "release-manifest.json");
+  const revisionPath = path.join(home, "REVISION");
+  await fs.writeFile(manifestPath, JSON.stringify({ git: { commit: "expected-revision" } }));
+  await fs.writeFile(revisionPath, "stale-revision\n");
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_CONNECTORS_REQUIRED_WA_ACCOUNTS: "sender",
+    ORKESTR_EXPECTED_RELEASE_MANIFEST: manifestPath,
+    ORKESTR_CONNECTORS_REVISION_FILE: revisionPath,
+  };
+  const release = await connectorReleaseState(env);
+  assert.equal(release.checked, true);
+  assert.equal(release.drift, true);
+
+  let scheduled = 0;
+  const result = await runConnectorDoctor({
+    repair: true,
+    env,
+    fetchImpl: async () => ({
+      ok: true,
+      json: async () => ({
+        ok: true,
+        gateway: { ok: true },
+        worker: { ok: true, state: "ready" },
+        accounts: [{ accountId: "sender", runtimeUsable: true, sendReady: true, inboundReady: true }],
+        queue: { deadLetter: 0 },
+      }),
+    }),
+    scheduleReleaseReconcileFn: async () => {
+      scheduled += 1;
+      return { unit: "test-reconcile" };
+    },
+  });
+
+  assert.equal(result.ok, false);
+  assert.deepEqual(result.issues, ["connector_release_drift"]);
+  assert.equal(result.repaired, true);
+  assert.equal(result.repairAction, "connector_release_reconcile_scheduled");
+  assert.equal(scheduled, 1);
+});
+
+test("connector doctor accepts matching standalone and active release revisions", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-connectors-doctor-revision-match-"));
+  const manifestPath = path.join(home, "release-manifest.json");
+  const revisionPath = path.join(home, "REVISION");
+  await fs.writeFile(manifestPath, JSON.stringify({ git: { commit: "same-revision" } }));
+  await fs.writeFile(revisionPath, "same-revision\n");
+  const release = await connectorReleaseState({
+    ORKESTR_EXPECTED_RELEASE_MANIFEST: manifestPath,
+    ORKESTR_CONNECTORS_REVISION_FILE: revisionPath,
+  });
+
+  assert.equal(release.checked, true);
+  assert.equal(release.drift, false);
 });
