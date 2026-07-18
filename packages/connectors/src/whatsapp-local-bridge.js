@@ -5872,6 +5872,17 @@ export async function listLocalWhatsAppChatParticipants({ accountId = "", chatId
   }
   let chat;
   try {
+    const cached = await cachedLocalWhatsAppGroupParticipants(runtime, id);
+    if (cached?.ok) {
+      return {
+        accountId: normalized,
+        chatId: id,
+        ready: Boolean(state.ready && state.chatOpsReady !== false && state.runtimeUsable !== false),
+        participants: cached.participants,
+        iAmAdmin: cached.iAmAdmin,
+        source: "cached_group_metadata",
+      };
+    }
     chat = await runtime.client.getChatById(id);
   } catch (error) {
     if (recoverableLocalWhatsAppRuntimeError(error)) {
@@ -5893,6 +5904,32 @@ export async function listLocalWhatsAppChatParticipants({ accountId = "", chatId
     ready: Boolean(state.ready && state.chatOpsReady !== false && state.runtimeUsable !== false),
     participants,
   };
+}
+
+async function cachedLocalWhatsAppGroupParticipants(runtime = null, chatId = "") {
+  const page = runtime?.client?.pupPage;
+  if (!page || typeof page.evaluate !== "function") return null;
+  return page.evaluate(async (groupId) => {
+    const clean = (value) => String(value || "").trim();
+    const serialized = (value) => clean(value?._serialized || value?.id?._serialized || value?.id || value);
+    const moduleRequire = window.require;
+    if (typeof moduleRequire !== "function") return null;
+    const collections = moduleRequire("WAWebCollections");
+    const widFactory = moduleRequire("WAWebWidFactory");
+    const groupWid = widFactory.createWid(groupId);
+    const chat = collections.Chat.get(groupWid) || collections.Chat.get(groupId);
+    const participants = chat?.groupMetadata?.participants;
+    if (!participants || typeof participants.serialize !== "function") return null;
+    return {
+      ok: true,
+      iAmAdmin: typeof chat.iAmAdmin === "function" ? chat.iAmAdmin() : null,
+      participants: participants.serialize().map((participant) => ({
+        id: serialized(participant),
+        isAdmin: Boolean(participant?.isAdmin || participant?.__x_isAdmin),
+        isSuperAdmin: Boolean(participant?.isSuperAdmin || participant?.__x_isSuperAdmin),
+      })).filter((participant) => participant.id),
+    };
+  }, chatId);
 }
 
 /**
@@ -6164,6 +6201,40 @@ export async function promoteLocalWhatsAppGroupParticipants({ accountId = "", ch
     throw localWhatsAppNotReadyError();
   }
   try {
+    const cachedResult = await applyCachedLocalWhatsAppGroupAdminAction({
+      runtime,
+      chatId: id,
+      participantIds: participants,
+      promote: true,
+    });
+    if (cachedResult?.ok) {
+      await appendEvent({
+        type: "whatsapp_local_group_admins_promoted",
+        accountId: normalized,
+        chatId: id,
+        participantIds: cachedResult.participantIds || participants,
+        result: cachedResult.result,
+        source: "cached_group_metadata",
+      }, env).catch(() => {});
+      return { ok: true, accountId: normalized, chatId: id, participantIds: cachedResult.participantIds || participants, result: cachedResult.result };
+    }
+    if (cachedResult?.error) {
+      await appendEvent({
+        type: "whatsapp_local_group_admin_cached_attempt",
+        accountId: normalized,
+        chatId: id,
+        participantIds: participants,
+        error: String(cachedResult.error),
+        missingParticipantIds: Array.isArray(cachedResult.missingParticipantIds) ? cachedResult.missingParticipantIds : [],
+        attemptErrors: Array.isArray(cachedResult.attemptErrors) ? cachedResult.attemptErrors : [],
+        foundShapes: Array.isArray(cachedResult.foundShapes) ? cachedResult.foundShapes : [],
+      }, env).catch(() => {});
+    }
+    if (cachedResult?.error && !["whatsapp_web_require_unavailable", "whatsapp_group_chat_required", "whatsapp_group_participants_unavailable", "whatsapp_admin_participants_not_found"].includes(String(cachedResult.error))) {
+      const error = new Error(String(cachedResult.error));
+      error.statusCode = 502;
+      throw error;
+    }
     const chat = await runtime.client.getChatById(id);
     if (!chat?.isGroup || typeof chat.promoteParticipants !== "function") {
       const error = new Error("whatsapp_group_chat_required");
@@ -6185,6 +6256,110 @@ export async function promoteLocalWhatsAppGroupParticipants({ accountId = "", ch
     }
     throw error;
   }
+}
+
+async function applyCachedLocalWhatsAppGroupAdminAction({ runtime = null, chatId = "", participantIds = [], promote = true } = {}) {
+  const page = runtime?.client?.pupPage;
+  if (!page || typeof page.evaluate !== "function") return null;
+  return page.evaluate(async (groupId, requestedIds, promoteAction) => {
+    const clean = (value) => String(value || "").trim();
+    const serialized = (value) => clean(value?._serialized || value?.id?._serialized || value?.id || value);
+    const digits = (value) => clean(value).replace(/[^\d]/g, "");
+    const sameParticipant = (left, right) => {
+      const a = clean(left).toLowerCase();
+      const b = clean(right).toLowerCase();
+      if (!a || !b) return false;
+      if (a === b) return true;
+      const ad = digits(a);
+      const bd = digits(b);
+      return Boolean(ad && bd && ad === bd);
+    };
+    const moduleRequire = window.require;
+    if (typeof moduleRequire !== "function") return { ok: false, error: "whatsapp_web_require_unavailable" };
+    const collections = moduleRequire("WAWebCollections");
+    const widFactory = moduleRequire("WAWebWidFactory");
+    const groupWid = widFactory.createWid(groupId);
+    const chat = collections.Chat.get(groupWid) ||
+      collections.Chat.get(groupId) ||
+      await collections.Chat.find(groupWid).catch(() => null);
+    if (!chat?.groupMetadata) return { ok: false, error: "whatsapp_group_chat_required" };
+    const participants = chat.groupMetadata?.participants;
+    if (!participants || typeof participants.get !== "function") return { ok: false, error: "whatsapp_group_participants_unavailable" };
+    const serializedParticipants = typeof participants.serialize === "function" ? participants.serialize() : [];
+    const found = [];
+    const missing = [];
+    for (const requested of requestedIds) {
+      const requestedText = clean(requested);
+      const requestedWid = (() => {
+        try {
+          return widFactory.createWid(requestedText);
+        } catch {
+          return null;
+        }
+      })();
+      const candidateIds = [
+        requestedText,
+        serialized(requestedWid),
+      ].filter(Boolean);
+      let participant = candidateIds.map((candidate) => participants.get(candidate)).find(Boolean) || null;
+      if (!participant) {
+        const match = serializedParticipants.find((item) => candidateIds.some((candidate) => sameParticipant(serialized(item), candidate)));
+        const matchId = serialized(match);
+        if (matchId) participant = participants.get(matchId);
+      }
+      if (participant) {
+        const participantId = serialized(participant);
+        if (!found.some((item) => sameParticipant(serialized(item), participantId))) found.push(participant);
+      } else {
+        missing.push(requestedText);
+      }
+    }
+    if (!found.length) return { ok: false, error: "whatsapp_admin_participants_not_found", missingParticipantIds: missing };
+    const action = moduleRequire("WAWebModifyParticipantsGroupAction");
+    const fn = promoteAction ? action.promoteParticipants : action.demoteParticipants;
+    const attempts = [
+      { shape: "participant_models", values: found },
+      { shape: "participant_wids", values: found.map((participant) => participant?.id).filter(Boolean) },
+      { shape: "serialized_ids", values: found.map((participant) => serialized(participant)).filter(Boolean) },
+    ].filter((attempt) => attempt.values.length);
+    let result = null;
+    let shape = "";
+    let lastError = null;
+    const attemptErrors = [];
+    for (const attempt of attempts) {
+      try {
+        result = await fn(chat, attempt.values);
+        shape = attempt.shape;
+        lastError = null;
+        break;
+      } catch (error) {
+        lastError = error;
+        attemptErrors.push({ shape: attempt.shape, error: clean(error?.message || error) });
+      }
+    }
+    if (lastError) {
+      return {
+        ok: false,
+        error: clean(lastError?.message || lastError) || "whatsapp_group_admin_action_failed",
+        missingParticipantIds: missing,
+        attemptErrors,
+        foundShapes: found.map((participant) => ({
+          id: serialized(participant),
+          hasId: Boolean(participant?.id),
+          idType: typeof participant?.id,
+          keys: Object.keys(participant || {}).slice(0, 12),
+        })),
+      };
+    }
+    return {
+      ok: true,
+      status: 200,
+      participantIds: found.map((participant) => serialized(participant)).filter(Boolean),
+      missingParticipantIds: missing,
+      shape,
+      result,
+    };
+  }, chatId, participantIds, promote === true);
 }
 
 /**
@@ -6221,6 +6396,40 @@ export async function demoteLocalWhatsAppGroupParticipants({ accountId = "", cha
     throw localWhatsAppNotReadyError();
   }
   try {
+    const cachedResult = await applyCachedLocalWhatsAppGroupAdminAction({
+      runtime,
+      chatId: id,
+      participantIds: participants,
+      promote: false,
+    });
+    if (cachedResult?.ok) {
+      await appendEvent({
+        type: "whatsapp_local_group_admins_demoted",
+        accountId: normalized,
+        chatId: id,
+        participantIds: cachedResult.participantIds || participants,
+        result: cachedResult.result,
+        source: "cached_group_metadata",
+      }, env).catch(() => {});
+      return { ok: true, accountId: normalized, chatId: id, participantIds: cachedResult.participantIds || participants, result: cachedResult.result };
+    }
+    if (cachedResult?.error) {
+      await appendEvent({
+        type: "whatsapp_local_group_admin_cached_attempt",
+        accountId: normalized,
+        chatId: id,
+        participantIds: participants,
+        error: String(cachedResult.error),
+        missingParticipantIds: Array.isArray(cachedResult.missingParticipantIds) ? cachedResult.missingParticipantIds : [],
+        attemptErrors: Array.isArray(cachedResult.attemptErrors) ? cachedResult.attemptErrors : [],
+        foundShapes: Array.isArray(cachedResult.foundShapes) ? cachedResult.foundShapes : [],
+      }, env).catch(() => {});
+    }
+    if (cachedResult?.error && !["whatsapp_web_require_unavailable", "whatsapp_group_chat_required", "whatsapp_group_participants_unavailable", "whatsapp_admin_participants_not_found"].includes(String(cachedResult.error))) {
+      const error = new Error(String(cachedResult.error));
+      error.statusCode = 502;
+      throw error;
+    }
     const chat = await runtime.client.getChatById(id);
     if (!chat?.isGroup || typeof chat.demoteParticipants !== "function") {
       const error = new Error("whatsapp_group_chat_required");

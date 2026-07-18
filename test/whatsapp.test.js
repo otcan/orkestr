@@ -2931,6 +2931,84 @@ test("local whatsapp participant reads recover stale ready runtime", async () =>
   }
 });
 
+test("local whatsapp participant reads use cached group metadata before chat lookup", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-participant-read-cache-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "responder",
+  };
+  const calls = [];
+  try {
+    setLocalWhatsAppRuntimeForTest("responder", {
+      client: {
+        pupPage: {
+          async evaluate(_callback, chatId) {
+            calls.push(["evaluate", chatId]);
+            return {
+              ok: true,
+              iAmAdmin: true,
+              participants: [{ id: "owner@lid", isAdmin: true, isSuperAdmin: false }],
+            };
+          },
+        },
+        async getChatById(chatId) {
+          calls.push(["getChatById", chatId]);
+          throw new Error("chat_lookup_should_not_run");
+        },
+      },
+    }, { ready: true, chatOpsReady: true, runtimeUsable: true }, env);
+
+    const result = await listLocalWhatsAppChatParticipants({ accountId: "responder", chatId: "fixture-group@g.us", env });
+
+    assert.deepEqual(calls, [["evaluate", "fixture-group@g.us"]]);
+    assert.equal(result.source, "cached_group_metadata");
+    assert.equal(result.iAmAdmin, true);
+    assert.deepEqual(result.participants, [{ id: "owner@lid", isAdmin: true, isSuperAdmin: false }]);
+  } finally {
+    await resetLocalWhatsAppBridgeForTest(env);
+  }
+});
+
+test("local whatsapp group admin promotion uses cached group metadata before chat lookup", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-admin-cache-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "responder",
+  };
+  const calls = [];
+  try {
+    setLocalWhatsAppRuntimeForTest("responder", {
+      client: {
+        pupPage: {
+          async evaluate(_callback, chatId, participantIds, promote) {
+            calls.push(["evaluate", chatId, participantIds, promote]);
+            return { ok: true, participantIds, result: { status: 200 } };
+          },
+        },
+        async getChatById(chatId) {
+          calls.push(["getChatById", chatId]);
+          throw new Error("chat_lookup_should_not_run");
+        },
+      },
+    }, { ready: true, chatOpsReady: true, runtimeUsable: true }, env);
+
+    const result = await promoteLocalWhatsAppGroupParticipants({
+      accountId: "responder",
+      chatId: "fixture-group@g.us",
+      participantIds: ["owner@lid"],
+      env,
+    });
+
+    assert.deepEqual(calls, [["evaluate", "fixture-group@g.us", ["owner@lid"], true]]);
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.participantIds, ["owner@lid"]);
+    const events = await listEvents(env);
+    assert.equal(events.some((event) => event.type === "whatsapp_local_group_admins_promoted" && event.source === "cached_group_metadata"), true);
+  } finally {
+    await resetLocalWhatsAppBridgeForTest(env);
+  }
+});
+
 test("local whatsapp group admin promotion recovers stale or broken runtime", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-admin-recover-"));
   const env = {
