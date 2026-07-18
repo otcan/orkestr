@@ -1822,7 +1822,7 @@ test("runtime status reports visible background terminal work instead of ready",
   }
 });
 
-test("runtime status does not treat stale working text above a prompt as typing", async () => {
+test("runtime status stops typing after a working prompt becomes stale", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-foreground-work-prompt-"));
   const fakeTmux = await createFakeTmux(home);
   const priorPath = process.env.PATH;
@@ -1848,10 +1848,20 @@ test("runtime status does not treat stale working text above a prompt as typing"
       TMUX_LOG: fakeTmux.log,
       TMUX_STATE: fakeTmux.state,
       TMUX_CAPTURE_TEXT: process.env.TMUX_CAPTURE_TEXT,
+      ORKESTR_PANE_PROGRESS_ACTIVE_MS: "0",
+      ORKESTR_PANE_STALE_TYPING_GRACE_MS: "10",
     };
     await createThread({ id: "foreground-work-prompt-thread", name: "Foreground Work Prompt Thread" }, env);
     await wakeThread("foreground-work-prompt-thread", { reason: "test" }, env);
 
+    env.TMUX_CAPTURE_TEXT = env.TMUX_CAPTURE_TEXT.replace("2m 00s", "2m 01s");
+    const initialStatus = await runtimeStatus("foreground-work-prompt-thread", env);
+    assert.equal(initialStatus.state, "working");
+    assert.equal(initialStatus.foregroundWorking, true);
+    assert.equal(initialStatus.typingActive, true);
+    assert.equal(initialStatus.promptReady, false);
+
+    await new Promise((resolve) => setTimeout(resolve, 15));
     const status = await runtimeStatus("foreground-work-prompt-thread", env);
 
     assert.equal(status.state, "working");

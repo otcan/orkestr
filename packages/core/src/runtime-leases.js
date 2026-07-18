@@ -787,7 +787,11 @@ export async function runtimeStatus(threadId, env = process.env, messagesOverrid
   const frozen = progressSample?.frozen === true || progressSample?.stateHint === "frozen";
   const backgroundWork = paneBackgroundWork(paneText) || progressSample?.backgroundWork === true;
   const staleWorkingPrompt = progressSample?.staleWorkingPrompt === true;
-  const foregroundWorking = !frozen && paneWorking(paneText) && !backgroundWork && !staleWorkingPrompt;
+  const staleTypingGraceMs = positiveDurationMs(env.ORKESTR_PANE_STALE_TYPING_GRACE_MS, 15_000, 0);
+  const changingWorkingPrompt = staleWorkingPrompt && staleTypingGraceMs > 0 &&
+    Number(progressSample?.stableForMs || 0) < staleTypingGraceMs;
+  const foregroundWorking = !frozen && paneWorking(paneText) && !backgroundWork &&
+    (!staleWorkingPrompt || changingWorkingPrompt);
   const promptReadyCandidate = panePromptReady(paneText);
   const working = !frozen && (foregroundWorking || backgroundWork || staleWorkingPrompt || (!promptReadyCandidate && runningCount > 0));
   const promptReady = promptReadyCandidate && !foregroundWorking && !needsResumeDirectoryConfirmation && !needsCodexUpdatePromptSkip;

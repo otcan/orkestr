@@ -1105,7 +1105,8 @@ sync_standalone_connectors_release() {
     return 0
   fi
   echo "Reconciling standalone connector release ${active_revision:0:12} -> ${expected_revision:0:12}."
-  bash "$script" --activate --source "$release_dir"
+  ORKESTR_CONNECTORS_EXPECTED_REVISION="$expected_revision" \
+    bash "$script" --activate --source "$release_dir"
 }
 
 restart_and_verify() {

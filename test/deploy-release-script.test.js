@@ -98,7 +98,7 @@ test("release deploy script exposes versioned install, status, and rollback", as
   assert.match(script, /ORKESTR_RELEASE_SYNC_CONNECTORS/);
   assert.match(script, /deploy-connectors-release\.sh/);
   assert.match(script, /Standalone connector release already matches active Orkestr revision/);
-  assert.match(script, /bash "\$script" --activate --source "\$release_dir"/);
+  assert.match(script, /ORKESTR_CONNECTORS_EXPECTED_REVISION="\$expected_revision" \\\s+bash "\$script" --activate --source "\$release_dir"/);
   assert.match(script, /ORKESTR_DEPLOY_EXPOSURE_CHECK/);
   assert.match(script, /ORKESTR_DEPLOY_PUBLIC_BASE_URL/);
   assert.match(script, /ORKESTR_DEPLOY_EXPOSURE_PRIVATE_PATHS/);
