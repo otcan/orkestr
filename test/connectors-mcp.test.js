@@ -834,6 +834,7 @@ test("connector doctor does not restart an authenticated account during startup 
       ORKESTR_HOME: home,
       ORKESTR_CONNECTORS_REQUIRED_WA_ACCOUNTS: "sender",
       ORKESTR_CONNECTORS_DOCTOR_STARTUP_GRACE_MS: "180000",
+      ORKESTR_CONNECTORS_DOCTOR_REVISION_CHECK: "0",
     },
     fetchImpl: async () => ({
       ok: true,
@@ -869,6 +870,7 @@ test("connector doctor leaves dead letters for explicit recovery", async () => {
     env: {
       ORKESTR_HOME: home,
       ORKESTR_CONNECTORS_REQUIRED_WA_ACCOUNTS: "sender",
+      ORKESTR_CONNECTORS_DOCTOR_REVISION_CHECK: "0",
     },
     fetchImpl: async () => ({
       ok: true,

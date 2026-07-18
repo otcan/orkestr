@@ -1109,15 +1109,15 @@ sync_standalone_connectors_release() {
 }
 
 restart_and_verify() {
-  configure_service_shutdown_timeout
+  configure_service_shutdown_timeout || return $?
   # Keep restart as one systemd transaction. A split stop/start can kill the
   # deploying Orkestr-managed process before it gets to the start command.
-  systemctl restart "${service_name}.service"
-  systemctl is-active --quiet "${service_name}.service"
-  health_check "$health_url" 40
-  sync_standalone_connectors_release
-  refresh_parent_whatsapp_bridge_proxy
-  deploy_public_exposure_check
+  systemctl restart "${service_name}.service" || return $?
+  systemctl is-active --quiet "${service_name}.service" || return $?
+  health_check "$health_url" 40 || return $?
+  sync_standalone_connectors_release || return $?
+  refresh_parent_whatsapp_bridge_proxy || return $?
+  deploy_public_exposure_check || return $?
   if [ "$deploy_drain_started" = "1" ]; then
     clear_deploy_drain
     echo "Deploy drain cleared after ${service_name}.service passed health checks."
