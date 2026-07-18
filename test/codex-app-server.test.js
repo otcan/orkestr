@@ -2172,6 +2172,88 @@ test("Codex app-server recovery never interrupts a live active turn because of e
   }
 });
 
+test("Codex app-server recovery interrupts an abandoned exec callback when a steer is waiting", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-stale-dynamic-exec-"));
+  const fake = await createFakeCodex(home);
+  const staleAt = new Date(Date.now() - 31_000).toISOString();
+  const env = {
+    ORKESTR_HOME: path.join(home, "orkestr"),
+    HOME: path.join(home, "runtime-home"),
+    PATH: `${fake.bin}${path.delimiter}${process.env.PATH || ""}`,
+    FAKE_CODEX_STATE: fake.stateFile,
+    ORKESTR_CODEX_APP_SERVER_STALE_DYNAMIC_EXEC_MS: "30000",
+    ORKESTR_CODEX_APP_SERVER_STALE_FINAL_GRACE_MS: "0",
+    ORKESTR_CODEX_APP_SERVER_STALE_RECOVERY_SCAN_CACHE_MS: "0",
+  };
+  try {
+    const thread = await createThread({ id: "app-server-stale-dynamic-exec-thread", name: "Stale Dynamic Exec Thread", cwd: home, executorId: "codex", executor: { type: "codex" } }, env);
+    const started = await startCodexAppServerThread(thread, env);
+    const codexId = started.thread.executor.codexThreadId;
+    const activeTurnId = "stale-dynamic-exec-turn";
+    await updateThread(started.thread.id, {
+      state: "working",
+      runtime: {
+        ...(started.thread.runtime || {}),
+        runtimeKind: "codex-app-server",
+        state: "working",
+        activeTurnId,
+        codexStatus: { type: "active", activeFlags: ["running"] },
+      },
+    }, env);
+    const input = await appendThreadMessage(started.thread.id, {
+      role: "user",
+      source: "whatsapp_inbound",
+      connector: "whatsapp",
+      chatId: "chat-stale-dynamic-exec",
+      accountId: "account-stale-dynamic-exec",
+      text: "Status?",
+      state: "completed",
+      deliveryState: "delivered",
+      deliveredAt: staleAt,
+      observedVia: "codex_app_server_turn_steer",
+      steerActiveTurn: true,
+      codexDeliveryMode: "instant_steer",
+      codexThreadId: codexId,
+      codexTurnId: activeTurnId,
+      createdAt: staleAt,
+    }, env);
+    const rawState = JSON.parse(await fs.readFile(fake.stateFile, "utf8"));
+    const codexThread = rawState.threads.find((item) => item.id === codexId);
+    codexThread.status = { type: "active", activeFlags: ["running"] };
+    codexThread.activeTurnId = activeTurnId;
+    codexThread.turns.push({
+      id: activeTurnId,
+      threadId: codexId,
+      status: "inProgress",
+      items: [
+        { type: "userMessage", id: "user_stale_dynamic_exec", content: [{ type: "text", text: "Original task" }] },
+        { type: "dynamicToolCall", id: "tool_stale_dynamic_exec", namespace: "functions", tool: "exec", status: "inProgress", durationMs: 31_000, arguments: {} },
+        { type: "userMessage", id: "steer_stale_dynamic_exec", content: [{ type: "text", text: "Status?" }] },
+      ],
+    });
+    await fs.writeFile(fake.stateFile, JSON.stringify(rawState, null, 2));
+    const client = await getCodexAppServerClient({ env, home: env.HOME });
+    client.threadStates.delete(codexId);
+
+    const result = await recoverStaleCodexAppServerTurns(env);
+    const messages = await listThreadMessages(started.thread.id, env);
+    const notice = messages.find((message) => message.parentMessageId === input.id && message.phase === "runtime_interrupted");
+    const updated = await getThread(started.thread.id, env);
+    const finalState = JSON.parse(await fs.readFile(fake.stateFile, "utf8"));
+
+    assert.equal(result.recovered, 1);
+    assert.equal(result.appended, 1);
+    assert.match(notice.text, /Codex tool response lost/);
+    assert.match(notice.text, /exec tool callback/);
+    assert.equal(updated.state, "ready");
+    assert.equal(updated.runtime.activeTurnId, null);
+    assert.equal(updated.runtime.lastStaleTurnRecoveryReason, "dynamic_exec_callback_stalled");
+    assert.equal(finalState.calls.some((call) => call.method === "turn/interrupt" && call.params?.turnId === activeTurnId), true);
+  } finally {
+    stopCodexAppServerClients();
+  }
+});
+
 test("Codex app-server recovery preserves every live active turn regardless of age", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-multi-active-timeout-"));
   const fake = await createFakeCodex(home);

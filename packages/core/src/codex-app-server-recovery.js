@@ -31,6 +31,7 @@ import { recordRuntimeLiveness, recordRuntimeLivenessProbeFailure } from "./runt
 import {
   activeTurnIdsFromClientState,
   activeTurnRecoveryPending,
+  staleDynamicExecCall,
   shouldSteerStaleActiveTurn,
   shouldRecoverStaleActiveTurn,
 } from "./codex-app-server-active-turn-recovery.js";
@@ -215,8 +216,8 @@ function staleRecoveryClearPatch(thread = {}, messages = []) {
   };
 }
 
-function staleRecoveryReason(thread = {}, turn = null, shouldRecoverActiveTurn = false, staleRuntime = false) {
-  if (shouldRecoverActiveTurn) return "active_turn_timeout";
+function staleRecoveryReason(thread = {}, turn = null, activeTurnRecoveryCause = "", staleRuntime = false) {
+  if (activeTurnRecoveryCause) return activeTurnRecoveryCause;
   return turn?.reason || (staleRuntime ? "stale_runtime" : "incomplete_turn");
 }
 
@@ -307,6 +308,15 @@ function staleTurnNoticeText(reason = "no_assistant_response", options = {}) {
     ? options.doctorLines.map((line) => clean(line)).filter(Boolean)
     : [];
   const withDoctor = (lines) => [...lines, ...doctorLines].join("\n");
+  if (noticeCause === "dynamic_exec_callback_stalled") {
+    return withDoctor([
+      "Codex tool response lost",
+      "",
+      "Orkestr found an exec tool callback that remained open after its response lease while your newer message was waiting.",
+      "The stuck turn was interrupted and this thread is ready again.",
+      "Send the next instruction normally to continue.",
+    ]);
+  }
   if (noticeCause === "active_turn_timeout") {
     if (reason === "no_final_answer") {
       return withDoctor([
@@ -375,10 +385,10 @@ function staleTurnNoticeText(reason = "no_assistant_response", options = {}) {
   ]);
 }
 
-function recoveryNoticeCause(options = {}, activeTurnRecovery = false) {
+function recoveryNoticeCause(options = {}, activeTurnRecoveryCause = "") {
   const explicit = clean(options.noticeCause || options.cause);
   if (explicit) return explicit;
-  return activeTurnRecovery ? "active_turn_timeout" : "";
+  return clean(activeTurnRecoveryCause);
 }
 
 function staleTurnEventId(thread, codexId, turn, options = {}) {
@@ -603,12 +613,14 @@ async function steerStaleActiveTurn(thread = {}, clientState = {}, turn = null, 
 }
 
 function activeTurnDoctorLines({ reason = "", interruptTurnIds = [], skippedTurnIds = [] } = {}) {
-  if (reason !== "active_turn_timeout") return [];
+  if (!["active_turn_timeout", "dynamic_exec_callback_stalled"].includes(reason)) return [];
   const targetCount = interruptTurnIds.length;
   const skippedCount = skippedTurnIds.length;
   const lines = [
     "",
-    `Doctor: no final answer found, no approval pending, stale active Codex turn${targetCount === 1 ? "" : "s"} selected for recovery.`,
+    reason === "dynamic_exec_callback_stalled"
+      ? `Doctor: an exec callback exceeded its response lease with a waiting steer; active Codex turn${targetCount === 1 ? "" : "s"} selected for recovery.`
+      : `Doctor: no final answer found, no approval pending, stale active Codex turn${targetCount === 1 ? "" : "s"} selected for recovery.`,
   ];
   if (skippedCount) {
     lines.push(`Doctor: ignored ${skippedCount} stale cached active turn id${skippedCount === 1 ? "" : "s"} instead of interrupting historical turns.`);
@@ -862,6 +874,11 @@ export async function recoverStaleCodexAppServerTurns(env = process.env, options
       ? initialScanKey
       : recoveryScanKey(thread, clientState, messagesFingerprint, options, env);
     const shouldRecoverRuntimeTurn = staleRuntime && staleRuntimeNoticeDue(thread, incompleteTurn, env);
+    const activeTurnRecoveryCause = shouldRecoverActiveTurn && staleDynamicExecCall(clientState, env)
+      ? "dynamic_exec_callback_stalled"
+      : shouldRecoverActiveTurn
+        ? "active_turn_timeout"
+        : "";
     const noticeTurn = shouldRecoverTurn || shouldRecoverActiveTurn || shouldRecoverRuntimeTurn
       ? incompleteTurn
       : null;
@@ -903,19 +920,19 @@ export async function recoverStaleCodexAppServerTurns(env = process.env, options
       }
     }
     if (freshNoticeTurn) {
-      const noticeCause = recoveryNoticeCause(options, shouldRecoverActiveTurn);
+      const noticeCause = recoveryNoticeCause(options, activeTurnRecoveryCause);
       const repeatAfterSafeResetLines = durableStaleRecoveryRepeated(thread, freshNoticeTurn)
         ? [
             "",
             "Doctor: this replay followed an earlier stale-turn recovery, so Orkestr is escalating across the fresh Codex session.",
           ]
         : [];
-      const noticeOptions = noticeCause === "active_turn_timeout"
+      const noticeOptions = ["active_turn_timeout", "dynamic_exec_callback_stalled"].includes(noticeCause)
         ? {
             ...options,
             noticeCause,
             doctorLines: activeTurnDoctorLines({
-              reason: "active_turn_timeout",
+              reason: noticeCause,
               interruptTurnIds: preNoticeInterruptPlan.interruptTurnIds,
               skippedTurnIds: preNoticeInterruptPlan.skippedTurnIds,
             }).concat(repeatAfterSafeResetLines),
@@ -952,7 +969,7 @@ export async function recoverStaleCodexAppServerTurns(env = process.env, options
     }
     const autoSafeResetAttempted = shouldAutoSafeResetRepeatedStaleTurn(thread, noticeMessages, freshNoticeTurn, options, env);
     const recoveryTurn = freshNoticeTurn || noticeTurn;
-    const recoveryReason = staleRecoveryReason(thread, recoveryTurn, shouldRecoverActiveTurn, staleRuntime);
+    const recoveryReason = staleRecoveryReason(thread, recoveryTurn, activeTurnRecoveryCause, staleRuntime);
     const recoveredAt = nowIso();
     const recoveryRuntimePatch = recoveryTurn
       ? staleRecoveryRuntimePatch(thread, {
@@ -993,7 +1010,7 @@ export async function recoverStaleCodexAppServerTurns(env = process.env, options
           codexThreadId: codexId,
           noticeMessageId: notice?.id || null,
           latestUserMessageId: freshNoticeTurn?.latestUser?.id || noticeTurn?.latestUser?.id || null,
-          noticeCause: recoveryNoticeCause(options, shouldRecoverActiveTurn) || null,
+          noticeCause: recoveryNoticeCause(options, activeTurnRecoveryCause) || null,
           recoverySource: clean(options.recoverySource || "") || null,
           recoveryReason,
         });
@@ -1063,7 +1080,7 @@ export async function recoverStaleCodexAppServerTurns(env = process.env, options
       skippedCachedActiveTurnIds: interruptPlan.skippedTurnIds,
       activeTurnRecoveryTargetId: interruptPlan.targetTurnId || null,
       interruptError: interruptError || null,
-      noticeCause: recoveryNoticeCause(options, shouldRecoverActiveTurn),
+      noticeCause: recoveryNoticeCause(options, activeTurnRecoveryCause),
       recoverySource: clean(options.recoverySource || ""),
       recoveryContinuation: staleRecoveryContinuationTurn(freshNoticeTurn || noticeTurn),
       staleTurnRecoveryStreak: recoveryRuntimePatch?.staleTurnRecoveryStreak || staleTurnRecoveryStreak(thread),

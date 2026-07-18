@@ -18,6 +18,27 @@ export function activeTurnFromCodexThread(codexThread = {}) {
   return activeTurnsFromCodexThread(codexThread)[0] || "";
 }
 
+export function activeDynamicToolCallFromCodexThread(codexThread = {}, activeTurnId = "") {
+  const turnId = clean(activeTurnId || activeTurnFromCodexThread(codexThread));
+  if (!turnId) return null;
+  const turns = Array.isArray(codexThread.turns) ? codexThread.turns : [];
+  const turn = turns.find((item) => clean(item?.id) === turnId);
+  const items = Array.isArray(turn?.items) ? turn.items : [];
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    const item = items[index] || {};
+    if (clean(item.type).toLowerCase() !== "dynamictoolcall") continue;
+    if (clean(item.status).toLowerCase() !== "inprogress") continue;
+    return {
+      id: clean(item.id),
+      turnId,
+      namespace: clean(item.namespace),
+      tool: clean(item.tool),
+      durationMs: Math.max(0, Number(item.durationMs || 0) || 0),
+    };
+  }
+  return null;
+}
+
 export function liveStateFromCodexThread(codexThread = {}, fallbackCodexId = "") {
   const codexId = clean(codexThread.id || codexThread.threadId || fallbackCodexId);
   if (!codexId) return null;
@@ -43,6 +64,12 @@ function rememberLiveCodexThreadState(client, codexId, state) {
   const checkedAt = nowIso();
   const previousActiveTurnId = clean(previous.activeTurnId);
   const activeTurnId = clean(state.activeTurnId);
+  const activeDynamicToolCall = activeDynamicToolCallFromCodexThread(state.thread, activeTurnId);
+  const sameDynamicToolCall = Boolean(
+    activeDynamicToolCall?.id &&
+    clean(previous.activeDynamicToolCall?.id) === activeDynamicToolCall.id &&
+    clean(previous.activeDynamicToolCall?.turnId) === activeDynamicToolCall.turnId
+  );
   const next = {
     ...previous,
     ...state,
@@ -51,6 +78,13 @@ function rememberLiveCodexThreadState(client, codexId, state) {
       ? previousActiveTurnId === activeTurnId
         ? previous.activeTurnObservedAt || checkedAt
         : checkedAt
+      : null,
+    activeDynamicToolCall: activeDynamicToolCall
+      ? {
+          ...activeDynamicToolCall,
+          observedAt: sameDynamicToolCall ? previous.activeDynamicToolCall.observedAt || checkedAt : checkedAt,
+          checkedAt,
+        }
       : null,
   };
   client.threadStates.set(codexId, next);
