@@ -272,6 +272,7 @@ function formatTenantSliceProvisionResult(payload = {}) {
     `Tenant VM slice ${payload.reused ? "reused" : slice.id ? "created" : "provisioned"}: ${slice.id || plan.tenantSlice?.id || "-"}`,
     `Owner: ${slice.ownerUserId || plan.tenantSlice?.ownerUserId || "-"}`,
     `Provisioning: ${plan.dryRun === false ? "executed" : "dry-run plan"}`,
+    `Placement: ${plan.placement?.target || "local-k3s"} (${plan.placement?.kubeconfig || "/etc/rancher/k3s/k3s.yaml"})`,
     `VM: ${vm.id || vm.tenantVmId || "-"} (${plan.namespace || vm.kubevirt?.namespace || vm.namespace || "-"}/${plan.vmName || vm.kubevirt?.vmName || vm.vmName || "-"})`,
     `Resources: ${vm.resources?.vcpus || "-"} vCPU, ${vm.resources?.memoryMiB || "-"} MiB memory, ${vm.resources?.diskGiB || "-"} GiB disk`,
     `Runtime: ${runtimeEnv.ORKESTR_PUBLIC_URL || vm.endpoint?.baseUrl || "-"}`,
@@ -301,16 +302,17 @@ function tenantSliceUsage() {
   return [
     "Usage:",
     "  orkestr vm-slice list [--json]",
-    "  orkestr vm-slice create <owner-user-id> [--id slice-id] [--namespace ns] [--vm-name name] [--wa-participant jid]... [--wa-admin jid]... [--execute] [--json]",
-    "  orkestr vm-slice provision <slice-id> [--execute] [--namespace ns] [--vm-name name] [--json]",
+    "  orkestr vm-slice create <owner-user-id> [--id slice-id] [--namespace ns] [--vm-name name] [--kubeconfig file] [--wa-participant jid]... [--wa-admin jid]... [--execute] [--json]",
+    "  orkestr vm-slice provision <slice-id> [--execute] [--namespace ns] [--vm-name name] [--kubeconfig file] [--json]",
     "  orkestr vm-slice status <slice-id> [--json]",
   ].join("\n");
 }
 
 function tenantSliceCreateUsage() {
   return [
-    "Usage: orkestr vm-slice create <owner-user-id> [--id slice-id] [--name display-name] [--namespace ns] [--vm-name name] [--wa-participant jid]... [--wa-admin jid]... [--execute] [--json]",
+    "Usage: orkestr vm-slice create <owner-user-id> [--id slice-id] [--name display-name] [--namespace ns] [--vm-name name] [--kubeconfig file] [--wa-participant jid]... [--wa-admin jid]... [--execute] [--json]",
     "Dry-run is the default. Add --execute to apply the KubeVirt manifest.",
+    "Tenant VMs default to /etc/rancher/k3s/k3s.yaml; ambient KUBECONFIG is ignored.",
   ].join("\n");
 }
 

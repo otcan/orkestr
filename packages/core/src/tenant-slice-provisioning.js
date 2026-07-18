@@ -16,6 +16,7 @@ import {
   updateTenantVm,
 } from "./tenant-vm-registry.js";
 import { buildTenantVmProvisioningPlan } from "./tenant-vm-provisioning.js";
+import { tenantVmProvisioningEnv } from "./tenant-vm-placement.js";
 import { configureTenantWhatsAppRoute } from "./tenant-whatsapp-routing.js";
 
 function nowIso() {
@@ -230,6 +231,7 @@ export function buildTenantSliceProvisioningPlan(sliceInput = {}, input = {}, en
     tenantSlice: publicTenantSlice(slice),
     tenantVm: publicTenantVm(tenantVm),
     sharedControlPlane: publicTenantControlPlane(provisionInput.sharedControlPlane),
+    placement: vmPlan.placement,
     namespace: vmPlan.namespace,
     vmName: vmPlan.vmName,
     serviceName: vmPlan.serviceName,
@@ -316,7 +318,7 @@ export async function provisionTenantSlice(tenantSliceId, input = {}, env = proc
     const [command, ...args] = executionPlan.commands.apply;
     const runner = options.spawnWithInput || spawnWithInput;
     const output = await runner(command, args, {
-      env: { ...process.env, ...env, ...(input.kubeconfig ? { KUBECONFIG: clean(input.kubeconfig) } : {}) },
+      env: tenantVmProvisioningEnv(input, env),
       maxBuffer: 1024 * 1024 * 16,
     }, executionPlan.manifest);
     const [tenantSlice, tenantVm] = await Promise.all([

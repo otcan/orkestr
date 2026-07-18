@@ -234,6 +234,7 @@ test("tenant slice provisioning execute path and runtime status are observable",
     ORKESTR_TENANT_SLICE_PORT_BASE: "25000",
     ORKESTR_AUTH_URL: "https://auth.example.test",
     ORKESTR_CONNECT_PUBLIC_URL: "https://connect.example.test",
+    KUBECONFIG: "/tmp/ambient-aws-cluster.yaml",
   };
   await createTenantSlice({
     id: "charlie-slice",
@@ -265,6 +266,8 @@ test("tenant slice provisioning execute path and runtime status are observable",
   assert.equal(calls.length, 1);
   assert.equal(calls[0].command, "kubectl");
   assert.deepEqual(calls[0].args, ["apply", "-f", "-"]);
+  assert.equal(calls[0].options.env.KUBECONFIG, "/etc/rancher/k3s/k3s.yaml");
+  assert.equal(result.placement.target, "local-k3s");
   const appliedManifest = JSON.parse(calls[0].input);
   const appliedCloudInitSecret = appliedManifest.items.find((item) => item.kind === "Secret" && item.metadata.name === "charlie-vm-cloudinit");
   const appliedUserData = appliedCloudInitSecret.stringData.userdata;

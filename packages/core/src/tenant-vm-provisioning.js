@@ -5,6 +5,7 @@ import { tenantBootstrapProfileJson, buildTenantBootstrapProfile } from "./tenan
 import { tenantDesktopShareUrlTemplate } from "./tenant-desktop-share-routing.js";
 import { tenantPublicUrls } from "./tenant-public-urls.js";
 import { getTenantVm, publicTenantVm, setTenantVmStatus } from "./tenant-vm-registry.js";
+import { resolveTenantVmPlacement, tenantVmProvisioningEnv } from "./tenant-vm-placement.js";
 
 const defaultImageUrl = "https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img";
 const defaultBootstrapUrl = "https://raw.githubusercontent.com/otcan/orkestr/main/scripts/bootstrap-vps.sh";
@@ -526,6 +527,7 @@ export function buildTenantVmProvisioningPlan(vm, input = {}, env = process.env)
   };
 
   return {
+    placement: resolveTenantVmPlacement(input, env),
     namespace,
     vmName,
     macAddress,
@@ -615,7 +617,7 @@ export async function provisionTenantVm(tenantVmId, input = {}, env = process.en
   const runner = options.spawnWithInput || spawnWithInput;
   try {
     const output = await runner(command, args, {
-      env: { ...process.env, ...env, ...(input.kubeconfig ? { KUBECONFIG: clean(input.kubeconfig) } : {}) },
+      env: tenantVmProvisioningEnv(input, env),
       maxBuffer: 1024 * 1024 * 16,
     }, plan.manifest);
     const tenantVm = await setTenantVmStatus(tenantVmId, "provisioning", { lastError: "" }, env);

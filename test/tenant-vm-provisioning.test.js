@@ -255,6 +255,56 @@ test("tenant VM provisioning execute path applies manifest and updates registry 
   assert.equal((await getTenantVm("bob-tenant", env)).status, "provisioning");
 });
 
+test("tenant VM provisioning defaults to local k3s instead of ambient KUBECONFIG", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-tenant-vm-local-placement-"));
+  const env = {
+    ORKESTR_HOME: home,
+    KUBECONFIG: "/tmp/ambient-aws-cluster.yaml",
+  };
+  await createTenantVm({
+    id: "local-tenant",
+    ownerUserId: "local",
+    kubevirt: { namespace: "orkestr-tenants", vmName: "local-tenant" },
+  }, env);
+  const calls = [];
+
+  const result = await provisionTenantVm("local-tenant", { execute: true }, env, {
+    spawnWithInput: async (command, args, options, input) => {
+      calls.push({ command, args, options, input });
+      return { stdout: "applied", stderr: "" };
+    },
+  });
+
+  assert.equal(result.dryRun, false);
+  assert.equal(calls[0].options.env.KUBECONFIG, "/etc/rancher/k3s/k3s.yaml");
+});
+
+test("tenant VM provisioning honors only explicit tenant placement overrides", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-tenant-vm-explicit-placement-"));
+  const env = {
+    ORKESTR_HOME: home,
+    KUBECONFIG: "/tmp/ambient-aws-cluster.yaml",
+    ORKESTR_TENANT_VM_KUBECONFIG: "/tmp/configured-k3s.yaml",
+  };
+  const tenantVm = await createTenantVm({
+    id: "placed-tenant",
+    ownerUserId: "placed",
+    kubevirt: { namespace: "orkestr-tenants", vmName: "placed-tenant" },
+  }, env);
+
+  const configuredPlan = buildTenantVmProvisioningPlan(tenantVm, {}, env);
+  const requestedPlan = buildTenantVmProvisioningPlan(tenantVm, { kubeconfig: "/tmp/requested-k3s.yaml" }, env);
+
+  assert.deepEqual(configuredPlan.placement, {
+    provider: "kubevirt",
+    target: "explicit-kubeconfig",
+    kubeconfig: "/tmp/configured-k3s.yaml",
+    source: "tenant-vm-config",
+  });
+  assert.equal(requestedPlan.placement.kubeconfig, "/tmp/requested-k3s.yaml");
+  assert.equal(requestedPlan.placement.source, "request");
+});
+
 test("tenant VM provisioning refuses credentialed public URLs", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-tenant-vm-provision-secret-url-"));
   const env = { ORKESTR_HOME: home };
