@@ -26,7 +26,8 @@ import {
   messageTurnId,
   terminalAssistantMessage,
 } from "./thread-message-visibility.js";
-import { readLiveCodexThreadState } from "./codex-app-server-live-state.js";
+import { probeLiveCodexThreadState } from "./codex-app-server-live-state.js";
+import { recordRuntimeLiveness, recordRuntimeLivenessProbeFailure } from "./runtime-liveness.js";
 import {
   activeTurnIdsFromClientState,
   activeTurnRecoveryPending,
@@ -454,13 +455,44 @@ function safeResetContinuationEventId(thread, codexId, turn, resetResult = {}) {
   });
 }
 
+function matchingRuntimeCheckpoint(thread = {}, latestUser = null) {
+  const checkpoint = thread?.runtime?.checkpoint;
+  if (!checkpoint || typeof checkpoint !== "object" || Array.isArray(checkpoint)) return null;
+  const turnId = clean(latestUser?.codexTurnId || latestUser?.executorTurnId || latestUser?.turnId);
+  const executionId = clean(latestUser?.executionId || turnId);
+  const checkpointTurnId = clean(checkpoint.turnId);
+  const checkpointExecutionId = clean(checkpoint.executionId);
+  if (turnId && checkpointTurnId && turnId === checkpointTurnId) return checkpoint;
+  if (executionId && checkpointExecutionId && executionId === checkpointExecutionId) return checkpoint;
+  return null;
+}
+
+function recoveryContinuationText(text = "", checkpoint = null) {
+  const body = clean(text);
+  if (!checkpoint) return body;
+  return [
+    body,
+    "",
+    "Orkestr runtime checkpoint for this interrupted execution:",
+    JSON.stringify({
+      checkpoint_id: checkpoint.checkpointId || null,
+      phase: checkpoint.phase || null,
+      summary: checkpoint.summary || "",
+      state: checkpoint.payload || {},
+    }),
+    "Resume from this checkpoint. Reconcile external state before repeating any side effect.",
+  ].join("\n").trim();
+}
+
 async function enqueueSafeResetContinuationInput(thread, codexId, turn, resetResult = {}, env = process.env, options = {}) {
   if (!safeResetSucceeded(resetResult)) return null;
   const latestUser = turn?.latestUser || null;
-  const text = clean(latestUser?.text);
+  const originalText = clean(latestUser?.text);
   const promptFile = clean(latestUser?.promptFile);
-  if (!latestUser || (!text && !promptFile)) return null;
+  if (!latestUser || (!originalText && !promptFile)) return null;
   const refreshedThread = resetResult?.thread || thread;
+  const checkpoint = matchingRuntimeCheckpoint(refreshedThread, latestUser);
+  const text = recoveryContinuationText(originalText, checkpoint);
   const newCodexThreadId = resetResult?.newCodexThreadId || codexThreadId(refreshedThread) || codexId;
   const whatsappParent = noticeWhatsappParent(turn, refreshedThread);
   return enqueueThreadInput(refreshedThread.id || thread.id, {
@@ -485,6 +517,7 @@ async function enqueueSafeResetContinuationInput(thread, codexId, turn, resetRes
     replayedFromMessageId: latestUser.id || null,
     previousCodexThreadId: codexId || null,
     previousRecoveryNoticeId: clean(options.previousRecoveryNoticeId) || null,
+    runtimeCheckpointId: clean(checkpoint?.checkpointId) || null,
     ...whatsappProjectionFields(whatsappParent, refreshedThread),
   }, env);
 }
@@ -786,15 +819,42 @@ export async function recoverStaleCodexAppServerTurns(env = process.env, options
     let shouldRecoverTurn = recoveryBlockedByPendingApproval ? false : shouldRecoverIncompleteTurn(thread, clientState, incompleteTurn, env);
     let shouldSteerActiveTurn = shouldSteerStaleActiveTurn(thread, clientState, incompleteTurn, env);
     let shouldRecoverActiveTurn = shouldRecoverStaleActiveTurn(thread, clientState, incompleteTurn, env);
-    if ((staleRuntime || shouldRecoverTurn || shouldSteerActiveTurn || shouldRecoverActiveTurn || activeTurnRecoveryPending(thread, clientState, incompleteTurn, env)) && client) {
-      const liveReadState = await readLiveCodexThreadState(client, codexId);
-      if (liveReadState) {
-        clientState = liveReadState;
+    const needsLivenessProbe = staleRuntime || shouldRecoverTurn || shouldSteerActiveTurn || shouldRecoverActiveTurn || activeTurnRecoveryPending(thread, clientState, incompleteTurn, env);
+    if (needsLivenessProbe) {
+      const probe = client
+        ? await probeLiveCodexThreadState(client, codexId).catch((error) => ({ ok: false, reason: "live_thread_read_failed", error }))
+        : { ok: false, reason: "app_server_client_unavailable" };
+      if (probe?.ok && probe.state) {
+        clientState = probe.state;
         staleRuntime = staleAppServerRuntime(thread, clientState);
         recoveryBlockedByPendingApproval = staleRecoveryPendingApproval(thread, clientState);
         shouldRecoverTurn = recoveryBlockedByPendingApproval ? false : shouldRecoverIncompleteTurn(thread, clientState, incompleteTurn, env);
         shouldSteerActiveTurn = shouldSteerStaleActiveTurn(thread, clientState, incompleteTurn, env);
         shouldRecoverActiveTurn = shouldRecoverStaleActiveTurn(thread, clientState, incompleteTurn, env);
+      }
+      const liveExecution = Boolean(
+        clean(probe?.state?.activeTurnId) ||
+        appServerStateFromStatus(probe?.state?.status || null) === "working" ||
+        appServerStateFromStatus(probe?.state?.status || null) === "awaiting_approval"
+      );
+      if (probe?.ok && liveExecution) {
+        await recordRuntimeLiveness(thread.id, {
+          runtimeGeneration: codexId,
+          turnId: clean(probe.state.activeTurnId || thread.runtime?.activeTurnId),
+          evidenceType: appServerStateFromStatus(probe.state.status) === "awaiting_approval" ? "approval_pending" : "runtime_probe",
+          phase: appServerStateFromStatus(probe.state.status) === "awaiting_approval" ? "awaiting_approval" : "executing",
+          summary: "Live Codex thread probe",
+        }, env).catch(() => {});
+      } else {
+        const failure = await recordRuntimeLivenessProbeFailure(thread.id, {
+          runtimeGeneration: codexId,
+          turnId: clean(thread.runtime?.activeTurnId || incompleteTurn?.latestUser?.codexTurnId),
+          reason: probe?.ok ? "active_execution_not_found" : publicError(probe?.error || probe?.reason || "runtime_probe_failed"),
+        }, env).catch(() => ({ lost: false }));
+        if (!failure?.lost) {
+          recoveryScanCache.delete(thread.id);
+          continue;
+        }
       }
     }
     if (recoveryBlockedByPendingApproval) continue;

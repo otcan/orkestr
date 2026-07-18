@@ -1648,7 +1648,7 @@ export async function runTenantApiAgentTool(name = "", args = {}, context = {}, 
   const principal = context.principal || null;
   const thread = context.thread || null;
   const tool = clean(name);
-  if (["orkestr_auth", "orkestr_messaging", "orkestr_conversation", "orkestr_routing"].includes(tool)) {
+  if (["orkestr_auth", "orkestr_messaging", "orkestr_conversation", "orkestr_routing", "orkestr_runtime"].includes(tool)) {
     return callConnectorsMcpTool(tool, {
       ...args,
       instance_id: clean(principal?.instanceId || principal?.tenantVmId || env.ORKESTR_TENANT_VM_ID || args.instance_id),

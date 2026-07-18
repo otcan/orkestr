@@ -123,6 +123,7 @@ test("tenant api-agent answers non-admin WhatsApp thread without Codex delivery"
   const messages = await listThreadMessages("otcantest", env);
   const current = messages.find((message) => message.id === input.id);
   const assistant = messages.find((message) => message.role === "assistant");
+  const thread = await getThread("otcantest", env);
   const usage = await creditUsageSummary({ tenantId: "otcan" }, env);
 
   assert.equal(result.ok, true);
@@ -151,6 +152,9 @@ test("tenant api-agent answers non-admin WhatsApp thread without Codex delivery"
   assert.equal(assistant.source, "api-agent");
   assert.equal(assistant.parentMessageId, input.id);
   assert.equal(assistant.text.includes("Codex"), false);
+  assert.equal(thread.runtime.finalDelivery.messageId, assistant.id);
+  assert.equal(thread.runtime.finalDelivery.status, "pending");
+  assert.equal(thread.runtime.liveness.phase, "awaiting_delivery");
   assert.equal(usage.count, 1);
   assert.equal(usage.byModel["gpt-5-mini"] > 0, true);
 });
@@ -391,6 +395,62 @@ test("tenant api-agent retries stale running messages after a restart", async ()
   assert.equal(current.staleObservedVia, "api_agent");
   assert.equal(assistant.parentMessageId, input.id);
   assert.equal(assistant.text, "The previous turn was interrupted before I could answer.");
+});
+
+test("tenant api-agent stop aliases cancel running and queued work before model execution", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-stop-"));
+  const env = { ORKESTR_HOME: home };
+  await createThread({
+    id: "otcantest-stop",
+    ownerUserId: "otcan",
+    name: "otcantest-stop",
+    runtimeKind: "api-agent",
+    executorId: "api-agent",
+    executor: { type: "api-agent", metadata: { runtimeKind: "api-agent" } },
+    binding: { connector: "whatsapp", chatId: "chat-otcan-stop", outboundAccountId: "wa-1" },
+  }, env);
+  const running = await appendThreadMessage("otcantest-stop", {
+    role: "user",
+    source: "whatsapp_inbound",
+    connector: "whatsapp",
+    text: "Keep working",
+    state: "running",
+    deliveryState: "api_agent_running",
+    observedVia: "api_agent",
+  }, env);
+  const queued = await appendThreadMessage("otcantest-stop", {
+    role: "user",
+    source: "whatsapp_inbound",
+    connector: "whatsapp",
+    text: "Queued continuation",
+    state: "queued",
+  }, env);
+  const control = await appendThreadMessage("otcantest-stop", {
+    role: "user",
+    source: "whatsapp_inbound",
+    connector: "whatsapp",
+    text: "/interrupt trailing text must not run",
+    state: "queued",
+  }, env);
+  let fetchCalled = false;
+
+  const result = await processApiAgentThreadInput("otcantest-stop", env, {
+    fetchImpl: async () => {
+      fetchCalled = true;
+      throw new Error("model request must not run for stop control");
+    },
+  });
+  const messages = await listThreadMessages("otcantest-stop", env);
+  const current = await getThread("otcantest-stop", env);
+
+  assert.equal(result.stopped, true);
+  assert.equal(fetchCalled, false);
+  assert.equal(messages.find((message) => message.id === running.id).deliveryState, "cancelled");
+  assert.equal(messages.find((message) => message.id === queued.id).deliveryState, "cancelled");
+  assert.equal(messages.find((message) => message.id === control.id).state, "completed");
+  assert.equal(messages.find((message) => message.id === control.id).stopCommand, "interrupt");
+  assert.equal(current.state, "ready");
+  assert.equal(messages.some((message) => message.role === "assistant"), false);
 });
 
 test("tenant api-agent sanitizer receives scoped WhatsApp capability for api-agent input", async () => {

@@ -39,7 +39,7 @@ export function createConnectorsMcpServer({ auth = {}, request = null, env = pro
         title: descriptor.title,
         readOnlyHint: descriptor.name === "orkestr_auth" ? false : descriptor.readOnlyHint,
         destructiveHint: descriptor.name === "orkestr_routing" || descriptor.name === "orkestr_auth",
-        idempotentHint: descriptor.name === "orkestr_messaging",
+        idempotentHint: descriptor.name === "orkestr_messaging" || descriptor.name === "orkestr_runtime",
         openWorldHint: true,
       },
     }, async (input) => connectorMcpToolResult(await runConnectorMcpTool(descriptor.name, input, { auth, request, env })));

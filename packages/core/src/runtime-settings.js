@@ -236,7 +236,7 @@ function defaultConnectorSettings(env = process.env) {
       enabled: Boolean(firstValue(env.ORKESTR_CONNECTORS_MCP_URL, env.ORKESTR_CONNECTORS_MCP_TOKEN, env.ORKESTR_CONNECTORS_MCP_BEARER_TOKEN)),
       transport: "streamable-http",
       url: firstValue(env.ORKESTR_CONNECTORS_MCP_URL) || "http://127.0.0.1:18914/mcp",
-      tools: ["orkestr_auth", "orkestr_messaging", "orkestr_conversation", "orkestr_routing"],
+      tools: ["orkestr_auth", "orkestr_messaging", "orkestr_conversation", "orkestr_routing", "orkestr_runtime"],
       authority: "bearer_scope",
     },
     whatsapp: {

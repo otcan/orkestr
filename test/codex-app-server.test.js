@@ -47,6 +47,13 @@ function response(payload, ok = true, status = 200) {
   };
 }
 
+async function recoverAfterConfirmedRuntimeLoss(env, options = {}) {
+  const firstProbe = await recoverStaleCodexAppServerTurns(env, options);
+  assert.equal(firstProbe.recovered, 0);
+  assert.equal(firstProbe.appended, 0);
+  return recoverStaleCodexAppServerTurns(env, options);
+}
+
 async function createFakeCodex(home) {
   const bin = path.join(home, "bin");
   const stateFile = path.join(home, "codex-state.json");
@@ -1972,7 +1979,7 @@ test("Codex app-server recovery syncs completed history before stale notice", as
     const client = await getCodexAppServerClient({ env, home: env.HOME });
     client.threadStates.delete(codexId);
 
-    const result = await recoverStaleCodexAppServerTurns(env);
+    const result = await recoverAfterConfirmedRuntimeLoss(env);
     const messages = await listThreadMessages(started.thread.id, env);
     const reply = messages.find((message) => message.role === "assistant" && message.text === "slice ok");
 
@@ -1989,10 +1996,10 @@ test("Codex app-server recovery syncs completed history before stale notice", as
   }
 });
 
-test("Codex app-server recovery steers long active turns before interrupting them", async () => {
+test("Codex app-server recovery preserves long active turns without autonomous steering", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-active-steer-"));
   const fake = await createFakeCodex(home);
-  const staleAt = new Date(Date.now() - 6 * 60_000).toISOString();
+  const staleAt = new Date(Date.now() - 2 * 60 * 60_000).toISOString();
   const env = {
     ORKESTR_HOME: path.join(home, "orkestr"),
     HOME: path.join(home, "runtime-home"),
@@ -2059,17 +2066,13 @@ test("Codex app-server recovery steers long active turns before interrupting the
     const updated = await getThread(started.thread.id, env);
     const messages = await listThreadMessages(started.thread.id, env);
     const finalState = JSON.parse(await fs.readFile(fake.stateFile, "utf8"));
-    const steerCall = finalState.calls.find((call) => call.method === "turn/steer");
 
     assert.equal(result.recovered, 0);
     assert.equal(result.appended, 0);
     assert.equal(updated.state, "working");
     assert.equal(updated.runtime.activeTurnId, activeTurnId);
-    assert.equal(updated.runtime.activeTurnSteer.turnId, activeTurnId);
-    assert.equal(updated.runtime.activeTurnSteer.ok, true);
-    assert.equal(steerCall.params.threadId, codexId);
-    assert.equal(steerCall.params.expectedTurnId, activeTurnId);
-    assert.match(steerCall.params.input[0].text, /brief visible progress update/);
+    assert.equal(updated.runtime.activeTurnSteer, undefined);
+    assert.equal(finalState.calls.some((call) => call.method === "turn/steer"), false);
     assert.equal(finalState.calls.some((call) => call.method === "turn/interrupt"), false);
     assert.equal(messages.some((message) => message.source === "orkestr_runtime" && message.phase === "runtime_interrupted"), false);
 
@@ -2077,16 +2080,16 @@ test("Codex app-server recovery steers long active turns before interrupting the
     const secondState = JSON.parse(await fs.readFile(fake.stateFile, "utf8"));
     assert.equal(second.recovered, 0);
     assert.equal(second.appended, 0);
-    assert.equal(secondState.calls.filter((call) => call.method === "turn/steer").length, 1);
+    assert.equal(secondState.calls.filter((call) => call.method === "turn/steer").length, 0);
   } finally {
     stopCodexAppServerClients();
   }
 });
 
-test("Codex app-server recovery interrupts stale live active turns with no visible response", async () => {
+test("Codex app-server recovery never interrupts a live active turn because of elapsed time", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-live-active-timeout-"));
   const fake = await createFakeCodex(home);
-  const staleAt = new Date(Date.now() - 60_000).toISOString();
+  const staleAt = new Date(Date.now() - 2 * 60 * 60_000).toISOString();
   const env = {
     ORKESTR_HOME: path.join(home, "orkestr"),
     HOME: path.join(home, "runtime-home"),
@@ -2154,48 +2157,25 @@ test("Codex app-server recovery interrupts stale live active turns with no visib
     const updated = await getThread(started.thread.id, env);
     const finalState = JSON.parse(await fs.readFile(fake.stateFile, "utf8"));
 
-    assert.equal(result.recovered, 1);
-    assert.equal(result.appended, 1);
-    assert.equal(notice.parentMessageId, input.id);
-    assert.equal(notice.connector, "whatsapp");
-    assert.equal(notice.chatId, "chat-live-active-timeout");
-    assert.match(notice.text, /^Codex response timed out/);
-    assert.match(notice.text, /Doctor: no final answer found, no approval pending/);
-    assert.match(notice.text, /Doctor action: interrupting the current stale turn/);
-    assert.equal(updated.state, "ready");
-    assert.equal(updated.runtime.state, "ready");
-    assert.equal(updated.runtime.activeTurnId, null);
-    assert.equal(updated.runtime.codexStatus.type, "idle");
-    assert.equal(client.threadStates.get(codexId)?.activeTurnId, "");
-    assert.equal(finalState.calls.some((call) => call.method === "thread/read" && call.params?.threadId === codexId), true);
-    assert.equal(finalState.calls.some((call) => call.method === "turn/interrupt" && call.params?.threadId === codexId && call.params?.turnId === activeTurnId), true);
+    assert.equal(result.recovered, 0);
+    assert.equal(result.appended, 0);
+    assert.equal(notice, undefined);
+    assert.equal(updated.state, "working");
+    assert.equal(updated.runtime.state, "working");
+    assert.equal(updated.runtime.activeTurnId, activeTurnId);
+    assert.equal(updated.runtime.codexStatus.type, "active");
+    assert.equal(client.threadStates.get(codexId)?.activeTurnId, activeTurnId);
+    assert.equal(finalState.calls.some((call) => call.method === "turn/interrupt"), false);
 
-    await client.handleNotification({
-      method: "turn/completed",
-      params: {
-        turn: {
-          id: activeTurnId,
-          threadId: codexId,
-          status: "interrupted",
-          error: { message: "Conversation interrupted - tell the model what to do differently." },
-        },
-      },
-    });
-    const messagesAfterInterruptedCompletion = await listThreadMessages(started.thread.id, env);
-    const runtimeNotices = messagesAfterInterruptedCompletion.filter((message) =>
-      message.source === "orkestr_runtime" && message.phase === "runtime_interrupted"
-    );
-    assert.equal(runtimeNotices.length, 1);
-    assert.equal(runtimeNotices[0].id, notice.id);
   } finally {
     stopCodexAppServerClients();
   }
 });
 
-test("Codex app-server recovery interrupts only the matching stale live active turn", async () => {
+test("Codex app-server recovery preserves every live active turn regardless of age", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-multi-active-timeout-"));
   const fake = await createFakeCodex(home);
-  const staleAt = new Date(Date.now() - 60_000).toISOString();
+  const staleAt = new Date(Date.now() - 2 * 60 * 60_000).toISOString();
   const env = {
     ORKESTR_HOME: path.join(home, "orkestr"),
     HOME: path.join(home, "runtime-home"),
@@ -2267,13 +2247,10 @@ test("Codex app-server recovery interrupts only the matching stale live active t
       .map((line) => JSON.parse(line));
     const recoveryEvent = events.find((event) => event.type === "codex_app_server_stale_turn_recovered");
 
-    assert.equal(result.recovered, 1);
-    assert.deepEqual(interrupted, ["second-live-active-turn"]);
-    assert.match(notice.text, /ignored 1 stale cached active turn id/);
-    assert.deepEqual(recoveryEvent.interruptedTurnIds, ["second-live-active-turn"]);
-    assert.deepEqual(recoveryEvent.skippedCachedActiveTurnIds, ["first-live-active-turn"]);
-    assert.equal(recoveryEvent.activeTurnRecoveryTargetId, "second-live-active-turn");
-    assert.equal(recoveryEvent.interruptError, null);
+    assert.equal(result.recovered, 0);
+    assert.deepEqual(interrupted, []);
+    assert.equal(notice, undefined);
+    assert.equal(recoveryEvent, undefined);
   } finally {
     stopCodexAppServerClients();
   }
@@ -2392,7 +2369,7 @@ test("Codex app-server recovery marks stale delivered turns ready and appends on
       codexTurnId: "stale-turn",
     }, env);
 
-    const first = await recoverStaleCodexAppServerTurns(env);
+    const first = await recoverAfterConfirmedRuntimeLoss(env);
     const after = await getThread(thread.id, env);
     const messages = await listThreadMessages(thread.id, env);
     const notices = messages.filter((message) => message.source === "orkestr_runtime" && message.phase === "runtime_interrupted");
@@ -2449,7 +2426,7 @@ test("Codex app-server recovery marks stale delivered turns ready and appends on
       codexTurnId: "restart-turn",
     }, env);
 
-    const restartRecovery = await recoverStaleCodexAppServerTurns(env, { noticeCause: "orkestr_restart" });
+    const restartRecovery = await recoverAfterConfirmedRuntimeLoss(env, { noticeCause: "orkestr_restart" });
     const restartMessages = await listThreadMessages(restartThread.id, env);
     const restartNotice = restartMessages.find((message) => message.source === "orkestr_runtime" && message.phase === "runtime_interrupted");
 
@@ -2492,7 +2469,7 @@ test("Codex app-server recovery marks stale delivered turns ready and appends on
       codexTurnId: "host-reboot-turn",
     }, env);
 
-    const rebootRecovery = await recoverStaleCodexAppServerTurns(env, { noticeCause: "host_reboot", recoverySource: "startup_recovery" });
+    const rebootRecovery = await recoverAfterConfirmedRuntimeLoss(env, { noticeCause: "host_reboot", recoverySource: "startup_recovery" });
     const rebootMessages = await listThreadMessages(rebootThread.id, env);
     const rebootNotice = rebootMessages.find((message) => message.source === "orkestr_runtime" && message.phase === "runtime_interrupted");
     const events = (await fs.readFile(path.join(env.ORKESTR_HOME, "events.jsonl"), "utf8"))
@@ -2560,7 +2537,7 @@ test("Codex app-server recovery does not emit a missing-response notice during f
       codexTurnId: "stale-grace-turn",
     }, env);
 
-    const result = await recoverStaleCodexAppServerTurns(env);
+    const result = await recoverAfterConfirmedRuntimeLoss(env);
     const updated = await getThread(thread.id, env);
     const messages = await listThreadMessages(thread.id, env);
 
@@ -2612,6 +2589,16 @@ test("Codex app-server recovery auto safe-resets repeated stale delivered turns"
         state: "ready",
         activeTurnId: null,
         codexStatus: { type: "idle" },
+        checkpoint: {
+          version: 1,
+          checkpointId: "repeat-stale-checkpoint",
+          runtimeGeneration: "repeat-stale-codex-thread",
+          executionId: "repeat-stale-second-turn",
+          turnId: "repeat-stale-second-turn",
+          phase: "collecting",
+          summary: "Resume from page three",
+          payload: { nextPage: 3, completedIds: ["job-1"] },
+        },
       },
     }, env);
     const previousInput = await appendThreadMessage(thread.id, {
@@ -2655,7 +2642,7 @@ test("Codex app-server recovery auto safe-resets repeated stale delivered turns"
     }, env);
     const resets = [];
 
-    const result = await recoverStaleCodexAppServerTurns(env, {
+    const result = await recoverAfterConfirmedRuntimeLoss(env, {
       autoSafeResetThread: async (threadId, context = {}) => {
         resets.push({ threadId, context });
         return {
@@ -2697,7 +2684,10 @@ test("Codex app-server recovery auto safe-resets repeated stale delivered turns"
     assert.equal(notices.at(-1).parentMessageId, latestInput.id);
     assert.equal(recoveryNotice, undefined);
     assert.ok(continuation);
-    assert.equal(continuation.text, latestInput.text);
+    assert.match(continuation.text, /^Second delivered turn with no reply\./);
+    assert.match(continuation.text, /Orkestr runtime checkpoint/);
+    assert.match(continuation.text, /"nextPage":3/);
+    assert.equal(continuation.runtimeCheckpointId, "repeat-stale-checkpoint");
     assert.equal(continuation.state, "queued");
     assert.equal(continuation.visibility, "internal");
     assert.equal(continuation.connector, "whatsapp");
@@ -2824,7 +2814,7 @@ test("Codex app-server recovery auto safe-resets stale continuations across safe
     }, env);
     const resets = [];
 
-    const result = await recoverStaleCodexAppServerTurns(env, {
+    const result = await recoverAfterConfirmedRuntimeLoss(env, {
       autoSafeResetThread: async (threadId, context = {}) => {
         resets.push({ threadId, context });
         return {
@@ -2943,7 +2933,7 @@ test("Codex app-server recovery respects auto safe-reset cooldown for stale cont
     }, env);
     const resets = [];
 
-    const result = await recoverStaleCodexAppServerTurns(env, {
+    const result = await recoverAfterConfirmedRuntimeLoss(env, {
       autoSafeResetThread: async (threadId, context = {}) => {
         resets.push({ threadId, context });
         return { ok: true, reset: true, safeReset: true };
@@ -3575,7 +3565,7 @@ test("Codex app-server recovery projects stale WhatsApp turns back to the source
       codexTurnId: "stale-wa-turn",
     }, env);
 
-    const result = await recoverStaleCodexAppServerTurns(env);
+    const result = await recoverAfterConfirmedRuntimeLoss(env);
     const messages = await listThreadMessages(thread.id, env);
     const notice = messages.find((message) => message.source === "orkestr_runtime" && message.phase === "runtime_interrupted");
 
@@ -3638,7 +3628,7 @@ test("Codex app-server recovery mirrors stale bound threads without a WhatsApp p
       codexTurnId: "stale-bound-wa-turn",
     }, env);
 
-    const result = await recoverStaleCodexAppServerTurns(env);
+    const result = await recoverAfterConfirmedRuntimeLoss(env);
     const messages = await listThreadMessages(thread.id, env);
     const notice = messages.find((message) => message.source === "orkestr_runtime" && message.phase === "runtime_interrupted");
 
@@ -3718,7 +3708,7 @@ test("Codex app-server recovery reports progress-only turns with no final answer
       codexTurnId: "progress-turn",
     }, env);
 
-    const first = await recoverStaleCodexAppServerTurns(env, { noticeCause: "orkestr_restart" });
+    const first = await recoverAfterConfirmedRuntimeLoss(env, { noticeCause: "orkestr_restart" });
     const messages = await listThreadMessages(thread.id, env);
     const notice = messages.find((message) => message.source === "orkestr_runtime" && message.phase === "runtime_interrupted");
 
@@ -4705,7 +4695,7 @@ test("Codex app-server /safe-reset command starts fresh thread without deliverin
   }
 });
 
-test("Codex app-server queues WhatsApp input behind active turns", async () => {
+test("Codex app-server steers WhatsApp input into active turns by default", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-wa-queue-"));
   const fake = await createFakeCodex(home);
   const env = {
@@ -4740,7 +4730,7 @@ test("Codex app-server queues WhatsApp input behind active turns", async () => {
     });
     await fs.writeFile(fake.stateFile, JSON.stringify(setupState, null, 2));
     const input = await enqueueThreadInput(started.thread.id, {
-      text: "queue this behind the current turn",
+      text: "steer this into the current turn",
       source: "whatsapp_inbound",
       connector: "whatsapp",
       chatId: "chat-wa-queue",
@@ -4751,10 +4741,10 @@ test("Codex app-server queues WhatsApp input behind active turns", async () => {
     const queued = messages.find((message) => message.id === input.id);
     const rawState = JSON.parse(await fs.readFile(fake.stateFile, "utf8"));
 
-    assert.deepEqual(delivered, []);
-    assert.equal(queued.state, "queued");
-    assert.equal(queued.deliveryState, "awaiting_active_turn");
-    assert.ok(!rawState.calls.some((call) => call.method === "turn/steer"));
+    assert.deepEqual(delivered, [input.id]);
+    assert.equal(queued.state, "completed");
+    assert.equal(queued.deliveryState, "delivered");
+    assert.ok(rawState.calls.some((call) => call.method === "turn/steer"));
     assert.ok(!rawState.calls.some((call) => call.method === "turn/start"));
   } finally {
     stopCodexAppServerClients();
@@ -4894,7 +4884,7 @@ test("Codex app-server delivers queued input when live status cleared a stale ac
   }
 });
 
-test("Codex app-server queues normal input behind active turns", async () => {
+test("Codex app-server steers normal input into verified active turns by default", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-generic-queue-"));
   const fake = await createFakeCodex(home);
   const env = {
@@ -4917,17 +4907,28 @@ test("Codex app-server queues normal input behind active turns", async () => {
       },
     }, env);
     await markAppServerTurnActive(started.thread, env);
+    const initialState = JSON.parse(await fs.readFile(fake.stateFile, "utf8"));
+    const codexThread = initialState.threads.find((item) => item.id === started.thread.executor.codexThreadId);
+    codexThread.status = { type: "active", activeFlags: ["running"] };
+    codexThread.activeTurnId = "active-turn";
+    codexThread.turns.push({
+      id: "active-turn",
+      threadId: started.thread.executor.codexThreadId,
+      status: "inProgress",
+      items: [{ type: "userMessage", id: "active-user", content: [{ type: "text", text: "previous active turn" }] }],
+    });
+    await fs.writeFile(fake.stateFile, JSON.stringify(initialState, null, 2));
     const input = await enqueueThreadInput(started.thread.id, { text: "queue normal input behind the turn" }, env);
 
     const delivered = await deliverCodexAppServerPendingInputs(await getThread(started.thread.id, env), env);
     const messages = await listThreadMessages(started.thread.id, env);
-    const queued = messages.find((message) => message.id === input.id);
+    const completed = messages.find((message) => message.id === input.id);
     const rawState = JSON.parse(await fs.readFile(fake.stateFile, "utf8"));
 
-    assert.deepEqual(delivered, []);
-    assert.equal(queued.state, "queued");
-    assert.equal(queued.deliveryState, "awaiting_active_turn");
-    assert.ok(!rawState.calls.some((call) => call.method === "turn/steer"));
+    assert.deepEqual(delivered, [input.id]);
+    assert.equal(completed.state, "completed");
+    assert.equal(completed.deliveryState, "delivered");
+    assert.ok(rawState.calls.some((call) => call.method === "turn/steer"));
     assert.ok(!rawState.calls.some((call) => call.method === "turn/start"));
   } finally {
     stopCodexAppServerClients();
@@ -5052,7 +5053,7 @@ test("Codex app-server interrupt reads live active turns before reporting no act
   }
 });
 
-test("Codex app-server /now steers the active turn without interrupting", async () => {
+test("Codex app-server plain input steers the active turn without interrupting", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-wa-now-"));
   const fake = await createFakeCodex(home);
   const env = {
@@ -5088,7 +5089,7 @@ test("Codex app-server /now steers the active turn without interrupting", async 
     await fs.writeFile(fake.stateFile, JSON.stringify(initialState, null, 2));
     await markAppServerTurnActive(started.thread, env);
     const input = await enqueueThreadInput(started.thread.id, {
-      text: "/now urgent next turn",
+      text: "urgent next turn",
       source: "whatsapp_inbound",
       connector: "whatsapp",
       chatId: "chat-wa-now",
@@ -5105,8 +5106,6 @@ test("Codex app-server /now steers the active turn without interrupting", async 
     assert.equal(completed.text, "urgent next turn");
     assert.equal(completed.state, "completed");
     assert.equal(completed.observedVia, "codex_app_server_turn_steer");
-    assert.equal(completed.codexDeliveryMode, "instant_steer");
-    assert.equal(completed.steerActiveTurn, true);
     assert.equal(steerCall.params.expectedTurnId, "active-turn");
     assert.equal(steerCall.params.input[0].text, "urgent next turn");
     assert.ok(activeTurn.items.some((item) => item.id === "steer_active-turn"));
@@ -5174,6 +5173,86 @@ test("Codex app-server /stop interrupts the active turn without sleeping the thr
     assert.equal(stopped.runtime.activeTurnId, null);
     assert.ok(rawState.calls.some((call) => call.method === "turn/interrupt" && call.params.turnId === "active-turn"));
     assert.ok(!rawState.calls.some((call) => call.method === "thread/unsubscribe"));
+  } finally {
+    stopCodexAppServerClients();
+  }
+});
+
+test("Codex app-server stop aliases preempt approvals and cancel older queued input", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-preemptive-stop-"));
+  const fake = await createFakeCodex(home);
+  const env = {
+    ORKESTR_HOME: path.join(home, "orkestr"),
+    HOME: path.join(home, "runtime-home"),
+    PATH: `${fake.bin}${path.delimiter}${process.env.PATH || ""}`,
+    FAKE_CODEX_STATE: fake.stateFile,
+  };
+  try {
+    const thread = await createThread({ id: "app-server-preemptive-stop-thread", name: "App Server Preemptive Stop Thread", cwd: home, executorId: "codex", executor: { type: "codex" } }, env);
+    const started = await startCodexAppServerThread(thread, env);
+    const codexId = started.thread.executor.codexThreadId;
+    const activeTurnId = "preemptive-stop-turn";
+    const request = {
+      requestId: "preemptive-stop-approval",
+      method: "item/commandExecution/requestApproval",
+      threadId: started.thread.id,
+      codexThreadId: codexId,
+      turnId: activeTurnId,
+      itemId: "preemptive-stop-call",
+    };
+    await updateThread(started.thread.id, {
+      state: "awaiting_approval",
+      runtime: {
+        ...(started.thread.runtime || {}),
+        runtimeKind: "codex-app-server",
+        state: "awaiting_approval",
+        activeTurnId,
+        pendingRequest: request,
+        codexStatus: { type: "active", activeFlags: ["waitingOnApproval"] },
+      },
+    }, env);
+    const client = await getCodexAppServerClient({ env, home: env.HOME });
+    const responses = [];
+    client.respond = (id, result) => responses.push({ id, result });
+    client.pendingRequests.set(request.requestId, request);
+    client.threadStates.set(codexId, {
+      activeTurnId,
+      status: { type: "active", activeFlags: ["waitingOnApproval"] },
+    });
+    const setupState = JSON.parse(await fs.readFile(fake.stateFile, "utf8"));
+    const setupThread = setupState.threads.find((item) => item.id === codexId);
+    setupThread.activeTurnId = activeTurnId;
+    setupThread.status = { type: "active", activeFlags: ["waitingOnApproval"] };
+    setupThread.turns.push({
+      id: activeTurnId,
+      threadId: codexId,
+      status: "inProgress",
+      items: [{ type: "userMessage", id: "preemptive-stop-user", content: [{ type: "text", text: "Existing task" }] }],
+    });
+    await fs.writeFile(fake.stateFile, JSON.stringify(setupState, null, 2));
+    const older = await enqueueThreadInput(started.thread.id, { text: "queued before stop", source: "whatsapp_inbound", connector: "whatsapp" }, env);
+    const control = await enqueueThreadInput(started.thread.id, { text: "/cancel never run this", source: "whatsapp_inbound", connector: "whatsapp" }, env);
+
+    const delivered = await deliverCodexAppServerPendingInputs(await getThread(started.thread.id, env), env);
+    const messages = await listThreadMessages(started.thread.id, env);
+    const current = await getThread(started.thread.id, env);
+    const finalState = JSON.parse(await fs.readFile(fake.stateFile, "utf8"));
+    const cancelled = messages.find((message) => message.id === older.id);
+    const completed = messages.find((message) => message.id === control.id);
+
+    assert.deepEqual(delivered, [control.id]);
+    assert.deepEqual(responses, [{ id: request.requestId, result: { decision: "decline" } }]);
+    assert.equal(cancelled.state, "failed");
+    assert.equal(cancelled.deliveryState, "cancelled");
+    assert.equal(completed.state, "completed");
+    assert.equal(completed.stopCommand, "cancel");
+    assert.equal(completed.approvalCancelled, true);
+    assert.equal(completed.interruptSent, true);
+    assert.equal(current.state, "ready");
+    assert.equal(current.runtime.pendingRequest, null);
+    assert.equal(current.runtime.activeTurnId, null);
+    assert.ok(finalState.calls.some((call) => call.method === "turn/interrupt" && call.params.turnId === activeTurnId));
+    assert.ok(!finalState.calls.some((call) => call.method === "turn/start" || call.method === "turn/steer"));
   } finally {
     stopCodexAppServerClients();
   }

@@ -1,10 +1,10 @@
 import * as z from "zod/v4";
 
-export const connectorsMcpContractVersion = "1.0";
+export const connectorsMcpContractVersion = "1.1";
 export const connectorsMcpProtocolVersion = "2025-11-25";
 
 const cleanString = z.string().trim();
-const serviceSchema = z.enum(["whatsapp", "gmail", "outlook", "jira", "shopify", "webui", "codex"]);
+const serviceSchema = z.enum(["whatsapp", "gmail", "outlook", "jira", "shopify", "webui", "codex", "runtime"]);
 const contextShape = {
   service: serviceSchema.describe("Connector service to operate."),
   account_id: cleanString.nullish().describe("Connector account id. Authority still comes from the MCP bearer token."),
@@ -49,6 +49,22 @@ export const connectorsMcpInputSchemas = {
     target_thread_id: cleanString.nullish(),
     operation_ref: cleanString.nullish(),
   }).strict(),
+  orkestr_runtime: z.object({
+    ...contextShape,
+    service: z.literal("runtime"),
+    action: z.enum(["progress", "checkpoint", "blocked", "complete"]),
+    execution_id: cleanString.min(1).max(240).describe("Stable id for the current logical execution."),
+    runtime_generation: cleanString.max(240).nullish().describe("Current runtime generation id. Stale generations are rejected."),
+    turn_id: cleanString.max(240).nullish(),
+    evidence_type: z.enum(["model_output", "tool_started", "tool_completed", "mcp_progress", "child_heartbeat", "output_growth", "desktop_heartbeat", "approval_pending", "user_input_pending"]).nullish(),
+    phase: cleanString.max(120).nullish(),
+    summary: cleanString.max(2_000).nullish(),
+    checkpoint_id: cleanString.max(240).nullish(),
+    checkpoint_json: z.string().max(65_536).nullish().describe("JSON object containing bounded resumable state for checkpoint actions."),
+    progress_current: z.number().finite().nullish(),
+    progress_total: z.number().finite().positive().nullish(),
+    completion_status: z.enum(["completed", "cancelled", "failed"]).nullish(),
+  }).strict(),
 };
 
 export const connectorsMcpToolDescriptors = [
@@ -74,6 +90,12 @@ export const connectorsMcpToolDescriptors = [
     name: "orkestr_routing",
     title: "Connector routing",
     description: "Inspect and administer durable Orkestr connector bindings and queued operations.",
+    readOnlyHint: false,
+  },
+  {
+    name: "orkestr_runtime",
+    title: "Runtime progress and checkpoints",
+    description: "Record scoped execution progress, durable checkpoints, blocked state, or completion without imposing a wall-clock timeout.",
     readOnlyHint: false,
   },
 ];
@@ -116,6 +138,9 @@ export function connectorMcpStructuredResult({
   operationRef = "",
   accountId = "",
   conversationId = "",
+  instanceId = "",
+  userId = "",
+  threadId = "",
   challenge = null,
   error = null,
   data = null,
@@ -129,6 +154,9 @@ export function connectorMcpStructuredResult({
     scope: {
       account_id: String(accountId || ""),
       conversation_id: String(conversationId || ""),
+      instance_id: String(instanceId || ""),
+      user_id: String(userId || ""),
+      thread_id: String(threadId || ""),
     },
     challenge: challenge || null,
     error: error ? {
@@ -166,6 +194,7 @@ export function connectorMcpCapabilities() {
       shopify: { status: "available", auth: ["status", "connect", "reconnect", "disconnect", "logout"] },
       webui: { status: "planned" },
       codex: { status: "planned" },
+      runtime: { status: "available", actions: ["progress", "checkpoint", "blocked", "complete"] },
     },
   };
 }

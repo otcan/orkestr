@@ -51,6 +51,7 @@ import { completeThreadSecurityApproveCommand } from "./security-thread-command.
 import { appendTurnLifecycleEvent, turnLifecycleFromRuntimeStatus } from "./turn-lifecycle.js";
 import { markConnectorDeliverySignal } from "./connector-delivery-signals.js";
 import { recordRouterTraceEvent } from "./router-traces.js";
+import { completeRuntimeLiveness, recordRuntimeLiveness } from "./runtime-liveness.js";
 
 const appServerDeliveryTimers = new Map();
 const appServerHistorySyncTimes = new Map();
@@ -72,8 +73,9 @@ function codexAppServerActiveTurnRetryMs(env = process.env) {
 }
 
 function shouldSteerActiveTurnInput(message = {}) {
-  return message?.steerActiveTurn === true ||
-    clean(message?.codexDeliveryMode).toLowerCase() === "instant_steer";
+  const deliveryMode = clean(message?.codexDeliveryMode).toLowerCase();
+  if (deliveryMode === "passive") return false;
+  return message?.steerActiveTurn !== false;
 }
 
 async function recordMessageRouterTrace(message = {}, phase, context = {}, env = process.env) {
@@ -960,6 +962,84 @@ export async function interruptCodexAppServerThread(thread, env = process.env) {
   return { interrupted: true, turnId: activeTurnId };
 }
 
+export async function stopCodexAppServerThread(thread, env = process.env) {
+  const current = await getThread(thread?.id, env).catch(() => null) || thread;
+  const id = codexThreadId(current);
+  if (!current?.id || !id) return { stopped: false, interrupted: false, reason: "codex_thread_id_required" };
+  await ensureContainedCodexRuntimeHome(current, env);
+  const runtimeEnv = codexRuntimeEnvForThread(current, env);
+  const client = await getCodexAppServerClient({ env: runtimeEnv, home: runtimeHome(runtimeEnv) });
+  const pendingRequest = client.pendingRequestForThread(current, { includePersisted: true });
+  let approvalCancelled = false;
+  let approvalError = "";
+  if (pendingRequest) {
+    try {
+      await client.answerPendingRequest(current, "decline");
+      approvalCancelled = true;
+    } catch (error) {
+      approvalError = publicError(error);
+    }
+  }
+  const interrupted = await interruptCodexAppServerThread(current, env).catch((error) => ({
+    interrupted: false,
+    reason: "interrupt_failed",
+    error: publicError(error),
+  }));
+  const interruptError = clean(interrupted?.error);
+  if (approvalError || interruptError) {
+    await appendEvent({
+      type: "codex_app_server_stop_failed",
+      threadId: current.id,
+      codexThreadId: id,
+      approvalCancelled,
+      approvalError: approvalError || null,
+      interruptError: interruptError || null,
+    }, env).catch(() => {});
+    return {
+      stopped: false,
+      interrupted: Boolean(interrupted?.interrupted),
+      approvalCancelled,
+      reason: approvalError ? "approval_cancel_failed" : "interrupt_failed",
+      error: approvalError || interruptError,
+    };
+  }
+  for (const [requestKey, request] of client.pendingRequests.entries()) {
+    if (request?.threadId === current.id || request?.codexThreadId === id) client.pendingRequests.delete(requestKey);
+  }
+  const refreshed = await getThread(current.id, env).catch(() => null) || current;
+  await updateThread(current.id, {
+    state: "ready",
+    lastError: null,
+    runtime: {
+      ...(refreshed.runtime || {}),
+      runtimeKind: "codex-app-server",
+      activeTurnId: null,
+      pendingRequest: null,
+      state: "ready",
+    },
+  }, env).catch(() => {});
+  await appendEvent({
+    type: "codex_app_server_stopped",
+    threadId: current.id,
+    codexThreadId: id,
+    interrupted: Boolean(interrupted?.interrupted),
+    approvalCancelled,
+  }, env).catch(() => {});
+  await completeRuntimeLiveness(current.id, {
+    runtimeGeneration: id,
+    turnId: interrupted?.turnId || current.runtime?.activeTurnId,
+    status: "cancelled",
+    phase: "cancelled",
+    summary: "Stopped by user",
+  }, env).catch(() => {});
+  return {
+    stopped: true,
+    interrupted: Boolean(interrupted?.interrupted),
+    turnId: interrupted?.turnId || null,
+    approvalCancelled,
+  };
+}
+
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -1008,6 +1088,13 @@ async function startCodexAppServerTurn({ client, thread, id, pending, env, runti
       turnId,
       state: "running",
       source: "codex-app-server",
+    }, env).catch(() => {});
+    await recordRuntimeLiveness(thread.id, {
+      runtimeGeneration: id,
+      turnId,
+      evidenceType: "model_started",
+      phase: "executing",
+      summary: "Codex turn started",
     }, env).catch(() => {});
   }
   return { result, observedVia, turnId };
@@ -1185,6 +1272,13 @@ export async function sendCodexAppServerInput(thread, message, env = process.env
         messageId: pending.id,
         activeTurnId: deliveryTurnId,
       }, env).catch(() => {});
+      await recordRuntimeLiveness(thread.id, {
+        runtimeGeneration: id,
+        turnId: deliveryTurnId,
+        evidenceType: "runtime_probe",
+        phase: "executing",
+        summary: "Steering input accepted by live turn",
+      }, env).catch(() => {});
       await recordMessageRouterTrace(completed, "delivered_to_runtime", {
         threadId: thread.id,
         ownerProcess: deliveryTurnId || activeTurnId,
@@ -1325,9 +1419,58 @@ export async function deliverCodexAppServerPendingInputs(thread, env = process.e
 async function deliverCodexAppServerPendingInputsUnlocked(thread, env = process.env) {
   const delivered = [];
   const messages = await listThreadMessages(thread.id, env);
-  let next = messages.find((message) => message.role === "user" && pendingInputStates.has(message.state));
+  const pendingMessages = messages.filter((message) => message.role === "user" && pendingInputStates.has(message.state));
+  const stopMessage = pendingMessages.find((message) => parseThreadInputCommand({ text: message.text }).command === "stop");
+  let next = stopMessage || pendingMessages[0];
   if (!next) return delivered;
   thread = await getThread(thread.id, env).catch(() => null) || thread;
+  if (stopMessage) {
+    const stopIndex = messages.findIndex((message) => message.id === stopMessage.id);
+    const parsedStop = parseThreadInputCommand({ text: stopMessage.text });
+    for (let index = 0; index < stopIndex; index += 1) {
+      const candidate = messages[index];
+      if (candidate?.role !== "user" || !pendingInputStates.has(clean(candidate.state))) continue;
+      await updateThreadMessage(thread.id, candidate.id, {
+        state: "failed",
+        deliveryState: "cancelled",
+        deliveryFailedAt: nowIso(),
+        observedVia: "codex_app_server_stop",
+        error: `Cancelled by /${parsedStop.rawCommand || "stop"}.`,
+      }, env).catch(() => {});
+      await appendEvent({
+        type: "thread_input_cancelled_by_stop",
+        threadId: thread.id,
+        messageId: candidate.id,
+        controlMessageId: stopMessage.id,
+        command: parsedStop.rawCommand || "stop",
+      }, env).catch(() => {});
+    }
+    const result = await stopCodexAppServerThread(thread, env).catch((error) => ({ stopped: false, error: publicError(error) }));
+    const completed = await updateThreadMessage(thread.id, stopMessage.id, {
+      state: result.stopped ? "completed" : "failed",
+      deliveryState: result.stopped ? "delivered" : "stop_failed",
+      deliveredAt: result.stopped ? nowIso() : "",
+      deliveryFailedAt: result.stopped ? "" : nowIso(),
+      observedVia: "codex_app_server_stop",
+      stopCommand: parsedStop.rawCommand || "stop",
+      interruptSent: Boolean(result.interrupted),
+      approvalCancelled: Boolean(result.approvalCancelled),
+      error: result.stopped ? null : result.error || result.reason || "stop_failed",
+    }, env);
+    await appendEvent({
+      type: "thread_stop_command",
+      threadId: thread.id,
+      messageId: stopMessage.id,
+      source: stopMessage.source || null,
+      command: parsedStop.rawCommand || "stop",
+      stopped: result.stopped === true,
+      interrupted: Boolean(result.interrupted),
+      approvalCancelled: Boolean(result.approvalCancelled),
+      error: result.stopped ? null : result.error || result.reason || "stop_failed",
+    }, env).catch(() => {});
+    if (completed?.id) delivered.push(completed.id);
+    return delivered;
+  }
   const securityCommand = await completeThreadSecurityApproveCommand(thread, next, env);
   if (securityCommand?.handled) {
     delivered.push(next.id);

@@ -1100,7 +1100,7 @@ test("thread wake blocks Codex before the raw login menu opens", async () => {
   }
 });
 
-test("queued stop commands kill the active runtime and complete locally", async () => {
+test("queued stop commands interrupt the active runtime without sleeping the thread", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-stop-command-"));
   const fakeTmux = await createFakeTmux(home);
   const priorPath = process.env.PATH;
@@ -1129,11 +1129,11 @@ test("queued stop commands kill the active runtime and complete locally", async 
     const stopped = messages.find((message) => message.id === command.id);
     const log = await fs.readFile(fakeTmux.log, "utf8");
 
-    assert.equal(status.state, "sleeping");
+    assert.equal(status.state, "ready");
     assert.equal(stopped.state, "completed");
     assert.equal(stopped.deliveryState, "delivered");
     assert.equal(stopped.observedVia, "orkestr_stop_command");
-    assert.match(log, /__CALL__\tkill-session\t-t\torkestr-stop-command-thread/);
+    assert.doesNotMatch(log, /__CALL__\tkill-session\t-t\torkestr-stop-command-thread/);
   } finally {
     restoreEnvValue("PATH", priorPath);
     restoreEnvValue("TMUX_LOG", priorTmuxLog);
@@ -2067,7 +2067,7 @@ test("thread input delivery waits for runtime acknowledgement before completing"
   }
 });
 
-test("queued /interrupt input strips the command and jumps ahead of stale awaiting ack", async () => {
+test("queued /interrupt input stops immediately and discards trailing text", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-now-command-"));
   const fakeTmux = await createFakeTmux(home);
   const captureFile = path.join(home, "pane.txt");
@@ -2116,22 +2116,20 @@ test("queued /interrupt input strips the command and jumps ahead of stale awaiti
       text: "/interrupt not KDP desk. It's Reddit desk",
     }, env);
 
-    assert.deepEqual(await deliverPendingThreadInputs("now-command-thread", env), []);
+    assert.deepEqual(await deliverPendingThreadInputs("now-command-thread", env), [urgent.id]);
     const messages = await listThreadMessages("now-command-thread", env);
     const staleAfter = messages.find((message) => message.id === stale.id);
     const urgentAfter = messages.find((message) => message.id === urgent.id);
-    const deliveredPrompt = await fs.readFile(loadedBufferCapture, "utf8");
 
     assert.equal(staleAfter.state, "failed");
     assert.equal(staleAfter.deliveryState, "superseded");
     assert.equal(staleAfter.observedVia, "thread_control_command_superseded_ack");
     assert.match(staleAfter.error, /Superseded by \/interrupt/);
-    assert.equal(urgentAfter.text, "not KDP desk. It's Reddit desk");
-    assert.equal(urgentAfter.state, "awaiting_ack");
-    assert.equal(urgentAfter.deliveryState, "awaiting_ack");
-    assert.equal(urgentAfter.forceDeliveryAfterInterrupt, true);
-    assert.match(deliveredPrompt, /\[WhatsApp: owner\]\n\nnot KDP desk\. It's Reddit desk/);
-    assert.doesNotMatch(deliveredPrompt, /\/interrupt/);
+    assert.equal(urgentAfter.text, "/interrupt not KDP desk. It's Reddit desk");
+    assert.equal(urgentAfter.state, "completed");
+    assert.equal(urgentAfter.deliveryState, "delivered");
+    assert.equal(urgentAfter.observedVia, "orkestr_stop_command");
+    await assert.rejects(() => fs.stat(loadedBufferCapture), /ENOENT/);
   } finally {
     restoreEnvValue("PATH", priorPath);
     restoreEnvValue("TMUX_LOG", priorTmuxLog);
@@ -5855,21 +5853,14 @@ test("thread summary keeps inline proposed plan mentions as final answers", asyn
   assert.equal(summary.planAvailable, false);
 });
 
-test("thread input commands strip /now before runtime delivery", () => {
+test("thread input commands use plain messages for steering and normalize stop aliases", () => {
   assert.deepEqual(parseThreadInputCommand({ text: "/now run this immediately" }), {
-    command: "steer",
-    rawCommand: "now",
-    text: "run this immediately",
-  });
-  assert.deepEqual(parseThreadInputCommand({ text: "/now \nI want this handled immediately" }), {
-    command: "steer",
-    rawCommand: "now",
-    text: "I want this handled immediately",
+    command: null,
+    text: "/now run this immediately",
   });
   assert.deepEqual(parseThreadInputCommand({ text: "/steer keep going with this detail" }), {
-    command: "steer",
-    rawCommand: "steer",
-    text: "keep going with this detail",
+    command: null,
+    text: "/steer keep going with this detail",
   });
   assert.deepEqual(parseThreadInputCommand({ text: "/implement" }), {
     command: "implement",
@@ -5880,6 +5871,21 @@ test("thread input commands strip /now before runtime delivery", () => {
     command: "stop",
     rawCommand: "stop",
     text: "",
+  });
+  assert.deepEqual(parseThreadInputCommand({ text: "/interrupt do not run this" }), {
+    command: "stop",
+    rawCommand: "interrupt",
+    text: "do not run this",
+  });
+  assert.deepEqual(parseThreadInputCommand({ text: "/cancel" }), {
+    command: "stop",
+    rawCommand: "cancel",
+    text: "",
+  });
+  assert.deepEqual(parseThreadInputCommand({ text: "/quit trailing text" }), {
+    command: "stop",
+    rawCommand: "quit",
+    text: "trailing text",
   });
   assert.deepEqual(parseThreadInputCommand({ text: "/reset" }), {
     command: "reset",

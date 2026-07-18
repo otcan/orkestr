@@ -11,7 +11,7 @@ import { deliverConnectorInboxEvent, routeWhatsAppInboundFromWorker } from "../p
 import { approvePairingChallenge, createPairingChallenge } from "../packages/core/src/security.js";
 import { configureTenantWhatsAppRoute } from "../packages/core/src/tenant-whatsapp-routing.js";
 import { createTenantVm } from "../packages/core/src/tenant-vm-registry.js";
-import { createThread } from "../packages/core/src/threads.js";
+import { createThread, getThread } from "../packages/core/src/threads.js";
 import { isMainModule } from "../scripts/main-module.mjs";
 import { createConnectorsMcpGateway } from "../scripts/orkestr-connectors-mcp.mjs";
 import { assessConnectorHealth, runConnectorDoctor } from "../scripts/orkestr-connectors-doctor.mjs";
@@ -189,15 +189,66 @@ test("connector MCP exposes the canonical tools and scoped account status", asyn
       "orkestr_conversation",
       "orkestr_messaging",
       "orkestr_routing",
+      "orkestr_runtime",
     ]);
     const status = await callConnectorsMcpTool("orkestr_auth", {
       service: "whatsapp",
       action: "status",
       account_id: "sender",
     }, item.env);
-    assert.equal(status.contract_version, "1.0");
+    assert.equal(status.contract_version, "1.1");
     assert.equal(status.status, "ok");
     assert.equal(status.data.accounts[0].accountId, "sender");
+  } finally {
+    await item.close();
+  }
+});
+
+test("connector MCP records scoped runtime progress and durable checkpoints", async () => {
+  const item = await fixture({ scoped: true });
+  try {
+    await createThread({
+      id: "firat-runtime-thread",
+      name: "Firat runtime",
+      ownerUserId: "firat",
+      executorId: "codex",
+      executor: { type: "codex", codexThreadId: "runtime-generation-1" },
+      runtime: { runtimeGeneration: "runtime-generation-1", activeTurnId: "turn-1" },
+    }, item.env);
+    const context = {
+      service: "runtime",
+      instance_id: "vm-firat",
+      user_id: "firat",
+      thread_id: "firat-runtime-thread",
+      execution_id: "execution-1",
+      runtime_generation: "runtime-generation-1",
+      turn_id: "turn-1",
+    };
+    const progress = await callConnectorsMcpTool("orkestr_runtime", {
+      ...context,
+      action: "progress",
+      evidence_type: "tool_completed",
+      phase: "collecting",
+      summary: "Collected the first result batch",
+      progress_current: 1,
+      progress_total: 3,
+    }, item.env);
+    const checkpoint = await callConnectorsMcpTool("orkestr_runtime", {
+      ...context,
+      action: "checkpoint",
+      phase: "collecting",
+      summary: "Resume from the second page",
+      checkpoint_id: "checkpoint-1",
+      checkpoint_json: JSON.stringify({ nextPage: 2, seenIds: ["a"] }),
+    }, item.env);
+    const thread = await getThread("firat-runtime-thread", item.env);
+
+    assert.equal(progress.status, "ok");
+    assert.equal(progress.scope.thread_id, "firat-runtime-thread");
+    assert.deepEqual(progress.data.liveness.counters, { current: 1, total: 3 });
+    assert.equal(checkpoint.status, "ok");
+    assert.equal(thread.runtime.checkpoint.checkpointId, "checkpoint-1");
+    assert.deepEqual(thread.runtime.checkpoint.payload, { nextPage: 2, seenIds: ["a"] });
   } finally {
     await item.close();
   }

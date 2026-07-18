@@ -1633,15 +1633,19 @@ export async function safeResetThreadRuntime(threadId, options = {}, env = proce
 }
 
 async function completeStopCommand(thread, message, env = process.env) {
-  const stopped = threadUsesNativeCodexRuntime(thread, env)
-    ? { slept: 0, interrupted: await interruptCodexRuntimeThread(thread, env).catch(() => ({ interrupted: false })) }
-    : await sleepThread(thread.id, { reason: whatsappOrigin(message) ? "whatsapp_stop_command" : "stop_command", kill: true }, env);
+  const interrupted = threadUsesNativeCodexRuntime(thread, env)
+    ? await interruptCodexRuntimeThread(thread, env).catch(() => ({ interrupted: false }))
+    : await runtimeStatus(thread.id, env)
+      .then((status) => interruptRuntimeStatus(status, env, { force: true }))
+      .then((sent) => ({ interrupted: Boolean(sent) }))
+      .catch(() => ({ interrupted: false }));
+  await updateThread(thread.id, { state: "ready", lastError: null }, env).catch(() => {});
   const updated = await updateThreadMessage(thread.id, message.id, {
     state: "completed",
     deliveryState: "delivered",
     observedVia: "orkestr_stop_command",
     deliveredAt: nowIso(),
-    interruptSent: Boolean(stopped.interrupted?.interrupted),
+    interruptSent: Boolean(interrupted?.interrupted),
     error: null,
   }, env);
   await appendEvent({
@@ -1649,8 +1653,8 @@ async function completeStopCommand(thread, message, env = process.env) {
     threadId: thread.id,
     messageId: message.id,
     source: message.source || null,
-    slept: stopped.slept,
-    interrupted: Boolean(stopped.interrupted?.interrupted),
+    slept: 0,
+    interrupted: Boolean(interrupted?.interrupted),
   }, env).catch(() => {});
   return updated.id;
 }

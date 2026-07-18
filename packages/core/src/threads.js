@@ -41,6 +41,7 @@ const messageStringFields = [
   "replayedFromMessageId",
   "previousCodexThreadId",
   "previousRecoveryNoticeId",
+  "runtimeCheckpointId",
   "originSurface",
   "originTransport",
   "senderParticipantId",

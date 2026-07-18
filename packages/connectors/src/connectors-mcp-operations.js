@@ -36,6 +36,11 @@ import {
   connectorsMcpInputSchemas,
 } from "./connectors-mcp-contract.js";
 import { assertConnectorMcpScope } from "./connectors-mcp-auth.js";
+import {
+  completeRuntimeLiveness,
+  recordRuntimeLiveness,
+  saveRuntimeCheckpoint,
+} from "../../core/src/runtime-liveness.js";
 
 function clean(value = "") {
   return String(value || "").trim();
@@ -368,12 +373,82 @@ async function runRouting(input, auth, env) {
   });
 }
 
+function runtimeCounters(input = {}) {
+  const counters = {};
+  if (Number.isFinite(input.progress_current)) counters.current = input.progress_current;
+  if (Number.isFinite(input.progress_total)) counters.total = input.progress_total;
+  return Object.keys(counters).length ? counters : null;
+}
+
+function runtimeCheckpointPayload(input = {}) {
+  const value = clean(input.checkpoint_json);
+  if (!value) throw Object.assign(new Error("runtime_checkpoint_json_required"), { statusCode: 400 });
+  let parsed;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    throw Object.assign(new Error("runtime_checkpoint_json_invalid"), { statusCode: 400 });
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw Object.assign(new Error("runtime_checkpoint_json_object_required"), { statusCode: 400 });
+  }
+  return parsed;
+}
+
+async function runRuntime(input, auth, env) {
+  const threadId = auth.threadId || clean(input.thread_id);
+  if (!threadId) throw Object.assign(new Error("runtime_thread_id_required"), { statusCode: 400 });
+  const common = {
+    executionId: input.execution_id,
+    runtimeGeneration: clean(input.runtime_generation),
+    turnId: clean(input.turn_id),
+    phase: clean(input.phase),
+    summary: clean(input.summary),
+    counters: runtimeCounters(input),
+  };
+  let payload;
+  if (input.action === "checkpoint") {
+    payload = await saveRuntimeCheckpoint(threadId, {
+      ...common,
+      checkpointId: clean(input.checkpoint_id),
+      payload: runtimeCheckpointPayload(input),
+    }, env);
+  } else if (input.action === "complete") {
+    payload = await completeRuntimeLiveness(threadId, {
+      ...common,
+      status: clean(input.completion_status) || "completed",
+      phase: clean(input.phase) || "complete",
+    }, env);
+  } else {
+    payload = await recordRuntimeLiveness(threadId, {
+      ...common,
+      evidenceType: clean(input.evidence_type) || "mcp_progress",
+      phase: clean(input.phase) || (input.action === "blocked" ? "blocked" : "executing"),
+    }, env);
+  }
+  if (!payload?.ok) {
+    throw Object.assign(new Error(clean(payload?.reason) || "runtime_signal_rejected"), {
+      statusCode: payload?.reason === "thread_not_found" ? 404 : 409,
+    });
+  }
+  return connectorMcpStructuredResult({
+    service: input.service,
+    action: input.action,
+    status: input.action === "blocked" ? "blocked" : input.action === "complete" ? clean(input.completion_status) || "completed" : "ok",
+    instanceId: auth.instanceId,
+    userId: auth.ownerUserId,
+    threadId,
+    data: payload,
+  });
+}
+
 export async function runConnectorMcpTool(tool = "", rawInput = {}, { auth = {}, request = null, env = process.env } = {}) {
   const schema = connectorsMcpInputSchemas[tool];
   if (!schema) throw Object.assign(new Error("connector_mcp_tool_not_found"), { statusCode: 404 });
   const input = schema.parse(rawInput);
   const scoped = assertConnectorMcpScope(auth, tool, input);
-  if (input.service !== "whatsapp" && tool !== "orkestr_auth") return unsupported(input);
+  if (tool === "orkestr_runtime" && input.service !== "runtime") return unsupported(input);
+  if (tool !== "orkestr_runtime" && input.service !== "whatsapp" && tool !== "orkestr_auth") return unsupported(input);
   if (["webui", "codex"].includes(input.service)) return unsupported(input);
   const challenge = await requireAttendedApproval(tool, input, scoped, request, env);
   if (challenge) return challengeResult(input, challenge);
@@ -382,6 +457,7 @@ export async function runConnectorMcpTool(tool = "", rawInput = {}, { auth = {},
     if (tool === "orkestr_messaging") return await runMessaging(input, scoped, env);
     if (tool === "orkestr_conversation") return await runConversation(input, scoped, env);
     if (tool === "orkestr_routing") return await runRouting(input, scoped, env);
+    if (tool === "orkestr_runtime") return await runRuntime(input, scoped, env);
   } catch (error) {
     return connectorMcpStructuredResult({
       service: input.service,
@@ -390,6 +466,9 @@ export async function runConnectorMcpTool(tool = "", rawInput = {}, { auth = {},
       operationRef: error?.operationRef || input.operation_ref,
       accountId: scoped.accountId,
       conversationId: scoped.conversationId,
+      instanceId: scoped.instanceId,
+      userId: scoped.ownerUserId,
+      threadId: scoped.threadId,
       error: {
         code: clean(error?.message) || "connector_operation_failed",
         retryable: Number(error?.statusCode || 500) >= 500 && error?.deliveryState !== "delivery_uncertain",

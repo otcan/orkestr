@@ -44,6 +44,8 @@ import { requestUserInputAnswers } from "./codex-app-server-user-input.js";
 import { appendTurnLifecycleEvent } from "./turn-lifecycle.js";
 import { markConnectorDeliverySignal } from "./connector-delivery-signals.js";
 import { recordCodexRuntimeAuthFailureSignal } from "./codex-auth-health.js";
+import { completeRuntimeLiveness, recordRuntimeLiveness } from "./runtime-liveness.js";
+import { markRuntimeFinalDeliveryPending, runtimeFinalDeliveryPending } from "./runtime-final-delivery.js";
 
 const execFileAsync = promisify(execFile);
 const clients = new Map();
@@ -61,6 +63,15 @@ function codexTurnConversationInterrupted(turn = {}) {
   if (["interrupted", "aborted", "cancelled", "canceled"].includes(reason)) return true;
   const errorText = publicError(turn.error).toLowerCase();
   return /conversation interrupted|turn_aborted|\bturn aborted\b|\binterrupted\b|\bcancell?ed\b/.test(errorText);
+}
+
+function itemLivenessEvidenceType(item = {}) {
+  const type = clean(item.type).toLowerCase();
+  if (type.includes("mcp")) return "mcp_progress";
+  if (type.includes("command") || type.includes("filechange") || type.includes("tool")) return "tool_completed";
+  if (type.includes("agent") || type === "plan" || type === "exitedreviewmode") return "model_output";
+  if (type.includes("compaction")) return "checkpoint";
+  return "runtime_probe";
 }
 
 function codexConversationInterruptionNoticeText() {
@@ -428,6 +439,13 @@ export class CodexAppServerClient {
       source: "codex-app-server",
       reason: message.method,
     }, this.env).catch(() => {});
+    await recordRuntimeLiveness(thread.id, {
+      runtimeGeneration: codexId,
+      turnId: params.turnId,
+      evidenceType: message.method === "item/tool/requestUserInput" ? "user_input_pending" : "approval_pending",
+      phase: message.method === "item/tool/requestUserInput" ? "blocked" : "awaiting_approval",
+      summary: message.method,
+    }, this.env).catch(() => {});
     const text = approvalPromptText(message.method, params);
     if (text) {
       const whatsappParent =
@@ -534,6 +552,13 @@ export class CodexAppServerClient {
             state: "running",
             source: "codex-app-server",
           }, this.env).catch(() => {});
+          await recordRuntimeLiveness(thread.id, {
+            runtimeGeneration: threadId,
+            turnId,
+            evidenceType: "model_started",
+            phase: "executing",
+            summary: "Codex turn started",
+          }, this.env).catch(() => {});
         }
       }
       return;
@@ -586,6 +611,23 @@ export class CodexAppServerClient {
             source: "codex-app-server",
             reason: errorText,
           }, this.env).catch(() => {});
+          if (status === "completed" && runtimeFinalDeliveryPending(thread, turnId)) {
+            await recordRuntimeLiveness(thread.id, {
+              runtimeGeneration: threadId,
+              turnId,
+              evidenceType: "mcp_progress",
+              phase: "awaiting_delivery",
+              summary: "Model completed; awaiting final connector delivery acknowledgement",
+            }, this.env).catch(() => {});
+          } else {
+            await completeRuntimeLiveness(thread.id, {
+              runtimeGeneration: threadId,
+              turnId,
+              status: codexTurnConversationInterrupted(turn) ? "cancelled" : status,
+              phase: codexTurnConversationInterrupted(turn) ? "cancelled" : status === "failed" ? "failed" : "complete",
+              summary: errorText,
+            }, this.env).catch(() => {});
+          }
           if (codexTurnConversationInterrupted(turn)) {
             const existingRecoveryNotice = existingRecoveryNoticeForTurn(await listThreadMessages(thread.id, this.env).catch(() => []), turnId);
             if (existingRecoveryNotice) {
@@ -639,6 +681,22 @@ export class CodexAppServerClient {
       await this.projectItem(params.item || {}, params, codexId);
       return;
     }
+    if (message.method === "item/started") {
+      const item = params.item || {};
+      const threadId = clean(params.threadId || item.threadId || codexId);
+      const thread = await threadForCodexThreadId(threadId, this.env);
+      if (thread) {
+        const type = clean(item.type).toLowerCase();
+        await recordRuntimeLiveness(thread.id, {
+          runtimeGeneration: threadId,
+          turnId: clean(params.turnId || item.turnId || thread.runtime?.activeTurnId),
+          evidenceType: type.includes("mcp") ? "mcp_progress" : type.includes("tool") || type.includes("command") || type.includes("filechange") ? "tool_started" : "model_output",
+          phase: "executing",
+          summary: clean(item.type),
+        }, this.env).catch(() => {});
+      }
+      return;
+    }
     if (message.method === "thread/tokenUsage/updated" && codexId) {
       const thread = await threadForCodexThreadId(codexId, this.env);
       if (thread) {
@@ -654,6 +712,13 @@ export class CodexAppServerClient {
             },
           },
         }, this.env).catch(() => {});
+        await recordRuntimeLiveness(thread.id, {
+          runtimeGeneration: codexId,
+          turnId: thread.runtime?.activeTurnId,
+          evidenceType: "model_output",
+          phase: "executing",
+          summary: "Token usage updated",
+        }, this.env).catch(() => {});
       }
     }
   }
@@ -663,6 +728,13 @@ export class CodexAppServerClient {
     const thread = await threadForCodexThreadId(codexId, this.env);
     if (!thread) return null;
     const type = clean(item.type);
+    await recordRuntimeLiveness(thread.id, {
+      runtimeGeneration: codexId,
+      turnId: clean(params.turnId || item.turnId),
+      evidenceType: itemLivenessEvidenceType(item),
+      phase: "executing",
+      summary: type,
+    }, this.env).catch(() => {});
     if (!["agentMessage", "plan", "exitedReviewMode", "contextCompaction"].includes(type)) return null;
     const text = type === "contextCompaction" ? "Codex compacted the conversation context." : itemText(item);
     if (!text) return null;
@@ -700,11 +772,22 @@ export class CodexAppServerClient {
       timestamp,
       ...whatsappProjectionFields(whatsappParent, thread),
     }, this.env);
+    const finalAnswer = clean(phase).toLowerCase() === "final_answer";
+    if (finalAnswer && whatsappOrigin(message)) {
+      await markRuntimeFinalDeliveryPending(thread.id, {
+        messageId: message.id,
+        parentMessageId: message.parentMessageId,
+        runtimeGeneration: codexId,
+        turnId,
+        connector: "whatsapp",
+        chatId: message.chatId,
+        accountId: message.accountId,
+      }, this.env).catch(() => {});
+    }
     if (!message?.coalescedUpdate) {
       notifyMessageHandler({ thread, message });
       markConnectorDeliverySignal(message);
     }
-    const finalAnswer = clean(phase).toLowerCase() === "final_answer";
     const completedKey = finalAnswer ? this.turnParentKey(codexId, turnId) : "";
     if (completedKey) {
       this.completedTurns.add(completedKey);
