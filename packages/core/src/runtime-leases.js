@@ -82,6 +82,7 @@ const proposedPlanOpenTagPattern = /^\s*<\s*proposed[\s_-]*plan\s*>/i;
 const deliveryRetryDefaultsMs = [1000, 3000, 8000, 20_000, 60_000];
 const defaultTempRuntimeTtlMs = 5 * 60 * 1000;
 const defaultRolloutSyncLookbackBytes = 2 * 1024 * 1024;
+const defaultRolloutMessageHistoryLimit = 2_000;
 const defaultWorkingAfterPromptMs = 30 * 60 * 1000;
 const whatsappSources = new Set(["whatsapp", "whatsapp_inbound", "whatsapp_client"]);
 
@@ -4025,6 +4026,18 @@ function codexRolloutPathForThread(thread = {}) {
   ).trim();
 }
 
+function rolloutMessageHistoryLimit(env = process.env) {
+  const parsed = Number(env.ORKESTR_ROLLOUT_MESSAGE_HISTORY_LIMIT || defaultRolloutMessageHistoryLimit);
+  return Number.isFinite(parsed) ? Math.max(100, Math.floor(parsed)) : defaultRolloutMessageHistoryLimit;
+}
+
+async function rolloutExistingMessages(threadId, parsed = [], env = process.env) {
+  return listThreadMessageCandidates(threadId, {
+    tailLimit: rolloutMessageHistoryLimit(env),
+    eventIds: parsed.map((message) => message.eventId).filter(Boolean),
+  }, env);
+}
+
 function shouldSyncDetachedRollout(thread = {}, activeLeaseThreadIds = new Set()) {
   if (!thread?.id || activeLeaseThreadIds.has(thread.id)) return false;
   if (!threadUsesNativeCodexRuntime(thread)) return false;
@@ -4036,7 +4049,7 @@ function shouldSyncDetachedRollout(thread = {}, activeLeaseThreadIds = new Set()
 async function appendRolloutMessages({ thread, rolloutPath, body, start, initialScan, env }) {
   const parsed = parseAssistantRolloutMessages(body, thread.id, start);
   if (!parsed.length) return { appended: 0, completedTurnId: null };
-  const existing = await listThreadMessages(thread.id, env);
+  const existing = await rolloutExistingMessages(thread.id, parsed, env);
   const existingEventKeys = new Set(existing.map(rolloutMessageEventKey));
   const existingTextKeys = new Set(
     existing
@@ -4176,7 +4189,7 @@ async function syncLeaseRollout(lease, env = process.env) {
     await handle.close().catch(() => {});
   }
   const parsed = parseAssistantRolloutMessages(body, lease.threadId, start);
-  const existing = await listThreadMessages(lease.threadId, env);
+  const existing = await rolloutExistingMessages(lease.threadId, parsed, env);
   const existingEventKeys = new Set(existing.map(rolloutMessageEventKey));
   const existingTextKeys = new Set(
     existing

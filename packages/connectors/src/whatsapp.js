@@ -135,6 +135,7 @@ let whatsappDeliveryRunCache = null;
 const whatsappMirrorMessageFileCache = new Map();
 const whatsappMirrorSqliteRevisionCache = new Map();
 const whatsappConnectorOutboxCache = new Map();
+const whatsappOutboxReconcileCache = new Map();
 const suppressibleWhatsAppUpdateDeliveryTypes = new Set([
   "delivery_error",
   "mode_queued",
@@ -2239,12 +2240,26 @@ function deliveredConnectorOutboxEvidence(job = {}, outboundDeliveries = [], out
 }
 
 async function reconcileWhatsAppConnectorOutboxFromLedger(state = {}, env = process.env) {
+  const paths = dataPaths(env);
+  const [outboxFingerprint, ledgerStats] = await Promise.all([
+    connectorOutboxStoreFingerprint(env).catch(() => null),
+    fs.stat(paths.whatsapp).catch(() => null),
+  ]);
+  const reconcileKey = outboxFingerprint && ledgerStats
+    ? `${outboxFingerprint}:${ledgerStats.size}:${ledgerStats.mtimeMs}:${ledgerStats.ctimeMs}`
+    : "";
+  if (reconcileKey && whatsappOutboxReconcileCache.get(paths.home) === reconcileKey) {
+    return { reconciled: 0, cached: true };
+  }
   const outbox = await listConnectorOutboxJobs({
     connector: "whatsapp",
     state: "pending claimed sent_to_broker failed_retryable delivery_uncertain",
   }, env).catch(() => ({ jobs: [] }));
   const jobs = outbox.jobs || [];
-  if (!jobs.length) return { reconciled: 0 };
+  if (!jobs.length) {
+    if (reconcileKey) whatsappOutboxReconcileCache.set(paths.home, reconcileKey);
+    return { reconciled: 0 };
+  }
   const outboundDeliveries = Array.isArray(state.outboundDeliveries) ? state.outboundDeliveries : [];
   const outboundIntents = Array.isArray(state.outboundIntents) ? state.outboundIntents : [];
   let reconciled = 0;
@@ -2290,6 +2305,7 @@ async function reconcileWhatsAppConnectorOutboxFromLedger(state = {}, env = proc
     }, env).catch(() => null);
   }
   if (intentsChanged) await writeWhatsAppState(state, env);
+  if (reconcileKey) whatsappOutboxReconcileCache.set(paths.home, reconcileKey);
   return { reconciled };
 }
 

@@ -420,10 +420,16 @@ export async function listThreadMessageCandidates(threadId, options = {}, env = 
     });
   }
   const ids = new Set((options.ids || []).map((value) => String(value || "").trim()).filter(Boolean));
+  const eventIds = new Set((options.eventIds || []).map((value) => String(value || "").trim()).filter(Boolean));
   const states = new Set((options.states || []).map((value) => String(value || "").trim()).filter(Boolean));
   const phases = new Set((options.phases || []).map((value) => String(value || "").trim()).filter(Boolean));
   messages.forEach((message, index) => {
-    if (ids.has(String(message?.id || "")) || states.has(String(message?.state || "")) || phases.has(String(message?.phase || ""))) add(message, index);
+    if (
+      ids.has(String(message?.id || "")) ||
+      eventIds.has(String(message?.eventId || "")) ||
+      states.has(String(message?.state || "")) ||
+      phases.has(String(message?.phase || ""))
+    ) add(message, index);
   });
   return [...selected.values()].sort((left, right) => left.index - right.index).map((entry) => entry.message);
 }

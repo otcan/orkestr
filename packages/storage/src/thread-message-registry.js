@@ -271,6 +271,15 @@ export async function listThreadMessageCandidates(threadId, options = {}, env = 
       where thread_id = ? and id in (${placeholders}) order by position asc
     `).all(threadId, ...ids));
   }
+  const eventIds = [...new Set((options.eventIds || []).map((value) => String(value || "").trim()).filter(Boolean))];
+  for (let offset = 0; offset < eventIds.length; offset += 500) {
+    const chunk = eventIds.slice(offset, offset + 500);
+    const placeholders = chunk.map(() => "?").join(",");
+    addRows(db.prepare(`
+      select position, data from orkestr_thread_messages
+      where thread_id = ? and event_id in (${placeholders}) order by position asc
+    `).all(threadId, ...chunk));
+  }
   const states = [...new Set((options.states || []).map((value) => String(value || "").trim()).filter(Boolean))];
   for (const state of states) {
     addRows(db.prepare(`

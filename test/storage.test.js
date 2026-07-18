@@ -270,3 +270,19 @@ test("thread message repository batches per-thread SQLite revisions", async () =
   assert.notEqual(second.get("thread-a"), first.get("thread-a"));
   assert.equal(second.get("thread-b"), first.get("thread-b"));
 });
+
+test("thread message candidates combine a bounded tail with exact rollout event ids", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-message-events-"));
+  const env = { ORKESTR_HOME: home, ORKESTR_THREAD_STORE: "sqlite" };
+  const repository = createThreadMessageRepository(env);
+  for (let index = 1; index <= 6; index += 1) {
+    await repository.append("thread-a", { id: `message-${index}`, eventId: `event-${index}`, text: `${index}` });
+  }
+
+  const candidates = await repository.listCandidates("thread-a", {
+    tailLimit: 2,
+    eventIds: ["event-2"],
+  });
+
+  assert.deepEqual(candidates.map((message) => message.id), ["message-2", "message-5", "message-6"]);
+});
