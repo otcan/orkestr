@@ -4,8 +4,8 @@ import { getThread, listThreadMessages, listThreads, updateThreadMessage } from 
 import { listRouterOutbox, listRouterTraces, recordRouterTraceEvent } from "./router-traces.js";
 import { backfillRouterTracePhases } from "./router-trace-backfill.js";
 import { inferredRuntimeBackfillPhases, phaseSet, phaseTime, requiredTracePhases, traceHasRuntimeReplyEvidence, traceShortCircuitedBeforeRuntime } from "./router-doctor-trace-rules.js";
+import { queueNoticeWithoutRuntimeDelivery, repairRuntimeDeliveryMissingAssistant, runtimeDeliveryMissingAssistantIssue, traceScopedMessage, traceScopedOutboxJob } from "./router-doctor-message-recovery.js";
 import { orphanedWhatsAppFinalAnswerIssues, repairOrphanedWhatsAppFinalAnswer } from "./router-doctor-whatsapp-final-mirror.js";
-
 function clean(value = "") {
   return String(value || "").trim();
 }
@@ -175,38 +175,6 @@ function olderAssistant(messages = [], userMessage = {}) {
     .find((message) => deliveredAssistantMessage(message) && sameChat(message, userMessage) && dateMs(message.createdAt || message.updatedAt) <= userTs) || null;
 }
 
-function newerUser(messages = [], userMessage = {}) {
-  const userTs = dateMs(userMessage.createdAt || userMessage.updatedAt);
-  return messages.find((message) =>
-    message.role === "user" &&
-    whatsappMessage(message) &&
-    sameChat(message, userMessage) &&
-    dateMs(message.createdAt || message.updatedAt) > userTs
-  ) || null;
-}
-
-function traceScopedMessage(message = {}, traces = [], routerTraceId = "") {
-  if (!routerTraceId) return true;
-  if (clean(message.routerTraceId) === routerTraceId) return true;
-  const messageIds = new Set(traces.map((trace) => clean(trace.messageId)).filter(Boolean));
-  return messageIds.has(clean(message.id)) || messageIds.has(clean(message.parentMessageId));
-}
-
-function traceScopedOutboxJob(job = {}, traces = [], routerTraceId = "") {
-  if (!routerTraceId) return true;
-  if (clean(job.routerTraceId || job.metadata?.routerTraceId) === routerTraceId) return true;
-  const messageIds = new Set(traces.map((trace) => clean(trace.messageId)).filter(Boolean));
-  return messageIds.has(clean(job.sourceMessageId)) || messageIds.has(clean(job.sourceEventId));
-}
-
-function queueNoticeWithoutRuntimeDelivery(message = {}, trace = null, thresholdMs = 60_000) {
-  if (!message || message.role !== "user") return false;
-  if (!["waiting_runtime_ready", "waiting_runtime_start", "awaiting_active_turn", "interrupting"].includes(lower(message.deliveryState))) return false;
-  const phases = trace ? phaseSet(trace) : new Set();
-  if (phases.has("delivered_to_runtime")) return false;
-  return ageMs(message.updatedAt || message.createdAt) >= thresholdMs;
-}
-
 function runtimeReady(status = {}) {
   if (status.working === true) return false;
   if (["working", "running", "busy"].includes(lower(status.state))) return false;
@@ -264,23 +232,7 @@ async function repairIssue(item = {}, context = {}) {
     return { code: "requeue_swallowed_input", ok: true, threadId: thread.id, messageId: item.messageId, state: updated?.state || "" };
   }
   if (item.code === "runtime_delivery_completed_without_assistant" && repairSafe !== false) {
-    const updated = await updateThreadMessage(thread.id, item.messageId, {
-      state: "queued",
-      deliveryState: "retrying_delivery",
-      error: "router_doctor_requeued_missing_assistant",
-      deliveryNextAttemptAt: null,
-    }, env);
-    await recordRouterTraceEvent({
-      routerTraceId: item.routerTraceId,
-      connector: "whatsapp",
-      threadId: thread.id,
-      messageId: item.messageId,
-      phase: "queued",
-      reason: "router_doctor_requeued_missing_assistant",
-      terminal: false,
-    }, env).catch(() => null);
-    const delivered = await deliverPendingThreadInputs(thread.id, env, { processApiAgent: true });
-    return { code: "requeue_runtime_delivery_without_assistant", ok: true, threadId: thread.id, messageId: item.messageId, state: updated?.state || "", delivered };
+    return repairRuntimeDeliveryMissingAssistant(item, { env, thread });
   }
   if (item.code === "missing_router_trace_phase" && repairSafe !== false) {
     const routerTraceId = clean(item.routerTraceId);
@@ -386,17 +338,8 @@ async function inspectThread(thread, options = {}) {
         routerTraceId: trace?.routerTraceId || clean(message.routerTraceId),
       }));
     }
-    if (!shortCircuitTrace && terminalUserMessage(message) && runtimeDelivered && !assistant && !newerUser(messages, message) && runtimeReady(status) && ageMs(message.updatedAt || message.createdAt) >= thresholdMs) {
-      checks.push(issue("runtime_delivery_completed_without_assistant", "error", "WhatsApp input reached an idle runtime but produced no newer same-chat assistant reply.", {
-        threadId: thread.id,
-        messageId: message.id,
-        routerTraceId: trace?.routerTraceId || clean(message.routerTraceId),
-        messageState: clean(message.state),
-        deliveryState: clean(message.deliveryState),
-        ageMs: ageMs(message.updatedAt || message.createdAt),
-        runtimeState: clean(status.state),
-      }));
-    }
+    const missingAssistant = runtimeDeliveryMissingAssistantIssue({ message, messages, trace, status, thresholdMs, runtimeDelivered, shortCircuitTrace, assistant, terminalUserMessageFn: terminalUserMessage, runtimeReadyFn: runtimeReady, whatsappMessageFn: whatsappMessage, issueFn: issue });
+    if (missingAssistant) checks.push({ threadId: thread.id, ...missingAssistant });
     if (activeQueuedMessage(message) && ageMs(message.createdAt) >= thresholdMs && runtimeReady(status)) {
       checks.push(issue("stale_queued_whatsapp_input_ready_runtime", "error", "WhatsApp input is queued while the runtime is ready past the stale threshold.", {
         threadId: thread.id,
