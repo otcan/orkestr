@@ -75,11 +75,14 @@ test("connector outbox SQLite fingerprint advances on durable job changes", asyn
   const initial = await connectorOutboxStoreFingerprint(runtimeEnv);
   const created = await ensureConnectorOutboxJob(whatsappJob({ tenantId: "tenant-a" }), runtimeEnv);
   const afterCreate = await connectorOutboxStoreFingerprint(runtimeEnv);
+  await ensureConnectorOutboxJob(whatsappJob({ tenantId: "tenant-a" }), runtimeEnv);
+  const afterDuplicate = await connectorOutboxStoreFingerprint(runtimeEnv);
   await markConnectorOutboxJob(created.job.id, { state: "delivered", deliveredAt: new Date().toISOString() }, runtimeEnv);
   const afterUpdate = await connectorOutboxStoreFingerprint(runtimeEnv);
 
   assert.equal(initial, "sqlite:0");
   assert.notEqual(afterCreate, initial);
+  assert.equal(afterDuplicate, afterCreate);
   assert.notEqual(afterUpdate, afterCreate);
 });
 

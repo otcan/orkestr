@@ -431,6 +431,14 @@ function mergeJob(existing = {}, next = {}) {
     : withWinner(existing, next);
 }
 
+function connectorOutboxJobChanged(existing = {}, next = {}) {
+  const withoutUpdateTimestamp = (job) => {
+    const { updatedAt: _updatedAt, ...comparable } = job || {};
+    return comparable;
+  };
+  return stableStringify(withoutUpdateTimestamp(existing)) !== stableStringify(withoutUpdateTimestamp(next));
+}
+
 export function mergeConnectorOutboxJobs(existing = [], next = [], env = process.env) {
   const merged = new Map();
   for (const item of [...(existing || []), ...(next || [])]) {
@@ -637,6 +645,7 @@ export async function ensureConnectorOutboxJob(input = {}, env = process.env) {
     const nextJob = await withPostgresTransaction(pg, async (client) => {
       const existing = await getConnectorOutboxJobRowPostgres(client, job.idempotencyKey, env, { forUpdate: true });
       const merged = existing ? mergeJob(existing, job) : job;
+      if (existing && !connectorOutboxJobChanged(existing, merged)) return existing;
       await upsertConnectorOutboxJobRowPostgres(client, merged);
       await pruneConnectorOutboxRowsPostgres(client, env);
       await setConnectorOutboxMetaPostgres(client, "updated_at", nowIso());
@@ -663,6 +672,9 @@ export async function ensureConnectorOutboxJob(input = {}, env = process.env) {
     const job = normalizeConnectorOutboxJob(input, env);
     const existing = getConnectorOutboxJobRow(db, job.idempotencyKey, env);
     const nextJob = existing ? mergeJob(existing, job) : job;
+    if (existing && !connectorOutboxJobChanged(existing, nextJob)) {
+      return { job: existing, created: false };
+    }
     db.exec("begin immediate");
     try {
       upsertConnectorOutboxJobRow(db, nextJob);
