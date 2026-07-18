@@ -2,7 +2,7 @@ import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { normalizeCodexModel, normalizeReasoningEffort } from "../../../packages/core/src/codex-app-server-common.js";
 import { RAW_TERMINAL_RUNTIME_KIND } from "../../../packages/core/src/raw-terminal-mode.js";
-import { resolveCodexThreadMetadata, runtimeStatus } from "../../../packages/core/src/runtime-leases.js";
+import { resolveCodexThreadMetadata, resolveCodexThreadMetadataBatch, runtimeStatus } from "../../../packages/core/src/runtime-leases.js";
 import { isAdminPrincipal, resourceOwnerUserId } from "../../../packages/core/src/policy.js";
 import { adminPrincipal } from "../../../packages/core/src/principal.js";
 import { getThread, listThreadMessages, listThreads, listThreadsForPrincipal } from "../../../packages/core/src/threads.js";
@@ -21,6 +21,7 @@ type ThreadSummaryOptions = {
   sampleRuntime?: boolean;
   refreshMetadata?: boolean;
   refreshIdleMetadata?: boolean;
+  codexMetadataById?: Map<string, Record<string, unknown>>;
 };
 
 type ThreadRuntimeMode =
@@ -757,7 +758,13 @@ function threadMetadataCacheKey(thread: any, status: any, gitFingerprint = ""): 
   });
 }
 
-async function cachedThreadMetadata(thread: any, status: any, ttlMs: number, refreshMetadata = true) {
+async function cachedThreadMetadata(
+  thread: any,
+  status: any,
+  ttlMs: number,
+  refreshMetadata = true,
+  preloadedLiveCodexMetadata: any = null,
+) {
   if (!refreshMetadata) {
     const cached = ttlMs > 0 ? threadMetadataCache.get(String(thread?.id || "")) : null;
     if (cached && cached.expiresAt > Date.now()) {
@@ -777,7 +784,9 @@ async function cachedThreadMetadata(thread: any, status: any, ttlMs: number, ref
     ...gitState,
     runtime: status?.lease ? { ...(thread.runtime || {}), ...status.lease } : thread.runtime,
   };
-  const liveCodexMetadata: any = await resolveCodexThreadMetadata(metadataTarget).catch(() => ({}));
+  const liveCodexMetadata: any = preloadedLiveCodexMetadata && Object.keys(preloadedLiveCodexMetadata).length
+    ? preloadedLiveCodexMetadata
+    : await resolveCodexThreadMetadata(metadataTarget).catch(() => ({}));
   if (ttlMs > 0 && thread?.id) {
     threadMetadataCache.set(String(thread.id), {
       cacheKey,
@@ -797,7 +806,16 @@ export async function threadRuntimeSummary(thread: any, messages: any[] = [], op
   const status: any = shouldSampleRuntime
     ? await cachedSummaryRuntimeStatus(thread, messages, runtimeStatusCacheTtlMs).catch(() => null)
     : null;
-  const { gitState, liveCodexMetadata } = await cachedThreadMetadata(thread, status, ttlMs, shouldRefreshMetadata);
+  const preloadedLiveCodexMetadata = shouldRefreshMetadata
+    ? options.codexMetadataById?.get(codexThreadId(thread)) || null
+    : null;
+  const { gitState, liveCodexMetadata } = await cachedThreadMetadata(
+    thread,
+    status,
+    ttlMs,
+    shouldRefreshMetadata,
+    preloadedLiveCodexMetadata,
+  );
   const orderedMessages = chronologicalMessages(messages);
   const codexThread = {
     ...thread,
@@ -966,11 +984,25 @@ export async function threadSummaryPayload(options: ThreadSummaryOptions = {}) {
     for (const id of threadRuntimeStatusSummaryCache.keys()) {
       if (!activeThreadIds.has(id)) threadRuntimeStatusSummaryCache.delete(id);
     }
+    const messagesByThreadId = new Map<string, any[]>(await Promise.all(threads.map(async (thread: any): Promise<[string, any[]]> => [
+      String(thread.id || ""),
+      await listThreadMessagesForSummary(thread.id),
+    ])));
+    const runtimeSampleByThreadId = new Map<string, boolean>(threads.map((thread: any): [string, boolean] => {
+      const messages = messagesByThreadId.get(String(thread.id || "")) || [];
+      return [String(thread.id || ""), threadNeedsLiveRuntimeSample(thread, messages)];
+    }));
+    const metadataRefreshThreads = threads.filter((thread: any) =>
+      refreshIdleMetadata || runtimeSampleByThreadId.get(String(thread.id || "")) === true,
+    );
+    const codexMetadataById = metadataRefreshThreads.length
+      ? await resolveCodexThreadMetadataBatch(metadataRefreshThreads).catch(() => new Map<string, Record<string, unknown>>())
+      : new Map<string, Record<string, unknown>>();
     const payload = {
       generatedAt: new Date().toISOString(),
       threads: await Promise.all(threads.map(async (thread: any) => {
-        const messages = await listThreadMessagesForSummary(thread.id);
-        const sampleRuntime = threadNeedsLiveRuntimeSample(thread, messages);
+        const messages = messagesByThreadId.get(String(thread.id || "")) || [];
+        const sampleRuntime = runtimeSampleByThreadId.get(String(thread.id || "")) === true;
         return threadRuntimeSummary(
           thread,
           messages,
@@ -979,6 +1011,7 @@ export async function threadSummaryPayload(options: ThreadSummaryOptions = {}) {
             runtimeStatusCacheTtlMs,
             sampleRuntime,
             refreshMetadata: sampleRuntime || refreshIdleMetadata,
+            codexMetadataById,
           },
         );
       })),

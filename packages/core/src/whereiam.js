@@ -13,12 +13,59 @@ import { tenantPublicUrls } from "./tenant-public-urls.js";
 import { adminUserId, normalizeUserId } from "./users.js";
 import { builtinUserSkillDefinitions, userScopedCapabilityHints } from "./user-skills.js";
 
+const desktopInventoryLiveCache = new Map();
+
 function nowIso() {
   return new Date().toISOString();
 }
 
 function clean(value) {
   return String(value || "").trim();
+}
+
+function positiveDurationMs(value, fallback, min = 0) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(min, parsed);
+}
+
+function desktopInventoryCacheTtlMs(env = process.env) {
+  return positiveDurationMs(env.ORKESTR_DESKTOP_INVENTORY_CACHE_MS || env.ORKESTR_BROWSER_SESSIONS_CACHE_MS, 15_000, 0);
+}
+
+function desktopInventoryCacheKey(principal = null, env = process.env) {
+  return JSON.stringify({
+    home: clean(env.ORKESTR_HOME),
+    mode: clean(env.ORKESTR_BROWSER_DESKTOP_MODE),
+    browserctlPath: clean(env.ORKESTR_BROWSERCTL_PATH || env.ORKESTR_BROWSERCTL),
+    userId: clean(principal?.userId),
+    role: clean(principal?.role),
+  });
+}
+
+async function cachedBrowserSessions(env = process.env, options = {}) {
+  const ttlMs = desktopInventoryCacheTtlMs(env);
+  if (ttlMs <= 0) return listBrowserSessions(env, options);
+  const key = desktopInventoryCacheKey(options.principal, env);
+  const cached = desktopInventoryLiveCache.get(key);
+  const now = Date.now();
+  if (cached?.payload && cached.expiresAt > now) return cached.payload;
+  if (cached?.inFlight) return cached.inFlight;
+  const inFlight = listBrowserSessions(env, options)
+    .then((payload) => {
+      desktopInventoryLiveCache.set(key, { payload, expiresAt: Date.now() + ttlMs, inFlight: null });
+      return payload;
+    })
+    .catch((error) => {
+      desktopInventoryLiveCache.delete(key);
+      throw error;
+    });
+  desktopInventoryLiveCache.set(key, {
+    payload: cached?.payload || null,
+    expiresAt: cached?.expiresAt || 0,
+    inFlight,
+  });
+  return inFlight;
 }
 
 function publicThreadName(thread = {}) {
@@ -344,7 +391,7 @@ async function desktopInventoryContext(principal = null, settings = {}, env = pr
   let error = "";
   let message = "";
   try {
-    payload = await listBrowserSessions(env, { principal });
+    payload = await cachedBrowserSessions(env, { principal });
     live = (payload?.sessions || []).map(publicDesktopRecord).filter((desktop) => desktop.slug);
   } catch (caught) {
     error = clean(caught?.message || caught || "desktop_inventory_failed");

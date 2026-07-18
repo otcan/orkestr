@@ -19,6 +19,11 @@ import {
   rawStructuredTurnActive,
 } from "../../../packages/core/src/raw-terminal-watch.js";
 import { threadSummaryPayload } from "./thread-summary.js";
+import {
+  stableSummaryBody,
+  summaryStreamClientBackpressured,
+  summaryStreamMaxBackpressureMs,
+} from "./thread-stream-summary.js";
 
 const execFileAsync = promisify(execFile);
 const attachedServers = new WeakSet<Server>();
@@ -26,6 +31,7 @@ const attachedServers = new WeakSet<Server>();
 type SummaryClient = {
   principal: Record<string, unknown>;
   lastSummaryBody: string;
+  backpressuredAt: number;
 };
 
 type UpgradeAuthContext = {
@@ -298,24 +304,6 @@ function rawSnapshotIdleIntervalMs(): number {
   return Number.isFinite(parsed) ? Math.max(rawSnapshotActiveIntervalMs(), parsed) : 3000;
 }
 
-function stableRuntimeSummary(runtime: unknown): unknown {
-  if (!runtime || typeof runtime !== "object") return runtime || null;
-  const { heartbeatAt, updatedAt, progress, ...stable } = runtime as Record<string, unknown>;
-  if (!progress || typeof progress !== "object") return stable;
-  const { capturedAt, sampledAtMs, ...stableProgress } = progress as Record<string, unknown>;
-  return { ...stable, progress: stableProgress };
-}
-
-function stableSummaryBody(payload: { threads?: Array<Record<string, unknown>> }): string {
-  const threads = (payload.threads || []).map((thread) => {
-    const { updatedAt, threadUpdatedAt, runtime, progress, progressCapturedAt, ...stable } = thread;
-    if (!progress || typeof progress !== "object") return { ...stable, runtime: stableRuntimeSummary(runtime) };
-    const { capturedAt, sampledAtMs, ...stableProgress } = progress as Record<string, unknown>;
-    return { ...stable, progress: stableProgress, runtime: stableRuntimeSummary(runtime) };
-  });
-  return JSON.stringify(threads);
-}
-
 function writeUpgradeError(socket: Duplex, statusCode: number, error: string): void {
   const statusText = statusCode === 403 ? "Forbidden" : statusCode === 404 ? "Not Found" : "Unauthorized";
   const body = JSON.stringify({ ok: false, error });
@@ -432,12 +420,39 @@ export function attachThreadStreamUpgrade(server: Server): void {
     if (!summaryClients.size || summaryInFlight) return;
     summaryInFlight = true;
     try {
+      const payloadsByPrincipal = new Map<string, {
+        payload: Record<string, unknown>;
+        stableBody: string;
+        wireBody: string;
+      }>();
       for (const [client, state] of summaryClients.entries()) {
-        const payload = await threadSummaryPayload({ principal: state.principal });
-        const stableBody = stableSummaryBody(payload);
+        if (summaryStreamClientBackpressured(client)) {
+          state.backpressuredAt ||= Date.now();
+          if (Date.now() - state.backpressuredAt >= summaryStreamMaxBackpressureMs()) {
+            summaryClients.delete(client);
+            client.terminate();
+          }
+          continue;
+        }
+        state.backpressuredAt = 0;
+        const principalKey = JSON.stringify({
+          userId: String(state.principal?.userId || "admin"),
+          role: String(state.principal?.role || "admin"),
+        });
+        let prepared = payloadsByPrincipal.get(principalKey);
+        if (!prepared) {
+          const payload = await threadSummaryPayload({ principal: state.principal });
+          prepared = {
+            payload,
+            stableBody: stableSummaryBody(payload),
+            wireBody: JSON.stringify({ type: "threads_summary", ...payload }),
+          };
+          payloadsByPrincipal.set(principalKey, prepared);
+        }
+        const { stableBody, wireBody } = prepared;
         if (!force && stableBody === state.lastSummaryBody) continue;
         state.lastSummaryBody = stableBody;
-        wsSend(client, { type: "threads_summary", ...payload });
+        client.send(wireBody);
       }
     } catch (error) {
       const message = { type: "error", data: error instanceof Error ? error.message : String(error) };
@@ -466,7 +481,7 @@ export function attachThreadStreamUpgrade(server: Server): void {
       const context = await authorizeThreadUpgradeRequest(request, socket);
       if (!context) return;
       wss.handleUpgrade(request, socket, head, (ws) => {
-        summaryClients.set(ws, { principal: context.principal, lastSummaryBody: "" });
+        summaryClients.set(ws, { principal: context.principal, lastSummaryBody: "", backpressuredAt: 0 });
         ensureSummaryTimer();
         wsSend(ws, {
           type: "transport_ready",

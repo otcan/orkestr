@@ -861,6 +861,11 @@ function sqlString(value) {
   return String(value || "").replaceAll("'", "''");
 }
 
+function validCodexThreadId(value) {
+  const id = String(value || "").trim();
+  return /^[0-9a-f-]{36}$/i.test(id) ? id : "";
+}
+
 function recordValue(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : null;
 }
@@ -956,7 +961,7 @@ async function resolveCodexRolloutMetadata(rolloutPath) {
 }
 
 async function resolveCodexThreadMetadataById(id, env = process.env) {
-  if (!/^[0-9a-f-]{36}$/i.test(id)) return {};
+  if (!validCodexThreadId(id)) return {};
   for (const home of codexHomes(env)) {
     const dbPath = path.join(home, "state_5.sqlite");
     try {
@@ -985,6 +990,107 @@ async function resolveCodexThreadMetadataById(id, env = process.env) {
   return {};
 }
 
+function codexRuntimeMetadataCacheKey(id, env = process.env) {
+  return `${runtimeCacheScope(env)}:${id}`;
+}
+
+function codexThreadIdsFromMetadataTargets(targets = []) {
+  const ids = [];
+  for (const target of Array.isArray(targets) ? targets : []) {
+    const id = validCodexThreadId(typeof target === "string" ? target : codexThreadId(target));
+    if (id) ids.push(id);
+  }
+  return [...new Set(ids)];
+}
+
+async function codexMetadataFromThreadRow({
+  id = "",
+  model = "",
+  reasoningEffort = "",
+  modelProvider = "",
+  tokensUsed = "",
+  rolloutPath = "",
+  home = "",
+} = {}) {
+  const normalizedRolloutPath = rolloutPath && path.isAbsolute(rolloutPath)
+    ? rolloutPath
+    : rolloutPath
+      ? path.resolve(home, rolloutPath)
+      : "";
+  const metadata = { codexThreadId: id };
+  if (model) metadata.codexModel = model;
+  if (reasoningEffort) metadata.codexReasoningEffort = reasoningEffort;
+  if (modelProvider) metadata.codexModelProvider = modelProvider;
+  const parsedTokens = Number(tokensUsed || 0);
+  if (Number.isFinite(parsedTokens) && parsedTokens > 0) metadata.codexTokenUsage = { total_tokens: parsedTokens };
+  if (normalizedRolloutPath) metadata.codexRolloutPath = normalizedRolloutPath;
+  return { ...metadata, ...(await resolveCodexRolloutMetadata(normalizedRolloutPath)) };
+}
+
+export async function resolveCodexThreadMetadataBatch(targets = [], env = process.env) {
+  const ids = codexThreadIdsFromMetadataTargets(targets);
+  const ttlMs = codexRuntimeMetadataCacheTtlMs(env);
+  const nowMs = Date.now();
+  const results = new Map();
+  const missing = [];
+  for (const id of ids) {
+    const cacheKey = codexRuntimeMetadataCacheKey(id, env);
+    const cached = ttlMs > 0 ? codexRuntimeMetadataCache.get(cacheKey) : null;
+    if (cached && cached.expiresAt > nowMs) results.set(id, cached.value);
+    else missing.push(id);
+  }
+
+  let remaining = missing;
+  for (const home of codexHomes(env)) {
+    if (!remaining.length) break;
+    const dbPath = path.join(home, "state_5.sqlite");
+    try {
+      const idList = remaining.map((id) => `'${sqlString(id)}'`).join(",");
+      const query = [
+        "select id, model, reasoning_effort, model_provider, tokens_used, rollout_path",
+        "from threads",
+        `where id in (${idList});`,
+      ].join(" ");
+      const { stdout } = await execFileAsync("sqlite3", ["-readonly", "-separator", "\t", dbPath, query]);
+      const rows = String(stdout || "").split(/\r?\n/).filter((line) => line.length);
+      const resolved = await Promise.all(rows.map(async (row) => {
+        const [id, model, reasoningEffort, modelProvider, tokensUsed, rolloutPath] = row.split("\t");
+        const validId = validCodexThreadId(id);
+        if (!validId) return null;
+        return [validId, await codexMetadataFromThreadRow({
+          id: validId,
+          model,
+          reasoningEffort,
+          modelProvider,
+          tokensUsed,
+          rolloutPath,
+          home,
+        })];
+      }));
+      for (const entry of resolved) {
+        if (!entry) continue;
+        const [id, metadata] = entry;
+        results.set(id, metadata);
+        if (ttlMs > 0) codexRuntimeMetadataCache.set(codexRuntimeMetadataCacheKey(id, env), {
+          value: metadata,
+          expiresAt: Date.now() + ttlMs,
+        });
+      }
+      remaining = remaining.filter((id) => !results.has(id));
+    } catch {
+      // Ignore missing sqlite, stale homes, or older Codex schemas.
+    }
+  }
+  for (const id of remaining) {
+    results.set(id, {});
+    if (ttlMs > 0) codexRuntimeMetadataCache.set(codexRuntimeMetadataCacheKey(id, env), {
+      value: {},
+      expiresAt: Date.now() + ttlMs,
+    });
+  }
+  return results;
+}
+
 export async function resolveCodexThreadMetadata(threadOrId, env = process.env) {
   const thread = threadOrId && typeof threadOrId === "object" ? threadOrId : null;
   const threadId = typeof threadOrId === "string" ? threadOrId : codexThreadId(threadOrId);
@@ -1004,7 +1110,7 @@ async function cachedRuntimeCodexThreadMetadata(threadOrId, env = process.env) {
   if (!id) return {};
   const ttlMs = codexRuntimeMetadataCacheTtlMs(env);
   if (ttlMs <= 0) return resolveCodexThreadMetadata(threadOrId, env);
-  const cacheKey = `${runtimeCacheScope(env)}:${id}`;
+  const cacheKey = codexRuntimeMetadataCacheKey(id, env);
   const cached = codexRuntimeMetadataCache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) return cached.value;
   const value = await resolveCodexThreadMetadata(threadOrId, env);

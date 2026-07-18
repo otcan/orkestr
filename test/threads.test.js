@@ -8,8 +8,9 @@ import { createHash } from "node:crypto";
 import { promisify } from "node:util";
 import { startServer } from "../apps/server/src/server.js";
 import { resetThreadSummaryCachesForTest, threadRuntimeSummary, threadSummaryPayload, threadSummaryRuntimeSnapshot } from "../apps/server/src/thread-summary.ts";
+import { stableSummaryBody, summaryStreamClientBackpressured } from "../apps/server/src/thread-stream-summary.js";
 import { runNextThreadMessage } from "../packages/core/src/executors.js";
-import { applyRuntimeCodexMode, consumeThreadConnectorDeliverySignalCount, deliverPendingThreadInputs, doctorRuntimeResources, drainAllPendingThreadInputs, hardResetThreadRuntime, listRuntimeLeases, recoverStalePendingThreadInputs, resetThreadInputDeliveryTimersForTest, resetThreadRuntime, resolveCodexThreadMetadata, runtimeStatus, setThreadConnectorDeliverySignalHandler, sleepThread, syncRuntimeLeases, syncRuntimeWindowName, takeoverRawTerminalThread, wakeThread } from "../packages/core/src/runtime-leases.js";
+import { applyRuntimeCodexMode, consumeThreadConnectorDeliverySignalCount, deliverPendingThreadInputs, doctorRuntimeResources, drainAllPendingThreadInputs, hardResetThreadRuntime, listRuntimeLeases, recoverStalePendingThreadInputs, resetThreadInputDeliveryTimersForTest, resetThreadRuntime, resolveCodexThreadMetadata, resolveCodexThreadMetadataBatch, runtimeStatus, setThreadConnectorDeliverySignalHandler, sleepThread, syncRuntimeLeases, syncRuntimeWindowName, takeoverRawTerminalThread, wakeThread } from "../packages/core/src/runtime-leases.js";
 import { completeThreadSecurityApproveCommand } from "../packages/core/src/security-thread-command.js";
 import { ensureDataDirs } from "../packages/storage/src/paths.js";
 import { parseThreadInputCommand } from "../packages/core/src/thread-commands.js";
@@ -4640,6 +4641,44 @@ test("thread summary returns stale payload while an expired cache refreshes", as
   }
 });
 
+test("thread summary stream ignores probe timestamps and applies bounded backpressure", () => {
+  const previousMax = process.env.ORKESTR_SUMMARY_STREAM_MAX_BUFFERED_BYTES;
+  process.env.ORKESTR_SUMMARY_STREAM_MAX_BUFFERED_BYTES = "65536";
+  try {
+    const first = stableSummaryBody({
+      threads: [{
+        id: "summary-stream-thread",
+        updatedAt: "2026-07-18T10:00:00.000Z",
+        runtime: {
+          state: "working",
+          operatorRolloutSyncedAt: "2026-07-18T10:00:00.000Z",
+          liveness: { phase: "executing", lastEvidenceAt: "2026-07-18T10:00:00.000Z", updatedAt: "2026-07-18T10:00:00.000Z" },
+          deliveryRecovery: { state: "ready", checkedAt: "2026-07-18T10:00:00.000Z" },
+        },
+      }],
+    });
+    const second = stableSummaryBody({
+      threads: [{
+        id: "summary-stream-thread",
+        updatedAt: "2026-07-18T10:01:00.000Z",
+        runtime: {
+          state: "working",
+          operatorRolloutSyncedAt: "2026-07-18T10:01:00.000Z",
+          liveness: { phase: "executing", lastEvidenceAt: "2026-07-18T10:01:00.000Z", updatedAt: "2026-07-18T10:01:00.000Z" },
+          deliveryRecovery: { state: "ready", checkedAt: "2026-07-18T10:01:00.000Z" },
+        },
+      }],
+    });
+
+    assert.equal(first, second);
+    assert.equal(summaryStreamClientBackpressured({ bufferedAmount: 0, _socket: { writableLength: 65_535 } }), false);
+    assert.equal(summaryStreamClientBackpressured({ bufferedAmount: 65_536, _socket: { writableLength: 0 } }), true);
+    assert.equal(summaryStreamClientBackpressured({ bufferedAmount: 0, _socket: { writableLength: 65_536 } }), true);
+  } finally {
+    restoreEnvValue("ORKESTR_SUMMARY_STREAM_MAX_BUFFERED_BYTES", previousMax);
+  }
+});
+
 test("thread summary skips live git and codex probes for idle threads by default", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-summary-idle-cheap-"));
   const bin = path.join(home, "bin");
@@ -6221,6 +6260,58 @@ test("thread runtime summary reads Codex model and limits from live metadata", a
     else process.env.ORKESTR_HOME = priorHome;
     if (priorCodexHome === undefined) delete process.env.CODEX_HOME;
     else process.env.CODEX_HOME = priorCodexHome;
+  }
+});
+
+test("Codex thread metadata batches active thread lookups into one SQLite process", async (t) => {
+  try {
+    await execFileAsync("sqlite3", ["--version"]);
+  } catch {
+    t.skip("sqlite3 unavailable");
+    return;
+  }
+
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-metadata-batch-"));
+  const codexHome = path.join(home, "codex-home");
+  const bin = path.join(home, "bin");
+  const log = path.join(home, "sqlite.log");
+  const firstId = "11111111-1111-4111-8111-111111111111";
+  const secondId = "22222222-2222-4222-8222-222222222222";
+  await fs.mkdir(codexHome, { recursive: true });
+  await fs.mkdir(bin, { recursive: true });
+  await execFileAsync("/usr/bin/sqlite3", [path.join(codexHome, "state_5.sqlite"), [
+    "create table threads (id text primary key, model text, reasoning_effort text, model_provider text, tokens_used integer, rollout_path text);",
+    `insert into threads values ('${firstId}', 'gpt-first', 'high', 'openai', 10, '');`,
+    `insert into threads values ('${secondId}', 'gpt-second', 'medium', 'openai', 20, '');`,
+  ].join("\n")]);
+  const sqliteWrapper = path.join(bin, "sqlite3");
+  await fs.writeFile(sqliteWrapper, [
+    "#!/usr/bin/env bash",
+    `printf 'call\\n' >> '${log}'`,
+    "exec /usr/bin/sqlite3 \"$@\"",
+    "",
+  ].join("\n"), "utf8");
+  await fs.chmod(sqliteWrapper, 0o755);
+
+  const priorPath = process.env.PATH;
+  const priorCodexHome = process.env.CODEX_HOME;
+  process.env.PATH = `${bin}:${priorPath || ""}`;
+  process.env.CODEX_HOME = codexHome;
+  try {
+    const result = await resolveCodexThreadMetadataBatch([firstId, secondId], {
+      ORKESTR_HOME: path.join(home, "orkestr-home"),
+      CODEX_HOME: codexHome,
+      HOME: home,
+    });
+    const calls = (await fs.readFile(log, "utf8")).trim().split(/\r?\n/).filter(Boolean);
+
+    assert.equal(calls.length, 1);
+    assert.equal(result.get(firstId)?.codexModel, "gpt-first");
+    assert.equal(result.get(secondId)?.codexModel, "gpt-second");
+    assert.equal(result.get(secondId)?.codexTokenUsage?.total_tokens, 20);
+  } finally {
+    restoreEnvValue("PATH", priorPath);
+    restoreEnvValue("CODEX_HOME", priorCodexHome);
   }
 });
 
