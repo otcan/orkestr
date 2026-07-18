@@ -190,6 +190,22 @@ function setConnectorOutboxMeta(db, key, value) {
   `).run(key, value);
 }
 
+function bumpConnectorOutboxRevision(db) {
+  db.prepare(`
+    insert into orkestr_connector_outbox_meta(key, value)
+    values ('store_revision', '1')
+    on conflict(key) do update set value = cast(value as integer) + 1
+  `).run();
+}
+
+export async function connectorOutboxStoreFingerprint(env = process.env) {
+  if (connectorOutboxPostgresMode(env)) return null;
+  const db = await openConnectorOutboxDatabase(env);
+  if (!db) return null;
+  const row = db.prepare("select value from orkestr_connector_outbox_meta where key = 'store_revision'").get();
+  return `sqlite:${Math.max(0, Number(row?.value || 0) || 0)}`;
+}
+
 export function rowToConnectorOutboxJob(row, env = process.env) {
   try {
     const data = typeof row.data === "string" ? JSON.parse(row.data) : row.data;
@@ -272,6 +288,7 @@ function replaceConnectorOutboxRows(db, jobs = [], env = process.env) {
     for (const job of mergeConnectorOutboxJobs(jobs, [], env)) upsertConnectorOutboxJobRow(db, job);
     pruneConnectorOutboxRows(db, env);
     setConnectorOutboxMeta(db, "updated_at", nowIso());
+    bumpConnectorOutboxRevision(db);
     db.exec("commit");
   } catch (error) {
     db.exec("rollback");
@@ -651,6 +668,7 @@ export async function ensureConnectorOutboxJob(input = {}, env = process.env) {
       upsertConnectorOutboxJobRow(db, nextJob);
       pruneConnectorOutboxRows(db, env);
       setConnectorOutboxMeta(db, "updated_at", nowIso());
+      bumpConnectorOutboxRevision(db);
       db.exec("commit");
     } catch (error) {
       db.exec("rollback");
@@ -776,6 +794,7 @@ export async function claimConnectorOutboxJob(jobIdOrKey = "", { claimant = "" }
     try {
       upsertConnectorOutboxJobRow(db, claimed);
       setConnectorOutboxMeta(db, "updated_at", now);
+      bumpConnectorOutboxRevision(db);
       db.exec("commit");
     } catch (error) {
       db.exec("rollback");
@@ -875,6 +894,7 @@ export async function releaseConnectorOutboxClaim(jobIdOrKey = "", { reason = ""
     try {
       upsertConnectorOutboxJobRow(db, released);
       setConnectorOutboxMeta(db, "updated_at", released.updatedAt);
+      bumpConnectorOutboxRevision(db);
       db.exec("commit");
     } catch (error) {
       db.exec("rollback");
@@ -959,6 +979,7 @@ export async function markConnectorOutboxJob(jobIdOrKey = "", patch = {}, env = 
       upsertConnectorOutboxJobRow(db, updated);
       pruneConnectorOutboxRows(db, env);
       setConnectorOutboxMeta(db, "updated_at", updated.updatedAt);
+      bumpConnectorOutboxRevision(db);
       db.exec("commit");
     } catch (error) {
       db.exec("rollback");

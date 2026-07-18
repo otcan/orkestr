@@ -54,6 +54,7 @@ import {
 } from "./whatsapp-inbound-security.js";
 import {
   claimConnectorOutboxJob,
+  connectorOutboxStoreFingerprint,
   connectorOutboxTerminalState,
   connectorOutboxRetryBackoffMs,
   ensureConnectorOutboxJob,
@@ -133,6 +134,7 @@ let whatsappDeliveryIdleCache = null;
 let whatsappDeliveryRunCache = null;
 const whatsappMirrorMessageFileCache = new Map();
 const whatsappMirrorSqliteRevisionCache = new Map();
+const whatsappConnectorOutboxCache = new Map();
 const suppressibleWhatsAppUpdateDeliveryTypes = new Set([
   "delivery_error",
   "mode_queued",
@@ -2183,6 +2185,19 @@ function connectorOutboxJobIntentMatches(job = {}, intent = {}) {
     (!job.deliveryType || pickString(intent.deliveryType) === pickString(job.deliveryType));
 }
 
+async function listCachedWhatsAppConnectorOutboxJobs(env = process.env) {
+  const fingerprint = await connectorOutboxStoreFingerprint(env).catch(() => null);
+  const cacheKey = dataPaths(env).connectorOutboxDb;
+  const cached = fingerprint ? whatsappConnectorOutboxCache.get(cacheKey) : null;
+  if (cached?.fingerprint === fingerprint) return cached.jobs;
+  const jobs = (await listConnectorOutboxJobs({
+    connector: "whatsapp",
+    limit: 1000,
+  }, env).catch(() => ({ jobs: [] }))).jobs || [];
+  if (fingerprint) whatsappConnectorOutboxCache.set(cacheKey, { fingerprint, jobs });
+  return jobs;
+}
+
 function connectorOutboxJobDeliveryMatches(job = {}, delivery = {}, { ignoreTextKey = false } = {}) {
   const jobId = pickString(job.id);
   if (jobId && pickString(delivery.connectorOutboxJobId) === jobId) return true;
@@ -4096,10 +4111,7 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
     };
   }
 
-  const connectorOutboxJobs = (await listConnectorOutboxJobs({
-    connector: "whatsapp",
-    limit: 1000,
-  }, env).catch(() => ({ jobs: [] }))).jobs || [];
+  const connectorOutboxJobs = await listCachedWhatsAppConnectorOutboxJobs(env);
   const outboundEchoDeliveryByAck = outboundEchoDeliveryForEvent(state.outboundDeliveries || [], connectorOutboxJobs, input);
   const outboundEchoDeliveryByText = outboundEchoDeliveryByAck
     ? null
@@ -5601,10 +5613,7 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
   await reconcileWhatsAppConnectorOutboxFromLedger(state, env).catch((error) =>
     appendEvent({ type: "connector_outbox_reconcile_from_whatsapp_delivery_failed", error: error.message || String(error) }, env).catch(() => null)
   );
-  const connectorOutboxJobs = (await listConnectorOutboxJobs({
-    connector: "whatsapp",
-    limit: 1000,
-  }, env).catch(() => ({ jobs: [] }))).jobs || [];
+  const connectorOutboxJobs = await listCachedWhatsAppConnectorOutboxJobs(env);
   const deliveredIds = new Set((state.outboundDeliveries || []).map((delivery) => delivery.messageId));
   const deliveredTextKeys = new Set((state.outboundDeliveries || []).map((delivery) => delivery.textKey).filter(Boolean));
   const batchTextKeys = new Set();

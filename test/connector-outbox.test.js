@@ -8,6 +8,7 @@ import {
   applyConnectorOutboxJobAction,
   claimConnectorOutboxJob,
   connectorOutboxRetentionLimit,
+  connectorOutboxStoreFingerprint,
   connectorOutboxTerminalState,
   ensureConnectorOutboxJob,
   listConnectorOutboxJobs,
@@ -66,6 +67,20 @@ test("connector outbox idempotency is tenant scoped and terminal states block du
   assert.equal(connectorOutboxTerminalState(delivered.state), true);
   assert.equal(terminalClaim.acquired, false);
   assert.equal(terminalClaim.reason, "connector_outbox_delivered");
+});
+
+test("connector outbox SQLite fingerprint advances on durable job changes", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-connector-outbox-fingerprint-"));
+  const runtimeEnv = env(home, { ORKESTR_CONNECTOR_OUTBOX_STORE: "sqlite" });
+  const initial = await connectorOutboxStoreFingerprint(runtimeEnv);
+  const created = await ensureConnectorOutboxJob(whatsappJob({ tenantId: "tenant-a" }), runtimeEnv);
+  const afterCreate = await connectorOutboxStoreFingerprint(runtimeEnv);
+  await markConnectorOutboxJob(created.job.id, { state: "delivered", deliveredAt: new Date().toISOString() }, runtimeEnv);
+  const afterUpdate = await connectorOutboxStoreFingerprint(runtimeEnv);
+
+  assert.equal(initial, "sqlite:0");
+  assert.notEqual(afterCreate, initial);
+  assert.notEqual(afterUpdate, afterCreate);
 });
 
 test("connector outbox idempotency is scoped by source revision and delivery type", async () => {
