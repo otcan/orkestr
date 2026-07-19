@@ -449,12 +449,29 @@ test("connector MCP inbound routing is idempotent and has a finite retry budget"
       throw new Error("target_offline");
     });
     assert.equal(failed.state, "failed_retryable");
+    assert.equal(failed.queued, true);
     const retryable = (await listConnectorInboxEvents({ states: ["failed_retryable"] }, env))[0];
     const terminal = await deliverConnectorInboxEvent(retryable, env, async () => {
       throw new Error("target_still_offline");
     });
     assert.equal(terminal.state, "dead_letter");
     assert.equal(terminal.attemptCount, 2);
+
+    const delayed = await routeWhatsAppInboundFromWorker({ ...payload, eventId: "wa-event-3" }, env, async () => {
+      throw new Error("target_temporarily_offline");
+    });
+    assert.equal(delayed.state, "failed_retryable");
+    assert.equal(delayed.queued, true);
+    const delayedEvent = (await listConnectorInboxEvents({ states: ["failed_retryable"] }, env))
+      .find((event) => event.id === "wa-event-3");
+    const recovered = await deliverConnectorInboxEvent(delayedEvent, env, async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ ok: true, threadId: "thread-recovered", messageId: "message-recovered" }),
+    }));
+    assert.equal(recovered.state, "delivered");
+    assert.equal(recovered.attemptCount, 2);
+    assert.equal(recovered.result.response.threadId, "thread-recovered");
   } finally {
     resetConnectorInboxForTest();
   }

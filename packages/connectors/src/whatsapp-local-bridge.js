@@ -601,6 +601,10 @@ function localWhatsAppWorkerEventSink(env = process.env) {
   return String(env.ORKESTR_WA_WORKER_EVENT_SINK_URL || "").trim();
 }
 
+function dedicatedLocalWhatsAppWorker(env = process.env) {
+  return Boolean(String(env.ORKESTR_WA_WORKER_SOCKET || "").trim());
+}
+
 function localWhatsAppWorkerEventSinkToken(env = process.env) {
   return String(env.ORKESTR_WA_WORKER_EVENT_TOKEN || "").trim();
 }
@@ -826,6 +830,12 @@ function targetInboundFailureCode(payload = {}, status = 0) {
   if ((status === 401 || status === 403) && raw === "browser_pairing_required") return "whatsapp_inbound_token_invalid";
   if (raw === "whatsapp_target_required") return "target_codex_not_configured";
   return raw || `whatsapp_inbound_forward_failed_${status || "unknown"}`;
+}
+
+function connectorMcpQueuedInboundAccepted({ response, payload, targetSource = "" } = {}) {
+  if (targetSource !== "connector_mcp_gateway" || !response?.ok) return false;
+  const state = String(payload?.state || "").trim();
+  return payload?.queued === true && Boolean(String(payload?.eventId || "").trim()) && ["pending", "failed_retryable"].includes(state);
 }
 
 function targetInboundFailureCategory(code = "", status = 0) {
@@ -1149,6 +1159,16 @@ export async function forwardLocalWhatsAppInbound(input = {}, env = process.env,
       }, env).catch(() => {});
     }
     const workerEventSink = localWhatsAppWorkerEventSink(env);
+    if (!workerEventSink && dedicatedLocalWhatsAppWorker(env)) {
+      throw attachRoutingFailure(new Error("whatsapp_worker_event_sink_required"), {
+        code: "whatsapp_worker_event_sink_required",
+        userFacingCategory: "connector",
+        capability: "whatsapp",
+        retryable: true,
+        reason: "whatsapp_worker_event_sink_required",
+        safeMessage: "The dedicated WhatsApp worker has no connector MCP event sink configured.",
+      });
+    }
     tenantRoute = workerEventSink ? null : await tenantWhatsAppInboundForwardRoute(input, env);
     if (!workerEventSink && !tenantRoute) {
       const mismatchRoute = await managedTenantRouteAccountMismatch(input, chatId, env);
@@ -1258,6 +1278,38 @@ export async function forwardLocalWhatsAppInbound(input = {}, env = process.env,
       signal: AbortSignal.timeout(Number(env.WHATSAPP_INBOUND_FORWARD_TIMEOUT_MS || 60_000)),
     });
     const payload = await response.json().catch(() => ({}));
+    if (connectorMcpQueuedInboundAccepted({ response, payload, targetSource })) {
+      await appendEvent({
+        type: "whatsapp_local_inbound_forward_queued",
+        chatId,
+        eventId: String(input.eventId || input.id || input.messageId || ""),
+        target,
+        targetSource,
+        routeMode,
+        status: response.status,
+        connectorEventId: payload.eventId,
+        state: payload.state,
+        attemptCount: payload.attemptCount || 0,
+      }, env).catch(() => {});
+      await rememberInboundForwardLedgerEntry(input, {
+        target,
+        threadId: null,
+        messageId: payload.eventId || null,
+      }, env).catch(() => {});
+      await recordRouterTraceEvent({
+        routerTraceId: trace.routerTraceId,
+        turnId: trace.turnId,
+        connector: "whatsapp",
+        accountId: trace.accountId,
+        chatId,
+        sourceEventId: trace.eventId,
+        messageId: payload.eventId || "",
+        phase: "queued",
+        reason: "connector_mcp_retry_queued",
+        ownerProcess: targetSource,
+      }, env).catch(() => null);
+      return { forwarded: true, queued: true, target, targetSource, routeMode, payload };
+    }
     if (!response.ok || payload?.ok === false) {
       const code = targetInboundFailureCode(payload, response.status);
       const safeMessage = targetInboundFailureSafeMessage(code, response.status);
@@ -3488,6 +3540,7 @@ function inboundRoutingFailureShouldNotify(error) {
   const reason = String(error?.message || error || "").trim();
   const failure = routingFailureFromError(error, { reason });
   if (reason === "whatsapp_target_required" || failure.code === "whatsapp_target_required") return false;
+  if (reason === "whatsapp_worker_event_sink_required" || failure.code === "whatsapp_worker_event_sink_required") return false;
   if (reason === "message_text_required" || failure.code === "message_text_required") return false;
   return true;
 }

@@ -2184,6 +2184,126 @@ test("local whatsapp inbound forwarding posts mapped chats", async () => {
   assert.equal(calls[0].body.chatId, "chat-forward@g.us");
 });
 
+test("dedicated whatsapp worker accepts durable MCP retry queue without a failure notice", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-worker-queued-"));
+  const chatId = "chat-worker-queued@g.us";
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "sender",
+    ORKESTR_WHATSAPP_SEND_CONFIRMATION_REQUIRED: "0",
+    ORKESTR_WA_WORKER_SOCKET: "/run/orkestr-wa/sender.sock",
+    ORKESTR_WA_WORKER_EVENT_SINK_URL: "http://127.0.0.1:18914/internal/whatsapp/inbound",
+    ORKESTR_WA_WORKER_EVENT_TOKEN: "worker-event-token",
+  };
+  const sent = [];
+  let fetchCalls = 0;
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (_url, options) => {
+    fetchCalls += 1;
+    assert.equal(options.headers.authorization, "Bearer worker-event-token");
+    return response({
+      ok: false,
+      queued: true,
+      state: "failed_retryable",
+      eventId: "connector-event-queued-1",
+      attemptCount: 1,
+      error: "target_temporarily_unavailable",
+    }, true, 202);
+  };
+  const message = {
+    id: { _serialized: `false_${chatId}_worker-queued-1`, remote: chatId },
+    fromMe: false,
+    from: chatId,
+    author: "491700000001@c.us",
+    body: "Why did you not answer?",
+    timestamp: 1_780_000_000,
+  };
+
+  try {
+    const queued = await handleInboundMessage("sender", message, env, {
+      client: {
+        async sendMessage(to, body) {
+          sent.push({ to, body });
+          return { id: { _serialized: `true_${chatId}_unexpected-notice` } };
+        },
+      },
+    });
+    const duplicate = await handleInboundMessage("sender", message, env, {
+      client: {
+        async sendMessage(to, body) {
+          sent.push({ to, body });
+          return { id: { _serialized: `true_${chatId}_unexpected-duplicate-notice` } };
+        },
+      },
+    });
+
+    assert.equal(queued.forwarded, true);
+    assert.equal(queued.routed.queued, true);
+    assert.equal(queued.routed.state, "failed_retryable");
+    assert.equal(duplicate.forwarded, true);
+    assert.equal(duplicate.routed.duplicate, true);
+    assert.equal(fetchCalls, 1);
+    assert.deepEqual(sent, []);
+    const events = await listEvents(env);
+    assert.equal(events.some((event) => event.type === "whatsapp_local_inbound_forward_queued"), true);
+    assert.equal(events.some((event) => event.type === "whatsapp_local_inbound_failure_notice_delivered"), false);
+  } finally {
+    globalThis.fetch = originalFetch;
+    await resetLocalWhatsAppBridgeForTest(env);
+  }
+});
+
+test("dedicated whatsapp worker never falls back to local routing without its MCP event sink", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-worker-no-sink-"));
+  const chatId = "chat-worker-no-sink@g.us";
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "sender",
+    ORKESTR_WHATSAPP_SEND_CONFIRMATION_REQUIRED: "0",
+    ORKESTR_WA_WORKER_SOCKET: "/run/orkestr-wa/sender.sock",
+  };
+  await createThread({
+    id: "worker-no-sink-thread",
+    name: "Worker no sink",
+    binding: {
+      connector: "whatsapp",
+      chatId,
+      enabled: true,
+      responderAccountId: "sender",
+      outboundAccountId: "sender",
+      allowOtherPeople: true,
+    },
+  }, env);
+  const sent = [];
+
+  try {
+    const result = await handleInboundMessage("sender", {
+      id: { _serialized: `false_${chatId}_worker-no-sink-1`, remote: chatId },
+      fromMe: false,
+      from: chatId,
+      author: "491700000001@c.us",
+      body: "route only through MCP",
+      timestamp: 1_780_000_000,
+    }, env, {
+      client: {
+        async sendMessage(to, body) {
+          sent.push({ to, body });
+          return { id: { _serialized: `true_${chatId}_unexpected-notice` } };
+        },
+      },
+    });
+
+    assert.equal(result.error, "whatsapp_worker_event_sink_required");
+    assert.equal(result.routingFailure.code, "whatsapp_worker_event_sink_required");
+    assert.equal(result.routingFailure.retryable, true);
+    assert.equal(result.noticeSent, false);
+    assert.deepEqual(sent, []);
+    assert.deepEqual(await listThreadMessages("worker-no-sink-thread", env), []);
+  } finally {
+    await resetLocalWhatsAppBridgeForTest(env);
+  }
+});
+
 test("local whatsapp forwarded security approval sends visible confirmation", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-forward-approval-notice-"));
   const chatId = "491700000000@c.us";
