@@ -43,10 +43,15 @@ Use the `orkestr-de-public` Google Cloud project.
 - App name: `Orkestr`
 - User support email: the support mailbox for `orkestr.de`
 - Authorized domain: `orkestr.de`
-- Application home page: `https://connect.orkestr.de/`
-- Privacy policy: `https://connect.orkestr.de/privacy`
-- Terms of service: `https://connect.orkestr.de/terms`
-- Support page: `https://connect.orkestr.de/support`
+- Application home page: `https://orkestr.de/`
+- Privacy policy: `https://orkestr.de/privacy`
+- Terms of service: `https://orkestr.de/terms`
+- Support page: `https://orkestr.de/support`
+
+The public homepage must be accessible without login and must visibly identify
+the submitted app as `Orkestr`. It should explain that Orkestr is an
+invite-only assistant app and self-hosted agent workstation, and should state
+why Google Workspace/Gmail permissions are requested.
 
 The authorized redirect URI must exactly match the runtime callback base. For
 the public connector entrypoint, register:
@@ -84,6 +89,8 @@ limited to files selected or created through Orkestr by `drive.file`.
 Use generic demo data only.
 
 - Show the WhatsApp `/connect google` command and the one-time link reply.
+- Briefly show the public `https://orkestr.de/` homepage with the app name,
+  purpose, and privacy/terms links.
 - Show the capability disclosure page before Google OAuth.
 - Select Gmail send only for the first public verification demo, then complete
   Google OAuth.

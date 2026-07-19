@@ -57,8 +57,13 @@ function assertAngularShell(html) {
 }
 
 function assertPublicShell(html) {
+  assert.match(html, /<title>Orkestr<\/title>/);
   assert.match(html, /<h1>Orkestr<\/h1>/);
   assert.match(html, /Invite-only private beta/);
+  assert.match(html, /Orkestr is an invite-only assistant app and self-hosted agent workstation/);
+  assert.match(html, /Gmail access is optional and user approved/);
+  assert.match(html, /Gmail send access is used to send emails that the user requests or approves from Orkestr/);
+  assert.match(html, /No Google user data used for advertising or model training/);
   assert.match(html, /Join waitlist/);
   assert.match(html, /id="waitlist-form"/);
   assert.match(html, /\/api\/public\/waitlist/);
