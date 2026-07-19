@@ -5,6 +5,7 @@ import { resolveBrokerConnectInstance } from "../../../packages/core/src/broker-
 import { securityCookieName, verifySecurityToken } from "../../../packages/core/src/security.js";
 import { resolveSharedAppShare } from "../../../packages/core/src/shared-apps.js";
 import { instanceSetupPairingRedirectPath, normalizeInstanceId } from "./instance-connect-setup.js";
+import { renderOAuthHomepage } from "./oauth-homepage.js";
 import { publicPairingUrl, publicSiteAllowedForHost, publicSitePath, renderPublicSite, renderPublicSiteCss } from "./public-site.js";
 
 const publicDir = path.resolve(process.cwd(), "dist/web/browser");
@@ -57,6 +58,13 @@ export function registerStaticFallback(app: INestApplication): void {
       return servePublicAsset(url, response);
     }
     const publicPath = new URL(url || "/", "http://localhost").pathname;
+    if (publicPath === "/about" && publicSiteAllowedForHost(requestHostHeader(request), process.env)) {
+      return response
+        .status(200)
+        .header("cache-control", "no-store")
+        .type("text/html; charset=utf-8")
+        .send(renderOAuthHomepage());
+    }
     if (publicPath === "/public-site.css" && publicSiteAllowedForHost(requestHostHeader(request), process.env)) {
       return response
         .status(200)

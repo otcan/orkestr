@@ -131,6 +131,8 @@ test("server serves the public site at root and Angular UI at app routes", async
     const termsHtml = await termsResponse.text();
     const privacyResponse = await fetch(`http://127.0.0.1:${port}/privacy`);
     const privacyHtml = await privacyResponse.text();
+    const aboutResponse = await fetch(`http://127.0.0.1:${port}/about`);
+    const aboutHtml = await aboutResponse.text();
     const acceptableUseResponse = await fetch(`http://127.0.0.1:${port}/acceptable-use`);
     const dataDeletionResponse = await fetch(`http://127.0.0.1:${port}/data-deletion`);
     const supportResponse = await fetch(`http://127.0.0.1:${port}/support`);
@@ -172,6 +174,15 @@ test("server serves the public site at root and Angular UI at app routes", async
     assert.match(termsHtml, /Only connect accounts you own or are authorized to use/);
     assert.equal(privacyResponse.status, 200);
     assert.match(privacyHtml, /Parent connector apps can provide OAuth entry points/);
+    assert.equal(aboutResponse.status, 200);
+    assert.match(aboutHtml, /<title>Orkestr<\/title>/);
+    assert.match(aboutHtml, /<h1>Orkestr<\/h1>/);
+    assert.match(aboutHtml, /What Orkestr does/);
+    assert.match(aboutHtml, /How Orkestr uses Google data/);
+    assert.match(aboutHtml, /Gmail draft and send access/);
+    assert.match(aboutHtml, /Google Calendar access/);
+    assert.match(aboutHtml, /href="\/privacy">Privacy Policy/);
+    assert.doesNotMatch(aboutHtml, /<script/);
     assert.equal(acceptableUseResponse.status, 200);
     assert.equal(dataDeletionResponse.status, 200);
     assert.equal(supportResponse.status, 200);
