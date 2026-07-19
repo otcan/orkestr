@@ -189,6 +189,12 @@ export function panePromptReady(text) {
   return lines.some(panePromptLine) || paneIdleSkillsHintReady(lines);
 }
 
+export function panePromptHasDraft(text) {
+  const lines = normalizedLines(text).map((line) => line.trim()).slice(-8);
+  const prompt = lines.findLast(panePromptLine) || "";
+  return /^(?:›|>)\s*\S/.test(prompt);
+}
+
 function paneIdleSkillsHintReady(lines = []) {
   const hintIndex = lines.findLastIndex((line) => /^(?:›|>)\s*Use\s+\/skills\s+to\s+list\s+available\s+skills\b/i.test(line));
   if (hintIndex < 0) return false;

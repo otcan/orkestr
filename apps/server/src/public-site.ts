@@ -1,5 +1,4 @@
 import { renderWaitlistSection, waitlistCss } from "./public-waitlist.js";
-
 type PublicPage = {
   title: string;
   eyebrow?: string;

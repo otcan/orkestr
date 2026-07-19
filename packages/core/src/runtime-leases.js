@@ -11,7 +11,7 @@ import { ensureRuntimeAgentsFile } from "./agent-context.js";
 import { recordCodexRuntimeAuthInvalidSignal } from "./codex-auth-health.js";
 import { deployDrainActiveSync } from "./deploy-drain.js";
 import { assertCodexAuthenticated } from "../../connectors/src/codex.js";
-import { clearPaneProgressCache, paneBackgroundWork, publicPaneProgress, samplePaneProgress } from "./pane-progress.js";
+import { clearPaneProgressCache, paneBackgroundWork, panePromptHasDraft, publicPaneProgress, samplePaneProgress } from "./pane-progress.js";
 import {
   appendThreadMessage,
   getThreadMessage,
@@ -799,6 +799,7 @@ export async function runtimeStatus(threadId, env = process.env, messagesOverrid
   const staleWorkingPrompt = progressSample?.staleWorkingPrompt === true;
   const staleTypingGraceMs = positiveDurationMs(env.ORKESTR_PANE_STALE_TYPING_GRACE_MS, 15_000, 0);
   const changingWorkingPrompt = staleWorkingPrompt && staleTypingGraceMs > 0 &&
+    panePromptHasDraft(paneText) &&
     Number(progressSample?.stableForMs || 0) < staleTypingGraceMs;
   const foregroundWorking = !frozen && paneWorking(paneText) && !backgroundWork &&
     (!staleWorkingPrompt || changingWorkingPrompt);

@@ -7,6 +7,7 @@ import {
   cachedPaneProgress,
   clearPaneProgressCache,
   codexModeFromPaneText,
+  panePromptHasDraft,
   paneProgressFromText,
   samplePaneProgress,
 } from "../packages/core/src/pane-progress.js";
@@ -80,6 +81,11 @@ test("pane progress classifies a ready prompt", () => {
   assert.equal(progress.stateHint, "ready");
   assert.equal(progress.summary, "Ready");
   assert.equal(progress.promptReady, true);
+});
+
+test("pane prompt draft detection distinguishes empty and populated prompts", () => {
+  assert.equal(panePromptHasDraft("All done.\n› \n  gpt-5.5 xhigh · /workspace"), false);
+  assert.equal(panePromptHasDraft("Working\n› Write tests\n  gpt-5.5 xhigh · /workspace"), true);
 });
 
 test("pane progress classifies idle Codex skills hint with status footer as ready", () => {

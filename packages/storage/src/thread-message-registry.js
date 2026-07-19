@@ -2,21 +2,17 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { dataPaths, ensureDataDirs } from "./paths.js";
 import { readJson } from "./store.js";
-
 const dbCache = new Map();
 const migratedThreads = new Map();
 let sqliteModulePromise = null;
-
 function safeThreadId(threadId) {
   return String(threadId || "").replace(/[^a-zA-Z0-9_.-]/g, "_") || "default";
 }
-
 function sqliteThreadMessageStore(env = process.env) {
   const explicit = String(env.ORKESTR_THREAD_MESSAGE_STORE || "").trim().toLowerCase();
   if (explicit) return explicit === "sqlite";
   return String(env.ORKESTR_THREAD_STORE || "").trim().toLowerCase() === "sqlite";
 }
-
 async function loadSqlite() {
   try {
     sqliteModulePromise ||= import("node:sqlite");
