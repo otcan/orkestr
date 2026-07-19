@@ -258,7 +258,7 @@ function renderLegalPage(pageId: string, env = process.env) {
         sections: [
           ["What may be processed", "Chat messages, files you upload or create, timers, connector status, OAuth grants, managed desktop state, and task outputs may be processed for your requested workflows."],
           ["Connector accounts", "Parent connector apps can provide OAuth entry points, but the account grants belong to the user who connects them."],
-          ["Google Workspace API data", "Orkestr's use and transfer of information received from Google Workspace APIs adheres to the Google API Services User Data Policy, including the Limited Use requirements."],
+          ["Google Workspace API data", "Orkestr's use and transfer of information received from Google Workspace APIs adheres to the Google API Services User Data Policy, including the Limited Use requirements. Google Workspace data is used only to provide user-requested connector features, is not sold, is not used for advertising, is not used to train general AI models, and is not transferred except as needed to operate requested workflows, maintain security, or comply with law."],
           ["Isolation goal", "External users should receive user-scoped resources and should not see admin chats, private overlays, secrets, or other users' data."],
           ["Deletion and export", "Use the deletion and export instructions to ask the operator to pause, export, or remove your beta data."],
         ],

@@ -118,8 +118,10 @@ stored in that user's scoped Orkestr data directory.
 
 For WhatsApp-bound users, the preferred flow is `/connect google` in chat. That
 creates a one-time link where the user chooses the exact capabilities to grant:
-Gmail read, Gmail actions, Gmail send/drafts, Calendar read, Calendar actions,
-and Drive selected files. See [Google Workspace OAuth verification prep](google-workspace-oauth-verification.md).
+Gmail send, Gmail read, Gmail actions, Gmail drafts, Calendar read, Calendar
+actions, and Drive selected files. New connections default to Gmail send only;
+restricted Gmail read, action, and draft scopes must be selected explicitly. See
+[Google Workspace OAuth verification prep](google-workspace-oauth-verification.md).
 
 The rule is simple: account state stays local. Orkestr can coordinate the agent
 with those accounts, but the public OSS repo must not ship tokens, cookies,
