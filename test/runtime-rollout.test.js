@@ -6,9 +6,71 @@ import test from "node:test";
 import {
   consumeThreadConnectorDeliverySignalCount,
   setThreadConnectorDeliverySignalHandler,
+  syncActiveRuntimeRolloutMessages,
   syncRuntimeLeases,
 } from "../packages/core/src/runtime-leases.js";
+import { dataPaths, ensureDataDirs } from "../packages/storage/src/paths.js";
 import { appendThreadMessage, createThread, getThread, listThreadMessages } from "../packages/core/src/threads.js";
+
+test("active runtime rollout sync projects final answers without waiting for the full runtime doctor", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-active-rollout-fast-path-"));
+  const rolloutPath = path.join(home, "rollout.jsonl");
+  const env = { ORKESTR_HOME: path.join(home, "orkestr") };
+  await ensureDataDirs(env);
+  await createThread({
+    id: "active-rollout-fast-thread",
+    name: "Active Rollout Fast Thread",
+    state: "working",
+    binding: {
+      connector: "whatsapp",
+      chatId: "chat-fast-rollout",
+      responderAccountId: "sender",
+      outboundAccountId: "sender",
+    },
+  }, env);
+  const parent = await appendThreadMessage("active-rollout-fast-thread", {
+    role: "user",
+    source: "whatsapp_inbound",
+    connector: "whatsapp",
+    chatId: "chat-fast-rollout",
+    accountId: "sender",
+    text: "Finish quickly",
+    timestamp: "2026-07-19T15:00:00.000Z",
+    state: "completed",
+    deliveryState: "delivered",
+  }, env);
+  await fs.writeFile(rolloutPath, JSON.stringify({
+    timestamp: "2026-07-19T15:00:01.000Z",
+    type: "response_item",
+    payload: {
+      type: "message",
+      role: "assistant",
+      phase: "final_answer",
+      content: [{ type: "output_text", text: "Fast final reply" }],
+    },
+  }) + "\n", "utf8");
+  await fs.writeFile(dataPaths(env).runtimeLeases, JSON.stringify([{
+    id: "active-rollout-fast-lease",
+    threadId: "active-rollout-fast-thread",
+    sessionName: "active-rollout-fast-session",
+    rolloutPath,
+    rolloutOffset: 0,
+    startedAt: "2026-07-19T15:00:00.000Z",
+  }]), "utf8");
+  consumeThreadConnectorDeliverySignalCount();
+
+  const first = await syncActiveRuntimeRolloutMessages(env);
+  const second = await syncActiveRuntimeRolloutMessages(env);
+  const messages = await listThreadMessages("active-rollout-fast-thread", env);
+  const reply = messages.find((message) => message.text === "Fast final reply");
+
+  assert.equal(first.appended, 1);
+  assert.equal(second.appended, 0);
+  assert.equal(reply?.parentMessageId, parent.id);
+  assert.equal(reply?.phase, "final_answer");
+  assert.equal(reply?.connector, "whatsapp");
+  assert.equal(consumeThreadConnectorDeliverySignalCount(), 1);
+});
 
 test("detached app-server WhatsApp threads project direct Codex rollout replies", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-detached-rollout-"));

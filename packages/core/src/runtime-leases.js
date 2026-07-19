@@ -70,6 +70,8 @@ const execFileAsync = promisify(execFile);
 const deliveryLocks = new Set();
 const deliveryTimers = new Map();
 let runtimeSyncInFlight = null;
+const rolloutSyncInFlight = new Map();
+const rolloutSyncLeaseCache = new Map();
 let threadInputDeliveryFailureHandler = null;
 const automaticRuntimeDoctorCache = new Map();
 const passiveTmuxSessionCache = new Map();
@@ -4239,6 +4241,60 @@ async function syncLeaseRollout(lease, env = process.env) {
   };
 }
 
+function rolloutSyncKey(lease = {}, env = process.env) {
+  return `${runtimeCacheScope(env)}:${String(lease.id || lease.threadId || lease.sessionName || "").trim()}`;
+}
+
+function cachedRolloutLease(lease = {}, env = process.env) {
+  const cached = rolloutSyncLeaseCache.get(rolloutSyncKey(lease, env));
+  if (!cached) return lease;
+  const cachedPath = String(cached.rolloutPath || "").trim();
+  const leasePath = String(lease.rolloutPath || "").trim();
+  if (cachedPath && leasePath && cachedPath !== leasePath) return lease;
+  if (Number(cached.rolloutOffset || 0) <= Number(lease.rolloutOffset || 0)) return lease;
+  return {
+    ...lease,
+    rolloutPath: cachedPath || leasePath,
+    rolloutOffset: cached.rolloutOffset,
+    rolloutOffsetLookbackApplied: cached.rolloutOffsetLookbackApplied,
+    rolloutOffsetLookbackBytes: cached.rolloutOffsetLookbackBytes,
+    rolloutLookbackScannedAt: cached.rolloutLookbackScannedAt,
+    rolloutLookbackScannedFrom: cached.rolloutLookbackScannedFrom,
+  };
+}
+
+async function syncLeaseRolloutExclusive(lease, env = process.env) {
+  const key = rolloutSyncKey(lease, env);
+  if (rolloutSyncInFlight.has(key)) return rolloutSyncInFlight.get(key);
+  const task = syncLeaseRollout(cachedRolloutLease(lease, env), env)
+    .then((result) => {
+      if (result?.lease) rolloutSyncLeaseCache.set(key, result.lease);
+      return result;
+    })
+    .finally(() => rolloutSyncInFlight.delete(key));
+  rolloutSyncInFlight.set(key, task);
+  return task;
+}
+
+async function syncActiveRuntimeRolloutMessagesFromLeases(leases = [], env = process.env) {
+  const active = leases.filter((lease) => !lease.endedAt);
+  const activeKeys = new Set(active.map((lease) => rolloutSyncKey(lease, env)));
+  for (const key of rolloutSyncLeaseCache.keys()) {
+    if (key.startsWith(`${runtimeCacheScope(env)}:`) && !activeKeys.has(key)) rolloutSyncLeaseCache.delete(key);
+  }
+  const results = await Promise.all(active.map((lease) =>
+    syncLeaseRolloutExclusive(lease, env).catch(() => ({ lease, appended: 0 }))
+  ));
+  return {
+    checked: results.length,
+    appended: results.reduce((total, result) => total + (Number(result?.appended || 0) || 0), 0),
+  };
+}
+
+export async function syncActiveRuntimeRolloutMessages(env = process.env) {
+  return syncActiveRuntimeRolloutMessagesFromLeases(await listRuntimeLeases(env), env);
+}
+
 async function syncDetachedCodexRollouts(activeLeaseThreadIds = new Set(), env = process.env) {
   const threads = await listThreads(env);
   let appended = 0;
@@ -4395,7 +4451,7 @@ async function syncRuntimeLeasesOnce(env = process.env) {
       changed = true;
       continue;
     }
-    const synced = await syncLeaseRollout(lease, env).catch(() => ({ lease, appended: 0 }));
+    const synced = await syncLeaseRolloutExclusive(lease, env).catch(() => ({ lease, appended: 0 }));
     let leaseForStorage = synced.lease;
     appended += synced.appended || 0;
     const thread = await getThread(lease.threadId, env).catch(() => null);
@@ -4464,6 +4520,7 @@ async function syncRuntimeLeasesOnce(env = process.env) {
 
 export async function syncPaneProgressForActiveLeases(env = process.env) {
   const leases = await listRuntimeLeases(env);
+  const rollout = await syncActiveRuntimeRolloutMessagesFromLeases(leases, env).catch(() => ({ checked: 0, appended: 0 }));
   let sampled = 0;
   let changed = 0;
   for (const lease of leases) {
@@ -4504,7 +4561,7 @@ export async function syncPaneProgressForActiveLeases(env = process.env) {
       },
     }, env).catch(() => {});
   }
-  return { sampled, changed };
+  return { sampled, changed, rolloutChecked: rollout.checked, rolloutAppended: rollout.appended };
 }
 
 function tmuxSessionAgeMs(session = {}) {
