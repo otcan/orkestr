@@ -546,7 +546,7 @@ async function gmailRawMessage(args = {}) {
 }
 
 export async function createGmailDraft(args = {}, env = process.env, fetchImpl = fetch, options = {}) {
-  const accessToken = await accessTokenWithCapability("gmail_send", env, fetchImpl, options);
+  const accessToken = await accessTokenWithCapability("gmail_drafts", env, fetchImpl, options);
   const draft = await jsonApiRequest(`${gmailApiBase}/drafts`, {
     method: "POST",
     body: { message: { raw: await gmailRawMessage(args) } },
@@ -559,7 +559,7 @@ export async function createGmailDraft(args = {}, env = process.env, fetchImpl =
 export async function sendGmailDraft(args = {}, env = process.env, fetchImpl = fetch, options = {}) {
   const draftId = clean(args.draftId || args.id);
   if (!draftId) throw connectorError("gmail_draft_id_required", 400);
-  const accessToken = await accessTokenWithCapability("gmail_send", env, fetchImpl, options);
+  const accessToken = await accessTokenWithCapability("gmail_drafts", env, fetchImpl, options);
   const sent = await jsonApiRequest(`${gmailApiBase}/drafts/send`, {
     method: "POST",
     body: { id: draftId },

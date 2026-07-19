@@ -19,12 +19,15 @@ const capabilityDefinitions = [
   },
   {
     id: "gmail_send",
-    label: "Gmail send and drafts",
-    summary: "Create drafts and send user-approved Gmail messages.",
-    scopes: [
-      "https://www.googleapis.com/auth/gmail.send",
-      "https://www.googleapis.com/auth/gmail.compose",
-    ],
+    label: "Gmail send",
+    summary: "Send user-approved Gmail messages.",
+    scopes: ["https://www.googleapis.com/auth/gmail.send"],
+  },
+  {
+    id: "gmail_drafts",
+    label: "Gmail drafts",
+    summary: "Create and send user-approved Gmail drafts.",
+    scopes: ["https://www.googleapis.com/auth/gmail.compose"],
   },
   {
     id: "calendar_read",
@@ -46,7 +49,7 @@ const capabilityDefinitions = [
   },
 ];
 
-const defaultGmailCapabilities = ["gmail_read", "gmail_actions", "gmail_send"];
+const defaultGmailCapabilities = ["gmail_send"];
 const definitionById = new Map(capabilityDefinitions.map((definition) => [definition.id, definition]));
 
 function clean(value) {
@@ -79,7 +82,7 @@ export function googleWorkspaceDefaultGmailCapabilities() {
   return [...defaultGmailCapabilities];
 }
 
-export function normalizeGoogleWorkspaceCapabilities(input = [], fallback = ["gmail_read"]) {
+export function normalizeGoogleWorkspaceCapabilities(input = [], fallback = defaultGmailCapabilities) {
   const values = Array.isArray(input)
     ? input
     : clean(input).split(/[\s,]+/g);

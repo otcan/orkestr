@@ -97,10 +97,10 @@ async function storeToken(env, scope, principal = null) {
 }
 
 test("google workspace scope selection maps only requested capabilities", () => {
-  const capabilities = normalizeGoogleWorkspaceCapabilities(["gmail_send", "calendar_read", "calendar_actions", "drive_file"]);
+  const capabilities = normalizeGoogleWorkspaceCapabilities(["gmail_send", "gmail_drafts", "calendar_read", "calendar_actions", "drive_file"]);
   const scopes = googleWorkspaceScopesForCapabilities(capabilities);
 
-  assert.deepEqual(capabilities, ["gmail_send", "calendar_read", "calendar_actions", "drive_file"]);
+  assert.deepEqual(capabilities, ["gmail_send", "gmail_drafts", "calendar_read", "calendar_actions", "drive_file"]);
   assert.ok(scopes.includes("openid"));
   assert.ok(scopes.includes("https://www.googleapis.com/auth/gmail.send"));
   assert.ok(scopes.includes("https://www.googleapis.com/auth/gmail.compose"));
@@ -158,7 +158,7 @@ test("whatsapp google connect link starts user-scoped oauth with selected scopes
   assert.equal(scopes.includes("https://www.googleapis.com/auth/drive.file"), false);
 });
 
-test("google workspace oauth defaults to full Gmail access", async () => {
+test("google workspace oauth defaults to Gmail send access", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-google-workspace-default-gmail-"));
   const env = await configureGoogle(home);
   const alice = userPrincipal({ id: "alice" });
@@ -169,12 +169,12 @@ test("google workspace oauth defaults to full Gmail access", async () => {
   const savedState = JSON.parse(await fs.readFile(statePath, "utf8"));
   const scopes = new URL(started.authorizeUrl).searchParams.get("scope").split(/\s+/g);
 
-  assert.deepEqual(started.capabilities, ["gmail_read", "gmail_actions", "gmail_send"]);
-  assert.deepEqual(savedState.requestedCapabilities, ["gmail_read", "gmail_actions", "gmail_send"]);
-  assert.ok(scopes.includes("https://www.googleapis.com/auth/gmail.readonly"));
-  assert.ok(scopes.includes("https://www.googleapis.com/auth/gmail.modify"));
+  assert.deepEqual(started.capabilities, ["gmail_send"]);
+  assert.deepEqual(savedState.requestedCapabilities, ["gmail_send"]);
+  assert.equal(scopes.includes("https://www.googleapis.com/auth/gmail.readonly"), false);
+  assert.equal(scopes.includes("https://www.googleapis.com/auth/gmail.modify"), false);
   assert.ok(scopes.includes("https://www.googleapis.com/auth/gmail.send"));
-  assert.ok(scopes.includes("https://www.googleapis.com/auth/gmail.compose"));
+  assert.equal(scopes.includes("https://www.googleapis.com/auth/gmail.compose"), false);
 });
 
 test("brokered google workspace oauth provisions the Gmail grant to the tenant VM", async () => {
@@ -402,7 +402,7 @@ test("google workspace callback stores only granted partial capabilities", async
   const link = await createGoogleWorkspaceConnectLink({ principal: alice, thread: { id: "thread-1" } }, env);
   const started = await startGoogleWorkspaceOAuth(env, {
     connectId: link.connectId,
-    capabilities: ["gmail_read", "gmail_actions", "gmail_send", "calendar_read", "calendar_actions", "drive_file"],
+    capabilities: ["gmail_read", "gmail_actions", "gmail_send", "gmail_drafts", "calendar_read", "calendar_actions", "drive_file"],
   });
 
   const result = await finishGmailOAuth(
@@ -438,7 +438,6 @@ test("gmail action and draft helpers build scoped Gmail requests", async () => {
     env,
     [
       "https://www.googleapis.com/auth/gmail.modify",
-      "https://www.googleapis.com/auth/gmail.send",
       "https://www.googleapis.com/auth/gmail.compose",
     ].join(" "),
   );
@@ -555,7 +554,7 @@ test("calendar and drive helpers build scoped google workspace requests", async 
   assert.equal(file.content, "Drive file contents");
 });
 
-test("google workspace connect html shows MCP context without duplicate account or scope controls", () => {
+test("google workspace connect html shows MCP context and capability controls", () => {
   const html = googleWorkspaceConnectHtml({
     connectId: "connect-1",
     request: { account: "user@example.com", brokerInstanceId: "instance-firat", userId: "firat", threadName: "firat-jobs" },
@@ -570,9 +569,13 @@ test("google workspace connect html shows MCP context without duplicate account 
   assert.match(html, /firat-jobs/);
   assert.doesNotMatch(html, /name="account"/);
   assert.doesNotMatch(html, /type="email"/);
-  assert.doesNotMatch(html, /name="capability"/);
-  assert.doesNotMatch(html, /Gmail read/);
-  assert.doesNotMatch(html, /Drive selected files/);
+  assert.match(html, /name="capability"/);
+  assert.match(html, /Gmail send/);
+  assert.match(html, /Gmail drafts/);
+  assert.match(html, /Gmail read/);
+  assert.match(html, /Drive selected files/);
+  assert.match(html, /value="gmail_send" checked/);
+  assert.doesNotMatch(html, /value="gmail_read" checked/);
 });
 
 test("google workspace preview html does not expose the OAuth start form", () => {

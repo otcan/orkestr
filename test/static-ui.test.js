@@ -762,7 +762,7 @@ test("broker instance app path pairs on broker and proxies the VM WebUI", async 
     assert.equal(intentStartResponse.status, 200);
     assert.equal(intentStartPayload.provider, "google_workspace");
     assert.ok(intentStartPayload.connectId);
-    assert.deepEqual(intentStartPayload.capabilities, ["gmail_read", "gmail_actions", "gmail_send"]);
+    assert.deepEqual(intentStartPayload.capabilities, ["gmail_send"]);
     const intentAuthorizeUrl = new URL(intentStartPayload.authorizeUrl);
     const intentScopes = String(intentAuthorizeUrl.searchParams.get("scope") || "").split(/\s+/g);
     assert.equal(intentAuthorizeUrl.origin, "https://accounts.google.com");
@@ -772,10 +772,10 @@ test("broker instance app path pairs on broker and proxies the VM WebUI", async 
     assert.equal(intentSavedState.state, intentStartPayload.state);
     assert.equal(intentSavedState.tenantVmId, "");
     assert.equal(intentSavedState.brokerTenantVmId, "firat-jobs-vm");
-    assert.ok(intentScopes.includes("https://www.googleapis.com/auth/gmail.readonly"));
-    assert.ok(intentScopes.includes("https://www.googleapis.com/auth/gmail.modify"));
+    assert.equal(intentScopes.includes("https://www.googleapis.com/auth/gmail.readonly"), false);
+    assert.equal(intentScopes.includes("https://www.googleapis.com/auth/gmail.modify"), false);
     assert.ok(intentScopes.includes("https://www.googleapis.com/auth/gmail.send"));
-    assert.ok(intentScopes.includes("https://www.googleapis.com/auth/gmail.compose"));
+    assert.equal(intentScopes.includes("https://www.googleapis.com/auth/gmail.compose"), false);
     assert.equal(intentDisconnectResponse.status, 200);
     assert.equal(intentDisconnectPayload.provider, "gmail");
     assert.equal(intentThreadsResponse.status, 403);

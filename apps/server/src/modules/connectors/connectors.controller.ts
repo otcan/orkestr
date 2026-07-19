@@ -1176,6 +1176,11 @@ export class GoogleWorkspaceConnectController {
       ? query.capability
       : String(query.capability || "").split(/[\s,]+/g).filter(Boolean);
     try {
+      if (String(query.capabilities_selected || "") === "1" && capabilities.length === 0) {
+        const error: any = new Error("Select at least one Google Workspace capability.");
+        error.statusCode = 400;
+        throw error;
+      }
       const connectId = String(query.connect || "");
       const payload = await getGoogleWorkspaceConnectRequest(connectId, process.env);
       if (googleWorkspaceConnectRequestExists(payload) && !(await googleWorkspaceConnectAccess(request, payload, response))) return;

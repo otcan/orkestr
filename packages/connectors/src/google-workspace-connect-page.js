@@ -1,3 +1,9 @@
+import {
+  googleWorkspaceCapabilityDefinitions,
+  googleWorkspaceDefaultGmailCapabilities,
+  normalizeGoogleWorkspaceCapabilities,
+} from "./google-workspace-scopes.js";
+
 function clean(value) {
   return String(value || "").trim();
 }
@@ -11,7 +17,39 @@ function escapeHtml(value = "") {
     .replace(/'/g, "&#39;");
 }
 
-export function googleWorkspaceConnectHtml({ connectId = "", request = {}, error = "", previewOnly = false } = {}) {
+const restrictedCapabilities = new Set(["gmail_read", "gmail_actions", "gmail_drafts"]);
+const sensitiveCapabilities = new Set(["gmail_send", "calendar_read", "calendar_actions"]);
+
+function capabilityRisk(id = "") {
+  if (restrictedCapabilities.has(id)) return "Restricted";
+  if (sensitiveCapabilities.has(id)) return "Sensitive";
+  return "Limited";
+}
+
+function capabilityControls(selectedCapabilities = googleWorkspaceDefaultGmailCapabilities()) {
+  const selected = new Set(normalizeGoogleWorkspaceCapabilities(selectedCapabilities, googleWorkspaceDefaultGmailCapabilities()));
+  return googleWorkspaceCapabilityDefinitions()
+    .map((definition) => {
+      const checked = selected.has(definition.id) ? " checked" : "";
+      return `<label class="capability">
+          <input type="checkbox" name="capability" value="${escapeHtml(definition.id)}"${checked}>
+          <span>
+            <strong>${escapeHtml(definition.label)}</strong>
+            <small>${escapeHtml(definition.summary)}</small>
+            <em>${escapeHtml(capabilityRisk(definition.id))}</em>
+          </span>
+        </label>`;
+    })
+    .join("");
+}
+
+export function googleWorkspaceConnectHtml({
+  connectId = "",
+  request = {},
+  error = "",
+  previewOnly = false,
+  selectedCapabilities = googleWorkspaceDefaultGmailCapabilities(),
+} = {}) {
   const safeConnect = escapeHtml(connectId);
   const hidden = `<input type="hidden" name="connect" value="${safeConnect}">`;
   const contextRows = [
@@ -32,6 +70,12 @@ export function googleWorkspaceConnectHtml({ connectId = "", request = {}, error
       ? `<p class="notice">Open this link in a browser to approve this Gmail connection. Link previews cannot start authorization.</p>`
     : `<form method="get" action="/connect/google/start">
         ${hidden}
+        <input type="hidden" name="capabilities_selected" value="1">
+        <fieldset>
+          <legend>Google access</legend>
+          <p class="notice">Orkestr starts narrow. Gmail read, Gmail actions, and Gmail drafts request restricted Google scopes and should be enabled only when needed.</p>
+          <div class="capabilities">${capabilityControls(selectedCapabilities)}</div>
+        </fieldset>
         <button type="submit">Continue to Google</button>
       </form>`;
   return `<!doctype html>
@@ -51,6 +95,14 @@ export function googleWorkspaceConnectHtml({ connectId = "", request = {}, error
     .context dd { margin: 4px 0 0; overflow-wrap: anywhere; }
     .notice { color: #3f4d59; background: #e8f1ee; border: 1px solid #c6ded3; border-radius: 8px; padding: 12px; }
     .error { color: #842029; background: #f8d7da; border: 1px solid #f1aeb5; border-radius: 8px; padding: 12px; }
+    fieldset { border: 1px solid #d3d8dc; border-radius: 8px; background: white; margin: 18px 0; padding: 14px; }
+    legend { color: #172026; font-weight: 800; padding: 0 6px; }
+    .capabilities { display: grid; gap: 8px; margin: 12px 0 0; }
+    .capability { display: grid; grid-template-columns: 20px 1fr; gap: 10px; align-items: start; border: 1px solid #e1e5e8; border-radius: 8px; padding: 10px; cursor: pointer; }
+    .capability input { margin-top: 3px; }
+    .capability span { display: grid; gap: 4px; }
+    .capability small { color: #52606d; line-height: 1.35; }
+    .capability em { color: #495057; font-size: 12px; font-style: normal; font-weight: 800; text-transform: uppercase; }
     button { appearance: none; border: 0; border-radius: 6px; padding: 12px 16px; background: #14532d; color: white; font-weight: 700; cursor: pointer; }
   </style>
 </head>

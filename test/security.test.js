@@ -851,7 +851,7 @@ test("tenant CLI setup status uses instance connector scope", async () => {
       refreshToken: "refresh-token",
       account: "oguzcanunver@gmail.com",
       email: "oguzcanunver@gmail.com",
-      capabilities: ["gmail_read", "gmail_actions", "gmail_send"],
+      capabilities: ["gmail_read", "gmail_actions", "gmail_send", "gmail_drafts"],
       grantedScopes: [
         "openid",
         "https://www.googleapis.com/auth/userinfo.email",
@@ -886,7 +886,7 @@ test("tenant CLI setup status uses instance connector scope", async () => {
     assert.equal(gmail.state, "connected");
     assert.equal(gmail.details.account, "oguzcanunver@gmail.com");
     assert.notEqual(gmail.details.overlay, true);
-    assert.deepEqual(gmail.details.capabilities, ["gmail_read", "gmail_actions", "gmail_send"]);
+    assert.deepEqual(gmail.details.capabilities, ["gmail_read", "gmail_actions", "gmail_send", "gmail_drafts"]);
 
     const oauth = await json(await fetch(`http://127.0.0.1:${port}/api/connectors/gmail/oauth/start`, {
       headers: { authorization: "Bearer cli-secret" },
