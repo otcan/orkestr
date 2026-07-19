@@ -60,7 +60,9 @@ function assertPublicShell(html) {
   assert.match(html, /<title>Orkestr<\/title>/);
   assert.match(html, /<h1>Orkestr<\/h1>/);
   assert.match(html, /Invite-only private beta/);
-  assert.match(html, /Orkestr is an invite-only assistant app and self-hosted agent workstation/);
+  assert.match(html, /Orkestr is an invite-only assistant application/);
+  assert.match(html, /name="application-name" content="Orkestr"/);
+  assert.match(html, /property="og:site_name" content="Orkestr"/);
   assert.match(html, /Gmail access is optional and user approved/);
   assert.match(html, /Gmail send access is used to send emails that the user requests or approves from Orkestr/);
   assert.match(html, /No Google user data used for advertising or model training/);
@@ -131,6 +133,8 @@ test("server serves the public site at root and Angular UI at app routes", async
     const supportResponse = await fetch(`http://127.0.0.1:${port}/support`);
     const betaResponse = await fetch(`http://127.0.0.1:${port}/beta`);
     const publicAssetResponse = await fetch(`http://127.0.0.1:${port}/public-assets/orkestr-three-screen-demo.png`);
+    const robotsResponse = await fetch(`http://127.0.0.1:${port}/robots.txt`);
+    const robots = await robotsResponse.text();
     const onboardingResponse = await fetch(`http://127.0.0.1:${port}/setup`);
     const onboardingHtml = await onboardingResponse.text();
     const setupGmailResponse = await fetch(`http://127.0.0.1:${port}/setup/gmail`);
@@ -169,6 +173,9 @@ test("server serves the public site at root and Angular UI at app routes", async
     assert.equal(betaResponse.status, 200);
     assert.equal(publicAssetResponse.status, 200);
     assert.match(publicAssetResponse.headers.get("content-type") || "", /image\/png/);
+    assert.equal(robotsResponse.status, 200);
+    assert.match(robotsResponse.headers.get("content-type") || "", /text\/plain/);
+    assert.equal(robots, "User-agent: *\nAllow: /\n");
     assert.equal(onboardingResponse.status, 200);
     assertAngularShell(onboardingHtml);
     assert.equal(setupGmailResponse.status, 200);

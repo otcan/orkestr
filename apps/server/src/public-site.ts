@@ -115,7 +115,7 @@ function shell(page: PublicPage, env = process.env) {
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>${title}</title>
-  <meta name="description" content="${escapeHtml(page.summary)}">
+  <meta name="description" content="${escapeHtml(page.summary)}"><meta name="application-name" content="Orkestr"><meta property="og:site_name" content="Orkestr"><meta property="og:title" content="${title}"><meta property="og:description" content="${escapeHtml(page.summary)}">${pageTitle === "Orkestr" && publicSiteBaseUrl(env) ? `<link rel="canonical" href="${escapeHtml(new URL("/", publicSiteBaseUrl(env)).toString())}">` : ""}
   <link rel="icon" type="image/svg+xml" href="/favicon.svg">
   <style>${publicCss()}</style>
 </head>
@@ -151,7 +151,7 @@ function renderHome(env = process.env) {
   const contact = publicContact(env);
   return shell({
     title: "Orkestr",
-    summary: "Orkestr is an invite-only assistant app and self-hosted agent workstation for persistent AI chats, WhatsApp, managed desktops, timers, files, and user-owned connectors such as Gmail.",
+    summary: "Orkestr is an invite-only assistant application. It lets users run persistent AI chats, work through WhatsApp, manage files and timers, operate private browser desktops, and connect user-approved services such as Gmail.",
     heading: "Orkestr",
     body: `<main>
   <section class="hero">
@@ -159,7 +159,7 @@ function renderHome(env = process.env) {
     <div class="hero-copy">
       <p class="eyebrow">Invite-only private beta</p>
       <h1>Orkestr</h1>
-      <p class="lead">Orkestr is an invite-only assistant app and self-hosted agent workstation for persistent AI chats, WhatsApp, managed desktops, timers, files, and user-owned connectors such as Gmail.</p>
+      <p class="lead">Orkestr is an invite-only assistant application. It lets users run persistent AI chats, work through WhatsApp, manage files and timers, operate private browser desktops, and connect user-approved services such as Gmail.</p>
       <div class="actions">
         <a class="button" href="#waitlist">Join waitlist</a>
         <a class="button secondary" href="${escapeHtml(repo)}" rel="noreferrer">View OSS repo</a>

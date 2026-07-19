@@ -56,6 +56,13 @@ export function registerStaticFallback(app: INestApplication): void {
     if (url.startsWith("/public-assets/")) {
       return servePublicAsset(url, response);
     }
+    if (new URL(url || "/", "http://localhost").pathname === "/robots.txt" && publicSiteAllowedForHost(requestHostHeader(request), process.env)) {
+      return response
+        .status(200)
+        .header("cache-control", "public, max-age=300")
+        .type("text/plain; charset=utf-8")
+        .send("User-agent: *\nAllow: /\n");
+    }
     const privatePublicRedirect = await privatePublicPathRedirectUrl(request, url, process.env);
     if (privatePublicRedirect) {
       return response
