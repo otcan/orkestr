@@ -118,11 +118,9 @@ export function shouldSteerStaleActiveTurn(thread, clientState, turn, env = proc
 
 export function activeTurnRecoveryPending(thread, clientState, turn, env = process.env) {
   return Boolean(
+    staleDynamicExecMs(env) &&
     activeTurnMatchesDeliveredTurn(thread, clientState, turn) &&
     !pendingApprovalState(thread, clientState) &&
-    (
-      (staleDynamicExecMs(env) && steeredUserWaiting(turn)) ||
-      startupSilenceMs(env)
-    )
+    steeredUserWaiting(turn)
   );
 }
