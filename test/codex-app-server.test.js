@@ -2070,7 +2070,7 @@ test("Codex app-server recovery syncs completed history before stale notice", as
   }
 });
 
-test("Codex app-server recovery preserves long active turns without autonomous steering", async () => {
+test("Codex app-server recovery preserves productive long active turns without autonomous steering", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-active-steer-"));
   const fake = await createFakeCodex(home);
   const staleAt = new Date(Date.now() - 2 * 60 * 60_000).toISOString();
@@ -2097,6 +2097,12 @@ test("Codex app-server recovery preserves long active turns without autonomous s
         state: "working",
         activeTurnId,
         codexStatus: { type: "active", activeFlags: ["running"] },
+        liveness: {
+          turnId: activeTurnId,
+          startedAt: staleAt,
+          lastSemanticEvidenceAt: staleAt,
+          lastSemanticEvidenceType: "tool_started",
+        },
       },
     }, env);
     await appendThreadMessage(started.thread.id, {
@@ -2160,7 +2166,7 @@ test("Codex app-server recovery preserves long active turns without autonomous s
   }
 });
 
-test("Codex app-server recovery never interrupts a live active turn because of elapsed time", async () => {
+test("Codex app-server recovery interrupts a live turn that never produced semantic evidence", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-live-active-timeout-"));
   const fake = await createFakeCodex(home);
   const staleAt = new Date(Date.now() - 2 * 60 * 60_000).toISOString();
@@ -2170,6 +2176,7 @@ test("Codex app-server recovery never interrupts a live active turn because of e
     PATH: `${fake.bin}${path.delimiter}${process.env.PATH || ""}`,
     FAKE_CODEX_STATE: fake.stateFile,
     ORKESTR_CODEX_APP_SERVER_STALE_ACTIVE_TURN_MS: "1",
+    ORKESTR_CODEX_APP_SERVER_STARTUP_SILENCE_MS: "30000",
     ORKESTR_CODEX_APP_SERVER_STALE_FINAL_GRACE_MS: "0",
     ORKESTR_CODEX_APP_SERVER_STALE_RECOVERY_SCAN_CACHE_MS: "0",
   };
@@ -2231,15 +2238,13 @@ test("Codex app-server recovery never interrupts a live active turn because of e
     const updated = await getThread(started.thread.id, env);
     const finalState = JSON.parse(await fs.readFile(fake.stateFile, "utf8"));
 
-    assert.equal(result.recovered, 0);
-    assert.equal(result.appended, 0);
-    assert.equal(notice, undefined);
-    assert.equal(updated.state, "working");
-    assert.equal(updated.runtime.state, "working");
-    assert.equal(updated.runtime.activeTurnId, activeTurnId);
-    assert.equal(updated.runtime.codexStatus.type, "active");
-    assert.equal(client.threadStates.get(codexId)?.activeTurnId, activeTurnId);
-    assert.equal(finalState.calls.some((call) => call.method === "turn/interrupt"), false);
+    assert.equal(result.recovered, 1);
+    assert.equal(result.appended, 1);
+    assert.match(notice?.text || "", /Codex response timed out/);
+    assert.equal(updated.state, "ready");
+    assert.equal(updated.runtime.state, "ready");
+    assert.equal(updated.runtime.activeTurnId, null);
+    assert.equal(finalState.calls.some((call) => call.method === "turn/interrupt" && call.params?.turnId === activeTurnId), true);
 
   } finally {
     stopCodexAppServerClients();
@@ -2328,7 +2333,7 @@ test("Codex app-server recovery interrupts an abandoned exec callback when a ste
   }
 });
 
-test("Codex app-server recovery preserves every live active turn regardless of age", async () => {
+test("Codex app-server recovery preserves productive live active turns regardless of age", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-multi-active-timeout-"));
   const fake = await createFakeCodex(home);
   const staleAt = new Date(Date.now() - 2 * 60 * 60_000).toISOString();
@@ -2353,6 +2358,12 @@ test("Codex app-server recovery preserves every live active turn regardless of a
         state: "working",
         activeTurnId: "second-live-active-turn",
         codexStatus: { type: "active", activeFlags: ["running"] },
+        liveness: {
+          turnId: "second-live-active-turn",
+          startedAt: staleAt,
+          lastSemanticEvidenceAt: staleAt,
+          lastSemanticEvidenceType: "model_output",
+        },
       },
     }, env);
     await appendThreadMessage(started.thread.id, {

@@ -5,6 +5,7 @@ import {
   activeTurnRecoveryPending,
   shouldRecoverStaleActiveTurn,
   staleDynamicExecCall,
+  staleStartupSilence,
 } from "../packages/core/src/codex-app-server-active-turn-recovery.js";
 import {
   activeDynamicToolCallFromCodexThread,
@@ -123,4 +124,48 @@ test("active-turn recovery preserves long turns without an abandoned exec callba
   assert.equal(shouldRecoverStaleActiveTurn(freshTool.thread, freshTool.clientState, freshTool.turn, env), false);
   assert.equal(shouldRecoverStaleActiveTurn(noSteer.thread, noSteer.clientState, noSteer.turn, env), false);
   assert.equal(shouldRecoverStaleActiveTurn(approval.thread, approval.clientState, approval.turn, env), false);
+});
+
+test("active-turn recovery distinguishes startup silence from unlimited productive work", () => {
+  const staleAt = new Date(Date.now() - 31_000).toISOString();
+  const env = {
+    ORKESTR_CODEX_APP_SERVER_STALE_DYNAMIC_EXEC_MS: "30000",
+    ORKESTR_CODEX_APP_SERVER_STARTUP_SILENCE_MS: "30000",
+  };
+  const silent = activeContext({
+    thread: {
+      runtime: {
+        state: "working",
+        activeTurnId: "turn-active",
+        liveness: {
+          turnId: "turn-active",
+          startedAt: staleAt,
+          lastSemanticEvidenceAt: null,
+        },
+      },
+    },
+    clientState: { activeDynamicToolCall: null },
+    latestUser: { createdAt: staleAt, deliveredAt: staleAt, steerActiveTurn: false },
+  });
+  const productive = activeContext({
+    thread: {
+      runtime: {
+        state: "working",
+        activeTurnId: "turn-active",
+        liveness: {
+          turnId: "turn-active",
+          startedAt: staleAt,
+          lastSemanticEvidenceAt: staleAt,
+          lastSemanticEvidenceType: "tool_started",
+        },
+      },
+    },
+    clientState: { activeDynamicToolCall: null },
+    latestUser: { createdAt: staleAt, deliveredAt: staleAt, steerActiveTurn: false },
+  });
+
+  assert.equal(staleStartupSilence(silent.thread, silent.clientState, silent.turn, env), true);
+  assert.equal(shouldRecoverStaleActiveTurn(silent.thread, silent.clientState, silent.turn, env), true);
+  assert.equal(staleStartupSilence(productive.thread, productive.clientState, productive.turn, env), false);
+  assert.equal(shouldRecoverStaleActiveTurn(productive.thread, productive.clientState, productive.turn, env), false);
 });

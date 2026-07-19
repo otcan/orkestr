@@ -69,6 +69,42 @@ test("runtime liveness requires two failed probes and resets failures on evidenc
   assert.equal(stale.reason, "stale_runtime_generation");
 });
 
+test("runtime probes do not overwrite semantic liveness evidence", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-runtime-semantic-liveness-"));
+  const env = { ORKESTR_HOME: home };
+  await createThread({
+    id: "runtime-semantic-liveness-thread",
+    name: "Runtime Semantic Liveness Thread",
+    runtimeKind: "codex-app-server",
+    codexThreadId: "codex-semantic-generation",
+    executor: { type: "codex", transport: "app-server", codexThreadId: "codex-semantic-generation" },
+    runtime: { runtimeKind: "codex-app-server", state: "working", activeTurnId: "semantic-turn" },
+  }, env);
+
+  const started = await recordRuntimeLiveness("runtime-semantic-liveness-thread", {
+    runtimeGeneration: "codex-semantic-generation",
+    turnId: "semantic-turn",
+    evidenceType: "model_started",
+  }, env);
+  const output = await recordRuntimeLiveness("runtime-semantic-liveness-thread", {
+    runtimeGeneration: "codex-semantic-generation",
+    turnId: "semantic-turn",
+    evidenceType: "model_output",
+  }, env);
+  const probe = await recordRuntimeLiveness("runtime-semantic-liveness-thread", {
+    runtimeGeneration: "codex-semantic-generation",
+    turnId: "semantic-turn",
+    evidenceType: "runtime_probe",
+  }, env);
+
+  assert.equal(started.liveness.lastSemanticEvidenceAt, null);
+  assert.equal(output.liveness.lastSemanticEvidenceType, "model_output");
+  assert.equal(probe.liveness.lastSemanticEvidenceAt, output.liveness.lastSemanticEvidenceAt);
+  assert.equal(probe.liveness.lastSemanticEvidenceType, "model_output");
+  assert.equal(probe.liveness.lastEvidenceType, "runtime_probe");
+  assert.notEqual(probe.liveness.lastProbeAt, null);
+});
+
 test("runtime checkpoints are scoped, bounded, and survive completion", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-runtime-checkpoint-"));
   const env = { ORKESTR_HOME: home };

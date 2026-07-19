@@ -16,6 +16,11 @@ const EVIDENCE_TYPES = new Set([
   "runtime_probe",
 ]);
 
+const TRANSPORT_ONLY_EVIDENCE_TYPES = new Set([
+  "model_started",
+  "runtime_probe",
+]);
+
 function clean(value) {
   return String(value || "").trim();
 }
@@ -85,6 +90,8 @@ export async function recordRuntimeLiveness(threadId, input = {}, env = process.
   }
   const executionId = clean(input.executionId || turnId || current.executionId || generation);
   const sameExecution = Boolean(current.executionId && executionId && current.executionId === executionId && clean(current.runtimeGeneration) === generation);
+  const semanticEvidence = !TRANSPORT_ONLY_EVIDENCE_TYPES.has(evidenceType);
+  const runtimeProbe = evidenceType === "runtime_probe";
   const liveness = {
     ...current,
     executionId: executionId || null,
@@ -93,12 +100,29 @@ export async function recordRuntimeLiveness(threadId, input = {}, env = process.
     startedAt: sameExecution ? current.startedAt || at : clean(input.startedAt) || at,
     lastEvidenceAt: at,
     lastEvidenceType: evidenceType,
+    lastSemanticEvidenceAt: semanticEvidence
+      ? at
+      : sameExecution
+        ? current.lastSemanticEvidenceAt || null
+        : null,
+    lastSemanticEvidenceType: semanticEvidence
+      ? evidenceType
+      : sameExecution
+        ? current.lastSemanticEvidenceType || null
+        : null,
+    lastProbeAt: runtimeProbe
+      ? at
+      : sameExecution
+        ? current.lastProbeAt || null
+        : null,
     phase: clean(input.phase) || current.phase || "executing",
     summary: clean(input.summary).slice(0, 1000) || current.summary || "",
     counters: boundedObject(input.counters, 4096) || current.counters || null,
     consecutiveProbeFailures: 0,
     lastProbeFailureAt: null,
     lastProbeFailureReason: null,
+    completedAt: sameExecution ? current.completedAt : undefined,
+    completionStatus: sameExecution ? current.completionStatus : undefined,
     updatedAt: at,
   };
   const updated = await updateThread(thread.id, {
