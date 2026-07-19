@@ -425,6 +425,14 @@ test("google workspace brokered connect links require instance and owner scoped 
     assert.match(pairedHtml, /orkestr_auth/);
     assert.match(pairedHtml, /google_workspace/);
 
+    const oauthCallbackResponse = await fetch(
+      `http://127.0.0.1:${port}/oauth/gmail/callback?state=missing-state&code=fake-code`,
+      { headers: { cookie }, redirect: "manual" },
+    );
+    const oauthCallbackBody = await oauthCallbackResponse.text();
+    assert.notEqual(oauthCallbackResponse.status, 403);
+    assert.doesNotMatch(oauthCallbackBody, /auth_intent_session_scope_denied/);
+
     const waRepairResponse = await fetch(`http://127.0.0.1:${port}/api/connectors/whatsapp/bridge/repair?accountId=sender`, { headers: { cookie } });
     const waRepairHtml = await waRepairResponse.text();
     assert.equal(waRepairResponse.status, 200);
