@@ -108,7 +108,8 @@ export function renderPublicSite(requestUrl = "/", env = process.env, options: {
 
 function shell(page: PublicPage, env = process.env) {
   const repo = publicRepoUrl(env);
-  const title = escapeHtml(page.title ? `${page.title} | Orkestr` : "Orkestr");
+  const pageTitle = clean(page.title || "");
+  const title = escapeHtml(!pageTitle || pageTitle === "Orkestr" ? "Orkestr" : `${pageTitle} | Orkestr`);
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -150,8 +151,8 @@ function renderHome(env = process.env) {
   const repo = publicRepoUrl(env);
   const contact = publicContact(env);
   return shell({
-    title: "Invite-only agent workstation",
-    summary: "Orkestr is a self-hosted agent workstation for persistent AI chats, WhatsApp, desktops, timers, files, and user-owned connectors.",
+    title: "Orkestr",
+    summary: "Orkestr is an invite-only assistant app and self-hosted agent workstation for persistent AI chats, WhatsApp, managed desktops, timers, files, and user-owned connectors such as Gmail.",
     heading: "Orkestr",
     body: `<main>
   <section class="hero">
@@ -159,7 +160,7 @@ function renderHome(env = process.env) {
     <div class="hero-copy">
       <p class="eyebrow">Invite-only private beta</p>
       <h1>Orkestr</h1>
-      <p class="lead">A self-hosted agent workstation for persistent AI chats, WhatsApp, managed desktops, timers, files, and user-owned connectors.</p>
+      <p class="lead">Orkestr is an invite-only assistant app and self-hosted agent workstation for persistent AI chats, WhatsApp, managed desktops, timers, files, and user-owned connectors such as Gmail.</p>
       <div class="actions">
         <a class="button" href="#waitlist">Join waitlist</a>
         <a class="button secondary" href="${escapeHtml(repo)}" rel="noreferrer">View OSS repo</a>
@@ -172,7 +173,7 @@ function renderHome(env = process.env) {
     <div>
       <p class="eyebrow">How it works</p>
       <h2 id="how-title">You use chat. Orkestr keeps the workspace alive.</h2>
-      <p>Invited users start in WhatsApp, connect only the accounts they choose, and use an isolated workspace, files area, timers, and managed desktop.</p>
+      <p>Orkestr lets invited users ask an AI agent to work from a private chat while Orkestr keeps the underlying workspace, browser desktop, timers, files, and connector state organized. Users start in WhatsApp or the Orkestr web cockpit, connect only the accounts they choose, and can pause or disconnect those accounts.</p>
     </div>
     <ol class="flow">
       <li><strong>Get invited.</strong><span>Your inviter sends the beta terms and creates your private chat.</span></li>
@@ -196,11 +197,26 @@ function renderHome(env = process.env) {
       <li>Export, deletion, pause, and support paths</li>
     </ul>
   </section>
+  <section class="band google-use" aria-labelledby="google-title">
+    <div>
+      <p class="eyebrow">Google Workspace</p>
+      <h2 id="google-title">Gmail access is optional and user approved.</h2>
+      <p>Orkestr asks for Google permissions only when a user starts the Google connection flow and selects a capability. Gmail send access is used to send emails that the user requests or approves from Orkestr. Gmail read, draft, and mailbox-modification permissions are separate optional capabilities when enabled by the deployment.</p>
+    </div>
+    <ul class="feature-list">
+      <li>Show the Google consent screen before access</li>
+      <li>Connect a Gmail account to a specific Orkestr user</li>
+      <li>Send user-approved emails from that Gmail account</li>
+      <li>Disconnect Google access from Orkestr setup</li>
+      <li>No sale of Google user data</li>
+      <li>No Google user data used for advertising or model training</li>
+    </ul>
+  </section>
   <section class="band trust" aria-labelledby="trust-title">
     <div>
       <p class="eyebrow">Trust model</p>
       <h2 id="trust-title">You stay in control of what gets connected.</h2>
-      <p>The public repo contains generic product code. Real deployments keep secrets, browser profiles, WhatsApp sessions, and private overlays outside the OSS repository.</p>
+      <p>The public repo contains generic product code. Real deployments keep secrets, browser profiles, WhatsApp sessions, OAuth tokens, and private overlays outside the OSS repository. Orkestr uses connected-account data only to provide the user-requested workflow.</p>
     </div>
     <div class="links">
       <a href="/privacy">Privacy</a>

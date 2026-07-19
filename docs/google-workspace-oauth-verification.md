@@ -41,6 +41,8 @@ limited to files selected or created through Orkestr by `drive.file`.
 Use generic demo data only.
 
 - Show the WhatsApp `/connect google` command and the one-time link reply.
+- Briefly show the public `https://orkestr.de/` homepage with the app name,
+  purpose, and privacy/terms links.
 - Show the capability disclosure page before Google OAuth.
 - Select a narrow set of capabilities, then complete Google OAuth.
 - Show the WhatsApp confirmation listing enabled capabilities.
