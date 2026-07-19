@@ -5,7 +5,7 @@ import { resolveBrokerConnectInstance } from "../../../packages/core/src/broker-
 import { securityCookieName, verifySecurityToken } from "../../../packages/core/src/security.js";
 import { resolveSharedAppShare } from "../../../packages/core/src/shared-apps.js";
 import { instanceSetupPairingRedirectPath, normalizeInstanceId } from "./instance-connect-setup.js";
-import { publicPairingUrl, publicSiteAllowedForHost, publicSitePath, renderPublicSite } from "./public-site.js";
+import { publicPairingUrl, publicSiteAllowedForHost, publicSitePath, renderPublicSite, renderPublicSiteCss } from "./public-site.js";
 
 const publicDir = path.resolve(process.cwd(), "dist/web/browser");
 const publicAssetDir = path.resolve(process.cwd(), "docs/assets");
@@ -56,7 +56,15 @@ export function registerStaticFallback(app: INestApplication): void {
     if (url.startsWith("/public-assets/")) {
       return servePublicAsset(url, response);
     }
-    if (new URL(url || "/", "http://localhost").pathname === "/robots.txt" && publicSiteAllowedForHost(requestHostHeader(request), process.env)) {
+    const publicPath = new URL(url || "/", "http://localhost").pathname;
+    if (publicPath === "/public-site.css" && publicSiteAllowedForHost(requestHostHeader(request), process.env)) {
+      return response
+        .status(200)
+        .header("cache-control", "public, max-age=300")
+        .type("text/css; charset=utf-8")
+        .send(renderPublicSiteCss());
+    }
+    if (publicPath === "/robots.txt" && publicSiteAllowedForHost(requestHostHeader(request), process.env)) {
       return response
         .status(200)
         .header("cache-control", "public, max-age=300")

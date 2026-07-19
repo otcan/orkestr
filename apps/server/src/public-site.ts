@@ -117,7 +117,7 @@ function shell(page: PublicPage, env = process.env) {
   <title>${title}</title>
   <meta name="description" content="${escapeHtml(page.summary)}"><meta name="application-name" content="Orkestr"><meta property="og:site_name" content="Orkestr"><meta property="og:title" content="${title}"><meta property="og:description" content="${escapeHtml(page.summary)}">${pageTitle === "Orkestr" && publicSiteBaseUrl(env) ? `<link rel="canonical" href="${escapeHtml(new URL("/", publicSiteBaseUrl(env)).toString())}">` : ""}
   <link rel="icon" type="image/svg+xml" href="/favicon.svg">
-  <style>${publicCss()}</style>
+  <link rel="stylesheet" href="/public-site.css">
 </head>
 <body>
   <header class="topbar">
@@ -159,7 +159,7 @@ function renderHome(env = process.env) {
     <div class="hero-copy">
       <p class="eyebrow">Invite-only private beta</p>
       <h1>Orkestr</h1>
-      <p class="lead">Orkestr is an invite-only assistant application. It lets users run persistent AI chats, work through WhatsApp, manage files and timers, operate private browser desktops, and connect user-approved services such as Gmail.</p>
+      <p><strong>Purpose of the Orkestr app:</strong> help invited users operate a private AI assistant for persistent chats, WhatsApp workflows, files, timers, browser desktops, and user-approved connectors.</p><p class="lead">Orkestr is an invite-only assistant application. It lets users run persistent AI chats, work through WhatsApp, manage files and timers, operate private browser desktops, and connect user-approved services such as Gmail.</p>
       <div class="actions">
         <a class="button" href="#waitlist">Join waitlist</a>
         <a class="button secondary" href="${escapeHtml(repo)}" rel="noreferrer">View OSS repo</a>
@@ -353,7 +353,7 @@ function legalBody({
 </main>`;
 }
 
-function publicCss() {
+export function renderPublicSiteCss() {
   return `
 :root {
   color-scheme: light;
