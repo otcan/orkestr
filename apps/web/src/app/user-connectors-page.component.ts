@@ -187,6 +187,7 @@ export class UserConnectorsPageComponent implements OnDestroy, OnInit {
         accountId: this.routeQueryParam("account_id"),
         alias: this.routeQueryParam("alias"),
         useMode: this.routeQueryParam("use_mode"),
+        oauthApp: this.routeQueryParam("oauth_app"),
         setAsMain: this.routeBooleanQueryParam("set_as_main"),
         setAsThreadDefault: this.routeBooleanQueryParam("set_as_thread_default"),
         threadId: this.connectorIntentThreadId(),

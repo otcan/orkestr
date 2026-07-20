@@ -197,7 +197,7 @@ test("connector MCP exposes the canonical tools and scoped account status", asyn
       action: "status",
       account_id: "sender",
     }, item.env);
-    assert.equal(status.contract_version, "1.2");
+    assert.equal(status.contract_version, "1.3");
     assert.equal(status.status, "ok");
     assert.equal(status.data.accounts[0].accountId, "sender");
   } finally {
@@ -471,6 +471,48 @@ test("attended Gmail approval cannot be reused with different account policy", a
       use_mode: "explicit_only",
       set_as_main: true,
       set_as_thread_default: false,
+      approval: pending.challenge.approve_code,
+    }, item.env);
+    assert.equal(altered.ok, false);
+    assert.match(JSON.stringify(altered), /pairing_challenge_intent_scope_denied/);
+  } finally {
+    await item.close();
+  }
+});
+
+test("attended Gmail OAuth app selection cannot fall back to the default profile", async () => {
+  const item = await fixture();
+  Object.assign(item.env, {
+    GMAIL_OAUTH_CLIENT_ID: "production-client",
+    GMAIL_OAUTH_CLIENT_SECRET: "production-secret",
+    GMAIL_OAUTH_REDIRECT_URI: "https://connect.orkestr.test/oauth/gmail/callback",
+    ORKESTR_GOOGLE_OAUTH_DEFAULT_APP: "orkestr-de",
+    ORKESTR_GOOGLE_OAUTH_APPS_JSON: JSON.stringify({
+      "otcan-claw": {
+        clientId: "testing-client",
+        clientSecret: "testing-secret",
+        approvedTesters: ["can@mayamilk.com"],
+      },
+    }),
+  });
+  try {
+    const pending = await callConnectorsMcpTool("orkestr_auth", {
+      service: "gmail",
+      action: "connect",
+      user_id: "admin",
+      account_hint: "can@mayamilk.com",
+      oauth_app: "otcan-claw",
+      use_mode: "explicit_only",
+    }, item.env);
+    assert.equal(pending.status, "approval_required");
+    await approvePairingChallenge(pending.challenge.approve_code, { env: item.env, approvedBy: "test" });
+
+    const altered = await callConnectorsMcpTool("orkestr_auth", {
+      service: "gmail",
+      action: "connect",
+      user_id: "admin",
+      account_hint: "can@mayamilk.com",
+      use_mode: "explicit_only",
       approval: pending.challenge.approve_code,
     }, item.env);
     assert.equal(altered.ok, false);

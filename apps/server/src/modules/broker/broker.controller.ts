@@ -166,6 +166,7 @@ export class BrokerController {
       accountId,
       account: clean(payload.account),
       googleConnectionId: clean(payload.googleConnectionId),
+      oauthAppId: clean(payload.oauthAppId || payload.oauth_app),
       alias: clean(payload.connectionAlias || payload.alias),
       useMode: clean(payload.connectionUseMode || payload.useMode),
       setAsMain: payload.setAsMain === true,
@@ -191,7 +192,9 @@ export class BrokerController {
     const { record, payload } = await brokerCall(() => decryptBrokerInstanceRequest(instanceId, body, process.env));
     const refreshToken = clean(payload.refreshToken);
     if (!refreshToken) throw httpError("broker_google_workspace_refresh_token_required", 400);
-    const token = await brokerCall(() => refreshGmailBrokerToken(refreshToken, process.env));
+    const token = await brokerCall(() => refreshGmailBrokerToken(refreshToken, process.env, fetch, {
+      oauthAppId: clean(payload.oauthAppId || payload.oauth_app),
+    }));
     return { ok: true, instanceId: record.instanceId, token };
   }
 

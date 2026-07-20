@@ -678,6 +678,7 @@ export interface GmailOAuthStartResponse {
   authorizeUrl: string;
   state?: string;
   redirectUri?: string;
+  oauthAppId?: string;
 }
 
 export interface GoogleWorkspaceConnection {
@@ -685,6 +686,7 @@ export interface GoogleWorkspaceConnection {
   accountId?: string;
   alias?: string;
   email?: string;
+  oauthAppId?: string;
   useMode?: "default" | "available" | "explicit_only";
   healthState?: string;
   isMain?: boolean;
@@ -2063,12 +2065,13 @@ export class ApiService {
     );
   }
 
-  startGmailOAuth(options: { account?: string; accountId?: string; alias?: string; useMode?: string; setAsMain?: boolean; setAsThreadDefault?: boolean; threadId?: string } = {}): Observable<GmailOAuthStartResponse> {
+  startGmailOAuth(options: { account?: string; accountId?: string; alias?: string; useMode?: string; oauthApp?: string; setAsMain?: boolean; setAsThreadDefault?: boolean; threadId?: string } = {}): Observable<GmailOAuthStartResponse> {
     const params = new URLSearchParams();
     if (options.account?.trim()) params.set("account", options.account.trim());
     if (options.accountId?.trim()) params.set("accountId", options.accountId.trim());
     if (options.alias?.trim()) params.set("alias", options.alias.trim());
     if (options.useMode?.trim()) params.set("useMode", options.useMode.trim());
+    if (options.oauthApp?.trim()) params.set("oauthApp", options.oauthApp.trim());
     if (options.setAsMain === true) params.set("setAsMain", "1");
     if (options.setAsThreadDefault === true) params.set("setAsThreadDefault", "1");
     if (options.threadId?.trim()) params.set("threadId", options.threadId.trim());

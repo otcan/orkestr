@@ -239,6 +239,7 @@ async function handleBrokerGoogleWorkspaceStart(request: any, response: any, rou
   const tenantVmId = clean(intent.tenantVmId || owner.tenantVmId);
   const account = clean(parsed.searchParams.get("account")).toLowerCase();
   const googleConnectionId = clean(parsed.searchParams.get("accountId") || parsed.searchParams.get("account_id") || intent.googleConnectionId);
+  const oauthAppId = clean(parsed.searchParams.get("oauthApp") || parsed.searchParams.get("oauth_app") || intent.oauthAppId);
   const alias = clean(parsed.searchParams.get("alias") || intent.connectionAlias);
   const useMode = clean(parsed.searchParams.get("useMode") || parsed.searchParams.get("use_mode") || intent.connectionUseMode);
   const setAsMain = ["1", "true", "yes"].includes(clean(parsed.searchParams.get("setAsMain") || parsed.searchParams.get("set_as_main") || intent.setAsMain).toLowerCase());
@@ -257,6 +258,7 @@ async function handleBrokerGoogleWorkspaceStart(request: any, response: any, rou
       capabilities,
       account,
       googleConnectionId,
+      oauthAppId,
       alias,
       useMode,
       setAsMain,

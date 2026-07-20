@@ -7,11 +7,7 @@ import {
   markConnectorOutboxJob,
 } from "./connector-outbox.js";
 import { resolveConnectorAttachmentRefs } from "./connector-staged-attachments.js";
-import {
-  connectorAuthStatus,
-  disconnectConnectorAuth,
-  startConnectorAuth,
-} from "./connector-auth.js";
+import { connectorAuthStatus, disconnectConnectorAuth, startConnectorAuth } from "./connector-auth.js";
 import {
   listWhatsAppBindingStatuses,
   retireWhatsAppThreadBinding,
@@ -61,6 +57,7 @@ function operationIntent(tool = "", input = {}) {
     target: clean(input.target),
     alias: clean(input.alias),
     useMode: clean(input.use_mode),
+    oauthAppId: clean(input.oauth_app),
     setAsMain: input.set_as_main === true,
     setAsThreadDefault: input.set_as_thread_default === true,
   };
@@ -189,6 +186,7 @@ async function runAuth(input, auth, env) {
         shop: clean(input.target),
         alias: clean(input.alias),
         useMode: clean(input.use_mode),
+        oauthAppId: clean(input.oauth_app),
         setAsMain: input.set_as_main === true,
         setAsThreadDefault: input.set_as_thread_default === true,
         threadId: auth.threadId,

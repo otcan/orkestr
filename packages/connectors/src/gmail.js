@@ -13,7 +13,7 @@ import {
   googleWorkspaceScopesForCapabilities,
   normalizeGoogleWorkspaceCapabilities,
 } from "./google-workspace-scopes.js";
-import { readParentConnectorRuntimeConfig } from "./parent-connector-apps.js";
+import { readGoogleOAuthAppConfig } from "./parent-connector-apps.js";
 import {
   listGoogleWorkspaceConnections,
   readGoogleWorkspaceConnectionToken,
@@ -280,6 +280,7 @@ function normalizeOAuthTokenPayload(payload, prior = {}, options = {}) {
     requestedCapabilities,
     requestedScopes,
     provider: clean(options.provider || prior.provider || "gmail"),
+    oauthAppId: clean(options.oauthAppId || prior.oauthAppId),
     tokenType: String(payload.token_type || prior.tokenType || "Bearer"),
     expiresAt: nowSeconds() + Math.max(1, expiresIn),
     updatedAt: new Date().toISOString(),
@@ -341,6 +342,7 @@ function normalizeBrokerGrantToken(rawToken = {}, grant = {}, prior = {}) {
     requestedCapabilities,
     requestedScopes,
     provider: clean(grant.provider || rawToken.provider || prior.provider || "google_workspace"),
+    oauthAppId: clean(grant.oauthAppId || rawToken.oauthAppId || prior.oauthAppId),
     tokenType: clean(rawToken.tokenType || rawToken.token_type || prior.tokenType || "Bearer"),
     expiresAt: Number.isFinite(expiresAt) && expiresAt > 0
       ? expiresAt
@@ -358,6 +360,7 @@ export async function saveBrokeredGmailGrant(grant = {}, env = process.env) {
   const connectionOptions = {
     ...(userId ? { userId } : {}),
     googleConnectionId: clean(grant.googleConnectionId || grant.connectionId),
+    oauthAppId: clean(grant.oauthAppId),
     alias: clean(grant.connectionAlias || grant.alias),
     useMode: clean(grant.connectionUseMode || grant.useMode),
     setAsMain: grant.setAsMain === true,
@@ -376,6 +379,7 @@ export async function saveBrokeredGmailGrant(grant = {}, env = process.env) {
     userId,
     account: token.account || clean(grant.account),
     googleConnectionId: stored.connectionId,
+    oauthAppId: token.oauthAppId,
     brokerInstanceId: token.brokerInstanceId,
     capabilities: token.capabilities || [],
     grantedScopes: token.grantedScopes || [],
@@ -544,7 +548,7 @@ export async function enrichGmailTokenAccount(env = process.env, fetchImpl = fet
 }
 
 export async function startGmailOAuth(env = process.env, options = {}) {
-  const config = await readParentConnectorRuntimeConfig("gmail", env);
+  const config = await readGoogleOAuthAppConfig(options.oauthAppId, env);
   const brokered = Boolean(clean(options.brokerInstanceId || options.brokerTenantVmId));
   const redirectUri = brokered
     ? brokeredGmailOAuthRedirectUri(env, config.redirectUri)
@@ -577,6 +581,7 @@ export async function startGmailOAuth(env = process.env, options = {}) {
     brokerTenantChatId: clean(options.brokerTenantChatId),
     brokerTenantAccountId: clean(options.brokerTenantAccountId),
     googleConnectionId: clean(options.googleConnectionId || options.connectionId),
+    oauthAppId: config.oauthAppId,
     connectionAlias: clean(options.connectionAlias || options.alias),
     connectionUseMode: clean(options.connectionUseMode || options.useMode),
     setAsMain: options.setAsMain === true,
@@ -598,11 +603,11 @@ export async function startGmailOAuth(env = process.env, options = {}) {
   url.searchParams.set("state", state);
   if (account) url.searchParams.set("login_hint", account);
   await appendEvent({ type: `${provider === "google_workspace" ? "google_workspace" : "gmail"}_oauth_started`, userId: scope.userId || undefined }, env);
-  return { authorizeUrl: url.toString(), state, redirectUri, account, provider, capabilities, scopes: requestedScopes };
+  return { authorizeUrl: url.toString(), state, redirectUri, account, provider, oauthAppId: config.oauthAppId, capabilities, scopes: requestedScopes };
 }
 
 export async function exchangeGmailCode(code, env = process.env, fetchImpl = fetch, options = {}) {
-  const config = await readParentConnectorRuntimeConfig("gmail", env);
+  const config = await readGoogleOAuthAppConfig(options.oauthAppId, env);
   const { clientId, clientSecret, redirectUri: configuredRedirectUri } = requireOAuthConfig(config);
   const redirectUri = String(options.redirectUri || configuredRedirectUri || "").trim();
   if (!clientSecret) {
@@ -622,8 +627,8 @@ export async function exchangeGmailCode(code, env = process.env, fetchImpl = fet
       fetchImpl,
     );
     const token = options.saveToken === false
-      ? normalizeOAuthTokenPayload(payload, {}, options)
-      : await saveTokenPayload(payload, env, {}, options);
+      ? normalizeOAuthTokenPayload(payload, {}, { ...options, oauthAppId: config.oauthAppId })
+      : await saveTokenPayload(payload, env, {}, { ...options, oauthAppId: config.oauthAppId });
     const scope = await connectorScopePaths(env, options);
     await appendEvent({ type: "gmail_oauth_token_exchanged", userId: scope.userId || undefined }, env);
     return token;
@@ -633,8 +638,8 @@ export async function exchangeGmailCode(code, env = process.env, fetchImpl = fet
   }
 }
 
-export async function refreshGmailBrokerToken(refreshToken, env = process.env, fetchImpl = fetch) {
-  const config = await readParentConnectorRuntimeConfig("gmail", env);
+export async function refreshGmailBrokerToken(refreshToken, env = process.env, fetchImpl = fetch, options = {}) {
+  const config = await readGoogleOAuthAppConfig(options.oauthAppId, env);
   const { clientId, clientSecret } = requireOAuthConfig(config);
   const token = clean(refreshToken);
   if (!clientSecret || !token) {
@@ -675,6 +680,7 @@ async function refreshBrokeredGmailAccessToken(prior = {}, env = process.env, fe
   const body = await encryptBrokerClientPayload({
     provider: clean(prior.provider || options.provider || "google_workspace"),
     refreshToken,
+    oauthAppId: clean(prior.oauthAppId),
     requestedCapabilities: prior.requestedCapabilities || options.requestedCapabilities || options.capabilities || [],
     requestedScopes: prior.requestedScopes || options.requestedScopes || options.scopes || [],
   }, registration, env);
@@ -696,6 +702,7 @@ async function refreshBrokeredGmailAccessToken(prior = {}, env = process.env, fe
   const token = await saveTokenPayload(tokenPayload, env, prior, {
     ...options,
     provider: prior.provider || options.provider || "google_workspace",
+    oauthAppId: prior.oauthAppId,
     requestedCapabilities: prior.requestedCapabilities || options.requestedCapabilities || options.capabilities || [],
     requestedScopes: prior.requestedScopes || options.requestedScopes || options.scopes || [],
     brokered: true,
@@ -716,7 +723,7 @@ export async function refreshGmailAccessToken(env = process.env, fetchImpl = fet
     if (prior.brokered === true || prior.brokerRefresh === true) {
       return await refreshBrokeredGmailAccessToken(prior, env, fetchImpl, options);
     }
-    const config = await readParentConnectorRuntimeConfig("gmail", env);
+    const config = await readGoogleOAuthAppConfig(prior.oauthAppId, env);
     const { clientId, clientSecret } = requireOAuthConfig(config);
     const refreshToken = String(prior.refreshToken || "").trim();
     if (!clientSecret || !refreshToken) {
@@ -736,6 +743,7 @@ export async function refreshGmailAccessToken(env = process.env, fetchImpl = fet
     const token = await saveTokenPayload(payload, env, prior, {
       ...options,
       provider: prior.provider || options.provider || "gmail",
+      oauthAppId: config.oauthAppId,
       requestedCapabilities: prior.requestedCapabilities || options.requestedCapabilities || options.capabilities || [],
       requestedScopes: prior.requestedScopes || options.requestedScopes || options.scopes || [],
     });
@@ -791,6 +799,7 @@ async function provisionBrokeredGmailGrant(savedState = {}, token = {}, env = pr
     chatId: savedState.brokerTenantChatId || savedState.chatId || "",
     accountId: savedState.brokerTenantAccountId || savedState.accountId || "",
     googleConnectionId: savedState.googleConnectionId || "",
+    oauthAppId: savedState.oauthAppId || "",
     connectionAlias: savedState.connectionAlias || "",
     connectionUseMode: savedState.connectionUseMode || "",
     setAsMain: savedState.setAsMain === true,
@@ -809,6 +818,7 @@ async function provisionBrokeredGmailGrant(savedState = {}, token = {}, env = pr
       requestedCapabilities: token.requestedCapabilities || savedState.requestedCapabilities || [],
       requestedScopes: token.requestedScopes || savedState.requestedScopes || [],
       provider: token.provider || savedState.provider || "google_workspace",
+      oauthAppId: token.oauthAppId || savedState.oauthAppId || "",
       tokenType: token.tokenType || "Bearer",
       expiresAt: token.expiresAt || 0,
     },
@@ -849,6 +859,7 @@ export async function finishGmailOAuth(query, env = process.env, fetchImpl = fet
     account: "",
     redirectUri: savedState.redirectUri || "",
     provider: savedState.provider || "gmail",
+    oauthAppId: savedState.oauthAppId || "",
     connectId: savedState.connectId || "",
     requestedCapabilities: savedState.requestedCapabilities || [],
     requestedScopes: savedState.requestedScopes || [],
@@ -860,6 +871,7 @@ export async function finishGmailOAuth(query, env = process.env, fetchImpl = fet
     storedToken = await writeGmailToken(resolved.token, env, {
       ...scopeOptions,
       googleConnectionId: savedState.googleConnectionId,
+      oauthAppId: savedState.oauthAppId,
       alias: savedState.connectionAlias,
       useMode: savedState.connectionUseMode,
       setAsMain: savedState.setAsMain === true,
@@ -886,6 +898,7 @@ export async function finishGmailOAuth(query, env = process.env, fetchImpl = fet
     chatId: savedState.chatId || "",
     accountId: savedState.accountId || "",
     googleConnectionId: storedToken.connectionId || savedState.googleConnectionId || "",
+    oauthAppId: storedToken.oauthAppId || savedState.oauthAppId || "",
     scope: resolved.token.scope,
     grantedScopes: resolved.token.grantedScopes || [],
     requestedCapabilities: savedState.requestedCapabilities || [],

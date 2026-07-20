@@ -62,6 +62,7 @@ function normalizeConnection(connection = {}) {
     ownerUserId: clean(connection.ownerUserId),
     alias: clean(connection.alias),
     email: lower(connection.email || connection.account),
+    oauthAppId: lower(connection.oauthAppId || connection.oauth_app),
     useMode: normalizeUseMode(connection.useMode, "available"),
     capabilities: unique(connection.capabilities),
     grantedScopes: unique(connection.grantedScopes),
@@ -186,6 +187,7 @@ export function publicGoogleWorkspaceConnection(connection = {}, options = {}) {
     provider: normalized.provider,
     alias: normalized.alias,
     email: normalized.email,
+    oauthAppId: normalized.oauthAppId,
     useMode: normalized.useMode,
     capabilities: normalized.capabilities,
     grantedScopes: normalized.grantedScopes,
@@ -325,6 +327,7 @@ export async function saveGoogleWorkspaceConnectionToken(token = {}, env = proce
     ownerUserId: ownerUserId(scope, options, env),
     alias,
     email: verifiedEmail || existing?.email,
+    oauthAppId: lower(options.oauthAppId || token.oauthAppId || existing?.oauthAppId),
     useMode,
     capabilities: token.capabilities || existing?.capabilities,
     grantedScopes: token.grantedScopes || existing?.grantedScopes,
@@ -334,7 +337,14 @@ export async function saveGoogleWorkspaceConnectionToken(token = {}, env = proce
     updatedAt: timestamp,
     lastValidatedAt: clean(options.lastValidatedAt || existing?.lastValidatedAt),
   });
-  await writeSecretJson(tokenPath(scope, reference), { ...token, account: connection.email, email: connection.email, connectionId, accountId: connectionId });
+  await writeSecretJson(tokenPath(scope, reference), {
+    ...token,
+    account: connection.email,
+    email: connection.email,
+    oauthAppId: connection.oauthAppId,
+    connectionId,
+    accountId: connectionId,
+  });
   const connections = registry.connections
     .filter((candidate) => candidate.connectionId !== connectionId)
     .map((candidate) => shouldBeMain && candidate.useMode === "default" ? { ...candidate, useMode: "available" } : candidate);
@@ -349,7 +359,14 @@ export async function saveGoogleWorkspaceConnectionToken(token = {}, env = proce
     connections,
   });
   return {
-    token: { ...token, account: connection.email, email: connection.email, connectionId, accountId: connectionId },
+    token: {
+      ...token,
+      account: connection.email,
+      email: connection.email,
+      oauthAppId: connection.oauthAppId,
+      connectionId,
+      accountId: connectionId,
+    },
     connection: publicGoogleWorkspaceConnection(connection, {
       mainConnectionId: updatedRegistry.mainConnectionId,
       threadDefaultConnectionId: updatedRegistry.threadDefaults[threadId],
