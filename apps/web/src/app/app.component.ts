@@ -1070,7 +1070,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
         this.enterPairingRequired();
         return true;
       }
-      if (!scope && this.isBrokerInstanceReturnUrl(returnUrl)) {
+      if (!scope && this.isScopedPairingReturnUrl(returnUrl)) {
         this.enterPairingRequired();
         return true;
       }
@@ -1089,7 +1089,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     }
     const returnPath = `${target.pathname}${target.search}${target.hash}`;
     const instanceId = this.instanceIdFromPairingReturn(target);
-    if (!instanceId && !this.isBrokerInstanceReturnUrl(returnUrl)) return null;
+    if (!instanceId && !this.isScopedPairingReturnUrl(returnUrl)) return null;
     try {
       return await firstValueFrom(this.api.securitySessionScope(returnPath, instanceId));
     } catch {
@@ -1110,6 +1110,16 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       const target = new URL(returnUrl, globalThis.location?.href || "http://localhost/");
       const parts = target.pathname.split("/").filter(Boolean);
       return parts[0] === "i" && Boolean(parts[1]) && parts[2] === "app";
+    } catch {
+      return false;
+    }
+  }
+
+  private isScopedPairingReturnUrl(returnUrl = ""): boolean {
+    try {
+      const target = new URL(returnUrl, globalThis.location?.href || "http://localhost/");
+      return this.isBrokerInstanceReturnUrl(returnUrl) ||
+        (["/connect/google", "/connect/google/start"].includes(target.pathname) && Boolean(target.searchParams.get("connect") || target.searchParams.get("connect_id")));
     } catch {
       return false;
     }

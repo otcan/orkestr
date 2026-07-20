@@ -425,6 +425,27 @@ test("google workspace brokered connect links require instance and owner scoped 
     assert.match(pairedHtml, /orkestr_auth/);
     assert.match(pairedHtml, /google_workspace/);
 
+    const matchingScopeResponse = await fetch(
+      `http://127.0.0.1:${port}/api/setup/security/session-scope?return=${encodeURIComponent(connectPath)}`,
+      { headers: { cookie } },
+    );
+    const matchingScopeText = await matchingScopeResponse.text();
+    const matchingScope = JSON.parse(matchingScopeText);
+    assert.equal(matchingScopeResponse.status, 200, matchingScopeText);
+    assert.equal(matchingScope.kind, "google_connect");
+    assert.equal(matchingScope.validForReturn, true);
+
+    const staleScopeResponse = await fetch(
+      `http://127.0.0.1:${port}/api/setup/security/session-scope?return=${encodeURIComponent("/connect/google?connect=new-connect-id")}`,
+      { headers: { cookie } },
+    );
+    const staleScope = await staleScopeResponse.json();
+    assert.equal(staleScopeResponse.status, 200);
+    assert.equal(staleScope.paired, true);
+    assert.equal(staleScope.kind, "google_connect");
+    assert.equal(staleScope.validForReturn, false);
+    assert.equal(staleScope.reason, "google_connect_scope_mismatch");
+
     const oauthCallbackResponse = await fetch(
       `http://127.0.0.1:${port}/oauth/gmail/callback?state=missing-state&code=fake-code`,
       { headers: { cookie }, redirect: "manual" },
@@ -1130,6 +1151,8 @@ test("pairing return stays same-origin and Codex warnings stay non-blocking", as
   assert.match(component, /Codex sign-in expired/);
   assert.match(component, /Connect Codex Agent before starting coding agents or sending coding-agent tasks\./);
   assert.match(component, /sameOriginPairingReturnUrl/);
+  assert.match(component, /isScopedPairingReturnUrl/);
+  assert.match(component, /\["\/connect\/google", "\/connect\/google\/start"\]/);
   assert.match(component, /target\.origin === current\.origin/);
   assert.doesNotMatch(component, /allowedOrigins\.includes\(target\.origin\)/);
   assert.doesNotMatch(template, /codex-required-shell/);

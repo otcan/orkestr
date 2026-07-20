@@ -1516,6 +1516,22 @@ function brokerAppRouteFromUrl(value = "") {
   };
 }
 
+function googleWorkspaceConnectReturnRouteFromUrl(value = "") {
+  let parsed;
+  try {
+    parsed = new URL(String(value || "/"), "http://localhost");
+  } catch {
+    return null;
+  }
+  if (["/connect/google", "/connect/google/start"].includes(parsed.pathname)) {
+    const connectId = String(parsed.searchParams.get("connect") || parsed.searchParams.get("connect_id") || "").trim();
+    if (!connectId) return null;
+    return { kind: "google_connect", instanceId: "", connectId };
+  }
+  const brokerRoute = brokerAppRouteFromUrl(value);
+  return brokerRoute ? { ...brokerRoute, kind: "broker_app" } : null;
+}
+
 function brokerAppRequestRoute(request) {
   return brokerAppRouteFromUrl(request?.originalUrl || request?.url || "/");
 }
@@ -1550,7 +1566,7 @@ function sessionMatchesBrokerAppRoute(session = {}, route = null) {
 }
 
 export function securitySessionReturnScope(session = null, returnPath = "", options = {}) {
-  const route = brokerAppRouteFromUrl(returnPath || "");
+  const route = googleWorkspaceConnectReturnRouteFromUrl(returnPath || "");
   const expectedInstanceId = String(options.instanceId || "").trim();
   const hasSession = Boolean(session?.id);
   if (!route) {
@@ -1563,7 +1579,7 @@ export function securitySessionReturnScope(session = null, returnPath = "", opti
   const instanceId = route.instanceId || expectedInstanceId;
   const result = {
     scoped: true,
-    kind: "broker_app",
+    kind: route.kind,
     instanceId,
     connectId: route.connectId || "",
     validForReturn: false,
@@ -1571,8 +1587,10 @@ export function securitySessionReturnScope(session = null, returnPath = "", opti
   };
   if (!hasSession) return result;
   if (session.shareId) return { ...result, reason: "share_session_not_valid_for_instance_app" };
-  if (String(session.instanceId || "").trim() !== instanceId) return { ...result, reason: "instance_mismatch" };
-  if (!authIntentGoogleConnectActionMatches(session, route.connectId)) {
+  if (instanceId && String(session.instanceId || "").trim() !== instanceId) return { ...result, reason: "instance_mismatch" };
+  const allowedActions = Array.isArray(session.allowedActions) ? session.allowedActions : [];
+  const exactAction = route.connectId ? `orkestr_auth.google.connect:${route.connectId}` : "orkestr_auth.google.connect";
+  if (!allowedActions.includes(exactAction)) {
     return { ...result, reason: "google_connect_scope_mismatch" };
   }
   return { ...result, validForReturn: true, reason: "session_valid" };

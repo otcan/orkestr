@@ -240,6 +240,71 @@ test("pairing page redirects to challenge path after pairing", async (t) => {
   }
 });
 
+test("pairing page keeps a new Google connect challenge open when the browser cookie is scoped to an older connect", async (t) => {
+  const puppeteer = await loadPuppeteer(t);
+  if (!puppeteer) return;
+  const chrome = await findChrome();
+  if (!chrome) {
+    t.skip("No Chrome or Chromium executable available for browser e2e.");
+    return;
+  }
+
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-pairing-google-scope-e2e-"));
+  const prior = saveEnv();
+  process.env.ORKESTR_HOME = home;
+  process.env.ORKESTR_AUTH_REQUIRED = "1";
+  process.env.ORKESTR_RECOVER_RUNNING_ON_START = "0";
+
+  const oldChallenge = await createPairingChallenge({
+    env: process.env,
+    userId: "admin",
+    role: "admin",
+    allowedActions: ["orkestr_auth.google.connect:old-connect"],
+    authIntent: { service: "gmail", provider: "google_workspace", action: "connect", connectId: "old-connect" },
+  });
+  await approvePairingChallenge(oldChallenge.challengeId, { env: process.env });
+  const oldPair = await pairBrowser({ challengeId: oldChallenge.challengeId, env: process.env });
+  const returnPath = "/connect/google?connect=new-connect";
+  const newChallenge = await createPairingChallenge({
+    env: process.env,
+    userId: "admin",
+    role: "admin",
+    requestedPath: returnPath,
+    allowedActions: ["orkestr_auth.google.connect:new-connect"],
+    authIntent: { service: "gmail", provider: "google_workspace", action: "connect", connectId: "new-connect" },
+  });
+  const server = await startServer({ port: 0, host: "127.0.0.1" });
+  const { port } = server.address();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  let browser;
+
+  try {
+    browser = await puppeteer.launch({
+      headless: "new",
+      executablePath: chrome,
+      args: ["--no-sandbox", "--disable-setuid-sandbox"],
+    });
+    const page = await browser.newPage();
+    await page.setCookie({ name: securityCookieName(process.env), value: oldPair.token, url: baseUrl });
+    const pairingUrl = `${baseUrl}/setup/pairing?challengeId=${encodeURIComponent(newChallenge.challengeId)}&return=${encodeURIComponent(returnPath)}`;
+    await page.goto(pairingUrl, { waitUntil: "networkidle2" });
+    await page.waitForFunction(() => document.body.innerText.includes("Approve this browser"));
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
+
+    const current = new URL(page.url());
+    assert.equal(current.pathname, "/setup/pairing");
+    assert.equal(current.searchParams.get("challengeId"), newChallenge.challengeId);
+    const command = await page.$eval(".command code", (node) => node.textContent.trim());
+    assert.equal(command, `orkestr connect approve ${newChallenge.challenge.approveCode}`);
+    const challenges = await listPairingChallenges({ env: process.env, includeExpired: true });
+    assert.equal(challenges.challenges.find((item) => item.id === newChallenge.challengeId)?.status, "pending");
+  } finally {
+    if (browser) await browser.close();
+    await new Promise((resolve) => server.close(resolve));
+    restoreEnv(prior);
+  }
+});
+
 test("unauthenticated shared app approval stays on the shared route", async (t) => {
   const puppeteer = await loadPuppeteer(t);
   if (!puppeteer) return;

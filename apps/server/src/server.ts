@@ -184,6 +184,7 @@ function authorizeAuthIntentSessionRequest(request: any, session: any) {
   if (method === "GET" && (url === "/connect/google" || url === "/connect/google/start")) return { ok: true };
   if (method === "GET" && url === "/oauth/gmail/callback") return { ok: true };
   if (method === "GET" && url === "/setup/pairing") return { ok: true };
+  if (method === "GET" && url === "/api/setup/security/session-scope") return { ok: true };
   if (method === "GET" && isStaticAssetRequestPath(url)) return { ok: true };
   if (whatsappRepairRouteAllowed(method, parts)) return { ok: true };
   if (desktopShareRouteAllowed(method, parts)) return { ok: true };
@@ -445,7 +446,10 @@ function authorizeControlPlaneRequest(request: any, principal: any) {
     const status =
       method === "GET" &&
       third === "status";
-    if (bootstrapChallenge || challengeStatus || pair || status) return { ok: true };
+    const sessionScope =
+      method === "GET" &&
+      third === "session-scope";
+    if (bootstrapChallenge || challengeStatus || pair || status || sessionScope) return { ok: true };
     return { ok: false, statusCode: 403, error: "control_plane_admin_required" };
   }
   if (surface === "setup" && second === "demo-preferences") return { ok: true };
