@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { callConnectorsMcpTool, connectorsMcpClientConfig, listConnectorsMcpTools } from "../packages/connectors/src/connectors-mcp-client.js";
+import { assertConnectorMcpScope } from "../packages/connectors/src/connectors-mcp-auth.js";
 import { listConnectorInboxEvents, resetConnectorInboxForTest } from "../packages/connectors/src/connector-inbox.js";
 import { listConnectorOutboxJobs } from "../packages/connectors/src/connector-outbox.js";
 import { deliverConnectorInboxEvent, routeWhatsAppInboundFromWorker } from "../packages/connectors/src/connectors-mcp-router.js";
@@ -196,12 +197,38 @@ test("connector MCP exposes the canonical tools and scoped account status", asyn
       action: "status",
       account_id: "sender",
     }, item.env);
-    assert.equal(status.contract_version, "1.1");
+    assert.equal(status.contract_version, "1.2");
     assert.equal(status.status, "ok");
     assert.equal(status.data.accounts[0].accountId, "sender");
   } finally {
     await item.close();
   }
+});
+
+test("connector MCP keeps WhatsApp transport account scope separate from Google account selection", () => {
+  const auth = {
+    scopes: ["connectors:*"],
+    ownerUserId: "firat",
+    instanceId: "vm-firat",
+    accountId: "sender",
+    accountService: "whatsapp",
+  };
+  const gmail = assertConnectorMcpScope(auth, "orkestr_auth", {
+    service: "gmail",
+    action: "status",
+    account_id: "google-connection-1",
+    instance_id: "vm-firat",
+    user_id: "firat",
+  });
+
+  assert.equal(gmail.accountId, "google-connection-1");
+  assert.throws(() => assertConnectorMcpScope(auth, "orkestr_auth", {
+    service: "whatsapp",
+    action: "status",
+    account_id: "different-whatsapp-account",
+    instance_id: "vm-firat",
+    user_id: "firat",
+  }), /connector_mcp_account_scope_denied/);
 });
 
 test("connector MCP records scoped runtime progress and durable checkpoints", async () => {
@@ -417,6 +444,37 @@ test("the same orkestr_auth tool starts attended Gmail OAuth without an account 
     assert.equal(started.status, "ok");
     assert.match(started.data.authorizeUrl, /^https:\/\/accounts\.google\.com\//);
     assert.equal(started.data.account, "");
+  } finally {
+    await item.close();
+  }
+});
+
+test("attended Gmail approval cannot be reused with different account policy", async () => {
+  const item = await fixture();
+  try {
+    const pending = await callConnectorsMcpTool("orkestr_auth", {
+      service: "gmail",
+      action: "connect",
+      user_id: "admin",
+      alias: "mayamilk",
+      use_mode: "explicit_only",
+      set_as_main: false,
+      set_as_thread_default: false,
+    }, item.env);
+    await approvePairingChallenge(pending.challenge.approve_code, { env: item.env, approvedBy: "test" });
+
+    const altered = await callConnectorsMcpTool("orkestr_auth", {
+      service: "gmail",
+      action: "connect",
+      user_id: "admin",
+      alias: "mayamilk",
+      use_mode: "explicit_only",
+      set_as_main: true,
+      set_as_thread_default: false,
+      approval: pending.challenge.approve_code,
+    }, item.env);
+    assert.equal(altered.ok, false);
+    assert.match(JSON.stringify(altered), /pairing_challenge_intent_scope_denied/);
   } finally {
     await item.close();
   }

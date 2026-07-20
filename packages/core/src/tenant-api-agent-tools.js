@@ -20,6 +20,7 @@ import {
 } from "../../browsers/src/browsers.js";
 import { operateManagedDesktop } from "../../browsers/src/desktop-operator.js";
 import { getGmailMessage, listGmailMessages } from "../../connectors/src/gmail.js";
+import { resolveGoogleWorkspaceConnection } from "../../connectors/src/google-workspace-connections.js";
 import {
   createGmailNotificationForPrincipal,
   deleteGmailNotificationForPrincipal,
@@ -163,9 +164,9 @@ async function runAction(args = {}, context = {}, env = process.env) {
   }
   const parameters = actionParameters(args);
   let result = null;
-  if (action.handler === "orkestr_search_gmail") result = await searchGmail(parameters, principal, env, fetchImpl);
-  else if (action.handler === "orkestr_read_gmail_message") result = await readGmailMessage(parameters, principal, env, fetchImpl);
-  else if (action.handler === "orkestr_read_latest_gmail_message") result = await readLatestGmailMessage(parameters, principal, env, fetchImpl);
+  if (action.handler === "orkestr_search_gmail") result = await searchGmail(parameters, principal, env, fetchImpl, thread);
+  else if (action.handler === "orkestr_read_gmail_message") result = await readGmailMessage(parameters, principal, env, fetchImpl, thread);
+  else if (action.handler === "orkestr_read_latest_gmail_message") result = await readLatestGmailMessage(parameters, principal, env, fetchImpl, thread);
   else if (action.handler === "orkestr_create_automation") result = await createAutomationForPrincipal(automationArgsForAction(action, parameters, thread), principal, env, { thread, fetchImpl });
   else if (action.handler === "orkestr_update_automation") result = await updateAutomationForPrincipal(automationIdArgsForAction(action, parameters), principal, env, { thread, fetchImpl });
   else if (action.handler === "orkestr_delete_automation") result = await deleteAutomationForPrincipal(automationIdArgsForAction(action, parameters), principal, env);
@@ -910,23 +911,41 @@ function publicGmailMessage(message = {}, options = {}) {
   };
 }
 
-async function searchGmail(args = {}, principal = {}, env = process.env, fetchImpl = fetch) {
-  await assertConnectorConnected("gmail", principal, env);
+async function selectedGmailContext(args = {}, principal = {}, env = process.env, thread = null) {
+  const selected = await resolveGoogleWorkspaceConnection({
+    connectionId: args.accountId,
+    account: args.account,
+    threadId: thread?.id,
+  }, env, { principal, threadId: thread?.id });
+  return {
+    options: { principal, connectionId: selected.connection.connectionId, threadId: thread?.id },
+    public: {
+      accountId: selected.connection.connectionId,
+      account: selected.connection.email,
+      alias: selected.connection.alias,
+      selectionSource: selected.selectionSource,
+    },
+  };
+}
+
+async function searchGmail(args = {}, principal = {}, env = process.env, fetchImpl = fetch, thread = null) {
+  const selected = await selectedGmailContext(args, principal, env, thread);
   const maxResults = Math.max(1, Math.min(10, Number(args.maxResults) || 5));
   const listed = await listGmailMessages({
     maxResults,
     query: clean(args.query),
-  }, env, fetchImpl, { principal });
+  }, env, fetchImpl, selected.options);
   const messages = [];
   for (const item of (listed.messages || []).slice(0, maxResults)) {
     const id = clean(item.id);
     if (!id) continue;
-    const message = await getGmailMessage(id, env, fetchImpl, { principal });
+    const message = await getGmailMessage(id, env, fetchImpl, selected.options);
     messages.push(publicGmailMessage(message));
   }
   return {
     ok: true,
     provider: "gmail",
+    ...selected.public,
     query: clean(args.query),
     resultSizeEstimate: listed.resultSizeEstimate || messages.length,
     nextPageToken: clean(listed.nextPageToken),
@@ -934,36 +953,39 @@ async function searchGmail(args = {}, principal = {}, env = process.env, fetchIm
   };
 }
 
-async function readGmailMessage(args = {}, principal = {}, env = process.env, fetchImpl = fetch) {
-  await assertConnectorConnected("gmail", principal, env);
-  const message = await getGmailMessage(args.messageId, env, fetchImpl, { principal });
+async function readGmailMessage(args = {}, principal = {}, env = process.env, fetchImpl = fetch, thread = null) {
+  const selected = await selectedGmailContext(args, principal, env, thread);
+  const message = await getGmailMessage(args.messageId, env, fetchImpl, selected.options);
   return {
     ok: true,
     provider: "gmail",
+    ...selected.public,
     message: publicGmailMessage(message, { includeText: true }),
   };
 }
 
-async function readLatestGmailMessage(args = {}, principal = {}, env = process.env, fetchImpl = fetch) {
-  await assertConnectorConnected("gmail", principal, env);
+async function readLatestGmailMessage(args = {}, principal = {}, env = process.env, fetchImpl = fetch, thread = null) {
+  const selected = await selectedGmailContext(args, principal, env, thread);
   const listed = await listGmailMessages({
     maxResults: 1,
     query: clean(args.query),
-  }, env, fetchImpl, { principal });
+  }, env, fetchImpl, selected.options);
   const id = clean(listed.messages?.[0]?.id);
   if (!id) {
     return {
       ok: true,
       provider: "gmail",
+      ...selected.public,
       query: clean(args.query),
       message: null,
       resultSizeEstimate: listed.resultSizeEstimate || 0,
     };
   }
-  const message = await getGmailMessage(id, env, fetchImpl, { principal });
+  const message = await getGmailMessage(id, env, fetchImpl, selected.options);
   return {
     ok: true,
     provider: "gmail",
+    ...selected.public,
     query: clean(args.query),
     message: publicGmailMessage(message, { includeText: true }),
     resultSizeEstimate: listed.resultSizeEstimate || 1,
@@ -1471,10 +1493,15 @@ export function tenantApiAgentToolDefinitions() {
         type: "object",
         properties: {
           provider: { type: "string", enum: ["gmail", "outlook", "jira", "shopify"], description: "Connector provider to sign in." },
-          account: { type: "string", description: "Email/account hint. For Gmail sign-in, ask the user for the exact Gmail address before starting auth if they did not provide one." },
+          account: { type: "string", description: "Optional account hint for the provider chooser." },
           shop: { type: "string", description: "Shopify shop domain/name for Shopify sign-in, or empty string for other providers." },
+          accountId: { type: "string", description: "Stable Google connection id when reconnecting, or empty when adding an account." },
+          alias: { type: "string", description: "Alias for a new Google connection, or empty for the verified email." },
+          useMode: { type: "string", enum: ["", "default", "available", "explicit_only"], description: "Google account discovery mode; use explicit_only for accounts that must never be selected automatically." },
+          setAsMain: { type: "boolean", description: "Whether this Google account should become the user's main account." },
+          setAsThreadDefault: { type: "boolean", description: "Whether this Google account should be the default only for this thread." },
         },
-        required: ["provider", "account", "shop"],
+        required: ["provider", "account", "shop", "accountId", "alias", "useMode", "setAsMain", "setAsThreadDefault"],
         additionalProperties: false,
       },
       strict: true,
@@ -1500,10 +1527,12 @@ export function tenantApiAgentToolDefinitions() {
       parameters: {
         type: "object",
         properties: {
+          accountId: { type: "string", description: "Stable Google connection id, or empty to use the thread default or main account." },
+          account: { type: "string", description: "Explicit Google account alias or email, or empty to use the thread default or main account." },
           query: { type: "string", description: "Gmail search query. Use an empty string for latest messages." },
           maxResults: { type: "number", description: "Maximum messages to return, 1 to 10." },
         },
-        required: ["query", "maxResults"],
+        required: ["accountId", "account", "query", "maxResults"],
         additionalProperties: false,
       },
       strict: true,
@@ -1515,9 +1544,11 @@ export function tenantApiAgentToolDefinitions() {
       parameters: {
         type: "object",
         properties: {
+          accountId: { type: "string", description: "Stable Google connection id, or empty to use the thread default or main account." },
+          account: { type: "string", description: "Explicit Google account alias or email, or empty to use the thread default or main account." },
           messageId: { type: "string", description: "Gmail message id returned by orkestr_search_gmail." },
         },
-        required: ["messageId"],
+        required: ["accountId", "account", "messageId"],
         additionalProperties: false,
       },
       strict: true,
@@ -1529,9 +1560,11 @@ export function tenantApiAgentToolDefinitions() {
       parameters: {
         type: "object",
         properties: {
+          accountId: { type: "string", description: "Stable Google connection id, or empty to use the thread default or main account." },
+          account: { type: "string", description: "Explicit Google account alias or email, or empty to use the thread default or main account." },
           query: { type: "string", description: "Optional Gmail search query. Use an empty string for the latest message overall." },
         },
-        required: ["query"],
+        required: ["accountId", "account", "query"],
         additionalProperties: false,
       },
       strict: true,
@@ -1803,7 +1836,12 @@ export async function runTenantApiAgentTool(name = "", args = {}, context = {}, 
       return callConnectorsMcpTool("orkestr_auth", {
         service: args.provider,
         action: "connect",
+        account_id: args.accountId,
         account_hint: args.account,
+        alias: args.alias,
+        use_mode: args.useMode,
+        set_as_main: args.setAsMain,
+        set_as_thread_default: args.setAsThreadDefault,
         target: args.shop,
         instance_id: clean(principal?.instanceId || principal?.tenantVmId || env.ORKESTR_TENANT_VM_ID),
         user_id: principalUserId(principal),
@@ -1825,13 +1863,13 @@ export async function runTenantApiAgentTool(name = "", args = {}, context = {}, 
     return connectorAuthStatus(args.provider, env, { principal });
   }
   if (tool === "orkestr_search_gmail") {
-    return searchGmail(args, principal, env, context.fetchImpl || fetch);
+    return searchGmail(args, principal, env, context.fetchImpl || fetch, thread);
   }
   if (tool === "orkestr_read_gmail_message") {
-    return readGmailMessage(args, principal, env, context.fetchImpl || fetch);
+    return readGmailMessage(args, principal, env, context.fetchImpl || fetch, thread);
   }
   if (tool === "orkestr_read_latest_gmail_message") {
-    return readLatestGmailMessage(args, principal, env, context.fetchImpl || fetch);
+    return readLatestGmailMessage(args, principal, env, context.fetchImpl || fetch, thread);
   }
   if (tool === "orkestr_create_gmail_notification") {
     return createGmailNotification(args, principal, thread, env);

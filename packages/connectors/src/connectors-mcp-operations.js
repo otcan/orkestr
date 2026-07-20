@@ -31,10 +31,7 @@ import {
   consumeApprovedPairingChallengeForAction,
   createPairingChallenge,
 } from "../../core/src/security.js";
-import {
-  connectorMcpStructuredResult,
-  connectorsMcpInputSchemas,
-} from "./connectors-mcp-contract.js";
+import { connectorMcpStructuredResult, connectorsMcpInputSchemas } from "./connectors-mcp-contract.js";
 import { assertConnectorMcpScope } from "./connectors-mcp-auth.js";
 import {
   completeRuntimeLiveness,
@@ -62,6 +59,10 @@ function operationIntent(tool = "", input = {}) {
     operationRef: clean(input.operation_ref),
     accountHint: clean(input.account_hint),
     target: clean(input.target),
+    alias: clean(input.alias),
+    useMode: clean(input.use_mode),
+    setAsMain: input.set_as_main === true,
+    setAsThreadDefault: input.set_as_thread_default === true,
   };
   return {
     connectorMcpAction: operationAction(tool, input),
@@ -175,17 +176,35 @@ async function runAuth(input, auth, env) {
       source: "connector-mcp",
     };
     let payload;
-    if (input.action === "status") payload = await connectorAuthStatus(input.service, env, { principal });
+    if (input.action === "status") payload = await connectorAuthStatus(input.service, env, {
+      principal,
+      connectionId: clean(input.account_id),
+      threadId: auth.threadId,
+    });
     else if (["connect", "reconnect"].includes(input.action)) {
       payload = await startConnectorAuth({
         provider: input.service,
+        accountId: clean(input.account_id),
         account: clean(input.account_hint),
         shop: clean(input.target),
+        alias: clean(input.alias),
+        useMode: clean(input.use_mode),
+        setAsMain: input.set_as_main === true,
+        setAsThreadDefault: input.set_as_thread_default === true,
+        threadId: auth.threadId,
       }, principal, env, fetch, { thread: auth.threadId ? { id: auth.threadId } : null });
-    } else {
-      payload = await disconnectConnectorAuth({ provider: input.service, account: clean(input.account_hint) }, principal, env);
-    }
-    return connectorMcpStructuredResult({ service: input.service, action: input.action, accountId: clean(input.account_hint), data: payload });
+    } else payload = await disconnectConnectorAuth({
+        provider: input.service,
+        accountId: clean(input.account_id),
+        account: clean(input.account_hint),
+        threadId: auth.threadId,
+      }, principal, env);
+    return connectorMcpStructuredResult({
+      service: input.service,
+      action: input.action,
+      accountId: clean(payload?.connectionId || payload?.accountId || input.account_id),
+      data: payload,
+    });
   }
   const payload = input.action === "status"
     ? scopedAccounts(await whatsappWorkerHealth(env), { ...auth, accountId })

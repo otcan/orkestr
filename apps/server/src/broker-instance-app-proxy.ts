@@ -238,6 +238,11 @@ async function handleBrokerGoogleWorkspaceStart(request: any, response: any, rou
   const userId = clean(owner.userId || intent.userId || session.userId);
   const tenantVmId = clean(intent.tenantVmId || owner.tenantVmId);
   const account = clean(parsed.searchParams.get("account")).toLowerCase();
+  const googleConnectionId = clean(parsed.searchParams.get("accountId") || parsed.searchParams.get("account_id") || intent.googleConnectionId);
+  const alias = clean(parsed.searchParams.get("alias") || intent.connectionAlias);
+  const useMode = clean(parsed.searchParams.get("useMode") || parsed.searchParams.get("use_mode") || intent.connectionUseMode);
+  const setAsMain = ["1", "true", "yes"].includes(clean(parsed.searchParams.get("setAsMain") || parsed.searchParams.get("set_as_main") || intent.setAsMain).toLowerCase());
+  const setAsThreadDefault = ["1", "true", "yes"].includes(clean(parsed.searchParams.get("setAsThreadDefault") || parsed.searchParams.get("set_as_thread_default") || intent.setAsThreadDefault).toLowerCase());
   const capabilities = stringArray(parsed.searchParams.getAll("capability").length
     ? parsed.searchParams.getAll("capability")
     : parsed.searchParams.get("capabilities") || googleWorkspaceDefaultGmailCapabilities());
@@ -251,6 +256,11 @@ async function handleBrokerGoogleWorkspaceStart(request: any, response: any, rou
       provider: "google_workspace",
       capabilities,
       account,
+      googleConnectionId,
+      alias,
+      useMode,
+      setAsMain,
+      setAsThreadDefault,
       ignoreConfiguredAccount: true,
       connectId,
       threadId,

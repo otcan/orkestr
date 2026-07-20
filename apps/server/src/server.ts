@@ -277,6 +277,10 @@ function authIntentBrokerAppApiRouteAllowed(method: string, rest: string[], sess
   if (method === "GET" && surface === "connectors" && second === "gmail" && third === "oauth" && fourth === "start") {
     return authIntentAllowsGoogleConnect(session);
   }
+  if (surface === "connectors" && second === "gmail" && third === "accounts") {
+    if (method === "GET" && !fourth) return authIntentAllowsGoogleConnect(session);
+    if (["PATCH", "DELETE"].includes(method) && Boolean(fourth)) return authIntentAllowsGoogleConnect(session);
+  }
   if (method === "DELETE" && surface === "connectors" && second === "gmail" && third === "auth") {
     return authIntentAllowsGoogleConnect(session);
   }

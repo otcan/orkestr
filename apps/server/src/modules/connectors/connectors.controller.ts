@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { Body, Controller, Delete, Get, HttpCode, Param, Post, Query, Req, Res, UploadedFiles, UseInterceptors } from "@nestjs/common";
+import { Body, Controller, Delete, Get, HttpCode, Param, Patch, Post, Query, Req, Res, UploadedFiles, UseInterceptors } from "@nestjs/common";
 import { AnyFilesInterceptor } from "@nestjs/platform-express";
 import { getSetupStatus } from "../../../../../packages/core/src/setup.js";
 import { readRuntimeSettings } from "../../../../../packages/core/src/runtime-settings.js";
@@ -23,6 +23,11 @@ import {
   googleWorkspaceCapabilityLabels,
 } from "../../../../../packages/connectors/src/google-workspace-scopes.js";
 import { disconnectConnectorAuth } from "../../../../../packages/connectors/src/connector-auth.js";
+import {
+  listGoogleWorkspaceConnections,
+  removeGoogleWorkspaceConnection,
+  updateGoogleWorkspaceConnection,
+} from "../../../../../packages/connectors/src/google-workspace-connections.js";
 import {
   pollOutlookDeviceOAuth,
   startOutlookDeviceOAuth,
@@ -158,6 +163,11 @@ function googleWorkspaceAuthIntent(connectRequest: any): Record<string, string> 
     threadId: String(connectRequest?.threadId || connectRequest?.brokerTenantThreadId || "").trim(),
     chatId: String(connectRequest?.chatId || connectRequest?.brokerTenantChatId || "").trim(),
     accountId: String(connectRequest?.accountId || connectRequest?.brokerTenantAccountId || "").trim(),
+    googleConnectionId: String(connectRequest?.googleConnectionId || "").trim(),
+    connectionAlias: String(connectRequest?.connectionAlias || connectRequest?.alias || "").trim(),
+    connectionUseMode: String(connectRequest?.connectionUseMode || connectRequest?.useMode || "").trim(),
+    setAsMain: connectRequest?.setAsMain === true ? "true" : "false",
+    setAsThreadDefault: connectRequest?.setAsThreadDefault === true ? "true" : "false",
     account,
     restartCommand: "/connect google",
     restartSurface: "whatsapp",
@@ -462,8 +472,59 @@ export class ConnectorsController {
   }
 
   @Get("gmail/oauth/start")
-  async startGmailOAuth(@Req() request: any, @Query("account") account = "") {
-    return beginGmailOAuth(process.env, { account, principal: requestPrincipal(request) });
+  async startGmailOAuth(
+    @Req() request: any,
+    @Query("account") account = "",
+    @Query("accountId") accountId = "",
+    @Query("alias") alias = "",
+    @Query("useMode") useMode = "",
+    @Query("setAsMain") setAsMain = "",
+    @Query("setAsThreadDefault") setAsThreadDefault = "",
+    @Query("threadId") threadId = "",
+  ) {
+    return beginGmailOAuth(process.env, {
+      account,
+      principal: requestPrincipal(request),
+      googleConnectionId: accountId,
+      alias,
+      useMode,
+      setAsMain: ["1", "true", "yes"].includes(clean(setAsMain).toLowerCase()),
+      setAsThreadDefault: ["1", "true", "yes"].includes(clean(setAsThreadDefault).toLowerCase()),
+      threadId,
+    });
+  }
+
+  @Get("gmail/accounts")
+  async gmailAccounts(@Req() request: any, @Query("threadId") threadId = "") {
+    return {
+      ok: true,
+      ...(await listGoogleWorkspaceConnections(process.env, {
+        principal: requestPrincipal(request),
+        threadId,
+        includeExplicit: true,
+      })),
+    };
+  }
+
+  @Patch("gmail/accounts/:connectionId")
+  async updateGmailAccount(
+    @Req() request: any,
+    @Param("connectionId") connectionId: string,
+    @Body() body: Record<string, unknown> = {},
+  ) {
+    return {
+      ok: true,
+      connection: await updateGoogleWorkspaceConnection(connectionId, body, process.env, {
+        principal: requestPrincipal(request),
+        threadId: clean(body.threadId),
+      }),
+    };
+  }
+
+  @Delete("gmail/accounts/:connectionId")
+  @HttpCode(200)
+  async deleteGmailAccount(@Req() request: any, @Param("connectionId") connectionId: string) {
+    return removeGoogleWorkspaceConnection(connectionId, process.env, { principal: requestPrincipal(request) });
   }
 
   @Delete("gmail/auth")

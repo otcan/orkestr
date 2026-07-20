@@ -129,6 +129,7 @@ export function googleWorkspaceBrokeredConnectorSetupPath(result = {}, connector
   const service = clean(connector) || "gmail";
   const userId = clean(result.brokerTenantUserId || result.userId);
   const thread = clean(result.brokerTenantThreadName || result.threadName || result.threadTitle || result.brokerTenantThreadId || result.threadId);
+  const threadId = clean(result.brokerTenantThreadId || result.threadId);
   const target = new URL(`/i/${encodeURIComponent(instanceId)}/app/connectors/${encodeURIComponent(service)}`, "http://localhost");
   target.searchParams.set("mcp", "tools/call");
   target.searchParams.set("tool", "orkestr_auth");
@@ -140,6 +141,12 @@ export function googleWorkspaceBrokeredConnectorSetupPath(result = {}, connector
   target.searchParams.set("instance_id", instanceId);
   if (userId) target.searchParams.set("user_id", userId);
   if (thread) target.searchParams.set("thread", thread);
+  if (threadId) target.searchParams.set("thread_id", threadId);
+  if (clean(result.googleConnectionId)) target.searchParams.set("account_id", clean(result.googleConnectionId));
+  if (clean(result.connectionAlias || result.alias)) target.searchParams.set("alias", clean(result.connectionAlias || result.alias));
+  if (clean(result.connectionUseMode || result.useMode)) target.searchParams.set("use_mode", clean(result.connectionUseMode || result.useMode));
+  if (result.setAsMain === true) target.searchParams.set("set_as_main", "1");
+  if (result.setAsThreadDefault === true) target.searchParams.set("set_as_thread_default", "1");
   if (clean(result.connectId)) target.searchParams.set("connect", clean(result.connectId));
   target.searchParams.set("auto", "0");
   return `${target.pathname}${target.search}`;
@@ -163,6 +170,11 @@ async function createBrokeredGoogleWorkspaceConnectLink({
   chatId = "",
   accountId = "",
   account = "",
+  googleConnectionId = "",
+  alias = "",
+  useMode = "",
+  setAsMain = false,
+  setAsThreadDefault = false,
 } = {}, env = process.env) {
   const registration = await ensureBrokerClientRegistration(env);
   if (registration?.ok === false || !registration?.instanceId || !registration?.brokerBaseUrl) {
@@ -178,6 +190,11 @@ async function createBrokeredGoogleWorkspaceConnectLink({
     chatId: clean(chatId || threadBinding.chatId),
     accountId: clean(accountId || threadBinding.responderAccountId || threadBinding.outboundAccountId),
     account: clean(account).toLowerCase(),
+    googleConnectionId: clean(googleConnectionId),
+    connectionAlias: clean(alias),
+    connectionUseMode: clean(useMode),
+    setAsMain: setAsMain === true,
+    setAsThreadDefault: setAsThreadDefault === true,
     source: "tenant_whatsapp",
   };
   const body = await encryptBrokerClientPayload(request, registration, env);
@@ -269,9 +286,25 @@ export async function createGoogleWorkspaceConnectLink({
   brokerTenantChatId = "",
   brokerTenantAccountId = "",
   brokerServerRequest = false,
+  googleConnectionId = "",
+  alias = "",
+  useMode = "",
+  setAsMain = false,
+  setAsThreadDefault = false,
 } = {}, env = process.env) {
   if (brokeredGoogleWorkspaceConnectEnabled(env)) {
-    return createBrokeredGoogleWorkspaceConnectLink({ principal, thread, chatId, accountId, account }, env);
+    return createBrokeredGoogleWorkspaceConnectLink({
+      principal,
+      thread,
+      chatId,
+      accountId,
+      account,
+      googleConnectionId,
+      alias,
+      useMode,
+      setAsMain,
+      setAsThreadDefault,
+    }, env);
   }
   const brokerContextProvided = Boolean(clean(
     brokerInstanceId ||
@@ -296,6 +329,11 @@ export async function createGoogleWorkspaceConnectLink({
     chatId: clean(chatId || threadBinding.chatId),
     accountId: clean(accountId || threadBinding.responderAccountId || threadBinding.outboundAccountId),
     account: clean(account).toLowerCase(),
+    googleConnectionId: clean(googleConnectionId),
+    connectionAlias: clean(alias),
+    connectionUseMode: clean(useMode),
+    setAsMain: setAsMain === true,
+    setAsThreadDefault: setAsThreadDefault === true,
     source: "whatsapp",
     brokerInstanceId: clean(brokerInstanceId),
     brokerTenantVmId: clean(brokerTenantVmId),
@@ -380,6 +418,11 @@ export async function startGoogleWorkspaceOAuth(env = process.env, options = {})
     brokerTenantThreadId: request.brokerTenantThreadId,
     brokerTenantChatId: request.brokerTenantChatId,
     brokerTenantAccountId: request.brokerTenantAccountId,
+    googleConnectionId: request.googleConnectionId,
+    connectionAlias: request.connectionAlias,
+    connectionUseMode: request.connectionUseMode,
+    setAsMain: request.setAsMain === true,
+    setAsThreadDefault: request.setAsThreadDefault === true,
   });
   request.consumedAt = nowIso();
   request.selectedCapabilities = capabilities;

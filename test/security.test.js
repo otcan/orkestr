@@ -1282,6 +1282,10 @@ test("broker instance connector challenge preserves trusted Google Workspace app
     brokerTenantThreadName: "Fırat Jobs",
     brokerTenantChatId: chatId,
     brokerTenantAccountId: "sender",
+    googleConnectionId: "google-firat",
+    alias: "firat",
+    useMode: "explicit_only",
+    setAsThreadDefault: true,
     brokerServerRequest: true,
   }, process.env);
   const connectorUrl = new URL(connect.connectorLink);
@@ -1306,6 +1310,10 @@ test("broker instance connector challenge preserves trusted Google Workspace app
     assert.equal(body.challenge.authIntent.connectId, connect.connectId);
     assert.equal(body.challenge.authIntent.chatId, chatId);
     assert.equal(body.challenge.authIntent.accountId, "sender");
+    assert.equal(body.challenge.authIntent.googleConnectionId, "google-firat");
+    assert.equal(body.challenge.authIntent.connectionAlias, "firat");
+    assert.equal(body.challenge.authIntent.connectionUseMode, "explicit_only");
+    assert.equal(body.challenge.authIntent.setAsThreadDefault, "true");
     assert.equal(body.challenge.authIntent.threadId, "firat-jobs");
     assert.equal(body.challenge.authIntent.thread, "Fırat Jobs");
     assert.equal(body.challenge.authIntent.restartCommand, "/connect google");

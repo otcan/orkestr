@@ -14,6 +14,12 @@ import {
   normalizeGoogleWorkspaceCapabilities,
 } from "./google-workspace-scopes.js";
 import { readParentConnectorRuntimeConfig } from "./parent-connector-apps.js";
+import {
+  listGoogleWorkspaceConnections,
+  readGoogleWorkspaceConnectionToken,
+  saveGoogleWorkspaceConnectionToken,
+  updateGoogleWorkspaceConnection,
+} from "./google-workspace-connections.js";
 
 const tokenUrl = "https://oauth2.googleapis.com/token";
 const gmailApiBase = "https://gmail.googleapis.com/gmail/v1/users/me";
@@ -290,14 +296,22 @@ function normalizeOAuthTokenPayload(payload, prior = {}, options = {}) {
 
 async function writeGmailToken(token, env, options = {}) {
   const scope = await connectorScopePaths(env, options);
-  await writeSecretJson(connectorFile(scope, "secrets", "gmail-token.json"), token);
+  const saved = await saveGoogleWorkspaceConnectionToken(token, env, {
+    ...options,
+    connectionId: options.googleConnectionId || options.connectionId || token.connectionId,
+    verifiedEmail: options.verifiedEmail || token.account || token.email,
+  });
   await fs.rm(connectorFile(scope, "secrets", "gmail-error.json"), { force: true }).catch(() => {});
-  return token;
+  return saved.token;
 }
 
 async function saveTokenPayload(payload, env, prior = {}, options = {}) {
   const token = normalizeOAuthTokenPayload(payload, prior, options);
-  return writeGmailToken(token, env, options);
+  return writeGmailToken(token, env, {
+    ...options,
+    googleConnectionId: options.googleConnectionId || options.connectionId || prior.connectionId,
+    verifiedEmail: options.verifiedEmail || token.account || prior.account,
+  });
 }
 
 function normalizeBrokerGrantToken(rawToken = {}, grant = {}, prior = {}) {
@@ -341,15 +355,27 @@ function normalizeBrokerGrantToken(rawToken = {}, grant = {}, prior = {}) {
 
 export async function saveBrokeredGmailGrant(grant = {}, env = process.env) {
   const userId = clean(grant.userId || grant.tenantUserId);
-  const prior = await readGmailToken(env, userId ? { userId } : {});
+  const connectionOptions = {
+    ...(userId ? { userId } : {}),
+    googleConnectionId: clean(grant.googleConnectionId || grant.connectionId),
+    alias: clean(grant.connectionAlias || grant.alias),
+    useMode: clean(grant.connectionUseMode || grant.useMode),
+    setAsMain: grant.setAsMain === true,
+    setAsThreadDefault: grant.setAsThreadDefault === true,
+    threadId: clean(grant.threadId),
+  };
+  const prior = connectionOptions.googleConnectionId
+    ? await readGmailToken(env, { ...(userId ? { userId } : {}), connectionId: connectionOptions.googleConnectionId })
+    : {};
   const token = normalizeBrokerGrantToken(grant.token || grant, grant, prior);
-  await writeGmailToken(token, env, userId ? { userId } : {});
+  const stored = await writeGmailToken(token, env, connectionOptions);
   await appendEvent({ type: "gmail_broker_grant_saved", userId: userId || undefined, brokerInstanceId: token.brokerInstanceId || undefined }, env).catch(() => {});
   return {
     ok: true,
     provider: token.provider,
     userId,
     account: token.account || clean(grant.account),
+    googleConnectionId: stored.connectionId,
     brokerInstanceId: token.brokerInstanceId,
     capabilities: token.capabilities || [],
     grantedScopes: token.grantedScopes || [],
@@ -370,7 +396,15 @@ async function saveOAuthError(error, env, options = {}) {
     ...classification,
     updatedAt: new Date().toISOString(),
   };
-  await writeSecretJson(connectorFile(scope, "secrets", "gmail-error.json"), record);
+  const connectionId = clean(options.connectionId || options.googleConnectionId);
+  if (connectionId) {
+    await updateGoogleWorkspaceConnection(connectionId, {
+      healthState: classification.state,
+      lastErrorCode: classification.code,
+    }, env, options).catch(() => {});
+  } else {
+    await writeSecretJson(connectorFile(scope, "secrets", "gmail-error.json"), record);
+  }
   if (error && typeof error === "object") {
     error.connectorState = classification.state;
     error.connectorCode = classification.code;
@@ -387,8 +421,19 @@ async function clearOAuthError(env, options = {}) {
 }
 
 export async function readGmailToken(env = process.env, options = {}) {
-  const scope = await connectorScopePaths(env, options);
-  return readJson(connectorFile(scope, "secrets", "gmail-token.json"), {});
+  const listed = await listGoogleWorkspaceConnections(env, { ...options, includeExplicit: true });
+  if (!listed.connections.length) return {};
+  try {
+    const selected = await readGoogleWorkspaceConnectionToken(env, options);
+    return {
+      ...selected.token,
+      connection: selected.connection,
+      selectionSource: selected.selectionSource,
+    };
+  } catch (error) {
+    if (error?.code === "connector_selection_required" && options.requireSelection !== true) return {};
+    throw error;
+  }
 }
 
 export async function getGmailProfileEmail(accessToken = "", fetchImpl = fetch, options = {}) {
@@ -531,12 +576,17 @@ export async function startGmailOAuth(env = process.env, options = {}) {
     brokerTenantThreadId: clean(options.brokerTenantThreadId),
     brokerTenantChatId: clean(options.brokerTenantChatId),
     brokerTenantAccountId: clean(options.brokerTenantAccountId),
+    googleConnectionId: clean(options.googleConnectionId || options.connectionId),
+    connectionAlias: clean(options.connectionAlias || options.alias),
+    connectionUseMode: clean(options.connectionUseMode || options.useMode),
+    setAsMain: options.setAsMain === true,
+    setAsThreadDefault: options.setAsThreadDefault === true,
     requestedCapabilities: capabilities,
     requestedScopes,
     redirectUri,
     createdAt: new Date().toISOString(),
   });
-  const existingToken = await readGmailToken(env, options);
+  const existingToken = await readGmailToken(env, { principal: options.principal, userId: options.userId });
   if (!clean(existingToken.accessToken)) await clearOAuthError(env, options);
   const url = new URL("https://accounts.google.com/o/oauth2/v2/auth");
   url.searchParams.set("client_id", clientId);
@@ -659,8 +709,10 @@ async function refreshBrokeredGmailAccessToken(prior = {}, env = process.env, fe
 }
 
 export async function refreshGmailAccessToken(env = process.env, fetchImpl = fetch, options = {}) {
+  let connectionId = clean(options.connectionId || options.googleConnectionId);
   try {
     const prior = await readGmailToken(env, options);
+    connectionId = connectionId || clean(prior.connectionId);
     if (prior.brokered === true || prior.brokerRefresh === true) {
       return await refreshBrokeredGmailAccessToken(prior, env, fetchImpl, options);
     }
@@ -691,7 +743,7 @@ export async function refreshGmailAccessToken(env = process.env, fetchImpl = fet
     await appendEvent({ type: "gmail_oauth_token_refreshed", userId: scope.userId || undefined }, env);
     return token;
   } catch (error) {
-    await saveOAuthError(error, env, { ...options, errorContext: "token_refresh" });
+    await saveOAuthError(error, env, { ...options, connectionId, errorContext: "token_refresh" });
     throw error;
   }
 }
@@ -738,6 +790,11 @@ async function provisionBrokeredGmailGrant(savedState = {}, token = {}, env = pr
     threadId: savedState.brokerTenantThreadId || savedState.threadId || "",
     chatId: savedState.brokerTenantChatId || savedState.chatId || "",
     accountId: savedState.brokerTenantAccountId || savedState.accountId || "",
+    googleConnectionId: savedState.googleConnectionId || "",
+    connectionAlias: savedState.connectionAlias || "",
+    connectionUseMode: savedState.connectionUseMode || "",
+    setAsMain: savedState.setAsMain === true,
+    setAsThreadDefault: savedState.setAsThreadDefault === true,
     brokerInstanceId,
     requestedCapabilities: savedState.requestedCapabilities || [],
     requestedScopes: savedState.requestedScopes || [],
@@ -798,8 +855,18 @@ export async function finishGmailOAuth(query, env = process.env, fetchImpl = fet
     saveToken: false,
   });
   const resolved = await tokenWithResolvedAccount(token, env, fetchImpl, scopeOptions);
+  let storedToken = resolved.token;
   if (!brokered) {
-    await writeGmailToken(resolved.token, env, scopeOptions);
+    storedToken = await writeGmailToken(resolved.token, env, {
+      ...scopeOptions,
+      googleConnectionId: savedState.googleConnectionId,
+      alias: savedState.connectionAlias,
+      useMode: savedState.connectionUseMode,
+      setAsMain: savedState.setAsMain === true,
+      setAsThreadDefault: savedState.setAsThreadDefault === true,
+      threadId: savedState.threadId,
+      verifiedEmail: resolved.account,
+    });
   }
   const brokerGrant = brokered
     ? await provisionBrokeredGmailGrant(savedState, resolved.token, env, fetchImpl)
@@ -818,6 +885,7 @@ export async function finishGmailOAuth(query, env = process.env, fetchImpl = fet
     threadId: savedState.threadId || "",
     chatId: savedState.chatId || "",
     accountId: savedState.accountId || "",
+    googleConnectionId: storedToken.connectionId || savedState.googleConnectionId || "",
     scope: resolved.token.scope,
     grantedScopes: resolved.token.grantedScopes || [],
     requestedCapabilities: savedState.requestedCapabilities || [],

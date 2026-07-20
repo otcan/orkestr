@@ -88,10 +88,45 @@
 
         @if (connector.id === "gmail" && (connectorConnected(connector) || connectedAccount(connector) || connectedCapabilityLabels(connector).length)) {
           <dl class="connector-details">
-            <div>
-              <dt>Google account</dt>
-              <dd><code>{{ connectedAccount(connector) || "Not reported" }}</code></dd>
-            </div>
+            @if (connectedGoogleAccounts(connector).length) {
+              @for (connection of connectedGoogleAccounts(connector); track connection["connectionId"]) {
+                <div>
+                  <dt>{{ googleAccountMode(connection) }}</dt>
+                  <dd>
+                    <code>{{ googleAccountLabel(connection) }}</code>
+                    @if (googleAccountEmail(connection) && googleAccountEmail(connection) !== googleAccountLabel(connection)) {
+                      <small>{{ googleAccountEmail(connection) }}</small>
+                    }
+                    <span class="connector-account-actions">
+                      @if (!googleAccountIsMain(connection)) {
+                        <select
+                          aria-label="Account usage"
+                          [ngModel]="googleAccountUseMode(connection)"
+                          (ngModelChange)="updateGoogleAccountMode(googleAccountId(connection), $event)"
+                          [disabled]="busy || !!actionBusy"
+                        >
+                          <option value="available">Available</option>
+                          <option value="explicit_only">Only when requested</option>
+                        </select>
+                        <button class="secondary" type="button" (click)="makeGoogleAccountMain(googleAccountId(connection))" [disabled]="busy || !!actionBusy">Make main</button>
+                      }
+                      @if (connectorIntentThreadId() && !googleAccountIsThreadDefault(connection)) {
+                        <button class="secondary" type="button" (click)="makeGoogleAccountThreadDefault(googleAccountId(connection))" [disabled]="busy || !!actionBusy">Use in this thread</button>
+                      }
+                      @if (googleAccountNeedsReconnect(connection)) {
+                        <button type="button" (click)="reconnectGoogleAccount(googleAccountId(connection))" [disabled]="busy || !!actionBusy">Reconnect</button>
+                      }
+                      <button class="secondary danger-soft" type="button" (click)="deleteGoogleAccount(googleAccountId(connection))" [disabled]="busy || !!actionBusy">Delete</button>
+                    </span>
+                  </dd>
+                </div>
+              }
+            } @else {
+              <div>
+                <dt>Google account</dt>
+                <dd><code>{{ connectedAccount(connector) || "Not reported" }}</code></dd>
+              </div>
+            }
             @if (connectedCapabilityLabels(connector).length) {
               <div>
                 <dt>Capabilities</dt>
@@ -99,11 +134,9 @@
               </div>
             }
           </dl>
-          @if (connectorConnected(connector)) {
-            <button class="secondary danger-soft" type="button" (click)="disconnectGmail()" [disabled]="actionDisabled('gmail')">
-              {{ actionBusy === "gmail-disconnect" ? "Deleting" : "Delete Gmail auth" }}
-            </button>
-          }
+          <button class="secondary" type="button" (click)="startGmail({ autoRedirect: true, addAccount: true })" [disabled]="actionDisabled('gmail')">
+            {{ actionBusy === "gmail" ? "Opening" : "Add Google account" }}
+          </button>
         }
 
         @if (connector.id === "gmail" && !connectorConnected(connector)) {

@@ -680,6 +680,26 @@ export interface GmailOAuthStartResponse {
   redirectUri?: string;
 }
 
+export interface GoogleWorkspaceConnection {
+  connectionId: string;
+  accountId?: string;
+  alias?: string;
+  email?: string;
+  useMode?: "default" | "available" | "explicit_only";
+  healthState?: string;
+  isMain?: boolean;
+  isThreadDefault?: boolean;
+  capabilities?: string[];
+  [key: string]: unknown;
+}
+
+export interface GoogleWorkspaceAccountsResponse {
+  ok: boolean;
+  connections: GoogleWorkspaceConnection[];
+  mainConnectionId?: string;
+  threadDefaultConnectionId?: string;
+}
+
 export interface OutlookOAuthStartResponse {
   ok: boolean;
   provider: string;
@@ -2043,9 +2063,35 @@ export class ApiService {
     );
   }
 
-  startGmailOAuth(account = ""): Observable<GmailOAuthStartResponse> {
-    const suffix = account.trim() ? `?account=${encodeURIComponent(account.trim())}` : "";
+  startGmailOAuth(options: { account?: string; accountId?: string; alias?: string; useMode?: string; setAsMain?: boolean; setAsThreadDefault?: boolean; threadId?: string } = {}): Observable<GmailOAuthStartResponse> {
+    const params = new URLSearchParams();
+    if (options.account?.trim()) params.set("account", options.account.trim());
+    if (options.accountId?.trim()) params.set("accountId", options.accountId.trim());
+    if (options.alias?.trim()) params.set("alias", options.alias.trim());
+    if (options.useMode?.trim()) params.set("useMode", options.useMode.trim());
+    if (options.setAsMain === true) params.set("setAsMain", "1");
+    if (options.setAsThreadDefault === true) params.set("setAsThreadDefault", "1");
+    if (options.threadId?.trim()) params.set("threadId", options.threadId.trim());
+    const suffix = params.size ? `?${params.toString()}` : "";
     return this.http.get<GmailOAuthStartResponse>(this.api(`/connectors/gmail/oauth/start${suffix}`));
+  }
+
+  googleWorkspaceAccounts(threadId = ""): Observable<GoogleWorkspaceAccountsResponse> {
+    const suffix = threadId.trim() ? `?threadId=${encodeURIComponent(threadId.trim())}` : "";
+    return this.http.get<GoogleWorkspaceAccountsResponse>(this.api(`/connectors/gmail/accounts${suffix}`));
+  }
+
+  updateGoogleWorkspaceAccount(connectionId: string, body: Record<string, unknown>): Observable<{ ok: boolean; connection: GoogleWorkspaceConnection }> {
+    return this.http.patch<{ ok: boolean; connection: GoogleWorkspaceConnection }>(
+      this.api(`/connectors/gmail/accounts/${encodeURIComponent(connectionId)}`),
+      body,
+    );
+  }
+
+  deleteGoogleWorkspaceAccount(connectionId: string): Observable<{ ok: boolean; connection: GoogleWorkspaceConnection }> {
+    return this.http.delete<{ ok: boolean; connection: GoogleWorkspaceConnection }>(
+      this.api(`/connectors/gmail/accounts/${encodeURIComponent(connectionId)}`),
+    );
   }
 
   disconnectGmailAuth(): Observable<{ ok: boolean; provider: string; state: string; status?: Record<string, unknown> }> {

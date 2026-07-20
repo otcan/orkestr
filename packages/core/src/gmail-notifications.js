@@ -423,6 +423,7 @@ export async function runGmailNotificationNow(id, env = process.env, fetchImpl =
     const result = await runGmailPromptPush(push.id, env, fetchImpl, {
       ...options,
       principal,
+      threadId: clean(options.threadId || (lower(push.targetType) === "thread" ? push.target : "")),
       force: options.force !== false,
     });
     const latest = result.push || await getStoredGmailNotification(push.id, env);
