@@ -215,6 +215,9 @@ test("brokered google workspace oauth provisions the Gmail grant to the tenant V
     brokerTenantChatId: "firat-wa",
     brokerTenantAccountId: "de-wa",
     account: "firatkahya@gmail.com",
+    alias: "firat-jobs",
+    useMode: "explicit_only",
+    setAsThreadDefault: true,
     brokerServerRequest: true,
   }, env);
   const connectorTarget = new URL(link.link);
@@ -225,6 +228,10 @@ test("brokered google workspace oauth provisions the Gmail grant to the tenant V
   assert.equal(connectorTarget.searchParams.get("instance_id"), registration.instanceId);
   assert.equal(connectorTarget.searchParams.get("user_id"), "firat");
   assert.equal(connectorTarget.searchParams.get("thread"), "firat-jobs");
+  assert.equal(connectorTarget.searchParams.get("thread_id"), "firat-jobs");
+  assert.equal(connectorTarget.searchParams.get("alias"), "firat-jobs");
+  assert.equal(connectorTarget.searchParams.get("use_mode"), "explicit_only");
+  assert.equal(connectorTarget.searchParams.get("set_as_thread_default"), "1");
   assert.equal(connectorTarget.searchParams.get("connect"), link.connectId);
   const connectTarget = new URL(link.connectLink);
   assert.equal(connectTarget.origin, "https://connect.orkestr.de");
@@ -239,6 +246,9 @@ test("brokered google workspace oauth provisions the Gmail grant to the tenant V
   const savedState = JSON.parse(await fs.readFile(path.join(userDataPaths("firat", env).oauth, "gmail-state.json"), "utf8"));
   assert.equal(savedState.redirectUri, "https://app.orkestr.de/oauth/gmail/callback");
   assert.equal(savedState.account, "");
+  assert.equal(savedState.connectionAlias, "firat-jobs");
+  assert.equal(savedState.connectionUseMode, "explicit_only");
+  assert.equal(savedState.setAsThreadDefault, true);
   const calls = [];
   const brokeredAccessToken = `ya29.${"c".repeat(90)}`;
   const result = await finishGmailOAuth(
@@ -266,6 +276,9 @@ test("brokered google workspace oauth provisions the Gmail grant to the tenant V
       assert.equal(decrypted.payload.threadId, "firat-jobs");
       assert.equal(decrypted.payload.chatId, "firat-wa");
       assert.equal(decrypted.payload.account, "firatkahya@gmail.com");
+      assert.equal(decrypted.payload.connectionAlias, "firat-jobs");
+      assert.equal(decrypted.payload.connectionUseMode, "explicit_only");
+      assert.equal(decrypted.payload.setAsThreadDefault, true);
       assert.equal(decrypted.payload.token.accessToken, brokeredAccessToken);
       assert.equal(decrypted.payload.token.refreshToken, "brokered-refresh");
       assert.equal(decrypted.payload.token.account, "firatkahya@gmail.com");

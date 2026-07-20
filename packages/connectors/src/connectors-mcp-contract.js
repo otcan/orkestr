@@ -1,13 +1,13 @@
 import * as z from "zod/v4";
 
-export const connectorsMcpContractVersion = "1.1";
+export const connectorsMcpContractVersion = "1.2";
 export const connectorsMcpProtocolVersion = "2025-11-25";
 
 const cleanString = z.string().trim();
 const serviceSchema = z.enum(["whatsapp", "gmail", "outlook", "jira", "shopify", "webui", "codex", "runtime"]);
 const contextShape = {
   service: serviceSchema.describe("Connector service to operate."),
-  account_id: cleanString.nullish().describe("Connector account id. Authority still comes from the MCP bearer token."),
+  account_id: cleanString.nullish().describe("Stable account id for the selected connector service. Authority still comes from the MCP bearer token."),
   instance_id: cleanString.nullish().describe("Orkestr instance id for context. It must match the bearer scope."),
   user_id: cleanString.nullish().describe("Orkestr user id for context. It must match the bearer scope."),
   thread_id: cleanString.nullish().describe("Orkestr thread id for context. It must match the bearer scope when scoped."),
@@ -20,6 +20,10 @@ export const connectorsMcpInputSchemas = {
     action: z.enum(["status", "connect", "reconnect", "disconnect", "logout"]),
     account_hint: cleanString.nullish().describe("Optional account hint. Gmail and other chooser-based providers do not require one."),
     target: cleanString.nullish().describe("Optional provider target such as a Shopify shop domain."),
+    alias: cleanString.nullish().describe("Optional stable display alias for a newly connected account."),
+    use_mode: z.enum(["default", "available", "explicit_only"]).nullish().describe("Discovery policy for a Google Workspace connection."),
+    set_as_main: z.boolean().nullish().describe("Make this Google Workspace connection the user's main account."),
+    set_as_thread_default: z.boolean().nullish().describe("Make this Google Workspace connection the default for the scoped thread."),
   }).strict(),
   orkestr_messaging: z.object({
     ...contextShape,

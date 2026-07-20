@@ -16,6 +16,7 @@ import {
   startGmailOAuth,
 } from "../packages/connectors/src/gmail.js";
 import { connectorAuthStatus, disconnectConnectorAuth } from "../packages/connectors/src/connector-auth.js";
+import { listGoogleWorkspaceConnections, resolveGoogleWorkspaceConnection } from "../packages/connectors/src/google-workspace-connections.js";
 import { __brokerInstanceRegistryTestInternals } from "../packages/core/src/broker-instance-registry.js";
 import { userPrincipal } from "../packages/core/src/principal.js";
 import { getSetupStatus } from "../packages/core/src/setup.js";
@@ -311,6 +312,53 @@ test("gmail callback stores the Google account actually selected by the user", a
   assert.equal(stored.account, "other@example.com");
 });
 
+test("gmail oauth adds an explicit-only account without replacing the main account", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-gmail-extra-account-"));
+  const env = { ORKESTR_HOME: home };
+  await writeConnectorConfig("gmail", {
+    clientId: "client-id",
+    clientSecret: "client-secret",
+    redirectUri: "http://localhost/callback",
+  }, env);
+  await exchangeGmailCode("main-code", env, async () => jsonResponse({
+    access_token: "main-access",
+    refresh_token: "main-refresh",
+    expires_in: 3600,
+  }), { account: "owner@example.com" });
+
+  const started = await startGmailOAuth(env, {
+    account: "can@mayamilk.com",
+    alias: "mayamilk",
+    useMode: "explicit_only",
+  });
+  const extraAccess = `ya29.${"x".repeat(90)}`;
+  const result = await finishGmailOAuth(
+    new URLSearchParams({ code: "extra-code", state: started.state }),
+    env,
+    async (url) => {
+      if (String(url) === "https://oauth2.googleapis.com/token") {
+        return jsonResponse({ access_token: extraAccess, refresh_token: "extra-refresh", expires_in: 3600 });
+      }
+      if (String(url) === "https://gmail.googleapis.com/gmail/v1/users/me/profile") {
+        return jsonResponse({ emailAddress: "can@mayamilk.com" });
+      }
+      throw new Error(`unexpected_url:${url}`);
+    },
+  );
+
+  const generic = await listGoogleWorkspaceConnections(env);
+  const all = await listGoogleWorkspaceConnections(env, { includeExplicit: true });
+  const defaultSelection = await resolveGoogleWorkspaceConnection({}, env);
+  const explicitSelection = await resolveGoogleWorkspaceConnection({ account: "mayamilk" }, env);
+
+  assert.equal(result.account, "can@mayamilk.com");
+  assert.equal(all.connections.length, 2);
+  assert.deepEqual(generic.connections.map((connection) => connection.email), ["owner@example.com"]);
+  assert.equal(defaultSelection.connection.email, "owner@example.com");
+  assert.equal(explicitSelection.connection.email, "can@mayamilk.com");
+  assert.equal(explicitSelection.selectionSource, "explicit");
+});
+
 test("gmail connector status backfills a missing account from the Gmail profile", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-gmail-profile-status-"));
   const env = { ORKESTR_HOME: home };
@@ -580,6 +628,54 @@ test("brokered gmail grants refresh through the parent broker without local OAut
   assert.equal(stored.brokered, true);
   assert.equal(stored.brokerInstanceId, "instance-firat");
   assert.deepEqual(capabilities.connectorAuth.gmail.capabilities, ["gmail_read"]);
+});
+
+test("brokered gmail grants preserve main and thread-scoped explicit account selection", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-gmail-broker-multi-account-"));
+  const env = { ORKESTR_HOME: home, ORKESTR_TENANT_VM_ID: "saim-linkedin-vm" };
+  const grant = (account, accessToken) => ({
+    userId: "saim",
+    account,
+    provider: "google_workspace",
+    brokerInstanceId: "instance-saim",
+    requestedCapabilities: ["gmail_read", "calendar_read"],
+    requestedScopes: [
+      "https://www.googleapis.com/auth/gmail.readonly",
+      "https://www.googleapis.com/auth/calendar.events.readonly",
+    ],
+    token: {
+      accessToken,
+      refreshToken: `refresh-${accessToken}`,
+      expiresAt: Math.floor(Date.now() / 1000) + 3600,
+      grantedScopes: [
+        "https://www.googleapis.com/auth/gmail.readonly",
+        "https://www.googleapis.com/auth/calendar.events.readonly",
+      ],
+    },
+  });
+  const main = await saveBrokeredGmailGrant({
+    ...grant("owner@example.com", "main-access"),
+    alias: "owner",
+    setAsMain: true,
+  }, env);
+  const saim = await saveBrokeredGmailGrant({
+    ...grant("saim@example.com", "saim-access"),
+    connectionAlias: "saim",
+    connectionUseMode: "explicit_only",
+    threadId: "saim-linkedin",
+    setAsThreadDefault: true,
+  }, env);
+
+  const defaultSelection = await resolveGoogleWorkspaceConnection({}, env, { userId: "saim" });
+  const threadSelection = await resolveGoogleWorkspaceConnection({ threadId: "saim-linkedin" }, env, { userId: "saim" });
+  const generic = await listGoogleWorkspaceConnections(env, { userId: "saim" });
+
+  assert.equal(defaultSelection.connection.connectionId, main.googleConnectionId);
+  assert.equal(defaultSelection.token.accessToken, "main-access");
+  assert.equal(threadSelection.connection.connectionId, saim.googleConnectionId);
+  assert.equal(threadSelection.token.accessToken, "saim-access");
+  assert.equal(threadSelection.selectionSource, "thread_default");
+  assert.deepEqual(generic.connections.map((connection) => connection.email), ["owner@example.com"]);
 });
 
 test("tenant gmail status uses instance connector scope for any principal", async () => {

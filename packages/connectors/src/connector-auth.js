@@ -5,9 +5,15 @@ import { connectorFile, connectorScopePaths } from "./connector-storage.js";
 import {
   classifyGmailConnectorError,
   enrichGmailTokenAccount,
+  readGmailToken,
   startGmailOAuth,
   validateGmailConnection,
 } from "./gmail.js";
+import {
+  listGoogleWorkspaceConnections,
+  removeGoogleWorkspaceConnection,
+  resolveGoogleWorkspaceConnection,
+} from "./google-workspace-connections.js";
 import {
   googleWorkspaceCapabilityLabels,
   googleWorkspaceCapabilitiesForScopes,
@@ -200,21 +206,32 @@ export async function connectorAuthStatus(providerId = "", env = process.env, op
   }
 
   const tokenPath = tokenFile(provider, scope);
+  const initialGmailToken = provider === "gmail"
+    ? await readGmailToken(env, { ...options, allowUnhealthy: true }).catch(() => ({}))
+    : null;
   const [tokenExists, priorError] = await Promise.all([
-    fileExists(tokenPath),
+    provider === "gmail"
+      ? Boolean(clean(initialGmailToken?.accessToken || initialGmailToken?.refreshToken))
+      : fileExists(tokenPath),
     readJson(errorFile(provider, scope), {}),
   ]);
   const priorGmailFailure = provider === "gmail" && clean(priorError.message)
     ? { ...classifyGmailConnectorError(priorError, { errorContext: priorError.errorContext }), ...priorError }
     : null;
-  if (provider === "gmail" && tokenExists && options.validate === true && priorGmailFailure?.state !== "reauth_required") {
+  if (
+    provider === "gmail" &&
+    tokenExists &&
+    options.validate === true &&
+    priorGmailFailure?.state !== "reauth_required" &&
+    clean(initialGmailToken?.connection?.healthState) !== "reauth_required"
+  ) {
     await validateGmailConnection(env, options.fetchImpl || fetch, options).catch(() => null);
   }
   const [pending, oauthState, error, token] = await Promise.all([
     readJson(pendingFile(provider, scope), {}),
     readJson(oauthStateFile(provider, scope), {}),
     readJson(errorFile(provider, scope), {}),
-    readJson(tokenPath, {}),
+    provider === "gmail" ? initialGmailToken : readJson(tokenPath, {}),
   ]);
   let statusToken = token;
   let account = clean(token.account || pending.account || oauthState.account);
@@ -231,10 +248,13 @@ export async function connectorAuthStatus(providerId = "", env = process.env, op
     ? { ...classifyGmailConnectorError(error, { errorContext: error.errorContext }), ...error }
     : null;
   const gmailFailureState = clean(gmailFailure?.state);
+  const connectionHealthState = provider === "gmail" ? clean(statusToken.connection?.healthState) : "";
   const gmailFailureBlocksToken = gmailFailureState === "reauth_required" ||
     gmailFailureState === "degraded" ||
     (gmailFailureState === "broken" && clean(error.errorContext) !== "oauth_exchange");
-  const state = tokenExists && gmailFailureBlocksToken
+  const state = tokenExists && ["reauth_required", "degraded", "broken"].includes(connectionHealthState)
+    ? connectionHealthState
+    : tokenExists && gmailFailureBlocksToken
     ? gmailFailureState
       : tokenExists
         ? gmailHasGrantedCapabilities ? "connected" : "partial"
@@ -256,14 +276,19 @@ export async function connectorAuthStatus(providerId = "", env = process.env, op
     connected: state === "connected",
     pending: state === "pending" || state === "authorization_url_ready",
     account,
+    ...(provider === "gmail" ? {
+      connectionId: clean(statusToken.connectionId),
+      selectionSource: clean(statusToken.selectionSource),
+      connections: (await listGoogleWorkspaceConnections(env, options).catch(() => ({ connections: [] }))).connections,
+    } : {}),
     shop: clean(oauthState.shop),
     parentConnector,
     userConnectionRequired: true,
     ...(provider === "gmail" && tokenExists ? gmailDetails : {}),
     error: clean(error.message),
-    reason: clean(error.code),
-    retryable: error.retryable === true,
-    nextAction: clean(error.nextAction),
+    reason: clean(error.code || statusToken.connection?.lastErrorCode),
+    retryable: error.retryable === true || connectionHealthState === "degraded",
+    nextAction: clean(error.nextAction) || (connectionHealthState === "reauth_required" ? "reconnect" : connectionHealthState === "degraded" ? "retry" : ""),
     updatedAt: clean(error.updatedAt),
     message: state === "reauth_required"
       ? `${definition?.label || provider} access is no longer accepted by the provider. Reconnect this user's account.`
@@ -289,6 +314,12 @@ export async function startConnectorAuth(args = {}, principal = {}, env = proces
       account,
       thread: options.thread,
       capabilities: args.capabilities || args.requestedCapabilities || undefined,
+      googleConnectionId: args.accountId || args.connectionId,
+      alias: args.alias,
+      useMode: args.useMode,
+      setAsMain: args.setAsMain === true,
+      setAsThreadDefault: args.setAsThreadDefault === true,
+      threadId: clean(options.thread?.id || args.threadId),
     });
     return {
       ok: true,
@@ -319,6 +350,30 @@ export async function disconnectConnectorAuth(args = {}, principal = {}, env = p
   const provider = normalizeProvider(args.provider);
   if (provider === "whatsapp") throw connectorError("whatsapp_disconnect_not_supported_here", 400);
   const scope = await connectorScopePaths(env, { principal });
+  if (provider === "gmail") {
+    const selected = await resolveGoogleWorkspaceConnection({
+      connectionId: args.accountId || args.connectionId,
+      account: args.account,
+      threadId: args.threadId,
+    }, env, { principal, threadId: args.threadId });
+    const removed = await removeGoogleWorkspaceConnection(selected.connection.connectionId, env, { principal });
+    await unlinkIfExists(errorFile(provider, scope));
+    await unlinkIfExists(oauthStateFile(provider, scope));
+    await appendEvent({
+      type: "gmail_oauth_disconnected",
+      provider,
+      userId: scope.userId || undefined,
+      accountId: selected.connection.connectionId,
+    }, env).catch(() => {});
+    return {
+      ok: true,
+      provider,
+      state: "disconnected",
+      accountId: selected.connection.connectionId,
+      connection: removed.connection,
+      status: await connectorAuthStatus(provider, env, { principal }),
+    };
+  }
   const removedFiles = [];
   for (const filePath of [
     tokenFile(provider, scope),

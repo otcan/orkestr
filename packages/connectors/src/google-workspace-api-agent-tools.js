@@ -9,6 +9,7 @@ import {
   sendGmailMessage,
   updateGoogleCalendarEvent,
 } from "./google-workspace.js";
+import { resolveGoogleWorkspaceConnection } from "./google-workspace-connections.js";
 
 function clean(value) {
   return String(value || "").trim();
@@ -39,7 +40,7 @@ function publicDriveFile(file = {}) {
 }
 
 export function tenantApiAgentGoogleWorkspaceToolDefinitions() {
-  return [
+  const tools = [
     {
       type: "function",
       name: "orkestr_modify_gmail_message",
@@ -206,28 +207,53 @@ export function tenantApiAgentGoogleWorkspaceToolDefinitions() {
       strict: true,
     },
   ];
+  return tools.map((tool) => ({
+    ...tool,
+    parameters: {
+      ...tool.parameters,
+      properties: {
+        accountId: { type: "string", description: "Stable Google connection id, or empty to use the thread default or main account." },
+        account: { type: "string", description: "Explicit Google account alias or email, or empty when accountId is supplied or the default should be used." },
+        ...tool.parameters.properties,
+      },
+      required: ["accountId", "account", ...tool.parameters.required],
+    },
+  }));
 }
 
 export async function runTenantApiAgentGoogleWorkspaceTool(name = "", args = {}, context = {}, env = process.env) {
   const principal = context.principal || null;
   const fetchImpl = context.fetchImpl || fetch;
-  const options = { principal };
   const tool = clean(name);
+  const supported = new Set(tenantApiAgentGoogleWorkspaceToolDefinitions().map((definition) => definition.name));
+  if (!supported.has(tool)) return { handled: false, result: null };
+  const selected = await resolveGoogleWorkspaceConnection({
+    connectionId: args.accountId,
+    account: args.account,
+    threadId: context.thread?.id || context.threadId,
+  }, env, { principal, threadId: context.thread?.id || context.threadId });
+  const options = { principal, connectionId: selected.connection.connectionId, threadId: context.thread?.id || context.threadId };
+  const selection = {
+    accountId: selected.connection.connectionId,
+    account: selected.connection.email,
+    alias: selected.connection.alias,
+    selectionSource: selected.selectionSource,
+  };
   if (tool === "orkestr_modify_gmail_message") {
     const result = await modifyGmailMessage(args, env, fetchImpl, options);
-    return { handled: true, result: { ok: true, provider: "gmail", messageId: result.messageId, patch: result.patch, message: result.message } };
+    return { handled: true, result: { ok: true, provider: "gmail", ...selection, messageId: result.messageId, patch: result.patch, message: result.message } };
   }
   if (tool === "orkestr_create_gmail_draft") {
     const result = await createGmailDraft(args, env, fetchImpl, options);
-    return { handled: true, result: { ok: true, provider: "gmail", draft: { id: clean(result.draft?.id), message: result.draft?.message || null } } };
+    return { handled: true, result: { ok: true, provider: "gmail", ...selection, draft: { id: clean(result.draft?.id), message: result.draft?.message || null } } };
   }
   if (tool === "orkestr_send_gmail_draft") {
     const result = await sendGmailDraft(args, env, fetchImpl, options);
-    return { handled: true, result: { ok: true, provider: "gmail", draftId: result.draftId, message: result.message } };
+    return { handled: true, result: { ok: true, provider: "gmail", ...selection, draftId: result.draftId, message: result.message } };
   }
   if (tool === "orkestr_send_gmail_message") {
     const result = await sendGmailMessage(args, env, fetchImpl, options);
-    return { handled: true, result: { ok: true, provider: "gmail", message: result.message } };
+    return { handled: true, result: { ok: true, provider: "gmail", ...selection, message: result.message } };
   }
   if (tool === "orkestr_list_google_calendar_events") {
     const result = await listGoogleCalendarEvents(args, env, fetchImpl, options);
@@ -236,6 +262,7 @@ export async function runTenantApiAgentGoogleWorkspaceTool(name = "", args = {},
       result: {
         ok: true,
         provider: "google_calendar",
+        ...selection,
         calendarId: result.calendarId,
         events: result.events.map(publicCalendarEvent),
         nextPageToken: result.nextPageToken,
@@ -244,15 +271,15 @@ export async function runTenantApiAgentGoogleWorkspaceTool(name = "", args = {},
   }
   if (tool === "orkestr_create_google_calendar_event") {
     const result = await createGoogleCalendarEvent(args, env, fetchImpl, options);
-    return { handled: true, result: { ok: true, provider: "google_calendar", action: "create", calendarId: result.calendarId, event: publicCalendarEvent(result.event) } };
+    return { handled: true, result: { ok: true, provider: "google_calendar", ...selection, action: "create", calendarId: result.calendarId, event: publicCalendarEvent(result.event) } };
   }
   if (tool === "orkestr_update_google_calendar_event") {
     const result = await updateGoogleCalendarEvent(args, env, fetchImpl, options);
-    return { handled: true, result: { ok: true, provider: "google_calendar", action: "update", calendarId: result.calendarId, eventId: result.eventId, event: publicCalendarEvent(result.event) } };
+    return { handled: true, result: { ok: true, provider: "google_calendar", ...selection, action: "update", calendarId: result.calendarId, eventId: result.eventId, event: publicCalendarEvent(result.event) } };
   }
   if (tool === "orkestr_delete_google_calendar_event") {
     const result = await deleteGoogleCalendarEvent(args, env, fetchImpl, options);
-    return { handled: true, result: { ok: true, provider: "google_calendar", action: "delete", calendarId: result.calendarId, eventId: result.eventId } };
+    return { handled: true, result: { ok: true, provider: "google_calendar", ...selection, action: "delete", calendarId: result.calendarId, eventId: result.eventId } };
   }
   if (tool === "orkestr_get_google_drive_file") {
     const result = await getGoogleDriveFile(args, env, fetchImpl, options);
@@ -261,6 +288,7 @@ export async function runTenantApiAgentGoogleWorkspaceTool(name = "", args = {},
       result: {
         ok: true,
         provider: "google_drive",
+        ...selection,
         file: publicDriveFile(result.file),
         ...(result.content !== undefined ? { content: clean(result.content).slice(0, Number(args.maxChars) || 20_000) } : {}),
       },

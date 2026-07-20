@@ -515,6 +515,16 @@ test("broker instance app path pairs on broker and proxies the VM WebUI", async 
       response.end(JSON.stringify({ ok: true, authorizeUrl: "https://accounts.google.test/oauth" }));
       return;
     }
+    if (request.method === "GET" && String(request.url || "").startsWith("/api/connectors/gmail/accounts")) {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ ok: true, connections: [{ connectionId: "google-saim", email: "saim@example.com" }] }));
+      return;
+    }
+    if (["PATCH", "DELETE"].includes(String(request.method || "")) && request.url === "/api/connectors/gmail/accounts/google-saim") {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ ok: true, connection: { connectionId: "google-saim" } }));
+      return;
+    }
     if (request.method === "DELETE" && request.url === "/api/connectors/gmail/auth") {
       response.writeHead(200, { "content-type": "application/json" });
       response.end(JSON.stringify({ ok: true, provider: "gmail", state: "disconnected" }));
@@ -567,6 +577,7 @@ test("broker instance app path pairs on broker and proxies the VM WebUI", async 
     const brokeredConnectUrl = new URL(brokeredConnect.connectLink);
     assert.equal(brokeredConnectUrl.pathname, `/i/${brokerRegistration.instanceId}/app/connectors/gmail`);
     assert.equal(brokeredConnectUrl.searchParams.get("connect"), brokeredConnect.connectId);
+    assert.equal(brokeredConnectUrl.searchParams.get("thread_id"), "firat-thread");
     const rawBrokeredConnectUrl = new URL(`/connect/google?connect=${encodeURIComponent(brokeredConnect.connectId)}`, "https://connect.orkestr.de");
     const topLevelBrokeredConnect = await fetch(
       `http://127.0.0.1:${port}${rawBrokeredConnectUrl.pathname}${rawBrokeredConnectUrl.search}`,
@@ -703,6 +714,11 @@ test("broker instance app path pairs on broker and proxies the VM WebUI", async 
         instanceId: brokerRegistration.instanceId,
         userId: "firat",
         account: "old-hint@example.com",
+        googleConnectionId: "google-saim",
+        connectionAlias: "saim",
+        connectionUseMode: "explicit_only",
+        setAsThreadDefault: "true",
+        threadId: "saim-linkedin",
       },
     });
     await approvePairingChallenge(authIntentChallenge.challengeId, { approvedBy: "node:test", env: process.env });
@@ -725,6 +741,16 @@ test("broker instance app path pairs on broker and proxies the VM WebUI", async 
     const intentUserPayload = await intentUserResponse.json();
     const intentStartResponse = await fetch(`http://127.0.0.1:${port}/i/${brokerRegistration.instanceId}/app/api/connectors/gmail/oauth/start`, { headers: { cookie: authIntentCookie } });
     const intentStartPayload = await intentStartResponse.json();
+    const intentAccountsResponse = await fetch(`http://127.0.0.1:${port}/i/${brokerRegistration.instanceId}/app/api/connectors/gmail/accounts?threadId=saim-linkedin`, { headers: { cookie: authIntentCookie } });
+    const intentAccountUpdateResponse = await fetch(`http://127.0.0.1:${port}/i/${brokerRegistration.instanceId}/app/api/connectors/gmail/accounts/google-saim`, {
+      method: "PATCH",
+      headers: { cookie: authIntentCookie, "content-type": "application/json" },
+      body: JSON.stringify({ useMode: "explicit_only" }),
+    });
+    const intentAccountDeleteResponse = await fetch(`http://127.0.0.1:${port}/i/${brokerRegistration.instanceId}/app/api/connectors/gmail/accounts/google-saim`, {
+      method: "DELETE",
+      headers: { cookie: authIntentCookie },
+    });
     const intentSavedState = JSON.parse(await fs.readFile(path.join(userDataPaths("firat", process.env).oauth, "gmail-state.json"), "utf8"));
     const intentDisconnectResponse = await fetch(`http://127.0.0.1:${port}/i/${brokerRegistration.instanceId}/app/api/connectors/gmail/auth`, { method: "DELETE", headers: { cookie: authIntentCookie } });
     const intentDisconnectPayload = await intentDisconnectResponse.json();
@@ -799,6 +825,9 @@ test("broker instance app path pairs on broker and proxies the VM WebUI", async 
     assert.equal(intentUserResponse.status, 200);
     assert.equal(intentUserPayload.user.id, "firat");
     assert.equal(intentStartResponse.status, 200);
+    assert.equal(intentAccountsResponse.status, 200);
+    assert.equal(intentAccountUpdateResponse.status, 200);
+    assert.equal(intentAccountDeleteResponse.status, 200);
     assert.equal(intentStartPayload.provider, "google_workspace");
     assert.ok(intentStartPayload.connectId);
     assert.deepEqual(intentStartPayload.capabilities, ["gmail_send"]);
@@ -811,6 +840,11 @@ test("broker instance app path pairs on broker and proxies the VM WebUI", async 
     assert.equal(intentSavedState.state, intentStartPayload.state);
     assert.equal(intentSavedState.tenantVmId, "");
     assert.equal(intentSavedState.brokerTenantVmId, "firat-jobs-vm");
+    assert.equal(intentSavedState.googleConnectionId, "google-saim");
+    assert.equal(intentSavedState.connectionAlias, "saim");
+    assert.equal(intentSavedState.connectionUseMode, "explicit_only");
+    assert.equal(intentSavedState.setAsThreadDefault, true);
+    assert.equal(intentSavedState.threadId, "saim-linkedin");
     assert.equal(intentScopes.includes("https://www.googleapis.com/auth/gmail.readonly"), false);
     assert.equal(intentScopes.includes("https://www.googleapis.com/auth/gmail.modify"), false);
     assert.ok(intentScopes.includes("https://www.googleapis.com/auth/gmail.send"));
@@ -1689,7 +1723,16 @@ test("web shell exposes a user connector management page", async () => {
   assert.match(connectorsComponent, /scheduleRetryIfNeeded\(\): void/);
   assert.match(connectorsComponent, /maybeAutoStartRouteLogin\(\): void/);
   assert.match(connectorsComponent, /if \(!this\.setupStatus\) return/);
-  assert.match(connectorsComponent, /startGmail\(options: \{ autoRedirect\?: boolean \} = \{\}\)/);
+  assert.match(connectorsComponent, /startGmail\(options: \{ autoRedirect\?: boolean; addAccount\?: boolean \} = \{\}\)/);
+  assert.match(connectorsComponent, /googleWorkspaceAccounts/);
+  assert.match(connectorsComponent, /makeGoogleAccountMain/);
+  assert.match(connectorsComponent, /makeGoogleAccountThreadDefault/);
+  assert.match(connectorsComponent, /updateGoogleAccountMode/);
+  assert.match(connectorsComponent, /reconnectGoogleAccount/);
+  assert.match(connectorsComponent, /deleteGoogleAccount/);
+  assert.match(connectorsTemplate, /Add Google account/);
+  assert.match(connectorsTemplate, /Only when requested/);
+  assert.match(connectorsTemplate, /Use in this thread/);
   assert.match(connectorsComponent, /disconnectGmail\(\): Promise<void>/);
   assert.match(connectorsComponent, /connectorConnected\(connector: ConnectorStatus\): boolean/);
   assert.match(connectorsComponent, /connectorNeedsReconnect\(connector: ConnectorStatus\): boolean/);
@@ -1709,7 +1752,7 @@ test("web shell exposes a user connector management page", async () => {
   assert.match(connectorsComponent, /connectorIntentThreadLabel\(\): string/);
   assert.match(connectorsComponent, /routeQueryParam\(name: string\): string/);
   assert.match(connectorsComponent, /void this\.load\(false\)/);
-  assert.match(connectorsComponent, /this\.api\.startGmailOAuth\(\)/);
+  assert.match(connectorsComponent, /useMode: "explicit_only"/);
   assert.match(connectorsComponent, /this\.api\.disconnectGmailAuth\(\)/);
   assert.match(connectorsComponent, /this\.api\.startOutlookOAuth\(this\.outlookAccount\)/);
   assert.match(connectorsComponent, /private readonly connectorOrder = \["whatsapp", "gmail", "outlook", "jira", "shopify", "linkedin", "browsers"\]/);
@@ -1733,8 +1776,8 @@ test("web shell exposes a user connector management page", async () => {
   assert.match(connectorsTemplate, /loginOnly\(\) \? "Secure sign-in" : "Connectors"/);
   assert.match(connectorsTemplate, /Google account/);
   assert.match(connectorsTemplate, /connectedAccount\(connector\)/);
-  assert.match(connectorsTemplate, /Delete Gmail auth/);
-  assert.match(connectorsTemplate, /disconnectGmail\(\)/);
+  assert.match(connectorsTemplate, /Add Google account/);
+  assert.match(connectorsTemplate, /deleteGoogleAccount/);
   assert.match(connectorsTemplate, /class="connector-details"/);
   assert.doesNotMatch(connectorsTemplate, /name="user-gmail-account"/);
   assert.match(connectorsTemplate, /Reconnect Gmail/);
@@ -1742,7 +1785,8 @@ test("web shell exposes a user connector management page", async () => {
   assert.match(connectorsTemplate, /Open Gmail sign-in/);
   assert.match(connectorsTemplate, /Open Microsoft sign-in/);
   assert.match(connectorsTemplate, /\[href\]="deskPath\(\)"/);
-  assert.match(api, /startGmailOAuth\(account = ""\)/);
+  assert.match(api, /startGmailOAuth\(options: \{/);
+  assert.match(api, /googleWorkspaceAccounts/);
   assert.match(api, /disconnectGmailAuth\(\)/);
   assert.match(api, /startOutlookOAuth\(account = ""\)/);
   assert.match(styles, /\.user-connector-grid/);

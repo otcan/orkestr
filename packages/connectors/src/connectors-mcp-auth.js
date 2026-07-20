@@ -45,6 +45,7 @@ function parseTokenRecords(value = "") {
 }
 
 function normalizeRecord(record = {}) {
+  const accountId = clean(record.accountId);
   return {
     id: clean(record.id || record.tokenId),
     token: clean(record.token || record.value || record.secret),
@@ -55,7 +56,8 @@ function normalizeRecord(record = {}) {
     ownerUserId: clean(record.ownerUserId || record.userId),
     instanceId: clean(record.instanceId || record.instance),
     threadId: clean(record.threadId),
-    accountId: clean(record.accountId),
+    accountId,
+    accountService: clean(record.accountService || record.service || (accountId ? "whatsapp" : "")).toLowerCase(),
     bindingId: clean(record.bindingId),
     chatId: clean(record.chatId),
     allowedChatIds: list(record.allowedChatIds || record.allowedChats || record.chatIds),
@@ -76,6 +78,7 @@ function publicRecord(record = {}) {
     instanceId: record.instanceId || "",
     threadId: record.threadId || "",
     accountId: record.accountId || "",
+    accountService: record.accountService || "",
     bindingId: record.bindingId || "",
     chatId: record.chatId || "",
     allowedChatIds: record.allowedChatIds || [],
@@ -176,7 +179,8 @@ export function assertConnectorMcpScope(auth = {}, tool = "", input = {}) {
   if (auth.instanceId && clean(input.instance_id) && auth.instanceId !== clean(input.instance_id)) scopeDenied("instance_scope_denied");
   if (auth.ownerUserId && clean(input.user_id) && auth.ownerUserId !== clean(input.user_id)) scopeDenied("user_scope_denied");
   if (auth.threadId && clean(input.thread_id) && auth.threadId !== clean(input.thread_id)) scopeDenied("thread_scope_denied");
-  if (auth.accountId && clean(input.account_id) && auth.accountId !== clean(input.account_id)) scopeDenied("account_scope_denied");
+  const accountScopeApplies = Boolean(auth.accountId) && (!auth.accountService || auth.accountService === service);
+  if (accountScopeApplies && clean(input.account_id) && auth.accountId !== clean(input.account_id)) scopeDenied("account_scope_denied");
 
   const conversationId = clean(input.conversation_id);
   const allowed = [...list(auth.allowedChatIds), ...list(auth.allowedRecipients), ...list(auth.chatId)];
@@ -185,7 +189,7 @@ export function assertConnectorMcpScope(auth = {}, tool = "", input = {}) {
     ...auth,
     service,
     action,
-    accountId: auth.accountId || clean(input.account_id),
+    accountId: accountScopeApplies ? auth.accountId : clean(input.account_id),
     instanceId: auth.instanceId || clean(input.instance_id),
     ownerUserId: auth.ownerUserId || clean(input.user_id),
     threadId: auth.threadId || clean(input.thread_id),

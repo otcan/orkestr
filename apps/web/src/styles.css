@@ -3175,6 +3175,23 @@ ork-first-thread-wizard.first-thread-host {
   color: var(--text);
 }
 
+.connector-account-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.connector-account-actions button {
+  padding: 7px 10px;
+}
+
+.connector-account-actions select {
+  width: auto;
+  min-width: 150px;
+  padding: 7px 10px;
+}
+
 .connector-device-code {
   display: flex;
   flex-wrap: wrap;
