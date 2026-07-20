@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test, { afterEach } from "node:test";
 import { appendThreadMessage, createThread } from "../packages/core/src/threads.js";
-import { routeWhatsAppInbound, syncWhatsAppTypingIndicators } from "../packages/connectors/src/whatsapp.js";
+import { deliverWhatsAppReplies, routeWhatsAppInbound, syncWhatsAppTypingIndicators } from "../packages/connectors/src/whatsapp.js";
 import {
   resetExternalWhatsAppTypingForTest,
   setExternalWhatsAppTyping,
@@ -103,4 +103,57 @@ test("external WhatsApp typing follows the routed turn lifecycle through MCP", a
   assert.equal(working.active, 1);
   assert.equal(completed.active, 0);
   assert.deepEqual(calls, ["composing", "paused"]);
+});
+
+test("typing scan cannot hide a new SQLite-backed final from delivery", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-typing-final-cache-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_THREAD_STORE: "sqlite",
+    WHATSAPP_BRIDGE_MODE: "external",
+    ORKESTR_WHATSAPP_EXTERNAL_BRIDGE_ENABLED: "1",
+  };
+  await createThread({ id: "typing-final-cache-thread", name: "Typing final cache" }, env);
+  await writeConnectorConfig("whatsapp", {
+    bridgeMode: "external",
+    bridgeUrl: "http://wa.test",
+    threadRoutes: { "typing-final-cache@g.us": "typing-final-cache-thread" },
+  }, env);
+  const routed = await routeWhatsAppInbound({
+    eventId: "typing-final-cache-event",
+    accountId: "sender",
+    chatId: "typing-final-cache@g.us",
+    text: "finish this",
+  }, env);
+  const final = await appendThreadMessage("typing-final-cache-thread", {
+    role: "assistant",
+    source: "codex-rollout",
+    phase: "final_answer",
+    state: "completed",
+    text: "Final must be delivered immediately.",
+    parentMessageId: routed.message.id,
+    connector: "whatsapp",
+    chatId: "typing-final-cache@g.us",
+    accountId: "sender",
+  }, env);
+
+  await syncWhatsAppTypingIndicators(env, {
+    statusImpl: async () => ({ state: "ready", working: false, typingActive: false }),
+    syncImpl: async (targets) => ({ ok: true, active: targets.length, targets }),
+  });
+
+  const calls = [];
+  const delivery = await deliverWhatsAppReplies(env, async (url, options = {}) => {
+    calls.push({ url, body: JSON.parse(options.body) });
+    return new Response(JSON.stringify({ ok: true, ids: ["sent-final-after-typing"] }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  });
+
+  assert.equal(delivery.delivered.length, 1);
+  assert.equal(delivery.delivered[0].messageId, final.id);
+  assert.equal(delivery.delivered[0].deliveryType, "final");
+  assert.equal(calls.length, 1);
+  assert.match(calls[0].body.text, /Final must be delivered immediately\./);
 });
