@@ -5288,13 +5288,14 @@ function whatsappSendFailureMessage(payload = {}, status = 0) {
   );
 }
 
-async function listThreadMessageSets(env, state = null, config = {}) {
+async function listThreadMessageSets(env, state = null, config = {}, options = {}) {
   const paths = await ensureDataDirs(env);
   const sets = [];
   const repository = createThreadMessageRepository(env);
   const threads = (await listThreads(env)).filter((thread) => threadEligibleForWhatsAppMirrorScan(thread, config));
   const fingerprints = await repository.fingerprints(threads.map((thread) => thread.id)).catch(() => null);
-  const cachePrefix = `${paths.home}:`;
+  const scanScope = pickString(options.scanScope, "delivery").toLowerCase();
+  const cachePrefix = `${paths.home}:${scanScope}:`;
   const activeCacheKeys = new Set(threads.map((thread) => `${cachePrefix}${thread.id}`));
   for (const cacheKey of whatsappMirrorSqliteRevisionCache.keys()) {
     if (cacheKey.startsWith(cachePrefix) && !activeCacheKeys.has(cacheKey)) {
@@ -5608,7 +5609,7 @@ export async function syncWhatsAppTypingIndicators(env = process.env, options = 
   const statusImpl = options.statusImpl || runtimeStatus;
   const syncImpl = options.syncImpl || syncWhatsAppTypingTargets;
   const targets = [];
-  for (const { threadId, thread, messages } of await listThreadMessageSets(env, state, config)) {
+  for (const { threadId, thread, messages } of await listThreadMessageSets(env, state, config, { scanScope: "typing" })) {
     const status = await statusImpl(threadId, env, messages).catch(() => null);
     const target = whatsappTypingTargetForThread({ thread, messages, status, state, env });
     if (target) targets.push(target);
