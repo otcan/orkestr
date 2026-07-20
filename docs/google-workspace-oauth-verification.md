@@ -63,6 +63,23 @@ https://connect.orkestr.de/oauth/gmail/callback
 If a deployment uses a different `GMAIL_OAUTH_REDIRECT_URI`, register that exact
 URI as well.
 
+## Multiple OAuth apps
+
+Keep the verified production client as the default. Additional testing or
+customer-specific clients must be selected explicitly and are never used as an
+automatic fallback:
+
+```dotenv
+ORKESTR_GOOGLE_OAUTH_DEFAULT_APP=orkestr-de
+ORKESTR_GOOGLE_OAUTH_APPS_JSON={"otcan-claw":{"clientId":"...","clientSecret":"...","redirectUri":"https://connect.orkestr.de/oauth/gmail/callback","approvedTesters":["can@mayamilk.com"]}}
+```
+
+Call `orkestr_auth` with `oauth_app: "otcan-claw"` only when the user asks for
+that profile. Omit `oauth_app` to use `orkestr-de`. Orkestr stores the selected
+profile id with the connection so callback exchange and refresh always use the
+same OAuth client. Testing-mode Google refresh tokens for Gmail or Calendar
+scopes expire after seven days.
+
 ## Capability Scopes
 
 Base identity is requested for every Google Workspace connection:

@@ -20,6 +20,78 @@ function firstEnv(env = process.env, keys = []) {
   return "";
 }
 
+function connectorConfigError(message, statusCode = 400) {
+  const error = new Error(message);
+  error.statusCode = statusCode;
+  return error;
+}
+
+function normalizeGoogleOAuthAppId(value = "") {
+  return clean(value).toLowerCase().replace(/[^a-z0-9_.-]+/g, "-").replace(/^-+|-+$/g, "");
+}
+
+function googleOAuthAppsConfig(config = {}, env = process.env) {
+  const raw = clean(
+    env.ORKESTR_GOOGLE_OAUTH_APPS_JSON ||
+      env.GOOGLE_OAUTH_APPS_JSON ||
+      (typeof config.oauthApps === "string" ? config.oauthApps : ""),
+  );
+  if (!raw && config.oauthApps && typeof config.oauthApps === "object" && !Array.isArray(config.oauthApps)) {
+    return config.oauthApps;
+  }
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("invalid");
+    return parsed;
+  } catch {
+    throw connectorConfigError("google_oauth_apps_config_invalid", 500);
+  }
+}
+
+export function googleOAuthDefaultAppId(config = {}, env = process.env) {
+  return normalizeGoogleOAuthAppId(
+    env.ORKESTR_GOOGLE_OAUTH_DEFAULT_APP ||
+      env.GOOGLE_OAUTH_DEFAULT_APP ||
+      config.defaultOAuthApp ||
+      config.oauthAppId ||
+      "default",
+  ) || "default";
+}
+
+export function resolveGoogleOAuthAppConfig(requestedAppId = "", config = {}, env = process.env) {
+  const defaultAppId = googleOAuthDefaultAppId(config, env);
+  const requested = normalizeGoogleOAuthAppId(requestedAppId);
+  const oauthAppId = requested || defaultAppId;
+  const profiles = googleOAuthAppsConfig(config, env);
+  const profileEntry = Object.entries(profiles).find(([id]) => normalizeGoogleOAuthAppId(id) === oauthAppId);
+  const profile = profileEntry?.[1] && typeof profileEntry[1] === "object" && !Array.isArray(profileEntry[1])
+    ? profileEntry[1]
+    : null;
+  if (requested && oauthAppId !== defaultAppId && !profile) {
+    throw connectorConfigError("google_oauth_app_not_found", 404);
+  }
+  const isDefault = oauthAppId === defaultAppId;
+  const base = isDefault ? { ...config } : { redirectUri: clean(config.redirectUri) };
+  const resolved = profile ? { ...base, ...profile } : base;
+  return {
+    ...resolved,
+    clientId: clean(resolved.clientId || resolved.client_id),
+    clientSecret: clean(resolved.clientSecret || resolved.client_secret),
+    redirectUri: clean(resolved.redirectUri || resolved.redirect_uri || config.redirectUri),
+    approvedTesters: resolved.approvedTesters || resolved.approved_testers || "",
+    oauthAppId,
+    defaultOAuthAppId: defaultAppId,
+    isDefaultOAuthApp: isDefault,
+    explicitSelection: Boolean(requested),
+  };
+}
+
+export async function readGoogleOAuthAppConfig(requestedAppId = "", env = process.env) {
+  const config = await readParentConnectorRuntimeConfig("gmail", env);
+  return resolveGoogleOAuthAppConfig(requestedAppId, config, env);
+}
+
 const providerDefinitions = {
   whatsapp: {
     provider: "whatsapp",
@@ -212,7 +284,10 @@ export function parentConnectorAppStatus({ provider, config = {}, env = process.
   const definition = parentConnectorProvider(provider);
   if (!definition) return null;
   const instanceScoped = isTenantScopedRuntime(env) && Boolean(definition.tokenFile);
-  const runtimeConfig = parentConnectorRuntimeConfig(definition.provider, config, env);
+  const baseRuntimeConfig = parentConnectorRuntimeConfig(definition.provider, config, env);
+  const runtimeConfig = definition.provider === "gmail"
+    ? resolveGoogleOAuthAppConfig("", baseRuntimeConfig, env)
+    : baseRuntimeConfig;
   const configState = definition.provider === "whatsapp"
     ? whatsappParentConfigState(runtimeConfig, runtimeStatus)
     : parentConfigState(definition, runtimeConfig);

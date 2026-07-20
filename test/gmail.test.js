@@ -12,6 +12,7 @@ import {
   normalizeGmailMessage,
   readGmailToken,
   refreshGmailAccessToken,
+  refreshGmailBrokerToken,
   saveBrokeredGmailGrant,
   startGmailOAuth,
 } from "../packages/connectors/src/gmail.js";
@@ -112,6 +113,100 @@ test("gmail oauth start can use service env app credentials", async () => {
   assert.equal(url.searchParams.get("client_id"), "env-client-id");
   assert.equal(url.searchParams.get("redirect_uri"), "https://orkestr.example.test/oauth/gmail/callback");
   assert.equal(started.redirectUri, "https://orkestr.example.test/oauth/gmail/callback");
+});
+
+test("named Google OAuth app survives authorization, callback storage, and refresh", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-gmail-oauth-app-"));
+  const env = {
+    ORKESTR_HOME: home,
+    GMAIL_OAUTH_CLIENT_ID: "production-client",
+    GMAIL_OAUTH_CLIENT_SECRET: "production-secret",
+    GMAIL_OAUTH_REDIRECT_URI: "https://connect.example.test/oauth/gmail/callback",
+    ORKESTR_GOOGLE_OAUTH_DEFAULT_APP: "orkestr-de",
+    ORKESTR_GOOGLE_OAUTH_APPS_JSON: JSON.stringify({
+      "otcan-claw": {
+        clientId: "testing-client",
+        clientSecret: "testing-secret",
+        approvedTesters: ["can@mayamilk.com"],
+      },
+    }),
+  };
+  const started = await startGmailOAuth(env, {
+    account: "can@mayamilk.com",
+    oauthAppId: "otcan-claw",
+    useMode: "explicit_only",
+  });
+  const authorizeUrl = new URL(started.authorizeUrl);
+  const savedState = JSON.parse(await fs.readFile(path.join(home, "oauth", "gmail-state.json"), "utf8"));
+
+  assert.equal(authorizeUrl.searchParams.get("client_id"), "testing-client");
+  assert.equal(started.oauthAppId, "otcan-claw");
+  assert.equal(savedState.oauthAppId, "otcan-claw");
+
+  const callbackCalls = [];
+  const secondaryAccessToken = `ya29.${"s".repeat(90)}`;
+  await finishGmailOAuth(new URLSearchParams({ code: "secondary-code", state: started.state }), env, async (url, options = {}) => {
+    callbackCalls.push(String(url));
+    if (String(url) === "https://oauth2.googleapis.com/token") {
+      const body = new URLSearchParams(options.body);
+      assert.equal(body.get("client_id"), "testing-client");
+      assert.equal(body.get("client_secret"), "testing-secret");
+      return jsonResponse({
+        access_token: secondaryAccessToken,
+        refresh_token: "secondary-refresh",
+        expires_in: 3600,
+        scope: "openid email profile https://www.googleapis.com/auth/gmail.send",
+      });
+    }
+    if (String(url) === "https://gmail.googleapis.com/gmail/v1/users/me/profile") {
+      return jsonResponse({ emailAddress: "can@mayamilk.com" });
+    }
+    throw new Error(`unexpected_url:${url}`);
+  });
+  const listed = await listGoogleWorkspaceConnections(env, { includeExplicit: true });
+  const stored = await readGmailToken(env, { connectionId: listed.connections[0].connectionId });
+
+  assert.equal(stored.oauthAppId, "otcan-claw");
+  assert.equal(stored.account, "can@mayamilk.com");
+  assert.equal(listed.connections[0].oauthAppId, "otcan-claw");
+  assert.deepEqual(callbackCalls, [
+    "https://oauth2.googleapis.com/token",
+    "https://gmail.googleapis.com/gmail/v1/users/me/profile",
+  ]);
+
+  const refreshed = await refreshGmailAccessToken(env, async (_url, options = {}) => {
+    const body = new URLSearchParams(options.body);
+    assert.equal(body.get("client_id"), "testing-client");
+    assert.equal(body.get("client_secret"), "testing-secret");
+    assert.equal(body.get("refresh_token"), "secondary-refresh");
+    return jsonResponse({
+      access_token: "secondary-refreshed",
+      expires_in: 3600,
+      scope: "openid email profile https://www.googleapis.com/auth/gmail.send",
+    });
+  }, { connectionId: listed.connections[0].connectionId });
+  assert.equal(refreshed.accessToken, "secondary-refreshed");
+  assert.equal(refreshed.oauthAppId, "otcan-claw");
+});
+
+test("broker refresh selects the OAuth app that issued the token", async () => {
+  const env = {
+    GMAIL_OAUTH_CLIENT_ID: "production-client",
+    GMAIL_OAUTH_CLIENT_SECRET: "production-secret",
+    GMAIL_OAUTH_REDIRECT_URI: "https://connect.example.test/oauth/gmail/callback",
+    ORKESTR_GOOGLE_OAUTH_DEFAULT_APP: "orkestr-de",
+    ORKESTR_GOOGLE_OAUTH_APPS_JSON: JSON.stringify({
+      "otcan-claw": { clientId: "testing-client", clientSecret: "testing-secret" },
+    }),
+  };
+  const payload = await refreshGmailBrokerToken("secondary-refresh", env, async (_url, options = {}) => {
+    const body = new URLSearchParams(options.body);
+    assert.equal(body.get("client_id"), "testing-client");
+    assert.equal(body.get("client_secret"), "testing-secret");
+    assert.equal(body.get("refresh_token"), "secondary-refresh");
+    return jsonResponse({ access_token: "secondary-access", expires_in: 3600 });
+  }, { oauthAppId: "otcan-claw" });
+  assert.equal(payload.access_token, "secondary-access");
 });
 
 test("gmail oauth uses the public broker callback and exchanges with the started redirect", async () => {
@@ -593,6 +688,7 @@ test("brokered gmail grants refresh through the parent broker without local OAut
     userId: "firat",
     account: "firat@example.com",
     provider: "google_workspace",
+    oauthAppId: "otcan-claw",
     brokerInstanceId: "instance-firat",
     requestedCapabilities: ["gmail_read"],
     requestedScopes: ["https://www.googleapis.com/auth/gmail.readonly"],
@@ -626,6 +722,7 @@ test("brokered gmail grants refresh through the parent broker without local OAut
   assert.equal(stored.accessToken, "access-new");
   assert.equal(stored.account, "firat@example.com");
   assert.equal(stored.brokered, true);
+  assert.equal(stored.oauthAppId, "otcan-claw");
   assert.equal(stored.brokerInstanceId, "instance-firat");
   assert.deepEqual(capabilities.connectorAuth.gmail.capabilities, ["gmail_read"]);
 });

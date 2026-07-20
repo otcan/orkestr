@@ -334,7 +334,11 @@ export class UsersController {
         migrate: body.migrate === true,
       });
     }
-    const oauth = await beginGmailOAuth(process.env, { userId: requested, account });
+    const oauth = await beginGmailOAuth(process.env, {
+      userId: requested,
+      account,
+      oauthAppId: String(body.oauthAppId || body.oauth_app || "").trim(),
+    });
     return { ok: true, userId: requested, identities, ...oauth };
   }
 

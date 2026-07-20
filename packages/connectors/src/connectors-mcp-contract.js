@@ -1,6 +1,6 @@
 import * as z from "zod/v4";
 
-export const connectorsMcpContractVersion = "1.2";
+export const connectorsMcpContractVersion = "1.3";
 export const connectorsMcpProtocolVersion = "2025-11-25";
 
 const cleanString = z.string().trim();
@@ -22,6 +22,7 @@ export const connectorsMcpInputSchemas = {
     target: cleanString.nullish().describe("Optional provider target such as a Shopify shop domain."),
     alias: cleanString.nullish().describe("Optional stable display alias for a newly connected account."),
     use_mode: z.enum(["default", "available", "explicit_only"]).nullish().describe("Discovery policy for a Google Workspace connection."),
+    oauth_app: cleanString.nullish().describe("Named Google OAuth app profile. Omit for the deployment default; use a non-default profile only when the user explicitly requests it."),
     set_as_main: z.boolean().nullish().describe("Make this Google Workspace connection the user's main account."),
     set_as_thread_default: z.boolean().nullish().describe("Make this Google Workspace connection the default for the scoped thread."),
   }).strict(),

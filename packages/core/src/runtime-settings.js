@@ -247,14 +247,14 @@ function defaultConnectorSettings(env = process.env) {
       responderRole: firstValue(env.ORKESTR_WHATSAPP_RESPONDER_ROLE, env.WHATSAPP_RESPONDER_ROLE) || "responder",
     },
     gmail: {
-      enabled: truthy(env.ORKESTR_GMAIL_ENABLED) || Boolean(firstValue(env.GMAIL_OAUTH_CLIENT_ID)),
+      enabled: truthy(env.ORKESTR_GMAIL_ENABLED) || Boolean(firstValue(env.GMAIL_OAUTH_CLIENT_ID, env.ORKESTR_GOOGLE_OAUTH_APPS_JSON, env.GOOGLE_OAUTH_APPS_JSON)),
       authDesktop: gmailAuthDesktop,
       needsAuthAction: "gmail.oauth.start",
       googleWorkspaceConnectCommand: "orkestr connect google --json",
       whatsappConnectCommand: "/connect google",
     },
     googleWorkspace: {
-      enabled: truthy(env.ORKESTR_GMAIL_ENABLED) || Boolean(firstValue(env.GMAIL_OAUTH_CLIENT_ID)) || Boolean(firstValue(env.ORKESTR_TENANT_VM_ID)),
+      enabled: truthy(env.ORKESTR_GMAIL_ENABLED) || Boolean(firstValue(env.GMAIL_OAUTH_CLIENT_ID, env.ORKESTR_GOOGLE_OAUTH_APPS_JSON, env.GOOGLE_OAUTH_APPS_JSON)) || Boolean(firstValue(env.ORKESTR_TENANT_VM_ID)),
       provider: "google_workspace",
       service: "gmail",
       authMode: "brokered_whatsapp_command",

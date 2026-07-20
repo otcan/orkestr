@@ -448,6 +448,7 @@ async function connectorAuthIntentForRequestedPath(requestedPath = "", instanceI
       chatId: String(connectRequest?.chatId || connectRequest?.brokerTenantChatId || "").trim(),
       accountId: String(connectRequest?.accountId || connectRequest?.brokerTenantAccountId || "").trim(),
       googleConnectionId: String(connectRequest?.googleConnectionId || "").trim(),
+      oauthAppId: String(connectRequest?.oauthAppId || connectRequest?.oauth_app || "").trim(),
       connectionAlias: String(connectRequest?.connectionAlias || connectRequest?.alias || "").trim(),
       connectionUseMode: String(connectRequest?.connectionUseMode || connectRequest?.useMode || "").trim(),
       setAsMain: connectRequest?.setAsMain === true ? "true" : "false",

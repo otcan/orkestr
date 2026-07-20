@@ -124,6 +124,14 @@ test("google workspace scope selection maps only requested capabilities", () => 
 test("whatsapp google connect link starts user-scoped oauth with selected scopes", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-google-workspace-start-"));
   const env = await configureGoogle(home);
+  env.ORKESTR_GOOGLE_OAUTH_DEFAULT_APP = "orkestr-de";
+  env.ORKESTR_GOOGLE_OAUTH_APPS_JSON = JSON.stringify({
+    "otcan-claw": {
+      clientId: "testing-client",
+      clientSecret: "testing-secret",
+      approvedTesters: ["can@mayamilk.com"],
+    },
+  });
   const alice = userPrincipal({ id: "alice" });
 
   const link = await createGoogleWorkspaceConnectLink({
@@ -132,12 +140,16 @@ test("whatsapp google connect link starts user-scoped oauth with selected scopes
       id: "thread-1",
       binding: { chatId: "wa-chat", responderAccountId: "wa-responder" },
     },
+    account: "can@mayamilk.com",
+    oauthAppId: "otcan-claw",
+    useMode: "explicit_only",
   }, env);
   assert.match(link.link, /^https:\/\/connect\.example\.test\/connect\/google\?connect=/);
 
   const request = await getGoogleWorkspaceConnectRequest(link.connectId, env);
   assert.equal(request.ok, true);
   assert.equal(request.request.userId, "alice");
+  assert.equal(request.request.oauthAppId, "otcan-claw");
 
   const started = await startGoogleWorkspaceOAuth(env, {
     connectId: link.connectId,
@@ -151,6 +163,8 @@ test("whatsapp google connect link starts user-scoped oauth with selected scopes
   assert.equal(savedState.provider, "google_workspace");
   assert.equal(savedState.threadId, "thread-1");
   assert.equal(savedState.chatId, "wa-chat");
+  assert.equal(savedState.oauthAppId, "otcan-claw");
+  assert.equal(url.searchParams.get("client_id"), "testing-client");
   assert.deepEqual(savedState.requestedCapabilities, ["gmail_read", "calendar_read"]);
   assert.ok(scopes.includes("https://www.googleapis.com/auth/gmail.readonly"));
   assert.ok(scopes.includes("https://www.googleapis.com/auth/calendar.events.readonly"));
@@ -305,6 +319,7 @@ test("brokered google workspace callback target returns to the instance connecto
     brokerInstanceId: "instance-firat",
     brokerTenantUserId: "firat",
     brokerTenantThreadName: "firat-jobs",
+    oauthAppId: "otcan-claw",
   }, {
     ORKESTR_CONNECT_PUBLIC_URL: "https://connect.crawlerai.de",
     ORKESTR_PUBLIC_AUTH_URL: "https://connect.orkestr.de/setup/pairing",
@@ -321,6 +336,7 @@ test("brokered google workspace callback target returns to the instance connecto
   assert.equal(target.searchParams.get("instance_id"), "instance-firat");
   assert.equal(target.searchParams.get("user_id"), "firat");
   assert.equal(target.searchParams.get("thread"), "firat-jobs");
+  assert.equal(target.searchParams.get("oauth_app"), "otcan-claw");
   assert.equal(target.searchParams.get("auto"), "0");
   assert.doesNotMatch(href, /crawlerai|app\.orkestr\.de|\/setup\/gmail/);
 });

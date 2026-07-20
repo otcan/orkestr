@@ -143,6 +143,7 @@ export function googleWorkspaceBrokeredConnectorSetupPath(result = {}, connector
   if (thread) target.searchParams.set("thread", thread);
   if (threadId) target.searchParams.set("thread_id", threadId);
   if (clean(result.googleConnectionId)) target.searchParams.set("account_id", clean(result.googleConnectionId));
+  if (clean(result.oauthAppId)) target.searchParams.set("oauth_app", clean(result.oauthAppId));
   if (clean(result.connectionAlias || result.alias)) target.searchParams.set("alias", clean(result.connectionAlias || result.alias));
   if (clean(result.connectionUseMode || result.useMode)) target.searchParams.set("use_mode", clean(result.connectionUseMode || result.useMode));
   if (result.setAsMain === true) target.searchParams.set("set_as_main", "1");
@@ -171,6 +172,7 @@ async function createBrokeredGoogleWorkspaceConnectLink({
   accountId = "",
   account = "",
   googleConnectionId = "",
+  oauthAppId = "",
   alias = "",
   useMode = "",
   setAsMain = false,
@@ -191,6 +193,7 @@ async function createBrokeredGoogleWorkspaceConnectLink({
     accountId: clean(accountId || threadBinding.responderAccountId || threadBinding.outboundAccountId),
     account: clean(account).toLowerCase(),
     googleConnectionId: clean(googleConnectionId),
+    oauthAppId: clean(oauthAppId),
     connectionAlias: clean(alias),
     connectionUseMode: clean(useMode),
     setAsMain: setAsMain === true,
@@ -287,6 +290,7 @@ export async function createGoogleWorkspaceConnectLink({
   brokerTenantAccountId = "",
   brokerServerRequest = false,
   googleConnectionId = "",
+  oauthAppId = "",
   alias = "",
   useMode = "",
   setAsMain = false,
@@ -300,6 +304,7 @@ export async function createGoogleWorkspaceConnectLink({
       accountId,
       account,
       googleConnectionId,
+      oauthAppId,
       alias,
       useMode,
       setAsMain,
@@ -330,6 +335,7 @@ export async function createGoogleWorkspaceConnectLink({
     accountId: clean(accountId || threadBinding.responderAccountId || threadBinding.outboundAccountId),
     account: clean(account).toLowerCase(),
     googleConnectionId: clean(googleConnectionId),
+    oauthAppId: clean(oauthAppId),
     connectionAlias: clean(alias),
     connectionUseMode: clean(useMode),
     setAsMain: setAsMain === true,
@@ -400,7 +406,7 @@ export async function startGoogleWorkspaceOAuth(env = process.env, options = {})
   const { scope, ledger, request } = await findConnectRequest(connectId, env);
   assertConnectRequestUsable(request);
   const capabilities = normalizeGoogleWorkspaceCapabilities(options.capabilities, googleWorkspaceDefaultGmailCapabilities());
-  const account = clean(options.account).toLowerCase();
+  const account = clean(options.account || (clean(request.oauthAppId) ? request.account : "")).toLowerCase();
   const started = await startGmailOAuth(env, {
     userId: scope.userId || "",
     account,
@@ -419,6 +425,7 @@ export async function startGoogleWorkspaceOAuth(env = process.env, options = {})
     brokerTenantChatId: request.brokerTenantChatId,
     brokerTenantAccountId: request.brokerTenantAccountId,
     googleConnectionId: request.googleConnectionId,
+    oauthAppId: request.oauthAppId,
     connectionAlias: request.connectionAlias,
     connectionUseMode: request.connectionUseMode,
     setAsMain: request.setAsMain === true,

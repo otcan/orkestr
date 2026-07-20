@@ -56,6 +56,7 @@ export function googleWorkspaceConnectHtml({
     ["Tool", "orkestr_auth"],
     ["Service", "gmail"],
     ["Provider", "google_workspace"],
+    ["OAuth app", request?.oauthAppId || "default"],
     ["Action", "connect"],
     ["Instance", request?.brokerInstanceId || request?.brokerTenantVmId || ""],
     ["User", request?.userId || request?.brokerTenantUserId || ""],

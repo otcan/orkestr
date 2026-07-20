@@ -10,6 +10,7 @@ import {
   parentConnectorProvider,
   parentConnectorProviderDefinitions,
   parentConnectorRuntimeConfig,
+  resolveGoogleOAuthAppConfig,
 } from "../packages/connectors/src/parent-connector-apps.js";
 import { getWhatsAppStatus } from "../packages/connectors/src/whatsapp.js";
 
@@ -44,6 +45,36 @@ test("parent connector registry includes WhatsApp as a parent bridge", () => {
   assert.equal(status.parentManaged, true);
   assert.equal(status.parentAppConfigured, true);
   assert.equal(status.userSurface, "chat");
+});
+
+test("named Google OAuth apps keep the production client as the default", () => {
+  const config = {
+    clientId: "production-client",
+    clientSecret: "production-secret",
+    redirectUri: "https://connect.example.test/oauth/gmail/callback",
+  };
+  const env = {
+    ORKESTR_GOOGLE_OAUTH_DEFAULT_APP: "orkestr-de",
+    ORKESTR_GOOGLE_OAUTH_APPS_JSON: JSON.stringify({
+      "otcan-claw": {
+        clientId: "testing-client",
+        clientSecret: "testing-secret",
+        approvedTesters: ["can@mayamilk.com"],
+      },
+    }),
+  };
+
+  const defaultApp = resolveGoogleOAuthAppConfig("", config, env);
+  const testingApp = resolveGoogleOAuthAppConfig("otcan-claw", config, env);
+
+  assert.equal(defaultApp.oauthAppId, "orkestr-de");
+  assert.equal(defaultApp.clientId, "production-client");
+  assert.equal(testingApp.oauthAppId, "otcan-claw");
+  assert.equal(testingApp.clientId, "testing-client");
+  assert.equal(testingApp.clientSecret, "testing-secret");
+  assert.equal(testingApp.redirectUri, config.redirectUri);
+  assert.deepEqual(testingApp.approvedTesters, ["can@mayamilk.com"]);
+  assert.throws(() => resolveGoogleOAuthAppConfig("missing", config, env), /google_oauth_app_not_found/);
 });
 
 test("external WhatsApp bridge status hides parent bridge internals", async () => {
