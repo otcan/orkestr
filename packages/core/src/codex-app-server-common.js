@@ -348,6 +348,12 @@ export function isCodexApprovalRequestMethod(method = "", params = {}) {
   return clean(metadata.codex_approval_kind || metadata.codexApprovalKind) === "mcp_tool_call";
 }
 
+export function isCodexToolSuggestionRequest(method = "", params = {}) {
+  if (clean(method) !== "mcpServer/elicitation/request") return false;
+  const metadata = params?._meta || {};
+  return clean(metadata.codex_approval_kind || metadata.codexApprovalKind) === "tool_suggestion";
+}
+
 const codexReasoningEfforts = new Set(["none", "minimal", "low", "medium", "high", "xhigh"]);
 
 export function normalizeCodexModel(value) {

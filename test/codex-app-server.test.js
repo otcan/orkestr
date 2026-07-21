@@ -1225,6 +1225,68 @@ test("Codex app-server auto-accepts MCP tool-call approvals for YOLO threads", a
   }
 });
 
+test("Codex app-server auto-declines plugin suggestions for YOLO threads", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-yolo-tool-suggestion-"));
+  const fake = await createFakeCodex(home);
+  const env = {
+    ORKESTR_HOME: path.join(home, "orkestr"),
+    HOME: path.join(home, "runtime-home"),
+    PATH: `${fake.bin}${path.delimiter}${process.env.PATH || ""}`,
+    FAKE_CODEX_STATE: fake.stateFile,
+  };
+  try {
+    const thread = await createThread({
+      id: "app-server-yolo-tool-suggestion-thread",
+      name: "YOLO Tool Suggestion Thread",
+      cwd: home,
+      codexSandbox: "danger-full-access",
+      codexApprovalPolicy: "never",
+      executorId: "codex",
+      executor: {
+        type: "codex",
+        metadata: {
+          codexSandbox: "danger-full-access",
+          codexApprovalPolicy: "never",
+        },
+      },
+    }, env);
+    const started = await startCodexAppServerThread(thread, env);
+    const client = await getCodexAppServerClient({ env, home: env.HOME });
+    const writes = [];
+    client.write = (payload) => writes.push(payload);
+
+    await client.handleServerRequest({
+      id: 9,
+      method: "mcpServer/elicitation/request",
+      params: {
+        threadId: started.thread.executor.codexThreadId,
+        turnId: "turn-yolo-tool-suggestion",
+        serverName: "codex_apps",
+        mode: "form",
+        _meta: {
+          codex_approval_kind: "tool_suggestion",
+          persist: "always",
+          tool_type: "plugin",
+          suggest_type: "install",
+          tool_id: "outlook-email@openai-curated-remote",
+        },
+        requestedSchema: { type: "object", properties: {} },
+      },
+    });
+
+    const updated = await getThread(started.thread.id, env);
+    const messages = await listThreadMessages(started.thread.id, env);
+
+    assert.deepEqual(writes, [{ id: 9, result: { decision: "decline" } }]);
+    assert.equal(client.pendingRequests.has("9"), false);
+    assert.notEqual(updated.state, "awaiting_approval");
+    assert.equal(updated.runtime?.pendingRequest, undefined);
+    assert.equal(messages.some((message) => message.phase === "awaiting_approval"), false);
+  } finally {
+    stopCodexAppServerClients();
+  }
+});
+
 test("Codex app-server completed turns clear persisted approval requests", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-complete-clears-approval-"));
   const fake = await createFakeCodex(home);
