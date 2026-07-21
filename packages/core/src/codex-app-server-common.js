@@ -345,13 +345,7 @@ export function isCodexApprovalRequestMethod(method = "", params = {}) {
   ].includes(normalized)) return true;
   if (normalized !== "mcpServer/elicitation/request") return false;
   const metadata = params?._meta || {};
-  return clean(metadata.codex_approval_kind || metadata.codexApprovalKind) === "mcp_tool_call";
-}
-
-export function isCodexToolSuggestionRequest(method = "", params = {}) {
-  if (clean(method) !== "mcpServer/elicitation/request") return false;
-  const metadata = params?._meta || {};
-  return clean(metadata.codex_approval_kind || metadata.codexApprovalKind) === "tool_suggestion";
+  return ["mcp_tool_call", "tool_suggestion"].includes(clean(metadata.codex_approval_kind || metadata.codexApprovalKind));
 }
 
 const codexReasoningEfforts = new Set(["none", "minimal", "low", "medium", "high", "xhigh"]);

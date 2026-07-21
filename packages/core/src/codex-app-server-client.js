@@ -23,7 +23,6 @@ import {
   itemPhase,
   itemText,
   isCodexApprovalRequestMethod,
-  isCodexToolSuggestionRequest,
   markThreadFromCodexStatus,
   nowIso,
   publicError,
@@ -415,18 +414,6 @@ export class CodexAppServerClient {
       this.pendingRequests.delete(String(message.id));
       await appendEvent({
         type: "codex_app_server_request_auto_accepted_yolo",
-        threadId: thread.id,
-        codexThreadId: codexId,
-        method: message.method,
-        requestId: String(message.id),
-      }, this.env).catch(() => {});
-      return;
-    }
-    if (isCodexToolSuggestionRequest(message.method, params) && threadAutoAcceptsCodexApprovals(thread, this.env)) {
-      this.respond(message.id, { decision: "decline" });
-      this.pendingRequests.delete(String(message.id));
-      await appendEvent({
-        type: "codex_app_server_tool_suggestion_auto_declined_yolo",
         threadId: thread.id,
         codexThreadId: codexId,
         method: message.method,

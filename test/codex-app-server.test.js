@@ -1225,7 +1225,7 @@ test("Codex app-server auto-accepts MCP tool-call approvals for YOLO threads", a
   }
 });
 
-test("Codex app-server auto-declines plugin suggestions for YOLO threads", async () => {
+test("Codex app-server auto-accepts plugin suggestions for YOLO threads", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-yolo-tool-suggestion-"));
   const fake = await createFakeCodex(home);
   const env = {
@@ -1277,7 +1277,7 @@ test("Codex app-server auto-declines plugin suggestions for YOLO threads", async
     const updated = await getThread(started.thread.id, env);
     const messages = await listThreadMessages(started.thread.id, env);
 
-    assert.deepEqual(writes, [{ id: 9, result: { decision: "decline" } }]);
+    assert.deepEqual(writes, [{ id: 9, result: { decision: "accept" } }]);
     assert.equal(client.pendingRequests.has("9"), false);
     assert.notEqual(updated.state, "awaiting_approval");
     assert.equal(updated.runtime?.pendingRequest, undefined);
