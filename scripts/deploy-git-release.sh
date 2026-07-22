@@ -41,6 +41,10 @@ Environment:
   ORKESTR_RELEASE_CONNECTIVITY_RECOVERY_COMMAND Command to run between required-account retry attempts.
   ORKESTR_RELEASE_CONNECTIVITY_RECOVERY_TIMEOUT_SECONDS Timeout for each recovery command run. Defaults to 20.
   ORKESTR_RELEASE_SYNC_CONNECTORS Reconcile standalone connector services to the active Orkestr revision. Defaults to 1.
+  ORKESTR_RELEASE_SYNC_PUBLIC_SERVICE Restart an active isolated public service after release activation. Defaults to 1.
+  ORKESTR_PUBLIC_SERVICE_NAME    Isolated public-site systemd unit. Defaults to orkestr-public.
+  ORKESTR_PUBLIC_SERVICE_HEALTH_URL Health URL for the isolated public service. Defaults to http://127.0.0.1:19812/api/health.
+  ORKESTR_PUBLIC_SERVICE_VERSION_URL Version URL for release verification. Defaults to http://127.0.0.1:19812/api/version.
   ORKESTR_DEPLOY_LOCK_BUSY_EXIT_CODE Exit code when another deploy holds the lock. Defaults to 0.
   ORKESTR_DEPLOY_HEALTH_URL     Health URL. Defaults to http://$ORKESTR_HOST:$ORKESTR_PORT/api/health.
   ORKESTR_DEPLOY_EXPOSURE_CHECK Check public no-cookie API exposure after restart. Defaults to 1.
@@ -1148,6 +1152,67 @@ sync_standalone_connectors_release() {
     bash "$script" --activate --source "$release_dir"
 }
 
+restart_and_verify_public_service() {
+  local enabled public_service public_unit working_directory expected_release expected_revision
+  local actual_release actual_revision version_json main_pid process_cwd
+  enabled="$sync_public_service"
+  if [ "$enabled" != "1" ]; then
+    echo "Isolated public-service release sync disabled."
+    return 0
+  fi
+
+  public_service="${ORKESTR_PUBLIC_SERVICE_NAME:-orkestr-public}"
+  public_unit="${public_service%.service}.service"
+  if [ "$public_unit" = "${service_name%.service}.service" ]; then
+    return 0
+  fi
+  if ! systemctl cat "$public_unit" >/dev/null 2>&1; then
+    echo "Isolated public-service release sync skipped: $public_unit is not installed."
+    return 0
+  fi
+  if ! systemctl is-active --quiet "$public_unit"; then
+    echo "Isolated public-service release sync skipped: $public_unit is intentionally inactive."
+    return 0
+  fi
+
+  working_directory="$(systemctl show -p WorkingDirectory --value "$public_unit" 2>/dev/null || true)"
+  if [ "$working_directory" != "$current_link" ]; then
+    echo "Refusing isolated public-service restart: $public_unit WorkingDirectory is '$working_directory', expected '$current_link'." >&2
+    return 1
+  fi
+
+  expected_release="$(readlink -f "$current_link" 2>/dev/null || true)"
+  [ -n "$expected_release" ] || {
+    echo "Cannot verify isolated public service: current release symlink is unresolved." >&2
+    return 1
+  }
+  expected_revision="$(node -e 'try { const fs = require("node:fs"); const j = JSON.parse(fs.readFileSync(process.argv[1], "utf8")); process.stdout.write(String(j.git?.commit || j.components?.orkestr?.commit || "")); } catch {}' "$expected_release/release-manifest.json" 2>/dev/null || true)"
+  [ -n "$expected_revision" ] || {
+    echo "Cannot verify isolated public service: release manifest commit is missing." >&2
+    return 1
+  }
+
+  systemctl restart "$public_unit" || return $?
+  systemctl is-active --quiet "$public_unit" || return $?
+  health_check "$public_service_health_url" 40 || return $?
+
+  main_pid="$(systemctl show -p MainPID --value "$public_unit" 2>/dev/null || true)"
+  process_cwd="$(readlink -f "/proc/$main_pid/cwd" 2>/dev/null || true)"
+  if [ "$process_cwd" != "$expected_release" ]; then
+    echo "Isolated public-service release verification failed: process cwd '$process_cwd' does not match '$expected_release'." >&2
+    return 1
+  fi
+
+  version_json="$(curl -fsS "$public_service_version_url" --max-time 8 2>/dev/null || true)"
+  actual_release="$(node -e 'try { const j = JSON.parse(process.argv[1] || "{}"); process.stdout.write(String(j.releaseId || j.tag || j.version || "")); } catch {}' "$version_json" 2>/dev/null || true)"
+  actual_revision="$(node -e 'try { const j = JSON.parse(process.argv[1] || "{}"); process.stdout.write(String(j.commit || "")); } catch {}' "$version_json" 2>/dev/null || true)"
+  if [ "$actual_revision" != "$expected_revision" ]; then
+    echo "Isolated public-service release verification failed: $public_unit reports ${actual_revision:-no commit}, expected $expected_revision." >&2
+    return 1
+  fi
+  echo "Isolated public service ready: $public_unit ${actual_release:-$expected_revision} (${actual_revision:0:12})."
+}
+
 restart_and_verify() {
   configure_service_shutdown_timeout || return $?
   # Keep restart as one systemd transaction. A split stop/start can kill the
@@ -1155,6 +1220,7 @@ restart_and_verify() {
   systemctl restart "${service_name}.service" || return $?
   systemctl is-active --quiet "${service_name}.service" || return $?
   health_check "$health_url" 40 || return $?
+  restart_and_verify_public_service || return $?
   sync_standalone_connectors_release || return $?
   refresh_parent_whatsapp_bridge_proxy || return $?
   deploy_public_exposure_check || return $?
@@ -1494,6 +1560,7 @@ install_command() {
   if [ "$previous_release" = "$release_id" ] && [ -d "$release_dir" ]; then
     if release_is_complete "$release_dir"; then
       repair_runtime_ownership
+      restart_and_verify_public_service
       sync_standalone_connectors_release
       echo "Orkestr already at $release_id ($target_ref)."
       return 0
@@ -1617,6 +1684,8 @@ repo_url="${ORKESTR_REPO_URL:-https://github.com/otcan/orkestr.git}"
 deploy_ref="${ref_arg:-${ORKESTR_DEPLOY_REF:-${ORKESTR_UPDATE_REF:-main}}}"
 deploy_channel="${channel_arg:-${ORKESTR_DEPLOY_CHANNEL:-production}}"
 service_name="${ORKESTR_SERVICE_NAME:-orkestr}"
+public_service_health_url="${ORKESTR_PUBLIC_SERVICE_HEALTH_URL:-http://127.0.0.1:19812/api/health}"
+public_service_version_url="${ORKESTR_PUBLIC_SERVICE_VERSION_URL:-http://127.0.0.1:19812/api/version}"
 codex_app_server_mode="$(printf '%s' "${ORKESTR_CODEX_APP_SERVER_MODE:-stdio}" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
 codex_app_server_socket="${ORKESTR_CODEX_APP_SERVER_SOCKET:-}"
 codex_app_server_service_name="${ORKESTR_CODEX_APP_SERVER_SERVICE_NAME:-${service_name}-codex}"
@@ -1633,6 +1702,7 @@ backup_excludes="${ORKESTR_DEPLOY_BACKUP_EXCLUDES:-run tmp whatsapp-bridge/sessi
 backup_keep="${ORKESTR_DEPLOY_BACKUP_KEEP:-3}"
 release_keep="${ORKESTR_DEPLOY_RELEASE_KEEP:-3}"
 sync_workers="$(bool_value "${sync_workers_arg:-${ORKESTR_DEPLOY_SYNC_WORKERS:-1}}")"
+sync_public_service="$(bool_value "${ORKESTR_RELEASE_SYNC_PUBLIC_SERVICE:-1}")"
 lock_file="${ORKESTR_DEPLOY_LOCK_FILE:-/var/lock/orkestr-deploy.lock}"
 lock_busy_exit_code="${ORKESTR_DEPLOY_LOCK_BUSY_EXIT_CODE:-0}"
 no_interrupt="$(bool_value "${no_interrupt_arg:-${ORKESTR_DEPLOY_NO_INTERRUPT:-1}}")"
@@ -1657,6 +1727,10 @@ esac
 case "$sync_workers" in
   0|1) ;;
   *) echo "ORKESTR_DEPLOY_SYNC_WORKERS must be 0 or 1." >&2; exit 2 ;;
+esac
+case "$sync_public_service" in
+  0|1) ;;
+  *) echo "ORKESTR_RELEASE_SYNC_PUBLIC_SERVICE must be 0 or 1." >&2; exit 2 ;;
 esac
 case "$exposure_check" in
   0|1) ;;
