@@ -3966,6 +3966,92 @@ async function readCachedLocalWhatsAppChatMessages(client, chatId = "", limit = 
   }, id, max);
 }
 
+async function readCachedLocalWhatsAppBoundChats(client, chatIds = [], limit = 20, sinceMs = 0, env = process.env) {
+  if (!client?.pupPage || typeof client.pupPage.evaluate !== "function") return null;
+  const ids = [...new Set((Array.isArray(chatIds) ? chatIds : [])
+    .map((value) => String(value || "").trim())
+    .filter(Boolean))];
+  if (!ids.length) return [];
+  const max = Math.max(1, Math.min(100, Number(limit || 20) || 20));
+  const minimumTimestampMs = Math.max(0, Number(sinceMs || 0) || 0);
+  return withLocalWhatsAppProbeTimeout(client.pupPage.evaluate((targetChatIds, targetLimit, minTimestampMs) => {
+    const serialized = (value) => {
+      if (!value) return "";
+      if (typeof value === "string") return value;
+      const candidates = [value._serialized, value.id?._serialized, value.user];
+      for (const candidate of candidates) {
+        if (typeof candidate !== "string" && typeof candidate !== "number") continue;
+        const text = String(candidate).trim();
+        if (text && text !== "[object Object]") return text;
+      }
+      if (value.id && value.id !== value) {
+        const nested = serialized(value.id);
+        if (nested) return nested;
+      }
+      const rendered = typeof value.toString === "function" ? String(value.toString()).trim() : "";
+      return rendered && rendered !== "[object Object]" ? rendered : "";
+    };
+    const serializeMessage = (message, targetChatId) => {
+      let model = null;
+      try {
+        model = window.WWebJS?.getMessageModel ? window.WWebJS.getMessageModel(message) : null;
+      } catch {
+        model = null;
+      }
+      if (!model) {
+        try {
+          model = typeof message?.serialize === "function" ? message.serialize() : message;
+        } catch {
+          model = message || {};
+        }
+      }
+      const messageId = model?.id || message?.id || {};
+      const remote = serialized(messageId.remote || message?.id?.remote || model?.from || message?.from || targetChatId);
+      const local = serialized(messageId.id || model?.messageId || message?.messageId);
+      const participant = serialized(messageId.participant || model?.author || message?.author);
+      const stableMessageId = serialized(messageId) || [
+        Boolean(model?.id?.fromMe ?? message?.id?.fromMe ?? model?.fromMe) ? "true" : "false",
+        remote,
+        local,
+        participant,
+      ].filter(Boolean).join("_");
+      return {
+        id: { ...messageId, _serialized: stableMessageId, remote },
+        body: String(model?.body || model?.caption || model?.pollName || model?.eventName || ""),
+        type: String(model?.type || message?.type || ""),
+        fromMe: Boolean(model?.id?.fromMe ?? message?.id?.fromMe ?? model?.fromMe),
+        from: serialized(model?.from || message?.from || messageId.remote || targetChatId),
+        to: serialized(model?.to || message?.to || targetChatId),
+        author: serialized(model?.author || message?.author || messageId.participant || message?.id?.participant),
+        timestamp: Number(model?.t || model?.timestamp || message?.t || message?.timestamp || 0) || 0,
+        hasMedia: Boolean(model?.directPath || model?.hasMedia || message?.directPath || message?.mediaKey),
+        isStatus: Boolean(model?.isStatus || message?.isStatus),
+      };
+    };
+    const timestampMs = (message) => {
+      const value = Number(message?.t || message?.timestamp || 0);
+      if (!Number.isFinite(value) || value <= 0) return 0;
+      return value > 1_000_000_000_000 ? value : value * 1000;
+    };
+    const collections = window.require?.("WAWebCollections");
+    const widFactory = window.require?.("WAWebWidFactory");
+    return targetChatIds.map((targetChatId) => {
+      const chatWid = widFactory?.createWid ? widFactory.createWid(targetChatId) : targetChatId;
+      const chat = collections?.Chat?.get?.(chatWid) || collections?.Chat?.get?.(targetChatId);
+      if (!chat) return { chatId: targetChatId, found: false, unreadCount: 0, messages: [] };
+      const unreadCount = Number(chat.unreadCount || 0) || 0;
+      const models = (typeof chat.msgs?.getModelsArray === "function" ? chat.msgs.getModelsArray() : [])
+        .filter((message) => message && !message.isNotification);
+      const unreadStart = Math.max(0, models.length - unreadCount);
+      const selected = models
+        .filter((message, index) => index >= unreadStart || (minTimestampMs > 0 && timestampMs(message) >= minTimestampMs))
+        .slice(-targetLimit)
+        .map((message) => serializeMessage(message, targetChatId));
+      return { chatId: targetChatId, found: true, unreadCount, messages: selected };
+    });
+  }, ids, max, minimumTimestampMs), "whatsapp_bound_chat_snapshot", env);
+}
+
 async function readCachedLocalWhatsAppMessageById(client, eventId = "", chatId = "") {
   if (!client?.pupPage || typeof client.pupPage.evaluate !== "function") return null;
   const id = String(eventId || "").trim();
@@ -4201,8 +4287,8 @@ function localWhatsAppUnreadRecoveryEnabled(env = process.env) {
 }
 
 export function localWhatsAppUnreadRecoveryIntervalMs(env = process.env) {
-  const parsed = Number(env.ORKESTR_WHATSAPP_UNREAD_RECOVERY_MS || env.WHATSAPP_LOCAL_UNREAD_RECOVERY_MS || 30_000);
-  return Number.isFinite(parsed) ? Math.max(10_000, parsed) : 30_000;
+  const parsed = Number(env.ORKESTR_WHATSAPP_UNREAD_RECOVERY_MS || env.WHATSAPP_LOCAL_UNREAD_RECOVERY_MS || 10_000);
+  return Number.isFinite(parsed) ? Math.max(10_000, parsed) : 10_000;
 }
 
 function localWhatsAppUnreadRecoveryFetchLimit(env = process.env) {
@@ -4303,6 +4389,59 @@ async function recoverBoundChatsAfterListFailure({
   env = process.env,
 } = {}) {
   if (typeof client?.getChatById !== "function" && typeof client?.pupPage?.evaluate !== "function") return null;
+  const snapshots = await readCachedLocalWhatsAppBoundChats(
+    client,
+    boundChats.map((target) => target.chatId),
+    limit,
+    recentEnabled ? recentSinceMs : 0,
+    env,
+  ).catch(() => null);
+  if (Array.isArray(snapshots) && snapshots.some((snapshot) => snapshot?.found === true)) {
+    const byChatId = new Map(snapshots.map((snapshot) => [String(snapshot?.chatId || ""), snapshot]));
+    const results = [];
+    for (const target of boundChats) {
+      const snapshot = byChatId.get(target.chatId);
+      if (!snapshot?.found) continue;
+      if (!snapshot.messages?.length) {
+        results.push({
+          ok: true,
+          accountId,
+          chatId: target.chatId,
+          ready: true,
+          unreadOnly: false,
+          sinceMs: recentEnabled ? recentSinceMs : null,
+          unreadCount: Number(snapshot.unreadCount || 0) || 0,
+          fetched: 0,
+          candidates: 0,
+          routed: [],
+          skipped: [],
+          recoveryMode: "bound_chat_batch",
+        });
+        continue;
+      }
+      const result = await recoverLocalWhatsAppChatMessagesWithClient({
+        accountId,
+        chatId: target.chatId,
+        limit,
+        unreadOnly: false,
+        markSeen: false,
+        sinceMs: recentEnabled ? recentSinceMs : 0,
+      }, env, {
+        client,
+        state,
+        failureSource: "unread_recovery",
+        chat: {
+          id: { _serialized: target.chatId },
+          unreadCount: Number(snapshot.unreadCount || 0) || 0,
+          async fetchMessages() {
+            return snapshot.messages;
+          },
+        },
+      });
+      results.push({ ...result, recoveryMode: "bound_chat_batch" });
+    }
+    return results;
+  }
   const selected = rotatingUnreadRecoveryChats(accountId, boundChats, maxChats);
   const results = [];
   for (const target of selected) {

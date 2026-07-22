@@ -4488,6 +4488,7 @@ test("local whatsapp unread recovery only scans bound chats for the selected acc
   assert.deepEqual(localWhatsAppUnreadRecoveryBoundChats(threads, "secondary", env), [
     { chatId: "secondary-chat@g.us", threadId: "secondary-thread", accountId: "secondary" },
   ]);
+  assert.equal(localWhatsAppUnreadRecoveryIntervalMs({}), 10000);
   assert.equal(localWhatsAppUnreadRecoveryIntervalMs({ ORKESTR_WHATSAPP_UNREAD_RECOVERY_MS: "5" }), 10000);
 });
 
@@ -5102,6 +5103,81 @@ test("local whatsapp unread recovery scans bound chats when the bulk chat list r
     assert.equal(messages.at(-1).text, "recovered after bulk chat failure");
     assert.equal(events.some((event) => event.type === "whatsapp_local_unread_chat_list_fallback" && event.routed === 1), true);
     assert.equal(events.some((event) => event.type === "whatsapp_local_unread_runtime_recovery_deferred"), false);
+  } finally {
+    await resetLocalWhatsAppBridgeForTest(env);
+  }
+});
+
+test("local whatsapp unread recovery batch-scans every bound chat when the bulk chat list returns bare r", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-unread-list-r-batch-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "responder",
+    ORKESTR_WHATSAPP_UNREAD_RECOVERY_MAX_CHATS: "1",
+  };
+  const chatIds = ["wa-batch-one@g.us", "wa-batch-two@g.us", "wa-batch-three@g.us"];
+  const calls = [];
+  const client = {
+    async getChats() {
+      calls.push(["getChats"]);
+      throw new Error("r");
+    },
+    pupPage: {
+      async evaluate(_callback, requestedChatIds) {
+        calls.push(["evaluate", ...requestedChatIds]);
+        return requestedChatIds.map((chatId, index) => ({
+          chatId,
+          found: true,
+          unreadCount: 1,
+          messages: [{
+            id: { _serialized: `batch-message-${index}`, remote: chatId },
+            fromMe: false,
+            from: chatId,
+            author: "wa-contact-one@c.us",
+            body: `batch recovery ${index + 1}`,
+            timestamp: 1_780_000_000 + index,
+          }],
+        }));
+      },
+    },
+  };
+  const threads = [];
+  for (const [index, chatId] of chatIds.entries()) {
+    threads.push(await createThread({
+      id: `batch-fallback-thread-${index}`,
+      name: `Batch fallback ${index}`,
+      binding: {
+        connector: "whatsapp",
+        chatId,
+        responderAccountId: "responder",
+        outboundAccountId: "responder",
+        enabled: true,
+      },
+    }, env));
+  }
+
+  try {
+    const result = await recoverUnreadLocalWhatsAppMessages(env, {
+      force: true,
+      accountIds: ["responder"],
+      clients: new Map([["responder", client]]),
+      accountStates: new Map([["responder", { state: "ready", ready: true }]]),
+      threads,
+      recentSinceMs: 1_779_999_000_000,
+      nowMs: 1_780_000_060_000,
+    });
+    const events = await listEvents(env, 30);
+
+    assert.deepEqual(calls, [["getChats"], ["evaluate", ...chatIds]]);
+    assert.equal(result.failed.length, 0);
+    assert.equal(result.recovered.length, 3);
+    assert.equal(result.routed, 3);
+    assert.equal(result.recovered.every((entry) => entry.recoveryMode === "bound_chat_batch"), true);
+    for (const [index, thread] of threads.entries()) {
+      const messages = await listThreadMessages(thread.id, env);
+      assert.equal(messages.at(-1).text, `batch recovery ${index + 1}`);
+    }
+    assert.equal(events.some((event) => event.type === "whatsapp_local_unread_chat_list_fallback" && event.scanned === 3 && event.routed === 3), true);
   } finally {
     await resetLocalWhatsAppBridgeForTest(env);
   }
