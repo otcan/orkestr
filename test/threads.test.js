@@ -5833,6 +5833,34 @@ test("thread summary exposes latest delivery failure details", async () => {
   assert.equal(summary.lastMessageError, "Codex rejected /now.");
 });
 
+test("thread summary distinguishes a ready-runtime delivery retry from ready", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-summary-ready-retry-"));
+  const env = { ORKESTR_HOME: home };
+  const thread = await createThread({ id: "summary-ready-retry-thread", name: "Summary Ready Retry", state: "ready" }, env);
+  await appendThreadMessage(thread.id, {
+    role: "user",
+    source: "whatsapp_inbound",
+    connector: "whatsapp",
+    text: "retry me",
+    state: "queued",
+    deliveryState: "retrying_ready_runtime",
+  }, env);
+
+  const summary = await threadRuntimeSummary(thread, await listThreadMessages(thread.id, env), { sampleRuntime: false, refreshMetadata: false });
+
+  assert.equal(summary.publicStatus, "Retrying delivery");
+  assert.equal(summary.publicStatusCode, "retrying_delivery");
+
+  const message = (await listThreadMessages(thread.id, env)).find((item) => item.role === "user");
+  await updateThreadMessage(thread.id, message.id, {
+    deliveryState: "ready_runtime_retry_exhausted",
+    error: "Ready runtime did not accept the queued input after bounded retries.",
+  }, env);
+  const failed = await threadRuntimeSummary(thread, await listThreadMessages(thread.id, env), { sampleRuntime: false, refreshMetadata: false });
+  assert.equal(failed.publicStatus, "Failed");
+  assert.equal(failed.publicStatusCode, "failed");
+});
+
 test("thread summary does not infer working from stale stored state without a runtime lease", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-summary-stale-working-home-"));
   const env = { ORKESTR_HOME: path.join(home, "stored") };
@@ -5975,6 +6003,16 @@ test("thread input commands use plain messages for steering and normalize stop a
     command: "code",
     rawCommand: "code",
     text: "",
+  });
+  assert.deepEqual(parseThreadInputCommand({ text: "/model gpt-test high" }), {
+    command: "model",
+    rawCommand: "model",
+    text: "gpt-test high",
+  });
+  assert.deepEqual(parseThreadInputCommand({ text: "/fast status" }), {
+    command: "fast",
+    rawCommand: "fast",
+    text: "status",
   });
   assert.deepEqual(parseThreadInputCommand({ text: "/rt agent" }), {
     command: "runtime_type",

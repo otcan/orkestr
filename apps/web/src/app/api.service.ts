@@ -1127,6 +1127,7 @@ export interface ThreadSummary {
   planImplementationReady?: boolean;
   planImplementationMenuVisible?: boolean;
   codexReasoningEffort?: string | null;
+  codexServiceTier?: string | null;
   codexModel?: string | null;
   codexModelProvider?: string | null;
   codexContextWindow?: number | null;

@@ -14,6 +14,8 @@ const CONTROL_COMMANDS = new Set([
   "planning",
   "code",
   "coding",
+  "model",
+  "fast",
   "switch",
   "rt",
   "runtime",

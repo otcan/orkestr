@@ -22,6 +22,20 @@ export const SLASH_COMMANDS: SlashCommandInfo[] = [
     acceptsText: true,
   },
   {
+    command: "/model",
+    aliases: [],
+    label: "Thread model",
+    detail: "Show or set the Codex model and reasoning effort for this thread.",
+    acceptsText: true,
+  },
+  {
+    command: "/fast",
+    aliases: [],
+    label: "Fast mode",
+    detail: "Toggle or inspect the Codex fast service tier for this thread.",
+    acceptsText: true,
+  },
+  {
     command: "/now",
     aliases: ["/interrupt"],
     label: "Interrupt send",

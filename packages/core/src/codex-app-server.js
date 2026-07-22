@@ -25,6 +25,9 @@ import {
   itemPhase,
   itemText,
   modelForThread,
+  normalizeCodexModel,
+  normalizeCodexServiceTier,
+  normalizeReasoningEffort,
   nowIso,
   publicError,
   runtimeHome,
@@ -35,6 +38,7 @@ import {
   turnStartParams,
   userInputText,
 } from "./codex-app-server-common.js";
+import { codexModelCatalog, resolveCodexThreadSettingsCommand } from "./codex-thread-settings.js";
 import { getCodexAppServerClient, stopCodexAppServerClients as stopCodexAppServerRuntimeClients } from "./codex-app-server-client.js";
 import { probeLiveCodexThreadState, readLiveCodexThreadState } from "./codex-app-server-live-state.js";
 import { codexAppServerSocket, codexAppServerTransport } from "../../connectors/src/codex-app-server-transport.js";
@@ -72,6 +76,37 @@ function withInternalClient(result, client) {
 function codexAppServerActiveTurnRetryMs(env = process.env) {
   const parsed = Number(env.ORKESTR_CODEX_APP_SERVER_ACTIVE_TURN_RETRY_MS || 15000);
   return Number.isFinite(parsed) ? Math.max(250, parsed) : 15000;
+}
+
+function codexAppServerReadyRetryMs(env = process.env) {
+  const parsed = Number(env.ORKESTR_CODEX_APP_SERVER_READY_RETRY_MS || 1000);
+  return Number.isFinite(parsed) ? Math.max(250, parsed) : 1000;
+}
+
+function codexAppServerReadyRetryMax(env = process.env) {
+  const parsed = Number(env.ORKESTR_CODEX_APP_SERVER_READY_RETRY_MAX ?? 3);
+  return Number.isFinite(parsed) ? Math.max(0, Math.floor(parsed)) : 3;
+}
+
+function threadReadyForInputRetry(thread = {}) {
+  const state = clean(thread.runtime?.state || thread.state).toLowerCase();
+  return state === "ready" &&
+    !clean(thread.runtime?.activeTurnId) &&
+    !thread.runtime?.pendingRequest &&
+    clean(thread.runtime?.deliveryRecovery?.state).toLowerCase() !== "operator_required";
+}
+
+function pendingInputEligibleForReadyRetry(message = {}) {
+  if (clean(message.state).toLowerCase() !== "queued") return false;
+  return new Set([
+    "",
+    "delivering",
+    "queued",
+    "retrying_delivery",
+    "retrying_ready_runtime",
+    "retrying_stale_ready_runtime",
+    "runtime_ready",
+  ]).has(clean(message.deliveryState).toLowerCase());
 }
 
 function shouldSteerActiveTurnInput(message = {}) {
@@ -648,6 +683,124 @@ async function completeCodexAppServerModeCommand(thread, message, mode, env = pr
   };
 }
 
+async function listCodexAppServerModels(client) {
+  const data = [];
+  let cursor = null;
+  for (let page = 0; page < 10; page += 1) {
+    const result = await client.request("model/list", { limit: 100, ...(cursor ? { cursor } : {}) });
+    data.push(...codexModelCatalog(result));
+    cursor = clean(result?.nextCursor);
+    if (!cursor) break;
+  }
+  return data;
+}
+
+async function applyCodexAppServerThreadSettings(thread, runtimePatch = {}, persistedPatch = {}, client, env = process.env) {
+  const id = codexThreadId(thread);
+  if (!id) throw new Error("codex_thread_id_required");
+  const request = { threadId: id };
+  if (Object.prototype.hasOwnProperty.call(runtimePatch, "model")) request.model = runtimePatch.model;
+  if (Object.prototype.hasOwnProperty.call(runtimePatch, "effort")) request.effort = runtimePatch.effort;
+  if (Object.prototype.hasOwnProperty.call(runtimePatch, "serviceTier")) request.serviceTier = runtimePatch.serviceTier;
+  await client.request("thread/settings/update", request);
+  const updatedAt = nowIso();
+  const current = await getThread(thread.id, env).catch(() => null) || thread;
+  const updated = await updateThread(thread.id, {
+    ...persistedPatch,
+    codexModelUpdatedAt: updatedAt,
+    executor: {
+      ...(current.executor || {}),
+      metadata: {
+        ...(current.executor?.metadata || {}),
+        ...(Object.prototype.hasOwnProperty.call(persistedPatch, "codexModel") ? { codexModel: persistedPatch.codexModel } : {}),
+        ...(Object.prototype.hasOwnProperty.call(persistedPatch, "codexReasoningEffort") ? { codexReasoningEffort: persistedPatch.codexReasoningEffort } : {}),
+        ...(Object.prototype.hasOwnProperty.call(persistedPatch, "codexServiceTier") ? { codexServiceTier: persistedPatch.codexServiceTier } : {}),
+        codexModelUpdatedAt: updatedAt,
+      },
+    },
+  }, env);
+  await appendEvent({
+    type: "codex_app_server_thread_settings_updated",
+    threadId: thread.id,
+    codexThreadId: id,
+    model: normalizeCodexModel(runtimePatch.model) || null,
+    effort: normalizeReasoningEffort(runtimePatch.effort) || null,
+    serviceTier: normalizeCodexServiceTier(runtimePatch.serviceTier) || null,
+  }, env).catch(() => {});
+  return updated;
+}
+
+async function completeCodexAppServerSettingsCommand(thread, message, parsedCommand, client, env = process.env) {
+  let resolved;
+  try {
+    if (externalChatInput(message) && clean(message.senderTrustLevel).toLowerCase() !== "owner") {
+      resolved = { ok: false, error: "Only a thread owner or Orkestr admin can change Codex settings." };
+    } else if (threadUsesRestrictedCodexPolicy(thread, env)) {
+      resolved = { ok: false, error: "Codex settings for this contained thread are managed by tenant policy." };
+    } else {
+      const models = await listCodexAppServerModels(client);
+      resolved = resolveCodexThreadSettingsCommand({
+        command: parsedCommand.command,
+        text: parsedCommand.text,
+        thread,
+        models,
+      });
+    }
+    if (resolved.ok && resolved.action === "update") {
+      thread = await applyCodexAppServerThreadSettings(thread, resolved.runtimePatch, resolved.patch, client, env);
+    }
+  } catch (error) {
+    resolved = { ok: false, error: `Could not update Codex thread settings: ${publicError(error)}` };
+  }
+  const replyText = clean(resolved.replyText || resolved.error) || "Codex thread settings were not changed.";
+  const completed = await updateThreadMessage(thread.id, message.id, {
+    state: "completed",
+    deliveryState: "delivered",
+    observedVia: "codex_app_server_settings_command",
+    deliveredAt: nowIso(),
+    error: resolved.ok ? null : resolved.error,
+  }, env);
+  await recordMessageRouterTrace(completed, "delivery_started", {
+    threadId: thread.id,
+    ownerProcess: codexThreadId(thread),
+    reason: "codex_app_server_settings_command",
+  }, env);
+  await recordMessageRouterTrace(completed, "delivered_to_runtime", {
+    threadId: thread.id,
+    ownerProcess: codexThreadId(thread),
+    reason: "codex_app_server_settings_command",
+  }, env);
+  const reply = await appendThreadMessage(thread.id, {
+    role: "assistant",
+    source: "orkestr_runtime",
+    phase: "final_answer",
+    text: replyText,
+    state: "completed",
+    eventId: threadEventId({
+      codexThreadId: codexThreadId(thread),
+      itemId: message.id,
+      type: `thread-settings-${parsedCommand.command}`,
+      role: "assistant",
+      text: replyText,
+    }),
+    codexModel: thread.codexModel || thread.executor?.metadata?.codexModel || null,
+    codexReasoningEffort: thread.codexReasoningEffort || thread.executor?.metadata?.codexReasoningEffort || null,
+    codexServiceTier: thread.codexServiceTier || thread.executor?.metadata?.codexServiceTier || null,
+    ...codexAppServerMessageFields(codexThreadId(thread), { itemId: message.id }),
+    ...whatsappProjectionFields(message, thread),
+  }, env);
+  markConnectorDeliverySignal(reply);
+  await appendEvent({
+    type: "thread_codex_settings_command",
+    threadId: thread.id,
+    messageId: message.id,
+    command: parsedCommand.command,
+    applied: resolved.ok === true,
+    error: resolved.ok ? null : resolved.error,
+  }, env).catch(() => {});
+  return { messageId: completed.id, message: completed, reply, applied: resolved.ok === true };
+}
+
 function codexAppServerHistorySyncIntervalMs(env = process.env) {
   const parsed = Number(env.ORKESTR_CODEX_APP_SERVER_HISTORY_SYNC_INTERVAL_MS || 60000);
   return Number.isFinite(parsed) ? Math.max(0, parsed) : 60000;
@@ -720,6 +873,14 @@ function scheduleCodexAppServerInputDelivery(threadId, env = process.env, delayM
   appServerDeliveryTimers.set(id, timer);
 }
 
+function cancelCodexAppServerInputDelivery(threadId) {
+  const id = clean(threadId);
+  const timer = id ? appServerDeliveryTimers.get(id) : null;
+  if (!timer) return;
+  clearTimeout(timer);
+  appServerDeliveryTimers.delete(id);
+}
+
 export {
   codexAppServerEnabled,
   codexRuntimeKind,
@@ -788,6 +949,7 @@ export async function startCodexAppServerThread(thread, env = process.env) {
         codexSessionId: clean(codexThread.sessionId || codexId),
         codexModel: modelForThread(thread, runtimeEnv) || codexThread.model || null,
         codexReasoningEffort: effortForThread(thread, runtimeEnv) || null,
+        codexServiceTier: normalizeCodexServiceTier(startParams.serviceTier || codexThread.serviceTier) || null,
         codexModelProvider: codexThread.modelProvider || "openai",
         codexSandbox: startParams.sandbox,
         codexApprovalPolicy: startParams.approvalPolicy,
@@ -1394,7 +1556,9 @@ export async function deliverCodexAppServerPendingInputs(thread, env = process.e
   const lockKey = clean(thread?.id);
   if (!lockKey) return [];
   if (appServerDeliveryLocks.has(lockKey)) {
-    await appendEvent({ type: "codex_app_server_input_delivery_in_flight", threadId: lockKey }, env).catch(() => {});
+    const retryMs = codexAppServerReadyRetryMs(env);
+    scheduleCodexAppServerInputDelivery(lockKey, env, retryMs);
+    await appendEvent({ type: "codex_app_server_input_delivery_in_flight", threadId: lockKey, retryMs }, env).catch(() => {});
     return [];
   }
   appServerDeliveryLocks.add(lockKey);
@@ -1404,12 +1568,56 @@ export async function deliverCodexAppServerPendingInputs(thread, env = process.e
   } finally {
     appServerDeliveryLocks.delete(lockKey);
   }
+  const messages = await listThreadMessageCandidates(lockKey, { states: [...pendingInputStates] }, env).catch(() => []);
+  const pending = messages.find((message) => message.role === "user" && pendingInputStates.has(clean(message.state)));
+  if (!pending) return delivered;
   if (delivered.length) {
-    const messages = await listThreadMessageCandidates(lockKey, { states: [...pendingInputStates] }, env).catch(() => []);
-    if (messages.some((message) => message.role === "user" && pendingInputStates.has(clean(message.state)))) {
-      scheduleCodexAppServerInputDelivery(lockKey, env, 0);
-    }
+    scheduleCodexAppServerInputDelivery(lockKey, env, 0);
+    return delivered;
   }
+  const currentThread = await getThread(lockKey, env).catch(() => null) || thread;
+  if (!threadReadyForInputRetry(currentThread) || !pendingInputEligibleForReadyRetry(pending)) return delivered;
+  const attempt = Math.max(0, Number(pending.deliveryReadyRetryAttempt || 0)) + 1;
+  const maxAttempts = codexAppServerReadyRetryMax(env);
+  if (attempt > maxAttempts) {
+    cancelCodexAppServerInputDelivery(lockKey);
+    await updateThreadMessage(lockKey, pending.id, {
+      state: "queued",
+      deliveryState: "ready_runtime_retry_exhausted",
+      deliveryNextAttemptAt: null,
+      error: "Ready runtime did not accept the queued input after bounded retries.",
+    }, env).catch(() => pending);
+    await appendEvent({
+      type: "codex_app_server_ready_input_retry_exhausted",
+      threadId: lockKey,
+      messageId: pending.id,
+      attempt: attempt - 1,
+    }, env).catch(() => {});
+    return delivered;
+  }
+  const retryMs = codexAppServerReadyRetryMs(env);
+  const nextAttemptAt = isoAfter(retryMs);
+  const updated = await updateThreadMessage(lockKey, pending.id, {
+    state: "queued",
+    deliveryState: "retrying_ready_runtime",
+    deliveryReadyRetryAttempt: attempt,
+    deliveryLastAttemptAt: nowIso(),
+    deliveryNextAttemptAt: nextAttemptAt,
+    error: null,
+  }, env).catch(() => pending);
+  await recordMessageRouterTrace(updated, "queued", {
+    threadId: lockKey,
+    reason: "ready_runtime_delivery_retry",
+    attempt,
+  }, env);
+  await appendEvent({
+    type: "codex_app_server_ready_input_retry_scheduled",
+    threadId: lockKey,
+    messageId: pending.id,
+    attempt,
+    retryMs,
+  }, env).catch(() => {});
+  scheduleCodexAppServerInputDelivery(lockKey, env, retryMs);
   return delivered;
 }
 
@@ -1622,6 +1830,11 @@ async function deliverCodexAppServerClaimedPendingInput(thread, next, env = proc
     return delivered;
   }
   const parsedCommand = parseThreadInputCommand({ text });
+  if (parsedCommand.command === "model" || parsedCommand.command === "fast") {
+    const completed = await completeCodexAppServerSettingsCommand(thread, next, parsedCommand, client, env);
+    if (completed?.messageId) delivered.push(completed.messageId);
+    return delivered;
+  }
   if (parsedCommand.command === "plan" || parsedCommand.command === "code") {
     const payloadText = clean(parsedCommand.text);
     if (!payloadText && !clean(next.promptFile)) {

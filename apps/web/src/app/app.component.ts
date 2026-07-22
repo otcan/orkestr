@@ -3120,7 +3120,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       progressState === "planning" ||
       progressState === "awaiting_approval" ||
       progressState === "awaiting_input" ||
-      /(?:working|running|processing|waking|pending|approval)/.test(state),
+      /(?:working|running|processing|waking|retrying|pending|approval)/.test(state),
     );
   }
 
@@ -3143,6 +3143,9 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   threadProcessingLabel(thread: ThreadSummary | null): string {
     if (!thread) return "Working";
     if (this.threadLoading(thread)) return "Loading";
+    const publicStatusCode = String(thread.publicStatusCode || "").toLowerCase();
+    if (publicStatusCode === "retrying_delivery") return "Retrying delivery";
+    if (publicStatusCode === "waking") return "Starting";
     const lifecycleState = String(thread.turnLifecycle?.state || "").toLowerCase();
     if (thread.turnLifecycle?.awaitingApproval) return "Waiting for approval";
     if (lifecycleState === "queued") return "Queued";

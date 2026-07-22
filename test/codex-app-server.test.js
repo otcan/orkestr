@@ -30,7 +30,7 @@ import {
   setThreadConnectorDeliverySignalHandler,
   sleepThread,
 } from "../packages/core/src/runtime-leases.js";
-import { appendOrUpdateEventMessage, appServerStateFromStatus, containedCodexRuntimePaths, effortForThread, modelForThread, threadEventId, threadStartParams, turnStartParams } from "../packages/core/src/codex-app-server-common.js";
+import { appendOrUpdateEventMessage, appServerStateFromStatus, containedCodexRuntimePaths, effortForThread, modelForThread, serviceTierForThread, threadEventId, threadStartParams, turnStartParams } from "../packages/core/src/codex-app-server-common.js";
 import { appendThreadMessage, createThread, enqueueThreadInput, getThread, listThreadMessages, updateThread, updateThreadMessage } from "../packages/core/src/threads.js";
 import { listRouterTraces } from "../packages/core/src/router-traces.js";
 import { deliverWhatsAppReplies } from "../packages/connectors/src/whatsapp.js";
@@ -132,6 +132,21 @@ rl.on("line", (line) => {
     if (thread) thread.name = params.name;
     writeState(state);
     return send({ id, result: {} });
+  }
+  if (message.method === "model/list") return send({ id, result: { data: [
+    { id: "gpt-test", model: "gpt-test", displayName: "GPT Test", description: "Test model", hidden: false, isDefault: true, defaultReasoningEffort: "medium", supportedReasoningEfforts: [{ reasoningEffort: "low", description: "Low" }, { reasoningEffort: "medium", description: "Medium" }, { reasoningEffort: "high", description: "High" }], serviceTiers: [{ id: "priority", name: "Fast", description: "Faster" }], defaultServiceTier: null },
+    { id: "gpt-small", model: "gpt-small", displayName: "GPT Small", description: "Small model", hidden: false, isDefault: false, defaultReasoningEffort: "low", supportedReasoningEfforts: [{ reasoningEffort: "low", description: "Low" }], serviceTiers: [], defaultServiceTier: null }
+  ], nextCursor: null } });
+  if (message.method === "thread/settings/update") {
+    const thread = state.threads.find((item) => item.id === params.threadId);
+    if (!thread) return send({ id, error: { code: -32000, message: "thread not found: " + params.threadId } });
+    if (Object.prototype.hasOwnProperty.call(params, "model")) thread.model = params.model;
+    if (Object.prototype.hasOwnProperty.call(params, "effort")) thread.effort = params.effort;
+    if (Object.prototype.hasOwnProperty.call(params, "serviceTier")) thread.serviceTier = params.serviceTier;
+    writeState(state);
+    send({ id, result: {} });
+    send({ method: "thread/settings/updated", params: { threadId: thread.id, threadSettings: { model: thread.model || "gpt-test", modelProvider: "openai", effort: thread.effort || "medium", serviceTier: thread.serviceTier || null } } });
+    return;
   }
   if (message.method === "thread/list") return send({ id, result: { data: state.threads.map(({ turns, loaded, ...thread }) => ({ ...thread, status: loaded ? (thread.status || { type: "idle" }) : { type: "notLoaded" } })), nextCursor: null } });
   if (message.method === "thread/read") return send({ id, result: { thread: state.threads.find((item) => item.id === params.threadId) || { id: params.threadId, turns: [] } } });
@@ -4878,6 +4893,247 @@ test("Codex app-server drains burst external inputs in order after one delivery 
     assert.equal(messages.find((message) => message.id === first.id)?.state, "completed");
     assert.equal(messages.find((message) => message.id === second.id)?.state, "completed");
     assert.deepEqual(turnTexts, ["burst message one", "burst message two"]);
+  } finally {
+    stopCodexAppServerClients();
+  }
+});
+
+test("Codex app-server retries a ready runtime promptly when delivery returns no ids", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-ready-retry-"));
+  const fake = await createFakeCodex(home);
+  const env = {
+    ORKESTR_HOME: path.join(home, "orkestr"),
+    HOME: path.join(home, "runtime-home"),
+    PATH: `${fake.bin}${path.delimiter}${process.env.PATH || ""}`,
+    FAKE_CODEX_STATE: fake.stateFile,
+    ORKESTR_CODEX_APP_SERVER_DELIVERY_RECOVERY_CLAIM_STALE_MS: "250",
+    ORKESTR_CODEX_APP_SERVER_READY_RETRY_MS: "250",
+    ORKESTR_CODEX_APP_SERVER_READY_RETRY_MAX: "2",
+  };
+  try {
+    const thread = await createThread({ id: "app-server-ready-retry-thread", name: "App Server Ready Retry Thread", cwd: home, executorId: "codex", executor: { type: "codex" } }, env);
+    const started = await startCodexAppServerThread(thread, env);
+    const input = await enqueueThreadInput(started.thread.id, {
+      text: "deliver after the short ready retry",
+      source: "whatsapp_inbound",
+      connector: "whatsapp",
+      chatId: "chat-ready-retry",
+    }, env);
+    await updateThreadMessage(started.thread.id, input.id, {
+      deliveryRecoveryClaimId: "briefly-busy",
+      deliveryRecoveryClaimedAt: new Date().toISOString(),
+      deliveryRecoveryClaimOwner: "test",
+    }, env);
+
+    const first = await deliverCodexAppServerPendingInputs(await getThread(started.thread.id, env), env);
+    let messages = await listThreadMessages(started.thread.id, env);
+    assert.deepEqual(first, []);
+    assert.equal(messages.find((message) => message.id === input.id)?.deliveryState, "retrying_ready_runtime");
+
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      messages = await listThreadMessages(started.thread.id, env);
+      if (messages.find((message) => message.id === input.id)?.state === "completed") break;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    const rawState = JSON.parse(await fs.readFile(fake.stateFile, "utf8"));
+    const matchingTurns = rawState.calls.filter((call) =>
+      call.method === "turn/start" &&
+      call.params?.input?.some((item) => item.text === "deliver after the short ready retry")
+    );
+
+    assert.equal(messages.find((message) => message.id === input.id)?.state, "completed");
+    assert.equal(matchingTurns.length, 1);
+  } finally {
+    stopCodexAppServerClients();
+  }
+});
+
+test("Codex app-server exposes a recoverable failure after bounded ready retries", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-ready-retry-exhausted-"));
+  const fake = await createFakeCodex(home);
+  const env = {
+    ORKESTR_HOME: path.join(home, "orkestr"),
+    HOME: path.join(home, "runtime-home"),
+    PATH: `${fake.bin}${path.delimiter}${process.env.PATH || ""}`,
+    FAKE_CODEX_STATE: fake.stateFile,
+    ORKESTR_CODEX_APP_SERVER_DELIVERY_RECOVERY_CLAIM_STALE_MS: "250",
+    ORKESTR_CODEX_APP_SERVER_READY_RETRY_MS: "250",
+    ORKESTR_CODEX_APP_SERVER_READY_RETRY_MAX: "0",
+  };
+  try {
+    const thread = await createThread({ id: "app-server-ready-retry-exhausted", name: "App Server Ready Retry Exhausted", cwd: home, executorId: "codex", executor: { type: "codex" } }, env);
+    const started = await startCodexAppServerThread(thread, env);
+    const input = await enqueueThreadInput(started.thread.id, {
+      text: "remain recoverable after bounded retries",
+      source: "whatsapp_inbound",
+      connector: "whatsapp",
+      chatId: "chat-ready-retry-exhausted",
+    }, env);
+    await updateThreadMessage(started.thread.id, input.id, {
+      deliveryRecoveryClaimId: "busy-until-doctor",
+      deliveryRecoveryClaimedAt: new Date().toISOString(),
+      deliveryRecoveryClaimOwner: "test",
+    }, env);
+
+    assert.deepEqual(await deliverCodexAppServerPendingInputs(await getThread(started.thread.id, env), env), []);
+    await new Promise((resolve) => setTimeout(resolve, 350));
+    const messages = await listThreadMessages(started.thread.id, env);
+    const rawState = JSON.parse(await fs.readFile(fake.stateFile, "utf8"));
+
+    assert.equal(messages.find((message) => message.id === input.id)?.state, "queued");
+    assert.equal(messages.find((message) => message.id === input.id)?.deliveryState, "ready_runtime_retry_exhausted");
+    assert.match(messages.find((message) => message.id === input.id)?.error, /bounded retries/);
+    assert.equal(rawState.calls.some((call) => call.method === "turn/start"), false);
+  } finally {
+    stopCodexAppServerClients();
+  }
+});
+
+test("Codex app-server applies thread-scoped /model and /fast commands without starting a turn", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-thread-settings-"));
+  const fake = await createFakeCodex(home);
+  const env = {
+    ORKESTR_HOME: path.join(home, "orkestr"),
+    HOME: path.join(home, "runtime-home"),
+    PATH: `${fake.bin}${path.delimiter}${process.env.PATH || ""}`,
+    FAKE_CODEX_STATE: fake.stateFile,
+  };
+  try {
+    const firstThread = await createThread({ id: "app-server-settings-first", name: "App Server Settings First", cwd: home, executorId: "codex", executor: { type: "codex" } }, env);
+    const secondThread = await createThread({ id: "app-server-settings-second", name: "App Server Settings Second", cwd: home, executorId: "codex", executor: { type: "codex" } }, env);
+    const first = await startCodexAppServerThread(firstThread, env);
+    await startCodexAppServerThread(secondThread, env);
+
+    const modelCommand = await enqueueThreadInput(first.thread.id, {
+      text: "/model gpt-test high",
+      source: "whatsapp_inbound",
+      connector: "whatsapp",
+      chatId: "chat-settings",
+      senderTrustLevel: "owner",
+    }, env);
+    assert.deepEqual(await deliverCodexAppServerPendingInputs(await getThread(first.thread.id, env), env), [modelCommand.id]);
+
+    const fastCommand = await enqueueThreadInput(first.thread.id, {
+      text: "/fast on",
+      source: "whatsapp_inbound",
+      connector: "whatsapp",
+      chatId: "chat-settings",
+      senderTrustLevel: "owner",
+    }, env);
+    assert.deepEqual(await deliverCodexAppServerPendingInputs(await getThread(first.thread.id, env), env), [fastCommand.id]);
+
+    const deniedCommand = await enqueueThreadInput(secondThread.id, {
+      text: "/fast on",
+      source: "whatsapp_inbound",
+      connector: "whatsapp",
+      chatId: "chat-settings-other",
+      senderTrustLevel: "trusted",
+    }, env);
+    assert.deepEqual(await deliverCodexAppServerPendingInputs(await getThread(secondThread.id, env), env), [deniedCommand.id]);
+
+    const updatedFirst = await getThread(first.thread.id, env);
+    const unchangedSecond = await getThread(secondThread.id, env);
+    const messages = await listThreadMessages(first.thread.id, env);
+    const rawState = JSON.parse(await fs.readFile(fake.stateFile, "utf8"));
+    const settingCalls = rawState.calls.filter((call) => call.method === "thread/settings/update");
+
+    assert.equal(modelForThread(updatedFirst, env), "gpt-test");
+    assert.equal(effortForThread(updatedFirst, env), "high");
+    assert.equal(serviceTierForThread(updatedFirst), "priority");
+    assert.equal(unchangedSecond.codexServiceTier, null);
+    assert.deepEqual(settingCalls.map((call) => call.params), [
+      { threadId: first.thread.codexThreadId, model: "gpt-test", effort: "high" },
+      { threadId: first.thread.codexThreadId, serviceTier: "priority" },
+    ]);
+    assert.equal(rawState.calls.some((call) => call.method === "turn/start"), false);
+    assert.equal(rawState.calls.some((call) => call.method === "turn/steer"), false);
+    assert.ok(messages.some((message) => message.role === "assistant" && /Model set to gpt-test with high effort/.test(message.text)));
+    assert.ok(messages.some((message) => message.role === "assistant" && /Fast mode enabled/.test(message.text)));
+    const secondMessages = await listThreadMessages(secondThread.id, env);
+    assert.ok(secondMessages.some((message) => message.role === "assistant" && /Only a thread owner or Orkestr admin/.test(message.text)));
+  } finally {
+    stopCodexAppServerClients();
+  }
+});
+
+test("Codex app-server settings commands cannot bypass contained thread policy", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-contained-settings-"));
+  const fake = await createFakeCodex(home);
+  const env = {
+    ORKESTR_HOME: path.join(home, "orkestr"),
+    HOME: path.join(home, "runtime-home"),
+    PATH: `${fake.bin}${path.delimiter}${process.env.PATH || ""}`,
+    FAKE_CODEX_STATE: fake.stateFile,
+    ORKESTR_ADMIN_USER_ID: "admin",
+  };
+  try {
+    const thread = await createThread({ id: "app-server-contained-settings", name: "Contained settings", cwd: home, ownerUserId: "contained-user", executorId: "codex", executor: { type: "codex" } }, env);
+    const started = await startCodexAppServerThread(thread, env);
+    const command = await enqueueThreadInput(started.thread.id, {
+      senderTrustLevel: "owner",
+      text: "/model gpt-test high",
+      source: "whatsapp_inbound",
+      connector: "whatsapp",
+      chatId: "chat-contained-settings",
+    }, env);
+
+    assert.deepEqual(await deliverCodexAppServerPendingInputs(await getThread(started.thread.id, env), env), [command.id]);
+
+    const messages = await listThreadMessages(started.thread.id, env);
+    const completed = messages.find((message) => message.id === command.id);
+    const reply = messages.find((message) => message.role === "assistant" && message.phase === "final_answer");
+    const latestState = JSON.parse(await fs.readFile(fake.stateFile, "utf8"));
+    assert.equal(completed.deliveryState, "delivered");
+    assert.match(completed.error, /managed by tenant policy/i);
+    assert.match(reply.text, /managed by tenant policy/i);
+    assert.equal(latestState.calls.filter((call) => call.method === "model/list").length, 0);
+    assert.equal(latestState.calls.filter((call) => call.method === "thread/settings/update").length, 0);
+  } finally {
+    stopCodexAppServerClients();
+  }
+});
+
+test("Codex app-server projects model, effort, and service tier into subsequent turns", () => {
+  const thread = {
+    codexThreadId: "codex-settings-projection",
+    codexModel: "gpt-test",
+    codexReasoningEffort: "max",
+    codexServiceTier: "priority",
+  };
+  assert.equal(threadStartParams(thread).serviceTier, "priority");
+  assert.deepEqual(
+    { model: turnStartParams(thread, { text: "next" }).model, effort: turnStartParams(thread, { text: "next" }).effort, serviceTier: turnStartParams(thread, { text: "next" }).serviceTier },
+    { model: "gpt-test", effort: "max", serviceTier: "priority" },
+  );
+});
+
+test("Codex app-server persists external thread settings notifications", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-settings-notification-"));
+  const fake = await createFakeCodex(home);
+  const env = {
+    ORKESTR_HOME: path.join(home, "orkestr"),
+    HOME: path.join(home, "runtime-home"),
+    PATH: `${fake.bin}${path.delimiter}${process.env.PATH || ""}`,
+    FAKE_CODEX_STATE: fake.stateFile,
+  };
+  try {
+    const thread = await createThread({ id: "app-server-settings-notification", name: "App Server Settings Notification", cwd: home, executorId: "codex", executor: { type: "codex" } }, env);
+    const started = await startCodexAppServerThread(thread, env);
+    const client = await getCodexAppServerClient({ env, home: env.HOME });
+
+    await client.handleNotification({
+      method: "thread/settings/updated",
+      params: {
+        threadId: started.thread.codexThreadId,
+        threadSettings: { model: "gpt-small", modelProvider: "openai", effort: "low", serviceTier: null },
+      },
+    });
+
+    const updated = await getThread(thread.id, env);
+    assert.equal(updated.codexModel, "gpt-small");
+    assert.equal(updated.codexReasoningEffort, "low");
+    assert.equal(updated.codexServiceTier, null);
+    assert.equal(updated.executor.metadata.codexModel, "gpt-small");
   } finally {
     stopCodexAppServerClients();
   }

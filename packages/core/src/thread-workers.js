@@ -944,6 +944,7 @@ export async function createThreadWorker(parentThreadId, input = {}, env = proce
       codexModel: parent.codexModel || parent.executor?.metadata?.codexModel || null,
       codexModelProvider: parent.codexModelProvider || parent.executor?.metadata?.codexModelProvider || null,
       codexReasoningEffort: parent.codexReasoningEffort || parent.executor?.metadata?.codexReasoningEffort || null,
+      codexServiceTier: parent.codexServiceTier || parent.executor?.metadata?.codexServiceTier || null,
       parentThreadId: parent.id,
       rootThreadId: rootId,
       workerIndex,

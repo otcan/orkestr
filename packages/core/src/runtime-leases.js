@@ -4871,6 +4871,7 @@ const staleReadyRuntimeDeliveryStates = new Set([
   "awaiting_runtime_completion",
   "awaiting_ack_unobserved",
   "retrying_delivery",
+  "ready_runtime_retry_exhausted",
   "waking",
 ]);
 

@@ -135,6 +135,11 @@ function codexModelDebugLabel(message = {}, thread = {}, env = process.env) {
   return effort ? `${model}/${effort}` : model;
 }
 
+function codexFastDebugValue(message = {}, thread = {}) {
+  const metadata = thread?.executor?.metadata && typeof thread.executor.metadata === "object" ? thread.executor.metadata : {};
+  return pickString(message.codexServiceTier, thread.codexServiceTier, metadata.codexServiceTier).toLowerCase() === "priority";
+}
+
 function codexModeDebugValue(message = {}, thread = {}) {
   const mode = pickString(
     message.codexModeLive,
@@ -303,6 +308,7 @@ export function whatsappDebugFooter({ message = {}, thread = {}, messages = [], 
   const weeklyRemaining = codexRateLimitsDebugValue(thread, "weekly");
   const parts = [
     `m:${codexModelDebugLabel(message, thread, env)}`,
+    ...(codexFastDebugValue(message, thread) ? ["fast:on"] : []),
     ...(mode ? [`mode:${mode}`] : []),
     ...(runtimeSurface ? [`rt:${runtimeSurface}`] : []),
     `msg:${footerMessageType(deliveryType)}`,

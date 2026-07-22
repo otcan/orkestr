@@ -44,8 +44,15 @@ curl "$ORKESTR_API_BASE/api/router-traces/diagnostics"
 
 ## Recovery Policy
 
-Diagnostics only suggest recovery. They do not re-inject user messages, reset
-threads, delete outbox rows, or send connector messages.
+The default doctor run is read-only. `orkestr doctor whatsapp --repair` may
+perform safe, scoped repairs for the selected `--thread` or `--trace`, including
+retrying one stale queued input on a ready runtime and releasing an expired
+outbox claim. Prefer `--trace` during incidents so repair cannot cross a router
+turn boundary.
+
+Historical final-answer replay is not part of ordinary stale-input repair. It
+must remain an explicit operator action after the trace and connector outbox are
+inspected, because the original reply may already have reached WhatsApp.
 
 - `queued` or `delivery_started`: check runtime health and retry the delivery
   queue.
@@ -55,6 +62,13 @@ threads, delete outbox rows, or send connector messages.
   durable outbox item.
 - `runtime_failed`: repair or restart the runtime, then explicitly retry if the
   user still expects a reply.
+
+Examples:
+
+```bash
+orkestr doctor router --trace <routerTraceId> --repair --json
+orkestr doctor whatsapp --thread <threadId> --repair --json
+```
 
 ## Alerts
 

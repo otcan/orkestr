@@ -348,7 +348,7 @@ export function isCodexApprovalRequestMethod(method = "", params = {}) {
   return ["mcp_tool_call", "tool_suggestion"].includes(clean(metadata.codex_approval_kind || metadata.codexApprovalKind));
 }
 
-const codexReasoningEfforts = new Set(["none", "minimal", "low", "medium", "high", "xhigh"]);
+const codexReasoningEfforts = new Set(["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]);
 
 export function normalizeCodexModel(value) {
   const model = clean(value);
@@ -384,6 +384,19 @@ export function effortForThread(thread, env = process.env) {
     thread.executor?.metadata?.codexReasoningEffort,
     process.env.ORKESTR_DEFAULT_CODEX_REASONING,
   ].map(normalizeReasoningEffort).find(Boolean) || "";
+}
+
+export function normalizeCodexServiceTier(value) {
+  const tier = clean(value);
+  if (!tier || tier.startsWith("/") || tier.toLowerCase().endsWith(".jsonl")) return "";
+  return tier;
+}
+
+export function serviceTierForThread(thread) {
+  return [
+    thread.codexServiceTier,
+    thread.executor?.metadata?.codexServiceTier,
+  ].map(normalizeCodexServiceTier).find(Boolean) || "";
 }
 
 export function codexInputText(message) {
@@ -426,7 +439,9 @@ export function threadStartParams(thread, env = process.env) {
   const developerInstructions = containedUserDeveloperInstructions(thread, env);
   if (developerInstructions) params.developerInstructions = developerInstructions;
   const model = modelForThread(thread, env);
+  const serviceTier = serviceTierForThread(thread);
   if (model) params.model = model;
+  if (serviceTier) params.serviceTier = serviceTier;
   return params;
 }
 
@@ -440,8 +455,10 @@ export function turnStartParams(thread, message, env = process.env) {
   };
   const model = modelForThread(thread, env);
   const effort = effortForThread(thread, env);
+  const serviceTier = serviceTierForThread(thread);
   if (model) params.model = model;
   if (effort) params.effort = effort;
+  if (serviceTier) params.serviceTier = serviceTier;
   return params;
 }
 

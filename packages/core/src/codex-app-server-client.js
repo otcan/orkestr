@@ -24,6 +24,9 @@ import {
   itemText,
   isCodexApprovalRequestMethod,
   markThreadFromCodexStatus,
+  normalizeCodexModel,
+  normalizeCodexServiceTier,
+  normalizeReasoningEffort,
   nowIso,
   publicError,
   runtimeHome,
@@ -495,6 +498,45 @@ export class CodexAppServerClient {
         status: params.thread.status || { type: "idle" },
         thread: params.thread,
       });
+    }
+    if (message.method === "thread/settings/updated" && codexId) {
+      const settings = params.threadSettings || {};
+      const state = this.threadStates.get(codexId) || {};
+      this.threadStates.set(codexId, { ...state, threadSettings: settings });
+      const thread = await threadForCodexThreadId(codexId, this.env);
+      if (thread) {
+        const model = normalizeCodexModel(settings.model) || null;
+        const effort = normalizeReasoningEffort(settings.effort) || null;
+        const serviceTier = normalizeCodexServiceTier(settings.serviceTier) || null;
+        const updatedAt = nowIso();
+        await updateThread(thread.id, {
+          codexModel: model,
+          codexModelProvider: clean(settings.modelProvider) || thread.codexModelProvider || null,
+          codexReasoningEffort: effort,
+          codexServiceTier: serviceTier,
+          codexModelUpdatedAt: updatedAt,
+          executor: {
+            ...(thread.executor || {}),
+            metadata: {
+              ...(thread.executor?.metadata || {}),
+              codexModel: model,
+              codexModelProvider: clean(settings.modelProvider) || thread.executor?.metadata?.codexModelProvider || null,
+              codexReasoningEffort: effort,
+              codexServiceTier: serviceTier,
+              codexModelUpdatedAt: updatedAt,
+            },
+          },
+        }, this.env).catch(() => {});
+        await appendEvent({
+          type: "codex_app_server_thread_settings_notification",
+          threadId: thread.id,
+          codexThreadId: codexId,
+          model,
+          effort,
+          serviceTier,
+        }, this.env).catch(() => {});
+      }
+      return;
     }
     if (message.method === "thread/status/changed" && codexId) {
       const state = this.threadStates.get(codexId) || {};

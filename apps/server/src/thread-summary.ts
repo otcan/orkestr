@@ -1,6 +1,6 @@
 import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
-import { normalizeCodexModel, normalizeReasoningEffort } from "../../../packages/core/src/codex-app-server-common.js";
+import { normalizeCodexModel, normalizeCodexServiceTier, normalizeReasoningEffort } from "../../../packages/core/src/codex-app-server-common.js";
 import { RAW_TERMINAL_RUNTIME_KIND } from "../../../packages/core/src/raw-terminal-mode.js";
 import { resolveCodexThreadMetadata, resolveCodexThreadMetadataBatch, runtimeStatus } from "../../../packages/core/src/runtime-leases.js";
 import { isAdminPrincipal, resourceOwnerUserId } from "../../../packages/core/src/policy.js";
@@ -258,6 +258,7 @@ function codexMetadata(thread: any) {
       codexModel: thread?.apiAgentModel || process.env.ORKESTR_API_AGENT_MODEL || "gpt-5-mini",
       codexModelProvider: "openai-api",
       codexReasoningEffort: null,
+      codexServiceTier: null,
       codexModelUpdatedAt: null,
       codexContextWindow: null,
       codexTokenUsage: null,
@@ -286,6 +287,7 @@ function codexMetadata(thread: any) {
     codexModel: [thread?.codexModel, metadata.codexModel, process.env.ORKESTR_DEFAULT_CODEX_MODEL, process.env.OPENAI_MODEL].map(normalizeCodexModel).find(Boolean) || null,
     codexModelProvider: provider || "codex",
     codexReasoningEffort: [thread?.codexReasoningEffort, metadata.codexReasoningEffort, process.env.ORKESTR_DEFAULT_CODEX_REASONING].map(normalizeReasoningEffort).find(Boolean) || null,
+    codexServiceTier: [thread?.codexServiceTier, metadata.codexServiceTier].map(normalizeCodexServiceTier).find(Boolean) || null,
     codexModelUpdatedAt: thread?.codexModelUpdatedAt || metadata.codexModelUpdatedAt || null,
     codexContextWindow: contextWindow,
     codexTokenUsage: tokenUsage,
@@ -847,6 +849,12 @@ export async function threadRuntimeSummary(thread: any, messages: any[] = [], op
   const inferredWorking = Boolean(status && state === "working");
   const awaitingAckCount = status?.awaitingAckCount ?? 0;
   const latestMessage = latestMessageSummary(orderedMessages);
+  const retryingDelivery = latestMessage.lastMessageRole === "user" &&
+    ["retrying_delivery", "retrying_ready_runtime", "retrying_stale_ready_runtime"].includes(String(latestMessage.lastMessageDeliveryState || ""));
+  const wakingDelivery = latestMessage.lastMessageRole === "user" &&
+    ["waking", "waking_runtime", "waiting_runtime_ready", "waiting_runtime_start"].includes(String(latestMessage.lastMessageDeliveryState || ""));
+  const failedDelivery = latestMessage.lastMessageRole === "user" &&
+    String(latestMessage.lastMessageDeliveryState || "") === "ready_runtime_retry_exhausted";
   const lastMessageRecovered = runtimeInterruptionRecovered(thread, latestMessage);
   const planAvailable = latestAssistantPlanAvailable(orderedMessages);
   const lastActivityAt = latestMessage.lastMessageAt || thread.updatedAt || thread.createdAt || null;
@@ -913,8 +921,8 @@ export async function threadRuntimeSummary(thread: any, messages: any[] = [], op
     staleWorking: false,
     staleWorkingReason: null,
     staleWorkingSince: null,
-    publicStatus: awaitingAckCount > 0 ? "Awaiting ack" : ready ? "Ready" : state === "sleeping" ? "Sleeping" : state === "unloaded" ? "Unloaded" : state,
-    publicStatusCode: awaitingAckCount > 0 ? "awaiting_ack" : ready ? "ready" : state,
+    publicStatus: failedDelivery ? "Failed" : retryingDelivery ? "Retrying delivery" : wakingDelivery ? "Waking" : awaitingAckCount > 0 ? "Awaiting ack" : ready ? "Ready" : state === "sleeping" ? "Sleeping" : state === "unloaded" ? "Unloaded" : state,
+    publicStatusCode: failedDelivery ? "failed" : retryingDelivery ? "retrying_delivery" : wakingDelivery ? "waking" : awaitingAckCount > 0 ? "awaiting_ack" : ready ? "ready" : state,
     hibernated: state === "sleeping",
     ...latestMessage,
     lastMessageRecovered,
