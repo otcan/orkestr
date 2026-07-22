@@ -323,6 +323,13 @@ test("install script provisions isolated connector MCP and WhatsApp worker servi
   assert.match(releaseScript, /switch_current_release/);
   assert.match(releaseScript, /ORKESTR_CONNECTORS_HEALTH_ATTEMPTS:-90/);
   assert.match(releaseScript, /ORKESTR_CONNECTORS_HEALTH_STABLE_SUCCESSES:-3/);
+  assert.match(releaseScript, /ORKESTR_CONNECTORS_DEPLOY_LOCK_FILE:-\/run\/lock\/orkestr-connectors-release\.lock/);
+  assert.match(releaseScript, /exec 9>"\$lock_file"/);
+  assert.match(releaseScript, /flock 9/);
+  assert.match(releaseScript, /active_connector_revision/);
+  assert.match(releaseScript, /systemctl is-active --quiet "\$worker_service"/);
+  assert.match(releaseScript, /systemctl is-active --quiet "\$gateway_service"/);
+  assert.match(releaseScript, /Connector release already active for revision/);
   assert.match(releaseScript, /for _ in \$\(seq 1 "\$health_attempts"\)/);
   assert.match(releaseScript, /health_successes=\$\(\(health_successes \+ 1\)\)/);
   assert.match(releaseScript, /orkestr-connectors-doctor\.mjs --repair/);

@@ -40,6 +40,7 @@ doctor_timer="${ORKESTR_CONNECTORS_DOCTOR_TIMER_NAME:-${doctor_service}}"
 health_attempts="${ORKESTR_CONNECTORS_HEALTH_ATTEMPTS:-90}"
 health_retry_delay="${ORKESTR_CONNECTORS_HEALTH_RETRY_DELAY:-1}"
 health_stable_successes="${ORKESTR_CONNECTORS_HEALTH_STABLE_SUCCESSES:-3}"
+lock_file="${ORKESTR_CONNECTORS_DEPLOY_LOCK_FILE:-/run/lock/orkestr-connectors-release.lock}"
 node_bin="$(command -v node || echo /usr/bin/node)"
 revision="$(git -C "$source_dir" rev-parse --verify HEAD)"
 release_id="$(date -u +%Y%m%dT%H%M%SZ)-${revision:0:12}"
@@ -63,9 +64,29 @@ switch_current_release() {
   [ "$(readlink -f "$current_link" 2>/dev/null || true)" = "$(readlink -f "$target")" ]
 }
 
+active_connector_revision() {
+  head -n 1 "$current_link/REVISION" 2>/dev/null | tr -d '[:space:]' || true
+}
+
 if ! git -C "$source_dir" diff --quiet || ! git -C "$source_dir" diff --cached --quiet; then
   echo "Connector releases must be built from a committed worktree." >&2
   exit 1
+fi
+
+if [ "$activate" -eq 1 ]; then
+  command -v flock >/dev/null 2>&1 || {
+    echo "Missing required command: flock" >&2
+    exit 1
+  }
+  mkdir -p "$(dirname "$lock_file")"
+  exec 9>"$lock_file"
+  flock 9
+  if [ "$(active_connector_revision)" = "$revision" ] \
+    && systemctl is-active --quiet "$worker_service" \
+    && systemctl is-active --quiet "$gateway_service"; then
+    echo "Connector release already active for revision ${revision:0:12}; skipping activation."
+    exit 0
+  fi
 fi
 
 mkdir -p "$release_dir"
