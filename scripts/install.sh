@@ -1234,7 +1234,7 @@ checkout_git_ref() {
 write_env_file() {
   local chrome
   chrome="$(chrome_path)"
-  local codex_command codex_sandbox codex_approval codex_app_server_mode codex_app_server_socket codex_app_server_service runtime_settings_file desktop_mode browserctl_path primary_domain public_site_url app_host auth_host public_url auth_url cookie_domain public_https_url wa_bridge_mode wa_external_enabled wa_bridge_url wa_autostart
+  local codex_command codex_sandbox codex_approval codex_app_server_mode codex_app_server_socket codex_app_server_service runtime_settings_file desktop_mode browserctl_path primary_domain public_site_url app_host auth_host public_url auth_url cookie_domain public_https_url wa_bridge_mode wa_external_enabled wa_bridge_url wa_autostart connector_encryption_key
   codex_command="${ORKESTR_RUNTIME_CODEX_COMMAND:-$(codex_command_default)}"
   codex_sandbox="${ORKESTR_CODEX_SANDBOX:-$(codex_sandbox_default)}"
   codex_approval="${ORKESTR_CODEX_APPROVAL_POLICY:-$(codex_approval_default)}"
@@ -1268,6 +1268,7 @@ write_env_file() {
     cookie_domain="$primary_domain"
   fi
   public_https_url="${ORKESTR_PUBLIC_HTTPS_URL:-$public_url}"
+  connector_encryption_key="${ORKESTR_CONNECTOR_ENCRYPTION_KEY:-$(random_private_token)}"
   if [ "$(normalize_bool "${ORKESTR_INSTALL_CONNECTORS_MCP:-${ORKESTR_INSTALL_WA_SERVICE:-0}}")" = "1" ]; then
     wa_bridge_mode="${WHATSAPP_BRIDGE_MODE:-external}"
     wa_external_enabled="${ORKESTR_WHATSAPP_EXTERNAL_BRIDGE_ENABLED:-1}"
@@ -1329,6 +1330,8 @@ ORKESTR_RESET_ON_UPDATE=${ORKESTR_RESET_ON_UPDATE:-0}
 ORKESTR_RESET_OVERLAY=${ORKESTR_RESET_OVERLAY:-0}
 ORKESTR_RUNTIME_WORKSPACE_ROOT=$workspace_dir
 ORKESTR_REDACT_LOCAL_FILE_PATHS=${ORKESTR_REDACT_LOCAL_FILE_PATHS:-0}
+ORKESTR_CONNECTOR_ENCRYPTION_KEY=$connector_encryption_key
+ORKESTR_GOOGLE_OAUTH_ALLOWED_CAPABILITIES=${ORKESTR_GOOGLE_OAUTH_ALLOWED_CAPABILITIES:-gmail_send}
 ORKESTR_CODEX_BIN=${ORKESTR_CODEX_BIN:-$(codex_bin_default)}
 ORKESTR_CODEX_SANDBOX=$codex_sandbox
 ORKESTR_CODEX_APPROVAL_POLICY=$codex_approval
@@ -1473,7 +1476,7 @@ ensure_env_assignment() {
 }
 
 migrate_systemd_env_file() {
-  local desktop_mode browserctl_path current_mode primary_domain public_site_url app_host auth_host public_url auth_url cookie_domain public_https_url
+  local desktop_mode browserctl_path current_mode primary_domain public_site_url app_host auth_host public_url auth_url cookie_domain public_https_url connector_encryption_key fallback_key_file
   desktop_mode="$1"
   browserctl_path="$2"
   primary_domain="${ORKESTR_PRIMARY_DOMAIN:-${ORKESTR_DOMAIN:-}}"
@@ -1513,6 +1516,17 @@ migrate_systemd_env_file() {
   ensure_env_assignment ORKESTR_CODEX_APP_SERVER_SERVICE_NAME "$(codex_app_server_service_name)"
   ensure_env_assignment ORKESTR_RUNTIME_WORKSPACE_ROOT "$workspace_dir"
   ensure_env_assignment ORKESTR_REDACT_LOCAL_FILE_PATHS "${ORKESTR_REDACT_LOCAL_FILE_PATHS:-0}"
+  connector_encryption_key="$(env_file_value ORKESTR_CONNECTOR_ENCRYPTION_KEY)"
+  if [ -z "$connector_encryption_key" ]; then
+    fallback_key_file="$data_dir/secrets/connector-encryption.key"
+    if [ -r "$fallback_key_file" ]; then
+      connector_encryption_key="base64:$(tr -d '\r\n' < "$fallback_key_file")"
+    else
+      connector_encryption_key="$(random_private_token)"
+    fi
+    set_env_assignment ORKESTR_CONNECTOR_ENCRYPTION_KEY "$connector_encryption_key"
+  fi
+  ensure_env_assignment ORKESTR_GOOGLE_OAUTH_ALLOWED_CAPABILITIES "${ORKESTR_GOOGLE_OAUTH_ALLOWED_CAPABILITIES:-gmail_send}"
   if [ -n "$primary_domain" ]; then ensure_env_assignment ORKESTR_PRIMARY_DOMAIN "$primary_domain"; fi
   if [ -n "$public_site_url" ]; then ensure_env_assignment ORKESTR_PUBLIC_SITE_URL "$public_site_url"; fi
   if [ -n "$app_host" ]; then ensure_env_assignment ORKESTR_APP_HOST "$app_host"; fi
@@ -1903,7 +1917,7 @@ fresh_reset_local_install() {
 }
 
 write_local_env_file() {
-  local primary_domain public_site_url app_host auth_host public_url auth_url cookie_domain public_https_url
+  local primary_domain public_site_url app_host auth_host public_url auth_url cookie_domain public_https_url connector_encryption_key fallback_key_file
   primary_domain="${ORKESTR_PRIMARY_DOMAIN:-${ORKESTR_DOMAIN:-}}"
   public_site_url="${ORKESTR_PUBLIC_SITE_URL:-}"
   if [ -z "$public_site_url" ] && [ -n "$primary_domain" ]; then
@@ -1928,6 +1942,15 @@ write_local_env_file() {
     cookie_domain="$primary_domain"
   fi
   public_https_url="${ORKESTR_PUBLIC_HTTPS_URL:-$public_url}"
+  connector_encryption_key="${ORKESTR_CONNECTOR_ENCRYPTION_KEY:-$(named_env_file_value "$local_env_file" ORKESTR_CONNECTOR_ENCRYPTION_KEY)}"
+  if [ -z "$connector_encryption_key" ]; then
+    fallback_key_file="$data_dir/secrets/connector-encryption.key"
+    if [ -r "$fallback_key_file" ]; then
+      connector_encryption_key="base64:$(tr -d '\r\n' < "$fallback_key_file")"
+    else
+      connector_encryption_key="$(random_private_token)"
+    fi
+  fi
   mkdir -p "$(dirname "$local_env_file")"
   {
     echo "# Orkestr local environment."
@@ -1951,6 +1974,8 @@ write_local_env_file() {
     write_env_var ORKESTR_RUNTIME_SETTINGS_FILE "${ORKESTR_RUNTIME_SETTINGS_FILE:-$data_dir/runtime-settings.json}"
     write_env_var ORKESTR_RUNTIME_WORKSPACE_ROOT "$workspace_dir"
     write_env_var ORKESTR_REDACT_LOCAL_FILE_PATHS "${ORKESTR_REDACT_LOCAL_FILE_PATHS:-0}"
+    write_env_var ORKESTR_CONNECTOR_ENCRYPTION_KEY "$connector_encryption_key"
+    write_env_var ORKESTR_GOOGLE_OAUTH_ALLOWED_CAPABILITIES "${ORKESTR_GOOGLE_OAUTH_ALLOWED_CAPABILITIES:-gmail_send}"
     write_env_var ORKESTR_CODEX_BIN "${ORKESTR_CODEX_BIN:-$(codex_bin_default)}"
     write_env_var ORKESTR_RUNTIME_CODEX_COMMAND "${ORKESTR_RUNTIME_CODEX_COMMAND:-$(codex_command_default)}"
     write_env_var CODEX_HOME "${CODEX_HOME:-$(local_codex_home_default)}"

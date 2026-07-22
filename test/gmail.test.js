@@ -321,6 +321,33 @@ test("gmail authorization code is exchanged and stored securely", async () => {
   assert.equal(stored.refreshToken, "refresh-1");
 });
 
+test("gmail disconnect preserves the local grant when provider revocation is temporarily unavailable", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-gmail-revoke-retry-"));
+  const env = { ORKESTR_HOME: home, ORKESTR_CONNECTOR_ENCRYPTION_KEY: "c".repeat(64) };
+  await writeConnectorConfig("gmail", {
+    clientId: "client-id",
+    clientSecret: "client-secret",
+    redirectUri: "http://localhost/callback",
+  }, env);
+  await exchangeGmailCode("code-123", env, async () => jsonResponse({
+    access_token: "access-revoke",
+    refresh_token: "refresh-revoke",
+    expires_in: 3600,
+    scope: "https://www.googleapis.com/auth/gmail.send",
+  }));
+
+  await assert.rejects(
+    disconnectConnectorAuth(
+      { provider: "gmail" },
+      { kind: "user", id: "admin", userId: "admin", role: "admin" },
+      env,
+      { fetchImpl: async () => ({ ok: false, status: 503 }) },
+    ),
+    /gmail_revoke_http_503/,
+  );
+  assert.equal((await readGmailToken(env)).refreshToken, "refresh-revoke");
+});
+
 test("gmail callback validates state and exchanges tokens", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-gmail-callback-"));
   const env = { ORKESTR_HOME: home };
@@ -816,8 +843,21 @@ test("tenant gmail status uses instance connector scope for any principal", asyn
   assert.equal(sameInstanceToken.accessToken, "legacy-global-access");
   await assert.rejects(fs.stat(userTokenPath));
 
-  await disconnectConnectorAuth({ provider: "gmail" }, userPrincipal({ id: "firat" }), env);
+  const revokeCalls = [];
+  const disconnected = await disconnectConnectorAuth(
+    { provider: "gmail" },
+    userPrincipal({ id: "firat" }),
+    env,
+    {
+      fetchImpl: async (url, options) => {
+        revokeCalls.push({ url: String(url), token: new URLSearchParams(options.body).get("token") });
+        return { ok: true, status: 200 };
+      },
+    },
+  );
 
+  assert.deepEqual(revokeCalls, [{ url: "https://oauth2.googleapis.com/revoke", token: "legacy-global-refresh" }]);
+  assert.equal(disconnected.revocation.state, "revoked");
   assert.equal((await readGmailToken(env)).accessToken, undefined);
   assert.equal((await readGmailToken(env, { userId: "firat" })).accessToken, undefined);
   await assert.rejects(fs.stat(userTokenPath));

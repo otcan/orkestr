@@ -586,8 +586,47 @@ set_env_assignment() {
   fi
 }
 
+env_file_value() {
+  local name value
+  name="$1"
+  value="$(sed -n "s/^${name}=//p" "$env_file_path" 2>/dev/null | tail -1)"
+  value="${value%\"}"
+  value="${value#\"}"
+  value="${value%\'}"
+  value="${value#\'}"
+  printf '%s' "$value"
+}
+
+random_private_token() {
+  if command -v openssl >/dev/null 2>&1; then
+    openssl rand -hex 32
+  else
+    node -e 'console.log(require("node:crypto").randomBytes(32).toString("hex"))'
+  fi
+}
+
+ensure_connector_security_env() {
+  local connector_key fallback_key_file runtime_home
+  [ -f "$env_file_path" ] || return 0
+  connector_key="$(env_file_value ORKESTR_CONNECTOR_ENCRYPTION_KEY)"
+  if [ -z "$connector_key" ]; then
+    runtime_home="${ORKESTR_HOME:-$deploy_root/data}"
+    fallback_key_file="$runtime_home/secrets/connector-encryption.key"
+    if [ -r "$fallback_key_file" ]; then
+      connector_key="base64:$(tr -d '\r\n' < "$fallback_key_file")"
+    else
+      connector_key="$(random_private_token)"
+    fi
+    set_env_assignment ORKESTR_CONNECTOR_ENCRYPTION_KEY "$connector_key"
+  fi
+  if ! grep -q '^ORKESTR_GOOGLE_OAUTH_ALLOWED_CAPABILITIES=' "$env_file_path"; then
+    set_env_assignment ORKESTR_GOOGLE_OAUTH_ALLOWED_CAPABILITIES gmail_send
+  fi
+}
+
 sync_versioned_env() {
   [ -f "$env_file_path" ] || return 0
+  ensure_connector_security_env
   set_env_assignment ORKESTR_APP_DIR "$current_link"
   set_env_assignment ORKESTR_RELEASE_DEPLOY "1"
   set_env_assignment ORKESTR_CURRENT_LINK "$current_link"

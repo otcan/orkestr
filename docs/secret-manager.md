@@ -44,6 +44,14 @@ but new work should avoid adding more ad hoc secret files. Migration tools must
 support dry-run output that reports only names, scopes, and status. They must
 never print secret values.
 
+Google Workspace connector tokens use the same security standard through an
+encrypted connector-record envelope. Access and refresh tokens are encrypted
+with AES-256-GCM before they are written to the user's connector directory.
+Production installs generate `ORKESTR_CONNECTOR_ENCRYPTION_KEY` in the protected
+service environment outside `ORKESTR_HOME`; local development falls back to a
+private key file under `ORKESTR_HOME/secrets`. Existing plaintext Gmail token
+records are rewritten as encrypted records on first read.
+
 The first migration utility covers known environment secrets:
 
 ```bash

@@ -12,6 +12,7 @@ import {
   googleWorkspaceDefaultGmailCapabilities,
   googleWorkspaceScopesForCapabilities,
   normalizeGoogleWorkspaceCapabilities,
+  requireAllowedGoogleWorkspaceCapabilities,
 } from "./google-workspace-scopes.js";
 import { readGoogleOAuthAppConfig } from "./parent-connector-apps.js";
 import {
@@ -22,6 +23,7 @@ import {
 } from "./google-workspace-connections.js";
 
 const tokenUrl = "https://oauth2.googleapis.com/token";
+const revokeUrl = "https://oauth2.googleapis.com/revoke";
 const gmailApiBase = "https://gmail.googleapis.com/gmail/v1/users/me";
 const googleUserInfoUrl = "https://www.googleapis.com/oauth2/v3/userinfo";
 const defaultGmailCapabilities = googleWorkspaceDefaultGmailCapabilities();
@@ -251,6 +253,25 @@ async function requestToken(params, fetchImpl = fetch) {
     throw error;
   }
   return payload;
+}
+
+export async function revokeGmailOAuthGrant(token = {}, fetchImpl = fetch, options = {}) {
+  const credential = clean(token.refreshToken || token.refresh_token || token.accessToken || token.access_token);
+  if (!credential) return { ok: true, revoked: false, state: "no_local_credential" };
+  const response = await timeoutFetch(fetchImpl, positiveInteger(options.timeoutMs, 10_000))(revokeUrl, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ token: credential }),
+  });
+  if (response.ok) return { ok: true, revoked: true, state: "revoked" };
+  if (response.status === 400 || response.status === 401) {
+    return { ok: true, revoked: false, state: "already_inactive" };
+  }
+  const error = new Error(`gmail_revoke_http_${response.status}`);
+  error.statusCode = 502;
+  error.providerStatus = response.status;
+  error.retryable = response.status === 408 || response.status === 429 || response.status >= 500;
+  throw error;
 }
 
 function normalizeOAuthTokenPayload(payload, prior = {}, options = {}) {
@@ -558,8 +579,12 @@ export async function startGmailOAuth(env = process.env, options = {}) {
   const tenantVmId = tenantVmIdForOAuth(env, options);
   const state = newOAuthState(env, options);
   const account = normalizeEmail(options.account || (options.ignoreConfiguredAccount === true ? "" : config.account) || "");
-  const capabilities = normalizeGoogleWorkspaceCapabilities(options.capabilities || options.requestedCapabilities, defaultGmailCapabilities);
-  const requestedScopes = uniqueList(options.scopes || options.requestedScopes || googleWorkspaceScopesForCapabilities(capabilities));
+  const capabilities = requireAllowedGoogleWorkspaceCapabilities(
+    options.capabilities || options.requestedCapabilities,
+    env,
+    config.allowedCapabilities,
+  );
+  const requestedScopes = googleWorkspaceScopesForCapabilities(capabilities);
   const provider = clean(options.provider || "gmail");
   assertApprovedTesterAccount(account, config);
   const thread = options.thread && typeof options.thread === "object" ? options.thread : {};
@@ -588,6 +613,8 @@ export async function startGmailOAuth(env = process.env, options = {}) {
     setAsThreadDefault: options.setAsThreadDefault === true,
     requestedCapabilities: capabilities,
     requestedScopes,
+    privacyPolicyVersion: clean(options.privacyPolicyVersion),
+    privacyConsentAt: clean(options.privacyConsentAt),
     redirectUri,
     createdAt: new Date().toISOString(),
   });

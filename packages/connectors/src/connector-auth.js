@@ -6,6 +6,7 @@ import {
   classifyGmailConnectorError,
   enrichGmailTokenAccount,
   readGmailToken,
+  revokeGmailOAuthGrant,
   startGmailOAuth,
   validateGmailConnection,
 } from "./gmail.js";
@@ -348,7 +349,7 @@ export async function startConnectorAuth(args = {}, principal = {}, env = proces
   return startAuthorizationCodeConnector(provider, args, principal, env);
 }
 
-export async function disconnectConnectorAuth(args = {}, principal = {}, env = process.env) {
+export async function disconnectConnectorAuth(args = {}, principal = {}, env = process.env, options = {}) {
   const provider = normalizeProvider(args.provider);
   if (provider === "whatsapp") throw connectorError("whatsapp_disconnect_not_supported_here", 400);
   const scope = await connectorScopePaths(env, { principal });
@@ -358,6 +359,7 @@ export async function disconnectConnectorAuth(args = {}, principal = {}, env = p
       account: args.account,
       threadId: args.threadId,
     }, env, { principal, threadId: args.threadId });
+    const revocation = await revokeGmailOAuthGrant(selected.token, options.fetchImpl || fetch);
     const removed = await removeGoogleWorkspaceConnection(selected.connection.connectionId, env, { principal });
     await unlinkIfExists(errorFile(provider, scope));
     await unlinkIfExists(oauthStateFile(provider, scope));
@@ -366,12 +368,14 @@ export async function disconnectConnectorAuth(args = {}, principal = {}, env = p
       provider,
       userId: scope.userId || undefined,
       accountId: selected.connection.connectionId,
+      revocationState: revocation.state,
     }, env).catch(() => {});
     return {
       ok: true,
       provider,
       state: "disconnected",
       accountId: selected.connection.connectionId,
+      revocation,
       connection: removed.connection,
       status: await connectorAuthStatus(provider, env, { principal }),
     };

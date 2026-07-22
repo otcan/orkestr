@@ -332,7 +332,8 @@ async function deleteUserTimers(userId, env = process.env) {
 }
 
 async function removeUserConnectorTokenFiles(userId, env = process.env) {
-  const secretsDir = userDataPaths(userId, env).secrets;
+  const paths = userDataPaths(userId, env);
+  const secretsDir = paths.secrets;
   const removed = [];
   for (const [providerId, tokenFile] of userConnectorTokenFiles) {
     const target = path.join(secretsDir, tokenFile);
@@ -343,7 +344,15 @@ async function removeUserConnectorTokenFiles(userId, env = process.env) {
       // Missing or locked token files are reported through the remaining checklist.
     }
   }
-  return removed;
+  try {
+    await fs.rm(path.join(secretsDir, "google-workspace-connections"), { recursive: true, force: true });
+    await fs.rm(path.join(paths.oauth, "google-workspace-connections.json"), { force: true });
+    await fs.rm(path.join(paths.oauth, "gmail-state.json"), { force: true });
+    removed.push("gmail");
+  } catch {
+    // The deletion checklist reports anything that remains.
+  }
+  return [...new Set(removed)];
 }
 
 function supportReply(type) {
