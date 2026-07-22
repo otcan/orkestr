@@ -30,6 +30,7 @@ function mockBridge(overrides = {}) {
   return {
     createLocalWhatsAppChat: async (payload) => ({ ok: true, chatId: "demo-group@g.us", ...payload }),
     demoteLocalWhatsAppGroupParticipants: async (payload) => ({ ok: true, ...payload }),
+    generateLocalWhatsAppChatPicture: async (payload) => ({ ok: true, ...payload }),
     getLocalWhatsAppBridgeStatus: async () => ({ ok: true, ready: true, state: "ready", accounts: [] }),
     getLocalWhatsAppQrSvg: async () => "<svg></svg>",
     listLocalWhatsAppChatMessages: async () => ({ ok: true, messages: [] }),
@@ -327,6 +328,34 @@ test("standalone WA service promotes and demotes group admins inside the worker"
     demoteLocalWhatsAppGroupParticipants: async ({ accountId, chatId: targetChatId, participantIds }) => {
       calls.push(["demote", accountId, targetChatId, participantIds]);
       return { ok: true, accountId, chatId: targetChatId, participantIds };
+    },
+  }));
+});
+
+test("standalone WA service generates a scoped group picture inside the worker", async () => {
+  const home = await testHome("orkestr-wa-service-group-picture-");
+  const calls = [];
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WA_SERVICE_AUTH_DISABLED: "1",
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "sender",
+  };
+  const chatId = "120363400000000001@g.us";
+
+  await withWaService(env, async ({ bridgeUrl }) => {
+    const response = await fetch(`${bridgeUrl}/accounts/sender/chats/${encodeURIComponent(chatId)}/picture`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ title: "Project Team" }),
+    });
+
+    assert.equal(response.status, 200);
+    assert.equal((await response.json()).ok, true);
+    assert.deepEqual(calls, [["sender", chatId, "Project Team"]]);
+  }, mockBridge({
+    generateLocalWhatsAppChatPicture: async ({ accountId, chatId: targetChatId, title }) => {
+      calls.push([accountId, targetChatId, title]);
+      return { ok: true, accountId, chatId: targetChatId, title };
     },
   }));
 });

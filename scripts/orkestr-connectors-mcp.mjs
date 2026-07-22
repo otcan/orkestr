@@ -88,7 +88,7 @@ function legacyPolicyChecks(req, url, body = {}) {
   return {
     accounts: accountId ? [accountId] : [],
     recipients: chatId ? [chatId] : [],
-    ...(chatId ? { recipientScope: leaf === "history" || leaf === "participants" || leaf === "recover" ? "history" : "send" } : {}),
+    ...(chatId ? { recipientScope: leaf === "history" || leaf === "participants" || leaf === "picture" || leaf === "recover" ? "history" : "send" } : {}),
     pairing: ["start", "start-phone", "pairing-session", "reconnect"].includes(leaf),
     manageAccounts: ["logout", "disconnect"].includes(leaf),
   };

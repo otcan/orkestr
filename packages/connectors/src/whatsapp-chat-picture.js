@@ -49,12 +49,18 @@ async function setLocalWhatsAppGroupPictureFromFile({
   env = process.env,
 } = {}) {
   await fs.access(picturePath);
-  const chat = await client.getChatById(chatId);
-  if (!chat?.isGroup || typeof chat.setPicture !== "function") {
-    throw new Error("chat picture can only be set for groups");
-  }
   const media = MessageMedia.fromFilePath(picturePath);
-  const updated = await chat.setPicture(media);
+  let updated = false;
+  try {
+    const chat = await client.getChatById(chatId);
+    if (!chat?.isGroup || typeof chat.setPicture !== "function") {
+      throw new Error("chat picture can only be set for groups");
+    }
+    updated = await chat.setPicture(media);
+  } catch (error) {
+    if (!client?.pupPage || typeof client.pupPage.evaluate !== "function") throw error;
+    updated = await client.pupPage.evaluate((id, value) => window.WWebJS.setPicture(id, value), chatId, media);
+  }
   await appendEvent({
     type: "whatsapp_chat_picture_set",
     chatId,

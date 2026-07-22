@@ -6,6 +6,7 @@ import { URL } from "node:url";
 import {
   createLocalWhatsAppChat,
   demoteLocalWhatsAppGroupParticipants,
+  generateLocalWhatsAppChatPicture,
   getLocalWhatsAppBridgeStatus,
   getLocalWhatsAppQrSvg,
   listLocalWhatsAppChatMessages,
@@ -232,6 +233,7 @@ function routeMatch(pathname, pattern) {
 const defaultBridge = {
   createLocalWhatsAppChat,
   demoteLocalWhatsAppGroupParticipants,
+  generateLocalWhatsAppChatPicture,
   getLocalWhatsAppBridgeStatus,
   getLocalWhatsAppQrSvg,
   listLocalWhatsAppChatMessages,
@@ -318,6 +320,19 @@ async function handleRequest(req, res, env = process.env, bridge = defaultBridge
     return json(res, 200, await bridge.listLocalWhatsAppChatParticipants({
       accountId: params.accountId,
       chatId: params.chatId,
+      env,
+    }));
+  }
+
+  params = routeMatch(url.pathname, "/accounts/:accountId/chats/:chatId/picture");
+  if (method === "POST" && params) {
+    requireAuth(req, env);
+    const body = await readJsonBody(req);
+    requireServicePolicy(req, url, env, body, { accounts: [params.accountId], recipients: [params.chatId], recipientScope: "history" });
+    return json(res, 200, await bridge.generateLocalWhatsAppChatPicture({
+      accountId: params.accountId,
+      chatId: params.chatId,
+      title: clean(body.title || body.name),
       env,
     }));
   }

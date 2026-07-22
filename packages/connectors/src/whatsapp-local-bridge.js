@@ -6206,8 +6206,7 @@ export async function generateLocalWhatsAppChatPicture({ accountId = "", chatId 
     error.statusCode = 400;
     throw error;
   }
-  const chat = await runtime.client.getChatById(id);
-  const requestedTitle = String(title || chat?.name || chat?.formattedTitle || id).trim();
+  const requestedTitle = String(title || id).trim();
   const dependencies = await loadBridgeDependencies();
   const picture = await setGeneratedLocalWhatsAppGroupPicture({
     client: runtime.client,
