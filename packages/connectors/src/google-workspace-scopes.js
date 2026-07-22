@@ -82,6 +82,35 @@ export function googleWorkspaceDefaultGmailCapabilities() {
   return [...defaultGmailCapabilities];
 }
 
+export function googleWorkspaceAllowedCapabilities(env = process.env, configured = "") {
+  const raw = Array.isArray(configured)
+    ? configured
+    : clean(
+      configured ||
+        env.ORKESTR_GOOGLE_OAUTH_ALLOWED_CAPABILITIES ||
+        env.GOOGLE_OAUTH_ALLOWED_CAPABILITIES,
+    ).split(/[\s,]+/g);
+  const values = raw.map(clean).filter(Boolean);
+  if (values.some((value) => ["*", "all"].includes(value.toLowerCase()))) {
+    return capabilityDefinitions.map((definition) => definition.id);
+  }
+  return normalizeGoogleWorkspaceCapabilities(values, defaultGmailCapabilities);
+}
+
+export function requireAllowedGoogleWorkspaceCapabilities(input = [], env = process.env, configured = "") {
+  const requested = normalizeGoogleWorkspaceCapabilities(input, defaultGmailCapabilities);
+  const allowed = new Set(googleWorkspaceAllowedCapabilities(env, configured));
+  const denied = requested.filter((capability) => !allowed.has(capability));
+  if (denied.length) {
+    const error = new Error(`google_workspace_capability_not_approved:${denied.join(",")}`);
+    error.code = "google_workspace_capability_not_approved";
+    error.statusCode = 403;
+    error.deniedCapabilities = denied;
+    throw error;
+  }
+  return requested;
+}
+
 export function normalizeGoogleWorkspaceCapabilities(input = [], fallback = defaultGmailCapabilities) {
   const values = Array.isArray(input)
     ? input

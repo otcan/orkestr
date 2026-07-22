@@ -1,4 +1,5 @@
 import { renderWaitlistSection, waitlistCss } from "./public-waitlist.js";
+import { publicPrivacyPage } from "./public-privacy.js";
 type PublicPage = {
   title: string;
   eyebrow?: string;
@@ -200,13 +201,13 @@ function renderHome(env = process.env) {
     <div>
       <p class="eyebrow">Google Workspace</p>
       <h2 id="google-title">Gmail access is optional and user approved.</h2>
-      <p>Orkestr asks for Google permissions only when a user starts the Google connection flow and selects a capability. Gmail send access is used to send emails that the user requests or approves from Orkestr. Gmail read, draft, and mailbox-modification permissions are separate optional capabilities when enabled by the deployment.</p>
+      <p>Orkestr asks for Google permissions only when a user starts the Google connection flow and reviews the data disclosure. The current public integration requests Gmail send access to send only emails that the user requests or approves. It cannot read the user's inbox or existing email.</p>
     </div>
     <ul class="feature-list">
       <li>Show the Google consent screen before access</li>
       <li>Connect a Gmail account to a specific Orkestr user</li>
       <li>Send user-approved emails from that Gmail account</li>
-      <li>Disconnect Google access from Orkestr setup</li>
+      <li>Revoke and disconnect Google access from Orkestr setup</li>
       <li>No sale of Google user data</li>
       <li>No Google user data used for advertising or model training</li>
     </ul>
@@ -246,23 +247,7 @@ function renderLegalPage(pageId: string, env = process.env) {
         ],
       }),
     },
-    privacy: {
-      title: "Privacy",
-      heading: "Privacy",
-      summary: "How Orkestr treats user data during the invite-only beta.",
-      body: legalBody({
-        eyebrow: "Data handling",
-        heading: "Privacy",
-        intro: "Orkestr stores and processes the minimum data needed to run your user-scoped chats, workspaces, timers, desktops, and connected accounts.",
-        sections: [
-          ["What may be processed", "Chat messages, files you upload or create, timers, connector status, OAuth grants, managed desktop state, and task outputs may be processed for your requested workflows."],
-          ["Connector accounts", "Parent connector apps can provide OAuth entry points, but the account grants belong to the user who connects them."],
-          ["Google Workspace API data", "Orkestr's use and transfer of information received from Google Workspace APIs adheres to the Google API Services User Data Policy, including the Limited Use requirements. Google Workspace data is used only to provide user-requested connector features, is not sold, is not used for advertising, is not used to train general AI models, and is not transferred except as needed to operate requested workflows, maintain security, or comply with law."],
-          ["Isolation goal", "External users should receive user-scoped resources and should not see admin chats, private overlays, secrets, or other users' data."],
-          ["Deletion and export", "Use the deletion and export instructions to ask the operator to pause, export, or remove your beta data."],
-        ],
-      }),
-    },
+    privacy: publicPrivacyPage(env),
     "acceptable-use": {
       title: "Acceptable Use",
       heading: "Acceptable Use",
@@ -289,6 +274,7 @@ function renderLegalPage(pageId: string, env = process.env) {
         sections: [
           ["Pause", "Ask to pause your Orkestr user. The operator can stop new work and disable access while preserving data for review."],
           ["Export", "Ask for an export of user-visible data where practical, such as files and chat/task records."],
+          ["Google access", "Disconnect Google from Orkestr setup to request provider revocation and remove the locally stored encrypted credentials. You can also revoke Orkestr directly from your Google Account permissions."],
           ["Deletion", "Ask for deletion when you want beta data removed. Some records may be retained only where required for security, abuse prevention, or legal reasons."],
           ["Contact", publicContact(env)],
         ],
@@ -474,6 +460,11 @@ ${waitlistCss()}
 }
 .legal-content h2 { margin: 0 0 8px; font-size: 24px; }
 .legal-content p { margin: 0; color: #475569; font-size: 17px; line-height: 1.55; }
+.legal-content p + p { margin-top: 12px; }
+.legal-content ul { display: grid; gap: 9px; margin: 14px 0 0; padding-left: 22px; color: #475569; font-size: 16px; line-height: 1.5; }
+.legal-content code { overflow-wrap: anywhere; color: #17202a; }
+.legal-content article[id] { scroll-margin-top: 88px; }
+.policy-meta { margin: 18px 0 0; color: #52606d; font-size: 14px; font-weight: 700; }
 .footer {
   display: flex;
   align-items: center;

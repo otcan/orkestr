@@ -267,6 +267,10 @@ test("support requests and offboarding are user scoped and conservative", async 
   const paths = userDataPaths("can", env);
   await fs.mkdir(paths.secrets, { recursive: true });
   await fs.writeFile(path.join(paths.secrets, "gmail-token.json"), JSON.stringify({ access_token: "secret" }), "utf8");
+  await fs.mkdir(path.join(paths.secrets, "google-workspace-connections"), { recursive: true });
+  await fs.writeFile(path.join(paths.secrets, "google-workspace-connections", "account.json"), "encrypted", "utf8");
+  await fs.mkdir(paths.oauth, { recursive: true });
+  await fs.writeFile(path.join(paths.oauth, "google-workspace-connections.json"), "{}", "utf8");
 
   const support = await recordUserSupportRequest("can", { type: "pause", message: "Pause me" }, env);
   const onboarding = await setUserOnboardingState("can", { state: "active", invite: { consentedAt: "now" } }, env);
@@ -285,6 +289,8 @@ test("support requests and offboarding are user scoped and conservative", async 
   assert.equal(identities.length, 0);
   assert.deepEqual(timers.map((timer) => timer.id), []);
   await assert.rejects(() => fs.access(path.join(paths.secrets, "gmail-token.json")));
+  await assert.rejects(() => fs.access(path.join(paths.secrets, "google-workspace-connections")));
+  await assert.rejects(() => fs.access(path.join(paths.oauth, "google-workspace-connections.json")));
 });
 
 test("waitlist API accepts public submissions and keeps review admin-only", async () => {

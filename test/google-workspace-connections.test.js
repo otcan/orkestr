@@ -46,6 +46,34 @@ test("legacy Gmail token migrates once into the Google Workspace registry", asyn
   const resolved = await resolveGoogleWorkspaceConnection({}, env);
   assert.equal(resolved.token.accessToken, "access-main@example.com");
   assert.equal(resolved.selectionSource, "user_default");
+  const encryptedPath = path.join(env.ORKESTR_HOME, "secrets", first.connection.tokenRef);
+  const encryptedText = await fs.readFile(encryptedPath, "utf8");
+  const encryptedRecord = JSON.parse(encryptedText);
+  assert.equal(encryptedRecord.recordType, "orkestr.encrypted-connector-record");
+  assert.equal(encryptedRecord.encrypted.algorithm, "aes-256-gcm");
+  assert.doesNotMatch(encryptedText, /access-main@example\.com/);
+  assert.doesNotMatch(encryptedText, /refresh-main@example\.com/);
+  assert.doesNotMatch(encryptedText, /main@example\.com/);
+});
+
+test("new Google Workspace tokens are encrypted and require the configured key", async () => {
+  const env = {
+    ...(await testEnv("orkestr-google-registry-encrypted-")),
+    ORKESTR_CONNECTOR_ENCRYPTION_KEY: "a".repeat(64),
+  };
+  const saved = await saveGoogleWorkspaceConnectionToken(token("private@example.com", "private-access"), env, {
+    setAsMain: true,
+  });
+  const registry = JSON.parse(await fs.readFile(path.join(env.ORKESTR_HOME, "oauth", "google-workspace-connections.json"), "utf8"));
+  const reference = registry.connections.find((connection) => connection.connectionId === saved.connection.connectionId).tokenRef;
+  const encryptedText = await fs.readFile(path.join(env.ORKESTR_HOME, "secrets", reference), "utf8");
+
+  assert.doesNotMatch(encryptedText, /private-access|refresh-private@example\.com|private@example\.com/);
+  assert.equal((await resolveGoogleWorkspaceConnection({}, env)).token.accessToken, "private-access");
+  await assert.rejects(
+    resolveGoogleWorkspaceConnection({}, { ...env, ORKESTR_CONNECTOR_ENCRYPTION_KEY: "b".repeat(64) }),
+    /connector_encryption_key_mismatch/,
+  );
 });
 
 test("Google Workspace agent tools use the explicitly selected connection and report the source", async () => {

@@ -9,6 +9,7 @@ import {
 } from "../../core/src/broker-instance-registry.js";
 import { getGmailAccessToken, readGmailToken, startGmailOAuth } from "./gmail.js";
 import {
+  googleWorkspaceAllowedCapabilities,
   googleWorkspaceCapabilityDefinitions,
   googleWorkspaceCapabilityDisclosure,
   googleWorkspaceCapabilityLabels,
@@ -16,9 +17,11 @@ import {
   googleWorkspaceDefaultGmailCapabilities,
   googleWorkspaceScopesForCapabilities,
   normalizeGoogleWorkspaceCapabilities,
+  requireAllowedGoogleWorkspaceCapabilities,
 } from "./google-workspace-scopes.js";
 
 export { googleWorkspaceConnectHtml } from "./google-workspace-connect-page.js";
+export { googleWorkspacePrivacyPolicyVersion } from "./google-workspace-privacy.js";
 
 const connectFileName = "google-workspace-connect.json";
 const gmailApiBase = "https://gmail.googleapis.com/gmail/v1/users/me";
@@ -369,7 +372,8 @@ export async function createGoogleWorkspaceConnectLink({
     connectorLink,
     link,
     expiresAt: request.expiresAt,
-    capabilities: googleWorkspaceCapabilityDefinitions(),
+    capabilities: googleWorkspaceCapabilityDefinitions()
+      .filter((definition) => googleWorkspaceAllowedCapabilities(env).includes(definition.id)),
     brokerInstanceId: request.brokerInstanceId,
     message: googleWorkspaceConnectMessage({
       link,
@@ -398,14 +402,20 @@ export async function getGoogleWorkspaceConnectRequest(connectId = "", env = pro
     return { ok: false, state: "expired", request };
   }
   if (clean(request.consumedAt)) return { ok: false, state: "used", request };
-  return { ok: true, state: "ready", request, capabilities: googleWorkspaceCapabilityDefinitions() };
+  const allowed = new Set(googleWorkspaceAllowedCapabilities(env));
+  return {
+    ok: true,
+    state: "ready",
+    request,
+    capabilities: googleWorkspaceCapabilityDefinitions().filter((definition) => allowed.has(definition.id)),
+  };
 }
 
 export async function startGoogleWorkspaceOAuth(env = process.env, options = {}) {
   const connectId = clean(options.connectId || options.connect);
   const { scope, ledger, request } = await findConnectRequest(connectId, env);
   assertConnectRequestUsable(request);
-  const capabilities = normalizeGoogleWorkspaceCapabilities(options.capabilities, googleWorkspaceDefaultGmailCapabilities());
+  const capabilities = requireAllowedGoogleWorkspaceCapabilities(options.capabilities, env);
   const account = clean(options.account || (clean(request.oauthAppId) ? request.account : "")).toLowerCase();
   const started = await startGmailOAuth(env, {
     userId: scope.userId || "",
@@ -430,9 +440,13 @@ export async function startGoogleWorkspaceOAuth(env = process.env, options = {})
     connectionUseMode: request.connectionUseMode,
     setAsMain: request.setAsMain === true,
     setAsThreadDefault: request.setAsThreadDefault === true,
+    privacyPolicyVersion: clean(options.privacyPolicyVersion),
+    privacyConsentAt: clean(options.privacyConsentAt),
   });
   request.consumedAt = nowIso();
   request.selectedCapabilities = capabilities;
+  request.privacyPolicyVersion = clean(options.privacyPolicyVersion);
+  request.privacyConsentAt = clean(options.privacyConsentAt);
   request.oauthState = started.state;
   await writeConnectLedger(scope, ledger);
   return {

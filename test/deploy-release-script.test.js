@@ -110,6 +110,9 @@ test("release deploy script exposes versioned install, status, and rollback", as
   assert.match(script, /\^0\+\$/);
   assert.match(script, /blocked by TLS\/network/);
   assert.match(script, /sync_versioned_env/);
+  assert.match(script, /ensure_connector_security_env/);
+  assert.match(script, /ORKESTR_CONNECTOR_ENCRYPTION_KEY/);
+  assert.match(script, /ORKESTR_GOOGLE_OAUTH_ALLOWED_CAPABILITIES/);
   assert.match(script, /set_env_assignment ORKESTR_APP_DIR "\$current_link"/);
   assert.match(script, /set_env_assignment ORKESTR_RELEASE_DEPLOY "1"/);
   assert.match(script, /repair_env_file_permissions/);

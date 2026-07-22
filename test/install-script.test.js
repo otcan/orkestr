@@ -85,6 +85,9 @@ test("install script exposes a host-native systemd VPS path", async () => {
   assert.match(script, /ORKESTR_ENABLE_HOST_CODEX/);
   assert.match(script, /ORKESTR_LOCAL_ENV_FILE/);
   assert.match(script, /ORKESTR_RUNTIME_SETTINGS_FILE/);
+  assert.match(script, /ORKESTR_CONNECTOR_ENCRYPTION_KEY/);
+  assert.match(script, /ORKESTR_GOOGLE_OAUTH_ALLOWED_CAPABILITIES/);
+  assert.match(script, /connector-encryption\.key/);
   assert.match(script, /primaryDomain: "ORKESTR_PRIMARY_DOMAIN"/);
   assert.match(script, /publicSiteUrl: "ORKESTR_PUBLIC_SITE_URL"/);
   assert.match(script, /appHost: "ORKESTR_APP_HOST"/);

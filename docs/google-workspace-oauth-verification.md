@@ -26,6 +26,18 @@ Gmail flow:
 This supports user-approved outbound Gmail actions without requesting Gmail
 read, mailbox modification, or draft/compose access by default.
 
+The production runtime enforces this with:
+
+```dotenv
+ORKESTR_GOOGLE_OAUTH_ALLOWED_CAPABILITIES=gmail_send
+```
+
+The connect page and the OAuth start endpoint both apply the allowlist. A
+manually constructed URL cannot request a capability that is not approved for
+the deployment. Use a separate testing client and an explicit allowlist when
+developing broader capabilities; do not broaden the verified production client
+before Google approves the additional scopes.
+
 Phase 2 can add restricted Gmail capabilities after the first public app is
 approved and the review/demo materials justify the added access:
 
@@ -109,6 +121,8 @@ Use generic demo data only.
 - Briefly show the public `https://orkestr.de/` homepage with the app name,
   purpose, and privacy/terms links.
 - Show the capability disclosure page before Google OAuth.
+- Show the Google-data access, sharing, protection, retention, and deletion
+  disclosures immediately before the affirmative consent control.
 - Select Gmail send only for the first public verification demo, then complete
   Google OAuth.
 - Show the WhatsApp confirmation listing enabled capabilities.
@@ -128,3 +142,36 @@ Use generic demo data only.
 Do not include refresh tokens, OAuth client secrets, real private messages,
 private file IDs, phone numbers, session state, local paths, or private hostnames
 in public verification material.
+
+## Privacy And Security Release Gate
+
+Do not submit or reply to a Google verification review until all of these are
+true on the live production deployment:
+
+- `https://orkestr.de/privacy` is public without login and exposes stable
+  anchors for Google data access, sharing, storage, protection, Limited Use,
+  and deletion.
+- The connect page requests only Gmail send and records the privacy policy
+  version plus affirmative consent time in the one-time OAuth state.
+- Google access and refresh tokens are AES-256-GCM encrypted on disk. The
+  production `ORKESTR_CONNECTOR_ENCRYPTION_KEY` is stored in the service
+  environment outside `ORKESTR_HOME`.
+- Legacy plaintext Gmail token records migrate to encrypted envelopes when
+  first read and are never returned through public APIs or event logs.
+- Disconnect revokes the Google credential before deleting the local encrypted
+  record. A temporary Google revocation failure leaves the record available for
+  a safe retry instead of reporting a false disconnect.
+- The live homepage, `/about`, privacy policy, OAuth consent screen, submitted
+  scopes, scope justification, and demo video all describe the same send-only
+  behavior.
+
+After the corrected policy is deployed and the Cloud Console request is
+resubmitted, reply in Google's existing review email thread. Link directly to:
+
+- `https://orkestr.de/privacy#google-data-access`
+- `https://orkestr.de/privacy#google-data-sharing`
+- `https://orkestr.de/privacy#google-data-protection`
+
+The reply should confirm that the policy was updated, the production behavior
+was verified, and the OAuth request was resubmitted. Do not open a new email
+thread.

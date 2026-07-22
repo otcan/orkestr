@@ -1,8 +1,10 @@
 import {
+  googleWorkspaceAllowedCapabilities,
   googleWorkspaceCapabilityDefinitions,
   googleWorkspaceDefaultGmailCapabilities,
   normalizeGoogleWorkspaceCapabilities,
 } from "./google-workspace-scopes.js";
+import { googleWorkspacePrivacyPolicyVersion } from "./google-workspace-privacy.js";
 
 function clean(value) {
   return String(value || "").trim();
@@ -26,9 +28,14 @@ function capabilityRisk(id = "") {
   return "Limited";
 }
 
-function capabilityControls(selectedCapabilities = googleWorkspaceDefaultGmailCapabilities()) {
+function capabilityControls(
+  selectedCapabilities = googleWorkspaceDefaultGmailCapabilities(),
+  allowedCapabilities = googleWorkspaceDefaultGmailCapabilities(),
+) {
   const selected = new Set(normalizeGoogleWorkspaceCapabilities(selectedCapabilities, googleWorkspaceDefaultGmailCapabilities()));
+  const allowed = new Set(allowedCapabilities);
   return googleWorkspaceCapabilityDefinitions()
+    .filter((definition) => allowed.has(definition.id))
     .map((definition) => {
       const checked = selected.has(definition.id) ? " checked" : "";
       return `<label class="capability">
@@ -49,8 +56,11 @@ export function googleWorkspaceConnectHtml({
   error = "",
   previewOnly = false,
   selectedCapabilities = googleWorkspaceDefaultGmailCapabilities(),
+  allowedCapabilities = "",
+  env = process.env,
 } = {}) {
   const safeConnect = escapeHtml(connectId);
+  const allowed = googleWorkspaceAllowedCapabilities(env, allowedCapabilities);
   const hidden = `<input type="hidden" name="connect" value="${safeConnect}">`;
   const contextRows = [
     ["Tool", "orkestr_auth"],
@@ -72,11 +82,22 @@ export function googleWorkspaceConnectHtml({
     : `<form method="get" action="/connect/google/start">
         ${hidden}
         <input type="hidden" name="capabilities_selected" value="1">
+        <input type="hidden" name="privacy_policy_version" value="${googleWorkspacePrivacyPolicyVersion}">
         <fieldset>
           <legend>Google access</legend>
-          <p class="notice">Orkestr starts narrow. Gmail read, Gmail actions, and Gmail drafts request restricted Google scopes and should be enabled only when needed.</p>
-          <div class="capabilities">${capabilityControls(selectedCapabilities)}</div>
+          <p class="notice"><strong>Current permission:</strong> Orkestr requests Gmail send access only. It can send an email on your behalf after you request or approve it. This permission cannot read your inbox or existing email.</p>
+          <div class="capabilities">${capabilityControls(selectedCapabilities, allowed)}</div>
         </fieldset>
+        <section class="disclosure" aria-labelledby="data-use-title">
+          <h2 id="data-use-title">How your Google data is handled</h2>
+          <p>Orkestr receives your basic Google account identity, OAuth grant, and encrypted access credentials. For Gmail send, it processes the recipients, subject, body, and attachments you request or approve and submits them to Google.</p>
+          <p>Credentials are encrypted at rest and are never sent to an AI provider. Orkestr does not sell Google user data, use it for advertising, or use it to train generalized AI models. Service providers receive data only as needed to deliver your requested workflow, operate the service securely, or comply with law.</p>
+          <p>You can disconnect Google at any time to revoke Orkestr's access and delete the stored credentials. Read the <a href="/privacy#google-data-access">Google data disclosure</a>, <a href="/privacy#google-data-sharing">sharing disclosure</a>, and <a href="/privacy#google-data-protection">protection disclosure</a>.</p>
+        </section>
+        <label class="consent">
+          <input type="checkbox" name="privacy_consent" value="1" required>
+          <span>I understand the Google data use described above and choose to continue to Google's consent screen.</span>
+        </label>
         <button type="submit">Continue to Google</button>
       </form>`;
   return `<!doctype html>
@@ -104,6 +125,12 @@ export function googleWorkspaceConnectHtml({
     .capability span { display: grid; gap: 4px; }
     .capability small { color: #52606d; line-height: 1.35; }
     .capability em { color: #495057; font-size: 12px; font-style: normal; font-weight: 800; text-transform: uppercase; }
+    .disclosure { border: 1px solid #d3d8dc; border-radius: 8px; background: white; margin: 18px 0; padding: 16px; }
+    .disclosure h2 { margin: 0 0 10px; font-size: 20px; }
+    .disclosure p { margin: 8px 0; color: #3f4d59; }
+    .disclosure a { color: #14532d; font-weight: 700; }
+    .consent { display: grid; grid-template-columns: 20px 1fr; gap: 10px; align-items: start; margin: 18px 0; line-height: 1.45; }
+    .consent input { margin-top: 4px; }
     button { appearance: none; border: 0; border-radius: 6px; padding: 12px 16px; background: #14532d; color: white; font-weight: 700; cursor: pointer; }
   </style>
 </head>

@@ -26,11 +26,11 @@ export function renderOAuthHomepage(): string {
       </article>
       <article>
         <h2>How Orkestr uses Google data</h2>
-        <p>Google Workspace access is optional. Orkestr requests Google permissions only after a user starts the connection flow and approves the Google consent screen. Gmail read access is used to find and summarize messages the user asks about. Gmail draft and send access is used to prepare or send messages the user requests or approves. Gmail mailbox access is used to label, archive, or otherwise organize messages when requested. Google Calendar access is used to read or manage calendar events requested by the user.</p>
+        <p>Google Workspace access is optional. The current public integration requests basic Google account identity and Gmail send access only after a user reviews Orkestr's data disclosure and continues to Google's consent screen. It sends only emails that the user requests or approves and cannot read the user's inbox or existing email.</p>
       </article>
       <article>
         <h2>User control and privacy</h2>
-        <p>Users can disconnect Google access. Orkestr does not sell Google user data, use it for advertising, or use it to train general AI models. Connected-account data is used only to provide the workflow requested by the user.</p>
+        <p>Users can disconnect Google access and remove Orkestr's stored credentials. Google OAuth tokens are encrypted at rest and are never sent to an AI provider. Orkestr does not sell Google user data, use it for advertising, or use it to train generalized AI models.</p>
       </article>
       <article>
         <h2>Public information</h2>

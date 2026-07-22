@@ -80,6 +80,7 @@ export function resolveGoogleOAuthAppConfig(requestedAppId = "", config = {}, en
     clientSecret: clean(resolved.clientSecret || resolved.client_secret),
     redirectUri: clean(resolved.redirectUri || resolved.redirect_uri || config.redirectUri),
     approvedTesters: resolved.approvedTesters || resolved.approved_testers || "",
+    allowedCapabilities: resolved.allowedCapabilities || resolved.allowed_capabilities || "",
     oauthAppId,
     defaultOAuthAppId: defaultAppId,
     isDefaultOAuthApp: isDefault,

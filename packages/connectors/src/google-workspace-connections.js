@@ -1,8 +1,12 @@
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { readJson, writeJson, writeSecretJson } from "../../storage/src/store.js";
+import { readJson, writeJson } from "../../storage/src/store.js";
 import { connectorFile, connectorScopePaths } from "./connector-storage.js";
+import {
+  readEncryptedConnectorRecord,
+  writeEncryptedConnectorRecord,
+} from "./encrypted-connector-record.js";
 
 const registryFileName = "google-workspace-connections.json";
 const legacyTokenFileName = "gmail-token.json";
@@ -164,7 +168,11 @@ export async function migrateLegacyGoogleWorkspaceConnection(env = process.env, 
     createdAt: timestamp,
     updatedAt: timestamp,
   });
-  await writeSecretJson(tokenPath(scope, reference), { ...legacyToken, connectionId, accountId: connectionId });
+  await writeEncryptedConnectorRecord(
+    tokenPath(scope, reference),
+    { ...legacyToken, connectionId, accountId: connectionId },
+    env,
+  );
   registry = await writeRegistry(scope, {
     ...registry,
     mainConnectionId: connectionId,
@@ -270,7 +278,7 @@ export async function resolveGoogleWorkspaceConnection(input = {}, env = process
       choices: safeChoices(registry, threadId),
     });
   }
-  const token = await readJson(tokenPath(scope, connection.tokenRef), {});
+  const token = await readEncryptedConnectorRecord(tokenPath(scope, connection.tokenRef), {}, env);
   if (options.allowUnhealthy !== true && (!hasToken(token) || ["revoked", "disconnected", "reauth_required"].includes(connection.healthState))) {
     throw connectionError("reconnect_required", 403, {
       connection: publicGoogleWorkspaceConnection(connection),
@@ -337,14 +345,18 @@ export async function saveGoogleWorkspaceConnectionToken(token = {}, env = proce
     updatedAt: timestamp,
     lastValidatedAt: clean(options.lastValidatedAt || existing?.lastValidatedAt),
   });
-  await writeSecretJson(tokenPath(scope, reference), {
-    ...token,
-    account: connection.email,
-    email: connection.email,
-    oauthAppId: connection.oauthAppId,
-    connectionId,
-    accountId: connectionId,
-  });
+  await writeEncryptedConnectorRecord(
+    tokenPath(scope, reference),
+    {
+      ...token,
+      account: connection.email,
+      email: connection.email,
+      oauthAppId: connection.oauthAppId,
+      connectionId,
+      accountId: connectionId,
+    },
+    env,
+  );
   const connections = registry.connections
     .filter((candidate) => candidate.connectionId !== connectionId)
     .map((candidate) => shouldBeMain && candidate.useMode === "default" ? { ...candidate, useMode: "available" } : candidate);

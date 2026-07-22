@@ -67,7 +67,8 @@ function assertPublicShell(html) {
   assert.match(html, /rel="stylesheet" href="\/public-site\.css"/);
   assert.doesNotMatch(html, /<style>/);
   assert.match(html, /Gmail access is optional and user approved/);
-  assert.match(html, /Gmail send access is used to send emails that the user requests or approves from Orkestr/);
+  assert.match(html, /current public integration requests Gmail send access/);
+  assert.match(html, /cannot read the user's inbox or existing email/);
   assert.match(html, /No Google user data used for advertising or model training/);
   assert.match(html, /Join waitlist/);
   assert.match(html, /id="waitlist-form"/);
@@ -173,14 +174,18 @@ test("server serves the public site at root and Angular UI at app routes", async
     assert.equal(termsResponse.status, 200);
     assert.match(termsHtml, /Only connect accounts you own or are authorized to use/);
     assert.equal(privacyResponse.status, 200);
-    assert.match(privacyHtml, /Parent connector apps can provide OAuth entry points/);
+    assert.match(privacyHtml, /Google user data Orkestr accesses/);
+    assert.match(privacyHtml, /id="google-data-sharing"/);
+    assert.match(privacyHtml, /id="google-data-protection"/);
+    assert.match(privacyHtml, /encrypted at rest with AES-256-GCM/);
+    assert.match(privacyHtml, /cannot and does not read the user's inbox/);
     assert.equal(aboutResponse.status, 200);
     assert.match(aboutHtml, /<title>Orkestr<\/title>/);
     assert.match(aboutHtml, /<h1>Orkestr<\/h1>/);
     assert.match(aboutHtml, /What Orkestr does/);
     assert.match(aboutHtml, /How Orkestr uses Google data/);
-    assert.match(aboutHtml, /Gmail draft and send access/);
-    assert.match(aboutHtml, /Google Calendar access/);
+    assert.match(aboutHtml, /Gmail send access only/);
+    assert.match(aboutHtml, /cannot read the user's inbox or existing email/);
     assert.match(aboutHtml, /href="\/privacy">Privacy Policy/);
     assert.doesNotMatch(aboutHtml, /<script/);
     assert.equal(acceptableUseResponse.status, 200);
@@ -424,6 +429,17 @@ test("google workspace brokered connect links require instance and owner scoped 
     assert.match(pairedHtml, /Connect Google Workspace/);
     assert.match(pairedHtml, /orkestr_auth/);
     assert.match(pairedHtml, /google_workspace/);
+    assert.match(pairedHtml, /name="privacy_consent"/);
+    assert.match(pairedHtml, /Gmail send access only/);
+    assert.doesNotMatch(pairedHtml, /value="gmail_read"/);
+
+    const unconsentedResponse = await fetch(`http://127.0.0.1:${port}${startPath}`, {
+      headers: { cookie },
+      redirect: "manual",
+    });
+    const unconsentedHtml = await unconsentedResponse.text();
+    assert.equal(unconsentedResponse.status, 400);
+    assert.match(unconsentedHtml, /Review and accept the Google data disclosure/);
 
     const matchingScopeResponse = await fetch(
       `http://127.0.0.1:${port}/api/setup/security/session-scope?return=${encodeURIComponent(connectPath)}`,

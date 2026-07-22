@@ -124,6 +124,7 @@ test("google workspace scope selection maps only requested capabilities", () => 
 test("whatsapp google connect link starts user-scoped oauth with selected scopes", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-google-workspace-start-"));
   const env = await configureGoogle(home);
+  env.ORKESTR_GOOGLE_OAUTH_ALLOWED_CAPABILITIES = "all";
   env.ORKESTR_GOOGLE_OAUTH_DEFAULT_APP = "orkestr-de";
   env.ORKESTR_GOOGLE_OAUTH_APPS_JSON = JSON.stringify({
     "otcan-claw": {
@@ -178,23 +179,45 @@ test("google workspace oauth defaults to Gmail send access", async () => {
   const alice = userPrincipal({ id: "alice" });
   const link = await createGoogleWorkspaceConnectLink({ principal: alice, thread: { id: "thread-1" } }, env);
 
-  const started = await startGoogleWorkspaceOAuth(env, { connectId: link.connectId });
+  const privacyConsentAt = "2026-07-23T10:00:00.000Z";
+  const started = await startGoogleWorkspaceOAuth(env, {
+    connectId: link.connectId,
+    privacyPolicyVersion: "2026-07-23",
+    privacyConsentAt,
+  });
   const statePath = path.join(userDataPaths("alice", env).oauth, "gmail-state.json");
   const savedState = JSON.parse(await fs.readFile(statePath, "utf8"));
   const scopes = new URL(started.authorizeUrl).searchParams.get("scope").split(/\s+/g);
 
   assert.deepEqual(started.capabilities, ["gmail_send"]);
   assert.deepEqual(savedState.requestedCapabilities, ["gmail_send"]);
+  assert.equal(savedState.privacyPolicyVersion, "2026-07-23");
+  assert.equal(savedState.privacyConsentAt, privacyConsentAt);
   assert.equal(scopes.includes("https://www.googleapis.com/auth/gmail.readonly"), false);
   assert.equal(scopes.includes("https://www.googleapis.com/auth/gmail.modify"), false);
   assert.ok(scopes.includes("https://www.googleapis.com/auth/gmail.send"));
   assert.equal(scopes.includes("https://www.googleapis.com/auth/gmail.compose"), false);
 });
 
+test("google workspace oauth blocks capabilities not approved for the production client", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-google-workspace-scope-lock-"));
+  const env = await configureGoogle(home);
+  const link = await createGoogleWorkspaceConnectLink({
+    principal: userPrincipal({ id: "alice" }),
+    thread: { id: "thread-1" },
+  }, env);
+
+  await assert.rejects(
+    startGoogleWorkspaceOAuth(env, { connectId: link.connectId, capabilities: ["gmail_read"] }),
+    (error) => error.code === "google_workspace_capability_not_approved" && error.statusCode === 403,
+  );
+});
+
 test("brokered google workspace oauth provisions the Gmail grant to the tenant VM", async () => {
   const parentHome = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-google-workspace-broker-parent-"));
   const tenantHome = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-google-workspace-broker-tenant-"));
   const env = await configureGoogle(parentHome);
+  env.ORKESTR_GOOGLE_OAUTH_ALLOWED_CAPABILITIES = "all";
   env.ORKESTR_CONNECT_PUBLIC_URL = "https://connect.crawlerai.de";
   env.ORKESTR_PUBLIC_AUTH_URL = "https://connect.orkestr.de/setup/pairing";
   env.GMAIL_OAUTH_REDIRECT_URI = "https://app.orkestr.de/oauth/gmail/callback";
@@ -427,6 +450,7 @@ test("google workspace connect rejects tenant broker metadata without broker rou
 test("google workspace callback stores only granted partial capabilities", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-google-workspace-partial-"));
   const env = await configureGoogle(home);
+  env.ORKESTR_GOOGLE_OAUTH_ALLOWED_CAPABILITIES = "all";
   const alice = userPrincipal({ id: "alice" });
   const link = await createGoogleWorkspaceConnectLink({ principal: alice, thread: { id: "thread-1" } }, env);
   const started = await startGoogleWorkspaceOAuth(env, {
@@ -587,6 +611,7 @@ test("google workspace connect html shows MCP context and capability controls", 
   const html = googleWorkspaceConnectHtml({
     connectId: "connect-1",
     request: { account: "user@example.com", brokerInstanceId: "instance-firat", userId: "firat", threadName: "firat-jobs" },
+    allowedCapabilities: "all",
   });
   assert.match(html, /Connect Google Workspace/);
   assert.match(html, /name="connect"/);
@@ -605,6 +630,17 @@ test("google workspace connect html shows MCP context and capability controls", 
   assert.match(html, /Drive selected files/);
   assert.match(html, /value="gmail_send" checked/);
   assert.doesNotMatch(html, /value="gmail_read" checked/);
+  assert.match(html, /name="privacy_consent"/);
+  assert.match(html, /privacy#google-data-protection/);
+});
+
+test("google workspace connect html exposes only the approved send capability by default", () => {
+  const html = googleWorkspaceConnectHtml({ connectId: "connect-1" });
+  assert.match(html, /Gmail send/);
+  assert.doesNotMatch(html, /Gmail read/);
+  assert.doesNotMatch(html, /Gmail drafts/);
+  assert.doesNotMatch(html, /Drive selected files/);
+  assert.match(html, /cannot read your inbox or existing email/);
 });
 
 test("google workspace preview html does not expose the OAuth start form", () => {

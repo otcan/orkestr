@@ -17,6 +17,7 @@ import {
   getGoogleWorkspaceConnectRequest,
   googleWorkspaceBrokeredConnectorSetupHref,
   googleWorkspaceConnectHtml,
+  googleWorkspacePrivacyPolicyVersion,
   startGoogleWorkspaceOAuth,
 } from "../../../../../packages/connectors/src/google-workspace.js";
 import {
@@ -25,7 +26,6 @@ import {
 import { disconnectConnectorAuth } from "../../../../../packages/connectors/src/connector-auth.js";
 import {
   listGoogleWorkspaceConnections,
-  removeGoogleWorkspaceConnection,
   updateGoogleWorkspaceConnection,
 } from "../../../../../packages/connectors/src/google-workspace-connections.js";
 import {
@@ -527,7 +527,11 @@ export class ConnectorsController {
   @Delete("gmail/accounts/:connectionId")
   @HttpCode(200)
   async deleteGmailAccount(@Req() request: any, @Param("connectionId") connectionId: string) {
-    return removeGoogleWorkspaceConnection(connectionId, process.env, { principal: requestPrincipal(request) });
+    return disconnectConnectorAuth(
+      { provider: "gmail", connectionId },
+      requestPrincipal(request),
+      process.env,
+    );
   }
 
   @Delete("gmail/auth")
@@ -1248,10 +1252,20 @@ export class GoogleWorkspaceConnectController {
       const connectId = String(query.connect || "");
       const payload = await getGoogleWorkspaceConnectRequest(connectId, process.env);
       if (googleWorkspaceConnectRequestExists(payload) && !(await googleWorkspaceConnectAccess(request, payload, response))) return;
+      if (
+        String(query.privacy_consent || "") !== "1" ||
+        String(query.privacy_policy_version || "") !== googleWorkspacePrivacyPolicyVersion
+      ) {
+        const error: any = new Error("Review and accept the Google data disclosure before continuing.");
+        error.statusCode = 400;
+        throw error;
+      }
       const started = await startGoogleWorkspaceOAuth(process.env, {
         connectId,
         capabilities,
         account: String(query.account || ""),
+        privacyPolicyVersion: googleWorkspacePrivacyPolicyVersion,
+        privacyConsentAt: new Date().toISOString(),
       });
       return response.redirect(302, started.authorizeUrl);
     } catch (error) {
@@ -1261,6 +1275,7 @@ export class GoogleWorkspaceConnectController {
         .type("text/html; charset=utf-8")
         .send(googleWorkspaceConnectHtml({
           connectId: String(query.connect || ""),
+          selectedCapabilities: capabilities,
           error: String((error as Error)?.message || "Google Workspace OAuth could not start."),
         }));
     }
