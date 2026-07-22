@@ -175,7 +175,7 @@ export function initialQueueDeliveryState(status = null, message = null) {
     return "waking";
   }
   if (isCodexAppServer) return "";
-  if (state === "working") return "awaiting_runtime_completion";
+  if (state === "working") return messageRequestsInstantSteer(message) ? "" : "awaiting_runtime_completion";
   if (state === "waking" || state === "sleeping") return "waiting_runtime_start";
   if (!status.sessionName) return "waiting_runtime_start";
   if (status.promptReady === false) return "waiting_runtime_ready";

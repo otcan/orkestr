@@ -18,7 +18,7 @@ import { createDesktopShare, desktopShareStatus, openDesktopShare } from "../pac
 import { createPairingChallenge, listPairingChallenges } from "../packages/core/src/security.js";
 import { createTenantVm } from "../packages/core/src/tenant-vm-registry.js";
 import { configureTenantWhatsAppRoute } from "../packages/core/src/tenant-whatsapp-routing.js";
-import { appendThreadMessage, createThread, enqueueThreadInput, getThread, listThreadMessages, listThreads, updateThreadMessage } from "../packages/core/src/threads.js";
+import { appendThreadMessage, createThread, enqueueThreadInput, getThread, listThreadMessages, listThreads, updateThread, updateThreadMessage } from "../packages/core/src/threads.js";
 import { createUser, linkUserPrivateIdentity } from "../packages/core/src/users.js";
 import { deliverWhatsAppReplies, formatWhatsAppOutboundText, getWhatsAppChatMessages, getWhatsAppChatParticipants, getWhatsAppStatus, initialQueueDeliveryState, mapLocalWhatsAppStatusFromHealth, routeWhatsAppInbound, sendWhatsAppText, syncWhatsAppTypingIndicators } from "../packages/connectors/src/whatsapp.js";
 import { addLocalWhatsAppGroupParticipants, cleanupLocalWhatsAppChromeLocks, clearLocalWhatsAppChatTypingState, createLocalWhatsAppChat, demoteLocalWhatsAppGroupParticipants, forwardLocalWhatsAppInbound, getLocalWhatsAppBridgeStatus, handleInboundMessage, inboundRoutingFailureNoticeText, listLocalWhatsAppChats, listLocalWhatsAppChatParticipants, localWhatsAppAccountIdsForEnv, localWhatsAppConnectedPageReadyFallbackEligible, localWhatsAppInboundForwardTarget, localWhatsAppMessageRouteFields, localWhatsAppReadyFallbackEligible, localWhatsAppTypingClearRetryDelaysMs, localWhatsAppUnreadRecoveryBoundChats, localWhatsAppUnreadRecoveryIntervalMs, normalizeGroupParticipantIds, notifyLocalWhatsAppPairingRequired, promoteLocalWhatsAppGroupParticipants, recoverConfiguredLocalWhatsAppAccounts, recoverLocalWhatsAppChatMessages, recoverUnreadLocalWhatsAppMessages, recoverableLocalWhatsAppAccountIds, reduceLocalWhatsAppBridgeState, resetLocalWhatsAppBridgeForTest, restartRecoverableLocalWhatsAppAccount, sendLocalWhatsAppMessage, sendLocalWhatsAppRepairQrEmail, sendWhatsAppTextWithConfirmation, setLocalWhatsAppRuntimeForTest, setLocalWhatsAppRuntimeRecoveryHooksForTest, startLocalWhatsAppAccount, startLocalWhatsAppTyping, stopLocalWhatsAppTyping, syncLocalWhatsAppTypingTargets, webCacheRoot } from "../packages/connectors/src/whatsapp-local-bridge.js";
@@ -12928,6 +12928,36 @@ test("whatsapp inbound marks Codex API threads for default active-turn steer", a
   assert.equal(routed.message.steerActiveTurn, true);
 });
 
+test("whatsapp inbound marks raw-terminal Codex threads for default active-turn steer", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-raw-terminal-steer-"));
+  const env = externalBridgeEnv(home);
+  const created = await createThread({
+    id: "thread-wa-raw-terminal-steer",
+    name: "WA Raw Terminal Steer Thread",
+    runtimeKind: "codex-app-server",
+  }, env);
+  await updateThread(created.id, {
+    runtimeKind: "raw-terminal",
+    terminalMode: "raw-terminal",
+    runtime: { ...(created.runtime || {}), runtimeKind: "raw-terminal", terminalMode: "raw-terminal" },
+    executor: { ...(created.executor || {}), id: "codex", type: "codex", transport: "raw-terminal" },
+    binding: { connector: "whatsapp", chatId: "chat-raw-terminal-steer", enabled: true },
+  }, env);
+  await writeConnectorConfig("whatsapp", {
+    bridgeMode: "external",
+    bridgeUrl: "http://wa.local",
+  }, env);
+
+  const routed = await routeWhatsAppInbound({
+    eventId: "wa-raw-terminal-steer-1",
+    chatId: "chat-raw-terminal-steer",
+    text: "please incorporate this clarification",
+  }, env);
+
+  assert.equal(routed.message.codexDeliveryMode, "instant_steer");
+  assert.equal(routed.message.steerActiveTurn, true);
+});
+
 test("whatsapp delivery reports waking queue notices", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-queue-waking-"));
   const env = externalBridgeEnv(home);
@@ -12979,6 +13009,12 @@ test("whatsapp queue notices use app-server runtime states", () => {
     sessionName: null,
     promptReady: true,
   }, { text: "wake tmux" }), "waiting_runtime_start");
+  assert.equal(initialQueueDeliveryState({
+    state: "working",
+    runtimeKind: "raw-terminal",
+    sessionName: "orkestr-thread-raw",
+    promptReady: false,
+  }, { text: "steer terminal", codexDeliveryMode: "instant_steer", steerActiveTurn: true }), "");
 });
 
 test("whatsapp queue notices strip pasted debug footers from previews", () => {

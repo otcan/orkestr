@@ -2777,6 +2777,25 @@ function deliveryAttempt(message) {
   return Math.max(0, Number(message?.deliveryAttempt || 0) || 0);
 }
 
+function messageRequestsInstantSteer(message = {}) {
+  return message.steerActiveTurn === true ||
+    String(message.codexDeliveryMode || "").trim().toLowerCase() === "instant_steer";
+}
+
+function rawTerminalCanAcceptInstantSteer(status = null, message = {}) {
+  if (!messageRequestsInstantSteer(message) || !status?.paneId) return false;
+  if (
+    status.frozen === true ||
+    status.state === "frozen" ||
+    status.state === "awaiting_approval" ||
+    status.planImplementationMenuVisible === true ||
+    status.needsResumeDirectoryConfirmation === true ||
+    status.needsCodexUpdatePromptSkip === true ||
+    status.turnLifecycle?.awaitingApproval === true
+  ) return false;
+  return status.working === true || status.foregroundWorking === true || status.backgroundWork === true || status.state === "working";
+}
+
 function stalePendingInputRecoveryMs(env = process.env) {
   const parsed = Number(env.ORKESTR_STALE_PENDING_INPUT_RECOVERY_MS ?? env.ORKESTR_ROUTER_DOCTOR_STALE_QUEUE_MS ?? 60_000);
   return Number.isFinite(parsed) ? Math.max(15_000, parsed) : 60_000;
@@ -3443,7 +3462,8 @@ async function cancelNeedInputForRawDelivery(thread, message, pendingQuestion, s
 }
 
 async function sendThreadInputToPane(thread, message, status, env = process.env) {
-  if (!status?.paneId || runtimeBlocksThreadInput(status) || !status.promptReady || status.planImplementationMenuVisible) {
+  const instantSteer = rawTerminalCanAcceptInstantSteer(status, message);
+  if (!status?.paneId || (!instantSteer && (runtimeBlocksThreadInput(status) || !status.promptReady)) || status.planImplementationMenuVisible) {
     const error = new Error("runtime_not_ready");
     error.statusCode = 504;
     error.status = status;
@@ -3452,12 +3472,13 @@ async function sendThreadInputToPane(thread, message, status, env = process.env)
   const attempt = deliveryAttempt(message) + 1;
   const inputText = inputTextForMessage(message);
   const deliveryInput = await deliveryInputForMessage(thread, message, inputText, env);
+  const attemptedVia = instantSteer ? `${deliveryInput.observedVia}_steer` : deliveryInput.observedVia;
   const sentAt = nowIso();
   const nextAttemptAt = isoAfter(deliveryRetryBackoffMs(attempt, env));
   const rollout = await rolloutSnapshotForDelivery(thread, status.lease, env);
   const pending = await updateThreadMessage(thread.id, message.id, {
     state: "pending_delivery",
-    deliveryState: attempt > 1 ? "retrying_delivery" : "delivering",
+    deliveryState: instantSteer ? "steering_active_turn" : (attempt > 1 ? "retrying_delivery" : "delivering"),
     deliveryAttempt: attempt,
     deliveryAckCheckCount: 0,
     deliveryPayloadHash: deliveryPayloadHash(message),
@@ -3499,7 +3520,7 @@ async function sendThreadInputToPane(thread, message, status, env = process.env)
     deliveryAckCheckCount: 0,
     deliveryLastAttemptAt: sentAt,
     deliveryNextAttemptAt: nextAttemptAt,
-    observedVia: submittedExistingPaste ? `tmux_submit_existing_${deliveryInput.mode}_pending_ack` : `${deliveryInput.observedVia}_pending_ack`,
+    observedVia: submittedExistingPaste ? `tmux_submit_existing_${deliveryInput.mode}_pending_ack` : `${attemptedVia}_pending_ack`,
     deliveryPaneId: status.paneId,
     runtimeLeaseId: status.lease?.id || null,
     deliveryInputMode: deliveryInput.mode,
@@ -3520,7 +3541,8 @@ async function sendThreadInputToPane(thread, message, status, env = process.env)
     attempt,
     paneId: status.paneId,
     nextAttemptAt,
-    observedVia: submittedExistingPaste ? `tmux_submit_existing_${deliveryInput.mode}` : deliveryInput.observedVia,
+    observedVia: submittedExistingPaste ? `tmux_submit_existing_${deliveryInput.mode}` : attemptedVia,
+    steerActiveTurn: instantSteer,
     deliveryInputMode: deliveryInput.mode,
     deliveryInputFile: deliveryInput.filePath || null,
   }, env);

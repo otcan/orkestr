@@ -1549,6 +1549,22 @@ function isCodexAppServerThread(thread = {}) {
     pickString(thread.executor?.transport).toLowerCase() === "app-server";
 }
 
+function isCodexSteerCapableThread(thread = {}) {
+  if (!thread || typeof thread !== "object" || Array.isArray(thread)) return false;
+  if (isCodexAppServerThread(thread)) return true;
+  const values = [
+    thread.runtimeKind,
+    thread.runtime?.runtimeKind,
+    thread.terminalMode,
+    thread.runtime?.terminalMode,
+    thread.executor?.transport,
+    thread.executor?.metadata?.transport,
+    thread.executor?.metadata?.runtimeKind,
+  ].map((value) => pickString(value).toLowerCase());
+  return values.some((value) => ["raw-terminal", "codex-tmux"].includes(value)) ||
+    pickString(thread.executorId, thread.executor?.id, thread.executor?.type).toLowerCase() === "codex";
+}
+
 function deliveryModeRequestsInstantSteer(value = "") {
   const mode = pickString(value).toLowerCase().replace(/[\s-]+/g, "_");
   return ["instant_steer", "steer", "active_turn_steer", "steer_active_turn"].includes(mode);
@@ -1618,7 +1634,7 @@ function whatsappInboundInstantSteerEnabled({ thread = null, binding = null, cha
   const bindingChatId = pickString(binding?.chatId, thread?.binding?.chatId, chatId);
   if (bindingChatId && configuredChats.has(bindingChatId)) return true;
   if (candidates.some((candidate) => bindingRequestsWhatsAppInstantSteer(candidate))) return true;
-  return isCodexAppServerThread(thread) && whatsappInboundInstantSteerDefaultEnabled(env);
+  return isCodexSteerCapableThread(thread) && whatsappInboundInstantSteerDefaultEnabled(env);
 }
 
 function shouldUseApiAgentForWhatsAppThread(thread = {}, env = process.env) {
