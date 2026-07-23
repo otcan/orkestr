@@ -104,8 +104,9 @@ test("google workspace scope selection maps only requested capabilities", () => 
   assert.ok(scopes.includes("openid"));
   assert.ok(scopes.includes("https://www.googleapis.com/auth/gmail.send"));
   assert.ok(scopes.includes("https://www.googleapis.com/auth/gmail.compose"));
-  assert.ok(scopes.includes("https://www.googleapis.com/auth/calendar.events.readonly"));
-  assert.ok(scopes.includes("https://www.googleapis.com/auth/calendar.events"));
+  assert.ok(scopes.includes("https://www.googleapis.com/auth/calendar.events.owned"));
+  assert.equal(scopes.includes("https://www.googleapis.com/auth/calendar.events.readonly"), false);
+  assert.equal(scopes.includes("https://www.googleapis.com/auth/calendar.events"), false);
   assert.ok(scopes.includes("https://www.googleapis.com/auth/drive.file"));
   assert.equal(scopes.includes("https://www.googleapis.com/auth/gmail.modify"), false);
   assert.equal(scopes.includes("https://www.googleapis.com/auth/drive.readonly"), false);
@@ -113,6 +114,14 @@ test("google workspace scope selection maps only requested capabilities", () => 
   assert.deepEqual(
     googleWorkspaceCapabilitiesForScopes("openid https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/calendar.events.readonly"),
     ["gmail_read", "calendar_read"],
+  );
+  assert.deepEqual(
+    googleWorkspaceCapabilitiesForScopes("openid https://www.googleapis.com/auth/calendar.events.owned"),
+    ["calendar_read", "calendar_actions"],
+  );
+  assert.deepEqual(
+    googleWorkspaceCapabilitiesForScopes("openid https://www.googleapis.com/auth/calendar.events"),
+    ["calendar_read", "calendar_actions"],
   );
   assert.deepEqual(
     googleWorkspaceCapabilitiesForScopes("openid https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile", ["gmail_read"]),
@@ -182,7 +191,7 @@ test("google workspace oauth defaults to Gmail send access", async () => {
   const privacyConsentAt = "2026-07-23T10:00:00.000Z";
   const started = await startGoogleWorkspaceOAuth(env, {
     connectId: link.connectId,
-    privacyPolicyVersion: "2026-07-23",
+    privacyPolicyVersion: "2026-07-23.2",
     privacyConsentAt,
   });
   const statePath = path.join(userDataPaths("alice", env).oauth, "gmail-state.json");
@@ -191,7 +200,7 @@ test("google workspace oauth defaults to Gmail send access", async () => {
 
   assert.deepEqual(started.capabilities, ["gmail_send"]);
   assert.deepEqual(savedState.requestedCapabilities, ["gmail_send"]);
-  assert.equal(savedState.privacyPolicyVersion, "2026-07-23");
+  assert.equal(savedState.privacyPolicyVersion, "2026-07-23.2");
   assert.equal(savedState.privacyConsentAt, privacyConsentAt);
   assert.equal(scopes.includes("https://www.googleapis.com/auth/gmail.readonly"), false);
   assert.equal(scopes.includes("https://www.googleapis.com/auth/gmail.modify"), false);
@@ -641,6 +650,21 @@ test("google workspace connect html exposes only the approved send capability by
   assert.doesNotMatch(html, /Gmail drafts/);
   assert.doesNotMatch(html, /Drive selected files/);
   assert.match(html, /cannot read your inbox or existing email/);
+});
+
+test("google workspace connect html discloses every selected expanded capability", () => {
+  const html = googleWorkspaceConnectHtml({
+    connectId: "connect-1",
+    allowedCapabilities: "all",
+    selectedCapabilities: ["gmail_read", "gmail_drafts", "calendar_read", "calendar_actions"],
+  });
+  assert.match(html, /Selected permissions:/);
+  assert.match(html, /For Gmail drafts/);
+  assert.match(html, /For Gmail read/);
+  assert.match(html, /For Calendar read/);
+  assert.match(html, /For Calendar actions/);
+  assert.doesNotMatch(html, /Current permission:/);
+  assert.doesNotMatch(html, /cannot read your inbox or existing email/);
 });
 
 test("google workspace preview html does not expose the OAuth start form", () => {

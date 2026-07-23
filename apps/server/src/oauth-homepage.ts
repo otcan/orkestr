@@ -1,4 +1,8 @@
-export function renderOAuthHomepage(): string {
+import { googleWorkspaceAllowedCapabilities } from "../../../packages/connectors/src/google-workspace-scopes.js";
+
+export function renderOAuthHomepage(env = process.env): string {
+  const capabilities = googleWorkspaceAllowedCapabilities(env);
+  const expandedGoogleAccess = capabilities.some((capability) => capability !== "gmail_send");
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -26,7 +30,9 @@ export function renderOAuthHomepage(): string {
       </article>
       <article>
         <h2>How Orkestr uses Google data</h2>
-        <p>Google Workspace access is optional. The current public integration requests basic Google account identity and Gmail send access only after a user reviews Orkestr's data disclosure and continues to Google's consent screen. It sends only emails that the user requests or approves and cannot read the user's inbox or existing email.</p>
+        <p>${expandedGoogleAccess
+          ? "Google Workspace access is optional. Users choose individual approved capabilities before Google's consent screen. Depending on that choice, Orkestr can prepare or send email, read selected Gmail signals, deliver notification previews, or read and manage owned-calendar events only for user-requested workflows."
+          : "Google Workspace access is optional. The current public integration requests basic Google account identity and Gmail send access only after a user reviews Orkestr's data disclosure and continues to Google's consent screen. It sends only emails that the user requests or approves and cannot read the user's inbox or existing email."}</p>
       </article>
       <article>
         <h2>User control and privacy</h2>

@@ -63,7 +63,7 @@ export function registerStaticFallback(app: INestApplication): void {
         .status(200)
         .header("cache-control", "no-store")
         .type("text/html; charset=utf-8")
-        .send(renderOAuthHomepage());
+        .send(renderOAuthHomepage(process.env));
     }
     if (publicPath === "/public-site.css" && publicSiteAllowedForHost(requestHostHeader(request), process.env)) {
       return response

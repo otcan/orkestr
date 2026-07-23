@@ -21,7 +21,11 @@ import {
   startGoogleWorkspaceOAuth,
 } from "../../../../../packages/connectors/src/google-workspace.js";
 import {
+  googleWorkspaceAllowedCapabilities,
+  googleWorkspaceCapabilityDefinitions,
   googleWorkspaceCapabilityLabels,
+  googleWorkspaceScopesForCapabilities,
+  requireAllowedGoogleWorkspaceCapabilities,
 } from "../../../../../packages/connectors/src/google-workspace-scopes.js";
 import { disconnectConnectorAuth } from "../../../../../packages/connectors/src/connector-auth.js";
 import {
@@ -483,7 +487,22 @@ export class ConnectorsController {
     @Query("setAsMain") setAsMain = "",
     @Query("setAsThreadDefault") setAsThreadDefault = "",
     @Query("threadId") threadId = "",
+    @Query("capabilities") capabilities = "",
+    @Query("privacyConsent") privacyConsent = "",
+    @Query("privacyPolicyVersion") privacyPolicyVersion = "",
   ) {
+    const requestedCapabilities = clean(capabilities)
+      ? requireAllowedGoogleWorkspaceCapabilities(stringArray(capabilities), process.env)
+      : [];
+    if (
+      requestedCapabilities.length &&
+      (
+        !["1", "true", "yes"].includes(clean(privacyConsent).toLowerCase()) ||
+        clean(privacyPolicyVersion) !== googleWorkspacePrivacyPolicyVersion
+      )
+    ) {
+      throw httpError("google_workspace_privacy_consent_required", 400);
+    }
     return beginGmailOAuth(process.env, {
       account,
       principal: requestPrincipal(request),
@@ -494,11 +513,19 @@ export class ConnectorsController {
       setAsMain: ["1", "true", "yes"].includes(clean(setAsMain).toLowerCase()),
       setAsThreadDefault: ["1", "true", "yes"].includes(clean(setAsThreadDefault).toLowerCase()),
       threadId,
+      ...(requestedCapabilities.length ? {
+        provider: "google_workspace",
+        capabilities: requestedCapabilities,
+        scopes: googleWorkspaceScopesForCapabilities(requestedCapabilities),
+        privacyPolicyVersion: clean(privacyPolicyVersion),
+        privacyConsentAt: new Date().toISOString(),
+      } : {}),
     });
   }
 
   @Get("gmail/accounts")
   async gmailAccounts(@Req() request: any, @Query("threadId") threadId = "") {
+    const allowed = new Set(googleWorkspaceAllowedCapabilities(process.env));
     return {
       ok: true,
       ...(await listGoogleWorkspaceConnections(process.env, {
@@ -506,6 +533,9 @@ export class ConnectorsController {
         threadId,
         includeExplicit: true,
       })),
+      availableCapabilities: googleWorkspaceCapabilityDefinitions()
+        .filter((definition) => allowed.has(definition.id)),
+      privacyPolicyVersion: googleWorkspacePrivacyPolicyVersion,
     };
   }
 

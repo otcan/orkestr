@@ -1,0 +1,66 @@
+<section class="workspace-access" aria-labelledby="google-access-heading">
+  <div class="workspace-access-head">
+    <div>
+      <strong id="google-access-heading">Google access</strong>
+      <small>Choose the account and only the permissions Orkestr should request.</small>
+    </div>
+  </div>
+
+  @if (accounts.length) {
+    <label>
+      <span>Account</span>
+      <select name="google-access-account" [(ngModel)]="selectedAccountId" (ngModelChange)="selectAccount($event)">
+        <option value="">Add another Google account</option>
+        @for (account of accounts; track account.connectionId) {
+          <option [value]="account.connectionId">{{ accountLabel(account) }}</option>
+        }
+      </select>
+    </label>
+  }
+
+  <fieldset>
+    <legend>Permissions</legend>
+    <div class="capability-list">
+      @for (capability of availableCapabilities; track capability.id) {
+        <label class="capability-option">
+          <input
+            type="checkbox"
+            [name]="'google-capability-' + capability.id"
+            [ngModel]="capabilityChecked(capability.id)"
+            (ngModelChange)="setCapability(capability.id, $event)"
+          />
+          <span>
+            <strong>{{ capability.label }}</strong>
+            <small>{{ capability.summary }}</small>
+            <em [class.restricted]="capabilityRisk(capability.id) === 'Restricted'">{{ capabilityRisk(capability.id) }}</em>
+          </span>
+        </label>
+      } @empty {
+        <p class="inline-error">No Google capabilities are approved for this deployment.</p>
+      }
+    </div>
+  </fieldset>
+
+  @if (unavailableCapabilities().length) {
+    <p class="access-note">
+      This account has older grants that are not currently requestable:
+      <code>{{ unavailableCapabilities().join(", ") }}</code>.
+    </p>
+  }
+
+  <label class="consent-row">
+    <input type="checkbox" name="google-access-consent" [(ngModel)]="consent" />
+    <span>
+      I understand that Orkestr will process Google data only for the selected workflows.
+      <a href="/privacy#google-data-access" target="_blank" rel="noreferrer">Review the Google data disclosure</a>.
+    </span>
+  </label>
+
+  @if (error) {
+    <p class="inline-error">{{ error }}</p>
+  }
+
+  <button type="button" (click)="connect()" [disabled]="!canContinue()">
+    {{ busy ? "Opening Google" : selectedAccountId ? "Update Google access" : "Continue to Google" }}
+  </button>
+</section>

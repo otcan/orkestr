@@ -123,6 +123,27 @@ actions, and Drive selected files. New connections default to Gmail send only;
 restricted Gmail read, action, and draft scopes must be selected explicitly. See
 [Google Workspace OAuth verification prep](google-workspace-oauth-verification.md).
 
+The same permission review is available in **Connectors > Gmail**. Existing
+accounts can be reconnected to add or reduce capabilities, and a second account
+can stay **Only when requested** so agents do not select it implicitly.
+
+Once granted, Orkestr exposes these Google Workspace workflows in chat:
+
+- Prepare a Gmail draft without sending it.
+- Send a prepared draft only after explicit approval of that send.
+- Search or read Gmail when Gmail read access was selected.
+- Watch a narrow Gmail query and deliver new matching signals to a thread.
+- List Calendar events when Calendar read access was selected.
+- Create, update, or delete an event on a calendar the user owns only after
+  explicit approval of the effective event details.
+
+Gmail signal watching uses persisted server-side rules with a minimum polling
+interval and message-id deduplication. The Connectors page shows rule health and
+supports **Check now**, pause, resume, and delete. Optional browser alerts use
+the browser Notification API and must be enabled by that browser's user. They
+are a convenience layer over the persisted Orkestr delivery; closing a browser
+does not remove the watcher.
+
 The rule is simple: account state stays local. Orkestr can coordinate the agent
 with those accounts, but the public OSS repo must not ship tokens, cookies,
 profiles, or private automation scripts.

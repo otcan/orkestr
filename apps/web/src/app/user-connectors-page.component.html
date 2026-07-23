@@ -113,9 +113,6 @@
                       @if (connectorIntentThreadId() && !googleAccountIsThreadDefault(connection)) {
                         <button class="secondary" type="button" (click)="makeGoogleAccountThreadDefault(googleAccountId(connection))" [disabled]="busy || !!actionBusy">Use in this thread</button>
                       }
-                      @if (googleAccountNeedsReconnect(connection)) {
-                        <button type="button" (click)="reconnectGoogleAccount(googleAccountId(connection))" [disabled]="busy || !!actionBusy">Reconnect</button>
-                      }
                       <button class="secondary danger-soft" type="button" (click)="deleteGoogleAccount(googleAccountId(connection))" [disabled]="busy || !!actionBusy">Delete</button>
                     </span>
                   </dd>
@@ -134,24 +131,19 @@
               </div>
             }
           </dl>
-          <button class="secondary" type="button" (click)="startGmail({ autoRedirect: true, addAccount: true })" [disabled]="actionDisabled('gmail')">
-            {{ actionBusy === "gmail" ? "Opening" : "Add Google account" }}
-          </button>
         }
 
-        @if (connector.id === "gmail" && !connectorConnected(connector)) {
-          @if (loginOnly()) {
-            <button type="button" (click)="startGmail({ autoRedirect: true })" [disabled]="actionDisabled('gmail')">
-              {{ actionBusy === "gmail" ? "Opening" : connectorNeedsReconnect(connector) ? "Reconnect Gmail" : "Open Gmail Sign-in" }}
-            </button>
-          } @else {
-            <button type="button" (click)="startGmail()" [disabled]="actionDisabled('gmail')">
-              {{ actionBusy === "gmail" ? "Starting" : connectorNeedsReconnect(connector) ? "Reconnect Gmail" : "Connect Gmail" }}
-            </button>
-          }
-          @if (gmailAuth?.authorizeUrl) {
-            <a class="button-link" [href]="gmailAuth?.authorizeUrl" target="_blank" rel="noreferrer">Open Gmail sign-in</a>
-          }
+        @if (connector.id === "gmail") {
+          <ork-google-workspace-access-panel
+            [accounts]="googleAccounts"
+            [availableCapabilities]="googleCapabilities"
+            [privacyPolicyVersion]="googlePrivacyPolicyVersion"
+            [threadId]="connectorIntentThreadId()"
+          ></ork-google-workspace-access-panel>
+          <ork-gmail-notifications-panel
+            [accounts]="googleAccounts"
+            [initialThreadId]="connectorIntentThreadId()"
+          ></ork-gmail-notifications-panel>
         }
 
         @if (connector.id === "outlook") {

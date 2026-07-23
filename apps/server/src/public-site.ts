@@ -1,5 +1,6 @@
 import { renderWaitlistSection, waitlistCss } from "./public-waitlist.js";
 import { publicPrivacyPage } from "./public-privacy.js";
+import { googleWorkspaceAllowedCapabilities } from "../../../packages/connectors/src/google-workspace-scopes.js";
 type PublicPage = {
   title: string;
   eyebrow?: string;
@@ -150,6 +151,8 @@ function shell(page: PublicPage, env = process.env) {
 function renderHome(env = process.env) {
   const repo = publicRepoUrl(env);
   const contact = publicContact(env);
+  const googleCapabilities = googleWorkspaceAllowedCapabilities(env);
+  const expandedGoogleAccess = googleCapabilities.some((capability) => capability !== "gmail_send");
   return shell({
     title: "Orkestr",
     summary: "Orkestr is an invite-only assistant application. It lets users run persistent AI chats, work through WhatsApp, manage files and timers, operate private browser desktops, and connect user-approved services such as Gmail.",
@@ -201,12 +204,14 @@ function renderHome(env = process.env) {
     <div>
       <p class="eyebrow">Google Workspace</p>
       <h2 id="google-title">Gmail access is optional and user approved.</h2>
-      <p>Orkestr asks for Google permissions only when a user starts the Google connection flow and reviews the data disclosure. The current public integration requests Gmail send access to send only emails that the user requests or approves. It cannot read the user's inbox or existing email.</p>
+      <p>${expandedGoogleAccess
+        ? "Orkestr asks for Google permissions only when a user starts the Google connection flow, selects individual approved capabilities, and reviews the data disclosure. Depending on that choice, Orkestr can prepare or send email, read selected Gmail signals, deliver notification previews, or read and manage events on calendars the user owns."
+        : "Orkestr asks for Google permissions only when a user starts the Google connection flow and reviews the data disclosure. The current public integration requests Gmail send access to send only emails that the user requests or approves. It cannot read the user's inbox or existing email."}</p>
     </div>
     <ul class="feature-list">
       <li>Show the Google consent screen before access</li>
       <li>Connect a Gmail account to a specific Orkestr user</li>
-      <li>Send user-approved emails from that Gmail account</li>
+      <li>${expandedGoogleAccess ? "Use only the Gmail and Calendar capabilities selected by the user" : "Send user-approved emails from that Gmail account"}</li>
       <li>Revoke and disconnect Google access from Orkestr setup</li>
       <li>No sale of Google user data</li>
       <li>No Google user data used for advertising or model training</li>
