@@ -1,11 +1,13 @@
 import { ChangeDetectorRef, Component, OnDestroy, OnInit, inject } from "@angular/core";
 import { FormsModule } from "@angular/forms";
 import { firstValueFrom } from "rxjs";
-import { ApiService, ConnectorStatus, GmailOAuthStartResponse, GoogleWorkspaceConnection, OrkestrUser, OutlookOAuthStartResponse, SetupStatus } from "./api.service";
+import { ApiService, ConnectorStatus, GoogleWorkspaceCapability, GoogleWorkspaceConnection, OrkestrUser, OutlookOAuthStartResponse, SetupStatus } from "./api.service";
+import { GoogleWorkspaceAccessPanelComponent } from "./google-workspace-access-panel.component";
+import { GmailNotificationsPanelComponent } from "./gmail-notifications-panel.component";
 
 @Component({
   selector: "ork-user-connectors-page",
-  imports: [FormsModule],
+  imports: [FormsModule, GmailNotificationsPanelComponent, GoogleWorkspaceAccessPanelComponent],
   templateUrl: "./user-connectors-page.component.html",
 })
 export class UserConnectorsPageComponent implements OnDestroy, OnInit {
@@ -14,7 +16,6 @@ export class UserConnectorsPageComponent implements OnDestroy, OnInit {
   private readonly connectorOrder = ["whatsapp", "gmail", "outlook", "jira", "shopify", "linkedin", "browsers"];
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
   private retryAttempts = 0;
-  private autoStartedRoute = "";
   private destroyed = false;
   private renderQueued = false;
 
@@ -25,9 +26,10 @@ export class UserConnectorsPageComponent implements OnDestroy, OnInit {
   outlookAccount = "";
   setupStatus: SetupStatus | null = null;
   currentUser: OrkestrUser | null = null;
-  gmailAuth: GmailOAuthStartResponse | null = null;
   outlookAuth: OutlookOAuthStartResponse | null = null;
   googleAccounts: GoogleWorkspaceConnection[] = [];
+  googleCapabilities: GoogleWorkspaceCapability[] = [];
+  googlePrivacyPolicyVersion = "";
 
   ngOnInit(): void {
     void this.load();
@@ -52,7 +54,11 @@ export class UserConnectorsPageComponent implements OnDestroy, OnInit {
       ]);
       if (setup.status === "fulfilled") this.setupStatus = setup.value;
       if (user.status === "fulfilled") this.currentUser = user.value.user;
-      if (googleAccounts.status === "fulfilled") this.googleAccounts = googleAccounts.value.connections || [];
+      if (googleAccounts.status === "fulfilled") {
+        this.googleAccounts = googleAccounts.value.connections || [];
+        this.googleCapabilities = googleAccounts.value.availableCapabilities || [];
+        this.googlePrivacyPolicyVersion = googleAccounts.value.privacyPolicyVersion || "";
+      }
       if (setup.status === "rejected") {
         this.error = this.errorText(setup.reason);
       } else if (user.status === "rejected" && !this.currentUser) {
@@ -61,7 +67,6 @@ export class UserConnectorsPageComponent implements OnDestroy, OnInit {
         this.error = "";
       }
       this.scheduleRetryIfNeeded();
-      this.maybeAutoStartRouteLogin();
     } catch (error) {
       this.error = this.errorText(error);
       this.scheduleRetryIfNeeded();
@@ -133,10 +138,6 @@ export class UserConnectorsPageComponent implements OnDestroy, OnInit {
     return String(connector.state || "").toLowerCase() === "connected";
   }
 
-  connectorNeedsReconnect(connector: ConnectorStatus): boolean {
-    return String(connector.state || "").toLowerCase() === "reauth_required";
-  }
-
   connectedAccount(connector: ConnectorStatus): string {
     return this.detailString(connector, "account") || this.detailString(connector, "email") || this.detailString(connector, "loginHint");
   }
@@ -171,43 +172,6 @@ export class UserConnectorsPageComponent implements OnDestroy, OnInit {
 
   googleAccountUseMode(connection: Record<string, unknown>): string { return String(connection["useMode"] || "available"); }
 
-  googleAccountNeedsReconnect(connection: Record<string, unknown>): boolean {
-    return ["reauth_required", "revoked", "disconnected"].includes(String(connection["healthState"] || "").toLowerCase());
-  }
-
-  async startGmail(options: { autoRedirect?: boolean; addAccount?: boolean } = {}): Promise<void> {
-    if (this.actionBusy) return;
-    this.actionBusy = "gmail";
-    this.renderNow();
-    try {
-      this.gmailAuth = await firstValueFrom(this.api.startGmailOAuth(options.addAccount ? {
-        useMode: "explicit_only",
-        threadId: this.connectorIntentThreadId(),
-      } : {
-        accountId: this.routeQueryParam("account_id"),
-        alias: this.routeQueryParam("alias"),
-        useMode: this.routeQueryParam("use_mode"),
-        oauthApp: this.routeQueryParam("oauth_app"),
-        setAsMain: this.routeBooleanQueryParam("set_as_main"),
-        setAsThreadDefault: this.routeBooleanQueryParam("set_as_thread_default"),
-        threadId: this.connectorIntentThreadId(),
-      }));
-      this.notice = this.gmailAuth.authorizeUrl ? "Gmail sign-in ready." : "Gmail sign-in started.";
-      this.error = "";
-      if (options.autoRedirect && this.gmailAuth.authorizeUrl) {
-        this.notice = "Opening Gmail sign-in...";
-        globalThis.location.href = this.gmailAuth.authorizeUrl;
-        return;
-      }
-      await this.load();
-    } catch (error) {
-      this.error = this.errorText(error);
-    } finally {
-      this.actionBusy = "";
-      this.renderNow();
-    }
-  }
-
   async makeGoogleAccountMain(connectionId: string): Promise<void> {
     await this.performConnectorAction(`gmail-main-${connectionId}`, () => firstValueFrom(
       this.api.updateGoogleWorkspaceAccount(connectionId, { setAsMain: true }),
@@ -229,32 +193,10 @@ export class UserConnectorsPageComponent implements OnDestroy, OnInit {
     ), "Google account usage updated.");
   }
 
-  async reconnectGoogleAccount(connectionId: string): Promise<void> {
-    await this.performConnectorAction(`gmail-reconnect-${connectionId}`, () => firstValueFrom(
-      this.api.startGmailOAuth({
-        accountId: connectionId,
-        threadId: this.connectorIntentThreadId(),
-      }),
-    ), "Google sign-in started.", false, (result) => {
-      this.gmailAuth = result;
-      if (this.gmailAuth.authorizeUrl) {
-        globalThis.location.href = this.gmailAuth.authorizeUrl;
-      }
-    });
-  }
-
   async deleteGoogleAccount(connectionId: string): Promise<void> {
     await this.performConnectorAction(`gmail-delete-${connectionId}`, () => firstValueFrom(
       this.api.deleteGoogleWorkspaceAccount(connectionId),
     ), "Google account removed.");
-  }
-
-  async disconnectGmail(): Promise<void> {
-    await this.performConnectorAction("gmail-disconnect", () => firstValueFrom(
-      this.api.disconnectGmailAuth(),
-    ), "Gmail auth deleted.", true, () => {
-      this.gmailAuth = null;
-    });
   }
 
   async startOutlook(): Promise<void> {
@@ -366,32 +308,12 @@ export class UserConnectorsPageComponent implements OnDestroy, OnInit {
     return this.appPath("/desk");
   }
 
-  private maybeAutoStartRouteLogin(): void {
-    const active = this.routeConnectorId();
-    if (active !== "gmail") return;
-    if (!this.setupStatus) return;
-    if (this.autoStartedRoute === active) return;
-    if (this.actionBusy || this.autoLoginDisabled()) return;
-    if (["connected", "degraded"].includes(String(this.connectorStatus("gmail").state || "").toLowerCase())) return;
-    this.autoStartedRoute = active;
-    void this.startGmail({ autoRedirect: true });
-  }
-
-  private autoLoginDisabled(): boolean {
-    const params = new URLSearchParams(globalThis.location?.search || "");
-    return params.get("manual") === "1" || params.get("auto") === "0";
-  }
-
   private connectorIntentService(): string {
     return this.routeQueryParam("service") || this.routeConnectorId() || "gmail";
   }
 
   private routeQueryParam(name: string): string {
     return new URLSearchParams(globalThis.location?.search || "").get(name) || "";
-  }
-
-  private routeBooleanQueryParam(name: string): boolean {
-    return ["1", "true", "yes"].includes(this.routeQueryParam(name).toLowerCase());
   }
 
   private routeInstanceId(): string {

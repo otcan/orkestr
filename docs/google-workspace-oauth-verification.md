@@ -107,7 +107,12 @@ Optional capabilities map to scopes as follows:
 - Gmail send: `https://www.googleapis.com/auth/gmail.send`
 - Gmail drafts: `https://www.googleapis.com/auth/gmail.compose`
 - Calendar read: `https://www.googleapis.com/auth/calendar.events.readonly`
-- Calendar actions: `https://www.googleapis.com/auth/calendar.events`
+- Calendar actions on calendars the user owns: `https://www.googleapis.com/auth/calendar.events.owned`
+
+`calendar.events.owned` also permits reading events on calendars the user
+owns. When Calendar actions are selected, Orkestr therefore does not request
+the redundant `calendar.events.readonly` scope. Existing grants that used
+`calendar.events` remain recognized for backward compatibility.
 - Drive selected files: `https://www.googleapis.com/auth/drive.file`
 
 Orkestr must not request broad Drive scopes for this flow. Drive access is
@@ -123,8 +128,8 @@ Use generic demo data only.
 - Show the capability disclosure page before Google OAuth.
 - Show the Google-data access, sharing, protection, retention, and deletion
   disclosures immediately before the affirmative consent control.
-- Select Gmail send only for the first public verification demo, then complete
-  Google OAuth.
+- Select only the capabilities submitted for the current verification demo,
+  then complete Google OAuth.
 - Show the WhatsApp confirmation listing enabled capabilities.
 - Demonstrate a user-approved Gmail send action.
 - Demonstrate a Gmail read action only if `gmail.readonly` is selected.
@@ -151,8 +156,9 @@ true on the live production deployment:
 - `https://orkestr.de/privacy` is public without login and exposes stable
   anchors for Google data access, sharing, storage, protection, Limited Use,
   and deletion.
-- The connect page requests only Gmail send and records the privacy policy
-  version plus affirmative consent time in the one-time OAuth state.
+- The connect page defaults to Gmail send, allows only deployment-approved
+  capabilities, and records the selected capabilities, privacy policy version,
+  and affirmative consent time in the one-time OAuth state.
 - Google access and refresh tokens are AES-256-GCM encrypted on disk. The
   production `ORKESTR_CONNECTOR_ENCRYPTION_KEY` is stored in the service
   environment outside `ORKESTR_HOME`.
@@ -161,9 +167,26 @@ true on the live production deployment:
 - Disconnect revokes the Google credential before deleting the local encrypted
   record. A temporary Google revocation failure leaves the record available for
   a safe retry instead of reporting a false disconnect.
-- The live homepage, `/about`, privacy policy, OAuth consent screen, submitted
-  scopes, scope justification, and demo video all describe the same send-only
-  behavior.
+- The live homepage, `/about`, privacy policy, OAuth consent screen, deployment
+  capability allowlist, submitted scopes, scope justification, and demo video
+  all describe the same production behavior.
+
+## Gmail Signal Notifications
+
+The initial notification implementation is intentionally operationally simple:
+
+1. A user grants Gmail read and creates a narrow Gmail query watcher.
+2. Orkestr persists the watcher and polls it on the configured cadence.
+3. Gmail message ids are deduplicated before delivery to the selected thread.
+4. The Connectors page reports the last check, last delivery, result count, and
+   last error, and offers an explicit **Check now** control.
+5. A paired browser may opt into local Notification API alerts. Browser
+   permission is never requested automatically, and notification previews do
+   not contain message bodies.
+
+This is not Gmail push delivery. A future Pub/Sub implementation must preserve
+the same tenant ownership, query filtering, deduplication, audit, renewal, and
+fallback-polling guarantees before it replaces polling.
 
 After the corrected policy is deployed and the Cloud Console request is
 resubmitted, reply in Google's existing review email thread. Link directly to:

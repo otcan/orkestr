@@ -10,6 +10,7 @@ import { OpsPageComponent, ToolsView } from "./ops-page.component";
 import { RawTerminalController } from "./raw-terminal.controller";
 import { SharedAppPageComponent } from "./shared-app-page.component";
 import { ConnectorStore } from "./stores/connector.store";
+import { GmailBrowserNotificationService } from "./gmail-browser-notification.service";
 import { RuntimeStore } from "./stores/runtime.store";
 import { ThreadStore } from "./stores/thread.store";
 import { ThreadComposerComponent } from "./thread-composer.component";
@@ -79,6 +80,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   private readonly api = inject(ApiService);
   private readonly cdr = inject(ChangeDetectorRef);
   private readonly connectorStore = inject(ConnectorStore);
+  private readonly gmailBrowserNotifications = inject(GmailBrowserNotificationService);
   private readonly runtimeStore = inject(RuntimeStore);
   private readonly threadStore = inject(ThreadStore);
   private readonly popStateHandler = () => {
@@ -289,6 +291,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.normalizeLegacyRoutePath();
     this.updateDocumentTitle();
     globalThis.addEventListener?.("popstate", this.popStateHandler);
+    this.gmailBrowserNotifications.start();
     void this.refresh(true);
     if (!this.sharedAppActive() && !this.pairingRequired) {
       this.connectSummaryStream();
@@ -307,6 +310,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     }
     this.rawTerminal.dispose();
     this.sidebarResizeEnd();
+    this.gmailBrowserNotifications.stop();
     globalThis.removeEventListener?.("popstate", this.popStateHandler);
   }
 

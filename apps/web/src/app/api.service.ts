@@ -679,6 +679,15 @@ export interface GmailOAuthStartResponse {
   state?: string;
   redirectUri?: string;
   oauthAppId?: string;
+  capabilities?: string[];
+}
+
+export interface GoogleWorkspaceCapability {
+  id: string;
+  label: string;
+  summary: string;
+  scopes: string[];
+  acceptedScopes?: string[];
 }
 
 export interface GoogleWorkspaceConnection {
@@ -700,6 +709,8 @@ export interface GoogleWorkspaceAccountsResponse {
   connections: GoogleWorkspaceConnection[];
   mainConnectionId?: string;
   threadDefaultConnectionId?: string;
+  availableCapabilities?: GoogleWorkspaceCapability[];
+  privacyPolicyVersion?: string;
 }
 
 export interface OutlookOAuthStartResponse {
@@ -775,6 +786,50 @@ export interface GmailMessage {
 
 export interface GmailMessageResponse {
   message: GmailMessage;
+}
+
+export interface GmailNotificationRule {
+  id: string;
+  connector: "gmail" | string;
+  ownerUserId?: string;
+  label: string;
+  targetType: "thread" | "agent" | string;
+  target: string;
+  deliveryMode: "notification" | "prompt" | string;
+  enabled: boolean;
+  query: string;
+  sourceConfig?: {
+    query?: string;
+    maxResults?: number;
+    account?: string;
+    preview?: string;
+  };
+  intervalMs: number;
+  every: string;
+  nextRunAt?: string;
+  lastRunAt?: string;
+  lastDeliveredAt?: string;
+  deliveredCount?: number;
+  processedSourceItemCount?: number;
+  lastError?: string;
+  lastErrorAt?: string;
+  failureCount?: number;
+}
+
+export interface GmailNotificationListResponse {
+  notifications: GmailNotificationRule[];
+}
+
+export interface GmailNotificationMutationResponse {
+  notification: GmailNotificationRule;
+}
+
+export interface GmailNotificationRunResponse {
+  pushId?: string;
+  connector?: string;
+  delivered?: unknown[];
+  skipped?: unknown[];
+  failed?: unknown[];
 }
 
 export interface CodexDeviceAuthResponse {
@@ -2066,7 +2121,7 @@ export class ApiService {
     );
   }
 
-  startGmailOAuth(options: { account?: string; accountId?: string; alias?: string; useMode?: string; oauthApp?: string; setAsMain?: boolean; setAsThreadDefault?: boolean; threadId?: string } = {}): Observable<GmailOAuthStartResponse> {
+  startGmailOAuth(options: { account?: string; accountId?: string; alias?: string; useMode?: string; oauthApp?: string; setAsMain?: boolean; setAsThreadDefault?: boolean; threadId?: string; capabilities?: string[]; privacyConsent?: boolean; privacyPolicyVersion?: string } = {}): Observable<GmailOAuthStartResponse> {
     const params = new URLSearchParams();
     if (options.account?.trim()) params.set("account", options.account.trim());
     if (options.accountId?.trim()) params.set("accountId", options.accountId.trim());
@@ -2076,6 +2131,9 @@ export class ApiService {
     if (options.setAsMain === true) params.set("setAsMain", "1");
     if (options.setAsThreadDefault === true) params.set("setAsThreadDefault", "1");
     if (options.threadId?.trim()) params.set("threadId", options.threadId.trim());
+    if (options.capabilities?.length) params.set("capabilities", options.capabilities.join(","));
+    if (options.privacyConsent === true) params.set("privacyConsent", "1");
+    if (options.privacyPolicyVersion?.trim()) params.set("privacyPolicyVersion", options.privacyPolicyVersion.trim());
     const suffix = params.size ? `?${params.toString()}` : "";
     return this.http.get<GmailOAuthStartResponse>(this.api(`/connectors/gmail/oauth/start${suffix}`));
   }
@@ -2121,6 +2179,32 @@ export class ApiService {
 
   gmailMessage(id: string): Observable<GmailMessageResponse> {
     return this.http.get<GmailMessageResponse>(this.api(`/connectors/gmail/messages/${encodeURIComponent(id)}`));
+  }
+
+  gmailNotifications(): Observable<GmailNotificationListResponse> {
+    return this.http.get<GmailNotificationListResponse>(this.api("/gmail-notifications"));
+  }
+
+  createGmailNotification(body: Record<string, unknown>): Observable<GmailNotificationMutationResponse> {
+    return this.http.post<GmailNotificationMutationResponse>(this.api("/gmail-notifications"), body);
+  }
+
+  updateGmailNotification(id: string, body: Record<string, unknown>): Observable<GmailNotificationMutationResponse> {
+    return this.http.patch<GmailNotificationMutationResponse>(
+      this.api(`/gmail-notifications/${encodeURIComponent(id)}`),
+      body,
+    );
+  }
+
+  deleteGmailNotification(id: string): Observable<{ ok: boolean }> {
+    return this.http.delete<{ ok: boolean }>(this.api(`/gmail-notifications/${encodeURIComponent(id)}`));
+  }
+
+  runGmailNotification(id: string): Observable<GmailNotificationRunResponse> {
+    return this.http.post<GmailNotificationRunResponse>(
+      this.api(`/gmail-notifications/${encodeURIComponent(id)}/run`),
+      {},
+    );
   }
 
   startCodexDeviceAuth(): Observable<CodexDeviceAuthResponse> {

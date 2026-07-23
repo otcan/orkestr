@@ -1,0 +1,137 @@
+:host {
+  display: block;
+}
+
+.gmail-notifications {
+  display: grid;
+  gap: 14px;
+  margin-top: 18px;
+  padding-top: 18px;
+  border-top: 1px solid rgba(128, 210, 138, 0.18);
+}
+
+.notification-heading,
+.rule-head,
+.rule-actions {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.notification-heading > div,
+.rule-head > div,
+.notification-form label {
+  display: grid;
+  gap: 5px;
+}
+
+.notification-heading small,
+.rule-head small,
+.empty-state {
+  color: #a9bea4;
+}
+
+.notification-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.notification-form .wide,
+.notification-form button {
+  grid-column: 1 / -1;
+}
+
+.notification-form label > span {
+  color: #8cff9b;
+  font-size: 0.72rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.notification-rules {
+  display: grid;
+  gap: 12px;
+}
+
+.notification-rules article {
+  display: grid;
+  gap: 10px;
+  padding: 12px 0;
+  border-top: 1px solid rgba(128, 210, 138, 0.12);
+}
+
+.notification-rules code {
+  overflow-wrap: anywhere;
+  color: #c8d8c3;
+}
+
+.notification-rules em {
+  color: #a9bea4;
+  font-size: 0.7rem;
+  font-style: normal;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.notification-rules em.enabled {
+  color: #8cff9b;
+}
+
+.notification-rules em.failed,
+.inline-error {
+  color: #ffc8bd;
+}
+
+.notification-rules dl {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+}
+
+.notification-rules dl div {
+  min-width: 0;
+}
+
+.notification-rules dt {
+  color: #8fa78b;
+  font-size: 0.68rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.notification-rules dd {
+  margin: 3px 0 0;
+  overflow-wrap: anywhere;
+}
+
+.rule-actions {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+}
+
+.inline-error,
+.inline-notice,
+.empty-state {
+  margin: 0;
+  line-height: 1.45;
+}
+
+.inline-notice {
+  color: #aeeeff;
+}
+
+@media (max-width: 720px) {
+  .notification-heading,
+  .rule-head {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .notification-form,
+  .notification-rules dl {
+    grid-template-columns: 1fr;
+  }
+}

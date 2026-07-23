@@ -33,6 +33,7 @@ const publicRuntimeEnvKeys = [
   "ORKESTR_CONNECT_PUBLIC_URL",
   "ORKESTR_COOKIE_DOMAIN",
   "ORKESTR_AUTH_REQUIRED",
+  "ORKESTR_GOOGLE_OAUTH_ALLOWED_CAPABILITIES",
 ];
 
 function snapshotEnv(keys) {
@@ -188,6 +189,17 @@ test("server serves the public site at root and Angular UI at app routes", async
     assert.match(aboutHtml, /cannot read the user's inbox or existing email/);
     assert.match(aboutHtml, /href="\/privacy">Privacy Policy/);
     assert.doesNotMatch(aboutHtml, /<script/);
+    process.env.ORKESTR_GOOGLE_OAUTH_ALLOWED_CAPABILITIES = "gmail_send,gmail_read,gmail_drafts,calendar_read,calendar_actions";
+    const expandedHomeHtml = await (await fetch(`http://127.0.0.1:${port}/`)).text();
+    const expandedPrivacyHtml = await (await fetch(`http://127.0.0.1:${port}/privacy`)).text();
+    const expandedAboutHtml = await (await fetch(`http://127.0.0.1:${port}/about`)).text();
+    assert.match(expandedHomeHtml, /read selected Gmail signals/);
+    assert.match(expandedPrivacyHtml, /gmail\.readonly/);
+    assert.match(expandedPrivacyHtml, /calendar\.events\.owned/);
+    assert.match(expandedPrivacyHtml, /Notification rules default to bounded message metadata and snippets/);
+    assert.doesNotMatch(expandedPrivacyHtml, /cannot and does not read the user's inbox/);
+    assert.match(expandedAboutHtml, /prepare or send email/);
+    delete process.env.ORKESTR_GOOGLE_OAUTH_ALLOWED_CAPABILITIES;
     assert.equal(acceptableUseResponse.status, 200);
     assert.equal(dataDeletionResponse.status, 200);
     assert.equal(supportResponse.status, 200);
@@ -430,7 +442,8 @@ test("google workspace brokered connect links require instance and owner scoped 
     assert.match(pairedHtml, /orkestr_auth/);
     assert.match(pairedHtml, /google_workspace/);
     assert.match(pairedHtml, /name="privacy_consent"/);
-    assert.match(pairedHtml, /Gmail send access only/);
+    assert.match(pairedHtml, /Selected permission:<\/strong> Gmail send/);
+    assert.match(pairedHtml, /cannot read your inbox or existing email/);
     assert.doesNotMatch(pairedHtml, /value="gmail_read"/);
 
     const unconsentedResponse = await fetch(`http://127.0.0.1:${port}${startPath}`, {
@@ -1753,33 +1766,29 @@ test("web shell exposes a user connector management page", async () => {
   assert.match(template, /<ork-user-connectors-page><\/ork-user-connectors-page>/);
   assert.match(template, /\(click\)="openPanel\('userConnectors'\)"/);
   assert.match(connectorsComponent, /selector: "ork-user-connectors-page"/);
-  assert.match(connectorsComponent, /imports: \[FormsModule\]/);
-  assert.match(connectorsComponent, /private autoStartedRoute = ""/);
+  assert.match(connectorsComponent, /imports: \[FormsModule, GmailNotificationsPanelComponent, GoogleWorkspaceAccessPanelComponent\]/);
+  assert.match(connectorsComponent, /import \{ GoogleWorkspaceAccessPanelComponent \}/);
+  assert.match(connectorsComponent, /import \{ GmailNotificationsPanelComponent \}/);
   assert.match(connectorsComponent, /this\.api\.setupStatus\(\)/);
   assert.match(connectorsComponent, /this\.api\.currentUser\(\)/);
+  assert.match(connectorsComponent, /this\.api\.googleWorkspaceAccounts\(this\.connectorIntentThreadId\(\)\)/);
   assert.match(connectorsComponent, /Promise\.allSettled/);
   assert.match(connectorsComponent, /if \(!this\.setupStatus\) return \[\]/);
   assert.match(connectorsComponent, /scheduleRetryIfNeeded\(\): void/);
-  assert.match(connectorsComponent, /maybeAutoStartRouteLogin\(\): void/);
-  assert.match(connectorsComponent, /if \(!this\.setupStatus\) return/);
-  assert.match(connectorsComponent, /startGmail\(options: \{ autoRedirect\?: boolean; addAccount\?: boolean \} = \{\}\)/);
+  assert.doesNotMatch(connectorsComponent, /maybeAutoStartRouteLogin/);
+  assert.doesNotMatch(connectorsComponent, /startGmail\(/);
   assert.match(connectorsComponent, /googleWorkspaceAccounts/);
   assert.match(connectorsComponent, /makeGoogleAccountMain/);
   assert.match(connectorsComponent, /makeGoogleAccountThreadDefault/);
   assert.match(connectorsComponent, /updateGoogleAccountMode/);
-  assert.match(connectorsComponent, /reconnectGoogleAccount/);
   assert.match(connectorsComponent, /deleteGoogleAccount/);
-  assert.match(connectorsTemplate, /Add Google account/);
+  assert.match(connectorsTemplate, /<ork-google-workspace-access-panel/);
+  assert.match(connectorsTemplate, /<ork-gmail-notifications-panel/);
   assert.match(connectorsTemplate, /Only when requested/);
   assert.match(connectorsTemplate, /Use in this thread/);
-  assert.match(connectorsComponent, /disconnectGmail\(\): Promise<void>/);
   assert.match(connectorsComponent, /connectorConnected\(connector: ConnectorStatus\): boolean/);
-  assert.match(connectorsComponent, /connectorNeedsReconnect\(connector: ConnectorStatus\): boolean/);
   assert.match(connectorsComponent, /connectedAccount\(connector: ConnectorStatus\): string/);
   assert.match(connectorsComponent, /connectedCapabilityLabels\(connector: ConnectorStatus\): string\[\]/);
-  assert.match(connectorsComponent, /globalThis\.location\.href = this\.gmailAuth\.authorizeUrl/);
-  assert.match(connectorsComponent, /this\.connectorStatus\("gmail"\)\.state/);
-  assert.match(connectorsComponent, /\["connected", "degraded"\]\.includes/);
   assert.match(connectorsComponent, /connectorIntentActive\(\): boolean/);
   assert.match(connectorsComponent, /connectorIntentMethod\(\): string/);
   assert.match(connectorsComponent, /connectorIntentTool\(\): string/);
@@ -1791,8 +1800,6 @@ test("web shell exposes a user connector management page", async () => {
   assert.match(connectorsComponent, /connectorIntentThreadLabel\(\): string/);
   assert.match(connectorsComponent, /routeQueryParam\(name: string\): string/);
   assert.match(connectorsComponent, /void this\.load\(false\)/);
-  assert.match(connectorsComponent, /useMode: "explicit_only"/);
-  assert.match(connectorsComponent, /this\.api\.disconnectGmailAuth\(\)/);
   assert.match(connectorsComponent, /this\.api\.startOutlookOAuth\(this\.outlookAccount\)/);
   assert.match(connectorsComponent, /private readonly connectorOrder = \["whatsapp", "gmail", "outlook", "jira", "shopify", "linkedin", "browsers"\]/);
   assert.match(connectorsComponent, /private appBasePath\(\): string/);
@@ -1810,18 +1817,14 @@ test("web shell exposes a user connector management page", async () => {
   assert.match(connectorsTemplate, /Action/);
   assert.match(connectorsTemplate, /User/);
   assert.match(connectorsTemplate, /Thread/);
-  assert.match(connectorsTemplate, /connector\.id === "gmail" && !connectorConnected\(connector\)/);
   assert.match(connectorsTemplate, /connectorIntentTargetInstanceId\(\)/);
   assert.match(connectorsTemplate, /loginOnly\(\) \? "Secure sign-in" : "Connectors"/);
   assert.match(connectorsTemplate, /Google account/);
   assert.match(connectorsTemplate, /connectedAccount\(connector\)/);
-  assert.match(connectorsTemplate, /Add Google account/);
   assert.match(connectorsTemplate, /deleteGoogleAccount/);
   assert.match(connectorsTemplate, /class="connector-details"/);
   assert.doesNotMatch(connectorsTemplate, /name="user-gmail-account"/);
-  assert.match(connectorsTemplate, /Reconnect Gmail/);
   assert.match(connectorsTemplate, /name="user-outlook-account"/);
-  assert.match(connectorsTemplate, /Open Gmail sign-in/);
   assert.match(connectorsTemplate, /Open Microsoft sign-in/);
   assert.match(connectorsTemplate, /\[href\]="deskPath\(\)"/);
   assert.match(api, /startGmailOAuth\(options: \{/);
@@ -1835,6 +1838,36 @@ test("web shell exposes a user connector management page", async () => {
   assert.match(styles, /\.connector-details/);
   assert.match(styles, /\.connector-action/);
   assert.match(styles, /\.connector-device-code/);
+});
+
+test("Google Workspace connector UI requires reviewed access and exposes bounded Gmail watchers", async () => {
+  const accessComponent = await fs.readFile("apps/web/src/app/google-workspace-access-panel.component.ts", "utf8");
+  const accessTemplate = await fs.readFile("apps/web/src/app/google-workspace-access-panel.component.html", "utf8");
+  const notificationsComponent = await fs.readFile("apps/web/src/app/gmail-notifications-panel.component.ts", "utf8");
+  const notificationsTemplate = await fs.readFile("apps/web/src/app/gmail-notifications-panel.component.html", "utf8");
+  const browserService = await fs.readFile("apps/web/src/app/gmail-browser-notification.service.ts", "utf8");
+
+  assert.match(accessComponent, /selectedCapabilities: string\[\] = \[\]/);
+  assert.match(accessComponent, /this\.consent &&/);
+  assert.match(accessComponent, /privacyConsent: true/);
+  assert.match(accessComponent, /privacyPolicyVersion: this\.privacyPolicyVersion/);
+  assert.match(accessComponent, /if \(ids\.includes\("gmail_send"\)\) return \["gmail_send"\]/);
+  assert.match(accessTemplate, /Choose the account and only the permissions Orkestr should request/);
+  assert.match(accessTemplate, /Review the Google data disclosure/);
+  assert.doesNotMatch(accessComponent, /ngOnInit/);
+
+  assert.match(notificationsComponent, /query = "is:unread newer_than:1d"/);
+  assert.match(notificationsComponent, /deliveryMode: "notification"/);
+  assert.match(notificationsComponent, /maxItemsPerRun: 3/);
+  assert.match(notificationsComponent, /this\.browserNotifications\.sync\(this\.rules\)/);
+  assert.match(notificationsTemplate, /Create watcher/);
+  assert.match(notificationsTemplate, /Check now/);
+  assert.match(notificationsTemplate, /Pause/);
+  assert.match(notificationsTemplate, /Delete/);
+  assert.match(browserService, /globalThis\.Notification\.requestPermission\(\)/);
+  assert.match(browserService, /orkestr:gmail-browser-notifications:v1/);
+  assert.match(browserService, /rule\.lastDeliveredAt/);
+  assert.doesNotMatch(browserService, /message body/i);
 });
 
 test("web shell keeps user skills chat and API only", async () => {

@@ -9,6 +9,7 @@ const actionRegistry = [
   { provider: "gmail", verb: "run", object: "notification", handler: "orkestr_run_automation", approval: "none", options: ["automationId", "notificationId"] },
   { provider: "gmail", verb: "delete", object: "notification", handler: "orkestr_delete_automation", approval: "confirm", options: ["automationId", "notificationId"] },
   { provider: "gmail", verb: "create", object: "draft", handler: "orkestr_create_gmail_draft", approval: "confirm", options: ["to", "cc", "bcc", "subject", "body"] },
+  { provider: "gmail", verb: "send", object: "draft", handler: "orkestr_send_gmail_draft", approval: "explicit", options: ["draftId"] },
   { provider: "gmail", verb: "send", object: "message", handler: "orkestr_send_gmail_message", approval: "explicit", options: ["to", "cc", "bcc", "subject", "body"] },
   { provider: "gmail", verb: "modify", object: "message", handler: "orkestr_modify_gmail_message", approval: "confirm", options: ["messageId", "action", "labelIds", "addLabelIds", "removeLabelIds"] },
   { provider: "outlook", verb: "search", object: "message", handler: "orkestr_search_skills", approval: "none", options: ["query", "maxResults"], status: "planned" },

@@ -897,6 +897,25 @@ test("tenant CLI setup status uses instance connector scope", async () => {
     await assert.rejects(fs.stat(path.join(firatPaths.oauth, "gmail-state.json")));
     assert.equal(globalOauthState.userId, "");
     assert.notEqual(globalOauthState.state, "stale-global-oauth-state");
+
+    const accounts = await json(await fetch(`http://127.0.0.1:${port}/api/connectors/gmail/accounts`, {
+      headers: { authorization: "Bearer cli-secret" },
+    }));
+    assert.deepEqual(accounts.availableCapabilities.map((capability) => capability.id), ["gmail_send"]);
+    assert.equal(accounts.privacyPolicyVersion, "2026-07-23.2");
+
+    const missingConsent = await fetch(
+      `http://127.0.0.1:${port}/api/connectors/gmail/oauth/start?capabilities=gmail_send`,
+      { headers: { authorization: "Bearer cli-secret" } },
+    );
+    assert.equal(missingConsent.status, 400);
+
+    const consented = await json(await fetch(
+      `http://127.0.0.1:${port}/api/connectors/gmail/oauth/start?capabilities=gmail_send&privacyConsent=1&privacyPolicyVersion=2026-07-23.2`,
+      { headers: { authorization: "Bearer cli-secret" } },
+    ));
+    assert.deepEqual(consented.capabilities, ["gmail_send"]);
+    assert.match(consented.authorizeUrl, /^https:\/\/accounts\.google\.com\//);
   } finally {
     globalThis.fetch = priorFetch;
     if (server) {

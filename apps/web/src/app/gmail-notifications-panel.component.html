@@ -1,0 +1,95 @@
+<section class="gmail-notifications" aria-labelledby="gmail-notifications-heading">
+  <div class="notification-heading">
+    <div>
+      <strong id="gmail-notifications-heading">Gmail signals</strong>
+      <small>Watch a bounded Gmail query and deliver each new match once.</small>
+    </div>
+    <button
+      class="secondary"
+      type="button"
+      (click)="enableBrowserNotifications()"
+      [disabled]="busy === 'browser' || browserNotifications.permission() === 'granted' || browserNotifications.permission() === 'unsupported'"
+    >
+      {{ browserPermissionLabel() }}
+    </button>
+  </div>
+
+  @if (error) {
+    <p class="inline-error">{{ error }}</p>
+  } @else if (notice) {
+    <p class="inline-notice">{{ notice }}</p>
+  }
+
+  @if (accounts.length && threads.length) {
+    <form class="notification-form" (submit)="create(); $event.preventDefault()">
+      <label>
+        <span>Google account</span>
+        <select name="gmail-notification-account" [(ngModel)]="account" required>
+          <option value="" disabled>Select an account with Gmail read access</option>
+          @for (connection of accounts; track connection.connectionId) {
+            @if ((connection.capabilities || []).includes("gmail_read")) {
+              <option [value]="connection.email">{{ accountLabel(connection) }}</option>
+            }
+          }
+        </select>
+      </label>
+      <label>
+        <span>Deliver to thread</span>
+        <select name="gmail-notification-target" [(ngModel)]="target" required>
+          @for (thread of threads; track thread.id) {
+            <option [value]="thread.id">{{ threadLabel(thread) }}</option>
+          }
+        </select>
+      </label>
+      <label class="wide">
+        <span>Gmail query</span>
+        <input name="gmail-notification-query" [(ngModel)]="query" required />
+      </label>
+      <label>
+        <span>Check every</span>
+        <select name="gmail-notification-every" [(ngModel)]="every">
+          <option value="5m">5 minutes</option>
+          <option value="15m">15 minutes</option>
+          <option value="30m">30 minutes</option>
+          <option value="1h">1 hour</option>
+        </select>
+      </label>
+      <label>
+        <span>Rule name</span>
+        <input name="gmail-notification-label" [(ngModel)]="label" maxlength="80" />
+      </label>
+      <button type="submit" [disabled]="!!busy || !account || !target || !query.trim()">Create watcher</button>
+    </form>
+  } @else if (!busy) {
+    <p class="empty-state">Connect an account with Gmail read access and create a thread before adding a watcher.</p>
+  }
+
+  <div class="notification-rules">
+    @for (rule of rules; track rule.id) {
+      <article>
+        <div class="rule-head">
+          <div>
+            <strong>{{ rule.label }}</strong>
+            <small>{{ rule.sourceConfig?.account || "Default Google account" }} · {{ rule.every }}</small>
+          </div>
+          <em [class.enabled]="rule.enabled" [class.failed]="rule.lastError">{{ rule.lastError ? "error" : rule.enabled ? "watching" : "paused" }}</em>
+        </div>
+        <code>{{ rule.query }}</code>
+        <dl>
+          <div><dt>Destination</dt><dd>{{ rule.target }}</dd></div>
+          <div><dt>Last check</dt><dd>{{ dateLabel(rule.lastRunAt) }}</dd></div>
+          <div><dt>Last delivery</dt><dd>{{ dateLabel(rule.lastDeliveredAt) }}</dd></div>
+          <div><dt>Delivered</dt><dd>{{ rule.deliveredCount || 0 }}</dd></div>
+        </dl>
+        @if (rule.lastError) {
+          <p class="inline-error">{{ rule.lastError }}</p>
+        }
+        <div class="rule-actions">
+          <button class="secondary" type="button" (click)="run(rule)" [disabled]="!!busy">Check now</button>
+          <button class="secondary" type="button" (click)="toggle(rule)" [disabled]="!!busy">{{ rule.enabled ? "Pause" : "Enable" }}</button>
+          <button class="secondary danger-soft" type="button" (click)="remove(rule)" [disabled]="!!busy">Delete</button>
+        </div>
+      </article>
+    }
+  </div>
+</section>

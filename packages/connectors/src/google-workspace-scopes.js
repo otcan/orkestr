@@ -34,12 +34,17 @@ const capabilityDefinitions = [
     label: "Calendar read",
     summary: "List Google Calendar events for approved date ranges.",
     scopes: ["https://www.googleapis.com/auth/calendar.events.readonly"],
+    acceptedScopes: [
+      "https://www.googleapis.com/auth/calendar.events.owned",
+      "https://www.googleapis.com/auth/calendar.events",
+    ],
   },
   {
     id: "calendar_actions",
     label: "Calendar actions",
-    summary: "Create, update, and delete user-approved Google Calendar events.",
-    scopes: ["https://www.googleapis.com/auth/calendar.events"],
+    summary: "Create, update, and delete user-approved events on calendars you own.",
+    scopes: ["https://www.googleapis.com/auth/calendar.events.owned"],
+    acceptedScopes: ["https://www.googleapis.com/auth/calendar.events"],
   },
   {
     id: "drive_file",
@@ -75,6 +80,7 @@ export function googleWorkspaceCapabilityDefinitions() {
   return capabilityDefinitions.map((definition) => ({
     ...definition,
     scopes: [...definition.scopes],
+    acceptedScopes: [...(definition.acceptedScopes || [])],
   }));
 }
 
@@ -122,9 +128,12 @@ export function normalizeGoogleWorkspaceCapabilities(input = [], fallback = defa
 
 export function googleWorkspaceScopesForCapabilities(input = []) {
   const capabilities = normalizeGoogleWorkspaceCapabilities(input);
+  const effectiveCapabilities = capabilities.includes("calendar_actions")
+    ? capabilities.filter((capability) => capability !== "calendar_read")
+    : capabilities;
   return unique([
     ...baseScopes,
-    ...capabilities.flatMap((capability) => definitionById.get(capability)?.scopes || []),
+    ...effectiveCapabilities.flatMap((capability) => definitionById.get(capability)?.scopes || []),
   ]);
 }
 
@@ -135,7 +144,8 @@ export function googleWorkspaceCapabilitiesForScopes(scopeValue = "", fallback =
   const scopes = new Set(values);
   const capabilities = [];
   for (const definition of capabilityDefinitions) {
-    if (definition.scopes.some((scope) => scopes.has(scope))) capabilities.push(definition.id);
+    const acceptedScopes = [...definition.scopes, ...(definition.acceptedScopes || [])];
+    if (acceptedScopes.some((scope) => scopes.has(scope))) capabilities.push(definition.id);
   }
   return capabilities.length ? capabilities : (values.length ? [] : [...fallback]);
 }

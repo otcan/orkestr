@@ -1572,6 +1572,18 @@ test("tenant api-agent exposes provider verb object action registry", async () =
 
   assert.equal(gmail.ok, true);
   assert.equal(gmail.actions.some((action) => action.provider === "gmail" && action.verb === "read" && action.object === "message"), true);
+  assert.deepEqual(
+    gmail.actions.find((action) => action.actionKey === "gmail.send.draft"),
+    {
+      actionKey: "gmail.send.draft",
+      provider: "gmail",
+      verb: "send",
+      object: "draft",
+      approval: "explicit",
+      status: "available",
+      options: ["draftId"],
+    },
+  );
   assert.equal(gmail.actions.some((action) => action.provider === "calendar"), false);
   assert.equal(timers.actions.length, 1);
   assert.equal(timers.actions[0].actionKey, "timer.create.timer");

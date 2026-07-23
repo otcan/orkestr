@@ -1,4 +1,8 @@
 import { googleWorkspacePrivacyPolicyVersion } from "../../../packages/connectors/src/google-workspace-privacy.js";
+import {
+  googleWorkspaceAllowedCapabilities,
+  googleWorkspaceCapabilityDefinitions,
+} from "../../../packages/connectors/src/google-workspace-scopes.js";
 
 type PrivacyPage = {
   title: string;
@@ -38,6 +42,43 @@ function contactHtml(contact = "") {
 export function publicPrivacyPage(env = process.env): PrivacyPage {
   const operator = operatorDetails(env);
   const operatorAddress = operator.address ? `, ${escapeHtml(operator.address)}` : "";
+  const allowedCapabilities = googleWorkspaceAllowedCapabilities(env);
+  const allowed = new Set(allowedCapabilities);
+  const expandedGoogleAccess = allowedCapabilities.some((capability) => capability !== "gmail_send");
+  const capabilityDefinitions = googleWorkspaceCapabilityDefinitions()
+    .filter((definition) => allowed.has(definition.id));
+  const scopeHtml = [
+    "<code>openid</code>",
+    "<code>userinfo.email</code>",
+    "<code>userinfo.profile</code>",
+    ...capabilityDefinitions.flatMap((definition) => definition.scopes.map((scope) => `<code>${escapeHtml(scope)}</code>`)),
+  ].join(", ");
+  const googleAccessItems = [
+    "<li><strong>Google identity:</strong> account identifier, email address, name, and available profile information used to identify the connected account.</li>",
+    "<li><strong>Authorization data:</strong> granted scopes, access token, refresh token when issued, token type, expiration time, and connection status.</li>",
+    ...(allowed.has("gmail_send")
+      ? ["<li><strong>User-approved outgoing email:</strong> sender account, recipients, subject, body, and attachments that the user requests or approves for sending.</li>"]
+      : []),
+    ...(allowed.has("gmail_drafts")
+      ? ["<li><strong>Gmail drafts:</strong> recipients, subject, body, attachments, draft identifiers, and delivery status for drafts the user asks Orkestr to create or send.</li>"]
+      : []),
+    ...(allowed.has("gmail_read") || allowed.has("gmail_actions")
+      ? ["<li><strong>Selected Gmail content:</strong> message identifiers, sender and recipient headers, subject, date, labels, snippets, and message content retrieved for a user-requested search, read, summary, action, or notification rule.</li>"]
+      : []),
+    ...(allowed.has("calendar_read") || allowed.has("calendar_actions")
+      ? ["<li><strong>Selected Calendar data:</strong> calendar identifiers and event titles, descriptions, locations, attendees, start and end times, recurrence, status, and links needed for user-requested event listing or management.</li>"]
+      : []),
+    "<li><strong>Operation metadata:</strong> identifiers and status returned by Google after a requested operation.</li>",
+  ].join("");
+  const googleUseDescription = expandedGoogleAccess
+    ? "Orkestr uses Google identity data to display and manage the connected account, authorization data to maintain the connection, selected Gmail data to perform user-requested draft, read, notification, or message workflows, selected Calendar data to list or manage events, and operation metadata to report results. Orkestr uses only capabilities the user selects and Google grants."
+    : "Orkestr uses Google identity data to display and manage the connected account, authorization data to maintain the connection, outgoing-email content to perform a send explicitly requested or approved by the user, and delivery metadata to report the result.";
+  const aiProviderDisclosure = expandedGoogleAccess
+    ? "a provider such as OpenAI may process prompts and the specific Gmail or Calendar content retrieved or prepared for a user-requested workflow. Notification rules default to bounded message metadata and snippets; full message content is retrieved only when the user asks for it. Google OAuth access and refresh tokens are never disclosed to an AI provider."
+    : "a provider such as OpenAI may process prompts and email content supplied or approved by the user when the user asks the agent to prepare or perform that workflow. Google OAuth access and refresh tokens are never disclosed to an AI provider. The current integration does not retrieve existing Gmail content for AI processing.";
+  const storageDescription = expandedGoogleAccess
+    ? "Google content used in a requested workflow may remain in the user's Orkestr chat, draft, notification, or task history when it is part of the user-visible result. Orkestr does not maintain a separate complete copy of the user's Gmail mailbox or Calendar. Notification state stores bounded rule configuration, message identifiers used for deduplication, run status, and selected previews."
+    : "Outgoing-email content may remain in the user's Orkestr chat or task history when it forms part of the user-visible workflow. It is not maintained as a separate copy of the user's Gmail mailbox.";
   return {
     title: "Privacy",
     heading: "Privacy",
@@ -61,18 +102,19 @@ export function publicPrivacyPage(env = process.env): PrivacyPage {
     </article>
     <article id="google-data-access">
       <h2>3. Google user data Orkestr accesses</h2>
-      <p>The current public Google integration requests only basic Google identity permissions and Gmail send access: <code>openid</code>, <code>userinfo.email</code>, <code>userinfo.profile</code>, and <code>gmail.send</code>.</p>
+      <p>${expandedGoogleAccess
+        ? `The public Google integration can request only the capabilities enabled for the deployment and selected by the user. The currently enabled scopes are: ${scopeHtml}.`
+        : `The current public Google integration requests only basic Google identity permissions and Gmail send access: ${scopeHtml}.`}</p>
       <ul>
-        <li><strong>Google identity:</strong> account identifier, email address, name, and available profile information used to identify the connected account.</li>
-        <li><strong>Authorization data:</strong> granted scopes, access token, refresh token when issued, token type, expiration time, and connection status.</li>
-        <li><strong>User-approved outgoing email:</strong> sender account, recipients, subject, body, and attachments that the user requests or approves for sending.</li>
-        <li><strong>Delivery metadata:</strong> identifiers and status returned by Gmail after the requested send operation.</li>
+        ${googleAccessItems}
       </ul>
-      <p><strong>Orkestr's current public Gmail integration cannot and does not read the user's inbox, existing messages, drafts, labels, contacts, mailbox settings, or email history.</strong> If Orkestr introduces a capability requiring additional Google scopes, it will update this policy and the in-product disclosure and obtain new consent before requesting that access.</p>
+      <p><strong>${expandedGoogleAccess
+        ? "Orkestr accesses only the Google capabilities the user selects and Google grants. It does not retrieve contacts, mailbox settings, or a complete mailbox or Calendar export."
+        : "Orkestr's current public Gmail integration cannot and does not read the user's inbox, existing messages, drafts, labels, contacts, mailbox settings, or email history."}</strong> If Orkestr introduces a capability requiring additional Google scopes, it will update this policy and the in-product disclosure and obtain new consent before requesting that access.</p>
     </article>
     <article id="google-data-use">
       <h2>4. How Orkestr uses Google user data</h2>
-      <p>Orkestr uses Google identity data to display and manage the connected account, authorization data to maintain the connection, outgoing-email content to perform a send explicitly requested or approved by the user, and delivery metadata to report the result. Google user data is not used for unrelated purposes.</p>
+      <p>${googleUseDescription} Google user data is not used for unrelated purposes.</p>
     </article>
     <article id="google-data-sharing">
       <h2>5. Sharing and disclosure of Google user data</h2>
@@ -80,7 +122,7 @@ export function publicPrivacyPage(env = process.env): PrivacyPage {
       <p>Data is disclosed only in these limited circumstances:</p>
       <ul>
         <li><strong>Google:</strong> Orkestr sends the user-approved email and credentials required to authenticate the request to Google's OAuth and Gmail services.</li>
-        <li><strong>Configured AI provider:</strong> a provider such as OpenAI may process prompts and email content supplied or approved by the user when the user asks the agent to prepare or perform that workflow. Google OAuth access and refresh tokens are never disclosed to an AI provider. The current integration does not retrieve existing Gmail content for AI processing.</li>
+        <li><strong>Configured AI provider:</strong> ${aiProviderDisclosure}</li>
         <li><strong>User-selected communication provider:</strong> when the user works through WhatsApp, Meta's WhatsApp service carries the user's instructions and Orkestr's status or result messages.</li>
         <li><strong>Infrastructure and security providers:</strong> hosting, storage, networking, monitoring, and security processors may handle encrypted or operational data only as needed to operate and protect the service.</li>
         <li><strong>Support, security, and law:</strong> authorized human access or disclosure may occur only with the user's explicit support request, to investigate abuse or a security incident, or where required by applicable law.</li>
@@ -90,7 +132,7 @@ export function publicPrivacyPage(env = process.env): PrivacyPage {
     <article id="google-data-storage">
       <h2>6. Storage and retention</h2>
       <p>Google OAuth credentials are stored in the connected user's isolated connector storage and retained until the user disconnects the account, the grant is revoked, the account is deleted, or the credentials expire and are no longer needed. A disconnect requests revocation from Google before deleting the local credential record.</p>
-      <p>Outgoing-email content may remain in the user's Orkestr chat or task history when it forms part of the user-visible workflow. It is not maintained as a separate copy of the user's Gmail mailbox. Connection requests are one-time and expire. Encrypted credential records may remain temporarily in protected operational backups until those backups rotate.</p>
+      <p>${storageDescription} Connection requests are one-time and expire. Encrypted credential records may remain temporarily in protected operational backups until those backups rotate.</p>
     </article>
     <article id="google-data-protection">
       <h2>7. Data protection mechanisms</h2>

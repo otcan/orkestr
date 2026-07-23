@@ -1,0 +1,109 @@
+:host {
+  display: block;
+}
+
+.workspace-access {
+  display: grid;
+  gap: 14px;
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid rgba(128, 210, 138, 0.18);
+}
+
+.workspace-access-head,
+.workspace-access-head div,
+.workspace-access label,
+.capability-option span {
+  display: grid;
+  gap: 5px;
+}
+
+.workspace-access small,
+.access-note,
+.consent-row {
+  color: #a9bea4;
+  line-height: 1.45;
+}
+
+.workspace-access label > span,
+.workspace-access legend {
+  color: #8cff9b;
+  font-size: 0.72rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.workspace-access select {
+  width: 100%;
+}
+
+.workspace-access fieldset {
+  border: 0;
+  margin: 0;
+  padding: 0;
+}
+
+.capability-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.capability-option {
+  grid-template-columns: 20px minmax(0, 1fr);
+  align-items: start;
+  padding: 9px 0;
+  border-bottom: 1px solid rgba(128, 210, 138, 0.12);
+}
+
+.capability-option input,
+.consent-row input {
+  margin-top: 3px;
+}
+
+.capability-option span strong {
+  color: #e5f4df;
+}
+
+.capability-option span small {
+  text-transform: none;
+}
+
+.capability-option em {
+  justify-self: start;
+  color: #aeeeff;
+  font-size: 0.68rem;
+  font-style: normal;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.capability-option em.restricted {
+  color: #ffd796;
+}
+
+.consent-row {
+  grid-template-columns: 20px minmax(0, 1fr) !important;
+  align-items: start;
+}
+
+.consent-row > span {
+  color: #c8d8c3 !important;
+  font-size: 0.82rem !important;
+  font-weight: 700 !important;
+  text-transform: none !important;
+}
+
+.consent-row a {
+  color: #8cff9b;
+}
+
+.inline-error {
+  margin: 0;
+  color: #ffc8bd;
+}
+
+.access-note {
+  margin: 0;
+  font-size: 0.78rem;
+}

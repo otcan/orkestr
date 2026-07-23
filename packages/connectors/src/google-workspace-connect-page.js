@@ -28,6 +28,54 @@ function capabilityRisk(id = "") {
   return "Limited";
 }
 
+function selectedCapabilityDefinitions(selectedCapabilities = [], allowedCapabilities = []) {
+  const selected = new Set(normalizeGoogleWorkspaceCapabilities(selectedCapabilities, googleWorkspaceDefaultGmailCapabilities()));
+  const allowed = new Set(allowedCapabilities);
+  return googleWorkspaceCapabilityDefinitions()
+    .filter((definition) => selected.has(definition.id) && allowed.has(definition.id));
+}
+
+function googleAccessNotice(selectedCapabilities = [], allowedCapabilities = []) {
+  const selected = selectedCapabilityDefinitions(selectedCapabilities, allowedCapabilities);
+  if (selected.length === 1 && selected[0].id === "gmail_send") {
+    return "<strong>Selected permission:</strong> Gmail send. Orkestr can send an email only after you request or approve it. This permission cannot read your inbox or existing email.";
+  }
+  if (!selected.length) {
+    return "<strong>Select access:</strong> Choose only the Google Workspace capabilities you want Orkestr to use.";
+  }
+  const labels = selected.map((definition) => escapeHtml(definition.label)).join(", ");
+  return `<strong>Selected permissions:</strong> ${labels}. Orkestr will use only the capabilities you select and Google grants.`;
+}
+
+function googleDataUseDisclosure(selectedCapabilities = [], allowedCapabilities = []) {
+  const selected = new Set(selectedCapabilityDefinitions(selectedCapabilities, allowedCapabilities).map((definition) => definition.id));
+  const lines = [
+    "Orkestr receives your basic Google account identity, OAuth grant, and encrypted access credentials.",
+  ];
+  if (selected.has("gmail_send")) {
+    lines.push("For Gmail send, it processes the recipients, subject, body, and attachments you request or approve.");
+  }
+  if (selected.has("gmail_drafts")) {
+    lines.push("For Gmail drafts, it processes draft recipients, subject, body, attachments, and Gmail draft identifiers that you ask it to create or send.");
+  }
+  if (selected.has("gmail_read")) {
+    lines.push("For Gmail read, it can search message metadata and retrieve message content when you ask it to read or summarize email.");
+  }
+  if (selected.has("gmail_actions")) {
+    lines.push("For Gmail actions, it can change labels, archive messages, and mark messages read or unread when you request those changes.");
+  }
+  if (selected.has("calendar_read")) {
+    lines.push("For Calendar read, it can retrieve event details for date ranges you request.");
+  }
+  if (selected.has("calendar_actions")) {
+    lines.push("For Calendar actions, it can create, update, or delete events on calendars you own after you approve the effective event details.");
+  }
+  if (selected.has("drive_file")) {
+    lines.push("For Drive selected files, it can access only files selected or created through Orkestr.");
+  }
+  return lines.map((line) => `<p>${escapeHtml(line)}</p>`).join("");
+}
+
 function capabilityControls(
   selectedCapabilities = googleWorkspaceDefaultGmailCapabilities(),
   allowedCapabilities = googleWorkspaceDefaultGmailCapabilities(),
@@ -85,12 +133,12 @@ export function googleWorkspaceConnectHtml({
         <input type="hidden" name="privacy_policy_version" value="${googleWorkspacePrivacyPolicyVersion}">
         <fieldset>
           <legend>Google access</legend>
-          <p class="notice"><strong>Current permission:</strong> Orkestr requests Gmail send access only. It can send an email on your behalf after you request or approve it. This permission cannot read your inbox or existing email.</p>
+          <p class="notice">${googleAccessNotice(selectedCapabilities, allowed)}</p>
           <div class="capabilities">${capabilityControls(selectedCapabilities, allowed)}</div>
         </fieldset>
         <section class="disclosure" aria-labelledby="data-use-title">
           <h2 id="data-use-title">How your Google data is handled</h2>
-          <p>Orkestr receives your basic Google account identity, OAuth grant, and encrypted access credentials. For Gmail send, it processes the recipients, subject, body, and attachments you request or approve and submits them to Google.</p>
+          ${googleDataUseDisclosure(selectedCapabilities, allowed)}
           <p>Credentials are encrypted at rest and are never sent to an AI provider. Orkestr does not sell Google user data, use it for advertising, or use it to train generalized AI models. Service providers receive data only as needed to deliver your requested workflow, operate the service securely, or comply with law.</p>
           <p>You can disconnect Google at any time to revoke Orkestr's access and delete the stored credentials. Read the <a href="/privacy#google-data-access">Google data disclosure</a>, <a href="/privacy#google-data-sharing">sharing disclosure</a>, and <a href="/privacy#google-data-protection">protection disclosure</a>.</p>
         </section>
