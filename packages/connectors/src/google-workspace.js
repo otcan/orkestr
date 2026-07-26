@@ -19,6 +19,10 @@ import {
   normalizeGoogleWorkspaceCapabilities,
   requireAllowedGoogleWorkspaceCapabilities,
 } from "./google-workspace-scopes.js";
+import {
+  createGoogleWorkspaceReviewAccessTicket,
+  googleWorkspaceReviewAccessTtlMs,
+} from "./google-workspace-review-access.js";
 
 export { googleWorkspaceConnectHtml } from "./google-workspace-connect-page.js";
 export { googleWorkspacePrivacyPolicyVersion } from "./google-workspace-privacy.js";
@@ -298,7 +302,11 @@ export async function createGoogleWorkspaceConnectLink({
   useMode = "",
   setAsMain = false,
   setAsThreadDefault = false,
+  reviewAccess = false,
 } = {}, env = process.env) {
+  if (reviewAccess === true && brokeredGoogleWorkspaceConnectEnabled(env)) {
+    throw connectorError("google_workspace_review_access_requires_isolated_instance", 409);
+  }
   if (brokeredGoogleWorkspaceConnectEnabled(env)) {
     return createBrokeredGoogleWorkspaceConnectLink({
       principal,
@@ -326,7 +334,13 @@ export async function createGoogleWorkspaceConnectLink({
   if (brokerContextProvided && brokerServerRequest !== true) {
     throw connectorError("broker_google_workspace_connect_requires_parent_broker", 409);
   }
+  if (reviewAccess === true && brokerContextProvided) {
+    throw connectorError("google_workspace_review_access_requires_isolated_instance", 409);
+  }
   const scope = await connectorScopePaths(env, { principal });
+  if (reviewAccess === true && !clean(scope.userId)) {
+    throw connectorError("google_workspace_review_access_requires_user", 400);
+  }
   const connectId = randomUUID();
   const threadBinding = thread.binding && typeof thread.binding === "object" ? thread.binding : {};
   const request = {
@@ -343,7 +357,7 @@ export async function createGoogleWorkspaceConnectLink({
     connectionUseMode: clean(useMode),
     setAsMain: setAsMain === true,
     setAsThreadDefault: setAsThreadDefault === true,
-    source: "whatsapp",
+    source: reviewAccess === true ? "oauth_reviewer" : "whatsapp",
     brokerInstanceId: clean(brokerInstanceId),
     brokerTenantVmId: clean(brokerTenantVmId),
     brokerTenantUserId: clean(brokerTenantUserId),
@@ -352,8 +366,15 @@ export async function createGoogleWorkspaceConnectLink({
     brokerTenantChatId: clean(brokerTenantChatId),
     brokerTenantAccountId: clean(brokerTenantAccountId),
     createdAt: nowIso(),
-    expiresAt: expiresAtIso(connectLinkTtlMs(env)),
+    expiresAt: expiresAtIso(reviewAccess === true ? googleWorkspaceReviewAccessTtlMs(env) : connectLinkTtlMs(env)),
   };
+  const review = reviewAccess === true
+    ? createGoogleWorkspaceReviewAccessTicket({
+      connectId,
+      userId: request.userId,
+      expiresAt: request.expiresAt,
+    }, env)
+    : "";
   const ledger = await readConnectLedger(scope);
   const cutoff = nowMs() - 24 * 60 * 60 * 1000;
   ledger.requests = [
@@ -361,7 +382,7 @@ export async function createGoogleWorkspaceConnectLink({
     request,
   ];
   await writeConnectLedger(scope, ledger);
-  const path = `/connect/google?connect=${encodeURIComponent(connectId)}`;
+  const path = `/connect/google?connect=${encodeURIComponent(connectId)}${review ? `&review=${encodeURIComponent(review)}` : ""}`;
   const connectorLink = googleWorkspaceBrokeredConnectorSetupHref(request, env, "gmail");
   const connectLink = connectorLink || publicConnectUrl(path, env, { brokered: Boolean(request.brokerInstanceId || request.brokerTenantVmId) });
   const link = connectorLink || connectLink;
@@ -369,6 +390,7 @@ export async function createGoogleWorkspaceConnectLink({
     ok: true,
     connectId,
     connectLink,
+    reviewLink: review ? connectLink : "",
     connectorLink,
     link,
     expiresAt: request.expiresAt,

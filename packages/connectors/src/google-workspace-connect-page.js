@@ -100,6 +100,7 @@ function capabilityControls(
 
 export function googleWorkspaceConnectHtml({
   connectId = "",
+  reviewAccess = "",
   request = {},
   error = "",
   previewOnly = false,
@@ -108,8 +109,12 @@ export function googleWorkspaceConnectHtml({
   env = process.env,
 } = {}) {
   const safeConnect = escapeHtml(connectId);
+  const safeReviewAccess = escapeHtml(reviewAccess);
   const allowed = googleWorkspaceAllowedCapabilities(env, allowedCapabilities);
-  const hidden = `<input type="hidden" name="connect" value="${safeConnect}">`;
+  const hidden = [
+    `<input type="hidden" name="connect" value="${safeConnect}">`,
+    safeReviewAccess ? `<input type="hidden" name="review" value="${safeReviewAccess}">` : "",
+  ].join("");
   const contextRows = [
     ["Tool", "orkestr_auth"],
     ["Service", "gmail"],
@@ -123,12 +128,11 @@ export function googleWorkspaceConnectHtml({
     .filter(([, value]) => clean(value))
     .map(([label, value]) => `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd></div>`)
     .join("");
-  const content = error
-    ? `<p class="error">${escapeHtml(error)}</p>`
-    : previewOnly
-      ? `<p class="notice">Open this link in a browser to approve this Gmail connection. Link previews cannot start authorization.</p>`
+  const content = previewOnly
+    ? `<p class="notice">Open this link in a browser to approve this Gmail connection. Link previews cannot start authorization.</p>`
     : `<form method="get" action="/connect/google/start">
         ${hidden}
+        ${error ? `<p class="error">${escapeHtml(error)}</p>` : ""}
         <input type="hidden" name="capabilities_selected" value="1">
         <input type="hidden" name="privacy_policy_version" value="${googleWorkspacePrivacyPolicyVersion}">
         <fieldset>

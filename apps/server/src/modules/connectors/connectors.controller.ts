@@ -20,6 +20,7 @@ import {
   googleWorkspacePrivacyPolicyVersion,
   startGoogleWorkspaceOAuth,
 } from "../../../../../packages/connectors/src/google-workspace.js";
+import { verifyGoogleWorkspaceReviewAccessTicket } from "../../../../../packages/connectors/src/google-workspace-review-access.js";
 import {
   googleWorkspaceAllowedCapabilities,
   googleWorkspaceCapabilityDefinitions,
@@ -208,6 +209,7 @@ function googleWorkspacePairingError(response: any, connectRequest: any, error: 
   response
     .status(403)
     .header("cache-control", "no-store")
+    .header("referrer-policy", "no-referrer")
     .type("text/html; charset=utf-8")
     .send(googleWorkspaceConnectHtml({
       connectId: String(connectRequest.connectId || ""),
@@ -235,6 +237,7 @@ function googleWorkspacePreviewResponse(response: any, connectRequest: any): voi
   response
     .status(200)
     .header("cache-control", "no-store")
+    .header("referrer-policy", "no-referrer")
     .type("text/html; charset=utf-8")
     .send(googleWorkspaceConnectHtml({
       connectId: String(connectRequest.connectId || ""),
@@ -243,12 +246,40 @@ function googleWorkspacePreviewResponse(response: any, connectRequest: any): voi
     } as any));
 }
 
+function googleWorkspaceRequestQueryValue(request: any, key: string): string {
+  const direct = request?.query?.[key];
+  if (Array.isArray(direct)) return String(direct[0] || "").trim();
+  if (direct !== undefined && direct !== null) return String(direct).trim();
+  return new URL(requestPathWithQuery(request), "http://localhost").searchParams.get(key)?.trim() || "";
+}
+
+function googleWorkspaceReviewAccess(request: any, connectRequest: any): { ok: boolean; present: boolean } {
+  return verifyGoogleWorkspaceReviewAccessTicket(googleWorkspaceRequestQueryValue(request, "review"), {
+    connectId: String(connectRequest?.connectId || ""),
+    userId: normalizeUserId(connectRequest?.userId || ""),
+  }, process.env);
+}
+
 async function googleWorkspaceConnectAccess(request: any, payload: any, response: any): Promise<boolean> {
   const connectRequest = payload?.request || {};
   const ownerUserId = normalizeUserId(connectRequest.userId || "");
   const status = await securityStatus();
   const currentPath = requestPathWithQuery(request);
   const session = request?.orkestrSecuritySession || null;
+  if (googleWorkspaceLinkPreviewRequest(request)) {
+    googleWorkspacePreviewResponse(response, connectRequest);
+    return false;
+  }
+  const reviewAccess = googleWorkspaceReviewAccess(request, connectRequest);
+  if (reviewAccess.present) {
+    if (googleWorkspaceBrokeredConnectRequest(connectRequest)) {
+      googleWorkspacePairingError(response, connectRequest, "google_workspace_review_access_requires_isolated_instance");
+      return false;
+    }
+    if (reviewAccess.ok) return true;
+    googleWorkspacePairingError(response, connectRequest, "google_workspace_review_access_invalid_or_expired");
+    return false;
+  }
   if (status.authEnabled) {
     if (session && googleWorkspaceAuthSessionHasAction(session, connectRequest)) {
       if (!googleWorkspaceSessionInstanceMatches(session, connectRequest)) {
@@ -260,10 +291,6 @@ async function googleWorkspaceConnectAccess(request: any, payload: any, response
         return false;
       }
       return true;
-    }
-    if (googleWorkspaceLinkPreviewRequest(request)) {
-      googleWorkspacePreviewResponse(response, connectRequest);
-      return false;
     }
     const challenge = await createPairingChallenge({
       request,
@@ -1231,7 +1258,7 @@ export class ConnectorCallbacksController {
 @Controller("connect")
 export class GoogleWorkspaceConnectController {
   @Get("google")
-  async googleConnect(@Req() request: any, @Query("connect") connect = "", @Res() response: any) {
+  async googleConnect(@Req() request: any, @Query("connect") connect = "", @Query("review") review = "", @Res() response: any) {
     let payload: any = null;
     try {
       payload = await getGoogleWorkspaceConnectRequest(connect, process.env);
@@ -1260,9 +1287,11 @@ export class GoogleWorkspaceConnectController {
     return response
       .status(ok ? 200 : Number((payload as any)?.statusCode || 400) || 400)
       .header("cache-control", "no-store")
+      .header("referrer-policy", "no-referrer")
       .type("text/html; charset=utf-8")
       .send(googleWorkspaceConnectHtml({
         connectId: connect,
+        reviewAccess: Array.isArray(review) ? String(review[0] || "") : String(review || ""),
         request: payload?.request || {},
         error: ok ? "" : String(payload?.error || payload?.state || "Google Workspace connection link is not available."),
       }));
@@ -1297,14 +1326,16 @@ export class GoogleWorkspaceConnectController {
         privacyPolicyVersion: googleWorkspacePrivacyPolicyVersion,
         privacyConsentAt: new Date().toISOString(),
       });
-      return response.redirect(302, started.authorizeUrl);
+      return response.header("referrer-policy", "no-referrer").redirect(302, started.authorizeUrl);
     } catch (error) {
       return response
         .status(Number((error as any)?.statusCode || 400) || 400)
         .header("cache-control", "no-store")
+        .header("referrer-policy", "no-referrer")
         .type("text/html; charset=utf-8")
         .send(googleWorkspaceConnectHtml({
           connectId: String(query.connect || ""),
+          reviewAccess: Array.isArray(query.review) ? String(query.review[0] || "") : String(query.review || ""),
           selectedCapabilities: capabilities,
           error: String((error as Error)?.message || "Google Workspace OAuth could not start."),
         }));
