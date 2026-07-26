@@ -1076,6 +1076,45 @@ test("CLI creates a Google Workspace connect link for agents", async () => {
   assert.match(payload.message, /Requested provider: google_workspace/);
 });
 
+test("CLI creates an explicitly scoped Google OAuth reviewer link", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-cli-connect-google-review-"));
+  const stdout = capture();
+  const code = await runCli(["connect", "google", "--review", "--thread", "reviewer-google", "--json"], {
+    env: {
+      ORKESTR_HOME: home,
+      ORKESTR_PUBLIC_URL: "https://review.example.test",
+      ORKESTR_GOOGLE_WORKSPACE_REVIEW_ACCESS_ENABLED: "1",
+      ORKESTR_GOOGLE_WORKSPACE_REVIEW_ACCESS_SECRET: "review-access-secret-for-isolated-google-verification",
+      ORKESTR_GOOGLE_WORKSPACE_REVIEW_ACCESS_TTL_MINUTES: "30",
+    },
+    stdout,
+    stderr: capture(),
+  });
+  const payload = JSON.parse(stdout.text());
+
+  assert.equal(code, 0);
+  assert.equal(payload.ok, true);
+  assert.match(payload.reviewLink, /^https:\/\/review\.example\.test\/connect\/google\?connect=/);
+  assert.equal(new URL(payload.reviewLink).searchParams.has("review"), true);
+});
+
+test("CLI requires an explicit reviewer thread before creating reviewer access", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-cli-connect-google-review-thread-"));
+  const stderr = capture();
+  const code = await runCli(["connect", "google", "--review", "--json"], {
+    env: {
+      ORKESTR_HOME: home,
+      ORKESTR_GOOGLE_WORKSPACE_REVIEW_ACCESS_ENABLED: "1",
+      ORKESTR_GOOGLE_WORKSPACE_REVIEW_ACCESS_SECRET: "review-access-secret-for-isolated-google-verification",
+    },
+    stdout: capture(),
+    stderr,
+  });
+
+  assert.equal(code, 1);
+  assert.match(stderr.text(), /--review --thread <reviewer-thread-id>/);
+});
+
 test("CLI manages secure input secrets without echoing values", async () => {
   const stdout = capture();
   const seen = [];

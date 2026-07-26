@@ -1374,9 +1374,13 @@ async function connectCommand(argv, ctx) {
 
 async function connectGoogleWorkspaceCommand(argv, ctx) {
   const json = argv.includes("--json");
+  const reviewAccess = argv.includes("--review");
   try {
     const cwd = flagValue(argv, "--cwd") || ctx.cwd || process.cwd();
     const explicitThreadId = flagValue(argv, "--thread") || flagValue(argv, "--thread-id") || "";
+    if (reviewAccess && !explicitThreadId) {
+      throw new Error("Usage: orkestr connect google --review --thread <reviewer-thread-id> [--json]");
+    }
     const where = explicitThreadId ? null : await googleConnectWhereAmI(cwd, ctx);
     const threadId = explicitThreadId || where?.thread?.id || "";
     const thread = await googleConnectThread(threadId, where, ctx);
@@ -1387,8 +1391,10 @@ async function connectGoogleWorkspaceCommand(argv, ctx) {
       chatId: flagValue(argv, "--chat-id") || flagValue(argv, "--chat") || "",
       accountId: flagValue(argv, "--account-id") || flagValue(argv, "--wa-account") || "",
       account: flagValue(argv, "--account") || flagValue(argv, "--email") || "",
+      reviewAccess,
     }, ctx.env);
     if (json) ctx.stdout.write(`${JSON.stringify(connect, null, 2)}\n`);
+    else if (reviewAccess) ctx.stdout.write(`Google OAuth reviewer link (expires ${connect.expiresAt}):\n${connect.reviewLink}\n`);
     else ctx.stdout.write(`${connect.message || connect.link || connect.connectLink || ""}\n`);
     return connect?.ok === false ? 1 : 0;
   } finally {
@@ -1963,6 +1969,7 @@ Common thread commands:
   orkestr api-session message <text> [--api-session-id id] [--role assistant|user] [--phase final_answer] [--json]
   orkestr api-session status [--api-session-id id] [--json]
   orkestr connect google [--account email] [--json]
+  orkestr connect google --review --thread <reviewer-thread-id> [--json]
   orkestr attach [thread-name-or-id] [--print] [--read-only] [--takeover] [--interrupt] [--yes] [--interval seconds] [--timeout duration] [--json]
   orkestr send <thread-name-or-id> "<message>" [--json]
   orkestr wake <thread-name-or-id> [--json]
@@ -2252,6 +2259,7 @@ function positional(argv) {
     "--takeover",
     "--interrupt",
     "--read-only",
+    "--review",
     "--yes",
   ]);
   for (let index = 0; index < argv.length; index += 1) {
