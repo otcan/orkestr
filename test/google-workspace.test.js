@@ -20,6 +20,7 @@ import {
 } from "../packages/connectors/src/google-workspace.js";
 import {
   googleWorkspaceCapabilitiesForScopes,
+  googleWorkspaceAllowedCapabilities,
   googleWorkspaceScopesForCapabilities,
   normalizeGoogleWorkspaceCapabilities,
 } from "../packages/connectors/src/google-workspace-scopes.js";
@@ -96,18 +97,23 @@ async function storeToken(env, scope, principal = null) {
   );
 }
 
-test("google workspace scope selection maps only requested capabilities", () => {
-  const capabilities = normalizeGoogleWorkspaceCapabilities(["gmail_send", "gmail_drafts", "calendar_read", "calendar_actions", "drive_file"]);
+test("google workspace scope selection maps every selected capability to its declared scope", () => {
+  const capabilities = normalizeGoogleWorkspaceCapabilities(["gmail_read", "gmail_send", "gmail_drafts", "calendar_read", "calendar_actions", "drive_file"]);
   const scopes = googleWorkspaceScopesForCapabilities(capabilities);
 
-  assert.deepEqual(capabilities, ["gmail_send", "gmail_drafts", "calendar_read", "calendar_actions", "drive_file"]);
-  assert.ok(scopes.includes("openid"));
-  assert.ok(scopes.includes("https://www.googleapis.com/auth/gmail.send"));
-  assert.ok(scopes.includes("https://www.googleapis.com/auth/gmail.compose"));
-  assert.ok(scopes.includes("https://www.googleapis.com/auth/calendar.events.owned"));
-  assert.equal(scopes.includes("https://www.googleapis.com/auth/calendar.events.readonly"), false);
+  assert.deepEqual(capabilities, ["gmail_read", "gmail_send", "gmail_drafts", "calendar_read", "calendar_actions", "drive_file"]);
+  assert.deepEqual(scopes, [
+    "openid",
+    "https://www.googleapis.com/auth/userinfo.email",
+    "https://www.googleapis.com/auth/userinfo.profile",
+    "https://www.googleapis.com/auth/gmail.readonly",
+    "https://www.googleapis.com/auth/gmail.send",
+    "https://www.googleapis.com/auth/gmail.compose",
+    "https://www.googleapis.com/auth/calendar.events.readonly",
+    "https://www.googleapis.com/auth/calendar.events.owned",
+    "https://www.googleapis.com/auth/drive.file",
+  ]);
   assert.equal(scopes.includes("https://www.googleapis.com/auth/calendar.events"), false);
-  assert.ok(scopes.includes("https://www.googleapis.com/auth/drive.file"));
   assert.equal(scopes.includes("https://www.googleapis.com/auth/gmail.modify"), false);
   assert.equal(scopes.includes("https://www.googleapis.com/auth/drive.readonly"), false);
 
@@ -128,6 +134,24 @@ test("google workspace scope selection maps only requested capabilities", () => 
     [],
   );
   assert.deepEqual(googleWorkspaceCapabilitiesForScopes("", ["gmail_read"]), ["gmail_read"]);
+});
+
+test("expanded Google verification profile has one exact capability and scope contract", () => {
+  const capabilities = googleWorkspaceAllowedCapabilities({
+    ORKESTR_GOOGLE_OAUTH_ALLOWED_CAPABILITIES: "gmail_send,gmail_read,gmail_drafts,calendar_read,calendar_actions",
+  });
+
+  assert.deepEqual(capabilities, ["gmail_send", "gmail_read", "gmail_drafts", "calendar_read", "calendar_actions"]);
+  assert.deepEqual(googleWorkspaceScopesForCapabilities(capabilities), [
+    "openid",
+    "https://www.googleapis.com/auth/userinfo.email",
+    "https://www.googleapis.com/auth/userinfo.profile",
+    "https://www.googleapis.com/auth/gmail.send",
+    "https://www.googleapis.com/auth/gmail.readonly",
+    "https://www.googleapis.com/auth/gmail.compose",
+    "https://www.googleapis.com/auth/calendar.events.readonly",
+    "https://www.googleapis.com/auth/calendar.events.owned",
+  ]);
 });
 
 test("whatsapp google connect link starts user-scoped oauth with selected scopes", async () => {
@@ -180,6 +204,50 @@ test("whatsapp google connect link starts user-scoped oauth with selected scopes
   assert.ok(scopes.includes("https://www.googleapis.com/auth/calendar.events.readonly"));
   assert.equal(scopes.includes("https://www.googleapis.com/auth/gmail.modify"), false);
   assert.equal(scopes.includes("https://www.googleapis.com/auth/drive.file"), false);
+});
+
+test("isolated reviewer links are explicitly enabled, user-bound, and longer lived", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-google-workspace-review-link-"));
+  const env = await configureGoogle(home);
+  env.ORKESTR_GOOGLE_WORKSPACE_REVIEW_ACCESS_ENABLED = "1";
+  env.ORKESTR_GOOGLE_WORKSPACE_REVIEW_ACCESS_SECRET = "review-access-secret-for-isolated-google-verification";
+  env.ORKESTR_GOOGLE_WORKSPACE_REVIEW_ACCESS_TTL_MINUTES = "30";
+  const link = await createGoogleWorkspaceConnectLink({
+    principal: userPrincipal({ id: "reviewer" }),
+    thread: { id: "review-thread" },
+    reviewAccess: true,
+  }, env);
+
+  assert.equal(link.reviewLink, link.connectLink);
+  const url = new URL(link.reviewLink);
+  assert.equal(url.searchParams.get("connect"), link.connectId);
+  assert.ok(url.searchParams.get("review"));
+  const request = await getGoogleWorkspaceConnectRequest(link.connectId, env);
+  assert.equal(request.request.source, "oauth_reviewer");
+  assert.ok(Date.parse(request.request.expiresAt) - Date.now() > 25 * 60_000);
+
+  await assert.rejects(
+    createGoogleWorkspaceConnectLink({
+      principal: userPrincipal({ id: "reviewer" }),
+      thread: { id: "review-thread" },
+      brokerInstanceId: "instance-review",
+      brokerServerRequest: true,
+      reviewAccess: true,
+    }, env),
+    (error) => error.message === "google_workspace_review_access_requires_isolated_instance",
+  );
+  await assert.rejects(
+    createGoogleWorkspaceConnectLink({
+      principal: userPrincipal({ id: "reviewer" }),
+      thread: { id: "review-thread" },
+      reviewAccess: true,
+    }, {
+      ...env,
+      ORKESTR_TENANT_VM_ID: "review-vm",
+      ORKESTR_BROKER_BASE_URL: "https://broker.example.test",
+    }),
+    (error) => error.message === "google_workspace_review_access_requires_isolated_instance",
+  );
 });
 
 test("google workspace oauth defaults to Gmail send access", async () => {
@@ -641,6 +709,15 @@ test("google workspace connect html shows MCP context and capability controls", 
   assert.doesNotMatch(html, /value="gmail_read" checked/);
   assert.match(html, /name="privacy_consent"/);
   assert.match(html, /privacy#google-data-protection/);
+});
+
+test("google workspace connect html preserves the scoped reviewer ticket without exposing it in context", () => {
+  const html = googleWorkspaceConnectHtml({
+    connectId: "connect-1",
+    reviewAccess: "review-ticket<&",
+  });
+  assert.match(html, /name="review" value="review-ticket&lt;&amp;"/);
+  assert.doesNotMatch(html, /<dd>review-ticket/);
 });
 
 test("google workspace connect html exposes only the approved send capability by default", () => {
