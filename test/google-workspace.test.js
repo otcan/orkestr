@@ -220,8 +220,8 @@ test("isolated reviewer links are explicitly enabled, user-bound, and longer liv
 
   assert.equal(link.reviewLink, link.connectLink);
   const url = new URL(link.reviewLink);
-  assert.equal(url.searchParams.get("connect"), link.connectId);
-  assert.ok(url.searchParams.get("review"));
+  assert.match(url.pathname, new RegExp(`^/connect/google/review/${link.connectId}/[^/]+$`));
+  assert.equal(url.search, "");
   const request = await getGoogleWorkspaceConnectRequest(link.connectId, env);
   assert.equal(request.request.source, "oauth_reviewer");
   assert.ok(Date.parse(request.request.expiresAt) - Date.now() > 25 * 60_000);

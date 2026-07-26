@@ -382,7 +382,12 @@ export async function createGoogleWorkspaceConnectLink({
     request,
   ];
   await writeConnectLedger(scope, ledger);
-  const path = `/connect/google?connect=${encodeURIComponent(connectId)}${review ? `&review=${encodeURIComponent(review)}` : ""}`;
+  // Reviewer links must survive email clients, ticket systems, and browser
+  // previews without losing a second query parameter. The ticket remains bound
+  // to this connect request and user, but travels as one opaque path link.
+  const path = review
+    ? `/connect/google/review/${encodeURIComponent(connectId)}/${encodeURIComponent(review)}`
+    : `/connect/google?connect=${encodeURIComponent(connectId)}`;
   const connectorLink = googleWorkspaceBrokeredConnectorSetupHref(request, env, "gmail");
   const connectLink = connectorLink || publicConnectUrl(path, env, { brokered: Boolean(request.brokerInstanceId || request.brokerTenantVmId) });
   const link = connectorLink || connectLink;

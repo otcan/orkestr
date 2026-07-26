@@ -1094,8 +1094,7 @@ test("CLI creates an explicitly scoped Google OAuth reviewer link", async () => 
 
   assert.equal(code, 0);
   assert.equal(payload.ok, true);
-  assert.match(payload.reviewLink, /^https:\/\/review\.example\.test\/connect\/google\?connect=/);
-  assert.equal(new URL(payload.reviewLink).searchParams.has("review"), true);
+  assert.match(payload.reviewLink, /^https:\/\/review\.example\.test\/connect\/google\/review\/[^/]+\/[^/]+$/);
 });
 
 test("CLI requires an explicit reviewer thread before creating reviewer access", async () => {

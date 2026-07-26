@@ -20,7 +20,10 @@ import {
   googleWorkspacePrivacyPolicyVersion,
   startGoogleWorkspaceOAuth,
 } from "../../../../../packages/connectors/src/google-workspace.js";
-import { verifyGoogleWorkspaceReviewAccessTicket } from "../../../../../packages/connectors/src/google-workspace-review-access.js";
+import {
+  googleWorkspaceReviewAccessEnabled,
+  verifyGoogleWorkspaceReviewAccessTicket,
+} from "../../../../../packages/connectors/src/google-workspace-review-access.js";
 import {
   googleWorkspaceAllowedCapabilities,
   googleWorkspaceCapabilityDefinitions,
@@ -247,6 +250,9 @@ function googleWorkspacePreviewResponse(response: any, connectRequest: any): voi
 }
 
 function googleWorkspaceRequestQueryValue(request: any, key: string): string {
+  const routeValue = request?.params?.[key];
+  if (Array.isArray(routeValue)) return String(routeValue[0] || "").trim();
+  if (routeValue !== undefined && routeValue !== null) return String(routeValue).trim();
   const direct = request?.query?.[key];
   if (Array.isArray(direct)) return String(direct[0] || "").trim();
   if (direct !== undefined && direct !== null) return String(direct).trim();
@@ -278,6 +284,13 @@ async function googleWorkspaceConnectAccess(request: any, payload: any, response
     }
     if (reviewAccess.ok) return true;
     googleWorkspacePairingError(response, connectRequest, "google_workspace_review_access_invalid_or_expired");
+    return false;
+  }
+  if (googleWorkspaceReviewAccessEnabled(process.env)) {
+    // The dedicated reviewer service never falls back to browser pairing. A
+    // reviewer has no Orkestr CLI or account, so an incomplete link must fail
+    // explicitly rather than creating an unusable approval challenge.
+    googleWorkspacePairingError(response, connectRequest, "google_workspace_reviewer_link_required");
     return false;
   }
   if (status.authEnabled) {
@@ -1259,6 +1272,15 @@ export class ConnectorCallbacksController {
 export class GoogleWorkspaceConnectController {
   @Get("google")
   async googleConnect(@Req() request: any, @Query("connect") connect = "", @Query("review") review = "", @Res() response: any) {
+    return this.renderGoogleConnect(request, String(connect || ""), String(review || ""), response);
+  }
+
+  @Get("google/review/:connect/:review")
+  async googleReviewerConnect(@Req() request: any, @Param("connect") connect = "", @Param("review") review = "", @Res() response: any) {
+    return this.renderGoogleConnect(request, String(connect || ""), String(review || ""), response);
+  }
+
+  private async renderGoogleConnect(request: any, connect: string, review: string, response: any) {
     let payload: any = null;
     try {
       payload = await getGoogleWorkspaceConnectRequest(connect, process.env);

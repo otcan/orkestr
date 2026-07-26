@@ -181,7 +181,7 @@ function authorizeAuthIntentSessionRequest(request: any, session: any) {
   const method = String(request?.method || "GET").toUpperCase();
   const url = String(request?.originalUrl || request?.url || "").split("?")[0];
   const parts = routePartsFromApiRequest(request);
-  if (method === "GET" && (url === "/connect/google" || url === "/connect/google/start")) return { ok: true };
+  if (method === "GET" && (url === "/connect/google" || url === "/connect/google/start" || /^\/connect\/google\/review\/[^/]+\/[^/]+$/.test(url))) return { ok: true };
   if (method === "GET" && url === "/oauth/gmail/callback") return { ok: true };
   if (method === "GET" && url === "/setup/pairing") return { ok: true };
   if (method === "GET" && url === "/api/setup/security/session-scope") return { ok: true };
