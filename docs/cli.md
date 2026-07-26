@@ -29,6 +29,7 @@ orkestr api-session message "Visible assistant update" --api-session-id "$ORKEST
 orkestr api-session status --api-session-id "$ORKESTR_API_SESSION_ID"
 orkestr settings --json
 orkestr connect google --json
+orkestr connect google --review --thread reviewer-google --json
 orkestr doctor timers
 orkestr security challenges
 orkestr security approve <challenge-id>
@@ -80,6 +81,15 @@ link for the current Orkestr thread. In tenant VMs this is the preferred
 agent-side command for user requests such as "connect Google"; it does not need
 a Gmail login hint. Use `/connect google` when the request is handled directly
 inside WhatsApp.
+
+`orkestr connect google --review --thread <reviewer-thread-id>` generates a
+short-lived, signed link for a Google OAuth verification reviewer. It is for a
+dedicated, isolated reviewer instance only: review access is disabled by
+default, cannot run through the tenant broker, and never grants general cockpit
+or API access. The link is a bearer credential; give it only to the reviewer
+through the existing Google review email thread and do not paste it into issues,
+logs, or chat transcripts. See
+[`google-workspace-oauth-verification.md`](google-workspace-oauth-verification.md).
 
 `orkestr api-session` is the stable bridge for API-driven agents that are not
 already running inside Orkestr's Codex app-server transport. `bind` attaches a

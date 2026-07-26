@@ -193,7 +193,13 @@ ORKESTR_GOOGLE_WORKSPACE_REVIEW_ACCESS_SECRET=<high-entropy-secret>
 ORKESTR_GOOGLE_WORKSPACE_REVIEW_ACCESS_TTL_MINUTES=10080
 ```
 
-Generate it only through the internal connection creation flow with
+Generate it only on that isolated instance, with a dedicated reviewer thread:
+
+```bash
+orkestr connect google --review --thread reviewer-google --json
+```
+
+The command is equivalent to the internal connection flow with
 `reviewAccess: true`. It is bound by HMAC to the exact connection id, Orkestr
 user id, and expiry. Reviewer links cannot be generated for brokered tenant
 connections. A missing, altered, expired, or disabled reviewer ticket follows
