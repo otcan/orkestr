@@ -534,14 +534,17 @@ test("isolated Google reviewer links authorize only their exact consent action",
   }, process.env);
   const reviewUrl = new URL(connect.reviewLink);
   const regularPath = `/connect/google?connect=${encodeURIComponent(connect.connectId)}`;
-  const reviewPath = `${reviewUrl.pathname}${reviewUrl.search}`;
+  const reviewPath = reviewUrl.pathname;
+  const reviewTicket = reviewUrl.pathname.split("/").at(-1) || "";
   const server = await startServer({ port: 0, host: "127.0.0.1" });
   const { port } = server.address();
 
   try {
     const regular = await fetch(`http://127.0.0.1:${port}${regularPath}`, { redirect: "manual" });
-    assert.equal(regular.status, 302);
-    assert.equal(new URL(regular.headers.get("location") || "", "http://localhost").pathname, "/setup/pairing");
+    const regularHtml = await regular.text();
+    assert.equal(regular.status, 403);
+    assert.equal(regular.headers.get("location"), null);
+    assert.match(regularHtml, /google_workspace_reviewer_link_required/);
 
     const reviewer = await fetch(`http://127.0.0.1:${port}${reviewPath}`, { redirect: "manual" });
     const reviewerHtml = await reviewer.text();
@@ -552,7 +555,7 @@ test("isolated Google reviewer links authorize only their exact consent action",
 
     const start = new URL(`http://127.0.0.1:${port}/connect/google/start`);
     start.searchParams.set("connect", connect.connectId);
-    start.searchParams.set("review", reviewUrl.searchParams.get("review") || "");
+    start.searchParams.set("review", reviewTicket);
     start.searchParams.set("capability", "gmail_send");
     const unconsented = await fetch(start, { redirect: "manual" });
     const unconsentedHtml = await unconsented.text();
@@ -562,7 +565,7 @@ test("isolated Google reviewer links authorize only their exact consent action",
     assert.match(unconsentedHtml, /name="review"/);
 
     const invalid = new URL(`http://127.0.0.1:${port}${reviewPath}`);
-    invalid.searchParams.set("review", "invalid-ticket");
+    invalid.pathname = `/connect/google/review/${connect.connectId}/invalid-ticket`;
     const invalidResponse = await fetch(invalid, { redirect: "manual" });
     const invalidHtml = await invalidResponse.text();
     assert.equal(invalidResponse.status, 403);
