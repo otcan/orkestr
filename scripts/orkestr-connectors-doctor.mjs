@@ -23,7 +23,7 @@ function healthToken(env = process.env) {
   return clean(env.ORKESTR_CONNECTORS_MCP_TOKEN || env.ORKESTR_WA_SERVICE_TOKEN || env.ORKESTR_WA_WORKER_EVENT_TOKEN);
 }
 
-export function assessConnectorHealth(payload = {}, env = process.env, release = {}) {
+export function assessConnectorHealth(payload = {}, env = process.env, release = {}, { releaseHealth = false } = {}) {
   const requiredAccounts = list(env.ORKESTR_CONNECTORS_REQUIRED_WA_ACCOUNTS || "sender");
   const accounts = Array.isArray(payload.accounts) ? payload.accounts : [];
   const matchesAccount = (account, id) => [
@@ -39,7 +39,7 @@ export function assessConnectorHealth(payload = {}, env = process.env, release =
   const unavailableAccounts = requiredAccounts.filter((id) => accounts.some((account) =>
     matchesAccount(account, id) && !accountReady(account)
   ));
-  const issues = [
+  const operationalIssues = [
     ...(payload.ok === false ? ["gateway_unhealthy"] : []),
     ...(payload.gateway?.ok === false ? ["gateway_unhealthy"] : []),
     ...(payload.worker?.ok === false ? ["worker_unhealthy"] : []),
@@ -48,9 +48,14 @@ export function assessConnectorHealth(payload = {}, env = process.env, release =
     ...(Number(payload.queue?.deadLetter || 0) > 0 ? ["dead_letter_events"] : []),
     ...(release.drift === true ? ["connector_release_drift"] : []),
   ];
+  const ignoredIssues = releaseHealth
+    ? operationalIssues.filter((issue) => issue === "dead_letter_events")
+    : [];
+  const issues = operationalIssues.filter((issue) => !ignoredIssues.includes(issue));
   return {
     ok: issues.length === 0,
     issues: [...new Set(issues)],
+    ignoredIssues: [...new Set(ignoredIssues)],
     missingAccounts,
     unavailableAccounts,
     queue: payload.queue || {},
@@ -148,7 +153,7 @@ async function scheduleReleaseReconcile(env = process.env) {
   return { unit, source, script };
 }
 
-export async function runConnectorDoctor({ repair = false, env = process.env, fetchImpl = fetch, scheduleReleaseReconcileFn = scheduleReleaseReconcile } = {}) {
+export async function runConnectorDoctor({ releaseHealth = false, repair = false, env = process.env, fetchImpl = fetch, scheduleReleaseReconcileFn = scheduleReleaseReconcile } = {}) {
   let payload;
   try {
     const token = healthToken(env);
@@ -162,7 +167,7 @@ export async function runConnectorDoctor({ repair = false, env = process.env, fe
     payload = { ok: false, gateway: { ok: false }, worker: { ok: false }, error: clean(error?.message) || "health_unreachable" };
   }
   const release = await connectorReleaseState(env);
-  const assessment = assessConnectorHealth(payload, env, release);
+  const assessment = assessConnectorHealth(payload, env, release, { releaseHealth });
   if (assessment.ok || !repair) return { ...assessment, repaired: false, health: payload };
 
   const recoveringAccounts = recoveringRequiredAccounts(payload, assessment, env);
@@ -204,7 +209,10 @@ export async function runConnectorDoctor({ repair = false, env = process.env, fe
 }
 
 if (isMainModule(import.meta.url)) {
-  const result = await runConnectorDoctor({ repair: process.argv.includes("--repair") });
+  const result = await runConnectorDoctor({
+    releaseHealth: process.argv.includes("--release-health"),
+    repair: process.argv.includes("--repair"),
+  });
   console.log(JSON.stringify(result));
   if (!result.ok && !result.repaired && result.repairSuppressed !== "startup_grace") process.exitCode = 1;
 }

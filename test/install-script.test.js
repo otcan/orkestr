@@ -326,6 +326,7 @@ test("install script provisions isolated connector MCP and WhatsApp worker servi
   assert.match(releaseScript, /switch_current_release/);
   assert.match(releaseScript, /ORKESTR_CONNECTORS_HEALTH_ATTEMPTS:-90/);
   assert.match(releaseScript, /ORKESTR_CONNECTORS_HEALTH_STABLE_SUCCESSES:-3/);
+  assert.match(releaseScript, /orkestr-connectors-doctor\.mjs" --release-health/);
   assert.match(releaseScript, /ORKESTR_CONNECTORS_DEPLOY_LOCK_FILE:-\/run\/lock\/orkestr-connectors-release\.lock/);
   assert.match(releaseScript, /exec 9>"\$lock_file"/);
   assert.match(releaseScript, /flock 9/);
