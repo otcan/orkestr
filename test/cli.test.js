@@ -56,6 +56,7 @@ test("CLI help exposes local service commands promised by the installer", async 
   assert.match(stdout.text(), /orkestr logs \[--service orkestr\]/);
   assert.match(stdout.text(), /orkestr sanitizer check --action action --text text/);
   assert.match(stdout.text(), /orkestr vm-slice create <owner-user-id>/);
+  assert.match(stdout.text(), /vm-slice \[list\|status <slice-id>\|provision <slice-id>\|destroy <slice-id>/);
 });
 
 test("CLI serve shutdown has a bounded force-exit fallback", async () => {
@@ -296,6 +297,29 @@ test("CLI vm-slice apply is a short execute alias", async () => {
   assert.equal(seen[0].body.execute, true);
   assert.equal(seen[0].body.dryRun, false);
   assert.equal(JSON.parse(stdout.text()).dryRun, false);
+});
+
+test("CLI vm-slice destroy stays dry-run until explicitly executed", async () => {
+  const stdout = capture();
+  const seen = [];
+  const code = await runCli(["--api", "http://orkestr.test", "vm-slice", "destroy", "reviewer-slice"], {
+    stdout,
+    stderr: capture(),
+    fetchImpl: fakeFetch({
+      "POST /api/tenant-slices/reviewer-slice/destroy": {
+        ok: true,
+        dryRun: true,
+        tenantSlice: { id: "reviewer-slice" },
+        namespace: "tenant-reviewer",
+        vmName: "reviewer-vm",
+      },
+    }, seen),
+  });
+
+  assert.equal(code, 0);
+  assert.equal(seen[0].body.execute, false);
+  assert.equal(seen[0].body.dryRun, true);
+  assert.match(stdout.text(), /No resources were changed/);
 });
 
 test("CLI sends local cli-auth bearer token when ORKESTR_HOME has one", async () => {
@@ -1095,6 +1119,27 @@ test("CLI creates an explicitly scoped Google OAuth reviewer link", async () => 
   assert.equal(code, 0);
   assert.equal(payload.ok, true);
   assert.match(payload.reviewLink, /^https:\/\/review\.example\.test\/connect\/google\/review\/[^/]+\/[^/]+$/);
+});
+
+test("CLI creates a reviewer environment link that owns the Google OAuth return flow", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-cli-connect-google-review-environment-"));
+  const stdout = capture();
+  const code = await runCli(["connect", "google", "--review-environment", "--thread", "reviewer-google", "--json"], {
+    env: {
+      ORKESTR_HOME: home,
+      ORKESTR_GOOGLE_WORKSPACE_REVIEW_PUBLIC_URL: "https://review.example.test",
+      ORKESTR_GOOGLE_WORKSPACE_REVIEW_ACCESS_ENABLED: "1",
+      ORKESTR_GOOGLE_WORKSPACE_REVIEW_ACCESS_SECRET: "review-access-secret-for-isolated-google-verification",
+    },
+    stdout,
+    stderr: capture(),
+  });
+  const payload = JSON.parse(stdout.text());
+
+  assert.equal(code, 0);
+  assert.equal(payload.ok, true);
+  assert.equal(payload.threadId, "reviewer-google");
+  assert.match(payload.reviewEnvironmentLink, /^https:\/\/review\.example\.test\/review\/google\/[^/]+$/);
 });
 
 test("CLI requires an explicit reviewer thread before creating reviewer access", async () => {

@@ -12,6 +12,7 @@ import {
   provisionTenantSlice,
   tenantSliceRuntimeStatus,
 } from "../../../../../packages/core/src/tenant-slice-provisioning.js";
+import { destroyTenantSlice } from "../../../../../packages/core/src/tenant-slice-destruction.js";
 import { isAdminPrincipal } from "../../../../../packages/core/src/policy.js";
 import { requestPrincipal } from "../../../../../packages/core/src/principal.js";
 import { httpError } from "../../common/http.js";
@@ -151,6 +152,16 @@ export class TenantSlicesController {
   async provision(@Req() request: any, @Param("tenantSliceId") tenantSliceId: string, @Body() body: Record<string, unknown> = {}) {
     assertAdminRequest(request);
     return provisionTenantSlice(tenantSliceId, provisionBody(body));
+  }
+
+  @Post(":tenantSliceId/destroy")
+  @HttpCode(200)
+  async destroy(@Req() request: any, @Param("tenantSliceId") tenantSliceId: string, @Body() body: Record<string, unknown> = {}) {
+    assertAdminRequest(request);
+    return destroyTenantSlice(tenantSliceId, {
+      execute: body.execute === true || body.execute === "true",
+      dryRun: body.dryRun !== false && body.dryRun !== "false",
+    });
   }
 
   @Post(":tenantSliceId/wake")

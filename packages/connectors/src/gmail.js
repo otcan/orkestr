@@ -615,6 +615,7 @@ export async function startGmailOAuth(env = process.env, options = {}) {
     requestedScopes,
     privacyPolicyVersion: clean(options.privacyPolicyVersion),
     privacyConsentAt: clean(options.privacyConsentAt),
+    reviewEnvironmentTicket: clean(options.reviewEnvironmentTicket),
     redirectUri,
     createdAt: new Date().toISOString(),
   });
@@ -929,6 +930,7 @@ export async function finishGmailOAuth(query, env = process.env, fetchImpl = fet
     scope: resolved.token.scope,
     grantedScopes: resolved.token.grantedScopes || [],
     requestedCapabilities: savedState.requestedCapabilities || [],
+    reviewEnvironmentTicket: savedState.reviewEnvironmentTicket || "",
     capabilities: resolved.token.capabilities || [],
     expiresAt: resolved.token.expiresAt,
     receivedAt: new Date().toISOString(),

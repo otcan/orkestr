@@ -25,6 +25,10 @@ import {
   verifyGoogleWorkspaceReviewAccessTicket,
 } from "../../../../../packages/connectors/src/google-workspace-review-access.js";
 import {
+  googleWorkspaceReviewEnvironmentPath,
+  verifyGoogleWorkspaceReviewEnvironmentTicket,
+} from "../../../../../packages/connectors/src/google-workspace-review-environment.js";
+import {
   googleWorkspaceAllowedCapabilities,
   googleWorkspaceCapabilityDefinitions,
   googleWorkspaceCapabilityLabels,
@@ -32,6 +36,7 @@ import {
   requireAllowedGoogleWorkspaceCapabilities,
 } from "../../../../../packages/connectors/src/google-workspace-scopes.js";
 import { disconnectConnectorAuth } from "../../../../../packages/connectors/src/connector-auth.js";
+import { appendGoogleWorkspaceReviewAudit } from "../../../../../packages/connectors/src/google-workspace-review-audit.js";
 import {
   listGoogleWorkspaceConnections,
   updateGoogleWorkspaceConnection,
@@ -57,7 +62,7 @@ import { requestThreadInputDelivery } from "../../../../../packages/core/src/run
 import { appendThreadMessage, getThread, getThreadForPrincipal } from "../../../../../packages/core/src/threads.js";
 import { processApiAgentThreadInput, threadUsesApiAgent } from "../../../../../packages/core/src/tenant-api-agent.js";
 import { getTenantVm } from "../../../../../packages/core/src/tenant-vm-registry.js";
-import { requestPrincipal } from "../../../../../packages/core/src/principal.js";
+import { requestPrincipal, userPrincipal } from "../../../../../packages/core/src/principal.js";
 import { isAdminPrincipal } from "../../../../../packages/core/src/policy.js";
 import { createPairingChallenge, securityStatus } from "../../../../../packages/core/src/security.js";
 import { resolveBrokerConnectInstance } from "../../../../../packages/core/src/broker-instance-registry.js";
@@ -264,6 +269,15 @@ function googleWorkspaceReviewAccess(request: any, connectRequest: any): { ok: b
     connectId: String(connectRequest?.connectId || ""),
     userId: normalizeUserId(connectRequest?.userId || ""),
   }, process.env);
+}
+
+function googleWorkspaceReviewEnvironment(request: any, connectRequest: any): { ok: boolean; present: boolean; ticket: string } {
+  const ticket = googleWorkspaceRequestQueryValue(request, "review_environment");
+  const verified = verifyGoogleWorkspaceReviewEnvironmentTicket(ticket, {
+    userId: normalizeUserId(connectRequest?.userId || ""),
+    threadId: String(connectRequest?.threadId || "").trim(),
+  }, process.env);
+  return { ...verified, ticket };
 }
 
 async function googleWorkspaceConnectAccess(request: any, payload: any, response: any): Promise<boolean> {
@@ -1254,15 +1268,18 @@ export class ConnectorCallbacksController {
       return response
         .status(tenantForward.status)
         .header("cache-control", "no-store")
+        .header("referrer-policy", "no-referrer")
         .type(tenantForward.contentType)
         .send(tenantForward.body);
     }
     const result = await finishGmailOAuth(queryParamsFromRequest(request, query));
     await notifyGmailOAuthCallback(result).catch(() => null);
+    await auditGoogleWorkspaceReviewCallback(result).catch(() => null);
     const payload = googleOAuthCallbackPayload(result);
     return response
       .status(200)
       .header("cache-control", "no-store")
+      .header("referrer-policy", "no-referrer")
       .type("text/html; charset=utf-8")
       .send(googleOAuthHtml(payload));
   }
@@ -1314,6 +1331,7 @@ export class GoogleWorkspaceConnectController {
       .send(googleWorkspaceConnectHtml({
         connectId: connect,
         reviewAccess: Array.isArray(review) ? String(review[0] || "") : String(review || ""),
+        reviewEnvironment: googleWorkspaceRequestQueryValue(request, "review_environment"),
         request: payload?.request || {},
         error: ok ? "" : String(payload?.error || payload?.state || "Google Workspace connection link is not available."),
       }));
@@ -1333,6 +1351,12 @@ export class GoogleWorkspaceConnectController {
       const connectId = String(query.connect || "");
       const payload = await getGoogleWorkspaceConnectRequest(connectId, process.env);
       if (googleWorkspaceConnectRequestExists(payload) && !(await googleWorkspaceConnectAccess(request, payload, response))) return;
+      const reviewEnvironment = googleWorkspaceReviewEnvironment(request, payload?.request || {});
+      if (reviewEnvironment.present && !reviewEnvironment.ok) {
+        const error: any = new Error("google_workspace_review_environment_invalid_or_expired");
+        error.statusCode = 403;
+        throw error;
+      }
       if (
         String(query.privacy_consent || "") !== "1" ||
         String(query.privacy_policy_version || "") !== googleWorkspacePrivacyPolicyVersion
@@ -1347,6 +1371,7 @@ export class GoogleWorkspaceConnectController {
         account: String(query.account || ""),
         privacyPolicyVersion: googleWorkspacePrivacyPolicyVersion,
         privacyConsentAt: new Date().toISOString(),
+        reviewEnvironmentTicket: reviewEnvironment.ok ? reviewEnvironment.ticket : "",
       });
       return response.header("referrer-policy", "no-referrer").redirect(302, started.authorizeUrl);
     } catch (error) {
@@ -1358,6 +1383,7 @@ export class GoogleWorkspaceConnectController {
         .send(googleWorkspaceConnectHtml({
           connectId: String(query.connect || ""),
           reviewAccess: Array.isArray(query.review) ? String(query.review[0] || "") : String(query.review || ""),
+          reviewEnvironment: Array.isArray(query.review_environment) ? String(query.review_environment[0] || "") : String(query.review_environment || ""),
           selectedCapabilities: capabilities,
           error: String((error as Error)?.message || "Google Workspace OAuth could not start."),
         }));
@@ -1509,6 +1535,12 @@ function googleOAuthCallbackPayload(result: Record<string, unknown> = {}) {
     const capabilities = stringArray(result.capabilities);
     const labels = googleWorkspaceCapabilityLabels(capabilities);
     const brokeredSetupHref = googleWorkspaceBrokeredConnectorSetupHref(result, process.env, "gmail");
+    const reviewTicket = clean(result.reviewEnvironmentTicket);
+    const reviewEnvironment = verifyGoogleWorkspaceReviewEnvironmentTicket(reviewTicket, {
+      userId: clean(result.userId),
+      threadId: clean(result.threadId),
+    }, process.env);
+    const reviewSetupHref = reviewEnvironment.ok ? googleWorkspaceReviewEnvironmentPath(reviewTicket) : "";
     return {
       ok: true,
       state: clean(result.state) || "ok",
@@ -1516,9 +1548,11 @@ function googleOAuthCallbackPayload(result: Record<string, unknown> = {}) {
       message: labels.length
         ? `Google Workspace authorization is complete. Enabled capabilities: ${labels.join(", ")}.`
         : "Google Workspace authorization is complete, but no optional Workspace capabilities were granted.",
-      setupHref: brokeredSetupHref || "/setup/gmail",
-      setupLabel: brokeredSetupHref ? "Open Instance Connector" : "Open Connectors",
-      setupReturnText: brokeredSetupHref
+      setupHref: reviewSetupHref || brokeredSetupHref || "/setup/gmail",
+      setupLabel: reviewSetupHref ? "Return to Google Workspace Review" : brokeredSetupHref ? "Open Instance Connector" : "Open Connectors",
+      setupReturnText: reviewSetupHref
+        ? "Return to the isolated review environment to test the Google capabilities you approved."
+        : brokeredSetupHref
         ? "Return to this instance connector page to refresh the connection status."
         : "Return to setup to refresh the connector status.",
     };
@@ -1566,6 +1600,19 @@ async function notifyGmailOAuthCallback(result: Record<string, unknown> = {}) {
   });
   await deliverWhatsAppReplies().catch(() => null);
   return message;
+}
+
+async function auditGoogleWorkspaceReviewCallback(result: Record<string, unknown> = {}) {
+  if (clean(result.provider) !== "google_workspace") return null;
+  const ticket = clean(result.reviewEnvironmentTicket);
+  const reviewed = verifyGoogleWorkspaceReviewEnvironmentTicket(ticket, {
+    userId: clean(result.userId),
+    threadId: clean(result.threadId),
+  }, process.env);
+  if (!reviewed.ok) return null;
+  return appendGoogleWorkspaceReviewAudit("google_connected", process.env, {
+    principal: userPrincipal({ id: reviewed.userId, source: "google-oauth-review" }),
+  });
 }
 
 function externalUrlFromRequest(request: any): string {

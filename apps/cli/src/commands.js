@@ -16,6 +16,7 @@ import { readRuntimeSettings } from "../../../packages/core/src/runtime-settings
 import { getThread } from "../../../packages/core/src/threads.js";
 import { adminPrincipal, userPrincipal } from "../../../packages/core/src/principal.js";
 import { createGoogleWorkspaceConnectLink } from "../../../packages/connectors/src/google-workspace.js";
+import { createGoogleWorkspaceReviewEnvironmentLink } from "../../../packages/connectors/src/google-workspace-review-environment.js";
 import { closeThreadRegistryCache } from "../../../packages/storage/src/thread-registry.js";
 import { rawAttachWatchText } from "../../../packages/core/src/raw-terminal-watch.js";
 import { defaultApiBase, requestJson } from "./api-client.js";
@@ -1375,16 +1376,32 @@ async function connectCommand(argv, ctx) {
 async function connectGoogleWorkspaceCommand(argv, ctx) {
   const json = argv.includes("--json");
   const reviewAccess = argv.includes("--review");
+  const reviewEnvironment = argv.includes("--review-environment") || argv.includes("--reviewer-environment");
   try {
     const cwd = flagValue(argv, "--cwd") || ctx.cwd || process.cwd();
     const explicitThreadId = flagValue(argv, "--thread") || flagValue(argv, "--thread-id") || "";
-    if (reviewAccess && !explicitThreadId) {
-      throw new Error("Usage: orkestr connect google --review --thread <reviewer-thread-id> [--json]");
+    if ((reviewAccess || reviewEnvironment) && !explicitThreadId) {
+      throw new Error("Usage: orkestr connect google --review --thread <reviewer-thread-id> [--json]\n       orkestr connect google --review-environment --thread <reviewer-thread-id> [--json]");
     }
     const where = explicitThreadId ? null : await googleConnectWhereAmI(cwd, ctx);
     const threadId = explicitThreadId || where?.thread?.id || "";
     const thread = await googleConnectThread(threadId, where, ctx);
     const principal = await googleConnectPrincipal(thread, where, ctx);
+    if (reviewEnvironment) {
+      const reviewer = createGoogleWorkspaceReviewEnvironmentLink({
+        userId: principal.userId,
+        threadId: thread.id,
+      }, ctx.env);
+      const payload = {
+        ok: true,
+        reviewEnvironmentLink: reviewer.link,
+        expiresAt: reviewer.expiresAt,
+        threadId: thread.id,
+      };
+      if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+      else ctx.stdout.write(`Google OAuth reviewer environment (expires ${payload.expiresAt}):\n${payload.reviewEnvironmentLink}\n`);
+      return 0;
+    }
     const connect = await createGoogleWorkspaceConnectLink({
       principal,
       thread,
@@ -1970,6 +1987,7 @@ Common thread commands:
   orkestr api-session status [--api-session-id id] [--json]
   orkestr connect google [--account email] [--json]
   orkestr connect google --review --thread <reviewer-thread-id> [--json]
+  orkestr connect google --review-environment --thread <reviewer-thread-id> [--json]
   orkestr attach [thread-name-or-id] [--print] [--read-only] [--takeover] [--interrupt] [--yes] [--interval seconds] [--timeout duration] [--json]
   orkestr send <thread-name-or-id> "<message>" [--json]
   orkestr wake <thread-name-or-id> [--json]
@@ -1996,7 +2014,7 @@ Advanced:
   orkestr desktop [share [slug]|approve <challenge-id>] [--json]
   orkestr jira draft <thread> [--max N] [--json]
   orkestr vm-slice create <owner-user-id> [--id slice-id] [--namespace ns] [--vm-name name] [--execute] [--json]
-  orkestr vm-slice [list|status <slice-id>|provision <slice-id>] [--json]
+  orkestr vm-slice [list|status <slice-id>|provision <slice-id>|destroy <slice-id> [--execute]] [--json]
   orkestr thread create <name> [--id id] [--cwd path] [--command command] [--executor id] [--json]
   orkestr worker create <parent-thread> [task text] [--task text] [--blank] [--label label] [--repo path] [--branch branch] [--no-wake] [--json]
   orkestr sleep <legacy-tmux-thread-name-or-id> [--json]
@@ -2260,6 +2278,8 @@ function positional(argv) {
     "--interrupt",
     "--read-only",
     "--review",
+    "--review-environment",
+    "--reviewer-environment",
     "--yes",
   ]);
   for (let index = 0; index < argv.length; index += 1) {

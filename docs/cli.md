@@ -30,6 +30,7 @@ orkestr api-session status --api-session-id "$ORKESTR_API_SESSION_ID"
 orkestr settings --json
 orkestr connect google --json
 orkestr connect google --review --thread reviewer-google --json
+orkestr connect google --review-environment --thread reviewer-google --json
 orkestr doctor timers
 orkestr security challenges
 orkestr security approve <challenge-id>
@@ -91,6 +92,13 @@ through the existing Google review email thread and do not paste it into issues,
 logs, or chat transcripts. See
 [`google-workspace-oauth-verification.md`](google-workspace-oauth-verification.md).
 
+`orkestr connect google --review-environment --thread <reviewer-thread-id>`
+generates the reviewer's starting link. The review surface creates a short-lived
+OAuth connection link only when **Connect Google** is selected and returns to
+the same review surface after the callback. It remains restricted to the
+reviewer's Gmail and Calendar test operations; it is not an Orkestr cockpit
+session.
+
 `orkestr api-session` is the stable bridge for API-driven agents that are not
 already running inside Orkestr's Codex app-server transport. `bind` attaches a
 stable external session id to the Orkestr thread resolved from `--cwd`,
@@ -140,6 +148,12 @@ access, usually over SSH on a host-native VPS.
 `orkestr security sessions` lists paired browser sessions without exposing
 session tokens. `orkestr security revoke <session-id>` revokes one paired
 browser, and `orkestr security revoke all` clears every paired browser session.
+
+`orkestr vm-slice destroy <slice-id>` prints the exact tenant-VM cleanup plan
+without changing resources. `orkestr vm-slice destroy <slice-id> --execute`
+removes only that slice's KubeVirt VM, service, cloud-init secret, root
+DataVolume, and root PVC, then marks the slice and VM records deleted. Use this
+for disposable OAuth reviewer environments after revoking the test grant.
 
 New Codex coding threads use `codex app-server` for structured turns and status.
 Existing pre-app-server Orkestr Codex threads are migrated with:

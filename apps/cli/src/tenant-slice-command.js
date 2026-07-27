@@ -9,6 +9,7 @@ export async function tenantSliceCommand(argv = [], ctx = {}) {
   if (subcommand === "apply") return provisionTenantSliceCommand(["--execute", ...rest], ctx);
   if (subcommand === "plan") return provisionTenantSliceCommand(["--dry-run", ...rest], ctx);
   if (subcommand === "provision") return provisionTenantSliceCommand(rest, ctx);
+  if (subcommand === "destroy" || subcommand === "teardown") return destroyTenantSliceCommand(rest, ctx);
   if (subcommand === "status" || subcommand === "show") return tenantSliceStatusCommand(rest, ctx);
   throw new Error(tenantSliceUsage());
 }
@@ -68,6 +69,21 @@ async function tenantSliceStatusCommand(argv, ctx) {
   const payload = await requestJson(`/api/tenant-slices/${encodeURIComponent(tenantSliceId)}/runtime-status`, ctx);
   if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
   else ctx.stdout.write(formatTenantSliceRuntimeStatus(payload));
+  return payload.ok === false ? 1 : 0;
+}
+
+async function destroyTenantSliceCommand(argv, ctx) {
+  const json = argv.includes("--json");
+  const tenantSliceId = positional(argv)[0] || flagValue(argv, "--id") || flagValue(argv, "--slice-id") || flagValue(argv, "--tenant-slice-id");
+  if (!tenantSliceId) throw new Error("Usage: orkestr vm-slice destroy <slice-id> [--execute] [--json]");
+  const execute = argv.includes("--execute") || argv.includes("--apply");
+  const payload = await requestJson(`/api/tenant-slices/${encodeURIComponent(tenantSliceId)}/destroy`, {
+    ...ctx,
+    method: "POST",
+    body: { execute, dryRun: !execute || argv.includes("--dry-run") || argv.includes("--plan") },
+  });
+  if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+  else ctx.stdout.write(formatTenantSliceDestructionResult(payload));
   return payload.ok === false ? 1 : 0;
 }
 
@@ -298,12 +314,25 @@ function formatTenantSliceRuntimeStatus(payload = {}) {
   ].filter(Boolean).join("\n") + "\n";
 }
 
+function formatTenantSliceDestructionResult(payload = {}) {
+  const slice = payload.tenantSlice || {};
+  const lines = [
+    `Tenant VM slice ${payload.dryRun === false ? "destroyed" : "destruction plan"}: ${slice.id || "-"}`,
+    `Namespace: ${payload.namespace || "-"}`,
+    `VM: ${payload.vmName || "-"}`,
+  ];
+  if (payload.dryRun === false) lines.push("The slice VM resources and its local OAuth state were removed.");
+  else lines.push("No resources were changed. Rerun with --execute to remove the VM resources and local OAuth state.");
+  return lines.join("\n") + "\n";
+}
+
 function tenantSliceUsage() {
   return [
     "Usage:",
     "  orkestr vm-slice list [--json]",
     "  orkestr vm-slice create <owner-user-id> [--id slice-id] [--namespace ns] [--vm-name name] [--kubeconfig file] [--wa-participant jid]... [--wa-admin jid]... [--execute] [--json]",
     "  orkestr vm-slice provision <slice-id> [--execute] [--namespace ns] [--vm-name name] [--kubeconfig file] [--json]",
+    "  orkestr vm-slice destroy <slice-id> [--execute] [--json]",
     "  orkestr vm-slice status <slice-id> [--json]",
   ].join("\n");
 }

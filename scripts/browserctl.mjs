@@ -6,6 +6,7 @@ import net from "node:net";
 import { randomUUID } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
 import { execFileSync, spawn } from "node:child_process";
+import { probeRfbFramebuffer } from "./browserctl-visual-readiness.mjs";
 
 const defaultCatalog = [
   {
@@ -271,7 +272,7 @@ function runtimePidChecks(state = {}) {
   };
 }
 
-function desktopReadiness({ state = {}, prepared = false, dryRunning = false, webOpen = false, cdpOpen = false } = {}) {
+async function desktopReadiness({ state = {}, prepared = false, dryRunning = false, webOpen = false, cdpOpen = false } = {}) {
   const pids = runtimePidChecks(state);
   const required = ["xvfb", "windowManager", "x11vnc", "websockify", "chrome"];
   const startedMs = Date.parse(String(state.startedAt || ""));
@@ -283,12 +284,22 @@ function desktopReadiness({ state = {}, prepared = false, dryRunning = false, we
   const pidOk = dryRunning || (hasRuntimeState && completePidState && missingPids.length === 0);
   const bridgeOk = dryRunning || (pids.x11vnc.ok && pids.websockify.ok && webOpen);
   const browserOk = dryRunning || (pids.chrome.ok && cdpOpen);
+  const framebuffer = dryRunning
+    ? { ok: true, status: "dry_run" }
+    : bridgeOk
+      ? await probeRfbFramebuffer({
+        port: Number(state.vncPort || portsForSlug(state.slug || "desktop").vncPort),
+        timeoutMs: numberEnv("ORKESTR_DESKTOP_VISUAL_PROBE_TIMEOUT_MS", 2500),
+      })
+      : { ok: false, status: "bridge_down" };
+  const visualOk = framebuffer.ok === true;
   const issues = [];
   if (!prepared) issues.push("not_prepared");
   if (hasRuntimeState && !pidOk) issues.push("stale_state");
   if (hasRuntimeState && !bridgeOk) issues.push("desktop_bridge_unreachable");
   if (hasRuntimeState && !browserOk) issues.push("desktop_browser_unreachable");
-  const ok = dryRunning || (pidOk && bridgeOk && browserOk);
+  if (hasRuntimeState && !visualOk) issues.push(framebuffer.status || "framebuffer_unreachable");
+  const ok = dryRunning || (pidOk && bridgeOk && browserOk && visualOk);
   return {
     ok,
     status: ok ? "ready" : issues[0] || "not_running",
@@ -296,6 +307,8 @@ function desktopReadiness({ state = {}, prepared = false, dryRunning = false, we
     pidOk,
     bridgeOk,
     browserOk,
+    visualOk,
+    framebuffer,
     checks: {
       prepared,
       webOpen,
@@ -613,7 +626,7 @@ async function sessionRecord(value) {
   const dryRunning = dryRun() && state.dryRunRunning === true;
   const webOpen = await isTcpPortOpen(state.webPort || portsForSlug(slug).webPort);
   const cdpOpen = await isTcpPortOpen(state.debugPort || portsForSlug(slug).debugPort);
-  const readiness = desktopReadiness({ state, prepared, dryRunning, webOpen, cdpOpen });
+  const readiness = await desktopReadiness({ state: { ...state, slug }, prepared, dryRunning, webOpen, cdpOpen });
   const running = readiness.ok;
   const degraded = prepared && !running && (
     webOpen ||

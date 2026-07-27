@@ -101,6 +101,7 @@ function capabilityControls(
 export function googleWorkspaceConnectHtml({
   connectId = "",
   reviewAccess = "",
+  reviewEnvironment = "",
   request = {},
   error = "",
   previewOnly = false,
@@ -110,10 +111,12 @@ export function googleWorkspaceConnectHtml({
 } = {}) {
   const safeConnect = escapeHtml(connectId);
   const safeReviewAccess = escapeHtml(reviewAccess);
+  const safeReviewEnvironment = escapeHtml(reviewEnvironment);
   const allowed = googleWorkspaceAllowedCapabilities(env, allowedCapabilities);
   const hidden = [
     `<input type="hidden" name="connect" value="${safeConnect}">`,
     safeReviewAccess ? `<input type="hidden" name="review" value="${safeReviewAccess}">` : "",
+    safeReviewEnvironment ? `<input type="hidden" name="review_environment" value="${safeReviewEnvironment}">` : "",
   ].join("");
   const contextRows = [
     ["Tool", "orkestr_auth"],
