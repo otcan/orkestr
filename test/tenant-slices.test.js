@@ -235,6 +235,41 @@ test("tenant slice provisioning builds a VM-backed plan", async () => {
   assert.equal(plan.manifest.includes("token"), false);
 });
 
+test("tenant slice provisioning removes disabled connector capabilities and service ports", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-tenant-slices-isolated-plan-"));
+  const env = { ORKESTR_HOME: home, ORKESTR_TENANT_SLICE_PORT_BASE: "24500" };
+  const slice = await createTenantSlice({
+    id: "isolated-reviewer",
+    ownerUserId: "reviewer",
+    connectors: {
+      whatsapp: { enabled: false },
+      gmail: { enabled: true },
+      linkedin: { enabled: false },
+      oxrm: { enabled: false },
+    },
+  }, env);
+
+  const plan = buildTenantSliceProvisioningPlan(slice, {
+    namespace: "tenant-reviewer",
+    vmName: "reviewer-vm",
+    controlPlane: { enabled: false },
+  }, env);
+
+  assert.deepEqual(slice.capabilities, ["codex", "files", "timers", "gmail"]);
+  assert.equal(slice.oxrm.enabled, false);
+  assert.deepEqual(plan.tenantVm.capabilities, ["codex", "files", "timers", "gmail"]);
+  assert.deepEqual(plan.servicePorts, [
+    { name: "ssh", port: 22, protocol: "TCP" },
+    { name: "orkestr", port: 24500, protocol: "TCP" },
+  ]);
+  assert.deepEqual(plan.bootstrapProfile.desks, []);
+  assert.deepEqual(plan.bootstrapProfile.skills.includes("whatsapp"), false);
+  assert.deepEqual(plan.bootstrapProfile.skills.includes("linkedin"), false);
+  assert.equal(plan.bootstrapProfile.connectors.whatsapp.enabled, false);
+  assert.equal(plan.bootstrapProfile.connectors.linkedin.enabled, false);
+  assert.equal(plan.bootstrapProfile.controlPlane.enabled, false);
+});
+
 test("tenant slice provisioning execute path and runtime status are observable", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-tenant-slices-exec-"));
   const env = {

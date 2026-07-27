@@ -163,7 +163,9 @@ function normalizeConnectors(connectors = {}) {
     whatsappBrokerBaseUrl: clean(source.whatsappBrokerBaseUrl || source.waBrokerBaseUrl || source.whatsappControlPlaneBaseUrl || source.whatsappInternalBaseUrl || ""),
     gmailAccountId: clean(source.gmailAccountId || ""),
     outlookAccountId: clean(source.outlookAccountId || ""),
-    linkedinDesktopSlug: clean(source.linkedinDesktopSlug || source.linkedin || "linkedin"),
+    linkedinDesktopSlug: Object.hasOwn(source, "linkedinDesktopSlug")
+      ? clean(source.linkedinDesktopSlug)
+      : clean(source.linkedin || "linkedin"),
   };
 }
 

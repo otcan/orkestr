@@ -58,6 +58,13 @@ function uniqueList(values = []) {
 
 function vmCapabilities(slice) {
   const capabilities = new Set(uniqueList(slice.capabilities || []));
+  if (slice.connectors?.whatsapp?.enabled === false) capabilities.delete("whatsapp");
+  if (slice.connectors?.gmail?.enabled === false) capabilities.delete("gmail");
+  if (slice.connectors?.linkedin?.enabled === false) {
+    capabilities.delete("linkedin");
+    capabilities.delete("desks");
+  }
+  if (slice.connectors?.oxrm?.enabled === false) capabilities.delete("oxrm");
   if (capabilities.has("linkedin")) {
     capabilities.add("desks");
     capabilities.delete("linkedin");
@@ -88,6 +95,7 @@ function tenantVmInputForSlice(sliceInput = {}, input = {}, env = process.env) {
       slice.labels?.brokerInstanceId ||
       slice.labels?.instanceId,
   );
+  const desktopEnabled = slice.connectors?.linkedin?.enabled !== false;
   const desktopSlug = clean(slice.connectors?.linkedin?.desktopSlug || "linkedin") || "linkedin";
   const firstThreadId = clean(input.firstThreadId || slice.id);
   const workspacePath = `/opt/orkestr/workspace/${firstThreadId}`;
@@ -130,15 +138,15 @@ function tenantVmInputForSlice(sliceInput = {}, input = {}, env = process.env) {
     bootstrap: {
       firstThreadName: clean(input.firstThreadName || slice.displayName || slice.ownerUserId),
       firstThreadId,
-      desks: slice.connectors?.linkedin?.enabled === false ? [] : [desktopEntry],
+      desks: desktopEnabled ? [desktopEntry] : [],
       skills: vmCapabilities(slice),
     },
     desktops: {
-      enabled: slice.connectors?.linkedin?.enabled !== false,
-      provisioned: ["warming", "running"].includes(slice.status),
+      enabled: desktopEnabled,
+      provisioned: desktopEnabled && ["warming", "running"].includes(slice.status),
       defaultSlug: desktopSlug,
-      visibleSlugs: slice.connectors?.linkedin?.enabled === false ? [] : [desktopSlug],
-      status: slice.status === "error" ? "error" : slice.status === "running" ? "ready" : "not_provisioned",
+      visibleSlugs: desktopEnabled ? [desktopSlug] : [],
+      status: slice.status === "error" ? "error" : desktopEnabled && slice.status === "running" ? "ready" : "not_provisioned",
     },
     connectors: {
       whatsappChatId: clean(slice.connectors?.whatsapp?.chatId),
@@ -147,7 +155,7 @@ function tenantVmInputForSlice(sliceInput = {}, input = {}, env = process.env) {
       whatsappRouteMode,
       whatsappBrokerBaseUrl: targetBrokerBaseUrl,
       gmailAccountId: clean(slice.connectors?.gmail?.accountId),
-      linkedinDesktopSlug: desktopSlug,
+      linkedinDesktopSlug: desktopEnabled ? desktopSlug : "",
     },
     capabilities: vmCapabilities(slice),
     labels: {
@@ -175,7 +183,16 @@ function vmProvisionInput(slice, tenantVm, input = {}, env = process.env) {
     connectPublicSetupUrl: input.connectPublicSetupUrl || input.publicSetupUrl || controlPlane.connectPublicSetupUrl,
     port: input.port || input.orkestrPort || slice.portBlock?.ports?.orkestr || "19812",
     servicePorts: {
-      ...slice.portBlock?.ports,
+      orkestr: slice.portBlock?.ports?.orkestr,
+      ...(slice.connectors?.oxrm?.enabled === false ? {} : {
+        oxrmWeb: slice.portBlock?.ports?.oxrmWeb,
+        oxrmApi: slice.portBlock?.ports?.oxrmApi,
+        oxrmMcp: slice.portBlock?.ports?.oxrmMcp,
+      }),
+      ...(slice.connectors?.linkedin?.enabled === false ? {} : {
+        desktopNoVnc: slice.portBlock?.ports?.desktopNoVnc,
+        desktopChromeDebug: slice.portBlock?.ports?.desktopChromeDebug,
+      }),
       ...(input.servicePorts && typeof input.servicePorts === "object" && !Array.isArray(input.servicePorts) ? input.servicePorts : {}),
     },
     instanceDesktopsProvisioned: slice.connectors?.linkedin?.enabled === false ? "0" : "1",

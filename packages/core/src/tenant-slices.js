@@ -274,15 +274,27 @@ function normalizeLifecycle(lifecycle = {}) {
   };
 }
 
-function normalizeOxrm(oxrm = {}, id = "", portBlock = {}) {
+function normalizeOxrm(oxrm = {}, id = "", portBlock = {}, connectorEnabled = true) {
   const source = oxrm && typeof oxrm === "object" && !Array.isArray(oxrm) ? oxrm : {};
   return {
-    enabled: source.enabled !== false,
+    enabled: connectorEnabled !== false && source.enabled !== false,
     composeProject: clean(source.composeProject || source.projectName) || `oxrm-tenant-${safeSystemdName(id)}`,
     webUrl: clean(source.webUrl) || `http://127.0.0.1:${portBlock.ports?.oxrmWeb || 0}`,
     apiUrl: clean(source.apiUrl) || `http://127.0.0.1:${portBlock.ports?.oxrmApi || 0}`,
     mcpUrl: clean(source.mcpUrl) || `http://127.0.0.1:${portBlock.ports?.oxrmMcp || 0}`,
   };
+}
+
+function normalizedCapabilities(input = {}, connectors = {}) {
+  const capabilities = new Set(normalizeStringList(input.capabilities || ["codex", "files", "timers", "whatsapp", "gmail", "linkedin", "oxrm"]));
+  if (connectors.whatsapp?.enabled === false) capabilities.delete("whatsapp");
+  if (connectors.gmail?.enabled === false) capabilities.delete("gmail");
+  if (connectors.linkedin?.enabled === false) {
+    capabilities.delete("linkedin");
+    capabilities.delete("desks");
+  }
+  if (connectors.oxrm?.enabled === false) capabilities.delete("oxrm");
+  return [...capabilities];
 }
 
 export function normalizeTenantSlice(input = {}, env = process.env, existing = []) {
@@ -292,7 +304,7 @@ export function normalizeTenantSlice(input = {}, env = process.env, existing = [
   const portBlock = normalizePortBlock(input.portBlock, existing, env);
   const connectors = normalizeConnectors(input.connectors || {});
   const resources = normalizeResources(input.resources);
-  const capabilities = normalizeStringList(input.capabilities || ["codex", "files", "timers", "whatsapp", "gmail", "linkedin", "oxrm"]);
+  const capabilities = normalizedCapabilities(input, connectors);
   const controlPlane = normalizeTenantControlPlane(input.controlPlane || input.sharedControlPlane || {}, env, { defaultEnabled: true });
   return {
     id,
@@ -309,7 +321,7 @@ export function normalizeTenantSlice(input = {}, env = process.env, existing = [
     controlPlane,
     budget: normalizeBudget(input.budget || input.openaiBudget),
     connectors,
-    oxrm: normalizeOxrm(input.oxrm, id, portBlock),
+    oxrm: normalizeOxrm(input.oxrm, id, portBlock, connectors.oxrm.enabled),
     lifecycle: normalizeLifecycle(input.lifecycle),
     capabilities,
     labels: normalizeLabels(input.labels),

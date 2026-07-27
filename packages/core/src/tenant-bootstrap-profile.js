@@ -87,7 +87,11 @@ function normalizeSkills(values = [], vm) {
 
 function normalizeDesks(values = [], vm) {
   const input = Array.isArray(values) ? values : stringList(values);
-  const rows = input.length ? input : [{ slug: vm.connectors.linkedinDesktopSlug || "linkedin", connector: "linkedin" }];
+  const rows = input.length
+    ? input
+    : (vm.capabilities.includes("desks") || vm.connectors.linkedinDesktopSlug
+      ? [{ slug: vm.connectors.linkedinDesktopSlug || "linkedin", connector: "linkedin" }]
+      : []);
   const seen = new Set();
   return rows
     .map((item) => {
