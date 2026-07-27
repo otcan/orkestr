@@ -181,6 +181,8 @@ test("server serves the public site at root and Angular UI at app routes", async
     assert.match(privacyHtml, /Google user data Orkestr accesses/);
     assert.match(privacyHtml, /id="google-data-sharing"/);
     assert.match(privacyHtml, /id="google-data-protection"/);
+    assert.match(privacyHtml, /id="google-data-limited-use"/);
+    assert.match(privacyHtml, /id="google-data-deletion"/);
     assert.match(privacyHtml, /encrypted at rest with AES-256-GCM/);
     assert.match(privacyHtml, /cannot and does not read the user's inbox/);
     assert.equal(aboutResponse.status, 200);

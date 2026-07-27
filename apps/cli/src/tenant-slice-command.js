@@ -127,6 +127,8 @@ function tenantSliceCreateBody(argv, ownerUserId) {
   });
   if (Object.keys(budget).length) body.budget = budget;
 
+  if (argv.includes("--no-control-plane")) body.controlPlane = { enabled: false };
+
   const connectors = connectorBody(argv);
   if (Object.keys(connectors).length) body.connectors = connectors;
 
@@ -304,7 +306,7 @@ function tenantSliceUsage() {
   return [
     "Usage:",
     "  orkestr vm-slice list [--json]",
-    "  orkestr vm-slice create <owner-user-id> [--id slice-id] [--namespace ns] [--vm-name name] [--kubeconfig file] [--wa-participant jid]... [--wa-admin jid]... [--execute] [--json]",
+    "  orkestr vm-slice create <owner-user-id> [--id slice-id] [--namespace ns] [--vm-name name] [--kubeconfig file] [--no-control-plane] [--wa-participant jid]... [--wa-admin jid]... [--execute] [--json]",
     "  orkestr vm-slice provision <slice-id> [--execute] [--namespace ns] [--vm-name name] [--kubeconfig file] [--json]",
     "  orkestr vm-slice destroy <slice-id> [--execute] [--json]",
     "  orkestr vm-slice status <slice-id> [--json]",
@@ -313,7 +315,7 @@ function tenantSliceUsage() {
 
 function tenantSliceCreateUsage() {
   return [
-    "Usage: orkestr vm-slice create <owner-user-id> [--id slice-id] [--name display-name] [--namespace ns] [--vm-name name] [--kubeconfig file] [--wa-participant jid]... [--wa-admin jid]... [--execute] [--json]",
+    "Usage: orkestr vm-slice create <owner-user-id> [--id slice-id] [--name display-name] [--namespace ns] [--vm-name name] [--kubeconfig file] [--no-control-plane] [--wa-participant jid]... [--wa-admin jid]... [--execute] [--json]",
     "Dry-run is the default. Add --execute to apply the KubeVirt manifest.",
     "Tenant VMs default to /etc/rancher/k3s/k3s.yaml; ambient KUBECONFIG is ignored.",
   ].join("\n");

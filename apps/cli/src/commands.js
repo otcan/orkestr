@@ -2013,7 +2013,7 @@ Advanced:
   orkestr security [challenges|sessions|approve <challenge-id>|reject <challenge-id>|revoke <session-id|all>] [--json]
   orkestr desktop [share [slug]|approve <challenge-id>] [--json]
   orkestr jira draft <thread> [--max N] [--json]
-  orkestr vm-slice create <owner-user-id> [--id slice-id] [--namespace ns] [--vm-name name] [--execute] [--json]
+  orkestr vm-slice create <owner-user-id> [--id slice-id] [--namespace ns] [--vm-name name] [--no-control-plane] [--execute] [--json]
   orkestr vm-slice [list|status <slice-id>|provision <slice-id>|destroy <slice-id> [--execute]] [--json]
   orkestr thread create <name> [--id id] [--cwd path] [--command command] [--executor id] [--json]
   orkestr worker create <parent-thread> [task text] [--task text] [--blank] [--label label] [--repo path] [--branch branch] [--no-wake] [--json]

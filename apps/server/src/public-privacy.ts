@@ -146,11 +146,11 @@ export function publicPrivacyPage(env = process.env): PrivacyPage {
       </ul>
       <p>No system can guarantee absolute security. Suspected unauthorized access is investigated and affected users and authorities are notified when required.</p>
     </article>
-    <article id="google-limited-use">
+    <article id="google-data-limited-use">
       <h2>8. Google API Services User Data Policy</h2>
       <p>Orkestr's use and transfer of information received from Google APIs adheres to the <a href="https://developers.google.com/terms/api-services-user-data-policy" rel="noreferrer">Google API Services User Data Policy</a>, including the Limited Use requirements. Google Workspace data is used only to provide or improve the user-facing feature requested by the user.</p>
     </article>
-    <article id="deletion">
+    <article id="google-data-deletion">
       <h2>9. User controls, revocation, and deletion</h2>
       <p>Users can decline Google access and continue using Orkestr without Gmail. A connected account can be disconnected from Orkestr setup, which revokes the Google grant and removes locally stored credentials. Users can also revoke Orkestr from their Google Account permissions page.</p>
       <p>Users may request access, correction, export, restriction, or deletion of their Orkestr data through the invitation chat, the <a href="/data-deletion">data deletion page</a>, or ${contactHtml(operator.contact)}. Some minimal records may be retained where required for security, abuse prevention, dispute handling, or law.</p>

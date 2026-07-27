@@ -150,6 +150,7 @@ test("CLI creates a tenant VM slice and returns a dry-run provisioning plan by d
     "40",
     "--cpu",
     "150",
+    "--no-control-plane",
     "--whatsapp-chat-id",
     "alice@g.us",
     "--wa-participant",
@@ -194,6 +195,7 @@ test("CLI creates a tenant VM slice and returns a dry-run provisioning plan by d
   assert.equal(seen[0].body.resources.memoryMaxMiB, 4096);
   assert.equal(seen[0].body.resources.diskSoftGiB, 40);
   assert.equal(seen[0].body.resources.cpuQuotaPercent, 150);
+  assert.deepEqual(seen[0].body.controlPlane, { enabled: false });
   assert.equal(seen[0].body.connectors.whatsapp.chatId, "alice@g.us");
   assert.deepEqual(seen[0].body.connectors.whatsapp.participantIds, ["wa-contact-primary@c.us", "wa-contact-secondary@c.us"]);
   assert.deepEqual(seen[0].body.connectors.whatsapp.adminParticipantIds, ["wa-contact-primary@c.us", "wa-contact-secondary@c.us"]);

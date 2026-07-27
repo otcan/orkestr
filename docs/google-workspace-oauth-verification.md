@@ -215,7 +215,7 @@ environment variables above. First inspect the plan, then explicitly apply it:
 orkestr vm-slice create google-reviewer \
   --id google-oauth-reviewer \
   --name "Google OAuth reviewer" \
-  --no-whatsapp --no-linkedin --no-oxrm \
+  --no-control-plane --no-whatsapp --no-linkedin --no-oxrm \
   --create-only
 orkestr vm-slice provision google-oauth-reviewer
 orkestr vm-slice provision google-oauth-reviewer --execute
