@@ -127,6 +127,17 @@ The same permission review is available in **Connectors > Gmail**. Existing
 accounts can be reconnected to add or reduce capabilities, and a second account
 can stay **Only when requested** so agents do not select it implicitly.
 
+For Google OAuth verification, an operator can create a separate signed review
+environment link with `orkestr connect google --review-environment --thread
+google-oauth-reviewer --json`. It is for a disposable isolated installation only. The
+reviewer can connect a synthetic Google account, read test mail, prepare a
+draft, send an explicitly approved test message, list Calendar events, and
+create an explicitly approved test event. It is not a normal Orkestr login and
+does not expose threads, WhatsApp, Raw, desktops, browser profiles, or other
+users' data. The link is a bearer credential and must only be sent through the
+existing Google review thread. See [Google Workspace OAuth verification
+prep](google-workspace-oauth-verification.md).
+
 Once granted, Orkestr exposes these Google Workspace workflows in chat:
 
 - Prepare a Gmail draft without sending it.

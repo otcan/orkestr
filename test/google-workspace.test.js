@@ -18,6 +18,7 @@ import {
   startGoogleWorkspaceOAuth,
   updateGoogleCalendarEvent,
 } from "../packages/connectors/src/google-workspace.js";
+import { createGoogleWorkspaceReviewEnvironmentTicket } from "../packages/connectors/src/google-workspace-review-environment.js";
 import {
   googleWorkspaceCapabilitiesForScopes,
   googleWorkspaceAllowedCapabilities,
@@ -248,6 +249,41 @@ test("isolated reviewer links are explicitly enabled, user-bound, and longer liv
     }),
     (error) => error.message === "google_workspace_review_access_requires_isolated_instance",
   );
+});
+
+test("reviewer environment ticket survives the OAuth state and is returned after completion", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-google-workspace-review-return-"));
+  const env = await configureGoogle(home);
+  env.ORKESTR_GOOGLE_OAUTH_ALLOWED_CAPABILITIES = "gmail_send";
+  env.ORKESTR_GOOGLE_WORKSPACE_REVIEW_ACCESS_ENABLED = "1";
+  env.ORKESTR_GOOGLE_WORKSPACE_REVIEW_ACCESS_SECRET = "review-access-secret-for-isolated-google-verification";
+  const principal = userPrincipal({ id: "reviewer" });
+  const environmentTicket = createGoogleWorkspaceReviewEnvironmentTicket({ userId: "reviewer", threadId: "review-thread" }, env);
+  const link = await createGoogleWorkspaceConnectLink({
+    principal,
+    thread: { id: "review-thread" },
+    reviewAccess: true,
+  }, env);
+  const started = await startGoogleWorkspaceOAuth(env, {
+    connectId: link.connectId,
+    capabilities: ["gmail_send"],
+    reviewEnvironmentTicket: environmentTicket,
+  });
+
+  const result = await finishGmailOAuth(new URLSearchParams({ code: "review-code", state: started.state }), env, async (url) => {
+    if (String(url) === "https://oauth2.googleapis.com/token") {
+      return jsonResponse({
+        access_token: "review-access",
+        refresh_token: "review-refresh",
+        expires_in: 3600,
+        scope: "openid https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/gmail.send",
+      });
+    }
+    return jsonResponse({ emailAddress: "reviewer@example.test" });
+  });
+
+  assert.equal(result.provider, "google_workspace");
+  assert.equal(result.reviewEnvironmentTicket, environmentTicket);
 });
 
 test("google workspace oauth defaults to Gmail send access", async () => {

@@ -22,6 +22,7 @@ import {
   provisionTenantSlice,
   tenantSliceRuntimeStatus,
 } from "../packages/core/src/tenant-slice-provisioning.js";
+import { destroyTenantSlice } from "../packages/core/src/tenant-slice-destruction.js";
 import { getTenantVm } from "../packages/core/src/tenant-vm-registry.js";
 
 async function read(response) {
@@ -335,6 +336,59 @@ test("tenant slice provisioning execute path and runtime status are observable",
   assert.equal((await getTenantVm("failed-slice-vm", env)).status, "error");
 });
 
+test("tenant slice destruction defaults to a plan and explicitly removes only the slice VM resources", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-tenant-slices-destroy-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_TENANT_SLICE_ROOT: "/tenant-root",
+    ORKESTR_TENANT_SLICE_PORT_BASE: "25500",
+    KUBECONFIG: "/tmp/ambient-cluster.yaml",
+  };
+  await createTenantSlice({
+    id: "reviewer-slice",
+    ownerUserId: "reviewer",
+    connectors: { whatsapp: { enabled: false }, linkedin: { enabled: false } },
+  }, env);
+  await provisionTenantSlice("reviewer-slice", { execute: true, namespace: "tenant-reviewer", vmName: "reviewer-vm" }, env, {
+    spawnWithInput: async () => ({ stdout: "applied", stderr: "" }),
+  });
+
+  const planned = await destroyTenantSlice("reviewer-slice", {}, env);
+  assert.equal(planned.dryRun, true);
+  assert.equal(planned.namespace, "tenant-reviewer");
+  assert.equal(planned.vmName, "reviewer-vm");
+  assert.deepEqual(planned.commands.delete, [
+    "kubectl",
+    "--namespace", "tenant-reviewer",
+    "delete",
+    "virtualmachine", "reviewer-vm",
+    "service", "reviewer-vm-svc",
+    "secret", "reviewer-vm-cloudinit",
+    "datavolume", "reviewer-vm-rootdisk",
+    "pvc", "reviewer-vm-rootdisk",
+    "--ignore-not-found=true",
+    "--wait=true",
+  ]);
+  assert.equal((await getTenantSlice("reviewer-slice", env)).status, "provisioning");
+
+  const calls = [];
+  const destroyed = await destroyTenantSlice("reviewer-slice", { execute: true }, env, {
+    spawnCommand: async (command, args, options) => {
+      calls.push({ command, args, options });
+      return { stdout: "deleted", stderr: "" };
+    },
+  });
+  assert.equal(destroyed.dryRun, false);
+  assert.equal(destroyed.tenantSlice.status, "deleted");
+  assert.equal(destroyed.tenantVm.status, "deleted");
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].command, "kubectl");
+  assert.deepEqual(calls[0].args, planned.commands.delete.slice(1));
+  assert.equal(calls[0].options.env.KUBECONFIG, "/etc/rancher/k3s/k3s.yaml");
+  assert.equal((await getTenantSlice("reviewer-slice", env)).status, "deleted");
+  assert.equal((await getTenantVm("reviewer-slice-vm", env)).status, "deleted");
+});
+
 test("tenant slice API is admin-only and returns provisioning plans", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-tenant-slices-api-"));
   const priorHome = process.env.ORKESTR_HOME;
@@ -412,6 +466,15 @@ test("tenant slice API is admin-only and returns provisioning plans", async () =
     assert.deepEqual(JSON.parse(provisioned.runtimeEnv.ORKESTR_API_AGENT_TENANT_BUDGETS_JSON), {
       dana: { dailyUsd: 4, monthlyUsd: 40 },
     });
+
+    const destruction = await read(await fetch(`${baseUrl}/api/tenant-slices/dana-slice/destroy`, {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: adminCookie },
+      body: JSON.stringify({}),
+    }));
+    assert.equal(destruction.dryRun, true);
+    assert.equal(destruction.namespace, "orkestr-tenants");
+    assert.equal(destruction.vmName, "dana-slice-vm");
 
     await createUser({
       email: "dana@example.test",

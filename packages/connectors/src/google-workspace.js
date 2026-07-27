@@ -469,6 +469,7 @@ export async function startGoogleWorkspaceOAuth(env = process.env, options = {})
     setAsThreadDefault: request.setAsThreadDefault === true,
     privacyPolicyVersion: clean(options.privacyPolicyVersion),
     privacyConsentAt: clean(options.privacyConsentAt),
+    reviewEnvironmentTicket: clean(options.reviewEnvironmentTicket),
   });
   request.consumedAt = nowIso();
   request.selectedCapabilities = capabilities;

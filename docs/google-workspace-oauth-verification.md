@@ -171,11 +171,12 @@ broker instance.
    directory, or workspace into this environment.
 3. Enable only the five capabilities in the expanded verification contract.
    Confirm the Google Cloud Console data-access list is the same scope list.
-4. Keep normal Orkestr pairing enabled. The review link is a separate, signed,
-   one-time authorization for exactly one Google connection request. It does
-   not create a browser session and cannot open the cockpit, thread API, Raw,
-   desktops, setup, or any other connector route.
-5. Give the reviewer the generated connection link and the dedicated test
+4. Keep normal Orkestr pairing enabled. The reviewer environment link is a
+   separate, signed bearer session for one review user and thread. It opens a
+   dedicated Google Workspace review surface only; it cannot open the normal
+   cockpit, thread API, Raw, desktops, setup, WhatsApp, browser profiles, or
+   any unrelated connector route.
+5. Give the reviewer the generated environment link and the dedicated test
    account sign-in instructions only through the existing Google review email
    thread. Never commit credentials, links, session material, or test data to
    this repository.
@@ -183,28 +184,74 @@ broker instance.
    data and Orkestr home, rotate the review-link secret, and disable the review
    environment.
 
-The review link is intentionally disabled by default. A private review
+The reviewer environment is intentionally disabled by default. A private review
 environment must set all of the following values, with a high-entropy secret
 of at least 32 characters stored only in its service environment:
 
 ```dotenv
 ORKESTR_GOOGLE_WORKSPACE_REVIEW_ACCESS_ENABLED=1
 ORKESTR_GOOGLE_WORKSPACE_REVIEW_ACCESS_SECRET=<high-entropy-secret>
-ORKESTR_GOOGLE_WORKSPACE_REVIEW_ACCESS_TTL_MINUTES=10080
+ORKESTR_GOOGLE_WORKSPACE_REVIEW_PUBLIC_URL=https://review.example.test
+ORKESTR_GOOGLE_WORKSPACE_REVIEW_ENV_TTL_MINUTES=240
 ```
 
 Generate it only on that isolated instance, with a dedicated reviewer thread:
 
 ```bash
-orkestr connect google --review --thread reviewer-google --json
+orkestr connect google --review-environment --thread google-oauth-reviewer --json
 ```
 
-The command is equivalent to the internal connection flow with
-`reviewAccess: true`. It is bound by HMAC to the exact connection id, Orkestr
-user id, and expiry. Reviewer links cannot be generated for brokered tenant
-connections. A missing, altered, expired, or disabled reviewer ticket follows
-the normal pairing path or returns an explicit unavailable error; it never
-falls back to broad access.
+The generated link is bound by HMAC to the exact reviewer user, reviewer thread,
+and expiry. Its **Connect Google** action creates a second, one-time OAuth
+authorization link bound to that same user. After the Google callback, Orkestr
+returns the reviewer to the same review environment.
+
+Provision this environment as a dedicated tenant VM slice with no WhatsApp,
+desktop, or CRM connector. The stable external reviewer hostname belongs at the
+reverse proxy, while the VM receives a fresh Orkestr home and the reviewer-only
+environment variables above. First inspect the plan, then explicitly apply it:
+
+```bash
+orkestr vm-slice create google-reviewer \
+  --id google-oauth-reviewer \
+  --name "Google OAuth reviewer" \
+  --no-whatsapp --no-linkedin --no-oxrm \
+  --create-only
+orkestr vm-slice provision google-oauth-reviewer
+orkestr vm-slice provision google-oauth-reviewer --execute
+```
+
+Add the exact reviewer callback URI configured by that deployment to the same
+Google OAuth client before opening the link. Do not reuse a production callback
+or point the reviewer hostname at a production Orkestr home.
+
+After the review, inspect the destruction plan and execute it only after the
+reviewer link and Google grant have been revoked:
+
+```bash
+orkestr vm-slice destroy google-oauth-reviewer
+orkestr vm-slice destroy google-oauth-reviewer --execute
+```
+
+The execute step deletes only that registered slice's KubeVirt VM, service,
+cloud-init secret, DataVolume, and root PVC, then marks its VM and slice records
+deleted. It does not delete a shared namespace or any other tenant. This is the
+required removal step for local OAuth state; do not substitute the registry-only
+delete endpoint for it.
+
+The review surface exposes only these explicit, user-confirmed operations after
+the corresponding scope has been granted: list and read Gmail messages, create
+Gmail drafts, send a message, list Calendar events, and create a Calendar event.
+Draft creation never sends a message. Send and Calendar creation require an
+affirmative confirmation in the review UI. Reviewer links cannot be generated
+for brokered tenant connections. A missing, altered, expired, or disabled
+review ticket returns an explicit unavailable error; it never falls back to
+broad access or pairing.
+
+The page includes deterministic review tasks and a compact action log. The log
+records only a timestamp and a fixed action name such as `gmail_draft_created`
+or `calendar_event_created`; it never stores or displays recipients, subjects,
+message bodies, event details, authorization codes, or tokens.
 
 ## Verification Demo Checklist
 
@@ -256,8 +303,8 @@ true on the live production deployment:
   capability allowlist, submitted scopes, scope justification, and demo video
   all describe the same production behavior.
 - The dedicated reviewer environment satisfies the isolation checklist above,
-  and the reviewer link has been tested without disabling pairing on normal
-  routes.
+  the environment link has been tested without disabling pairing on normal
+  routes, and its OAuth callback returns to that environment.
 
 ## Gmail Signal Notifications
 
