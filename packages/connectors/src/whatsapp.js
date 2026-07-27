@@ -321,6 +321,16 @@ function externalBridgeInlineAttachmentMaxBytes(env = process.env) {
   return Number.isFinite(value) && value > 0 ? value : 25 * 1024 * 1024;
 }
 
+function localBridgeAttachmentMaxBytes(env = process.env) {
+  const value = Number(
+    env.ORKESTR_WHATSAPP_LOCAL_BRIDGE_ATTACHMENT_MAX_BYTES ||
+      env.ORKESTR_WHATSAPP_ATTACHMENT_MAX_BYTES ||
+      env.ORKESTR_REMOTE_ARTIFACT_MAX_BYTES ||
+      25 * 1024 * 1024,
+  );
+  return Number.isFinite(value) && value > 0 ? value : 25 * 1024 * 1024;
+}
+
 function safeBridgeAttachmentFilename(value = "", fallback = "attachment") {
   return path.basename(String(value || fallback)).replace(/[^a-zA-Z0-9_. -]/g, "_").slice(0, 240) || fallback;
 }
@@ -371,6 +381,34 @@ async function prepareExternalBridgeInlineAttachments(attachments = [], env = pr
       encoding: "base64",
       data: buffer.toString("base64"),
     });
+  }
+  return { attachments: prepared, skipped };
+}
+
+async function prepareLocalBridgeAttachments(attachments = [], env = process.env) {
+  const maxBytes = localBridgeAttachmentMaxBytes(env);
+  const prepared = [];
+  const skipped = [];
+  for (const attachment of Array.isArray(attachments) ? attachments : []) {
+    const filePath = pickString(attachment.path, attachment.saved_path, attachment.filePath, attachment.localPath);
+    if (!filePath) continue;
+    const filename = safeBridgeAttachmentFilename(pickString(attachment.filename, attachment.name, path.basename(filePath)));
+    let stats = null;
+    try {
+      stats = await fs.stat(filePath);
+    } catch {
+      skipped.push({ path: filePath, filename, reason: "attachment_path_missing" });
+      continue;
+    }
+    if (!stats.isFile()) {
+      skipped.push({ path: filePath, filename, reason: "attachment_path_not_file" });
+      continue;
+    }
+    if (stats.size > maxBytes) {
+      skipped.push({ path: filePath, filename, reason: "attachment_too_large", size: stats.size, maxBytes });
+      continue;
+    }
+    prepared.push(attachment);
   }
   return { attachments: prepared, skipped };
 }
@@ -5365,7 +5403,21 @@ export async function sendWhatsAppText({ chatId = "", text = "", accountId = "",
       })).filter((attachment) => attachment.path)
     : [];
   if (!bridgeUrl && bridgeMode(resolvedConfig, env) === "local") {
-    return sendLocalWhatsAppMessage({ chatId, text, accountId, attachments: normalizedAttachments, env, crossAccountEchoSuppression, routeSentMessage });
+    const localAttachments = await prepareLocalBridgeAttachments(normalizedAttachments, env);
+    const safeSkipped = localAttachments.skipped.map((attachment) => ({
+      ...attachment,
+      path: attachment.filename,
+    }));
+    const payload = await sendLocalWhatsAppMessage({
+      chatId,
+      text: appendLocalAttachmentFailureNotes(text, safeSkipped),
+      accountId,
+      attachments: localAttachments.attachments,
+      env,
+      crossAccountEchoSuppression,
+      routeSentMessage,
+    });
+    return localAttachments.skipped.length ? { ...payload, skippedAttachments: localAttachments.skipped } : payload;
   }
   if (!bridgeUrl) throw badRequest("whatsapp_bridge_not_configured");
   const externalBridgeCanReadPaths = externalBridgeCanReadLocalAttachmentPaths(resolvedConfig, env);

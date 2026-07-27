@@ -6785,6 +6785,16 @@ async function recoverLocalWhatsAppAccountAfterGroupAdminError(accountId, error,
   });
 }
 
+function localWhatsAppOutboundAttachmentMaxBytes(env = process.env) {
+  const parsed = Number(
+    env.ORKESTR_WHATSAPP_LOCAL_BRIDGE_ATTACHMENT_MAX_BYTES ||
+      env.ORKESTR_WHATSAPP_ATTACHMENT_MAX_BYTES ||
+      env.ORKESTR_REMOTE_ARTIFACT_MAX_BYTES ||
+      25 * 1024 * 1024,
+  );
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 25 * 1024 * 1024;
+}
+
 /**
  * @param {{ chatId?: string, text?: string, accountId?: string, attachments?: Array<Record<string, unknown>>, env?: Record<string, string | undefined>, crossAccountEchoSuppression?: boolean, routeSentMessage?: boolean }} [options]
  */
@@ -6804,6 +6814,7 @@ export async function sendLocalWhatsAppMessage({ chatId = "", text = "", account
   }
   await stopLocalWhatsAppTyping({ accountId: selectedAccountId, chatId, env }).catch(() => {});
   const sent = [];
+  const skipped = [];
   const routed = [];
   try {
     const cleanText = String(text || "");
@@ -6857,8 +6868,19 @@ export async function sendLocalWhatsAppMessage({ chatId = "", text = "", account
       : [];
     if (normalizedAttachments.length) {
       const MessageMedia = runtime.MessageMedia || (await loadBridgeDependencies()).whatsapp.MessageMedia;
+      const maxAttachmentBytes = localWhatsAppOutboundAttachmentMaxBytes(env);
       for (const attachment of normalizedAttachments) {
         const stat = await fs.stat(attachment.path);
+        if (stat.size > maxAttachmentBytes) {
+          skipped.push({
+            path: attachment.path,
+            filename: attachment.filename || path.basename(attachment.path),
+            reason: "attachment_too_large",
+            size: stat.size,
+            maxBytes: maxAttachmentBytes,
+          });
+          continue;
+        }
         rememberOutboundAttachment(selectedAccountId, chatId, { ...attachment, size: stat.size }, env, {
           crossAccount: crossAccountEchoSuppression !== false,
         });
@@ -6902,6 +6924,7 @@ export async function sendLocalWhatsAppMessage({ chatId = "", text = "", account
     ids: sent.map((entry) => entry.id).filter(Boolean),
     accountId: selectedAccountId,
     sent,
+    ...(skipped.length ? { skipped } : {}),
     ...(routed.length ? { routed } : {}),
   };
 }
