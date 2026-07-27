@@ -15,6 +15,7 @@ import {
   getTenantSliceForPrincipal,
   listTenantSlicesForPrincipal,
   publicTenantSlice,
+  updateTenantSlice,
 } from "../packages/core/src/tenant-slices.js";
 import { listTenantWhatsAppRoutes, tenantWhatsAppInboundForwardRoute } from "../packages/core/src/tenant-whatsapp-routing.js";
 import {
@@ -114,6 +115,24 @@ test("tenant slice registry keeps one active tenant VM slice per owner", async (
   const replacement = await createTenantSlice({ id: "alice-next", ownerUserId: "alice" }, env);
   assert.equal(replacement.id, "alice-next");
   assert.equal(replacement.portBlock.base, 23050);
+});
+
+test("updating slice resources also updates the VM resources used for provisioning", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-tenant-slices-resource-update-"));
+  const env = { ORKESTR_HOME: home, ORKESTR_TENANT_SLICE_PORT_BASE: "23500" };
+  await createTenantSlice({ id: "reviewer", ownerUserId: "reviewer" }, env);
+
+  const updated = await updateTenantSlice("reviewer", {
+    resources: { memoryHighMiB: 1536, memoryMaxMiB: 2048, cpuQuotaPercent: 100, tasksMax: 1024, diskSoftGiB: 20 },
+  }, env);
+  const plan = buildTenantSliceProvisioningPlan(updated, { namespace: "tenant-reviewer", vmName: "reviewer-vm" }, env);
+  const manifest = JSON.parse(plan.manifest);
+  const vm = manifest.items.find((item) => item.kind === "VirtualMachine");
+
+  assert.deepEqual(updated.vm.resources, { vcpus: 1, memoryMiB: 2048, diskGiB: 20 });
+  assert.equal(plan.tenantVm.resources.memoryMiB, 2048);
+  assert.equal(vm.spec.template.spec.domain.resources.requests.memory, "2048Mi");
+  assert.equal(vm.spec.dataVolumeTemplates[0].spec.pvc.resources.requests.storage, "20Gi");
 });
 
 test("tenant slice provisioning builds a VM-backed plan", async () => {
@@ -404,11 +423,11 @@ test("tenant slice destruction defaults to a plan and explicitly removes only th
     "kubectl",
     "--namespace", "tenant-reviewer",
     "delete",
-    "virtualmachine", "reviewer-vm",
-    "service", "reviewer-vm-svc",
-    "secret", "reviewer-vm-cloudinit",
-    "datavolume", "reviewer-vm-rootdisk",
-    "pvc", "reviewer-vm-rootdisk",
+    "virtualmachine/reviewer-vm",
+    "service/reviewer-vm-svc",
+    "secret/reviewer-vm-cloudinit",
+    "datavolume/reviewer-vm-rootdisk",
+    "pvc/reviewer-vm-rootdisk",
     "--ignore-not-found=true",
     "--wait=true",
   ]);

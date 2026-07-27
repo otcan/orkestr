@@ -45,6 +45,10 @@ function normalizeStringList(values = []) {
   return [...new Set(list.map((value) => clean(value)).filter(Boolean))];
 }
 
+function objectValue(value = {}) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
+
 function normalizeGoogleWorkspaceCapabilities(values = [], fallback = ["gmail_send"]) {
   const normalized = normalizeStringList(values)
     .map((value) => value.toLowerCase())
@@ -141,6 +145,15 @@ function normalizeVmResources(resources = {}, fallback = {}) {
     vcpus: normalizeNumber(source.vcpus ?? source.cpu ?? Math.ceil(Number(local.cpuQuotaPercent || 200) / 100), 2, { min: 1, max: 64 }),
     memoryMiB: normalizeNumber(source.memoryMiB ?? source.memoryMb ?? source.memory ?? local.memoryMaxMiB ?? local.memoryMax ?? 9216, 9216, { min: 512, max: 1048576 }),
     diskGiB: normalizeNumber(source.diskGiB ?? source.diskGb ?? source.disk ?? local.diskSoftGiB ?? local.diskGiB ?? local.disk ?? 100, 100, { min: 5, max: 16384 }),
+  };
+}
+
+function vmResourcesForSliceResources(resources = {}) {
+  const normalized = normalizeResources(resources);
+  return {
+    vcpus: Math.max(1, Math.ceil(normalized.cpuQuotaPercent / 100)),
+    memoryMiB: normalized.memoryMaxMiB,
+    diskGiB: normalized.diskSoftGiB,
   };
 }
 
@@ -430,7 +443,25 @@ export async function updateTenantSlice(tenantSliceId, patch = {}, env = process
   const requestedOwner = clean(patch.ownerUserId || patch.userId);
   if (requestedOwner && normalizeUserId(requestedOwner) !== current.ownerUserId) throw tenantSliceError("tenant_slice_owner_immutable", 409);
   const now = nowIso();
-  const updated = normalizeTenantSlice({ ...current, ...patch, id: current.id, ownerUserId: current.ownerUserId, createdAt: current.createdAt, updatedAt: now }, env, existing.filter((item) => item.id !== id));
+  const resourcePatch = objectValue(patch.resources);
+  const hasResourcePatch = Object.keys(resourcePatch).length > 0;
+  const resources = hasResourcePatch ? { ...current.resources, ...resourcePatch } : current.resources;
+  const explicitVmPatch = objectValue(patch.vm || patch.tenantVm);
+  const vm = Object.keys(explicitVmPatch).length
+    ? { ...current.vm, ...explicitVmPatch }
+    : hasResourcePatch
+      ? { ...current.vm, resources: vmResourcesForSliceResources(resources) }
+      : current.vm;
+  const updated = normalizeTenantSlice({
+    ...current,
+    ...patch,
+    resources,
+    vm,
+    id: current.id,
+    ownerUserId: current.ownerUserId,
+    createdAt: current.createdAt,
+    updatedAt: now,
+  }, env, existing.filter((item) => item.id !== id));
   await writeTenantSliceFile(existing.map((item) => item.id === id ? updated : item), env);
   await appendEvent({ type: "tenant_slice_updated", tenantSliceId: updated.id, ownerUserId: updated.ownerUserId, status: updated.status }, env).catch(() => {});
   return updated;
