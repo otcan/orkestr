@@ -2709,7 +2709,7 @@ async function handleRecoverableLocalWhatsAppRuntimeInvalidation(accountId = "",
   // Persistent chat-ops bare-r failures fall through to the normal runtime
   // recovery path below.
   const source = String(options.source || "");
-  if (source.startsWith("typing_") && localWhatsAppBareRRuntimeError(error)) {
+  if (source.startsWith("typing_") && options.allowBrowserStoreFallback !== false && localWhatsAppBareRRuntimeError(error)) {
     const runtime = runtimes.get(normalized);
     const browserStore = runtime?.client ? await probeLocalWhatsAppBrowserStore(runtime.client, env) : null;
     if (browserStore?.ok) {
@@ -2900,7 +2900,10 @@ async function refreshTypingSession(session, key, runtime, env = process.env) {
 
 async function sendChatTypingState(runtime, chatId, active, env = process.env) {
   if (!active) {
-    await clearLocalWhatsAppChatTypingState(runtime, chatId, env);
+    // Clearing a typing indicator is best effort. Unlike starting typing, it
+    // must not use a direct page evaluation: a stale WhatsApp Web frame can
+    // make that fallback race an outbound send and tear down the usable page.
+    await clearLocalWhatsAppChatTypingState(runtime, chatId, env, { allowDirectFallback: false });
     return;
   }
   let chatApiError = "";
@@ -2924,7 +2927,7 @@ async function sendChatTypingState(runtime, chatId, active, env = process.env) {
   throw error;
 }
 
-export async function clearLocalWhatsAppChatTypingState(runtime, chatId, env = process.env) {
+export async function clearLocalWhatsAppChatTypingState(runtime, chatId, env = process.env, { allowDirectFallback = true } = {}) {
   const id = String(chatId || "").trim();
   if (!runtime?.client || !id) return { ok: false, chatApiOk: false, directOk: false, reason: !id ? "missing_chat_id" : "missing_client" };
   let chatApiOk = false;
@@ -2940,10 +2943,12 @@ export async function clearLocalWhatsAppChatTypingState(runtime, chatId, env = p
   } catch (error) {
     chatApiError = error?.message || String(error);
   }
-  try {
-    directOk = await directChatstate(runtime, id, "stop", env);
-  } catch (error) {
-    directError = error?.message || String(error);
+  if (allowDirectFallback) {
+    try {
+      directOk = await directChatstate(runtime, id, "stop", env);
+    } catch (error) {
+      directError = error?.message || String(error);
+    }
   }
   if (!chatApiOk && !directOk) {
     const error = new Error(directError || chatApiError || "typing_clear_failed");
@@ -3074,6 +3079,10 @@ export async function stopLocalWhatsAppTyping({ chatId = "", accountId = "", env
   if (!selectedAccountId || !id) return { ok: false, reason: "missing_target" };
   const key = typingKey(selectedAccountId, id);
   const session = typingSessions.get(key);
+  if (!session) {
+    clearTypingClearRetryTimers(key);
+    return { ok: true, active: false, skipped: "not_typing", accountId: selectedAccountId, chatId: id };
+  }
   clearTypingSessionTimers(session);
   typingSessions.delete(key);
   const runtime = runtimes.get(selectedAccountId);
@@ -3085,6 +3094,7 @@ export async function stopLocalWhatsAppTyping({ chatId = "", accountId = "", env
       recoverableClearFailure = await handleRecoverableLocalWhatsAppRuntimeInvalidation(selectedAccountId, error, env, {
         source: "typing_clear",
         reason: "typing_clear_runtime_error",
+        allowBrowserStoreFallback: false,
       });
     });
     if (!recoverableClearFailure) scheduleTypingClearRetries({ accountId: selectedAccountId, chatId: id, env });

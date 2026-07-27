@@ -861,7 +861,64 @@ test("local whatsapp typing clear failure never restarts the inbound transport",
   }
 });
 
-test("local whatsapp typing clear keeps runtime ready when browser store is connected", async () => {
+test("local whatsapp delivery does not use a stale page to stop typing", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-send-safe-typing-stop-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "responder",
+    ORKESTR_WHATSAPP_SEND_CONFIRMATION_REQUIRED: "0",
+    ORKESTR_WHATSAPP_TYPING_REFRESH_MS: "60000",
+    ORKESTR_WHATSAPP_TYPING_CLEAR_RETRY_MS: "0",
+  };
+  const calls = [];
+  const chat = {
+    async sendStateTyping() {
+      calls.push("typing-start");
+    },
+    async clearState() {
+      calls.push("typing-stop");
+      throw new Error("r");
+    },
+  };
+  const runtime = {
+    client: {
+      async getChatById() {
+        return chat;
+      },
+      async sendPresenceAvailable() {},
+      async sendMessage() {
+        calls.push("send");
+        return { id: { _serialized: "wa-send-safe-typing-stop" } };
+      },
+      pupPage: {
+        async evaluate() {
+          calls.push("direct-page");
+          throw new Error("Protocol error (Runtime.callFunctionOn): Target closed");
+        },
+      },
+    },
+  };
+
+  try {
+    setLocalWhatsAppRuntimeForTest("responder", runtime, {}, env);
+    await startLocalWhatsAppTyping({ accountId: "responder", chatId: "chat-send-safe-typing-stop", env });
+    calls.splice(0);
+
+    const sent = await sendLocalWhatsAppMessage({
+      accountId: "responder",
+      chatId: "chat-send-safe-typing-stop",
+      text: "deliver this",
+      env,
+    });
+
+    assert.equal(sent.ok, true);
+    assert.deepEqual(calls, ["typing-stop", "send"]);
+  } finally {
+    await resetLocalWhatsAppBridgeForTest(env);
+  }
+});
+
+test("local whatsapp typing clear is deferred without probing the browser page", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-typing-clear-store-"));
   const env = {
     ORKESTR_HOME: home,
@@ -934,10 +991,12 @@ test("local whatsapp typing clear keeps runtime ready when browser store is conn
     assert.equal(account.ready, true);
     assert.equal(account.chatOpsReady, true);
     assert.equal(account.runtimeUsable, true);
-    assert.equal(account.lastRecoveryReason, "browser_store_typing_runtime_fallback");
+    assert.equal(account.lastRecoveryReason, "");
     assert.equal(calls.some((call) => call[0] === "restart"), false);
     assert.equal(calls.some((call) => call[0] === "start"), false);
-    assert.ok(events.find((event) => event.type === "whatsapp_local_typing_runtime_browser_store_ready" && event.accountId === "responder"));
+    assert.equal(calls.some((call) => call[0] === "directChatstate" && call[2] === "stop"), false);
+    assert.equal(calls.some((call) => call[0] === "browserStore"), false);
+    assert.ok(events.find((event) => event.type === "whatsapp_local_typing_runtime_recovery_deferred" && event.source === "typing_clear"));
     assert.equal(events.some((event) => event.type === "whatsapp_local_runtime_degraded" && event.source === "typing_clear"), false);
   } finally {
     await resetLocalWhatsAppBridgeForTest(env);
