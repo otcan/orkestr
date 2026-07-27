@@ -5982,6 +5982,115 @@ test("local whatsapp reset start does not hang on wedged destroy", async () => {
   }
 });
 
+test("local whatsapp replacement cancels stale connected-page fallback work", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-stale-connected-fallback-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "sender",
+    ORKESTR_WHATSAPP_CONNECTED_READY_FALLBACK_MS: "5",
+    ORKESTR_WHATSAPP_CONNECTED_READY_FALLBACK_ATTEMPTS: "1",
+  };
+  const clients = [];
+
+  class LocalAuth {}
+
+  class Client {
+    constructor() {
+      this.handlers = new Map();
+      this.pupPage = {
+        evaluate: async () => {
+          this.fallbackEvaluations = Number(this.fallbackEvaluations || 0) + 1;
+          return { ok: false, reason: "page_not_connected" };
+        },
+      };
+      clients.push(this);
+    }
+
+    on(event, handler) {
+      this.handlers.set(event, handler);
+      return this;
+    }
+
+    initialize() {
+      return Promise.resolve();
+    }
+
+    async destroy() {}
+  }
+
+  const dependencies = async () => ({
+    whatsapp: { Client, LocalAuth },
+    qrcode: {},
+  });
+
+  try {
+    await startLocalWhatsAppAccount("sender", env, { loadBridgeDependencies: dependencies });
+    const staleClient = clients[0];
+    await startLocalWhatsAppAccount("sender", env, {
+      resetRuntime: true,
+      loadBridgeDependencies: dependencies,
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 25));
+
+    assert.equal(staleClient.fallbackEvaluations || 0, 0);
+  } finally {
+    await resetLocalWhatsAppBridgeForTest(env);
+  }
+});
+
+test("local whatsapp ignores ready events from a replaced client", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-stale-ready-event-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "sender",
+  };
+  const clients = [];
+
+  class LocalAuth {}
+
+  class Client {
+    constructor() {
+      this.handlers = new Map();
+      clients.push(this);
+    }
+
+    on(event, handler) {
+      this.handlers.set(event, handler);
+      return this;
+    }
+
+    initialize() {
+      return Promise.resolve();
+    }
+
+    async destroy() {}
+  }
+
+  const dependencies = async () => ({
+    whatsapp: { Client, LocalAuth },
+    qrcode: {},
+  });
+
+  try {
+    await startLocalWhatsAppAccount("sender", env, { loadBridgeDependencies: dependencies });
+    const staleClient = clients[0];
+    await startLocalWhatsAppAccount("sender", env, {
+      resetRuntime: true,
+      loadBridgeDependencies: dependencies,
+    });
+
+    await staleClient.handlers.get("ready")();
+
+    const status = await getLocalWhatsAppBridgeStatus(env);
+    const account = status.accounts.find((item) => item.accountId === "sender");
+    assert.equal(account.state, "starting");
+    assert.equal(account.ready, false);
+  } finally {
+    await resetLocalWhatsAppBridgeForTest(env);
+  }
+});
+
 test("local whatsapp startup timeout fails a pre-qr hang and makes it recoverable", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-startup-timeout-"));
   const env = {
@@ -6464,6 +6573,12 @@ test("local whatsapp recovery clears process handlers and startup timers before 
     clearAuthReadyTimer() {
       calls.push("auth");
     },
+    clearReadyFallbackTimer() {
+      calls.push("ready-fallback");
+    },
+    clearConnectedPageReadyFallbackTimer() {
+      calls.push("connected-page-fallback");
+    },
     clearPairingCodeUnhandledRejectionHandler() {
       calls.push("pairing-handler");
     },
@@ -6479,7 +6594,7 @@ test("local whatsapp recovery clears process handlers and startup timers before 
     });
 
     assert.equal(result.hadRuntime, true);
-    assert.deepEqual(calls, ["startup", "auth", "pairing-handler", "runtime-handlers", "destroy"]);
+    assert.deepEqual(calls, ["startup", "auth", "ready-fallback", "connected-page-fallback", "pairing-handler", "runtime-handlers", "destroy"]);
   } finally {
     await resetLocalWhatsAppBridgeForTest(env);
   }

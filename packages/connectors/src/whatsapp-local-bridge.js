@@ -5021,6 +5021,8 @@ export async function restartRecoverableLocalWhatsAppAccount(accountId = "", env
   if (runtime?.client) {
     runtime.clearStartupTimer?.();
     runtime.clearAuthReadyTimer?.();
+    runtime.clearReadyFallbackTimer?.();
+    runtime.clearConnectedPageReadyFallbackTimer?.();
     runtime.clearPairingCodeUnhandledRejectionHandler?.();
     runtime.clearRuntimeCloseUnhandledRejectionHandler?.();
   }
@@ -5210,6 +5212,8 @@ async function startLocalWhatsAppAccountOnce(normalized, env = process.env, opti
     if (!shouldResetRuntime && !shouldReplaceRuntime) return accountSnapshot(normalized, env);
     existingRuntime.clearStartupTimer?.();
     existingRuntime.clearAuthReadyTimer?.();
+    existingRuntime.clearReadyFallbackTimer?.();
+    existingRuntime.clearConnectedPageReadyFallbackTimer?.();
     existingRuntime.clearPairingCodeUnhandledRejectionHandler?.();
     existingRuntime.clearRuntimeCloseUnhandledRejectionHandler?.();
     runtimes.delete(normalized);
@@ -5276,6 +5280,7 @@ async function startLocalWhatsAppAccountOnce(normalized, env = process.env, opti
   let client = null;
   let startupTimer = null;
   let startupSettled = false;
+  const ownsRuntime = () => runtimes.get(normalized)?.client === client;
   const clearStartupTimer = () => {
     if (!startupTimer) return;
     clearTimeout(startupTimer);
@@ -5430,6 +5435,7 @@ async function startLocalWhatsAppAccountOnce(normalized, env = process.env, opti
     if (typeof authReadyTimer.unref === "function") authReadyTimer.unref();
   };
   const handleStartupTimeout = async () => {
+    if (!ownsRuntime()) return;
     const state = accountStates.get(normalized) || defaultAccountState(normalized);
     if (startupSettled || state.ready || state.authenticated || state.qrAvailable || state.pairingCode || state.state !== "starting") return;
     const message = `WhatsApp bridge did not emit QR, pairing, auth, or ready within ${Math.round(startTimeoutMs / 1000)}s. Restart the bridge or re-link the device.`;
@@ -5457,6 +5463,7 @@ async function startLocalWhatsAppAccountOnce(normalized, env = process.env, opti
     clearRuntimeCloseUnhandledRejectionHandler();
   };
   const handleAuthReadyTimeout = async () => {
+    if (!ownsRuntime()) return;
     const state = accountStates.get(normalized) || defaultAccountState(normalized);
     if (state.ready || state.state !== "authenticated") return;
     const message = `WhatsApp authenticated but did not become ready within ${Math.round(authTimeoutMs / 1000)}s. Restart the bridge or re-link the device.`;
@@ -5498,6 +5505,7 @@ async function startLocalWhatsAppAccountOnce(normalized, env = process.env, opti
     connectedPageReadyFallbackTimer = null;
   };
   const triggerReadyFallback = async (reason, options = {}) => {
+    if (!ownsRuntime()) return { ok: false, skipped: "stale_runtime" };
     const state = accountStates.get(normalized) || defaultAccountState(normalized);
     if (readyFallbackTriggered || state.ready) return;
     const allowConnectedPage = options.allowConnectedPage === true;
@@ -5560,11 +5568,11 @@ async function startLocalWhatsAppAccountOnce(normalized, env = process.env, opti
     connectedPageReadyFallbackTimer = setTimeout(async () => {
       connectedPageReadyFallbackTimer = null;
       const current = accountStates.get(normalized) || defaultAccountState(normalized);
-      if (readyFallbackTriggered || current.ready || !runtimes.has(normalized)) return;
+      if (readyFallbackTriggered || current.ready || !ownsRuntime()) return;
       connectedPageReadyFallbackCount += 1;
       await triggerReadyFallback(reason, { allowConnectedPage: true });
       const latest = accountStates.get(normalized) || defaultAccountState(normalized);
-      if (!latest.ready && !readyFallbackTriggered && runtimes.has(normalized)) {
+      if (!latest.ready && !readyFallbackTriggered && ownsRuntime()) {
         scheduleConnectedPageReadyFallback(reason);
       }
     }, connectedPageReadyFallbackDelayMs(env));
@@ -5590,6 +5598,7 @@ async function startLocalWhatsAppAccountOnce(normalized, env = process.env, opti
   });
 
   client.on("qr", async (qr) => {
+    if (!ownsRuntime()) return;
     try {
       startupSettled = true;
       clearStartupTimer();
@@ -5618,6 +5627,7 @@ async function startLocalWhatsAppAccountOnce(normalized, env = process.env, opti
   });
 
   client.on("code", async (code) => {
+    if (!ownsRuntime()) return;
     startupSettled = true;
     clearStartupTimer();
     setAccountState(normalized, {
@@ -5634,6 +5644,7 @@ async function startLocalWhatsAppAccountOnce(normalized, env = process.env, opti
   });
 
   client.on("authenticated", async () => {
+    if (!ownsRuntime()) return;
     startupSettled = true;
     clearStartupTimer();
     clearPairingCodeUnhandledRejectionHandler();
@@ -5652,6 +5663,7 @@ async function startLocalWhatsAppAccountOnce(normalized, env = process.env, opti
   });
 
   client.on("ready", async () => {
+    if (!ownsRuntime()) return;
     startupSettled = true;
     clearStartupTimer();
     clearPairingCodeUnhandledRejectionHandler();
@@ -5673,6 +5685,7 @@ async function startLocalWhatsAppAccountOnce(normalized, env = process.env, opti
   });
 
   client.on("auth_failure", async (message) => {
+    if (!ownsRuntime()) return;
     startupSettled = true;
     clearStartupTimer();
     clearPairingCodeUnhandledRejectionHandler();
@@ -5700,6 +5713,7 @@ async function startLocalWhatsAppAccountOnce(normalized, env = process.env, opti
   });
 
   client.on("disconnected", async (reason) => {
+    if (!ownsRuntime()) return;
     startupSettled = true;
     clearStartupTimer();
     clearPairingCodeUnhandledRejectionHandler();
@@ -5734,6 +5748,7 @@ async function startLocalWhatsAppAccountOnce(normalized, env = process.env, opti
   });
 
   client.on("loading_screen", async (percent, message) => {
+    if (!ownsRuntime()) return;
     setAccountState(normalized, {
       loadingPercent: Number(percent),
       loadingMessage: String(message || ""),
@@ -5748,6 +5763,7 @@ async function startLocalWhatsAppAccountOnce(normalized, env = process.env, opti
   });
 
   client.on("change_state", async (state) => {
+    if (!ownsRuntime()) return;
     setAccountState(normalized, { waState: String(state || "") });
     await appendEvent({ type: "whatsapp_local_state_changed", accountId: normalized, state: String(state || "") }, env).catch(() => {});
   });
@@ -5757,10 +5773,12 @@ async function startLocalWhatsAppAccountOnce(normalized, env = process.env, opti
   });
 
   client.on("message", (message) => {
+    if (!ownsRuntime()) return;
     void handleInboundMessage(normalized, message, env, { client });
   });
 
   client.on("message_create", (message) => {
+    if (!ownsRuntime()) return;
     void handleInboundMessage(normalized, message, env, { ownOnly: true, client });
   });
 
@@ -5775,6 +5793,8 @@ async function startLocalWhatsAppAccountOnce(normalized, env = process.env, opti
     initializePromise: null,
     clearStartupTimer,
     clearAuthReadyTimer,
+    clearReadyFallbackTimer,
+    clearConnectedPageReadyFallbackTimer,
     clearPairingCodeUnhandledRejectionHandler,
     clearRuntimeCloseUnhandledRejectionHandler,
   };
@@ -5807,6 +5827,8 @@ export async function logoutLocalWhatsAppAccount(accountId = "", env = process.e
   if (runtime?.client) {
     runtime.clearStartupTimer?.();
     runtime.clearAuthReadyTimer?.();
+    runtime.clearReadyFallbackTimer?.();
+    runtime.clearConnectedPageReadyFallbackTimer?.();
     runtime.clearPairingCodeUnhandledRejectionHandler?.();
     runtime.clearRuntimeCloseUnhandledRejectionHandler?.();
     await runtime.client.logout().catch(() => {});
