@@ -378,6 +378,10 @@ function whatsappRepairRouteAllowed(method: string, parts: string[]) {
 function isUserConnectorRoute(route: { method: string; connector: string; action: string[] }) {
   if (route.connector === "gmail") {
     if (route.method === "GET" && route.action.length === 2 && route.action[0] === "oauth" && route.action[1] === "start") return true;
+    if (route.action[0] === "accounts") {
+      if (route.method === "GET" && route.action.length === 1) return true;
+      if (["PATCH", "DELETE"].includes(route.method) && route.action.length === 2) return true;
+    }
     if (route.method === "DELETE" && route.action.length === 1 && route.action[0] === "auth") return true;
     if (route.method === "GET" && route.action[0] === "messages" && route.action.length <= 2) return true;
     if (route.method === "POST" && route.action.length === 1 && route.action[0] === "test") return true;

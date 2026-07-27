@@ -140,10 +140,12 @@
             [privacyPolicyVersion]="googlePrivacyPolicyVersion"
             [threadId]="connectorIntentThreadId()"
           ></ork-google-workspace-access-panel>
-          <ork-gmail-notifications-panel
-            [accounts]="googleAccounts"
-            [initialThreadId]="connectorIntentThreadId()"
-          ></ork-gmail-notifications-panel>
+          @if (!connectorIntentActive()) {
+            <ork-gmail-notifications-panel
+              [accounts]="googleAccounts"
+              [initialThreadId]="connectorIntentThreadId()"
+            ></ork-gmail-notifications-panel>
+          }
         }
 
         @if (connector.id === "outlook") {

@@ -1847,6 +1847,7 @@ test("web shell exposes a user connector management page", async () => {
   assert.match(connectorsComponent, /deleteGoogleAccount/);
   assert.match(connectorsTemplate, /<ork-google-workspace-access-panel/);
   assert.match(connectorsTemplate, /<ork-gmail-notifications-panel/);
+  assert.match(connectorsTemplate, /@if \(!connectorIntentActive\(\)\) \{\s*<ork-gmail-notifications-panel/s);
   assert.match(connectorsTemplate, /Only when requested/);
   assert.match(connectorsTemplate, /Use in this thread/);
   assert.match(connectorsComponent, /connectorConnected\(connector: ConnectorStatus\): boolean/);

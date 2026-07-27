@@ -185,6 +185,9 @@ function vmProvisionInput(slice, tenantVm, input = {}, env = process.env) {
       ORKESTR_ADMIN_USER_ID: slice.ownerUserId,
       ORKESTR_DEPLOYMENT_TRACK: "tenant-vm-slice",
       ORKESTR_DEFAULT_DESKTOP_SLUG: clean(slice.connectors?.linkedin?.desktopSlug || "linkedin") || "linkedin",
+      ORKESTR_GOOGLE_OAUTH_ALLOWED_CAPABILITIES: slice.connectors?.gmail?.enabled === false
+        ? ""
+        : (slice.connectors?.gmail?.allowedCapabilities || ["gmail_send"]).join(","),
       ORKESTR_API_AGENT_TENANT_BUDGETS_JSON: JSON.stringify({ [slice.ownerUserId]: slice.budget }),
       ...runtimeEnv,
     },

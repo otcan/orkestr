@@ -10,6 +10,15 @@ const statuses = new Set(["planned", "provisioning", "stopped", "warming", "runn
 const defaultTenantRoot = "/srv/orkestr-tenants";
 const defaultPortBase = 21000;
 const defaultPortBlockSize = 50;
+const googleWorkspaceCapabilityIds = new Set([
+  "gmail_read",
+  "gmail_actions",
+  "gmail_send",
+  "gmail_drafts",
+  "calendar_read",
+  "calendar_actions",
+  "drive_file",
+]);
 
 function nowIso() {
   return new Date().toISOString();
@@ -34,6 +43,13 @@ function normalizeNumber(value, fallback, { min = 0, max = 1_000_000 } = {}) {
 function normalizeStringList(values = []) {
   const list = Array.isArray(values) ? values : String(values || "").split(",");
   return [...new Set(list.map((value) => clean(value)).filter(Boolean))];
+}
+
+function normalizeGoogleWorkspaceCapabilities(values = [], fallback = ["gmail_send"]) {
+  const normalized = normalizeStringList(values)
+    .map((value) => value.toLowerCase())
+    .filter((value) => googleWorkspaceCapabilityIds.has(value));
+  return normalized.length ? normalized : [...fallback];
 }
 
 function normalizeBoolean(value, fallback = false) {
@@ -210,6 +226,7 @@ function normalizeSystem(system = {}, id = "") {
 function normalizeConnectors(connectors = {}) {
   const source = connectors && typeof connectors === "object" && !Array.isArray(connectors) ? connectors : {};
   const whatsapp = source.whatsapp && typeof source.whatsapp === "object" && !Array.isArray(source.whatsapp) ? source.whatsapp : {};
+  const gmail = source.gmail && typeof source.gmail === "object" && !Array.isArray(source.gmail) ? source.gmail : {};
   const whatsappParticipantIds = normalizeStringList(whatsapp.participantIds || whatsapp.participants || source.whatsappParticipantIds || source.waParticipantIds);
   const promoteParticipantsAsAdmins = normalizeBoolean(whatsapp.promoteParticipantsAsAdmins ?? source.whatsappPromoteParticipantsAsAdmins, whatsappParticipantIds.length > 0);
   const whatsappAdminParticipantIds = normalizeStringList([
@@ -227,8 +244,12 @@ function normalizeConnectors(connectors = {}) {
       promoteParticipantsAsAdmins,
     },
     gmail: {
-      enabled: source.gmail?.enabled ?? source.gmailEnabled ?? true,
-      accountId: clean(source.gmail?.accountId || source.gmailAccountId),
+      enabled: gmail.enabled ?? source.gmailEnabled ?? true,
+      accountId: clean(gmail.accountId || source.gmailAccountId),
+      allowedCapabilities: normalizeGoogleWorkspaceCapabilities(
+        gmail.allowedCapabilities || gmail.capabilities || source.gmailAllowedCapabilities || source.gmailCapabilities,
+        gmail.enabled === false || source.gmailEnabled === false ? [] : ["gmail_send"],
+      ),
     },
     linkedin: {
       enabled: source.linkedin?.enabled ?? source.linkedinEnabled ?? true,

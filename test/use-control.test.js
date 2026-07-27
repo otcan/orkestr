@@ -1268,6 +1268,12 @@ test("user management API is admin-only and can pair a browser to a managed user
     assert.equal(deniedConnectorResponse.status, 403);
     assert.equal(deniedConnector.error, "connector_admin_required");
 
+    const userGoogleAccountsResponse = await fetch(`${baseUrl}/api/connectors/gmail/accounts`, {
+      headers: { cookie: userCookie, connection: "close" },
+    });
+    assert.notEqual(userGoogleAccountsResponse.status, 403);
+    assert.notEqual((await read(userGoogleAccountsResponse)).error, "connector_admin_required");
+
     const userWhatsAppCreateResponse = await fetch(`${baseUrl}/api/connectors/whatsapp/accounts`, {
       method: "POST",
       headers: { "content-type": "application/json", cookie: userCookie, connection: "close" },

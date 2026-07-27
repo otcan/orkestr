@@ -132,7 +132,13 @@ test("tenant slice provisioning builds a VM-backed plan", async () => {
     ownerUserId: "bob",
     resources: { memoryHighMiB: 2048, memoryMaxMiB: 4096, cpuQuotaPercent: 125, tasksMax: 512, diskSoftGiB: 30 },
     budget: { dailyUsd: 2, monthlyUsd: 20 },
-    connectors: { linkedin: { desktopSlug: "linkedin-bob" } },
+    connectors: {
+      gmail: {
+        accountId: "bob@example.test",
+        allowedCapabilities: ["gmail_send", "gmail_read", "gmail_drafts", "calendar_read", "calendar_actions"],
+      },
+      linkedin: { desktopSlug: "linkedin-bob" },
+    },
   }, env);
 
   const plan = buildTenantSliceProvisioningPlan(slice, {
@@ -193,6 +199,7 @@ test("tenant slice provisioning builds a VM-backed plan", async () => {
   assert.equal(plan.runtimeEnv.ORKESTR_INSTANCE_ID, "broker-bob-001");
   assert.equal(plan.runtimeEnv.ORKESTR_BROKER_BASE_URL, "https://broker.example.test");
   assert.equal(plan.runtimeEnv.ORKESTR_DEFAULT_DESKTOP_SLUG, "linkedin-bob");
+  assert.equal(plan.runtimeEnv.ORKESTR_GOOGLE_OAUTH_ALLOWED_CAPABILITIES, "gmail_send,gmail_read,gmail_drafts,calendar_read,calendar_actions");
   assert.equal(plan.runtimeEnv.ORKESTR_BROWSER_VISIBLE_SLUGS, "linkedin-bob");
   assert.equal(plan.runtimeEnv.ORKESTR_INSTANCE_DESKTOPS_PROVISIONED, "1");
   assert.deepEqual(JSON.parse(plan.runtimeEnv.ORKESTR_DESKTOP_CATALOG_JSON).map((desk) => desk.slug), ["linkedin-bob"]);
@@ -214,6 +221,7 @@ test("tenant slice provisioning builds a VM-backed plan", async () => {
   assert.match(runtimeEnvFile, /^ORKESTR_TENANT_SLICE_ID='bob-slice'$/m);
   assert.match(runtimeEnvFile, /^ORKESTR_TENANT_VM_ID='bob-slice-vm'$/m);
   assert.match(runtimeEnvFile, /^ORKESTR_HOST='0\.0\.0\.0'$/m);
+  assert.match(runtimeEnvFile, /^ORKESTR_GOOGLE_OAUTH_ALLOWED_CAPABILITIES='gmail_send,gmail_read,gmail_drafts,calendar_read,calendar_actions'$/m);
   assert.match(runtimeEnvFile, /^ORKESTR_BROWSER_VISIBLE_SLUGS='linkedin-bob'$/m);
   assert.match(runtimeEnvFile, /^ORKESTR_INSTANCE_DESKTOPS_PROVISIONED='1'$/m);
   assert.match(runtimeEnvFile, /^ORKESTR_DESKTOP_CATALOG_JSON='\[/m);
