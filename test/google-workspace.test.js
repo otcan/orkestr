@@ -227,6 +227,20 @@ test("isolated reviewer links are explicitly enabled, user-bound, and longer liv
   assert.equal(request.request.source, "oauth_reviewer");
   assert.ok(Date.parse(request.request.expiresAt) - Date.now() > 25 * 60_000);
 
+  const tenantLink = await createGoogleWorkspaceConnectLink({
+    principal: userPrincipal({ id: "reviewer" }),
+    thread: { id: "review-thread" },
+    reviewAccess: true,
+  }, {
+    ...env,
+    ORKESTR_TENANT_VM_ID: "review-vm",
+  });
+  const tenantRequest = await getGoogleWorkspaceConnectRequest(tenantLink.connectId, {
+    ...env,
+    ORKESTR_TENANT_VM_ID: "review-vm",
+  });
+  assert.equal(tenantRequest.request.userId, "reviewer");
+
   await assert.rejects(
     createGoogleWorkspaceConnectLink({
       principal: userPrincipal({ id: "reviewer" }),

@@ -338,14 +338,17 @@ export async function createGoogleWorkspaceConnectLink({
     throw connectorError("google_workspace_review_access_requires_isolated_instance", 409);
   }
   const scope = await connectorScopePaths(env, { principal });
-  if (reviewAccess === true && !clean(scope.userId)) {
+  // Tenant VMs deliberately keep connector data at VM scope. A reviewer link
+  // still needs its signed ticket identity for the OAuth request binding.
+  const requestUserId = clean(scope.userId || principal?.userId);
+  if (reviewAccess === true && !requestUserId) {
     throw connectorError("google_workspace_review_access_requires_user", 400);
   }
   const connectId = randomUUID();
   const threadBinding = thread.binding && typeof thread.binding === "object" ? thread.binding : {};
   const request = {
     connectId,
-    userId: scope.userId || "",
+    userId: requestUserId,
     threadId: clean(thread.id),
     threadName: clean(thread.name || thread.title || thread.displayName),
     chatId: clean(chatId || threadBinding.chatId),
