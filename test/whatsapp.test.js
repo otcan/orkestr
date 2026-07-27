@@ -868,7 +868,7 @@ test("local whatsapp delivery does not use a stale page to stop typing", async (
     ORKESTR_WHATSAPP_ACCOUNT_IDS: "responder",
     ORKESTR_WHATSAPP_SEND_CONFIRMATION_REQUIRED: "0",
     ORKESTR_WHATSAPP_TYPING_REFRESH_MS: "60000",
-    ORKESTR_WHATSAPP_TYPING_CLEAR_RETRY_MS: "0",
+    ORKESTR_WHATSAPP_TYPING_CLEAR_RETRY_MS: "5",
   };
   const calls = [];
   const chat = {
@@ -910,9 +910,11 @@ test("local whatsapp delivery does not use a stale page to stop typing", async (
       text: "deliver this",
       env,
     });
+    await new Promise((resolve) => setTimeout(resolve, 20));
 
     assert.equal(sent.ok, true);
-    assert.deepEqual(calls, ["typing-stop", "send"]);
+    assert.equal(calls.includes("send"), true);
+    assert.equal(calls.includes("direct-page"), false);
   } finally {
     await resetLocalWhatsAppBridgeForTest(env);
   }

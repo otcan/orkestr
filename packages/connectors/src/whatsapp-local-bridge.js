@@ -2985,6 +2985,7 @@ function scheduleTypingClearRetries({ accountId = "", chatId = "", env = process
           await handleRecoverableLocalWhatsAppRuntimeInvalidation(selectedAccountId, error, env, {
             source: "typing_clear_retry",
             reason: "typing_clear_runtime_error",
+            allowBrowserStoreFallback: false,
           });
         });
     }, delayMs);
@@ -3048,6 +3049,7 @@ export async function startLocalWhatsAppTyping({ chatId = "", accountId = "", en
           await handleRecoverableLocalWhatsAppRuntimeInvalidation(selectedAccountId, error, env, {
             source: "typing_start_cancel_clear",
             reason: "typing_clear_runtime_error",
+            allowBrowserStoreFallback: false,
           });
         });
       }
