@@ -60,6 +60,16 @@ function recoverableJob(job = {}) {
     recoverableWhatsAppOutboxError(job.metadata?.failureReason);
 }
 
+function strandedAutoRecoveryJob(job = {}, operator = "whatsapp-auto-recovery") {
+  if (lower(job.connector) !== "whatsapp" || lower(job.state) !== "pending") return false;
+  const requestedBy = lower(job.metadata?.retryRequestedBy);
+  return Boolean(
+    requestedBy &&
+    requestedBy === lower(operator) &&
+    clean(job.metadata?.retryRequestedAt)
+  );
+}
+
 /**
  * @param {{
  *   accountIds?: string[],
@@ -76,10 +86,14 @@ export async function retryRecoverableWhatsAppOutboxJobsForAccounts({
 } = {}, env = process.env) {
   const accounts = unique(accountIds);
   if (!accounts.length) return { ok: true, retried: [], skipped: [{ reason: "no_accounts" }] };
+  // A connector outbox retry alone is not enough. The WhatsApp delivery scanner
+  // caches candidates using its mirror ledger, so reset that ledger too before
+  // asking it to send the recovered job again.
+  const { applyWhatsAppConnectorOutboxAction } = await import("./whatsapp.js");
   const accountSet = new Set(accounts.map((item) => item.toLowerCase()));
   const listed = await listConnectorOutboxJobs({
     connector: "whatsapp",
-    state: "failed_retryable",
+    state: "failed_retryable pending",
     limit,
   }, env);
   const retried = [];
@@ -90,11 +104,15 @@ export async function retryRecoverableWhatsAppOutboxJobsForAccounts({
       skipped.push({ id: job.id, accountId, reason: "different_account" });
       continue;
     }
-    if (!recoverableJob(job)) {
+    if (!recoverableJob(job) && !strandedAutoRecoveryJob(job, operator)) {
       skipped.push({ id: job.id, accountId, reason: "not_recoverable" });
       continue;
     }
     const result = await applyConnectorOutboxJobAction(job.id, "retry", {
+      reason,
+      operator,
+    }, env);
+    const mirror = await applyWhatsAppConnectorOutboxAction(result.job, "retry", {
       reason,
       operator,
     }, env);
@@ -106,6 +124,7 @@ export async function retryRecoverableWhatsAppOutboxJobsForAccounts({
       deliveryType: clean(job.deliveryType),
       previousState: clean(result.previousState || job.state),
       state: clean(result.job?.state),
+      mirrorStateSynced: mirror.ok === true,
     });
   }
   if (retried.length) {
