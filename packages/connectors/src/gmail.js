@@ -619,7 +619,18 @@ export async function startGmailOAuth(env = process.env, options = {}) {
     redirectUri,
     createdAt: new Date().toISOString(),
   });
-  const existingToken = await readGmailToken(env, { principal: options.principal, userId: options.userId });
+  // Starting OAuth must be able to repair a connection whose old token is gone
+  // or marked for reauthorization. Runtime Gmail calls still require a healthy
+  // token through the default resolver behavior.
+  const existingToken = await readGmailToken(env, {
+    principal: options.principal,
+    userId: options.userId,
+    connectionId: clean(options.googleConnectionId || options.connectionId),
+    allowUnhealthy: true,
+  }).catch((error) => {
+    if (error?.code === "connector_account_not_found") return {};
+    throw error;
+  });
   if (!clean(existingToken.accessToken)) await clearOAuthError(env, options);
   const url = new URL("https://accounts.google.com/o/oauth2/v2/auth");
   url.searchParams.set("client_id", clientId);

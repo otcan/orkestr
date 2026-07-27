@@ -17,7 +17,12 @@ import {
   startGmailOAuth,
 } from "../packages/connectors/src/gmail.js";
 import { connectorAuthStatus, disconnectConnectorAuth } from "../packages/connectors/src/connector-auth.js";
-import { listGoogleWorkspaceConnections, resolveGoogleWorkspaceConnection } from "../packages/connectors/src/google-workspace-connections.js";
+import {
+  listGoogleWorkspaceConnections,
+  resolveGoogleWorkspaceConnection,
+  saveGoogleWorkspaceConnectionToken,
+  updateGoogleWorkspaceConnection,
+} from "../packages/connectors/src/google-workspace-connections.js";
 import { __brokerInstanceRegistryTestInternals } from "../packages/core/src/broker-instance-registry.js";
 import { userPrincipal } from "../packages/core/src/principal.js";
 import { getSetupStatus } from "../packages/core/src/setup.js";
@@ -96,6 +101,45 @@ test("gmail oauth start clears stale user-scoped oauth errors", async () => {
 
   const after = await getSetupStatus({ env, principal });
   assert.equal(after.connectors.find((connector) => connector.id === "gmail")?.state, "partial");
+});
+
+test("gmail OAuth reconnect starts for an unhealthy selected Google connection", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-gmail-reconnect-start-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_GOOGLE_OAUTH_ALLOWED_CAPABILITIES: "gmail_read",
+  };
+  await writeConnectorConfig("gmail", {
+    clientId: "client-id",
+    clientSecret: "client-secret",
+    redirectUri: "http://localhost:19812/oauth/gmail/callback",
+  }, env);
+  const saved = await saveGoogleWorkspaceConnectionToken({
+    accessToken: "stale-access",
+    refreshToken: "stale-refresh",
+    account: "person@example.com",
+    capabilities: ["gmail_read"],
+    grantedScopes: ["https://www.googleapis.com/auth/gmail.readonly"],
+  }, env, { setAsMain: true });
+  await updateGoogleWorkspaceConnection(saved.connection.connectionId, {
+    healthState: "reauth_required",
+    lastErrorCode: "gmail_reauthorization_required",
+  }, env);
+
+  await assert.rejects(
+    resolveGoogleWorkspaceConnection({ connectionId: saved.connection.connectionId }, env),
+    (error) => error.code === "reconnect_required",
+  );
+
+  const started = await startGmailOAuth(env, {
+    account: "person@example.com",
+    googleConnectionId: saved.connection.connectionId,
+    capabilities: ["gmail_read"],
+  });
+  const state = JSON.parse(await fs.readFile(path.join(home, "oauth", "gmail-state.json"), "utf8"));
+
+  assert.equal(new URL(started.authorizeUrl).hostname, "accounts.google.com");
+  assert.equal(state.googleConnectionId, saved.connection.connectionId);
 });
 
 test("gmail oauth start can use service env app credentials", async () => {
