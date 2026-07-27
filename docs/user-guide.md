@@ -169,6 +169,14 @@ Orkestr desktop skill request. The agent creates the temporary phone link with
 `orkestr desktop share`, then approves the pasted `desk-...` challenge with
 `orkestr desktop approve`.
 
+Before issuing a share, Orkestr verifies the managed desktop's process state,
+noVNC bridge, Chrome debugging endpoint, and a small sample of the local VNC
+framebuffer. A black or blank-white framebuffer is reported as an unavailable
+desktop instead of producing a misleading share link. Orkestr performs one
+safe restart attempt for a degraded managed desktop; if that does not recover
+the screen, create a new share only after resolving the reported readiness
+reason.
+
 ### Schedule Work
 
 Timers can wake a thread and send a prompt on a cadence. Use them for recurring
