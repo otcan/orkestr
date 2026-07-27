@@ -2513,6 +2513,7 @@ Type=simple
 User=$run_user
 Group=$group_name
 WorkingDirectory=$repo_dir
+EnvironmentFile=-$env_file
 EnvironmentFile=-$connectors_env
 Environment=ORKESTR_WA_WORKER_SOCKET=/run/orkestr-wa/%i.sock
 Environment=ORKESTR_WHATSAPP_AUTOSTART_ACCOUNT_IDS=%i

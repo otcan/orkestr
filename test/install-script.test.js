@@ -317,6 +317,7 @@ test("install script provisions isolated connector MCP and WhatsApp worker servi
   assert.match(script, /ORKESTR_INSTALL_CONNECTORS_MCP/);
   assert.match(script, /scripts\/orkestr-connectors-mcp\.mjs/);
   assert.match(script, /scripts\/orkestr-wa-worker\.mjs/);
+  assert.match(script, /EnvironmentFile=-\$env_file\nEnvironmentFile=-\$connectors_env/);
   assert.match(script, /orkestr-connectors-doctor\.mjs --repair/);
   assert.match(script, /ORKESTR_INSTALL_PERSONAL_CONNECTORS_MCP/);
   assert.match(script, /ORKESTR_PERSONAL_CONNECTORS_HOME/);
@@ -331,6 +332,8 @@ test("install script provisions isolated connector MCP and WhatsApp worker servi
   assert.match(releaseScript, /exec 9>"\$lock_file"/);
   assert.match(releaseScript, /flock 9/);
   assert.match(releaseScript, /active_connector_revision/);
+  assert.match(releaseScript, /worker_thread_store\(\)/);
+  assert.match(releaseScript, /Environment=ORKESTR_THREAD_STORE=%s/);
   assert.match(releaseScript, /systemctl is-active --quiet "\$worker_service"/);
   assert.match(releaseScript, /systemctl is-active --quiet "\$gateway_service"/);
   assert.match(releaseScript, /Connector release already active for revision/);
@@ -344,6 +347,7 @@ test("install script provisions isolated connector MCP and WhatsApp worker servi
   assert.match(migrationScript, /--activate/);
   assert.match(migrationScript, /Connector MCP cutover failed; embedded UI routing was restored/);
   assert.match(migrationScript, /ORKESTR_WHATSAPP_AUTOSTART=0/);
+  assert.match(migrationScript, /"ORKESTR_THREAD_STORE"/);
   assert.match(migrationScript, /set_env_value "\$ui_env" WHATSAPP_BRIDGE_MODE "external"/);
   assert.match(migrationScript, /set_env_value "\$ui_env" ORKESTR_WHATSAPP_AUTOSTART "0"/);
   assert.match(migrationScript, /orkestr-connectors-doctor\.mjs/);

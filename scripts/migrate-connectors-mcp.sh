@@ -137,6 +137,7 @@ allowed = {
     "ORKESTR_WHATSAPP_RESPONDER_ACCOUNT_ID",
     "ORKESTR_WHATSAPP_SENDER_ROLE",
     "ORKESTR_WHATSAPP_RESPONDER_ROLE",
+    "ORKESTR_THREAD_STORE",
 }
 for assignment in shlex.split(sys.stdin.read()):
     name, separator, value = assignment.partition("=")

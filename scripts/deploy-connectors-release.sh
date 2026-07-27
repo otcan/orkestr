@@ -35,6 +35,7 @@ retention="${ORKESTR_CONNECTORS_RELEASE_RETENTION:-3}"
 connectors_env="${ORKESTR_CONNECTORS_ENV_FILE:-/etc/orkestr/orkestr-connectors.env}"
 gateway_service="${ORKESTR_CONNECTORS_MCP_SERVICE_NAME:-orkestr-connectors-mcp}"
 worker_service="${ORKESTR_WA_WORKER_SERVICE_NAME:-orkestr-wa-worker}@sender"
+ui_service="${ORKESTR_UI_SERVICE_NAME:-${ORKESTR_SERVICE_NAME:-orkestr}}"
 doctor_service="${ORKESTR_CONNECTORS_DOCTOR_SERVICE_NAME:-${gateway_service}-doctor}"
 doctor_timer="${ORKESTR_CONNECTORS_DOCTOR_TIMER_NAME:-${doctor_service}}"
 health_attempts="${ORKESTR_CONNECTORS_HEALTH_ATTEMPTS:-90}"
@@ -66,6 +67,23 @@ switch_current_release() {
 
 active_connector_revision() {
   head -n 1 "$current_link/REVISION" 2>/dev/null | tr -d '[:space:]' || true
+}
+
+worker_thread_store() {
+  local configured
+  configured="$(printf '%s' "${ORKESTR_THREAD_STORE:-}" | LC_ALL=C tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+  if [ -z "$configured" ] && command -v systemctl >/dev/null 2>&1; then
+    configured="$(systemctl show "${ui_service}.service" --property=Environment --value 2>/dev/null \
+      | tr ' ' '\n' \
+      | sed -n 's/^ORKESTR_THREAD_STORE=//p' \
+      | tail -1 \
+      | LC_ALL=C tr '[:upper:]' '[:lower:]' \
+      | tr -d '[:space:]')"
+  fi
+  case "$configured" in
+    sqlite|json) printf '%s' "$configured" ;;
+    *) printf '' ;;
+  esac
 }
 
 if ! git -C "$source_dir" diff --quiet || ! git -C "$source_dir" diff --cached --quiet; then
@@ -121,8 +139,14 @@ switch_current_release "$release_dir"
 mkdir -p "/etc/systemd/system/${gateway_service}.service.d" "/etc/systemd/system/${worker_service}.service.d" "/etc/systemd/system/${doctor_service}.service.d"
 printf '[Service]\nWorkingDirectory=%s\nExecStart=\nExecStart=%s %s/scripts/orkestr-connectors-mcp.mjs\n' \
   "$current_link" "$node_bin" "$current_link" > "/etc/systemd/system/${gateway_service}.service.d/release.conf"
-printf '[Service]\nWorkingDirectory=%s\nExecStart=\nExecStart=%s %s/scripts/orkestr-wa-worker.mjs\n' \
-  "$current_link" "$node_bin" "$current_link" > "/etc/systemd/system/${worker_service}.service.d/release.conf"
+{
+  printf '[Service]\nWorkingDirectory=%s\n' "$current_link"
+  thread_store="$(worker_thread_store)"
+  if [ -n "$thread_store" ]; then
+    printf 'Environment=ORKESTR_THREAD_STORE=%s\n' "$thread_store"
+  fi
+  printf 'ExecStart=\nExecStart=%s %s/scripts/orkestr-wa-worker.mjs\n' "$node_bin" "$current_link"
+} > "/etc/systemd/system/${worker_service}.service.d/release.conf"
 printf '[Service]\nWorkingDirectory=%s\nExecStart=\nExecStart=%s %s/scripts/orkestr-connectors-doctor.mjs --repair\n' \
   "$current_link" "$node_bin" "$current_link" > "/etc/systemd/system/${doctor_service}.service.d/release.conf"
 systemctl daemon-reload
