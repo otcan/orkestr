@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import { ApiError, requestJson } from "./api-client.js";
+import { destroyTenantSliceCommand } from "./tenant-slice-destroy-command.js";
 
 export async function tenantSliceCommand(argv = [], ctx = {}) {
   const subcommand = argv[0]?.startsWith("--") ? "list" : argv[0] || "list";
@@ -9,6 +10,7 @@ export async function tenantSliceCommand(argv = [], ctx = {}) {
   if (subcommand === "apply") return provisionTenantSliceCommand(["--execute", ...rest], ctx);
   if (subcommand === "plan") return provisionTenantSliceCommand(["--dry-run", ...rest], ctx);
   if (subcommand === "provision") return provisionTenantSliceCommand(rest, ctx);
+  if (subcommand === "destroy" || subcommand === "teardown") return destroyTenantSliceCommand(rest, ctx);
   if (subcommand === "status" || subcommand === "show") return tenantSliceStatusCommand(rest, ctx);
   throw new Error(tenantSliceUsage());
 }
@@ -304,6 +306,7 @@ function tenantSliceUsage() {
     "  orkestr vm-slice list [--json]",
     "  orkestr vm-slice create <owner-user-id> [--id slice-id] [--namespace ns] [--vm-name name] [--kubeconfig file] [--wa-participant jid]... [--wa-admin jid]... [--execute] [--json]",
     "  orkestr vm-slice provision <slice-id> [--execute] [--namespace ns] [--vm-name name] [--kubeconfig file] [--json]",
+    "  orkestr vm-slice destroy <slice-id> [--execute] [--json]",
     "  orkestr vm-slice status <slice-id> [--json]",
   ].join("\n");
 }

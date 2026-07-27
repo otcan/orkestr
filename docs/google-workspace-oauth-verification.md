@@ -48,6 +48,41 @@ approved and the review/demo materials justify the added access:
 Keep restricted scopes optional in the Orkestr consent page. Do not make them a
 silent default.
 
+## Expanded Verification Contract
+
+The current expanded verification request is deliberately narrower than the
+full connector feature set. Its deployed allowlist, Google Cloud Console scope
+list, OAuth consent screen, demo recording, reviewer environment, and written
+justifications must all contain exactly these optional capabilities:
+
+```dotenv
+ORKESTR_GOOGLE_OAUTH_ALLOWED_CAPABILITIES=gmail_send,gmail_read,gmail_drafts,calendar_read,calendar_actions
+```
+
+That produces this exact OAuth scope set, in addition to the three base identity
+scopes listed below:
+
+- `https://www.googleapis.com/auth/gmail.send`
+- `https://www.googleapis.com/auth/gmail.readonly`
+- `https://www.googleapis.com/auth/gmail.compose`
+- `https://www.googleapis.com/auth/calendar.events.readonly`
+- `https://www.googleapis.com/auth/calendar.events.owned`
+
+Do not submit `gmail.modify`, `drive.file`, `calendar.events`, or any broader
+Google scope in this review. Those are supported as separate optional product
+capabilities and require their own justification and verification evidence
+before they are enabled for the verified production OAuth client.
+
+Scope justifications for the submission:
+
+| Scope | User-visible action | Why the scope is needed |
+| --- | --- | --- |
+| `gmail.send` | Send an email the user requested or approved | Sends the exact recipient, subject, body, and attachments selected by the user. It does not read mailbox history. |
+| `gmail.readonly` | Search, inspect, and summarize mail signals the user asks Orkestr to read | Retrieves matching message metadata and content without changing messages, labels, or mailbox settings. |
+| `gmail.compose` | Create, revise, and send a user-approved Gmail draft | Creates a draft before sending it and stores only the draft data and identifier required to continue that user workflow. |
+| `calendar.events.readonly` | List events and availability for a date range the user asks to inspect | Reads event details on calendars the user can access without changing any event. |
+| `calendar.events.owned` | Create, update, and delete a user-approved event on a calendar the user owns | Limits event changes to calendars owned by the connected account; Orkestr shows or asks for the effective event details before the action. |
+
 ## Google Cloud Console Values
 
 Use the `orkestr-de-public` Google Cloud project.
@@ -109,14 +144,114 @@ Optional capabilities map to scopes as follows:
 - Calendar read: `https://www.googleapis.com/auth/calendar.events.readonly`
 - Calendar actions on calendars the user owns: `https://www.googleapis.com/auth/calendar.events.owned`
 
-`calendar.events.owned` also permits reading events on calendars the user
-owns. When Calendar actions are selected, Orkestr therefore does not request
-the redundant `calendar.events.readonly` scope. Existing grants that used
-`calendar.events` remain recognized for backward compatibility.
+Calendar read and Calendar actions are separate user-facing capabilities. When
+both are selected, Orkestr requests both scopes: `calendar.events.readonly`
+permits read-only availability across calendars the user can access, while
+`calendar.events.owned` limits edits to calendars the user owns. Orkestr does
+not suppress either selected capability while constructing the OAuth request.
+Existing grants that used `calendar.events` remain recognized for backward
+compatibility.
 - Drive selected files: `https://www.googleapis.com/auth/drive.file`
 
 Orkestr must not request broad Drive scopes for this flow. Drive access is
 limited to files selected or created through Orkestr by `drive.file`.
+
+## Isolated Reviewer Environment
+
+Create the reviewer environment outside this public repository. It is a
+disposable, synthetic-data installation used only for Google verification. It
+must not be the production Orkestr home, a personal deployment, or a tenant
+broker instance.
+
+1. Create one dedicated Orkestr review user and one dedicated Google test
+   account containing only synthetic messages, drafts, and calendar events.
+   Do not use a customer, employee, or personal mailbox as reviewer evidence.
+2. Use a fresh `ORKESTR_HOME`, database, connector encryption key, and browser
+   profile. Do not mount an existing overlay, WhatsApp session, desktop, token
+   directory, or workspace into this environment.
+3. Enable only the five capabilities in the expanded verification contract.
+   Confirm the Google Cloud Console data-access list is the same scope list.
+4. Keep normal Orkestr pairing enabled. The reviewer environment link is a
+   separate, signed bearer session for one review user and thread. It opens a
+   dedicated Google Workspace review surface only; it cannot open the normal
+   cockpit, thread API, Raw, desktops, setup, WhatsApp, browser profiles, or
+   any unrelated connector route.
+5. Give the reviewer the generated environment link and the dedicated test
+   account sign-in instructions only through the existing Google review email
+   thread. Never commit credentials, links, session material, or test data to
+   this repository.
+6. After approval or expiry, revoke the test Google grant, delete its synthetic
+   data and Orkestr home, rotate the review-link secret, and disable the review
+   environment.
+
+The reviewer environment is intentionally disabled by default. A private review
+environment must set all of the following values, with a high-entropy secret
+of at least 32 characters stored only in its service environment:
+
+```dotenv
+ORKESTR_GOOGLE_WORKSPACE_REVIEW_ACCESS_ENABLED=1
+ORKESTR_GOOGLE_WORKSPACE_REVIEW_ACCESS_SECRET=<high-entropy-secret>
+ORKESTR_GOOGLE_WORKSPACE_REVIEW_PUBLIC_URL=https://review.example.test
+ORKESTR_GOOGLE_WORKSPACE_REVIEW_ENV_TTL_MINUTES=240
+```
+
+Generate it only on that isolated instance, with a dedicated reviewer thread:
+
+```bash
+orkestr connect google --review-environment --thread google-oauth-reviewer --json
+```
+
+The generated link is bound by HMAC to the exact reviewer user, reviewer thread,
+and expiry. Its **Connect Google** action creates a second, one-time OAuth
+authorization link bound to that same user. After the Google callback, Orkestr
+returns the reviewer to the same review environment.
+
+Provision this environment as a dedicated tenant VM slice with no WhatsApp,
+desktop, or CRM connector. The stable external reviewer hostname belongs at the
+reverse proxy, while the VM receives a fresh Orkestr home and the reviewer-only
+environment variables above. First inspect the plan, then explicitly apply it:
+
+```bash
+orkestr vm-slice create google-reviewer \
+  --id google-oauth-reviewer \
+  --name "Google OAuth reviewer" \
+  --no-whatsapp --no-linkedin --no-oxrm \
+  --create-only
+orkestr vm-slice provision google-oauth-reviewer
+orkestr vm-slice provision google-oauth-reviewer --execute
+```
+
+Add the exact reviewer callback URI configured by that deployment to the same
+Google OAuth client before opening the link. Do not reuse a production callback
+or point the reviewer hostname at a production Orkestr home.
+
+After the review, inspect the destruction plan and execute it only after the
+reviewer link and Google grant have been revoked:
+
+```bash
+orkestr vm-slice destroy google-oauth-reviewer
+orkestr vm-slice destroy google-oauth-reviewer --execute
+```
+
+The execute step deletes only that registered slice's KubeVirt VM, service,
+cloud-init secret, DataVolume, and root PVC, then marks its VM and slice records
+deleted. It does not delete a shared namespace or any other tenant. This is the
+required removal step for local OAuth state; do not substitute the registry-only
+delete endpoint for it.
+
+The review surface exposes only these explicit, user-confirmed operations after
+the corresponding scope has been granted: list and read Gmail messages, create
+Gmail drafts, send a message, list Calendar events, and create a Calendar event.
+Draft creation never sends a message. Send and Calendar creation require an
+affirmative confirmation in the review UI. Reviewer links cannot be generated
+for brokered tenant connections. A missing, altered, expired, or disabled
+review ticket returns an explicit unavailable error; it never falls back to
+broad access or pairing.
+
+The page includes deterministic review tasks and a compact action log. The log
+records only a timestamp and a fixed action name such as `gmail_draft_created`
+or `calendar_event_created`; it never stores or displays recipients, subjects,
+message bodies, event details, authorization codes, or tokens.
 
 ## Verification Demo Checklist
 
@@ -128,20 +263,17 @@ Use generic demo data only.
 - Show the capability disclosure page before Google OAuth.
 - Show the Google-data access, sharing, protection, retention, and deletion
   disclosures immediately before the affirmative consent control.
-- Select only the capabilities submitted for the current verification demo,
-  then complete Google OAuth.
+- Select only the five capabilities in the expanded verification contract, then
+  complete Google OAuth. Show every Google consent-screen scope in the same
+  recording; do not cut from one authorization request to another.
 - Show the WhatsApp confirmation listing enabled capabilities.
 - Demonstrate a user-approved Gmail send action.
 - Demonstrate a Gmail read action only if `gmail.readonly` is selected.
-- Demonstrate a Gmail label/archive/read-unread action if `gmail.modify` was
-  selected.
 - Demonstrate draft creation or draft sending only if `gmail.compose` was
   selected.
 - Demonstrate Calendar event listing if Calendar read was selected.
 - Demonstrate creating, updating, or deleting a test Calendar event if Calendar
   actions was selected.
-- Demonstrate Drive selected-file metadata or text content access if
-  `drive.file` was selected.
 - Show that unselected or ungranted capabilities are unavailable.
 
 Do not include refresh tokens, OAuth client secrets, real private messages,
@@ -170,6 +302,9 @@ true on the live production deployment:
 - The live homepage, `/about`, privacy policy, OAuth consent screen, deployment
   capability allowlist, submitted scopes, scope justification, and demo video
   all describe the same production behavior.
+- The dedicated reviewer environment satisfies the isolation checklist above,
+  the environment link has been tested without disabling pairing on normal
+  routes, and its OAuth callback returns to that environment.
 
 ## Gmail Signal Notifications
 
@@ -196,5 +331,6 @@ resubmitted, reply in Google's existing review email thread. Link directly to:
 - `https://orkestr.de/privacy#google-data-protection`
 
 The reply should confirm that the policy was updated, the production behavior
-was verified, and the OAuth request was resubmitted. Do not open a new email
-thread.
+was verified, and the OAuth request was resubmitted. Include the unlisted demo
+video URL, reviewer navigation steps, and temporary synthetic-account
+credentials only in that existing thread. Do not open a new email thread.

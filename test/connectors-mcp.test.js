@@ -1042,6 +1042,27 @@ test("connector doctor evaluates the worker and queue rather than UI process hea
   ]);
 });
 
+test("connector release health ignores retained dead letters but keeps transport failures blocking", () => {
+  const payload = {
+    ok: true,
+    gateway: { ok: true },
+    worker: { ok: true, state: "ready" },
+    accounts: [{ accountId: "sender", ready: true, runtimeUsable: true, sendReady: true, inboundReady: true }],
+    queue: { deadLetter: 2 },
+  };
+  const env = { ORKESTR_CONNECTORS_REQUIRED_WA_ACCOUNTS: "sender" };
+
+  const result = assessConnectorHealth(payload, env, {}, { releaseHealth: true });
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.issues, []);
+  assert.deepEqual(result.ignoredIssues, ["dead_letter_events"]);
+
+  const unhealthy = assessConnectorHealth({ ...payload, worker: { ok: false, state: "unavailable" } }, env, {}, { releaseHealth: true });
+  assert.equal(unhealthy.ok, false);
+  assert.deepEqual(unhealthy.issues, ["worker_unhealthy"]);
+  assert.deepEqual(unhealthy.ignoredIssues, ["dead_letter_events"]);
+});
+
 test("connector doctor recognizes phone identities through their runtime alias", () => {
   const result = assessConnectorHealth({
     ok: true,

@@ -128,12 +128,9 @@ export function normalizeGoogleWorkspaceCapabilities(input = [], fallback = defa
 
 export function googleWorkspaceScopesForCapabilities(input = []) {
   const capabilities = normalizeGoogleWorkspaceCapabilities(input);
-  const effectiveCapabilities = capabilities.includes("calendar_actions")
-    ? capabilities.filter((capability) => capability !== "calendar_read")
-    : capabilities;
   return unique([
     ...baseScopes,
-    ...effectiveCapabilities.flatMap((capability) => definitionById.get(capability)?.scopes || []),
+    ...capabilities.flatMap((capability) => definitionById.get(capability)?.scopes || []),
   ]);
 }
 

@@ -34,6 +34,9 @@ const publicRuntimeEnvKeys = [
   "ORKESTR_COOKIE_DOMAIN",
   "ORKESTR_AUTH_REQUIRED",
   "ORKESTR_GOOGLE_OAUTH_ALLOWED_CAPABILITIES",
+  "ORKESTR_GOOGLE_WORKSPACE_REVIEW_ACCESS_ENABLED",
+  "ORKESTR_GOOGLE_WORKSPACE_REVIEW_ACCESS_SECRET",
+  "ORKESTR_GOOGLE_WORKSPACE_REVIEW_ACCESS_TTL_MINUTES",
 ];
 
 function snapshotEnv(keys) {
@@ -507,6 +510,66 @@ test("google workspace brokered connect links require instance and owner scoped 
     const apiPayload = await apiResponse.json();
     assert.equal(apiResponse.status, 403);
     assert.equal(apiPayload.error, "auth_intent_session_scope_denied");
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    restoreEnv(prior);
+  }
+});
+
+test("isolated Google reviewer links authorize only their exact consent action", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-static-google-review-access-"));
+  const envKeys = [...publicRuntimeEnvKeys, "ORKESTR_HOME", "ORKESTR_OVERLAY_DIR"];
+  const prior = snapshotEnv(envKeys);
+  clearEnv(envKeys);
+  process.env.ORKESTR_HOME = home;
+  process.env.ORKESTR_AUTH_REQUIRED = "1";
+  process.env.ORKESTR_CONNECT_PUBLIC_URL = "https://connect.example.test";
+  process.env.ORKESTR_GOOGLE_WORKSPACE_REVIEW_ACCESS_ENABLED = "1";
+  process.env.ORKESTR_GOOGLE_WORKSPACE_REVIEW_ACCESS_SECRET = "review-access-secret-for-isolated-google-verification";
+  process.env.ORKESTR_GOOGLE_WORKSPACE_REVIEW_ACCESS_TTL_MINUTES = "30";
+  const connect = await createGoogleWorkspaceConnectLink({
+    principal: userPrincipal({ id: "reviewer" }),
+    thread: { id: "review-thread" },
+    reviewAccess: true,
+  }, process.env);
+  const reviewUrl = new URL(connect.reviewLink);
+  const regularPath = `/connect/google?connect=${encodeURIComponent(connect.connectId)}`;
+  const reviewPath = reviewUrl.pathname;
+  const reviewTicket = reviewUrl.pathname.split("/").at(-1) || "";
+  const server = await startServer({ port: 0, host: "127.0.0.1" });
+  const { port } = server.address();
+
+  try {
+    const regular = await fetch(`http://127.0.0.1:${port}${regularPath}`, { redirect: "manual" });
+    const regularHtml = await regular.text();
+    assert.equal(regular.status, 403);
+    assert.equal(regular.headers.get("location"), null);
+    assert.match(regularHtml, /google_workspace_reviewer_link_required/);
+
+    const reviewer = await fetch(`http://127.0.0.1:${port}${reviewPath}`, { redirect: "manual" });
+    const reviewerHtml = await reviewer.text();
+    assert.equal(reviewer.status, 200);
+    assert.equal(reviewer.headers.get("referrer-policy"), "no-referrer");
+    assert.match(reviewerHtml, /Connect Google Workspace/);
+    assert.match(reviewerHtml, /name="review"/);
+
+    const start = new URL(`http://127.0.0.1:${port}/connect/google/start`);
+    start.searchParams.set("connect", connect.connectId);
+    start.searchParams.set("review", reviewTicket);
+    start.searchParams.set("capability", "gmail_send");
+    const unconsented = await fetch(start, { redirect: "manual" });
+    const unconsentedHtml = await unconsented.text();
+    assert.equal(unconsented.status, 400);
+    assert.equal(unconsented.headers.get("referrer-policy"), "no-referrer");
+    assert.match(unconsentedHtml, /Review and accept the Google data disclosure/);
+    assert.match(unconsentedHtml, /name="review"/);
+
+    const invalid = new URL(`http://127.0.0.1:${port}${reviewPath}`);
+    invalid.pathname = `/connect/google/review/${connect.connectId}/invalid-ticket`;
+    const invalidResponse = await fetch(invalid, { redirect: "manual" });
+    const invalidHtml = await invalidResponse.text();
+    assert.equal(invalidResponse.status, 403);
+    assert.match(invalidHtml, /google_workspace_review_access_invalid_or_expired/);
   } finally {
     await new Promise((resolve) => server.close(resolve));
     restoreEnv(prior);

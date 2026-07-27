@@ -142,7 +142,7 @@ health_successes=0
 for _ in $(seq 1 "$health_attempts"); do
   if ORKESTR_CONNECTORS_MCP_TOKEN="$token" \
       ORKESTR_CONNECTORS_MCP_HEALTH_URL="${ORKESTR_CONNECTORS_MCP_HEALTH_URL:-http://127.0.0.1:18914/health}" \
-      "$node_bin" "$release_dir/scripts/orkestr-connectors-doctor.mjs" >/dev/null 2>&1; then
+      "$node_bin" "$release_dir/scripts/orkestr-connectors-doctor.mjs" --release-health >/dev/null 2>&1; then
     health_successes=$((health_successes + 1))
     if [ "$health_successes" -ge "$health_stable_successes" ]; then
       health_ready=1
