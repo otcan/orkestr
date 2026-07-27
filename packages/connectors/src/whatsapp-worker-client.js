@@ -94,11 +94,17 @@ export function whatsappWorkerConversation(accountId = "", conversationId = "", 
     return requestWhatsAppWorker(`/accounts/${account}/chats/${conversation}/history?limit=${Math.max(1, Number(options.limit || 30) || 30)}`, {}, env);
   }
   if (action === "participants") return requestWhatsAppWorker(`/accounts/${account}/chats/${conversation}/participants`, {}, env);
-  if (action === "promote-admins" || action === "demote-admins") {
-    const suffix = action === "demote-admins" ? "/admins/demote" : "/admins";
+  if (["promote_admins", "demote_admins", "promote-admins", "demote-admins"].includes(action)) {
+    const suffix = action === "demote_admins" || action === "demote-admins" ? "/admins/demote" : "/admins";
     return requestWhatsAppWorker(`/accounts/${account}/chats/${conversation}${suffix}`, {
       method: "POST",
       body: { participantIds: options.participantIds || [] },
+    }, env);
+  }
+  if (action === "set_picture") {
+    return requestWhatsAppWorker(`/accounts/${account}/chats/${conversation}/picture`, {
+      method: "POST",
+      body: { title: clean(options.title) },
     }, env);
   }
   if (action === "recover") {
@@ -133,9 +139,23 @@ export function whatsappWorkerTyping({ accountId = "", conversationId = "", stat
   }, env);
 }
 
-export function whatsappWorkerCreateConversation({ accountId = "", name = "", participantIds = [] } = {}, env = process.env) {
+export function whatsappWorkerCreateConversation({
+  accountId = "",
+  name = "",
+  participantIds = [],
+  adminParticipantIds = [],
+  promoteParticipantsAsAdmins = false,
+  generatePicture = true,
+} = {}, env = process.env) {
   return requestWhatsAppWorker("/chats", {
     method: "POST",
-    body: { senderAccountId: clean(accountId || "sender"), name: clean(name), participantIds },
+    body: {
+      senderAccountId: clean(accountId || "sender"),
+      name: clean(name),
+      participantIds,
+      adminParticipantIds,
+      promoteParticipantsAsAdmins,
+      generatePicture,
+    },
   }, env);
 }

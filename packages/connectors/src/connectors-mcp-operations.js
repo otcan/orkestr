@@ -58,6 +58,11 @@ function operationIntent(tool = "", input = {}) {
     alias: clean(input.alias),
     useMode: clean(input.use_mode),
     oauthAppId: clean(input.oauth_app),
+    name: clean(input.name),
+    participantIds: (input.participant_ids || []).map(clean).filter(Boolean),
+    adminParticipantIds: (input.admin_participant_ids || []).map(clean).filter(Boolean),
+    promoteParticipantsAsAdmins: input.promote_participants_as_admins === true,
+    generatePicture: input.generate_picture !== false,
     setAsMain: input.set_as_main === true,
     setAsThreadDefault: input.set_as_thread_default === true,
   };
@@ -69,7 +74,9 @@ function operationIntent(tool = "", input = {}) {
 
 async function challengeRequired(tool = "", input = {}, auth = {}, env = process.env) {
   if (tool === "orkestr_auth") return input.action !== "status";
-  if (tool === "orkestr_conversation") return input.action === "create";
+  if (tool === "orkestr_conversation") {
+    return ["create", "promote_admins", "demote_admins", "set_picture"].includes(input.action) && !auth.operator;
+  }
   if (tool === "orkestr_routing") return input.action !== "status";
   if (tool === "orkestr_messaging" && input.action === "set_typing") return false;
   if (tool !== "orkestr_messaging" || !auth.operator) return false;
@@ -312,7 +319,14 @@ async function runConversation(input, auth, env) {
   let payload;
   if (input.action === "list") payload = filterConversations(await whatsappWorkerConversations(accountId, env), auth);
   else if (input.action === "create") {
-    payload = await whatsappWorkerCreateConversation({ accountId, name: input.name, participantIds: input.participant_ids || [] }, env);
+    payload = await whatsappWorkerCreateConversation({
+      accountId,
+      name: input.name,
+      participantIds: input.participant_ids || [],
+      adminParticipantIds: input.admin_participant_ids || [],
+      promoteParticipantsAsAdmins: input.promote_participants_as_admins === true,
+      generatePicture: input.generate_picture !== false,
+    }, env);
   } else {
     if (!clean(input.conversation_id)) throw Object.assign(new Error("connector_conversation_id_required"), { statusCode: 400 });
     payload = await whatsappWorkerConversation(accountId, input.conversation_id, input.action, {
@@ -320,6 +334,8 @@ async function runConversation(input, auth, env) {
       unreadOnly: input.unread_only,
       markSeen: input.mark_seen,
       eventIds: input.event_ids,
+      participantIds: input.participant_ids,
+      title: input.name,
     }, env);
   }
   return connectorMcpStructuredResult({

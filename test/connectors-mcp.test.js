@@ -49,8 +49,25 @@ function fakeWorker() {
       res.end(JSON.stringify({ ok: true, active: body.state === "composing", chatId: body.to }));
       return;
     }
+    if (req.url === "/chats") {
+      res.end(JSON.stringify({
+        ok: true,
+        chat: { id: "owner-project@g.us", name: body.name, isGroup: true, generated: true },
+        participantIds: body.participantIds || [],
+        adminParticipantIds: body.adminParticipantIds || [],
+      }));
+      return;
+    }
     if (req.url === "/accounts/sender/chats/firat-jobs%40g.us/recover") {
       res.end(JSON.stringify({ ok: true, exact: true, requested: body.eventIds?.length || 0, routed: [] }));
+      return;
+    }
+    if (req.url === "/accounts/sender/chats/owner-project%40g.us/admins") {
+      res.end(JSON.stringify({ ok: true, participantIds: body.participantIds || [] }));
+      return;
+    }
+    if (req.url === "/accounts/sender/chats/owner-project%40g.us/picture") {
+      res.end(JSON.stringify({ ok: true, title: body.title }));
       return;
     }
     if (req.url === "/accounts/sender/logout") {
@@ -200,6 +217,110 @@ test("connector MCP exposes the canonical tools and scoped account status", asyn
     assert.equal(status.contract_version, "1.3");
     assert.equal(status.status, "ok");
     assert.equal(status.data.accounts[0].accountId, "sender");
+  } finally {
+    await item.close();
+  }
+});
+
+test("connector MCP lets the trusted operator create a conversation and promote explicit admins", async () => {
+  const item = await fixture();
+  try {
+    const created = await callConnectorsMcpTool("orkestr_conversation", {
+      service: "whatsapp",
+      action: "create",
+      account_id: "sender",
+      name: "Owner project",
+      participant_ids: ["owner-primary@c.us"],
+      admin_participant_ids: ["owner-primary@c.us"],
+      promote_participants_as_admins: true,
+      generate_picture: true,
+    }, item.env);
+    const call = item.worker.calls.find((entry) => entry.url === "/chats");
+
+    assert.equal(created.status, "ok", JSON.stringify(created));
+    assert.equal(created.challenge, null);
+    assert.deepEqual(call.body, {
+      senderAccountId: "sender",
+      name: "Owner project",
+      participantIds: ["owner-primary@c.us"],
+      adminParticipantIds: ["owner-primary@c.us"],
+      promoteParticipantsAsAdmins: true,
+      generatePicture: true,
+    });
+  } finally {
+    await item.close();
+  }
+});
+
+test("connector MCP still challenges scoped non-operator conversation creation", async () => {
+  const item = await fixture({ scoped: true });
+  try {
+    const pending = await callConnectorsMcpTool("orkestr_conversation", {
+      service: "whatsapp",
+      action: "create",
+      account_id: "sender",
+      instance_id: "vm-firat",
+      user_id: "firat",
+      name: "Scoped project",
+    }, item.env);
+
+    assert.equal(pending.status, "approval_required");
+    assert.match(pending.challenge.approve_command, /^orkestr security approve /);
+    assert.equal(item.worker.calls.some((entry) => entry.url === "/chats"), false);
+  } finally {
+    await item.close();
+  }
+});
+
+test("connector MCP lets the trusted operator retry conversation administration", async () => {
+  const item = await fixture();
+  try {
+    const promoted = await callConnectorsMcpTool("orkestr_conversation", {
+      service: "whatsapp",
+      action: "promote_admins",
+      account_id: "sender",
+      conversation_id: "owner-project@g.us",
+      participant_ids: ["owner-primary@c.us"],
+    }, item.env);
+    const pictured = await callConnectorsMcpTool("orkestr_conversation", {
+      service: "whatsapp",
+      action: "set_picture",
+      account_id: "sender",
+      conversation_id: "owner-project@g.us",
+      name: "Owner project",
+    }, item.env);
+
+    assert.equal(promoted.status, "ok", JSON.stringify(promoted));
+    assert.equal(promoted.challenge, null);
+    assert.equal(pictured.status, "ok", JSON.stringify(pictured));
+    assert.equal(pictured.challenge, null);
+    assert.deepEqual(item.worker.calls.find((entry) => entry.url.endsWith("/admins")).body, {
+      participantIds: ["owner-primary@c.us"],
+    });
+    assert.deepEqual(item.worker.calls.find((entry) => entry.url.endsWith("/picture")).body, {
+      title: "Owner project",
+    });
+  } finally {
+    await item.close();
+  }
+});
+
+test("connector MCP challenges scoped non-operator conversation administration", async () => {
+  const item = await fixture({ scoped: true });
+  try {
+    const pending = await callConnectorsMcpTool("orkestr_conversation", {
+      service: "whatsapp",
+      action: "promote_admins",
+      account_id: "sender",
+      instance_id: "vm-firat",
+      user_id: "firat",
+      conversation_id: "firat-jobs@g.us",
+      participant_ids: ["firat@c.us"],
+    }, item.env);
+
+    assert.equal(pending.status, "approval_required");
+    assert.match(pending.challenge.approve_command, /^orkestr security approve /);
+    assert.equal(item.worker.calls.some((entry) => entry.url.endsWith("/admins")), false);
   } finally {
     await item.close();
   }

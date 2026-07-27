@@ -37,10 +37,13 @@ export const connectorsMcpInputSchemas = {
   }).strict(),
   orkestr_conversation: z.object({
     ...contextShape,
-    action: z.enum(["list", "history", "participants", "recover", "create"]),
+    action: z.enum(["list", "history", "participants", "recover", "create", "promote_admins", "demote_admins", "set_picture"]),
     conversation_id: cleanString.nullish(),
     name: cleanString.nullish(),
     participant_ids: z.array(cleanString.min(1)).max(100).nullish(),
+    admin_participant_ids: z.array(cleanString.min(1)).max(100).nullish(),
+    promote_participants_as_admins: z.boolean().nullish(),
+    generate_picture: z.boolean().nullish(),
     limit: z.number().int().min(1).max(200).nullish(),
     unread_only: z.boolean().nullish(),
     mark_seen: z.boolean().nullish(),
@@ -88,7 +91,7 @@ export const connectorsMcpToolDescriptors = [
   {
     name: "orkestr_conversation",
     title: "Connector conversations",
-    description: "List, inspect, recover, or create connector conversations. Creation is an attended administrative write.",
+    description: "List, inspect, recover, create, or administer connector conversations. Administrative writes require attended approval for scoped non-operator callers.",
     readOnlyHint: false,
   },
   {
