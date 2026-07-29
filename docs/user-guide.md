@@ -130,15 +130,14 @@ can stay **Only when requested** so agents do not select it implicitly.
 For Google OAuth verification, an operator can create a separate stable review
 environment URL with `orkestr connect google --review-environment --thread
 google-oauth-reviewer --json`. It is for a disposable isolated installation only.
-The reviewer enters the separately supplied review password, which creates a
-restricted browser session and a fresh internal OAuth ticket. The reviewer can
-connect a synthetic Google account, read test mail, prepare a draft, send an
-explicitly approved test message, list Calendar events, and create an explicitly
-approved test event. It is not a normal Orkestr login and does not expose
-threads, WhatsApp, Raw, desktops, browser profiles, or other users' data. Send
-the URL, review password, and synthetic-account instructions only through the
-existing Google review thread. See [Google Workspace OAuth verification
-prep](google-workspace-oauth-verification.md).
+The reviewer enters the separately supplied password and is taken into that
+instance's normal Orkestr UI, directly on **Connectors > Gmail**. They can use
+the actual Google connection flow and inspect the requested capabilities in the
+same interface users receive. The reviewer VM must contain only synthetic test
+data and no production threads, WhatsApp accounts, browser profiles, or other
+users' data. Send the URL, password, and synthetic-account instructions only
+through the existing Google review thread. See [Google Workspace OAuth
+verification prep](google-workspace-oauth-verification.md).
 
 Once granted, Orkestr exposes these Google Workspace workflows in chat:
 

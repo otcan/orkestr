@@ -1145,7 +1145,6 @@ test("CLI creates a reviewer environment link that owns the Google OAuth return 
   assert.equal(payload.ok, true);
   assert.equal(payload.threadId, "reviewer-google");
   assert.equal(payload.reviewEnvironmentLink, "https://review.example.test/review/google");
-  assert.equal(payload.sessionTtlMinutes, 43_200);
 });
 
 test("CLI requires an explicit reviewer thread before creating reviewer access", async () => {
