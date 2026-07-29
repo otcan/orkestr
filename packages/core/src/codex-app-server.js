@@ -1713,6 +1713,33 @@ async function deliverCodexAppServerClaimedPendingInput(thread, next, env = proc
     return delivered;
   }
   let id = codexThreadId(thread);
+  if (!id) {
+    try {
+      const started = await startCodexAppServerThread(thread, env);
+      thread = started?.thread || await getThread(thread.id, env).catch(() => null) || thread;
+      client = started?.client || client;
+      runtimeEnv = codexRuntimeEnvForThread(thread, env);
+      id = codexThreadId(thread);
+      if (!id) throw new Error("codex_app_server_thread_start_missing_id");
+      await appendEvent({
+        type: "codex_app_server_thread_started_for_input",
+        threadId: thread.id,
+        messageId: next.id,
+        codexThreadId: id,
+      }, env).catch(() => {});
+    } catch (error) {
+      const errorText = publicError(error);
+      await updateThreadMessage(thread.id, next.id, {
+        state: "failed",
+        deliveryState: "failed",
+        deliveryClaimId: null,
+        error: errorText,
+      }, env).catch(() => {});
+      await updateThread(thread.id, { state: "failed", lastError: errorText }, env).catch(() => {});
+      await appendEvent({ type: "thread_input_delivery_failed", threadId: thread.id, messageId: next.id, error: errorText }, env).catch(() => {});
+      return delivered;
+    }
+  }
   if (externalChatInput(next)) {
     const readiness = await verifiedExternalDeliveryRuntime(thread, next, client, env);
     if (!readiness.ok) return delivered;
