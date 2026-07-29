@@ -1389,17 +1389,16 @@ async function connectGoogleWorkspaceCommand(argv, ctx) {
     const principal = await googleConnectPrincipal(thread, where, ctx);
     if (reviewEnvironment) {
       const reviewer = createGoogleWorkspaceReviewEnvironmentLink({
-        userId: principal.userId,
         threadId: thread.id,
       }, ctx.env);
       const payload = {
         ok: true,
         reviewEnvironmentLink: reviewer.link,
-        expiresAt: reviewer.expiresAt,
+        sessionTtlMinutes: Math.floor(reviewer.sessionTtlMs / 60_000),
         threadId: thread.id,
       };
       if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
-      else ctx.stdout.write(`Google OAuth reviewer environment (expires ${payload.expiresAt}):\n${payload.reviewEnvironmentLink}\n`);
+      else ctx.stdout.write(`Google OAuth reviewer environment:\n${payload.reviewEnvironmentLink}\n`);
       return 0;
     }
     const connect = await createGoogleWorkspaceConnectLink({

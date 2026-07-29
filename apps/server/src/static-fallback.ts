@@ -26,7 +26,7 @@ export function registerStaticFallback(app: INestApplication): void {
   const expressApp = app.getHttpAdapter().getInstance();
   expressApp.use(async (request: any, response: any, next: () => void) => {
     const url = String(request.originalUrl || request.url || "");
-    if (url.startsWith("/api/") || url.startsWith("/oauth/") || url.startsWith("/connect/") || url.startsWith("/review/google/") || url.startsWith("/google-marketing/oauth/")) {
+    if (url.startsWith("/api/") || url.startsWith("/oauth/") || url.startsWith("/connect/") || url === "/review/google" || url.startsWith("/review/google/") || url.startsWith("/google-marketing/oauth/")) {
       return next();
     }
     if (isDesktopSharePagePath(url)) {

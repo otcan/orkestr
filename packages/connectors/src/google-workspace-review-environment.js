@@ -9,6 +9,10 @@ function reviewEnvironmentSecret(env = process.env) {
   return clean(env.ORKESTR_GOOGLE_WORKSPACE_REVIEW_ACCESS_SECRET);
 }
 
+function reviewEnvironmentPassword(env = process.env) {
+  return clean(env.ORKESTR_GOOGLE_WORKSPACE_REVIEW_PASSWORD);
+}
+
 function reviewEnvironmentError(message, statusCode = 403) {
   const error = new Error(message);
   error.code = message;
@@ -21,6 +25,18 @@ function reviewEnvironmentTtlMinutes(env = process.env) {
   return Math.max(5, Math.min(1_440, Number.isFinite(configured) ? configured : 240));
 }
 
+function reviewSessionTtlMinutes(env = process.env) {
+  const configured = Number(env.ORKESTR_GOOGLE_WORKSPACE_REVIEW_SESSION_TTL_MINUTES || 43_200);
+  return Math.max(60, Math.min(129_600, Number.isFinite(configured) ? configured : 43_200));
+}
+
+export function googleWorkspaceReviewEnvironmentIdentity(env = process.env) {
+  return {
+    userId: clean(env.ORKESTR_GOOGLE_WORKSPACE_REVIEW_USER_ID) || "google-reviewer",
+    threadId: clean(env.ORKESTR_GOOGLE_WORKSPACE_REVIEW_THREAD_ID) || "google-oauth-reviewer",
+  };
+}
+
 function signature(value, secret) {
   return createHmac("sha256", secret).update(value).digest("base64url");
 }
@@ -28,6 +44,12 @@ function signature(value, secret) {
 function sameSignature(left, right) {
   const actual = Buffer.from(clean(left), "base64url");
   const expected = Buffer.from(clean(right), "base64url");
+  return actual.length > 0 && actual.length === expected.length && timingSafeEqual(actual, expected);
+}
+
+function sameValue(left, right) {
+  const actual = Buffer.from(clean(left));
+  const expected = Buffer.from(clean(right));
   return actual.length > 0 && actual.length === expected.length && timingSafeEqual(actual, expected);
 }
 
@@ -68,8 +90,93 @@ export function googleWorkspaceReviewEnvironmentEnabled(env = process.env) {
   return googleWorkspaceReviewAccessEnabled(env);
 }
 
+export function googleWorkspaceReviewPasswordAccessEnabled(env = process.env) {
+  return googleWorkspaceReviewEnvironmentEnabled(env) && reviewEnvironmentPassword(env).length >= 16;
+}
+
 export function googleWorkspaceReviewEnvironmentTtlMs(env = process.env) {
   return reviewEnvironmentTtlMinutes(env) * 60_000;
+}
+
+export function googleWorkspaceReviewSessionTtlMs(env = process.env) {
+  return reviewSessionTtlMinutes(env) * 60_000;
+}
+
+export function googleWorkspaceReviewSessionCookieName() {
+  return "orkestr_google_workspace_review";
+}
+
+export function googleWorkspaceReviewSessionCookieHeader(token = "", env = process.env) {
+  const value = clean(token);
+  if (!value) return "";
+  const secure = reviewPublicBaseUrl(env).startsWith("https://") ? "; Secure" : "";
+  const maxAge = Math.floor(googleWorkspaceReviewSessionTtlMs(env) / 1_000);
+  return `${googleWorkspaceReviewSessionCookieName()}=${encodeURIComponent(value)}; Path=/review/google; Max-Age=${maxAge}; HttpOnly; SameSite=Lax${secure}`;
+}
+
+export function googleWorkspaceReviewSessionFromCookie(cookieHeader = "") {
+  const name = googleWorkspaceReviewSessionCookieName();
+  for (const part of String(cookieHeader || "").split(";")) {
+    const [key, ...value] = part.trim().split("=");
+    if (key !== name) continue;
+    try {
+      return clean(decodeURIComponent(value.join("=")));
+    } catch {
+      return "";
+    }
+  }
+  return "";
+}
+
+export function verifyGoogleWorkspaceReviewPassword(password = "", env = process.env) {
+  return googleWorkspaceReviewPasswordAccessEnabled(env) && sameValue(password, reviewEnvironmentPassword(env));
+}
+
+export function createGoogleWorkspaceReviewSession({ userId = "", threadId = "", expiresAt = "" } = {}, env = process.env) {
+  if (!googleWorkspaceReviewPasswordAccessEnabled(env)) {
+    throw reviewEnvironmentError("google_workspace_review_password_not_configured");
+  }
+  const expiresAtMs = clean(expiresAt)
+    ? Date.parse(clean(expiresAt))
+    : Date.now() + googleWorkspaceReviewSessionTtlMs(env);
+  if (!clean(userId) || !clean(threadId) || !Number.isFinite(expiresAtMs) || expiresAtMs <= Date.now()) {
+    throw reviewEnvironmentError("google_workspace_review_session_invalid_request", 400);
+  }
+  const encoded = Buffer.from(JSON.stringify({
+    v: 1,
+    scope: "google_workspace_review_session",
+    userId: clean(userId),
+    threadId: clean(threadId),
+    expiresAt: new Date(expiresAtMs).toISOString(),
+  })).toString("base64url");
+  return `${encoded}.${signature(encoded, reviewEnvironmentSecret(env))}`;
+}
+
+export function verifyGoogleWorkspaceReviewSession(token = "", env = process.env) {
+  const parsed = parseTicket(token);
+  if (!parsed) return { ok: false, present: Boolean(clean(token)), reason: "malformed" };
+  if (!googleWorkspaceReviewPasswordAccessEnabled(env)) return { ok: false, present: true, reason: "disabled" };
+  if (!sameSignature(parsed.signature, signature(parsed.encoded, reviewEnvironmentSecret(env)))) {
+    return { ok: false, present: true, reason: "signature" };
+  }
+  const expiresAtMs = Date.parse(clean(parsed.payload.expiresAt));
+  if (
+    parsed.payload.v !== 1 ||
+    parsed.payload.scope !== "google_workspace_review_session" ||
+    !Number.isFinite(expiresAtMs) ||
+    expiresAtMs <= Date.now() ||
+    !clean(parsed.payload.userId) ||
+    !clean(parsed.payload.threadId)
+  ) {
+    return { ok: false, present: true, reason: "binding_or_expiry" };
+  }
+  return {
+    ok: true,
+    present: true,
+    userId: clean(parsed.payload.userId),
+    threadId: clean(parsed.payload.threadId),
+    expiresAt: new Date(expiresAtMs).toISOString(),
+  };
 }
 
 export function createGoogleWorkspaceReviewEnvironmentTicket({ userId = "", threadId = "", expiresAt = "" } = {}, env = process.env) {
@@ -130,14 +237,18 @@ export function googleWorkspaceReviewEnvironmentPath(ticket = "") {
 }
 
 export function createGoogleWorkspaceReviewEnvironmentLink(input = {}, env = process.env) {
-  const ticket = createGoogleWorkspaceReviewEnvironmentTicket(input, env);
-  const path = googleWorkspaceReviewEnvironmentPath(ticket);
+  if (!googleWorkspaceReviewPasswordAccessEnabled(env)) {
+    throw reviewEnvironmentError("google_workspace_review_password_not_configured");
+  }
+  const identity = googleWorkspaceReviewEnvironmentIdentity(env);
+  if (clean(input.threadId) && clean(input.threadId) !== identity.threadId) {
+    throw reviewEnvironmentError("google_workspace_review_environment_identity_mismatch", 400);
+  }
   const base = reviewPublicBaseUrl(env);
   return {
     ok: true,
-    ticket,
-    path,
-    link: base ? new URL(path, `${base}/`).toString() : path,
-    expiresAt: verifyGoogleWorkspaceReviewEnvironmentTicket(ticket, {}, env).expiresAt,
+    path: "/review/google",
+    link: base ? new URL("/review/google", `${base}/`).toString() : "/review/google",
+    sessionTtlMs: googleWorkspaceReviewSessionTtlMs(env),
   };
 }

@@ -1132,6 +1132,9 @@ test("CLI creates a reviewer environment link that owns the Google OAuth return 
       ORKESTR_GOOGLE_WORKSPACE_REVIEW_PUBLIC_URL: "https://review.example.test",
       ORKESTR_GOOGLE_WORKSPACE_REVIEW_ACCESS_ENABLED: "1",
       ORKESTR_GOOGLE_WORKSPACE_REVIEW_ACCESS_SECRET: "review-access-secret-for-isolated-google-verification",
+      ORKESTR_GOOGLE_WORKSPACE_REVIEW_PASSWORD: "a-long-review-password-for-isolated-oauth",
+      ORKESTR_GOOGLE_WORKSPACE_REVIEW_USER_ID: "root",
+      ORKESTR_GOOGLE_WORKSPACE_REVIEW_THREAD_ID: "reviewer-google",
     },
     stdout,
     stderr: capture(),
@@ -1141,7 +1144,8 @@ test("CLI creates a reviewer environment link that owns the Google OAuth return 
   assert.equal(code, 0);
   assert.equal(payload.ok, true);
   assert.equal(payload.threadId, "reviewer-google");
-  assert.match(payload.reviewEnvironmentLink, /^https:\/\/review\.example\.test\/review\/google\/[^/]+$/);
+  assert.equal(payload.reviewEnvironmentLink, "https://review.example.test/review/google");
+  assert.equal(payload.sessionTtlMinutes, 43_200);
 });
 
 test("CLI requires an explicit reviewer thread before creating reviewer access", async () => {

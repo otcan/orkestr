@@ -93,11 +93,12 @@ logs, or chat transcripts. See
 [`google-workspace-oauth-verification.md`](google-workspace-oauth-verification.md).
 
 `orkestr connect google --review-environment --thread <reviewer-thread-id>`
-generates the reviewer's starting link. The review surface creates a short-lived
-OAuth connection link only when **Connect Google** is selected and returns to
-the same review surface after the callback. It remains restricted to the
-reviewer's Gmail and Calendar test operations; it is not an Orkestr cockpit
-session.
+prints the stable reviewer entry URL. The reviewer uses the dedicated review
+password, which creates a restricted browser session. Each browser session
+mints a short-lived OAuth connection link only when **Connect Google** is
+selected and returns to the same review surface after the callback. The review
+environment remains restricted to the reviewer’s Gmail and Calendar test
+operations; it is not an Orkestr cockpit session.
 
 `orkestr api-session` is the stable bridge for API-driven agents that are not
 already running inside Orkestr's Codex app-server transport. `bind` attaches a

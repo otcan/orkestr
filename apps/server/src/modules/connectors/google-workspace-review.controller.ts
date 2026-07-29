@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, Query, Res } from "@nestjs/common";
+import { Body, Controller, Get, Param, Post, Query, Req, Res } from "@nestjs/common";
 import {
   createGmailDraft,
   createGoogleCalendarEvent,
@@ -10,11 +10,18 @@ import { getGmailMessage, listGmailMessages } from "../../../../../packages/conn
 import { listGoogleWorkspaceConnections } from "../../../../../packages/connectors/src/google-workspace-connections.js";
 import { appendGoogleWorkspaceReviewAudit, listGoogleWorkspaceReviewAudit } from "../../../../../packages/connectors/src/google-workspace-review-audit.js";
 import {
+  createGoogleWorkspaceReviewSession,
+  createGoogleWorkspaceReviewEnvironmentTicket,
+  googleWorkspaceReviewEnvironmentIdentity,
   googleWorkspaceReviewEnvironmentPath,
+  googleWorkspaceReviewSessionCookieHeader,
+  googleWorkspaceReviewSessionFromCookie,
+  verifyGoogleWorkspaceReviewPassword,
+  verifyGoogleWorkspaceReviewSession,
   verifyGoogleWorkspaceReviewEnvironmentTicket,
 } from "../../../../../packages/connectors/src/google-workspace-review-environment.js";
 import { userPrincipal } from "../../../../../packages/core/src/principal.js";
-import { googleWorkspaceReviewPageHtml } from "./google-workspace-review-page.js";
+import { googleWorkspaceReviewLoginPageHtml, googleWorkspaceReviewPageHtml } from "./google-workspace-review-page.js";
 
 function clean(value: unknown): string {
   return String(value || "").trim();
@@ -47,6 +54,18 @@ function reviewContext(ticket: string) {
     expiresAt: verified.expiresAt,
     principal: userPrincipal({ id: verified.userId, source: "google-oauth-review" }),
   };
+}
+
+function sessionContext(request: any) {
+  const token = googleWorkspaceReviewSessionFromCookie(request?.headers?.cookie || "");
+  const verified = verifyGoogleWorkspaceReviewSession(token, process.env);
+  if (!verified.ok) {
+    const error: any = new Error("google_workspace_review_session_required");
+    error.statusCode = 401;
+    error.code = error.message;
+    throw error;
+  }
+  return verified;
 }
 
 async function operationOptions(context: ReturnType<typeof reviewContext>, value: Record<string, unknown> = {}) {
@@ -130,6 +149,49 @@ function publicCalendarEvent(event: Record<string, any> = {}) {
 
 @Controller("review/google")
 export class GoogleWorkspaceReviewController {
+  @Get()
+  entry(@Req() request: any, @Res() response: any) {
+    const session = verifyGoogleWorkspaceReviewSession(googleWorkspaceReviewSessionFromCookie(request?.headers?.cookie || ""), process.env);
+    if (session.ok) return response.redirect(302, "/review/google/session");
+    response.setHeader("cache-control", "no-store");
+    response.setHeader("referrer-policy", "no-referrer");
+    return response.status(200).type("text/html; charset=utf-8").send(googleWorkspaceReviewLoginPageHtml());
+  }
+
+  @Post("session")
+  createSession(@Body() body: Record<string, unknown> = {}, @Res() response: any) {
+    if (!verifyGoogleWorkspaceReviewPassword(clean(body.password), process.env)) {
+      response.setHeader("cache-control", "no-store");
+      response.setHeader("referrer-policy", "no-referrer");
+      return response.status(403).type("text/html; charset=utf-8").send(googleWorkspaceReviewLoginPageHtml({ error: "Incorrect review password." }));
+    }
+    try {
+      const session = createGoogleWorkspaceReviewSession(googleWorkspaceReviewEnvironmentIdentity(process.env), process.env);
+      response.setHeader("cache-control", "no-store");
+      response.setHeader("referrer-policy", "no-referrer");
+      response.setHeader("set-cookie", googleWorkspaceReviewSessionCookieHeader(session, process.env));
+      return response.redirect(303, "/review/google/session");
+    } catch (error) {
+      const failure = reviewError(error);
+      return response.status(failure.statusCode).json(failure.payload);
+    }
+  }
+
+  @Get("session")
+  openSession(@Req() request: any, @Res() response: any) {
+    try {
+      const session = sessionContext(request);
+      const ticket = createGoogleWorkspaceReviewEnvironmentTicket({ userId: session.userId, threadId: session.threadId }, process.env);
+      response.setHeader("cache-control", "no-store");
+      response.setHeader("referrer-policy", "no-referrer");
+      return response.redirect(302, googleWorkspaceReviewEnvironmentPath(ticket));
+    } catch (error) {
+      response.setHeader("cache-control", "no-store");
+      response.setHeader("referrer-policy", "no-referrer");
+      return response.status(401).type("text/html; charset=utf-8").send(googleWorkspaceReviewLoginPageHtml({ error: "Your review session has expired. Enter the review password again." }));
+    }
+  }
+
   @Get(":ticket")
   open(@Param("ticket") ticket = "", @Res() response: any) {
     try {

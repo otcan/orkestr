@@ -3,7 +3,12 @@ import test from "node:test";
 import {
   createGoogleWorkspaceReviewEnvironmentLink,
   createGoogleWorkspaceReviewEnvironmentTicket,
+  createGoogleWorkspaceReviewSession,
   googleWorkspaceReviewEnvironmentTtlMs,
+  googleWorkspaceReviewSessionCookieHeader,
+  googleWorkspaceReviewSessionFromCookie,
+  verifyGoogleWorkspaceReviewPassword,
+  verifyGoogleWorkspaceReviewSession,
   verifyGoogleWorkspaceReviewEnvironmentTicket,
 } from "../packages/connectors/src/google-workspace-review-environment.js";
 
@@ -13,6 +18,9 @@ function reviewEnv() {
     ORKESTR_GOOGLE_WORKSPACE_REVIEW_ACCESS_SECRET: "review-access-secret-for-isolated-google-verification",
     ORKESTR_GOOGLE_WORKSPACE_REVIEW_ENV_TTL_MINUTES: "30",
     ORKESTR_GOOGLE_WORKSPACE_REVIEW_PUBLIC_URL: "https://review.example.test",
+    ORKESTR_GOOGLE_WORKSPACE_REVIEW_PASSWORD: "a-long-review-password-for-isolated-oauth",
+    ORKESTR_GOOGLE_WORKSPACE_REVIEW_USER_ID: "reviewer",
+    ORKESTR_GOOGLE_WORKSPACE_REVIEW_THREAD_ID: "review-thread",
   };
 }
 
@@ -31,12 +39,29 @@ test("reviewer environment ticket is signed and bound to one user and thread", (
   );
 });
 
-test("reviewer environment link uses the dedicated public host and needs reviewer configuration", () => {
+test("reviewer environment link is stable and requires the configured review thread", () => {
   const link = createGoogleWorkspaceReviewEnvironmentLink({ userId: "reviewer", threadId: "review-thread" }, reviewEnv());
-  assert.match(link.link, /^https:\/\/review\.example\.test\/review\/google\/[^/]+$/);
-  assert.ok(Date.parse(link.expiresAt) > Date.now());
+  assert.equal(link.link, "https://review.example.test/review/google");
+  assert.equal(link.sessionTtlMs, 43_200 * 60_000);
+  assert.throws(
+    () => createGoogleWorkspaceReviewEnvironmentLink({ userId: "reviewer", threadId: "another-thread" }, reviewEnv()),
+    (error) => error.code === "google_workspace_review_environment_identity_mismatch",
+  );
   assert.throws(
     () => createGoogleWorkspaceReviewEnvironmentLink({ userId: "reviewer", threadId: "review-thread" }, {}),
-    (error) => error.code === "google_workspace_review_access_not_configured",
+    (error) => error.code === "google_workspace_review_password_not_configured",
   );
+});
+
+test("review password creates a renewable scoped browser session", () => {
+  const env = reviewEnv();
+  assert.equal(verifyGoogleWorkspaceReviewPassword("a-long-review-password-for-isolated-oauth", env), true);
+  assert.equal(verifyGoogleWorkspaceReviewPassword("wrong", env), false);
+  const session = createGoogleWorkspaceReviewSession({ userId: "reviewer", threadId: "review-thread" }, env);
+  assert.equal(verifyGoogleWorkspaceReviewSession(session, env).ok, true);
+  const cookie = googleWorkspaceReviewSessionCookieHeader(session, env);
+  assert.match(cookie, /HttpOnly/);
+  assert.match(cookie, /SameSite=Lax/);
+  assert.match(cookie, /Secure/);
+  assert.equal(googleWorkspaceReviewSessionFromCookie(cookie), session);
 });

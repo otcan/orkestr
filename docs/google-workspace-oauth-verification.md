@@ -171,15 +171,15 @@ broker instance.
    directory, or workspace into this environment.
 3. Enable only the five capabilities in the expanded verification contract.
    Confirm the Google Cloud Console data-access list is the same scope list.
-4. Keep normal Orkestr pairing enabled. The reviewer environment link is a
-   separate, signed bearer session for one review user and thread. It opens a
-   dedicated Google Workspace review surface only; it cannot open the normal
-   cockpit, thread API, Raw, desktops, setup, WhatsApp, browser profiles, or
-   any unrelated connector route.
-5. Give the reviewer the generated environment link and the dedicated test
-   account sign-in instructions only through the existing Google review email
-   thread. Never commit credentials, links, session material, or test data to
-   this repository.
+4. Keep normal Orkestr pairing enabled. The stable reviewer URL requires the
+   separate review password, then creates a signed, restricted browser session
+   for one review user and thread. It opens a dedicated Google Workspace review
+   surface only; it cannot open the normal cockpit, thread API, Raw, desktops,
+   setup, WhatsApp, browser profiles, or any unrelated connector route.
+5. Give the reviewer the stable environment URL, review password, and
+   dedicated test-account sign-in instructions only through the existing Google
+   review email thread. Never commit credentials, session material, or test
+   data to this repository.
 6. After approval or expiry, revoke the test Google grant, delete its synthetic
    data and Orkestr home, rotate the review-link secret, and disable the review
    environment.
@@ -193,6 +193,10 @@ ORKESTR_GOOGLE_WORKSPACE_REVIEW_ACCESS_ENABLED=1
 ORKESTR_GOOGLE_WORKSPACE_REVIEW_ACCESS_SECRET=<high-entropy-secret>
 ORKESTR_GOOGLE_WORKSPACE_REVIEW_PUBLIC_URL=https://review.example.test
 ORKESTR_GOOGLE_WORKSPACE_REVIEW_ENV_TTL_MINUTES=240
+ORKESTR_GOOGLE_WORKSPACE_REVIEW_PASSWORD=<high-entropy-review-password>
+ORKESTR_GOOGLE_WORKSPACE_REVIEW_SESSION_TTL_MINUTES=43200
+ORKESTR_GOOGLE_WORKSPACE_REVIEW_USER_ID=google-reviewer
+ORKESTR_GOOGLE_WORKSPACE_REVIEW_THREAD_ID=google-oauth-reviewer
 ```
 
 Generate it only on that isolated instance, with a dedicated reviewer thread:
@@ -201,10 +205,17 @@ Generate it only on that isolated instance, with a dedicated reviewer thread:
 orkestr connect google --review-environment --thread google-oauth-reviewer --json
 ```
 
-The generated link is bound by HMAC to the exact reviewer user, reviewer thread,
-and expiry. Its **Connect Google** action creates a second, one-time OAuth
-authorization link bound to that same user. After the Google callback, Orkestr
-returns the reviewer to the same review environment.
+The generated URL is stable. A reviewer enters the separately supplied review
+password, which creates an HttpOnly browser session bound by HMAC to the
+reviewer user and thread. The browser session is renewable by signing in again;
+it does not make the email link expire. Its **Connect Google** action creates a
+short-lived OAuth authorization link bound to that same user. After the Google
+callback, Orkestr returns the reviewer to the same review environment.
+
+Use a high-entropy review password, send it only in the Google verification
+thread, and rotate `ORKESTR_GOOGLE_WORKSPACE_REVIEW_ACCESS_SECRET` after the
+review. Rotating that secret revokes every reviewer browser session and any
+outstanding internal OAuth ticket.
 
 Provision this environment as a dedicated tenant VM slice with no WhatsApp,
 desktop, or CRM connector. The stable external reviewer hostname belongs at the
