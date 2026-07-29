@@ -367,6 +367,9 @@ export interface SetupStatus {
   home: string;
   connectors: ConnectorStatus[];
   redacted?: boolean;
+  onboarding?: {
+    autoOpen?: boolean;
+  };
   urls?: {
     primaryDomain?: string;
     appUrl?: string;

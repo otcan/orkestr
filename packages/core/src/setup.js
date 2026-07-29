@@ -8,6 +8,10 @@ import { securityStatus } from "./security.js";
 
 export { connectorOrder };
 
+function onboardingAutoOpenEnabled(env = process.env) {
+  return !["0", "false", "no", "off", "disabled"].includes(String(env.ORKESTR_ONBOARDING_AUTO_OPEN || "").trim().toLowerCase());
+}
+
 function setupState(connectors) {
   const useful = connectors.filter((connector) => ["connected", "partial"].includes(connector.state));
   if (!useful.length) return "incomplete";
@@ -36,6 +40,9 @@ export async function getSetupStatus({ env = process.env, home, principal = null
     generatedAt: new Date().toISOString(),
     home: paths.home,
     setupState: setupState(connectors),
+    onboarding: {
+      autoOpen: onboardingAutoOpenEnabled(env),
+    },
     settings,
     overlay,
     security,
@@ -50,6 +57,9 @@ export function publicSetupStatus(status = {}) {
     generatedAt: status.generatedAt || new Date().toISOString(),
     home: "",
     setupState: String(status.setupState || "incomplete"),
+    onboarding: {
+      autoOpen: status.onboarding?.autoOpen !== false,
+    },
     overlay: publicOverlayStatus(status.overlay),
     security: publicSetupSecurityStatus(status.security),
     auth: publicSetupAuthStatus(status.auth),
