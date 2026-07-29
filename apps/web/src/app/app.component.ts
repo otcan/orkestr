@@ -4718,6 +4718,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   private shouldAutoOpenOnboarding(): boolean {
     if (this.isUserMode()) return false;
     if (this.onboardingActive || !this.setupStatus || this.setupStatus.setupState === "ready") return false;
+    if (this.setupStatus.onboarding?.autoOpen === false) return false;
     if (this.readOnboardingFlag("skipped") || this.readOnboardingFlag("completed")) return false;
     const parts = this.locationPathParts();
     return parts.length === 0 || (parts.length === 1 && parts[0] === "ng");

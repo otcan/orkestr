@@ -20,6 +20,13 @@ test("connector config is persisted and redacts OpenAI secrets", async () => {
   assert.equal(openai.state, "connected");
 });
 
+test("setup status can suppress automatic onboarding for a pre-provisioned deployment", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-onboarding-auto-open-"));
+  const status = await getSetupStatus({ env: { ORKESTR_HOME: home, ORKESTR_ONBOARDING_AUTO_OPEN: "0" }, home });
+
+  assert.equal(status.onboarding.autoOpen, false);
+});
+
 test("gmail client secrets are stored outside public config", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-gmail-secret-"));
   const env = { ORKESTR_HOME: home };
