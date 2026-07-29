@@ -1394,7 +1394,6 @@ async function connectGoogleWorkspaceCommand(argv, ctx) {
       const payload = {
         ok: true,
         reviewEnvironmentLink: reviewer.link,
-        sessionTtlMinutes: Math.floor(reviewer.sessionTtlMs / 60_000),
         threadId: thread.id,
       };
       if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
