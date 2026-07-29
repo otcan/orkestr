@@ -915,6 +915,47 @@ test("Codex app-server starts threads, delivers input, and imports existing thre
   }
 });
 
+test("Codex app-server starts a seeded wake-on-message thread before delivering its first input", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-seeded-thread-"));
+  const fake = await createFakeCodex(home);
+  const env = {
+    ORKESTR_HOME: path.join(home, "orkestr"),
+    HOME: path.join(home, "runtime-home"),
+    PATH: `${fake.bin}${path.delimiter}${process.env.PATH || ""}`,
+    FAKE_CODEX_STATE: fake.stateFile,
+  };
+
+  try {
+    const thread = await createThread({
+      id: "seeded-wake-thread",
+      name: "Seeded wake thread",
+      state: "sleeping",
+      wakePolicy: "wake-on-message",
+      cwd: home,
+      workspace: home,
+      runtimeKind: "codex-app-server",
+      runtime: { runtimeKind: "codex-app-server" },
+      executorId: "codex",
+      executor: { id: "codex", type: "codex", transport: "app-server" },
+    }, env);
+    const queued = await enqueueThreadInput(thread.id, { text: "start from the first message" }, env);
+
+    const delivered = await deliverCodexAppServerPendingInputs(thread, env);
+    const current = await getThread(thread.id, env);
+    const messages = await listThreadMessages(thread.id, env);
+    const state = JSON.parse(await fs.readFile(fake.stateFile, "utf8"));
+
+    assert.deepEqual(delivered, [queued.id]);
+    assert.equal(current.executor.codexThreadId, "thr_001");
+    assert.equal(current.codexThreadId, "thr_001");
+    assert.equal(state.calls.filter((call) => call.method === "thread/start").length, 1);
+    assert.equal(state.calls.filter((call) => call.method === "turn/start").length, 1);
+    assert.ok(messages.some((message) => message.source === "codex-app-server" && /Reply to: start from the first message/.test(message.text)));
+  } finally {
+    stopCodexAppServerClients();
+  }
+});
+
 test("Codex app-server records bare mode commands locally", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-mode-command-"));
   const fake = await createFakeCodex(home);
