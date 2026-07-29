@@ -31,12 +31,13 @@ function restoreEnv(snapshot) {
   }
 }
 
-test("reviewer environment is pairing-free but ticket-scoped and can create its OAuth link", async () => {
+test("reviewer password opens the normal isolated Orkestr UI", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-google-review-http-"));
   const prior = snapshotEnv();
   process.env.ORKESTR_HOME = home;
   delete process.env.ORKESTR_OVERLAY_DIR;
   process.env.ORKESTR_AUTH_REQUIRED = "1";
+  process.env.ORKESTR_CONNECT_PUBLIC_URL = "http://127.0.0.1";
   process.env.ORKESTR_GOOGLE_WORKSPACE_REVIEW_PUBLIC_URL = "https://review.example.test";
   process.env.ORKESTR_GOOGLE_WORKSPACE_REVIEW_ACCESS_ENABLED = "1";
   process.env.ORKESTR_GOOGLE_WORKSPACE_REVIEW_ACCESS_SECRET = "review-access-secret-for-isolated-google-verification";
@@ -54,7 +55,9 @@ test("reviewer environment is pairing-free but ticket-scoped and can create its 
     const entry = await fetch(`${root}${entryPath}`, { redirect: "manual" });
     const entryHtml = await entry.text();
     assert.equal(entry.status, 200);
-    assert.match(entryHtml, /Review password/);
+    assert.match(entryHtml, /isolated Orkestr OSS instance/);
+    assert.match(entryHtml, /Access password/);
+    assert.doesNotMatch(entryHtml, /Review tasks|Action log|Send Gmail message/);
 
     const rejected = await fetch(`${root}${entryPath}/session`, {
       method: "POST",
@@ -71,65 +74,29 @@ test("reviewer environment is pairing-free but ticket-scoped and can create its 
       redirect: "manual",
     });
     assert.equal(signedIn.status, 303);
-    assert.equal(signedIn.headers.get("location"), "/review/google/session");
+    assert.equal(signedIn.headers.get("location"), "/app/connectors/gmail");
     const sessionCookie = (signedIn.headers.get("set-cookie") || "").split(";")[0];
-    assert.match(sessionCookie, /^orkestr_google_workspace_review=/);
+    assert.match(sessionCookie, /^orkestr_session=/);
 
-    const freshSession = await fetch(`${root}/review/google/session`, { headers: { cookie: sessionCookie }, redirect: "manual" });
-    assert.equal(freshSession.status, 302);
-    const pathName = freshSession.headers.get("location") || "";
-    assert.match(pathName, /^\/review\/google\/[^/]+$/);
+    const apiBeforeSignIn = await fetch(`${root}/api/threads`);
+    assert.equal(apiBeforeSignIn.status, 401);
+    const threads = await fetch(`${root}/api/threads`, { headers: { cookie: sessionCookie } });
+    assert.equal(threads.status, 200);
+    const threadPayload = await threads.json();
+    assert.notEqual(threadPayload?.error, "browser_pairing_required");
 
-    const page = await fetch(`${root}${pathName}`, { redirect: "manual" });
-    const pageHtml = await page.text();
-    assert.equal(page.status, 200);
-    assert.equal(page.headers.get("referrer-policy"), "no-referrer");
-    assert.match(pageHtml, /Google Workspace review/);
-    assert.match(pageHtml, /Connect Google/);
-    assert.match(pageHtml, /Send Gmail message/);
-    assert.match(pageHtml, /Review tasks/);
-    assert.match(pageHtml, /Action log/);
-    assert.doesNotMatch(pageHtml, /<ork-root(?:\s|>)/);
+    const cockpit = await fetch(`${root}/app/connectors/gmail`, { headers: { cookie: sessionCookie } });
+    const cockpitHtml = await cockpit.text();
+    assert.equal(cockpit.status, 200);
+    assert.match(cockpitHtml, /<ork-root(?:\s|>)/);
 
-    const status = await fetch(`${root}${pathName}/status`);
-    const statusPayload = await status.json();
-    assert.equal(status.status, 200);
-    assert.equal(statusPayload.ok, true);
-    assert.deepEqual(statusPayload.connections, []);
+    const alreadySignedIn = await fetch(`${root}${entryPath}`, { headers: { cookie: sessionCookie }, redirect: "manual" });
+    assert.equal(alreadySignedIn.status, 302);
+    assert.equal(alreadySignedIn.headers.get("location"), "/app/connectors/gmail");
 
-    const connect = await fetch(`${root}${pathName}/connect`, { method: "POST" });
-    const connectPayload = await connect.json();
-    assert.equal(connect.status, 200);
-    assert.equal(connectPayload.ok, true);
-    const connectUrl = new URL(connectPayload.connectUrl, root);
-    assert.match(connectUrl.pathname, /^\/connect\/google\/review\/[^/]+\/[^/]+$/);
-    assert.ok(connectUrl.searchParams.get("review_environment"));
-
-    const loggedStatus = await fetch(`${root}${pathName}/status`);
-    const loggedStatusPayload = await loggedStatus.json();
-    assert.equal(loggedStatusPayload.actions[0].action, "google_connect_requested");
-
-    const connectPage = await fetch(`${root}${connectUrl.pathname}${connectUrl.search}`);
-    const connectHtml = await connectPage.text();
-    assert.equal(connectPage.status, 200);
-    assert.match(connectHtml, /name="review_environment"/);
-
-    const operation = await fetch(`${root}${pathName}/gmail/messages`);
-    const operationPayload = await operation.json();
-    assert.equal(operation.status, 403);
-    assert.equal(operationPayload.error, "google_workspace_not_connected");
-
-    const unconfirmedSend = await fetch(`${root}${pathName}/gmail/messages`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ to: "reviewer@example.test", subject: "test", body: "test" }),
-    });
-    const unconfirmedSendPayload = await unconfirmedSend.json();
-    assert.equal(unconfirmedSend.status, 400);
-    assert.equal(unconfirmedSendPayload.error, "google_workspace_review_send_confirmation_required");
-
-    const invalid = await fetch(`${root}/review/google/invalid-ticket`, { redirect: "manual" });
-    assert.equal(invalid.status, 403);
+    const oldTicket = await fetch(`${root}/review/google/old-ticket`, { redirect: "manual" });
+    assert.equal(oldTicket.status, 302);
+    assert.equal(oldTicket.headers.get("location"), "/review/google");
   } finally {
     await new Promise((resolve) => server.close(resolve));
     restoreEnv(prior);

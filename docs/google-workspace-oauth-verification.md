@@ -172,10 +172,12 @@ broker instance.
 3. Enable only the five capabilities in the expanded verification contract.
    Confirm the Google Cloud Console data-access list is the same scope list.
 4. Keep normal Orkestr pairing enabled. The stable reviewer URL requires the
-   separate review password, then creates a signed, restricted browser session
-   for one review user and thread. It opens a dedicated Google Workspace review
-   surface only; it cannot open the normal cockpit, thread API, Raw, desktops,
-   setup, WhatsApp, browser profiles, or any unrelated connector route.
+   separate review password, then creates a normal Orkestr browser session for
+   the dedicated reviewer user. It opens the real **Connectors > Gmail** UI so
+   the reviewer can follow the same Google connection and capability-selection
+   flow as an Orkestr user. This is safe only because the entire VM is isolated
+   and contains no production users, threads, WhatsApp accounts, Raw sessions,
+   desktops, browser profiles, or unrelated connector data.
 5. Give the reviewer the stable environment URL, review password, and
    dedicated test-account sign-in instructions only through the existing Google
    review email thread. Never commit credentials, session material, or test
@@ -194,7 +196,6 @@ ORKESTR_GOOGLE_WORKSPACE_REVIEW_ACCESS_SECRET=<high-entropy-secret>
 ORKESTR_GOOGLE_WORKSPACE_REVIEW_PUBLIC_URL=https://review.example.test
 ORKESTR_GOOGLE_WORKSPACE_REVIEW_ENV_TTL_MINUTES=240
 ORKESTR_GOOGLE_WORKSPACE_REVIEW_PASSWORD=<high-entropy-review-password>
-ORKESTR_GOOGLE_WORKSPACE_REVIEW_SESSION_TTL_MINUTES=43200
 ORKESTR_GOOGLE_WORKSPACE_REVIEW_USER_ID=google-reviewer
 ORKESTR_GOOGLE_WORKSPACE_REVIEW_THREAD_ID=google-oauth-reviewer
 ```
@@ -205,12 +206,11 @@ Generate it only on that isolated instance, with a dedicated reviewer thread:
 orkestr connect google --review-environment --thread google-oauth-reviewer --json
 ```
 
-The generated URL is stable. A reviewer enters the separately supplied review
-password, which creates an HttpOnly browser session bound by HMAC to the
-reviewer user and thread. The browser session is renewable by signing in again;
-it does not make the email link expire. Its **Connect Google** action creates a
-short-lived OAuth authorization link bound to that same user. After the Google
-callback, Orkestr returns the reviewer to the same review environment.
+The generated URL is stable. A reviewer enters the separately supplied password,
+which creates Orkestr's normal HttpOnly browser session for this disposable VM
+and opens **Connectors > Gmail**. The reviewer then uses the real Google
+connection and capability-selection flow. After the Google callback, Orkestr
+returns the reviewer to its normal UI.
 
 Use a high-entropy review password, send it only in the Google verification
 thread, and rotate `ORKESTR_GOOGLE_WORKSPACE_REVIEW_ACCESS_SECRET` after the
@@ -250,19 +250,12 @@ deleted. It does not delete a shared namespace or any other tenant. This is the
 required removal step for local OAuth state; do not substitute the registry-only
 delete endpoint for it.
 
-The review surface exposes only these explicit, user-confirmed operations after
-the corresponding scope has been granted: list and read Gmail messages, create
-Gmail drafts, send a message, list Calendar events, and create a Calendar event.
-Draft creation never sends a message. Send and Calendar creation require an
-affirmative confirmation in the review UI. Reviewer links cannot be generated
-for brokered tenant connections. A missing, altered, expired, or disabled
-review ticket returns an explicit unavailable error; it never falls back to
-broad access or pairing.
-
-The page includes deterministic review tasks and a compact action log. The log
-records only a timestamp and a fixed action name such as `gmail_draft_created`
-or `calendar_event_created`; it never stores or displays recipients, subjects,
-message bodies, event details, authorization codes, or tokens.
+The reviewer uses the product rather than a separate audit form. The dedicated
+VM can create test threads and use any normal Orkestr surface, but its data
+boundary is the VM itself: only the synthetic reviewer user and test Google
+account exist there. Reviewer links cannot be generated for brokered tenant
+connections. A missing, altered, or disabled password configuration does not
+fall back to broad access or disable pairing elsewhere.
 
 ## Verification Demo Checklist
 
