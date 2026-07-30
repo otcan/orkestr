@@ -16,7 +16,11 @@ import { readRuntimeSettings } from "../../../packages/core/src/runtime-settings
 import { getThread } from "../../../packages/core/src/threads.js";
 import { adminPrincipal, userPrincipal } from "../../../packages/core/src/principal.js";
 import { createGoogleWorkspaceConnectLink } from "../../../packages/connectors/src/google-workspace.js";
-import { createGoogleWorkspaceReviewEnvironmentLink } from "../../../packages/connectors/src/google-workspace-review-environment.js";
+import {
+  createGoogleWorkspaceReviewEnvironmentLink,
+  googleWorkspaceReviewEnvironmentEnabled,
+  googleWorkspaceReviewEnvironmentIdentity,
+} from "../../../packages/connectors/src/google-workspace-review-environment.js";
 import { closeThreadRegistryCache } from "../../../packages/storage/src/thread-registry.js";
 import { rawAttachWatchText } from "../../../packages/core/src/raw-terminal-watch.js";
 import { defaultApiBase, requestJson } from "./api-client.js";
@@ -1375,18 +1379,24 @@ async function connectCommand(argv, ctx) {
 
 async function connectGoogleWorkspaceCommand(argv, ctx) {
   const json = argv.includes("--json");
-  const reviewAccess = argv.includes("--review");
+  const requestedReviewAccess = argv.includes("--review");
   const reviewEnvironment = argv.includes("--review-environment") || argv.includes("--reviewer-environment");
   try {
     const cwd = flagValue(argv, "--cwd") || ctx.cwd || process.cwd();
     const explicitThreadId = flagValue(argv, "--thread") || flagValue(argv, "--thread-id") || "";
-    if ((reviewAccess || reviewEnvironment) && !explicitThreadId) {
+    if ((requestedReviewAccess || reviewEnvironment) && !explicitThreadId) {
       throw new Error("Usage: orkestr connect google --review --thread <reviewer-thread-id> [--json]\n       orkestr connect google --review-environment --thread <reviewer-thread-id> [--json]");
     }
     const where = explicitThreadId ? null : await googleConnectWhereAmI(cwd, ctx);
     const threadId = explicitThreadId || where?.thread?.id || "";
     const thread = await googleConnectThread(threadId, where, ctx);
     const principal = await googleConnectPrincipal(thread, where, ctx);
+    const reviewer = googleWorkspaceReviewEnvironmentIdentity(ctx.env);
+    const reviewAccess = requestedReviewAccess || (
+      googleWorkspaceReviewEnvironmentEnabled(ctx.env) &&
+      thread.id === reviewer.threadId &&
+      principal.userId === reviewer.userId
+    );
     if (reviewEnvironment) {
       const reviewer = createGoogleWorkspaceReviewEnvironmentLink({
         threadId: thread.id,

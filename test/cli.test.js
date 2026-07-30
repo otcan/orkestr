@@ -1123,6 +1123,29 @@ test("CLI creates an explicitly scoped Google OAuth reviewer link", async () => 
   assert.match(payload.reviewLink, /^https:\/\/review\.example\.test\/connect\/google\/review\/[^/]+\/[^/]+$/);
 });
 
+test("CLI automatically scopes Google links inside the dedicated reviewer environment", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-cli-connect-google-review-auto-"));
+  const stdout = capture();
+  const code = await runCli(["connect", "google", "--thread", "reviewer-google", "--json"], {
+    env: {
+      ORKESTR_HOME: home,
+      ORKESTR_PUBLIC_URL: "https://review.example.test",
+      ORKESTR_ADMIN_USER_ID: "reviewer",
+      ORKESTR_GOOGLE_WORKSPACE_REVIEW_ACCESS_ENABLED: "1",
+      ORKESTR_GOOGLE_WORKSPACE_REVIEW_ACCESS_SECRET: "review-access-secret-for-isolated-google-verification",
+      ORKESTR_GOOGLE_WORKSPACE_REVIEW_USER_ID: "reviewer",
+      ORKESTR_GOOGLE_WORKSPACE_REVIEW_THREAD_ID: "reviewer-google",
+    },
+    stdout,
+    stderr: capture(),
+  });
+  const payload = JSON.parse(stdout.text());
+
+  assert.equal(code, 0);
+  assert.match(payload.link, /^https:\/\/review\.example\.test\/connect\/google\/review\/[^/]+\/[^/]+$/);
+  assert.equal(payload.link, payload.reviewLink);
+});
+
 test("CLI creates a reviewer environment link that owns the Google OAuth return flow", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-cli-connect-google-review-environment-"));
   const stdout = capture();
