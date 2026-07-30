@@ -566,6 +566,21 @@ test("CLI whereiam sends the current directory to the public API", async () => {
   assert.match(stdout.text(), /Repo: \/repo\/demo/);
 });
 
+test("CLI whereiam preserves the original caller directory through the host wrapper", async () => {
+  const seen = [];
+  const code = await runCli(["whereiam", "--json"], {
+    env: { ORKESTR_CALLER_CWD: "/workspace/reviewer" },
+    stdout: capture(),
+    stderr: capture(),
+    fetchImpl: fakeFetch({
+      "GET /api/whereiam": { ok: true },
+    }, seen),
+  });
+
+  assert.equal(code, 0);
+  assert.match(seen[0].search, /cwd=%2Fworkspace%2Freviewer/);
+});
+
 test("CLI whereiam can bind a stable API session id", async () => {
   const stdout = capture();
   const seen = [];

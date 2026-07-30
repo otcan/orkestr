@@ -2130,6 +2130,7 @@ write_cli_wrapper() {
   cat > /usr/local/bin/orkestr <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
+caller_cwd="${ORKESTR_CALLER_CWD:-$PWD}"
 env_file="${ORKESTR_ENV_FILE:-/etc/orkestr/orkestr.env}"
 if [ -r "$env_file" ]; then
   set -a
@@ -2142,6 +2143,7 @@ current_link="${ORKESTR_CURRENT_LINK:-/opt/orkestr/current}"
 if [ "${ORKESTR_RELEASE_DEPLOY:-0}" = "1" ] && [ -e "$current_link" ]; then
   app_dir="$current_link"
 fi
+export ORKESTR_CALLER_CWD="$caller_cwd"
 cd "$app_dir"
 run_user="${ORKESTR_RUN_USER:-}"
 if [ -z "$run_user" ] && command -v systemctl >/dev/null 2>&1; then

@@ -45,7 +45,7 @@ function reviewerAccessRequested({ reviewAccess = false, principal = {}, thread 
   if (!googleWorkspaceReviewEnvironmentEnabled(env)) return false;
   const reviewer = googleWorkspaceReviewEnvironmentIdentity(env);
   const userId = clean(principal.userId || principal.id || principal.ownerUserId);
-  return clean(thread.id) === reviewer.threadId && userId === reviewer.userId;
+  return userId === reviewer.userId && (!clean(thread.id) || clean(thread.id) === reviewer.threadId);
 }
 
 function nowMs() {
@@ -316,7 +316,11 @@ export async function createGoogleWorkspaceConnectLink({
   setAsThreadDefault = false,
   reviewAccess = false,
 } = {}, env = process.env) {
+  const reviewer = googleWorkspaceReviewEnvironmentIdentity(env);
   const reviewerAccess = reviewerAccessRequested({ reviewAccess, principal, thread }, env);
+  const requestThread = reviewerAccess && !clean(thread.id)
+    ? { ...thread, id: reviewer.threadId }
+    : thread;
   if (reviewerAccess && brokeredGoogleWorkspaceConnectEnabled(env)) {
     throw connectorError("google_workspace_review_access_requires_isolated_instance", 409);
   }
@@ -358,12 +362,12 @@ export async function createGoogleWorkspaceConnectLink({
     throw connectorError("google_workspace_review_access_requires_user", 400);
   }
   const connectId = randomUUID();
-  const threadBinding = thread.binding && typeof thread.binding === "object" ? thread.binding : {};
+  const threadBinding = requestThread.binding && typeof requestThread.binding === "object" ? requestThread.binding : {};
   const request = {
     connectId,
     userId: requestUserId,
-    threadId: clean(thread.id),
-    threadName: clean(thread.name || thread.title || thread.displayName),
+    threadId: clean(requestThread.id),
+    threadName: clean(requestThread.name || requestThread.title || requestThread.displayName),
     chatId: clean(chatId || threadBinding.chatId),
     accountId: clean(accountId || threadBinding.responderAccountId || threadBinding.outboundAccountId),
     account: clean(account).toLowerCase(),

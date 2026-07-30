@@ -187,6 +187,7 @@ test("install script exposes a host-native systemd VPS path", async () => {
   assert.match(script, /ORKESTR_DEPLOY_TAGS_ONLY/);
   assert.match(script, /ORKESTR_DEPLOY_CHANNEL=main/);
   assert.match(script, /ORKESTR_CURRENT_LINK/);
+  assert.match(script, /ORKESTR_CALLER_CWD/);
   assert.match(script, /ORKESTR_DEPLOY_ROOT/);
   assert.match(script, /ORKESTR_DEPLOY_CHANNEL/);
   assert.match(script, /ORKESTR_UPDATE_INTERVAL_SECONDS/);
