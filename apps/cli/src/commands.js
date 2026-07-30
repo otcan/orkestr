@@ -323,7 +323,7 @@ function formatSecretStatus(secret = {}) {
 
 async function whereiamCommand(argv, ctx) {
   const json = argv.includes("--json");
-  const cwd = flagValue(argv, "--cwd") || ctx.cwd || process.cwd();
+  const cwd = cliWorkingDirectory(argv, ctx);
   const apiSessionId = resolveApiSessionId(argv, ctx);
   const bind = argv.includes("--bind");
   const params = new URLSearchParams();
@@ -1382,7 +1382,7 @@ async function connectGoogleWorkspaceCommand(argv, ctx) {
   const requestedReviewAccess = argv.includes("--review");
   const reviewEnvironment = argv.includes("--review-environment") || argv.includes("--reviewer-environment");
   try {
-    const cwd = flagValue(argv, "--cwd") || ctx.cwd || process.cwd();
+    const cwd = cliWorkingDirectory(argv, ctx);
     const explicitThreadId = flagValue(argv, "--thread") || flagValue(argv, "--thread-id") || "";
     if ((requestedReviewAccess || reviewEnvironment) && !explicitThreadId) {
       throw new Error("Usage: orkestr connect google --review --thread <reviewer-thread-id> [--json]\n       orkestr connect google --review-environment --thread <reviewer-thread-id> [--json]");
@@ -1425,6 +1425,10 @@ async function connectGoogleWorkspaceCommand(argv, ctx) {
   } finally {
     await closeThreadRegistryCache(ctx.env).catch(() => {});
   }
+}
+
+function cliWorkingDirectory(argv = [], ctx = {}) {
+  return flagValue(argv, "--cwd") || ctx.cwd || ctx.env?.ORKESTR_CALLER_CWD || process.cwd();
 }
 
 async function googleConnectWhereAmI(cwd = "", ctx = {}) {
