@@ -265,6 +265,25 @@ test("isolated reviewer links are explicitly enabled, user-bound, and longer liv
   );
 });
 
+test("isolated reviewer identity always receives a signed Google link", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-google-workspace-review-auto-link-"));
+  const env = await configureGoogle(home);
+  env.ORKESTR_GOOGLE_WORKSPACE_REVIEW_ACCESS_ENABLED = "1";
+  env.ORKESTR_GOOGLE_WORKSPACE_REVIEW_ACCESS_SECRET = "review-access-secret-for-isolated-google-verification";
+  env.ORKESTR_GOOGLE_WORKSPACE_REVIEW_USER_ID = "reviewer";
+  env.ORKESTR_GOOGLE_WORKSPACE_REVIEW_THREAD_ID = "review-thread";
+
+  const link = await createGoogleWorkspaceConnectLink({
+    principal: userPrincipal({ id: "reviewer" }),
+    thread: { id: "review-thread" },
+  }, env);
+
+  assert.equal(link.link, link.reviewLink);
+  assert.match(new URL(link.link).pathname, new RegExp(`^/connect/google/review/${link.connectId}/[^/]+$`));
+  const request = await getGoogleWorkspaceConnectRequest(link.connectId, env);
+  assert.equal(request.request.source, "oauth_reviewer");
+});
+
 test("reviewer environment ticket survives the OAuth state and is returned after completion", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-google-workspace-review-return-"));
   const env = await configureGoogle(home);

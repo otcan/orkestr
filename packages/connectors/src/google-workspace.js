@@ -23,6 +23,10 @@ import {
   createGoogleWorkspaceReviewAccessTicket,
   googleWorkspaceReviewAccessTtlMs,
 } from "./google-workspace-review-access.js";
+import {
+  googleWorkspaceReviewEnvironmentEnabled,
+  googleWorkspaceReviewEnvironmentIdentity,
+} from "./google-workspace-review-environment.js";
 
 export { googleWorkspaceConnectHtml } from "./google-workspace-connect-page.js";
 export { googleWorkspacePrivacyPolicyVersion } from "./google-workspace-privacy.js";
@@ -34,6 +38,14 @@ const driveApiBase = "https://www.googleapis.com/drive/v3";
 
 function clean(value) {
   return String(value || "").trim();
+}
+
+function reviewerAccessRequested({ reviewAccess = false, principal = {}, thread = {} } = {}, env = process.env) {
+  if (reviewAccess === true) return true;
+  if (!googleWorkspaceReviewEnvironmentEnabled(env)) return false;
+  const reviewer = googleWorkspaceReviewEnvironmentIdentity(env);
+  const userId = clean(principal.userId || principal.id || principal.ownerUserId);
+  return clean(thread.id) === reviewer.threadId && userId === reviewer.userId;
 }
 
 function nowMs() {
@@ -304,7 +316,8 @@ export async function createGoogleWorkspaceConnectLink({
   setAsThreadDefault = false,
   reviewAccess = false,
 } = {}, env = process.env) {
-  if (reviewAccess === true && brokeredGoogleWorkspaceConnectEnabled(env)) {
+  const reviewerAccess = reviewerAccessRequested({ reviewAccess, principal, thread }, env);
+  if (reviewerAccess && brokeredGoogleWorkspaceConnectEnabled(env)) {
     throw connectorError("google_workspace_review_access_requires_isolated_instance", 409);
   }
   if (brokeredGoogleWorkspaceConnectEnabled(env)) {
@@ -334,14 +347,14 @@ export async function createGoogleWorkspaceConnectLink({
   if (brokerContextProvided && brokerServerRequest !== true) {
     throw connectorError("broker_google_workspace_connect_requires_parent_broker", 409);
   }
-  if (reviewAccess === true && brokerContextProvided) {
+  if (reviewerAccess && brokerContextProvided) {
     throw connectorError("google_workspace_review_access_requires_isolated_instance", 409);
   }
   const scope = await connectorScopePaths(env, { principal });
   // Tenant VMs deliberately keep connector data at VM scope. A reviewer link
   // still needs its signed ticket identity for the OAuth request binding.
   const requestUserId = clean(scope.userId || principal?.userId);
-  if (reviewAccess === true && !requestUserId) {
+  if (reviewerAccess && !requestUserId) {
     throw connectorError("google_workspace_review_access_requires_user", 400);
   }
   const connectId = randomUUID();
@@ -360,7 +373,7 @@ export async function createGoogleWorkspaceConnectLink({
     connectionUseMode: clean(useMode),
     setAsMain: setAsMain === true,
     setAsThreadDefault: setAsThreadDefault === true,
-    source: reviewAccess === true ? "oauth_reviewer" : "whatsapp",
+    source: reviewerAccess ? "oauth_reviewer" : "whatsapp",
     brokerInstanceId: clean(brokerInstanceId),
     brokerTenantVmId: clean(brokerTenantVmId),
     brokerTenantUserId: clean(brokerTenantUserId),
@@ -369,9 +382,9 @@ export async function createGoogleWorkspaceConnectLink({
     brokerTenantChatId: clean(brokerTenantChatId),
     brokerTenantAccountId: clean(brokerTenantAccountId),
     createdAt: nowIso(),
-    expiresAt: expiresAtIso(reviewAccess === true ? googleWorkspaceReviewAccessTtlMs(env) : connectLinkTtlMs(env)),
+    expiresAt: expiresAtIso(reviewerAccess ? googleWorkspaceReviewAccessTtlMs(env) : connectLinkTtlMs(env)),
   };
-  const review = reviewAccess === true
+  const review = reviewerAccess
     ? createGoogleWorkspaceReviewAccessTicket({
       connectId,
       userId: request.userId,
