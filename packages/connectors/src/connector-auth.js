@@ -298,7 +298,7 @@ export async function connectorAuthStatus(providerId = "", env = process.env, op
         : tokenExists
           ? gmailHasGrantedCapabilities
             ? `${definition?.label || provider} is connected for this user.`
-            : `${definition?.label || provider} token is present, but no Google Workspace capabilities were granted. Reconnect and select the required access.`
+            : `${definition?.label || provider} token is present, but no Google Workspace capabilities were granted. Reconnect for the required access.`
       : parentConnector.parentAppConfigured || parentConnector.parentAppPartiallyConfigured
         ? `${definition?.label || provider} is not connected for this user yet.`
         : `${definition?.label || provider} parent app configuration is missing.`,

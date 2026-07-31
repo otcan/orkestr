@@ -8,11 +8,12 @@ but each user's grant and token are scoped to that user.
 
 1. The user sends `/connect google` in their WhatsApp-bound Orkestr chat.
 2. Orkestr replies with a one-time `/connect/google` link.
-3. The web page asks the user to select capabilities before redirecting to
-   Google OAuth.
-4. Orkestr requests only the scopes required by the selected capabilities.
-5. If Google grants only some optional scopes, Orkestr stores and exposes only
-   the granted capabilities.
+3. Orkestr stores the smallest capability set required for that requested
+   action on the server. The browser page displays that set read-only.
+4. Google is the only account and permission consent screen. The browser page
+   cannot add, remove, or broaden scopes.
+5. If Google grants only some scopes, Orkestr stores and exposes only the
+   granted capabilities.
 6. The chat receives a success or failure confirmation.
 
 ## Recommended Publishing Phases
@@ -45,8 +46,8 @@ approved and the review/demo materials justify the added access:
 - Gmail actions: `https://www.googleapis.com/auth/gmail.modify`
 - Gmail drafts: `https://www.googleapis.com/auth/gmail.compose`
 
-Keep restricted scopes optional in the Orkestr consent page. Do not make them a
-silent default.
+Keep restricted scopes action-scoped. Do not make them a silent default or a
+client-controlled checkbox selection.
 
 ## Expanded Verification Contract
 
@@ -174,8 +175,9 @@ broker instance.
 4. Keep normal Orkestr pairing enabled. The stable reviewer URL requires the
    separate review password, then creates a normal Orkestr browser session for
    the dedicated reviewer user. It opens the real **Connectors > Gmail** UI so
-   the reviewer can follow the same Google connection and capability-selection
-   flow as an Orkestr user. This is safe only because the entire VM is isolated
+   the reviewer can follow the same Google connection flow as an Orkestr user.
+   The reviewer link requests the complete submitted scope set and displays it
+   read-only before Google presents its consent screen. This is safe only because the entire VM is isolated
    and contains no production users, threads, WhatsApp accounts, Raw sessions,
    desktops, browser profiles, or unrelated connector data.
 5. Give the reviewer the stable environment URL, review password, and
@@ -209,8 +211,9 @@ orkestr connect google --review-environment --thread google-oauth-reviewer --jso
 The generated URL is stable. A reviewer enters the separately supplied password,
 which creates Orkestr's normal HttpOnly browser session for this disposable VM
 and opens **Connectors > Gmail**. The reviewer then uses the real Google
-connection and capability-selection flow. After the Google callback, Orkestr
-returns the reviewer to its normal UI.
+connection flow. The reviewer-only connect request contains the complete
+submitted scope set and cannot be edited in Orkestr. After the Google callback,
+Orkestr returns the reviewer to its normal UI.
 
 Use a high-entropy review password, send it only in the Google verification
 thread, and rotate `ORKESTR_GOOGLE_WORKSPACE_REVIEW_ACCESS_SECRET` after the
@@ -261,16 +264,18 @@ fall back to broad access or disable pairing elsewhere.
 
 Use generic demo data only.
 
-- Show the WhatsApp `/connect google` command and the one-time link reply.
+- Open the stable isolated reviewer URL, enter the supplied Orkestr review
+  password, and show that it opens **Connectors > Gmail**.
 - Briefly show the public `https://orkestr.de/` homepage with the app name,
   purpose, and privacy/terms links.
-- Show the capability disclosure page before Google OAuth.
-- Show the Google-data access, sharing, protection, retention, and deletion
-  disclosures immediately before the affirmative consent control.
-- Select only the five capabilities in the expanded verification contract, then
-  complete Google OAuth. Show every Google consent-screen scope in the same
-  recording; do not cut from one authorization request to another.
-- Show the WhatsApp confirmation listing enabled capabilities.
+- Start Google connection from **Connectors > Gmail**. Show the read-only
+  requested-capabilities page, the Google-data access, sharing, protection,
+  retention, and deletion disclosures, and then continue to Google.
+- Complete Google OAuth with only the five capabilities in the expanded
+  verification contract. Expand every requested Google consent-screen scope in
+  the same recording; do not cut from one authorization request to another.
+- Return to Orkestr and show the connected Google account and enabled
+  capabilities.
 - Demonstrate a user-approved Gmail send action.
 - Demonstrate a Gmail read action only if `gmail.readonly` is selected.
 - Demonstrate draft creation or draft sending only if `gmail.compose` was
@@ -292,9 +297,10 @@ true on the live production deployment:
 - `https://orkestr.de/privacy` is public without login and exposes stable
   anchors for Google data access, sharing, storage, protection, Limited Use,
   and deletion.
-- The connect page defaults to Gmail send, allows only deployment-approved
-  capabilities, and records the selected capabilities, privacy policy version,
-  and affirmative consent time in the one-time OAuth state.
+- The connect page requests only the capability set fixed in its server-side
+  one-time OAuth record. It displays that set read-only, ignores client-supplied
+  scope changes, and records the requested capabilities and privacy-policy
+  version in the OAuth state.
 - Google access and refresh tokens are AES-256-GCM encrypted on disk. The
   production `ORKESTR_CONNECTOR_ENCRYPTION_KEY` is stored in the service
   environment outside `ORKESTR_HOME`.
@@ -309,6 +315,9 @@ true on the live production deployment:
 - The dedicated reviewer environment satisfies the isolation checklist above,
   the environment link has been tested without disabling pairing on normal
   routes, and its OAuth callback returns to that environment.
+- The privacy policy contains an affirmative Google Limited Use statement and
+  states that Google Workspace data is not used to develop, improve, or train
+  generalized or non-personalized AI or machine-learning models.
 
 ## Gmail Signal Notifications
 
@@ -338,3 +347,26 @@ The reply should confirm that the policy was updated, the production behavior
 was verified, and the OAuth request was resubmitted. Include the unlisted demo
 video URL, reviewer navigation steps, and temporary synthetic-account
 credentials only in that existing thread. Do not open a new email thread.
+
+## Submission Package
+
+Do this only after the live reviewer environment has passed the release gate.
+
+1. In Google Cloud Console, make the submitted scope list exactly match the
+   five-scope expanded contract above. Remove every unreviewed scope.
+2. Verify the same allowlist is deployed to the isolated reviewer environment.
+3. Record the checklist above as an unlisted YouTube video. The complete Google
+   consent screen and every scope must be visible.
+4. Put the stable reviewer URL, password, and any synthetic-account details in
+   the existing Google review email thread. Do not put them in the video,
+   repository, issue tracker, or public documentation.
+5. Reply in that thread with the scope table above, the unlisted video, these
+   navigation steps, and the three privacy anchors.
+
+Reviewer navigation steps for the reply:
+
+1. Open the supplied reviewer URL and enter the supplied Orkestr password.
+2. On **Connectors > Gmail**, choose **Continue to Google**.
+3. Sign in with the supplied synthetic Google account or the review account.
+4. Review and accept the Google consent screen.
+5. Return to Orkestr and run the listed Gmail and Calendar verification steps.

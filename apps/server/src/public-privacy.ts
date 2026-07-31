@@ -71,11 +71,11 @@ export function publicPrivacyPage(env = process.env): PrivacyPage {
     "<li><strong>Operation metadata:</strong> identifiers and status returned by Google after a requested operation.</li>",
   ].join("");
   const googleUseDescription = expandedGoogleAccess
-    ? "Orkestr uses Google identity data to display and manage the connected account, authorization data to maintain the connection, selected Gmail data to perform user-requested draft, read, notification, or message workflows, selected Calendar data to list or manage events, and operation metadata to report results. Orkestr uses only capabilities the user selects and Google grants."
+    ? "Orkestr uses Google identity data to display and manage the connected account, authorization data to maintain the connection, selected Gmail data to perform user-requested draft, read, notification, or message workflows, selected Calendar data to list or manage events, and operation metadata to report results. Orkestr requests access for a specific user-facing action; Google is the only consent screen that grants it."
     : "Orkestr uses Google identity data to display and manage the connected account, authorization data to maintain the connection, outgoing-email content to perform a send explicitly requested or approved by the user, and delivery metadata to report the result.";
   const aiProviderDisclosure = expandedGoogleAccess
-    ? "a provider such as OpenAI may process prompts and the specific Gmail or Calendar content retrieved or prepared for a user-requested workflow. Notification rules default to bounded message metadata and snippets; full message content is retrieved only when the user asks for it. Google OAuth access and refresh tokens are never disclosed to an AI provider."
-    : "a provider such as OpenAI may process prompts and email content supplied or approved by the user when the user asks the agent to prepare or perform that workflow. Google OAuth access and refresh tokens are never disclosed to an AI provider. The current integration does not retrieve existing Gmail content for AI processing.";
+    ? "a configured AI provider may process only the specific Gmail or Calendar content needed for a user-requested workflow. That provider must be contractually prohibited from using Google Workspace data to develop, improve, or train generalized or non-personalized AI or machine-learning models. Notification rules default to bounded message metadata and snippets; full message content is retrieved only when the user asks for it. Google OAuth access and refresh tokens are never disclosed to an AI provider."
+    : "a configured AI provider may process email content supplied or approved by the user when the user asks the agent to prepare or perform that workflow. That provider must be contractually prohibited from using Google Workspace data to develop, improve, or train generalized or non-personalized AI or machine-learning models. Google OAuth access and refresh tokens are never disclosed to an AI provider. The current integration does not retrieve existing Gmail content for AI processing.";
   const storageDescription = expandedGoogleAccess
     ? "Google content used in a requested workflow may remain in the user's Orkestr chat, draft, notification, or task history when it is part of the user-visible result. Orkestr does not maintain a separate complete copy of the user's Gmail mailbox or Calendar. Notification state stores bounded rule configuration, message identifiers used for deduplication, run status, and selected previews."
     : "Outgoing-email content may remain in the user's Orkestr chat or task history when it forms part of the user-visible workflow. It is not maintained as a separate copy of the user's Gmail mailbox.";
@@ -88,7 +88,7 @@ export function publicPrivacyPage(env = process.env): PrivacyPage {
     <p class="eyebrow">Data handling</p>
     <h1>Privacy Policy</h1>
     <p class="lead">This policy explains how Orkestr accesses, uses, stores, protects, and shares personal information, including data connected through Google Workspace.</p>
-    <p class="policy-meta">Version ${publicPrivacyPolicyVersion} · Effective July 23, 2026</p>
+    <p class="policy-meta">Version ${publicPrivacyPolicyVersion} · Effective July 31, 2026</p>
   </section>
   <section class="legal-content">
     <article id="scope">
@@ -103,13 +103,13 @@ export function publicPrivacyPage(env = process.env): PrivacyPage {
     <article id="google-data-access">
       <h2>3. Google user data Orkestr accesses</h2>
       <p>${expandedGoogleAccess
-        ? `The public Google integration can request only the capabilities enabled for the deployment and selected by the user. The currently enabled scopes are: ${scopeHtml}.`
+        ? `The public Google integration can request only the capabilities enabled for the deployment and required by the user-requested action. The currently enabled scopes are: ${scopeHtml}.`
         : `The current public Google integration requests only basic Google identity permissions and Gmail send access: ${scopeHtml}.`}</p>
       <ul>
         ${googleAccessItems}
       </ul>
       <p><strong>${expandedGoogleAccess
-        ? "Orkestr accesses only the Google capabilities the user selects and Google grants. It does not retrieve contacts, mailbox settings, or a complete mailbox or Calendar export."
+        ? "Orkestr accesses only the Google capabilities required by the user-requested action and granted by Google. It does not retrieve contacts, mailbox settings, or a complete mailbox or Calendar export."
         : "Orkestr's current public Gmail integration cannot and does not read the user's inbox, existing messages, drafts, labels, contacts, mailbox settings, or email history."}</strong> If Orkestr introduces a capability requiring additional Google scopes, it will update this policy and the in-product disclosure and obtain new consent before requesting that access.</p>
     </article>
     <article id="google-data-use">
@@ -118,7 +118,7 @@ export function publicPrivacyPage(env = process.env): PrivacyPage {
     </article>
     <article id="google-data-sharing">
       <h2>5. Sharing and disclosure of Google user data</h2>
-      <p>Orkestr does not sell Google user data. It does not provide Google user data to advertising platforms, data brokers, or information resellers, and does not use it for advertising, credit decisions, or generalized AI or machine-learning model training.</p>
+      <p>Orkestr does not sell Google user data. It does not provide Google user data to advertising platforms, data brokers, or information resellers, and does not use it for advertising, credit decisions, or to develop, improve, or train generalized or non-personalized AI or machine-learning models.</p>
       <p>Data is disclosed only in these limited circumstances:</p>
       <ul>
         <li><strong>Google:</strong> Orkestr sends the user-approved email and credentials required to authenticate the request to Google's OAuth and Gmail services.</li>
@@ -148,7 +148,7 @@ export function publicPrivacyPage(env = process.env): PrivacyPage {
     </article>
     <article id="google-data-limited-use">
       <h2>8. Google API Services User Data Policy</h2>
-      <p>Orkestr's use and transfer of information received from Google APIs adheres to the <a href="https://developers.google.com/terms/api-services-user-data-policy" rel="noreferrer">Google API Services User Data Policy</a>, including the Limited Use requirements. Google Workspace data is used only to provide or improve the user-facing feature requested by the user.</p>
+      <p>Orkestr's use and transfer of information received from Google APIs adheres to the <a href="https://developers.google.com/terms/api-services-user-data-policy" rel="noreferrer">Google API Services User Data Policy</a>, including the Limited Use requirements. Google Workspace data is used only to provide the user-facing feature requested by the user. Orkestr and its service providers do not use Google Workspace data to develop, improve, or train generalized or non-personalized AI or machine-learning models.</p>
     </article>
     <article id="google-data-deletion">
       <h2>9. User controls, revocation, and deletion</h2>

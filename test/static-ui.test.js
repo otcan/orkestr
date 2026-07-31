@@ -446,18 +446,11 @@ test("google workspace brokered connect links require instance and owner scoped 
     assert.match(pairedHtml, /Connect Google Workspace/);
     assert.match(pairedHtml, /orkestr_auth/);
     assert.match(pairedHtml, /google_workspace/);
-    assert.match(pairedHtml, /name="privacy_consent"/);
-    assert.match(pairedHtml, /Selected permission:<\/strong> Gmail send/);
+    assert.match(pairedHtml, /Requested Google access/);
+    assert.match(pairedHtml, /Requested permission:<\/strong> Gmail send/);
     assert.match(pairedHtml, /cannot read your inbox or existing email/);
-    assert.doesNotMatch(pairedHtml, /value="gmail_read"/);
-
-    const unconsentedResponse = await fetch(`http://127.0.0.1:${port}${startPath}`, {
-      headers: { cookie },
-      redirect: "manual",
-    });
-    const unconsentedHtml = await unconsentedResponse.text();
-    assert.equal(unconsentedResponse.status, 400);
-    assert.match(unconsentedHtml, /Review and accept the Google data disclosure/);
+    assert.doesNotMatch(pairedHtml, /type="checkbox"/);
+    assert.doesNotMatch(pairedHtml, /name="capability"/);
 
     const matchingScopeResponse = await fetch(
       `http://127.0.0.1:${port}/api/setup/security/session-scope?return=${encodeURIComponent(connectPath)}`,
@@ -558,13 +551,13 @@ test("isolated Google reviewer links authorize only their exact consent action",
     const start = new URL(`http://127.0.0.1:${port}/connect/google/start`);
     start.searchParams.set("connect", connect.connectId);
     start.searchParams.set("review", reviewTicket);
-    start.searchParams.set("capability", "gmail_send");
-    const unconsented = await fetch(start, { redirect: "manual" });
-    const unconsentedHtml = await unconsented.text();
-    assert.equal(unconsented.status, 400);
-    assert.equal(unconsented.headers.get("referrer-policy"), "no-referrer");
-    assert.match(unconsentedHtml, /Review and accept the Google data disclosure/);
-    assert.match(unconsentedHtml, /name="review"/);
+    start.searchParams.set("capability", "gmail_read");
+    const startResponse = await fetch(start, { redirect: "manual" });
+    const startHtml = await startResponse.text();
+    assert.equal(startResponse.status, 400);
+    assert.equal(startResponse.headers.get("referrer-policy"), "no-referrer");
+    assert.match(startHtml, /gmail_oauth_config_required/);
+    assert.match(startHtml, /name="review"/);
 
     const invalid = new URL(`http://127.0.0.1:${port}${reviewPath}`);
     invalid.pathname = `/connect/google/review/${connect.connectId}/invalid-ticket`;
@@ -1913,13 +1906,13 @@ test("Google Workspace connector UI requires reviewed access and exposes bounded
   const notificationsTemplate = await fs.readFile("apps/web/src/app/gmail-notifications-panel.component.html", "utf8");
   const browserService = await fs.readFile("apps/web/src/app/gmail-browser-notification.service.ts", "utf8");
 
-  assert.match(accessComponent, /selectedCapabilities: string\[\] = \[\]/);
-  assert.match(accessComponent, /this\.consent &&/);
-  assert.match(accessComponent, /privacyConsent: true/);
-  assert.match(accessComponent, /privacyPolicyVersion: this\.privacyPolicyVersion/);
-  assert.match(accessComponent, /if \(ids\.includes\("gmail_send"\)\) return \["gmail_send"\]/);
-  assert.match(accessTemplate, /Choose the account and only the permissions Orkestr should request/);
-  assert.match(accessTemplate, /Review the Google data disclosure/);
+  assert.match(accessComponent, /selectedAccountId = ""/);
+  assert.match(accessComponent, /startGmailOAuth\(\{/);
+  assert.doesNotMatch(accessComponent, /selectedCapabilities/);
+  assert.doesNotMatch(accessComponent, /privacyConsent/);
+  assert.match(accessTemplate, /Google handles account selection and consent/);
+  assert.doesNotMatch(accessTemplate, /Permissions/);
+  assert.doesNotMatch(accessTemplate, /google-capability-/);
   assert.doesNotMatch(accessComponent, /ngOnInit/);
 
   assert.match(notificationsComponent, /query = "is:unread newer_than:1d"/);

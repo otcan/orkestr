@@ -136,8 +136,6 @@
         @if (connector.id === "gmail") {
           <ork-google-workspace-access-panel
             [accounts]="googleAccounts"
-            [availableCapabilities]="googleCapabilities"
-            [privacyPolicyVersion]="googlePrivacyPolicyVersion"
             [threadId]="connectorIntentThreadId()"
           ></ork-google-workspace-access-panel>
           @if (!connectorIntentActive()) {

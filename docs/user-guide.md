@@ -117,23 +117,25 @@ The callback endpoint only completes the OAuth exchange. User tokens are still
 stored in that user's scoped Orkestr data directory.
 
 For WhatsApp-bound users, the preferred flow is `/connect google` in chat. That
-creates a one-time link where the user chooses the exact capabilities to grant:
-Gmail send, Gmail read, Gmail actions, Gmail drafts, Calendar read, Calendar
-actions, and Drive selected files. New connections default to Gmail send only;
-restricted Gmail read, action, and draft scopes must be selected explicitly. See
-[Google Workspace OAuth verification prep](google-workspace-oauth-verification.md).
+creates a one-time link for the exact user-facing action that needs Google
+access. Orkestr fixes that capability set on the server, shows it read-only,
+then sends the user to Google. Google is the only place where the user selects
+an account and grants or declines access. New connections request Gmail send
+only; a later Gmail read, draft, or Calendar action starts a narrowly scoped
+reconnect when that capability is actually needed. See [Google Workspace OAuth
+verification prep](google-workspace-oauth-verification.md).
 
-The same permission review is available in **Connectors > Gmail**. Existing
-accounts can be reconnected to add or reduce capabilities, and a second account
-can stay **Only when requested** so agents do not select it implicitly.
+**Connectors > Gmail** is an account-management page, not a second permission
+picker. Existing accounts can be reconnected, and a second account can stay
+**Only when requested** so agents do not select it implicitly.
 
 For Google OAuth verification, an operator can create a separate stable review
 environment URL with `orkestr connect google --review-environment --thread
 google-oauth-reviewer --json`. It is for a disposable isolated installation only.
 The reviewer enters the separately supplied password and is taken into that
 instance's normal Orkestr UI, directly on **Connectors > Gmail**. They can use
-the actual Google connection flow and inspect the requested capabilities in the
-same interface users receive. The reviewer VM must contain only synthetic test
+the actual Google connection flow and inspect the fixed, requested capabilities
+in the same interface users receive. The reviewer VM must contain only synthetic test
 data and no production threads, WhatsApp accounts, browser profiles, or other
 users' data. Send the URL, password, and synthetic-account instructions only
 through the existing Google review thread. See [Google Workspace OAuth
