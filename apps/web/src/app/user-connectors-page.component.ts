@@ -1,7 +1,7 @@
 import { ChangeDetectorRef, Component, OnDestroy, OnInit, inject } from "@angular/core";
 import { FormsModule } from "@angular/forms";
 import { firstValueFrom } from "rxjs";
-import { ApiService, ConnectorStatus, GoogleWorkspaceCapability, GoogleWorkspaceConnection, OrkestrUser, OutlookOAuthStartResponse, SetupStatus } from "./api.service";
+import { ApiService, ConnectorStatus, GoogleWorkspaceConnection, OrkestrUser, OutlookOAuthStartResponse, SetupStatus } from "./api.service";
 import { GoogleWorkspaceAccessPanelComponent } from "./google-workspace-access-panel.component";
 import { GmailNotificationsPanelComponent } from "./gmail-notifications-panel.component";
 
@@ -28,8 +28,6 @@ export class UserConnectorsPageComponent implements OnDestroy, OnInit {
   currentUser: OrkestrUser | null = null;
   outlookAuth: OutlookOAuthStartResponse | null = null;
   googleAccounts: GoogleWorkspaceConnection[] = [];
-  googleCapabilities: GoogleWorkspaceCapability[] = [];
-  googlePrivacyPolicyVersion = "";
 
   ngOnInit(): void {
     void this.load();
@@ -56,8 +54,6 @@ export class UserConnectorsPageComponent implements OnDestroy, OnInit {
       if (user.status === "fulfilled") this.currentUser = user.value.user;
       if (googleAccounts.status === "fulfilled") {
         this.googleAccounts = googleAccounts.value.connections || [];
-        this.googleCapabilities = googleAccounts.value.availableCapabilities || [];
-        this.googlePrivacyPolicyVersion = googleAccounts.value.privacyPolicyVersion || "";
       }
       if (setup.status === "rejected") {
         this.error = this.errorText(setup.reason);

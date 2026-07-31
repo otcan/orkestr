@@ -171,6 +171,7 @@ export class BrokerController {
       useMode: clean(payload.connectionUseMode || payload.useMode),
       setAsMain: payload.setAsMain === true,
       setAsThreadDefault: payload.setAsThreadDefault === true,
+      capabilities: Array.isArray(payload.capabilities) ? payload.capabilities.map((value) => clean(value)).filter(Boolean) : [],
       brokerInstanceId: record.instanceId,
       brokerTenantVmId: clean(payload.tenantVmId),
       brokerTenantUserId: userId,

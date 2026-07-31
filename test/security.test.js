@@ -902,7 +902,7 @@ test("tenant CLI setup status uses instance connector scope", async () => {
       headers: { authorization: "Bearer cli-secret" },
     }));
     assert.deepEqual(accounts.availableCapabilities.map((capability) => capability.id), ["gmail_send"]);
-    assert.equal(accounts.privacyPolicyVersion, "2026-07-23.2");
+    assert.equal(accounts.privacyPolicyVersion, "2026-07-31.1");
 
     const missingConsent = await fetch(
       `http://127.0.0.1:${port}/api/connectors/gmail/oauth/start?capabilities=gmail_send`,
@@ -911,7 +911,7 @@ test("tenant CLI setup status uses instance connector scope", async () => {
     assert.equal(missingConsent.status, 400);
 
     const consented = await json(await fetch(
-      `http://127.0.0.1:${port}/api/connectors/gmail/oauth/start?capabilities=gmail_send&privacyConsent=1&privacyPolicyVersion=2026-07-23.2`,
+      `http://127.0.0.1:${port}/api/connectors/gmail/oauth/start?capabilities=gmail_send&privacyConsent=1&privacyPolicyVersion=2026-07-31.1`,
       { headers: { authorization: "Bearer cli-secret" } },
     ));
     assert.deepEqual(consented.capabilities, ["gmail_send"]);

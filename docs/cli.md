@@ -96,7 +96,7 @@ logs, or chat transcripts. See
 prints the stable reviewer entry URL. The reviewer uses the dedicated password,
 which creates a normal Orkestr browser session for that disposable isolated VM
 and opens **Connectors > Gmail**. From there they use the real Google connection
-flow and capability selection UI. This command must only be enabled on a
+flow and review the fixed capability set before Google shows its consent screen. This command must only be enabled on a
 synthetic-data reviewer VM; it must never be enabled on a production, personal,
 or tenant deployment.
 

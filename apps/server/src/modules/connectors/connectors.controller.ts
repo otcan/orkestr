@@ -1333,21 +1333,14 @@ export class GoogleWorkspaceConnectController {
         reviewAccess: Array.isArray(review) ? String(review[0] || "") : String(review || ""),
         reviewEnvironment: googleWorkspaceRequestQueryValue(request, "review_environment"),
         request: payload?.request || {},
+        selectedCapabilities: payload?.requestedCapabilities || payload?.request?.requestedCapabilities || [],
         error: ok ? "" : String(payload?.error || payload?.state || "Google Workspace connection link is not available."),
       }));
   }
 
   @Get("google/start")
   async googleStart(@Req() request: any, @Query() query: Record<string, string | string[]>, @Res() response: any) {
-    const capabilities = Array.isArray(query.capability)
-      ? query.capability
-      : String(query.capability || "").split(/[\s,]+/g).filter(Boolean);
     try {
-      if (String(query.capabilities_selected || "") === "1" && capabilities.length === 0) {
-        const error: any = new Error("Select at least one Google Workspace capability.");
-        error.statusCode = 400;
-        throw error;
-      }
       const connectId = String(query.connect || "");
       const payload = await getGoogleWorkspaceConnectRequest(connectId, process.env);
       if (googleWorkspaceConnectRequestExists(payload) && !(await googleWorkspaceConnectAccess(request, payload, response))) return;
@@ -1357,17 +1350,8 @@ export class GoogleWorkspaceConnectController {
         error.statusCode = 403;
         throw error;
       }
-      if (
-        String(query.privacy_consent || "") !== "1" ||
-        String(query.privacy_policy_version || "") !== googleWorkspacePrivacyPolicyVersion
-      ) {
-        const error: any = new Error("Review and accept the Google data disclosure before continuing.");
-        error.statusCode = 400;
-        throw error;
-      }
       const started = await startGoogleWorkspaceOAuth(process.env, {
         connectId,
-        capabilities,
         account: String(query.account || ""),
         privacyPolicyVersion: googleWorkspacePrivacyPolicyVersion,
         privacyConsentAt: new Date().toISOString(),
@@ -1384,7 +1368,7 @@ export class GoogleWorkspaceConnectController {
           connectId: String(query.connect || ""),
           reviewAccess: Array.isArray(query.review) ? String(query.review[0] || "") : String(query.review || ""),
           reviewEnvironment: Array.isArray(query.review_environment) ? String(query.review_environment[0] || "") : String(query.review_environment || ""),
-          selectedCapabilities: capabilities,
+          selectedCapabilities: [],
           error: String((error as Error)?.message || "Google Workspace OAuth could not start."),
         }));
     }

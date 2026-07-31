@@ -1,1 +1,1 @@
-export const googleWorkspacePrivacyPolicyVersion = "2026-07-23.2";
+export const googleWorkspacePrivacyPolicyVersion = "2026-07-31.1";

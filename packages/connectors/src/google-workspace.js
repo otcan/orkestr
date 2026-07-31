@@ -196,6 +196,7 @@ async function createBrokeredGoogleWorkspaceConnectLink({
   useMode = "",
   setAsMain = false,
   setAsThreadDefault = false,
+  capabilities = [],
 } = {}, env = process.env) {
   const registration = await ensureBrokerClientRegistration(env);
   if (registration?.ok === false || !registration?.instanceId || !registration?.brokerBaseUrl) {
@@ -217,6 +218,7 @@ async function createBrokeredGoogleWorkspaceConnectLink({
     connectionUseMode: clean(useMode),
     setAsMain: setAsMain === true,
     setAsThreadDefault: setAsThreadDefault === true,
+    capabilities: Array.isArray(capabilities) ? capabilities : [],
     source: "tenant_whatsapp",
   };
   const body = await encryptBrokerClientPayload(request, registration, env);
@@ -315,6 +317,7 @@ export async function createGoogleWorkspaceConnectLink({
   setAsMain = false,
   setAsThreadDefault = false,
   reviewAccess = false,
+  capabilities = [],
 } = {}, env = process.env) {
   const reviewer = googleWorkspaceReviewEnvironmentIdentity(env);
   const reviewerAccess = reviewerAccessRequested({ reviewAccess, principal, thread }, env);
@@ -337,6 +340,7 @@ export async function createGoogleWorkspaceConnectLink({
       useMode,
       setAsMain,
       setAsThreadDefault,
+      capabilities,
     }, env);
   }
   const brokerContextProvided = Boolean(clean(
@@ -361,6 +365,15 @@ export async function createGoogleWorkspaceConnectLink({
   if (reviewerAccess && !requestUserId) {
     throw connectorError("google_workspace_review_access_requires_user", 400);
   }
+  // A connect link is an action-scoped server record, not a client-side scope
+  // picker. Reviewer links deliberately request the complete submitted review
+  // set; ordinary links start with the narrow Gmail-send capability.
+  const requestedCapabilities = requireAllowedGoogleWorkspaceCapabilities(
+    Array.isArray(capabilities) && capabilities.length
+      ? capabilities
+      : (reviewerAccess ? googleWorkspaceAllowedCapabilities(env) : googleWorkspaceDefaultGmailCapabilities()),
+    env,
+  );
   const connectId = randomUUID();
   const threadBinding = requestThread.binding && typeof requestThread.binding === "object" ? requestThread.binding : {};
   const request = {
@@ -377,6 +390,7 @@ export async function createGoogleWorkspaceConnectLink({
     connectionUseMode: clean(useMode),
     setAsMain: setAsMain === true,
     setAsThreadDefault: setAsThreadDefault === true,
+    requestedCapabilities,
     source: reviewerAccess ? "oauth_reviewer" : "whatsapp",
     brokerInstanceId: clean(brokerInstanceId),
     brokerTenantVmId: clean(brokerTenantVmId),
@@ -419,8 +433,7 @@ export async function createGoogleWorkspaceConnectLink({
     connectorLink,
     link,
     expiresAt: request.expiresAt,
-    capabilities: googleWorkspaceCapabilityDefinitions()
-      .filter((definition) => googleWorkspaceAllowedCapabilities(env).includes(definition.id)),
+    capabilities: googleWorkspaceCapabilityDisclosure(requestedCapabilities),
     brokerInstanceId: request.brokerInstanceId,
     message: googleWorkspaceConnectMessage({
       link,
@@ -454,6 +467,10 @@ export async function getGoogleWorkspaceConnectRequest(connectId = "", env = pro
     ok: true,
     state: "ready",
     request,
+    requestedCapabilities: requireAllowedGoogleWorkspaceCapabilities(
+      request.requestedCapabilities,
+      env,
+    ),
     capabilities: googleWorkspaceCapabilityDefinitions().filter((definition) => allowed.has(definition.id)),
   };
 }
@@ -462,7 +479,13 @@ export async function startGoogleWorkspaceOAuth(env = process.env, options = {})
   const connectId = clean(options.connectId || options.connect);
   const { scope, ledger, request } = await findConnectRequest(connectId, env);
   assertConnectRequestUsable(request);
-  const capabilities = requireAllowedGoogleWorkspaceCapabilities(options.capabilities, env);
+  const capabilities = requireAllowedGoogleWorkspaceCapabilities(request.requestedCapabilities, env);
+  if (Object.hasOwn(options, "capabilities")) {
+    const supplied = requireAllowedGoogleWorkspaceCapabilities(options.capabilities, env);
+    if (supplied.slice().sort().join(",") !== capabilities.slice().sort().join(",")) {
+      throw connectorError("google_workspace_connect_capabilities_fixed", 409);
+    }
+  }
   const account = clean(options.account || (clean(request.oauthAppId) ? request.account : "")).toLowerCase();
   const started = await startGmailOAuth(env, {
     userId: scope.userId || "",

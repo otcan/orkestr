@@ -522,7 +522,7 @@
                   <li>Add this authorized redirect URI: <code>{{ gmailRedirectUri }}</code></li>
                   <li>Paste the client ID and secret here, then start auth. From WhatsApp, send exactly <code>/connect google</code>.</li>
                 </ol>
-                <small>Use your own Google project. Orkestr requests only the scopes selected by the user; Drive uses selected-file access only.</small>
+                <small>Use your own Google project. Orkestr requests only the scopes required for the user-requested action; Drive uses selected-file access only.</small>
                 <a class="oauth-link" href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noreferrer">Open Google credentials</a>
               } @else {
                 <strong>Create a Microsoft app registration</strong>
