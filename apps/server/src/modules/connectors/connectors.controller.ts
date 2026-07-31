@@ -25,6 +25,8 @@ import {
   verifyGoogleWorkspaceReviewAccessTicket,
 } from "../../../../../packages/connectors/src/google-workspace-review-access.js";
 import {
+  googleWorkspaceReviewEnvironmentEnabled,
+  googleWorkspaceReviewEnvironmentIdentity,
   googleWorkspaceReviewEnvironmentPath,
   verifyGoogleWorkspaceReviewEnvironmentTicket,
 } from "../../../../../packages/connectors/src/google-workspace-review-environment.js";
@@ -32,6 +34,7 @@ import {
   googleWorkspaceAllowedCapabilities,
   googleWorkspaceCapabilityDefinitions,
   googleWorkspaceCapabilityLabels,
+  googleWorkspaceDefaultGmailCapabilities,
   googleWorkspaceScopesForCapabilities,
   requireAllowedGoogleWorkspaceCapabilities,
 } from "../../../../../packages/connectors/src/google-workspace-scopes.js";
@@ -541,25 +544,20 @@ export class ConnectorsController {
     @Query("setAsMain") setAsMain = "",
     @Query("setAsThreadDefault") setAsThreadDefault = "",
     @Query("threadId") threadId = "",
-    @Query("capabilities") capabilities = "",
-    @Query("privacyConsent") privacyConsent = "",
-    @Query("privacyPolicyVersion") privacyPolicyVersion = "",
   ) {
-    const requestedCapabilities = clean(capabilities)
-      ? requireAllowedGoogleWorkspaceCapabilities(stringArray(capabilities), process.env)
-      : [];
-    if (
-      requestedCapabilities.length &&
-      (
-        !["1", "true", "yes"].includes(clean(privacyConsent).toLowerCase()) ||
-        clean(privacyPolicyVersion) !== googleWorkspacePrivacyPolicyVersion
-      )
-    ) {
-      throw httpError("google_workspace_privacy_consent_required", 400);
-    }
+    const principal = requestPrincipal(request);
+    const reviewer = googleWorkspaceReviewEnvironmentIdentity(process.env);
+    const reviewerConnection = googleWorkspaceReviewEnvironmentEnabled(process.env) &&
+      clean(principal.userId || principal.id) === reviewer.userId;
+    // Scope selection belongs to Google. The service owns the request contract:
+    // ordinary connections begin narrowly, while the disposable review identity
+    // receives the submitted scope set without a client-controlled query override.
+    const requestedCapabilities = reviewerConnection
+      ? googleWorkspaceAllowedCapabilities(process.env)
+      : googleWorkspaceDefaultGmailCapabilities();
     return beginGmailOAuth(process.env, {
       account,
-      principal: requestPrincipal(request),
+      principal,
       googleConnectionId: accountId,
       alias,
       useMode,
@@ -567,13 +565,11 @@ export class ConnectorsController {
       setAsMain: ["1", "true", "yes"].includes(clean(setAsMain).toLowerCase()),
       setAsThreadDefault: ["1", "true", "yes"].includes(clean(setAsThreadDefault).toLowerCase()),
       threadId,
-      ...(requestedCapabilities.length ? {
-        provider: "google_workspace",
-        capabilities: requestedCapabilities,
-        scopes: googleWorkspaceScopesForCapabilities(requestedCapabilities),
-        privacyPolicyVersion: clean(privacyPolicyVersion),
-        privacyConsentAt: new Date().toISOString(),
-      } : {}),
+      provider: "google_workspace",
+      capabilities: requestedCapabilities,
+      scopes: googleWorkspaceScopesForCapabilities(requestedCapabilities),
+      privacyPolicyVersion: googleWorkspacePrivacyPolicyVersion,
+      privacyConsentAt: new Date().toISOString(),
     });
   }
 

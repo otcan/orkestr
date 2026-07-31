@@ -18,6 +18,9 @@ const envKeys = [
   "ORKESTR_GOOGLE_WORKSPACE_REVIEW_PASSWORD",
   "ORKESTR_GOOGLE_WORKSPACE_REVIEW_USER_ID",
   "ORKESTR_GOOGLE_WORKSPACE_REVIEW_THREAD_ID",
+  "ORKESTR_GOOGLE_OAUTH_ALLOWED_CAPABILITIES",
+  "ORKESTR_GOOGLE_OAUTH_APPS_JSON",
+  "ORKESTR_GOOGLE_OAUTH_DEFAULT_APP",
 ];
 
 function snapshotEnv() {
@@ -45,6 +48,15 @@ test("reviewer password opens the normal isolated Orkestr UI", async () => {
   process.env.ORKESTR_GOOGLE_WORKSPACE_REVIEW_PASSWORD = "a-long-review-password-for-isolated-oauth";
   process.env.ORKESTR_GOOGLE_WORKSPACE_REVIEW_USER_ID = "reviewer";
   process.env.ORKESTR_GOOGLE_WORKSPACE_REVIEW_THREAD_ID = "review-thread";
+  process.env.ORKESTR_GOOGLE_OAUTH_ALLOWED_CAPABILITIES = "gmail_read,gmail_actions,gmail_send,gmail_drafts,calendar_read,calendar_actions";
+  process.env.ORKESTR_GOOGLE_OAUTH_DEFAULT_APP = "reviewer";
+  process.env.ORKESTR_GOOGLE_OAUTH_APPS_JSON = JSON.stringify({
+    reviewer: {
+      clientId: "reviewer-client",
+      clientSecret: "reviewer-secret",
+      redirectUri: "https://review.example.test/oauth/gmail/callback",
+    },
+  });
   const review = createGoogleWorkspaceReviewEnvironmentLink({ userId: "reviewer", threadId: "review-thread" }, process.env);
   const entryPath = new URL(review.link).pathname;
   const server = await startServer({ port: 0, host: "127.0.0.1" });
@@ -89,6 +101,22 @@ test("reviewer password opens the normal isolated Orkestr UI", async () => {
     const cockpitHtml = await cockpit.text();
     assert.equal(cockpit.status, 200);
     assert.match(cockpitHtml, /<ork-root(?:\s|>)/);
+
+    const oauth = await (await fetch(`${root}/api/connectors/gmail/oauth/start?capabilities=gmail_send`, {
+      headers: { cookie: sessionCookie },
+    })).json();
+    assert.ok(oauth.authorizeUrl, JSON.stringify(oauth));
+    const authorizeUrl = new URL(oauth.authorizeUrl);
+    assert.deepEqual(oauth.capabilities, [
+      "gmail_read",
+      "gmail_actions",
+      "gmail_send",
+      "gmail_drafts",
+      "calendar_read",
+      "calendar_actions",
+    ]);
+    assert.match(authorizeUrl.searchParams.get("scope") || "", /https:\/\/www\.googleapis\.com\/auth\/calendar\.events/);
+    assert.equal(authorizeUrl.searchParams.get("redirect_uri"), "https://review.example.test/oauth/gmail/callback");
 
     const alreadySignedIn = await fetch(`${root}${entryPath}`, { headers: { cookie: sessionCookie }, redirect: "manual" });
     assert.equal(alreadySignedIn.status, 302);
