@@ -215,6 +215,11 @@ textarea:focus {
   padding: 0;
 }
 
+.mobile-sidebar-backdrop,
+.mobile-thread-switcher {
+  display: none;
+}
+
 .sidebar-resize-handle:hover,
 .sidebar-resizing .sidebar-resize-handle {
   background: linear-gradient(90deg, rgba(126, 247, 142, 0.1), rgba(126, 247, 142, 0.52), rgba(126, 247, 142, 0.1));
@@ -4180,9 +4185,7 @@ ork-first-thread-wizard.first-thread-host {
 
 @media (max-width: 860px) {
   .app-shell {
-    grid-template-columns: 1fr;
-    grid-template-rows: minmax(160px, 32vh) minmax(0, 1fr);
-    grid-template-rows: minmax(150px, min(32dvh, 260px)) minmax(0, 1fr);
+    display: block;
     height: 100dvh;
     max-height: 100dvh;
   }
@@ -4192,12 +4195,41 @@ ork-first-thread-wizard.first-thread-host {
   }
 
   .sidebar {
-    border-right: 0;
-    border-bottom: 1px solid rgba(24, 32, 25, 0.14);
+    position: fixed;
+    z-index: 70;
+    inset: 0 auto 0 0;
+    width: min(360px, calc(100vw - 42px));
+    height: 100dvh;
+    border-right: 1px solid rgba(119, 205, 126, 0.26);
+    border-bottom: 0;
+    box-shadow: 20px 0 44px rgba(0, 0, 0, 0.44);
     padding: 14px;
+    transform: translateX(calc(-100% - 12px));
+    transition: transform 180ms ease;
+  }
+
+  .app-shell.mobile-sidebar-open .sidebar {
+    transform: translateX(0);
+  }
+
+  .mobile-sidebar-backdrop {
+    position: fixed;
+    z-index: 60;
+    inset: 0;
+    width: 100%;
+    min-height: 0;
+    border: 0;
+    border-radius: 0;
+    background: rgba(0, 0, 0, 0.54);
+    padding: 0;
+  }
+
+  .app-shell.mobile-sidebar-open .mobile-sidebar-backdrop {
+    display: block;
   }
 
   .chat {
+    height: 100%;
     min-height: 0;
     overflow: hidden;
     padding: 12px;
@@ -4220,9 +4252,44 @@ ork-first-thread-wizard.first-thread-host {
     display: grid;
   }
 
+  .chat-head {
+    grid-template-columns: auto 42px minmax(0, 1fr);
+    align-items: start;
+    gap: 10px;
+  }
+
+  .mobile-thread-switcher {
+    display: inline-flex;
+    min-height: 42px;
+    padding: 8px 10px;
+  }
+
+  .chat-head .head-actions {
+    grid-column: 1 / -1;
+  }
+
+  .chat-head .head-actions.cockpit-actions {
+    display: none;
+  }
+
+  .subline {
+    flex-wrap: wrap;
+  }
+
   .head-actions,
   .panel-tabs {
     justify-content: flex-start;
+  }
+
+  .panel-tabs {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scrollbar-width: thin;
+  }
+
+  .panel-tabs > .codex-control-scroll {
+    flex: 0 0 auto;
   }
 
   .message {

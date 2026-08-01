@@ -222,6 +222,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   rawConnectionDetail = "";
   sidebarWidth = 460;
   sidebarResizing = false;
+  mobileSidebarOpen = false;
 
   private fallbackPoller?: ReturnType<typeof setInterval>;
   private systemPoller?: ReturnType<typeof setInterval>;
@@ -784,6 +785,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     }
     const nextPanel = "chat";
     this.threadWizardOpen = false;
+    this.mobileSidebarOpen = false;
     this.selectedId = this.threadSlug(thread);
     this.activePanel = nextPanel;
     this.modelDetailsOpen = false;
@@ -1140,6 +1142,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       return;
     }
     if (this.activePanel === "raw") this.closeRawStream();
+    this.mobileSidebarOpen = false;
     this.threadWizardOpen = true;
     this.onboardingActive = false;
     this.activePanel = "chat";
@@ -1152,6 +1155,17 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     if (!this.threads.length) return;
     this.threadWizardOpen = false;
     this.updateDocumentTitle();
+    this.renderNow();
+  }
+
+  openMobileSidebar(): void {
+    this.mobileSidebarOpen = true;
+    this.renderNow();
+  }
+
+  closeMobileSidebar(): void {
+    if (!this.mobileSidebarOpen) return;
+    this.mobileSidebarOpen = false;
     this.renderNow();
   }
 
