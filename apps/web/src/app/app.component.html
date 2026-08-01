@@ -19,8 +19,8 @@
     <ork-user-connectors-page></ork-user-connectors-page>
   </main>
 } @else if (appReady) {
-<main class="app-shell" [class.sidebar-resizing]="sidebarResizing" [class.user-mode]="isUserMode()" [style.--sidebar-width.px]="sidebarWidth">
-  <aside class="sidebar">
+<main class="app-shell" [class.sidebar-resizing]="sidebarResizing" [class.user-mode]="isUserMode()" [class.mobile-sidebar-open]="mobileSidebarOpen" [style.--sidebar-width.px]="sidebarWidth">
+  <aside id="thread-sidebar" class="sidebar">
     <div class="brand">
       <div>
         <p class="eyebrow">{{ sidebarEyebrow() }}</p>
@@ -256,6 +256,13 @@
   </aside>
 
   <button
+    class="mobile-sidebar-backdrop"
+    type="button"
+    aria-label="Close thread list"
+    (click)="closeMobileSidebar()"
+  ></button>
+
+  <button
     class="sidebar-resize-handle"
     type="button"
     aria-label="Resize thread sidebar"
@@ -286,6 +293,13 @@
       ></ork-first-thread-wizard>
     } @else if (selectedThread(); as thread) {
       <header class="chat-head">
+        <button
+          class="secondary mobile-thread-switcher"
+          type="button"
+          aria-controls="thread-sidebar"
+          [attr.aria-expanded]="mobileSidebarOpen"
+          (click)="openMobileSidebar()"
+        >Threads</button>
         <div class="chat-head-avatar" [title]="threadIconTitle(thread)" [attr.aria-label]="threadIconTitle(thread)">
           @if (threadAvatarUrl(thread)) {
             <img [src]="threadAvatarUrl(thread)" [alt]="threadIconTitle(thread)" />

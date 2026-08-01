@@ -7,6 +7,7 @@ import { startServer } from "../apps/server/src/server.js";
 import { approvePairingChallenge, createPairingChallenge, listPairingChallenges, pairBrowser, securityCookieName } from "../packages/core/src/security.js";
 import { createAppShare } from "../packages/core/src/shared-apps.js";
 import { adminPrincipal } from "../packages/core/src/principal.js";
+import { appendThreadMessage, createThread } from "../packages/core/src/threads.js";
 
 const envKeys = ["ORKESTR_HOME", "ORKESTR_AUTH_REQUIRED", "ORKESTR_RECOVER_RUNNING_ON_START"];
 
@@ -101,6 +102,83 @@ test("pairing required page generates and consumes a challenge in a real browser
     await approvePairingChallenge(challengeId);
     await page.waitForFunction(() => !document.body.innerText.includes("Approve this browser"), { timeout: 15_000 });
     assert.equal(new URL(page.url()).pathname, "/");
+    assert.deepEqual(errors, []);
+  } finally {
+    if (browser) await browser.close();
+    await new Promise((resolve) => server.close(resolve));
+    restoreEnv(prior);
+  }
+});
+
+test("mobile thread routes keep the selected conversation visible and open threads in a drawer", async (t) => {
+  const puppeteer = await loadPuppeteer(t);
+  if (!puppeteer) return;
+  const chrome = await findChrome();
+  if (!chrome) {
+    t.skip("No Chrome or Chromium executable available for browser e2e.");
+    return;
+  }
+
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-mobile-thread-e2e-"));
+  const prior = saveEnv();
+  process.env.ORKESTR_HOME = home;
+  process.env.ORKESTR_AUTH_REQUIRED = "0";
+  process.env.ORKESTR_RECOVER_RUNNING_ON_START = "0";
+  await createThread({ id: "mobile-review-thread", name: "Mobile Review Thread" }, process.env);
+  await appendThreadMessage("mobile-review-thread", {
+    role: "assistant",
+    state: "completed",
+    phase: "final",
+    text: "The selected conversation is visible on mobile.",
+  }, process.env);
+
+  const server = await startServer({ port: 0, host: "127.0.0.1" });
+  const { port } = server.address();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  let browser;
+
+  try {
+    browser = await puppeteer.launch({
+      headless: "new",
+      executablePath: chrome,
+      args: ["--no-sandbox", "--disable-setuid-sandbox"],
+    });
+    const page = await browser.newPage();
+    await page.setViewport({ width: 390, height: 844, deviceScaleFactor: 1, isMobile: true, hasTouch: true });
+    const errors = [];
+    page.on("pageerror", (error) => errors.push(error.message || String(error)));
+
+    await page.goto(`${baseUrl}/thread/mobile-review-thread`, { waitUntil: "networkidle2" });
+    await page.waitForFunction(
+      () => document.body.innerText.includes("The selected conversation is visible on mobile."),
+      { timeout: 10_000 },
+    );
+
+    const initial = await page.evaluate(() => {
+      const drawer = document.querySelector("#thread-sidebar")?.getBoundingClientRect();
+      const chat = document.querySelector(".chat")?.getBoundingClientRect();
+      const firstMessage = document.querySelector(".message")?.getBoundingClientRect();
+      return {
+        drawerRight: drawer?.right || 0,
+        chatLeft: chat?.left || 0,
+        chatWidth: chat?.width || 0,
+        firstMessageTop: firstMessage?.top || 0,
+        pageOverflows: document.documentElement.scrollWidth > window.innerWidth,
+      };
+    });
+    assert.ok(initial.drawerRight <= 1);
+    assert.equal(initial.chatLeft, 0);
+    assert.ok(initial.chatWidth >= 380);
+    assert.ok(initial.firstMessageTop < 422);
+    assert.equal(initial.pageOverflows, false);
+
+    await page.click("button.mobile-thread-switcher");
+    await page.waitForFunction(() => {
+      const drawer = document.querySelector("#thread-sidebar")?.getBoundingClientRect();
+      return Boolean(drawer) && Number(drawer.left) >= -1;
+    }, { timeout: 3_000 });
+    const openedLeft = await page.$eval("#thread-sidebar", (node) => node.getBoundingClientRect().left);
+    assert.ok(openedLeft >= -1);
     assert.deepEqual(errors, []);
   } finally {
     if (browser) await browser.close();

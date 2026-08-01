@@ -1256,6 +1256,27 @@ test("global shell keeps onboarding footer reachable", async () => {
   assert.match(styles, /\.app-shell\s*{[^}]*overflow:\s*hidden/s);
 });
 
+test("mobile thread view uses an off-canvas drawer so the active chat stays visible", async () => {
+  const template = await fs.readFile("apps/web/src/app/app.component.html", "utf8");
+  const component = await fs.readFile("apps/web/src/app/app.component.ts", "utf8");
+  const styles = await fs.readFile("apps/web/src/styles.css", "utf8");
+
+  assert.match(template, /\[class\.mobile-sidebar-open\]="mobileSidebarOpen"/);
+  assert.match(template, /id="thread-sidebar"/);
+  assert.match(template, /class="secondary mobile-thread-switcher"/);
+  assert.match(template, /\(click\)="openMobileSidebar\(\)"/);
+  assert.match(template, /class="mobile-sidebar-backdrop"/);
+  assert.match(component, /mobileSidebarOpen = false/);
+  assert.match(component, /openMobileSidebar\(\): void/);
+  assert.match(component, /closeMobileSidebar\(\): void/);
+  assert.match(component, /this\.mobileSidebarOpen = false;\s*this\.selectedId = this\.threadSlug\(thread\)/);
+  assert.match(styles, /@media \(max-width: 860px\)\s*{[\s\S]*?\.sidebar\s*{[\s\S]*?position:\s*fixed/s);
+  assert.match(styles, /\.app-shell\.mobile-sidebar-open \.sidebar\s*{\s*transform:\s*translateX\(0\)/);
+  assert.match(styles, /\.mobile-thread-switcher\s*{\s*display:\s*inline-flex/);
+  assert.match(styles, /\.chat-head \.head-actions\.cockpit-actions\s*{\s*display:\s*none/);
+  assert.match(styles, /\.panel-tabs\s*{\s*flex-wrap:\s*nowrap;\s*overflow-x:\s*auto/s);
+});
+
 test("thread sidebar treats runtime interruption messages as errors", async () => {
   const component = await fs.readFile("apps/web/src/app/app.component.ts", "utf8");
 
