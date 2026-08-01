@@ -118,6 +118,36 @@ test("reviewer password opens the normal isolated Orkestr UI", async () => {
     assert.match(authorizeUrl.searchParams.get("scope") || "", /https:\/\/www\.googleapis\.com\/auth\/calendar\.events/);
     assert.equal(authorizeUrl.searchParams.get("redirect_uri"), "https://review.example.test/oauth/gmail/callback");
 
+    const nativeFetch = globalThis.fetch;
+    globalThis.fetch = async (url, options = {}) => {
+      if (String(url) === "https://oauth2.googleapis.com/token") {
+        return new Response(JSON.stringify({
+          access_token: "review-access-token",
+          refresh_token: "review-refresh-token",
+          expires_in: 3600,
+          scope: authorizeUrl.searchParams.get("scope") || "",
+        }), { headers: { "content-type": "application/json" } });
+      }
+      if (String(url) === "https://gmail.googleapis.com/gmail/v1/users/me/profile") {
+        return new Response(JSON.stringify({ emailAddress: "reviewer@example.test" }), { headers: { "content-type": "application/json" } });
+      }
+      return nativeFetch(url, options);
+    };
+    try {
+      const callback = await nativeFetch(
+        `${root}/oauth/gmail/callback?code=review-code&state=${encodeURIComponent(authorizeUrl.searchParams.get("state") || "")}`,
+        { headers: { cookie: sessionCookie } },
+      );
+      const callbackHtml = await callback.text();
+      assert.equal(callback.status, 200);
+      assert.match(callbackHtml, /Google Workspace connected/);
+      assert.match(callbackHtml, /http-equiv="refresh" content="0;url=\/app\/connectors\/gmail"/);
+      assert.match(callbackHtml, /href="\/app\/connectors\/gmail"/);
+      assert.doesNotMatch(callbackHtml, /\/setup\/gmail/);
+    } finally {
+      globalThis.fetch = nativeFetch;
+    }
+
     const alreadySignedIn = await fetch(`${root}${entryPath}`, { headers: { cookie: sessionCookie }, redirect: "manual" });
     assert.equal(alreadySignedIn.status, 302);
     assert.equal(alreadySignedIn.headers.get("location"), "/app/connectors/gmail");

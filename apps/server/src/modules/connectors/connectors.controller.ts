@@ -27,7 +27,6 @@ import {
 import {
   googleWorkspaceReviewEnvironmentEnabled,
   googleWorkspaceReviewEnvironmentIdentity,
-  googleWorkspaceReviewEnvironmentPath,
   verifyGoogleWorkspaceReviewEnvironmentTicket,
 } from "../../../../../packages/connectors/src/google-workspace-review-environment.js";
 import {
@@ -1211,8 +1210,8 @@ export class ConnectorCallbacksController {
               message: `Gmail authorization opened in ${browser.label || desktopSlug}. Finish the Google login in that virtual browser.`,
               deskUrl: browser.desk_url || browser.url || "",
               desktopSlug,
-              setupHref: "/setup/gmail",
-              setupLabel: "Open Mail Setup",
+              setupHref: "/app/connectors/gmail",
+              setupLabel: "Open Gmail",
             }));
         } catch (error) {
           return response
@@ -1226,8 +1225,8 @@ export class ConnectorCallbacksController {
               message: String((error as Error)?.message || "Gmail authorization could not be opened in the virtual browser."),
               authorizeUrl,
               desktopSlug,
-              setupHref: "/setup/gmail",
-              setupLabel: "Open Mail Setup",
+              setupHref: "/app/connectors/gmail",
+              setupLabel: "Open Gmail",
             }));
         }
       }
@@ -1240,8 +1239,8 @@ export class ConnectorCallbacksController {
       .send(googleOAuthHtml({
         ...payload,
         title: "Gmail auth failed",
-        setupHref: "/setup/gmail",
-        setupLabel: "Open Mail Setup",
+        setupHref: "/app/connectors/gmail",
+        setupLabel: "Open Gmail",
       }));
   }
 
@@ -1256,8 +1255,8 @@ export class ConnectorCallbacksController {
         state: "error",
         title: "Gmail auth failed",
         message: String((error as Error)?.message || "tenant_oauth_forward_failed"),
-        setupHref: "/setup/gmail",
-        setupLabel: "Open Mail Setup",
+        setupHref: "/app/connectors/gmail",
+        setupLabel: "Open Gmail",
       }),
     }));
     if (tenantForward) {
@@ -1520,7 +1519,7 @@ function googleOAuthCallbackPayload(result: Record<string, unknown> = {}) {
       userId: clean(result.userId),
       threadId: clean(result.threadId),
     }, process.env);
-    const reviewSetupHref = reviewEnvironment.ok ? googleWorkspaceReviewEnvironmentPath(reviewTicket) : "";
+    const reviewConnectorHref = reviewEnvironment.ok ? "/app/connectors/gmail" : "";
     return {
       ok: true,
       state: clean(result.state) || "ok",
@@ -1528,13 +1527,14 @@ function googleOAuthCallbackPayload(result: Record<string, unknown> = {}) {
       message: labels.length
         ? `Google Workspace authorization is complete. Enabled capabilities: ${labels.join(", ")}.`
         : "Google Workspace authorization is complete, but no optional Workspace capabilities were granted.",
-      setupHref: reviewSetupHref || brokeredSetupHref || "/setup/gmail",
-      setupLabel: reviewSetupHref ? "Return to Google Workspace Review" : brokeredSetupHref ? "Open Instance Connector" : "Open Connectors",
-      setupReturnText: reviewSetupHref
-        ? "Return to the isolated review environment to test the Google capabilities you approved."
+      setupHref: brokeredSetupHref || reviewConnectorHref || "/app/connectors/gmail",
+      setupLabel: reviewConnectorHref ? "Return to Google Workspace Review" : brokeredSetupHref ? "Open Instance Connector" : "Open Gmail",
+      setupReturnText: reviewConnectorHref
+        ? "Returning to the isolated review environment to test the Google capabilities you approved."
         : brokeredSetupHref
         ? "Return to this instance connector page to refresh the connection status."
-        : "Return to setup to refresh the connector status.",
+        : "Returning to the connected Gmail account in Orkestr.",
+      autoRedirect: true,
     };
   }
   return {
@@ -1542,8 +1542,10 @@ function googleOAuthCallbackPayload(result: Record<string, unknown> = {}) {
     state: clean(result.state) || "ok",
     title: "Gmail connected",
     message: "Gmail authorization is complete. You can return to Orkestr.",
-    setupHref: "/setup/gmail",
-    setupLabel: "Open Mail Setup",
+    setupHref: "/app/connectors/gmail",
+    setupLabel: "Open Gmail",
+    setupReturnText: "Returning to the connected Gmail account in Orkestr.",
+    autoRedirect: true,
   };
 }
 
@@ -1680,14 +1682,16 @@ function googleOAuthHtml(payload: Record<string, unknown> = {}): string {
   const deskUrl = String(payload.deskUrl || "").trim();
   const authorizeUrl = String(payload.authorizeUrl || "").trim();
   const desktopSlug = String(payload.desktopSlug || "").trim();
-  const setupHref = String(payload.setupHref || "/setup/gmail").trim();
+  const setupHref = String(payload.setupHref || "/app/connectors/gmail").trim();
   const setupLabel = String(payload.setupLabel || "Open Setup").trim();
-  const setupReturnText = String(payload.setupReturnText || "Return to setup to refresh the connector status.").trim();
+  const setupReturnText = String(payload.setupReturnText || "Return to Orkestr to refresh the connector status.").trim();
+  const autoRedirect = ok && payload.autoRedirect === true && /^\/(?!\/)/.test(setupHref);
   return `<!doctype html>
 <html>
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    ${autoRedirect ? `<meta http-equiv="refresh" content="0;url=${escapeHtml(setupHref)}">` : ""}
     <title>${escapeHtml(title)}</title>
     <style>
       body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #061007; color: #eaffdf; font-family: Inter, system-ui, sans-serif; }
@@ -1705,8 +1709,8 @@ function googleOAuthHtml(payload: Record<string, unknown> = {}): string {
       ${desktopSlug ? `<p>Desktop: ${escapeHtml(desktopSlug)}</p>` : ""}
       ${deskUrl ? `<a href="${escapeHtml(deskUrl)}" target="_blank" rel="noreferrer">Open Virtual Browser</a>` : ""}
       ${authorizeUrl ? `<a href="${escapeHtml(authorizeUrl)}" target="_blank" rel="noreferrer">Open Google Auth Directly</a>` : ""}
-      <p>${escapeHtml(setupReturnText)}</p>
-      <a href="${escapeHtml(setupHref)}">${escapeHtml(setupLabel)}</a>
+      <p>${escapeHtml(autoRedirect ? "Returning to Orkestr now. Use the link below if your browser does not continue automatically." : setupReturnText)}</p>
+      <a href="${escapeHtml(setupHref)}">${escapeHtml(autoRedirect ? "Continue to Orkestr" : setupLabel)}</a>
     </main>
   </body>
 </html>`;
