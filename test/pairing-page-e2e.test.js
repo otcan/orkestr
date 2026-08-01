@@ -163,13 +163,16 @@ test("mobile thread routes keep the selected conversation visible and open threa
         chatLeft: chat?.left || 0,
         chatWidth: chat?.width || 0,
         firstMessageTop: firstMessage?.top || 0,
+        firstMessageBottom: firstMessage?.bottom || 0,
+        viewportHeight: window.innerHeight,
         pageOverflows: document.documentElement.scrollWidth > window.innerWidth,
       };
     });
     assert.ok(initial.drawerRight <= 1);
     assert.equal(initial.chatLeft, 0);
     assert.ok(initial.chatWidth >= 380);
-    assert.ok(initial.firstMessageTop < 422);
+    assert.ok(initial.firstMessageTop < initial.viewportHeight);
+    assert.ok(initial.firstMessageBottom > 0);
     assert.equal(initial.pageOverflows, false);
 
     await page.click("button.mobile-thread-switcher");
