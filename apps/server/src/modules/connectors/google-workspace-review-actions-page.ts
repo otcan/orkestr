@@ -25,6 +25,7 @@ export function googleWorkspaceReviewActionsPageHtml(): string {
     <div class="eyebrow">ORKESTR REVIEW ENVIRONMENT</div>
     <h1>Google Workspace capabilities</h1>
     <p class="muted">This isolated environment performs real Gmail and Google Calendar operations only for the Google account you connect. Test messages are addressed to that same account and test calendar events have no guests.</p>
+    <p><a class="button secondary" href="/review/google/demo">Back to Orkestr workspace</a></p>
 
     <section class="panel connection">
       <div><h2 id="account-title">Checking Google connection</h2><p class="muted" id="account-detail">Connect a Google account to enable the review actions.</p></div>

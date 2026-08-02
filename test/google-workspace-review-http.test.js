@@ -86,7 +86,7 @@ test("reviewer password opens the normal isolated Orkestr UI", async () => {
       redirect: "manual",
     });
     assert.equal(signedIn.status, 303);
-    assert.equal(signedIn.headers.get("location"), "/review/google/actions");
+    assert.equal(signedIn.headers.get("location"), "/review/google/demo");
     const sessionCookie = (signedIn.headers.get("set-cookie") || "").split(";")[0];
     assert.match(sessionCookie, /^orkestr_session=/);
 
@@ -98,6 +98,19 @@ test("reviewer password opens the normal isolated Orkestr UI", async () => {
     assert.equal(threads.status, 200);
     const threadPayload = await threads.json();
     assert.notEqual(threadPayload?.error, "browser_pairing_required");
+
+    const demo = await fetch(`${root}/review/google/demo`, { headers: { cookie: sessionCookie } });
+    const demoHtml = await demo.text();
+    assert.equal(demo.status, 200);
+    assert.match(demoHtml, /Client workspace review/);
+    assert.match(demoHtml, /Thread timers/);
+    const demoChat = await (await fetch(`${root}/review/google/demo/api/chat`, {
+      method: "POST",
+      headers: { cookie: sessionCookie, "content-type": "application/json" },
+      body: JSON.stringify({ message: "Create a Google connection link for this workspace." }),
+    })).json();
+    assert.equal(demoChat.ok, true);
+    assert.equal(demoChat.action.href, "/connectors/gmail");
 
     const actions = await fetch(`${root}/review/google/actions`, { headers: { cookie: sessionCookie } });
     const actionsHtml = await actions.text();
@@ -162,8 +175,8 @@ test("reviewer password opens the normal isolated Orkestr UI", async () => {
       const callbackHtml = await callback.text();
       assert.equal(callback.status, 200);
       assert.match(callbackHtml, /Google Workspace connected/);
-      assert.match(callbackHtml, /http-equiv="refresh" content="0;url=\/review\/google\/actions"/);
-      assert.match(callbackHtml, /href="\/review\/google\/actions"/);
+      assert.match(callbackHtml, /http-equiv="refresh" content="0;url=\/review\/google\/demo\?connected=1"/);
+      assert.match(callbackHtml, /href="\/review\/google\/demo\?connected=1"/);
       assert.doesNotMatch(callbackHtml, /\/setup\/gmail/);
 
       const status = await (await nativeFetch(`${root}/review/google/actions/api/status`, { headers: { cookie: sessionCookie } })).json();
@@ -186,7 +199,7 @@ test("reviewer password opens the normal isolated Orkestr UI", async () => {
 
     const alreadySignedIn = await fetch(`${root}${entryPath}`, { headers: { cookie: sessionCookie }, redirect: "manual" });
     assert.equal(alreadySignedIn.status, 302);
-    assert.equal(alreadySignedIn.headers.get("location"), "/review/google/actions");
+    assert.equal(alreadySignedIn.headers.get("location"), "/review/google/demo");
 
     const oldTicket = await fetch(`${root}/review/google/old-ticket`, { redirect: "manual" });
     assert.equal(oldTicket.status, 302);
