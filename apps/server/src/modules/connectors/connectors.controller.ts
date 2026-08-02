@@ -1532,7 +1532,7 @@ function googleOAuthCallbackPayload(result: Record<string, unknown> = {}) {
     }, process.env);
     // A reviewer environment is a root-mounted standalone app. Brokered
     // instances retain their /i/<instance>/app connector paths above.
-    const reviewConnectorHref = reviewEnvironment.ok ? "/connectors/gmail" : "";
+    const reviewConnectorHref = reviewEnvironment.ok ? "/review/google/actions" : "";
     return {
       ok: true,
       state: clean(result.state) || "ok",
