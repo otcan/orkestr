@@ -725,6 +725,7 @@ test("calendar and drive helpers build scoped google workspace requests", async 
     if (parsed.pathname === "/calendar/v3/calendars/primary/events" && (!options.method || options.method === "GET")) {
       assert.equal(parsed.searchParams.get("timeMin"), "2026-06-04T00:00:00Z");
       assert.equal(parsed.searchParams.get("timeMax"), "2026-06-05T00:00:00Z");
+      assert.equal(parsed.searchParams.get("q"), "Demo");
       return jsonResponse({ items: [{ id: "event-1", summary: "Planning" }] });
     }
     if (parsed.pathname === "/calendar/v3/calendars/primary/events" && options.method === "POST") {
@@ -758,6 +759,7 @@ test("calendar and drive helpers build scoped google workspace requests", async 
     calendarId: "primary",
     timeMin: "2026-06-04T00:00:00Z",
     timeMax: "2026-06-05T00:00:00Z",
+    q: "Demo",
     maxResults: 5,
   }, env, fetchImpl);
   const created = await createGoogleCalendarEvent({
