@@ -86,7 +86,9 @@ Scope justifications for the submission:
 
 ## Google Cloud Console Values
 
-Use the `orkestr-de-public` Google Cloud project.
+Use a dedicated Google Cloud project that contains only Orkestr OAuth clients.
+Do not share the verification project with unrelated apps: Google's review
+materials must account for every OAuth client registered in that project.
 
 - App name: `Orkestr`
 - User support email: the support mailbox for `orkestr.de`
@@ -113,17 +115,17 @@ URI as well.
 
 ## Multiple OAuth apps
 
-Keep the verified production client as the default. Additional testing or
-customer-specific clients must be selected explicitly and are never used as an
-automatic fallback:
+Keep the verified production client as the default. Additional staging,
+testing, or customer-specific clients must be selected explicitly and are never
+used as an automatic fallback:
 
 ```dotenv
-ORKESTR_GOOGLE_OAUTH_DEFAULT_APP=orkestr-de
-ORKESTR_GOOGLE_OAUTH_APPS_JSON={"otcan-claw":{"clientId":"...","clientSecret":"...","redirectUri":"https://connect.orkestr.de/oauth/gmail/callback","approvedTesters":["can@mayamilk.com"]}}
+ORKESTR_GOOGLE_OAUTH_DEFAULT_APP=production
+ORKESTR_GOOGLE_OAUTH_APPS_JSON={"staging":{"clientId":"...","clientSecret":"...","redirectUri":"https://connect.example.test/oauth/gmail/callback","approvedTesters":["tester@example.test"]}}
 ```
 
-Call `orkestr_auth` with `oauth_app: "otcan-claw"` only when the user asks for
-that profile. Omit `oauth_app` to use `orkestr-de`. Orkestr stores the selected
+Call `orkestr_auth` with `oauth_app: "staging"` only when the user asks for
+that profile. Omit `oauth_app` to use `production`. Orkestr stores the selected
 profile id with the connection so callback exchange and refresh always use the
 same OAuth client. Testing-mode Google refresh tokens for Gmail or Calendar
 scopes expire after seven days.
