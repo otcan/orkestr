@@ -86,21 +86,24 @@ test("reviewer password opens the normal isolated Orkestr UI", async () => {
       redirect: "manual",
     });
     assert.equal(signedIn.status, 303);
-    assert.equal(signedIn.headers.get("location"), "/connectors/gmail");
+    assert.equal(signedIn.headers.get("location"), "/review/google/actions");
     const sessionCookie = (signedIn.headers.get("set-cookie") || "").split(";")[0];
     assert.match(sessionCookie, /^orkestr_session=/);
 
     const apiBeforeSignIn = await fetch(`${root}/api/threads`);
     assert.equal(apiBeforeSignIn.status, 401);
+    const actionsBeforeSignIn = await fetch(`${root}/review/google/actions`);
+    assert.equal(actionsBeforeSignIn.status, 403);
     const threads = await fetch(`${root}/api/threads`, { headers: { cookie: sessionCookie } });
     assert.equal(threads.status, 200);
     const threadPayload = await threads.json();
     assert.notEqual(threadPayload?.error, "browser_pairing_required");
 
-    const cockpit = await fetch(`${root}/connectors/gmail`, { headers: { cookie: sessionCookie } });
-    const cockpitHtml = await cockpit.text();
-    assert.equal(cockpit.status, 200);
-    assert.match(cockpitHtml, /<ork-root(?:\s|>)/);
+    const actions = await fetch(`${root}/review/google/actions`, { headers: { cookie: sessionCookie } });
+    const actionsHtml = await actions.text();
+    assert.equal(actions.status, 200);
+    assert.match(actionsHtml, /Google Workspace capabilities/);
+    assert.match(actionsHtml, /Create test draft/);
 
     const oauth = await (await fetch(`${root}/api/connectors/gmail/oauth/start?capabilities=gmail_send`, {
       headers: { cookie: sessionCookie },
@@ -122,7 +125,7 @@ test("reviewer password opens the normal isolated Orkestr UI", async () => {
     globalThis.fetch = async (url, options = {}) => {
       if (String(url) === "https://oauth2.googleapis.com/token") {
         return new Response(JSON.stringify({
-          access_token: "review-access-token",
+          access_token: "ya29.review-access-token-for-google-workspace-review-http-test-abcdefghijklmnopqrstuvwxyz",
           refresh_token: "review-refresh-token",
           expires_in: 3600,
           scope: authorizeUrl.searchParams.get("scope") || "",
@@ -130,6 +133,24 @@ test("reviewer password opens the normal isolated Orkestr UI", async () => {
       }
       if (String(url) === "https://gmail.googleapis.com/gmail/v1/users/me/profile") {
         return new Response(JSON.stringify({ emailAddress: "reviewer@example.test" }), { headers: { "content-type": "application/json" } });
+      }
+      if (String(url).startsWith("https://gmail.googleapis.com/gmail/v1/users/me/messages?") ) {
+        return new Response(JSON.stringify({ messages: [{ id: "review-message" }] }), { headers: { "content-type": "application/json" } });
+      }
+      if (String(url).startsWith("https://gmail.googleapis.com/gmail/v1/users/me/messages/review-message")) {
+        return new Response(JSON.stringify({ id: "review-message", snippet: "Review message preview", payload: { headers: [{ name: "Subject", value: "Review subject" }, { name: "From", value: "sender@example.test" }] } }), { headers: { "content-type": "application/json" } });
+      }
+      if (String(url) === "https://gmail.googleapis.com/gmail/v1/users/me/drafts" && options.method === "POST") {
+        return new Response(JSON.stringify({ id: "review-draft", message: { id: "draft-message" } }), { headers: { "content-type": "application/json" } });
+      }
+      if (String(url) === "https://gmail.googleapis.com/gmail/v1/users/me/messages/send" && options.method === "POST") {
+        return new Response(JSON.stringify({ id: "sent-message" }), { headers: { "content-type": "application/json" } });
+      }
+      if (String(url).startsWith("https://www.googleapis.com/calendar/v3/calendars/primary/events") && options.method === "POST") {
+        return new Response(JSON.stringify({ id: "review-event", summary: "Orkestr Google OAuth review event", start: { dateTime: "2026-08-03T10:00:00Z" }, end: { dateTime: "2026-08-03T10:30:00Z" } }), { headers: { "content-type": "application/json" } });
+      }
+      if (String(url).startsWith("https://www.googleapis.com/calendar/v3/calendars/primary/events")) {
+        return new Response(JSON.stringify({ items: [{ id: "existing-event", summary: "Existing event", start: { dateTime: "2026-08-03T09:00:00Z" }, end: { dateTime: "2026-08-03T09:30:00Z" } }] }), { headers: { "content-type": "application/json" } });
       }
       return nativeFetch(url, options);
     };
@@ -141,16 +162,31 @@ test("reviewer password opens the normal isolated Orkestr UI", async () => {
       const callbackHtml = await callback.text();
       assert.equal(callback.status, 200);
       assert.match(callbackHtml, /Google Workspace connected/);
-      assert.match(callbackHtml, /http-equiv="refresh" content="0;url=\/connectors\/gmail"/);
-      assert.match(callbackHtml, /href="\/connectors\/gmail"/);
+      assert.match(callbackHtml, /http-equiv="refresh" content="0;url=\/review\/google\/actions"/);
+      assert.match(callbackHtml, /href="\/review\/google\/actions"/);
       assert.doesNotMatch(callbackHtml, /\/setup\/gmail/);
+
+      const status = await (await nativeFetch(`${root}/review/google/actions/api/status`, { headers: { cookie: sessionCookie } })).json();
+      assert.equal(status.connected, true);
+      assert.equal(status.account.email, "reviewer@example.test");
+
+      const read = await (await nativeFetch(`${root}/review/google/actions/api/gmail-read`, { method: "POST", headers: { cookie: sessionCookie } })).json();
+      assert.equal(read.message.subject, "Review subject");
+      const draft = await (await nativeFetch(`${root}/review/google/actions/api/gmail-draft`, { method: "POST", headers: { cookie: sessionCookie } })).json();
+      assert.equal(draft.draftId, "review-draft");
+      const sent = await (await nativeFetch(`${root}/review/google/actions/api/gmail-send`, { method: "POST", headers: { cookie: sessionCookie } })).json();
+      assert.equal(sent.messageId, "sent-message");
+      const calendar = await (await nativeFetch(`${root}/review/google/actions/api/calendar-list`, { method: "POST", headers: { cookie: sessionCookie } })).json();
+      assert.equal(calendar.events[0].summary, "Existing event");
+      const created = await (await nativeFetch(`${root}/review/google/actions/api/calendar-create`, { method: "POST", headers: { cookie: sessionCookie } })).json();
+      assert.equal(created.event.id, "review-event");
     } finally {
       globalThis.fetch = nativeFetch;
     }
 
     const alreadySignedIn = await fetch(`${root}${entryPath}`, { headers: { cookie: sessionCookie }, redirect: "manual" });
     assert.equal(alreadySignedIn.status, 302);
-    assert.equal(alreadySignedIn.headers.get("location"), "/connectors/gmail");
+    assert.equal(alreadySignedIn.headers.get("location"), "/review/google/actions");
 
     const oldTicket = await fetch(`${root}/review/google/old-ticket`, { redirect: "manual" });
     assert.equal(oldTicket.status, 302);

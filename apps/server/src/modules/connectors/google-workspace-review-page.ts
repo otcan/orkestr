@@ -35,7 +35,7 @@ export function googleWorkspaceReviewLoginPageHtml({ error = "" }: { error?: str
   <main>
     <div class="panel">
       <h1>Orkestr reviewer environment</h1>
-      <p class="muted">This is a dedicated, isolated Orkestr OSS instance for Google Workspace review. After sign-in, use the normal Orkestr Gmail connector to connect the supplied Google account and review the requested capabilities.</p>
+      <p class="muted">This is a dedicated, isolated Orkestr OSS instance for Google Workspace review. After sign-in, connect the supplied Google account, then use the real Gmail and Calendar review actions.</p>
       ${safeError ? `<p class="error">${safeError}</p>` : ""}
       <form method="post" action="/review/google/session">
         <label>Access password <input name="password" type="password" required autocomplete="current-password"></label>
