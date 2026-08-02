@@ -722,6 +722,7 @@ export async function listGoogleCalendarEvents(args = {}, env = process.env, fet
   for (const [key, value] of Object.entries({
     timeMin: clean(args.timeMin),
     timeMax: clean(args.timeMax),
+    q: clean(args.q),
     maxResults: Math.max(1, Math.min(50, Number(args.maxResults) || 10)),
     singleEvents: args.singleEvents === false ? "false" : "true",
     orderBy: args.orderBy || "startTime",
