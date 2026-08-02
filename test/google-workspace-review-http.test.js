@@ -86,7 +86,7 @@ test("reviewer password opens the normal isolated Orkestr UI", async () => {
       redirect: "manual",
     });
     assert.equal(signedIn.status, 303);
-    assert.equal(signedIn.headers.get("location"), "/app/connectors/gmail");
+    assert.equal(signedIn.headers.get("location"), "/connectors/gmail");
     const sessionCookie = (signedIn.headers.get("set-cookie") || "").split(";")[0];
     assert.match(sessionCookie, /^orkestr_session=/);
 
@@ -97,7 +97,7 @@ test("reviewer password opens the normal isolated Orkestr UI", async () => {
     const threadPayload = await threads.json();
     assert.notEqual(threadPayload?.error, "browser_pairing_required");
 
-    const cockpit = await fetch(`${root}/app/connectors/gmail`, { headers: { cookie: sessionCookie } });
+    const cockpit = await fetch(`${root}/connectors/gmail`, { headers: { cookie: sessionCookie } });
     const cockpitHtml = await cockpit.text();
     assert.equal(cockpit.status, 200);
     assert.match(cockpitHtml, /<ork-root(?:\s|>)/);
@@ -141,8 +141,8 @@ test("reviewer password opens the normal isolated Orkestr UI", async () => {
       const callbackHtml = await callback.text();
       assert.equal(callback.status, 200);
       assert.match(callbackHtml, /Google Workspace connected/);
-      assert.match(callbackHtml, /http-equiv="refresh" content="0;url=\/app\/connectors\/gmail"/);
-      assert.match(callbackHtml, /href="\/app\/connectors\/gmail"/);
+      assert.match(callbackHtml, /http-equiv="refresh" content="0;url=\/connectors\/gmail"/);
+      assert.match(callbackHtml, /href="\/connectors\/gmail"/);
       assert.doesNotMatch(callbackHtml, /\/setup\/gmail/);
     } finally {
       globalThis.fetch = nativeFetch;
@@ -150,7 +150,7 @@ test("reviewer password opens the normal isolated Orkestr UI", async () => {
 
     const alreadySignedIn = await fetch(`${root}${entryPath}`, { headers: { cookie: sessionCookie }, redirect: "manual" });
     assert.equal(alreadySignedIn.status, 302);
-    assert.equal(alreadySignedIn.headers.get("location"), "/app/connectors/gmail");
+    assert.equal(alreadySignedIn.headers.get("location"), "/connectors/gmail");
 
     const oldTicket = await fetch(`${root}/review/google/old-ticket`, { redirect: "manual" });
     assert.equal(oldTicket.status, 302);

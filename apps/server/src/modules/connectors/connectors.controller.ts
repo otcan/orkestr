@@ -25,6 +25,7 @@ import {
   verifyGoogleWorkspaceReviewAccessTicket,
 } from "../../../../../packages/connectors/src/google-workspace-review-access.js";
 import {
+  createGoogleWorkspaceReviewEnvironmentTicket,
   googleWorkspaceReviewEnvironmentEnabled,
   googleWorkspaceReviewEnvironmentIdentity,
   verifyGoogleWorkspaceReviewEnvironmentTicket,
@@ -554,6 +555,15 @@ export class ConnectorsController {
     const requestedCapabilities = reviewerConnection
       ? googleWorkspaceAllowedCapabilities(process.env)
       : googleWorkspaceDefaultGmailCapabilities();
+    // The connector page starts OAuth directly, rather than through a chat
+    // connect link. Preserve the reviewed environment binding in its OAuth
+    // state so the callback returns to the root-mounted reviewer cockpit.
+    const reviewEnvironmentTicket = reviewerConnection
+      ? createGoogleWorkspaceReviewEnvironmentTicket({
+        userId: reviewer.userId,
+        threadId: reviewer.threadId,
+      }, process.env)
+      : "";
     return beginGmailOAuth(process.env, {
       account,
       principal,
@@ -569,6 +579,7 @@ export class ConnectorsController {
       scopes: googleWorkspaceScopesForCapabilities(requestedCapabilities),
       privacyPolicyVersion: googleWorkspacePrivacyPolicyVersion,
       privacyConsentAt: new Date().toISOString(),
+      reviewEnvironmentTicket,
     });
   }
 
@@ -1519,7 +1530,9 @@ function googleOAuthCallbackPayload(result: Record<string, unknown> = {}) {
       userId: clean(result.userId),
       threadId: clean(result.threadId),
     }, process.env);
-    const reviewConnectorHref = reviewEnvironment.ok ? "/app/connectors/gmail" : "";
+    // A reviewer environment is a root-mounted standalone app. Brokered
+    // instances retain their /i/<instance>/app connector paths above.
+    const reviewConnectorHref = reviewEnvironment.ok ? "/connectors/gmail" : "";
     return {
       ok: true,
       state: clean(result.state) || "ok",

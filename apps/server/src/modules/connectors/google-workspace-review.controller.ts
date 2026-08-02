@@ -29,7 +29,7 @@ export class GoogleWorkspaceReviewController {
   @Get()
   entry(@Req() request: any, @Res() response: any) {
     reviewerResponseHeaders(response);
-    if (request?.orkestrSecuritySession) return response.redirect(302, "/app/connectors/gmail");
+    if (request?.orkestrSecuritySession) return response.redirect(302, "/connectors/gmail");
     return response.status(200).type("text/html; charset=utf-8").send(googleWorkspaceReviewLoginPageHtml());
   }
 
@@ -47,7 +47,7 @@ export class GoogleWorkspaceReviewController {
         request,
         userId: identity.userId,
         role: "admin",
-        requestedPath: "/app/connectors/gmail",
+        requestedPath: "/connectors/gmail",
       } as any);
       await approvePairingChallenge(challenge.challengeId, { approvedBy: "google_review_password" });
       const paired = await pairBrowser({
@@ -60,7 +60,7 @@ export class GoogleWorkspaceReviewController {
         requestHost: clean(request?.headers?.["x-forwarded-host"] || request?.headers?.host),
         path: "/",
       }));
-      return response.redirect(303, "/app/connectors/gmail");
+      return response.redirect(303, "/connectors/gmail");
     } catch {
       return response.status(503).type("text/html; charset=utf-8").send(googleWorkspaceReviewLoginPageHtml({
         error: "Unable to open the reviewer environment. Try again shortly.",
