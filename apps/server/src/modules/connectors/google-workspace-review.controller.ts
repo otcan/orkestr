@@ -135,7 +135,10 @@ export class GoogleWorkspaceReviewController {
   @Post("actions/api/gmail-read")
   async readGmail(@Req() request: any) {
     const { principal, connection } = await this.reviewConnection(request);
-    const listed = await listGmailMessages({ maxResults: 1 }, process.env, fetch, { principal, connectionId: connection.connectionId });
+    const listed = await listGmailMessages({
+      maxResults: 1,
+      query: 'from:me subject:"Orkestr Google OAuth review"',
+    }, process.env, fetch, { principal, connectionId: connection.connectionId });
     const messageId = clean(listed.messages?.[0]?.id);
     const message = messageId
       ? await getGmailMessage(messageId, process.env, fetch, { principal, connectionId: connection.connectionId })
