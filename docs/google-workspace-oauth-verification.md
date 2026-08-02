@@ -180,7 +180,7 @@ broker instance.
    capabilities** page. That page links to the real **Connectors > Gmail**
    connection flow and, after consent, provides real review actions: read its
    self-addressed review test message, create a self-addressed draft, send a self-addressed test
-   message, list upcoming events, and create a no-guest test event. The
+   message, list its reviewer-created test events, and create a no-guest test event. The
    reviewer link requests the complete submitted scope set and displays it
    read-only before Google presents its consent screen. This is safe only
    because the entire VM is isolated and contains no production users, threads,

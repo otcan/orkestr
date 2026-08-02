@@ -37,14 +37,14 @@ export function googleWorkspaceReviewActionsPageHtml(): string {
         <li>Gmail read: inspect the self-addressed review test message.</li>
         <li>Gmail drafts: create a draft addressed to the connected account.</li>
         <li>Gmail send: send a test message to the connected account.</li>
-        <li>Calendar read: list upcoming events.</li>
+        <li>Calendar read: list reviewer-created test events.</li>
         <li>Calendar actions: create a test event on the connected account's primary calendar.</li>
       </ul>
       <div class="task-grid">
         <article class="task"><h2>Read Gmail</h2><p class="muted">Loads the test message sent by this reviewer environment.</p><button data-action="gmail-read">Read test message</button></article>
         <article class="task"><h2>Create draft</h2><p class="muted">Creates a review draft addressed to the connected account.</p><button data-action="gmail-draft">Create test draft</button></article>
         <article class="task"><h2>Send Gmail</h2><p class="muted">Sends a review message only to the connected account.</p><button data-action="gmail-send">Send test message</button></article>
-        <article class="task"><h2>Read Calendar</h2><p class="muted">Lists up to five upcoming events from the primary calendar.</p><button data-action="calendar-list">List upcoming events</button></article>
+        <article class="task"><h2>Read Calendar</h2><p class="muted">Lists up to five reviewer-created test events from the primary calendar.</p><button data-action="calendar-list">List test events</button></article>
         <article class="task"><h2>Create event</h2><p class="muted">Creates a no-guest review event in the primary calendar.</p><button data-action="calendar-create">Create test event</button></article>
       </div>
       <pre id="result" aria-live="polite">Select an action to show its real connector result.</pre>

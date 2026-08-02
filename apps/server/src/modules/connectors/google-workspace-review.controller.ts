@@ -181,6 +181,7 @@ export class GoogleWorkspaceReviewController {
       calendarId: "primary",
       timeMin: now.toISOString(),
       timeMax: nextWeek.toISOString(),
+      q: "Orkestr Google OAuth review",
       maxResults: 5,
     }, process.env, fetch, { principal, connectionId: connection.connectionId });
     await appendGoogleWorkspaceReviewAudit("calendar_events_listed", process.env, { principal });
