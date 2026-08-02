@@ -58,14 +58,14 @@ export function googleWorkspaceReviewActionsPageHtml(): string {
     let connected = false;
 
     function show(value) { result.textContent = JSON.stringify(value, null, 2); }
-    function update(status) {
+    function update(status, showAudit = true) {
       connected = Boolean(status.connected);
       accountTitle.textContent = connected ? "Connected: " + status.account.email : "Google account not connected";
       accountDetail.textContent = connected
         ? "Enabled: " + (status.account.capabilities || []).join(", ") + "."
         : "Use Connect or manage Google, then return here after Google consent.";
       buttons.forEach((button) => { button.disabled = !connected; });
-      if (status.audit?.length) show({ connection: status.account, recentActions: status.audit });
+      if (showAudit && status.audit?.length) show({ connection: status.account, recentActions: status.audit });
     }
     async function request(path, options) {
       const response = await fetch(path, options);
@@ -73,8 +73,8 @@ export function googleWorkspaceReviewActionsPageHtml(): string {
       if (!response.ok || payload.ok === false) throw new Error(payload.error || payload.message || "request_failed_" + response.status);
       return payload;
     }
-    async function loadStatus() {
-      try { update(await request("/review/google/actions/api/status")); }
+    async function loadStatus(showAudit = true) {
+      try { update(await request("/review/google/actions/api/status"), showAudit); }
       catch (error) { show({ ok: false, error: String(error.message || error) }); }
     }
     buttons.forEach((button) => button.addEventListener("click", async () => {
@@ -86,7 +86,7 @@ export function googleWorkspaceReviewActionsPageHtml(): string {
         const action = button.dataset.action;
         const payload = await request("/review/google/actions/api/" + action, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
         show(payload);
-        await loadStatus();
+        await loadStatus(false);
       } catch (error) { show({ ok: false, error: String(error.message || error) }); }
       finally { button.textContent = label; button.disabled = !connected; }
     }));
