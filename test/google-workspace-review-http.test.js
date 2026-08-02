@@ -48,7 +48,7 @@ test("reviewer password opens the normal isolated Orkestr UI", async () => {
   process.env.ORKESTR_GOOGLE_WORKSPACE_REVIEW_PASSWORD = "a-long-review-password-for-isolated-oauth";
   process.env.ORKESTR_GOOGLE_WORKSPACE_REVIEW_USER_ID = "reviewer";
   process.env.ORKESTR_GOOGLE_WORKSPACE_REVIEW_THREAD_ID = "review-thread";
-  process.env.ORKESTR_GOOGLE_OAUTH_ALLOWED_CAPABILITIES = "gmail_read,gmail_actions,gmail_send,gmail_drafts,calendar_read,calendar_actions";
+  process.env.ORKESTR_GOOGLE_OAUTH_ALLOWED_CAPABILITIES = "gmail_read,gmail_send,gmail_drafts,calendar_read,calendar_actions";
   process.env.ORKESTR_GOOGLE_OAUTH_DEFAULT_APP = "reviewer";
   process.env.ORKESTR_GOOGLE_OAUTH_APPS_JSON = JSON.stringify({
     reviewer: {
@@ -109,13 +109,13 @@ test("reviewer password opens the normal isolated Orkestr UI", async () => {
     const authorizeUrl = new URL(oauth.authorizeUrl);
     assert.deepEqual(oauth.capabilities, [
       "gmail_read",
-      "gmail_actions",
       "gmail_send",
       "gmail_drafts",
       "calendar_read",
       "calendar_actions",
     ]);
     assert.match(authorizeUrl.searchParams.get("scope") || "", /https:\/\/www\.googleapis\.com\/auth\/calendar\.events/);
+    assert.doesNotMatch(authorizeUrl.searchParams.get("scope") || "", /https:\/\/www\.googleapis\.com\/auth\/gmail\.modify/);
     assert.equal(authorizeUrl.searchParams.get("redirect_uri"), "https://review.example.test/oauth/gmail/callback");
 
     const nativeFetch = globalThis.fetch;
