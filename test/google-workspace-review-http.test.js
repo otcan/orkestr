@@ -48,7 +48,7 @@ test("reviewer password opens the normal isolated Orkestr UI", async () => {
   process.env.ORKESTR_GOOGLE_WORKSPACE_REVIEW_PASSWORD = "a-long-review-password-for-isolated-oauth";
   process.env.ORKESTR_GOOGLE_WORKSPACE_REVIEW_USER_ID = "reviewer";
   process.env.ORKESTR_GOOGLE_WORKSPACE_REVIEW_THREAD_ID = "review-thread";
-  process.env.ORKESTR_GOOGLE_OAUTH_ALLOWED_CAPABILITIES = "gmail_read,gmail_actions,gmail_send,gmail_drafts,calendar_read,calendar_actions";
+  process.env.ORKESTR_GOOGLE_OAUTH_ALLOWED_CAPABILITIES = "gmail_read,gmail_send,gmail_drafts,calendar_read,calendar_actions";
   process.env.ORKESTR_GOOGLE_OAUTH_DEFAULT_APP = "reviewer";
   process.env.ORKESTR_GOOGLE_OAUTH_APPS_JSON = JSON.stringify({
     reviewer: {
@@ -109,14 +109,44 @@ test("reviewer password opens the normal isolated Orkestr UI", async () => {
     const authorizeUrl = new URL(oauth.authorizeUrl);
     assert.deepEqual(oauth.capabilities, [
       "gmail_read",
-      "gmail_actions",
       "gmail_send",
       "gmail_drafts",
       "calendar_read",
       "calendar_actions",
     ]);
     assert.match(authorizeUrl.searchParams.get("scope") || "", /https:\/\/www\.googleapis\.com\/auth\/calendar\.events/);
+    assert.doesNotMatch(authorizeUrl.searchParams.get("scope") || "", /https:\/\/www\.googleapis\.com\/auth\/gmail\.modify/);
     assert.equal(authorizeUrl.searchParams.get("redirect_uri"), "https://review.example.test/oauth/gmail/callback");
+
+    const nativeFetch = globalThis.fetch;
+    globalThis.fetch = async (url, options = {}) => {
+      if (String(url) === "https://oauth2.googleapis.com/token") {
+        return new Response(JSON.stringify({
+          access_token: "review-access-token",
+          refresh_token: "review-refresh-token",
+          expires_in: 3600,
+          scope: authorizeUrl.searchParams.get("scope") || "",
+        }), { headers: { "content-type": "application/json" } });
+      }
+      if (String(url) === "https://gmail.googleapis.com/gmail/v1/users/me/profile") {
+        return new Response(JSON.stringify({ emailAddress: "reviewer@example.test" }), { headers: { "content-type": "application/json" } });
+      }
+      return nativeFetch(url, options);
+    };
+    try {
+      const callback = await nativeFetch(
+        `${root}/oauth/gmail/callback?code=review-code&state=${encodeURIComponent(authorizeUrl.searchParams.get("state") || "")}`,
+        { headers: { cookie: sessionCookie } },
+      );
+      const callbackHtml = await callback.text();
+      assert.equal(callback.status, 200);
+      assert.match(callbackHtml, /Google Workspace connected/);
+      assert.match(callbackHtml, /http-equiv="refresh" content="0;url=\/app\/connectors\/gmail"/);
+      assert.match(callbackHtml, /href="\/app\/connectors\/gmail"/);
+      assert.doesNotMatch(callbackHtml, /\/setup\/gmail/);
+    } finally {
+      globalThis.fetch = nativeFetch;
+    }
 
     const alreadySignedIn = await fetch(`${root}${entryPath}`, { headers: { cookie: sessionCookie }, redirect: "manual" });
     assert.equal(alreadySignedIn.status, 302);
