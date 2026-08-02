@@ -176,12 +176,16 @@ broker instance.
    Confirm the Google Cloud Console data-access list is the same scope list.
 4. Keep normal Orkestr pairing enabled. The stable reviewer URL requires the
    separate review password, then creates a normal Orkestr browser session for
-   the dedicated reviewer user. It opens the real **Connectors > Gmail** UI so
-   the reviewer can follow the same Google connection flow as an Orkestr user.
-   The reviewer link requests the complete submitted scope set and displays it
-   read-only before Google presents its consent screen. This is safe only because the entire VM is isolated
-   and contains no production users, threads, WhatsApp accounts, Raw sessions,
-   desktops, browser profiles, or unrelated connector data.
+   the dedicated reviewer user. It opens a dedicated **Google Workspace
+   capabilities** page. That page links to the real **Connectors > Gmail**
+   connection flow and, after consent, provides real review actions: read one
+   recent message, create a self-addressed draft, send a self-addressed test
+   message, list upcoming events, and create a no-guest test event. The
+   reviewer link requests the complete submitted scope set and displays it
+   read-only before Google presents its consent screen. This is safe only
+   because the entire VM is isolated and contains no production users, threads,
+   WhatsApp accounts, Raw sessions, desktops, browser profiles, or unrelated
+   connector data.
 5. Give the reviewer the stable environment URL, review password, and
    dedicated test-account sign-in instructions only through the existing Google
    review email thread. Never commit credentials, session material, or test
@@ -212,10 +216,11 @@ orkestr connect google --review-environment --thread google-oauth-reviewer --jso
 
 The generated URL is stable. A reviewer enters the separately supplied password,
 which creates Orkestr's normal HttpOnly browser session for this disposable VM
-and opens **Connectors > Gmail**. The reviewer then uses the real Google
-connection flow. The reviewer-only connect request contains the complete
-submitted scope set and cannot be edited in Orkestr. After the Google callback,
-Orkestr returns the reviewer to its normal UI.
+and opens **Google Workspace capabilities**. The reviewer then uses the real
+Google connection flow from **Connect or manage Google**. The reviewer-only
+connect request contains the complete submitted scope set and cannot be edited
+in Orkestr. After the Google callback, Orkestr returns the reviewer to the
+capabilities page, where each requested scope has a real, bounded test action.
 
 Use a high-entropy review password, send it only in the Google verification
 thread, and rotate `ORKESTR_GOOGLE_WORKSPACE_REVIEW_ACCESS_SECRET` after the
@@ -368,7 +373,11 @@ Do this only after the live reviewer environment has passed the release gate.
 Reviewer navigation steps for the reply:
 
 1. Open the supplied reviewer URL and enter the supplied Orkestr password.
-2. On **Connectors > Gmail**, choose **Continue to Google**.
+2. On **Google Workspace capabilities**, choose **Connect or manage Google**,
+   then choose **Continue to Google**.
 3. Sign in with the supplied synthetic Google account or the review account.
 4. Review and accept the Google consent screen.
-5. Return to Orkestr and run the listed Gmail and Calendar verification steps.
+5. Return to **Google Workspace capabilities** and run the five listed Gmail
+   and Calendar verification actions. The draft and sent message are addressed
+   only to the connected review account; the created calendar event has no
+   guests.
