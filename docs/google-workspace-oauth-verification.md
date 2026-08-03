@@ -177,8 +177,9 @@ broker instance.
 4. Keep normal Orkestr pairing enabled. The stable reviewer URL requires the
    separate review password, then creates a normal Orkestr browser session for
    the dedicated reviewer user. It opens a dedicated **Client workspace
-   review** page that first shows normal Orkestr chat and thread timers. The
-   reviewer asks the chat to create a Google connection link, which opens the
+   review** thread in the normal Orkestr web cockpit, not a scripted or
+   standalone review page. The reviewer first sees normal Orkestr chat and
+   thread timers, then asks the chat to create a Google connection link, which opens the
    real **Connectors > Gmail** connection flow. After consent, the workspace
    shows that the selected capabilities are available to chat and timers, and
    links to real review actions: read its
@@ -219,8 +220,9 @@ orkestr connect google --review-environment --thread google-oauth-reviewer --jso
 
 The generated URL is stable. A reviewer enters the separately supplied password,
 which creates Orkestr's normal HttpOnly browser session for this disposable VM
-and opens **Client workspace review**. The reviewer first sees normal chat and
-thread timers, then asks the chat to create the real Google connection link.
+and opens the dedicated thread in the normal Orkestr cockpit. The reviewer first
+sees normal chat and thread timers, then asks the chat to create the real Google
+connection link.
 The reviewer-only
 connect request contains the complete submitted scope set and cannot be edited
 in Orkestr. After the Google callback, Orkestr returns the reviewer to the

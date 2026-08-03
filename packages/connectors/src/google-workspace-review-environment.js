@@ -154,6 +154,11 @@ export function googleWorkspaceReviewEnvironmentPath(ticket = "") {
   return value ? `/review/google/${encodeURIComponent(value)}` : "";
 }
 
+export function googleWorkspaceReviewEnvironmentWorkspacePath(env = process.env) {
+  const identity = googleWorkspaceReviewEnvironmentIdentity(env);
+  return `/thread/${encodeURIComponent(identity.threadId)}`;
+}
+
 export function createGoogleWorkspaceReviewEnvironmentLink(input = {}, env = process.env) {
   if (!googleWorkspaceReviewPasswordAccessEnabled(env)) {
     throw reviewEnvironmentError("google_workspace_review_password_not_configured");
