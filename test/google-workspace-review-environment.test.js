@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   createGoogleWorkspaceReviewEnvironmentLink,
   createGoogleWorkspaceReviewEnvironmentTicket,
+  googleWorkspaceReviewEnvironmentWorkspacePath,
   googleWorkspaceReviewEnvironmentTtlMs,
   verifyGoogleWorkspaceReviewPassword,
   verifyGoogleWorkspaceReviewEnvironmentTicket,
@@ -36,8 +37,10 @@ test("reviewer environment ticket is signed and bound to one user and thread", (
 });
 
 test("reviewer environment link is stable and requires the configured review thread", () => {
-  const link = createGoogleWorkspaceReviewEnvironmentLink({ userId: "reviewer", threadId: "review-thread" }, reviewEnv());
+  const env = reviewEnv();
+  const link = createGoogleWorkspaceReviewEnvironmentLink({ userId: "reviewer", threadId: "review-thread" }, env);
   assert.equal(link.link, "https://review.example.test/review/google");
+  assert.equal(googleWorkspaceReviewEnvironmentWorkspacePath(env), "/thread/review-thread");
   assert.throws(
     () => createGoogleWorkspaceReviewEnvironmentLink({ userId: "reviewer", threadId: "another-thread" }, reviewEnv()),
     (error) => error.code === "google_workspace_review_environment_identity_mismatch",

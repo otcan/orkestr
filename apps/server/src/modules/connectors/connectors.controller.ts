@@ -28,6 +28,7 @@ import {
   createGoogleWorkspaceReviewEnvironmentTicket,
   googleWorkspaceReviewEnvironmentEnabled,
   googleWorkspaceReviewEnvironmentIdentity,
+  googleWorkspaceReviewEnvironmentWorkspacePath,
   verifyGoogleWorkspaceReviewEnvironmentTicket,
 } from "../../../../../packages/connectors/src/google-workspace-review-environment.js";
 import {
@@ -1530,9 +1531,11 @@ function googleOAuthCallbackPayload(result: Record<string, unknown> = {}) {
       userId: clean(result.userId),
       threadId: clean(result.threadId),
     }, process.env);
-    // A reviewer environment is a root-mounted standalone app. Brokered
-    // instances retain their /i/<instance>/app connector paths above.
-    const reviewConnectorHref = reviewEnvironment.ok ? "/review/google/demo?connected=1" : "";
+    // A reviewer environment opens the actual isolated Orkestr cockpit.
+    // Brokered instances retain their /i/<instance>/app connector paths above.
+    const reviewConnectorHref = reviewEnvironment.ok
+      ? googleWorkspaceReviewEnvironmentWorkspacePath(process.env)
+      : "";
     return {
       ok: true,
       state: clean(result.state) || "ok",
@@ -1541,7 +1544,7 @@ function googleOAuthCallbackPayload(result: Record<string, unknown> = {}) {
         ? `Google Workspace authorization is complete. Enabled capabilities: ${labels.join(", ")}.`
         : "Google Workspace authorization is complete, but no optional Workspace capabilities were granted.",
       setupHref: brokeredSetupHref || reviewConnectorHref || "/app/connectors/gmail",
-      setupLabel: reviewConnectorHref ? "Return to Orkestr Workspace Review" : brokeredSetupHref ? "Open Instance Connector" : "Open Gmail",
+      setupLabel: reviewConnectorHref ? "Return to Orkestr" : brokeredSetupHref ? "Open Instance Connector" : "Open Gmail",
       setupReturnText: reviewConnectorHref
         ? "Returning to the isolated workspace where the approved Google capabilities are available in chat and thread timers."
         : brokeredSetupHref

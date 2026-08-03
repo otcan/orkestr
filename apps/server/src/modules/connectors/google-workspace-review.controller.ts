@@ -8,6 +8,7 @@ import {
 import {
   googleWorkspaceReviewEnvironmentIdentity,
   googleWorkspaceReviewEnvironmentEnabled,
+  googleWorkspaceReviewEnvironmentWorkspacePath,
   verifyGoogleWorkspaceReviewPassword,
 } from "../../../../../packages/connectors/src/google-workspace-review-environment.js";
 import { appendGoogleWorkspaceReviewAudit, listGoogleWorkspaceReviewAudit } from "../../../../../packages/connectors/src/google-workspace-review-audit.js";
@@ -17,7 +18,6 @@ import { getGmailMessage, listGmailMessages } from "../../../../../packages/conn
 import { requestPrincipal } from "../../../../../packages/core/src/principal.js";
 import { googleWorkspaceReviewLoginPageHtml } from "./google-workspace-review-page.js";
 import { googleWorkspaceReviewActionsPageHtml } from "./google-workspace-review-actions-page.js";
-import { googleWorkspaceReviewDemoPageHtml } from "./google-workspace-review-demo-page.js";
 
 function clean(value: unknown): string {
   return String(value || "").trim();
@@ -45,6 +45,10 @@ function reviewMessage(message: any = {}) {
 
 @Controller("review/google")
 export class GoogleWorkspaceReviewController {
+  private workspacePath() {
+    return googleWorkspaceReviewEnvironmentWorkspacePath(process.env);
+  }
+
   private reviewPrincipal(request: any) {
     const principal = requestPrincipal(request);
     const identity = googleWorkspaceReviewEnvironmentIdentity(process.env);
@@ -65,7 +69,7 @@ export class GoogleWorkspaceReviewController {
   @Get()
   entry(@Req() request: any, @Res() response: any) {
     reviewerResponseHeaders(response);
-    if (request?.orkestrSecuritySession) return response.redirect(302, "/review/google/demo");
+    if (request?.orkestrSecuritySession) return response.redirect(302, this.workspacePath());
     return response.status(200).type("text/html; charset=utf-8").send(googleWorkspaceReviewLoginPageHtml());
   }
 
@@ -83,7 +87,7 @@ export class GoogleWorkspaceReviewController {
         request,
         userId: identity.userId,
         role: "admin",
-        requestedPath: "/review/google/demo",
+        requestedPath: this.workspacePath(),
       } as any);
       await approvePairingChallenge(challenge.challengeId, { approvedBy: "google_review_password" });
       const paired = await pairBrowser({
@@ -96,7 +100,7 @@ export class GoogleWorkspaceReviewController {
         requestHost: clean(request?.headers?.["x-forwarded-host"] || request?.headers?.host),
         path: "/",
       }));
-      return response.redirect(303, "/review/google/demo");
+      return response.redirect(303, this.workspacePath());
     } catch {
       return response.status(503).type("text/html; charset=utf-8").send(googleWorkspaceReviewLoginPageHtml({
         error: "Unable to open the reviewer environment. Try again shortly.",
@@ -111,38 +115,19 @@ export class GoogleWorkspaceReviewController {
   }
 
   @Get("demo")
-  demo(@Req() request: any, @Res() response: any) {
+  legacyDemo(@Req() request: any, @Res() response: any) {
     this.reviewPrincipal(request);
     reviewerResponseHeaders(response);
-    return response.status(200).type("text/html; charset=utf-8").send(googleWorkspaceReviewDemoPageHtml({
-      connected: clean(request?.query?.connected) === "1",
-    }));
-  }
-
-  @Post("demo/api/chat")
-  demoChat(@Body() body: Record<string, unknown> = {}, @Req() request: any) {
-    this.reviewPrincipal(request);
-    const message = clean(body.message).slice(0, 1000);
-    if (!message) throw new BadRequestException("workspace_chat_message_required");
-    const wantsGoogle = /\b(google|gmail|calendar|connect|oauth)\b/i.test(message);
-    if (wantsGoogle) {
-      return {
-        ok: true,
-        message: "I prepared a secure Google Workspace connection link for this client workspace. After the account owner approves it, the selected Gmail and Calendar capabilities can be used directly in chat or by this thread's timers.",
-        action: { label: "Continue to Google", href: "/connectors/gmail" },
-      };
-    }
-    return {
-      ok: true,
-      message: "I can keep that work in this thread and attach a timer when it needs follow-through. Ask me to create a Google connection link when the account owner is ready to approve Gmail and Calendar capabilities.",
-    };
+    return response.redirect(302, this.workspacePath());
   }
 
   @Get("actions")
   actions(@Req() request: any, @Res() response: any) {
     this.reviewPrincipal(request);
     reviewerResponseHeaders(response);
-    return response.status(200).type("text/html; charset=utf-8").send(googleWorkspaceReviewActionsPageHtml());
+    return response.status(200).type("text/html; charset=utf-8").send(googleWorkspaceReviewActionsPageHtml({
+      workspaceHref: this.workspacePath(),
+    }));
   }
 
   @Get("actions/api/status")
