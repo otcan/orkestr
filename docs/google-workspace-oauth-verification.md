@@ -152,8 +152,8 @@ both are selected, Orkestr requests both scopes: `calendar.events.readonly`
 permits read-only availability across calendars the user can access, while
 `calendar.events.owned` limits edits to calendars the user owns. Orkestr does
 not suppress either selected capability while constructing the OAuth request.
-Existing grants that used `calendar.events` remain recognized for backward
-compatibility.
+Existing grants using the superseded broad Calendar action scope must be
+re-authorized before Calendar actions are available under this narrow contract.
 - Drive selected files: `https://www.googleapis.com/auth/drive.file`
 
 Orkestr must not request broad Drive scopes for this flow. Drive access is
