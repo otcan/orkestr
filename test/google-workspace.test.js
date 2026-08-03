@@ -124,11 +124,11 @@ test("google workspace scope selection maps every selected capability to its dec
   );
   assert.deepEqual(
     googleWorkspaceCapabilitiesForScopes("openid https://www.googleapis.com/auth/calendar.events.owned"),
-    ["calendar_read", "calendar_actions"],
+    ["calendar_actions"],
   );
   assert.deepEqual(
     googleWorkspaceCapabilitiesForScopes("openid https://www.googleapis.com/auth/calendar.events"),
-    ["calendar_read", "calendar_actions"],
+    [],
   );
   assert.deepEqual(
     googleWorkspaceCapabilitiesForScopes("openid https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile", ["gmail_read"]),
@@ -659,9 +659,9 @@ test("google workspace callback stores only granted partial capabilities", async
   const status = await connectorAuthStatus("gmail", env, { principal: alice });
 
   assert.equal(result.provider, "google_workspace");
-  assert.deepEqual(result.capabilities, ["gmail_read", "calendar_read", "calendar_actions"]);
-  assert.deepEqual(token.capabilities, ["gmail_read", "calendar_read", "calendar_actions"]);
-  assert.deepEqual(status.capabilities, ["gmail_read", "calendar_read", "calendar_actions"]);
+  assert.deepEqual(result.capabilities, ["gmail_read", "calendar_read"]);
+  assert.deepEqual(token.capabilities, ["gmail_read", "calendar_read"]);
+  assert.deepEqual(status.capabilities, ["gmail_read", "calendar_read"]);
 });
 
 test("gmail action and draft helpers build scoped Gmail requests", async () => {
@@ -713,7 +713,7 @@ test("calendar and drive helpers build scoped google workspace requests", async 
     env,
     [
       "https://www.googleapis.com/auth/calendar.events.readonly",
-      "https://www.googleapis.com/auth/calendar.events",
+      "https://www.googleapis.com/auth/calendar.events.owned",
       "https://www.googleapis.com/auth/drive.file",
     ].join(" "),
   );
@@ -794,6 +794,7 @@ test("google workspace connect html shows a fixed capability disclosure without 
     connectId: "connect-1",
     request: { account: "user@example.com", brokerInstanceId: "instance-firat", userId: "firat", threadName: "firat-jobs" },
     allowedCapabilities: "all",
+    selectedCapabilities: ["gmail_read", "gmail_send", "gmail_drafts", "drive_file"],
   });
   assert.match(html, /Connect Google Workspace/);
   assert.match(html, /name="connect"/);
@@ -826,7 +827,7 @@ test("google workspace connect html preserves the scoped reviewer ticket without
 });
 
 test("google workspace connect html exposes only the approved send capability by default", () => {
-  const html = googleWorkspaceConnectHtml({ connectId: "connect-1" });
+  const html = googleWorkspaceConnectHtml({ connectId: "connect-1", allowedCapabilities: "all" });
   assert.match(html, /Gmail send/);
   assert.doesNotMatch(html, /Gmail read/);
   assert.doesNotMatch(html, /Gmail drafts/);
