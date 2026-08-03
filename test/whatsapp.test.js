@@ -6344,7 +6344,12 @@ test("local whatsapp autostart account recovers after target closure", async () 
     assert.ok(calls.some((call) => call[0] === "destroy"));
     assert.deepEqual(calls.filter((call) => call[0] === "restart"), [["restart", "responder", true, "auto_recover"]]);
     assert.deepEqual(calls.filter((call) => call[0] === "start"), [["start", "responder", true, false]]);
-    const events = await listEvents(env, 50);
+    let events = [];
+    for (let attempt = 0; attempt < 25; attempt += 1) {
+      events = await listEvents(env, 50);
+      if (events.some((event) => event.type === "whatsapp_local_auto_recover_started" && event.accountId === "responder")) break;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
     assert.ok(events.find((event) => event.type === "whatsapp_local_runtime_auto_recover_scheduled" && event.accountId === "responder"));
     assert.ok(events.find((event) => event.type === "whatsapp_local_runtime_auto_recover_run" && event.accountId === "responder"));
     assert.ok(events.find((event) => event.type === "whatsapp_local_auto_recover_started" && event.accountId === "responder"));
