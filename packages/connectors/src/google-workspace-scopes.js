@@ -34,17 +34,12 @@ const capabilityDefinitions = [
     label: "Calendar read",
     summary: "List Google Calendar events for approved date ranges.",
     scopes: ["https://www.googleapis.com/auth/calendar.events.readonly"],
-    acceptedScopes: [
-      "https://www.googleapis.com/auth/calendar.events.owned",
-      "https://www.googleapis.com/auth/calendar.events",
-    ],
   },
   {
     id: "calendar_actions",
     label: "Calendar actions",
     summary: "Create, update, and delete user-approved events on calendars you own.",
     scopes: ["https://www.googleapis.com/auth/calendar.events.owned"],
-    acceptedScopes: ["https://www.googleapis.com/auth/calendar.events"],
   },
   {
     id: "drive_file",

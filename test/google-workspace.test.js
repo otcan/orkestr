@@ -124,11 +124,11 @@ test("google workspace scope selection maps every selected capability to its dec
   );
   assert.deepEqual(
     googleWorkspaceCapabilitiesForScopes("openid https://www.googleapis.com/auth/calendar.events.owned"),
-    ["calendar_read", "calendar_actions"],
+    ["calendar_actions"],
   );
   assert.deepEqual(
     googleWorkspaceCapabilitiesForScopes("openid https://www.googleapis.com/auth/calendar.events"),
-    ["calendar_read", "calendar_actions"],
+    [],
   );
   assert.deepEqual(
     googleWorkspaceCapabilitiesForScopes("openid https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile", ["gmail_read"]),
@@ -659,9 +659,9 @@ test("google workspace callback stores only granted partial capabilities", async
   const status = await connectorAuthStatus("gmail", env, { principal: alice });
 
   assert.equal(result.provider, "google_workspace");
-  assert.deepEqual(result.capabilities, ["gmail_read", "calendar_read", "calendar_actions"]);
-  assert.deepEqual(token.capabilities, ["gmail_read", "calendar_read", "calendar_actions"]);
-  assert.deepEqual(status.capabilities, ["gmail_read", "calendar_read", "calendar_actions"]);
+  assert.deepEqual(result.capabilities, ["gmail_read", "calendar_read"]);
+  assert.deepEqual(token.capabilities, ["gmail_read", "calendar_read"]);
+  assert.deepEqual(status.capabilities, ["gmail_read", "calendar_read"]);
 });
 
 test("gmail action and draft helpers build scoped Gmail requests", async () => {
@@ -713,7 +713,7 @@ test("calendar and drive helpers build scoped google workspace requests", async 
     env,
     [
       "https://www.googleapis.com/auth/calendar.events.readonly",
-      "https://www.googleapis.com/auth/calendar.events",
+      "https://www.googleapis.com/auth/calendar.events.owned",
       "https://www.googleapis.com/auth/drive.file",
     ].join(" "),
   );
