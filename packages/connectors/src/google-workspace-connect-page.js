@@ -82,7 +82,7 @@ function capabilityDisclosure(
   const selected = new Set(normalizeGoogleWorkspaceCapabilities(selectedCapabilities, googleWorkspaceDefaultGmailCapabilities()));
   const allowed = new Set(allowedCapabilities);
   return googleWorkspaceCapabilityDefinitions()
-    .filter((definition) => allowed.has(definition.id))
+    .filter((definition) => selected.has(definition.id) && allowed.has(definition.id))
     .map((definition) => {
       return `<li class="capability">
           <span>

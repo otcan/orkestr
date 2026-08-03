@@ -794,6 +794,7 @@ test("google workspace connect html shows a fixed capability disclosure without 
     connectId: "connect-1",
     request: { account: "user@example.com", brokerInstanceId: "instance-firat", userId: "firat", threadName: "firat-jobs" },
     allowedCapabilities: "all",
+    selectedCapabilities: ["gmail_read", "gmail_send", "gmail_drafts", "drive_file"],
   });
   assert.match(html, /Connect Google Workspace/);
   assert.match(html, /name="connect"/);
@@ -826,7 +827,7 @@ test("google workspace connect html preserves the scoped reviewer ticket without
 });
 
 test("google workspace connect html exposes only the approved send capability by default", () => {
-  const html = googleWorkspaceConnectHtml({ connectId: "connect-1" });
+  const html = googleWorkspaceConnectHtml({ connectId: "connect-1", allowedCapabilities: "all" });
   assert.match(html, /Gmail send/);
   assert.doesNotMatch(html, /Gmail read/);
   assert.doesNotMatch(html, /Gmail drafts/);
