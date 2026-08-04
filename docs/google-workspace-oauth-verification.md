@@ -4,6 +4,14 @@ Orkestr supports a WhatsApp-first Google Workspace connection flow for
 user-owned accounts. The parent Orkestr install owns the Google OAuth client,
 but each user's grant and token are scoped to that user.
 
+> Public scope policy: the supported public Job Application and LinkedIn
+> outreach workflow does **not** use Gmail inbox read, Gmail drafts, Gmail
+> watchers, or Google Calendar API access. It uses private job-alert addresses,
+> Orkestr-owned drafts, timers, and user-confirmed calendar exports instead.
+> See [Job Application And Outreach Workflow](job-application-workflow.md).
+> Keep the public OAuth allowlist at `gmail_send` unless a separate security
+> assessment and Google approval cover a broader private integration.
+
 ## User Flow
 
 1. The user sends `/connect google` in their WhatsApp-bound Orkestr chat.
@@ -39,8 +47,10 @@ the deployment. Use a separate testing client and an explicit allowlist when
 developing broader capabilities; do not broaden the verified production client
 before Google approves the additional scopes.
 
-Phase 2 can add restricted Gmail capabilities after the first public app is
-approved and the review/demo materials justify the added access:
+Do not add restricted Gmail capabilities to the public app for the Job
+Application or LinkedIn outreach workflow. The following scopes are available
+only for a separately isolated development integration that has its own Google
+review and security-assessment plan:
 
 - Gmail read: `https://www.googleapis.com/auth/gmail.readonly`
 - Gmail actions: `https://www.googleapis.com/auth/gmail.modify`
@@ -49,12 +59,13 @@ approved and the review/demo materials justify the added access:
 Keep restricted scopes action-scoped. Do not make them a silent default or a
 client-controlled checkbox selection.
 
-## Expanded Verification Contract
+## Restricted Development Contract (Not Public)
 
-The current expanded verification request is deliberately narrower than the
-full connector feature set. Its deployed allowlist, Google Cloud Console scope
-list, OAuth consent screen, demo recording, reviewer environment, and written
-justifications must all contain exactly these optional capabilities:
+This is not the public deployment contract and must not be enabled on the
+public OAuth client merely to support job alerts, drafts, timers, or calendar
+follow-ups. If an isolated development integration needs the following
+capabilities, its allowlist, OAuth consent screen, demo recording, reviewer
+environment, and written justification must match exactly:
 
 ```dotenv
 ORKESTR_GOOGLE_OAUTH_ALLOWED_CAPABILITIES=gmail_send,gmail_read,gmail_drafts,calendar_read,calendar_actions
@@ -70,9 +81,9 @@ scopes listed below:
 - `https://www.googleapis.com/auth/calendar.events.owned`
 
 Do not submit `gmail.modify`, `drive.file`, `calendar.events`, or any broader
-Google scope in this review. Those are supported as separate optional product
-capabilities and require their own justification and verification evidence
-before they are enabled for the verified production OAuth client.
+Google scope under this development profile. Those are separate optional
+capabilities and require their own justification, verification evidence, and
+the applicable security assessment before they are enabled anywhere.
 
 Scope justifications for the submission:
 

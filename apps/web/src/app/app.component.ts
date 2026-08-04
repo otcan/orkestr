@@ -17,6 +17,7 @@ import { ThreadComposerComponent } from "./thread-composer.component";
 import { ThreadMessageListComponent } from "./thread-message-list.component";
 import { UserConnectorsPageComponent } from "./user-connectors-page.component";
 import { UserDeskPageComponent } from "./user-desk-page.component";
+import { UserJobsPageComponent } from "./user-jobs-page.component";
 import { UserTimersPageComponent } from "./user-timers-page.component";
 import { hasProposedPlanEnvelope, renderMessageTextHtml } from "./message-renderer";
 import {
@@ -48,7 +49,7 @@ import {
 } from "./api.service";
 import { appendPendingFiles, messageWithAttachmentPaths, PendingFile, removePendingFile, uploadPendingFiles } from "./thread-uploads";
 
-type Panel = "chat" | "history" | "delivery" | "timers" | "attach" | "settings" | "workers" | "runtime" | "raw" | "ops" | "files" | "userTimers" | "userDesk" | "userConnectors";
+type Panel = "chat" | "history" | "delivery" | "timers" | "attach" | "settings" | "workers" | "runtime" | "raw" | "ops" | "files" | "userTimers" | "userDesk" | "userJobs" | "userConnectors";
 type CodexRateLimitKey = "primary" | "secondary";
 type SetupPageMode = "setup" | "onboarding";
 type SetupSection = "system" | "security" | "secrets" | "maintenance" | "codex" | "gmail" | "whatsapp" | "browsers";
@@ -73,7 +74,7 @@ const MESSAGE_PAGE_LIMIT = 100;
 
 @Component({
   selector: "ork-root",
-  imports: [DatePipe, FormsModule, FirstThreadWizardComponent, FilesPageComponent, OpsPageComponent, OnboardingPageComponent, PairingRequiredPageComponent, SharedAppPageComponent, ThreadComposerComponent, ThreadMessageListComponent, UserConnectorsPageComponent, UserDeskPageComponent, UserTimersPageComponent],
+  imports: [DatePipe, FormsModule, FirstThreadWizardComponent, FilesPageComponent, OpsPageComponent, OnboardingPageComponent, PairingRequiredPageComponent, SharedAppPageComponent, ThreadComposerComponent, ThreadMessageListComponent, UserConnectorsPageComponent, UserDeskPageComponent, UserJobsPageComponent, UserTimersPageComponent],
   templateUrl: "./app.component.html",
 })
 export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
@@ -587,7 +588,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   panelAllowedForCurrentUser(panel: Panel): boolean {
     if (this.isAdminMode()) return true;
-    return ["chat", "history", "delivery", "timers", "files", "userTimers", "userDesk", "userConnectors"].includes(panel);
+    return ["chat", "history", "delivery", "timers", "files", "userTimers", "userDesk", "userJobs", "userConnectors"].includes(panel);
   }
 
   isUserNavPanelActive(panel: Panel): boolean {
@@ -596,7 +597,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   private isRouteLevelUserPanel(panel: Panel): boolean {
-    return ["ops", "files", "userTimers", "userDesk", "userConnectors"].includes(panel);
+    return ["ops", "files", "userTimers", "userDesk", "userJobs", "userConnectors"].includes(panel);
   }
 
   rawTerminalAvailable(thread: ThreadSummary | null = this.selectedThread()): boolean {
@@ -878,6 +879,18 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       if (this.activePanel === "raw") this.closeRawStream();
       this.activePanel = "userDesk";
       this.pushPath("", "userDesk");
+      this.updateDocumentTitle();
+      this.renderNow();
+      return;
+    }
+    if (panel === "userJobs") {
+      this.modelDetailsOpen = false;
+      this.slashHelpOpen = false;
+      this.gitDetailsThreadId = "";
+      this.threadWizardOpen = false;
+      if (this.activePanel === "raw") this.closeRawStream();
+      this.activePanel = "userJobs";
+      this.pushPath("", "userJobs");
       this.updateDocumentTitle();
       this.renderNow();
       return;
@@ -4550,6 +4563,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     if (parts[0] === "files" || (parts[0] === "ng" && parts[1] === "files")) return "files";
     if (parts[0] === "timers" || (parts[0] === "ng" && parts[1] === "timers")) return "userTimers";
     if (parts[0] === "desk" || (parts[0] === "ng" && parts[1] === "desk")) return "userDesk";
+    if (parts[0] === "jobs" || (parts[0] === "ng" && parts[1] === "jobs")) return "userJobs";
     if (parts[0] === "connectors" || (parts[0] === "ng" && parts[1] === "connectors")) return "userConnectors";
     if (parts[0] === "skills" || (parts[0] === "ng" && parts[1] === "skills")) return "chat";
     const threadIndex = parts.indexOf("thread");
@@ -4596,6 +4610,10 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     }
     if (parts[0] === "ng" && parts[1] === "desk") {
       globalThis.history?.replaceState({}, "", this.appPath("/desk"));
+      return;
+    }
+    if (parts[0] === "ng" && parts[1] === "jobs") {
+      globalThis.history?.replaceState({}, "", this.appPath("/jobs"));
       return;
     }
     if (parts[0] === "ng" && parts[1] === "connectors") {
@@ -4714,6 +4732,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     if (panel === "files") return this.appPath("/files");
     if (panel === "userTimers") return this.appPath("/timers");
     if (panel === "userDesk") return this.appPath("/desk");
+    if (panel === "userJobs") return this.appPath("/jobs");
     if (panel === "userConnectors") return this.appPath("/connectors");
     const suffix = panel === "chat" ? "" : `/${panel}`;
     return this.appPath(`/thread/${encodeURIComponent(id)}${suffix}`);

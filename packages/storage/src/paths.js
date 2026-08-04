@@ -34,6 +34,8 @@ export function dataPaths(env = process.env) {
     workspaces: path.join(home, "workspaces"),
     timers: path.join(home, "timers.json"),
     jobsQueue: env.ORKESTR_JOBS_QUEUE_FILE || path.join(home, "jobs-queue.json"),
+    jobAlertRoutes: env.ORKESTR_JOB_ALERT_ROUTES_FILE || path.join(home, "job-alert-routes.json"),
+    mailDrafts: env.ORKESTR_MAIL_DRAFTS_FILE || path.join(home, "mail-drafts.json"),
     jobsJdCacheAccess: env.ORKESTR_JOBS_JD_CACHE_ACCESS_FILE || path.join(home, "jobs-jd-cache-access.json"),
     freelanceDeJobsDb: env.ORKESTR_FREELANCE_DE_JOBS_DB || path.join(codexOpsHome, "data", "freelance-de", "freelance_jobs.db"),
     gmailSignalJobRecordsRoot: env.ORKESTR_GMAIL_SIGNAL_RECORD_ROOT || path.join(path.dirname(home), ".openclaw", "workspace", "Orkestr", ".data", "workspaces", "157ea1bfc66836fd", "oxrm", "jobseeker-can", "files", "records", "job-search", "gmail"),

@@ -22,6 +22,13 @@ oXRM is the first workflow app built around the same model: an MCP-first
 relationship workspace that gives agents structured relationship memory,
 follow-up queues, and safe human-approved actions.
 
+For job applications and LinkedIn outreach, Orkestr can create a private
+job-alert address per thread, turn incoming alerts into passive Jobs signals,
+keep outbound drafts locally, and prepare calendar files or Google Calendar
+prefill links. This workflow does not require Gmail inbox read, Gmail drafts,
+or Google Calendar API access. See [Job Application And Outreach
+Workflow](docs/job-application-workflow.md).
+
 > Public alpha. The Docker/Helm path is the primary OSS demo path. Browser
 > pairing gates remote access; do not expose raw Orkestr API, thread, desktop,
 > or terminal routes directly to the public internet.
