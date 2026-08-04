@@ -5,6 +5,13 @@ import {
   presentQueuedJobs,
   updateJobCandidateStateForPrincipal,
 } from "../../../../../packages/core/src/jobs-queue.js";
+import {
+  createJobAlertRouteForPrincipal,
+  ingestJobAlertEmail,
+  listJobAlertRoutesForPrincipal,
+  testJobAlertRouteForPrincipal,
+} from "../../../../../packages/core/src/job-alerts.js";
+import { createCalendarExport } from "../../../../../packages/core/src/calendar-export.js";
 import { handleJobsJdCacheMcpRequest as handleJobsJdCacheMcp } from "../../../../../packages/core/src/jobs-jd-cache-mcp.js";
 import { runGmailJobsPollForPrincipal } from "../../../../../packages/connectors/src/gmail-jobs-queue.js";
 import { requestPrincipal } from "../../../../../packages/core/src/principal.js";
@@ -37,6 +44,40 @@ export class JobsController {
   @HttpCode(200)
   async run(@Req() request: any, @Body() body: Record<string, unknown> = {}) {
     return runGmailJobsPollForPrincipal(body, requestPrincipal(request));
+  }
+
+  @Get("alert-routes")
+  async alertRoutes(@Req() request: any) {
+    return listJobAlertRoutesForPrincipal(requestPrincipal(request));
+  }
+
+  @Post("alert-routes")
+  @HttpCode(200)
+  async createAlertRoute(@Req() request: any, @Body() body: Record<string, unknown> = {}) {
+    return createJobAlertRouteForPrincipal(body, requestPrincipal(request));
+  }
+
+  @Post("alert-routes/:routeId/test")
+  @HttpCode(200)
+  async testAlertRoute(@Req() request: any, @Param("routeId") routeId: string) {
+    return testJobAlertRouteForPrincipal(routeId, requestPrincipal(request));
+  }
+
+  @Post("inbound-email")
+  @HttpCode(200)
+  async inboundEmail(@Req() request: any, @Body() body: Record<string, unknown> = {}) {
+    if (request.orkestrMachineAuth !== "job_alert_relay") {
+      const error = new Error("job_alert_relay_auth_required");
+      (error as any).statusCode = 403;
+      throw error;
+    }
+    return ingestJobAlertEmail(body);
+  }
+
+  @Post("calendar-exports")
+  @HttpCode(200)
+  async calendarExport(@Body() body: Record<string, unknown> = {}) {
+    return createCalendarExport(body);
   }
 
   @Post("present")

@@ -132,6 +132,7 @@ function companyRoleKey(fit = {}) {
 
 function dedupeKeysFor(candidate = {}) {
   const keys = new Set(Array.isArray(candidate.dedupeKeys) ? candidate.dedupeKeys.map(clean).filter(Boolean) : []);
+  if (candidate.source && candidate.sourceMessageId) keys.add(`source:${candidate.source}:${candidate.sourceMessageId}`);
   if (candidate.gmailMessageId) keys.add(`gmail:${candidate.gmailMessageId}`);
   for (const url of candidate.canonicalJobUrls || []) keys.add(`url:${url}`);
   const fitKey = companyRoleKey(candidate.fit || {});
@@ -146,6 +147,10 @@ function normalizeCandidate(candidate = {}) {
     id: clean(candidate.id) || `job_${randomUUID()}`,
     ownerUserId: normalizeUserId(candidate.ownerUserId || candidate.userId || adminUserId),
     state,
+    source: lower(candidate.source || "gmail").replace(/[^a-z0-9_.-]+/g, "_").slice(0, 80) || "gmail",
+    sourceMessageId: clean(candidate.sourceMessageId || candidate.externalMessageId || candidate.messageId || candidate.gmailMessageId),
+    sourceThreadId: clean(candidate.sourceThreadId || candidate.externalThreadId || candidate.gmailThreadId || candidate.threadId),
+    sourceUrl: clean(candidate.sourceUrl || candidate.gmailUrl),
     gmailMessageId: clean(candidate.gmailMessageId || candidate.messageId),
     gmailThreadId: clean(candidate.gmailThreadId || candidate.threadId),
     gmailUrl: clean(candidate.gmailUrl),
@@ -176,16 +181,23 @@ function normalizeCandidate(candidate = {}) {
   return normalized;
 }
 
-function candidateFromGmailMessage(message = {}, context = {}, now = new Date()) {
+function candidateFromMessage(message = {}, context = {}, now = new Date()) {
   const text = [message.subject, message.snippet, message.text].map(clean).filter(Boolean).join("\n");
   const extractedLinks = extractUrls(text);
   const canonicalJobUrls = [...new Set(extractedLinks.map(canonicalJobUrl).filter(Boolean))];
-  const gmailMessageId = clean(message.id);
+  const source = lower(context.source || message.source || "gmail") || "gmail";
+  const sourceMessageId = clean(message.sourceMessageId || message.externalMessageId || message.id || message.messageId);
+  const sourceThreadId = clean(message.sourceThreadId || message.externalThreadId || message.threadId || sourceMessageId);
+  const gmailMessageId = source === "gmail" ? sourceMessageId : "";
   return normalizeCandidate({
     ownerUserId: context.ownerUserId,
     state: "new",
+    source,
+    sourceMessageId,
+    sourceThreadId,
+    sourceUrl: clean(message.sourceUrl),
     gmailMessageId,
-    gmailThreadId: message.threadId,
+    gmailThreadId: source === "gmail" ? sourceThreadId : "",
     gmailUrl: gmailMessageId ? `https://mail.google.com/mail/u/0/#all/${gmailMessageId}` : "",
     sender: message.from,
     subject: message.subject,
@@ -282,7 +294,7 @@ async function upsertCandidatesFromMessages(messages = [], context = {}, env = p
   const created = [];
   const duplicates = [];
   for (const message of messages) {
-    const candidate = candidateFromGmailMessage(message, context, now);
+    const candidate = candidateFromMessage(message, context, now);
     const existing = store.candidates.find((entry) => canAccessOwner({ role: "user", userId: context.ownerUserId }, entry.ownerUserId, env) && candidateMatches(entry, candidate));
     if (existing) {
       existing.lastSeenAt = now.toISOString();
@@ -405,6 +417,7 @@ export async function classifyJobCandidate(candidate = {}, preferences = {}, env
   if (typeof options.classifyImpl === "function") {
     return normalizeFitResult(await options.classifyImpl(candidate, preferences), candidate, env);
   }
+  if (options.disableFitAgent === true) return heuristicFit(candidate, env);
   const command = options.fitAgentCommand || fitAgentCommand(env);
   if (command) {
     const payload = { preferences, candidate };
@@ -469,7 +482,10 @@ export async function classifyQueuedJobCandidates(input = {}, env = process.env,
   const limit = intValue(input.limit ?? input.maxItemsPerRun, defaultMaxItemsPerRun, 1, 20);
   const threshold = intValue(input.fitThreshold, jobsFitThreshold(env), 1, 10);
   const store = await readQueueStore(env);
-  const selected = store.candidates.filter((candidate) => candidate.ownerUserId === ownerUserId && candidate.state === "new").slice(0, limit);
+  const candidateIds = new Set((Array.isArray(input.candidateIds) ? input.candidateIds : []).map(clean).filter(Boolean));
+  const selected = store.candidates
+    .filter((candidate) => candidate.ownerUserId === ownerUserId && candidate.state === "new" && (!candidateIds.size || candidateIds.has(candidate.id)))
+    .slice(0, limit);
   const classified = [];
   for (const candidate of selected) {
     candidate.state = "triaging";
@@ -519,20 +535,21 @@ export async function presentQueuedJobs(input = {}, env = process.env, options =
   const targetThread = await resolveJobsTargetThread(jobsTargetThreadId(input, env), env);
   if (options.principal) assertOwnerAccess(options.principal, targetThread.ownerUserId, "jobs_queue_present", env);
   const store = await readQueueStore(env);
+  const candidateIds = new Set((Array.isArray(input.candidateIds) ? input.candidateIds : []).map(clean).filter(Boolean));
   const candidates = store.candidates
-    .filter((candidate) => candidate.ownerUserId === ownerUserId && candidate.state === "queued_fit")
+    .filter((candidate) => candidate.ownerUserId === ownerUserId && candidate.state === "queued_fit" && (!candidateIds.size || candidateIds.has(candidate.id)))
     .slice(0, limit);
   if (!candidates.length) return { ok: true, presented: [], message: null };
   const now = options.now instanceof Date ? options.now : new Date();
   const text = formatJobDigest(candidates, now);
   const signalMode = jobsSignalMode(input, env);
   const message = await appendThreadSignal(targetThread.id, threadDeliveryDefaults(targetThread, {
-    source: "jobs_queue",
-    connector: "gmail",
+    source: clean(input.source) || "jobs_queue",
+    connector: clean(input.connector) || "gmail",
     signalKind: "jobs",
     signalMode,
-    originSurface: "jobs",
-    originTransport: signalMode === "notify_passively" ? "jobs-passive-signal-notify" : "jobs-passive-signal",
+    originSurface: clean(input.originSurface) || "jobs",
+    originTransport: clean(input.originTransport) || (signalMode === "notify_passively" ? "jobs-passive-signal-notify" : "jobs-passive-signal"),
     externalId: candidates.map((candidate) => candidate.id).join(",").slice(0, 500),
     ownerUserId,
     text,
@@ -555,8 +572,18 @@ export async function processJobCandidateMessages(input = {}, messages = [], env
   const ownerUserId = ownerUserIdFor(input, options.principal || null, env);
   const maxResults = intValue(input.maxResults ?? input.maxItemsPerRun ?? env.ORKESTR_JOBS_MAX_ITEMS_PER_RUN, defaultMaxItemsPerRun, 1, 20);
   const targetThreadId = jobsTargetThreadId(input, env);
-  const upserted = await upsertCandidatesFromMessages(Array.isArray(messages) ? messages : [], { ownerUserId, targetThreadId }, env, now);
-  const classified = await classifyQueuedJobCandidates({ ownerUserId, limit: maxResults, fitThreshold: input.fitThreshold, preferences: input.preferences }, env, options);
+  const source = lower(input.source || "gmail") || "gmail";
+  const upserted = await upsertCandidatesFromMessages(Array.isArray(messages) ? messages : [], { ownerUserId, targetThreadId, source }, env, now);
+  // Mail relays must not cause older queued content to be reclassified. Existing
+  // Gmail polling keeps its retry behavior for candidates that remain new.
+  const candidateIds = input.onlyCreatedCandidates === true ? upserted.created.map((candidate) => candidate.id) : [];
+  const classified = await classifyQueuedJobCandidates({
+    ownerUserId,
+    limit: maxResults,
+    fitThreshold: input.fitThreshold,
+    preferences: input.preferences,
+    candidateIds,
+  }, env, options);
   const shouldPresent = input.present !== false;
   let presentation = { ok: true, presented: [], message: null };
   if (shouldPresent) {
@@ -564,7 +591,12 @@ export async function processJobCandidateMessages(input = {}, messages = [], env
       ownerUserId,
       targetThreadId,
       limit: maxResults,
+      candidateIds,
       signalMode: input.signalMode || input.signalDeliveryMode,
+      source: input.signalSource,
+      connector: input.connector,
+      originSurface: input.originSurface,
+      originTransport: input.originTransport,
     }, env, { ...options, now }).catch((error) => ({ ok: false, presented: [], error: clean(error?.message || error) }));
   }
   await appendEvent({

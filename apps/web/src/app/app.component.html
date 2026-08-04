@@ -50,7 +50,12 @@
         <button class="secondary" type="button" [class.active]="isUserNavPanelActive('files')" (click)="openPanel('files')">Files</button>
         <button class="secondary" type="button" [class.active]="isUserNavPanelActive('userTimers')" (click)="openPanel('userTimers')">Automations</button>
         <button class="secondary" type="button" [class.active]="isUserNavPanelActive('userDesk')" (click)="openPanel('userDesk')">Desk</button>
+        <button class="secondary" type="button" [class.active]="isUserNavPanelActive('userJobs')" (click)="openPanel('userJobs')">Jobs</button>
         <button class="secondary" type="button" [class.active]="isUserNavPanelActive('userConnectors')" (click)="openPanel('userConnectors')">Connectors</button>
+      </nav>
+    } @else {
+      <nav class="user-mode-nav" aria-label="Workspace navigation">
+        <button class="secondary" type="button" [class.active]="activePanel === 'userJobs'" (click)="openPanel('userJobs')">Jobs</button>
       </nav>
     }
 
@@ -280,6 +285,8 @@
       <ork-user-timers-page></ork-user-timers-page>
     } @else if (activePanel === "userDesk") {
       <ork-user-desk-page></ork-user-desk-page>
+    } @else if (activePanel === "userJobs") {
+      <ork-user-jobs-page></ork-user-jobs-page>
     } @else if (activePanel === "userConnectors") {
       <ork-user-connectors-page></ork-user-connectors-page>
     } @else if ((threadWizardOpen || !threads.length) && canCreateThreadFromSidebar()) {
