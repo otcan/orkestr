@@ -7,10 +7,13 @@ import {
   listThreadMessages,
   listThreads,
   updateThread,
+  updateThreadMessage,
 } from "./threads.js";
 import { getTaskAgentProfile } from "./task-agent-profiles.js";
 
 const activeTaskStates = new Set(["created", "queued", "starting", "working", "delivering_result"]);
+const terminalTaskStates = new Set(["cancelled", "completed", "failed"]);
+const taskResultLocks = new Map();
 
 function clean(value) {
   return String(value || "").trim();
@@ -65,6 +68,25 @@ export function isTaskAgentThread(thread = {}) {
   return clean(thread.threadKind) === "task-agent" && Boolean(clean(thread.agentTaskId));
 }
 
+export function isTerminalTaskAgentThread(thread = {}) {
+  return isTaskAgentThread(thread) && terminalTaskStates.has(clean(thread.agentTaskStatus));
+}
+
+async function withTaskResultLock(threadId, operation) {
+  const key = clean(threadId);
+  const previous = taskResultLocks.get(key) || Promise.resolve();
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  taskResultLocks.set(key, gate);
+  await previous.catch(() => {});
+  try {
+    return await operation();
+  } finally {
+    release();
+    if (taskResultLocks.get(key) === gate) taskResultLocks.delete(key);
+  }
+}
+
 export async function listTaskAgents(parentThreadId, env = process.env) {
   const parent = await getThread(parentThreadId, env);
   if (!parent) throw httpError("thread_not_found", 404);
@@ -89,6 +111,8 @@ export async function createTaskAgent(parentThreadId, input = {}, env = process.
   const taskId = clean(input.id || input.taskId).slice(0, 240) || randomUUID();
   const childId = `task-${safeSegment(parent.id, "parent")}-${safeSegment(profile.id, "agent")}-${taskId.slice(0, 8)}`;
   const contextRefs = normalizeContextRefs(input.contextRefs || input.context_refs);
+  const autoRun = input.autoRun !== false;
+  const initialStatus = autoRun ? "queued" : "held";
   const prompt = taskPrompt(parent, profile, task, contextRefs);
   const workspace = parentWorkspace(parent);
   const child = await createThread({
@@ -125,6 +149,7 @@ export async function createTaskAgent(parentThreadId, input = {}, env = process.
     agentTaskId: taskId,
     agentProfileId: profile.id,
     agentTaskStatus: "created",
+    agentTaskAutoRun: autoRun,
     agentTask: task,
     agentContextRefs: contextRefs,
     agentTaskPrompt: prompt,
@@ -133,11 +158,12 @@ export async function createTaskAgent(parentThreadId, input = {}, env = process.
     role: "user",
     source: "orkestr_task_agent_handoff",
     text: prompt,
-    state: "queued",
+    state: initialStatus,
+    deliveryState: initialStatus,
     clientMessageId: `task-agent:${taskId}`,
   }, env);
   const updated = await updateThread(child.id, {
-    agentTaskStatus: "queued",
+    agentTaskStatus: initialStatus,
     agentTaskMessageId: message.id,
   }, env);
   await appendEvent({
@@ -174,59 +200,63 @@ export async function taskAgentSummary(threadOrId, env = process.env) {
 }
 
 async function enqueueParentResult(thread, sourceMessage, status, resultText, env, options = {}) {
-  const current = await getThread(thread.id, env);
-  if (!current || !isTaskAgentThread(current)) return null;
-  if (["cancelled", "completed", "failed"].includes(clean(current.agentTaskStatus)) && current.agentTaskCompletedAt) {
-    return taskAgentSummary(current, env);
-  }
-  if (clean(current.agentResultSourceMessageId) === clean(sourceMessage?.id)) return taskAgentSummary(current, env);
-  const parent = await getThread(current.parentThreadId, env);
-  if (!parent) {
-    await updateThread(current.id, { agentTaskStatus: "failed", lastError: "task_agent_parent_not_found" }, env);
-    return null;
-  }
-  await updateThread(current.id, {
-    agentTaskStatus: "delivering_result",
-    agentResultSourceMessageId: sourceMessage?.id || null,
-  }, env);
-  const text = [
-    `[Specialist task ${status}]`,
-    `Profile: ${current.agentProfileId}`,
-    `Task ID: ${current.agentTaskId}`,
-    `Task: ${current.agentTask}`,
-    "",
-    resultText,
-    "",
-    "Treat this as scoped specialist evidence. Evaluate it and answer the user in the parent conversation.",
-  ].join("\n");
-  const parentMessage = await appendThreadMessage(parent.id, {
-    role: "user",
-    source: "orkestr_task_agent_result",
-    text,
-    state: "queued",
-    steerActiveTurn: true,
-    codexDeliveryMode: "instant_steer",
-    clientMessageId: `task-agent-result:${current.agentTaskId}:${sourceMessage?.id || status}`,
-  }, env);
-  const updated = await updateThread(current.id, {
-    agentTaskStatus: status,
-    agentParentResultMessageId: parentMessage.id,
-    agentTaskCompletedAt: new Date().toISOString(),
-    lastError: status === "failed" ? resultText : null,
-  }, env);
-  await appendEvent({
-    type: `task_agent_${status}`,
-    threadId: parent.id,
-    taskAgentThreadId: current.id,
-    taskId: current.agentTaskId,
-    profileId: current.agentProfileId,
-    parentMessageId: parentMessage.id,
-  }, env);
-  if (options.deliver !== false) {
-    const { requestThreadInputDelivery } = await import("./runtime-leases.js");
-    requestThreadInputDelivery(parent.id, env);
-  }
-  return taskAgentSummary(updated, env);
+  return withTaskResultLock(thread.id, async () => {
+    const current = await getThread(thread.id, env);
+    if (!current || !isTaskAgentThread(current)) return null;
+    if (isTerminalTaskAgentThread(current)) return taskAgentSummary(current, env);
+    if (clean(current.agentResultSourceMessageId) === clean(sourceMessage?.id)) return taskAgentSummary(current, env);
+    const parent = await getThread(current.parentThreadId, env);
+    if (!parent) {
+      await updateThread(current.id, {
+        agentTaskStatus: "failed",
+        agentTaskCompletedAt: new Date().toISOString(),
+        lastError: "task_agent_parent_not_found",
+      }, env);
+      return null;
+    }
+    await updateThread(current.id, {
+      agentTaskStatus: "delivering_result",
+      agentResultSourceMessageId: sourceMessage?.id || null,
+    }, env);
+    const text = [
+      `[Specialist task ${status}]`,
+      `Profile: ${current.agentProfileId}`,
+      `Task ID: ${current.agentTaskId}`,
+      `Task: ${current.agentTask}`,
+      "",
+      resultText,
+      "",
+      "Treat this as scoped specialist evidence. Evaluate it and answer the user in the parent conversation.",
+    ].join("\n");
+    const parentMessage = await appendThreadMessage(parent.id, {
+      role: "user",
+      source: "orkestr_task_agent_result",
+      text,
+      state: "queued",
+      steerActiveTurn: true,
+      codexDeliveryMode: "instant_steer",
+      clientMessageId: `task-agent-result:${current.agentTaskId}:${sourceMessage?.id || status}`,
+    }, env);
+    const updated = await updateThread(current.id, {
+      agentTaskStatus: status,
+      agentParentResultMessageId: parentMessage.id,
+      agentTaskCompletedAt: new Date().toISOString(),
+      lastError: status === "failed" ? resultText : null,
+    }, env);
+    await appendEvent({
+      type: `task_agent_${status}`,
+      threadId: parent.id,
+      taskAgentThreadId: current.id,
+      taskId: current.agentTaskId,
+      profileId: current.agentProfileId,
+      parentMessageId: parentMessage.id,
+    }, env);
+    if (options.deliver !== false) {
+      const { requestThreadInputDelivery } = await import("./runtime-leases.js");
+      requestThreadInputDelivery(parent.id, env);
+    }
+    return taskAgentSummary(updated, env);
+  });
 }
 
 export async function completeTaskAgentFromMessage(thread, message, env = process.env, options = {}) {
@@ -243,7 +273,7 @@ export async function failTaskAgent(thread, error, env = process.env, options = 
 export async function finishTaskAgentTurn(thread, turn = {}, env = process.env, options = {}) {
   if (!isTaskAgentThread(thread)) return null;
   const current = await getThread(thread.id, env);
-  if (!current || ["cancelled", "completed", "failed"].includes(clean(current.agentTaskStatus))) return current ? taskAgentSummary(current, env) : null;
+  if (!current || isTerminalTaskAgentThread(current)) return current ? taskAgentSummary(current, env) : null;
   const status = clean(turn.status || "completed").toLowerCase();
   if (turn.interrupted === true || ["interrupted", "aborted", "cancelled", "canceled"].includes(status)) {
     return failTaskAgent(current, clean(turn.error) || "The specialist task was interrupted before returning a result.", env, options);
@@ -260,16 +290,35 @@ export async function finishTaskAgentTurn(thread, turn = {}, env = process.env, 
 export async function cancelTaskAgent(taskAgentId, env = process.env) {
   const thread = await getThread(taskAgentId, env);
   if (!thread || !isTaskAgentThread(thread)) throw httpError("task_agent_not_found", 404);
-  const updated = await updateThread(thread.id, {
-    agentTaskStatus: "cancelled",
-    agentTaskCompletedAt: new Date().toISOString(),
-  }, env);
-  await appendEvent({
-    type: "task_agent_cancelled",
-    threadId: thread.parentThreadId,
-    taskAgentThreadId: thread.id,
-    taskId: thread.agentTaskId,
-    profileId: thread.agentProfileId,
-  }, env);
-  return updated;
+  return withTaskResultLock(thread.id, async () => {
+    const current = await getThread(thread.id, env);
+    if (!current || !isTaskAgentThread(current)) throw httpError("task_agent_not_found", 404);
+    if (isTerminalTaskAgentThread(current)) return current;
+    const cancelledAt = new Date().toISOString();
+    const updated = await updateThread(current.id, {
+      agentTaskStatus: "cancelled",
+      agentTaskCompletedAt: cancelledAt,
+    }, env);
+    const messages = await listThreadMessages(current.id, env);
+    for (const message of messages) {
+      if (clean(message.role) !== "user" || !["held", "queued", "pending_delivery", "awaiting_ack"].includes(clean(message.state))) continue;
+      await updateThreadMessage(current.id, message.id, {
+        state: "cancelled",
+        deliveryState: "cancelled",
+        deliveryFailedAt: cancelledAt,
+        deliveryClaimId: null,
+        deliveryNextAttemptAt: null,
+        observedVia: "task_agent_cancel",
+        error: "Specialist task cancelled.",
+      }, env);
+    }
+    await appendEvent({
+      type: "task_agent_cancelled",
+      threadId: current.parentThreadId,
+      taskAgentThreadId: current.id,
+      taskId: current.agentTaskId,
+      profileId: current.agentProfileId,
+    }, env);
+    return updated;
+  });
 }

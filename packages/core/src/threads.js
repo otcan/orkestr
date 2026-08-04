@@ -221,6 +221,7 @@ export async function createThread(input = {}, env = process.env) {
     agentTaskId: String(input.agentTaskId || "").trim() || null,
     agentProfileId: String(input.agentProfileId || "").trim() || null,
     agentTaskStatus: String(input.agentTaskStatus || "").trim() || null,
+    agentTaskAutoRun: typeof input.agentTaskAutoRun === "boolean" ? input.agentTaskAutoRun : null,
     agentTask: String(input.agentTask || "").trim() || null,
     agentContextRefs: Array.isArray(input.agentContextRefs) ? input.agentContextRefs.map((value) => String(value || "").trim()).filter(Boolean) : [],
     agentTaskPrompt: String(input.agentTaskPrompt || "").trim() || null,

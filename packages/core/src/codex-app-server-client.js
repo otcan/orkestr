@@ -577,6 +577,17 @@ export class CodexAppServerClient {
         this.threadStates.set(threadId, { ...state, activeTurnId: turnId, activeTurnObservedAt: nowIso(), status: { type: "active", activeFlags: ["running"] }, statusObservedAt: nowIso() });
         const thread = await threadForCodexThreadId(threadId, this.env);
         if (thread) {
+          const { isTerminalTaskAgentThread } = await import("./task-agents.js");
+          if (isTerminalTaskAgentThread(thread)) {
+            await appendEvent({
+              type: "task_agent_late_turn_started_ignored",
+              threadId: thread.id,
+              taskId: thread.agentTaskId,
+              turnId,
+              taskStatus: thread.agentTaskStatus,
+            }, this.env).catch(() => {});
+            return;
+          }
           await updateThread(thread.id, {
             state: "working",
             ...(thread.threadKind === "task-agent" ? { agentTaskStatus: "working" } : {}),
@@ -628,6 +639,22 @@ export class CodexAppServerClient {
         }
         const thread = await threadForCodexThreadId(threadId, this.env);
         if (thread) {
+          const { finishTaskAgentTurn, isTerminalTaskAgentThread } = await import("./task-agents.js");
+          if (isTerminalTaskAgentThread(thread)) {
+            await appendEvent({
+              type: "task_agent_late_turn_completed_ignored",
+              threadId: thread.id,
+              taskId: thread.agentTaskId,
+              turnId,
+              taskStatus: thread.agentTaskStatus,
+            }, this.env).catch(() => {});
+            await completeRuntimeLiveness(thread.id, {
+              runtimeGeneration: threadId,
+              turnId,
+              status: thread.agentTaskStatus,
+            }, this.env).catch(() => {});
+            return;
+          }
           await updateThread(thread.id, {
             state: status === "failed" ? "failed" : "ready",
             lastError: status === "failed" ? errorText : null,
@@ -646,7 +673,6 @@ export class CodexAppServerClient {
           if (status === "failed") {
             await recordCodexRuntimeAuthFailureSignal({ thread, error: errorText, turnId }, this.env).catch(() => {});
           }
-          const { finishTaskAgentTurn } = await import("./task-agents.js");
           await finishTaskAgentTurn(thread, {
             status,
             interrupted: codexTurnConversationInterrupted(turn),

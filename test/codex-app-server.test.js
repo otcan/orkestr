@@ -36,6 +36,7 @@ import { listRouterTraces } from "../packages/core/src/router-traces.js";
 import { deliverWhatsAppReplies } from "../packages/connectors/src/whatsapp.js";
 import { writeConnectorConfig } from "../packages/storage/src/config.js";
 import { readCodexAuthHealth } from "../packages/core/src/codex-auth-health.js";
+import { cancelTaskAgent, createTaskAgent } from "../packages/core/src/task-agents.js";
 
 function response(payload, ok = true, status = 200) {
   return {
@@ -5779,6 +5780,44 @@ test("Codex app-server stop aliases preempt approvals and cancel older queued in
     assert.equal(current.runtime.activeTurnId, null);
     assert.ok(finalState.calls.some((call) => call.method === "turn/interrupt" && call.params.turnId === activeTurnId));
     assert.ok(!finalState.calls.some((call) => call.method === "turn/start" || call.method === "turn/steer"));
+  } finally {
+    stopCodexAppServerClients();
+  }
+});
+
+test("Codex app-server late turn notifications do not revive cancelled task agents", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-cancelled-task-"));
+  const fake = await createFakeCodex(home);
+  const env = {
+    ORKESTR_HOME: path.join(home, "orkestr"),
+    HOME: path.join(home, "runtime-home"),
+    PATH: `${fake.bin}${path.delimiter}${process.env.PATH || ""}`,
+    FAKE_CODEX_STATE: fake.stateFile,
+  };
+  try {
+    const parent = await createThread({ id: "cancelled-task-parent", name: "Cancelled Task Parent", cwd: home }, env);
+    const { taskAgent } = await createTaskAgent(parent.id, {
+      task: "Never execute this task.",
+      autoRun: false,
+    }, env);
+    const started = await startCodexAppServerThread(taskAgent, env);
+    const codexId = started.thread.executor.codexThreadId;
+    await cancelTaskAgent(started.thread.id, env);
+    const client = await getCodexAppServerClient({ env, home: env.HOME });
+
+    await client.handleNotification({
+      method: "turn/started",
+      params: { turn: { id: "late-task-turn", threadId: codexId } },
+    });
+    await client.handleNotification({
+      method: "turn/completed",
+      params: { turn: { id: "late-task-turn", threadId: codexId, status: "completed" } },
+    });
+
+    const current = await getThread(started.thread.id, env);
+    assert.equal(current.agentTaskStatus, "cancelled");
+    assert.notEqual(current.state, "working");
+    assert.equal((await listThreadMessages(parent.id, env)).length, 0);
   } finally {
     stopCodexAppServerClients();
   }

@@ -77,7 +77,7 @@ test("CLI spawns a scoped specialist task agent", async () => {
     stderr: capture(),
     fetchImpl: fakeFetch({
       "POST /api/threads/parent-thread/task-agents": {
-        taskAgent: { id: "task-id", threadId: "task-thread", profileId: "sre_engineer", status: "queued" },
+        taskAgent: { id: "task-id", threadId: "task-thread", profileId: "sre_engineer", status: "held" },
       },
     }, seen),
   });

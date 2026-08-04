@@ -7,6 +7,7 @@ import { startServer } from "../apps/server/src/server.js";
 import { codexSandboxForThread, threadStartParams } from "../packages/core/src/codex-app-server-common.js";
 import { listTaskAgentProfiles } from "../packages/core/src/task-agent-profiles.js";
 import {
+  cancelTaskAgent,
   completeTaskAgentFromMessage,
   createTaskAgent,
   finishTaskAgentTurn,
@@ -107,6 +108,90 @@ test("task agent final answers are steered back to the parent exactly once", asy
   assert.equal(summary.result.messageId, result.id);
 });
 
+test("task agent terminal handoffs are serialized when completion signals race", async () => {
+  const env = await testEnv();
+  const parent = await createThread({ id: "race-parent", name: "Race Parent", cwd: path.dirname(env.ORKESTR_HOME) }, env);
+  const { taskAgent } = await createTaskAgent(parent.id, { task: "Inspect the race." }, env);
+  const result = await appendThreadMessage(taskAgent.id, {
+    role: "assistant",
+    source: "codex-app-server",
+    phase: "final_answer",
+    text: "The task completed with evidence.",
+    state: "completed",
+  }, env);
+
+  await Promise.all([
+    completeTaskAgentFromMessage(taskAgent, result, env, { deliver: false }),
+    finishTaskAgentTurn(taskAgent, { status: "completed" }, env, { deliver: false }),
+  ]);
+
+  const parentMessages = (await listThreadMessages(parent.id, env))
+    .filter((message) => message.source === "orkestr_task_agent_result");
+  assert.equal(parentMessages.length, 1);
+  const current = await getThread(taskAgent.id, env);
+  assert.ok(["completed", "failed"].includes(current.agentTaskStatus));
+});
+
+test("held task agents stay out of delivery and cancellation remains terminal", async () => {
+  const env = await testEnv();
+  const parent = await createThread({ id: "held-parent", name: "Held Parent", cwd: path.dirname(env.ORKESTR_HOME) }, env);
+  const { taskAgent, message } = await createTaskAgent(parent.id, {
+    task: "Do not execute this task.",
+    autoRun: false,
+  }, env);
+
+  assert.equal(taskAgent.agentTaskStatus, "held");
+  assert.equal(taskAgent.agentTaskAutoRun, false);
+  assert.equal(message.state, "held");
+  assert.equal(message.deliveryState, "held");
+
+  await cancelTaskAgent(taskAgent.id, env);
+  const cancelledMessage = (await listThreadMessages(taskAgent.id, env))[0];
+  assert.equal(cancelledMessage.state, "cancelled");
+  assert.equal(cancelledMessage.deliveryState, "cancelled");
+
+  const lateResult = await appendThreadMessage(taskAgent.id, {
+    role: "assistant",
+    source: "codex-app-server",
+    phase: "final_answer",
+    text: "This late result must not be delivered.",
+    state: "completed",
+  }, env);
+  await Promise.all([
+    completeTaskAgentFromMessage(taskAgent, lateResult, env, { deliver: false }),
+    finishTaskAgentTurn(taskAgent, { status: "completed" }, env, { deliver: false }),
+  ]);
+
+  const current = await getThread(taskAgent.id, env);
+  assert.equal(current.agentTaskStatus, "cancelled");
+  assert.equal((await listThreadMessages(parent.id, env)).length, 0);
+});
+
+test("task cancellation and result delivery cannot overwrite each other", async () => {
+  const env = await testEnv();
+  const parent = await createThread({ id: "cancel-race-parent", name: "Cancel Race Parent", cwd: path.dirname(env.ORKESTR_HOME) }, env);
+  const { taskAgent } = await createTaskAgent(parent.id, { task: "Race cancellation with completion." }, env);
+  const result = await appendThreadMessage(taskAgent.id, {
+    role: "assistant",
+    source: "codex-app-server",
+    phase: "final_answer",
+    text: "Late completion.",
+    state: "completed",
+  }, env);
+
+  await Promise.all([
+    cancelTaskAgent(taskAgent.id, env),
+    completeTaskAgentFromMessage(taskAgent, result, env, { deliver: false }),
+  ]);
+
+  const current = await getThread(taskAgent.id, env);
+  const parentResults = (await listThreadMessages(parent.id, env))
+    .filter((message) => message.source === "orkestr_task_agent_result");
+  assert.ok(["cancelled", "completed"].includes(current.agentTaskStatus));
+  assert.ok(parentResults.length <= 1);
+  assert.equal(parentResults.length === 1, current.agentTaskStatus === "completed");
+});
+
 test("public task agent profiles do not expose developer instructions", () => {
   const profiles = listTaskAgentProfiles();
   assert.equal(profiles.length, 1);
@@ -165,10 +250,21 @@ test("task agent API creates hidden child tasks and exposes their status", async
     const threadList = await fetch(`${baseUrl}/api/threads/summary`).then((response) => response.json());
 
     assert.equal(payload.taskAgent.profileId, "sre_engineer");
-    assert.equal(payload.taskAgent.status, "queued");
+    assert.equal(payload.taskAgent.status, "held");
     assert.equal(listed.taskAgents.length, 1);
     assert.equal(status.taskAgent.id, payload.taskAgent.id);
     assert.deepEqual(threadList.threads.map((thread) => thread.id), ["api-parent"]);
+
+    const cancelledResponse = await fetch(`${baseUrl}/api/task-agents/${encodeURIComponent(payload.taskAgent.threadId)}/cancel`, {
+      method: "POST",
+    });
+    const cancelled = await cancelledResponse.json();
+    assert.equal(cancelledResponse.status, 200, JSON.stringify(cancelled));
+    assert.equal(cancelled.taskAgent.id, payload.taskAgent.id);
+    assert.equal(cancelled.taskAgent.status, "cancelled");
+    const childMessages = await listThreadMessages(payload.taskAgent.threadId);
+    assert.equal(childMessages[0].state, "cancelled");
+    assert.equal(childMessages[0].deliveryState, "cancelled");
   } finally {
     await new Promise((resolve) => server.close(resolve));
     if (previousHome === undefined) delete process.env.ORKESTR_HOME;

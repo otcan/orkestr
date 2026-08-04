@@ -28,6 +28,8 @@ orkestr task-agent cancel <task-agent-thread>
 ```
 
 Use repeated `--context <reference>` flags to pass explicit context references.
+Use `--no-run` to create a durably held task that cannot be picked up by
+delivery recovery; it remains held until it is cancelled.
 Task-agent results are steered into an active parent turn or queued as the next
 parent turn when the parent is idle.
 
