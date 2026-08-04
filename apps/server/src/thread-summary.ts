@@ -354,12 +354,12 @@ function threadSummarySlowMs(): number {
 async function listThreadSummaryScope(principal: Record<string, any> | null, includeAllUserThreads: boolean) {
   const effectivePrincipal = principal || adminPrincipal(defaultAdminUser());
   if (includeAllUserThreads || !isAdminPrincipal(effectivePrincipal)) {
-    return listThreadsForPrincipal(effectivePrincipal);
+    return (await listThreadsForPrincipal(effectivePrincipal)).filter((thread: any) => thread.threadKind !== "task-agent");
   }
 
   const ownerUserId = normalizeUserId(effectivePrincipal.userId || defaultAdminUser().id);
   const threads = await listThreads();
-  return threads.filter((thread: any) => resourceOwnerUserId(thread) === ownerUserId);
+  return threads.filter((thread: any) => resourceOwnerUserId(thread) === ownerUserId && thread.threadKind !== "task-agent");
 }
 
 async function listThreadMessagesForSummary(threadId: string) {

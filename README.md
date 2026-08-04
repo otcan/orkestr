@@ -285,6 +285,7 @@ For a real Codex walkthrough that does require Codex sign-in, use
 
 - setup UI at `/setup`
 - named Codex threads with status, queue, stop, attach, and history
+- built-in specialist task agents that return scoped results to a parent Codex thread
 - Codex app-server based thread runtime for new coding threads
 - web UI and CLI control
 - optional built-in local WhatsApp bridge
@@ -379,6 +380,7 @@ See [docs/oss-managed-boundary.md](docs/oss-managed-boundary.md).
 ## Documentation Map
 
 - [User guide](docs/user-guide.md)
+- [Task agents](docs/task-agents.md)
 - [Framework and deployment](docs/framework-deployment.md)
 - [LLM-assisted release procedures](docs/llm-assisted-release-procedures.md)
 - [OSS vs managed boundary](docs/oss-managed-boundary.md)

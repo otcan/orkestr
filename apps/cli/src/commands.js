@@ -77,6 +77,7 @@ export async function runCli(argv = process.argv.slice(2), context = {}) {
     if (command === "thread") return await threadCommand(args, ctx);
     if (command === "create") return await createCommand(args, ctx);
     if (command === "worker") return await workerCommand(args, ctx);
+    if (command === "task-agent" || command === "task_agent") return await taskAgentCommand(args, ctx);
     if (command === "attach") return await attach(args, ctx);
     if (command === "send") return await send(args, ctx);
     if (command === "wake") return await postThreadAction("wake", args, ctx);
@@ -1766,6 +1767,57 @@ async function createWorkerCommand(argv, ctx) {
   return 0;
 }
 
+async function taskAgentCommand(argv, ctx) {
+  const subcommand = argv[0] || "";
+  if (subcommand === "profiles") {
+    const payload = await requestJson("/api/task-agent-profiles", ctx);
+    if (argv.includes("--json")) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+    else ctx.stdout.write(`${(payload.profiles || []).map((profile) => `${profile.id}\t${profile.description}`).join("\n")}\n`);
+    return 0;
+  }
+  if (subcommand === "spawn") {
+    const values = positional(argv.slice(1));
+    const parent = values[0];
+    const task = (flagValue(argv, "--task") || values.slice(1).join(" ")).trim();
+    if (!parent || !task) throw new Error("Usage: orkestr task-agent spawn <parent-thread> <task text> [--profile sre_engineer] [--context ref]... [--no-run] [--json]");
+    const body = {
+      profile: flagValue(argv, "--profile") || "sre_engineer",
+      task,
+      contextRefs: repeatedFlagValues(argv, ["--context"]),
+      autoRun: !argv.includes("--no-run"),
+    };
+    const payload = await requestJson(`/api/threads/${encodeURIComponent(parent)}/task-agents`, { ...ctx, method: "POST", body });
+    if (argv.includes("--json")) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+    else ctx.stdout.write(`Spawned ${payload.taskAgent?.profileId || body.profile} task ${payload.taskAgent?.threadId || payload.taskAgent?.id || ""}\n`);
+    return 0;
+  }
+  if (subcommand === "list") {
+    const parent = positional(argv.slice(1))[0];
+    if (!parent) throw new Error("Usage: orkestr task-agent list <parent-thread> [--json]");
+    const payload = await requestJson(`/api/threads/${encodeURIComponent(parent)}/task-agents`, ctx);
+    if (argv.includes("--json")) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+    else ctx.stdout.write(`${(payload.taskAgents || []).map((task) => `${task.threadId}\t${task.profileId}\t${task.status}\t${task.task}`).join("\n")}\n`);
+    return 0;
+  }
+  if (subcommand === "status") {
+    const taskAgentId = positional(argv.slice(1))[0];
+    if (!taskAgentId) throw new Error("Usage: orkestr task-agent status <task-agent-thread> [--json]");
+    const payload = await requestJson(`/api/task-agents/${encodeURIComponent(taskAgentId)}`, ctx);
+    if (argv.includes("--json")) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+    else ctx.stdout.write(`${payload.taskAgent?.status || "unknown"}\t${payload.taskAgent?.result?.text || ""}\n`);
+    return 0;
+  }
+  if (subcommand === "cancel") {
+    const taskAgentId = positional(argv.slice(1))[0];
+    if (!taskAgentId) throw new Error("Usage: orkestr task-agent cancel <task-agent-thread> [--json]");
+    const payload = await requestJson(`/api/task-agents/${encodeURIComponent(taskAgentId)}/cancel`, { ...ctx, method: "POST", body: {} });
+    if (argv.includes("--json")) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+    else ctx.stdout.write(`Cancelled ${payload.taskAgent?.threadId || taskAgentId}\n`);
+    return 0;
+  }
+  throw new Error("Usage: orkestr task-agent [profiles|spawn|list|status|cancel]");
+}
+
 async function attach(argv, ctx) {
   const printOnly = argv.includes("--print");
   const json = argv.includes("--json");
@@ -2029,6 +2081,9 @@ Advanced:
   orkestr vm-slice [list|status <slice-id>|provision <slice-id>|destroy <slice-id> [--execute]] [--json]
   orkestr thread create <name> [--id id] [--cwd path] [--command command] [--executor id] [--json]
   orkestr worker create <parent-thread> [task text] [--task text] [--blank] [--label label] [--repo path] [--branch branch] [--no-wake] [--json]
+  orkestr task-agent profiles [--json]
+  orkestr task-agent spawn <parent-thread> <task text> [--profile sre_engineer] [--context ref]... [--no-run] [--json]
+  orkestr task-agent [list <parent-thread>|status <task-agent-thread>|cancel <task-agent-thread>] [--json]
   orkestr sleep <legacy-tmux-thread-name-or-id> [--json]
 
 Environment:
@@ -2183,6 +2238,8 @@ function positional(argv) {
     "--limit",
     "--name",
     "--port",
+    "--profile",
+    "--context",
     "--phone",
     "--phone-number",
     "--repo",
@@ -2263,6 +2320,7 @@ function positional(argv) {
     "--no-picture",
     "--no-wa-admin",
     "--no-wake",
+    "--no-run",
     "--print",
     "--open",
     "--repair",

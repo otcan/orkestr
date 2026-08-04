@@ -579,6 +579,7 @@ export class CodexAppServerClient {
         if (thread) {
           await updateThread(thread.id, {
             state: "working",
+            ...(thread.threadKind === "task-agent" ? { agentTaskStatus: "working" } : {}),
             runtime: {
               ...(thread.runtime || {}),
               runtimeKind: "codex-app-server",
@@ -645,6 +646,12 @@ export class CodexAppServerClient {
           if (status === "failed") {
             await recordCodexRuntimeAuthFailureSignal({ thread, error: errorText, turnId }, this.env).catch(() => {});
           }
+          const { finishTaskAgentTurn } = await import("./task-agents.js");
+          await finishTaskAgentTurn(thread, {
+            status,
+            interrupted: codexTurnConversationInterrupted(turn),
+            error: errorText,
+          }, this.env).catch(() => {});
           await appendTurnLifecycleEvent(codexTurnConversationInterrupted(turn) ? "interrupted" : status === "failed" ? "failed" : "completed", {
             threadId: thread.id,
             runtimeKind: "codex-app-server",
@@ -829,6 +836,15 @@ export class CodexAppServerClient {
     if (!message?.coalescedUpdate) {
       notifyMessageHandler({ thread, message });
       markConnectorDeliverySignal(message);
+    }
+    if (finalAnswer) {
+      const { completeTaskAgentFromMessage } = await import("./task-agents.js");
+      await completeTaskAgentFromMessage(thread, message, this.env).catch((error) => appendEvent({
+        type: "task_agent_result_delivery_failed",
+        threadId: thread.id,
+        messageId: message.id,
+        error: publicError(error),
+      }, this.env).catch(() => {}));
     }
     const completedKey = finalAnswer ? this.turnParentKey(codexId, turnId) : "";
     if (completedKey) {

@@ -218,6 +218,27 @@ export const threadWorkerCreateSchema = {
   },
 };
 
+export const taskAgentCreateSchema = {
+  ...idParams("threadId"),
+  body: {
+    type: "object",
+    required: ["task"],
+    properties: {
+      profile: stringValue,
+      profileId: stringValue,
+      task: stringValue,
+      contextRefs: {
+        type: "array",
+        items: stringValue,
+        maxItems: 20,
+      },
+      reasoningEffort: stringValue,
+      autoRun: { type: "boolean" },
+    },
+    additionalProperties: false,
+  },
+};
+
 export const threadBindingUpdateSchema = {
   ...idParams("threadId"),
   body: {

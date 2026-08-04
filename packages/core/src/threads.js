@@ -217,6 +217,17 @@ export async function createThread(input = {}, env = process.env) {
     codexRateLimits: input.codexRateLimits || input.executor?.metadata?.codexRateLimits || null,
     parentThreadId: String(input.parentThreadId || "").trim() || null,
     rootThreadId: String(input.rootThreadId || input.parentThreadId || "").trim() || null,
+    threadKind: String(input.threadKind || "").trim() || null,
+    agentTaskId: String(input.agentTaskId || "").trim() || null,
+    agentProfileId: String(input.agentProfileId || "").trim() || null,
+    agentTaskStatus: String(input.agentTaskStatus || "").trim() || null,
+    agentTask: String(input.agentTask || "").trim() || null,
+    agentContextRefs: Array.isArray(input.agentContextRefs) ? input.agentContextRefs.map((value) => String(value || "").trim()).filter(Boolean) : [],
+    agentTaskPrompt: String(input.agentTaskPrompt || "").trim() || null,
+    agentTaskMessageId: String(input.agentTaskMessageId || "").trim() || null,
+    agentResultSourceMessageId: String(input.agentResultSourceMessageId || "").trim() || null,
+    agentParentResultMessageId: String(input.agentParentResultMessageId || "").trim() || null,
+    agentTaskCompletedAt: String(input.agentTaskCompletedAt || "").trim() || null,
     workerIndex: Number(input.workerIndex || 0) || null,
     workerLabel: String(input.workerLabel || "").trim() || null,
     workerStatus: String(input.workerStatus || "").trim() || null,
@@ -366,10 +377,11 @@ export async function deleteThread(threadId, options = {}, env = process.env) {
     throw error;
   }
   const childThreads = threads.filter((thread) => thread.parentThreadId === target.id || thread.rootThreadId === target.id);
-  if (childThreads.length && options.deleteWorkers !== true) {
+  const blockingChildren = childThreads.filter((thread) => thread.threadKind !== "task-agent");
+  if (blockingChildren.length && options.deleteWorkers !== true) {
     const error = new Error("thread_has_workers");
     error.statusCode = 409;
-    error.workerCount = childThreads.length;
+    error.workerCount = blockingChildren.length;
     throw error;
   }
   const deletedIds = descendantThreadIds(threads, [target.id]);
