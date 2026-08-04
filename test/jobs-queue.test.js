@@ -229,6 +229,35 @@ test("Gmail job signals can be recorded without WhatsApp delivery", async () => 
   assert.equal(whatsappCalls.length, 0);
 });
 
+test("Gmail polling retries a previously unclassified candidate on a later run", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-jobs-retry-new-"));
+  const env = { ORKESTR_HOME: home };
+  await createThread({ id: "jobs-retry-thread", name: "Jobs retry" }, env);
+  const message = {
+    id: "job-retry-1",
+    threadId: "gmail-thread-job-retry-1",
+    subject: "Platform Engineer at RetryCo",
+    from: "jobs@retryco.example",
+    snippet: "Remote platform role",
+    text: "Remote platform role https://jobs.example.com/retryco/platform",
+    internalDate: String(Date.parse("2026-06-30T10:00:00Z")),
+  };
+
+  const first = await processJobCandidateMessages({ threadId: "jobs-retry-thread", present: false }, [message], env, {
+    classifyImpl: async () => { throw new Error("temporary_classifier_failure"); },
+  });
+  const retry = await processJobCandidateMessages({ threadId: "jobs-retry-thread", present: false }, [message], env, {
+    classifyImpl: () => ({ fit_score: 8, role: "Platform Engineer", company: "RetryCo" }),
+  });
+  const queue = await listJobQueueForPrincipal(adminPrincipal(), env);
+
+  assert.equal(first.upserted.created.length, 1);
+  assert.equal(first.classified.classified[0].state, "new");
+  assert.equal(retry.upserted.created.length, 0);
+  assert.equal(retry.classified.classified.length, 1);
+  assert.equal(queue.counts.queued_fit, 1);
+});
+
 test("Gmail jobs poll rejects LinkedIn network suggestions", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-jobs-linkedin-network-"));
   const env = {

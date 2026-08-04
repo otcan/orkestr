@@ -57,6 +57,40 @@ test("CLI help exposes local service commands promised by the installer", async 
   assert.match(stdout.text(), /orkestr sanitizer check --action action --text text/);
   assert.match(stdout.text(), /orkestr vm-slice create <owner-user-id>/);
   assert.match(stdout.text(), /vm-slice \[list\|status <slice-id>\|provision <slice-id>\|destroy <slice-id>/);
+  assert.match(stdout.text(), /orkestr task-agent spawn <parent-thread>/);
+});
+
+test("CLI spawns a scoped specialist task agent", async () => {
+  const stdout = capture();
+  const seen = [];
+  const code = await runCli([
+    "--api", "http://orkestr.test",
+    "task-agent", "spawn", "parent-thread",
+    "--task", "Diagnose watcher restarts",
+    "--profile", "sre_engineer",
+    "--context", "watcher logs",
+    "--context", "release state",
+    "--no-run",
+    "--json",
+  ], {
+    stdout,
+    stderr: capture(),
+    fetchImpl: fakeFetch({
+      "POST /api/threads/parent-thread/task-agents": {
+        taskAgent: { id: "task-id", threadId: "task-thread", profileId: "sre_engineer", status: "queued" },
+      },
+    }, seen),
+  });
+
+  assert.equal(code, 0);
+  assert.equal(seen.length, 1);
+  assert.deepEqual(seen[0].body, {
+    profile: "sre_engineer",
+    task: "Diagnose watcher restarts",
+    contextRefs: ["watcher logs", "release state"],
+    autoRun: false,
+  });
+  assert.match(stdout.text(), /task-thread/);
 });
 
 test("CLI serve shutdown has a bounded force-exit fallback", async () => {

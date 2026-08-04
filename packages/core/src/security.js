@@ -700,6 +700,15 @@ function jobsJdCacheTokens(env = process.env) {
   ];
 }
 
+function jobAlertRelayTokens(env = process.env) {
+  return [
+    ...splitSecretList(env.ORKESTR_JOB_ALERT_RELAY_TOKEN),
+    ...splitSecretList(env.JOB_ALERT_RELAY_TOKEN),
+    ...splitSecretList(env.ORKESTR_JOB_ALERT_RELAY_TOKENS),
+    ...splitSecretList(env.JOB_ALERT_RELAY_TOKENS),
+  ];
+}
+
 function whatsappBridgeTokens(env = process.env) {
   return [
     ...splitSecretList(env.ORKESTR_WHATSAPP_BRIDGE_TOKEN),
@@ -756,6 +765,15 @@ function isJobsJdCacheMachineRoute(request) {
   return null;
 }
 
+function isJobAlertRelayMachineRoute(request) {
+  const method = String(request?.method || "GET").toUpperCase();
+  const url = String(request?.originalUrl || request?.url || "").split("?")[0];
+  if (method === "POST" && url === "/api/jobs/inbound-email") {
+    return { kind: "job_alert_relay", tokens: jobAlertRelayTokens, requiredScopes: ["jobs:ingest"] };
+  }
+  return null;
+}
+
 function whatsappMachineAuthFailure(route, reason, statusCode) {
   const error = reason === "scope_denied" ? "wa_token_scope_denied" : `${route.kind}_token_${reason}`;
   const safeMessage = reason === "unconfigured"
@@ -800,6 +818,30 @@ function jobsJdCacheMachineAuthFailure(route, reason, statusCode) {
       code: error,
       capability: "jobs_jd_cache",
       provider: "jobs_xrm",
+      userFacingCategory: "connector",
+      retryable: reason === "unconfigured",
+      safeMessage,
+      reason: error,
+    },
+  };
+}
+
+function jobAlertRelayMachineAuthFailure(route, reason, statusCode) {
+  const error = `${route.kind}_token_${reason}`;
+  const safeMessage = reason === "unconfigured"
+    ? "The target Orkestr instance has no job-alert relay token configured."
+    : reason === "required"
+      ? "The job-alert relay request did not include its bearer token."
+      : "The target Orkestr instance rejected the job-alert relay token.";
+  return {
+    ok: false,
+    statusCode,
+    error,
+    machineAuth: route.kind,
+    routingFailure: {
+      code: error,
+      capability: "job_alerts",
+      provider: "mail_relay",
       userFacingCategory: "connector",
       retryable: reason === "unconfigured",
       safeMessage,
@@ -926,6 +968,30 @@ async function authorizeJobsJdCacheMachineRequest(request, env = process.env) {
         maxResults: Number(env.ORKESTR_JOBS_JD_CACHE_MAX_RESULTS || env.JOBS_JD_CACHE_MAX_RESULTS || 100) || 100,
         enabled: true,
       },
+    },
+  };
+}
+
+function authorizeJobAlertRelayMachineRequest(request, env = process.env) {
+  const route = isJobAlertRelayMachineRoute(request);
+  if (!route) return null;
+  const token = bearerToken(request?.headers?.authorization || request?.headers?.Authorization || "");
+  const tokens = route.tokens(env);
+  if (!tokens.length) return jobAlertRelayMachineAuthFailure(route, "unconfigured", 503);
+  if (!token) return jobAlertRelayMachineAuthFailure(route, "required", 401);
+  if (!tokens.some((candidate) => timingSafeSecretEqual(token, candidate))) {
+    return jobAlertRelayMachineAuthFailure(route, "invalid", 401);
+  }
+  return {
+    ok: true,
+    principal: adminPrincipal(defaultAdminUser(env)),
+    machineAuth: route.kind,
+    machineAuthContext: {
+      tokenId: "configured-job-alert-relay-token",
+      routeKind: route.kind,
+      scopes: route.requiredScopes,
+      principalKind: "mail_relay",
+      principalId: "configured-job-alert-relay-token",
     },
   };
 }
@@ -1701,6 +1767,16 @@ export async function authorizeHttpRequest(request, env = process.env) {
     machineAuthContext: jobsJdCacheAuth.machineAuthContext || null,
   };
   if (jobsJdCacheAuth && status.authEnabled) return { ...jobsJdCacheAuth, status };
+  const jobAlertRelayAuth = authorizeJobAlertRelayMachineRequest(request, env);
+  if (jobAlertRelayAuth?.ok) return {
+    ok: true,
+    status,
+    principal: jobAlertRelayAuth.principal,
+    machineAuth: jobAlertRelayAuth.machineAuth,
+    machineAuthContext: jobAlertRelayAuth.machineAuthContext || null,
+  };
+  // Mail relays are an ingress boundary even for a local, unpaired install.
+  if (jobAlertRelayAuth) return { ...jobAlertRelayAuth, status };
   if (!status.authEnabled) return { ok: true, status, principal: adminPrincipal(defaultAdminUser(env)) };
   const session = await securitySessionForRequest(request, env);
   if (session) {

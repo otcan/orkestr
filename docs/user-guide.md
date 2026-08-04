@@ -141,7 +141,13 @@ users' data. Send the URL, password, and synthetic-account instructions only
 through the existing Google review thread. See [Google Workspace OAuth
 verification prep](google-workspace-oauth-verification.md).
 
-Once granted, Orkestr exposes these Google Workspace workflows in chat:
+For public job applications and LinkedIn outreach, use **Jobs** instead of a
+mailbox-read or Calendar OAuth flow. It creates a private alert address for the
+thread, keeps drafts in Orkestr, uses normal thread timers for follow-up, and
+prepares `.ics` or Google Calendar prefill links for the user to confirm. See
+[Job Application And Outreach Workflow](job-application-workflow.md).
+
+Once granted, Orkestr exposes these optional Google Workspace workflows in chat:
 
 - Prepare a Gmail draft without sending it.
 - Send a prepared draft only after explicit approval of that send.

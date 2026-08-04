@@ -108,6 +108,12 @@ Orkestr capabilities:
   \`orkestr wake <thread>\`, \`orkestr reset <thread>\`, and
   \`orkestr safe-reset <thread>\` for a fresh Codex session after a broken
   app-server session. \`orkestr sleep\` is only for legacy tmux runtimes.
+- Specialist tasks: use \`orkestr task-agent spawn <parent-thread> "<task>" --profile sre_engineer\`
+  when a bounded read-only operational investigation would help. The child has
+  no WhatsApp route or Git worktree; its structured result is steered back into
+  the parent Codex thread automatically. Use \`orkestr task-agent list
+  <parent-thread>\` and \`orkestr task-agent cancel <task-agent-thread>\` for
+  lifecycle control.
 - Browser pairing/security: \`orkestr security challenges\`,
   \`orkestr security approve <challenge-id>\`, \`orkestr security reject
   <challenge-id>\`, and \`orkestr security sessions\`. If the user asks to

@@ -5,6 +5,7 @@ import {
   ThreadInputService,
   ThreadRepoService,
   ThreadRuntimeService,
+  ThreadTaskAgentService,
   ThreadWorkerService,
 } from "./thread-application.services.js";
 import { ThreadTimersController } from "./thread-timers.controller.js";
@@ -13,15 +14,17 @@ import { ThreadMessagesController } from "./thread-messages.controller.js";
 import { ThreadRuntimeController } from "./thread-runtime.controller.js";
 import { ThreadBindingController } from "./thread-binding.controller.js";
 import { ThreadsController } from "./threads.controller.js";
+import { ThreadTaskAgentsController } from "./thread-task-agents.controller.js";
 
 @Module({
-  controllers: [ThreadsController, ThreadRuntimeController, ThreadBindingController, ThreadWorkersController, ThreadTimersController, ThreadMessagesController],
+  controllers: [ThreadsController, ThreadRuntimeController, ThreadBindingController, ThreadWorkersController, ThreadTaskAgentsController, ThreadTimersController, ThreadMessagesController],
   providers: [
     ThreadBindingService,
     ThreadActionSanitizerService,
     ThreadInputService,
     ThreadRepoService,
     ThreadRuntimeService,
+    ThreadTaskAgentService,
     ThreadWorkerService,
   ],
 })

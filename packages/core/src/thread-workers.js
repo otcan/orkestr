@@ -855,7 +855,7 @@ function handoffPrompt(parent, worker, input = {}) {
 
 async function workerIndexFor(parentId, env = process.env) {
   const threads = await listThreads(env);
-  return threads.filter((thread) => thread.parentThreadId === parentId).length + 1;
+  return threads.filter((thread) => thread.parentThreadId === parentId && thread.threadKind !== "task-agent").length + 1;
 }
 
 export async function listThreadWorkers(parentThreadId, env = process.env) {
@@ -863,7 +863,7 @@ export async function listThreadWorkers(parentThreadId, env = process.env) {
   if (!parent) throw httpError("thread_not_found", 404);
   const threads = await listThreads(env);
   return threads
-    .filter((thread) => thread.parentThreadId === parent.id)
+    .filter((thread) => thread.parentThreadId === parent.id && thread.threadKind !== "task-agent")
     .sort((a, b) => Number(a.workerIndex || 0) - Number(b.workerIndex || 0) || String(a.createdAt || "").localeCompare(String(b.createdAt || "")));
 }
 
@@ -913,6 +913,7 @@ export async function createThreadWorker(parentThreadId, input = {}, env = proce
     const metadata = {
       parentThreadId: parent.id,
       rootThreadId: rootId,
+      threadKind: "worker",
       workerIndex,
       workerLabel,
       repoPath,
@@ -947,6 +948,7 @@ export async function createThreadWorker(parentThreadId, input = {}, env = proce
       codexServiceTier: parent.codexServiceTier || parent.executor?.metadata?.codexServiceTier || null,
       parentThreadId: parent.id,
       rootThreadId: rootId,
+      threadKind: "worker",
       workerIndex,
       workerLabel,
       workerStatus: "created",

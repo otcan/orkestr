@@ -70,6 +70,9 @@ export function sanitizedThreadActionInput(input: Record<string, unknown> = {}):
   const scalarKeys = [
     "text",
     "prompt",
+    "task",
+    "profile",
+    "profileId",
     "promptFile",
     "source",
     "reason",
@@ -99,7 +102,7 @@ export function sanitizedThreadActionInput(input: Record<string, unknown> = {}):
   const result: Record<string, unknown> = {};
   for (const key of scalarKeys) {
     if (!hasOwn(input, key)) continue;
-    result[key] = String(input[key] || "").slice(0, key === "text" || key === "prompt" ? 8000 : 500);
+    result[key] = String(input[key] || "").slice(0, key === "text" || key === "prompt" || key === "task" ? 8000 : 500);
   }
   for (const key of ["wake", "start", "deleteWorkers", "mirrorToWhatsApp", "suppressWhatsAppUpdates", "suppressWhatsAppDebugFooter", "enabled", "allowOtherPeople"]) {
     if (hasOwn(input, key)) result[key] = Boolean(input[key]);
@@ -110,7 +113,7 @@ export function sanitizedThreadActionInput(input: Record<string, unknown> = {}):
   if (Array.isArray(input.files)) {
     result.files = input.files.map(sanitizerFileMeta);
   }
-  for (const key of ["ownerContactIds", "ownerContactAliases", "authorizedContactIds", "authorizedContactAliases", "additionalParticipantIds"]) {
+  for (const key of ["ownerContactIds", "ownerContactAliases", "authorizedContactIds", "authorizedContactAliases", "additionalParticipantIds", "contextRefs"]) {
     if (Array.isArray(input[key])) result[key] = input[key].map((value) => String(value || "").slice(0, 500)).filter(Boolean);
   }
   return result;

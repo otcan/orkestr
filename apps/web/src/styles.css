@@ -2987,6 +2987,68 @@ ork-first-thread-wizard.first-thread-host {
   grid-template-columns: minmax(160px, 220px) minmax(0, 1fr) 150px 180px auto;
 }
 
+.jobs-section {
+  display: grid;
+  gap: 10px;
+  margin-top: 22px;
+  padding-top: 18px;
+  border-top: 1px solid rgba(119, 205, 126, 0.16);
+}
+
+.jobs-section-head {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.jobs-section-head h4 {
+  margin: 3px 0 0;
+}
+
+.jobs-section-head select {
+  width: min(100%, 280px);
+}
+
+.jobs-section > p {
+  margin: 0;
+  color: rgba(235, 255, 230, 0.74);
+}
+
+.jobs-route-row code {
+  display: block;
+  margin-top: 5px;
+  overflow-wrap: anywhere;
+  color: #b9ffb1;
+}
+
+.jobs-draft-editor,
+.jobs-calendar-editor {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  gap: 10px;
+}
+
+.jobs-draft-editor textarea,
+.jobs-calendar-editor textarea {
+  grid-column: 1 / -1;
+}
+
+.jobs-draft-row p {
+  max-width: 780px;
+  margin-bottom: 0;
+  white-space: pre-wrap;
+}
+
+.jobs-calendar-editor input:first-child,
+.jobs-calendar-editor textarea {
+  grid-column: span 2;
+}
+
+.jobs-calendar-actions {
+  align-items: center;
+}
+
 .timer-actions {
   display: flex;
   align-items: center;

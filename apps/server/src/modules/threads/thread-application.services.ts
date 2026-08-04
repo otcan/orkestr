@@ -11,6 +11,7 @@ import {
   updateThread,
 } from "../../../../../packages/core/src/threads.js";
 import { createThreadWorker, detectThreadRepo, listThreadWorkers, refreshThreadGitState, syncThreadWorkerWithParent, updateThreadRepo } from "../../../../../packages/core/src/thread-workers.js";
+import { cancelTaskAgent, createTaskAgent, listTaskAgents, taskAgentSummary } from "../../../../../packages/core/src/task-agents.js";
 import { userScopedCapabilityHints } from "../../../../../packages/core/src/user-skills.js";
 import { sanitizedThreadActionInput } from "./thread-route-helpers.js";
 
@@ -71,6 +72,25 @@ export class ThreadWorkerService {
 
   refreshGitState(threadId: string) {
     return refreshThreadGitState(threadId);
+  }
+}
+
+@Injectable()
+export class ThreadTaskAgentService {
+  async list(threadId: string) {
+    return Promise.all((await listTaskAgents(threadId)).map((thread) => taskAgentSummary(thread)));
+  }
+
+  create(threadId: string, body: Record<string, unknown>) {
+    return createTaskAgent(threadId, body);
+  }
+
+  summary(thread: any) {
+    return taskAgentSummary(thread);
+  }
+
+  async cancel(threadId: string) {
+    return taskAgentSummary(await cancelTaskAgent(threadId));
   }
 }
 

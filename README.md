@@ -22,6 +22,13 @@ oXRM is the first workflow app built around the same model: an MCP-first
 relationship workspace that gives agents structured relationship memory,
 follow-up queues, and safe human-approved actions.
 
+For job applications and LinkedIn outreach, Orkestr can create a private
+job-alert address per thread, turn incoming alerts into passive Jobs signals,
+keep outbound drafts locally, and prepare calendar files or Google Calendar
+prefill links. This workflow does not require Gmail inbox read, Gmail drafts,
+or Google Calendar API access. See [Job Application And Outreach
+Workflow](docs/job-application-workflow.md).
+
 > Public alpha. The Docker/Helm path is the primary OSS demo path. Browser
 > pairing gates remote access; do not expose raw Orkestr API, thread, desktop,
 > or terminal routes directly to the public internet.
@@ -285,6 +292,7 @@ For a real Codex walkthrough that does require Codex sign-in, use
 
 - setup UI at `/setup`
 - named Codex threads with status, queue, stop, attach, and history
+- built-in specialist task agents that return scoped results to a parent Codex thread
 - Codex app-server based thread runtime for new coding threads
 - web UI and CLI control
 - optional built-in local WhatsApp bridge
@@ -379,6 +387,7 @@ See [docs/oss-managed-boundary.md](docs/oss-managed-boundary.md).
 ## Documentation Map
 
 - [User guide](docs/user-guide.md)
+- [Task agents](docs/task-agents.md)
 - [Framework and deployment](docs/framework-deployment.md)
 - [LLM-assisted release procedures](docs/llm-assisted-release-procedures.md)
 - [OSS vs managed boundary](docs/oss-managed-boundary.md)

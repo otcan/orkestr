@@ -20,6 +20,7 @@ import {
   updateThreadMessage,
 } from "./threads.js";
 import { defaultRuntimeSettings } from "./runtime-settings.js";
+import { taskAgentDeveloperInstructions } from "./task-agent-profiles.js";
 
 export const appServerTransports = new Set(["app-server", "codex-app-server"]);
 export const tmuxTransports = new Set(["tmux", "legacy", "codex-tmux"]);
@@ -288,10 +289,12 @@ export function threadUsesRestrictedCodexPolicy(thread = {}, env = process.env) 
 }
 
 export function codexSandboxForThread(thread = {}, env = process.env) {
+  const explicit = clean(thread.codexSandbox || thread.executor?.metadata?.codexSandbox);
+  if (clean(thread.threadKind) === "task-agent" && explicit) return explicit;
   if (threadUsesRestrictedCodexPolicy(thread, env)) return "workspace-write";
   const configured = defaultRuntimeSettings(env).codex || {};
   if (configured.bypassApprovalsAndSandbox === true) return "danger-full-access";
-  const requested = clean(thread.codexSandbox || thread.executor?.metadata?.codexSandbox || configured.sandbox || "workspace-write") || "workspace-write";
+  const requested = clean(explicit || configured.sandbox || "workspace-write") || "workspace-write";
   return requested;
 }
 
@@ -325,10 +328,12 @@ export function sandboxPolicyForTurn(thread, env = process.env) {
 }
 
 export function approvalPolicyForThread(thread, env = process.env) {
+  const explicit = clean(thread.codexApprovalPolicy || thread.executor?.metadata?.codexApprovalPolicy);
+  if (clean(thread.threadKind) === "task-agent" && explicit) return explicit;
   if (threadUsesRestrictedCodexPolicy(thread, env)) return "never";
   const configured = defaultRuntimeSettings(env).codex || {};
   if (configured.bypassApprovalsAndSandbox === true) return "never";
-  const requested = clean(thread.codexApprovalPolicy || thread.executor?.metadata?.codexApprovalPolicy || configured.approvalPolicy || "on-request") || "on-request";
+  const requested = clean(explicit || configured.approvalPolicy || "on-request") || "on-request";
   return requested;
 }
 
@@ -436,7 +441,10 @@ export function threadStartParams(thread, env = process.env) {
     sandbox: codexSandboxForThread(thread, env),
     serviceName: "orkestr_oss",
   };
-  const developerInstructions = containedUserDeveloperInstructions(thread, env);
+  const developerInstructions = [
+    containedUserDeveloperInstructions(thread, env),
+    taskAgentDeveloperInstructions(thread),
+  ].filter(Boolean).join("\n\n");
   if (developerInstructions) params.developerInstructions = developerInstructions;
   const model = modelForThread(thread, env);
   const serviceTier = serviceTierForThread(thread);

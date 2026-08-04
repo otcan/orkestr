@@ -1704,7 +1704,7 @@ test("web shell switches to a constrained non-admin user mode", async () => {
   assert.match(component, /uiRuntimeReady\(\): boolean/);
   assert.match(component, /uiRuntimeReady\(\): boolean\s*\{\s*return true;/);
   assert.match(component, /panelAllowedForCurrentUser\(panel: Panel\): boolean/);
-  assert.match(component, /\["chat", "history", "delivery", "timers", "files", "userTimers", "userDesk", "userConnectors"\]\.includes\(panel\)/);
+  assert.match(component, /\["chat", "history", "delivery", "timers", "files", "userTimers", "userDesk", "userJobs", "userConnectors"\]\.includes\(panel\)/);
   assert.match(component, /normalizeUserModeView\(\)/);
   assert.match(component, /isUserNavPanelActive\(panel: Panel\): boolean/);
   assert.match(component, /isRouteLevelUserPanel\(panel: Panel\): boolean/);
