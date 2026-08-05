@@ -66,6 +66,38 @@ test("twilio voice incoming returns German speech gather TwiML with escaped assi
   assert.doesNotMatch(result.twiml, /Account owner's <assistant>/);
 });
 
+test("twilio voice incoming can use configured bilingual prompt messages", async () => {
+  const env = await voiceEnv();
+  const principal = adminPrincipal("admin");
+  await setSecureSecret({
+    scope: "user",
+    ownerUserId: "admin",
+    name: "twilio_voice_intro_message",
+    value: "Hallo, hier ist der Telefonassistent von Example Owner. Bitte nennen Sie Ihren Namen und den Grund Ihres Anrufs.",
+  }, principal, env);
+  await setSecureSecret({
+    scope: "user",
+    ownerUserId: "admin",
+    name: "twilio_voice_intro_message_en",
+    value: "Hello, this is Example Owner's phone assistant. Please say your name and why you are calling.",
+  }, principal, env);
+  await setSecureSecret({
+    scope: "user",
+    ownerUserId: "admin",
+    name: "twilio_voice_english_language",
+    value: "en-US",
+  }, principal, env);
+
+  const result = await twilioVoiceIncomingResponse("voice-token", {}, env);
+
+  assert.equal(result.ok, true);
+  assert.match(result.twiml, /Telefonassistent von Example Owner/);
+  assert.match(result.twiml, /language="en-US"/);
+  assert.match(result.twiml, /Example Owner&apos;s phone assistant/);
+  assert.match(result.twiml, /<Gather input="speech"/);
+  assert.match(result.twiml, /language="de-DE"/);
+});
+
 test("twilio voice invalid webhook token is rejected without exposing config", async () => {
   const env = await voiceEnv();
   const result = await twilioVoiceIncomingResponse("wrong-token", {}, env);

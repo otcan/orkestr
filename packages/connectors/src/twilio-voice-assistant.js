@@ -52,6 +52,12 @@ function normalizeVoiceMode(value = "") {
   return "twilio_native";
 }
 
+function normalizeOptionalLanguage(value = "") {
+  const text = clean(value);
+  if (!text) return "";
+  return /^[a-z]{2}(?:-[A-Z]{2})?$/.test(text) ? text : "";
+}
+
 function positiveInteger(value, fallback, max = 240) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed < 0) return fallback;
@@ -134,6 +140,24 @@ export async function twilioVoiceAssistantConfig(options = {}, env = process.env
     await resolveConfigSecret("twilio/voice-calle-region", ["twilio_voice_calle_region", "twilio-voice-calle-region"], { ownerUserId }, env) ||
     "DE",
   );
+  const introMessage = sanitizeText(
+    options.introMessage ||
+    envFirst(env, ["ORKESTR_TWILIO_VOICE_INTRO_MESSAGE", "TWILIO_VOICE_INTRO_MESSAGE"]) ||
+    await resolveConfigSecret("twilio/voice-intro-message", ["twilio_voice_intro_message", "twilio-voice-intro-message"], { ownerUserId }, env),
+    2000,
+  );
+  const introMessageEnglish = sanitizeText(
+    options.introMessageEnglish ||
+    options.introMessageEn ||
+    envFirst(env, ["ORKESTR_TWILIO_VOICE_INTRO_MESSAGE_EN", "TWILIO_VOICE_INTRO_MESSAGE_EN"]) ||
+    await resolveConfigSecret("twilio/voice-intro-message-en", ["twilio_voice_intro_message_en", "twilio-voice-intro-message-en"], { ownerUserId }, env),
+    2000,
+  );
+  const englishLanguage = normalizeOptionalLanguage(
+    options.englishLanguage ||
+    envFirst(env, ["ORKESTR_TWILIO_VOICE_ENGLISH_LANGUAGE", "TWILIO_VOICE_ENGLISH_LANGUAGE"]) ||
+    await resolveConfigSecret("twilio/voice-english-language", ["twilio_voice_english_language", "twilio-voice-english-language"], { ownerUserId }, env),
+  ) || "en-US";
   return {
     ownerUserId,
     mode,
@@ -141,7 +165,10 @@ export async function twilioVoiceAssistantConfig(options = {}, env = process.env
     summaryTo,
     assistantLabel,
     language: normalizeLanguage(options.language || envFirst(env, ["ORKESTR_TWILIO_VOICE_LANGUAGE", "TWILIO_VOICE_LANGUAGE"])),
+    englishLanguage,
     publicBaseUrl: publicBaseUrl || publicBaseUrlFromInput(options, env),
+    introMessage,
+    introMessageEnglish,
     calleGoal,
     calleLanguage,
     calleRegion,
@@ -167,11 +194,17 @@ function twimlResponse(inner = "") {
 export function twilioVoiceIncomingTwiml(config = {}) {
   const urls = twilioVoiceWebhookUrls(config);
   const language = normalizeLanguage(config.language);
+  const englishLanguage = normalizeOptionalLanguage(config.englishLanguage) || "en-US";
   const label = clean(config.assistantLabel) || "Orkestr assistant";
-  const prompt = `Hallo, hier ist ${label}. Die gewünschte Person ist gerade nicht direkt am Telefon. Sagen Sie mir bitte kurz Ihren Namen, warum Sie anrufen, und wie sie Sie erreichen kann. Ich notiere Ihre Nachricht.`;
+  const prompt = sanitizeText(config.introMessage, 2000) || `Hallo, hier ist ${label}. Die gewünschte Person ist gerade nicht direkt am Telefon. Sagen Sie mir bitte kurz Ihren Namen, warum Sie anrufen, und wie sie Sie erreichen kann. Ich notiere Ihre Nachricht.`;
+  const englishPrompt = sanitizeText(config.introMessageEnglish, 2000);
+  const sayPrompts = [
+    `<Say language="${xmlEscape(language)}">${xmlEscape(prompt)}</Say>`,
+    englishPrompt ? `<Say language="${xmlEscape(englishLanguage)}">${xmlEscape(englishPrompt)}</Say>` : "",
+  ].filter(Boolean).join("");
   return twimlResponse([
     `<Gather input="speech" action="${xmlEscape(urls.gather)}" method="POST" language="${xmlEscape(language)}" speechTimeout="auto" timeout="12" actionOnEmptyResult="true">`,
-    `<Say language="${xmlEscape(language)}">${xmlEscape(prompt)}</Say>`,
+    sayPrompts,
     "</Gather>",
     `<Say language="${xmlEscape(language)}">Danke. Ich habe den Anruf notiert.</Say>`,
   ].join(""));

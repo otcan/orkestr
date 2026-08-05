@@ -27,6 +27,9 @@ function parseArgs(argv = []) {
     calleGoal: "",
     calleLanguage: "",
     calleRegion: "",
+    introMessage: "",
+    introMessageEnglish: "",
+    englishLanguage: "",
   };
   for (let index = 1; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -44,6 +47,9 @@ function parseArgs(argv = []) {
     else if (arg === "--calle-goal") options.calleGoal = clean(argv[++index]);
     else if (arg === "--calle-language") options.calleLanguage = clean(argv[++index]);
     else if (arg === "--calle-region") options.calleRegion = clean(argv[++index]);
+    else if (arg === "--intro-message") options.introMessage = clean(argv[++index]);
+    else if (arg === "--intro-message-en" || arg === "--intro-message-english") options.introMessageEnglish = clean(argv[++index]);
+    else if (arg === "--english-language") options.englishLanguage = clean(argv[++index]);
     else if (arg === "--help" || arg === "-h") options.help = true;
     else throw new Error(`unknown_arg:${arg}`);
   }
@@ -54,7 +60,7 @@ function usage() {
   return [
     "Usage:",
     "  node scripts/twilio-voice-assistant.mjs status [--user admin] [--public-url URL] [--json]",
-    "  node scripts/twilio-voice-assistant.mjs configure-secrets --summary-to EMAIL --public-url URL [--assistant-label TEXT] [--mode twilio-native|calle-callback] [--calle-goal TEXT] [--webhook-token TOKEN] [--user admin] [--json]",
+    "  node scripts/twilio-voice-assistant.mjs configure-secrets --summary-to EMAIL --public-url URL [--assistant-label TEXT] [--mode twilio-native|calle-callback] [--intro-message TEXT] [--intro-message-en TEXT] [--calle-goal TEXT] [--webhook-token TOKEN] [--user admin] [--json]",
     "  node scripts/twilio-voice-assistant.mjs search-de [--page-size 10] [--region Berlin] [--json]",
     "  node scripts/twilio-voice-assistant.mjs buy-number --phone-number +49... --public-url URL --yes [--user admin] [--json]",
     "  node scripts/twilio-voice-assistant.mjs configure-number --phone-number +49... --public-url URL --yes [--user admin] [--json]",
@@ -101,6 +107,9 @@ async function status(options = {}, env = process.env) {
       summaryTo: Boolean(config.summaryTo),
       publicBaseUrl: Boolean(config.publicBaseUrl),
       assistantLabel: Boolean(config.assistantLabel),
+      introMessage: Boolean(config.introMessage),
+      introMessageEnglish: Boolean(config.introMessageEnglish),
+      englishLanguage: Boolean(config.englishLanguage),
       calleGoal: Boolean(config.calleGoal),
       calleLanguage: Boolean(config.calleLanguage),
       calleRegion: Boolean(config.calleRegion),
@@ -135,6 +144,15 @@ async function configureSecrets(options = {}, env = process.env) {
   if (clean(options.calleRegion)) {
     writes.push(await setSecureSecret({ scope: "user", ownerUserId: userId, name: "twilio_voice_calle_region", value: options.calleRegion }, principal, env));
   }
+  if (clean(options.introMessage)) {
+    writes.push(await setSecureSecret({ scope: "user", ownerUserId: userId, name: "twilio_voice_intro_message", value: options.introMessage }, principal, env));
+  }
+  if (clean(options.introMessageEnglish)) {
+    writes.push(await setSecureSecret({ scope: "user", ownerUserId: userId, name: "twilio_voice_intro_message_en", value: options.introMessageEnglish }, principal, env));
+  }
+  if (clean(options.englishLanguage)) {
+    writes.push(await setSecureSecret({ scope: "user", ownerUserId: userId, name: "twilio_voice_english_language", value: options.englishLanguage }, principal, env));
+  }
   const config = await twilioVoiceAssistantConfig({
     userId,
     publicBaseUrl: options.publicUrl,
@@ -145,6 +163,9 @@ async function configureSecrets(options = {}, env = process.env) {
     calleGoal: options.calleGoal,
     calleLanguage: options.calleLanguage,
     calleRegion: options.calleRegion,
+    introMessage: options.introMessage,
+    introMessageEnglish: options.introMessageEnglish,
+    englishLanguage: options.englishLanguage,
   }, env);
   return {
     ok: true,
