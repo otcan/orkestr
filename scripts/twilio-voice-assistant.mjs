@@ -23,6 +23,10 @@ function parseArgs(argv = []) {
     webhookToken: "",
     phoneNumber: "",
     region: "",
+    mode: "",
+    calleGoal: "",
+    calleLanguage: "",
+    calleRegion: "",
   };
   for (let index = 1; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -36,6 +40,10 @@ function parseArgs(argv = []) {
     else if (arg === "--webhook-token") options.webhookToken = clean(argv[++index]);
     else if (arg === "--phone-number" || arg === "--number") options.phoneNumber = clean(argv[++index]);
     else if (arg === "--region") options.region = clean(argv[++index]);
+    else if (arg === "--mode") options.mode = clean(argv[++index]);
+    else if (arg === "--calle-goal") options.calleGoal = clean(argv[++index]);
+    else if (arg === "--calle-language") options.calleLanguage = clean(argv[++index]);
+    else if (arg === "--calle-region") options.calleRegion = clean(argv[++index]);
     else if (arg === "--help" || arg === "-h") options.help = true;
     else throw new Error(`unknown_arg:${arg}`);
   }
@@ -46,7 +54,7 @@ function usage() {
   return [
     "Usage:",
     "  node scripts/twilio-voice-assistant.mjs status [--user admin] [--public-url URL] [--json]",
-    "  node scripts/twilio-voice-assistant.mjs configure-secrets --summary-to EMAIL --public-url URL [--assistant-label TEXT] [--webhook-token TOKEN] [--user admin] [--json]",
+    "  node scripts/twilio-voice-assistant.mjs configure-secrets --summary-to EMAIL --public-url URL [--assistant-label TEXT] [--mode twilio-native|calle-callback] [--calle-goal TEXT] [--webhook-token TOKEN] [--user admin] [--json]",
     "  node scripts/twilio-voice-assistant.mjs search-de [--page-size 10] [--region Berlin] [--json]",
     "  node scripts/twilio-voice-assistant.mjs buy-number --phone-number +49... --public-url URL --yes [--user admin] [--json]",
     "  node scripts/twilio-voice-assistant.mjs configure-number --phone-number +49... --public-url URL --yes [--user admin] [--json]",
@@ -87,11 +95,15 @@ async function status(options = {}, env = process.env) {
     ok: Boolean(config.webhookToken && config.summaryTo && config.publicBaseUrl),
     mode: "status",
     userId: config.ownerUserId,
+    voiceMode: config.mode,
     configured: {
       webhookToken: Boolean(config.webhookToken),
       summaryTo: Boolean(config.summaryTo),
       publicBaseUrl: Boolean(config.publicBaseUrl),
       assistantLabel: Boolean(config.assistantLabel),
+      calleGoal: Boolean(config.calleGoal),
+      calleLanguage: Boolean(config.calleLanguage),
+      calleRegion: Boolean(config.calleRegion),
     },
     urls: config.webhookToken && config.publicBaseUrl ? publicWebhookUrls(config) : null,
   };
@@ -111,12 +123,28 @@ async function configureSecrets(options = {}, env = process.env) {
   if (clean(options.assistantLabel)) {
     writes.push(await setSecureSecret({ scope: "user", ownerUserId: userId, name: "twilio_voice_assistant_label", value: options.assistantLabel }, principal, env));
   }
+  if (clean(options.mode)) {
+    writes.push(await setSecureSecret({ scope: "user", ownerUserId: userId, name: "twilio_voice_mode", value: options.mode }, principal, env));
+  }
+  if (clean(options.calleGoal)) {
+    writes.push(await setSecureSecret({ scope: "user", ownerUserId: userId, name: "twilio_voice_calle_goal", value: options.calleGoal }, principal, env));
+  }
+  if (clean(options.calleLanguage)) {
+    writes.push(await setSecureSecret({ scope: "user", ownerUserId: userId, name: "twilio_voice_calle_language", value: options.calleLanguage }, principal, env));
+  }
+  if (clean(options.calleRegion)) {
+    writes.push(await setSecureSecret({ scope: "user", ownerUserId: userId, name: "twilio_voice_calle_region", value: options.calleRegion }, principal, env));
+  }
   const config = await twilioVoiceAssistantConfig({
     userId,
     publicBaseUrl: options.publicUrl,
     webhookToken: token,
     summaryTo: options.summaryTo,
     assistantLabel: options.assistantLabel,
+    mode: options.mode,
+    calleGoal: options.calleGoal,
+    calleLanguage: options.calleLanguage,
+    calleRegion: options.calleRegion,
   }, env);
   return {
     ok: true,
@@ -124,6 +152,7 @@ async function configureSecrets(options = {}, env = process.env) {
     userId,
     secrets: writes.map((item) => item.secret?.handle).filter(Boolean),
     urls: publicWebhookUrls(config),
+    voiceMode: config.mode,
   };
 }
 

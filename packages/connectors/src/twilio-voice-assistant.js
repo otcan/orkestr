@@ -4,6 +4,7 @@ import { adminPrincipal } from "../../core/src/principal.js";
 import { resolveSecureSecretValue } from "../../core/src/secure-secrets.js";
 import { adminUserId, normalizeUserId } from "../../core/src/users.js";
 import { appendEvent } from "../../storage/src/store.js";
+import { enqueueTwilioCalleCallback } from "./calle-callback.js";
 
 function clean(value = "") {
   return String(value || "").trim();
@@ -39,6 +40,32 @@ function normalizeToken(value = "") {
 
 function sanitizeLine(value = "") {
   return String(value || "").replace(/\u0000/g, "").replace(/\s+/g, " ").trim().slice(0, 1000);
+}
+
+function sanitizeText(value = "", max = 4000) {
+  return String(value || "").replace(/\u0000/g, "").trim().slice(0, max);
+}
+
+function normalizeVoiceMode(value = "") {
+  const text = clean(value).toLowerCase().replace(/[\s-]+/g, "_");
+  if (["calle", "call_e", "call_e_callback", "calle_callback"].includes(text)) return "calle_callback";
+  return "twilio_native";
+}
+
+function positiveInteger(value, fallback, max = 240) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0) return fallback;
+  return Math.min(max, Math.floor(parsed));
+}
+
+function defaultCalleGoal(label = "Orkestr assistant") {
+  return [
+    `You are ${label}, the account owner's CALL-E phone assistant.`,
+    "Call the person back in German.",
+    "Briefly explain that you are the account owner's assistant, ask for their name, why they called, urgency, and the best way for the account owner to respond.",
+    "Be warm, concise, and practical. Do not pretend to be the account owner. Do not collect sensitive secrets or payment details.",
+    "At the end, summarize the next action clearly so Orkestr can email the account owner a useful call summary.",
+  ].join(" ");
 }
 
 function publicBaseUrlFromInput(input = {}, env = process.env) {
@@ -84,13 +111,42 @@ export async function twilioVoiceAssistantConfig(options = {}, env = process.env
     await resolveConfigSecret("twilio/voice-assistant-label", ["twilio_voice_assistant_label", "twilio-voice-assistant-label"], { ownerUserId }, env) ||
     "Orkestr assistant",
   );
+  const mode = normalizeVoiceMode(
+    options.mode ||
+    envFirst(env, ["ORKESTR_TWILIO_VOICE_MODE", "TWILIO_VOICE_MODE"]) ||
+    await resolveConfigSecret("twilio/voice-mode", ["twilio_voice_mode", "twilio-voice-mode"], { ownerUserId }, env),
+  );
+  const calleGoal = sanitizeText(
+    options.calleGoal ||
+    envFirst(env, ["ORKESTR_TWILIO_VOICE_CALLE_GOAL", "TWILIO_VOICE_CALLE_GOAL"]) ||
+    await resolveConfigSecret("twilio/voice-calle-goal", ["twilio_voice_calle_goal", "twilio-voice-calle-goal"], { ownerUserId }, env) ||
+    defaultCalleGoal(assistantLabel),
+  );
+  const calleLanguage = sanitizeLine(
+    options.calleLanguage ||
+    envFirst(env, ["ORKESTR_TWILIO_VOICE_CALLE_LANGUAGE", "TWILIO_VOICE_CALLE_LANGUAGE"]) ||
+    await resolveConfigSecret("twilio/voice-calle-language", ["twilio_voice_calle_language", "twilio-voice-calle-language"], { ownerUserId }, env) ||
+    "German",
+  );
+  const calleRegion = sanitizeLine(
+    options.calleRegion ||
+    envFirst(env, ["ORKESTR_TWILIO_VOICE_CALLE_REGION", "TWILIO_VOICE_CALLE_REGION"]) ||
+    await resolveConfigSecret("twilio/voice-calle-region", ["twilio_voice_calle_region", "twilio-voice-calle-region"], { ownerUserId }, env) ||
+    "DE",
+  );
   return {
     ownerUserId,
+    mode,
     webhookToken,
     summaryTo,
     assistantLabel,
     language: normalizeLanguage(options.language || envFirst(env, ["ORKESTR_TWILIO_VOICE_LANGUAGE", "TWILIO_VOICE_LANGUAGE"])),
     publicBaseUrl: publicBaseUrl || publicBaseUrlFromInput(options, env),
+    calleGoal,
+    calleLanguage,
+    calleRegion,
+    calleMaxPolls: positiveInteger(options.calleMaxPolls ?? envFirst(env, ["ORKESTR_TWILIO_VOICE_CALLE_MAX_POLLS", "TWILIO_VOICE_CALLE_MAX_POLLS"]), 90),
+    callePollIntervalMs: positiveInteger(options.callePollIntervalMs ?? envFirst(env, ["ORKESTR_TWILIO_VOICE_CALLE_POLL_INTERVAL_MS", "TWILIO_VOICE_CALLE_POLL_INTERVAL_MS"]), 10_000, 60_000),
   };
 }
 
@@ -112,7 +168,7 @@ export function twilioVoiceIncomingTwiml(config = {}) {
   const urls = twilioVoiceWebhookUrls(config);
   const language = normalizeLanguage(config.language);
   const label = clean(config.assistantLabel) || "Orkestr assistant";
-  const prompt = `Hallo, hier ist ${label}. Can ist gerade nicht direkt am Telefon. Sagen Sie mir bitte kurz Ihren Namen, warum Sie anrufen, und wie Can Sie erreichen kann. Ich notiere Ihre Nachricht.`;
+  const prompt = `Hallo, hier ist ${label}. Die gewünschte Person ist gerade nicht direkt am Telefon. Sagen Sie mir bitte kurz Ihren Namen, warum Sie anrufen, und wie sie Sie erreichen kann. Ich notiere Ihre Nachricht.`;
   return twimlResponse([
     `<Gather input="speech" action="${xmlEscape(urls.gather)}" method="POST" language="${xmlEscape(language)}" speechTimeout="auto" timeout="12" actionOnEmptyResult="true">`,
     `<Say language="${xmlEscape(language)}">${xmlEscape(prompt)}</Say>`,
@@ -136,6 +192,20 @@ function twilioVoiceUnavailableTwiml(config = {}) {
   return twimlResponse(
     `<Say language="${xmlEscape(language)}">Der Assistent ist gerade nicht erreichbar. Bitte versuchen Sie es später erneut.</Say>`,
   );
+}
+
+function twilioVoiceCalleCallbackTwiml(config = {}, callback = {}) {
+  const language = normalizeLanguage(config.language);
+  const label = clean(config.assistantLabel) || "Orkestr assistant";
+  const message = callback?.record?.reason === "caller_phone_not_callable"
+    ? `Hallo, hier ist ${label}. Der CALL-E Assistent kann Sie ohne erkannte Telefonnummer gerade nicht zurückrufen. Bitte schreiben Sie der gewünschten Person kurz per Nachricht.`
+    : callback?.duplicate
+      ? `Hallo, hier ist ${label}. Der CALL-E Assistent wurde für diesen Anruf bereits gestartet. Sie erhalten gleich einen Rückruf.`
+      : `Hallo, hier ist ${label}. Mein CALL-E Assistent ruft Sie gleich zurück und nimmt Ihr Anliegen auf. Bitte nehmen Sie den Rückruf an.`;
+  return twimlResponse([
+    `<Say language="${xmlEscape(language)}">${xmlEscape(message)}</Say>`,
+    "<Hangup/>",
+  ].join(""));
 }
 
 export async function verifyTwilioVoiceWebhookToken(token = "", options = {}, env = process.env) {
@@ -208,6 +278,10 @@ export async function twilioVoiceIncomingResponse(token = "", options = {}, env 
       error: verified.error,
       twiml: twilioVoiceUnavailableTwiml(verified.config || {}),
     };
+  }
+  if (verified.config.mode === "calle_callback") {
+    const callback = await enqueueTwilioCalleCallback(options.body || options.input || options.twilioBody || {}, verified.config, env, options);
+    return { ok: true, twiml: twilioVoiceCalleCallbackTwiml(verified.config, callback), config: verified.config, callback };
   }
   return { ok: true, twiml: twilioVoiceIncomingTwiml(verified.config), config: verified.config };
 }

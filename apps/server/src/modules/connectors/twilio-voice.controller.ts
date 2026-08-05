@@ -21,8 +21,8 @@ function sendTwiMl(response: any, statusCode: number, twiml: string): void {
 export class TwilioVoiceController {
   @Post(":token/incoming")
   @HttpCode(200)
-  async incoming(@Req() request: any, @Res() response: any, @Param("token") token: string) {
-    const result = await twilioVoiceIncomingResponse(token, requestOptions(request));
+  async incoming(@Req() request: any, @Res() response: any, @Param("token") token: string, @Body() body: Record<string, unknown> = {}) {
+    const result = await twilioVoiceIncomingResponse(token, { ...requestOptions(request), body });
     sendTwiMl(response, result.ok ? 200 : Number(result.statusCode || 503), result.twiml || "");
   }
 
