@@ -56,8 +56,12 @@ test("twilio voice incoming returns German speech gather TwiML with escaped assi
   assert.match(result.twiml, /^<\?xml version="1\.0" encoding="UTF-8"\?><Response>/);
   assert.match(result.twiml, /<Gather input="speech"/);
   assert.match(result.twiml, /language="de-DE"/);
+  assert.match(result.twiml, /timeout="12"/);
+  assert.match(result.twiml, /actionOnEmptyResult="true"/);
   assert.match(result.twiml, /https:\/\/voice\.example\.test\/api\/connectors\/twilio\/voice\/voice-token\/gather/);
   assert.match(result.twiml, /Can&apos;s &lt;assistant&gt;/);
+  assert.match(result.twiml, /Can ist gerade nicht direkt am Telefon/);
+  assert.doesNotMatch(result.twiml, /Ich habe leider nichts gehört/);
   assert.doesNotMatch(result.twiml, /Can's <assistant>/);
 });
 
@@ -90,4 +94,21 @@ test("twilio voice gather creates an Orkestr email draft from speech input", asy
   assert.match(drafts.drafts[0].body, /contract renewal tomorrow/);
   assert.match(drafts.drafts[0].body, /Speech confidence: 0\.92/);
   assert.match(result.twiml, /Danke/);
+});
+
+test("twilio voice gather creates a missed-call draft when no speech is captured", async () => {
+  const env = await voiceEnv();
+  const config = await twilioVoiceAssistantConfig({}, env);
+  const result = await createTwilioVoiceSummaryDraft({
+    From: "+491701234567",
+    To: "+49301234567",
+    CallSid: "CA-silent-1",
+  }, config, env);
+  const drafts = await listOrkestrMailDraftsForPrincipal(adminPrincipal("admin"), {}, env);
+
+  assert.equal(result.ok, true);
+  assert.equal(drafts.drafts.length, 1);
+  assert.match(drafts.drafts[0].subject, /Missed assistant call/);
+  assert.match(drafts.drafts[0].body, /No speech was captured/);
+  assert.match(result.twiml, /nicht sicher verstehen/);
 });

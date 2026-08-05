@@ -112,19 +112,22 @@ export function twilioVoiceIncomingTwiml(config = {}) {
   const urls = twilioVoiceWebhookUrls(config);
   const language = normalizeLanguage(config.language);
   const label = clean(config.assistantLabel) || "Orkestr assistant";
-  const prompt = `Hallo, hier ist ${label}. Bitte sagen Sie kurz, warum Sie anrufen. Ich fasse die Nachricht per E-Mail zusammen.`;
+  const prompt = `Hallo, hier ist ${label}. Can ist gerade nicht direkt am Telefon. Sagen Sie mir bitte kurz Ihren Namen, warum Sie anrufen, und wie Can Sie erreichen kann. Ich notiere Ihre Nachricht.`;
   return twimlResponse([
-    `<Gather input="speech" action="${xmlEscape(urls.gather)}" method="POST" language="${xmlEscape(language)}" speechTimeout="auto" timeout="5">`,
+    `<Gather input="speech" action="${xmlEscape(urls.gather)}" method="POST" language="${xmlEscape(language)}" speechTimeout="auto" timeout="12" actionOnEmptyResult="true">`,
     `<Say language="${xmlEscape(language)}">${xmlEscape(prompt)}</Say>`,
     "</Gather>",
-    `<Say language="${xmlEscape(language)}">Ich habe leider nichts gehört. Bitte rufen Sie später erneut an.</Say>`,
+    `<Say language="${xmlEscape(language)}">Danke. Ich habe den Anruf notiert.</Say>`,
   ].join(""));
 }
 
-function twilioVoiceThanksTwiml(config = {}) {
+function twilioVoiceThanksTwiml(config = {}, options = {}) {
   const language = normalizeLanguage(config.language);
+  const message = options.hasSpeech
+    ? "Danke. Ich habe Ihre Nachricht aufgenommen und leite die Zusammenfassung weiter."
+    : "Danke. Ich konnte Ihre Nachricht nicht sicher verstehen, aber ich habe den Anruf notiert und leite ihn weiter.";
   return twimlResponse(
-    `<Say language="${xmlEscape(language)}">Danke. Ich habe Ihre Nachricht aufgenommen und fasse sie weiter.</Say>`,
+    `<Say language="${xmlEscape(language)}">${xmlEscape(message)}</Say>`,
   );
 }
 
@@ -157,8 +160,9 @@ export async function createTwilioVoiceSummaryDraft(input = {}, options = {}, en
   const callSid = sanitizeLine(input.CallSid || input.callSid || `call-${randomUUID()}`);
   const confidence = sanitizeLine(input.Confidence || input.confidence);
   const now = new Date().toISOString();
-  const reason = speech || "No speech was captured.";
-  const subject = `Call summary: ${caller}`;
+  const hasSpeech = Boolean(speech);
+  const reason = speech || "No speech was captured. The caller may have stayed silent, spoken before capture began, or Twilio speech recognition may not have understood the audio.";
+  const subject = hasSpeech ? `Call summary: ${caller}` : `Missed assistant call: ${caller}`;
   const body = [
     "A caller reached your Twilio assistant line.",
     "",
@@ -168,7 +172,7 @@ export async function createTwilioVoiceSummaryDraft(input = {}, options = {}, en
     `Time: ${now}`,
     confidence ? `Speech confidence: ${confidence}` : "",
     "",
-    "Caller message:",
+    hasSpeech ? "Caller message:" : "Captured message:",
     reason,
     "",
     "Suggested next step:",
@@ -186,12 +190,12 @@ export async function createTwilioVoiceSummaryDraft(input = {}, options = {}, en
     ownerUserId: config.ownerUserId,
     draftId: draftResult.draft.id,
     callSid,
-    hasSpeech: Boolean(speech),
+    hasSpeech,
   }, env).catch(() => {});
   return {
     ok: true,
     draft: draftResult.draft,
-    twiml: twilioVoiceThanksTwiml(config),
+    twiml: twilioVoiceThanksTwiml(config, { hasSpeech }),
   };
 }
 
