@@ -26,6 +26,7 @@
     "e2e:whatsapp-demo-onboarding": "node scripts/real-wa-demo-onboarding.mjs",
     "web:build": "ng build web",
     "smoke": "node scripts/smoke.mjs",
+    "smoke:twilio": "node scripts/twilio-smoke.mjs",
     "smoke:public-domain": "bash scripts/smoke-public-domain.sh",
     "smoke:public-kubevirt": "bash scripts/migrate-public-kubevirt.sh smoke",
     "smoke:vps:aws": "bash scripts/smoke-vps-aws.sh",
