@@ -27,6 +27,7 @@ function parseArgs(argv = []) {
     calleGoal: "",
     calleLanguage: "",
     calleRegion: "",
+    calleLiveStreamUrl: "",
     introMessage: "",
     introMessageEnglish: "",
     englishLanguage: "",
@@ -47,6 +48,7 @@ function parseArgs(argv = []) {
     else if (arg === "--calle-goal") options.calleGoal = clean(argv[++index]);
     else if (arg === "--calle-language") options.calleLanguage = clean(argv[++index]);
     else if (arg === "--calle-region") options.calleRegion = clean(argv[++index]);
+    else if (arg === "--calle-live-stream-url") options.calleLiveStreamUrl = clean(argv[++index]);
     else if (arg === "--intro-message") options.introMessage = clean(argv[++index]);
     else if (arg === "--intro-message-en" || arg === "--intro-message-english") options.introMessageEnglish = clean(argv[++index]);
     else if (arg === "--english-language") options.englishLanguage = clean(argv[++index]);
@@ -60,7 +62,7 @@ function usage() {
   return [
     "Usage:",
     "  node scripts/twilio-voice-assistant.mjs status [--user admin] [--public-url URL] [--json]",
-    "  node scripts/twilio-voice-assistant.mjs configure-secrets --summary-to EMAIL --public-url URL [--assistant-label TEXT] [--mode twilio-native|calle-callback] [--intro-message TEXT] [--intro-message-en TEXT] [--calle-goal TEXT] [--webhook-token TOKEN] [--user admin] [--json]",
+    "  node scripts/twilio-voice-assistant.mjs configure-secrets --summary-to EMAIL --public-url URL [--assistant-label TEXT] [--mode twilio-native|calle-callback|calle-live] [--intro-message TEXT] [--intro-message-en TEXT] [--calle-goal TEXT] [--calle-live-stream-url WSS_URL] [--webhook-token TOKEN] [--user admin] [--json]",
     "  node scripts/twilio-voice-assistant.mjs search-de [--page-size 10] [--region Berlin] [--json]",
     "  node scripts/twilio-voice-assistant.mjs buy-number --phone-number +49... --public-url URL --yes [--user admin] [--json]",
     "  node scripts/twilio-voice-assistant.mjs configure-number --phone-number +49... --public-url URL --yes [--user admin] [--json]",
@@ -97,11 +99,17 @@ async function status(options = {}, env = process.env) {
     userId: options.userId,
     publicBaseUrl: options.publicUrl,
   }, env);
+  const baseReady = Boolean(config.webhookToken && config.summaryTo && config.publicBaseUrl);
+  const modeReady = config.mode !== "calle_live" || Boolean(config.calleLiveStreamUrl);
   return {
-    ok: Boolean(config.webhookToken && config.summaryTo && config.publicBaseUrl),
+    ok: Boolean(baseReady && modeReady),
     mode: "status",
     userId: config.ownerUserId,
     voiceMode: config.mode,
+    errors: [
+      !baseReady ? "twilio_voice_base_config_incomplete" : "",
+      config.mode === "calle_live" && !config.calleLiveStreamUrl ? "twilio_voice_calle_live_stream_url_missing" : "",
+    ].filter(Boolean),
     configured: {
       webhookToken: Boolean(config.webhookToken),
       summaryTo: Boolean(config.summaryTo),
@@ -113,6 +121,7 @@ async function status(options = {}, env = process.env) {
       calleGoal: Boolean(config.calleGoal),
       calleLanguage: Boolean(config.calleLanguage),
       calleRegion: Boolean(config.calleRegion),
+      calleLiveStreamUrl: Boolean(config.calleLiveStreamUrl),
     },
     urls: config.webhookToken && config.publicBaseUrl ? publicWebhookUrls(config) : null,
   };
@@ -144,6 +153,9 @@ async function configureSecrets(options = {}, env = process.env) {
   if (clean(options.calleRegion)) {
     writes.push(await setSecureSecret({ scope: "user", ownerUserId: userId, name: "twilio_voice_calle_region", value: options.calleRegion }, principal, env));
   }
+  if (clean(options.calleLiveStreamUrl)) {
+    writes.push(await setSecureSecret({ scope: "user", ownerUserId: userId, name: "twilio_voice_calle_live_stream_url", value: options.calleLiveStreamUrl }, principal, env));
+  }
   if (clean(options.introMessage)) {
     writes.push(await setSecureSecret({ scope: "user", ownerUserId: userId, name: "twilio_voice_intro_message", value: options.introMessage }, principal, env));
   }
@@ -163,6 +175,7 @@ async function configureSecrets(options = {}, env = process.env) {
     calleGoal: options.calleGoal,
     calleLanguage: options.calleLanguage,
     calleRegion: options.calleRegion,
+    calleLiveStreamUrl: options.calleLiveStreamUrl,
     introMessage: options.introMessage,
     introMessageEnglish: options.introMessageEnglish,
     englishLanguage: options.englishLanguage,

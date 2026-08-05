@@ -49,6 +49,7 @@ function sanitizeText(value = "", max = 4000) {
 function normalizeVoiceMode(value = "") {
   const text = clean(value).toLowerCase().replace(/[\s-]+/g, "_");
   if (["calle", "call_e", "call_e_callback", "calle_callback"].includes(text)) return "calle_callback";
+  if (["calle_live", "call_e_live", "live_calle", "live_call_e"].includes(text)) return "calle_live";
   return "twilio_native";
 }
 
@@ -62,6 +63,18 @@ function positiveInteger(value, fallback, max = 240) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed < 0) return fallback;
   return Math.min(max, Math.floor(parsed));
+}
+
+function normalizeCalleLiveStreamUrl(value = "") {
+  const text = clean(value);
+  if (!text) return "";
+  try {
+    const parsed = new URL(text);
+    if (parsed.protocol !== "wss:") return "";
+    return parsed.toString();
+  } catch {
+    return "";
+  }
 }
 
 function defaultCalleGoal(label = "Orkestr assistant") {
@@ -140,6 +153,11 @@ export async function twilioVoiceAssistantConfig(options = {}, env = process.env
     await resolveConfigSecret("twilio/voice-calle-region", ["twilio_voice_calle_region", "twilio-voice-calle-region"], { ownerUserId }, env) ||
     "DE",
   );
+  const calleLiveStreamUrl = normalizeCalleLiveStreamUrl(
+    options.calleLiveStreamUrl ||
+    envFirst(env, ["ORKESTR_TWILIO_VOICE_CALLE_LIVE_STREAM_URL", "TWILIO_VOICE_CALLE_LIVE_STREAM_URL"]) ||
+    await resolveConfigSecret("twilio/voice-calle-live-stream-url", ["twilio_voice_calle_live_stream_url", "twilio-voice-calle-live-stream-url"], { ownerUserId }, env),
+  );
   const introMessage = sanitizeText(
     options.introMessage ||
     envFirst(env, ["ORKESTR_TWILIO_VOICE_INTRO_MESSAGE", "TWILIO_VOICE_INTRO_MESSAGE"]) ||
@@ -172,6 +190,7 @@ export async function twilioVoiceAssistantConfig(options = {}, env = process.env
     calleGoal,
     calleLanguage,
     calleRegion,
+    calleLiveStreamUrl,
     calleMaxPolls: positiveInteger(options.calleMaxPolls ?? envFirst(env, ["ORKESTR_TWILIO_VOICE_CALLE_MAX_POLLS", "TWILIO_VOICE_CALLE_MAX_POLLS"]), 90),
     callePollIntervalMs: positiveInteger(options.callePollIntervalMs ?? envFirst(env, ["ORKESTR_TWILIO_VOICE_CALLE_POLL_INTERVAL_MS", "TWILIO_VOICE_CALLE_POLL_INTERVAL_MS"]), 10_000, 60_000),
   };
@@ -208,6 +227,42 @@ export function twilioVoiceIncomingTwiml(config = {}) {
     "</Gather>",
     `<Say language="${xmlEscape(language)}">Danke. Ich habe den Anruf notiert.</Say>`,
   ].join(""));
+}
+
+function twilioVoiceCalleLiveTwiml(config = {}, input = {}) {
+  const language = normalizeLanguage(config.language);
+  const streamUrl = normalizeCalleLiveStreamUrl(config.calleLiveStreamUrl);
+  if (!streamUrl) return twilioVoiceCalleLiveUnavailableTwiml(config);
+  const label = clean(config.assistantLabel) || "Orkestr assistant";
+  const callSid = sanitizeLine(input.CallSid || input.callSid || input.CallUUID || input.callUuid);
+  const caller = sanitizeLine(input.From || input.from || input.Caller || input.caller);
+  const called = sanitizeLine(input.To || input.to || input.Called || input.called);
+  const parameters = [
+    ["owner_user_id", config.ownerUserId],
+    ["assistant_label", label],
+    ["call_sid", callSid],
+    ["caller", caller],
+    ["called", called],
+    ["language", config.calleLanguage],
+    ["region", config.calleRegion],
+    ["goal", config.calleGoal],
+  ].filter(([, value]) => clean(value));
+  return twimlResponse([
+    `<Say language="${xmlEscape(language)}">Einen Moment bitte. Ich verbinde Sie jetzt mit dem Live-Assistenten.</Say>`,
+    "<Connect>",
+    `<Stream url="${xmlEscape(streamUrl)}">`,
+    ...parameters.map(([name, value]) => `<Parameter name="${xmlEscape(name)}" value="${xmlEscape(sanitizeText(value, 500))}"/>`),
+    "</Stream>",
+    "</Connect>",
+    `<Say language="${xmlEscape(language)}">Der Live-Assistent wurde beendet. Vielen Dank.</Say>`,
+  ].join(""));
+}
+
+function twilioVoiceCalleLiveUnavailableTwiml(config = {}) {
+  const language = normalizeLanguage(config.language);
+  return twimlResponse(
+    `<Say language="${xmlEscape(language)}">Der CALL-E Live-Assistent ist noch nicht verbunden. Bitte versuchen Sie es später erneut.</Say><Hangup/>`,
+  );
 }
 
 function twilioVoiceThanksTwiml(config = {}, options = {}) {
@@ -315,6 +370,23 @@ export async function twilioVoiceIncomingResponse(token = "", options = {}, env 
   if (verified.config.mode === "calle_callback") {
     const callback = await enqueueTwilioCalleCallback(options.body || options.input || options.twilioBody || {}, verified.config, env, options);
     return { ok: true, twiml: twilioVoiceCalleCallbackTwiml(verified.config, callback), config: verified.config, callback };
+  }
+  if (verified.config.mode === "calle_live") {
+    const input = options.body || options.input || options.twilioBody || {};
+    if (!verified.config.calleLiveStreamUrl) {
+      await appendEvent({
+        type: "twilio_voice_calle_live_stream_missing",
+        ownerUserId: verified.config.ownerUserId,
+        callSid: sanitizeLine(input.CallSid || input.callSid || input.CallUUID || input.callUuid) || null,
+      }, env).catch(() => {});
+      return {
+        ok: true,
+        error: "twilio_voice_calle_live_stream_url_missing",
+        twiml: twilioVoiceCalleLiveUnavailableTwiml(verified.config),
+        config: verified.config,
+      };
+    }
+    return { ok: true, twiml: twilioVoiceCalleLiveTwiml(verified.config, input), config: verified.config };
   }
   return { ok: true, twiml: twilioVoiceIncomingTwiml(verified.config), config: verified.config };
 }
