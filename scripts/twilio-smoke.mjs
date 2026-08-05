@@ -55,14 +55,14 @@ function usage() {
   ].join("\n");
 }
 
-function redactSid(value = "") {
+export function redactSid(value = "") {
   const text = clean(value);
   if (!text) return "";
   if (text.length <= 8) return "[redacted]";
   return `${text.slice(0, 4)}...${text.slice(-4)}`;
 }
 
-function redactPhoneNumber(value = "") {
+export function redactPhoneNumber(value = "") {
   const text = clean(value);
   if (!text) return "";
   if (text.length <= 4) return "[redacted]";
@@ -98,7 +98,7 @@ async function resolveCredential(name, options = {}, env = process.env) {
   return { value: "", source: "" };
 }
 
-async function loadCredentials(options = {}, env = process.env) {
+export async function loadCredentials(options = {}, env = process.env) {
   const entries = await Promise.all(Object.keys(credentialSpecs).map(async (name) => [
     name,
     await resolveCredential(name, options, env),
@@ -124,22 +124,24 @@ async function loadCredentials(options = {}, env = process.env) {
   };
 }
 
-function twilioAuthHeader(credentials = {}) {
+export function twilioAuthHeader(credentials = {}) {
   const token = Buffer.from(`${credentials.apiKeySid}:${credentials.apiKeySecret}`, "utf8").toString("base64");
   return `Basic ${token}`;
 }
 
-async function twilioGet(route, credentials = {}, options = {}, deps = {}) {
+export async function twilioRequest(method, route, credentials = {}, options = {}, deps = {}) {
   const apiBase = clean(options.apiBase) || DEFAULT_API_BASE;
   const fetchImpl = deps.fetchImpl || globalThis.fetch;
   if (typeof fetchImpl !== "function") throw new Error("fetch_unavailable");
   const url = new URL(route, apiBase);
   const response = await fetchImpl(url, {
-    method: "GET",
+    method,
     headers: {
       authorization: twilioAuthHeader(credentials),
       accept: "application/json",
+      ...(options.body ? { "content-type": "application/x-www-form-urlencoded" } : {}),
     },
+    ...(options.body ? { body: options.body } : {}),
   });
   const bodyText = await response.text();
   let body = {};
@@ -159,6 +161,10 @@ async function twilioGet(route, credentials = {}, options = {}, deps = {}) {
     throw error;
   }
   return body;
+}
+
+export async function twilioGet(route, credentials = {}, options = {}, deps = {}) {
+  return twilioRequest("GET", route, credentials, options, deps);
 }
 
 function publicSource(source = "") {

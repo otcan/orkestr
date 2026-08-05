@@ -1718,6 +1718,7 @@ function isAllowedBeforePairing(request) {
   if (method === "POST" && /^\/api\/broker\/instances\/[^/]+\/whatsapp\/(?:onboarding|history)$/.test(url)) return true;
   if (method === "POST" && /^\/api\/broker\/instances\/[^/]+\/google-workspace\/(?:connect-link|refresh-token)$/.test(url)) return true;
   if (method === "POST" && url === "/api/broker/google-workspace/grants") return true;
+  if (method === "POST" && /^\/api\/connectors\/twilio\/voice\/[^/]+\/(?:incoming|gather)$/.test(url)) return true;
   if (method === "GET" && url === "/api/connectors/whatsapp/bridge/repair") return true;
   if (method === "POST" && url === "/api/connectors/whatsapp/bridge/repair/send-email") return true;
   if (method === "GET" && /^\/api\/setup\/security\/challenges\/[^/]+$/.test(url)) return true;
