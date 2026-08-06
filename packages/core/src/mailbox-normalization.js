@@ -121,11 +121,39 @@ function normalizeVerification(input = {}) {
   const source = input.verification && typeof input.verification === "object" && !Array.isArray(input.verification)
     ? input.verification
     : {};
+  const candidates = Array.isArray(source.lastCandidates || source.candidates)
+    ? (source.lastCandidates || source.candidates)
+    : [];
   return {
+    state: cleanLower(source.state || input.verificationState || (source.verifiedAt || input.verifiedAt ? "verified" : "")),
     provider: cleanLower(source.provider || input.verificationProvider || ""),
     requestedAt: clean(source.requestedAt || input.verificationRequestedAt),
     verifiedAt: clean(source.verifiedAt || input.verifiedAt),
+    lastCandidateAt: clean(source.lastCandidateAt || input.verificationLastCandidateAt),
+    lastCandidates: candidates.slice(0, 5).map((candidate) => {
+      const item = candidate && typeof candidate === "object" && !Array.isArray(candidate) ? candidate : {};
+      return {
+        type: cleanLower(item.type || ""),
+        value: clean(item.value || "").slice(0, 80),
+        href: clean(item.href || "").slice(0, 600),
+      };
+    }).filter((candidate) => candidate.type && (candidate.value || candidate.href)),
+    attemptCount: Math.max(0, Math.floor(Number(source.attemptCount || input.verificationAttemptCount || 0) || 0)),
     lastError: clean(source.lastError || input.verificationLastError).slice(0, 500),
+  };
+}
+
+function normalizeLifecycle(input = {}) {
+  const source = input.lifecycle && typeof input.lifecycle === "object" && !Array.isArray(input.lifecycle)
+    ? input.lifecycle
+    : {};
+  return {
+    state: cleanLower(source.state || input.lifecycleState || "ready"),
+    mtaRevision: clean(source.mtaRevision || input.mtaRevision),
+    propagationState: cleanLower(source.propagationState || input.propagationState || "pending"),
+    propagationStartedAt: clean(source.propagationStartedAt || input.propagationStartedAt),
+    propagationCompletedAt: clean(source.propagationCompletedAt || input.propagationCompletedAt),
+    lastError: clean(source.lastError || input.lifecycleLastError).slice(0, 500),
   };
 }
 
@@ -159,6 +187,7 @@ export function normalizeMailbox(input = {}, env = process.env) {
     targetSelection: normalizeTargetSelection(input.targetSelection || input.targetResolution || {}),
     source: cleanLower(input.source || "admin"),
     verification: normalizeVerification(input),
+    lifecycle: normalizeLifecycle(input),
     limits: normalizeLimits(input, env),
     createdAt: clean(input.createdAt) || now,
     updatedAt: clean(input.updatedAt) || now,
@@ -197,6 +226,7 @@ export function publicMailbox(mailbox = {}, env = process.env) {
     targetSelection: { ...normalized.targetSelection },
     source: normalized.source,
     verification: { ...normalized.verification },
+    lifecycle: { ...normalized.lifecycle },
     limits: { ...normalized.limits },
     createdAt: normalized.createdAt,
     updatedAt: normalized.updatedAt,
@@ -299,10 +329,10 @@ export function extractForwardingVerificationCandidates(input = {}) {
     seen.add(key);
     candidates.push(candidate);
   };
-  for (const match of source.matchAll(/\b(?:confirmation|forwarding|verification)\s+(?:code|number)[:\s#-]*([a-z0-9-]{6,32})\b/gi)) {
+  for (const match of source.matchAll(/\b(?:confirmation|forwarding|verification)\s+(?:code|number)[^\S\r\n]*(?:[:#-][^\S\r\n]*)?([a-z0-9-]{6,32})\b/gi)) {
     add({ type: "code", value: clean(match[1]).slice(0, 32) });
   }
-  for (const match of source.matchAll(/\bcode[:\s#-]+([a-z0-9-]{6,32})\b/gi)) {
+  for (const match of source.matchAll(/\bcode\s*[:#-]\s*([a-z0-9-]{6,32})\b/gi)) {
     add({ type: "code", value: clean(match[1]).slice(0, 32) });
   }
   for (const match of source.matchAll(/https:\/\/(?:mail-settings\.google\.com|accounts\.google\.com|outlook\.office\.com|outlook\.live\.com)\/[^\s<>"']{1,500}/gi)) {

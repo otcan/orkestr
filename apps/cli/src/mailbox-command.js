@@ -5,6 +5,7 @@ function positional(argv) {
   const flagsWithValues = new Set([
     "--address",
     "--id",
+    "--idempotency-key",
     "--label",
     "--limit",
     "--local-part",
@@ -15,6 +16,8 @@ function positional(argv) {
     "--owner-user-id",
     "--purpose",
     "--reason",
+    "--recipient",
+    "--request-id",
     "--state",
     "--status",
     "--suffix",
@@ -22,8 +25,14 @@ function positional(argv) {
     "--tenant-vm",
     "--tenant-vm-id",
     "--title",
+    "--to",
     "--type",
     "--user-id",
+    "--from",
+    "--message-id",
+    "--provider",
+    "--subject",
+    "--text",
     "--vm",
   ]);
   for (let index = 0; index < argv.length; index += 1) {
@@ -65,10 +74,51 @@ function mailboxCreateBody(argv = []) {
     ["--tenant-vm-id", "tenantVmId"],
     ["--vm", "tenantVmId"],
     ["--reason", "overrideReason"],
+    ["--idempotency-key", "idempotencyKey"],
   ]) {
     const value = flagValue(argv, flag);
     if (value) body[key] = value;
   }
+  return body;
+}
+
+function mailboxActionBody(argv = []) {
+  const body = {};
+  for (const [flag, key] of [
+    ["--idempotency-key", "idempotencyKey"],
+    ["--request-id", "requestId"],
+    ["--provider", "provider"],
+    ["--state", "state"],
+    ["--status", "status"],
+    ["--suffix", "suffix"],
+    ["--reason", "overrideReason"],
+  ]) {
+    const value = flagValue(argv, flag);
+    if (value) body[key] = value;
+  }
+  if (argv.includes("--confirm")) body.confirm = true;
+  return body;
+}
+
+function mailboxIngestBody(argv = []) {
+  const body = {
+    mailboxId: flagValue(argv, "--mailbox") || flagValue(argv, "--mailbox-id") || "",
+    recipient: flagValue(argv, "--recipient") || flagValue(argv, "--to") || "",
+    headers: {
+      messageId: flagValue(argv, "--message-id") || "",
+      from: flagValue(argv, "--from") || "",
+      subject: flagValue(argv, "--subject") || "",
+    },
+    body: {
+      text: flagValue(argv, "--text") || "",
+    },
+    envelope: {
+      rcptTo: flagValue(argv, "--recipient") || flagValue(argv, "--to") || "",
+      mailFrom: flagValue(argv, "--from") || "",
+    },
+  };
+  if (!body.mailboxId) delete body.mailboxId;
+  if (!body.recipient) delete body.recipient;
   return body;
 }
 
@@ -110,6 +160,15 @@ function formatMailboxCreated(mailbox = {}) {
     `Owner: ${mailbox.ownerUserId || "-"}`,
     `Target: ${mailbox.target?.type === "vm" ? `vm:${mailbox.target.tenantVmId || "-"}` : "main"}`,
     `Selection: ${mailbox.targetSelection?.selectionSource || "-"} ${mailbox.targetSelection?.ambiguityResult || ""}`.trim(),
+  ].join("\n") + "\n";
+}
+
+function formatMailboxAction(label = "Mailbox", mailbox = {}) {
+  return [
+    `${label}: ${mailbox.address || mailbox.id || "-"}`,
+    `Status: ${mailbox.status || "-"}`,
+    `Owner: ${mailbox.ownerUserId || "-"}`,
+    `Target: ${mailbox.target?.type === "vm" ? `vm:${mailbox.target.tenantVmId || "-"}` : "main"}`,
   ].join("\n") + "\n";
 }
 
@@ -161,10 +220,50 @@ export async function mailboxesCommand(argv, ctx) {
     else ctx.stdout.write(formatMailboxCreated(payload.mailbox || {}));
     return 0;
   }
+  if (subcommand === "verify") {
+    const mailboxId = positional(rest)[0] || flagValue(rest, "--mailbox") || flagValue(rest, "--mailbox-id");
+    if (!mailboxId) throw new Error("Usage: orkestr mailboxes verify <mailbox-id> [--state verified|verification-pending] [--json]");
+    const payload = await requestJson(`/api/mailboxes/${encodeURIComponent(mailboxId)}/verification`, { ...ctx, method: "PATCH", body: mailboxActionBody(rest) });
+    if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+    else ctx.stdout.write(formatMailboxAction("Mailbox", payload.mailbox || {}));
+    return 0;
+  }
+  if (subcommand === "delete" || subcommand === "remove") {
+    const mailboxId = positional(rest)[0] || flagValue(rest, "--mailbox") || flagValue(rest, "--mailbox-id");
+    if (!mailboxId) throw new Error("Usage: orkestr mailboxes delete <mailbox-id> [--json]");
+    const payload = await requestJson(`/api/mailboxes/${encodeURIComponent(mailboxId)}`, { ...ctx, method: "DELETE", body: mailboxActionBody(rest) });
+    if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+    else ctx.stdout.write(formatMailboxAction("Deleted", payload.mailbox || {}));
+    return 0;
+  }
+  if (subcommand === "rotate") {
+    const mailboxId = positional(rest)[0] || flagValue(rest, "--mailbox") || flagValue(rest, "--mailbox-id");
+    if (!mailboxId) throw new Error("Usage: orkestr mailboxes rotate <mailbox-id> [--suffix value] [--json]");
+    const payload = await requestJson(`/api/mailboxes/${encodeURIComponent(mailboxId)}/rotate`, { ...ctx, method: "POST", body: mailboxActionBody(rest) });
+    if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+    else ctx.stdout.write(formatMailboxAction("Rotated to", payload.mailbox || {}));
+    return 0;
+  }
+  if (subcommand === "ingest") {
+    const body = mailboxIngestBody(rest);
+    if (!body.mailboxId && !body.recipient) throw new Error("Usage: orkestr mailboxes ingest [--mailbox-id id|--recipient address] [--message-id id] [--text text] [--json]");
+    const payload = await requestJson("/api/mailboxes/ingest", { ...ctx, method: "POST", body });
+    if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+    else ctx.stdout.write(`${payload.action || "mailbox_ingested"} ${payload.mailbox?.id || ""}\n`);
+    return 0;
+  }
   if (subcommand === "relay-audits" || subcommand === "relay-audit") {
     const payload = await requestJson(`/api/mailboxes/relay-audits${mailboxQueryString(rest)}`, ctx);
     if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
     else ctx.stdout.write(formatMailboxRelayAuditTable(payload.relayAudits || []));
+    return 0;
+  }
+  if (subcommand === "retry") {
+    const relayAuditId = positional(rest)[0];
+    if (!relayAuditId) throw new Error("Usage: orkestr mailboxes retry <relay-audit-id> [--json]");
+    const payload = await requestJson(`/api/mailboxes/relay-audits/${encodeURIComponent(relayAuditId)}/retry`, { ...ctx, method: "POST", body: mailboxActionBody(rest) });
+    if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+    else ctx.stdout.write(formatMailboxRelayAuditTable([payload.relayAudit || {}]));
     return 0;
   }
   if (subcommand === "dead-letters" || subcommand === "dead-letter") {
@@ -173,5 +272,13 @@ export async function mailboxesCommand(argv, ctx) {
     else ctx.stdout.write(formatMailboxDeadLetterTable(payload.deadLetters || []));
     return 0;
   }
-  throw new Error("Usage: orkestr mailboxes [list|create|relay-audits|dead-letters] [--json]");
+  if (subcommand === "replay") {
+    const deadLetterId = positional(rest)[0];
+    if (!deadLetterId) throw new Error("Usage: orkestr mailboxes replay <dead-letter-id> --confirm [--json]");
+    const payload = await requestJson(`/api/mailboxes/dead-letters/${encodeURIComponent(deadLetterId)}/replay`, { ...ctx, method: "POST", body: mailboxActionBody(rest) });
+    if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+    else ctx.stdout.write(formatMailboxRelayAuditTable([payload.relayAudit || {}]));
+    return 0;
+  }
+  throw new Error("Usage: orkestr mailboxes [list|create|verify|delete|rotate|ingest|retry|relay-audits|dead-letters|replay] [--json]");
 }

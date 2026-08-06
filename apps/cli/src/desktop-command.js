@@ -1,5 +1,6 @@
 import { approveDesktopShareChallenge } from "../../../packages/core/src/desktop-shares.js";
 import { readRuntimeSettings } from "../../../packages/core/src/runtime-settings.js";
+import { resolveTargetInstance } from "../../../packages/core/src/target-resolver.js";
 import { requestJson } from "./api-client.js";
 
 function clean(value) {
@@ -27,6 +28,10 @@ function flagValue(argv, name) {
 
 function browserSessionSlug(session) {
   return clean(session?.slug || session?.id || session?.name).toLowerCase();
+}
+
+function unique(values = []) {
+  return [...new Set(values.map((value) => clean(value).toLowerCase()).filter(Boolean))];
 }
 
 async function currentThreadContext(ctx) {
@@ -58,10 +63,28 @@ async function resolveDesktopSlug(explicit, ctx, threadId = "") {
   ].map(browserSessionSlug).filter(Boolean);
   const available = await browserSessionSlugs(ctx, threadId);
   const availableSet = new Set(available);
-  return candidates.find((slug) => !availableSet.size || availableSet.has(slug))
-    || available[0]
-    || candidates[0]
-    || "desktop";
+  const desktopCandidates = unique([...candidates, ...available]).map((slug) => {
+    const live = !availableSet.size || availableSet.has(slug);
+    return {
+      id: slug,
+      type: "desktop",
+      ownerUserId: ctx.env?.ORKESTR_ADMIN_USER_ID || "admin",
+      status: live ? "active" : "unknown",
+      eligible: live,
+      reason: live ? "eligible" : "desktop_not_available",
+    };
+  });
+  const resolution = await resolveTargetInstance({
+    targetType: "desktop",
+    principal: { kind: "system", role: "admin", userId: "cli" },
+    action: "desktop.share",
+    candidates: desktopCandidates,
+    allowSingleInference: true,
+    selectionSource: "single_authorized_target",
+  }, ctx.env);
+  if (resolution.ok) return resolution.selectedTarget.id;
+  const choices = resolution.candidates.filter((candidate) => candidate.eligible).map((candidate) => candidate.id).join(", ");
+  throw new Error(`desktop_selection_required: run orkestr desktop share <slug>${choices ? ` (${choices})` : ""}`);
 }
 
 function desktopShareText(payload = {}, slug = "") {

@@ -27,11 +27,20 @@ export {
   normalizeMailbox,
   publicMailbox,
 };
+export {
+  deleteMailboxForPrincipal,
+  rotateMailboxForPrincipal,
+  verifyMailboxForPrincipal,
+} from "./mailbox-lifecycle.js";
+export {
+  replayMailboxDeadLetterForPrincipal,
+  retryMailboxRelayForPrincipal,
+} from "./mailbox-relay-admin.js";
 
-const closedStatuses = new Set(["deleting", "deleted", "rotated"]);
+export const closedStatuses = new Set(["deleting", "deleted", "rotated"]);
 const vmMailboxCapabilities = new Set(["mailbox", "mailboxes"]);
 
-function validateMailbox(mailbox = {}) {
+export function validateMailbox(mailbox = {}) {
   if (!mailbox.id) throw mailboxError("mailbox_id_required");
   if (!mailbox.localPart || mailbox.localPart.length > 64) throw mailboxError("mailbox_local_part_invalid");
   if (!mailbox.domain || mailbox.domain.length > 190) throw mailboxError("mailbox_domain_invalid");
@@ -46,24 +55,51 @@ function mailboxStorePath(env = process.env) {
   return dataPaths(env).mailboxes;
 }
 
-async function readMailboxStore(env = process.env) {
-  const payload = await readJson(mailboxStorePath(env), { schemaVersion: 1, mailboxes: [], relayAudits: [], deadLetters: [] });
+export async function readMailboxStore(env = process.env) {
+  const payload = await readJson(mailboxStorePath(env), { schemaVersion: 1, mailboxes: [], relayAudits: [], deadLetters: [], operations: [] });
   return {
     schemaVersion: 1,
     mailboxes: Array.isArray(payload?.mailboxes) ? payload.mailboxes : Array.isArray(payload) ? payload : [],
     relayAudits: Array.isArray(payload?.relayAudits) ? payload.relayAudits : [],
     deadLetters: Array.isArray(payload?.deadLetters) ? payload.deadLetters : [],
+    operations: Array.isArray(payload?.operations) ? payload.operations : [],
   };
 }
 
-async function writeMailboxStore(store = {}, env = process.env) {
+export async function writeMailboxStore(store = {}, env = process.env) {
   await writeJson(mailboxStorePath(env), {
     schemaVersion: 1,
     mailboxes: Array.isArray(store.mailboxes) ? store.mailboxes : [],
     relayAudits: Array.isArray(store.relayAudits) ? store.relayAudits : [],
     deadLetters: Array.isArray(store.deadLetters) ? store.deadLetters : [],
+    operations: Array.isArray(store.operations) ? store.operations : [],
     updatedAt: nowIso(),
   });
+}
+
+export function idempotencyKey(input = {}) {
+  return safeSegment(input.idempotencyKey || input.requestId || "", "", 160);
+}
+
+export function operationResult(store = {}, action = "", key = "") {
+  if (!key) return null;
+  return (store.operations || []).find((item) => item.action === action && item.idempotencyKey === key) || null;
+}
+
+export function recordOperation(store = {}, action = "", key = "", result = {}) {
+  if (!key) return store;
+  const without = (store.operations || []).filter((item) => !(item.action === action && item.idempotencyKey === key));
+  return {
+    ...store,
+    operations: [...without, {
+      action,
+      idempotencyKey: key,
+      mailboxId: result.mailboxId || "",
+      relayAuditId: result.relayAuditId || "",
+      deadLetterId: result.deadLetterId || "",
+      createdAt: nowIso(),
+    }].slice(-1000),
+  };
 }
 
 export async function listMailboxes(env = process.env) {
@@ -93,13 +129,19 @@ export async function createMailbox(input = {}, env = process.env) {
   const mailbox = normalizeMailbox(input, env);
   validateMailbox(mailbox);
   const store = await readMailboxStore(env);
+  const key = idempotencyKey(input);
+  const prior = operationResult(store, "mailbox.create", key);
+  if (prior?.mailboxId) {
+    const existingMailbox = store.mailboxes.map((item) => normalizeMailbox(item, env)).find((item) => item.id === prior.mailboxId);
+    if (existingMailbox) return existingMailbox;
+  }
   const existing = store.mailboxes.map((item) => normalizeMailbox(item, env));
   if (existing.some((item) => item.id === mailbox.id)) throw mailboxError("mailbox_already_exists", 409);
   if (existing.some((item) => item.address === mailbox.address && !closedStatuses.has(item.status))) {
     throw mailboxError("mailbox_address_already_exists", 409);
   }
   store.mailboxes.push(mailbox);
-  await writeMailboxStore(store, env);
+  await writeMailboxStore(recordOperation(store, "mailbox.create", key, { mailboxId: mailbox.id }), env);
   await appendEvent({
     type: "mailbox_created",
     mailboxId: mailbox.id,
@@ -109,6 +151,24 @@ export async function createMailbox(input = {}, env = process.env) {
     tenantVmId: mailbox.target.tenantVmId || "",
   }, env).catch(() => {});
   return mailbox;
+}
+
+export async function mailboxForPrincipal(mailboxId, principal = {}, env = process.env) {
+  const mailbox = await getMailbox(mailboxId, env);
+  if (!mailbox) throw mailboxError("mailbox_not_found", 404);
+  assertOwnerAccess(principal, mailbox.ownerUserId, "mailbox_access", env);
+  return mailbox;
+}
+
+export async function replaceMailbox(mailbox, patch = {}, env = process.env) {
+  const store = await readMailboxStore(env);
+  const next = normalizeMailbox({ ...mailbox, ...patch, updatedAt: nowIso() }, env);
+  validateMailbox(next);
+  await writeMailboxStore({
+    ...store,
+    mailboxes: store.mailboxes.map((item) => normalizeMailbox(item, env).id === next.id ? next : item),
+  }, env);
+  return next;
 }
 
 function vmMailboxQuota(env = process.env) {
@@ -187,7 +247,26 @@ async function resolveMailboxForInbound(input = {}, env = process.env) {
   throw mailboxError("mailbox_recipient_rejected", 404);
 }
 
+async function recordVerificationCandidates(mailbox, message, env = process.env) {
+  if (!message.verificationCandidates?.length) return mailbox;
+  const latest = await getMailbox(mailbox.id, env);
+  if (!latest) return mailbox;
+  return replaceMailbox(latest, {
+    status: latest.status === "pending" ? "verification-pending" : latest.status,
+    verification: {
+      ...latest.verification,
+      state: latest.verification.verifiedAt ? "verified" : "candidate-detected",
+      lastCandidateAt: nowIso(),
+      lastCandidates: message.verificationCandidates,
+    },
+  }, env);
+}
+
 async function queueVmRelay(mailbox, message, idempotencyKey, env = process.env) {
+  const store = await readMailboxStore(env);
+  const existing = store.relayAudits.find((audit) => audit.id === idempotencyKey);
+  if (existing) return { created: false, audit: existing };
+  const now = nowIso();
   let resolution = null;
   try {
     resolution = await resolveTenantVmTarget({
@@ -201,19 +280,36 @@ async function queueVmRelay(mailbox, message, idempotencyKey, env = process.env)
       requireRunning: true,
     }, env);
   } catch (error) {
-    await recordMailboxDeadLetter({
+    const audit = {
+      id: idempotencyKey,
+      mailboxId: mailbox.id,
+      ownerUserId: mailbox.ownerUserId,
+      targetType: "vm",
+      tenantVmId: mailbox.target.tenantVmId,
+      state: "dead-lettered",
+      attemptCount: 0,
+      messageId: message.headers.messageId,
+      bodyHash: message.bodyHash,
+      sizeBytes: message.sizeBytes,
+      attachmentCount: message.attachments.length,
+      provenance: message.provenance,
+      targetSelection: error?.resolution ? targetResolutionMetadata(error.resolution) : mailbox.targetSelection,
+      lastError: cleanLower(error?.message || "target_stale"),
+      createdAt: now,
+      updatedAt: now,
+    };
+    store.relayAudits.push(audit);
+    await writeMailboxStore(store, env);
+    const deadLetter = await recordMailboxDeadLetter({
       mailbox,
       message,
       idempotencyKey,
       reason: error?.message || "target_stale",
       resolution: error?.resolution || null,
+      relayAuditId: audit.id,
     }, env);
-    throw error;
+    return { created: true, audit, deadLetter: deadLetter.deadLetter };
   }
-  const store = await readMailboxStore(env);
-  const existing = store.relayAudits.find((audit) => audit.id === idempotencyKey);
-  if (existing) return { created: false, audit: existing };
-  const now = nowIso();
   const audit = {
     id: idempotencyKey,
     mailboxId: mailbox.id,
@@ -228,6 +324,9 @@ async function queueVmRelay(mailbox, message, idempotencyKey, env = process.env)
     attachmentCount: message.attachments.length,
     provenance: message.provenance,
     targetSelection: targetResolutionMetadata(resolution),
+    nextAttemptAt: now,
+    expiresAt: new Date(Date.now() + positiveInteger(env.ORKESTR_MAILBOX_VM_RELAY_SPOOL_TTL_MS, 7 * 24 * 60 * 60 * 1000, { min: 60_000, max: 90 * 24 * 60 * 60 * 1000 })).toISOString(),
+    lastError: "",
     createdAt: now,
     updatedAt: now,
   };
@@ -236,7 +335,7 @@ async function queueVmRelay(mailbox, message, idempotencyKey, env = process.env)
   return { created: true, audit };
 }
 
-async function recordMailboxDeadLetter({ mailbox, message, idempotencyKey, reason = "", resolution = null } = {}, env = process.env) {
+export async function recordMailboxDeadLetter({ mailbox, message, idempotencyKey, reason = "", resolution = null, relayAuditId = "" } = {}, env = process.env) {
   const store = await readMailboxStore(env);
   const deadLetterId = `${idempotencyKey || "mailbox"}:${cleanLower(reason || "failed")}`;
   const existing = store.deadLetters.find((entry) => entry.id === deadLetterId);
@@ -248,6 +347,7 @@ async function recordMailboxDeadLetter({ mailbox, message, idempotencyKey, reaso
     ownerUserId: mailbox?.ownerUserId || "",
     targetType: mailbox?.target?.type || "",
     tenantVmId: mailbox?.target?.tenantVmId || "",
+    relayAuditId,
     reason: cleanLower(reason || "mailbox_route_failed"),
     messageId: message?.headers?.messageId || "",
     bodyHash: message?.bodyHash || "",
@@ -269,6 +369,21 @@ async function recordMailboxDeadLetter({ mailbox, message, idempotencyKey, reaso
   return { created: true, deadLetter };
 }
 
+export function publicRelayAudit(audit = {}) {
+  const { provenance, ...safe } = audit || {};
+  return {
+    ...safe,
+    provenance: provenance ? {
+      rcptTo: provenance.rcptTo || [],
+      sourceIp: provenance.sourceIp || "",
+      spf: provenance.spf || "",
+      dkim: provenance.dkim || "",
+      dmarc: provenance.dmarc || "",
+      ingestAdapter: provenance.ingestAdapter || "",
+    } : {},
+  };
+}
+
 export async function listMailboxRelayAudits({ mailboxId = "", tenantVmId = "", states = [], limit = 100 } = {}, env = process.env) {
   const store = await readMailboxStore(env);
   const wantedStates = (Array.isArray(states) ? states : [states]).map(cleanLower).filter(Boolean);
@@ -277,7 +392,8 @@ export async function listMailboxRelayAudits({ mailboxId = "", tenantVmId = "", 
     .filter((audit) => !mailboxId || audit.mailboxId === mailboxId)
     .filter((audit) => !tenantVmId || audit.tenantVmId === tenantVmId)
     .filter((audit) => !wantedStates.length || wantedStates.includes(cleanLower(audit.state)))
-    .slice(-capped);
+    .slice(-capped)
+    .map(publicRelayAudit);
 }
 
 export async function listMailboxDeadLetters({ mailboxId = "", tenantVmId = "", states = [], limit = 100 } = {}, env = process.env) {
@@ -292,10 +408,11 @@ export async function listMailboxDeadLetters({ mailboxId = "", tenantVmId = "", 
 }
 
 export async function routeMailboxMessage(input = {}, env = process.env) {
-  const mailbox = await resolveMailboxForInbound(input, env);
+  let mailbox = await resolveMailboxForInbound(input, env);
   if (!acceptingMailboxStatuses.has(mailbox.status)) throw mailboxError("mailbox_not_accepting", 409);
   const message = normalizeInboundMailboxMessage(input, mailbox);
   const idempotencyKey = mailboxMessageIdempotencyKey(input, mailbox);
+  mailbox = await recordVerificationCandidates(mailbox, message, env);
 
   if (mailbox.target.type === "vm") {
     const relay = await queueVmRelay(mailbox, message, idempotencyKey, env);
@@ -309,10 +426,11 @@ export async function routeMailboxMessage(input = {}, env = process.env) {
     }, env).catch(() => {});
     return {
       ok: true,
-      action: relay.created ? "vm_relay_queued" : "deduped",
+      action: relay.deadLetter ? "vm_relay_dead_lettered" : relay.created ? "vm_relay_queued" : "deduped",
       created: relay.created,
       mailbox: publicMailbox(mailbox, env),
-      relayAudit: relay.audit,
+      relayAudit: publicRelayAudit(relay.audit),
+      deadLetter: relay.deadLetter || null,
       idempotencyKey,
     };
   }
