@@ -179,6 +179,26 @@ directories stay under Orkestr-managed data paths or private overlays, and
 agents should use the Orkestr desktop lease APIs instead of starting unmanaged
 Chrome profiles.
 
+Desktop authorization is thread-scoped. An administrator grants each thread
+the exact desktops and permissions it may discover, lease, operate, and share.
+Workers and task agents inherit their parent's grants and may only narrow that
+set. A lease returns a fencing token; heartbeat, release, and stateful browser
+actions must use the current token so a superseded holder cannot continue.
+
+Existing installations can migrate without guessing from thread names:
+
+```text
+POST /api/desktop-grants/backfill {"dryRun":true}
+POST /api/desktop-grants/backfill {"dryRun":false}
+POST /api/threads/<thread-id>/desktop-grants
+```
+
+The migration uses only explicit thread desktop metadata and reports ambiguous
+threads for attended assignment. `ORKESTR_DESKTOP_ACCESS_MODE=shadow` records
+would-deny decisions during rollout; switch to `enforce` after grants are
+reviewed. Legacy share links without a thread, boundary, and grant revision are
+revoked in enforcement mode.
+
 The installer records the default desktop, Gmail auth desktop, and manual
 intervention desktop in runtime settings. Codex-aware skills should read
 `orkestr whereiam --json` or `orkestr settings --json` instead of guessing which

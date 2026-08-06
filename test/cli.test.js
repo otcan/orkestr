@@ -895,9 +895,16 @@ test("CLI desktop share chooses the configured desktop and calls the public API"
     stdout,
     stderr: capture(),
     fetchImpl: fakeFetch({
+      "GET /api/whereiam": {
+        thread: { id: "thread-linkedin", displayName: "LinkedIn" },
+      },
       "GET /api/browser-sessions": {
         ok: true,
         sessions: [{ slug: "linkedin", label: "LinkedIn" }],
+      },
+      "POST /api/desktops/linkedin/acquire": {
+        ok: true,
+        lease: { fencingToken: "fence-linkedin" },
       },
       "POST /api/desktops/linkedin/share": {
         url: "https://desktop.example.test/desktop-share/share-1?key=secret",
@@ -907,8 +914,15 @@ test("CLI desktop share chooses the configured desktop and calls the public API"
   });
 
   assert.equal(code, 0);
-  assert.deepEqual(seen.map((entry) => entry.key), ["GET /api/browser-sessions", "POST /api/desktops/linkedin/share"]);
-  assert.equal(seen[1].body.start, true);
+  assert.deepEqual(seen.map((entry) => entry.key), [
+    "GET /api/whereiam",
+    "GET /api/browser-sessions",
+    "POST /api/desktops/linkedin/acquire",
+    "POST /api/desktops/linkedin/share",
+  ]);
+  assert.equal(seen[3].body.start, true);
+  assert.equal(seen[3].body.threadId, "thread-linkedin");
+  assert.equal(seen[3].body.fencingToken, "fence-linkedin");
   assert.match(stdout.text(), /Desktop link for LinkedIn/);
   assert.match(stdout.text(), /desktop-share\/share-1/);
 });

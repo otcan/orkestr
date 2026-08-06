@@ -222,12 +222,17 @@ export class FirstThreadWizardComponent {
 
   private async startVirtualDesk(thread: ThreadSummary): Promise<void> {
     const slug = this.desktopSlug();
-    await firstValueFrom(this.api.acquireDesktopLease(slug, {
+    await firstValueFrom(this.api.replaceThreadDesktopGrants(thread.id, [{
+      desktopSlug: slug,
+      permissions: ["discover", "acquire", "operate", "share"],
+    }], "first_thread_desktop"));
+    const acquired = await firstValueFrom(this.api.acquireDesktopLease(slug, {
       threadId: thread.id,
       reason: "oss_demo_first_thread",
     }));
     await firstValueFrom(this.api.browserAction(slug, "start", {
       threadId: thread.id,
+      fencingToken: acquired.lease?.fencingToken,
       reason: "oss_demo_first_thread",
     }));
   }

@@ -59,12 +59,13 @@ export function createOrkestrLinkedInDesktopAdapter(options = {}) {
   const desktopSlug = clean(options.desktopSlug || env.ORKESTR_LINKEDIN_DESKTOP_SLUG || "linkedin");
   const threadId = clean(options.threadId);
   const ownerUserId = clean(options.ownerUserId);
+  const fencingToken = clean(options.fencingToken || options.lease?.fencingToken);
   const operate = options.operateManagedDesktopFn || operateManagedDesktop;
   const heartbeat = options.heartbeatDesktopLeaseFn || heartbeatDesktopLease;
 
   async function heartbeatLease() {
     if (!threadId) return null;
-    return heartbeat(desktopSlug, threadId, env, { principal: options.principal, ownerUserId }).catch(() => null);
+    return heartbeat(desktopSlug, threadId, env, { principal: options.principal, ownerUserId, fencingToken }).catch(() => null);
   }
 
   async function observe(action = {}, context = {}) {
@@ -77,7 +78,7 @@ export function createOrkestrLinkedInDesktopAdapter(options = {}) {
         waitMs: options.waitMs || env.ORKESTR_LINKEDIN_OBSERVE_WAIT_MS || 750,
       },
       env,
-      { principal: options.principal, ownerUserId },
+      { principal: options.principal, ownerUserId, threadId, fencingToken },
     );
     const page = observed?.page || {};
     return {
@@ -208,6 +209,8 @@ export async function executeLinkedInMcpPlan(plan = {}, options = {}) {
     desktopSlug,
     threadId,
     ownerUserId,
+    lease,
+    fencingToken: lease?.fencingToken,
     heartbeatDesktopLeaseFn: leaseFns.heartbeatDesktopLeaseFn,
   });
   const server = linkedin.createLinkedInMcpServer({
@@ -238,6 +241,7 @@ export async function executeLinkedInMcpPlan(plan = {}, options = {}) {
       await leaseFns.releaseDesktopLeaseFn(desktopSlug, {
         threadId,
         ownerUserId,
+        fencingToken: lease.fencingToken,
         reason: "linkedin_mcp_runtime_complete",
       }, env).catch(() => null);
     }

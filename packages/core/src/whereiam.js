@@ -12,6 +12,7 @@ import { containedUserPolicyPath, tenantIsolationBoundary, threadUsesContainedUs
 import { tenantPublicUrls } from "./tenant-public-urls.js";
 import { adminUserId, normalizeUserId } from "./users.js";
 import { builtinUserSkillDefinitions, userScopedCapabilityHints } from "./user-skills.js";
+import { desktopAccessPolicySummary, filterDesktopSessionsForThread } from "./desktop-access.js";
 
 const desktopInventoryLiveCache = new Map();
 
@@ -33,20 +34,22 @@ function desktopInventoryCacheTtlMs(env = process.env) {
   return positiveDurationMs(env.ORKESTR_DESKTOP_INVENTORY_CACHE_MS || env.ORKESTR_BROWSER_SESSIONS_CACHE_MS, 15_000, 0);
 }
 
-function desktopInventoryCacheKey(principal = null, env = process.env) {
+function desktopInventoryCacheKey(principal = null, env = process.env, options = {}) {
   return JSON.stringify({
     home: clean(env.ORKESTR_HOME),
     mode: clean(env.ORKESTR_BROWSER_DESKTOP_MODE),
     browserctlPath: clean(env.ORKESTR_BROWSERCTL_PATH || env.ORKESTR_BROWSERCTL),
     userId: clean(principal?.userId),
     role: clean(principal?.role),
+    threadId: clean(options?.threadId),
+    policyRevision: Number(options?.desktopPolicyRevision || 0) || 0,
   });
 }
 
 async function cachedBrowserSessions(env = process.env, options = {}) {
   const ttlMs = desktopInventoryCacheTtlMs(env);
   if (ttlMs <= 0) return listBrowserSessions(env, options);
-  const key = desktopInventoryCacheKey(options.principal, env);
+  const key = desktopInventoryCacheKey(options.principal, env, options);
   const cached = desktopInventoryLiveCache.get(key);
   const now = Date.now();
   if (cached?.payload && cached.expiresAt > now) return cached.payload;
@@ -387,21 +390,22 @@ function mergeDesktopRecords(known = [], live = []) {
   return [...bySlug.values()];
 }
 
-async function desktopInventoryContext(principal = null, settings = {}, env = process.env) {
+async function desktopInventoryContext(principal = null, settings = {}, env = process.env, threadId = "") {
   const desktopSettings = settings?.desktops && typeof settings.desktops === "object" ? settings.desktops : {};
   const known = desktopSettingsItems(settings);
+  const access = await desktopAccessPolicySummary(threadId, principal, env);
   let payload = null;
   let live = [];
   let error = "";
   let message = "";
   try {
-    payload = await cachedBrowserSessions(env, { principal });
+    payload = await cachedBrowserSessions(env, { principal, threadId, desktopPolicyRevision: access.revision });
     live = (payload?.sessions || []).map(publicDesktopRecord).filter((desktop) => desktop.slug);
   } catch (caught) {
     error = clean(caught?.message || caught || "desktop_inventory_failed");
     message = clean(caught?.publicMessage || caught?.message || caught || "Desktop inventory failed.");
   }
-  const desktops = mergeDesktopRecords(known, live);
+  const desktops = await filterDesktopSessionsForThread(mergeDesktopRecords(known, live), { principal, threadId }, env);
   return {
     ok: payload ? payload.ok !== false : known.length > 0,
     liveOk: Boolean(payload && payload.ok !== false),
@@ -419,6 +423,7 @@ async function desktopInventoryContext(principal = null, settings = {}, env = pr
     desktops,
     known,
     live,
+    access,
   };
 }
 
@@ -536,7 +541,7 @@ export async function whereAmI(input = {}, env = process.env) {
   const scoped = Boolean(principal && !isAdminPrincipal(principal));
   const sanitizerRequired = scoped;
   const containedPolicy = threadUsesContainedUserPolicy(thread || { ownerUserId: owner }, env);
-  const desktops = await desktopInventoryContext(principal, settings, env);
+  const desktops = await desktopInventoryContext(principal, settings, env, thread?.id || "");
   return {
     ok: Boolean(thread),
     matched: Boolean(thread),

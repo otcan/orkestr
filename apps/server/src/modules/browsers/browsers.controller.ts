@@ -28,6 +28,12 @@ import { assertSanitizedAction } from "../../../../../packages/core/src/llm-sani
 import { requestPrincipal } from "../../../../../packages/core/src/principal.js";
 import { isAdminPrincipal, resourceOwnerUserId } from "../../../../../packages/core/src/policy.js";
 import { getThreadForPrincipal } from "../../../../../packages/core/src/threads.js";
+import {
+  assertDesktopAccess,
+  backfillThreadDesktopGrants,
+  listThreadDesktopGrants,
+  setThreadDesktopGrants,
+} from "../../../../../packages/core/src/desktop-access.js";
 import { httpError } from "../../common/http.js";
 
 function desktopShareReady(browser: any): boolean {
@@ -49,35 +55,52 @@ function desktopShareNotReadyReason(browser: any, fallback = "desktop_share_not_
 @Controller("api")
 export class BrowsersController {
   @Get("browsers")
-  async browsers(@Req() request: any) {
+  async browsers(@Req() request: any, @Query("threadId") threadId = "", @Query("breakGlass") breakGlass = "", @Query("reason") reason = "") {
     const principal = requestPrincipal(request);
-    const payload = await listBrowserSessions(process.env, { principal });
+    const payload = await listBrowserSessions(process.env, {
+      principal,
+      threadId: String(threadId || "").trim(),
+      breakGlass: ["1", "true", "yes"].includes(String(breakGlass || "").toLowerCase()),
+      breakGlassReason: String(reason || "").trim(),
+    });
     return { ...payload, browsers: payload.sessions };
   }
 
   @Get("browser-sessions")
-  async browserSessions(@Req() request: any) {
-    return listBrowserSessions(process.env, { principal: requestPrincipal(request) });
+  async browserSessions(@Req() request: any, @Query("threadId") threadId = "", @Query("breakGlass") breakGlass = "", @Query("reason") reason = "") {
+    return listBrowserSessions(process.env, {
+      principal: requestPrincipal(request),
+      threadId: String(threadId || "").trim(),
+      breakGlass: ["1", "true", "yes"].includes(String(breakGlass || "").toLowerCase()),
+      breakGlassReason: String(reason || "").trim(),
+    });
   }
 
   @Get("desktops/leases")
-  async desktopLeases(@Req() request: any, @Query("include") include = "") {
+  async desktopLeases(@Req() request: any, @Query("include") include = "", @Query("threadId") threadId = "", @Query("breakGlass") breakGlass = "", @Query("reason") reason = "") {
     const principal = requestPrincipal(request);
     return {
       ok: true,
-      desktopLeases: await publicDesktopLeases({ includeReleased: include === "released", principal }),
+      desktopLeases: await publicDesktopLeases({
+        includeReleased: include === "released",
+        principal,
+        threadId: String(threadId || "").trim(),
+        breakGlass: ["1", "true", "yes"].includes(String(breakGlass || "").toLowerCase()),
+        breakGlassReason: String(reason || "").trim(),
+      }),
       staleAfterMs: Number(process.env.ORKESTR_DESKTOP_LEASE_STALE_MS || 15 * 60_000),
       generatedAt: new Date().toISOString(),
     };
   }
 
   @Get("desktops/:slug/lease")
-  async desktopLease(@Req() request: any, @Param("slug") slug: string) {
+  async desktopLease(@Req() request: any, @Param("slug") slug: string, @Query("threadId") threadId = "") {
     const principal = requestPrincipal(request);
+    await assertDesktopAccess({ principal, threadId, desktopSlug: slug, permission: "discover" }, process.env);
     return {
       ok: true,
       desktopSlug: normalizeDesktopSlug(slug),
-      lease: await activeDesktopLeaseStatus(slug, process.env, { principal }),
+      lease: await activeDesktopLeaseStatus(slug, process.env, { principal, threadId }),
       staleAfterMs: Number(process.env.ORKESTR_DESKTOP_LEASE_STALE_MS || 15 * 60_000),
       generatedAt: new Date().toISOString(),
     };
@@ -88,6 +111,7 @@ export class BrowsersController {
   async acquireDesktop(@Req() request: any, @Param("slug") slug: string, @Body() body: Record<string, unknown> = {}) {
     const principal = requestPrincipal(request);
     const ownerUserId = await this.ownerUserIdFromLeaseBody(body, principal);
+    if (body.force === true && !isAdminPrincipal(principal)) throw httpError("desktop_force_acquire_admin_required", 403);
     await this.assertDesktopSanitized("acquire", principal, slug, { ...body, ownerUserId });
     const result = await acquireDesktopLease(slug, { ...body, ownerUserId }, process.env, { principal });
     if (!result.ok) throw httpError("desktop_leased", 409);
@@ -107,7 +131,11 @@ export class BrowsersController {
     const threadId = String(body.threadId || "").trim();
     if (!threadId) throw httpError("threadId_required", 400);
     const ownerUserId = await this.ownerUserIdFromLeaseBody(body, principal);
-    const result = await heartbeatDesktopLease(slug, threadId, process.env, { principal, ownerUserId });
+    const result = await heartbeatDesktopLease(slug, threadId, process.env, {
+      principal,
+      ownerUserId,
+      fencingToken: String(body.fencingToken || "").trim(),
+    });
     if (!result.ok) throw httpError(result.reason || "lease_not_found", result.reason === "lease_owned_by_other_thread" ? 409 : 404);
     return { ok: true, lease: result.lease };
   }
@@ -117,6 +145,7 @@ export class BrowsersController {
   async releaseDesktop(@Req() request: any, @Param("slug") slug: string, @Body() body: Record<string, unknown> = {}) {
     const principal = requestPrincipal(request);
     const force = body.force === true;
+    if (force && !isAdminPrincipal(principal)) throw httpError("desktop_force_release_admin_required", 403);
     const threadId = String(body.threadId || "").trim();
     if (!threadId && !force) throw httpError("threadId_required_unless_force", 400);
     const ownerUserId = threadId ? await this.ownerUserIdFromLeaseBody(body, principal) : String(body.ownerUserId || body.userId || "").trim();
@@ -125,6 +154,7 @@ export class BrowsersController {
       ownerUserId,
       principal,
       force,
+      fencingToken: String(body.fencingToken || "").trim(),
       reason: String(body.reason || (force ? "force_released" : "released")).trim(),
     });
     if (!result.ok) throw httpError(result.reason || "lease_not_found", result.reason === "lease_owned_by_other_thread" ? 409 : 404);
@@ -135,13 +165,31 @@ export class BrowsersController {
   @HttpCode(201)
   async shareDesktop(@Req() request: any, @Param("slug") slug: string, @Body() body: Record<string, unknown> = {}) {
     const principal = requestPrincipal(request);
+    const threadId = String(body.threadId || body.ownerThreadId || "").trim();
+    const ownerUserId = threadId ? await this.ownerUserIdFromLeaseBody(body, principal) : String(body.ownerUserId || "").trim();
     await this.assertDesktopSanitized("share", principal, slug, body);
+    await assertDesktopAccess({
+      principal,
+      threadId,
+      desktopSlug: slug,
+      ownerUserId,
+      permission: "share",
+      breakGlass: body.breakGlass === true,
+      breakGlassReason: String(body.breakGlassReason || "").trim(),
+    }, process.env);
     let browser: any = null;
     let startError = "";
     const startRequested = body.start !== false;
     if (startRequested) {
       try {
-        browser = await openVirtualBrowser(slug, process.env, "", { principal });
+        browser = await openVirtualBrowser(slug, process.env, "", {
+          principal,
+          threadId,
+          ownerUserId,
+          fencingToken: String(body.fencingToken || "").trim(),
+          breakGlass: body.breakGlass === true,
+          breakGlassReason: String(body.breakGlassReason || "").trim(),
+        });
       } catch (error) {
         startError = String((error as Error)?.message || error || "desktop_start_failed");
       }
@@ -151,6 +199,10 @@ export class BrowsersController {
     const share = await createDesktopShare({
       desktopSlug: slug,
       principal,
+      threadId,
+      ownerUserId,
+      breakGlass: body.breakGlass === true,
+      breakGlassReason: String(body.breakGlassReason || "").trim(),
       label: String(browser?.label || body.label || "").trim(),
       env: process.env,
     });
@@ -230,6 +282,36 @@ export class BrowsersController {
     return this.runAction(request, slug, action, body);
   }
 
+  @Get("threads/:threadId/desktop-grants")
+  async threadDesktopGrants(@Req() request: any, @Param("threadId") threadId: string) {
+    return listThreadDesktopGrants(threadId, requestPrincipal(request), process.env);
+  }
+
+  @Post("threads/:threadId/desktop-grants")
+  @HttpCode(200)
+  async replaceThreadDesktopGrants(@Req() request: any, @Param("threadId") threadId: string, @Body() body: Record<string, unknown> = {}) {
+    const principal = requestPrincipal(request);
+    const grants = Array.isArray(body.grants)
+      ? body.grants
+      : Array.isArray(body.desktops)
+        ? body.desktops
+        : [];
+    return setThreadDesktopGrants(threadId, grants, {
+      principal,
+      reason: String(body.reason || "").trim(),
+      source: "api",
+    }, process.env);
+  }
+
+  @Post("desktop-grants/backfill")
+  @HttpCode(200)
+  async backfillDesktopGrants(@Req() request: any, @Body() body: Record<string, unknown> = {}) {
+    return backfillThreadDesktopGrants({
+      principal: requestPrincipal(request),
+      dryRun: body.dryRun !== false,
+    }, process.env);
+  }
+
   private async ownerUserIdFromLeaseBody(body: Record<string, unknown>, principal: any) {
     const threadId = String(body.threadId || body.ownerThreadId || "").trim();
     if (!threadId) return String(body.ownerUserId || body.userId || "").trim();
@@ -261,15 +343,25 @@ export class BrowsersController {
     const principal = requestPrincipal(request);
     try {
       const normalized = String(action || "").trim().toLowerCase();
+      const threadId = String(body.threadId || body.ownerThreadId || "").trim();
+      const ownerUserId = threadId ? await this.ownerUserIdFromLeaseBody(body, principal) : String(body.ownerUserId || "").trim();
+      const desktopOptions = {
+        principal,
+        threadId,
+        ownerUserId,
+        fencingToken: String(body.fencingToken || "").trim(),
+        breakGlass: body.breakGlass === true,
+        breakGlassReason: String(body.breakGlassReason || "").trim(),
+      };
       await this.assertDesktopSanitized(normalized || "action", principal, slug, body);
-      if (normalized === "prepare") return { browser: await prepareVirtualBrowser(slug, process.env, { principal }) };
-      if (normalized === "start" || normalized === "open") return { browser: await openVirtualBrowser(slug, process.env, "", { principal }) };
+      if (normalized === "prepare") return { browser: await prepareVirtualBrowser(slug, process.env, desktopOptions) };
+      if (normalized === "start" || normalized === "open") return { browser: await openVirtualBrowser(slug, process.env, "", desktopOptions) };
       if (normalized === "open-url" || normalized === "openurl" || normalized === "navigate") {
-        return { browser: await openUrlInVirtualBrowser(slug, String(body.url || body.href || ""), process.env, { principal }) };
+        return { browser: await openUrlInVirtualBrowser(slug, String(body.url || body.href || ""), process.env, desktopOptions) };
       }
-      if (normalized === "stop") return { browser: await stopVirtualBrowser(slug, process.env, { principal }) };
-      if (normalized === "restart") return { browser: await restartVirtualBrowser(slug, process.env, { principal }) };
-      if (normalized === "cleanup") return { browser: await cleanupVirtualBrowser(slug, process.env, { principal }) };
+      if (normalized === "stop") return { browser: await stopVirtualBrowser(slug, process.env, desktopOptions) };
+      if (normalized === "restart") return { browser: await restartVirtualBrowser(slug, process.env, desktopOptions) };
+      if (normalized === "cleanup") return { browser: await cleanupVirtualBrowser(slug, process.env, desktopOptions) };
       throw httpError("unknown_browser_action", 404);
     } catch (error) {
       const statusCode = Number((error as { statusCode?: number })?.statusCode || 0);

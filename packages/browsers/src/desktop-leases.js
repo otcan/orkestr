@@ -1,27 +1,13 @@
-import fs from "node:fs/promises";
-import path from "node:path";
-import { randomUUID } from "node:crypto";
-import { dataPaths } from "../../storage/src/paths.js";
 import { listThreads, listThreadsForPrincipal } from "../../core/src/threads.js";
 import { isAdminPrincipal, resourceOwnerUserId } from "../../core/src/policy.js";
 import { normalizeUserId } from "../../core/src/users.js";
+import { assertDesktopAccess, authorizeDesktopAccess, desktopAccessMode } from "../../core/src/desktop-access.js";
+import { desktopLeaseStore, normalizeDesktopSlug } from "./desktop-lease-store.js";
 
-const VALID_MODES = new Set(["exclusive", "viewOnly", "sharedRead"]);
+export { normalizeDesktopSlug } from "./desktop-lease-store.js";
 
 function nowIso() {
   return new Date().toISOString();
-}
-
-async function ensureParent(filePath) {
-  await fs.mkdir(path.dirname(filePath), { recursive: true });
-}
-
-export function normalizeDesktopSlug(value) {
-  return String(value || "")
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9_.-]+/g, "-")
-    .replace(/^-+|-+$/g, "");
 }
 
 function parseLeaseDurationMs(value, fallbackMs) {
@@ -35,189 +21,6 @@ function parseLeaseDurationMs(value, fallbackMs) {
   const unit = match[2] || "ms";
   const factor = { ms: 1, s: 1000, m: 60_000, h: 60 * 60_000, d: 24 * 60 * 60_000 }[unit] || 1;
   return Math.max(0, Math.round(amount * factor));
-}
-
-function normalizeLease(raw) {
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
-  const desktopSlug = normalizeDesktopSlug(raw.desktopSlug || raw.slug);
-  const threadId = String(raw.threadId || raw.ownerThreadId || "").trim();
-  if (!desktopSlug || !threadId) return null;
-  const mode = VALID_MODES.has(String(raw.mode || "")) ? String(raw.mode) : "exclusive";
-  const acquiredAt = raw.acquiredAt || nowIso();
-  const ownerUserId = normalizeUserId(raw.ownerUserId || raw.userId || "admin");
-  return {
-    id: String(raw.id || `${desktopSlug}:${ownerUserId}:${threadId}:${raw.acquiredAt || randomUUID()}`).trim(),
-    desktopSlug,
-    ownerUserId,
-    threadId,
-    codexThreadId: String(raw.codexThreadId || "").trim() || null,
-    threadName: String(raw.threadName || "").trim() || null,
-    mode,
-    purpose: String(raw.purpose || "").trim() || null,
-    runId: String(raw.runId || "").trim() || null,
-    acquiredAt,
-    heartbeatAt: raw.heartbeatAt || acquiredAt,
-    expiresAt: raw.expiresAt || null,
-    releasedAt: raw.releasedAt || null,
-    releaseReason: raw.releaseReason || null,
-    updatedAt: raw.updatedAt || raw.heartbeatAt || acquiredAt,
-    metadata: raw.metadata && typeof raw.metadata === "object" && !Array.isArray(raw.metadata) ? raw.metadata : {},
-  };
-}
-
-function normalizeState(parsed) {
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return { desktopLeases: [] };
-  return {
-    desktopLeases: Array.isArray(parsed.desktopLeases)
-      ? parsed.desktopLeases.map(normalizeLease).filter(Boolean)
-      : [],
-  };
-}
-
-export class DesktopLeaseStore {
-  constructor(filePath) {
-    this.filePath = filePath;
-    this.queue = Promise.resolve();
-  }
-
-  async init() {
-    await ensureParent(this.filePath);
-    try {
-      const raw = await fs.readFile(this.filePath, "utf8");
-      const state = normalizeState(JSON.parse(raw));
-      await this.writeState(state);
-    } catch {
-      await this.writeState({ desktopLeases: [] });
-    }
-  }
-
-  async readStateRaw() {
-    try {
-      const raw = await fs.readFile(this.filePath, "utf8");
-      return normalizeState(JSON.parse(raw));
-    } catch (error) {
-      if (error?.code !== "ENOENT") throw error;
-      return { desktopLeases: [] };
-    }
-  }
-
-  async readState() {
-    await this.queue.catch(() => {});
-    return this.readStateRaw();
-  }
-
-  async writeState(state) {
-    await ensureParent(this.filePath);
-    await fs.writeFile(this.filePath, `${JSON.stringify(normalizeState(state), null, 2)}\n`, { mode: 0o600 });
-  }
-
-  async mutateState(mutator) {
-    const run = this.queue.then(async () => {
-      const state = await this.readStateRaw();
-      const result = await mutator(state);
-      await this.writeState(state);
-      return result;
-    });
-    this.queue = run.then(() => undefined, () => undefined);
-    return run;
-  }
-
-  async readAll({ includeReleased = false } = {}) {
-    const state = await this.readState();
-    return includeReleased ? state.desktopLeases : state.desktopLeases.filter((lease) => !lease.releasedAt);
-  }
-
-  async activeLease(desktopSlug, ownerUserId = "") {
-    const slug = normalizeDesktopSlug(desktopSlug);
-    const owner = ownerUserId ? normalizeUserId(ownerUserId) : "";
-    const leases = await this.readAll();
-    return leases
-      .filter((lease) => lease.desktopSlug === slug && (!owner || lease.ownerUserId === owner))
-      .sort((left, right) => Date.parse(right.acquiredAt || "") - Date.parse(left.acquiredAt || ""))[0] || null;
-  }
-
-  async acquire(lease, { force = false, releaseReason = "superseded" } = {}) {
-    const normalized = normalizeLease(lease);
-    if (!normalized) {
-      const error = new Error("invalid_desktop_lease");
-      error.statusCode = 400;
-      throw error;
-    }
-    return this.mutateState((state) => {
-      const active = state.desktopLeases.find((item) =>
-        item.desktopSlug === normalized.desktopSlug &&
-        item.ownerUserId === normalized.ownerUserId &&
-        !item.releasedAt
-      ) || null;
-      const now = nowIso();
-      if (active && active.threadId !== normalized.threadId && !force) {
-        return { ok: false, conflict: active, lease: null };
-      }
-      if (active && active.threadId === normalized.threadId) {
-        Object.assign(active, {
-          ...active,
-          ...normalized,
-          id: active.id,
-          acquiredAt: active.acquiredAt || normalized.acquiredAt,
-          heartbeatAt: now,
-          updatedAt: now,
-          releasedAt: null,
-          releaseReason: null,
-        });
-        return { ok: true, lease: active, renewed: true, previousLease: null };
-      }
-      if (active) {
-        active.releasedAt = now;
-        active.releaseReason = releaseReason;
-        active.updatedAt = now;
-      }
-      state.desktopLeases.unshift({ ...normalized, acquiredAt: normalized.acquiredAt || now, heartbeatAt: normalized.heartbeatAt || now, updatedAt: now });
-      return { ok: true, lease: state.desktopLeases[0], renewed: false, previousLease: active || null };
-    });
-  }
-
-  async heartbeat(desktopSlug, threadId, ownerUserId = "") {
-    const slug = normalizeDesktopSlug(desktopSlug);
-    const owner = String(threadId || "").trim();
-    const ownerUser = ownerUserId ? normalizeUserId(ownerUserId) : "";
-    return this.mutateState((state) => {
-      const active = state.desktopLeases.find((lease) =>
-        lease.desktopSlug === slug &&
-        (!ownerUser || lease.ownerUserId === ownerUser) &&
-        !lease.releasedAt
-      ) || null;
-      if (!active) return { ok: false, reason: "lease_not_found", lease: null };
-      if (owner && active.threadId !== owner) return { ok: false, reason: "lease_owned_by_other_thread", lease: active };
-      const now = nowIso();
-      active.heartbeatAt = now;
-      active.updatedAt = now;
-      return { ok: true, lease: active };
-    });
-  }
-
-  async release(desktopSlug, { threadId = "", ownerUserId = "", force = false, reason = "released" } = {}) {
-    const slug = normalizeDesktopSlug(desktopSlug);
-    const owner = String(threadId || "").trim();
-    const ownerUser = ownerUserId ? normalizeUserId(ownerUserId) : "";
-    return this.mutateState((state) => {
-      const active = state.desktopLeases.find((lease) =>
-        lease.desktopSlug === slug &&
-        (!ownerUser || lease.ownerUserId === ownerUser) &&
-        !lease.releasedAt
-      ) || null;
-      if (!active) return { ok: false, reason: "lease_not_found", lease: null };
-      if (owner && active.threadId !== owner && !force) return { ok: false, reason: "lease_owned_by_other_thread", lease: active };
-      const now = nowIso();
-      active.releasedAt = now;
-      active.releaseReason = reason;
-      active.updatedAt = now;
-      return { ok: true, lease: active };
-    });
-  }
-}
-
-function desktopLeaseStore(env = process.env) {
-  return new DesktopLeaseStore(dataPaths(env).desktopLeases);
 }
 
 function threadAllowsLeaseSteal(thread) {
@@ -324,7 +127,12 @@ async function visibleThreadsForDesktopContext(principal = null, env = process.e
 export async function attachDesktopStateToSessions(sessions = [], env = process.env, options = {}) {
   const scopedSessions = Array.isArray(sessions) ? sessions : [];
   const [leases, threads] = await Promise.all([
-    publicDesktopLeases({ principal: options?.principal }, env).catch(() => []),
+    publicDesktopLeases({
+      principal: options?.principal,
+      threadId: options?.threadId,
+      breakGlass: options?.breakGlass === true,
+      breakGlassReason: options?.breakGlassReason,
+    }, env).catch(() => []),
     visibleThreadsForDesktopContext(options?.principal, env),
   ]);
   const leaseByKey = new Map(leases.map((lease) => [`${lease.desktopSlug}:${lease.ownerUserId || ""}`, lease]));
@@ -375,7 +183,7 @@ export function publicDesktopLease(lease, threadsById = new Map(), nowMs = Date.
   };
 }
 
-export async function publicDesktopLeases({ includeReleased = false, principal = null } = {}, env = process.env) {
+export async function publicDesktopLeases({ includeReleased = false, principal = null, threadId = "", breakGlass = false, breakGlassReason = "" } = {}, env = process.env) {
   const store = desktopLeaseStore(env);
   const [leases, threads] = await Promise.all([
     store.readAll({ includeReleased }),
@@ -383,7 +191,20 @@ export async function publicDesktopLeases({ includeReleased = false, principal =
   ]);
   const threadsById = new Map(threads.map((thread) => [thread.id, thread]));
   const nowMs = Date.now();
-  return filterLeasesForPrincipal(leases, principal, env).map((lease) => publicDesktopLease(lease, threadsById, nowMs, env));
+  const scoped = [];
+  for (const lease of filterLeasesForPrincipal(leases, principal, env)) {
+    const decision = await authorizeDesktopAccess({
+      principal,
+      threadId,
+      desktopSlug: lease.desktopSlug,
+      ownerUserId: lease.ownerUserId,
+      permission: "discover",
+      breakGlass,
+      breakGlassReason,
+    }, env);
+    if (decision.allowed) scoped.push(publicDesktopLease(lease, threadsById, nowMs, env));
+  }
+  return scoped;
 }
 
 export async function activeDesktopLeaseStatus(desktopSlug, env = process.env, options = {}) {
@@ -395,6 +216,32 @@ export async function activeDesktopLeaseStatus(desktopSlug, env = process.env, o
   ]);
   const threadsById = new Map(threads.map((thread) => [thread.id, thread]));
   return publicDesktopLease(lease, threadsById, Date.now(), env);
+}
+
+export async function assertDesktopLeaseForOperation(slug, env = process.env, options = {}) {
+  if (desktopAccessMode(env) !== "enforce") return null;
+  if (options?.breakGlass === true && isAdminPrincipal(options?.principal || {}) && String(options?.breakGlassReason || "").trim()) return null;
+  const desktopSlug = normalizeDesktopSlug(slug);
+  const threadId = String(options?.threadId || "").trim();
+  const fencingToken = String(options?.fencingToken || "").trim();
+  if (!threadId) {
+    const error = new Error("desktop_thread_scope_required");
+    error.statusCode = 403;
+    throw error;
+  }
+  const ownerUserId = ownerUserIdForPrincipal(options?.principal, env, options?.ownerUserId);
+  const lease = await desktopLeaseStore(env).activeLease(desktopSlug, ownerUserId);
+  if (!lease || lease.threadId !== threadId) {
+    const error = new Error(lease ? "desktop_lease_owned_by_other_thread" : "desktop_lease_required");
+    error.statusCode = lease ? 409 : 403;
+    throw error;
+  }
+  if (!fencingToken || lease.fencingToken !== fencingToken) {
+    const error = new Error(fencingToken ? "lease_fencing_token_invalid" : "lease_fencing_token_required");
+    error.statusCode = 409;
+    throw error;
+  }
+  return lease;
 }
 
 export async function acquireDesktopLease(slug, payload = {}, env = process.env, options = {}) {
@@ -411,6 +258,30 @@ export async function acquireDesktopLease(slug, payload = {}, env = process.env,
     throw error;
   }
   const ownerUserId = ownerUserIdForPrincipal(options?.principal, env, payload.ownerUserId || payload.userId);
+  if (payload.force === true && options?.principal && !isAdminPrincipal(options.principal)) {
+    const error = new Error("desktop_force_acquire_admin_required");
+    error.statusCode = 403;
+    throw error;
+  }
+  if (
+    payload.force === true &&
+    desktopAccessMode(env) === "enforce" &&
+    options?.principal &&
+    !String(payload.reason || payload.breakGlassReason || "").trim()
+  ) {
+    const error = new Error("desktop_force_acquire_reason_required");
+    error.statusCode = 400;
+    throw error;
+  }
+  await assertDesktopAccess({
+    principal: options?.principal,
+    threadId,
+    desktopSlug,
+    ownerUserId,
+    permission: "acquire",
+    breakGlass: options?.breakGlass === true || payload.breakGlass === true,
+    breakGlassReason: options?.breakGlassReason || payload.breakGlassReason,
+  }, env);
   const ttlMs = parseLeaseDurationMs(payload.ttlMs ?? payload.ttl ?? payload.expiresIn, Number(env.ORKESTR_DESKTOP_LEASE_TTL_MS || 4 * 60 * 60_000));
   const now = nowIso();
   const expiresAt = ttlMs > 0 ? new Date(Date.parse(now) + ttlMs).toISOString() : null;
@@ -450,12 +321,23 @@ export async function acquireDesktopLease(slug, payload = {}, env = process.env,
 
 export async function heartbeatDesktopLease(slug, threadId, env = process.env, options = {}) {
   const ownerUserId = ownerUserIdForPrincipal(options?.principal, env, options?.ownerUserId);
-  const result = await desktopLeaseStore(env).heartbeat(slug, threadId, ownerUserId);
+  await assertDesktopAccess({ principal: options?.principal, threadId, desktopSlug: slug, ownerUserId, permission: "acquire" }, env);
+  const fencingToken = String(options?.fencingToken || "").trim();
+  if (desktopAccessMode(env) === "enforce" && !fencingToken) {
+    return { ok: false, reason: "lease_fencing_token_required", lease: await activeDesktopLeaseStatus(slug, env, { ownerUserId }) };
+  }
+  const result = await desktopLeaseStore(env).heartbeat(slug, threadId, ownerUserId, fencingToken);
   return { ...result, lease: await activeDesktopLeaseStatus(slug, env, { ownerUserId }) };
 }
 
 export async function releaseDesktopLease(slug, options = {}, env = process.env) {
   const ownerUserId = ownerUserIdForPrincipal(options?.principal, env, options?.ownerUserId);
+  if (!options?.force) {
+    await assertDesktopAccess({ principal: options?.principal, threadId: options?.threadId, desktopSlug: slug, ownerUserId, permission: "acquire" }, env);
+  }
+  if (desktopAccessMode(env) === "enforce" && !options?.force && !String(options?.fencingToken || "").trim()) {
+    return { ok: false, reason: "lease_fencing_token_required", lease: await activeDesktopLeaseStatus(slug, env, { ownerUserId }) };
+  }
   const result = await desktopLeaseStore(env).release(slug, { ...options, ownerUserId });
   return { ...result, lease: result.lease ? publicDesktopLease(result.lease, new Map(), Date.now(), env) : await activeDesktopLeaseStatus(slug, env, { ownerUserId }) };
 }

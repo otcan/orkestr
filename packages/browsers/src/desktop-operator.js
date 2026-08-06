@@ -1,5 +1,7 @@
 import WebSocket from "ws";
 import { managedDesktopAction, managedDesktopOpenUrl } from "./browserctl.js";
+import { assertDesktopAccess } from "../../core/src/desktop-access.js";
+import { assertDesktopLeaseForOperation } from "./desktop-leases.js";
 
 function clean(value) {
   return String(value || "").trim();
@@ -305,6 +307,16 @@ export async function operateManagedDesktop(slug = "", args = {}, env = process.
     throw error;
   }
   const operation = clean(args.operation || args.action || "observe").toLowerCase();
+  await assertDesktopAccess({
+    principal: options?.principal,
+    threadId: options?.threadId,
+    desktopSlug,
+    ownerUserId: options?.ownerUserId,
+    permission: "operate",
+    breakGlass: options?.breakGlass === true,
+    breakGlassReason: options?.breakGlassReason,
+  }, env);
+  await assertDesktopLeaseForOperation(desktopSlug, env, options);
   const waitMs = clampInt(args.waitMs, 750, 0, 10_000);
   const maxText = clampInt(args.maxText, 8000, 500, 20_000);
   let session = null;

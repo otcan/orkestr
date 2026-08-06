@@ -7,6 +7,7 @@ import { ensureVirtualBrowserReady } from "../../../packages/browsers/src/browse
 import { requestPrincipal } from "../../../packages/core/src/principal.js";
 import { authorizeHttpRequest } from "../../../packages/core/src/security.js";
 import { isMobileDesktopRoute, serveMobileDesktopShell } from "./mobile-desktop-shell.js";
+import { assertDesktopAccess } from "../../../packages/core/src/desktop-access.js";
 
 type DesktopTarget = {
   slug: string;
@@ -47,17 +48,41 @@ function portFromEndpoint(value: unknown): number {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : 0;
 }
 
-function principalCacheKey(principal: any, slug: string): string {
-  return `${String(principal?.userId || "admin")}:${String(principal?.role || "admin")}:${slug}`;
+function principalCacheKey(principal: any, slug: string, threadId = "", grantRevision = 0): string {
+  return `${String(principal?.userId || "admin")}:${String(principal?.role || "admin")}:${threadId}:${grantRevision}:${slug}`;
 }
 
-async function desktopTarget(rawUrl: string | undefined, principal: any): Promise<DesktopTarget | null> {
+function desktopRequestScope(rawUrl: string | undefined, request: any = {}): { threadId: string; grantRevision: number } {
+  const parsed = new URL(String(rawUrl || "/"), "http://orkestr.local");
+  const share = request?.orkestrDesktopShare || {};
+  return {
+    threadId: String(share.threadId || parsed.searchParams.get("threadId") || request?.headers?.["x-orkestr-thread-id"] || "").trim(),
+    grantRevision: Number(share.grantRevision || 0) || 0,
+  };
+}
+
+async function desktopTarget(rawUrl: string | undefined, principal: any, scope: any = {}): Promise<DesktopTarget | null> {
   const request = parseDesktopUrl(rawUrl);
   if (!request) return null;
-  const cacheKey = principalCacheKey(principal, request.slug);
+  const decision = await assertDesktopAccess({
+    principal,
+    threadId: scope.threadId,
+    desktopSlug: request.slug,
+    permission: scope.desktopShare ? "share" : "operate",
+  });
+  if (scope.grantRevision && decision.grantRevision !== scope.grantRevision) {
+    const error = new Error("desktop_share_grant_changed");
+    Object.assign(error, { statusCode: 401 });
+    throw error;
+  }
+  const cacheKey = principalCacheKey(principal, request.slug, scope.threadId, decision.grantRevision);
   const cached = targetCache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) return { ...request, port: cached.port };
-  const session = await ensureVirtualBrowserReady(request.slug, process.env, { principal });
+  const session = await ensureVirtualBrowserReady(request.slug, process.env, {
+    principal,
+    threadId: scope.threadId,
+    fencingToken: String(scope.fencingToken || "").trim(),
+  });
   const port = session ? sessionWebPort(session) : 0;
   if (!port) {
     const error = new Error("desktop_not_running");
@@ -82,13 +107,30 @@ function sendJson(response: any, statusCode: number, payload: Record<string, unk
 async function proxyDesktopHttp(request: any, response: any): Promise<void> {
   const mobileRoute = isMobileDesktopRoute(request.originalUrl || request.url);
   if (mobileRoute) {
-    serveMobileDesktopShell(response, mobileRoute.slug);
-    return;
+    try {
+      const scope = desktopRequestScope(request.originalUrl || request.url, request);
+      await assertDesktopAccess({
+        principal: requestPrincipal(request),
+        threadId: scope.threadId,
+        desktopSlug: mobileRoute.slug,
+        permission: request.orkestrDesktopShare ? "share" : "operate",
+      });
+      serveMobileDesktopShell(response, mobileRoute.slug);
+      return;
+    } catch (error) {
+      sendJson(response, Number((error as any)?.statusCode || 403), { ok: false, error: error instanceof Error ? error.message : String(error) });
+      return;
+    }
   }
 
   let target: DesktopTarget | null = null;
   try {
-    target = await desktopTarget(request.originalUrl || request.url, requestPrincipal(request));
+    const scope = desktopRequestScope(request.originalUrl || request.url, request);
+    target = await desktopTarget(request.originalUrl || request.url, requestPrincipal(request), {
+      ...scope,
+      desktopShare: request.orkestrDesktopShare || null,
+      fencingToken: request.headers?.["x-orkestr-desktop-fencing-token"] || "",
+    });
   } catch (error) {
     sendJson(response, Number((error as any)?.statusCode || 502), {
       ok: false,
@@ -170,7 +212,13 @@ export function attachDesktopProxyUpgrade(server: Server): void {
 
     let target: DesktopTarget | null = null;
     try {
-      target = await desktopTarget(request.url, auth.principal);
+      const share = auth.desktopShare || null;
+      const scope = desktopRequestScope(request.url, { headers: request.headers, orkestrDesktopShare: share });
+      target = await desktopTarget(request.url, auth.principal, {
+        ...scope,
+        desktopShare: share,
+        fencingToken: request.headers["x-orkestr-desktop-fencing-token"] || "",
+      });
     } catch (error) {
       writeUpgradeError(socket, Number((error as any)?.statusCode || 502), error instanceof Error ? error.message : String(error));
       return;

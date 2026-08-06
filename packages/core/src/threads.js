@@ -229,6 +229,17 @@ export async function createThread(input = {}, env = process.env) {
     agentResultSourceMessageId: String(input.agentResultSourceMessageId || "").trim() || null,
     agentParentResultMessageId: String(input.agentParentResultMessageId || "").trim() || null,
     agentTaskCompletedAt: String(input.agentTaskCompletedAt || "").trim() || null,
+    desktopSlug: String(input.desktopSlug || "").trim() || null,
+    browserSlug: String(input.browserSlug || "").trim() || null,
+    managedDesktopSlug: String(input.managedDesktopSlug || "").trim() || null,
+    manualInterventionDesktopSlug: String(input.manualInterventionDesktopSlug || "").trim() || null,
+    defaultDesktopSlug: String(input.defaultDesktopSlug || "").trim() || null,
+    desktopAccess: input.desktopAccess && typeof input.desktopAccess === "object" && !Array.isArray(input.desktopAccess)
+      ? { ...input.desktopAccess }
+      : null,
+    desktopGrants: Array.isArray(input.desktopGrants)
+      ? input.desktopGrants.map((value) => typeof value === "string" ? value : value && typeof value === "object" ? { ...value } : null).filter(Boolean)
+      : [],
     workerIndex: Number(input.workerIndex || 0) || null,
     workerLabel: String(input.workerLabel || "").trim() || null,
     workerStatus: String(input.workerStatus || "").trim() || null,

@@ -76,6 +76,7 @@ export async function createApp(): Promise<INestApplication> {
         (request as any).orkestrSecuritySession = result.session || null;
         (request as any).orkestrMachineAuth = (result as any).machineAuth || null;
         (request as any).orkestrMachineAuthContext = (result as any).machineAuthContext || null;
+        (request as any).orkestrDesktopShare = (result as any).desktopShare || null;
         const scopedShareAuth = authorizeScopedShareSessionRequest(request, result.session || null);
         if (!scopedShareAuth.ok) {
           return response

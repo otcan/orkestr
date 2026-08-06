@@ -196,7 +196,7 @@ export class OpsPageComponent implements OnInit, OnDestroy {
     if (showBusy) this.busy = true;
     this.opsBrowsersLoading = true;
     if (!this.opsBrowsers.length) this.opsBrowserMessage = "";
-    const browsersRequest = firstValueFrom(this.api.browserSessions());
+    const browsersRequest = firstValueFrom(this.api.browserSessions("", "ops_desktop_inventory"));
     browsersRequest
       .then((payload) => this.applyBrowserSessions(payload))
       .catch((error) => this.applyBrowserSessionsError(error))
@@ -225,7 +225,7 @@ export class OpsPageComponent implements OnInit, OnDestroy {
         firstValueFrom(this.api.events(120)),
         firstValueFrom(this.api.eventArchives()),
         browsersRequest,
-        firstValueFrom(this.api.desktopLeases()),
+        firstValueFrom(this.api.desktopLeases(false, "", "ops_desktop_inventory")),
         firstValueFrom(this.api.runtimeLeases()),
         firstValueFrom(this.api.executors()),
         firstValueFrom(this.api.executions()),
@@ -680,7 +680,7 @@ export class OpsPageComponent implements OnInit, OnDestroy {
     if (this.browserActionBusy(browser)) return;
     this.activeBrowserActionSlug = slug;
     try {
-      await firstValueFrom(this.api.browserAction(slug, action));
+      await firstValueFrom(this.api.browserAction(slug, action, { breakGlass: true, breakGlassReason: "ops_desktop_action" }));
       await this.loadOps(false);
     } catch (error) {
       this.error = this.errorText(error);
@@ -695,7 +695,7 @@ export class OpsPageComponent implements OnInit, OnDestroy {
     if (!slug || this.browserActionBusy(browser)) return;
     this.activeBrowserActionSlug = slug;
     try {
-      const result = await firstValueFrom(this.api.createDesktopShare(slug));
+      const result = await firstValueFrom(this.api.createDesktopShare(slug, { breakGlass: true, breakGlassReason: "ops_desktop_share" }));
       if (navigator?.clipboard && result.url) {
         await navigator.clipboard.writeText(result.url).catch(() => undefined);
       }

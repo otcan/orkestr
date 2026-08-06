@@ -5,9 +5,10 @@ import { promisify } from "node:util";
 import { dataPaths, ensureDataDirs, userDataPaths } from "../../storage/src/paths.js";
 import { appendEvent, readJson, writeJson } from "../../storage/src/store.js";
 import { isAdminPrincipal } from "../../core/src/policy.js";
+import { assertDesktopAccess, filterDesktopSessionsForThread } from "../../core/src/desktop-access.js";
 import { desktopCatalogFromEnv } from "../../core/src/runtime-settings.js";
 import { normalizeUserId } from "../../core/src/users.js";
-import { attachDesktopStateToSessions } from "./desktop-leases.js";
+import { assertDesktopLeaseForOperation, attachDesktopStateToSessions } from "./desktop-leases.js";
 import { isBrowserctlUnavailableError, listManagedDesktopSessions, managedDesktopAction, managedDesktopOpenUrl } from "./browserctl.js";
 
 const execFileAsync = promisify(execFile);
@@ -108,7 +109,11 @@ export async function listBrowserSessions(env = process.env, options = {}) {
   if (desktopMode(env) !== "profiles") {
     try {
       const payload = await listManagedDesktopSessions(env, options);
-      return { ...payload, sessions: filterVisibleBrowserSessions(payload.sessions || [], env) };
+      const visible = filterVisibleBrowserSessions(payload.sessions || [], env);
+      const sessions = await filterDesktopSessionsForThread(visible, {
+        ...options,
+      }, env);
+      return { ...payload, sessions };
     } catch (error) {
       if (!shouldFallbackAfterBrowserctlError(error, env)) {
         return {
@@ -121,8 +126,25 @@ export async function listBrowserSessions(env = process.env, options = {}) {
       }
     }
   }
-  const sessions = await listProfileBrowsers(env, options);
+  const listed = await listProfileBrowsers(env, options);
+  const sessions = await filterDesktopSessionsForThread(listed, {
+    ...options,
+  }, env);
   return { ok: true, source: "profiles", sessions };
+}
+
+async function assertBrowserAccess(slug, permission, env = process.env, options = {}) {
+  const decision = await assertDesktopAccess({
+    principal: options?.principal,
+    threadId: options?.threadId,
+    desktopSlug: slug,
+    ownerUserId: options?.ownerUserId,
+    permission,
+    breakGlass: options?.breakGlass === true,
+    breakGlassReason: options?.breakGlassReason,
+  }, env);
+  if (permission === "operate") await assertDesktopLeaseForOperation(slug, env, options);
+  return decision;
 }
 
 export function filterVisibleBrowserSessions(sessions = [], env = process.env) {
@@ -384,6 +406,7 @@ export async function ensureVirtualBrowserReady(slug, env = process.env, options
 }
 
 export async function prepareVirtualBrowser(slug, env = process.env, options = {}) {
+  await assertBrowserAccess(slug, "operate", env, options);
   const unavailable = desktopUnavailableError(env);
   if (unavailable) throw unavailable;
   if (desktopMode(env) !== "profiles") {
@@ -419,6 +442,7 @@ export async function prepareVirtualBrowser(slug, env = process.env, options = {
 }
 
 export async function openVirtualBrowser(slug, env = process.env, targetUrl = "", options = {}) {
+  await assertBrowserAccess(slug, "operate", env, options);
   const unavailable = desktopUnavailableError(env);
   if (unavailable) throw unavailable;
   if (desktopMode(env) !== "profiles") {
@@ -489,6 +513,7 @@ export async function openVirtualBrowser(slug, env = process.env, targetUrl = ""
 }
 
 export async function openUrlInVirtualBrowser(slug, url, env = process.env, options = {}) {
+  await assertBrowserAccess(slug, "operate", env, options);
   const targetUrl = normalizeBrowserOpenUrl(url);
   const unavailable = desktopUnavailableError(env);
   if (unavailable) throw unavailable;
@@ -507,6 +532,7 @@ export async function openUrlInVirtualBrowser(slug, url, env = process.env, opti
 }
 
 export async function stopVirtualBrowser(slug, env = process.env, options = {}) {
+  await assertBrowserAccess(slug, "operate", env, options);
   const unavailable = desktopUnavailableError(env);
   if (unavailable) throw unavailable;
   if (desktopMode(env) !== "profiles") {
@@ -556,6 +582,7 @@ export async function stopVirtualBrowser(slug, env = process.env, options = {}) 
 }
 
 export async function restartVirtualBrowser(slug, env = process.env, options = {}) {
+  await assertBrowserAccess(slug, "operate", env, options);
   const unavailable = desktopUnavailableError(env);
   if (unavailable) throw unavailable;
   if (desktopMode(env) !== "profiles") {
@@ -570,6 +597,7 @@ export async function restartVirtualBrowser(slug, env = process.env, options = {
 }
 
 export async function cleanupVirtualBrowser(slug, env = process.env, options = {}) {
+  await assertBrowserAccess(slug, "operate", env, options);
   const unavailable = desktopUnavailableError(env);
   if (unavailable) throw unavailable;
   if (desktopMode(env) !== "profiles") {

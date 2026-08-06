@@ -4,8 +4,17 @@ import { appendEvent, readJson, writeSecretJson } from "../../storage/src/store.
 import { adminPrincipal } from "./principal.js";
 import { isAdminPrincipal } from "./policy.js";
 import { defaultAdminUser, normalizeUserId } from "./users.js";
+import { assertDesktopAccess, authorizeDesktopAccess, desktopAccessMode, desktopBoundaryId } from "./desktop-access.js";
+import {
+  desktopShareBaseDomain,
+  desktopShareCookieHeader,
+  desktopShareSubdomainFromHost,
+  desktopShareUrl,
+  parseDesktopShareCookie,
+} from "./desktop-share-http.js";
 
-const shareCookieName = "orkestr_desktop_share";
+export { desktopShareCookieHeader, desktopShareCookieName, desktopShareSubdomainFromHost } from "./desktop-share-http.js";
+
 const shareAuditTtlMs = 24 * 60 * 60 * 1000;
 const defaultShareTtlMs = 60 * 60 * 1000;
 const defaultAccessTtlMs = 30 * 60 * 1000;
@@ -89,6 +98,14 @@ function normalizeShare(share = {}, now = Date.now()) {
     id: String(share.id || "").trim(),
     desktopSlug: cleanSlug(share.desktopSlug || share.slug),
     ownerUserId: normalizeUserId(share.ownerUserId || share.userId || "admin"),
+    threadId: String(share.threadId || "").trim() || null,
+    desktopId: String(share.desktopId || share.resourceId || "").trim() || null,
+    boundaryId: String(share.boundaryId || share.tenantVmId || "").trim() || null,
+    grantRevision: Math.max(0, Number(share.grantRevision || 0) || 0),
+    policyRevision: Math.max(0, Number(share.policyRevision || 0) || 0),
+    desktopGeneration: Math.max(1, Number(share.desktopGeneration || 1) || 1),
+    breakGlass: share.breakGlass === true,
+    breakGlassReason: String(share.breakGlassReason || "").trim() || null,
     subdomain: String(share.subdomain || "").trim().toLowerCase(),
     keyHash: String(share.keyHash || "").trim(),
     status: status === "pending" && expired ? "expired" : status,
@@ -96,6 +113,8 @@ function normalizeShare(share = {}, now = Date.now()) {
     expiresAt,
     supersededAt: String(share.supersededAt || "").trim() || null,
     supersededBy: String(share.supersededBy || "").trim() || null,
+    revokedAt: String(share.revokedAt || "").trim() || null,
+    revokeReason: String(share.revokeReason || "").trim() || null,
     createdBy: String(share.createdBy || "").trim() || null,
     label: String(share.label || "").trim() || null,
     attempts: Array.isArray(share.attempts) ? share.attempts.map((attempt) => normalizeAttempt(attempt, now)) : [],
@@ -111,9 +130,15 @@ function keepShare(share, now = Date.now()) {
 async function readState(env = process.env) {
   const state = await readJson(secretPath(env), { desktopShares: [] });
   const now = Date.now();
+  const enforce = desktopAccessMode(env) === "enforce";
   return {
     desktopShares: Array.isArray(state.desktopShares)
-      ? state.desktopShares.map((share) => normalizeShare(share, now)).filter((share) => share.id && keepShare(share, now))
+      ? state.desktopShares
+          .map((share) => normalizeShare(share, now))
+          .map((share) => enforce && !(share.breakGlass && share.breakGlassReason) && (!share.threadId || !share.desktopId || !share.boundaryId || !share.grantRevision)
+            ? { ...share, status: "revoked", revokedAt: share.revokedAt || nowIso(), revokeReason: "legacy_share_missing_thread_scope" }
+            : share)
+          .filter((share) => share.id && keepShare(share, now))
       : [],
   };
 }
@@ -133,12 +158,20 @@ function publicShare(share) {
     id: share.id,
     desktopSlug: share.desktopSlug,
     ownerUserId: share.ownerUserId,
+    threadId: share.threadId,
+    desktopId: share.desktopId,
+    boundaryId: share.boundaryId,
+    grantRevision: share.grantRevision,
+    desktopGeneration: share.desktopGeneration,
+    breakGlass: share.breakGlass === true,
     subdomain: share.subdomain,
     status: share.status,
     createdAt: share.createdAt,
     expiresAt: share.expiresAt,
     supersededAt: share.supersededAt || null,
     supersededBy: share.supersededBy || null,
+    revokedAt: share.revokedAt || null,
+    revokeReason: share.revokeReason || null,
     label: share.label,
   };
 }
@@ -158,39 +191,6 @@ function publicAttempt(attempt, { includeChallenge = false } = {}) {
 function ownerUserIdForPrincipal(principal = null, fallback = "", env = process.env) {
   if (principal?.userId && !isAdminPrincipal(principal)) return normalizeUserId(principal.userId);
   return normalizeUserId(fallback || principal?.userId || env.ORKESTR_ADMIN_USER_ID || defaultAdminUser(env).id);
-}
-
-function publicHttpsBase(env = process.env) {
-  return String(env.ORKESTR_PUBLIC_HTTPS_URL || env.ORKESTR_HTTPS_URL || env.ORKESTR_TAILSCALE_HTTPS_NAME || "").trim().replace(/\/+$/, "");
-}
-
-function shareBaseDomain(env = process.env) {
-  return String(env.ORKESTR_DESKTOP_SHARE_BASE_DOMAIN || "").trim().toLowerCase().replace(/^https?:\/\//, "").replace(/\/.*$/, "").replace(/^\*\./, "");
-}
-
-export function desktopShareSubdomainFromHost(host = "", env = process.env) {
-  const domain = shareBaseDomain(env);
-  if (!domain) return "";
-  const normalizedHost = String(host || "").trim().toLowerCase().split(":")[0];
-  if (!normalizedHost.endsWith(`.${domain}`)) return "";
-  return normalizedHost.slice(0, -domain.length - 1);
-}
-
-function desktopShareUrl(share, key, env = process.env) {
-  const template = String(env.ORKESTR_DESKTOP_SHARE_URL_TEMPLATE || "").trim();
-  if (template) {
-    return template
-      .replaceAll("{subdomain}", encodeURIComponent(share.subdomain))
-      .replaceAll("{shareId}", encodeURIComponent(share.id))
-      .replaceAll("{id}", encodeURIComponent(share.id))
-      .replaceAll("{key}", encodeURIComponent(key));
-  }
-  const domain = shareBaseDomain(env);
-  if (domain) {
-    return `https://${share.subdomain}.${domain}/desktop-share/${encodeURIComponent(share.id)}?key=${encodeURIComponent(key)}`;
-  }
-  const base = publicHttpsBase(env) || `http://127.0.0.1:${String(env.ORKESTR_PORT || "19812").trim() || "19812"}`;
-  return `${base}/desktop-share/${encodeURIComponent(share.subdomain)}/${encodeURIComponent(share.id)}?key=${encodeURIComponent(key)}`;
 }
 
 function assertShareActive(share, now = Date.now()) {
@@ -239,46 +239,71 @@ function desktopUrlForShare(share) {
   return `/desktop/${slug}/vnc.html?autoconnect=1&resize=scale&path=desktop/${slug}/websockify`;
 }
 
-export function desktopShareCookieName() {
-  return shareCookieName;
+function principalForShare(share, env = process.env) {
+  return share.ownerUserId === normalizeUserId(defaultAdminUser(env).id)
+    ? adminPrincipal(defaultAdminUser(env))
+    : {
+        kind: "user",
+        userId: share.ownerUserId,
+        role: "user",
+        source: "desktop-share",
+        displayName: share.ownerUserId,
+      };
 }
 
-export function desktopShareCookieHeader(value, env = process.env, maxAgeMs = accessTtlMs(env)) {
-  const secure = String(env.ORKESTR_COOKIE_SECURE || "").trim() === "1" || publicHttpsBase(env).startsWith("https://") || Boolean(shareBaseDomain(env));
-  return [
-    `${shareCookieName}=${encodeURIComponent(value)}`,
-    "Path=/",
-    "HttpOnly",
-    "SameSite=Lax",
-    `Max-Age=${Math.floor(maxAgeMs / 1000)}`,
-    secure ? "Secure" : "",
-  ].filter(Boolean).join("; ");
-}
-
-function cookieValue(header, name = shareCookieName) {
-  const raw = String(header || "");
-  for (const part of raw.split(";")) {
-    const [key, ...rest] = part.trim().split("=");
-    if (key === name) return decodeURIComponent(rest.join("=") || "");
+async function assertCurrentShareGrant(share, env = process.env) {
+  const decision = await authorizeDesktopAccess({
+    principal: principalForShare(share, env),
+    threadId: share.threadId,
+    desktopSlug: share.desktopSlug,
+    desktopId: share.desktopId,
+    ownerUserId: share.ownerUserId,
+    boundaryId: share.boundaryId,
+    desktopGeneration: share.desktopGeneration,
+    permission: "share",
+    breakGlass: share.breakGlass === true,
+    breakGlassReason: share.breakGlassReason,
+  }, env);
+  if (!decision.allowed) throw desktopShareError(decision.reason || "desktop_share_scope_denied", 403);
+  if (share.grantRevision && decision.grantRevision !== share.grantRevision) {
+    throw desktopShareError("desktop_share_grant_changed", 401);
   }
-  return "";
+  if (share.boundaryId && decision.boundaryId !== share.boundaryId) {
+    throw desktopShareError("desktop_share_boundary_changed", 401);
+  }
+  if (share.desktopGeneration && decision.desktopGeneration !== share.desktopGeneration) {
+    throw desktopShareError("desktop_share_generation_changed", 401);
+  }
+  return decision;
 }
 
-function parseShareCookie(header) {
-  const value = cookieValue(header);
-  const [shareId, token] = value.split(":");
-  return { shareId: String(shareId || "").trim(), token: String(token || "").trim() };
-}
-
-export async function createDesktopShare({ desktopSlug = "", slug = "", ownerUserId = "", principal = null, label = "", env = process.env } = {}) {
+export async function createDesktopShare({ desktopSlug = "", slug = "", ownerUserId = "", principal = null, threadId = "", desktopAccess = null, breakGlass = false, breakGlassReason = "", label = "", env = process.env } = {}) {
   const normalizedSlug = cleanSlug(desktopSlug || slug);
   if (!normalizedSlug) throw desktopShareError("desktop_slug_required", 400);
+  const resolvedOwnerUserId = ownerUserIdForPrincipal(principal, ownerUserId, env);
+  const access = desktopAccess || await assertDesktopAccess({
+    principal,
+    threadId,
+    desktopSlug: normalizedSlug,
+    ownerUserId: resolvedOwnerUserId,
+    permission: "share",
+    breakGlass,
+    breakGlassReason,
+  }, env);
   const key = randomToken(32);
   const state = await readState(env);
   const share = normalizeShare({
     id: randomToken(12),
     desktopSlug: normalizedSlug,
-    ownerUserId: ownerUserIdForPrincipal(principal, ownerUserId, env),
+    ownerUserId: resolvedOwnerUserId,
+    threadId: String(threadId || access.threadId || "").trim(),
+    desktopId: access.desktopId,
+    boundaryId: access.boundaryId || desktopBoundaryId(env),
+    grantRevision: access.grantRevision,
+    policyRevision: access.policyRevision,
+    desktopGeneration: access.desktopGeneration,
+    breakGlass: access.breakGlass === true,
+    breakGlassReason: access.breakGlassReason,
     subdomain: randomDnsLabel(),
     keyHash: sha256(key),
     status: "pending",
@@ -313,7 +338,7 @@ export async function createDesktopShare({ desktopSlug = "", slug = "", ownerUse
     url,
     key,
     subdomain: share.subdomain,
-    wildcardSubdomainConfigured: Boolean(shareBaseDomain(env) || String(env.ORKESTR_DESKTOP_SHARE_URL_TEMPLATE || "").trim()),
+    wildcardSubdomainConfigured: Boolean(desktopShareBaseDomain(env) || String(env.ORKESTR_DESKTOP_SHARE_URL_TEMPLATE || "").trim()),
   };
 }
 
@@ -326,6 +351,7 @@ export async function openDesktopShare({ shareId = "", key = "", browserToken = 
   assertShareActive(share, now);
   assertShareKey(share, key);
   assertShareSubdomain(share, subdomain);
+  await assertCurrentShareGrant(share, env);
 
   let token = String(browserToken || "").trim();
   let attempt = token
@@ -368,6 +394,7 @@ export async function desktopShareStatus({ shareId = "", key = "", browserToken 
   assertShareActive(share, now);
   assertShareKey(share, key);
   assertShareSubdomain(share, subdomain);
+  await assertCurrentShareGrant(share, env);
   const attempt = String(browserToken || "").trim()
     ? share.attempts.find((item) => item.tokenHash === sha256(browserToken) && Date.parse(item.expiresAt || "") > now)
     : null;
@@ -388,6 +415,11 @@ export async function approveDesktopShareChallenge(challenge = "", { env = proce
   let approved = null;
   for (const share of state.desktopShares) {
     if (["expired", "revoked", "superseded"].includes(share.status) || Date.parse(share.expiresAt || "") <= now) continue;
+    try {
+      await assertCurrentShareGrant(share, env);
+    } catch {
+      continue;
+    }
     for (const attempt of share.attempts) {
       if (attempt.challenge !== value || attempt.status !== "pending" || Date.parse(attempt.expiresAt || "") <= now) continue;
       attempt.status = "approved";
@@ -422,7 +454,7 @@ export async function authorizeDesktopShareHttpRequest(request, env = process.en
   const parts = url.pathname.split("/").filter(Boolean);
   if (parts[0] !== "desktop" || !parts[1]) return null;
   const requestedSlug = cleanSlug(decodeURIComponent(parts[1]));
-  const { shareId, token } = parseShareCookie(request?.headers?.cookie || "");
+  const { shareId, token } = parseDesktopShareCookie(request?.headers?.cookie || "");
   if (!shareId || !token) return null;
   const state = await readState(env);
   const now = Date.now();
@@ -430,17 +462,10 @@ export async function authorizeDesktopShareHttpRequest(request, env = process.en
   if (!share) return null;
   assertShareActive(share, now);
   if (share.desktopSlug !== requestedSlug) throw desktopShareError("desktop_share_slug_forbidden", 403);
+  await assertCurrentShareGrant(share, env);
   const attempt = share.attempts.find((item) => item.tokenHash === sha256(token) && Date.parse(item.expiresAt || "") > now);
   if (!attempt || attempt.status !== "approved") return null;
-  const principal = share.ownerUserId === normalizeUserId(defaultAdminUser(env).id)
-    ? adminPrincipal(defaultAdminUser(env))
-    : {
-        kind: "user",
-        userId: share.ownerUserId,
-        role: "user",
-        source: "desktop-share",
-        displayName: share.ownerUserId,
-      };
+  const principal = principalForShare(share, env);
   return {
     ok: true,
     principal,
