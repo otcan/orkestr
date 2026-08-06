@@ -23,6 +23,7 @@ import {
   approveDesktopShareChallenge,
   createDesktopShare,
   desktopShareStatus,
+  listDesktopShares,
   openDesktopShare,
 } from "../packages/core/src/desktop-shares.js";
 
@@ -180,6 +181,13 @@ test("desktop shares are invalidated when their thread grant is replaced", async
     () => desktopShareStatus({ shareId, key, subdomain: created.subdomain, browserToken: opened.cookie.value.split(":")[1], env }),
     /desktop_grant_required/,
   );
+  const lifecycle = await listDesktopShares({ ownerUserId: "admin", threadId: threadA.id, env });
+  const invalidated = lifecycle.shares.find((share) => share.id === shareId);
+  assert.equal(invalidated?.status, "revoked");
+  assert.equal(invalidated?.attempts[0]?.status, "approved");
+  assert.ok(invalidated?.attempts[0]?.approvedAt);
+  assert.ok(invalidated?.attempts[0]?.expiresAt);
+  assert.equal(Object.hasOwn(invalidated?.attempts[0] || {}, "challenge"), false);
 });
 
 test("desktop shares are invalidated when the desktop runtime generation advances", async () => {

@@ -271,6 +271,7 @@ function serveDesktopSharePage(response: any) {
     <code id="challenge">loading</code>
     <button id="copy" type="button">Copy challenge</button>
     <p id="status"></p>
+    <small id="lifecycle" aria-live="polite"></small>
     <a id="open" class="button" href="#" hidden>Open desktop</a>
     <a id="mobile" class="button" href="#" hidden>Mobile controls</a>
     <small>This link only works for this browser after the exact command below is pasted back to the Orkestr chat.</small>
@@ -287,6 +288,7 @@ function serveDesktopSharePage(response: any) {
     const key = new URLSearchParams(location.search).get('key') || '';
     const challenge = document.getElementById('challenge');
     const statusNode = document.getElementById('status');
+    const lifecycleNode = document.getElementById('lifecycle');
     const summary = document.getElementById('summary');
     const open = document.getElementById('open');
     const mobile = document.getElementById('mobile');
@@ -351,9 +353,24 @@ function serveDesktopSharePage(response: any) {
       main.hidden = true;
       viewer.hidden = false;
     }
+    function lifecycleTime(value) {
+      if (!value) return 'unknown';
+      const time = new Date(value);
+      return Number.isNaN(time.getTime()) ? 'unknown' : time.toLocaleString();
+    }
+    function renderLifecycle(body) {
+      const share = body && body.share ? body.share : {};
+      const attempt = body && body.attempt ? body.attempt : {};
+      const generation = Number(share.shareGeneration || 0);
+      const shareStatus = share.status || 'pending';
+      const attemptStatus = attempt.status || 'not opened';
+      const approved = attempt.approvedAt ? ' approved ' + lifecycleTime(attempt.approvedAt) : '';
+      lifecycleNode.textContent = 'Generation ' + generation + ' · ' + shareStatus + ' · attempt ' + attemptStatus + approved + ' · expires ' + lifecycleTime(share.expiresAt);
+    }
     async function poll() {
       try {
         const body = await json(api('status'));
+        renderLifecycle(body);
         if (body.approved && body.desktopUrl) {
           const desktopUrl = body.desktopUrl;
           statusNode.textContent = 'Approved. Desktop connected.';
@@ -378,6 +395,7 @@ function serveDesktopSharePage(response: any) {
     async function start() {
       try {
         const body = await json(api('open'));
+        renderLifecycle(body);
         const value = body.attempt && body.attempt.challenge ? body.attempt.challenge : '';
         challenge.textContent = 'orkestr desktop approve ' + value;
         summary.textContent = 'Copy this exact command and paste it into the Orkestr chat that requested the desktop.';

@@ -298,12 +298,13 @@ export interface DesktopShareRecord {
   desktopSlug: string;
   ownerUserId: string;
   threadId?: string | null;
+  lineageId?: string;
   status: string;
   current?: boolean;
   shareGeneration?: number;
   createdAt?: string;
   expiresAt?: string;
-  attempts?: Array<{ id: string; status: string; createdAt?: string; approvedAt?: string | null }>;
+  attempts?: Array<{ id: string; status: string; createdAt?: string; expiresAt?: string; approvedAt?: string | null }>;
 }
 
 export interface DesktopLeaseRecord {

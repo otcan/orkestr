@@ -60,6 +60,14 @@ function closeShareSocket(connection: ShareSocket, reason: string): void {
   unregisterShareSocket(connection, reason);
 }
 
+function revalidateShareSocket(connection: ShareSocket): void {
+  void validateDesktopShareSession({ shareId: connection.shareId, attemptId: connection.attemptId }).catch((error) => {
+    const reason = String((error as Error)?.message || "desktop_share_invalid");
+    recordShareSocketEvent("desktop_share_ws_stale_reconnect", connection, reason);
+    closeShareSocket(connection, reason);
+  });
+}
+
 export function registerDesktopShareSocket(socket: Duplex, upstream: Duplex, share: any, attempt: any): ShareSocket | null {
   const shareId = String(share?.id || "").trim();
   const attemptId = String(attempt?.id || "").trim();
@@ -71,12 +79,7 @@ export function registerDesktopShareSocket(socket: Duplex, upstream: Duplex, sha
     attemptId,
     socket,
     upstream,
-    validationTimer: setInterval(() => {
-      void validateDesktopShareSession({ shareId, attemptId }).catch((error) => {
-        recordShareSocketEvent("desktop_share_ws_stale_reconnect", connection, String((error as Error)?.message || "desktop_share_invalid"));
-        closeShareSocket(connection, String((error as Error)?.message || "desktop_share_invalid"));
-      });
-    }, 2_000),
+    validationTimer: setInterval(() => revalidateShareSocket(connection), 2_000),
     closed: false,
   } satisfies ShareSocket;
   connection.validationTimer.unref?.();
@@ -86,6 +89,9 @@ export function registerDesktopShareSocket(socket: Duplex, upstream: Duplex, sha
   socket.once("close", () => unregisterShareSocket(connection));
   upstream.once("close", () => unregisterShareSocket(connection));
   recordShareSocketEvent("desktop_share_ws_connected", connection);
+  // Close a socket that became stale in the authorization-to-upstream race
+  // immediately instead of granting it the next polling interval.
+  revalidateShareSocket(connection);
   return connection;
 }
 

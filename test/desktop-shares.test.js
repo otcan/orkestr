@@ -7,6 +7,7 @@ import {
   approveDesktopShareChallenge,
   authorizeDesktopShareHttpRequest,
   createDesktopShare,
+  desktopShareEnforcementPreflight,
   desktopShareFailureResponse,
   desktopShareRenewalHint,
   desktopShareStatus,
@@ -186,6 +187,33 @@ test("concurrent desktop share creation leaves exactly one monotonic current sha
   assert.deepEqual(generations, [1, 2, 3, 4, 5, 6, 7, 8]);
   assert.equal(lifecycle.shares.filter((share) => share.current).length, 1);
   assert.equal(lifecycle.shares.filter((share) => share.status === "superseded").length, 7);
+});
+
+test("shadow-mode legacy share lineages stay visible and block enforcement while ambiguous", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-desktop-share-legacy-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_PUBLIC_HTTPS_URL: "https://app.example.test",
+    ORKESTR_DESKTOP_ACCESS_MODE: "shadow",
+  };
+  const expiresAt = new Date(Date.now() + 60 * 60_000).toISOString();
+  await fs.mkdir(path.join(home, "secrets"), { recursive: true });
+  await fs.writeFile(path.join(home, "secrets", "desktop-shares.json"), `${JSON.stringify({
+    desktopShares: [
+      { id: "legacy-older", desktopSlug: "linkedin", ownerUserId: "alice", status: "active", createdAt: "2026-01-01T00:00:00.000Z", expiresAt },
+      { id: "legacy-newer", desktopSlug: "linkedin", ownerUserId: "alice", status: "active", createdAt: "2026-01-02T00:00:00.000Z", expiresAt },
+    ],
+  })}\n`);
+
+  const lifecycle = await listDesktopShares({ ownerUserId: "alice", env });
+  const preflight = await desktopShareEnforcementPreflight(env);
+
+  assert.equal(lifecycle.shares.filter((share) => share.current).length, 1);
+  assert.equal(lifecycle.shares.find((share) => share.current)?.id, "legacy-newer");
+  assert.deepEqual(lifecycle.migrationAmbiguities, [{ lineageId: lifecycle.shares[0].lineageId, reason: "active_share_lineage_ambiguous" }]);
+  assert.equal(preflight.mode, "shadow");
+  assert.equal(preflight.ok, false);
+  assert.equal(preflight.ambiguities.length, 1);
 });
 
 test("desktop share supersession is isolated by thread lineage", async () => {
