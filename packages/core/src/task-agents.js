@@ -18,7 +18,6 @@ const defaultMissingResultGraceMs = 2_000;
 const maxMissingResultGraceMs = 30_000;
 function clean(value) { return String(value || "").trim(); }
 function lower(value) { return clean(value).toLowerCase(); }
-
 function timestampMs(value = "") {
   const parsed = Date.parse(clean(value));
   return Number.isFinite(parsed) ? parsed : 0;
