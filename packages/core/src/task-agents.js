@@ -12,13 +12,33 @@ import {
 } from "./threads.js";
 import { getTaskAgentProfile } from "./task-agent-profiles.js";
 
-const activeTaskStates = new Set(["created", "queued", "starting", "working", "delivering_result"]);
+const activeTaskStates = new Set(["created", "queued", "starting", "working", "awaiting_result", "delivering_result"]);
 const terminalTaskStates = new Set(["cancelled", "completed", "failed"]);
 const taskResultLocks = new Map();
+const defaultMissingResultGraceMs = 2_000;
+const maxMissingResultGraceMs = 30_000;
 
-function clean(value) {
-  return String(value || "").trim();
+function clean(value) { return String(value || "").trim(); }
+function lower(value) { return clean(value).toLowerCase(); }
+
+function timestampMs(value = "") {
+  const parsed = Date.parse(clean(value));
+  return Number.isFinite(parsed) ? parsed : 0;
 }
+
+function optionNowMs(options = {}) {
+  const parsed = Number(options.nowMs ?? options.now ?? 0);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : Date.now();
+}
+
+function missingResultGraceMs(env = process.env, options = {}) {
+  const raw = options.resultGraceMs ?? env.ORKESTR_TASK_AGENT_RESULT_GRACE_MS ?? defaultMissingResultGraceMs;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed)) return defaultMissingResultGraceMs;
+  return Math.max(0, Math.min(maxMissingResultGraceMs, Math.floor(parsed)));
+}
+
+function isoAt(ms) { return new Date(Math.max(0, Number(ms) || 0)).toISOString(); }
 
 function safeSegment(value, fallback = "task") {
   return clean(value).toLowerCase().replace(/[^a-z0-9_.-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 64) || fallback;
@@ -65,12 +85,35 @@ function taskPrompt(parent, profile, task, contextRefs) {
   ].filter(Boolean).join("\n");
 }
 
-export function isTaskAgentThread(thread = {}) {
-  return clean(thread.threadKind) === "task-agent" && Boolean(clean(thread.agentTaskId));
+export function isTaskAgentThread(thread = {}) { return clean(thread.threadKind) === "task-agent" && Boolean(clean(thread.agentTaskId)); }
+
+export function isTerminalTaskAgentThread(thread = {}) { return isTaskAgentThread(thread) && terminalTaskStates.has(clean(thread.agentTaskStatus)); }
+
+function canCorrectMissingResultFailure(thread = {}) {
+  return isTaskAgentThread(thread) && clean(thread.agentTaskStatus) === "failed" &&
+    clean(thread.agentTaskFailureKind) === "missing_result" && thread.agentTaskFailureProvisional === true;
 }
 
-export function isTerminalTaskAgentThread(thread = {}) {
-  return isTaskAgentThread(thread) && terminalTaskStates.has(clean(thread.agentTaskStatus));
+function taskAgentRuntimeActive(thread = {}) {
+  const runtime = thread.runtime && typeof thread.runtime === "object" ? thread.runtime : {};
+  const codexStatus = runtime.codexStatus && typeof runtime.codexStatus === "object" ? runtime.codexStatus : {};
+  return Boolean(
+    clean(runtime.activeTurnId) ||
+    runtime.pendingRequest ||
+    lower(codexStatus.type) === "active" ||
+    ["working", "awaiting_approval"].includes(lower(runtime.state)),
+  );
+}
+
+function taskAgentFinalAnswer(messages = [], turnId = "") {
+  const finalAnswers = [...messages].reverse().filter((message) =>
+    clean(message.role) === "assistant" && clean(message.phase || "final_answer") === "final_answer" && clean(message.text));
+  const wantedTurn = clean(turnId);
+  if (wantedTurn) {
+    const matching = finalAnswers.find((message) => clean(message.codexTurnId || message.turnId) === wantedTurn);
+    if (matching) return matching;
+  }
+  return finalAnswers[0] || null;
 }
 
 async function withTaskResultLock(threadId, operation) {
@@ -88,12 +131,13 @@ async function withTaskResultLock(threadId, operation) {
   }
 }
 
-export async function listTaskAgents(parentThreadId, env = process.env) {
+export async function listTaskAgents(parentThreadId, env = process.env, options = {}) {
   const parent = await getThread(parentThreadId, env);
   if (!parent) throw httpError("thread_not_found", 404);
-  return (await listThreads(env))
+  const taskAgents = (await listThreads(env))
     .filter((thread) => isTaskAgentThread(thread) && thread.parentThreadId === parent.id)
     .sort((left, right) => clean(right.createdAt).localeCompare(clean(left.createdAt)));
+  return Promise.all(taskAgents.map((thread) => reconcileTaskAgentStatus(thread, env, options)));
 }
 
 export async function createTaskAgent(parentThreadId, input = {}, env = process.env) {
@@ -179,13 +223,11 @@ export async function createTaskAgent(parentThreadId, input = {}, env = process.
   return { parent, taskAgent: updated, message, profile: publicProfile };
 }
 
-export async function taskAgentSummary(threadOrId, env = process.env) {
+async function taskAgentSummaryFromThread(threadOrId, env = process.env) {
   const thread = typeof threadOrId === "string" ? await getThread(threadOrId, env) : threadOrId;
   if (!thread || !isTaskAgentThread(thread)) throw httpError("task_agent_not_found", 404);
   const messages = await listThreadMessages(thread.id, env);
-  const result = [...messages].reverse().find((message) =>
-    clean(message.role) === "assistant" && clean(message.phase || "final_answer") === "final_answer" && clean(message.text)
-  ) || null;
+  const result = taskAgentFinalAnswer(messages);
   return {
     id: thread.agentTaskId,
     threadId: thread.id,
@@ -201,12 +243,23 @@ export async function taskAgentSummary(threadOrId, env = process.env) {
   };
 }
 
+export async function taskAgentSummary(threadOrId, env = process.env, options = {}) {
+  const thread = typeof threadOrId === "string" ? await getThread(threadOrId, env) : threadOrId;
+  if (!thread || !isTaskAgentThread(thread)) throw httpError("task_agent_not_found", 404);
+  const reconciled = await reconcileTaskAgentStatus(thread, env, options);
+  return taskAgentSummaryFromThread(reconciled, env);
+}
+
 async function enqueueParentResult(thread, sourceMessage, status, resultText, env, options = {}) {
   return withTaskResultLock(thread.id, async () => {
     const current = await getThread(thread.id, env);
     if (!current || !isTaskAgentThread(current)) return null;
-    if (isTerminalTaskAgentThread(current)) return taskAgentSummary(current, env);
-    if (clean(current.agentResultSourceMessageId) === clean(sourceMessage?.id)) return taskAgentSummary(current, env);
+    const sourceMessageId = clean(sourceMessage?.id);
+    const correction = status === "completed" && canCorrectMissingResultFailure(current);
+    if (isTerminalTaskAgentThread(current) && !correction) return taskAgentSummaryFromThread(current, env);
+    if (sourceMessageId && clean(current.agentResultSourceMessageId) === sourceMessageId && !correction) {
+      return taskAgentSummaryFromThread(current, env);
+    }
     const parent = await getThread(current.parentThreadId, env);
     if (!parent) {
       await updateThread(current.id, {
@@ -216,10 +269,6 @@ async function enqueueParentResult(thread, sourceMessage, status, resultText, en
       }, env);
       return null;
     }
-    await updateThread(current.id, {
-      agentTaskStatus: "delivering_result",
-      agentResultSourceMessageId: sourceMessage?.id || null,
-    }, env);
     const text = [
       `[Specialist task ${status}]`,
       `Profile: ${current.agentProfileId}`,
@@ -230,35 +279,62 @@ async function enqueueParentResult(thread, sourceMessage, status, resultText, en
       "",
       "Treat this as scoped specialist evidence. Evaluate it and answer the user in the parent conversation.",
     ].join("\n");
-    const parentMessage = await appendThreadMessage(parent.id, {
-      role: "user",
-      source: "orkestr_task_agent_result",
-      text,
-      state: "queued",
-      steerActiveTurn: true,
-      codexDeliveryMode: "instant_steer",
-      clientMessageId: `task-agent-result:${current.agentTaskId}:${sourceMessage?.id || status}`,
-    }, env);
+    let parentMessage = null;
+    if (correction && clean(current.agentParentResultMessageId)) {
+      parentMessage = await updateThreadMessage(parent.id, current.agentParentResultMessageId, {
+        text,
+        state: "queued",
+        deliveryState: "queued",
+        deliveryClaimId: null,
+        deliveryNextAttemptAt: null,
+        error: null,
+        steerActiveTurn: true,
+        codexDeliveryMode: "instant_steer",
+        clientMessageId: `task-agent-result:${current.agentTaskId}:${sourceMessageId || status}`,
+      }, env).catch(() => null);
+    }
+    if (!parentMessage) {
+      await updateThread(current.id, {
+        agentTaskStatus: "delivering_result",
+        agentResultSourceMessageId: sourceMessageId || null,
+      }, env);
+      parentMessage = await appendThreadMessage(parent.id, {
+        role: "user",
+        source: "orkestr_task_agent_result",
+        text,
+        state: "queued",
+        steerActiveTurn: true,
+        codexDeliveryMode: "instant_steer",
+        clientMessageId: `task-agent-result:${current.agentTaskId}:${sourceMessageId || status}`,
+      }, env);
+    }
     const updated = await updateThread(current.id, {
       agentTaskStatus: status,
       agentParentResultMessageId: parentMessage.id,
       agentTaskCompletedAt: new Date().toISOString(),
       lastError: status === "failed" ? resultText : null,
+      agentResultSourceMessageId: sourceMessageId || clean(current.agentResultSourceMessageId) || null,
+      agentTaskFailureKind: status === "failed" ? clean(options.failureKind) || null : null,
+      agentTaskFailureProvisional: status === "failed" ? options.provisional === true : false,
+      agentTaskResultDueAt: null,
+      agentTaskResultGraceStartedAt: null,
+      agentTaskResultTurnId: null,
     }, env);
     await appendEvent({
-      type: `task_agent_${status}`,
+      type: correction ? "task_agent_missing_result_corrected" : `task_agent_${status}`,
       threadId: parent.id,
       taskAgentThreadId: current.id,
       taskId: current.agentTaskId,
       profileId: current.agentProfileId,
       parentMessageId: parentMessage.id,
+      sourceMessageId: sourceMessageId || null,
     }, env);
     recordTaskAgentLifecycleMetric(`result_${status}`, status);
     if (options.deliver !== false) {
       const { requestThreadInputDelivery } = await import("./runtime-leases.js");
       requestThreadInputDelivery(parent.id, env);
     }
-    return taskAgentSummary(updated, env);
+    return taskAgentSummaryFromThread(updated, env);
   });
 }
 
@@ -269,25 +345,119 @@ export async function completeTaskAgentFromMessage(thread, message, env = proces
 
 export async function failTaskAgent(thread, error, env = process.env, options = {}) {
   if (!isTaskAgentThread(thread)) return null;
-  const message = { id: `failure-${clean(thread.runtime?.lastTurnId || Date.now())}` };
+  const turnId = clean(options.turnId || thread.agentTaskResultTurnId || thread.runtime?.lastTurnId || thread.runtime?.activeTurnId);
+  const kind = clean(options.failureKind || "runtime");
+  const message = { id: clean(options.sourceMessageId) || `failure-${kind}-${turnId || "unknown"}` };
   return enqueueParentResult(thread, message, "failed", clean(error) || "The specialist task failed without a diagnostic result.", env, options);
 }
 
 export async function finishTaskAgentTurn(thread, turn = {}, env = process.env, options = {}) {
   if (!isTaskAgentThread(thread)) return null;
   const current = await getThread(thread.id, env);
-  if (!current || isTerminalTaskAgentThread(current)) return current ? taskAgentSummary(current, env) : null;
+  if (!current) return null;
+  if (clean(current.agentTaskStatus) === "cancelled") return taskAgentSummaryFromThread(current, env);
   const status = clean(turn.status || "completed").toLowerCase();
+  const turnId = clean(turn.id || turn.turnId || current.runtime?.lastTurnId || current.runtime?.activeTurnId);
+  const existingFinal = taskAgentFinalAnswer(await listThreadMessages(current.id, env), turnId);
+  if (existingFinal) return completeTaskAgentFromMessage(current, existingFinal, env, options);
+  if (isTerminalTaskAgentThread(current) && !canCorrectMissingResultFailure(current)) {
+    return taskAgentSummaryFromThread(current, env);
+  }
   if (turn.interrupted === true || ["interrupted", "aborted", "cancelled", "canceled"].includes(status)) {
-    return failTaskAgent(current, clean(turn.error) || "The specialist task was interrupted before returning a result.", env, options);
+    return failTaskAgent(current, clean(turn.error) || "The specialist task was interrupted before returning a result.", env, { ...options, turnId });
   }
   if (status === "failed") {
-    return failTaskAgent(current, clean(turn.error) || "The specialist task failed before returning a result.", env, options);
+    return failTaskAgent(current, clean(turn.error) || "The specialist task failed before returning a result.", env, { ...options, turnId });
   }
   if (status === "completed") {
-    return failTaskAgent(current, "The specialist task completed without returning a final result.", env, options);
+    return reconcileMissingResultAfterCompletedTurn(current, { ...turn, id: turnId }, env, options);
   }
   return null;
+}
+
+async function reconcileMissingResultAfterCompletedTurn(thread, turn = {}, env = process.env, options = {}) {
+  const current = await getThread(thread.id, env);
+  if (!current || !isTaskAgentThread(current)) return null;
+  if (clean(current.agentTaskStatus) === "cancelled") return taskAgentSummaryFromThread(current, env);
+  const turnId = clean(turn.id || turn.turnId || current.agentTaskResultTurnId || current.runtime?.lastTurnId);
+  const now = optionNowMs(options);
+  const existingDueAt = timestampMs(current.agentTaskResultDueAt);
+  const graceMs = missingResultGraceMs(env, options);
+  const dueAtMs = existingDueAt || (now + graceMs);
+  if (graceMs <= 0 || dueAtMs <= now) {
+    return failTaskAgent(
+      current,
+      "The specialist task completed without returning a final result.",
+      env,
+      {
+        ...options,
+        turnId,
+        failureKind: "missing_result",
+        provisional: true,
+        sourceMessageId: `failure-missing_result-${turnId || clean(current.agentTaskId) || "unknown"}`,
+      },
+    );
+  }
+  const startedAt = clean(current.agentTaskResultGraceStartedAt) || isoAt(now);
+  const updated = await updateThread(current.id, {
+    agentTaskStatus: "awaiting_result",
+    agentTaskResultDueAt: isoAt(dueAtMs),
+    agentTaskResultGraceStartedAt: startedAt,
+    agentTaskResultTurnId: turnId || null,
+    agentTaskFailureKind: null,
+    agentTaskFailureProvisional: false,
+    lastError: null,
+  }, env);
+  if (!existingDueAt) {
+    await appendEvent({
+      type: "task_agent_result_grace_started",
+      threadId: current.parentThreadId,
+      taskAgentThreadId: current.id,
+      taskId: current.agentTaskId,
+      profileId: current.agentProfileId,
+      turnId,
+      dueAt: isoAt(dueAtMs),
+    }, env).catch(() => {});
+    recordTaskAgentLifecycleMetric("awaiting_result", "awaiting_result");
+  }
+  return taskAgentSummaryFromThread(updated, env);
+}
+
+export async function reconcileTaskAgentStatus(threadOrId, env = process.env, options = {}) {
+  const current = typeof threadOrId === "string" ? await getThread(threadOrId, env) : await getThread(threadOrId?.id, env);
+  if (!current || !isTaskAgentThread(current)) return current;
+  if (clean(current.agentTaskStatus) === "cancelled") return current;
+  const turnId = clean(current.agentTaskResultTurnId || current.runtime?.lastTurnId || current.runtime?.activeTurnId);
+  const finalAnswer = taskAgentFinalAnswer(await listThreadMessages(current.id, env), turnId);
+  if (finalAnswer && (!isTerminalTaskAgentThread(current) || canCorrectMissingResultFailure(current))) {
+    await completeTaskAgentFromMessage(current, finalAnswer, env, options);
+    return getThread(current.id, env);
+  }
+  if (isTerminalTaskAgentThread(current)) return current;
+  if (taskAgentRuntimeActive(current) && clean(current.agentTaskStatus) !== "working") {
+    const updated = await updateThread(current.id, {
+      agentTaskStatus: "working",
+      agentTaskResultDueAt: null,
+      agentTaskResultGraceStartedAt: null,
+      agentTaskResultTurnId: null,
+      agentTaskFailureKind: null,
+      agentTaskFailureProvisional: false,
+      lastError: null,
+    }, env);
+    recordTaskAgentLifecycleMetric("reconciled_working", "working");
+    return updated;
+  }
+  if (clean(current.agentTaskStatus) === "awaiting_result") {
+    const dueAt = timestampMs(current.agentTaskResultDueAt);
+    if (dueAt && dueAt <= optionNowMs(options)) {
+      await reconcileMissingResultAfterCompletedTurn(current, { id: current.agentTaskResultTurnId || "" }, env, {
+        ...options,
+        resultGraceMs: 0,
+      });
+      return getThread(current.id, env);
+    }
+  }
+  return current;
 }
 
 export async function cancelTaskAgent(taskAgentId, env = process.env) {

@@ -12,10 +12,11 @@ import {
   createTaskAgent,
   finishTaskAgentTurn,
   listTaskAgents,
+  reconcileTaskAgentStatus,
   taskAgentSummary,
 } from "../packages/core/src/task-agents.js";
 import { renderOpenMetrics, resetObservabilityForTests } from "../packages/core/src/observability.js";
-import { appendThreadMessage, createThread, deleteThread, getThread, listThreadMessages } from "../packages/core/src/threads.js";
+import { appendThreadMessage, createThread, deleteThread, getThread, listThreadMessages, updateThread } from "../packages/core/src/threads.js";
 import { listThreadWorkers } from "../packages/core/src/thread-workers.js";
 
 async function testEnv() {
@@ -133,6 +134,7 @@ test("task agent lifecycle transitions update observability counters", async () 
 
 test("task agent terminal handoffs are serialized when completion signals race", async () => {
   const env = await testEnv();
+  env.ORKESTR_TASK_AGENT_RESULT_GRACE_MS = "5000";
   const parent = await createThread({ id: "race-parent", name: "Race Parent", cwd: path.dirname(env.ORKESTR_HOME) }, env);
   const { taskAgent } = await createTaskAgent(parent.id, { task: "Inspect the race." }, env);
   const result = await appendThreadMessage(taskAgent.id, {
@@ -152,7 +154,55 @@ test("task agent terminal handoffs are serialized when completion signals race",
     .filter((message) => message.source === "orkestr_task_agent_result");
   assert.equal(parentMessages.length, 1);
   const current = await getThread(taskAgent.id, env);
-  assert.ok(["completed", "failed"].includes(current.agentTaskStatus));
+  assert.equal(current.agentTaskStatus, "completed");
+});
+
+test("task agent summary reconciles active runtime to working", async () => {
+  const env = await testEnv();
+  const parent = await createThread({ id: "active-runtime-parent", name: "Active Runtime Parent", cwd: path.dirname(env.ORKESTR_HOME) }, env);
+  const { taskAgent } = await createTaskAgent(parent.id, { task: "Inspect active runtime." }, env);
+  await updateThread(taskAgent.id, {
+    agentTaskStatus: "queued",
+    runtime: {
+      ...(taskAgent.runtime || {}),
+      runtimeKind: "codex-app-server",
+      state: "working",
+      activeTurnId: "active-runtime-turn",
+      codexStatus: { type: "active", activeFlags: ["running"] },
+    },
+  }, env);
+
+  const summary = await taskAgentSummary(taskAgent.id, env);
+  const current = await getThread(taskAgent.id, env);
+
+  assert.equal(summary.status, "working");
+  assert.equal(current.agentTaskStatus, "working");
+});
+
+test("task agent concurrency uses reconciled active runtime status", async () => {
+  const env = { ...await testEnv(), ORKESTR_TASK_AGENT_MAX_ACTIVE_PER_THREAD: "1" };
+  const parent = await createThread({ id: "active-concurrency-parent", name: "Active Concurrency Parent", cwd: path.dirname(env.ORKESTR_HOME) }, env);
+  const { taskAgent } = await createTaskAgent(parent.id, {
+    task: "Held task became active.",
+    autoRun: false,
+  }, env);
+  await updateThread(taskAgent.id, {
+    agentTaskStatus: "held",
+    runtime: {
+      ...(taskAgent.runtime || {}),
+      runtimeKind: "codex-app-server",
+      state: "working",
+      activeTurnId: "active-concurrency-turn",
+      codexStatus: { type: "active", activeFlags: ["running"] },
+    },
+  }, env);
+
+  await assert.rejects(
+    () => createTaskAgent(parent.id, { task: "Second task should wait." }, env),
+    /task_agent_concurrency_limit/,
+  );
+  const current = await getThread(taskAgent.id, env);
+  assert.equal(current.agentTaskStatus, "working");
 });
 
 test("held task agents stay out of delivery and cancellation remains terminal", async () => {
@@ -226,14 +276,65 @@ test("task agent terminal turns surface a missing result to the parent", async (
   const env = await testEnv();
   const parent = await createThread({ id: "missing-result-parent", name: "Missing Result Parent", cwd: path.dirname(env.ORKESTR_HOME) }, env);
   const { taskAgent } = await createTaskAgent(parent.id, { task: "Inspect the runtime." }, env);
+  const now = Date.parse("2026-01-01T00:00:00.000Z");
 
-  await finishTaskAgentTurn(taskAgent, { status: "completed" }, env, { deliver: false });
+  await finishTaskAgentTurn(taskAgent, { id: "missing-result-turn", status: "completed" }, env, {
+    deliver: false,
+    nowMs: now,
+    resultGraceMs: 100,
+  });
 
-  const current = await getThread(taskAgent.id, env);
+  let current = await getThread(taskAgent.id, env);
+  assert.equal(current.agentTaskStatus, "awaiting_result");
+  assert.equal((await listThreadMessages(parent.id, env)).length, 0);
+
+  await reconcileTaskAgentStatus(taskAgent.id, env, {
+    deliver: false,
+    nowMs: now + 101,
+  });
+  current = await getThread(taskAgent.id, env);
   assert.equal(current.agentTaskStatus, "failed");
+  assert.equal(current.agentTaskFailureKind, "missing_result");
+  assert.equal(current.agentTaskFailureProvisional, true);
   const parentMessages = await listThreadMessages(parent.id, env);
   assert.equal(parentMessages.length, 1);
   assert.match(parentMessages[0].text, /completed without returning a final result/i);
+});
+
+test("late task agent final answer corrects provisional missing-result failure", async () => {
+  const env = await testEnv();
+  const parent = await createThread({ id: "late-result-parent", name: "Late Result Parent", cwd: path.dirname(env.ORKESTR_HOME) }, env);
+  const { taskAgent } = await createTaskAgent(parent.id, { task: "Inspect late projection." }, env);
+
+  await finishTaskAgentTurn(taskAgent, { id: "late-result-turn", status: "completed" }, env, {
+    deliver: false,
+    resultGraceMs: 0,
+  });
+  const failed = await getThread(taskAgent.id, env);
+  const failedParentMessages = await listThreadMessages(parent.id, env);
+  assert.equal(failed.agentTaskStatus, "failed");
+  assert.equal(failedParentMessages.length, 1);
+  const parentMessageId = failedParentMessages[0].id;
+
+  const lateResult = await appendThreadMessage(taskAgent.id, {
+    role: "assistant",
+    source: "codex-app-server",
+    phase: "final_answer",
+    text: "Late but valid evidence.",
+    state: "completed",
+    codexTurnId: "late-result-turn",
+  }, env);
+  await completeTaskAgentFromMessage(taskAgent, lateResult, env, { deliver: false });
+
+  const current = await getThread(taskAgent.id, env);
+  const parentMessages = (await listThreadMessages(parent.id, env))
+    .filter((message) => message.source === "orkestr_task_agent_result");
+  assert.equal(current.agentTaskStatus, "completed");
+  assert.equal(current.agentTaskFailureKind, null);
+  assert.equal(parentMessages.length, 1);
+  assert.equal(parentMessages[0].id, parentMessageId);
+  assert.match(parentMessages[0].text, /Late but valid evidence/);
+  assert.doesNotMatch(parentMessages[0].text, /completed without returning a final result/i);
 });
 
 test("deleting a parent cascades hidden task agents without worker confirmation", async () => {
