@@ -3433,7 +3433,7 @@ test("tenant api-agent can run a generic desktop skill action", async () => {
   assert.equal(opened.desktop.availableActions.includes("open"), true);
 });
 
-test("tenant api-agent can use configured generic desktop for the managed desktop skill", async () => {
+test("tenant api-agent rejects configured generic desktop for desktop-specific skills", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-generic-desktop-action-"));
   const env = {
     ORKESTR_HOME: home,
@@ -3456,12 +3456,13 @@ test("tenant api-agent can use configured generic desktop for the managed deskto
     url: "",
   }, { principal }, env);
 
-  assert.equal(linkedin.available, true);
-  assert.equal(linkedin.resolvedDesktop, "desktop");
-  assert.equal(linkedin.availableActions.includes("open"), true);
-  assert.deepEqual(linkedin.desktops.map((desktop) => desktop.slug), ["desktop"]);
-  assert.equal(opened.ok, true);
-  assert.equal(opened.desktop.slug, "desktop");
+  assert.equal(linkedin.available, false);
+  assert.equal(linkedin.setupState, "user_desktop_not_provisioned");
+  assert.equal(linkedin.resolvedDesktop, "");
+  assert.deepEqual(linkedin.desktops, []);
+  assert.equal(opened.ok, false);
+  assert.equal(opened.error, "instance_selection_required");
+  assert.equal(opened.targetSelection.selectedInstanceId, "");
 });
 
 test("tenant api-agent answers desktop action requests from skill action tool results", async () => {

@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { adminUserId, normalizeUserId } from "./users.js";
+import { parseRawMime } from "./mailbox-mime.js";
 
 export const mailboxStatuses = new Set([
   "pending",
@@ -51,7 +52,7 @@ export function safeSegment(value = "", fallback = "mailbox", max = 64) {
     .slice(0, max) || fallback;
 }
 
-function mailboxDomain(env = process.env) {
+export function mailboxDomain(env = process.env) {
   return cleanLower(env.ORKESTR_MAILBOX_DOMAIN || defaultMailboxDomain)
     .replace(/^@+/, "")
     .replace(/[^a-z0-9.-]+/g, "-")
@@ -160,11 +161,11 @@ function normalizeLifecycle(input = {}) {
 function normalizeLimits(input = {}, env = process.env) {
   const source = input.limits && typeof input.limits === "object" && !Array.isArray(input.limits) ? input.limits : {};
   return {
-    maxMessageBytes: positiveInteger(source.maxMessageBytes || env.ORKESTR_MAILBOX_MAX_MESSAGE_BYTES, 25 * 1024 * 1024, {
+    maxMessageBytes: positiveInteger(source.maxMessageBytes ?? env.ORKESTR_MAILBOX_MAX_MESSAGE_BYTES, 25 * 1024 * 1024, {
       min: 1024,
       max: 100 * 1024 * 1024,
     }),
-    maxAttachments: positiveInteger(source.maxAttachments || env.ORKESTR_MAILBOX_MAX_ATTACHMENTS, 25, { min: 0, max: 100 }),
+    maxAttachments: positiveInteger(source.maxAttachments ?? env.ORKESTR_MAILBOX_MAX_ATTACHMENTS, 25, { min: 0, max: 100 }),
   };
 }
 
@@ -258,13 +259,43 @@ export function normalizeRecipientList(input = {}) {
   return [...new Set(values)];
 }
 
-function normalizeHeaders(input = {}) {
+const parsedMimeCache = new WeakMap();
+
+function rawMimeValue(input = {}) {
+  return input.rawMime ?? input.mime ?? input.rfc822 ?? input.raw ?? "";
+}
+
+function rawMimeSize(value = "") {
+  if (Buffer.isBuffer(value)) return value.length;
+  if (value instanceof ArrayBuffer) return value.byteLength;
+  if (ArrayBuffer.isView(value)) return value.byteLength;
+  return Buffer.byteLength(String(value || ""), "utf8");
+}
+
+async function parsedMime(input = {}) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return null;
+  const raw = rawMimeValue(input);
+  if (!rawMimeSize(raw) || !clean(Buffer.isBuffer(raw) ? raw.toString("utf8") : raw)) return null;
+  if (parsedMimeCache.has(input)) return parsedMimeCache.get(input);
+  const parsed = parseRawMime(raw).catch(() => ({
+    headers: {},
+    body: {},
+    attachments: [],
+    sizeBytes: rawMimeSize(raw),
+    parseError: "mailbox_mime_parse_failed",
+  }));
+  parsedMimeCache.set(input, parsed);
+  return parsed;
+}
+
+async function normalizeHeaders(input = {}) {
   const source = input.headers && typeof input.headers === "object" && !Array.isArray(input.headers) ? input.headers : {};
+  const mime = (await parsedMime(input))?.headers || {};
   return {
-    messageId: clean(source.messageId || source["message-id"] || input.messageId),
-    subject: clean(source.subject || input.subject).slice(0, 500),
-    from: clean(source.from || input.from).slice(0, 500),
-    date: clean(source.date || input.date).slice(0, 120),
+    messageId: clean(source.messageId || source["message-id"] || input.messageId || mime.messageId),
+    subject: clean(source.subject || input.subject || mime.subject).slice(0, 500),
+    from: clean(source.from || input.from || mime.from).slice(0, 500),
+    date: clean(source.date || input.date || mime.date).slice(0, 120),
   };
 }
 
@@ -285,26 +316,28 @@ function normalizeProvenance(input = {}) {
   };
 }
 
-function bodyParts(input = {}) {
+async function bodyParts(input = {}) {
   const body = input.body && typeof input.body === "object" && !Array.isArray(input.body) ? input.body : {};
-  const text = clean(body.text ?? input.text ?? "");
-  const html = clean(body.html ?? input.html ?? "");
+  const mime = (await parsedMime(input))?.body || {};
+  const text = clean(body.text ?? input.text ?? mime.text ?? "");
+  const html = clean(body.html ?? input.html ?? mime.html ?? "");
   return { text, html };
 }
 
-function bodySnippet(input = {}, maxChars = 500) {
-  const { text, html } = bodyParts(input);
+async function bodySnippet(input = {}, maxChars = 500) {
+  const { text, html } = await bodyParts(input);
   const source = text || html.replace(/<[^>]*>/g, " ");
   return source.replace(/\s+/g, " ").trim().slice(0, maxChars);
 }
 
-function bodyHash(input = {}) {
-  const { text, html } = bodyParts(input);
+async function bodyHash(input = {}) {
+  const { text, html } = await bodyParts(input);
   return sha256(`${text}\n${html}`);
 }
 
-function attachmentSummary(input = {}) {
-  const values = Array.isArray(input.attachments) ? input.attachments : [];
+async function attachmentSummary(input = {}) {
+  const mimeAttachments = (await parsedMime(input))?.attachments || [];
+  const values = Array.isArray(input.attachments) && input.attachments.length ? input.attachments : mimeAttachments;
   return values.slice(0, 50).map((attachment) => {
     const source = attachment && typeof attachment === "object" ? attachment : {};
     return {
@@ -317,9 +350,9 @@ function attachmentSummary(input = {}) {
   });
 }
 
-export function extractForwardingVerificationCandidates(input = {}) {
-  const headers = normalizeHeaders(input);
-  const { text, html } = bodyParts(input);
+export async function extractForwardingVerificationCandidates(input = {}) {
+  const headers = await normalizeHeaders(input);
+  const { text, html } = await bodyParts(input);
   const source = `${headers.subject}\n${text}\n${html.replace(/<[^>]*>/g, " ")}`.slice(0, 20000);
   const candidates = [];
   const seen = new Set();
@@ -341,20 +374,21 @@ export function extractForwardingVerificationCandidates(input = {}) {
   return candidates.slice(0, 5);
 }
 
-export function mailboxMessageIdempotencyKey(input = {}, mailbox = {}) {
-  const headers = normalizeHeaders(input);
+export async function mailboxMessageIdempotencyKey(input = {}, mailbox = {}) {
+  const headers = await normalizeHeaders(input);
   const provenance = normalizeProvenance(input);
-  const bodyDigest = bodyHash(input);
+  const bodyDigest = await bodyHash(input);
   const messageIdentity = headers.messageId
     ? `message-id:${cleanLower(headers.messageId)}`
     : `fallback:${cleanLower(headers.from)}:${cleanLower(headers.subject)}:${provenance.mailFrom.toLowerCase()}:${bodyDigest}`;
   return `mailbox:${mailbox.id || "unknown"}:${sha256(messageIdentity).slice(0, 40)}`;
 }
 
-export function normalizeInboundMailboxMessage(input = {}, mailbox = {}) {
-  const headers = normalizeHeaders(input);
+export async function normalizeInboundMailboxMessage(input = {}, mailbox = {}) {
+  const headers = await normalizeHeaders(input);
   const provenance = normalizeProvenance(input);
-  const attachments = attachmentSummary(input);
+  const attachments = await attachmentSummary(input);
+  const mime = await parsedMime(input);
   return {
     mailboxId: mailbox.id || "",
     ownerUserId: mailbox.ownerUserId || "",
@@ -362,10 +396,11 @@ export function normalizeInboundMailboxMessage(input = {}, mailbox = {}) {
     targetSelection: mailbox.targetSelection ? { ...mailbox.targetSelection } : {},
     headers,
     provenance,
-    snippet: bodySnippet(input),
-    bodyHash: bodyHash(input),
-    sizeBytes: Math.max(0, Math.floor(Number(input.sizeBytes || input.body?.sizeBytes || 0) || 0)),
+    snippet: await bodySnippet(input),
+    bodyHash: await bodyHash(input),
+    sizeBytes: Math.max(0, Math.floor(Number(input.sizeBytes || input.body?.sizeBytes || mime?.sizeBytes || 0) || 0)),
     attachments,
-    verificationCandidates: extractForwardingVerificationCandidates(input),
+    verificationCandidates: await extractForwardingVerificationCandidates(input),
+    mimeParseError: clean(mime?.parseError),
   };
 }

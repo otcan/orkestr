@@ -57,6 +57,7 @@
     "@xterm/xterm": "^6.0.0",
     "multer": "2.1.1",
     "pg": "^8.21.0",
+    "postal-mime": "^2.7.5",
     "qrcode": "^1.5.4",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.2",

@@ -3,6 +3,7 @@ import { ingestMailboxMessage } from "../../../../../packages/connectors/src/mai
 import {
   createMailboxForPrincipal,
   deleteMailboxForPrincipal,
+  mailboxInfrastructureStatus,
   listMailboxDeadLetters,
   listMailboxRelayAudits,
   listMailboxesForPrincipal,
@@ -85,6 +86,13 @@ export class MailboxesController {
     } catch (error) {
       rethrowHttp(error);
     }
+  }
+
+  @Get("infrastructure")
+  async infrastructure(@Req() request: any) {
+    const principal = requestPrincipal(request);
+    if (!isAdminPrincipal(principal)) throw httpError("mailbox_infrastructure_admin_required", 403);
+    return { ok: true, infrastructure: mailboxInfrastructureStatus({}, process.env) };
   }
 
   @Patch(":mailboxId/verification")

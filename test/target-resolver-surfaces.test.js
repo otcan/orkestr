@@ -5,8 +5,9 @@ import path from "node:path";
 import test from "node:test";
 import { runCli } from "../apps/cli/src/commands.js";
 import { writeRuntimeSettings } from "../packages/core/src/runtime-settings.js";
+import { resolveSkillDesktopTarget } from "../packages/core/src/skill-desktop-resolver.js";
 import { createAppShare, sharedAppData } from "../packages/core/src/shared-apps.js";
-import { adminPrincipal } from "../packages/core/src/principal.js";
+import { adminPrincipal, userPrincipal } from "../packages/core/src/principal.js";
 
 async function fixture(prefix = "orkestr-target-surfaces-") {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
@@ -96,4 +97,112 @@ test("XRM-backed shared apps use explicit backing instance and return target pro
   } finally {
     globalThis.fetch = priorFetch;
   }
+});
+
+test("skill desktop resolver fails closed for ambiguous omitted targets", async () => {
+  const env = await fixture("orkestr-skill-desktop-ambiguous-");
+  const result = await resolveSkillDesktopTarget({
+    desktops: [
+      { slug: "desk-a", status: "active", availableActions: ["open"] },
+      { slug: "desk-b", status: "active", availableActions: ["open"] },
+    ],
+    principal: userPrincipal({ id: "alice" }),
+    env,
+    action: "desktop.operate",
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.error, "instance_selection_required");
+  assert.equal(result.targetSelection.ambiguityResult, "multiple_match");
+  assert.equal(result.candidates.length, 2);
+});
+
+test("skill desktop resolver infers exactly one target with provenance", async () => {
+  const env = await fixture("orkestr-skill-desktop-single-");
+  const result = await resolveSkillDesktopTarget({
+    desktops: [{ slug: "solo-desk", status: "active", availableActions: ["open"] }],
+    principal: userPrincipal({ id: "alice" }),
+    env,
+    action: "desktop.operate",
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.slug, "solo-desk");
+  assert.equal(result.targetSelection.selectionSource, "single_authorized_target");
+  assert.equal(result.targetSelection.ambiguityResult, "single_match");
+});
+
+test("skill desktop resolver rejects stale explicit targets without fallback", async () => {
+  const env = await fixture("orkestr-skill-desktop-stale-");
+  const result = await resolveSkillDesktopTarget({
+    args: { target: "desk-a" },
+    desktops: [
+      { slug: "desk-a", status: "inactive", availableActions: ["status"] },
+      { slug: "desk-b", status: "active", availableActions: ["open"] },
+    ],
+    principal: userPrincipal({ id: "alice" }),
+    env,
+    action: "desktop.operate",
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.error, "target_stale");
+  assert.equal(result.targetSelection.selectionSource, "explicit_request");
+  assert.equal(result.targetSelection.selectedInstanceId, "");
+});
+
+test("skill desktop resolver rejects generic defaults for desktop-specific skills", async () => {
+  const env = await fixture("orkestr-skill-desktop-configured-");
+  env.ORKESTR_DEFAULT_DESKTOP_SLUG = "desktop";
+  const result = await resolveSkillDesktopTarget({
+    skill: { id: "linkedin", requiresDesktop: "linkedin" },
+    desktops: [{ slug: "desktop", status: "active", availableActions: ["open"] }],
+    principal: userPrincipal({ id: "alice" }),
+    env,
+    action: "skill.linkedin.open",
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.error, "instance_selection_required");
+  assert.equal(result.targetSelection.selectedInstanceId, "");
+});
+
+test("skill desktop resolver uses skill-specific configured mapping with provenance", async () => {
+  const env = await fixture("orkestr-skill-desktop-specific-");
+  env.ORKESTR_DEFAULT_DESKTOP_SLUG = "desktop";
+  env.ORKESTR_LINKEDIN_DESKTOP_SLUG = "linkedin-browser";
+  const result = await resolveSkillDesktopTarget({
+    skill: { id: "linkedin", requiresDesktop: "linkedin" },
+    desktops: [
+      { slug: "desktop", status: "active", availableActions: ["open"], connector: "desktop" },
+      { slug: "linkedin-browser", status: "active", availableActions: ["open"], connector: "linkedin" },
+    ],
+    principal: userPrincipal({ id: "alice" }),
+    env,
+    action: "skill.linkedin.open",
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.slug, "linkedin-browser");
+  assert.equal(result.targetSelection.selectionSource, "skill_configured_desktop");
+  assert.equal(result.targetSelection.selectedInstanceId, "linkedin-browser");
+});
+
+test("skill desktop resolver allows one semantic desktop candidate for required skills", async () => {
+  const env = await fixture("orkestr-skill-desktop-semantic-");
+  const result = await resolveSkillDesktopTarget({
+    skill: { id: "linkedin", requiresDesktop: "linkedin" },
+    desktops: [
+      { slug: "desktop", status: "active", availableActions: ["open"], connector: "desktop" },
+      { slug: "linkedin-dana", status: "active", availableActions: ["open"], connector: "linkedin" },
+    ],
+    principal: userPrincipal({ id: "alice" }),
+    env,
+    action: "skill.linkedin.open",
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.slug, "linkedin-dana");
+  assert.equal(result.targetSelection.selectionSource, "single_semantic_target");
+  assert.equal(result.targetSelection.selectedInstanceId, "linkedin-dana");
 });
