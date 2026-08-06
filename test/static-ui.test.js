@@ -2074,6 +2074,7 @@ test("desktop share shell supervises noVNC and proxy terminates stale sockets", 
 
   assert.match(sharePage, /id="desktop-frame"/);
   assert.match(sharePage, /id="lifecycle"/);
+  assert.match(sharePage, /function hideDesktop\(\)/);
   assert.match(sharePage, /showTerminal\(error\)/);
   assert.match(sharePage, /showDesktop\(desktopUrl\)/);
   assert.match(sharePage, /renderLifecycle\(body\)/);
@@ -2083,8 +2084,11 @@ test("desktop share shell supervises noVNC and proxy terminates stale sockets", 
   assert.match(proxy, /onDesktopShareLifecycle/);
   assert.match(proxy, /validateDesktopShareSession/);
   assert.match(proxy, /desktop_share_ws_forcibly_closed/);
+  assert.match(proxy, /shareSocketExpiryDelayMs/);
   assert.match(proxy, /2_000/);
   assert.match(shares, /view_only=false/);
+  const expired = sharePage.slice(sharePage.indexOf("function showExpired"), sharePage.indexOf("function showTerminal"));
+  assert.match(expired, /hideDesktop\(\)/);
 });
 
 test("desktop share Desk inventory presents only redacted lifecycle and attempt metadata", async () => {

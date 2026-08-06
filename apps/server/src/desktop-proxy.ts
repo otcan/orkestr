@@ -27,6 +27,7 @@ type ShareSocket = {
   socket: Duplex;
   upstream: Duplex;
   validationTimer: NodeJS.Timeout;
+  expiryTimer: NodeJS.Timeout | null;
   closed: boolean;
 };
 const shareSockets = new Map<string, Set<ShareSocket>>();
@@ -46,6 +47,7 @@ function unregisterShareSocket(connection: ShareSocket, reason = "disconnected")
   if (connection.closed) return;
   connection.closed = true;
   clearInterval(connection.validationTimer);
+  if (connection.expiryTimer) clearTimeout(connection.expiryTimer);
   const connections = shareSockets.get(connection.shareId);
   connections?.delete(connection);
   if (!connections?.size) shareSockets.delete(connection.shareId);
@@ -68,10 +70,19 @@ function revalidateShareSocket(connection: ShareSocket): void {
   });
 }
 
+function shareSocketExpiryDelayMs(share: any, attempt: any): number | null {
+  const expirations = [share?.expiresAt, attempt?.expiresAt]
+    .map((value) => Date.parse(String(value || "")))
+    .filter((value) => Number.isFinite(value));
+  if (!expirations.length) return null;
+  return Math.max(0, Math.min(...expirations) - Date.now());
+}
+
 export function registerDesktopShareSocket(socket: Duplex, upstream: Duplex, share: any, attempt: any): ShareSocket | null {
   const shareId = String(share?.id || "").trim();
   const attemptId = String(attempt?.id || "").trim();
   if (!shareId || !attemptId) return null;
+  const expiryDelayMs = shareSocketExpiryDelayMs(share, attempt);
   const connection = {
     shareId,
     lineageId: String(share.lineageId || "").trim(),
@@ -80,9 +91,11 @@ export function registerDesktopShareSocket(socket: Duplex, upstream: Duplex, sha
     socket,
     upstream,
     validationTimer: setInterval(() => revalidateShareSocket(connection), 2_000),
+    expiryTimer: expiryDelayMs === null ? null : setTimeout(() => revalidateShareSocket(connection), expiryDelayMs),
     closed: false,
   } satisfies ShareSocket;
   connection.validationTimer.unref?.();
+  connection.expiryTimer?.unref?.();
   const connections = shareSockets.get(shareId) || new Set<ShareSocket>();
   connections.add(connection);
   shareSockets.set(shareId, connections);

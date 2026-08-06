@@ -326,6 +326,7 @@ function serveDesktopSharePage(response: any) {
     function showExpired(error) {
       const renewal = error && error.payload ? error.payload.renewal : null;
       if (!renewal || !renewal.renewCommand) return false;
+      hideDesktop();
       challenge.textContent = renewal.renewCommand;
       summary.textContent = 'This desktop link expired.';
       statusNode.textContent = renewal.message || 'Ask the Orkestr operator to create a fresh desktop link.';
@@ -333,19 +334,24 @@ function serveDesktopSharePage(response: any) {
       copy.textContent = 'Copy renewal command';
       return true;
     }
-    function showTerminal(error) {
-      const lifecycle = error && error.payload ? error.payload.lifecycle : null;
-      if (!lifecycle || !['superseded', 'revoked'].includes(lifecycle.status)) return false;
+    function hideDesktop() {
       viewer.hidden = true;
       desktopFrame.removeAttribute('src');
       main.hidden = false;
+      open.hidden = true;
+      open.removeAttribute('href');
+      mobile.hidden = true;
+      mobile.removeAttribute('href');
+    }
+    function showTerminal(error) {
+      const lifecycle = error && error.payload ? error.payload.lifecycle : null;
+      if (!lifecycle || !['superseded', 'revoked'].includes(lifecycle.status)) return false;
+      hideDesktop();
       challenge.textContent = lifecycle.status === 'superseded' ? 'replaced' : 'revoked';
       summary.textContent = lifecycle.status === 'superseded' ? 'This desktop share was replaced.' : 'This desktop share was revoked.';
       statusNode.textContent = 'Return to the Orkestr chat and request a new desktop link.';
       statusNode.className = 'error';
       copy.hidden = true;
-      open.hidden = true;
-      mobile.hidden = true;
       return true;
     }
     function showDesktop(desktopUrl) {
