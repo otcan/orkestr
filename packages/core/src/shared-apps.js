@@ -3,6 +3,7 @@ import path from "node:path";
 import { dataPaths, ensureDataDirs } from "../../storage/src/paths.js";
 import { appendEvent, readJson, writeSecretJson } from "../../storage/src/store.js";
 import { isAdminPrincipal } from "./policy.js";
+import { resolveTargetInstance, targetResolutionMetadata } from "./target-resolver.js";
 import { normalizeUserId } from "./users.js";
 
 const appTypes = new Set(["people-message-labeling"]);
@@ -10,8 +11,6 @@ const defaultLabels = ["not_evaluated", "to_contact", "to_skip"];
 const actionSetClassification = "setClassification";
 const actionSetNote = "setNote";
 const defaultActions = [actionSetClassification, actionSetNote];
-const defaultXrmReviewApiBaseUrl = "http://127.0.0.1:25995";
-
 function nowIso() {
   return new Date().toISOString();
 }
@@ -123,17 +122,53 @@ function normalizeReviewStatus(value = "", fallback = "all") {
   return fallback;
 }
 
-function xrmInstanceApiBaseUrl(app = {}, share = {}, env = process.env) {
+function xrmReviewInstanceCandidates(app = {}, share = {}, env = process.env) {
   const filters = shareFilters(share);
-  const instanceId = clean(app.backingInstanceId || filters.backingInstanceId || filters.xrmInstanceId).toLowerCase();
   const configured = objectValue(jsonObject(env.ORKESTR_SHARED_APPS_XRM_REVIEW_API_BASE_URLS_JSON, {}));
-  return clean(
-    configured[instanceId] ||
-    filters.apiBaseUrl ||
-    env.ORKESTR_SHARED_APPS_XRM_REVIEW_API_BASE_URL ||
-    env.ORKESTR_XRM_REVIEW_API_BASE_URL ||
-    defaultXrmReviewApiBaseUrl
-  ).replace(/\/+$/g, "");
+  const ownerUserId = normalizeUserId(app.createdBy || share.createdBy || env.ORKESTR_ADMIN_USER_ID || "admin");
+  const candidates = Object.entries(configured).map(([id, apiBaseUrl]) => ({
+    id: normalizeSharedInstanceId(id),
+    type: "oxrm",
+    ownerUserId,
+    status: clean(apiBaseUrl) ? "active" : "disabled",
+    eligible: Boolean(clean(apiBaseUrl)),
+    reason: clean(apiBaseUrl) ? "eligible" : "api_base_url_missing",
+    resource: { apiBaseUrl: clean(apiBaseUrl).replace(/\/+$/g, "") },
+  })).filter((candidate) => candidate.id);
+  const singleApiBaseUrl = clean(filters.apiBaseUrl || env.ORKESTR_SHARED_APPS_XRM_REVIEW_API_BASE_URL || env.ORKESTR_XRM_REVIEW_API_BASE_URL).replace(/\/+$/g, "");
+  if (singleApiBaseUrl) {
+    const explicit = normalizeSharedInstanceId(app.backingInstanceId || filters.backingInstanceId || filters.xrmInstanceId);
+    candidates.push({
+      id: explicit || "xrm-review",
+      type: "oxrm",
+      ownerUserId,
+      status: "active",
+      eligible: true,
+      reason: "eligible",
+      resource: { apiBaseUrl: singleApiBaseUrl },
+    });
+  }
+  return candidates;
+}
+
+async function xrmReviewTarget(app = {}, share = {}, env = process.env, action = "shared_app.xrm.resolve") {
+  const filters = shareFilters(share);
+  const explicit = normalizeSharedInstanceId(app.backingInstanceId || filters.backingInstanceId || filters.xrmInstanceId);
+  const resolution = await resolveTargetInstance({
+    targetType: "oxrm",
+    explicitTargetId: explicit,
+    ownerUserId: normalizeUserId(app.createdBy || share.createdBy || env.ORKESTR_ADMIN_USER_ID || "admin"),
+    principal: { kind: "system", role: "admin", userId: "shared-apps" },
+    action,
+    candidates: xrmReviewInstanceCandidates(app, share, env),
+    allowSingleInference: true,
+    selectionSource: explicit ? "explicit_request" : "single_authorized_target",
+  }, env);
+  if (!resolution.ok) throw sharedAppError(resolution.error || "instance_selection_required", resolution.statusCode || 409);
+  return {
+    apiBaseUrl: clean(resolution.selectedTarget?.resource?.apiBaseUrl || "").replace(/\/+$/g, ""),
+    targetSelection: targetResolutionMetadata(resolution),
+  };
 }
 
 function shareFilters(share = {}) {
@@ -205,7 +240,8 @@ async function fetchXrmReviewItems(app = {}, share = {}, query = {}, env = proce
   const offset = intValue(query.offset ?? 0, 0, 0, 1_000_000);
   const status = normalizeReviewStatus(queryValue(query.status, filters.status || "all"), "all");
   const q = queryValue(query.q, "");
-  const baseUrl = xrmInstanceApiBaseUrl(app, share, env);
+  const target = await xrmReviewTarget(app, share, env, "shared_app.xrm.items");
+  const baseUrl = target.apiBaseUrl;
   const url = new URL(`${baseUrl}/api/review/queues/${encodeURIComponent(queueKey)}/items`);
   url.searchParams.set("limit", String(limit));
   url.searchParams.set("offset", String(offset));
@@ -232,6 +268,7 @@ async function fetchXrmReviewItems(app = {}, share = {}, query = {}, env = proce
     status,
     q,
     queueKey,
+    targetSelection: target.targetSelection,
   };
 }
 
@@ -240,11 +277,15 @@ async function fetchXrmReviewMessages(app = {}, share = {}, personId = "", env =
   const id = normalizeId(personId);
   if (!queueKey) throw sharedAppError("xrm_review_queue_required", 400);
   if (!id) throw sharedAppError("person_id_required", 400);
-  const baseUrl = xrmInstanceApiBaseUrl(app, share, env);
+  const target = await xrmReviewTarget(app, share, env, "shared_app.xrm.messages");
+  const baseUrl = target.apiBaseUrl;
   const url = new URL(`${baseUrl}/api/review/queues/${encodeURIComponent(queueKey)}/items/${encodeURIComponent(id)}/messages`);
   url.searchParams.set("limit", "200");
   const messages = await fetchJson(url);
-  return (Array.isArray(messages) ? messages : []).map(mapXrmReviewMessage);
+  return {
+    messages: (Array.isArray(messages) ? messages : []).map(mapXrmReviewMessage),
+    targetSelection: target.targetSelection,
+  };
 }
 
 async function writeXrmReviewClassification(app = {}, share = {}, personId = "", classification = "", env = process.env) {
@@ -252,13 +293,15 @@ async function writeXrmReviewClassification(app = {}, share = {}, personId = "",
   const id = normalizeId(personId);
   if (!queueKey) throw sharedAppError("xrm_review_queue_required", 400);
   if (!id) throw sharedAppError("person_id_required", 400);
-  const baseUrl = xrmInstanceApiBaseUrl(app, share, env);
+  const target = await xrmReviewTarget(app, share, env, "shared_app.xrm.classification");
+  const baseUrl = target.apiBaseUrl;
   const url = `${baseUrl}/api/review/queues/${encodeURIComponent(queueKey)}/items/${encodeURIComponent(id)}/classification`;
-  return fetchJson(url, {
+  const payload = await fetchJson(url, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ status: classification }),
   });
+  return { payload, targetSelection: target.targetSelection };
 }
 
 async function writeXrmReviewNote(app = {}, share = {}, personId = "", note = "", env = process.env) {
@@ -266,13 +309,15 @@ async function writeXrmReviewNote(app = {}, share = {}, personId = "", note = ""
   const id = normalizeId(personId);
   if (!queueKey) throw sharedAppError("xrm_review_queue_required", 400);
   if (!id) throw sharedAppError("person_id_required", 400);
-  const baseUrl = xrmInstanceApiBaseUrl(app, share, env);
+  const target = await xrmReviewTarget(app, share, env, "shared_app.xrm.note");
+  const baseUrl = target.apiBaseUrl;
   const url = `${baseUrl}/api/review/queues/${encodeURIComponent(queueKey)}/items/${encodeURIComponent(id)}/note`;
-  return fetchJson(url, {
+  const payload = await fetchJson(url, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ note }),
   });
+  return { payload, targetSelection: target.targetSelection };
 }
 
 async function readState(env = process.env) {
@@ -531,6 +576,7 @@ async function sharedAppPayload(app = {}, share = {}, { env = process.env, query
         liveSource: {
           backingSystem: "xrm",
           queueKey: batch.queueKey,
+          targetSelection: batch.targetSelection,
           generatedAt: nowIso(),
         },
         queue: batch.queue,
@@ -570,7 +616,8 @@ export async function sharedAppPersonMessages(instanceId, appSlug, shareToken, p
   const id = normalizeId(personId);
   if (!id) throw sharedAppError("person_id_required", 400);
   if (isXrmBackedShare(app, share)) {
-    return { ok: true, personId: id, messages: await fetchXrmReviewMessages(app, share, id, env) };
+    const result = await fetchXrmReviewMessages(app, share, id, env);
+    return { ok: true, personId: id, messages: result.messages, targetSelection: result.targetSelection };
   }
   const person = basePeopleFromShare(share).find((item) => item.id === id);
   if (!person) throw sharedAppError("person_not_found", 404);
@@ -603,14 +650,16 @@ export async function runSharedAppAction(instanceId, appSlug, shareToken, action
   if (actionName === actionSetNote) {
     const note = clean(body.note || body.value).slice(0, 5000);
     if (isXrmBackedShare(app, share)) {
-      const updated = await writeXrmReviewNote(app, share, personId, note, env);
-      await appendEvent({ type: "shared_app_action", instanceId: share.instanceId, appSlug: share.appSlug, shareId: share.id, action: actionName, personId, backingSystem: "xrm" }, env).catch(() => {});
+      const written = await writeXrmReviewNote(app, share, personId, note, env);
+      const updated = written.payload;
+      await appendEvent({ type: "shared_app_action", instanceId: share.instanceId, appSlug: share.appSlug, shareId: share.id, action: actionName, personId, backingSystem: "xrm", targetSelection: written.targetSelection }, env).catch(() => {});
       return {
         ok: true,
         personId,
         note,
         reviewNote: clean(updated?.reviewReason || note),
         currentClassification: normalizeReviewStatus(updated?.reviewStatus, "not_evaluated"),
+        targetSelection: written.targetSelection,
       };
     }
     const state = await readState(env);
@@ -641,9 +690,9 @@ export async function runSharedAppAction(instanceId, appSlug, shareToken, action
   const classification = clean(body.classification || body.value);
   if (!defaultLabels.includes(classification)) throw sharedAppError("invalid_classification", 400);
   if (isXrmBackedShare(app, share)) {
-    await writeXrmReviewClassification(app, share, personId, classification, env);
-    await appendEvent({ type: "shared_app_action", instanceId: share.instanceId, appSlug: share.appSlug, shareId: share.id, action: actionName, personId, classification, backingSystem: "xrm" }, env).catch(() => {});
-    return { ok: true, personId, classification };
+    const written = await writeXrmReviewClassification(app, share, personId, classification, env);
+    await appendEvent({ type: "shared_app_action", instanceId: share.instanceId, appSlug: share.appSlug, shareId: share.id, action: actionName, personId, classification, backingSystem: "xrm", targetSelection: written.targetSelection }, env).catch(() => {});
+    return { ok: true, personId, classification, targetSelection: written.targetSelection };
   }
   const state = await readState(env);
   let updated = null;

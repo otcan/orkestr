@@ -295,16 +295,15 @@ test("VM-target mailbox relay dead-letters stale target instead of re-inferring 
     capabilities: ["mailboxes"],
   }, env);
 
-  await assert.rejects(
-    () => ingestMailboxMessage({
-      recipient: mailbox.address,
-      headers: { messageId: "<stale@example.test>", from: "sender@example.test", subject: "Do not reroute" },
-      envelope: { mailFrom: "sender@example.test", rcptTo: mailbox.address },
-      body: { text: "must not move to replacement-vm" },
-    }, env),
-    /target_stale/,
-  );
+  const routed = await ingestMailboxMessage({
+    recipient: mailbox.address,
+    headers: { messageId: "<stale@example.test>", from: "sender@example.test", subject: "Do not reroute" },
+    envelope: { mailFrom: "sender@example.test", rcptTo: mailbox.address },
+    body: { text: "must not move to replacement-vm" },
+  }, env);
 
+  assert.equal(routed.action, "vm_relay_dead_lettered");
+  assert.equal(routed.relayAudit.state, "dead-lettered");
   assert.deepEqual(await listConnectorInboxEvents({}, env), []);
   assert.deepEqual(await listMailboxRelayAudits({ tenantVmId: "replacement-vm" }, env), []);
   const deadLetters = await listMailboxDeadLetters({ tenantVmId: "stale-vm" }, env);
