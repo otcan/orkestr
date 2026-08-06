@@ -13,6 +13,7 @@ import { connectorAuthStatus } from "../../../packages/connectors/src/connector-
 import { recoverStaleCodexAppServerTurns } from "../../../packages/core/src/codex-app-server.js";
 import { deployDrainActiveSync } from "../../../packages/core/src/deploy-drain.js";
 import { deliverWhatsAppReplies, syncWhatsAppTypingIndicators } from "../../../packages/connectors/src/whatsapp.js";
+import { recoverTwilioVoiceCalleCallbacks } from "../../../packages/connectors/src/twilio-voice-assistant.js";
 import {
   recoverConfiguredLocalWhatsAppAccounts,
   recoverUnreadLocalWhatsAppMessages,
@@ -89,6 +90,15 @@ export async function recoverAfterStartup(env = process.env) {
     return { deferred: true, reason: "deploy_draining", startupCause: lifecycle?.startupCause || null };
   }
   await drainAllPendingThreadInputs(env).catch(() => []);
+  const twilioVoiceCallbacks = await recoverTwilioVoiceCalleCallbacks(env).catch((error) => {
+    reportServerError(env, {
+      source: "server.recoverTwilioVoiceCallbacks",
+      code: "twilio_voice_callback_recovery_failed",
+      message: error?.message || String(error),
+      error,
+    });
+    return { ok: false, error: error?.message || String(error) };
+  });
   const result = await syncRuntimeAndDeliverWhatsApp(env, { forceWhatsapp: true, recoveryCause });
   await appendEvent({
     type: "server_startup_recovery_completed",
@@ -96,8 +106,15 @@ export async function recoverAfterStartup(env = process.env) {
     recoveryCause,
     recoveredAppServerTurns: result?.recoveredAppServerTurns || 0,
     appended: result?.appended || 0,
+    twilioVoiceCallbacks: {
+      started: Array.isArray((twilioVoiceCallbacks as any)?.started) ? (twilioVoiceCallbacks as any).started.length : 0,
+      reconciled: Array.isArray((twilioVoiceCallbacks as any)?.reconciled) ? (twilioVoiceCallbacks as any).reconciled.length : 0,
+      failed: Array.isArray((twilioVoiceCallbacks as any)?.failed) ? (twilioVoiceCallbacks as any).failed.length : 0,
+      timedOut: Array.isArray((twilioVoiceCallbacks as any)?.timedOut) ? (twilioVoiceCallbacks as any).timedOut.length : 0,
+      skipped: Boolean((twilioVoiceCallbacks as any)?.skipped),
+    },
   }, env).catch(() => {});
-  return { ...result, startupCause: lifecycle?.startupCause || null, recoveryCause };
+  return { ...result, startupCause: lifecycle?.startupCause || null, recoveryCause, twilioVoiceCallbacks };
 }
 
 export async function runTimerLoop(

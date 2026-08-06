@@ -29,9 +29,9 @@ export class TwilioVoiceController {
   @Post(":token/gather")
   @HttpCode(200)
   async gather(@Req() request: any, @Res() response: any, @Param("token") token: string, @Body() body: Record<string, unknown> = {}) {
-    const verified = await verifyTwilioVoiceWebhookToken(token, requestOptions(request));
+    const verified = await verifyTwilioVoiceWebhookToken(token, { ...requestOptions(request), body, twilioEndpoint: "gather" });
     if (!verified.ok) {
-      const denied = await twilioVoiceIncomingResponse(token, requestOptions(request));
+      const denied = await twilioVoiceIncomingResponse(token, { ...requestOptions(request), body, twilioEndpoint: "gather" });
       return sendTwiMl(response, Number(verified.statusCode || 403), denied.twiml || "");
     }
     const result = await createTwilioVoiceSummaryDraft(body, {
