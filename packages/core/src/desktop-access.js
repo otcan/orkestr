@@ -394,6 +394,33 @@ export async function setThreadDesktopGrants(threadId = "", entries = [], option
   };
 }
 
+export async function advanceDesktopResourceGeneration(desktopSlug = "", ownerUserId = "", options = {}, env = process.env) {
+  const slug = safeSegment(desktopSlug, "");
+  const owner = normalizeUserId(ownerUserId || env.ORKESTR_ADMIN_USER_ID || "admin");
+  if (!slug) throw accessError("desktop_not_found", 404);
+  const id = desktopResourceId(slug, owner, env);
+  const updated = await mutateState(env, (state) => {
+    let resource = state.resources.find((item) => item.id === id) || null;
+    if (!resource) {
+      resource = normalizeResource({ id, slug, ownerUserId: owner, boundaryId: desktopBoundaryId(env) }, env);
+      state.resources.push(resource);
+    }
+    resource.generation = Math.max(1, Number(resource.generation || 1) || 1) + 1;
+    resource.updatedAt = nowIso();
+    return resource;
+  });
+  await appendEvent({
+    type: "desktop_resource_generation_advanced",
+    desktopId: updated.result.id,
+    desktopSlug: updated.result.slug,
+    ownerUserId: updated.result.ownerUserId,
+    boundaryId: updated.result.boundaryId,
+    desktopGeneration: updated.result.generation,
+    reason: clean(options.reason || "desktop_runtime_replaced"),
+  }, env).catch(() => undefined);
+  return { ok: true, resource: updated.result, policyRevision: updated.state.revision };
+}
+
 function explicitDesktopEntries(thread = {}) {
   const objects = [
     thread,

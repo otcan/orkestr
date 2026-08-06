@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import {
   authorizeDesktopAccess,
+  advanceDesktopResourceGeneration,
   backfillThreadDesktopGrants,
   listThreadDesktopGrants,
   setThreadDesktopGrants,
@@ -178,6 +179,21 @@ test("desktop shares are invalidated when their thread grant is replaced", async
   await assert.rejects(
     () => desktopShareStatus({ shareId, key, subdomain: created.subdomain, browserToken: opened.cookie.value.split(":")[1], env }),
     /desktop_grant_required/,
+  );
+});
+
+test("desktop shares are invalidated when the desktop runtime generation advances", async () => {
+  const { env, principal, threadA } = await fixture();
+  const created = await createDesktopShare({ desktopSlug: "linkedin", principal, threadId: threadA.id, env });
+  const { shareId, key } = shareParts(created.url);
+  const opened = await openDesktopShare({ shareId, key, subdomain: created.subdomain, env });
+  await approveDesktopShareChallenge(opened.attempt.challenge, { env, approvedBy: threadA.id });
+
+  await advanceDesktopResourceGeneration("linkedin", "admin", { reason: "test_restart" }, env);
+
+  await assert.rejects(
+    () => desktopShareStatus({ shareId, key, subdomain: created.subdomain, browserToken: opened.cookie.value.split(":")[1], env }),
+    /desktop_share_generation_changed/,
   );
 });
 

@@ -8,6 +8,9 @@ import { requestPrincipal } from "../../../packages/core/src/principal.js";
 import { authorizeHttpRequest } from "../../../packages/core/src/security.js";
 import { isMobileDesktopRoute, serveMobileDesktopShell } from "./mobile-desktop-shell.js";
 import { assertDesktopAccess } from "../../../packages/core/src/desktop-access.js";
+import { onDesktopShareLifecycle } from "../../../packages/core/src/desktop-share-lifecycle.js";
+import { validateDesktopShareSession } from "../../../packages/core/src/desktop-shares.js";
+import { appendEvent } from "../../../packages/storage/src/store.js";
 
 type DesktopTarget = {
   slug: string;
@@ -16,6 +19,83 @@ type DesktopTarget = {
 };
 
 const targetCache = new Map<string, { port: number; expiresAt: number }>();
+type ShareSocket = {
+  shareId: string;
+  lineageId: string;
+  shareGeneration: number;
+  attemptId: string;
+  socket: Duplex;
+  upstream: Duplex;
+  validationTimer: NodeJS.Timeout;
+  closed: boolean;
+};
+const shareSockets = new Map<string, Set<ShareSocket>>();
+
+function recordShareSocketEvent(type: string, connection: ShareSocket, reason = ""): void {
+  void appendEvent({
+    type,
+    shareId: connection.shareId,
+    lineageId: connection.lineageId,
+    shareGeneration: connection.shareGeneration,
+    attemptId: connection.attemptId,
+    reason,
+  }).catch(() => undefined);
+}
+
+function unregisterShareSocket(connection: ShareSocket, reason = "disconnected"): void {
+  if (connection.closed) return;
+  connection.closed = true;
+  clearInterval(connection.validationTimer);
+  const connections = shareSockets.get(connection.shareId);
+  connections?.delete(connection);
+  if (!connections?.size) shareSockets.delete(connection.shareId);
+  recordShareSocketEvent("desktop_share_ws_disconnected", connection, reason);
+}
+
+function closeShareSocket(connection: ShareSocket, reason: string): void {
+  if (connection.closed) return;
+  recordShareSocketEvent("desktop_share_ws_forcibly_closed", connection, reason);
+  connection.socket.destroy();
+  connection.upstream.destroy();
+  unregisterShareSocket(connection, reason);
+}
+
+export function registerDesktopShareSocket(socket: Duplex, upstream: Duplex, share: any, attempt: any): ShareSocket | null {
+  const shareId = String(share?.id || "").trim();
+  const attemptId = String(attempt?.id || "").trim();
+  if (!shareId || !attemptId) return null;
+  const connection = {
+    shareId,
+    lineageId: String(share.lineageId || "").trim(),
+    shareGeneration: Number(share.shareGeneration || 0) || 0,
+    attemptId,
+    socket,
+    upstream,
+    validationTimer: setInterval(() => {
+      void validateDesktopShareSession({ shareId, attemptId }).catch((error) => {
+        recordShareSocketEvent("desktop_share_ws_stale_reconnect", connection, String((error as Error)?.message || "desktop_share_invalid"));
+        closeShareSocket(connection, String((error as Error)?.message || "desktop_share_invalid"));
+      });
+    }, 2_000),
+    closed: false,
+  } satisfies ShareSocket;
+  connection.validationTimer.unref?.();
+  const connections = shareSockets.get(shareId) || new Set<ShareSocket>();
+  connections.add(connection);
+  shareSockets.set(shareId, connections);
+  socket.once("close", () => unregisterShareSocket(connection));
+  upstream.once("close", () => unregisterShareSocket(connection));
+  recordShareSocketEvent("desktop_share_ws_connected", connection);
+  return connection;
+}
+
+onDesktopShareLifecycle((event) => {
+  const direct = event.shareId ? [...(shareSockets.get(event.shareId) || [])] : [];
+  const lineage = event.lineageId
+    ? [...shareSockets.values()].flatMap((connections) => [...connections]).filter((connection) => connection.lineageId === event.lineageId && connection.shareGeneration < event.shareGeneration)
+    : [];
+  for (const connection of new Set([...direct, ...lineage])) closeShareSocket(connection, event.reason || "desktop_share_changed");
+});
 
 function targetCacheTtlMs(): number {
   const parsed = Number(process.env.ORKESTR_DESKTOP_PROXY_TARGET_CACHE_MS || 2000);
@@ -232,9 +312,10 @@ export function attachDesktopProxyUpgrade(server: Server): void {
       upstream.write(rawUpgradeHeaders(request, target));
       if (head.length) upstream.write(head);
       socket.pipe(upstream).pipe(socket);
+      registerDesktopShareSocket(socket, upstream, auth.desktopShare || null, auth.desktopShareAttempt || null);
     });
     upstream.on("error", (error) => {
-      writeUpgradeError(socket, 502, error.message || "desktop_proxy_failed");
+      if (!socket.destroyed) writeUpgradeError(socket, 502, error.message || "desktop_proxy_failed");
     });
   });
 }

@@ -169,7 +169,7 @@ export class UserDeskPageComponent implements OnInit {
     if (!this.browserRunning(browser)) return "";
     const slug = this.browserSlug(browser);
     if (!slug) return "";
-    return `/desktop/${encodeURIComponent(slug)}/vnc.html?autoconnect=1&resize=scale&path=desktop/${encodeURIComponent(slug)}/websockify`;
+    return `/desktop/${encodeURIComponent(slug)}/vnc.html?autoconnect=1&resize=scale&view_only=false&path=desktop/${encodeURIComponent(slug)}/websockify`;
   }
 
   browserLease(browser: BrowserSession): DesktopLeaseRecord | null {

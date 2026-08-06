@@ -7,9 +7,12 @@ import {
   approveDesktopShareChallenge,
   authorizeDesktopShareHttpRequest,
   createDesktopShare,
+  desktopShareFailureResponse,
   desktopShareRenewalHint,
   desktopShareStatus,
+  listDesktopShares,
   openDesktopShare,
+  revokeDesktopShare,
 } from "../packages/core/src/desktop-shares.js";
 import {
   parseTenantDesktopSharePath,
@@ -73,7 +76,7 @@ test("desktop shares require a random subdomain, link key, and per-browser chat 
   assert.equal(pending.approved, false);
   assert.equal(approved.share.desktopSlug, "linkedin");
   assert.equal(ready.approved, true);
-  assert.equal(ready.desktopUrl, "/desktop/linkedin/vnc.html?autoconnect=1&resize=scale&path=desktop/linkedin/websockify");
+  assert.equal(ready.desktopUrl, "/desktop/linkedin/vnc.html?autoconnect=1&resize=scale&view_only=false&path=desktop/linkedin/websockify");
   assert.equal(auth.principal.userId, "alice");
   await assert.rejects(() => authorizeDesktopShareHttpRequest({
     url: "/desktop/gmail/vnc.html",
@@ -108,6 +111,9 @@ test("desktop shares supersede older pending and active shares for the same owne
     () => openDesktopShare({ shareId: firstParts.shareId, key: firstParts.key, subdomain: first.subdomain, env }),
     /desktop_share_superseded/,
   );
+  assert.equal(first.share.shareGeneration, 1);
+  assert.equal(second.share.shareGeneration, 2);
+  assert.equal(second.share.replacesShareId, first.share.id);
 
   const secondOpened = await openDesktopShare({
     shareId: secondParts.shareId,
@@ -165,7 +171,70 @@ test("desktop shares support path-based public challenge links", async () => {
   assert.equal(pending.approved, false);
   assert.equal(pending.desktopUrl, "");
   assert.equal(ready.approved, true);
-  assert.equal(ready.desktopUrl, "/desktop/linkedin/vnc.html?autoconnect=1&resize=scale&path=desktop/linkedin/websockify");
+  assert.equal(ready.desktopUrl, "/desktop/linkedin/vnc.html?autoconnect=1&resize=scale&view_only=false&path=desktop/linkedin/websockify");
+});
+
+test("concurrent desktop share creation leaves exactly one monotonic current share", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-desktop-share-concurrent-"));
+  const env = { ORKESTR_HOME: home, ORKESTR_PUBLIC_HTTPS_URL: "https://app.example.test" };
+  const principal = userPrincipal({ id: "alice", role: "user" });
+
+  await Promise.all(Array.from({ length: 8 }, () => createDesktopShare({ desktopSlug: "linkedin", principal, env })));
+  const lifecycle = await listDesktopShares({ ownerUserId: "alice", desktopSlug: "linkedin", env });
+  const generations = lifecycle.shares.map((share) => share.shareGeneration).sort((left, right) => left - right);
+
+  assert.deepEqual(generations, [1, 2, 3, 4, 5, 6, 7, 8]);
+  assert.equal(lifecycle.shares.filter((share) => share.current).length, 1);
+  assert.equal(lifecycle.shares.filter((share) => share.status === "superseded").length, 7);
+});
+
+test("desktop share supersession is isolated by thread lineage", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-desktop-share-thread-lineage-"));
+  const env = { ORKESTR_HOME: home, ORKESTR_PUBLIC_HTTPS_URL: "https://app.example.test" };
+  const principal = userPrincipal({ id: "alice", role: "user" });
+  await createThread({ id: "thread-a", name: "Thread A", ownerUserId: "alice", cwd: home }, env);
+  await createThread({ id: "thread-b", name: "Thread B", ownerUserId: "alice", cwd: home }, env);
+
+  await createDesktopShare({ desktopSlug: "linkedin", principal, threadId: "thread-a", env });
+  await createDesktopShare({ desktopSlug: "linkedin", principal, threadId: "thread-b", env });
+  const lifecycle = await listDesktopShares({ ownerUserId: "alice", desktopSlug: "linkedin", env });
+
+  assert.equal(lifecycle.shares.filter((share) => share.current).length, 2);
+  assert.deepEqual(new Set(lifecycle.shares.map((share) => share.threadId)), new Set(["thread-a", "thread-b"]));
+});
+
+test("superseded lifecycle responses and operator summaries never disclose successor credentials", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-desktop-share-redaction-"));
+  const env = { ORKESTR_HOME: home, ORKESTR_PUBLIC_HTTPS_URL: "https://app.example.test" };
+  const principal = userPrincipal({ id: "alice", role: "user" });
+  const first = await createDesktopShare({ desktopSlug: "linkedin", principal, env });
+  const firstParts = urlParts(first.url);
+  const opened = await openDesktopShare({ shareId: firstParts.shareId, key: firstParts.key, subdomain: first.subdomain, env, request: { ip: "192.0.2.20", headers: { "user-agent": "secret-agent" } } });
+  const second = await createDesktopShare({ desktopSlug: "linkedin", principal, env });
+  const stale = await desktopShareFailureResponse({ shareId: first.share.id, key: firstParts.key, subdomain: first.subdomain, env });
+  const lifecycle = await listDesktopShares({ ownerUserId: "alice", env });
+  const serialized = JSON.stringify({ stale, lifecycle });
+
+  assert.equal(stale.statusCode, 409);
+  assert.equal(stale.lifecycle.status, "superseded");
+  assert.equal(stale.lifecycle.shareGeneration, 1);
+  assert.doesNotMatch(serialized, new RegExp(second.key));
+  assert.doesNotMatch(serialized, new RegExp(opened.attempt.challenge));
+  assert.doesNotMatch(serialized, /192\.0\.2\.20|secret-agent/);
+});
+
+test("revoking the current desktop share makes it non-current", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-desktop-share-revoke-"));
+  const env = { ORKESTR_HOME: home, ORKESTR_PUBLIC_HTTPS_URL: "https://app.example.test" };
+  const principal = userPrincipal({ id: "alice", role: "user" });
+  const created = await createDesktopShare({ desktopSlug: "linkedin", principal, env });
+
+  const revoked = await revokeDesktopShare(created.share.id, { env, reason: "test_revoked" });
+  const lifecycle = await listDesktopShares({ ownerUserId: "alice", env });
+
+  assert.equal(revoked.share.status, "revoked");
+  assert.equal(lifecycle.shares[0].current, false);
+  assert.equal(lifecycle.shares[0].revokeReason, "test_revoked");
 });
 
 test("tenant desktop share routing uses parent path and rewrites approved desktop URLs", () => {

@@ -293,6 +293,19 @@ export interface DesktopShareResponse {
   };
 }
 
+export interface DesktopShareRecord {
+  id: string;
+  desktopSlug: string;
+  ownerUserId: string;
+  threadId?: string | null;
+  status: string;
+  current?: boolean;
+  shareGeneration?: number;
+  createdAt?: string;
+  expiresAt?: string;
+  attempts?: Array<{ id: string; status: string; createdAt?: string; approvedAt?: string | null }>;
+}
+
 export interface DesktopLeaseRecord {
   id?: string;
   desktopSlug?: string;
@@ -2781,6 +2794,14 @@ export class ApiService {
 
   createDesktopShare(slug: string, body: Record<string, unknown> = {}): Observable<DesktopShareResponse> {
     return this.http.post<DesktopShareResponse>(this.api(`/desktops/${encodeURIComponent(slug)}/share`), body);
+  }
+
+  desktopShares(includeTerminal = true): Observable<{ ok: boolean; shares: DesktopShareRecord[]; migrationAmbiguities?: Array<Record<string, unknown>> }> {
+    return this.http.get<{ ok: boolean; shares: DesktopShareRecord[]; migrationAmbiguities?: Array<Record<string, unknown>> }>(this.api(`/desktop-shares?includeTerminal=${includeTerminal ? "1" : "0"}`));
+  }
+
+  revokeDesktopShare(shareId: string, reason = "operator_revoked"): Observable<{ ok: boolean; share: DesktopShareRecord }> {
+    return this.http.post<{ ok: boolean; share: DesktopShareRecord }>(this.api(`/desktop-shares/${encodeURIComponent(shareId)}/revoke`), { reason });
   }
 
   replaceThreadDesktopGrants(threadId: string, grants: Array<Record<string, unknown> | string>, reason = ""): Observable<Record<string, unknown>> {

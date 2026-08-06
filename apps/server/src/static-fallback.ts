@@ -260,10 +260,12 @@ function serveDesktopSharePage(response: any) {
     button, a.button { display: inline-flex; align-items: center; justify-content: center; min-height: 42px; padding: 0 16px; border-radius: 6px; border: 1px solid #5b6b7d; background: #e8edf3; color: #111820; font-weight: 700; text-decoration: none; }
     small { display: block; margin-top: 16px; color: #8f9baa; }
     .error { color: #ffb4a9; }
+    #viewer { position: fixed; inset: 0; background: #050708; }
+    #viewer iframe { width: 100%; height: 100%; border: 0; display: block; }
   </style>
 </head>
 <body>
-  <main>
+  <main id="share-panel">
     <h1>Orkestr Desktop Access</h1>
     <p id="summary">Preparing a one-time desktop challenge.</p>
     <code id="challenge">loading</code>
@@ -273,6 +275,7 @@ function serveDesktopSharePage(response: any) {
     <a id="mobile" class="button" href="#" hidden>Mobile controls</a>
     <small>This link only works for this browser after the exact command below is pasted back to the Orkestr chat.</small>
   </main>
+  <section id="viewer" hidden><iframe id="desktop-frame" title="Orkestr desktop"></iframe></section>
   <script>
     const parts = location.pathname.split('/').filter(Boolean);
     const shareIndex = parts.indexOf('desktop-share');
@@ -288,6 +291,9 @@ function serveDesktopSharePage(response: any) {
     const open = document.getElementById('open');
     const mobile = document.getElementById('mobile');
     const copy = document.getElementById('copy');
+    const main = document.getElementById('share-panel');
+    const viewer = document.getElementById('viewer');
+    const desktopFrame = document.getElementById('desktop-frame');
     const api = (action) => {
       const base = tenantVmId
         ? '/api/tenant-vms/' + encodeURIComponent(tenantVmId) + '/desktop-shares/' + encodeURIComponent(shareId) + '/' + action
@@ -325,12 +331,32 @@ function serveDesktopSharePage(response: any) {
       copy.textContent = 'Copy renewal command';
       return true;
     }
+    function showTerminal(error) {
+      const lifecycle = error && error.payload ? error.payload.lifecycle : null;
+      if (!lifecycle || !['superseded', 'revoked'].includes(lifecycle.status)) return false;
+      viewer.hidden = true;
+      desktopFrame.removeAttribute('src');
+      main.hidden = false;
+      challenge.textContent = lifecycle.status === 'superseded' ? 'replaced' : 'revoked';
+      summary.textContent = lifecycle.status === 'superseded' ? 'This desktop share was replaced.' : 'This desktop share was revoked.';
+      statusNode.textContent = 'Return to the Orkestr chat and request a new desktop link.';
+      statusNode.className = 'error';
+      copy.hidden = true;
+      open.hidden = true;
+      mobile.hidden = true;
+      return true;
+    }
+    function showDesktop(desktopUrl) {
+      if (desktopFrame.getAttribute('src') !== desktopUrl) desktopFrame.setAttribute('src', desktopUrl);
+      main.hidden = true;
+      viewer.hidden = false;
+    }
     async function poll() {
       try {
         const body = await json(api('status'));
         if (body.approved && body.desktopUrl) {
           const desktopUrl = body.desktopUrl;
-          statusNode.textContent = 'Approved. Opening the desktop.';
+          statusNode.textContent = 'Approved. Desktop connected.';
           open.href = desktopUrl;
           open.hidden = false;
           const mobileUrl = mobileDestination(body.desktopUrl);
@@ -338,13 +364,13 @@ function serveDesktopSharePage(response: any) {
             mobile.href = mobileUrl;
             mobile.hidden = false;
           }
-          location.href = desktopUrl;
-          return;
+          showDesktop(desktopUrl);
         }
-        statusNode.textContent = 'Waiting for approval from chat.';
+        if (!body.approved) statusNode.textContent = 'Waiting for approval from chat.';
         setTimeout(poll, 2000);
       } catch (error) {
         if (showExpired(error)) return;
+        if (showTerminal(error)) return;
         statusNode.textContent = error.message || String(error);
         statusNode.className = 'error';
       }
@@ -359,6 +385,7 @@ function serveDesktopSharePage(response: any) {
         poll();
       } catch (error) {
         if (showExpired(error)) return;
+        if (showTerminal(error)) return;
         challenge.textContent = 'not available';
         statusNode.textContent = error.message || String(error);
         statusNode.className = 'error';

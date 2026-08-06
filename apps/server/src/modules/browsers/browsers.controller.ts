@@ -19,10 +19,14 @@ import {
 import {
   createDesktopShare,
   desktopShareCookieHeader,
+  desktopShareEnforcementPreflight,
+  desktopShareFailureResponse,
   desktopShareRenewalHint,
   desktopShareStatus,
   desktopShareSubdomainFromHost,
+  listDesktopShares,
   openDesktopShare,
+  revokeDesktopShare,
 } from "../../../../../packages/core/src/desktop-shares.js";
 import { assertSanitizedAction } from "../../../../../packages/core/src/llm-sanitizer.js";
 import { requestPrincipal } from "../../../../../packages/core/src/principal.js";
@@ -30,6 +34,7 @@ import { isAdminPrincipal, resourceOwnerUserId } from "../../../../../packages/c
 import { getThreadForPrincipal } from "../../../../../packages/core/src/threads.js";
 import {
   assertDesktopAccess,
+  advanceDesktopResourceGeneration,
   backfillThreadDesktopGrants,
   listThreadDesktopGrants,
   setThreadDesktopGrants,
@@ -238,8 +243,8 @@ export class BrowsersController {
         env: process.env,
       });
     } catch (error) {
-      const expired = await this.expiredDesktopShareResponse(error, response, shareId, key, shareSubdomain);
-      if (expired) return expired;
+      const failure = await this.desktopShareFailure(error, response, shareId, key, shareSubdomain);
+      if (failure) return failure;
       throw error;
     }
     response.setHeader("set-cookie", result.cookie.header || desktopShareCookieHeader(result.cookie.value, process.env));
@@ -264,10 +269,35 @@ export class BrowsersController {
         env: process.env,
       });
     } catch (error) {
-      const expired = await this.expiredDesktopShareResponse(error, response, shareId, key, shareSubdomain);
-      if (expired) return expired;
+      const failure = await this.desktopShareFailure(error, response, shareId, key, shareSubdomain);
+      if (failure) return failure;
       throw error;
     }
+  }
+
+  @Get("desktop-shares")
+  async desktopShares(@Req() request: any, @Query("includeTerminal") includeTerminal = "1", @Query("threadId") threadId = "", @Query("desktopSlug") desktopSlug = "") {
+    const principal = requestPrincipal(request);
+    return listDesktopShares({
+      ownerUserId: isAdminPrincipal(principal) ? "" : principal.userId,
+      threadId,
+      desktopSlug,
+      includeTerminal: !["0", "false", "no"].includes(String(includeTerminal || "").toLowerCase()),
+      env: process.env,
+    });
+  }
+
+  @Get("desktop-shares-enforcement-preflight")
+  async desktopSharesEnforcementPreflight(@Req() request: any) {
+    if (!isAdminPrincipal(requestPrincipal(request))) throw httpError("desktop_share_admin_required", 403);
+    return desktopShareEnforcementPreflight(process.env);
+  }
+
+  @Post("desktop-shares/:shareId/revoke")
+  @HttpCode(200)
+  async revokeDesktopShareRequest(@Req() request: any, @Param("shareId") shareId: string, @Body() body: Record<string, unknown> = {}) {
+    if (!isAdminPrincipal(requestPrincipal(request))) throw httpError("desktop_share_admin_required", 403);
+    return revokeDesktopShare(shareId, { reason: String(body.reason || "operator_revoked"), env: process.env });
   }
 
   @Post("browsers/:slug/:action")
@@ -327,16 +357,17 @@ export class BrowsersController {
     return String(value.split(":")[1] || "").trim();
   }
 
-  private async expiredDesktopShareResponse(error: any, response: any, shareId: string, key: string, subdomain: string) {
-    if (String(error?.message || "") !== "desktop_share_expired") return null;
-    const renewal = await desktopShareRenewalHint({ shareId, key, subdomain, env: process.env });
-    if (!renewal) return null;
-    response.status(410);
-    return {
-      ok: false,
-      error: "desktop_share_expired",
-      renewal,
-    };
+  private async desktopShareFailure(error: any, response: any, shareId: string, key: string, subdomain: string) {
+    if (String(error?.message || "") === "desktop_share_expired") {
+      const renewal = await desktopShareRenewalHint({ shareId, key, subdomain, env: process.env });
+      if (!renewal) return null;
+      response.status(410);
+      return { ok: false, error: "desktop_share_expired", renewal };
+    }
+    const lifecycle = await desktopShareFailureResponse({ shareId, key, subdomain, env: process.env });
+    if (!lifecycle) return null;
+    response.status(lifecycle.statusCode);
+    return lifecycle;
   }
 
   private async runAction(request: any, slug: string, action: string, body: Record<string, unknown> = {}) {
@@ -360,8 +391,16 @@ export class BrowsersController {
         return { browser: await openUrlInVirtualBrowser(slug, String(body.url || body.href || ""), process.env, desktopOptions) };
       }
       if (normalized === "stop") return { browser: await stopVirtualBrowser(slug, process.env, desktopOptions) };
-      if (normalized === "restart") return { browser: await restartVirtualBrowser(slug, process.env, desktopOptions) };
-      if (normalized === "cleanup") return { browser: await cleanupVirtualBrowser(slug, process.env, desktopOptions) };
+      if (normalized === "restart") {
+        const browser = await restartVirtualBrowser(slug, process.env, desktopOptions);
+        await advanceDesktopResourceGeneration(slug, ownerUserId, { reason: "desktop_restarted" }, process.env);
+        return { browser };
+      }
+      if (normalized === "cleanup") {
+        const browser = await cleanupVirtualBrowser(slug, process.env, desktopOptions);
+        await advanceDesktopResourceGeneration(slug, ownerUserId, { reason: "desktop_cleaned" }, process.env);
+        return { browser };
+      }
       throw httpError("unknown_browser_action", 404);
     } catch (error) {
       const statusCode = Number((error as { statusCode?: number })?.statusCode || 0);
