@@ -439,6 +439,15 @@ export async function twilioVoiceIncomingResponse(token = "", options = {}, env 
     };
   }
   if (verified.config.mode === "calle_callback") {
+    if (!verified.signature?.configured) {
+      return {
+        ok: false,
+        statusCode: 503,
+        error: "twilio_voice_signature_auth_token_required",
+        twiml: twilioVoiceUnavailableTwiml(verified.config),
+        config: verified.config,
+      };
+    }
     const callback = await enqueueTwilioCalleCallback(options.body || options.input || options.twilioBody || {}, verified.config, env, options);
     if (callback.fallback === "twilio_native_gather" || callback?.record?.reason === "caller_phone_not_callable") {
       return {
@@ -475,6 +484,9 @@ export async function recoverTwilioVoiceCalleCallbacks(env = process.env, option
   const config = await twilioVoiceAssistantConfig(options, env);
   if (config.mode !== "calle_callback") {
     return { ok: true, skipped: true, reason: "twilio_voice_mode_not_calle_callback", voiceMode: config.mode };
+  }
+  if (!config.twilioAuthToken) {
+    return { ok: false, skipped: true, reason: "twilio_voice_signature_auth_token_required", voiceMode: config.mode };
   }
   return recoverTwilioCalleCallbacks(config, env, options);
 }

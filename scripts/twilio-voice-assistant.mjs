@@ -104,17 +104,20 @@ async function status(options = {}, env = process.env) {
     publicBaseUrl: options.publicUrl,
   }, env);
   const baseReady = Boolean(config.webhookToken && config.summaryTo && config.publicBaseUrl);
+  const callbackAuthReady = config.mode !== "calle_callback" || Boolean(config.twilioAuthToken);
   const modeReady = config.mode !== "calle_live" || Boolean(config.calleLiveStreamUrl);
+  const blockers = [
+    !baseReady ? "twilio_voice_base_config_incomplete" : "",
+    config.mode === "calle_callback" && !config.twilioAuthToken ? "twilio_voice_signature_auth_token_required" : "",
+    config.mode === "calle_live" && !config.calleLiveStreamUrl ? "twilio_voice_calle_live_stream_url_missing" : "",
+  ].filter(Boolean);
   const urls = config.webhookToken && config.publicBaseUrl ? publicWebhookUrls(config) : null;
   return {
-    ok: Boolean(baseReady && modeReady),
+    ok: blockers.length === 0,
     mode: "status",
     userId: config.ownerUserId,
     voiceMode: config.mode,
-    errors: [
-      !baseReady ? "twilio_voice_base_config_incomplete" : "",
-      config.mode === "calle_live" && !config.calleLiveStreamUrl ? "twilio_voice_calle_live_stream_url_missing" : "",
-    ].filter(Boolean),
+    errors: blockers,
     configured: {
       webhookToken: Boolean(config.webhookToken),
       summaryTo: Boolean(config.summaryTo),
@@ -132,9 +135,10 @@ async function status(options = {}, env = process.env) {
     },
     callback: {
       enabled: config.mode === "calle_callback",
-      configured: Boolean(config.mode === "calle_callback" && baseReady && config.calleGoal),
+      configured: Boolean(config.mode === "calle_callback" && baseReady && config.calleGoal && config.twilioAuthToken),
       copyConfigured: Boolean(config.calleCallbackMessage),
       auth: {
+        twilioSignatureValidationRequired: true,
         twilioSignatureValidationConfigured: Boolean(config.twilioAuthToken),
         calleAuthChecked: false,
         calleAuthOk: null,
@@ -145,6 +149,23 @@ async function status(options = {}, env = process.env) {
         ok: null,
         reason: "not_checked_by_default",
       },
+    },
+    readiness: {
+      ready: blockers.length === 0,
+      code: {
+        twilioNative: true,
+        calleCallback: true,
+        calleLiveFailClosed: true,
+      },
+      operatorConfig: {
+        baseConfigured: baseReady,
+        selectedModeReady: Boolean(modeReady && callbackAuthReady),
+        callbackSignatureAuthTokenConfigured: Boolean(config.twilioAuthToken),
+        liveGatewayConfigured: Boolean(config.calleLiveStreamUrl),
+        twilioWebhookChecked: false,
+        calleAuthChecked: false,
+      },
+      blockers,
     },
     liveGateway: {
       enabled: config.mode === "calle_live",
@@ -280,6 +301,9 @@ async function configureOwnedNumber(options = {}, env = process.env) {
     publicBaseUrl: options.publicUrl,
     webhookToken: token,
   }, env);
+  if (config.mode === "calle_callback" && !config.twilioAuthToken) {
+    throw new Error("twilio_voice_signature_auth_token_required: configure --twilio-auth-token before pointing a Twilio number at calle-callback mode");
+  }
   const credentials = await loadCredentials({ userId: options.userId }, env);
   const sid = await ownedNumberSid(credentials, options.phoneNumber);
   if (!sid) throw new Error("twilio_number_not_owned");
@@ -309,6 +333,9 @@ async function buyNumber(options = {}, env = process.env) {
     publicBaseUrl: options.publicUrl,
     webhookToken: token,
   }, env);
+  if (config.mode === "calle_callback" && !config.twilioAuthToken) {
+    throw new Error("twilio_voice_signature_auth_token_required: configure --twilio-auth-token before buying/configuring a Twilio callback number");
+  }
   const credentials = await loadCredentials({ userId: options.userId }, env);
   const body = new URLSearchParams({
     PhoneNumber: options.phoneNumber,

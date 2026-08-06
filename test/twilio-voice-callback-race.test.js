@@ -17,6 +17,7 @@ async function voiceEnv(prefix = "orkestr-twilio-voice-race-") {
   await setSecureSecret({ scope: "user", ownerUserId: "admin", name: "twilio_voice_summary_to", value: "owner@example.test" }, principal, env);
   await setSecureSecret({ scope: "user", ownerUserId: "admin", name: "twilio_voice_public_url", value: "https://voice.example.test" }, principal, env);
   await setSecureSecret({ scope: "user", ownerUserId: "admin", name: "twilio_voice_mode", value: "calle-callback" }, principal, env);
+  await setSecureSecret({ scope: "user", ownerUserId: "admin", name: "twilio_voice_auth_token", value: "twilio-auth-secret" }, principal, env);
   return env;
 }
 
