@@ -16,7 +16,8 @@ function productionMode(env = process.env) {
     env.ORKESTR_DEPLOYMENT_ENV,
     env.ORKESTR_INSTALL_MODE === "service" ? "production" : "",
   ].map(cleanLower).some((value) => ["prod", "production"].includes(value)) ||
-    truthy(env.ORKESTR_PRODUCTION);
+    truthy(env.ORKESTR_PRODUCTION) ||
+    truthy(env.ORKESTR_RELEASE_DEPLOY);
 }
 
 function safeToken(value = "", fallback = "") {

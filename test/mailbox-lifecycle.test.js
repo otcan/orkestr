@@ -128,6 +128,17 @@ test("production mailbox creation rejects the default reserved mailbox domain", 
   );
 });
 
+test("versioned release deployments enforce production mailbox readiness", async () => {
+  const env = await fixture({
+    ORKESTR_RELEASE_DEPLOY: "1",
+    ORKESTR_MAILBOX_DOMAIN: "",
+  });
+  const status = mailboxInfrastructureStatus({}, env);
+  assert.equal(status.productionMode, true);
+  assert.equal(status.ready, false);
+  assert.equal(status.reason, "mailbox_reserved_domain_in_production");
+});
+
 test("production reserved mailbox domains require an explicit development override", async () => {
   const env = await fixture({
     NODE_ENV: "production",
