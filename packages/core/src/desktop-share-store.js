@@ -202,6 +202,6 @@ export function publicDesktopShareAttempt(attempt, { includeChallenge = false } 
     expiresAt: attempt.expiresAt,
     approvedAt: attempt.approvedAt,
     openedAt: attempt.openedAt,
-    challenge: includeChallenge ? attempt.challenge : undefined,
+    ...(includeChallenge ? { challenge: attempt.challenge } : {}),
   };
 }

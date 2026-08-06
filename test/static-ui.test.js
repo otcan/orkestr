@@ -2063,12 +2063,29 @@ test("desktop share shell supervises noVNC and proxy terminates stale sockets", 
   const shares = await fs.readFile("packages/core/src/desktop-shares.js", "utf8");
 
   assert.match(sharePage, /id="desktop-frame"/);
+  assert.match(sharePage, /id="lifecycle"/);
   assert.match(sharePage, /showTerminal\(error\)/);
   assert.match(sharePage, /showDesktop\(desktopUrl\)/);
+  assert.match(sharePage, /renderLifecycle\(body\)/);
+  assert.match(sharePage, /share\.shareGeneration/);
+  assert.match(sharePage, /attempt\.approvedAt/);
   assert.doesNotMatch(sharePage, /location\.href = desktopUrl/);
   assert.match(proxy, /onDesktopShareLifecycle/);
   assert.match(proxy, /validateDesktopShareSession/);
   assert.match(proxy, /desktop_share_ws_forcibly_closed/);
-  assert.match(proxy, /}, 2_000\)/);
+  assert.match(proxy, /2_000/);
   assert.match(shares, /view_only=false/);
+});
+
+test("desktop share Desk inventory presents only redacted lifecycle and attempt metadata", async () => {
+  const template = await fs.readFile("apps/web/src/app/ops-page.component.html", "utf8");
+  const component = await fs.readFile("apps/web/src/app/ops-page.component.ts", "utf8");
+
+  assert.match(template, /desktopShareReference\(share\.id\)/);
+  assert.match(template, /share\.expiresAt/);
+  assert.match(template, /attempt\.status/);
+  assert.match(template, /attempt\.approvedAt/);
+  assert.match(template, /attempt\.expiresAt/);
+  assert.match(component, /desktopShareReference\(value: string \| null \| undefined\)/);
+  assert.match(component, /id\.slice\(-8\)/);
 });

@@ -290,7 +290,16 @@ export async function desktopShareStatus({ shareId = "", key = "", browserToken 
   assertShareActive(share, now);
   assertShareKey(share, key);
   assertShareSubdomain(share, subdomain);
-  await assertCurrentShareGrant(share, env);
+  try {
+    await assertCurrentShareGrant(share, env);
+  } catch (error) {
+    // A recipient shell polls this endpoint while its noVNC iframe is open. Make
+    // an access or desktop-generation failure terminal before returning it so
+    // the controller can replace the stale framebuffer with the revoked state
+    // instead of leaving a generic error over an active-looking tab.
+    await revokeDesktopShare(share.id, { reason: String(error?.message || "desktop_share_scope_changed"), env }).catch(() => undefined);
+    throw error;
+  }
   const attempt = String(browserToken || "").trim()
     ? share.attempts.find((item) => item.tokenHash === sha256(browserToken) && Date.parse(item.expiresAt || "") > now)
     : null;

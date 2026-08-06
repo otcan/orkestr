@@ -13,13 +13,21 @@ function urlParts(value) {
   };
 }
 
-test("superseding a share forcibly closes its established desktop socket", async () => {
+async function waitFor(predicate, timeoutMs = 5_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() >= deadline) assert.fail("timed out waiting for desktop share socket state");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+}
+
+test("superseding and revoking shares fence established noVNC sockets while the latest share stays live", async () => {
   const previousHome = process.env.ORKESTR_HOME;
   const previousPublicUrl = process.env.ORKESTR_PUBLIC_HTTPS_URL;
   process.env.ORKESTR_HOME = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-desktop-proxy-lifecycle-"));
   process.env.ORKESTR_PUBLIC_HTTPS_URL = "https://app.example.test";
   try {
-    const { createDesktopShare, openDesktopShare, approveDesktopShareChallenge } = await import("../dist/server/packages/core/src/desktop-shares.js");
+    const { createDesktopShare, openDesktopShare, approveDesktopShareChallenge, revokeDesktopShare } = await import("../dist/server/packages/core/src/desktop-shares.js");
     const { registerDesktopShareSocket } = await import("../dist/server/apps/server/src/desktop-proxy.js");
     const principal = { kind: "user", userId: "alice", role: "user", source: "test" };
     const first = await createDesktopShare({ desktopSlug: "linkedin", principal });
@@ -30,11 +38,24 @@ test("superseding a share forcibly closes its established desktop socket", async
     const upstream = new PassThrough();
     registerDesktopShareSocket(socket, upstream, approved.share, approved.attempt);
 
-    await createDesktopShare({ desktopSlug: "linkedin", principal });
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    const second = await createDesktopShare({ desktopSlug: "linkedin", principal });
+    await waitFor(() => socket.destroyed && upstream.destroyed);
 
     assert.equal(socket.destroyed, true);
     assert.equal(upstream.destroyed, true);
+
+    const secondParts = urlParts(second.url);
+    const secondOpened = await openDesktopShare({ shareId: secondParts.shareId, key: secondParts.key, subdomain: second.subdomain });
+    const secondApproved = await approveDesktopShareChallenge(secondOpened.attempt.challenge, { approvedBy: "test" });
+    const latestSocket = new PassThrough();
+    const latestUpstream = new PassThrough();
+    registerDesktopShareSocket(latestSocket, latestUpstream, secondApproved.share, secondApproved.attempt);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(latestSocket.destroyed, false);
+    assert.equal(latestUpstream.destroyed, false);
+
+    await revokeDesktopShare(secondApproved.share.id, { reason: "test_revoked" });
+    await waitFor(() => latestSocket.destroyed && latestUpstream.destroyed);
   } finally {
     if (previousHome === undefined) delete process.env.ORKESTR_HOME;
     else process.env.ORKESTR_HOME = previousHome;

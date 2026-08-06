@@ -530,9 +530,12 @@
         @for (share of opsDesktopShares; track share.id) {
           <article class="timer-row">
             <div>
-              <strong>{{ share.desktopSlug }} · generation {{ share.shareGeneration || 0 }}</strong>
-              <p>{{ share.current ? "current" : share.status }} | thread {{ share.threadId || "legacy" }} | {{ share.attempts?.length || 0 }} recent attempts</p>
+              <strong>{{ share.desktopSlug }} · {{ desktopShareReference(share.id) }} · generation {{ share.shareGeneration || 0 }}</strong>
+              <p>{{ share.current ? "current" : share.status }} | thread {{ share.threadId || "legacy" }} | expires {{ share.expiresAt | date: "MMM d, HH:mm" }}</p>
               <small>Created {{ share.createdAt | date: "MMM d, HH:mm" }}</small>
+              @for (attempt of share.attempts || []; track attempt.id) {
+                <small>Attempt {{ desktopShareReference(attempt.id) }} · {{ attempt.status }}@if (attempt.approvedAt) { · approved {{ attempt.approvedAt | date: "MMM d, HH:mm" }} } · expires {{ attempt.expiresAt | date: "MMM d, HH:mm" }}</small>
+              }
             </div>
             @if (share.current) {
               <div class="timer-actions">

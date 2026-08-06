@@ -909,6 +909,11 @@ export class OpsPageComponent implements OnInit, OnDestroy {
     return !!id && this.activeDesktopLeaseId === id;
   }
 
+  desktopShareReference(value: string | null | undefined): string {
+    const id = String(value || "").trim();
+    return id ? `#${id.slice(-8)}` : "unknown";
+  }
+
   browserActionBusy(browser: BrowserSession): boolean {
     const slug = this.browserSlug(browser);
     return !!slug && this.activeBrowserActionSlug === slug;
