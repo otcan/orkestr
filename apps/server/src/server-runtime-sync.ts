@@ -27,6 +27,10 @@ import {
   recordServerStartup,
   recoveryCauseForStartup,
 } from "./server-lifecycle.js";
+import {
+  recordBackgroundLoopMetrics,
+  recordWhatsAppDeliveryMetrics,
+} from "../../../packages/core/src/observability.js";
 
 export function runtimeMonitorIntervalMs() {
   const parsed = Number(process.env.ORKESTR_RUNTIME_MONITOR_INTERVAL_MS || 5000);
@@ -101,18 +105,35 @@ export async function runTimerLoop(
   syncImpl: (options?: { forceWhatsapp?: boolean; recoveryCause?: string }) => Promise<any> =
     (options = {}) => syncRuntimeAndDeliverWhatsApp(env, options),
 ) {
-  const dueTimers = await markDueTimers(env, new Date(), {
-    connectorStatusProvider: (provider: string, actualEnv: NodeJS.ProcessEnv, options: any = {}) =>
-      connectorAuthStatus(provider, actualEnv, options),
-  });
-  const gmailNotificationRuns = await runDueGmailNotifications(env);
-  const jobsRuns = await runDueGmailJobsAutomation(env);
-  const drained = await drainAllPendingThreadInputs(env);
-  const deliveredCount = drained.reduce((count: number, result: any) => count + Number(result?.delivered?.length || 0), 0);
-  const gmailDeliveredCount = gmailNotificationRuns.reduce((count: number, result: any) => count + Number(result?.run?.delivered?.length || 0), 0);
-  const jobsPresentedCount = jobsRuns.reduce((count: number, result: any) => count + Number(result?.presentation?.presented?.length || 0), 0);
-  if (dueTimers.length || gmailDeliveredCount > 0 || jobsPresentedCount > 0 || deliveredCount > 0 || drained.length > 0) {
-    await syncImpl({ forceWhatsapp: true });
+  const startedAt = Date.now();
+  const counts: Record<string, number> = {};
+  try {
+    const dueTimers = await markDueTimers(env, new Date(), {
+      connectorStatusProvider: (provider: string, actualEnv: NodeJS.ProcessEnv, options: any = {}) =>
+        connectorAuthStatus(provider, actualEnv, options),
+    });
+    const gmailNotificationRuns = await runDueGmailNotifications(env);
+    const jobsRuns = await runDueGmailJobsAutomation(env);
+    const drained = await drainAllPendingThreadInputs(env);
+    const deliveredCount = drained.reduce((count: number, result: any) => count + Number(result?.delivered?.length || 0), 0);
+    const gmailDeliveredCount = gmailNotificationRuns.reduce((count: number, result: any) => count + Number(result?.run?.delivered?.length || 0), 0);
+    const jobsPresentedCount = jobsRuns.reduce((count: number, result: any) => count + Number(result?.presentation?.presented?.length || 0), 0);
+    Object.assign(counts, {
+      due_timers: dueTimers.length,
+      gmail_notification_runs: gmailNotificationRuns.length,
+      gmail_delivered: gmailDeliveredCount,
+      jobs_runs: jobsRuns.length,
+      jobs_presented: jobsPresentedCount,
+      drained_threads: drained.length,
+      drained_inputs: deliveredCount,
+    });
+    if (dueTimers.length || gmailDeliveredCount > 0 || jobsPresentedCount > 0 || deliveredCount > 0 || drained.length > 0) {
+      await syncImpl({ forceWhatsapp: true });
+    }
+    recordBackgroundLoopMetrics({ loop: "timer_loop", result: "completed", durationMs: Date.now() - startedAt, counts });
+  } catch (error) {
+    recordBackgroundLoopMetrics({ loop: "timer_loop", result: "failed", durationMs: Date.now() - startedAt, counts });
+    throw error;
   }
 }
 
@@ -129,6 +150,7 @@ export function createRuntimeWhatsAppSyncRunner(env = process.env) {
   const run = (options: { forceWhatsapp?: boolean; recoveryCause?: string } = {}) => {
     if (inFlight) {
       queuedOptions = mergeRuntimeSyncOptions(queuedOptions, options);
+      recordBackgroundLoopMetrics({ loop: "runtime_sync", result: "queued_behind_active", durationMs: 0 });
       return inFlight.then(() => ({ ok: true, queuedBehindActiveSync: true }));
     }
     inFlight = syncRuntimeAndDeliverWhatsApp(env, options)
@@ -162,82 +184,105 @@ async function recoverWhatsAppAccountsAndOutbox(env = process.env, reason = "run
 }
 
 async function syncRuntimeAndDeliverWhatsApp(env = process.env, options: { forceWhatsapp?: boolean; recoveryCause?: string } = {}) {
-  const pendingConnectorDeliveries = consumeThreadConnectorDeliverySignalCount();
-  const synced = await syncRuntimeLeases(env);
-  const recoveredPendingInputs = await recoverStalePendingThreadInputs(env).catch((error) => {
-    reportServerError(env, {
-      source: "server.recoverStalePendingThreadInputs",
-      code: "stale_pending_input_recovery_failed",
-      message: error?.message || String(error),
-      error,
-    });
-    return [];
-  });
-  const recovered = await recoverStaleCodexAppServerTurns(env, {
-    noticeCause: options.recoveryCause,
-    recoverySource: options.recoveryCause ? "startup_recovery" : "",
-    autoSafeResetThread: (threadId: string, context: Record<string, unknown> = {}) =>
-      safeResetThreadRuntime(threadId, { reason: String(context.reason || "stale_turn_auto_safe_reset") }, env),
-    continueThreadInput: (threadId: string) => deliverPendingThreadInputs(threadId, env, { processApiAgent: true }),
-  }).catch((error) => {
-    reportServerError(env, {
-      source: "server.recoverCodexAppServerTurns",
-      code: "codex_app_server_recovery_failed",
-      message: error?.message || String(error),
-      error,
-    });
-    return { recovered: 0, appended: 0 };
-  });
-  const whatsappRecovery = await recoverWhatsAppAccountsAndOutbox(env, "runtime_sync_whatsapp_recovery").catch((error) => {
-    reportServerError(env, {
-      source: "server.recoverWhatsAppAccounts",
-      code: "whatsapp_account_recovery_failed",
-      message: error?.message || String(error),
-      error,
-    });
-    return { recovery: { recovered: [], skipped: [{ reason: error?.message || String(error) }] }, outbox: { retried: [], skipped: [] } };
-  });
-  const unreadRecovery = await recoverUnreadLocalWhatsAppMessages(env).catch((error) => {
-    reportServerError(env, {
-      source: "server.recoverUnreadWhatsApp",
-      code: "whatsapp_unread_recovery_failed",
-      message: error?.message || String(error),
-      error,
-    });
-    return { routed: 0 };
-  });
-  await syncWhatsAppTypingIndicators(env).catch((error) => {
-    reportServerError(env, {
-      source: "server.syncWhatsAppTyping",
-      code: "whatsapp_typing_sync_failed",
-      message: error?.message || String(error),
-      error,
-    }, { deliverWatcher: false });
-  });
-  const connectorDeliveries = pendingConnectorDeliveries + consumeThreadConnectorDeliverySignalCount();
-  const appended = (synced.appended || 0) + (recovered.appended || 0);
-  const recoveredWhatsAppAccounts = Array.isArray(whatsappRecovery?.recovery?.recovered) ? whatsappRecovery.recovery.recovered.length : 0;
-  const retriedWhatsAppOutbox = Array.isArray(whatsappRecovery?.outbox?.retried) ? whatsappRecovery.outbox.retried.length : 0;
-  if (options.forceWhatsapp || appended > 0 || connectorDeliveries > 0 || recoveredPendingInputs.length > 0 || Number(unreadRecovery.routed || 0) > 0 || recoveredWhatsAppAccounts > 0 || retriedWhatsAppOutbox > 0) {
-    const delivery = await deliverWhatsAppReplies(env).catch((error) => {
+  const startedAt = Date.now();
+  const counts: Record<string, number> = {};
+  try {
+    const pendingConnectorDeliveries = consumeThreadConnectorDeliverySignalCount();
+    const synced = await syncRuntimeLeases(env);
+    const recoveredPendingInputs = await recoverStalePendingThreadInputs(env).catch((error) => {
       reportServerError(env, {
-        source: "server.deliverWhatsAppReplies",
-        code: "whatsapp_reply_delivery_failed",
+        source: "server.recoverStalePendingThreadInputs",
+        code: "stale_pending_input_recovery_failed",
+        message: error?.message || String(error),
+        error,
+      });
+      return [];
+    });
+    const recovered = await recoverStaleCodexAppServerTurns(env, {
+      noticeCause: options.recoveryCause,
+      recoverySource: options.recoveryCause ? "startup_recovery" : "",
+      autoSafeResetThread: (threadId: string, context: Record<string, unknown> = {}) =>
+        safeResetThreadRuntime(threadId, { reason: String(context.reason || "stale_turn_auto_safe_reset") }, env),
+      continueThreadInput: (threadId: string) => deliverPendingThreadInputs(threadId, env, { processApiAgent: true }),
+    }).catch((error) => {
+      reportServerError(env, {
+        source: "server.recoverCodexAppServerTurns",
+        code: "codex_app_server_recovery_failed",
+        message: error?.message || String(error),
+        error,
+      });
+      return { recovered: 0, appended: 0 };
+    });
+    const whatsappRecovery = await recoverWhatsAppAccountsAndOutbox(env, "runtime_sync_whatsapp_recovery").catch((error) => {
+      reportServerError(env, {
+        source: "server.recoverWhatsAppAccounts",
+        code: "whatsapp_account_recovery_failed",
+        message: error?.message || String(error),
+        error,
+      });
+      return { recovery: { recovered: [], skipped: [{ reason: error?.message || String(error) }] }, outbox: { retried: [], skipped: [] } };
+    });
+    const unreadRecovery = await recoverUnreadLocalWhatsAppMessages(env).catch((error) => {
+      reportServerError(env, {
+        source: "server.recoverUnreadWhatsApp",
+        code: "whatsapp_unread_recovery_failed",
+        message: error?.message || String(error),
+        error,
+      });
+      return { routed: 0 };
+    });
+    await syncWhatsAppTypingIndicators(env).catch((error) => {
+      reportServerError(env, {
+        source: "server.syncWhatsAppTyping",
+        code: "whatsapp_typing_sync_failed",
         message: error?.message || String(error),
         error,
       }, { deliverWatcher: false });
-      return null;
     });
-    reportWhatsAppDeliveryAnomalies(env, "server.deliverWhatsAppReplies", delivery);
+    const connectorDeliveries = pendingConnectorDeliveries + consumeThreadConnectorDeliverySignalCount();
+    const appended = (synced.appended || 0) + (recovered.appended || 0);
+    const recoveredWhatsAppAccounts = Array.isArray(whatsappRecovery?.recovery?.recovered) ? whatsappRecovery.recovery.recovered.length : 0;
+    const retriedWhatsAppOutbox = Array.isArray(whatsappRecovery?.outbox?.retried) ? whatsappRecovery.outbox.retried.length : 0;
+    Object.assign(counts, {
+      runtime_appended: Number(synced.appended || 0),
+      total_appended: appended,
+      recovered_app_server_turns: Number(recovered.recovered || 0),
+      recovered_pending_inputs: recoveredPendingInputs.length,
+      recovered_whatsapp_accounts: recoveredWhatsAppAccounts,
+      retried_whatsapp_outbox: retriedWhatsAppOutbox,
+      unread_whatsapp_routed: Number(unreadRecovery.routed || 0),
+      connector_deliveries: connectorDeliveries,
+    });
+    if (options.forceWhatsapp || appended > 0 || connectorDeliveries > 0 || recoveredPendingInputs.length > 0 || Number(unreadRecovery.routed || 0) > 0 || recoveredWhatsAppAccounts > 0 || retriedWhatsAppOutbox > 0) {
+      const deliveryStartedAt = Date.now();
+      const delivery = await deliverWhatsAppReplies(env).then((result) => {
+        recordWhatsAppDeliveryMetrics({ source: "runtime_sync", result, durationMs: Date.now() - deliveryStartedAt });
+        return result;
+      }).catch((error) => {
+        recordWhatsAppDeliveryMetrics({ source: "runtime_sync", error, durationMs: Date.now() - deliveryStartedAt });
+        reportServerError(env, {
+          source: "server.deliverWhatsAppReplies",
+          code: "whatsapp_reply_delivery_failed",
+          message: error?.message || String(error),
+          error,
+        }, { deliverWatcher: false });
+        return null;
+      });
+      reportWhatsAppDeliveryAnomalies(env, "server.deliverWhatsAppReplies", delivery);
+    }
+    recordBackgroundLoopMetrics({ loop: "runtime_sync", result: "completed", durationMs: Date.now() - startedAt, counts });
+    return {
+      ...synced,
+      appended,
+      recoveredAppServerTurns: recovered.recovered || 0,
+      recoveredPendingInputs,
+      recoveredWhatsAppAccounts,
+      retriedWhatsAppOutbox,
+    };
+  } catch (error) {
+    recordBackgroundLoopMetrics({ loop: "runtime_sync", result: "failed", durationMs: Date.now() - startedAt, counts });
+    throw error;
   }
-  return {
-    ...synced,
-    appended,
-    recoveredAppServerTurns: recovered.recovered || 0,
-    recoveredPendingInputs,
-    recoveredWhatsAppAccounts,
-    retriedWhatsAppOutbox,
-  };
 }
 
 export function createWhatsAppDeliveryScheduler(env = process.env) {
@@ -277,7 +322,12 @@ export function createWhatsAppDeliveryScheduler(env = process.env) {
       return;
     }
     running = true;
+    const startedAt = Date.now();
     deliverWhatsAppReplies(env)
+      .then((result) => {
+        recordWhatsAppDeliveryMetrics({ source: "delivery_scheduler", result, durationMs: Date.now() - startedAt });
+        return result;
+      })
       .then(async (result) => {
         await syncWhatsAppTypingIndicators(env).catch((error) => {
           reportServerError(env, {
@@ -298,6 +348,7 @@ export function createWhatsAppDeliveryScheduler(env = process.env) {
         return null;
       })
       .catch((error) => {
+        recordWhatsAppDeliveryMetrics({ source: "delivery_scheduler", error, durationMs: Date.now() - startedAt });
         reportServerError(env, {
           source: "server.whatsappDeliveryScheduler",
           code: "whatsapp_delivery_scheduler_failed",

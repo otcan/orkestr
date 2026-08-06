@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { appendEvent } from "../../storage/src/store.js";
+import { recordTaskAgentLifecycleMetric } from "./observability.js";
 import {
   appendThreadMessage,
   createThread,
@@ -173,6 +174,7 @@ export async function createTaskAgent(parentThreadId, input = {}, env = process.
     taskId,
     profileId: profile.id,
   }, env);
+  recordTaskAgentLifecycleMetric("created", initialStatus);
   const { developerInstructions, ...publicProfile } = profile;
   return { parent, taskAgent: updated, message, profile: publicProfile };
 }
@@ -251,6 +253,7 @@ async function enqueueParentResult(thread, sourceMessage, status, resultText, en
       profileId: current.agentProfileId,
       parentMessageId: parentMessage.id,
     }, env);
+    recordTaskAgentLifecycleMetric(`result_${status}`, status);
     if (options.deliver !== false) {
       const { requestThreadInputDelivery } = await import("./runtime-leases.js");
       requestThreadInputDelivery(parent.id, env);
@@ -319,6 +322,7 @@ export async function cancelTaskAgent(taskAgentId, env = process.env) {
       taskId: current.agentTaskId,
       profileId: current.agentProfileId,
     }, env);
+    recordTaskAgentLifecycleMetric("cancelled", "cancelled");
     return updated;
   });
 }

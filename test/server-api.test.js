@@ -10,7 +10,13 @@ import {
 } from "../apps/server/src/server-lifecycle.ts";
 import { createConnectorRuntimeSyncSignalHandler, whatsAppDeliveryFollowUpDelayMs } from "../packages/connectors/src/whatsapp-sync-signal.js";
 import { startCodexAppServerThread, stopCodexAppServerClients } from "../packages/core/src/codex-app-server.js";
+import { resetObservabilityForTests } from "../packages/core/src/observability.js";
 import { createThread, getThread, listThreadMessages, updateThread } from "../packages/core/src/threads.js";
+
+const unauthenticatedServerEnvKeys = [
+  "ORKESTR_AUTH_REQUIRED",
+  "ORKESTR_UNSAFE_ALLOW_PUBLIC_UNAUTHENTICATED",
+];
 
 async function request(baseUrl, route, options = {}) {
   const response = await fetch(`${baseUrl}${route}`, {
@@ -20,6 +26,22 @@ async function request(baseUrl, route, options = {}) {
   const text = await response.text();
   assert.ok(response.ok, `${route} returned ${response.status}: ${text}`);
   return text ? JSON.parse(text) : {};
+}
+
+function snapshotEnv(keys) {
+  return Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+}
+
+function restoreEnv(snapshot) {
+  for (const [key, value] of Object.entries(snapshot)) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+}
+
+function useUnauthenticatedTestServer() {
+  process.env.ORKESTR_AUTH_REQUIRED = "0";
+  process.env.ORKESTR_UNSAFE_ALLOW_PUBLIC_UNAUTHENTICATED = "1";
 }
 
 async function waitForMessage(threadId, predicate, { attempts = 20, intervalMs = 50 } = {}) {
@@ -286,14 +308,23 @@ test("server exposes health, readiness, version, and agent message APIs", async 
   const priorCodexAppServerMode = process.env.ORKESTR_CODEX_APP_SERVER_MODE;
   const priorCodexAppServerSocket = process.env.ORKESTR_CODEX_APP_SERVER_SOCKET;
   const priorRuntimeCodexCommand = process.env.ORKESTR_RUNTIME_CODEX_COMMAND;
+  const priorMetricsEnabled = process.env.ORKESTR_METRICS_ENABLED;
+  const priorMetricsPublic = process.env.ORKESTR_METRICS_PUBLIC;
+  const priorMetricsToken = process.env.ORKESTR_METRICS_TOKEN;
+  const priorServerAuth = snapshotEnv(unauthenticatedServerEnvKeys);
   const priorPath = process.env.PATH;
+  resetObservabilityForTests();
   process.env.ORKESTR_HOME = home;
   process.env.ORKESTR_RUNTIME_WORKSPACE_ROOT = workspaceRoot;
+  useUnauthenticatedTestServer();
   const fakeCodexBin = await createFakeCodexAppServer(home);
   process.env.ORKESTR_CODEX_BIN = path.join(fakeCodexBin, "codex");
   process.env.ORKESTR_CODEX_APP_SERVER_MODE = "stdio";
   delete process.env.ORKESTR_CODEX_APP_SERVER_SOCKET;
   delete process.env.ORKESTR_RUNTIME_CODEX_COMMAND;
+  delete process.env.ORKESTR_METRICS_ENABLED;
+  delete process.env.ORKESTR_METRICS_PUBLIC;
+  delete process.env.ORKESTR_METRICS_TOKEN;
   process.env.PATH = `${fakeCodexBin}${path.delimiter}${priorPath || ""}`;
   const server = await startServer({ port: 0, host: "127.0.0.1" });
   const { port } = server.address();
@@ -404,6 +435,21 @@ test("server exposes health, readiness, version, and agent message APIs", async 
     assert.equal(missingDownload.status, 404);
     const crossThreadDownload = await fetch(`${baseUrl}/api/threads/${relativeWorkspaceThread.thread.id}/attachments/${uploadedMessage.attachments[0].id}/download`);
     assert.equal(crossThreadDownload.status, 404);
+    const metricsResponse = await fetch(`${baseUrl}/metrics`);
+    assert.equal(metricsResponse.status, 200);
+    assert.match(metricsResponse.headers.get("content-type") || "", /text\/plain/);
+    const metrics = await metricsResponse.text();
+    assert.match(metrics, /orkestr_http_requests_total/);
+    assert.match(metrics, /orkestr_threads_current/);
+    assert.match(metrics, /orkestr_runtime_threads_current/);
+    assert.match(metrics, /orkestr_metrics_threads_scanned/);
+    assert.match(metrics, /route="\/api\/health"/);
+    assert.match(metrics, /route="\/api\/threads\/:threadId"/);
+    assert.match(metrics, /route="\/api\/browser-sessions\/:desktopSlug\/prepare"/);
+    assert.equal(metrics.includes(createdThread.thread.id), false);
+    assert.equal(metrics.includes(relativeWorkspaceThread.thread.id), false);
+    assert.equal(metrics.includes(uploadedMessage.attachments[0].id), false);
+    assert.equal(metrics.includes("linkedin"), false);
     await fs.unlink(String(uploadedMessage.attachments[0].path || uploadedMessage.attachments[0].saved_path));
     const staleDownload = await fetch(`${baseUrl}${uploadedMessage.attachments[0].downloadUrl}`);
     assert.equal(staleDownload.status, 403);
@@ -421,6 +467,13 @@ test("server exposes health, readiness, version, and agent message APIs", async 
     else process.env.ORKESTR_CODEX_APP_SERVER_SOCKET = priorCodexAppServerSocket;
     if (priorRuntimeCodexCommand === undefined) delete process.env.ORKESTR_RUNTIME_CODEX_COMMAND;
     else process.env.ORKESTR_RUNTIME_CODEX_COMMAND = priorRuntimeCodexCommand;
+    if (priorMetricsEnabled === undefined) delete process.env.ORKESTR_METRICS_ENABLED;
+    else process.env.ORKESTR_METRICS_ENABLED = priorMetricsEnabled;
+    if (priorMetricsPublic === undefined) delete process.env.ORKESTR_METRICS_PUBLIC;
+    else process.env.ORKESTR_METRICS_PUBLIC = priorMetricsPublic;
+    if (priorMetricsToken === undefined) delete process.env.ORKESTR_METRICS_TOKEN;
+    else process.env.ORKESTR_METRICS_TOKEN = priorMetricsToken;
+    restoreEnv(priorServerAuth);
     if (priorPath === undefined) delete process.env.PATH;
     else process.env.PATH = priorPath;
   }
@@ -453,9 +506,11 @@ export const executorAdapter = {
   const priorHome = process.env.ORKESTR_HOME;
   const priorOverlay = process.env.ORKESTR_OVERLAY_DIR;
   const priorStartedFile = process.env.SLOW_EXECUTOR_STARTED_FILE;
+  const priorServerAuth = snapshotEnv(unauthenticatedServerEnvKeys);
   process.env.ORKESTR_HOME = home;
   process.env.ORKESTR_OVERLAY_DIR = overlayDir;
   process.env.SLOW_EXECUTOR_STARTED_FILE = startedFile;
+  useUnauthenticatedTestServer();
   const server = await startServer({ port: 0, host: "127.0.0.1" });
   const { port } = server.address();
   const baseUrl = `http://127.0.0.1:${port}`;
@@ -487,6 +542,7 @@ export const executorAdapter = {
     else process.env.ORKESTR_OVERLAY_DIR = priorOverlay;
     if (priorStartedFile === undefined) delete process.env.SLOW_EXECUTOR_STARTED_FILE;
     else process.env.SLOW_EXECUTOR_STARTED_FILE = priorStartedFile;
+    restoreEnv(priorServerAuth);
   }
 });
 
@@ -502,9 +558,11 @@ test("thread interrupt API interrupts persisted app-server active turn before re
   const priorCodexHome = process.env.CODEX_HOME;
   const priorPath = process.env.PATH;
   const priorFakeCalls = process.env.FAKE_CODEX_CALLS;
+  const priorServerAuth = snapshotEnv(unauthenticatedServerEnvKeys);
   process.env.ORKESTR_HOME = path.join(home, "orkestr-home");
   process.env.HOME = path.join(home, "runtime-home");
   process.env.CODEX_HOME = path.join(home, "codex-home");
+  useUnauthenticatedTestServer();
   const fakeCodexBin = await createFakeCodexAppServer(home);
   process.env.ORKESTR_CODEX_BIN = path.join(fakeCodexBin, "codex");
   process.env.ORKESTR_CODEX_APP_SERVER_MODE = "stdio";
@@ -583,5 +641,6 @@ test("thread interrupt API interrupts persisted app-server active turn before re
     else process.env.PATH = priorPath;
     if (priorFakeCalls === undefined) delete process.env.FAKE_CODEX_CALLS;
     else process.env.FAKE_CODEX_CALLS = priorFakeCalls;
+    restoreEnv(priorServerAuth);
   }
 });

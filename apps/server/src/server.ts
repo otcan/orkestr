@@ -28,6 +28,11 @@ import { ensureDataDirs } from "../../../packages/storage/src/paths.js";
 import { authorizeHttpRequest } from "../../../packages/core/src/security.js";
 import { getThreadForPrincipal, listThreads } from "../../../packages/core/src/threads.js";
 import { isAdminPrincipal } from "../../../packages/core/src/policy.js";
+import {
+  createMetricsHandler,
+  createObservabilityMiddleware,
+  metricsRequestAllowed,
+} from "../../../packages/core/src/observability.js";
 import { AppModule } from "./app.module.js";
 import { startBrokerClientHeartbeat } from "./broker-client-heartbeat.js";
 import { attachBrokerInstanceAppProxyUpgrade, registerBrokerInstanceAppProxy } from "./broker-instance-app-proxy.js";
@@ -64,6 +69,19 @@ function whatsappDeliveryPollIntervalMs(env = process.env) {
 
 export async function createApp(): Promise<INestApplication> {
   const app = await NestFactory.create(AppModule, { logger: false });
+  app.use(createObservabilityMiddleware(process.env));
+  app.use((request, response, next) => {
+    const route = String((request as any)?.originalUrl || (request as any)?.url || "").split("?")[0];
+    if (route !== "/metrics" && route !== "/api/metrics") return next();
+    const allowed = metricsRequestAllowed(request, process.env);
+    if (!allowed.ok) {
+      return response
+        .status(allowed.statusCode || 403)
+        .type("application/json")
+        .send(JSON.stringify({ ok: false, error: allowed.error || "metrics_forbidden" }));
+    }
+    return createMetricsHandler(process.env)(request, response);
+  });
   app.use((_request, response, next) => {
     response.setHeader("cache-control", "no-store");
     next();

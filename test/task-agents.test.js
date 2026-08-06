@@ -14,6 +14,7 @@ import {
   listTaskAgents,
   taskAgentSummary,
 } from "../packages/core/src/task-agents.js";
+import { renderOpenMetrics, resetObservabilityForTests } from "../packages/core/src/observability.js";
 import { appendThreadMessage, createThread, deleteThread, getThread, listThreadMessages } from "../packages/core/src/threads.js";
 import { listThreadWorkers } from "../packages/core/src/thread-workers.js";
 
@@ -106,6 +107,28 @@ test("task agent final answers are steered back to the parent exactly once", asy
   const summary = await taskAgentSummary(current, env);
   assert.equal(summary.status, "completed");
   assert.equal(summary.result.messageId, result.id);
+});
+
+test("task agent lifecycle transitions update observability counters", async () => {
+  resetObservabilityForTests();
+  const env = await testEnv();
+  const parent = await createThread({ id: "metric-parent", name: "Metric Parent", cwd: path.dirname(env.ORKESTR_HOME) }, env);
+  const { taskAgent } = await createTaskAgent(parent.id, {
+    task: "Return lifecycle metrics.",
+  }, env);
+  const result = await appendThreadMessage(taskAgent.id, {
+    role: "assistant",
+    source: "codex-app-server",
+    phase: "final_answer",
+    text: "Lifecycle metric evidence.",
+    state: "completed",
+  }, env);
+
+  await completeTaskAgentFromMessage(taskAgent, result, env, { deliver: false });
+
+  const metrics = renderOpenMetrics();
+  assert.match(metrics, /orkestr_task_agent_lifecycle_total\{event="created",status="queued"\} 1/);
+  assert.match(metrics, /orkestr_task_agent_lifecycle_total\{event="result_completed",status="completed"\} 1/);
 });
 
 test("task agent terminal handoffs are serialized when completion signals race", async () => {
