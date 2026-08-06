@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -15,6 +16,7 @@ import {
   listMailboxRelayAudits,
   listMailboxesForPrincipal,
   mailboxMessageIdempotencyKey,
+  normalizeInboundMailboxMessage,
 } from "../packages/core/src/mailboxes.js";
 import { adminPrincipal, userPrincipal } from "../packages/core/src/principal.js";
 import { approvePairingChallenge } from "../packages/core/src/security.js";
@@ -200,8 +202,8 @@ test("missing Message-ID falls back to deterministic content idempotency", async
     body: { text: "Candidate profile update" },
   };
 
-  const firstKey = mailboxMessageIdempotencyKey({ ...input, providerMessageId: "provider-1" }, mailbox);
-  const secondKey = mailboxMessageIdempotencyKey({ ...input, providerMessageId: "provider-2" }, mailbox);
+  const firstKey = await mailboxMessageIdempotencyKey({ ...input, providerMessageId: "provider-1" }, mailbox);
+  const secondKey = await mailboxMessageIdempotencyKey({ ...input, providerMessageId: "provider-2" }, mailbox);
   assert.equal(firstKey, secondKey);
 
   await ingestMailboxMessage({ ...input, providerMessageId: "provider-1" }, env);
@@ -224,6 +226,112 @@ test("same forwarded email can be processed independently for multiple recipient
 
   assert.notEqual(first.idempotencyKey, second.idempotencyKey);
   assert.equal((await listConnectorInboxEvents({}, env)).length, 2);
+});
+
+test("raw MIME ingest extracts safe headers, body alternatives, attachments, and verification candidates", async () => {
+  const env = await fixture();
+  const mailbox = await createMailbox({ ownerUserId: "owner", purpose: "mime", suffix: "raw", status: "active" }, env);
+  const rawMime = [
+    "Message-ID: <raw-mime@example.test>",
+    "From: Forwarder <forwarder@example.test>",
+    "Subject: Gmail forwarding verification",
+    "Date: Thu, 06 Aug 2026 10:00:00 +0000",
+    "Content-Type: multipart/mixed; boundary=\"outer\"",
+    "",
+    "--outer",
+    "Content-Type: multipart/alternative; boundary=\"alt\"",
+    "",
+    "--alt",
+    "Content-Type: text/plain; charset=utf-8",
+    "",
+    "Forwarding verification code: MIME12345",
+    "--alt",
+    "Content-Type: text/html; charset=utf-8",
+    "",
+    "<p>Forwarding verification code: MIME12345</p>",
+    "--alt--",
+    "--outer",
+    "Content-Type: application/pdf; name=\"lead.pdf\"",
+    "Content-Disposition: attachment; filename=\"lead.pdf\"",
+    "Content-Transfer-Encoding: base64",
+    "",
+    "cGRmLXBheWxvYWQ=",
+    "--outer--",
+    "",
+  ].join("\r\n");
+
+  const normalized = await normalizeInboundMailboxMessage({ recipient: mailbox.address, rawMime }, mailbox);
+  assert.equal(normalized.headers.messageId, "<raw-mime@example.test>");
+  assert.equal(normalized.snippet, "Forwarding verification code: MIME12345");
+  assert.deepEqual(normalized.verificationCandidates, [{ type: "code", value: "MIME12345" }]);
+  assert.equal(normalized.attachments.length, 1);
+  assert.equal(normalized.attachments[0].filename, "lead.pdf");
+  assert.equal(normalized.attachments[0].quarantined, true);
+  assert.equal(Object.hasOwn(normalized, "rawMime"), false);
+
+  const ingested = await ingestMailboxMessage({ recipient: mailbox.address, rawMime, envelope: { rcptTo: mailbox.address } }, env);
+  const duplicate = await ingestMailboxMessage({ recipient: mailbox.address, rawMime, envelope: { rcptTo: mailbox.address } }, env);
+  assert.equal(ingested.action, "connector_inbox_queued");
+  assert.equal(duplicate.action, "deduped");
+  assert.equal((await listConnectorInboxEvents({}, env)).length, 1);
+});
+
+test("raw MIME parser preserves UTF-8 fields and binary attachment bytes", async () => {
+  const env = await fixture();
+  const mailbox = await createMailbox({ ownerUserId: "owner", purpose: "mime", suffix: "binary", status: "active" }, env);
+  const binary = Buffer.from([0, 1, 2, 255, 254, 253, 65, 66]);
+  const rawMime = [
+    "Message-ID: <utf8-binary@example.test>",
+    "From: =?UTF-8?Q?J=C3=B6rg?= <joerg@example.test>",
+    "Subject: =?UTF-8?Q?R=C3=A9sum=C3=A9_=E2=9C=93?=",
+    "Content-Type: multipart/mixed; boundary=\"utf8\"",
+    "",
+    "--utf8",
+    "Content-Type: text/plain; charset=utf-8",
+    "Content-Transfer-Encoding: quoted-printable",
+    "",
+    "Caf=C3=A9 =E2=9C=93",
+    "--utf8",
+    "Content-Type: application/octet-stream",
+    "Content-Disposition: attachment; filename*=utf-8''r%C3%A9sum%C3%A9.bin",
+    "Content-Transfer-Encoding: base64",
+    "",
+    binary.toString("base64"),
+    "--utf8--",
+    "",
+  ].join("\r\n");
+
+  const normalized = await normalizeInboundMailboxMessage({ recipient: mailbox.address, rawMime }, mailbox);
+  assert.equal(normalized.headers.subject, "Résumé ✓");
+  assert.equal(normalized.headers.from, "Jörg <joerg@example.test>");
+  assert.equal(normalized.snippet, "Café ✓");
+  assert.equal(normalized.attachments.length, 1);
+  assert.equal(normalized.attachments[0].filename, "résumé.bin");
+  assert.equal(normalized.attachments[0].sizeBytes, binary.length);
+  assert.equal(normalized.attachments[0].contentHash, createHash("sha256").update(binary).digest("hex"));
+  assert.equal(normalized.attachments[0].quarantined, true);
+});
+
+test("malformed raw MIME boundaries do not fabricate attachment metadata", async () => {
+  const env = await fixture();
+  const mailbox = await createMailbox({ ownerUserId: "owner", purpose: "mime", suffix: "malformed", status: "active" }, env);
+  const rawMime = [
+    "Message-ID: <malformed-mime@example.test>",
+    "Content-Type: multipart/mixed; boundary=\"expected\"",
+    "",
+    "--unexpected",
+    "Content-Type: application/octet-stream",
+    "Content-Disposition: attachment; filename=\"ghost.bin\"",
+    "Content-Transfer-Encoding: base64",
+    "",
+    "AAEC",
+    "--unexpected--",
+    "",
+  ].join("\r\n");
+
+  const normalized = await normalizeInboundMailboxMessage({ recipient: mailbox.address, rawMime }, mailbox);
+  assert.equal(normalized.headers.messageId, "<malformed-mime@example.test>");
+  assert.deepEqual(normalized.attachments, []);
 });
 
 test("VM-target mailbox ingest records relay audit only and never enters main connector inbox", async () => {
@@ -318,7 +426,7 @@ test("forwarding verification candidates are extracted without storing full body
   const mailbox = await createMailbox({ ownerUserId: "owner", purpose: "verify", suffix: "gmail", status: "verification-pending" }, env);
   const text = "Use forwarding confirmation code 123456789 or visit https://mail-settings.google.com/mail/vf-abc123 to confirm.";
 
-  const candidates = extractForwardingVerificationCandidates({
+  const candidates = await extractForwardingVerificationCandidates({
     headers: { subject: "Gmail Forwarding Confirmation" },
     body: { text },
   });

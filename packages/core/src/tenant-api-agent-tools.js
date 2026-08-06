@@ -49,6 +49,7 @@ import { whereAmI } from "./whereiam.js";
 import { desktopProvisioningMessage } from "./desktop-provisioning.js";
 import { desktopAccessMode } from "./desktop-access.js";
 import { createDesktopShare } from "./desktop-shares.js";
+import { resolveSkillDesktopTarget } from "./skill-desktop-resolver.js";
 import { updateThread } from "./threads.js";
 import {
   createUserSkillForPrincipal,
@@ -602,12 +603,17 @@ function desktopSlugCandidatesForSkill(skill = {}, env = process.env, args = {})
   if (explicit) return [explicit];
   const id = lower(skill.id);
   const required = clean(skill.requiredDesktop || skill.requiresDesktop);
+  if (required) {
+    return uniqueClean([
+      id === "linkedin" ? clean(env.ORKESTR_LINKEDIN_DESKTOP_SLUG || env.ORKESTR_LINKEDIN_BROWSER_SLUG) : "",
+      required,
+    ]);
+  }
   return uniqueClean([
-    required,
     id === "linkedin" ? clean(env.ORKESTR_LINKEDIN_DESKTOP_SLUG || env.ORKESTR_LINKEDIN_BROWSER_SLUG) : "",
     clean(env.ORKESTR_DEFAULT_DESKTOP_SLUG),
     clean(env.ORKESTR_MANUAL_INTERVENTION_DESKTOP_SLUG),
-    (id === "linkedin" || required) ? "desktop" : "",
+    id === "linkedin" ? "desktop" : "",
   ]);
 }
 
@@ -622,12 +628,30 @@ function genericDesktopFallback(desktops = []) {
   return /desktop|browser|managed/.test(label) ? only : null;
 }
 
+function semanticDesktopFallback(skill = {}, desktops = []) {
+  const required = lower(skill.requiredDesktop || skill.requiresDesktop);
+  if (!required) return null;
+  const matches = (Array.isArray(desktops) ? desktops : []).filter((desktop) => {
+    const slug = clean(desktop.slug);
+    const connector = lower(desktop.connector);
+    const type = lower(desktop.type);
+    const purpose = lower(desktop.purpose || desktop.notes);
+    const label = lower(desktop.label || desktop.displayName);
+    const startUrl = lower(desktop.startUrl || desktop.url);
+    if (slug === required || connector === required || type === required || purpose === required) return true;
+    if (required === "linkedin") return connector === "linkedin" || /\blinkedin\b/.test(`${purpose} ${label} ${startUrl}`);
+    return false;
+  });
+  return matches.length === 1 ? matches[0] : null;
+}
+
 function desktopForSkill(skill = {}, desktops = [], env = process.env, args = {}) {
   const list = Array.isArray(desktops) ? desktops : [];
   for (const slug of desktopSlugCandidatesForSkill(skill, env, args)) {
     const desktop = list.find((item) => clean(item.slug) === slug);
     if (desktop) return desktop;
   }
+  if (clean(skill.requiredDesktop || skill.requiresDesktop)) return semanticDesktopFallback(skill, list);
   return clean(args.target || args.slug) ? null : genericDesktopFallback(list);
 }
 
@@ -820,9 +844,27 @@ async function runSkillAction(args = {}, principal = {}, thread = null, env = pr
   if (action === "status" || action === "list_actions") return { ok: true, action, skill, desktopInventory: inventory.desktopInventory };
   if (clean(skill.requiresDesktop)) {
     const desktops = inventory.desktopInventory?.desktops || [];
-    const desktop = desktopForSkill(skill, desktops, env, args);
-    const slug = clean(desktop?.slug || args.target || args.slug || skill.requiredDesktop || skill.requiresDesktop);
-    if (!desktop) return { ok: false, error: "desktop_not_available", action, skill, desktopInventory: inventory.desktopInventory };
+    const resolved = await resolveSkillDesktopTarget({
+      skill,
+      desktops,
+      env,
+      args,
+      principal,
+      action: `skill.${skill.id}.${action}`,
+    });
+    if (!resolved.ok) {
+      return {
+        ok: false,
+        error: resolved.error || "desktop_not_available",
+        action,
+        skill,
+        targetSelection: resolved.targetSelection,
+        candidates: resolved.candidates,
+        desktopInventory: inventory.desktopInventory,
+      };
+    }
+    const desktop = resolved.desktop;
+    const slug = resolved.slug;
     if (!desktop.availableActions.includes(action)) return { ok: false, error: "skill_action_not_available", action, skill, desktop };
     const lease = await ensureAgentDesktopLease(slug, principal, thread, env);
     const desktopOptions = { principal, threadId: clean(thread?.id), fencingToken: clean(lease?.fencingToken) };
@@ -838,6 +880,7 @@ async function runSkillAction(args = {}, principal = {}, thread = null, env = pr
           action,
           skill,
           desktop,
+          targetSelection: resolved.targetSelection,
           message: "Desktop is already available.",
           shareUrl: share.url,
           desktopShare: share.share,
@@ -858,6 +901,7 @@ async function runSkillAction(args = {}, principal = {}, thread = null, env = pr
       action,
       skill: { ...skill, desktops: undefined },
       desktop: publicDesktopRecord(result),
+      targetSelection: resolved.targetSelection,
       url: "",
       openedUrl: safeUrl(result?.openedUrl),
       shareUrl: share?.url || "",
@@ -1752,14 +1796,58 @@ export async function runTenantApiAgentTool(name = "", args = {}, context = {}, 
   if (tool === "orkestr_operate_desktop") {
     const skillId = clean(args.skillId).toLowerCase();
     let slug = clean(args.target || args.slug);
+    let targetSelection = null;
+    let desktopInventory = null;
     if (!slug && skillId) {
       const inventory = await skillActionInventory(principal, thread, env, { skillId, includeDesktopInventory: true });
+      desktopInventory = inventory.desktopInventory || null;
       const skill = inventory.skills[0] || null;
-      const desktop = skill ? desktopForSkill(skill, inventory.desktopInventory?.desktops || [], env, args) : null;
-      slug = clean(desktop?.slug || skill?.resolvedDesktop || skill?.requiresDesktop || skill?.requiredDesktop);
+      const resolved = skill ? await resolveSkillDesktopTarget({
+        skill,
+        desktops: inventory.desktopInventory?.desktops || [],
+        env,
+        args,
+        principal,
+        action: "skill.desktop.operate",
+      }) : { ok: false, error: "skill_not_found" };
+      if (!resolved.ok) {
+        return {
+          ok: false,
+          error: resolved.error || "desktop_not_available",
+          operation: args.operation,
+          targetSelection: resolved.targetSelection || null,
+          candidates: resolved.candidates || [],
+          desktopInventory,
+        };
+      }
+      slug = resolved.slug;
+      targetSelection = resolved.targetSelection;
+    } else {
+      const inventory = await safeDesktopInventory(principal, thread, env);
+      desktopInventory = inventory;
+      const resolved = await resolveSkillDesktopTarget({
+        skill: {},
+        desktops: inventory.desktops || [],
+        env,
+        args: { ...args, target: slug },
+        principal,
+        action: "desktop.operate",
+      });
+      if (!resolved.ok) {
+        return {
+          ok: false,
+          error: resolved.error || "desktop_not_available",
+          operation: args.operation,
+          targetSelection: resolved.targetSelection,
+          candidates: resolved.candidates,
+          desktopInventory,
+        };
+      }
+      slug = resolved.slug;
+      targetSelection = resolved.targetSelection;
     }
     const lease = await ensureAgentDesktopLease(slug, principal, thread, env);
-    return operateManagedDesktop(slug, {
+    const result = await operateManagedDesktop(slug, {
       operation: args.operation,
       url: args.url,
       selector: args.selector,
@@ -1770,6 +1858,7 @@ export async function runTenantApiAgentTool(name = "", args = {}, context = {}, 
       waitMs: args.waitMs,
       maxText: args.maxText,
     }, env, { principal, threadId: clean(thread?.id), fencingToken: clean(lease?.fencingToken) });
+    return { ...result, targetSelection };
   }
   if (tool === "orkestr_connect_workspace_runtime") {
     return connectWorkspaceRuntime(args, thread, env);

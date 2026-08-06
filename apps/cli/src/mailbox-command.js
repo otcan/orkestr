@@ -202,6 +202,16 @@ function formatMailboxDeadLetterTable(deadLetters = []) {
   ].join("\n") + "\n";
 }
 
+function formatMailboxInfrastructure(infrastructure = {}) {
+  return [
+    `Mailbox infrastructure: ${infrastructure.ready ? "ready" : "not ready"}`,
+    `Domain: ${infrastructure.domain || "-"}`,
+    `Adapter: ${infrastructure.adapter || "-"}`,
+    `Propagation: ${infrastructure.propagationState || "-"}`,
+    infrastructure.reason ? `Reason: ${infrastructure.reason}` : "",
+  ].filter(Boolean).join("\n") + "\n";
+}
+
 export async function mailboxesCommand(argv, ctx) {
   const subcommand = argv[0]?.startsWith("--") ? "list" : argv[0] || "list";
   const rest = subcommand === "list" && argv[0]?.startsWith("--") ? argv : argv.slice(1);
@@ -218,6 +228,12 @@ export async function mailboxesCommand(argv, ctx) {
     const payload = await requestJson("/api/mailboxes", { ...ctx, method: "POST", body });
     if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
     else ctx.stdout.write(formatMailboxCreated(payload.mailbox || {}));
+    return 0;
+  }
+  if (subcommand === "status" || subcommand === "infrastructure") {
+    const payload = await requestJson("/api/mailboxes/infrastructure", ctx);
+    if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+    else ctx.stdout.write(formatMailboxInfrastructure(payload.infrastructure || {}));
     return 0;
   }
   if (subcommand === "verify") {
@@ -280,5 +296,5 @@ export async function mailboxesCommand(argv, ctx) {
     else ctx.stdout.write(formatMailboxRelayAuditTable([payload.relayAudit || {}]));
     return 0;
   }
-  throw new Error("Usage: orkestr mailboxes [list|create|verify|delete|rotate|ingest|retry|relay-audits|dead-letters|replay] [--json]");
+  throw new Error("Usage: orkestr mailboxes [list|status|create|verify|delete|rotate|ingest|retry|relay-audits|dead-letters|replay] [--json]");
 }

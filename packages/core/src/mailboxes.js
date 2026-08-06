@@ -1,5 +1,10 @@
 import { dataPaths } from "../../storage/src/paths.js";
 import { appendEvent, readJson, writeJson } from "../../storage/src/store.js";
+import {
+  assertMailboxInfrastructureReady,
+  mailboxInfrastructureStatus,
+  mailboxLifecyclePatchForInfrastructure,
+} from "./mailbox-infrastructure.js";
 import { assertOwnerAccess, canAccessOwner, isAdminPrincipal, policyError } from "./policy.js";
 import { resolveTenantVmTarget, targetResolutionMetadata } from "./target-resolver.js";
 import {
@@ -27,6 +32,7 @@ export {
   normalizeMailbox,
   publicMailbox,
 };
+export { mailboxInfrastructureStatus };
 export {
   deleteMailboxForPrincipal,
   rotateMailboxForPrincipal,
@@ -126,7 +132,15 @@ export async function getMailboxByAddress(address, env = process.env) {
 }
 
 export async function createMailbox(input = {}, env = process.env) {
-  const mailbox = normalizeMailbox(input, env);
+  const initial = normalizeMailbox(input, env);
+  const infrastructure = assertMailboxInfrastructureReady(initial, env);
+  const mailbox = normalizeMailbox({
+    ...initial,
+    lifecycle: {
+      ...initial.lifecycle,
+      ...mailboxLifecyclePatchForInfrastructure(infrastructure),
+    },
+  }, env);
   validateMailbox(mailbox);
   const store = await readMailboxStore(env);
   const key = idempotencyKey(input);
@@ -335,6 +349,18 @@ async function queueVmRelay(mailbox, message, idempotencyKey, env = process.env)
   return { created: true, audit };
 }
 
+function assertMailboxMessageLimits(mailbox = {}, message = {}) {
+  const limits = mailbox.limits || {};
+  const maxMessageBytes = Number(limits.maxMessageBytes || 0);
+  const maxAttachments = Number(limits.maxAttachments || 0);
+  if (maxMessageBytes > 0 && Number(message.sizeBytes || 0) > maxMessageBytes) {
+    throw mailboxError("mailbox_message_too_large", 413);
+  }
+  if (maxAttachments >= 0 && Array.isArray(message.attachments) && message.attachments.length > maxAttachments) {
+    throw mailboxError("mailbox_attachment_limit_exceeded", 413);
+  }
+}
+
 export async function recordMailboxDeadLetter({ mailbox, message, idempotencyKey, reason = "", resolution = null, relayAuditId = "" } = {}, env = process.env) {
   const store = await readMailboxStore(env);
   const deadLetterId = `${idempotencyKey || "mailbox"}:${cleanLower(reason || "failed")}`;
@@ -410,8 +436,9 @@ export async function listMailboxDeadLetters({ mailboxId = "", tenantVmId = "", 
 export async function routeMailboxMessage(input = {}, env = process.env) {
   let mailbox = await resolveMailboxForInbound(input, env);
   if (!acceptingMailboxStatuses.has(mailbox.status)) throw mailboxError("mailbox_not_accepting", 409);
-  const message = normalizeInboundMailboxMessage(input, mailbox);
-  const idempotencyKey = mailboxMessageIdempotencyKey(input, mailbox);
+  const message = await normalizeInboundMailboxMessage(input, mailbox);
+  assertMailboxMessageLimits(mailbox, message);
+  const idempotencyKey = await mailboxMessageIdempotencyKey(input, mailbox);
   mailbox = await recordVerificationCandidates(mailbox, message, env);
 
   if (mailbox.target.type === "vm") {

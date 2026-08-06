@@ -12,6 +12,7 @@ import {
   getMailbox,
   listMailboxDeadLetters,
   listMailboxRelayAudits,
+  mailboxInfrastructureStatus,
   replayMailboxDeadLetterForPrincipal,
   retryMailboxRelayForPrincipal,
   rotateMailboxForPrincipal,
@@ -86,6 +87,88 @@ test("mailbox lifecycle operations are scoped, idempotent, and disable old alias
   }, userPrincipal({ id: "alice" }), env);
   assert.equal(deleted.status, "deleted");
   assert.equal((await getMailbox(rotated.mailbox.id, env)).status, "deleted");
+});
+
+test("production mailbox creation fails closed until MTA readiness is explicit", async () => {
+  const missing = await fixture({ ORKESTR_MAILBOX_REQUIRE_MTA_READY: "1" });
+  await assert.rejects(
+    () => createMailbox({ ownerUserId: "owner", purpose: "prod", suffix: "blocked" }, missing),
+    /mailbox_infrastructure_not_ready/,
+  );
+
+  const ready = await fixture({
+    ORKESTR_MAILBOX_REQUIRE_MTA_READY: "1",
+    ORKESTR_MAILBOX_MTA_READY: "1",
+    ORKESTR_MAILBOX_MTA_ADAPTER: "postfix",
+    ORKESTR_MAILBOX_MTA_PROPAGATION: "recipient-map",
+    ORKESTR_MAILBOX_MTA_REVISION: "rev-001",
+  });
+  const mailbox = await createMailbox({ ownerUserId: "owner", purpose: "prod", suffix: "ready" }, ready);
+  assert.equal(mailbox.lifecycle.propagationState, "complete");
+  assert.equal(mailbox.lifecycle.mtaRevision, "rev-001");
+  assert.equal(mailbox.lifecycle.lastError, "");
+});
+
+test("production mailbox creation rejects the default reserved mailbox domain", async () => {
+  const env = await fixture({
+    NODE_ENV: "production",
+    ORKESTR_MAILBOX_DOMAIN: "",
+    ORKESTR_MAILBOX_MTA_READY: "1",
+    ORKESTR_MAILBOX_MTA_ADAPTER: "postfix",
+  });
+  const status = mailboxInfrastructureStatus({}, env);
+  assert.equal(status.productionMode, true);
+  assert.equal(status.reservedDomain, true);
+  assert.equal(status.ready, false);
+  assert.equal(status.reason, "mailbox_reserved_domain_in_production");
+
+  await assert.rejects(
+    () => createMailbox({ ownerUserId: "owner", purpose: "prod", suffix: "reserved" }, env),
+    /mailbox_infrastructure_not_ready/,
+  );
+});
+
+test("production reserved mailbox domains require an explicit development override", async () => {
+  const env = await fixture({
+    NODE_ENV: "production",
+    ORKESTR_MAILBOX_DOMAIN: "",
+    ORKESTR_MAILBOX_ALLOW_DEVELOPMENT_DOMAIN: "1",
+  });
+  const mailbox = await createMailbox({ ownerUserId: "owner", purpose: "dev", suffix: "override" }, env);
+  assert.equal(mailbox.address, "dev-override@in.example.test");
+  assert.equal(mailbox.lifecycle.propagationState, "development");
+});
+
+test("mailbox ingest enforces public-safe message and attachment limits before routing", async () => {
+  const env = await fixture();
+  const mailbox = await createMailbox({
+    ownerUserId: "owner",
+    purpose: "limits",
+    suffix: "small",
+    status: "active",
+    limits: { maxMessageBytes: 1024, maxAttachments: 0 },
+  }, env);
+
+  await assert.rejects(
+    () => ingestMailboxMessage({
+      recipient: mailbox.address,
+      headers: { messageId: "<too-large@example.test>" },
+      sizeBytes: 2048,
+      body: { text: "small text but oversized transport" },
+    }, env),
+    /mailbox_message_too_large/,
+  );
+
+  await assert.rejects(
+    () => ingestMailboxMessage({
+      recipient: mailbox.address,
+      headers: { messageId: "<attachment-limit@example.test>" },
+      body: { text: "attachment" },
+      attachments: [{ filename: "blocked.pdf", contentType: "application/pdf", sizeBytes: 1 }],
+    }, env),
+    /mailbox_attachment_limit_exceeded/,
+  );
+  assert.deepEqual(await listConnectorInboxEvents({}, env), []);
 });
 
 test("forwarding verification ingest updates only scoped mailbox verification metadata", async () => {
