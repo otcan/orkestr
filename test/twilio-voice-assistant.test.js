@@ -98,6 +98,53 @@ test("twilio voice incoming can use configured bilingual prompt messages", async
   assert.match(result.twiml, /language="de-DE"/);
 });
 
+test("twilio voice CALL-E live mode bridges the inbound call to a configured media stream", async () => {
+  const env = await voiceEnv();
+  const principal = adminPrincipal("admin");
+  await setSecureSecret({ scope: "user", ownerUserId: "admin", name: "twilio_voice_mode", value: "calle-live" }, principal, env);
+  await setSecureSecret({ scope: "user", ownerUserId: "admin", name: "twilio_voice_calle_live_stream_url", value: "wss://calle-live.example.test/twilio/stream?token=secret" }, principal, env);
+  await setSecureSecret({ scope: "user", ownerUserId: "admin", name: "twilio_voice_calle_goal", value: "Ask the caller why they called and summarize the next action." }, principal, env);
+
+  const result = await twilioVoiceIncomingResponse("voice-token", {
+    body: {
+      From: "+491701234567",
+      To: "+49301234567",
+      CallSid: "CA-live-1",
+    },
+  }, env);
+
+  assert.equal(result.ok, true);
+  assert.equal(result.config.mode, "calle_live");
+  assert.match(result.twiml, /<Connect><Stream url="wss:\/\/calle-live\.example\.test\/twilio\/stream\?token=secret">/);
+  assert.match(result.twiml, /<Parameter name="assistant_label" value="Account owner&apos;s &lt;assistant&gt;"\/>/);
+  assert.match(result.twiml, /<Parameter name="call_sid" value="CA-live-1"\/>/);
+  assert.match(result.twiml, /<Parameter name="caller" value="\+491701234567"\/>/);
+  assert.match(result.twiml, /<Parameter name="goal" value="Ask the caller why they called and summarize the next action\."\/>/);
+  assert.doesNotMatch(result.twiml, /<Gather input="speech"/);
+  assert.doesNotMatch(result.twiml, /Rückruf/);
+  assert.doesNotMatch(result.twiml, /<Hangup\/>/);
+});
+
+test("twilio voice CALL-E live mode fails closed when the media stream is not configured", async () => {
+  const env = await voiceEnv();
+  await setSecureSecret({ scope: "user", ownerUserId: "admin", name: "twilio_voice_mode", value: "calle-live" }, adminPrincipal("admin"), env);
+
+  const result = await twilioVoiceIncomingResponse("voice-token", {
+    body: {
+      From: "+491701234567",
+      To: "+49301234567",
+      CallSid: "CA-live-missing",
+    },
+  }, env);
+
+  assert.equal(result.ok, true);
+  assert.equal(result.error, "twilio_voice_calle_live_stream_url_missing");
+  assert.match(result.twiml, /CALL-E Live-Assistent ist noch nicht verbunden/);
+  assert.match(result.twiml, /<Hangup\/>/);
+  assert.doesNotMatch(result.twiml, /<Gather input="speech"/);
+  assert.doesNotMatch(result.twiml, /Rückruf/);
+});
+
 test("twilio voice invalid webhook token is rejected without exposing config", async () => {
   const env = await voiceEnv();
   const result = await twilioVoiceIncomingResponse("wrong-token", {}, env);
