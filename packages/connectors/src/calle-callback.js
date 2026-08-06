@@ -1,96 +1,23 @@
-import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { promisify } from "node:util";
 import { createOrkestrMailDraftForPrincipal } from "../../core/src/mail-drafts.js";
 import { adminPrincipal } from "../../core/src/principal.js";
 import { adminUserId, normalizeUserId } from "../../core/src/users.js";
-import { dataPaths } from "../../storage/src/paths.js";
-import { appendEvent, readJson, writeJson } from "../../storage/src/store.js";
+import { appendEvent } from "../../storage/src/store.js";
+import { getCalleCallbackStatus, safeError, startCalleCallbackCall } from "./calle-client.js";
+import { claimCallbackRecord, clean, cleanText, isCallablePhone, mutateCallbackStore, normalizePhone, normalizeRecord, normalizeStatus, nowIso, readCallbackStore, updateCallbackRecord } from "./calle-callback-store.js";
 
-const execFileAsync = promisify(execFile);
-const calleEnv = {
-  CALLE_SOURCE: "skills_sh",
-  CALLE_INTEGRATION: "skills_sh_skill",
-  CALLE_INTEGRATION_VERSION: "0.1.0",
-};
+export { getCalleCallbackStatus, startCalleCallbackCall };
+
 const terminalStatuses = new Set(["COMPLETED", "FAILED", "NO_ANSWER", "DECLINED", "CANCELED", "CANCELLED", "VOICEMAIL", "BUSY", "EXPIRED"]);
-
-function clean(value = "") {
-  return String(value || "").trim();
-}
-
-function cleanText(value = "", max = 20_000) {
-  return String(value || "").replace(/\u0000/g, "").trim().slice(0, max);
-}
-
-function nowIso() {
-  return new Date().toISOString();
-}
-
-function callbackStorePath(env = process.env) {
-  return dataPaths(env).twilioVoiceCallbacks;
-}
-
-function normalizePhone(value = "") {
-  const text = clean(value);
-  if (!text || /^(anonymous|unknown|restricted)$/i.test(text)) return "";
-  return text.replace(/[^\d+]/g, "");
-}
-
-function isCallablePhone(value = "") {
-  return /^\+\d{7,18}$/.test(normalizePhone(value));
-}
-
-function normalizeStatus(value = "") {
-  const status = clean(value).toUpperCase();
-  return status || "UNKNOWN";
-}
 
 function isTerminalStatus(value = "") {
   return terminalStatuses.has(normalizeStatus(value));
 }
 
-function normalizeRecord(record = {}) {
-  const createdAt = clean(record.createdAt) || nowIso();
-  return {
-    id: clean(record.id) || randomUUID(),
-    ownerUserId: normalizeUserId(record.ownerUserId || record.userId || adminUserId),
-    callSid: clean(record.callSid),
-    caller: normalizePhone(record.caller),
-    called: normalizePhone(record.called),
-    status: clean(record.status) || "queued",
-    reason: clean(record.reason).slice(0, 500),
-    runId: clean(record.runId),
-    callStatus: normalizeStatus(record.callStatus),
-    summary: cleanText(record.summary, 5000),
-    transcript: cleanText(record.transcript, 20_000),
-    draftId: clean(record.draftId),
-    error: clean(record.error).slice(0, 500),
-    createdAt,
-    updatedAt: clean(record.updatedAt) || createdAt,
-    completedAt: clean(record.completedAt),
-  };
-}
-
-function normalizeStore(payload = {}) {
-  const callbacks = Array.isArray(payload.callbacks) ? payload.callbacks.map(normalizeRecord) : [];
-  return {
-    schemaVersion: 1,
-    callbacks,
-  };
-}
-
-async function readCallbackStore(env = process.env) {
-  return normalizeStore(await readJson(callbackStorePath(env), { schemaVersion: 1, callbacks: [] }));
-}
-
-async function writeCallbackStore(store = {}, env = process.env) {
-  const callbacks = Array.isArray(store.callbacks) ? store.callbacks.map(normalizeRecord).slice(0, 500) : [];
-  await writeJson(callbackStorePath(env), {
-    schemaVersion: 1,
-    callbacks,
-    updatedAt: nowIso(),
-  });
+function callbackStatusForCalleStatus(value = "") {
+  const status = normalizeStatus(value);
+  if (!isTerminalStatus(status)) return "in_progress";
+  return status === "COMPLETED" ? "completed" : "terminal_failed";
 }
 
 function callInput(input = {}) {
@@ -101,159 +28,50 @@ function callInput(input = {}) {
   };
 }
 
-function safeError(error) {
-  const payloadCode = clean(error?.payload?.error?.code || error?.payload?.code);
-  const payloadMessage = clean(error?.payload?.error?.message || error?.payload?.message);
-  return clean(payloadCode || payloadMessage || error?.code || error?.message || error || "calle_callback_failed").slice(0, 500);
-}
-
-function parseJsonOutput(raw = "") {
-  const text = clean(raw);
-  if (!text) return {};
-  try {
-    return JSON.parse(text);
-  } catch (error) {
-    const wrapped = new Error("calle_invalid_json");
-    wrapped.cause = error;
-    throw wrapped;
-  }
-}
-
-async function execCalleJson(args = [], env = process.env, options = {}) {
-  const command = clean(options.command || env.ORKESTR_CALLE_COMMAND || "calle");
-  const execImpl = options.execFileAsync || execFileAsync;
-  const timeout = Math.max(1000, Number(options.timeoutMs || env.ORKESTR_CALLE_COMMAND_TIMEOUT_MS || 120_000) || 120_000);
-  try {
-    const result = await execImpl(command, args, {
-      env: { ...process.env, ...env, ...calleEnv },
-      timeout,
-      maxBuffer: Math.max(1024 * 1024, Number(env.ORKESTR_CALLE_MAX_BUFFER_BYTES || 4 * 1024 * 1024) || 4 * 1024 * 1024),
-    });
-    return parseJsonOutput(result?.stdout || "");
-  } catch (error) {
-    const payload = parseJsonOutput(error?.stdout || "");
-    const wrapped = new Error(clean(payload?.error?.code || payload?.error?.message || error?.message || "calle_command_failed"));
-    wrapped.payload = payload;
-    wrapped.cause = error;
-    throw wrapped;
-  }
-}
-
-function structuredContent(payload = {}, key = "status_result") {
-  return (
-    payload?.[key]?.structuredContent ||
-    payload?.status_result?.structuredContent ||
-    payload?.statusResult?.structuredContent ||
-    payload?.result?.structuredContent ||
-    payload?.structuredContent ||
-    {}
-  );
-}
-
-function publicCalleStatus(status = {}) {
-  const extracted = status.extracted && typeof status.extracted === "object" ? status.extracted : {};
-  const calling = extracted.calling && typeof extracted.calling === "object" ? extracted.calling : {};
-  return {
-    status: normalizeStatus(status.status || status.call_status || status.state),
-    message: cleanText(status.message, 1000),
-    summary: cleanText(status.post_summary || status.summary || status.message, 5000),
-    transcript: cleanText(status.transcript, 20_000),
-    callId: clean(status.call_id || status.callId),
-    callee: clean(extracted.to_phones?.[0] || calling.callee),
-    durationSeconds: clean(calling.duration_seconds || calling.durationSeconds),
-    startedAt: clean(calling.started_at || calling.startedAt),
-    endedAt: clean(calling.ended_at || calling.endedAt),
-  };
-}
-
-export async function startCalleCallbackCall(record = {}, config = {}, env = process.env, options = {}) {
-  if (!isCallablePhone(record.caller)) {
-    return { ok: false, error: "caller_phone_not_callable" };
-  }
-  const args = [
-    "call",
-    "start",
-    "--to-phone",
-    normalizePhone(record.caller),
-    "--goal",
-    cleanText(config.calleGoal, 4000),
-  ];
-  if (clean(config.calleLanguage)) args.push("--language", clean(config.calleLanguage));
-  if (clean(config.calleRegion)) args.push("--region", clean(config.calleRegion));
-  const payload = await execCalleJson(args, env, options);
-  if (payload?.ok === false) {
-    const error = new Error(clean(payload?.error?.code || payload?.error?.message || "calle_call_start_failed"));
-    error.payload = payload;
-    throw error;
-  }
-  const status = publicCalleStatus(structuredContent(payload, "status_result"));
-  return {
-    ok: true,
-    runId: clean(payload.run_id || payload.runId || status.runId),
-    status,
-  };
-}
-
-export async function getCalleCallbackStatus(runId = "", env = process.env, options = {}) {
-  const id = clean(runId);
-  if (!id) throw new Error("calle_run_id_required");
-  const payload = await execCalleJson(["call", "status", "--run-id", id], env, options);
-  if (payload?.ok === false) {
-    const error = new Error(clean(payload?.error?.code || payload?.error?.message || "calle_call_status_failed"));
-    error.payload = payload;
-    throw error;
-  }
-  return publicCalleStatus(structuredContent(payload, "result"));
-}
-
-async function upsertCallbackRecord(record = {}, env = process.env) {
-  const normalized = normalizeRecord({ ...record, updatedAt: nowIso() });
-  const store = await readCallbackStore(env);
-  const index = store.callbacks.findIndex((item) => item.id === normalized.id);
-  if (index >= 0) store.callbacks[index] = normalized;
-  else store.callbacks.unshift(normalized);
-  await writeCallbackStore(store, env);
-  return normalized;
-}
-
-async function updateCallbackRecord(recordId = "", patch = {}, env = process.env) {
-  const store = await readCallbackStore(env);
-  const index = store.callbacks.findIndex((item) => item.id === clean(recordId));
-  if (index < 0) return null;
-  const record = normalizeRecord({ ...store.callbacks[index], ...patch, updatedAt: nowIso() });
-  store.callbacks[index] = record;
-  await writeCallbackStore(store, env);
-  return record;
-}
-
 export async function reserveTwilioCalleCallback(input = {}, config = {}, env = process.env) {
   const parsed = callInput(input);
   const ownerUserId = normalizeUserId(config.ownerUserId || adminUserId);
   const callSid = parsed.callSid || `twilio-${randomUUID()}`;
-  const store = await readCallbackStore(env);
-  const duplicate = store.callbacks.find((record) => record.ownerUserId === ownerUserId && record.callSid === callSid);
-  if (duplicate) {
-    return { ok: true, duplicate: true, record: duplicate };
-  }
-  const record = normalizeRecord({
-    ownerUserId,
-    callSid,
-    caller: parsed.caller,
-    called: parsed.called,
-    status: isCallablePhone(parsed.caller) ? "queued" : "skipped",
-    reason: isCallablePhone(parsed.caller) ? "" : "caller_phone_not_callable",
+  const callable = isCallablePhone(parsed.caller);
+  const reserved = await mutateCallbackStore(env, async (store) => {
+    const duplicate = store.callbacks.find((record) => record.ownerUserId === ownerUserId && record.callSid === callSid);
+    if (duplicate) {
+      return {
+        ok: duplicate.status !== "skipped",
+        duplicate: true,
+        fallback: duplicate.reason === "caller_phone_not_callable" ? "twilio_native_gather" : "",
+        record: duplicate,
+      };
+    }
+    const record = normalizeRecord({
+      ownerUserId,
+      callSid,
+      caller: parsed.caller,
+      called: parsed.called,
+      status: callable ? "queued" : "skipped",
+      phase: callable ? "queued" : "fallback",
+      reason: callable ? "" : "caller_phone_not_callable",
+      retryable: false,
+      recovery: callable ? "" : "Use native Twilio speech gather because the caller number is anonymous, unknown, or restricted.",
+    });
+    store.callbacks.unshift(record);
+    return {
+      ok: callable,
+      duplicate: false,
+      fallback: callable ? "" : "twilio_native_gather",
+      record,
+    };
   });
-  store.callbacks.unshift(record);
-  await writeCallbackStore(store, env);
   await appendEvent({
     type: "twilio_voice_calle_callback_reserved",
     ownerUserId,
-    recordId: record.id,
-    callSid: record.callSid,
-    status: record.status,
-    reason: record.reason || null,
+    recordId: reserved.record.id,
+    callSid: reserved.record.callSid,
+    status: reserved.record.status,
+    reason: reserved.record.reason || null,
+    fallback: reserved.fallback || null,
   }, env).catch(() => {});
-  return { ok: record.status !== "skipped", duplicate: false, record };
+  return reserved;
 }
 
 function delay(ms = 0) {
@@ -302,18 +120,37 @@ async function createCalleSummaryDraft(record = {}, status = {}, config = {}, en
   return draftResult.draft;
 }
 
-async function createCalleFailureDraft(record = {}, error, config = {}, env = process.env) {
+function failureRecoveryText(phase = "", error = "") {
+  const normalizedPhase = clean(phase) || "unknown";
+  const normalizedError = safeError(error);
+  if (normalizedPhase === "poll_timeout") {
+    return "CALL-E accepted the callback but did not reach a terminal status in time. Check CALL-E status manually, then retry or call the caller back.";
+  }
+  if (normalizedPhase === "terminal") {
+    return "CALL-E reached a non-success terminal call state. Review the caller number and call outcome, then retry manually if appropriate.";
+  }
+  if (/auth|token|login/i.test(normalizedError)) {
+    return "Refresh CALL-E authentication on the server, then retry the callback or call the caller back manually.";
+  }
+  return "Check CALL-E reachability and server logs, then retry the callback or call the caller back manually.";
+}
+
+async function createCalleFailureDraft(record = {}, error, config = {}, env = process.env, options = {}) {
   if (!clean(config.summaryTo)) return null;
+  const phase = clean(options.phase || record.phase || "start");
+  const recovery = cleanText(options.recovery || record.recovery || failureRecoveryText(phase, error), 1000);
   const body = [
-    "A caller reached your Twilio assistant line, but Orkestr could not start the CALL-E callback.",
+    "A caller reached your Twilio assistant line, but Orkestr could not complete the CALL-E callback.",
     "",
     `Caller: ${record.caller || "Unknown caller"}`,
     `Called line: ${record.called || "Unknown line"}`,
     `Twilio Call SID: ${record.callSid || "Not available"}`,
+    `Phase: ${phase}`,
     `Error: ${safeError(error)}`,
+    `Recovery: ${recovery}`,
     "",
     "Suggested next step:",
-    "Check CALL-E authentication on the server, then call the person back manually if needed.",
+    "Fix the listed recovery item, then retry the callback or call the person back manually if needed.",
   ].join("\n");
   const draftResult = await createOrkestrMailDraftForPrincipal({
     ownerUserId: config.ownerUserId,
@@ -324,39 +161,149 @@ async function createCalleFailureDraft(record = {}, error, config = {}, env = pr
   return draftResult.draft;
 }
 
+async function markCallbackFailure(record = {}, error, config = {}, env = process.env, options = {}) {
+  const phase = clean(options.phase || record.phase || "start");
+  const recovery = cleanText(options.recovery || failureRecoveryText(phase, error), 1000);
+  const draft = await createCalleFailureDraft(record, error, config, env, { phase, recovery }).catch(() => null);
+  const updated = await updateCallbackRecord(record.id, {
+    status: clean(options.status) || "failed",
+    phase,
+    error: safeError(error),
+    draftId: draft?.id || record.draftId || "",
+    callStatus: clean(options.callStatus) || "FAILED",
+    retryable: options.retryable !== false,
+    recovery,
+    completedAt: nowIso(),
+    notifiedAt: draft?.id ? nowIso() : record.notifiedAt,
+  }, env);
+  await appendEvent({
+    type: clean(options.eventType) || "twilio_voice_calle_callback_failed",
+    ownerUserId: updated?.ownerUserId || record.ownerUserId || config.ownerUserId,
+    recordId: updated?.id || record.id,
+    draftId: draft?.id || null,
+    callSid: updated?.callSid || record.callSid || null,
+    phase,
+    error: updated?.error || safeError(error),
+  }, env).catch(() => {});
+  return { draft, record: updated };
+}
+
 export async function runTwilioCalleCallback(recordId = "", config = {}, env = process.env, options = {}) {
-  let record = await updateCallbackRecord(recordId, { status: "starting", error: "", reason: "" }, env);
+  const claimed = await claimCallbackRecord(recordId, env);
+  let record = claimed.record;
   if (!record) throw new Error("twilio_calle_callback_not_found");
+  if (!claimed.ok) {
+    await appendEvent({
+      type: "twilio_voice_calle_callback_claim_skipped",
+      ownerUserId: record.ownerUserId || config.ownerUserId,
+      recordId: record.id,
+      callSid: record.callSid,
+      status: record.status,
+      reason: claimed.reason,
+      alreadyRunning: Boolean(claimed.alreadyRunning),
+    }, env).catch(() => {});
+    return {
+      ok: true,
+      duplicate: true,
+      alreadyRunning: Boolean(claimed.alreadyRunning),
+      reason: claimed.reason,
+      record,
+    };
+  }
   try {
     const started = await startCalleCallbackCall(record, config, env, options);
     if (!started.ok) {
-      record = await updateCallbackRecord(record.id, { status: "skipped", reason: started.error, callStatus: "SKIPPED" }, env);
+      record = await updateCallbackRecord(record.id, {
+        status: "skipped",
+        phase: "fallback",
+        reason: started.error,
+        callStatus: "SKIPPED",
+        completedAt: nowIso(),
+      }, env);
       return { ok: false, skipped: true, record };
     }
     let latest = started.status || {};
+    const initialRuntimeStatus = callbackStatusForCalleStatus(latest.status);
     record = await updateCallbackRecord(record.id, {
-      status: isTerminalStatus(latest.status) ? "completed" : "in_progress",
+      status: initialRuntimeStatus,
+      phase: isTerminalStatus(latest.status) ? "terminal" : "poll",
       runId: started.runId,
       callStatus: latest.status,
       summary: latest.summary,
       transcript: latest.transcript,
+      retryable: initialRuntimeStatus === "terminal_failed",
       completedAt: isTerminalStatus(latest.status) ? nowIso() : "",
     }, env);
     const interval = pollIntervalMs(config, env, options);
     for (let attempt = 0; attempt < maxPolls(config, env, options) && !isTerminalStatus(latest.status); attempt += 1) {
       if (interval) await delay(interval);
       latest = await getCalleCallbackStatus(started.runId, env, options);
+      const runtimeStatus = callbackStatusForCalleStatus(latest.status);
       record = await updateCallbackRecord(record.id, {
-        status: isTerminalStatus(latest.status) ? "completed" : "in_progress",
+        status: runtimeStatus,
+        phase: isTerminalStatus(latest.status) ? "terminal" : "poll",
         callStatus: latest.status,
         summary: latest.summary,
         transcript: latest.transcript,
+        retryable: runtimeStatus === "terminal_failed",
         completedAt: isTerminalStatus(latest.status) ? nowIso() : "",
       }, env);
     }
-    if (isTerminalStatus(latest.status) && !record?.draftId) {
+    if (isTerminalStatus(latest.status) && normalizeStatus(latest.status) !== "COMPLETED") {
+      const error = `calle_call_${normalizeStatus(latest.status).toLowerCase()}`;
+      const draft = await createCalleFailureDraft(record, error, config, env, { phase: "terminal" }).catch(() => null);
+      record = await updateCallbackRecord(record.id, {
+        status: "terminal_failed",
+        phase: "terminal",
+        error,
+        draftId: draft?.id || record.draftId || "",
+        retryable: true,
+        recovery: failureRecoveryText("terminal", error),
+        notifiedAt: draft?.id ? nowIso() : record.notifiedAt,
+      }, env);
+      await appendEvent({
+        type: "twilio_voice_calle_callback_terminal_failed",
+        ownerUserId: record.ownerUserId,
+        recordId: record.id,
+        draftId: draft?.id || null,
+        callSid: record.callSid,
+        callStatus: latest.status,
+        error,
+      }, env).catch(() => {});
+      return { ok: false, terminal: true, error, record, status: latest };
+    }
+    if (!isTerminalStatus(latest.status)) {
+      const error = "calle_callback_terminal_timeout";
+      const draft = await createCalleFailureDraft(record, error, config, env, { phase: "poll_timeout" }).catch(() => null);
+      record = await updateCallbackRecord(record.id, {
+        status: "timed_out",
+        phase: "poll_timeout",
+        error,
+        draftId: draft?.id || record.draftId || "",
+        retryable: true,
+        recovery: failureRecoveryText("poll_timeout", error),
+        completedAt: nowIso(),
+        notifiedAt: draft?.id ? nowIso() : record.notifiedAt,
+      }, env);
+      await appendEvent({
+        type: "twilio_voice_calle_callback_timed_out",
+        ownerUserId: record.ownerUserId,
+        recordId: record.id,
+        draftId: draft?.id || null,
+        callSid: record.callSid,
+        callStatus: latest.status || "UNKNOWN",
+      }, env).catch(() => {});
+      return { ok: false, timedOut: true, error, record, status: latest };
+    }
+    if (!record?.draftId) {
       const draft = await createCalleSummaryDraft(record, latest, config, env);
-      record = await updateCallbackRecord(record.id, { draftId: draft?.id || "", status: "completed" }, env);
+      record = await updateCallbackRecord(record.id, {
+        draftId: draft?.id || "",
+        status: "completed",
+        phase: "terminal",
+        retryable: false,
+        notifiedAt: draft?.id ? nowIso() : record.notifiedAt,
+      }, env);
       await appendEvent({
         type: "twilio_voice_calle_callback_summary_draft_created",
         ownerUserId: record.ownerUserId,
@@ -368,19 +315,25 @@ export async function runTwilioCalleCallback(recordId = "", config = {}, env = p
     }
     return { ok: true, record, status: latest };
   } catch (error) {
-    const draft = await createCalleFailureDraft(record, error, config, env).catch(() => null);
+    const phase = record?.phase || "start";
+    const draft = await createCalleFailureDraft(record, error, config, env, { phase }).catch(() => null);
     record = await updateCallbackRecord(record.id, {
       status: "failed",
+      phase,
       error: safeError(error),
       draftId: draft?.id || "",
       callStatus: "FAILED",
+      retryable: true,
+      recovery: failureRecoveryText(phase, error),
       completedAt: nowIso(),
+      notifiedAt: draft?.id ? nowIso() : record.notifiedAt,
     }, env);
     await appendEvent({
       type: "twilio_voice_calle_callback_failed",
       ownerUserId: record?.ownerUserId || config.ownerUserId,
       recordId: record?.id || recordId,
       callSid: record?.callSid || null,
+      phase,
       error: record?.error || safeError(error),
     }, env).catch(() => {});
     return { ok: false, error: safeError(error), record };
@@ -405,6 +358,138 @@ export async function enqueueTwilioCalleCallback(input = {}, config = {}, env = 
     if (typeof timer.unref === "function") timer.unref();
   }
   return reserved;
+}
+
+function recordAgeMs(record = {}) {
+  const timestamp = Date.parse(record.updatedAt || record.createdAt || "");
+  return timestamp ? Math.max(0, Date.now() - timestamp) : Number.POSITIVE_INFINITY;
+}
+
+function staleStartingMs(env = process.env, options = {}) {
+  return Math.max(1000, Number(options.staleStartingMs || env.ORKESTR_TWILIO_CALLBACK_STALE_STARTING_MS || 60_000) || 60_000);
+}
+
+function terminalTimeoutMs(env = process.env, options = {}) {
+  return Math.max(1000, Number(options.terminalTimeoutMs || env.ORKESTR_TWILIO_CALLBACK_TERMINAL_TIMEOUT_MS || 30 * 60_000) || 30 * 60_000);
+}
+
+function scheduleRecoveredCallback(record = {}, config = {}, env = process.env, options = {}) {
+  const runner = () => runTwilioCalleCallback(record.id, config, env, options);
+  if (options.awaitRecovery === true) return runner();
+  const timer = setTimeout(() => {
+    void runner().catch((error) => appendEvent({
+      type: "twilio_voice_calle_callback_recovery_runner_failed",
+      ownerUserId: config.ownerUserId,
+      recordId: record.id,
+      error: safeError(error),
+    }, env).catch(() => {}));
+  }, 0);
+  if (typeof timer.unref === "function") timer.unref();
+  return Promise.resolve({ ok: true, scheduled: true, record });
+}
+
+export async function recoverTwilioCalleCallbacks(config = {}, env = process.env, options = {}) {
+  const store = await readCallbackStore(env);
+  const result = {
+    ok: true,
+    started: [],
+    reconciled: [],
+    timedOut: [],
+    failed: [],
+    skipped: [],
+  };
+  for (const record of store.callbacks.map(normalizeRecord)) {
+    if (record.status === "queued") {
+      result.started.push(record.id);
+      await scheduleRecoveredCallback(record, config, env, options);
+      continue;
+    }
+    if (record.status === "starting" && recordAgeMs(record) >= staleStartingMs(env, options)) {
+      const failure = await markCallbackFailure(record, "calle_callback_start_state_lost", config, env, {
+        phase: "start",
+        recovery: "Orkestr restarted while CALL-E startup was in an unknown state. No duplicate callback was started automatically; retry manually after checking CALL-E.",
+      });
+      result.failed.push(failure.record?.id || record.id);
+      continue;
+    }
+    if (record.status !== "in_progress") {
+      result.skipped.push({ id: record.id, status: record.status });
+      continue;
+    }
+    if (record.runId && options.reconcileStatus !== false) {
+      try {
+        const latest = await getCalleCallbackStatus(record.runId, env, options);
+        const runtimeStatus = callbackStatusForCalleStatus(latest.status);
+        const updated = await updateCallbackRecord(record.id, {
+          status: runtimeStatus,
+          phase: isTerminalStatus(latest.status) ? "terminal" : "poll",
+          callStatus: latest.status,
+          summary: latest.summary,
+          transcript: latest.transcript,
+          retryable: runtimeStatus === "terminal_failed",
+          completedAt: isTerminalStatus(latest.status) ? nowIso() : "",
+        }, env);
+        result.reconciled.push(updated?.id || record.id);
+        if (isTerminalStatus(latest.status) && normalizeStatus(latest.status) !== "COMPLETED") {
+          const error = `calle_call_${normalizeStatus(latest.status).toLowerCase()}`;
+          const failure = await markCallbackFailure(updated || record, error, config, env, {
+            phase: "terminal",
+            status: "terminal_failed",
+            callStatus: latest.status,
+            eventType: "twilio_voice_calle_callback_terminal_failed",
+          });
+          result.failed.push(failure.record?.id || record.id);
+        } else if (isTerminalStatus(latest.status) && normalizeStatus(latest.status) === "COMPLETED" && !(updated || record).draftId) {
+          const draft = await createCalleSummaryDraft(updated || record, latest, config, env);
+          await updateCallbackRecord(record.id, {
+            draftId: draft?.id || "",
+            status: "completed",
+            phase: "terminal",
+            retryable: false,
+            notifiedAt: draft?.id ? nowIso() : (updated || record).notifiedAt,
+          }, env);
+        } else if (!isTerminalStatus(latest.status) && recordAgeMs(updated || record) >= terminalTimeoutMs(env, options)) {
+          const failure = await markCallbackFailure(updated || record, "calle_callback_terminal_timeout", config, env, {
+            phase: "poll_timeout",
+            status: "timed_out",
+            callStatus: latest.status || "UNKNOWN",
+            eventType: "twilio_voice_calle_callback_timed_out",
+          });
+          result.timedOut.push(failure.record?.id || record.id);
+        }
+        continue;
+      } catch (error) {
+        const failure = await markCallbackFailure(record, error, config, env, {
+          phase: "reconcile",
+          recovery: "Orkestr could not reconcile the stored CALL-E run. Check CALL-E auth/reachability, then retry manually if needed.",
+        });
+        result.failed.push(failure.record?.id || record.id);
+        continue;
+      }
+    }
+    if (recordAgeMs(record) >= terminalTimeoutMs(env, options)) {
+      const failure = await markCallbackFailure(record, "calle_callback_terminal_timeout", config, env, {
+        phase: "poll_timeout",
+        status: "timed_out",
+        callStatus: record.callStatus || "UNKNOWN",
+        eventType: "twilio_voice_calle_callback_timed_out",
+      });
+      result.timedOut.push(failure.record?.id || record.id);
+    } else {
+      result.skipped.push({ id: record.id, status: record.status });
+    }
+  }
+  if (result.started.length || result.failed.length || result.timedOut.length || result.reconciled.length) {
+    await appendEvent({
+      type: "twilio_voice_calle_callback_recovery_completed",
+      ownerUserId: config.ownerUserId,
+      started: result.started.length,
+      reconciled: result.reconciled.length,
+      failed: result.failed.length,
+      timedOut: result.timedOut.length,
+    }, env).catch(() => {});
+  }
+  return result;
 }
 
 export async function listTwilioCalleCallbacks(env = process.env) {

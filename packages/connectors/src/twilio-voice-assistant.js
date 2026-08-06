@@ -1,10 +1,10 @@
-import { randomUUID } from "node:crypto";
+import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import { createOrkestrMailDraftForPrincipal } from "../../core/src/mail-drafts.js";
 import { adminPrincipal } from "../../core/src/principal.js";
 import { resolveSecureSecretValue } from "../../core/src/secure-secrets.js";
 import { adminUserId, normalizeUserId } from "../../core/src/users.js";
 import { appendEvent } from "../../storage/src/store.js";
-import { enqueueTwilioCalleCallback } from "./calle-callback.js";
+import { enqueueTwilioCalleCallback, recoverTwilioCalleCallbacks } from "./calle-callback.js";
 
 function clean(value = "") {
   return String(value || "").trim();
@@ -87,6 +87,10 @@ function defaultCalleGoal(label = "Orkestr assistant") {
   ].join(" ");
 }
 
+function defaultCalleCallbackMessage(label = "Orkestr assistant") {
+  return `Hallo, hier ist ${label}. Der Telefonassistent des Anschlussinhabers ruft Sie in wenigen Sekunden zurück und nimmt Ihr Anliegen auf. Bitte nehmen Sie den Rückruf an.`;
+}
+
 function publicBaseUrlFromInput(input = {}, env = process.env) {
   const configured = clean(input.publicBaseUrl || env.ORKESTR_TWILIO_VOICE_PUBLIC_URL || env.ORKESTR_PUBLIC_APP_URL || env.ORKESTR_APP_URL || env.ORKESTR_PUBLIC_URL);
   if (configured) return configured.replace(/\/+$/g, "");
@@ -158,6 +162,18 @@ export async function twilioVoiceAssistantConfig(options = {}, env = process.env
     envFirst(env, ["ORKESTR_TWILIO_VOICE_CALLE_LIVE_STREAM_URL", "TWILIO_VOICE_CALLE_LIVE_STREAM_URL"]) ||
     await resolveConfigSecret("twilio/voice-calle-live-stream-url", ["twilio_voice_calle_live_stream_url", "twilio-voice-calle-live-stream-url"], { ownerUserId }, env),
   );
+  const calleCallbackMessage = sanitizeText(
+    options.calleCallbackMessage ||
+    envFirst(env, ["ORKESTR_TWILIO_VOICE_CALLE_CALLBACK_MESSAGE", "TWILIO_VOICE_CALLE_CALLBACK_MESSAGE"]) ||
+    await resolveConfigSecret("twilio/voice-calle-callback-message", ["twilio_voice_calle_callback_message", "twilio-voice-calle-callback-message"], { ownerUserId }, env) ||
+    defaultCalleCallbackMessage(assistantLabel),
+    2000,
+  );
+  const twilioAuthToken = clean(
+    options.twilioAuthToken ||
+    envFirst(env, ["ORKESTR_TWILIO_VOICE_AUTH_TOKEN", "TWILIO_VOICE_AUTH_TOKEN", "ORKESTR_TWILIO_AUTH_TOKEN", "TWILIO_AUTH_TOKEN"]) ||
+    await resolveConfigSecret("twilio/voice-auth-token", ["twilio_voice_auth_token", "twilio-auth-token", "twilio/auth-token", "twilio_auth_token"], { ownerUserId }, env),
+  );
   const introMessage = sanitizeText(
     options.introMessage ||
     envFirst(env, ["ORKESTR_TWILIO_VOICE_INTRO_MESSAGE", "TWILIO_VOICE_INTRO_MESSAGE"]) ||
@@ -191,6 +207,8 @@ export async function twilioVoiceAssistantConfig(options = {}, env = process.env
     calleLanguage,
     calleRegion,
     calleLiveStreamUrl,
+    calleCallbackMessage,
+    twilioAuthToken,
     calleMaxPolls: positiveInteger(options.calleMaxPolls ?? envFirst(env, ["ORKESTR_TWILIO_VOICE_CALLE_MAX_POLLS", "TWILIO_VOICE_CALLE_MAX_POLLS"]), 90),
     callePollIntervalMs: positiveInteger(options.callePollIntervalMs ?? envFirst(env, ["ORKESTR_TWILIO_VOICE_CALLE_POLL_INTERVAL_MS", "TWILIO_VOICE_CALLE_POLL_INTERVAL_MS"]), 10_000, 60_000),
   };
@@ -289,18 +307,71 @@ function twilioVoiceCalleCallbackTwiml(config = {}, callback = {}) {
     ? `Hallo, hier ist ${label}. Der CALL-E Assistent kann Sie ohne erkannte Telefonnummer gerade nicht zurückrufen. Bitte schreiben Sie der gewünschten Person kurz per Nachricht.`
     : callback?.duplicate
       ? `Hallo, hier ist ${label}. Der CALL-E Assistent wurde für diesen Anruf bereits gestartet. Sie erhalten gleich einen Rückruf.`
-      : `Hallo, hier ist ${label}. Mein CALL-E Assistent ruft Sie gleich zurück und nimmt Ihr Anliegen auf. Bitte nehmen Sie den Rückruf an.`;
+      : sanitizeText(config.calleCallbackMessage, 2000) || defaultCalleCallbackMessage(label);
   return twimlResponse([
     `<Say language="${xmlEscape(language)}">${xmlEscape(message)}</Say>`,
     "<Hangup/>",
   ].join(""));
 }
 
+function headerValue(headers = {}, name = "") {
+  const expected = clean(name).toLowerCase();
+  for (const [key, value] of Object.entries(headers || {})) {
+    if (clean(key).toLowerCase() !== expected) continue;
+    return Array.isArray(value) ? clean(value[0]) : clean(value);
+  }
+  return "";
+}
+
+function twilioSignatureUrl(config = {}, options = {}) {
+  const endpoint = clean(options.twilioEndpoint || options.endpoint || "incoming");
+  const urls = twilioVoiceWebhookUrls(config);
+  return urls[endpoint] || urls.incoming;
+}
+
+function twilioSignaturePayload(url = "", body = {}) {
+  const entries = [];
+  for (const [key, rawValue] of Object.entries(body || {})) {
+    const values = Array.isArray(rawValue) ? rawValue : [rawValue];
+    for (const value of values) entries.push([String(key), String(value ?? "")]);
+  }
+  entries.sort(([leftKey, leftValue], [rightKey, rightValue]) =>
+    leftKey.localeCompare(rightKey) || leftValue.localeCompare(rightValue));
+  return `${url}${entries.map(([key, value]) => `${key}${value}`).join("")}`;
+}
+
+function secureStringEqual(left = "", right = "") {
+  const leftBuffer = Buffer.from(String(left || ""), "utf8");
+  const rightBuffer = Buffer.from(String(right || ""), "utf8");
+  return leftBuffer.length === rightBuffer.length && timingSafeEqual(leftBuffer, rightBuffer);
+}
+
+export function calculateTwilioVoiceSignature(authToken = "", url = "", body = {}) {
+  return createHmac("sha1", String(authToken || ""))
+    .update(twilioSignaturePayload(url, body), "utf8")
+    .digest("base64");
+}
+
+function verifyTwilioVoiceSignature(config = {}, options = {}) {
+  const authToken = clean(config.twilioAuthToken);
+  if (!authToken) return { ok: true, configured: false };
+  const signature = headerValue(options.headers, "x-twilio-signature");
+  if (!signature) return { ok: false, configured: true, statusCode: 403, error: "twilio_voice_signature_missing" };
+  const url = twilioSignatureUrl(config, options);
+  const expected = calculateTwilioVoiceSignature(authToken, url, options.body || options.input || options.twilioBody || {});
+  if (!secureStringEqual(signature, expected)) {
+    return { ok: false, configured: true, statusCode: 403, error: "twilio_voice_signature_invalid" };
+  }
+  return { ok: true, configured: true };
+}
+
 export async function verifyTwilioVoiceWebhookToken(token = "", options = {}, env = process.env) {
   const config = await twilioVoiceAssistantConfig(options, env);
   if (!config.webhookToken) return { ok: false, statusCode: 503, error: "twilio_voice_webhook_token_missing", config };
   if (normalizeToken(token) !== config.webhookToken) return { ok: false, statusCode: 403, error: "twilio_voice_webhook_token_invalid", config };
-  return { ok: true, config };
+  const signature = verifyTwilioVoiceSignature(config, options);
+  if (!signature.ok) return { ok: false, statusCode: signature.statusCode || 403, error: signature.error, config, signature };
+  return { ok: true, config, signature };
 }
 
 export async function createTwilioVoiceSummaryDraft(input = {}, options = {}, env = process.env) {
@@ -369,6 +440,15 @@ export async function twilioVoiceIncomingResponse(token = "", options = {}, env 
   }
   if (verified.config.mode === "calle_callback") {
     const callback = await enqueueTwilioCalleCallback(options.body || options.input || options.twilioBody || {}, verified.config, env, options);
+    if (callback.fallback === "twilio_native_gather" || callback?.record?.reason === "caller_phone_not_callable") {
+      return {
+        ok: true,
+        fallback: "twilio_native_gather",
+        twiml: twilioVoiceIncomingTwiml(verified.config),
+        config: verified.config,
+        callback,
+      };
+    }
     return { ok: true, twiml: twilioVoiceCalleCallbackTwiml(verified.config, callback), config: verified.config, callback };
   }
   if (verified.config.mode === "calle_live") {
@@ -389,4 +469,12 @@ export async function twilioVoiceIncomingResponse(token = "", options = {}, env 
     return { ok: true, twiml: twilioVoiceCalleLiveTwiml(verified.config, input), config: verified.config };
   }
   return { ok: true, twiml: twilioVoiceIncomingTwiml(verified.config), config: verified.config };
+}
+
+export async function recoverTwilioVoiceCalleCallbacks(env = process.env, options = {}) {
+  const config = await twilioVoiceAssistantConfig(options, env);
+  if (config.mode !== "calle_callback") {
+    return { ok: true, skipped: true, reason: "twilio_voice_mode_not_calle_callback", voiceMode: config.mode };
+  }
+  return recoverTwilioCalleCallbacks(config, env, options);
 }
