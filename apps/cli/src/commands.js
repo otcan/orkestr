@@ -28,6 +28,7 @@ import { createCommand } from "./create-command.js";
 import { desktopCommand } from "./desktop-command.js";
 import { formatRuntimeResources, formatSystemDoctor, formatThreadTable, formatTimerDoctor, formatTimerTable, threadName } from "./format.js";
 import { jiraCommand } from "./jira-command.js";
+import { mailboxesCommand } from "./mailbox-command.js";
 import { tenantSliceCommand } from "./tenant-slice-command.js";
 import { pickThread as defaultPickThread } from "./thread-picker.js";
 
@@ -63,6 +64,7 @@ export async function runCli(argv = process.argv.slice(2), context = {}) {
     if (command === "whatsapp" || command === "wa") return await whatsappCommand(args, ctx);
     if (command === "timers" || command === "timer") return await timersCommand(args, ctx);
     if (command === "jobs" || command === "job") return await jobsCommand(args, ctx);
+    if (command === "mailboxes" || command === "mailbox") return await mailboxesCommand(args, ctx);
     if (command === "connect") return await connectCommand(args, ctx);
     if (command === "security") return await securityCommand(args, ctx);
     if (command === "desktop" || command === "desktops") return await desktopCommand(args, ctx);
@@ -2073,6 +2075,7 @@ Advanced:
   orkestr whatsapp bind-thread <thread> --name <group name> [--wa-participant jid]... [--json]
   orkestr timers [list|doctor|run <timer-id>] [--json]
   orkestr jobs run [--owner-user-id user] [--target-thread thread] [--max-results N] [--signal-mode record_only|notify_passively] [--json]
+  orkestr mailboxes [list|create|relay-audits|dead-letters] [--json]
   orkestr connect approve <code> [--json]
   orkestr security [challenges|sessions|approve <challenge-id>|reject <challenge-id>|revoke <session-id|all>] [--json]
   orkestr desktop [share [slug]|approve <challenge-id>] [--json]
@@ -2236,9 +2239,13 @@ function positional(argv) {
     "--label",
     "--level",
     "--limit",
+    "--local-part",
+    "--mailbox",
+    "--mailbox-id",
     "--name",
     "--port",
     "--profile",
+    "--purpose",
     "--context",
     "--phone",
     "--phone-number",
@@ -2253,7 +2260,9 @@ function positional(argv) {
     "--service",
     "--sender-account",
     "--status",
+    "--suffix",
     "--task",
+    "--target",
     "--target-account",
     "--target-account-id",
     "--owner-contact",
@@ -2272,6 +2281,8 @@ function positional(argv) {
     "--secret-value",
     "--tenant",
     "--tenant-id",
+    "--tenant-vm",
+    "--tenant-vm-id",
     "--title",
     "--ref",
     "--channel",
@@ -2307,6 +2318,7 @@ function positional(argv) {
     "--instance-id",
     "--user",
     "--user-id",
+    "--vm",
     "--owner",
     "--owner-user",
     "--owner-user-id",
