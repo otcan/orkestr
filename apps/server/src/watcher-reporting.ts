@@ -1,5 +1,6 @@
 import { recordWatcherAlert } from "../../../packages/core/src/watcher-alerts.js";
 import { deliverWhatsAppReplies } from "../../../packages/connectors/src/whatsapp.js";
+import { recordWatcherAlertMetric } from "../../../packages/core/src/observability.js";
 
 export type WatcherServerErrorInput = {
   source: string;
@@ -16,6 +17,11 @@ export type WatcherServerErrorInput = {
 };
 
 export function reportServerError(env = process.env, input: WatcherServerErrorInput, options: { deliverWatcher?: boolean; mirrorWatcher?: boolean } = {}) {
+  recordWatcherAlertMetric({
+    source: input.source,
+    code: input.code || "server_error",
+    severity: "error",
+  });
   const mirrorToConnector = options.mirrorWatcher !== undefined
     ? options.mirrorWatcher
     : options.deliverWatcher !== false;
