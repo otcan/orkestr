@@ -1400,6 +1400,103 @@ test("Codex app-server completed turns clear persisted approval requests", async
   }
 });
 
+test("Codex app-server task agent waits for late final-answer projection after turn completion", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-task-agent-completed-before-final-"));
+  const fake = await createFakeCodex(home);
+  const env = {
+    ORKESTR_HOME: path.join(home, "orkestr"),
+    HOME: path.join(home, "runtime-home"),
+    PATH: `${fake.bin}${path.delimiter}${process.env.PATH || ""}`,
+    FAKE_CODEX_STATE: fake.stateFile,
+    ORKESTR_TASK_AGENT_RESULT_GRACE_MS: "5000",
+  };
+  try {
+    const parent = await createThread({ id: "notification-order-parent-a", name: "Notification Order Parent A", cwd: home }, env);
+    const { taskAgent } = await createTaskAgent(parent.id, { task: "Handle out-of-order completion." }, env);
+    const started = await startCodexAppServerThread(taskAgent, env);
+    const codexId = started.thread.executor.codexThreadId;
+    const client = await getCodexAppServerClient({ env, home: env.HOME });
+
+    await client.handleNotification({
+      method: "turn/started",
+      params: { turn: { id: "turn-order-a", threadId: codexId, status: "inProgress" } },
+    });
+    assert.equal((await getThread(taskAgent.id, env)).agentTaskStatus, "working");
+
+    await client.handleNotification({
+      method: "turn/completed",
+      params: { turn: { id: "turn-order-a", threadId: codexId, status: "completed", error: null } },
+    });
+    const awaiting = await getThread(taskAgent.id, env);
+    assert.equal(awaiting.agentTaskStatus, "awaiting_result");
+    assert.equal((await listThreadMessages(parent.id, env)).length, 0);
+
+    await client.handleNotification({
+      method: "item/completed",
+      params: {
+        threadId: codexId,
+        turnId: "turn-order-a",
+        item: { type: "agentMessage", id: "agent-order-a", text: "Late projected final answer.", phase: "final_answer" },
+      },
+    });
+
+    const current = await getThread(taskAgent.id, env);
+    const parentResults = (await listThreadMessages(parent.id, env))
+      .filter((message) => message.source === "orkestr_task_agent_result");
+    assert.equal(current.agentTaskStatus, "completed");
+    assert.equal(parentResults.length, 1);
+    assert.match(parentResults[0].text, /Late projected final answer/);
+  } finally {
+    stopCodexAppServerClients();
+  }
+});
+
+test("Codex app-server task agent keeps one parent result when final answer precedes turn completion", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-task-agent-final-before-completed-"));
+  const fake = await createFakeCodex(home);
+  const env = {
+    ORKESTR_HOME: path.join(home, "orkestr"),
+    HOME: path.join(home, "runtime-home"),
+    PATH: `${fake.bin}${path.delimiter}${process.env.PATH || ""}`,
+    FAKE_CODEX_STATE: fake.stateFile,
+  };
+  try {
+    const parent = await createThread({ id: "notification-order-parent-b", name: "Notification Order Parent B", cwd: home }, env);
+    const { taskAgent } = await createTaskAgent(parent.id, { task: "Handle final-answer-first order." }, env);
+    const started = await startCodexAppServerThread(taskAgent, env);
+    const codexId = started.thread.executor.codexThreadId;
+    const client = await getCodexAppServerClient({ env, home: env.HOME });
+
+    await client.handleNotification({
+      method: "turn/started",
+      params: { turn: { id: "turn-order-b", threadId: codexId, status: "inProgress" } },
+    });
+    await client.handleNotification({
+      method: "item/completed",
+      params: {
+        threadId: codexId,
+        turnId: "turn-order-b",
+        item: { type: "agentMessage", id: "agent-order-b", text: "Early projected final answer.", phase: "final_answer" },
+      },
+    });
+    await client.handleNotification({
+      method: "turn/completed",
+      params: { turn: { id: "turn-order-b", threadId: codexId, status: "completed", error: null } },
+    });
+
+    const current = await getThread(taskAgent.id, env);
+    const parentResults = (await listThreadMessages(parent.id, env))
+      .filter((message) => message.source === "orkestr_task_agent_result");
+    assert.equal(current.agentTaskStatus, "completed");
+    assert.equal(current.state, "ready");
+    assert.equal(current.runtime.activeTurnId, null);
+    assert.equal(parentResults.length, 1);
+    assert.match(parentResults[0].text, /Early projected final answer/);
+  } finally {
+    stopCodexAppServerClients();
+  }
+});
+
 test("Codex app-server failed turns record reused refresh tokens as broken auth", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-auth-failed-"));
   const fake = await createFakeCodex(home);

@@ -641,6 +641,25 @@ export class CodexAppServerClient {
         if (thread) {
           const { finishTaskAgentTurn, isTerminalTaskAgentThread } = await import("./task-agents.js");
           if (isTerminalTaskAgentThread(thread)) {
+            const taskStatus = clean(thread.agentTaskStatus);
+            if (taskStatus !== "cancelled") {
+              const runtimeState = taskStatus === "failed" ? "failed" : "ready";
+              await updateThread(thread.id, {
+                state: runtimeState,
+                lastError: taskStatus === "failed" ? thread.lastError || errorText : null,
+                runtime: {
+                  ...(thread.runtime || {}),
+                  runtimeKind: "codex-app-server",
+                  activeTurnId: null,
+                  lastTurnId: turnId || null,
+                  lastTurnStatus: status,
+                  pendingRequest: null,
+                  codexStatus: { type: taskStatus === "failed" ? "systemError" : "idle" },
+                  state: runtimeState,
+                  updatedAt: nowIso(),
+                },
+              }, this.env).catch(() => {});
+            }
             await appendEvent({
               type: "task_agent_late_turn_completed_ignored",
               threadId: thread.id,
