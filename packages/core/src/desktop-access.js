@@ -8,9 +8,7 @@ import { normalizeUserId } from "./users.js";
 const DESKTOP_PERMISSIONS = new Set(["discover", "acquire", "operate", "share"]);
 const mutationQueues = new Map();
 
-function clean(value = "") {
-  return String(value || "").trim();
-}
+function clean(value = "") { return String(value || "").trim(); }
 
 function safeSegment(value = "", fallback = "local") {
   return clean(value)
@@ -20,9 +18,7 @@ function safeSegment(value = "", fallback = "local") {
     .slice(0, 120) || fallback;
 }
 
-function nowIso() {
-  return new Date().toISOString();
-}
+function nowIso() { return new Date().toISOString(); }
 
 function normalizePermissions(values = []) {
   const input = Array.isArray(values) ? values : clean(values).split(/[\s,]+/g);
