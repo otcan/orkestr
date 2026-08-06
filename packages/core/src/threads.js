@@ -114,9 +114,13 @@ function restrictedCodexSecurityProfile(input = {}) {
 async function enqueueMessageMutation(filePath, operation) {
   const previous = messageMutationQueues.get(filePath) || Promise.resolve();
   const next = previous.then(operation, operation);
-  messageMutationQueues.set(filePath, next.finally(() => {
-    if (messageMutationQueues.get(filePath) === next) messageMutationQueues.delete(filePath);
-  }));
+  const tracked = next.finally(() => {
+    if (messageMutationQueues.get(filePath) === tracked) messageMutationQueues.delete(filePath);
+  });
+  // `next` is returned to the caller. The tracked promise exists only to
+  // serialize and clean up the queue, so consume its mirrored rejection.
+  void tracked.catch(() => {});
+  messageMutationQueues.set(filePath, tracked);
   return next;
 }
 

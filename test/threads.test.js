@@ -245,6 +245,25 @@ test("thread message mutations do not overwrite concurrent appends", async () =>
   assert.equal(new Set(messages.map((message) => message.cursor)).size, messages.length);
 });
 
+test("failed thread message mutations do not leak rejections or poison the queue", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-message-mutation-failure-"));
+  const env = { ORKESTR_HOME: home };
+  await createThread({ id: "mutation-failure-thread", name: "Mutation Failure Thread", executorId: "noop" }, env);
+
+  await assert.rejects(
+    updateThreadMessage("mutation-failure-thread", "missing-message", { state: "completed" }, env),
+    /message_not_found/,
+  );
+  const message = await appendThreadMessage("mutation-failure-thread", {
+    role: "user",
+    text: "queue remains usable",
+    state: "queued",
+  }, env);
+  const updated = await updateThreadMessage("mutation-failure-thread", message.id, { state: "completed" }, env);
+
+  assert.equal(updated.state, "completed");
+});
+
 test("whatsapp thread inputs suppress duplicate external ids atomically", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-external-id-dedupe-"));
   const env = { ORKESTR_HOME: home };

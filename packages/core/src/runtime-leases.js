@@ -3562,7 +3562,14 @@ function scheduleThreadInputDelivery(threadId, env = process.env, delayMs = 0) {
   if (current) clearTimeout(current);
   const timer = setTimeout(() => {
     deliveryTimers.delete(id);
-    void deliverPendingThreadInputs(id, env);
+    void deliverPendingThreadInputs(id, env).catch((error) => {
+      const errorText = error instanceof Error ? error.message : String(error);
+      void appendEvent({
+        type: "thread_input_delivery_scheduler_failed",
+        threadId: id,
+        error: errorText,
+      }, env).catch(() => {});
+    });
   }, Math.max(0, Number(delayMs) || 0));
   if (typeof timer.unref === "function") timer.unref();
   deliveryTimers.set(id, timer);
