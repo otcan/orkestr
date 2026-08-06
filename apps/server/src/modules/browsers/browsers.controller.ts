@@ -145,7 +145,7 @@ export class BrowsersController {
   async releaseDesktop(@Req() request: any, @Param("slug") slug: string, @Body() body: Record<string, unknown> = {}) {
     const principal = requestPrincipal(request);
     const force = body.force === true;
-    if (force && !isAdminPrincipal(principal)) throw httpError("desktop_force_release_admin_required", 403);
+    if (force && !isAdminPrincipal(principal)) throw httpError("lease_not_found", 404);
     const threadId = String(body.threadId || "").trim();
     if (!threadId && !force) throw httpError("threadId_required_unless_force", 400);
     const ownerUserId = threadId ? await this.ownerUserIdFromLeaseBody(body, principal) : String(body.ownerUserId || body.userId || "").trim();

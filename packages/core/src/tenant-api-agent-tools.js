@@ -47,6 +47,7 @@ import { doctorAutomationsForPrincipal } from "./automation-doctor.js";
 import { runTenantApiAgentTimerTool, tenantApiAgentTimerToolDefinitions } from "./tenant-api-agent-timer-tools.js";
 import { whereAmI } from "./whereiam.js";
 import { desktopProvisioningMessage } from "./desktop-provisioning.js";
+import { desktopAccessMode } from "./desktop-access.js";
 import { createDesktopShare } from "./desktop-shares.js";
 import { updateThread } from "./threads.js";
 import {
@@ -653,6 +654,7 @@ async function safeDesktopInventory(principal = {}, thread = null, env = process
 
 async function ensureAgentDesktopLease(slug = "", principal = {}, thread = null, env = process.env) {
   if (!thread?.id) {
+    if (desktopAccessMode(env) !== "enforce") return null;
     const error = new Error("desktop_thread_scope_required");
     error.statusCode = 403;
     throw error;
