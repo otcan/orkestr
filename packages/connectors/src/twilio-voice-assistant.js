@@ -77,16 +77,6 @@ function normalizeCalleLiveStreamUrl(value = "") {
   }
 }
 
-function defaultCalleGoal(label = "Orkestr assistant") {
-  return [
-    `You are ${label}, the account owner's CALL-E phone assistant.`,
-    "Call the person back in German.",
-    "Briefly explain that you are the account owner's assistant, ask for their name, why they called, urgency, and the best way for the account owner to respond.",
-    "Be warm, concise, and practical. Do not pretend to be the account owner. Do not collect sensitive secrets or payment details.",
-    "At the end, summarize the next action clearly so Orkestr can email the account owner a useful call summary.",
-  ].join(" ");
-}
-
 function defaultCalleCallbackMessage(label = "Orkestr assistant") {
   return `Hallo, hier ist ${label}. Der Telefonassistent des Anschlussinhabers ruft Sie in wenigen Sekunden zurück und nimmt Ihr Anliegen auf. Bitte nehmen Sie den Rückruf an.`;
 }
@@ -139,11 +129,10 @@ export async function twilioVoiceAssistantConfig(options = {}, env = process.env
     envFirst(env, ["ORKESTR_TWILIO_VOICE_MODE", "TWILIO_VOICE_MODE"]) ||
     await resolveConfigSecret("twilio/voice-mode", ["twilio_voice_mode", "twilio-voice-mode"], { ownerUserId }, env),
   );
-  const calleGoal = sanitizeText(
+  const configuredCalleGoal = sanitizeText(
     options.calleGoal ||
     envFirst(env, ["ORKESTR_TWILIO_VOICE_CALLE_GOAL", "TWILIO_VOICE_CALLE_GOAL"]) ||
-    await resolveConfigSecret("twilio/voice-calle-goal", ["twilio_voice_calle_goal", "twilio-voice-calle-goal"], { ownerUserId }, env) ||
-    defaultCalleGoal(assistantLabel),
+    await resolveConfigSecret("twilio/voice-calle-goal", ["twilio_voice_calle_goal", "twilio-voice-calle-goal"], { ownerUserId }, env),
   );
   const calleLanguage = sanitizeLine(
     options.calleLanguage ||
@@ -203,7 +192,8 @@ export async function twilioVoiceAssistantConfig(options = {}, env = process.env
     publicBaseUrl: publicBaseUrl || publicBaseUrlFromInput(options, env),
     introMessage,
     introMessageEnglish,
-    calleGoal,
+    calleGoal: configuredCalleGoal,
+    calleGoalConfigured: Boolean(configuredCalleGoal),
     calleLanguage,
     calleRegion,
     calleLiveStreamUrl,
@@ -298,6 +288,10 @@ function twilioVoiceUnavailableTwiml(config = {}) {
   return twimlResponse(
     `<Say language="${xmlEscape(language)}">Der Assistent ist gerade nicht erreichbar. Bitte versuchen Sie es später erneut.</Say>`,
   );
+}
+
+function calleCallbackGoalConfigured(config = {}) {
+  return Boolean(clean(config.calleGoal) && config.calleGoalConfigured !== false);
 }
 
 function twilioVoiceCalleCallbackTwiml(config = {}, callback = {}) {
@@ -439,6 +433,24 @@ export async function twilioVoiceIncomingResponse(token = "", options = {}, env 
     };
   }
   if (verified.config.mode === "calle_callback") {
+    if (!verified.signature?.configured) {
+      return {
+        ok: false,
+        statusCode: 503,
+        error: "twilio_voice_signature_auth_token_required",
+        twiml: twilioVoiceUnavailableTwiml(verified.config),
+        config: verified.config,
+      };
+    }
+    if (!calleCallbackGoalConfigured(verified.config)) {
+      return {
+        ok: false,
+        statusCode: 503,
+        error: "twilio_voice_calle_goal_required",
+        twiml: twilioVoiceUnavailableTwiml(verified.config),
+        config: verified.config,
+      };
+    }
     const callback = await enqueueTwilioCalleCallback(options.body || options.input || options.twilioBody || {}, verified.config, env, options);
     if (callback.fallback === "twilio_native_gather" || callback?.record?.reason === "caller_phone_not_callable") {
       return {
@@ -475,6 +487,12 @@ export async function recoverTwilioVoiceCalleCallbacks(env = process.env, option
   const config = await twilioVoiceAssistantConfig(options, env);
   if (config.mode !== "calle_callback") {
     return { ok: true, skipped: true, reason: "twilio_voice_mode_not_calle_callback", voiceMode: config.mode };
+  }
+  if (!config.twilioAuthToken) {
+    return { ok: false, skipped: true, reason: "twilio_voice_signature_auth_token_required", voiceMode: config.mode };
+  }
+  if (!calleCallbackGoalConfigured(config)) {
+    return { ok: false, skipped: true, reason: "twilio_voice_calle_goal_required", voiceMode: config.mode };
   }
   return recoverTwilioCalleCallbacks(config, env, options);
 }

@@ -28,6 +28,19 @@ async function voiceEnv(prefix = "orkestr-twilio-voice-") {
   return env;
 }
 
+async function enableSignedCallback(env) {
+  const principal = adminPrincipal("admin");
+  await setSecureSecret({ scope: "user", ownerUserId: "admin", name: "twilio_voice_mode", value: "calle-callback" }, principal, env);
+  await setSecureSecret({ scope: "user", ownerUserId: "admin", name: "twilio_voice_auth_token", value: "twilio-auth-secret" }, principal, env);
+  await setSecureSecret({ scope: "user", ownerUserId: "admin", name: "twilio_voice_calle_goal", value: "Ask why the caller called and summarize the next action." }, principal, env);
+}
+
+async function signedIncoming(env, body, options = {}) {
+  const config = await twilioVoiceAssistantConfig({}, env);
+  const signature = calculateTwilioVoiceSignature("twilio-auth-secret", twilioVoiceWebhookUrls(config).incoming, body);
+  return { body, headers: { "x-twilio-signature": signature }, ...options };
+}
+
 test("twilio voice webhook routes are reachable before browser pairing but other connector routes stay blocked", async () => {
   const env = await voiceEnv();
   const incoming = await authorizeHttpRequest({
@@ -228,7 +241,7 @@ test("twilio voice gather creates a missed-call draft when no speech is captured
 
 test("twilio voice CALL-E mode starts callback call and drafts terminal summary", async () => {
   const env = await voiceEnv();
-  await setSecureSecret({ scope: "user", ownerUserId: "admin", name: "twilio_voice_mode", value: "calle-callback" }, adminPrincipal("admin"), env);
+  await enableSignedCallback(env);
   const calls = [];
   const execFileAsync = async (command, args, options) => {
     calls.push({ command, args, env: options.env });
@@ -254,16 +267,16 @@ test("twilio voice CALL-E mode starts callback call and drafts terminal summary"
       }),
     };
   };
-  const result = await twilioVoiceIncomingResponse("voice-token", {
-    body: {
-      From: "+491701234567",
-      To: "+4963316993992",
-      CallSid: "CA-calle-1",
-    },
+  const body = {
+    From: "+491701234567",
+    To: "+4963316993992",
+    CallSid: "CA-calle-1",
+  };
+  const result = await twilioVoiceIncomingResponse("voice-token", await signedIncoming(env, body, {
     awaitCallback: true,
     execFileAsync,
     maxPolls: 0,
-  }, env);
+  }), env);
   const drafts = await listOrkestrMailDraftsForPrincipal(adminPrincipal("admin"), {}, env);
   const callbacks = await listTwilioCalleCallbacks(env);
 
@@ -289,7 +302,7 @@ test("twilio voice CALL-E mode starts callback call and drafts terminal summary"
 
 test("twilio voice CALL-E mode dedupes repeated Twilio incoming webhooks", async () => {
   const env = await voiceEnv();
-  await setSecureSecret({ scope: "user", ownerUserId: "admin", name: "twilio_voice_mode", value: "calle-callback" }, adminPrincipal("admin"), env);
+  await enableSignedCallback(env);
   const calls = [];
   const execFileAsync = async (command, args, options) => {
     calls.push({ command, args, env: options.env });
@@ -302,18 +315,17 @@ test("twilio voice CALL-E mode dedupes repeated Twilio incoming webhooks", async
     };
   };
 
-  await twilioVoiceIncomingResponse("voice-token", {
-    body: { From: "+491701234567", To: "+4963316993992", CallSid: "CA-calle-dupe" },
+  const body = { From: "+491701234567", To: "+4963316993992", CallSid: "CA-calle-dupe" };
+  await twilioVoiceIncomingResponse("voice-token", await signedIncoming(env, body, {
     awaitCallback: true,
     execFileAsync,
     maxPolls: 0,
-  }, env);
-  const second = await twilioVoiceIncomingResponse("voice-token", {
-    body: { From: "+491701234567", To: "+4963316993992", CallSid: "CA-calle-dupe" },
+  }), env);
+  const second = await twilioVoiceIncomingResponse("voice-token", await signedIncoming(env, body, {
     awaitCallback: true,
     execFileAsync,
     maxPolls: 0,
-  }, env);
+  }), env);
   const drafts = await listOrkestrMailDraftsForPrincipal(adminPrincipal("admin"), {}, env);
   const callbacks = await listTwilioCalleCallbacks(env);
 
@@ -326,7 +338,7 @@ test("twilio voice CALL-E mode dedupes repeated Twilio incoming webhooks", async
 
 test("twilio voice CALL-E mode reserves CallSid safely under concurrent Twilio retries", async () => {
   const env = await voiceEnv();
-  await setSecureSecret({ scope: "user", ownerUserId: "admin", name: "twilio_voice_mode", value: "calle-callback" }, adminPrincipal("admin"), env);
+  await enableSignedCallback(env);
   const calls = [];
   const execFileAsync = async (command, args, options) => {
     calls.push({ command, args, env: options.env });
@@ -340,12 +352,12 @@ test("twilio voice CALL-E mode reserves CallSid safely under concurrent Twilio r
     };
   };
 
-  const results = await Promise.all(Array.from({ length: 8 }, () => twilioVoiceIncomingResponse("voice-token", {
-    body: { From: "+491701234567", To: "+4963316993992", CallSid: "CA-calle-concurrent" },
+  const body = { From: "+491701234567", To: "+4963316993992", CallSid: "CA-calle-concurrent" };
+  const results = await Promise.all(Array.from({ length: 8 }, async () => twilioVoiceIncomingResponse("voice-token", await signedIncoming(env, body, {
     awaitCallback: true,
     execFileAsync,
     maxPolls: 0,
-  }, env)));
+  }), env)));
   const drafts = await listOrkestrMailDraftsForPrincipal(adminPrincipal("admin"), {}, env);
   const callbacks = await listTwilioCalleCallbacks(env);
 
@@ -359,14 +371,14 @@ test("twilio voice CALL-E mode reserves CallSid safely under concurrent Twilio r
 
 test("twilio voice CALL-E mode falls back to native gather when Twilio hides caller number", async () => {
   const env = await voiceEnv();
-  await setSecureSecret({ scope: "user", ownerUserId: "admin", name: "twilio_voice_mode", value: "calle-callback" }, adminPrincipal("admin"), env);
-  const result = await twilioVoiceIncomingResponse("voice-token", {
-    body: { From: "anonymous", To: "+4963316993992", CallSid: "CA-calle-anon" },
+  await enableSignedCallback(env);
+  const body = { From: "anonymous", To: "+4963316993992", CallSid: "CA-calle-anon" };
+  const result = await twilioVoiceIncomingResponse("voice-token", await signedIncoming(env, body, {
     awaitCallback: true,
     execFileAsync: async () => {
       throw new Error("should_not_call_calle");
     },
-  }, env);
+  }), env);
   const drafts = await listOrkestrMailDraftsForPrincipal(adminPrincipal("admin"), {}, env);
   const callbacks = await listTwilioCalleCallbacks(env);
 
@@ -382,7 +394,7 @@ test("twilio voice CALL-E mode falls back to native gather when Twilio hides cal
 
 test("twilio voice CALL-E mode records start failures as owner-visible drafts", async () => {
   const env = await voiceEnv();
-  await setSecureSecret({ scope: "user", ownerUserId: "admin", name: "twilio_voice_mode", value: "calle-callback" }, adminPrincipal("admin"), env);
+  await enableSignedCallback(env);
   const execFileAsync = async () => {
     const error = new Error("Command failed");
     error.stdout = JSON.stringify({
@@ -392,12 +404,12 @@ test("twilio voice CALL-E mode records start failures as owner-visible drafts", 
     throw error;
   };
 
-  const result = await twilioVoiceIncomingResponse("voice-token", {
-    body: { From: "+491701234567", To: "+4963316993992", CallSid: "CA-calle-auth" },
+  const body = { From: "+491701234567", To: "+4963316993992", CallSid: "CA-calle-auth" };
+  const result = await twilioVoiceIncomingResponse("voice-token", await signedIncoming(env, body, {
     awaitCallback: true,
     execFileAsync,
     maxPolls: 0,
-  }, env);
+  }), env);
   const drafts = await listOrkestrMailDraftsForPrincipal(adminPrincipal("admin"), {}, env);
   const callbacks = await listTwilioCalleCallbacks(env);
 
@@ -412,7 +424,7 @@ test("twilio voice CALL-E mode records start failures as owner-visible drafts", 
 
 test("twilio voice CALL-E mode marks callbacks timed out when CALL-E never reaches terminal state", async () => {
   const env = await voiceEnv();
-  await setSecureSecret({ scope: "user", ownerUserId: "admin", name: "twilio_voice_mode", value: "calle-callback" }, adminPrincipal("admin"), env);
+  await enableSignedCallback(env);
   const execFileAsync = async () => ({
     stdout: JSON.stringify({
       ok: true,
@@ -421,12 +433,12 @@ test("twilio voice CALL-E mode marks callbacks timed out when CALL-E never reach
     }),
   });
 
-  const result = await twilioVoiceIncomingResponse("voice-token", {
-    body: { From: "+491701234567", To: "+4963316993992", CallSid: "CA-calle-timeout" },
+  const body = { From: "+491701234567", To: "+4963316993992", CallSid: "CA-calle-timeout" };
+  const result = await twilioVoiceIncomingResponse("voice-token", await signedIncoming(env, body, {
     awaitCallback: true,
     execFileAsync,
     maxPolls: 0,
-  }, env);
+  }), env);
   const drafts = await listOrkestrMailDraftsForPrincipal(adminPrincipal("admin"), {}, env);
   const callbacks = await listTwilioCalleCallbacks(env);
 
@@ -444,7 +456,7 @@ test("twilio voice CALL-E mode marks callbacks timed out when CALL-E never reach
 
 test("twilio voice CALL-E startup recovery resumes durable queued callbacks without duplicating CallSid", async () => {
   const env = await voiceEnv();
-  await setSecureSecret({ scope: "user", ownerUserId: "admin", name: "twilio_voice_mode", value: "calle-callback" }, adminPrincipal("admin"), env);
+  await enableSignedCallback(env);
   const config = await twilioVoiceAssistantConfig({}, env);
   await reserveTwilioCalleCallback({
     From: "+491701234567",
