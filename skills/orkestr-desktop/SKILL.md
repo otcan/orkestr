@@ -11,6 +11,8 @@ Orkestr message router to intercept `/desktop`.
 ## Workflow
 
 1. Discover context with `orkestr whereiam --json`.
+   Use only desktops listed for the current thread; never substitute another
+   visible or remembered desktop slug.
 2. If the user named a desktop slug, use it. Otherwise use the manual
    intervention desktop from the context, then the default desktop.
 3. Create a phone link:

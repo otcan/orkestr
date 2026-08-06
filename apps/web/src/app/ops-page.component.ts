@@ -2,7 +2,7 @@ import { DatePipe } from "@angular/common";
 import { ChangeDetectorRef, Component, EventEmitter, Input, OnDestroy, OnInit, Output, inject } from "@angular/core";
 import { FormsModule } from "@angular/forms";
 import { firstValueFrom } from "rxjs";
-import { Agent, AgentTemplate, ApiService, BrowserSession, ConnectorStatus, DesktopLeaseRecord, EventArchive, EventRecord, EventStorageStatus, OrkestrUser, OutlookOAuthPollResponse, ReleaseInstance, ReleaseInstancesResponse, ReleaseRolloutResponse, SecureSecretMetadata, SecurityChallenge, SecuritySession, SetupStatus, TenantVm, TimerDoctorResponse, TimerRecord, ThreadSummary, UserIdentity, UserOutlookOAuthStartResponse, VersionResponse, WatcherAlert, WhatsAppDoctorAccount, WhatsAppDoctorBinding, WhatsAppDoctorResponse, WhatsAppOutboxJob } from "./api.service";
+import { Agent, AgentTemplate, ApiService, BrowserSession, ConnectorStatus, DesktopLeaseRecord, DesktopShareRecord, EventArchive, EventRecord, EventStorageStatus, OrkestrUser, OutlookOAuthPollResponse, ReleaseInstance, ReleaseInstancesResponse, ReleaseRolloutResponse, SecureSecretMetadata, SecurityChallenge, SecuritySession, SetupStatus, TenantVm, TimerDoctorResponse, TimerRecord, ThreadSummary, UserIdentity, UserOutlookOAuthStartResponse, VersionResponse, WatcherAlert, WhatsAppDoctorAccount, WhatsAppDoctorBinding, WhatsAppDoctorResponse, WhatsAppOutboxJob } from "./api.service";
 import { OpsWaitlistComponent } from "./ops-waitlist.component";
 
 export type ToolsView = "system" | "broker" | "timers" | "desktops" | "models" | "settings" | "connectors" | "users" | "waitlist" | "audit";
@@ -119,6 +119,8 @@ export class OpsPageComponent implements OnInit, OnDestroy {
   opsBrowserMessage = "";
   activeWatcherAlertActionId = "";
   opsDesktopLeases: DesktopLeaseRecord[] = [];
+  opsDesktopShares: DesktopShareRecord[] = [];
+  activeDesktopShareId = "";
   activeDesktopLeaseId = "";
   opsRuntimeLeases: Array<Record<string, unknown>> = [];
   opsExecutors: Array<Record<string, unknown>> = [];
@@ -196,7 +198,7 @@ export class OpsPageComponent implements OnInit, OnDestroy {
     if (showBusy) this.busy = true;
     this.opsBrowsersLoading = true;
     if (!this.opsBrowsers.length) this.opsBrowserMessage = "";
-    const browsersRequest = firstValueFrom(this.api.browserSessions());
+    const browsersRequest = firstValueFrom(this.api.browserSessions("", "ops_desktop_inventory"));
     browsersRequest
       .then((payload) => this.applyBrowserSessions(payload))
       .catch((error) => this.applyBrowserSessionsError(error))
@@ -209,7 +211,7 @@ export class OpsPageComponent implements OnInit, OnDestroy {
       await this.loadOpsVersion();
       const managed = this.managedOpsEnabled();
       const secretsRequest = this.loadOpsSecrets();
-      const [releaseInstances, tenantVms, threads, watcherAlerts, setup, whatsapp, whatsappDoctor, whatsappOutbox, agents, templates, timers, timerDoctor, events, eventArchives, browsers, desktopLeases, runtimeLeases, executors, executions, system, processes, models, users, securityChallenges, securitySessions] = await Promise.allSettled([
+      const [releaseInstances, tenantVms, threads, watcherAlerts, setup, whatsapp, whatsappDoctor, whatsappOutbox, agents, templates, timers, timerDoctor, events, eventArchives, browsers, desktopLeases, desktopShares, runtimeLeases, executors, executions, system, processes, models, users, securityChallenges, securitySessions] = await Promise.allSettled([
         managed ? firstValueFrom(this.api.releaseInstances(true)) : Promise.resolve({ instances: [], counts: {}, generatedAt: "" } as ReleaseInstancesResponse),
         managed ? firstValueFrom(this.api.tenantVms()) : Promise.resolve({ tenantVms: [], vms: [] }),
         firstValueFrom(this.api.threads({ includeAllUsers: true })),
@@ -225,7 +227,8 @@ export class OpsPageComponent implements OnInit, OnDestroy {
         firstValueFrom(this.api.events(120)),
         firstValueFrom(this.api.eventArchives()),
         browsersRequest,
-        firstValueFrom(this.api.desktopLeases()),
+        firstValueFrom(this.api.desktopLeases(false, "", "ops_desktop_inventory")),
+        firstValueFrom(this.api.desktopShares(true)),
         firstValueFrom(this.api.runtimeLeases()),
         firstValueFrom(this.api.executors()),
         firstValueFrom(this.api.executions()),
@@ -300,6 +303,7 @@ export class OpsPageComponent implements OnInit, OnDestroy {
         this.applyBrowserSessionsError(browsers.reason);
       }
       if (desktopLeases.status === "fulfilled") this.opsDesktopLeases = desktopLeases.value.desktopLeases || [];
+      if (desktopShares.status === "fulfilled") this.opsDesktopShares = desktopShares.value.shares || [];
       if (runtimeLeases.status === "fulfilled") {
         this.opsRuntimeLeases = runtimeLeases.value.leases || [];
         this.opsRuntimeBudget = runtimeLeases.value.budget || null;
@@ -680,7 +684,7 @@ export class OpsPageComponent implements OnInit, OnDestroy {
     if (this.browserActionBusy(browser)) return;
     this.activeBrowserActionSlug = slug;
     try {
-      await firstValueFrom(this.api.browserAction(slug, action));
+      await firstValueFrom(this.api.browserAction(slug, action, { breakGlass: true, breakGlassReason: "ops_desktop_action" }));
       await this.loadOps(false);
     } catch (error) {
       this.error = this.errorText(error);
@@ -695,7 +699,7 @@ export class OpsPageComponent implements OnInit, OnDestroy {
     if (!slug || this.browserActionBusy(browser)) return;
     this.activeBrowserActionSlug = slug;
     try {
-      const result = await firstValueFrom(this.api.createDesktopShare(slug));
+      const result = await firstValueFrom(this.api.createDesktopShare(slug, { breakGlass: true, breakGlassReason: "ops_desktop_share" }));
       if (navigator?.clipboard && result.url) {
         await navigator.clipboard.writeText(result.url).catch(() => undefined);
       }
@@ -731,6 +735,21 @@ export class OpsPageComponent implements OnInit, OnDestroy {
       this.error = this.errorText(error);
     } finally {
       this.activeDesktopLeaseId = "";
+      this.renderNow();
+    }
+  }
+
+  async revokeDesktopShareRecord(share: DesktopShareRecord): Promise<void> {
+    if (!share.id || this.activeDesktopShareId) return;
+    this.activeDesktopShareId = share.id;
+    try {
+      await firstValueFrom(this.api.revokeDesktopShare(share.id));
+      this.notice = `${share.desktopSlug} share revoked.`;
+      await this.loadOps(false);
+    } catch (error) {
+      this.error = this.errorText(error);
+    } finally {
+      this.activeDesktopShareId = "";
       this.renderNow();
     }
   }
@@ -855,7 +874,7 @@ export class OpsPageComponent implements OnInit, OnDestroy {
     if (!slug) return "";
     if (!String(browser.desk_url || browser.url || "").trim() && this.browserType(browser) !== "desktop") return "";
     const encodedSlug = encodeURIComponent(slug);
-    return `/desktop/${encodedSlug}/vnc.html?autoconnect=1&resize=scale&path=desktop/${encodedSlug}/websockify`;
+    return `/desktop/${encodedSlug}/vnc.html?autoconnect=1&resize=scale&view_only=false&path=desktop/${encodedSlug}/websockify`;
   }
 
   desktopThreads(browser: BrowserSession): Array<Record<string, unknown>> {

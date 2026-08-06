@@ -27,14 +27,15 @@ export class UserDeskPageComponent implements OnInit {
   async load(): Promise<void> {
     this.busy = true;
     try {
-      const [browsers, leases, threads] = await Promise.all([
-        firstValueFrom(this.api.browserSessions()),
-        firstValueFrom(this.api.desktopLeases()),
-        firstValueFrom(this.api.threads()),
+      const threads = await firstValueFrom(this.api.threads());
+      this.threads = threads.threads || [];
+      const threadId = this.primaryThread()?.id || "";
+      const [browsers, leases] = await Promise.all([
+        firstValueFrom(this.api.browserSessions(threadId)),
+        firstValueFrom(this.api.desktopLeases(false, threadId)),
       ]);
       this.browsers = browsers.sessions || browsers.browsers || [];
       this.leases = leases.desktopLeases || [];
-      this.threads = threads.threads || [];
       this.error = "";
     } catch (error) {
       this.error = this.errorText(error);
@@ -49,7 +50,12 @@ export class UserDeskPageComponent implements OnInit {
     this.busy = true;
     this.activeSlug = slug;
     try {
-      const payload = await firstValueFrom(this.api.browserAction(slug, action, { reason: "user_desk" }));
+      const lease = this.browserLease(browser);
+      const payload = await firstValueFrom(this.api.browserAction(slug, action, {
+        threadId: String(lease?.threadId || this.primaryThread()?.id || ""),
+        fencingToken: String(lease?.fencingToken || ""),
+        reason: "user_desk",
+      }));
       this.browsers = this.upsertBrowser(payload.browser || browser);
       const label = { prepare: "prepared", start: "started", stop: "stopped", restart: "restarted" }[action];
       this.notice = `${this.browserLabel(payload.browser || browser)} ${label}.`;
@@ -96,7 +102,7 @@ export class UserDeskPageComponent implements OnInit {
     this.busy = true;
     this.activeSlug = slug;
     try {
-      await firstValueFrom(this.api.releaseDesktopLease(slug, { threadId, reason: "user_released" }));
+      await firstValueFrom(this.api.releaseDesktopLease(slug, { threadId, fencingToken: lease?.fencingToken, reason: "user_released" }));
       this.leases = this.leases.filter((item) => this.leaseSlug(item) !== slug);
       this.notice = `${this.browserLabel(browser)} released.`;
       this.error = "";
@@ -115,7 +121,11 @@ export class UserDeskPageComponent implements OnInit {
     this.busy = true;
     this.activeSlug = slug;
     try {
-      const payload = await firstValueFrom(this.api.createDesktopShare(slug));
+      const lease = this.browserLease(browser);
+      const payload = await firstValueFrom(this.api.createDesktopShare(slug, {
+        threadId: String(lease?.threadId || this.primaryThread()?.id || ""),
+        fencingToken: String(lease?.fencingToken || ""),
+      }));
       this.shareUrl = payload.url || "";
       this.notice = this.shareUrl ? "Share link ready." : "Share requested.";
       this.error = "";
@@ -159,7 +169,7 @@ export class UserDeskPageComponent implements OnInit {
     if (!this.browserRunning(browser)) return "";
     const slug = this.browserSlug(browser);
     if (!slug) return "";
-    return `/desktop/${encodeURIComponent(slug)}/vnc.html?autoconnect=1&resize=scale&path=desktop/${encodeURIComponent(slug)}/websockify`;
+    return `/desktop/${encodeURIComponent(slug)}/vnc.html?autoconnect=1&resize=scale&view_only=false&path=desktop/${encodeURIComponent(slug)}/websockify`;
   }
 
   browserLease(browser: BrowserSession): DesktopLeaseRecord | null {

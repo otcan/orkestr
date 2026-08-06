@@ -29,9 +29,19 @@ function browserSessionSlug(session) {
   return clean(session?.slug || session?.id || session?.name).toLowerCase();
 }
 
-async function browserSessionSlugs(ctx) {
+async function currentThreadContext(ctx) {
+  const cwd = clean(ctx.cwd || ctx.env?.ORKESTR_CALLER_CWD || process.cwd());
+  const payload = await requestJson(`/api/whereiam?cwd=${encodeURIComponent(cwd)}`, ctx).catch(() => null);
+  return {
+    threadId: clean(payload?.thread?.id),
+    threadName: clean(payload?.thread?.displayName || payload?.thread?.title || payload?.thread?.name),
+  };
+}
+
+async function browserSessionSlugs(ctx, threadId = "") {
   try {
-    const payload = await requestJson("/api/browser-sessions", ctx);
+    const query = threadId ? `?threadId=${encodeURIComponent(threadId)}` : "";
+    const payload = await requestJson(`/api/browser-sessions${query}`, ctx);
     const sessions = Array.isArray(payload?.sessions) ? payload.sessions : payload?.browsers || [];
     return sessions.map(browserSessionSlug).filter(Boolean);
   } catch {
@@ -39,14 +49,14 @@ async function browserSessionSlugs(ctx) {
   }
 }
 
-async function resolveDesktopSlug(explicit, ctx) {
+async function resolveDesktopSlug(explicit, ctx, threadId = "") {
   if (clean(explicit)) return clean(explicit).toLowerCase();
   const settings = await readRuntimeSettings(ctx.env).catch(() => ({}));
   const candidates = [
     settings?.desktops?.manualIntervention,
     settings?.desktops?.default,
   ].map(browserSessionSlug).filter(Boolean);
-  const available = await browserSessionSlugs(ctx);
+  const available = await browserSessionSlugs(ctx, threadId);
   const availableSet = new Set(available);
   return candidates.find((slug) => !availableSet.size || availableSet.has(slug))
     || available[0]
@@ -72,10 +82,24 @@ function desktopShareText(payload = {}, slug = "") {
 async function shareDesktop(argv, ctx) {
   const json = argv.includes("--json");
   const values = positional(argv);
-  const slug = await resolveDesktopSlug(values[0], ctx);
+  const thread = await currentThreadContext(ctx);
+  const slug = await resolveDesktopSlug(values[0], ctx, thread.threadId);
   const body = {
     start: !argv.includes("--no-start"),
+    threadId: thread.threadId,
   };
+  if (thread.threadId && body.start) {
+    const acquired = await requestJson(`/api/desktops/${encodeURIComponent(slug)}/acquire`, {
+      ...ctx,
+      method: "POST",
+      body: {
+        threadId: thread.threadId,
+        threadName: thread.threadName,
+        purpose: "desktop_share",
+      },
+    });
+    body.fencingToken = clean(acquired?.lease?.fencingToken);
+  }
   const label = flagValue(argv, "--label");
   if (label) body.label = label;
   const payload = await requestJson(`/api/desktops/${encodeURIComponent(slug)}/share`, {

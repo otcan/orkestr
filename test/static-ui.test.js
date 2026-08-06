@@ -1315,7 +1315,7 @@ test("ops desktop links are only shown for running desktops", async () => {
   assert.match(component, /openBrowserDesktop\(browser: BrowserSession\): void/);
   assert.match(component, /browserIsRunning\(browser: BrowserSession\): boolean/);
   assert.match(component, /"active", "running"/);
-  assert.match(component, /\/desktop\/\$\{encodedSlug\}\/vnc\.html\?autoconnect=1&resize=scale&path=desktop\/\$\{encodedSlug\}\/websockify/);
+  assert.match(component, /\/desktop\/\$\{encodedSlug\}\/vnc\.html\?autoconnect=1&resize=scale&view_only=false&path=desktop\/\$\{encodedSlug\}\/websockify/);
   assert.doesNotMatch(component, /return String\(browser\.desk_url \|\| browser\.url \|\| ""\)\.trim\(\)/);
   assert.match(template, /\(click\)="openBrowserDesktop\(browser\)"/);
   assert.match(template, />Open Desktop<\/button>/);
@@ -1804,19 +1804,19 @@ test("web shell exposes a user desktop desk page", async () => {
   assert.match(template, /<ork-user-desk-page><\/ork-user-desk-page>/);
   assert.match(template, /\(click\)="openPanel\('userDesk'\)"/);
   assert.match(deskComponent, /selector: "ork-user-desk-page"/);
-  assert.match(deskComponent, /this\.api\.browserSessions\(\)/);
-  assert.match(deskComponent, /this\.api\.desktopLeases\(\)/);
+  assert.match(deskComponent, /this\.api\.browserSessions\(threadId\)/);
+  assert.match(deskComponent, /this\.api\.desktopLeases\(false, threadId\)/);
   assert.match(deskComponent, /this\.api\.acquireDesktopLease\(slug/);
   assert.match(deskComponent, /this\.api\.releaseDesktopLease\(slug/);
-  assert.match(deskComponent, /this\.api\.createDesktopShare\(slug\)/);
+  assert.match(deskComponent, /this\.api\.createDesktopShare\(slug, \{/);
   assert.match(deskTemplate, /Open Desktop/);
   assert.match(deskTemplate, /Reserve/);
   assert.match(api, /interface DesktopLeaseRecord/);
-  assert.match(api, /desktopLeases\(includeReleased = false\)/);
+  assert.match(api, /desktopLeases\(includeReleased = false, threadId = "", breakGlassReason = ""\)/);
   assert.match(api, /acquireDesktopLease\(slug: string/);
   assert.match(api, /releaseDesktopLease\(slug: string/);
   assert.match(opsComponent, /opsDesktopLeases: DesktopLeaseRecord\[\] = \[\]/);
-  assert.match(opsComponent, /firstValueFrom\(this\.api\.desktopLeases\(\)\)/);
+  assert.match(opsComponent, /firstValueFrom\(this\.api\.desktopLeases\(false, "", "ops_desktop_inventory"\)\)/);
   assert.match(opsComponent, /forceReleaseDesktopLease\(lease: DesktopLeaseRecord\)/);
   assert.match(opsTemplate, /Desktop leases/);
   assert.match(styles, /\.user-desk-grid/);
@@ -2055,4 +2055,20 @@ test("mobile desktop shell wraps noVNC with phone-first controls", async () => {
   assert.match(sharePage, /\/api\/tenant-vms\//);
   assert.match(sharePage, /subdomain \? '&subdomain='/);
   assert.match(sharePage, /desktop\/.*\/mobile/);
+});
+
+test("desktop share shell supervises noVNC and proxy terminates stale sockets", async () => {
+  const proxy = await fs.readFile("apps/server/src/desktop-proxy.ts", "utf8");
+  const sharePage = await fs.readFile("apps/server/src/static-fallback.ts", "utf8");
+  const shares = await fs.readFile("packages/core/src/desktop-shares.js", "utf8");
+
+  assert.match(sharePage, /id="desktop-frame"/);
+  assert.match(sharePage, /showTerminal\(error\)/);
+  assert.match(sharePage, /showDesktop\(desktopUrl\)/);
+  assert.doesNotMatch(sharePage, /location\.href = desktopUrl/);
+  assert.match(proxy, /onDesktopShareLifecycle/);
+  assert.match(proxy, /validateDesktopShareSession/);
+  assert.match(proxy, /desktop_share_ws_forcibly_closed/);
+  assert.match(proxy, /}, 2_000\)/);
+  assert.match(shares, /view_only=false/);
 });

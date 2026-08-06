@@ -1735,7 +1735,7 @@ export async function authorizeHttpRequest(request, env = process.env) {
         error: error?.message || String(error),
       }))
     : null;
-  if (shareAuth?.ok) return { ok: true, status, principal: shareAuth.principal, desktopShare: shareAuth.share };
+  if (shareAuth?.ok) return { ok: true, status, principal: shareAuth.principal, desktopShare: shareAuth.share, desktopShareAttempt: shareAuth.attempt };
   if (shareAuth && Number(shareAuth.statusCode || 0) >= 400) {
     return { ok: false, status, statusCode: shareAuth.statusCode, error: shareAuth.error || "desktop_share_forbidden" };
   }

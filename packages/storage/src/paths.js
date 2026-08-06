@@ -31,6 +31,7 @@ export function dataPaths(env = process.env) {
     threadMessagesDb: path.join(home, "thread-messages.sqlite"),
     runtimeLeases: path.join(home, "runtime-leases.json"),
     desktopLeases: env.ORKESTR_DESKTOP_LEASE_FILE || path.join(home, "desktop-leases.json"),
+    desktopAccess: env.ORKESTR_DESKTOP_ACCESS_FILE || path.join(home, "desktop-access.json"),
     workspaces: path.join(home, "workspaces"),
     timers: path.join(home, "timers.json"),
     jobsQueue: env.ORKESTR_JOBS_QUEUE_FILE || path.join(home, "jobs-queue.json"),

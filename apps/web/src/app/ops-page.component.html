@@ -519,6 +519,32 @@
         }
       </div>
     </div>
+    <div class="desktop-lease-list">
+      <div class="panel-title compact-title">
+        <div>
+          <p class="eyebrow">Desktop shares</p>
+          <h3>{{ opsDesktopShares.length }} retained</h3>
+        </div>
+      </div>
+      <div class="compact-list">
+        @for (share of opsDesktopShares; track share.id) {
+          <article class="timer-row">
+            <div>
+              <strong>{{ share.desktopSlug }} · generation {{ share.shareGeneration || 0 }}</strong>
+              <p>{{ share.current ? "current" : share.status }} | thread {{ share.threadId || "legacy" }} | {{ share.attempts?.length || 0 }} recent attempts</p>
+              <small>Created {{ share.createdAt | date: "MMM d, HH:mm" }}</small>
+            </div>
+            @if (share.current) {
+              <div class="timer-actions">
+                <button class="secondary danger-soft" type="button" (click)="revokeDesktopShareRecord(share)" [disabled]="!!activeDesktopShareId">Revoke</button>
+              </div>
+            }
+          </article>
+        } @empty {
+          <p class="empty">No retained desktop shares.</p>
+        }
+      </div>
+    </div>
   }
 
   @if (toolsView === "models") {

@@ -19,6 +19,25 @@ function browserSessionsUrl(env = process.env) {
   return String(env.ORKESTR_BROWSER_SESSIONS_URL || "").trim();
 }
 
+function remoteDesktopHeaders(env = process.env, options = {}) {
+  const headers = {
+    "x-orkestr-thread-id": String(options?.threadId || "").trim(),
+    "x-orkestr-owner-user-id": String(options?.ownerUserId || options?.principal?.userId || "").trim(),
+    "x-orkestr-tenant-boundary": String(env.ORKESTR_TENANT_VM_ID || env.ORKESTR_INSTANCE_ID || "").trim(),
+    "x-orkestr-desktop-fencing-token": String(options?.fencingToken || "").trim(),
+  };
+  const token = String(env.ORKESTR_BROWSER_API_TOKEN || env.ORKESTR_BROWSER_API_BEARER_TOKEN || "").trim();
+  if (token) headers.authorization = `Bearer ${token}`;
+  return Object.fromEntries(Object.entries(headers).filter(([, value]) => value));
+}
+
+function appendRemoteScope(url, options = {}) {
+  const parsed = new URL(url);
+  const threadId = String(options?.threadId || "").trim();
+  if (threadId) parsed.searchParams.set("threadId", threadId);
+  return parsed.toString();
+}
+
 function numberEnv(env, name, fallback) {
   const parsed = Number(env[name] || fallback);
   return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
@@ -168,7 +187,9 @@ async function listRemoteDesktopSessions(env = process.env, options = {}) {
   const explicitUrl = browserSessionsUrl(env);
   const base = browserApiBase(env);
   if (!explicitUrl && !base) return null;
-  const payload = await fetchBrowserJson(explicitUrl || `${base}/api/browser-sessions`);
+  const payload = await fetchBrowserJson(appendRemoteScope(explicitUrl || `${base}/api/browser-sessions`, options), {
+    headers: remoteDesktopHeaders(env, options),
+  });
   const sessions = Array.isArray(payload?.sessions) ? payload.sessions.map(normalizeBrowserctlSession) : [];
   return {
     ...payload,
@@ -184,7 +205,12 @@ async function remoteDesktopAction(slug, action, env = process.env, options = {}
   const normalized = action === "open" ? "start" : action === "prepare" ? "health" : action;
   const payload = await fetchBrowserJson(`${base}/api/browser-sessions/${encodeURIComponent(slug)}/${encodeURIComponent(normalized)}`, {
     method: "POST",
-    body: "{}",
+    headers: remoteDesktopHeaders(env, options),
+    body: JSON.stringify({
+      threadId: String(options?.threadId || "").trim(),
+      ownerUserId: String(options?.ownerUserId || options?.principal?.userId || "").trim(),
+      fencingToken: String(options?.fencingToken || "").trim(),
+    }),
   });
   const session = payload?.browser || payload?.session || payload?.desktop || null;
   if (session) return { ...(await attachDesktopLease(normalizeBrowserctlSession(session), env, options)), action: normalized, ok: payload?.ok !== false };
@@ -197,7 +223,13 @@ async function remoteDesktopOpenUrl(slug, targetUrl, env = process.env, options 
   if (!base) return null;
   const payload = await fetchBrowserJson(`${base}/api/browser-sessions/${encodeURIComponent(slug)}/open-url`, {
     method: "POST",
-    body: JSON.stringify({ url: targetUrl }),
+    headers: remoteDesktopHeaders(env, options),
+    body: JSON.stringify({
+      url: targetUrl,
+      threadId: String(options?.threadId || "").trim(),
+      ownerUserId: String(options?.ownerUserId || options?.principal?.userId || "").trim(),
+      fencingToken: String(options?.fencingToken || "").trim(),
+    }),
   });
   const session = payload?.browser || payload?.session || payload?.desktop || null;
   if (session) {

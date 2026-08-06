@@ -293,6 +293,19 @@ export interface DesktopShareResponse {
   };
 }
 
+export interface DesktopShareRecord {
+  id: string;
+  desktopSlug: string;
+  ownerUserId: string;
+  threadId?: string | null;
+  status: string;
+  current?: boolean;
+  shareGeneration?: number;
+  createdAt?: string;
+  expiresAt?: string;
+  attempts?: Array<{ id: string; status: string; createdAt?: string; approvedAt?: string | null }>;
+}
+
 export interface DesktopLeaseRecord {
   id?: string;
   desktopSlug?: string;
@@ -2744,16 +2757,30 @@ export class ApiService {
     return this.http.post<ThreadUploadResponse>(this.api(`/threads/${encodeURIComponent(id)}/uploads`), body);
   }
 
-  browserSessions(): Observable<{ sessions: BrowserSession[]; browsers?: BrowserSession[]; source?: string; error?: string; message?: string }> {
-    return this.http.get<{ sessions: BrowserSession[]; browsers?: BrowserSession[]; source?: string; error?: string; message?: string }>(this.api("/browser-sessions"));
+  browserSessions(threadId = "", breakGlassReason = ""): Observable<{ sessions: BrowserSession[]; browsers?: BrowserSession[]; source?: string; error?: string; message?: string }> {
+    const params = new URLSearchParams();
+    if (threadId) params.set("threadId", threadId);
+    if (breakGlassReason) {
+      params.set("breakGlass", "1");
+      params.set("reason", breakGlassReason);
+    }
+    const query = params.size ? `?${params.toString()}` : "";
+    return this.http.get<{ sessions: BrowserSession[]; browsers?: BrowserSession[]; source?: string; error?: string; message?: string }>(this.api(`/browser-sessions${query}`));
   }
 
   browserAction(slug: string, action: string, body: Record<string, unknown> = {}): Observable<{ browser: BrowserSession }> {
     return this.http.post<{ browser: BrowserSession }>(this.api(`/browser-sessions/${encodeURIComponent(slug)}/${encodeURIComponent(action)}`), body);
   }
 
-  desktopLeases(includeReleased = false): Observable<{ ok: boolean; desktopLeases: DesktopLeaseRecord[]; staleAfterMs?: number; generatedAt?: string }> {
-    const query = includeReleased ? "?include=released" : "";
+  desktopLeases(includeReleased = false, threadId = "", breakGlassReason = ""): Observable<{ ok: boolean; desktopLeases: DesktopLeaseRecord[]; staleAfterMs?: number; generatedAt?: string }> {
+    const params = new URLSearchParams();
+    if (includeReleased) params.set("include", "released");
+    if (threadId) params.set("threadId", threadId);
+    if (breakGlassReason) {
+      params.set("breakGlass", "1");
+      params.set("reason", breakGlassReason);
+    }
+    const query = params.size ? `?${params.toString()}` : "";
     return this.http.get<{ ok: boolean; desktopLeases: DesktopLeaseRecord[]; staleAfterMs?: number; generatedAt?: string }>(this.api(`/desktops/leases${query}`));
   }
 
@@ -2765,8 +2792,20 @@ export class ApiService {
     return this.http.post<{ ok: boolean; lease?: DesktopLeaseRecord | null }>(this.api(`/desktops/${encodeURIComponent(slug)}/release`), body);
   }
 
-  createDesktopShare(slug: string): Observable<DesktopShareResponse> {
-    return this.http.post<DesktopShareResponse>(this.api(`/desktops/${encodeURIComponent(slug)}/share`), {});
+  createDesktopShare(slug: string, body: Record<string, unknown> = {}): Observable<DesktopShareResponse> {
+    return this.http.post<DesktopShareResponse>(this.api(`/desktops/${encodeURIComponent(slug)}/share`), body);
+  }
+
+  desktopShares(includeTerminal = true): Observable<{ ok: boolean; shares: DesktopShareRecord[]; migrationAmbiguities?: Array<Record<string, unknown>> }> {
+    return this.http.get<{ ok: boolean; shares: DesktopShareRecord[]; migrationAmbiguities?: Array<Record<string, unknown>> }>(this.api(`/desktop-shares?includeTerminal=${includeTerminal ? "1" : "0"}`));
+  }
+
+  revokeDesktopShare(shareId: string, reason = "operator_revoked"): Observable<{ ok: boolean; share: DesktopShareRecord }> {
+    return this.http.post<{ ok: boolean; share: DesktopShareRecord }>(this.api(`/desktop-shares/${encodeURIComponent(shareId)}/revoke`), { reason });
+  }
+
+  replaceThreadDesktopGrants(threadId: string, grants: Array<Record<string, unknown> | string>, reason = ""): Observable<Record<string, unknown>> {
+    return this.http.post<Record<string, unknown>>(this.api(`/threads/${encodeURIComponent(threadId)}/desktop-grants`), { grants, reason });
   }
 
   sharedApp(instanceId: string, appSlug: string, shareToken: string, params: Record<string, unknown> = {}): Observable<SharedAppPayload> {

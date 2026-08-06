@@ -19,6 +19,7 @@ import {
   stopVirtualBrowser,
 } from "../../browsers/src/browsers.js";
 import { operateManagedDesktop } from "../../browsers/src/desktop-operator.js";
+import { acquireDesktopLease } from "../../browsers/src/desktop-leases.js";
 import { getGmailMessage, listGmailMessages } from "../../connectors/src/gmail.js";
 import { resolveGoogleWorkspaceConnection } from "../../connectors/src/google-workspace-connections.js";
 import {
@@ -46,6 +47,7 @@ import { doctorAutomationsForPrincipal } from "./automation-doctor.js";
 import { runTenantApiAgentTimerTool, tenantApiAgentTimerToolDefinitions } from "./tenant-api-agent-timer-tools.js";
 import { whereAmI } from "./whereiam.js";
 import { desktopProvisioningMessage } from "./desktop-provisioning.js";
+import { desktopAccessMode } from "./desktop-access.js";
 import { createDesktopShare } from "./desktop-shares.js";
 import { updateThread } from "./threads.js";
 import {
@@ -142,9 +144,10 @@ function automationIdArgsForAction(action = {}, parameters = {}) {
 
 function automationDoctorOptions(context = {}, env = process.env) {
   const principal = context.principal || null;
+  const threadId = clean(context.thread?.id);
   return {
     connectorStatusProvider: (provider, connectorPrincipal = principal) => connectorAuthStatus(provider, env, { principal: connectorPrincipal }),
-    browserSessionsProvider: () => listBrowserSessions(env, { principal }),
+    browserSessionsProvider: () => listBrowserSessions(env, { principal, threadId }),
   };
 }
 
@@ -567,10 +570,11 @@ function publicDesktopRecord(session = {}) {
   };
 }
 
-async function createDesktopActionShare(slug = "", label = "", principal = {}, env = process.env) {
+async function createDesktopActionShare(slug = "", label = "", principal = {}, thread = null, env = process.env) {
   const share = await createDesktopShare({
     desktopSlug: slug,
     principal,
+    threadId: clean(thread?.id),
     label: clean(label || slug || "Desktop"),
     env,
   });
@@ -627,9 +631,9 @@ function desktopForSkill(skill = {}, desktops = [], env = process.env, args = {}
   return clean(args.target || args.slug) ? null : genericDesktopFallback(list);
 }
 
-async function safeDesktopInventory(principal = {}, env = process.env) {
+async function safeDesktopInventory(principal = {}, thread = null, env = process.env) {
   try {
-    const payload = await listBrowserSessions(env, { principal });
+    const payload = await listBrowserSessions(env, { principal, threadId: clean(thread?.id) });
     return {
       ok: payload?.ok !== false,
       source: clean(payload?.source),
@@ -646,6 +650,27 @@ async function safeDesktopInventory(principal = {}, env = process.env) {
       desktops: [],
     };
   }
+}
+
+async function ensureAgentDesktopLease(slug = "", principal = {}, thread = null, env = process.env) {
+  if (!thread?.id) {
+    if (desktopAccessMode(env) !== "enforce") return null;
+    const error = new Error("desktop_thread_scope_required");
+    error.statusCode = 403;
+    throw error;
+  }
+  const acquired = await acquireDesktopLease(slug, {
+    threadId: thread.id,
+    threadName: clean(thread.title || thread.name || thread.id),
+    mode: "exclusive",
+    purpose: "tenant_api_agent",
+  }, env, { principal });
+  if (!acquired?.ok) {
+    const error = new Error(acquired?.error || "desktop_lease_failed");
+    error.statusCode = 409;
+    throw error;
+  }
+  return acquired.lease;
 }
 
 function skillActionNames(skill = {}, capabilities = {}, desktops = null, env = process.env) {
@@ -716,7 +741,7 @@ async function skillActionInventory(principal = {}, thread = null, env = process
     },
   }));
   const skillFilter = clean(options.skillId).toLowerCase();
-  const desktopInventory = options.includeDesktopInventory === true ? await safeDesktopInventory(principal, env) : null;
+  const desktopInventory = options.includeDesktopInventory === true ? await safeDesktopInventory(principal, thread, env) : null;
   const desktops = desktopInventory?.desktops || null;
   const skills = listed.skills
     .filter((skill) => !skillFilter || skill.id === skillFilter)
@@ -799,13 +824,15 @@ async function runSkillAction(args = {}, principal = {}, thread = null, env = pr
     const slug = clean(desktop?.slug || args.target || args.slug || skill.requiredDesktop || skill.requiresDesktop);
     if (!desktop) return { ok: false, error: "desktop_not_available", action, skill, desktopInventory: inventory.desktopInventory };
     if (!desktop.availableActions.includes(action)) return { ok: false, error: "skill_action_not_available", action, skill, desktop };
+    const lease = await ensureAgentDesktopLease(slug, principal, thread, env);
+    const desktopOptions = { principal, threadId: clean(thread?.id), fencingToken: clean(lease?.fencingToken) };
     let result;
     let share = null;
-    if (action === "prepare") result = await prepareVirtualBrowser(slug, env, { principal });
-    else if (action === "start") result = await openVirtualBrowser(slug, env, "", { principal });
+    if (action === "prepare") result = await prepareVirtualBrowser(slug, env, desktopOptions);
+    else if (action === "start") result = await openVirtualBrowser(slug, env, "", desktopOptions);
     else if (action === "open") {
       if (desktop.url && !desktop.availableActions.includes("start")) {
-        share = await createDesktopActionShare(slug, desktop.label || slug, principal, env);
+        share = await createDesktopActionShare(slug, desktop.label || slug, principal, thread, env);
         return {
           ok: true,
           action,
@@ -817,14 +844,14 @@ async function runSkillAction(args = {}, principal = {}, thread = null, env = pr
           wildcardSubdomainConfigured: share.wildcardSubdomainConfigured,
         };
       }
-      result = await openVirtualBrowser(slug, env, "", { principal });
+      result = await openVirtualBrowser(slug, env, "", desktopOptions);
     } else if (action === "open_url") {
-      result = await openUrlInVirtualBrowser(slug, args.url, env, { principal });
-    } else if (action === "stop") result = await stopVirtualBrowser(slug, env, { principal });
-    else if (action === "restart") result = await restartVirtualBrowser(slug, env, { principal });
+      result = await openUrlInVirtualBrowser(slug, args.url, env, desktopOptions);
+    } else if (action === "stop") result = await stopVirtualBrowser(slug, env, desktopOptions);
+    else if (action === "restart") result = await restartVirtualBrowser(slug, env, desktopOptions);
     else return { ok: false, error: "skill_action_not_implemented", action, skill, desktop };
     if (["open", "start", "open_url"].includes(action)) {
-      share = await createDesktopActionShare(slug, result?.label || desktop.label || slug, principal, env);
+      share = await createDesktopActionShare(slug, result?.label || desktop.label || slug, principal, thread, env);
     }
     return {
       ok: true,
@@ -1731,6 +1758,7 @@ export async function runTenantApiAgentTool(name = "", args = {}, context = {}, 
       const desktop = skill ? desktopForSkill(skill, inventory.desktopInventory?.desktops || [], env, args) : null;
       slug = clean(desktop?.slug || skill?.resolvedDesktop || skill?.requiresDesktop || skill?.requiredDesktop);
     }
+    const lease = await ensureAgentDesktopLease(slug, principal, thread, env);
     return operateManagedDesktop(slug, {
       operation: args.operation,
       url: args.url,
@@ -1741,7 +1769,7 @@ export async function runTenantApiAgentTool(name = "", args = {}, context = {}, 
       value: args.value,
       waitMs: args.waitMs,
       maxText: args.maxText,
-    }, env, { principal });
+    }, env, { principal, threadId: clean(thread?.id), fencingToken: clean(lease?.fencingToken) });
   }
   if (tool === "orkestr_connect_workspace_runtime") {
     return connectWorkspaceRuntime(args, thread, env);

@@ -129,6 +129,10 @@ Orkestr capabilities:
   \`orkestr doctor timers\`.
 - Browsers/desktops: use \`GET /api/browser-sessions\`,
   \`GET /api/desktops/leases\`, and the desktop acquire/heartbeat/release APIs.
+  Desktop inventory is thread-scoped. Use only a desktop returned for the
+  current thread, and preserve the lease fencing token for subsequent actions,
+  heartbeat, release, and share requests. Never fall back to another thread's
+  desktop or a remembered global slug.
   If the user sends \`/desktop\`, \`/browser\`, or asks for a phone/mobile
   desktop link, treat it as an agent-side Orkestr desktop skill request: run
   \`orkestr desktop share [slug]\`, send the generated URL, then approve the
