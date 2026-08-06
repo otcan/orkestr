@@ -2389,6 +2389,12 @@ async function reconcileHydratedCodexTurnCompletion(thread, completedTurnId, env
   return true;
 }
 
+async function reconcileHydratedTaskAgentCompletion(thread, completedTurnId, env = process.env) {
+  if (clean(thread?.threadKind) !== "task-agent" || !clean(completedTurnId)) return null;
+  const { reconcileTaskAgentStatus } = await import("./task-agents.js");
+  return reconcileTaskAgentStatus(thread.id, env).catch(() => null);
+}
+
 function duplicateHistoryMatch(existing = {}, input = {}) {
   const existingItemId = clean(existing.codexItemId);
   const inputItemId = clean(input.codexItemId);
@@ -2546,6 +2552,7 @@ export async function hydrateCodexAppServerThreadMessages(thread, codexThread, e
     }
   }
   const completed = await reconcileHydratedCodexTurnCompletion(thread, completedTurnId, env);
+  if (completedTurnId) await reconcileHydratedTaskAgentCompletion(thread, completedTurnId, env);
   return { count, created, updated, completedTurnId: completed ? completedTurnId : null };
 }
 

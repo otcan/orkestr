@@ -301,6 +301,49 @@ test("task agent terminal turns surface a missing result to the parent", async (
   assert.match(parentMessages[0].text, /completed without returning a final result/i);
 });
 
+test("task agent missing-result reconciliation ignores stale finals from other turns", async () => {
+  const env = await testEnv();
+  const parent = await createThread({ id: "stale-result-parent", name: "Stale Result Parent", cwd: path.dirname(env.ORKESTR_HOME) }, env);
+  const { taskAgent } = await createTaskAgent(parent.id, { task: "Inspect stale final reuse." }, env);
+  await appendThreadMessage(taskAgent.id, {
+    role: "assistant",
+    source: "codex-app-server",
+    phase: "final_answer",
+    text: "Old result from an earlier turn.",
+    state: "completed",
+    codexTurnId: "old-turn",
+  }, env);
+  const now = Date.parse("2026-01-01T01:00:00.000Z");
+
+  await finishTaskAgentTurn(taskAgent, { id: "new-turn", status: "completed" }, env, {
+    deliver: false,
+    nowMs: now,
+    resultGraceMs: 100,
+  });
+
+  let current = await getThread(taskAgent.id, env);
+  assert.equal(current.agentTaskStatus, "awaiting_result");
+  assert.equal((await listThreadMessages(parent.id, env)).length, 0);
+
+  await reconcileTaskAgentStatus(taskAgent.id, env, {
+    deliver: false,
+    nowMs: now + 101,
+  });
+  current = await getThread(taskAgent.id, env);
+  const parentMessages = (await listThreadMessages(parent.id, env))
+    .filter((message) => message.source === "orkestr_task_agent_result");
+  assert.equal(current.agentTaskStatus, "failed");
+  assert.equal(current.agentTaskFailureKind, "missing_result");
+  assert.equal(current.agentTaskResultTurnId, "new-turn");
+  assert.equal(parentMessages.length, 1);
+  assert.match(parentMessages[0].text, /completed without returning a final result/i);
+  assert.doesNotMatch(parentMessages[0].text, /Old result from an earlier turn/);
+
+  const summary = await taskAgentSummary(taskAgent.id, env);
+  assert.equal(summary.status, "failed");
+  assert.equal(summary.result, null);
+});
+
 test("late task agent final answer corrects provisional missing-result failure", async () => {
   const env = await testEnv();
   const parent = await createThread({ id: "late-result-parent", name: "Late Result Parent", cwd: path.dirname(env.ORKESTR_HOME) }, env);
