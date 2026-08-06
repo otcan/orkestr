@@ -82,6 +82,9 @@ function publicCalleStatus(status = {}) {
 
 export async function startCalleCallbackCall(record = {}, config = {}, env = process.env, options = {}) {
   if (!isCallablePhone(record.caller)) return { ok: false, error: "caller_phone_not_callable" };
+  if (!clean(config.calleGoal) || config.calleGoalConfigured === false) {
+    return { ok: false, error: "twilio_voice_calle_goal_required" };
+  }
   const args = [
     "call",
     "start",

@@ -32,6 +32,7 @@ async function enableSignedCallback(env) {
   const principal = adminPrincipal("admin");
   await setSecureSecret({ scope: "user", ownerUserId: "admin", name: "twilio_voice_mode", value: "calle-callback" }, principal, env);
   await setSecureSecret({ scope: "user", ownerUserId: "admin", name: "twilio_voice_auth_token", value: "twilio-auth-secret" }, principal, env);
+  await setSecureSecret({ scope: "user", ownerUserId: "admin", name: "twilio_voice_calle_goal", value: "Ask why the caller called and summarize the next action." }, principal, env);
 }
 
 async function signedIncoming(env, body, options = {}) {
