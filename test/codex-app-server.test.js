@@ -4421,6 +4421,62 @@ test("Codex app-server history sync clears active turns when the final answer is
   }
 });
 
+test("Codex app-server history sync completes task agents after restart", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-task-agent-history-complete-"));
+  const fake = await createFakeCodex(home);
+  const env = {
+    ORKESTR_HOME: path.join(home, "orkestr"),
+    HOME: path.join(home, "runtime-home"),
+    PATH: `${fake.bin}${path.delimiter}${process.env.PATH || ""}`,
+    FAKE_CODEX_STATE: fake.stateFile,
+    ORKESTR_CODEX_APP_SERVER_HISTORY_SYNC_INTERVAL_MS: "0",
+  };
+  try {
+    const parent = await createThread({ id: "history-task-parent", name: "History Task Parent", cwd: home }, env);
+    const { taskAgent } = await createTaskAgent(parent.id, { task: "Recover result from history sync." }, env);
+    const started = await startCodexAppServerThread(taskAgent, env);
+    const codexId = started.thread.executor.codexThreadId;
+    const activeTurnId = "history-task-turn";
+    await updateThread(started.thread.id, {
+      state: "queued",
+      agentTaskStatus: "queued",
+      runtime: {
+        ...(started.thread.runtime || {}),
+        runtimeKind: "codex-app-server",
+        state: "ready",
+        activeTurnId: null,
+        codexStatus: { type: "idle" },
+      },
+    }, env);
+
+    const state = JSON.parse(await fs.readFile(fake.stateFile, "utf8"));
+    const codexThread = state.threads.find((item) => item.id === codexId);
+    codexThread.turns.push({
+      id: activeTurnId,
+      threadId: codexId,
+      status: "completed",
+      items: [
+        { type: "userMessage", id: "history-task-user", content: [{ type: "text", text: "recover task" }] },
+        { type: "agentMessage", id: "history-task-agent", text: "Recovered task result.", phase: "final_answer" },
+      ],
+    });
+    await fs.writeFile(fake.stateFile, JSON.stringify(state, null, 2));
+
+    await syncCodexAppServerThreadMessages(await getThread(started.thread.id, env), env, { force: true });
+    await syncCodexAppServerThreadMessages(await getThread(started.thread.id, env), env, { force: true });
+
+    const current = await getThread(started.thread.id, env);
+    const parentResults = (await listThreadMessages(parent.id, env))
+      .filter((message) => message.source === "orkestr_task_agent_result");
+    assert.equal(current.agentTaskStatus, "completed");
+    assert.equal(current.state, "ready");
+    assert.equal(parentResults.length, 1);
+    assert.match(parentResults[0].text, /Recovered task result/);
+  } finally {
+    stopCodexAppServerClients();
+  }
+});
+
 test("Codex app-server sleep is rejected and reset interrupts active turns", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-reset-"));
   const fake = await createFakeCodex(home);
