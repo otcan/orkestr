@@ -5,7 +5,8 @@ import path from "node:path";
 import test from "node:test";
 import { startServer } from "../apps/server/src/server.js";
 import { ingestMailboxMessage } from "../packages/connectors/src/mailbox-inbox.js";
-import { listConnectorInboxEvents, resetConnectorInboxForTest } from "../packages/connectors/src/connector-inbox.js";
+import { runMailboxDeliveryPump } from "../packages/connectors/src/mailbox-delivery-pump.js";
+import { listConnectorInboxEvents, markConnectorInboxEvent, resetConnectorInboxForTest } from "../packages/connectors/src/connector-inbox.js";
 import {
   createMailbox,
   createMailboxThreadListener,
@@ -155,12 +156,36 @@ test("expired claims are recovered transactionally and retried with the same exa
     delivery.attemptCount = 1;
     return { state };
   }, scope.env);
-  const dispatched = await dispatchMailboxThreadDeliveries({ deliveryIds: queued.deliveryIds }, scope.env);
-  assert.equal(dispatched.delivered, 1);
+  const pumped = await runMailboxDeliveryPump(scope.env);
+  assert.equal(pumped.deliveries.delivered, 1);
   const state = await readThreadResourcePolicyState(scope.env);
   assert.equal(state.mailboxDeliveries[0].state, "delivered");
   assert.equal(state.mailboxDeliveries[0].attemptCount, 2);
   assert.equal(state.mailboxDeliveries[0].epoch, 4);
+});
+
+test("a bounded single-run pump retries a transient append failure without another inbound email", async () => {
+  const scope = await fixture();
+  await grantListenerAccess(scope);
+  await createMailboxThreadListener({ mailbox: scope.mailbox, threadId: scope.thread.id, principal: scope.principal }, scope.env);
+  const routed = await routeMailboxMessage(inbound(scope.mailbox, "<mailbox-thread-transient@example.test>"), scope.env);
+  const queued = await enqueueMailboxThreadDeliveries(routed.mailboxDeliveryInput, scope.env);
+  const failed = await dispatchMailboxThreadDeliveries({
+    deliveryIds: queued.deliveryIds,
+    appendMessage: async () => { throw new Error("transient_append_failure"); },
+  }, scope.env);
+  assert.equal(failed.results[0].state, "pending");
+  await withThreadResourcePolicyTransaction((state) => {
+    const delivery = state.mailboxDeliveries.find((item) => item.id === queued.deliveryIds[0]);
+    delivery.nextAttemptAt = new Date(Date.now() - 1_000).toISOString();
+    return { state };
+  }, scope.env);
+  const first = runMailboxDeliveryPump(scope.env);
+  const second = runMailboxDeliveryPump(scope.env);
+  const [pumped, concurrent] = await Promise.all([first, second]);
+  assert.equal(pumped.deliveries.delivered, 1);
+  assert.equal(concurrent.skipped, "in_process");
+  assert.equal((await listThreadMessages(scope.thread.id, scope.env)).filter((message) => message.source === "mailbox").length, 1);
 });
 
 test("bounded expired claims enter durable dead-letter state and status reports them", async () => {
@@ -222,7 +247,7 @@ test("mailbox listener HTTP APIs expose create, list, status, and revoke", async
   }
 });
 
-test("a policy-store outage preserves known main mailbox ingress in connector spool and never appends a thread", async () => {
+test("a policy-store outage spools without thread delivery and replays exactly once after recovery", async () => {
   const scope = await fixture();
   await grantListenerAccess(scope);
   await createMailboxThreadListener({ mailbox: scope.mailbox, threadId: scope.thread.id, principal: scope.principal }, scope.env);
@@ -231,4 +256,12 @@ test("a policy-store outage preserves known main mailbox ingress in connector sp
   assert.equal(result.action, "mailbox_policy_unavailable_spooled");
   assert.equal((await listConnectorInboxEvents({}, unavailable)).length, 1);
   assert.equal((await listThreadMessages(scope.thread.id, unavailable)).length, 0);
+  const [spooled] = await listConnectorInboxEvents({ states: ["policy-unavailable"] }, scope.env);
+  await markConnectorInboxEvent(spooled.id, { nextAttemptAt: new Date(Date.now() - 1_000).toISOString() }, scope.env);
+  const replayed = await runMailboxDeliveryPump(scope.env);
+  assert.equal(replayed.replay.results[0].state, "routed");
+  assert.equal((await listThreadMessages(scope.thread.id, scope.env)).filter((message) => message.source === "mailbox").length, 1);
+  const duplicate = await runMailboxDeliveryPump(scope.env);
+  assert.equal(duplicate.replay.attempted, 0);
+  assert.equal((await listThreadMessages(scope.thread.id, scope.env)).filter((message) => message.source === "mailbox").length, 1);
 });
