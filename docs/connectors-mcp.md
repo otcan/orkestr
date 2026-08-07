@@ -43,13 +43,16 @@ Only a resource-aware integration can execute a real registered resource. It
 must resolve the resource plus service, account, conversation, binding,
 target-thread, and operation-reference handles independently, then authorize
 that resolved target. Generic connector tools reject a resource bearer before
-they run a connector handler. In resource `enforce` mode, a non-operator
-resource bearer needs all of the following exact claims: resource type/id,
+they run a connector handler. In resource `enforce` mode, every declared
+resource target — including one supplied by a trusted dispatcher — needs a
+resource bearer with all of the following exact claims: resource type/id,
 allowed resource actions, root and thread ids, boundary id, policy and grant
-revisions, resource generation, a jti, issued-at time, and expiry. The token
-lifetime is at most five minutes. The connector scope remains only an upper
-bound: it cannot create or widen a thread-resource grant. Missing or inferred
-resource targets are rejected.
+revisions, resource generation, a jti, issued-at time, and expiry. The static
+`ORKESTR_CONNECTORS_MCP_TOKEN` operator credential is valid only for generic
+instance operations with no resource target; it cannot authorize a desktop,
+oXRM, or mailbox. The token lifetime is at most five minutes. The connector
+scope remains only an upper bound: it cannot create or widen a thread-resource
+grant. Missing or inferred resource targets are rejected.
 
 Runtime/API code that has current effective authorization can call
 `issueConnectorMcpResourceToken`. It returns a crypto-random bearer once, with

@@ -260,6 +260,7 @@ test("child creation fails closed before the child becomes discoverable when pol
 
 test("break-glass requires recent authentication and a change reference", async () => {
   const { env, principal, parent } = await fixture();
+  const recentlyAuthenticated = { ...principal, authenticatedAt: new Date().toISOString() };
   await advanceThreadResourceGeneration("desktop", "desk-a", "admin", {}, env);
   const missing = await authorizeThreadResourceAccess({ principal, threadId: parent.id, resourceType: "desktop", resourceKey: "desk-a", permission: "operate", breakGlass: true, breakGlassReason: "incident" }, env);
   assert.equal(missing.granted, false);
@@ -268,9 +269,14 @@ test("break-glass requires recent authentication and a change reference", async 
     breakGlassReason: "incident", breakGlassChangeRef: "CHG-NO-THREAD", recentAuthAt: new Date().toISOString(),
   }, env);
   assert.equal(missingThread.granted, false);
-  const allowed = await authorizeThreadResourceAccess({
+  const untrustedRequestTimestamp = await authorizeThreadResourceAccess({
     principal, threadId: parent.id, resourceType: "desktop", resourceKey: "desk-a", permission: "operate", breakGlass: true,
-    breakGlassReason: "incident", breakGlassChangeRef: "CHG-123", recentAuthAt: new Date().toISOString(),
+    breakGlassReason: "incident", breakGlassChangeRef: "CHG-UNTRUSTED", recentAuthAt: new Date().toISOString(),
+  }, env);
+  assert.equal(untrustedRequestTimestamp.granted, false);
+  const allowed = await authorizeThreadResourceAccess({
+    principal: recentlyAuthenticated, threadId: parent.id, resourceType: "desktop", resourceKey: "desk-a", permission: "operate", breakGlass: true,
+    breakGlassReason: "incident", breakGlassChangeRef: "CHG-123",
   }, env);
   assert.equal(allowed.breakGlass, true);
   assert.match(allowed.breakGlassExpiresAt, /T/);
@@ -281,7 +287,7 @@ test("break-glass persists transactional audit before use when best-effort event
   await advanceThreadResourceGeneration("desktop", "desk-a", "admin", {}, env);
   await fs.rm(path.join(home, "events.jsonl"), { force: true });
   await fs.mkdir(path.join(home, "events.jsonl"));
-  const allowed = await authorizeThreadResourceAccess({ principal, threadId: parent.id, resourceType: "desktop", resourceKey: "desk-a", permission: "operate", breakGlass: true, breakGlassReason: "incident", breakGlassChangeRef: "CHG-1", recentAuthAt: new Date().toISOString() }, env);
+  const allowed = await authorizeThreadResourceAccess({ principal: { ...principal, authenticatedAt: new Date().toISOString() }, threadId: parent.id, resourceType: "desktop", resourceKey: "desk-a", permission: "operate", breakGlass: true, breakGlassReason: "incident", breakGlassChangeRef: "CHG-1" }, env);
   assert.equal(allowed.breakGlass, true);
   const state = await readThreadResourcePolicyState(env);
   const audit = state.policyAuditOutbox.find((item) => item.action === "break_glass" && item.outcome === "allowed");

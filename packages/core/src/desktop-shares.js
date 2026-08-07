@@ -122,7 +122,8 @@ function desktopUrlForShare(share) {
 }
 
 function principalForShare(share, env = process.env) {
-  return share.ownerUserId === normalizeUserId(defaultAdminUser(env).id)
+  const authenticatedAt = share.breakGlass === true ? String(share.breakGlassAuthenticatedAt || "").trim() : "";
+  const principal = share.ownerUserId === normalizeUserId(defaultAdminUser(env).id)
     ? adminPrincipal(defaultAdminUser(env))
     : {
         kind: "user",
@@ -131,6 +132,7 @@ function principalForShare(share, env = process.env) {
         source: "desktop-share",
         displayName: share.ownerUserId,
       };
+  return authenticatedAt ? { ...principal, authenticatedAt } : principal;
 }
 
 async function assertCurrentShareGrant(share, env = process.env) {
@@ -145,6 +147,7 @@ async function assertCurrentShareGrant(share, env = process.env) {
     permission: "share",
     breakGlass: share.breakGlass === true,
     breakGlassReason: share.breakGlassReason,
+    breakGlassChangeRef: share.breakGlassChangeRef,
   }, env);
   if (!decision.allowed) throw desktopShareError(decision.reason || "desktop_share_scope_denied", 403);
   if (share.grantRevision && decision.grantRevision !== share.grantRevision) {
@@ -159,7 +162,7 @@ async function assertCurrentShareGrant(share, env = process.env) {
   return decision;
 }
 
-export async function createDesktopShare({ desktopSlug = "", slug = "", ownerUserId = "", principal = null, threadId = "", desktopAccess = null, breakGlass = false, breakGlassReason = "", label = "", env = process.env } = {}) {
+export async function createDesktopShare({ desktopSlug = "", slug = "", ownerUserId = "", principal = null, threadId = "", desktopAccess = null, breakGlass = false, breakGlassReason = "", breakGlassChangeRef = "", recentAuthAt = "", label = "", env = process.env } = {}) {
   const normalizedSlug = cleanSlug(desktopSlug || slug);
   if (!normalizedSlug) throw desktopShareError("desktop_slug_required", 400);
   const resolvedOwnerUserId = ownerUserIdForPrincipal(principal, ownerUserId, env);
@@ -171,6 +174,8 @@ export async function createDesktopShare({ desktopSlug = "", slug = "", ownerUse
     permission: "share",
     breakGlass,
     breakGlassReason,
+    breakGlassChangeRef,
+    recentAuthAt,
   }, env);
   const key = randomToken(32);
   const mutation = await mutateState(env, (state) => {
@@ -196,11 +201,17 @@ export async function createDesktopShare({ desktopSlug = "", slug = "", ownerUse
       desktopGeneration: access.desktopGeneration,
       breakGlass: access.breakGlass === true,
       breakGlassReason: access.breakGlassReason,
+      breakGlassChangeRef: access.breakGlassChangeRef,
+      breakGlassAuthenticatedAt: access.breakGlass === true ? String(principal?.recentAuthAt || principal?.authenticatedAt || "").trim() : null,
       subdomain: randomDnsLabel(),
       keyHash: sha256(key),
       status: "pending",
       createdAt: nowIso(),
-      expiresAt: new Date(Date.now() + shareTtlMs(env)).toISOString(),
+      // Break-glass never creates a long-lived desktop share. The share cannot
+      // outlive the short authorization window that created it.
+      expiresAt: access.breakGlass && access.breakGlassExpiresAt
+        ? new Date(Math.min(Date.now() + shareTtlMs(env), Date.parse(access.breakGlassExpiresAt))).toISOString()
+        : new Date(Date.now() + shareTtlMs(env)).toISOString(),
       createdBy: principal?.userId || "system",
       label,
       attempts: [],

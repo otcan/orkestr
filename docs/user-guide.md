@@ -223,7 +223,11 @@ caller-supplied resource ID as proof of the target.
 Break-glass access is enabled only after a transactional, append-preserving
 audit row records the canonical resource and thread IDs, permission, boundary,
 owner, expiry, and change reference. Best-effort event delivery supplements
-this row; it is never the sole break-glass evidence.
+this row; it is never the sole break-glass evidence. Browser/API callers supply
+the reason and change reference, while recent authentication is derived only
+from their verified browser security session. A break-glass desktop share is
+bounded by the short break-glass expiry and carries the recorded reference for
+its revalidation; it cannot become a normal long-lived share.
 
 The shared-app XRM review surface currently has a share-session identity, not
 an Orkestr thread identity, and is therefore deliberately instance-scoped. It
@@ -240,12 +244,16 @@ further intersect that snapshot. Subsequent parent additions do not widen that
 child; parent revocations narrow it immediately. Resource records bind a native
 identifier to its owner and tenant/VM boundary and status; grants provide only
 use permission and never provision an instance, credential, endpoint, or
-mailbox. The instance lifecycle must register an active oXRM or mailbox
-resource with the admin/system `registerThreadResource` operation before an
-administrator can grant it. Desktop keeps a small legacy catalog compatibility
-path while existing desktop grants are migrated.
+mailbox. The instance lifecycle must register an active resource before an
+administrator can grant it. In desktop `enforce` mode, registration and
+generation come from the desktop lifecycle; a grant cannot create a desktop.
+Desktop catalog auto-registration is retained only for `off`/`shadow` rollout
+compatibility while existing grants are migrated.
 Decisions include the exact resource, policy revision, grant revision, and
 resource generation for callers that need to reject stale work.
+Declared child scopes also receive a nonzero child policy revision, so a
+short-lived connector execution token can bind to that direct child grant while
+remaining dependent on every ancestor grant and the captured ceiling.
 
 For clustered deployments, set `ORKESTR_THREAD_RESOURCE_POLICY_STORE=postgres`
 and configure `ORKESTR_THREAD_RESOURCE_POLICY_POSTGRES_URL` (or the matching
@@ -254,8 +262,9 @@ and `PGPASSWORD` variables). PostgreSQL uses serializable, metadata-row-locked
 whole-state transactions and never falls back to SQLite or JSON. It creates an
 empty unified schema only: importing legacy desktop or JSON state is an
 explicit, evidence-reviewed operator migration, never an automatic inference.
-The doctor reports only `postgres` health and aggregate counts; it does not
-expose connection details or credentials.
+Pool initialization is coalesced per connection identity; a schema-failed or
+shutdown-raced pool is closed rather than retained for reuse. The doctor reports only
+`postgres` health and aggregate counts; it does not expose connection details or credentials.
 
 Use independent rollout modes per resource type:
 
@@ -277,7 +286,9 @@ dispatch. Mailbox permissions are `discover`, `read`, `subscribe`, and
 mode, a listener is a durable record keyed by mailbox resource, exact thread,
 normalized filter, and generation. Creating a listener requires an effective
 `subscribe` grant; listing requires `read`; revoking requires `manage` and
-invalidates pending deliveries. The listener APIs are `POST`/`GET`
+invalidates pending deliveries. An idempotency key may replay only its original
+mailbox resource, thread, and normalized filter; reuse for another target is
+rejected. The listener APIs are `POST`/`GET`
 `/api/mailboxes/:mailboxId/listeners`, `DELETE`
 `/api/mailboxes/:mailboxId/listeners/:listenerId`, and
 `GET /api/mailboxes/:mailboxId/delivery-status`. In enforce mode, inbound mail
@@ -299,6 +310,16 @@ thread-message idempotency key. VM mailbox relay is separate and unchanged.
 Break-glass is never an implicit admin bypass: it requires the exact target and
 action, an admin's recent authentication, a reason, and a change reference; it
 is audited before use and expires within fifteen minutes.
+
+For a strict default-deny deployment, explicitly configure all three resource
+modes as `enforce` only after their instance lifecycles have registered active
+resources and the required grants exist:
+
+```text
+ORKESTR_DESKTOP_ACCESS_MODE=enforce
+ORKESTR_OXRM_ACCESS_MODE=enforce
+ORKESTR_MAILBOX_ACCESS_MODE=enforce
+```
 
 Run `orkestr doctor system --json` for the read-only thread-resource policy
 report. It exposes only aggregate backend health, global and per-type modes and supported

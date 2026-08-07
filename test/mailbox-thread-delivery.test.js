@@ -96,6 +96,29 @@ test("mailbox listeners require exact registered subscribe/read/manage grants an
   );
 });
 
+test("mailbox listener idempotency never reuses a listener across resource, thread, or filter targets", async () => {
+  const scope = await fixture();
+  await grantListenerAccess(scope);
+  const idempotencyKey = "listener-target-bound";
+  const first = await createMailboxThreadListener({
+    mailbox: scope.mailbox, threadId: scope.thread.id, filter: { subjectIncludes: "build" }, principal: scope.principal, idempotencyKey,
+  }, scope.env);
+  const otherThread = await createThread({ id: "delivery-other-thread", ownerUserId: "admin", name: "Other delivery" }, scope.env);
+  const otherMailbox = await createMailbox({ ownerUserId: "admin", purpose: "alerts", suffix: "other-listener", status: "active" }, scope.env);
+  await registerThreadResource({ resourceType: "mailbox", resourceId: otherMailbox.id, ownerUserId: "admin", status: "active" }, { principal: scope.principal }, scope.env);
+  await setThreadResourceGrants(otherThread.id, "mailbox", [{ resourceId: otherMailbox.id, permissions: ["read", "subscribe", "manage"] }], { principal: scope.principal }, scope.env);
+
+  await assert.rejects(
+    () => createMailboxThreadListener({ mailbox: otherMailbox, threadId: otherThread.id, filter: { subjectIncludes: "build" }, principal: scope.principal, idempotencyKey }, scope.env),
+    /mailbox_listener_idempotency_target_mismatch/,
+  );
+  const replay = await createMailboxThreadListener({
+    mailbox: scope.mailbox, threadId: scope.thread.id, filter: { subjectIncludes: "build" }, principal: scope.principal, idempotencyKey,
+  }, scope.env);
+  assert.equal(replay.idempotent, true);
+  assert.equal(replay.listener.id, first.listener.id);
+});
+
 test("enabled main mailbox ingress dedupes once and appends only to exact matching listener threads", async () => {
   const scope = await fixture();
   await grantListenerAccess(scope);

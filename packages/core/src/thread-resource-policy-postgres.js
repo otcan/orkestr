@@ -1,4 +1,5 @@
 const pools = new Map();
+const poolOpenings = new Map();
 let pgModulePromise = null;
 let poolFactoryForTest = null;
 
@@ -28,8 +29,16 @@ async function closePool(pool) {
 
 export async function closeThreadResourcePolicyPostgresPools() {
   const active = [...new Set(pools.values())];
+  const openings = [...new Set(poolOpenings.values())];
   pools.clear();
-  await Promise.allSettled(active.map((pool) => closePool(pool)));
+  // Clearing the opening map tells each in-flight opener not to adopt its
+  // freshly initialized pool. The opener owns closing that candidate, which
+  // avoids leaking a pool when schema initialization races with shutdown.
+  poolOpenings.clear();
+  await Promise.allSettled([
+    ...active.map((pool) => closePool(pool)),
+    ...openings,
+  ]);
 }
 
 export function clearThreadResourcePolicyPostgresCache() {
@@ -86,9 +95,15 @@ function poolCacheKey(env = process.env) {
 
 export async function openThreadResourcePolicyPostgres(env = process.env) {
   const key = poolCacheKey(env);
-  let pool = pools.get(key);
-  try {
-    if (!pool) {
+  const cached = pools.get(key);
+  if (cached) return cached;
+  const inFlight = poolOpenings.get(key);
+  if (inFlight) return inFlight;
+
+  let opening;
+  opening = (async () => {
+    let pool = null;
+    try {
       if (poolFactoryForTest) pool = await poolFactoryForTest(postgresConnectionConfig(env), env);
       else {
         const pg = await loadPg();
@@ -97,15 +112,25 @@ export async function openThreadResourcePolicyPostgres(env = process.env) {
           max: Math.max(1, Number(env.ORKESTR_THREAD_RESOURCE_POLICY_POSTGRES_POOL_SIZE || 5) || 5),
         });
       }
+      pool.__orkestrThreadResourcePolicyReady ||= ensureSchema(pool);
+      await pool.__orkestrThreadResourcePolicyReady;
+      // A cache clear while opening must not let this now-unowned pool become
+      // visible after shutdown. Its catch path closes it before returning.
+      if (poolOpenings.get(key) !== opening) {
+        throw policyStoreError("thread_resource_policy_postgres_open_cancelled", 503);
+      }
       pools.set(key, pool);
+      return pool;
+    } catch (error) {
+      if (pools.get(key) === pool) pools.delete(key);
+      try { await closePool(pool); } catch {}
+      throw unavailable(error);
+    } finally {
+      if (poolOpenings.get(key) === opening) poolOpenings.delete(key);
     }
-    pool.__orkestrThreadResourcePolicyReady ||= ensureSchema(pool);
-    await pool.__orkestrThreadResourcePolicyReady;
-    return pool;
-  } catch (error) {
-    pools.delete(key);
-    throw unavailable(error);
-  }
+  })();
+  poolOpenings.set(key, opening);
+  return opening;
 }
 
 // The PostgreSQL schema mirrors the policy state's entity boundaries. Entity

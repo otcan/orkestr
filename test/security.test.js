@@ -6,9 +6,11 @@ import test from "node:test";
 import { startServer } from "../apps/server/src/server.js";
 import { createGoogleWorkspaceConnectLink } from "../packages/connectors/src/google-workspace.js";
 import { __brokerInstanceRegistryTestInternals, encryptBrokerChannelPayload } from "../packages/core/src/broker-instance-registry.js";
-import { userPrincipal } from "../packages/core/src/principal.js";
+import { adminPrincipal, userPrincipal } from "../packages/core/src/principal.js";
 import { approvePairingChallenge, authorizeHttpRequest, createPairingChallenge, listPairingChallenges, pairBrowser, securityStatus } from "../packages/core/src/security.js";
+import { registerThreadResource, readThreadResourcePolicy } from "../packages/core/src/thread-resource-grants.js";
 import { createTenantVm } from "../packages/core/src/tenant-vm-registry.js";
+import { createThread } from "../packages/core/src/threads.js";
 import { createUser, getUser } from "../packages/core/src/users.js";
 import { writeConnectorConfig } from "../packages/storage/src/config.js";
 import { userDataPaths } from "../packages/storage/src/paths.js";
@@ -1455,6 +1457,56 @@ test("paired browser sessions can open desktop routes without desktop-share chal
 
   assert.equal(allowed.ok, true);
   assert.equal(allowed.principal.userId, "admin");
+  assert.equal(allowed.principal.authenticatedAt, allowed.session.createdAt);
   assert.equal(stillBlockedWithoutSession.ok, false);
   assert.equal(stillBlockedWithoutSession.error, "browser_pairing_required");
+});
+
+test("browser break-glass routes require an exact reference and use the paired session authentication time", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-security-browser-break-glass-"));
+  const prior = saveEnv([
+    "ORKESTR_HOME", "ORKESTR_AUTH_REQUIRED", "ORKESTR_DESKTOP_ACCESS_MODE", "ORKESTR_BROWSER_DESKTOP_MODE",
+    "ORKESTR_BROWSER_LAUNCH_DISABLED", "ORKESTR_DESKTOP_CATALOG_JSON", "ORKESTR_WHATSAPP_AUTOSTART", "WHATSAPP_LOCAL_AUTOSTART",
+  ]);
+  process.env.ORKESTR_HOME = home;
+  process.env.ORKESTR_AUTH_REQUIRED = "1";
+  process.env.ORKESTR_DESKTOP_ACCESS_MODE = "enforce";
+  process.env.ORKESTR_BROWSER_DESKTOP_MODE = "profiles";
+  process.env.ORKESTR_BROWSER_LAUNCH_DISABLED = "1";
+  process.env.ORKESTR_DESKTOP_CATALOG_JSON = JSON.stringify([{ slug: "linkedin", label: "LinkedIn" }]);
+  process.env.ORKESTR_WHATSAPP_AUTOSTART = "0";
+  process.env.WHATSAPP_LOCAL_AUTOSTART = "0";
+  let server = null;
+  try {
+    const principal = adminPrincipal("admin");
+    const thread = await createThread({ id: "browser-break-glass-thread", ownerUserId: "admin", name: "Browser break glass" }, process.env);
+    await registerThreadResource({ resourceType: "desktop", resourceId: "linkedin", ownerUserId: "admin", status: "active" }, { principal }, process.env);
+    const challenge = await createPairingChallenge({ env: process.env });
+    await approvePairingChallenge(challenge.challengeId, { env: process.env });
+    const paired = await pairBrowser({ challengeId: challenge.challengeId, env: process.env });
+    server = await startServer({ port: 0, host: "127.0.0.1" });
+    const { port } = server.address();
+    const endpoint = `http://127.0.0.1:${port}/api/browser-sessions/linkedin/prepare`;
+    const headers = { "content-type": "application/json", cookie: `orkestr_session=${encodeURIComponent(paired.token)}` };
+    const rejected = await fetch(endpoint, {
+      method: "POST", headers,
+      body: JSON.stringify({ threadId: thread.id, breakGlass: true, breakGlassReason: "incident" }),
+    });
+    assert.equal(rejected.status, 403);
+    assert.equal((await json(rejected)).error, "desktop_break_glass_requirements_missing");
+
+    const allowed = await fetch(endpoint, {
+      method: "POST", headers,
+      body: JSON.stringify({ threadId: thread.id, breakGlass: true, breakGlassReason: "incident", breakGlassChangeRef: "CHG-BROWSER-1" }),
+    });
+    assert.equal(allowed.status, 200);
+    assert.equal((await json(allowed)).browser.slug, "linkedin");
+    const audit = (await readThreadResourcePolicy(process.env)).policyAuditOutbox.find((item) =>
+      item.action === "break_glass" && item.threadId === thread.id && item.resourceId === "linkedin" && item.changeRef === "CHG-BROWSER-1",
+    );
+    assert.ok(audit);
+  } finally {
+    if (server) await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    restoreEnv(prior);
+  }
 });
