@@ -18,9 +18,11 @@ import {
   routeWhatsAppInboundFromWorker,
 } from "../packages/connectors/src/connectors-mcp-router.js";
 import { approvePairingChallenge, createPairingChallenge } from "../packages/core/src/security.js";
+import { adminPrincipal } from "../packages/core/src/principal.js";
 import { configureTenantWhatsAppRoute } from "../packages/core/src/tenant-whatsapp-routing.js";
 import { createTenantVm } from "../packages/core/src/tenant-vm-registry.js";
 import { createThread, getThread } from "../packages/core/src/threads.js";
+import { readThreadResourcePolicy, registerThreadResource, setThreadResourceGrants } from "../packages/core/src/thread-resource-grants.js";
 import { isMainModule } from "../scripts/main-module.mjs";
 import { createConnectorsMcpGateway } from "../scripts/orkestr-connectors-mcp.mjs";
 import { assessConnectorHealth, connectorReleaseState, runConnectorDoctor } from "../scripts/orkestr-connectors-doctor.mjs";
@@ -453,6 +455,36 @@ test("connector MCP keeps WhatsApp transport account scope separate from Google 
     instance_id: "vm-firat",
     user_id: "firat",
   }), /connector_mcp_account_scope_denied/);
+});
+
+test("connector MCP enforces an explicit current resource token target before dispatch", async () => {
+  const item = await fixture({ scoped: true });
+  try {
+    const principal = adminPrincipal("admin");
+    const thread = await createThread({ id: "resource-token-mcp", name: "Resource token MCP", ownerUserId: "firat" }, item.env);
+    const registered = await registerThreadResource({ resourceType: "oxrm", resourceId: "crm-mcp", ownerUserId: "firat", status: "active" }, { principal }, item.env);
+    const granted = await setThreadResourceGrants(thread.id, "oxrm", [{ resourceId: "crm-mcp", permissions: ["read"] }], { principal }, item.env);
+    const policy = await readThreadResourcePolicy(item.env);
+    const issuedAt = new Date().toISOString();
+    item.env.ORKESTR_OXRM_ACCESS_MODE = "enforce";
+    item.env.ORKESTR_CONNECTORS_MCP_TOKENS_JSON = JSON.stringify({
+      tenant: {
+        token: "scoped-token", scopes: ["connectors:read"], principalKind: "tenant_vm", ownerUserId: "firat", instanceId: "vm-firat", accountId: "sender",
+        threadId: thread.id, rootThreadId: thread.id, resourceType: "oxrm", resourceId: registered.resource.id, resourceActions: ["read"],
+        boundaryId: registered.resource.boundaryId, policyRevision: policy.revision, grantRevision: granted.grants[0].revision,
+        resourceGeneration: registered.resource.generation, jti: "test-resource-token", issuedAt, expiresAt: new Date(Date.parse(issuedAt) + (4 * 60_000)).toISOString(),
+      },
+    });
+    const result = await callConnectorsMcpTool("orkestr_auth", {
+      service: "whatsapp", action: "status", account_id: "sender", instance_id: "vm-firat", user_id: "firat", thread_id: thread.id,
+      resource_type: "oxrm", resource_id: registered.resource.id, resource_action: "read",
+    }, item.env);
+
+    assert.equal(result.status, "ok", JSON.stringify(result));
+    assert.equal((await readThreadResourcePolicy(item.env)).resourceSessions[0].state, "active");
+  } finally {
+    await item.close();
+  }
 });
 
 test("connector MCP records scoped runtime progress and durable checkpoints", async () => {

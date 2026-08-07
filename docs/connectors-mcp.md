@@ -31,6 +31,28 @@ Every result includes `contract_version`, service/action/status,
 `operation_ref`, effective scope, an optional challenge, and a structured
 error. The bearer is authoritative; context arguments must match it.
 
+## Resource-bound execution tokens
+
+Connector calls are normally instance-scoped. The current connector tools do
+not infer a desktop, oXRM instance, or mailbox from a connector account, chat,
+or instance id. A surface that cannot identify a registered resource therefore
+remains instance-scoped.
+
+An integration with a real registered resource can send the explicit
+`resource_type`, canonical `resource_id`, and `resource_action` context fields.
+In resource `enforce` mode, a non-operator bearer then needs all of the
+following exact claims: resource type/id, allowed resource actions, root and
+thread ids, boundary id, policy and grant revisions, resource generation, a
+jti, issued-at time, and expiry. The token lifetime is at most five minutes.
+The connector scope remains only an upper bound: it cannot create or widen a
+thread-resource grant. Missing or inferred resource targets are rejected.
+
+Active resource-bound executions are stored transactionally with a hashed jti.
+They are revalidated on every use and invalidated in the same policy
+transaction as a grant replacement or resource-generation change. The resource
+policy doctor reports session coverage and counts only; it never exposes token,
+jti, or resource identifiers.
+
 Account changes, route changes, new chats, and first-time recipients return an
 attended Orkestr challenge. Existing scoped chat sends do not. Unconfirmed
 WhatsApp delivery is not automatically resent. MCP attachment inputs accept

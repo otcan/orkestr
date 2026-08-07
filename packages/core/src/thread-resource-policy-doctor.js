@@ -44,7 +44,7 @@ function emptyReport({ ok, backend, health, error = "", modes, writeModes, globa
   return {
     ok, backend, health, ...(error ? { error } : {}), ...(disabled ? { disabled: true } : {}),
     global: { access: "per_resource_only", write: globalWrite }, modes, writeModes,
-    counts: { resources: {}, grants: {}, policies: {}, listeners: 0, deliveries: {}, auditOutbox: 0 },
+    counts: { resources: {}, grants: {}, policies: {}, listeners: 0, deliveries: {}, auditOutbox: 0, resourceSessions: {} },
     outbox: { total: 0, pending: 0, claimed: 0, delivered: 0 },
     shadowMismatches: 0,
     coverage: { resourceSessions: "unsupported" },
@@ -96,6 +96,8 @@ export async function threadResourcePolicyDoctorReport(env = process.env, now = 
   const activeBreakGlass = (state.policyAuditOutbox || []).filter((item) => item.action === "break_glass" && item.expiresAt && Date.parse(item.expiresAt) > now);
   const outbox = Object.fromEntries(["pending", "claimed", "delivered"].map((name) => [name, state.policyAuditOutbox.filter((item) => item.state === name).length]));
   outbox.total = state.policyAuditOutbox.length;
+  const resourceSessions = state.resourceSessions || [];
+  const resourceSessionCounts = Object.fromEntries(["active", "invalidated", "expired"].map((name) => [name, resourceSessions.filter((item) => item.state === name).length]));
   const shadowMismatches = events.filter((event) => event.type === "thread_resource_access_shadow_denied" || (event.type === "mailbox_thread_delivery_shadow_evaluated" && event.mismatch === true)).length;
   const threadsById = new Map(threads.map((thread) => [thread.id, thread]));
   return {
@@ -113,12 +115,13 @@ export async function threadResourcePolicyDoctorReport(env = process.env, now = 
       listeners: state.mailboxListeners.length,
       deliveries: Object.fromEntries(["pending", "claimed", "delivered", "revoked", "quarantined", "dead-letter"].map((name) => [name, state.mailboxDeliveries.filter((item) => item.state === name).length])),
       auditOutbox: state.policyAuditOutbox.length,
+      resourceSessions: resourceSessionCounts,
     },
     outbox,
     shadowMismatches,
-    coverage: { resourceSessions: "unsupported" },
+    coverage: { resourceSessions: "transactional_aggregate" },
     stale: {
-      sessions: 0,
+      sessions: resourceSessions.filter((item) => item.state === "active" && Date.parse(item.expiresAt) <= now).length,
       listeners: state.mailboxListeners.filter((item) => item.status === "active" && !item.revokedAt && !listenerHasCurrentGrant(item, state, threadsById)).length,
       deliveries: pending.filter((item) => old(item.updatedAt || item.createdAt, deliveryStaleMs, now)).length,
     },
