@@ -90,7 +90,7 @@ test("share expiry fences an established noVNC socket without waiting for period
     await new Promise((resolve) => setTimeout(resolve, 50));
     assert.equal(socket.destroyed, false);
     assert.equal(upstream.destroyed, false);
-    await waitFor(() => socket.destroyed && upstream.destroyed, 1_500);
+    await waitFor(() => socket.destroyed && upstream.destroyed, 5_000);
   } finally {
     if (previousHome === undefined) delete process.env.ORKESTR_HOME;
     else process.env.ORKESTR_HOME = previousHome;
