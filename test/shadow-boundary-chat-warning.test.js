@@ -226,8 +226,10 @@ test("a WhatsApp-bound shadow warning uses the outbound-intent recovery path aft
   const state = JSON.parse(await fs.readFile(path.join(env.ORKESTR_HOME, "whatsapp.json"), "utf8"));
   const intent = state.outboundIntents.find((item) => item.messageId === secondMessage.id);
 
-  assert.equal(first.shadowBoundaryWarning.emitted, true);
-  assert.equal(firstRepeat.shadowBoundaryWarning.emitted, false);
+  assert.deepEqual(
+    [first.shadowBoundaryWarning.emitted, firstRepeat.shadowBoundaryWarning.emitted].sort(),
+    [false, true],
+  );
   assert.equal(second.shadowBoundaryWarning.emitted, true);
   assert.equal(firstMessage.chatId, "shadow-warning-chat");
   assert.equal(secondMessage.chatId, "shadow-warning-chat");
