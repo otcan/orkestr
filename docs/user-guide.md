@@ -199,6 +199,38 @@ would-deny decisions during rollout; switch to `enforce` after grants are
 reviewed. Legacy share links without a thread, boundary, and grant revision are
 revoked in enforcement mode.
 
+### Thread Resource Policy Rollout
+
+Desktop grants are backed by the transactional thread-resource policy database,
+not by a process-local permission cache. The same policy model also supports
+oXRM resources: a thread-scoped oXRM target resolver considers only resources
+granted to that thread before it performs explicit or single-target selection.
+It never substitutes a different same-owner target after a denied or stale
+selection.
+
+Policies have an explicit empty state, so an administrator can deliberately
+deny every resource of one type to a thread. When a worker or task-agent is
+created, it receives a ceiling snapshot of its parent's then-effective grants.
+Subsequent parent additions do not widen that child; parent revocations narrow
+it immediately. Decisions include the exact resource, policy revision, grant
+revision, and resource generation for callers that need to reject stale work.
+
+Use independent rollout modes per resource type:
+
+```text
+ORKESTR_DESKTOP_ACCESS_MODE=shadow
+ORKESTR_OXRM_ACCESS_MODE=shadow
+ORKESTR_MAILBOX_ACCESS_MODE=off
+```
+
+`desktop` preserves the existing shadow default, while `oxrm` is opt-in until
+its explicit grants are configured. `mailbox` is reserved in the shared policy
+model; durable mailbox listener/delivery dispatch is a follow-on increment, so
+this release intentionally does not claim mailbox thread routing is enabled.
+Break-glass is never an implicit admin bypass: it requires the exact target and
+action, an admin's recent authentication, a reason, and a change reference; it
+is audited before use and expires within fifteen minutes.
+
 The installer records the default desktop, Gmail auth desktop, and manual
 intervention desktop in runtime settings. Codex-aware skills should read
 `orkestr whereiam --json` or `orkestr settings --json` instead of guessing which
