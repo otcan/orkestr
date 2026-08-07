@@ -87,10 +87,14 @@ async function fixture({ grant = true } = {}) {
   return { env, auth, input, principal, thread, resource: registered.resource };
 }
 
+function assertResourceAccess(auth, input, env) {
+  return assertConnectorMcpResourceAccess(auth, input, env, { actualTarget: input });
+}
+
 test("resource-bound connector tokens intersect token actions with current grants and persist an active session", async () => {
   const item = await fixture();
   const scoped = assertConnectorMcpScope(item.auth, "orkestr_auth", item.input);
-  await assertConnectorMcpResourceAccess(scoped, item.input, item.env);
+  await assertResourceAccess(scoped, item.input, item.env);
   const state = await readThreadResourcePolicy(item.env);
 
   assert.equal(state.resourceSessions.length, 1);
@@ -102,33 +106,33 @@ test("resource-bound connector tokens intersect token actions with current grant
   assert.equal(JSON.stringify(report).includes(item.resource.id), false);
   assert.equal(JSON.stringify(report).includes("resource-execution-jti"), false);
   await assert.rejects(
-    () => assertConnectorMcpResourceAccess(scoped, { ...item.input, resource_action: "execute" }, item.env),
+    () => assertResourceAccess(scoped, { ...item.input, resource_action: "execute" }, item.env),
     /connector_mcp_resource_target_scope_denied/,
   );
 });
 
 test("resource-bound connector tokens reject stale epochs and invalidate sessions synchronously", async () => {
   const item = await fixture();
-  await assertConnectorMcpResourceAccess(item.auth, item.input, item.env);
+  await assertResourceAccess(item.auth, item.input, item.env);
   await advanceThreadResourceGeneration("oxrm", "crm-primary", "tenant", { principal: item.principal }, item.env);
   const invalidated = await readThreadResourcePolicy(item.env);
 
   assert.equal(invalidated.resourceSessions[0].state, "invalidated");
   await assert.rejects(
-    () => assertConnectorMcpResourceAccess(item.auth, item.input, item.env),
+    () => assertResourceAccess(item.auth, item.input, item.env),
     /connector_mcp_resource_token_stale/,
   );
 });
 
 test("resource-bound connector sessions are invalidated when a grant is replaced", async () => {
   const item = await fixture();
-  await assertConnectorMcpResourceAccess(item.auth, item.input, item.env);
+  await assertResourceAccess(item.auth, item.input, item.env);
   await setThreadResourceGrants(item.thread.id, "oxrm", [{ resourceId: "crm-primary", permissions: ["read"] }], { principal: item.principal }, item.env);
   const invalidated = await readThreadResourcePolicy(item.env);
 
   assert.equal(invalidated.resourceSessions[0].state, "invalidated");
   await assert.rejects(
-    () => assertConnectorMcpResourceAccess(item.auth, item.input, item.env),
+    () => assertResourceAccess(item.auth, item.input, item.env),
     /connector_mcp_resource_token_stale/,
   );
 });
@@ -136,35 +140,43 @@ test("resource-bound connector sessions are invalidated when a grant is replaced
 test("resource-bound connector tokens fail closed for cross-thread, cross-boundary, and target mismatches", async () => {
   const item = await fixture();
   await assert.rejects(
-    () => assertConnectorMcpResourceAccess(item.auth, { ...item.input, thread_id: "other-thread" }, item.env),
+    () => assertConnectorMcpResourceAccess(item.auth, item.input, item.env),
+    /connector_mcp_resource_dispatch_target_unbound/,
+  );
+  await assert.rejects(
+    () => assertResourceAccess(item.auth, { ...item.input, thread_id: "other-thread" }, item.env),
     /connector_mcp_resource_thread_scope_denied/,
   );
   await assert.rejects(
-    () => assertConnectorMcpResourceAccess({ ...item.auth, boundaryId: "other-boundary" }, item.input, item.env),
+    () => assertResourceAccess({ ...item.auth, boundaryId: "other-boundary" }, item.input, item.env),
     /connector_mcp_resource_boundary_denied/,
   );
   await assert.rejects(
-    () => assertConnectorMcpResourceAccess({ ...item.auth, audience: "other-mcp" }, item.input, item.env),
+    () => assertResourceAccess({ ...item.auth, audience: "other-mcp" }, item.input, item.env),
     /connector_mcp_resource_audience_denied/,
   );
   await assert.rejects(
-    () => assertConnectorMcpResourceAccess(item.auth, { ...item.input, resource_id: "other-resource" }, item.env),
+    () => assertResourceAccess(item.auth, { ...item.input, resource_id: "other-resource" }, item.env),
     /connector_mcp_resource_target_scope_denied/,
   );
   await assert.rejects(
-    () => assertConnectorMcpResourceAccess(item.auth, { ...item.input, connector_mcp_tool: "orkestr_conversation" }, item.env),
+    () => assertConnectorMcpResourceAccess(item.auth, { ...item.input, resource_id: "other-resource" }, item.env, { actualTarget: item.input }),
+    /connector_mcp_resource_dispatch_target_mismatch/,
+  );
+  await assert.rejects(
+    () => assertResourceAccess(item.auth, { ...item.input, connector_mcp_tool: "orkestr_conversation" }, item.env),
     /connector_mcp_resource_dispatch_scope_denied/,
   );
   await assert.rejects(
-    () => assertConnectorMcpResourceAccess(item.auth, { ...item.input, action: "list" }, item.env),
+    () => assertResourceAccess(item.auth, { ...item.input, action: "list" }, item.env),
     /connector_mcp_resource_dispatch_scope_denied/,
   );
   await assert.rejects(
-    () => assertConnectorMcpResourceAccess(item.auth, { ...item.input, resource_id: "" }, item.env),
+    () => assertResourceAccess(item.auth, { ...item.input, resource_id: "" }, item.env),
     /connector_mcp_resource_target_required/,
   );
   await assert.rejects(
-    () => assertConnectorMcpResourceAccess({
+    () => assertResourceAccess({
       ...item.auth,
       expiresAt: new Date(Date.parse(item.auth.issuedAt) + (6 * 60_000)).toISOString(),
     }, item.input, item.env),
@@ -175,7 +187,7 @@ test("resource-bound connector tokens fail closed for cross-thread, cross-bounda
 test("resource-bound connector token scope never creates a grant", async () => {
   const item = await fixture({ grant: false });
   await assert.rejects(
-    () => assertConnectorMcpResourceAccess(item.auth, item.input, item.env),
+    () => assertResourceAccess(item.auth, item.input, item.env),
     /connector_mcp_resource_grant_required/,
   );
   assert.equal((await readThreadResourcePolicy(item.env)).resourceSessions.length, 0);
@@ -204,7 +216,7 @@ test("issued resource tokens round-trip through connector auth and survive unrel
   assert.match(issued.token, /^rt_[A-Za-z0-9_-]+$/);
   assert.equal(auth.resourceId, item.resource.id);
   assert.equal(auth.audience, "orkestr-connectors-mcp");
-  await assertConnectorMcpResourceAccess(auth, item.input, item.env);
+  await assertResourceAccess(auth, item.input, item.env);
   const unrelated = await createThread({ id: "unrelated-resource-thread", name: "Unrelated", ownerUserId: "tenant" }, item.env);
   await registerThreadResource({ resourceType: "oxrm", resourceId: "crm-unrelated", ownerUserId: "tenant", status: "active" }, { principal: item.principal }, item.env);
   await setThreadResourceGrants(unrelated.id, "oxrm", [{ resourceId: "crm-unrelated", permissions: ["read"] }], { principal: item.principal }, item.env);
@@ -212,7 +224,7 @@ test("issued resource tokens round-trip through connector auth and survive unrel
 
   assert.equal(afterUnrelatedEdit.resourceSessions[0].state, "active");
   assert.equal(afterUnrelatedEdit.resourceSessions[0].audience, "orkestr-connectors-mcp");
-  await assertConnectorMcpResourceAccess(await authorizeConnectorMcpToken(issued.token, item.env), item.input, item.env);
+  await assertResourceAccess(await authorizeConnectorMcpToken(issued.token, item.env), item.input, item.env);
   assert.equal(JSON.stringify(afterUnrelatedEdit.resourceSessions).includes(issued.token), false);
   await assert.rejects(() => authorizeConnectorMcpToken(`${issued.token}x`, item.env), /connector_mcp_token_invalid/);
 });

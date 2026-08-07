@@ -3,6 +3,7 @@ import { dataPaths, ensureDataDirs } from "../../storage/src/paths.js";
 import { readJson } from "../../storage/src/store.js";
 import {
   clearThreadResourcePolicyPostgresCache,
+  closeThreadResourcePolicyPostgresPools,
   openThreadResourcePolicyPostgres,
   readThreadResourcePolicyPostgresState,
   setThreadResourcePolicyPostgresPoolFactory,
@@ -26,8 +27,11 @@ export const __threadResourcePolicyStoreTestInternals = Object.freeze({
   setPostgresPoolFactory(factory = null) {
     setThreadResourcePolicyPostgresPoolFactory(factory);
   },
-  clearPostgresCache() {
-    clearThreadResourcePolicyPostgresCache();
+  async clearPostgresCache() {
+    await clearThreadResourcePolicyPostgresCache();
+  },
+  async closePostgresPools() {
+    await closeThreadResourcePolicyPostgresPools();
   },
 });
 

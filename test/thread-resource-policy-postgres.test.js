@@ -11,10 +11,17 @@ import {
 import { threadResourcePolicyDoctorReport } from "../packages/core/src/thread-resource-policy-doctor.js";
 import { ingestMailboxMessage } from "../packages/connectors/src/mailbox-inbox.js";
 import { runMailboxDeliveryPump } from "../packages/connectors/src/mailbox-delivery-pump.js";
-import { createMailbox, createMailboxThreadListener } from "../packages/core/src/mailboxes.js";
+import {
+  createMailbox,
+  createMailboxThreadListener,
+  dispatchMailboxThreadDeliveries,
+  enqueueMailboxThreadDeliveries,
+  revokeMailboxThreadListener,
+  routeMailboxMessage,
+} from "../packages/core/src/mailboxes.js";
 import { adminPrincipal } from "../packages/core/src/principal.js";
 import { registerThreadResource, setThreadResourceGrants } from "../packages/core/src/thread-resource-grants.js";
-import { createThread, listThreadMessages } from "../packages/core/src/threads.js";
+import { appendThreadMessage, createThread, listThreadMessages } from "../packages/core/src/threads.js";
 import { listConnectorInboxEvents, markConnectorInboxEvent, resetConnectorInboxForTest } from "../packages/connectors/src/connector-inbox.js";
 
 const stateTables = new Set([
@@ -145,6 +152,11 @@ function resource(id = "local:admin:oxrm:crm") {
   return { id, nativeId: "crm", resourceType: "oxrm", resourceKey: "crm", ownerUserId: "admin", boundaryId: "local", generation: 1, status: "active", backend: "oxrm", createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z", retiredAt: null };
 }
 
+test.afterEach(async () => {
+  await __threadResourcePolicyStoreTestInternals.clearPostgresCache();
+  __threadResourcePolicyStoreTestInternals.setPostgresPoolFactory(null);
+});
+
 test("PostgreSQL policy store commits complete state, preserves audit, and rolls back", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-resource-postgres-"));
   const env = policyEnv(home);
@@ -259,6 +271,19 @@ test("exhausted PostgreSQL serialization conflicts leave mailbox ingress in the 
 
 const realPostgresUrl = String(process.env.ORKESTR_TEST_THREAD_RESOURCE_POLICY_POSTGRES_URL || "").trim();
 
+function realPolicyEnv(home) {
+  return {
+    ORKESTR_HOME: home,
+    ORKESTR_ADMIN_USER_ID: "admin",
+    ORKESTR_MAILBOX_DOMAIN: "mail.example.test",
+    ORKESTR_THREAD_RESOURCE_POLICY_STORE: "postgres",
+    ORKESTR_THREAD_RESOURCE_POLICY_POSTGRES_URL: realPostgresUrl,
+    ORKESTR_DESKTOP_ACCESS_MODE: "enforce",
+    ORKESTR_OXRM_ACCESS_MODE: "enforce",
+    ORKESTR_MAILBOX_ACCESS_MODE: "enforce",
+  };
+}
+
 test("real PostgreSQL policy store round-trips a transactional record when an isolated test database is configured", { skip: !realPostgresUrl }, async () => {
   // This opt-in URL must point at a disposable test database. The test keeps
   // its marker isolated and removes it afterwards, but must not share an
@@ -285,4 +310,65 @@ test("real PostgreSQL policy store round-trips a transactional record when an is
       }, env);
     }
   }
+});
+
+test("real PostgreSQL serializable CAS permits one concurrent policy writer", { skip: !realPostgresUrl }, async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-resource-postgres-real-cas-"));
+  const env = realPolicyEnv(home);
+  const initial = await readThreadResourcePolicyState(env);
+  const expectedRevision = initial.revision;
+  const prefix = `real-cas-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const attempts = await Promise.allSettled(["one", "two"].map((id) => withThreadResourcePolicyTransaction((state) => {
+    if (state.revision !== expectedRevision) throw Object.assign(new Error("thread_resource_policy_revision_conflict"), { statusCode: 409 });
+    state.revision = expectedRevision + 1;
+    state.mutations.push({ action: "real-cas", idempotencyKey: `${prefix}-${id}`, result: { id }, policyRevision: state.revision, createdAt: new Date().toISOString() });
+    return { state };
+  }, env)));
+  assert.equal(attempts.filter((item) => item.status === "fulfilled").length, 1);
+  assert.equal(attempts.filter((item) => item.status === "rejected" && /thread_resource_policy_revision_conflict/.test(item.reason?.message)).length, 1);
+  await withThreadResourcePolicyTransaction((state) => {
+    state.mutations = state.mutations.filter((item) => !String(item.idempotencyKey || "").startsWith(prefix));
+    return { state };
+  }, env);
+});
+
+test("real PostgreSQL mailbox fence orders a concurrent revoke after the idempotent append", { skip: !realPostgresUrl }, async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-resource-postgres-real-mailbox-"));
+  const env = realPolicyEnv(home);
+  const principal = adminPrincipal("admin");
+  const suffix = `real-fence-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const thread = await createThread({ id: `${suffix}-thread`, name: "Real Postgres fence", ownerUserId: "admin" }, env);
+  const mailbox = await createMailbox({ ownerUserId: "admin", purpose: "alerts", suffix, status: "active" }, env);
+  await registerThreadResource({ resourceType: "mailbox", resourceId: mailbox.id, ownerUserId: "admin", status: "active" }, { principal }, env);
+  await setThreadResourceGrants(thread.id, "mailbox", [{ resourceId: mailbox.id, permissions: ["read", "subscribe", "manage"] }], { principal }, env);
+  const listener = await createMailboxThreadListener({ mailbox, threadId: thread.id, principal }, env);
+  const routed = await routeMailboxMessage({
+    recipient: mailbox.address,
+    headers: { messageId: `<${suffix}-delivery@example.test>`, from: "builds@example.test", subject: "Fence" },
+    envelope: { rcptTo: mailbox.address, mailFrom: "builds@example.test" },
+    body: { text: "fenced" },
+  }, env);
+  const delivery = await enqueueMailboxThreadDeliveries(routed.mailboxDeliveryInput, env);
+  let entered;
+  const appendEntered = new Promise((resolve) => { entered = resolve; });
+  let release;
+  const appendRelease = new Promise((resolve) => { release = resolve; });
+  const dispatching = dispatchMailboxThreadDeliveries({
+    deliveryIds: delivery.deliveryIds,
+    appendMessage: async (threadId, message, localEnv) => {
+      entered();
+      await appendRelease;
+      return appendThreadMessage(threadId, message, localEnv);
+    },
+  }, env);
+  await appendEntered;
+  let revokeFinished = false;
+  const revoking = revokeMailboxThreadListener({ mailbox, listenerId: listener.listener.id, principal }, env).then((value) => { revokeFinished = true; return value; });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(revokeFinished, false);
+  release();
+  const [dispatched, revoked] = await Promise.all([dispatching, revoking]);
+  assert.equal(dispatched.delivered, 1);
+  assert.equal(revoked.listener.status, "revoked");
+  assert.equal((await listThreadMessages(thread.id, env)).filter((item) => item.source === "mailbox").length, 1);
 });

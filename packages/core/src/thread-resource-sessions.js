@@ -29,14 +29,14 @@ function actions(value = [], resourceType = "") {
 
 function target(input = {}) {
   return {
-    resourceType: clean(input.resource_type),
-    resourceId: clean(input.resource_id),
-    action: clean(input.resource_action).toLowerCase(),
-    threadId: clean(input.thread_id),
+    resourceType: clean(input.resource_type || input.resourceType),
+    resourceId: clean(input.resource_id || input.resourceId),
+    action: clean(input.resource_action || input.resourceAction || input.permission).toLowerCase(),
+    threadId: clean(input.thread_id || input.threadId),
     connectorTool: clean(input.connector_mcp_tool || input.connectorMcpTool || input.connector_tool).toLowerCase(),
-    // The connector operation's action is the dispatch target. Never accept a
-    // separate caller-supplied claim selector in place of that actual action.
-    connectorAction: clean(input.action).toLowerCase(),
+    // The connector operation's action is the dispatch target. A trusted
+    // actualTarget provides the same action field separately from request data.
+    connectorAction: clean(input.action || input.connectorMcpAction || input.connector_mcp_action).toLowerCase(),
   };
 }
 
@@ -68,6 +68,10 @@ function claims(auth = {}) {
 
 function resourceTokenDeclared(value = {}) {
   return Boolean(clean(value.resourceType) || clean(value.resourceId) || (Array.isArray(value.resourceActions) && value.resourceActions.length) || clean(value.resourceJtiHash));
+}
+
+export function connectorMcpResourceTokenDeclared(auth = {}) {
+  return resourceTokenDeclared(auth);
 }
 
 function validClaimSet(value = {}) {
@@ -150,17 +154,28 @@ async function persistCurrentResourceSession(value = {}, threadsById = new Map()
   return updated.result.session;
 }
 
-// Connector calls are instance-scoped unless a real target is supplied. Once a
-// resource target is declared in enforce mode, it has no legacy fallback: all
-// target and epoch claims must be present and current.
-export async function assertConnectorMcpResourceAccess(auth = {}, input = {}, env = process.env) {
-  const requested = target(input);
+// Connector calls are instance-scoped unless a dispatcher supplies a trusted
+// actualTarget. Once a resource target is declared in enforce mode, it has no
+// legacy fallback: request fields may corroborate that target, but never stand
+// in for it, and all target and epoch claims must be present and current.
+export async function assertConnectorMcpResourceAccess(auth = {}, input = {}, env = process.env, { actualTarget = null } = {}) {
+  const callerTarget = target(input);
+  const requested = actualTarget ? target(actualTarget) : callerTarget;
   const value = claims(auth);
-  const declared = resourceTokenDeclared(auth) || requested.resourceType || requested.resourceId || requested.action;
+  const declared = resourceTokenDeclared(auth) || callerTarget.resourceType || callerTarget.resourceId || callerTarget.action;
   if (!declared || auth.operator) return auth;
   const resourceType = normalizeThreadResourceType(requested.resourceType || value.resourceType);
   const mode = threadResourceAccessMode(resourceType, env);
   if (mode !== "enforce") return auth;
+  if (!actualTarget) deny("resource_dispatch_target_unbound");
+  if (
+    (callerTarget.resourceType && callerTarget.resourceType !== requested.resourceType) ||
+    (callerTarget.resourceId && callerTarget.resourceId !== requested.resourceId) ||
+    (callerTarget.action && callerTarget.action !== requested.action) ||
+    (callerTarget.threadId && callerTarget.threadId !== requested.threadId) ||
+    (callerTarget.connectorTool && callerTarget.connectorTool !== requested.connectorTool) ||
+    (callerTarget.connectorAction && callerTarget.connectorAction !== requested.connectorAction)
+  ) deny("resource_dispatch_target_mismatch");
   if (!requested.resourceType || !requested.resourceId || !requested.action || !requested.threadId) deny("resource_target_required", 400);
   if (!resourceType || !actions([requested.action], resourceType).includes(requested.action)) deny("resource_target_invalid", 400);
   if (value.audience !== connectorMcpResourceAudience) deny("resource_audience_denied", 401);

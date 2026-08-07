@@ -215,6 +215,10 @@ considers only resources granted to that thread before explicit or
 single-target selection. It never substitutes a different same-owner target
 after a denied or stale selection. In `shadow` mode the same authorizer records
 the would-deny decision but preserves legacy selection; it is not enforcement.
+Resource-bound connector MCP bearers are accepted only by a resource-aware
+dispatcher that resolves the actual resource independently of caller input.
+The generic connector MCP tools deliberately reject them rather than treating a
+caller-supplied resource ID as proof of the target.
 
 The shared-app XRM review surface currently has a share-session identity, not
 an Orkestr thread identity, and is therefore deliberately instance-scoped. It
