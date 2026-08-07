@@ -224,8 +224,12 @@ further intersect that snapshot. Subsequent parent additions do not widen that
 child; parent revocations narrow it immediately. Resource records bind a native
 identifier to its owner and tenant/VM boundary and status; grants provide only
 use permission and never provision an instance, credential, endpoint, or
-mailbox. Decisions include the exact resource, policy revision, grant revision,
-and resource generation for callers that need to reject stale work.
+mailbox. The instance lifecycle must register an active oXRM or mailbox
+resource with the admin/system `registerThreadResource` operation before an
+administrator can grant it. Desktop keeps a small legacy catalog compatibility
+path while existing desktop grants are migrated.
+Decisions include the exact resource, policy revision, grant revision, and
+resource generation for callers that need to reject stale work.
 
 Use independent rollout modes per resource type:
 

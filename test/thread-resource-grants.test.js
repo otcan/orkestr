@@ -9,10 +9,12 @@ import {
   advanceThreadResourceGeneration,
   authorizeThreadResourceAccess,
   listThreadResourceGrants,
+  registerThreadResource,
   setThreadResourceGrants,
   threadResourceId,
+  validateThreadResourceAuthorizationBinding,
 } from "../packages/core/src/thread-resource-grants.js";
-import { readThreadResourcePolicyState } from "../packages/core/src/thread-resource-policy-store.js";
+import { openThreadResourcePolicyDatabase, readThreadResourcePolicyState } from "../packages/core/src/thread-resource-policy-store.js";
 import { resolveTargetInstance, requireResolvedTargetInstance } from "../packages/core/src/target-resolver.js";
 import { listEvents } from "../packages/storage/src/store.js";
 
@@ -28,8 +30,26 @@ async function fixture() {
   const principal = adminPrincipal("admin");
   const parent = await createThread({ id: "parent", ownerUserId: "admin", name: "Parent" }, env);
   const sibling = await createThread({ id: "sibling", ownerUserId: "admin", name: "Sibling" }, env);
+  for (const resourceId of ["xrm-a", "xrm-b", "later-xrm"]) {
+    await registerThreadResource({ resourceType: "oxrm", resourceId, ownerUserId: "admin", status: "active" }, { principal }, env);
+  }
   return { home, env, principal, parent, sibling };
 }
+
+test("non-desktop grants require an active instance-owned resource registration", async () => {
+  const { env, principal, parent } = await fixture();
+  await assert.rejects(
+    () => setThreadResourceGrants(parent.id, "oxrm", [{ resourceId: "unregistered-xrm", permissions: ["read"] }], { principal }, env),
+    /thread_resource_not_registered/,
+  );
+  await assert.rejects(
+    () => setThreadResourceGrants(parent.id, "mailbox", [{ resourceId: "unregistered-mailbox", permissions: ["route"] }], { principal }, env),
+    /thread_resource_not_registered/,
+  );
+  await registerThreadResource({ resourceType: "mailbox", resourceId: "mailbox-a", ownerUserId: "admin", status: "active" }, { principal }, env);
+  const granted = await setThreadResourceGrants(parent.id, "mailbox", [{ resourceId: "mailbox-a", permissions: ["route"] }], { principal }, env);
+  assert.equal(granted.grants.length, 1);
+});
 
 test("transactional resource policies isolate same-owner threads and persist an explicit empty policy", async () => {
   const { home, env, principal, parent, sibling } = await fixture();
@@ -75,6 +95,19 @@ test("child ceilings prevent later widening and parent revocation narrows immedi
   await setThreadResourceGrants(parent.id, "oxrm", [{ resourceId: "xrm-b", permissions: ["read"] }], { principal }, env);
   const revoked = await authorizeThreadResourceAccess({ principal, threadId: child.id, resourceType: "oxrm", resourceId: "xrm-a", permission: "read" }, env);
   assert.equal(revoked.granted, false);
+});
+
+test("a descendant direct grant cannot re-root a lineage after ancestor revocation", async () => {
+  const { env, principal, parent } = await fixture();
+  await setThreadResourceGrants(parent.id, "oxrm", [{ resourceId: "xrm-a", permissions: ["read"] }], { principal }, env);
+  const intermediate = await createThread({ id: "intermediate", ownerUserId: "admin", name: "Intermediate", parentThreadId: parent.id }, env);
+  await setThreadResourceGrants(intermediate.id, "oxrm", [{ resourceId: "xrm-a", permissions: ["read"] }], { principal }, env);
+  await setThreadResourceGrants(parent.id, "oxrm", [], { principal }, env);
+  const intermediateDecision = await authorizeThreadResourceAccess({ principal, threadId: intermediate.id, resourceType: "oxrm", resourceId: "xrm-a", permission: "read" }, env);
+  assert.equal(intermediateDecision.granted, false);
+  const grandchild = await createThread({ id: "grandchild", ownerUserId: "admin", name: "Grandchild", parentThreadId: intermediate.id }, env);
+  const grandchildDecision = await authorizeThreadResourceAccess({ principal, threadId: grandchild.id, resourceType: "oxrm", resourceId: "xrm-a", permission: "read" }, env);
+  assert.equal(grandchildDecision.granted, false);
 });
 
 test("an empty child snapshot remains denied after a later parent grant", async () => {
@@ -157,20 +190,48 @@ test("grant mutations reject unknown permissions and idempotent replays do not a
   assert.equal(after.revision, before.revision);
 });
 
+test("unknown resource actions fail closed while documented aliases remain scoped", async () => {
+  const { env, principal, parent } = await fixture();
+  await setThreadResourceGrants(parent.id, "oxrm", [{ resourceId: "xrm-a", permissions: ["execute"] }], { principal }, env);
+  const alias = await authorizeThreadResourceAccess({ principal, threadId: parent.id, resourceType: "oxrm", resourceId: "xrm-a", action: "call" }, env);
+  const unknown = await authorizeThreadResourceAccess({ principal, threadId: parent.id, resourceType: "oxrm", resourceId: "xrm-a", action: "delete" }, env);
+  assert.equal(alias.granted, true);
+  assert.equal(unknown.allowed, false);
+  assert.equal(unknown.reason, "oxrm_permission_invalid");
+});
+
+test("oXRM authorization bindings accept their canonical resource ID and reject stale epochs", async () => {
+  const { env, principal, parent } = await fixture();
+  await setThreadResourceGrants(parent.id, "oxrm", [{ resourceId: "xrm-a", permissions: ["read"] }], { principal }, env);
+  const decision = await authorizeThreadResourceAccess({ principal, threadId: parent.id, resourceType: "oxrm", resourceId: "xrm-a", permission: "read" }, env);
+  const current = await validateThreadResourceAuthorizationBinding(decision.authorizationBinding, { principal, threadId: parent.id, permission: "read" }, env);
+  assert.equal(current.granted, true);
+  await setThreadResourceGrants(parent.id, "oxrm", [], { principal }, env);
+  await assert.rejects(
+    () => validateThreadResourceAuthorizationBinding(decision.authorizationBinding, { principal, threadId: parent.id, permission: "read" }, env),
+    /thread_resource_authorization_stale/,
+  );
+});
+
 test("resource identities bind native IDs to the owning boundary", async () => {
   const { home, env, principal } = await fixture();
   const alice = await createThread({ id: "alice-thread", ownerUserId: "alice", name: "Alice" }, env);
   const bob = await createThread({ id: "bob-thread", ownerUserId: "bob", name: "Bob" }, env);
+  await registerThreadResource({ resourceType: "oxrm", resourceId: "shared-native", ownerUserId: "alice", status: "active" }, { principal }, env);
+  await registerThreadResource({ resourceType: "oxrm", resourceId: "shared-native", ownerUserId: "bob", status: "active" }, { principal }, env);
   await setThreadResourceGrants(alice.id, "oxrm", [{ resourceId: "shared-native", permissions: ["read"] }], { principal }, env);
   await setThreadResourceGrants(bob.id, "oxrm", [{ resourceId: "shared-native", permissions: ["read"] }], { principal }, env);
   const aliceGrant = await listThreadResourceGrants(alice.id, "oxrm", principal, env);
   const bobGrant = await listThreadResourceGrants(bob.id, "oxrm", principal, env);
   assert.notEqual(aliceGrant.grants[0].resourceId, bobGrant.grants[0].resourceId);
   assert.equal(aliceGrant.grants[0].resourceId, threadResourceId("oxrm", "shared-native", "alice", env));
+  const adminAlice = await authorizeThreadResourceAccess({ principal, threadId: alice.id, resourceType: "oxrm", resourceId: "shared-native", permission: "read" }, env);
+  assert.equal(adminAlice.granted, true);
   const crossOwner = await authorizeThreadResourceAccess({ principal, threadId: alice.id, resourceType: "oxrm", resourceId: "shared-native", ownerUserId: "bob", permission: "read" }, env);
   assert.equal(crossOwner.granted, false);
 
   const vmEnv = { ...env, ORKESTR_HOME: home, ORKESTR_TENANT_VM_ID: "vm-b" };
+  await registerThreadResource({ resourceType: "oxrm", resourceId: "boundary-native", ownerUserId: "alice", status: "active" }, { principal }, vmEnv);
   await setThreadResourceGrants(alice.id, "oxrm", [{ resourceId: "boundary-native", permissions: ["read"] }], { principal }, vmEnv);
   const crossBoundary = await authorizeThreadResourceAccess({ principal, threadId: alice.id, resourceType: "oxrm", resourceId: "boundary-native", boundaryId: "vm-b", permission: "read" }, env);
   assert.equal(crossBoundary.granted, false);
@@ -218,4 +279,29 @@ test("break-glass denies when its required audit cannot be persisted", async () 
     () => authorizeThreadResourceAccess({ principal, threadId: parent.id, resourceType: "desktop", resourceKey: "desk-a", permission: "operate", breakGlass: true, breakGlassReason: "incident", breakGlassChangeRef: "CHG-1", recentAuthAt: new Date().toISOString() }, env),
     /thread_resource_break_glass_audit_unavailable/,
   );
+});
+
+test("policy DB retries cleanly after a failed legacy desktop migration", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-resource-migration-retry-"));
+  const env = { ORKESTR_HOME: home };
+  await fs.writeFile(path.join(home, "desktop-access.json"), "{not-json");
+  await assert.rejects(() => openThreadResourcePolicyDatabase(env));
+  await fs.writeFile(path.join(home, "desktop-access.json"), JSON.stringify({ grants: [] }));
+  const db = await openThreadResourcePolicyDatabase(env);
+  assert.ok(db);
+});
+
+test("legacy desktop grant migration remains usable through the desktop slug", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-resource-legacy-desktop-"));
+  const env = { ORKESTR_HOME: home, ORKESTR_ADMIN_USER_ID: "admin", ORKESTR_DESKTOP_ACCESS_MODE: "enforce" };
+  const principal = adminPrincipal("admin");
+  const thread = await createThread({ id: "legacy-thread", ownerUserId: "admin", name: "Legacy" }, env);
+  await fs.writeFile(path.join(home, "desktop-access.json"), JSON.stringify({
+    revision: 1,
+    resources: [{ id: "legacy-desktop-id", slug: "legacy-desktop", ownerUserId: "admin", boundaryId: "local", generation: 1 }],
+    grants: [{ id: "legacy-grant", threadId: thread.id, desktopId: "legacy-desktop-id", desktopSlug: "legacy-desktop", ownerUserId: "admin", boundaryId: "local", permissions: ["discover", "operate"] }],
+  }));
+  const decision = await authorizeThreadResourceAccess({ principal, threadId: thread.id, resourceType: "desktop", resourceKey: "legacy-desktop", permission: "operate" }, env);
+  assert.equal(decision.granted, true);
+  assert.equal(decision.resourceId, "legacy-desktop-id");
 });
