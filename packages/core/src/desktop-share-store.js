@@ -23,6 +23,11 @@ export function desktopShareRandomToken(bytes = 24) {
   return crypto.randomBytes(bytes).toString("base64url");
 }
 
+function expireStatus(status = "", expired = false) {
+  const value = String(status || "").trim() || "pending";
+  return expired && !["revoked", "superseded"].includes(value) ? "expired" : value;
+}
+
 export function cleanDesktopSlug(value) {
   return String(value || "")
     .trim()
@@ -39,12 +44,12 @@ export function desktopShareLineageId(share = {}) {
 export function normalizeDesktopShareAttempt(attempt = {}, now = Date.now()) {
   const expiresAt = String(attempt.expiresAt || "").trim();
   const expired = Date.parse(expiresAt || "") <= now;
-  const status = String(attempt.status || (attempt.approvedAt ? "approved" : "pending")).trim() || "pending";
+  const status = expireStatus(attempt.status || (attempt.approvedAt ? "approved" : "pending"), expired);
   return {
     id: String(attempt.id || desktopShareRandomToken(10)).trim(),
     tokenHash: String(attempt.tokenHash || "").trim(),
     challenge: String(attempt.challenge || "").trim(),
-    status: status === "pending" && expired ? "expired" : status,
+    status,
     createdAt: String(attempt.createdAt || "").trim() || desktopShareNowIso(),
     expiresAt,
     openedAt: String(attempt.openedAt || "").trim() || null,
@@ -58,7 +63,7 @@ export function normalizeDesktopShareAttempt(attempt = {}, now = Date.now()) {
 export function normalizeDesktopShare(share = {}, now = Date.now()) {
   const expiresAt = String(share.expiresAt || "").trim();
   const expired = Date.parse(expiresAt || "") <= now;
-  const status = String(share.status || "pending").trim() || "pending";
+  const status = expireStatus(share.status || "pending", expired);
   return {
     id: String(share.id || "").trim(),
     desktopSlug: cleanDesktopSlug(share.desktopSlug || share.slug),
@@ -78,7 +83,7 @@ export function normalizeDesktopShare(share = {}, now = Date.now()) {
     breakGlassReason: String(share.breakGlassReason || "").trim() || null,
     subdomain: String(share.subdomain || "").trim().toLowerCase(),
     keyHash: String(share.keyHash || "").trim(),
-    status: status === "pending" && expired ? "expired" : status,
+    status,
     createdAt: String(share.createdAt || "").trim() || desktopShareNowIso(),
     expiresAt,
     supersededAt: String(share.supersededAt || "").trim() || null,
