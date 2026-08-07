@@ -12,6 +12,7 @@ const threadResourceInvalidationSubjects = new Set(["resource", "session_share",
 const threadResourceInvalidationReasons = new Set(["revoked", "generation_advanced", "grant_replaced", "listener_revoked", "policy_stale"]);
 const mailboxDeliveryStates = new Set(["pending", "claimed", "delivered", "revoked", "quarantined", "dead-letter"]);
 const breakGlassOutcomes = new Set(["allowed", "denied", "blocked"]);
+const shadowBoundaryWarningOutcomes = new Set(["emitted", "deduplicated", "failed"]);
 const counters = new Map();
 const histograms = new Map();
 const startedAt = Date.now();
@@ -223,6 +224,13 @@ export function recordThreadResourceBreakGlassMetric({ resourceType = "unknown",
   incrementCounter("orkestr_thread_resource_break_glass_total", {
     resource_type: enumLabel(resourceType, threadResourceTypes),
     outcome: enumLabel(outcome, breakGlassOutcomes),
+  });
+}
+
+export function recordShadowBoundaryChatWarningMetric({ resourceType = "unknown", outcome = "emitted" } = {}) {
+  incrementCounter("orkestr_shadow_boundary_chat_warnings_total", {
+    resource_type: enumLabel(resourceType, threadResourceTypes),
+    outcome: enumLabel(outcome, shadowBoundaryWarningOutcomes),
   });
 }
 

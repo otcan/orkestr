@@ -850,6 +850,7 @@ async function runSkillAction(args = {}, principal = {}, thread = null, env = pr
       env,
       args,
       principal,
+      threadId: clean(thread?.id),
       action: `skill.${skill.id}.${action}`,
     });
     if (!resolved.ok) {
@@ -1808,6 +1809,7 @@ export async function runTenantApiAgentTool(name = "", args = {}, context = {}, 
         env,
         args,
         principal,
+        threadId: clean(thread?.id),
         action: "skill.desktop.operate",
       }) : { ok: false, error: "skill_not_found" };
       if (!resolved.ok) {
@@ -1831,6 +1833,7 @@ export async function runTenantApiAgentTool(name = "", args = {}, context = {}, 
         env,
         args: { ...args, target: slug },
         principal,
+        threadId: clean(thread?.id),
         action: "desktop.operate",
       });
       if (!resolved.ok) {

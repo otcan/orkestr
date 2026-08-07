@@ -54,6 +54,8 @@ ORKESTR_METRICS_QUEUE_TAIL_LIMIT=500
   message counts.
 - `orkestr_task_agent_lifecycle_total`: task-agent lifecycle transitions.
 - `orkestr_watcher_alerts_total`: watcher alert counts by source and code.
+- `orkestr_shadow_boundary_chat_warnings_total`: opted-in shadow target warning
+  outcomes by resource type. It never labels a thread, target, or chat.
 
 Routes and labels intentionally avoid thread IDs, chat IDs, account IDs,
 desktop slugs, hostnames, and personal names.

@@ -531,6 +531,17 @@ export async function appendThreadMessage(threadId, input, env = process.env) {
           );
       if (duplicate) return { ...duplicate, duplicate: true, duplicateReason: "client_message_id" };
     }
+    if (role === "assistant" && input.dedupeAssistantByIdempotencyKey === true && clientMessageId) {
+      const candidate = sqlite
+        ? await messageRepository.find(thread.id, { clientMessageId, role: "assistant" })
+        : [...messages].reverse().find((existing) =>
+            existing.role === "assistant" &&
+            existing.source === source &&
+            clientInputIdempotencyKey(existing) === clientMessageId
+          );
+      const duplicate = candidate && candidate.source === source ? candidate : null;
+      if (duplicate) return { ...duplicate, duplicate: true, duplicateReason: "assistant_idempotency_key" };
+    }
     const externalId = String(input.externalId || "").trim();
     if (role === "user" && externalId && whatsappOrigin({ ...input, role, source })) {
       const candidate = sqlite
@@ -580,6 +591,16 @@ export async function appendThreadMessage(threadId, input, env = process.env) {
       nextMessage.securityClassification = {
         malicious: input.securityClassification.malicious === true,
         reason: String(input.securityClassification.reason || "").trim(),
+      };
+    }
+    if (input.shadowBoundaryWarning && typeof input.shadowBoundaryWarning === "object" && !Array.isArray(input.shadowBoundaryWarning)) {
+      nextMessage.shadowBoundaryWarning = {
+        eligible: input.shadowBoundaryWarning.eligible === true,
+        emitted: input.shadowBoundaryWarning.emitted === true,
+        resourceType: String(input.shadowBoundaryWarning.resourceType || "").trim().toLowerCase(),
+        mode: String(input.shadowBoundaryWarning.mode || "").trim().toLowerCase(),
+        reason: String(input.shadowBoundaryWarning.reason || "").trim().toLowerCase(),
+        notificationId: String(input.shadowBoundaryWarning.notificationId || "").trim(),
       };
     }
     nextMessage = normalizeNoReplyAssistantMessage(nextMessage);
