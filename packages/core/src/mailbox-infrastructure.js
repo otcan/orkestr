@@ -54,7 +54,7 @@ export function mailboxInfrastructureStatus(input = {}, env = process.env) {
   const adapter = safeToken(env.ORKESTR_MAILBOX_MTA_ADAPTER || env.ORKESTR_MAILBOX_INGEST_ADAPTER, "");
   const propagation = safeToken(env.ORKESTR_MAILBOX_MTA_PROPAGATION || env.ORKESTR_MAILBOX_RECIPIENT_PROPAGATION, adapter ? "configured" : "");
   const readyFlag = truthy(env.ORKESTR_MAILBOX_MTA_READY || env.ORKESTR_MAILBOX_INBOUND_READY);
-  const ready = !reservedDomainBlocked && (!requireReady || (readyFlag && adapter));
+  const ready = Boolean(!reservedDomainBlocked && (!requireReady || (readyFlag && adapter)));
   const reason = ready
     ? ""
     : reservedDomainBlocked

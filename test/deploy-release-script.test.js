@@ -114,6 +114,7 @@ test("release deploy script exposes versioned install, status, and rollback", as
   assert.match(script, /restart_and_verify_mailbox_mta/);
   assert.match(script, /orkestr-mailbox-postfix/);
   assert.match(script, /orkestr-mailbox-postfix\.mjs" probe/);
+  assert.match(script, /while \[ "\$attempt" -le 40 \]/);
   assert.match(script, /deploy-connectors-release\.sh/);
   assert.match(script, /Standalone connector release already matches active Orkestr revision/);
   assert.match(script, /ORKESTR_CONNECTORS_EXPECTED_REVISION="\$expected_revision" \\\s+bash "\$script" --activate --source "\$release_dir"/);

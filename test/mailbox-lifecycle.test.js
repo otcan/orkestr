@@ -103,6 +103,7 @@ test("production mailbox creation fails closed until MTA readiness is explicit",
     ORKESTR_MAILBOX_MTA_PROPAGATION: "recipient-map",
     ORKESTR_MAILBOX_MTA_REVISION: "rev-001",
   });
+  assert.equal(mailboxInfrastructureStatus({}, ready).ready, true);
   const mailbox = await createMailbox({ ownerUserId: "owner", purpose: "prod", suffix: "ready" }, ready);
   assert.equal(mailbox.lifecycle.propagationState, "complete");
   assert.equal(mailbox.lifecycle.mtaRevision, "rev-001");

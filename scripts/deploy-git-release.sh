@@ -1215,7 +1215,7 @@ restart_and_verify_public_service() {
 }
 
 restart_and_verify_mailbox_mta() {
-  local enabled mailbox_service mailbox_unit working_directory
+  local enabled mailbox_service mailbox_unit working_directory attempt
   enabled="$sync_mailbox_mta"
   if [ "$enabled" != "1" ]; then
     echo "Mailbox MTA release sync disabled."
@@ -1238,6 +1238,15 @@ restart_and_verify_mailbox_mta() {
   fi
   systemctl restart "$mailbox_unit" || return $?
   systemctl is-active --quiet "$mailbox_unit" || return $?
+  attempt=1
+  while [ "$attempt" -le 40 ]; do
+    if node "$current_link/scripts/orkestr-mailbox-postfix.mjs" probe >/dev/null 2>&1; then
+      echo "Mailbox MTA recipient map ready: $mailbox_unit."
+      return 0
+    fi
+    sleep 0.25
+    attempt="$((attempt + 1))"
+  done
   node "$current_link/scripts/orkestr-mailbox-postfix.mjs" probe || return $?
   echo "Mailbox MTA recipient map ready: $mailbox_unit."
 }
