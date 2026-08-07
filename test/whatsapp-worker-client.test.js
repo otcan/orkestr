@@ -4,7 +4,7 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { whatsappWorkerConfig, whatsappWorkerHealth } from "../packages/connectors/src/whatsapp-worker-client.js";
+import { whatsappWorkerConfig, whatsappWorkerHealth, whatsappWorkerSend } from "../packages/connectors/src/whatsapp-worker-client.js";
 
 async function closeServer(server, sockets = new Set()) {
   for (const socket of sockets) socket.destroy();
@@ -13,9 +13,18 @@ async function closeServer(server, sockets = new Set()) {
   });
 }
 
-test("whatsapp worker config caps health request timeout at five seconds", () => {
-  assert.equal(whatsappWorkerConfig({ ORKESTR_WA_WORKER_TIMEOUT_MS: "60000" }).timeoutMs, 5000);
-  assert.equal(whatsappWorkerConfig({ ORKESTR_WA_WORKER_TIMEOUT_MS: "20" }).timeoutMs, 500);
+test("whatsapp worker config keeps health timeout separate from operations", () => {
+  const long = whatsappWorkerConfig({ ORKESTR_WA_WORKER_TIMEOUT_MS: "60000" });
+  assert.equal(long.operationTimeoutMs, 60000);
+  assert.equal(long.timeoutMs, 60000);
+  assert.equal(long.healthTimeoutMs, 5000);
+
+  const explicitHealth = whatsappWorkerConfig({
+    ORKESTR_WA_WORKER_TIMEOUT_MS: "60000",
+    ORKESTR_WA_WORKER_HEALTH_TIMEOUT_MS: "50",
+  });
+  assert.equal(explicitHealth.operationTimeoutMs, 60000);
+  assert.equal(explicitHealth.healthTimeoutMs, 50);
 });
 
 test("whatsapp worker health returns 503 for ok false payloads", async () => {
@@ -68,5 +77,70 @@ test("whatsapp worker health times out stalled unix sockets with 503", async () 
     assert.equal(Date.now() - started < 1000, true);
   } finally {
     await closeServer(server, sockets);
+  }
+});
+
+test("whatsapp worker health uses an absolute timeout for trickle responses", async () => {
+  const sockets = new Set();
+  const server = http.createServer((_request, response) => {
+    response.writeHead(200, { "content-type": "application/json" });
+    response.write("{");
+    const interval = setInterval(() => response.write(" "), 5);
+    response.on("close", () => clearInterval(interval));
+  });
+  server.on("connection", (socket) => {
+    sockets.add(socket);
+    socket.on("close", () => sockets.delete(socket));
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  const started = Date.now();
+
+  try {
+    await assert.rejects(
+      () => whatsappWorkerHealth({
+        ORKESTR_WA_WORKER_URL: `http://127.0.0.1:${address.port}`,
+        ORKESTR_WA_WORKER_HEALTH_TIMEOUT_MS: "40",
+      }),
+      (error) => {
+        assert.equal(error.message, "whatsapp_worker_timeout");
+        assert.equal(error.statusCode, 503);
+        return true;
+      },
+    );
+    assert.equal(Date.now() - started < 1000, true);
+  } finally {
+    await closeServer(server, sockets);
+  }
+});
+
+test("whatsapp worker send is not capped by the short health deadline", async () => {
+  const server = http.createServer((request, response) => {
+    if (request.url !== "/send-text") {
+      response.writeHead(404, { "content-type": "application/json" });
+      response.end(JSON.stringify({ ok: false, error: "missing" }));
+      return;
+    }
+    setTimeout(() => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ ok: true, messageId: "sent-after-health-deadline" }));
+    }, 80);
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+
+  try {
+    const result = await whatsappWorkerSend({
+      accountId: "sender",
+      conversationId: "chat@g.us",
+      text: "hello",
+    }, {
+      ORKESTR_WA_WORKER_URL: `http://127.0.0.1:${address.port}`,
+      ORKESTR_WA_WORKER_HEALTH_TIMEOUT_MS: "20",
+      ORKESTR_WA_WORKER_TIMEOUT_MS: "500",
+    });
+    assert.equal(result.messageId, "sent-after-health-deadline");
+  } finally {
+    await closeServer(server);
   }
 });

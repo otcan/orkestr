@@ -2,6 +2,7 @@ import { deliverPendingThreadInputs } from "./runtime-leases.js";
 import { recordRouterTraceEvent } from "./router-traces.js";
 import { phaseSet } from "./router-doctor-trace-rules.js";
 import { updateThreadMessage } from "./threads.js";
+import { abortable, throwIfAborted } from "./router-doctor-abort.js";
 
 function clean(value = "") {
   return String(value || "").trim();
@@ -87,14 +88,16 @@ export function runtimeDeliveryMissingAssistantIssue({
   });
 }
 
-export async function repairRuntimeDeliveryMissingAssistant(item = {}, { env, thread } = {}) {
-  const updated = await updateThreadMessage(thread.id, item.messageId, {
+export async function repairRuntimeDeliveryMissingAssistant(item = {}, { env, thread, signal } = {}) {
+  throwIfAborted(signal);
+  const updated = await abortable(updateThreadMessage(thread.id, item.messageId, {
     state: "queued",
     deliveryState: "retrying_delivery",
     error: "router_doctor_requeued_missing_assistant",
     deliveryNextAttemptAt: null,
-  }, env);
-  await recordRouterTraceEvent({
+  }, env), signal);
+  throwIfAborted(signal);
+  await abortable(recordRouterTraceEvent({
     routerTraceId: item.routerTraceId,
     connector: "whatsapp",
     threadId: thread.id,
@@ -102,7 +105,8 @@ export async function repairRuntimeDeliveryMissingAssistant(item = {}, { env, th
     phase: "queued",
     reason: "router_doctor_requeued_missing_assistant",
     terminal: false,
-  }, env).catch(() => null);
-  const delivered = await deliverPendingThreadInputs(thread.id, env, { processApiAgent: true });
+  }, env).catch(() => null), signal);
+  throwIfAborted(signal);
+  const delivered = await abortable(deliverPendingThreadInputs(thread.id, env, { processApiAgent: true }), signal);
   return { code: "requeue_runtime_delivery_without_assistant", ok: true, threadId: thread.id, messageId: item.messageId, state: updated?.state || "", delivered };
 }

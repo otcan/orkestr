@@ -1,11 +1,13 @@
 import { appendEvent } from "../../storage/src/store.js";
-import { deliverPendingThreadInputs, runtimeStatus, wakeThread } from "./runtime-leases.js";
-import { getThread, listThreadMessages, listThreads, updateThreadMessage } from "./threads.js";
-import { listRouterOutbox, listRouterTraces, recordRouterTraceEvent } from "./router-traces.js";
-import { backfillRouterTracePhases } from "./router-trace-backfill.js";
-import { inferredRuntimeBackfillPhases, phaseSet, phaseTime, requiredTracePhases, traceHasRuntimeReplyEvidence, traceShortCircuitedBeforeRuntime } from "./router-doctor-trace-rules.js";
-import { queueNoticeWithoutRuntimeDelivery, repairRuntimeDeliveryMissingAssistant, runtimeDeliveryMissingAssistantIssue } from "./router-doctor-message-recovery.js";
-import { orphanedWhatsAppFinalAnswerIssues, repairOrphanedWhatsAppFinalAnswer } from "./router-doctor-whatsapp-final-mirror.js";
+import { runtimeStatus } from "./runtime-leases.js";
+import { getThread, listThreadMessages, listThreads } from "./threads.js";
+import { listRouterOutbox, listRouterTraces } from "./router-traces.js";
+import { phaseSet, phaseTime, requiredTracePhases, traceShortCircuitedBeforeRuntime } from "./router-doctor-trace-rules.js";
+import { boundedResult, buildMessageIndex, buildTraceIndex, scopedMessageIdsForTraces, timeoutMs } from "./router-doctor-indexes.js";
+import { queueNoticeWithoutRuntimeDelivery, runtimeDeliveryMissingAssistantIssue } from "./router-doctor-message-recovery.js";
+import { orphanedWhatsAppFinalAnswerIssues } from "./router-doctor-whatsapp-final-mirror.js";
+import { abortable, throwIfAborted } from "./router-doctor-abort.js";
+import { repairIssue } from "./router-doctor-repairs.js";
 function clean(value = "") {
   return String(value || "").trim();
 }
@@ -45,24 +47,6 @@ function issue(code, severity, summary, detail = {}) {
     summary,
     ...detail,
   };
-}
-
-function timeoutMs(value, fallback = 5_000, max = 5_000) {
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
-  return Math.min(max, Math.floor(parsed));
-}
-
-function boundedResult(promise, ms = 5_000, fallback = {}) {
-  let timer = null;
-  return Promise.race([
-    Promise.resolve(promise),
-    new Promise((resolve) => {
-      timer = setTimeout(() => resolve(fallback), ms);
-    }),
-  ]).finally(() => {
-    if (timer) clearTimeout(timer);
-  });
 }
 
 function whatsappMessage(message = {}) {
@@ -106,50 +90,6 @@ function messageRuntimeDeliveryEvidence(message = {}) {
   return false;
 }
 
-function inferredMessageRuntimeBackfillPhases(trace = {}, message = {}, missingPhases = []) {
-  const missing = new Set((Array.isArray(missingPhases) ? missingPhases : []).map(lower));
-  const phases = phaseSet(trace);
-  const additions = [];
-  const queuedMs = phaseTime(trace, "queued") || phaseTime(trace, "routed") || phaseTime(trace, "received") || dateMs(trace.createdAt);
-  const deliveredMs = dateMs(message.deliveredAt || message.deliveryLastAttemptAt || message.updatedAt) || dateMs(trace.updatedAt) || Date.now();
-  const startMs = queuedMs && queuedMs < deliveredMs ? Math.max(queuedMs + 1, deliveredMs - 2) : Math.max(1, deliveredMs - 2);
-  const reason = `router_doctor_inferred_from_${lower(message.observedVia) || "message_delivery"}`.slice(0, 200);
-  if (missing.has("delivery_started") && !phases.has("delivery_started")) {
-    additions.push({ phase: "delivery_started", ts: new Date(startMs).toISOString(), reason });
-  }
-  if (missing.has("delivered_to_runtime") && !phases.has("delivered_to_runtime")) {
-    additions.push({ phase: "delivered_to_runtime", ts: new Date(Math.max(startMs + 1, deliveredMs)).toISOString(), reason });
-  }
-  return additions;
-}
-
-function deliveredAssistantMessage(message = {}) {
-  if (message.role !== "assistant") return false;
-  if (lower(message.deliveryState) === "failed") return false;
-  return ["completed", "delivered", ""].includes(lower(message.state)) ||
-    ["completed", "delivered", ""].includes(lower(message.deliveryState));
-}
-
-function buildTraceIndex(traces = []) {
-  const byTraceId = new Map();
-  const byMessageId = new Map();
-  for (const trace of Array.isArray(traces) ? traces : []) {
-    const routerTraceId = clean(trace.routerTraceId);
-    const messageId = clean(trace.messageId);
-    if (routerTraceId && !byTraceId.has(routerTraceId)) byTraceId.set(routerTraceId, trace);
-    if (messageId && !byMessageId.has(messageId)) byMessageId.set(messageId, trace);
-  }
-  return {
-    byTraceId,
-    byMessageId,
-    forMessage(message = {}) {
-      const routerTraceId = clean(message.routerTraceId);
-      if (routerTraceId && byTraceId.has(routerTraceId)) return byTraceId.get(routerTraceId);
-      return byMessageId.get(clean(message.id)) || null;
-    },
-  };
-}
-
 function accountIdForThread(thread = {}) {
   const binding = thread.binding && typeof thread.binding === "object" ? thread.binding : {};
   return clean(
@@ -184,165 +124,16 @@ function accountMatchesId(account = {}, id = "") {
   return candidates.includes(clean(id)) || candidates.includes(`whatsapp:${clean(id)}`);
 }
 
-function chatKey(message = {}) {
-  return clean(message.chatId);
-}
-
-function assistantForUser({ byChat = new Map(), blank = null, any = null } = {}, userMessage = {}) {
-  const key = chatKey(userMessage);
-  if (!key) return any || null;
-  return byChat.get(key) || blank || null;
-}
-
-function newerWhatsAppUserFromState({ byChat = new Map(), blank = null, any = null } = {}, userMessage = {}) {
-  const key = chatKey(userMessage);
-  if (!key) return any || null;
-  return byChat.get(key) || blank || null;
-}
-
-function buildMessageIndex(messages = [], whatsappMessageFn = whatsappMessage) {
-  const newerAssistantById = new Map();
-  const olderAssistantById = new Map();
-  const newerWhatsAppUserById = new Map();
-  let laterAssistant = { byChat: new Map(), blank: null, any: null };
-  let laterUser = { byChat: new Map(), blank: null, any: null };
-  for (let index = (Array.isArray(messages) ? messages.length : 0) - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    newerAssistantById.set(clean(message.id), assistantForUser(laterAssistant, message));
-    newerWhatsAppUserById.set(clean(message.id), newerWhatsAppUserFromState(laterUser, message));
-    if (deliveredAssistantMessage(message)) {
-      laterAssistant.any = message;
-      const key = chatKey(message);
-      if (key) laterAssistant.byChat.set(key, message);
-      else laterAssistant.blank = message;
-    }
-    if (message?.role === "user" && (typeof whatsappMessageFn !== "function" || whatsappMessageFn(message))) {
-      laterUser.any = message;
-      const key = chatKey(message);
-      if (key) laterUser.byChat.set(key, message);
-      else laterUser.blank = message;
-    }
-  }
-
-  let priorAssistant = { byChat: new Map(), blank: null, any: null };
-  for (const message of Array.isArray(messages) ? messages : []) {
-    olderAssistantById.set(clean(message.id), assistantForUser(priorAssistant, message));
-    if (deliveredAssistantMessage(message)) {
-      priorAssistant.any = message;
-      const key = chatKey(message);
-      if (key) priorAssistant.byChat.set(key, message);
-      else priorAssistant.blank = message;
-    }
-  }
-
-  return {
-    newerAssistant(message = {}) {
-      return newerAssistantById.get(clean(message.id)) || null;
-    },
-    olderAssistant(message = {}) {
-      return olderAssistantById.get(clean(message.id)) || null;
-    },
-    newerWhatsAppUser(message = {}) {
-      return newerWhatsAppUserById.get(clean(message.id)) || null;
-    },
-  };
-}
-
-function scopedMessageIdsForTraces(traces = []) {
-  return new Set((Array.isArray(traces) ? traces : []).flatMap((trace) => [clean(trace.messageId)]).filter(Boolean));
-}
-
 function runtimeReady(status = {}) {
   if (status.working === true) return false;
   if (["working", "running", "busy"].includes(lower(status.state))) return false;
   return lower(status.state) === "ready" || status.promptReady === true || status.ready === true;
 }
 
-async function repairIssue(item = {}, context = {}) {
-  const { env, thread, repairSafe, releaseConnectorOutboxClaimFn, ensureConnectorOutboxJobFn } = context;
-  if (item.code === "sleeping_thread_has_queued_whatsapp_input") {
-    const result = await wakeThread(thread.id, { reason: "router_doctor_whatsapp_repair" }, env);
-    return { code: "wake_thread", ok: true, threadId: thread.id, messageId: item.messageId, status: result.status || null };
-  }
-  if (item.code === "stale_queued_whatsapp_input_ready_runtime") {
-    let requeued = false;
-    if (lower(item.messageState) !== "awaiting_ack") {
-      await updateThreadMessage(thread.id, item.messageId, {
-        state: "queued",
-        deliveryState: "retrying_delivery",
-        error: null,
-        deliveryNextAttemptAt: null,
-      }, env);
-      requeued = true;
-    }
-    const delivered = await deliverPendingThreadInputs(thread.id, env, { processApiAgent: true });
-    return { code: "retry_runtime_delivery", ok: true, threadId: thread.id, messageId: item.messageId, requeued, delivered };
-  }
-  if (item.code === "stale_outbox_claim") {
-    const released = typeof releaseConnectorOutboxClaimFn === "function"
-      ? await releaseConnectorOutboxClaimFn(item.outboxJobId, { reason: "router_doctor_stale_claim" }, env)
-      : null;
-    return { code: "release_stale_outbox_claim", ok: Boolean(released), outboxJobId: item.outboxJobId, state: released?.state || "" };
-  }
-  if (item.code === "orphaned_whatsapp_final_answer" && repairSafe !== false) {
-    return repairOrphanedWhatsAppFinalAnswer(item, {
-      ...context,
-      ensureConnectorOutboxJobFn,
-      accountIdForThreadFn: accountIdForThread,
-    });
-  }
-  if (item.code === "queued_whatsapp_input_marked_terminal_without_runtime_delivery" && repairSafe !== false) {
-    const updated = await updateThreadMessage(thread.id, item.messageId, {
-      state: "queued",
-      deliveryState: "retrying_delivery",
-      error: "router_doctor_requeued_missing_runtime_delivery",
-    }, env);
-    await recordRouterTraceEvent({
-      routerTraceId: item.routerTraceId,
-      connector: "whatsapp",
-      threadId: thread.id,
-      messageId: item.messageId,
-      phase: "queued",
-      reason: "router_doctor_requeued_missing_runtime_delivery",
-      terminal: false,
-    }, env).catch(() => null);
-    return { code: "requeue_swallowed_input", ok: true, threadId: thread.id, messageId: item.messageId, state: updated?.state || "" };
-  }
-  if (item.code === "runtime_delivery_completed_without_assistant" && repairSafe !== false) {
-    return repairRuntimeDeliveryMissingAssistant(item, { env, thread });
-  }
-  if (item.code === "missing_router_trace_phase" && repairSafe !== false) {
-    const routerTraceId = clean(item.routerTraceId);
-    if (!routerTraceId) return null;
-    const trace = (await listRouterTraces({ routerTraceId, connector: "whatsapp" }, env))[0] || null;
-    if (!trace || traceShortCircuitedBeforeRuntime(trace)) return null;
-    const message = (Array.isArray(context.messages) ? context.messages : []).find((entry) => clean(entry.id) === clean(item.messageId || trace.messageId)) || {};
-    const additions = traceHasRuntimeReplyEvidence(trace)
-      ? inferredRuntimeBackfillPhases(trace, item.missingPhases)
-      : inferredMessageRuntimeBackfillPhases(trace, message, item.missingPhases);
-    if (!additions.length) return null;
-    const result = await backfillRouterTracePhases({
-      routerTraceId,
-      phases: additions,
-      reason: "router_doctor_backfill_missing_runtime_delivery",
-    }, env);
-    const added = Array.isArray(result?.addedPhases) ? result.addedPhases.map((phase) => phase.phase) : [];
-    if (!added.length) return null;
-    return {
-      code: "backfill_router_trace_phases",
-      ok: true,
-      threadId: thread.id,
-      messageId: item.messageId || trace.messageId || "",
-      routerTraceId,
-      phases: added,
-      currentPhase: result?.trace?.currentPhase || trace.currentPhase || "",
-    };
-  }
-  return null;
-}
-
 async function inspectThread(thread, options = {}) {
   const env = options.env || process.env;
+  const signal = options.signal || null;
+  throwIfAborted(signal);
   const repair = options.repair === true;
   const repairSafe = options.repairSafe !== false;
   const listConnectorOutboxJobsFn = typeof options.listConnectorOutboxJobsFn === "function" ? options.listConnectorOutboxJobsFn : null;
@@ -350,8 +141,8 @@ async function inspectThread(thread, options = {}) {
   const ensureConnectorOutboxJobFn = typeof options.ensureConnectorOutboxJobFn === "function" ? options.ensureConnectorOutboxJobFn : null;
   const thresholdMs = Number(options.staleMs || 0) || staleQueueMs(env);
   const routerTraceId = clean(options.routerTraceId || options.trace || "");
-  const messages = await listThreadMessages(thread.id, env);
-  const allTraces = await listRouterTraces({ threadId: thread.id, connector: "whatsapp" }, env);
+  const messages = await abortable(listThreadMessages(thread.id, env), signal);
+  const allTraces = await abortable(listRouterTraces({ threadId: thread.id, connector: "whatsapp" }, env), signal);
   const traces = routerTraceId
     ? allTraces.filter((trace) => clean(trace.routerTraceId) === routerTraceId)
     : allTraces;
@@ -365,14 +156,14 @@ async function inspectThread(thread, options = {}) {
     : messages;
   const traceIndex = buildTraceIndex(traces);
   const messageIndex = buildMessageIndex(messages);
-  const status = await Promise.resolve(typeof options.runtimeStatusFn === "function"
+  const status = await abortable(Promise.resolve(typeof options.runtimeStatusFn === "function"
     ? options.runtimeStatusFn(thread, messages, env)
     : runtimeStatus(thread.id, env)
-  ).catch(() => ({ state: thread.state || "unknown" }));
-  const whatsappStatus = await Promise.resolve(typeof options.whatsappStatusFn === "function"
+  ).catch(() => ({ state: thread.state || "unknown" })), signal);
+  const whatsappStatus = await abortable(Promise.resolve(typeof options.whatsappStatusFn === "function"
     ? options.whatsappStatusFn(thread, env)
     : Promise.resolve({ ready: false, state: "unknown" })
-  ).catch((error) => ({ state: "error", error: clean(error?.message || error) }));
+  ).catch((error) => ({ state: "error", error: clean(error?.message || error) })), signal);
   const checks = [];
   const repairs = [];
 
@@ -467,7 +258,7 @@ async function inspectThread(thread, options = {}) {
   }
 
   const connectorOutbox = listConnectorOutboxJobsFn
-    ? await listConnectorOutboxJobsFn({ connector: "whatsapp", threadId: thread.id, limit: 5000 }, env)
+    ? await abortable(listConnectorOutboxJobsFn({ connector: "whatsapp", threadId: thread.id, limit: 5000 }, env), signal)
     : { jobs: [] };
   const connectorOutboxJobs = routerTraceId
     ? (connectorOutbox.jobs || []).filter((job) =>
@@ -499,6 +290,7 @@ async function inspectThread(thread, options = {}) {
 
   if (repair) {
     for (const item of checks) {
+      throwIfAborted(signal);
       const repaired = await repairIssue(item, {
         env,
         thread,
@@ -506,14 +298,19 @@ async function inspectThread(thread, options = {}) {
         repairSafe,
         releaseConnectorOutboxClaimFn,
         ensureConnectorOutboxJobFn,
-      }).catch((error) => ({
-        code: "repair_failed",
-        ok: false,
-        issueCode: item.code,
-        threadId: thread.id,
-        messageId: item.messageId || "",
-        error: clean(error?.message || error),
-      }));
+        accountIdForThreadFn: accountIdForThread,
+        signal,
+      }).catch((error) => {
+        if (error?.name === "AbortError") throw error;
+        return {
+          code: "repair_failed",
+          ok: false,
+          issueCode: item.code,
+          threadId: thread.id,
+          messageId: item.messageId || "",
+          error: clean(error?.message || error),
+        };
+      });
       if (repaired) repairs.push(repaired);
     }
   }
@@ -529,14 +326,29 @@ async function inspectThread(thread, options = {}) {
   };
 }
 
+export function routerDoctorRunEvent(payload = {}, options = {}) {
+  return {
+    type: "router_doctor_whatsapp_run",
+    status: clean(payload.status),
+    repair: payload.repair === true,
+    threadId: clean(options.threadSelector || options.threadId || ""),
+    routerTraceId: clean(options.routerTraceId || ""),
+    errors: Number(payload.counts?.errors || 0),
+    warnings: Number(payload.counts?.warnings || 0),
+    repairs: Number(payload.counts?.repairs || 0),
+  };
+}
+
 export async function doctorWhatsAppRouter(options = {}) {
   const env = options.env || process.env;
+  const signal = options.signal || null;
+  throwIfAborted(signal);
   const repair = options.repair === true;
   const threadSelector = clean(options.threadId || options.thread || "");
   const routerTraceId = clean(options.routerTraceId || options.trace || "");
   let threads = [];
   if (threadSelector) {
-    const thread = await getThread(threadSelector, env);
+    const thread = await abortable(getThread(threadSelector, env), signal);
     if (!thread) {
       const error = new Error("thread_not_found");
       error.statusCode = 404;
@@ -544,11 +356,11 @@ export async function doctorWhatsAppRouter(options = {}) {
     }
     threads = [thread];
   } else if (routerTraceId) {
-    const traces = await listRouterTraces({ routerTraceId, connector: "whatsapp" }, env);
+    const traces = await abortable(listRouterTraces({ routerTraceId, connector: "whatsapp" }, env), signal);
     const threadIds = [...new Set(traces.map((trace) => clean(trace.threadId)).filter(Boolean))];
-    threads = (await Promise.all(threadIds.map((id) => getThread(id, env)))).filter(Boolean);
+    threads = (await abortable(Promise.all(threadIds.map((id) => getThread(id, env))), signal)).filter(Boolean);
   } else {
-    threads = (await listThreads(env)).filter((thread) => lower(thread.binding?.connector || "") === "whatsapp");
+    threads = (await abortable(listThreads(env), signal)).filter((thread) => lower(thread.binding?.connector || "") === "whatsapp");
   }
 
   const statusTimeout = timeoutMs(options.whatsappStatusTimeoutMs || env.ORKESTR_ROUTER_DOCTOR_WHATSAPP_STATUS_TIMEOUT_MS, 5_000, 5_000);
@@ -566,10 +378,11 @@ export async function doctorWhatsAppRouter(options = {}) {
 
   const threadReports = [];
   for (const thread of threads) {
+    throwIfAborted(signal);
     threadReports.push(await inspectThread(thread, { ...options, env, repair, whatsappStatusFn: sharedWhatsAppStatusFn }));
   }
 
-  const routerOutbox = routerTraceId ? await listRouterOutbox({ routerTraceId }, env) : [];
+  const routerOutbox = routerTraceId ? await abortable(listRouterOutbox({ routerTraceId }, env), signal) : [];
   const checks = threadReports.flatMap((report) => report.checks);
   const repairs = threadReports.flatMap((report) => report.repairs);
   const errors = checks.filter((item) => item.severity === "error").length;
@@ -590,15 +403,9 @@ export async function doctorWhatsAppRouter(options = {}) {
     threads: threadReports,
     ...(routerTraceId ? { routerTraceId, routerOutbox } : {}),
   };
-  await appendEvent({
-    type: "router_doctor_whatsapp_run",
-    status: payload.status,
-    repair,
-    threadId: threadSelector,
-    routerTraceId,
-    errors,
-    warnings,
-    repairs: repairs.length,
-  }, env).catch(() => null);
+  throwIfAborted(signal);
+  if (options.recordRunEvent !== false) {
+    await abortable(appendEvent(routerDoctorRunEvent(payload, { threadSelector, routerTraceId }), env).catch(() => null), signal);
+  }
   return payload;
 }
