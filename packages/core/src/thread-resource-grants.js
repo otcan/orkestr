@@ -3,7 +3,17 @@ import { appendEvent } from "../../storage/src/store.js";
 import { canAccessOwner, isAdminPrincipal, policyError, resourceOwnerUserId } from "./policy.js";
 import { getThread } from "./threads.js";
 import { readThreadResourcePolicyState, withThreadResourcePolicyTransaction } from "./thread-resource-policy-store.js";
+import {
+  requireUnifiedThreadResourceWriteMode,
+  threadResourceWriteMode,
+  threadResourceWritePlan,
+} from "./thread-resource-rollout.js";
 import { normalizeUserId } from "./users.js";
+import {
+  recordThreadResourceAccessMetric,
+  recordThreadResourceBreakGlassMetric,
+  recordThreadResourceInvalidationMetric,
+} from "./observability.js";
 
 export const THREAD_RESOURCE_TYPES = Object.freeze({ desktop: "desktop", oxrm: "oxrm", mailbox: "mailbox" });
 export const THREAD_RESOURCE_PERMISSIONS = Object.freeze({
@@ -57,6 +67,12 @@ export function threadResourceAccessMode(resourceType = "", env = process.env) {
   // Desktop remains rollout-safe. New resource types are opt-in until their explicit
   // bindings have been configured, so existing instance-level integrations keep working.
   return type === THREAD_RESOURCE_TYPES.desktop || type === THREAD_RESOURCE_TYPES.oxrm ? "shadow" : "off";
+}
+
+export { threadResourceWriteMode, threadResourceWritePlan } from "./thread-resource-rollout.js";
+
+function requireUnifiedWriteMode(resourceType = "", env = process.env) {
+  return requireUnifiedThreadResourceWriteMode(resourceType, policyError, env);
 }
 
 function normalizeResource(raw = {}, env = process.env) {
@@ -161,6 +177,7 @@ function normalizeState(raw = {}, env = process.env) {
     mailboxListeners: Array.isArray(raw?.mailboxListeners) ? raw.mailboxListeners : [],
     mailboxDeliveries: Array.isArray(raw?.mailboxDeliveries) ? raw.mailboxDeliveries : [],
     mailboxPumpLeases: Array.isArray(raw?.mailboxPumpLeases) ? raw.mailboxPumpLeases : [],
+    policyAuditOutbox: Array.isArray(raw?.policyAuditOutbox) ? raw.policyAuditOutbox : [],
     updatedAt: clean(raw?.updatedAt) || null,
   };
 }
@@ -174,6 +191,21 @@ async function mutateState(env, operation) {
     const state = normalizeState(stored, env);
     const result = operation(state);
     if (result?.noChange === true) return { result: result.result, state, persist: false };
+    if (result?.transactionalAudit) {
+      const audit = result.transactionalAudit;
+      state.policyAuditOutbox = [...(state.policyAuditOutbox || []), {
+        id: randomUUID(),
+        action: clean(audit.action || "thread_resource_policy_mutation"),
+        resourceType: normalizeThreadResourceType(audit.resourceType),
+        outcome: clean(audit.outcome || "allowed"),
+        actorUserId: clean(audit.actorUserId || "system"),
+        reason: clean(audit.reason || "").slice(0, 160),
+        expiresAt: clean(audit.expiresAt || "") || null,
+        policyRevision: state.revision + (result?.skipPolicyEpoch === true ? 0 : 1),
+        state: "pending",
+        createdAt: nowIso(),
+      }].slice(-2000);
+    }
     // Delivery queue bookkeeping is transactional policy-store state, but it
     // must not invalidate grants merely by claiming, retrying, or completing a
     // message. Listener/grant/resource mutations intentionally advance this
@@ -317,7 +349,7 @@ function denial(base, reason, env) {
   return base.mode === "shadow" ? { ...denied, allowed: true, shadowDenied: true } : denied;
 }
 
-export async function authorizeThreadResourceAccess(input = {}, env = process.env) {
+async function evaluateThreadResourceAccess(input = {}, env = process.env) {
   const resourceType = normalizeThreadResourceType(input.resourceType || input.type);
   const mode = threadResourceAccessMode(resourceType, env);
   const principal = input.principal || null;
@@ -388,13 +420,50 @@ export async function authorizeThreadResourceAccess(input = {}, env = process.en
     const expiresAt = new Date(Date.now() + maxMs).toISOString();
     const decision = { ...base, allowed: true, granted: true, breakGlass: true, breakGlassReason: reason, breakGlassChangeRef: changeRef, breakGlassExpiresAt: expiresAt, reason: `${resourceType}_admin_break_glass`, authorizationBinding: { resourceType, resourceId: resource.id, policyRevision: state.revision, grantRevision: 0, resourceGeneration: base.resourceGeneration, expiresAt } };
     // Break-glass is usable only after its immutable audit has been committed.
-    await auditDecision(decision, env, { required: true }); return decision;
+    await recordThreadResourcePolicyAudit({
+      action: "break_glass", resourceType, actorUserId: clean(principal?.userId || "system"),
+      outcome: "allowed", reason, expiresAt,
+    }, env);
+    await auditDecision(decision, env);
+    recordThreadResourceBreakGlassMetric({ resourceType, outcome: "allowed" });
+    return decision;
   }
   const grant = thread ? await effectiveGrant(state, thread, resource, permission, env) : null;
   if (grant) return { ...base, allowed: true, granted: true, grant, grantRevision: grant.revision, reason: grant.inheritedByThreadId ? `${resourceType}_grant_inherited` : `${resourceType}_grant_allowed`, authorizationBinding: { resourceType, resourceId: resource.id, policyRevision: state.revision, grantRevision: grant.revision, resourceGeneration: base.resourceGeneration } };
   const decision = denial(base, threadId ? `${resourceType}_grant_required` : `${resourceType}_thread_scope_required`, env);
   await auditDecision(decision, env);
   return decision;
+}
+
+export async function authorizeThreadResourceAccess(input = {}, env = process.env) {
+  const startedAt = Date.now();
+  try {
+    const decision = await evaluateThreadResourceAccess(input, env);
+    recordThreadResourceAccessMetric({ ...decision, durationMs: Date.now() - startedAt });
+    return decision;
+  } catch (error) {
+    recordThreadResourceAccessMetric({
+      resourceType: input.resourceType || input.type,
+      permission: input.permission || input.action,
+      mode: threadResourceAccessMode(input.resourceType || input.type, env),
+      granted: false,
+      durationMs: Date.now() - startedAt,
+    });
+    throw error;
+  }
+}
+
+export async function recordThreadResourcePolicyAudit(input = {}, env = process.env) {
+  const audit = {
+    action: clean(input.action || "thread_resource_policy_mutation"),
+    resourceType: normalizeThreadResourceType(input.resourceType),
+    outcome: clean(input.outcome || "allowed"),
+    actorUserId: clean(input.actorUserId || "system"),
+    reason: clean(input.reason || "").slice(0, 160),
+    expiresAt: clean(input.expiresAt || "") || null,
+  };
+  const updated = await mutateState(env, () => ({ transactionalAudit: audit, skipPolicyEpoch: true }));
+  return updated.result;
 }
 
 export async function assertThreadResourceAccess(input = {}, env = process.env) {
@@ -454,6 +523,7 @@ export async function registerThreadResource(input = {}, options = {}, env = pro
   const principal = options.principal || input.principal || null;
   const resourceType = normalizeThreadResourceType(input.resourceType || input.type);
   if (!resourceType) throw policyError("thread_resource_type_invalid", 400);
+  const writePlan = requireUnifiedWriteMode(resourceType, env);
   if (!isAdminPrincipal(principal || {})) throw policyError("thread_resource_registration_admin_required", 403);
   const requestedStatus = clean(input.status || "active").toLowerCase();
   if (!["active", "suspended", "retired"].includes(requestedStatus)) throw policyError("thread_resource_status_invalid", 400);
@@ -480,18 +550,25 @@ export async function registerThreadResource(input = {}, options = {}, env = pro
     } : { ...resource, createdAt: timestamp, updatedAt: timestamp, retiredAt: resource.status === "retired" ? (resource.retiredAt || timestamp) : null };
     state.resources = state.resources.filter((item) => !(item.resourceType === resource.resourceType && item.id === resource.id));
     state.resources.push(next);
-    const result = { resource: next };
+    const result = {
+      resource: next,
+      transactionalAudit: {
+        action: "resource_registered", resourceType, actorUserId: clean(principal?.userId || "system"),
+        outcome: "allowed", reason: next.status,
+      },
+    };
     if (idempotencyKey) state.mutations.push({ action, idempotencyKey, result, policyRevision: state.revision + 1, createdAt: timestamp });
     return result;
   });
   if (updated.result.idempotent !== true) await appendEvent({ type: "thread_resource_registered", resourceType, resourceId: updated.result.resource.id, ownerUserId: updated.result.resource.ownerUserId, boundaryId: updated.result.resource.boundaryId, resourceGeneration: updated.result.resource.generation, status: updated.result.resource.status, actorUserId: clean(principal?.userId || "system") }, env).catch(() => undefined);
-  return { ok: true, resource: updated.result.resource, policyRevision: updated.state.revision, idempotent: updated.result.idempotent === true };
+  return { ok: true, resource: updated.result.resource, policyRevision: updated.state.revision, writePlan, idempotent: updated.result.idempotent === true };
 }
 
 export async function setThreadResourceGrants(threadId = "", resourceType = "", entries = [], options = {}, env = process.env) {
   const type = normalizeThreadResourceType(resourceType);
   const principal = options.principal || null;
   if (!type) throw policyError("thread_resource_type_invalid", 400);
+  const writePlan = requireUnifiedWriteMode(type, env);
   if (!isAdminPrincipal(principal || {})) throw policyError("thread_resource_grant_admin_required", 403);
   const thread = await getThread(threadId, env);
   if (!thread) throw policyError("thread_not_found", 404);
@@ -538,28 +615,46 @@ export async function setThreadResourceGrants(threadId = "", resourceType = "", 
     const policy = { threadId: thread.id, resourceType: type, revision: Number(priorPolicy?.revision || 0) + 1, explicitEmpty: created.length === 0, inheritanceMode: priorPolicy?.inheritanceMode === "snapshot_ceiling" ? "snapshot_ceiling" : "explicit", parentSnapshotRevision: priorPolicy?.parentSnapshotRevision || 0, createdAt: priorPolicy?.createdAt || timestamp, updatedAt: timestamp };
     state.policies = state.policies.filter((item) => !(item.threadId === thread.id && item.resourceType === type));
     state.policies.push(policy);
-    const result = { grants: created, policy };
+    const result = {
+      grants: created,
+      policy,
+      transactionalAudit: {
+        action: "grants_replaced", resourceType: type, actorUserId, outcome: "allowed",
+        reason: created.length ? "explicit_grants" : "explicit_empty_policy",
+      },
+    };
     if (idempotencyKey) state.mutations.push({ action: `grants.replace:${thread.id}:${type}`, idempotencyKey, result, policyRevision: state.revision + 1, createdAt: timestamp });
     return result;
   });
   const grants = updated.result.grants || [];
   if (updated.result.idempotent !== true) await appendEvent({ type: "thread_resource_grants_replaced", threadId: thread.id, ownerUserId, actorUserId, resourceType: type, resourceIds: grants.map((grant) => grant.resourceId), policyRevision: updated.state.revision, resourcePolicyRevision: updated.result.policy?.revision || 0, idempotencyKey: clean(options.idempotencyKey || options.requestId) }, env).catch(() => undefined);
-  return { ok: true, mode: threadResourceAccessMode(type, env), policyRevision: updated.state.revision, resourcePolicyRevision: updated.result.policy?.revision || 0, threadId: thread.id, resourceType: type, grants, idempotent: updated.result.idempotent === true };
+  return { ok: true, mode: threadResourceAccessMode(type, env), writePlan, policyRevision: updated.state.revision, resourcePolicyRevision: updated.result.policy?.revision || 0, threadId: thread.id, resourceType: type, grants, idempotent: updated.result.idempotent === true };
 }
 
 export async function advanceThreadResourceGeneration(resourceType = "", resourceKey = "", ownerUserId = "", options = {}, env = process.env) {
   const type = normalizeThreadResourceType(resourceType); const key = safeThreadResourceSegment(resourceKey, ""); const owner = normalizeUserId(ownerUserId || env.ORKESTR_ADMIN_USER_ID || "admin");
   if (!type || !key) throw policyError("thread_resource_not_found", 404);
+  const writePlan = requireUnifiedWriteMode(type, env);
   const candidate = normalizeResource({ resourceType: type, nativeId: options.nativeId || options.resourceNativeId || options.resourceId || key, resourceKey: key, ownerUserId: owner, boundaryId: options.boundaryId || threadResourceBoundaryId(env) }, env);
   const id = candidate.id;
   const updated = await mutateState(env, (state) => {
     let resource = state.resources.find((item) => item.id === id && item.resourceType === type) || null;
     if (!resource && type === "desktop") { resource = candidate; state.resources.push(resource); }
     if (!resource) throw policyError("thread_resource_not_registered", 404);
-    resource.generation += 1; resource.updatedAt = nowIso(); return resource;
+    resource.generation += 1; resource.updatedAt = nowIso();
+    return {
+      resource,
+      transactionalAudit: {
+        action: "resource_generation_advanced", resourceType: type,
+        actorUserId: clean(options.principal?.userId || "system"), outcome: "allowed",
+        reason: clean(options.reason || "resource_runtime_replaced"),
+      },
+    };
   });
-  await appendEvent({ type: "thread_resource_generation_advanced", resourceType: type, resourceId: updated.result.id, resourceKey: updated.result.resourceKey, ownerUserId: updated.result.ownerUserId, boundaryId: updated.result.boundaryId, resourceGeneration: updated.result.generation, reason: clean(options.reason || "resource_runtime_replaced") }, env).catch(() => undefined);
-  return { ok: true, resource: updated.result, policyRevision: updated.state.revision };
+  const resource = updated.result.resource;
+  recordThreadResourceInvalidationMetric({ resourceType: type, subject: type === "desktop" ? "session_share" : "resource" });
+  await appendEvent({ type: "thread_resource_generation_advanced", resourceType: type, resourceId: resource.id, resourceKey: resource.resourceKey, ownerUserId: resource.ownerUserId, boundaryId: resource.boundaryId, resourceGeneration: resource.generation, reason: clean(options.reason || "resource_runtime_replaced") }, env).catch(() => undefined);
+  return { ok: true, resource, writePlan, policyRevision: updated.state.revision };
 }
 
 export async function captureChildThreadResourceCeiling(childThread = {}, env = process.env) {
@@ -611,7 +706,15 @@ export async function captureChildThreadResourceCeiling(childThread = {}, env = 
       state.policies = state.policies.filter((item) => !(item.threadId === childId && item.resourceType === resourceType));
       state.policies.push(policy);
     }
-    return { captured: captured.length };
+    return {
+      captured: captured.length,
+      ...(captured.length ? {
+        transactionalAudit: {
+          action: "child_snapshot_ceiling_captured", actorUserId: "system",
+          outcome: "allowed", reason: "parent_snapshot_ceiling",
+        },
+      } : {}),
+    };
   });
   if (updated.result.captured) await appendEvent({ type: "thread_resource_child_ceiling_captured", threadId: childId, parentThreadId: parentId, captured: updated.result.captured, policyRevision: updated.state.revision }, env).catch(() => undefined);
   return { ok: true, ...updated.result, policyRevision: updated.state.revision };
@@ -620,5 +723,5 @@ export async function captureChildThreadResourceCeiling(childThread = {}, env = 
 export async function threadResourcePolicySummary(threadId = "", principal = null, env = process.env) {
   const state = await readState(env); const grants = threadId ? state.grants.filter((grant) => grant.threadId === clean(threadId) && !grant.revokedAt) : [];
   const policies = threadId ? state.policies.filter((policy) => policy.threadId === clean(threadId)) : [];
-  return { version: state.version, revision: state.revision, threadId: clean(threadId) || null, explicitGrantCount: grants.length, grantsByType: Object.fromEntries(Object.keys(THREAD_RESOURCE_PERMISSIONS).map((type) => [type, grants.filter((grant) => grant.resourceType === type).map((grant) => grant.resourceKey)])), policies: Object.fromEntries(policies.map((policy) => [policy.resourceType, { revision: policy.revision, explicitEmpty: policy.explicitEmpty, inheritanceMode: policy.inheritanceMode, parentSnapshotRevision: policy.parentSnapshotRevision }])), modes: Object.fromEntries(Object.keys(THREAD_RESOURCE_PERMISSIONS).map((type) => [type, threadResourceAccessMode(type, env)])), principalRole: clean(principal?.role) || null };
+  return { version: state.version, revision: state.revision, threadId: clean(threadId) || null, explicitGrantCount: grants.length, grantsByType: Object.fromEntries(Object.keys(THREAD_RESOURCE_PERMISSIONS).map((type) => [type, grants.filter((grant) => grant.resourceType === type).map((grant) => grant.resourceKey)])), policies: Object.fromEntries(policies.map((policy) => [policy.resourceType, { revision: policy.revision, explicitEmpty: policy.explicitEmpty, inheritanceMode: policy.inheritanceMode, parentSnapshotRevision: policy.parentSnapshotRevision }])), modes: Object.fromEntries(Object.keys(THREAD_RESOURCE_PERMISSIONS).map((type) => [type, threadResourceAccessMode(type, env)])), writeModes: Object.fromEntries(Object.keys(THREAD_RESOURCE_PERMISSIONS).map((type) => [type, threadResourceWritePlan(type, env)])), principalRole: clean(principal?.role) || null };
 }

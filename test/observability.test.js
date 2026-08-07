@@ -3,7 +3,11 @@ import test from "node:test";
 import {
   metricsRequestAllowed,
   recordBackgroundLoopMetrics,
+  recordMailboxThreadDeliveryMetrics,
   recordTaskAgentLifecycleMetric,
+  recordThreadResourceAccessMetric,
+  recordThreadResourceBreakGlassMetric,
+  recordThreadResourceInvalidationMetric,
   recordWatcherAlertMetric,
   recordWhatsAppDeliveryMetrics,
   renderOpenMetrics,
@@ -69,6 +73,11 @@ test("observability records loop, delivery, task-agent, and watcher counters", (
   });
   recordTaskAgentLifecycleMetric("result_completed", "completed");
   recordWatcherAlertMetric({ source: "server.runtimeMonitor", code: "runtime_sync_failed", severity: "error" });
+  recordThreadResourceAccessMetric({ resourceType: "mailbox", permission: "subscribe", mode: "shadow", shadowDenied: true, durationMs: 12 });
+  recordThreadResourceInvalidationMetric({ resourceType: "desktop", subject: "share", reason: "Message-ID <person@example.test>" });
+  recordMailboxThreadDeliveryMetrics({ state: "dead-letter", lagMs: 1_000 });
+  recordThreadResourceBreakGlassMetric({ resourceType: "oxrm", outcome: "allowed" });
+  recordThreadResourceAccessMetric({ resourceType: "resource-private-id", permission: "Message-ID <person@example.test>", mode: "untrusted-mode" });
 
   const metrics = renderOpenMetrics();
   assert.match(metrics, /orkestr_background_loop_runs_total\{loop="runtime_sync",result="completed"\} 1/);
@@ -77,4 +86,11 @@ test("observability records loop, delivery, task-agent, and watcher counters", (
   assert.match(metrics, /orkestr_whatsapp_delivery_messages_total\{source="delivery_scheduler",state="sent"\} 2/);
   assert.match(metrics, /orkestr_task_agent_lifecycle_total\{event="result_completed",status="completed"\} 1/);
   assert.match(metrics, /orkestr_watcher_alerts_total\{source="server.runtimemonitor",code="runtime_sync_failed",severity="error"\} 1/);
+  assert.match(metrics, /orkestr_thread_resource_access_decisions_total\{resource_type="mailbox",permission="subscribe",mode="shadow",outcome="shadow_denied"\} 1/);
+  assert.match(metrics, /orkestr_thread_resource_shadow_mismatches_total\{resource_type="mailbox",permission="subscribe"\} 1/);
+  assert.match(metrics, /orkestr_thread_resource_invalidations_total\{resource_type="desktop",subject="share"\} 1/);
+  assert.equal(metrics.includes("person@example.test"), false);
+  assert.match(metrics, /orkestr_mailbox_thread_delivery_transitions_total\{state="dead-letter"\} 1/);
+  assert.match(metrics, /orkestr_thread_resource_break_glass_total\{resource_type="oxrm",outcome="allowed"\} 1/);
+  assert.equal(metrics.includes("resource-private-id"), false);
 });

@@ -3,6 +3,7 @@ import { appendEvent } from "../../storage/src/store.js";
 import { policyError } from "./policy.js";
 import { appendThreadMessage } from "./threads.js";
 import { evaluateMailboxThreadDeliveryShadow } from "./mailbox-thread-delivery-shadow.js";
+import { recordMailboxThreadDeliveryMetrics, recordThreadResourceInvalidationMetric } from "./observability.js";
 import {
   assertThreadResourceAccess,
   authorizeThreadResourceAccess,
@@ -163,7 +164,11 @@ export async function createMailboxThreadListener({ mailbox, threadId, filter = 
       idempotencyKey: clean(idempotencyKey),
     };
     state.mailboxListeners = [...(state.mailboxListeners || []), listener];
-    return { listener, idempotent: false };
+    return {
+      listener,
+      idempotent: false,
+      transactionalAudit: { action: "mailbox_listener_created", resourceType: "mailbox", actorUserId: clean(principal.userId || "system"), outcome: "allowed", reason: "explicit_listener" },
+    };
   }, env);
   if (!result.result.idempotent) await appendEvent({ type: "mailbox_thread_listener_created", mailboxId: mailbox.id, resourceId, threadId, listenerId: result.result.listener.id, listenerGeneration: result.result.listener.generation }, env).catch(() => {});
   return { ok: true, listener: publicListener(result.result.listener), policyRevision: result.state.revision, idempotent: result.result.idempotent };
@@ -198,8 +203,13 @@ export async function revokeMailboxThreadListener({ mailbox, listenerId, princip
     state.mailboxDeliveries = (state.mailboxDeliveries || []).map((delivery) => delivery.listenerId === listener.id && activeDeliveryStates.has(delivery.state)
       ? { ...delivery, state: "revoked", epoch: Number(delivery.epoch || 1) + 1, claimToken: null, claimExpiresAt: null, reason: "mailbox_listener_revoked", updatedAt: timestamp }
       : delivery);
-    return { listener, idempotent: false };
+    return {
+      listener,
+      idempotent: false,
+      transactionalAudit: { action: "mailbox_listener_revoked", resourceType: "mailbox", actorUserId: clean(principal.userId || "system"), outcome: "allowed", reason: listener.reason },
+    };
   }, env);
+  if (!result.result.idempotent) recordThreadResourceInvalidationMetric({ resourceType: "mailbox", subject: "listener" });
   if (!result.result.idempotent) await appendEvent({ type: "mailbox_thread_listener_revoked", mailboxId: mailbox.id, resourceId, threadId: existing.threadId, listenerId: existing.id, listenerGeneration: result.result.listener.generation }, env).catch(() => {});
   return { ok: true, listener: publicListener(result.result.listener), policyRevision: result.state.revision, idempotent: result.result.idempotent };
 }
@@ -243,6 +253,9 @@ export async function enqueueMailboxThreadDeliveries({ mailbox, message, idempot
     state.mailboxDeliveries = [...(state.mailboxDeliveries || []), ...deliveries.filter((item) => !(state.mailboxDeliveries || []).some((existing) => existing.dedupeKey === item.dedupeKey))];
     return { deliveries, queued: deliveries.filter((item) => item.state === "pending").length, unrouted: false, idempotent: deliveries.every((item) => item.createdAt !== timestamp), skipPolicyEpoch: true };
   }, env);
+  for (const delivery of result.result.deliveries || []) {
+    recordMailboxThreadDeliveryMetrics({ state: delivery.state, lagMs: Date.now() - Date.parse(delivery.createdAt || "") });
+  }
   await appendEvent({ type: result.result.unrouted ? "mailbox_thread_delivery_unrouted" : "mailbox_thread_delivery_queued", mailboxId: mailbox.id, resourceId, deliveryCount: result.result.queued, idempotencyKey: messageKey }, env).catch(() => {});
   return { ok: true, deliveryIds: result.result.deliveries.map((item) => item.id), queued: result.result.queued, unrouted: result.result.unrouted, policyRevision: result.state.revision, idempotent: result.result.idempotent };
 }
@@ -438,6 +451,10 @@ export async function dispatchMailboxThreadDeliveries({ deliveryIds = [], limit 
     }
   }
   const deadLetters = results.filter((item) => item.state === "dead-letter").length;
+  for (const item of results) {
+    const delivery = (state.mailboxDeliveries || []).find((candidate) => candidate.id === item.id);
+    recordMailboxThreadDeliveryMetrics({ state: item.state, lagMs: delivery ? Date.now() - Date.parse(delivery.createdAt || "") : 0 });
+  }
   if (deadLetters) await appendEvent({ type: "mailbox_thread_delivery_dead_lettered", deadLetterCount: deadLetters }, env).catch(() => {});
   return { ok: true, results, delivered: results.filter((item) => item.state === "delivered").length, deadLetters };
 }
