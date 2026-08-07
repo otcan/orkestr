@@ -46,8 +46,11 @@ function parseTokenRecords(value = "") {
 
 function normalizeRecord(record = {}) {
   const accountId = clean(record.accountId);
+  const resourceType = clean(record.resourceType || record.resource_type).toLowerCase();
+  const resourceJti = clean(record.jti || record.resourceJti || record.resource_jti);
+  const tokenId = clean(record.id || record.tokenId);
   return {
-    id: clean(record.id || record.tokenId),
+    id: tokenId,
     token: clean(record.token || record.value || record.secret),
     tokenHash: clean(record.tokenHash || record.hash).toLowerCase(),
     scopes: scopeList(record.scopes || record.scope || record.capabilities),
@@ -62,6 +65,17 @@ function normalizeRecord(record = {}) {
     chatId: clean(record.chatId),
     allowedChatIds: list(record.allowedChatIds || record.allowedChats || record.chatIds),
     allowedRecipients: list(record.allowedRecipients || record.allowedRecipientIds || record.recipientIds),
+    resourceType,
+    resourceId: clean(record.resourceId || record.resource_id),
+    resourceActions: scopeList(record.resourceActions || record.allowedResourceActions || record.resource_actions || record.resourceAction),
+    rootThreadId: clean(record.rootThreadId || record.root_thread_id),
+    boundaryId: clean(record.boundaryId || record.boundary_id),
+    policyRevision: Number(record.policyRevision || record.policy_revision || 0),
+    grantRevision: Number(record.grantRevision || record.grant_revision || 0),
+    resourceGeneration: Number(record.resourceGeneration || record.resource_generation || 0),
+    resourceJtiHash: resourceJti ? hash(resourceJti) : clean(record.resourceJtiHash || record.jtiHash || record.jti_hash).toLowerCase(),
+    tokenIdHash: tokenId ? hash(tokenId) : clean(record.tokenIdHash || record.token_id_hash).toLowerCase(),
+    issuedAt: clean(record.issuedAt || record.issued_at),
     expiresAt: clean(record.expiresAt),
     disabled: record.disabled === true || record.enabled === false,
     operator: record.operator === true,
@@ -83,6 +97,18 @@ function publicRecord(record = {}) {
     chatId: record.chatId || "",
     allowedChatIds: record.allowedChatIds || [],
     allowedRecipients: record.allowedRecipients || [],
+    resourceType: record.resourceType || "",
+    resourceId: record.resourceId || "",
+    resourceActions: record.resourceActions || [],
+    rootThreadId: record.rootThreadId || "",
+    boundaryId: record.boundaryId || "",
+    policyRevision: Number(record.policyRevision || 0),
+    grantRevision: Number(record.grantRevision || 0),
+    resourceGeneration: Number(record.resourceGeneration || 0),
+    resourceJtiHash: record.resourceJtiHash || "",
+    tokenIdHash: record.tokenIdHash || "",
+    issuedAt: record.issuedAt || "",
+    expiresAt: record.expiresAt || "",
     operator: record.operator === true,
   };
 }

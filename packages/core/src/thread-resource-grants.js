@@ -177,6 +177,18 @@ function normalizeState(raw = {}, env = process.env) {
     mailboxListeners: Array.isArray(raw?.mailboxListeners) ? raw.mailboxListeners : [],
     mailboxDeliveries: Array.isArray(raw?.mailboxDeliveries) ? raw.mailboxDeliveries : [],
     mailboxPumpLeases: Array.isArray(raw?.mailboxPumpLeases) ? raw.mailboxPumpLeases : [],
+    resourceSessions: (Array.isArray(raw?.resourceSessions) ? raw.resourceSessions : []).map((item) => ({
+      id: clean(item?.id), jtiHash: clean(item?.jtiHash), tokenIdHash: clean(item?.tokenIdHash),
+      resourceType: normalizeThreadResourceType(item?.resourceType), resourceId: clean(item?.resourceId),
+      actions: normalizeThreadResourcePermissions(item?.resourceType, item?.actions),
+      threadId: clean(item?.threadId), rootThreadId: clean(item?.rootThreadId), boundaryId: clean(item?.boundaryId),
+      policyRevision: Math.max(0, Number(item?.policyRevision || 0) || 0), grantRevision: Math.max(0, Number(item?.grantRevision || 0) || 0),
+      resourceGeneration: Math.max(1, Number(item?.resourceGeneration || 1) || 1),
+      state: ["active", "invalidated", "expired"].includes(clean(item?.state).toLowerCase()) ? clean(item.state).toLowerCase() : "invalidated",
+      epoch: Math.max(1, Number(item?.epoch || 1) || 1), issuedAt: clean(item?.issuedAt), expiresAt: clean(item?.expiresAt),
+      lastUsedAt: clean(item?.lastUsedAt) || null, createdAt: clean(item?.createdAt) || nowIso(), updatedAt: clean(item?.updatedAt || item?.createdAt) || nowIso(),
+      invalidatedAt: clean(item?.invalidatedAt) || null, invalidationReason: clean(item?.invalidationReason) || null,
+    })).filter((item) => item.id && item.jtiHash && item.tokenIdHash && item.resourceType && item.resourceId && item.actions.length && item.threadId && item.rootThreadId && item.boundaryId && item.issuedAt && item.expiresAt),
     policyAuditOutbox: (Array.isArray(raw?.policyAuditOutbox) ? raw.policyAuditOutbox : []).map((item) => ({
       ...item,
       state: ["pending", "claimed", "delivered"].includes(clean(item?.state).toLowerCase()) ? clean(item.state).toLowerCase() : "pending",
@@ -218,14 +230,24 @@ async function mutateState(env, operation) {
       state.policyAuditOutbox = [...(state.policyAuditOutbox || []), record];
       auditOutboxUpserts.push(record);
     }
-    // Delivery queue bookkeeping is transactional policy-store state, but it
-    // must not invalidate grants merely by claiming, retrying, or completing a
-    // message. Listener/grant/resource mutations intentionally advance this
-    // epoch; queue mutations opt out with skipPolicyEpoch.
-    if (result?.skipPolicyEpoch !== true) state.revision += 1;
+    // Delivery/session bookkeeping opts out of the policy epoch. Every other
+    // mutation advances a global policy revision, so any resource token that
+    // carries that revision must be invalidated in the same transaction.
+    if (result?.skipPolicyEpoch !== true) {
+      invalidateResourceSessions(state, () => true, "policy_revision_advanced");
+      state.revision += 1;
+    }
     state.updatedAt = nowIso();
     return { result, state, auditOutboxUpserts };
   }, env);
+}
+
+function invalidateResourceSessions(state, matches, reason, timestamp = nowIso()) {
+  state.resourceSessions = (state.resourceSessions || []).map((session) =>
+    session.state === "active" && matches(session)
+      ? { ...session, state: "invalidated", epoch: Number(session.epoch || 1) + 1, invalidatedAt: timestamp, invalidationReason: reason, updatedAt: timestamp }
+      : session
+  );
 }
 
 // Mailbox delivery uses the same transaction and policy revision as grants.
@@ -594,6 +616,9 @@ export async function registerThreadResource(input = {}, options = {}, env = pro
     } : { ...resource, createdAt: timestamp, updatedAt: timestamp, retiredAt: resource.status === "retired" ? (resource.retiredAt || timestamp) : null };
     state.resources = state.resources.filter((item) => !(item.resourceType === resource.resourceType && item.id === resource.id));
     state.resources.push(next);
+    if (existing && (existing.generation !== next.generation || existing.status !== next.status || existing.retiredAt !== next.retiredAt)) {
+      invalidateResourceSessions(state, (session) => session.resourceType === next.resourceType && session.resourceId === next.id, "resource_lifecycle_changed", timestamp);
+    }
     const result = {
       resource: next,
       transactionalAudit: {
@@ -659,6 +684,9 @@ export async function setThreadResourceGrants(threadId = "", resourceType = "", 
     const policy = { threadId: thread.id, resourceType: type, revision: Number(priorPolicy?.revision || 0) + 1, explicitEmpty: created.length === 0, inheritanceMode: priorPolicy?.inheritanceMode === "snapshot_ceiling" ? "snapshot_ceiling" : "explicit", parentSnapshotRevision: priorPolicy?.parentSnapshotRevision || 0, createdAt: priorPolicy?.createdAt || timestamp, updatedAt: timestamp };
     state.policies = state.policies.filter((item) => !(item.threadId === thread.id && item.resourceType === type));
     state.policies.push(policy);
+    // A parent grant can be inherited by descendants; invalidating this type
+    // is intentionally conservative so no resource token survives a policy edit.
+    invalidateResourceSessions(state, (session) => session.resourceType === type, "grant_replaced", timestamp);
     const result = {
       grants: created,
       policy,
@@ -686,7 +714,9 @@ export async function advanceThreadResourceGeneration(resourceType = "", resourc
     let resource = state.resources.find((item) => item.id === id && item.resourceType === type) || null;
     if (!resource && type === "desktop") { resource = candidate; state.resources.push(resource); }
     if (!resource) throw policyError("thread_resource_not_registered", 404);
-    resource.generation += 1; resource.updatedAt = nowIso();
+    const timestamp = nowIso();
+    resource.generation += 1; resource.updatedAt = timestamp;
+    invalidateResourceSessions(state, (session) => session.resourceType === type && session.resourceId === resource.id, "resource_generation_advanced", timestamp);
     return {
       resource,
       transactionalAudit: {

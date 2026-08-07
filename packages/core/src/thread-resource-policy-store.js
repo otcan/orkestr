@@ -210,6 +210,33 @@ function ensureSchema(db) {
     );
     create index if not exists idx_thread_resource_audit_outbox_state
       on orkestr_thread_resource_audit_outbox(state, created_at);
+    create table if not exists orkestr_thread_resource_sessions (
+      id text primary key,
+      jti_hash text not null unique,
+      token_id_hash text not null,
+      resource_type text not null,
+      resource_id text not null,
+      actions_json text not null,
+      thread_id text not null,
+      root_thread_id text not null,
+      boundary_id text not null,
+      policy_revision integer not null,
+      grant_revision integer not null,
+      resource_generation integer not null,
+      state text not null,
+      epoch integer not null default 1,
+      issued_at text not null,
+      expires_at text not null,
+      last_used_at text,
+      created_at text not null,
+      updated_at text not null,
+      invalidated_at text,
+      invalidation_reason text
+    );
+    create index if not exists idx_thread_resource_sessions_state
+      on orkestr_thread_resource_sessions(state, expires_at);
+    create index if not exists idx_thread_resource_sessions_resource
+      on orkestr_thread_resource_sessions(resource_type, resource_id, state);
   `);
   ensureColumn(db, "orkestr_thread_resource_policy", "inheritance_mode", "text not null default 'explicit'");
   ensureColumn(db, "orkestr_thread_resource_policy", "parent_snapshot_revision", "integer not null default 0");
@@ -275,11 +302,21 @@ function readState(db) {
       policyRevision: Number(row.policy_revision || 0), state: row.state, claimToken: row.claim_token || null,
       claimExpiresAt: row.claim_expires_at || null, deliveredAt: row.delivered_at || null, createdAt: row.created_at,
     })),
+    resourceSessions: db.prepare("select * from orkestr_thread_resource_sessions").all().map((row) => ({
+      id: row.id, jtiHash: row.jti_hash, tokenIdHash: row.token_id_hash,
+      resourceType: row.resource_type, resourceId: row.resource_id, actions: parseJson(row.actions_json, []),
+      threadId: row.thread_id, rootThreadId: row.root_thread_id, boundaryId: row.boundary_id,
+      policyRevision: Number(row.policy_revision || 0), grantRevision: Number(row.grant_revision || 0),
+      resourceGeneration: Number(row.resource_generation || 1), state: row.state, epoch: Number(row.epoch || 1),
+      issuedAt: row.issued_at, expiresAt: row.expires_at, lastUsedAt: row.last_used_at || null,
+      createdAt: row.created_at, updatedAt: row.updated_at, invalidatedAt: row.invalidated_at || null,
+      invalidationReason: row.invalidation_reason || null,
+    })),
   };
 }
 
 function replaceState(db, state = {}, auditOutboxUpserts = []) {
-  db.exec("delete from orkestr_mailbox_thread_pump_leases; delete from orkestr_mailbox_thread_deliveries; delete from orkestr_mailbox_thread_listeners; delete from orkestr_thread_resource_grants; delete from orkestr_thread_resources; delete from orkestr_thread_resource_policy; delete from orkestr_thread_resource_ceilings; delete from orkestr_thread_resource_mutations;");
+  db.exec("delete from orkestr_thread_resource_sessions; delete from orkestr_mailbox_thread_pump_leases; delete from orkestr_mailbox_thread_deliveries; delete from orkestr_mailbox_thread_listeners; delete from orkestr_thread_resource_grants; delete from orkestr_thread_resources; delete from orkestr_thread_resource_policy; delete from orkestr_thread_resource_ceilings; delete from orkestr_thread_resource_mutations;");
   const resource = db.prepare("insert into orkestr_thread_resources(resource_type, resource_id, native_id, resource_key, owner_user_id, boundary_id, generation, status, backend, created_at, updated_at, retired_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
   for (const item of state.resources || []) resource.run(item.resourceType, item.id, item.nativeId || item.resourceKey, item.resourceKey, item.ownerUserId, item.boundaryId, item.generation, item.status || (item.retiredAt ? "retired" : "active"), item.backend || "", item.createdAt, item.updatedAt, item.retiredAt || null);
   const policy = db.prepare("insert into orkestr_thread_resource_policy(thread_id, resource_type, revision, explicit_empty, inheritance_mode, parent_snapshot_revision, created_at, updated_at) values (?, ?, ?, ?, ?, ?, ?, ?)");
@@ -296,6 +333,14 @@ function replaceState(db, state = {}, auditOutboxUpserts = []) {
   for (const item of state.mailboxDeliveries || []) delivery.run(item.id, item.dedupeKey, item.resourceType, item.resourceId, item.mailboxId, item.listenerId || null, item.listenerGeneration || 0, item.threadId || null, item.state, item.epoch || 1, item.attemptCount || 0, item.maxAttempts || 1, item.nextAttemptAt || null, item.claimToken || null, item.claimExpiresAt || null, item.grantRevision || 0, item.policyRevision || 0, item.resourceGeneration || 1, item.messageKey, JSON.stringify(item.payload || {}), item.reason || null, item.createdAt, item.updatedAt, item.deliveredAt || null);
   const pumpLease = db.prepare("insert into orkestr_mailbox_thread_pump_leases(name, token, expires_at, updated_at) values (?, ?, ?, ?)");
   for (const item of state.mailboxPumpLeases || []) pumpLease.run(item.name, item.token, item.expiresAt, item.updatedAt);
+  const resourceSession = db.prepare("insert into orkestr_thread_resource_sessions(id, jti_hash, token_id_hash, resource_type, resource_id, actions_json, thread_id, root_thread_id, boundary_id, policy_revision, grant_revision, resource_generation, state, epoch, issued_at, expires_at, last_used_at, created_at, updated_at, invalidated_at, invalidation_reason) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+  for (const item of state.resourceSessions || []) {
+    resourceSession.run(item.id, item.jtiHash, item.tokenIdHash, item.resourceType, item.resourceId,
+      JSON.stringify(item.actions || []), item.threadId, item.rootThreadId, item.boundaryId,
+      item.policyRevision || 0, item.grantRevision || 0, item.resourceGeneration || 1,
+      item.state || "active", item.epoch || 1, item.issuedAt, item.expiresAt, item.lastUsedAt || null,
+      item.createdAt, item.updatedAt, item.invalidatedAt || null, item.invalidationReason || null);
+  }
   // Audit history is append-preserving. Policy state can be rebuilt wholesale,
   // but audit rows are only inserted or explicitly state-transitioned here.
   const auditOutbox = db.prepare(`

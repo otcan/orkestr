@@ -30,6 +30,7 @@ import {
 import { connectorMcpStructuredResult, connectorsMcpInputSchemas } from "./connectors-mcp-contract.js";
 import { assertConnectorMcpScope } from "./connectors-mcp-auth.js";
 import { runConnectorMcpRuntime } from "./connectors-mcp-runtime-operations.js";
+import { assertConnectorMcpResourceAccess } from "../../core/src/thread-resource-sessions.js";
 
 function clean(value = "") {
   return String(value || "").trim();
@@ -50,6 +51,7 @@ function operationIntent(tool = "", input = {}) {
     targetThreadId: clean(input.target_thread_id),
     operationRef: clean(input.operation_ref),
     accountHint: clean(input.account_hint),
+    resourceTarget: [clean(input.resource_type), clean(input.resource_id), clean(input.resource_action)],
     target: clean(input.target),
     alias: clean(input.alias),
     useMode: clean(input.use_mode),
@@ -406,7 +408,7 @@ export async function runConnectorMcpTool(tool = "", rawInput = {}, { auth = {},
   const schema = connectorsMcpInputSchemas[tool];
   if (!schema) throw Object.assign(new Error("connector_mcp_tool_not_found"), { statusCode: 404 });
   const input = schema.parse(rawInput);
-  const scoped = assertConnectorMcpScope(auth, tool, input);
+  const scoped = await assertConnectorMcpResourceAccess(assertConnectorMcpScope(auth, tool, input), input, env);
   if (tool === "orkestr_runtime" && input.service !== "runtime") return unsupported(input);
   if (tool !== "orkestr_runtime" && input.service !== "whatsapp" && tool !== "orkestr_auth") return unsupported(input);
   if (["webui", "codex"].includes(input.service)) return unsupported(input);
