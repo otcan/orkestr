@@ -13,7 +13,9 @@ import {
   setThreadResourceGrants,
 } from "../packages/core/src/thread-resource-grants.js";
 import { assertConnectorMcpResourceAccess } from "../packages/core/src/thread-resource-sessions.js";
+import { issueConnectorMcpResourceToken } from "../packages/core/src/thread-resource-sessions.js";
 import { threadResourcePolicyDoctorReport } from "../packages/core/src/thread-resource-policy-doctor.js";
+import { withThreadResourcePolicyTransaction } from "../packages/core/src/thread-resource-policy-store.js";
 
 function tokenRecord({ token = "resource-token", resource, thread, policyRevision, grantRevision, resourceGeneration, overrides = {} } = {}) {
   const issuedAt = new Date().toISOString();
@@ -62,7 +64,7 @@ async function fixture({ grant = true } = {}) {
       token,
       resource: registered.resource,
       thread,
-      policyRevision: state.revision,
+      policyRevision: state.policies.find((policy) => policy.threadId === thread.id && policy.resourceType === "oxrm")?.revision || 0,
       grantRevision: granted?.grants?.[0]?.revision || 1,
       resourceGeneration: registered.resource.generation,
     }),
@@ -170,4 +172,66 @@ test("configured operator connector token remains compatible without a resource 
 
   assert.equal(auth.operator, true);
   assert.equal(result, auth);
+});
+
+test("issued resource tokens round-trip through connector auth and survive unrelated policy edits", async () => {
+  const item = await fixture();
+  const issued = await issueConnectorMcpResourceToken({
+    resourceType: "oxrm", resourceId: item.resource.id, resourceAction: "read", threadId: item.thread.id,
+    principal: item.principal, scopes: ["connectors:read"], instanceId: "tenant-instance",
+  }, item.env);
+  // Issued sessions are independently usable; they do not rely on a static
+  // environment token record remaining configured after issuance.
+  item.env.ORKESTR_CONNECTORS_MCP_TOKENS_JSON = "";
+  const auth = await authorizeConnectorMcpToken(issued.token, item.env);
+
+  assert.match(issued.token, /^rt_[A-Za-z0-9_-]+$/);
+  assert.equal(auth.resourceId, item.resource.id);
+  await assertConnectorMcpResourceAccess(auth, item.input, item.env);
+  const unrelated = await createThread({ id: "unrelated-resource-thread", name: "Unrelated", ownerUserId: "tenant" }, item.env);
+  await registerThreadResource({ resourceType: "oxrm", resourceId: "crm-unrelated", ownerUserId: "tenant", status: "active" }, { principal: item.principal }, item.env);
+  await setThreadResourceGrants(unrelated.id, "oxrm", [{ resourceId: "crm-unrelated", permissions: ["read"] }], { principal: item.principal }, item.env);
+  const afterUnrelatedEdit = await readThreadResourcePolicy(item.env);
+
+  assert.equal(afterUnrelatedEdit.resourceSessions[0].state, "active");
+  await assertConnectorMcpResourceAccess(await authorizeConnectorMcpToken(issued.token, item.env), item.input, item.env);
+  assert.equal(JSON.stringify(afterUnrelatedEdit.resourceSessions).includes(issued.token), false);
+  await assert.rejects(() => authorizeConnectorMcpToken(`${issued.token}x`, item.env), /connector_mcp_token_invalid/);
+});
+
+test("issued resource tokens enforce lifetime and are revoked with their effective grant", async () => {
+  const item = await fixture();
+  await assert.rejects(
+    () => issueConnectorMcpResourceToken({ resourceType: "oxrm", resourceId: item.resource.id, resourceAction: "read", threadId: item.thread.id, principal: item.principal, ttlMs: 0 }, item.env),
+    /connector_mcp_resource_token_ttl_invalid/,
+  );
+  await assert.rejects(
+    () => issueConnectorMcpResourceToken({ resourceType: "oxrm", resourceId: item.resource.id, resourceAction: "read", threadId: item.thread.id, principal: item.principal, ttlMs: 5 * 60_000 + 1 }, item.env),
+    /connector_mcp_resource_token_ttl_invalid/,
+  );
+  const issued = await issueConnectorMcpResourceToken({ resourceType: "oxrm", resourceId: item.resource.id, resourceAction: "read", threadId: item.thread.id, principal: item.principal }, item.env);
+  await withThreadResourcePolicyTransaction((state) => {
+    state.resourceSessions[0].expiresAt = new Date(Date.now() - 1_000).toISOString();
+    return { state };
+  }, item.env);
+  await assert.rejects(() => authorizeConnectorMcpToken(issued.token, item.env), /connector_mcp_token_invalid/);
+
+  const active = await issueConnectorMcpResourceToken({ resourceType: "oxrm", resourceId: item.resource.id, resourceAction: "read", threadId: item.thread.id, principal: item.principal }, item.env);
+  await setThreadResourceGrants(item.thread.id, "oxrm", [], { principal: item.principal }, item.env);
+  const state = await readThreadResourcePolicy(item.env);
+  assert.equal(state.resourceSessions.some((session) => session.bearerHash && session.state === "invalidated"), true);
+  await assert.rejects(() => authorizeConnectorMcpToken(active.token, item.env), /connector_mcp_token_invalid/);
+});
+
+test("parent grant replacement invalidates an inherited child session through grantThreadId", async () => {
+  const item = await fixture();
+  const parent = await createThread({ id: "resource-source-parent", name: "Resource source parent", ownerUserId: "tenant" }, item.env);
+  await setThreadResourceGrants(parent.id, "oxrm", [{ resourceId: "crm-primary", permissions: ["read"] }], { principal: item.principal }, item.env);
+  const child = await createThread({ id: "resource-source-child", name: "Resource source child", ownerUserId: "tenant", parentThreadId: parent.id }, item.env);
+  await issueConnectorMcpResourceToken({ resourceType: "oxrm", resourceId: item.resource.id, resourceAction: "read", threadId: child.id, principal: item.principal }, item.env);
+  const active = await readThreadResourcePolicy(item.env);
+
+  assert.equal(active.resourceSessions[0].grantThreadId, parent.id);
+  await setThreadResourceGrants(parent.id, "oxrm", [], { principal: item.principal }, item.env);
+  assert.equal((await readThreadResourcePolicy(item.env)).resourceSessions[0].state, "invalidated");
 });

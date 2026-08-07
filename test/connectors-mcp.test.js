@@ -471,10 +471,14 @@ test("connector MCP enforces an explicit current resource token target before di
       tenant: {
         token: "scoped-token", scopes: ["connectors:read"], principalKind: "tenant_vm", ownerUserId: "firat", instanceId: "vm-firat", accountId: "sender",
         threadId: thread.id, rootThreadId: thread.id, resourceType: "oxrm", resourceId: registered.resource.id, resourceActions: ["read"],
-        boundaryId: registered.resource.boundaryId, policyRevision: policy.revision, grantRevision: granted.grants[0].revision,
+        boundaryId: registered.resource.boundaryId, policyRevision: policy.policies.find((entry) => entry.threadId === thread.id && entry.resourceType === "oxrm").revision, grantRevision: granted.grants[0].revision,
         resourceGeneration: registered.resource.generation, jti: "test-resource-token", issuedAt, expiresAt: new Date(Date.parse(issuedAt) + (4 * 60_000)).toISOString(),
       },
     });
+    const missingTarget = await callConnectorsMcpTool("orkestr_auth", {
+      service: "whatsapp", action: "status", account_id: "sender", instance_id: "vm-firat", user_id: "firat", thread_id: thread.id,
+    }, item.env);
+    assert.match(JSON.stringify(missingTarget), /connector_mcp_resource_target_required/);
     const result = await callConnectorsMcpTool("orkestr_auth", {
       service: "whatsapp", action: "status", account_id: "sender", instance_id: "vm-firat", user_id: "firat", thread_id: thread.id,
       resource_type: "oxrm", resource_id: registered.resource.id, resource_action: "read",
