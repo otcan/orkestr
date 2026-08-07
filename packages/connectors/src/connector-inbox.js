@@ -108,13 +108,26 @@ export async function markConnectorInboxEvent(id = "", patch = {}, env = process
   return row(db.prepare("select * from orkestr_connector_inbox where id = ?").get(current.id));
 }
 
-export async function listConnectorInboxEvents({ states = [], limit = 100 } = {}, env = process.env) {
+export async function listConnectorInboxEvents({ states = [], connectors = [], limit = 100 } = {}, env = process.env) {
   const db = await database(env);
   const wanted = (Array.isArray(states) ? states : [states]).map(clean).filter(Boolean);
+  const wantedConnectors = (Array.isArray(connectors) ? connectors : [connectors]).map(clean).filter(Boolean);
   const capped = Math.max(1, Math.min(1000, Number(limit || 100) || 100));
-  if (!wanted.length) return db.prepare("select * from orkestr_connector_inbox order by created_at desc limit ?").all(capped).map(row);
-  const placeholders = wanted.map(() => "?").join(",");
-  return db.prepare(`select * from orkestr_connector_inbox where state in (${placeholders}) order by created_at asc limit ?`).all(...wanted, capped).map(row);
+  const clauses = [];
+  const parameters = [];
+  if (wanted.length) {
+    clauses.push(`state in (${wanted.map(() => "?").join(",")})`);
+    parameters.push(...wanted);
+  }
+  if (wantedConnectors.length) {
+    clauses.push(`connector in (${wantedConnectors.map(() => "?").join(",")})`);
+    parameters.push(...wantedConnectors);
+  }
+  const where = clauses.length ? ` where ${clauses.join(" and ")}` : "";
+  const direction = wanted.length ? "asc" : "desc";
+  return db.prepare(`select * from orkestr_connector_inbox${where} order by created_at ${direction} limit ?`)
+    .all(...parameters, capped)
+    .map(row);
 }
 
 export function resetConnectorInboxForTest() {

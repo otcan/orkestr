@@ -6,9 +6,17 @@ import path from "node:path";
 import test from "node:test";
 import { callConnectorsMcpTool, connectorsMcpClientConfig, listConnectorsMcpTools } from "../packages/connectors/src/connectors-mcp-client.js";
 import { assertConnectorMcpScope } from "../packages/connectors/src/connectors-mcp-auth.js";
-import { listConnectorInboxEvents, resetConnectorInboxForTest } from "../packages/connectors/src/connector-inbox.js";
+import {
+  ensureConnectorInboxEvent,
+  listConnectorInboxEvents,
+  resetConnectorInboxForTest,
+} from "../packages/connectors/src/connector-inbox.js";
 import { listConnectorOutboxJobs } from "../packages/connectors/src/connector-outbox.js";
-import { deliverConnectorInboxEvent, routeWhatsAppInboundFromWorker } from "../packages/connectors/src/connectors-mcp-router.js";
+import {
+  deliverConnectorInboxEvent,
+  retryConnectorInbox,
+  routeWhatsAppInboundFromWorker,
+} from "../packages/connectors/src/connectors-mcp-router.js";
 import { approvePairingChallenge, createPairingChallenge } from "../packages/core/src/security.js";
 import { configureTenantWhatsAppRoute } from "../packages/core/src/tenant-whatsapp-routing.js";
 import { createTenantVm } from "../packages/core/src/tenant-vm-registry.js";
@@ -693,6 +701,49 @@ test("connector MCP inbound routing is idempotent and has a finite retry budget"
     assert.equal(recovered.state, "delivered");
     assert.equal(recovered.attemptCount, 2);
     assert.equal(recovered.result.response.threadId, "thread-recovered");
+  } finally {
+    resetConnectorInboxForTest();
+  }
+});
+
+test("WhatsApp retry worker leaves other connector inbox events untouched", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-connectors-inbox-scope-"));
+  const env = {
+    ...process.env,
+    ORKESTR_HOME: home,
+    ORKESTR_CONNECTORS_MCP_INBOUND_TARGET_URL: "http://orkestr-ui.test/api/connectors/whatsapp/inbound",
+  };
+  let deliveries = 0;
+  try {
+    await ensureConnectorInboxEvent({
+      id: "mailbox-event-1",
+      connector: "mailbox",
+      accountId: "mailbox-1",
+      conversationId: "mailbox-1",
+      payload: { headers: { messageId: "<mailbox-event-1@example.test>" } },
+    }, env);
+    await ensureConnectorInboxEvent({
+      id: "wa-event-scoped-retry",
+      connector: "whatsapp",
+      accountId: "sender",
+      conversationId: "jobs@g.us",
+      payload: { eventId: "wa-event-scoped-retry", accountId: "sender", chatId: "jobs@g.us", text: "hello" },
+    }, env);
+
+    const retried = await retryConnectorInbox(env, async () => {
+      deliveries += 1;
+      return { ok: true, status: 200, json: async () => ({ ok: true }) };
+    });
+    const events = await listConnectorInboxEvents({}, env);
+    const mailbox = events.find((event) => event.id === "mailbox-event-1");
+    const whatsapp = events.find((event) => event.id === "wa-event-scoped-retry");
+
+    assert.equal(retried.attempted, 1);
+    assert.equal(deliveries, 1);
+    assert.equal(mailbox.state, "pending");
+    assert.equal(mailbox.attemptCount, 0);
+    assert.equal(mailbox.error, "");
+    assert.equal(whatsapp.state, "delivered");
   } finally {
     resetConnectorInboxForTest();
   }

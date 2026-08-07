@@ -200,7 +200,11 @@ export async function routeWhatsAppInboundFromWorker(payload = {}, env = process
 }
 
 export async function retryConnectorInbox(env = process.env, fetchImpl = fetch) {
-  const events = await listConnectorInboxEvents({ states: ["pending", "failed_retryable"], limit: 100 }, env);
+  const events = await listConnectorInboxEvents({
+    states: ["pending", "failed_retryable"],
+    connectors: ["whatsapp"],
+    limit: 100,
+  }, env);
   const due = events.filter((event) => !event.nextAttemptAt || Date.parse(event.nextAttemptAt) <= Date.now());
   const results = [];
   for (const event of due) results.push(await deliverConnectorInboxEvent(event, env, fetchImpl));
