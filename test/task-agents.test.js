@@ -110,6 +110,74 @@ test("task agent final answers are steered back to the parent exactly once", asy
   assert.equal(summary.result.messageId, result.id);
 });
 
+test("task agent reconciliation completes a durable delivering_result retry after parent result append", async () => {
+  const env = await testEnv();
+  const parent = await createThread({
+    id: "aeef8faaa15877f7",
+    name: "otcanClaw Features",
+    cwd: path.dirname(env.ORKESTR_HOME),
+  }, env);
+  const { taskAgent } = await createTaskAgent(parent.id, {
+    id: "2c695ddb-ac42-49d0-87bb-553d8b07e35f",
+    profile: "sre_engineer",
+    task: "Validate ORK-404 state reconciliation.",
+  }, env);
+  assert.equal(taskAgent.id, "task-aeef8faaa15877f7-sre_engineer-2c695ddb");
+  const result = await appendThreadMessage(taskAgent.id, {
+    id: "final-answer-live-shape",
+    role: "assistant",
+    source: "codex-app-server",
+    phase: "final_answer",
+    text: "The specialist result was completed before durable task status settled.",
+    state: "completed",
+    codexTurnId: "turn-live-shape",
+  }, env);
+  const existingParentResult = await appendThreadMessage(parent.id, {
+    role: "user",
+    source: "orkestr_task_agent_result",
+    text: [
+      "[Specialist task completed]",
+      "Profile: sre_engineer",
+      "Task ID: 2c695ddb-ac42-49d0-87bb-553d8b07e35f",
+      "Task: Validate ORK-404 state reconciliation.",
+      "",
+      result.text,
+    ].join("\n"),
+    state: "queued",
+    steerActiveTurn: true,
+    codexDeliveryMode: "instant_steer",
+    clientMessageId: `task-agent-result:${taskAgent.agentTaskId}:${result.id}`,
+  }, env);
+  await updateThread(taskAgent.id, {
+    state: "ready",
+    agentTaskStatus: "delivering_result",
+    agentResultSourceMessageId: result.id,
+    agentParentResultMessageId: null,
+    agentTaskResultTurnId: "turn-live-shape",
+    runtime: {
+      ...(taskAgent.runtime || {}),
+      runtimeKind: "codex-app-server",
+      lastTurnId: "turn-live-shape",
+      activeTurnId: null,
+    },
+  }, env);
+
+  let summary = await taskAgentSummary(taskAgent.id, env, { deliver: false });
+  summary = await taskAgentSummary(taskAgent.id, env, { deliver: false });
+  const current = await getThread(taskAgent.id, env);
+  const parentResults = (await listThreadMessages(parent.id, env))
+    .filter((message) => message.source === "orkestr_task_agent_result");
+
+  assert.equal(summary.status, "completed");
+  assert.equal(summary.result.messageId, result.id);
+  assert.equal(current.agentTaskStatus, "completed");
+  assert.equal(current.agentResultSourceMessageId, result.id);
+  assert.equal(current.agentParentResultMessageId, existingParentResult.id);
+  assert.equal(parentResults.length, 1);
+  assert.equal(parentResults[0].id, existingParentResult.id);
+  assert.match(parentResults[0].text, /specialist result was completed/i);
+});
+
 test("task agent lifecycle transitions update observability counters", async () => {
   resetObservabilityForTests();
   const env = await testEnv();
