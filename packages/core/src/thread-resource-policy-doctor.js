@@ -5,6 +5,7 @@ import { listThreads } from "./threads.js";
 import { explicitThreadResourceBackfillPlan } from "./thread-resource-backfill.js";
 import {
   THREAD_RESOURCE_PERMISSIONS,
+  effectiveThreadResourceGrantFromSnapshot,
   readThreadResourcePolicy,
   threadResourceAccessMode,
   threadResourceWritePlan,
@@ -62,14 +63,11 @@ async function policyStoreIsInitialized(env = process.env) {
 function listenerHasCurrentGrant(listener = {}, state = {}, threadsById = new Map()) {
   const resource = state.resources.find((item) => item.resourceType === "mailbox" && item.id === listener.resourceId);
   if (!resource || resource.status !== "active" || resource.retiredAt || Number(resource.generation) !== Number(listener.resourceGeneration)) return false;
-  const seen = new Set();
-  let thread = threadsById.get(listener.threadId) || null;
-  while (thread?.id && !seen.has(thread.id)) {
-    seen.add(thread.id);
-    if (state.grants.some((grant) => !grant.revokedAt && grant.threadId === thread.id && grant.resourceType === "mailbox" && grant.resourceId === resource.id && grant.permissions.includes("subscribe") && Number(grant.revision) === Number(listener.grantRevision))) return true;
-    thread = threadsById.get(clean(thread.parentThreadId)) || null;
-  }
-  return false;
+  const grant = effectiveThreadResourceGrantFromSnapshot({
+    state, threadsById, threadId: listener.threadId, resourceType: "mailbox",
+    resourceId: resource.id, permission: "subscribe",
+  });
+  return Boolean(grant && Number(grant.revision) === Number(listener.grantRevision));
 }
 
 export async function threadResourcePolicyDoctorReport(env = process.env, now = Date.now()) {
