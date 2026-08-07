@@ -9,6 +9,7 @@ import { dataPaths } from "../../storage/src/paths.js";
 import { activeCodexRuntimeAuthInvalid } from "./codex-auth-health.js";
 import { codexAppServerStatus } from "./codex-app-server-client.js";
 import { eventStorageCheck } from "./event-storage-doctor.js";
+import { threadResourcePolicyDoctorCheck } from "./thread-resource-policy-doctor.js";
 import { publicUrlIdentityConfigNames, publicUrlIdentityDiagnostics, publicUrlIdentityRecords } from "./public-url-config.js";
 import { securityStatus } from "./security.js";
 
@@ -469,7 +470,7 @@ export async function systemDoctor({ env = process.env, home = os.homedir() } = 
   }
 
   const urlDropInCheck = await publicUrlDropInIdentityCheck(env);
-  const checks = [...pathChecks, ...commandChecks, publicUrlIdentityCheck(env), urlDropInCheck, await eventStorageCheck(env), ...securityDoctorChecks];
+  const checks = [...pathChecks, ...commandChecks, publicUrlIdentityCheck(env), urlDropInCheck, await eventStorageCheck(env), await threadResourcePolicyDoctorCheck(env), ...securityDoctorChecks];
   const { counts, status, summary } = summarize(checks);
   const issues = checks
     .filter((check) => check.status !== "ok")
