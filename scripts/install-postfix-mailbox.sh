@@ -9,6 +9,7 @@ Options:
   --domain DOMAIN       Inbound-only mailbox domain. Defaults to in.orkestr.de.
   --hostname HOSTNAME   SMTP hostname. Defaults to mx.<domain>.
   --env-file PATH       Orkestr environment file. Defaults to /etc/orkestr/orkestr.env.
+  --ui-env-file PATH    Main service environment file. Auto-detected by default.
   --current PATH        Active release symlink. Defaults to /opt/orkestr/current.
   --service NAME        Main Orkestr service. Defaults to orkestr-ui.
   --run-user USER       Runtime user. Defaults to the main service user.
@@ -18,6 +19,7 @@ EOF
 domain="${ORKESTR_MAILBOX_DOMAIN:-in.orkestr.de}"
 smtp_hostname=""
 env_file="${ORKESTR_ENV_FILE:-/etc/orkestr/orkestr.env}"
+ui_env_file="${ORKESTR_UI_ENV_FILE:-}"
 current_link="${ORKESTR_CURRENT_LINK:-/opt/orkestr/current}"
 main_service="${ORKESTR_SERVICE_NAME:-orkestr-ui}"
 run_user="${ORKESTR_RUN_USER:-}"
@@ -27,6 +29,7 @@ while [ "$#" -gt 0 ]; do
     --domain) domain="${2:-}"; shift 2 ;;
     --hostname) smtp_hostname="${2:-}"; shift 2 ;;
     --env-file) env_file="${2:-}"; shift 2 ;;
+    --ui-env-file) ui_env_file="${2:-}"; shift 2 ;;
     --current) current_link="${2:-}"; shift 2 ;;
     --service) main_service="${2:-}"; shift 2 ;;
     --run-user) run_user="${2:-}"; shift 2 ;;
@@ -50,6 +53,13 @@ if ! [[ "$smtp_hostname" =~ ^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$ ]]; then
 fi
 
 main_unit="${main_service%.service}.service"
+if [ -z "$ui_env_file" ]; then
+  ui_env_file="$(systemctl show -p EnvironmentFiles --value "$main_unit" 2>/dev/null \
+    | awk '{ print $1 }' \
+    | grep '^/etc/orkestr/.*\.env$' \
+    | tail -n 1 || true)"
+fi
+ui_env_file="${ui_env_file:-$env_file}"
 if [ -z "$run_user" ]; then
   run_user="$(systemctl show -p User --value "$main_unit" 2>/dev/null || true)"
 fi
@@ -70,14 +80,24 @@ postconf -m | grep -qx socketmap || { echo "This Postfix build does not support 
 install -d -m 0755 "$(dirname "$env_file")"
 touch "$env_file"
 chmod 0640 "$env_file"
+[ "$ui_env_file" = "$env_file" ] || {
+  install -d -m 0755 "$(dirname "$ui_env_file")"
+  touch "$ui_env_file"
+}
+
+upsert_env_file() {
+  local file="$1" key="$2" value="$3" temporary
+  temporary="$(mktemp)"
+  awk -v key="$key" 'index($0, key "=") != 1 { print }' "$file" > "$temporary"
+  printf '%s=%s\n' "$key" "$value" >> "$temporary"
+  cat "$temporary" > "$file"
+  rm -f "$temporary"
+}
 
 upsert_env() {
-  local key="$1" value="$2" temporary
-  temporary="$(mktemp)"
-  awk -v key="$key" 'index($0, key "=") != 1 { print }' "$env_file" > "$temporary"
-  printf '%s=%s\n' "$key" "$value" >> "$temporary"
-  cat "$temporary" > "$env_file"
-  rm -f "$temporary"
+  local key="$1" value="$2"
+  upsert_env_file "$env_file" "$key" "$value"
+  [ "$ui_env_file" = "$env_file" ] || upsert_env_file "$ui_env_file" "$key" "$value"
 }
 
 revision="$(git -C "$current_link" rev-parse HEAD 2>/dev/null || date -u +%Y%m%dT%H%M%SZ)"

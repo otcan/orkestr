@@ -87,3 +87,11 @@ test("Postfix socket map netstrings decode incrementally", () => {
   const completed = decodeSocketMapFrames(Buffer.concat([decoded.remainder, second.subarray(5)]));
   assert.deepEqual(completed.frames, ["mailboxes two@in.orkestr.de"]);
 });
+
+test("Postfix installer updates the main service and adapter environments", async () => {
+  const script = await fs.readFile("scripts/install-postfix-mailbox.sh", "utf8");
+  assert.match(script, /systemctl show -p EnvironmentFiles --value "\$main_unit"/);
+  assert.match(script, /ui_env_file="\$\{ui_env_file:-\$env_file\}"/);
+  assert.match(script, /upsert_env_file "\$env_file" "\$key" "\$value"/);
+  assert.match(script, /upsert_env_file "\$ui_env_file" "\$key" "\$value"/);
+});
