@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { readWhatsAppScopedTokenRecords } from "../../core/src/whatsapp-scoped-tokens.js";
+import { authorizeIssuedConnectorResourceToken } from "../../core/src/thread-resource-sessions.js";
 
 function clean(value = "") {
   return String(value || "").trim();
@@ -53,6 +54,7 @@ function normalizeRecord(record = {}) {
     id: tokenId,
     token: clean(record.token || record.value || record.secret),
     tokenHash: clean(record.tokenHash || record.hash).toLowerCase(),
+    bearerHash: clean(record.token || record.value || record.secret) ? hash(record.token || record.value || record.secret) : clean(record.tokenHash || record.hash).toLowerCase(),
     scopes: scopeList(record.scopes || record.scope || record.capabilities),
     principalKind: clean(record.principalKind || record.kind || "external_instance"),
     principalId: clean(record.principalId || record.instanceId || record.ownerUserId || record.userId),
@@ -107,6 +109,7 @@ function publicRecord(record = {}) {
     resourceGeneration: Number(record.resourceGeneration || 0),
     resourceJtiHash: record.resourceJtiHash || "",
     tokenIdHash: record.tokenIdHash || "",
+    bearerHash: record.bearerHash || "",
     issuedAt: record.issuedAt || "",
     expiresAt: record.expiresAt || "",
     operator: record.operator === true,
@@ -145,11 +148,11 @@ export async function authorizeConnectorMcpToken(token = "", env = process.env) 
     throw error;
   }
   const records = await connectorMcpTokenRecords(env);
-  if (!records.length) {
-    const error = new Error("connector_mcp_token_unconfigured");
-    error.statusCode = 503;
-    throw error;
-  }
+  // Resource bearers are durable, short-lived sessions rather than configured
+  // environment records. Resolve their hashed session binding before static
+  // records so an issued bearer works without a retained env record.
+  const issued = await authorizeIssuedConnectorResourceToken(value, env);
+  if (issued) return issued;
   const record = records.find((candidate) => secretMatches(candidate, value));
   if (!record || record.disabled || (record.expiresAt && Date.parse(record.expiresAt) <= Date.now())) {
     const error = new Error("connector_mcp_token_invalid");

@@ -214,10 +214,19 @@ function ensureSchema(db) {
       id text primary key,
       jti_hash text not null unique,
       token_id_hash text not null,
+      bearer_hash text not null default '',
+      scopes_json text not null default '[]',
+      principal_kind text not null default 'external_instance',
+      principal_id text not null default '',
+      owner_user_id text not null default '',
+      instance_id text not null default '',
+      account_id text not null default '',
+      account_service text not null default '',
       resource_type text not null,
       resource_id text not null,
       actions_json text not null,
       thread_id text not null,
+      grant_thread_id text not null default '',
       root_thread_id text not null,
       boundary_id text not null,
       policy_revision integer not null,
@@ -247,6 +256,15 @@ function ensureSchema(db) {
   ensureColumn(db, "orkestr_thread_resource_audit_outbox", "claim_token", "text");
   ensureColumn(db, "orkestr_thread_resource_audit_outbox", "claim_expires_at", "text");
   ensureColumn(db, "orkestr_thread_resource_audit_outbox", "delivered_at", "text");
+  ensureColumn(db, "orkestr_thread_resource_sessions", "grant_thread_id", "text not null default ''");
+  ensureColumn(db, "orkestr_thread_resource_sessions", "bearer_hash", "text not null default ''");
+  ensureColumn(db, "orkestr_thread_resource_sessions", "scopes_json", "text not null default '[]'");
+  ensureColumn(db, "orkestr_thread_resource_sessions", "principal_kind", "text not null default 'external_instance'");
+  ensureColumn(db, "orkestr_thread_resource_sessions", "principal_id", "text not null default ''");
+  ensureColumn(db, "orkestr_thread_resource_sessions", "owner_user_id", "text not null default ''");
+  ensureColumn(db, "orkestr_thread_resource_sessions", "instance_id", "text not null default ''");
+  ensureColumn(db, "orkestr_thread_resource_sessions", "account_id", "text not null default ''");
+  ensureColumn(db, "orkestr_thread_resource_sessions", "account_service", "text not null default ''");
   db.exec("create unique index if not exists idx_mailbox_thread_listener_idempotency_unique on orkestr_mailbox_thread_listeners(idempotency_key) where idempotency_key <> '';");
   db.exec("update orkestr_thread_resources set native_id = resource_key where native_id = ''; update orkestr_thread_resources set status = case when retired_at is not null then 'retired' else 'active' end where status = '';");
 }
@@ -303,9 +321,11 @@ function readState(db) {
       claimExpiresAt: row.claim_expires_at || null, deliveredAt: row.delivered_at || null, createdAt: row.created_at,
     })),
     resourceSessions: db.prepare("select * from orkestr_thread_resource_sessions").all().map((row) => ({
-      id: row.id, jtiHash: row.jti_hash, tokenIdHash: row.token_id_hash,
+      id: row.id, jtiHash: row.jti_hash, tokenIdHash: row.token_id_hash, bearerHash: row.bearer_hash || "",
+      scopes: parseJson(row.scopes_json, []), principalKind: row.principal_kind || "external_instance", principalId: row.principal_id || "",
+      ownerUserId: row.owner_user_id || "", instanceId: row.instance_id || "", accountId: row.account_id || "", accountService: row.account_service || "",
       resourceType: row.resource_type, resourceId: row.resource_id, actions: parseJson(row.actions_json, []),
-      threadId: row.thread_id, rootThreadId: row.root_thread_id, boundaryId: row.boundary_id,
+      threadId: row.thread_id, grantThreadId: row.grant_thread_id || row.thread_id, rootThreadId: row.root_thread_id, boundaryId: row.boundary_id,
       policyRevision: Number(row.policy_revision || 0), grantRevision: Number(row.grant_revision || 0),
       resourceGeneration: Number(row.resource_generation || 1), state: row.state, epoch: Number(row.epoch || 1),
       issuedAt: row.issued_at, expiresAt: row.expires_at, lastUsedAt: row.last_used_at || null,
@@ -333,10 +353,11 @@ function replaceState(db, state = {}, auditOutboxUpserts = []) {
   for (const item of state.mailboxDeliveries || []) delivery.run(item.id, item.dedupeKey, item.resourceType, item.resourceId, item.mailboxId, item.listenerId || null, item.listenerGeneration || 0, item.threadId || null, item.state, item.epoch || 1, item.attemptCount || 0, item.maxAttempts || 1, item.nextAttemptAt || null, item.claimToken || null, item.claimExpiresAt || null, item.grantRevision || 0, item.policyRevision || 0, item.resourceGeneration || 1, item.messageKey, JSON.stringify(item.payload || {}), item.reason || null, item.createdAt, item.updatedAt, item.deliveredAt || null);
   const pumpLease = db.prepare("insert into orkestr_mailbox_thread_pump_leases(name, token, expires_at, updated_at) values (?, ?, ?, ?)");
   for (const item of state.mailboxPumpLeases || []) pumpLease.run(item.name, item.token, item.expiresAt, item.updatedAt);
-  const resourceSession = db.prepare("insert into orkestr_thread_resource_sessions(id, jti_hash, token_id_hash, resource_type, resource_id, actions_json, thread_id, root_thread_id, boundary_id, policy_revision, grant_revision, resource_generation, state, epoch, issued_at, expires_at, last_used_at, created_at, updated_at, invalidated_at, invalidation_reason) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+  const resourceSession = db.prepare("insert into orkestr_thread_resource_sessions(id, jti_hash, token_id_hash, bearer_hash, scopes_json, principal_kind, principal_id, owner_user_id, instance_id, account_id, account_service, resource_type, resource_id, actions_json, thread_id, grant_thread_id, root_thread_id, boundary_id, policy_revision, grant_revision, resource_generation, state, epoch, issued_at, expires_at, last_used_at, created_at, updated_at, invalidated_at, invalidation_reason) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
   for (const item of state.resourceSessions || []) {
-    resourceSession.run(item.id, item.jtiHash, item.tokenIdHash, item.resourceType, item.resourceId,
-      JSON.stringify(item.actions || []), item.threadId, item.rootThreadId, item.boundaryId,
+    resourceSession.run(item.id, item.jtiHash, item.tokenIdHash, item.bearerHash || "", JSON.stringify(item.scopes || []),
+      item.principalKind || "external_instance", item.principalId || "", item.ownerUserId || "", item.instanceId || "", item.accountId || "", item.accountService || "",
+      item.resourceType, item.resourceId, JSON.stringify(item.actions || []), item.threadId, item.grantThreadId || item.threadId, item.rootThreadId, item.boundaryId,
       item.policyRevision || 0, item.grantRevision || 0, item.resourceGeneration || 1,
       item.state || "active", item.epoch || 1, item.issuedAt, item.expiresAt, item.lastUsedAt || null,
       item.createdAt, item.updatedAt, item.invalidatedAt || null, item.invalidationReason || null);

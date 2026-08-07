@@ -33,10 +33,11 @@ error. The bearer is authoritative; context arguments must match it.
 
 ## Resource-bound execution tokens
 
-Connector calls are normally instance-scoped. The current connector tools do
-not infer a desktop, oXRM instance, or mailbox from a connector account, chat,
-or instance id. A surface that cannot identify a registered resource therefore
-remains instance-scoped.
+Connector calls are normally instance-scoped. `orkestr_auth`,
+`orkestr_messaging`, `orkestr_conversation`, `orkestr_routing`, and
+`orkestr_runtime` do not infer a desktop, oXRM instance, or mailbox from a
+connector account, chat, or instance id. A surface that cannot identify a
+registered resource therefore remains instance-scoped.
 
 An integration with a real registered resource can send the explicit
 `resource_type`, canonical `resource_id`, and `resource_action` context fields.
@@ -47,9 +48,16 @@ jti, issued-at time, and expiry. The token lifetime is at most five minutes.
 The connector scope remains only an upper bound: it cannot create or widen a
 thread-resource grant. Missing or inferred resource targets are rejected.
 
-Active resource-bound executions are stored transactionally with a hashed jti.
-They are revalidated on every use and invalidated in the same policy
-transaction as a grant replacement or resource-generation change. The resource
+Runtime/API code that has current effective authorization can call
+`issueConnectorMcpResourceToken`. It returns a crypto-random bearer once, with
+one exact action and a maximum five-minute lifetime. The durable session keeps
+only hashes of the bearer and jti, plus its exact resource, thread/root,
+boundary, source-grant, policy/grant revision, and resource generation binding.
+
+Active resource-bound executions are stored transactionally with hashed bearer
+and jti values. They are revalidated on every use and invalidated in the same
+policy transaction as an affected grant replacement or resource-generation
+change; unrelated resource policy changes do not revoke them. The resource
 policy doctor reports session coverage and counts only; it never exposes token,
 jti, or resource identifiers.
 

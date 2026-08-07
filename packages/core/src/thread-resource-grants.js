@@ -178,10 +178,13 @@ function normalizeState(raw = {}, env = process.env) {
     mailboxDeliveries: Array.isArray(raw?.mailboxDeliveries) ? raw.mailboxDeliveries : [],
     mailboxPumpLeases: Array.isArray(raw?.mailboxPumpLeases) ? raw.mailboxPumpLeases : [],
     resourceSessions: (Array.isArray(raw?.resourceSessions) ? raw.resourceSessions : []).map((item) => ({
-      id: clean(item?.id), jtiHash: clean(item?.jtiHash), tokenIdHash: clean(item?.tokenIdHash),
+      id: clean(item?.id), jtiHash: clean(item?.jtiHash), tokenIdHash: clean(item?.tokenIdHash), bearerHash: clean(item?.bearerHash),
+      scopes: Array.isArray(item?.scopes) ? item.scopes.map((scope) => clean(scope).toLowerCase()).filter(Boolean) : [],
+      principalKind: clean(item?.principalKind) || "external_instance", principalId: clean(item?.principalId), ownerUserId: clean(item?.ownerUserId),
+      instanceId: clean(item?.instanceId), accountId: clean(item?.accountId), accountService: clean(item?.accountService).toLowerCase(),
       resourceType: normalizeThreadResourceType(item?.resourceType), resourceId: clean(item?.resourceId),
       actions: normalizeThreadResourcePermissions(item?.resourceType, item?.actions),
-      threadId: clean(item?.threadId), rootThreadId: clean(item?.rootThreadId), boundaryId: clean(item?.boundaryId),
+      threadId: clean(item?.threadId), grantThreadId: clean(item?.grantThreadId || item?.threadId), rootThreadId: clean(item?.rootThreadId), boundaryId: clean(item?.boundaryId),
       policyRevision: Math.max(0, Number(item?.policyRevision || 0) || 0), grantRevision: Math.max(0, Number(item?.grantRevision || 0) || 0),
       resourceGeneration: Math.max(1, Number(item?.resourceGeneration || 1) || 1),
       state: ["active", "invalidated", "expired"].includes(clean(item?.state).toLowerCase()) ? clean(item.state).toLowerCase() : "invalidated",
@@ -230,13 +233,10 @@ async function mutateState(env, operation) {
       state.policyAuditOutbox = [...(state.policyAuditOutbox || []), record];
       auditOutboxUpserts.push(record);
     }
-    // Delivery/session bookkeeping opts out of the policy epoch. Every other
-    // mutation advances a global policy revision, so any resource token that
-    // carries that revision must be invalidated in the same transaction.
-    if (result?.skipPolicyEpoch !== true) {
-      invalidateResourceSessions(state, () => true, "policy_revision_advanced");
-      state.revision += 1;
-    }
+    // Delivery/session bookkeeping opts out of the policy epoch. Resource
+    // sessions are invalidated by the mutation that actually affects their
+    // grant source or resource, rather than by unrelated global revisions.
+    if (result?.skipPolicyEpoch !== true) state.revision += 1;
     state.updatedAt = nowIso();
     return { result, state, auditOutboxUpserts };
   }, env);
@@ -662,6 +662,9 @@ export async function setThreadResourceGrants(threadId = "", resourceType = "", 
       throw policyError("thread_resource_policy_revision_conflict", 409);
     }
     const timestamp = nowIso();
+    const affectedResourceIds = new Set(state.grants
+      .filter((grant) => grant.threadId === thread.id && grant.resourceType === type && !grant.revokedAt)
+      .map((grant) => grant.resourceId));
     state.grants = state.grants.map((grant) => grant.threadId === thread.id && grant.resourceType === type && !grant.revokedAt ? { ...grant, revokedAt: timestamp, revokedBy: actorUserId, updatedAt: timestamp } : grant);
     if (type === THREAD_RESOURCE_TYPES.mailbox) {
       state.mailboxDeliveries = (state.mailboxDeliveries || []).map((delivery) =>
@@ -681,12 +684,18 @@ export async function setThreadResourceGrants(threadId = "", resourceType = "", 
       const grant = normalizeGrant({ threadId: thread.id, resourceType: type, resourceId: resource.id, resourceKey: resource.resourceKey, ownerUserId, boundaryId, permissions: entry.permissions, revision: state.revision + 1, source: clean(options.source || "admin"), reason: entry.reason }, env);
       state.grants.push(grant); return grant;
     });
+    for (const grant of created) affectedResourceIds.add(grant.resourceId);
     const policy = { threadId: thread.id, resourceType: type, revision: Number(priorPolicy?.revision || 0) + 1, explicitEmpty: created.length === 0, inheritanceMode: priorPolicy?.inheritanceMode === "snapshot_ceiling" ? "snapshot_ceiling" : "explicit", parentSnapshotRevision: priorPolicy?.parentSnapshotRevision || 0, createdAt: priorPolicy?.createdAt || timestamp, updatedAt: timestamp };
     state.policies = state.policies.filter((item) => !(item.threadId === thread.id && item.resourceType === type));
     state.policies.push(policy);
-    // A parent grant can be inherited by descendants; invalidating this type
-    // is intentionally conservative so no resource token survives a policy edit.
-    invalidateResourceSessions(state, (session) => session.resourceType === type, "grant_replaced", timestamp);
+    // A parent source grant affects its descendants through grantThreadId. A
+    // policy replacement also affects every same-type session owned by the
+    // changed thread, including inherited resources narrowed by that policy.
+    invalidateResourceSessions(state, (session) =>
+      session.resourceType === type && (
+        session.threadId === thread.id ||
+        (session.grantThreadId === thread.id && affectedResourceIds.has(session.resourceId))
+      ), "grant_replaced", timestamp);
     const result = {
       grants: created,
       policy,
