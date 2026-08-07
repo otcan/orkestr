@@ -7,7 +7,9 @@ import { listConnectorInboxEvents, resetConnectorInboxForTest } from "../package
 import {
   decodeSocketMapFrames,
   encodeSocketMapFrame,
+  ingestPostfixSpoolFile,
   ingestPostfixMailboxMessage,
+  spoolPostfixMailboxMessage,
   postfixSocketMapLookup,
 } from "../packages/connectors/src/postfix-mailbox-adapter.js";
 import { createMailbox, deleteMailboxForPrincipal, rotateMailboxForPrincipal } from "../packages/core/src/mailboxes.js";
@@ -88,10 +90,34 @@ test("Postfix socket map netstrings decode incrementally", () => {
   assert.deepEqual(completed.frames, ["mailboxes two@in.orkestr.de"]);
 });
 
+test("Postfix spool ingestion keeps raw MIME off the API body and removes the spool file", async () => {
+  const env = await fixture();
+  env.ORKESTR_MAILBOX_SPOOL_DIR = path.join(env.ORKESTR_HOME, "spool");
+  const mailbox = await createMailbox({ purpose: "jobs", suffix: "spool", status: "active" }, env);
+  const rawMime = Buffer.from([
+    "From: sender@example.net",
+    `To: ${mailbox.address}`,
+    "Message-ID: <postfix-spool@example.net>",
+    "Subject: Spool adapter",
+    "",
+    "Spool body",
+  ].join("\r\n"));
+  const spool = await spoolPostfixMailboxMessage(rawMime, env);
+  const result = await ingestPostfixSpoolFile({
+    spoolId: spool.spoolId,
+    recipient: mailbox.address,
+    sender: "sender@example.net",
+  }, env);
+  assert.equal(result.action, "connector_inbox_queued");
+  await assert.rejects(fs.stat(spool.filePath), { code: "ENOENT" });
+});
+
 test("Postfix installer updates the main service and adapter environments", async () => {
   const script = await fs.readFile("scripts/install-postfix-mailbox.sh", "utf8");
   assert.match(script, /systemctl show -p EnvironmentFiles --value "\$main_unit"/);
   assert.match(script, /ui_env_file="\$\{ui_env_file:-\$env_file\}"/);
   assert.match(script, /upsert_env_file "\$env_file" "\$key" "\$value"/);
   assert.match(script, /upsert_env_file "\$ui_env_file" "\$key" "\$value"/);
+  assert.match(script, /ORKESTR_MAILBOX_MTA_TOKEN/);
+  assert.match(script, /ORKESTR_MAILBOX_SPOOL_DIR/);
 });

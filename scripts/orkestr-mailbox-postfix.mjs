@@ -5,8 +5,7 @@ import process from "node:process";
 import {
   decodeSocketMapFrames,
   encodeSocketMapFrame,
-  ingestPostfixMailboxMessage,
-  postfixSocketMapLookup,
+  spoolPostfixMailboxMessage,
 } from "../packages/connectors/src/postfix-mailbox-adapter.js";
 
 function flagValue(argv, name) {
@@ -35,18 +34,60 @@ async function readStdin(maxBytes) {
   return Buffer.concat(chunks, size);
 }
 
+function apiBase() {
+  if (process.env.ORKESTR_MAILBOX_API_BASE) return String(process.env.ORKESTR_MAILBOX_API_BASE).replace(/\/+$/, "");
+  const host = String(process.env.ORKESTR_HOST || "127.0.0.1").trim();
+  const safeHost = !host || host === "0.0.0.0" || host === "::" ? "127.0.0.1" : host;
+  return `http://${safeHost}:${process.env.ORKESTR_PORT || process.env.PORT || "19812"}`;
+}
+
+async function mailboxApi(pathname, { method = "GET", body } = {}) {
+  const token = String(process.env.ORKESTR_MAILBOX_MTA_TOKEN || "").trim();
+  if (!token) throw new Error("mailbox_mta_token_missing");
+  const response = await fetch(`${apiBase()}${pathname}`, {
+    method,
+    headers: {
+      authorization: `Bearer ${token}`,
+      ...(body === undefined ? {} : { "content-type": "application/json" }),
+    },
+    body: body === undefined ? undefined : JSON.stringify(body),
+    signal: AbortSignal.timeout(10_000),
+  });
+  const text = await response.text();
+  const payload = text ? JSON.parse(text) : {};
+  if (!response.ok) throw new Error(String(payload?.error || payload?.message || `mailbox_api_http_${response.status}`));
+  return payload;
+}
+
+async function lookupRecipient(request = "") {
+  const separator = String(request || "").indexOf(" ");
+  const map = separator < 0 ? "" : String(request).slice(0, separator).trim().toLowerCase();
+  const address = separator < 0 ? "" : String(request).slice(separator + 1).trim().toLowerCase();
+  if (map !== "mailboxes" || !address) return "PERM invalid_request";
+  const result = await mailboxApi(`/api/mailboxes/lookup?address=${encodeURIComponent(address)}`);
+  return result.found ? `OK ${result.mailboxId}` : "NOTFOUND";
+}
+
 async function ingest(argv) {
   const maxBytes = positiveInteger(
     process.env.ORKESTR_MAILBOX_POSTFIX_MAX_BYTES || process.env.ORKESTR_MAILBOX_MAX_MESSAGE_BYTES,
     25 * 1024 * 1024,
     100 * 1024 * 1024,
   );
-  const result = await ingestPostfixMailboxMessage({
-    rawMime: await readStdin(maxBytes),
+  const spool = await spoolPostfixMailboxMessage(await readStdin(maxBytes));
+  const body = {
+    spoolId: spool.spoolId,
     recipient: flagValue(argv, "--recipient"),
     originalRecipient: flagValue(argv, "--original-recipient"),
     sender: flagValue(argv, "--sender"),
-  });
+  };
+  let result;
+  try {
+    result = await mailboxApi("/api/mailboxes/ingest-spool", { method: "POST", body });
+  } catch (error) {
+    await fs.unlink(spool.filePath).catch(() => undefined);
+    throw error;
+  }
   process.stdout.write(`${JSON.stringify({
     ok: result.ok === true,
     action: result.action || "",
@@ -75,7 +116,7 @@ async function serve() {
         for (const frame of decoded.frames) {
           let response;
           try {
-            response = await postfixSocketMapLookup(frame);
+            response = await lookupRecipient(frame);
           } catch {
             response = "TEMP mailbox_lookup_failed";
           }

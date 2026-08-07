@@ -1,8 +1,55 @@
+import crypto from "node:crypto";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { constants as fsConstants } from "node:fs";
 import { ingestMailboxMessage } from "./mailbox-inbox.js";
 import { listMailboxes } from "../../core/src/mailboxes.js";
 import { acceptingMailboxStatuses, extractAddress } from "../../core/src/mailbox-normalization.js";
 
 const socketMapName = "mailboxes";
+const spoolIdPattern = /^mail-[a-f0-9-]{36}\.eml$/;
+
+export function mailboxSpoolDirectory(env = process.env) {
+  return path.resolve(String(env.ORKESTR_MAILBOX_SPOOL_DIR || "/var/spool/orkestr-mailbox").trim());
+}
+
+export function mailboxSpoolPath(spoolId = "", env = process.env) {
+  const id = String(spoolId || "").trim();
+  if (!spoolIdPattern.test(id)) throw new Error("mailbox_spool_id_invalid");
+  const directory = mailboxSpoolDirectory(env);
+  const resolved = path.resolve(directory, id);
+  if (path.dirname(resolved) !== directory) throw new Error("mailbox_spool_path_invalid");
+  return resolved;
+}
+
+export async function spoolPostfixMailboxMessage(rawMime = Buffer.alloc(0), env = process.env) {
+  const source = Buffer.isBuffer(rawMime) ? rawMime : Buffer.from(rawMime || "");
+  const spoolId = `mail-${crypto.randomUUID()}.eml`;
+  const filePath = mailboxSpoolPath(spoolId, env);
+  await fs.mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
+  await fs.writeFile(filePath, source, { flag: "wx", mode: 0o600 });
+  return { spoolId, filePath, sizeBytes: source.length };
+}
+
+export async function ingestPostfixSpoolFile({ spoolId = "", ...envelope } = {}, env = process.env) {
+  const filePath = mailboxSpoolPath(spoolId, env);
+  let handle;
+  try {
+    handle = await fs.open(filePath, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+    const stat = await handle.stat();
+    if (!stat.isFile()) throw new Error("mailbox_spool_file_invalid");
+    const maxBytes = Number(env.ORKESTR_MAILBOX_POSTFIX_MAX_BYTES || env.ORKESTR_MAILBOX_MAX_MESSAGE_BYTES || 25 * 1024 * 1024);
+    if (stat.size > maxBytes) {
+      const error = new Error("mailbox_message_too_large");
+      error.statusCode = 413;
+      throw error;
+    }
+    return await ingestPostfixMailboxMessage({ ...envelope, rawMime: await handle.readFile() }, env);
+  } finally {
+    await handle?.close().catch(() => undefined);
+    await fs.unlink(filePath).catch(() => undefined);
+  }
+}
 
 export function encodeSocketMapFrame(value = "") {
   const payload = Buffer.from(String(value || ""), "utf8");

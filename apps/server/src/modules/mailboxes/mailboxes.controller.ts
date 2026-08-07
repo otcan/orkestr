@@ -1,5 +1,6 @@
 import { Body, Controller, Delete, Get, HttpCode, Param, Patch, Post, Query, Req } from "@nestjs/common";
 import { ingestMailboxMessage } from "../../../../../packages/connectors/src/mailbox-inbox.js";
+import { ingestPostfixSpoolFile } from "../../../../../packages/connectors/src/postfix-mailbox-adapter.js";
 import {
   createMailboxForPrincipal,
   deleteMailboxForPrincipal,
@@ -7,12 +8,14 @@ import {
   listMailboxDeadLetters,
   listMailboxRelayAudits,
   listMailboxesForPrincipal,
+  getMailboxByAddress,
   publicMailbox,
   replayMailboxDeadLetterForPrincipal,
   retryMailboxRelayForPrincipal,
   rotateMailboxForPrincipal,
   verifyMailboxForPrincipal,
 } from "../../../../../packages/core/src/mailboxes.js";
+import { acceptingMailboxStatuses, extractAddress } from "../../../../../packages/core/src/mailbox-normalization.js";
 import { isAdminPrincipal } from "../../../../../packages/core/src/policy.js";
 import { requestPrincipal } from "../../../../../packages/core/src/principal.js";
 import { httpError } from "../../common/http.js";
@@ -67,6 +70,32 @@ function rethrowHttp(error: any, fallback = "mailbox_request_failed"): never {
 
 @Controller("api/mailboxes")
 export class MailboxesController {
+  @Get("lookup")
+  async lookup(@Req() request: any, @Query("address") address: string) {
+    const principal = requestPrincipal(request);
+    if (!isAdminPrincipal(principal) || request.orkestrMachineAuth !== "mailbox_mta") throw httpError("mailbox_mta_auth_required", 403);
+    const mailbox = await getMailboxByAddress(extractAddress(address));
+    const found = Boolean(mailbox && acceptingMailboxStatuses.has(mailbox.status));
+    return { ok: true, found, mailboxId: found ? mailbox!.id : "" };
+  }
+
+  @Post("ingest-spool")
+  @HttpCode(202)
+  async ingestSpool(@Req() request: any, @Body() body: Record<string, unknown> = {}) {
+    const principal = requestPrincipal(request);
+    if (!isAdminPrincipal(principal) || request.orkestrMachineAuth !== "mailbox_mta") throw httpError("mailbox_mta_auth_required", 403);
+    try {
+      return await ingestPostfixSpoolFile({
+        spoolId: String(body.spoolId || "").trim(),
+        recipient: String(body.recipient || "").trim(),
+        originalRecipient: String(body.originalRecipient || "").trim(),
+        sender: String(body.sender || "").trim(),
+      } as any, process.env);
+    } catch (error) {
+      rethrowHttp(error, "mailbox_ingest_failed");
+    }
+  }
+
   @Get()
   async list(@Req() request: any) {
     const principal = requestPrincipal(request);

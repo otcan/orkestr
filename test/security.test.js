@@ -213,6 +213,44 @@ test("scoped WhatsApp inbound tokens are accepted without granting bridge send",
   assert.equal(bridgeDenied.error, "wa_token_scope_denied");
 });
 
+test("mailbox MTA token is local-only and limited to lookup and spool ingestion", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-security-mailbox-mta-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_AUTH_REQUIRED: "1",
+    ORKESTR_MAILBOX_MTA_TOKEN: "mailbox-token",
+  };
+  const lookup = await authorizeHttpRequest({
+    method: "GET",
+    url: "/api/mailboxes/lookup?address=one@in.orkestr.de",
+    headers: { authorization: "Bearer mailbox-token" },
+  }, env);
+  const ingest = await authorizeHttpRequest({
+    method: "POST",
+    url: "/api/mailboxes/ingest-spool",
+    headers: { authorization: "Bearer mailbox-token" },
+  }, env);
+  const unrelated = await authorizeHttpRequest({
+    method: "GET",
+    url: "/api/mailboxes",
+    headers: { authorization: "Bearer mailbox-token" },
+  }, env);
+  const remote = await authorizeHttpRequest({
+    method: "GET",
+    url: "/api/mailboxes/lookup?address=one@in.orkestr.de",
+    headers: { authorization: "Bearer mailbox-token" },
+    socket: { remoteAddress: "203.0.113.10" },
+  }, env);
+  assert.equal(lookup.ok, true);
+  assert.equal(lookup.machineAuth, "mailbox_mta");
+  assert.deepEqual(lookup.machineAuthContext.scopes, ["mailbox:lookup"]);
+  assert.equal(ingest.ok, true);
+  assert.deepEqual(ingest.machineAuthContext.scopes, ["mailbox:ingest"]);
+  assert.equal(unrelated.ok, false);
+  assert.equal(remote.ok, false);
+  assert.equal(remote.error, "mailbox_mta_local_only");
+});
+
 test("non-local bind requires pairing by default", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-security-nonlocal-"));
   const prior = saveEnv([

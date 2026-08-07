@@ -709,6 +709,32 @@ function jobAlertRelayTokens(env = process.env) {
   ];
 }
 
+function isMailboxMtaMachineRoute(request) {
+  const method = String(request?.method || "GET").toUpperCase();
+  const url = String(request?.originalUrl || request?.url || "").split("?")[0];
+  if (method === "GET" && url === "/api/mailboxes/lookup") return { kind: "mailbox_mta", scope: "mailbox:lookup" };
+  if (method === "POST" && url === "/api/mailboxes/ingest-spool") return { kind: "mailbox_mta", scope: "mailbox:ingest" };
+  return null;
+}
+
+function authorizeMailboxMtaMachineRequest(request, env = process.env) {
+  const route = isMailboxMtaMachineRoute(request);
+  if (!route) return null;
+  const token = bearerToken(request?.headers?.authorization || request?.headers?.Authorization || "");
+  const configured = splitSecretList(env.ORKESTR_MAILBOX_MTA_TOKEN);
+  if (!configured.length) return { ok: false, statusCode: 503, error: "mailbox_mta_auth_unconfigured", machineAuth: route.kind };
+  if (!token || !configured.some((candidate) => timingSafeSecretEqual(token, candidate))) {
+    return { ok: false, statusCode: 401, error: "mailbox_mta_auth_invalid", machineAuth: route.kind };
+  }
+  if (!isLocalRequest(request)) return { ok: false, statusCode: 403, error: "mailbox_mta_local_only", machineAuth: route.kind };
+  return {
+    ok: true,
+    principal: adminPrincipal(defaultAdminUser(env)),
+    machineAuth: route.kind,
+    machineAuthContext: { tokenId: "configured-mailbox-mta-token", scopes: [route.scope], principalKind: "mail_relay" },
+  };
+}
+
 function whatsappBridgeTokens(env = process.env) {
   return [
     ...splitSecretList(env.ORKESTR_WHATSAPP_BRIDGE_TOKEN),
@@ -1739,6 +1765,15 @@ export async function authorizeHttpRequest(request, env = process.env) {
   if (shareAuth && Number(shareAuth.statusCode || 0) >= 400) {
     return { ok: false, status, statusCode: shareAuth.statusCode, error: shareAuth.error || "desktop_share_forbidden" };
   }
+  const mailboxMtaAuth = authorizeMailboxMtaMachineRequest(request, env);
+  if (mailboxMtaAuth?.ok) return {
+    ok: true,
+    status,
+    principal: mailboxMtaAuth.principal,
+    machineAuth: mailboxMtaAuth.machineAuth,
+    machineAuthContext: mailboxMtaAuth.machineAuthContext,
+  };
+  if (mailboxMtaAuth) return { ...mailboxMtaAuth, status };
   const cliAuth = await authorizeCliMachineRequest(request, env);
   if (cliAuth?.ok) return { ok: true, status, principal: cliAuth.principal, machineAuth: cliAuth.machineAuth };
   const brokerProxyAuth = await authorizeBrokerProxyMachineRequest(request, env);

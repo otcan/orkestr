@@ -100,6 +100,12 @@ upsert_env() {
   [ "$ui_env_file" = "$env_file" ] || upsert_env_file "$ui_env_file" "$key" "$value"
 }
 
+read_env_value() {
+  local file="$1" key="$2"
+  [ -r "$file" ] || return 0
+  awk -v key="$key" 'index($0, key "=") == 1 { print substr($0, length(key) + 2); exit }' "$file"
+}
+
 revision="$(git -C "$current_link" rev-parse HEAD 2>/dev/null || date -u +%Y%m%dT%H%M%SZ)"
 upsert_env ORKESTR_MAILBOX_DOMAIN "$domain"
 upsert_env ORKESTR_MAILBOX_REQUIRE_MTA_READY 1
@@ -109,6 +115,13 @@ upsert_env ORKESTR_MAILBOX_MTA_REVISION "$revision"
 upsert_env ORKESTR_MAILBOX_MTA_READY 1
 upsert_env ORKESTR_MAILBOX_SOCKET_HOST 127.0.0.1
 upsert_env ORKESTR_MAILBOX_SOCKET_PORT "${ORKESTR_MAILBOX_SOCKET_PORT:-19096}"
+mailbox_token="$(read_env_value "$ui_env_file" ORKESTR_MAILBOX_MTA_TOKEN)"
+mailbox_token="${mailbox_token:-$(read_env_value "$env_file" ORKESTR_MAILBOX_MTA_TOKEN)}"
+mailbox_token="${mailbox_token:-$(openssl rand -hex 32)}"
+spool_dir="${ORKESTR_MAILBOX_SPOOL_DIR:-/var/spool/orkestr-mailbox}"
+upsert_env ORKESTR_MAILBOX_MTA_TOKEN "$mailbox_token"
+upsert_env ORKESTR_MAILBOX_SPOOL_DIR "$spool_dir"
+install -d -o "$run_user" -g "$(id -gn "$run_user")" -m 0700 "$spool_dir"
 
 cat > /etc/systemd/system/orkestr-mailbox-postfix.service <<EOF
 [Unit]
