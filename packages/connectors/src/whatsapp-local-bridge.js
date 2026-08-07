@@ -8,6 +8,7 @@ import { processApiAgentThreadInput, threadUsesApiAgent } from "../../core/src/t
 import { listTenantWhatsAppRoutes, tenantWhatsAppInboundForwardRoute } from "../../core/src/tenant-whatsapp-routing.js";
 import { attachRoutingFailure, normalizeRoutingFailure, routingFailureFromError } from "../../core/src/routing-failures.js";
 import { recordRouterTraceEvent, routerTraceIdFor, turnIdFor } from "../../core/src/router-traces.js";
+import { recordWatcherAlert } from "../../core/src/watcher-alerts.js";
 import { exactSecurityApproveChallengeId } from "../../core/src/raw-terminal-commands.js";
 import { publicHttpUrl, tenantPublicSetupUrl } from "../../core/src/tenant-public-urls.js";
 import { getThread, listThreads } from "../../core/src/threads.js";
@@ -22,6 +23,12 @@ import {
   whatsappBindingIsRouteEligible,
 } from "./whatsapp-inbound-routing.js";
 import { readWhatsAppConnectorAccounts, validWhatsAppConnectorAccountId } from "./whatsapp-account-registry.js";
+import {
+  claimTransformedMediaEchoTerminalReplayAudit,
+  filterTransformedMediaEchoAttachments,
+  recordTransformedMediaEchoTerminalReplayAudit,
+  rememberTransformedOutboundMediaEcho,
+} from "./whatsapp-media-echo.js";
 
 export const localWhatsAppAccountIds = ["account-1", "account-2"];
 export const localWhatsAppBridgeBasePath = "/api/connectors/whatsapp/bridge";
@@ -1466,6 +1473,31 @@ function serializedMessageId(message = {}) {
   return [message?.fromMe === true ? "true" : "false", remote, local, participant].filter(Boolean).join("_");
 }
 
+function stableProtocolMessageId(message = {}) {
+  const direct = serializedId(message?.id?._serialized || message?._serialized);
+  if (direct) return direct;
+  if (typeof message?.id === "string" || typeof message?.id === "number" || typeof message?.id === "bigint") {
+    return serializedId(message.id);
+  }
+  const local = serializedId(message?.id?.id || message?.messageId);
+  if (!local) return "";
+  const remote = serializedId(message?.id?.remote || message?.from || message?.to);
+  const participant = serializedId(message?.id?.participant || message?.author);
+  return [message?.fromMe === true ? "true" : "false", remote, local, participant].filter(Boolean).join("_");
+}
+
+function injectedTerminalReplayAuditAppendFailure(env = process.env, eventId = "", auditId = "") {
+  const target = serializedId(env.ORKESTR_WHATSAPP_TRANSFORMED_MEDIA_ECHO_INJECT_TERMINAL_REPLAY_AUDIT_FAILURE_ID);
+  if (!target) return false;
+  const scopedEventId = serializedId(eventId);
+  const scopedAuditId = serializedId(auditId);
+  if (target !== "*" && target !== scopedEventId && target !== scopedAuditId) return false;
+  const remaining = Math.max(0, Math.floor(Number(env.ORKESTR_WHATSAPP_TRANSFORMED_MEDIA_ECHO_INJECT_TERMINAL_REPLAY_AUDIT_FAILURE_COUNT || 1)));
+  if (!remaining) return false;
+  env.ORKESTR_WHATSAPP_TRANSFORMED_MEDIA_ECHO_INJECT_TERMINAL_REPLAY_AUDIT_FAILURE_COUNT = String(remaining - 1);
+  return true;
+}
+
 function pairingCodeRequestError(error) {
   const text = [
     error?.stack,
@@ -2182,7 +2214,7 @@ function localWhatsAppChatOpsProbeIntervalMs(env = process.env) {
 
 function localWhatsAppChatOpsProbeTimeoutMs(env = process.env) {
   const parsed = Number(env.ORKESTR_WHATSAPP_CHAT_OPS_PROBE_TIMEOUT_MS || env.WA_CHAT_OPS_PROBE_TIMEOUT_MS || 2500);
-  return Number.isFinite(parsed) ? Math.max(500, parsed) : 2500;
+  return Number.isFinite(parsed) ? Math.min(5000, Math.max(500, parsed)) : 2500;
 }
 
 function localWhatsAppRuntimeDestroyTimeoutMs(env = process.env) {
@@ -3363,7 +3395,10 @@ async function downloadInboundMedia(accountId, message, env = process.env, { cli
           primaryError = error;
         }
       }
-      if (!media?.data) {
+      const hasDownloadedMedia = Array.isArray(media)
+        ? media.some((item) => item?.data)
+        : Boolean(media?.data);
+      if (!hasDownloadedMedia) {
         try {
           media = await downloadInboundMediaFromBrowserStore(candidate || message, client, env);
           if (media?.data) {
@@ -3379,8 +3414,11 @@ async function downloadInboundMedia(accountId, message, env = process.env, { cli
           if (!primaryError) primaryError = fallbackError;
         }
       }
-      if (primaryError && !media?.data) throw primaryError;
-      if (!media?.data) throw new Error("whatsapp_inbound_media_not_ready");
+      const hasRecoveredMedia = Array.isArray(media)
+        ? media.some((item) => item?.data)
+        : Boolean(media?.data);
+      if (primaryError && !hasRecoveredMedia) throw primaryError;
+      if (!hasRecoveredMedia) throw new Error("whatsapp_inbound_media_not_ready");
       if (attempt > 1) {
         await appendEvent({
           type: "whatsapp_local_inbound_media_download_recovered",
@@ -3421,24 +3459,31 @@ async function downloadInboundMedia(accountId, message, env = process.env, { cli
 async function saveInboundMedia(accountId, message, env = process.env, options = {}) {
   if (!message?.hasMedia) return [];
   const media = await downloadInboundMedia(accountId, message, env, options);
+  const mediaItems = (Array.isArray(media) ? media : [media]).filter((item) => item?.data);
+  if (!mediaItems.length) return [];
   const date = new Date().toISOString().slice(0, 10);
   const outDir = path.join(inboundMediaRoot(env), date);
   await fs.mkdir(outDir, { recursive: true });
   const eventId = safeFilePart(serializedMessageId(message) || `${accountId}-${Date.now()}`, "message");
-  const originalName = safeFilePart(media.filename || message._data?.filename || "", "");
-  const ext = path.extname(originalName) || extensionForMime(media.mimetype);
-  const baseName = originalName
-    ? `${eventId}-${originalName}`
-    : `${eventId}-attachment${ext}`;
-  const filePath = path.join(outDir, baseName);
-  await fs.writeFile(filePath, Buffer.from(media.data, "base64"));
-  return [{
-    path: filePath,
-    filename: originalName || path.basename(filePath),
-    mimetype: media.mimetype || "",
-    kind: message.type || "",
-    size: Buffer.byteLength(media.data, "base64"),
-  }];
+  const attachments = [];
+  for (const [index, item] of mediaItems.entries()) {
+    const originalName = safeFilePart(item.filename || (mediaItems.length === 1 ? message._data?.filename : "") || "", "");
+    const ext = path.extname(originalName) || extensionForMime(item.mimetype);
+    const baseName = originalName
+      ? `${eventId}-${originalName}`
+      : `${eventId}-attachment${index + 1}${ext}`;
+    const filePath = path.join(outDir, baseName);
+    const body = Buffer.from(item.data, "base64");
+    await fs.writeFile(filePath, body);
+    attachments.push({
+      path: filePath,
+      filename: originalName || path.basename(filePath),
+      mimetype: item.mimetype || "",
+      kind: message.type || "",
+      size: body.length,
+    });
+  }
+  return attachments;
 }
 
 function attachmentSummaryText(attachments = []) {
@@ -3451,6 +3496,136 @@ function attachmentSummaryText(attachments = []) {
       attachment.mimetype ? `mimetype: ${attachment.mimetype}` : "",
     ].filter(Boolean).join("\n")),
   ].join("\n\n");
+}
+
+async function recordLocalTransformedMediaEchoDecision({ accountId = "", chatId = "", eventId = "", result = {}, terminal = false, env = process.env } = {}) {
+  if (!result?.matched?.length) return;
+  const routerTraceId = routerTraceIdFor({
+    connector: "whatsapp",
+    accountId,
+    chatId,
+    eventId: eventId || "missing_event_id",
+    fallbackId: `${accountId}:${chatId}:transformed_media_echo`,
+  });
+  const turnId = turnIdFor({ routerTraceId });
+  await recordRouterTraceEvent({
+    routerTraceId,
+    turnId,
+    connector: "whatsapp",
+    accountId,
+    chatId,
+    sourceEventId: eventId,
+    phase: terminal ? "skipped" : (result.action === "shadow" ? "shadow" : "filtered"),
+    reason: "outbound_echo_attachment_transformed",
+    terminal,
+  }, env).catch(() => {});
+  await appendEvent({
+    type: "whatsapp_outbound_echo_attachment_transformed",
+    eventId,
+    routerTraceId,
+    chatId,
+    accountId,
+    source: "local_bridge",
+    mode: result.mode || "",
+    decision: terminal ? "suppress" : result.action || "",
+    matchedAttachmentCount: result.matched.length,
+    retainedAttachmentCount: Array.isArray(result.attachments) ? result.attachments.length : 0,
+  }, env).catch(() => {});
+}
+
+async function recordLocalTransformedMediaEchoCycleSignal({ accountId = "", chatId = "", eventId = "", result = {}, env = process.env } = {}) {
+  if (result?.cycleSignal?.suspected !== true) return;
+  const signal = result.cycleSignal;
+  const routerTraceId = routerTraceIdFor({
+    connector: "whatsapp",
+    accountId,
+    chatId,
+    eventId: eventId || "missing_event_id",
+    fallbackId: `${accountId}:${chatId}:transformed_media_echo_cycle`,
+  });
+  const turnId = turnIdFor({ routerTraceId });
+  await recordRouterTraceEvent({
+    routerTraceId,
+    turnId,
+    connector: "whatsapp",
+    accountId,
+    chatId,
+    sourceEventId: eventId,
+    phase: "warning",
+    reason: "outbound_media_inbound_assistant_cycle_suspected",
+  }, env).catch(() => {});
+  await appendEvent({
+    type: "whatsapp_outbound_echo_attachment_transformed_cycle_suspected",
+    eventId,
+    routerTraceId,
+    source: "local_bridge",
+    mode: signal.mode || result.mode || "",
+    decision: result.action || "",
+    reason: signal.reason || "",
+    mediaKind: signal.mediaKind || "image",
+    matchedAttachmentBucket: signal.matchedAttachmentBucket || "",
+    retainedAttachmentBucket: signal.retainedAttachmentBucket || "",
+    candidateRecordBucket: signal.candidateRecordBucket || "",
+  }, env).catch(() => {});
+  await recordWatcherAlert({
+    severity: "warning",
+    source: "connectors.whatsapp.media_echo",
+    code: "outbound_media_inbound_assistant_cycle_suspected",
+    message: "Potential WhatsApp outbound media echo is being routed back to the assistant.",
+    details: {
+      connector: "whatsapp",
+      source: "local_bridge",
+      mode: signal.mode || result.mode || "",
+      decision: result.action || "",
+      reason: signal.reason || "",
+      mediaKind: signal.mediaKind || "image",
+      matchedAttachmentBucket: signal.matchedAttachmentBucket || "",
+      retainedAttachmentBucket: signal.retainedAttachmentBucket || "",
+      candidateRecordBucket: signal.candidateRecordBucket || "",
+    },
+  }, env).catch(() => {});
+}
+
+async function deleteMatchedInboundEchoFiles({ accountId = "", chatId = "", eventId = "", matched = [], env = process.env } = {}) {
+  const root = inboundMediaRoot(env);
+  let deleted = 0;
+  let skipped = 0;
+  for (const item of Array.isArray(matched) ? matched : []) {
+    const filePath = String(item?.attachment?.path || "").trim();
+    if (!filePath || !sameOrInsidePath(root, filePath)) {
+      skipped += 1;
+      continue;
+    }
+    try {
+      const stat = await fs.stat(filePath);
+      if (!stat.isFile()) {
+        skipped += 1;
+        continue;
+      }
+      await fs.unlink(filePath);
+      deleted += 1;
+    } catch (error) {
+      if (error?.code === "ENOENT") continue;
+      skipped += 1;
+      await appendEvent({
+        type: "whatsapp_outbound_echo_attachment_transformed_cleanup_failed",
+        accountId,
+        eventId,
+        chatId,
+        errorClass: "inbound_echo_file_cleanup_failed",
+      }, env).catch(() => {});
+    }
+  }
+  if (deleted || skipped) {
+    await appendEvent({
+      type: "whatsapp_outbound_echo_attachment_transformed_cleanup",
+      accountId,
+      eventId,
+      chatId,
+      deleted,
+      skipped,
+    }, env).catch(() => {});
+  }
 }
 
 function publicHelpUrl(env = process.env) {
@@ -3717,6 +3892,7 @@ export async function handleInboundMessage(accountId, message, env = process.env
   if (message?.isStatus) return { skipped: "status_message" };
   const text = String(message?.body || "").trim();
   const { chatId, from, fromMe: routeFromMe } = localWhatsAppMessageRouteFields(message);
+  const protocolEventId = stableProtocolMessageId(message);
   const eventId = String(serializedMessageId(message) || `${accountId}:${chatId}:${message.timestamp || Date.now()}`).trim();
   if (!isRoutableWhatsAppConversationId(chatId)) {
     await appendEvent({
@@ -3726,6 +3902,46 @@ export async function handleInboundMessage(accountId, message, env = process.env
       chatId,
     }, env).catch(() => {});
     return { skipped: "invalid_conversation_id", eventId, chatId, from, fromMe: routeFromMe };
+  }
+  const terminalEchoReplay = fromMe && protocolEventId
+    ? await claimTransformedMediaEchoTerminalReplayAudit({ accountId, chatId, eventId: protocolEventId, env }).catch(() => null)
+    : null;
+  if (terminalEchoReplay) {
+    if (terminalEchoReplay.replayAuditNeeded !== false) {
+      const replayAuditId = String(terminalEchoReplay.replayAuditId || terminalEchoReplay.replayAudit?.id || "").trim();
+      try {
+        if (injectedTerminalReplayAuditAppendFailure(env, protocolEventId, replayAuditId)) {
+          throw new Error("transformed_media_echo_terminal_replay_audit_injected_failure");
+        }
+        await appendEvent({
+          type: "whatsapp_outbound_echo_attachment_transformed_terminal_replay",
+          accountId,
+          eventId: protocolEventId,
+          chatId,
+          auditId: replayAuditId,
+          idempotencyKey: replayAuditId,
+          mode: terminalEchoReplay.mode || "",
+          matchedAttachmentCount: terminalEchoReplay.matchedAttachmentCount || 0,
+        }, env);
+        await recordTransformedMediaEchoTerminalReplayAudit({
+          accountId,
+          chatId,
+          eventId: protocolEventId,
+          auditId: replayAuditId,
+          env,
+        }).catch(() => {});
+      } catch {
+        // The replay is still suppressed. A pending audit state remains durable
+        // and the next exact redelivery retries the append before marking recorded.
+      }
+    }
+    return {
+      duplicate: true,
+      skipped: terminalEchoReplay.skipped || "outbound_echo_attachment_transformed",
+      eventId,
+      chatId,
+      matchedAttachmentCount: terminalEchoReplay.matchedAttachmentCount || 0,
+    };
   }
   if (fromMe && outboundMessageIds.has(eventId)) return { skipped: "outbound_echo_id", eventId, chatId };
   if (outboundTextRecentlySent(accountId, chatId, text, env)) {
@@ -3766,11 +3982,62 @@ export async function handleInboundMessage(accountId, message, env = process.env
     }, env).catch(() => {});
   }
   if (!text && !attachments.length) return { skipped: "empty_message" };
+  let routedTextSource = text;
+  const transformedEcho = await filterTransformedMediaEchoAttachments({
+    accountId,
+    chatId,
+    eventId,
+    terminalEventId: protocolEventId,
+    fromMe,
+    text,
+    attachments,
+    env,
+    source: "local_bridge",
+  }).catch((error) => {
+    appendEvent({
+      type: "whatsapp_outbound_echo_attachment_transformed_match_failed",
+      accountId,
+      eventId,
+      chatId,
+      errorClass: "transformed_media_echo_match_failed",
+    }, env).catch(() => {});
+    return null;
+  });
+  const transformedMediaEchoChecked = transformedEcho
+    ? {
+        source: "local_bridge",
+        mode: transformedEcho.mode || "",
+        action: transformedEcho.action || "",
+        matchedAttachmentCount: Array.isArray(transformedEcho.matched) ? transformedEcho.matched.length : 0,
+        cycleSignalHandled: transformedEcho?.cycleSignal?.suspected === true,
+      }
+    : null;
+  if (transformedEcho?.matched?.length) {
+    attachments = transformedEcho.attachments;
+    routedTextSource = transformedEcho.text;
+    const terminal = transformedEcho.mode === "enforce" && !routedTextSource && !attachments.length;
+    if (transformedEcho.mode === "enforce") {
+      await deleteMatchedInboundEchoFiles({ accountId, chatId, eventId, matched: transformedEcho.matched, env });
+    }
+    await recordLocalTransformedMediaEchoDecision({ accountId, chatId, eventId, result: transformedEcho, terminal, env });
+    if (terminal) {
+      return {
+        skipped: "outbound_echo_attachment_transformed",
+        eventId,
+        chatId,
+        matchedAttachmentCount: transformedEcho.matched.length,
+      };
+    }
+  }
+  if (!routedTextSource && !attachments.length) return { skipped: "empty_message" };
   if (outboundAttachmentsRecentlySent(accountId, chatId, attachments, env, { allowSizeOnly: fromMe })) {
     return { skipped: fromMe ? "outbound_echo_attachment" : "outbound_echo_cross_account_attachment", eventId, chatId };
   }
+  if (transformedEcho?.cycleSignal?.suspected) {
+    await recordLocalTransformedMediaEchoCycleSignal({ accountId, chatId, eventId, result: transformedEcho, env });
+  }
   const routeAccountId = String(options.routeAccountId || accountId || "").trim();
-  const routedText = text || attachmentSummaryText(attachments);
+  const routedText = routedTextSource || attachmentSummaryText(attachments);
   const inbound = {
     eventId,
     chatId,
@@ -3779,6 +4046,7 @@ export async function handleInboundMessage(accountId, message, env = process.env
     fromMe: routeFromMe,
     text: routedText,
     attachments,
+    ...(transformedMediaEchoChecked ? { transformedMediaEchoChecked } : {}),
     timestamp: message.timestamp ? new Date(Number(message.timestamp) * 1000).toISOString() : nowIso(),
   };
   try {
@@ -6897,9 +7165,24 @@ export async function sendLocalWhatsAppMessage({ chatId = "", text = "", account
           "whatsapp_send_media",
           env,
         );
-        rememberOutboundMessageId(message?.id?._serialized);
+        const deliveredMessageId = serializedMessageId(message);
+        rememberOutboundMessageId(deliveredMessageId);
+        await rememberTransformedOutboundMediaEcho({
+          accountId: selectedAccountId,
+          chatId,
+          attachment: { ...attachment, size: stat.size },
+          deliveredMessageId,
+          crossAccount: crossAccountEchoSuppression !== false,
+          env,
+        }).catch((error) => appendEvent({
+          type: "whatsapp_transformed_media_echo_record_failed",
+          chatId,
+          accountId: selectedAccountId,
+          mediaKind: "image",
+          errorClass: "transformed_media_echo_record_failed",
+        }, env).catch(() => {}));
         sent.push({
-          id: String(message?.id?._serialized || ""),
+          id: String(deliveredMessageId || ""),
           kind: "attachment",
           path: attachment.path,
           filename: attachment.filename || path.basename(attachment.path),

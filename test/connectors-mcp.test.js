@@ -40,7 +40,7 @@ async function close(server) {
   await new Promise((resolve) => server.close(resolve));
 }
 
-function fakeWorker() {
+function fakeWorker({ healthHandler = null } = {}) {
   const calls = [];
   const server = http.createServer(async (req, res) => {
     const chunks = [];
@@ -49,6 +49,10 @@ function fakeWorker() {
     calls.push({ method: req.method, url: req.url, body });
     res.setHeader("content-type", "application/json");
     if (req.url === "/health") {
+      if (typeof healthHandler === "function") {
+        await healthHandler(req, res);
+        return;
+      }
       res.end(JSON.stringify({ ok: true, state: "ready", accounts: [{ accountId: "sender", ready: true }] }));
       return;
     }
@@ -91,9 +95,9 @@ function fakeWorker() {
   return { server, calls };
 }
 
-async function fixture({ scoped = false } = {}) {
+async function fixture({ scoped = false, workerOptions = {}, envOverrides = {}, gatewayOptions = {} } = {}) {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-connectors-mcp-"));
-  const worker = fakeWorker();
+  const worker = fakeWorker(workerOptions);
   const workerUrl = await listen(worker.server);
   const token = scoped ? "scoped-token" : "operator-token";
   const env = {
@@ -120,8 +124,9 @@ async function fixture({ scoped = false } = {}) {
     }) : "",
     ORKESTR_CONNECTORS_MCP_BEARER_TOKEN: token,
     ORKESTR_CONNECTOR_INBOX_RETRY_INTERVAL_MS: "60000",
+    ...envOverrides,
   };
-  const gateway = createConnectorsMcpGateway({ env });
+  const gateway = createConnectorsMcpGateway({ env, ...gatewayOptions });
   const gatewayServer = http.createServer(gateway.app);
   const gatewayUrl = await listen(gatewayServer);
   env.ORKESTR_CONNECTORS_MCP_URL = `${gatewayUrl}/mcp`;
@@ -136,6 +141,96 @@ async function fixture({ scoped = false } = {}) {
     },
   };
 }
+
+async function gatewayHealth(item) {
+  const response = await fetch(`${item.gatewayUrl}/health`, {
+    headers: { authorization: `Bearer ${item.env.ORKESTR_CONNECTORS_MCP_BEARER_TOKEN}` },
+  });
+  const payload = await response.json();
+  return { response, payload };
+}
+
+test("connector MCP gateway health returns HTTP 200 for healthy worker diagnostics", async () => {
+  const item = await fixture();
+  try {
+    const { response, payload } = await gatewayHealth(item);
+
+    assert.equal(response.status, 200);
+    assert.equal(payload.ok, true);
+    assert.equal(payload.worker.ok, true);
+    assert.equal(payload.queue.pending, 0);
+  } finally {
+    await item.close();
+  }
+});
+
+test("connector MCP gateway health returns HTTP 503 for worker ok false payloads", async () => {
+  const item = await fixture({
+    workerOptions: {
+      healthHandler: (_request, response) => {
+        response.end(JSON.stringify({ ok: false, state: "stalled", error: "worker_socket_stalled" }));
+      },
+    },
+  });
+  try {
+    const { response, payload } = await gatewayHealth(item);
+
+    assert.equal(response.status, 503);
+    assert.equal(payload.ok, false);
+    assert.equal(payload.worker.ok, false);
+    assert.equal(payload.worker.error, "worker_socket_stalled");
+    assert.equal(typeof payload.queue.pending, "number");
+  } finally {
+    await item.close();
+  }
+});
+
+test("connector MCP gateway health returns HTTP 503 when worker health times out", async () => {
+  const item = await fixture({
+    workerOptions: {
+      healthHandler: () => {},
+    },
+    envOverrides: {
+      ORKESTR_WA_WORKER_HEALTH_TIMEOUT_MS: "40",
+    },
+  });
+  const started = Date.now();
+  try {
+    const { response, payload } = await gatewayHealth(item);
+
+    assert.equal(response.status, 503);
+    assert.equal(payload.ok, false);
+    assert.equal(payload.worker.ok, false);
+    assert.equal(payload.worker.error, "whatsapp_worker_timeout");
+    assert.equal(Date.now() - started < 1000, true);
+  } finally {
+    await item.close();
+  }
+});
+
+test("connector MCP gateway health bounds queue inspection after worker succeeds", async () => {
+  const item = await fixture({
+    envOverrides: {
+      ORKESTR_CONNECTORS_MCP_HEALTH_QUEUE_TIMEOUT_MS: "40",
+    },
+    gatewayOptions: {
+      listConnectorInboxEventsFn: () => new Promise(() => {}),
+    },
+  });
+  const started = Date.now();
+  try {
+    const { response, payload } = await gatewayHealth(item);
+
+    assert.equal(response.status, 200);
+    assert.equal(payload.ok, true);
+    assert.equal(payload.worker.ok, true);
+    assert.equal(payload.queue.inspectionTimedOut, true);
+    assert.equal(payload.queue.pending, 0);
+    assert.equal(Date.now() - started < 1000, true);
+  } finally {
+    await item.close();
+  }
+});
 
 test("connector MCP stages authenticated worker media before durable routing", async () => {
   const item = await fixture();

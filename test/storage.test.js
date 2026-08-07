@@ -36,6 +36,30 @@ test("writeJson writes valid JSON through concurrent writes", async () => {
   assert.equal((await fs.readdir(dir)).filter((name) => name.endsWith(".tmp")).length, 0);
 });
 
+test("failed queued file writes do not leak unhandled rejections or poison retries", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-storage-queue-failure-"));
+  const blocked = path.join(dir, "blocked");
+  const file = path.join(blocked, "state.json");
+  await fs.writeFile(blocked, "not a directory", "utf8");
+  const unhandled = [];
+  const onUnhandled = (reason) => {
+    unhandled.push(reason);
+  };
+  process.on("unhandledRejection", onUnhandled);
+  try {
+    await assert.rejects(() => writeJson(file, { failed: true }), /EEXIST|ENOTDIR|not a directory/i);
+    await new Promise((resolve) => setImmediate(resolve));
+    await fs.unlink(blocked);
+    await writeJson(file, { ok: true });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.deepEqual(await readJson(file, null), { ok: true });
+    assert.equal(unhandled.length, 0);
+  } finally {
+    process.off("unhandledRejection", onUnhandled);
+  }
+});
+
 test("listEvents reads recent JSONL records from a bounded tail", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-storage-events-"));
   const env = {

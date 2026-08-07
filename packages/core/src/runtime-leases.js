@@ -45,6 +45,7 @@ import { completeThreadSecurityApproveCommand, threadSecurityApproveChallengeId 
 import { threadUsesContainedUserPolicy } from "./tenant-policy.js";
 import { apiAgentRuntimeStatus, processApiAgentThreadInput, threadUsesApiAgent } from "./tenant-api-agent.js";
 import { appendTurnLifecycleEvent, turnLifecycleFromRuntimeStatus } from "./turn-lifecycle.js";
+import { withRuntimeLeaseLock } from "./runtime-lease-lock.js";
 import {
   capturePane,
   killTmuxSession,
@@ -110,12 +111,24 @@ function automaticRuntimeDoctorIntervalMs(env = process.env) {
   return positiveDurationMs(env.ORKESTR_RUNTIME_DOCTOR_AUTOMATIC_INTERVAL_MS, 60_000, 5_000);
 }
 
+function runtimeSyncSideEffectDelayMs(env = process.env) {
+  return positiveDurationMs(env.ORKESTR_RUNTIME_SYNC_SIDE_EFFECT_DELAY_MS, 0, 0);
+}
+
+function runtimePaneProgressSideEffectDelayMs(env = process.env) {
+  return positiveDurationMs(env.ORKESTR_RUNTIME_PANE_PROGRESS_SIDE_EFFECT_DELAY_MS, 0, 0);
+}
+
 function passiveTmuxStatusCacheTtlMs(env = process.env) {
   return positiveDurationMs(env.ORKESTR_RUNTIME_TMUX_STATUS_CACHE_MS, 4_000, 0);
 }
 
 function codexRuntimeMetadataCacheTtlMs(env = process.env) {
   return positiveDurationMs(env.ORKESTR_RUNTIME_CODEX_METADATA_CACHE_MS, 60_000, 0);
+}
+
+function runtimeLeaseStoreLockTimeoutMs(env = process.env) {
+  return positiveDurationMs(env.ORKESTR_RUNTIME_LEASE_LOCK_TIMEOUT_MS, 10_000, 1);
 }
 
 function runtimeCacheScope(env = process.env) {
@@ -358,29 +371,45 @@ async function runtimeLeasesPath(env) {
   return paths.runtimeLeases;
 }
 
-async function saveRuntimeLeases(leases, env = process.env) {
+async function readRuntimeLeasesUnlocked(env = process.env) {
+  return readJson(await runtimeLeasesPath(env), []);
+}
+
+async function saveRuntimeLeasesUnlocked(leases, env = process.env) {
   await writeJson(await runtimeLeasesPath(env), leases);
   return leases;
 }
 
 export async function listRuntimeLeases(env = process.env) {
-  return readJson(await runtimeLeasesPath(env), []);
+  return readRuntimeLeasesUnlocked(env);
+}
+
+async function mutateRuntimeLeases(env = process.env, operation, options = {}) {
+  const filePath = await runtimeLeasesPath(env);
+  return withRuntimeLeaseLock(filePath, async () => {
+    const leases = await readRuntimeLeasesUnlocked(env);
+    const result = await operation(leases);
+    const nextLeases = Array.isArray(result?.leases) ? result.leases : null;
+    if (nextLeases && result.changed !== false) await saveRuntimeLeasesUnlocked(nextLeases, env);
+    return Object.prototype.hasOwnProperty.call(result || {}, "value") ? result.value : result;
+  }, { timeoutMs: options.timeoutMs ?? runtimeLeaseStoreLockTimeoutMs(env) });
 }
 
 export async function clearRuntimeLeasesForThread(threadId, options = {}, env = process.env) {
   const id = String(threadId || "").trim();
   if (!id) return { cleared: 0 };
-  const leases = await listRuntimeLeases(env);
   const now = nowIso();
   const reason = String(options.reason || "runtime_cleared").trim() || "runtime_cleared";
-  let cleared = 0;
-  const next = leases.map((lease) => {
-    if (lease.threadId !== id || lease.endedAt) return lease;
-    cleared += 1;
-    return { ...lease, endedAt: now, endReason: reason };
+  const { cleared } = await mutateRuntimeLeases(env, async (leases) => {
+    let cleared = 0;
+    const next = leases.map((lease) => {
+      if (lease.threadId !== id || lease.endedAt) return lease;
+      cleared += 1;
+      return { ...lease, endedAt: now, endReason: reason };
+    });
+    return { leases: next, changed: cleared > 0, value: { cleared } };
   });
   if (cleared) {
-    await saveRuntimeLeases(next, env);
     await appendEvent({ type: "runtime_leases_cleared", threadId: id, reason, count: cleared }, env).catch(() => null);
   }
   return { cleared };
@@ -412,33 +441,35 @@ async function terminateProcessGroupId(pgid, fallbackPid, signal = "SIGTERM") {
 
 async function saveLeaseWindowName(leaseId, windowName, env = process.env) {
   if (!leaseId) return;
-  const leases = await listRuntimeLeases(env);
-  let changed = false;
-  const next = leases.map((lease) => {
-    if (lease.id !== leaseId || lease.windowName === windowName) return lease;
-    changed = true;
-    return { ...lease, windowName };
+  await mutateRuntimeLeases(env, async (leases) => {
+    let changed = false;
+    const next = leases.map((lease) => {
+      if (lease.id !== leaseId || lease.windowName === windowName) return lease;
+      changed = true;
+      return { ...lease, windowName };
+    });
+    return { leases: next, changed, value: null };
   });
-  if (changed) await saveRuntimeLeases(next, env);
 }
 
 async function saveLeasePaneId(leaseId, paneId, env = process.env) {
   if (!leaseId || !paneId) return;
-  const leases = await listRuntimeLeases(env);
-  let changed = false;
-  const next = leases.map((lease) => {
-    if (lease.id !== leaseId || lease.paneId === paneId) return lease;
-    changed = true;
-    return { ...lease, paneId };
+  await mutateRuntimeLeases(env, async (leases) => {
+    let changed = false;
+    const next = leases.map((lease) => {
+      if (lease.id !== leaseId || lease.paneId === paneId) return lease;
+      changed = true;
+      return { ...lease, paneId };
+    });
+    return { leases: next, changed, value: null };
   });
-  if (changed) await saveRuntimeLeases(next, env);
 }
 
-async function resolveLivePaneId(lease, env = process.env) {
+async function resolveLivePaneId(lease, env = process.env, options = {}) {
   const panes = await tmuxPaneIds(lease?.sessionName).catch(() => []);
   const storedPaneId = String(lease?.paneId || "").trim();
   const paneId = storedPaneId && panes.includes(storedPaneId) ? storedPaneId : panes[0] || null;
-  if (paneId && paneId !== storedPaneId) await saveLeasePaneId(lease?.id, paneId, env).catch(() => {});
+  if (!options.readonly && paneId && paneId !== storedPaneId) await saveLeasePaneId(lease?.id, paneId, env).catch(() => {});
   return paneId;
 }
 
@@ -488,11 +519,11 @@ async function cachedPassiveRuntimeThreadMessages(threadId, env = process.env) {
   return messages;
 }
 
-async function resolvePassiveLivePaneId(lease, env = process.env) {
+async function resolvePassiveLivePaneId(lease, env = process.env, options = {}) {
   const panes = await cachedPassiveTmuxPaneIds(lease?.sessionName, env);
   const storedPaneId = String(lease?.paneId || "").trim();
   const paneId = storedPaneId && panes.includes(storedPaneId) ? storedPaneId : panes[0] || null;
-  if (paneId && paneId !== storedPaneId) await saveLeasePaneId(lease?.id, paneId, env).catch(() => {});
+  if (!options.readonly && paneId && paneId !== storedPaneId) await saveLeasePaneId(lease?.id, paneId, env).catch(() => {});
   return paneId;
 }
 
@@ -666,20 +697,33 @@ function paneCodexUpdatePrompt(text) {
   return Boolean(paneCodexUpdatePromptChoice(text));
 }
 
+function activeLeaseForThreadFromLeases(leases = [], threadId) {
+  return [...leases].reverse().find((lease) => lease.threadId === threadId && !lease.endedAt) || null;
+}
+
 async function activeLeaseForThread(threadId, env = process.env, options = {}) {
   const leases = await listRuntimeLeases(env);
-  const active = [...leases].reverse().find((lease) => lease.threadId === threadId && !lease.endedAt) || null;
+  const active = activeLeaseForThreadFromLeases(leases, threadId);
   if (!active) return null;
   const hasSession = options.passiveTmuxCache
     ? await cachedPassiveTmuxHasSession(active.sessionName, env)
     : await tmuxHasSession(active.sessionName);
   if (hasSession) return active;
-  const ended = leases.map((lease) => lease.id === active.id ? { ...lease, endedAt: nowIso(), endReason: "tmux_session_missing" } : lease);
-  await saveRuntimeLeases(ended, env);
+  if (options.mutateMissing === false) return null;
+  const endedAt = nowIso();
+  const ended = await mutateRuntimeLeases(env, async (latest) => {
+    const current = activeLeaseForThreadFromLeases(latest, threadId);
+    if (!current || current.id !== active.id) return { changed: false, value: null };
+    return {
+      leases: latest.map((lease) => lease.id === current.id ? { ...lease, endedAt, endReason: "tmux_session_missing" } : lease),
+      value: current,
+    };
+  });
+  if (!ended) return null;
   await updateThread(threadId, {
     state: "sleeping",
     activeRuntimeLeaseId: null,
-    runtime: { ...(active || {}), state: "sleeping", endedAt: nowIso(), endReason: "tmux_session_missing" },
+    runtime: { ...(ended || {}), state: "sleeping", endedAt, endReason: "tmux_session_missing" },
   }, env).catch(() => {});
   return null;
 }
@@ -773,8 +817,8 @@ export async function runtimeStatus(threadId, env = process.env, messagesOverrid
   }
 
   const paneId = options.passiveTmuxCache
-    ? await resolvePassiveLivePaneId(lease, env)
-    : await resolveLivePaneId(lease, env);
+    ? await resolvePassiveLivePaneId(lease, env, { readonly: options.readonlyLease === true })
+    : await resolveLivePaneId(lease, env, { readonly: options.readonlyLease === true });
   const progressSample = await samplePaneProgress({
     threadId: thread.id,
     leaseId: lease.id,
@@ -1280,15 +1324,27 @@ export async function wakeThread(threadId, options = {}, env = process.env) {
     error.repair = "Run `orkestr codex migrate` on this host.";
     throw error;
   }
-  const existing = await activeLeaseForThread(thread.id, env);
+  const leasesPath = await runtimeLeasesPath(env);
+  try {
+    const woken = await withRuntimeLeaseLock(leasesPath, async () => {
+  let leases = await readRuntimeLeasesUnlocked(env);
+  const existing = activeLeaseForThreadFromLeases(leases, thread.id);
   if (existing) {
-    const windowName = await refreshTmuxWindowName(thread, existing, env);
-    return {
-      thread,
-      lease: { ...existing, windowName },
-      reused: true,
-      status: await runtimeStatus(thread.id, env),
-    };
+    if (await tmuxHasSession(existing.sessionName)) {
+      return {
+        thread,
+        lease: existing,
+        reused: true,
+        status: null,
+      };
+    }
+    const endedAt = nowIso();
+    leases = leases.map((lease) => lease.id === existing.id ? { ...lease, endedAt, endReason: "tmux_session_missing" } : lease);
+    await updateThread(thread.id, {
+      state: "sleeping",
+      activeRuntimeLeaseId: null,
+      runtime: { ...existing, state: "sleeping", endedAt, endReason: "tmux_session_missing" },
+    }, env).catch(() => {});
   }
 
   const paths = await ensureDataDirs(env);
@@ -1319,6 +1375,8 @@ export async function wakeThread(threadId, options = {}, env = process.env) {
   }, env);
 
   if (await tmuxHasSession(sessionName)) {
+    // Session names are deterministic; keep replacement fenced until a future
+    // tombstone/generation handoff can separate old and new tmux identities.
     await killTmuxSession(sessionName).catch(() => {});
   }
   await tmuxNewSession(sessionName, workspace, command, {
@@ -1365,9 +1423,8 @@ export async function wakeThread(threadId, options = {}, env = process.env) {
     rolloutOffsetLookbackBytes,
     ...(terminalMode ? { runtimeKind: RAW_TERMINAL_RUNTIME_KIND, terminalMode: RAW_TERMINAL_RUNTIME_KIND } : {}),
   };
-  const leases = await listRuntimeLeases(env);
   leases.push(lease);
-  await saveRuntimeLeases(leases, env);
+  await saveRuntimeLeasesUnlocked(leases, env);
   const updatedThread = await updateThread(thread.id, {
     state: "ready",
     wakePolicy: thread.wakePolicy || "wake-on-message",
@@ -1390,7 +1447,25 @@ export async function wakeThread(threadId, options = {}, env = process.env) {
     executor: { ...(thread.executor || {}), sessionName, tmuxTarget: paneId },
   }, env);
   await appendEvent({ type: "runtime_woken", threadId: thread.id, leaseId: lease.id, sessionName, paneId, windowName, reason: lease.reason }, env);
-  return { thread: updatedThread, lease, reused: false, status: await runtimeStatus(thread.id, env), dataHome: paths.home };
+  return { thread: updatedThread, lease, reused: false, status: null, dataHome: paths.home };
+    }, { timeoutMs: runtimeLeaseStoreLockTimeoutMs(env) });
+    let lease = woken.lease;
+    if (woken.reused && lease) {
+      const windowName = await refreshTmuxWindowName(thread, lease, env).catch(() => lease.windowName || tmuxWindowName(thread));
+      lease = { ...lease, windowName };
+    }
+    return {
+      ...woken,
+      lease,
+      status: await runtimeStatus(thread.id, env).catch(() => null),
+    };
+  } catch (error) {
+    if (error?.message !== "runtime_lease_store_locked") throw error;
+    // Reuse is only safe while holding the lease writer lock. A concurrent
+    // sleep can hold the lock while killing a deterministic tmux session and
+    // before persisting endedAt, so an unlocked snapshot must not report reuse.
+    throw error;
+  }
 }
 
 export async function takeoverRawTerminalThread(threadId, options = {}, env = process.env) {
@@ -1437,18 +1512,25 @@ export async function sleepThread(threadId, options = {}, env = process.env) {
     error.statusCode = 409;
     throw error;
   }
-  const leases = await listRuntimeLeases(env);
   const now = nowIso();
-  const active = leases.filter((lease) => lease.threadId === thread.id && !lease.endedAt);
-  for (const lease of active) {
-    if (options.kill !== false) {
-      await killTmuxSession(lease.sessionName).catch(() => {});
-    }
-  }
-  await saveRuntimeLeases(leases.map((lease) => active.some((item) => item.id === lease.id)
-    ? { ...lease, endedAt: now, endReason: options.reason || "sleep" }
-    : lease), env);
   const reason = options.reason || "sleep";
+  const { active } = await mutateRuntimeLeases(env, async (leases) => {
+    const active = leases.filter((lease) => lease.threadId === thread.id && !lease.endedAt);
+    for (const lease of active) {
+      if (options.kill !== false) {
+        // Sleep must kill before ending the deterministic session lease, or a
+        // concurrent wake can recreate the same name and lose its new runtime.
+        await killTmuxSession(lease.sessionName).catch(() => {});
+      }
+    }
+    return {
+      leases: leases.map((lease) => active.some((item) => item.id === lease.id)
+        ? { ...lease, endedAt: now, endReason: reason }
+        : lease),
+      changed: active.length > 0,
+      value: { active },
+    };
+  });
   const updated = await updateThread(thread.id, {
     state: "sleeping",
     activeRuntimeLeaseId: null,
@@ -4418,43 +4500,55 @@ async function runAutomaticRuntimeDoctor(env = process.env) {
   return inFlight;
 }
 
-async function syncRuntimeLeasesOnce(env = process.env) {
-  await runAutomaticRuntimeDoctor(env).catch(() => null);
-  const leases = await listRuntimeLeases(env);
-  let changed = false;
-  let appended = 0;
-  const next = [];
-  for (const lease of leases) {
-    if (lease.endedAt) {
-      next.push(lease);
-      continue;
-    }
-    if (!(await cachedPassiveTmuxHasSession(lease.sessionName, env))) {
-      next.push({ ...lease, endedAt: nowIso(), endReason: "tmux_session_missing" });
-      await updateThread(lease.threadId, { state: "sleeping", activeRuntimeLeaseId: null }, env).catch(() => {});
-      changed = true;
-      continue;
-    }
-    const threadForTtl = runtimeLeaseUsesSlidingActivityTtl(lease)
-      ? await getThread(lease.threadId, env).catch(() => null)
-      : null;
-    const messagesForTtl = threadForTtl
-      ? await cachedPassiveRuntimeThreadMessages(threadForTtl.id, env).catch(() => [])
-      : [];
-    const ttl = runtimeLeaseTtlDecision(lease, env, { messages: messagesForTtl });
-    if (ttl) {
-      const endedAt = nowIso();
-      await killTmuxSession(lease.sessionName).catch(() => {});
-      next.push({
-        ...lease,
-        endedAt,
-        endReason: ttl.reason,
-        ttlMs: ttl.ttlMs,
-        ageMs: ttl.ageMs,
-        activityAt: ttl.activityAt || lease.activityAt || null,
-        temporaryReason: ttl.temporaryReason || lease.temporaryReason || null,
-      });
-      await updateThread(lease.threadId, {
+function runtimeLeaseRegistryRevision(lease = {}) {
+  return JSON.stringify(lease || null);
+}
+
+async function observeRuntimeLeaseForSync(lease, env = process.env) {
+  const observation = {
+    leaseId: lease.id,
+    threadId: lease.threadId,
+    revision: runtimeLeaseRegistryRevision(lease),
+    appended: 0,
+    leaseForStorage: lease,
+    endPatch: null,
+    killSessionNameUnderLock: null,
+    sideEffects: [],
+  };
+  if (lease.endedAt) return observation;
+  if (!(await cachedPassiveTmuxHasSession(lease.sessionName, env))) {
+    const endedAt = nowIso();
+    observation.endPatch = { endedAt, endReason: "tmux_session_missing" };
+    observation.sideEffects.push({
+      type: "updateThread",
+      threadId: lease.threadId,
+      patch: { state: "sleeping", activeRuntimeLeaseId: null },
+    });
+    return observation;
+  }
+
+  const threadForTtl = runtimeLeaseUsesSlidingActivityTtl(lease)
+    ? await getThread(lease.threadId, env).catch(() => null)
+    : null;
+  const messagesForTtl = threadForTtl
+    ? await cachedPassiveRuntimeThreadMessages(threadForTtl.id, env).catch(() => [])
+    : [];
+  const ttl = runtimeLeaseTtlDecision(lease, env, { messages: messagesForTtl });
+  if (ttl) {
+    const endedAt = nowIso();
+    observation.endPatch = {
+      endedAt,
+      endReason: ttl.reason,
+      ttlMs: ttl.ttlMs,
+      ageMs: ttl.ageMs,
+      activityAt: ttl.activityAt || lease.activityAt || null,
+      temporaryReason: ttl.temporaryReason || lease.temporaryReason || null,
+    };
+    observation.killSessionNameUnderLock = lease.sessionName;
+    observation.sideEffects.push({
+      type: "updateThread",
+      threadId: lease.threadId,
+      patch: {
         state: "sleeping",
         activeRuntimeLeaseId: null,
         runtime: {
@@ -4466,8 +4560,11 @@ async function syncRuntimeLeasesOnce(env = process.env) {
           activityAt: ttl.activityAt || null,
           temporaryReason: ttl.temporaryReason,
         },
-      }, env).catch(() => {});
-      await appendEvent({
+      },
+    });
+    observation.sideEffects.push({
+      type: "event",
+      event: {
         type: "runtime_slept",
         threadId: lease.threadId,
         reason: ttl.reason,
@@ -4477,75 +4574,179 @@ async function syncRuntimeLeasesOnce(env = process.env) {
         ageMs: ttl.ageMs,
         activityAt: ttl.activityAt || null,
         temporaryReason: ttl.temporaryReason,
-      }, env).catch(() => {});
-      changed = true;
-      continue;
-    }
-    const synced = await syncLeaseRolloutExclusive(lease, env).catch(() => ({ lease, appended: 0 }));
-    let leaseForStorage = synced.lease;
-    appended += synced.appended || 0;
-    const thread = await getThread(lease.threadId, env).catch(() => null);
-    const messages = thread ? await cachedPassiveRuntimeThreadMessages(thread.id, env).catch(() => []) : [];
-    let status = await runtimeStatus(lease.threadId, env, messages, { passiveTmuxCache: true }).catch(() => null);
-    if (status) {
-      leaseForStorage = {
-        ...synced.lease,
-        paneId: status.lease?.paneId ?? synced.lease.paneId,
-        windowName: status.lease?.windowName ?? synced.lease.windowName,
-      };
-      if (thread) {
-        const awaitingAck = messages.find((message) => message.role === "user" && message.state === "awaiting_ack");
-        if (awaitingAck) {
-          const acknowledged = await acknowledgeThreadInputDelivery(thread, awaitingAck, status, env).catch(() => null);
-          if (acknowledged) scheduleThreadInputDelivery(thread.id, env, 0);
-          else await failRejectedThreadInputDelivery(thread, awaitingAck, status, env).catch(() => null);
-        }
-      }
-      if (status.needsResumeDirectoryConfirmation && status.paneId) {
-        await tmuxSendKeys(status.paneId, "2", "C-m").catch(() => {});
-        await updateThread(lease.threadId, {
-          state: "waking",
-          runtime: { ...leaseForStorage, state: "waking", progress: status.progress || null },
-        }, env).catch(() => {});
-        next.push(leaseForStorage);
-        changed = true;
-        continue;
-      }
-      if (status.needsCodexUpdatePromptSkip && status.paneId) {
-        await tmuxSendKeys(status.paneId, status.codexUpdatePromptChoice || "2", "C-m").catch(() => {});
-        await updateThread(lease.threadId, {
-          state: "waking",
-          runtime: { ...leaseForStorage, state: "waking", progress: status.progress || null },
-        }, env).catch(() => {});
-        next.push(leaseForStorage);
-        changed = true;
-        continue;
-      }
-      const restoredMode = thread ? await reapplyDesiredCodexMode(thread, status, env) : null;
-      if (restoredMode?.applied) {
-        status = await runtimeStatus(lease.threadId, env, messages, { passiveTmuxCache: true }).catch(() => status);
-        changed = true;
-      }
-      if (thread) {
-        await appendDetectedConversationInterruptionNotice(thread, status, env);
-      }
-      await updateThread(lease.threadId, {
-        state: status.state,
-        ...liveCodexModePatch(thread, status),
-        runtime: { ...leaseForStorage, state: status.state, progress: status.progress || null },
-      }, env).catch(() => {});
-    }
-    next.push(leaseForStorage);
-    changed = changed || JSON.stringify(leaseForStorage) !== JSON.stringify(lease);
+      },
+    });
+    return observation;
   }
-  const activeLeaseThreadIds = new Set(next.filter((lease) => !lease.endedAt).map((lease) => lease.threadId));
+
+  const synced = await syncLeaseRolloutExclusive(lease, env).catch(() => ({ lease, appended: 0 }));
+  let leaseForStorage = synced.lease;
+  observation.appended += synced.appended || 0;
+  const thread = await getThread(lease.threadId, env).catch(() => null);
+  const messages = thread ? await cachedPassiveRuntimeThreadMessages(thread.id, env).catch(() => []) : [];
+  const status = await runtimeStatus(lease.threadId, env, messages, {
+    passiveTmuxCache: true,
+    mutateMissing: false,
+    readonlyLease: true,
+  }).catch(() => null);
+  if (!status) {
+    observation.leaseForStorage = leaseForStorage;
+    return observation;
+  }
+  leaseForStorage = {
+    ...synced.lease,
+    paneId: status.lease?.paneId ?? synced.lease.paneId,
+    windowName: status.lease?.windowName ?? synced.lease.windowName,
+  };
+  observation.leaseForStorage = leaseForStorage;
+  if (thread) {
+    const awaitingAck = messages.find((message) => message.role === "user" && message.state === "awaiting_ack");
+    if (awaitingAck) {
+      observation.sideEffects.push({ type: "ackDelivery", thread, message: awaitingAck, status });
+    }
+  }
+  if (status.needsResumeDirectoryConfirmation && status.paneId) {
+    observation.sideEffects.push({ type: "tmuxSendKeys", paneId: status.paneId, keys: ["2", "C-m"] });
+    observation.sideEffects.push({
+      type: "updateThread",
+      threadId: lease.threadId,
+      patch: { state: "waking", runtime: { ...leaseForStorage, state: "waking", progress: status.progress || null } },
+    });
+    return observation;
+  }
+  if (status.needsCodexUpdatePromptSkip && status.paneId) {
+    observation.sideEffects.push({ type: "tmuxSendKeys", paneId: status.paneId, keys: [status.codexUpdatePromptChoice || "2", "C-m"] });
+    observation.sideEffects.push({
+      type: "updateThread",
+      threadId: lease.threadId,
+      patch: { state: "waking", runtime: { ...leaseForStorage, state: "waking", progress: status.progress || null } },
+    });
+    return observation;
+  }
+  if (thread) {
+    observation.sideEffects.push({ type: "statusThread", thread, status, leaseForStorage, messages });
+  }
+  return observation;
+}
+
+async function applyGuardedRuntimeSyncSideEffect(observation, env = process.env, operation) {
+  const threadId = String(observation?.threadId || "").trim();
+  if (!threadId || typeof operation !== "function") return null;
+  return mutateRuntimeLeases(env, async (leases) => {
+    const thread = await getThread(threadId, env).catch(() => null);
+    if (!thread) return { changed: false, value: null };
+    const currentLease = leases.find((lease) => lease.id === observation.leaseId) || null;
+    const activeLease = activeLeaseForThreadFromLeases(leases, threadId);
+    const threadActiveLeaseId = String(thread.activeRuntimeLeaseId || "").trim();
+    const effectAllowed = observation.endPatch
+      ? Boolean(currentLease?.endedAt && !activeLease && (!threadActiveLeaseId || threadActiveLeaseId === observation.leaseId))
+      : Boolean(activeLease?.id === observation.leaseId && threadActiveLeaseId === observation.leaseId);
+    if (!effectAllowed) return { changed: false, value: null };
+    const value = await operation({ thread, currentLease, activeLease });
+    return { changed: false, value };
+  }).catch(() => null);
+}
+
+async function applyGuardedPaneProgressSideEffect(snapshot, env = process.env, operation) {
+  const lease = snapshot?.lease || {};
+  const threadId = String(lease.threadId || "").trim();
+  if (!threadId || typeof operation !== "function") return null;
+  return mutateRuntimeLeases(env, async (leases) => {
+    const activeLease = activeLeaseForThreadFromLeases(leases, threadId);
+    if (!activeLease || activeLease.id !== lease.id) return { changed: false, value: null };
+    if (runtimeLeaseRegistryRevision(activeLease) !== snapshot.revision) return { changed: false, value: null };
+    const thread = await getThread(threadId, env).catch(() => null);
+    if (!thread || String(thread.activeRuntimeLeaseId || "") !== lease.id) return { changed: false, value: null };
+    const value = await operation({ thread, activeLease });
+    return { changed: false, value };
+  }).catch(() => null);
+}
+
+async function applyRuntimeSyncSideEffects(observations = [], env = process.env) {
+  for (const observation of observations) {
+    for (const effect of observation.sideEffects || []) {
+      if (effect.type === "updateThread") {
+        await applyGuardedRuntimeSyncSideEffect(observation, env, async () => {
+          const patch = observation.endPatch
+            ? effect.patch
+            : { activeRuntimeLeaseId: observation.leaseId, ...effect.patch };
+          return updateThread(effect.threadId, patch, env).catch(() => null);
+        });
+      } else if (effect.type === "event") {
+        await applyGuardedRuntimeSyncSideEffect(observation, env, () => appendEvent(effect.event, env).catch(() => null));
+      } else if (effect.type === "tmuxSendKeys") {
+        await applyGuardedRuntimeSyncSideEffect(observation, env, () => tmuxSendKeys(effect.paneId, ...effect.keys).catch(() => null));
+      } else if (effect.type === "ackDelivery") {
+        await applyGuardedRuntimeSyncSideEffect(observation, env, async ({ thread }) => {
+          const acknowledged = await acknowledgeThreadInputDelivery(thread, effect.message, effect.status, env).catch(() => null);
+          if (acknowledged) scheduleThreadInputDelivery(thread.id, env, 0);
+          else await failRejectedThreadInputDelivery(thread, effect.message, effect.status, env).catch(() => null);
+          return acknowledged;
+        });
+      } else if (effect.type === "statusThread") {
+        await applyGuardedRuntimeSyncSideEffect(observation, env, async ({ thread }) => {
+          let status = effect.status;
+          const restoredMode = await reapplyDesiredCodexMode(thread, status, env).catch(() => null);
+          if (restoredMode?.applied) {
+            status = await runtimeStatus(thread.id, env, effect.messages, { passiveTmuxCache: true }).catch(() => status);
+          }
+          await appendDetectedConversationInterruptionNotice(thread, status, env);
+          return updateThread(thread.id, {
+            state: status.state,
+            activeRuntimeLeaseId: observation.leaseId,
+            ...liveCodexModePatch(thread, status),
+            runtime: { ...effect.leaseForStorage, state: status.state, progress: status.progress || null },
+          }, env).catch(() => null);
+        });
+      }
+    }
+  }
+}
+
+async function syncRuntimeLeasesOnce(env = process.env) {
+  await runAutomaticRuntimeDoctor(env).catch(() => null);
+  const snapshot = await listRuntimeLeases(env);
+  const observations = [];
+  for (const lease of snapshot) {
+    if (lease.endedAt) continue;
+    observations.push(await observeRuntimeLeaseForSync(lease, env));
+  }
+  const observedAppended = observations.reduce((count, observation) => count + (observation.appended || 0), 0);
+  const merged = await mutateRuntimeLeases(env, async (leases) => {
+    let changed = false;
+    const applied = [];
+    const next = [...leases];
+    for (const observation of observations) {
+      const index = next.findIndex((lease) => lease.id === observation.leaseId);
+      if (index < 0 || next[index].endedAt || runtimeLeaseRegistryRevision(next[index]) !== observation.revision) continue;
+      if (observation.endPatch) {
+        if (observation.killSessionNameUnderLock) {
+          // Session names are deterministic; keep this bounded kill fenced so
+          // wake cannot recreate the same session between lease end and kill.
+          await killTmuxSession(observation.killSessionNameUnderLock).catch(() => {});
+        }
+        next[index] = { ...next[index], ...observation.endPatch };
+        changed = true;
+        applied.push(observation);
+        continue;
+      }
+      if (runtimeLeaseRegistryRevision(observation.leaseForStorage) !== observation.revision) {
+        next[index] = observation.leaseForStorage;
+        changed = true;
+      }
+      applied.push(observation);
+    }
+    return { leases: next, changed, value: { leases: next, applied } };
+  });
+  const sideEffectDelayMs = runtimeSyncSideEffectDelayMs(env);
+  if (sideEffectDelayMs > 0) await sleep(sideEffectDelayMs);
+  await applyRuntimeSyncSideEffects(merged.applied, env);
+  const activeLeaseThreadIds = new Set(merged.leases.filter((lease) => !lease.endedAt).map((lease) => lease.threadId));
   for (const id of passiveRuntimeThreadMessagesCache.keys()) {
     if (!activeLeaseThreadIds.has(id)) passiveRuntimeThreadMessagesCache.delete(id);
   }
   const detached = await syncDetachedCodexRollouts(activeLeaseThreadIds, env).catch(() => ({ appended: 0 }));
-  appended += detached.appended || 0;
-  if (changed) await saveRuntimeLeases(next, env);
-  return { leases: next, appended };
+  return { leases: merged.leases, appended: observedAppended + (detached.appended || 0) };
 }
 
 export async function syncPaneProgressForActiveLeases(env = process.env) {
@@ -4555,8 +4756,9 @@ export async function syncPaneProgressForActiveLeases(env = process.env) {
   let changed = 0;
   for (const lease of leases) {
     if (lease.endedAt) continue;
+    const revision = runtimeLeaseRegistryRevision(lease);
     if (!(await cachedPassiveTmuxHasSession(lease.sessionName, env).catch(() => false))) continue;
-    const paneId = await resolvePassiveLivePaneId(lease, env).catch(() => lease.paneId || null);
+    const paneId = await resolvePassiveLivePaneId(lease, env, { readonly: true }).catch(() => lease.paneId || null);
     if (!paneId) continue;
     const progress = publicPaneProgress(await samplePaneProgress({
       threadId: lease.threadId,
@@ -4566,30 +4768,33 @@ export async function syncPaneProgressForActiveLeases(env = process.env) {
     }, env).catch(() => null));
     if (!progress) continue;
     sampled += 1;
-    const thread = await getThread(lease.threadId, env).catch(() => null);
-    if (!thread) continue;
-    await recordCodexRuntimeAuthInvalidSignal({ thread, progress }, env).catch(() => {});
-    const previous = thread.runtime?.progress;
-    const codexPatch = liveCodexModePatch(thread, {
-      codexMode: progress.codexMode,
-      codexModeSource: progress.codexMode ? "runtime-pane" : null,
+    const sideEffectDelayMs = runtimePaneProgressSideEffectDelayMs(env);
+    if (sideEffectDelayMs > 0) await sleep(sideEffectDelayMs);
+    const applied = await applyGuardedPaneProgressSideEffect({ lease, revision }, env, async ({ thread, activeLease }) => {
+      await recordCodexRuntimeAuthInvalidSignal({ thread, progress }, env).catch(() => {});
+      const previous = thread.runtime?.progress;
+      const codexPatch = liveCodexModePatch(thread, {
+        codexMode: progress.codexMode,
+        codexModeSource: progress.codexMode ? "runtime-pane" : null,
+      });
+      await appendDetectedConversationInterruptionNotice(thread, { progress }, env);
+      const changedProgress = !previous ||
+        previous.tailHash !== progress.tailHash ||
+        previous.summary !== progress.summary ||
+        previous.stateHint !== progress.stateHint;
+      if (!changedProgress && Object.keys(codexPatch).length === 0) return false;
+      await updateThread(lease.threadId, {
+        ...codexPatch,
+        runtime: {
+          ...(thread.runtime || {}),
+          ...activeLease,
+          paneId,
+          progress,
+        },
+      }, env).catch(() => {});
+      return true;
     });
-    await appendDetectedConversationInterruptionNotice(thread, { progress }, env);
-    const changedProgress = !previous ||
-      previous.tailHash !== progress.tailHash ||
-      previous.summary !== progress.summary ||
-      previous.stateHint !== progress.stateHint;
-    if (!changedProgress && Object.keys(codexPatch).length === 0) continue;
-    changed += 1;
-    await updateThread(lease.threadId, {
-      ...codexPatch,
-      runtime: {
-        ...(thread.runtime || {}),
-        ...lease,
-        paneId,
-        progress,
-      },
-    }, env).catch(() => {});
+    if (applied) changed += 1;
   }
   return { sampled, changed, rolloutChecked: rollout.checked, rolloutAppended: rollout.appended };
 }
@@ -4713,6 +4918,112 @@ function resourceSummary(counts) {
   return "No leaked runtime resources found.";
 }
 
+function duplicateActiveRuntimeLeaseGroups(activeLeases = [], liveSessionNames = new Set()) {
+  const byThread = new Map();
+  for (const lease of activeLeases) {
+    const threadId = String(lease.threadId || "").trim();
+    if (!threadId) continue;
+    const group = byThread.get(threadId) || [];
+    group.push(lease);
+    byThread.set(threadId, group);
+  }
+  return [...byThread.entries()]
+    .filter(([, leases]) => leases.length > 1)
+    .map(([threadId, leases]) => {
+      const ranked = leases
+        .map((lease, index) => ({ lease, index }))
+        .sort((left, right) => {
+          const rightLive = liveSessionNames.has(right.lease.sessionName) ? 1 : 0;
+          const leftLive = liveSessionNames.has(left.lease.sessionName) ? 1 : 0;
+          if (rightLive !== leftLive) return rightLive - leftLive;
+          const rightStarted = timestampMs(right.lease.startedAt || right.lease.heartbeatAt);
+          const leftStarted = timestampMs(left.lease.startedAt || left.lease.heartbeatAt);
+          if (rightStarted !== leftStarted) return rightStarted - leftStarted;
+          return right.index - left.index;
+        });
+      return {
+        threadId,
+        keep: ranked[0].lease,
+        duplicates: ranked.slice(1).map((item) => item.lease),
+      };
+    });
+}
+
+async function repairRuntimeResourceRegistry(rawTmuxSessions = [], { env = process.env, automatic = false } = {}) {
+  return mutateRuntimeLeases(env, async (leases) => {
+    const actions = [];
+    let nextLeases = leases;
+    let changed = false;
+    const activeLeases = leases.filter((lease) => !lease.endedAt);
+    const activeSessionNames = new Set(activeLeases.map((lease) => String(lease.sessionName || "")).filter(Boolean));
+    const tmuxSessions = rawTmuxSessions.filter((session) => sessionBelongsToRuntimeInstance(session, activeSessionNames, env));
+    const liveSessionNames = new Set(tmuxSessions.map((session) => session.sessionName));
+    const duplicateLeaseGroups = duplicateActiveRuntimeLeaseGroups(activeLeases, liveSessionNames);
+    for (const group of duplicateLeaseGroups) {
+      const endedAt = nowIso();
+      const duplicateIds = new Set(group.duplicates.map((lease) => lease.id));
+      nextLeases = nextLeases.map((item) => duplicateIds.has(item.id)
+        ? { ...item, endedAt, endReason: "resource_doctor_duplicate_lease" }
+        : item);
+      changed = true;
+      await updateThread(group.threadId, { activeRuntimeLeaseId: group.keep.id }, env).catch(() => {});
+      for (const lease of group.duplicates) {
+        actions.push({
+          action: "ended_duplicate_lease",
+          threadId: group.threadId,
+          sessionName: lease.sessionName,
+          leaseId: lease.id,
+          keptLeaseId: group.keep.id,
+        });
+        if (lease.sessionName && lease.sessionName !== group.keep.sessionName && liveSessionNames.has(lease.sessionName)) {
+          const killed = await killTmuxSession(lease.sessionName).catch((error) => ({ error: error?.message || String(error) }));
+          actions.push({
+            action: "killed_duplicate_session",
+            threadId: group.threadId,
+            sessionName: lease.sessionName,
+            leaseId: lease.id,
+            keptSessionName: group.keep.sessionName,
+            keptLeaseId: group.keep.id,
+            killed,
+          });
+        }
+      }
+    }
+
+    const repairedActiveLeases = nextLeases.filter((lease) => !lease.endedAt);
+    for (const lease of repairedActiveLeases) {
+      if (liveSessionNames.has(lease.sessionName)) continue;
+      const endedAt = nowIso();
+      nextLeases = nextLeases.map((item) => item.id === lease.id
+        ? { ...item, endedAt, endReason: "resource_doctor_missing_session" }
+        : item);
+      changed = true;
+      await updateThread(lease.threadId, { state: "sleeping", activeRuntimeLeaseId: null }, env).catch(() => {});
+      actions.push({ action: "ended_stale_lease", threadId: lease.threadId, sessionName: lease.sessionName });
+    }
+
+    const repairedActiveSessionNames = new Set(nextLeases
+      .filter((lease) => !lease.endedAt)
+      .map((lease) => String(lease.sessionName || ""))
+      .filter(Boolean));
+    const repairedTmuxSessions = rawTmuxSessions
+      .filter((session) => sessionBelongsToRuntimeInstance(session, repairedActiveSessionNames, env));
+    for (const session of repairedTmuxSessions) {
+      const decision = sessionRepairDecision(session, repairedActiveSessionNames, { repair: true, automatic, env });
+      if (!decision.repairable) continue;
+      const killed = await killTmuxSession(session.sessionName).catch((error) => ({ error: error?.message || String(error) }));
+      actions.push({
+        action: "killed_tmux_session",
+        sessionName: session.sessionName,
+        currentPath: session.currentPath,
+        reason: decision.expiredTemp ? "expired_temp_runtime" : "orphan_tmux_session",
+        killed,
+      });
+    }
+    return { leases: nextLeases, changed, value: actions };
+  });
+}
+
 export async function doctorRuntimeResources({ env = process.env, repair = false, automatic = false } = {}) {
   const leases = await listRuntimeLeases(env).catch(() => []);
   const activeLeases = leases.filter((lease) => !lease.endedAt);
@@ -4748,7 +5059,19 @@ export async function doctorRuntimeResources({ env = process.env, repair = false
   const ignoredTmuxSessions = rawTmuxSessions.filter((session) => !sessionBelongsToRuntimeInstance(session, activeSessionNames, env));
 
   const liveSessionNames = new Set(tmuxSessions.map((session) => session.sessionName));
-  let nextLeases = leases;
+  const duplicateLeaseGroups = duplicateActiveRuntimeLeaseGroups(activeLeases, liveSessionNames);
+  for (const group of duplicateLeaseGroups) {
+    issues.push({
+      severity: "warning",
+      code: "duplicate_runtime_lease",
+      threadId: group.threadId,
+      sessionName: group.keep.sessionName,
+      keepLeaseId: group.keep.id,
+      duplicateLeaseIds: group.duplicates.map((lease) => lease.id),
+      message: "Multiple active runtime leases point at the same thread. The newest live lease should be kept.",
+    });
+  }
+
   for (const lease of activeLeases) {
     if (liveSessionNames.has(lease.sessionName)) continue;
     issues.push({
@@ -4758,14 +5081,6 @@ export async function doctorRuntimeResources({ env = process.env, repair = false
       sessionName: lease.sessionName,
       message: "Runtime lease is active in storage but the tmux session is missing.",
     });
-    if (repair) {
-      const endedAt = nowIso();
-      nextLeases = nextLeases.map((item) => item.id === lease.id
-        ? { ...item, endedAt, endReason: "resource_doctor_missing_session" }
-        : item);
-      await updateThread(lease.threadId, { state: "sleeping", activeRuntimeLeaseId: null }, env).catch(() => {});
-      actions.push({ action: "ended_stale_lease", threadId: lease.threadId, sessionName: lease.sessionName });
-    }
   }
 
   for (const session of tmuxSessions) {
@@ -4792,16 +5107,13 @@ export async function doctorRuntimeResources({ env = process.env, repair = false
         message: "temporary Orkestr runtime exceeded its hard TTL.",
       });
     }
-    if (decision.repairable) {
-      const killed = await killTmuxSession(session.sessionName).catch((error) => ({ error: error?.message || String(error) }));
-      actions.push({
-        action: "killed_tmux_session",
-        sessionName: session.sessionName,
-        currentPath: session.currentPath,
-        reason: decision.expiredTemp ? "expired_temp_runtime" : "orphan_tmux_session",
-        killed,
-      });
-    }
+  }
+
+  if (repair) {
+    actions.push(...await repairRuntimeResourceRegistry(rawTmuxSessions, { env, automatic }).catch((error) => [{
+      action: "repair_failed",
+      error: error?.message || String(error),
+    }]));
   }
 
   let tempCodexProcesses = [];
@@ -4828,10 +5140,6 @@ export async function doctorRuntimeResources({ env = process.env, repair = false
     }
   }
 
-  if (repair && actions.some((action) => action.action === "ended_stale_lease")) {
-    await saveRuntimeLeases(nextLeases, env).catch(() => {});
-  }
-
   const relevantIssues = automatic
     ? issues.filter((issue) => issue.code === "expired_temp_runtime" || issue.code === "orphan_temp_codex_process")
     : issues;
@@ -4842,6 +5150,7 @@ export async function doctorRuntimeResources({ env = process.env, repair = false
     orphanSessions: tmuxSessions.filter((session) => !activeSessionNames.has(session.sessionName)).length,
     tempSessions: tmuxSessions.filter((session) => sessionTemporaryReason(session, env)).length,
     staleLeases: activeLeases.filter((lease) => !liveSessionNames.has(lease.sessionName)).length,
+    duplicateLeases: duplicateLeaseGroups.reduce((count, group) => count + group.duplicates.length, 0),
     tempCodexProcesses: tempCodexProcesses.length,
     issues: relevantIssues.length,
     repaired: actions.length,

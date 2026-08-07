@@ -1,6 +1,7 @@
 import { resourceOwnerUserId } from "./policy.js";
 import { recordRouterTraceEvent } from "./router-traces.js";
 import { updateThreadMessage } from "./threads.js";
+import { abortable, throwIfAborted } from "./router-doctor-abort.js";
 
 function clean(value = "") {
   return String(value || "").trim();
@@ -72,7 +73,7 @@ export function orphanedWhatsAppFinalAnswerIssues({
 }
 
 export async function repairOrphanedWhatsAppFinalAnswer(item = {}, context = {}) {
-  const { env, thread, ensureConnectorOutboxJobFn, accountIdForThreadFn } = context;
+  const { env, thread, ensureConnectorOutboxJobFn, accountIdForThreadFn, signal } = context;
   if (typeof ensureConnectorOutboxJobFn !== "function") return null;
   const message = (Array.isArray(context.messages) ? context.messages : []).find((entry) => clean(entry.id) === clean(item.messageId));
   if (!message) return null;
@@ -80,7 +81,8 @@ export async function repairOrphanedWhatsAppFinalAnswer(item = {}, context = {})
   if (!chatId) return null;
   const accountId = clean(item.accountId || message.accountId || (typeof accountIdForThreadFn === "function" ? accountIdForThreadFn(thread) : ""));
   const ownerUserId = resourceOwnerUserId(thread || {}, env);
-  const result = await ensureConnectorOutboxJobFn({
+  throwIfAborted(signal);
+  const result = await abortable(ensureConnectorOutboxJobFn({
     tenantId: ownerUserId,
     ownerUserId,
     connector: "whatsapp",
@@ -98,15 +100,17 @@ export async function repairOrphanedWhatsAppFinalAnswer(item = {}, context = {})
       routerTraceId: clean(message.routerTraceId),
       repairedBy: "router_doctor_whatsapp",
     },
-  }, env);
-  await updateThreadMessage(thread.id, message.id, {
+  }, env), signal);
+  throwIfAborted(signal);
+  await abortable(updateThreadMessage(thread.id, message.id, {
     mirrorOutboxJobId: result.job.id,
     mirrorDeliveryType: "final",
     deliveryState: "pending_whatsapp_mirror",
     deliveryLastAttemptAt: nowIso(),
     deliveryError: "",
-  }, env).catch(() => null);
-  await recordRouterTraceEvent({
+  }, env).catch(() => null), signal);
+  throwIfAborted(signal);
+  await abortable(recordRouterTraceEvent({
     routerTraceId: clean(message.routerTraceId),
     connector: "whatsapp",
     threadId: thread.id,
@@ -117,7 +121,7 @@ export async function repairOrphanedWhatsAppFinalAnswer(item = {}, context = {})
     chatId,
     accountId,
     connectorOutboxJobId: result.job.id,
-  }, env).catch(() => null);
+  }, env).catch(() => null), signal);
   return {
     code: "enqueue_orphaned_final_answer_mirror",
     ok: true,
