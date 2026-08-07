@@ -28,6 +28,34 @@ function listenPort(env = process.env) {
   return Math.max(1, Number(env.ORKESTR_CONNECTORS_MCP_PORT || 18914) || 18914);
 }
 
+function positiveTimeoutMs(value, fallback = 5_000, max = 5_000) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  return Math.min(max, Math.max(1, Math.floor(parsed)));
+}
+
+function healthQueueTimeoutMs(env = process.env) {
+  return positiveTimeoutMs(
+    env.ORKESTR_CONNECTORS_MCP_HEALTH_QUEUE_TIMEOUT_MS ||
+      env.ORKESTR_WA_WORKER_HEALTH_TIMEOUT_MS ||
+      env.ORKESTR_WA_WORKER_TIMEOUT_MS,
+    5_000,
+    5_000,
+  );
+}
+
+function boundedResult(promise, timeoutMs, fallback) {
+  let timer = null;
+  return Promise.race([
+    Promise.resolve(promise),
+    new Promise((resolve) => {
+      timer = setTimeout(() => resolve(fallback), timeoutMs);
+    }),
+  ]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+}
+
 function secretEqual(left = "", right = "") {
   if (!left || !right) return false;
   const a = crypto.createHash("sha256").update(String(left)).digest();
@@ -94,7 +122,7 @@ function legacyPolicyChecks(req, url, body = {}) {
   };
 }
 
-export function createConnectorsMcpGateway({ env = process.env, fetchImpl = fetch } = {}) {
+export function createConnectorsMcpGateway({ env = process.env, fetchImpl = fetch, listConnectorInboxEventsFn = listConnectorInboxEvents } = {}) {
   const host = listenHost(env);
   const allowedHosts = list(env.ORKESTR_CONNECTORS_MCP_ALLOWED_HOSTS || `${host},localhost,127.0.0.1`);
   const app = createMcpExpressApp({ host, allowedHosts });
@@ -159,19 +187,31 @@ export function createConnectorsMcpGateway({ env = process.env, fetchImpl = fetc
     let authorized = legacyTokenAllowed(req, env) || workerEventTokenAllowed(req, env);
     if (!authorized && token) authorized = await authorizeConnectorMcpToken(token, env).then(() => true, () => false);
     if (!authorized) return res.status(401).json({ ok: false, error: "connector_mcp_token_required" });
-    const [worker, queued] = await Promise.all([
+    const queueTimeoutMs = healthQueueTimeoutMs(env);
+    const queueInspection = boundedResult(
+      Promise.resolve()
+        .then(() => listConnectorInboxEventsFn({ states: ["pending", "failed_retryable", "dead_letter"], limit: 1000 }, env))
+        .then((events) => ({ events: Array.isArray(events) ? events : [], timedOut: false }))
+        .catch(() => ({ events: [], timedOut: false })),
+      queueTimeoutMs,
+      { events: [], timedOut: true },
+    );
+    const [worker, queue] = await Promise.all([
       whatsappWorkerHealth(env).catch((error) => ({ ok: false, state: "unavailable", error: clean(error?.message) })),
-      listConnectorInboxEvents({ states: ["pending", "failed_retryable", "dead_letter"], limit: 1000 }, env).catch(() => []),
+      queueInspection,
     ]);
-    return res.json({
+    const workerOk = worker.ok !== false;
+    const queued = queue.events || [];
+    return res.status(workerOk ? 200 : 503).json({
       ...worker,
-      ok: worker.ok !== false,
+      ok: workerOk,
       gateway: { ok: true, browserFree: true },
-      worker: { ok: worker.ok !== false, state: worker.state || "", error: worker.error || "" },
+      worker: { ok: workerOk, state: worker.state || "", error: worker.error || "" },
       queue: {
         pending: queued.filter((item) => item.state === "pending").length,
         retryable: queued.filter((item) => item.state === "failed_retryable").length,
         deadLetter: queued.filter((item) => item.state === "dead_letter").length,
+        inspectionTimedOut: queue.timedOut === true,
       },
     });
   });

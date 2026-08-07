@@ -611,7 +611,9 @@ async function doctorWhatsAppRouterCommand(argv, ctx) {
   if (argv.includes("--unsafe")) params.set("unsafe", "1");
   if (staleMs) params.set("staleMs", staleMs);
   if (timeoutMs) params.set("timeoutMs", timeoutMs);
-  const requestDoctor = () => requestJson(`/api/router-traces/doctor/whatsapp${params.size ? `?${params.toString()}` : ""}`, ctx);
+  const parsedTimeoutMs = Number(timeoutMs || 30_000);
+  const clientTimeoutMs = (Number.isFinite(parsedTimeoutMs) && parsedTimeoutMs > 0 ? Math.floor(parsedTimeoutMs) : 30_000) + 1_000;
+  const requestDoctor = () => requestJson(`/api/router-traces/doctor/whatsapp${params.size ? `?${params.toString()}` : ""}`, { ...ctx, timeoutMs: clientTimeoutMs });
   if (argv.includes("--watch")) {
     const intervalMs = Math.max(1000, Number(flagValue(argv, "--watch-interval-ms") || flagValue(argv, "--interval-ms") || 30000) || 30000);
     const count = Math.max(0, Number(flagValue(argv, "--watch-count") || 0) || 0);

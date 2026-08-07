@@ -8,6 +8,7 @@ import { doctorWhatsAppRouter } from "../packages/core/src/router-doctor.js";
 import { listRouterTraces, recordRouterTraceEvent } from "../packages/core/src/router-traces.js";
 import { appendThreadMessage, createThread, listThreadMessages, updateThread } from "../packages/core/src/threads.js";
 import { createThreadMessageRepository } from "../packages/storage/src/repositories.js";
+import { listEvents } from "../packages/storage/src/store.js";
 
 function runtimeEnv(home, extra = {}) {
   return {
@@ -70,6 +71,23 @@ test("WhatsApp router doctor treats runtime account aliases as ready", async () 
   });
 
   assert.equal(report.checks.some((check) => check.code === "transport_down"), false);
+});
+
+test("WhatsApp router doctor records successful run telemetry unless delegated", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-router-doctor-run-event-"));
+  const env = runtimeEnv(home);
+  const thread = await createWhatsAppThread(env);
+
+  const report = await doctorWhatsAppRouter({ thread: thread.id, env, whatsappStatusFn: readyWhatsAppStatus });
+  const events = await listEvents(env, 10);
+  const recorded = events.find((event) => event.type === "router_doctor_whatsapp_run");
+
+  assert.equal(recorded?.threadId, thread.id);
+  assert.equal(recorded?.status, report.status);
+
+  await doctorWhatsAppRouter({ thread: thread.id, env, whatsappStatusFn: readyWhatsAppStatus, recordRunEvent: false });
+  const afterDelegatedRun = await listEvents(env, 10);
+  assert.equal(afterDelegatedRun.filter((event) => event.type === "router_doctor_whatsapp_run").length, 1);
 });
 
 test("WhatsApp router doctor treats scoped tenant send bridge as ready", async () => {

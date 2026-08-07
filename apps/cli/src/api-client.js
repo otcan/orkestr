@@ -26,12 +26,34 @@ export async function requestJson(path, options = {}) {
     body,
     fetchImpl = globalThis.fetch,
     method = body === undefined ? "GET" : "POST",
+    timeoutMs = 0,
   } = options;
-  const response = await fetchImpl(`${String(baseUrl).replace(/\/+$/g, "")}${path}`, {
-    method,
-    headers: await requestHeaders({ body, env: options.env }),
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
+  const deadlineMs = Number(timeoutMs);
+  const controller = Number.isFinite(deadlineMs) && deadlineMs > 0 ? new AbortController() : null;
+  let timer = null;
+  let timedOut = false;
+  if (controller) {
+    timer = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, Math.floor(deadlineMs));
+  }
+  let response;
+  try {
+    response = await fetchImpl(`${String(baseUrl).replace(/\/+$/g, "")}${path}`, {
+      method,
+      headers: await requestHeaders({ body, env: options.env }),
+      body: body === undefined ? undefined : JSON.stringify(body),
+      ...(controller ? { signal: controller.signal } : {}),
+    });
+  } catch (error) {
+    if (timedOut || error?.name === "AbortError") {
+      throw new ApiError("api_request_timeout", { status: 0, payload: { error: "api_request_timeout", timeoutMs: Math.floor(deadlineMs) } });
+    }
+    throw error;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
   const text = await response.text();
   const payload = text ? parseJson(text) : null;
   if (!response.ok) {
