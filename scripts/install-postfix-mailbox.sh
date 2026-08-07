@@ -220,7 +220,15 @@ systemctl restart "$main_unit"
 systemctl is-active --quiet orkestr-mailbox-postfix.service
 systemctl is-active --quiet postfix.service
 set -a
-. "$env_file"
+. "$mta_env_file"
 set +a
-/usr/bin/node "$current_link/scripts/orkestr-mailbox-postfix.mjs" probe
+probe_ready=0
+for _attempt in $(seq 1 40); do
+  if /usr/bin/node "$current_link/scripts/orkestr-mailbox-postfix.mjs" probe >/dev/null 2>&1; then
+    probe_ready=1
+    break
+  fi
+  sleep 0.25
+done
+[ "$probe_ready" = 1 ] || /usr/bin/node "$current_link/scripts/orkestr-mailbox-postfix.mjs" probe
 echo "Orkestr inbound mailbox transport ready for $domain via $smtp_hostname."
