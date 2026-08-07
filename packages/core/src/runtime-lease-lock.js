@@ -1,9 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
+import { AsyncLocalStorage } from "node:async_hooks";
 
 const queues = new Map();
 const OWNER_FILE = "owner.json";
+const lockContext = new AsyncLocalStorage();
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -11,6 +13,23 @@ function sleep(ms) {
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+function normalizedTimeoutMs(value, fallback = 10_000) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? Math.max(0, parsed) : fallback;
+}
+
+function lockTimeoutError() {
+  const lockError = new Error("runtime_lease_store_locked");
+  lockError.statusCode = 503;
+  return lockError;
+}
+
+function reentrantLockError() {
+  const lockError = new Error("runtime_lease_store_reentrant");
+  lockError.statusCode = 500;
+  return lockError;
 }
 
 function parseLinuxProcessStartIdentity(stat) {
@@ -193,9 +212,7 @@ export async function acquireRuntimeLeaseFileLock(filePath, { timeoutMs = 10_000
         continue;
       }
       if (Date.now() - startedAt >= timeoutMs) {
-        const lockError = new Error("runtime_lease_store_locked");
-        lockError.statusCode = 503;
-        throw lockError;
+        throw lockTimeoutError();
       }
       await sleep(10 + Math.floor(Math.random() * 20));
     }
@@ -203,15 +220,43 @@ export async function acquireRuntimeLeaseFileLock(filePath, { timeoutMs = 10_000
 }
 
 export async function withRuntimeLeaseLock(filePath, operation, options = {}) {
-  const previous = queues.get(filePath) || Promise.resolve();
+  const key = path.resolve(filePath);
+  const heldLocks = lockContext.getStore() || new Set();
+  if (heldLocks?.has(key)) throw reentrantLockError();
+  const timeoutMs = normalizedTimeoutMs(options.timeoutMs, 10_000);
+  const deadlineAt = Date.now() + timeoutMs;
+  let expired = false;
+  let timeoutId = null;
+  const timeout = new Promise((_, reject) => {
+    timeoutId = setTimeout(() => {
+      expired = true;
+      reject(lockTimeoutError());
+    }, timeoutMs);
+    timeoutId.unref?.();
+  });
+  const previous = queues.get(key) || Promise.resolve();
   const run = previous.catch(() => undefined).then(async () => {
-    const release = await acquireRuntimeLeaseFileLock(filePath, options);
-    try {
-      return await operation();
-    } finally {
+    if (expired) return null;
+    const release = await acquireRuntimeLeaseFileLock(filePath, {
+      ...options,
+      timeoutMs: Math.max(0, deadlineAt - Date.now()),
+    });
+    clearTimeout(timeoutId);
+    if (expired) {
       await release();
+      return null;
+    }
+    heldLocks.add(key);
+    try {
+      return await lockContext.run(heldLocks, operation);
+    } finally {
+      try {
+        await release();
+      } finally {
+        heldLocks.delete(key);
+      }
     }
   });
-  queues.set(filePath, run.then(() => undefined, () => undefined));
-  return run;
+  queues.set(key, run.then(() => undefined, () => undefined));
+  return Promise.race([run, timeout]).finally(() => clearTimeout(timeoutId));
 }
