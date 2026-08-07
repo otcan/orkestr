@@ -274,9 +274,13 @@ function recoverTrailingJson(raw, error) {
 async function enqueueFileWrite(filePath, operation) {
   const previous = writeQueues.get(filePath) || Promise.resolve();
   const next = previous.then(operation, operation);
-  writeQueues.set(filePath, next.finally(() => {
-    if (writeQueues.get(filePath) === next) writeQueues.delete(filePath);
-  }));
+  const tracked = next.finally(() => {
+    if (writeQueues.get(filePath) === tracked) writeQueues.delete(filePath);
+  });
+  // `next` is the caller-visible promise. Consume the mirrored rejection used
+  // only for queue housekeeping so an audited deny can fail synchronously.
+  void tracked.catch(() => undefined);
+  writeQueues.set(filePath, tracked);
   return next;
 }
 

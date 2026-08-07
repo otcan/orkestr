@@ -203,17 +203,29 @@ revoked in enforcement mode.
 
 Desktop grants are backed by the transactional thread-resource policy database,
 not by a process-local permission cache. The same policy model also supports
-oXRM resources: a thread-scoped oXRM target resolver considers only resources
-granted to that thread before it performs explicit or single-target selection.
-It never substitutes a different same-owner target after a denied or stale
-selection.
+oXRM resources: in `enforce` mode, a thread-scoped oXRM target resolver
+considers only resources granted to that thread before explicit or
+single-target selection. It never substitutes a different same-owner target
+after a denied or stale selection. In `shadow` mode the same authorizer records
+the would-deny decision but preserves legacy selection; it is not enforcement.
+
+The shared-app XRM review surface currently has a share-session identity, not
+an Orkestr thread identity, and is therefore deliberately instance-scoped. It
+does not receive a thread grant by implication. Any new thread-driven oXRM
+surface must pass its exact `threadId` and required resource permission into
+the target resolver before it can be put in `enforce` mode.
 
 Policies have an explicit empty state, so an administrator can deliberately
-deny every resource of one type to a thread. When a worker or task-agent is
-created, it receives a ceiling snapshot of its parent's then-effective grants.
-Subsequent parent additions do not widen that child; parent revocations narrow
-it immediately. Decisions include the exact resource, policy revision, grant
-revision, and resource generation for callers that need to reject stale work.
+deny every resource of one type to a thread. A child records a snapshot marker
+even when that snapshot contains no grants. When a worker or task-agent is
+created, it receives a ceiling snapshot of its parent's then-effective grants
+before it is made discoverable; an explicitly declared child scope can only
+further intersect that snapshot. Subsequent parent additions do not widen that
+child; parent revocations narrow it immediately. Resource records bind a native
+identifier to its owner and tenant/VM boundary and status; grants provide only
+use permission and never provision an instance, credential, endpoint, or
+mailbox. Decisions include the exact resource, policy revision, grant revision,
+and resource generation for callers that need to reject stale work.
 
 Use independent rollout modes per resource type:
 

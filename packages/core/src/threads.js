@@ -244,6 +244,9 @@ export async function createThread(input = {}, env = process.env) {
     desktopGrants: Array.isArray(input.desktopGrants)
       ? input.desktopGrants.map((value) => typeof value === "string" ? value : value && typeof value === "object" ? { ...value } : null).filter(Boolean)
       : [],
+    resourceGrants: Array.isArray(input.resourceGrants)
+      ? input.resourceGrants.map((value) => typeof value === "string" ? value : value && typeof value === "object" ? { ...value } : null).filter(Boolean)
+      : [],
     workerIndex: Number(input.workerIndex || 0) || null,
     workerLabel: String(input.workerLabel || "").trim() || null,
     workerStatus: String(input.workerStatus || "").trim() || null,
@@ -278,12 +281,15 @@ export async function createThread(input = {}, env = process.env) {
     createdAt: nowIso(),
     updatedAt: nowIso(),
   };
-  threads.push(thread);
-  await saveThreads(threads, env);
   if (thread.parentThreadId) {
+    // A child is held out of discovery until its immutable parent ceiling is
+    // captured. A failed policy transaction must never create a runnable child
+    // with an implicit parent-wide scope.
     const { captureChildThreadResourceCeiling } = await import("./thread-resource-grants.js");
     await captureChildThreadResourceCeiling(thread, env);
   }
+  threads.push(thread);
+  await saveThreads(threads, env);
   await appendEvent({ type: "thread_created", threadId: thread.id, name: thread.name, ownerUserId: thread.ownerUserId }, env);
   return thread;
 }

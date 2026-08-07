@@ -154,6 +154,9 @@ function xrmReviewInstanceCandidates(app = {}, share = {}, env = process.env) {
 async function xrmReviewTarget(app = {}, share = {}, env = process.env, action = "shared_app.xrm.resolve") {
   const filters = shareFilters(share);
   const explicit = normalizeSharedInstanceId(app.backingInstanceId || filters.backingInstanceId || filters.xrmInstanceId);
+  // A public shared-app session is intentionally instance-scoped: it has a
+  // share-session boundary, not an Orkestr thread identity. Do not invent a
+  // thread ID here; thread-driven oXRM callers must pass one to the resolver.
   const resolution = await resolveTargetInstance({
     targetType: "oxrm",
     explicitTargetId: explicit,

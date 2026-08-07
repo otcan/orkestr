@@ -3,6 +3,7 @@ import { dataPaths, ensureDataDirs } from "../../storage/src/paths.js";
 import { readJson } from "../../storage/src/store.js";
 
 const databases = new Map();
+const transactionQueues = new Map();
 let sqliteModulePromise = null;
 const clean = (value = "") => String(value || "").trim();
 
@@ -53,6 +54,8 @@ function ensureSchema(db) {
       resource_type text not null,
       revision integer not null default 0,
       explicit_empty integer not null default 0,
+      inheritance_mode text not null default 'explicit',
+      parent_snapshot_revision integer not null default 0,
       created_at text not null,
       updated_at text not null,
       primary key(thread_id, resource_type)
@@ -60,10 +63,12 @@ function ensureSchema(db) {
     create table if not exists orkestr_thread_resources (
       resource_type text not null,
       resource_id text not null,
+      native_id text not null default '',
       resource_key text not null,
       owner_user_id text not null,
       boundary_id text not null,
       generation integer not null default 1,
+      status text not null default 'active',
       backend text,
       created_at text not null,
       updated_at text not null,
@@ -109,6 +114,16 @@ function ensureSchema(db) {
       primary key(action, idempotency_key)
     );
   `);
+  ensureColumn(db, "orkestr_thread_resource_policy", "inheritance_mode", "text not null default 'explicit'");
+  ensureColumn(db, "orkestr_thread_resource_policy", "parent_snapshot_revision", "integer not null default 0");
+  ensureColumn(db, "orkestr_thread_resources", "native_id", "text not null default ''");
+  ensureColumn(db, "orkestr_thread_resources", "status", "text not null default 'active'");
+  db.exec("update orkestr_thread_resources set native_id = resource_key where native_id = ''; update orkestr_thread_resources set status = case when retired_at is not null then 'retired' else 'active' end where status = '';");
+}
+
+function ensureColumn(db, table, column, definition) {
+  const columns = db.prepare(`pragma table_info(${table})`).all().map((row) => row.name);
+  if (!columns.includes(column)) db.exec(`alter table ${table} add column ${column} ${definition}`);
 }
 
 function parseJson(value, fallback) {
@@ -129,8 +144,8 @@ function readState(db) {
     version: 1,
     revision: Number(meta(db, "revision", "0")) || 0,
     updatedAt: meta(db, "updated_at", "") || null,
-    policies: db.prepare("select * from orkestr_thread_resource_policy").all().map((row) => ({ threadId: row.thread_id, resourceType: row.resource_type, revision: Number(row.revision || 0), explicitEmpty: Boolean(row.explicit_empty), createdAt: row.created_at, updatedAt: row.updated_at })),
-    resources: db.prepare("select * from orkestr_thread_resources").all().map((row) => ({ id: row.resource_id, resourceType: row.resource_type, resourceKey: row.resource_key, ownerUserId: row.owner_user_id, boundaryId: row.boundary_id, generation: Number(row.generation || 1), backend: row.backend || "", createdAt: row.created_at, updatedAt: row.updated_at, retiredAt: row.retired_at || null })),
+    policies: db.prepare("select * from orkestr_thread_resource_policy").all().map((row) => ({ threadId: row.thread_id, resourceType: row.resource_type, revision: Number(row.revision || 0), explicitEmpty: Boolean(row.explicit_empty), inheritanceMode: row.inheritance_mode || "explicit", parentSnapshotRevision: Number(row.parent_snapshot_revision || 0), createdAt: row.created_at, updatedAt: row.updated_at })),
+    resources: db.prepare("select * from orkestr_thread_resources").all().map((row) => ({ id: row.resource_id, nativeId: row.native_id || row.resource_key, resourceType: row.resource_type, resourceKey: row.resource_key, ownerUserId: row.owner_user_id, boundaryId: row.boundary_id, generation: Number(row.generation || 1), status: row.status || (row.retired_at ? "retired" : "active"), backend: row.backend || "", createdAt: row.created_at, updatedAt: row.updated_at, retiredAt: row.retired_at || null })),
     grants: db.prepare("select * from orkestr_thread_resource_grants").all().map((row) => ({ id: row.id, threadId: row.thread_id, resourceType: row.resource_type, resourceId: row.resource_id, resourceKey: row.resource_key, ownerUserId: row.owner_user_id, boundaryId: row.boundary_id, permissions: parseJson(row.permissions_json, []), revision: Number(row.revision || 1), source: row.source || "", createdAt: row.created_at, updatedAt: row.updated_at, revokedAt: row.revoked_at || null, revokedBy: row.revoked_by || null, reason: row.reason || null })),
     ceilings: db.prepare("select * from orkestr_thread_resource_ceilings").all().map((row) => ({ threadId: row.thread_id, resourceType: row.resource_type, resourceId: row.resource_id, permissions: parseJson(row.permissions_json, []), parentThreadId: row.parent_thread_id, createdAt: row.created_at })),
     mutations: db.prepare("select * from orkestr_thread_resource_mutations").all().map((row) => ({ action: row.action, idempotencyKey: row.idempotency_key, result: parseJson(row.result_json, {}), policyRevision: Number(row.policy_revision || 0), createdAt: row.created_at })),
@@ -139,10 +154,10 @@ function readState(db) {
 
 function replaceState(db, state = {}) {
   db.exec("delete from orkestr_thread_resource_grants; delete from orkestr_thread_resources; delete from orkestr_thread_resource_policy; delete from orkestr_thread_resource_ceilings; delete from orkestr_thread_resource_mutations;");
-  const resource = db.prepare("insert into orkestr_thread_resources(resource_type, resource_id, resource_key, owner_user_id, boundary_id, generation, backend, created_at, updated_at, retired_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
-  for (const item of state.resources || []) resource.run(item.resourceType, item.id, item.resourceKey, item.ownerUserId, item.boundaryId, item.generation, item.backend || "", item.createdAt, item.updatedAt, item.retiredAt || null);
-  const policy = db.prepare("insert into orkestr_thread_resource_policy(thread_id, resource_type, revision, explicit_empty, created_at, updated_at) values (?, ?, ?, ?, ?, ?)");
-  for (const item of state.policies || []) policy.run(item.threadId, item.resourceType, item.revision, item.explicitEmpty ? 1 : 0, item.createdAt, item.updatedAt);
+  const resource = db.prepare("insert into orkestr_thread_resources(resource_type, resource_id, native_id, resource_key, owner_user_id, boundary_id, generation, status, backend, created_at, updated_at, retired_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+  for (const item of state.resources || []) resource.run(item.resourceType, item.id, item.nativeId || item.resourceKey, item.resourceKey, item.ownerUserId, item.boundaryId, item.generation, item.status || (item.retiredAt ? "retired" : "active"), item.backend || "", item.createdAt, item.updatedAt, item.retiredAt || null);
+  const policy = db.prepare("insert into orkestr_thread_resource_policy(thread_id, resource_type, revision, explicit_empty, inheritance_mode, parent_snapshot_revision, created_at, updated_at) values (?, ?, ?, ?, ?, ?, ?, ?)");
+  for (const item of state.policies || []) policy.run(item.threadId, item.resourceType, item.revision, item.explicitEmpty ? 1 : 0, item.inheritanceMode || "explicit", item.parentSnapshotRevision || 0, item.createdAt, item.updatedAt);
   const grant = db.prepare("insert into orkestr_thread_resource_grants(id, thread_id, resource_type, resource_id, resource_key, owner_user_id, boundary_id, permissions_json, revision, source, created_at, updated_at, revoked_at, revoked_by, reason) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
   for (const item of state.grants || []) grant.run(item.id, item.threadId, item.resourceType, item.resourceId, item.resourceKey, item.ownerUserId, item.boundaryId, JSON.stringify(item.permissions || []), item.revision, item.source || "", item.createdAt, item.updatedAt, item.revokedAt || null, item.revokedBy || null, item.reason || null);
   const ceiling = db.prepare("insert into orkestr_thread_resource_ceilings(thread_id, resource_type, resource_id, permissions_json, parent_thread_id, created_at) values (?, ?, ?, ?, ?, ?)");
@@ -155,17 +170,23 @@ function replaceState(db, state = {}) {
 
 export async function withThreadResourcePolicyTransaction(operation, env = process.env) {
   const db = await openThreadResourcePolicyDatabase(env);
-  db.exec("begin immediate");
-  try {
-    const state = readState(db);
-    const outcome = await operation(state);
-    if (outcome?.state) replaceState(db, outcome.state);
-    db.exec("commit");
-    return outcome;
-  } catch (error) {
-    db.exec("rollback");
-    throw error;
-  }
+  const previous = transactionQueues.get(db) || Promise.resolve();
+  const run = previous.catch(() => undefined).then(() => {
+    db.exec("begin immediate");
+    try {
+      const state = readState(db);
+      const outcome = operation(state);
+      if (outcome && typeof outcome.then === "function") throw new Error("thread_resource_policy_transaction_async_operation_forbidden");
+      if (outcome?.state && outcome.persist !== false) replaceState(db, outcome.state);
+      db.exec("commit");
+      return outcome;
+    } catch (error) {
+      db.exec("rollback");
+      throw error;
+    }
+  });
+  transactionQueues.set(db, run.then(() => undefined, () => undefined));
+  return run;
 }
 
 export async function readThreadResourcePolicyState(env = process.env) {
