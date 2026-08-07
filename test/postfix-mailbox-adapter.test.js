@@ -119,5 +119,8 @@ test("Postfix installer updates the main service and adapter environments", asyn
   assert.match(script, /upsert_env_file "\$env_file" "\$key" "\$value"/);
   assert.match(script, /upsert_env_file "\$ui_env_file" "\$key" "\$value"/);
   assert.match(script, /ORKESTR_MAILBOX_MTA_TOKEN/);
+  assert.match(script, /mailbox-mta\.env/);
+  assert.match(script, /remove_env_key "\$env_file" ORKESTR_MAILBOX_MTA_TOKEN/);
   assert.match(script, /ORKESTR_MAILBOX_SPOOL_DIR/);
+  assert.match(script, /systemctl restart orkestr-mailbox-postfix\.service/);
 });

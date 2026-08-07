@@ -10,6 +10,7 @@ Options:
   --hostname HOSTNAME   SMTP hostname. Defaults to mx.<domain>.
   --env-file PATH       Orkestr environment file. Defaults to /etc/orkestr/orkestr.env.
   --ui-env-file PATH    Main service environment file. Auto-detected by default.
+  --mta-env-file PATH   Dedicated MTA environment file. Defaults to /etc/orkestr/mailbox-mta.env.
   --current PATH        Active release symlink. Defaults to /opt/orkestr/current.
   --service NAME        Main Orkestr service. Defaults to orkestr-ui.
   --run-user USER       Runtime user. Defaults to the main service user.
@@ -20,6 +21,7 @@ domain="${ORKESTR_MAILBOX_DOMAIN:-in.orkestr.de}"
 smtp_hostname=""
 env_file="${ORKESTR_ENV_FILE:-/etc/orkestr/orkestr.env}"
 ui_env_file="${ORKESTR_UI_ENV_FILE:-}"
+mta_env_file="${ORKESTR_MAILBOX_MTA_ENV_FILE:-/etc/orkestr/mailbox-mta.env}"
 current_link="${ORKESTR_CURRENT_LINK:-/opt/orkestr/current}"
 main_service="${ORKESTR_SERVICE_NAME:-orkestr-ui}"
 run_user="${ORKESTR_RUN_USER:-}"
@@ -30,6 +32,7 @@ while [ "$#" -gt 0 ]; do
     --hostname) smtp_hostname="${2:-}"; shift 2 ;;
     --env-file) env_file="${2:-}"; shift 2 ;;
     --ui-env-file) ui_env_file="${2:-}"; shift 2 ;;
+    --mta-env-file) mta_env_file="${2:-}"; shift 2 ;;
     --current) current_link="${2:-}"; shift 2 ;;
     --service) main_service="${2:-}"; shift 2 ;;
     --run-user) run_user="${2:-}"; shift 2 ;;
@@ -106,6 +109,15 @@ read_env_value() {
   awk -v key="$key" 'index($0, key "=") == 1 { print substr($0, length(key) + 2); exit }' "$file"
 }
 
+remove_env_key() {
+  local file="$1" key="$2" temporary
+  [ -f "$file" ] || return 0
+  temporary="$(mktemp)"
+  awk -v key="$key" 'index($0, key "=") != 1 { print }' "$file" > "$temporary"
+  cat "$temporary" > "$file"
+  rm -f "$temporary"
+}
+
 revision="$(git -C "$current_link" rev-parse HEAD 2>/dev/null || date -u +%Y%m%dT%H%M%SZ)"
 upsert_env ORKESTR_MAILBOX_DOMAIN "$domain"
 upsert_env ORKESTR_MAILBOX_REQUIRE_MTA_READY 1
@@ -115,12 +127,25 @@ upsert_env ORKESTR_MAILBOX_MTA_REVISION "$revision"
 upsert_env ORKESTR_MAILBOX_MTA_READY 1
 upsert_env ORKESTR_MAILBOX_SOCKET_HOST 127.0.0.1
 upsert_env ORKESTR_MAILBOX_SOCKET_PORT "${ORKESTR_MAILBOX_SOCKET_PORT:-19096}"
-mailbox_token="$(read_env_value "$ui_env_file" ORKESTR_MAILBOX_MTA_TOKEN)"
+mailbox_token="$(read_env_value "$mta_env_file" ORKESTR_MAILBOX_MTA_TOKEN)"
+mailbox_token="${mailbox_token:-$(read_env_value "$ui_env_file" ORKESTR_MAILBOX_MTA_TOKEN)}"
 mailbox_token="${mailbox_token:-$(read_env_value "$env_file" ORKESTR_MAILBOX_MTA_TOKEN)}"
 mailbox_token="${mailbox_token:-$(openssl rand -hex 32)}"
 spool_dir="${ORKESTR_MAILBOX_SPOOL_DIR:-/var/spool/orkestr-mailbox}"
-upsert_env ORKESTR_MAILBOX_MTA_TOKEN "$mailbox_token"
 upsert_env ORKESTR_MAILBOX_SPOOL_DIR "$spool_dir"
+upsert_env_file "$ui_env_file" ORKESTR_MAILBOX_MTA_TOKEN "$mailbox_token"
+[ "$ui_env_file" = "$env_file" ] || remove_env_key "$env_file" ORKESTR_MAILBOX_MTA_TOKEN
+install -d -m 0755 "$(dirname "$mta_env_file")"
+touch "$mta_env_file"
+ui_port="$(read_env_value "$ui_env_file" ORKESTR_PORT)"
+ui_port="${ui_port:-$(read_env_value "$env_file" ORKESTR_PORT)}"
+upsert_env_file "$mta_env_file" ORKESTR_MAILBOX_API_BASE "http://127.0.0.1:${ui_port:-19812}"
+upsert_env_file "$mta_env_file" ORKESTR_MAILBOX_MTA_TOKEN "$mailbox_token"
+upsert_env_file "$mta_env_file" ORKESTR_MAILBOX_SOCKET_HOST 127.0.0.1
+upsert_env_file "$mta_env_file" ORKESTR_MAILBOX_SOCKET_PORT "${ORKESTR_MAILBOX_SOCKET_PORT:-19096}"
+upsert_env_file "$mta_env_file" ORKESTR_MAILBOX_SPOOL_DIR "$spool_dir"
+chown root:"$(id -gn "$run_user")" "$mta_env_file"
+chmod 0640 "$mta_env_file"
 install -d -o "$run_user" -g "$(id -gn "$run_user")" -m 0700 "$spool_dir"
 
 cat > /etc/systemd/system/orkestr-mailbox-postfix.service <<EOF
@@ -135,7 +160,7 @@ Type=simple
 User=$run_user
 Group=$(id -gn "$run_user")
 WorkingDirectory=$current_link
-EnvironmentFile=-$env_file
+EnvironmentFile=-$mta_env_file
 ExecStart=/usr/bin/node $current_link/scripts/orkestr-mailbox-postfix.mjs serve
 Restart=on-failure
 RestartSec=2
@@ -183,6 +208,7 @@ fi
 
 systemctl daemon-reload
 systemctl enable --now orkestr-mailbox-postfix.service
+systemctl restart orkestr-mailbox-postfix.service
 postfix check
 systemctl enable --now postfix.service
 systemctl reload postfix.service

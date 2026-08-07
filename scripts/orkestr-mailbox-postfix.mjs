@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import fs from "node:fs/promises";
+import fsSync from "node:fs";
 import net from "node:net";
 import process from "node:process";
 import {
@@ -7,6 +8,35 @@ import {
   encodeSocketMapFrame,
   spoolPostfixMailboxMessage,
 } from "../packages/connectors/src/postfix-mailbox-adapter.js";
+
+const mtaEnvKeys = new Set([
+  "ORKESTR_MAILBOX_API_BASE",
+  "ORKESTR_MAILBOX_MTA_TOKEN",
+  "ORKESTR_MAILBOX_POSTFIX_MAX_BYTES",
+  "ORKESTR_MAILBOX_MAX_MESSAGE_BYTES",
+  "ORKESTR_MAILBOX_SOCKET",
+  "ORKESTR_MAILBOX_SOCKET_GID",
+  "ORKESTR_MAILBOX_SOCKET_HOST",
+  "ORKESTR_MAILBOX_SOCKET_PORT",
+  "ORKESTR_MAILBOX_SPOOL_DIR",
+]);
+
+function loadMtaEnvironment() {
+  const file = String(process.env.ORKESTR_MAILBOX_MTA_ENV_FILE || "/etc/orkestr/mailbox-mta.env").trim();
+  let raw = "";
+  try {
+    raw = fsSync.readFileSync(file, "utf8");
+  } catch {
+    return;
+  }
+  for (const line of raw.split(/\r?\n/)) {
+    const match = line.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
+    if (!match || !mtaEnvKeys.has(match[1]) || String(process.env[match[1]] || "").trim()) continue;
+    process.env[match[1]] = match[2].trim();
+  }
+}
+
+loadMtaEnvironment();
 
 function flagValue(argv, name) {
   const index = argv.indexOf(name);
