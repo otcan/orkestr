@@ -15,9 +15,10 @@ import { ThreadRuntimeController } from "./thread-runtime.controller.js";
 import { ThreadBindingController } from "./thread-binding.controller.js";
 import { ThreadsController } from "./threads.controller.js";
 import { ThreadTaskAgentsController } from "./thread-task-agents.controller.js";
+import { ThreadResourceController } from "./thread-resource.controller.js";
 
 @Module({
-  controllers: [ThreadsController, ThreadRuntimeController, ThreadBindingController, ThreadWorkersController, ThreadTaskAgentsController, ThreadTimersController, ThreadMessagesController],
+  controllers: [ThreadsController, ThreadRuntimeController, ThreadBindingController, ThreadWorkersController, ThreadTaskAgentsController, ThreadTimersController, ThreadMessagesController, ThreadResourceController],
   providers: [
     ThreadBindingService,
     ThreadActionSanitizerService,

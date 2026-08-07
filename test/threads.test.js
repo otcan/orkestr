@@ -10,7 +10,8 @@ import { startServer } from "../apps/server/src/server.js";
 import { resetThreadSummaryCachesForTest, threadRuntimeSummary, threadSummaryPayload, threadSummaryRuntimeSnapshot } from "../apps/server/src/thread-summary.ts";
 import { stableSummaryBody, summaryStreamClientBackpressured } from "../apps/server/src/thread-stream-summary.js";
 import { runNextThreadMessage } from "../packages/core/src/executors.js";
-import { applyRuntimeCodexMode, consumeThreadConnectorDeliverySignalCount, deliverPendingThreadInputs, doctorRuntimeResources, drainAllPendingThreadInputs, hardResetThreadRuntime, listRuntimeLeases, recoverStalePendingThreadInputs, resetThreadInputDeliveryTimersForTest, resetThreadRuntime, resolveCodexThreadMetadata, resolveCodexThreadMetadataBatch, runtimeStatus, setThreadConnectorDeliverySignalHandler, sleepThread, syncRuntimeLeases, syncRuntimeWindowName, takeoverRawTerminalThread, wakeThread } from "../packages/core/src/runtime-leases.js";
+import { applyRuntimeCodexMode, clearRuntimeLeasesForThread, consumeThreadConnectorDeliverySignalCount, deliverPendingThreadInputs, doctorRuntimeResources, drainAllPendingThreadInputs, hardResetThreadRuntime, listRuntimeLeases, recoverStalePendingThreadInputs, resetThreadInputDeliveryTimersForTest, resetThreadRuntime, resolveCodexThreadMetadata, resolveCodexThreadMetadataBatch, runtimeStatus, setThreadConnectorDeliverySignalHandler, sleepThread, syncPaneProgressForActiveLeases, syncRuntimeLeases, syncRuntimeWindowName, takeoverRawTerminalThread, wakeThread } from "../packages/core/src/runtime-leases.js";
+import { acquireRuntimeLeaseFileLock, withRuntimeLeaseLock } from "../packages/core/src/runtime-lease-lock.js";
 import { completeThreadSecurityApproveCommand } from "../packages/core/src/security-thread-command.js";
 import { ensureDataDirs } from "../packages/storage/src/paths.js";
 import { parseThreadInputCommand } from "../packages/core/src/thread-commands.js";
@@ -102,6 +103,7 @@ case "$cmd" in
     while [ "$#" -gt 0 ]; do
       if [ "$1" = "-t" ]; then target="\${2:-}"; shift 2; else shift; fi
     done
+    if [ -n "\${TMUX_HAS_SESSION_DELAY:-}" ]; then sleep "\${TMUX_HAS_SESSION_DELAY:-}"; fi
     if [ -f "$TMUX_STATE" ] && grep -Fxq "$target" "$TMUX_STATE"; then exit 0; fi
     exit 1
     ;;
@@ -110,6 +112,7 @@ case "$cmd" in
     while [ "$#" -gt 0 ]; do
       if [ "$1" = "-s" ]; then session="\${2:-}"; shift 2; else shift; fi
     done
+    if [ -n "\${TMUX_NEW_SESSION_DELAY:-}" ]; then sleep "\${TMUX_NEW_SESSION_DELAY:-}"; fi
     if [ -n "$session" ]; then printf '%s\\n' "$session" >> "$TMUX_STATE"; fi
     exit 0
     ;;
@@ -118,6 +121,7 @@ case "$cmd" in
     while [ "$#" -gt 0 ]; do
       if [ "$1" = "-t" ]; then target="\${2:-}"; shift 2; else shift; fi
     done
+    if [ -n "\${TMUX_KILL_SESSION_DELAY:-}" ]; then sleep "\${TMUX_KILL_SESSION_DELAY:-}"; fi
     if [ -n "$target" ] && [ -f "$TMUX_STATE" ]; then
       grep -Fxv "$target" "$TMUX_STATE" > "$TMUX_STATE.tmp" || true
       mv "$TMUX_STATE.tmp" "$TMUX_STATE"
@@ -195,6 +199,49 @@ esac
 function restoreEnvValue(key, value) {
   if (value === undefined) delete process.env[key];
   else process.env[key] = value;
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitForFilePattern(filePath, pattern, timeoutMs = 1000) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    const text = await fs.readFile(filePath, "utf8").catch(() => "");
+    if (pattern.test(text)) return text;
+    await delay(10);
+  }
+  throw new Error(`pattern_not_observed:${pattern}`);
+}
+
+async function waitForRuntimeLease(env, predicate, timeoutMs = 1000) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    const leases = await listRuntimeLeases(env);
+    const found = leases.find(predicate);
+    if (found) return found;
+    await delay(10);
+  }
+  throw new Error("runtime_lease_condition_not_observed");
+}
+
+function execNodeScript(script, { env = {}, timeoutMs = 5000 } = {}) {
+  return new Promise((resolve, reject) => {
+    execFile(process.execPath, ["--input-type=module", "-e", script], {
+      env: { ...process.env, ...env },
+      timeout: timeoutMs,
+      maxBuffer: 1024 * 1024,
+    }, (error, stdout, stderr) => {
+      if (error) {
+        error.stdout = stdout;
+        error.stderr = stderr;
+        reject(error);
+        return;
+      }
+      resolve({ stdout, stderr });
+    });
+  });
 }
 
 process.env.ORKESTR_CODEX_AUTH_PREFLIGHT ||= "0";
@@ -737,6 +784,1038 @@ test("temporary test homes use a placeholder runtime command by default", async 
   }
 });
 
+test("runtime lease file lock heartbeats prevent stale takeover of slow holders", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-runtime-lock-heartbeat-"));
+  const filePath = path.join(home, "runtime-leases.json");
+  const firstRelease = await acquireRuntimeLeaseFileLock(filePath, {
+    staleMs: 40,
+    heartbeatMs: 5,
+    timeoutMs: 200,
+  });
+
+  try {
+    await delay(120);
+    await assert.rejects(
+      () => acquireRuntimeLeaseFileLock(filePath, {
+        staleMs: 40,
+        heartbeatMs: 5,
+        timeoutMs: 80,
+      }),
+      /runtime_lease_store_locked/,
+    );
+  } finally {
+    await firstRelease();
+  }
+
+  const secondRelease = await acquireRuntimeLeaseFileLock(filePath, {
+    staleMs: 40,
+    heartbeatMs: 5,
+    timeoutMs: 200,
+  });
+  await secondRelease();
+});
+
+test("runtime lease file lock release cannot remove a successor after lock path replacement", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-runtime-lock-token-release-"));
+  const filePath = path.join(home, "runtime-leases.json");
+  const lockPath = `${filePath}.lock`;
+  const stalePath = `${lockPath}.stale.test`;
+  const successorOwner = {
+    pid: process.pid,
+    token: "successor-token",
+    acquiredAt: new Date().toISOString(),
+    heartbeatAt: new Date().toISOString(),
+  };
+  let firstRelease = null;
+  let released = false;
+
+  try {
+    firstRelease = await acquireRuntimeLeaseFileLock(filePath, {
+      staleMs: 20,
+      heartbeatMs: 0,
+      timeoutMs: 200,
+    });
+    await fs.rename(lockPath, stalePath);
+    await fs.mkdir(lockPath, { mode: 0o700 });
+    await fs.writeFile(path.join(lockPath, "owner.json"), `${JSON.stringify(successorOwner, null, 2)}\n`, { mode: 0o600 });
+
+    await firstRelease();
+    released = true;
+
+    const afterReleaseOwner = JSON.parse(await fs.readFile(path.join(lockPath, "owner.json"), "utf8"));
+    assert.equal(afterReleaseOwner.token, "successor-token");
+  } finally {
+    if (firstRelease && !released) await firstRelease().catch(() => {});
+    await fs.rm(lockPath, { recursive: true, force: true }).catch(() => {});
+    await fs.rm(stalePath, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("runtime lease file lock does not time-take over a stale live local owner", {
+  skip: process.platform !== "linux" ? "requires Linux /proc process identity" : false,
+}, async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-runtime-lock-live-owner-"));
+  const filePath = path.join(home, "runtime-leases.json");
+  const lockPath = `${filePath}.lock`;
+  const firstRelease = await acquireRuntimeLeaseFileLock(filePath, {
+    staleMs: 20,
+    heartbeatMs: 0,
+    timeoutMs: 200,
+  });
+
+  try {
+    await delay(35);
+    const contenders = await Promise.allSettled([
+      acquireRuntimeLeaseFileLock(filePath, {
+        staleMs: 20,
+        heartbeatMs: 5,
+        timeoutMs: 60,
+      }),
+      acquireRuntimeLeaseFileLock(filePath, {
+        staleMs: 20,
+        heartbeatMs: 5,
+        timeoutMs: 60,
+      }),
+    ]);
+    assert.equal(contenders.every((result) => result.status === "rejected"), true);
+    for (const result of contenders) {
+      assert.match(result.reason?.message || "", /runtime_lease_store_locked/);
+    }
+
+    const owner = JSON.parse(await fs.readFile(path.join(lockPath, "owner.json"), "utf8"));
+    assert.equal(owner.pid, process.pid);
+    assert.match(owner.processStartIdentity, /^linux:\d+$/);
+  } finally {
+    await firstRelease();
+  }
+});
+
+test("runtime lease file lock does not time-take over a stale live PID without process identity", {
+  skip: process.platform !== "linux" ? "requires Linux /proc process identity" : false,
+}, async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-runtime-lock-live-legacy-owner-"));
+  const filePath = path.join(home, "runtime-leases.json");
+  const lockPath = `${filePath}.lock`;
+  const staleTime = new Date(Date.now() - 60_000);
+  await fs.mkdir(lockPath, { recursive: true, mode: 0o700 });
+  await fs.writeFile(path.join(lockPath, "owner.json"), `${JSON.stringify({
+    pid: process.pid,
+    token: "legacy-live-owner",
+    acquiredAt: staleTime.toISOString(),
+    heartbeatAt: staleTime.toISOString(),
+  }, null, 2)}\n`, { mode: 0o600 });
+  await fs.utimes(path.join(lockPath, "owner.json"), staleTime, staleTime);
+
+  await assert.rejects(
+    () => acquireRuntimeLeaseFileLock(filePath, {
+      staleMs: 20,
+      heartbeatMs: 5,
+      timeoutMs: 60,
+    }),
+    /runtime_lease_store_locked/,
+  );
+
+  const owner = JSON.parse(await fs.readFile(path.join(lockPath, "owner.json"), "utf8"));
+  assert.equal(owner.token, "legacy-live-owner");
+});
+
+test("runtime lease file lock reclaims an owner with mismatched process identity", {
+  skip: process.platform !== "linux" ? "requires Linux /proc process identity" : false,
+}, async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-runtime-lock-mismatched-owner-"));
+  const filePath = path.join(home, "runtime-leases.json");
+  const lockPath = `${filePath}.lock`;
+  await fs.mkdir(lockPath, { recursive: true, mode: 0o700 });
+  await fs.writeFile(path.join(lockPath, "owner.json"), `${JSON.stringify({
+    pid: process.pid,
+    processStartIdentity: "linux:0",
+    token: "mismatched-owner",
+    acquiredAt: new Date().toISOString(),
+    heartbeatAt: new Date().toISOString(),
+  }, null, 2)}\n`, { mode: 0o600 });
+
+  const release = await acquireRuntimeLeaseFileLock(filePath, {
+    staleMs: 60_000,
+    heartbeatMs: 0,
+    timeoutMs: 200,
+  });
+
+  try {
+    const owner = JSON.parse(await fs.readFile(path.join(lockPath, "owner.json"), "utf8"));
+    assert.equal(owner.pid, process.pid);
+    assert.match(owner.processStartIdentity, /^linux:\d+$/);
+    assert.notEqual(owner.token, "mismatched-owner");
+  } finally {
+    await release();
+  }
+});
+
+test("runtime lease file lock heartbeat cannot overwrite a stale-takeover successor", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-runtime-lock-heartbeat-owner-"));
+  const filePath = path.join(home, "runtime-leases.json");
+  const lockPath = `${filePath}.lock`;
+  const stalePath = `${lockPath}.stale.test`;
+  const successorOwner = {
+    pid: process.pid,
+    token: "successor-token",
+    acquiredAt: new Date().toISOString(),
+    heartbeatAt: new Date().toISOString(),
+  };
+  let firstRelease = null;
+  let released = false;
+  let heartbeatObserved = false;
+  let observeHeartbeat = () => {};
+  let resumeHeartbeat = () => {};
+  const heartbeatCanResume = new Promise((resolve) => {
+    resumeHeartbeat = resolve;
+  });
+  const heartbeatPaused = new Promise((resolve) => {
+    let resolved = false;
+    observeHeartbeat = () => {
+      if (!resolved) {
+        resolved = true;
+        resolve();
+      }
+    };
+  });
+
+  try {
+    firstRelease = await acquireRuntimeLeaseFileLock(filePath, {
+      staleMs: 1_000,
+      heartbeatMs: 1,
+      timeoutMs: 200,
+      heartbeatHook: async ({ phase }) => {
+        if (phase !== "beforeTouch" || heartbeatObserved) return;
+        heartbeatObserved = true;
+        observeHeartbeat();
+        await heartbeatCanResume;
+      },
+    });
+    await Promise.race([
+      heartbeatPaused,
+      delay(500).then(() => {
+        throw new Error("runtime_lock_heartbeat_not_observed");
+      }),
+    ]);
+
+    await fs.rename(lockPath, stalePath);
+    await fs.mkdir(lockPath, { mode: 0o700 });
+    await fs.writeFile(path.join(lockPath, "owner.json"), `${JSON.stringify(successorOwner, null, 2)}\n`, { mode: 0o600 });
+
+    resumeHeartbeat();
+    await delay(25);
+
+    const currentOwner = JSON.parse(await fs.readFile(path.join(lockPath, "owner.json"), "utf8"));
+    assert.equal(currentOwner.token, "successor-token");
+
+    await firstRelease();
+    released = true;
+    const afterReleaseOwner = JSON.parse(await fs.readFile(path.join(lockPath, "owner.json"), "utf8"));
+    assert.equal(afterReleaseOwner.token, "successor-token");
+  } finally {
+    resumeHeartbeat();
+    if (firstRelease && !released) await firstRelease().catch(() => {});
+    await fs.rm(lockPath, { recursive: true, force: true }).catch(() => {});
+    await fs.rm(stalePath, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("runtime lease queued timeout includes same-process queue wait", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-runtime-lock-queue-timeout-"));
+  const filePath = path.join(home, "runtime-leases.json");
+  let holderStarted = () => {};
+  const holderReady = new Promise((resolve) => {
+    holderStarted = resolve;
+  });
+  let waiterRan = false;
+  const holder = withRuntimeLeaseLock(filePath, async () => {
+    holderStarted();
+    await delay(180);
+  }, { timeoutMs: 500, heartbeatMs: 5 });
+  await holderReady;
+
+  const startedAt = Date.now();
+  await assert.rejects(
+    () => withRuntimeLeaseLock(filePath, async () => {
+      waiterRan = true;
+    }, { timeoutMs: 25, heartbeatMs: 5 }),
+    /runtime_lease_store_locked/,
+  );
+  const elapsedMs = Date.now() - startedAt;
+  await holder;
+
+  assert.equal(waiterRan, false);
+  assert.ok(elapsedMs < 120, `queued waiter timed out after ${elapsedMs}ms`);
+});
+
+test("runtime lease lock rejects nested same-file acquisition", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-runtime-lock-reentrant-"));
+  const filePath = path.join(home, "runtime-leases.json");
+  await withRuntimeLeaseLock(filePath, async () => {
+    const startedAt = Date.now();
+    await assert.rejects(
+      () => withRuntimeLeaseLock(filePath, async () => {}, { timeoutMs: 100 }),
+      /runtime_lease_store_reentrant/,
+    );
+    assert.ok(Date.now() - startedAt < 50);
+  }, { timeoutMs: 500, heartbeatMs: 5 });
+});
+
+test("runtime lease lock allows timer-created reacquire after release", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-runtime-lock-timer-reacquire-"));
+  const filePath = path.join(home, "runtime-leases.json");
+  let laterReacquire = null;
+  let releaseGateOpen = () => {};
+  const releaseGate = new Promise((resolve) => {
+    releaseGateOpen = resolve;
+  });
+  await withRuntimeLeaseLock(filePath, async () => {
+    laterReacquire = new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    })
+      .then(() => releaseGate)
+      .then(() => withRuntimeLeaseLock(filePath, async () => "reacquired", { timeoutMs: 200, heartbeatMs: 5 }));
+  }, { timeoutMs: 500, heartbeatMs: 5 });
+
+  releaseGateOpen();
+  assert.equal(await laterReacquire, "reacquired");
+});
+
+test("runtime lease lock allows scheduler-shaped mutation after release", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-runtime-lock-scheduled-mutation-"));
+  const env = { ORKESTR_HOME: path.join(home, "orkestr-home") };
+  await createThread({ id: "scheduled-lock-thread", name: "Scheduled Lock Thread" }, env);
+  const paths = await ensureDataDirs(env);
+  await fs.writeFile(paths.runtimeLeases, `${JSON.stringify([{
+    id: "lease-scheduled-lock",
+    threadId: "scheduled-lock-thread",
+    sessionName: "orkestr-scheduled-lock-thread",
+    startedAt: "2026-01-01T00:00:00.000Z",
+  }], null, 2)}\n`, "utf8");
+
+  let scheduledMutation = null;
+  let releaseGateOpen = () => {};
+  const releaseGate = new Promise((resolve) => {
+    releaseGateOpen = resolve;
+  });
+  await withRuntimeLeaseLock(paths.runtimeLeases, async () => {
+    scheduledMutation = new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    })
+      .then(() => releaseGate)
+      .then(() => clearRuntimeLeasesForThread("scheduled-lock-thread", { reason: "scheduled_clear" }, env));
+  }, { timeoutMs: 500, heartbeatMs: 5 });
+
+  releaseGateOpen();
+  const cleared = await scheduledMutation;
+  const leases = await listRuntimeLeases(env);
+  assert.equal(cleared.cleared, 1);
+  assert.equal(leases.find((lease) => lease.id === "lease-scheduled-lock")?.endReason, "scheduled_clear");
+});
+
+test("concurrent wake calls reuse a single runtime lease", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-wake-race-"));
+  const fakeTmux = await createFakeTmux(home);
+  const priorPath = process.env.PATH;
+  const priorTmuxLog = process.env.TMUX_LOG;
+  const priorTmuxState = process.env.TMUX_STATE;
+  const priorTmuxDelay = process.env.TMUX_NEW_SESSION_DELAY;
+  process.env.PATH = `${fakeTmux.bin}:${priorPath || ""}`;
+  process.env.TMUX_LOG = fakeTmux.log;
+  process.env.TMUX_STATE = fakeTmux.state;
+  process.env.TMUX_NEW_SESSION_DELAY = "0.05";
+
+  try {
+    const env = {
+      ORKESTR_HOME: path.join(home, "orkestr-home"),
+      HOME: path.join(home, "runtime-home"),
+      CODEX_HOME: path.join(home, "codex-home"),
+      PATH: process.env.PATH,
+      TMUX_LOG: fakeTmux.log,
+      TMUX_STATE: fakeTmux.state,
+      TMUX_NEW_SESSION_DELAY: process.env.TMUX_NEW_SESSION_DELAY,
+    };
+    await createThread({ id: "wake-race-thread", name: "Wake Race Thread" }, env);
+
+    const results = await Promise.all([
+      wakeThread("wake-race-thread", { reason: "send" }, env),
+      wakeThread("wake-race-thread", { reason: "manual_wake" }, env),
+    ]);
+    const leases = await listRuntimeLeases(env);
+    const active = leases.filter((lease) => lease.threadId === "wake-race-thread" && !lease.endedAt);
+    const log = await fs.readFile(fakeTmux.log, "utf8");
+
+    assert.equal(active.length, 1);
+    assert.equal(new Set(results.map((result) => result.lease.id)).size, 1);
+    assert.equal(results.filter((result) => result.reused).length, 1);
+    assert.equal((log.match(/__CALL__\tnew-session\t/g) || []).length, 1);
+  } finally {
+    restoreEnvValue("PATH", priorPath);
+    restoreEnvValue("TMUX_LOG", priorTmuxLog);
+    restoreEnvValue("TMUX_STATE", priorTmuxState);
+    restoreEnvValue("TMUX_NEW_SESSION_DELAY", priorTmuxDelay);
+  }
+});
+
+test("wakeThread does not reuse from an unfenced lease snapshot after lock timeout", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-wake-lock-timeout-"));
+  const fakeTmux = await createFakeTmux(home);
+  const priorPath = process.env.PATH;
+  const priorTmuxLog = process.env.TMUX_LOG;
+  const priorTmuxState = process.env.TMUX_STATE;
+  process.env.PATH = `${fakeTmux.bin}:${priorPath || ""}`;
+  process.env.TMUX_LOG = fakeTmux.log;
+  process.env.TMUX_STATE = fakeTmux.state;
+
+  try {
+    const env = {
+      ORKESTR_HOME: path.join(home, "orkestr-home"),
+      HOME: path.join(home, "runtime-home"),
+      CODEX_HOME: path.join(home, "codex-home"),
+      ORKESTR_RUNTIME_LEASE_LOCK_TIMEOUT_MS: "30",
+      PATH: process.env.PATH,
+      TMUX_LOG: fakeTmux.log,
+      TMUX_STATE: fakeTmux.state,
+    };
+    await createThread({ id: "wake-lock-timeout-thread", name: "Wake Lock Timeout Thread" }, env);
+    await wakeThread("wake-lock-timeout-thread", { reason: "initial" }, env);
+    const paths = await ensureDataDirs(env);
+    const releaseStoreLock = await acquireRuntimeLeaseFileLock(paths.runtimeLeases, {
+      heartbeatMs: 5,
+      staleMs: 1_000,
+      timeoutMs: 200,
+    });
+
+    try {
+      await assert.rejects(
+        () => wakeThread("wake-lock-timeout-thread", { reason: "timeout_reuse" }, env),
+        /runtime_lease_store_locked/,
+      );
+    } finally {
+      await releaseStoreLock();
+    }
+  } finally {
+    restoreEnvValue("PATH", priorPath);
+    restoreEnvValue("TMUX_LOG", priorTmuxLog);
+    restoreEnvValue("TMUX_STATE", priorTmuxState);
+  }
+});
+
+test("wakeThread fails instead of reusing during a delayed sleep kill", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-wake-during-sleep-kill-"));
+  const fakeTmux = await createFakeTmux(home);
+  const priorPath = process.env.PATH;
+  const priorTmuxLog = process.env.TMUX_LOG;
+  const priorTmuxState = process.env.TMUX_STATE;
+  const priorKillDelay = process.env.TMUX_KILL_SESSION_DELAY;
+  process.env.PATH = `${fakeTmux.bin}:${priorPath || ""}`;
+  process.env.TMUX_LOG = fakeTmux.log;
+  process.env.TMUX_STATE = fakeTmux.state;
+
+  try {
+    const env = {
+      ORKESTR_HOME: path.join(home, "orkestr-home"),
+      HOME: path.join(home, "runtime-home"),
+      CODEX_HOME: path.join(home, "codex-home"),
+      ORKESTR_RUNTIME_LEASE_LOCK_TIMEOUT_MS: "30",
+      PATH: process.env.PATH,
+      TMUX_LOG: fakeTmux.log,
+      TMUX_STATE: fakeTmux.state,
+      TMUX_KILL_SESSION_DELAY: "0.4",
+    };
+    await createThread({ id: "wake-during-sleep-kill-thread", name: "Wake During Sleep Kill Thread" }, env);
+    const first = await wakeThread("wake-during-sleep-kill-thread", { reason: "initial" }, env);
+    const runtimeLeasesUrl = new URL("../packages/core/src/runtime-leases.js", import.meta.url).href;
+    const child = execNodeScript(`
+      import { sleepThread } from ${JSON.stringify(runtimeLeasesUrl)};
+      const env = JSON.parse(process.env.ORKESTR_TEST_ENV);
+      await sleepThread("wake-during-sleep-kill-thread", { reason: "delayed_sleep", kill: true }, env);
+    `, { env: { ORKESTR_TEST_ENV: JSON.stringify(env), TMUX_KILL_SESSION_DELAY: env.TMUX_KILL_SESSION_DELAY }, timeoutMs: 5000 });
+
+    await waitForFilePattern(fakeTmux.log, /__CALL__\tkill-session\t-t\torkestr-wake-during-sleep-kill-thread/);
+    await assert.rejects(
+      () => wakeThread("wake-during-sleep-kill-thread", { reason: "racing_wake" }, env),
+      /runtime_lease_store_locked/,
+    );
+    await child;
+
+    const thread = await getThread("wake-during-sleep-kill-thread", env);
+    const leases = await listRuntimeLeases(env);
+    const log = await fs.readFile(fakeTmux.log, "utf8");
+    assert.equal(thread.state, "sleeping");
+    assert.equal(thread.activeRuntimeLeaseId, null);
+    assert.equal(leases.find((lease) => lease.id === first.lease.id)?.endReason, "delayed_sleep");
+    assert.equal((log.match(/__CALL__\tnew-session\t/g) || []).length, 1);
+  } finally {
+    restoreEnvValue("PATH", priorPath);
+    restoreEnvValue("TMUX_LOG", priorTmuxLog);
+    restoreEnvValue("TMUX_STATE", priorTmuxState);
+    restoreEnvValue("TMUX_KILL_SESSION_DELAY", priorKillDelay);
+  }
+});
+
+test("runtime lease registry serializes wake and sleep across processes", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-wake-sleep-multiprocess-"));
+  const fakeTmux = await createFakeTmux(home);
+  const priorPath = process.env.PATH;
+  const priorTmuxLog = process.env.TMUX_LOG;
+  const priorTmuxState = process.env.TMUX_STATE;
+  const priorTmuxDelay = process.env.TMUX_NEW_SESSION_DELAY;
+  process.env.PATH = `${fakeTmux.bin}:${priorPath || ""}`;
+  process.env.TMUX_LOG = fakeTmux.log;
+  process.env.TMUX_STATE = fakeTmux.state;
+  process.env.TMUX_NEW_SESSION_DELAY = "0.2";
+
+  try {
+    const env = {
+      ORKESTR_HOME: path.join(home, "orkestr-home"),
+      HOME: path.join(home, "runtime-home"),
+      CODEX_HOME: path.join(home, "codex-home"),
+      PATH: process.env.PATH,
+      TMUX_LOG: fakeTmux.log,
+      TMUX_STATE: fakeTmux.state,
+      TMUX_NEW_SESSION_DELAY: process.env.TMUX_NEW_SESSION_DELAY,
+    };
+    await createThread({ id: "wake-sleep-race-thread", name: "Wake Sleep Race Thread" }, env);
+    const runtimeLeasesUrl = new URL("../packages/core/src/runtime-leases.js", import.meta.url).href;
+    const child = execNodeScript(`
+      import { wakeThread } from ${JSON.stringify(runtimeLeasesUrl)};
+      const env = JSON.parse(process.env.ORKESTR_TEST_ENV);
+      await wakeThread("wake-sleep-race-thread", { reason: "child_wake" }, env);
+    `, { env: { ORKESTR_TEST_ENV: JSON.stringify(env) } });
+    await waitForFilePattern(fakeTmux.log, /__CALL__\tnew-session\t/);
+
+    const slept = await sleepThread("wake-sleep-race-thread", { reason: "race_sleep", kill: true }, env);
+    await child;
+
+    const leases = await listRuntimeLeases(env);
+    const log = await fs.readFile(fakeTmux.log, "utf8");
+    assert.equal(slept.slept, 1);
+    assert.equal(leases.filter((lease) => lease.threadId === "wake-sleep-race-thread" && !lease.endedAt).length, 0);
+    assert.match(log, /__CALL__\tnew-session\t/);
+    assert.match(log, /kill-session/);
+    assert.match(log, /orkestr-wake-sleep-race-thread/);
+  } finally {
+    restoreEnvValue("PATH", priorPath);
+    restoreEnvValue("TMUX_LOG", priorTmuxLog);
+    restoreEnvValue("TMUX_STATE", priorTmuxState);
+    restoreEnvValue("TMUX_NEW_SESSION_DELAY", priorTmuxDelay);
+  }
+});
+
+test("runtime lease metadata update preserves a newer lease committed before it obtains the lock", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-metadata-lock-"));
+  const fakeTmux = await createFakeTmux(home);
+  const priorPath = process.env.PATH;
+  const priorTmuxLog = process.env.TMUX_LOG;
+  const priorTmuxState = process.env.TMUX_STATE;
+  process.env.PATH = `${fakeTmux.bin}:${priorPath || ""}`;
+  process.env.TMUX_LOG = fakeTmux.log;
+  process.env.TMUX_STATE = fakeTmux.state;
+
+  try {
+    const env = {
+      ORKESTR_HOME: path.join(home, "orkestr-home"),
+      HOME: path.join(home, "runtime-home"),
+      CODEX_HOME: path.join(home, "codex-home"),
+      PATH: process.env.PATH,
+      TMUX_LOG: fakeTmux.log,
+      TMUX_STATE: fakeTmux.state,
+    };
+    const paths = await ensureDataDirs(env);
+    await createThread({ id: "metadata-lock-thread", name: "Metadata Lock Thread" }, env);
+    await fs.writeFile(fakeTmux.state, "orkestr-metadata-lock-thread\n", "utf8");
+    await fs.writeFile(paths.runtimeLeases, `${JSON.stringify([{
+      id: "lease-old",
+      threadId: "metadata-lock-thread",
+      sessionName: "orkestr-metadata-lock-thread",
+      startedAt: "2026-01-01T00:00:00.000Z",
+    }], null, 2)}\n`, "utf8");
+    const releaseStoreLock = await acquireRuntimeLeaseFileLock(paths.runtimeLeases, {
+      heartbeatMs: 5,
+      staleMs: 1_000,
+      timeoutMs: 200,
+    });
+    const runtimeLeasesUrl = new URL("../packages/core/src/runtime-leases.js", import.meta.url).href;
+    const child = execNodeScript(`
+      import { syncRuntimeWindowName } from ${JSON.stringify(runtimeLeasesUrl)};
+      const env = JSON.parse(process.env.ORKESTR_TEST_ENV);
+      await syncRuntimeWindowName("metadata-lock-thread", env);
+    `, { env: { ORKESTR_TEST_ENV: JSON.stringify(env) } });
+    await waitForFilePattern(fakeTmux.log, /__CALL__\trename-window\t/);
+    await fs.writeFile(paths.runtimeLeases, `${JSON.stringify([
+      {
+        id: "lease-old",
+        threadId: "metadata-lock-thread",
+        sessionName: "orkestr-metadata-lock-thread",
+        startedAt: "2026-01-01T00:00:00.000Z",
+      },
+      {
+        id: "lease-new",
+        threadId: "metadata-lock-thread-2",
+        sessionName: "orkestr-metadata-lock-thread-2",
+        startedAt: "2026-01-01T00:00:01.000Z",
+      },
+    ], null, 2)}\n`, "utf8");
+    await releaseStoreLock();
+    await child;
+
+    const leases = await listRuntimeLeases(env);
+    assert.equal(leases.some((lease) => lease.id === "lease-new"), true);
+    assert.equal(leases.find((lease) => lease.id === "lease-old")?.windowName, "Metadata Lock Thread");
+  } finally {
+    restoreEnvValue("PATH", priorPath);
+    restoreEnvValue("TMUX_LOG", priorTmuxLog);
+    restoreEnvValue("TMUX_STATE", priorTmuxState);
+  }
+});
+
+test("runtime resource doctor revalidates stale orphan snapshots before killing a newly leased session", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-doctor-revalidate-"));
+  const fakeTmux = await createFakeTmux(home);
+  const priorPath = process.env.PATH;
+  const priorTmuxLog = process.env.TMUX_LOG;
+  const priorTmuxState = process.env.TMUX_STATE;
+  const priorTmuxSessionPath = process.env.TMUX_SESSION_PATH;
+  process.env.PATH = `${fakeTmux.bin}:${priorPath || ""}`;
+  process.env.TMUX_LOG = fakeTmux.log;
+  process.env.TMUX_STATE = fakeTmux.state;
+  process.env.TMUX_SESSION_PATH = path.join(home, "orkestr-home", "workspaces", "doctor-revalidate");
+  await fs.writeFile(fakeTmux.state, "orkestr-doctor-revalidate-thread\n", "utf8");
+
+  try {
+    const env = {
+      ORKESTR_HOME: path.join(home, "orkestr-home"),
+      PATH: process.env.PATH,
+      TMUX_LOG: fakeTmux.log,
+      TMUX_STATE: fakeTmux.state,
+      TMUX_SESSION_PATH: process.env.TMUX_SESSION_PATH,
+    };
+    const paths = await ensureDataDirs(env);
+    const releaseStoreLock = await acquireRuntimeLeaseFileLock(paths.runtimeLeases, {
+      heartbeatMs: 5,
+      staleMs: 1_000,
+      timeoutMs: 200,
+    });
+    const runtimeLeasesUrl = new URL("../packages/core/src/runtime-leases.js", import.meta.url).href;
+    const child = execNodeScript(`
+      import { doctorRuntimeResources } from ${JSON.stringify(runtimeLeasesUrl)};
+      const env = JSON.parse(process.env.ORKESTR_TEST_ENV);
+      const result = await doctorRuntimeResources({ env, repair: true });
+      console.log(JSON.stringify(result.actions));
+    `, { env: { ORKESTR_TEST_ENV: JSON.stringify(env) } });
+    await waitForFilePattern(fakeTmux.log, /__CALL__\tlist-sessions/);
+    await fs.writeFile(paths.runtimeLeases, `${JSON.stringify([{
+      id: "lease-current",
+      threadId: "doctor-revalidate-thread",
+      sessionName: "orkestr-doctor-revalidate-thread",
+      startedAt: "2026-01-01T00:00:01.000Z",
+    }], null, 2)}\n`, "utf8");
+    await releaseStoreLock();
+    const { stdout } = await child;
+    const actions = JSON.parse(stdout.trim() || "[]");
+    const state = await fs.readFile(fakeTmux.state, "utf8");
+    const log = await fs.readFile(fakeTmux.log, "utf8");
+
+    assert.equal(actions.some((action) => action.action === "killed_tmux_session"), false);
+    assert.match(state, /orkestr-doctor-revalidate-thread/);
+    assert.doesNotMatch(log, /__CALL__\tkill-session\t-t\torkestr-doctor-revalidate-thread/);
+  } finally {
+    restoreEnvValue("PATH", priorPath);
+    restoreEnvValue("TMUX_LOG", priorTmuxLog);
+    restoreEnvValue("TMUX_STATE", priorTmuxState);
+    restoreEnvValue("TMUX_SESSION_PATH", priorTmuxSessionPath);
+  }
+});
+
+test("runtime lease registry lock recovers after a crashed owner process", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-runtime-lock-crash-recovery-"));
+  const filePath = path.join(home, "runtime-leases.json");
+  const lockUrl = new URL("../packages/core/src/runtime-lease-lock.js", import.meta.url).href;
+  await execNodeScript(`
+    import { acquireRuntimeLeaseFileLock } from ${JSON.stringify(lockUrl)};
+    await acquireRuntimeLeaseFileLock(process.env.ORKESTR_TEST_LEASE_FILE, {
+      heartbeatMs: 0,
+      staleMs: 60_000,
+      timeoutMs: 200,
+    });
+  `, { env: { ORKESTR_TEST_LEASE_FILE: filePath } });
+
+  const release = await acquireRuntimeLeaseFileLock(filePath, {
+    heartbeatMs: 0,
+    staleMs: 60_000,
+    timeoutMs: 500,
+  });
+  await release();
+});
+
+test("runtime lease registry mutations honor lock timeout", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-runtime-mutation-lock-timeout-"));
+  const env = {
+    ORKESTR_HOME: path.join(home, "orkestr-home"),
+    ORKESTR_RUNTIME_LEASE_LOCK_TIMEOUT_MS: "30",
+  };
+  await createThread({ id: "mutation-lock-timeout-thread", name: "Mutation Lock Timeout Thread" }, env);
+  const paths = await ensureDataDirs(env);
+  await fs.writeFile(paths.runtimeLeases, `${JSON.stringify([{
+    id: "lease-timeout",
+    threadId: "mutation-lock-timeout-thread",
+    sessionName: "orkestr-mutation-lock-timeout-thread",
+    startedAt: "2026-01-01T00:00:00.000Z",
+  }], null, 2)}\n`, "utf8");
+  const releaseStoreLock = await acquireRuntimeLeaseFileLock(paths.runtimeLeases, {
+    heartbeatMs: 5,
+    staleMs: 1_000,
+    timeoutMs: 200,
+  });
+  try {
+    await assert.rejects(
+      () => clearRuntimeLeasesForThread("mutation-lock-timeout-thread", { reason: "test_timeout" }, env),
+      /runtime_lease_store_locked/,
+    );
+  } finally {
+    await releaseStoreLock();
+  }
+});
+
+test("runtime sync stalled observation does not block unrelated clear mutation", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-runtime-sync-stalled-observation-"));
+  const fakeTmux = await createFakeTmux(home);
+  const priorPath = process.env.PATH;
+  const priorTmuxLog = process.env.TMUX_LOG;
+  const priorTmuxState = process.env.TMUX_STATE;
+  const priorHasSessionDelay = process.env.TMUX_HAS_SESSION_DELAY;
+  process.env.PATH = `${fakeTmux.bin}:${priorPath || ""}`;
+  process.env.TMUX_LOG = fakeTmux.log;
+  process.env.TMUX_STATE = fakeTmux.state;
+  process.env.TMUX_HAS_SESSION_DELAY = "0.4";
+  await fs.writeFile(fakeTmux.state, "orkestr-sync-stalled-observation\n", "utf8");
+
+  try {
+    const env = {
+      ORKESTR_HOME: path.join(home, "orkestr-home"),
+      ORKESTR_RUNTIME_LEASE_LOCK_TIMEOUT_MS: "50",
+      PATH: process.env.PATH,
+      TMUX_LOG: fakeTmux.log,
+      TMUX_STATE: fakeTmux.state,
+      TMUX_HAS_SESSION_DELAY: process.env.TMUX_HAS_SESSION_DELAY,
+    };
+    const paths = await ensureDataDirs(env);
+    await fs.writeFile(paths.runtimeLeases, `${JSON.stringify([{
+      id: "lease-sync-stalled",
+      threadId: "sync-stalled-thread",
+      sessionName: "orkestr-sync-stalled-observation",
+      startedAt: "2026-01-01T00:00:00.000Z",
+    }], null, 2)}\n`, "utf8");
+    const runtimeLeasesUrl = new URL("../packages/core/src/runtime-leases.js", import.meta.url).href;
+    const child = execNodeScript(`
+      import { syncRuntimeLeases } from ${JSON.stringify(runtimeLeasesUrl)};
+      const env = JSON.parse(process.env.ORKESTR_TEST_ENV);
+      await syncRuntimeLeases(env);
+    `, { env: { ORKESTR_TEST_ENV: JSON.stringify(env) } });
+    await waitForFilePattern(fakeTmux.log, /__CALL__\thas-session\t/);
+    const startedAt = Date.now();
+    const cleared = await clearRuntimeLeasesForThread("sync-stalled-thread", { reason: "test_clear" }, env);
+    const elapsedMs = Date.now() - startedAt;
+    await child;
+
+    const leases = await listRuntimeLeases(env);
+    assert.equal(cleared.cleared, 1);
+    assert.ok(elapsedMs < 250, `clear waited ${elapsedMs}ms for stalled sync`);
+    assert.equal(leases.filter((lease) => lease.threadId === "sync-stalled-thread" && !lease.endedAt).length, 0);
+    assert.equal(leases.find((lease) => lease.id === "lease-sync-stalled")?.endReason, "test_clear");
+  } finally {
+    restoreEnvValue("PATH", priorPath);
+    restoreEnvValue("TMUX_LOG", priorTmuxLog);
+    restoreEnvValue("TMUX_STATE", priorTmuxState);
+    restoreEnvValue("TMUX_HAS_SESSION_DELAY", priorHasSessionDelay);
+  }
+});
+
+test("runtime sync stale observation does not overwrite a newer lease revision", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-runtime-sync-stale-merge-"));
+  const fakeTmux = await createFakeTmux(home);
+  const priorPath = process.env.PATH;
+  const priorTmuxLog = process.env.TMUX_LOG;
+  const priorTmuxState = process.env.TMUX_STATE;
+  const priorHasSessionDelay = process.env.TMUX_HAS_SESSION_DELAY;
+  process.env.PATH = `${fakeTmux.bin}:${priorPath || ""}`;
+  process.env.TMUX_LOG = fakeTmux.log;
+  process.env.TMUX_STATE = fakeTmux.state;
+  process.env.TMUX_HAS_SESSION_DELAY = "0.4";
+  await fs.writeFile(fakeTmux.state, "orkestr-sync-stale-merge\n", "utf8");
+
+  try {
+    const env = {
+      ORKESTR_HOME: path.join(home, "orkestr-home"),
+      PATH: process.env.PATH,
+      TMUX_LOG: fakeTmux.log,
+      TMUX_STATE: fakeTmux.state,
+      TMUX_HAS_SESSION_DELAY: process.env.TMUX_HAS_SESSION_DELAY,
+    };
+    const paths = await ensureDataDirs(env);
+    await createThread({ id: "sync-stale-merge-thread", name: "Sync Stale Merge Thread" }, env);
+    await fs.writeFile(paths.runtimeLeases, `${JSON.stringify([{
+      id: "lease-sync-stale",
+      threadId: "sync-stale-merge-thread",
+      sessionName: "orkestr-sync-stale-merge",
+      startedAt: "2026-01-01T00:00:00.000Z",
+      windowName: "old-window",
+    }], null, 2)}\n`, "utf8");
+    const runtimeLeasesUrl = new URL("../packages/core/src/runtime-leases.js", import.meta.url).href;
+    const child = execNodeScript(`
+      import { syncRuntimeLeases } from ${JSON.stringify(runtimeLeasesUrl)};
+      const env = JSON.parse(process.env.ORKESTR_TEST_ENV);
+      await syncRuntimeLeases(env);
+    `, { env: { ORKESTR_TEST_ENV: JSON.stringify(env) } });
+    await waitForFilePattern(fakeTmux.log, /__CALL__\thas-session\t/);
+    await fs.writeFile(paths.runtimeLeases, `${JSON.stringify([{
+      id: "lease-sync-stale",
+      threadId: "sync-stale-merge-thread",
+      sessionName: "orkestr-sync-stale-merge",
+      startedAt: "2026-01-01T00:00:00.000Z",
+      windowName: "newer-window",
+    }], null, 2)}\n`, "utf8");
+    await child;
+
+    const leases = await listRuntimeLeases(env);
+    assert.equal(leases.find((lease) => lease.id === "lease-sync-stale")?.windowName, "newer-window");
+  } finally {
+    restoreEnvValue("PATH", priorPath);
+    restoreEnvValue("TMUX_LOG", priorTmuxLog);
+    restoreEnvValue("TMUX_STATE", priorTmuxState);
+    restoreEnvValue("TMUX_HAS_SESSION_DELAY", priorHasSessionDelay);
+  }
+});
+
+test("runtime sync stale missing-session side effect does not clear a newer wake", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-runtime-sync-wake-side-effect-"));
+  const fakeTmux = await createFakeTmux(home);
+  const priorPath = process.env.PATH;
+  const priorTmuxLog = process.env.TMUX_LOG;
+  const priorTmuxState = process.env.TMUX_STATE;
+  const priorHasSessionDelay = process.env.TMUX_HAS_SESSION_DELAY;
+  const sessionName = "orkestr-sync-wake-after-merge-thread";
+  process.env.PATH = `${fakeTmux.bin}:${priorPath || ""}`;
+  process.env.TMUX_LOG = fakeTmux.log;
+  process.env.TMUX_STATE = fakeTmux.state;
+  process.env.TMUX_HAS_SESSION_DELAY = "0.3";
+  await fs.writeFile(fakeTmux.state, `${sessionName}\n`, "utf8");
+
+  try {
+    const env = {
+      ORKESTR_HOME: path.join(home, "orkestr-home"),
+      HOME: path.join(home, "runtime-home"),
+      CODEX_HOME: path.join(home, "codex-home"),
+      PATH: process.env.PATH,
+      TMUX_LOG: fakeTmux.log,
+      TMUX_STATE: fakeTmux.state,
+      TMUX_HAS_SESSION_DELAY: process.env.TMUX_HAS_SESSION_DELAY,
+      ORKESTR_RUNTIME_SYNC_SIDE_EFFECT_DELAY_MS: "500",
+      ORKESTR_RUNTIME_DOCTOR_AUTOMATIC_INTERVAL_MS: "60000",
+    };
+    const paths = await ensureDataDirs(env);
+    await createThread({
+      id: "sync-wake-after-merge-thread",
+      name: "Sync Wake After Merge Thread",
+      state: "ready",
+      activeRuntimeLeaseId: "lease-sync-missing-old",
+      runtime: { state: "ready", sessionName },
+    }, env);
+    await fs.writeFile(paths.runtimeLeases, `${JSON.stringify([{
+      id: "lease-sync-missing-old",
+      threadId: "sync-wake-after-merge-thread",
+      sessionName,
+      startedAt: "2026-01-01T00:00:00.000Z",
+    }], null, 2)}\n`, "utf8");
+    const runtimeLeasesUrl = new URL("../packages/core/src/runtime-leases.js", import.meta.url).href;
+    const child = execNodeScript(`
+      import { syncRuntimeLeases } from ${JSON.stringify(runtimeLeasesUrl)};
+      const env = JSON.parse(process.env.ORKESTR_TEST_ENV);
+      await syncRuntimeLeases(env);
+    `, { env: { ORKESTR_TEST_ENV: JSON.stringify(env) }, timeoutMs: 5000 });
+
+    await waitForFilePattern(fakeTmux.log, new RegExp(`__CALL__\\thas-session\\t-t\\t${sessionName}`));
+    await fs.writeFile(fakeTmux.state, "", "utf8");
+    await waitForRuntimeLease(env, (lease) => lease.id === "lease-sync-missing-old" && lease.endedAt);
+    const woken = await wakeThread("sync-wake-after-merge-thread", { reason: "new_wake" }, env);
+    await child;
+
+    const thread = await getThread("sync-wake-after-merge-thread", env);
+    const leases = await listRuntimeLeases(env);
+    assert.equal(woken.reused, false);
+    assert.equal(thread.state, "ready");
+    assert.equal(thread.activeRuntimeLeaseId, woken.lease.id);
+    assert.notEqual(thread.activeRuntimeLeaseId, "lease-sync-missing-old");
+    assert.equal(leases.find((lease) => lease.id === woken.lease.id)?.endedAt, undefined);
+  } finally {
+    restoreEnvValue("PATH", priorPath);
+    restoreEnvValue("TMUX_LOG", priorTmuxLog);
+    restoreEnvValue("TMUX_STATE", priorTmuxState);
+    restoreEnvValue("TMUX_HAS_SESSION_DELAY", priorHasSessionDelay);
+  }
+});
+
+test("runtime sync stale status side effect does not overwrite a sleep", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-runtime-sync-sleep-side-effect-"));
+  const fakeTmux = await createFakeTmux(home);
+  const priorPath = process.env.PATH;
+  const priorTmuxLog = process.env.TMUX_LOG;
+  const priorTmuxState = process.env.TMUX_STATE;
+  const sessionName = "orkestr-sync-sleep-after-merge-thread";
+  process.env.PATH = `${fakeTmux.bin}:${priorPath || ""}`;
+  process.env.TMUX_LOG = fakeTmux.log;
+  process.env.TMUX_STATE = fakeTmux.state;
+  await fs.writeFile(fakeTmux.state, `${sessionName}\n`, "utf8");
+
+  try {
+    const env = {
+      ORKESTR_HOME: path.join(home, "orkestr-home"),
+      HOME: path.join(home, "runtime-home"),
+      CODEX_HOME: path.join(home, "codex-home"),
+      PATH: process.env.PATH,
+      TMUX_LOG: fakeTmux.log,
+      TMUX_STATE: fakeTmux.state,
+      ORKESTR_RUNTIME_SYNC_SIDE_EFFECT_DELAY_MS: "500",
+      ORKESTR_RUNTIME_DOCTOR_AUTOMATIC_INTERVAL_MS: "60000",
+    };
+    const paths = await ensureDataDirs(env);
+    await createThread({
+      id: "sync-sleep-after-merge-thread",
+      name: "Sync Sleep After Merge Thread",
+      state: "ready",
+      activeRuntimeLeaseId: "lease-sync-status-old",
+      runtime: { state: "ready", sessionName },
+    }, env);
+    await fs.writeFile(paths.runtimeLeases, `${JSON.stringify([{
+      id: "lease-sync-status-old",
+      threadId: "sync-sleep-after-merge-thread",
+      sessionName,
+      startedAt: "2026-01-01T00:00:00.000Z",
+    }], null, 2)}\n`, "utf8");
+    const runtimeLeasesUrl = new URL("../packages/core/src/runtime-leases.js", import.meta.url).href;
+    const child = execNodeScript(`
+      import { syncRuntimeLeases } from ${JSON.stringify(runtimeLeasesUrl)};
+      const env = JSON.parse(process.env.ORKESTR_TEST_ENV);
+      await syncRuntimeLeases(env);
+    `, { env: { ORKESTR_TEST_ENV: JSON.stringify(env) }, timeoutMs: 5000 });
+
+    await waitForRuntimeLease(env, (lease) => lease.id === "lease-sync-status-old" && lease.paneId === "%42");
+    const slept = await sleepThread("sync-sleep-after-merge-thread", { reason: "test_sleep", kill: false }, env);
+    await child;
+
+    const thread = await getThread("sync-sleep-after-merge-thread", env);
+    const leases = await listRuntimeLeases(env);
+    assert.equal(slept.slept, 1);
+    assert.equal(thread.state, "sleeping");
+    assert.equal(thread.activeRuntimeLeaseId, null);
+    assert.equal(leases.find((lease) => lease.id === "lease-sync-status-old")?.endReason, "test_sleep");
+  } finally {
+    restoreEnvValue("PATH", priorPath);
+    restoreEnvValue("TMUX_LOG", priorTmuxLog);
+    restoreEnvValue("TMUX_STATE", priorTmuxState);
+  }
+});
+
+test("runtime pane progress stale sample does not overwrite a sleep", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-runtime-pane-progress-sleep-race-"));
+  const fakeTmux = await createFakeTmux(home);
+  const priorPath = process.env.PATH;
+  const priorTmuxLog = process.env.TMUX_LOG;
+  const priorTmuxState = process.env.TMUX_STATE;
+  process.env.PATH = `${fakeTmux.bin}:${priorPath || ""}`;
+  process.env.TMUX_LOG = fakeTmux.log;
+  process.env.TMUX_STATE = fakeTmux.state;
+
+  try {
+    const env = {
+      ORKESTR_HOME: path.join(home, "orkestr-home"),
+      HOME: path.join(home, "runtime-home"),
+      CODEX_HOME: path.join(home, "codex-home"),
+      PATH: process.env.PATH,
+      TMUX_LOG: fakeTmux.log,
+      TMUX_STATE: fakeTmux.state,
+      ORKESTR_RUNTIME_PANE_PROGRESS_SIDE_EFFECT_DELAY_MS: "500",
+    };
+    await createThread({ id: "pane-progress-sleep-race-thread", name: "Pane Progress Sleep Race Thread" }, env);
+    const first = await wakeThread("pane-progress-sleep-race-thread", { reason: "initial" }, env);
+    await fs.writeFile(fakeTmux.log, "", "utf8");
+    const runtimeLeasesUrl = new URL("../packages/core/src/runtime-leases.js", import.meta.url).href;
+    const child = execNodeScript(`
+      import { syncPaneProgressForActiveLeases } from ${JSON.stringify(runtimeLeasesUrl)};
+      const env = JSON.parse(process.env.ORKESTR_TEST_ENV);
+      await syncPaneProgressForActiveLeases(env);
+    `, { env: { ORKESTR_TEST_ENV: JSON.stringify(env) }, timeoutMs: 5000 });
+
+    await waitForFilePattern(fakeTmux.log, /__CALL__\tcapture-pane\t/);
+    await sleepThread("pane-progress-sleep-race-thread", { reason: "test_sleep", kill: false }, env);
+    await child;
+
+    const thread = await getThread("pane-progress-sleep-race-thread", env);
+    const leases = await listRuntimeLeases(env);
+    assert.equal(thread.state, "sleeping");
+    assert.equal(thread.activeRuntimeLeaseId, null);
+    assert.equal(thread.runtime?.state, "sleeping");
+    assert.equal(thread.runtime?.id, undefined);
+    assert.equal(thread.runtime?.progress, undefined);
+    assert.equal(leases.find((lease) => lease.id === first.lease.id)?.endReason, "test_sleep");
+  } finally {
+    restoreEnvValue("PATH", priorPath);
+    restoreEnvValue("TMUX_LOG", priorTmuxLog);
+    restoreEnvValue("TMUX_STATE", priorTmuxState);
+  }
+});
+
+test("runtime pane progress stale sample does not overwrite a newer wake", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-runtime-pane-progress-wake-race-"));
+  const fakeTmux = await createFakeTmux(home);
+  const priorPath = process.env.PATH;
+  const priorTmuxLog = process.env.TMUX_LOG;
+  const priorTmuxState = process.env.TMUX_STATE;
+  process.env.PATH = `${fakeTmux.bin}:${priorPath || ""}`;
+  process.env.TMUX_LOG = fakeTmux.log;
+  process.env.TMUX_STATE = fakeTmux.state;
+
+  try {
+    const env = {
+      ORKESTR_HOME: path.join(home, "orkestr-home"),
+      HOME: path.join(home, "runtime-home"),
+      CODEX_HOME: path.join(home, "codex-home"),
+      PATH: process.env.PATH,
+      TMUX_LOG: fakeTmux.log,
+      TMUX_STATE: fakeTmux.state,
+      ORKESTR_RUNTIME_PANE_PROGRESS_SIDE_EFFECT_DELAY_MS: "500",
+    };
+    await createThread({ id: "pane-progress-wake-race-thread", name: "Pane Progress Wake Race Thread" }, env);
+    const first = await wakeThread("pane-progress-wake-race-thread", { reason: "initial" }, env);
+    await fs.writeFile(fakeTmux.log, "", "utf8");
+    const runtimeLeasesUrl = new URL("../packages/core/src/runtime-leases.js", import.meta.url).href;
+    const child = execNodeScript(`
+      import { syncPaneProgressForActiveLeases } from ${JSON.stringify(runtimeLeasesUrl)};
+      const env = JSON.parse(process.env.ORKESTR_TEST_ENV);
+      await syncPaneProgressForActiveLeases(env);
+    `, { env: { ORKESTR_TEST_ENV: JSON.stringify(env) }, timeoutMs: 5000 });
+
+    await waitForFilePattern(fakeTmux.log, /__CALL__\tcapture-pane\t/);
+    await sleepThread("pane-progress-wake-race-thread", { reason: "replace_runtime", kill: true }, env);
+    const second = await wakeThread("pane-progress-wake-race-thread", { reason: "new_wake" }, env);
+    await child;
+
+    const thread = await getThread("pane-progress-wake-race-thread", env);
+    const leases = await listRuntimeLeases(env);
+    assert.equal(thread.state, "ready");
+    assert.equal(thread.activeRuntimeLeaseId, second.lease.id);
+    assert.equal(thread.runtime?.leaseId, second.lease.id);
+    assert.notEqual(thread.runtime?.id, first.lease.id);
+    assert.equal(leases.find((lease) => lease.id === first.lease.id)?.endReason, "replace_runtime");
+    assert.equal(leases.find((lease) => lease.id === second.lease.id)?.endedAt, undefined);
+  } finally {
+    restoreEnvValue("PATH", priorPath);
+    restoreEnvValue("TMUX_LOG", priorTmuxLog);
+    restoreEnvValue("TMUX_STATE", priorTmuxState);
+  }
+});
+
 test("runtime sync expires temporary runtimes at their hard TTL", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-temp-ttl-"));
   const fakeTmux = await createFakeTmux(home);
@@ -810,6 +1889,188 @@ test("runtime resource doctor repairs orphaned test tmux sessions", async () => 
     restoreEnvValue("TMUX_LOG", priorTmuxLog);
     restoreEnvValue("TMUX_STATE", priorTmuxState);
     restoreEnvValue("TMUX_SESSION_PATH", priorTmuxSessionPath);
+  }
+});
+
+test("runtime resource doctor repairs duplicate active leases for one thread", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-duplicate-lease-doctor-"));
+  const fakeTmux = await createFakeTmux(home);
+  const priorPath = process.env.PATH;
+  const priorTmuxLog = process.env.TMUX_LOG;
+  const priorTmuxState = process.env.TMUX_STATE;
+  const sessionName = "orkestr-duplicate-lease-thread";
+  process.env.PATH = `${fakeTmux.bin}:${priorPath || ""}`;
+  process.env.TMUX_LOG = fakeTmux.log;
+  process.env.TMUX_STATE = fakeTmux.state;
+  await fs.writeFile(fakeTmux.state, `${sessionName}\n`, "utf8");
+
+  try {
+    const env = {
+      ORKESTR_HOME: path.join(home, "orkestr-home"),
+      PATH: process.env.PATH,
+      TMUX_LOG: fakeTmux.log,
+      TMUX_STATE: fakeTmux.state,
+    };
+    const paths = await ensureDataDirs(env);
+    await createThread({ id: "duplicate-lease-thread", name: "Duplicate Lease Thread" }, env);
+    await fs.writeFile(paths.runtimeLeases, `${JSON.stringify([
+      {
+        id: "lease-old",
+        threadId: "duplicate-lease-thread",
+        sessionName,
+        workspace: path.join(home, "workspace"),
+        startedAt: "2026-01-01T00:00:00.000Z",
+      },
+      {
+        id: "lease-new",
+        threadId: "duplicate-lease-thread",
+        sessionName,
+        workspace: path.join(home, "workspace"),
+        startedAt: "2026-01-01T00:00:01.000Z",
+      },
+    ], null, 2)}\n`, "utf8");
+
+    const detected = await doctorRuntimeResources({ env, repair: false });
+    const repaired = await doctorRuntimeResources({ env, repair: true });
+    const leases = await listRuntimeLeases(env);
+    const thread = await getThread("duplicate-lease-thread", env);
+
+    assert.equal(detected.ok, false);
+    assert.equal(detected.status, "warning");
+    assert.equal(detected.counts.duplicateLeases, 1);
+    assert.ok(detected.issues.some((issue) => issue.code === "duplicate_runtime_lease"));
+    assert.ok(repaired.actions.some((action) => action.action === "ended_duplicate_lease" && action.leaseId === "lease-old"));
+    assert.equal(leases.find((lease) => lease.id === "lease-old")?.endReason, "resource_doctor_duplicate_lease");
+    assert.equal(leases.find((lease) => lease.id === "lease-new")?.endedAt, undefined);
+    assert.equal(thread.activeRuntimeLeaseId, "lease-new");
+  } finally {
+    restoreEnvValue("PATH", priorPath);
+    restoreEnvValue("TMUX_LOG", priorTmuxLog);
+    restoreEnvValue("TMUX_STATE", priorTmuxState);
+  }
+});
+
+test("runtime resource doctor repairs duplicate leases with distinct live sessions in one pass", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-duplicate-session-doctor-"));
+  const fakeTmux = await createFakeTmux(home);
+  const priorPath = process.env.PATH;
+  const priorTmuxLog = process.env.TMUX_LOG;
+  const priorTmuxState = process.env.TMUX_STATE;
+  const oldSession = "orkestr-duplicate-session-thread-old";
+  const keptSession = "orkestr-duplicate-session-thread-new";
+  process.env.PATH = `${fakeTmux.bin}:${priorPath || ""}`;
+  process.env.TMUX_LOG = fakeTmux.log;
+  process.env.TMUX_STATE = fakeTmux.state;
+  await fs.writeFile(fakeTmux.state, `${oldSession}\n${keptSession}\n`, "utf8");
+
+  try {
+    const env = {
+      ORKESTR_HOME: path.join(home, "orkestr-home"),
+      PATH: process.env.PATH,
+      TMUX_LOG: fakeTmux.log,
+      TMUX_STATE: fakeTmux.state,
+    };
+    const paths = await ensureDataDirs(env);
+    await createThread({ id: "duplicate-session-thread", name: "Duplicate Session Thread" }, env);
+    await fs.writeFile(paths.runtimeLeases, `${JSON.stringify([
+      {
+        id: "lease-old-session",
+        threadId: "duplicate-session-thread",
+        sessionName: oldSession,
+        workspace: path.join(home, "workspace"),
+        startedAt: "2026-01-01T00:00:00.000Z",
+      },
+      {
+        id: "lease-kept-session",
+        threadId: "duplicate-session-thread",
+        sessionName: keptSession,
+        workspace: path.join(home, "workspace"),
+        startedAt: "2026-01-01T00:00:01.000Z",
+      },
+    ], null, 2)}\n`, "utf8");
+
+    const repaired = await doctorRuntimeResources({ env, repair: true });
+    const leases = await listRuntimeLeases(env);
+    const tmuxState = await fs.readFile(fakeTmux.state, "utf8");
+    const log = await fs.readFile(fakeTmux.log, "utf8");
+
+    assert.ok(repaired.actions.some((action) => action.action === "ended_duplicate_lease" && action.leaseId === "lease-old-session"));
+    assert.ok(repaired.actions.some((action) => action.action === "killed_duplicate_session" && action.sessionName === oldSession));
+    assert.equal(leases.find((lease) => lease.id === "lease-old-session")?.endReason, "resource_doctor_duplicate_lease");
+    assert.equal(leases.find((lease) => lease.id === "lease-kept-session")?.endedAt, undefined);
+    assert.doesNotMatch(tmuxState, new RegExp(`${oldSession}\\n?`));
+    assert.match(tmuxState, new RegExp(`${keptSession}\\n?`));
+    assert.match(log, new RegExp(`__CALL__\\tkill-session\\t-t\\t${oldSession}`));
+    assert.doesNotMatch(log, new RegExp(`__CALL__\\tkill-session\\t-t\\t${keptSession}`));
+  } finally {
+    restoreEnvValue("PATH", priorPath);
+    restoreEnvValue("TMUX_LOG", priorTmuxLog);
+    restoreEnvValue("TMUX_STATE", priorTmuxState);
+  }
+});
+
+test("runtime resource doctor keeps a live survivor when duplicate stale lease is missing", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-duplicate-stale-doctor-"));
+  const fakeTmux = await createFakeTmux(home);
+  const priorPath = process.env.PATH;
+  const priorTmuxLog = process.env.TMUX_LOG;
+  const priorTmuxState = process.env.TMUX_STATE;
+  const staleSession = "orkestr-duplicate-stale-thread-old";
+  const liveSession = "orkestr-duplicate-stale-thread-new";
+  process.env.PATH = `${fakeTmux.bin}:${priorPath || ""}`;
+  process.env.TMUX_LOG = fakeTmux.log;
+  process.env.TMUX_STATE = fakeTmux.state;
+  await fs.writeFile(fakeTmux.state, `${liveSession}\n`, "utf8");
+
+  try {
+    const env = {
+      ORKESTR_HOME: path.join(home, "orkestr-home"),
+      PATH: process.env.PATH,
+      TMUX_LOG: fakeTmux.log,
+      TMUX_STATE: fakeTmux.state,
+    };
+    const paths = await ensureDataDirs(env);
+    await createThread({ id: "duplicate-stale-thread", name: "Duplicate Stale Thread" }, env);
+    await updateThread("duplicate-stale-thread", {
+      state: "ready",
+      activeRuntimeLeaseId: "lease-stale-duplicate",
+      runtime: { state: "ready", sessionName: staleSession },
+    }, env);
+    await fs.writeFile(paths.runtimeLeases, `${JSON.stringify([
+      {
+        id: "lease-stale-duplicate",
+        threadId: "duplicate-stale-thread",
+        sessionName: staleSession,
+        workspace: path.join(home, "workspace"),
+        startedAt: "2026-01-01T00:00:00.000Z",
+      },
+      {
+        id: "lease-live-survivor",
+        threadId: "duplicate-stale-thread",
+        sessionName: liveSession,
+        workspace: path.join(home, "workspace"),
+        startedAt: "2026-01-01T00:00:01.000Z",
+      },
+    ], null, 2)}\n`, "utf8");
+
+    const repaired = await doctorRuntimeResources({ env, repair: true });
+    const leases = await listRuntimeLeases(env);
+    const thread = await getThread("duplicate-stale-thread", env);
+    const tmuxState = await fs.readFile(fakeTmux.state, "utf8");
+    const log = await fs.readFile(fakeTmux.log, "utf8");
+
+    assert.ok(repaired.actions.some((action) => action.action === "ended_duplicate_lease" && action.leaseId === "lease-stale-duplicate"));
+    assert.equal(repaired.actions.some((action) => action.action === "ended_stale_lease" && action.sessionName === staleSession), false);
+    assert.equal(leases.find((lease) => lease.id === "lease-stale-duplicate")?.endReason, "resource_doctor_duplicate_lease");
+    assert.equal(leases.find((lease) => lease.id === "lease-live-survivor")?.endedAt, undefined);
+    assert.equal(thread.activeRuntimeLeaseId, "lease-live-survivor");
+    assert.equal(thread.state, "ready");
+    assert.match(tmuxState, new RegExp(`${liveSession}\\n?`));
+    assert.doesNotMatch(log, new RegExp(`__CALL__\\tkill-session\\t-t\\t${liveSession}`));
+  } finally {
+    restoreEnvValue("PATH", priorPath);
+    restoreEnvValue("TMUX_LOG", priorTmuxLog);
+    restoreEnvValue("TMUX_STATE", priorTmuxState);
   }
 });
 

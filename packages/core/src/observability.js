@@ -5,6 +5,13 @@ const httpDurationBuckets = [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5
 const httpResponseSizeBuckets = [100, 500, 1000, 5000, 10000, 50000, 100000, 500000, 1000000, 5000000];
 const backgroundDurationBuckets = [0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 120];
 const pendingInputStates = new Set(["queued", "pending_delivery", "awaiting_ack", "running"]);
+const threadResourceTypes = new Set(["desktop", "oxrm", "mailbox"]);
+const threadResourcePermissions = new Set(["discover", "acquire", "operate", "share", "read", "write", "execute", "subscribe", "manage"]);
+const threadResourceModes = new Set(["off", "shadow", "enforce"]);
+const threadResourceInvalidationSubjects = new Set(["resource", "session_share", "share", "listener"]);
+const threadResourceInvalidationReasons = new Set(["revoked", "generation_advanced", "grant_replaced", "listener_revoked", "policy_stale"]);
+const mailboxDeliveryStates = new Set(["pending", "claimed", "delivered", "revoked", "quarantined", "dead-letter"]);
+const breakGlassOutcomes = new Set(["allowed", "denied", "blocked"]);
 const counters = new Map();
 const histograms = new Map();
 const startedAt = Date.now();
@@ -23,6 +30,11 @@ function labelValue(value = "", fallback = "unknown") {
     .replace(/^_+|_+$/g, "")
     .slice(0, 80);
   return normalized || fallback;
+}
+
+function enumLabel(value = "", allowed = new Set(), fallback = "unknown") {
+  const normalized = lower(value);
+  return allowed.has(normalized) ? normalized : fallback;
 }
 
 function countValue(value) {
@@ -178,6 +190,40 @@ export function recordWhatsAppDeliveryMetrics({ source = "unknown", result = nul
   incrementCounter("orkestr_whatsapp_delivery_messages_total", { source: labels.source, state: "sent" }, sent);
   incrementCounter("orkestr_whatsapp_delivery_messages_total", { source: labels.source, state: "failed" }, failed);
   incrementCounter("orkestr_whatsapp_delivery_messages_total", { source: labels.source, state: "skipped" }, skipped);
+}
+
+export function recordThreadResourceAccessMetric({ resourceType = "unknown", permission = "unknown", mode = "unknown", granted = false, shadowDenied = false, durationMs = 0 } = {}) {
+  const outcome = shadowDenied ? "shadow_denied" : granted ? "allowed" : "denied";
+  const labels = {
+    resource_type: enumLabel(resourceType, threadResourceTypes),
+    permission: enumLabel(permission, threadResourcePermissions),
+    mode: enumLabel(mode, threadResourceModes),
+    outcome,
+  };
+  incrementCounter("orkestr_thread_resource_access_decisions_total", labels);
+  observeHistogram("orkestr_thread_resource_policy_evaluation_seconds", countValue(durationMs) / 1000, labels, backgroundDurationBuckets);
+  if (shadowDenied) incrementCounter("orkestr_thread_resource_shadow_mismatches_total", { resource_type: labels.resource_type, permission: labels.permission });
+}
+
+export function recordThreadResourceInvalidationMetric({ resourceType = "unknown", subject = "resource", reason = "unknown" } = {}) {
+  incrementCounter("orkestr_thread_resource_invalidations_total", {
+    resource_type: enumLabel(resourceType, threadResourceTypes),
+    subject: enumLabel(subject, threadResourceInvalidationSubjects),
+    reason: enumLabel(reason, threadResourceInvalidationReasons),
+  });
+}
+
+export function recordMailboxThreadDeliveryMetrics({ state = "unknown", lagMs = 0 } = {}) {
+  const labels = { state: enumLabel(state, mailboxDeliveryStates) };
+  incrementCounter("orkestr_mailbox_thread_delivery_transitions_total", labels);
+  if (Number(lagMs) > 0) observeHistogram("orkestr_mailbox_thread_delivery_lag_seconds", countValue(lagMs) / 1000, labels, backgroundDurationBuckets);
+}
+
+export function recordThreadResourceBreakGlassMetric({ resourceType = "unknown", outcome = "allowed" } = {}) {
+  incrementCounter("orkestr_thread_resource_break_glass_total", {
+    resource_type: enumLabel(resourceType, threadResourceTypes),
+    outcome: enumLabel(outcome, breakGlassOutcomes),
+  });
 }
 
 function statusClass(statusCode) {

@@ -19,6 +19,7 @@ import {
   stopLocalWhatsAppBridge,
 } from "../../../packages/connectors/src/whatsapp-local-bridge.js";
 import { clearWhatsAppDeliveryIdleCache } from "../../../packages/connectors/src/whatsapp.js";
+import { mailboxThreadDeliveryPumpIntervalMs, runMailboxDeliveryPump } from "../../../packages/connectors/src/mailbox-delivery-pump.js";
 import { migrateThreadMessageStore } from "../../../packages/storage/src/thread-message-registry.js";
 import {
   createConnectorRuntimeSyncSignalHandler,
@@ -578,6 +579,17 @@ export async function startServer({ port = 19812, host = "127.0.0.1", openBrowse
     whatsappDeliveryScheduler.schedule();
   }, whatsappDeliveryPollIntervalMs(serverEnv));
   whatsappDeliveryPoll.unref?.();
+  const mailboxDeliveryPoll = setInterval(() => {
+    runMailboxDeliveryPump(serverEnv).catch((error) => {
+      reportServerError(serverEnv, {
+        source: "server.mailboxDeliveryPump",
+        code: "mailbox_delivery_pump_failed",
+        message: error?.message || String(error),
+        error,
+      });
+    });
+  }, mailboxThreadDeliveryPumpIntervalMs(serverEnv));
+  mailboxDeliveryPoll.unref?.();
   const brokerClientHeartbeat = startBrokerClientHeartbeat(serverEnv);
   const scheduleWhatsAppDeliveryFollowUp = () => {
     clearWhatsAppDeliveryIdleCache();
@@ -610,6 +622,14 @@ export async function startServer({ port = 19812, host = "127.0.0.1", openBrowse
   attachThreadStreamUpgrade(app.getHttpServer());
   await app.listen(port, host);
   whatsappDeliveryScheduler.schedule();
+  void runMailboxDeliveryPump(serverEnv).catch((error) => {
+    reportServerError(serverEnv, {
+      source: "server.mailboxDeliveryPump.startup",
+      code: "mailbox_delivery_pump_startup_failed",
+      message: error?.message || String(error),
+      error,
+    });
+  });
   const startupRecoveryTimer = scheduleStartupRecovery(serverEnv);
 
   const url = `http://${host}:${port}`;
@@ -627,6 +647,7 @@ export async function startServer({ port = 19812, host = "127.0.0.1", openBrowse
     if (startupRecoveryTimer) clearTimeout(startupRecoveryTimer);
     brokerClientHeartbeat.close();
     clearInterval(whatsappDeliveryPoll);
+    clearInterval(mailboxDeliveryPoll);
     whatsappDeliveryScheduler.close();
     stopCodexAppServerClients();
     await stopLocalWhatsAppBridge(serverEnv).catch(() => {});

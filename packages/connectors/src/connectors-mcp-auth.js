@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { readWhatsAppScopedTokenRecords } from "../../core/src/whatsapp-scoped-tokens.js";
+import { authorizeIssuedConnectorResourceToken, connectorMcpResourceAudience } from "../../core/src/thread-resource-sessions.js";
 
 function clean(value = "") {
   return String(value || "").trim();
@@ -46,10 +47,14 @@ function parseTokenRecords(value = "") {
 
 function normalizeRecord(record = {}) {
   const accountId = clean(record.accountId);
+  const resourceType = clean(record.resourceType || record.resource_type).toLowerCase();
+  const resourceJti = clean(record.jti || record.resourceJti || record.resource_jti);
+  const tokenId = clean(record.id || record.tokenId);
   return {
-    id: clean(record.id || record.tokenId),
+    id: tokenId,
     token: clean(record.token || record.value || record.secret),
     tokenHash: clean(record.tokenHash || record.hash).toLowerCase(),
+    bearerHash: clean(record.token || record.value || record.secret) ? hash(record.token || record.value || record.secret) : clean(record.tokenHash || record.hash).toLowerCase(),
     scopes: scopeList(record.scopes || record.scope || record.capabilities),
     principalKind: clean(record.principalKind || record.kind || "external_instance"),
     principalId: clean(record.principalId || record.instanceId || record.ownerUserId || record.userId),
@@ -62,6 +67,26 @@ function normalizeRecord(record = {}) {
     chatId: clean(record.chatId),
     allowedChatIds: list(record.allowedChatIds || record.allowedChats || record.chatIds),
     allowedRecipients: list(record.allowedRecipients || record.allowedRecipientIds || record.recipientIds),
+    resourceType,
+    resourceId: clean(record.resourceId || record.resource_id),
+    resourceActions: scopeList(record.resourceActions || record.allowedResourceActions || record.resource_actions || record.resourceAction),
+    connectorService: clean(record.connectorService || record.connector_service || record.service).toLowerCase(),
+    connectorAccountId: clean(record.connectorAccountId || record.connector_account_id || record.accountId || record.account_id),
+    connectorConversationId: clean(record.connectorConversationId || record.connector_conversation_id || record.conversationId || record.conversation_id),
+    connectorBindingId: clean(record.connectorBindingId || record.connector_binding_id || record.bindingId || record.binding_id),
+    connectorTargetThreadId: clean(record.connectorTargetThreadId || record.connector_target_thread_id || record.targetThreadId || record.target_thread_id),
+    connectorOperationRef: clean(record.connectorOperationRef || record.connector_operation_ref || record.operationRef || record.operation_ref),
+    connectorMcpTool: clean(record.connectorMcpTool || record.connector_mcp_tool || record.tool).toLowerCase(),
+    connectorMcpAction: clean(record.connectorMcpAction || record.connector_mcp_action || record.toolAction).toLowerCase(),
+    rootThreadId: clean(record.rootThreadId || record.root_thread_id),
+    boundaryId: clean(record.boundaryId || record.boundary_id),
+    policyRevision: Number(record.policyRevision || record.policy_revision || 0),
+    grantRevision: Number(record.grantRevision || record.grant_revision || 0),
+    resourceGeneration: Number(record.resourceGeneration || record.resource_generation || 0),
+    resourceJtiHash: resourceJti ? hash(resourceJti) : clean(record.resourceJtiHash || record.jtiHash || record.jti_hash).toLowerCase(),
+    tokenIdHash: tokenId ? hash(tokenId) : clean(record.tokenIdHash || record.token_id_hash).toLowerCase(),
+    audience: resourceType ? connectorMcpResourceAudience : "",
+    issuedAt: clean(record.issuedAt || record.issued_at),
     expiresAt: clean(record.expiresAt),
     disabled: record.disabled === true || record.enabled === false,
     operator: record.operator === true,
@@ -83,6 +108,28 @@ function publicRecord(record = {}) {
     chatId: record.chatId || "",
     allowedChatIds: record.allowedChatIds || [],
     allowedRecipients: record.allowedRecipients || [],
+    resourceType: record.resourceType || "",
+    resourceId: record.resourceId || "",
+    resourceActions: record.resourceActions || [],
+    connectorService: record.connectorService || "",
+    connectorAccountId: record.connectorAccountId || "",
+    connectorConversationId: record.connectorConversationId || "",
+    connectorBindingId: record.connectorBindingId || "",
+    connectorTargetThreadId: record.connectorTargetThreadId || "",
+    connectorOperationRef: record.connectorOperationRef || "",
+    connectorMcpTool: record.connectorMcpTool || "",
+    connectorMcpAction: record.connectorMcpAction || "",
+    rootThreadId: record.rootThreadId || "",
+    boundaryId: record.boundaryId || "",
+    policyRevision: Number(record.policyRevision || 0),
+    grantRevision: Number(record.grantRevision || 0),
+    resourceGeneration: Number(record.resourceGeneration || 0),
+    resourceJtiHash: record.resourceJtiHash || "",
+    tokenIdHash: record.tokenIdHash || "",
+    bearerHash: record.bearerHash || "",
+    audience: record.audience || "",
+    issuedAt: record.issuedAt || "",
+    expiresAt: record.expiresAt || "",
     operator: record.operator === true,
   };
 }
@@ -119,11 +166,11 @@ export async function authorizeConnectorMcpToken(token = "", env = process.env) 
     throw error;
   }
   const records = await connectorMcpTokenRecords(env);
-  if (!records.length) {
-    const error = new Error("connector_mcp_token_unconfigured");
-    error.statusCode = 503;
-    throw error;
-  }
+  // Resource bearers are durable, short-lived sessions rather than configured
+  // environment records. Resolve their hashed session binding before static
+  // records so an issued bearer works without a retained env record.
+  const issued = await authorizeIssuedConnectorResourceToken(value, env);
+  if (issued) return issued;
   const record = records.find((candidate) => secretMatches(candidate, value));
   if (!record || record.disabled || (record.expiresAt && Date.parse(record.expiresAt) <= Date.now())) {
     const error = new Error("connector_mcp_token_invalid");
@@ -179,6 +226,7 @@ export function assertConnectorMcpScope(auth = {}, tool = "", input = {}) {
   if (auth.instanceId && clean(input.instance_id) && auth.instanceId !== clean(input.instance_id)) scopeDenied("instance_scope_denied");
   if (auth.ownerUserId && clean(input.user_id) && auth.ownerUserId !== clean(input.user_id)) scopeDenied("user_scope_denied");
   if (auth.threadId && clean(input.thread_id) && auth.threadId !== clean(input.thread_id)) scopeDenied("thread_scope_denied");
+  if (auth.threadId && clean(input.target_thread_id) && auth.threadId !== clean(input.target_thread_id)) scopeDenied("target_thread_scope_denied");
   const accountScopeApplies = Boolean(auth.accountId) && (!auth.accountService || auth.accountService === service);
   if (accountScopeApplies && clean(input.account_id) && auth.accountId !== clean(input.account_id)) scopeDenied("account_scope_denied");
 

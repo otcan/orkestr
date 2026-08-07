@@ -11,22 +11,22 @@ import {
   updateThreadMessage,
 } from "./threads.js";
 import { getTaskAgentProfile } from "./task-agent-profiles.js";
-const activeTaskStates = new Set(["created", "queued", "starting", "working", "awaiting_result", "delivering_result"]);
-const terminalTaskStates = new Set(["cancelled", "completed", "failed"]);
+import {
+  activeTaskStates,
+  canCorrectMissingResultFailure,
+  clean,
+  isTaskAgentThread,
+  isTerminalTaskAgentThread,
+  isoAt,
+  optionNowMs,
+  taskAgentFinalAnswer,
+  taskAgentRuntimeActive,
+  timestampMs,
+} from "./task-agent-state.js";
+export { isTaskAgentThread, isTerminalTaskAgentThread } from "./task-agent-state.js";
 const taskResultLocks = new Map();
 const defaultMissingResultGraceMs = 2_000;
 const maxMissingResultGraceMs = 30_000;
-function clean(value) { return String(value || "").trim(); }
-function lower(value) { return clean(value).toLowerCase(); }
-function timestampMs(value = "") {
-  const parsed = Date.parse(clean(value));
-  return Number.isFinite(parsed) ? parsed : 0;
-}
-
-function optionNowMs(options = {}) {
-  const parsed = Number(options.nowMs ?? options.now ?? 0);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : Date.now();
-}
 
 function missingResultGraceMs(env = process.env, options = {}) {
   const raw = options.resultGraceMs ?? env.ORKESTR_TASK_AGENT_RESULT_GRACE_MS ?? defaultMissingResultGraceMs;
@@ -34,8 +34,6 @@ function missingResultGraceMs(env = process.env, options = {}) {
   if (!Number.isFinite(parsed)) return defaultMissingResultGraceMs;
   return Math.max(0, Math.min(maxMissingResultGraceMs, Math.floor(parsed)));
 }
-
-function isoAt(ms) { return new Date(Math.max(0, Number(ms) || 0)).toISOString(); }
 
 function safeSegment(value, fallback = "task") {
   return clean(value).toLowerCase().replace(/[^a-z0-9_.-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 64) || fallback;
@@ -80,35 +78,6 @@ function taskPrompt(parent, profile, task, contextRefs) {
     "",
     "Investigate independently within the supplied scope. Return one structured final answer to the parent agent.",
   ].filter(Boolean).join("\n");
-}
-
-export function isTaskAgentThread(thread = {}) { return clean(thread.threadKind) === "task-agent" && Boolean(clean(thread.agentTaskId)); }
-export function isTerminalTaskAgentThread(thread = {}) { return isTaskAgentThread(thread) && terminalTaskStates.has(clean(thread.agentTaskStatus)); }
-
-function canCorrectMissingResultFailure(thread = {}) {
-  return isTaskAgentThread(thread) && clean(thread.agentTaskStatus) === "failed" &&
-    clean(thread.agentTaskFailureKind) === "missing_result" && thread.agentTaskFailureProvisional === true;
-}
-
-function taskAgentRuntimeActive(thread = {}) {
-  const runtime = thread.runtime && typeof thread.runtime === "object" ? thread.runtime : {};
-  const codexStatus = runtime.codexStatus && typeof runtime.codexStatus === "object" ? runtime.codexStatus : {};
-  return Boolean(
-    clean(runtime.activeTurnId) ||
-    runtime.pendingRequest ||
-    lower(codexStatus.type) === "active" ||
-    ["working", "awaiting_approval"].includes(lower(runtime.state)),
-  );
-}
-
-function taskAgentFinalAnswer(messages = [], turnId = "") {
-  const finalAnswers = [...messages].reverse().filter((message) =>
-    clean(message.role) === "assistant" && clean(message.phase || "final_answer") === "final_answer" && clean(message.text));
-  const wantedTurn = clean(turnId);
-  if (wantedTurn) {
-    return finalAnswers.find((message) => clean(message.codexTurnId || message.turnId) === wantedTurn) || null;
-  }
-  return finalAnswers[0] || null;
 }
 
 async function withTaskResultLock(threadId, operation) {
@@ -257,7 +226,13 @@ async function enqueueParentResult(thread, sourceMessage, status, resultText, en
     const resultTurnId = clean(options.turnId || sourceMessage?.codexTurnId || sourceMessage?.turnId || current.agentTaskResultTurnId || current.runtime?.lastTurnId || current.runtime?.activeTurnId);
     const correction = status === "completed" && canCorrectMissingResultFailure(current);
     if (isTerminalTaskAgentThread(current) && !correction) return taskAgentSummaryFromThread(current, env);
-    if (sourceMessageId && clean(current.agentResultSourceMessageId) === sourceMessageId && !correction) {
+    if (
+      sourceMessageId &&
+      clean(current.agentResultSourceMessageId) === sourceMessageId &&
+      clean(current.agentTaskStatus) === status &&
+      clean(current.agentParentResultMessageId) &&
+      !correction
+    ) {
       return taskAgentSummaryFromThread(current, env);
     }
     const parent = await getThread(current.parentThreadId, env);

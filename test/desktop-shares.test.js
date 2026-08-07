@@ -336,6 +336,51 @@ test("expired desktop shares expose renewal hints only with the original link ke
   assert.equal(wrongKey, null);
 });
 
+test("expired active desktop shares are terminal in lifecycle listings", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-desktop-share-expired-active-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_PUBLIC_HTTPS_URL: "https://app.example.test",
+  };
+  const principal = userPrincipal({ id: "alice", role: "user" });
+  const created = await createDesktopShare({ desktopSlug: "linkedin", principal, env });
+  const { shareId, key } = urlParts(created.url);
+  const opened = await openDesktopShare({
+    shareId,
+    key,
+    subdomain: created.subdomain,
+    env,
+  });
+  await approveDesktopShareChallenge(opened.attempt.challenge, { env, approvedBy: "whatsapp-thread" });
+
+  const statePath = path.join(home, "secrets", "desktop-shares.json");
+  const state = JSON.parse(await fs.readFile(statePath, "utf8"));
+  state.desktopShares[0].status = "active";
+  state.desktopShares[0].expiresAt = new Date(Date.now() - 60_000).toISOString();
+  state.desktopShares[0].attempts[0].status = "approved";
+  state.desktopShares[0].attempts[0].expiresAt = new Date(Date.now() - 30_000).toISOString();
+  await fs.writeFile(statePath, `${JSON.stringify(state, null, 2)}\n`);
+
+  const lifecycle = await listDesktopShares({ ownerUserId: "alice", env });
+  const activeOnly = await listDesktopShares({ ownerUserId: "alice", includeTerminal: false, env });
+
+  assert.equal(lifecycle.shares.length, 1);
+  assert.equal(lifecycle.shares[0].status, "expired");
+  assert.equal(lifecycle.shares[0].current, false);
+  assert.deepEqual(lifecycle.shares[0].attempts.map((attempt) => attempt.status), ["expired"]);
+  assert.equal(activeOnly.shares.length, 0);
+  await assert.rejects(
+    () => desktopShareStatus({
+      shareId,
+      key,
+      browserToken: opened.cookie.value.split(":")[1],
+      subdomain: created.subdomain,
+      env,
+    }),
+    /desktop_share_expired/,
+  );
+});
+
 test("thread router leaves desktop link requests for the agent skill", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-desktop-skill-"));
   const env = { ORKESTR_HOME: home };

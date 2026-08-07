@@ -132,6 +132,8 @@ export async function attachDesktopStateToSessions(sessions = [], env = process.
       threadId: options?.threadId,
       breakGlass: options?.breakGlass === true,
       breakGlassReason: options?.breakGlassReason,
+      breakGlassChangeRef: options?.breakGlassChangeRef || options?.changeRef,
+      recentAuthAt: options?.recentAuthAt,
     }, env).catch(() => []),
     visibleThreadsForDesktopContext(options?.principal, env),
   ]);
@@ -183,7 +185,7 @@ export function publicDesktopLease(lease, threadsById = new Map(), nowMs = Date.
   };
 }
 
-export async function publicDesktopLeases({ includeReleased = false, principal = null, threadId = "", breakGlass = false, breakGlassReason = "" } = {}, env = process.env) {
+export async function publicDesktopLeases({ includeReleased = false, principal = null, threadId = "", breakGlass = false, breakGlassReason = "", breakGlassChangeRef = "", recentAuthAt = "" } = {}, env = process.env) {
   const store = desktopLeaseStore(env);
   const [leases, threads] = await Promise.all([
     store.readAll({ includeReleased }),
@@ -201,6 +203,8 @@ export async function publicDesktopLeases({ includeReleased = false, principal =
       permission: "discover",
       breakGlass,
       breakGlassReason,
+      breakGlassChangeRef,
+      recentAuthAt,
     }, env);
     if (decision.allowed) scoped.push(publicDesktopLease(lease, threadsById, nowMs, env));
   }
@@ -220,7 +224,7 @@ export async function activeDesktopLeaseStatus(desktopSlug, env = process.env, o
 
 export async function assertDesktopLeaseForOperation(slug, env = process.env, options = {}) {
   if (desktopAccessMode(env) !== "enforce") return null;
-  if (options?.breakGlass === true && isAdminPrincipal(options?.principal || {}) && String(options?.breakGlassReason || "").trim()) return null;
+  if (options?.authorizedBreakGlass === true) return null;
   const desktopSlug = normalizeDesktopSlug(slug);
   const threadId = String(options?.threadId || "").trim();
   const fencingToken = String(options?.fencingToken || "").trim();
@@ -281,6 +285,8 @@ export async function acquireDesktopLease(slug, payload = {}, env = process.env,
     permission: "acquire",
     breakGlass: options?.breakGlass === true || payload.breakGlass === true,
     breakGlassReason: options?.breakGlassReason || payload.breakGlassReason,
+    breakGlassChangeRef: options?.breakGlassChangeRef || payload.breakGlassChangeRef || payload.changeRef || payload.changeReference,
+    recentAuthAt: options?.recentAuthAt,
   }, env);
   const ttlMs = parseLeaseDurationMs(payload.ttlMs ?? payload.ttl ?? payload.expiresIn, Number(env.ORKESTR_DESKTOP_LEASE_TTL_MS || 4 * 60 * 60_000));
   const now = nowIso();

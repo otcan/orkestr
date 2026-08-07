@@ -193,11 +193,151 @@ POST /api/desktop-grants/backfill {"dryRun":false}
 POST /api/threads/<thread-id>/desktop-grants
 ```
 
+For explicit oXRM and mailbox metadata, operators can review the evidence-only
+plan at `POST /api/thread-resources/backfill {"dryRun":true}`. Applying it
+requires an admin session and an approved pairing challenge: first call with
+`{"dryRun":false}` to receive the challenge, then repeat with
+`{"dryRun":false,"approval":"<challenge-id-or-code>"}`. This route never
+infers resources from thread names and will quarantine incomplete evidence.
+
 The migration uses only explicit thread desktop metadata and reports ambiguous
 threads for attended assignment. `ORKESTR_DESKTOP_ACCESS_MODE=shadow` records
 would-deny decisions during rollout; switch to `enforce` after grants are
 reviewed. Legacy share links without a thread, boundary, and grant revision are
 revoked in enforcement mode.
+
+### Thread Resource Policy Rollout
+
+Desktop grants are backed by the transactional thread-resource policy database,
+not by a process-local permission cache. The same policy model also supports
+oXRM resources: in `enforce` mode, a thread-scoped oXRM target resolver
+considers only resources granted to that thread before explicit or
+single-target selection. It never substitutes a different same-owner target
+after a denied or stale selection. In `shadow` mode the same authorizer records
+the would-deny decision but preserves legacy selection; it is not enforcement.
+Resource-bound connector MCP bearers are accepted only by a resource-aware
+dispatcher that resolves the actual resource independently of caller input.
+The generic connector MCP tools deliberately reject them rather than treating a
+caller-supplied resource ID as proof of the target.
+
+Break-glass access is enabled only after a transactional, append-preserving
+audit row records the canonical resource and thread IDs, permission, boundary,
+owner, expiry, and change reference. Best-effort event delivery supplements
+this row; it is never the sole break-glass evidence. Browser/API callers supply
+the reason and change reference, while recent authentication is derived only
+from their verified browser security session. A break-glass desktop share is
+bounded by the short break-glass expiry and carries the recorded reference for
+its revalidation; it cannot become a normal long-lived share.
+
+The shared-app XRM review surface currently has a share-session identity, not
+an Orkestr thread identity, and is therefore deliberately instance-scoped. It
+does not receive a thread grant by implication. Any new thread-driven oXRM
+surface must pass its exact `threadId` and required resource permission into
+the target resolver before it can be put in `enforce` mode.
+
+Policies have an explicit empty state, so an administrator can deliberately
+deny every resource of one type to a thread. A child records a snapshot marker
+even when that snapshot contains no grants. When a worker or task-agent is
+created, it receives a ceiling snapshot of its parent's then-effective grants
+before it is made discoverable; an explicitly declared child scope can only
+further intersect that snapshot. Subsequent parent additions do not widen that
+child; parent revocations narrow it immediately. Resource records bind a native
+identifier to its owner and tenant/VM boundary and status; grants provide only
+use permission and never provision an instance, credential, endpoint, or
+mailbox. The instance lifecycle must register an active resource before an
+administrator can grant it. In desktop `enforce` mode, registration and
+generation come from the desktop lifecycle; a grant cannot create a desktop.
+Desktop catalog auto-registration is retained only for `off`/`shadow` rollout
+compatibility while existing grants are migrated.
+Decisions include the exact resource, policy revision, grant revision, and
+resource generation for callers that need to reject stale work.
+Declared child scopes also receive a nonzero child policy revision, so a
+short-lived connector execution token can bind to that direct child grant while
+remaining dependent on every ancestor grant and the captured ceiling.
+
+For clustered deployments, set `ORKESTR_THREAD_RESOURCE_POLICY_STORE=postgres`
+and configure `ORKESTR_THREAD_RESOURCE_POLICY_POSTGRES_URL` (or the matching
+`ORKESTR_THREAD_RESOURCE_POLICY_PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`,
+and `PGPASSWORD` variables). PostgreSQL uses serializable, metadata-row-locked
+whole-state transactions and never falls back to SQLite or JSON. It creates an
+empty unified schema only: importing legacy desktop or JSON state is an
+explicit, evidence-reviewed operator migration, never an automatic inference.
+Pool initialization is coalesced per connection identity; a schema-failed or
+shutdown-raced pool is closed rather than retained for reuse. The doctor reports only
+`postgres` health and aggregate counts; it does not expose connection details or credentials.
+
+Use independent rollout modes per resource type:
+
+```text
+ORKESTR_DESKTOP_ACCESS_MODE=shadow
+ORKESTR_OXRM_ACCESS_MODE=shadow
+ORKESTR_MAILBOX_ACCESS_MODE=off
+```
+
+`desktop` preserves the existing shadow default, while `oxrm` is opt-in until
+its explicit grants are configured. `mailbox` remains off until the mailbox
+resource is registered and each destination thread receives exact mailbox
+permissions. In mailbox `shadow` mode, ingress still follows the legacy
+connector-inbox path and only emits a content-free unified
+would-allow/would-deny evaluation; it neither delivers to listeners nor
+quarantines a legacy message. Mailbox `enforce` mode enables exact-listener
+dispatch. Mailbox permissions are `discover`, `read`, `subscribe`, and
+`manage`; unknown permissions and wildcard grants are rejected. In non-off
+mode, a listener is a durable record keyed by mailbox resource, exact thread,
+normalized filter, and generation. Creating a listener requires an effective
+`subscribe` grant; listing requires `read`; revoking requires `manage` and
+invalidates pending deliveries. An idempotency key may replay only its original
+mailbox resource, thread, and normalized filter; reuse for another target is
+rejected. The listener APIs are `POST`/`GET`
+`/api/mailboxes/:mailboxId/listeners`, `DELETE`
+`/api/mailboxes/:mailboxId/listeners/:listenerId`, and
+`GET /api/mailboxes/:mailboxId/delivery-status`. In enforce mode, inbound mail
+is deduplicated once in the instance-owned inbox spool and creates one delivery
+per active, authorized matching listener. No matching listener is
+recorded in durable unrouted quarantine; it never falls back to an owner's
+general inbox or thread. The status surface exposes listener count, pending,
+unrouted, dead-letter count, and oldest pending lag. Delivery claim and state
+transitions carry their own CAS epoch; policy/grant/resource/listener epochs
+are rechecked before a thread append. If the transactional
+policy store is unavailable, known mailbox ingress stays in the existing
+instance-owned connector spool without any thread delivery. A bounded,
+lease-protected pump reclaims due retries and expired claims; it also replays
+`policy-unavailable` mailbox spool rows after policy storage recovers. Replay
+uses the stable delivery client-message ID, so a retry cannot append twice.
+The final policy/claim check runs immediately before append; a revocation that
+begins after that cross-store check is still contained by the same deterministic
+thread-message idempotency key. VM mailbox relay is separate and unchanged.
+Break-glass is never an implicit admin bypass: it requires the exact target and
+action, an admin's recent authentication, a reason, and a change reference; it
+is audited before use and expires within fifteen minutes.
+
+For a strict default-deny deployment, explicitly configure all three resource
+modes as `enforce` only after their instance lifecycles have registered active
+resources and the required grants exist:
+
+```text
+ORKESTR_DESKTOP_ACCESS_MODE=enforce
+ORKESTR_OXRM_ACCESS_MODE=enforce
+ORKESTR_MAILBOX_ACCESS_MODE=enforce
+```
+
+Run `orkestr doctor system --json` for the read-only thread-resource policy
+report. It exposes only aggregate backend health, global and per-type modes and supported
+rollback plans, resource/grant/policy/listener/delivery counts, queue lag and
+dead letters, stale work, shadow mismatch totals, explicit-evidence backfill
+counts, and break-glass audit state. It never includes endpoints, credentials,
+message content, or resource/thread identifiers. Policy writes default to
+`unified`. `legacy` and `dual` are fail-closed and reported as unsupported
+until a real legacy writer exists; mailbox's only supported rollback is setting
+its access mode to `off`, which keeps the legacy connector inbox path while
+preserving unified records. Explicit oXRM/mailbox backfill accepts only typed
+resource metadata plus explicit permissions; names and shared ownership are
+reported as insufficient evidence rather than inferred.
+
+The transactional audit outbox is append-preserving: this slice has no automatic
+retention or deletion policy. The doctor reports pending, claimed, and delivered
+audit counts without exposing audit contents. An audit sink claims a bounded
+batch and marks only that claim as delivered after its own durable handoff.
 
 The installer records the default desktop, Gmail auth desktop, and manual
 intervention desktop in runtime settings. Codex-aware skills should read
