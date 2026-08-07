@@ -3,6 +3,7 @@ import { dataPaths, ensureDataDirs } from "../../storage/src/paths.js";
 import { readJson } from "../../storage/src/store.js";
 
 const databases = new Map();
+const databaseOpenPromises = new Map();
 const transactionQueues = new Map();
 let sqliteModulePromise = null;
 const clean = (value = "") => String(value || "").trim();
@@ -32,15 +33,31 @@ export async function openThreadResourcePolicyDatabase(env = process.env) {
   if (!sqlite) throw Object.assign(new Error("thread_resource_policy_transactional_store_required"), { statusCode: 503 });
   const paths = await ensureDataDirs(env);
   if (databases.has(paths.threadResourcePolicyDb)) return databases.get(paths.threadResourcePolicyDb);
-  const existed = await fs.stat(paths.threadResourcePolicyDb).then((stat) => stat.size > 0, () => false);
-  const db = new sqlite.DatabaseSync(paths.threadResourcePolicyDb);
-  db.exec("pragma journal_mode = WAL");
-  db.exec("pragma synchronous = NORMAL");
-  db.exec("pragma busy_timeout = 5000");
-  ensureSchema(db);
-  databases.set(paths.threadResourcePolicyDb, db);
-  await migrateLegacyDesktopGrants(db, paths, existed);
-  return db;
+  if (databaseOpenPromises.has(paths.threadResourcePolicyDb)) return databaseOpenPromises.get(paths.threadResourcePolicyDb);
+  const opening = (async () => {
+    const existed = await fs.stat(paths.threadResourcePolicyDb).then((stat) => stat.size > 0, () => false);
+    let db = null;
+    try {
+      db = new sqlite.DatabaseSync(paths.threadResourcePolicyDb);
+      db.exec("pragma journal_mode = WAL");
+      db.exec("pragma synchronous = NORMAL");
+      db.exec("pragma busy_timeout = 5000");
+      ensureSchema(db);
+      await migrateLegacyDesktopGrants(db, paths, existed);
+      databases.set(paths.threadResourcePolicyDb, db);
+      return db;
+    } catch (error) {
+      try { db?.close(); } catch {}
+      databases.delete(paths.threadResourcePolicyDb);
+      throw error;
+    }
+  })();
+  databaseOpenPromises.set(paths.threadResourcePolicyDb, opening);
+  try {
+    return await opening;
+  } finally {
+    if (databaseOpenPromises.get(paths.threadResourcePolicyDb) === opening) databaseOpenPromises.delete(paths.threadResourcePolicyDb);
+  }
 }
 
 function ensureSchema(db) {

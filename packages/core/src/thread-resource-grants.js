@@ -61,10 +61,13 @@ export function threadResourceAccessMode(resourceType = "", env = process.env) {
 
 function normalizeResource(raw = {}, env = process.env) {
   const resourceType = normalizeThreadResourceType(raw.resourceType || raw.type);
-  const nativeId = safeThreadResourceSegment(raw.nativeId || raw.resourceNativeId || raw.resourceKey || raw.key || raw.slug || raw.desktopSlug || raw.mailboxId || raw.instanceId || raw.resourceId || raw.id, "");
-  const resourceKey = safeThreadResourceSegment(raw.resourceKey || raw.key || raw.slug || raw.desktopSlug || nativeId, "");
   const ownerUserId = normalizeUserId(raw.ownerUserId || raw.userId || env.ORKESTR_ADMIN_USER_ID || "admin");
   const boundaryId = safeThreadResourceSegment(raw.boundaryId || raw.tenantVmId || threadResourceBoundaryId(env));
+  const suppliedId = clean(raw.canonicalResourceId || raw.resourceId || raw.id);
+  const canonicalPrefix = resourceType && resourceType !== "desktop" ? `${boundaryId}:${ownerUserId}:${resourceType}:` : "";
+  const suppliedCanonical = Boolean(canonicalPrefix && suppliedId.startsWith(canonicalPrefix));
+  const nativeId = safeThreadResourceSegment(raw.nativeId || raw.resourceNativeId || (suppliedCanonical ? suppliedId.slice(canonicalPrefix.length) : raw.resourceKey || raw.key || raw.slug || raw.desktopSlug || raw.mailboxId || raw.instanceId || suppliedId), "");
+  const resourceKey = safeThreadResourceSegment(raw.resourceKey || raw.key || raw.slug || raw.desktopSlug || nativeId, "");
   // oXRM and mailbox native identifiers are only unique within their instance
   // boundary and owner. Never use a caller-provided native identifier as the
   // policy key for those types.
@@ -183,7 +186,7 @@ function permissionFor(resourceType, action = "") {
   if (resourceType === "desktop" && ["proxy", "open_share", "approve_share"].includes(requested)) return "share";
   if (resourceType === "oxrm" && ["operate", "call", "skill"].includes(requested)) return "execute";
   if (resourceType === "mailbox" && ["ingest", "receive", "relay"].includes(requested)) return "route";
-  return allowed.includes("operate") ? "operate" : allowed.includes("read") ? "read" : allowed[0] || "discover";
+  return "";
 }
 
 function directGrants(state, threadId, resource) {
@@ -238,13 +241,17 @@ async function effectiveGrant(state, thread, resource, permission, env, seen = n
 
 function effectiveGrantForLineage(state, lineage = [], resource, permission) {
   let effective = null;
-  for (const thread of lineage) {
+  for (let index = 0; index < lineage.length; index += 1) {
+    const thread = lineage[index];
     const direct = directGrants(state, thread.id, resource);
     const directGrant = direct.find((grant) => grant.permissions.includes(permission)) || null;
-    if (!effective) {
+    if (index === 0) {
       effective = directGrant;
       continue;
     }
+    // A descendant direct grant is only a restriction of an already-effective
+    // ancestor grant. It can never re-root a denied lineage.
+    if (!effective) return null;
     const ceiling = state.ceilings.find((item) => item.threadId === thread.id && item.resourceType === resource.resourceType && item.resourceId === resource.id) || null;
     if (!ceiling?.permissions.includes(permission)) return null;
     const policy = state.policies.find((item) => item.threadId === thread.id && item.resourceType === resource.resourceType) || null;
@@ -296,8 +303,9 @@ export async function authorizeThreadResourceAccess(input = {}, env = process.en
   const mode = threadResourceAccessMode(resourceType, env);
   const principal = input.principal || null;
   const threadId = clean(input.threadId || input.thread?.id);
-  const requestedOwner = normalizeUserId(input.ownerUserId || input.thread?.ownerUserId || principal?.userId || env.ORKESTR_ADMIN_USER_ID || "admin");
-  const resource = normalizeResource({
+  const resolvedThread = threadId ? await getThread(threadId, env) : null;
+  const requestedOwner = normalizeUserId(input.ownerUserId || resolvedThread?.ownerUserId || input.thread?.ownerUserId || principal?.userId || env.ORKESTR_ADMIN_USER_ID || "admin");
+  let resource = normalizeResource({
     resourceType, resourceId: input.resourceId || input.id, resourceKey: input.resourceKey || input.key || input.slug || input.desktopSlug || input.mailboxId || input.instanceId,
     ownerUserId: requestedOwner, boundaryId: input.boundaryId, generation: input.resourceGeneration || input.generation || input.desktopGeneration,
   }, env);
@@ -310,12 +318,30 @@ export async function authorizeThreadResourceAccess(input = {}, env = process.en
     breakGlass: false, breakGlassReason: "", breakGlassChangeRef: "", breakGlassExpiresAt: "", authorizationBinding: null,
     reason: `${resourceType || "resource"}_access_denied`,
   };
+  if (!permission) {
+    const decision = { ...base, reason: `${resourceType || "resource"}_permission_invalid` };
+    await auditDecision(decision, env);
+    return decision;
+  }
   if (!resourceType || !resource) { const decision = denial(base, `${resourceType || "resource"}_not_found`, env); await auditDecision(decision, env); return decision; }
   if (resource.boundaryId !== base.boundaryId) { const decision = denial(base, `${resourceType}_boundary_denied`, env); await auditDecision(decision, env); return decision; }
   if (mode === "off") return { ...base, allowed: true, granted: true, reason: `${resourceType}_access_disabled`, authorizationBinding: { resourceType, resourceId: resource.id, policyRevision: 0, grantRevision: 0, resourceGeneration: resource.generation } };
   const state = await readState(env);
   base.policyRevision = state.revision;
-  const stored = state.resources.find((item) => item.id === resource.id && item.resourceType === resourceType) || null;
+  let stored = state.resources.find((item) => item.id === resource.id && item.resourceType === resourceType) || null;
+  // Legacy desktop records may have a pre-canonical resource ID. Their slug,
+  // owner, and boundary remain the compatibility identity; non-desktop types
+  // never receive this fallback.
+  if (!stored && resourceType === "desktop") {
+    stored = state.resources.find((item) => item.resourceType === "desktop" && item.resourceKey === resource.resourceKey && item.ownerUserId === resource.ownerUserId && item.boundaryId === resource.boundaryId) || null;
+    if (stored) {
+      resource = stored;
+      base.resourceId = stored.id;
+      base.resourceKey = stored.resourceKey;
+      base.desktopId = stored.id;
+      base.desktopSlug = stored.resourceKey;
+    }
+  }
   if (!stored) { const decision = denial(base, `${resourceType}_resource_not_registered`, env); await auditDecision(decision, env); return decision; }
   if (stored.ownerUserId !== resource.ownerUserId || stored.boundaryId !== resource.boundaryId || stored.nativeId !== resource.nativeId) {
     const decision = denial(base, `${resourceType}_resource_identity_denied`, env); await auditDecision(decision, env); return decision;
@@ -323,7 +349,7 @@ export async function authorizeThreadResourceAccess(input = {}, env = process.en
   if (stored.status !== "active" || stored.retiredAt) { const decision = denial(base, `${resourceType}_resource_inactive`, env); await auditDecision(decision, env); return decision; }
   base.resourceGeneration = stored.generation;
   if (resourceType === "desktop") base.desktopGeneration = stored.generation;
-  const thread = threadId ? await getThread(threadId, env) : null;
+  const thread = resolvedThread;
   const ownerUserId = normalizeUserId(thread?.ownerUserId || requestedOwner);
   base.ownerUserId = ownerUserId;
   if (threadId && !thread) { const decision = denial(base, `${resourceType}_thread_not_found`, env); await auditDecision(decision, env); return decision; }
@@ -405,6 +431,44 @@ function exactGrantPermissions(resourceType, entry = {}) {
   return normalized;
 }
 
+export async function registerThreadResource(input = {}, options = {}, env = process.env) {
+  const principal = options.principal || input.principal || null;
+  const resourceType = normalizeThreadResourceType(input.resourceType || input.type);
+  if (!resourceType) throw policyError("thread_resource_type_invalid", 400);
+  if (!isAdminPrincipal(principal || {})) throw policyError("thread_resource_registration_admin_required", 403);
+  const requestedStatus = clean(input.status || "active").toLowerCase();
+  if (!["active", "suspended", "retired"].includes(requestedStatus)) throw policyError("thread_resource_status_invalid", 400);
+  const resource = normalizeResource({ ...input, resourceType, status: requestedStatus }, env);
+  if (!resource) throw policyError("thread_resource_registration_invalid", 400);
+  const idempotencyKey = clean(options.idempotencyKey || options.requestId || input.idempotencyKey || input.requestId);
+  const updated = await mutateState(env, (state) => {
+    const action = `resources.upsert:${resource.resourceType}:${resource.id}`;
+    const prior = idempotencyKey ? state.mutations.find((item) => item.action === action && item.idempotencyKey === idempotencyKey) : null;
+    if (prior?.result?.resource) return { noChange: true, result: { ...prior.result, idempotent: true } };
+    const existing = state.resources.find((item) => item.resourceType === resource.resourceType && item.id === resource.id) || null;
+    if (existing && (existing.nativeId !== resource.nativeId || existing.ownerUserId !== resource.ownerUserId || existing.boundaryId !== resource.boundaryId)) {
+      throw policyError("thread_resource_identity_conflict", 409);
+    }
+    const timestamp = nowIso();
+    const next = existing ? {
+      ...existing,
+      resourceKey: resource.resourceKey,
+      backend: resource.backend,
+      status: resource.status,
+      generation: Math.max(existing.generation, resource.generation),
+      retiredAt: resource.status === "retired" ? (resource.retiredAt || timestamp) : null,
+      updatedAt: timestamp,
+    } : { ...resource, createdAt: timestamp, updatedAt: timestamp, retiredAt: resource.status === "retired" ? (resource.retiredAt || timestamp) : null };
+    state.resources = state.resources.filter((item) => !(item.resourceType === resource.resourceType && item.id === resource.id));
+    state.resources.push(next);
+    const result = { resource: next };
+    if (idempotencyKey) state.mutations.push({ action, idempotencyKey, result, policyRevision: state.revision + 1, createdAt: timestamp });
+    return result;
+  });
+  if (updated.result.idempotent !== true) await appendEvent({ type: "thread_resource_registered", resourceType, resourceId: updated.result.resource.id, ownerUserId: updated.result.resource.ownerUserId, boundaryId: updated.result.resource.boundaryId, resourceGeneration: updated.result.resource.generation, status: updated.result.resource.status, actorUserId: clean(principal?.userId || "system") }, env).catch(() => undefined);
+  return { ok: true, resource: updated.result.resource, policyRevision: updated.state.revision, idempotent: updated.result.idempotent === true };
+}
+
 export async function setThreadResourceGrants(threadId = "", resourceType = "", entries = [], options = {}, env = process.env) {
   const type = normalizeThreadResourceType(resourceType);
   const principal = options.principal || null;
@@ -437,7 +501,10 @@ export async function setThreadResourceGrants(threadId = "", resourceType = "", 
     const created = normalized.map((entry) => {
       const candidate = normalizeResource({ resourceType: type, nativeId: entry.nativeId, resourceKey: entry.resourceKey, ownerUserId, boundaryId, generation: entry.generation }, env);
       let resource = state.resources.find((item) => item.id === candidate.id && item.resourceType === type) || null;
-      if (!resource) { resource = candidate; state.resources.push(resource); }
+      // Thread grants are use permissions, not a provisioning API. Preserve the
+      // old desktop-only catalog convenience until the legacy adapter is gone.
+      if (!resource && type === "desktop") { resource = candidate; state.resources.push(resource); }
+      if (!resource) throw policyError("thread_resource_not_registered", 404);
       if (resource.ownerUserId !== ownerUserId || resource.boundaryId !== boundaryId || resource.status !== "active") throw policyError("thread_resource_instance_unavailable", 409);
       const grant = normalizeGrant({ threadId: thread.id, resourceType: type, resourceId: resource.id, resourceKey: resource.resourceKey, ownerUserId, boundaryId, permissions: entry.permissions, revision: state.revision + 1, source: clean(options.source || "admin"), reason: entry.reason }, env);
       state.grants.push(grant); return grant;
@@ -461,7 +528,8 @@ export async function advanceThreadResourceGeneration(resourceType = "", resourc
   const id = candidate.id;
   const updated = await mutateState(env, (state) => {
     let resource = state.resources.find((item) => item.id === id && item.resourceType === type) || null;
-    if (!resource) { resource = candidate; state.resources.push(resource); }
+    if (!resource && type === "desktop") { resource = candidate; state.resources.push(resource); }
+    if (!resource) throw policyError("thread_resource_not_registered", 404);
     resource.generation += 1; resource.updatedAt = nowIso(); return resource;
   });
   await appendEvent({ type: "thread_resource_generation_advanced", resourceType: type, resourceId: updated.result.id, resourceKey: updated.result.resourceKey, ownerUserId: updated.result.ownerUserId, boundaryId: updated.result.boundaryId, resourceGeneration: updated.result.generation, reason: clean(options.reason || "resource_runtime_replaced") }, env).catch(() => undefined);
