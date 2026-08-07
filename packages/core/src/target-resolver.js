@@ -144,13 +144,13 @@ export async function resolveTargetInstance(input = {}, env = process.env) {
   const owner = clean(input.ownerUserId) ? normalizeUserId(input.ownerUserId) : "";
   const ownerScoped = owner ? candidates.filter((candidate) => candidate.ownerUserId === owner) : candidates;
   const ownerAuthorized = ownerScoped.filter((candidate) => canAccessOwner(principal, candidate.ownerUserId, env));
-  // A caller that supplies a thread is selecting a thread-scoped resource, not
-  // merely any same-owner instance. Shadow mode still records would-deny
-  // decisions, but target selection itself never silently falls through to an
-  // ungranted target.
+  // A caller that supplies a thread is selecting a thread-scoped resource. In
+  // shadow rollout we evaluate and audit the same decision but preserve legacy
+  // selection; only enforce mode may remove ungranted candidates.
   const resourceType = cleanLower(input.resourceType || targetType);
-  const enforceThreadScope = Boolean(clean(input.threadId || input.thread?.id)) && ["desktop", "oxrm", "mailbox"].includes(resourceType) && threadResourceAccessMode(resourceType, env) !== "off";
-  const decisions = enforceThreadScope
+  const threadScopeMode = threadResourceAccessMode(resourceType, env);
+  const threadScoped = Boolean(clean(input.threadId || input.thread?.id)) && ["desktop", "oxrm", "mailbox"].includes(resourceType) && threadScopeMode !== "off";
+  const decisions = threadScoped
     ? await Promise.all(ownerAuthorized.map(async (candidate) => [candidate.id, await authorizeThreadResourceAccess({
       principal,
       threadId: input.threadId || input.thread?.id,
@@ -164,7 +164,7 @@ export async function resolveTargetInstance(input = {}, env = process.env) {
     }, env)]))
     : [];
   const decisionById = new Map(decisions);
-  const authorized = enforceThreadScope
+  const authorized = threadScoped && threadScopeMode === "enforce"
     ? ownerAuthorized.filter((candidate) => decisionById.get(candidate.id)?.granted === true)
     : ownerAuthorized;
   let result;
