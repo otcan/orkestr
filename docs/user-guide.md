@@ -242,7 +242,11 @@ ORKESTR_MAILBOX_ACCESS_MODE=off
 `desktop` preserves the existing shadow default, while `oxrm` is opt-in until
 its explicit grants are configured. `mailbox` remains off until the mailbox
 resource is registered and each destination thread receives exact mailbox
-permissions. Mailbox permissions are `discover`, `read`, `subscribe`, and
+permissions. In mailbox `shadow` mode, ingress still follows the legacy
+connector-inbox path and only emits a content-free unified
+would-allow/would-deny evaluation; it neither delivers to listeners nor
+quarantines a legacy message. Mailbox `enforce` mode enables exact-listener
+dispatch. Mailbox permissions are `discover`, `read`, `subscribe`, and
 `manage`; unknown permissions and wildcard grants are rejected. In non-off
 mode, a listener is a durable record keyed by mailbox resource, exact thread,
 normalized filter, and generation. Creating a listener requires an effective
@@ -250,9 +254,9 @@ normalized filter, and generation. Creating a listener requires an effective
 invalidates pending deliveries. The listener APIs are `POST`/`GET`
 `/api/mailboxes/:mailboxId/listeners`, `DELETE`
 `/api/mailboxes/:mailboxId/listeners/:listenerId`, and
-`GET /api/mailboxes/:mailboxId/delivery-status`. Inbound mail is deduplicated
-once in the instance-owned inbox spool and creates
-one delivery per active, authorized matching listener. No matching listener is
+`GET /api/mailboxes/:mailboxId/delivery-status`. In enforce mode, inbound mail
+is deduplicated once in the instance-owned inbox spool and creates one delivery
+per active, authorized matching listener. No matching listener is
 recorded in durable unrouted quarantine; it never falls back to an owner's
 general inbox or thread. The status surface exposes listener count, pending,
 unrouted, dead-letter count, and oldest pending lag. Delivery claim and state

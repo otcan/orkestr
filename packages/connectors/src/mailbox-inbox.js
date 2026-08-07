@@ -109,7 +109,7 @@ export async function replayMailboxPolicyOutageSpool({ limit = 25 } = {}, env = 
         nextAttemptAt: terminal ? "" : new Date(Date.now() + mailboxPolicyReplayDelayMs(attemptCount, env)).toISOString(),
         error: String(error?.message || "mailbox_policy_replay_failed"),
       }, env);
-      await appendEvent({ type: terminal ? "mailbox_thread_delivery_policy_replay_dead_lettered" : "mailbox_thread_delivery_policy_replay_deferred", mailboxId: mailbox.id, ownerUserId: mailbox.ownerUserId, inboxEventId: event.id, reason: updated.error }).catch(() => {});
+      await appendEvent({ type: terminal ? "mailbox_thread_delivery_policy_replay_dead_lettered" : "mailbox_thread_delivery_policy_replay_deferred", mailboxId: mailbox.id, ownerUserId: mailbox.ownerUserId, inboxEventId: event.id, reason: updated.error }, env).catch(() => {});
       results.push({ id: event.id, state: updated.state, reason: updated.error });
     }
   }

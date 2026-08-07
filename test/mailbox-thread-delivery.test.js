@@ -22,6 +22,7 @@ import { approvePairingChallenge } from "../packages/core/src/security.js";
 import { registerThreadResource, setThreadResourceGrants } from "../packages/core/src/thread-resource-grants.js";
 import { readThreadResourcePolicyState, withThreadResourcePolicyTransaction } from "../packages/core/src/thread-resource-policy-store.js";
 import { listThreadMessages, createThread } from "../packages/core/src/threads.js";
+import { listEvents } from "../packages/storage/src/store.js";
 
 async function fixture(extraEnv = {}) {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-mailbox-thread-delivery-"));
@@ -107,11 +108,55 @@ test("enabled main mailbox ingress dedupes once and appends only to exact matchi
   assert.equal(second.action, "deduped");
   const messages = await listThreadMessages(scope.thread.id, scope.env);
   assert.equal(messages.filter((message) => message.source === "mailbox").length, 1);
-  assert.equal((await listConnectorInboxEvents({}, scope.env)).length, 1);
+  const inboxEvents = await listConnectorInboxEvents({}, scope.env);
+  assert.equal(inboxEvents.length, 1);
+  assert.equal(inboxEvents[0].state, "routed");
   const status = await mailboxThreadDeliveryStatus({ mailbox: scope.mailbox }, scope.env);
   assert.equal(status.listenerCount, 1);
   assert.equal(status.pending, 0);
   assert.equal(status.unrouted, 0);
+});
+
+test("shadow mailbox mode keeps legacy connector inbox ingress and only audits the unified would-deny", async () => {
+  const scope = await fixture();
+  await grantListenerAccess(scope);
+  await createMailboxThreadListener({ mailbox: scope.mailbox, threadId: scope.thread.id, principal: scope.principal }, scope.env);
+  await setThreadResourceGrants(scope.thread.id, "mailbox", [], { principal: scope.principal }, scope.env);
+  scope.env.ORKESTR_MAILBOX_ACCESS_MODE = "shadow";
+
+  const rawMessageId = "<mailbox-thread-shadow@example.test>";
+  const result = await ingestMailboxMessage(inbound(scope.mailbox, rawMessageId), scope.env);
+
+  assert.equal(result.action, "connector_inbox_queued");
+  assert.equal(result.shadowEvaluation?.wouldAllow, false);
+  assert.equal(result.shadowEvaluation?.reason, "mailbox_no_authorized_listener");
+  const inboxEvents = await listConnectorInboxEvents({}, scope.env);
+  assert.equal(inboxEvents.length, 1);
+  assert.equal(inboxEvents[0].state, "pending");
+  assert.equal((await listThreadMessages(scope.thread.id, scope.env)).length, 0);
+  assert.equal((await readThreadResourcePolicyState(scope.env)).mailboxDeliveries.length, 0);
+  const events = await listEvents(scope.env, 40);
+  const evaluation = events.find((event) => event.type === "mailbox_thread_delivery_shadow_evaluated");
+  assert.equal(evaluation?.outcome, "would_deny");
+  assert.equal(evaluation?.mismatch, true);
+  assert.equal(Object.hasOwn(evaluation || {}, "threadId"), false);
+  assert.equal(Object.hasOwn(evaluation || {}, "text"), false);
+  assert.match(evaluation?.idempotencyKeyHash || "", /^[a-f0-9]{24}$/);
+  assert.equal(Object.hasOwn(evaluation || {}, "idempotencyKey"), false);
+  assert.equal(JSON.stringify(evaluation).includes(rawMessageId), false);
+  assert.equal(events.some((event) => event.type === "thread_resource_access_shadow_denied" && event.resourceType === "mailbox"), true);
+});
+
+test("the mailbox delivery pump is a no-op without opening policy storage when access mode is off", async () => {
+  const scope = await fixture({
+    ORKESTR_MAILBOX_ACCESS_MODE: "off",
+    ORKESTR_THREAD_RESOURCE_POLICY_STORE: "json",
+  });
+
+  const pumped = await runMailboxDeliveryPump(scope.env);
+
+  assert.deepEqual(pumped, { ok: true, skipped: "access_mode_off", deliveries: null, replay: null });
+  await assert.rejects(fs.stat(path.join(scope.env.ORKESTR_HOME, "thread-resource-policy.sqlite")), /ENOENT/);
 });
 
 test("nonmatching or unregistered enabled mailboxes enter durable unrouted quarantine without inbox fallback", async () => {
