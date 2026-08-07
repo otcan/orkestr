@@ -45,6 +45,7 @@ import { completeThreadSecurityApproveCommand, threadSecurityApproveChallengeId 
 import { threadUsesContainedUserPolicy } from "./tenant-policy.js";
 import { apiAgentRuntimeStatus, processApiAgentThreadInput, threadUsesApiAgent } from "./tenant-api-agent.js";
 import { appendTurnLifecycleEvent, turnLifecycleFromRuntimeStatus } from "./turn-lifecycle.js";
+import { withRuntimeLeaseLock } from "./runtime-lease-lock.js";
 import {
   capturePane,
   killTmuxSession,
@@ -116,6 +117,10 @@ function passiveTmuxStatusCacheTtlMs(env = process.env) {
 
 function codexRuntimeMetadataCacheTtlMs(env = process.env) {
   return positiveDurationMs(env.ORKESTR_RUNTIME_CODEX_METADATA_CACHE_MS, 60_000, 0);
+}
+
+function runtimeLeaseStoreLockTimeoutMs(env = process.env) {
+  return positiveDurationMs(env.ORKESTR_RUNTIME_LEASE_LOCK_TIMEOUT_MS, 10_000, 1);
 }
 
 function runtimeCacheScope(env = process.env) {
@@ -1280,6 +1285,9 @@ export async function wakeThread(threadId, options = {}, env = process.env) {
     error.repair = "Run `orkestr codex migrate` on this host.";
     throw error;
   }
+  const leasesPath = await runtimeLeasesPath(env);
+  try {
+    return await withRuntimeLeaseLock(leasesPath, async () => {
   const existing = await activeLeaseForThread(thread.id, env);
   if (existing) {
     const windowName = await refreshTmuxWindowName(thread, existing, env);
@@ -1391,6 +1399,20 @@ export async function wakeThread(threadId, options = {}, env = process.env) {
   }, env);
   await appendEvent({ type: "runtime_woken", threadId: thread.id, leaseId: lease.id, sessionName, paneId, windowName, reason: lease.reason }, env);
   return { thread: updatedThread, lease, reused: false, status: await runtimeStatus(thread.id, env), dataHome: paths.home };
+    }, { timeoutMs: runtimeLeaseStoreLockTimeoutMs(env) });
+  } catch (error) {
+    if (error?.message !== "runtime_lease_store_locked") throw error;
+    const existing = await activeLeaseForThread(thread.id, env).catch(() => null);
+    if (!existing) throw error;
+    const windowName = await refreshTmuxWindowName(thread, existing, env)
+      .catch(() => existing.windowName || tmuxWindowName(thread));
+    return {
+      thread,
+      lease: { ...existing, windowName },
+      reused: true,
+      status: await runtimeStatus(thread.id, env),
+    };
+  }
 }
 
 export async function takeoverRawTerminalThread(threadId, options = {}, env = process.env) {
@@ -4713,6 +4735,37 @@ function resourceSummary(counts) {
   return "No leaked runtime resources found.";
 }
 
+function duplicateActiveRuntimeLeaseGroups(activeLeases = [], liveSessionNames = new Set()) {
+  const byThread = new Map();
+  for (const lease of activeLeases) {
+    const threadId = String(lease.threadId || "").trim();
+    if (!threadId) continue;
+    const group = byThread.get(threadId) || [];
+    group.push(lease);
+    byThread.set(threadId, group);
+  }
+  return [...byThread.entries()]
+    .filter(([, leases]) => leases.length > 1)
+    .map(([threadId, leases]) => {
+      const ranked = leases
+        .map((lease, index) => ({ lease, index }))
+        .sort((left, right) => {
+          const rightLive = liveSessionNames.has(right.lease.sessionName) ? 1 : 0;
+          const leftLive = liveSessionNames.has(left.lease.sessionName) ? 1 : 0;
+          if (rightLive !== leftLive) return rightLive - leftLive;
+          const rightStarted = timestampMs(right.lease.startedAt || right.lease.heartbeatAt);
+          const leftStarted = timestampMs(left.lease.startedAt || left.lease.heartbeatAt);
+          if (rightStarted !== leftStarted) return rightStarted - leftStarted;
+          return right.index - left.index;
+        });
+      return {
+        threadId,
+        keep: ranked[0].lease,
+        duplicates: ranked.slice(1).map((item) => item.lease),
+      };
+    });
+}
+
 export async function doctorRuntimeResources({ env = process.env, repair = false, automatic = false } = {}) {
   const leases = await listRuntimeLeases(env).catch(() => []);
   const activeLeases = leases.filter((lease) => !lease.endedAt);
@@ -4749,6 +4802,48 @@ export async function doctorRuntimeResources({ env = process.env, repair = false
 
   const liveSessionNames = new Set(tmuxSessions.map((session) => session.sessionName));
   let nextLeases = leases;
+  const duplicateLeaseGroups = duplicateActiveRuntimeLeaseGroups(activeLeases, liveSessionNames);
+  for (const group of duplicateLeaseGroups) {
+    issues.push({
+      severity: "warning",
+      code: "duplicate_runtime_lease",
+      threadId: group.threadId,
+      sessionName: group.keep.sessionName,
+      keepLeaseId: group.keep.id,
+      duplicateLeaseIds: group.duplicates.map((lease) => lease.id),
+      message: "Multiple active runtime leases point at the same thread. The newest live lease should be kept.",
+    });
+    if (repair) {
+      const endedAt = nowIso();
+      const duplicateIds = new Set(group.duplicates.map((lease) => lease.id));
+      nextLeases = nextLeases.map((item) => duplicateIds.has(item.id)
+        ? { ...item, endedAt, endReason: "resource_doctor_duplicate_lease" }
+        : item);
+      await updateThread(group.threadId, { activeRuntimeLeaseId: group.keep.id }, env).catch(() => {});
+      for (const lease of group.duplicates) {
+        actions.push({
+          action: "ended_duplicate_lease",
+          threadId: group.threadId,
+          sessionName: lease.sessionName,
+          leaseId: lease.id,
+          keptLeaseId: group.keep.id,
+        });
+        if (lease.sessionName && lease.sessionName !== group.keep.sessionName && liveSessionNames.has(lease.sessionName)) {
+          const killed = await killTmuxSession(lease.sessionName).catch((error) => ({ error: error?.message || String(error) }));
+          actions.push({
+            action: "killed_duplicate_session",
+            threadId: group.threadId,
+            sessionName: lease.sessionName,
+            leaseId: lease.id,
+            keptSessionName: group.keep.sessionName,
+            keptLeaseId: group.keep.id,
+            killed,
+          });
+        }
+      }
+    }
+  }
+
   for (const lease of activeLeases) {
     if (liveSessionNames.has(lease.sessionName)) continue;
     issues.push({
@@ -4828,7 +4923,7 @@ export async function doctorRuntimeResources({ env = process.env, repair = false
     }
   }
 
-  if (repair && actions.some((action) => action.action === "ended_stale_lease")) {
+  if (repair && actions.some((action) => action.action === "ended_stale_lease" || action.action === "ended_duplicate_lease")) {
     await saveRuntimeLeases(nextLeases, env).catch(() => {});
   }
 
@@ -4842,6 +4937,7 @@ export async function doctorRuntimeResources({ env = process.env, repair = false
     orphanSessions: tmuxSessions.filter((session) => !activeSessionNames.has(session.sessionName)).length,
     tempSessions: tmuxSessions.filter((session) => sessionTemporaryReason(session, env)).length,
     staleLeases: activeLeases.filter((lease) => !liveSessionNames.has(lease.sessionName)).length,
+    duplicateLeases: duplicateLeaseGroups.reduce((count, group) => count + group.duplicates.length, 0),
     tempCodexProcesses: tempCodexProcesses.length,
     issues: relevantIssues.length,
     repaired: actions.length,
