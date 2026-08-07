@@ -327,6 +327,38 @@ function effectiveGrantForLineage(state, lineage = [], resource, permission) {
   return effective;
 }
 
+// Doctor/report callers can use the exact inheritance calculation without an
+// authorization decision, event append, or metric. The supplied state and
+// thread map are snapshots owned by the caller, so this remains read-only.
+export function effectiveThreadResourceGrantFromSnapshot({ state = {}, threadsById = new Map(), threadId = "", resourceType = "", resourceId = "", permission = "" } = {}) {
+  const type = normalizeThreadResourceType(resourceType);
+  const permitted = permissionFor(type, permission);
+  const resource = (state.resources || []).find((item) => item.resourceType === type && item.id === clean(resourceId));
+  if (!type || !permitted || !resource || resource.status !== "active" || resource.retiredAt) return null;
+  const lookup = threadsById instanceof Map ? threadsById : new Map(Object.entries(threadsById || {}));
+  const lineage = [];
+  const seen = new Set();
+  let thread = lookup.get(clean(threadId)) || null;
+  while (thread?.id) {
+    // Match the authorization path's fail-closed behavior for a broken
+    // lineage. A missing/cyclic parent must never make a descendant a root.
+    if (seen.has(thread.id)) return null;
+    seen.add(thread.id);
+    lineage.unshift(thread);
+    const parentId = clean(thread.parentThreadId);
+    if (!parentId) break;
+    thread = lookup.get(parentId) || null;
+    if (!thread) return null;
+  }
+  if (!lineage.length) return null;
+  try {
+    return effectiveGrantForLineage(state, lineage, resource, permitted);
+  } catch {
+    // A malformed persisted declared scope is not evidence of a current grant.
+    return null;
+  }
+}
+
 async function threadLineage(thread = {}, env = process.env) {
   const lineage = [];
   let cursor = thread;

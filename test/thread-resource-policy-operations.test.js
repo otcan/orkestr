@@ -119,6 +119,25 @@ test("doctor does not initialize disabled policy storage and only flags invalid 
   assert.equal(invalid.stale.listeners, 1);
 });
 
+test("doctor evaluates inherited listener grants through child deny-all policy without side effects", async () => {
+  const { env, principal } = await fixture();
+  const parent = await createThread({ id: "listener-parent", ownerUserId: "admin", name: "Parent" }, env);
+  const mailbox = { id: "inherited-listener-mailbox", ownerUserId: "admin", target: { type: "main" } };
+  await registerThreadResource({ resourceType: "mailbox", resourceId: mailbox.id, ownerUserId: "admin", status: "active" }, { principal }, env);
+  await setThreadResourceGrants(parent.id, "mailbox", [{ resourceId: mailbox.id, permissions: ["subscribe"] }], { principal }, env);
+  const child = await createThread({ id: "listener-child", ownerUserId: "admin", name: "Child", parentThreadId: parent.id }, env);
+  const listener = await createMailboxThreadListener({ mailbox, threadId: child.id, principal }, env);
+  assert.ok(listener.listener.id);
+
+  await setThreadResourceGrants(child.id, "mailbox", [], { principal }, env);
+  const before = await readThreadResourcePolicy(env);
+  const report = await threadResourcePolicyDoctorReport(env);
+  const after = await readThreadResourcePolicy(env);
+  assert.equal(report.stale.listeners, 1);
+  assert.equal(after.revision, before.revision);
+  assert.equal(after.policyAuditOutbox.length, before.policyAuditOutbox.length);
+});
+
 test("audit outbox preserves old rows across policy mutations and supports claim delivery", async () => {
   const { env, principal } = await fixture();
   const oldRows = Array.from({ length: 2001 }, (_, index) => ({
