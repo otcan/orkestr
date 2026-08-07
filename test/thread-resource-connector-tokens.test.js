@@ -243,6 +243,36 @@ test("configured operator connector token remains compatible without a resource 
   assert.equal(result, auth);
 });
 
+test("configured operator connector tokens cannot bypass declared resource targets in enforce mode", async () => {
+  const item = await fixture();
+  item.env.ORKESTR_CONNECTORS_MCP_TOKEN = "operator-token";
+  const operator = await authorizeConnectorMcpToken("operator-token", item.env);
+  const denied = /connector_mcp_resource_operator_target_denied/;
+
+  await assert.rejects(
+    () => assertConnectorMcpResourceAccess(operator, item.input, item.env),
+    denied,
+    "a caller-declared resource must not use the static operator credential",
+  );
+  const unregistered = { ...item.input, resource_id: "unregistered-resource" };
+  await assert.rejects(
+    () => assertConnectorMcpResourceAccess(operator, unregistered, item.env, { actualTarget: unregistered }),
+    denied,
+    "a dispatcher-declared unregistered resource must not use the static operator credential",
+  );
+  const otherThread = await createThread({ id: "operator-cross-thread", name: "Operator cross thread", ownerUserId: "tenant" }, item.env);
+  const crossThread = {
+    ...item.input,
+    thread_id: otherThread.id,
+    target_thread_id: otherThread.id,
+  };
+  await assert.rejects(
+    () => assertConnectorMcpResourceAccess(operator, crossThread, item.env, { actualTarget: crossThread }),
+    denied,
+    "a static operator credential cannot use a registered resource through another thread",
+  );
+});
+
 test("issued resource tokens round-trip through connector auth and survive unrelated policy edits", async () => {
   const item = await fixture();
   const issued = await issueConnectorMcpResourceToken(issueInput(item, { scopes: ["connectors:read"], instanceId: "tenant-instance" }), item.env);
@@ -306,4 +336,32 @@ test("parent grant replacement invalidates an inherited child session through gr
   assert.equal(active.resourceSessions[0].grantThreadId, parent.id);
   await setThreadResourceGrants(parent.id, "oxrm", [], { principal: item.principal }, item.env);
   assert.equal((await readThreadResourcePolicy(item.env)).resourceSessions[0].state, "invalidated");
+});
+
+test("declared child scopes bind a nonzero policy epoch and are invalidated by parent lineage revocation", async () => {
+  const item = await fixture();
+  const parent = await createThread({ id: "resource-direct-child-parent", name: "Resource direct child parent", ownerUserId: "tenant" }, item.env);
+  await setThreadResourceGrants(parent.id, "oxrm", [{ resourceId: "crm-primary", permissions: ["read"] }], { principal: item.principal }, item.env);
+  const child = await createThread({
+    id: "resource-direct-child", name: "Resource direct child", ownerUserId: "tenant", parentThreadId: parent.id,
+    resourceGrants: [{ resourceType: "oxrm", resourceId: "crm-primary", permissions: ["read"] }],
+  }, item.env);
+  const captured = await readThreadResourcePolicy(item.env);
+  const childPolicy = captured.policies.find((policy) => policy.threadId === child.id && policy.resourceType === "oxrm");
+  assert.ok(childPolicy);
+  assert.equal(childPolicy.revision > 0, true);
+
+  const issued = await issueConnectorMcpResourceToken(issueInput(item, { threadId: child.id, targetThreadId: child.id }), item.env);
+  const active = await readThreadResourcePolicy(item.env);
+  assert.equal(active.resourceSessions[0].state, "active");
+  assert.equal(active.resourceSessions[0].grantThreadId, child.id);
+  await assertResourceAccess(await authorizeConnectorMcpToken(issued.token, item.env), { ...item.input, thread_id: child.id, target_thread_id: child.id }, item.env);
+
+  await setThreadResourceGrants(parent.id, "oxrm", [], { principal: item.principal }, item.env);
+  assert.equal((await readThreadResourcePolicy(item.env)).resourceSessions[0].state, "invalidated");
+  await assert.rejects(() => authorizeConnectorMcpToken(issued.token, item.env), /connector_mcp_token_invalid/);
+  await assert.rejects(
+    () => assertResourceAccess(issued.authorization, { ...item.input, thread_id: child.id, target_thread_id: child.id }, item.env),
+    /connector_mcp_resource_grant_required/,
+  );
 });

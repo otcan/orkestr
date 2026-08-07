@@ -161,6 +161,8 @@ export async function resolveTargetInstance(input = {}, env = process.env) {
       permission: input.permission || input.resourcePermission || "execute",
       breakGlass: input.breakGlass === true,
       breakGlassReason: input.breakGlassReason || input.overrideReason,
+      breakGlassChangeRef: input.breakGlassChangeRef || input.changeRef || input.changeReference,
+      recentAuthAt: input.recentAuthAt,
     }, env)]))
     : [];
   const decisionById = new Map(decisions);

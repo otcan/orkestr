@@ -85,6 +85,10 @@ function resourceTokenDeclared(value = {}) {
   );
 }
 
+function resourceTargetDeclared(value = {}) {
+  return Boolean(clean(value.resourceType) || clean(value.resourceId) || clean(value.action));
+}
+
 export function connectorMcpResourceTokenDeclared(auth = {}) {
   return resourceTokenDeclared(auth);
 }
@@ -181,11 +185,19 @@ export async function assertConnectorMcpResourceAccess(auth = {}, input = {}, en
   const callerTarget = target(input);
   const requested = actualTarget ? target(actualTarget) : callerTarget;
   const value = claims(auth);
-  const declared = resourceTokenDeclared(auth) || callerTarget.resourceType || callerTarget.resourceId || callerTarget.action;
-  if (!declared || auth.operator) return auth;
+  // A configured operator credential is compatible with generic instance
+  // operations only. Once either the caller or a trusted dispatcher names a
+  // resource, enforce mode requires a resource-scoped bearer (or a separately
+  // audited break-glass authorization before this dispatch); the static token
+  // can never stand in for a resource policy decision.
+  const targetDeclared = resourceTargetDeclared(callerTarget) || resourceTargetDeclared(requested);
+  const declared = resourceTokenDeclared(auth) || targetDeclared;
+  if (!declared) return auth;
   const resourceType = normalizeThreadResourceType(requested.resourceType || value.resourceType);
   const mode = threadResourceAccessMode(resourceType, env);
   if (mode !== "enforce") return auth;
+  if (auth.operator && targetDeclared) deny("resource_operator_target_denied");
+  if (auth.operator) return auth;
   if (!actualTarget) deny("resource_dispatch_target_unbound");
   if (
     (callerTarget.resourceType && callerTarget.resourceType !== requested.resourceType) ||

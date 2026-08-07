@@ -8,6 +8,7 @@ import {
   readThreadResourcePolicyState,
   withThreadResourcePolicyTransaction,
 } from "../packages/core/src/thread-resource-policy-store.js";
+import { openThreadResourcePolicyPostgres } from "../packages/core/src/thread-resource-policy-postgres.js";
 import { threadResourcePolicyDoctorReport } from "../packages/core/src/thread-resource-policy-doctor.js";
 import { ingestMailboxMessage } from "../packages/connectors/src/mailbox-inbox.js";
 import { runMailboxDeliveryPump } from "../packages/connectors/src/mailbox-delivery-pump.js";
@@ -21,6 +22,7 @@ import {
 } from "../packages/core/src/mailboxes.js";
 import { adminPrincipal } from "../packages/core/src/principal.js";
 import { registerThreadResource, setThreadResourceGrants } from "../packages/core/src/thread-resource-grants.js";
+import { issueConnectorMcpResourceToken } from "../packages/core/src/thread-resource-sessions.js";
 import { appendThreadMessage, createThread, listThreadMessages } from "../packages/core/src/threads.js";
 import { listConnectorInboxEvents, markConnectorInboxEvent, resetConnectorInboxForTest } from "../packages/connectors/src/connector-inbox.js";
 
@@ -147,6 +149,84 @@ function fakePolicyPool() {
     },
   };
 }
+
+test("Postgres policy pool coalesces concurrent schema opens for one cache key", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-policy-pg-open-race-"));
+  const env = policyEnv(home);
+  const pool = fakePolicyPool();
+  let created = 0;
+  let resolveFactory;
+  const factoryReady = new Promise((resolve) => { resolveFactory = resolve; });
+  try {
+    __threadResourcePolicyStoreTestInternals.setPostgresPoolFactory(async () => {
+      created += 1;
+      return factoryReady;
+    });
+
+    const first = openThreadResourcePolicyPostgres(env);
+    const second = openThreadResourcePolicyPostgres(env);
+    await Promise.resolve();
+    assert.equal(created, 1);
+    resolveFactory(pool);
+    const [left, right] = await Promise.all([first, second]);
+
+    assert.strictEqual(left, pool);
+    assert.strictEqual(right, pool);
+  } finally {
+    await __threadResourcePolicyStoreTestInternals.clearPostgresCache();
+    __threadResourcePolicyStoreTestInternals.setPostgresPoolFactory(null);
+  }
+});
+
+test("Postgres policy pool closes failed schema candidates before retrying", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-policy-pg-open-failure-"));
+  const env = policyEnv(home);
+  let failedEnds = 0;
+  const failed = {
+    async query() { throw new Error("schema_failed"); },
+    async end() { failedEnds += 1; },
+  };
+  const healthy = fakePolicyPool();
+  let created = 0;
+  try {
+    __threadResourcePolicyStoreTestInternals.setPostgresPoolFactory(async () => {
+      created += 1;
+      return created === 1 ? failed : healthy;
+    });
+
+    await assert.rejects(() => openThreadResourcePolicyPostgres(env), /thread_resource_policy_postgres_unavailable/);
+    assert.equal(failedEnds, 1);
+    const reopened = await openThreadResourcePolicyPostgres(env);
+
+    assert.strictEqual(reopened, healthy);
+    assert.equal(created, 2);
+  } finally {
+    await __threadResourcePolicyStoreTestInternals.clearPostgresCache();
+    __threadResourcePolicyStoreTestInternals.setPostgresPoolFactory(null);
+  }
+});
+
+test("Postgres policy pool closes an unadopted candidate when shutdown races its open", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-policy-pg-open-shutdown-"));
+  const env = policyEnv(home);
+  let ended = 0;
+  let resolveFactory;
+  const factoryReady = new Promise((resolve) => { resolveFactory = resolve; });
+  const pool = { ...fakePolicyPool(), async end() { ended += 1; } };
+  try {
+    __threadResourcePolicyStoreTestInternals.setPostgresPoolFactory(async () => factoryReady);
+    const opening = openThreadResourcePolicyPostgres(env);
+    await Promise.resolve();
+    const closing = __threadResourcePolicyStoreTestInternals.clearPostgresCache();
+    resolveFactory(pool);
+    await assert.rejects(() => opening, /thread_resource_policy_postgres_open_cancelled/);
+    await closing;
+    assert.equal(ended, 1);
+  } finally {
+    await __threadResourcePolicyStoreTestInternals.clearPostgresCache();
+    __threadResourcePolicyStoreTestInternals.setPostgresPoolFactory(null);
+  }
+});
 
 function resource(id = "local:admin:oxrm:crm") {
   return { id, nativeId: "crm", resourceType: "oxrm", resourceKey: "crm", ownerUserId: "admin", boundaryId: "local", generation: 1, status: "active", backend: "oxrm", createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z", retiredAt: null };
@@ -331,6 +411,65 @@ test("real PostgreSQL serializable CAS permits one concurrent policy writer", { 
     state.mutations = state.mutations.filter((item) => !String(item.idempotencyKey || "").startsWith(prefix));
     return { state };
   }, env);
+});
+
+test("real PostgreSQL coalesces concurrent policy pool initialization", { skip: !realPostgresUrl }, async () => {
+  const env = realPolicyEnv(await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-resource-postgres-real-open-")));
+  await __threadResourcePolicyStoreTestInternals.clearPostgresCache();
+  try {
+    const [first, second] = await Promise.all([
+      openThreadResourcePolicyPostgres(env),
+      openThreadResourcePolicyPostgres(env),
+    ]);
+    assert.strictEqual(first, second);
+  } finally {
+    await __threadResourcePolicyStoreTestInternals.clearPostgresCache();
+  }
+});
+
+test("real PostgreSQL preserves child policy epochs and invalidates direct child sessions on ancestor revocation", { skip: !realPostgresUrl }, async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-resource-postgres-real-child-"));
+  const env = realPolicyEnv(home);
+  const principal = adminPrincipal("admin");
+  const suffix = `real-child-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const parent = await createThread({ id: `${suffix}-parent`, name: "Real Postgres direct child parent", ownerUserId: "admin" }, env);
+  const registered = await registerThreadResource({ resourceType: "oxrm", resourceId: suffix, ownerUserId: "admin", status: "active" }, { principal }, env);
+  await setThreadResourceGrants(parent.id, "oxrm", [{ resourceId: suffix, permissions: ["read"] }], { principal }, env);
+  const child = await createThread({
+    id: `${suffix}-child`, name: "Real Postgres direct child", ownerUserId: "admin", parentThreadId: parent.id,
+    resourceGrants: [{ resourceType: "oxrm", resourceId: suffix, permissions: ["read"] }],
+  }, env);
+  const captured = await readThreadResourcePolicyState(env);
+  assert.equal(captured.policies.find((policy) => policy.threadId === child.id && policy.resourceType === "oxrm")?.revision > 0, true);
+  await issueConnectorMcpResourceToken({
+    resourceType: "oxrm", resourceId: registered.resource.id, resourceAction: "read", threadId: child.id, principal,
+    connectorMcpTool: "orkestr_auth", connectorMcpAction: "status", service: "whatsapp", accountId: "account", conversationId: "conversation",
+    bindingId: "binding", targetThreadId: child.id, operationRef: "real-child-scope",
+  }, env);
+  assert.equal((await readThreadResourcePolicyState(env)).resourceSessions.find((session) => session.threadId === child.id)?.grantThreadId, child.id);
+  await setThreadResourceGrants(parent.id, "oxrm", [], { principal }, env);
+  assert.equal((await readThreadResourcePolicyState(env)).resourceSessions.find((session) => session.threadId === child.id)?.state, "invalidated");
+});
+
+test("real PostgreSQL rejects mailbox listener idempotency reuse for a different target", { skip: !realPostgresUrl }, async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-resource-postgres-real-listener-"));
+  const env = realPolicyEnv(home);
+  const principal = adminPrincipal("admin");
+  const suffix = `real-listener-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const firstThread = await createThread({ id: `${suffix}-one`, name: "Real Postgres listener one", ownerUserId: "admin" }, env);
+  const secondThread = await createThread({ id: `${suffix}-two`, name: "Real Postgres listener two", ownerUserId: "admin" }, env);
+  const firstMailbox = await createMailbox({ ownerUserId: "admin", purpose: "alerts", suffix: `one-${suffix}`, status: "active" }, env);
+  const secondMailbox = await createMailbox({ ownerUserId: "admin", purpose: "alerts", suffix: `two-${suffix}`, status: "active" }, env);
+  for (const [thread, mailbox] of [[firstThread, firstMailbox], [secondThread, secondMailbox]]) {
+    await registerThreadResource({ resourceType: "mailbox", resourceId: mailbox.id, ownerUserId: "admin", status: "active" }, { principal }, env);
+    await setThreadResourceGrants(thread.id, "mailbox", [{ resourceId: mailbox.id, permissions: ["read", "subscribe", "manage"] }], { principal }, env);
+  }
+  const idempotencyKey = `${suffix}-idempotency`;
+  await createMailboxThreadListener({ mailbox: firstMailbox, threadId: firstThread.id, principal, idempotencyKey }, env);
+  await assert.rejects(
+    () => createMailboxThreadListener({ mailbox: secondMailbox, threadId: secondThread.id, principal, idempotencyKey }, env),
+    /mailbox_listener_idempotency_target_mismatch/,
+  );
 });
 
 test("real PostgreSQL mailbox fence orders a concurrent revoke after the idempotent append", { skip: !realPostgresUrl }, async () => {

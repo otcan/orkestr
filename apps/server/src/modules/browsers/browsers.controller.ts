@@ -60,29 +60,28 @@ function desktopShareNotReadyReason(browser: any, fallback = "desktop_share_not_
 @Controller("api")
 export class BrowsersController {
   @Get("browsers")
-  async browsers(@Req() request: any, @Query("threadId") threadId = "", @Query("breakGlass") breakGlass = "", @Query("reason") reason = "") {
+  async browsers(@Req() request: any, @Query("threadId") threadId = "", @Query("breakGlass") breakGlass = "", @Query("reason") reason = "", @Query("changeRef") changeRef = "") {
     const principal = requestPrincipal(request);
     const payload = await listBrowserSessions(process.env, {
       principal,
       threadId: String(threadId || "").trim(),
-      breakGlass: ["1", "true", "yes"].includes(String(breakGlass || "").toLowerCase()),
-      breakGlassReason: String(reason || "").trim(),
+      ...this.breakGlassInputs(principal, { breakGlass, breakGlassReason: reason, breakGlassChangeRef: changeRef }),
     });
     return { ...payload, browsers: payload.sessions };
   }
 
   @Get("browser-sessions")
-  async browserSessions(@Req() request: any, @Query("threadId") threadId = "", @Query("breakGlass") breakGlass = "", @Query("reason") reason = "") {
+  async browserSessions(@Req() request: any, @Query("threadId") threadId = "", @Query("breakGlass") breakGlass = "", @Query("reason") reason = "", @Query("changeRef") changeRef = "") {
+    const principal = requestPrincipal(request);
     return listBrowserSessions(process.env, {
-      principal: requestPrincipal(request),
+      principal,
       threadId: String(threadId || "").trim(),
-      breakGlass: ["1", "true", "yes"].includes(String(breakGlass || "").toLowerCase()),
-      breakGlassReason: String(reason || "").trim(),
+      ...this.breakGlassInputs(principal, { breakGlass, breakGlassReason: reason, breakGlassChangeRef: changeRef }),
     });
   }
 
   @Get("desktops/leases")
-  async desktopLeases(@Req() request: any, @Query("include") include = "", @Query("threadId") threadId = "", @Query("breakGlass") breakGlass = "", @Query("reason") reason = "") {
+  async desktopLeases(@Req() request: any, @Query("include") include = "", @Query("threadId") threadId = "", @Query("breakGlass") breakGlass = "", @Query("reason") reason = "", @Query("changeRef") changeRef = "") {
     const principal = requestPrincipal(request);
     return {
       ok: true,
@@ -90,8 +89,7 @@ export class BrowsersController {
         includeReleased: include === "released",
         principal,
         threadId: String(threadId || "").trim(),
-        breakGlass: ["1", "true", "yes"].includes(String(breakGlass || "").toLowerCase()),
-        breakGlassReason: String(reason || "").trim(),
+        ...this.breakGlassInputs(principal, { breakGlass, breakGlassReason: reason, breakGlassChangeRef: changeRef }),
       }),
       staleAfterMs: Number(process.env.ORKESTR_DESKTOP_LEASE_STALE_MS || 15 * 60_000),
       generatedAt: new Date().toISOString(),
@@ -118,7 +116,7 @@ export class BrowsersController {
     const ownerUserId = await this.ownerUserIdFromLeaseBody(body, principal);
     if (body.force === true && !isAdminPrincipal(principal)) throw httpError("desktop_force_acquire_admin_required", 403);
     await this.assertDesktopSanitized("acquire", principal, slug, { ...body, ownerUserId });
-    const result = await acquireDesktopLease(slug, { ...body, ownerUserId }, process.env, { principal });
+    const result = await acquireDesktopLease(slug, { ...body, ownerUserId }, process.env, { principal, ...this.breakGlassInputs(principal, body) });
     if (!result.ok) throw httpError("desktop_leased", 409);
     return result;
   }
@@ -170,6 +168,7 @@ export class BrowsersController {
   @HttpCode(201)
   async shareDesktop(@Req() request: any, @Param("slug") slug: string, @Body() body: Record<string, unknown> = {}) {
     const principal = requestPrincipal(request);
+    const breakGlassOptions = this.breakGlassInputs(principal, body);
     const threadId = String(body.threadId || body.ownerThreadId || "").trim();
     const ownerUserId = threadId ? await this.ownerUserIdFromLeaseBody(body, principal) : String(body.ownerUserId || "").trim();
     await this.assertDesktopSanitized("share", principal, slug, body);
@@ -179,8 +178,7 @@ export class BrowsersController {
       desktopSlug: slug,
       ownerUserId,
       permission: "share",
-      breakGlass: body.breakGlass === true,
-      breakGlassReason: String(body.breakGlassReason || "").trim(),
+      ...breakGlassOptions,
     }, process.env);
     let browser: any = null;
     let startError = "";
@@ -192,8 +190,7 @@ export class BrowsersController {
           threadId,
           ownerUserId,
           fencingToken: String(body.fencingToken || "").trim(),
-          breakGlass: body.breakGlass === true,
-          breakGlassReason: String(body.breakGlassReason || "").trim(),
+          ...breakGlassOptions,
         });
       } catch (error) {
         startError = String((error as Error)?.message || error || "desktop_start_failed");
@@ -206,8 +203,7 @@ export class BrowsersController {
       principal,
       threadId,
       ownerUserId,
-      breakGlass: body.breakGlass === true,
-      breakGlassReason: String(body.breakGlassReason || "").trim(),
+      ...breakGlassOptions,
       label: String(browser?.label || body.label || "").trim(),
       env: process.env,
     });
@@ -381,8 +377,7 @@ export class BrowsersController {
         threadId,
         ownerUserId,
         fencingToken: String(body.fencingToken || "").trim(),
-        breakGlass: body.breakGlass === true,
-        breakGlassReason: String(body.breakGlassReason || "").trim(),
+        ...this.breakGlassInputs(principal, body),
       };
       await this.assertDesktopSanitized(normalized || "action", principal, slug, body);
       if (normalized === "prepare") return { browser: await prepareVirtualBrowser(slug, process.env, desktopOptions) };
@@ -424,5 +419,17 @@ export class BrowsersController {
         ...input,
       },
     }, process.env);
+  }
+
+  private breakGlassInputs(principal: any, input: Record<string, unknown> = {}) {
+    const breakGlass = input.breakGlass === true || ["1", "true", "yes"].includes(String(input.breakGlass || "").toLowerCase());
+    return {
+      breakGlass,
+      breakGlassReason: String(input.breakGlassReason || input.reason || "").trim(),
+      breakGlassChangeRef: String(input.breakGlassChangeRef || input.changeRef || input.changeReference || "").trim(),
+      // Never trust a query/body timestamp; authentication middleware supplies
+      // this only from the verified browser security session.
+      recentAuthAt: String(principal?.recentAuthAt || principal?.authenticatedAt || "").trim(),
+    };
   }
 }

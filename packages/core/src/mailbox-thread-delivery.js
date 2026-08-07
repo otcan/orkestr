@@ -3,6 +3,12 @@ import { appendEvent } from "../../storage/src/store.js";
 import { policyError } from "./policy.js";
 import { appendThreadMessage } from "./threads.js";
 import { evaluateMailboxThreadDeliveryShadow } from "./mailbox-thread-delivery-shadow.js";
+import {
+  mailboxPumpRunKey,
+  mailboxThreadDeliveryPumpLeaseMs,
+  mailboxThreadDeliveryPumpLimit,
+  mailboxThreadDeliveryPumpIntervalMs,
+} from "./mailbox-thread-delivery-pump-config.js";
 import { recordMailboxThreadDeliveryMetrics, recordThreadResourceInvalidationMetric } from "./observability.js";
 import {
   assertThreadResourceAccess,
@@ -23,27 +29,8 @@ const listenerFilterKeys = new Set(["fromIncludes", "subjectIncludes", "hasAttac
 const localPumpRuns = new Map();
 const mailboxPumpLeaseName = "mailbox-thread-delivery";
 
-function boundedInteger(value, fallback, minimum, maximum) {
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed)) return fallback;
-  return Math.max(minimum, Math.min(maximum, Math.floor(parsed)));
-}
-
-export function mailboxThreadDeliveryPumpIntervalMs(env = process.env) {
-  return boundedInteger(env.ORKESTR_MAILBOX_THREAD_DELIVERY_PUMP_INTERVAL_MS, 5_000, 1_000, 5 * 60_000);
-}
-
-export function mailboxThreadDeliveryPumpLimit(env = process.env) {
-  return boundedInteger(env.ORKESTR_MAILBOX_THREAD_DELIVERY_PUMP_LIMIT, 25, 1, 100);
-}
-
-function mailboxThreadDeliveryPumpLeaseMs(env = process.env) {
-  return boundedInteger(env.ORKESTR_MAILBOX_THREAD_DELIVERY_PUMP_LEASE_MS, 30_000, 5_000, 5 * 60_000);
-}
-
-function mailboxPumpRunKey(env = process.env) {
-  return clean(env.ORKESTR_THREAD_RESOURCE_POLICY_DB || env.ORKESTR_HOME || "default");
-}
+export { mailboxThreadDeliveryPumpIntervalMs, mailboxThreadDeliveryPumpLimit };
+export { mailboxThreadDeliveryStatus } from "./mailbox-thread-delivery-status.js";
 
 function mailboxResourceId(mailbox = {}, env = process.env) {
   return threadResourceId("mailbox", mailbox.id, mailbox.ownerUserId, env);
@@ -154,7 +141,15 @@ export async function createMailboxThreadListener({ mailbox, threadId, filter = 
     const existing = (state.mailboxListeners || []).find((item) => item.resourceId === resourceId && item.threadId === threadId && item.filterKey === key && item.status === "active" && !item.revokedAt);
     if (existing) return { noChange: true, result: { listener: existing, idempotent: true } };
     const prior = clean(idempotencyKey) && (state.mailboxListeners || []).find((item) => item.idempotencyKey === clean(idempotencyKey));
-    if (prior) return { noChange: true, result: { listener: prior, idempotent: true } };
+    if (prior) {
+      // The physical uniqueness guard is intentionally global, so an idempotency
+      // key can never silently create (or return) a listener for another
+      // mailbox, thread, or filter.
+      if (prior.resourceId !== resourceId || prior.threadId !== threadId || prior.filterKey !== key) {
+        throw policyError("mailbox_listener_idempotency_target_mismatch", 409);
+      }
+      return { noChange: true, result: { listener: prior, idempotent: true } };
+    }
     const generations = (state.mailboxListeners || []).filter((item) => item.resourceId === resourceId && item.threadId === threadId && item.filterKey === key).map((item) => Number(item.generation || 0));
     const timestamp = nowIso();
     const listener = {
@@ -458,6 +453,9 @@ async function runMailboxThreadDeliveryPump({ limit, replay } = {}, env = proces
 }
 
 export function pumpMailboxThreadDeliveries(options = {}, env = process.env) {
+  if (threadResourceAccessMode("mailbox", env) === "off") {
+    return Promise.resolve({ ok: true, skipped: "mode_off", deliveries: null, replay: null });
+  }
   const key = mailboxPumpRunKey(env);
   if (localPumpRuns.has(key)) return Promise.resolve({ ok: true, skipped: "in_process", deliveries: null, replay: null });
   const run = runMailboxThreadDeliveryPump(options, env);
@@ -495,22 +493,4 @@ export async function dispatchMailboxThreadDeliveries({ deliveryIds = [], limit 
   }
   if (deadLetters) await appendEvent({ type: "mailbox_thread_delivery_dead_lettered", deadLetterCount: deadLetters }, env).catch(() => {});
   return { ok: true, results, delivered: results.filter((item) => item.state === "delivered").length, deadLetters };
-}
-
-export async function mailboxThreadDeliveryStatus({ mailbox, resourceId = "" } = {}, env = process.env) {
-  const id = clean(resourceId) || mailboxResourceId(mailbox, env);
-  if (!id) throw policyError("mailbox_listener_mailbox_required", 400);
-  const state = await readThreadResourcePolicy(env);
-  const deliveries = (state.mailboxDeliveries || []).filter((item) => item.resourceId === id);
-  const pending = deliveries.filter((item) => item.state === "pending" || item.state === "claimed");
-  const oldest = pending.map((item) => Date.parse(item.createdAt)).filter(Number.isFinite).sort((a, b) => a - b)[0];
-  return {
-    mailboxResourceId: id,
-    listenerCount: (state.mailboxListeners || []).filter((item) => item.resourceId === id && item.status === "active" && !item.revokedAt).length,
-    pending: pending.length,
-    unrouted: deliveries.filter((item) => item.state === "quarantined").length,
-    deadLetter: deliveries.filter((item) => item.state === "dead-letter").length,
-    oldestPendingAt: oldest ? new Date(oldest).toISOString() : null,
-    oldestLagMs: oldest ? Math.max(0, Date.now() - oldest) : 0,
-  };
 }

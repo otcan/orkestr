@@ -1826,7 +1826,8 @@ test("web shell exposes a user desktop desk page", async () => {
   assert.match(api, /acquireDesktopLease\(slug: string/);
   assert.match(api, /releaseDesktopLease\(slug: string/);
   assert.match(opsComponent, /opsDesktopLeases: DesktopLeaseRecord\[\] = \[\]/);
-  assert.match(opsComponent, /firstValueFrom\(this\.api\.desktopLeases\(false, "", "ops_desktop_inventory"\)\)/);
+  assert.match(opsComponent, /firstValueFrom\(this\.api\.desktopLeases\(\)\)/);
+  assert.match(opsComponent, /breakGlassChangeRef: changeRef/);
   assert.match(opsComponent, /forceReleaseDesktopLease\(lease: DesktopLeaseRecord\)/);
   assert.match(opsTemplate, /Desktop leases/);
   assert.match(styles, /\.user-desk-grid/);
