@@ -12,6 +12,8 @@ import { renderOpenMetrics, resetObservabilityForTests } from "../packages/core/
 import { writeConnectorConfig } from "../packages/storage/src/config.js";
 import { deliverWhatsAppReplies } from "../packages/connectors/src/whatsapp.js";
 import { outboundMirrorMessageSetKey } from "../packages/connectors/src/whatsapp-outbound-intents.js";
+import { createMailbox, createMailboxForPrincipal, createMailboxThreadListener } from "../packages/core/src/mailboxes.js";
+import { createTenantVm } from "../packages/core/src/tenant-vm-registry.js";
 
 async function fixture(extra = {}) {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-shadow-boundary-warning-"));
@@ -129,6 +131,52 @@ test("shadow target warnings stay silent for probes, off or enforce modes, grant
   assert.deepEqual((await listThreadMessages(thread.id, env)).filter((message) => message.source === "shadow-boundary-warning"), []);
 });
 
+test("actual mailbox VM target selection preserves warning metadata without treating the VM as a mailbox resource", async () => {
+  const env = await fixture({ ORKESTR_MAILBOX_DOMAIN: "mail.example.test" });
+  await createTenantVm({
+    id: "shadow-warning-mailbox-vm",
+    ownerUserId: "admin",
+    status: "running",
+    capabilities: ["mailboxes"],
+  }, env);
+
+  const mailbox = await createMailboxForPrincipal({
+    targetType: "vm",
+    tenantVmId: "shadow-warning-mailbox-vm",
+    purpose: "alerts",
+    suffix: "selection",
+  }, adminPrincipal(), env);
+
+  assert.equal(mailbox.targetSelection.selectedInstanceId, "shadow-warning-mailbox-vm");
+  assert.deepEqual(mailbox.targetSelection.shadowBoundaryWarning, {
+    eligible: false,
+    emitted: false,
+    resourceType: "tenant_vm",
+    mode: "",
+    reason: "resource_type_not_supported",
+    notificationId: "",
+  });
+  assert.equal((await listEvents(env, 20)).some((event) => event.type === "shadow_boundary_chat_warning_emitted"), false);
+});
+
+test("actual mailbox listener access rejects a shadow-only grant gap without a chat warning", async () => {
+  const env = await fixture({ ORKESTR_MAILBOX_DOMAIN: "mail.example.test" });
+  const thread = await createSelectionThread("shadow-warning-mailbox-listener", env, {
+    connector: "whatsapp",
+    chatId: "shadow-warning-mailbox-listener-chat",
+    responderAccountId: "shadow-warning-account",
+    mirrorToWhatsApp: true,
+  });
+  const mailbox = await createMailbox({ ownerUserId: "admin", purpose: "alerts", suffix: "listener", status: "active" }, env);
+  await registerThreadResource({ resourceType: "mailbox", resourceId: mailbox.id, ownerUserId: "admin", status: "active" }, { principal: adminPrincipal() }, env);
+
+  await assert.rejects(
+    () => createMailboxThreadListener({ mailbox, threadId: thread.id, principal: adminPrincipal() }, env),
+    /mailbox_listener_subscribe_grant_required/,
+  );
+  assert.deepEqual((await listThreadMessages(thread.id, env)).filter((message) => message.source === "shadow-boundary-warning"), []);
+});
+
 test("a WhatsApp-bound shadow warning uses the outbound-intent recovery path after the mirror cursor advances", async () => {
   const env = await fixture();
   await writeConnectorConfig("whatsapp", { bridgeMode: "external", bridgeUrl: "http://wa.local" }, env);
@@ -140,11 +188,17 @@ test("a WhatsApp-bound shadow warning uses the outbound-intent recovery path aft
     mirrorToWhatsApp: true,
   });
 
-  const first = await resolveTargetInstance(selectionInput({
+  const firstInput = selectionInput({
     resourceType: "oxrm", threadId: thread.id, targetId: "legacy-oxrm", requestId: "warning-first",
-  }), env);
-  const firstMessage = (await listThreadMessages(thread.id, env)).find((message) => message.source === "shadow-boundary-warning");
+  });
+  const [first, firstRepeat] = await Promise.all([
+    resolveTargetInstance(firstInput, env),
+    resolveTargetInstance(firstInput, env),
+  ]);
+  const firstMessages = (await listThreadMessages(thread.id, env)).filter((message) => message.source === "shadow-boundary-warning");
+  const firstMessage = firstMessages[0];
   const firstDelivery = await deliverWhatsAppReplies(env, async () => ({ ok: true, status: 200, json: async () => ({ ok: true, ids: ["first"] }) }));
+  assert.equal(firstMessages.length, 1);
   assert.equal(firstDelivery.delivered.length, 1);
 
   const second = await resolveTargetInstance(selectionInput({
@@ -173,11 +227,14 @@ test("a WhatsApp-bound shadow warning uses the outbound-intent recovery path aft
   const intent = state.outboundIntents.find((item) => item.messageId === secondMessage.id);
 
   assert.equal(first.shadowBoundaryWarning.emitted, true);
+  assert.equal(firstRepeat.shadowBoundaryWarning.emitted, false);
   assert.equal(second.shadowBoundaryWarning.emitted, true);
   assert.equal(firstMessage.chatId, "shadow-warning-chat");
   assert.equal(secondMessage.chatId, "shadow-warning-chat");
   assert.equal(recovered.delivered.length, 1);
   assert.deepEqual(calls.map((call) => call.body.to), ["shadow-warning-chat"]);
   assert.deepEqual(calls.map((call) => call.body.accountId), ["shadow-warning-account"]);
+  assert.equal(state.outboundIntents.filter((item) => item.messageId === firstMessage.id).length, 1);
+  assert.equal(state.outboundIntents.filter((item) => item.messageId === secondMessage.id).length, 1);
   assert.equal(intent.createdReason, "fresh_notification_after_cursor");
 });
