@@ -274,6 +274,19 @@ Break-glass is never an implicit admin bypass: it requires the exact target and
 action, an admin's recent authentication, a reason, and a change reference; it
 is audited before use and expires within fifteen minutes.
 
+Run `orkestr doctor system --json` for the read-only thread-resource policy
+report. It exposes only aggregate backend health, global and per-type modes and supported
+rollback plans, resource/grant/policy/listener/delivery counts, queue lag and
+dead letters, stale work, shadow mismatch totals, explicit-evidence backfill
+counts, and break-glass audit state. It never includes endpoints, credentials,
+message content, or resource/thread identifiers. Policy writes default to
+`unified`. `legacy` and `dual` are fail-closed and reported as unsupported
+until a real legacy writer exists; mailbox's only supported rollback is setting
+its access mode to `off`, which keeps the legacy connector inbox path while
+preserving unified records. Explicit oXRM/mailbox backfill accepts only typed
+resource metadata plus explicit permissions; names and shared ownership are
+reported as insufficient evidence rather than inferred.
+
 The installer records the default desktop, Gmail auth desktop, and manual
 intervention desktop in runtime settings. Codex-aware skills should read
 `orkestr whereiam --json` or `orkestr settings --json` instead of guessing which
