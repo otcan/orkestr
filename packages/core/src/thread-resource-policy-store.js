@@ -241,6 +241,12 @@ function ensureSchema(db) {
       instance_id text not null default '',
       account_id text not null default '',
       account_service text not null default '',
+      connector_service text not null default '',
+      connector_account_id text not null default '',
+      connector_conversation_id text not null default '',
+      connector_binding_id text not null default '',
+      connector_target_thread_id text not null default '',
+      connector_operation_ref text not null default '',
       resource_type text not null,
       resource_id text not null,
       actions_json text not null,
@@ -287,6 +293,12 @@ function ensureSchema(db) {
   ensureColumn(db, "orkestr_thread_resource_sessions", "instance_id", "text not null default ''");
   ensureColumn(db, "orkestr_thread_resource_sessions", "account_id", "text not null default ''");
   ensureColumn(db, "orkestr_thread_resource_sessions", "account_service", "text not null default ''");
+  ensureColumn(db, "orkestr_thread_resource_sessions", "connector_service", "text not null default ''");
+  ensureColumn(db, "orkestr_thread_resource_sessions", "connector_account_id", "text not null default ''");
+  ensureColumn(db, "orkestr_thread_resource_sessions", "connector_conversation_id", "text not null default ''");
+  ensureColumn(db, "orkestr_thread_resource_sessions", "connector_binding_id", "text not null default ''");
+  ensureColumn(db, "orkestr_thread_resource_sessions", "connector_target_thread_id", "text not null default ''");
+  ensureColumn(db, "orkestr_thread_resource_sessions", "connector_operation_ref", "text not null default ''");
   ensureColumn(db, "orkestr_thread_resource_sessions", "connector_tool", "text not null default ''");
   ensureColumn(db, "orkestr_thread_resource_sessions", "connector_action", "text not null default ''");
   db.exec("create unique index if not exists idx_mailbox_thread_listener_idempotency_unique on orkestr_mailbox_thread_listeners(idempotency_key) where idempotency_key <> '';");
@@ -349,6 +361,8 @@ function readState(db) {
       scopes: parseJson(row.scopes_json, []), principalKind: row.principal_kind || "external_instance", principalId: row.principal_id || "",
       ownerUserId: row.owner_user_id || "", instanceId: row.instance_id || "", accountId: row.account_id || "", accountService: row.account_service || "",
       resourceType: row.resource_type, resourceId: row.resource_id, actions: parseJson(row.actions_json, []),
+      connectorService: row.connector_service || "", connectorAccountId: row.connector_account_id || "", connectorConversationId: row.connector_conversation_id || "",
+      connectorBindingId: row.connector_binding_id || "", connectorTargetThreadId: row.connector_target_thread_id || "", connectorOperationRef: row.connector_operation_ref || "",
       connectorTool: row.connector_tool || "", connectorAction: row.connector_action || "",
       threadId: row.thread_id, grantThreadId: row.grant_thread_id || row.thread_id, rootThreadId: row.root_thread_id, boundaryId: row.boundary_id,
       policyRevision: Number(row.policy_revision || 0), grantRevision: Number(row.grant_revision || 0),
@@ -378,10 +392,11 @@ function replaceState(db, state = {}, auditOutboxUpserts = []) {
   for (const item of state.mailboxDeliveries || []) delivery.run(item.id, item.dedupeKey, item.resourceType, item.resourceId, item.mailboxId, item.listenerId || null, item.listenerGeneration || 0, item.threadId || null, item.state, item.epoch || 1, item.attemptCount || 0, item.maxAttempts || 1, item.nextAttemptAt || null, item.claimToken || null, item.claimExpiresAt || null, item.grantRevision || 0, item.policyRevision || 0, item.resourceGeneration || 1, item.messageKey, JSON.stringify(item.payload || {}), item.reason || null, item.createdAt, item.updatedAt, item.deliveredAt || null);
   const pumpLease = db.prepare("insert into orkestr_mailbox_thread_pump_leases(name, token, expires_at, updated_at) values (?, ?, ?, ?)");
   for (const item of state.mailboxPumpLeases || []) pumpLease.run(item.name, item.token, item.expiresAt, item.updatedAt);
-  const resourceSession = db.prepare("insert into orkestr_thread_resource_sessions(id, jti_hash, token_id_hash, bearer_hash, audience, scopes_json, principal_kind, principal_id, owner_user_id, instance_id, account_id, account_service, resource_type, resource_id, actions_json, connector_tool, connector_action, thread_id, grant_thread_id, root_thread_id, boundary_id, policy_revision, grant_revision, resource_generation, state, epoch, issued_at, expires_at, last_used_at, created_at, updated_at, invalidated_at, invalidation_reason) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+  const resourceSession = db.prepare("insert into orkestr_thread_resource_sessions(id, jti_hash, token_id_hash, bearer_hash, audience, scopes_json, principal_kind, principal_id, owner_user_id, instance_id, account_id, account_service, connector_service, connector_account_id, connector_conversation_id, connector_binding_id, connector_target_thread_id, connector_operation_ref, resource_type, resource_id, actions_json, connector_tool, connector_action, thread_id, grant_thread_id, root_thread_id, boundary_id, policy_revision, grant_revision, resource_generation, state, epoch, issued_at, expires_at, last_used_at, created_at, updated_at, invalidated_at, invalidation_reason) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
   for (const item of state.resourceSessions || []) {
     resourceSession.run(item.id, item.jtiHash, item.tokenIdHash, item.bearerHash || "", item.audience || "", JSON.stringify(item.scopes || []),
       item.principalKind || "external_instance", item.principalId || "", item.ownerUserId || "", item.instanceId || "", item.accountId || "", item.accountService || "",
+      item.connectorService || "", item.connectorAccountId || "", item.connectorConversationId || "", item.connectorBindingId || "", item.connectorTargetThreadId || "", item.connectorOperationRef || "",
       item.resourceType, item.resourceId, JSON.stringify(item.actions || []), item.connectorTool || "", item.connectorAction || "", item.threadId, item.grantThreadId || item.threadId, item.rootThreadId, item.boundaryId,
       item.policyRevision || 0, item.grantRevision || 0, item.resourceGeneration || 1,
       item.state || "active", item.epoch || 1, item.issuedAt, item.expiresAt, item.lastUsedAt || null,

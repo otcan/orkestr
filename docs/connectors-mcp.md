@@ -39,21 +39,26 @@ Connector calls are normally instance-scoped. `orkestr_auth`,
 connector account, chat, or instance id. A surface that cannot identify a
 registered resource therefore remains instance-scoped.
 
-An integration with a real registered resource can send the explicit
-`resource_type`, canonical `resource_id`, and `resource_action` context fields.
-In resource `enforce` mode, a non-operator bearer then needs all of the
-following exact claims: resource type/id, allowed resource actions, root and
-thread ids, boundary id, policy and grant revisions, resource generation, a
-jti, issued-at time, and expiry. The token lifetime is at most five minutes.
-The connector scope remains only an upper bound: it cannot create or widen a
-thread-resource grant. Missing or inferred resource targets are rejected.
+Only a resource-aware integration can execute a real registered resource. It
+must resolve the resource plus service, account, conversation, binding,
+target-thread, and operation-reference handles independently, then authorize
+that resolved target. Generic connector tools reject a resource bearer before
+they run a connector handler. In resource `enforce` mode, a non-operator
+resource bearer needs all of the following exact claims: resource type/id,
+allowed resource actions, root and thread ids, boundary id, policy and grant
+revisions, resource generation, a jti, issued-at time, and expiry. The token
+lifetime is at most five minutes. The connector scope remains only an upper
+bound: it cannot create or widen a thread-resource grant. Missing or inferred
+resource targets are rejected.
 
 Runtime/API code that has current effective authorization can call
 `issueConnectorMcpResourceToken`. It returns a crypto-random bearer once, with
 one exact action and a maximum five-minute lifetime. The durable session keeps
 only hashes of the bearer and jti, plus its exact resource, thread/root,
 boundary, fixed `orkestr-connectors-mcp` audience, source-grant, policy/grant
-revision, and resource generation binding.
+revision, resource generation binding, and exact connector service, account,
+conversation, binding, target-thread, and operation-reference handles. Empty
+handles are bound as empty too; a caller cannot add a target after issuance.
 
 Active resource-bound executions are stored transactionally with hashed bearer
 and jti values. They are revalidated on every use and invalidated in the same
