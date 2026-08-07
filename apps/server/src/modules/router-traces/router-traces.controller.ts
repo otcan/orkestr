@@ -43,6 +43,42 @@ function numberQuery(value: unknown, fallback = 0): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
+function boundedNumberQuery(value: unknown, fallback: number, max: number): number {
+  const parsed = numberQuery(value, fallback);
+  return Math.min(max, Math.max(1, parsed));
+}
+
+function timeoutPayload(timeoutMs: number, repair: boolean) {
+  return {
+    ok: false,
+    status: "timeout",
+    summary: `WhatsApp/router doctor did not finish within ${timeoutMs}ms.`,
+    repair,
+    generatedAt: new Date().toISOString(),
+    counts: { threads: 0, checks: 1, errors: 1, warnings: 0, repairs: 0 },
+    checks: [{
+      code: "router_doctor_timeout",
+      severity: "error",
+      summary: "Run the doctor for a specific thread or trace, or rerun with a larger timeout during an attended diagnostic window.",
+      timeoutMs,
+    }],
+    repairs: [],
+    threads: [],
+  };
+}
+
+async function boundedDoctorResult<T>(promise: Promise<T>, timeoutMs: number, repair: boolean): Promise<T | ReturnType<typeof timeoutPayload>> {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  return Promise.race([
+    promise,
+    new Promise<ReturnType<typeof timeoutPayload>>((resolve) => {
+      timer = setTimeout(() => resolve(timeoutPayload(timeoutMs, repair)), timeoutMs);
+    }),
+  ]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+}
+
 @Controller("api/router-traces")
 export class RouterTracesController {
   @Get()
@@ -78,7 +114,8 @@ export class RouterTracesController {
     if (repair && !isAdminPrincipal(principal)) throw httpError("admin_required_for_router_repair", 403);
     const thread = clean(query.thread || query.threadId);
     if (allowed && thread && !allowed.has(thread)) throw httpError("thread_access_denied", 403);
-    const result = await doctorWhatsAppRouter({
+    const timeoutMs = boundedNumberQuery(query.timeoutMs || query.timeout, 30_000, 120_000);
+    const doctorRun = doctorWhatsAppRouter({
       thread,
       routerTraceId: clean(query.trace || query.routerTraceId),
       repair,
@@ -89,6 +126,7 @@ export class RouterTracesController {
       listConnectorOutboxJobsFn: listConnectorOutboxJobs,
       releaseConnectorOutboxClaimFn: releaseConnectorOutboxClaim,
     });
+    const result = repair ? await doctorRun : await boundedDoctorResult(doctorRun, timeoutMs, repair);
     if (!allowed) return result;
     return {
       ...result,

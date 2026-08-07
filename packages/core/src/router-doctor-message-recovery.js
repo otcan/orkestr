@@ -67,13 +67,14 @@ export function runtimeDeliveryMissingAssistantIssue({
   runtimeDelivered,
   shortCircuitTrace,
   assistant,
+  newerWhatsAppUserMessage,
   terminalUserMessageFn,
   runtimeReadyFn,
   whatsappMessageFn,
   issueFn,
 } = {}) {
   if (shortCircuitTrace || !terminalUserMessageFn(message) || !runtimeDelivered || assistant) return null;
-  if (newerWhatsAppUser(messages, message, whatsappMessageFn) || !runtimeReadyFn(status)) return null;
+  if ((newerWhatsAppUserMessage || newerWhatsAppUser(messages, message, whatsappMessageFn)) || !runtimeReadyFn(status)) return null;
   const messageAgeMs = ageMs(message.updatedAt || message.createdAt);
   if (messageAgeMs < thresholdMs) return null;
   return issueFn("runtime_delivery_completed_without_assistant", "error", "WhatsApp input reached an idle runtime but produced no newer same-chat assistant reply.", {
