@@ -220,6 +220,11 @@ dispatcher that resolves the actual resource independently of caller input.
 The generic connector MCP tools deliberately reject them rather than treating a
 caller-supplied resource ID as proof of the target.
 
+Break-glass access is enabled only after a transactional, append-preserving
+audit row records the canonical resource and thread IDs, permission, boundary,
+owner, expiry, and change reference. Best-effort event delivery supplements
+this row; it is never the sole break-glass evidence.
+
 The shared-app XRM review surface currently has a share-session identity, not
 an Orkestr thread identity, and is therefore deliberately instance-scoped. It
 does not receive a thread grant by implication. Any new thread-driven oXRM

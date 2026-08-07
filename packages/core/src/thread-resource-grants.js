@@ -198,6 +198,13 @@ function normalizeState(raw = {}, env = process.env) {
     })).filter((item) => item.id && item.jtiHash && item.tokenIdHash && item.resourceType && item.resourceId && item.actions.length && item.threadId && item.rootThreadId && item.boundaryId && item.issuedAt && item.expiresAt),
     policyAuditOutbox: (Array.isArray(raw?.policyAuditOutbox) ? raw.policyAuditOutbox : []).map((item) => ({
       ...item,
+      resourceType: normalizeThreadResourceType(item?.resourceType),
+      resourceId: clean(item?.resourceId),
+      threadId: clean(item?.threadId),
+      permission: clean(item?.permission).toLowerCase(),
+      boundaryId: clean(item?.boundaryId),
+      ownerUserId: clean(item?.ownerUserId),
+      changeRef: clean(item?.changeRef),
       state: ["pending", "claimed", "delivered"].includes(clean(item?.state).toLowerCase()) ? clean(item.state).toLowerCase() : "pending",
       claimToken: clean(item?.claimToken) || null,
       claimExpiresAt: clean(item?.claimExpiresAt) || null,
@@ -223,6 +230,12 @@ async function mutateState(env, operation) {
         id: randomUUID(),
         action: clean(audit.action || "thread_resource_policy_mutation"),
         resourceType: normalizeThreadResourceType(audit.resourceType),
+        resourceId: clean(audit.resourceId),
+        threadId: clean(audit.threadId),
+        permission: clean(audit.permission).toLowerCase(),
+        boundaryId: clean(audit.boundaryId),
+        ownerUserId: clean(audit.ownerUserId),
+        changeRef: clean(audit.changeRef || audit.breakGlassChangeRef || audit.changeReference),
         outcome: clean(audit.outcome || "allowed"),
         actorUserId: clean(audit.actorUserId || "system"),
         reason: clean(audit.reason || "").slice(0, 160),
@@ -485,7 +498,7 @@ async function evaluateThreadResourceAccess(input = {}, env = process.env) {
   const recentAuthAt = Date.parse(clean(input.recentAuthAt || principal?.recentAuthAt || principal?.authenticatedAt));
   const recentAuthWindowMs = Math.max(1_000, Math.min(15 * 60_000, Number(env.ORKESTR_THREAD_RESOURCE_BREAK_GLASS_RECENT_AUTH_MS || 15 * 60_000) || 15 * 60_000));
   const recentAuth = Number.isFinite(recentAuthAt) && recentAuthAt >= Date.now() - recentAuthWindowMs && recentAuthAt <= Date.now() + 60_000;
-  if (input.breakGlass === true && (!isAdminPrincipal(principal || {}) || !reason || !changeRef || !recentAuth)) {
+  if (input.breakGlass === true && (!threadId || !isAdminPrincipal(principal || {}) || !reason || !changeRef || !recentAuth)) {
     const decision = { ...base, reason: `${resourceType}_break_glass_requirements_missing` };
     await auditDecision(decision, env); return decision;
   }
@@ -496,6 +509,8 @@ async function evaluateThreadResourceAccess(input = {}, env = process.env) {
     // Break-glass is usable only after its immutable audit has been committed.
     await recordThreadResourcePolicyAudit({
       action: "break_glass", resourceType, actorUserId: clean(principal?.userId || "system"),
+      resourceId: decision.resourceId, threadId: decision.threadId, permission: decision.permission,
+      boundaryId: decision.boundaryId, ownerUserId: decision.ownerUserId, changeRef,
       outcome: "allowed", reason, expiresAt,
     }, env);
     await auditDecision(decision, env);
@@ -531,6 +546,12 @@ export async function recordThreadResourcePolicyAudit(input = {}, env = process.
   const audit = {
     action: clean(input.action || "thread_resource_policy_mutation"),
     resourceType: normalizeThreadResourceType(input.resourceType),
+    resourceId: clean(input.resourceId || input.resource_id),
+    threadId: clean(input.threadId || input.thread_id),
+    permission: clean(input.permission).toLowerCase(),
+    boundaryId: clean(input.boundaryId || input.boundary_id),
+    ownerUserId: clean(input.ownerUserId || input.owner_user_id),
+    changeRef: clean(input.changeRef || input.change_ref || input.breakGlassChangeRef || input.changeReference),
     outcome: clean(input.outcome || "allowed"),
     actorUserId: clean(input.actorUserId || "system"),
     reason: clean(input.reason || "").slice(0, 160),

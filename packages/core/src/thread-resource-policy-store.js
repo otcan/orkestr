@@ -215,6 +215,12 @@ function ensureSchema(db) {
       id text primary key,
       action text not null,
       resource_type text not null default '',
+      resource_id text not null default '',
+      thread_id text not null default '',
+      permission text not null default '',
+      boundary_id text not null default '',
+      owner_user_id text not null default '',
+      change_ref text not null default '',
       outcome text not null,
       actor_user_id text not null,
       reason text,
@@ -283,6 +289,12 @@ function ensureSchema(db) {
   ensureColumn(db, "orkestr_thread_resource_audit_outbox", "claim_token", "text");
   ensureColumn(db, "orkestr_thread_resource_audit_outbox", "claim_expires_at", "text");
   ensureColumn(db, "orkestr_thread_resource_audit_outbox", "delivered_at", "text");
+  ensureColumn(db, "orkestr_thread_resource_audit_outbox", "resource_id", "text not null default ''");
+  ensureColumn(db, "orkestr_thread_resource_audit_outbox", "thread_id", "text not null default ''");
+  ensureColumn(db, "orkestr_thread_resource_audit_outbox", "permission", "text not null default ''");
+  ensureColumn(db, "orkestr_thread_resource_audit_outbox", "boundary_id", "text not null default ''");
+  ensureColumn(db, "orkestr_thread_resource_audit_outbox", "owner_user_id", "text not null default ''");
+  ensureColumn(db, "orkestr_thread_resource_audit_outbox", "change_ref", "text not null default ''");
   ensureColumn(db, "orkestr_thread_resource_sessions", "grant_thread_id", "text not null default ''");
   ensureColumn(db, "orkestr_thread_resource_sessions", "bearer_hash", "text not null default ''");
   ensureColumn(db, "orkestr_thread_resource_sessions", "audience", "text not null default ''");
@@ -351,7 +363,8 @@ function readState(db) {
     })),
     mailboxPumpLeases: db.prepare("select * from orkestr_mailbox_thread_pump_leases").all().map((row) => ({ name: row.name, token: row.token, expiresAt: row.expires_at, updatedAt: row.updated_at })),
     policyAuditOutbox: db.prepare("select * from orkestr_thread_resource_audit_outbox order by created_at asc").all().map((row) => ({
-      id: row.id, action: row.action, resourceType: row.resource_type || "", outcome: row.outcome,
+      id: row.id, action: row.action, resourceType: row.resource_type || "", resourceId: row.resource_id || "", threadId: row.thread_id || "",
+      permission: row.permission || "", boundaryId: row.boundary_id || "", ownerUserId: row.owner_user_id || "", changeRef: row.change_ref || "", outcome: row.outcome,
       actorUserId: row.actor_user_id, reason: row.reason || "", expiresAt: row.expires_at || null,
       policyRevision: Number(row.policy_revision || 0), state: row.state, claimToken: row.claim_token || null,
       claimExpiresAt: row.claim_expires_at || null, deliveredAt: row.delivered_at || null, createdAt: row.created_at,
@@ -406,9 +419,9 @@ function replaceState(db, state = {}, auditOutboxUpserts = []) {
   // but audit rows are only inserted or explicitly state-transitioned here.
   const auditOutbox = db.prepare(`
     insert into orkestr_thread_resource_audit_outbox(
-      id, action, resource_type, outcome, actor_user_id, reason, expires_at,
-      policy_revision, state, claim_token, claim_expires_at, delivered_at, created_at
-    ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      id, action, resource_type, resource_id, thread_id, permission, boundary_id, owner_user_id, change_ref,
+      outcome, actor_user_id, reason, expires_at, policy_revision, state, claim_token, claim_expires_at, delivered_at, created_at
+    ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     on conflict(id) do update set
       state = excluded.state,
       claim_token = excluded.claim_token,
@@ -416,8 +429,8 @@ function replaceState(db, state = {}, auditOutboxUpserts = []) {
       delivered_at = excluded.delivered_at
   `);
   for (const item of auditOutboxUpserts || []) {
-    auditOutbox.run(item.id, item.action, item.resourceType || "", item.outcome, item.actorUserId, item.reason || null,
-      item.expiresAt || null, item.policyRevision || 0, item.state || "pending", item.claimToken || null,
+    auditOutbox.run(item.id, item.action, item.resourceType || "", item.resourceId || "", item.threadId || "", item.permission || "", item.boundaryId || "", item.ownerUserId || "", item.changeRef || "",
+      item.outcome, item.actorUserId, item.reason || null, item.expiresAt || null, item.policyRevision || 0, item.state || "pending", item.claimToken || null,
       item.claimExpiresAt || null, item.deliveredAt || null, item.createdAt);
   }
   setMeta(db, "revision", Number(state.revision || 0));

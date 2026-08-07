@@ -263,6 +263,11 @@ test("break-glass requires recent authentication and a change reference", async 
   await advanceThreadResourceGeneration("desktop", "desk-a", "admin", {}, env);
   const missing = await authorizeThreadResourceAccess({ principal, threadId: parent.id, resourceType: "desktop", resourceKey: "desk-a", permission: "operate", breakGlass: true, breakGlassReason: "incident" }, env);
   assert.equal(missing.granted, false);
+  const missingThread = await authorizeThreadResourceAccess({
+    principal, resourceType: "desktop", resourceKey: "desk-a", permission: "operate", breakGlass: true,
+    breakGlassReason: "incident", breakGlassChangeRef: "CHG-NO-THREAD", recentAuthAt: new Date().toISOString(),
+  }, env);
+  assert.equal(missingThread.granted, false);
   const allowed = await authorizeThreadResourceAccess({
     principal, threadId: parent.id, resourceType: "desktop", resourceKey: "desk-a", permission: "operate", breakGlass: true,
     breakGlassReason: "incident", breakGlassChangeRef: "CHG-123", recentAuthAt: new Date().toISOString(),
@@ -279,7 +284,15 @@ test("break-glass persists transactional audit before use when best-effort event
   const allowed = await authorizeThreadResourceAccess({ principal, threadId: parent.id, resourceType: "desktop", resourceKey: "desk-a", permission: "operate", breakGlass: true, breakGlassReason: "incident", breakGlassChangeRef: "CHG-1", recentAuthAt: new Date().toISOString() }, env);
   assert.equal(allowed.breakGlass, true);
   const state = await readThreadResourcePolicyState(env);
-  assert.equal(state.policyAuditOutbox.some((item) => item.action === "break_glass" && item.outcome === "allowed"), true);
+  const audit = state.policyAuditOutbox.find((item) => item.action === "break_glass" && item.outcome === "allowed");
+  assert.ok(audit, "break-glass remains durably auditable when event append fails");
+  assert.deepEqual({
+    resourceType: audit.resourceType, resourceId: audit.resourceId, threadId: audit.threadId,
+    permission: audit.permission, boundaryId: audit.boundaryId, ownerUserId: audit.ownerUserId, changeRef: audit.changeRef,
+  }, {
+    resourceType: allowed.resourceType, resourceId: allowed.resourceId, threadId: allowed.threadId,
+    permission: allowed.permission, boundaryId: allowed.boundaryId, ownerUserId: allowed.ownerUserId, changeRef: "CHG-1",
+  });
 });
 
 test("policy DB retries cleanly after a failed legacy desktop migration", async () => {

@@ -69,7 +69,7 @@ function fakePolicyPool() {
 
   async function dispatch(client, sql, params = []) {
     const text = lower(sql);
-    if (text.startsWith("create table") || text.startsWith("create unique index") || text.startsWith("create index")) return { rows: [] };
+    if (text.startsWith("create table") || text.startsWith("create unique index") || text.startsWith("create index") || text.startsWith("alter table")) return { rows: [] };
     if (text.startsWith("begin isolation level serializable")) {
       if (serializationFailures > 0) {
         serializationFailures -= 1;
@@ -124,8 +124,8 @@ function fakePolicyPool() {
     if (text.startsWith("insert into orkestr_thread_resource_audit_outbox")) {
       const target = storeFor(client);
       const record = {
-        id: params[0], action: params[1], resource_type: params[2], outcome: params[3], actor_user_id: params[4], reason: params[5],
-        expires_at: params[6], policy_revision: params[7], state: params[8], claim_token: params[9], claim_expires_at: params[10], delivered_at: params[11], created_at: params[12],
+        id: params[0], action: params[1], resource_type: params[2], resource_id: params[3], thread_id: params[4], permission: params[5], boundary_id: params[6], owner_user_id: params[7], change_ref: params[8],
+        outcome: params[9], actor_user_id: params[10], reason: params[11], expires_at: params[12], policy_revision: params[13], state: params[14], claim_token: params[15], claim_expires_at: params[16], delivered_at: params[17], created_at: params[18],
       };
       const existing = target.audit.get(record.id);
       target.audit.set(record.id, existing ? { ...existing, state: record.state, claim_token: record.claim_token, claim_expires_at: record.claim_expires_at, delivered_at: record.delivered_at } : record);
@@ -162,7 +162,7 @@ test("PostgreSQL policy store commits complete state, preserves audit, and rolls
   const env = policyEnv(home);
   __threadResourcePolicyStoreTestInternals.setPostgresPoolFactory(() => fakePolicyPool());
   try {
-    const audit = { id: "audit-old", action: "break_glass", resourceType: "oxrm", outcome: "allowed", actorUserId: "admin", reason: "incident", expiresAt: null, policyRevision: 1, state: "pending", claimToken: null, claimExpiresAt: null, deliveredAt: null, createdAt: "2026-01-01T00:00:00.000Z" };
+    const audit = { id: "audit-old", action: "break_glass", resourceType: "oxrm", resourceId: "local:admin:oxrm:crm", threadId: "thread-1", permission: "read", boundaryId: "local", ownerUserId: "admin", changeRef: "CHG-123", outcome: "allowed", actorUserId: "admin", reason: "incident", expiresAt: null, policyRevision: 1, state: "pending", claimToken: null, claimExpiresAt: null, deliveredAt: null, createdAt: "2026-01-01T00:00:00.000Z" };
     await withThreadResourcePolicyTransaction((state) => {
       state.revision = 1;
       state.resources = [resource()];
@@ -186,6 +186,7 @@ test("PostgreSQL policy store commits complete state, preserves audit, and rolls
     assert.equal(committed.mailboxDeliveries.length, 1);
     assert.equal(committed.mailboxPumpLeases.length, 1);
     assert.equal(committed.resourceSessions[0].audience, "orkestr-connectors-mcp");
+    assert.deepEqual(committed.policyAuditOutbox.find((item) => item.id === audit.id), audit);
     assert.equal((await readThreadResourcePolicyState({ ...env, ORKESTR_THREAD_RESOURCE_POLICY_STORE: "postgresql" })).revision, 1);
     assert.equal(await fs.stat(path.join(home, "thread-resource-policy.sqlite")).then(() => true, () => false), false);
     await assert.rejects(() => withThreadResourcePolicyTransaction((state) => { state.resources.push(resource("rollback")); throw new Error("rollback"); }, env), /rollback/);

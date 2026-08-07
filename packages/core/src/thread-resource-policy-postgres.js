@@ -193,6 +193,12 @@ async function ensureSchema(pool) {
       id text primary key,
       action text not null,
       resource_type text not null default '',
+      resource_id text not null default '',
+      thread_id text not null default '',
+      permission text not null default '',
+      boundary_id text not null default '',
+      owner_user_id text not null default '',
+      change_ref text not null default '',
       outcome text not null,
       actor_user_id text not null,
       reason text,
@@ -207,6 +213,10 @@ async function ensureSchema(pool) {
     create index if not exists idx_thread_resource_audit_outbox_state
       on orkestr_thread_resource_audit_outbox(state, created_at);
   `);
+  for (const [column, definition] of [
+    ["resource_id", "text not null default ''"], ["thread_id", "text not null default ''"], ["permission", "text not null default ''"],
+    ["boundary_id", "text not null default ''"], ["owner_user_id", "text not null default ''"], ["change_ref", "text not null default ''"],
+  ]) await pool.query(`alter table orkestr_thread_resource_audit_outbox add column if not exists ${column} ${definition}`);
   // Deliberately do not import JSON/SQLite state: an operator must use an
   // explicit, evidence-reviewed migration rather than inferred legacy rows.
   await pool.query("insert into orkestr_thread_resource_meta(key, value) values ($1, $2) on conflict(key) do nothing", ["schema_version", "1"]);
@@ -255,7 +265,8 @@ async function readState(client) {
     updatedAt: updatedAt || null,
     policies, resources, grants, ceilings, mutations, mailboxListeners, mailboxDeliveries, mailboxPumpLeases, resourceSessions,
     policyAuditOutbox: audit.rows.map((row) => ({
-      id: row.id, action: row.action, resourceType: row.resource_type || "", outcome: row.outcome, actorUserId: row.actor_user_id,
+      id: row.id, action: row.action, resourceType: row.resource_type || "", resourceId: row.resource_id || "", threadId: row.thread_id || "",
+      permission: row.permission || "", boundaryId: row.boundary_id || "", ownerUserId: row.owner_user_id || "", changeRef: row.change_ref || "", outcome: row.outcome, actorUserId: row.actor_user_id,
       reason: row.reason || "", expiresAt: row.expires_at || null, policyRevision: Number(row.policy_revision || 0), state: row.state,
       claimToken: row.claim_token || null, claimExpiresAt: row.claim_expires_at || null, deliveredAt: row.delivered_at || null, createdAt: row.created_at,
     })),
@@ -288,16 +299,16 @@ async function replaceState(client, state = {}, auditOutboxUpserts = []) {
   for (const item of auditOutboxUpserts || []) {
     await client.query(`
       insert into ${tables.policyAuditOutbox}(
-        id, action, resource_type, outcome, actor_user_id, reason, expires_at,
-        policy_revision, state, claim_token, claim_expires_at, delivered_at, created_at
-      ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+        id, action, resource_type, resource_id, thread_id, permission, boundary_id, owner_user_id, change_ref,
+        outcome, actor_user_id, reason, expires_at, policy_revision, state, claim_token, claim_expires_at, delivered_at, created_at
+      ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
       on conflict(id) do update set
         state = excluded.state,
         claim_token = excluded.claim_token,
         claim_expires_at = excluded.claim_expires_at,
         delivered_at = excluded.delivered_at
-    `, [item.id, item.action, item.resourceType || "", item.outcome, item.actorUserId, item.reason || null,
-      item.expiresAt || null, item.policyRevision || 0, item.state || "pending", item.claimToken || null,
+    `, [item.id, item.action, item.resourceType || "", item.resourceId || "", item.threadId || "", item.permission || "", item.boundaryId || "", item.ownerUserId || "", item.changeRef || "",
+      item.outcome, item.actorUserId, item.reason || null, item.expiresAt || null, item.policyRevision || 0, item.state || "pending", item.claimToken || null,
       item.claimExpiresAt || null, item.deliveredAt || null, item.createdAt]);
   }
   await client.query("insert into orkestr_thread_resource_meta(key, value) values ($1, $2) on conflict(key) do update set value = excluded.value", ["revision", String(Number(state.revision || 0))]);
