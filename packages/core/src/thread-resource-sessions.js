@@ -14,6 +14,7 @@ import {
 const clean = (value = "") => String(value || "").trim();
 const maxTokenLifetimeMs = 5 * 60_000;
 const hash = (value = "") => crypto.createHash("sha256").update(String(value || "")).digest("hex");
+export const connectorMcpResourceAudience = "orkestr-connectors-mcp";
 
 function deny(reason, statusCode = 403) {
   const error = new Error(`connector_mcp_${reason}`);
@@ -50,6 +51,7 @@ function claims(auth = {}) {
     jtiHash: clean(auth.resourceJtiHash),
     tokenIdHash: clean(auth.tokenIdHash),
     bearerHash: clean(auth.bearerHash),
+    audience: clean(auth.audience),
     scopes: Array.isArray(auth.scopes) ? auth.scopes.map((scope) => clean(scope).toLowerCase()).filter(Boolean) : [],
     principalKind: clean(auth.principalKind) || "external_instance", principalId: clean(auth.principalId),
     ownerUserId: clean(auth.ownerUserId), instanceId: clean(auth.instanceId), accountId: clean(auth.accountId), accountService: clean(auth.accountService).toLowerCase(),
@@ -66,7 +68,8 @@ function validClaimSet(value = {}) {
   return Boolean(
     value.resourceType && value.resourceId && value.actions.length && value.rootThreadId && value.threadId && value.boundaryId &&
     Number.isInteger(value.policyRevision) && value.policyRevision >= 0 && Number.isInteger(value.grantRevision) && value.grantRevision > 0 &&
-    Number.isInteger(value.resourceGeneration) && value.resourceGeneration > 0 && value.jtiHash && value.tokenIdHash && value.bearerHash && value.issuedAt && value.expiresAt
+    Number.isInteger(value.resourceGeneration) && value.resourceGeneration > 0 && value.jtiHash && value.tokenIdHash && value.bearerHash &&
+    value.audience === connectorMcpResourceAudience && value.issuedAt && value.expiresAt
   );
 }
 
@@ -97,7 +100,7 @@ function sameActions(left = [], right = []) {
 }
 
 function sessionMatches(session = {}, value = {}) {
-  return session.jtiHash === value.jtiHash && session.tokenIdHash === value.tokenIdHash && session.bearerHash === value.bearerHash &&
+  return session.jtiHash === value.jtiHash && session.tokenIdHash === value.tokenIdHash && session.bearerHash === value.bearerHash && session.audience === value.audience &&
     session.resourceType === value.resourceType && session.resourceId === value.resourceId &&
     sameActions(actions(session.actions, value.resourceType), value.actions) &&
     session.threadId === value.threadId && session.grantThreadId === value.grantThreadId && session.rootThreadId === value.rootThreadId && session.boundaryId === value.boundaryId &&
@@ -153,6 +156,7 @@ export async function assertConnectorMcpResourceAccess(auth = {}, input = {}, en
   if (mode !== "enforce") return auth;
   if (!requested.resourceType || !requested.resourceId || !requested.action || !requested.threadId) deny("resource_target_required", 400);
   if (!resourceType || !actions([requested.action], resourceType).includes(requested.action)) deny("resource_target_invalid", 400);
+  if (value.audience !== connectorMcpResourceAudience) deny("resource_audience_denied", 401);
   if (!validClaimSet(value)) deny("resource_claims_required", 401);
   const lifetimeError = validLifetime(value);
   if (lifetimeError) deny(lifetimeError, 401);
@@ -191,7 +195,7 @@ function issuedAuth(session = {}) {
     resourceType: session.resourceType || "", resourceId: session.resourceId || "", resourceActions: session.actions || [],
     rootThreadId: session.rootThreadId || "", threadId: session.threadId || "", boundaryId: session.boundaryId || "",
     policyRevision: Number(session.policyRevision || 0), grantRevision: Number(session.grantRevision || 0), resourceGeneration: Number(session.resourceGeneration || 0),
-    resourceJtiHash: session.jtiHash || "", tokenIdHash: session.tokenIdHash || "", bearerHash: session.bearerHash || "",
+    resourceJtiHash: session.jtiHash || "", tokenIdHash: session.tokenIdHash || "", bearerHash: session.bearerHash || "", audience: session.audience || "",
     issuedAt: session.issuedAt || "", expiresAt: session.expiresAt || "", operator: false,
   };
 }
@@ -236,7 +240,7 @@ export async function issueConnectorMcpResourceToken(input = {}, env = process.e
   const bearer = `rt_${randomBytes(32).toString("base64url")}`;
   const jti = randomUUID();
   const value = {
-    jtiHash: hash(jti), tokenIdHash: hash(`issued:${jti}`), bearerHash: hash(bearer),
+    jtiHash: hash(jti), tokenIdHash: hash(`issued:${jti}`), bearerHash: hash(bearer), audience: connectorMcpResourceAudience,
     scopes: connectorScopes(input.scopes), principalKind: clean(input.principalKind || input.principal_kind) || "external_instance",
     principalId: clean(input.principalId || input.principal_id || principal?.userId), ownerUserId: resource.ownerUserId,
     instanceId: clean(input.instanceId || input.instance_id), accountId: clean(input.accountId || input.account_id), accountService: clean(input.accountService || input.account_service).toLowerCase(),

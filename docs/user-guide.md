@@ -231,6 +231,16 @@ path while existing desktop grants are migrated.
 Decisions include the exact resource, policy revision, grant revision, and
 resource generation for callers that need to reject stale work.
 
+For clustered deployments, set `ORKESTR_THREAD_RESOURCE_POLICY_STORE=postgres`
+and configure `ORKESTR_THREAD_RESOURCE_POLICY_POSTGRES_URL` (or the matching
+`ORKESTR_THREAD_RESOURCE_POLICY_PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`,
+and `PGPASSWORD` variables). PostgreSQL uses serializable, metadata-row-locked
+whole-state transactions and never falls back to SQLite or JSON. It creates an
+empty unified schema only: importing legacy desktop or JSON state is an
+explicit, evidence-reviewed operator migration, never an automatic inference.
+The doctor reports only `postgres` health and aggregate counts; it does not
+expose connection details or credentials.
+
 Use independent rollout modes per resource type:
 
 ```text

@@ -52,7 +52,8 @@ Runtime/API code that has current effective authorization can call
 `issueConnectorMcpResourceToken`. It returns a crypto-random bearer once, with
 one exact action and a maximum five-minute lifetime. The durable session keeps
 only hashes of the bearer and jti, plus its exact resource, thread/root,
-boundary, source-grant, policy/grant revision, and resource generation binding.
+boundary, fixed `orkestr-connectors-mcp` audience, source-grant, policy/grant
+revision, and resource generation binding.
 
 Active resource-bound executions are stored transactionally with hashed bearer
 and jti values. They are revalidated on every use and invalidated in the same
