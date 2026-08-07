@@ -2,6 +2,7 @@ import { appendEvent } from "../../storage/src/store.js";
 import { canAccessOwner, isAdminPrincipal } from "./policy.js";
 import { listTenantVms } from "./tenant-vm-registry.js";
 import { authorizeThreadResourceAccess, threadResourceAccessMode } from "./thread-resource-grants.js";
+import { emitShadowBoundaryChatWarning } from "./shadow-boundary-chat-warning.js";
 import { adminUserId, normalizeUserId } from "./users.js";
 
 function clean(value = "") {
@@ -77,6 +78,14 @@ function publicResolution(result = {}) {
     error: cleanLower(result.error || ""),
     candidateCount: Number(result.candidates?.length || 0),
     authorizedCandidateCount: Number(result.authorizedCandidateCount || 0),
+    shadowBoundaryWarning: {
+      eligible: result.shadowBoundaryWarning?.eligible === true,
+      emitted: result.shadowBoundaryWarning?.emitted === true,
+      resourceType: cleanLower(result.shadowBoundaryWarning?.resourceType || result.targetType || ""),
+      mode: cleanLower(result.shadowBoundaryWarning?.mode || ""),
+      reason: cleanLower(result.shadowBoundaryWarning?.reason || "not_evaluated"),
+      notificationId: clean(result.shadowBoundaryWarning?.notificationId || ""),
+    },
   };
 }
 
@@ -171,6 +180,16 @@ export async function resolveTargetInstance(input = {}, env = process.env) {
     : ownerAuthorized;
   let result;
 
+  const finalize = async (resolution) => {
+    resolution.shadowBoundaryWarning = await emitShadowBoundaryChatWarning({
+      resolution,
+      input: { ...input, resourceType },
+      decision: decisionById.get(resolution.selectedTarget?.id) || null,
+    }, env);
+    await auditResolution(resolution, input, env);
+    return resolution;
+  };
+
   if (explicitTargetId) {
     const candidate = ownerScoped.find((item) => item.id === explicitTargetId);
     if (!candidate) result = failure(input, ownerScoped, authorized, "target_not_found", 404, { selectionSource: "explicit_request", ambiguityResult: "not_found" });
@@ -182,8 +201,7 @@ export async function resolveTargetInstance(input = {}, env = process.env) {
         : cleanLower(input.selectionSource || "explicit_request"),
       ambiguityResult: "explicit_match",
     });
-    await auditResolution(result, input, env);
-    return result;
+    return finalize(result);
   }
 
   const eligible = authorized.filter((candidate) => candidate.eligible);
@@ -197,8 +215,7 @@ export async function resolveTargetInstance(input = {}, env = process.env) {
   } else {
     result = failure(input, ownerScoped, authorized, "instance_selection_required", 409, { selectionSource: "missing_target", ambiguityResult: "multiple_match" });
   }
-  await auditResolution(result, input, env);
-  return result;
+  return finalize(result);
 }
 
 export async function requireResolvedTargetInstance(input = {}, env = process.env) {
