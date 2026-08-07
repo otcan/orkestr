@@ -24,6 +24,7 @@ import {
   safeSegment,
   nowIso,
 } from "./mailbox-normalization.js";
+import { routeMainMailboxThreadDelivery } from "./mailbox-thread-delivery.js";
 
 export {
   extractForwardingVerificationCandidates,
@@ -33,6 +34,14 @@ export {
   publicMailbox,
 };
 export { mailboxInfrastructureStatus };
+export {
+  createMailboxThreadListener,
+  dispatchMailboxThreadDeliveries,
+  enqueueMailboxThreadDeliveries,
+  listMailboxThreadListeners,
+  mailboxThreadDeliveryStatus,
+  revokeMailboxThreadListener,
+} from "./mailbox-thread-delivery.js";
 export {
   deleteMailboxForPrincipal,
   rotateMailboxForPrincipal,
@@ -462,18 +471,8 @@ export async function routeMailboxMessage(input = {}, env = process.env) {
     };
   }
 
-  return {
-    ok: true,
-    action: "connector_inbox_required",
-    created: null,
-    mailbox: publicMailbox(mailbox, env),
-    connectorInboxInput: {
-      id: idempotencyKey,
-      connector: "mailbox",
-      accountId: mailbox.id,
-      conversationId: mailbox.id,
-      payload: message,
-    },
-    idempotencyKey,
-  };
+  // Main-instance mailbox listener delivery is separate from the instance
+  // mailbox lifecycle. The connector ingress owns global dedupe and invokes
+  // the exact-listener dispatcher after spooling the message once.
+  return routeMainMailboxThreadDelivery({ mailbox, message, idempotencyKey, publicMailbox: publicMailbox(mailbox, env) }, env);
 }

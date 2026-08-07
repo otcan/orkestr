@@ -39,7 +39,8 @@ test("virtual browsers can be prepared without launching Chrome", async () => {
   assert.equal(opened.debugPort, 9223);
   assert.equal(browsers.find((browser) => browser.slug === "linkedin").configured, true);
   assert.equal(browsers.find((browser) => browser.slug === "linkedin").type, "desktop");
-  assert.equal(events.at(-1).type, "browser_open_requested");
+  assert.equal(events.some((event) => event.type === "browser_open_requested"), true);
+  assert.equal(events.some((event) => event.type === "thread_resource_access_shadow_denied"), true);
 });
 
 test("virtual browser management exposes stop and cleanup actions", async () => {

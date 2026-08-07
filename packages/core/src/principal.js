@@ -42,6 +42,9 @@ export function principalFromSecuritySession(session = {}, env = process.env) {
     role,
     source: "browser-session",
     sessionId: String(session.id || "").trim(),
+    // This is derived from the verified pairing session, never from a request
+    // parameter. Break-glass uses it as the recent reauthentication anchor.
+    authenticatedAt: String(session.createdAt || "").trim(),
     displayName: String(session.displayName || (role === "admin" ? "Admin" : userId)).trim(),
   };
 }

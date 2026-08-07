@@ -1,6 +1,7 @@
 import { appendEvent } from "../../storage/src/store.js";
 import { canAccessOwner, isAdminPrincipal } from "./policy.js";
 import { listTenantVms } from "./tenant-vm-registry.js";
+import { authorizeThreadResourceAccess, threadResourceAccessMode } from "./thread-resource-grants.js";
 import { adminUserId, normalizeUserId } from "./users.js";
 
 function clean(value = "") {
@@ -142,13 +143,38 @@ export async function resolveTargetInstance(input = {}, env = process.env) {
     .filter(Boolean);
   const owner = clean(input.ownerUserId) ? normalizeUserId(input.ownerUserId) : "";
   const ownerScoped = owner ? candidates.filter((candidate) => candidate.ownerUserId === owner) : candidates;
-  const authorized = ownerScoped.filter((candidate) => canAccessOwner(principal, candidate.ownerUserId, env));
+  const ownerAuthorized = ownerScoped.filter((candidate) => canAccessOwner(principal, candidate.ownerUserId, env));
+  // A caller that supplies a thread is selecting a thread-scoped resource. In
+  // shadow rollout we evaluate and audit the same decision but preserve legacy
+  // selection; only enforce mode may remove ungranted candidates.
+  const resourceType = cleanLower(input.resourceType || targetType);
+  const threadScopeMode = threadResourceAccessMode(resourceType, env);
+  const threadScoped = Boolean(clean(input.threadId || input.thread?.id)) && ["desktop", "oxrm", "mailbox"].includes(resourceType) && threadScopeMode !== "off";
+  const decisions = threadScoped
+    ? await Promise.all(ownerAuthorized.map(async (candidate) => [candidate.id, await authorizeThreadResourceAccess({
+      principal,
+      threadId: input.threadId || input.thread?.id,
+      resourceType,
+      resourceId: candidate.id,
+      resourceKey: candidate.id,
+      ownerUserId: candidate.ownerUserId,
+      permission: input.permission || input.resourcePermission || "execute",
+      breakGlass: input.breakGlass === true,
+      breakGlassReason: input.breakGlassReason || input.overrideReason,
+      breakGlassChangeRef: input.breakGlassChangeRef || input.changeRef || input.changeReference,
+      recentAuthAt: input.recentAuthAt,
+    }, env)]))
+    : [];
+  const decisionById = new Map(decisions);
+  const authorized = threadScoped && threadScopeMode === "enforce"
+    ? ownerAuthorized.filter((candidate) => decisionById.get(candidate.id)?.granted === true)
+    : ownerAuthorized;
   let result;
 
   if (explicitTargetId) {
     const candidate = ownerScoped.find((item) => item.id === explicitTargetId);
     if (!candidate) result = failure(input, ownerScoped, authorized, "target_not_found", 404, { selectionSource: "explicit_request", ambiguityResult: "not_found" });
-    else if (!canAccessOwner(principal, candidate.ownerUserId, env)) result = failure(input, ownerScoped, authorized, "target_unauthorized", 403, { selectionSource: "explicit_request", ambiguityResult: "unauthorized" });
+    else if (!canAccessOwner(principal, candidate.ownerUserId, env) || !authorized.some((item) => item.id === candidate.id)) result = failure(input, ownerScoped, authorized, "target_unauthorized", 403, { selectionSource: "explicit_request", ambiguityResult: "unauthorized" });
     else if (!candidate.eligible) result = failure(input, ownerScoped, authorized, "target_stale", 409, { selectionSource: "explicit_request", ambiguityResult: "stale" });
     else result = success(input, ownerScoped, authorized, candidate, {
       selectionSource: isAdminPrincipal(principal) && input.adminOverride === true

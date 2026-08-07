@@ -155,16 +155,17 @@ function positiveInteger(value, fallback, minimum = 1) {
 }
 
 function whatsappBridgeStatusTimeoutMs(env = process.env) {
-  return positiveInteger(
+  const parsed = positiveInteger(
     pickString(
       env.ORKESTR_WHATSAPP_BRIDGE_STATUS_TIMEOUT_MS,
       env.WHATSAPP_BRIDGE_STATUS_TIMEOUT_MS,
       env.ORKESTR_WHATSAPP_BRIDGE_FETCH_TIMEOUT_MS,
       env.WHATSAPP_BRIDGE_FETCH_TIMEOUT_MS,
     ),
-    45_000,
+    5_000,
     1,
   );
+  return Math.min(parsed, 5_000);
 }
 
 async function fetchWithTimeout(url, fetchImpl, fetchOptions = {}, timeoutMs = 45_000) {
@@ -557,8 +558,9 @@ function appendLocalAttachmentFailureNotes(text = "", skipped = []) {
   ].filter((line, index) => index !== 0 || line).join("\n");
 }
 
-async function externalBridgeAccounts(bridgeUrl, healthPayload, fetchImpl, headers = {}, env = process.env) {
+async function externalBridgeAccounts(bridgeUrl, healthPayload, fetchImpl, headers = {}, env = process.env, options = {}) {
   if (Array.isArray(healthPayload?.accounts)) return healthPayload.accounts.map(publicBridgeAccount);
+  if (options.deep !== true && options.read !== true && options.probeAccounts !== true) return [];
   try {
     const dashboard = await fetchJson(whatsappBridgeEndpointUrl(bridgeUrl, "/api/dashboard"), fetchImpl, { headers, env });
     if (dashboard.ok && Array.isArray(dashboard.accounts)) return dashboard.accounts.map(publicBridgeAccount);
@@ -741,7 +743,8 @@ export function mapLocalWhatsAppStatusFromHealth(health) {
 }
 
 async function getLocalStatus(env, options = {}) {
-  const health = await getLocalWhatsAppBridgeStatus(env, options);
+  const diagnostic = options.probeChatOps === true || options.deep === true || options.read === true || options.force === true;
+  const health = await getLocalWhatsAppBridgeStatus(env, diagnostic ? options : { ...options, probeChatOps: false });
   return mapLocalWhatsAppStatusFromHealth(health);
 }
 
@@ -773,16 +776,32 @@ export async function getWhatsAppStatus(env = process.env, fetchImpl = fetch, op
         };
       }
       return {
+        ok: false,
         state: "failed",
         summary: `WhatsApp bridge returned HTTP ${health.status}.`,
         bridgeUrl,
+        statusCode: Number(health.status || 503) || 503,
         health: publicExternalBridgeHealth(health.payload),
         qrAvailable: false,
       };
     }
-    if (hasReadySignal(health.payload)) {
-      const accounts = await externalBridgeAccounts(bridgeUrl, health.payload, fetchImpl, headers, env);
+    if (health.payload?.ok === false) {
       return {
+        ok: false,
+        state: "failed",
+        summary: pickString(health.payload?.summary, health.payload?.error, "WhatsApp bridge health check failed."),
+        bridgeUrl,
+        statusCode: 503,
+        error: pickString(health.payload?.error),
+        health: publicExternalBridgeHealth(health.payload),
+        accounts: Array.isArray(health.payload?.accounts) ? health.payload.accounts.map(publicBridgeAccount) : [],
+        qrAvailable: false,
+      };
+    }
+    if (hasReadySignal(health.payload)) {
+      const accounts = await externalBridgeAccounts(bridgeUrl, health.payload, fetchImpl, headers, env, options);
+      return {
+        ok: true,
         state: "paired",
         summary: "WhatsApp bridge is reachable and paired.",
         bridgeUrl,
@@ -791,11 +810,17 @@ export async function getWhatsAppStatus(env = process.env, fetchImpl = fetch, op
         qrAvailable: false,
       };
     }
-    const qrAvailable = await fetchOk(whatsappBridgeEndpointUrl(bridgeUrl, "/qr.svg"), fetchImpl, { headers, env });
-    const accounts = await externalBridgeAccounts(bridgeUrl, health.payload, fetchImpl, headers, env);
+    const deep = options.deep === true || options.read === true || options.probeQr === true || options.probeAccounts === true;
+    const qrAvailable = deep ? await fetchOk(whatsappBridgeEndpointUrl(bridgeUrl, "/qr.svg"), fetchImpl, { headers, env }) : false;
+    const accounts = await externalBridgeAccounts(bridgeUrl, health.payload, fetchImpl, headers, env, options);
     return {
+      ok: true,
       state: qrAvailable ? "qr_needed" : "unpaired",
-      summary: qrAvailable ? "WhatsApp bridge is reachable; scan the QR code to pair." : "WhatsApp bridge is reachable but not paired.",
+      summary: qrAvailable
+        ? "WhatsApp bridge is reachable; scan the QR code to pair."
+        : deep
+          ? "WhatsApp bridge is reachable but not paired."
+          : "WhatsApp bridge is reachable but not ready.",
       bridgeUrl,
       health: publicExternalBridgeHealth(health.payload),
       accounts,
@@ -804,9 +829,11 @@ export async function getWhatsAppStatus(env = process.env, fetchImpl = fetch, op
     };
   } catch (error) {
     return {
+      ok: false,
       state: "unreachable",
       summary: "WhatsApp bridge is unreachable.",
       bridgeUrl,
+      statusCode: 503,
       health: null,
       qrAvailable: false,
       error: error.message,

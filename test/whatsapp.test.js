@@ -8693,7 +8693,7 @@ test("whatsapp status bridge timeout is configurable", async () => {
   assert.equal(slow.state, "paired");
 });
 
-test("whatsapp status discovers external bridge accounts from dashboard", async () => {
+test("whatsapp status discovers external bridge accounts from dashboard during deep diagnostics", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-dashboard-"));
   const env = externalBridgeEnv(home);
   await writeConnectorConfig("whatsapp", { bridgeMode: "external", bridgeUrl: "http://wa.local" }, env);
@@ -8710,10 +8710,30 @@ test("whatsapp status discovers external bridge accounts from dashboard", async 
       });
     }
     throw new Error(`unexpected ${url.pathname}`);
-  });
+  }, { deep: true });
 
   assert.equal(status.state, "paired");
   assert.deepEqual(status.accounts.map((account) => account.id), ["main", "assistant"]);
+});
+
+test("whatsapp status does not run QR or dashboard fallback probes after unhealthy bridge health", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-health-no-fallback-"));
+  const env = externalBridgeEnv(home);
+  await writeConnectorConfig("whatsapp", { bridgeMode: "external", bridgeUrl: "http://wa.local" }, env);
+  const calls = [];
+
+  const status = await getWhatsAppStatus(env, async (url) => {
+    calls.push(url.pathname);
+    if (url.pathname === "/health") return response({ ok: false, error: "worker_socket_stalled" }, true, 200);
+    throw new Error(`unexpected fallback ${url.pathname}`);
+  });
+
+  assert.deepEqual(calls, ["/health"]);
+  assert.equal(status.ok, false);
+  assert.equal(status.state, "failed");
+  assert.equal(status.statusCode, 503);
+  assert.equal(status.error, "worker_socket_stalled");
+  assert.equal(status.qrAvailable, false);
 });
 
 test("whatsapp external bridge preserves path prefixes", async () => {
@@ -8978,7 +8998,7 @@ test("whatsapp bridge send uses external bridge config without local accounts", 
   assert.equal(calls[0].body.accountId, "responder");
 });
 
-test("whatsapp status reports qr needed when health is reachable and qr exists", async () => {
+test("whatsapp status reports qr needed when deep diagnostics find an available QR", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-qr-"));
   const env = externalBridgeEnv(home);
   await writeConnectorConfig("whatsapp", { bridgeMode: "external", bridgeUrl: "http://wa.local/" }, env);
@@ -8987,7 +9007,7 @@ test("whatsapp status reports qr needed when health is reachable and qr exists",
     if (url.pathname === "/health") return response({ ok: true, ready: false });
     if (url.pathname === "/qr.svg") return response({}, true, 200);
     throw new Error(`unexpected ${url.pathname}`);
-  });
+  }, { deep: true });
 
   assert.equal(status.state, "qr_needed");
   assert.equal(status.qrUrl, "http://wa.local/qr.svg");

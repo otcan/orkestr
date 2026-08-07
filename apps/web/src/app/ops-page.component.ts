@@ -198,7 +198,7 @@ export class OpsPageComponent implements OnInit, OnDestroy {
     if (showBusy) this.busy = true;
     this.opsBrowsersLoading = true;
     if (!this.opsBrowsers.length) this.opsBrowserMessage = "";
-    const browsersRequest = firstValueFrom(this.api.browserSessions("", "ops_desktop_inventory"));
+    const browsersRequest = firstValueFrom(this.api.browserSessions());
     browsersRequest
       .then((payload) => this.applyBrowserSessions(payload))
       .catch((error) => this.applyBrowserSessionsError(error))
@@ -227,7 +227,7 @@ export class OpsPageComponent implements OnInit, OnDestroy {
         firstValueFrom(this.api.events(120)),
         firstValueFrom(this.api.eventArchives()),
         browsersRequest,
-        firstValueFrom(this.api.desktopLeases(false, "", "ops_desktop_inventory")),
+        firstValueFrom(this.api.desktopLeases()),
         firstValueFrom(this.api.desktopShares(true)),
         firstValueFrom(this.api.runtimeLeases()),
         firstValueFrom(this.api.executors()),
@@ -682,9 +682,21 @@ export class OpsPageComponent implements OnInit, OnDestroy {
     const slug = this.browserSlug(browser);
     if (!slug) return;
     if (this.browserActionBusy(browser)) return;
+    const changeRef = window.prompt("Enter the approved incident or change reference for this break-glass desktop action:", "")?.trim();
+    if (!changeRef) {
+      this.error = "A change or incident reference is required for break-glass desktop actions.";
+      this.renderNow();
+      return;
+    }
+    const threadId = window.prompt("Enter the exact thread ID authorized for this break-glass desktop action:", "")?.trim();
+    if (!threadId) {
+      this.error = "An exact thread ID is required for break-glass desktop actions.";
+      this.renderNow();
+      return;
+    }
     this.activeBrowserActionSlug = slug;
     try {
-      await firstValueFrom(this.api.browserAction(slug, action, { breakGlass: true, breakGlassReason: "ops_desktop_action" }));
+      await firstValueFrom(this.api.browserAction(slug, action, { threadId, breakGlass: true, breakGlassReason: "ops_desktop_action", breakGlassChangeRef: changeRef }));
       await this.loadOps(false);
     } catch (error) {
       this.error = this.errorText(error);
@@ -697,9 +709,21 @@ export class OpsPageComponent implements OnInit, OnDestroy {
   async shareDesktop(browser: BrowserSession): Promise<void> {
     const slug = this.browserSlug(browser);
     if (!slug || this.browserActionBusy(browser)) return;
+    const changeRef = window.prompt("Enter the approved incident or change reference for this break-glass desktop share:", "")?.trim();
+    if (!changeRef) {
+      this.error = "A change or incident reference is required for break-glass desktop shares.";
+      this.renderNow();
+      return;
+    }
+    const threadId = window.prompt("Enter the exact thread ID authorized for this break-glass desktop share:", "")?.trim();
+    if (!threadId) {
+      this.error = "An exact thread ID is required for break-glass desktop shares.";
+      this.renderNow();
+      return;
+    }
     this.activeBrowserActionSlug = slug;
     try {
-      const result = await firstValueFrom(this.api.createDesktopShare(slug, { breakGlass: true, breakGlassReason: "ops_desktop_share" }));
+      const result = await firstValueFrom(this.api.createDesktopShare(slug, { threadId, breakGlass: true, breakGlassReason: "ops_desktop_share", breakGlassChangeRef: changeRef }));
       if (navigator?.clipboard && result.url) {
         await navigator.clipboard.writeText(result.url).catch(() => undefined);
       }

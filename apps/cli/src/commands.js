@@ -604,12 +604,16 @@ async function doctorWhatsAppRouterCommand(argv, ctx) {
   const thread = flagValue(argv, "--thread") || flagValue(argv, "--thread-id") || "";
   const trace = flagValue(argv, "--trace") || flagValue(argv, "--router-trace") || flagValue(argv, "--router-trace-id") || "";
   const staleMs = flagValue(argv, "--stale-ms") || flagValue(argv, "--stale");
+  const timeoutMs = flagValue(argv, "--timeout-ms") || flagValue(argv, "--timeout");
   if (thread) params.set("thread", thread);
   if (trace) params.set("trace", trace);
   if (argv.includes("--repair") || argv.includes("--repair-safe")) params.set("repair", "1");
   if (argv.includes("--unsafe")) params.set("unsafe", "1");
   if (staleMs) params.set("staleMs", staleMs);
-  const requestDoctor = () => requestJson(`/api/router-traces/doctor/whatsapp${params.size ? `?${params.toString()}` : ""}`, ctx);
+  if (timeoutMs) params.set("timeoutMs", timeoutMs);
+  const parsedTimeoutMs = Number(timeoutMs || 30_000);
+  const clientTimeoutMs = (Number.isFinite(parsedTimeoutMs) && parsedTimeoutMs > 0 ? Math.floor(parsedTimeoutMs) : 30_000) + 1_000;
+  const requestDoctor = () => requestJson(`/api/router-traces/doctor/whatsapp${params.size ? `?${params.toString()}` : ""}`, { ...ctx, timeoutMs: clientTimeoutMs });
   if (argv.includes("--watch")) {
     const intervalMs = Math.max(1000, Number(flagValue(argv, "--watch-interval-ms") || flagValue(argv, "--interval-ms") || 30000) || 30000);
     const count = Math.max(0, Number(flagValue(argv, "--watch-count") || 0) || 0);
