@@ -274,9 +274,11 @@ function recoverTrailingJson(raw, error) {
 async function enqueueFileWrite(filePath, operation) {
   const previous = writeQueues.get(filePath) || Promise.resolve();
   const next = previous.then(operation, operation);
-  writeQueues.set(filePath, next.finally(() => {
-    if (writeQueues.get(filePath) === next) writeQueues.delete(filePath);
-  }));
+  const tracked = next.finally(() => {
+    if (writeQueues.get(filePath) === tracked) writeQueues.delete(filePath);
+  });
+  void tracked.catch(() => {});
+  writeQueues.set(filePath, tracked);
   return next;
 }
 

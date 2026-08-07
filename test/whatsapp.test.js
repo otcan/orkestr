@@ -7,6 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import test, { afterEach } from "node:test";
 import { promisify } from "node:util";
+import sharp from "sharp";
 import { startServer } from "../apps/server/src/server.js";
 import { stopCodexAppServerClients } from "../packages/core/src/codex-app-server-client.js";
 import { runNextAgentMessage, runNextThreadMessage } from "../packages/core/src/executors.js";
@@ -20,6 +21,7 @@ import { createTenantVm } from "../packages/core/src/tenant-vm-registry.js";
 import { configureTenantWhatsAppRoute } from "../packages/core/src/tenant-whatsapp-routing.js";
 import { appendThreadMessage, createThread, enqueueThreadInput, getThread, listThreadMessages, listThreads, updateThread, updateThreadMessage } from "../packages/core/src/threads.js";
 import { createUser, linkUserPrivateIdentity } from "../packages/core/src/users.js";
+import { renderOpenMetrics, resetObservabilityForTests } from "../packages/core/src/observability.js";
 import { deliverWhatsAppReplies, formatWhatsAppOutboundText, getWhatsAppChatMessages, getWhatsAppChatParticipants, getWhatsAppStatus, initialQueueDeliveryState, mapLocalWhatsAppStatusFromHealth, routeWhatsAppInbound, sendWhatsAppText, syncWhatsAppTypingIndicators } from "../packages/connectors/src/whatsapp.js";
 import { addLocalWhatsAppGroupParticipants, cleanupLocalWhatsAppChromeLocks, clearLocalWhatsAppChatTypingState, createLocalWhatsAppChat, demoteLocalWhatsAppGroupParticipants, forwardLocalWhatsAppInbound, getLocalWhatsAppBridgeStatus, handleInboundMessage, inboundRoutingFailureNoticeText, listLocalWhatsAppChats, listLocalWhatsAppChatParticipants, localWhatsAppAccountIdsForEnv, localWhatsAppConnectedPageReadyFallbackEligible, localWhatsAppInboundForwardTarget, localWhatsAppMessageRouteFields, localWhatsAppReadyFallbackEligible, localWhatsAppTypingClearRetryDelaysMs, localWhatsAppUnreadRecoveryBoundChats, localWhatsAppUnreadRecoveryIntervalMs, normalizeGroupParticipantIds, notifyLocalWhatsAppPairingRequired, promoteLocalWhatsAppGroupParticipants, recoverConfiguredLocalWhatsAppAccounts, recoverLocalWhatsAppChatMessages, recoverUnreadLocalWhatsAppMessages, recoverableLocalWhatsAppAccountIds, reduceLocalWhatsAppBridgeState, resetLocalWhatsAppBridgeForTest, restartRecoverableLocalWhatsAppAccount, sendLocalWhatsAppMessage, sendLocalWhatsAppRepairQrEmail, sendWhatsAppTextWithConfirmation, setLocalWhatsAppRuntimeForTest, setLocalWhatsAppRuntimeRecoveryHooksForTest, startLocalWhatsAppAccount, startLocalWhatsAppTyping, stopLocalWhatsAppTyping, syncLocalWhatsAppTypingTargets, webCacheRoot } from "../packages/connectors/src/whatsapp-local-bridge.js";
 import { routedWhatsAppTypingTarget, runWithRoutedWhatsAppTyping } from "../packages/connectors/src/whatsapp-router-typing.js";
@@ -30,6 +32,7 @@ import { canRecoverLiveWhatsAppOutboundIntent, mergeWhatsAppOutboundIntents, mer
 import { formatWhatsAppQueueNotice } from "../packages/connectors/src/whatsapp-outbound-mirror.js";
 import { routerUpdateWhatsAppDeliveryTarget } from "../packages/connectors/src/whatsapp-router-updates.js";
 import { upsertWhatsAppConnectorAccount } from "../packages/connectors/src/whatsapp-account-registry.js";
+import { acquireTransformedMediaEchoLedgerLockForTest, filterTransformedMediaEchoAttachments, rememberTransformedMediaEchoTerminalSuppression, rememberTransformedOutboundMediaEcho, transformedMediaEchoLedgerLockOwnerPathForTest, transformedMediaEchoLedgerLockPathForTest } from "../packages/connectors/src/whatsapp-media-echo.js";
 import { readConnectorOutbox, writeConnectorOutbox } from "../packages/connectors/src/connector-outbox.js";
 import { writeConnectorConfig } from "../packages/storage/src/config.js";
 import { dataPaths, userDataPaths } from "../packages/storage/src/paths.js";
@@ -54,6 +57,22 @@ test.after(() => {
     else process.env[key] = value;
   }
 });
+
+function assertMetricLine(metrics, name, labels = []) {
+  const line = String(metrics || "").split("\n").find((candidate) =>
+    candidate.startsWith(name) && labels.every((label) => candidate.includes(label))
+  );
+  assert.ok(line, `missing metric ${name} with labels ${labels.join(", ")}`);
+  return line;
+}
+
+function metricSampleLines(metrics, name) {
+  const prefixWithLabels = `${name}{`;
+  const prefixWithoutLabels = `${name} `;
+  return String(metrics || "").split("\n").filter((line) =>
+    line.startsWith(prefixWithLabels) || line.startsWith(prefixWithoutLabels)
+  );
+}
 
 test("whatsapp outbound intent state merge is monotonic", () => {
   const cursors = mergeWhatsAppOutboundMirrorCursors(
@@ -3614,6 +3633,166 @@ test("local whatsapp send times out hung browser sends without retrying", async 
   assert.equal(attempts, 1);
 });
 
+function testImageMimetype(filePath = "") {
+  const extension = path.extname(filePath).toLowerCase();
+  if (extension === ".jpg" || extension === ".jpeg") return "image/jpeg";
+  if (extension === ".webp") return "image/webp";
+  if (extension === ".gif") return "image/gif";
+  return "image/png";
+}
+
+function localImageRuntimeForTest(sent = []) {
+  function MessageMedia(mimetype, data) {
+    this.mimetype = mimetype;
+    this.data = data;
+  }
+  MessageMedia.fromFilePath = (filePath) => ({
+    mimetype: testImageMimetype(filePath),
+    data: "",
+  });
+  return {
+    MessageMedia,
+    client: {
+      async sendMessage(to, media, options) {
+        sent.push({ to, media, options });
+        return { id: { _serialized: `true_${to}_image-${sent.length}` }, to, timestamp: 1_780_000_000 + sent.length };
+      },
+    },
+  };
+}
+
+async function writeSyntheticWaImage(filePath, variant = "primary") {
+  const variants = {
+    primary: { a: "#14532d", b: "#f97316", c: "#2563eb", label: "A" },
+    alternate: { a: "#7f1d1d", b: "#22c55e", c: "#facc15", label: "B" },
+    novel: { a: "#0f766e", b: "#e11d48", c: "#38bdf8", label: "N" },
+  };
+  const colors = variants[variant] || variants.primary;
+  const svg = `
+    <svg xmlns="http://www.w3.org/2000/svg" width="240" height="160" viewBox="0 0 240 160">
+      <rect width="240" height="160" fill="${colors.a}"/>
+      <circle cx="58" cy="72" r="46" fill="${colors.b}"/>
+      <rect x="120" y="30" width="78" height="94" rx="4" fill="${colors.c}"/>
+      <path d="M20 138 L224 22" stroke="#ffffff" stroke-width="9"/>
+      <text x="140" y="103" font-size="48" font-family="Arial" fill="#ffffff">${colors.label}</text>
+    </svg>
+  `;
+  await sharp(Buffer.from(svg)).png().toFile(filePath);
+  return filePath;
+}
+
+async function writeOrientedWaImage(filePath) {
+  const svg = `
+    <svg xmlns="http://www.w3.org/2000/svg" width="240" height="160" viewBox="0 0 240 160">
+      <rect width="240" height="160" fill="#164e63"/>
+      <circle cx="62" cy="72" r="45" fill="#f97316"/>
+      <rect x="122" y="28" width="82" height="98" rx="4" fill="#4338ca"/>
+      <path d="M18 136 L226 24" stroke="#ffffff" stroke-width="9"/>
+      <text x="142" y="104" font-size="44" font-family="Arial" fill="#ffffff">R</text>
+    </svg>
+  `;
+  await sharp(Buffer.from(svg))
+    .jpeg({ quality: 90, mozjpeg: true })
+    .withMetadata({ orientation: 6 })
+    .toFile(filePath);
+  return filePath;
+}
+
+async function writeSolidWaImage(filePath, color = "#ff0000") {
+  await sharp({
+    create: {
+      width: 160,
+      height: 160,
+      channels: 3,
+      background: color,
+    },
+  }).png().toFile(filePath);
+  return filePath;
+}
+
+async function transformedWaJpegMedia(sourcePath, options = {}) {
+  const pipeline = sharp(sourcePath).rotate();
+  if (options.resize) pipeline.resize(options.resize.width, options.resize.height, { fit: "fill" });
+  const buffer = await pipeline.jpeg({ quality: options.quality || 74, mozjpeg: true }).toBuffer();
+  return {
+    data: buffer.toString("base64"),
+    mimetype: "image/jpeg",
+    filename: options.filename || "wa-transformed.jpg",
+    buffer,
+  };
+}
+
+async function listFilesRecursive(root) {
+  const entries = await fs.readdir(root, { withFileTypes: true }).catch((error) => {
+    if (error?.code === "ENOENT") return [];
+    throw error;
+  });
+  const files = [];
+  for (const entry of entries) {
+    const filePath = path.join(root, entry.name);
+    if (entry.isDirectory()) files.push(...await listFilesRecursive(filePath));
+    else if (entry.isFile()) files.push(filePath);
+  }
+  return files;
+}
+
+async function processStartTicksForTest(pid = process.pid) {
+  const raw = await fs.readFile(`/proc/${pid}/stat`, "utf8").catch(() => "");
+  const closeParen = raw.lastIndexOf(")");
+  if (closeParen < 0) return "";
+  return String(raw.slice(closeParen + 1).trim().split(/\s+/)[19] || "").trim();
+}
+
+async function currentBootIdForTest() {
+  return String(await fs.readFile("/proc/sys/kernel/random/boot_id", "utf8").catch(() => "")).trim();
+}
+
+async function writeTransformedMediaEchoLockOwnerForTest(env, token, overrides = {}) {
+  const lockPath = transformedMediaEchoLedgerLockPathForTest(env);
+  const ownerPath = transformedMediaEchoLedgerLockOwnerPathForTest(env, token);
+  await fs.rm(lockPath, { recursive: true, force: true });
+  await fs.mkdir(lockPath, { recursive: true });
+  const acquiredAtMs = Number(overrides.acquiredAtMs) || Date.now();
+  await fs.writeFile(ownerPath, JSON.stringify({
+    version: 2,
+    token,
+    pid: process.pid,
+    processStartTicks: await processStartTicksForTest(process.pid),
+    bootId: await currentBootIdForTest(),
+    hostname: os.hostname(),
+    acquiredAtMs,
+    acquiredAt: new Date(acquiredAtMs).toISOString(),
+    ...overrides,
+  }));
+  const mtime = new Date(acquiredAtMs);
+  await fs.utimes(ownerPath, mtime, mtime);
+  await fs.utimes(lockPath, mtime, mtime);
+  return { lockPath, ownerPath };
+}
+
+async function transformedMediaEchoLockOwnerTokenForTest(env) {
+  const lockPath = transformedMediaEchoLedgerLockPathForTest(env);
+  const entries = await fs.readdir(lockPath).catch(() => []);
+  const ownerFile = entries.find((entry) => entry.startsWith("owner-") && entry.endsWith(".json"));
+  if (!ownerFile) return "";
+  const payload = JSON.parse(await fs.readFile(path.join(lockPath, ownerFile), "utf8"));
+  return String(payload.token || "").trim();
+}
+
+async function createBoundWhatsAppThreadForTest({ env, threadId, chatId, accountId = "responder" }) {
+  return createThread({
+    id: threadId,
+    name: threadId,
+    binding: {
+      connector: "whatsapp",
+      chatId,
+      responderAccountId: accountId,
+      outboundAccountId: accountId,
+      enabled: true,
+    },
+  }, env);
+}
+
 test("local whatsapp inbound ignores recent outbound attachment echoes", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-attachment-echo-"));
   const env = {
@@ -3672,6 +3851,1338 @@ test("local whatsapp inbound ignores recent outbound attachment echoes", async (
     assert.equal(sent[0].to, chatId);
     assert.equal(result.skipped, "outbound_echo_attachment");
     assert.equal(result.chatId, chatId);
+  } finally {
+    await resetLocalWhatsAppBridgeForTest(env);
+  }
+});
+
+test("local whatsapp transformed image echo defaults to shadow mode", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-transformed-shadow-default-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "responder",
+  };
+  const chatId = "chat-transformed-shadow-default@g.us";
+  const sourcePath = path.join(home, "shadow-source.png");
+  await writeSyntheticWaImage(sourcePath, "primary");
+  await createBoundWhatsAppThreadForTest({ env, threadId: "transformed-shadow-default-thread", chatId });
+  resetObservabilityForTests();
+
+  try {
+    setLocalWhatsAppRuntimeForTest("responder", localImageRuntimeForTest([]), {}, env);
+    await sendLocalWhatsAppMessage({
+      accountId: "responder",
+      chatId,
+      attachments: [{ path: sourcePath, filename: "shadow-source.png", mimetype: "image/png" }],
+      env,
+    });
+    const media = await transformedWaJpegMedia(sourcePath, { resize: { width: 210, height: 140 }, quality: 68 });
+
+    const result = await handleInboundMessage("responder", {
+      id: { _serialized: `true_${chatId}_shadow-default`, remote: chatId },
+      from: "responder@lid",
+      to: chatId,
+      fromMe: true,
+      body: "",
+      hasMedia: true,
+      type: "image",
+      timestamp: 1_780_000_000,
+      async downloadMedia() {
+        return media;
+      },
+    }, env, { ownOnly: true });
+    const messages = await listThreadMessages("transformed-shadow-default-thread", env);
+    const events = await listEvents(env, 50);
+    const echoEvent = events.find((event) => event.type === "whatsapp_outbound_echo_attachment_transformed");
+    const cycleEvents = events.filter((event) => event.type === "whatsapp_outbound_echo_attachment_transformed_cycle_suspected");
+    const watcherEvents = events.filter((event) =>
+      event.type === "watcher_alert_recorded" &&
+      event.source === "connectors.whatsapp.media_echo" &&
+      event.code === "outbound_media_inbound_assistant_cycle_suspected"
+    );
+    const traces = await listRouterTraces({}, env);
+    const cycleTracePhases = traces.flatMap((trace) => trace.phases || [])
+      .filter((phase) => phase.reason === "outbound_media_inbound_assistant_cycle_suspected");
+    const routedAttachmentPath = messages[0]?.attachments?.[0]?.path || "";
+    const metrics = renderOpenMetrics();
+    const cycleMetricLines = metricSampleLines(metrics, "orkestr_whatsapp_outbound_echo_attachment_transformed_cycle_suspected_total");
+
+    assert.equal(result.routed.threadId, "transformed-shadow-default-thread");
+    assert.equal(messages.length, 1);
+    assert.equal(echoEvent?.mode, "shadow");
+    assert.equal(echoEvent?.decision, "shadow");
+    assert.equal(cycleEvents.length, 1);
+    assert.equal(cycleEvents[0]?.source, "local_bridge");
+    assert.equal(cycleEvents[0]?.reason, "shadow_match");
+    assert.equal(cycleEvents[0]?.matchedAttachmentBucket, "1");
+    assert.equal(cycleEvents[0]?.retainedAttachmentBucket, "1");
+    assert.equal(watcherEvents.length, 1);
+    assert.equal(cycleTracePhases.length, 1);
+    assert.equal(cycleMetricLines.length, 1);
+    assert.match(cycleMetricLines[0], /source="local_bridge"/);
+    assert.match(cycleMetricLines[0], / 1$/);
+    assertMetricLine(metrics, "orkestr_whatsapp_outbound_echo_attachment_transformed_cycle_suspected_total", [
+      'mode="shadow"',
+      'source="local_bridge"',
+      'reason="shadow_match"',
+    ]);
+    assert.equal(Boolean(await fs.stat(routedAttachmentPath).catch(() => null)), true);
+  } finally {
+    await resetLocalWhatsAppBridgeForTest(env);
+  }
+});
+
+test("local whatsapp suppresses transformed fromMe PNG image echo without creating a user turn", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-transformed-image-echo-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "responder",
+    ORKESTR_WHATSAPP_TRANSFORMED_MEDIA_ECHO_MODE: "enforce",
+  };
+  const chatId = "chat-transformed-image-echo@g.us";
+  const sourcePath = path.join(home, "orkestr-generated.png");
+  await writeSyntheticWaImage(sourcePath, "primary");
+  await createBoundWhatsAppThreadForTest({ env, threadId: "transformed-image-thread", chatId });
+  const sent = [];
+  resetObservabilityForTests();
+
+  try {
+    setLocalWhatsAppRuntimeForTest("responder", localImageRuntimeForTest(sent), {}, env);
+    await sendLocalWhatsAppMessage({
+      accountId: "responder",
+      chatId,
+      attachments: [{ path: sourcePath, filename: "orkestr-generated.png", mimetype: "image/png" }],
+      env,
+    });
+    const media = await transformedWaJpegMedia(sourcePath, { resize: { width: 210, height: 140 }, quality: 68 });
+
+    const result = await handleInboundMessage("responder", {
+      id: { _serialized: `true_${chatId}_transformed-image-echo`, remote: chatId },
+      from: "responder@lid",
+      to: chatId,
+      fromMe: true,
+      body: "",
+      hasMedia: true,
+      type: "image",
+      timestamp: 1_780_000_000,
+      async downloadMedia() {
+        return media;
+      },
+    }, env, { ownOnly: true });
+    const messages = await listThreadMessages("transformed-image-thread", env);
+    const events = await listEvents(env, 20);
+    const echoEvent = events.find((event) => event.type === "whatsapp_outbound_echo_attachment_transformed");
+    const inboundFiles = await listFilesRecursive(path.join(home, "whatsapp-bridge", "inbound-media"));
+    const metrics = renderOpenMetrics();
+
+    assert.equal(sent.length, 1);
+    assert.equal(result.skipped, "outbound_echo_attachment_transformed");
+    assert.equal(messages.length, 0);
+    assert.deepEqual(inboundFiles, []);
+    assert.equal(echoEvent?.decision, "suppress");
+    assert.equal(echoEvent?.matchedAttachmentCount, 1);
+    const eventJson = JSON.stringify(echoEvent);
+    assert.equal(eventJson.includes(sourcePath), false);
+    assert.equal(eventJson.includes(media.data.slice(0, 16)), false);
+    assertMetricLine(metrics, "orkestr_whatsapp_outbound_echo_attachment_transformed_total", [
+      'result="suppress"',
+      'mode="enforce"',
+      'source="local_bridge"',
+      'mediaKind="image"',
+    ]);
+    assertMetricLine(metrics, "orkestr_whatsapp_outbound_echo_attachment_transformed_match_duration_seconds_count", [
+      'result="suppress"',
+      'mode="enforce"',
+      'source="local_bridge"',
+      'mediaKind="image"',
+    ]);
+    assertMetricLine(metrics, "orkestr_whatsapp_outbound_echo_attachment_transformed_match_distance_count", [
+      'result="suppress"',
+      'mode="enforce"',
+      'source="local_bridge"',
+      'distanceKind="hash"',
+    ]);
+  } finally {
+    await resetLocalWhatsAppBridgeForTest(env);
+  }
+});
+
+test("local whatsapp transformed image exact event replay stays suppressed after bridge restart", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-transformed-terminal-replay-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "responder",
+    ORKESTR_WHATSAPP_TRANSFORMED_MEDIA_ECHO_MODE: "enforce",
+  };
+  const chatId = "chat-transformed-terminal-replay@g.us";
+  const sourcePath = path.join(home, "terminal-replay-source.png");
+  await writeSyntheticWaImage(sourcePath, "primary");
+  await createBoundWhatsAppThreadForTest({ env, threadId: "transformed-terminal-replay-thread", chatId });
+
+  try {
+    setLocalWhatsAppRuntimeForTest("responder", localImageRuntimeForTest([]), {}, env);
+    await sendLocalWhatsAppMessage({
+      accountId: "responder",
+      chatId,
+      attachments: [{ path: sourcePath, filename: "terminal-replay-source.png", mimetype: "image/png" }],
+      env,
+    });
+    const media = await transformedWaJpegMedia(sourcePath, { resize: { width: 210, height: 140 }, quality: 68 });
+    const eventId = `true_${chatId}_terminal-replay`;
+    const crashPath = path.join(home, "terminal-replay-crash.jpg");
+    await fs.writeFile(crashPath, media.buffer);
+    await assert.rejects(
+      filterTransformedMediaEchoAttachments({
+        accountId: "responder",
+        chatId,
+        eventId,
+        fromMe: true,
+        text: "",
+        attachments: [{ path: crashPath, filename: "terminal-replay-crash.jpg", mimetype: "image/jpeg", kind: "image", size: media.buffer.length }],
+        env: {
+          ...env,
+          ORKESTR_WHATSAPP_TRANSFORMED_MEDIA_ECHO_INJECT_BEFORE_ATOMIC_WRITE_EVENT_ID: eventId,
+        },
+        source: "test",
+      }),
+      /transformed_media_echo_atomic_write_injected_failure/,
+    );
+    const failedLedger = JSON.parse(await fs.readFile(path.join(home, "whatsapp-transformed-media-echo-ledger.json"), "utf8"));
+    assert.equal(failedLedger.records.length, 1);
+    assert.equal((failedLedger.terminalEvents || []).length, 0);
+    const inbound = (id, body, downloadMedia) => ({
+      id: { _serialized: id, remote: chatId },
+      from: "responder@lid",
+      to: chatId,
+      fromMe: true,
+      body,
+      hasMedia: true,
+      type: "image",
+      timestamp: 1_780_000_009,
+      downloadMedia,
+    });
+
+    const first = await handleInboundMessage("responder", inbound(eventId, "", async () => media), env, { ownOnly: true });
+    const suppressedLedger = JSON.parse(await fs.readFile(path.join(home, "whatsapp-transformed-media-echo-ledger.json"), "utf8"));
+    assert.equal(suppressedLedger.records.length, 0);
+    assert.equal((suppressedLedger.terminalEvents || []).length, 1);
+    assert.equal(suppressedLedger.terminalEvents[0]?.eventId, eventId);
+    assert.equal(suppressedLedger.terminalEvents[0]?.replayAudit, undefined);
+    await resetLocalWhatsAppBridgeForTest(env);
+    let replayDownloads = 0;
+    env.ORKESTR_WHATSAPP_TRANSFORMED_MEDIA_ECHO_INJECT_TERMINAL_REPLAY_AUDIT_FAILURE_ID = eventId;
+    env.ORKESTR_WHATSAPP_TRANSFORMED_MEDIA_ECHO_INJECT_TERMINAL_REPLAY_AUDIT_FAILURE_COUNT = "1";
+    const replay = await handleInboundMessage("responder", inbound(eventId, "", async () => {
+      replayDownloads += 1;
+      throw new Error("replay_media_download_should_not_run");
+    }), env, { ownOnly: true });
+    const pendingAuditLedger = JSON.parse(await fs.readFile(path.join(home, "whatsapp-transformed-media-echo-ledger.json"), "utf8"));
+    const pendingAudit = pendingAuditLedger.terminalEvents[0]?.replayAudit;
+    assert.equal(pendingAudit?.state, "pending");
+    assert.equal(pendingAudit?.attempts, 1);
+    assert.match(pendingAudit?.id || "", /^whatsapp-transformed-terminal-replay:/);
+    assert.equal((await listEvents(env, 30)).filter((event) => event.type === "whatsapp_outbound_echo_attachment_transformed_terminal_replay").length, 0);
+    await resetLocalWhatsAppBridgeForTest(env);
+    const secondReplay = await handleInboundMessage("responder", inbound(eventId, "", async () => {
+      replayDownloads += 1;
+      throw new Error("second_replay_media_download_should_not_run");
+    }), env, { ownOnly: true });
+    const recordedAuditLedger = JSON.parse(await fs.readFile(path.join(home, "whatsapp-transformed-media-echo-ledger.json"), "utf8"));
+    const recordedAudit = recordedAuditLedger.terminalEvents[0]?.replayAudit;
+    assert.equal(recordedAudit?.state, "recorded");
+    assert.equal(recordedAudit?.id, pendingAudit.id);
+    assert.equal(recordedAudit?.attempts, 2);
+    assert.ok(recordedAudit?.recordedAt);
+    await resetLocalWhatsAppBridgeForTest(env);
+    const thirdReplay = await handleInboundMessage("responder", inbound(eventId, "", async () => {
+      replayDownloads += 1;
+      throw new Error("third_replay_media_download_should_not_run");
+    }), env, { ownOnly: true });
+    setLocalWhatsAppRuntimeForTest("responder", localImageRuntimeForTest([]), {}, env);
+    const newEvent = await handleInboundMessage("responder", inbound(`true_${chatId}_terminal-new-event`, "intentional resend", async () => media), env, { ownOnly: true });
+    const messages = await listThreadMessages("transformed-terminal-replay-thread", env);
+    const events = await listEvents(env, 30);
+    const replayEvents = events.filter((event) => event.type === "whatsapp_outbound_echo_attachment_transformed_terminal_replay");
+
+    assert.equal(first.skipped, "outbound_echo_attachment_transformed");
+    assert.equal(replay.skipped, "outbound_echo_attachment_transformed");
+    assert.equal(secondReplay.skipped, "outbound_echo_attachment_transformed");
+    assert.equal(thirdReplay.skipped, "outbound_echo_attachment_transformed");
+    assert.equal(replay.duplicate, true);
+    assert.equal(secondReplay.duplicate, true);
+    assert.equal(thirdReplay.duplicate, true);
+    assert.equal(replayDownloads, 0);
+    assert.equal(replayEvents.length, 1);
+    assert.equal(replayEvents[0]?.eventId, eventId);
+    assert.equal(replayEvents[0]?.auditId, pendingAudit.id);
+    assert.equal(replayEvents[0]?.idempotencyKey, pendingAudit.id);
+    assert.deepEqual([...new Set(replayEvents.map((event) => event.auditId))], [pendingAudit.id]);
+    assert.equal(newEvent.routed.threadId, "transformed-terminal-replay-thread");
+    assert.equal(messages.length, 1);
+    assert.equal(messages[0].text, "intentional resend");
+  } finally {
+    await resetLocalWhatsAppBridgeForTest(env);
+  }
+});
+
+test("local whatsapp transformed image no stable event id fails open for terminal replay", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-transformed-no-id-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "responder",
+    ORKESTR_WHATSAPP_TRANSFORMED_MEDIA_ECHO_MODE: "enforce",
+  };
+  const chatId = "chat-transformed-no-id@g.us";
+  const sourcePath = path.join(home, "no-id-source.png");
+  await writeSyntheticWaImage(sourcePath, "primary");
+  await createBoundWhatsAppThreadForTest({ env, threadId: "transformed-no-id-thread", chatId });
+
+  try {
+    setLocalWhatsAppRuntimeForTest("responder", localImageRuntimeForTest([]), {}, env);
+    await sendLocalWhatsAppMessage({
+      accountId: "responder",
+      chatId,
+      attachments: [{ path: sourcePath, filename: "no-id-source.png", mimetype: "image/png" }],
+      env,
+    });
+    const media = await transformedWaJpegMedia(sourcePath, { resize: { width: 210, height: 140 }, quality: 68 });
+    const noProtocolIdInbound = (body) => ({
+      from: "responder@lid",
+      to: chatId,
+      fromMe: true,
+      body,
+      hasMedia: true,
+      type: "image",
+      timestamp: 1_780_000_010,
+      async downloadMedia() {
+        return media;
+      },
+    });
+
+    const first = await handleInboundMessage("responder", noProtocolIdInbound(""), env, { ownOnly: true });
+    const ledger = JSON.parse(await fs.readFile(path.join(home, "whatsapp-transformed-media-echo-ledger.json"), "utf8"));
+    await resetLocalWhatsAppBridgeForTest(env);
+    const second = await handleInboundMessage("responder", noProtocolIdInbound("intentional no-id resend"), env, { ownOnly: true });
+    const messages = await listThreadMessages("transformed-no-id-thread", env);
+    const events = await listEvents(env, 30);
+    const replayEvents = events.filter((event) => event.type === "whatsapp_outbound_echo_attachment_transformed_terminal_replay");
+
+    assert.equal(first.skipped, "outbound_echo_attachment_transformed");
+    assert.equal(ledger.records.length, 0);
+    assert.equal((ledger.terminalEvents || []).length, 0);
+    assert.equal(second.routed.threadId, "transformed-no-id-thread");
+    assert.equal(messages.length, 1);
+    assert.equal(messages[0].text, "intentional no-id resend");
+    assert.equal(replayEvents.length, 0);
+  } finally {
+    await resetLocalWhatsAppBridgeForTest(env);
+  }
+});
+
+test("local whatsapp terminal replay fences are ttl bounded, not count capped", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-transformed-terminal-ttl-bound-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "responder",
+    ORKESTR_WHATSAPP_TRANSFORMED_MEDIA_ECHO_MODE: "enforce",
+    ORKESTR_WHATSAPP_TRANSFORMED_MEDIA_ECHO_EVENT_LIMIT: "2",
+  };
+  const chatId = "chat-transformed-terminal-ttl-bound@g.us";
+  const eventIds = Array.from({ length: 5 }, (_value, index) => `true_${chatId}_terminal-fence-${index}`);
+
+  try {
+    for (const eventId of eventIds) {
+      await rememberTransformedMediaEchoTerminalSuppression({
+        accountId: "responder",
+        chatId,
+        eventId,
+        result: { mode: "enforce", matchedAttachmentCount: 1, attachments: [] },
+        env,
+      });
+    }
+    await resetLocalWhatsAppBridgeForTest(env);
+    let downloads = 0;
+    const replay = await handleInboundMessage("responder", {
+      id: { _serialized: eventIds[0], remote: chatId },
+      from: "responder@lid",
+      to: chatId,
+      fromMe: true,
+      body: "",
+      hasMedia: true,
+      type: "image",
+      timestamp: 1_780_000_011,
+      async downloadMedia() {
+        downloads += 1;
+        throw new Error("ttl_bound_replay_media_download_should_not_run");
+      },
+    }, env, { ownOnly: true });
+    const ledger = JSON.parse(await fs.readFile(path.join(home, "whatsapp-transformed-media-echo-ledger.json"), "utf8"));
+
+    assert.equal(replay.skipped, "outbound_echo_attachment_transformed");
+    assert.equal(downloads, 0);
+    assert.ok((ledger.terminalEvents || []).some((event) => event.eventId === eventIds[0]));
+    assert.ok((ledger.terminalEvents || []).length > 2);
+  } finally {
+    await resetLocalWhatsAppBridgeForTest(env);
+  }
+});
+
+test("local whatsapp transformed image echo normalizes EXIF orientation metadata", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-transformed-orientation-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "responder",
+    ORKESTR_WHATSAPP_TRANSFORMED_MEDIA_ECHO_MODE: "enforce",
+  };
+  const chatId = "chat-transformed-orientation@g.us";
+  const sourcePath = path.join(home, "oriented-source.jpg");
+  await writeOrientedWaImage(sourcePath);
+  await createBoundWhatsAppThreadForTest({ env, threadId: "transformed-orientation-thread", chatId });
+
+  try {
+    const metadata = await sharp(sourcePath).metadata();
+    assert.equal(metadata.orientation, 6);
+    setLocalWhatsAppRuntimeForTest("responder", localImageRuntimeForTest([]), {}, env);
+    await sendLocalWhatsAppMessage({
+      accountId: "responder",
+      chatId,
+      attachments: [{ path: sourcePath, filename: "oriented-source.jpg", mimetype: "image/jpeg" }],
+      env,
+    });
+    const media = await transformedWaJpegMedia(sourcePath, { resize: { width: 150, height: 220 }, quality: 71, filename: "oriented-returned.jpg" });
+
+    const result = await handleInboundMessage("responder", {
+      id: { _serialized: `true_${chatId}_oriented-returned`, remote: chatId },
+      from: "responder@lid",
+      to: chatId,
+      fromMe: true,
+      body: "",
+      hasMedia: true,
+      type: "image",
+      timestamp: 1_780_000_001,
+      async downloadMedia() {
+        return media;
+      },
+    }, env, { ownOnly: true });
+    const messages = await listThreadMessages("transformed-orientation-thread", env);
+    const events = await listEvents(env, 20);
+    const echoEvent = events.find((event) => event.type === "whatsapp_outbound_echo_attachment_transformed");
+    const inboundFiles = await listFilesRecursive(path.join(home, "whatsapp-bridge", "inbound-media"));
+
+    assert.equal(result.skipped, "outbound_echo_attachment_transformed");
+    assert.equal(messages.length, 0);
+    assert.deepEqual(inboundFiles, []);
+    assert.equal(echoEvent?.decision, "suppress");
+    assert.equal(echoEvent?.matchedAttachmentCount, 1);
+  } finally {
+    await resetLocalWhatsAppBridgeForTest(env);
+  }
+});
+
+test("local whatsapp suppresses two transformed image echoes in one event", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-transformed-multi-image-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "responder",
+    ORKESTR_WHATSAPP_TRANSFORMED_MEDIA_ECHO_MODE: "enforce",
+  };
+  const chatId = "chat-transformed-multi-image@g.us";
+  const firstPath = path.join(home, "multi-first.png");
+  const secondPath = path.join(home, "multi-second.png");
+  await writeSyntheticWaImage(firstPath, "primary");
+  await writeSyntheticWaImage(secondPath, "alternate");
+  await createBoundWhatsAppThreadForTest({ env, threadId: "transformed-multi-image-thread", chatId });
+  const sent = [];
+
+  try {
+    setLocalWhatsAppRuntimeForTest("responder", localImageRuntimeForTest(sent), {}, env);
+    await sendLocalWhatsAppMessage({
+      accountId: "responder",
+      chatId,
+      attachments: [
+        { path: firstPath, filename: "multi-first.png", mimetype: "image/png" },
+        { path: secondPath, filename: "multi-second.png", mimetype: "image/png" },
+      ],
+      env,
+    });
+    const firstMedia = await transformedWaJpegMedia(firstPath, { resize: { width: 205, height: 135 }, quality: 70, filename: "multi-first-returned.jpg" });
+    const secondMedia = await transformedWaJpegMedia(secondPath, { resize: { width: 205, height: 135 }, quality: 70, filename: "multi-second-returned.jpg" });
+
+    const result = await handleInboundMessage("responder", {
+      id: { _serialized: `true_${chatId}_multi-returned`, remote: chatId },
+      from: "responder@lid",
+      to: chatId,
+      fromMe: true,
+      body: "",
+      hasMedia: true,
+      type: "image",
+      timestamp: 1_780_000_002,
+      async downloadMedia() {
+        return [firstMedia, secondMedia];
+      },
+    }, env, { ownOnly: true });
+    const messages = await listThreadMessages("transformed-multi-image-thread", env);
+    const events = await listEvents(env, 20);
+    const echoEvent = events.find((event) => event.type === "whatsapp_outbound_echo_attachment_transformed");
+    const inboundFiles = await listFilesRecursive(path.join(home, "whatsapp-bridge", "inbound-media"));
+
+    assert.equal(sent.length, 2);
+    assert.equal(result.skipped, "outbound_echo_attachment_transformed");
+    assert.equal(messages.length, 0);
+    assert.deepEqual(inboundFiles, []);
+    assert.equal(echoEvent?.decision, "suppress");
+    assert.equal(echoEvent?.matchedAttachmentCount, 2);
+    assert.equal(echoEvent?.retainedAttachmentCount, 0);
+  } finally {
+    await resetLocalWhatsAppBridgeForTest(env);
+  }
+});
+
+test("local whatsapp strips two transformed image echoes but keeps novel event content", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-transformed-multi-novel-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "responder",
+    ORKESTR_WHATSAPP_TRANSFORMED_MEDIA_ECHO_MODE: "enforce",
+  };
+  const chatId = "chat-transformed-multi-novel@g.us";
+  const firstPath = path.join(home, "multi-first.png");
+  const secondPath = path.join(home, "multi-second.png");
+  const novelPath = path.join(home, "multi-novel.png");
+  await writeSyntheticWaImage(firstPath, "primary");
+  await writeSyntheticWaImage(secondPath, "alternate");
+  await writeSyntheticWaImage(novelPath, "novel");
+  await createBoundWhatsAppThreadForTest({ env, threadId: "transformed-multi-novel-thread", chatId });
+
+  try {
+    setLocalWhatsAppRuntimeForTest("responder", localImageRuntimeForTest([]), {}, env);
+    await sendLocalWhatsAppMessage({
+      accountId: "responder",
+      chatId,
+      attachments: [
+        { path: firstPath, filename: "multi-first.png", mimetype: "image/png" },
+        { path: secondPath, filename: "multi-second.png", mimetype: "image/png" },
+      ],
+      env,
+    });
+    const firstMedia = await transformedWaJpegMedia(firstPath, { resize: { width: 205, height: 135 }, quality: 70, filename: "multi-first-returned.jpg" });
+    const secondMedia = await transformedWaJpegMedia(secondPath, { resize: { width: 205, height: 135 }, quality: 70, filename: "multi-second-returned.jpg" });
+    const novelMedia = await transformedWaJpegMedia(novelPath, { resize: { width: 205, height: 135 }, quality: 70, filename: "multi-novel-returned.jpg" });
+
+    const result = await handleInboundMessage("responder", {
+      id: { _serialized: `true_${chatId}_multi-novel`, remote: chatId },
+      from: "responder@lid",
+      to: chatId,
+      fromMe: true,
+      body: "keep multi caption",
+      hasMedia: true,
+      type: "image",
+      timestamp: 1_780_000_003,
+      async downloadMedia() {
+        return [firstMedia, secondMedia, novelMedia];
+      },
+    }, env, { ownOnly: true });
+    const messages = await listThreadMessages("transformed-multi-novel-thread", env);
+    const events = await listEvents(env, 20);
+    const echoEvent = events.find((event) => event.type === "whatsapp_outbound_echo_attachment_transformed");
+    const inboundFiles = await listFilesRecursive(path.join(home, "whatsapp-bridge", "inbound-media"));
+
+    assert.equal(result.routed.threadId, "transformed-multi-novel-thread");
+    assert.equal(messages.length, 1);
+    assert.equal(messages[0].text, "keep multi caption");
+    assert.deepEqual(messages[0].attachments.map((attachment) => attachment.filename), ["multi-novel-returned.jpg"]);
+    assert.equal(inboundFiles.length, 1);
+    assert.match(path.basename(inboundFiles[0]), /multi-novel-returned\.jpg$/);
+    assert.equal(echoEvent?.decision, "filter");
+    assert.equal(echoEvent?.matchedAttachmentCount, 2);
+    assert.equal(echoEvent?.retainedAttachmentCount, 1);
+  } finally {
+    await resetLocalWhatsAppBridgeForTest(env);
+  }
+});
+
+test("local whatsapp transformed image matcher does not cycle-alert distinct same-dimension near-size images", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-transformed-image-negative-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "responder",
+    ORKESTR_WHATSAPP_TRANSFORMED_MEDIA_ECHO_MODE: "enforce",
+  };
+  const chatId = "chat-transformed-image-negative@g.us";
+  const sourcePath = path.join(home, "outbound.png");
+  const otherPath = path.join(home, "other.png");
+  await writeSyntheticWaImage(sourcePath, "primary");
+  await writeSyntheticWaImage(otherPath, "alternate");
+  await createBoundWhatsAppThreadForTest({ env, threadId: "transformed-negative-thread", chatId });
+  resetObservabilityForTests();
+
+  try {
+    setLocalWhatsAppRuntimeForTest("responder", localImageRuntimeForTest([]), {}, env);
+    await sendLocalWhatsAppMessage({
+      accountId: "responder",
+      chatId,
+      attachments: [{ path: sourcePath, filename: "outbound.png", mimetype: "image/png" }],
+      env,
+    });
+    const media = await transformedWaJpegMedia(otherPath, { resize: { width: 210, height: 140 }, quality: 69, filename: "same-dimensions.jpg" });
+
+    const result = await handleInboundMessage("responder", {
+      id: { _serialized: `true_${chatId}_distinct-image`, remote: chatId },
+      from: "responder@lid",
+      to: chatId,
+      fromMe: true,
+      body: "manual image with caption",
+      hasMedia: true,
+      type: "image",
+      timestamp: 1_780_000_001,
+      async downloadMedia() {
+        return media;
+      },
+    }, env, { ownOnly: true });
+    const messages = await listThreadMessages("transformed-negative-thread", env);
+    const events = await listEvents(env, 50);
+    const cycleEvent = events.find((event) => event.type === "whatsapp_outbound_echo_attachment_transformed_cycle_suspected");
+    const watcherEvent = events.find((event) =>
+      event.type === "watcher_alert_recorded" &&
+      event.source === "connectors.whatsapp.media_echo" &&
+      event.code === "outbound_media_inbound_assistant_cycle_suspected"
+    );
+    const metrics = renderOpenMetrics();
+
+    assert.equal(result.routed.threadId, "transformed-negative-thread");
+    assert.equal(messages.length, 1);
+    assert.equal(messages[0].text, "manual image with caption");
+    assert.equal(messages[0].attachments.length, 1);
+    assert.equal(Boolean(cycleEvent), false);
+    assert.equal(Boolean(watcherEvent), false);
+    assertMetricLine(metrics, "orkestr_whatsapp_outbound_echo_attachment_transformed_unmatched_total", [
+      'mode="enforce"',
+      'source="local_bridge"',
+      'reason="no_match"',
+    ]);
+    assert.equal(metrics.includes("orkestr_whatsapp_outbound_echo_attachment_transformed_cycle_suspected_total"), false);
+  } finally {
+    await resetLocalWhatsAppBridgeForTest(env);
+  }
+});
+
+test("local whatsapp transformed image matcher fails open for distinct solid aHash collisions", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-transformed-solid-negative-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "responder",
+    ORKESTR_WHATSAPP_TRANSFORMED_MEDIA_ECHO_MODE: "enforce",
+  };
+  const chatId = "chat-transformed-solid-negative@g.us";
+  const redPath = path.join(home, "solid-red.png");
+  const bluePath = path.join(home, "solid-blue.png");
+  await writeSolidWaImage(redPath, "#ff0000");
+  await writeSolidWaImage(bluePath, "#0000ff");
+  await createBoundWhatsAppThreadForTest({ env, threadId: "transformed-solid-negative-thread", chatId });
+
+  try {
+    setLocalWhatsAppRuntimeForTest("responder", localImageRuntimeForTest([]), {}, env);
+    await sendLocalWhatsAppMessage({
+      accountId: "responder",
+      chatId,
+      attachments: [{ path: redPath, filename: "solid-red.png", mimetype: "image/png" }],
+      env,
+    });
+    const media = await transformedWaJpegMedia(bluePath, { resize: { width: 120, height: 120 }, quality: 70, filename: "solid-blue.jpg" });
+
+    const result = await handleInboundMessage("responder", {
+      id: { _serialized: `true_${chatId}_solid-blue`, remote: chatId },
+      from: "responder@lid",
+      to: chatId,
+      fromMe: true,
+      body: "intentional solid image",
+      hasMedia: true,
+      type: "image",
+      timestamp: 1_780_000_001,
+      async downloadMedia() {
+        return media;
+      },
+    }, env, { ownOnly: true });
+    const messages = await listThreadMessages("transformed-solid-negative-thread", env);
+
+    assert.equal(result.routed.threadId, "transformed-solid-negative-thread");
+    assert.equal(messages.length, 1);
+    assert.equal(messages[0].text, "intentional solid image");
+  } finally {
+    await resetLocalWhatsAppBridgeForTest(env);
+  }
+});
+
+test("local whatsapp transformed image matcher fails open for distinct near-red low-information collisions", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-transformed-near-red-negative-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "responder",
+    ORKESTR_WHATSAPP_TRANSFORMED_MEDIA_ECHO_MODE: "enforce",
+  };
+  const chatId = "chat-transformed-near-red-negative@g.us";
+  const redOnePath = path.join(home, "near-red-one.png");
+  const redTwoPath = path.join(home, "near-red-two.png");
+  await writeSolidWaImage(redOnePath, "#b00000");
+  await writeSolidWaImage(redTwoPath, "#bf0000");
+  await createBoundWhatsAppThreadForTest({ env, threadId: "transformed-near-red-negative-thread", chatId });
+
+  try {
+    setLocalWhatsAppRuntimeForTest("responder", localImageRuntimeForTest([]), {}, env);
+    await sendLocalWhatsAppMessage({
+      accountId: "responder",
+      chatId,
+      attachments: [{ path: redOnePath, filename: "near-red-one.png", mimetype: "image/png" }],
+      env,
+    });
+    const media = await transformedWaJpegMedia(redTwoPath, { resize: { width: 120, height: 120 }, quality: 70, filename: "near-red-two.jpg" });
+
+    const result = await handleInboundMessage("responder", {
+      id: { _serialized: `true_${chatId}_near-red-two`, remote: chatId },
+      from: "responder@lid",
+      to: chatId,
+      fromMe: true,
+      body: "intentional near-red image",
+      hasMedia: true,
+      type: "image",
+      timestamp: 1_780_000_001,
+      async downloadMedia() {
+        return media;
+      },
+    }, env, { ownOnly: true });
+    const messages = await listThreadMessages("transformed-near-red-negative-thread", env);
+
+    assert.equal(result.routed.threadId, "transformed-near-red-negative-thread");
+    assert.equal(messages.length, 1);
+    assert.equal(messages[0].text, "intentional near-red image");
+  } finally {
+    await resetLocalWhatsAppBridgeForTest(env);
+  }
+});
+
+test("whatsapp router strips only transformed echo images from mixed attachment events", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-router-transformed-mixed-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "responder",
+    ORKESTR_WHATSAPP_TRANSFORMED_MEDIA_ECHO_MODE: "enforce",
+  };
+  const chatId = "chat-router-transformed-mixed@g.us";
+  const sourcePath = path.join(home, "outbound.png");
+  const novelPath = path.join(home, "novel.png");
+  const echoPath = path.join(home, "echo.jpg");
+  const novelJpegPath = path.join(home, "novel.jpg");
+  await writeSyntheticWaImage(sourcePath, "primary");
+  await writeSyntheticWaImage(novelPath, "novel");
+  await createBoundWhatsAppThreadForTest({ env, threadId: "router-transformed-mixed-thread", chatId });
+
+  try {
+    setLocalWhatsAppRuntimeForTest("responder", localImageRuntimeForTest([]), {}, env);
+    await sendLocalWhatsAppMessage({
+      accountId: "responder",
+      chatId,
+      attachments: [{ path: sourcePath, filename: "outbound.png", mimetype: "image/png" }],
+      env,
+    });
+    const echo = await transformedWaJpegMedia(sourcePath, { resize: { width: 208, height: 138 }, quality: 72, filename: "echo.jpg" });
+    const novel = await transformedWaJpegMedia(novelPath, { resize: { width: 208, height: 138 }, quality: 72, filename: "novel.jpg" });
+    await fs.writeFile(echoPath, echo.buffer);
+    await fs.writeFile(novelJpegPath, novel.buffer);
+
+    const result = await routeWhatsAppInbound({
+      eventId: `true_${chatId}_router-mixed`,
+      chatId,
+      from: "responder@lid",
+      accountId: "responder",
+      fromMe: true,
+      text: "keep this caption",
+      attachments: [
+        { path: echoPath, filename: "echo.jpg", mimetype: "image/jpeg", kind: "image", size: echo.buffer.length },
+        { path: novelJpegPath, filename: "novel.jpg", mimetype: "image/jpeg", kind: "image", size: novel.buffer.length },
+      ],
+      timestamp: "2026-08-07T12:00:00.000Z",
+    }, env);
+    const messages = await listThreadMessages("router-transformed-mixed-thread", env);
+
+    assert.equal(result.threadId, "router-transformed-mixed-thread");
+    assert.equal(messages.length, 1);
+    assert.equal(messages[0].text, "keep this caption");
+    assert.deepEqual(messages[0].attachments.map((attachment) => attachment.filename), ["novel.jpg"]);
+    assert.equal(Boolean(await fs.stat(echoPath).catch(() => null)), true);
+  } finally {
+    await resetLocalWhatsAppBridgeForTest(env);
+  }
+});
+
+test("whatsapp router preserves caption appended after generated attachment summary prefix", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-router-transformed-caption-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "responder",
+    ORKESTR_WHATSAPP_TRANSFORMED_MEDIA_ECHO_MODE: "enforce",
+  };
+  const chatId = "chat-router-transformed-caption@g.us";
+  const sourcePath = path.join(home, "caption-source.png");
+  const echoPath = path.join(home, "echo-caption.jpg");
+  await writeSyntheticWaImage(sourcePath, "primary");
+  await createBoundWhatsAppThreadForTest({ env, threadId: "router-transformed-caption-thread", chatId });
+
+  try {
+    setLocalWhatsAppRuntimeForTest("responder", localImageRuntimeForTest([]), {}, env);
+    await sendLocalWhatsAppMessage({
+      accountId: "responder",
+      chatId,
+      attachments: [{ path: sourcePath, filename: "caption-source.png", mimetype: "image/png" }],
+      env,
+    });
+    const echo = await transformedWaJpegMedia(sourcePath, { resize: { width: 208, height: 138 }, quality: 72, filename: "echo-caption.jpg" });
+    await fs.writeFile(echoPath, echo.buffer);
+    const generatedSummary = [
+      "WhatsApp attachment received.",
+      "Attachment 1: echo-caption.jpg\nmimetype: image/jpeg",
+    ].join("\n\n");
+    const text = `${generatedSummary}\n\nPlease preserve this caption.`;
+
+    const result = await routeWhatsAppInbound({
+      eventId: `true_${chatId}_router-caption`,
+      chatId,
+      from: "responder@lid",
+      accountId: "responder",
+      fromMe: true,
+      text,
+      attachments: [
+        { path: echoPath, filename: "echo-caption.jpg", mimetype: "image/jpeg", kind: "image", size: echo.buffer.length },
+      ],
+      timestamp: "2026-08-07T12:00:00.000Z",
+    }, env);
+    const messages = await listThreadMessages("router-transformed-caption-thread", env);
+
+    assert.equal(result.threadId, "router-transformed-caption-thread");
+    assert.equal(messages.length, 1);
+    assert.equal(messages[0].text, text);
+    assert.deepEqual(messages[0].attachments || [], []);
+  } finally {
+    await resetLocalWhatsAppBridgeForTest(env);
+  }
+});
+
+test("local whatsapp transformed image echo ledger survives bridge restart", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-transformed-restart-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "responder",
+    ORKESTR_WHATSAPP_TRANSFORMED_MEDIA_ECHO_MODE: "enforce",
+  };
+  const chatId = "chat-transformed-restart@g.us";
+  const sourcePath = path.join(home, "restart-source.png");
+  await writeSyntheticWaImage(sourcePath, "primary");
+
+  try {
+    setLocalWhatsAppRuntimeForTest("responder", localImageRuntimeForTest([]), {}, env);
+    await sendLocalWhatsAppMessage({
+      accountId: "responder",
+      chatId,
+      attachments: [{ path: sourcePath, filename: "restart-source.png", mimetype: "image/png" }],
+      env,
+    });
+    const media = await transformedWaJpegMedia(sourcePath, { resize: { width: 200, height: 130 }, quality: 70 });
+    await resetLocalWhatsAppBridgeForTest(env);
+
+    const result = await handleInboundMessage("responder", {
+      id: { _serialized: `true_${chatId}_after-restart`, remote: chatId },
+      from: "responder@lid",
+      to: chatId,
+      fromMe: true,
+      body: "",
+      hasMedia: true,
+      type: "image",
+      timestamp: 1_780_000_002,
+      async downloadMedia() {
+        return media;
+      },
+    }, env, { ownOnly: true });
+
+    assert.equal(result.skipped, "outbound_echo_attachment_transformed");
+  } finally {
+    await resetLocalWhatsAppBridgeForTest(env);
+  }
+});
+
+test("local whatsapp transformed image echo respects ttl, chat, and cross-account scope", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-transformed-scope-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "primary,secondary",
+    ORKESTR_WHATSAPP_TRANSFORMED_MEDIA_ECHO_MODE: "enforce",
+    ORKESTR_WHATSAPP_TRANSFORMED_MEDIA_ECHO_TTL_MS: "1000",
+  };
+  const chatId = "chat-transformed-scope@g.us";
+  const otherChatId = "chat-transformed-other@g.us";
+  const sourcePath = path.join(home, "scope-source.png");
+  await writeSyntheticWaImage(sourcePath, "primary");
+  await createBoundWhatsAppThreadForTest({ env, threadId: "transformed-scope-thread", chatId, accountId: "secondary" });
+  await createBoundWhatsAppThreadForTest({ env, threadId: "transformed-scope-other-thread", chatId: otherChatId, accountId: "secondary" });
+
+  try {
+    setLocalWhatsAppRuntimeForTest("primary", localImageRuntimeForTest([]), {}, env);
+    await sendLocalWhatsAppMessage({
+      accountId: "primary",
+      chatId,
+      attachments: [{ path: sourcePath, filename: "scope-source.png", mimetype: "image/png" }],
+      env,
+    });
+    const media = await transformedWaJpegMedia(sourcePath, { resize: { width: 206, height: 136 }, quality: 71 });
+
+    const crossAccount = await handleInboundMessage("secondary", {
+      id: { _serialized: `false_${chatId}_cross-account`, remote: chatId },
+      from: chatId,
+      author: "primary@lid",
+      fromMe: false,
+      body: "",
+      hasMedia: true,
+      type: "image",
+      timestamp: 1_780_000_003,
+      async downloadMedia() {
+        return media;
+      },
+    }, env);
+    const wrongChat = await handleInboundMessage("secondary", {
+      id: { _serialized: `false_${otherChatId}_wrong-chat`, remote: otherChatId },
+      from: otherChatId,
+      author: "primary@lid",
+      fromMe: false,
+      body: "same image in another chat",
+      hasMedia: true,
+      type: "image",
+      timestamp: 1_780_000_004,
+      async downloadMedia() {
+        return media;
+      },
+    }, env);
+    await new Promise((resolve) => setTimeout(resolve, 1100));
+    const expired = await handleInboundMessage("secondary", {
+      id: { _serialized: `false_${chatId}_expired`, remote: chatId },
+      from: chatId,
+      author: "primary@lid",
+      fromMe: false,
+      body: "expired echo candidate",
+      hasMedia: true,
+      type: "image",
+      timestamp: 1_780_000_005,
+      async downloadMedia() {
+        return media;
+      },
+    }, env);
+
+    assert.notEqual(crossAccount.skipped, "outbound_echo_attachment_transformed");
+    assert.notEqual(wrongChat.skipped, "outbound_echo_attachment_transformed");
+    assert.notEqual(expired.skipped, "outbound_echo_attachment_transformed");
+  } finally {
+    await resetLocalWhatsAppBridgeForTest(env);
+  }
+});
+
+test("local whatsapp transformed image echo matcher routes corrupt unsupported media", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-transformed-corrupt-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "responder",
+    ORKESTR_WHATSAPP_TRANSFORMED_MEDIA_ECHO_MODE: "enforce",
+  };
+  const chatId = "chat-transformed-corrupt@g.us";
+  const sourcePath = path.join(home, "corrupt-source.png");
+  await writeSyntheticWaImage(sourcePath, "primary");
+  await createBoundWhatsAppThreadForTest({ env, threadId: "transformed-corrupt-thread", chatId });
+
+  try {
+    setLocalWhatsAppRuntimeForTest("responder", localImageRuntimeForTest([]), {}, env);
+    await sendLocalWhatsAppMessage({
+      accountId: "responder",
+      chatId,
+      attachments: [{ path: sourcePath, filename: "corrupt-source.png", mimetype: "image/png" }],
+      env,
+    });
+
+    const result = await handleInboundMessage("responder", {
+      id: { _serialized: `true_${chatId}_corrupt`, remote: chatId },
+      from: "responder@lid",
+      to: chatId,
+      fromMe: true,
+      body: "broken image should route",
+      hasMedia: true,
+      type: "image",
+      timestamp: 1_780_000_006,
+      async downloadMedia() {
+        return {
+          data: Buffer.from("not an image").toString("base64"),
+          mimetype: "image/jpeg",
+          filename: "corrupt.jpg",
+        };
+      },
+    }, env, { ownOnly: true });
+    const messages = await listThreadMessages("transformed-corrupt-thread", env);
+
+    assert.equal(result.routed.threadId, "transformed-corrupt-thread");
+    assert.equal(messages.length, 1);
+    assert.equal(messages[0].text, "broken image should route");
+  } finally {
+    await resetLocalWhatsAppBridgeForTest(env);
+  }
+});
+
+test("local whatsapp transformed image echo consumes matched records before a later resend", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-transformed-repeat-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "responder",
+    ORKESTR_WHATSAPP_TRANSFORMED_MEDIA_ECHO_MODE: "enforce",
+  };
+  const chatId = "chat-transformed-repeat@g.us";
+  const sourcePath = path.join(home, "repeat-source.png");
+  await writeSyntheticWaImage(sourcePath, "primary");
+  await createBoundWhatsAppThreadForTest({ env, threadId: "transformed-repeat-thread", chatId });
+
+  try {
+    setLocalWhatsAppRuntimeForTest("responder", localImageRuntimeForTest([]), {}, env);
+    await sendLocalWhatsAppMessage({
+      accountId: "responder",
+      chatId,
+      attachments: [{ path: sourcePath, filename: "repeat-source.png", mimetype: "image/png" }],
+      env,
+    });
+    const media = await transformedWaJpegMedia(sourcePath, { resize: { width: 204, height: 134 }, quality: 73 });
+    const first = await handleInboundMessage("responder", {
+      id: { _serialized: `true_${chatId}_repeat-echo`, remote: chatId },
+      from: "responder@lid",
+      to: chatId,
+      fromMe: true,
+      body: "",
+      hasMedia: true,
+      type: "image",
+      timestamp: 1_780_000_007,
+      async downloadMedia() {
+        return media;
+      },
+    }, env, { ownOnly: true });
+    const second = await handleInboundMessage("responder", {
+      id: { _serialized: `true_${chatId}_repeat-intentional`, remote: chatId },
+      from: "responder@lid",
+      to: chatId,
+      fromMe: true,
+      body: "intentional resend",
+      hasMedia: true,
+      type: "image",
+      timestamp: 1_780_000_008,
+      async downloadMedia() {
+        return media;
+      },
+    }, env, { ownOnly: true });
+    const messages = await listThreadMessages("transformed-repeat-thread", env);
+
+    assert.equal(first.skipped, "outbound_echo_attachment_transformed");
+    assert.notEqual(second.skipped, "outbound_echo_attachment_transformed");
+    assert.equal(second.routed.threadId, "transformed-repeat-thread");
+    assert.equal(messages.length, 1);
+    assert.equal(messages[0].text, "intentional resend");
+  } finally {
+    await resetLocalWhatsAppBridgeForTest(env);
+  }
+});
+
+test("local whatsapp transformed image echo consumes only one concurrent callback", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-transformed-concurrency-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "responder",
+    ORKESTR_WHATSAPP_TRANSFORMED_MEDIA_ECHO_MODE: "enforce",
+  };
+  const chatId = "chat-transformed-concurrency@g.us";
+  const sourcePath = path.join(home, "concurrent-source.png");
+  await writeSyntheticWaImage(sourcePath, "primary");
+  await createBoundWhatsAppThreadForTest({ env, threadId: "transformed-concurrency-thread", chatId });
+
+  try {
+    setLocalWhatsAppRuntimeForTest("responder", localImageRuntimeForTest([]), {}, env);
+    await sendLocalWhatsAppMessage({
+      accountId: "responder",
+      chatId,
+      attachments: [{ path: sourcePath, filename: "concurrent-source.png", mimetype: "image/png" }],
+      env,
+    });
+    const media = await transformedWaJpegMedia(sourcePath, { resize: { width: 204, height: 134 }, quality: 73 });
+    const inbound = (suffix) => handleInboundMessage("responder", {
+      id: { _serialized: `true_${chatId}_${suffix}`, remote: chatId },
+      from: "responder@lid",
+      to: chatId,
+      fromMe: true,
+      body: "",
+      hasMedia: true,
+      type: "image",
+      timestamp: 1_780_000_007,
+      async downloadMedia() {
+        return media;
+      },
+    }, env, { ownOnly: true });
+
+    const results = await Promise.all([inbound("concurrent-a"), inbound("concurrent-b")]);
+    const messages = await listThreadMessages("transformed-concurrency-thread", env);
+
+    assert.equal(results.filter((result) => result.skipped === "outbound_echo_attachment_transformed").length, 1);
+    assert.equal(results.filter((result) => result.routed?.threadId === "transformed-concurrency-thread").length, 1);
+    assert.equal(messages.length, 1);
+  } finally {
+    await resetLocalWhatsAppBridgeForTest(env);
+  }
+});
+
+test("whatsapp transformed image matcher skips non-self media before fingerprinting", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-transformed-not-from-me-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_TRANSFORMED_MEDIA_ECHO_MODE: "enforce",
+  };
+  const missingPath = path.join(home, "missing-image.jpg");
+
+  const result = await filterTransformedMediaEchoAttachments({
+    accountId: "responder",
+    chatId: "chat-not-from-me@g.us",
+    fromMe: false,
+    text: "user sent an image",
+    attachments: [{ path: missingPath, filename: "missing-image.jpg", mimetype: "image/jpeg", kind: "image" }],
+    env,
+    source: "test",
+  });
+  const ledgerPath = path.join(home, "whatsapp-transformed-media-echo-ledger.json");
+
+  assert.equal(result.action, "not_from_me");
+  assert.equal(result.text, "user sent an image");
+  assert.equal(result.attachments.length, 1);
+  assert.equal(Boolean(await fs.stat(ledgerPath).catch(() => null)), false);
+});
+
+test("whatsapp transformed image telemetry counts ambiguous match candidates", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-transformed-ambiguous-telemetry-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_TRANSFORMED_MEDIA_ECHO_MODE: "enforce",
+  };
+  const chatId = "chat-transformed-ambiguous-telemetry@g.us";
+  const sourcePath = path.join(home, "ambiguous-source.png");
+  const inboundPath = path.join(home, "ambiguous-returned.jpg");
+  await writeSyntheticWaImage(sourcePath, "primary");
+  resetObservabilityForTests();
+
+  await rememberTransformedOutboundMediaEcho({
+    accountId: "responder",
+    chatId,
+    attachment: { path: sourcePath, filename: "ambiguous-source.png", mimetype: "image/png" },
+    deliveredMessageId: "ambiguous-first",
+    env,
+  });
+  await rememberTransformedOutboundMediaEcho({
+    accountId: "responder",
+    chatId,
+    attachment: { path: sourcePath, filename: "ambiguous-source.png", mimetype: "image/png" },
+    deliveredMessageId: "ambiguous-second",
+    env,
+  });
+  const media = await transformedWaJpegMedia(sourcePath, { resize: { width: 204, height: 134 }, quality: 73, filename: "ambiguous-returned.jpg" });
+  await fs.writeFile(inboundPath, media.buffer);
+
+  const result = await filterTransformedMediaEchoAttachments({
+    accountId: "responder",
+    chatId,
+    fromMe: true,
+    text: "ambiguous image should route",
+    attachments: [{ path: inboundPath, filename: "ambiguous-returned.jpg", mimetype: "image/jpeg", kind: "image", size: media.buffer.length }],
+    env,
+    source: "test",
+  });
+  const metrics = renderOpenMetrics();
+
+  assert.equal(result.action, "ambiguous");
+  assert.equal(result.ambiguous, 1);
+  assert.equal(result.unmatched, 0);
+  assert.equal(result.candidateRecordCount, 2);
+  assert.equal(result.cycleSignal, null);
+  assertMetricLine(metrics, "orkestr_whatsapp_outbound_echo_attachment_transformed_ambiguous_total", [
+    'mode="enforce"',
+    'source="test"',
+  ]);
+  assertMetricLine(metrics, "orkestr_whatsapp_outbound_echo_attachment_transformed_match_duration_seconds_count", [
+    'result="ambiguous"',
+    'mode="enforce"',
+    'source="test"',
+  ]);
+});
+
+test("whatsapp transformed image echo ledger lock preserves concurrent writers across processes", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-transformed-cross-process-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_TRANSFORMED_MEDIA_ECHO_MODE: "enforce",
+    ORKESTR_WHATSAPP_TRANSFORMED_MEDIA_ECHO_LOCK_WAIT_MS: "10000",
+  };
+  const chatId = "chat-cross-process@g.us";
+  const firstPath = path.join(home, "cross-process-first.png");
+  const secondPath = path.join(home, "cross-process-second.png");
+  await writeSyntheticWaImage(firstPath, "primary");
+  await writeSyntheticWaImage(secondPath, "novel");
+  const code = `
+    import { rememberTransformedOutboundMediaEcho } from "./packages/connectors/src/whatsapp-media-echo.js";
+    const payload = JSON.parse(process.argv[1]);
+    const result = await rememberTransformedOutboundMediaEcho(payload);
+    if (!result.recorded) {
+      console.error(JSON.stringify(result));
+      process.exit(2);
+    }
+  `;
+  const childEnv = { ...process.env, ORKESTR_WHATSAPP_AUTOSTART: "0", WHATSAPP_LOCAL_AUTOSTART: "0" };
+
+  await Promise.all([
+    execFileAsync(process.execPath, ["--input-type=module", "-e", code, JSON.stringify({
+      accountId: "responder",
+      chatId,
+      attachment: { path: firstPath, filename: "cross-process-first.png", mimetype: "image/png" },
+      deliveredMessageId: "cross-process-first",
+      env,
+    })], { cwd: process.cwd(), env: childEnv }),
+    execFileAsync(process.execPath, ["--input-type=module", "-e", code, JSON.stringify({
+      accountId: "responder",
+      chatId,
+      attachment: { path: secondPath, filename: "cross-process-second.png", mimetype: "image/png" },
+      deliveredMessageId: "cross-process-second",
+      env,
+    })], { cwd: process.cwd(), env: childEnv }),
+  ]);
+  const ledger = JSON.parse(await fs.readFile(path.join(home, "whatsapp-transformed-media-echo-ledger.json"), "utf8"));
+  const messageIds = ledger.records.map((record) => record.deliveredMessageId).sort();
+
+  assert.deepEqual(messageIds, ["cross-process-first", "cross-process-second"]);
+});
+
+test("whatsapp transformed image echo ledger stale cleanup keeps replacement lock", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-transformed-lock-stale-race-"));
+  const env = {
+    ORKESTR_HOME: home,
+  };
+  const oldMs = Date.now() - 60_000;
+  await writeTransformedMediaEchoLockOwnerForTest(env, "stale-owner", {
+    pid: 999999999,
+    processStartTicks: "1",
+    acquiredAtMs: oldMs,
+  });
+  let replaced = false;
+
+  await assert.rejects(
+    acquireTransformedMediaEchoLedgerLockForTest(env, {
+      token: "new-owner",
+      waitMs: 100,
+      retryMs: 5,
+      staleMs: 1000,
+      hooks: {
+        async beforeStaleOwnerUnlink() {
+          if (replaced) return;
+          replaced = true;
+          await writeTransformedMediaEchoLockOwnerForTest(env, "successor-owner");
+        },
+      },
+    }),
+    /transformed_media_echo_ledger_lock_timeout/,
+  );
+
+  assert.equal(await transformedMediaEchoLockOwnerTokenForTest(env), "successor-owner");
+  await fs.rm(transformedMediaEchoLedgerLockPathForTest(env), { recursive: true, force: true });
+});
+
+test("whatsapp transformed image echo ledger lock does not steal slow live holder beyond stale window", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-transformed-lock-live-holder-"));
+  const env = {
+    ORKESTR_HOME: home,
+  };
+  const live = await acquireTransformedMediaEchoLedgerLockForTest(env, { token: "live-holder" });
+  const old = new Date(Date.now() - 60_000);
+
+  await fs.utimes(live.ownerPath, old, old);
+  await fs.utimes(live.lockPath, old, old);
+  try {
+    await assert.rejects(
+      acquireTransformedMediaEchoLedgerLockForTest(env, {
+        token: "competitor",
+        waitMs: 100,
+        retryMs: 5,
+        staleMs: 1000,
+      }),
+      /transformed_media_echo_ledger_lock_timeout/,
+    );
+
+    assert.equal(await transformedMediaEchoLockOwnerTokenForTest(env), "live-holder");
+  } finally {
+    await live.release();
+  }
+});
+
+test("whatsapp transformed image echo ledger lock release keeps replacement lock", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-transformed-lock-token-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_TRANSFORMED_MEDIA_ECHO_LOCK_WAIT_MS: "1000",
+  };
+  const lock = await acquireTransformedMediaEchoLedgerLockForTest(env, {
+    token: "old-owner",
+    hooks: {
+      async beforeReleaseOwnerUnlink() {
+        await writeTransformedMediaEchoLockOwnerForTest(env, "successor-owner");
+      },
+    },
+  });
+
+  await lock.release();
+
+  assert.equal(await transformedMediaEchoLockOwnerTokenForTest(env), "successor-owner");
+  await fs.rm(transformedMediaEchoLedgerLockPathForTest(env), { recursive: true, force: true });
+});
+
+test("local whatsapp transformed image echo feature flag off routes the callback", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-transformed-off-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "responder",
+    ORKESTR_WHATSAPP_TRANSFORMED_MEDIA_ECHO_MODE: "off",
+  };
+  const chatId = "chat-transformed-off@g.us";
+  const sourcePath = path.join(home, "off-source.png");
+  await writeSyntheticWaImage(sourcePath, "primary");
+  await createBoundWhatsAppThreadForTest({ env, threadId: "transformed-off-thread", chatId });
+
+  try {
+    setLocalWhatsAppRuntimeForTest("responder", localImageRuntimeForTest([]), {}, env);
+    await sendLocalWhatsAppMessage({
+      accountId: "responder",
+      chatId,
+      attachments: [{ path: sourcePath, filename: "off-source.png", mimetype: "image/png" }],
+      env,
+    });
+    const media = await transformedWaJpegMedia(sourcePath, { resize: { width: 202, height: 132 }, quality: 73 });
+
+    const result = await handleInboundMessage("responder", {
+      id: { _serialized: `true_${chatId}_off`, remote: chatId },
+      from: "responder@lid",
+      to: chatId,
+      fromMe: true,
+      body: "off mode keeps this visible",
+      hasMedia: true,
+      type: "image",
+      timestamp: 1_780_000_008,
+      async downloadMedia() {
+        return media;
+      },
+    }, env, { ownOnly: true });
+    const messages = await listThreadMessages("transformed-off-thread", env);
+
+    assert.equal(result.routed.threadId, "transformed-off-thread");
+    assert.equal(messages.length, 1);
+    assert.equal(messages[0].text, "off mode keeps this visible");
   } finally {
     await resetLocalWhatsAppBridgeForTest(env);
   }

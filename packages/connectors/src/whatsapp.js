@@ -23,6 +23,7 @@ import {
   routerTraceIdFor,
   turnIdFor,
 } from "../../core/src/router-traces.js";
+import { recordWatcherAlert } from "../../core/src/watcher-alerts.js";
 import { appendThreadMessage, createThreadForPrincipal, enqueueThreadInputForPrincipal, getThread, listThreadMessages, listThreads, listThreadsForPrincipal, updateThread, updateThreadMessage } from "../../core/src/threads.js";
 import { adminUserId, findOrCreateExternalUser, getUser, normalizeUserId } from "../../core/src/users.js";
 import { dataPaths, ensureDataDirs } from "../../storage/src/paths.js";
@@ -69,6 +70,7 @@ import {
   outboundDeliveryKey,
   pruneOutboundDeliveryClaims,
 } from "./whatsapp-delivery-ledger.js";
+import { filterTransformedMediaEchoAttachments } from "./whatsapp-media-echo.js";
 import {
   advanceWhatsAppOutboundMirrorCursors,
   canCreateWhatsAppOutboundIntent,
@@ -962,6 +964,18 @@ function pickString(...values) {
     if (text) return text;
   }
   return "";
+}
+
+function whatsappRouterAttachmentSummaryText(attachments = []) {
+  const items = Array.isArray(attachments) ? attachments : [];
+  if (!items.length) return "";
+  return [
+    "WhatsApp attachment received.",
+    ...items.map((attachment, index) => [
+      `Attachment ${index + 1}: ${pickString(attachment.filename, path.basename(pickString(attachment.path)), "attachment")}`,
+      pickString(attachment.mimetype) ? `mimetype: ${pickString(attachment.mimetype)}` : "",
+    ].filter(Boolean).join("\n")),
+  ].join("\n\n");
 }
 
 function nonRetryableWhatsAppOutboundError(error) {
@@ -4045,6 +4059,60 @@ async function handleWhatsAppRouterStatusCommand({
   };
 }
 
+async function recordWhatsAppTransformedMediaEchoCycleSignal({
+  routerTraceId = "",
+  turnId = "",
+  accountId = "",
+  chatId = "",
+  eventId = "",
+  result = {},
+  source = "router",
+  env = process.env,
+} = {}) {
+  if (result?.cycleSignal?.suspected !== true) return;
+  const signal = result.cycleSignal;
+  await recordRouterTraceEvent({
+    routerTraceId,
+    turnId,
+    connector: "whatsapp",
+    accountId,
+    chatId,
+    sourceEventId: eventId,
+    phase: "warning",
+    reason: "outbound_media_inbound_assistant_cycle_suspected",
+  }, env).catch(() => {});
+  await appendEvent({
+    type: "whatsapp_outbound_echo_attachment_transformed_cycle_suspected",
+    eventId,
+    routerTraceId,
+    source,
+    mode: signal.mode || result.mode || "",
+    decision: result.action || "",
+    reason: signal.reason || "",
+    mediaKind: signal.mediaKind || "image",
+    matchedAttachmentBucket: signal.matchedAttachmentBucket || "",
+    retainedAttachmentBucket: signal.retainedAttachmentBucket || "",
+    candidateRecordBucket: signal.candidateRecordBucket || "",
+  }, env).catch(() => {});
+  await recordWatcherAlert({
+    severity: "warning",
+    source: "connectors.whatsapp.media_echo",
+    code: "outbound_media_inbound_assistant_cycle_suspected",
+    message: "Potential WhatsApp outbound media echo is being routed back to the assistant.",
+    details: {
+      connector: "whatsapp",
+      source,
+      mode: signal.mode || result.mode || "",
+      decision: result.action || "",
+      reason: signal.reason || "",
+      mediaKind: signal.mediaKind || "image",
+      matchedAttachmentBucket: signal.matchedAttachmentBucket || "",
+      retainedAttachmentBucket: signal.retainedAttachmentBucket || "",
+      candidateRecordBucket: signal.candidateRecordBucket || "",
+    },
+  }, env).catch(() => {});
+}
+
 export async function routeWhatsAppInbound(input = {}, env = process.env, fetchImpl = fetch) {
   const config = await readConnectorConfig("whatsapp", env);
   const eventId = pickString(input.eventId, input.id, input.messageId);
@@ -4420,7 +4488,7 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
   const disabledTarget = await skipDisabledBinding(threadId);
   if (disabledTarget) return disabledTarget;
 
-  const text = stripWhatsAppDebugFooter(pickString(input.text, input.body, input.message));
+  let text = stripWhatsAppDebugFooter(pickString(input.text, input.body, input.message));
   const promptFile = pickString(input.promptFile);
   if (!text && !promptFile) {
     await recordRouterTraceEvent({
@@ -4443,12 +4511,114 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
   const accountId = pickString(input.accountId, threadRoute.binding?.outboundAccountId);
   const routerTraceId = initialTraceId;
   const turnId = initialTurnId;
+  let attachments = Array.isArray(input.attachments) ? input.attachments : [];
+  const localBridgeTransformedMediaEchoChecked =
+    input?.transformedMediaEchoChecked?.source === "local_bridge" &&
+    input?.transformedMediaEchoChecked?.checked !== false;
+  const transformedEcho = localBridgeTransformedMediaEchoChecked
+    ? null
+    : await filterTransformedMediaEchoAttachments({
+        accountId,
+        chatId,
+        eventId,
+        terminalEventId: eventId,
+        fromMe: input.fromMe === true,
+        text,
+        attachments,
+        env,
+        source: "router",
+      }).catch((error) => {
+        appendEvent({
+          type: "whatsapp_outbound_echo_attachment_transformed_match_failed",
+          eventId,
+          canonicalEventId,
+          routerTraceId,
+          chatId,
+          accountId,
+          source: "router",
+          errorClass: "transformed_media_echo_match_failed",
+        }, env).catch(() => {});
+        return null;
+      });
+  if (transformedEcho?.matched?.length) {
+    await appendEvent({
+      type: "whatsapp_outbound_echo_attachment_transformed",
+      eventId,
+      canonicalEventId,
+      routerTraceId,
+      chatId,
+      accountId,
+      source: "router",
+      mode: transformedEcho.mode || "",
+      decision: transformedEcho.action || "",
+      matchedAttachmentCount: transformedEcho.matched.length,
+      retainedAttachmentCount: Array.isArray(transformedEcho.attachments) ? transformedEcho.attachments.length : 0,
+    }, env).catch(() => {});
+    if (transformedEcho.mode === "enforce") {
+      text = transformedEcho.text;
+      attachments = transformedEcho.attachments;
+      if (!text && attachments.length) text = whatsappRouterAttachmentSummaryText(attachments);
+      input = { ...input, text, attachments };
+      if (!text && !promptFile && !attachments.length) {
+        const event = {
+          eventId,
+          canonicalEventId,
+          routerTraceId,
+          turnId,
+          agentId: null,
+          threadId: threadId || null,
+          messageId: null,
+          chatId,
+          from,
+          accountId,
+          ignoredReason: "outbound_echo_attachment_transformed",
+          matchedAttachmentCount: transformedEcho.matched.length,
+          receivedAt: pickString(input.timestamp, input.receivedAt) || new Date().toISOString(),
+        };
+        state.inboundEvents = [...(state.inboundEvents || []), event];
+        await writeWhatsAppState(state, env);
+        await ensureRouterTurn({ routerTraceId, turnId, connector: "whatsapp", accountId, chatId, eventId, threadId: threadId || "", state: "skipped" }, env).catch(() => null);
+        await recordRouterTraceEvent({
+          routerTraceId,
+          turnId,
+          connector: "whatsapp",
+          accountId,
+          chatId,
+          sourceEventId: eventId,
+          threadId: threadId || "",
+          phase: "skipped",
+          reason: "outbound_echo_attachment_transformed",
+          terminal: true,
+        }, env).catch(() => {});
+        return {
+          duplicate: false,
+          skipped: "outbound_echo_attachment_transformed",
+          ignoredOutboundEcho: true,
+          event,
+          agentId: null,
+          threadId: threadId || null,
+        };
+      }
+    }
+  }
+  if (transformedEcho?.cycleSignal?.suspected) {
+    await recordWhatsAppTransformedMediaEchoCycleSignal({
+      routerTraceId,
+      turnId,
+      accountId,
+      chatId,
+      eventId,
+      result: transformedEcho,
+      source: "router",
+      env,
+    });
+  }
   const inboundDedupeKey = whatsappInboundContentDedupeKey({
     chatId,
     from,
     text,
     promptFile,
-    attachments: Array.isArray(input.attachments) ? input.attachments : [],
+    attachments,
     timestamp: pickString(input.timestamp, input.receivedAt),
   });
   const existingContentEvent = inboundDedupeKey
@@ -4553,7 +4723,7 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
     accountId,
     text,
     promptFile,
-    attachments: Array.isArray(input.attachments) ? input.attachments : [],
+    attachments,
   };
   let thread = threadId ? (await listThreads(env)).find((item) => item.id === threadId || item.name === threadId || item.bindingName === threadId) : null;
   thread = await ensureApiAgentWhatsAppThread(thread, env);
