@@ -240,9 +240,27 @@ ORKESTR_MAILBOX_ACCESS_MODE=off
 ```
 
 `desktop` preserves the existing shadow default, while `oxrm` is opt-in until
-its explicit grants are configured. `mailbox` is reserved in the shared policy
-model; durable mailbox listener/delivery dispatch is a follow-on increment, so
-this release intentionally does not claim mailbox thread routing is enabled.
+its explicit grants are configured. `mailbox` remains off until the mailbox
+resource is registered and each destination thread receives exact mailbox
+permissions. Mailbox permissions are `discover`, `read`, `subscribe`, and
+`manage`; unknown permissions and wildcard grants are rejected. In non-off
+mode, a listener is a durable record keyed by mailbox resource, exact thread,
+normalized filter, and generation. Creating a listener requires an effective
+`subscribe` grant; listing requires `read`; revoking requires `manage` and
+invalidates pending deliveries. The listener APIs are `POST`/`GET`
+`/api/mailboxes/:mailboxId/listeners`, `DELETE`
+`/api/mailboxes/:mailboxId/listeners/:listenerId`, and
+`GET /api/mailboxes/:mailboxId/delivery-status`. Inbound mail is deduplicated
+once in the instance-owned inbox spool and creates
+one delivery per active, authorized matching listener. No matching listener is
+recorded in durable unrouted quarantine; it never falls back to an owner's
+general inbox or thread. The status surface exposes listener count, pending,
+unrouted, dead-letter count, and oldest pending lag. Delivery claim and state
+transitions carry their own CAS epoch; policy/grant/resource/listener epochs
+are rechecked before a thread append. If the transactional
+policy store is unavailable, known mailbox ingress stays in the existing
+instance-owned connector spool without any thread delivery. VM mailbox relay
+is separate and unchanged.
 Break-glass is never an implicit admin bypass: it requires the exact target and
 action, an admin's recent authentication, a reason, and a change reference; it
 is audited before use and expires within fifteen minutes.

@@ -9,7 +9,7 @@ export const THREAD_RESOURCE_TYPES = Object.freeze({ desktop: "desktop", oxrm: "
 export const THREAD_RESOURCE_PERMISSIONS = Object.freeze({
   desktop: Object.freeze(["discover", "acquire", "operate", "share"]),
   oxrm: Object.freeze(["discover", "read", "write", "execute"]),
-  mailbox: Object.freeze(["discover", "route", "read", "send"]),
+  mailbox: Object.freeze(["discover", "read", "subscribe", "manage"]),
 });
 
 const truthy = new Set(["1", "true", "yes", "on"]);
@@ -158,6 +158,8 @@ function normalizeState(raw = {}, env = process.env) {
     })).filter((item) => item.threadId && item.resourceType),
     ceilings,
     mutations: Array.isArray(raw?.mutations) ? raw.mutations : [],
+    mailboxListeners: Array.isArray(raw?.mailboxListeners) ? raw.mailboxListeners : [],
+    mailboxDeliveries: Array.isArray(raw?.mailboxDeliveries) ? raw.mailboxDeliveries : [],
     updatedAt: clean(raw?.updatedAt) || null,
   };
 }
@@ -171,10 +173,25 @@ async function mutateState(env, operation) {
     const state = normalizeState(stored, env);
     const result = operation(state);
     if (result?.noChange === true) return { result: result.result, state, persist: false };
-    state.revision += 1;
+    // Delivery queue bookkeeping is transactional policy-store state, but it
+    // must not invalidate grants merely by claiming, retrying, or completing a
+    // message. Listener/grant/resource mutations intentionally advance this
+    // epoch; queue mutations opt out with skipPolicyEpoch.
+    if (result?.skipPolicyEpoch !== true) state.revision += 1;
     state.updatedAt = nowIso();
     return { result, state };
   }, env);
+}
+
+// Mailbox delivery uses the same transaction and policy revision as grants.
+// Keep this narrowly exported so the mailbox dispatcher cannot acquire a
+// process-local side store or accidentally bypass CAS invalidation.
+export async function readThreadResourcePolicy(env = process.env) {
+  return readState(env);
+}
+
+export async function mutateThreadResourcePolicy(operation, env = process.env) {
+  return mutateState(env, operation);
 }
 
 function permissionFor(resourceType, action = "") {
@@ -185,7 +202,8 @@ function permissionFor(resourceType, action = "") {
   if (resourceType === "desktop" && ["lease", "heartbeat", "release"].includes(requested)) return "acquire";
   if (resourceType === "desktop" && ["proxy", "open_share", "approve_share"].includes(requested)) return "share";
   if (resourceType === "oxrm" && ["operate", "call", "skill"].includes(requested)) return "execute";
-  if (resourceType === "mailbox" && ["ingest", "receive", "relay"].includes(requested)) return "route";
+  if (resourceType === "mailbox" && ["listener", "listen", "create_listener", "subscribe"].includes(requested)) return "subscribe";
+  if (resourceType === "mailbox" && ["revoke_listener", "listeners", "manage"].includes(requested)) return "manage";
   return "";
 }
 
@@ -498,6 +516,13 @@ export async function setThreadResourceGrants(threadId = "", resourceType = "", 
     }
     const timestamp = nowIso();
     state.grants = state.grants.map((grant) => grant.threadId === thread.id && grant.resourceType === type && !grant.revokedAt ? { ...grant, revokedAt: timestamp, revokedBy: actorUserId, updatedAt: timestamp } : grant);
+    if (type === THREAD_RESOURCE_TYPES.mailbox) {
+      state.mailboxDeliveries = (state.mailboxDeliveries || []).map((delivery) =>
+        delivery.threadId === thread.id && ["pending", "claimed"].includes(delivery.state)
+          ? { ...delivery, state: "revoked", epoch: Number(delivery.epoch || 1) + 1, claimToken: null, claimExpiresAt: null, reason: "mailbox_grant_replaced", updatedAt: timestamp }
+          : delivery,
+      );
+    }
     const created = normalized.map((entry) => {
       const candidate = normalizeResource({ resourceType: type, nativeId: entry.nativeId, resourceKey: entry.resourceKey, ownerUserId, boundaryId, generation: entry.generation }, env);
       let resource = state.resources.find((item) => item.id === candidate.id && item.resourceType === type) || null;
