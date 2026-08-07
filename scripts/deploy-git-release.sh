@@ -42,6 +42,7 @@ Environment:
   ORKESTR_RELEASE_CONNECTIVITY_RECOVERY_TIMEOUT_SECONDS Timeout for each recovery command run. Defaults to 20.
   ORKESTR_RELEASE_SYNC_CONNECTORS Reconcile standalone connector services to the active Orkestr revision. Defaults to 1.
   ORKESTR_RELEASE_SYNC_PUBLIC_SERVICE Restart an active isolated public service after release activation. Defaults to 1.
+  ORKESTR_RELEASE_SYNC_MAILBOX_MTA Restart an active Orkestr Postfix socket-map service after release activation. Defaults to 1.
   ORKESTR_PUBLIC_SERVICE_NAME    Isolated public-site systemd unit. Defaults to orkestr-public.
   ORKESTR_PUBLIC_SERVICE_HEALTH_URL Health URL for the isolated public service. Defaults to http://127.0.0.1:19812/api/health.
   ORKESTR_PUBLIC_SERVICE_VERSION_URL Version URL for release verification. Defaults to http://127.0.0.1:19812/api/version.
@@ -1213,6 +1214,34 @@ restart_and_verify_public_service() {
   echo "Isolated public service ready: $public_unit ${actual_release:-$expected_revision} (${actual_revision:0:12})."
 }
 
+restart_and_verify_mailbox_mta() {
+  local enabled mailbox_service mailbox_unit working_directory
+  enabled="$sync_mailbox_mta"
+  if [ "$enabled" != "1" ]; then
+    echo "Mailbox MTA release sync disabled."
+    return 0
+  fi
+  mailbox_service="${ORKESTR_MAILBOX_MTA_SERVICE_NAME:-orkestr-mailbox-postfix}"
+  mailbox_unit="${mailbox_service%.service}.service"
+  if ! systemctl cat "$mailbox_unit" >/dev/null 2>&1; then
+    echo "Mailbox MTA release sync skipped: $mailbox_unit is not installed."
+    return 0
+  fi
+  if ! systemctl is-active --quiet "$mailbox_unit"; then
+    echo "Mailbox MTA release sync skipped: $mailbox_unit is intentionally inactive."
+    return 0
+  fi
+  working_directory="$(systemctl show -p WorkingDirectory --value "$mailbox_unit" 2>/dev/null || true)"
+  if [ "$working_directory" != "$current_link" ]; then
+    echo "Refusing mailbox MTA restart: $mailbox_unit WorkingDirectory is '$working_directory', expected '$current_link'." >&2
+    return 1
+  fi
+  systemctl restart "$mailbox_unit" || return $?
+  systemctl is-active --quiet "$mailbox_unit" || return $?
+  node "$current_link/scripts/orkestr-mailbox-postfix.mjs" probe || return $?
+  echo "Mailbox MTA recipient map ready: $mailbox_unit."
+}
+
 restart_and_verify() {
   configure_service_shutdown_timeout || return $?
   # Keep restart as one systemd transaction. A split stop/start can kill the
@@ -1221,6 +1250,7 @@ restart_and_verify() {
   systemctl is-active --quiet "${service_name}.service" || return $?
   health_check "$health_url" 40 || return $?
   restart_and_verify_public_service || return $?
+  restart_and_verify_mailbox_mta || return $?
   sync_standalone_connectors_release || return $?
   refresh_parent_whatsapp_bridge_proxy || return $?
   deploy_public_exposure_check || return $?
@@ -1561,6 +1591,7 @@ install_command() {
     if release_is_complete "$release_dir"; then
       repair_runtime_ownership
       restart_and_verify_public_service
+      restart_and_verify_mailbox_mta
       sync_standalone_connectors_release
       echo "Orkestr already at $release_id ($target_ref)."
       return 0
@@ -1703,6 +1734,7 @@ backup_keep="${ORKESTR_DEPLOY_BACKUP_KEEP:-3}"
 release_keep="${ORKESTR_DEPLOY_RELEASE_KEEP:-3}"
 sync_workers="$(bool_value "${sync_workers_arg:-${ORKESTR_DEPLOY_SYNC_WORKERS:-1}}")"
 sync_public_service="$(bool_value "${ORKESTR_RELEASE_SYNC_PUBLIC_SERVICE:-1}")"
+sync_mailbox_mta="$(bool_value "${ORKESTR_RELEASE_SYNC_MAILBOX_MTA:-1}")"
 lock_file="${ORKESTR_DEPLOY_LOCK_FILE:-/var/lock/orkestr-deploy.lock}"
 lock_busy_exit_code="${ORKESTR_DEPLOY_LOCK_BUSY_EXIT_CODE:-0}"
 no_interrupt="$(bool_value "${no_interrupt_arg:-${ORKESTR_DEPLOY_NO_INTERRUPT:-1}}")"
@@ -1731,6 +1763,10 @@ esac
 case "$sync_public_service" in
   0|1) ;;
   *) echo "ORKESTR_RELEASE_SYNC_PUBLIC_SERVICE must be 0 or 1." >&2; exit 2 ;;
+esac
+case "$sync_mailbox_mta" in
+  0|1) ;;
+  *) echo "ORKESTR_RELEASE_SYNC_MAILBOX_MTA must be 0 or 1." >&2; exit 2 ;;
 esac
 case "$exposure_check" in
   0|1) ;;
