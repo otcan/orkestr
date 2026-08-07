@@ -18,11 +18,22 @@ const tables = Object.freeze({
 
 export function setThreadResourcePolicyPostgresPoolFactory(factory = null) {
   poolFactoryForTest = typeof factory === "function" ? factory : null;
+  void closeThreadResourcePolicyPostgresPools();
+}
+
+async function closePool(pool) {
+  if (typeof pool?.end !== "function") return;
+  await pool.end();
+}
+
+export async function closeThreadResourcePolicyPostgresPools() {
+  const active = [...new Set(pools.values())];
   pools.clear();
+  await Promise.allSettled(active.map((pool) => closePool(pool)));
 }
 
 export function clearThreadResourcePolicyPostgresCache() {
-  pools.clear();
+  return closeThreadResourcePolicyPostgresPools();
 }
 
 function policyStoreError(code, statusCode = 503, cause = null) {
@@ -223,11 +234,21 @@ async function rows(client, table) {
 }
 
 async function readState(client) {
-  const [revision, updatedAt, policies, resources, grants, ceilings, mutations, mailboxListeners, mailboxDeliveries, mailboxPumpLeases, resourceSessions, audit] = await Promise.all([
-    meta(client, "revision", "0"), meta(client, "updated_at", ""), rows(client, tables.policies), rows(client, tables.resources), rows(client, tables.grants),
-    rows(client, tables.ceilings), rows(client, tables.mutations), rows(client, tables.mailboxListeners), rows(client, tables.mailboxDeliveries),
-    rows(client, tables.mailboxPumpLeases), rows(client, tables.resourceSessions), client.query(`select * from ${tables.policyAuditOutbox} order by created_at asc`),
-  ]);
+  // A checked-out pg client executes one statement at a time. Serial reads
+  // retain this transaction's single snapshot without pg@9's deprecated
+  // concurrent-query warning.
+  const revision = await meta(client, "revision", "0");
+  const updatedAt = await meta(client, "updated_at", "");
+  const policies = await rows(client, tables.policies);
+  const resources = await rows(client, tables.resources);
+  const grants = await rows(client, tables.grants);
+  const ceilings = await rows(client, tables.ceilings);
+  const mutations = await rows(client, tables.mutations);
+  const mailboxListeners = await rows(client, tables.mailboxListeners);
+  const mailboxDeliveries = await rows(client, tables.mailboxDeliveries);
+  const mailboxPumpLeases = await rows(client, tables.mailboxPumpLeases);
+  const resourceSessions = await rows(client, tables.resourceSessions);
+  const audit = await client.query(`select * from ${tables.policyAuditOutbox} order by created_at asc`);
   return {
     version: 1,
     revision: Number(revision || 0) || 0,

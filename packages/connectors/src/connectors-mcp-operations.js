@@ -30,7 +30,7 @@ import {
 import { connectorMcpStructuredResult, connectorsMcpInputSchemas } from "./connectors-mcp-contract.js";
 import { assertConnectorMcpScope } from "./connectors-mcp-auth.js";
 import { runConnectorMcpRuntime } from "./connectors-mcp-runtime-operations.js";
-import { assertConnectorMcpResourceAccess } from "../../core/src/thread-resource-sessions.js";
+import { assertConnectorMcpResourceAccess, connectorMcpResourceTokenDeclared } from "../../core/src/thread-resource-sessions.js";
 
 function clean(value = "") {
   return String(value || "").trim();
@@ -38,6 +38,12 @@ function clean(value = "") {
 
 function routingScopeDenied(reason = "target_scope_denied") {
   const error = new Error(`connector_mcp_${reason}`);
+  error.statusCode = 403;
+  throw error;
+}
+
+function resourceDispatchTargetDenied() {
+  const error = new Error("connector_mcp_resource_dispatch_target_unbound");
   error.statusCode = 403;
   throw error;
 }
@@ -439,7 +445,13 @@ export async function runConnectorMcpTool(tool = "", rawInput = {}, { auth = {},
   if (!schema) throw Object.assign(new Error("connector_mcp_tool_not_found"), { statusCode: 404 });
   const input = schema.parse(rawInput);
   const scopedInput = { ...input, connector_mcp_tool: tool, connector_mcp_action: input.action };
-  const scoped = await assertConnectorMcpResourceAccess(assertConnectorMcpScope(auth, tool, scopedInput), scopedInput, env);
+  const scope = assertConnectorMcpScope(auth, tool, scopedInput);
+  // Current connector MCP tools are generic connector operations; none has a
+  // resolver that obtains an actual desktop/oXRM/mailbox target independently
+  // of caller input. Refuse resource-bound bearers until a resource-aware tool
+  // supplies that target from its own dispatch path.
+  if (!scope.operator && connectorMcpResourceTokenDeclared(scope)) resourceDispatchTargetDenied();
+  const scoped = await assertConnectorMcpResourceAccess(scope, scopedInput, env);
   if (tool === "orkestr_runtime" && input.service !== "runtime") return unsupported(input);
   if (tool !== "orkestr_runtime" && input.service !== "whatsapp" && tool !== "orkestr_auth") return unsupported(input);
   if (["webui", "codex"].includes(input.service)) return unsupported(input);
