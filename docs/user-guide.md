@@ -259,8 +259,13 @@ unrouted, dead-letter count, and oldest pending lag. Delivery claim and state
 transitions carry their own CAS epoch; policy/grant/resource/listener epochs
 are rechecked before a thread append. If the transactional
 policy store is unavailable, known mailbox ingress stays in the existing
-instance-owned connector spool without any thread delivery. VM mailbox relay
-is separate and unchanged.
+instance-owned connector spool without any thread delivery. A bounded,
+lease-protected pump reclaims due retries and expired claims; it also replays
+`policy-unavailable` mailbox spool rows after policy storage recovers. Replay
+uses the stable delivery client-message ID, so a retry cannot append twice.
+The final policy/claim check runs immediately before append; a revocation that
+begins after that cross-store check is still contained by the same deterministic
+thread-message idempotency key. VM mailbox relay is separate and unchanged.
 Break-glass is never an implicit admin bypass: it requires the exact target and
 action, an admin's recent authentication, a reason, and a change reference; it
 is audited before use and expires within fifteen minutes.

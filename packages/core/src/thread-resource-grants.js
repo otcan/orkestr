@@ -160,6 +160,7 @@ function normalizeState(raw = {}, env = process.env) {
     mutations: Array.isArray(raw?.mutations) ? raw.mutations : [],
     mailboxListeners: Array.isArray(raw?.mailboxListeners) ? raw.mailboxListeners : [],
     mailboxDeliveries: Array.isArray(raw?.mailboxDeliveries) ? raw.mailboxDeliveries : [],
+    mailboxPumpLeases: Array.isArray(raw?.mailboxPumpLeases) ? raw.mailboxPumpLeases : [],
     updatedAt: clean(raw?.updatedAt) || null,
   };
 }

@@ -17,6 +17,30 @@ const nowIso = () => new Date().toISOString();
 const hash = (value = "") => createHash("sha256").update(String(value || "")).digest("hex");
 const activeDeliveryStates = new Set(["pending", "claimed"]);
 const listenerFilterKeys = new Set(["fromIncludes", "subjectIncludes", "hasAttachments", "verificationOnly"]);
+const localPumpRuns = new Map();
+const mailboxPumpLeaseName = "mailbox-thread-delivery";
+
+function boundedInteger(value, fallback, minimum, maximum) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(minimum, Math.min(maximum, Math.floor(parsed)));
+}
+
+export function mailboxThreadDeliveryPumpIntervalMs(env = process.env) {
+  return boundedInteger(env.ORKESTR_MAILBOX_THREAD_DELIVERY_PUMP_INTERVAL_MS, 5_000, 1_000, 5 * 60_000);
+}
+
+export function mailboxThreadDeliveryPumpLimit(env = process.env) {
+  return boundedInteger(env.ORKESTR_MAILBOX_THREAD_DELIVERY_PUMP_LIMIT, 25, 1, 100);
+}
+
+function mailboxThreadDeliveryPumpLeaseMs(env = process.env) {
+  return boundedInteger(env.ORKESTR_MAILBOX_THREAD_DELIVERY_PUMP_LEASE_MS, 30_000, 5_000, 5 * 60_000);
+}
+
+function mailboxPumpRunKey(env = process.env) {
+  return clean(env.ORKESTR_THREAD_RESOURCE_POLICY_DB || env.ORKESTR_HOME || "default");
+}
 
 function mailboxResourceId(mailbox = {}, env = process.env) {
   return threadResourceId("mailbox", mailbox.id, mailbox.ownerUserId, env);
@@ -259,6 +283,27 @@ async function validateDelivery(delivery = {}, env = process.env) {
   return matchesEpoch ? { ok: true, state, listener, resource, decision } : { ok: false, reason: "mailbox_delivery_policy_stale", state };
 }
 
+// The policy and message stores are separate SQLite databases, so this cannot
+// make append and revoke one cross-store transaction. It does make the last
+// authorization/claim comparison synchronous and immediately adjacent to the
+// idempotent append. A post-check race is contained by clientMessageId.
+async function revalidateClaimBeforeAppend(delivery = {}, claimToken = "", env = process.env) {
+  const validation = await validateDelivery(delivery, env);
+  if (!validation.ok) return validation;
+  const checked = await mutateThreadResourcePolicy((state) => {
+    const live = (state.mailboxDeliveries || []).find((item) => item.id === delivery.id);
+    const listener = (state.mailboxListeners || []).find((item) => item.id === delivery.listenerId);
+    const resource = state.resources.find((item) => item.resourceType === "mailbox" && item.id === delivery.resourceId);
+    const current = Boolean(
+      live?.state === "claimed" && live.claimToken === claimToken && Number(live.epoch || 1) === Number(delivery.epoch || 1) &&
+      listener?.status === "active" && !listener.revokedAt && Number(listener.generation || 0) === Number(delivery.listenerGeneration || 0) &&
+      resource?.status === "active" && !resource.retiredAt && Number(state.revision) === Number(validation.state.revision),
+    );
+    return { noChange: true, result: { current } };
+  }, env);
+  return checked.result?.current ? validation : { ok: false, reason: "mailbox_delivery_claim_stale" };
+}
+
 async function claimMailboxThreadDelivery(deliveryIdValue, env = process.env) {
   const state = await readThreadResourcePolicy(env);
   const candidate = (state.mailboxDeliveries || []).find((item) => item.id === deliveryIdValue && item.state === "pending" && (!item.nextAttemptAt || Date.parse(item.nextAttemptAt) <= Date.now()));
@@ -308,7 +353,57 @@ async function recoverExpiredMailboxThreadClaims(env = process.env) {
   return result.result?.recovered || 0;
 }
 
-export async function dispatchMailboxThreadDeliveries({ deliveryIds = [], limit = 25 } = {}, env = process.env) {
+async function acquireMailboxThreadDeliveryPumpLease(env = process.env) {
+  const token = randomUUID();
+  const result = await mutateThreadResourcePolicy((state) => {
+    const timestamp = nowIso();
+    const leases = Array.isArray(state.mailboxPumpLeases) ? state.mailboxPumpLeases : [];
+    const current = leases.find((item) => item.name === mailboxPumpLeaseName) || null;
+    if (current?.expiresAt && Date.parse(current.expiresAt) > Date.now()) {
+      return { noChange: true, result: { acquired: false, expiresAt: current.expiresAt } };
+    }
+    const lease = { name: mailboxPumpLeaseName, token, expiresAt: new Date(Date.now() + mailboxThreadDeliveryPumpLeaseMs(env)).toISOString(), updatedAt: timestamp };
+    state.mailboxPumpLeases = [...leases.filter((item) => item.name !== mailboxPumpLeaseName), lease];
+    return { acquired: true, lease, skipPolicyEpoch: true };
+  }, env);
+  return result.result;
+}
+
+async function releaseMailboxThreadDeliveryPumpLease(token = "", env = process.env) {
+  if (!token) return false;
+  const result = await mutateThreadResourcePolicy((state) => {
+    const leases = Array.isArray(state.mailboxPumpLeases) ? state.mailboxPumpLeases : [];
+    const current = leases.find((item) => item.name === mailboxPumpLeaseName && item.token === token);
+    if (!current) return { noChange: true, result: { released: false } };
+    state.mailboxPumpLeases = leases.filter((item) => item.name !== mailboxPumpLeaseName);
+    return { released: true, skipPolicyEpoch: true };
+  }, env);
+  return result.result?.released === true;
+}
+
+async function runMailboxThreadDeliveryPump({ limit, replay } = {}, env = process.env) {
+  const lease = await acquireMailboxThreadDeliveryPumpLease(env);
+  if (!lease?.acquired) return { ok: true, skipped: "lease_held", deliveries: null, replay: null };
+  try {
+    const deliveries = await dispatchMailboxThreadDeliveries({ limit: limit || mailboxThreadDeliveryPumpLimit(env) }, env);
+    const replayed = typeof replay === "function" ? await replay() : null;
+    return { ok: true, skipped: "", deliveries, replay: replayed };
+  } finally {
+    await releaseMailboxThreadDeliveryPumpLease(lease.lease.token, env);
+  }
+}
+
+export function pumpMailboxThreadDeliveries(options = {}, env = process.env) {
+  const key = mailboxPumpRunKey(env);
+  if (localPumpRuns.has(key)) return Promise.resolve({ ok: true, skipped: "in_process", deliveries: null, replay: null });
+  const run = runMailboxThreadDeliveryPump(options, env);
+  localPumpRuns.set(key, run);
+  return run.finally(() => {
+    if (localPumpRuns.get(key) === run) localPumpRuns.delete(key);
+  });
+}
+
+export async function dispatchMailboxThreadDeliveries({ deliveryIds = [], limit = 25, appendMessage = appendThreadMessage } = {}, env = process.env) {
   await recoverExpiredMailboxThreadClaims(env);
   const requested = new Set((Array.isArray(deliveryIds) ? deliveryIds : [deliveryIds]).map(clean).filter(Boolean));
   const state = await readThreadResourcePolicy(env);
@@ -317,14 +412,14 @@ export async function dispatchMailboxThreadDeliveries({ deliveryIds = [], limit 
   for (const candidate of candidates) {
     const claim = await claimMailboxThreadDelivery(candidate.id, env);
     if (!claim) continue;
-    const validation = await validateDelivery(claim.delivery, env);
+    const validation = await revalidateClaimBeforeAppend(claim.delivery, claim.claimToken, env);
     if (!validation.ok) {
       await completeMailboxThreadDelivery(claim.delivery, claim.claimToken, { invalidated: true, reason: validation.reason }, env);
       results.push({ id: candidate.id, state: "revoked", reason: validation.reason });
       continue;
     }
     try {
-      await appendThreadMessage(claim.delivery.threadId, { role: "user", source: "mailbox", connector: "mailbox", clientMessageId: `mailbox-delivery:${claim.delivery.id}`, externalId: claim.delivery.messageKey, text: claim.delivery.payload.text }, env);
+      await appendMessage(claim.delivery.threadId, { role: "user", source: "mailbox", connector: "mailbox", clientMessageId: `mailbox-delivery:${claim.delivery.id}`, externalId: claim.delivery.messageKey, text: claim.delivery.payload.text }, env);
       await completeMailboxThreadDelivery(claim.delivery, claim.claimToken, { delivered: true }, env);
       results.push({ id: candidate.id, state: "delivered" });
     } catch (error) {
