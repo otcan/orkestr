@@ -1,6 +1,13 @@
 import fs from "node:fs/promises";
 import { dataPaths, ensureDataDirs } from "../../storage/src/paths.js";
 import { readJson } from "../../storage/src/store.js";
+import {
+  clearThreadResourcePolicyPostgresCache,
+  openThreadResourcePolicyPostgres,
+  readThreadResourcePolicyPostgresState,
+  setThreadResourcePolicyPostgresPoolFactory,
+  withThreadResourcePolicyPostgresTransaction,
+} from "./thread-resource-policy-postgres.js";
 
 const databases = new Map();
 const databaseOpenPromises = new Map();
@@ -13,6 +20,15 @@ export function threadResourcePolicyStoreMode(env = process.env) {
   const mode = clean(env.ORKESTR_THREAD_RESOURCE_POLICY_STORE || env.ORKESTR_THREAD_RESOURCE_STORE || env.ORKESTR_STORAGE || "sqlite").toLowerCase();
   return policyStoreModes.has(mode) ? mode : "invalid";
 }
+
+export const __threadResourcePolicyStoreTestInternals = Object.freeze({
+  setPostgresPoolFactory(factory = null) {
+    setThreadResourcePolicyPostgresPoolFactory(factory);
+  },
+  clearPostgresCache() {
+    clearThreadResourcePolicyPostgresCache();
+  },
+});
 
 async function loadSqlite(mode) {
   try {
@@ -28,10 +44,7 @@ export async function openThreadResourcePolicyDatabase(env = process.env) {
   const mode = threadResourcePolicyStoreMode(env);
   if (mode === "invalid") throw Object.assign(new Error("thread_resource_policy_store_mode_invalid"), { statusCode: 503 });
   if (mode === "json") throw Object.assign(new Error("thread_resource_policy_transactional_store_required"), { statusCode: 503 });
-  // The current clustered store abstraction does not yet expose a PostgreSQL
-  // transaction adapter. Refuse a configured PostgreSQL mode rather than
-  // silently downgrading policy to process-local or file state.
-  if (mode === "postgres" || mode === "postgresql") throw Object.assign(new Error("thread_resource_policy_postgres_backend_not_configured"), { statusCode: 501 });
+  if (mode === "postgres" || mode === "postgresql") return openThreadResourcePolicyPostgres(env);
   const sqlite = await loadSqlite(mode);
   if (!sqlite) throw Object.assign(new Error("thread_resource_policy_transactional_store_required"), { statusCode: 503 });
   const paths = await ensureDataDirs(env);
@@ -215,6 +228,7 @@ function ensureSchema(db) {
       jti_hash text not null unique,
       token_id_hash text not null,
       bearer_hash text not null default '',
+      audience text not null default '',
       scopes_json text not null default '[]',
       principal_kind text not null default 'external_instance',
       principal_id text not null default '',
@@ -258,6 +272,7 @@ function ensureSchema(db) {
   ensureColumn(db, "orkestr_thread_resource_audit_outbox", "delivered_at", "text");
   ensureColumn(db, "orkestr_thread_resource_sessions", "grant_thread_id", "text not null default ''");
   ensureColumn(db, "orkestr_thread_resource_sessions", "bearer_hash", "text not null default ''");
+  ensureColumn(db, "orkestr_thread_resource_sessions", "audience", "text not null default ''");
   ensureColumn(db, "orkestr_thread_resource_sessions", "scopes_json", "text not null default '[]'");
   ensureColumn(db, "orkestr_thread_resource_sessions", "principal_kind", "text not null default 'external_instance'");
   ensureColumn(db, "orkestr_thread_resource_sessions", "principal_id", "text not null default ''");
@@ -321,7 +336,7 @@ function readState(db) {
       claimExpiresAt: row.claim_expires_at || null, deliveredAt: row.delivered_at || null, createdAt: row.created_at,
     })),
     resourceSessions: db.prepare("select * from orkestr_thread_resource_sessions").all().map((row) => ({
-      id: row.id, jtiHash: row.jti_hash, tokenIdHash: row.token_id_hash, bearerHash: row.bearer_hash || "",
+      id: row.id, jtiHash: row.jti_hash, tokenIdHash: row.token_id_hash, bearerHash: row.bearer_hash || "", audience: row.audience || "",
       scopes: parseJson(row.scopes_json, []), principalKind: row.principal_kind || "external_instance", principalId: row.principal_id || "",
       ownerUserId: row.owner_user_id || "", instanceId: row.instance_id || "", accountId: row.account_id || "", accountService: row.account_service || "",
       resourceType: row.resource_type, resourceId: row.resource_id, actions: parseJson(row.actions_json, []),
@@ -353,9 +368,9 @@ function replaceState(db, state = {}, auditOutboxUpserts = []) {
   for (const item of state.mailboxDeliveries || []) delivery.run(item.id, item.dedupeKey, item.resourceType, item.resourceId, item.mailboxId, item.listenerId || null, item.listenerGeneration || 0, item.threadId || null, item.state, item.epoch || 1, item.attemptCount || 0, item.maxAttempts || 1, item.nextAttemptAt || null, item.claimToken || null, item.claimExpiresAt || null, item.grantRevision || 0, item.policyRevision || 0, item.resourceGeneration || 1, item.messageKey, JSON.stringify(item.payload || {}), item.reason || null, item.createdAt, item.updatedAt, item.deliveredAt || null);
   const pumpLease = db.prepare("insert into orkestr_mailbox_thread_pump_leases(name, token, expires_at, updated_at) values (?, ?, ?, ?)");
   for (const item of state.mailboxPumpLeases || []) pumpLease.run(item.name, item.token, item.expiresAt, item.updatedAt);
-  const resourceSession = db.prepare("insert into orkestr_thread_resource_sessions(id, jti_hash, token_id_hash, bearer_hash, scopes_json, principal_kind, principal_id, owner_user_id, instance_id, account_id, account_service, resource_type, resource_id, actions_json, thread_id, grant_thread_id, root_thread_id, boundary_id, policy_revision, grant_revision, resource_generation, state, epoch, issued_at, expires_at, last_used_at, created_at, updated_at, invalidated_at, invalidation_reason) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+  const resourceSession = db.prepare("insert into orkestr_thread_resource_sessions(id, jti_hash, token_id_hash, bearer_hash, audience, scopes_json, principal_kind, principal_id, owner_user_id, instance_id, account_id, account_service, resource_type, resource_id, actions_json, thread_id, grant_thread_id, root_thread_id, boundary_id, policy_revision, grant_revision, resource_generation, state, epoch, issued_at, expires_at, last_used_at, created_at, updated_at, invalidated_at, invalidation_reason) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
   for (const item of state.resourceSessions || []) {
-    resourceSession.run(item.id, item.jtiHash, item.tokenIdHash, item.bearerHash || "", JSON.stringify(item.scopes || []),
+    resourceSession.run(item.id, item.jtiHash, item.tokenIdHash, item.bearerHash || "", item.audience || "", JSON.stringify(item.scopes || []),
       item.principalKind || "external_instance", item.principalId || "", item.ownerUserId || "", item.instanceId || "", item.accountId || "", item.accountService || "",
       item.resourceType, item.resourceId, JSON.stringify(item.actions || []), item.threadId, item.grantThreadId || item.threadId, item.rootThreadId, item.boundaryId,
       item.policyRevision || 0, item.grantRevision || 0, item.resourceGeneration || 1,
@@ -385,6 +400,8 @@ function replaceState(db, state = {}, auditOutboxUpserts = []) {
 }
 
 export async function withThreadResourcePolicyTransaction(operation, env = process.env) {
+  const mode = threadResourcePolicyStoreMode(env);
+  if (mode === "postgres" || mode === "postgresql") return withThreadResourcePolicyPostgresTransaction(operation, env);
   const db = await openThreadResourcePolicyDatabase(env);
   const previous = transactionQueues.get(db) || Promise.resolve();
   const run = previous.catch(() => undefined).then(() => {
@@ -406,6 +423,8 @@ export async function withThreadResourcePolicyTransaction(operation, env = proce
 }
 
 export async function readThreadResourcePolicyState(env = process.env) {
+  const mode = threadResourcePolicyStoreMode(env);
+  if (mode === "postgres" || mode === "postgresql") return readThreadResourcePolicyPostgresState(env);
   const db = await openThreadResourcePolicyDatabase(env);
   return readState(db);
 }

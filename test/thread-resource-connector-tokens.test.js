@@ -140,6 +140,10 @@ test("resource-bound connector tokens fail closed for cross-thread, cross-bounda
     /connector_mcp_resource_boundary_denied/,
   );
   await assert.rejects(
+    () => assertConnectorMcpResourceAccess({ ...item.auth, audience: "other-mcp" }, item.input, item.env),
+    /connector_mcp_resource_audience_denied/,
+  );
+  await assert.rejects(
     () => assertConnectorMcpResourceAccess(item.auth, { ...item.input, resource_id: "other-resource" }, item.env),
     /connector_mcp_resource_target_scope_denied/,
   );
@@ -187,6 +191,7 @@ test("issued resource tokens round-trip through connector auth and survive unrel
 
   assert.match(issued.token, /^rt_[A-Za-z0-9_-]+$/);
   assert.equal(auth.resourceId, item.resource.id);
+  assert.equal(auth.audience, "orkestr-connectors-mcp");
   await assertConnectorMcpResourceAccess(auth, item.input, item.env);
   const unrelated = await createThread({ id: "unrelated-resource-thread", name: "Unrelated", ownerUserId: "tenant" }, item.env);
   await registerThreadResource({ resourceType: "oxrm", resourceId: "crm-unrelated", ownerUserId: "tenant", status: "active" }, { principal: item.principal }, item.env);
@@ -194,6 +199,7 @@ test("issued resource tokens round-trip through connector auth and survive unrel
   const afterUnrelatedEdit = await readThreadResourcePolicy(item.env);
 
   assert.equal(afterUnrelatedEdit.resourceSessions[0].state, "active");
+  assert.equal(afterUnrelatedEdit.resourceSessions[0].audience, "orkestr-connectors-mcp");
   await assertConnectorMcpResourceAccess(await authorizeConnectorMcpToken(issued.token, item.env), item.input, item.env);
   assert.equal(JSON.stringify(afterUnrelatedEdit.resourceSessions).includes(issued.token), false);
   await assert.rejects(() => authorizeConnectorMcpToken(`${issued.token}x`, item.env), /connector_mcp_token_invalid/);

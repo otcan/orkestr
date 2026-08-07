@@ -32,6 +32,7 @@ function safeError(error) {
 
 function safeBackend(value = "") {
   const backend = clean(value).toLowerCase();
+  if (backend === "postgresql") return "postgres";
   return ["sqlite", "json", "postgres", "postgresql", "invalid"].includes(backend) ? backend : "invalid";
 }
 

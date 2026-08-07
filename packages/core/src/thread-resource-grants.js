@@ -178,7 +178,7 @@ function normalizeState(raw = {}, env = process.env) {
     mailboxDeliveries: Array.isArray(raw?.mailboxDeliveries) ? raw.mailboxDeliveries : [],
     mailboxPumpLeases: Array.isArray(raw?.mailboxPumpLeases) ? raw.mailboxPumpLeases : [],
     resourceSessions: (Array.isArray(raw?.resourceSessions) ? raw.resourceSessions : []).map((item) => ({
-      id: clean(item?.id), jtiHash: clean(item?.jtiHash), tokenIdHash: clean(item?.tokenIdHash), bearerHash: clean(item?.bearerHash),
+      id: clean(item?.id), jtiHash: clean(item?.jtiHash), tokenIdHash: clean(item?.tokenIdHash), bearerHash: clean(item?.bearerHash), audience: clean(item?.audience),
       scopes: Array.isArray(item?.scopes) ? item.scopes.map((scope) => clean(scope).toLowerCase()).filter(Boolean) : [],
       principalKind: clean(item?.principalKind) || "external_instance", principalId: clean(item?.principalId), ownerUserId: clean(item?.ownerUserId),
       instanceId: clean(item?.instanceId), accountId: clean(item?.accountId), accountService: clean(item?.accountService).toLowerCase(),

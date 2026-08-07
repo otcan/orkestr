@@ -290,7 +290,7 @@ export async function routeMainMailboxThreadDelivery({ mailbox, message, idempot
 }
 
 export function isMailboxThreadPolicyUnavailable(error) {
-  return error?.statusCode >= 500 || /^thread_resource_policy_(transactional_store_required|postgres_backend_not_configured)/.test(lower(error?.message));
+  return error?.statusCode >= 500 || /^thread_resource_policy_(transactional_store_required|postgres_unavailable|postgres_driver_missing)/.test(lower(error?.message));
 }
 
 async function validateDelivery(delivery = {}, env = process.env) {

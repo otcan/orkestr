@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { readWhatsAppScopedTokenRecords } from "../../core/src/whatsapp-scoped-tokens.js";
-import { authorizeIssuedConnectorResourceToken } from "../../core/src/thread-resource-sessions.js";
+import { authorizeIssuedConnectorResourceToken, connectorMcpResourceAudience } from "../../core/src/thread-resource-sessions.js";
 
 function clean(value = "") {
   return String(value || "").trim();
@@ -77,6 +77,7 @@ function normalizeRecord(record = {}) {
     resourceGeneration: Number(record.resourceGeneration || record.resource_generation || 0),
     resourceJtiHash: resourceJti ? hash(resourceJti) : clean(record.resourceJtiHash || record.jtiHash || record.jti_hash).toLowerCase(),
     tokenIdHash: tokenId ? hash(tokenId) : clean(record.tokenIdHash || record.token_id_hash).toLowerCase(),
+    audience: resourceType ? connectorMcpResourceAudience : "",
     issuedAt: clean(record.issuedAt || record.issued_at),
     expiresAt: clean(record.expiresAt),
     disabled: record.disabled === true || record.enabled === false,
@@ -110,6 +111,7 @@ function publicRecord(record = {}) {
     resourceJtiHash: record.resourceJtiHash || "",
     tokenIdHash: record.tokenIdHash || "",
     bearerHash: record.bearerHash || "",
+    audience: record.audience || "",
     issuedAt: record.issuedAt || "",
     expiresAt: record.expiresAt || "",
     operator: record.operator === true,
