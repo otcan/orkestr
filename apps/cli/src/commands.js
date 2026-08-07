@@ -604,11 +604,13 @@ async function doctorWhatsAppRouterCommand(argv, ctx) {
   const thread = flagValue(argv, "--thread") || flagValue(argv, "--thread-id") || "";
   const trace = flagValue(argv, "--trace") || flagValue(argv, "--router-trace") || flagValue(argv, "--router-trace-id") || "";
   const staleMs = flagValue(argv, "--stale-ms") || flagValue(argv, "--stale");
+  const timeoutMs = flagValue(argv, "--timeout-ms") || flagValue(argv, "--timeout");
   if (thread) params.set("thread", thread);
   if (trace) params.set("trace", trace);
   if (argv.includes("--repair") || argv.includes("--repair-safe")) params.set("repair", "1");
   if (argv.includes("--unsafe")) params.set("unsafe", "1");
   if (staleMs) params.set("staleMs", staleMs);
+  if (timeoutMs) params.set("timeoutMs", timeoutMs);
   const requestDoctor = () => requestJson(`/api/router-traces/doctor/whatsapp${params.size ? `?${params.toString()}` : ""}`, ctx);
   if (argv.includes("--watch")) {
     const intervalMs = Math.max(1000, Number(flagValue(argv, "--watch-interval-ms") || flagValue(argv, "--interval-ms") || 30000) || 30000);

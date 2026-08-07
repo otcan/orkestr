@@ -2182,7 +2182,7 @@ function localWhatsAppChatOpsProbeIntervalMs(env = process.env) {
 
 function localWhatsAppChatOpsProbeTimeoutMs(env = process.env) {
   const parsed = Number(env.ORKESTR_WHATSAPP_CHAT_OPS_PROBE_TIMEOUT_MS || env.WA_CHAT_OPS_PROBE_TIMEOUT_MS || 2500);
-  return Number.isFinite(parsed) ? Math.max(500, parsed) : 2500;
+  return Number.isFinite(parsed) ? Math.min(5000, Math.max(500, parsed)) : 2500;
 }
 
 function localWhatsAppRuntimeDestroyTimeoutMs(env = process.env) {

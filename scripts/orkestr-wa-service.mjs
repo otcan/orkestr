@@ -114,6 +114,10 @@ function json(res, status, payload) {
   res.end(JSON.stringify(payload));
 }
 
+function healthStatusCode(payload = {}) {
+  return payload.ok === false ? 503 : 200;
+}
+
 function sendText(res, status, text, contentType = "text/plain; charset=utf-8") {
   res.writeHead(status, { "content-type": contentType, "cache-control": "no-store" });
   res.end(text);
@@ -254,7 +258,13 @@ async function handleRequest(req, res, env = process.env, bridge = defaultBridge
   const url = new URL(req.url || "/", "http://orkestr-wa.local");
   if (method === "GET" && (url.pathname === "/" || url.pathname === "/health")) {
     requireAuth(req, env);
-    return json(res, 200, publicHealth(await bridge.getLocalWhatsAppBridgeStatus(env, { probeChatOps: true }), env));
+    const health = publicHealth(await bridge.getLocalWhatsAppBridgeStatus(env, { probeChatOps: false }), env);
+    return json(res, healthStatusCode(health), health);
+  }
+  if (method === "GET" && (url.pathname === "/diagnostics/health" || url.pathname === "/api/diagnostics/health")) {
+    requireAuth(req, env);
+    const health = publicHealth(await bridge.getLocalWhatsAppBridgeStatus(env, { probeChatOps: true, read: true, force: url.searchParams.get("force") === "1" }), env);
+    return json(res, healthStatusCode(health), health);
   }
   if (method === "GET" && (url.pathname === "/accounts" || url.pathname === "/api/dashboard")) {
     requireAuth(req, env);

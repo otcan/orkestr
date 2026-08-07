@@ -76,7 +76,7 @@ test("standalone WA service exposes sanitized health for configured accounts", a
   });
 });
 
-test("standalone WA service health actively probes chat operations", async () => {
+test("standalone WA service health is passive and diagnostics probes chat operations", async () => {
   const home = await testHome("orkestr-wa-service-health-probe-");
   const env = {
     ORKESTR_HOME: home,
@@ -87,11 +87,14 @@ test("standalone WA service health actively probes chat operations", async () =>
 
   await withWaService(env, async ({ bridgeUrl }) => {
     const health = await fetch(`${bridgeUrl}/health`);
+    const diagnostics = await fetch(`${bridgeUrl}/diagnostics/health`);
     const dashboard = await fetch(`${bridgeUrl}/api/dashboard`);
     assert.equal(health.status, 200);
+    assert.equal(diagnostics.status, 200);
     assert.equal(dashboard.status, 200);
     assert.deepEqual(calls, [
-      [env, { probeChatOps: true }],
+      [env, { probeChatOps: false }],
+      [env, { probeChatOps: true, read: true, force: false }],
       [env, { probeChatOps: true }],
     ]);
   }, mockBridge({

@@ -4,7 +4,7 @@ import { getThread, listThreadMessages, listThreads, updateThreadMessage } from 
 import { listRouterOutbox, listRouterTraces, recordRouterTraceEvent } from "./router-traces.js";
 import { backfillRouterTracePhases } from "./router-trace-backfill.js";
 import { inferredRuntimeBackfillPhases, phaseSet, phaseTime, requiredTracePhases, traceHasRuntimeReplyEvidence, traceShortCircuitedBeforeRuntime } from "./router-doctor-trace-rules.js";
-import { queueNoticeWithoutRuntimeDelivery, repairRuntimeDeliveryMissingAssistant, runtimeDeliveryMissingAssistantIssue, traceScopedMessage, traceScopedOutboxJob } from "./router-doctor-message-recovery.js";
+import { queueNoticeWithoutRuntimeDelivery, repairRuntimeDeliveryMissingAssistant, runtimeDeliveryMissingAssistantIssue } from "./router-doctor-message-recovery.js";
 import { orphanedWhatsAppFinalAnswerIssues, repairOrphanedWhatsAppFinalAnswer } from "./router-doctor-whatsapp-final-mirror.js";
 function clean(value = "") {
   return String(value || "").trim();
@@ -45,6 +45,24 @@ function issue(code, severity, summary, detail = {}) {
     summary,
     ...detail,
   };
+}
+
+function timeoutMs(value, fallback = 5_000, max = 5_000) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  return Math.min(max, Math.floor(parsed));
+}
+
+function boundedResult(promise, ms = 5_000, fallback = {}) {
+  let timer = null;
+  return Promise.race([
+    Promise.resolve(promise),
+    new Promise((resolve) => {
+      timer = setTimeout(() => resolve(fallback), ms);
+    }),
+  ]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
 }
 
 function whatsappMessage(message = {}) {
@@ -112,19 +130,24 @@ function deliveredAssistantMessage(message = {}) {
     ["completed", "delivered", ""].includes(lower(message.deliveryState));
 }
 
-function sameChat(left = {}, right = {}) {
-  const leftChat = clean(left.chatId);
-  const rightChat = clean(right.chatId);
-  return !leftChat || !rightChat || leftChat === rightChat;
-}
-
-function traceForMessage(message = {}, traces = []) {
-  const routerTraceId = clean(message.routerTraceId);
-  if (routerTraceId) {
-    const byTrace = traces.find((trace) => clean(trace.routerTraceId) === routerTraceId);
-    if (byTrace) return byTrace;
+function buildTraceIndex(traces = []) {
+  const byTraceId = new Map();
+  const byMessageId = new Map();
+  for (const trace of Array.isArray(traces) ? traces : []) {
+    const routerTraceId = clean(trace.routerTraceId);
+    const messageId = clean(trace.messageId);
+    if (routerTraceId && !byTraceId.has(routerTraceId)) byTraceId.set(routerTraceId, trace);
+    if (messageId && !byMessageId.has(messageId)) byMessageId.set(messageId, trace);
   }
-  return traces.find((trace) => clean(trace.messageId) === clean(message.id)) || null;
+  return {
+    byTraceId,
+    byMessageId,
+    forMessage(message = {}) {
+      const routerTraceId = clean(message.routerTraceId);
+      if (routerTraceId && byTraceId.has(routerTraceId)) return byTraceId.get(routerTraceId);
+      return byMessageId.get(clean(message.id)) || null;
+    },
+  };
 }
 
 function accountIdForThread(thread = {}) {
@@ -161,18 +184,72 @@ function accountMatchesId(account = {}, id = "") {
   return candidates.includes(clean(id)) || candidates.includes(`whatsapp:${clean(id)}`);
 }
 
-function newerAssistant(messages = [], userMessage = {}) {
-  const userTs = dateMs(userMessage.createdAt || userMessage.updatedAt);
-  return messages
-    .filter((message) => deliveredAssistantMessage(message) && sameChat(message, userMessage))
-    .find((message) => dateMs(message.createdAt || message.updatedAt) > userTs) || null;
+function chatKey(message = {}) {
+  return clean(message.chatId);
 }
 
-function olderAssistant(messages = [], userMessage = {}) {
-  const userTs = dateMs(userMessage.createdAt || userMessage.updatedAt);
-  return [...messages]
-    .reverse()
-    .find((message) => deliveredAssistantMessage(message) && sameChat(message, userMessage) && dateMs(message.createdAt || message.updatedAt) <= userTs) || null;
+function assistantForUser({ byChat = new Map(), blank = null, any = null } = {}, userMessage = {}) {
+  const key = chatKey(userMessage);
+  if (!key) return any || null;
+  return byChat.get(key) || blank || null;
+}
+
+function newerWhatsAppUserFromState({ byChat = new Map(), blank = null, any = null } = {}, userMessage = {}) {
+  const key = chatKey(userMessage);
+  if (!key) return any || null;
+  return byChat.get(key) || blank || null;
+}
+
+function buildMessageIndex(messages = [], whatsappMessageFn = whatsappMessage) {
+  const newerAssistantById = new Map();
+  const olderAssistantById = new Map();
+  const newerWhatsAppUserById = new Map();
+  let laterAssistant = { byChat: new Map(), blank: null, any: null };
+  let laterUser = { byChat: new Map(), blank: null, any: null };
+  for (let index = (Array.isArray(messages) ? messages.length : 0) - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    newerAssistantById.set(clean(message.id), assistantForUser(laterAssistant, message));
+    newerWhatsAppUserById.set(clean(message.id), newerWhatsAppUserFromState(laterUser, message));
+    if (deliveredAssistantMessage(message)) {
+      laterAssistant.any = message;
+      const key = chatKey(message);
+      if (key) laterAssistant.byChat.set(key, message);
+      else laterAssistant.blank = message;
+    }
+    if (message?.role === "user" && (typeof whatsappMessageFn !== "function" || whatsappMessageFn(message))) {
+      laterUser.any = message;
+      const key = chatKey(message);
+      if (key) laterUser.byChat.set(key, message);
+      else laterUser.blank = message;
+    }
+  }
+
+  let priorAssistant = { byChat: new Map(), blank: null, any: null };
+  for (const message of Array.isArray(messages) ? messages : []) {
+    olderAssistantById.set(clean(message.id), assistantForUser(priorAssistant, message));
+    if (deliveredAssistantMessage(message)) {
+      priorAssistant.any = message;
+      const key = chatKey(message);
+      if (key) priorAssistant.byChat.set(key, message);
+      else priorAssistant.blank = message;
+    }
+  }
+
+  return {
+    newerAssistant(message = {}) {
+      return newerAssistantById.get(clean(message.id)) || null;
+    },
+    olderAssistant(message = {}) {
+      return olderAssistantById.get(clean(message.id)) || null;
+    },
+    newerWhatsAppUser(message = {}) {
+      return newerWhatsAppUserById.get(clean(message.id)) || null;
+    },
+  };
+}
+
+function scopedMessageIdsForTraces(traces = []) {
+  return new Set((Array.isArray(traces) ? traces : []).flatMap((trace) => [clean(trace.messageId)]).filter(Boolean));
 }
 
 function runtimeReady(status = {}) {
@@ -278,7 +355,16 @@ async function inspectThread(thread, options = {}) {
   const traces = routerTraceId
     ? allTraces.filter((trace) => clean(trace.routerTraceId) === routerTraceId)
     : allTraces;
-  const scopedMessages = messages.filter((message) => traceScopedMessage(message, traces, routerTraceId));
+  const scopedTraceMessageIds = scopedMessageIdsForTraces(traces);
+  const scopedMessages = routerTraceId
+    ? messages.filter((message) =>
+      clean(message.routerTraceId) === routerTraceId ||
+        scopedTraceMessageIds.has(clean(message.id)) ||
+        scopedTraceMessageIds.has(clean(message.parentMessageId))
+    )
+    : messages;
+  const traceIndex = buildTraceIndex(traces);
+  const messageIndex = buildMessageIndex(messages);
   const status = await Promise.resolve(typeof options.runtimeStatusFn === "function"
     ? options.runtimeStatusFn(thread, messages, env)
     : runtimeStatus(thread.id, env)
@@ -315,13 +401,13 @@ async function inspectThread(thread, options = {}) {
   }
 
   for (const message of scopedMessages.filter((item) => whatsappMessage(item) && item.role === "user")) {
-    const trace = traceForMessage(message, traces);
+    const trace = traceIndex.forMessage(message);
     const shortCircuitTrace = trace ? traceShortCircuitedBeforeRuntime(trace) : false;
     const phases = trace ? phaseSet(trace) : new Set();
-    const assistant = newerAssistant(messages, message);
+    const assistant = messageIndex.newerAssistant(message);
     const runtimeDelivered = phases.has("delivered_to_runtime") || messageRuntimeDeliveryEvidence(message);
     if (!shortCircuitTrace && terminalUserMessage(message) && !runtimeDelivered && !assistant) {
-      const older = olderAssistant(messages, message);
+      const older = messageIndex.olderAssistant(message);
       checks.push(issue("queued_whatsapp_input_marked_terminal_without_runtime_delivery", "error", "WhatsApp user input is terminal without runtime delivery evidence or a newer same-chat assistant reply.", {
         threadId: thread.id,
         messageId: message.id,
@@ -331,14 +417,14 @@ async function inspectThread(thread, options = {}) {
         olderAssistantMessageId: older?.id || "",
       }));
     }
-    if (!shortCircuitTrace && terminalUserMessage(message) && !runtimeDelivered && !assistant && olderAssistant(messages, message)) {
+    if (!shortCircuitTrace && terminalUserMessage(message) && !runtimeDelivered && !assistant && messageIndex.olderAssistant(message)) {
       checks.push(issue("older_reply_completed_newer_user_message", "error", "A reply/notice older than the WhatsApp user message appears to be the only completion evidence.", {
         threadId: thread.id,
         messageId: message.id,
         routerTraceId: trace?.routerTraceId || clean(message.routerTraceId),
       }));
     }
-    const missingAssistant = runtimeDeliveryMissingAssistantIssue({ message, messages, trace, status, thresholdMs, runtimeDelivered, shortCircuitTrace, assistant, terminalUserMessageFn: terminalUserMessage, runtimeReadyFn: runtimeReady, whatsappMessageFn: whatsappMessage, issueFn: issue });
+    const missingAssistant = runtimeDeliveryMissingAssistantIssue({ message, messages, trace, status, thresholdMs, runtimeDelivered, shortCircuitTrace, assistant, newerWhatsAppUserMessage: messageIndex.newerWhatsAppUser(message), terminalUserMessageFn: terminalUserMessage, runtimeReadyFn: runtimeReady, whatsappMessageFn: whatsappMessage, issueFn: issue });
     if (missingAssistant) checks.push({ threadId: thread.id, ...missingAssistant });
     if (activeQueuedMessage(message) && ageMs(message.createdAt) >= thresholdMs && runtimeReady(status)) {
       checks.push(issue("stale_queued_whatsapp_input_ready_runtime", "error", "WhatsApp input is queued while the runtime is ready past the stale threshold.", {
@@ -383,7 +469,13 @@ async function inspectThread(thread, options = {}) {
   const connectorOutbox = listConnectorOutboxJobsFn
     ? await listConnectorOutboxJobsFn({ connector: "whatsapp", threadId: thread.id, limit: 5000 }, env)
     : { jobs: [] };
-  const connectorOutboxJobs = (connectorOutbox.jobs || []).filter((job) => traceScopedOutboxJob(job, traces, routerTraceId));
+  const connectorOutboxJobs = routerTraceId
+    ? (connectorOutbox.jobs || []).filter((job) =>
+      clean(job.routerTraceId || job.metadata?.routerTraceId) === routerTraceId ||
+        scopedTraceMessageIds.has(clean(job.sourceMessageId)) ||
+        scopedTraceMessageIds.has(clean(job.sourceEventId))
+    )
+    : (connectorOutbox.jobs || []);
   checks.push(...orphanedWhatsAppFinalAnswerIssues({
     messages: scopedMessages,
     connectorOutboxJobs,
@@ -459,9 +551,22 @@ export async function doctorWhatsAppRouter(options = {}) {
     threads = (await listThreads(env)).filter((thread) => lower(thread.binding?.connector || "") === "whatsapp");
   }
 
+  const statusTimeout = timeoutMs(options.whatsappStatusTimeoutMs || env.ORKESTR_ROUTER_DOCTOR_WHATSAPP_STATUS_TIMEOUT_MS, 5_000, 5_000);
+  let sharedWhatsAppStatusPromise = null;
+  const sharedWhatsAppStatusFn = (thread) => {
+    sharedWhatsAppStatusPromise ||= boundedResult(
+      typeof options.whatsappStatusFn === "function"
+        ? options.whatsappStatusFn(thread, env)
+        : Promise.resolve({ ready: false, state: "unknown" }),
+      statusTimeout,
+      { ok: false, state: "timeout", statusCode: 503, error: `whatsapp_status_timeout_${statusTimeout}ms` },
+    ).catch((error) => ({ ok: false, state: "error", statusCode: 503, error: clean(error?.message || error) }));
+    return sharedWhatsAppStatusPromise;
+  };
+
   const threadReports = [];
   for (const thread of threads) {
-    threadReports.push(await inspectThread(thread, { ...options, env, repair }));
+    threadReports.push(await inspectThread(thread, { ...options, env, repair, whatsappStatusFn: sharedWhatsAppStatusFn }));
   }
 
   const routerOutbox = routerTraceId ? await listRouterOutbox({ routerTraceId }, env) : [];
