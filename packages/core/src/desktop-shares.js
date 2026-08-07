@@ -5,6 +5,7 @@ import { isAdminPrincipal } from "./policy.js";
 import { defaultAdminUser, normalizeUserId } from "./users.js";
 import { assertDesktopAccess, authorizeDesktopAccess, desktopAccessMode, desktopBoundaryId } from "./desktop-access.js";
 import { emitDesktopShareLifecycle } from "./desktop-share-lifecycle.js";
+import { recordThreadResourceInvalidationMetric } from "./observability.js";
 import {
   cleanDesktopSlug as cleanSlug,
   desktopShareLineageId as lineageIdFor,
@@ -381,6 +382,7 @@ export async function revokeDesktopShare(shareId = "", { reason = "operator_revo
     return item;
   });
   emitDesktopShareLifecycle({ shareId: share.id, lineageId: share.lineageId, shareGeneration: share.shareGeneration, reason: "revoked" });
+  recordThreadResourceInvalidationMetric({ resourceType: "desktop", subject: "share" });
   await appendEvent({ type: "desktop_share_revoked", shareId: share.id, lineageId: share.lineageId, shareGeneration: share.shareGeneration, reason: share.revokeReason }, env).catch(() => {});
   return { ok: true, share: publicShare(share) };
 }

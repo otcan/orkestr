@@ -80,6 +80,7 @@ test("child ceilings prevent later widening and parent revocation narrows immedi
   const { env, principal, parent } = await fixture();
   await setThreadResourceGrants(parent.id, "oxrm", [{ resourceId: "xrm-a", permissions: ["read"] }], { principal }, env);
   const child = await createThread({ id: "child", ownerUserId: "admin", name: "Child", parentThreadId: parent.id, threadKind: "task-agent" }, env);
+  assert.equal((await readThreadResourcePolicyState(env)).policyAuditOutbox.some((item) => item.action === "child_snapshot_ceiling_captured"), true);
 
   const inherited = await authorizeThreadResourceAccess({ principal, threadId: child.id, resourceType: "oxrm", resourceId: "xrm-a", permission: "read" }, env);
   assert.equal(inherited.granted, true);
@@ -270,15 +271,15 @@ test("break-glass requires recent authentication and a change reference", async 
   assert.match(allowed.breakGlassExpiresAt, /T/);
 });
 
-test("break-glass denies when its required audit cannot be persisted", async () => {
+test("break-glass persists transactional audit before use when best-effort events are unavailable", async () => {
   const { home, env, principal, parent } = await fixture();
   await advanceThreadResourceGeneration("desktop", "desk-a", "admin", {}, env);
   await fs.rm(path.join(home, "events.jsonl"), { force: true });
   await fs.mkdir(path.join(home, "events.jsonl"));
-  await assert.rejects(
-    () => authorizeThreadResourceAccess({ principal, threadId: parent.id, resourceType: "desktop", resourceKey: "desk-a", permission: "operate", breakGlass: true, breakGlassReason: "incident", breakGlassChangeRef: "CHG-1", recentAuthAt: new Date().toISOString() }, env),
-    /thread_resource_break_glass_audit_unavailable/,
-  );
+  const allowed = await authorizeThreadResourceAccess({ principal, threadId: parent.id, resourceType: "desktop", resourceKey: "desk-a", permission: "operate", breakGlass: true, breakGlassReason: "incident", breakGlassChangeRef: "CHG-1", recentAuthAt: new Date().toISOString() }, env);
+  assert.equal(allowed.breakGlass, true);
+  const state = await readThreadResourcePolicyState(env);
+  assert.equal(state.policyAuditOutbox.some((item) => item.action === "break_glass" && item.outcome === "allowed"), true);
 });
 
 test("policy DB retries cleanly after a failed legacy desktop migration", async () => {

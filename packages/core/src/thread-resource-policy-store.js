@@ -190,6 +190,20 @@ function ensureSchema(db) {
       expires_at text not null,
       updated_at text not null
     );
+    create table if not exists orkestr_thread_resource_audit_outbox (
+      id text primary key,
+      action text not null,
+      resource_type text not null default '',
+      outcome text not null,
+      actor_user_id text not null,
+      reason text,
+      expires_at text,
+      policy_revision integer not null,
+      state text not null,
+      created_at text not null
+    );
+    create index if not exists idx_thread_resource_audit_outbox_state
+      on orkestr_thread_resource_audit_outbox(state, created_at);
   `);
   ensureColumn(db, "orkestr_thread_resource_policy", "inheritance_mode", "text not null default 'explicit'");
   ensureColumn(db, "orkestr_thread_resource_policy", "parent_snapshot_revision", "integer not null default 0");
@@ -246,11 +260,16 @@ function readState(db) {
       createdAt: row.created_at, updatedAt: row.updated_at, deliveredAt: row.delivered_at || null,
     })),
     mailboxPumpLeases: db.prepare("select * from orkestr_mailbox_thread_pump_leases").all().map((row) => ({ name: row.name, token: row.token, expiresAt: row.expires_at, updatedAt: row.updated_at })),
+    policyAuditOutbox: db.prepare("select * from orkestr_thread_resource_audit_outbox order by created_at asc").all().map((row) => ({
+      id: row.id, action: row.action, resourceType: row.resource_type || "", outcome: row.outcome,
+      actorUserId: row.actor_user_id, reason: row.reason || "", expiresAt: row.expires_at || null,
+      policyRevision: Number(row.policy_revision || 0), state: row.state, createdAt: row.created_at,
+    })),
   };
 }
 
 function replaceState(db, state = {}) {
-  db.exec("delete from orkestr_mailbox_thread_pump_leases; delete from orkestr_mailbox_thread_deliveries; delete from orkestr_mailbox_thread_listeners; delete from orkestr_thread_resource_grants; delete from orkestr_thread_resources; delete from orkestr_thread_resource_policy; delete from orkestr_thread_resource_ceilings; delete from orkestr_thread_resource_mutations;");
+  db.exec("delete from orkestr_thread_resource_audit_outbox; delete from orkestr_mailbox_thread_pump_leases; delete from orkestr_mailbox_thread_deliveries; delete from orkestr_mailbox_thread_listeners; delete from orkestr_thread_resource_grants; delete from orkestr_thread_resources; delete from orkestr_thread_resource_policy; delete from orkestr_thread_resource_ceilings; delete from orkestr_thread_resource_mutations;");
   const resource = db.prepare("insert into orkestr_thread_resources(resource_type, resource_id, native_id, resource_key, owner_user_id, boundary_id, generation, status, backend, created_at, updated_at, retired_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
   for (const item of state.resources || []) resource.run(item.resourceType, item.id, item.nativeId || item.resourceKey, item.resourceKey, item.ownerUserId, item.boundaryId, item.generation, item.status || (item.retiredAt ? "retired" : "active"), item.backend || "", item.createdAt, item.updatedAt, item.retiredAt || null);
   const policy = db.prepare("insert into orkestr_thread_resource_policy(thread_id, resource_type, revision, explicit_empty, inheritance_mode, parent_snapshot_revision, created_at, updated_at) values (?, ?, ?, ?, ?, ?, ?, ?)");
@@ -267,6 +286,8 @@ function replaceState(db, state = {}) {
   for (const item of state.mailboxDeliveries || []) delivery.run(item.id, item.dedupeKey, item.resourceType, item.resourceId, item.mailboxId, item.listenerId || null, item.listenerGeneration || 0, item.threadId || null, item.state, item.epoch || 1, item.attemptCount || 0, item.maxAttempts || 1, item.nextAttemptAt || null, item.claimToken || null, item.claimExpiresAt || null, item.grantRevision || 0, item.policyRevision || 0, item.resourceGeneration || 1, item.messageKey, JSON.stringify(item.payload || {}), item.reason || null, item.createdAt, item.updatedAt, item.deliveredAt || null);
   const pumpLease = db.prepare("insert into orkestr_mailbox_thread_pump_leases(name, token, expires_at, updated_at) values (?, ?, ?, ?)");
   for (const item of state.mailboxPumpLeases || []) pumpLease.run(item.name, item.token, item.expiresAt, item.updatedAt);
+  const auditOutbox = db.prepare("insert into orkestr_thread_resource_audit_outbox(id, action, resource_type, outcome, actor_user_id, reason, expires_at, policy_revision, state, created_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+  for (const item of (state.policyAuditOutbox || []).slice(-2000)) auditOutbox.run(item.id, item.action, item.resourceType || "", item.outcome, item.actorUserId, item.reason || null, item.expiresAt || null, item.policyRevision || 0, item.state || "pending", item.createdAt);
   setMeta(db, "revision", Number(state.revision || 0));
   setMeta(db, "updated_at", state.updatedAt || new Date().toISOString());
 }
