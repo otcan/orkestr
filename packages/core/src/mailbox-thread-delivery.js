@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { appendEvent } from "../../storage/src/store.js";
 import { policyError } from "./policy.js";
 import { appendThreadMessage } from "./threads.js";
+import { evaluateMailboxThreadDeliveryShadow } from "./mailbox-thread-delivery-shadow.js";
 import {
   assertThreadResourceAccess,
   authorizeThreadResourceAccess,
@@ -206,6 +207,10 @@ export async function revokeMailboxThreadListener({ mailbox, listenerId, princip
 export async function enqueueMailboxThreadDeliveries({ mailbox, message, idempotencyKey } = {}, env = process.env) {
   if (!mailbox?.id || mailbox.target?.type !== "main") throw policyError("mailbox_thread_delivery_main_mailbox_required", 409);
   policyModeRequired(env);
+  if (threadResourceAccessMode("mailbox", env) === "shadow") {
+    const shadowEvaluation = await evaluateMailboxThreadDeliveryShadow({ mailbox, message, idempotencyKey }, env);
+    return { ok: true, deliveryIds: [], queued: 0, unrouted: false, idempotent: true, shadow: true, shadowEvaluation };
+  }
   const resourceId = mailboxResourceId(mailbox, env);
   const messageKey = clean(idempotencyKey);
   if (!messageKey) throw policyError("mailbox_message_idempotency_required", 400);
@@ -252,7 +257,12 @@ export async function routeMainMailboxThreadDelivery({ mailbox, message, idempot
     connectorInboxInput: { id: idempotencyKey, connector: "mailbox", accountId: mailbox.id, conversationId: mailbox.id, payload: message },
     idempotencyKey,
   });
-  if (threadResourceAccessMode("mailbox", env) === "off") return legacySpool();
+  const mode = threadResourceAccessMode("mailbox", env);
+  if (mode === "off") return legacySpool();
+  if (mode === "shadow") {
+    const shadowEvaluation = await evaluateMailboxThreadDeliveryShadow({ mailbox, message, idempotencyKey }, env);
+    return { ...legacySpool(), shadowEvaluation };
+  }
   // The connector inbox owns ingress dedupe and spooling. It calls the
   // listener dispatcher only after the mailbox/message pair is committed once.
   return {
