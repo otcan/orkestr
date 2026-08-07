@@ -128,6 +128,17 @@ test("doctor evaluates inherited listener grants through child deny-all policy w
   const child = await createThread({ id: "listener-child", ownerUserId: "admin", name: "Child", parentThreadId: parent.id }, env);
   const listener = await createMailboxThreadListener({ mailbox, threadId: child.id, principal }, env);
   assert.ok(listener.listener.id);
+  const initialBefore = await readThreadResourcePolicy(env);
+  assert.equal(initialBefore.ceilings.some((ceiling) =>
+    ceiling.threadId === child.id &&
+    ceiling.resourceType === "mailbox" &&
+    ceiling.permissions.includes("subscribe")
+  ), true);
+  const initialReport = await threadResourcePolicyDoctorReport(env);
+  const initialAfter = await readThreadResourcePolicy(env);
+  assert.equal(initialReport.stale.listeners, 0);
+  assert.equal(initialAfter.revision, initialBefore.revision);
+  assert.equal(initialAfter.policyAuditOutbox.length, initialBefore.policyAuditOutbox.length);
 
   await setThreadResourceGrants(child.id, "mailbox", [], { principal }, env);
   const before = await readThreadResourcePolicy(env);
