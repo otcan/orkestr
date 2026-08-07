@@ -31,6 +31,13 @@ function tokenRecord({ token = "resource-token", resource, thread, policyRevisio
     resourceType: "oxrm",
     resourceId: resource.id,
     resourceActions: ["read"],
+    connectorService: "whatsapp",
+    connectorAccountId: "account-a",
+    connectorConversationId: "conversation-a",
+    connectorBindingId: "binding-a",
+    connectorTargetThreadId: thread.id,
+    connectorOperationRef: "operation-a",
+    allowedChatIds: ["conversation-a"],
     connectorMcpTool: "orkestr_auth",
     connectorMcpAction: "status",
     boundaryId: resource.boundaryId,
@@ -78,6 +85,11 @@ async function fixture({ grant = true } = {}) {
     instance_id: "tenant-instance",
     user_id: "tenant",
     thread_id: thread.id,
+    account_id: "account-a",
+    conversation_id: "conversation-a",
+    binding_id: "binding-a",
+    target_thread_id: thread.id,
+    operation_ref: "operation-a",
     resource_type: "oxrm",
     resource_id: registered.resource.id,
     resource_action: "read",
@@ -85,6 +97,16 @@ async function fixture({ grant = true } = {}) {
     connector_mcp_action: "status",
   };
   return { env, auth, input, principal, thread, resource: registered.resource };
+}
+
+function issueInput(item, overrides = {}) {
+  return {
+    resourceType: "oxrm", resourceId: item.resource.id, resourceAction: "read", threadId: item.thread.id,
+    principal: item.principal, connectorMcpTool: "orkestr_auth", connectorMcpAction: "status",
+    service: "whatsapp", accountId: "account-a", conversationId: "conversation-a", bindingId: "binding-a",
+    targetThreadId: item.thread.id, operationRef: "operation-a",
+    ...overrides,
+  };
 }
 
 function assertResourceAccess(auth, input, env) {
@@ -171,6 +193,25 @@ test("resource-bound connector tokens fail closed for cross-thread, cross-bounda
     () => assertResourceAccess(item.auth, { ...item.input, action: "list" }, item.env),
     /connector_mcp_resource_dispatch_scope_denied/,
   );
+  for (const [field, value] of [
+    ["service", "gmail"],
+    ["account_id", "account-b"],
+    ["conversation_id", "conversation-b"],
+    ["binding_id", "binding-b"],
+    ["target_thread_id", "other-thread"],
+    ["operation_ref", "operation-b"],
+  ]) {
+    await assert.rejects(
+      () => assertResourceAccess(item.auth, { ...item.input, [field]: value }, item.env),
+      /connector_mcp_resource_operation_target_scope_denied/,
+      `resource token must bind ${field}`,
+    );
+    await assert.rejects(
+      () => assertConnectorMcpResourceAccess(item.auth, { ...item.input, [field]: value }, item.env, { actualTarget: item.input }),
+      /connector_mcp_resource_dispatch_target_mismatch/,
+      `caller cannot contradict trusted ${field}`,
+    );
+  }
   await assert.rejects(
     () => assertResourceAccess(item.auth, { ...item.input, resource_id: "" }, item.env),
     /connector_mcp_resource_target_required/,
@@ -204,10 +245,7 @@ test("configured operator connector token remains compatible without a resource 
 
 test("issued resource tokens round-trip through connector auth and survive unrelated policy edits", async () => {
   const item = await fixture();
-  const issued = await issueConnectorMcpResourceToken({
-    resourceType: "oxrm", resourceId: item.resource.id, resourceAction: "read", threadId: item.thread.id,
-    principal: item.principal, scopes: ["connectors:read"], instanceId: "tenant-instance", connectorMcpTool: "orkestr_auth", connectorMcpAction: "status",
-  }, item.env);
+  const issued = await issueConnectorMcpResourceToken(issueInput(item, { scopes: ["connectors:read"], instanceId: "tenant-instance" }), item.env);
   // Issued sessions are independently usable; they do not rely on a static
   // environment token record remaining configured after issuance.
   item.env.ORKESTR_CONNECTORS_MCP_TOKENS_JSON = "";
@@ -232,21 +270,25 @@ test("issued resource tokens round-trip through connector auth and survive unrel
 test("issued resource tokens enforce lifetime and are revoked with their effective grant", async () => {
   const item = await fixture();
   await assert.rejects(
-    () => issueConnectorMcpResourceToken({ resourceType: "oxrm", resourceId: item.resource.id, resourceAction: "read", threadId: item.thread.id, principal: item.principal, ttlMs: 0, connectorMcpTool: "orkestr_auth", connectorMcpAction: "status" }, item.env),
+    () => issueConnectorMcpResourceToken(issueInput(item, { service: "" }), item.env),
+    /connector_mcp_resource_token_issue_target_invalid/,
+  );
+  await assert.rejects(
+    () => issueConnectorMcpResourceToken(issueInput(item, { ttlMs: 0 }), item.env),
     /connector_mcp_resource_token_ttl_invalid/,
   );
   await assert.rejects(
-    () => issueConnectorMcpResourceToken({ resourceType: "oxrm", resourceId: item.resource.id, resourceAction: "read", threadId: item.thread.id, principal: item.principal, ttlMs: 5 * 60_000 + 1, connectorMcpTool: "orkestr_auth", connectorMcpAction: "status" }, item.env),
+    () => issueConnectorMcpResourceToken(issueInput(item, { ttlMs: 5 * 60_000 + 1 }), item.env),
     /connector_mcp_resource_token_ttl_invalid/,
   );
-  const issued = await issueConnectorMcpResourceToken({ resourceType: "oxrm", resourceId: item.resource.id, resourceAction: "read", threadId: item.thread.id, principal: item.principal, connectorMcpTool: "orkestr_auth", connectorMcpAction: "status" }, item.env);
+  const issued = await issueConnectorMcpResourceToken(issueInput(item), item.env);
   await withThreadResourcePolicyTransaction((state) => {
     state.resourceSessions[0].expiresAt = new Date(Date.now() - 1_000).toISOString();
     return { state };
   }, item.env);
   await assert.rejects(() => authorizeConnectorMcpToken(issued.token, item.env), /connector_mcp_token_invalid/);
 
-  const active = await issueConnectorMcpResourceToken({ resourceType: "oxrm", resourceId: item.resource.id, resourceAction: "read", threadId: item.thread.id, principal: item.principal, connectorMcpTool: "orkestr_auth", connectorMcpAction: "status" }, item.env);
+  const active = await issueConnectorMcpResourceToken(issueInput(item), item.env);
   await setThreadResourceGrants(item.thread.id, "oxrm", [], { principal: item.principal }, item.env);
   const state = await readThreadResourcePolicy(item.env);
   assert.equal(state.resourceSessions.some((session) => session.bearerHash && session.state === "invalidated"), true);
@@ -258,7 +300,7 @@ test("parent grant replacement invalidates an inherited child session through gr
   const parent = await createThread({ id: "resource-source-parent", name: "Resource source parent", ownerUserId: "tenant" }, item.env);
   await setThreadResourceGrants(parent.id, "oxrm", [{ resourceId: "crm-primary", permissions: ["read"] }], { principal: item.principal }, item.env);
   const child = await createThread({ id: "resource-source-child", name: "Resource source child", ownerUserId: "tenant", parentThreadId: parent.id }, item.env);
-  await issueConnectorMcpResourceToken({ resourceType: "oxrm", resourceId: item.resource.id, resourceAction: "read", threadId: child.id, principal: item.principal, connectorMcpTool: "orkestr_auth", connectorMcpAction: "status" }, item.env);
+  await issueConnectorMcpResourceToken(issueInput(item, { threadId: child.id, targetThreadId: child.id }), item.env);
   const active = await readThreadResourcePolicy(item.env);
 
   assert.equal(active.resourceSessions[0].grantThreadId, parent.id);

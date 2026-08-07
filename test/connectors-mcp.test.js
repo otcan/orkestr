@@ -23,6 +23,7 @@ import { configureTenantWhatsAppRoute } from "../packages/core/src/tenant-whatsa
 import { createTenantVm } from "../packages/core/src/tenant-vm-registry.js";
 import { createThread, getThread } from "../packages/core/src/threads.js";
 import { readThreadResourcePolicy, registerThreadResource, setThreadResourceGrants } from "../packages/core/src/thread-resource-grants.js";
+import { issueConnectorMcpResourceToken } from "../packages/core/src/thread-resource-sessions.js";
 import { isMainModule } from "../scripts/main-module.mjs";
 import { createConnectorsMcpGateway } from "../scripts/orkestr-connectors-mcp.mjs";
 import { assessConnectorHealth, connectorReleaseState, runConnectorDoctor } from "../scripts/orkestr-connectors-doctor.mjs";
@@ -463,19 +464,14 @@ test("generic connector MCP handlers reject resource-bound tokens without an ind
     const principal = adminPrincipal("admin");
     const thread = await createThread({ id: "resource-token-mcp", name: "Resource token MCP", ownerUserId: "firat" }, item.env);
     const registered = await registerThreadResource({ resourceType: "oxrm", resourceId: "crm-mcp", ownerUserId: "firat", status: "active" }, { principal }, item.env);
-    const granted = await setThreadResourceGrants(thread.id, "oxrm", [{ resourceId: "crm-mcp", permissions: ["read"] }], { principal }, item.env);
-    const policy = await readThreadResourcePolicy(item.env);
-    const issuedAt = new Date().toISOString();
+    await setThreadResourceGrants(thread.id, "oxrm", [{ resourceId: "crm-mcp", permissions: ["read"] }], { principal }, item.env);
     item.env.ORKESTR_OXRM_ACCESS_MODE = "enforce";
-    item.env.ORKESTR_CONNECTORS_MCP_TOKENS_JSON = JSON.stringify({
-      tenant: {
-        token: "scoped-token", scopes: ["connectors:read"], principalKind: "tenant_vm", ownerUserId: "firat", instanceId: "vm-firat", accountId: "sender",
-        threadId: thread.id, rootThreadId: thread.id, resourceType: "oxrm", resourceId: registered.resource.id, resourceActions: ["read"],
-        connectorMcpTool: "orkestr_auth", connectorMcpAction: "status",
-        boundaryId: registered.resource.boundaryId, policyRevision: policy.policies.find((entry) => entry.threadId === thread.id && entry.resourceType === "oxrm").revision, grantRevision: granted.grants[0].revision,
-        resourceGeneration: registered.resource.generation, jti: "test-resource-token", issuedAt, expiresAt: new Date(Date.parse(issuedAt) + (4 * 60_000)).toISOString(),
-      },
-    });
+    const issued = await issueConnectorMcpResourceToken({
+      resourceType: "oxrm", resourceId: registered.resource.id, resourceAction: "read", threadId: thread.id,
+      principal, scopes: ["connectors:read"], instanceId: "vm-firat", accountId: "sender", accountService: "whatsapp",
+      service: "whatsapp", connectorMcpTool: "orkestr_auth", connectorMcpAction: "status",
+    }, item.env);
+    item.env.ORKESTR_CONNECTORS_MCP_BEARER_TOKEN = issued.token;
     const missingTarget = await callConnectorsMcpTool("orkestr_auth", {
       service: "whatsapp", action: "status", account_id: "sender", instance_id: "vm-firat", user_id: "firat", thread_id: thread.id,
     }, item.env);
@@ -486,7 +482,14 @@ test("generic connector MCP handlers reject resource-bound tokens without an ind
     }, item.env);
 
     assert.match(JSON.stringify(result), /connector_mcp_resource_dispatch_target_unbound/);
-    assert.equal((await readThreadResourcePolicy(item.env)).resourceSessions.length, 0);
+    assert.equal((await readThreadResourcePolicy(item.env)).resourceSessions.length, 1);
+    const gmailBypass = await callConnectorsMcpTool("orkestr_auth", {
+      service: "gmail", action: "status", account_id: "gmail-account", instance_id: "vm-firat", user_id: "firat", thread_id: thread.id,
+      resource_type: "oxrm", resource_id: registered.resource.id, resource_action: "read",
+    }, item.env);
+    assert.match(JSON.stringify(gmailBypass), /connector_mcp_resource_dispatch_target_unbound/);
+    assert.equal(Object.hasOwn(gmailBypass, "data"), false, "generic auth must not return aggregate Gmail status for a resource bearer");
+    assert.equal((await readThreadResourcePolicy(item.env)).resourceSessions.length, 1);
     const crossResource = await callConnectorsMcpTool("orkestr_auth", {
       service: "whatsapp", action: "status", account_id: "sender", instance_id: "vm-firat", user_id: "firat", thread_id: thread.id,
       resource_type: "oxrm", resource_id: "other-resource", resource_action: "read",

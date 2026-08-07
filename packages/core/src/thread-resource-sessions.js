@@ -29,6 +29,12 @@ function actions(value = [], resourceType = "") {
 
 function target(input = {}) {
   return {
+    service: clean(input.service).toLowerCase(),
+    accountId: clean(input.account_id || input.accountId),
+    conversationId: clean(input.conversation_id || input.conversationId),
+    bindingId: clean(input.binding_id || input.bindingId),
+    targetThreadId: clean(input.target_thread_id || input.targetThreadId),
+    operationRef: clean(input.operation_ref || input.operationRef),
     resourceType: clean(input.resource_type || input.resourceType),
     resourceId: clean(input.resource_id || input.resourceId),
     action: clean(input.resource_action || input.resourceAction || input.permission).toLowerCase(),
@@ -52,6 +58,12 @@ function claims(auth = {}) {
     policyRevision: Number(auth.policyRevision || 0),
     grantRevision: Number(auth.grantRevision || 0),
     resourceGeneration: Number(auth.resourceGeneration || 0),
+    connectorService: clean(auth.connectorService || auth.connector_service).toLowerCase(),
+    connectorAccountId: clean(auth.connectorAccountId || auth.connector_account_id),
+    connectorConversationId: clean(auth.connectorConversationId || auth.connector_conversation_id),
+    connectorBindingId: clean(auth.connectorBindingId || auth.connector_binding_id),
+    connectorTargetThreadId: clean(auth.connectorTargetThreadId || auth.connector_target_thread_id),
+    connectorOperationRef: clean(auth.connectorOperationRef || auth.connector_operation_ref),
     connectorTool: clean(auth.connectorMcpTool || auth.connector_mcp_tool).toLowerCase(),
     connectorAction: clean(auth.connectorMcpAction || auth.connector_mcp_action).toLowerCase(),
     jtiHash: clean(auth.resourceJtiHash),
@@ -67,7 +79,10 @@ function claims(auth = {}) {
 }
 
 function resourceTokenDeclared(value = {}) {
-  return Boolean(clean(value.resourceType) || clean(value.resourceId) || (Array.isArray(value.resourceActions) && value.resourceActions.length) || clean(value.resourceJtiHash));
+  return Boolean(
+    clean(value.resourceType) || clean(value.resourceId) || (Array.isArray(value.resourceActions) && value.resourceActions.length) ||
+    clean(value.resourceJtiHash) || clean(value.audience) === connectorMcpResourceAudience
+  );
 }
 
 export function connectorMcpResourceTokenDeclared(auth = {}) {
@@ -79,7 +94,7 @@ function validClaimSet(value = {}) {
     value.resourceType && value.resourceId && value.actions.length && value.rootThreadId && value.threadId && value.boundaryId &&
     Number.isInteger(value.policyRevision) && value.policyRevision >= 0 && Number.isInteger(value.grantRevision) && value.grantRevision > 0 &&
     Number.isInteger(value.resourceGeneration) && value.resourceGeneration > 0 && value.jtiHash && value.tokenIdHash && value.bearerHash &&
-    value.audience === connectorMcpResourceAudience && value.connectorTool && value.connectorAction && value.issuedAt && value.expiresAt
+    value.audience === connectorMcpResourceAudience && value.connectorService && value.connectorTool && value.connectorAction && value.issuedAt && value.expiresAt
   );
 }
 
@@ -113,6 +128,9 @@ function sessionMatches(session = {}, value = {}) {
   return session.jtiHash === value.jtiHash && session.tokenIdHash === value.tokenIdHash && session.bearerHash === value.bearerHash && session.audience === value.audience &&
     session.resourceType === value.resourceType && session.resourceId === value.resourceId &&
     sameActions(actions(session.actions, value.resourceType), value.actions) &&
+    session.connectorService === value.connectorService && session.connectorAccountId === value.connectorAccountId &&
+    session.connectorConversationId === value.connectorConversationId && session.connectorBindingId === value.connectorBindingId &&
+    session.connectorTargetThreadId === value.connectorTargetThreadId && session.connectorOperationRef === value.connectorOperationRef &&
     session.connectorTool === value.connectorTool && session.connectorAction === value.connectorAction &&
     session.threadId === value.threadId && session.grantThreadId === value.grantThreadId && session.rootThreadId === value.rootThreadId && session.boundaryId === value.boundaryId &&
     Number(session.policyRevision) === value.policyRevision && Number(session.grantRevision) === value.grantRevision &&
@@ -155,9 +173,10 @@ async function persistCurrentResourceSession(value = {}, threadsById = new Map()
 }
 
 // Connector calls are instance-scoped unless a dispatcher supplies a trusted
-// actualTarget. Once a resource target is declared in enforce mode, it has no
-// legacy fallback: request fields may corroborate that target, but never stand
-// in for it, and all target and epoch claims must be present and current.
+// actualTarget. A resource-aware dispatcher must resolve both the resource and
+// every connector operation handle independently of caller input. Once a
+// resource target is declared in enforce mode, it has no legacy fallback:
+// request fields may corroborate that target, but never stand in for it.
 export async function assertConnectorMcpResourceAccess(auth = {}, input = {}, env = process.env, { actualTarget = null } = {}) {
   const callerTarget = target(input);
   const requested = actualTarget ? target(actualTarget) : callerTarget;
@@ -172,11 +191,17 @@ export async function assertConnectorMcpResourceAccess(auth = {}, input = {}, en
     (callerTarget.resourceType && callerTarget.resourceType !== requested.resourceType) ||
     (callerTarget.resourceId && callerTarget.resourceId !== requested.resourceId) ||
     (callerTarget.action && callerTarget.action !== requested.action) ||
+    (callerTarget.service && callerTarget.service !== requested.service) ||
+    (callerTarget.accountId && callerTarget.accountId !== requested.accountId) ||
+    (callerTarget.conversationId && callerTarget.conversationId !== requested.conversationId) ||
+    (callerTarget.bindingId && callerTarget.bindingId !== requested.bindingId) ||
+    (callerTarget.targetThreadId && callerTarget.targetThreadId !== requested.targetThreadId) ||
+    (callerTarget.operationRef && callerTarget.operationRef !== requested.operationRef) ||
     (callerTarget.threadId && callerTarget.threadId !== requested.threadId) ||
     (callerTarget.connectorTool && callerTarget.connectorTool !== requested.connectorTool) ||
     (callerTarget.connectorAction && callerTarget.connectorAction !== requested.connectorAction)
   ) deny("resource_dispatch_target_mismatch");
-  if (!requested.resourceType || !requested.resourceId || !requested.action || !requested.threadId) deny("resource_target_required", 400);
+  if (!requested.resourceType || !requested.resourceId || !requested.action || !requested.threadId || !requested.service) deny("resource_target_required", 400);
   if (!resourceType || !actions([requested.action], resourceType).includes(requested.action)) deny("resource_target_invalid", 400);
   if (value.audience !== connectorMcpResourceAudience) deny("resource_audience_denied", 401);
   if (!validClaimSet(value)) deny("resource_claims_required", 401);
@@ -184,6 +209,11 @@ export async function assertConnectorMcpResourceAccess(auth = {}, input = {}, en
   if (lifetimeError) deny(lifetimeError, 401);
   if (requested.resourceType !== value.resourceType || requested.resourceId !== value.resourceId || !value.actions.includes(requested.action)) deny("resource_target_scope_denied");
   if (requested.threadId !== value.threadId) deny("resource_thread_scope_denied");
+  if (
+    requested.service !== value.connectorService || requested.accountId !== value.connectorAccountId ||
+    requested.conversationId !== value.connectorConversationId || requested.bindingId !== value.connectorBindingId ||
+    requested.targetThreadId !== value.connectorTargetThreadId || requested.operationRef !== value.connectorOperationRef
+  ) deny("resource_operation_target_scope_denied");
   if (!requested.connectorTool || !requested.connectorAction || requested.connectorTool !== value.connectorTool || requested.connectorAction !== value.connectorAction) deny("resource_dispatch_scope_denied");
   if (threadResourceBoundaryId(env) !== value.boundaryId) deny("resource_boundary_denied");
 
@@ -216,6 +246,9 @@ function issuedAuth(session = {}) {
     ownerUserId: session.ownerUserId || "", instanceId: session.instanceId || "", accountId: session.accountId || "", accountService: session.accountService || "",
     bindingId: "", chatId: "", allowedChatIds: [], allowedRecipients: [],
     resourceType: session.resourceType || "", resourceId: session.resourceId || "", resourceActions: session.actions || [],
+    connectorService: session.connectorService || "", connectorAccountId: session.connectorAccountId || "",
+    connectorConversationId: session.connectorConversationId || "", connectorBindingId: session.connectorBindingId || "",
+    connectorTargetThreadId: session.connectorTargetThreadId || "", connectorOperationRef: session.connectorOperationRef || "",
     connectorMcpTool: session.connectorTool || "", connectorMcpAction: session.connectorAction || "",
     rootThreadId: session.rootThreadId || "", threadId: session.threadId || "", boundaryId: session.boundaryId || "",
     policyRevision: Number(session.policyRevision || 0), grantRevision: Number(session.grantRevision || 0), resourceGeneration: Number(session.resourceGeneration || 0),
@@ -246,8 +279,9 @@ export async function issueConnectorMcpResourceToken(input = {}, env = process.e
   const threadId = clean(input.threadId || input.thread_id);
   const connectorTool = clean(input.connectorMcpTool || input.connector_mcp_tool || input.connectorTool || input.tool).toLowerCase();
   const connectorAction = clean(input.connectorMcpAction || input.connector_mcp_action || input.connectorAction || input.action).toLowerCase();
+  const connectorTarget = target(input);
   const principal = input.principal || null;
-  if (!resourceType || !resourceId || !threadId || !actions([permission], resourceType).includes(permission) || !connectorTool || !connectorAction) deny("resource_token_issue_target_invalid", 400);
+  if (!resourceType || !resourceId || !threadId || !actions([permission], resourceType).includes(permission) || !connectorTool || !connectorAction || !connectorTarget.service) deny("resource_token_issue_target_invalid", 400);
   const requestedTtlMs = Number(input.ttlMs ?? input.ttl_ms ?? maxTokenLifetimeMs);
   if (!Number.isFinite(requestedTtlMs) || requestedTtlMs < 1_000 || requestedTtlMs > maxTokenLifetimeMs) deny("resource_token_ttl_invalid", 400);
   const [state, threads] = await Promise.all([readThreadResourcePolicy(env), listThreads(env)]);
@@ -270,7 +304,11 @@ export async function issueConnectorMcpResourceToken(input = {}, env = process.e
     scopes: connectorScopes(input.scopes), principalKind: clean(input.principalKind || input.principal_kind) || "external_instance",
     principalId: clean(input.principalId || input.principal_id || principal?.userId), ownerUserId: resource.ownerUserId,
     instanceId: clean(input.instanceId || input.instance_id), accountId: clean(input.accountId || input.account_id), accountService: clean(input.accountService || input.account_service).toLowerCase(),
-    resourceType, resourceId, actions: [permission], connectorTool, connectorAction, threadId, grantThreadId, rootThreadId, boundaryId: resource.boundaryId,
+    resourceType, resourceId, actions: [permission],
+    connectorService: connectorTarget.service, connectorAccountId: connectorTarget.accountId,
+    connectorConversationId: connectorTarget.conversationId, connectorBindingId: connectorTarget.bindingId,
+    connectorTargetThreadId: connectorTarget.targetThreadId, connectorOperationRef: connectorTarget.operationRef,
+    connectorTool, connectorAction, threadId, grantThreadId, rootThreadId, boundaryId: resource.boundaryId,
     policyRevision, grantRevision: Number(grant.revision), resourceGeneration: Number(resource.generation), permission, issuedAt, expiresAt,
   };
   const session = await persistCurrentResourceSession(value, threadsById, env);
