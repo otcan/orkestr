@@ -9,6 +9,7 @@ const threadResourceTypes = new Set(["desktop", "oxrm", "mailbox"]);
 const threadResourcePermissions = new Set(["discover", "acquire", "operate", "share", "read", "write", "execute", "subscribe", "manage"]);
 const threadResourceModes = new Set(["off", "shadow", "enforce"]);
 const threadResourceInvalidationSubjects = new Set(["resource", "session_share", "share", "listener"]);
+const threadResourceInvalidationReasons = new Set(["revoked", "generation_advanced", "grant_replaced", "listener_revoked", "policy_stale"]);
 const mailboxDeliveryStates = new Set(["pending", "claimed", "delivered", "revoked", "quarantined", "dead-letter"]);
 const breakGlassOutcomes = new Set(["allowed", "denied", "blocked"]);
 const counters = new Map();
@@ -204,10 +205,11 @@ export function recordThreadResourceAccessMetric({ resourceType = "unknown", per
   if (shadowDenied) incrementCounter("orkestr_thread_resource_shadow_mismatches_total", { resource_type: labels.resource_type, permission: labels.permission });
 }
 
-export function recordThreadResourceInvalidationMetric({ resourceType = "unknown", subject = "resource" } = {}) {
+export function recordThreadResourceInvalidationMetric({ resourceType = "unknown", subject = "resource", reason = "unknown" } = {}) {
   incrementCounter("orkestr_thread_resource_invalidations_total", {
     resource_type: enumLabel(resourceType, threadResourceTypes),
     subject: enumLabel(subject, threadResourceInvalidationSubjects),
+    reason: enumLabel(reason, threadResourceInvalidationReasons),
   });
 }
 
