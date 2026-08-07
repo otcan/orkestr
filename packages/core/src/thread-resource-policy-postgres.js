@@ -287,7 +287,7 @@ function serializationConflict(error) {
   return error?.code === "40001" || /could not serialize/i.test(clean(error?.message));
 }
 
-export async function withThreadResourcePolicyPostgresTransaction(operation, env = process.env) {
+async function withThreadResourcePolicyPostgresTransactionInternal(operation, env = process.env, { allowAsync = false } = {}) {
   const pool = await openThreadResourcePolicyPostgres(env);
   let lastConflict = null;
   for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -303,11 +303,14 @@ export async function withThreadResourcePolicyPostgresTransaction(operation, env
       let outcome;
       try {
         outcome = operation(state);
+        if (outcome && typeof outcome.then === "function") {
+          if (!allowAsync) throw policyStoreError("thread_resource_policy_transaction_async_operation_forbidden", 500);
+          outcome = await outcome;
+        }
       } catch (error) {
         operationError = true;
         throw error;
       }
-      if (outcome && typeof outcome.then === "function") throw policyStoreError("thread_resource_policy_transaction_async_operation_forbidden", 500);
       if (outcome?.state && outcome.persist !== false) await replaceState(client, outcome.state, outcome.auditOutboxUpserts);
       await client.query("commit");
       return outcome;
@@ -321,6 +324,17 @@ export async function withThreadResourcePolicyPostgresTransaction(operation, env
     }
   }
   throw policyStoreError("thread_resource_policy_transaction_conflict", 409, lastConflict);
+}
+
+export async function withThreadResourcePolicyPostgresTransaction(operation, env = process.env) {
+  return withThreadResourcePolicyPostgresTransactionInternal(operation, env);
+}
+
+// Used only for the mailbox append boundary. The transaction holds the shared
+// policy revision lock while an idempotent thread append is performed, so a
+// concurrent listener revoke linearizes strictly before or after that append.
+export async function withThreadResourcePolicyPostgresDeliveryFence(operation, env = process.env) {
+  return withThreadResourcePolicyPostgresTransactionInternal(operation, env, { allowAsync: true });
 }
 
 export async function readThreadResourcePolicyPostgresState(env = process.env) {

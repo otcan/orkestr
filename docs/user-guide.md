@@ -193,6 +193,13 @@ POST /api/desktop-grants/backfill {"dryRun":false}
 POST /api/threads/<thread-id>/desktop-grants
 ```
 
+For explicit oXRM and mailbox metadata, operators can review the evidence-only
+plan at `POST /api/thread-resources/backfill {"dryRun":true}`. Applying it
+requires an admin session and an approved pairing challenge: first call with
+`{"dryRun":false}` to receive the challenge, then repeat with
+`{"dryRun":false,"approval":"<challenge-id-or-code>"}`. This route never
+infers resources from thread names and will quarantine incomplete evidence.
+
 The migration uses only explicit thread desktop metadata and reports ambiguous
 threads for attended assignment. `ORKESTR_DESKTOP_ACCESS_MODE=shadow` records
 would-deny decisions during rollout; switch to `enforce` after grants are

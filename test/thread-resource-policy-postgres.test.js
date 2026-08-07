@@ -9,6 +9,13 @@ import {
   withThreadResourcePolicyTransaction,
 } from "../packages/core/src/thread-resource-policy-store.js";
 import { threadResourcePolicyDoctorReport } from "../packages/core/src/thread-resource-policy-doctor.js";
+import { ingestMailboxMessage } from "../packages/connectors/src/mailbox-inbox.js";
+import { runMailboxDeliveryPump } from "../packages/connectors/src/mailbox-delivery-pump.js";
+import { createMailbox, createMailboxThreadListener } from "../packages/core/src/mailboxes.js";
+import { adminPrincipal } from "../packages/core/src/principal.js";
+import { registerThreadResource, setThreadResourceGrants } from "../packages/core/src/thread-resource-grants.js";
+import { createThread, listThreadMessages } from "../packages/core/src/threads.js";
+import { listConnectorInboxEvents, markConnectorInboxEvent, resetConnectorInboxForTest } from "../packages/connectors/src/connector-inbox.js";
 
 const stateTables = new Set([
   "orkestr_thread_resource_policy", "orkestr_thread_resources", "orkestr_thread_resource_grants",
@@ -34,6 +41,7 @@ function policyEnv(home) {
 function fakePolicyPool() {
   const shared = { meta: new Map(), tables: Object.fromEntries([...stateTables].map((name) => [name, new Map()])), audit: new Map() };
   let writeTail = Promise.resolve();
+  let serializationFailures = 0;
 
   const storeFor = (client) => client?.working || client?.snapshot || shared;
   const keyFor = (table, columns = {}, data = {}) => {
@@ -55,7 +63,16 @@ function fakePolicyPool() {
   async function dispatch(client, sql, params = []) {
     const text = lower(sql);
     if (text.startsWith("create table") || text.startsWith("create unique index") || text.startsWith("create index")) return { rows: [] };
-    if (text.startsWith("begin isolation level serializable")) { client.write = true; return { rows: [] }; }
+    if (text.startsWith("begin isolation level serializable")) {
+      if (serializationFailures > 0) {
+        serializationFailures -= 1;
+        const error = new Error("could not serialize access due to concurrent update");
+        error.code = "40001";
+        throw error;
+      }
+      client.write = true;
+      return { rows: [] };
+    }
     if (text.startsWith("begin isolation level repeatable read")) { client.snapshot = clone(shared); return { rows: [] }; }
     if (text === "commit") {
       if (client.working) {
@@ -112,6 +129,7 @@ function fakePolicyPool() {
   }
 
   return {
+    setSerializationFailures(count = 0) { serializationFailures = Math.max(0, Number(count) || 0); },
     async query(sql, params = []) { return dispatch(null, sql, params); },
     async connect() {
       const client = {
@@ -195,5 +213,76 @@ test("PostgreSQL policy store serializes concurrent CAS writes and fails closed 
     assert.equal(JSON.stringify(report).includes("private-postgres.example"), false);
   } finally {
     __threadResourcePolicyStoreTestInternals.setPostgresPoolFactory(null);
+  }
+});
+
+test("exhausted PostgreSQL serialization conflicts leave mailbox ingress in the durable replay spool", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-resource-postgres-mailbox-"));
+  const env = {
+    ...policyEnv(home),
+    ORKESTR_ADMIN_USER_ID: "admin",
+    ORKESTR_MAILBOX_DOMAIN: "mail.example.test",
+  };
+  const pool = fakePolicyPool();
+  __threadResourcePolicyStoreTestInternals.setPostgresPoolFactory(() => pool);
+  resetConnectorInboxForTest();
+  try {
+    const principal = adminPrincipal("admin");
+    const thread = await createThread({ id: "postgres-conflict-mailbox", name: "Postgres conflict", ownerUserId: "admin" }, env);
+    const mailbox = await createMailbox({ ownerUserId: "admin", purpose: "alerts", suffix: "conflict", status: "active" }, env);
+    await registerThreadResource({ resourceType: "mailbox", resourceId: mailbox.id, ownerUserId: "admin", status: "active" }, { principal }, env);
+    await setThreadResourceGrants(thread.id, "mailbox", [{ resourceId: mailbox.id, permissions: ["read", "subscribe", "manage"] }], { principal }, env);
+    await createMailboxThreadListener({ mailbox, threadId: thread.id, principal }, env);
+
+    pool.setSerializationFailures(3);
+    const ingested = await ingestMailboxMessage({
+      recipient: mailbox.address,
+      headers: { messageId: "<postgres-conflict@example.test>", from: "builds@example.test", subject: "Conflict" },
+      envelope: { rcptTo: mailbox.address, mailFrom: "builds@example.test" },
+      body: { text: "replay me" },
+    }, env);
+    assert.equal(ingested.action, "mailbox_policy_unavailable_spooled");
+    const [spooled] = await listConnectorInboxEvents({ states: ["policy-unavailable"] }, env);
+    assert.ok(spooled);
+    assert.equal((await listThreadMessages(thread.id, env)).length, 0);
+
+    pool.setSerializationFailures(0);
+    await markConnectorInboxEvent(spooled.id, { nextAttemptAt: new Date(Date.now() - 1_000).toISOString() }, env);
+    const replayed = await runMailboxDeliveryPump(env);
+    assert.equal(replayed.replay.results[0].state, "routed");
+    assert.equal((await listThreadMessages(thread.id, env)).filter((item) => item.source === "mailbox").length, 1);
+  } finally {
+    resetConnectorInboxForTest();
+    __threadResourcePolicyStoreTestInternals.setPostgresPoolFactory(null);
+  }
+});
+
+const realPostgresUrl = String(process.env.ORKESTR_TEST_THREAD_RESOURCE_POLICY_POSTGRES_URL || "").trim();
+
+test("real PostgreSQL policy store round-trips a transactional record when an isolated test database is configured", { skip: !realPostgresUrl }, async () => {
+  // This opt-in URL must point at a disposable test database. The test keeps
+  // its marker isolated and removes it afterwards, but must not share an
+  // operator's policy database with a running deployment.
+  const marker = `integration-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const env = {
+    ORKESTR_THREAD_RESOURCE_POLICY_STORE: "postgres",
+    ORKESTR_THREAD_RESOURCE_POLICY_POSTGRES_URL: realPostgresUrl,
+  };
+  const markerId = `local:admin:oxrm:${marker}`;
+  let inserted = false;
+  try {
+    await withThreadResourcePolicyTransaction((state) => {
+      state.resources.push({ ...resource(markerId), nativeId: marker, resourceKey: marker });
+      return { state };
+    }, env);
+    inserted = true;
+    assert.equal((await readThreadResourcePolicyState(env)).resources.some((item) => item.id === markerId), true);
+  } finally {
+    if (inserted) {
+      await withThreadResourcePolicyTransaction((state) => {
+        state.resources = state.resources.filter((item) => item.id !== markerId);
+        return { state };
+      }, env);
+    }
   }
 });

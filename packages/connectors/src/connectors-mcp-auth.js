@@ -70,6 +70,8 @@ function normalizeRecord(record = {}) {
     resourceType,
     resourceId: clean(record.resourceId || record.resource_id),
     resourceActions: scopeList(record.resourceActions || record.allowedResourceActions || record.resource_actions || record.resourceAction),
+    connectorMcpTool: clean(record.connectorMcpTool || record.connector_mcp_tool || record.tool).toLowerCase(),
+    connectorMcpAction: clean(record.connectorMcpAction || record.connector_mcp_action || record.toolAction).toLowerCase(),
     rootThreadId: clean(record.rootThreadId || record.root_thread_id),
     boundaryId: clean(record.boundaryId || record.boundary_id),
     policyRevision: Number(record.policyRevision || record.policy_revision || 0),
@@ -103,6 +105,8 @@ function publicRecord(record = {}) {
     resourceType: record.resourceType || "",
     resourceId: record.resourceId || "",
     resourceActions: record.resourceActions || [],
+    connectorMcpTool: record.connectorMcpTool || "",
+    connectorMcpAction: record.connectorMcpAction || "",
     rootThreadId: record.rootThreadId || "",
     boundaryId: record.boundaryId || "",
     policyRevision: Number(record.policyRevision || 0),
@@ -210,6 +214,7 @@ export function assertConnectorMcpScope(auth = {}, tool = "", input = {}) {
   if (auth.instanceId && clean(input.instance_id) && auth.instanceId !== clean(input.instance_id)) scopeDenied("instance_scope_denied");
   if (auth.ownerUserId && clean(input.user_id) && auth.ownerUserId !== clean(input.user_id)) scopeDenied("user_scope_denied");
   if (auth.threadId && clean(input.thread_id) && auth.threadId !== clean(input.thread_id)) scopeDenied("thread_scope_denied");
+  if (auth.threadId && clean(input.target_thread_id) && auth.threadId !== clean(input.target_thread_id)) scopeDenied("target_thread_scope_denied");
   const accountScopeApplies = Boolean(auth.accountId) && (!auth.accountService || auth.accountService === service);
   if (accountScopeApplies && clean(input.account_id) && auth.accountId !== clean(input.account_id)) scopeDenied("account_scope_denied");
 

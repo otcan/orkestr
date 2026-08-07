@@ -7,6 +7,7 @@ import { recordMailboxThreadDeliveryMetrics, recordThreadResourceInvalidationMet
 import {
   assertThreadResourceAccess,
   authorizeThreadResourceAccess,
+  fenceThreadResourcePolicyDelivery,
   mutateThreadResourcePolicy,
   readThreadResourcePolicy,
   threadResourceAccessMode,
@@ -290,7 +291,7 @@ export async function routeMainMailboxThreadDelivery({ mailbox, message, idempot
 }
 
 export function isMailboxThreadPolicyUnavailable(error) {
-  return error?.statusCode >= 500 || /^thread_resource_policy_(transactional_store_required|postgres_unavailable|postgres_driver_missing)/.test(lower(error?.message));
+  return error?.statusCode >= 500 || /^thread_resource_policy_(transactional_store_required|postgres_unavailable|postgres_driver_missing|transaction_conflict)/.test(lower(error?.message));
 }
 
 async function validateDelivery(delivery = {}, env = process.env) {
@@ -306,10 +307,6 @@ async function validateDelivery(delivery = {}, env = process.env) {
   return matchesEpoch ? { ok: true, state, listener, resource, decision } : { ok: false, reason: "mailbox_delivery_policy_stale", state };
 }
 
-// The policy and message stores are separate SQLite databases, so this cannot
-// make append and revoke one cross-store transaction. It does make the last
-// authorization/claim comparison synchronous and immediately adjacent to the
-// idempotent append. A post-check race is contained by clientMessageId.
 async function revalidateClaimBeforeAppend(delivery = {}, claimToken = "", env = process.env) {
   const validation = await validateDelivery(delivery, env);
   if (!validation.ok) return validation;
@@ -325,6 +322,50 @@ async function revalidateClaimBeforeAppend(delivery = {}, claimToken = "", env =
     return { noChange: true, result: { current } };
   }, env);
   return checked.result?.current ? validation : { ok: false, reason: "mailbox_delivery_claim_stale" };
+}
+
+// The policy store serializes all mutations on its revision row. Keeping that
+// fence open while the thread store performs its deterministic-id append means
+// a listener revoke has one unambiguous order: it commits before the final
+// authorization (no append), or after the append has durably committed.
+async function appendMailboxThreadDeliveryWithFence(delivery = {}, claimToken = "", appendMessage = appendThreadMessage, env = process.env) {
+  const validation = await revalidateClaimBeforeAppend(delivery, claimToken, env);
+  if (!validation.ok) return { ok: false, invalidated: true, reason: validation.reason };
+  const outcome = await fenceThreadResourcePolicyDelivery(async (state) => {
+    const live = (state.mailboxDeliveries || []).find((item) => item.id === delivery.id);
+    const listener = (state.mailboxListeners || []).find((item) => item.id === delivery.listenerId);
+    const resource = state.resources.find((item) => item.resourceType === "mailbox" && item.id === delivery.resourceId);
+    const current = Boolean(
+      live?.state === "claimed" && live.claimToken === claimToken && Number(live.epoch || 1) === Number(delivery.epoch || 1) &&
+      listener?.status === "active" && !listener.revokedAt && Number(listener.generation || 0) === Number(delivery.listenerGeneration || 0) &&
+      resource?.status === "active" && !resource.retiredAt && Number(state.revision) === Number(validation.state.revision),
+    );
+    if (!current) return { result: { ok: false, invalidated: true, reason: "mailbox_delivery_claim_stale" }, persist: false };
+    try {
+      await appendMessage(delivery.threadId, {
+        role: "user", source: "mailbox", connector: "mailbox", clientMessageId: `mailbox-delivery:${delivery.id}`,
+        externalId: delivery.messageKey, text: delivery.payload.text,
+      }, env);
+      const timestamp = nowIso();
+      live.epoch = Number(live.epoch || 1) + 1;
+      live.claimToken = null; live.claimExpiresAt = null; live.updatedAt = timestamp;
+      live.state = "delivered"; live.deliveredAt = timestamp; live.reason = null;
+      return { state, result: { ok: true, state: "delivered" } };
+    } catch (error) {
+      const timestamp = nowIso();
+      live.epoch = Number(live.epoch || 1) + 1;
+      live.claimToken = null; live.claimExpiresAt = null; live.updatedAt = timestamp;
+      live.reason = clean(error?.message || "mailbox_thread_append_failed").slice(0, 300);
+      if (live.attemptCount >= live.maxAttempts) {
+        live.state = "dead-letter";
+      } else {
+        live.state = "pending";
+        live.nextAttemptAt = new Date(Date.now() + Math.min(60_000, 1_000 * (2 ** Math.max(0, live.attemptCount - 1)))).toISOString();
+      }
+      return { state, result: { ok: false, invalidated: false, state: live.state, reason: live.reason } };
+    }
+  }, env);
+  return outcome.result || { ok: false, invalidated: true, reason: "mailbox_delivery_claim_stale" };
 }
 
 async function claimMailboxThreadDelivery(deliveryIdValue, env = process.env) {
@@ -435,20 +476,17 @@ export async function dispatchMailboxThreadDeliveries({ deliveryIds = [], limit 
   for (const candidate of candidates) {
     const claim = await claimMailboxThreadDelivery(candidate.id, env);
     if (!claim) continue;
-    const validation = await revalidateClaimBeforeAppend(claim.delivery, claim.claimToken, env);
-    if (!validation.ok) {
-      await completeMailboxThreadDelivery(claim.delivery, claim.claimToken, { invalidated: true, reason: validation.reason }, env);
-      results.push({ id: candidate.id, state: "revoked", reason: validation.reason });
+    const appended = await appendMailboxThreadDeliveryWithFence(claim.delivery, claim.claimToken, appendMessage, env);
+    if (appended.ok) {
+      results.push({ id: candidate.id, state: "delivered" });
       continue;
     }
-    try {
-      await appendMessage(claim.delivery.threadId, { role: "user", source: "mailbox", connector: "mailbox", clientMessageId: `mailbox-delivery:${claim.delivery.id}`, externalId: claim.delivery.messageKey, text: claim.delivery.payload.text }, env);
-      await completeMailboxThreadDelivery(claim.delivery, claim.claimToken, { delivered: true }, env);
-      results.push({ id: candidate.id, state: "delivered" });
-    } catch (error) {
-      const completed = await completeMailboxThreadDelivery(claim.delivery, claim.claimToken, { delivered: false, reason: error?.message }, env);
-      results.push({ id: candidate.id, state: completed.result?.delivery?.state || "pending", reason: clean(error?.message) });
+    if (appended.invalidated) {
+      await completeMailboxThreadDelivery(claim.delivery, claim.claimToken, { invalidated: true, reason: appended.reason }, env);
+      results.push({ id: candidate.id, state: "revoked", reason: appended.reason });
+      continue;
     }
+    results.push({ id: candidate.id, state: appended.state || "pending", reason: appended.reason });
   }
   const deadLetters = results.filter((item) => item.state === "dead-letter").length;
   for (const item of results) {
