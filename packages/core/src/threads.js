@@ -280,6 +280,10 @@ export async function createThread(input = {}, env = process.env) {
   };
   threads.push(thread);
   await saveThreads(threads, env);
+  if (thread.parentThreadId) {
+    const { captureChildThreadResourceCeiling } = await import("./thread-resource-grants.js");
+    await captureChildThreadResourceCeiling(thread, env);
+  }
   await appendEvent({ type: "thread_created", threadId: thread.id, name: thread.name, ownerUserId: thread.ownerUserId }, env);
   return thread;
 }
