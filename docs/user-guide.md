@@ -287,6 +287,11 @@ preserving unified records. Explicit oXRM/mailbox backfill accepts only typed
 resource metadata plus explicit permissions; names and shared ownership are
 reported as insufficient evidence rather than inferred.
 
+The transactional audit outbox is append-preserving: this slice has no automatic
+retention or deletion policy. The doctor reports pending, claimed, and delivered
+audit counts without exposing audit contents. An audit sink claims a bounded
+batch and marks only that claim as delivered after its own durable handoff.
+
 The installer records the default desktop, Gmail auth desktop, and manual
 intervention desktop in runtime settings. Codex-aware skills should read
 `orkestr whereiam --json` or `orkestr settings --json` instead of guessing which

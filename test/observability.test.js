@@ -88,7 +88,7 @@ test("observability records loop, delivery, task-agent, and watcher counters", (
   assert.match(metrics, /orkestr_watcher_alerts_total\{source="server.runtimemonitor",code="runtime_sync_failed",severity="error"\} 1/);
   assert.match(metrics, /orkestr_thread_resource_access_decisions_total\{resource_type="mailbox",permission="subscribe",mode="shadow",outcome="shadow_denied"\} 1/);
   assert.match(metrics, /orkestr_thread_resource_shadow_mismatches_total\{resource_type="mailbox",permission="subscribe"\} 1/);
-  assert.match(metrics, /orkestr_thread_resource_invalidations_total\{resource_type="desktop",subject="share"\} 1/);
+  assert.match(metrics, /orkestr_thread_resource_invalidations_total\{resource_type="desktop",subject="share",reason="unknown"\} 1/);
   assert.equal(metrics.includes("person@example.test"), false);
   assert.match(metrics, /orkestr_mailbox_thread_delivery_transitions_total\{state="dead-letter"\} 1/);
   assert.match(metrics, /orkestr_thread_resource_break_glass_total\{resource_type="oxrm",outcome="allowed"\} 1/);

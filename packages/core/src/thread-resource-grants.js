@@ -177,7 +177,13 @@ function normalizeState(raw = {}, env = process.env) {
     mailboxListeners: Array.isArray(raw?.mailboxListeners) ? raw.mailboxListeners : [],
     mailboxDeliveries: Array.isArray(raw?.mailboxDeliveries) ? raw.mailboxDeliveries : [],
     mailboxPumpLeases: Array.isArray(raw?.mailboxPumpLeases) ? raw.mailboxPumpLeases : [],
-    policyAuditOutbox: Array.isArray(raw?.policyAuditOutbox) ? raw.policyAuditOutbox : [],
+    policyAuditOutbox: (Array.isArray(raw?.policyAuditOutbox) ? raw.policyAuditOutbox : []).map((item) => ({
+      ...item,
+      state: ["pending", "claimed", "delivered"].includes(clean(item?.state).toLowerCase()) ? clean(item.state).toLowerCase() : "pending",
+      claimToken: clean(item?.claimToken) || null,
+      claimExpiresAt: clean(item?.claimExpiresAt) || null,
+      deliveredAt: clean(item?.deliveredAt) || null,
+    })),
     updatedAt: clean(raw?.updatedAt) || null,
   };
 }
@@ -191,9 +197,10 @@ async function mutateState(env, operation) {
     const state = normalizeState(stored, env);
     const result = operation(state);
     if (result?.noChange === true) return { result: result.result, state, persist: false };
+    const auditOutboxUpserts = [...(Array.isArray(result?.auditOutboxUpserts) ? result.auditOutboxUpserts : [])];
     if (result?.transactionalAudit) {
       const audit = result.transactionalAudit;
-      state.policyAuditOutbox = [...(state.policyAuditOutbox || []), {
+      const record = {
         id: randomUUID(),
         action: clean(audit.action || "thread_resource_policy_mutation"),
         resourceType: normalizeThreadResourceType(audit.resourceType),
@@ -203,8 +210,13 @@ async function mutateState(env, operation) {
         expiresAt: clean(audit.expiresAt || "") || null,
         policyRevision: state.revision + (result?.skipPolicyEpoch === true ? 0 : 1),
         state: "pending",
+        claimToken: null,
+        claimExpiresAt: null,
+        deliveredAt: null,
         createdAt: nowIso(),
-      }].slice(-2000);
+      };
+      state.policyAuditOutbox = [...(state.policyAuditOutbox || []), record];
+      auditOutboxUpserts.push(record);
     }
     // Delivery queue bookkeeping is transactional policy-store state, but it
     // must not invalidate grants merely by claiming, retrying, or completing a
@@ -212,7 +224,7 @@ async function mutateState(env, operation) {
     // epoch; queue mutations opt out with skipPolicyEpoch.
     if (result?.skipPolicyEpoch !== true) state.revision += 1;
     state.updatedAt = nowIso();
-    return { result, state };
+    return { result, state, auditOutboxUpserts };
   }, env);
 }
 
@@ -627,6 +639,7 @@ export async function setThreadResourceGrants(threadId = "", resourceType = "", 
     return result;
   });
   const grants = updated.result.grants || [];
+  if (updated.result.idempotent !== true) recordThreadResourceInvalidationMetric({ resourceType: type, subject: type === "desktop" ? "session_share" : "resource", reason: "grant_replaced" });
   if (updated.result.idempotent !== true) await appendEvent({ type: "thread_resource_grants_replaced", threadId: thread.id, ownerUserId, actorUserId, resourceType: type, resourceIds: grants.map((grant) => grant.resourceId), policyRevision: updated.state.revision, resourcePolicyRevision: updated.result.policy?.revision || 0, idempotencyKey: clean(options.idempotencyKey || options.requestId) }, env).catch(() => undefined);
   return { ok: true, mode: threadResourceAccessMode(type, env), writePlan, policyRevision: updated.state.revision, resourcePolicyRevision: updated.result.policy?.revision || 0, threadId: thread.id, resourceType: type, grants, idempotent: updated.result.idempotent === true };
 }
@@ -652,7 +665,7 @@ export async function advanceThreadResourceGeneration(resourceType = "", resourc
     };
   });
   const resource = updated.result.resource;
-  recordThreadResourceInvalidationMetric({ resourceType: type, subject: type === "desktop" ? "session_share" : "resource" });
+  recordThreadResourceInvalidationMetric({ resourceType: type, subject: type === "desktop" ? "session_share" : "resource", reason: "generation_advanced" });
   await appendEvent({ type: "thread_resource_generation_advanced", resourceType: type, resourceId: resource.id, resourceKey: resource.resourceKey, ownerUserId: resource.ownerUserId, boundaryId: resource.boundaryId, resourceGeneration: resource.generation, reason: clean(options.reason || "resource_runtime_replaced") }, env).catch(() => undefined);
   return { ok: true, resource, writePlan, policyRevision: updated.state.revision };
 }

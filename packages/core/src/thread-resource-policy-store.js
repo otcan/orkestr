@@ -7,9 +7,11 @@ const databaseOpenPromises = new Map();
 const transactionQueues = new Map();
 let sqliteModulePromise = null;
 const clean = (value = "") => String(value || "").trim();
+const policyStoreModes = new Set(["sqlite", "postgres", "postgresql", "json"]);
 
 export function threadResourcePolicyStoreMode(env = process.env) {
-  return clean(env.ORKESTR_THREAD_RESOURCE_POLICY_STORE || env.ORKESTR_THREAD_RESOURCE_STORE || env.ORKESTR_STORAGE || "sqlite").toLowerCase();
+  const mode = clean(env.ORKESTR_THREAD_RESOURCE_POLICY_STORE || env.ORKESTR_THREAD_RESOURCE_STORE || env.ORKESTR_STORAGE || "sqlite").toLowerCase();
+  return policyStoreModes.has(mode) ? mode : "invalid";
 }
 
 async function loadSqlite(mode) {
@@ -24,6 +26,7 @@ async function loadSqlite(mode) {
 
 export async function openThreadResourcePolicyDatabase(env = process.env) {
   const mode = threadResourcePolicyStoreMode(env);
+  if (mode === "invalid") throw Object.assign(new Error("thread_resource_policy_store_mode_invalid"), { statusCode: 503 });
   if (mode === "json") throw Object.assign(new Error("thread_resource_policy_transactional_store_required"), { statusCode: 503 });
   // The current clustered store abstraction does not yet expose a PostgreSQL
   // transaction adapter. Refuse a configured PostgreSQL mode rather than
@@ -200,6 +203,9 @@ function ensureSchema(db) {
       expires_at text,
       policy_revision integer not null,
       state text not null,
+      claim_token text,
+      claim_expires_at text,
+      delivered_at text,
       created_at text not null
     );
     create index if not exists idx_thread_resource_audit_outbox_state
@@ -211,6 +217,9 @@ function ensureSchema(db) {
   ensureColumn(db, "orkestr_thread_resources", "status", "text not null default 'active'");
   ensureColumn(db, "orkestr_mailbox_thread_deliveries", "epoch", "integer not null default 1");
   ensureColumn(db, "orkestr_mailbox_thread_listeners", "idempotency_key", "text not null default ''");
+  ensureColumn(db, "orkestr_thread_resource_audit_outbox", "claim_token", "text");
+  ensureColumn(db, "orkestr_thread_resource_audit_outbox", "claim_expires_at", "text");
+  ensureColumn(db, "orkestr_thread_resource_audit_outbox", "delivered_at", "text");
   db.exec("create unique index if not exists idx_mailbox_thread_listener_idempotency_unique on orkestr_mailbox_thread_listeners(idempotency_key) where idempotency_key <> '';");
   db.exec("update orkestr_thread_resources set native_id = resource_key where native_id = ''; update orkestr_thread_resources set status = case when retired_at is not null then 'retired' else 'active' end where status = '';");
 }
@@ -263,13 +272,14 @@ function readState(db) {
     policyAuditOutbox: db.prepare("select * from orkestr_thread_resource_audit_outbox order by created_at asc").all().map((row) => ({
       id: row.id, action: row.action, resourceType: row.resource_type || "", outcome: row.outcome,
       actorUserId: row.actor_user_id, reason: row.reason || "", expiresAt: row.expires_at || null,
-      policyRevision: Number(row.policy_revision || 0), state: row.state, createdAt: row.created_at,
+      policyRevision: Number(row.policy_revision || 0), state: row.state, claimToken: row.claim_token || null,
+      claimExpiresAt: row.claim_expires_at || null, deliveredAt: row.delivered_at || null, createdAt: row.created_at,
     })),
   };
 }
 
-function replaceState(db, state = {}) {
-  db.exec("delete from orkestr_thread_resource_audit_outbox; delete from orkestr_mailbox_thread_pump_leases; delete from orkestr_mailbox_thread_deliveries; delete from orkestr_mailbox_thread_listeners; delete from orkestr_thread_resource_grants; delete from orkestr_thread_resources; delete from orkestr_thread_resource_policy; delete from orkestr_thread_resource_ceilings; delete from orkestr_thread_resource_mutations;");
+function replaceState(db, state = {}, auditOutboxUpserts = []) {
+  db.exec("delete from orkestr_mailbox_thread_pump_leases; delete from orkestr_mailbox_thread_deliveries; delete from orkestr_mailbox_thread_listeners; delete from orkestr_thread_resource_grants; delete from orkestr_thread_resources; delete from orkestr_thread_resource_policy; delete from orkestr_thread_resource_ceilings; delete from orkestr_thread_resource_mutations;");
   const resource = db.prepare("insert into orkestr_thread_resources(resource_type, resource_id, native_id, resource_key, owner_user_id, boundary_id, generation, status, backend, created_at, updated_at, retired_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
   for (const item of state.resources || []) resource.run(item.resourceType, item.id, item.nativeId || item.resourceKey, item.resourceKey, item.ownerUserId, item.boundaryId, item.generation, item.status || (item.retiredAt ? "retired" : "active"), item.backend || "", item.createdAt, item.updatedAt, item.retiredAt || null);
   const policy = db.prepare("insert into orkestr_thread_resource_policy(thread_id, resource_type, revision, explicit_empty, inheritance_mode, parent_snapshot_revision, created_at, updated_at) values (?, ?, ?, ?, ?, ?, ?, ?)");
@@ -286,8 +296,24 @@ function replaceState(db, state = {}) {
   for (const item of state.mailboxDeliveries || []) delivery.run(item.id, item.dedupeKey, item.resourceType, item.resourceId, item.mailboxId, item.listenerId || null, item.listenerGeneration || 0, item.threadId || null, item.state, item.epoch || 1, item.attemptCount || 0, item.maxAttempts || 1, item.nextAttemptAt || null, item.claimToken || null, item.claimExpiresAt || null, item.grantRevision || 0, item.policyRevision || 0, item.resourceGeneration || 1, item.messageKey, JSON.stringify(item.payload || {}), item.reason || null, item.createdAt, item.updatedAt, item.deliveredAt || null);
   const pumpLease = db.prepare("insert into orkestr_mailbox_thread_pump_leases(name, token, expires_at, updated_at) values (?, ?, ?, ?)");
   for (const item of state.mailboxPumpLeases || []) pumpLease.run(item.name, item.token, item.expiresAt, item.updatedAt);
-  const auditOutbox = db.prepare("insert into orkestr_thread_resource_audit_outbox(id, action, resource_type, outcome, actor_user_id, reason, expires_at, policy_revision, state, created_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
-  for (const item of (state.policyAuditOutbox || []).slice(-2000)) auditOutbox.run(item.id, item.action, item.resourceType || "", item.outcome, item.actorUserId, item.reason || null, item.expiresAt || null, item.policyRevision || 0, item.state || "pending", item.createdAt);
+  // Audit history is append-preserving. Policy state can be rebuilt wholesale,
+  // but audit rows are only inserted or explicitly state-transitioned here.
+  const auditOutbox = db.prepare(`
+    insert into orkestr_thread_resource_audit_outbox(
+      id, action, resource_type, outcome, actor_user_id, reason, expires_at,
+      policy_revision, state, claim_token, claim_expires_at, delivered_at, created_at
+    ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    on conflict(id) do update set
+      state = excluded.state,
+      claim_token = excluded.claim_token,
+      claim_expires_at = excluded.claim_expires_at,
+      delivered_at = excluded.delivered_at
+  `);
+  for (const item of auditOutboxUpserts || []) {
+    auditOutbox.run(item.id, item.action, item.resourceType || "", item.outcome, item.actorUserId, item.reason || null,
+      item.expiresAt || null, item.policyRevision || 0, item.state || "pending", item.claimToken || null,
+      item.claimExpiresAt || null, item.deliveredAt || null, item.createdAt);
+  }
   setMeta(db, "revision", Number(state.revision || 0));
   setMeta(db, "updated_at", state.updatedAt || new Date().toISOString());
 }
@@ -301,7 +327,7 @@ export async function withThreadResourcePolicyTransaction(operation, env = proce
       const state = readState(db);
       const outcome = operation(state);
       if (outcome && typeof outcome.then === "function") throw new Error("thread_resource_policy_transaction_async_operation_forbidden");
-      if (outcome?.state && outcome.persist !== false) replaceState(db, outcome.state);
+      if (outcome?.state && outcome.persist !== false) replaceState(db, outcome.state, outcome.auditOutboxUpserts);
       db.exec("commit");
       return outcome;
     } catch (error) {

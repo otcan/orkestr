@@ -382,7 +382,7 @@ export async function revokeDesktopShare(shareId = "", { reason = "operator_revo
     return item;
   });
   emitDesktopShareLifecycle({ shareId: share.id, lineageId: share.lineageId, shareGeneration: share.shareGeneration, reason: "revoked" });
-  recordThreadResourceInvalidationMetric({ resourceType: "desktop", subject: "share" });
+  recordThreadResourceInvalidationMetric({ resourceType: "desktop", subject: "share", reason: "revoked" });
   await appendEvent({ type: "desktop_share_revoked", shareId: share.id, lineageId: share.lineageId, shareGeneration: share.shareGeneration, reason: share.revokeReason }, env).catch(() => {});
   return { ok: true, share: publicShare(share) };
 }

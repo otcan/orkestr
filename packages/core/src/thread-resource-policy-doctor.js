@@ -1,4 +1,6 @@
+import fs from "node:fs/promises";
 import { listEvents } from "../../storage/src/store.js";
+import { dataPaths } from "../../storage/src/paths.js";
 import { listThreads } from "./threads.js";
 import { explicitThreadResourceBackfillPlan } from "./thread-resource-backfill.js";
 import {
@@ -29,10 +31,7 @@ function safeError(error) {
 
 function safeBackend(value = "") {
   const backend = clean(value).toLowerCase();
-  // The current store opens SQLite for its inherited `auto` and other local
-  // storage aliases. Never echo an unknown configuration value into doctor
-  // output, since it could be a connection string.
-  return ["json", "postgres", "postgresql"].includes(backend) ? backend : "sqlite";
+  return ["sqlite", "json", "postgres", "postgresql", "invalid"].includes(backend) ? backend : "invalid";
 }
 
 function globalWriteMode(env = process.env) {
@@ -40,35 +39,67 @@ function globalWriteMode(env = process.env) {
   return ["legacy", "dual", "unified"].includes(value) ? value : "invalid";
 }
 
+function emptyReport({ ok, backend, health, error = "", modes, writeModes, globalWrite = "unified", disabled = false } = {}) {
+  return {
+    ok, backend, health, ...(error ? { error } : {}), ...(disabled ? { disabled: true } : {}),
+    global: { access: "per_resource_only", write: globalWrite }, modes, writeModes,
+    counts: { resources: {}, grants: {}, policies: {}, listeners: 0, deliveries: {}, auditOutbox: 0 },
+    outbox: { total: 0, pending: 0, claimed: 0, delivered: 0 },
+    shadowMismatches: 0,
+    coverage: { resourceSessions: "unsupported" },
+    stale: { sessions: 0, listeners: 0, deliveries: 0 },
+    queue: { pending: 0, deadLetter: 0, oldestLagMs: 0 },
+    evidence: { unregistered: 0, ambiguous: 0, plannedResources: 0, plannedGrants: 0 },
+    breakGlass: { active: 0, pendingAudit: 0 },
+  };
+}
+
+async function policyStoreIsInitialized(env = process.env) {
+  const target = dataPaths(env).threadResourcePolicyDb;
+  return fs.stat(target).then((stat) => stat.isFile() && stat.size > 0, () => false);
+}
+
+function listenerHasCurrentGrant(listener = {}, state = {}, threadsById = new Map()) {
+  const resource = state.resources.find((item) => item.resourceType === "mailbox" && item.id === listener.resourceId);
+  if (!resource || resource.status !== "active" || resource.retiredAt || Number(resource.generation) !== Number(listener.resourceGeneration)) return false;
+  const seen = new Set();
+  let thread = threadsById.get(listener.threadId) || null;
+  while (thread?.id && !seen.has(thread.id)) {
+    seen.add(thread.id);
+    if (state.grants.some((grant) => !grant.revokedAt && grant.threadId === thread.id && grant.resourceType === "mailbox" && grant.resourceId === resource.id && grant.permissions.includes("subscribe") && Number(grant.revision) === Number(listener.grantRevision))) return true;
+    thread = threadsById.get(clean(thread.parentThreadId)) || null;
+  }
+  return false;
+}
+
 export async function threadResourcePolicyDoctorReport(env = process.env, now = Date.now()) {
   const backend = safeBackend(threadResourcePolicyStoreMode(env));
   const modes = Object.fromEntries(Object.keys(THREAD_RESOURCE_PERMISSIONS).map((type) => [type, threadResourceAccessMode(type, env)]));
   const writeModes = Object.fromEntries(Object.keys(THREAD_RESOURCE_PERMISSIONS).map((type) => [type, threadResourceWritePlan(type, env)]));
+  const allOff = Object.values(modes).every((mode) => mode === "off");
+  if (backend === "invalid") return emptyReport({ ok: false, backend, health: "unavailable", error: "thread_resource_policy_store_mode_invalid", modes, writeModes, globalWrite: globalWriteMode(env) });
+  if (allOff && backend === "sqlite" && !(await policyStoreIsInitialized(env))) {
+    return emptyReport({ ok: true, backend, health: "not_initialized", modes, writeModes, globalWrite: globalWriteMode(env), disabled: true });
+  }
   let state;
   try {
     state = await readThreadResourcePolicy(env);
   } catch (error) {
-    return {
-      ok: false, backend, health: "unavailable", error: safeError(error),
-      global: { access: "per_resource_only", write: globalWriteMode(env) }, modes, writeModes,
-      counts: { resources: {}, grants: {}, policies: {}, listeners: 0, deliveries: {}, auditOutbox: 0 },
-      shadowMismatches: 0, stale: { sessions: 0, listeners: 0, deliveries: 0 }, queue: { pending: 0, deadLetter: 0, oldestLagMs: 0 },
-      evidence: { unregistered: 0, ambiguous: 0, plannedResources: 0, plannedGrants: 0 }, breakGlass: { active: 0, pendingAudit: 0 },
-    };
+    return emptyReport({ ok: false, backend, health: "unavailable", error: safeError(error), modes, writeModes, globalWrite: globalWriteMode(env) });
   }
   const [threads, events, evidence] = await Promise.all([
     listThreads(env),
     listEvents(env, Math.max(10, Math.min(1000, Number(env.ORKESTR_THREAD_RESOURCE_DOCTOR_EVENT_LIMIT || 500) || 500))).catch(() => []),
     explicitThreadResourceBackfillPlan(env).catch(() => ({ plannedResources: [], plannedGrants: [], ambiguous: [], unregistered: [] })),
   ]);
-  const listenerStaleMs = duration(env, "ORKESTR_THREAD_RESOURCE_STALE_LISTENER_MS", 24 * 60 * 60_000);
   const deliveryStaleMs = duration(env, "ORKESTR_THREAD_RESOURCE_STALE_DELIVERY_MS", 30 * 60_000);
-  const sessionStaleMs = duration(env, "ORKESTR_THREAD_RESOURCE_STALE_SESSION_MS", 30 * 60_000);
   const pending = state.mailboxDeliveries.filter((item) => ["pending", "claimed"].includes(item.state));
   const oldestAt = pending.map((item) => Date.parse(item.createdAt)).filter(Number.isFinite).sort((a, b) => a - b)[0] || 0;
   const activeBreakGlass = (state.policyAuditOutbox || []).filter((item) => item.action === "break_glass" && item.expiresAt && Date.parse(item.expiresAt) > now);
+  const outbox = Object.fromEntries(["pending", "claimed", "delivered"].map((name) => [name, state.policyAuditOutbox.filter((item) => item.state === name).length]));
+  outbox.total = state.policyAuditOutbox.length;
   const shadowMismatches = events.filter((event) => event.type === "thread_resource_access_shadow_denied" || (event.type === "mailbox_thread_delivery_shadow_evaluated" && event.mismatch === true)).length;
-  const staleSessions = threads.filter((thread) => ["working", "running"].includes(clean(thread.state).toLowerCase()) && old(thread.runtime?.heartbeatAt || thread.heartbeatAt || thread.updatedAt, sessionStaleMs, now)).length;
+  const threadsById = new Map(threads.map((thread) => [thread.id, thread]));
   return {
     ok: true,
     backend,
@@ -85,10 +116,12 @@ export async function threadResourcePolicyDoctorReport(env = process.env, now = 
       deliveries: Object.fromEntries(["pending", "claimed", "delivered", "revoked", "quarantined", "dead-letter"].map((name) => [name, state.mailboxDeliveries.filter((item) => item.state === name).length])),
       auditOutbox: state.policyAuditOutbox.length,
     },
+    outbox,
     shadowMismatches,
+    coverage: { resourceSessions: "unsupported" },
     stale: {
-      sessions: staleSessions,
-      listeners: state.mailboxListeners.filter((item) => item.status === "active" && old(item.updatedAt, listenerStaleMs, now)).length,
+      sessions: 0,
+      listeners: state.mailboxListeners.filter((item) => item.status === "active" && !item.revokedAt && !listenerHasCurrentGrant(item, state, threadsById)).length,
       deliveries: pending.filter((item) => old(item.updatedAt || item.createdAt, deliveryStaleMs, now)).length,
     },
     queue: { pending: pending.length, deadLetter: state.mailboxDeliveries.filter((item) => item.state === "dead-letter").length, oldestLagMs: oldestAt ? Math.max(0, now - oldestAt) : 0 },
@@ -109,7 +142,9 @@ export async function threadResourcePolicyDoctorCheck(env = process.env) {
     severity: status === "warning" ? "warning" : "info",
     summary: !report.ok
       ? (allOff ? "Policy storage is unavailable while all resource modes are off." : `Policy storage is unavailable (${report.error}).`)
-      : `Policy ${report.backend} is healthy; ${report.queue.pending} mailbox delivery item(s) pending and ${report.queue.deadLetter} dead-lettered.`,
+      : report.health === "not_initialized"
+        ? "Policy storage is not initialized while all resource modes are off."
+        : `Policy ${report.backend} is healthy; ${report.queue.pending} mailbox delivery item(s) pending, ${report.queue.deadLetter} dead-lettered, and ${report.outbox.pending} audit item(s) pending delivery.`,
     report,
     repair: problems ? "Review resource-grants doctor evidence and mailbox delivery status before enforcing additional resource modes." : "",
   };

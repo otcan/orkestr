@@ -209,7 +209,7 @@ export async function revokeMailboxThreadListener({ mailbox, listenerId, princip
       transactionalAudit: { action: "mailbox_listener_revoked", resourceType: "mailbox", actorUserId: clean(principal.userId || "system"), outcome: "allowed", reason: listener.reason },
     };
   }, env);
-  if (!result.result.idempotent) recordThreadResourceInvalidationMetric({ resourceType: "mailbox", subject: "listener" });
+  if (!result.result.idempotent) recordThreadResourceInvalidationMetric({ resourceType: "mailbox", subject: "listener", reason: "listener_revoked" });
   if (!result.result.idempotent) await appendEvent({ type: "mailbox_thread_listener_revoked", mailboxId: mailbox.id, resourceId, threadId: existing.threadId, listenerId: existing.id, listenerGeneration: result.result.listener.generation }, env).catch(() => {});
   return { ok: true, listener: publicListener(result.result.listener), policyRevision: result.state.revision, idempotent: result.result.idempotent };
 }
