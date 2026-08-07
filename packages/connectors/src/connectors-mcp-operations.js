@@ -30,9 +30,46 @@ import {
 import { connectorMcpStructuredResult, connectorsMcpInputSchemas } from "./connectors-mcp-contract.js";
 import { assertConnectorMcpScope } from "./connectors-mcp-auth.js";
 import { runConnectorMcpRuntime } from "./connectors-mcp-runtime-operations.js";
+import { assertConnectorMcpResourceAccess, connectorMcpResourceTokenDeclared } from "../../core/src/thread-resource-sessions.js";
 
 function clean(value = "") {
   return String(value || "").trim();
+}
+
+function routingScopeDenied(reason = "target_scope_denied") {
+  const error = new Error(`connector_mcp_${reason}`);
+  error.statusCode = 403;
+  throw error;
+}
+
+function resourceDispatchTargetDenied() {
+  const error = new Error("connector_mcp_resource_dispatch_target_unbound");
+  error.statusCode = 403;
+  throw error;
+}
+
+// Routing identifiers are handles to stateful objects. A thread-scoped bearer
+// must never turn one of those handles into authority over a sibling thread,
+// even when the caller omits thread_id from the request body.
+async function assertConnectorMcpRoutingTargetScope(input = {}, auth = {}, env = process.env) {
+  if (auth.operator || !clean(auth.threadId)) return;
+  const scopedThreadId = clean(auth.threadId);
+  if (clean(input.target_thread_id) && clean(input.target_thread_id) !== scopedThreadId) routingScopeDenied("target_thread_scope_denied");
+  if (clean(input.binding_id)) {
+    const statuses = await listWhatsAppBindingStatuses({ env }).catch(() => ({ bindings: [] }));
+    const binding = (statuses.bindings || []).find((item) => clean(item.id) === clean(input.binding_id) || clean(item.bindingId) === clean(input.binding_id));
+    if (!binding || clean(binding.threadId) !== scopedThreadId) routingScopeDenied("binding_scope_denied");
+  }
+  if (clean(input.operation_ref)) {
+    const operations = await listConnectorOutboxJobs({
+      threadId: scopedThreadId,
+      ownerUserId: clean(auth.ownerUserId),
+      connector: clean(input.service),
+    }, env).catch(() => ({ jobs: [] }));
+    if (!(operations.jobs || []).some((item) => clean(item.id) === clean(input.operation_ref) && clean(item.threadId) === scopedThreadId)) {
+      routingScopeDenied("operation_scope_denied");
+    }
+  }
 }
 
 function operationAction(tool = "", input = {}) {
@@ -50,6 +87,7 @@ function operationIntent(tool = "", input = {}) {
     targetThreadId: clean(input.target_thread_id),
     operationRef: clean(input.operation_ref),
     accountHint: clean(input.account_hint),
+    resourceTarget: [clean(input.resource_type), clean(input.resource_id), clean(input.resource_action)],
     target: clean(input.target),
     alias: clean(input.alias),
     useMode: clean(input.use_mode),
@@ -406,10 +444,18 @@ export async function runConnectorMcpTool(tool = "", rawInput = {}, { auth = {},
   const schema = connectorsMcpInputSchemas[tool];
   if (!schema) throw Object.assign(new Error("connector_mcp_tool_not_found"), { statusCode: 404 });
   const input = schema.parse(rawInput);
-  const scoped = assertConnectorMcpScope(auth, tool, input);
+  const scopedInput = { ...input, connector_mcp_tool: tool, connector_mcp_action: input.action };
+  const scope = assertConnectorMcpScope(auth, tool, scopedInput);
+  // Current connector MCP tools are generic connector operations; none has a
+  // resolver that obtains an actual desktop/oXRM/mailbox target independently
+  // of caller input. Refuse resource-bound bearers until a resource-aware tool
+  // supplies that target from its own dispatch path.
+  if (!scope.operator && connectorMcpResourceTokenDeclared(scope)) resourceDispatchTargetDenied();
+  const scoped = await assertConnectorMcpResourceAccess(scope, scopedInput, env);
   if (tool === "orkestr_runtime" && input.service !== "runtime") return unsupported(input);
   if (tool !== "orkestr_runtime" && input.service !== "whatsapp" && tool !== "orkestr_auth") return unsupported(input);
   if (["webui", "codex"].includes(input.service)) return unsupported(input);
+  if (tool === "orkestr_routing") await assertConnectorMcpRoutingTargetScope(input, scoped, env);
   const challenge = await requireAttendedApproval(tool, input, scoped, request, env);
   if (challenge) return challengeResult(input, challenge);
   try {

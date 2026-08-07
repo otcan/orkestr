@@ -11,6 +11,9 @@ const contextShape = {
   instance_id: cleanString.nullish().describe("Orkestr instance id for context. It must match the bearer scope."),
   user_id: cleanString.nullish().describe("Orkestr user id for context. It must match the bearer scope."),
   thread_id: cleanString.nullish().describe("Orkestr thread id for context. It must match the bearer scope when scoped."),
+  resource_type: z.enum(["desktop", "oxrm", "mailbox"]).nullish().describe("Registered resource type for a resource-aware dispatcher. Generic connector tools reject resource-bound bearers."),
+  resource_id: cleanString.nullish().describe("Canonical registered resource id, resolved by a resource-aware dispatcher rather than inferred from connector context."),
+  resource_action: cleanString.nullish().describe("Exact resource permission consumed by a resource-aware dispatcher, such as read, execute, or operate."),
   approval: cleanString.nullish().describe("Approved Orkestr challenge id or approval code for an attended administrative write."),
 };
 

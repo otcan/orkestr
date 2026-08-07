@@ -142,8 +142,10 @@ async function assertBrowserAccess(slug, permission, env = process.env, options 
     permission,
     breakGlass: options?.breakGlass === true,
     breakGlassReason: options?.breakGlassReason,
+    breakGlassChangeRef: options?.breakGlassChangeRef || options?.changeRef,
+    recentAuthAt: options?.recentAuthAt,
   }, env);
-  if (permission === "operate") await assertDesktopLeaseForOperation(slug, env, options);
+  if (permission === "operate") await assertDesktopLeaseForOperation(slug, env, { ...options, authorizedBreakGlass: decision.breakGlass === true });
   return decision;
 }
 

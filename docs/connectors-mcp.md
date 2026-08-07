@@ -31,6 +31,45 @@ Every result includes `contract_version`, service/action/status,
 `operation_ref`, effective scope, an optional challenge, and a structured
 error. The bearer is authoritative; context arguments must match it.
 
+## Resource-bound execution tokens
+
+Connector calls are normally instance-scoped. `orkestr_auth`,
+`orkestr_messaging`, `orkestr_conversation`, `orkestr_routing`, and
+`orkestr_runtime` do not infer a desktop, oXRM instance, or mailbox from a
+connector account, chat, or instance id. A surface that cannot identify a
+registered resource therefore remains instance-scoped.
+
+Only a resource-aware integration can execute a real registered resource. It
+must resolve the resource plus service, account, conversation, binding,
+target-thread, and operation-reference handles independently, then authorize
+that resolved target. Generic connector tools reject a resource bearer before
+they run a connector handler. In resource `enforce` mode, every declared
+resource target — including one supplied by a trusted dispatcher — needs a
+resource bearer with all of the following exact claims: resource type/id,
+allowed resource actions, root and thread ids, boundary id, policy and grant
+revisions, resource generation, a jti, issued-at time, and expiry. The static
+`ORKESTR_CONNECTORS_MCP_TOKEN` operator credential is valid only for generic
+instance operations with no resource target; it cannot authorize a desktop,
+oXRM, or mailbox. The token lifetime is at most five minutes. The connector
+scope remains only an upper bound: it cannot create or widen a thread-resource
+grant. Missing or inferred resource targets are rejected.
+
+Runtime/API code that has current effective authorization can call
+`issueConnectorMcpResourceToken`. It returns a crypto-random bearer once, with
+one exact action and a maximum five-minute lifetime. The durable session keeps
+only hashes of the bearer and jti, plus its exact resource, thread/root,
+boundary, fixed `orkestr-connectors-mcp` audience, source-grant, policy/grant
+revision, resource generation binding, and exact connector service, account,
+conversation, binding, target-thread, and operation-reference handles. Empty
+handles are bound as empty too; a caller cannot add a target after issuance.
+
+Active resource-bound executions are stored transactionally with hashed bearer
+and jti values. They are revalidated on every use and invalidated in the same
+policy transaction as an affected grant replacement or resource-generation
+change; unrelated resource policy changes do not revoke them. The resource
+policy doctor reports session coverage and counts only; it never exposes token,
+jti, or resource identifiers.
+
 Account changes, route changes, new chats, and first-time recipients return an
 attended Orkestr challenge. Existing scoped chat sends do not. Unconfirmed
 WhatsApp delivery is not automatically resent. MCP attachment inputs accept

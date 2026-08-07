@@ -3,7 +3,11 @@ import { ingestMailboxMessage } from "../../../../../packages/connectors/src/mai
 import { ingestPostfixSpoolFile } from "../../../../../packages/connectors/src/postfix-mailbox-adapter.js";
 import {
   createMailboxForPrincipal,
+  createMailboxThreadListener,
   deleteMailboxForPrincipal,
+  mailboxForPrincipal,
+  mailboxThreadDeliveryStatus,
+  listMailboxThreadListeners,
   mailboxInfrastructureStatus,
   listMailboxDeadLetters,
   listMailboxRelayAudits,
@@ -12,6 +16,7 @@ import {
   publicMailbox,
   replayMailboxDeadLetterForPrincipal,
   retryMailboxRelayForPrincipal,
+  revokeMailboxThreadListener,
   rotateMailboxForPrincipal,
   verifyMailboxForPrincipal,
 } from "../../../../../packages/core/src/mailboxes.js";
@@ -124,6 +129,42 @@ export class MailboxesController {
     return { ok: true, infrastructure: mailboxInfrastructureStatus({}, process.env) };
   }
 
+  @Get(":mailboxId/listeners")
+  async listeners(@Req() request: any, @Param("mailboxId") mailboxId: string, @Query("threadId") threadId: string, @Query("includeRevoked") includeRevoked = "") {
+    try {
+      const principal = requestPrincipal(request);
+      const mailbox = await mailboxForPrincipal(mailboxId, principal);
+      return { ok: true, listeners: await listMailboxThreadListeners({ mailbox, threadId: String(threadId || "").trim(), principal, includeRevoked: includeRevoked === "true" } as any) };
+    } catch (error) {
+      rethrowHttp(error, "mailbox_listener_list_failed");
+    }
+  }
+
+  @Post(":mailboxId/listeners")
+  @HttpCode(201)
+  async createListener(@Req() request: any, @Param("mailboxId") mailboxId: string, @Body() body: Record<string, unknown> = {}) {
+    try {
+      const principal = requestPrincipal(request);
+      const mailbox = await mailboxForPrincipal(mailboxId, principal);
+      return await createMailboxThreadListener({
+        mailbox, threadId: String(body.threadId || "").trim(), filter: body.filter as any,
+        principal, idempotencyKey: String(body.idempotencyKey || body.requestId || "").trim(), expectedPolicyRevision: body.expectedPolicyRevision,
+      } as any);
+    } catch (error) {
+      rethrowHttp(error, "mailbox_listener_create_failed");
+    }
+  }
+
+  @Get(":mailboxId/delivery-status")
+  async deliveryStatus(@Req() request: any, @Param("mailboxId") mailboxId: string) {
+    try {
+      const mailbox = await mailboxForPrincipal(mailboxId, requestPrincipal(request));
+      return { ok: true, status: await mailboxThreadDeliveryStatus({ mailbox } as any) };
+    } catch (error) {
+      rethrowHttp(error, "mailbox_delivery_status_failed");
+    }
+  }
+
   @Patch(":mailboxId/verification")
   async verify(@Req() request: any, @Param("mailboxId") mailboxId: string, @Body() body: Record<string, unknown> = {}) {
     try {
@@ -139,6 +180,17 @@ export class MailboxesController {
       return { ok: true, mailbox: await deleteMailboxForPrincipal(mailboxId, mailboxBody(body), requestPrincipal(request)) };
     } catch (error) {
       rethrowHttp(error);
+    }
+  }
+
+  @Delete(":mailboxId/listeners/:listenerId")
+  async revokeListener(@Req() request: any, @Param("mailboxId") mailboxId: string, @Param("listenerId") listenerId: string, @Body() body: Record<string, unknown> = {}) {
+    try {
+      const principal = requestPrincipal(request);
+      const mailbox = await mailboxForPrincipal(mailboxId, principal);
+      return await revokeMailboxThreadListener({ mailbox, listenerId, principal, reason: String(body.reason || "").trim(), expectedPolicyRevision: body.expectedPolicyRevision } as any);
+    } catch (error) {
+      rethrowHttp(error, "mailbox_listener_revoke_failed");
     }
   }
 

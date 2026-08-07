@@ -81,6 +81,8 @@ export function normalizeDesktopShare(share = {}, now = Date.now()) {
     supersessionReason: String(share.supersessionReason || "").trim() || null,
     breakGlass: share.breakGlass === true,
     breakGlassReason: String(share.breakGlassReason || "").trim() || null,
+    breakGlassChangeRef: String(share.breakGlassChangeRef || share.changeRef || "").trim() || null,
+    breakGlassAuthenticatedAt: String(share.breakGlassAuthenticatedAt || "").trim() || null,
     subdomain: String(share.subdomain || "").trim().toLowerCase(),
     keyHash: String(share.keyHash || "").trim(),
     status,
@@ -109,7 +111,7 @@ export async function readDesktopShareState(env = process.env) {
   const desktopShares = Array.isArray(state.desktopShares)
     ? state.desktopShares
         .map((share) => normalizeDesktopShare(share, now))
-        .map((share) => enforce && !(share.breakGlass && share.breakGlassReason) && (!share.threadId || !share.desktopId || !share.boundaryId || !share.grantRevision)
+        .map((share) => enforce && !(share.breakGlass && share.breakGlassReason && share.breakGlassChangeRef && share.breakGlassAuthenticatedAt) && (!share.threadId || !share.desktopId || !share.boundaryId || !share.grantRevision)
           ? { ...share, status: "revoked", revokedAt: share.revokedAt || desktopShareNowIso(), revokeReason: "legacy_share_missing_thread_scope" }
           : share)
         .filter((share) => share.id && keepShare(share, now))

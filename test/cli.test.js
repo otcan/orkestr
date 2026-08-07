@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { defaultApiBase } from "../apps/cli/src/api-client.js";
+import { ApiError, defaultApiBase, requestJson } from "../apps/cli/src/api-client.js";
 import { runCli } from "../apps/cli/src/commands.js";
 import { createDesktopShare, desktopShareStatus, openDesktopShare } from "../packages/core/src/desktop-shares.js";
 import { userPrincipal } from "../packages/core/src/principal.js";
@@ -58,6 +58,29 @@ test("CLI help exposes local service commands promised by the installer", async 
   assert.match(stdout.text(), /orkestr vm-slice create <owner-user-id>/);
   assert.match(stdout.text(), /vm-slice \[list\|status <slice-id>\|provision <slice-id>\|destroy <slice-id>/);
   assert.match(stdout.text(), /orkestr task-agent spawn <parent-thread>/);
+});
+
+test("CLI API client aborts stalled requests on its own deadline", async () => {
+  await assert.rejects(
+    () => requestJson("/api/router-traces/doctor/whatsapp?timeoutMs=20", {
+      baseUrl: "http://orkestr.test",
+      env: { ORKESTR_DISABLE_CLI_AUTH: "1" },
+      timeoutMs: 20,
+      fetchImpl: (_url, options = {}) => new Promise((_resolve, reject) => {
+        options.signal?.addEventListener("abort", () => {
+          const error = new Error("aborted");
+          error.name = "AbortError";
+          reject(error);
+        }, { once: true });
+      }),
+    }),
+    (error) => {
+      assert.equal(error instanceof ApiError, true);
+      assert.equal(error.message, "api_request_timeout");
+      assert.equal(error.payload.timeoutMs, 20);
+      return true;
+    },
+  );
 });
 
 test("CLI spawns a scoped specialist task agent", async () => {

@@ -10,6 +10,7 @@ import {
   listThreadDesktopGrants,
   setThreadDesktopGrants,
 } from "../packages/core/src/desktop-access.js";
+import { readThreadResourcePolicy } from "../packages/core/src/thread-resource-grants.js";
 import { adminPrincipal } from "../packages/core/src/principal.js";
 import { createThread } from "../packages/core/src/threads.js";
 import { whereAmI } from "../packages/core/src/whereiam.js";
@@ -49,6 +50,8 @@ async function fixture() {
   const principal = adminPrincipal("admin");
   const threadA = await createThread({ id: "thread-a", ownerUserId: "admin", name: "Thread A", cwd: path.join(home, "a") }, env);
   const threadB = await createThread({ id: "thread-b", ownerUserId: "admin", name: "Thread B", cwd: path.join(home, "b") }, env);
+  await advanceDesktopResourceGeneration("linkedin", "admin", { reason: "fixture_desktop_lifecycle_registered" }, env);
+  await advanceDesktopResourceGeneration("pa", "admin", { reason: "fixture_desktop_lifecycle_registered" }, env);
   await setThreadDesktopGrants(threadA.id, ["linkedin"], { principal, reason: "test" }, env);
   await setThreadDesktopGrants(threadB.id, ["pa"], { principal, reason: "test" }, env);
   return { home, env, principal, threadA, threadB };
@@ -88,6 +91,27 @@ test("same-owner threads see and acquire only explicitly granted desktops", asyn
     fencingToken: acquired.lease.fencingToken,
   });
   assert.equal(opened.slug, "linkedin");
+});
+
+test("desktop enforce grants require lifecycle registration while rollout modes retain catalog compatibility", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-desktop-grant-registration-"));
+  const env = testEnv(home);
+  const principal = adminPrincipal("admin");
+  const strictThread = await createThread({ id: "desktop-strict", ownerUserId: "admin", name: "Desktop strict" }, env);
+  await assert.rejects(
+    () => setThreadDesktopGrants(strictThread.id, ["unregistered-desktop"], { principal, reason: "must_be_lifecycle_registered" }, env),
+    /thread_resource_not_registered/,
+  );
+  await advanceDesktopResourceGeneration("registered-desktop", "admin", { reason: "desktop_lifecycle_started" }, env);
+  const registered = await setThreadDesktopGrants(strictThread.id, ["registered-desktop"], { principal, reason: "lifecycle_registered" }, env);
+  assert.equal(registered.grants.length, 1);
+
+  for (const mode of ["shadow", "off"]) {
+    env.ORKESTR_DESKTOP_ACCESS_MODE = mode;
+    const legacyThread = await createThread({ id: `desktop-${mode}`, ownerUserId: "admin", name: `Desktop ${mode}` }, env);
+    const legacy = await setThreadDesktopGrants(legacyThread.id, [`legacy-${mode}-desktop`], { principal, reason: "rollout_catalog_compatibility" }, env);
+    assert.equal(legacy.grants.length, 1);
+  }
 });
 
 test("child agents inherit parent grants but cannot widen an explicit child policy", async () => {
@@ -205,6 +229,31 @@ test("desktop shares are invalidated when the desktop runtime generation advance
   );
 });
 
+test("break-glass desktop shares require session-backed recent auth and retain the exact audited reference", async () => {
+  const { env, principal } = await fixture();
+  const breakGlassThread = await createThread({ id: "thread-break-glass", ownerUserId: "admin", name: "Break glass" }, env);
+  await advanceDesktopResourceGeneration("linkedin", "admin", { reason: "register_for_break_glass" }, env);
+  const request = {
+    desktopSlug: "linkedin", principal, threadId: breakGlassThread.id, breakGlass: true,
+    breakGlassReason: "incident", breakGlassChangeRef: "CHG-DESKTOP-1", env,
+  };
+  await assert.rejects(() => createDesktopShare(request), /desktop_break_glass_requirements_missing/);
+
+  const authenticatedPrincipal = { ...principal, authenticatedAt: new Date().toISOString() };
+  const created = await createDesktopShare({ ...request, principal: authenticatedPrincipal });
+  const ttlMs = Date.parse(created.share.expiresAt) - Date.parse(created.share.createdAt);
+  assert.equal(ttlMs <= 5 * 60_000 + 1_000, true);
+  const { shareId, key } = shareParts(created.url);
+  const opened = await openDesktopShare({ shareId, key, subdomain: created.subdomain, env });
+  assert.equal(opened.ok, true);
+  const audit = (await readThreadResourcePolicy(env)).policyAuditOutbox.find((item) =>
+    item.action === "break_glass" && item.changeRef === "CHG-DESKTOP-1" && item.threadId === breakGlassThread.id,
+  );
+  assert.ok(audit);
+  assert.equal(audit.resourceType, "desktop");
+  assert.equal(audit.permission, "share");
+});
+
 test("whereiam desktop inventory is keyed and filtered by thread policy revision", async () => {
   const { env, threadA, threadB } = await fixture();
   await fs.mkdir(threadA.cwd, { recursive: true });
@@ -237,6 +286,7 @@ test("migration backfills only explicit desktop metadata and quarantines name-on
   assert.deepEqual(dryRun.planned.map((item) => item.threadId), ["explicit-thread"]);
   assert.deepEqual(dryRun.ambiguous.map((item) => item.threadId), ["linkedin-name-only"]);
 
+  await advanceDesktopResourceGeneration("pa", "admin", { reason: "migration_desktop_lifecycle_registered" }, env);
   const applied = await backfillThreadDesktopGrants({ principal, dryRun: false }, env);
   assert.deepEqual(applied.applied, [{ threadId: "explicit-thread", desktopSlugs: ["pa"] }]);
   const explicit = await authorizeDesktopAccess({ principal, threadId: "explicit-thread", desktopSlug: "pa", permission: "discover" }, env);

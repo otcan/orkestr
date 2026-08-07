@@ -5,12 +5,26 @@ function clean(value = "") {
   return String(value || "").trim();
 }
 
+function boundedTimeoutMs(value, fallback = 5_000, max = 5_000, min = 10) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  return Math.min(max, Math.max(min, Math.floor(parsed)));
+}
+
 export function whatsappWorkerConfig(env = process.env) {
+  const operationTimeoutMs = boundedTimeoutMs(env.ORKESTR_WA_WORKER_TIMEOUT_MS, 30_000, 120_000, 500);
+  const healthTimeoutMs = boundedTimeoutMs(
+    env.ORKESTR_WA_WORKER_HEALTH_TIMEOUT_MS || env.ORKESTR_WA_WORKER_TIMEOUT_MS,
+    5_000,
+    5_000,
+  );
   return {
     socketPath: clean(env.ORKESTR_WA_WORKER_SOCKET || "/run/orkestr-wa/sender.sock"),
     baseUrl: clean(env.ORKESTR_WA_WORKER_URL),
     token: clean(env.ORKESTR_WA_WORKER_TOKEN || env.ORKESTR_WA_SERVICE_TOKEN),
-    timeoutMs: Math.max(500, Number(env.ORKESTR_WA_WORKER_TIMEOUT_MS || 30_000) || 30_000),
+    timeoutMs: operationTimeoutMs,
+    operationTimeoutMs,
+    healthTimeoutMs,
   };
 }
 
@@ -33,15 +47,39 @@ function requestOptions(pathname, method, config, body) {
   };
 }
 
-export function requestWhatsAppWorker(pathname = "/health", { method = "GET", body = null } = {}, env = process.env) {
+function timeoutError() {
+  return Object.assign(new Error("whatsapp_worker_timeout"), { statusCode: 503 });
+}
+
+function normalizeRequestError(cause) {
+  if (cause?.message === "whatsapp_worker_timeout") return cause;
+  const error = new Error(cause?.code === "ENOENT" || cause?.code === "ECONNREFUSED" ? "whatsapp_worker_unavailable" : clean(cause?.message) || "whatsapp_worker_request_failed");
+  error.statusCode = 503;
+  error.cause = cause;
+  return error;
+}
+
+export function requestWhatsAppWorker(pathname = "/health", { method = "GET", body = null, timeoutMs = null } = {}, env = process.env) {
   const config = whatsappWorkerConfig(env);
   if (!config.baseUrl && !config.socketPath) return Promise.reject(Object.assign(new Error("whatsapp_worker_unconfigured"), { statusCode: 503 }));
   const encoded = body === null || body === undefined ? "" : JSON.stringify(body);
   const request = requestOptions(pathname, method, config, encoded);
+  const deadlineMs = boundedTimeoutMs(timeoutMs || config.operationTimeoutMs, config.operationTimeoutMs, 120_000, 10);
   return new Promise((resolve, reject) => {
+    let settled = false;
+    let response = null;
+    let wallTimer = null;
+    const finish = (fn, value) => {
+      if (settled) return;
+      settled = true;
+      if (wallTimer) clearTimeout(wallTimer);
+      fn(value);
+    };
     const req = request.transport.request(request.options, (res) => {
+      response = res;
       const chunks = [];
       res.on("data", (chunk) => chunks.push(chunk));
+      res.once("error", (cause) => finish(reject, normalizeRequestError(cause)));
       res.on("end", () => {
         const raw = Buffer.concat(chunks).toString("utf8");
         let payload = {};
@@ -52,20 +90,27 @@ export function requestWhatsAppWorker(pathname = "/health", { method = "GET", bo
         }
         if ((res.statusCode || 500) >= 400 || payload?.ok === false) {
           const error = new Error(clean(payload?.error) || `whatsapp_worker_http_${res.statusCode || 500}`);
-          error.statusCode = res.statusCode || 502;
+          error.statusCode = payload?.ok === false && Number(res.statusCode || 0) < 400
+            ? 503
+            : res.statusCode || 502;
           error.payload = payload;
-          reject(error);
+          finish(reject, error);
           return;
         }
-        resolve(payload);
+        finish(resolve, payload);
       });
     });
-    req.setTimeout(config.timeoutMs, () => req.destroy(Object.assign(new Error("whatsapp_worker_timeout"), { statusCode: 504 })));
+    const abortTimeout = () => {
+      const error = timeoutError();
+      finish(reject, error);
+      req.destroy(error);
+      response?.destroy?.(error);
+    };
+    wallTimer = setTimeout(abortTimeout, deadlineMs);
+    wallTimer.unref?.();
+    req.setTimeout(deadlineMs, abortTimeout);
     req.once("error", (cause) => {
-      const error = new Error(cause?.code === "ENOENT" || cause?.code === "ECONNREFUSED" ? "whatsapp_worker_unavailable" : clean(cause?.message) || "whatsapp_worker_request_failed");
-      error.statusCode = 503;
-      error.cause = cause;
-      reject(error);
+      finish(reject, normalizeRequestError(cause));
     });
     if (encoded) req.write(encoded);
     req.end();
@@ -73,7 +118,8 @@ export function requestWhatsAppWorker(pathname = "/health", { method = "GET", bo
 }
 
 export function whatsappWorkerHealth(env = process.env) {
-  return requestWhatsAppWorker("/health", {}, env);
+  const config = whatsappWorkerConfig(env);
+  return requestWhatsAppWorker("/health", { timeoutMs: config.healthTimeoutMs }, env);
 }
 
 export function whatsappWorkerAuth(accountId = "", action = "status", env = process.env) {

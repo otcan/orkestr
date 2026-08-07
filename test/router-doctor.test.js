@@ -7,6 +7,8 @@ import { ensureConnectorOutboxJob, listConnectorOutboxJobs, readConnectorOutbox,
 import { doctorWhatsAppRouter } from "../packages/core/src/router-doctor.js";
 import { listRouterTraces, recordRouterTraceEvent } from "../packages/core/src/router-traces.js";
 import { appendThreadMessage, createThread, listThreadMessages, updateThread } from "../packages/core/src/threads.js";
+import { createThreadMessageRepository } from "../packages/storage/src/repositories.js";
+import { listEvents } from "../packages/storage/src/store.js";
 
 function runtimeEnv(home, extra = {}) {
   return {
@@ -25,6 +27,16 @@ async function createWhatsAppThread(env) {
     name: "WA Doctor Thread",
     state: "sleeping",
     binding: { connector: "whatsapp", chatId: "chat-1", outboundAccountId: "responder" },
+  }, env);
+}
+
+async function createWhatsAppThreadWithId(env, id) {
+  return createThread({
+    id,
+    ownerUserId: "otcan",
+    name: `WA Doctor Thread ${id}`,
+    state: "ready",
+    binding: { connector: "whatsapp", chatId: `chat-${id}`, outboundAccountId: "responder" },
   }, env);
 }
 
@@ -61,6 +73,23 @@ test("WhatsApp router doctor treats runtime account aliases as ready", async () 
   assert.equal(report.checks.some((check) => check.code === "transport_down"), false);
 });
 
+test("WhatsApp router doctor records successful run telemetry unless delegated", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-router-doctor-run-event-"));
+  const env = runtimeEnv(home);
+  const thread = await createWhatsAppThread(env);
+
+  const report = await doctorWhatsAppRouter({ thread: thread.id, env, whatsappStatusFn: readyWhatsAppStatus });
+  const events = await listEvents(env, 10);
+  const recorded = events.find((event) => event.type === "router_doctor_whatsapp_run");
+
+  assert.equal(recorded?.threadId, thread.id);
+  assert.equal(recorded?.status, report.status);
+
+  await doctorWhatsAppRouter({ thread: thread.id, env, whatsappStatusFn: readyWhatsAppStatus, recordRunEvent: false });
+  const afterDelegatedRun = await listEvents(env, 10);
+  assert.equal(afterDelegatedRun.filter((event) => event.type === "router_doctor_whatsapp_run").length, 1);
+});
+
 test("WhatsApp router doctor treats scoped tenant send bridge as ready", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-router-doctor-scoped-send-"));
   const env = runtimeEnv(home);
@@ -76,6 +105,44 @@ test("WhatsApp router doctor treats scoped tenant send bridge as ready", async (
     }),
   });
 
+  assert.equal(report.checks.some((check) => check.code === "transport_down"), false);
+});
+
+test("WhatsApp router doctor bounds a stalled WhatsApp status call", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-router-doctor-status-timeout-"));
+  const env = runtimeEnv(home);
+  const thread = await createWhatsAppThread(env);
+  const started = Date.now();
+
+  const report = await doctorWhatsAppRouter({
+    thread: thread.id,
+    env,
+    whatsappStatusTimeoutMs: 25,
+    whatsappStatusFn: async () => new Promise(() => {}),
+  });
+
+  assert.equal(Date.now() - started < 1000, true);
+  assert.equal(report.ok, false);
+  assert.equal(report.checks.some((check) => check.code === "transport_down" && check.transportState === "timeout"), true);
+});
+
+test("WhatsApp router doctor shares one bounded WhatsApp status call across threads", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-router-doctor-shared-status-"));
+  const env = runtimeEnv(home);
+  await createWhatsAppThreadWithId(env, "wa-doctor-thread-one");
+  await createWhatsAppThreadWithId(env, "wa-doctor-thread-two");
+  let calls = 0;
+
+  const report = await doctorWhatsAppRouter({
+    env,
+    whatsappStatusFn: async () => {
+      calls += 1;
+      return readyWhatsAppStatus();
+    },
+  });
+
+  assert.equal(calls, 1);
+  assert.equal(report.counts.threads, 2);
   assert.equal(report.checks.some((check) => check.code === "transport_down"), false);
 });
 
@@ -602,4 +669,56 @@ test("WhatsApp router doctor requeues stale non-ack input before retrying delive
   assert.equal(repair.requeued, true);
   assert.equal(updated.state, "queued");
   assert.equal(updated.deliveryState, "waiting_runtime_start");
+});
+
+test("WhatsApp router doctor scans synthetic 50k-message threads under 10 seconds", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-router-doctor-50k-"));
+  const env = runtimeEnv(home, { ORKESTR_THREAD_MESSAGE_STORE: "json" });
+  const thread = await createWhatsAppThread(env);
+  const baseMs = Date.parse("2026-07-12T18:00:00.000Z");
+  const messages = [];
+  for (let index = 0; index < 25_000; index += 1) {
+    const userTs = new Date(baseMs + index * 2000).toISOString();
+    const assistantTs = new Date(baseMs + index * 2000 + 1000).toISOString();
+    messages.push({
+      id: `user-${index}`,
+      role: "user",
+      source: "whatsapp_inbound",
+      connector: "whatsapp",
+      chatId: "chat-1",
+      accountId: "responder",
+      text: `Message ${index}`,
+      state: "completed",
+      deliveryState: "delivered",
+      createdAt: userTs,
+      updatedAt: userTs,
+    });
+    messages.push({
+      id: `assistant-${index}`,
+      role: "assistant",
+      source: "codex-app-server",
+      connector: "whatsapp",
+      chatId: "chat-1",
+      accountId: "responder",
+      text: `Reply ${index}`,
+      state: "completed",
+      deliveryState: "delivered",
+      createdAt: assistantTs,
+      updatedAt: assistantTs,
+    });
+  }
+  await createThreadMessageRepository(env).save(thread.id, messages);
+
+  const started = Date.now();
+  const report = await doctorWhatsAppRouter({
+    thread: thread.id,
+    env,
+    runtimeStatusFn: async () => ({ state: "ready", promptReady: true, working: false }),
+    whatsappStatusFn: readyWhatsAppStatus,
+  });
+  const elapsedMs = Date.now() - started;
+
+  assert.equal(elapsedMs < 10_000, true, `router doctor took ${elapsedMs}ms`);
+  assert.equal(report.threads[0].messageCount, 50_000);
+  assert.equal(report.checks.some((check) => check.severity === "error"), false);
 });
