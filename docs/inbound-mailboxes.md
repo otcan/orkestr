@@ -54,7 +54,9 @@ node /opt/orkestr/current/scripts/orkestr-mailbox-postfix.mjs probe
 ```
 
 Create a mailbox, send an external message, and confirm exactly one connector
-inbox or VM relay event. Then rotate and delete the mailbox and verify that SMTP
+inbox event while mailbox policy is off, exact listener delivery or durable
+unrouted quarantine while it is enabled, or a VM relay event for VM targets.
+Then rotate and delete the mailbox and verify that SMTP
 rejects the old recipient.
 
 ## Rollback

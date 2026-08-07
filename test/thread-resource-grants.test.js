@@ -43,11 +43,11 @@ test("non-desktop grants require an active instance-owned resource registration"
     /thread_resource_not_registered/,
   );
   await assert.rejects(
-    () => setThreadResourceGrants(parent.id, "mailbox", [{ resourceId: "unregistered-mailbox", permissions: ["route"] }], { principal }, env),
+    () => setThreadResourceGrants(parent.id, "mailbox", [{ resourceId: "unregistered-mailbox", permissions: ["subscribe"] }], { principal }, env),
     /thread_resource_not_registered/,
   );
   await registerThreadResource({ resourceType: "mailbox", resourceId: "mailbox-a", ownerUserId: "admin", status: "active" }, { principal }, env);
-  const granted = await setThreadResourceGrants(parent.id, "mailbox", [{ resourceId: "mailbox-a", permissions: ["route"] }], { principal }, env);
+  const granted = await setThreadResourceGrants(parent.id, "mailbox", [{ resourceId: "mailbox-a", permissions: ["subscribe"] }], { principal }, env);
   assert.equal(granted.grants.length, 1);
 });
 
