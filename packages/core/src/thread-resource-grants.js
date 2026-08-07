@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { appendEvent } from "../../storage/src/store.js";
 import { canAccessOwner, isAdminPrincipal, policyError, resourceOwnerUserId } from "./policy.js";
 import { getThread } from "./threads.js";
-import { readThreadResourcePolicyState, withThreadResourcePolicyTransaction } from "./thread-resource-policy-store.js";
+import { readThreadResourcePolicyState, withThreadResourcePolicyDeliveryFence, withThreadResourcePolicyTransaction } from "./thread-resource-policy-store.js";
 import {
   requireUnifiedThreadResourceWriteMode,
   threadResourceWriteMode,
@@ -184,6 +184,7 @@ function normalizeState(raw = {}, env = process.env) {
       instanceId: clean(item?.instanceId), accountId: clean(item?.accountId), accountService: clean(item?.accountService).toLowerCase(),
       resourceType: normalizeThreadResourceType(item?.resourceType), resourceId: clean(item?.resourceId),
       actions: normalizeThreadResourcePermissions(item?.resourceType, item?.actions),
+      connectorTool: clean(item?.connectorTool).toLowerCase(), connectorAction: clean(item?.connectorAction).toLowerCase(),
       threadId: clean(item?.threadId), grantThreadId: clean(item?.grantThreadId || item?.threadId), rootThreadId: clean(item?.rootThreadId), boundaryId: clean(item?.boundaryId),
       policyRevision: Math.max(0, Number(item?.policyRevision || 0) || 0), grantRevision: Math.max(0, Number(item?.grantRevision || 0) || 0),
       resourceGeneration: Math.max(1, Number(item?.resourceGeneration || 1) || 1),
@@ -259,6 +260,10 @@ export async function readThreadResourcePolicy(env = process.env) {
 
 export async function mutateThreadResourcePolicy(operation, env = process.env) {
   return mutateState(env, operation);
+}
+
+export async function fenceThreadResourcePolicyDelivery(operation, env = process.env) {
+  return withThreadResourcePolicyDeliveryFence((stored) => operation(normalizeState(stored, env)), env);
 }
 
 function permissionFor(resourceType, action = "") {

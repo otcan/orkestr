@@ -21,7 +21,7 @@ import { adminPrincipal } from "../packages/core/src/principal.js";
 import { approvePairingChallenge } from "../packages/core/src/security.js";
 import { registerThreadResource, setThreadResourceGrants } from "../packages/core/src/thread-resource-grants.js";
 import { readThreadResourcePolicyState, withThreadResourcePolicyTransaction } from "../packages/core/src/thread-resource-policy-store.js";
-import { listThreadMessages, createThread } from "../packages/core/src/threads.js";
+import { appendThreadMessage, listThreadMessages, createThread } from "../packages/core/src/threads.js";
 import { listEvents } from "../packages/storage/src/store.js";
 
 async function fixture(extraEnv = {}) {
@@ -187,6 +187,38 @@ test("listener revoke advances generation and invalidates a queued delivery befo
   assert.equal(state.mailboxDeliveries[0].state, "revoked");
 });
 
+test("the final mailbox append fence orders a concurrent listener revoke after the durable append", async () => {
+  const scope = await fixture();
+  await grantListenerAccess(scope);
+  const listener = await createMailboxThreadListener({ mailbox: scope.mailbox, threadId: scope.thread.id, principal: scope.principal }, scope.env);
+  const routed = await routeMailboxMessage(inbound(scope.mailbox, "<mailbox-thread-fence@example.test>"), scope.env);
+  const queued = await enqueueMailboxThreadDeliveries(routed.mailboxDeliveryInput, scope.env);
+  let enteredAppend;
+  const appendEntered = new Promise((resolve) => { enteredAppend = resolve; });
+  let releaseAppend;
+  const appendRelease = new Promise((resolve) => { releaseAppend = resolve; });
+  const dispatching = dispatchMailboxThreadDeliveries({
+    deliveryIds: queued.deliveryIds,
+    appendMessage: async (threadId, message, env) => {
+      enteredAppend();
+      await appendRelease;
+      return appendThreadMessage(threadId, message, env);
+    },
+  }, scope.env);
+  await appendEntered;
+  let revokeFinished = false;
+  const revoking = revokeMailboxThreadListener({ mailbox: scope.mailbox, listenerId: listener.listener.id, principal: scope.principal }, scope.env)
+    .then((result) => { revokeFinished = true; return result; });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(revokeFinished, false, "revoke must wait for the fenced authorization/append boundary");
+  releaseAppend();
+  const [dispatched, revoked] = await Promise.all([dispatching, revoking]);
+  assert.equal(dispatched.delivered, 1);
+  assert.equal(revoked.listener.status, "revoked");
+  assert.equal((await listThreadMessages(scope.thread.id, scope.env)).filter((message) => message.source === "mailbox").length, 1);
+  assert.equal((await readThreadResourcePolicyState(scope.env)).mailboxDeliveries[0].state, "delivered");
+});
+
 test("expired claims are recovered transactionally and retried with the same exact delivery id", async () => {
   const scope = await fixture();
   await grantListenerAccess(scope);
@@ -286,6 +318,20 @@ test("mailbox listener HTTP APIs expose create, list, status, and revoke", async
     assert.equal((await read(status)).status.listenerCount, 1);
     const revoked = await fetch(`${baseUrl}/api/mailboxes/${scope.mailbox.id}/listeners/${listener.listener.id}`, { method: "DELETE", headers: { "content-type": "application/json", cookie }, body: JSON.stringify({ reason: "test" }) });
     assert.equal(revoked.status, 200);
+    const preview = await fetch(`${baseUrl}/api/thread-resources/backfill`, {
+      method: "POST", headers: { "content-type": "application/json", cookie }, body: JSON.stringify({ dryRun: true }),
+    });
+    assert.equal(preview.status, 200);
+    const requestedBackfill = await read(await fetch(`${baseUrl}/api/thread-resources/backfill`, {
+      method: "POST", headers: { "content-type": "application/json", cookie }, body: JSON.stringify({ dryRun: false }),
+    }));
+    assert.equal(requestedBackfill.status, "approval_required");
+    await approvePairingChallenge(requestedBackfill.challenge.id, { env: process.env, approvedBy: "node:test" });
+    const appliedBackfill = await read(await fetch(`${baseUrl}/api/thread-resources/backfill`, {
+      method: "POST", headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({ dryRun: false, approval: requestedBackfill.challenge.id }),
+    }));
+    assert.equal(appliedBackfill.dryRun, false);
   } finally {
     await closeServer(server);
     for (const [key, value] of Object.entries(prior)) restoreEnv(key, value);

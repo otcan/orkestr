@@ -33,6 +33,10 @@ function target(input = {}) {
     resourceId: clean(input.resource_id),
     action: clean(input.resource_action).toLowerCase(),
     threadId: clean(input.thread_id),
+    connectorTool: clean(input.connector_mcp_tool || input.connectorMcpTool || input.connector_tool).toLowerCase(),
+    // The connector operation's action is the dispatch target. Never accept a
+    // separate caller-supplied claim selector in place of that actual action.
+    connectorAction: clean(input.action).toLowerCase(),
   };
 }
 
@@ -48,6 +52,8 @@ function claims(auth = {}) {
     policyRevision: Number(auth.policyRevision || 0),
     grantRevision: Number(auth.grantRevision || 0),
     resourceGeneration: Number(auth.resourceGeneration || 0),
+    connectorTool: clean(auth.connectorMcpTool || auth.connector_mcp_tool).toLowerCase(),
+    connectorAction: clean(auth.connectorMcpAction || auth.connector_mcp_action).toLowerCase(),
     jtiHash: clean(auth.resourceJtiHash),
     tokenIdHash: clean(auth.tokenIdHash),
     bearerHash: clean(auth.bearerHash),
@@ -69,7 +75,7 @@ function validClaimSet(value = {}) {
     value.resourceType && value.resourceId && value.actions.length && value.rootThreadId && value.threadId && value.boundaryId &&
     Number.isInteger(value.policyRevision) && value.policyRevision >= 0 && Number.isInteger(value.grantRevision) && value.grantRevision > 0 &&
     Number.isInteger(value.resourceGeneration) && value.resourceGeneration > 0 && value.jtiHash && value.tokenIdHash && value.bearerHash &&
-    value.audience === connectorMcpResourceAudience && value.issuedAt && value.expiresAt
+    value.audience === connectorMcpResourceAudience && value.connectorTool && value.connectorAction && value.issuedAt && value.expiresAt
   );
 }
 
@@ -103,6 +109,7 @@ function sessionMatches(session = {}, value = {}) {
   return session.jtiHash === value.jtiHash && session.tokenIdHash === value.tokenIdHash && session.bearerHash === value.bearerHash && session.audience === value.audience &&
     session.resourceType === value.resourceType && session.resourceId === value.resourceId &&
     sameActions(actions(session.actions, value.resourceType), value.actions) &&
+    session.connectorTool === value.connectorTool && session.connectorAction === value.connectorAction &&
     session.threadId === value.threadId && session.grantThreadId === value.grantThreadId && session.rootThreadId === value.rootThreadId && session.boundaryId === value.boundaryId &&
     Number(session.policyRevision) === value.policyRevision && Number(session.grantRevision) === value.grantRevision &&
     Number(session.resourceGeneration) === value.resourceGeneration && session.issuedAt === value.issuedAt && session.expiresAt === value.expiresAt;
@@ -162,6 +169,7 @@ export async function assertConnectorMcpResourceAccess(auth = {}, input = {}, en
   if (lifetimeError) deny(lifetimeError, 401);
   if (requested.resourceType !== value.resourceType || requested.resourceId !== value.resourceId || !value.actions.includes(requested.action)) deny("resource_target_scope_denied");
   if (requested.threadId !== value.threadId) deny("resource_thread_scope_denied");
+  if (!requested.connectorTool || !requested.connectorAction || requested.connectorTool !== value.connectorTool || requested.connectorAction !== value.connectorAction) deny("resource_dispatch_scope_denied");
   if (threadResourceBoundaryId(env) !== value.boundaryId) deny("resource_boundary_denied");
 
   const [state, threads] = await Promise.all([readThreadResourcePolicy(env), listThreads(env)]);
@@ -193,6 +201,7 @@ function issuedAuth(session = {}) {
     ownerUserId: session.ownerUserId || "", instanceId: session.instanceId || "", accountId: session.accountId || "", accountService: session.accountService || "",
     bindingId: "", chatId: "", allowedChatIds: [], allowedRecipients: [],
     resourceType: session.resourceType || "", resourceId: session.resourceId || "", resourceActions: session.actions || [],
+    connectorMcpTool: session.connectorTool || "", connectorMcpAction: session.connectorAction || "",
     rootThreadId: session.rootThreadId || "", threadId: session.threadId || "", boundaryId: session.boundaryId || "",
     policyRevision: Number(session.policyRevision || 0), grantRevision: Number(session.grantRevision || 0), resourceGeneration: Number(session.resourceGeneration || 0),
     resourceJtiHash: session.jtiHash || "", tokenIdHash: session.tokenIdHash || "", bearerHash: session.bearerHash || "", audience: session.audience || "",
@@ -220,8 +229,10 @@ export async function issueConnectorMcpResourceToken(input = {}, env = process.e
   const resourceId = clean(input.resourceId || input.resource_id);
   const permission = clean(input.resourceAction || input.resource_action || input.permission).toLowerCase();
   const threadId = clean(input.threadId || input.thread_id);
+  const connectorTool = clean(input.connectorMcpTool || input.connector_mcp_tool || input.connectorTool || input.tool).toLowerCase();
+  const connectorAction = clean(input.connectorMcpAction || input.connector_mcp_action || input.connectorAction || input.action).toLowerCase();
   const principal = input.principal || null;
-  if (!resourceType || !resourceId || !threadId || !actions([permission], resourceType).includes(permission)) deny("resource_token_issue_target_invalid", 400);
+  if (!resourceType || !resourceId || !threadId || !actions([permission], resourceType).includes(permission) || !connectorTool || !connectorAction) deny("resource_token_issue_target_invalid", 400);
   const requestedTtlMs = Number(input.ttlMs ?? input.ttl_ms ?? maxTokenLifetimeMs);
   if (!Number.isFinite(requestedTtlMs) || requestedTtlMs < 1_000 || requestedTtlMs > maxTokenLifetimeMs) deny("resource_token_ttl_invalid", 400);
   const [state, threads] = await Promise.all([readThreadResourcePolicy(env), listThreads(env)]);
@@ -244,7 +255,7 @@ export async function issueConnectorMcpResourceToken(input = {}, env = process.e
     scopes: connectorScopes(input.scopes), principalKind: clean(input.principalKind || input.principal_kind) || "external_instance",
     principalId: clean(input.principalId || input.principal_id || principal?.userId), ownerUserId: resource.ownerUserId,
     instanceId: clean(input.instanceId || input.instance_id), accountId: clean(input.accountId || input.account_id), accountService: clean(input.accountService || input.account_service).toLowerCase(),
-    resourceType, resourceId, actions: [permission], threadId, grantThreadId, rootThreadId, boundaryId: resource.boundaryId,
+    resourceType, resourceId, actions: [permission], connectorTool, connectorAction, threadId, grantThreadId, rootThreadId, boundaryId: resource.boundaryId,
     policyRevision, grantRevision: Number(grant.revision), resourceGeneration: Number(resource.generation), permission, issuedAt, expiresAt,
   };
   const session = await persistCurrentResourceSession(value, threadsById, env);

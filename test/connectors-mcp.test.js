@@ -11,7 +11,7 @@ import {
   listConnectorInboxEvents,
   resetConnectorInboxForTest,
 } from "../packages/connectors/src/connector-inbox.js";
-import { listConnectorOutboxJobs } from "../packages/connectors/src/connector-outbox.js";
+import { ensureConnectorOutboxJob, listConnectorOutboxJobs } from "../packages/connectors/src/connector-outbox.js";
 import {
   deliverConnectorInboxEvent,
   retryConnectorInbox,
@@ -471,6 +471,7 @@ test("connector MCP enforces an explicit current resource token target before di
       tenant: {
         token: "scoped-token", scopes: ["connectors:read"], principalKind: "tenant_vm", ownerUserId: "firat", instanceId: "vm-firat", accountId: "sender",
         threadId: thread.id, rootThreadId: thread.id, resourceType: "oxrm", resourceId: registered.resource.id, resourceActions: ["read"],
+        connectorMcpTool: "orkestr_auth", connectorMcpAction: "status",
         boundaryId: registered.resource.boundaryId, policyRevision: policy.policies.find((entry) => entry.threadId === thread.id && entry.resourceType === "oxrm").revision, grantRevision: granted.grants[0].revision,
         resourceGeneration: registered.resource.generation, jti: "test-resource-token", issuedAt, expiresAt: new Date(Date.parse(issuedAt) + (4 * 60_000)).toISOString(),
       },
@@ -486,6 +487,75 @@ test("connector MCP enforces an explicit current resource token target before di
 
     assert.equal(result.status, "ok", JSON.stringify(result));
     assert.equal((await readThreadResourcePolicy(item.env)).resourceSessions[0].state, "active");
+    const crossResource = await callConnectorsMcpTool("orkestr_auth", {
+      service: "whatsapp", action: "status", account_id: "sender", instance_id: "vm-firat", user_id: "firat", thread_id: thread.id,
+      resource_type: "oxrm", resource_id: "other-resource", resource_action: "read",
+    }, item.env);
+    assert.match(JSON.stringify(crossResource), /connector_mcp_resource_target_scope_denied/);
+    const crossThread = await callConnectorsMcpTool("orkestr_auth", {
+      service: "whatsapp", action: "status", account_id: "sender", instance_id: "vm-firat", user_id: "firat", thread_id: "other-thread",
+      resource_type: "oxrm", resource_id: registered.resource.id, resource_action: "read",
+    }, item.env);
+    assert.match(JSON.stringify(crossThread), /connector_mcp_thread_scope_denied/);
+    const wrongDispatch = await callConnectorsMcpTool("orkestr_conversation", {
+      service: "whatsapp", action: "list", account_id: "sender", instance_id: "vm-firat", user_id: "firat", thread_id: thread.id,
+      resource_type: "oxrm", resource_id: registered.resource.id, resource_action: "read",
+    }, item.env);
+    assert.match(JSON.stringify(wrongDispatch), /connector_mcp_resource_dispatch_scope_denied/);
+  } finally {
+    await item.close();
+  }
+});
+
+test("connector MCP routing cannot follow target threads, bindings, or operations outside a resource token thread", async () => {
+  const item = await fixture({ scoped: true });
+  try {
+    const principal = adminPrincipal("admin");
+    const thread = await createThread({ id: "routing-scope-thread", name: "Routing scope", ownerUserId: "firat" }, item.env);
+    const other = await createThread({
+      id: "routing-other-thread", name: "Routing other", ownerUserId: "firat",
+      binding: { connector: "whatsapp", chatId: "firat-jobs@g.us", accountId: "sender" },
+    }, item.env);
+    const registered = await registerThreadResource({ resourceType: "oxrm", resourceId: "routing-crm", ownerUserId: "firat", status: "active" }, { principal }, item.env);
+    const granted = await setThreadResourceGrants(thread.id, "oxrm", [{ resourceId: "routing-crm", permissions: ["read"] }], { principal }, item.env);
+    const policy = await readThreadResourcePolicy(item.env);
+    const issuedAt = new Date().toISOString();
+    item.env.ORKESTR_OXRM_ACCESS_MODE = "enforce";
+    const setRoutingToken = (action) => {
+      const token = `scoped-routing-${action}`;
+      item.env.ORKESTR_CONNECTORS_MCP_BEARER_TOKEN = token;
+      item.env.ORKESTR_CONNECTORS_MCP_TOKENS_JSON = JSON.stringify({ tenant: {
+        token, scopes: ["connectors:read", "connectors:manage"], principalKind: "tenant_vm", ownerUserId: "firat", instanceId: "vm-firat", accountId: "sender", allowedChatIds: ["firat-jobs@g.us"],
+        threadId: thread.id, rootThreadId: thread.id, resourceType: "oxrm", resourceId: registered.resource.id, resourceActions: ["read"],
+        connectorMcpTool: "orkestr_routing", connectorMcpAction: action, boundaryId: registered.resource.boundaryId,
+        policyRevision: policy.policies.find((entry) => entry.threadId === thread.id && entry.resourceType === "oxrm").revision,
+        grantRevision: granted.grants[0].revision, resourceGeneration: registered.resource.generation, jti: `routing-${action}`,
+        issuedAt, expiresAt: new Date(Date.parse(issuedAt) + (4 * 60_000)).toISOString(),
+      } });
+    };
+    setRoutingToken("bind");
+    const crossTarget = await callConnectorsMcpTool("orkestr_routing", {
+      service: "whatsapp", action: "bind", account_id: "sender", instance_id: "vm-firat", user_id: "firat", thread_id: thread.id,
+      conversation_id: "firat-jobs@g.us", target_thread_id: other.id,
+      resource_type: "oxrm", resource_id: registered.resource.id, resource_action: "read",
+    }, item.env);
+    assert.match(JSON.stringify(crossTarget), /connector_mcp_target_thread_scope_denied/);
+    setRoutingToken("unbind");
+    const crossBinding = await callConnectorsMcpTool("orkestr_routing", {
+      service: "whatsapp", action: "unbind", account_id: "sender", instance_id: "vm-firat", user_id: "firat", thread_id: thread.id,
+      binding_id: `thread:${other.id}:whatsapp`, resource_type: "oxrm", resource_id: registered.resource.id, resource_action: "read",
+    }, item.env);
+    assert.match(JSON.stringify(crossBinding), /connector_mcp_binding_scope_denied/);
+    const job = await ensureConnectorOutboxJob({
+      connector: "whatsapp", tenantId: "vm-firat", ownerUserId: "firat", accountId: "sender", chatId: "firat-jobs@g.us", threadId: other.id,
+      sourceMessageId: "routing-cross-operation", sourceRevision: "1", deliveryType: "mcp_send_text", idempotencyKey: "routing-cross-operation", payload: { text: "ignored" },
+    }, item.env);
+    setRoutingToken("retry");
+    const crossOperation = await callConnectorsMcpTool("orkestr_routing", {
+      service: "whatsapp", action: "retry", account_id: "sender", instance_id: "vm-firat", user_id: "firat", thread_id: thread.id,
+      operation_ref: job.job.id, resource_type: "oxrm", resource_id: registered.resource.id, resource_action: "read",
+    }, item.env);
+    assert.match(JSON.stringify(crossOperation), /connector_mcp_operation_scope_denied/);
   } finally {
     await item.close();
   }
