@@ -41,6 +41,15 @@ import {
   threadUsesNativeCodexRuntime,
 } from "./runtime-codex-adapter.js";
 import { appendOrUpdateEventMessage, normalizeCodexModel, normalizeReasoningEffort } from "./codex-app-server-common.js";
+import {
+  codexGenerationFencingMode,
+  currentCodexGeneration,
+  resolveCurrentCodexGeneration,
+  rolloutPathFingerprint,
+  verifyRolloutGeneration,
+} from "./codex-generation-lineage.js";
+import { ensureCodexFinalProjectionDelivery } from "./codex-final-projection.js";
+import { doctorCodexGenerationResources as doctorCodexGenerationResourcesBase } from "./codex-generation-doctor.js";
 import { completeThreadSecurityApproveCommand, threadSecurityApproveChallengeId } from "./security-thread-command.js";
 import { threadUsesContainedUserPolicy } from "./tenant-policy.js";
 import { apiAgentRuntimeStatus, processApiAgentThreadInput, threadUsesApiAgent } from "./tenant-api-agent.js";
@@ -161,6 +170,10 @@ async function recordMessageRouterTrace(message = {}, phase, context = {}, env =
 
 export { consumeThreadConnectorDeliverySignalCount, setThreadConnectorDeliverySignalHandler };
 
+export async function doctorCodexGenerationResources(options = {}) {
+  return doctorCodexGenerationResourcesBase({ ...options, resolveVerifiedRollout });
+}
+
 export function setThreadInputDeliveryFailureHandler(handler) {
   threadInputDeliveryFailureHandler = typeof handler === "function" ? handler : null;
   return () => {
@@ -280,7 +293,7 @@ function temporaryRuntimeReason({ thread = {}, workspace = "", command = "" } = 
 }
 
 function codexThreadId(thread) {
-  return String(thread?.executor?.codexThreadId || thread?.codexThreadId || "").trim();
+  return currentCodexGeneration(thread);
 }
 
 function threadName(thread) {
@@ -896,10 +909,10 @@ export async function runtimeStatus(threadId, env = process.env, messagesOverrid
   return { ...status, turnLifecycle: turnLifecycleFromRuntimeStatus(status, messages) };
 }
 
-async function resolveCodexRolloutPath(threadId) {
+async function resolveCodexRolloutPath(threadId, env = process.env) {
   const id = String(threadId || "").trim();
   if (!/^[0-9a-f-]{36}$/i.test(id)) return null;
-  for (const home of codexHomes()) {
+  for (const home of codexHomes(env)) {
     const dbPath = path.join(home, "state_5.sqlite");
     try {
       const { stdout } = await execFileAsync("sqlite3", ["-readonly", dbPath, `select rollout_path from threads where id='${id.replaceAll("'", "''")}' limit 1;`]);
@@ -1160,6 +1173,60 @@ export async function resolveCodexThreadMetadata(threadOrId, env = process.env) 
   return resolveCodexThreadMetadataById(discovered.codexThreadId, env);
 }
 
+export async function resolveVerifiedRollout(thread, generation = "", options = {}, env = process.env) {
+  if (generation && typeof generation === "object") {
+    env = options && Object.keys(options).length ? options : env;
+    options = generation;
+    generation = "";
+  }
+  const lineage = resolveCurrentCodexGeneration(thread);
+  const expectedGeneration = String(generation || lineage.generation || "").trim();
+  if (!expectedGeneration || lineage.ambiguous || (lineage.generation && lineage.generation !== expectedGeneration)) {
+    return {
+      ok: false,
+      reason: "codex_generation_fields_conflict",
+      expectedGeneration: expectedGeneration || null,
+      observedGenerations: lineage.generations,
+    };
+  }
+  const metadata = await resolveCodexThreadMetadataById(expectedGeneration, env).catch(() => ({}));
+  const candidates = [
+    metadata.codexRolloutPath,
+    options.preferredPath,
+    thread?.runtime?.operatorRolloutPath,
+    thread?.codexRolloutPath,
+    thread?.executor?.metadata?.codexRolloutPath,
+  ].map((value) => String(value || "").trim()).filter(Boolean);
+  const seen = new Set();
+  let lastFailure = null;
+  for (const candidate of candidates) {
+    if (seen.has(candidate)) continue;
+    seen.add(candidate);
+    const verified = await verifyRolloutGeneration(candidate, expectedGeneration, options).catch(() => ({
+      ok: false,
+      reason: "codex_rollout_path_missing",
+      expectedGeneration,
+      pathFingerprint: rolloutPathFingerprint(candidate),
+    }));
+    if (verified.ok) {
+      return {
+        ...verified,
+        rolloutPath: candidate,
+        expectedGeneration,
+        resolvedFrom: candidate === metadata.codexRolloutPath ? "codex_sqlite" : "stored_metadata",
+      };
+    }
+    lastFailure = verified;
+  }
+  return {
+    ok: false,
+    reason: lastFailure?.reason || "codex_rollout_path_missing",
+    expectedGeneration,
+    observedGeneration: lastFailure?.observedGeneration || lastFailure?.generation || null,
+    pathFingerprint: lastFailure?.pathFingerprint || "",
+  };
+}
+
 async function cachedRuntimeCodexThreadMetadata(threadOrId, env = process.env) {
   const id = String(typeof threadOrId === "string" ? threadOrId : codexThreadId(threadOrId) || "").trim();
   if (!id) return {};
@@ -1222,13 +1289,23 @@ async function resolveCodexThreadByWorkspace(workspace, startedAt, env = process
 }
 
 async function rolloutOffsetForThread(thread, env = process.env) {
-  const rolloutPath = await resolveCodexRolloutPath(codexThreadId(thread));
+  const rolloutGeneration = codexThreadId(thread);
+  const mode = codexGenerationFencingMode(env);
+  const verified = mode === "enforce"
+    ? await resolveVerifiedRollout(thread, rolloutGeneration, {}, env)
+    : null;
+  const rolloutPath = verified?.ok
+    ? verified.rolloutPath
+    : mode === "enforce"
+      ? null
+      : await resolveCodexRolloutPath(rolloutGeneration, env);
   if (!rolloutPath) return { rolloutPath: null, rolloutOffset: 0 };
   const stats = await fs.stat(rolloutPath).catch(() => null);
   const size = Number(stats?.size || 0) || 0;
   const lookbackBytes = rolloutSyncLookbackBytes(env);
   return {
     rolloutPath,
+    rolloutGeneration: rolloutGeneration || null,
     rolloutOffset: Math.max(0, size - lookbackBytes),
     rolloutOffsetLookbackApplied: lookbackBytes > 0,
     rolloutOffsetLookbackBytes: lookbackBytes,
@@ -1395,6 +1472,7 @@ export async function wakeThread(threadId, options = {}, env = process.env) {
     rolloutOffset,
     rolloutOffsetLookbackApplied,
     rolloutOffsetLookbackBytes,
+    rolloutGeneration,
   } = await rolloutOffsetForThread(thread, env);
   const lease = {
     id: crypto.randomUUID(),
@@ -1418,6 +1496,7 @@ export async function wakeThread(threadId, options = {}, env = process.env) {
     startedAt: nowIso(),
     heartbeatAt: nowIso(),
     rolloutPath,
+    rolloutGeneration,
     rolloutOffset,
     rolloutOffsetLookbackApplied,
     rolloutOffsetLookbackBytes,
@@ -4038,7 +4117,7 @@ function formatRequestUserInput(argumentsText) {
   ].join("\n").trim();
 }
 
-function parseAssistantRolloutMessages(body, threadId, baseOffset = 0) {
+export function parseAssistantRolloutMessages(body, threadId, baseOffset = 0, generation = "") {
   const messages = [];
   const keyIndexes = new Map();
   let offset = baseOffset;
@@ -4077,7 +4156,7 @@ function parseAssistantRolloutMessages(body, threadId, baseOffset = 0) {
       timestamp,
       phase,
       text,
-      eventId: eventId({ threadId, timestamp, role: "assistant", phase, text }),
+      eventId: eventId({ threadId: generation ? `${threadId}:${generation}` : threadId, timestamp, role: "assistant", phase, text }),
       sourceFormat: parsed?.type === "response_item" ? "response_item" : "event_msg",
     };
     const key = ["assistant", String(phase || ""), normalizedTextKey(text)].join("\n");
@@ -4160,8 +4239,11 @@ function shouldSyncDetachedRollout(thread = {}, activeLeaseThreadIds = new Set()
   return Boolean(codexThreadId(thread) || codexRolloutPathForThread(thread));
 }
 
-async function appendRolloutMessages({ thread, rolloutPath, body, start, initialScan, env }) {
-  const parsed = parseAssistantRolloutMessages(body, thread.id, start);
+async function appendRolloutMessages({ thread, rolloutPath, body, start, initialScan, expectedGeneration = "", env }) {
+  const generation = String(expectedGeneration || codexThreadId(thread) || "").trim();
+  const current = await getThread(thread.id, env).catch(() => null);
+  if (!current || codexThreadId(current) !== generation) return { appended: 0, completedTurnId: null, rejected: "codex_generation_changed" };
+  const parsed = parseAssistantRolloutMessages(body, thread.id, start, generation);
   if (!parsed.length) return { appended: 0, completedTurnId: null };
   const existing = await rolloutExistingMessages(thread.id, parsed, env);
   const existingEventKeys = new Set(existing.map(rolloutMessageEventKey));
@@ -4203,7 +4285,13 @@ async function appendRolloutMessages({ thread, rolloutPath, body, start, initial
       codexTurnId: parentTurnId || null,
       executorTurnId: parentTurnId || null,
     }, env);
-    markConnectorDeliverySignal(appendedMessage);
+    if (String(message.phase || "final_answer").trim().toLowerCase() === "final_answer") {
+      await ensureCodexFinalProjectionDelivery(current, appendedMessage, {
+        runtimeGeneration: generation,
+        turnId: parentTurnId,
+        source: "detached_rollout",
+      }, env).catch(() => {});
+    } else markConnectorDeliverySignal(appendedMessage);
     existingEventKeys.add(eventKey);
     existingTextKeys.add(textKey);
     appended += 1;
@@ -4256,14 +4344,43 @@ async function reconcileDetachedRolloutCompletion(thread, runtime, completedTurn
 }
 
 async function syncLeaseRollout(lease, env = process.env) {
-  const thread = await getThread(lease.threadId, env);
+  let thread = await getThread(lease.threadId, env);
   const codexMetadata = await cachedRuntimeCodexThreadMetadata(thread, env).catch(() => ({}));
   if (Object.keys(codexMetadata).length) {
-    await updateThread(lease.threadId, codexMetadataUpdatePatch(thread, codexMetadata), env).catch(() => {});
+    thread = await updateThread(lease.threadId, codexMetadataUpdatePatch(thread, codexMetadata), env).catch(() => thread);
   }
+  const expectedGeneration = codexThreadId(thread);
+  const fencingMode = codexGenerationFencingMode(env);
   let rolloutPath = lease.rolloutPath;
+  if (fencingMode !== "off") {
+    const verified = await resolveVerifiedRollout(thread, expectedGeneration, { preferredPath: rolloutPath }, env);
+    if (verified.ok) {
+      if (rolloutPath && rolloutPath !== verified.rolloutPath) {
+        await appendEvent({
+          type: "codex_rollout_path_rebound",
+          threadId: thread.id,
+          expectedGeneration,
+          pathFingerprint: verified.pathFingerprint,
+          repairAction: fencingMode === "enforce" ? "rebound" : "proposed_rebind",
+          outcome: fencingMode,
+        }, env).catch(() => {});
+      }
+      if (fencingMode === "enforce") rolloutPath = verified.rolloutPath;
+    } else {
+      await appendEvent({
+        type: "codex_rollout_identity_mismatch",
+        threadId: thread.id,
+        expectedGeneration: expectedGeneration || null,
+        observedGeneration: verified.observedGeneration || null,
+        pathFingerprint: verified.pathFingerprint || rolloutPathFingerprint(rolloutPath),
+        repairAction: fencingMode === "enforce" ? "rejected_projection" : "proposed_reject",
+        outcome: verified.reason,
+      }, env).catch(() => {});
+      if (fencingMode === "enforce") return { lease: { ...lease, rolloutSyncError: verified.reason }, appended: 0 };
+    }
+  }
   if (!rolloutPath) {
-    rolloutPath = await resolveCodexRolloutPath(codexThreadId(thread));
+    rolloutPath = await resolveCodexRolloutPath(codexThreadId(thread), env);
     if (!rolloutPath) {
       const discovered = await resolveCodexThreadByWorkspace(lease.workspace, lease.startedAt, env);
       if (discovered?.codexThreadId && discovered.rolloutPath) {
@@ -4280,7 +4397,10 @@ async function syncLeaseRollout(lease, env = process.env) {
     return { lease: { ...lease, rolloutPath }, appended: 0 };
   }
   const size = Number(stats.size || 0) || 0;
-  const savedOffset = Math.max(0, Number(lease.rolloutOffset || 0));
+  const generationMatches = fencingMode !== "enforce" || String(lease.rolloutGeneration || "").trim() === expectedGeneration;
+  const pathMatches = !lease.rolloutPath || lease.rolloutPath === rolloutPath;
+  const reusableCursor = generationMatches && pathMatches;
+  const savedOffset = reusableCursor ? Math.max(0, Number(lease.rolloutOffset || 0)) : 0;
   const lookbackBytes = rolloutSyncLookbackBytes(env);
   const scannedLookbackBytes = Number(lease.rolloutOffsetLookbackBytes || 0) || 0;
   const needsLookbackScan =
@@ -4290,9 +4410,11 @@ async function syncLeaseRollout(lease, env = process.env) {
   if (size <= savedOffset && !needsLookbackScan) {
     return { lease: { ...lease, rolloutPath }, appended: 0 };
   }
-  const start = needsLookbackScan
-    ? Math.max(0, Math.min(savedOffset, size) - lookbackBytes)
-    : Math.min(savedOffset, size);
+  const start = !reusableCursor
+    ? Math.max(0, size - lookbackBytes)
+    : needsLookbackScan
+      ? Math.max(0, Math.min(savedOffset, size) - lookbackBytes)
+      : Math.min(savedOffset, size);
   const handle = await fs.open(rolloutPath, "r");
   let body = "";
   try {
@@ -4302,44 +4424,27 @@ async function syncLeaseRollout(lease, env = process.env) {
   } finally {
     await handle.close().catch(() => {});
   }
-  const parsed = parseAssistantRolloutMessages(body, lease.threadId, start);
-  const existing = await rolloutExistingMessages(lease.threadId, parsed, env);
-  const existingEventKeys = new Set(existing.map(rolloutMessageEventKey));
-  const existingTextKeys = new Set(
-    existing
-      .filter((message) => message.role === "assistant")
-      .map(rolloutMessageNearTextKey),
-  );
-  let appended = 0;
-  for (const message of parsed) {
-    const eventKey = rolloutMessageEventKey(message);
-    const textKey = rolloutMessageNearTextKey(message);
-    if (existingEventKeys.has(eventKey) || existingTextKeys.has(textKey)) continue;
-    const whatsappParent = latestRolloutWhatsAppInput(existing, message.timestamp, thread);
-    const appendedMessage = await appendThreadMessage(lease.threadId, {
-      role: "assistant",
-      source: message.source,
-      text: message.text,
-      state: "completed",
-      cursor: null,
-      timestamp: message.timestamp,
-      phase: message.phase,
-      eventId: message.eventId,
-      parentMessageId: whatsappParent?.id || null,
-      connector: whatsappParent ? "whatsapp" : "",
-      chatId: whatsappParentChatId(whatsappParent, thread),
-      accountId: whatsappParentAccountId(whatsappParent, thread),
-    }, env);
-    markConnectorDeliverySignal(appendedMessage);
-    existingEventKeys.add(eventKey);
-    existingTextKeys.add(textKey);
-    appended += 1;
+  const projected = await appendRolloutMessages({
+    thread,
+    rolloutPath,
+    body,
+    start,
+    initialScan: !reusableCursor,
+    expectedGeneration,
+    env,
+  });
+  const appended = Number(projected?.appended || 0) || 0;
+  const currentGeneration = codexThreadId(await getThread(thread.id, env).catch(() => null));
+  if (currentGeneration !== expectedGeneration) {
+    return { lease: { ...lease, rolloutSyncError: "codex_generation_changed" }, appended };
   }
   return {
     lease: {
       ...lease,
       rolloutPath,
+      rolloutGeneration: expectedGeneration || null,
       rolloutOffset: Math.max(savedOffset, size),
+      rolloutSyncError: null,
       heartbeatAt: nowIso(),
       ...(needsLookbackScan
         ? {
@@ -4360,6 +4465,9 @@ function rolloutSyncKey(lease = {}, env = process.env) {
 function cachedRolloutLease(lease = {}, env = process.env) {
   const cached = rolloutSyncLeaseCache.get(rolloutSyncKey(lease, env));
   if (!cached) return lease;
+  const cachedGeneration = String(cached.rolloutGeneration || "").trim();
+  const leaseGeneration = String(lease.rolloutGeneration || "").trim();
+  if (leaseGeneration && cachedGeneration && cachedGeneration !== leaseGeneration) return lease;
   const cachedPath = String(cached.rolloutPath || "").trim();
   const leasePath = String(lease.rolloutPath || "").trim();
   if (cachedPath && leasePath && cachedPath !== leasePath) return lease;
@@ -4367,6 +4475,7 @@ function cachedRolloutLease(lease = {}, env = process.env) {
   return {
     ...lease,
     rolloutPath: cachedPath || leasePath,
+    rolloutGeneration: cachedGeneration || leaseGeneration || null,
     rolloutOffset: cached.rolloutOffset,
     rolloutOffsetLookbackApplied: cached.rolloutOffsetLookbackApplied,
     rolloutOffsetLookbackBytes: cached.rolloutOffsetLookbackBytes,
@@ -4412,6 +4521,21 @@ async function syncDetachedCodexRollouts(activeLeaseThreadIds = new Set(), env =
   let appended = 0;
   for (const thread of threads) {
     if (!shouldSyncDetachedRollout(thread, activeLeaseThreadIds)) continue;
+    const lineage = resolveCurrentCodexGeneration(thread);
+    const expectedGeneration = lineage.generation;
+    const fencingMode = codexGenerationFencingMode(env);
+    if (lineage.ambiguous || (fencingMode === "enforce" && !expectedGeneration)) {
+      await appendEvent({
+        type: "codex_rollout_identity_mismatch",
+        threadId: thread.id,
+        expectedGeneration: null,
+        observedGenerations: lineage.generations,
+        projectionSource: "detached_rollout",
+        repairAction: "rejected_projection",
+        outcome: "codex_generation_fields_conflict",
+      }, env).catch(() => {});
+      continue;
+    }
     let rolloutPath = codexRolloutPathForThread(thread);
     const codexMetadata = rolloutPath ? {} : await resolveCodexThreadMetadata(thread, env).catch(() => ({}));
     let currentThread = thread;
@@ -4419,15 +4543,46 @@ async function syncDetachedCodexRollouts(activeLeaseThreadIds = new Set(), env =
       currentThread = await updateThread(thread.id, codexMetadataUpdatePatch(thread, codexMetadata), env).catch(() => thread);
       rolloutPath = codexRolloutPathForThread(currentThread);
     }
-    rolloutPath = rolloutPath || await resolveCodexRolloutPath(codexThreadId(currentThread));
+    if (fencingMode !== "off") {
+      const verified = await resolveVerifiedRollout(currentThread, expectedGeneration, { preferredPath: rolloutPath }, env);
+      if (verified.ok) {
+        if (rolloutPath && rolloutPath !== verified.rolloutPath) {
+          await appendEvent({
+            type: "codex_rollout_path_rebound",
+            threadId: thread.id,
+            expectedGeneration,
+            pathFingerprint: verified.pathFingerprint,
+            projectionSource: "detached_rollout",
+            repairAction: fencingMode === "enforce" ? "rebound" : "proposed_rebind",
+            outcome: fencingMode,
+          }, env).catch(() => {});
+        }
+        if (fencingMode === "enforce") rolloutPath = verified.rolloutPath;
+      } else {
+        await appendEvent({
+          type: "codex_rollout_identity_mismatch",
+          threadId: thread.id,
+          expectedGeneration: expectedGeneration || null,
+          observedGeneration: verified.observedGeneration || null,
+          pathFingerprint: verified.pathFingerprint || rolloutPathFingerprint(rolloutPath),
+          projectionSource: "detached_rollout",
+          repairAction: fencingMode === "enforce" ? "rejected_projection" : "proposed_reject",
+          outcome: verified.reason,
+        }, env).catch(() => {});
+        if (fencingMode === "enforce") continue;
+      }
+    }
+    rolloutPath = rolloutPath || await resolveCodexRolloutPath(expectedGeneration, env);
     if (!rolloutPath) continue;
     const stats = await fs.stat(rolloutPath).catch(() => null);
     if (!stats?.isFile()) continue;
     const size = Number(stats.size || 0) || 0;
     const runtime = currentThread.runtime && typeof currentThread.runtime === "object" ? currentThread.runtime : {};
     const storedPath = String(runtime.operatorRolloutPath || "").trim();
+    const storedGeneration = String(runtime.operatorRolloutGeneration || "").trim();
     const storedOffset = Math.max(0, Number(runtime.operatorRolloutOffset || 0) || 0);
-    const hasStoredOffset = storedPath === rolloutPath && storedOffset > 0;
+    const generationCursorMatches = fencingMode !== "enforce" || storedGeneration === expectedGeneration;
+    const hasStoredOffset = storedPath === rolloutPath && generationCursorMatches && storedOffset > 0;
     const lookbackBytes = rolloutSyncLookbackBytes(env);
     const start = hasStoredOffset ? Math.min(storedOffset, size) : Math.max(0, size - lookbackBytes);
     let completedTurnId = "";
@@ -4447,22 +4602,28 @@ async function syncDetachedCodexRollouts(activeLeaseThreadIds = new Set(), env =
         body,
         start,
         initialScan: !hasStoredOffset,
+        expectedGeneration,
         env,
       }).catch(() => ({ appended: 0, completedTurnId: null }));
       appended += Number(projected?.appended || 0) || 0;
       completedTurnId = String(projected?.completedTurnId || "").trim();
     }
-    const completionPatch = await reconcileDetachedRolloutCompletion(currentThread, runtime, completedTurnId, env);
-    const rolloutChanged = storedPath !== rolloutPath || storedOffset !== size;
+    const latestThread = await getThread(currentThread.id, env).catch(() => null);
+    if (fencingMode === "enforce" && codexThreadId(latestThread) !== expectedGeneration) continue;
+    const latestRuntime = latestThread?.runtime && typeof latestThread.runtime === "object" ? latestThread.runtime : runtime;
+    const completionPatch = await reconcileDetachedRolloutCompletion(latestThread || currentThread, latestRuntime, completedTurnId, env);
+    const rolloutChanged = storedPath !== rolloutPath || storedGeneration !== expectedGeneration || storedOffset !== size;
     if (completionPatch || rolloutChanged) {
       await updateThread(currentThread.id, {
         ...(completionPatch || {}),
         runtime: {
-          ...(completionPatch?.runtime || runtime),
-          runtimeKind: runtime.runtimeKind || currentThread.runtimeKind || "codex-app-server",
+          ...(completionPatch?.runtime || latestRuntime),
+          runtimeKind: latestRuntime.runtimeKind || currentThread.runtimeKind || "codex-app-server",
           operatorRolloutPath: rolloutPath,
+          operatorRolloutGeneration: expectedGeneration || null,
           operatorRolloutOffset: size,
           operatorRolloutSyncedAt: nowIso(),
+          operatorRolloutSyncError: null,
         },
       }, env).catch(() => {});
     }
@@ -5140,8 +5301,17 @@ export async function doctorRuntimeResources({ env = process.env, repair = false
     }
   }
 
+  const codexGeneration = await doctorCodexGenerationResources({ env, repair, resolveVerifiedRollout }).catch((error) => ({
+    checked: 0,
+    skippedAmbiguous: 0,
+    issues: [{ severity: "error", code: "codex_generation_doctor_failed", message: error?.message || String(error) }],
+    actions: [],
+  }));
+  issues.push(...codexGeneration.issues);
+  actions.push(...codexGeneration.actions);
+
   const relevantIssues = automatic
-    ? issues.filter((issue) => issue.code === "expired_temp_runtime" || issue.code === "orphan_temp_codex_process")
+    ? issues.filter((issue) => issue.code === "expired_temp_runtime" || issue.code === "orphan_temp_codex_process" || issue.code.startsWith("codex_") || issue.code === "completed_turn_missing_final_projection" || issue.code === "final_message_missing_outbox")
     : issues;
   const counts = {
     activeLeases: activeLeases.length,
@@ -5154,6 +5324,9 @@ export async function doctorRuntimeResources({ env = process.env, repair = false
     tempCodexProcesses: tempCodexProcesses.length,
     issues: relevantIssues.length,
     repaired: actions.length,
+    codexGenerationChecked: codexGeneration.checked,
+    skippedAmbiguous: codexGeneration.skippedAmbiguous,
+    stillBroken: relevantIssues.filter((issue) => !actions.some((action) => action.threadId === issue.threadId && action.code === issue.code)).length,
   };
   const status = relevantIssues.some((issue) => issue.severity === "error") ? "broken" : relevantIssues.length ? "warning" : "ok";
   return {

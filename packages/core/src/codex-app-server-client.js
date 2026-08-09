@@ -49,7 +49,8 @@ import { appendTurnLifecycleEvent } from "./turn-lifecycle.js";
 import { markConnectorDeliverySignal } from "./connector-delivery-signals.js";
 import { recordCodexRuntimeAuthFailureSignal } from "./codex-auth-health.js";
 import { completeRuntimeLiveness, recordRuntimeLiveness } from "./runtime-liveness.js";
-import { markRuntimeFinalDeliveryPending, runtimeFinalDeliveryPending } from "./runtime-final-delivery.js";
+import { runtimeFinalDeliveryPending } from "./runtime-final-delivery.js";
+import { ensureCodexFinalProjectionDelivery } from "./codex-final-projection.js";
 
 const execFileAsync = promisify(execFile);
 const clients = new Map();
@@ -357,6 +358,41 @@ export class CodexAppServerClient {
     if (mailboxTurnRestricted(remembered)) return remembered;
     const messages = await listThreadMessages(thread.id, this.env).catch(() => []);
     return messages.find((item) => clean(item.codexTurnId || item.executorTurnId) === effectiveTurnId && mailboxTurnRestricted(item)) || null;
+  }
+
+  async recoverCompletedTurnProjection(thread, codexId, turnId, completedTurn = {}) {
+    const hasProjectedFinal = async () => (await listThreadMessages(thread.id, this.env).catch(() => [])).some((message) =>
+      clean(message.role).toLowerCase() === "assistant" &&
+      clean(message.phase || "final_answer").toLowerCase() === "final_answer" &&
+      clean(message.codexTurnId || message.executorTurnId) === turnId &&
+      clean(message.codexThreadId || message.executorThreadId) === codexId
+    );
+    if (!turnId || await hasProjectedFinal()) return { recovered: false, missing: false };
+    let sourceTurn = completedTurn;
+    if (!Array.isArray(sourceTurn?.items) || !sourceTurn.items.length) {
+      const read = await this.request("thread/read", { threadId: codexId, includeTurns: true }).catch(() => null);
+      sourceTurn = (Array.isArray(read?.thread?.turns) ? read.thread.turns : []).find((item) => clean(item?.id) === turnId) || sourceTurn;
+    }
+    let recovered = false;
+    for (const item of Array.isArray(sourceTurn?.items) ? sourceTurn.items : []) {
+      if (clean(itemPhase(item) || "final_answer").toLowerCase() !== "final_answer") continue;
+      if (!itemText(item)) continue;
+      const projected = await this.projectItem(item, { threadId: codexId, turnId, timestamp: sourceTurn.completedAt || sourceTurn.updatedAt || nowIso() }, codexId).catch(() => null);
+      if (projected) recovered = true;
+    }
+    const missing = !(await hasProjectedFinal());
+    if (missing || recovered) {
+      await appendEvent({
+        type: missing ? "completed_turn_missing_final_projection" : "codex_final_projection_recovered",
+        threadId: thread.id,
+        expectedGeneration: codexId,
+        turnId,
+        projectionSource: "turn_completion_backstop",
+        repairAction: missing ? "operator_review_required" : "hydrated_completed_turn",
+        outcome: missing ? "missing" : "recovered",
+      }, this.env).catch(() => {});
+    }
+    return { recovered, missing };
   }
 
   async handleServerRequest(message) {
@@ -672,7 +708,7 @@ export class CodexAppServerClient {
         for (const [requestKey, request] of this.pendingRequests.entries()) {
           if (request?.codexThreadId === threadId && (!turnId || !request.turnId || request.turnId === turnId)) this.pendingRequests.delete(requestKey);
         }
-        const thread = await threadForCodexThreadId(threadId, this.env);
+        let thread = await threadForCodexThreadId(threadId, this.env);
         if (thread) {
           const { finishTaskAgentTurn, isTerminalTaskAgentThread } = await import("./task-agents.js");
           if (isTerminalTaskAgentThread(thread)) {
@@ -708,6 +744,10 @@ export class CodexAppServerClient {
               status: thread.agentTaskStatus,
             }, this.env).catch(() => {});
             return;
+          }
+          if (status === "completed") {
+            await this.recoverCompletedTurnProjection(thread, threadId, turnId, turn).catch(() => null);
+            thread = await threadForCodexThreadId(threadId, this.env) || thread;
           }
           await updateThread(thread.id, {
             state: status === "failed" ? "failed" : "ready",
@@ -861,7 +901,17 @@ export class CodexAppServerClient {
   async projectItem(item, params = {}, fallbackCodexThreadId = "") {
     const codexId = clean(params.threadId || item.threadId || fallbackCodexThreadId);
     const thread = await threadForCodexThreadId(codexId, this.env);
-    if (!thread) return null;
+    if (!thread) {
+      await appendEvent({
+        type: "codex_app_server_notification_unmapped",
+        observedGeneration: codexId || null,
+        turnId: clean(params.turnId || item.turnId) || null,
+        itemId: clean(item.id) || null,
+        projectionSource: "live",
+        outcome: "ignored",
+      }, this.env).catch(() => {});
+      return null;
+    }
     const type = clean(item.type);
     await recordRuntimeLiveness(thread.id, {
       runtimeGeneration: codexId,
@@ -908,21 +958,17 @@ export class CodexAppServerClient {
       ...whatsappProjectionFields(whatsappParent, thread),
     }, this.env);
     const finalAnswer = clean(phase).toLowerCase() === "final_answer";
-    if (finalAnswer && whatsappOrigin(message)) {
-      await markRuntimeFinalDeliveryPending(thread.id, {
-        messageId: message.id,
-        parentMessageId: message.parentMessageId,
-        runtimeGeneration: codexId,
-        turnId,
-        connector: "whatsapp",
-        chatId: message.chatId,
-        accountId: message.accountId,
-      }, this.env).catch(() => {});
-    }
     if (!message?.coalescedUpdate) {
       notifyMessageHandler({ thread, message });
-      markConnectorDeliverySignal(message);
     }
+    if (finalAnswer) {
+      await ensureCodexFinalProjectionDelivery(thread, message, {
+        runtimeGeneration: codexId,
+        turnId,
+        source: "live",
+        signal: !message?.coalescedUpdate,
+      }, this.env).catch(() => {});
+    } else if (!message?.coalescedUpdate) markConnectorDeliverySignal(message);
     if (finalAnswer) {
       const { completeTaskAgentFromMessage } = await import("./task-agents.js");
       await completeTaskAgentFromMessage(thread, message, this.env).catch((error) => appendEvent({

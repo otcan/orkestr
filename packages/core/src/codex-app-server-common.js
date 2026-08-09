@@ -21,6 +21,7 @@ import {
 } from "./threads.js";
 import { defaultRuntimeSettings } from "./runtime-settings.js";
 import { taskAgentDeveloperInstructions } from "./task-agent-profiles.js";
+import { currentCodexGeneration, resolveCurrentCodexGeneration } from "./codex-generation-lineage.js";
 
 export const appServerTransports = new Set(["app-server", "codex-app-server"]);
 export const tmuxTransports = new Set(["tmux", "legacy", "codex-tmux"]);
@@ -238,7 +239,7 @@ function shouldCoalesceCodexEventMessageUpdate(existing = {}, patch = {}, env = 
 }
 
 export function codexThreadId(thread) {
-  return clean(thread?.executor?.codexThreadId || thread?.codexThreadId);
+  return currentCodexGeneration(thread);
 }
 
 export function codexSessionId(thread) {
@@ -484,10 +485,11 @@ export async function threadForCodexThreadId(codexId, env = process.env) {
   const id = clean(codexId);
   if (!id) return null;
   const threads = await listThreads(env).catch(() => []);
-  return threads.find((thread) =>
-    clean(thread?.executor?.codexThreadId || thread?.codexThreadId) === id ||
-    clean(thread?.threadId) === id,
-  ) || null;
+  return threads.find((thread) => {
+    const lineage = resolveCurrentCodexGeneration(thread);
+    if (lineage.ambiguous) return false;
+    return lineage.generation === id || clean(thread?.threadId) === id;
+  }) || null;
 }
 
 export async function appendOrUpdateEventMessage(thread, input, env = process.env) {

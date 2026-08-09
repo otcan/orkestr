@@ -192,6 +192,78 @@ test("detached app-server WhatsApp threads project direct Codex rollout replies"
   }
 });
 
+test("detached rollout fencing rebinds a stale old-generation path and projects only the current final", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-detached-generation-fence-"));
+  const oldPath = path.join(home, "old.jsonl");
+  const currentPath = path.join(home, "current.jsonl");
+  const env = {
+    ORKESTR_HOME: path.join(home, "orkestr"),
+    ORKESTR_CODEX_GENERATION_FENCING: "enforce",
+    ORKESTR_ROLLOUT_SYNC_LOOKBACK_BYTES: "8192",
+  };
+  const currentGeneration = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  await fs.writeFile(oldPath, [
+    JSON.stringify({ type: "session_meta", payload: { id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb" } }),
+    JSON.stringify({ timestamp: "2026-08-09T10:00:01.000Z", type: "event_msg", payload: { type: "agent_message", phase: "final_answer", message: "stale reply" } }),
+  ].join("\n") + "\n");
+  await fs.writeFile(currentPath, [
+    JSON.stringify({ type: "session_meta", payload: { id: currentGeneration } }),
+    JSON.stringify({ timestamp: "2026-08-09T10:01:02.000Z", type: "event_msg", payload: { type: "agent_message", phase: "final_answer", message: "current reply" } }),
+  ].join("\n") + "\n");
+  await createThread({
+    id: "detached-generation-fence-thread",
+    name: "Detached generation fence",
+    state: "working",
+    codexThreadId: currentGeneration,
+    codexRolloutPath: currentPath,
+    executor: {
+      type: "codex",
+      transport: "app-server",
+      codexThreadId: currentGeneration,
+      metadata: { codexThreadId: currentGeneration, runtimeKind: "codex-app-server", codexRolloutPath: currentPath },
+    },
+    runtime: {
+      runtimeKind: "codex-app-server",
+      state: "working",
+      codexThreadId: currentGeneration,
+      activeTurnId: "turn-current",
+      operatorRolloutPath: oldPath,
+      operatorRolloutGeneration: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      operatorRolloutOffset: 999,
+    },
+    binding: { connector: "whatsapp", chatId: "chat-fenced", responderAccountId: "sender" },
+  }, env);
+  const parent = await appendThreadMessage("detached-generation-fence-thread", {
+    role: "user",
+    source: "whatsapp_inbound",
+    connector: "whatsapp",
+    chatId: "chat-fenced",
+    accountId: "sender",
+    text: "current request",
+    timestamp: "2026-08-09T10:01:00.000Z",
+    state: "completed",
+    codexTurnId: "turn-current",
+  }, env);
+  consumeThreadConnectorDeliverySignalCount();
+
+  const first = await syncRuntimeLeases(env);
+  const second = await syncRuntimeLeases(env);
+  const messages = await listThreadMessages("detached-generation-fence-thread", env);
+  const stored = await getThread("detached-generation-fence-thread", env);
+
+  assert.equal(first.appended, 1);
+  assert.equal(second.appended, 0);
+  assert.equal(messages.some((message) => message.text === "stale reply"), false);
+  const reply = messages.find((message) => message.text === "current reply");
+  assert.equal(reply?.parentMessageId, parent.id);
+  assert.equal(reply?.codexThreadId, currentGeneration);
+  assert.equal(stored.runtime.operatorRolloutPath, currentPath);
+  assert.equal(stored.runtime.operatorRolloutGeneration, currentGeneration);
+  assert.equal(stored.runtime.finalDelivery.messageId, reply.id);
+  assert.equal(stored.runtime.finalDelivery.status, "pending");
+  assert.equal(consumeThreadConnectorDeliverySignalCount(), 1);
+});
+
 test("detached rollout final answers clear matching active app-server turns", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-detached-rollout-complete-"));
   const rolloutPath = path.join(home, "rollout.jsonl");

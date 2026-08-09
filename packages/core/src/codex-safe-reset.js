@@ -4,6 +4,7 @@ import { ensureDataDirs } from "../../storage/src/paths.js";
 import { appendEvent } from "../../storage/src/store.js";
 import { getThread, listThreadMessages, updateThread } from "./threads.js";
 import { clean, codexSessionId, codexThreadId, nowIso } from "./codex-app-server-common.js";
+import { codexGenerationTransitionPatch } from "./codex-generation-lineage.js";
 
 function checkpointMessageText(message) {
   const role = clean(message?.role || "unknown");
@@ -68,21 +69,23 @@ function codexSafeResetPatch(thread, checkpoint, reason) {
     previousState: thread?.state || null,
     previousRuntimeState: runtime.state || null,
   };
+  const transition = codexGenerationTransitionPatch(thread, "", "");
   return {
+    ...transition,
     state: "waking",
     lastError: null,
     runtimeKind: "codex-app-server",
     codexThreadId: null,
     codexSessionId: null,
     executor: {
-      ...(thread.executor || {}),
+      ...(transition.executor || {}),
       id: "codex",
       type: "codex",
       transport: "app-server",
       codexThreadId: null,
       codexSessionId: null,
       metadata: {
-        ...metadata,
+        ...(transition.executor?.metadata || metadata),
         transport: "app-server",
         runtimeKind: "codex-app-server",
         codexThreadId: null,
@@ -91,7 +94,7 @@ function codexSafeResetPatch(thread, checkpoint, reason) {
       },
     },
     runtime: {
-      ...runtime,
+      ...(transition.runtime || runtime),
       runtimeKind: "codex-app-server",
       state: "waking",
       activeTurnId: null,

@@ -49,6 +49,7 @@ export async function markRuntimeFinalDeliveryPending(threadId, input = {}, env 
     connector: clean(input.connector || "whatsapp"),
     chatId: clean(input.chatId) || null,
     accountId: clean(input.accountId) || null,
+    projectionSource: clean(input.projectionSource) || clean(current?.projectionSource) || null,
     status: "pending",
     completionStatus: clean(input.completionStatus || "completed"),
     pendingAt: clean(current?.messageId) === messageId ? current.pendingAt || at : at,
