@@ -1,81 +1,181 @@
 import { appendEvent } from "../../storage/src/store.js";
-import { getThread } from "./threads.js";
-import { codexGenerationFencingMode, currentCodexGeneration } from "./codex-generation-lineage.js";
+import { ensureConnectorOutboxJobThroughAdapter } from "./connector-outbox-adapter.js";
+import { resourceOwnerUserId } from "./policy.js";
 import { markConnectorDeliverySignal } from "./connector-delivery-signals.js";
+import { currentCodexGenerationMatches } from "./codex-generation.js";
 import { markRuntimeFinalDeliveryPending } from "./runtime-final-delivery.js";
-import { whatsappOrigin } from "./codex-app-server-whatsapp.js";
+import { getThread, getThreadMessage, updateThreadMessage } from "./threads.js";
+
+// A persisted marker handles restarts; this short-lived reservation closes the
+// in-process race between a live event and history/rollout reconciliation.
+const finalProjectionSignalReservations = new Set();
 
 function clean(value) {
   return String(value || "").trim();
 }
 
-export async function ensureCodexFinalProjectionDelivery(threadOrId, message, input = {}, env = process.env) {
-  if (!message || clean(message.phase || "final_answer").toLowerCase() !== "final_answer") {
-    return { ok: true, final: false, signaled: false, message };
+function isFinalAnswer(message = {}) {
+  return clean(message.role).toLowerCase() === "assistant" &&
+    clean(message.state || "completed").toLowerCase() === "completed" &&
+    clean(message.phase || "final_answer").toLowerCase() === "final_answer";
+}
+
+function whatsappFinal(message = {}) {
+  return clean(message.connector).toLowerCase() === "whatsapp" && Boolean(clean(message.chatId));
+}
+
+function signalReservationKey(threadId, messageId, env = process.env) {
+  return `${clean(env.ORKESTR_HOME) || "default"}:${clean(threadId)}:${clean(messageId)}`;
+}
+
+function generationIsAccepted(thread, generation, allowUnboundGeneration = false) {
+  if (!generation) return { ok: true, reason: "generation_not_provided", resolution: null };
+  const match = currentCodexGenerationMatches(thread, generation);
+  const resetGeneration = clean(thread?.runtime?.safeReset?.codexThreadId);
+  if (match.ok) return match;
+  if (allowUnboundGeneration && match.reason === "codex_generation_missing" && !resetGeneration) {
+    return { ...match, ok: true, reason: "shadow_unbound_generation" };
   }
-  const thread = typeof threadOrId === "string"
-    ? await getThread(threadOrId, env).catch(() => null)
-    : await getThread(threadOrId?.id, env).catch(() => null) || threadOrId;
-  if (!thread) return { ok: false, final: true, signaled: false, reason: "thread_not_found", message };
-  const expectedGeneration = currentCodexGeneration(thread);
-  const observedGeneration = clean(input.runtimeGeneration || message.codexThreadId || message.executorThreadId);
-  const strictGeneration = codexGenerationFencingMode(env) === "enforce";
-  if ((strictGeneration && !expectedGeneration) || (expectedGeneration && observedGeneration && observedGeneration !== expectedGeneration)) {
-    await appendEvent({
-      type: "codex_rollout_identity_mismatch",
-      threadId: thread.id,
-      expectedGeneration: expectedGeneration || null,
-      observedGeneration: observedGeneration || null,
-      turnId: clean(input.turnId || message.codexTurnId || message.executorTurnId) || null,
-      itemId: clean(message.codexItemId || message.executorItemId) || null,
-      projectionSource: clean(input.source || message.source) || null,
-      repairAction: "rejected_projection",
-      outcome: "generation_mismatch",
-    }, env).catch(() => {});
-    return { ok: false, final: true, signaled: false, reason: "codex_generation_mismatch", message };
-  }
-  if (!whatsappOrigin(message)) return { ok: true, final: true, signaled: false, message };
-  const currentDelivery = thread.runtime?.finalDelivery || null;
-  const alreadyEstablished = clean(currentDelivery?.messageId) === clean(message.id);
-  if (!alreadyEstablished) {
-    await markRuntimeFinalDeliveryPending(thread.id, {
-      messageId: message.id,
-      parentMessageId: message.parentMessageId,
-      runtimeGeneration: expectedGeneration || observedGeneration,
-      turnId: clean(input.turnId || message.codexTurnId || message.executorTurnId),
-      connector: "whatsapp",
-      chatId: message.chatId,
-      accountId: message.accountId,
-      projectionSource: clean(input.source || message.source),
+  return match;
+}
+
+async function recordProjectionRejection(type, { thread, message, generation, match, source }, env) {
+  await appendEvent({
+    type,
+    threadId: thread.id,
+    messageId: message.id,
+    observedGeneration: generation || null,
+    expectedGeneration: match?.resolution?.id || null,
+    reason: match?.reason || "generation_rejected",
+    source,
+  }, env).catch(() => {});
+}
+
+/**
+ * Establish the durable side effects of a Codex final answer exactly once.
+ * Every projection path calls this after it has upserted the same assistant
+ * message. The connector outbox remains the delivery authority; this helper
+ * only creates its idempotent intent and records the pending acknowledgement.
+ */
+export async function reconcileCodexFinalProjection({
+  thread,
+  message,
+  runtimeGeneration = "",
+  allowUnboundGeneration = false,
+  source = "unknown",
+  env = process.env,
+} = {}) {
+  if (!thread?.id || !message?.id || !isFinalAnswer(message)) return { message, reconciled: false, reason: "not_final_answer" };
+  const generation = clean(allowUnboundGeneration ? runtimeGeneration : runtimeGeneration || message.codexThreadId || message.executorThreadId);
+  const initialGeneration = generationIsAccepted(thread, generation, allowUnboundGeneration);
+  if (!initialGeneration.ok) {
+    await recordProjectionRejection("codex_final_projection_rejected", {
+      thread,
+      message,
+      generation,
+      match: initialGeneration,
+      source,
     }, env);
+    return { message, reconciled: false, rejected: true, reason: initialGeneration.reason };
   }
-  const shouldSignal = input.signal !== false && (!alreadyEstablished || input.forceSignal === true);
-  if (shouldSignal) markConnectorDeliverySignal(message);
-  if (!alreadyEstablished && clean(input.source) && clean(input.source) !== "live") {
-    await appendEvent({
-      type: "codex_final_projection_recovered",
-      threadId: thread.id,
-      expectedGeneration,
-      turnId: clean(input.turnId || message.codexTurnId || message.executorTurnId) || null,
-      itemId: clean(message.codexItemId || message.executorItemId) || null,
-      projectionSource: clean(input.source),
-      messageId: message.id,
-      repairAction: "established_final_delivery",
-      outcome: "pending",
-    }, env).catch(() => {});
-    if (clean(input.source) === "doctor") {
-      await appendEvent({
-        type: "codex_final_delivery_backfilled",
-        threadId: thread.id,
-        expectedGeneration,
-        turnId: clean(input.turnId || message.codexTurnId || message.executorTurnId) || null,
-        itemId: clean(message.codexItemId || message.executorItemId) || null,
-        projectionSource: "doctor",
-        messageId: message.id,
-        repairAction: "backfilled_final_delivery",
-        outcome: "pending",
-      }, env).catch(() => {});
+  if (!whatsappFinal(message)) return { message, reconciled: false, reason: "not_whatsapp_final" };
+
+  const pending = await markRuntimeFinalDeliveryPending(thread.id, {
+    messageId: message.id,
+    parentMessageId: message.parentMessageId,
+    runtimeGeneration: generation || null,
+    turnId: message.codexTurnId || message.executorTurnId || null,
+    connector: "whatsapp",
+    chatId: message.chatId,
+    accountId: message.accountId,
+  }, env).catch((error) => ({ ok: false, reason: error?.message || "final_delivery_pending_failed" }));
+  if (!pending?.ok) {
+    await recordProjectionRejection("codex_final_projection_pending_failed", {
+      thread,
+      message,
+      generation,
+      match: { reason: pending?.reason || "final_delivery_pending_failed" },
+      source,
+    }, env);
+    return { message, reconciled: false, rejected: true, reason: pending?.reason || "final_delivery_pending_failed" };
+  }
+  const currentThread = await getThread(thread.id, env).catch(() => null) || thread;
+  const postPendingGeneration = generationIsAccepted(currentThread, generation, allowUnboundGeneration);
+  if (!postPendingGeneration.ok) {
+    await recordProjectionRejection("codex_final_projection_post_pending_rejected", {
+      thread: currentThread,
+      message,
+      generation,
+      match: postPendingGeneration,
+      source,
+    }, env);
+    return { message, reconciled: false, rejected: true, reason: postPendingGeneration.reason };
+  }
+
+  const ownerUserId = resourceOwnerUserId(currentThread, env);
+  const sourceRevision = clean(message.finalProjectionSourceRevision) || String(Number(message.revision || 1) || 1);
+  const ensured = await ensureConnectorOutboxJobThroughAdapter({
+    tenantId: ownerUserId,
+    ownerUserId,
+    connector: "whatsapp",
+    accountId: clean(message.accountId || currentThread.binding?.responderAccountId || currentThread.binding?.outboundAccountId),
+    chatId: message.chatId,
+    threadId: currentThread.id,
+    sourceEventId: clean(message.eventId || message.sourceEventId || message.id),
+    sourceMessageId: message.id,
+    sourceRevision,
+    deliveryType: "final",
+    payload: { text: clean(message.text) },
+    metadata: {
+      kind: "thread",
+      parentMessageId: clean(message.parentMessageId),
+      runtimeGeneration: generation || "",
+      finalProjection: true,
+    },
+  }, env);
+
+  let projected = message;
+  if (clean(message.mirrorOutboxJobId) !== clean(ensured.job?.id)) {
+    projected = await updateThreadMessage(currentThread.id, message.id, {
+      mirrorOutboxJobId: ensured.job?.id || null,
+      mirrorDeliveryType: "final",
+      finalProjectionOutboxEnsuredAt: new Date().toISOString(),
+      finalProjectionRuntimeGeneration: generation || null,
+      finalProjectionSourceRevision: sourceRevision,
+    }, env).catch(() => message);
+  }
+  if (!projected.finalProjectionConnectorSignaledAt) {
+    const stored = await getThreadMessage(currentThread.id, message.id, env).catch(() => null);
+    if (stored?.finalProjectionConnectorSignaledAt) {
+      projected = stored;
+    } else {
+      const reservation = signalReservationKey(currentThread.id, message.id, env);
+      if (!finalProjectionSignalReservations.has(reservation)) {
+        finalProjectionSignalReservations.add(reservation);
+        try {
+          const marked = await updateThreadMessage(currentThread.id, message.id, {
+            finalProjectionConnectorSignaledAt: new Date().toISOString(),
+          }, env).catch(() => null);
+          if (marked?.finalProjectionConnectorSignaledAt) {
+            projected = marked;
+            markConnectorDeliverySignal(projected);
+          }
+        } finally {
+          finalProjectionSignalReservations.delete(reservation);
+        }
+      }
     }
   }
-  return { ok: true, final: true, signaled: shouldSignal, pendingCreated: !alreadyEstablished, message };
+  await appendEvent({
+    type: "codex_final_projection_reconciled",
+    threadId: currentThread.id,
+    messageId: message.id,
+    runtimeGeneration: generation || null,
+    turnId: clean(message.codexTurnId || message.executorTurnId) || null,
+    outboxJobId: ensured.job?.id || null,
+    outboxCreated: ensured.created === true,
+    finalDeliveryPending: pending?.pending === true,
+    source,
+  }, env).catch(() => {});
+  return { message: projected, reconciled: true, outboxJob: ensured.job || null, outboxCreated: ensured.created === true };
 }

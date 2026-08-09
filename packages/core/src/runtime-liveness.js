@@ -1,5 +1,6 @@
 import { appendEvent } from "../../storage/src/store.js";
 import { getThread, updateThread } from "./threads.js";
+import { currentCodexGenerationMatches, resolveCurrentCodexGeneration } from "./codex-generation.js";
 
 const EVIDENCE_TYPES = new Set([
   "model_started",
@@ -33,20 +34,36 @@ function runtimeGeneration(thread = {}, input = {}) {
   return clean(
     input.runtimeGeneration ||
     input.codexThreadId ||
-    thread?.executor?.codexThreadId ||
-    thread?.codexThreadId ||
-    thread?.runtime?.runtimeGeneration
+    resolveCurrentCodexGeneration(thread).id
   );
 }
 
 function currentRuntimeGeneration(thread = {}) {
-  return clean(thread?.executor?.codexThreadId || thread?.codexThreadId || thread?.runtime?.runtimeGeneration);
+  return clean(resolveCurrentCodexGeneration(thread).id);
 }
 
 function scopedToCurrentRuntime(thread = {}, input = {}) {
-  const expected = currentRuntimeGeneration(thread);
-  const actual = runtimeGeneration(thread, input);
-  return !expected || !actual || expected === actual;
+  const actual = clean(input.runtimeGeneration || input.codexThreadId);
+  const resolution = resolveCurrentCodexGeneration(thread);
+  if (resolution.ambiguous) return false;
+  // Liveness also covers connector-only threads. With no known Codex
+  // generation there is no basis for declaring an incoming delivery update
+  // stale; begin enforcing as soon as the thread is bound to Codex.
+  if (!resolution.id) return true;
+  return !actual || currentCodexGenerationMatches(thread, actual).ok;
+}
+
+async function recordGenerationRejection(thread, input, operation, env = process.env) {
+  const resolution = resolveCurrentCodexGeneration(thread);
+  await appendEvent({
+    type: "runtime_liveness_generation_rejected",
+    operation,
+    threadId: thread.id,
+    expectedRuntimeGeneration: resolution.id || null,
+    observedRuntimeGeneration: clean(input.runtimeGeneration || input.codexThreadId) || null,
+    reason: resolution.ambiguous ? resolution.reason : "superseded_or_missing_runtime_generation",
+    candidateSources: Object.keys(resolution.candidates || {}),
+  }, env).catch(() => {});
 }
 
 function boundedObject(value, maxBytes = 16_384) {
@@ -64,13 +81,7 @@ export async function recordRuntimeLiveness(threadId, input = {}, env = process.
   const thread = await getThread(threadId, env);
   if (!thread) return { ok: false, recorded: false, reason: "thread_not_found" };
   if (!scopedToCurrentRuntime(thread, input)) {
-    await appendEvent({
-      type: "runtime_liveness_stale_generation_rejected",
-      threadId: thread.id,
-      expectedRuntimeGeneration: currentRuntimeGeneration(thread) || null,
-      runtimeGeneration: runtimeGeneration(thread, input) || null,
-      turnId: clean(input.turnId) || null,
-    }, env).catch(() => {});
+    await recordGenerationRejection(thread, input, "record", env);
     return { ok: false, recorded: false, reason: "stale_runtime_generation" };
   }
   const evidenceType = clean(input.evidenceType || "runtime_probe").toLowerCase();
@@ -147,7 +158,10 @@ export async function recordRuntimeLiveness(threadId, input = {}, env = process.
 export async function recordRuntimeLivenessProbeFailure(threadId, input = {}, env = process.env) {
   const thread = await getThread(threadId, env);
   if (!thread) return { ok: false, lost: false, reason: "thread_not_found" };
-  if (!scopedToCurrentRuntime(thread, input)) return { ok: false, lost: false, reason: "stale_runtime_generation" };
+  if (!scopedToCurrentRuntime(thread, input)) {
+    await recordGenerationRejection(thread, input, "probe_failure", env);
+    return { ok: false, lost: false, reason: "stale_runtime_generation" };
+  }
   const runtime = thread.runtime && typeof thread.runtime === "object" ? thread.runtime : {};
   const current = runtime.liveness && typeof runtime.liveness === "object" ? runtime.liveness : {};
   const turnId = clean(input.turnId || runtime.activeTurnId || current.turnId);
@@ -220,7 +234,10 @@ export async function saveRuntimeCheckpoint(threadId, input = {}, env = process.
 export async function completeRuntimeLiveness(threadId, input = {}, env = process.env) {
   const thread = await getThread(threadId, env);
   if (!thread) return { ok: false, completed: false, reason: "thread_not_found" };
-  if (!scopedToCurrentRuntime(thread, input)) return { ok: false, completed: false, reason: "stale_runtime_generation" };
+  if (!scopedToCurrentRuntime(thread, input)) {
+    await recordGenerationRejection(thread, input, "complete", env);
+    return { ok: false, completed: false, reason: "stale_runtime_generation" };
+  }
   const runtime = thread.runtime && typeof thread.runtime === "object" ? thread.runtime : {};
   const current = runtime.liveness && typeof runtime.liveness === "object" ? runtime.liveness : {};
   const turnId = clean(input.turnId || current.turnId);

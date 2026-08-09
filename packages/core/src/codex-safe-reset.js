@@ -4,7 +4,6 @@ import { ensureDataDirs } from "../../storage/src/paths.js";
 import { appendEvent } from "../../storage/src/store.js";
 import { getThread, listThreadMessages, updateThread } from "./threads.js";
 import { clean, codexSessionId, codexThreadId, nowIso } from "./codex-app-server-common.js";
-import { codexGenerationTransitionPatch } from "./codex-generation-lineage.js";
 
 function checkpointMessageText(message) {
   const role = clean(message?.role || "unknown");
@@ -69,38 +68,66 @@ function codexSafeResetPatch(thread, checkpoint, reason) {
     previousState: thread?.state || null,
     previousRuntimeState: runtime.state || null,
   };
-  const transition = codexGenerationTransitionPatch(thread, "", "");
   return {
-    ...transition,
     state: "waking",
     lastError: null,
     runtimeKind: "codex-app-server",
     codexThreadId: null,
     codexSessionId: null,
+    codexRolloutPath: null,
+    codexRolloutGeneration: null,
+    codexRolloutOffset: 0,
+    codexRolloutSyncedAt: null,
+    codexRolloutSyncError: null,
+    codexRolloutValidation: null,
     executor: {
-      ...(transition.executor || {}),
+      ...(thread.executor || {}),
       id: "codex",
       type: "codex",
       transport: "app-server",
       codexThreadId: null,
       codexSessionId: null,
       metadata: {
-        ...(transition.executor?.metadata || metadata),
+        ...metadata,
         transport: "app-server",
         runtimeKind: "codex-app-server",
         codexThreadId: null,
         codexSessionId: null,
+        codexRolloutPath: null,
+        codexRolloutGeneration: null,
+        codexRolloutOffset: 0,
+        codexRolloutSyncedAt: null,
+        codexRolloutSyncError: null,
+        codexRolloutValidation: null,
         lastSafeReset: archive,
       },
     },
     runtime: {
-      ...(transition.runtime || runtime),
+      ...runtime,
       runtimeKind: "codex-app-server",
       state: "waking",
+      codexThreadId: null,
+      codexSessionId: null,
+      runtimeGeneration: null,
+      codexRolloutPath: null,
+      codexRolloutGeneration: null,
+      codexRolloutOffset: 0,
+      codexRolloutSyncedAt: null,
+      codexRolloutSyncError: null,
+      codexRolloutValidation: null,
       activeTurnId: null,
       pendingRequest: null,
       codexStatus: null,
       lastTurnStatus: null,
+      operatorRolloutPath: null,
+      operatorRolloutOffset: 0,
+      operatorRolloutGeneration: null,
+      operatorRolloutSyncedAt: null,
+      operatorRolloutSyncError: null,
+      operatorRolloutValidation: null,
+      finalDelivery: null,
+      liveness: null,
+      checkpoint: null,
       safeReset: archive,
     },
   };

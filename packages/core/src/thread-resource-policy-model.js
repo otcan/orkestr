@@ -2,15 +2,9 @@ import { randomUUID } from "node:crypto";
 import { policyError } from "./policy.js";
 import { getThread } from "./threads.js";
 import { normalizeUserId } from "./users.js";
+import { THREAD_RESOURCE_PERMISSIONS, THREAD_RESOURCE_TYPES } from "./thread-resource-policy-constants.js";
 
-export const THREAD_RESOURCE_TYPES = Object.freeze({ desktop: "desktop", oxrm: "oxrm", mailbox: "mailbox" });
-export const THREAD_RESOURCE_PERMISSIONS = Object.freeze({
-  desktop: Object.freeze(["discover", "acquire", "operate", "share"]),
-  oxrm: Object.freeze(["discover", "read", "write", "execute"]),
-  // `process` is deliberately separate from subscription. Receiving a
-  // mailbox message is not authority to start an external-origin turn.
-  mailbox: Object.freeze(["discover", "read", "subscribe", "process", "manage"]),
-});
+export { THREAD_RESOURCE_PERMISSIONS, THREAD_RESOURCE_TYPES } from "./thread-resource-policy-constants.js";
 
 const truthy = new Set(["1", "true", "yes", "on"]);
 const modes = new Set(["off", "shadow", "enforce"]);

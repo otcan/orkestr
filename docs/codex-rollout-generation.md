@@ -4,7 +4,7 @@ Orkestr treats `runtime.codexThreadId`, the executor Codex ID, the root Codex ID
 and executor metadata as one generation identity. Conflicting non-empty values
 are ambiguous and fail closed; a runtime-only ID is a valid current generation.
 
-Rollout ingestion can be staged with `ORKESTR_CODEX_GENERATION_FENCING`:
+Rollout ingestion can be staged with `ORKESTR_CODEX_GENERATION_ROLLOUT_MODE`:
 
 - unset or `off`: preserve legacy rollout selection while using the canonical
   live-notification lookup and durable final projector;

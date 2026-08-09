@@ -11,7 +11,7 @@ import {
   codexAppServerTransport,
   codexAppServerWebSocketUrl,
 } from "../../connectors/src/codex-app-server-transport.js";
-import { listThreadMessages, updateThread, updateThreadMessage } from "./threads.js";
+import { getThread, listThreadMessages, updateThread, updateThreadMessage } from "./threads.js";
 import {
   appendOrUpdateEventMessage,
   appServerStateFromStatus,
@@ -34,6 +34,7 @@ import {
   threadAutoAcceptsCodexApprovals,
   threadEventId,
   threadForCodexThreadId,
+  threadForSupersededCodexGeneration,
   threadUsesRestrictedCodexPolicy,
   timeoutMs,
 } from "./codex-app-server-common.js";
@@ -50,7 +51,8 @@ import { markConnectorDeliverySignal } from "./connector-delivery-signals.js";
 import { recordCodexRuntimeAuthFailureSignal } from "./codex-auth-health.js";
 import { completeRuntimeLiveness, recordRuntimeLiveness } from "./runtime-liveness.js";
 import { runtimeFinalDeliveryPending } from "./runtime-final-delivery.js";
-import { ensureCodexFinalProjectionDelivery } from "./codex-final-projection.js";
+import { reconcileCodexFinalProjection } from "./codex-final-projection.js";
+import { currentCodexGenerationMatches } from "./codex-generation.js";
 
 const execFileAsync = promisify(execFile);
 const clients = new Map();
@@ -558,6 +560,40 @@ export class CodexAppServerClient {
   async handleNotification(message) {
     const params = message.params || {};
     const codexId = clean(params.threadId || params.thread?.id || params.turn?.threadId);
+    if (codexId) {
+      const current = await threadForCodexThreadId(codexId, this.env);
+      if (!current) {
+        const superseded = await threadForSupersededCodexGeneration(codexId, this.env);
+        if (superseded) {
+          const runtime = superseded.runtime && typeof superseded.runtime === "object" ? superseded.runtime : {};
+          const diagnostics = runtime.codexGenerationDiagnostics && typeof runtime.codexGenerationDiagnostics === "object"
+            ? runtime.codexGenerationDiagnostics
+            : {};
+          const unmappedNotifications = Math.max(0, Number(diagnostics.unmappedNotifications || 0) || 0) + 1;
+          await updateThread(superseded.id, {
+            runtime: {
+              ...runtime,
+              codexGenerationDiagnostics: {
+                ...diagnostics,
+                unmappedNotifications,
+                lastUnmappedNotificationAt: new Date().toISOString(),
+                lastUnmappedNotificationGeneration: codexId,
+                lastUnmappedNotificationMethod: message.method,
+              },
+            },
+          }, this.env).catch(() => {});
+          await appendEvent({
+            type: "codex_app_server_superseded_notification_rejected",
+            threadId: superseded.id,
+            observedGeneration: codexId,
+            expectedGeneration: codexThreadId(superseded) || null,
+            method: message.method,
+            turnId: clean(params.turnId || params.turn?.id) || null,
+          }, this.env).catch(() => {});
+          return;
+        }
+      }
+    }
     if (message.method === "thread/started" && params.thread?.id) {
       this.threadStates.set(params.thread.id, {
         ...(this.threadStates.get(params.thread.id) || {}),
@@ -900,7 +936,7 @@ export class CodexAppServerClient {
 
   async projectItem(item, params = {}, fallbackCodexThreadId = "") {
     const codexId = clean(params.threadId || item.threadId || fallbackCodexThreadId);
-    const thread = await threadForCodexThreadId(codexId, this.env);
+    let thread = await threadForCodexThreadId(codexId, this.env);
     if (!thread) {
       await appendEvent({
         type: "codex_app_server_notification_unmapped",
@@ -909,6 +945,21 @@ export class CodexAppServerClient {
         itemId: clean(item.id) || null,
         projectionSource: "live",
         outcome: "ignored",
+      }, this.env).catch(() => {});
+      return null;
+    }
+    const current = await getThread(thread.id, this.env).catch(() => null);
+    if (current) thread = current;
+    const generation = currentCodexGenerationMatches(thread, codexId);
+    if (!generation.ok) {
+      await appendEvent({
+        type: "codex_app_server_projection_rejected",
+        threadId: thread.id,
+        observedGeneration: codexId || null,
+        expectedGeneration: generation.resolution?.id || null,
+        reason: generation.reason,
+        itemType: clean(item.type) || null,
+        turnId: clean(params.turnId || item.turnId) || null,
       }, this.env).catch(() => {});
       return null;
     }
@@ -958,20 +1009,23 @@ export class CodexAppServerClient {
       ...whatsappProjectionFields(whatsappParent, thread),
     }, this.env);
     const finalAnswer = clean(phase).toLowerCase() === "final_answer";
+    const finalProjection = finalAnswer
+      ? await reconcileCodexFinalProjection({
+          thread,
+          message,
+          runtimeGeneration: codexId,
+          source: "live_notification",
+          env: this.env,
+        }).catch(() => null)
+      : null;
+    const projectedMessage = finalProjection?.message || message;
     if (!message?.coalescedUpdate) {
-      notifyMessageHandler({ thread, message });
+      notifyMessageHandler({ thread, message: projectedMessage });
+      if (!finalAnswer) markConnectorDeliverySignal(projectedMessage);
     }
     if (finalAnswer) {
-      await ensureCodexFinalProjectionDelivery(thread, message, {
-        runtimeGeneration: codexId,
-        turnId,
-        source: "live",
-        signal: !message?.coalescedUpdate,
-      }, this.env).catch(() => {});
-    } else if (!message?.coalescedUpdate) markConnectorDeliverySignal(message);
-    if (finalAnswer) {
       const { completeTaskAgentFromMessage } = await import("./task-agents.js");
-      await completeTaskAgentFromMessage(thread, message, this.env).catch((error) => appendEvent({
+      await completeTaskAgentFromMessage(thread, projectedMessage, this.env).catch((error) => appendEvent({
         type: "task_agent_result_delivery_failed",
         threadId: thread.id,
         messageId: message.id,
@@ -1014,13 +1068,14 @@ export class CodexAppServerClient {
         error: publicError(error),
       }, this.env).catch(() => {}));
     }
+    const threadAfterProjection = await getThread(thread.id, this.env).catch(() => null) || thread;
     await updateThread(thread.id, {
       state: "ready",
       lastError: null,
       ...(finalAnswer ? {
         runtime: {
-          ...(thread.runtime || {}),
-          runtimeKind: "codex-app-server",
+          ...(threadAfterProjection.runtime || {}),
+          runtimeKind: threadAfterProjection.runtime?.runtimeKind || "codex-app-server",
           activeTurnId: null,
           lastTurnId: turnId || null,
           lastTurnStatus: "completed",
@@ -1031,7 +1086,7 @@ export class CodexAppServerClient {
         },
       } : {}),
     }, this.env).catch(() => {});
-    return message;
+    return projectedMessage;
   }
 
   pendingRequestForThread(thread, options = {}) {

@@ -11,6 +11,8 @@ import { ensureRuntimeAgentsFile } from "./agent-context.js";
 import { recordCodexRuntimeAuthInvalidSignal } from "./codex-auth-health.js";
 import { deployDrainActiveSync } from "./deploy-drain.js";
 import { assertCodexAuthenticated } from "../../connectors/src/codex.js";
+import { ensureConnectorOutboxJob, listConnectorOutboxJobs } from "../../connectors/src/connector-outbox.js";
+import { setConnectorOutboxJobAdapter } from "./connector-outbox-adapter.js";
 import { clearPaneProgressCache, paneBackgroundWork, panePromptHasDraft, publicPaneProgress, samplePaneProgress } from "./pane-progress.js";
 import {
   appendThreadMessage,
@@ -41,15 +43,6 @@ import {
   threadUsesNativeCodexRuntime,
 } from "./runtime-codex-adapter.js";
 import { appendOrUpdateEventMessage, normalizeCodexModel, normalizeReasoningEffort } from "./codex-app-server-common.js";
-import {
-  codexGenerationFencingMode,
-  currentCodexGeneration,
-  resolveCurrentCodexGeneration,
-  rolloutPathFingerprint,
-  verifyRolloutGeneration,
-} from "./codex-generation-lineage.js";
-import { ensureCodexFinalProjectionDelivery } from "./codex-final-projection.js";
-import { doctorCodexGenerationResources as doctorCodexGenerationResourcesBase } from "./codex-generation-doctor.js";
 import { completeThreadSecurityApproveCommand, threadSecurityApproveChallengeId } from "./security-thread-command.js";
 import { threadUsesContainedUserPolicy } from "./tenant-policy.js";
 import { apiAgentRuntimeStatus, processApiAgentThreadInput, threadUsesApiAgent } from "./tenant-api-agent.js";
@@ -75,6 +68,18 @@ import {
   rawTerminalTtlMs,
   threadUsesRawTerminalMode,
 } from "./raw-terminal-mode.js";
+import {
+  currentCodexGenerationId,
+  generationScopedRuntimePatch,
+  rolloutGenerationMode,
+  rolloutPathFingerprint,
+  resolveCurrentCodexGeneration,
+  staleGenerationRuntimeState,
+} from "./codex-generation.js";
+import { reconcileCodexFinalProjection } from "./codex-final-projection.js";
+import { readCodexRolloutSessionMeta, validateCodexRolloutGeneration } from "./codex-rollout-generation.js";
+
+setConnectorOutboxJobAdapter(ensureConnectorOutboxJob);
 
 const execFileAsync = promisify(execFile);
 const deliveryLocks = new Set();
@@ -169,10 +174,6 @@ async function recordMessageRouterTrace(message = {}, phase, context = {}, env =
 }
 
 export { consumeThreadConnectorDeliverySignalCount, setThreadConnectorDeliverySignalHandler };
-
-export async function doctorCodexGenerationResources(options = {}) {
-  return doctorCodexGenerationResourcesBase({ ...options, resolveVerifiedRollout });
-}
 
 export function setThreadInputDeliveryFailureHandler(handler) {
   threadInputDeliveryFailureHandler = typeof handler === "function" ? handler : null;
@@ -293,7 +294,7 @@ function temporaryRuntimeReason({ thread = {}, workspace = "", command = "" } = 
 }
 
 function codexThreadId(thread) {
-  return currentCodexGeneration(thread);
+  return currentCodexGenerationId(thread);
 }
 
 function threadName(thread) {
@@ -341,10 +342,10 @@ async function ensureCodexWorkspaceTrusted(workspace, env = process.env) {
   await fs.writeFile(configPath, `${existing}${suffix}\n${sectionHeader}\ntrust_level = "trusted"\n`, "utf8");
 }
 
-function eventId({ threadId = "", timestamp = "", role = "", phase = "", text = "" }) {
+function eventId({ threadId = "", generation = "", timestamp = "", role = "", phase = "", text = "" }) {
   return crypto
     .createHash("sha256")
-    .update(`${threadId}\n${timestamp}\n${role}\n${phase}\n${String(text || "").replace(/\s+/g, " ").trim()}`)
+    .update(`${threadId}\n${generation}\n${timestamp}\n${role}\n${phase}\n${String(text || "").replace(/\s+/g, " ").trim()}`)
     .digest("hex");
 }
 
@@ -359,6 +360,7 @@ function hasProposedPlanEnvelope(value) {
 function rolloutMessageEventKey(message) {
   return [
     message.eventId || "",
+    message.codexThreadId || message.executorThreadId || "",
     message.role,
     String(message.phase || ""),
     normalizedTextKey(message.text),
@@ -372,6 +374,7 @@ function rolloutMessageTimestampBucket(message) {
 
 function rolloutMessageNearTextKey(message) {
   return [
+    message.codexThreadId || message.executorThreadId || "",
     message.role,
     String(message.phase || ""),
     normalizedTextKey(message.text),
@@ -1173,60 +1176,6 @@ export async function resolveCodexThreadMetadata(threadOrId, env = process.env) 
   return resolveCodexThreadMetadataById(discovered.codexThreadId, env);
 }
 
-export async function resolveVerifiedRollout(thread, generation = "", options = {}, env = process.env) {
-  if (generation && typeof generation === "object") {
-    env = options && Object.keys(options).length ? options : env;
-    options = generation;
-    generation = "";
-  }
-  const lineage = resolveCurrentCodexGeneration(thread);
-  const expectedGeneration = String(generation || lineage.generation || "").trim();
-  if (!expectedGeneration || lineage.ambiguous || (lineage.generation && lineage.generation !== expectedGeneration)) {
-    return {
-      ok: false,
-      reason: "codex_generation_fields_conflict",
-      expectedGeneration: expectedGeneration || null,
-      observedGenerations: lineage.generations,
-    };
-  }
-  const metadata = await resolveCodexThreadMetadataById(expectedGeneration, env).catch(() => ({}));
-  const candidates = [
-    metadata.codexRolloutPath,
-    options.preferredPath,
-    thread?.runtime?.operatorRolloutPath,
-    thread?.codexRolloutPath,
-    thread?.executor?.metadata?.codexRolloutPath,
-  ].map((value) => String(value || "").trim()).filter(Boolean);
-  const seen = new Set();
-  let lastFailure = null;
-  for (const candidate of candidates) {
-    if (seen.has(candidate)) continue;
-    seen.add(candidate);
-    const verified = await verifyRolloutGeneration(candidate, expectedGeneration, options).catch(() => ({
-      ok: false,
-      reason: "codex_rollout_path_missing",
-      expectedGeneration,
-      pathFingerprint: rolloutPathFingerprint(candidate),
-    }));
-    if (verified.ok) {
-      return {
-        ...verified,
-        rolloutPath: candidate,
-        expectedGeneration,
-        resolvedFrom: candidate === metadata.codexRolloutPath ? "codex_sqlite" : "stored_metadata",
-      };
-    }
-    lastFailure = verified;
-  }
-  return {
-    ok: false,
-    reason: lastFailure?.reason || "codex_rollout_path_missing",
-    expectedGeneration,
-    observedGeneration: lastFailure?.observedGeneration || lastFailure?.generation || null,
-    pathFingerprint: lastFailure?.pathFingerprint || "",
-  };
-}
-
 async function cachedRuntimeCodexThreadMetadata(threadOrId, env = process.env) {
   const id = String(typeof threadOrId === "string" ? threadOrId : codexThreadId(threadOrId) || "").trim();
   if (!id) return {};
@@ -1242,6 +1191,9 @@ async function cachedRuntimeCodexThreadMetadata(threadOrId, env = process.env) {
 
 function codexMetadataUpdatePatch(thread = {}, codexMetadata = {}) {
   const executorMetadata = { ...(thread?.executor?.metadata || {}), ...codexMetadata };
+  if (codexMetadata.codexRolloutPath && codexMetadata.codexThreadId) {
+    executorMetadata.codexRolloutGeneration = codexMetadata.codexThreadId;
+  }
   if (!normalizeCodexModel(executorMetadata.codexModel)) delete executorMetadata.codexModel;
   if (!normalizeReasoningEffort(executorMetadata.codexReasoningEffort)) delete executorMetadata.codexReasoningEffort;
   const provider = String(executorMetadata.codexModelProvider || "").trim();
@@ -1290,22 +1242,14 @@ async function resolveCodexThreadByWorkspace(workspace, startedAt, env = process
 
 async function rolloutOffsetForThread(thread, env = process.env) {
   const rolloutGeneration = codexThreadId(thread);
-  const mode = codexGenerationFencingMode(env);
-  const verified = mode === "enforce"
-    ? await resolveVerifiedRollout(thread, rolloutGeneration, {}, env)
-    : null;
-  const rolloutPath = verified?.ok
-    ? verified.rolloutPath
-    : mode === "enforce"
-      ? null
-      : await resolveCodexRolloutPath(rolloutGeneration, env);
-  if (!rolloutPath) return { rolloutPath: null, rolloutOffset: 0 };
+  const rolloutPath = await resolveCodexRolloutPath(rolloutGeneration, env);
+  if (!rolloutPath) return { rolloutGeneration: rolloutGeneration || null, rolloutPath: null, rolloutOffset: 0 };
   const stats = await fs.stat(rolloutPath).catch(() => null);
   const size = Number(stats?.size || 0) || 0;
   const lookbackBytes = rolloutSyncLookbackBytes(env);
   return {
-    rolloutPath,
     rolloutGeneration: rolloutGeneration || null,
+    rolloutPath,
     rolloutOffset: Math.max(0, size - lookbackBytes),
     rolloutOffsetLookbackApplied: lookbackBytes > 0,
     rolloutOffsetLookbackBytes: lookbackBytes,
@@ -3127,15 +3071,18 @@ function paneRejectedSlashCommand(paneText, command) {
 }
 
 async function rolloutSnapshotForDelivery(thread, lease, env = process.env) {
+  const generation = codexThreadId(thread);
+  const leaseGeneration = String(lease?.rolloutGeneration || "").trim();
+  const leasePath = generation && leaseGeneration && leaseGeneration !== generation ? "" : lease?.rolloutPath;
   const rolloutPath = String(
-    lease?.rolloutPath ||
-    thread?.codexRolloutPath ||
-    thread?.executor?.metadata?.codexRolloutPath ||
+    leasePath ||
+    codexRolloutPathForThread(thread, env) ||
     "",
   ).trim();
-  if (!rolloutPath) return { deliveryRolloutPath: "", deliveryRolloutOffset: 0 };
+  if (!rolloutPath) return { deliveryRolloutGeneration: generation || null, deliveryRolloutPath: "", deliveryRolloutOffset: 0 };
   const stats = await fs.stat(rolloutPath).catch(() => null);
   return {
+    deliveryRolloutGeneration: generation || null,
     deliveryRolloutPath: rolloutPath,
     deliveryRolloutOffset: Number(stats?.size || lease?.rolloutOffset || 0) || 0,
   };
@@ -3165,11 +3112,12 @@ async function deliveryAckEvidence(thread, message, status, env = process.env) {
   const runtimeWorking = status?.working || status?.state === "working";
   if (runtimeWorking && status?.progress?.staleWorkingPrompt !== true) return { observedVia: "runtime_working" };
 
+  const generation = codexThreadId(thread);
+  if (message.deliveryRolloutGeneration && generation && message.deliveryRolloutGeneration !== generation) return null;
   const rolloutPath = String(
     message.deliveryRolloutPath ||
-    status?.lease?.rolloutPath ||
-    thread?.codexRolloutPath ||
-    thread?.executor?.metadata?.codexRolloutPath ||
+    ((status?.lease?.rolloutGeneration && generation && status.lease.rolloutGeneration !== generation) ? "" : status?.lease?.rolloutPath) ||
+    codexRolloutPathForThread(thread, env) ||
     "",
   ).trim();
   if (rolloutPath) {
@@ -3363,11 +3311,12 @@ async function recoverStaleThreadInputAck(thread, message, status, env = process
   if (!status?.paneId || !status.promptReady || status.working) return false;
   const paneText = await capturePane(status.paneId, 40).catch(() => "");
   if (paneContainsDeliveryText(paneText, inputTextForMessage(message))) return false;
+  const generation = codexThreadId(thread);
+  if (message.deliveryRolloutGeneration && generation && message.deliveryRolloutGeneration !== generation) return false;
   const rolloutPath = String(
     message.deliveryRolloutPath ||
-    status?.lease?.rolloutPath ||
-    thread?.codexRolloutPath ||
-    thread?.executor?.metadata?.codexRolloutPath ||
+    ((status?.lease?.rolloutGeneration && generation && status.lease.rolloutGeneration !== generation) ? "" : status?.lease?.rolloutPath) ||
+    codexRolloutPathForThread(thread, env) ||
     "",
   ).trim();
   if (rolloutPath) {
@@ -4156,7 +4105,8 @@ export function parseAssistantRolloutMessages(body, threadId, baseOffset = 0, ge
       timestamp,
       phase,
       text,
-      eventId: eventId({ threadId: generation ? `${threadId}:${generation}` : threadId, timestamp, role: "assistant", phase, text }),
+      eventId: eventId({ threadId, generation, timestamp, role: "assistant", phase, text }),
+      codexThreadId: generation || null,
       sourceFormat: parsed?.type === "response_item" ? "response_item" : "event_msg",
     };
     const key = ["assistant", String(phase || ""), normalizedTextKey(text)].join("\n");
@@ -4210,11 +4160,18 @@ function whatsappParentAccountId(parent = null, thread = null) {
   return String(parent?.accountId || binding.responderAccountId || binding.outboundAccountId || "").trim();
 }
 
-function codexRolloutPathForThread(thread = {}) {
+function codexRolloutPathForThread(thread = {}, env = process.env) {
+  const generation = codexThreadId(thread);
+  const runtime = thread?.runtime && typeof thread.runtime === "object" ? thread.runtime : {};
+  const metadata = thread?.executor?.metadata && typeof thread.executor.metadata === "object" ? thread.executor.metadata : {};
+  const metadataGeneration = String(thread?.codexRolloutGeneration || metadata.codexRolloutGeneration || "").trim();
+  const runtimeGeneration = String(runtime.operatorRolloutGeneration || "").trim();
+  const mode = rolloutGenerationMode(env);
+  const metadataAllowed = !generation || !metadataGeneration || metadataGeneration === generation || mode === "shadow";
+  const runtimeAllowed = !generation || !runtimeGeneration || runtimeGeneration === generation || mode === "shadow";
   return String(
-    thread?.codexRolloutPath ||
-    thread?.executor?.metadata?.codexRolloutPath ||
-    thread?.runtime?.operatorRolloutPath ||
+    (metadataAllowed && (thread?.codexRolloutPath || metadata.codexRolloutPath)) ||
+    (runtimeAllowed && runtime.operatorRolloutPath) ||
     "",
   ).trim();
 }
@@ -4231,18 +4188,15 @@ async function rolloutExistingMessages(threadId, parsed = [], env = process.env)
   }, env);
 }
 
-function shouldSyncDetachedRollout(thread = {}, activeLeaseThreadIds = new Set()) {
+function shouldSyncDetachedRollout(thread = {}, activeLeaseThreadIds = new Set(), env = process.env) {
   if (!thread?.id || activeLeaseThreadIds.has(thread.id)) return false;
   if (!threadUsesNativeCodexRuntime(thread)) return false;
   if (threadUsesContainedUserPolicy(thread)) return false;
   if (String(thread?.binding?.connector || "").trim().toLowerCase() !== "whatsapp") return false;
-  return Boolean(codexThreadId(thread) || codexRolloutPathForThread(thread));
+  return Boolean(codexThreadId(thread) || codexRolloutPathForThread(thread, env));
 }
 
-async function appendRolloutMessages({ thread, rolloutPath, body, start, initialScan, expectedGeneration = "", env }) {
-  const generation = String(expectedGeneration || codexThreadId(thread) || "").trim();
-  const current = await getThread(thread.id, env).catch(() => null);
-  if (!current || codexThreadId(current) !== generation) return { appended: 0, completedTurnId: null, rejected: "codex_generation_changed" };
+async function appendRolloutMessages({ thread, rolloutPath, generation = "", body, start, initialScan, projectionSource = "detached_rollout", env }) {
   const parsed = parseAssistantRolloutMessages(body, thread.id, start, generation);
   if (!parsed.length) return { appended: 0, completedTurnId: null };
   const existing = await rolloutExistingMessages(thread.id, parsed, env);
@@ -4255,7 +4209,7 @@ async function appendRolloutMessages({ thread, rolloutPath, body, start, initial
   const latestExistingMs = Math.max(0, ...existing.map(messageTimeMs).filter(Number.isFinite));
   let appended = 0;
   let completedTurnId = "";
-  const codexId = codexThreadId(thread);
+  const codexId = generation || codexThreadId(thread);
   for (const message of parsed) {
     if (initialScan && latestExistingMs && timestampMs(message.timestamp) <= latestExistingMs + 1000) continue;
     const eventKey = rolloutMessageEventKey(message);
@@ -4286,12 +4240,16 @@ async function appendRolloutMessages({ thread, rolloutPath, body, start, initial
       executorTurnId: parentTurnId || null,
     }, env);
     if (String(message.phase || "final_answer").trim().toLowerCase() === "final_answer") {
-      await ensureCodexFinalProjectionDelivery(current, appendedMessage, {
-        runtimeGeneration: generation,
-        turnId: parentTurnId,
-        source: "detached_rollout",
-      }, env).catch(() => {});
-    } else markConnectorDeliverySignal(appendedMessage);
+      await reconcileCodexFinalProjection({
+        thread,
+        message: appendedMessage,
+        runtimeGeneration: codexId,
+        source: projectionSource,
+        env,
+      }).catch(() => {});
+    } else {
+      markConnectorDeliverySignal(appendedMessage);
+    }
     existingEventKeys.add(eventKey);
     existingTextKeys.add(textKey);
     appended += 1;
@@ -4304,7 +4262,7 @@ async function appendRolloutMessages({ thread, rolloutPath, body, start, initial
       type: "detached_codex_rollout_messages_appended",
       threadId: thread.id,
       codexThreadId: codexId,
-      rolloutPath,
+      rolloutPathFingerprint: rolloutPathFingerprint(rolloutPath),
       appended,
     }, env).catch(() => {});
   }
@@ -4343,78 +4301,130 @@ async function reconcileDetachedRolloutCompletion(thread, runtime, completedTurn
   };
 }
 
+async function runRolloutAfterReadHook(context = {}, env = process.env) {
+  const hook = env.ORKESTR_TEST_ROLLOUT_AFTER_READ_HOOK;
+  if (typeof hook === "function") await hook(context);
+}
+
+async function fenceRolloutGeneration(threadId, expectedGeneration = "", surface = "unknown", env = process.env) {
+  const thread = await getThread(threadId, env).catch(() => null);
+  if (!thread) return { ok: false, thread: null, reason: "thread_not_found", generation: "" };
+  const expected = String(expectedGeneration || "").trim();
+  const current = codexThreadId(thread);
+  if (!expected || current === expected) return { ok: true, thread, generation: current || expected };
+  await appendEvent({
+    type: "codex_rollout_generation_fenced",
+    threadId,
+    surface,
+    expectedGeneration: expected,
+    currentGeneration: current || null,
+    reason: "generation_changed_during_rollout_scan",
+  }, env).catch(() => {});
+  return { ok: false, thread, reason: "generation_changed_during_rollout_scan", generation: current || "" };
+}
+
+function resetLeaseRolloutForGeneration(lease = {}, generation = "") {
+  return {
+    ...lease,
+    rolloutGeneration: generation || null,
+    rolloutPath: null,
+    rolloutOffset: 0,
+    rolloutOffsetLookbackApplied: false,
+    rolloutOffsetLookbackBytes: 0,
+    rolloutLookbackScannedAt: null,
+    rolloutLookbackScannedFrom: null,
+  };
+}
+
 async function syncLeaseRollout(lease, env = process.env) {
   let thread = await getThread(lease.threadId, env);
+  if (!thread) return { lease, appended: 0 };
   const codexMetadata = await cachedRuntimeCodexThreadMetadata(thread, env).catch(() => ({}));
   if (Object.keys(codexMetadata).length) {
-    thread = await updateThread(lease.threadId, codexMetadataUpdatePatch(thread, codexMetadata), env).catch(() => thread);
+    await updateThread(lease.threadId, codexMetadataUpdatePatch(thread, codexMetadata), env).catch(() => {});
+    thread = await getThread(lease.threadId, env).catch(() => thread) || thread;
   }
-  const expectedGeneration = codexThreadId(thread);
-  const fencingMode = codexGenerationFencingMode(env);
-  let rolloutPath = lease.rolloutPath;
-  if (fencingMode !== "off") {
-    const verified = await resolveVerifiedRollout(thread, expectedGeneration, { preferredPath: rolloutPath }, env);
-    if (verified.ok) {
-      if (rolloutPath && rolloutPath !== verified.rolloutPath) {
-        await appendEvent({
-          type: "codex_rollout_path_rebound",
-          threadId: thread.id,
-          expectedGeneration,
-          pathFingerprint: verified.pathFingerprint,
-          repairAction: fencingMode === "enforce" ? "rebound" : "proposed_rebind",
-          outcome: fencingMode,
-        }, env).catch(() => {});
-      }
-      if (fencingMode === "enforce") rolloutPath = verified.rolloutPath;
-    } else {
-      await appendEvent({
-        type: "codex_rollout_identity_mismatch",
-        threadId: thread.id,
-        expectedGeneration: expectedGeneration || null,
-        observedGeneration: verified.observedGeneration || null,
-        pathFingerprint: verified.pathFingerprint || rolloutPathFingerprint(rolloutPath),
-        repairAction: fencingMode === "enforce" ? "rejected_projection" : "proposed_reject",
-        outcome: verified.reason,
-      }, env).catch(() => {});
-      if (fencingMode === "enforce") return { lease: { ...lease, rolloutSyncError: verified.reason }, appended: 0 };
-    }
+  const generation = codexThreadId(thread);
+  let currentLease = { ...lease };
+  if (generation && currentLease.rolloutGeneration && currentLease.rolloutGeneration !== generation) {
+    currentLease = {
+      ...currentLease,
+      rolloutGeneration: generation,
+      rolloutPath: null,
+      rolloutOffset: 0,
+      rolloutOffsetLookbackApplied: false,
+      rolloutOffsetLookbackBytes: 0,
+      rolloutLookbackScannedAt: null,
+      rolloutLookbackScannedFrom: null,
+    };
+    await appendEvent({
+      type: "codex_rollout_generation_state_invalidated",
+      threadId: thread.id,
+      previousGeneration: lease.rolloutGeneration,
+      runtimeGeneration: generation,
+      surface: "active_lease",
+    }, env).catch(() => {});
+  } else if (generation && !currentLease.rolloutGeneration) {
+    currentLease.rolloutGeneration = generation;
+  }
+  let rolloutPath = currentLease.rolloutPath;
+  const currentGenerationPath = generation ? await resolveCodexRolloutPath(generation, env) : null;
+  if (currentGenerationPath && currentGenerationPath !== rolloutPath) {
+    rolloutPath = currentGenerationPath;
+    currentLease = {
+      ...currentLease,
+      rolloutPath,
+      rolloutGeneration: generation || null,
+      rolloutOffset: 0,
+      rolloutOffsetLookbackApplied: false,
+      rolloutOffsetLookbackBytes: 0,
+      rolloutLookbackScannedAt: null,
+      rolloutLookbackScannedFrom: null,
+    };
   }
   if (!rolloutPath) {
-    rolloutPath = await resolveCodexRolloutPath(codexThreadId(thread), env);
+    rolloutPath = currentGenerationPath;
     if (!rolloutPath) {
-      const discovered = await resolveCodexThreadByWorkspace(lease.workspace, lease.startedAt, env);
-      if (discovered?.codexThreadId && discovered.rolloutPath) {
+      const discovered = await resolveCodexThreadByWorkspace(currentLease.workspace, currentLease.startedAt, env);
+      if (discovered?.codexThreadId && discovered.rolloutPath && (!generation || discovered.codexThreadId === generation)) {
         rolloutPath = discovered.rolloutPath;
-        await updateThread(lease.threadId, {
+        await updateThread(currentLease.threadId, {
           executor: { ...(thread?.executor || {}), codexThreadId: discovered.codexThreadId },
         }, env).catch(() => {});
       }
     }
-    if (!rolloutPath) return { lease, appended: 0 };
+    if (!rolloutPath) return { lease: currentLease, appended: 0 };
   }
   const stats = await fs.stat(rolloutPath).catch(() => null);
   if (!stats) {
-    return { lease: { ...lease, rolloutPath }, appended: 0 };
+    return { lease: { ...currentLease, rolloutPath }, appended: 0 };
+  }
+  const validation = await validateCodexRolloutGeneration({ thread, generation, rolloutPath, surface: "active_lease", env });
+  if (!validation.accepted) {
+    return {
+      lease: {
+        ...currentLease,
+        rolloutPath,
+        rolloutGeneration: generation || null,
+        rolloutValidation: { state: "rejected", reason: validation.reason, checkedAt: nowIso() },
+      },
+      appended: 0,
+    };
   }
   const size = Number(stats.size || 0) || 0;
-  const generationMatches = fencingMode !== "enforce" || String(lease.rolloutGeneration || "").trim() === expectedGeneration;
-  const pathMatches = !lease.rolloutPath || lease.rolloutPath === rolloutPath;
-  const reusableCursor = generationMatches && pathMatches;
-  const savedOffset = reusableCursor ? Math.max(0, Number(lease.rolloutOffset || 0)) : 0;
+  const savedOffset = Math.max(0, Number(currentLease.rolloutOffset || 0));
   const lookbackBytes = rolloutSyncLookbackBytes(env);
-  const scannedLookbackBytes = Number(lease.rolloutOffsetLookbackBytes || 0) || 0;
+  const scannedLookbackBytes = Number(currentLease.rolloutOffsetLookbackBytes || 0) || 0;
   const needsLookbackScan =
     lookbackBytes > 0 &&
-    !lease.rolloutOffsetLookbackApplied &&
-    (!lease.rolloutLookbackScannedAt || scannedLookbackBytes < lookbackBytes);
+    !currentLease.rolloutOffsetLookbackApplied &&
+    (!currentLease.rolloutLookbackScannedAt || scannedLookbackBytes < lookbackBytes);
   if (size <= savedOffset && !needsLookbackScan) {
-    return { lease: { ...lease, rolloutPath }, appended: 0 };
+    return { lease: { ...currentLease, rolloutPath, rolloutGeneration: generation || null }, appended: 0 };
   }
-  const start = !reusableCursor
-    ? Math.max(0, size - lookbackBytes)
-    : needsLookbackScan
-      ? Math.max(0, Math.min(savedOffset, size) - lookbackBytes)
-      : Math.min(savedOffset, size);
+  const start = needsLookbackScan
+    ? Math.max(0, Math.min(savedOffset, size) - lookbackBytes)
+    : Math.min(savedOffset, size);
   const handle = await fs.open(rolloutPath, "r");
   let body = "";
   try {
@@ -4424,27 +4434,82 @@ async function syncLeaseRollout(lease, env = process.env) {
   } finally {
     await handle.close().catch(() => {});
   }
-  const projected = await appendRolloutMessages({
-    thread,
-    rolloutPath,
-    body,
-    start,
-    initialScan: !reusableCursor,
-    expectedGeneration,
-    env,
-  });
-  const appended = Number(projected?.appended || 0) || 0;
-  const currentGeneration = codexThreadId(await getThread(thread.id, env).catch(() => null));
-  if (currentGeneration !== expectedGeneration) {
-    return { lease: { ...lease, rolloutSyncError: "codex_generation_changed" }, appended };
+  await runRolloutAfterReadHook({
+    surface: "active_lease",
+    threadId: currentLease.threadId,
+    expectedGeneration: generation || null,
+    rolloutPathFingerprint: rolloutPathFingerprint(rolloutPath),
+  }, env);
+  const readFence = await fenceRolloutGeneration(currentLease.threadId, generation, "active_lease_after_read", env);
+  if (!readFence.ok) {
+    return { lease: resetLeaseRolloutForGeneration(currentLease, readFence.generation), appended: 0 };
+  }
+  thread = readFence.thread;
+  const parsed = parseAssistantRolloutMessages(body, currentLease.threadId, start, generation);
+  const existing = await rolloutExistingMessages(currentLease.threadId, parsed, env);
+  const existingEventKeys = new Set(existing.map(rolloutMessageEventKey));
+  const existingTextKeys = new Set(
+    existing
+      .filter((message) => message.role === "assistant")
+      .map(rolloutMessageNearTextKey),
+  );
+  const projectionFence = await fenceRolloutGeneration(currentLease.threadId, generation, "active_lease_before_projection", env);
+  if (!projectionFence.ok) {
+    return { lease: resetLeaseRolloutForGeneration(currentLease, projectionFence.generation), appended: 0 };
+  }
+  thread = projectionFence.thread;
+  let appended = 0;
+  for (const message of parsed) {
+    const eventKey = rolloutMessageEventKey(message);
+    const textKey = rolloutMessageNearTextKey(message);
+    if (existingEventKeys.has(eventKey) || existingTextKeys.has(textKey)) continue;
+    const whatsappParent = latestRolloutWhatsAppInput(existing, message.timestamp, thread);
+    const appendedMessage = await appendThreadMessage(currentLease.threadId, {
+      role: "assistant",
+      source: message.source,
+      text: message.text,
+      state: "completed",
+      cursor: null,
+      timestamp: message.timestamp,
+      phase: message.phase,
+      eventId: message.eventId,
+      parentMessageId: whatsappParent?.id || null,
+      connector: whatsappParent ? "whatsapp" : "",
+      chatId: whatsappParentChatId(whatsappParent, thread),
+      accountId: whatsappParentAccountId(whatsappParent, thread),
+      originSurface: "codex",
+      originTransport: "codex-rollout",
+      executorKind: "codex",
+      executorTransport: "cli-rollout",
+      executorThreadId: generation || null,
+      codexThreadId: generation || null,
+    }, env);
+    if (String(message.phase || "final_answer").trim().toLowerCase() === "final_answer") {
+      await reconcileCodexFinalProjection({
+        thread,
+        message: appendedMessage,
+        runtimeGeneration: generation,
+        source: "active_rollout",
+        env,
+      }).catch(() => {});
+    } else {
+      markConnectorDeliverySignal(appendedMessage);
+    }
+    existingEventKeys.add(eventKey);
+    existingTextKeys.add(textKey);
+    appended += 1;
+  }
+  const commitFence = await fenceRolloutGeneration(currentLease.threadId, generation, "active_lease_before_cursor_commit", env);
+  if (!commitFence.ok) {
+    return { lease: resetLeaseRolloutForGeneration(currentLease, commitFence.generation), appended };
   }
   return {
     lease: {
-      ...lease,
+      ...currentLease,
       rolloutPath,
-      rolloutGeneration: expectedGeneration || null,
+      rolloutGeneration: generation || null,
       rolloutOffset: Math.max(savedOffset, size),
-      rolloutSyncError: null,
+      rolloutValidation: { state: "accepted", reason: validation.reason, checkedAt: nowIso() },
       heartbeatAt: nowIso(),
       ...(needsLookbackScan
         ? {
@@ -4459,23 +4524,21 @@ async function syncLeaseRollout(lease, env = process.env) {
 }
 
 function rolloutSyncKey(lease = {}, env = process.env) {
-  return `${runtimeCacheScope(env)}:${String(lease.id || lease.threadId || lease.sessionName || "").trim()}`;
+  return `${runtimeCacheScope(env)}:${String(lease.id || lease.threadId || lease.sessionName || "").trim()}:${String(lease.rolloutGeneration || "").trim()}`;
 }
 
 function cachedRolloutLease(lease = {}, env = process.env) {
   const cached = rolloutSyncLeaseCache.get(rolloutSyncKey(lease, env));
   if (!cached) return lease;
-  const cachedGeneration = String(cached.rolloutGeneration || "").trim();
-  const leaseGeneration = String(lease.rolloutGeneration || "").trim();
-  if (leaseGeneration && cachedGeneration && cachedGeneration !== leaseGeneration) return lease;
   const cachedPath = String(cached.rolloutPath || "").trim();
   const leasePath = String(lease.rolloutPath || "").trim();
+  if (String(cached.rolloutGeneration || "").trim() !== String(lease.rolloutGeneration || "").trim()) return lease;
   if (cachedPath && leasePath && cachedPath !== leasePath) return lease;
   if (Number(cached.rolloutOffset || 0) <= Number(lease.rolloutOffset || 0)) return lease;
   return {
     ...lease,
     rolloutPath: cachedPath || leasePath,
-    rolloutGeneration: cachedGeneration || leaseGeneration || null,
+    rolloutGeneration: cached.rolloutGeneration || lease.rolloutGeneration || null,
     rolloutOffset: cached.rolloutOffset,
     rolloutOffsetLookbackApplied: cached.rolloutOffsetLookbackApplied,
     rolloutOffsetLookbackBytes: cached.rolloutOffsetLookbackBytes,
@@ -4520,69 +4583,48 @@ async function syncDetachedCodexRollouts(activeLeaseThreadIds = new Set(), env =
   const threads = await listThreads(env);
   let appended = 0;
   for (const thread of threads) {
-    if (!shouldSyncDetachedRollout(thread, activeLeaseThreadIds)) continue;
-    const lineage = resolveCurrentCodexGeneration(thread);
-    const expectedGeneration = lineage.generation;
-    const fencingMode = codexGenerationFencingMode(env);
-    if (lineage.ambiguous || (fencingMode === "enforce" && !expectedGeneration)) {
-      await appendEvent({
-        type: "codex_rollout_identity_mismatch",
-        threadId: thread.id,
-        expectedGeneration: null,
-        observedGenerations: lineage.generations,
-        projectionSource: "detached_rollout",
-        repairAction: "rejected_projection",
-        outcome: "codex_generation_fields_conflict",
-      }, env).catch(() => {});
-      continue;
-    }
-    let rolloutPath = codexRolloutPathForThread(thread);
-    const codexMetadata = rolloutPath ? {} : await resolveCodexThreadMetadata(thread, env).catch(() => ({}));
+    if (!shouldSyncDetachedRollout(thread, activeLeaseThreadIds, env)) continue;
+    const initialGeneration = codexThreadId(thread);
+    const codexMetadata = await resolveCodexThreadMetadata(thread, env).catch(() => ({}));
     let currentThread = thread;
     if (Object.keys(codexMetadata).length) {
       currentThread = await updateThread(thread.id, codexMetadataUpdatePatch(thread, codexMetadata), env).catch(() => thread);
-      rolloutPath = codexRolloutPathForThread(currentThread);
     }
-    if (fencingMode !== "off") {
-      const verified = await resolveVerifiedRollout(currentThread, expectedGeneration, { preferredPath: rolloutPath }, env);
-      if (verified.ok) {
-        if (rolloutPath && rolloutPath !== verified.rolloutPath) {
-          await appendEvent({
-            type: "codex_rollout_path_rebound",
-            threadId: thread.id,
-            expectedGeneration,
-            pathFingerprint: verified.pathFingerprint,
-            projectionSource: "detached_rollout",
-            repairAction: fencingMode === "enforce" ? "rebound" : "proposed_rebind",
-            outcome: fencingMode,
-          }, env).catch(() => {});
-        }
-        if (fencingMode === "enforce") rolloutPath = verified.rolloutPath;
-      } else {
-        await appendEvent({
-          type: "codex_rollout_identity_mismatch",
-          threadId: thread.id,
-          expectedGeneration: expectedGeneration || null,
-          observedGeneration: verified.observedGeneration || null,
-          pathFingerprint: verified.pathFingerprint || rolloutPathFingerprint(rolloutPath),
-          projectionSource: "detached_rollout",
-          repairAction: fencingMode === "enforce" ? "rejected_projection" : "proposed_reject",
-          outcome: verified.reason,
-        }, env).catch(() => {});
-        if (fencingMode === "enforce") continue;
-      }
-    }
-    rolloutPath = rolloutPath || await resolveCodexRolloutPath(expectedGeneration, env);
+    const generation = codexThreadId(currentThread) || initialGeneration;
+    // Always ask Codex for the current generation's path before considering a
+    // persisted rollout pointer. A safe reset must never inherit an old path.
+    let rolloutPath = await resolveCodexRolloutPath(generation, env);
+    rolloutPath = rolloutPath || codexRolloutPathForThread(currentThread, env);
     if (!rolloutPath) continue;
     const stats = await fs.stat(rolloutPath).catch(() => null);
     if (!stats?.isFile()) continue;
+    const validation = await validateCodexRolloutGeneration({
+      thread: currentThread,
+      generation,
+      rolloutPath,
+      surface: "detached_runtime",
+      env,
+    });
+    if (!validation.accepted) {
+      await updateThread(currentThread.id, {
+        runtime: {
+          ...(currentThread.runtime || {}),
+          operatorRolloutValidation: {
+            state: "rejected",
+            reason: validation.reason,
+            generation: generation || null,
+            checkedAt: nowIso(),
+          },
+        },
+      }, env).catch(() => {});
+      continue;
+    }
     const size = Number(stats.size || 0) || 0;
     const runtime = currentThread.runtime && typeof currentThread.runtime === "object" ? currentThread.runtime : {};
     const storedPath = String(runtime.operatorRolloutPath || "").trim();
-    const storedGeneration = String(runtime.operatorRolloutGeneration || "").trim();
     const storedOffset = Math.max(0, Number(runtime.operatorRolloutOffset || 0) || 0);
-    const generationCursorMatches = fencingMode !== "enforce" || storedGeneration === expectedGeneration;
-    const hasStoredOffset = storedPath === rolloutPath && generationCursorMatches && storedOffset > 0;
+    const storedGeneration = String(runtime.operatorRolloutGeneration || "").trim();
+    const hasStoredOffset = storedPath === rolloutPath && storedOffset > 0 && (!generation || storedGeneration === generation);
     const lookbackBytes = rolloutSyncLookbackBytes(env);
     const start = hasStoredOffset ? Math.min(storedOffset, size) : Math.max(0, size - lookbackBytes);
     let completedTurnId = "";
@@ -4596,32 +4638,55 @@ async function syncDetachedCodexRollouts(activeLeaseThreadIds = new Set(), env =
       } finally {
         await handle.close().catch(() => {});
       }
+      await runRolloutAfterReadHook({
+        surface: "detached_runtime",
+        threadId: currentThread.id,
+        expectedGeneration: generation || null,
+        rolloutPathFingerprint: rolloutPathFingerprint(rolloutPath),
+      }, env);
+      const readFence = await fenceRolloutGeneration(currentThread.id, generation, "detached_runtime_after_read", env);
+      if (!readFence.ok) continue;
+      currentThread = readFence.thread;
+      const projectionFence = await fenceRolloutGeneration(currentThread.id, generation, "detached_runtime_before_projection", env);
+      if (!projectionFence.ok) continue;
+      currentThread = projectionFence.thread;
       const projected = await appendRolloutMessages({
         thread: currentThread,
         rolloutPath,
+        generation,
         body,
         start,
         initialScan: !hasStoredOffset,
-        expectedGeneration,
+        projectionSource: "detached_rollout",
         env,
       }).catch(() => ({ appended: 0, completedTurnId: null }));
       appended += Number(projected?.appended || 0) || 0;
       completedTurnId = String(projected?.completedTurnId || "").trim();
     }
-    const latestThread = await getThread(currentThread.id, env).catch(() => null);
-    if (fencingMode === "enforce" && codexThreadId(latestThread) !== expectedGeneration) continue;
-    const latestRuntime = latestThread?.runtime && typeof latestThread.runtime === "object" ? latestThread.runtime : runtime;
-    const completionPatch = await reconcileDetachedRolloutCompletion(latestThread || currentThread, latestRuntime, completedTurnId, env);
-    const rolloutChanged = storedPath !== rolloutPath || storedGeneration !== expectedGeneration || storedOffset !== size;
+    const commitFence = await fenceRolloutGeneration(currentThread.id, generation, "detached_runtime_before_cursor_commit", env);
+    if (!commitFence.ok) continue;
+    currentThread = commitFence.thread;
+    const threadAfterProjection = await getThread(currentThread.id, env).catch(() => null) || currentThread;
+    const runtimeAfterProjection = threadAfterProjection.runtime && typeof threadAfterProjection.runtime === "object"
+      ? threadAfterProjection.runtime
+      : runtime;
+    const completionPatch = await reconcileDetachedRolloutCompletion(threadAfterProjection, runtimeAfterProjection, completedTurnId, env);
+    const rolloutChanged = storedPath !== rolloutPath || storedOffset !== size || storedGeneration !== generation;
     if (completionPatch || rolloutChanged) {
-      await updateThread(currentThread.id, {
+      await updateThread(threadAfterProjection.id, {
         ...(completionPatch || {}),
         runtime: {
-          ...(completionPatch?.runtime || latestRuntime),
-          runtimeKind: latestRuntime.runtimeKind || currentThread.runtimeKind || "codex-app-server",
+          ...(completionPatch?.runtime || runtimeAfterProjection),
+          runtimeKind: runtimeAfterProjection.runtimeKind || threadAfterProjection.runtimeKind || "codex-app-server",
           operatorRolloutPath: rolloutPath,
-          operatorRolloutGeneration: expectedGeneration || null,
           operatorRolloutOffset: size,
+          operatorRolloutGeneration: generation || null,
+          operatorRolloutValidation: {
+            state: "accepted",
+            reason: validation.reason,
+            generation: generation || null,
+            checkedAt: nowIso(),
+          },
           operatorRolloutSyncedAt: nowIso(),
           operatorRolloutSyncError: null,
         },
@@ -5185,6 +5250,56 @@ async function repairRuntimeResourceRegistry(rawTmuxSessions = [], { env = proce
   });
 }
 
+function generationDoctorIssue(code, detail = {}) {
+  return {
+    severity: "warning",
+    category: "codex_generation",
+    code,
+    ...detail,
+  };
+}
+
+function codexWhatsAppFinalMessage(message = {}) {
+  const source = String(message.source || "").trim().toLowerCase();
+  return message.role === "assistant" &&
+    String(message.state || "completed").trim().toLowerCase() === "completed" &&
+    String(message.phase || "final_answer").trim().toLowerCase() === "final_answer" &&
+    String(message.connector || "").trim().toLowerCase() === "whatsapp" &&
+    Boolean(String(message.chatId || "").trim()) &&
+    (source.includes("codex") || Boolean(message.codexThreadId || message.executorThreadId || message.finalProjectionRuntimeGeneration));
+}
+
+function finalProjectionOutboxJob(jobs = [], message = {}) {
+  const messageId = String(message.id || "").trim();
+  return jobs.find((job) =>
+    String(job?.connector || "").trim().toLowerCase() === "whatsapp" &&
+    String(job?.deliveryType || "").trim().toLowerCase() === "final" &&
+    String(job?.sourceMessageId || "").trim() === messageId,
+  ) || null;
+}
+
+function finalProjectionGeneration(message = {}) {
+  return String(
+    message.finalProjectionRuntimeGeneration ||
+    message.codexThreadId ||
+    message.executorThreadId ||
+    "",
+  ).trim();
+}
+
+function finalProjectionCanRepair(thread, message) {
+  const generation = finalProjectionGeneration(message);
+  const resolution = resolveCurrentCodexGeneration(thread);
+  if (resolution.ambiguous) return false;
+  if (!generation) return !resolution.id && !String(thread?.runtime?.safeReset?.codexThreadId || "").trim();
+  return resolution.id === generation;
+}
+
+function generationDoctorMessageTailLimit(env = process.env) {
+  const parsed = Number(env.ORKESTR_CODEX_GENERATION_DOCTOR_MESSAGE_TAIL_LIMIT || 100);
+  return Number.isFinite(parsed) ? Math.max(1, Math.min(1_000, Math.floor(parsed))) : 100;
+}
+
 export async function doctorRuntimeResources({ env = process.env, repair = false, automatic = false } = {}) {
   const leases = await listRuntimeLeases(env).catch(() => []);
   const activeLeases = leases.filter((lease) => !lease.endedAt);
@@ -5244,6 +5359,231 @@ export async function doctorRuntimeResources({ env = process.env, repair = false
     });
   }
 
+  // The automatic doctor runs on the hot runtime-sync path. Keep generation
+  // reconciliation an explicit operator repair so it cannot invalidate a
+  // rollout pointer while the sync pass is still recording its validation.
+  const generationThreads = automatic ? [] : await listThreads(env).catch(() => []);
+  const generationMessageTailLimit = generationDoctorMessageTailLimit(env);
+  for (const storedThread of generationThreads) {
+    let thread = storedThread;
+    let state = staleGenerationRuntimeState(thread);
+    let runtime = thread.runtime && typeof thread.runtime === "object" ? thread.runtime : {};
+    let metadata = thread.executor?.metadata && typeof thread.executor.metadata === "object" ? thread.executor.metadata : {};
+    const durableConflicts = state.resolution.id ? state.resolution.supersededIds : [];
+    if (durableConflicts.length) {
+      issues.push(generationDoctorIssue("durable_codex_generation_conflict", {
+        threadId: thread.id,
+        runtimeGeneration: state.resolution.id,
+        conflictingGenerations: durableConflicts,
+        candidateSources: Object.keys(state.resolution.candidates || {}),
+        message: "The live runtime generation disagrees with durable Codex identity copies.",
+      }));
+      if (repair) {
+        const patch = generationScopedRuntimePatch(thread, state.resolution.id, {
+          codexSessionId: thread.runtime?.codexSessionId || thread.executor?.codexSessionId || state.resolution.id,
+        });
+        thread = await updateThread(thread.id, patch, env).catch(() => thread) || thread;
+        state = staleGenerationRuntimeState(thread);
+        runtime = thread.runtime && typeof thread.runtime === "object" ? thread.runtime : {};
+        metadata = thread.executor?.metadata && typeof thread.executor.metadata === "object" ? thread.executor.metadata : {};
+        actions.push({ action: "repaired_durable_codex_generation_conflict", threadId: thread.id, runtimeGeneration: state.resolution.id || null });
+      }
+    }
+    if (state.resolution.ambiguous) {
+      issues.push({
+        severity: "error",
+        category: "codex_generation",
+        code: "ambiguous_codex_generation",
+        threadId: thread.id,
+        message: "Thread has conflicting durable Codex generation identities and is fail-closed.",
+        candidateSources: Object.keys(state.resolution.candidates || {}),
+      });
+      continue;
+    }
+
+    const currentGeneration = state.resolution.id;
+    const rolloutPath = String(thread.codexRolloutPath || metadata.codexRolloutPath || runtime.operatorRolloutPath || "").trim();
+    const rolloutGeneration = String(thread.codexRolloutGeneration || metadata.codexRolloutGeneration || runtime.operatorRolloutGeneration || "").trim();
+    const rolloutGenerationMismatch = Boolean(
+      currentGeneration && rolloutGeneration && rolloutGeneration !== currentGeneration,
+    );
+    let invalidateRollout = state.staleRollout || rolloutGenerationMismatch;
+    if (state.staleRollout || rolloutGenerationMismatch) {
+      issues.push(generationDoctorIssue("rollout_generation_mismatch", {
+        threadId: thread.id,
+        runtimeGeneration: currentGeneration || null,
+        rolloutGeneration: rolloutGeneration || null,
+        message: "Persisted rollout state belongs to a different Codex generation.",
+      }));
+    } else if (currentGeneration && rolloutPath && !rolloutGeneration) {
+      issues.push(generationDoctorIssue("unscoped_rollout_generation_state", {
+        threadId: thread.id,
+        runtimeGeneration: currentGeneration,
+        message: "Persisted rollout state has no generation marker and is running in compatibility shadow mode.",
+      }));
+    }
+    if (rolloutPath) {
+      const sessionMeta = await readCodexRolloutSessionMeta(rolloutPath, env);
+      if (!sessionMeta.ok) {
+        issues.push(generationDoctorIssue(`rollout_session_meta_${sessionMeta.reason}`, {
+          threadId: thread.id,
+          runtimeGeneration: currentGeneration || null,
+          rolloutPathFingerprint: rolloutPathFingerprint(rolloutPath),
+          message: "Rollout session metadata is missing, malformed, or unreadable.",
+        }));
+      } else if (currentGeneration && sessionMeta.id !== currentGeneration) {
+        invalidateRollout = true;
+        issues.push(generationDoctorIssue("rollout_session_meta_generation_mismatch", {
+          threadId: thread.id,
+          runtimeGeneration: currentGeneration,
+          sessionGeneration: sessionMeta.id,
+          rolloutPathFingerprint: rolloutPathFingerprint(rolloutPath),
+          message: "Rollout session metadata belongs to a different Codex generation.",
+        }));
+      }
+      const currentGenerationPath = currentGeneration
+        ? await resolveCodexRolloutPath(currentGeneration, env).catch(() => null)
+        : null;
+      if (currentGenerationPath && currentGenerationPath !== rolloutPath) {
+        invalidateRollout = true;
+        issues.push(generationDoctorIssue("rollout_path_generation_mismatch", {
+          threadId: thread.id,
+          runtimeGeneration: currentGeneration || null,
+          rolloutPathFingerprint: rolloutPathFingerprint(rolloutPath),
+          currentRolloutPathFingerprint: rolloutPathFingerprint(currentGenerationPath),
+          message: "Persisted rollout path differs from the current Codex generation path.",
+        }));
+      }
+    }
+    if (state.staleFinalDelivery) {
+      issues.push(generationDoctorIssue("stale_final_delivery_generation_state", {
+        threadId: thread.id,
+        runtimeGeneration: currentGeneration || null,
+        finalDeliveryGeneration: runtime.finalDelivery?.runtimeGeneration || null,
+        message: "Pending final delivery belongs to a superseded Codex generation.",
+      }));
+    }
+    if (repair && (invalidateRollout || state.staleFinalDelivery || (currentGeneration && runtime.operatorRolloutPath && !runtime.operatorRolloutGeneration))) {
+      const nextRuntime = {
+        ...runtime,
+        ...(invalidateRollout ? {
+          operatorRolloutPath: null,
+          operatorRolloutOffset: 0,
+          operatorRolloutGeneration: null,
+          operatorRolloutSyncedAt: null,
+          operatorRolloutSyncError: null,
+          operatorRolloutValidation: null,
+        } : currentGeneration && runtime.operatorRolloutPath && !runtime.operatorRolloutGeneration ? {
+          operatorRolloutGeneration: currentGeneration,
+        } : {}),
+        ...(state.staleFinalDelivery ? { finalDelivery: null } : {}),
+      };
+      const nextMetadata = invalidateRollout ? {
+        ...metadata,
+        codexRolloutPath: null,
+        codexRolloutGeneration: null,
+      } : metadata;
+      thread = await updateThread(thread.id, {
+        runtime: nextRuntime,
+        ...(invalidateRollout ? { codexRolloutPath: null, codexRolloutGeneration: null } : {}),
+        ...(invalidateRollout ? { executor: { ...(thread.executor || {}), metadata: nextMetadata } } : {}),
+      }, env).catch(() => thread) || thread;
+      runtime = thread.runtime && typeof thread.runtime === "object" ? thread.runtime : {};
+      metadata = thread.executor?.metadata && typeof thread.executor.metadata === "object" ? thread.executor.metadata : {};
+      actions.push({
+        action: "repaired_codex_generation_state",
+        threadId: thread.id,
+        rolloutInvalidated: invalidateRollout,
+        finalDeliveryInvalidated: state.staleFinalDelivery,
+      });
+      await appendEvent({
+        type: "codex_generation_state_repaired",
+        threadId: thread.id,
+        runtimeGeneration: currentGeneration || null,
+        rolloutInvalidated: invalidateRollout,
+        finalDeliveryInvalidated: state.staleFinalDelivery,
+      }, env).catch(() => {});
+    }
+
+    const diagnostics = runtime.codexGenerationDiagnostics && typeof runtime.codexGenerationDiagnostics === "object"
+      ? runtime.codexGenerationDiagnostics
+      : {};
+    const unmappedNotifications = Math.max(0, Number(diagnostics.unmappedNotifications || 0) || 0);
+    const reviewedNotifications = Math.max(0, Number(diagnostics.unmappedNotificationsReviewed || 0) || 0);
+    if (unmappedNotifications > reviewedNotifications) {
+      issues.push(generationDoctorIssue("unmapped_codex_notification", {
+        threadId: thread.id,
+        runtimeGeneration: currentGeneration || null,
+        unmappedNotifications: unmappedNotifications - reviewedNotifications,
+        message: "Superseded Codex notifications were rejected and need operator review.",
+      }));
+      if (repair) {
+        await updateThread(thread.id, {
+          runtime: {
+            ...runtime,
+            codexGenerationDiagnostics: {
+              ...diagnostics,
+              unmappedNotificationsReviewed: unmappedNotifications,
+              unmappedNotificationsReviewedAt: nowIso(),
+            },
+          },
+        }, env).catch(() => {});
+        actions.push({ action: "reviewed_unmapped_codex_notifications", threadId: thread.id, count: unmappedNotifications - reviewedNotifications });
+      }
+    }
+
+    const messages = await listThreadMessageCandidates(thread.id, {
+      tailLimit: generationMessageTailLimit,
+    }, env).catch(() => []);
+    const connectorOutboxJobs = (await listConnectorOutboxJobs({
+      connector: "whatsapp",
+      threadId: thread.id,
+      deliveryType: "final",
+      limit: generationMessageTailLimit,
+    }, env).catch(() => ({ jobs: [] }))).jobs || [];
+    const finalMessages = messages.filter(codexWhatsAppFinalMessage);
+    const latestFinal = finalMessages.at(-1) || null;
+    for (const message of finalMessages) {
+      const outboxJob = finalProjectionOutboxJob(connectorOutboxJobs, message);
+      const missingOutbox = !outboxJob;
+      const missingFinalDelivery = message.id === latestFinal?.id && runtime.finalDelivery?.messageId !== message.id;
+      if (missingFinalDelivery) {
+        issues.push(generationDoctorIssue("missing_final_projection", {
+          threadId: thread.id,
+          messageId: message.id,
+          runtimeGeneration: finalProjectionGeneration(message) || null,
+          message: "Latest completed Codex WhatsApp final has no final-delivery projection.",
+        }));
+      }
+      if (missingOutbox) {
+        issues.push(generationDoctorIssue("missing_final_projection_outbox", {
+          threadId: thread.id,
+          messageId: message.id,
+          runtimeGeneration: finalProjectionGeneration(message) || null,
+          message: "Completed Codex WhatsApp final has no connector outbox job.",
+        }));
+      }
+      if (repair && message.id === latestFinal?.id && (missingFinalDelivery || missingOutbox) && finalProjectionCanRepair(thread, message)) {
+        const result = await reconcileCodexFinalProjection({
+          thread,
+          message,
+          runtimeGeneration: finalProjectionGeneration(message),
+          allowUnboundGeneration: !finalProjectionGeneration(message),
+          source: "runtime_doctor_repair",
+          env,
+        }).catch(() => null);
+        if (result?.reconciled) {
+          actions.push({
+            action: "repaired_codex_final_projection",
+            threadId: thread.id,
+            messageId: message.id,
+            outboxJobId: result.outboxJob?.id || null,
+          });
+        }
+      }
+    }
+  }
+
   for (const session of tmuxSessions) {
     const decision = sessionRepairDecision(session, activeSessionNames, { repair, automatic, env });
     if (decision.orphan) {
@@ -5301,17 +5641,8 @@ export async function doctorRuntimeResources({ env = process.env, repair = false
     }
   }
 
-  const codexGeneration = await doctorCodexGenerationResources({ env, repair, resolveVerifiedRollout }).catch((error) => ({
-    checked: 0,
-    skippedAmbiguous: 0,
-    issues: [{ severity: "error", code: "codex_generation_doctor_failed", message: error?.message || String(error) }],
-    actions: [],
-  }));
-  issues.push(...codexGeneration.issues);
-  actions.push(...codexGeneration.actions);
-
   const relevantIssues = automatic
-    ? issues.filter((issue) => issue.code === "expired_temp_runtime" || issue.code === "orphan_temp_codex_process" || issue.code.startsWith("codex_") || issue.code === "completed_turn_missing_final_projection" || issue.code === "final_message_missing_outbox")
+    ? issues.filter((issue) => issue.code === "expired_temp_runtime" || issue.code === "orphan_temp_codex_process")
     : issues;
   const counts = {
     activeLeases: activeLeases.length,
@@ -5322,10 +5653,16 @@ export async function doctorRuntimeResources({ env = process.env, repair = false
     staleLeases: activeLeases.filter((lease) => !liveSessionNames.has(lease.sessionName)).length,
     duplicateLeases: duplicateLeaseGroups.reduce((count, group) => count + group.duplicates.length, 0),
     tempCodexProcesses: tempCodexProcesses.length,
+    generationIssues: issues.filter((issue) => issue.category === "codex_generation").length,
+    generationFieldConflicts: issues.filter((issue) => issue.code === "durable_codex_generation_conflict" || issue.code === "ambiguous_codex_generation").length,
+    rolloutGenerationMismatches: issues.filter((issue) => String(issue.code || "").startsWith("rollout_")).length,
+    unmappedCodexNotifications: issues
+      .filter((issue) => issue.code === "unmapped_codex_notification")
+      .reduce((count, issue) => count + (Number(issue.unmappedNotifications || 0) || 0), 0),
+    missingFinalProjections: issues.filter((issue) => issue.code === "missing_final_projection").length,
+    missingFinalOutboxes: issues.filter((issue) => issue.code === "missing_final_projection_outbox").length,
     issues: relevantIssues.length,
     repaired: actions.length,
-    codexGenerationChecked: codexGeneration.checked,
-    skippedAmbiguous: codexGeneration.skippedAmbiguous,
     stillBroken: relevantIssues.filter((issue) => !actions.some((action) => action.threadId === issue.threadId && action.code === issue.code)).length,
   };
   const status = relevantIssues.some((issue) => issue.severity === "error") ? "broken" : relevantIssues.length ? "warning" : "ok";
