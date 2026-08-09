@@ -561,9 +561,22 @@ cleanup_incomplete_release() {
   fi
 }
 
+make_release_runtime_readable() {
+  local release_dir
+  release_dir="$1"
+  [ -d "$release_dir" ] || return 0
+
+  # Deployment state and backups need the restrictive process umask, but the
+  # immutable release tree is public source code. Helper services such as the
+  # Postfix mailbox pipe run as the configured Orkestr service user and must be
+  # able to traverse it. Preserve executable bits while granting read access.
+  chmod -R a+rX "$release_dir"
+}
+
 activate_release() {
   local release_dir next_link
   release_dir="$1"
+  make_release_runtime_readable "$release_dir"
   if [ -e "$current_link" ] && [ ! -L "$current_link" ]; then
     echo "Refusing to replace non-symlink current path: $current_link" >&2
     exit 1
@@ -1598,6 +1611,7 @@ install_command() {
   fi
   if [ "$previous_release" = "$release_id" ] && [ -d "$release_dir" ]; then
     if release_is_complete "$release_dir"; then
+      make_release_runtime_readable "$release_dir"
       repair_runtime_ownership
       restart_and_verify_public_service
       restart_and_verify_mailbox_mta
@@ -1638,6 +1652,7 @@ install_command() {
     fi
     npm --prefix "$release_dir" prune --omit=dev
     printf 'ready\n' > "$release_dir/.orkestr-release-ready"
+    make_release_runtime_readable "$release_dir"
     staging_release_dir=""
   fi
 
