@@ -3,11 +3,15 @@ import { ingestMailboxMessage } from "../../../../../packages/connectors/src/mai
 import { ingestPostfixSpoolFile } from "../../../../../packages/connectors/src/postfix-mailbox-adapter.js";
 import {
   createMailboxForPrincipal,
+  cancelMailboxRouteWork,
+  createMailboxRoute,
   createMailboxThreadListener,
   deleteMailboxForPrincipal,
   mailboxForPrincipal,
   mailboxThreadDeliveryStatus,
   listMailboxThreadListeners,
+  listMailboxRoutes,
+  mailboxRouteStatus,
   mailboxInfrastructureStatus,
   listMailboxDeadLetters,
   listMailboxRelayAudits,
@@ -16,7 +20,11 @@ import {
   publicMailbox,
   replayMailboxDeadLetterForPrincipal,
   retryMailboxRelayForPrincipal,
+  retryMailboxRouteWork,
   revokeMailboxThreadListener,
+  revokeMailboxRoute,
+  moveMailboxRoute,
+  discardMailboxContext,
   rotateMailboxForPrincipal,
   verifyMailboxForPrincipal,
 } from "../../../../../packages/core/src/mailboxes.js";
@@ -56,6 +64,11 @@ function mailboxBody(body: Record<string, unknown> = {}) {
   if (body.target && typeof body.target === "object") output.target = body.target;
   if (body.verification && typeof body.verification === "object") output.verification = body.verification;
   if (body.limits && typeof body.limits === "object") output.limits = body.limits;
+  if (body.newThread && typeof body.newThread === "object") output.newThread = body.newThread;
+  if (body.filter && typeof body.filter === "object") output.filter = body.filter;
+  for (const key of ["threadId", "routeId", "mode", "workId", "contextId", "reason", "expectedPolicyRevision"]) {
+    if (body[key] !== undefined) output[key] = String(body[key] || "").trim();
+  }
   if (body.confirm === true) output.confirm = true;
   return output;
 }
@@ -162,6 +175,94 @@ export class MailboxesController {
       return { ok: true, status: await mailboxThreadDeliveryStatus({ mailbox } as any) };
     } catch (error) {
       rethrowHttp(error, "mailbox_delivery_status_failed");
+    }
+  }
+
+  @Get(":mailboxId/routes")
+  async routes(@Req() request: any, @Param("mailboxId") mailboxId: string, @Query("includeRevoked") includeRevoked = "") {
+    try {
+      const principal = requestPrincipal(request);
+      const mailbox = await mailboxForPrincipal(mailboxId, principal);
+      return { ok: true, routes: await listMailboxRoutes({ mailbox, principal, includeRevoked: includeRevoked === "true" } as any) };
+    } catch (error) {
+      rethrowHttp(error, "mailbox_route_list_failed");
+    }
+  }
+
+  @Post(":mailboxId/routes")
+  @HttpCode(201)
+  async createRoute(@Req() request: any, @Param("mailboxId") mailboxId: string, @Body() body: Record<string, unknown> = {}) {
+    try {
+      const principal = requestPrincipal(request);
+      const mailbox = await mailboxForPrincipal(mailboxId, principal);
+      return await createMailboxRoute({ mailbox, threadId: String(body.threadId || "").trim(), newThread: body.newThread, mode: String(body.mode || "append_only"), principal, expectedPolicyRevision: body.expectedPolicyRevision } as any);
+    } catch (error) {
+      rethrowHttp(error, "mailbox_route_create_failed");
+    }
+  }
+
+  @Get(":mailboxId/route-status")
+  async routeStatus(@Req() request: any, @Param("mailboxId") mailboxId: string) {
+    try {
+      const mailbox = await mailboxForPrincipal(mailboxId, requestPrincipal(request));
+      return { ok: true, status: await mailboxRouteStatus({ mailbox } as any) };
+    } catch (error) {
+      rethrowHttp(error, "mailbox_route_status_failed");
+    }
+  }
+
+  @Patch(":mailboxId/routes/:routeId")
+  async moveRoute(@Req() request: any, @Param("mailboxId") mailboxId: string, @Param("routeId") routeId: string, @Body() body: Record<string, unknown> = {}) {
+    try {
+      const principal = requestPrincipal(request);
+      const mailbox = await mailboxForPrincipal(mailboxId, principal);
+      return await moveMailboxRoute({ mailbox, routeId, threadId: String(body.threadId || "").trim(), mode: String(body.mode || ""), principal, expectedPolicyRevision: body.expectedPolicyRevision } as any);
+    } catch (error) {
+      rethrowHttp(error, "mailbox_route_move_failed");
+    }
+  }
+
+  @Delete(":mailboxId/routes/:routeId")
+  async revokeRoute(@Req() request: any, @Param("mailboxId") mailboxId: string, @Param("routeId") routeId: string, @Body() body: Record<string, unknown> = {}) {
+    try {
+      const principal = requestPrincipal(request);
+      const mailbox = await mailboxForPrincipal(mailboxId, principal);
+      return await revokeMailboxRoute({ mailbox, routeId, principal, reason: String(body.reason || "").trim(), expectedPolicyRevision: body.expectedPolicyRevision } as any);
+    } catch (error) {
+      rethrowHttp(error, "mailbox_route_revoke_failed");
+    }
+  }
+
+  @Post(":mailboxId/route-work/:workId/retry")
+  async retryRouteWork(@Req() request: any, @Param("mailboxId") mailboxId: string, @Param("workId") workId: string) {
+    try {
+      const principal = requestPrincipal(request);
+      const mailbox = await mailboxForPrincipal(mailboxId, principal);
+      return await retryMailboxRouteWork({ mailbox, workId, principal } as any);
+    } catch (error) {
+      rethrowHttp(error, "mailbox_route_retry_failed");
+    }
+  }
+
+  @Delete(":mailboxId/route-work/:workId")
+  async cancelRouteWork(@Req() request: any, @Param("mailboxId") mailboxId: string, @Param("workId") workId: string, @Body() body: Record<string, unknown> = {}) {
+    try {
+      const principal = requestPrincipal(request);
+      const mailbox = await mailboxForPrincipal(mailboxId, principal);
+      return await cancelMailboxRouteWork({ mailbox, workId, principal, reason: String(body.reason || "").trim() } as any);
+    } catch (error) {
+      rethrowHttp(error, "mailbox_route_cancel_failed");
+    }
+  }
+
+  @Delete(":mailboxId/contexts/:contextId")
+  async discardContext(@Req() request: any, @Param("mailboxId") mailboxId: string, @Param("contextId") contextId: string, @Body() body: Record<string, unknown> = {}) {
+    try {
+      const principal = requestPrincipal(request);
+      const mailbox = await mailboxForPrincipal(mailboxId, principal);
+      return await discardMailboxContext({ mailbox, contextId, principal, reason: String(body.reason || "").trim() } as any);
+    } catch (error) {
+      rethrowHttp(error, "mailbox_context_discard_failed");
     }
   }
 

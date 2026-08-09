@@ -3,6 +3,7 @@ import { appendEvent } from "../../storage/src/store.js";
 import { policyError } from "./policy.js";
 import { appendThreadMessage } from "./threads.js";
 import { evaluateMailboxThreadDeliveryShadow } from "./mailbox-thread-delivery-shadow.js";
+import { enqueueMailboxRouteSource } from "./mailbox-routes.js";
 import {
   mailboxPumpRunKey,
   mailboxThreadDeliveryPumpLeaseMs,
@@ -220,6 +221,10 @@ export async function enqueueMailboxThreadDeliveries({ mailbox, message, idempot
   const resourceId = mailboxResourceId(mailbox, env);
   const messageKey = clean(idempotencyKey);
   if (!messageKey) throw policyError("mailbox_message_idempotency_required", 400);
+  // Route sources are immutable mailbox ingress records. Legacy listeners use
+  // the existing append-only deliveries below and never acquire execution or
+  // context semantics merely by being present.
+  const routeSource = await enqueueMailboxRouteSource({ mailbox, message, idempotencyKey: messageKey }, env);
   const snapshot = await readThreadResourcePolicy(env);
   const resource = snapshot.resources.find((item) => item.resourceType === "mailbox" && item.id === resourceId && item.status === "active" && !item.retiredAt) || null;
   const candidates = resource ? (snapshot.mailboxListeners || []).filter((item) => item.resourceId === resourceId && item.status === "active" && !item.revokedAt && matches(item, message)) : [];
@@ -253,7 +258,7 @@ export async function enqueueMailboxThreadDeliveries({ mailbox, message, idempot
     recordMailboxThreadDeliveryMetrics({ state: delivery.state, lagMs: Date.now() - Date.parse(delivery.createdAt || "") });
   }
   await appendEvent({ type: result.result.unrouted ? "mailbox_thread_delivery_unrouted" : "mailbox_thread_delivery_queued", mailboxId: mailbox.id, resourceId, deliveryCount: result.result.queued, idempotencyKey: messageKey }, env).catch(() => {});
-  return { ok: true, deliveryIds: result.result.deliveries.map((item) => item.id), queued: result.result.queued, unrouted: result.result.unrouted, policyRevision: result.state.revision, idempotent: result.result.idempotent };
+  return { ok: true, deliveryIds: result.result.deliveries.map((item) => item.id), queued: result.result.queued, unrouted: result.result.unrouted, policyRevision: result.state.revision, idempotent: result.result.idempotent, routeSource };
 }
 
 export async function routeMainMailboxThreadDelivery({ mailbox, message, idempotencyKey, publicMailbox } = {}, env = process.env) {

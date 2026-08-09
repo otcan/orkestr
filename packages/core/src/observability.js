@@ -6,11 +6,12 @@ const httpResponseSizeBuckets = [100, 500, 1000, 5000, 10000, 50000, 100000, 500
 const backgroundDurationBuckets = [0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 120];
 const pendingInputStates = new Set(["queued", "pending_delivery", "awaiting_ack", "running"]);
 const threadResourceTypes = new Set(["desktop", "oxrm", "mailbox"]);
-const threadResourcePermissions = new Set(["discover", "acquire", "operate", "share", "read", "write", "execute", "subscribe", "manage"]);
+const threadResourcePermissions = new Set(["discover", "acquire", "operate", "share", "read", "write", "execute", "subscribe", "process", "manage"]);
 const threadResourceModes = new Set(["off", "shadow", "enforce"]);
 const threadResourceInvalidationSubjects = new Set(["resource", "session_share", "share", "listener"]);
 const threadResourceInvalidationReasons = new Set(["revoked", "generation_advanced", "grant_replaced", "listener_revoked", "policy_stale"]);
 const mailboxDeliveryStates = new Set(["pending", "claimed", "delivered", "revoked", "quarantined", "dead-letter"]);
+const mailboxRouteWorkStates = new Set(["pending", "claimed", "accepted", "delivered", "dead-letter", "cancelled", "context_pending"]);
 const breakGlassOutcomes = new Set(["allowed", "denied", "blocked"]);
 const shadowBoundaryWarningOutcomes = new Set(["emitted", "deduplicated", "failed"]);
 const counters = new Map();
@@ -218,6 +219,12 @@ export function recordMailboxThreadDeliveryMetrics({ state = "unknown", lagMs = 
   const labels = { state: enumLabel(state, mailboxDeliveryStates) };
   incrementCounter("orkestr_mailbox_thread_delivery_transitions_total", labels);
   if (Number(lagMs) > 0) observeHistogram("orkestr_mailbox_thread_delivery_lag_seconds", countValue(lagMs) / 1000, labels, backgroundDurationBuckets);
+}
+
+export function recordMailboxRouteMetrics({ state = "unknown", mode = "unknown", lagMs = 0 } = {}) {
+  const labels = { state: enumLabel(state, mailboxRouteWorkStates), mode: enumLabel(mode, new Set(["append_only", "process_immediately", "context_next_turn"])) };
+  incrementCounter("orkestr_mailbox_route_transitions_total", labels);
+  if (Number(lagMs) > 0) observeHistogram("orkestr_mailbox_route_lag_seconds", countValue(lagMs) / 1000, labels, backgroundDurationBuckets);
 }
 
 export function recordThreadResourceBreakGlassMetric({ resourceType = "unknown", outcome = "allowed" } = {}) {

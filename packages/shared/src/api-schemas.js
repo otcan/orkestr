@@ -23,6 +23,24 @@ export const connectorConfigSchema = {
   body: objectValue,
 };
 
+export const mailboxRouteSchema = {
+  body: {
+    type: "object",
+    properties: {
+      threadId: stringValue,
+      mode: stringValue,
+      routeId: stringValue,
+      workId: stringValue,
+      contextId: stringValue,
+      reason: stringValue,
+      expectedPolicyRevision: stringValue,
+      idempotencyKey: stringValue,
+      newThread: objectValue,
+    },
+    additionalProperties: true,
+  },
+};
+
 export const connectorTestSchema = idParams("id");
 
 export const gmailMessagesSchema = {

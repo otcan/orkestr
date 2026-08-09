@@ -211,6 +211,38 @@ function ensureSchema(db) {
       expires_at text not null,
       updated_at text not null
     );
+    create table if not exists orkestr_mailbox_routes (
+      id text primary key,
+      resource_id text not null,
+      status text not null,
+      data_json text not null
+    );
+    create unique index if not exists idx_mailbox_routes_active_resource
+      on orkestr_mailbox_routes(resource_id) where status = 'active';
+    create table if not exists orkestr_mailbox_sources (
+      id text primary key,
+      dedupe_key text not null unique,
+      resource_id text not null,
+      data_json text not null
+    );
+    create table if not exists orkestr_mailbox_route_work (
+      id text primary key,
+      dedupe_key text not null unique,
+      route_id text not null,
+      state text not null,
+      data_json text not null
+    );
+    create index if not exists idx_mailbox_route_work_claim
+      on orkestr_mailbox_route_work(state, route_id);
+    create table if not exists orkestr_mailbox_contexts (
+      id text primary key,
+      work_id text not null unique,
+      thread_id text not null,
+      status text not null,
+      data_json text not null
+    );
+    create index if not exists idx_mailbox_contexts_pending
+      on orkestr_mailbox_contexts(thread_id, status);
     create table if not exists orkestr_thread_resource_audit_outbox (
       id text primary key,
       action text not null,
@@ -362,6 +394,10 @@ function readState(db) {
       createdAt: row.created_at, updatedAt: row.updated_at, deliveredAt: row.delivered_at || null,
     })),
     mailboxPumpLeases: db.prepare("select * from orkestr_mailbox_thread_pump_leases").all().map((row) => ({ name: row.name, token: row.token, expiresAt: row.expires_at, updatedAt: row.updated_at })),
+    mailboxRoutes: db.prepare("select * from orkestr_mailbox_routes").all().map((row) => parseJson(row.data_json, {})),
+    mailboxSources: db.prepare("select * from orkestr_mailbox_sources").all().map((row) => parseJson(row.data_json, {})),
+    mailboxRouteWork: db.prepare("select * from orkestr_mailbox_route_work").all().map((row) => parseJson(row.data_json, {})),
+    mailboxContexts: db.prepare("select * from orkestr_mailbox_contexts").all().map((row) => parseJson(row.data_json, {})),
     policyAuditOutbox: db.prepare("select * from orkestr_thread_resource_audit_outbox order by created_at asc").all().map((row) => ({
       id: row.id, action: row.action, resourceType: row.resource_type || "", resourceId: row.resource_id || "", threadId: row.thread_id || "",
       permission: row.permission || "", boundaryId: row.boundary_id || "", ownerUserId: row.owner_user_id || "", changeRef: row.change_ref || "", outcome: row.outcome,
@@ -388,7 +424,7 @@ function readState(db) {
 }
 
 function replaceState(db, state = {}, auditOutboxUpserts = []) {
-  db.exec("delete from orkestr_thread_resource_sessions; delete from orkestr_mailbox_thread_pump_leases; delete from orkestr_mailbox_thread_deliveries; delete from orkestr_mailbox_thread_listeners; delete from orkestr_thread_resource_grants; delete from orkestr_thread_resources; delete from orkestr_thread_resource_policy; delete from orkestr_thread_resource_ceilings; delete from orkestr_thread_resource_mutations;");
+  db.exec("delete from orkestr_thread_resource_sessions; delete from orkestr_mailbox_contexts; delete from orkestr_mailbox_route_work; delete from orkestr_mailbox_sources; delete from orkestr_mailbox_routes; delete from orkestr_mailbox_thread_pump_leases; delete from orkestr_mailbox_thread_deliveries; delete from orkestr_mailbox_thread_listeners; delete from orkestr_thread_resource_grants; delete from orkestr_thread_resources; delete from orkestr_thread_resource_policy; delete from orkestr_thread_resource_ceilings; delete from orkestr_thread_resource_mutations;");
   const resource = db.prepare("insert into orkestr_thread_resources(resource_type, resource_id, native_id, resource_key, owner_user_id, boundary_id, generation, status, backend, created_at, updated_at, retired_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
   for (const item of state.resources || []) resource.run(item.resourceType, item.id, item.nativeId || item.resourceKey, item.resourceKey, item.ownerUserId, item.boundaryId, item.generation, item.status || (item.retiredAt ? "retired" : "active"), item.backend || "", item.createdAt, item.updatedAt, item.retiredAt || null);
   const policy = db.prepare("insert into orkestr_thread_resource_policy(thread_id, resource_type, revision, explicit_empty, inheritance_mode, parent_snapshot_revision, created_at, updated_at) values (?, ?, ?, ?, ?, ?, ?, ?)");
@@ -405,6 +441,14 @@ function replaceState(db, state = {}, auditOutboxUpserts = []) {
   for (const item of state.mailboxDeliveries || []) delivery.run(item.id, item.dedupeKey, item.resourceType, item.resourceId, item.mailboxId, item.listenerId || null, item.listenerGeneration || 0, item.threadId || null, item.state, item.epoch || 1, item.attemptCount || 0, item.maxAttempts || 1, item.nextAttemptAt || null, item.claimToken || null, item.claimExpiresAt || null, item.grantRevision || 0, item.policyRevision || 0, item.resourceGeneration || 1, item.messageKey, JSON.stringify(item.payload || {}), item.reason || null, item.createdAt, item.updatedAt, item.deliveredAt || null);
   const pumpLease = db.prepare("insert into orkestr_mailbox_thread_pump_leases(name, token, expires_at, updated_at) values (?, ?, ?, ?)");
   for (const item of state.mailboxPumpLeases || []) pumpLease.run(item.name, item.token, item.expiresAt, item.updatedAt);
+  const route = db.prepare("insert into orkestr_mailbox_routes(id, resource_id, status, data_json) values (?, ?, ?, ?)");
+  for (const item of state.mailboxRoutes || []) route.run(item.id, item.resourceId, item.status, JSON.stringify(item));
+  const source = db.prepare("insert into orkestr_mailbox_sources(id, dedupe_key, resource_id, data_json) values (?, ?, ?, ?)");
+  for (const item of state.mailboxSources || []) source.run(item.id, item.dedupeKey, item.resourceId, JSON.stringify(item));
+  const routeWork = db.prepare("insert into orkestr_mailbox_route_work(id, dedupe_key, route_id, state, data_json) values (?, ?, ?, ?, ?)");
+  for (const item of state.mailboxRouteWork || []) routeWork.run(item.id, item.dedupeKey, item.routeId, item.state, JSON.stringify(item));
+  const mailboxContext = db.prepare("insert into orkestr_mailbox_contexts(id, work_id, thread_id, status, data_json) values (?, ?, ?, ?, ?)");
+  for (const item of state.mailboxContexts || []) mailboxContext.run(item.id, item.workId, item.threadId, item.status, JSON.stringify(item));
   const resourceSession = db.prepare("insert into orkestr_thread_resource_sessions(id, jti_hash, token_id_hash, bearer_hash, audience, scopes_json, principal_kind, principal_id, owner_user_id, instance_id, account_id, account_service, connector_service, connector_account_id, connector_conversation_id, connector_binding_id, connector_target_thread_id, connector_operation_ref, resource_type, resource_id, actions_json, connector_tool, connector_action, thread_id, grant_thread_id, root_thread_id, boundary_id, policy_revision, grant_revision, resource_generation, state, epoch, issued_at, expires_at, last_used_at, created_at, updated_at, invalidated_at, invalidation_reason) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
   for (const item of state.resourceSessions || []) {
     resourceSession.run(item.id, item.jtiHash, item.tokenIdHash, item.bearerHash || "", item.audience || "", JSON.stringify(item.scopes || []),

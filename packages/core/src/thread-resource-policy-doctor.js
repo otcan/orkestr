@@ -45,12 +45,12 @@ function emptyReport({ ok, backend, health, error = "", modes, writeModes, globa
   return {
     ok, backend, health, ...(error ? { error } : {}), ...(disabled ? { disabled: true } : {}),
     global: { access: "per_resource_only", write: globalWrite }, modes, writeModes,
-    counts: { resources: {}, grants: {}, policies: {}, listeners: 0, deliveries: {}, auditOutbox: 0, resourceSessions: {} },
+    counts: { resources: {}, grants: {}, policies: {}, listeners: 0, deliveries: {}, routes: {}, routeSources: {}, routeWork: {}, contexts: {}, auditOutbox: 0, resourceSessions: {} },
     outbox: { total: 0, pending: 0, claimed: 0, delivered: 0 },
     shadowMismatches: 0,
     coverage: { resourceSessions: "unsupported" },
-    stale: { sessions: 0, listeners: 0, deliveries: 0 },
-    queue: { pending: 0, deadLetter: 0, oldestLagMs: 0 },
+    stale: { sessions: 0, listeners: 0, deliveries: 0, routeWork: 0 },
+    queue: { pending: 0, deadLetter: 0, oldestLagMs: 0, routePending: 0, routeDeadLetter: 0 },
     evidence: { unregistered: 0, ambiguous: 0, plannedResources: 0, plannedGrants: 0 },
     breakGlass: { active: 0, pendingAudit: 0 },
   };
@@ -93,6 +93,8 @@ export async function threadResourcePolicyDoctorReport(env = process.env, now = 
   ]);
   const deliveryStaleMs = duration(env, "ORKESTR_THREAD_RESOURCE_STALE_DELIVERY_MS", 30 * 60_000);
   const pending = state.mailboxDeliveries.filter((item) => ["pending", "claimed"].includes(item.state));
+  const routeWork = state.mailboxRouteWork || [];
+  const routePending = routeWork.filter((item) => ["pending", "claimed"].includes(item.state));
   const oldestAt = pending.map((item) => Date.parse(item.createdAt)).filter(Number.isFinite).sort((a, b) => a - b)[0] || 0;
   const activeBreakGlass = (state.policyAuditOutbox || []).filter((item) => item.action === "break_glass" && item.expiresAt && Date.parse(item.expiresAt) > now);
   const outbox = Object.fromEntries(["pending", "claimed", "delivered"].map((name) => [name, state.policyAuditOutbox.filter((item) => item.state === name).length]));
@@ -115,6 +117,10 @@ export async function threadResourcePolicyDoctorReport(env = process.env, now = 
       policies: countBy(state.policies),
       listeners: state.mailboxListeners.length,
       deliveries: Object.fromEntries(["pending", "claimed", "delivered", "revoked", "quarantined", "dead-letter"].map((name) => [name, state.mailboxDeliveries.filter((item) => item.state === name).length])),
+      routes: Object.fromEntries(["active", "revoked"].map((name) => [name, (state.mailboxRoutes || []).filter((item) => item.status === name).length])),
+      routeSources: Object.fromEntries(["stored", "suppressed", "unrouted", "dead-letter"].map((name) => [name, (state.mailboxSources || []).filter((item) => item.state === name).length])),
+      routeWork: Object.fromEntries(["pending", "claimed", "accepted", "delivered", "dead-letter", "cancelled", "context_pending"].map((name) => [name, routeWork.filter((item) => item.state === name).length])),
+      contexts: Object.fromEntries(["pending", "reserved", "consumed", "cancelled"].map((name) => [name, (state.mailboxContexts || []).filter((item) => item.status === name).length])),
       auditOutbox: state.policyAuditOutbox.length,
       resourceSessions: resourceSessionCounts,
     },
@@ -125,8 +131,9 @@ export async function threadResourcePolicyDoctorReport(env = process.env, now = 
       sessions: resourceSessions.filter((item) => item.state === "active" && Date.parse(item.expiresAt) <= now).length,
       listeners: state.mailboxListeners.filter((item) => item.status === "active" && !item.revokedAt && !listenerHasCurrentGrant(item, state, threadsById)).length,
       deliveries: pending.filter((item) => old(item.updatedAt || item.createdAt, deliveryStaleMs, now)).length,
+      routeWork: routePending.filter((item) => old(item.updatedAt || item.createdAt, deliveryStaleMs, now)).length,
     },
-    queue: { pending: pending.length, deadLetter: state.mailboxDeliveries.filter((item) => item.state === "dead-letter").length, oldestLagMs: oldestAt ? Math.max(0, now - oldestAt) : 0 },
+    queue: { pending: pending.length, deadLetter: state.mailboxDeliveries.filter((item) => item.state === "dead-letter").length, oldestLagMs: oldestAt ? Math.max(0, now - oldestAt) : 0, routePending: routePending.length, routeDeadLetter: routeWork.filter((item) => item.state === "dead-letter").length },
     evidence: { unregistered: evidence.unregistered.length, ambiguous: evidence.ambiguous.length, plannedResources: evidence.plannedResources.length, plannedGrants: evidence.plannedGrants.length },
     breakGlass: { active: activeBreakGlass.length, pendingAudit: activeBreakGlass.filter((item) => item.state === "pending").length },
   };
@@ -135,7 +142,7 @@ export async function threadResourcePolicyDoctorReport(env = process.env, now = 
 export async function threadResourcePolicyDoctorCheck(env = process.env) {
   const report = await threadResourcePolicyDoctorReport(env);
   const allOff = Object.values(report.modes).every((mode) => mode === "off");
-  const problems = !report.ok || report.queue.deadLetter > 0 || report.stale.sessions > 0 || report.stale.listeners > 0 || report.stale.deliveries > 0 || report.evidence.unregistered > 0 || report.evidence.ambiguous > 0;
+  const problems = !report.ok || report.queue.deadLetter > 0 || report.queue.routeDeadLetter > 0 || report.stale.sessions > 0 || report.stale.listeners > 0 || report.stale.deliveries > 0 || report.stale.routeWork > 0 || report.evidence.unregistered > 0 || report.evidence.ambiguous > 0;
   const status = !report.ok ? (allOff ? "ok" : "warning") : problems ? "warning" : "ok";
   return {
     id: "thread_resource_policy",
@@ -146,7 +153,7 @@ export async function threadResourcePolicyDoctorCheck(env = process.env) {
       ? (allOff ? "Policy storage is unavailable while all resource modes are off." : `Policy storage is unavailable (${report.error}).`)
       : report.health === "not_initialized"
         ? "Policy storage is not initialized while all resource modes are off."
-        : `Policy ${report.backend} is healthy; ${report.queue.pending} mailbox delivery item(s) pending, ${report.queue.deadLetter} dead-lettered, and ${report.outbox.pending} audit item(s) pending delivery.`,
+        : `Policy ${report.backend} is healthy; ${report.queue.pending} mailbox delivery item(s) and ${report.queue.routePending} route work item(s) pending, ${report.queue.deadLetter + report.queue.routeDeadLetter} dead-lettered, and ${report.outbox.pending} audit item(s) pending delivery.`,
     report,
     repair: problems ? "Review resource-grants doctor evidence and mailbox delivery status before enforcing additional resource modes." : "",
   };

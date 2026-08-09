@@ -10,6 +10,11 @@ import { assertResourceAccess, assertThreadLimit, filterResourcesForPrincipal, i
 import { resolveThreadAttachments } from "./thread-attachments.js";
 import { userScopedCapabilityHints } from "./user-skills.js";
 import { adminUserId, getUser, normalizeUserId } from "./users.js";
+import {
+  consumeMailboxContextsForHumanTurn,
+  releaseMailboxContextsForHumanTurn,
+  reserveMailboxContextsForHumanTurn,
+} from "./mailbox-routes.js";
 
 const runningThreadIds = new Set();
 const messageMutationQueues = new Map();
@@ -75,6 +80,8 @@ const messageStringFields = [
   "idempotencyKey",
   "signalKind",
   "signalMode",
+  "mailboxExecutionPolicy",
+  "mailboxContextClaimId",
 ];
 
 function safeThreadId(threadId) {
@@ -605,7 +612,7 @@ export async function appendThreadMessage(threadId, input, env = process.env) {
     }
     nextMessage = normalizeNoReplyAssistantMessage(nextMessage);
     if (input.forceDeliveryAfterInterrupt === true) nextMessage.forceDeliveryAfterInterrupt = true;
-    if (input.steerActiveTurn === true) nextMessage.steerActiveTurn = true;
+    if (input.steerActiveTurn === true || input.steerActiveTurn === false) nextMessage.steerActiveTurn = input.steerActiveTurn;
     if (input.recoveryContinuation === true) nextMessage.recoveryContinuation = true;
     if (!nextMessage.text && !nextMessage.promptFile) {
       const error = new Error("message_text_required");
@@ -768,11 +775,32 @@ export async function enqueueThreadInputForPrincipal(threadId, input, principal,
       },
     }, env);
   }
-  return appendThreadMessage(thread.id, {
+  // Context-next-turn mailbox routes reserve their durable context only for an
+  // authenticated human input. The reservation is released if this message is
+  // not durably created, and a passive delivery marker prevents it steering an
+  // already-running turn.
+  const mailboxContextClaimId = randomUUID();
+  const reservation = await reserveMailboxContextsForHumanTurn({ threadId: thread.id, claimId: mailboxContextClaimId }, env);
+  const contextualInput = reservation.contexts.length ? {
     ...nextInput,
-    role: "user",
-    state: "queued",
-  }, env);
+    text: [reservation.text, String(nextInput.text || "").trim() ? `Human request:\n${String(nextInput.text || "").trim()}` : ""].filter(Boolean).join("\n\n"),
+    mailboxContextClaimId,
+    codexDeliveryMode: "passive",
+    steerActiveTurn: false,
+  } : nextInput;
+  try {
+    const message = await appendThreadMessage(thread.id, {
+      ...contextualInput,
+      role: "user",
+      state: "queued",
+    }, env);
+    if (!message.duplicate && reservation.contexts.length) await consumeMailboxContextsForHumanTurn(mailboxContextClaimId, message.id, env);
+    if (message.duplicate && reservation.contexts.length) await releaseMailboxContextsForHumanTurn(mailboxContextClaimId, env);
+    return message;
+  } catch (error) {
+    if (reservation.contexts.length) await releaseMailboxContextsForHumanTurn(mailboxContextClaimId, env).catch(() => {});
+    throw error;
+  }
 }
 
 export async function updateThreadMessage(threadId, messageId, patch, env = process.env) {
