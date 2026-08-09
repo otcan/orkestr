@@ -118,7 +118,15 @@ function externalMailboxActor(mailbox = {}) {
   return { kind: "external_mailbox", role: "external", userId: `mailbox:${clean(mailbox.id)}`, mailboxId: clean(mailbox.id) };
 }
 
-function routeApprovalIntent({ action, mailbox, route = null, threadId = "", mode = "" } = {}, env = process.env) {
+function canonicalNewThreadIdentity(mailbox = {}, newThread = null) {
+  if (!newThread || typeof newThread !== "object" || Array.isArray(newThread)) return null;
+  const id = clean(newThread.id).slice(0, 160);
+  const name = clean(newThread.name || newThread.title || `Mailbox ${mailbox.address || ""}`).slice(0, 160);
+  return { id, name, canonical: JSON.stringify({ id, name }) };
+}
+
+function routeApprovalIntent({ action, mailbox, route = null, threadId = "", mode = "", newThread = null } = {}, env = process.env) {
+  const identity = canonicalNewThreadIdentity(mailbox, newThread);
   return {
     mailboxRouteAction: clean(action),
     mailboxId: clean(mailbox?.id),
@@ -128,12 +136,13 @@ function routeApprovalIntent({ action, mailbox, route = null, threadId = "", mod
     sourceMode: clean(route?.mode),
     destinationThreadId: clean(threadId),
     destinationMode: clean(mode),
+    ...(identity ? { newThreadId: identity.id, newThreadName: identity.name, newThreadIdentity: identity.canonical } : {}),
   };
 }
 
-async function requireRouteAttendedApproval({ action, mailbox, route = null, threadId = "", mode = "", principal = {}, approval = "", request = null } = {}, env = process.env) {
+async function requireRouteAttendedApproval({ action, mailbox, route = null, threadId = "", mode = "", newThread = null, principal = {}, approval = "", request = null } = {}, env = process.env) {
   const requiredAction = `mailbox_route:${clean(action)}`;
-  const authIntent = routeApprovalIntent({ action, mailbox, route, threadId, mode }, env);
+  const authIntent = routeApprovalIntent({ action, mailbox, route, threadId, mode, newThread }, env);
   if (clean(approval)) {
     await consumeApprovedPairingChallengeForAction(approval, {
       env,
@@ -243,8 +252,9 @@ async function provisionRouteThread(mailbox, principal, newThread, mode, env, op
   }
   const [{ createThreadForPrincipal, listThreads, updateThread }, { setThreadResourceGrants }] = await Promise.all([import("./threads.js"), import("./thread-resource-grants.js")]);
   const installGrants = typeof operations.setThreadResourceGrants === "function" ? operations.setThreadResourceGrants : setThreadResourceGrants;
-  const name = clean(newThread.name || newThread.title || `Mailbox ${mailbox.address}`).slice(0, 160);
-  const requestedId = clean(newThread.id);
+  const identity = canonicalNewThreadIdentity(mailbox, newThread);
+  const name = identity.name;
+  const requestedId = identity.id;
   const matchingThread = (await listThreads(env)).find((thread) => thread.ownerUserId === mailbox.ownerUserId && (
     (requestedId && (thread.id === requestedId || thread.name === requestedId || thread.bindingName === requestedId)) ||
     (name && (thread.name === name || thread.bindingName === name))
@@ -291,7 +301,7 @@ async function createMailboxRouteInternal({ mailbox, threadId = "", newThread = 
     // provisioning only after the attended approval has been consumed.
     if (clean(threadId)) await assertRouteSetupAccess(mailbox, clean(threadId), principal, normalizedMode, env);
     const pending = await requireRouteAttendedApproval({
-      action: "create_process_immediately", mailbox, threadId: clean(threadId), mode: normalizedMode, principal, approval, request,
+      action: "create_process_immediately", mailbox, threadId: clean(threadId), mode: normalizedMode, newThread, principal, approval, request,
     }, env);
     if (pending) return pending;
   }
@@ -381,20 +391,61 @@ export async function revokeMailboxRoute({ mailbox, routeId = "", principal = {}
   return { ok: true, route: publicRoute(outcome.result.route), policyRevision: outcome.state.revision, idempotent: outcome.result.idempotent };
 }
 
-export async function moveMailboxRoute({ mailbox, routeId, threadId, mode, principal = {}, expectedPolicyRevision, approval = "", request = null } = {}, env = process.env) {
+// `operations` is an internal race seam for deterministic move tests. HTTP
+// callers use the two-argument form and cannot supply it.
+export async function moveMailboxRoute({ mailbox, routeId, threadId, mode, principal = {}, expectedPolicyRevision, approval = "", request = null } = {}, env = process.env, operations = {}) {
   const resourceId = mailboxResourceId(mailbox, env);
-  const current = (await readThreadResourcePolicy(env)).mailboxRoutes.find((route) => route.id === clean(routeId) && route.resourceId === resourceId && route.status === "active");
+  const before = await readThreadResourcePolicy(env);
+  if (expectedPolicyRevision !== undefined && Number(expectedPolicyRevision) !== Number(before.revision)) throw policyError("mailbox_route_policy_revision_conflict", 409);
+  const current = before.mailboxRoutes.find((route) => route.id === clean(routeId) && route.resourceId === resourceId && route.status === "active");
   if (!current) throw policyError("mailbox_route_not_found", 404);
+  const manage = await assertThreadResourceAccess({ resourceType: "mailbox", resourceId, resourceKey: mailbox.id, ownerUserId: mailbox.ownerUserId, threadId: current.threadId, principal, permission: "manage" }, env);
+  if (!manage.granted || manage.shadowDenied || !manage.grant) throw policyError("mailbox_route_manage_grant_required", 403);
   const destinationThreadId = clean(threadId);
   const destinationMode = routeMode(mode || current.mode);
   if (!destinationThreadId) throw policyError("mailbox_route_thread_required", 400);
-  await assertRouteSetupAccess(mailbox, destinationThreadId, principal, destinationMode, env);
+  const access = await assertRouteSetupAccess(mailbox, destinationThreadId, principal, destinationMode, env);
   const pending = await requireRouteAttendedApproval({
     action: "move", mailbox, route: current, threadId: destinationThreadId, mode: destinationMode, principal, approval, request,
   }, env);
   if (pending) return pending;
-  await revokeMailboxRoute({ mailbox, routeId, principal, reason: "mailbox_route_moved", expectedPolicyRevision }, env);
-  return createMailboxRouteInternal({ mailbox, threadId: destinationThreadId, mode: destinationMode, principal }, env, {}, { approvalSatisfied: true });
+  if (typeof operations.beforeMutation === "function") await operations.beforeMutation();
+  const outcome = await mutateThreadResourcePolicy((state) => {
+    if (expectedPolicyRevision !== undefined && Number(expectedPolicyRevision) !== Number(state.revision)) throw policyError("mailbox_route_policy_revision_conflict", 409);
+    if (Number(access.subscribe.policyRevision) !== Number(state.revision) || (destinationMode === "process_immediately" && Number(access.process?.policyRevision) !== Number(state.revision))) {
+      throw policyError("mailbox_route_policy_revision_conflict", 409);
+    }
+    const resource = state.resources.find((item) => item.resourceType === "mailbox" && item.id === resourceId && item.status === "active" && !item.retiredAt);
+    if (!resource) throw policyError("mailbox_route_resource_inactive", 409);
+    const route = (state.mailboxRoutes || []).find((item) => item.id === current.id && item.resourceId === resourceId && item.status === "active" && Number(item.generation) === Number(current.generation));
+    if (!route) throw policyError("mailbox_route_policy_revision_conflict", 409);
+    const timestamp = nowIso();
+    cancelRouteWork(state, route, timestamp, "mailbox_route_moved");
+    route.threadId = destinationThreadId;
+    route.mode = destinationMode;
+    route.generation = Number(route.generation || 1) + 1;
+    route.grantRevision = access.subscribe.grantRevision;
+    route.processGrantRevision = access.process?.grantRevision || 0;
+    // This mutation advances the policy epoch after the callback returns, so
+    // record the resulting epoch rather than the pre-move access snapshot.
+    route.policyRevision = Number(state.revision) + 1;
+    route.resourceGeneration = access.subscribe.resourceGeneration;
+    route.updatedAt = timestamp;
+    route.reason = "";
+    return {
+      route: { ...route },
+      idempotent: false,
+      transactionalAudit: {
+        action: "mailbox_route_moved", resourceType: "mailbox", actorUserId: clean(principal.userId), outcome: "allowed",
+        reason: `${current.threadId}:${current.mode}->${destinationThreadId}:${destinationMode}`,
+      },
+    };
+  }, env);
+  await appendEvent({
+    type: "mailbox_route_moved", mailboxId: mailbox.id, routeId: current.id,
+    previousThreadId: current.threadId, previousMode: current.mode, threadId: destinationThreadId, mode: destinationMode,
+  }, env).catch(() => {});
+  return { ok: true, route: publicRoute(outcome.result.route), policyRevision: outcome.state.revision, idempotent: false };
 }
 
 function sourceHasActiveDelivery(state, sourceId) {

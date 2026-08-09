@@ -270,8 +270,69 @@ test("process route creation and every route move require an exact attended appr
   assert.equal((await readThreadResourcePolicyState(scope.env)).mailboxRoutes.find((route) => route.status === "active")?.id, created.route.id);
   await approvePairingChallenge(pendingMove.challenge.id, { env: scope.env, approvedBy: "node:test" });
   const moved = await moveMailboxRoute({ mailbox: scope.mailbox, routeId: created.route.id, threadId: destination.id, mode: "append_only", principal: scope.principal, approval: pendingMove.challenge.approveCode }, scope.env);
+  assert.equal(moved.route.id, created.route.id);
+  assert.equal(moved.route.generation, created.route.generation + 1);
   assert.equal(moved.route.threadId, destination.id);
   assert.equal(moved.route.mode, "append_only");
+});
+
+test("process new-thread approval is bound to the exact canonical destination identity", async () => {
+  const scope = await fixture("new-thread-intent");
+  const input = {
+    mailbox: scope.mailbox,
+    newThread: { id: "approved-new-thread", name: "Approved mailbox destination" },
+    mode: "process_immediately",
+    principal: scope.principal,
+  };
+  const pending = await createMailboxRoute(input, scope.env);
+  assert.equal(pending.status, "approval_required");
+  assert.deepEqual({
+    id: pending.challenge.authIntent.newThreadId,
+    name: pending.challenge.authIntent.newThreadName,
+    canonical: pending.challenge.authIntent.newThreadIdentity,
+  }, {
+    id: "approved-new-thread",
+    name: "Approved mailbox destination",
+    canonical: JSON.stringify({ id: "approved-new-thread", name: "Approved mailbox destination" }),
+  });
+  await approvePairingChallenge(pending.challenge.id, { env: scope.env, approvedBy: "node:test" });
+  await assert.rejects(
+    () => createMailboxRoute({ ...input, newThread: { id: "approved-new-thread", name: "Different mailbox destination" }, approval: pending.challenge.approveCode }, scope.env),
+    /pairing_challenge_intent_scope_denied/,
+  );
+  assert.equal(await getThread("approved-new-thread", scope.env), null);
+  const created = await createMailboxRoute({ ...input, approval: pending.challenge.approveCode }, scope.env);
+  assert.equal(created.route.threadId, "approved-new-thread");
+});
+
+test("an approved move atomically replaces the route and leaves it active on a policy race", async () => {
+  const scope = await fixture("move-atomic");
+  const route = await createMailboxRoute({ mailbox: scope.mailbox, threadId: scope.thread.id, mode: "context_next_turn", principal: scope.principal }, scope.env);
+  await ingestMailboxMessage(inbound(scope.mailbox, "<move-atomic@example.test>", "Cancel old context"), scope.env);
+  const destination = await createThread({ id: "move-atomic-destination", ownerUserId: "admin", name: "Atomic move destination" }, scope.env);
+  await setThreadResourceGrants(destination.id, "mailbox", [{ resourceId: scope.mailbox.id, permissions: ["read", "subscribe", "manage"] }], { principal: scope.principal }, scope.env);
+  const pending = await moveMailboxRoute({ mailbox: scope.mailbox, routeId: route.route.id, threadId: destination.id, mode: "append_only", principal: scope.principal }, scope.env);
+  await approvePairingChallenge(pending.challenge.id, { env: scope.env, approvedBy: "node:test" });
+  const moved = await moveMailboxRoute({ mailbox: scope.mailbox, routeId: route.route.id, threadId: destination.id, mode: "append_only", principal: scope.principal, approval: pending.challenge.approveCode }, scope.env);
+  let state = await readThreadResourcePolicyState(scope.env);
+  assert.equal(state.mailboxRoutes.length, 1);
+  assert.equal(moved.route.id, route.route.id);
+  assert.equal(moved.route.generation, route.route.generation + 1);
+  assert.equal(state.mailboxRouteWork[0].state, "cancelled");
+  assert.equal(state.mailboxContexts[0].status, "cancelled");
+
+  const race = await moveMailboxRoute({ mailbox: scope.mailbox, routeId: moved.route.id, threadId: scope.thread.id, mode: "append_only", principal: scope.principal }, scope.env);
+  await approvePairingChallenge(race.challenge.id, { env: scope.env, approvedBy: "node:test" });
+  await assert.rejects(
+    () => moveMailboxRoute({ mailbox: scope.mailbox, routeId: moved.route.id, threadId: scope.thread.id, mode: "append_only", principal: scope.principal, approval: race.challenge.approveCode }, scope.env, {
+      beforeMutation: async () => mutateThreadResourcePolicy(() => ({ raced: true }), scope.env),
+    }),
+    /mailbox_route_policy_revision_conflict/,
+  );
+  state = await readThreadResourcePolicyState(scope.env);
+  assert.equal(state.mailboxRoutes.length, 1);
+  assert.equal(state.mailboxRoutes[0].status, "active");
+  assert.equal(state.mailboxRoutes[0].threadId, destination.id);
 });
 
 test("raw MIME ingress preserves loop headers and suppresses each loop signal before route work", async () => {

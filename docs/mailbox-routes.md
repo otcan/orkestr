@@ -18,7 +18,8 @@ never reuses or replaces grants on an existing thread during this flow.
 Moving any route, and creating a `process_immediately` route, is an attended
 admin-control action. The first REST, Ops UI, or CLI request returns a pairing
 challenge bound to the exact mailbox, current route (for a move), destination
-thread, and mode. Approve that challenge with `orkestr security approve
+thread and mode. A new process destination is also bound to its canonical
+requested thread ID and name. Approve that challenge with `orkestr security approve
 <challenge-id-or-code>`, then retry the same operation with `--approval
 <challenge-id-or-code>` (or paste the code in Ops). A challenge is one-time and
 cannot be reused for a different route or destination.
@@ -58,5 +59,8 @@ origin messages, and ancestry beyond `ORKESTR_MAILBOX_ROUTE_MAX_ANCESTRY` are
 stored as suppressed sources and never create route work.
 
 Route revocation cancels unstarted work, including `context_pending`, and
-pending context. Accepted turns are not deleted, but all later route actions
-revalidate the route generation and current mailbox grants.
+pending context. A move performs that cancellation and replaces the route's
+destination, mode, and grant snapshots in one policy mutation while retaining
+the route ID and incrementing its generation. Accepted turns are not deleted,
+but all later route actions revalidate the route generation and current mailbox
+grants.
