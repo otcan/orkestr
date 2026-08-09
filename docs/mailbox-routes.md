@@ -2,7 +2,15 @@
 
 A main-instance mailbox can have one active route to one explicitly authorized
 thread. Routes are configured with `orkestr mailboxes routes` or the matching
-`/api/mailboxes/:mailboxId/routes` endpoints.
+`/api/mailboxes/:mailboxId/routes` endpoints. The Ops **Mailboxes** tab shows
+the active route and its durable source, work, and context counts.
+
+Routes can target an existing authorized thread. Administrators may instead
+provision a fresh destination: Orkestr rejects any existing matching thread
+identity and grants that new thread only the named mailbox permissions required
+by the selected route mode (`read`, `subscribe`, `manage`, plus `process` for
+immediate processing). It never reuses or replaces grants on an existing
+thread during this flow.
 
 Route modes are intentionally distinct:
 
