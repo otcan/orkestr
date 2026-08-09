@@ -12,6 +12,7 @@ import {
   createMailbox,
   createMailboxForPrincipal,
   extractForwardingVerificationCandidates,
+  getMailbox,
   listMailboxDeadLetters,
   listMailboxRelayAudits,
   listMailboxesForPrincipal,
@@ -20,6 +21,8 @@ import {
 } from "../packages/core/src/mailboxes.js";
 import { adminPrincipal, userPrincipal } from "../packages/core/src/principal.js";
 import { approvePairingChallenge } from "../packages/core/src/security.js";
+import { createThread } from "../packages/core/src/threads.js";
+import { registerThreadResource, setThreadResourceGrants } from "../packages/core/src/thread-resource-grants.js";
 import { createTenantVm, deleteTenantVm } from "../packages/core/src/tenant-vm-registry.js";
 
 async function fixture(extraEnv = {}) {
@@ -466,11 +469,13 @@ test("mailbox API exposes admin list and create surface", async () => {
   const priorRecover = process.env.ORKESTR_RECOVER_RUNNING_ON_START;
   const priorDomain = process.env.ORKESTR_MAILBOX_DOMAIN;
   const priorReservedDomain = process.env.ORKESTR_MAILBOX_ALLOW_RESERVED_DOMAIN;
+  const priorAccessMode = process.env.ORKESTR_MAILBOX_ACCESS_MODE;
   process.env.ORKESTR_HOME = home;
   process.env.ORKESTR_AUTH_REQUIRED = "1";
   process.env.ORKESTR_RECOVER_RUNNING_ON_START = "0";
   process.env.ORKESTR_MAILBOX_DOMAIN = "api.example.test";
   process.env.ORKESTR_MAILBOX_ALLOW_RESERVED_DOMAIN = "1";
+  process.env.ORKESTR_MAILBOX_ACCESS_MODE = "enforce";
   const server = await startServer({ port: 0, host: "127.0.0.1" });
   const baseUrl = `http://127.0.0.1:${server.address().port}`;
 
@@ -499,6 +504,47 @@ test("mailbox API exposes admin list and create surface", async () => {
     const listedPayload = await listed.json();
     assert.equal(listed.status, 200);
     assert.deepEqual(listedPayload.mailboxes.map((mailbox) => mailbox.address), ["ops-api@api.example.test"]);
+
+    const mailbox = await getMailbox(createdPayload.mailbox.id, process.env);
+    const principal = adminPrincipal();
+    const routeThread = await createThread({ id: "api-route-thread", ownerUserId: "admin", name: "API route" }, process.env);
+    await registerThreadResource({ resourceType: "mailbox", resourceId: mailbox.id, ownerUserId: "admin", status: "active" }, { principal }, process.env);
+    await setThreadResourceGrants(routeThread.id, "mailbox", [{ resourceId: mailbox.id, permissions: ["read", "subscribe", "manage", "process"] }], { principal }, process.env);
+    const pendingRoute = await fetch(`${baseUrl}/api/mailboxes/${encodeURIComponent(mailbox.id)}/routes`, {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({ threadId: routeThread.id, mode: "process_immediately" }),
+    });
+    const pendingRoutePayload = await pendingRoute.json();
+    assert.equal(pendingRoute.status, 201);
+    assert.equal(pendingRoutePayload.status, "approval_required");
+    assert.equal(pendingRoutePayload.challenge.authIntent.destinationThreadId, routeThread.id);
+    await approvePairingChallenge(pendingRoutePayload.challenge.id, { env: process.env, approvedBy: "node:test" });
+    const approvedRoute = await fetch(`${baseUrl}/api/mailboxes/${encodeURIComponent(mailbox.id)}/routes`, {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({ threadId: routeThread.id, mode: "process_immediately", approval: pendingRoutePayload.challenge.approveCode }),
+    });
+    const approvedRoutePayload = await approvedRoute.json();
+    assert.equal(approvedRoutePayload.route.mode, "process_immediately");
+
+    const moveThread = await createThread({ id: "api-route-move-thread", ownerUserId: "admin", name: "API moved route" }, process.env);
+    await setThreadResourceGrants(moveThread.id, "mailbox", [{ resourceId: mailbox.id, permissions: ["read", "subscribe", "manage"] }], { principal }, process.env);
+    const pendingMove = await fetch(`${baseUrl}/api/mailboxes/${encodeURIComponent(mailbox.id)}/routes/${encodeURIComponent(approvedRoutePayload.route.id)}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({ threadId: moveThread.id, mode: "append_only" }),
+    });
+    const pendingMovePayload = await pendingMove.json();
+    assert.equal(pendingMovePayload.status, "approval_required");
+    assert.equal(pendingMovePayload.challenge.authIntent.sourceThreadId, routeThread.id);
+    await approvePairingChallenge(pendingMovePayload.challenge.id, { env: process.env, approvedBy: "node:test" });
+    const approvedMove = await fetch(`${baseUrl}/api/mailboxes/${encodeURIComponent(mailbox.id)}/routes/${encodeURIComponent(approvedRoutePayload.route.id)}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({ threadId: moveThread.id, mode: "append_only", approval: pendingMovePayload.challenge.approveCode }),
+    });
+    assert.equal((await approvedMove.json()).route.threadId, moveThread.id);
   } finally {
     await closeServer(server);
     restoreEnv("ORKESTR_HOME", priorHome);
@@ -506,6 +552,7 @@ test("mailbox API exposes admin list and create surface", async () => {
     restoreEnv("ORKESTR_RECOVER_RUNNING_ON_START", priorRecover);
     restoreEnv("ORKESTR_MAILBOX_DOMAIN", priorDomain);
     restoreEnv("ORKESTR_MAILBOX_ALLOW_RESERVED_DOMAIN", priorReservedDomain);
+    restoreEnv("ORKESTR_MAILBOX_ACCESS_MODE", priorAccessMode);
   }
 });
 
@@ -558,4 +605,33 @@ test("mailbox CLI create sends explicit target request body", async () => {
     tenantVmId: "tenant-one",
   });
   assert.equal(JSON.parse(stdout).mailbox.target.tenantVmId, "tenant-one");
+});
+
+test("mailbox route CLI prints an attended approval retry and forwards the scoped code", async () => {
+  const calls = [];
+  let stdout = "";
+  const fetchImpl = async (url, options = {}) => {
+    calls.push({ url: String(url), options });
+    const body = JSON.parse(options.body);
+    const payload = body.approval
+      ? { ok: true, route: { id: "route-approved" } }
+      : { ok: false, status: "approval_required", challenge: { id: "challenge-1", approveCode: "CODE1234", approveCommand: "orkestr security approve CODE1234" } };
+    return new Response(JSON.stringify(payload), { status: 201, headers: { "content-type": "application/json" } });
+  };
+  const context = {
+    baseUrl: "http://orkestr.test",
+    env: { ORKESTR_DISABLE_CLI_AUTH: "1" },
+    stdout: { write: (chunk) => { stdout += chunk; } },
+    stderr: { write: () => {} },
+    fetchImpl,
+  };
+  assert.equal(await runCli(["mailboxes", "routes", "create", "--mailbox-id", "mailbox-1", "--thread-id", "thread-1", "--mode", "process_immediately"], context), 0);
+  assert.match(stdout, /orkestr security approve CODE1234/);
+  assert.match(stdout, /--approval CODE1234/);
+  assert.deepEqual(JSON.parse(calls[0].options.body), { threadId: "thread-1", mode: "process_immediately" });
+
+  stdout = "";
+  assert.equal(await runCli(["mailboxes", "routes", "create", "--mailbox-id", "mailbox-1", "--thread-id", "thread-1", "--mode", "process_immediately", "--approval", "CODE1234"], context), 0);
+  assert.equal(stdout, "route-approved\n");
+  assert.deepEqual(JSON.parse(calls[1].options.body), { threadId: "thread-1", mode: "process_immediately", approval: "CODE1234" });
 });

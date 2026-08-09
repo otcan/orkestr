@@ -15,6 +15,14 @@ creation failure removes its exact grant and deletes the fresh thread. If that
 cleanup cannot complete, the thread remains visibly marked as failed. Orkestr
 never reuses or replaces grants on an existing thread during this flow.
 
+Moving any route, and creating a `process_immediately` route, is an attended
+admin-control action. The first REST, Ops UI, or CLI request returns a pairing
+challenge bound to the exact mailbox, current route (for a move), destination
+thread, and mode. Approve that challenge with `orkestr security approve
+<challenge-id-or-code>`, then retry the same operation with `--approval
+<challenge-id-or-code>` (or paste the code in Ops). A challenge is one-time and
+cannot be reused for a different route or destination.
+
 Route modes are intentionally distinct:
 
 - `append_only` records the normalized mailbox source in the destination's
@@ -33,9 +41,22 @@ Route modes are intentionally distinct:
 
 Legacy mailbox listeners remain append-only, but an active listener and a route
 cannot be co-enabled for the same mailbox; revoke the listener before route
-promotion. Each ingress first receives an immutable normalized source record;
-delivery, processing, and context status are reported separately by `orkestr
-mailboxes routes status --mailbox-id …`. Route revocation cancels unstarted
-work, including `context_pending`, and pending context. Accepted turns are not
-deleted, but all later route actions revalidate the route generation and current
-mailbox grants.
+promotion. Each ingress first receives a normalized source record; delivery,
+processing, and context status are reported separately by `orkestr mailboxes
+routes status --mailbox-id …`. Source content is immutable while retained, but
+retention is bounded per mailbox by `ORKESTR_MAILBOX_ROUTE_SOURCE_RETENTION_LIMIT`
+(default `1000`, maximum `100000`). The oldest source whose associated work and
+context are terminal is compacted with those terminal records before accepting
+new ingress. If every retained source is still active, the route-source layer
+returns `mailbox_route_source_backpressure`; real connector ingress retains the
+message in its retry spool and leaves all live work untouched. The Ops count is
+therefore the retained count, not an all-time message counter.
+
+Ingress normalizes bounded `Auto-Submitted`, `References`, `In-Reply-To`, and
+`X-Orkestr-Origin` values before route policy runs. Auto replies, known Orkestr
+origin messages, and ancestry beyond `ORKESTR_MAILBOX_ROUTE_MAX_ANCESTRY` are
+stored as suppressed sources and never create route work.
+
+Route revocation cancels unstarted work, including `context_pending`, and
+pending context. Accepted turns are not deleted, but all later route actions
+revalidate the route generation and current mailbox grants.

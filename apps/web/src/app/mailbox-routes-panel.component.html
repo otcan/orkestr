@@ -49,7 +49,7 @@
 
   @if (status) {
     <div class="ops-grid user-metrics">
-      <article class="ops-card"><h4>Messages</h4><p>{{ status.sources.received }}</p><small>{{ status.sources.suppressed }} suppressed · {{ status.sources.deadLetter }} dead-lettered</small></article>
+      <article class="ops-card"><h4>Retained messages</h4><p>{{ status.sources.received }}</p><small>{{ status.sources.suppressed }} suppressed · {{ status.sources.deadLetter }} dead-lettered</small></article>
       <article class="ops-card"><h4>Processing</h4><p>{{ status.processing.pending + status.processing.claimed + status.processing.accepted + status.processing.running }}</p><small>{{ status.processing.accepted }} accepted · {{ status.processing.running }} running · {{ status.processing.completed }} completed · {{ status.processing.failed }} failed</small></article>
       <article class="ops-card"><h4>Next-turn context</h4><p>{{ status.context.pending + status.context.reserved }}</p><small>{{ status.context.consumed }} consumed once · {{ status.context.cancelled }} cancelled</small></article>
     </div>
@@ -93,11 +93,53 @@
       </label>
       <p>{{ modeHelp() }}</p>
       <small>Required exact mailbox grants: {{ requiredGrants() }}.</small>
+      @if (mode === "process_immediately") {
+        <label>
+          <span>Attended approval code</span>
+          <input name="mailbox-route-create-approval" [(ngModel)]="createApproval" placeholder="Approve first, then paste code to retry" [disabled]="saving || !selectedMailboxId" />
+        </label>
+        <small>Process-now routes require a scoped attended approval. The first request provides the exact approval command without changing this route.</small>
+      }
       <div class="settings-actions compact-actions">
         <button type="submit" [disabled]="saving || !selectedMailboxId || (!targetThreadId && (!createNewThread || !newThreadName))">{{ saving ? "Saving" : "Create explicit route" }}</button>
       </div>
     </form>
   </article>
+
+  @if (movingRoute; as route) {
+    <article class="ops-card">
+      <h4>Move route</h4>
+      <p>{{ route.mode }} → {{ threadLabel(route.threadId) }}</p>
+      <form class="user-edit-form" (ngSubmit)="moveRoute()">
+        <label>
+          <span>New destination thread</span>
+          <select name="mailbox-route-move-thread" [(ngModel)]="moveThreadId" [disabled]="saving">
+            <option value="">Select an authorized thread</option>
+            @for (thread of threads; track thread.id) {
+              <option [value]="thread.id">{{ thread.name || thread.id }} · {{ thread.id }}</option>
+            }
+          </select>
+        </label>
+        <label>
+          <span>Delivery mode</span>
+          <select name="mailbox-route-move-mode" [(ngModel)]="moveMode" [disabled]="saving">
+            @for (option of routeModes; track option.value) {
+              <option [value]="option.value">{{ option.label }}</option>
+            }
+          </select>
+        </label>
+        <label>
+          <span>Attended approval code</span>
+          <input name="mailbox-route-move-approval" [(ngModel)]="moveApproval" placeholder="Approve first, then paste code to retry" [disabled]="saving" />
+        </label>
+        <small>Moving a route always requires a scoped attended approval, including append-only moves.</small>
+        <div class="settings-actions compact-actions">
+          <button type="submit" [disabled]="saving || !moveThreadId">{{ saving ? "Saving" : "Move route" }}</button>
+          <button class="secondary" type="button" (click)="cancelMove()" [disabled]="saving">Cancel</button>
+        </div>
+      </form>
+    </article>
+  }
 
   <section>
     <h4>Routes</h4>
@@ -109,6 +151,7 @@
           <small>Created {{ route.createdAt | date: "MMM d, yyyy HH:mm:ss" }}</small>
           @if (route.status === "active") {
             <div class="row-actions">
+              <button class="secondary" type="button" (click)="beginMove(route)" [disabled]="saving">Move route</button>
               <button class="secondary danger-soft" type="button" (click)="revokeRoute(route)" [disabled]="saving">Revoke route</button>
             </div>
           }

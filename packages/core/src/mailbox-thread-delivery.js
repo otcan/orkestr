@@ -226,10 +226,16 @@ export async function enqueueMailboxThreadDeliveries({ mailbox, message, idempot
   const resourceId = mailboxResourceId(mailbox, env);
   const messageKey = clean(idempotencyKey);
   if (!messageKey) throw policyError("mailbox_message_idempotency_required", 400);
-  // Route sources are immutable mailbox ingress records. Legacy listeners use
-  // the existing append-only deliveries below and never acquire execution or
-  // context semantics merely by being present.
+  // Route sources retain immutable ingress content while they are live. Their
+  // terminal records are compacted under the bounded route-source retention
+  // policy; legacy listeners never acquire execution or context semantics.
   const routeSource = await enqueueMailboxRouteSource({ mailbox, message, idempotencyKey: messageKey }, env);
+  // Do not acknowledge an ingress that could not obtain bounded source
+  // capacity. The connector inbox keeps it durable for the existing retry
+  // path instead of silently marking the message as routed without a source.
+  if (routeSource.skipped === "mailbox_route_source_backpressure") {
+    throw policyError("mailbox_route_source_backpressure", 503);
+  }
   const snapshot = await readThreadResourcePolicy(env);
   const resource = snapshot.resources.find((item) => item.resourceType === "mailbox" && item.id === resourceId && item.status === "active" && !item.retiredAt) || null;
   const candidates = resource ? (snapshot.mailboxListeners || []).filter((item) => item.resourceId === resourceId && item.status === "active" && !item.revokedAt && matches(item, message)) : [];

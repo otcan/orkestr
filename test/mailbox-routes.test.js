@@ -7,9 +7,10 @@ import { ingestMailboxMessage } from "../packages/connectors/src/mailbox-inbox.j
 import { resetConnectorInboxForTest } from "../packages/connectors/src/connector-inbox.js";
 import { createMailbox, createMailboxThreadListener, revokeMailboxThreadListener } from "../packages/core/src/mailboxes.js";
 import { readThreadResourcePolicyState } from "../packages/core/src/thread-resource-policy-store.js";
-import { createMailboxRoute, dispatchMailboxRouteWork, enqueueMailboxRouteSource, mailboxRouteStatus, reconcileMailboxRouteWorkRuntime, recordMailboxRouteWorkRuntime, reserveMailboxContextsForHumanTurn, revokeMailboxRoute } from "../packages/core/src/mailbox-routes.js";
+import { createMailboxRoute, dispatchMailboxRouteWork, enqueueMailboxRouteSource, mailboxRouteStatus, moveMailboxRoute, reconcileMailboxRouteWorkRuntime, recordMailboxRouteWorkRuntime, reserveMailboxContextsForHumanTurn, revokeMailboxRoute } from "../packages/core/src/mailbox-routes.js";
 import { appendThreadMessage, createThread, enqueueThreadInputForPrincipal, getThread, listThreadMessages, updateThread } from "../packages/core/src/threads.js";
 import { adminPrincipal } from "../packages/core/src/principal.js";
+import { approvePairingChallenge } from "../packages/core/src/security.js";
 import { mutateThreadResourcePolicy, registerThreadResource, setThreadResourceGrants } from "../packages/core/src/thread-resource-grants.js";
 import { turnStartParams } from "../packages/core/src/codex-app-server-common.js";
 
@@ -31,6 +32,14 @@ function inbound(mailbox, messageId, text = "Build 42 failed") {
     envelope: { rcptTo: mailbox.address, mailFrom: "builds@example.test" },
     body: { text },
   };
+}
+
+async function createApprovedRoute(input, env, operations) {
+  const pending = await createMailboxRoute(input, env, operations);
+  if (pending.status !== "approval_required") return pending;
+  assert.equal(pending.challenge.authIntent.mailboxRouteAction, "create_process_immediately");
+  await approvePairingChallenge(pending.challenge.id, { env, approvedBy: "node:test" });
+  return createMailboxRoute({ ...input, approval: pending.challenge.approveCode }, env, operations);
 }
 
 test.afterEach(() => resetConnectorInboxForTest());
@@ -56,7 +65,7 @@ test("an active route is singleton, exact, and keeps append-only route delivery 
 
 test("an admin can provision a new destination with only the exact route grant", async () => {
   const scope = await fixture("new-thread");
-  const created = await createMailboxRoute({ mailbox: scope.mailbox, newThread: { name: "New mailbox route" }, mode: "process_immediately", principal: scope.principal }, scope.env);
+  const created = await createApprovedRoute({ mailbox: scope.mailbox, newThread: { name: "New mailbox route" }, mode: "process_immediately", principal: scope.principal }, scope.env);
   assert.equal(created.route.mode, "process_immediately");
   const thread = await getThread(created.route.threadId, scope.env);
   assert.equal(thread.mailboxRouteProvisioning?.status, "ready");
@@ -220,8 +229,93 @@ test("process-immediately requires the exact process grant", async () => {
     /mailbox_route_process_grant_required/,
   );
   await setThreadResourceGrants(scope.thread.id, "mailbox", [{ resourceId: scope.mailbox.id, permissions: ["read", "subscribe", "process", "manage"] }], { principal: scope.principal }, scope.env);
-  const route = await createMailboxRoute({ mailbox: scope.mailbox, threadId: scope.thread.id, mode: "process_immediately", principal: scope.principal }, scope.env);
+  const route = await createApprovedRoute({ mailbox: scope.mailbox, threadId: scope.thread.id, mode: "process_immediately", principal: scope.principal }, scope.env);
   assert.equal(route.route.mode, "process_immediately");
+});
+
+test("process route creation and every route move require an exact attended approval", async () => {
+  const scope = await fixture("attended", ["read", "subscribe", "process", "manage"]);
+  const pendingCreate = await createMailboxRoute({ mailbox: scope.mailbox, threadId: scope.thread.id, mode: "process_immediately", principal: scope.principal }, scope.env);
+  assert.equal(pendingCreate.status, "approval_required");
+  const resourceId = (await readThreadResourcePolicyState(scope.env)).resources.find((resource) => resource.resourceType === "mailbox")?.id;
+  assert.deepEqual(pendingCreate.challenge.authIntent, {
+    mailboxRouteAction: "create_process_immediately",
+    mailboxId: scope.mailbox.id,
+    mailboxResourceId: resourceId,
+    routeId: "",
+    sourceThreadId: "",
+    sourceMode: "",
+    destinationThreadId: scope.thread.id,
+    destinationMode: "process_immediately",
+  });
+  assert.equal((await readThreadResourcePolicyState(scope.env)).mailboxRoutes.length, 0);
+  await approvePairingChallenge(pendingCreate.challenge.id, { env: scope.env, approvedBy: "node:test" });
+  const created = await createMailboxRoute({ mailbox: scope.mailbox, threadId: scope.thread.id, mode: "process_immediately", principal: scope.principal, approval: pendingCreate.challenge.approveCode }, scope.env);
+  assert.equal(created.route.mode, "process_immediately");
+
+  const destination = await createThread({ id: "attended-move-destination", ownerUserId: "admin", name: "Moved route destination" }, scope.env);
+  await setThreadResourceGrants(destination.id, "mailbox", [{ resourceId: scope.mailbox.id, permissions: ["read", "subscribe", "process", "manage"] }], { principal: scope.principal }, scope.env);
+  const pendingMove = await moveMailboxRoute({ mailbox: scope.mailbox, routeId: created.route.id, threadId: destination.id, mode: "append_only", principal: scope.principal }, scope.env);
+  assert.equal(pendingMove.status, "approval_required");
+  assert.deepEqual(pendingMove.challenge.authIntent, {
+    mailboxRouteAction: "move",
+    mailboxId: scope.mailbox.id,
+    mailboxResourceId: resourceId,
+    routeId: created.route.id,
+    sourceThreadId: scope.thread.id,
+    sourceMode: "process_immediately",
+    destinationThreadId: destination.id,
+    destinationMode: "append_only",
+  });
+  assert.equal((await readThreadResourcePolicyState(scope.env)).mailboxRoutes.find((route) => route.status === "active")?.id, created.route.id);
+  await approvePairingChallenge(pendingMove.challenge.id, { env: scope.env, approvedBy: "node:test" });
+  const moved = await moveMailboxRoute({ mailbox: scope.mailbox, routeId: created.route.id, threadId: destination.id, mode: "append_only", principal: scope.principal, approval: pendingMove.challenge.approveCode }, scope.env);
+  assert.equal(moved.route.threadId, destination.id);
+  assert.equal(moved.route.mode, "append_only");
+});
+
+test("raw MIME ingress preserves loop headers and suppresses each loop signal before route work", async () => {
+  const scope = await fixture("raw-loop");
+  scope.env.ORKESTR_MAILBOX_ROUTE_MAX_ANCESTRY = "2";
+  await createMailboxRoute({ mailbox: scope.mailbox, threadId: scope.thread.id, mode: "append_only", principal: scope.principal }, scope.env);
+  const rawMime = (messageId, headers) => [
+    `Message-ID: ${messageId}`,
+    "From: Sender <sender@example.test>",
+    "Subject: Route loop regression",
+    ...headers,
+    "",
+    "This message must never become route work.",
+  ].join("\r\n");
+  await ingestMailboxMessage({ recipient: scope.mailbox.address, rawMime: rawMime("<auto-loop@example.test>", ["Auto-Submitted: auto-replied"]), envelope: { rcptTo: scope.mailbox.address } }, scope.env);
+  await ingestMailboxMessage({ recipient: scope.mailbox.address, rawMime: rawMime("<origin-loop@example.test>", ["X-Orkestr-Origin: mailbox-route"]), envelope: { rcptTo: scope.mailbox.address } }, scope.env);
+  await ingestMailboxMessage({ recipient: scope.mailbox.address, rawMime: rawMime("<ancestry-loop@example.test>", ["References: <first@example.test> <second@example.test> <third@example.test>", "In-Reply-To: <first@example.test>"]), envelope: { rcptTo: scope.mailbox.address } }, scope.env);
+  const state = await readThreadResourcePolicyState(scope.env);
+  assert.deepEqual(state.mailboxSources.map((source) => source.suppressionReason).sort(), ["ancestry_limit", "auto_submitted", "orkestr_origin"]);
+  assert.equal(state.mailboxRouteWork.length, 0);
+  assert.equal((await listThreadMessages(scope.thread.id, scope.env)).filter((message) => message.source === "mailbox_route").length, 0);
+});
+
+test("route source retention compacts only terminal records and backpressures active work", async () => {
+  const terminal = await fixture("source-retention");
+  terminal.env.ORKESTR_MAILBOX_ROUTE_SOURCE_RETENTION_LIMIT = "2";
+  await createMailboxRoute({ mailbox: terminal.mailbox, threadId: terminal.thread.id, mode: "append_only", principal: terminal.principal }, terminal.env);
+  for (const number of [1, 2, 3]) await ingestMailboxMessage(inbound(terminal.mailbox, `<source-retention-${number}@example.test>`), terminal.env);
+  let state = await readThreadResourcePolicyState(terminal.env);
+  assert.equal(state.mailboxSources.length, 2);
+  assert.equal(state.mailboxRouteWork.length, 2);
+  assert.deepEqual(state.mailboxSources.map((source) => source.payload.messageId).sort(), ["<source-retention-2@example.test>", "<source-retention-3@example.test>"]);
+
+  const active = await fixture("source-backpressure");
+  active.env.ORKESTR_MAILBOX_ROUTE_SOURCE_RETENTION_LIMIT = "1";
+  await createMailboxRoute({ mailbox: active.mailbox, threadId: active.thread.id, mode: "context_next_turn", principal: active.principal }, active.env);
+  const first = await ingestMailboxMessage(inbound(active.mailbox, "<source-active@example.test>"), active.env);
+  assert.equal(first.action, "mailbox_thread_delivery_unrouted");
+  const blocked = await ingestMailboxMessage(inbound(active.mailbox, "<source-blocked@example.test>"), active.env);
+  assert.equal(blocked.action, "mailbox_policy_unavailable_spooled");
+  state = await readThreadResourcePolicyState(active.env);
+  assert.equal(state.mailboxSources.length, 1);
+  assert.equal(state.mailboxRouteWork.length, 1);
+  assert.equal(state.mailboxRouteWork[0].state, "context_pending");
 });
 
 test("route revoke linearizes with an append-only acceptance fence", async () => {
@@ -258,7 +352,7 @@ test("process-immediately sanitizes as an external mailbox actor and creates one
     `process.stdin.on('end', () => { fs.writeFileSync(${JSON.stringify(sanitizerLog)}, input); console.log(JSON.stringify({ allow: true, reason: 'test-allow' })); });`,
   ].join("\n"));
   scope.env.ORKESTR_LLM_SANITIZER_COMMAND_JSON = JSON.stringify([process.execPath, sanitizer]);
-  await createMailboxRoute({ mailbox: scope.mailbox, threadId: scope.thread.id, mode: "process_immediately", principal: scope.principal }, scope.env);
+  await createApprovedRoute({ mailbox: scope.mailbox, threadId: scope.thread.id, mode: "process_immediately", principal: scope.principal }, scope.env);
   const routed = await ingestMailboxMessage(inbound(scope.mailbox, "<passive-route@example.test>", "Untrusted mailbox body"), scope.env);
   assert.equal(routed.routeDispatch.accepted, 1, JSON.stringify(routed.routeDispatch));
   const messages = await listThreadMessages(scope.thread.id, scope.env);
@@ -276,7 +370,7 @@ test("process-immediately sanitizes as an external mailbox actor and creates one
 
 test("process work keeps a durable queue-message and Codex-turn link through reconciliation without replaying acceptance", async () => {
   const scope = await fixture("process-runtime", ["read", "subscribe", "process", "manage"]);
-  await createMailboxRoute({ mailbox: scope.mailbox, threadId: scope.thread.id, mode: "process_immediately", principal: scope.principal }, scope.env);
+  await createApprovedRoute({ mailbox: scope.mailbox, threadId: scope.thread.id, mode: "process_immediately", principal: scope.principal }, scope.env);
   const source = await enqueueMailboxRouteSource({ mailbox: scope.mailbox, message: inbound(scope.mailbox, "<process-runtime@example.test>"), idempotencyKey: "process-runtime" }, scope.env);
   const queued = await appendThreadMessage(scope.thread.id, {
     role: "user",

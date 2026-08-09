@@ -3,6 +3,7 @@ import { appendEvent } from "../../storage/src/store.js";
 import { assertSanitizedAction } from "./llm-sanitizer.js";
 import { recordMailboxRouteMetrics } from "./observability.js";
 import { isAdminPrincipal, policyError } from "./policy.js";
+import { consumeApprovedPairingChallengeForAction, createPairingChallenge } from "./security.js";
 import {
   assertThreadResourceAccess,
   authorizeThreadResourceAccess,
@@ -91,7 +92,7 @@ function suppressionReason(message = {}, env = process.env) {
   const subject = lower(headers.subject || message.subject);
   if (/mailer-daemon|postmaster/.test(from) || /(?:delivery status|undeliverable|failure notice)/.test(subject)) return "bounce";
   if (lower(headers["x-orkestr-origin"] || headers.xOrkestrOrigin) || message.orkestrOrigin === true || message.knownOutbound === true) return "orkestr_origin";
-  const ancestry = String(headers.references || headers["in-reply-to"] || message.ancestry || "").trim().split(/\s+/).filter(Boolean);
+  const ancestry = String(headers.references || headers.inReplyTo || headers["in-reply-to"] || message.ancestry || "").trim().split(/\s+/).filter(Boolean);
   const maxAncestry = Math.max(1, Math.min(50, Number(env.ORKESTR_MAILBOX_ROUTE_MAX_ANCESTRY || 12) || 12));
   if (ancestry.length > maxAncestry) return "ancestry_limit";
   return "";
@@ -105,12 +106,64 @@ function routeContextLimit(env = process.env) {
   return Math.max(1, Math.min(100, Number(env.ORKESTR_MAILBOX_ROUTE_CONTEXT_LIMIT || 10) || 10));
 }
 
+function routeSourceRetentionLimit(env = process.env) {
+  return Math.max(1, Math.min(100_000, Number(env.ORKESTR_MAILBOX_ROUTE_SOURCE_RETENTION_LIMIT || 1_000) || 1_000));
+}
+
 function contextReservationMs(env = process.env) {
   return Math.max(5_000, Math.min(15 * 60_000, Number(env.ORKESTR_MAILBOX_ROUTE_CONTEXT_RESERVATION_MS || 60_000) || 60_000));
 }
 
 function externalMailboxActor(mailbox = {}) {
   return { kind: "external_mailbox", role: "external", userId: `mailbox:${clean(mailbox.id)}`, mailboxId: clean(mailbox.id) };
+}
+
+function routeApprovalIntent({ action, mailbox, route = null, threadId = "", mode = "" } = {}, env = process.env) {
+  return {
+    mailboxRouteAction: clean(action),
+    mailboxId: clean(mailbox?.id),
+    mailboxResourceId: mailboxResourceId(mailbox, env),
+    routeId: clean(route?.id),
+    sourceThreadId: clean(route?.threadId),
+    sourceMode: clean(route?.mode),
+    destinationThreadId: clean(threadId),
+    destinationMode: clean(mode),
+  };
+}
+
+async function requireRouteAttendedApproval({ action, mailbox, route = null, threadId = "", mode = "", principal = {}, approval = "", request = null } = {}, env = process.env) {
+  const requiredAction = `mailbox_route:${clean(action)}`;
+  const authIntent = routeApprovalIntent({ action, mailbox, route, threadId, mode }, env);
+  if (clean(approval)) {
+    await consumeApprovedPairingChallengeForAction(approval, {
+      env,
+      action: requiredAction,
+      authIntent,
+      consumedBy: `mailbox-route:${clean(principal.userId || principal.id || "unknown")}`,
+    });
+    return null;
+  }
+  const created = await createPairingChallenge({
+    request: request || { headers: {}, socket: {} },
+    env,
+    userId: clean(principal.userId || principal.id),
+    role: isAdminPrincipal(principal) ? "admin" : "user",
+    requestedPath: `/api/mailboxes/${encodeURIComponent(clean(mailbox?.id))}/routes`,
+    allowedActions: [requiredAction],
+    authIntent,
+  });
+  return {
+    ok: false,
+    status: "approval_required",
+    action: requiredAction,
+    challenge: {
+      id: created.challengeId,
+      approveCode: created.challenge?.approveCode || "",
+      expiresAt: created.expiresAt,
+      approveCommand: `orkestr security approve ${created.challenge?.approveCode || created.challengeId}`,
+      authIntent,
+    },
+  };
 }
 
 async function routeDecision(mailbox, threadId, permission, env) {
@@ -222,14 +275,26 @@ async function provisionRouteThread(mailbox, principal, newThread, mode, env, op
 
 // `operations` is an internal dependency seam for deterministic storage-fault
 // tests. HTTP callers use the two-argument form and cannot supply it.
-export async function createMailboxRoute({ mailbox, threadId = "", newThread = null, mode = "append_only", principal = {}, expectedPolicyRevision } = {}, env = process.env, operations = {}) {
+async function createMailboxRouteInternal({ mailbox, threadId = "", newThread = null, mode = "append_only", principal = {}, expectedPolicyRevision, approval = "", request = null } = {}, env = process.env, operations = {}, { approvalSatisfied = false } = {}) {
   if (!mailbox?.id || mailbox.target?.type !== "main") throw policyError("mailbox_route_main_mailbox_required", 409);
   requiredPolicyMode(env);
   const normalizedMode = routeMode(mode);
+  if (!clean(threadId) && (!newThread || typeof newThread !== "object")) throw policyError("mailbox_route_thread_required", 400);
+  if (!clean(threadId) && !isAdminPrincipal(principal)) throw policyError("mailbox_route_new_thread_admin_required", 403);
   const resourceId = mailboxResourceId(mailbox, env);
   const before = await readThreadResourcePolicy(env);
   if (expectedPolicyRevision !== undefined && Number(expectedPolicyRevision) !== Number(before.revision)) throw policyError("mailbox_route_policy_revision_conflict", 409);
   if (legacyListenerActive(before, resourceId)) throw policyError("mailbox_route_legacy_listener_active", 409);
+  if (normalizedMode === "process_immediately" && !approvalSatisfied) {
+    // Validate an existing destination before asking an operator to approve a
+    // potentially unusable execution route. New destinations are checked by
+    // provisioning only after the attended approval has been consumed.
+    if (clean(threadId)) await assertRouteSetupAccess(mailbox, clean(threadId), principal, normalizedMode, env);
+    const pending = await requireRouteAttendedApproval({
+      action: "create_process_immediately", mailbox, threadId: clean(threadId), mode: normalizedMode, principal, approval, request,
+    }, env);
+    if (pending) return pending;
+  }
   let provision = null;
   try {
     provision = clean(threadId) ? null : await provisionRouteThread(mailbox, principal, newThread, normalizedMode, env, operations);
@@ -266,6 +331,10 @@ export async function createMailboxRoute({ mailbox, threadId = "", newThread = n
     if (provision?.threadId) await compensateProvisionedMailboxRouteThread({ threadId: provision.threadId, mailbox, principal, reason: clean(error?.message) || "mailbox_route_provisioning_failed" }, env);
     throw error;
   }
+}
+
+export async function createMailboxRoute(input = {}, env = process.env, operations = {}) {
+  return createMailboxRouteInternal(input, env, operations);
 }
 
 export async function listMailboxRoutes({ mailbox, principal = {}, includeRevoked = false } = {}, env = process.env) {
@@ -312,12 +381,42 @@ export async function revokeMailboxRoute({ mailbox, routeId = "", principal = {}
   return { ok: true, route: publicRoute(outcome.result.route), policyRevision: outcome.state.revision, idempotent: outcome.result.idempotent };
 }
 
-export async function moveMailboxRoute({ mailbox, routeId, threadId, mode, principal = {}, expectedPolicyRevision } = {}, env = process.env) {
+export async function moveMailboxRoute({ mailbox, routeId, threadId, mode, principal = {}, expectedPolicyRevision, approval = "", request = null } = {}, env = process.env) {
   const resourceId = mailboxResourceId(mailbox, env);
   const current = (await readThreadResourcePolicy(env)).mailboxRoutes.find((route) => route.id === clean(routeId) && route.resourceId === resourceId && route.status === "active");
   if (!current) throw policyError("mailbox_route_not_found", 404);
+  const destinationThreadId = clean(threadId);
+  const destinationMode = routeMode(mode || current.mode);
+  if (!destinationThreadId) throw policyError("mailbox_route_thread_required", 400);
+  await assertRouteSetupAccess(mailbox, destinationThreadId, principal, destinationMode, env);
+  const pending = await requireRouteAttendedApproval({
+    action: "move", mailbox, route: current, threadId: destinationThreadId, mode: destinationMode, principal, approval, request,
+  }, env);
+  if (pending) return pending;
   await revokeMailboxRoute({ mailbox, routeId, principal, reason: "mailbox_route_moved", expectedPolicyRevision }, env);
-  return createMailboxRoute({ mailbox, threadId: clean(threadId), mode: mode || current.mode, principal }, env);
+  return createMailboxRouteInternal({ mailbox, threadId: destinationThreadId, mode: destinationMode, principal }, env, {}, { approvalSatisfied: true });
+}
+
+function sourceHasActiveDelivery(state, sourceId) {
+  return (state.mailboxRouteWork || []).some((work) => work.sourceId === sourceId && activeWork.has(work.state)) ||
+    (state.mailboxContexts || []).some((context) => context.sourceId === sourceId && ["pending", "reserved"].includes(context.status));
+}
+
+function compactRouteSources(state, resourceId, env) {
+  const limit = routeSourceRetentionLimit(env);
+  const retained = (state.mailboxSources || []).filter((source) => source.resourceId === resourceId);
+  const required = Math.max(0, retained.length - limit + 1);
+  if (!required) return { limit, pruned: 0, capacity: true };
+  const removable = retained
+    .filter((source) => !sourceHasActiveDelivery(state, source.id))
+    .sort((left, right) => Date.parse(left.createdAt || "") - Date.parse(right.createdAt || ""))
+    .slice(0, required);
+  if (!removable.length) return { limit, pruned: 0, capacity: false };
+  const removed = new Set(removable.map((source) => source.id));
+  state.mailboxSources = (state.mailboxSources || []).filter((source) => !removed.has(source.id));
+  state.mailboxRouteWork = (state.mailboxRouteWork || []).filter((work) => !removed.has(work.sourceId));
+  state.mailboxContexts = (state.mailboxContexts || []).filter((context) => !removed.has(context.sourceId));
+  return { limit, pruned: removed.size, capacity: retained.length - removed.size < limit };
 }
 
 export async function enqueueMailboxRouteSource({ mailbox, message, idempotencyKey } = {}, env = process.env) {
@@ -332,6 +431,8 @@ export async function enqueueMailboxRouteSource({ mailbox, message, idempotencyK
     const timestamp = nowIso(); const id = sourceIdFor(resourceId, messageKey);
     const existing = (state.mailboxSources || []).find((item) => item.dedupeKey === id);
     if (existing) return { noChange: true, result: { source: existing, work: (state.mailboxRouteWork || []).find((item) => item.sourceId === existing.id) || null, idempotent: true } };
+    const retention = compactRouteSources(state, resourceId, env);
+    if (!retention.capacity) return { source: null, work: null, idempotent: false, backpressured: true, retention, skipPolicyEpoch: true };
     const liveRoute = route && (state.mailboxRoutes || []).find((item) => item.id === route.id && item.status === "active" && item.generation === route.generation);
     const resource = state.resources.find((item) => item.resourceType === "mailbox" && item.id === resourceId && item.status === "active" && !item.retiredAt);
     const permitted = Boolean(liveRoute && resource && subscribe?.granted && !subscribe?.shadowDenied && subscribe?.grant && Number(subscribe.policyRevision) === Number(state.revision) && Number(subscribe.resourceGeneration) === Number(resource.generation));
@@ -351,6 +452,10 @@ export async function enqueueMailboxRouteSource({ mailbox, message, idempotencyK
     }
     return { source, work, idempotent: false, skipPolicyEpoch: true };
   }, env);
+  if (outcome.result.backpressured) {
+    await appendEvent({ type: "mailbox_route_source_backpressured", mailboxId: mailbox.id, resourceId, limit: outcome.result.retention.limit }, env).catch(() => {});
+    return { ok: true, source: null, workId: null, mode: null, idempotent: false, skipped: "mailbox_route_source_backpressure", retention: outcome.result.retention };
+  }
   await appendEvent({ type: "mailbox_route_source_received", mailboxId: mailbox.id, sourceId: outcome.result.source.id, routeId: outcome.result.work?.routeId || "", state: outcome.result.source.state }, env).catch(() => {});
   recordMailboxRouteMetrics({ state: outcome.result.work?.state || outcome.result.source.state, mode: outcome.result.work?.mode || "unknown" });
   return { ok: true, source: publicSource(outcome.result.source), workId: outcome.result.work?.id || null, mode: outcome.result.work?.mode || null, idempotent: outcome.result.idempotent };

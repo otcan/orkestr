@@ -1393,6 +1393,8 @@ test("ops mailboxes page exposes explicit route setup and durable status", async
   const panelTemplate = await fs.readFile("apps/web/src/app/mailbox-routes-panel.component.html", "utf8");
   const panelComponent = await fs.readFile("apps/web/src/app/mailbox-routes-panel.component.ts", "utf8");
   const api = await fs.readFile("apps/web/src/app/api.service.ts", "utf8");
+  const controller = await fs.readFile("apps/server/src/modules/mailboxes/mailboxes.controller.ts", "utf8");
+  const cli = await fs.readFile("apps/cli/src/mailbox-command.js", "utf8");
 
   assert.match(opsComponent, /MailboxRoutesPanelComponent/);
   assert.match(opsComponent, /id: "mailboxes", label: "Mailboxes", kind: "oss-optional"/);
@@ -1404,7 +1406,11 @@ test("ops mailboxes page exposes explicit route setup and durable status", async
   assert.match(panelTemplate, /selected thread must already have the exact subscribe grant/i);
   assert.match(panelTemplate, /read, subscribe, manage, and process/);
   assert.match(panelTemplate, /Required exact mailbox grants/);
+  assert.match(panelTemplate, /Attended approval code/);
+  assert.match(panelTemplate, /Move route/);
   assert.match(panelComponent, /requiredGrants\(\): string/);
+  assert.match(panelComponent, /async moveRoute\(\): Promise<void>/);
+  assert.match(panelComponent, /approvalNotice\(/);
   assert.match(panelTemplate, /processing failure/);
   assert.match(panelTemplate, /never replayed automatically/);
   assert.match(panelComponent, /this\.api\.mailboxRouteStatus\(this\.selectedMailboxId\)/);
@@ -1412,7 +1418,11 @@ test("ops mailboxes page exposes explicit route setup and durable status", async
   assert.match(api, /export interface MailboxRouteStatus/);
   assert.match(api, /running: number; completed: number; failed: number/);
   assert.match(api, /mailboxRoutes\(mailboxId: string\)/);
+  assert.match(api, /moveMailboxRoute\(mailboxId: string, routeId: string/);
   assert.match(api, /revokeMailboxRoute\(mailboxId: string, routeId: string/);
+  assert.match(controller, /approval: String\(body\.approval \|\| ""\)\.trim\(\), request/);
+  assert.match(cli, /--approval/);
+  assert.match(cli, /Retry the same route command with --approval/);
 });
 
 test("ops audit view exposes normalized filterable events", async () => {

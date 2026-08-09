@@ -195,7 +195,10 @@ export class MailboxesController {
     try {
       const principal = requestPrincipal(request);
       const mailbox = await mailboxForPrincipal(mailboxId, principal);
-      return await createMailboxRoute({ mailbox, threadId: String(body.threadId || "").trim(), newThread: body.newThread, mode: String(body.mode || "append_only"), principal, expectedPolicyRevision: body.expectedPolicyRevision } as any);
+      return await createMailboxRoute({
+        mailbox, threadId: String(body.threadId || "").trim(), newThread: body.newThread, mode: String(body.mode || "append_only"),
+        principal, expectedPolicyRevision: body.expectedPolicyRevision, approval: String(body.approval || "").trim(), request,
+      } as any);
     } catch (error) {
       rethrowHttp(error, "mailbox_route_create_failed");
     }
@@ -216,7 +219,10 @@ export class MailboxesController {
     try {
       const principal = requestPrincipal(request);
       const mailbox = await mailboxForPrincipal(mailboxId, principal);
-      return await moveMailboxRoute({ mailbox, routeId, threadId: String(body.threadId || "").trim(), mode: String(body.mode || ""), principal, expectedPolicyRevision: body.expectedPolicyRevision } as any);
+      return await moveMailboxRoute({
+        mailbox, routeId, threadId: String(body.threadId || "").trim(), mode: String(body.mode || ""),
+        principal, expectedPolicyRevision: body.expectedPolicyRevision, approval: String(body.approval || "").trim(), request,
+      } as any);
     } catch (error) {
       rethrowHttp(error, "mailbox_route_move_failed");
     }

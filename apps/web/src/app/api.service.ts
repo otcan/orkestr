@@ -984,6 +984,24 @@ export interface MailboxRouteStatus {
   context: { pending: number; reserved: number; consumed: number; cancelled: number };
 }
 
+export interface MailboxRouteApproval {
+  id: string;
+  approveCode?: string;
+  expiresAt?: string;
+  approveCommand?: string;
+  authIntent?: Record<string, string>;
+}
+
+export interface MailboxRouteMutation {
+  ok: boolean;
+  status?: "approval_required";
+  action?: string;
+  route?: MailboxRoute;
+  policyRevision?: number;
+  idempotent?: boolean;
+  challenge?: MailboxRouteApproval;
+}
+
 export interface AutomationRecord {
   automationId: string;
   rawId: string;
@@ -2449,8 +2467,12 @@ export class ApiService {
     return this.http.get<{ ok: boolean; status: MailboxRouteStatus }>(this.api(`/mailboxes/${encodeURIComponent(mailboxId)}/route-status`));
   }
 
-  createMailboxRoute(mailboxId: string, body: { threadId: string; mode: MailboxRoute["mode"]; newThread?: { name: string } }): Observable<{ ok: boolean; route: MailboxRoute; policyRevision?: number; idempotent?: boolean }> {
-    return this.http.post<{ ok: boolean; route: MailboxRoute; policyRevision?: number; idempotent?: boolean }>(this.api(`/mailboxes/${encodeURIComponent(mailboxId)}/routes`), body);
+  createMailboxRoute(mailboxId: string, body: { threadId: string; mode: MailboxRoute["mode"]; newThread?: { name: string }; approval?: string }): Observable<MailboxRouteMutation> {
+    return this.http.post<MailboxRouteMutation>(this.api(`/mailboxes/${encodeURIComponent(mailboxId)}/routes`), body);
+  }
+
+  moveMailboxRoute(mailboxId: string, routeId: string, body: { threadId: string; mode: MailboxRoute["mode"]; approval?: string }): Observable<MailboxRouteMutation> {
+    return this.http.patch<MailboxRouteMutation>(this.api(`/mailboxes/${encodeURIComponent(mailboxId)}/routes/${encodeURIComponent(routeId)}`), body);
   }
 
   revokeMailboxRoute(mailboxId: string, routeId: string, reason = ""): Observable<{ ok: boolean; route: MailboxRoute; policyRevision?: number; idempotent?: boolean }> {

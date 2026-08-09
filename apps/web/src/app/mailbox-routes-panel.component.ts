@@ -23,6 +23,11 @@ export class MailboxRoutesPanelComponent implements OnInit {
   createNewThread = false;
   newThreadName = "";
   mode: RouteMode = "append_only";
+  createApproval = "";
+  movingRoute: MailboxRoute | null = null;
+  moveThreadId = "";
+  moveMode: RouteMode = "append_only";
+  moveApproval = "";
   busy = false;
   saving = false;
   error = "";
@@ -88,11 +93,18 @@ export class MailboxRoutesPanelComponent implements OnInit {
         threadId: this.createNewThread ? "" : this.targetThreadId.trim(),
         mode: this.mode,
         ...(this.createNewThread ? { newThread: { name: this.newThreadName.trim() } } : {}),
+        ...(this.createApproval.trim() ? { approval: this.createApproval.trim() } : {}),
       }));
+      if (result.status === "approval_required") {
+        this.notice = this.approvalNotice(result.challenge?.approveCommand || "", "create this process-now route", "createApproval");
+        this.error = "";
+        return;
+      }
       this.notice = result.idempotent ? "The requested route already exists." : "Mailbox route created.";
       this.targetThreadId = "";
       this.createNewThread = false;
       this.newThreadName = "";
+      this.createApproval = "";
       await this.loadRouteData();
       this.error = "";
     } catch (error) {
@@ -108,6 +120,47 @@ export class MailboxRoutesPanelComponent implements OnInit {
     try {
       await firstValueFrom(this.api.revokeMailboxRoute(this.selectedMailboxId, route.id, "revoked_from_ops"));
       this.notice = "Mailbox route revoked. Pending work and contexts were cancelled.";
+      await this.loadRouteData();
+      this.error = "";
+    } catch (error) {
+      this.error = this.errorText(error);
+    } finally {
+      this.saving = false;
+    }
+  }
+
+  beginMove(route: MailboxRoute): void {
+    this.movingRoute = route;
+    this.moveThreadId = route.threadId;
+    this.moveMode = route.mode;
+    this.moveApproval = "";
+    this.notice = "";
+    this.error = "";
+  }
+
+  cancelMove(): void {
+    this.movingRoute = null;
+    this.moveThreadId = "";
+    this.moveApproval = "";
+  }
+
+  async moveRoute(): Promise<void> {
+    const route = this.movingRoute;
+    if (this.saving || !this.selectedMailboxId || !route || !this.moveThreadId.trim()) return;
+    this.saving = true;
+    try {
+      const result = await firstValueFrom(this.api.moveMailboxRoute(this.selectedMailboxId, route.id, {
+        threadId: this.moveThreadId.trim(),
+        mode: this.moveMode,
+        ...(this.moveApproval.trim() ? { approval: this.moveApproval.trim() } : {}),
+      }));
+      if (result.status === "approval_required") {
+        this.notice = this.approvalNotice(result.challenge?.approveCommand || "", "move this mailbox route", "moveApproval");
+        this.error = "";
+        return;
+      }
+      this.notice = "Mailbox route moved.";
+      this.cancelMove();
       await this.loadRouteData();
       this.error = "";
     } catch (error) {
@@ -139,5 +192,11 @@ export class MailboxRoutesPanelComponent implements OnInit {
   private errorText(error: unknown): string {
     const value = error as { error?: { message?: string }; message?: string };
     return String(value?.error?.message || value?.message || "Mailbox route request failed.");
+  }
+
+  private approvalNotice(command: string, action: string, field: "createApproval" | "moveApproval"): string {
+    const fallback = "orkestr security challenges";
+    this[field] = "";
+    return `Attended approval is required to ${action}. Run ${command || fallback}, then paste its approved challenge code below and retry.`;
   }
 }
