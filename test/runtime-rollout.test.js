@@ -10,6 +10,7 @@ import {
   syncRuntimeLeases,
 } from "../packages/core/src/runtime-leases.js";
 import { dataPaths, ensureDataDirs } from "../packages/storage/src/paths.js";
+import { readConnectorOutbox } from "../packages/connectors/src/connector-outbox.js";
 import { appendThreadMessage, createThread, getThread, listThreadMessages } from "../packages/core/src/threads.js";
 
 test("active runtime rollout sync projects final answers without waiting for the full runtime doctor", async () => {
@@ -172,6 +173,8 @@ test("detached app-server WhatsApp threads project direct Codex rollout replies"
       chatId: "chat-1",
       deliveryState: "completed",
     }]);
+    const outboxAfterFirst = await readConnectorOutbox(env);
+    assert.equal(outboxAfterFirst.jobs.filter((job) => job.sourceMessageId === reply.id && job.deliveryType === "final").length, 1);
 
     const stored = await getThread("detached-rollout-thread", env);
     assert.equal(stored.runtime.operatorRolloutPath, rolloutPath);
@@ -187,8 +190,88 @@ test("detached app-server WhatsApp threads project direct Codex rollout replies"
     assert.equal(afterSecond.filter((message) => message.text === "Projected reply").length, 1);
     assert.equal(storedAfterSecond.runtime.operatorRolloutSyncedAt, firstSyncedAt);
     assert.equal(storedAfterSecond.updatedAt, firstUpdatedAt);
+    const outboxAfterSecond = await readConnectorOutbox(env);
+    assert.equal(outboxAfterSecond.jobs.filter((job) => job.sourceMessageId === reply.id && job.deliveryType === "final").length, 1);
   } finally {
     clearSignalHandler();
+  }
+});
+
+test("enforced detached rollout rejects a malformed or superseded session meta generation", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-rollout-generation-enforce-"));
+  const rolloutPath = path.join(home, "rollout.jsonl");
+  const generation = "55555555-5555-4555-8555-555555555555";
+  const env = {
+    ORKESTR_HOME: path.join(home, "orkestr"),
+    ORKESTR_CODEX_GENERATION_ROLLOUT_MODE: "enforce",
+  };
+  await createThread({
+    id: "rollout-generation-enforce-thread",
+    name: "Rollout generation enforce",
+    state: "ready",
+    executor: {
+      type: "codex",
+      transport: "app-server",
+      codexThreadId: generation,
+      metadata: { codexRolloutPath: rolloutPath, codexRolloutGeneration: generation },
+    },
+    runtime: { runtimeKind: "codex-app-server", codexThreadId: generation, runtimeGeneration: generation },
+    binding: { connector: "whatsapp", chatId: "chat-generation", outboundAccountId: "responder" },
+  }, env);
+  await fs.writeFile(rolloutPath, [
+    JSON.stringify({ type: "session_meta", payload: { id: "superseded-generation" } }),
+    JSON.stringify({
+      timestamp: "2026-08-01T12:00:00.000Z",
+      type: "response_item",
+      payload: { type: "message", role: "assistant", phase: "final_answer", content: [{ type: "output_text", text: "Must not project" }] },
+    }),
+  ].join("\n") + "\n", "utf8");
+
+  const result = await syncRuntimeLeases(env);
+  const thread = await getThread("rollout-generation-enforce-thread", env);
+  const messages = await listThreadMessages("rollout-generation-enforce-thread", env);
+
+  assert.equal(result.appended, 0);
+  assert.equal(messages.some((message) => message.text === "Must not project"), false);
+  assert.equal(thread.runtime.operatorRolloutValidation.reason, "session_meta_generation_mismatch");
+});
+
+test("enforced detached rollout rejects missing and malformed session metadata", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-rollout-session-meta-enforce-"));
+  const env = {
+    ORKESTR_HOME: path.join(home, "orkestr"),
+    ORKESTR_CODEX_GENERATION_ROLLOUT_MODE: "enforce",
+  };
+  const fixtures = [
+    { id: "missing", body: JSON.stringify({ type: "response_item", payload: { type: "message", role: "assistant", phase: "final_answer", content: [{ type: "output_text", text: "No meta" }] } }) + "\n", reason: "session_meta_missing" },
+    { id: "malformed", body: JSON.stringify({ type: "session_meta", payload: { id: "bad session id with spaces" } }) + "\n", reason: "session_meta_id_malformed" },
+  ];
+  for (const fixture of fixtures) {
+    const generation = `session-meta-${fixture.id}`;
+    const rolloutPath = path.join(home, `${fixture.id}.jsonl`);
+    await createThread({
+      id: `rollout-session-meta-${fixture.id}`,
+      name: `Rollout session meta ${fixture.id}`,
+      executor: {
+        type: "codex",
+        transport: "app-server",
+        codexThreadId: generation,
+        metadata: { codexRolloutPath: rolloutPath, codexRolloutGeneration: generation },
+      },
+      runtime: { runtimeKind: "codex-app-server", codexThreadId: generation, runtimeGeneration: generation },
+      binding: { connector: "whatsapp", chatId: `chat-${fixture.id}`, outboundAccountId: "responder" },
+    }, env);
+    await fs.writeFile(rolloutPath, fixture.body, "utf8");
+  }
+
+  const result = await syncRuntimeLeases(env);
+
+  assert.equal(result.appended, 0);
+  for (const fixture of fixtures) {
+    const thread = await getThread(`rollout-session-meta-${fixture.id}`, env);
+    const messages = await listThreadMessages(`rollout-session-meta-${fixture.id}`, env);
+    assert.equal(thread.runtime.operatorRolloutValidation.reason, fixture.reason);
+    assert.equal(messages.filter((message) => message.role === "assistant").length, 0);
   }
 });
 

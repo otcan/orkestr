@@ -19,6 +19,7 @@ import { createPairingChallenge, getPairingChallenge } from "../packages/core/sr
 import { createThreadWorker, detectThreadGitState, listThreadWorkers, refreshThreadGitState, syncSafeThreadWorkersWithParents, syncThreadWorkerWithParent, updateThreadRepo } from "../packages/core/src/thread-workers.js";
 import { appendThreadMessage, createThread, deleteThread, enqueueThreadInput, enqueueThreadInputForPrincipal, getThread, listThreadMessages, listThreads, updateThread, updateThreadMessage } from "../packages/core/src/threads.js";
 import { adminPrincipal } from "../packages/core/src/principal.js";
+import { readConnectorOutbox } from "../packages/connectors/src/connector-outbox.js";
 
 const execFileAsync = promisify(execFile);
 const priorThreadTestEnv = {
@@ -1890,6 +1891,121 @@ test("runtime resource doctor repairs orphaned test tmux sessions", async () => 
     restoreEnvValue("TMUX_STATE", priorTmuxState);
     restoreEnvValue("TMUX_SESSION_PATH", priorTmuxSessionPath);
   }
+});
+
+test("runtime resource doctor detects and repairs generation conflicts and incomplete final projection", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-generation-doctor-"));
+  const fakeTmux = await createFakeTmux(home);
+  await fs.writeFile(fakeTmux.state, "", "utf8");
+  const currentGeneration = "doctor-current-generation";
+  const env = {
+    ORKESTR_HOME: path.join(home, "orkestr-home"),
+    PATH: `${fakeTmux.bin}:${process.env.PATH || ""}`,
+    TMUX_LOG: fakeTmux.log,
+    TMUX_STATE: fakeTmux.state,
+  };
+  const thread = await createThread({
+    id: "generation-doctor-thread",
+    name: "Generation Doctor Thread",
+    codexThreadId: "durable-old-generation",
+    executor: { type: "codex", codexThreadId: "durable-old-generation" },
+    runtime: {
+      runtimeKind: "codex-app-server",
+      codexThreadId: currentGeneration,
+      runtimeGeneration: currentGeneration,
+      codexGenerationDiagnostics: { unmappedNotifications: 2 },
+    },
+    binding: { connector: "whatsapp", chatId: "doctor-chat", outboundAccountId: "doctor-account" },
+  }, env);
+  const final = await appendThreadMessage(thread.id, {
+    role: "assistant",
+    source: "codex-app-server",
+    phase: "final_answer",
+    state: "completed",
+    connector: "whatsapp",
+    chatId: "doctor-chat",
+    accountId: "doctor-account",
+    text: "Recover this final projection.",
+    codexThreadId: currentGeneration,
+  }, env);
+
+  const detected = await doctorRuntimeResources({ env, repair: false });
+  const repaired = await doctorRuntimeResources({ env, repair: true });
+  const after = await doctorRuntimeResources({ env, repair: false });
+  const stored = await getThread(thread.id, env);
+  const outbox = await readConnectorOutbox(env);
+
+  assert.equal(detected.counts.generationFieldConflicts, 1);
+  assert.equal(detected.counts.unmappedCodexNotifications, 2);
+  assert.equal(detected.counts.missingFinalProjections, 1);
+  assert.equal(detected.counts.missingFinalOutboxes, 1);
+  assert.ok(detected.issues.some((issue) => issue.code === "durable_codex_generation_conflict"));
+  assert.ok(repaired.actions.some((action) => action.action === "repaired_durable_codex_generation_conflict"));
+  assert.ok(repaired.actions.some((action) => action.action === "repaired_codex_final_projection"));
+  assert.equal(stored.codexThreadId, currentGeneration);
+  assert.equal(stored.executor.codexThreadId, currentGeneration);
+  assert.equal(stored.runtime.finalDelivery.messageId, final.id);
+  assert.equal(outbox.jobs.filter((job) => job.sourceMessageId === final.id && job.deliveryType === "final").length, 1);
+  assert.equal(after.counts.generationFieldConflicts, 0);
+  assert.equal(after.counts.unmappedCodexNotifications, 0);
+  assert.equal(after.counts.missingFinalProjections, 0);
+  assert.equal(after.counts.missingFinalOutboxes, 0);
+});
+
+test("runtime resource doctor detects and clears rollout generation, session metadata, and path mismatches", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-rollout-generation-doctor-"));
+  const fakeTmux = await createFakeTmux(home);
+  await fs.writeFile(fakeTmux.state, "", "utf8");
+  const codexHome = path.join(home, "codex-home");
+  const currentGeneration = "77777777-7777-4777-8777-777777777777";
+  const oldGeneration = "88888888-8888-4888-8888-888888888888";
+  const currentPath = path.join(home, "current.jsonl");
+  const stalePath = path.join(home, "stale.jsonl");
+  await fs.mkdir(codexHome, { recursive: true });
+  await fs.writeFile(currentPath, `${JSON.stringify({ type: "session_meta", payload: { id: currentGeneration } })}\n`, "utf8");
+  await fs.writeFile(stalePath, `${JSON.stringify({ type: "session_meta", payload: { id: oldGeneration } })}\n`, "utf8");
+  await execFileAsync("sqlite3", [
+    path.join(codexHome, "state_5.sqlite"),
+    `create table threads (id text, rollout_path text); insert into threads values ('${currentGeneration}', '${currentPath}');`,
+  ]);
+  const env = {
+    ORKESTR_HOME: path.join(home, "orkestr-home"),
+    CODEX_HOME: codexHome,
+    PATH: `${fakeTmux.bin}:${process.env.PATH || ""}`,
+    TMUX_LOG: fakeTmux.log,
+    TMUX_STATE: fakeTmux.state,
+  };
+  await createThread({
+    id: "rollout-generation-doctor-thread",
+    name: "Rollout generation doctor",
+    codexThreadId: currentGeneration,
+    executor: {
+      type: "codex",
+      codexThreadId: currentGeneration,
+      metadata: { codexRolloutPath: stalePath, codexRolloutGeneration: oldGeneration },
+    },
+    runtime: {
+      runtimeKind: "codex-app-server",
+      codexThreadId: currentGeneration,
+      runtimeGeneration: currentGeneration,
+      operatorRolloutPath: stalePath,
+      operatorRolloutGeneration: oldGeneration,
+      operatorRolloutOffset: 17,
+    },
+  }, env);
+
+  const detected = await doctorRuntimeResources({ env, repair: false });
+  const repaired = await doctorRuntimeResources({ env, repair: true });
+  const stored = await getThread("rollout-generation-doctor-thread", env);
+
+  assert.ok(detected.counts.rolloutGenerationMismatches >= 3);
+  assert.ok(detected.issues.some((issue) => issue.code === "rollout_generation_mismatch"));
+  assert.ok(detected.issues.some((issue) => issue.code === "rollout_session_meta_generation_mismatch"));
+  assert.ok(detected.issues.some((issue) => issue.code === "rollout_path_generation_mismatch"));
+  assert.ok(repaired.actions.some((action) => action.action === "repaired_codex_generation_state" && action.rolloutInvalidated));
+  assert.equal(stored.runtime.operatorRolloutPath, null);
+  assert.equal(stored.runtime.operatorRolloutOffset, 0);
+  assert.equal(stored.executor.metadata.codexRolloutPath, null);
 });
 
 test("runtime resource doctor repairs duplicate active leases for one thread", async () => {

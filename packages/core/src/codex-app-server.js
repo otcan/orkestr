@@ -58,6 +58,8 @@ import { appendTurnLifecycleEvent, turnLifecycleFromRuntimeStatus } from "./turn
 import { markConnectorDeliverySignal } from "./connector-delivery-signals.js";
 import { recordRouterTraceEvent } from "./router-traces.js";
 import { completeRuntimeLiveness, recordRuntimeLiveness } from "./runtime-liveness.js";
+import { currentCodexGenerationMatches, generationScopedRuntimePatch, rolloutGenerationMode } from "./codex-generation.js";
+import { reconcileCodexFinalProjection } from "./codex-final-projection.js";
 
 const appServerDeliveryTimers = new Map();
 const appServerHistorySyncTimes = new Map();
@@ -789,7 +791,15 @@ async function completeCodexAppServerSettingsCommand(thread, message, parsedComm
     ...codexAppServerMessageFields(codexThreadId(thread), { itemId: message.id }),
     ...whatsappProjectionFields(message, thread),
   }, env);
-  markConnectorDeliverySignal(reply);
+  const finalProjection = await reconcileCodexFinalProjection({
+    thread,
+    message: reply,
+    runtimeGeneration: codexThreadId(thread),
+    source: "settings_command",
+    env,
+  }).catch(() => null);
+  const projectedReply = finalProjection?.message || reply;
+  if (!finalProjection?.reconciled) markConnectorDeliverySignal(projectedReply);
   await appendEvent({
     type: "thread_codex_settings_command",
     threadId: thread.id,
@@ -798,7 +808,7 @@ async function completeCodexAppServerSettingsCommand(thread, message, parsedComm
     applied: resolved.ok === true,
     error: resolved.ok ? null : resolved.error,
   }, env).catch(() => {});
-  return { messageId: completed.id, message: completed, reply, applied: resolved.ok === true };
+  return { messageId: completed.id, message: completed, reply: projectedReply, applied: resolved.ok === true };
 }
 
 function codexAppServerHistorySyncIntervalMs(env = process.env) {
@@ -841,6 +851,7 @@ function freshStartRuntime(thread = {}, { codexId = "", codexSessionId: sessionI
     state: "ready",
     codexThreadId: codexId,
     codexSessionId: sessionId,
+    runtimeGeneration: codexId || null,
     startedAt: nowIso(),
   };
 }
@@ -854,6 +865,7 @@ function resumeRuntime(thread = {}, { codexId = "", codexSessionId: sessionId = 
     state: "ready",
     codexThreadId: codexId,
     codexSessionId: sessionId,
+    runtimeGeneration: codexId || null,
     activeTurnId: null,
     resumedAt: nowIso(),
   };
@@ -927,6 +939,9 @@ export async function startCodexAppServerThread(thread, env = process.env) {
   const codexThread = result?.thread || {};
   const codexId = clean(codexThread.id || codexThread.threadId);
   if (!codexId) throw new Error("codex_app_server_thread_missing_id");
+  const sessionId = clean(codexThread.sessionId || codexId);
+  const generationPatch = generationScopedRuntimePatch(thread, codexId, { codexSessionId: sessionId });
+  const generationThread = { ...thread, ...generationPatch, executor: generationPatch.executor, runtime: generationPatch.runtime };
   if (thread.name) {
     await client.request("thread/name/set", { threadId: codexId, name: thread.name }).catch(() => null);
   }
@@ -934,21 +949,21 @@ export async function startCodexAppServerThread(thread, env = process.env) {
     state: "ready",
     runtimeKind: "codex-app-server",
     codexThreadId: codexId,
-    codexSessionId: clean(codexThread.sessionId || codexId),
+    codexSessionId: sessionId,
     executor: {
-      ...(thread.executor || {}),
+      ...(generationPatch.executor || {}),
       id: "codex",
       type: "codex",
       transport: "app-server",
       codexThreadId: codexId,
-      codexSessionId: clean(codexThread.sessionId || codexId),
+      codexSessionId: sessionId,
       metadata: {
-        ...(thread.executor?.metadata || {}),
+        ...(generationPatch.executor?.metadata || {}),
         transport: "app-server",
         codexThreadId: codexId,
-        codexSessionId: clean(codexThread.sessionId || codexId),
-        codexModel: modelForThread(thread, runtimeEnv) || codexThread.model || null,
-        codexReasoningEffort: effortForThread(thread, runtimeEnv) || null,
+        codexSessionId: sessionId,
+        codexModel: modelForThread(generationThread, runtimeEnv) || codexThread.model || null,
+        codexReasoningEffort: effortForThread(generationThread, runtimeEnv) || null,
         codexServiceTier: normalizeCodexServiceTier(startParams.serviceTier || codexThread.serviceTier) || null,
         codexModelProvider: codexThread.modelProvider || "openai",
         codexSandbox: startParams.sandbox,
@@ -957,9 +972,9 @@ export async function startCodexAppServerThread(thread, env = process.env) {
         ...containedMetadata,
       },
     },
-    runtime: freshStartRuntime(thread, {
+    runtime: freshStartRuntime(generationThread, {
       codexId,
-      codexSessionId: clean(codexThread.sessionId || codexId),
+      codexSessionId: sessionId,
       contained: containedMetadata.containedCodexIsolated === true,
     }),
   }, env);
@@ -1028,28 +1043,32 @@ export async function resumeCodexAppServerThread(thread, env = process.env) {
     ...(developerInstructions ? { developerInstructions } : {}),
   });
   const codexThread = result?.thread || {};
+  const sessionId = clean(codexThread.sessionId || codexSessionId(thread) || id);
+  const generationPatch = generationScopedRuntimePatch(thread, id, { codexSessionId: sessionId });
+  const generationThread = { ...thread, ...generationPatch, executor: generationPatch.executor, runtime: generationPatch.runtime };
   const updated = await updateThread(thread.id, {
     state: "ready",
     lastError: null,
     runtimeKind: "codex-app-server",
-    codexSessionId: clean(codexThread.sessionId || codexSessionId(thread) || id),
+    codexThreadId: id,
+    codexSessionId: sessionId,
     executor: {
-      ...(thread.executor || {}),
+      ...(generationPatch.executor || {}),
       transport: "app-server",
       codexThreadId: id,
-      codexSessionId: clean(codexThread.sessionId || codexSessionId(thread) || id),
+      codexSessionId: sessionId,
       metadata: {
-        ...(thread.executor?.metadata || {}),
+        ...(generationPatch.executor?.metadata || {}),
         transport: "app-server",
         runtimeKind: "codex-app-server",
         codexThreadId: id,
-        codexSessionId: clean(codexThread.sessionId || codexSessionId(thread) || id),
+        codexSessionId: sessionId,
         ...containedMetadata,
       },
     },
-    runtime: resumeRuntime(thread, {
+    runtime: resumeRuntime(generationThread, {
       codexId: id,
-      codexSessionId: clean(codexThread.sessionId || codexSessionId(thread) || id),
+      codexSessionId: sessionId,
       contained: containedMetadata.containedCodexIsolated === true,
     }),
   }, env);
@@ -2372,17 +2391,18 @@ function latestCompletedHistoryTurnId(turns = []) {
 async function reconcileHydratedCodexTurnCompletion(thread, completedTurnId, env = process.env) {
   const turnId = clean(completedTurnId);
   if (!turnId) return false;
-  const activeTurnId = clean(thread?.runtime?.activeTurnId);
+  const currentThread = await getThread(thread.id, env).catch(() => null) || thread;
+  const activeTurnId = clean(currentThread?.runtime?.activeTurnId);
   const threadLooksWorking =
-    clean(thread?.state).toLowerCase() === "working" ||
-    clean(thread?.runtime?.state).toLowerCase() === "working";
+    clean(currentThread?.state).toLowerCase() === "working" ||
+    clean(currentThread?.runtime?.state).toLowerCase() === "working";
   if (activeTurnId && activeTurnId !== turnId) return false;
   if (!activeTurnId && !threadLooksWorking) return false;
-  await updateThread(thread.id, {
+  await updateThread(currentThread.id, {
     state: "ready",
     lastError: null,
     runtime: {
-      ...(thread.runtime || {}),
+      ...(currentThread.runtime || {}),
       runtimeKind: "codex-app-server",
       activeTurnId: null,
       lastTurnId: turnId,
@@ -2393,7 +2413,7 @@ async function reconcileHydratedCodexTurnCompletion(thread, completedTurnId, env
     },
   }, env).catch(() => {});
   await appendTurnLifecycleEvent("completed", {
-    threadId: thread.id,
+    threadId: currentThread.id,
     runtimeKind: "codex-app-server",
     turnId,
     state: "completed",
@@ -2500,6 +2520,29 @@ async function upsertHydratedCodexMessage(thread, input, messages, env = process
 }
 
 export async function hydrateCodexAppServerThreadMessages(thread, codexThread, env = process.env) {
+  const historyGeneration = clean(codexThread?.id || codexThread?.threadId);
+  let shadowUnboundHistory = false;
+  if (historyGeneration) {
+    const match = currentCodexGenerationMatches(thread, historyGeneration);
+    shadowUnboundHistory = match.reason === "codex_generation_missing" && rolloutGenerationMode(env) === "shadow";
+    if (!match.ok && !shadowUnboundHistory) {
+      await appendEvent({
+        type: "codex_app_server_history_projection_rejected",
+        threadId: thread.id,
+        observedGeneration: historyGeneration,
+        expectedGeneration: match.resolution?.id || null,
+        reason: match.reason,
+      }, env).catch(() => {});
+      return { count: 0, created: 0, updated: 0, completedTurnId: null, rejected: true, reason: match.reason };
+    }
+    if (shadowUnboundHistory) {
+      await appendEvent({
+        type: "codex_app_server_history_generation_shadow_unbound",
+        threadId: thread.id,
+        observedGeneration: historyGeneration,
+      }, env).catch(() => {});
+    }
+  }
   const turns = Array.isArray(codexThread?.turns) ? codexThread.turns : [];
   const messages = await listThreadMessages(thread.id, env).catch(() => []);
   let count = 0;
@@ -2557,8 +2600,15 @@ export async function hydrateCodexAppServerThreadMessages(thread, codexThread, e
           if (result.created) created += 1;
           if (result.updated) updated += 1;
           if (result.changed) count += 1;
-          if (result.changed && clean(result.message?.phase || "final_answer").toLowerCase() === "final_answer") {
-            markConnectorDeliverySignal(result.message);
+          if (clean(result.message?.phase || "final_answer").toLowerCase() === "final_answer") {
+            await reconcileCodexFinalProjection({
+              thread,
+              message: result.message,
+              runtimeGeneration: shadowUnboundHistory ? "" : historyGeneration,
+              allowUnboundGeneration: shadowUnboundHistory,
+              source: "history_hydration",
+              env,
+            }).catch(() => {});
           }
         }
       }

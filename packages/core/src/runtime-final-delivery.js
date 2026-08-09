@@ -1,6 +1,7 @@
 import { appendEvent } from "../../storage/src/store.js";
 import { getThread, updateThread } from "./threads.js";
 import { completeRuntimeLiveness, recordRuntimeLiveness } from "./runtime-liveness.js";
+import { currentCodexGenerationMatches } from "./codex-generation.js";
 
 function clean(value) {
   return String(value || "").trim();
@@ -33,6 +34,25 @@ export function runtimeFinalDeliveryPending(thread = {}, turnId = "") {
 export async function markRuntimeFinalDeliveryPending(threadId, input = {}, env = process.env) {
   const thread = await getThread(threadId, env);
   if (!thread) return { ok: false, pending: false, reason: "thread_not_found" };
+  const observedGeneration = clean(input.runtimeGeneration || input.codexThreadId);
+  if (observedGeneration) {
+    const match = currentCodexGenerationMatches(thread, observedGeneration);
+    // A connector-only thread may not yet have a Codex generation. It cannot
+    // be a superseded Codex execution, so retain the normal final-delivery
+    // contract for that legacy/general path. Once a generation is known,
+    // every mutation must match it.
+    if (!match.ok && (match.resolution?.id || match.resolution?.ambiguous)) {
+      await appendEvent({
+        type: "runtime_final_delivery_generation_rejected",
+        threadId: thread.id,
+        observedGeneration,
+        expectedGeneration: match.resolution?.id || null,
+        reason: match.reason,
+        operation: "pending",
+      }, env).catch(() => {});
+      return { ok: false, pending: false, reason: match.reason };
+    }
+  }
   const messageId = clean(input.messageId);
   if (!messageId) return { ok: false, pending: false, reason: "message_id_required" };
   const runtime = thread.runtime && typeof thread.runtime === "object" ? thread.runtime : {};
@@ -82,6 +102,21 @@ export async function acknowledgeRuntimeFinalDelivery(threadId, input = {}, env 
   if (!thread) return { ok: false, acknowledged: false, reason: "thread_not_found" };
   const runtime = thread.runtime && typeof thread.runtime === "object" ? thread.runtime : {};
   const current = runtime.finalDelivery && typeof runtime.finalDelivery === "object" ? runtime.finalDelivery : null;
+  const deliveryGeneration = clean(current?.runtimeGeneration);
+  if (deliveryGeneration) {
+    const match = currentCodexGenerationMatches(thread, deliveryGeneration);
+    if (!match.ok && (match.resolution?.id || match.resolution?.ambiguous)) {
+      await appendEvent({
+        type: "runtime_final_delivery_generation_rejected",
+        threadId: thread.id,
+        observedGeneration: deliveryGeneration,
+        expectedGeneration: match.resolution?.id || null,
+        reason: match.reason,
+        operation: "acknowledge",
+      }, env).catch(() => {});
+      return { ok: false, acknowledged: false, reason: match.reason };
+    }
+  }
   if (!matchesPendingDelivery(current, input)) return { ok: false, acknowledged: false, reason: "final_delivery_not_found" };
   if (clean(current.status) === "delivered") return { ok: true, acknowledged: true, duplicate: true, finalDelivery: current, thread };
   const at = clean(input.deliveredAt) || nowIso();
@@ -126,6 +161,21 @@ export async function recordRuntimeFinalDeliveryFailure(threadId, input = {}, en
   if (!thread) return { ok: false, recorded: false, reason: "thread_not_found" };
   const runtime = thread.runtime && typeof thread.runtime === "object" ? thread.runtime : {};
   const current = runtime.finalDelivery && typeof runtime.finalDelivery === "object" ? runtime.finalDelivery : null;
+  const deliveryGeneration = clean(current?.runtimeGeneration);
+  if (deliveryGeneration) {
+    const match = currentCodexGenerationMatches(thread, deliveryGeneration);
+    if (!match.ok && (match.resolution?.id || match.resolution?.ambiguous)) {
+      await appendEvent({
+        type: "runtime_final_delivery_generation_rejected",
+        threadId: thread.id,
+        observedGeneration: deliveryGeneration,
+        expectedGeneration: match.resolution?.id || null,
+        reason: match.reason,
+        operation: "failure",
+      }, env).catch(() => {});
+      return { ok: false, recorded: false, reason: match.reason };
+    }
+  }
   if (!matchesPendingDelivery(current, input)) return { ok: false, recorded: false, reason: "final_delivery_not_found" };
   const at = nowIso();
   const status = clean(input.status || "failed_retryable");
