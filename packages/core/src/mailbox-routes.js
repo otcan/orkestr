@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { appendEvent } from "../../storage/src/store.js";
 import { assertSanitizedAction } from "./llm-sanitizer.js";
 import { recordMailboxRouteMetrics } from "./observability.js";
-import { policyError } from "./policy.js";
+import { isAdminPrincipal, policyError } from "./policy.js";
 import {
   assertThreadResourceAccess,
   authorizeThreadResourceAccess,
@@ -139,14 +139,37 @@ async function assertRouteSetupAccess(mailbox, threadId, principal, mode, env) {
   return { subscribe, process };
 }
 
-async function provisionRouteThread(mailbox, principal, newThread, env) {
+async function provisionRouteThread(mailbox, principal, newThread, mode, env) {
   if (!newThread || typeof newThread !== "object") return "";
-  const { createThreadForPrincipal } = await import("./threads.js");
+  // Grant writes are deliberately admin-only. Keep new destination creation on
+  // that same explicit control plane rather than creating a thread that is
+  // eligible through an implicit owner or wildcard rule.
+  if (!isAdminPrincipal(principal)) throw policyError("mailbox_route_new_thread_admin_required", 403);
+  const resourceId = mailboxResourceId(mailbox, env);
+  const state = await readThreadResourcePolicy(env);
+  if ((state.mailboxRoutes || []).some((route) => route.resourceId === resourceId && route.status === "active")) throw policyError("mailbox_route_active_exists", 409);
+  if (!state.resources.some((resource) => resource.resourceType === "mailbox" && resource.id === resourceId && resource.status === "active" && !resource.retiredAt)) {
+    throw policyError("mailbox_route_resource_inactive", 409);
+  }
+  const [{ createThreadForPrincipal, listThreads }, { setThreadResourceGrants }] = await Promise.all([import("./threads.js"), import("./thread-resource-grants.js")]);
+  const name = clean(newThread.name || newThread.title || `Mailbox ${mailbox.address}`).slice(0, 160);
+  const requestedId = clean(newThread.id);
+  const matchingThread = (await listThreads(env)).find((thread) => thread.ownerUserId === mailbox.ownerUserId && (
+    (requestedId && (thread.id === requestedId || thread.name === requestedId || thread.bindingName === requestedId)) ||
+    (name && (thread.name === name || thread.bindingName === name))
+  ));
+  if (matchingThread) throw policyError("mailbox_route_new_thread_exists", 409);
   const created = await createThreadForPrincipal({
-    name: clean(newThread.name || newThread.title || `Mailbox ${mailbox.address}`).slice(0, 160),
+    name,
     ownerUserId: mailbox.ownerUserId,
-    ...(clean(newThread.id) ? { id: clean(newThread.id) } : {}),
+    ...(requestedId ? { id: requestedId } : {}),
   }, principal, env);
+  const permissions = ["read", "subscribe", "manage", ...(mode === "process_immediately" ? ["process"] : [])];
+  await setThreadResourceGrants(created.id, "mailbox", [{ resourceId: mailbox.id, permissions, reason: "mailbox_route_new_thread" }], {
+    principal,
+    source: "mailbox_route_provisioning",
+    idempotencyKey: `mailbox-route-thread:${resourceId}:${created.id}:${mode}`,
+  }, env);
   return created.id;
 }
 
@@ -154,7 +177,7 @@ export async function createMailboxRoute({ mailbox, threadId = "", newThread = n
   if (!mailbox?.id || mailbox.target?.type !== "main") throw policyError("mailbox_route_main_mailbox_required", 409);
   requiredPolicyMode(env);
   const normalizedMode = routeMode(mode);
-  const destinationThreadId = clean(threadId) || await provisionRouteThread(mailbox, principal, newThread, env);
+  const destinationThreadId = clean(threadId) || await provisionRouteThread(mailbox, principal, newThread, normalizedMode, env);
   if (!destinationThreadId) throw policyError("mailbox_route_thread_required", 400);
   const access = await assertRouteSetupAccess(mailbox, destinationThreadId, principal, normalizedMode, env);
   const resourceId = mailboxResourceId(mailbox, env);

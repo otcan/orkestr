@@ -1400,6 +1400,7 @@ test("ops mailboxes page exposes explicit route setup and durable status", async
   assert.match(panelTemplate, /One explicit route per main mailbox/);
   assert.match(panelTemplate, /Create explicit route/);
   assert.match(panelTemplate, /Revoke route/);
+  assert.match(panelTemplate, /Provision a new eligible destination thread/);
   assert.match(panelComponent, /this\.api\.mailboxRouteStatus\(this\.selectedMailboxId\)/);
   assert.match(panelComponent, /this\.api\.createMailboxRoute\(this\.selectedMailboxId/);
   assert.match(api, /export interface MailboxRouteStatus/);

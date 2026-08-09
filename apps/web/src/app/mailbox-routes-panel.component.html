@@ -58,15 +58,27 @@
   <article class="ops-card">
     <h4>Create route</h4>
     <form class="user-edit-form" (ngSubmit)="createRoute()">
-      <label>
-        <span>Destination thread</span>
-        <select name="mailbox-route-thread" [(ngModel)]="targetThreadId" [disabled]="saving || !selectedMailboxId">
-          <option value="">Select an authorized thread</option>
-          @for (thread of threads; track thread.id) {
-            <option [value]="thread.id">{{ thread.name || thread.id }} · {{ thread.id }}</option>
-          }
-        </select>
+      <label class="checkbox-row">
+        <input type="checkbox" name="mailbox-route-new-thread" [(ngModel)]="createNewThread" [disabled]="saving || !selectedMailboxId" />
+        <span>Provision a new eligible destination thread</span>
       </label>
+      @if (createNewThread) {
+        <label>
+          <span>New thread name</span>
+          <input name="mailbox-route-new-thread-name" [(ngModel)]="newThreadName" placeholder="Mailbox destination" [disabled]="saving || !selectedMailboxId" />
+        </label>
+        <small>Available to administrators; provisioning creates only the exact mailbox permissions required by this route.</small>
+      } @else {
+        <label>
+          <span>Destination thread</span>
+          <select name="mailbox-route-thread" [(ngModel)]="targetThreadId" [disabled]="saving || !selectedMailboxId">
+            <option value="">Select an authorized thread</option>
+            @for (thread of threads; track thread.id) {
+              <option [value]="thread.id">{{ thread.name || thread.id }} · {{ thread.id }}</option>
+            }
+          </select>
+        </label>
+      }
       <label>
         <span>Delivery mode</span>
         <select name="mailbox-route-mode" [(ngModel)]="mode" [disabled]="saving || !selectedMailboxId">
@@ -77,7 +89,7 @@
       </label>
       <p>{{ modeHelp() }}</p>
       <div class="settings-actions compact-actions">
-        <button type="submit" [disabled]="saving || !selectedMailboxId || !targetThreadId">{{ saving ? "Saving" : "Create explicit route" }}</button>
+        <button type="submit" [disabled]="saving || !selectedMailboxId || (!targetThreadId && (!createNewThread || !newThreadName))">{{ saving ? "Saving" : "Create explicit route" }}</button>
       </div>
     </form>
   </article>

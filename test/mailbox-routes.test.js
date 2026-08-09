@@ -54,6 +54,24 @@ test("an active route is singleton, exact, and keeps append-only route delivery 
   assert.equal(state.mailboxSources[0].payload.attachments.length, 0);
 });
 
+test("an admin can provision a new destination with only the exact route grant", async () => {
+  const scope = await fixture("new-thread");
+  const created = await createMailboxRoute({ mailbox: scope.mailbox, newThread: { name: "New mailbox route" }, mode: "process_immediately", principal: scope.principal }, scope.env);
+  assert.equal(created.route.mode, "process_immediately");
+  const state = await readThreadResourcePolicyState(scope.env);
+  const grant = state.grants.find((item) => item.threadId === created.route.threadId && item.resourceId.endsWith(scope.mailbox.id) && !item.revokedAt);
+  assert.deepEqual([...grant.permissions].sort(), ["manage", "process", "read", "subscribe"]);
+});
+
+test("new route provisioning never reuses an existing destination identity", async () => {
+  const scope = await fixture("new-thread-existing");
+  await createThread({ id: "existing-mailbox-route-thread", ownerUserId: "admin", name: "Existing mailbox route" }, scope.env);
+  await assert.rejects(
+    () => createMailboxRoute({ mailbox: scope.mailbox, newThread: { name: "Existing mailbox route" }, principal: scope.principal }, scope.env),
+    /mailbox_route_new_thread_exists/,
+  );
+});
+
 test("context-next-turn stores no immediate turn and consumes an exact reserved context once with the next human queue item", async () => {
   const scope = await fixture("context");
   await createMailboxRoute({ mailbox: scope.mailbox, threadId: scope.thread.id, mode: "context_next_turn", principal: scope.principal }, scope.env);

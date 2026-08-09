@@ -20,6 +20,8 @@ export class MailboxRoutesPanelComponent implements OnInit {
   status: MailboxRouteStatus | null = null;
   selectedMailboxId = "";
   targetThreadId = "";
+  createNewThread = false;
+  newThreadName = "";
   mode: RouteMode = "append_only";
   busy = false;
   saving = false;
@@ -75,15 +77,18 @@ export class MailboxRoutesPanelComponent implements OnInit {
   }
 
   async createRoute(): Promise<void> {
-    if (this.saving || !this.selectedMailboxId || !this.targetThreadId.trim()) return;
+    if (this.saving || !this.selectedMailboxId || (!this.targetThreadId.trim() && (!this.createNewThread || !this.newThreadName.trim()))) return;
     this.saving = true;
     try {
       const result = await firstValueFrom(this.api.createMailboxRoute(this.selectedMailboxId, {
-        threadId: this.targetThreadId.trim(),
+        threadId: this.createNewThread ? "" : this.targetThreadId.trim(),
         mode: this.mode,
+        ...(this.createNewThread ? { newThread: { name: this.newThreadName.trim() } } : {}),
       }));
       this.notice = result.idempotent ? "The requested route already exists." : "Mailbox route created.";
       this.targetThreadId = "";
+      this.createNewThread = false;
+      this.newThreadName = "";
       await this.loadRouteData();
       this.error = "";
     } catch (error) {

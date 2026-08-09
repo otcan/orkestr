@@ -2449,7 +2449,7 @@ export class ApiService {
     return this.http.get<{ ok: boolean; status: MailboxRouteStatus }>(this.api(`/mailboxes/${encodeURIComponent(mailboxId)}/route-status`));
   }
 
-  createMailboxRoute(mailboxId: string, body: { threadId: string; mode: MailboxRoute["mode"] }): Observable<{ ok: boolean; route: MailboxRoute; policyRevision?: number; idempotent?: boolean }> {
+  createMailboxRoute(mailboxId: string, body: { threadId: string; mode: MailboxRoute["mode"]; newThread?: { name: string } }): Observable<{ ok: boolean; route: MailboxRoute; policyRevision?: number; idempotent?: boolean }> {
     return this.http.post<{ ok: boolean; route: MailboxRoute; policyRevision?: number; idempotent?: boolean }>(this.api(`/mailboxes/${encodeURIComponent(mailboxId)}/routes`), body);
   }
 
