@@ -45,7 +45,6 @@ export {
 export {
   createMailboxRoute,
   cancelMailboxRouteWork,
-  compensateMailboxRouteProvision,
   discardMailboxContext,
   dispatchMailboxRouteWork,
   listMailboxRoutes,

@@ -7,7 +7,7 @@ import { ingestMailboxMessage } from "../packages/connectors/src/mailbox-inbox.j
 import { resetConnectorInboxForTest } from "../packages/connectors/src/connector-inbox.js";
 import { createMailbox, createMailboxThreadListener, revokeMailboxThreadListener } from "../packages/core/src/mailboxes.js";
 import { readThreadResourcePolicyState } from "../packages/core/src/thread-resource-policy-store.js";
-import { compensateMailboxRouteProvision, createMailboxRoute, dispatchMailboxRouteWork, enqueueMailboxRouteSource, mailboxRouteStatus, reconcileMailboxRouteWorkRuntime, recordMailboxRouteWorkRuntime, reserveMailboxContextsForHumanTurn, revokeMailboxRoute } from "../packages/core/src/mailbox-routes.js";
+import { createMailboxRoute, dispatchMailboxRouteWork, enqueueMailboxRouteSource, mailboxRouteStatus, reconcileMailboxRouteWorkRuntime, recordMailboxRouteWorkRuntime, reserveMailboxContextsForHumanTurn, revokeMailboxRoute } from "../packages/core/src/mailbox-routes.js";
 import { appendThreadMessage, createThread, enqueueThreadInputForPrincipal, getThread, listThreadMessages, updateThread } from "../packages/core/src/threads.js";
 import { adminPrincipal } from "../packages/core/src/principal.js";
 import { mutateThreadResourcePolicy, registerThreadResource, setThreadResourceGrants } from "../packages/core/src/thread-resource-grants.js";
@@ -65,19 +65,44 @@ test("an admin can provision a new destination with only the exact route grant",
   assert.deepEqual([...grant.permissions].sort(), ["manage", "process", "read", "subscribe"]);
 });
 
-test("route provisioning compensation removes the fresh thread and exact mailbox grant after failure", async () => {
+test("route provisioning compensates a fault-injected grant failure without an orphan thread or grant", async () => {
   const scope = await fixture("new-thread-cleanup");
-  const fresh = await createThread({ id: "provisioning-failure-thread", ownerUserId: "admin", name: "Fresh route destination" }, scope.env);
-  await setThreadResourceGrants(fresh.id, "mailbox", [{ resourceId: scope.mailbox.id, permissions: ["read", "subscribe", "manage"] }], {
-    principal: scope.principal,
-    source: "mailbox_route_provisioning",
-  }, scope.env);
-
-  const cleanup = await compensateMailboxRouteProvision({ threadId: fresh.id, mailbox: scope.mailbox, principal: scope.principal, reason: "simulated_route_creation_failure" }, scope.env);
-  assert.equal(cleanup.deleted, true);
-  assert.equal(await getThread(fresh.id, scope.env), null);
+  const freshId = "provisioning-failure-thread";
+  await assert.rejects(
+    () => createMailboxRoute({ mailbox: scope.mailbox, newThread: { id: freshId, name: "Fresh route destination" }, principal: scope.principal }, scope.env, {
+      setThreadResourceGrants: async () => { throw new Error("injected_grant_write_failure"); },
+    }),
+    /injected_grant_write_failure/,
+  );
+  assert.equal(await getThread(freshId, scope.env), null);
   const state = await readThreadResourcePolicyState(scope.env);
-  assert.equal(state.grants.some((grant) => grant.threadId === fresh.id && !grant.revokedAt), false);
+  assert.equal(state.grants.some((grant) => grant.threadId === freshId && !grant.revokedAt), false);
+  assert.equal(state.mailboxRoutes.length, 0);
+});
+
+test("route provisioning compensates its fresh thread when a concurrent route wins", async () => {
+  const scope = await fixture("new-thread-concurrent");
+  const freshId = "provisioning-concurrent-thread";
+  let competingRouteCreated = false;
+  await assert.rejects(
+    () => createMailboxRoute({ mailbox: scope.mailbox, newThread: { id: freshId, name: "Concurrent route destination" }, principal: scope.principal }, scope.env, {
+      setThreadResourceGrants: async (...args) => {
+        const result = await setThreadResourceGrants(...args);
+        if (!competingRouteCreated) {
+          competingRouteCreated = true;
+          await createMailboxRoute({ mailbox: scope.mailbox, threadId: scope.thread.id, mode: "append_only", principal: scope.principal }, scope.env);
+        }
+        return result;
+      },
+    }),
+    /mailbox_route_active_exists/,
+  );
+  assert.equal(competingRouteCreated, true);
+  assert.equal(await getThread(freshId, scope.env), null);
+  const state = await readThreadResourcePolicyState(scope.env);
+  assert.equal(state.grants.some((grant) => grant.threadId === freshId && !grant.revokedAt), false);
+  assert.equal(state.mailboxRoutes.filter((route) => route.status === "active").length, 1);
+  assert.equal(state.mailboxRoutes.find((route) => route.status === "active")?.threadId, scope.thread.id);
 });
 
 test("new route provisioning never reuses an existing destination identity", async () => {
@@ -251,11 +276,25 @@ test("process-immediately sanitizes as an external mailbox actor and creates one
 
 test("process work keeps a durable queue-message and Codex-turn link through reconciliation without replaying acceptance", async () => {
   const scope = await fixture("process-runtime", ["read", "subscribe", "process", "manage"]);
-  scope.env.ORKESTR_LLM_SANITIZER_COMMAND_JSON = JSON.stringify([process.execPath, "-e", "process.stdin.resume(); process.stdin.on('end', () => console.log(JSON.stringify({ allow: true })));"]);
   await createMailboxRoute({ mailbox: scope.mailbox, threadId: scope.thread.id, mode: "process_immediately", principal: scope.principal }, scope.env);
   const source = await enqueueMailboxRouteSource({ mailbox: scope.mailbox, message: inbound(scope.mailbox, "<process-runtime@example.test>"), idempotencyKey: "process-runtime" }, scope.env);
-  const accepted = await dispatchMailboxRouteWork({ workIds: [source.workId] }, scope.env);
-  assert.equal(accepted.accepted, 1);
+  const queued = await appendThreadMessage(scope.thread.id, {
+    role: "user",
+    source: "mailbox_route",
+    connector: "mailbox",
+    state: "queued",
+    clientMessageId: `mailbox-route-work:${source.workId}`,
+    text: "Durably accepted mailbox work",
+    mailboxExecutionPolicy: "read_only_no_network_no_connectors_no_messaging_no_auth_no_browser_no_desktop",
+  }, scope.env);
+  await mutateThreadResourcePolicy((policy) => {
+    const work = policy.mailboxRouteWork.find((item) => item.id === source.workId);
+    work.state = "accepted";
+    work.executionState = "accepted";
+    work.messageId = queued.id;
+    work.acceptedAt = new Date().toISOString();
+    return { accepted: true, skipPolicyEpoch: true };
+  }, scope.env);
 
   let state = await readThreadResourcePolicyState(scope.env);
   const work = state.mailboxRouteWork.find((item) => item.id === source.workId);

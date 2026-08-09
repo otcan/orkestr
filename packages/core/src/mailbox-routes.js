@@ -175,11 +175,7 @@ async function compensateProvisionedMailboxRouteThread({ threadId, mailbox, prin
   }
 }
 
-export async function compensateMailboxRouteProvision(input = {}, env = process.env) {
-  return compensateProvisionedMailboxRouteThread(input, env);
-}
-
-async function provisionRouteThread(mailbox, principal, newThread, mode, env) {
+async function provisionRouteThread(mailbox, principal, newThread, mode, env, operations = {}) {
   if (!newThread || typeof newThread !== "object") return null;
   // Grant writes are deliberately admin-only. Keep new destination creation on
   // that same explicit control plane rather than creating a thread that is
@@ -192,7 +188,8 @@ async function provisionRouteThread(mailbox, principal, newThread, mode, env) {
   if (!state.resources.some((resource) => resource.resourceType === "mailbox" && resource.id === resourceId && resource.status === "active" && !resource.retiredAt)) {
     throw policyError("mailbox_route_resource_inactive", 409);
   }
-  const [{ createThreadForPrincipal, listThreads }, { setThreadResourceGrants }] = await Promise.all([import("./threads.js"), import("./thread-resource-grants.js")]);
+  const [{ createThreadForPrincipal, listThreads, updateThread }, { setThreadResourceGrants }] = await Promise.all([import("./threads.js"), import("./thread-resource-grants.js")]);
+  const installGrants = typeof operations.setThreadResourceGrants === "function" ? operations.setThreadResourceGrants : setThreadResourceGrants;
   const name = clean(newThread.name || newThread.title || `Mailbox ${mailbox.address}`).slice(0, 160);
   const requestedId = clean(newThread.id);
   const matchingThread = (await listThreads(env)).find((thread) => thread.ownerUserId === mailbox.ownerUserId && (
@@ -207,11 +204,11 @@ async function provisionRouteThread(mailbox, principal, newThread, mode, env) {
       ownerUserId: mailbox.ownerUserId,
       ...(requestedId ? { id: requestedId } : {}),
     }, principal, env);
-    await (await import("./threads.js")).updateThread(created.id, {
+    await updateThread(created.id, {
       mailboxRouteProvisioning: { status: "provisioning", mailboxId: mailbox.id, mode, startedAt: nowIso() },
     }, env);
     const permissions = ["read", "subscribe", "manage", ...(mode === "process_immediately" ? ["process"] : [])];
-    await setThreadResourceGrants(created.id, "mailbox", [{ resourceId: mailbox.id, permissions, reason: "mailbox_route_new_thread" }], {
+    await installGrants(created.id, "mailbox", [{ resourceId: mailbox.id, permissions, reason: "mailbox_route_new_thread" }], {
       principal,
       source: "mailbox_route_provisioning",
       idempotencyKey: `mailbox-route-thread:${resourceId}:${created.id}:${mode}`,
@@ -223,7 +220,9 @@ async function provisionRouteThread(mailbox, principal, newThread, mode, env) {
   }
 }
 
-export async function createMailboxRoute({ mailbox, threadId = "", newThread = null, mode = "append_only", principal = {}, expectedPolicyRevision } = {}, env = process.env) {
+// `operations` is an internal dependency seam for deterministic storage-fault
+// tests. HTTP callers use the two-argument form and cannot supply it.
+export async function createMailboxRoute({ mailbox, threadId = "", newThread = null, mode = "append_only", principal = {}, expectedPolicyRevision } = {}, env = process.env, operations = {}) {
   if (!mailbox?.id || mailbox.target?.type !== "main") throw policyError("mailbox_route_main_mailbox_required", 409);
   requiredPolicyMode(env);
   const normalizedMode = routeMode(mode);
@@ -233,7 +232,7 @@ export async function createMailboxRoute({ mailbox, threadId = "", newThread = n
   if (legacyListenerActive(before, resourceId)) throw policyError("mailbox_route_legacy_listener_active", 409);
   let provision = null;
   try {
-    provision = clean(threadId) ? null : await provisionRouteThread(mailbox, principal, newThread, normalizedMode, env);
+    provision = clean(threadId) ? null : await provisionRouteThread(mailbox, principal, newThread, normalizedMode, env, operations);
     const destinationThreadId = clean(threadId) || provision?.threadId || "";
     if (!destinationThreadId) throw policyError("mailbox_route_thread_required", 400);
     const access = await assertRouteSetupAccess(mailbox, destinationThreadId, principal, normalizedMode, env);
