@@ -4741,13 +4741,27 @@ test("Codex app-server safe reset checkpoints and starts a fresh thread", async 
     const started = await startCodexAppServerThread(thread, env);
     await appendThreadMessage(started.thread.id, { role: "user", text: "Important active task", state: "completed" }, env);
     await appendThreadMessage(started.thread.id, { role: "assistant", phase: "final_answer", text: "Important result", state: "completed" }, env);
+    const oldRolloutPath = path.join(home, "old-generation-rollout.jsonl");
     await updateThread(started.thread.id, {
       state: "working",
+      codexRolloutPath: oldRolloutPath,
+      codexRolloutGeneration: started.thread.codexThreadId,
+      executor: {
+        ...(started.thread.executor || {}),
+        metadata: {
+          ...(started.thread.executor?.metadata || {}),
+          codexRolloutPath: oldRolloutPath,
+          codexRolloutGeneration: started.thread.codexThreadId,
+        },
+      },
       runtime: {
         ...(started.thread.runtime || {}),
         runtimeKind: "codex-app-server",
         state: "working",
         activeTurnId: "active-turn",
+        operatorRolloutPath: oldRolloutPath,
+        operatorRolloutGeneration: started.thread.codexThreadId,
+        operatorRolloutOffset: 42,
       },
     }, env);
     await markAppServerTurnActive(started.thread, env);
@@ -4765,6 +4779,13 @@ test("Codex app-server safe reset checkpoints and starts a fresh thread", async 
     assert.notEqual(reset.newCodexThreadId, oldCodexThreadId);
     assert.equal(resetThread.codexThreadId, reset.newCodexThreadId);
     assert.equal(resetThread.executor.metadata.lastSafeReset.codexThreadId, oldCodexThreadId);
+    assert.equal(resetThread.codexRolloutPath, null);
+    assert.equal(resetThread.codexRolloutGeneration, null);
+    assert.equal(resetThread.executor.metadata.codexRolloutPath, null);
+    assert.equal(resetThread.executor.metadata.codexRolloutGeneration, null);
+    assert.equal(resetThread.runtime.operatorRolloutPath, null);
+    assert.equal(resetThread.runtime.operatorRolloutGeneration, null);
+    assert.equal(resetThread.runtime.operatorRolloutOffset, 0);
     assert.match(checkpoint, /Important active task/);
     assert.match(checkpoint, /Important result/);
     assert.equal(rawState.calls.filter((call) => call.method === "thread\/start").length, 2);

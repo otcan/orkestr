@@ -2008,6 +2008,60 @@ test("runtime resource doctor detects and clears rollout generation, session met
   assert.equal(stored.executor.metadata.codexRolloutPath, null);
 });
 
+test("runtime resource doctor bounds final-projection checks to the configured tail and converges cleanly", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-generation-doctor-tail-"));
+  const fakeTmux = await createFakeTmux(home);
+  await fs.writeFile(fakeTmux.state, "", "utf8");
+  const generation = "doctor-tail-generation";
+  const env = {
+    ORKESTR_HOME: path.join(home, "orkestr-home"),
+    ORKESTR_CODEX_GENERATION_DOCTOR_MESSAGE_TAIL_LIMIT: "1",
+    PATH: `${fakeTmux.bin}:${process.env.PATH || ""}`,
+    TMUX_LOG: fakeTmux.log,
+    TMUX_STATE: fakeTmux.state,
+  };
+  const thread = await createThread({
+    id: "generation-doctor-tail-thread",
+    name: "Generation doctor tail",
+    executor: { type: "codex", codexThreadId: generation },
+    runtime: { runtimeKind: "codex-app-server", codexThreadId: generation, runtimeGeneration: generation },
+    binding: { connector: "whatsapp", chatId: "tail-chat", outboundAccountId: "tail-account" },
+  }, env);
+  await appendThreadMessage(thread.id, {
+    role: "assistant",
+    source: "codex-app-server",
+    phase: "final_answer",
+    state: "completed",
+    connector: "whatsapp",
+    chatId: "tail-chat",
+    accountId: "tail-account",
+    text: "Older final outside the configured doctor tail.",
+    codexThreadId: generation,
+  }, env);
+  const latest = await appendThreadMessage(thread.id, {
+    role: "assistant",
+    source: "codex-app-server",
+    phase: "final_answer",
+    state: "completed",
+    connector: "whatsapp",
+    chatId: "tail-chat",
+    accountId: "tail-account",
+    text: "Latest final inside the configured doctor tail.",
+    codexThreadId: generation,
+  }, env);
+
+  const detected = await doctorRuntimeResources({ env, repair: false });
+  const repaired = await doctorRuntimeResources({ env, repair: true });
+  const secondRepair = await doctorRuntimeResources({ env, repair: true });
+  const outbox = await readConnectorOutbox(env);
+
+  assert.equal(detected.counts.missingFinalProjections, 1);
+  assert.equal(detected.counts.missingFinalOutboxes, 1);
+  assert.ok(repaired.actions.some((action) => action.action === "repaired_codex_final_projection" && action.messageId === latest.id));
+  assert.equal(outbox.jobs.filter((job) => job.deliveryType === "final" && job.threadId === thread.id).length, 1);
+  assert.deepEqual(secondRepair.actions, []);
+});
+
 test("runtime resource doctor repairs duplicate active leases for one thread", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-duplicate-lease-doctor-"));
   const fakeTmux = await createFakeTmux(home);

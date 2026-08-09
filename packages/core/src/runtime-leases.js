@@ -11,7 +11,7 @@ import { ensureRuntimeAgentsFile } from "./agent-context.js";
 import { recordCodexRuntimeAuthInvalidSignal } from "./codex-auth-health.js";
 import { deployDrainActiveSync } from "./deploy-drain.js";
 import { assertCodexAuthenticated } from "../../connectors/src/codex.js";
-import { readConnectorOutbox } from "../../connectors/src/connector-outbox.js";
+import { listConnectorOutboxJobs } from "../../connectors/src/connector-outbox.js";
 import { clearPaneProgressCache, paneBackgroundWork, panePromptHasDraft, publicPaneProgress, samplePaneProgress } from "./pane-progress.js";
 import {
   appendThreadMessage,
@@ -4298,6 +4298,41 @@ async function reconcileDetachedRolloutCompletion(thread, runtime, completedTurn
   };
 }
 
+async function runRolloutAfterReadHook(context = {}, env = process.env) {
+  const hook = env.ORKESTR_TEST_ROLLOUT_AFTER_READ_HOOK;
+  if (typeof hook === "function") await hook(context);
+}
+
+async function fenceRolloutGeneration(threadId, expectedGeneration = "", surface = "unknown", env = process.env) {
+  const thread = await getThread(threadId, env).catch(() => null);
+  if (!thread) return { ok: false, thread: null, reason: "thread_not_found", generation: "" };
+  const expected = String(expectedGeneration || "").trim();
+  const current = codexThreadId(thread);
+  if (!expected || current === expected) return { ok: true, thread, generation: current || expected };
+  await appendEvent({
+    type: "codex_rollout_generation_fenced",
+    threadId,
+    surface,
+    expectedGeneration: expected,
+    currentGeneration: current || null,
+    reason: "generation_changed_during_rollout_scan",
+  }, env).catch(() => {});
+  return { ok: false, thread, reason: "generation_changed_during_rollout_scan", generation: current || "" };
+}
+
+function resetLeaseRolloutForGeneration(lease = {}, generation = "") {
+  return {
+    ...lease,
+    rolloutGeneration: generation || null,
+    rolloutPath: null,
+    rolloutOffset: 0,
+    rolloutOffsetLookbackApplied: false,
+    rolloutOffsetLookbackBytes: 0,
+    rolloutLookbackScannedAt: null,
+    rolloutLookbackScannedFrom: null,
+  };
+}
+
 async function syncLeaseRollout(lease, env = process.env) {
   let thread = await getThread(lease.threadId, env);
   if (!thread) return { lease, appended: 0 };
@@ -4396,6 +4431,17 @@ async function syncLeaseRollout(lease, env = process.env) {
   } finally {
     await handle.close().catch(() => {});
   }
+  await runRolloutAfterReadHook({
+    surface: "active_lease",
+    threadId: currentLease.threadId,
+    expectedGeneration: generation || null,
+    rolloutPathFingerprint: rolloutPathFingerprint(rolloutPath),
+  }, env);
+  const readFence = await fenceRolloutGeneration(currentLease.threadId, generation, "active_lease_after_read", env);
+  if (!readFence.ok) {
+    return { lease: resetLeaseRolloutForGeneration(currentLease, readFence.generation), appended: 0 };
+  }
+  thread = readFence.thread;
   const parsed = parseAssistantRolloutMessages(body, currentLease.threadId, start, generation);
   const existing = await rolloutExistingMessages(currentLease.threadId, parsed, env);
   const existingEventKeys = new Set(existing.map(rolloutMessageEventKey));
@@ -4404,6 +4450,11 @@ async function syncLeaseRollout(lease, env = process.env) {
       .filter((message) => message.role === "assistant")
       .map(rolloutMessageNearTextKey),
   );
+  const projectionFence = await fenceRolloutGeneration(currentLease.threadId, generation, "active_lease_before_projection", env);
+  if (!projectionFence.ok) {
+    return { lease: resetLeaseRolloutForGeneration(currentLease, projectionFence.generation), appended: 0 };
+  }
+  thread = projectionFence.thread;
   let appended = 0;
   for (const message of parsed) {
     const eventKey = rolloutMessageEventKey(message);
@@ -4444,6 +4495,10 @@ async function syncLeaseRollout(lease, env = process.env) {
     existingEventKeys.add(eventKey);
     existingTextKeys.add(textKey);
     appended += 1;
+  }
+  const commitFence = await fenceRolloutGeneration(currentLease.threadId, generation, "active_lease_before_cursor_commit", env);
+  if (!commitFence.ok) {
+    return { lease: resetLeaseRolloutForGeneration(currentLease, commitFence.generation), appended };
   }
   return {
     lease: {
@@ -4580,6 +4635,18 @@ async function syncDetachedCodexRollouts(activeLeaseThreadIds = new Set(), env =
       } finally {
         await handle.close().catch(() => {});
       }
+      await runRolloutAfterReadHook({
+        surface: "detached_runtime",
+        threadId: currentThread.id,
+        expectedGeneration: generation || null,
+        rolloutPathFingerprint: rolloutPathFingerprint(rolloutPath),
+      }, env);
+      const readFence = await fenceRolloutGeneration(currentThread.id, generation, "detached_runtime_after_read", env);
+      if (!readFence.ok) continue;
+      currentThread = readFence.thread;
+      const projectionFence = await fenceRolloutGeneration(currentThread.id, generation, "detached_runtime_before_projection", env);
+      if (!projectionFence.ok) continue;
+      currentThread = projectionFence.thread;
       const projected = await appendRolloutMessages({
         thread: currentThread,
         rolloutPath,
@@ -4593,6 +4660,9 @@ async function syncDetachedCodexRollouts(activeLeaseThreadIds = new Set(), env =
       appended += Number(projected?.appended || 0) || 0;
       completedTurnId = String(projected?.completedTurnId || "").trim();
     }
+    const commitFence = await fenceRolloutGeneration(currentThread.id, generation, "detached_runtime_before_cursor_commit", env);
+    if (!commitFence.ok) continue;
+    currentThread = commitFence.thread;
     const threadAfterProjection = await getThread(currentThread.id, env).catch(() => null) || currentThread;
     const runtimeAfterProjection = threadAfterProjection.runtime && typeof threadAfterProjection.runtime === "object"
       ? threadAfterProjection.runtime
@@ -5221,6 +5291,11 @@ function finalProjectionCanRepair(thread, message) {
   return resolution.id === generation;
 }
 
+function generationDoctorMessageTailLimit(env = process.env) {
+  const parsed = Number(env.ORKESTR_CODEX_GENERATION_DOCTOR_MESSAGE_TAIL_LIMIT || 100);
+  return Number.isFinite(parsed) ? Math.max(1, Math.min(1_000, Math.floor(parsed))) : 100;
+}
+
 export async function doctorRuntimeResources({ env = process.env, repair = false, automatic = false } = {}) {
   const leases = await listRuntimeLeases(env).catch(() => []);
   const activeLeases = leases.filter((lease) => !lease.endedAt);
@@ -5284,7 +5359,7 @@ export async function doctorRuntimeResources({ env = process.env, repair = false
   // reconciliation an explicit operator repair so it cannot invalidate a
   // rollout pointer while the sync pass is still recording its validation.
   const generationThreads = automatic ? [] : await listThreads(env).catch(() => []);
-  const connectorOutboxJobs = automatic ? [] : (await readConnectorOutbox(env).catch(() => ({ jobs: [] }))).jobs || [];
+  const generationMessageTailLimit = generationDoctorMessageTailLimit(env);
   for (const storedThread of generationThreads) {
     let thread = storedThread;
     let state = staleGenerationRuntimeState(thread);
@@ -5453,7 +5528,15 @@ export async function doctorRuntimeResources({ env = process.env, repair = false
       }
     }
 
-    const messages = await listThreadMessages(thread.id, env).catch(() => []);
+    const messages = await listThreadMessageCandidates(thread.id, {
+      tailLimit: generationMessageTailLimit,
+    }, env).catch(() => []);
+    const connectorOutboxJobs = (await listConnectorOutboxJobs({
+      connector: "whatsapp",
+      threadId: thread.id,
+      deliveryType: "final",
+      limit: generationMessageTailLimit,
+    }, env).catch(() => ({ jobs: [] }))).jobs || [];
     const finalMessages = messages.filter(codexWhatsAppFinalMessage);
     const latestFinal = finalMessages.at(-1) || null;
     for (const message of finalMessages) {

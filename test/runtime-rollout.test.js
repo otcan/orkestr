@@ -11,7 +11,7 @@ import {
 } from "../packages/core/src/runtime-leases.js";
 import { dataPaths, ensureDataDirs } from "../packages/storage/src/paths.js";
 import { readConnectorOutbox } from "../packages/connectors/src/connector-outbox.js";
-import { appendThreadMessage, createThread, getThread, listThreadMessages } from "../packages/core/src/threads.js";
+import { appendThreadMessage, createThread, getThread, listThreadMessages, updateThread } from "../packages/core/src/threads.js";
 
 test("active runtime rollout sync projects final answers without waiting for the full runtime doctor", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-active-rollout-fast-path-"));
@@ -71,6 +71,55 @@ test("active runtime rollout sync projects final answers without waiting for the
   assert.equal(reply?.phase, "final_answer");
   assert.equal(reply?.connector, "whatsapp");
   assert.equal(consumeThreadConnectorDeliverySignalCount(), 1);
+});
+
+test("active rollout generation fence drops content read before a safe-reset generation change", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-active-rollout-generation-fence-"));
+  const rolloutPath = path.join(home, "old-rollout.jsonl");
+  const oldGeneration = "10101010-1010-4010-8010-101010101010";
+  const newGeneration = "20202020-2020-4020-8020-202020202020";
+  let reset = false;
+  const env = {
+    ORKESTR_HOME: path.join(home, "orkestr"),
+    ORKESTR_TEST_ROLLOUT_AFTER_READ_HOOK: async ({ surface }) => {
+      if (reset || surface !== "active_lease") return;
+      reset = true;
+      const thread = await getThread("active-generation-fence-thread", env);
+      await updateThread(thread.id, {
+        codexThreadId: newGeneration,
+        executor: { ...(thread.executor || {}), codexThreadId: newGeneration },
+        runtime: { ...(thread.runtime || {}), codexThreadId: newGeneration, runtimeGeneration: newGeneration },
+      }, env);
+    },
+  };
+  await ensureDataDirs(env);
+  await createThread({
+    id: "active-generation-fence-thread",
+    name: "Active generation fence",
+    codexThreadId: oldGeneration,
+    executor: { type: "codex", codexThreadId: oldGeneration },
+    runtime: { runtimeKind: "codex-app-server", codexThreadId: oldGeneration, runtimeGeneration: oldGeneration },
+    binding: { connector: "whatsapp", chatId: "active-fence-chat", outboundAccountId: "responder" },
+  }, env);
+  await fs.writeFile(rolloutPath, [
+    JSON.stringify({ type: "session_meta", payload: { id: oldGeneration } }),
+    JSON.stringify({ timestamp: "2026-08-01T12:00:00.000Z", type: "response_item", payload: { type: "message", role: "assistant", phase: "final_answer", content: [{ type: "output_text", text: "Old active rollout content" }] } }),
+  ].join("\n") + "\n", "utf8");
+  await fs.writeFile(dataPaths(env).runtimeLeases, JSON.stringify([{
+    id: "active-generation-fence-lease",
+    threadId: "active-generation-fence-thread",
+    sessionName: "active-generation-fence-session",
+    rolloutPath,
+    rolloutGeneration: oldGeneration,
+    rolloutOffset: 0,
+    startedAt: "2026-08-01T11:59:00.000Z",
+  }]), "utf8");
+
+  const result = await syncActiveRuntimeRolloutMessages(env);
+  const messages = await listThreadMessages("active-generation-fence-thread", env);
+
+  assert.equal(result.appended, 0);
+  assert.equal(messages.some((message) => message.text === "Old active rollout content"), false);
 });
 
 test("detached app-server WhatsApp threads project direct Codex rollout replies", async () => {
@@ -195,6 +244,58 @@ test("detached app-server WhatsApp threads project direct Codex rollout replies"
   } finally {
     clearSignalHandler();
   }
+});
+
+test("detached rollout generation fence does not import or commit an old cursor after reset", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-detached-rollout-generation-fence-"));
+  const rolloutPath = path.join(home, "old-rollout.jsonl");
+  const oldGeneration = "30303030-3030-4030-8030-303030303030";
+  const newGeneration = "40404040-4040-4040-8040-404040404040";
+  let reset = false;
+  const env = {
+    ORKESTR_HOME: path.join(home, "orkestr"),
+    ORKESTR_TEST_ROLLOUT_AFTER_READ_HOOK: async ({ surface }) => {
+      if (reset || surface !== "detached_runtime") return;
+      reset = true;
+      const thread = await getThread("detached-generation-fence-thread", env);
+      await updateThread(thread.id, {
+        codexThreadId: newGeneration,
+        executor: { ...(thread.executor || {}), codexThreadId: newGeneration },
+        runtime: { ...(thread.runtime || {}), codexThreadId: newGeneration, runtimeGeneration: newGeneration },
+      }, env);
+    },
+  };
+  await createThread({
+    id: "detached-generation-fence-thread",
+    name: "Detached generation fence",
+    codexThreadId: oldGeneration,
+    executor: {
+      type: "codex",
+      transport: "app-server",
+      codexThreadId: oldGeneration,
+      metadata: { codexRolloutPath: rolloutPath, codexRolloutGeneration: oldGeneration },
+    },
+    runtime: {
+      runtimeKind: "codex-app-server",
+      codexThreadId: oldGeneration,
+      runtimeGeneration: oldGeneration,
+      operatorRolloutOffset: 0,
+    },
+    binding: { connector: "whatsapp", chatId: "detached-fence-chat", outboundAccountId: "responder" },
+  }, env);
+  await fs.writeFile(rolloutPath, [
+    JSON.stringify({ type: "session_meta", payload: { id: oldGeneration } }),
+    JSON.stringify({ timestamp: "2026-08-01T12:00:00.000Z", type: "response_item", payload: { type: "message", role: "assistant", phase: "final_answer", content: [{ type: "output_text", text: "Old detached rollout content" }] } }),
+  ].join("\n") + "\n", "utf8");
+
+  const result = await syncRuntimeLeases(env);
+  const thread = await getThread("detached-generation-fence-thread", env);
+  const messages = await listThreadMessages("detached-generation-fence-thread", env);
+
+  assert.equal(result.appended, 0);
+  assert.equal(messages.some((message) => message.text === "Old detached rollout content"), false);
+  assert.equal(thread.runtime.operatorRolloutOffset, 0);
+  assert.equal(thread.runtime.operatorRolloutPath, undefined);
 });
 
 test("enforced detached rollout rejects a malformed or superseded session meta generation", async () => {
