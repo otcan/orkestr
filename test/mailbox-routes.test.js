@@ -5,10 +5,10 @@ import path from "node:path";
 import test from "node:test";
 import { ingestMailboxMessage } from "../packages/connectors/src/mailbox-inbox.js";
 import { resetConnectorInboxForTest } from "../packages/connectors/src/connector-inbox.js";
-import { createMailbox } from "../packages/core/src/mailboxes.js";
+import { createMailbox, createMailboxThreadListener, revokeMailboxThreadListener } from "../packages/core/src/mailboxes.js";
 import { readThreadResourcePolicyState } from "../packages/core/src/thread-resource-policy-store.js";
-import { createMailboxRoute, dispatchMailboxRouteWork, enqueueMailboxRouteSource, mailboxRouteStatus, reserveMailboxContextsForHumanTurn, revokeMailboxRoute } from "../packages/core/src/mailbox-routes.js";
-import { appendThreadMessage, createThread, enqueueThreadInputForPrincipal, listThreadMessages } from "../packages/core/src/threads.js";
+import { compensateMailboxRouteProvision, createMailboxRoute, dispatchMailboxRouteWork, enqueueMailboxRouteSource, mailboxRouteStatus, reconcileMailboxRouteWorkRuntime, recordMailboxRouteWorkRuntime, reserveMailboxContextsForHumanTurn, revokeMailboxRoute } from "../packages/core/src/mailbox-routes.js";
+import { appendThreadMessage, createThread, enqueueThreadInputForPrincipal, getThread, listThreadMessages, updateThread } from "../packages/core/src/threads.js";
 import { adminPrincipal } from "../packages/core/src/principal.js";
 import { mutateThreadResourcePolicy, registerThreadResource, setThreadResourceGrants } from "../packages/core/src/thread-resource-grants.js";
 import { turnStartParams } from "../packages/core/src/codex-app-server-common.js";
@@ -58,9 +58,26 @@ test("an admin can provision a new destination with only the exact route grant",
   const scope = await fixture("new-thread");
   const created = await createMailboxRoute({ mailbox: scope.mailbox, newThread: { name: "New mailbox route" }, mode: "process_immediately", principal: scope.principal }, scope.env);
   assert.equal(created.route.mode, "process_immediately");
+  const thread = await getThread(created.route.threadId, scope.env);
+  assert.equal(thread.mailboxRouteProvisioning?.status, "ready");
   const state = await readThreadResourcePolicyState(scope.env);
   const grant = state.grants.find((item) => item.threadId === created.route.threadId && item.resourceId.endsWith(scope.mailbox.id) && !item.revokedAt);
   assert.deepEqual([...grant.permissions].sort(), ["manage", "process", "read", "subscribe"]);
+});
+
+test("route provisioning compensation removes the fresh thread and exact mailbox grant after failure", async () => {
+  const scope = await fixture("new-thread-cleanup");
+  const fresh = await createThread({ id: "provisioning-failure-thread", ownerUserId: "admin", name: "Fresh route destination" }, scope.env);
+  await setThreadResourceGrants(fresh.id, "mailbox", [{ resourceId: scope.mailbox.id, permissions: ["read", "subscribe", "manage"] }], {
+    principal: scope.principal,
+    source: "mailbox_route_provisioning",
+  }, scope.env);
+
+  const cleanup = await compensateMailboxRouteProvision({ threadId: fresh.id, mailbox: scope.mailbox, principal: scope.principal, reason: "simulated_route_creation_failure" }, scope.env);
+  assert.equal(cleanup.deleted, true);
+  assert.equal(await getThread(fresh.id, scope.env), null);
+  const state = await readThreadResourcePolicyState(scope.env);
+  assert.equal(state.grants.some((grant) => grant.threadId === fresh.id && !grant.revokedAt), false);
 });
 
 test("new route provisioning never reuses an existing destination identity", async () => {
@@ -103,6 +120,72 @@ test("context-next-turn recovers an expired reservation before a later human req
   const recovered = await reserveMailboxContextsForHumanTurn({ threadId: scope.thread.id, claimId: "later-human-turn" }, scope.env);
   assert.equal(recovered.contexts.length, 1);
   assert.equal(recovered.contexts[0].reservedFor, "later-human-turn");
+});
+
+test("context-next-turn binds duplicate client inputs to the original message and consumes the context only once", async () => {
+  const scope = await fixture("context-duplicate");
+  await createMailboxRoute({ mailbox: scope.mailbox, threadId: scope.thread.id, mode: "context_next_turn", principal: scope.principal }, scope.env);
+  await ingestMailboxMessage(inbound(scope.mailbox, "<context-duplicate@example.test>", "Single-use context"), scope.env);
+
+  const first = await enqueueThreadInputForPrincipal(scope.thread.id, { text: "Summarize", clientMessageId: "same-human-request" }, scope.principal, scope.env);
+  const duplicate = await enqueueThreadInputForPrincipal(scope.thread.id, { text: "Summarize", clientMessageId: "same-human-request" }, scope.principal, scope.env);
+  const later = await enqueueThreadInputForPrincipal(scope.thread.id, { text: "A different request", clientMessageId: "later-human-request" }, scope.principal, scope.env);
+
+  assert.match(first.text, /Single-use context/);
+  assert.equal(duplicate.id, first.id);
+  assert.equal(duplicate.duplicate, true);
+  assert.doesNotMatch(later.text, /Single-use context/);
+  const state = await readThreadResourcePolicyState(scope.env);
+  assert.equal(state.mailboxContexts.filter((item) => item.status === "consumed" && item.messageId === first.id).length, 1);
+  assert.equal(state.mailboxContexts.some((item) => item.status === "reserved"), false);
+});
+
+test("context-next-turn reconciles a reserved record after a crash between append and consume", async () => {
+  const scope = await fixture("context-crash");
+  await createMailboxRoute({ mailbox: scope.mailbox, threadId: scope.thread.id, mode: "context_next_turn", principal: scope.principal }, scope.env);
+  await ingestMailboxMessage(inbound(scope.mailbox, "<context-crash@example.test>", "Crash-safe context"), scope.env);
+  const reservation = await reserveMailboxContextsForHumanTurn({ threadId: scope.thread.id, claimId: "crash-before-consume" }, scope.env);
+  assert.equal(reservation.contexts.length, 1);
+  const appended = await appendThreadMessage(scope.thread.id, {
+    role: "user",
+    source: "ui",
+    state: "queued",
+    clientMessageId: "crashed-human-request",
+    mailboxContextClaimId: "crash-before-consume",
+    text: `Please handle this.\n\n${reservation.text}`,
+  }, scope.env);
+
+  const later = await enqueueThreadInputForPrincipal(scope.thread.id, { text: "A later request", clientMessageId: "after-crash" }, scope.principal, scope.env);
+  assert.doesNotMatch(later.text, /Crash-safe context/);
+  const state = await readThreadResourcePolicyState(scope.env);
+  assert.equal(state.mailboxContexts.find((item) => item.id === reservation.contexts[0].id)?.status, "consumed");
+  assert.equal(state.mailboxContexts.find((item) => item.id === reservation.contexts[0].id)?.messageId, appended.id);
+});
+
+test("route revocation cancels context_pending work and its reserved delivery context", async () => {
+  const scope = await fixture("context-revoke");
+  const route = await createMailboxRoute({ mailbox: scope.mailbox, threadId: scope.thread.id, mode: "context_next_turn", principal: scope.principal }, scope.env);
+  await ingestMailboxMessage(inbound(scope.mailbox, "<context-revoke@example.test>", "Cancel this context"), scope.env);
+  await revokeMailboxRoute({ mailbox: scope.mailbox, routeId: route.route.id, principal: scope.principal }, scope.env);
+
+  const state = await readThreadResourcePolicyState(scope.env);
+  assert.equal(state.mailboxRouteWork[0].state, "cancelled");
+  assert.equal(state.mailboxContexts[0].status, "cancelled");
+});
+
+test("active legacy listeners and routes cannot be co-enabled for a mailbox", async () => {
+  const scope = await fixture("legacy-coexistence");
+  const listener = await createMailboxThreadListener({ mailbox: scope.mailbox, threadId: scope.thread.id, principal: scope.principal }, scope.env);
+  await assert.rejects(
+    () => createMailboxRoute({ mailbox: scope.mailbox, threadId: scope.thread.id, mode: "append_only", principal: scope.principal }, scope.env),
+    /mailbox_route_legacy_listener_active/,
+  );
+  await revokeMailboxThreadListener({ mailbox: scope.mailbox, listenerId: listener.listener.id, principal: scope.principal }, scope.env);
+  await createMailboxRoute({ mailbox: scope.mailbox, threadId: scope.thread.id, mode: "append_only", principal: scope.principal }, scope.env);
+  await assert.rejects(
+    () => createMailboxThreadListener({ mailbox: scope.mailbox, threadId: scope.thread.id, principal: scope.principal }, scope.env),
+    /mailbox_listener_route_active/,
+  );
 });
 
 test("process-immediately requires the exact process grant", async () => {
@@ -164,4 +247,29 @@ test("process-immediately sanitizes as an external mailbox actor and creates one
   assert.equal(sanitizerPayload.action, "mailbox.route.process");
   assert.equal(sanitizerPayload.actor.role, "external");
   assert.notEqual(sanitizerPayload.actor.kind, "admin");
+});
+
+test("process work keeps a durable queue-message and Codex-turn link through reconciliation without replaying acceptance", async () => {
+  const scope = await fixture("process-runtime", ["read", "subscribe", "process", "manage"]);
+  scope.env.ORKESTR_LLM_SANITIZER_COMMAND_JSON = JSON.stringify([process.execPath, "-e", "process.stdin.resume(); process.stdin.on('end', () => console.log(JSON.stringify({ allow: true })));"]);
+  await createMailboxRoute({ mailbox: scope.mailbox, threadId: scope.thread.id, mode: "process_immediately", principal: scope.principal }, scope.env);
+  const source = await enqueueMailboxRouteSource({ mailbox: scope.mailbox, message: inbound(scope.mailbox, "<process-runtime@example.test>"), idempotencyKey: "process-runtime" }, scope.env);
+  const accepted = await dispatchMailboxRouteWork({ workIds: [source.workId] }, scope.env);
+  assert.equal(accepted.accepted, 1);
+
+  let state = await readThreadResourcePolicyState(scope.env);
+  const work = state.mailboxRouteWork.find((item) => item.id === source.workId);
+  assert.equal(work.state, "accepted");
+  assert.ok(work.messageId);
+  await recordMailboxRouteWorkRuntime({ threadId: scope.thread.id, messageId: work.messageId, codexTurnId: "mailbox-turn-1", state: "running" }, scope.env);
+  state = await readThreadResourcePolicyState(scope.env);
+  assert.equal(state.mailboxRouteWork.find((item) => item.id === source.workId)?.state, "running");
+  assert.equal(state.mailboxRouteWork.find((item) => item.id === source.workId)?.codexTurnId, "mailbox-turn-1");
+
+  await updateThread(scope.thread.id, { runtime: { lastTurnId: "mailbox-turn-1", lastTurnStatus: "completed", state: "ready" } }, scope.env);
+  const reconciled = await reconcileMailboxRouteWorkRuntime(scope.env);
+  assert.equal(reconciled.reconciled, 1);
+  state = await readThreadResourcePolicyState(scope.env);
+  assert.equal(state.mailboxRouteWork.find((item) => item.id === source.workId)?.state, "completed");
+  assert.equal((await dispatchMailboxRouteWork({ workIds: [source.workId] }, scope.env)).results.length, 0);
 });

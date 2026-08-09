@@ -1401,9 +1401,16 @@ test("ops mailboxes page exposes explicit route setup and durable status", async
   assert.match(panelTemplate, /Create explicit route/);
   assert.match(panelTemplate, /Revoke route/);
   assert.match(panelTemplate, /Provision a new eligible destination thread/);
+  assert.match(panelTemplate, /selected thread must already have the exact subscribe grant/i);
+  assert.match(panelTemplate, /read, subscribe, manage, and process/);
+  assert.match(panelTemplate, /Required exact mailbox grants/);
+  assert.match(panelComponent, /requiredGrants\(\): string/);
+  assert.match(panelTemplate, /processing failure/);
+  assert.match(panelTemplate, /never replayed automatically/);
   assert.match(panelComponent, /this\.api\.mailboxRouteStatus\(this\.selectedMailboxId\)/);
   assert.match(panelComponent, /this\.api\.createMailboxRoute\(this\.selectedMailboxId/);
   assert.match(api, /export interface MailboxRouteStatus/);
+  assert.match(api, /running: number; completed: number; failed: number/);
   assert.match(api, /mailboxRoutes\(mailboxId: string\)/);
   assert.match(api, /revokeMailboxRoute\(mailboxId: string, routeId: string/);
 });

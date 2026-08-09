@@ -139,6 +139,11 @@ export async function createMailboxThreadListener({ mailbox, threadId, filter = 
     if (Number(decision.policyRevision) !== Number(state.revision)) throw policyError("mailbox_listener_policy_revision_conflict", 409);
     const resource = state.resources.find((item) => item.resourceType === "mailbox" && item.id === resourceId);
     if (!resource || resource.status !== "active" || resource.retiredAt) throw policyError("mailbox_listener_resource_inactive", 409);
+    // Routes own exactly one delivery path for a mailbox. Leaving a legacy
+    // listener active beside a route can append the same inbound message twice.
+    if ((state.mailboxRoutes || []).some((route) => route.resourceId === resourceId && route.status === "active" && !route.revokedAt)) {
+      throw policyError("mailbox_listener_route_active", 409);
+    }
     const existing = (state.mailboxListeners || []).find((item) => item.resourceId === resourceId && item.threadId === threadId && item.filterKey === key && item.status === "active" && !item.revokedAt);
     if (existing) return { noChange: true, result: { listener: existing, idempotent: true } };
     const prior = clean(idempotencyKey) && (state.mailboxListeners || []).find((item) => item.idempotencyKey === clean(idempotencyKey));

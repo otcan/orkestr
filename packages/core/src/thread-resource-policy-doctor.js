@@ -119,7 +119,7 @@ export async function threadResourcePolicyDoctorReport(env = process.env, now = 
       deliveries: Object.fromEntries(["pending", "claimed", "delivered", "revoked", "quarantined", "dead-letter"].map((name) => [name, state.mailboxDeliveries.filter((item) => item.state === name).length])),
       routes: Object.fromEntries(["active", "revoked"].map((name) => [name, (state.mailboxRoutes || []).filter((item) => item.status === name).length])),
       routeSources: Object.fromEntries(["stored", "suppressed", "unrouted", "dead-letter"].map((name) => [name, (state.mailboxSources || []).filter((item) => item.state === name).length])),
-      routeWork: Object.fromEntries(["pending", "claimed", "accepted", "delivered", "dead-letter", "cancelled", "context_pending"].map((name) => [name, routeWork.filter((item) => item.state === name).length])),
+      routeWork: Object.fromEntries(["pending", "claimed", "accepted", "running", "completed", "failed", "delivered", "dead-letter", "cancelled", "context_pending"].map((name) => [name, routeWork.filter((item) => item.state === name).length])),
       contexts: Object.fromEntries(["pending", "reserved", "consumed", "cancelled"].map((name) => [name, (state.mailboxContexts || []).filter((item) => item.status === name).length])),
       auditOutbox: state.policyAuditOutbox.length,
       resourceSessions: resourceSessionCounts,

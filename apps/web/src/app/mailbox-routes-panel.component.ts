@@ -50,6 +50,10 @@ export class MailboxRoutesPanelComponent implements OnInit {
     return this.routeModes.find((item) => item.value === this.mode)?.help || "";
   }
 
+  requiredGrants(): string {
+    return this.mode === "process_immediately" ? "read, subscribe, manage, and process" : "read, subscribe, and manage";
+  }
+
   async load(): Promise<void> {
     this.busy = true;
     try {

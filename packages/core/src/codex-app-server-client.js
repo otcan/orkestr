@@ -24,6 +24,7 @@ import {
   itemText,
   isCodexApprovalRequestMethod,
   markThreadFromCodexStatus,
+  mailboxTurnRestricted,
   normalizeCodexModel,
   normalizeCodexServiceTier,
   normalizeReasoningEffort,
@@ -349,6 +350,15 @@ export class CodexAppServerClient {
     return this.turnParents.get(this.turnParentKey(codexId, turnId)) || null;
   }
 
+  async mailboxRestrictedTurnMessage(thread, codexId, turnId) {
+    const effectiveTurnId = clean(turnId || thread.runtime?.activeTurnId);
+    if (!effectiveTurnId) return null;
+    const remembered = this.turnParent(codexId, effectiveTurnId);
+    if (mailboxTurnRestricted(remembered)) return remembered;
+    const messages = await listThreadMessages(thread.id, this.env).catch(() => []);
+    return messages.find((item) => clean(item.codexTurnId || item.executorTurnId) === effectiveTurnId && mailboxTurnRestricted(item)) || null;
+  }
+
   async handleServerRequest(message) {
     const params = message.params || {};
     const codexId = clean(params.threadId);
@@ -368,6 +378,26 @@ export class CodexAppServerClient {
     if (!thread) {
       this.rejectServerRequest(message.id, "No Orkestr thread is mapped to this Codex request.");
       this.pendingRequests.delete(String(message.id));
+      return;
+    }
+    const mailboxParent = await this.mailboxRestrictedTurnMessage(thread, codexId, params.turnId);
+    if (mailboxParent) {
+      // The protocol exposes no per-turn MCP/tool allowlist. Do not turn a
+      // mailbox-origin request into an approval prompt: reject every server
+      // request at this boundary, including dynamic tools, MCP elicitations,
+      // connector/auth requests, browser/desktop actions, and shell/file
+      // permission escalation.
+      this.rejectServerRequest(message.id, "Blocked by the mailbox-origin read-only tool policy.");
+      this.pendingRequests.delete(String(message.id));
+      await appendEvent({
+        type: "codex_app_server_request_blocked_mailbox_policy",
+        threadId: thread.id,
+        codexThreadId: codexId,
+        turnId: clean(params.turnId),
+        messageId: mailboxParent.id || "",
+        method: message.method,
+        requestId: String(message.id),
+      }, this.env).catch(() => {});
       return;
     }
     if (threadUsesRestrictedCodexPolicy(thread, this.env)) {
@@ -599,6 +629,11 @@ export class CodexAppServerClient {
               updatedAt: nowIso(),
             },
           }, this.env).catch(() => {});
+          const parent = this.turnParent(threadId, turnId);
+          if (mailboxTurnRestricted(parent)) {
+            const { recordMailboxRouteWorkRuntime } = await import("./mailbox-routes.js");
+            await recordMailboxRouteWorkRuntime({ threadId: thread.id, messageId: parent.id, codexTurnId: turnId, state: "running" }, this.env).catch(() => {});
+          }
           await appendTurnLifecycleEvent("started", {
             threadId: thread.id,
             runtimeKind: "codex-app-server",
@@ -689,6 +724,12 @@ export class CodexAppServerClient {
               updatedAt: nowIso(),
             },
           }, this.env).catch(() => {});
+          const parent = this.turnParent(threadId, turnId);
+          if (mailboxTurnRestricted(parent)) {
+            const { recordMailboxRouteWorkRuntime } = await import("./mailbox-routes.js");
+            const terminalState = status === "completed" ? "completed" : "failed";
+            await recordMailboxRouteWorkRuntime({ threadId: thread.id, messageId: parent.id, codexTurnId: turnId, state: terminalState, reason: errorText || status }, this.env).catch(() => {});
+          }
           if (status === "failed") {
             await recordCodexRuntimeAuthFailureSignal({ thread, error: errorText, turnId }, this.env).catch(() => {});
           }

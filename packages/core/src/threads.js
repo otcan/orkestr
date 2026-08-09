@@ -1,6 +1,6 @@
 import path from "node:path";
 import fs from "node:fs/promises";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { ensureDataDirs } from "../../storage/src/paths.js";
 import { appendEvent } from "../../storage/src/store.js";
 import { createThreadMessageRepository, createThreadRepository } from "../../storage/src/repositories.js";
@@ -662,6 +662,12 @@ function clientInputIdempotencyKey(input = {}) {
   ).trim();
 }
 
+function mailboxContextClaimKey(threadId = "", input = {}) {
+  const clientMessageId = clientInputIdempotencyKey(input);
+  if (!clientMessageId) return randomUUID();
+  return `mailbox-context:${createHash("sha256").update(`${threadId}:${clientMessageId}`).digest("hex").slice(0, 40)}`;
+}
+
 function whatsappOrigin(input = {}) {
   return String(input.connector || "").trim().toLowerCase() === "whatsapp" ||
     whatsappSources.has(String(input.source || "").trim().toLowerCase());
@@ -779,8 +785,16 @@ export async function enqueueThreadInputForPrincipal(threadId, input, principal,
   // authenticated human input. The reservation is released if this message is
   // not durably created, and a passive delivery marker prevents it steering an
   // already-running turn.
-  const mailboxContextClaimId = randomUUID();
-  const reservation = await reserveMailboxContextsForHumanTurn({ threadId: thread.id, claimId: mailboxContextClaimId }, env);
+  const mailboxContextClaimId = mailboxContextClaimKey(thread.id, nextInput);
+  // Reconcile a durable append that survived a crash before its context state
+  // was consumed. The claim id is deterministic for a client idempotency key,
+  // so a retry sees the same reserved context rather than attaching it to a
+  // later, unrelated human request.
+  const knownMessageClaims = (await listThreadMessages(thread.id, env)).map((message) => ({
+    claimId: String(message.mailboxContextClaimId || "").trim(),
+    messageId: String(message.id || "").trim(),
+  })).filter((item) => item.claimId && item.messageId);
+  const reservation = await reserveMailboxContextsForHumanTurn({ threadId: thread.id, claimId: mailboxContextClaimId, knownMessageClaims }, env);
   const contextualInput = reservation.contexts.length ? {
     ...nextInput,
     text: [reservation.text, String(nextInput.text || "").trim() ? `Human request:\n${String(nextInput.text || "").trim()}` : ""].filter(Boolean).join("\n\n"),
@@ -794,8 +808,11 @@ export async function enqueueThreadInputForPrincipal(threadId, input, principal,
       role: "user",
       state: "queued",
     }, env);
-    if (!message.duplicate && reservation.contexts.length) await consumeMailboxContextsForHumanTurn(mailboxContextClaimId, message.id, env);
-    if (message.duplicate && reservation.contexts.length) await releaseMailboxContextsForHumanTurn(mailboxContextClaimId, env);
+    if (reservation.contexts.length && (!message.duplicate || String(message.mailboxContextClaimId || "") === mailboxContextClaimId)) {
+      await consumeMailboxContextsForHumanTurn(mailboxContextClaimId, message.id, env);
+    } else if (reservation.contexts.length) {
+      await releaseMailboxContextsForHumanTurn(mailboxContextClaimId, env);
+    }
     return message;
   } catch (error) {
     if (reservation.contexts.length) await releaseMailboxContextsForHumanTurn(mailboxContextClaimId, env).catch(() => {});

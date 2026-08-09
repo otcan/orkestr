@@ -50,9 +50,12 @@
   @if (status) {
     <div class="ops-grid user-metrics">
       <article class="ops-card"><h4>Messages</h4><p>{{ status.sources.received }}</p><small>{{ status.sources.suppressed }} suppressed · {{ status.sources.deadLetter }} dead-lettered</small></article>
-      <article class="ops-card"><h4>Processing</h4><p>{{ status.processing.pending + status.processing.claimed }}</p><small>{{ status.processing.accepted }} accepted · {{ status.processing.delivered }} appended</small></article>
+      <article class="ops-card"><h4>Processing</h4><p>{{ status.processing.pending + status.processing.claimed + status.processing.accepted + status.processing.running }}</p><small>{{ status.processing.accepted }} accepted · {{ status.processing.running }} running · {{ status.processing.completed }} completed · {{ status.processing.failed }} failed</small></article>
       <article class="ops-card"><h4>Next-turn context</h4><p>{{ status.context.pending + status.context.reserved }}</p><small>{{ status.context.consumed }} consumed once · {{ status.context.cancelled }} cancelled</small></article>
     </div>
+    @if (status.processing.failed) {
+      <div class="notice error">{{ status.processing.failed }} processing failure{{ status.processing.failed === 1 ? "" : "s" }} need operator review. Accepted or running mailbox inputs are never replayed automatically.</div>
+    }
   }
 
   <article class="ops-card">
@@ -67,7 +70,7 @@
           <span>New thread name</span>
           <input name="mailbox-route-new-thread-name" [(ngModel)]="newThreadName" placeholder="Mailbox destination" [disabled]="saving || !selectedMailboxId" />
         </label>
-        <small>Available to administrators; provisioning creates only the exact mailbox permissions required by this route.</small>
+        <small>Available to administrators; provisioning creates only the exact {{ mode === "process_immediately" ? "read, subscribe, manage, and process" : "read, subscribe, and manage" }} mailbox permissions required by this route.</small>
       } @else {
         <label>
           <span>Destination thread</span>
@@ -78,6 +81,7 @@
             }
           </select>
         </label>
+        <small>The selected thread must already have the exact subscribe grant{{ mode === "process_immediately" ? " and process grant" : "" }} for this mailbox.</small>
       }
       <label>
         <span>Delivery mode</span>
@@ -88,6 +92,7 @@
         </select>
       </label>
       <p>{{ modeHelp() }}</p>
+      <small>Required exact mailbox grants: {{ requiredGrants() }}.</small>
       <div class="settings-actions compact-actions">
         <button type="submit" [disabled]="saving || !selectedMailboxId || (!targetThreadId && (!createNewThread || !newThreadName))">{{ saving ? "Saving" : "Create explicit route" }}</button>
       </div>

@@ -45,11 +45,14 @@ export {
 export {
   createMailboxRoute,
   cancelMailboxRouteWork,
+  compensateMailboxRouteProvision,
   discardMailboxContext,
   dispatchMailboxRouteWork,
   listMailboxRoutes,
   mailboxRouteStatus,
   moveMailboxRoute,
+  reconcileMailboxRouteWorkRuntime,
+  recordMailboxRouteWorkRuntime,
   retryMailboxRouteWork,
   revokeMailboxRoute,
 } from "./mailbox-routes.js";

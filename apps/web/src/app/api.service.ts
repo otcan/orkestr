@@ -980,7 +980,7 @@ export interface MailboxRoute {
 export interface MailboxRouteStatus {
   route: MailboxRoute | null;
   sources: { received: number; suppressed: number; unrouted: number; deadLetter: number };
-  processing: { pending: number; claimed: number; accepted: number; delivered: number; deadLetter: number; cancelled: number };
+  processing: { pending: number; claimed: number; accepted: number; running: number; completed: number; failed: number; delivered: number; deadLetter: number; cancelled: number };
   context: { pending: number; reserved: number; consumed: number; cancelled: number };
 }
 

@@ -1225,6 +1225,61 @@ test("Codex app-server auto-accepts command approvals for YOLO threads", async (
   }
 });
 
+test("Codex app-server rejects dynamic and MCP tool requests for mailbox-origin turns", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-mailbox-tool-boundary-"));
+  const fake = await createFakeCodex(home);
+  const env = {
+    ORKESTR_HOME: path.join(home, "orkestr"),
+    HOME: path.join(home, "runtime-home"),
+    PATH: `${fake.bin}${path.delimiter}${process.env.PATH || ""}`,
+    FAKE_CODEX_STATE: fake.stateFile,
+  };
+  try {
+    const thread = await createThread({
+      id: "app-server-mailbox-tool-boundary-thread",
+      name: "Mailbox Tool Boundary Thread",
+      cwd: home,
+      executorId: "codex",
+      executor: { type: "codex" },
+    }, env);
+    const started = await startCodexAppServerThread(thread, env);
+    const client = await getCodexAppServerClient({ env, home: env.HOME });
+    const parent = await appendThreadMessage(started.thread.id, {
+      role: "user",
+      source: "mailbox_route",
+      state: "queued",
+      text: "Untrusted inbound mailbox message",
+      mailboxExecutionPolicy: "read_only_no_network_no_connectors_no_messaging_no_auth_no_browser_no_desktop",
+    }, env);
+    const codexThreadId = started.thread.executor.codexThreadId;
+    client.rememberTurnParent(codexThreadId, "mailbox-turn", parent);
+    const writes = [];
+    client.write = (payload) => writes.push(payload);
+
+    await client.handleServerRequest({
+      id: 91,
+      method: "item/tool/call",
+      params: { threadId: codexThreadId, turnId: "mailbox-turn", callId: "connector-call", namespace: "codex_apps", tool: "send_email", arguments: {} },
+    });
+    await client.handleServerRequest({
+      id: 92,
+      method: "mcpServer/elicitation/request",
+      params: { threadId: codexThreadId, turnId: "mailbox-turn", serverName: "codex_apps", mode: "form", requestedSchema: { type: "object" } },
+    });
+
+    assert.deepEqual(writes, [
+      { id: 91, error: { code: -32000, message: "Blocked by the mailbox-origin read-only tool policy." } },
+      { id: 92, error: { code: -32000, message: "Blocked by the mailbox-origin read-only tool policy." } },
+    ]);
+    assert.equal(client.pendingRequests.has("91"), false);
+    assert.equal(client.pendingRequests.has("92"), false);
+    const messages = await listThreadMessages(started.thread.id, env);
+    assert.equal(messages.some((message) => message.phase === "awaiting_approval" || message.phase === "need_input"), false);
+  } finally {
+    stopCodexAppServerClients();
+  }
+});
+
 test("Codex app-server auto-accepts MCP tool-call approvals for YOLO threads", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-yolo-mcp-approval-"));
   const fake = await createFakeCodex(home);

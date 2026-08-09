@@ -465,10 +465,12 @@ test("mailbox API exposes admin list and create surface", async () => {
   const priorAuth = process.env.ORKESTR_AUTH_REQUIRED;
   const priorRecover = process.env.ORKESTR_RECOVER_RUNNING_ON_START;
   const priorDomain = process.env.ORKESTR_MAILBOX_DOMAIN;
+  const priorReservedDomain = process.env.ORKESTR_MAILBOX_ALLOW_RESERVED_DOMAIN;
   process.env.ORKESTR_HOME = home;
   process.env.ORKESTR_AUTH_REQUIRED = "1";
   process.env.ORKESTR_RECOVER_RUNNING_ON_START = "0";
   process.env.ORKESTR_MAILBOX_DOMAIN = "api.example.test";
+  process.env.ORKESTR_MAILBOX_ALLOW_RESERVED_DOMAIN = "1";
   const server = await startServer({ port: 0, host: "127.0.0.1" });
   const baseUrl = `http://127.0.0.1:${server.address().port}`;
 
@@ -503,6 +505,7 @@ test("mailbox API exposes admin list and create surface", async () => {
     restoreEnv("ORKESTR_AUTH_REQUIRED", priorAuth);
     restoreEnv("ORKESTR_RECOVER_RUNNING_ON_START", priorRecover);
     restoreEnv("ORKESTR_MAILBOX_DOMAIN", priorDomain);
+    restoreEnv("ORKESTR_MAILBOX_ALLOW_RESERVED_DOMAIN", priorReservedDomain);
   }
 });
 

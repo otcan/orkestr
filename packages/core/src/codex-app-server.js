@@ -1236,6 +1236,19 @@ async function startCodexAppServerTurn({ client, thread, id, pending, env, runti
   if (!runtimeIdentity.matches) {
     return { result, observedVia, turnId, staleRuntime: true };
   }
+  if (turnId && pending?.mailboxExecutionPolicy === "read_only_no_network_no_connectors_no_messaging_no_auth_no_browser_no_desktop") {
+    const completedRuntime = alreadyCompleted ? await getThread(thread.id, env).catch(() => null) : null;
+    const observedStatus = terminalResult ? status : clean(completedRuntime?.runtime?.lastTurnStatus).toLowerCase();
+    const observedTerminal = ["completed", "failed", "interrupted", "aborted", "cancelled", "canceled"].includes(observedStatus);
+    const { recordMailboxRouteWorkRuntime } = await import("./mailbox-routes.js");
+    await recordMailboxRouteWorkRuntime({
+      threadId: thread.id,
+      messageId: pending.id,
+      codexTurnId: turnId,
+      state: observedTerminal ? (observedStatus === "completed" ? "completed" : "failed") : "running",
+      reason: observedTerminal && observedStatus !== "completed" ? observedStatus : "",
+    }, env).catch(() => {});
+  }
   if (turnId && !terminalResult && !alreadyCompleted) {
     client.threadStates.set(id, { ...(client.threadStates.get(id) || {}), activeTurnId: turnId, activeTurnObservedAt: nowIso(), status: { type: "active", activeFlags: ["running"] }, statusObservedAt: nowIso() });
     await updateThread(thread.id, {
