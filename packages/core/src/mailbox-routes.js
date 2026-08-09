@@ -101,6 +101,10 @@ function routeContextLimit(env = process.env) {
   return Math.max(1, Math.min(100, Number(env.ORKESTR_MAILBOX_ROUTE_CONTEXT_LIMIT || 10) || 10));
 }
 
+function contextReservationMs(env = process.env) {
+  return Math.max(5_000, Math.min(15 * 60_000, Number(env.ORKESTR_MAILBOX_ROUTE_CONTEXT_RESERVATION_MS || 60_000) || 60_000));
+}
+
 function externalMailboxActor(mailbox = {}) {
   return { kind: "external_mailbox", role: "external", userId: `mailbox:${clean(mailbox.id)}`, mailboxId: clean(mailbox.id) };
 }
@@ -403,7 +407,12 @@ export async function dispatchMailboxRouteWork({ workIds = [], limit = 25, appen
 export async function reserveMailboxContextsForHumanTurn({ threadId, claimId } = {}, env = process.env) {
   const token = clean(claimId); if (!clean(threadId) || !token) return { contexts: [], text: "" };
   const outcome = await mutateThreadResourcePolicy((state) => {
-    const timestamp = nowIso(); const pending = (state.mailboxContexts || []).filter((item) => item.threadId === threadId && item.status === "pending").sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt))).slice(0, routeContextLimit(env));
+    const timestamp = nowIso(); const expiredBefore = Date.now() - contextReservationMs(env);
+    for (const item of state.mailboxContexts || []) {
+      if (item.status !== "reserved" || Date.parse(item.reservedAt || "") > expiredBefore) continue;
+      item.status = "pending"; item.reservedFor = null; item.reservedAt = null; item.updatedAt = timestamp;
+    }
+    const pending = (state.mailboxContexts || []).filter((item) => item.threadId === threadId && item.status === "pending").sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt))).slice(0, routeContextLimit(env));
     for (const item of pending) { item.status = "reserved"; item.reservedFor = token; item.reservedAt = timestamp; item.updatedAt = timestamp; }
     return pending.length ? { contexts: pending.map((item) => ({ ...item })), skipPolicyEpoch: true } : { noChange: true, result: { contexts: [] } };
   }, env);

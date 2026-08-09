@@ -1,0 +1,104 @@
+<section class="mailbox-routes-panel">
+  <div class="panel-title compact-title">
+    <div>
+      <p class="eyebrow">Mailbox routes</p>
+      <h3>One explicit route per main mailbox</h3>
+      <small>Existing mailbox listeners remain append-only. A route applies only to newly ingested messages.</small>
+    </div>
+    <button class="secondary" type="button" (click)="load()" [disabled]="busy || saving">Reload</button>
+  </div>
+
+  @if (error) {
+    <div class="notice error">{{ error }}</div>
+  }
+  @if (notice && !error) {
+    <div class="notice">{{ notice }}</div>
+  }
+
+  <div class="ops-columns">
+    <article class="ops-card">
+      <h4>Main mailbox</h4>
+      <label>
+        <span>Mailbox</span>
+        <select name="mailbox-route-mailbox" [(ngModel)]="selectedMailboxId" (ngModelChange)="selectMailbox()" [disabled]="busy || saving">
+          <option value="">Select a main mailbox</option>
+          @for (mailbox of mainMailboxes(); track mailbox.id) {
+            <option [value]="mailbox.id">{{ mailbox.displayName || mailbox.address }} · {{ mailbox.status || "unknown" }}</option>
+          }
+        </select>
+      </label>
+      @if (selectedMailbox(); as mailbox) {
+        <p>{{ mailbox.address }}</p>
+        <small>Mailbox id: {{ mailbox.id }}</small>
+      } @else {
+        <p>No main mailboxes are available to this account.</p>
+      }
+    </article>
+
+    <article class="ops-card">
+      <h4>Current delivery state</h4>
+      @if (status?.route; as route) {
+        <p>{{ route.mode }} → {{ threadLabel(route.threadId) }}</p>
+        <small>Generation {{ route.generation }} · active since {{ route.createdAt | date: "MMM d, HH:mm" }}</small>
+      } @else {
+        <p>No active route</p>
+        <small>Messages are not routed to a thread by this feature.</small>
+      }
+    </article>
+  </div>
+
+  @if (status) {
+    <div class="ops-grid user-metrics">
+      <article class="ops-card"><h4>Messages</h4><p>{{ status.sources.received }}</p><small>{{ status.sources.suppressed }} suppressed · {{ status.sources.deadLetter }} dead-lettered</small></article>
+      <article class="ops-card"><h4>Processing</h4><p>{{ status.processing.pending + status.processing.claimed }}</p><small>{{ status.processing.accepted }} accepted · {{ status.processing.delivered }} appended</small></article>
+      <article class="ops-card"><h4>Next-turn context</h4><p>{{ status.context.pending + status.context.reserved }}</p><small>{{ status.context.consumed }} consumed once · {{ status.context.cancelled }} cancelled</small></article>
+    </div>
+  }
+
+  <article class="ops-card">
+    <h4>Create route</h4>
+    <form class="user-edit-form" (ngSubmit)="createRoute()">
+      <label>
+        <span>Destination thread</span>
+        <select name="mailbox-route-thread" [(ngModel)]="targetThreadId" [disabled]="saving || !selectedMailboxId">
+          <option value="">Select an authorized thread</option>
+          @for (thread of threads; track thread.id) {
+            <option [value]="thread.id">{{ thread.name || thread.id }} · {{ thread.id }}</option>
+          }
+        </select>
+      </label>
+      <label>
+        <span>Delivery mode</span>
+        <select name="mailbox-route-mode" [(ngModel)]="mode" [disabled]="saving || !selectedMailboxId">
+          @for (option of routeModes; track option.value) {
+            <option [value]="option.value">{{ option.label }}</option>
+          }
+        </select>
+      </label>
+      <p>{{ modeHelp() }}</p>
+      <div class="settings-actions compact-actions">
+        <button type="submit" [disabled]="saving || !selectedMailboxId || !targetThreadId">{{ saving ? "Saving" : "Create explicit route" }}</button>
+      </div>
+    </form>
+  </article>
+
+  <section>
+    <h4>Routes</h4>
+    <div class="compact-list">
+      @for (route of routes; track route.id) {
+        <article class="compact-row">
+          <strong>{{ route.mode }} → {{ threadLabel(route.threadId) }}</strong>
+          <span>{{ route.status }} · generation {{ route.generation }}</span>
+          <small>Created {{ route.createdAt | date: "MMM d, yyyy HH:mm:ss" }}</small>
+          @if (route.status === "active") {
+            <div class="row-actions">
+              <button class="secondary danger-soft" type="button" (click)="revokeRoute(route)" [disabled]="saving">Revoke route</button>
+            </div>
+          }
+        </article>
+      } @empty {
+        <p class="empty">No active mailbox route.</p>
+      }
+    </div>
+  </section>
+</section>

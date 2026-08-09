@@ -7,10 +7,10 @@ import { ingestMailboxMessage } from "../packages/connectors/src/mailbox-inbox.j
 import { resetConnectorInboxForTest } from "../packages/connectors/src/connector-inbox.js";
 import { createMailbox } from "../packages/core/src/mailboxes.js";
 import { readThreadResourcePolicyState } from "../packages/core/src/thread-resource-policy-store.js";
-import { createMailboxRoute, dispatchMailboxRouteWork, enqueueMailboxRouteSource, mailboxRouteStatus, revokeMailboxRoute } from "../packages/core/src/mailbox-routes.js";
+import { createMailboxRoute, dispatchMailboxRouteWork, enqueueMailboxRouteSource, mailboxRouteStatus, reserveMailboxContextsForHumanTurn, revokeMailboxRoute } from "../packages/core/src/mailbox-routes.js";
 import { appendThreadMessage, createThread, enqueueThreadInputForPrincipal, listThreadMessages } from "../packages/core/src/threads.js";
 import { adminPrincipal } from "../packages/core/src/principal.js";
-import { registerThreadResource, setThreadResourceGrants } from "../packages/core/src/thread-resource-grants.js";
+import { mutateThreadResourcePolicy, registerThreadResource, setThreadResourceGrants } from "../packages/core/src/thread-resource-grants.js";
 import { turnStartParams } from "../packages/core/src/codex-app-server-common.js";
 
 async function fixture(label, permissions = ["read", "subscribe", "manage"]) {
@@ -69,6 +69,22 @@ test("context-next-turn stores no immediate turn and consumes an exact reserved 
   const after = await mailboxRouteStatus({ mailbox: scope.mailbox }, scope.env);
   assert.equal(after.context.pending, 0);
   assert.equal(after.context.consumed, 1);
+});
+
+test("context-next-turn recovers an expired reservation before a later human request claims it", async () => {
+  const scope = await fixture("context-recovery");
+  await createMailboxRoute({ mailbox: scope.mailbox, threadId: scope.thread.id, mode: "context_next_turn", principal: scope.principal }, scope.env);
+  await ingestMailboxMessage(inbound(scope.mailbox, "<context-recovery@example.test>", "Recoverable context"), scope.env);
+  const first = await reserveMailboxContextsForHumanTurn({ threadId: scope.thread.id, claimId: "interrupted-turn" }, scope.env);
+  assert.equal(first.contexts.length, 1);
+  await mutateThreadResourcePolicy((state) => {
+    const context = state.mailboxContexts.find((item) => item.id === first.contexts[0].id);
+    context.reservedAt = "2000-01-01T00:00:00.000Z";
+    return { updated: true, skipPolicyEpoch: true };
+  }, scope.env);
+  const recovered = await reserveMailboxContextsForHumanTurn({ threadId: scope.thread.id, claimId: "later-human-turn" }, scope.env);
+  assert.equal(recovered.contexts.length, 1);
+  assert.equal(recovered.contexts[0].reservedFor, "later-human-turn");
 });
 
 test("process-immediately requires the exact process grant", async () => {

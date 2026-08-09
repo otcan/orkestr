@@ -950,6 +950,40 @@ export interface TimerRecord {
   lastError?: string;
 }
 
+export interface MailboxRecord {
+  id: string;
+  ownerUserId?: string;
+  address: string;
+  displayName?: string;
+  purpose?: string;
+  status?: string;
+  target?: { type?: string; tenantVmId?: string };
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface MailboxRoute {
+  id: string;
+  mailboxResourceId: string;
+  mailboxId: string;
+  threadId: string;
+  mode: "append_only" | "process_immediately" | "context_next_turn";
+  generation: number;
+  status: string;
+  policyRevision?: number;
+  createdAt?: string;
+  updatedAt?: string;
+  revokedAt?: string | null;
+  reason?: string | null;
+}
+
+export interface MailboxRouteStatus {
+  route: MailboxRoute | null;
+  sources: { received: number; suppressed: number; unrouted: number; deadLetter: number };
+  processing: { pending: number; claimed: number; accepted: number; delivered: number; deadLetter: number; cancelled: number };
+  context: { pending: number; reserved: number; consumed: number; cancelled: number };
+}
+
 export interface AutomationRecord {
   automationId: string;
   rawId: string;
@@ -2401,6 +2435,29 @@ export class ApiService {
 
   timers(): Observable<{ timers: TimerRecord[] }> {
     return this.http.get<{ timers: TimerRecord[] }>(this.api("/timers"));
+  }
+
+  mailboxes(): Observable<{ ok: boolean; mailboxes: MailboxRecord[] }> {
+    return this.http.get<{ ok: boolean; mailboxes: MailboxRecord[] }>(this.api("/mailboxes"));
+  }
+
+  mailboxRoutes(mailboxId: string): Observable<{ ok: boolean; routes: MailboxRoute[] }> {
+    return this.http.get<{ ok: boolean; routes: MailboxRoute[] }>(this.api(`/mailboxes/${encodeURIComponent(mailboxId)}/routes`));
+  }
+
+  mailboxRouteStatus(mailboxId: string): Observable<{ ok: boolean; status: MailboxRouteStatus }> {
+    return this.http.get<{ ok: boolean; status: MailboxRouteStatus }>(this.api(`/mailboxes/${encodeURIComponent(mailboxId)}/route-status`));
+  }
+
+  createMailboxRoute(mailboxId: string, body: { threadId: string; mode: MailboxRoute["mode"] }): Observable<{ ok: boolean; route: MailboxRoute; policyRevision?: number; idempotent?: boolean }> {
+    return this.http.post<{ ok: boolean; route: MailboxRoute; policyRevision?: number; idempotent?: boolean }>(this.api(`/mailboxes/${encodeURIComponent(mailboxId)}/routes`), body);
+  }
+
+  revokeMailboxRoute(mailboxId: string, routeId: string, reason = ""): Observable<{ ok: boolean; route: MailboxRoute; policyRevision?: number; idempotent?: boolean }> {
+    return this.http.delete<{ ok: boolean; route: MailboxRoute; policyRevision?: number; idempotent?: boolean }>(
+      this.api(`/mailboxes/${encodeURIComponent(mailboxId)}/routes/${encodeURIComponent(routeId)}`),
+      { body: reason ? { reason } : {} },
+    );
   }
 
   jobAlertRoutes(): Observable<JobAlertRouteResponse> {
