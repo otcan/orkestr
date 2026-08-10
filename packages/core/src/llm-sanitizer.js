@@ -129,6 +129,39 @@ function openAISanitizerModel(env = process.env) {
   return clean(env.ORKESTR_LLM_SANITIZER_MODEL || env.ORKESTR_API_AGENT_ROUTER_MODEL || "gpt-5-nano");
 }
 
+function openAISanitizerReasoning(model, env = process.env) {
+  const configured = clean(env.ORKESTR_LLM_SANITIZER_REASONING_EFFORT).toLowerCase();
+  if (configured) return { effort: configured };
+  if (/^gpt-5(?:-(?:mini|nano))?(?:-|$)/i.test(model)) return { effort: "low" };
+  return null;
+}
+
+function openAISanitizerMaxOutputTokens(env = process.env) {
+  const configured = Number(env.ORKESTR_LLM_SANITIZER_MAX_OUTPUT_TOKENS || 600);
+  if (!Number.isFinite(configured)) return 600;
+  return Math.max(64, Math.min(2048, Math.floor(configured)));
+}
+
+function sanitizerResponseFormat() {
+  return {
+    format: {
+      type: "json_schema",
+      name: "orkestr_sanitizer_decision",
+      strict: true,
+      schema: {
+        type: "object",
+        properties: {
+          allow: { type: "boolean" },
+          reason: { type: "string" },
+          category: { type: "string" },
+        },
+        required: ["allow", "reason", "category"],
+        additionalProperties: false,
+      },
+    },
+  };
+}
+
 function responseText(response = {}) {
   const direct = clean(response.output_text);
   if (direct) return direct;
@@ -158,6 +191,7 @@ async function runOpenAISanitizer(payload, env = process.env) {
   const apiKey = clean(env.OPENAI_API_KEY || env.ORKESTR_OPENAI_API_KEY);
   if (!apiKey) return unavailable("llm_sanitizer_unconfigured");
   const model = openAISanitizerModel(env);
+  const reasoning = openAISanitizerReasoning(model, env);
   const attempts = sanitizerMaxAttempts(env);
   let last = unavailable("llm_sanitizer_unavailable");
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
@@ -177,6 +211,8 @@ async function runOpenAISanitizer(payload, env = process.env) {
             "Return only compact JSON with keys: allow boolean, reason string, category string.",
             "Orkestr has already authenticated the caller; payload.actor is the authenticated caller and payload.principal is the effective resource/user being routed.",
             "Do not use this sanitizer as a generic ACL. Use actor/principal/resource context to classify whether the requested content is safe to execute.",
+            "Treat the request as same-tenant when actor.userId, principal.userId, and resource.ownerUserId are equal. Do not require a separate tenant id.",
+            "Treat resource.capabilities as trusted authorization evidence already computed by Orkestr; do not invent missing authorization when the matching capability is true.",
             "Admin/system requests are skipped before this sanitizer. If one reaches this sanitizer unexpectedly, deny.",
             "Allow normal same-tenant chat and same-tenant resource requests.",
             "For thread.input and api-agent.input, allow same-user requests to use a connector even when that capability is missing; the tenant assistant can explain that it is not connected or start a user-scoped connector sign-in flow. Do not treat this as permission for connector data access.",
@@ -195,7 +231,9 @@ async function runOpenAISanitizer(payload, env = process.env) {
             "If uncertain, deny.",
           ].join("\n"),
           input: JSON.stringify(payload),
-          max_output_tokens: 220,
+          ...(reasoning ? { reasoning } : {}),
+          text: sanitizerResponseFormat(),
+          max_output_tokens: openAISanitizerMaxOutputTokens(env),
           store: false,
           metadata: {
             orkestr_runtime: "llm-sanitizer",
@@ -343,18 +381,19 @@ async function runHttpSanitizer(payload, env = process.env) {
 
 export async function sanitizeAction(request = {}, env = process.env) {
   if (llmSanitizerDisabled(env)) return disabledDecision();
+  const actor = objectOrNull(request.actor || request.requester || request.caller) || objectOrNull(request.principal);
   const payload = {
     schemaVersion: 1,
     requestedAt: nowIso(),
     action: String(request.action || "").trim(),
-    actor: objectOrNull(request.actor || request.requester || request.caller),
+    actor,
     principal: request.principal || null,
     resource: request.resource || null,
     input: request.input || null,
     policy: {
       llmOnly: true,
       failClosed: true,
-      authorizationContextIncluded: Boolean(objectOrNull(request.actor || request.requester || request.caller)),
+      authorizationContextIncluded: Boolean(actor),
     },
   };
   if (adminActor(payload)) return skippedForAdminDecision();
