@@ -164,7 +164,7 @@ function desktopRequestScope(rawUrl: string | undefined, request: any = {}): { t
 async function desktopTarget(rawUrl: string | undefined, principal: any, scope: any = {}): Promise<DesktopTarget | null> {
   const request = parseDesktopUrl(rawUrl);
   if (!request) return null;
-  if (desktopCapabilityRequired(process.env) && !scope.desktopShare) {
+  if (desktopCapabilityRequired(process.env, { threadId: scope.threadId, desktopSlug: request.slug }) && !scope.desktopShare) {
     const error = new Error("desktop_brokered_share_required");
     Object.assign(error, { statusCode: 403 });
     throw error;
@@ -215,7 +215,7 @@ async function proxyDesktopHttp(request: any, response: any): Promise<void> {
   if (mobileRoute) {
     try {
       const scope = desktopRequestScope(request.originalUrl || request.url, request);
-      if (desktopCapabilityRequired(process.env) && !request.orkestrDesktopShare) {
+      if (desktopCapabilityRequired(process.env, { threadId: scope.threadId, desktopSlug: mobileRoute.slug }) && !request.orkestrDesktopShare) {
         const error = new Error("desktop_brokered_share_required");
         Object.assign(error, { statusCode: 403 });
         throw error;

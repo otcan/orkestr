@@ -14,6 +14,7 @@ import {
   normalizeThreadResourceType,
   permissionForThreadResource,
   threadResourceAccessMode,
+  threadResourceAccessModeFor,
   threadResourceBoundaryId,
 } from "./thread-resource-policy-model.js";
 import { normalizeUserId } from "./users.js";
@@ -118,7 +119,6 @@ function denial(base, reason) {
 
 async function evaluateThreadResourceAccess(input = {}, env = process.env) {
   const resourceType = normalizeThreadResourceType(input.resourceType || input.type);
-  const mode = threadResourceAccessMode(resourceType, env);
   const principal = input.principal || null;
   const threadId = clean(input.threadId || input.thread?.id);
   const resolvedThread = threadId ? await getThread(threadId, env) : null;
@@ -126,6 +126,12 @@ async function evaluateThreadResourceAccess(input = {}, env = process.env) {
   let resource = normalizeResource({
     resourceType, resourceId: input.resourceId || input.id, resourceKey: input.resourceKey || input.key || input.slug || input.desktopSlug || input.mailboxId || input.instanceId,
     ownerUserId: requestedOwner, boundaryId: input.boundaryId, generation: input.resourceGeneration || input.generation || input.desktopGeneration,
+  }, env);
+  const mode = threadResourceAccessModeFor(resourceType, {
+    ...input,
+    threadId,
+    resourceId: resource?.id || input.resourceId || input.id,
+    resourceKey: resource?.resourceKey || input.resourceKey || input.key,
   }, env);
   const permission = permissionForThreadResource(resourceType, input.permission || input.action);
   const base = {
@@ -209,7 +215,7 @@ export async function authorizeThreadResourceAccess(input = {}, env = process.en
     recordThreadResourceAccessMetric({ ...decision, durationMs: Date.now() - startedAt });
     return decision;
   } catch (error) {
-    recordThreadResourceAccessMetric({ resourceType: input.resourceType || input.type, permission: input.permission || input.action, mode: threadResourceAccessMode(input.resourceType || input.type, env), granted: false, durationMs: Date.now() - startedAt });
+    recordThreadResourceAccessMetric({ resourceType: input.resourceType || input.type, permission: input.permission || input.action, mode: threadResourceAccessModeFor(input.resourceType || input.type, input, env), granted: false, durationMs: Date.now() - startedAt });
     throw error;
   }
 }

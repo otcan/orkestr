@@ -315,7 +315,7 @@ export async function operateManagedDesktop(slug = "", args = {}, env = process.
     throw error;
   }
   let broker = null;
-  if (desktopCapabilityRequired(env)) {
+  if (desktopCapabilityRequired(env, { threadId: options?.threadId, desktopSlug })) {
     broker = await consumeDesktopCapability({
       capability: options?.desktopCapability,
       principal: options?.principal,

@@ -679,7 +679,7 @@ async function safeDesktopInventory(principal = {}, thread = null, env = process
 
 async function ensureAgentDesktopLease(slug = "", principal = {}, thread = null, env = process.env) {
   if (!thread?.id) {
-    if (desktopAccessMode(env) !== "enforce") return null;
+    if (desktopAccessMode(env, { threadId: clean(thread?.id), desktopSlug: slug }) !== "enforce") return null;
     const error = new Error("desktop_thread_scope_required");
     error.statusCode = 403;
     throw error;
