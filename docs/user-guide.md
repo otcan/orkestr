@@ -206,9 +206,17 @@ would-deny decisions during rollout; switch to `enforce` after grants are
 reviewed. Legacy share links without a thread, boundary, and grant revision are
 revoked in enforcement mode.
 
+An operator may enforce a reviewed desktop incrementally while the global mode
+remains `shadow` by setting `ORKESTR_DESKTOP_ENFORCED_BINDINGS_JSON` to an array
+of exact `{ "threadId": "...", "resourceId": "..." }` bindings. A protected
+thread is enforced for every desktop request, and a protected desktop is
+enforced for every requesting thread, so a mismatched pair fails closed. The
+resource ID must come from the private instance policy; do not publish real
+thread or account bindings. Malformed non-empty configuration fails closed.
+
 ### Brokered Desktop Capabilities
 
-In desktop `enforce` mode, normal API and agent inventory projections redact
+In desktop `enforce` mode, including a scoped enforced binding, normal API and agent inventory projections redact
 browser control endpoints, profile paths, and noVNC/CDP details. A caller first
 selects its thread; the server resolves exactly one active desktop grant for
 that thread and creates an exclusive, finite, heartbeat-current lease. It may

@@ -124,7 +124,7 @@ export class BrowsersController {
     const principal = requestPrincipal(request);
     const ownerUserId = await this.ownerUserIdFromLeaseBody(body, principal);
     const breakGlassOptions = this.breakGlassInputs(principal, body);
-    if (desktopCapabilityRequired(process.env) && !breakGlassOptions.breakGlass) {
+    if (desktopCapabilityRequired(process.env, { threadId: String(body.threadId || body.ownerThreadId || "").trim(), desktopSlug: slug }) && !breakGlassOptions.breakGlass) {
       const resolved = await resolveExactDesktopGrant({ principal, threadId: String(body.threadId || body.ownerThreadId || "").trim(), permission: "acquire", scope: "lifecycle", audience: "server-browser-action" }, process.env);
       if (resolved.selection.resource.resourceKey !== normalizeDesktopSlug(slug)) throw httpError("desktop_server_resolved_target_mismatch", 403);
     }
@@ -185,7 +185,7 @@ export class BrowsersController {
     const breakGlassOptions = this.breakGlassInputs(principal, body);
     const threadId = String(body.threadId || body.ownerThreadId || "").trim();
     const ownerUserId = threadId ? await this.ownerUserIdFromLeaseBody(body, principal) : String(body.ownerUserId || "").trim();
-    if (desktopCapabilityRequired(process.env) && !breakGlassOptions.breakGlass) {
+    if (desktopCapabilityRequired(process.env, { threadId, desktopSlug: slug }) && !breakGlassOptions.breakGlass) {
       const resolved = await resolveExactDesktopGrant({ principal, threadId, permission: "share", scope: "visible_interaction", audience: "desktop-share" }, process.env);
       if (resolved.selection.resource.resourceKey !== normalizeDesktopSlug(slug)) throw httpError("desktop_server_resolved_target_mismatch", 403);
     }
@@ -405,7 +405,7 @@ export class BrowsersController {
       const threadId = String(body.threadId || body.ownerThreadId || "").trim();
       const ownerUserId = threadId ? await this.ownerUserIdFromLeaseBody(body, principal) : String(body.ownerUserId || "").trim();
       const breakGlassOptions = this.breakGlassInputs(principal, body);
-      if (desktopCapabilityRequired(process.env) && !breakGlassOptions.breakGlass) {
+      if (desktopCapabilityRequired(process.env, { threadId, desktopSlug: slug }) && !breakGlassOptions.breakGlass) {
         const consumed = await consumeDesktopCapability({
           capability: String(body.desktopCapability || "").trim(),
           principal,

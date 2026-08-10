@@ -1,6 +1,7 @@
 import { appendEvent } from "../../storage/src/store.js";
 import { getThread, listThreads } from "./threads.js";
 import { isAdminPrincipal, resourceOwnerUserId } from "./policy.js";
+import { normalizeUserId } from "./users.js";
 import { THREAD_RESOURCE_PERMISSIONS } from "./thread-resource-policy-constants.js";
 import {
   advanceThreadResourceGeneration,
@@ -10,7 +11,7 @@ import {
   listThreadResourceGrants,
   safeThreadResourceSegment,
   setThreadResourceGrants,
-  threadResourceAccessMode,
+  threadResourceAccessModeFor,
   threadResourceBoundaryId,
   threadResourceId,
   threadResourcePolicySummary,
@@ -20,7 +21,15 @@ export const DESKTOP_PERMISSIONS = new Set(THREAD_RESOURCE_PERMISSIONS.desktop);
 
 const clean = (value = "") => String(value || "").trim();
 
-export function desktopAccessMode(env = process.env) { return threadResourceAccessMode("desktop", env); }
+export function desktopAccessMode(env = process.env, input = {}) {
+  const desktopSlug = safeThreadResourceSegment(input.desktopSlug || input.slug || input.resourceKey, "");
+  const ownerUserId = normalizeUserId(input.ownerUserId || input.principal?.userId || env.ORKESTR_ADMIN_USER_ID || "admin");
+  return threadResourceAccessModeFor("desktop", {
+    ...input,
+    desktopSlug,
+    resourceId: input.resourceId || input.desktopId || (desktopSlug ? threadResourceId("desktop", desktopSlug, ownerUserId, env) : ""),
+  }, env);
+}
 export function desktopBoundaryId(env = process.env) { return threadResourceBoundaryId(env); }
 export function desktopResourceId(slug = "", ownerUserId = "", env = process.env) { return threadResourceId("desktop", slug, ownerUserId, env); }
 
@@ -153,5 +162,5 @@ export async function backfillThreadDesktopGrants(options = {}, env = process.en
 export async function desktopAccessPolicySummary(threadId = "", principal = null, env = process.env) {
   const summary = await threadResourcePolicySummary(threadId, principal, env);
   const grantedDesktopSlugs = summary.grantsByType.desktop || [];
-  return { mode: desktopAccessMode(env), version: summary.version, revision: summary.revision, threadId: summary.threadId, explicitGrantCount: grantedDesktopSlugs.length, grantedDesktopSlugs, principalRole: summary.principalRole };
+  return { mode: desktopAccessMode(env, { threadId: summary.threadId }), version: summary.version, revision: summary.revision, threadId: summary.threadId, explicitGrantCount: grantedDesktopSlugs.length, grantedDesktopSlugs, principalRole: summary.principalRole };
 }

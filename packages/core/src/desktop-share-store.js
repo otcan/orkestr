@@ -107,11 +107,10 @@ function keepShare(share, now = Date.now()) {
 export async function readDesktopShareState(env = process.env) {
   const state = await readJson(secretPath(env), { desktopShares: [] });
   const now = Date.now();
-  const enforce = desktopAccessMode(env) === "enforce";
   const desktopShares = Array.isArray(state.desktopShares)
     ? state.desktopShares
         .map((share) => normalizeDesktopShare(share, now))
-        .map((share) => enforce && !(share.breakGlass && share.breakGlassReason && share.breakGlassChangeRef && share.breakGlassAuthenticatedAt) && (!share.threadId || !share.desktopId || !share.boundaryId || !share.grantRevision)
+        .map((share) => desktopAccessMode(env, { threadId: share.threadId, resourceId: share.desktopId, desktopSlug: share.desktopSlug, ownerUserId: share.ownerUserId }) === "enforce" && !(share.breakGlass && share.breakGlassReason && share.breakGlassChangeRef && share.breakGlassAuthenticatedAt) && (!share.threadId || !share.desktopId || !share.boundaryId || !share.grantRevision)
           ? { ...share, status: "revoked", revokedAt: share.revokedAt || desktopShareNowIso(), revokeReason: "legacy_share_missing_thread_scope" }
           : share)
         .filter((share) => share.id && keepShare(share, now))

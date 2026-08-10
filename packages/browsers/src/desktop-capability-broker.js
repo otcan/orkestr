@@ -141,8 +141,8 @@ async function deny(reason, input = {}, env = process.env, statusCode = 403) {
   throw brokerError(reason, statusCode);
 }
 
-export function desktopCapabilityRequired(env = process.env) {
-  return desktopAccessMode(env) === "enforce";
+export function desktopCapabilityRequired(env = process.env, input = {}) {
+  return desktopAccessMode(env, input) === "enforce";
 }
 
 export async function resolveExactDesktopGrant(input = {}, env = process.env) {
@@ -185,7 +185,7 @@ export async function resolveExactDesktopGrant(input = {}, env = process.env) {
 }
 
 export async function issueDesktopCapability(input = {}, env = process.env) {
-  if (!desktopCapabilityRequired(env)) return { required: false, capability: "", desktop: null };
+  if (!desktopCapabilityRequired(env, input)) return { required: false, capability: "", desktop: null };
   const requestedScope = scope(input.scope);
   const audience = clean(input.audience);
   if (!audience || !/^[a-z0-9_.:-]{3,120}$/i.test(audience)) await deny("desktop_capability_audience_required", input, env, 400);
@@ -333,7 +333,7 @@ export async function issueDesktopCapability(input = {}, env = process.env) {
 }
 
 export async function consumeDesktopCapability(input = {}, env = process.env) {
-  if (!desktopCapabilityRequired(env)) return { required: false, desktop: null };
+  if (!desktopCapabilityRequired(env, input)) return { required: false, desktop: null };
   const token = clean(input.capability);
   const audience = clean(input.audience);
   const requestedScope = scope(input.scope);

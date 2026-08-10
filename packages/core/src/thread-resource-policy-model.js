@@ -53,6 +53,42 @@ export function threadResourceAccessMode(resourceType = "", env = process.env) {
   return type === THREAD_RESOURCE_TYPES.desktop || type === THREAD_RESOURCE_TYPES.oxrm ? "shadow" : "off";
 }
 
+function desktopEnforcedBindings(env = process.env) {
+  const raw = clean(env.ORKESTR_DESKTOP_ENFORCED_BINDINGS_JSON);
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return null;
+    const bindings = parsed.map((item) => ({
+      threadId: clean(item?.threadId),
+      resourceId: clean(item?.resourceId || item?.desktopId),
+    })).filter((item) => item.threadId && item.resourceId);
+    return bindings.length === parsed.length ? bindings : null;
+  } catch {
+    return null;
+  }
+}
+
+// Operators can graduate one exact thread/desktop binding from shadow to
+// enforcement without changing the rollout mode for unrelated desktops. Both
+// sides of a protected binding trigger enforcement: the protected thread
+// cannot drift to another desktop, and another thread cannot target the
+// protected desktop. Invalid non-empty configuration fails closed globally.
+export function threadResourceAccessModeFor(resourceType = "", input = {}, env = process.env) {
+  const type = normalizeThreadResourceType(resourceType);
+  const configured = threadResourceAccessMode(type, env);
+  if (type !== THREAD_RESOURCE_TYPES.desktop || configured !== "shadow") return configured;
+  const bindings = desktopEnforcedBindings(env);
+  if (bindings === null) return "enforce";
+  if (!bindings.length) return configured;
+  const threadId = clean(input.threadId || input.thread?.id);
+  const resourceId = clean(input.resourceId || input.desktopId || input.id);
+  return bindings.some((binding) =>
+    (threadId && binding.threadId === threadId) ||
+    (resourceId && binding.resourceId === resourceId)
+  ) ? "enforce" : configured;
+}
+
 export function normalizeResource(raw = {}, env = process.env) {
   const resourceType = normalizeThreadResourceType(raw.resourceType || raw.type);
   const ownerUserId = normalizeUserId(raw.ownerUserId || raw.userId || env.ORKESTR_ADMIN_USER_ID || "admin");

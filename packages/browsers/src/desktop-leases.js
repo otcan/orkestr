@@ -231,7 +231,7 @@ export async function activeDesktopLeaseStatus(desktopSlug, env = process.env, o
 }
 
 export async function assertDesktopLeaseForOperation(slug, env = process.env, options = {}) {
-  if (desktopAccessMode(env) !== "enforce") return null;
+  if (desktopAccessMode(env, { ...options, desktopSlug: slug }) !== "enforce") return null;
   if (options?.authorizedBreakGlass === true) return null;
   const desktopSlug = normalizeDesktopSlug(slug);
   const threadId = String(options?.threadId || "").trim();
@@ -314,7 +314,7 @@ export async function acquireDesktopLease(slug, payload = {}, env = process.env,
     error.statusCode = 403;
     throw error;
   }
-  if (payload.force === true && desktopAccessMode(env) === "enforce") {
+  if (payload.force === true && desktopAccessMode(env, { ...payload, desktopSlug, ownerUserId }) === "enforce") {
     if (!isAdminPrincipal(options?.principal) || options?.breakGlass !== true) {
       const error = new Error("desktop_force_acquire_break_glass_required");
       error.statusCode = 403;
@@ -338,13 +338,13 @@ export async function acquireDesktopLease(slug, payload = {}, env = process.env,
     recentAuthAt: options?.recentAuthAt,
   }, env);
   const requestedMode = String(payload.mode || "exclusive").trim();
-  if (desktopAccessMode(env) === "enforce" && requestedMode !== "exclusive") {
+  if (desktopAccessMode(env, { ...payload, desktopSlug, ownerUserId }) === "enforce" && requestedMode !== "exclusive") {
     const error = new Error("desktop_lease_must_be_exclusive");
     error.statusCode = 409;
     throw error;
   }
   const ttlMs = parseLeaseDurationMs(payload.ttlMs ?? payload.ttl ?? payload.expiresIn, Number(env.ORKESTR_DESKTOP_LEASE_TTL_MS || 4 * 60 * 60_000));
-  if (desktopAccessMode(env) === "enforce" && ttlMs <= 0) {
+  if (desktopAccessMode(env, { ...payload, desktopSlug, ownerUserId }) === "enforce" && ttlMs <= 0) {
     const error = new Error("desktop_lease_expiry_required");
     error.statusCode = 400;
     throw error;
@@ -389,7 +389,7 @@ export async function heartbeatDesktopLease(slug, threadId, env = process.env, o
   const ownerUserId = ownerUserIdForPrincipal(options?.principal, env, options?.ownerUserId);
   await assertDesktopAccess({ principal: options?.principal, threadId, desktopSlug: slug, ownerUserId, permission: "acquire" }, env);
   const fencingToken = String(options?.fencingToken || "").trim();
-  if (desktopAccessMode(env) === "enforce" && !fencingToken) {
+  if (desktopAccessMode(env, { ...options, threadId, desktopSlug: slug, ownerUserId }) === "enforce" && !fencingToken) {
     return { ok: false, reason: "lease_fencing_token_required", lease: await activeDesktopLeaseStatus(slug, env, { ownerUserId }) };
   }
   const result = await desktopLeaseStore(env).heartbeat(slug, threadId, ownerUserId, fencingToken);
@@ -401,7 +401,7 @@ export async function releaseDesktopLease(slug, options = {}, env = process.env)
   if (!options?.force) {
     await assertDesktopAccess({ principal: options?.principal, threadId: options?.threadId, desktopSlug: slug, ownerUserId, permission: "acquire" }, env);
   }
-  if (desktopAccessMode(env) === "enforce" && !options?.force && !String(options?.fencingToken || "").trim()) {
+  if (desktopAccessMode(env, { ...options, desktopSlug: slug, ownerUserId }) === "enforce" && !options?.force && !String(options?.fencingToken || "").trim()) {
     return { ok: false, reason: "lease_fencing_token_required", lease: await activeDesktopLeaseStatus(slug, env, { ownerUserId }) };
   }
   const result = await desktopLeaseStore(env).release(slug, { ...options, ownerUserId });

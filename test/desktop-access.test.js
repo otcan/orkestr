@@ -7,6 +7,7 @@ import {
   authorizeDesktopAccess,
   advanceDesktopResourceGeneration,
   backfillThreadDesktopGrants,
+  desktopAccessMode,
   listThreadDesktopGrants,
   setThreadDesktopGrants,
 } from "../packages/core/src/desktop-access.js";
@@ -93,6 +94,44 @@ test("same-owner threads see and acquire only explicitly granted desktops", asyn
   assert.equal(opened.slug, "linkedin");
 });
 
+test("scoped enforcement protects both sides of an exact thread and desktop binding", async () => {
+  const { env, principal, threadA, threadB } = await fixture();
+  const resource = (await readThreadResourcePolicy(env)).resources.find((item) => item.resourceType === "desktop" && item.resourceKey === "linkedin");
+  env.ORKESTR_DESKTOP_ACCESS_MODE = "shadow";
+  env.ORKESTR_DESKTOP_ENFORCED_BINDINGS_JSON = JSON.stringify([
+    { threadId: threadA.id, resourceId: resource.id },
+  ]);
+
+  assert.equal(desktopAccessMode(env), "shadow");
+  assert.equal(desktopAccessMode(env, { threadId: threadA.id }), "enforce");
+  assert.equal(desktopAccessMode(env, { desktopSlug: "linkedin" }), "enforce");
+  assert.equal(desktopAccessMode(env, { threadId: threadB.id, desktopSlug: "pa" }), "shadow");
+
+  const exact = await authorizeDesktopAccess({ principal, threadId: threadA.id, desktopSlug: "linkedin", permission: "operate" }, env);
+  const protectedThreadDrift = await authorizeDesktopAccess({ principal, threadId: threadA.id, desktopSlug: "pa", permission: "operate" }, env);
+  const protectedDesktopDrift = await authorizeDesktopAccess({ principal, threadId: threadB.id, desktopSlug: "linkedin", permission: "operate" }, env);
+  const unrelated = await authorizeDesktopAccess({ principal, threadId: threadB.id, desktopSlug: "pa", permission: "operate" }, env);
+  assert.equal(exact.allowed, true);
+  assert.equal(exact.mode, "enforce");
+  assert.equal(protectedThreadDrift.allowed, false);
+  assert.equal(protectedThreadDrift.mode, "enforce");
+  assert.equal(protectedDesktopDrift.allowed, false);
+  assert.equal(protectedDesktopDrift.mode, "enforce");
+  assert.equal(unrelated.allowed, true);
+  assert.equal(unrelated.mode, "shadow");
+
+  await assert.rejects(
+    () => acquireDesktopLease("linkedin", { threadId: threadA.id, mode: "shared" }, env, { principal }),
+    /desktop_lease_must_be_exclusive/,
+  );
+  const unrelatedLease = await acquireDesktopLease("pa", { threadId: threadB.id, ttlMs: 0 }, env, { principal });
+  assert.equal(unrelatedLease.ok, true);
+  assert.equal(unrelatedLease.lease.expiresAt, null);
+
+  env.ORKESTR_DESKTOP_ENFORCED_BINDINGS_JSON = "not-json";
+  assert.equal(desktopAccessMode(env, { threadId: threadB.id, desktopSlug: "pa" }), "enforce");
+});
+
 test("desktop enforce grants require lifecycle registration while rollout modes retain catalog compatibility", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-desktop-grant-registration-"));
   const env = testEnv(home);
@@ -112,6 +151,20 @@ test("desktop enforce grants require lifecycle registration while rollout modes 
     const legacy = await setThreadDesktopGrants(legacyThread.id, [`legacy-${mode}-desktop`], { principal, reason: "rollout_catalog_compatibility" }, env);
     assert.equal(legacy.grants.length, 1);
   }
+});
+
+test("a scoped enforced thread cannot create a grant from shadow catalog compatibility", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-desktop-scoped-registration-"));
+  const env = { ...testEnv(home), ORKESTR_DESKTOP_ACCESS_MODE: "shadow" };
+  const principal = adminPrincipal("admin");
+  const thread = await createThread({ id: "scoped-strict", ownerUserId: "admin", name: "Scoped strict" }, env);
+  env.ORKESTR_DESKTOP_ENFORCED_BINDINGS_JSON = JSON.stringify([
+    { threadId: thread.id, resourceId: "local:admin:not-registered" },
+  ]);
+  await assert.rejects(
+    () => setThreadDesktopGrants(thread.id, ["not-registered"], { principal, reason: "scoped_strict" }, env),
+    /thread_resource_not_registered/,
+  );
 });
 
 test("child agents inherit parent grants but cannot widen an explicit child policy", async () => {

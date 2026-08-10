@@ -14,6 +14,7 @@ import { acquireDesktopLease, releaseDesktopLease } from "../packages/browsers/s
 import { desktopLeaseStore } from "../packages/browsers/src/desktop-lease-store.js";
 import {
   consumeDesktopCapability,
+  desktopCapabilityRequired,
   issueDesktopCapability,
 } from "../packages/browsers/src/desktop-capability-broker.js";
 import { operateManagedDesktop } from "../packages/browsers/src/desktop-operator.js";
@@ -95,6 +96,36 @@ test("desktop capability resolves one exact grant, redacts bearer state, and rej
   assert.ok(allow);
   assert.equal(JSON.stringify(allow).includes("127.0.0.1"), false);
   assert.equal(JSON.stringify(allow).includes(issued.capability), false);
+});
+
+test("scoped enforced bindings require the broker without globally enforcing unrelated desktops", async () => {
+  const { env, principal, thread, resource, lease } = await fixture();
+  env.ORKESTR_DESKTOP_ACCESS_MODE = "shadow";
+  env.ORKESTR_DESKTOP_ENFORCED_BINDINGS_JSON = JSON.stringify([
+    { threadId: thread.id, resourceId: resource.id },
+  ]);
+  assert.equal(desktopCapabilityRequired(env), false);
+  assert.equal(desktopCapabilityRequired(env, { threadId: thread.id }), true);
+  assert.equal(desktopCapabilityRequired(env, { desktopSlug: "linkedin" }), true);
+  assert.equal(desktopCapabilityRequired(env, { threadId: "other-thread", desktopSlug: "other" }), false);
+
+  const issued = await issueDesktopCapability({
+    principal,
+    threadId: thread.id,
+    fencingToken: lease.fencingToken,
+    audience: "managed-desktop-operator",
+    scope: "observe",
+  }, env);
+  assert.equal(issued.required, true);
+  const consumed = await consumeDesktopCapability({
+    principal,
+    capability: issued.capability,
+    desktopSlug: "linkedin",
+    threadId: thread.id,
+    audience: "managed-desktop-operator",
+    scope: "observe",
+  }, env);
+  assert.equal(consumed.required, true);
 });
 
 test("desktop capability is single-use under concurrent replay and cannot be retargeted", async () => {
