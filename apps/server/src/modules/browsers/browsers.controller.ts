@@ -123,13 +123,14 @@ export class BrowsersController {
   async acquireDesktop(@Req() request: any, @Param("slug") slug: string, @Body() body: Record<string, unknown> = {}) {
     const principal = requestPrincipal(request);
     const ownerUserId = await this.ownerUserIdFromLeaseBody(body, principal);
-    if (desktopCapabilityRequired(process.env)) {
+    const breakGlassOptions = this.breakGlassInputs(principal, body);
+    if (desktopCapabilityRequired(process.env) && !breakGlassOptions.breakGlass) {
       const resolved = await resolveExactDesktopGrant({ principal, threadId: String(body.threadId || body.ownerThreadId || "").trim(), permission: "acquire", scope: "lifecycle", audience: "server-browser-action" }, process.env);
       if (resolved.selection.resource.resourceKey !== normalizeDesktopSlug(slug)) throw httpError("desktop_server_resolved_target_mismatch", 403);
     }
     if (body.force === true && !isAdminPrincipal(principal)) throw httpError("desktop_force_acquire_admin_required", 403);
     await this.assertDesktopSanitized("acquire", principal, slug, { ...body, ownerUserId });
-    const result = await acquireDesktopLease(slug, { ...body, ownerUserId }, process.env, { principal, ...this.breakGlassInputs(principal, body) });
+    const result = await acquireDesktopLease(slug, { ...body, ownerUserId }, process.env, { principal, ...breakGlassOptions });
     if (!result.ok) throw httpError("desktop_leased", 409);
     return result;
   }
@@ -184,7 +185,7 @@ export class BrowsersController {
     const breakGlassOptions = this.breakGlassInputs(principal, body);
     const threadId = String(body.threadId || body.ownerThreadId || "").trim();
     const ownerUserId = threadId ? await this.ownerUserIdFromLeaseBody(body, principal) : String(body.ownerUserId || "").trim();
-    if (desktopCapabilityRequired(process.env)) {
+    if (desktopCapabilityRequired(process.env) && !breakGlassOptions.breakGlass) {
       const resolved = await resolveExactDesktopGrant({ principal, threadId, permission: "share", scope: "visible_interaction", audience: "desktop-share" }, process.env);
       if (resolved.selection.resource.resourceKey !== normalizeDesktopSlug(slug)) throw httpError("desktop_server_resolved_target_mismatch", 403);
     }
@@ -403,7 +404,8 @@ export class BrowsersController {
       const normalized = String(action || "").trim().toLowerCase();
       const threadId = String(body.threadId || body.ownerThreadId || "").trim();
       const ownerUserId = threadId ? await this.ownerUserIdFromLeaseBody(body, principal) : String(body.ownerUserId || "").trim();
-      if (desktopCapabilityRequired(process.env)) {
+      const breakGlassOptions = this.breakGlassInputs(principal, body);
+      if (desktopCapabilityRequired(process.env) && !breakGlassOptions.breakGlass) {
         const consumed = await consumeDesktopCapability({
           capability: String(body.desktopCapability || "").trim(),
           principal,
@@ -419,7 +421,7 @@ export class BrowsersController {
         threadId,
         ownerUserId,
         fencingToken: String(body.fencingToken || "").trim(),
-        ...this.breakGlassInputs(principal, body),
+        ...breakGlassOptions,
       };
       await this.assertDesktopSanitized(normalized || "action", principal, slug, body);
       if (normalized === "prepare") return { browser: redactDesktopSession(await prepareVirtualBrowser(slug, process.env, desktopOptions)) };
