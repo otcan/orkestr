@@ -53,6 +53,7 @@ import { completeRuntimeLiveness, recordRuntimeLiveness } from "./runtime-livene
 import { runtimeFinalDeliveryPending } from "./runtime-final-delivery.js";
 import { reconcileCodexFinalProjection } from "./codex-final-projection.js";
 import { currentCodexGenerationMatches } from "./codex-generation.js";
+import { canonicalTimestamp } from "./timestamp-normalization.js";
 
 const execFileAsync = promisify(execFile);
 const clients = new Map();
@@ -975,7 +976,7 @@ export class CodexAppServerClient {
     const text = type === "contextCompaction" ? "Codex compacted the conversation context." : itemText(item);
     if (!text) return null;
     const phase = itemPhase(item) || "final_answer";
-    const timestamp = params.timestamp || nowIso();
+    const timestamp = canonicalTimestamp(params.timestamp) || nowIso();
     const turnId = clean(params.turnId || item.turnId);
     const rememberedParent = this.turnParent(codexId, turnId);
     const explicitParent = params.parentMessage && whatsappOrigin(params.parentMessage) ? params.parentMessage : null;

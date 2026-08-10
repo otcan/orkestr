@@ -20,6 +20,7 @@ import {
 } from "../../browsers/src/browsers.js";
 import { operateManagedDesktop } from "../../browsers/src/desktop-operator.js";
 import { acquireDesktopLease } from "../../browsers/src/desktop-leases.js";
+import { issueDesktopCapability } from "../../browsers/src/desktop-capability-broker.js";
 import { getGmailMessage, listGmailMessages } from "../../connectors/src/gmail.js";
 import { resolveGoogleWorkspaceConnection } from "../../connectors/src/google-workspace-connections.js";
 import {
@@ -148,7 +149,7 @@ function automationDoctorOptions(context = {}, env = process.env) {
   const threadId = clean(context.thread?.id);
   return {
     connectorStatusProvider: (provider, connectorPrincipal = principal) => connectorAuthStatus(provider, env, { principal: connectorPrincipal }),
-    browserSessionsProvider: () => listBrowserSessions(env, { principal, threadId }),
+    browserSessionsProvider: () => listBrowserSessions(env, { principal, threadId, publicProjection: true }),
   };
 }
 
@@ -657,7 +658,7 @@ function desktopForSkill(skill = {}, desktops = [], env = process.env, args = {}
 
 async function safeDesktopInventory(principal = {}, thread = null, env = process.env) {
   try {
-    const payload = await listBrowserSessions(env, { principal, threadId: clean(thread?.id) });
+    const payload = await listBrowserSessions(env, { principal, threadId: clean(thread?.id), publicProjection: true });
     return {
       ok: payload?.ok !== false,
       source: clean(payload?.source),
@@ -688,6 +689,7 @@ async function ensureAgentDesktopLease(slug = "", principal = {}, thread = null,
     threadName: clean(thread.title || thread.name || thread.id),
     mode: "exclusive",
     purpose: "tenant_api_agent",
+    runId: clean(thread.runtime?.activeTurnId || thread.executor?.codexThreadId || `tenant-api:${thread.id}`),
   }, env, { principal });
   if (!acquired?.ok) {
     const error = new Error(acquired?.error || "desktop_lease_failed");
@@ -1850,6 +1852,13 @@ export async function runTenantApiAgentTool(name = "", args = {}, context = {}, 
       targetSelection = resolved.targetSelection;
     }
     const lease = await ensureAgentDesktopLease(slug, principal, thread, env);
+    const capability = await issueDesktopCapability({
+      principal,
+      threadId: clean(thread?.id),
+      fencingToken: clean(lease?.fencingToken),
+      audience: "managed-desktop-operator",
+      scope: ["click", "type", "navigate"].includes(clean(args.operation).toLowerCase()) ? "visible_interaction" : "observe",
+    }, env);
     const result = await operateManagedDesktop(slug, {
       operation: args.operation,
       url: args.url,
@@ -1860,7 +1869,12 @@ export async function runTenantApiAgentTool(name = "", args = {}, context = {}, 
       value: args.value,
       waitMs: args.waitMs,
       maxText: args.maxText,
-    }, env, { principal, threadId: clean(thread?.id), fencingToken: clean(lease?.fencingToken) });
+    }, env, {
+      principal,
+      threadId: clean(thread?.id),
+      fencingToken: clean(lease?.fencingToken),
+      desktopCapability: capability.capability,
+    });
     return { ...result, targetSelection };
   }
   if (tool === "orkestr_connect_workspace_runtime") {

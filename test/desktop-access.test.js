@@ -149,7 +149,19 @@ test("lease fencing rejects stale holders after forced takeover", async () => {
   const first = await acquireDesktopLease("linkedin", { threadId: threadA.id }, env, { principal });
   const replacementThread = await createThread({ id: "thread-replacement", ownerUserId: "admin", name: "Replacement" }, env);
   await setThreadDesktopGrants(replacementThread.id, ["linkedin"], { principal, reason: "replacement" }, env);
-  const second = await acquireDesktopLease("linkedin", { threadId: replacementThread.id, force: true, reason: "attended takeover" }, env, { principal });
+  const breakGlassPrincipal = { ...principal, authenticatedAt: new Date().toISOString() };
+  const second = await acquireDesktopLease("linkedin", {
+    threadId: replacementThread.id,
+    force: true,
+    reason: "attended takeover",
+    breakGlassReason: "attended takeover",
+    breakGlassChangeRef: "CHG-DESKTOP-TAKEOVER",
+  }, env, {
+    principal: breakGlassPrincipal,
+    breakGlass: true,
+    breakGlassReason: "attended takeover",
+    breakGlassChangeRef: "CHG-DESKTOP-TAKEOVER",
+  });
 
   assert.notEqual(first.lease.fencingToken, second.lease.fencingToken);
   assert.ok(second.lease.fencingVersion > first.lease.fencingVersion);

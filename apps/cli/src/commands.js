@@ -1786,12 +1786,19 @@ async function taskAgentCommand(argv, ctx) {
     const parent = values[0];
     const task = (flagValue(argv, "--task") || values.slice(1).join(" ")).trim();
     if (!parent || !task) throw new Error("Usage: orkestr task-agent spawn <parent-thread> <task text> [--profile sre_engineer] [--context ref]... [--no-run] [--json]");
+    const where = await taskAgentWhereAmI(argv, ctx);
+    const originThread = where?.matched && where?.thread && typeof where.thread === "object" ? where.thread : null;
     const body = {
       profile: flagValue(argv, "--profile") || "sre_engineer",
       task,
       contextRefs: repeatedFlagValues(argv, ["--context"]),
       autoRun: !argv.includes("--no-run"),
     };
+    if (originThread?.id) {
+      body.originThreadId = String(originThread.id || "").trim();
+      body.originRootThreadId = String(originThread.rootThreadId || originThread.parentThreadId || originThread.id || "").trim();
+      body.requestedParentThreadId = parent;
+    }
     const payload = await requestJson(`/api/threads/${encodeURIComponent(parent)}/task-agents`, { ...ctx, method: "POST", body });
     if (argv.includes("--json")) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
     else ctx.stdout.write(`Spawned ${payload.taskAgent?.profileId || body.profile} task ${payload.taskAgent?.threadId || payload.taskAgent?.id || ""}\n`);
@@ -1822,6 +1829,13 @@ async function taskAgentCommand(argv, ctx) {
     return 0;
   }
   throw new Error("Usage: orkestr task-agent [profiles|spawn|list|status|cancel]");
+}
+
+async function taskAgentWhereAmI(argv = [], ctx = {}) {
+  const params = new URLSearchParams();
+  const cwd = cliWorkingDirectory(argv, ctx);
+  if (cwd) params.set("cwd", cwd);
+  return await requestJson(`/api/whereiam?${params.toString()}`, ctx).catch(() => null);
 }
 
 async function attach(argv, ctx) {

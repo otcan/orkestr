@@ -1977,6 +1977,45 @@ test("Codex app-server projects orphan bound replies to the WhatsApp binding", a
   }
 });
 
+test("Codex app-server canonicalizes epoch-seconds item timestamps", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-epoch-timestamp-"));
+  const fake = await createFakeCodex(home);
+  const env = {
+    ORKESTR_HOME: path.join(home, "orkestr"),
+    HOME: path.join(home, "runtime-home"),
+    PATH: `${fake.bin}${path.delimiter}${process.env.PATH || ""}`,
+    FAKE_CODEX_STATE: fake.stateFile,
+  };
+  try {
+    const thread = await createThread({
+      id: "app-server-epoch-timestamp-thread",
+      name: "App Server Epoch Timestamp Thread",
+      cwd: home,
+      executorId: "codex",
+      executor: { type: "codex" },
+    }, env);
+    const started = await startCodexAppServerThread(thread, env);
+    const codexId = started.thread.executor.codexThreadId;
+    const client = await getCodexAppServerClient({ env, home: env.HOME });
+    const epochSeconds = "1786352641";
+
+    await client.projectItem({
+      id: "epoch-seconds-agent-message",
+      type: "agentMessage",
+      text: "Safe fixture response.",
+      phase: "final_answer",
+    }, { threadId: codexId, turnId: "epoch-seconds-turn", timestamp: epochSeconds }, codexId);
+
+    const messages = await listThreadMessages(started.thread.id, env);
+    const reply = messages.find((message) => message.codexItemId === "epoch-seconds-agent-message");
+
+    assert.equal(reply?.createdAt, new Date(Number(epochSeconds) * 1000).toISOString());
+    assert.ok(Number.isFinite(Date.parse(String(reply?.createdAt || ""))));
+  } finally {
+    stopCodexAppServerClients();
+  }
+});
+
 test("Codex app-server status ignores stale stored working state without live client state", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-stale-working-"));
   const fake = await createFakeCodex(home);

@@ -2,6 +2,7 @@ import WebSocket from "ws";
 import { managedDesktopAction, managedDesktopOpenUrl } from "./browserctl.js";
 import { assertDesktopAccess } from "../../core/src/desktop-access.js";
 import { assertDesktopLeaseForOperation } from "./desktop-leases.js";
+import { consumeDesktopCapability, desktopCapabilityRequired } from "./desktop-capability-broker.js";
 
 function clean(value) {
   return String(value || "").trim();
@@ -307,6 +308,33 @@ export async function operateManagedDesktop(slug = "", args = {}, env = process.
     throw error;
   }
   const operation = clean(args.operation || args.action || "observe").toLowerCase();
+  const cdpInteraction = ["click", "type", "navigate"].includes(operation);
+  if (!["observe", "extract", "read", "click", "type", "navigate"].includes(operation)) {
+    const error = new Error("desktop_operation_not_supported");
+    error.statusCode = 400;
+    throw error;
+  }
+  let broker = null;
+  if (desktopCapabilityRequired(env)) {
+    broker = await consumeDesktopCapability({
+      capability: options?.desktopCapability,
+      principal: options?.principal,
+      desktopSlug,
+      threadId: options?.threadId,
+      audience: "managed-desktop-operator",
+      scope: cdpInteraction ? "visible_interaction" : "observe",
+    }, env);
+    if (broker?.desktop?.slug !== desktopSlug) {
+      const error = new Error("desktop_capability_target_mismatch");
+      error.statusCode = 403;
+      throw error;
+    }
+    if (cdpInteraction && broker?.desktop?.requiresVisibleNoVnc === true) {
+      const error = new Error("desktop_visible_novnc_interaction_required");
+      error.statusCode = 403;
+      throw error;
+    }
+  }
   await assertDesktopAccess({
     principal: options?.principal,
     threadId: options?.threadId,
@@ -322,9 +350,9 @@ export async function operateManagedDesktop(slug = "", args = {}, env = process.
   let session = null;
 
   if (operation === "navigate") {
-    session = await managedDesktopOpenUrl(desktopSlug, validateHttpUrl(args.url), env, options);
+    session = await managedDesktopOpenUrl(desktopSlug, validateHttpUrl(args.url), env, { ...options, brokerAuthorized: broker?.required === true });
   } else {
-    session = await managedDesktopAction(desktopSlug, "start", env, options);
+    session = await managedDesktopAction(desktopSlug, "start", env, { ...options, brokerAuthorized: broker?.required === true });
   }
 
   const cdpUrl = clean(session?.cdp_url);
@@ -353,8 +381,8 @@ export async function operateManagedDesktop(slug = "", args = {}, env = process.
       await sleep(waitMs);
     } else if (operation === "navigate") {
       await sleep(waitMs || 1500);
-    } else if (!["observe", "extract", "read"].includes(operation)) {
-      return { ok: false, error: "desktop_operation_not_supported", operation };
+    } else {
+      await sleep(waitMs);
     }
     const observed = summarizeObservation(await evaluateJson(client, OBSERVE_SCRIPT), maxText);
     return {

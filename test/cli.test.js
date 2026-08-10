@@ -99,6 +99,15 @@ test("CLI spawns a scoped specialist task agent", async () => {
     stdout,
     stderr: capture(),
     fetchImpl: fakeFetch({
+      "GET /api/whereiam": {
+        ok: true,
+        matched: true,
+        thread: {
+          id: "worker-thread",
+          parentThreadId: "parent-thread",
+          rootThreadId: "parent-thread",
+        },
+      },
       "POST /api/threads/parent-thread/task-agents": {
         taskAgent: { id: "task-id", threadId: "task-thread", profileId: "sre_engineer", status: "held" },
       },
@@ -106,12 +115,17 @@ test("CLI spawns a scoped specialist task agent", async () => {
   });
 
   assert.equal(code, 0);
-  assert.equal(seen.length, 1);
-  assert.deepEqual(seen[0].body, {
+  assert.equal(seen.length, 2);
+  assert.equal(seen[0].key, "GET /api/whereiam");
+  assert.equal(seen[1].key, "POST /api/threads/parent-thread/task-agents");
+  assert.deepEqual(seen[1].body, {
     profile: "sre_engineer",
     task: "Diagnose watcher restarts",
     contextRefs: ["watcher logs", "release state"],
     autoRun: false,
+    originThreadId: "worker-thread",
+    originRootThreadId: "parent-thread",
+    requestedParentThreadId: "parent-thread",
   });
   assert.match(stdout.text(), /task-thread/);
 });

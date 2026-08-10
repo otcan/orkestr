@@ -245,6 +245,9 @@ export const taskAgentCreateSchema = {
       profile: stringValue,
       profileId: stringValue,
       task: stringValue,
+      originThreadId: stringValue,
+      originRootThreadId: stringValue,
+      requestedParentThreadId: stringValue,
       contextRefs: {
         type: "array",
         items: stringValue,
