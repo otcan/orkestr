@@ -11,6 +11,7 @@ import { assertDesktopAccess } from "../../../packages/core/src/desktop-access.j
 import { onDesktopShareLifecycle } from "../../../packages/core/src/desktop-share-lifecycle.js";
 import { validateDesktopShareSession } from "../../../packages/core/src/desktop-shares.js";
 import { appendEvent } from "../../../packages/storage/src/store.js";
+import { desktopCapabilityRequired } from "../../../packages/browsers/src/desktop-capability-broker.js";
 
 type DesktopTarget = {
   slug: string;
@@ -163,6 +164,11 @@ function desktopRequestScope(rawUrl: string | undefined, request: any = {}): { t
 async function desktopTarget(rawUrl: string | undefined, principal: any, scope: any = {}): Promise<DesktopTarget | null> {
   const request = parseDesktopUrl(rawUrl);
   if (!request) return null;
+  if (desktopCapabilityRequired(process.env) && !scope.desktopShare) {
+    const error = new Error("desktop_brokered_share_required");
+    Object.assign(error, { statusCode: 403 });
+    throw error;
+  }
   const decision = await assertDesktopAccess({
     principal,
     threadId: scope.threadId,
@@ -181,6 +187,7 @@ async function desktopTarget(rawUrl: string | undefined, principal: any, scope: 
     principal,
     threadId: scope.threadId,
     fencingToken: String(scope.fencingToken || "").trim(),
+    internalDesktopProxy: true,
   });
   const port = session ? sessionWebPort(session) : 0;
   if (!port) {
@@ -208,6 +215,11 @@ async function proxyDesktopHttp(request: any, response: any): Promise<void> {
   if (mobileRoute) {
     try {
       const scope = desktopRequestScope(request.originalUrl || request.url, request);
+      if (desktopCapabilityRequired(process.env) && !request.orkestrDesktopShare) {
+        const error = new Error("desktop_brokered_share_required");
+        Object.assign(error, { statusCode: 403 });
+        throw error;
+      }
       await assertDesktopAccess({
         principal: requestPrincipal(request),
         threadId: scope.threadId,

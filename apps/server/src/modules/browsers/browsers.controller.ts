@@ -5,6 +5,7 @@ import {
   openUrlInVirtualBrowser,
   openVirtualBrowser,
   prepareVirtualBrowser,
+  redactDesktopSession,
   restartVirtualBrowser,
   stopVirtualBrowser,
 } from "../../../../../packages/browsers/src/browsers.js";
@@ -39,6 +40,12 @@ import {
   listThreadDesktopGrants,
   setThreadDesktopGrants,
 } from "../../../../../packages/core/src/desktop-access.js";
+import {
+  consumeDesktopCapability,
+  desktopCapabilityRequired,
+  issueDesktopCapability,
+  resolveExactDesktopGrant,
+} from "../../../../../packages/browsers/src/desktop-capability-broker.js";
 import { httpError } from "../../common/http.js";
 
 function desktopShareReady(browser: any): boolean {
@@ -65,6 +72,7 @@ export class BrowsersController {
     const payload = await listBrowserSessions(process.env, {
       principal,
       threadId: String(threadId || "").trim(),
+      publicProjection: true,
       ...this.breakGlassInputs(principal, { breakGlass, breakGlassReason: reason, breakGlassChangeRef: changeRef }),
     });
     return { ...payload, browsers: payload.sessions };
@@ -76,6 +84,7 @@ export class BrowsersController {
     return listBrowserSessions(process.env, {
       principal,
       threadId: String(threadId || "").trim(),
+      publicProjection: true,
       ...this.breakGlassInputs(principal, { breakGlass, breakGlassReason: reason, breakGlassChangeRef: changeRef }),
     });
   }
@@ -114,6 +123,10 @@ export class BrowsersController {
   async acquireDesktop(@Req() request: any, @Param("slug") slug: string, @Body() body: Record<string, unknown> = {}) {
     const principal = requestPrincipal(request);
     const ownerUserId = await this.ownerUserIdFromLeaseBody(body, principal);
+    if (desktopCapabilityRequired(process.env)) {
+      const resolved = await resolveExactDesktopGrant({ principal, threadId: String(body.threadId || body.ownerThreadId || "").trim(), permission: "acquire", scope: "lifecycle", audience: "server-browser-action" }, process.env);
+      if (resolved.selection.resource.resourceKey !== normalizeDesktopSlug(slug)) throw httpError("desktop_server_resolved_target_mismatch", 403);
+    }
     if (body.force === true && !isAdminPrincipal(principal)) throw httpError("desktop_force_acquire_admin_required", 403);
     await this.assertDesktopSanitized("acquire", principal, slug, { ...body, ownerUserId });
     const result = await acquireDesktopLease(slug, { ...body, ownerUserId }, process.env, { principal, ...this.breakGlassInputs(principal, body) });
@@ -171,6 +184,10 @@ export class BrowsersController {
     const breakGlassOptions = this.breakGlassInputs(principal, body);
     const threadId = String(body.threadId || body.ownerThreadId || "").trim();
     const ownerUserId = threadId ? await this.ownerUserIdFromLeaseBody(body, principal) : String(body.ownerUserId || "").trim();
+    if (desktopCapabilityRequired(process.env)) {
+      const resolved = await resolveExactDesktopGrant({ principal, threadId, permission: "share", scope: "visible_interaction", audience: "desktop-share" }, process.env);
+      if (resolved.selection.resource.resourceKey !== normalizeDesktopSlug(slug)) throw httpError("desktop_server_resolved_target_mismatch", 403);
+    }
     await this.assertDesktopSanitized("share", principal, slug, body);
     await assertDesktopAccess({
       principal,
@@ -209,7 +226,7 @@ export class BrowsersController {
     });
     return {
       ...share,
-      browser,
+      browser: redactDesktopSession(browser),
       desktopStart: {
         requested: startRequested,
         ok: Boolean(browser),
@@ -308,6 +325,20 @@ export class BrowsersController {
     return this.runAction(request, slug, action, body);
   }
 
+  @Post("threads/:threadId/desktop-capabilities")
+  @HttpCode(201)
+  async issueDesktopCapability(@Req() request: any, @Param("threadId") threadId: string, @Body() body: Record<string, unknown> = {}) {
+    const principal = requestPrincipal(request);
+    return issueDesktopCapability({
+      principal,
+      threadId,
+      fencingToken: String(body.fencingToken || "").trim(),
+      audience: "server-browser-action",
+      scope: String(body.scope || "lifecycle").trim(),
+      ttlMs: body.ttlMs,
+    }, process.env);
+  }
+
   @Get("threads/:threadId/desktop-grants")
   async threadDesktopGrants(@Req() request: any, @Param("threadId") threadId: string) {
     return listThreadDesktopGrants(threadId, requestPrincipal(request), process.env);
@@ -372,6 +403,17 @@ export class BrowsersController {
       const normalized = String(action || "").trim().toLowerCase();
       const threadId = String(body.threadId || body.ownerThreadId || "").trim();
       const ownerUserId = threadId ? await this.ownerUserIdFromLeaseBody(body, principal) : String(body.ownerUserId || "").trim();
+      if (desktopCapabilityRequired(process.env)) {
+        const consumed = await consumeDesktopCapability({
+          capability: String(body.desktopCapability || "").trim(),
+          principal,
+          desktopSlug: normalizeDesktopSlug(slug),
+          threadId,
+          audience: "server-browser-action",
+          scope: "lifecycle",
+        }, process.env);
+        if (consumed.desktop?.slug !== normalizeDesktopSlug(slug) || consumed.desktop?.threadId !== threadId) throw httpError("desktop_server_resolved_target_mismatch", 403);
+      }
       const desktopOptions = {
         principal,
         threadId,
@@ -380,21 +422,21 @@ export class BrowsersController {
         ...this.breakGlassInputs(principal, body),
       };
       await this.assertDesktopSanitized(normalized || "action", principal, slug, body);
-      if (normalized === "prepare") return { browser: await prepareVirtualBrowser(slug, process.env, desktopOptions) };
-      if (normalized === "start" || normalized === "open") return { browser: await openVirtualBrowser(slug, process.env, "", desktopOptions) };
+      if (normalized === "prepare") return { browser: redactDesktopSession(await prepareVirtualBrowser(slug, process.env, desktopOptions)) };
+      if (normalized === "start" || normalized === "open") return { browser: redactDesktopSession(await openVirtualBrowser(slug, process.env, "", desktopOptions)) };
       if (normalized === "open-url" || normalized === "openurl" || normalized === "navigate") {
-        return { browser: await openUrlInVirtualBrowser(slug, String(body.url || body.href || ""), process.env, desktopOptions) };
+        return { browser: redactDesktopSession(await openUrlInVirtualBrowser(slug, String(body.url || body.href || ""), process.env, desktopOptions)) };
       }
-      if (normalized === "stop") return { browser: await stopVirtualBrowser(slug, process.env, desktopOptions) };
+      if (normalized === "stop") return { browser: redactDesktopSession(await stopVirtualBrowser(slug, process.env, desktopOptions)) };
       if (normalized === "restart") {
         const browser = await restartVirtualBrowser(slug, process.env, desktopOptions);
         await advanceDesktopResourceGeneration(slug, ownerUserId, { reason: "desktop_restarted" }, process.env);
-        return { browser };
+        return { browser: redactDesktopSession(browser) };
       }
       if (normalized === "cleanup") {
         const browser = await cleanupVirtualBrowser(slug, process.env, desktopOptions);
         await advanceDesktopResourceGeneration(slug, ownerUserId, { reason: "desktop_cleaned" }, process.env);
-        return { browser };
+        return { browser: redactDesktopSession(browser) };
       }
       throw httpError("unknown_browser_action", 404);
     } catch (error) {

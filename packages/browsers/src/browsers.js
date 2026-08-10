@@ -113,7 +113,10 @@ export async function listBrowserSessions(env = process.env, options = {}) {
       const sessions = await filterDesktopSessionsForThread(visible, {
         ...options,
       }, env);
-      return { ...payload, sessions };
+      return {
+        ...payload,
+        sessions: options.publicProjection === true ? sessions.map(redactDesktopSession) : sessions,
+      };
     } catch (error) {
       if (!shouldFallbackAfterBrowserctlError(error, env)) {
         return {
@@ -130,7 +133,34 @@ export async function listBrowserSessions(env = process.env, options = {}) {
   const sessions = await filterDesktopSessionsForThread(listed, {
     ...options,
   }, env);
-  return { ok: true, source: "profiles", sessions };
+  return {
+    ok: true,
+    source: "profiles",
+    sessions: options.publicProjection === true ? sessions.map(redactDesktopSession) : sessions,
+  };
+}
+
+const DESKTOP_ENDPOINT_FIELD = /cdp|debug.?port|profile|endpoint|upstream|local.?control|(?:^|_)(?:web|vnc|novnc|rfb)_?port|desk_?url/i;
+
+function redactDesktopValue(value) {
+  if (Array.isArray(value)) return value.map(redactDesktopValue);
+  if (!value || typeof value !== "object") return value;
+  const output = {};
+  for (const [key, nested] of Object.entries(value)) {
+    // `url` is deliberately removed at every depth: browser session records
+    // are inventory, not a transport for either local controls or page state.
+    if (key.toLowerCase() === "url" || DESKTOP_ENDPOINT_FIELD.test(key)) continue;
+    output[key] = redactDesktopValue(nested);
+  }
+  return output;
+}
+
+// Browserctl records are an internal broker protocol. Never return profile
+// paths, loopback control URLs, VNC ports, or direct noVNC routes to normal
+// API/agent callers; those callers receive a capability or share ticket.
+export function redactDesktopSession(session = {}) {
+  const output = redactDesktopValue(session && typeof session === "object" ? session : {});
+  return { ...output, endpointRedacted: true };
 }
 
 async function assertBrowserAccess(slug, permission, env = process.env, options = {}) {
@@ -388,7 +418,7 @@ export function virtualBrowserReady(browser = null) {
 
 export async function ensureVirtualBrowserReady(slug, env = process.env, options = {}) {
   const id = String(slug || "").trim();
-  const listed = await listBrowserSessions(env, options);
+  const listed = await listBrowserSessions(env, { ...options, publicProjection: false });
   const current = (listed.sessions || []).find((browser) => String(browser.slug || browser.id || "").trim() === id);
   if (!current) {
     const error = new Error("browser_session_not_found");
