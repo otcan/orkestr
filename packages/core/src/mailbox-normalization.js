@@ -199,6 +199,9 @@ export function normalizeMailbox(input = {}, env = process.env) {
 
 function normalizeTargetSelection(input = {}) {
   const source = input && typeof input === "object" && !Array.isArray(input) ? input : {};
+  const warning = source.shadowBoundaryWarning && typeof source.shadowBoundaryWarning === "object" && !Array.isArray(source.shadowBoundaryWarning)
+    ? source.shadowBoundaryWarning
+    : {};
   return {
     ok: source.ok === true,
     selectedInstanceId: clean(source.selectedInstanceId || source.instanceId || ""),
@@ -209,6 +212,14 @@ function normalizeTargetSelection(input = {}) {
     error: cleanLower(source.error || ""),
     candidateCount: Math.max(0, Math.floor(Number(source.candidateCount || 0) || 0)),
     authorizedCandidateCount: Math.max(0, Math.floor(Number(source.authorizedCandidateCount || 0) || 0)),
+    shadowBoundaryWarning: {
+      eligible: warning.eligible === true,
+      emitted: warning.emitted === true,
+      resourceType: cleanLower(warning.resourceType || ""),
+      mode: cleanLower(warning.mode || ""),
+      reason: cleanLower(warning.reason || "not_evaluated"),
+      notificationId: clean(warning.notificationId || ""),
+    },
   };
 }
 
@@ -296,6 +307,13 @@ async function normalizeHeaders(input = {}) {
     subject: clean(source.subject || input.subject || mime.subject).slice(0, 500),
     from: clean(source.from || input.from || mime.from).slice(0, 500),
     date: clean(source.date || input.date || mime.date).slice(0, 120),
+    // These headers drive ingress-only loop suppression. Retain bounded,
+    // normalized values rather than raw MIME so no untrusted source can grow
+    // durable policy records through header size alone.
+    autoSubmitted: clean(source.autoSubmitted || source["auto-submitted"] || input.autoSubmitted || input["auto-submitted"] || mime.autoSubmitted).slice(0, 120),
+    references: clean(source.references || input.references || mime.references).slice(0, 4_000),
+    inReplyTo: clean(source.inReplyTo || source["in-reply-to"] || input.inReplyTo || input["in-reply-to"] || mime.inReplyTo).slice(0, 1_000),
+    xOrkestrOrigin: clean(source.xOrkestrOrigin || source["x-orkestr-origin"] || input.xOrkestrOrigin || input["x-orkestr-origin"] || mime.xOrkestrOrigin).slice(0, 120),
   };
 }
 

@@ -43,6 +43,19 @@ export {
   revokeMailboxThreadListener,
 } from "./mailbox-thread-delivery.js";
 export {
+  createMailboxRoute,
+  cancelMailboxRouteWork,
+  discardMailboxContext,
+  dispatchMailboxRouteWork,
+  listMailboxRoutes,
+  mailboxRouteStatus,
+  moveMailboxRoute,
+  reconcileMailboxRouteWorkRuntime,
+  recordMailboxRouteWorkRuntime,
+  retryMailboxRouteWork,
+  revokeMailboxRoute,
+} from "./mailbox-routes.js";
+export {
   deleteMailboxForPrincipal,
   rotateMailboxForPrincipal,
   verifyMailboxForPrincipal,

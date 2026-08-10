@@ -72,6 +72,10 @@ id "$run_user" >/dev/null 2>&1 || { echo "Runtime user not found: $run_user" >&2
   echo "Mailbox Postfix adapter is missing from $current_link; deploy the matching Orkestr release first." >&2
   exit 1
 }
+runuser -u "$run_user" -- test -r "$current_link/scripts/orkestr-mailbox-postfix.mjs" || {
+  echo "Mailbox Postfix adapter is not readable by $run_user; repair the active release permissions first." >&2
+  exit 1
+}
 
 export DEBIAN_FRONTEND=noninteractive
 echo "postfix postfix/mailname string $smtp_hostname" | debconf-set-selections

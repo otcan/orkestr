@@ -1,8 +1,8 @@
 import { appendEvent } from "../../storage/src/store.js";
 import { getThread, listThreads } from "./threads.js";
 import { isAdminPrincipal, resourceOwnerUserId } from "./policy.js";
+import { THREAD_RESOURCE_PERMISSIONS } from "./thread-resource-policy-constants.js";
 import {
-  THREAD_RESOURCE_PERMISSIONS,
   advanceThreadResourceGeneration,
   assertThreadResourceAccess,
   authorizeThreadResourceAccess,

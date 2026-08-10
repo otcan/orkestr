@@ -1387,6 +1387,44 @@ test("ops users page exposes targeted browser pairing and revocation", async () 
   assert.match(securityComponent, /sessionTarget\(session: SecuritySession\): string/);
 });
 
+test("ops mailboxes page exposes explicit route setup and durable status", async () => {
+  const opsTemplate = await fs.readFile("apps/web/src/app/ops-page.component.html", "utf8");
+  const opsComponent = await fs.readFile("apps/web/src/app/ops-page.component.ts", "utf8");
+  const panelTemplate = await fs.readFile("apps/web/src/app/mailbox-routes-panel.component.html", "utf8");
+  const panelComponent = await fs.readFile("apps/web/src/app/mailbox-routes-panel.component.ts", "utf8");
+  const api = await fs.readFile("apps/web/src/app/api.service.ts", "utf8");
+  const controller = await fs.readFile("apps/server/src/modules/mailboxes/mailboxes.controller.ts", "utf8");
+  const cli = await fs.readFile("apps/cli/src/mailbox-command.js", "utf8");
+
+  assert.match(opsComponent, /MailboxRoutesPanelComponent/);
+  assert.match(opsComponent, /id: "mailboxes", label: "Mailboxes", kind: "oss-optional"/);
+  assert.match(opsTemplate, /<ork-mailbox-routes-panel><\/ork-mailbox-routes-panel>/);
+  assert.match(panelTemplate, /One explicit route per main mailbox/);
+  assert.match(panelTemplate, /Create explicit route/);
+  assert.match(panelTemplate, /Revoke route/);
+  assert.match(panelTemplate, /Provision a new eligible destination thread/);
+  assert.match(panelTemplate, /selected thread must already have the exact subscribe grant/i);
+  assert.match(panelTemplate, /read, subscribe, manage, and process/);
+  assert.match(panelTemplate, /Required exact mailbox grants/);
+  assert.match(panelTemplate, /Attended approval code/);
+  assert.match(panelTemplate, /Move route/);
+  assert.match(panelComponent, /requiredGrants\(\): string/);
+  assert.match(panelComponent, /async moveRoute\(\): Promise<void>/);
+  assert.match(panelComponent, /approvalNotice\(/);
+  assert.match(panelTemplate, /processing failure/);
+  assert.match(panelTemplate, /never replayed automatically/);
+  assert.match(panelComponent, /this\.api\.mailboxRouteStatus\(this\.selectedMailboxId\)/);
+  assert.match(panelComponent, /this\.api\.createMailboxRoute\(this\.selectedMailboxId/);
+  assert.match(api, /export interface MailboxRouteStatus/);
+  assert.match(api, /running: number; completed: number; failed: number/);
+  assert.match(api, /mailboxRoutes\(mailboxId: string\)/);
+  assert.match(api, /moveMailboxRoute\(mailboxId: string, routeId: string/);
+  assert.match(api, /revokeMailboxRoute\(mailboxId: string, routeId: string/);
+  assert.match(controller, /approval: String\(body\.approval \|\| ""\)\.trim\(\), request/);
+  assert.match(cli, /--approval/);
+  assert.match(cli, /Retry the same route command with --approval/);
+});
+
 test("ops audit view exposes normalized filterable events", async () => {
   const template = await fs.readFile("apps/web/src/app/ops-page.component.html", "utf8");
   const component = await fs.readFile("apps/web/src/app/ops-page.component.ts", "utf8");
@@ -1398,7 +1436,7 @@ test("ops audit view exposes normalized filterable events", async () => {
   const styles = await fs.readFile("apps/web/src/styles.css", "utf8");
 
   assert.match(component, /export type ToolsView = .*"audit"/);
-  assert.match(appComponent, /"connectors", "users", "waitlist", "audit"/);
+  assert.match(appComponent, /"connectors", "mailboxes", "users", "waitlist", "audit"/);
   assert.match(template, /visibleToolTabs\(\)/);
   assert.match(template, /\[class\.active\]="toolsView === tab\.id"/);
   assert.match(component, /id: "audit", label: "Audit", kind: "oss-core"/);
@@ -1512,7 +1550,7 @@ test("ops waitlist view exposes secure approval workflow", async () => {
 
   assert.match(opsComponent, /export type ToolsView = .*"waitlist"/);
   assert.match(opsComponent, /OpsWaitlistComponent/);
-  assert.match(appComponent, /"connectors", "users", "waitlist", "audit"/);
+  assert.match(appComponent, /"connectors", "mailboxes", "users", "waitlist", "audit"/);
   assert.match(opsComponent, /id: "waitlist", label: "Waitlist", kind: "managed"/);
   assert.match(opsTemplate, /visibleToolTabs\(\)/);
   assert.match(opsTemplate, /<ork-ops-waitlist><\/ork-ops-waitlist>/);

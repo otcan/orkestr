@@ -274,6 +274,20 @@ ORKESTR_OXRM_ACCESS_MODE=shadow
 ORKESTR_MAILBOX_ACCESS_MODE=off
 ```
 
+To surface a selected desktop, oXRM, or mailbox target that was permitted only
+by `shadow` mode, opt in explicitly:
+
+```text
+ORKESTR_SHADOW_BOUNDARY_CHAT_WARNINGS=1
+```
+
+One deterministic assistant notification is added to the selecting thread when
+there is no effective thread grant. Eligible WhatsApp-bound threads mirror that
+notification through the normal outbound-intent path. Discovery, inventory,
+status, doctor, dry-run, and preflight checks never generate this notice.
+The flag is off by default so an existing shadow rollout remains observational
+until an operator chooses to expose these gaps in chat history.
+
 `desktop` preserves the existing shadow default, while `oxrm` is opt-in until
 its explicit grants are configured. `mailbox` remains off until the mailbox
 resource is registered and each destination thread receives exact mailbox
