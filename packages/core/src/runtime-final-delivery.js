@@ -24,6 +24,79 @@ function matchesPendingDelivery(delivery = null, input = {}) {
   return true;
 }
 
+function uniqueStrings(values = []) {
+  const seen = new Set();
+  const result = [];
+  for (const value of values) {
+    const item = clean(value);
+    if (!item || seen.has(item)) continue;
+    seen.add(item);
+    result.push(item);
+  }
+  return result;
+}
+
+function sameKnownDeliveryField(delivery = {}, input = {}, field = "") {
+  const left = clean(delivery?.[field]);
+  const right = clean(input?.[field]);
+  return !left || !right || left === right;
+}
+
+function deliverySupersedesMessage(delivery = {}, messageId = "") {
+  const id = clean(messageId);
+  if (!id) return false;
+  return (Array.isArray(delivery?.supersededMessageIds) ? delivery.supersededMessageIds : [])
+    .some((value) => clean(value) === id);
+}
+
+function deliveredDuplicateMatches(delivery = null, input = {}) {
+  const messageId = clean(input.messageId);
+  if (!delivery || clean(delivery.status) !== "delivered" || !messageId) return false;
+  if (clean(delivery.messageId) === messageId || deliverySupersedesMessage(delivery, messageId)) return true;
+  for (const field of ["runtimeGeneration", "connector", "chatId", "accountId"]) {
+    if (!sameKnownDeliveryField(delivery, input, field)) return false;
+  }
+  const deliveryTurnId = clean(delivery.turnId);
+  const inputTurnId = clean(input.turnId);
+  const deliveryParentMessageId = clean(delivery.parentMessageId);
+  const inputParentMessageId = clean(input.parentMessageId);
+  return Boolean(
+    (deliveryTurnId && inputTurnId && deliveryTurnId === inputTurnId) ||
+    (deliveryParentMessageId && inputParentMessageId && deliveryParentMessageId === inputParentMessageId)
+  );
+}
+
+async function coalesceDeliveredDuplicate(thread, runtime, current, input = {}, env = process.env) {
+  const messageId = clean(input.messageId);
+  if (!deliveredDuplicateMatches(current, input) || clean(current?.messageId) === messageId) return null;
+  const at = nowIso();
+  const finalDelivery = {
+    ...current,
+    supersededMessageIds: uniqueStrings([...(current.supersededMessageIds || []), messageId]),
+    updatedAt: at,
+  };
+  const updated = await updateThread(thread.id, { runtime: { ...runtime, finalDelivery } }, env);
+  await appendEvent({
+    type: "runtime_final_delivery_duplicate_coalesced",
+    threadId: thread.id,
+    messageId,
+    canonicalMessageId: current.messageId,
+    turnId: current.turnId || clean(input.turnId) || null,
+    runtimeGeneration: current.runtimeGeneration || clean(input.runtimeGeneration) || null,
+  }, env).catch(() => {});
+  return {
+    ok: true,
+    pending: false,
+    acknowledged: true,
+    recorded: false,
+    duplicate: true,
+    superseded: true,
+    reason: "final_delivery_already_delivered",
+    finalDelivery: updated.runtime?.finalDelivery || finalDelivery,
+    thread: updated,
+  };
+}
+
 export function runtimeFinalDeliveryPending(thread = {}, turnId = "") {
   const delivery = thread?.runtime?.finalDelivery || null;
   if (!delivery || clean(delivery.status) !== "pending") return false;
@@ -60,6 +133,8 @@ export async function markRuntimeFinalDeliveryPending(threadId, input = {}, env 
   if (clean(current?.messageId) === messageId && clean(current?.status) === "delivered") {
     return { ok: true, pending: false, duplicate: true, finalDelivery: current, thread };
   }
+  const coalesced = await coalesceDeliveredDuplicate(thread, runtime, current, input, env);
+  if (coalesced) return coalesced;
   const at = nowIso();
   const finalDelivery = {
     messageId,
@@ -118,7 +193,12 @@ export async function acknowledgeRuntimeFinalDelivery(threadId, input = {}, env 
       return { ok: false, acknowledged: false, reason: match.reason };
     }
   }
-  if (!matchesPendingDelivery(current, input)) return { ok: false, acknowledged: false, reason: "final_delivery_not_found" };
+  if (!matchesPendingDelivery(current, input)) {
+    if (deliveredDuplicateMatches(current, input)) {
+      return { ok: true, acknowledged: true, duplicate: true, superseded: true, finalDelivery: current, thread };
+    }
+    return { ok: false, acknowledged: false, reason: "final_delivery_not_found" };
+  }
   if (clean(current.status) === "delivered") return { ok: true, acknowledged: true, duplicate: true, finalDelivery: current, thread };
   const at = clean(input.deliveredAt) || nowIso();
   const finalDelivery = {
@@ -177,7 +257,19 @@ export async function recordRuntimeFinalDeliveryFailure(threadId, input = {}, en
       return { ok: false, recorded: false, reason: match.reason };
     }
   }
-  if (!matchesPendingDelivery(current, input)) return { ok: false, recorded: false, reason: "final_delivery_not_found" };
+  if (!matchesPendingDelivery(current, input)) {
+    if (deliveredDuplicateMatches(current, input)) {
+      await appendEvent({
+        type: "runtime_final_delivery_duplicate_failure_suppressed",
+        threadId: thread.id,
+        messageId: clean(input.messageId) || null,
+        canonicalMessageId: current?.messageId || null,
+        turnId: current?.turnId || clean(input.turnId) || null,
+      }, env).catch(() => {});
+      return { ok: true, recorded: false, duplicate: true, superseded: true, reason: "final_delivery_already_delivered", finalDelivery: current, thread };
+    }
+    return { ok: false, recorded: false, reason: "final_delivery_not_found" };
+  }
   const at = nowIso();
   const status = clean(input.status || "failed_retryable");
   const finalDelivery = {
