@@ -4576,7 +4576,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     const candidate = parts[0] === "ops"
       ? String(parts[1] || "system")
       : parts[0] === "ng" && parts[1] === "ops" ? String(parts[2] || "system") : "system";
-    return ["system", "timers", "desktops", "models", "settings", "connectors", "users", "waitlist", "audit"].includes(candidate) ? candidate as ToolsView : "system";
+    return ["system", "timers", "desktops", "models", "settings", "connectors", "mailboxes", "users", "waitlist", "audit"].includes(candidate) ? candidate as ToolsView : "system";
   }
 
   private normalizeLegacyRoutePath(): void {

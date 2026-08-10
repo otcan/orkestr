@@ -2,13 +2,9 @@ import { randomUUID } from "node:crypto";
 import { policyError } from "./policy.js";
 import { getThread } from "./threads.js";
 import { normalizeUserId } from "./users.js";
+import { THREAD_RESOURCE_PERMISSIONS, THREAD_RESOURCE_TYPES } from "./thread-resource-policy-constants.js";
 
-export const THREAD_RESOURCE_TYPES = Object.freeze({ desktop: "desktop", oxrm: "oxrm", mailbox: "mailbox" });
-export const THREAD_RESOURCE_PERMISSIONS = Object.freeze({
-  desktop: Object.freeze(["discover", "acquire", "operate", "share"]),
-  oxrm: Object.freeze(["discover", "read", "write", "execute"]),
-  mailbox: Object.freeze(["discover", "read", "subscribe", "manage"]),
-});
+export { THREAD_RESOURCE_PERMISSIONS, THREAD_RESOURCE_TYPES } from "./thread-resource-policy-constants.js";
 
 const truthy = new Set(["1", "true", "yes", "on"]);
 const modes = new Set(["off", "shadow", "enforce"]);
@@ -159,6 +155,10 @@ export function normalizeThreadResourcePolicyState(raw = {}, env = process.env) 
     mailboxListeners: Array.isArray(raw?.mailboxListeners) ? raw.mailboxListeners : [],
     mailboxDeliveries: Array.isArray(raw?.mailboxDeliveries) ? raw.mailboxDeliveries : [],
     mailboxPumpLeases: Array.isArray(raw?.mailboxPumpLeases) ? raw.mailboxPumpLeases : [],
+    mailboxRoutes: Array.isArray(raw?.mailboxRoutes) ? raw.mailboxRoutes : [],
+    mailboxSources: Array.isArray(raw?.mailboxSources) ? raw.mailboxSources : [],
+    mailboxRouteWork: Array.isArray(raw?.mailboxRouteWork) ? raw.mailboxRouteWork : [],
+    mailboxContexts: Array.isArray(raw?.mailboxContexts) ? raw.mailboxContexts : [],
     resourceSessions: (Array.isArray(raw?.resourceSessions) ? raw.resourceSessions : []).map((item) => ({
       id: clean(item?.id), jtiHash: clean(item?.jtiHash), tokenIdHash: clean(item?.tokenIdHash), bearerHash: clean(item?.bearerHash), audience: clean(item?.audience),
       scopes: Array.isArray(item?.scopes) ? item.scopes.map((scope) => clean(scope).toLowerCase()).filter(Boolean) : [],

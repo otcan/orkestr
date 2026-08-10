@@ -30,6 +30,14 @@ function positional(argv) {
     "--user-id",
     "--from",
     "--message-id",
+    "--mode",
+    "--approval",
+    "--route-id",
+    "--thread",
+    "--thread-id",
+    "--work-id",
+    "--context-id",
+    "--expected-policy-revision",
     "--provider",
     "--subject",
     "--text",
@@ -74,6 +82,9 @@ function mailboxCreateBody(argv = []) {
     ["--tenant-vm-id", "tenantVmId"],
     ["--vm", "tenantVmId"],
     ["--reason", "overrideReason"],
+    ["--thread", "threadId"],
+    ["--thread-id", "threadId"],
+    ["--mode", "mode"],
     ["--idempotency-key", "idempotencyKey"],
   ]) {
     const value = flagValue(argv, flag);
@@ -92,12 +103,41 @@ function mailboxActionBody(argv = []) {
     ["--status", "status"],
     ["--suffix", "suffix"],
     ["--reason", "overrideReason"],
+    ["--approval", "approval"],
   ]) {
     const value = flagValue(argv, flag);
     if (value) body[key] = value;
   }
   if (argv.includes("--confirm")) body.confirm = true;
   return body;
+}
+
+function mailboxRouteBody(argv = []) {
+  const body = mailboxActionBody(argv);
+  for (const [flag, key] of [
+    ["--thread", "threadId"],
+    ["--thread-id", "threadId"],
+    ["--mode", "mode"],
+    ["--expected-policy-revision", "expectedPolicyRevision"],
+  ]) {
+    const value = flagValue(argv, flag);
+    if (value) body[key] = value;
+  }
+  return body;
+}
+
+function writeRouteMutation(payload = {}, ctx, json = false) {
+  if (json) {
+    ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+    return;
+  }
+  if (payload.status === "approval_required") {
+    const challenge = payload.challenge || {};
+    const approval = challenge.approveCode || challenge.id || "<challenge-id>";
+    ctx.stdout.write(`Approval required: ${challenge.approveCommand || `orkestr security approve ${approval}`}\nRetry the same route command with --approval ${approval}.\n`);
+    return;
+  }
+  ctx.stdout.write(`${payload.route?.id || ""}\n`);
 }
 
 function mailboxIngestBody(argv = []) {
@@ -296,5 +336,65 @@ export async function mailboxesCommand(argv, ctx) {
     else ctx.stdout.write(formatMailboxRelayAuditTable([payload.relayAudit || {}]));
     return 0;
   }
-  throw new Error("Usage: orkestr mailboxes [list|status|create|verify|delete|rotate|ingest|retry|relay-audits|dead-letters|replay] [--json]");
+  if (subcommand === "routes" || subcommand === "route") {
+    const values = positional(rest);
+    const action = values[0] || "list";
+    const mailboxId = flagValue(rest, "--mailbox") || flagValue(rest, "--mailbox-id");
+    if (!mailboxId) throw new Error("Usage: orkestr mailboxes routes <list|status|create|move|revoke|retry|cancel|context-discard> --mailbox-id id [--json]");
+    const body = mailboxRouteBody(rest);
+    if (action === "list") {
+      const payload = await requestJson(`/api/mailboxes/${encodeURIComponent(mailboxId)}/routes`, ctx);
+      if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+      else ctx.stdout.write(`${(payload.routes || []).map((route) => `${route.id} ${route.mode} ${route.threadId} ${route.status}`).join("\n")}\n`);
+      return 0;
+    }
+    if (action === "status") {
+      const payload = await requestJson(`/api/mailboxes/${encodeURIComponent(mailboxId)}/route-status`, ctx);
+      if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+      else ctx.stdout.write(`${JSON.stringify(payload.status || {}, null, 2)}\n`);
+      return 0;
+    }
+    if (action === "create") {
+      const payload = await requestJson(`/api/mailboxes/${encodeURIComponent(mailboxId)}/routes`, { ...ctx, method: "POST", body });
+      writeRouteMutation(payload, ctx, json);
+      return 0;
+    }
+    if (action === "move") {
+      const routeId = flagValue(rest, "--route-id") || values[1];
+      if (!routeId) throw new Error("Usage: orkestr mailboxes routes move --mailbox-id id --route-id id --thread-id id [--mode mode] [--approval challenge-id]");
+      const payload = await requestJson(`/api/mailboxes/${encodeURIComponent(mailboxId)}/routes/${encodeURIComponent(routeId)}`, { ...ctx, method: "PATCH", body });
+      writeRouteMutation(payload, ctx, json);
+      return 0;
+    }
+    if (action === "revoke") {
+      const routeId = flagValue(rest, "--route-id") || values[1];
+      if (!routeId) throw new Error("Usage: orkestr mailboxes routes revoke --mailbox-id id --route-id id");
+      const payload = await requestJson(`/api/mailboxes/${encodeURIComponent(mailboxId)}/routes/${encodeURIComponent(routeId)}`, { ...ctx, method: "DELETE", body });
+      if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`); else ctx.stdout.write(`${payload.route?.status || "revoked"}\n`);
+      return 0;
+    }
+    if (action === "retry") {
+      const workId = flagValue(rest, "--work-id") || values[1];
+      if (!workId) throw new Error("Usage: orkestr mailboxes routes retry --mailbox-id id --work-id id");
+      const payload = await requestJson(`/api/mailboxes/${encodeURIComponent(mailboxId)}/route-work/${encodeURIComponent(workId)}/retry`, { ...ctx, method: "POST", body });
+      if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`); else ctx.stdout.write(`${payload.accepted || payload.delivered || 0}\n`);
+      return 0;
+    }
+    if (action === "cancel") {
+      const workId = flagValue(rest, "--work-id") || values[1];
+      if (!workId) throw new Error("Usage: orkestr mailboxes routes cancel --mailbox-id id --work-id id");
+      const payload = await requestJson(`/api/mailboxes/${encodeURIComponent(mailboxId)}/route-work/${encodeURIComponent(workId)}`, { ...ctx, method: "DELETE", body });
+      if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`); else ctx.stdout.write(`${payload.work?.state || "cancelled"}\n`);
+      return 0;
+    }
+    if (action === "context-discard") {
+      const contextId = flagValue(rest, "--context-id") || values[1];
+      if (!contextId) throw new Error("Usage: orkestr mailboxes routes context-discard --mailbox-id id --context-id id");
+      const payload = await requestJson(`/api/mailboxes/${encodeURIComponent(mailboxId)}/contexts/${encodeURIComponent(contextId)}`, { ...ctx, method: "DELETE", body });
+      if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`); else ctx.stdout.write("discarded\n");
+      return 0;
+    }
+    throw new Error("Usage: orkestr mailboxes routes <list|status|create|move|revoke|retry|cancel|context-discard> --mailbox-id id");
+  }
+  throw new Error("Usage: orkestr mailboxes [list|status|create|verify|delete|rotate|ingest|retry|relay-audits|dead-letters|replay|routes] [--json]");
 }

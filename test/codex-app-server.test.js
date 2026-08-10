@@ -22,7 +22,7 @@ import {
   stopCodexAppServerClients,
   syncCodexAppServerThreadMessages,
 } from "../packages/core/src/codex-app-server.js";
-import { migrateCodexThreadsToAppServer } from "../packages/core/src/codex-app-server-migration.js";
+import { migrateCodexRuntimeGenerationState, migrateCodexThreadsToAppServer } from "../packages/core/src/codex-app-server-migration.js";
 import {
   consumeThreadConnectorDeliverySignalCount,
   resetThreadRuntime,
@@ -37,6 +37,9 @@ import { deliverWhatsAppReplies } from "../packages/connectors/src/whatsapp.js";
 import { writeConnectorConfig } from "../packages/storage/src/config.js";
 import { readCodexAuthHealth } from "../packages/core/src/codex-auth-health.js";
 import { cancelTaskAgent, createTaskAgent } from "../packages/core/src/task-agents.js";
+import { CodexAppServerClient } from "../packages/core/src/codex-app-server-client.js";
+import { readConnectorOutbox } from "../packages/connectors/src/connector-outbox.js";
+import { reconcileCodexFinalProjection } from "../packages/core/src/codex-final-projection.js";
 
 function response(payload, ok = true, status = 200) {
   return {
@@ -469,6 +472,141 @@ test("Codex app-server coalesces rapid non-final text growth without a disk edit
   assert.equal(flushed.id, first.id);
   assert.equal(messagesAfterFlush.length, 1);
   assert.equal(messagesAfterFlush[0].text, "Working on it. Still checking the slow path. Persist this update.");
+});
+
+test("Codex app-server projects runtime-only current generations once with one final outbox job", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-runtime-generation-only-"));
+  const env = { ORKESTR_HOME: path.join(home, "orkestr") };
+  const generation = "runtime-only-generation";
+  const thread = await createThread({
+    id: "runtime-only-generation-thread",
+    name: "Runtime-only generation",
+    executor: { type: "codex" },
+    runtime: { runtimeKind: "codex-app-server", codexThreadId: generation, runtimeGeneration: generation },
+    binding: { connector: "whatsapp", chatId: "runtime-only-chat", outboundAccountId: "runtime-only-account" },
+  }, env);
+  const parent = await appendThreadMessage(thread.id, {
+    role: "user",
+    source: "whatsapp_inbound",
+    connector: "whatsapp",
+    chatId: "runtime-only-chat",
+    accountId: "runtime-only-account",
+    text: "Use the current runtime only",
+    state: "completed",
+    codexThreadId: generation,
+    codexTurnId: "runtime-only-turn",
+  }, env);
+  const client = new CodexAppServerClient({ env, home });
+  consumeThreadConnectorDeliverySignalCount();
+  const params = { threadId: generation, turnId: "runtime-only-turn", parentMessage: parent };
+  const item = { type: "agentMessage", id: "runtime-only-item", text: "Projected exactly once", phase: "final_answer" };
+
+  await client.projectItem(item, params, generation);
+  await client.projectItem(item, params, generation);
+
+  const messages = await listThreadMessages(thread.id, env);
+  const reply = messages.find((message) => message.text === "Projected exactly once");
+  const outbox = await readConnectorOutbox(env);
+  const stored = await getThread(thread.id, env);
+
+  assert.equal(messages.filter((message) => message.text === "Projected exactly once").length, 1);
+  assert.equal(reply?.codexThreadId, generation);
+  assert.equal(stored.runtime.finalDelivery.messageId, reply.id);
+  assert.equal(stored.runtime.finalDelivery.status, "pending");
+  assert.equal(outbox.jobs.filter((job) => job.sourceMessageId === reply.id && job.deliveryType === "final").length, 1);
+  assert.equal(consumeThreadConnectorDeliverySignalCount(), 1);
+});
+
+test("Codex app-server rejects and records notifications from a superseded durable generation", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-superseded-notification-"));
+  const env = { ORKESTR_HOME: path.join(home, "orkestr") };
+  const currentGeneration = "current-notification-generation";
+  const supersededGeneration = "superseded-notification-generation";
+  const thread = await createThread({
+    id: "superseded-notification-thread",
+    name: "Superseded notification",
+    codexThreadId: supersededGeneration,
+    executor: { type: "codex", codexThreadId: supersededGeneration },
+    runtime: {
+      runtimeKind: "codex-app-server",
+      codexThreadId: currentGeneration,
+      runtimeGeneration: currentGeneration,
+    },
+  }, env);
+  const client = new CodexAppServerClient({ env, home });
+
+  await client.handleNotification({
+    method: "thread/status/changed",
+    params: { threadId: supersededGeneration, status: { type: "active" } },
+  });
+
+  const stored = await getThread(thread.id, env);
+  assert.equal(stored.runtime.codexGenerationDiagnostics.unmappedNotifications, 1);
+  assert.equal(stored.runtime.codexGenerationDiagnostics.lastUnmappedNotificationGeneration, supersededGeneration);
+  assert.equal(stored.runtime.codexStatus, undefined);
+});
+
+test("Codex final projection converges an existing final after the pending and outbox stages were missed", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-final-projection-crash-"));
+  const env = { ORKESTR_HOME: path.join(home, "orkestr") };
+  const generation = "final-projection-generation";
+  const thread = await createThread({
+    id: "final-projection-crash-thread",
+    name: "Final projection crash boundary",
+    executor: { type: "codex", codexThreadId: generation },
+    runtime: { runtimeKind: "codex-app-server", codexThreadId: generation, runtimeGeneration: generation },
+    binding: { connector: "whatsapp", chatId: "final-projection-chat", outboundAccountId: "final-projection-account" },
+  }, env);
+  const message = await appendThreadMessage(thread.id, {
+    role: "assistant",
+    source: "codex-app-server",
+    phase: "final_answer",
+    state: "completed",
+    connector: "whatsapp",
+    chatId: "final-projection-chat",
+    accountId: "final-projection-account",
+    text: "Converge after the crash boundary.",
+    codexThreadId: generation,
+    codexTurnId: "final-projection-turn",
+  }, env);
+
+  await reconcileCodexFinalProjection({ thread, message, runtimeGeneration: generation, source: "crash_boundary", env });
+  await reconcileCodexFinalProjection({ thread, message, runtimeGeneration: generation, source: "crash_boundary", env });
+
+  const stored = await getThread(thread.id, env);
+  const outbox = await readConnectorOutbox(env);
+  assert.equal(stored.runtime.finalDelivery.messageId, message.id);
+  assert.equal(stored.runtime.finalDelivery.status, "pending");
+  assert.equal(outbox.jobs.filter((job) => job.sourceMessageId === message.id && job.deliveryType === "final").length, 1);
+});
+
+test("Codex generation migration invalidates stale rollout and final-delivery state", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-generation-migration-"));
+  const env = { ORKESTR_HOME: path.join(home, "orkestr") };
+  await createThread({
+    id: "generation-migration-thread",
+    name: "Generation migration",
+    executor: { type: "codex", codexThreadId: "old-generation" },
+    codexThreadId: "old-generation",
+    runtime: {
+      runtimeKind: "codex-app-server",
+      codexThreadId: "current-generation",
+      runtimeGeneration: "old-generation",
+      operatorRolloutPath: "/example/old-rollout.jsonl",
+      operatorRolloutOffset: 41,
+      operatorRolloutGeneration: "old-generation",
+      finalDelivery: { messageId: "old-final", runtimeGeneration: "old-generation", status: "pending" },
+    },
+  }, env);
+
+  const migration = await migrateCodexRuntimeGenerationState({}, env);
+  const thread = await getThread("generation-migration-thread", env);
+
+  assert.equal(migration.migrated, 1);
+  assert.equal(thread.runtime.runtimeGeneration, "current-generation");
+  assert.equal(thread.runtime.operatorRolloutPath, null);
+  assert.equal(thread.runtime.operatorRolloutOffset, 0);
+  assert.equal(thread.runtime.finalDelivery, null);
 });
 
 test("Codex app-server injects contained user policy on start and resume", async () => {
@@ -1220,6 +1358,61 @@ test("Codex app-server auto-accepts command approvals for YOLO threads", async (
     assert.notEqual(updated.state, "awaiting_approval");
     assert.equal(updated.runtime?.pendingRequest, undefined);
     assert.equal(messages.some((message) => message.phase === "awaiting_approval"), false);
+  } finally {
+    stopCodexAppServerClients();
+  }
+});
+
+test("Codex app-server rejects dynamic and MCP tool requests for mailbox-origin turns", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-mailbox-tool-boundary-"));
+  const fake = await createFakeCodex(home);
+  const env = {
+    ORKESTR_HOME: path.join(home, "orkestr"),
+    HOME: path.join(home, "runtime-home"),
+    PATH: `${fake.bin}${path.delimiter}${process.env.PATH || ""}`,
+    FAKE_CODEX_STATE: fake.stateFile,
+  };
+  try {
+    const thread = await createThread({
+      id: "app-server-mailbox-tool-boundary-thread",
+      name: "Mailbox Tool Boundary Thread",
+      cwd: home,
+      executorId: "codex",
+      executor: { type: "codex" },
+    }, env);
+    const started = await startCodexAppServerThread(thread, env);
+    const client = await getCodexAppServerClient({ env, home: env.HOME });
+    const parent = await appendThreadMessage(started.thread.id, {
+      role: "user",
+      source: "mailbox_route",
+      state: "queued",
+      text: "Untrusted inbound mailbox message",
+      mailboxExecutionPolicy: "read_only_no_network_no_connectors_no_messaging_no_auth_no_browser_no_desktop",
+    }, env);
+    const codexThreadId = started.thread.executor.codexThreadId;
+    client.rememberTurnParent(codexThreadId, "mailbox-turn", parent);
+    const writes = [];
+    client.write = (payload) => writes.push(payload);
+
+    await client.handleServerRequest({
+      id: 91,
+      method: "item/tool/call",
+      params: { threadId: codexThreadId, turnId: "mailbox-turn", callId: "connector-call", namespace: "codex_apps", tool: "send_email", arguments: {} },
+    });
+    await client.handleServerRequest({
+      id: 92,
+      method: "mcpServer/elicitation/request",
+      params: { threadId: codexThreadId, turnId: "mailbox-turn", serverName: "codex_apps", mode: "form", requestedSchema: { type: "object" } },
+    });
+
+    assert.deepEqual(writes, [
+      { id: 91, error: { code: -32000, message: "Blocked by the mailbox-origin read-only tool policy." } },
+      { id: 92, error: { code: -32000, message: "Blocked by the mailbox-origin read-only tool policy." } },
+    ]);
+    assert.equal(client.pendingRequests.has("91"), false);
+    assert.equal(client.pendingRequests.has("92"), false);
+    const messages = await listThreadMessages(started.thread.id, env);
+    assert.equal(messages.some((message) => message.phase === "awaiting_approval" || message.phase === "need_input"), false);
   } finally {
     stopCodexAppServerClients();
   }
@@ -4227,15 +4420,22 @@ test("Codex app-server history hydration projects WhatsApp final replies", async
   };
 
   const result = await hydrateCodexAppServerThreadMessages(thread, codexThread, env);
+  await hydrateCodexAppServerThreadMessages(thread, codexThread, env);
   const messages = await listThreadMessages(thread.id, env);
   const reply = messages.find((message) => message.role === "assistant" && message.text === "slice ok");
+  const stored = await getThread(thread.id, env);
+  const outbox = await readConnectorOutbox(env);
 
   assert.equal(result.created, 1);
+  assert.equal(messages.filter((message) => message.id === reply?.id).length, 1);
   assert.equal(reply?.source, "codex-app-server-import");
   assert.equal(reply?.parentMessageId, input.id);
   assert.equal(reply?.connector, "whatsapp");
   assert.equal(reply?.chatId, "chat-history-wa");
   assert.equal(reply?.accountId, "wa-history");
+  assert.equal(stored.runtime.finalDelivery.messageId, reply.id);
+  assert.equal(stored.runtime.finalDelivery.status, "pending");
+  assert.equal(outbox.jobs.filter((job) => job.sourceMessageId === reply.id && job.deliveryType === "final").length, 1);
   assert.equal(consumeThreadConnectorDeliverySignalCount(), 1);
 });
 
@@ -4580,13 +4780,27 @@ test("Codex app-server safe reset checkpoints and starts a fresh thread", async 
     const started = await startCodexAppServerThread(thread, env);
     await appendThreadMessage(started.thread.id, { role: "user", text: "Important active task", state: "completed" }, env);
     await appendThreadMessage(started.thread.id, { role: "assistant", phase: "final_answer", text: "Important result", state: "completed" }, env);
+    const oldRolloutPath = path.join(home, "old-generation-rollout.jsonl");
     await updateThread(started.thread.id, {
       state: "working",
+      codexRolloutPath: oldRolloutPath,
+      codexRolloutGeneration: started.thread.codexThreadId,
+      executor: {
+        ...(started.thread.executor || {}),
+        metadata: {
+          ...(started.thread.executor?.metadata || {}),
+          codexRolloutPath: oldRolloutPath,
+          codexRolloutGeneration: started.thread.codexThreadId,
+        },
+      },
       runtime: {
         ...(started.thread.runtime || {}),
         runtimeKind: "codex-app-server",
         state: "working",
         activeTurnId: "active-turn",
+        operatorRolloutPath: oldRolloutPath,
+        operatorRolloutGeneration: started.thread.codexThreadId,
+        operatorRolloutOffset: 42,
       },
     }, env);
     await markAppServerTurnActive(started.thread, env);
@@ -4604,6 +4818,13 @@ test("Codex app-server safe reset checkpoints and starts a fresh thread", async 
     assert.notEqual(reset.newCodexThreadId, oldCodexThreadId);
     assert.equal(resetThread.codexThreadId, reset.newCodexThreadId);
     assert.equal(resetThread.executor.metadata.lastSafeReset.codexThreadId, oldCodexThreadId);
+    assert.equal(resetThread.codexRolloutPath, null);
+    assert.equal(resetThread.codexRolloutGeneration, null);
+    assert.equal(resetThread.executor.metadata.codexRolloutPath, null);
+    assert.equal(resetThread.executor.metadata.codexRolloutGeneration, null);
+    assert.equal(resetThread.runtime.operatorRolloutPath, null);
+    assert.equal(resetThread.runtime.operatorRolloutGeneration, null);
+    assert.equal(resetThread.runtime.operatorRolloutOffset, 0);
     assert.match(checkpoint, /Important active task/);
     assert.match(checkpoint, /Important result/);
     assert.equal(rawState.calls.filter((call) => call.method === "thread\/start").length, 2);

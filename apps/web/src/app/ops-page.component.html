@@ -24,6 +24,10 @@
     <ork-ops-waitlist></ork-ops-waitlist>
   }
 
+  @if (toolsView === "mailboxes") {
+    <ork-mailbox-routes-panel></ork-mailbox-routes-panel>
+  }
+
   @if (toolsView === "broker") {
     <div class="ops-grid">
       <article class="ops-card">

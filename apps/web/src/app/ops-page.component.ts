@@ -3,9 +3,10 @@ import { ChangeDetectorRef, Component, EventEmitter, Input, OnDestroy, OnInit, O
 import { FormsModule } from "@angular/forms";
 import { firstValueFrom } from "rxjs";
 import { Agent, AgentTemplate, ApiService, BrowserSession, ConnectorStatus, DesktopLeaseRecord, DesktopShareRecord, EventArchive, EventRecord, EventStorageStatus, OrkestrUser, OutlookOAuthPollResponse, ReleaseInstance, ReleaseInstancesResponse, ReleaseRolloutResponse, SecureSecretMetadata, SecurityChallenge, SecuritySession, SetupStatus, TenantVm, TimerDoctorResponse, TimerRecord, ThreadSummary, UserIdentity, UserOutlookOAuthStartResponse, VersionResponse, WatcherAlert, WhatsAppDoctorAccount, WhatsAppDoctorBinding, WhatsAppDoctorResponse, WhatsAppOutboxJob } from "./api.service";
+import { MailboxRoutesPanelComponent } from "./mailbox-routes-panel.component";
 import { OpsWaitlistComponent } from "./ops-waitlist.component";
 
-export type ToolsView = "system" | "broker" | "timers" | "desktops" | "models" | "settings" | "connectors" | "users" | "waitlist" | "audit";
+export type ToolsView = "system" | "broker" | "timers" | "desktops" | "models" | "settings" | "connectors" | "mailboxes" | "users" | "waitlist" | "audit";
 type MailIdentityProvider = "gmail" | "outlook";
 type ToolTabKind = "oss-core" | "oss-optional" | "managed";
 
@@ -48,7 +49,7 @@ interface BrokerSavedView {
 
 @Component({
   selector: "ork-ops-page",
-  imports: [DatePipe, FormsModule, OpsWaitlistComponent],
+  imports: [DatePipe, FormsModule, MailboxRoutesPanelComponent, OpsWaitlistComponent],
   templateUrl: "./ops-page.component.html",
 })
 export class OpsPageComponent implements OnInit, OnDestroy {
@@ -67,6 +68,7 @@ export class OpsPageComponent implements OnInit, OnDestroy {
     { id: "models", label: "Models", kind: "oss-optional" },
     { id: "settings", label: "Overview", kind: "oss-core" },
     { id: "connectors", label: "Connectors", kind: "oss-optional" },
+    { id: "mailboxes", label: "Mailboxes", kind: "oss-optional" },
     { id: "users", label: "Users", kind: "managed" },
     { id: "waitlist", label: "Waitlist", kind: "managed" },
     { id: "audit", label: "Audit", kind: "oss-core" },

@@ -24,7 +24,8 @@ import {
   turnIdFor,
 } from "../../core/src/router-traces.js";
 import { recordWatcherAlert } from "../../core/src/watcher-alerts.js";
-import { appendThreadMessage, createThreadForPrincipal, enqueueThreadInputForPrincipal, getThread, listThreadMessages, listThreads, listThreadsForPrincipal, updateThread, updateThreadMessage } from "../../core/src/threads.js";
+import { appendThreadMessage, createThreadForPrincipal, enqueueThreadInputForPrincipal, getThread, getThreadMessage, listThreadMessages, listThreads, listThreadsForPrincipal, updateThread, updateThreadMessage } from "../../core/src/threads.js";
+import { resolveCurrentCodexGeneration } from "../../core/src/codex-generation.js";
 import { adminUserId, findOrCreateExternalUser, getUser, normalizeUserId } from "../../core/src/users.js";
 import { dataPaths, ensureDataDirs } from "../../storage/src/paths.js";
 import { readConnectorConfig } from "../../storage/src/config.js";
@@ -3109,6 +3110,41 @@ async function sendWhatsAppOutboundCandidate(input = {}) {
   });
 }
 
+function finalProjectionGeneration(message = {}, outboxJob = {}) {
+  return pickString(
+    outboxJob?.metadata?.runtimeGeneration,
+    message?.finalProjectionRuntimeGeneration,
+    message?.codexThreadId,
+    message?.executorThreadId,
+  );
+}
+
+async function supersededCodexFinalDeliveryFence({ threadId, messageId, message, outboxJob, env } = {}) {
+  const observedGeneration = finalProjectionGeneration(message, outboxJob);
+  if (!threadId || !observedGeneration) return { suppressed: false };
+  const currentThread = await getThread(threadId, env).catch(() => null);
+  if (!currentThread) return { suppressed: false };
+  const currentMessage = messageId
+    ? await getThreadMessage(threadId, messageId, env).catch(() => null)
+    : null;
+  const resolved = resolveCurrentCodexGeneration(currentThread);
+  const messageGeneration = finalProjectionGeneration(currentMessage || message, outboxJob);
+  const expectedGeneration = resolved.id || "";
+  const resetGeneration = pickString(currentThread?.runtime?.safeReset?.codexThreadId);
+  const stale = resolved.ambiguous ||
+    (expectedGeneration && messageGeneration !== expectedGeneration) ||
+    (!expectedGeneration && resetGeneration && messageGeneration === resetGeneration);
+  if (!stale) return { suppressed: false };
+  return {
+    suppressed: true,
+    reason: resolved.ambiguous
+      ? "ambiguous_codex_generation"
+      : "superseded_codex_generation",
+    observedGeneration: messageGeneration,
+    expectedGeneration: expectedGeneration || null,
+  };
+}
+
 async function sendClaimedWhatsAppText({
   state,
   outboundDeliveries,
@@ -3149,7 +3185,11 @@ async function sendClaimedWhatsAppText({
     agentId: agentId || "",
     sourceEventId: pickString(message?.eventId, message?.sourceEventId, sourceMessageId, messageId),
     sourceMessageId: pickString(sourceMessageId, messageId),
-    sourceRevision: String(messageSourceRevision(message)),
+    sourceRevision: String(
+      deliveryType === "final" && pickString(message?.finalProjectionSourceRevision)
+        ? message.finalProjectionSourceRevision
+        : messageSourceRevision(message)
+    ),
     deliveryType,
     payload: {
       text,
@@ -3165,6 +3205,7 @@ async function sendClaimedWhatsAppText({
       routerTraceId,
       turnId,
       routerOutboxId: intent?.outboxId || "",
+      ...(finalProjectionGeneration(message) ? { runtimeGeneration: finalProjectionGeneration(message) } : {}),
     },
   }, env);
   if (connectorOutboxTerminalState(outboxResult.job?.state)) {
@@ -3233,6 +3274,83 @@ async function sendClaimedWhatsAppText({
       terminal: true,
     }, env).catch(() => {});
     return { skipped: { reason: `connector_outbox_${outboxResult.job.state}` } };
+  }
+  if (deliveryType === "final") {
+    const fence = await supersededCodexFinalDeliveryFence({
+      threadId,
+      messageId,
+      message,
+      outboxJob: outboxResult.job,
+      env,
+    });
+    if (fence.suppressed) {
+      const now = new Date().toISOString();
+      await markConnectorOutboxJob(outboxResult.job.id, {
+        state: "suppressed",
+        skippedAt: now,
+        terminalAt: now,
+        error: fence.reason,
+        metadata: {
+          ...(outboxResult.job.metadata || {}),
+          generationFence: {
+            observedGeneration: fence.observedGeneration,
+            expectedGeneration: fence.expectedGeneration,
+            suppressedAt: now,
+          },
+        },
+      }, env).catch(() => null);
+      if (intent?.intentId) {
+        const marked = markWhatsAppOutboundIntent(outboundIntents, intent.intentId, {
+          status: "skipped",
+          skippedAt: now,
+          error: fence.reason,
+        });
+        outboundIntents.splice(0, outboundIntents.length, ...marked);
+        state.outboundIntents = outboundIntents;
+        await writeWhatsAppState(state, env);
+      }
+      await patchAssistantMirrorDeliveryState({
+        kind,
+        agentId,
+        threadId,
+        message,
+        deliveryType,
+        patch: {
+          mirrorOutboxJobId: outboxResult.job.id,
+          deliveryState: "suppressed",
+          deliveryLastAttemptAt: now,
+          deliveryError: fence.reason,
+        },
+        env,
+      });
+      await markRouterOutboxItem(intent?.outboxId, { status: "skipped", error: fence.reason }, env).catch(() => null);
+      await appendEvent({
+        type: "whatsapp_final_delivery_generation_suppressed",
+        threadId: threadId || null,
+        messageId: messageId || null,
+        outboxJobId: outboxResult.job.id,
+        observedGeneration: fence.observedGeneration || null,
+        expectedGeneration: fence.expectedGeneration,
+        reason: fence.reason,
+      }, env).catch(() => null);
+      await recordRouterTraceEvent({
+        routerTraceId,
+        turnId,
+        connector: "whatsapp",
+        phase: "skipped",
+        reason: fence.reason,
+        threadId,
+        messageId,
+        chatId,
+        accountId,
+        deliveryType,
+        routerUpdateType,
+        outboxId: intent?.outboxId,
+        connectorOutboxJobId: outboxResult.job.id,
+        terminal: true,
+      }, env).catch(() => {});
+      return { skipped: { reason: fence.reason } };
+    }
   }
   const staleRetryable = staleRetryableWhatsAppConnectorOutboxJob(outboxResult.job, env);
   if (stalePendingWhatsAppConnectorOutboxJob(outboxResult.job, env) || staleRetryable) {
