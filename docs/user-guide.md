@@ -206,6 +206,38 @@ would-deny decisions during rollout; switch to `enforce` after grants are
 reviewed. Legacy share links without a thread, boundary, and grant revision are
 revoked in enforcement mode.
 
+### Brokered Desktop Capabilities
+
+In desktop `enforce` mode, normal API and agent inventory projections redact
+browser control endpoints, profile paths, and noVNC/CDP details. A caller first
+selects its thread; the server resolves exactly one active desktop grant for
+that thread and creates an exclusive, finite, heartbeat-current lease. It may
+then issue a short-lived, single-use capability bound to the authenticated
+principal, exact thread, current lease fencing version, runtime identity,
+resource generation, and grant revision. Callers cannot use a raw endpoint or
+select a different desktop with that capability. Replays, expired capabilities,
+replaced leases, stale grants, and invalid attestations are denied before a
+browser connection is made and produce redacted audit decisions.
+
+External-account desktop registration additionally requires a private-overlay
+attestation record keyed by the server-resolved resource ID. The record is an
+opaque, verified account-reference and isolation-evidence hash with matching
+resource owner and boundary, verifier, issue/expiry timestamps, and a
+visible-noVNC requirement when applicable. Do not put account names, VM
+bindings, ports, profiles, endpoint URLs, or attestation values in this
+repository or public environment files. For an attested external LinkedIn
+desktop, CDP click/type/navigate operations are denied; writes remain an
+attended visible noVNC workflow. Generic managed desktops, such as Gmail,
+retain their existing brokered operations when their resource policy does not
+require visible noVNC interaction.
+
+`off` and `shadow` retain migration compatibility and do not require a desktop
+capability or attestation. Before enabling `enforce`, private operators must
+deploy the broker/attestation source, register each account lifecycle, migrate
+explicit per-thread grants, verify exclusive tenant/desktop isolation, and
+remove legacy shared endpoint paths. Those private rollout artifacts are not
+part of Orkestr OSS.
+
 ### Thread Resource Policy Rollout
 
 Desktop grants are backed by the transactional thread-resource policy database,

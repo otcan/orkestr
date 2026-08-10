@@ -6,6 +6,9 @@ import { desktopLeaseStore, normalizeDesktopSlug } from "./desktop-lease-store.j
 
 export { normalizeDesktopSlug } from "./desktop-lease-store.js";
 
+const DEFAULT_LEASE_STALE_MS = 15 * 60_000;
+const MAX_HEARTBEAT_FUTURE_SKEW_MS = 60_000;
+
 function nowIso() {
   return new Date().toISOString();
 }
@@ -21,6 +24,11 @@ function parseLeaseDurationMs(value, fallbackMs) {
   const unit = match[2] || "ms";
   const factor = { ms: 1, s: 1000, m: 60_000, h: 60 * 60_000, d: 24 * 60 * 60_000 }[unit] || 1;
   return Math.max(0, Math.round(amount * factor));
+}
+
+function leaseStaleAfterMs(env = process.env) {
+  const configured = Number(env.ORKESTR_DESKTOP_LEASE_STALE_MS);
+  return Number.isFinite(configured) && configured > 0 ? configured : DEFAULT_LEASE_STALE_MS;
 }
 
 function threadAllowsLeaseSteal(thread) {
@@ -165,7 +173,7 @@ export function publicDesktopLease(lease, threadsById = new Map(), nowMs = Date.
   const thread = threadsById.get(lease.threadId) || null;
   const heartbeatMs = Date.parse(lease.heartbeatAt || "");
   const expiresMs = Date.parse(lease.expiresAt || "");
-  const staleAfterMs = Number(env.ORKESTR_DESKTOP_LEASE_STALE_MS || 15 * 60_000);
+  const staleAfterMs = leaseStaleAfterMs(env);
   const heartbeatAgeMs = Number.isFinite(heartbeatMs) ? Math.max(0, nowMs - heartbeatMs) : null;
   const expired = Number.isFinite(expiresMs) && expiresMs <= nowMs;
   const stale = heartbeatAgeMs != null && heartbeatAgeMs > staleAfterMs;
@@ -240,7 +248,46 @@ export async function assertDesktopLeaseForOperation(slug, env = process.env, op
     error.statusCode = lease ? 409 : 403;
     throw error;
   }
+  const nowMs = Date.now();
+  const expiresAtMs = Date.parse(lease.expiresAt || "");
+  if (!Number.isFinite(expiresAtMs)) {
+    const error = new Error("desktop_lease_expiry_invalid");
+    error.statusCode = 403;
+    throw error;
+  }
+  if (expiresAtMs <= nowMs) {
+    const error = new Error("desktop_lease_expired");
+    error.statusCode = 403;
+    throw error;
+  }
+  const heartbeatAtMs = Date.parse(lease.heartbeatAt || "");
+  if (!Number.isFinite(heartbeatAtMs) || heartbeatAtMs > nowMs + MAX_HEARTBEAT_FUTURE_SKEW_MS) {
+    const error = new Error("desktop_lease_heartbeat_invalid");
+    error.statusCode = 403;
+    throw error;
+  }
+  if (nowMs - heartbeatAtMs > leaseStaleAfterMs(env)) {
+    const error = new Error("desktop_lease_heartbeat_stale");
+    error.statusCode = 403;
+    throw error;
+  }
+  if (lease.mode !== "exclusive") {
+    const error = new Error("desktop_lease_must_be_exclusive");
+    error.statusCode = 409;
+    throw error;
+  }
+  if (options?.expectedLeaseId && lease.id !== String(options.expectedLeaseId)) {
+    const error = new Error("desktop_lease_replaced");
+    error.statusCode = 409;
+    throw error;
+  }
+  if (options?.expectedFencingVersion && Number(lease.fencingVersion) !== Number(options.expectedFencingVersion)) {
+    const error = new Error("desktop_lease_replaced");
+    error.statusCode = 409;
+    throw error;
+  }
   if (!fencingToken || lease.fencingToken !== fencingToken) {
+    if (options?.expectedLeaseId && !options?.fencingToken) return lease;
     const error = new Error(fencingToken ? "lease_fencing_token_invalid" : "lease_fencing_token_required");
     error.statusCode = 409;
     throw error;
@@ -267,15 +314,17 @@ export async function acquireDesktopLease(slug, payload = {}, env = process.env,
     error.statusCode = 403;
     throw error;
   }
-  if (
-    payload.force === true &&
-    desktopAccessMode(env) === "enforce" &&
-    options?.principal &&
-    !String(payload.reason || payload.breakGlassReason || "").trim()
-  ) {
-    const error = new Error("desktop_force_acquire_reason_required");
-    error.statusCode = 400;
-    throw error;
+  if (payload.force === true && desktopAccessMode(env) === "enforce") {
+    if (!isAdminPrincipal(options?.principal) || options?.breakGlass !== true) {
+      const error = new Error("desktop_force_acquire_break_glass_required");
+      error.statusCode = 403;
+      throw error;
+    }
+    if (!String(options?.breakGlassReason || payload.breakGlassReason || payload.reason || "").trim() || !String(options?.breakGlassChangeRef || payload.breakGlassChangeRef || payload.changeRef || "").trim()) {
+      const error = new Error("desktop_force_acquire_break_glass_evidence_required");
+      error.statusCode = 400;
+      throw error;
+    }
   }
   await assertDesktopAccess({
     principal: options?.principal,
@@ -288,7 +337,18 @@ export async function acquireDesktopLease(slug, payload = {}, env = process.env,
     breakGlassChangeRef: options?.breakGlassChangeRef || payload.breakGlassChangeRef || payload.changeRef || payload.changeReference,
     recentAuthAt: options?.recentAuthAt,
   }, env);
+  const requestedMode = String(payload.mode || "exclusive").trim();
+  if (desktopAccessMode(env) === "enforce" && requestedMode !== "exclusive") {
+    const error = new Error("desktop_lease_must_be_exclusive");
+    error.statusCode = 409;
+    throw error;
+  }
   const ttlMs = parseLeaseDurationMs(payload.ttlMs ?? payload.ttl ?? payload.expiresIn, Number(env.ORKESTR_DESKTOP_LEASE_TTL_MS || 4 * 60 * 60_000));
+  if (desktopAccessMode(env) === "enforce" && ttlMs <= 0) {
+    const error = new Error("desktop_lease_expiry_required");
+    error.statusCode = 400;
+    throw error;
+  }
   const now = nowIso();
   const expiresAt = ttlMs > 0 ? new Date(Date.parse(now) + ttlMs).toISOString() : null;
   const store = desktopLeaseStore(env);
@@ -299,7 +359,7 @@ export async function acquireDesktopLease(slug, payload = {}, env = process.env,
       threadId,
       codexThreadId: payload.codexThreadId,
       threadName: payload.threadName,
-      mode: payload.mode,
+      mode: requestedMode,
       purpose: payload.purpose,
       runId: payload.runId,
       acquiredAt: now,

@@ -8546,6 +8546,65 @@ test("thread message API hides adjacent duplicate rollout assistant records", as
   }
 });
 
+test("thread message API keeps a legacy epoch duplicate final in the current page", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-epoch-duplicate-api-"));
+  const priorHome = process.env.ORKESTR_HOME;
+  process.env.ORKESTR_HOME = home;
+  const server = await startServer({ port: 0, host: "127.0.0.1" });
+  const { port } = server.address();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  try {
+    const env = { ORKESTR_HOME: home };
+    const epochSeconds = "1786352641";
+    const epochMs = Number(epochSeconds) * 1000;
+    const expectedTimestamp = new Date(epochMs).toISOString();
+    const finalText = "Safe fixture final that must remain visible.";
+    await createThread({ id: "epoch-duplicate-api-thread", name: "Epoch Duplicate API Thread" }, env);
+    for (let index = 0; index < 100; index += 1) {
+      await appendThreadMessage("epoch-duplicate-api-thread", {
+        role: "assistant",
+        source: "fixture",
+        phase: "commentary",
+        text: `Earlier fixture update ${index}`,
+        createdAt: new Date(epochMs - (100 - index) * 1000).toISOString(),
+      }, env);
+    }
+    await appendThreadMessage("epoch-duplicate-api-thread", {
+      role: "assistant",
+      source: "codex-app-server",
+      phase: "final_answer",
+      text: finalText,
+      codexThreadId: "epoch-duplicate-codex-thread",
+      codexTurnId: "epoch-duplicate-turn",
+      codexItemId: "epoch-duplicate-item-legacy",
+      createdAt: epochSeconds,
+    }, env);
+    await appendThreadMessage("epoch-duplicate-api-thread", {
+      role: "assistant",
+      source: "codex-app-server",
+      phase: "final_answer",
+      text: finalText,
+      codexThreadId: "epoch-duplicate-codex-thread",
+      codexTurnId: "epoch-duplicate-turn",
+      codexItemId: "epoch-duplicate-item-iso",
+      createdAt: new Date(epochMs + 239).toISOString(),
+    }, env);
+
+    const listed = await fetch(`${baseUrl}/api/threads/epoch-duplicate-api-thread/messages`);
+    const payload = await listed.json();
+    const finals = payload.messages.filter((message) => message.text === finalText);
+
+    assert.equal(listed.status, 200);
+    assert.equal(finals.length, 1);
+    assert.equal(finals[0].timestamp, expectedTimestamp);
+    assert.ok(Number.isFinite(Date.parse(finals[0].timestamp)));
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    if (priorHome === undefined) delete process.env.ORKESTR_HOME;
+    else process.env.ORKESTR_HOME = priorHome;
+  }
+});
+
 test("thread message API keeps completed Codex info updates visible with final answer", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-final-api-"));
   const priorHome = process.env.ORKESTR_HOME;
