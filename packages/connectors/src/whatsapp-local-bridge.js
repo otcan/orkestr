@@ -18,6 +18,7 @@ import { enrichGmailTokenAccount, readGmailToken } from "./gmail.js";
 import { listHostNativeGmailAccounts, sendHostNativeGmailMessage } from "./gmail-host-native.js";
 import { connectorAuthStatus } from "./connector-auth.js";
 import { listConnectorScopePaths } from "./connector-storage.js";
+import { claimWhatsAppInboundFailureNotice } from "./whatsapp-inbound-notice-ledger.js";
 import {
   bindingAccountIds as whatsappBindingAccountIds,
   whatsappBindingIsRouteEligible,
@@ -3754,6 +3755,17 @@ async function sendInboundRoutingFailureNotice({ accountId = "", chatId = "", ev
   if (!selectedAccountId || !id || !sourceEventId) return { sent: false, reason: "missing_target" };
   if (!inboundRoutingFailureShouldNotify(error)) return { sent: false, reason: "routing_failure_not_user_notifiable" };
   if (hasInboundFailureNotice(selectedAccountId, sourceEventId)) return { sent: false, reason: "already_notified" };
+  const failure = routingFailureFromError(error);
+  const claimed = await claimWhatsAppInboundFailureNotice({
+    accountId: selectedAccountId,
+    eventId: sourceEventId,
+    chatId: id,
+    failureCode: failure.code || failure.reason,
+  }, env);
+  if (!claimed.claimed) {
+    rememberInboundFailureNotice(selectedAccountId, sourceEventId);
+    return { sent: false, reason: claimed.reason || "already_notified" };
+  }
   const text = inboundRoutingFailureNoticeText(error, { env });
   rememberInboundFailureNotice(selectedAccountId, sourceEventId);
   try {

@@ -3,6 +3,7 @@ import { updateThread } from "../../core/src/threads.js";
 import { readConnectorConfig } from "../../storage/src/config.js";
 import { bridgeRequestHeaders, configuredWhatsAppBridgeUrl, whatsappBridgeEndpointUrl } from "./whatsapp.js";
 import { createLocalWhatsAppChat, normalizeGroupParticipantIds } from "./whatsapp-local-bridge.js";
+import { dualWriteWhatsAppParticipantIdentity } from "./whatsapp-participant-identity.js";
 
 function clean(value) {
   return String(value || "").trim();
@@ -18,10 +19,10 @@ function threadGroupDisplayName(thread = {}, options = {}) {
   return clean(options.name || options.displayName || thread.binding?.displayName || thread.bindingName || thread.name || thread.title || thread.id);
 }
 
-function threadGroupBinding(thread = {}, group = {}, options = {}) {
+function threadGroupBinding(thread = {}, group = {}, options = {}, env = process.env) {
   const current = thread.binding && typeof thread.binding === "object" ? thread.binding : {};
   const displayName = threadGroupDisplayName(thread, options);
-  return {
+  return dualWriteWhatsAppParticipantIdentity({
     ...current,
     connector: "whatsapp",
     chatId: clean(group.chat?.id || group.chatId || current.chatId),
@@ -42,7 +43,7 @@ function threadGroupBinding(thread = {}, group = {}, options = {}) {
     ownerAuthorTags: Array.isArray(current.ownerAuthorTags) ? current.ownerAuthorTags : [],
     trustedOverrideAuthorTags: Array.isArray(current.trustedOverrideAuthorTags) ? current.trustedOverrideAuthorTags : [],
     updatedAt: new Date().toISOString(),
-  };
+  }, env);
 }
 
 async function createExternalWhatsAppChat(options = {}, env = process.env, fetchImpl = fetch) {
@@ -89,7 +90,7 @@ export async function createAndBindWhatsAppThreadGroup(thread, options = {}, env
   const current = thread.binding && typeof thread.binding === "object" ? thread.binding : {};
   const forceNew = options.forceNew === true;
   if (clean(current.chatId) && !forceNew) {
-    const binding = threadGroupBinding(thread, { chat: { id: current.chatId }, senderAccountId: current.senderAccountId, responderAccountId: current.responderAccountId }, options);
+    const binding = threadGroupBinding(thread, { chat: { id: current.chatId }, senderAccountId: current.senderAccountId, responderAccountId: current.responderAccountId }, options, env);
     const updated = await (dependencies.updateThread || updateThread)(thread.id, { binding, bindingName: binding.displayName }, env);
     return {
       ok: true,
@@ -112,7 +113,7 @@ export async function createAndBindWhatsAppThreadGroup(thread, options = {}, env
     generatePicture: optionalBoolean(options.generatePicture, true),
     env,
   });
-  const binding = threadGroupBinding(thread, group, options);
+  const binding = threadGroupBinding(thread, group, options, env);
   if (!binding.chatId) {
     const error = new Error("whatsapp_chat_create_failed");
     error.statusCode = 502;

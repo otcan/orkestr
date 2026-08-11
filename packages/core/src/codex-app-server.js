@@ -735,7 +735,7 @@ async function applyCodexAppServerThreadSettings(thread, runtimePatch = {}, pers
 async function completeCodexAppServerSettingsCommand(thread, message, parsedCommand, client, env = process.env) {
   let resolved;
   try {
-    if (externalChatInput(message) && clean(message.senderTrustLevel).toLowerCase() !== "owner") {
+    if (externalChatInput(message) && clean(message.senderEffectiveRole || message.senderTrustLevel).toLowerCase() !== "owner") {
       resolved = { ok: false, error: "Only a thread owner or Orkestr admin can change Codex settings." };
     } else if (threadUsesRestrictedCodexPolicy(thread, env)) {
       resolved = { ok: false, error: "Codex settings for this contained thread are managed by tenant policy." };

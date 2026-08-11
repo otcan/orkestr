@@ -3,6 +3,7 @@ import {
   generatedSingleAccountGroupBindingCanTrustGroupBoundary,
   participantIdSet,
 } from "./whatsapp-inbound-routing.js";
+import { resolveWhatsAppParticipantIdentity } from "./whatsapp-participant-identity.js";
 
 function pickString(...values) {
   for (const value of values) {
@@ -143,6 +144,69 @@ export function evaluateWhatsAppInboundSecurity({
     bindingId: bindingId(binding),
     threadId: pickString(thread.id, binding.threadId),
   };
+  const identity = resolveWhatsAppParticipantIdentity(binding, {
+    accountId: participant.accountId,
+    senderId: from,
+    fromMe,
+  }, env);
+  if (identity.enabled) {
+    const effectiveRole = identity.effectiveRole || "unknown";
+    const evidence = {
+      trustLevel: effectiveRole,
+      effectiveRole,
+      policyMode: policy.mode,
+      participant,
+      classified,
+      participantIdentityId: identity.identityId || "",
+      bindingRevision: identity.revision || pickString(binding.updatedAt),
+      policyRevision: pickString(binding.inboundSecurity?.revision, binding.policyRevision, identity.revision),
+      identityResolutionReason: identity.reason || "",
+    };
+    if (identity.valid === false) {
+      return {
+        allowed: false,
+        action: "deny",
+        reason: "participant_identity_invalid",
+        ...evidence,
+        retryable: false,
+        remediation: identity.remediation || "Repair the WhatsApp participant identity binding, then use explicit replay.",
+        safeMessage: "This WhatsApp binding has an invalid participant identity configuration.",
+      };
+    }
+    if (effectiveRole === "blocked") {
+      return {
+        allowed: false,
+        action: "deny",
+        reason: "blocked_participant",
+        ...evidence,
+        retryable: false,
+        remediation: "Remove the explicit blocked grant only after verifying the participant identity, then use explicit replay.",
+        safeMessage: "This WhatsApp sender is blocked for this Orkestr chat.",
+      };
+    }
+    if (effectiveRole === "owner") return { allowed: true, ...evidence };
+    if (effectiveRole === "trusted") {
+      if (!classified.malicious) return { allowed: true, ...evidence };
+      return {
+        allowed: false,
+        action: policy.autoBlockEnabled ? "block" : "deny",
+        reason: classified.reason || "suspicious_trusted_request",
+        ...evidence,
+        retryable: false,
+        remediation: "Verify an owner alias and grant owner explicitly only if this sender is the account owner, then use explicit replay.",
+        safeMessage: "This WhatsApp request was denied because it is outside the allowed Orkestr context.",
+      };
+    }
+    return {
+      allowed: false,
+      action: "deny",
+      reason: "unknown_sender",
+      ...evidence,
+      retryable: false,
+      remediation: "Add a verified participant identity and explicit binding grant, then use explicit replay.",
+      safeMessage: "This WhatsApp sender is not allowed to control this Orkestr chat.",
+    };
+  }
 
   if (senderMatches(blockedIds, from)) {
     return {

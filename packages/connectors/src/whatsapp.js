@@ -982,6 +982,11 @@ function whatsappInboundSecurityError(decision = {}, context = {}) {
     chatId: pickString(context.chatId, decision.participant?.chatId),
     principalKind: "whatsapp-participant",
     principalId: pickString(decision.participant?.senderId, decision.participant?.participantId),
+    classification: pickString(decision.classified?.reason),
+    effectiveRole: pickString(decision.effectiveRole, decision.trustLevel, "unknown"),
+    policyRevision: pickString(decision.policyRevision),
+    bindingRevision: pickString(decision.bindingRevision),
+    remediation: pickString(decision.remediation) || "Verify the participant binding and use explicit replay after authorization is corrected.",
   };
   return error;
 }
@@ -2067,6 +2072,7 @@ async function routeThread(input, config, env) {
     from,
     fromMe,
     aclContext: input.machineAuthContext || null,
+    env,
   }));
   if (matchedThreads.length > 1) {
     throw routingConflict("wa_binding_ambiguous", {
@@ -4362,6 +4368,10 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
     event.eventId === eventId || sameWhatsAppSourceEvent(event, incomingEventIdentity)
   );
   if (existing) {
+    const duplicateRejected = ["inbound_security_denied", "inbound_security_blocked"].includes(pickString(existing.ignoredReason));
+    const duplicateReason = duplicateRejected
+      ? "duplicate_of_rejection"
+      : existing.eventId === eventId ? "duplicate_event_id" : "duplicate_source_message";
     await recordRouterTraceEvent({
       routerTraceId: pickString(existing.routerTraceId, initialTraceId),
       turnId: pickString(existing.turnId, initialTurnId),
@@ -4372,8 +4382,15 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
       threadId: existing.threadId || null,
       messageId: existing.messageId,
       phase: "skipped",
-      reason: existing.eventId === eventId ? "duplicate_event_id" : "duplicate_source_message",
+      reason: duplicateReason,
       terminal: true,
+      failureCode: duplicateRejected ? "whatsapp_inbound_sender_denied" : "",
+      classification: pickString(existing.inboundSecurity?.classified?.reason),
+      effectiveRole: pickString(existing.inboundSecurity?.effectiveRole, existing.inboundSecurity?.trustLevel),
+      policyRevision: pickString(existing.inboundSecurity?.policyRevision),
+      bindingRevision: pickString(existing.inboundSecurity?.bindingRevision),
+      retryable: false,
+      remediation: pickString(existing.inboundSecurity?.remediation),
     }, env).catch(() => {});
     await appendEvent({
       type: "whatsapp_inbound_duplicate",
@@ -4383,10 +4400,14 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
       agentId: existing.agentId || null,
       threadId: existing.threadId || null,
       messageId: existing.messageId,
-      duplicateReason: existing.eventId === eventId ? "duplicate_event_id" : "duplicate_source_message",
+      duplicateReason,
+      outcome: duplicateRejected ? "duplicate_rejected" : "duplicate_accepted",
     }, env);
     return {
       duplicate: true,
+      rejected: duplicateRejected,
+      outcome: duplicateRejected ? "duplicate_rejected" : "duplicate_accepted",
+      failureCode: duplicateRejected ? "whatsapp_inbound_sender_denied" : "",
       event: existing,
       agentId: existing.agentId || null,
       threadId: existing.threadId || null,
@@ -4885,6 +4906,7 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
   messageInput.externalPrincipal = inboundSecurity.participant;
   messageInput.senderParticipantId = inboundSecurity.participant?.senderId || "";
   messageInput.senderTrustLevel = inboundSecurity.trustLevel || "unknown";
+  messageInput.senderEffectiveRole = inboundSecurity.effectiveRole || inboundSecurity.trustLevel || "unknown";
   messageInput.senderPolicyMode = inboundSecurity.policyMode || "";
   messageInput.securityClassification = inboundSecurity.classified || null;
   if (!inboundSecurity.allowed) {
@@ -4904,12 +4926,18 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
       attachments: Array.isArray(input.attachments) ? input.attachments : [],
       ...(inboundDedupeKey ? { inboundDedupeKey } : {}),
       ignoredReason: blocked ? "inbound_security_blocked" : "inbound_security_denied",
+      outcome: "rejected_terminal",
       inboundSecurity: {
         reason: inboundSecurity.reason,
         action: inboundSecurity.action || "deny",
         trustLevel: inboundSecurity.trustLevel,
+        effectiveRole: inboundSecurity.effectiveRole || inboundSecurity.trustLevel,
         policyMode: inboundSecurity.policyMode,
         classified: inboundSecurity.classified,
+        policyRevision: inboundSecurity.policyRevision || "",
+        bindingRevision: inboundSecurity.bindingRevision || "",
+        retryable: false,
+        remediation: inboundSecurity.remediation || "Verify the participant binding and use explicit replay after authorization is corrected.",
       },
       receivedAt: pickString(input.timestamp, input.receivedAt) || new Date().toISOString(),
     };
@@ -4927,6 +4955,13 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
       phase: "skipped",
       reason: event.ignoredReason,
       terminal: true,
+      failureCode: "whatsapp_inbound_sender_denied",
+      classification: pickString(inboundSecurity.classified?.reason),
+      effectiveRole: pickString(inboundSecurity.effectiveRole, inboundSecurity.trustLevel, "unknown"),
+      policyRevision: pickString(inboundSecurity.policyRevision),
+      bindingRevision: pickString(inboundSecurity.bindingRevision),
+      retryable: false,
+      remediation: pickString(inboundSecurity.remediation) || "Verify the participant binding and use explicit replay after authorization is corrected.",
     }, env).catch(() => {});
     await appendEvent({
       type: blocked ? "whatsapp_inbound_security_blocked" : "whatsapp_inbound_security_denied",
@@ -4939,7 +4974,13 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
       from,
       reason: inboundSecurity.reason,
       trustLevel: inboundSecurity.trustLevel,
+      effectiveRole: inboundSecurity.effectiveRole || inboundSecurity.trustLevel,
       policyMode: inboundSecurity.policyMode,
+      classification: pickString(inboundSecurity.classified?.reason),
+      policyRevision: pickString(inboundSecurity.policyRevision),
+      bindingRevision: pickString(inboundSecurity.bindingRevision),
+      retryable: false,
+      remediation: pickString(inboundSecurity.remediation),
     }, env).catch(() => {});
     throw whatsappInboundSecurityError(inboundSecurity, {
       routerTraceId,

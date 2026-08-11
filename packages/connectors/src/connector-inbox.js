@@ -34,11 +34,28 @@ async function database(env = process.env) {
       error text,
       payload text not null,
       result text,
+      outcome text,
+      http_status integer,
+      retryable integer,
+      failure_code text,
+      replay_of_id text,
+      replay_id text,
       created_at text not null,
       updated_at text not null
     );
     create index if not exists idx_connector_inbox_state_next on orkestr_connector_inbox(state, next_attempt_at);
   `);
+  const columns = new Set(db.prepare("pragma table_info(orkestr_connector_inbox)").all().map((column) => column.name));
+  for (const [name, definition] of [
+    ["outcome", "text"],
+    ["http_status", "integer"],
+    ["retryable", "integer"],
+    ["failure_code", "text"],
+    ["replay_of_id", "text"],
+    ["replay_id", "text"],
+  ]) {
+    if (!columns.has(name)) db.exec(`alter table orkestr_connector_inbox add column ${name} ${definition}`);
+  }
   databases.set(filePath, db);
   return db;
 }
@@ -56,6 +73,12 @@ function row(record) {
     error: record.error || "",
     payload: JSON.parse(record.payload || "{}"),
     result: record.result ? JSON.parse(record.result) : null,
+    outcome: record.outcome || "",
+    httpStatus: Number(record.http_status || 0) || 0,
+    retryable: record.retryable === null || record.retryable === undefined ? null : Boolean(record.retryable),
+    failureCode: record.failure_code || "",
+    replayOfId: record.replay_of_id || "",
+    replayId: record.replay_id || "",
     createdAt: record.created_at,
     updatedAt: record.updated_at,
   };
@@ -69,14 +92,16 @@ export async function ensureConnectorInboxEvent(input = {}, env = process.env) {
   if (existing) return { created: false, event: existing };
   const now = new Date().toISOString();
   db.prepare(`
-    insert into orkestr_connector_inbox(id, connector, account_id, conversation_id, state, attempt_count, payload, created_at, updated_at)
-    values (?, ?, ?, ?, 'pending', 0, ?, ?, ?)
+    insert into orkestr_connector_inbox(id, connector, account_id, conversation_id, state, attempt_count, payload, replay_of_id, replay_id, created_at, updated_at)
+    values (?, ?, ?, ?, 'pending', 0, ?, ?, ?, ?, ?)
   `).run(
     id,
     clean(input.connector || "whatsapp"),
     clean(input.accountId),
     clean(input.conversationId),
     JSON.stringify(input.payload || {}),
+    clean(input.replayOfId),
+    clean(input.replayId),
     now,
     now,
   );
@@ -94,7 +119,7 @@ export async function markConnectorInboxEvent(id = "", patch = {}, env = process
   };
   db.prepare(`
     update orkestr_connector_inbox
-    set state = ?, attempt_count = ?, next_attempt_at = ?, error = ?, result = ?, updated_at = ?
+    set state = ?, attempt_count = ?, next_attempt_at = ?, error = ?, result = ?, outcome = ?, http_status = ?, retryable = ?, failure_code = ?, replay_of_id = ?, replay_id = ?, updated_at = ?
     where id = ?
   `).run(
     clean(next.state || current.state),
@@ -102,10 +127,21 @@ export async function markConnectorInboxEvent(id = "", patch = {}, env = process
     clean(next.nextAttemptAt),
     clean(next.error).slice(0, 1000),
     next.result ? JSON.stringify(next.result) : null,
+    clean(next.outcome),
+    Number(next.httpStatus || 0) || null,
+    next.retryable === null || next.retryable === undefined ? null : next.retryable ? 1 : 0,
+    clean(next.failureCode).slice(0, 240),
+    clean(next.replayOfId),
+    clean(next.replayId),
     next.updatedAt,
     current.id,
   );
   return row(db.prepare("select * from orkestr_connector_inbox where id = ?").get(current.id));
+}
+
+export async function getConnectorInboxEvent(id = "", env = process.env) {
+  const db = await database(env);
+  return row(db.prepare("select * from orkestr_connector_inbox where id = ?").get(clean(id)));
 }
 
 export async function listConnectorInboxEvents({ states = [], connectors = [], limit = 100 } = {}, env = process.env) {
