@@ -14,6 +14,7 @@ import {
   releaseConnectorOutboxClaim,
 } from "../../../../../packages/connectors/src/connector-outbox.js";
 import { getWhatsAppStatus } from "../../../../../packages/connectors/src/whatsapp.js";
+import { whatsappParticipantIdentityStatus } from "../../../../../packages/connectors/src/whatsapp-participant-identity.js";
 import { isAdminPrincipal } from "../../../../../packages/core/src/policy.js";
 import { requestPrincipal } from "../../../../../packages/core/src/principal.js";
 import { listThreadsForPrincipal } from "../../../../../packages/core/src/threads.js";
@@ -145,6 +146,7 @@ export class RouterTracesController {
       signal,
       recordRunEvent: false,
       whatsappStatusFn: () => getWhatsAppStatus(),
+      whatsappParticipantIdentityStatusFn: whatsappParticipantIdentityStatus,
       ensureConnectorOutboxJobFn: ensureConnectorOutboxJob,
       listConnectorOutboxJobsFn: listConnectorOutboxJobs,
       releaseConnectorOutboxClaimFn: releaseConnectorOutboxClaim,

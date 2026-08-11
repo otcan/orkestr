@@ -2749,12 +2749,12 @@ function inputTextForMessage(message) {
     const principal = message.externalPrincipal && typeof message.externalPrincipal === "object" && !Array.isArray(message.externalPrincipal)
       ? message.externalPrincipal
       : null;
-    if (principal || message.senderTrustLevel || message.senderPolicyMode) {
+    if (principal || message.senderEffectiveRole || message.senderTrustLevel || message.senderPolicyMode) {
       const lines = [
         "[WhatsApp]",
         `chat: ${String(message.chatId || principal?.chatId || source || "").trim() || "unknown"}`,
         `sender: ${String(message.senderParticipantId || principal?.senderId || message.from || "").trim() || "unknown"}`,
-        `trust: ${String(message.senderTrustLevel || "unknown").trim() || "unknown"}`,
+        `trust: ${String(message.senderEffectiveRole || message.senderTrustLevel || "unknown").trim() || "unknown"}`,
         `scope: ${String(message.senderPolicyMode || "this-thread-only").trim() || "this-thread-only"}`,
       ];
       return `${lines.join("\n")}\n\n${body}`;

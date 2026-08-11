@@ -7,7 +7,7 @@ import { authorizeConnectorMcpRequest, authorizeConnectorMcpToken } from "../pac
 import { createConnectorsMcpServer } from "../packages/connectors/src/connectors-mcp-server.js";
 import { listConnectorInboxEvents } from "../packages/connectors/src/connector-inbox.js";
 import { parseConnectorInboxMediaMetadata, stageConnectorInboxMedia } from "../packages/connectors/src/connector-inbox-media.js";
-import { retryConnectorInbox, routeWhatsAppInboundFromWorker } from "../packages/connectors/src/connectors-mcp-router.js";
+import { replayConnectorInboxEvent, retryConnectorInbox, routeWhatsAppInboundFromWorker } from "../packages/connectors/src/connectors-mcp-router.js";
 import { requestWhatsAppWorker, whatsappWorkerHealth } from "../packages/connectors/src/whatsapp-worker-client.js";
 import { requireWaServicePolicy } from "./orkestr-wa-policy.mjs";
 import { isMainModule } from "./main-module.mjs";
@@ -155,9 +155,21 @@ export function createConnectorsMcpGateway({ env = process.env, fetchImpl = fetc
     if (!workerEventTokenAllowed(req, env)) return res.status(401).json({ ok: false, error: "whatsapp_worker_event_token_invalid" });
     try {
       const result = await routeWhatsAppInboundFromWorker(req.body || {}, env, fetchImpl);
-      return res.status(result.ok ? 200 : 202).json(result);
+      const status = result.state === "rejected_terminal" || result.outcome === "duplicate_rejected" ? 403 : result.ok ? 200 : 202;
+      return res.status(status).json(result);
     } catch (error) {
       return res.status(Number(error?.statusCode || 500)).json({ ok: false, error: clean(error?.message) || "connector_inbound_failed" });
+    }
+  });
+
+  app.post("/internal/whatsapp/inbound/:eventId/replay", async (req, res) => {
+    if (!legacyTokenAllowed(req, env)) return res.status(401).json({ ok: false, error: "connector_mcp_operator_token_required" });
+    try {
+      const result = await replayConnectorInboxEvent(req.params.eventId, req.body || {}, env, fetchImpl);
+      const status = result.state === "rejected_terminal" ? Number(result.result?.response?.statusCode || 403) : result.ok ? 200 : 202;
+      return res.status(status).json(result);
+    } catch (error) {
+      return res.status(Number(error?.statusCode || 500)).json({ ok: false, error: clean(error?.message) || "connector_inbox_replay_failed" });
     }
   });
 

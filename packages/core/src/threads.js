@@ -51,6 +51,7 @@ const messageStringFields = [
   "originTransport",
   "senderParticipantId",
   "senderTrustLevel",
+  "senderEffectiveRole",
   "senderPolicyMode",
   "executorKind",
   "executorTransport",

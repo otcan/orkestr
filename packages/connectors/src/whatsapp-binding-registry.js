@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { dataPaths, ensureDataDirs } from "../../storage/src/paths.js";
 import { readJson, writeJson } from "../../storage/src/store.js";
 import { adminUserId, normalizeUserId } from "../../core/src/users.js";
+import { dualWriteWhatsAppParticipantIdentity } from "./whatsapp-participant-identity.js";
 
 export const whatsappBindingPrecedence = ["chat", "thread", "instance", "user", "account-default"];
 
@@ -128,7 +129,7 @@ export function normalizeWhatsAppPersistentBinding(input = {}, prior = {}, env =
   }
   const ownerUserId = normalizeUserId(input.ownerUserId || input.userId || prior.ownerUserId || prior.userId || env.ORKESTR_ADMIN_USER_ID || adminUserId);
   const additionalParticipantsEnabled = optionalBoolean(input.additionalParticipantsEnabled, prior.additionalParticipantsEnabled === true);
-  const binding = {
+  let binding = {
     ...prior,
     ...input,
     connector: "whatsapp",
@@ -172,6 +173,7 @@ export function normalizeWhatsAppPersistentBinding(input = {}, prior = {}, env =
     createdAt: pickString(prior.createdAt) || nowIso(),
     updatedAt: nowIso(),
   };
+  binding = dualWriteWhatsAppParticipantIdentity(binding, env);
   assertRequiredTarget(binding);
   binding.id = pickString(input.id, input.bindingId, prior.id, prior.bindingId) || defaultBindingId(binding);
   binding.bindingId = binding.id;
