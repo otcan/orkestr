@@ -15,6 +15,12 @@ import {
   releaseMailboxContextsForHumanTurn,
   reserveMailboxContextsForHumanTurn,
 } from "./mailbox-routes.js";
+import {
+  assertPublicRefInvariant,
+  assertUniquePublicRefs,
+  canonicalInstanceUrlsEnabled,
+  generateUniquePublicRef,
+} from "./canonical-public-references.js";
 
 const runningThreadIds = new Set();
 const messageMutationQueues = new Map();
@@ -169,6 +175,7 @@ export async function getThreadForPrincipal(threadId, principal, env = process.e
 }
 
 async function saveThreads(threads, env) {
+  assertUniquePublicRefs(threads, "thread");
   return createThreadRepository(env).save(threads);
 }
 
@@ -192,8 +199,13 @@ export async function createThread(input = {}, env = process.env) {
   const codexThreadId = String(input.codexThreadId || input.executor?.codexThreadId || input.executor?.metadata?.codexThreadId || "").trim();
   const codexSessionId = String(input.codexSessionId || input.executor?.codexSessionId || input.executor?.metadata?.codexSessionId || "").trim();
 
+  const publicRefAssignedAt = canonicalInstanceUrlsEnabled(env) ? nowIso() : "";
   const thread = {
     id: requestedId || randomUUID(),
+    ...(publicRefAssignedAt ? {
+      publicRef: generateUniquePublicRef("thread", new Set(threads.map((item) => String(item.publicRef || "")).filter(Boolean))),
+      publicRefAssignedAt,
+    } : {}),
     ownerUserId,
     name,
     title: String(input.title || name).trim(),
@@ -358,6 +370,10 @@ export async function updateThread(threadId, patch = {}, env = process.env) {
   let changed = false;
   const next = threads.map((thread) => {
     if (thread.id !== id && thread.name !== id && thread.bindingName !== id) return thread;
+    assertPublicRefInvariant(thread.publicRef, Object.prototype.hasOwnProperty.call(patch, "publicRef") ? patch.publicRef : thread.publicRef, "thread");
+    if (thread.publicRefAssignedAt && Object.prototype.hasOwnProperty.call(patch, "publicRefAssignedAt") && patch.publicRefAssignedAt !== thread.publicRefAssignedAt) {
+      throw Object.assign(new Error("thread_public_ref_metadata_immutable"), { statusCode: 400 });
+    }
     const candidate = {
       ...thread,
       ...patch,

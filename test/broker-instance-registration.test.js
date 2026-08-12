@@ -21,6 +21,7 @@ import {
 } from "../packages/core/src/broker-instance-registry.js";
 import { authorizeHttpRequest } from "../packages/core/src/security.js";
 import { startServer } from "../apps/server/src/server.js";
+import { isInstancePublicRef } from "../packages/core/src/canonical-public-references.js";
 
 function request(headers = {}) {
   return {
@@ -55,6 +56,7 @@ test("broker registration issues broker UUID and encrypted channel bootstrap", a
   const env = {
     ORKESTR_HOME: home,
     ORKESTR_BROKER_REGISTRATION_TOKEN: "register-secret",
+    ORKESTR_CANONICAL_INSTANCE_URLS: "1",
   };
 
   const registration = await registerBrokerInstance({
@@ -71,6 +73,7 @@ test("broker registration issues broker UUID and encrypted channel bootstrap", a
 
   assert.equal(registration.ok, true);
   uuidLike(registration.instanceId);
+  assert.equal(isInstancePublicRef(registration.publicRef), true);
   assert.notEqual(registration.instanceId, "orkestr-ui");
   uuidLike(registration.channelId);
   assert.match(registration.broker.publicKey, /BEGIN PUBLIC KEY/);
@@ -85,6 +88,7 @@ test("broker registration issues broker UUID and encrypted channel bootstrap", a
   const instances = await listBrokerInstances(env);
   assert.equal(instances.instances.length, 1);
   assert.equal(instances.instances[0].instanceId, registration.instanceId);
+  assert.equal(instances.instances[0].publicRef, registration.publicRef);
   assert.equal(instances.instances[0].displayName, "demo vm");
   assert.equal(instances.instances[0].version, "0.1.0-alpha.33");
 });
@@ -96,6 +100,7 @@ test("broker registry persists instances in sqlite and redacts routing metadata"
     ORKESTR_HOME: home,
     ORKESTR_BROKER_INSTANCE_STORE: "sqlite",
     ORKESTR_BROKER_REGISTRATION_TOKEN: "register-secret",
+    ORKESTR_CANONICAL_INSTANCE_URLS: "1",
   };
 
   const registration = await registerBrokerInstance({
@@ -120,6 +125,7 @@ test("broker registry persists instances in sqlite and redacts routing metadata"
   assert.equal(listed.backend, "sqlite");
   assert.equal(listed.instances.length, 1);
   assert.equal(listed.instances[0].instanceId, registration.instanceId);
+  assert.equal(isInstancePublicRef(listed.instances[0].publicRef), true);
   assert.equal(listed.instances[0].endpointBaseUrl, "http://10.0.0.12:19822");
   assert.equal(listed.instances[0].connectBaseUrl, "https://connect.orkestr.de");
   assert.equal(listed.instances[0].relayAccountId, "responder");
@@ -129,6 +135,7 @@ test("broker registry persists instances in sqlite and redacts routing metadata"
   assert.equal(JSON.stringify(listed).includes("+49 176 123456"), false);
   assert.equal(resolved.ok, true);
   assert.equal(resolved.instance.instanceId, registration.instanceId);
+  assert.equal(resolved.instance.publicRef, registration.publicRef);
 });
 
 test("broker WhatsApp onboarding prefers sender account over responder fallback", () => {

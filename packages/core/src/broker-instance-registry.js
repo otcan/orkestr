@@ -3,6 +3,12 @@ import os from "node:os";
 import { dataPaths, ensureDataDirs } from "../../storage/src/paths.js";
 import { readJson, writeJson, writeSecretJson, appendEvent } from "../../storage/src/store.js";
 import { getSqliteBrokerInstance, readSqliteBrokerRegistry, writeSqliteBrokerRegistry } from "./broker-instance-sqlite-store.js";
+import {
+  assertUniquePublicRefs,
+  canonicalInstanceUrlsEnabled,
+  generateUniquePublicRef,
+} from "./canonical-public-references.js";
+import { readInstanceIdentity } from "./instance-identity.js";
 const DEFAULT_MAX_INSTANCES = 10000;
 const DEFAULT_RATE_WINDOW_MS = 60_000;
 const DEFAULT_RATE_LIMIT = 30;
@@ -151,6 +157,11 @@ async function readRegistry(env = process.env) {
 }
 
 async function writeRegistry(registry, env = process.env) {
+  assertUniquePublicRefs(registry.instances, "instance");
+  const localIdentity = await readInstanceIdentity(env);
+  if (localIdentity?.publicRef) {
+    assertUniquePublicRefs([{ id: localIdentity.internalInstanceId, publicRef: localIdentity.publicRef }, ...registry.instances], "instance");
+  }
   if (await writeSqliteBrokerRegistry(registry, env)) return;
   const paths = await ensureDataDirs(env);
   await writeJson(paths.brokerInstances, {
@@ -240,6 +251,7 @@ function instanceResponse(record, brokerChannel, encryptedWelcome) {
   return {
     ok: true,
     instanceId: record.instanceId,
+    publicRef: record.publicRef || null,
     channelId: record.channelId,
     registeredAt: record.createdAt,
     broker: publicBrokerRecord(brokerChannel),
@@ -279,9 +291,18 @@ export async function registerBrokerInstance({ body = {}, request = {}, env = pr
   const channelId = crypto.randomUUID();
   const channelKey = deriveChannelKey(sharedSecret, channelId);
   const createdAt = nowIso();
+  const localIdentity = canonicalInstanceUrlsEnabled(env) ? await readInstanceIdentity(env) : null;
+  const reservedInstanceRefs = new Set([
+    ...(localIdentity?.publicRef ? [localIdentity.publicRef] : []),
+    ...registry.instances.map((instance) => clean(instance.publicRef)).filter(Boolean),
+  ]);
   const record = {
     ...(existing || {}),
     instanceId: crypto.randomUUID(),
+    ...(existing?.publicRef ? { publicRef: existing.publicRef } : canonicalInstanceUrlsEnabled(env) ? {
+      publicRef: generateUniquePublicRef("instance", reservedInstanceRefs),
+      publicRefAssignedAt: createdAt,
+    } : {}),
     channelId,
     status: "registered",
     displayName: clean(body.displayName || body.name || os.hostname()).slice(0, 120),
@@ -337,6 +358,7 @@ export async function listBrokerInstances(env = process.env) {
     backend: registry.backend || "json",
     instances: registry.instances.map((instance) => ({
       instanceId: instance.instanceId,
+      publicRef: instance.publicRef || null,
       channelId: instance.channelId,
       status: instance.status,
       displayName: instance.displayName,
@@ -383,7 +405,7 @@ function heartbeatExpired(record) {
 
 function publicConnectRecord(record) {
   return {
-    instanceId: record.instanceId, channelId: record.channelId, status: record.status,
+    instanceId: record.instanceId, publicRef: record.publicRef || null, channelId: record.channelId, status: record.status,
     displayName: record.displayName, version: record.version,
     endpointBaseUrl: record.endpointBaseUrl || "",
     connectBaseUrl: record.connectBaseUrl || "",
@@ -392,6 +414,27 @@ function publicConnectRecord(record) {
     lastSeenAt: record.lastSeenAt || null,
     lastHeartbeatAt: record.lastHeartbeatAt || null,
   };
+}
+
+export async function readBrokerInstanceRegistry(env = process.env) {
+  return readRegistry(env);
+}
+
+export async function writeBrokerInstanceRegistry(registry, env = process.env, options = {}) {
+  const current = await readRegistry(env);
+  const existingById = new Map(current.instances.map((instance) => [clean(instance.instanceId), instance]));
+  for (const candidate of Array.isArray(registry?.instances) ? registry.instances : []) {
+    const prior = existingById.get(clean(candidate.instanceId));
+    if (!prior) continue;
+    if (prior.publicRef !== candidate.publicRef || prior.publicRefAssignedAt !== candidate.publicRefAssignedAt) {
+      const oneTimeAssignment = options.allowPublicRefAssignment === true && !prior.publicRef && candidate.publicRef;
+      if (!oneTimeAssignment && options.restorePublicRefs !== true) {
+        throw Object.assign(new Error("broker_instance_public_ref_immutable"), { statusCode: 409 });
+      }
+    }
+  }
+  await writeRegistry(registry, env);
+  return readRegistry(env);
 }
 
 function normalizedEndpointBaseUrl(value = "") {
