@@ -11,8 +11,10 @@ import {
   enforceHostBoundaryRequest,
   hostBoundaryUpgradeDenied,
   rejectUnknownHostBoundaryRequest,
+  sanitizeForwardedHostHeaders,
 } from "../dist/server/apps/server/src/host-boundaries.js";
 import { writeInstanceIdentity } from "../packages/core/src/instance-identity.js";
+import { approvePairingChallenge } from "../packages/core/src/security.js";
 import { createThread } from "../packages/core/src/threads.js";
 import { hostBoundaryDoctorChecks } from "../packages/core/src/host-boundary-doctor.js";
 import { startServer } from "../dist/server/apps/server/src/server.js";
@@ -114,6 +116,32 @@ test("forwarded host and proto are ignored unless the direct peer is explicitly 
   assert.equal(effectiveRequestOrigin(trusted, { ORKESTR_TRUST_PROXY_HEADERS: "1", ORKESTR_TRUSTED_PROXY_IPS: "127.0.0.1" }), "https://app.example.test:8443");
   trusted.headers["x-forwarded-host"] = "app.example.test,attacker.invalid";
   assert.equal(effectiveRequestOrigin(trusted, { ORKESTR_TRUST_PROXY_HEADERS: "1", ORKESTR_TRUSTED_PROXY_IPS: "127.0.0.1" }), "https://127.0.0.1:3000");
+});
+
+test("forwarded host headers are removed for untrusted peers and normalized for trusted proxies", () => {
+  const featureOff = request("/", "app.example.test", {
+    headers: { "x-forwarded-host": "legacy-proxy.example.test", "x-forwarded-proto": "https" },
+  });
+  sanitizeForwardedHostHeaders(featureOff, {});
+  assert.equal(featureOff.headers["x-forwarded-host"], "legacy-proxy.example.test");
+
+  const direct = request("/", "app.example.test", {
+    headers: { "x-forwarded-host": "attacker.invalid", "x-forwarded-proto": "http" },
+  });
+  sanitizeForwardedHostHeaders(direct, { ORKESTR_HOST_BOUNDARIES: "1" });
+  assert.equal(direct.headers["x-forwarded-host"], undefined);
+  assert.equal(direct.headers["x-forwarded-proto"], undefined);
+
+  const proxied = request("/", "127.0.0.1:3000", {
+    remoteAddress: "127.0.0.1",
+    headers: { "x-forwarded-host": "app.example.test:8443", "x-forwarded-proto": "https" },
+  });
+  sanitizeForwardedHostHeaders(proxied, {
+    ORKESTR_TRUST_PROXY_HEADERS: "1",
+    ORKESTR_TRUSTED_PROXY_IPS: "127.0.0.1",
+  });
+  assert.equal(proxied.headers["x-forwarded-host"], "app.example.test:8443");
+  assert.equal(proxied.headers["x-forwarded-proto"], "https");
 });
 
 test("handoff routes allow only connect/auth origins, redirect app, and reject unknown or missing hosts", async () => {
@@ -307,6 +335,7 @@ test("live server keeps the connect pairing page, assets, and primitive APIs on 
     "ORKESTR_CANONICAL_INSTANCE_URLS", "ORKESTR_CANONICAL_APP_GATEWAY",
     "ORKESTR_CANONICAL_APP_LINKS", "ORKESTR_PUBLIC_APP_URL",
     "ORKESTR_CONNECT_PUBLIC_URL", "ORKESTR_PUBLIC_AUTH_URL",
+    "ORKESTR_PRIMARY_DOMAIN",
     "ORKESTR_AUTH_REQUIRED", "ORKESTR_OVERLAY_DIR", "ORKESTR_RECOVER_RUNNING_ON_START",
     "ORKESTR_TRUST_PROXY_HEADERS", "ORKESTR_TRUSTED_PROXY_IPS",
   ];
@@ -314,6 +343,7 @@ test("live server keeps the connect pairing page, assets, and primitive APIs on 
   Object.assign(process.env, env(home, {
     ORKESTR_PUBLIC_APP_URL: "http://app.example.test",
     ORKESTR_CONNECT_PUBLIC_URL: "http://connect.example.test",
+    ORKESTR_PRIMARY_DOMAIN: "example.test",
     ORKESTR_AUTH_REQUIRED: "0",
     ORKESTR_RECOVER_RUNNING_ON_START: "0",
   }));
@@ -339,6 +369,9 @@ test("live server keeps the connect pairing page, assets, and primitive APIs on 
   assert.equal((await call("/api/version", "connect.example.test")).status, 200);
   assert.equal((await call("/api/setup/status", "connect.example.test")).status, 200);
   assert.equal((await call("/api/setup/security/status", "connect.example.test")).status, 401);
+  const disallowedUnpaired = await call("/api/threads", "connect.example.test");
+  assert.equal(disallowedUnpaired.status, 404);
+  assert.equal(disallowedUnpaired.body.toString(), "not found");
 
   const challenge = await call("/api/setup/security/challenges", "connect.example.test", {
     method: "POST",
@@ -346,11 +379,25 @@ test("live server keeps the connect pairing page, assets, and primitive APIs on 
     body: JSON.stringify({}),
   });
   assert.equal(challenge.status, 200);
+  const challengePayload = JSON.parse(challenge.body.toString());
+  await approvePairingChallenge(challengePayload.challenge.approveCode, { env: process.env });
+  const paired = await call("/api/setup/security/pair", "connect.example.test", {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-forwarded-host": "attacker.invalid", "x-forwarded-proto": "http" },
+    body: JSON.stringify({ challengeId: challengePayload.challengeId }),
+  });
+  assert.equal(paired.status, 200);
+  assert.match(String(paired.headers["set-cookie"] || ""), /Domain=example\.test/);
+  assert.doesNotMatch(String(paired.headers["set-cookie"] || ""), /attacker\.invalid/);
+  const disallowedPaired = await call("/api/threads", "connect.example.test", {
+    headers: { cookie: String(paired.headers["set-cookie"] || "") },
+  });
+  assert.deepEqual([disallowedPaired.status, disallowedPaired.body.toString()], [404, "not found"]);
   assert.equal((await call("/api/setup/security/enabled", "connect.example.test", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ enabled: false }),
-  })).status, 401);
+  })).status, 404);
 
   const handoff = await call("/setup/pairing?return=%2Fsetup", "app.example.test");
   assert.equal(handoff.status, 308);

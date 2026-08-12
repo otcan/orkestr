@@ -65,6 +65,26 @@ function trustedProxy(request: any, env = process.env): boolean {
   return allowed.includes(remote);
 }
 
+export function sanitizeForwardedHostHeaders(request: any, env = process.env): void {
+  if (!hostBoundariesEnabled(env)) return;
+  const headers = request?.headers;
+  if (!headers || typeof headers !== "object") return;
+  if (!trustedProxy(request, env)) {
+    delete headers["x-forwarded-host"];
+    delete headers["x-forwarded-proto"];
+    return;
+  }
+  const origin = effectiveRequestOrigin(request, env);
+  if (!origin) {
+    delete headers["x-forwarded-host"];
+    delete headers["x-forwarded-proto"];
+    return;
+  }
+  const parsed = new URL(origin);
+  headers["x-forwarded-host"] = parsed.host;
+  headers["x-forwarded-proto"] = parsed.protocol.replace(/:$/, "");
+}
+
 function singleHeader(value: unknown): string {
   const text = String(value || "").trim();
   return text && !text.includes(",") && !/[\s/?#\\]/.test(text) ? text : "";
@@ -212,8 +232,12 @@ export function rejectUnknownHostBoundaryRequest(request: any, response: any, en
   if (localProbeRequest(request)) return false;
   const origin = effectiveRequestOrigin(request, env);
   const { appOrigin, connectOrigins } = allowedBoundaryOrigins(env);
-  if (origin && appOrigin && connectOrigins.size && !connectOrigins.has(appOrigin) &&
-      (origin === appOrigin || connectOrigins.has(origin))) return false;
+  if (origin && appOrigin && connectOrigins.size && !connectOrigins.has(appOrigin) && origin === appOrigin) return false;
+  if (origin && appOrigin && connectOrigins.size && !connectOrigins.has(appOrigin) && connectOrigins.has(origin)) {
+    const rawUrl = String(request?.originalUrl || request?.url || "/");
+    if (compatibilityPath(rawUrl) || handoffPath(rawUrl) || connectSupportPath(request?.method, rawUrl) ||
+        canonicalPath(rawUrl) || legacyThreadRoute(rawUrl)) return false;
+  }
   recordDenial(!origin || !appOrigin || !connectOrigins.size || connectOrigins.has(appOrigin)
     ? "invalid_host_or_config"
     : "wrong_host", env);
@@ -316,6 +340,7 @@ function denyUpgrade(request: any, socket: Duplex): void {
 export function attachHostBoundaryUpgrade(server: Server, env = process.env): void {
   if (!hostBoundariesEnabled(env)) return;
   server.prependListener("upgrade", (request: IncomingMessage, socket: Duplex) => {
+    sanitizeForwardedHostHeaders(request, env);
     if (validInternalUpgrade(request)) return;
     const origin = effectiveRequestOrigin(request, env);
     const { appOrigin, connectOrigins } = allowedBoundaryOrigins(env);

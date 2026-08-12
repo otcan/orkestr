@@ -42,6 +42,7 @@ import {
   attachHostBoundaryUpgrade,
   enforceHostBoundaryRequest,
   rejectUnknownHostBoundaryRequest,
+  sanitizeForwardedHostHeaders,
 } from "./host-boundaries.js";
 import { JsonErrorFilter } from "./common/json-error.filter.js";
 import { attachDesktopProxyUpgrade, registerDesktopProxy } from "./desktop-proxy.js";
@@ -77,6 +78,7 @@ function whatsappDeliveryPollIntervalMs(env = process.env) {
 export async function createApp(): Promise<INestApplication> {
   const app = await NestFactory.create(AppModule, { logger: false });
   app.use((request, response, next) => {
+    sanitizeForwardedHostHeaders(request, process.env);
     if (rejectUnknownHostBoundaryRequest(request, response, process.env)) return;
     next();
   });

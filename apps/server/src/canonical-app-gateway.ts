@@ -224,9 +224,11 @@ function proxyLocalUpgrade(request: IncomingMessage, socket: Duplex, head: Buffe
     for (let index = 0; index < request.rawHeaders.length; index += 2) {
       const name = request.rawHeaders[index] || "";
       const value = request.rawHeaders[index + 1] || "";
-      if (name.toLowerCase() === "x-orkestr-internal-canonical-upgrade") continue;
+      if (["x-orkestr-internal-canonical-upgrade", "x-forwarded-host", "x-forwarded-proto"].includes(name.toLowerCase())) continue;
       lines.push(name.toLowerCase() === "host" ? `Host: 127.0.0.1:${port}` : `${name}: ${value}`);
     }
+    if (request.headers["x-forwarded-host"]) lines.push(`X-Forwarded-Host: ${request.headers["x-forwarded-host"]}`);
+    if (request.headers["x-forwarded-proto"]) lines.push(`X-Forwarded-Proto: ${request.headers["x-forwarded-proto"]}`);
     lines.push(`X-Orkestr-Internal-Canonical-Upgrade: ${internalCanonicalUpgradeHeader()}`);
     upstream.write(`${lines.join("\r\n")}\r\n\r\n`);
     if (head.length) upstream.write(head);
