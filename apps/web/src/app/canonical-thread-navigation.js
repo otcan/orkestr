@@ -44,3 +44,16 @@ export function navigateCanonicalThreadTarget(targetUrl = "", options = {}) {
   }
   return { navigated: next !== present, crossOrigin: false, url: next };
 }
+
+export function navigateLegacyThreadPath(targetPath = "", options = {}) {
+  const next = String(targetPath || "");
+  if (!next) return { navigated: false, crossOrigin: false };
+  const current = currentUrl(options.currentUrl);
+  const mode = options.mode === "replace" ? "replace" : "push";
+  if (mode === "push" && current.pathname === next) {
+    return { navigated: false, crossOrigin: false, url: next };
+  }
+  if (mode === "replace") options.history?.replaceState?.({}, "", next);
+  else options.history?.pushState?.({}, "", next);
+  return { navigated: true, crossOrigin: false, url: next };
+}

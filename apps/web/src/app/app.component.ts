@@ -48,7 +48,7 @@ import {
   WhatsAppStatusResponse,
 } from "./api.service";
 import { appendPendingFiles, messageWithAttachmentPaths, PendingFile, removePendingFile, uploadPendingFiles } from "./thread-uploads";
-import { canonicalThreadPanelUrl, navigateCanonicalThreadTarget } from "./canonical-thread-navigation.js";
+import { canonicalThreadPanelUrl, navigateCanonicalThreadTarget, navigateLegacyThreadPath } from "./canonical-thread-navigation.js";
 
 type Panel = "chat" | "history" | "delivery" | "timers" | "attach" | "settings" | "workers" | "runtime" | "raw" | "ops" | "files" | "userTimers" | "userDesk" | "userJobs" | "userConnectors";
 type CodexRateLimitKey = "primary" | "secondary";
@@ -386,9 +386,9 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       this.apiOnline = true;
       this.trackThreadActivity(payload.threads);
       this.threads = [...payload.threads].sort((a, b) => this.activityMs(b) - this.activityMs(a));
-      this.canonicalizeCurrentThreadRoute();
+      if (this.canonicalizeCurrentThreadRoute()) return;
       this.seedReadStateIfNeeded(this.threads);
-      this.normalizeUserModeView();
+      if (this.normalizeUserModeView()) return;
       if (this.shouldAutoOpenOnboarding()) {
         this.onboardingActive = true;
         this.setupPageMode = "setup";
@@ -401,7 +401,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       }
       if (!this.isRouteLevelUserPanel(this.activePanel) && !this.selectedId && this.threads.length) {
         this.selectedId = this.threadSlug(this.threads[0]);
-        this.replacePath(this.selectedId, this.activePanel);
+        if (this.replacePath(this.selectedId, this.activePanel)) return;
       }
       const selected = this.selectedThread();
       this.syncThreadMetaDraft(selected);
@@ -754,11 +754,11 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       this.apiOnline = true;
       this.appReady = true;
       this.threads = [...threads].sort((a, b) => this.activityMs(b) - this.activityMs(a));
-      this.canonicalizeCurrentThreadRoute();
+      if (this.canonicalizeCurrentThreadRoute()) return;
       this.seedReadStateIfNeeded(this.threads);
       if (!this.isRouteLevelUserPanel(this.activePanel) && !this.selectedId && this.threads.length) {
         this.selectedId = this.threadSlug(this.threads[0]);
-        this.replacePath(this.selectedId, this.activePanel);
+        if (this.replacePath(this.selectedId, this.activePanel)) return;
       }
       const selected = this.selectedThread();
       this.syncThreadMetaDraft(selected);
@@ -821,8 +821,8 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.scrollAfterRender = this.activePanel === "chat";
   }
 
-  private normalizeUserModeView(): void {
-    if (!this.isUserMode()) return;
+  private normalizeUserModeView(): boolean {
+    if (!this.isUserMode()) return false;
     if (this.activePanel === "raw") this.closeRawStream();
     this.modelDetailsOpen = false;
     this.gitDetailsThreadId = "";
@@ -831,8 +831,9 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     if (this.activePanel === "ops" || !this.panelAllowedForCurrentUser(this.activePanel)) {
       this.activePanel = "chat";
       const thread = this.selectedThread();
-      if (thread) this.replacePath(this.threadSlug(thread), "chat");
+      if (thread && this.replacePath(this.threadSlug(thread), "chat")) return true;
     }
+    return false;
   }
 
   async openPanel(panel: Panel): Promise<void> {
@@ -843,7 +844,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     if (!this.panelAllowedForCurrentUser(panel)) {
       this.activePanel = "chat";
       const thread = this.selectedThread();
-      if (thread) this.replacePath(this.threadSlug(thread), "chat");
+      if (thread && this.replacePath(this.threadSlug(thread), "chat")) return;
       this.renderNow();
       return;
     }
@@ -950,7 +951,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     if (this.isUserMode()) {
       this.activePanel = "chat";
       const thread = this.selectedThread();
-      if (thread) this.replacePath(this.threadSlug(thread), "chat");
+      if (thread && this.replacePath(this.threadSlug(thread), "chat")) return;
       this.renderNow();
       return;
     }
@@ -981,7 +982,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     if (this.isUserMode()) {
       this.activePanel = "chat";
       const thread = this.selectedThread();
-      if (thread) this.replacePath(this.threadSlug(thread), "chat");
+      if (thread && this.replacePath(this.threadSlug(thread), "chat")) return;
       this.renderNow();
       return;
     }
@@ -1001,7 +1002,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       this.activePanel = "chat";
       this.onboardingActive = false;
       const thread = this.selectedThread();
-      if (thread) this.replacePath(this.threadSlug(thread), "chat");
+      if (thread && this.replacePath(this.threadSlug(thread), "chat")) return;
       this.renderNow();
       return;
     }
@@ -1044,7 +1045,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       this.threadWizardOpen = false;
       if (this.selectedThread()) {
         this.activePanel = "chat";
-        this.pushPath(this.selectedId, "chat");
+        if (this.pushPath(this.selectedId, "chat")) return;
       } else {
         this.activePanel = "ops";
         this.toolsView = "connectors";
@@ -4676,6 +4677,14 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   private pushPath(id: string, panel: Panel = "chat"): boolean {
     const next = this.pathForPanel(id, panel);
+    if (!/^https?:\/\//i.test(next)) {
+      navigateLegacyThreadPath(next, {
+        currentUrl: globalThis.location?.href,
+        mode: "push",
+        history: globalThis.history,
+      });
+      return false;
+    }
     return navigateCanonicalThreadTarget(next, {
       currentUrl: globalThis.location?.href,
       mode: "push",
@@ -4685,7 +4694,16 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   private replacePath(id: string, panel: Panel = "chat"): boolean {
-    return navigateCanonicalThreadTarget(this.pathForPanel(id, panel), {
+    const next = this.pathForPanel(id, panel);
+    if (!/^https?:\/\//i.test(next)) {
+      navigateLegacyThreadPath(next, {
+        currentUrl: globalThis.location?.href,
+        mode: "replace",
+        history: globalThis.history,
+      });
+      return false;
+    }
+    return navigateCanonicalThreadTarget(next, {
       currentUrl: globalThis.location?.href,
       mode: "replace",
       history: globalThis.history,
@@ -4797,17 +4815,17 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     );
   }
 
-  private canonicalizeCurrentThreadRoute(): void {
+  private canonicalizeCurrentThreadRoute(): boolean {
     const thread = this.selectedThread();
-    if (!thread) return;
+    if (!thread) return false;
     const target = this.canonicalPanelUrl(thread, this.activePanel, true);
-    if (!target) return;
-    navigateCanonicalThreadTarget(target, {
+    if (!target) return false;
+    return navigateCanonicalThreadTarget(target, {
       currentUrl: globalThis.location?.href,
       mode: "replace",
       history: globalThis.history,
       location: globalThis.location,
-    });
+    }).crossOrigin;
   }
 
   private pushOpsPath(view: ToolsView): void {

@@ -24,3 +24,8 @@ export function navigateCanonicalThreadTarget(
   targetUrl?: string,
   options?: CanonicalNavigationOptions,
 ): CanonicalNavigationResult;
+
+export function navigateLegacyThreadPath(
+  targetPath?: string,
+  options?: Pick<CanonicalNavigationOptions, "currentUrl" | "mode" | "history">,
+): CanonicalNavigationResult;

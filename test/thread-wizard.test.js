@@ -271,9 +271,12 @@ test("canonical thread links drive history, active-panel open/copy, and notifica
   const template = await fs.readFile("apps/web/src/app/app.component.html", "utf8");
   const gmailNotifications = await fs.readFile("apps/web/src/app/gmail-browser-notification.service.ts", "utf8");
 
-  assert.match(component, /this\.threads\s*=.*\n\s*this\.canonicalizeCurrentThreadRoute\(\)/);
+  assert.equal(component.match(/if \(this\.canonicalizeCurrentThreadRoute\(\)\) return;/g)?.length, 2);
+  assert.match(component, /if \(this\.replacePath\(this\.selectedId, this\.activePanel\)\) return;/);
+  assert.match(component, /if \(this\.pushPath\(this\.selectedId, "chat"\)\) return;/);
   assert.match(component, /navigateCanonicalThreadTarget\(next/);
   assert.match(component, /navigateCanonicalThreadTarget\(target/);
+  assert.match(component, /navigateLegacyThreadPath\(next/);
   assert.match(component, /private canonicalPanelUrl/);
   assert.match(component, /selectedThreadUrl\(thread: ThreadSummary\)/);
   assert.match(component, /this\.canonicalPanelUrl\(thread, this\.activePanel, true\)/);

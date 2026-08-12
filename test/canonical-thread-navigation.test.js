@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   canonicalThreadPanelUrl,
   navigateCanonicalThreadTarget,
+  navigateLegacyThreadPath,
 } from "../apps/web/src/app/canonical-thread-navigation.js";
 import { buildThreadLinkIndex, resolveThreadLink } from "../apps/web/src/app/thread-link-index.js";
 
@@ -65,6 +66,17 @@ test("initial route conversion crosses origins with replace and preserves query 
   });
   assert.equal(result.crossOrigin, true);
   assert.deepEqual(spies.calls, [["replace", `${canonical}/history?before=a%2Fb#cursor`]]);
+});
+
+test("feature-off legacy push keeps query and fragment when pathname is unchanged", () => {
+  const spies = navigationSpies();
+  const result = navigateLegacyThreadPath("/thread/foo", {
+    currentUrl: "https://connect.example.test/thread/foo?keep=1#hash",
+    mode: "push",
+    history: spies.history,
+  });
+  assert.equal(result.navigated, false);
+  assert.deepEqual(spies.calls, []);
 });
 
 test("Gmail thread link aliases resolve only when unique and exact identifiers win", () => {

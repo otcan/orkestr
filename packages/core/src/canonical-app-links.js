@@ -28,6 +28,8 @@ function routeTail(sourceUrl = "") {
 export function explicitCanonicalAppBase(env = process.env) {
   const configuredUrl = String(env.ORKESTR_PUBLIC_APP_URL || env.ORKESTR_APP_URL || "").trim();
   const configuredHost = String(env.ORKESTR_APP_HOST || "").trim();
+  const configuredScheme = configuredUrl.match(/^([a-z][a-z0-9+.-]*):/i)?.[1]?.toLowerCase() || "";
+  if (configuredScheme && !["http", "https"].includes(configuredScheme)) return "";
   const host = configuredHost.replace(/^https?:\/\//i, "");
   if (!configuredUrl && /[/?#]/.test(host)) return "";
   const source = configuredUrl || (host ? `https://${host}` : "");

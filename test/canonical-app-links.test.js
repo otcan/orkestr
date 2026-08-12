@@ -67,6 +67,17 @@ test("canonical app bases preserve explicit URL schemes and ports without using 
   };
   assert.equal(explicitCanonicalAppBase(fallbackOnly), "");
   assert.equal(canonicalThreadAppUrl({ instancePublicRef: instanceRef, threadPublicRef: threadRef }, fallbackOnly), "");
+
+  for (const appUrl of [
+    "ftp://app.example.test",
+    "ws://app.example.test",
+    "file:///tmp/orkestr",
+    "javascript:alert(1)",
+  ]) {
+    const unsupported = { ...flags, ORKESTR_PUBLIC_APP_URL: appUrl, ORKESTR_APP_HOST: "valid.example.test" };
+    assert.equal(explicitCanonicalAppBase(unsupported), "", appUrl);
+    assert.equal(canonicalThreadAppUrl({ instancePublicRef: instanceRef, threadPublicRef: threadRef }, unsupported), "", appUrl);
+  }
 });
 
 test("thread link data is stable across rename and never leaks internal identity", async () => {
