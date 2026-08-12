@@ -43,6 +43,16 @@ test("canonical app paths preserve opaque refs, suffixes, and query strings", ()
   assert.throws(() => parseCanonicalAppUrl("/instance/not-an-opaque-ref/thread/name"), /instance_public_ref_invalid/);
   assert.throws(() => parseCanonicalAppUrl(`/instance/${instanceRef}/thread/not-an-opaque-ref`), /thread_public_ref_invalid/);
   assert.throws(() => parseCanonicalAppUrl(`/instance/${instanceRef}/thread/%E0%A4%A`), /URI malformed/);
+  for (const path of [
+    `/instance/${instanceRef}/%74hread/${threadRef}`,
+    `/instance/${instanceRef}/t%68read/${threadRef}`,
+    `/in%73tance/ins_%41QEBAQEBAQEBAQEBAQEBAQ/thread/${threadRef}`,
+  ]) {
+    const route = parseCanonicalAppUrl(path);
+    assert.equal(route.instancePublicRef, instanceRef);
+    assert.equal(route.threadPublicRef, threadRef);
+    assert.equal(route.upstreamPath, `/thread/${threadRef}`);
+  }
 });
 
 test("instance denial stops before thread authorization or tenant dispatch", async () => {
@@ -149,6 +159,21 @@ test("local canonical gateway serves an instance-scoped SPA and uses uniform 404
   );
   assert.equal(unauthorizedPage.status, 404);
   assert.equal(await unauthorizedPage.text(), "not found");
+  for (const encodedPath of [
+    `/instance/${instanceRef}/%74hread/${thread.publicRef}`,
+    `/instance/${instanceRef}/t%68read/${thread.publicRef}`,
+    `/in%73tance/ins_%41QEBAQEBAQEBAQEBAQEBAQ/thread/${thread.publicRef}`,
+  ]) {
+    const response = await fetch(`http://127.0.0.1:${port}${encodedPath}`, { headers: { cookie: userCookie } });
+    assert.equal(response.status, 404, encodedPath);
+    assert.equal(await response.text(), "not found", encodedPath);
+  }
+  const malformedEncodedInstance = await fetch(
+    `http://127.0.0.1:${port}/instance/%E0%A4%A/thread/${thread.publicRef}`,
+    { headers: { cookie: userCookie } },
+  );
+  assert.equal(malformedEncodedInstance.status, 404);
+  assert.equal(await malformedEncodedInstance.text(), "not found");
 });
 
 test("broker canonical gateway preserves HTTP bodies, queries, HTML base, streaming, and canonical cookie scope", async (t) => {

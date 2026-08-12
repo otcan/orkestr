@@ -45,21 +45,33 @@ function decode(value = ""): string {
 
 export function parseCanonicalAppUrl(rawUrl = ""): CanonicalAppRoute | null {
   const parsed = new URL(rawUrl || "/", "http://orkestr.local");
-  const parts = parsed.pathname.split("/").filter(Boolean);
-  if (parts[0] !== "instance" || parts.length < 2) return null;
-  const instancePublicRef = parseInstancePublicRef(decode(parts[1]));
+  const rawParts = parsed.pathname.split("/").filter(Boolean);
+  if (!rawParts.length || decode(rawParts[0]) !== "instance") return null;
+  const parts = ["instance", ...rawParts.slice(1).map(decode)];
+  if (parts.length < 2) return null;
+  const instancePublicRef = parseInstancePublicRef(parts[1]);
   const suffixParts = parts.slice(2);
   let threadPublicRef = "";
   if (suffixParts[0] === "thread") {
-    threadPublicRef = parseThreadPublicRef(decode(suffixParts[1]));
+    threadPublicRef = parseThreadPublicRef(suffixParts[1]);
   }
-  const suffix = `/${suffixParts.map((part) => encodeURIComponent(decode(part))).join("/")}`;
+  const suffix = `/${suffixParts.map((part) => encodeURIComponent(part)).join("/")}`;
   return {
     instancePublicRef,
     threadPublicRef,
     upstreamPath: `${suffix === "/" ? "/" : suffix}${parsed.search}`,
     prefixPath: `/instance/${encodeURIComponent(instancePublicRef)}/`,
   };
+}
+
+function canonicalAppPathCandidate(rawUrl = ""): boolean {
+  const parsed = new URL(rawUrl || "/", "http://orkestr.local");
+  const first = parsed.pathname.split("/").filter(Boolean)[0] || "";
+  try {
+    return decode(first) === "instance";
+  } catch {
+    return first.startsWith("instance");
+  }
 }
 
 function requestAuthorizedForLocalInstance(request: any, internalInstanceId: string): boolean {
@@ -113,7 +125,7 @@ export async function resolveCanonicalRoute(
 export async function preflightCanonicalAppRequest(request: any): Promise<{ matched: boolean; ok: boolean }> {
   if (!canonicalAppGatewayEnabled(process.env)) return { matched: false, ok: true };
   const rawUrl = String(request?.originalUrl || request?.url || "/");
-  if (!new URL(rawUrl, "http://orkestr.local").pathname.startsWith("/instance/")) return { matched: false, ok: true };
+  if (!canonicalAppPathCandidate(rawUrl)) return { matched: false, ok: true };
   let route: CanonicalAppRoute | null = null;
   try { route = parseCanonicalAppUrl(rawUrl); } catch { return { matched: true, ok: false }; }
   if (!route) return { matched: true, ok: false };
@@ -151,8 +163,7 @@ export function registerCanonicalAppGateway(app: INestApplication): void {
   if (!canonicalAppGatewayEnabled(process.env)) return;
   const expressApp = app.getHttpAdapter().getInstance();
   expressApp.use((request: any, response: any, next: () => void) => {
-    const pathname = new URL(String(request.originalUrl || request.url || "/"), "http://orkestr.local").pathname;
-    if (!pathname.startsWith("/instance/")) return next();
+    if (!canonicalAppPathCandidate(String(request.originalUrl || request.url || "/"))) return next();
     let route: CanonicalAppRoute | null = null;
     try { route = parseCanonicalAppUrl(request.originalUrl || request.url); } catch { notFound(response); return; }
     if (!route) { notFound(response); return; }
