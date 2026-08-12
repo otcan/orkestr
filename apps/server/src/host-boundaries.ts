@@ -159,6 +159,13 @@ function connectSupportPath(method = "GET", rawUrl = ""): boolean {
   ].includes(pathname)) return true;
   if (verb === "GET" && /^\/api\/setup\/security\/challenges\/[^/]+$/.test(pathname)) return true;
   if (verb === "GET" && pathname === "/api/connectors/gmail/oauth/start") return true;
+  if (verb === "POST" && (
+    pathname === "/api/broker/instances/register" ||
+    /^\/api\/broker\/instances\/[^/]+\/heartbeat$/.test(pathname) ||
+    /^\/api\/broker\/instances\/[^/]+\/whatsapp\/(?:onboarding|history)$/.test(pathname) ||
+    /^\/api\/broker\/instances\/[^/]+\/google-workspace\/(?:connect-link|refresh-token)$/.test(pathname) ||
+    pathname === "/api/broker/google-workspace/grants"
+  )) return true;
   return false;
 }
 

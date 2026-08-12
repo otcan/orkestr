@@ -108,7 +108,10 @@ ORKESTR_CONNECT_PUBLIC_URL=https://connect.example.test
 The application origin serves canonical ingress and normal application routes.
 The connect/auth origin serves setup and OAuth handoffs plus only the static
 shell and method-specific pairing/OAuth primitives required to complete those
-flows. It does not serve thread, control-plane, or administrator security APIs.
+flows. It also accepts the encrypted, method-specific broker registration,
+heartbeat, WhatsApp relay, and Google Workspace grant endpoints used by tenant
+instances. It does not serve thread, browser control-plane, broker inventory,
+or administrator security APIs.
 An application-origin setup or OAuth handoff is redirected to the configured
 connect/auth origin with its query string intact. Canonical routes arriving on
 the connect/auth origin are redirected to the application origin.

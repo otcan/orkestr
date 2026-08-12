@@ -250,6 +250,13 @@ test("connect host serves only method-specific pairing primitives and OAuth star
     ["GET", "/api/setup/security/challenges/sample"],
     ["POST", "/api/setup/security/pair"],
     ["GET", "/api/connectors/gmail/oauth/start?account=sample%40example.test"],
+    ["POST", "/api/broker/instances/register"],
+    ["POST", "/api/broker/instances/sample/heartbeat"],
+    ["POST", "/api/broker/instances/sample/whatsapp/onboarding"],
+    ["POST", "/api/broker/instances/sample/whatsapp/history"],
+    ["POST", "/api/broker/instances/sample/google-workspace/connect-link"],
+    ["POST", "/api/broker/instances/sample/google-workspace/refresh-token"],
+    ["POST", "/api/broker/google-workspace/grants"],
   ]) {
     assert.equal((await enforce(request(url, "connect.example.test", { method }), runtimeEnv)).handled, false, `${method} ${url}`);
   }
@@ -268,6 +275,9 @@ test("connect host serves only method-specific pairing primitives and OAuth star
     ["POST", "/api/setup/security/sessions/revoke"],
     ["POST", "/api/setup/security/sessions/sample/revoke"],
     ["POST", "/api/connectors/gmail/oauth/start"],
+    ["GET", "/api/broker/instances"],
+    ["GET", "/api/broker/instances/sample/heartbeat"],
+    ["POST", "/api/broker/instances/sample/other"],
   ]) {
     const denied = await enforce(request(url, "connect.example.test", { method }), runtimeEnv);
     assert.deepEqual([denied.statusCode, denied.body], [404, "not found"], `${method} ${url}`);
