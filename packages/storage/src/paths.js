@@ -55,6 +55,7 @@ export function dataPaths(env = process.env) {
     brokerInstancesDb: env.ORKESTR_BROKER_INSTANCES_DB || path.join(home, "broker-instances.sqlite"),
     brokerChannel: env.ORKESTR_BROKER_CHANNEL_FILE || path.join(home, "secrets", "broker-channel.json"),
     brokerClientIdentity: env.ORKESTR_BROKER_CLIENT_IDENTITY_FILE || path.join(home, "secrets", "broker-client-identity.json"),
+    brokerRegistrationIntent: env.ORKESTR_BROKER_REGISTRATION_INTENT_FILE || path.join(home, "secrets", "broker-registration-intent.json"),
     brokerClientRegistration: env.ORKESTR_BROKER_CLIENT_REGISTRATION_FILE || path.join(home, "secrets", "broker-client-registration.json"),
     releaseInstances: env.ORKESTR_RELEASE_INSTANCES_FILE || path.join(home, "release-instances.json"),
     releaseWhatsAppNotifications: path.join(home, "release-whatsapp-notifications.json"),

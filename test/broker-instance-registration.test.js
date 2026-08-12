@@ -15,15 +15,19 @@ import {
   ensureBrokerClientRegistration,
   heartbeatBrokerInstance,
   listBrokerInstances,
+  readBrokerInstanceRegistry,
   registerBrokerInstance,
   resolveBrokerConnectInstance,
   sendBrokerClientHeartbeat,
+  writeBrokerInstanceRegistry,
 } from "../packages/core/src/broker-instance-registry.js";
 import { authorizeHttpRequest } from "../packages/core/src/security.js";
 import { startServer } from "../apps/server/src/server.js";
 import { isInstancePublicRef } from "../packages/core/src/canonical-public-references.js";
 import { generateInstancePublicRef } from "../packages/core/src/canonical-public-references.js";
 import { readInstanceIdentity, writeInstanceIdentity } from "../packages/core/src/instance-identity.js";
+import { readBrokerRegistrationIntent } from "../packages/core/src/broker-registration-intent.js";
+import { writeSqliteBrokerRegistry } from "../packages/core/src/broker-instance-sqlite-store.js";
 
 function request(headers = {}) {
   return {
@@ -50,6 +54,31 @@ function restoreEnv(prior) {
     if (value === undefined) delete process.env[key];
     else process.env[key] = value;
   }
+}
+
+function registrationIntentId() {
+  return crypto.randomBytes(32).toString("base64url");
+}
+
+function localBrokerFetch(brokerEnv, calls = []) {
+  return async (_url, options = {}) => {
+    const body = JSON.parse(options.body);
+    calls.push(body);
+    try {
+      const payload = await registerBrokerInstance({
+        env: brokerEnv,
+        body,
+        request: request(options.headers || {}),
+      });
+      return { ok: true, status: 200, async json() { return payload; } };
+    } catch (error) {
+      return {
+        ok: false,
+        status: Number(error?.statusCode || 500),
+        async json() { return { ok: false, error: error?.message || "broker_registration_failed" }; },
+      };
+    }
+  };
 }
 
 test("broker registration issues broker UUID and encrypted channel bootstrap", async () => {
@@ -235,24 +264,29 @@ test("broker public reference is authoritative for first registration, cache reu
   assert.equal((await readInstanceIdentity(env)).publicRef, publicRef);
 });
 
-test("broker public reference accepts equal migrated identity and rejects conflicts", async (t) => {
+test("broker public reference accepts equal persisted identity and rejects conflicts during intent recovery", async (t) => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-broker-client-ref-conflict-"));
   t.after(() => fs.rm(home, { recursive: true, force: true }));
   const publicRef = generateInstancePublicRef();
-  const env = { ORKESTR_HOME: home, ORKESTR_BROKER_BASE_URL: "https://broker.example.test", ORKESTR_CANONICAL_INSTANCE_URLS: "1" };
-  await writeInstanceIdentity({ internalInstanceId: "broker-instance", publicRef }, env);
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_BROKER_BASE_URL: "https://broker.example.test",
+    ORKESTR_BROKER_REGISTRATION_TOKEN: "synthetic-registration-token",
+    ORKESTR_CANONICAL_INSTANCE_URLS: "1",
+  };
+  let responseRef = publicRef;
   const fetchImpl = async () => ({
     ok: true, status: 200,
-    async json() { return { ok: true, instanceId: "broker-instance", publicRef, channelId: "channel", broker: { publicKey: "key" } }; },
+    async json() { return { ok: true, instanceId: "broker-instance", publicRef: responseRef, channelId: "channel", broker: { publicKey: "key" } }; },
   });
-  assert.equal((await ensureBrokerClientRegistration(env, { fetchImpl })).publicRef, publicRef);
-  await fs.rm(path.join(home, "secrets", "broker-client-registration.json"), { force: true });
+  await assert.rejects(ensureBrokerClientRegistration(env, {
+    fetchImpl,
+    async writeRegistrationCache() { throw new Error("synthetic_cache_crash"); },
+  }), /broker_client_registration_cache_write_failed/);
+  assert.equal((await readInstanceIdentity(env)).publicRef, publicRef);
   const conflictRef = generateInstancePublicRef();
-  const conflictingFetch = async () => ({
-    ok: true, status: 200,
-    async json() { return { ok: true, instanceId: "broker-instance", publicRef: conflictRef, channelId: "channel-2", broker: { publicKey: "key" } }; },
-  });
-  await assert.rejects(ensureBrokerClientRegistration(env, { fetchImpl: conflictingFetch }), /broker_instance_public_ref_conflict/);
+  responseRef = conflictRef;
+  await assert.rejects(ensureBrokerClientRegistration(env, { fetchImpl }), /broker_instance_public_ref_conflict/);
   assert.equal((await readInstanceIdentity(env)).publicRef, publicRef);
 });
 
@@ -319,7 +353,7 @@ test("broker client registration recovers a cache-write crash from persisted can
   assert.equal(cached.publicRef, publicRef);
 });
 
-test("broker client registration retry fails closed when persisted and returned public refs differ", async (t) => {
+test("broker client registration without recovery evidence fails before a conflicting remote response", async (t) => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-broker-client-cache-retry-conflict-"));
   t.after(() => fs.rm(home, { recursive: true, force: true }));
   const instanceId = "11111111-2222-4333-8444-777777777777";
@@ -331,9 +365,9 @@ test("broker client registration retry fails closed when persisted and returned 
     ORKESTR_CANONICAL_INSTANCE_URLS: "1",
   };
   await writeInstanceIdentity({ internalInstanceId: instanceId, publicRef }, env);
-  let requestedInstanceId = "";
+  let calls = 0;
   const fetchImpl = async (_url, options = {}) => {
-    requestedInstanceId = JSON.parse(options.body).brokerInstanceId;
+    calls += 1;
     return {
       ok: true,
       status: 200,
@@ -349,8 +383,12 @@ test("broker client registration retry fails closed when persisted and returned 
     };
   };
 
-  await assert.rejects(ensureBrokerClientRegistration(env, { fetchImpl }), /broker_instance_public_ref_conflict/);
-  assert.equal(requestedInstanceId, instanceId);
+  assert.deepEqual(await ensureBrokerClientRegistration(env, { fetchImpl }), {
+    ok: false,
+    reason: "broker_registration_recovery_intent_missing",
+    status: 409,
+  });
+  assert.equal(calls, 0);
   assert.equal((await readInstanceIdentity(env)).publicRef, publicRef);
   await assert.rejects(
     fs.access(path.join(home, "secrets", "broker-client-registration.json")),
@@ -450,6 +488,332 @@ test("feature-off broker force and target changes do not request the cached inst
   assert.equal(changedTarget.instanceId, "legacy-instance-3");
   assert.equal(calls.length, 3);
   assert.equal(calls.every((body) => body.brokerInstanceId === undefined), true);
+  assert.equal(calls.every((body) => body.registrationIntentId === undefined), true);
+});
+
+test("registration intent recovers a real remote commit before local identity sync", async (t) => {
+  const clientHome = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-broker-intent-client-sync-crash-"));
+  const brokerHome = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-broker-intent-server-sync-crash-"));
+  t.after(() => Promise.all([
+    fs.rm(clientHome, { recursive: true, force: true }),
+    fs.rm(brokerHome, { recursive: true, force: true }),
+  ]));
+  const clientEnv = {
+    ORKESTR_HOME: clientHome,
+    ORKESTR_BROKER_BASE_URL: "https://broker.example.test",
+    ORKESTR_CANONICAL_INSTANCE_URLS: "1",
+  };
+  const brokerEnv = {
+    ORKESTR_HOME: brokerHome,
+    ORKESTR_BROKER_REGISTRATION_OPEN: "1",
+    ORKESTR_CANONICAL_INSTANCE_URLS: "1",
+    ORKESTR_BROKER_INSTANCE_STORE: "json",
+  };
+  const calls = [];
+  const fetchImpl = localBrokerFetch(brokerEnv, calls);
+
+  await assert.rejects(
+    ensureBrokerClientRegistration(clientEnv, {
+      fetchImpl,
+      async syncRegistrationIdentity() { throw new Error("synthetic_identity_sync_crash"); },
+    }),
+    /synthetic_identity_sync_crash/,
+  );
+  const pending = await readBrokerRegistrationIntent(clientEnv);
+  const afterCrash = await listBrokerInstances(brokerEnv);
+  assert.equal(afterCrash.instances.length, 1);
+  assert.equal(await readInstanceIdentity(clientEnv), null);
+
+  const recovered = await ensureBrokerClientRegistration(clientEnv, { fetchImpl });
+  const afterRecovery = await listBrokerInstances(brokerEnv);
+  assert.equal(afterRecovery.instances.length, 1);
+  assert.equal(recovered.instanceId, afterCrash.instances[0].instanceId);
+  assert.equal(recovered.publicRef, afterCrash.instances[0].publicRef);
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].registrationIntentId, pending.registrationIntentId);
+  assert.equal(calls[1].registrationIntentId, pending.registrationIntentId);
+  assert.equal(calls[1].brokerInstanceId, undefined);
+  assert.equal(JSON.stringify(recovered).includes(pending.registrationIntentId), false);
+  assert.equal(await readBrokerRegistrationIntent(clientEnv), null);
+});
+
+test("registration intent recovers a cache-write crash against a real open broker", async (t) => {
+  const clientHome = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-broker-intent-client-cache-crash-"));
+  const brokerHome = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-broker-intent-server-cache-crash-"));
+  t.after(() => Promise.all([
+    fs.rm(clientHome, { recursive: true, force: true }),
+    fs.rm(brokerHome, { recursive: true, force: true }),
+  ]));
+  const clientEnv = {
+    ORKESTR_HOME: clientHome,
+    ORKESTR_BROKER_BASE_URL: "https://broker.example.test",
+    ORKESTR_CANONICAL_INSTANCE_URLS: "1",
+  };
+  const brokerEnv = {
+    ORKESTR_HOME: brokerHome,
+    ORKESTR_BROKER_REGISTRATION_OPEN: "1",
+    ORKESTR_CANONICAL_INSTANCE_URLS: "1",
+    ORKESTR_BROKER_INSTANCE_STORE: "sqlite",
+  };
+  const calls = [];
+  const fetchImpl = localBrokerFetch(brokerEnv, calls);
+
+  await assert.rejects(ensureBrokerClientRegistration(clientEnv, {
+    fetchImpl,
+    async writeRegistrationCache() { throw new Error("synthetic_cache_crash"); },
+  }), /broker_client_registration_cache_write_failed/);
+  const identity = await readInstanceIdentity(clientEnv);
+  const pending = await readBrokerRegistrationIntent(clientEnv);
+  assert.ok(identity?.internalInstanceId);
+  assert.ok(pending?.registrationIntentId);
+
+  const recovered = await ensureBrokerClientRegistration(clientEnv, { fetchImpl });
+  const instances = await listBrokerInstances(brokerEnv);
+  assert.equal(instances.instances.length, 1);
+  assert.equal(recovered.instanceId, identity.internalInstanceId);
+  assert.equal(recovered.publicRef, identity.publicRef);
+  assert.equal(calls[1].brokerInstanceId, identity.internalInstanceId);
+  assert.equal(calls[1].registrationIntentId, pending.registrationIntentId);
+  assert.equal(await readBrokerRegistrationIntent(clientEnv), null);
+});
+
+test("durable cache reconciles and cleans an exact leftover registration intent", async (t) => {
+  const clientHome = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-broker-intent-cleanup-"));
+  const brokerHome = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-broker-intent-cleanup-server-"));
+  t.after(() => Promise.all([
+    fs.rm(clientHome, { recursive: true, force: true }),
+    fs.rm(brokerHome, { recursive: true, force: true }),
+  ]));
+  const clientEnv = { ORKESTR_HOME: clientHome, ORKESTR_BROKER_BASE_URL: "https://broker.example.test", ORKESTR_CANONICAL_INSTANCE_URLS: "1" };
+  const brokerEnv = { ORKESTR_HOME: brokerHome, ORKESTR_BROKER_REGISTRATION_OPEN: "1", ORKESTR_CANONICAL_INSTANCE_URLS: "1", ORKESTR_BROKER_INSTANCE_STORE: "json" };
+  let cleanupAttempts = 0;
+  const registered = await ensureBrokerClientRegistration(clientEnv, {
+    fetchImpl: localBrokerFetch(brokerEnv),
+    async removeRegistrationIntent() {
+      cleanupAttempts += 1;
+      throw new Error("synthetic_cleanup_crash");
+    },
+  });
+  assert.equal(cleanupAttempts, 1);
+  assert.ok(await readBrokerRegistrationIntent(clientEnv));
+
+  const reused = await ensureBrokerClientRegistration(clientEnv, { fetchImpl: localBrokerFetch(brokerEnv) });
+  assert.equal(reused.reused, true);
+  assert.equal(reused.instanceId, registered.instanceId);
+  assert.equal(await readBrokerRegistrationIntent(clientEnv), null);
+});
+
+test("durable canonical cache rejects a relay-account-only scope change before network access", async (t) => {
+  const clientHome = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-broker-intent-cache-relay-scope-"));
+  const brokerHome = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-broker-intent-cache-relay-server-"));
+  t.after(() => Promise.all([
+    fs.rm(clientHome, { recursive: true, force: true }),
+    fs.rm(brokerHome, { recursive: true, force: true }),
+  ]));
+  const clientEnv = {
+    ORKESTR_HOME: clientHome,
+    ORKESTR_BROKER_BASE_URL: "https://broker.example.test",
+    ORKESTR_CANONICAL_INSTANCE_URLS: "1",
+    ORKESTR_BROKER_WHATSAPP_RELAY_ACCOUNT_ID: "relay-one",
+  };
+  const brokerEnv = { ORKESTR_HOME: brokerHome, ORKESTR_BROKER_REGISTRATION_OPEN: "1", ORKESTR_CANONICAL_INSTANCE_URLS: "1", ORKESTR_BROKER_INSTANCE_STORE: "json" };
+  await ensureBrokerClientRegistration(clientEnv, { fetchImpl: localBrokerFetch(brokerEnv) });
+  let calls = 0;
+  await assert.rejects(ensureBrokerClientRegistration({
+    ...clientEnv,
+    ORKESTR_BROKER_WHATSAPP_RELAY_ACCOUNT_ID: "relay-two",
+  }, {
+    fetchImpl: async () => { calls += 1; throw new Error("unexpected_remote_call"); },
+  }), /broker_registration_target_scope_conflict/);
+  assert.equal(calls, 0);
+});
+
+test("broker intent replay rotates one channel, permits operational updates, and rejects identity scope changes", async (t) => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-broker-intent-binding-"));
+  t.after(() => fs.rm(home, { recursive: true, force: true }));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_BROKER_REGISTRATION_OPEN: "1",
+    ORKESTR_CANONICAL_INSTANCE_URLS: "1",
+    ORKESTR_BROKER_INSTANCE_STORE: "sqlite",
+  };
+  const client = __brokerInstanceRegistryTestInternals.createX25519Identity();
+  const otherClient = __brokerInstanceRegistryTestInternals.createX25519Identity();
+  const intent = registrationIntentId();
+  const first = await registerBrokerInstance({
+    env,
+    request: request(),
+    body: {
+      registrationIntentId: intent,
+      encryptionPublicKey: client.publicKey,
+      whatsappNumber: "+49 176 111111",
+      version: "1.0.0",
+      endpointBaseUrl: "https://old.example.test",
+    },
+  });
+  assert.equal(JSON.stringify(first).includes(intent), false);
+  const replay = await registerBrokerInstance({
+    env,
+    request: request(),
+    body: {
+      registrationIntentId: intent,
+      encryptionPublicKey: client.publicKey,
+      whatsappNumber: "+49 176 111111",
+      version: "2.0.0",
+      endpointBaseUrl: "https://new.example.test",
+    },
+  });
+  assert.equal(replay.replayed, true);
+  assert.equal(replay.instanceId, first.instanceId);
+  assert.equal(replay.publicRef, first.publicRef);
+  assert.notEqual(replay.channelId, first.channelId);
+  const sharedSecret = __brokerInstanceRegistryTestInternals.deriveSharedSecret(client.privateKey, replay.broker.publicKey);
+  const channelKey = __brokerInstanceRegistryTestInternals.deriveChannelKey(sharedSecret, replay.channelId);
+  const welcome = __brokerInstanceRegistryTestInternals.decryptJson(replay.encryptedWelcome, channelKey);
+  assert.equal(welcome.instanceId, first.instanceId);
+  const instances = await listBrokerInstances(env);
+  assert.equal(instances.instances.length, 1);
+  assert.equal(JSON.stringify(instances).includes(intent), false);
+  assert.equal(instances.instances[0].version, "2.0.0");
+  assert.equal(instances.instances[0].endpointBaseUrl, "https://new.example.test");
+
+  await assert.rejects(registerBrokerInstance({
+    env,
+    request: request(),
+    body: { registrationIntentId: intent, encryptionPublicKey: otherClient.publicKey, whatsappNumber: "+49 176 111111" },
+  }), /broker_registration_intent_binding_conflict/);
+  await assert.rejects(registerBrokerInstance({
+    env,
+    request: request(),
+    body: { registrationIntentId: intent, encryptionPublicKey: client.publicKey, whatsappNumber: "+49 176 222222" },
+  }), /broker_registration_intent_binding_conflict/);
+  await assert.rejects(registerBrokerInstance({
+    env,
+    request: request({ authorization: "Bearer different-open-scope" }),
+    body: { registrationIntentId: intent, encryptionPublicKey: client.publicKey, whatsappNumber: "+49 176 111111" },
+  }), /broker_registration_intent_binding_conflict/);
+  await assert.rejects(registerBrokerInstance({
+    env,
+    request: request(),
+    body: { brokerInstanceId: first.instanceId, encryptionPublicKey: client.publicKey, whatsappNumber: "+49 176 111111" },
+  }), /broker_requested_instance_id_requires_token/);
+  const events = await fs.readFile(path.join(home, "events.jsonl"), "utf8");
+  assert.equal(events.includes(intent), false);
+  assert.equal(JSON.stringify(await readBrokerInstanceRegistry(env)).includes(intent), false);
+});
+
+test("broker registration intent hashes stay unique in JSON and SQLite persistence", async (t) => {
+  for (const store of ["json", "sqlite"]) {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), `orkestr-broker-intent-unique-${store}-`));
+    t.after(() => fs.rm(home, { recursive: true, force: true }));
+    const env = {
+      ORKESTR_HOME: home,
+      ORKESTR_BROKER_REGISTRATION_OPEN: "1",
+      ORKESTR_CANONICAL_INSTANCE_URLS: "1",
+      ORKESTR_BROKER_INSTANCE_STORE: store,
+    };
+    const client = __brokerInstanceRegistryTestInternals.createX25519Identity();
+    await registerBrokerInstance({ env, request: request(), body: { registrationIntentId: registrationIntentId(), encryptionPublicKey: client.publicKey } });
+    await registerBrokerInstance({ env, request: request(), body: { registrationIntentId: registrationIntentId(), encryptionPublicKey: client.publicKey } });
+    const registry = await readBrokerInstanceRegistry(env);
+    registry.instances[1].registrationIntentHash = registry.instances[0].registrationIntentHash;
+    await assert.rejects(writeBrokerInstanceRegistry(registry, env), /broker_registration_intent_duplicate/);
+    assert.equal((await listBrokerInstances(env)).instances.length, 2);
+    if (store === "sqlite") {
+      const directHome = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-broker-intent-direct-sqlite-"));
+      t.after(() => fs.rm(directHome, { recursive: true, force: true }));
+      await assert.rejects(writeSqliteBrokerRegistry(registry, {
+        ...env,
+        ORKESTR_HOME: directHome,
+        ORKESTR_BROKER_INSTANCES_DB: path.join(directHome, "broker-instances.sqlite"),
+      }), /UNIQUE constraint failed/);
+      const mutation = await readBrokerInstanceRegistry(env);
+      mutation.instances[0].registrationIntentBindingHash = crypto.randomBytes(32).toString("hex");
+      await assert.rejects(writeSqliteBrokerRegistry(mutation, env), /broker_registration_intent_binding_immutable/);
+    }
+  }
+});
+
+test("pending local registration intent rejects target and authentication scope changes", async (t) => {
+  for (const changedScope of ["target", "relay", "auth"]) {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), `orkestr-broker-intent-client-${changedScope}-`));
+    t.after(() => fs.rm(home, { recursive: true, force: true }));
+    const baseEnv = {
+      ORKESTR_HOME: home,
+      ORKESTR_BROKER_BASE_URL: "https://broker.example.test",
+      ORKESTR_CANONICAL_INSTANCE_URLS: "1",
+      ORKESTR_DEMO_WHATSAPP_NUMBER: "+49 176 111111",
+      ORKESTR_BROKER_REGISTRATION_TOKEN: "registration-token-one",
+    };
+    let calls = 0;
+    const unavailableBroker = async () => {
+      calls += 1;
+      throw new Error("synthetic_network_failure");
+    };
+    await assert.rejects(ensureBrokerClientRegistration(baseEnv, { fetchImpl: unavailableBroker }), /synthetic_network_failure/);
+    assert.ok(await readBrokerRegistrationIntent(baseEnv));
+    const changedEnv = changedScope === "target"
+      ? { ...baseEnv, ORKESTR_DEMO_WHATSAPP_NUMBER: "+49 176 222222" }
+      : changedScope === "relay"
+        ? { ...baseEnv, ORKESTR_BROKER_WHATSAPP_RELAY_ACCOUNT_ID: "different-relay" }
+      : { ...baseEnv, ORKESTR_BROKER_REGISTRATION_TOKEN: "registration-token-two" };
+    await assert.rejects(
+      ensureBrokerClientRegistration(changedEnv, { fetchImpl: unavailableBroker }),
+      /broker_registration_intent_binding_conflict/,
+    );
+    assert.equal(calls, 1);
+  }
+});
+
+test("durable canonical cache rejects an authentication-scope change before reuse or network access", async (t) => {
+  const clientHome = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-broker-intent-cache-auth-scope-"));
+  const brokerHome = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-broker-intent-cache-auth-server-"));
+  t.after(() => Promise.all([
+    fs.rm(clientHome, { recursive: true, force: true }),
+    fs.rm(brokerHome, { recursive: true, force: true }),
+  ]));
+  const clientEnv = {
+    ORKESTR_HOME: clientHome,
+    ORKESTR_BROKER_BASE_URL: "https://broker.example.test",
+    ORKESTR_CANONICAL_INSTANCE_URLS: "1",
+    ORKESTR_BROKER_REGISTRATION_TOKEN: "token-one",
+  };
+  const brokerEnv = {
+    ORKESTR_HOME: brokerHome,
+    ORKESTR_BROKER_REGISTRATION_TOKEN: "token-one",
+    ORKESTR_CANONICAL_INSTANCE_URLS: "1",
+    ORKESTR_BROKER_INSTANCE_STORE: "json",
+  };
+  await ensureBrokerClientRegistration(clientEnv, { fetchImpl: localBrokerFetch(brokerEnv) });
+  let calls = 0;
+  await assert.rejects(ensureBrokerClientRegistration({
+    ...clientEnv,
+    ORKESTR_BROKER_REGISTRATION_TOKEN: "token-two",
+  }, {
+    fetchImpl: async () => { calls += 1; throw new Error("unexpected_remote_call"); },
+  }), /broker_registration_auth_scope_conflict/);
+  assert.equal(calls, 0);
+});
+
+test("canonical recovery without cache or intent reports an explicit diagnostic in open and token modes", async (t) => {
+  for (const mode of ["open", "token"]) {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), `orkestr-broker-intent-missing-${mode}-`));
+    t.after(() => fs.rm(home, { recursive: true, force: true }));
+    const env = {
+      ORKESTR_HOME: home,
+      ORKESTR_BROKER_BASE_URL: "https://broker.example.test",
+      ORKESTR_CANONICAL_INSTANCE_URLS: "1",
+      ...(mode === "token" ? { ORKESTR_BROKER_REGISTRATION_TOKEN: "synthetic-registration-token" } : {}),
+    };
+    await writeInstanceIdentity({
+      internalInstanceId: "11111111-2222-4333-8444-999999999999",
+      publicRef: generateInstancePublicRef(),
+    }, env);
+    let calls = 0;
+    const result = await ensureBrokerClientRegistration(env, { fetchImpl: async () => { calls += 1; throw new Error("unexpected_remote_call"); } });
+    assert.deepEqual(result, { ok: false, reason: "broker_registration_recovery_intent_missing", status: 409 });
+    assert.equal(calls, 0);
+  }
 });
 
 test("broker client registration prefers canonical broker base over demo fallback", async () => {
