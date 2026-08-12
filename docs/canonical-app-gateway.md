@@ -135,3 +135,37 @@ legacy-selector ambiguity, cookie/forwarded-header hazards, and recent
 wrong-host traffic without exposing private selectors or hostnames. Roll back
 host separation by setting `ORKESTR_HOST_BOUNDARIES=0`; stored public references
 and the three earlier canonical feature flags are unchanged.
+
+## Release gate and staged rollout
+
+Run the deterministic canonical URL gate before enabling any rollout phase:
+
+```sh
+npm run release:canonical-urls -- --artifact /tmp/canonical-url-gate.json
+```
+
+The artifact contains stage names, timestamps, and exit status without runtime
+identifiers or configured hosts. The gate builds both server and WebUI, runs the
+reference, migration, local/broker gateway, HTTP/SSE/WebSocket, authorization,
+legacy redirect, host-boundary, cookie, doctor, and link/navigation suites, and
+checks the OSS confidentiality boundary. Real connector traffic is deliberately
+outside this deterministic gate.
+
+Roll out one independently reversible phase at a time:
+
+1. Enable `ORKESTR_CANONICAL_INSTANCE_URLS` and apply the reference migration.
+   Verify dry-run, apply, and a repeated apply before continuing.
+2. Enable `ORKESTR_CANONICAL_APP_GATEWAY` on the parent-local canary. Verify
+   health, an authorized canonical route, a uniform unauthorized `404`, SSE,
+   and WebSocket ingress.
+3. Enable the gateway on one brokered canary and repeat the isolation checks.
+4. Enable `ORKESTR_CANONICAL_APP_LINKS` first for the operator canary, then for
+   the remaining release-train instances after doctor telemetry is clean.
+5. Enable `ORKESTR_HOST_BOUNDARIES` last, after the shared cookie domain and
+   trusted proxy list are verified and legacy wrong-host traffic is near zero.
+
+Before each forward phase, drill its rollback by disabling only the newest
+flag and confirming health plus the previous route behavior. Never delete or
+regenerate public references during rollback. Keep legacy aliases available
+until host-boundary telemetry and bookmarks are clean; ambiguous aliases always
+remain a uniform `404` rather than using first-match routing.
