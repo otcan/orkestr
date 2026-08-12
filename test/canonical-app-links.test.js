@@ -4,6 +4,7 @@ import {
   canonicalAppLinksEnabled,
   canonicalThreadAppUrl,
   canonicalThreadLinkData,
+  explicitCanonicalAppBase,
 } from "../packages/core/src/canonical-app-links.js";
 import { threadRuntimeSummary } from "../dist/server/apps/server/src/thread-summary.js";
 
@@ -36,6 +37,36 @@ test("canonical links use only immutable refs and preserve route query and fragm
     `https://app.example.test/instance/${instanceRef}/thread/${threadRef}/settings?tab=people%2Fall#owner`,
   );
   assert.doesNotMatch(result, /hostile|name|internal|uuid/i);
+});
+
+test("canonical app bases preserve explicit URL schemes and ports without using legacy fallbacks", () => {
+  const flags = {
+    ORKESTR_CANONICAL_INSTANCE_URLS: "1",
+    ORKESTR_CANONICAL_APP_GATEWAY: "1",
+    ORKESTR_CANONICAL_APP_LINKS: "1",
+  };
+  const cases = [
+    [{ ...flags, ORKESTR_PUBLIC_APP_URL: "http://localhost:18892/app" }, "http://localhost:18892/"],
+    [{ ...flags, ORKESTR_APP_URL: "https://app.example.test:8443/root" }, "https://app.example.test:8443/"],
+    [{ ...flags, ORKESTR_APP_HOST: "app.example.test:9443" }, "https://app.example.test:9443/"],
+  ];
+  for (const [env, expectedBase] of cases) {
+    assert.equal(explicitCanonicalAppBase(env), expectedBase);
+    assert.equal(
+      canonicalThreadAppUrl({ instancePublicRef: instanceRef, threadPublicRef: threadRef }, env),
+      `${expectedBase}instance/${instanceRef}/thread/${threadRef}`,
+    );
+  }
+
+  const fallbackOnly = {
+    ...flags,
+    ORKESTR_PUBLIC_URL: "https://legacy.example.test",
+    ORKESTR_PUBLIC_HTTPS_URL: "https://tailnet.example.test",
+    ORKESTR_CONNECT_PUBLIC_URL: "https://connect.example.test",
+    ORKESTR_PRIMARY_DOMAIN: "example.test",
+  };
+  assert.equal(explicitCanonicalAppBase(fallbackOnly), "");
+  assert.equal(canonicalThreadAppUrl({ instancePublicRef: instanceRef, threadPublicRef: threadRef }, fallbackOnly), "");
 });
 
 test("thread link data is stable across rename and never leaks internal identity", async () => {

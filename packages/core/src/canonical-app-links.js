@@ -4,7 +4,6 @@ import {
   parseThreadPublicRef,
 } from "./canonical-public-references.js";
 import { readInstanceIdentity } from "./instance-identity.js";
-import { publicUrlConfig } from "./public-url-config.js";
 
 function enabled(value = "") {
   return ["1", "true", "yes", "on", "enabled"].includes(String(value || "").trim().toLowerCase());
@@ -26,6 +25,25 @@ function routeTail(sourceUrl = "") {
   };
 }
 
+export function explicitCanonicalAppBase(env = process.env) {
+  const configuredUrl = String(env.ORKESTR_PUBLIC_APP_URL || env.ORKESTR_APP_URL || "").trim();
+  const configuredHost = String(env.ORKESTR_APP_HOST || "").trim();
+  const host = configuredHost.replace(/^https?:\/\//i, "");
+  if (!configuredUrl && /[/?#]/.test(host)) return "";
+  const source = configuredUrl || (host ? `https://${host}` : "");
+  if (!source) return "";
+  try {
+    const parsed = new URL(/^https?:\/\//i.test(source) ? source : `https://${source}`);
+    if (!["http:", "https:"].includes(parsed.protocol) || !parsed.hostname || parsed.username || parsed.password) return "";
+    parsed.pathname = "/";
+    parsed.search = "";
+    parsed.hash = "";
+    return parsed.toString();
+  } catch {
+    return "";
+  }
+}
+
 export function canonicalThreadAppUrl({
   instancePublicRef = "",
   threadPublicRef = "",
@@ -35,11 +53,11 @@ export function canonicalThreadAppUrl({
   if (!canonicalAppLinksEnabled(env)) return "";
   const instanceRef = parseInstancePublicRef(instancePublicRef);
   const threadRef = parseThreadPublicRef(threadPublicRef);
-  const appHost = String(publicUrlConfig(env).appHost || "").trim().toLowerCase();
-  if (!appHost) return "";
+  const appBase = explicitCanonicalAppBase(env);
+  if (!appBase) return "";
   const preserved = routeTail(sourceUrl);
   const suffix = panel ? [String(panel).trim()] : preserved.suffix;
-  const target = new URL(`https://${appHost}`);
+  const target = new URL(appBase);
   const pathname = ["instance", instanceRef, "thread", threadRef, ...suffix]
     .map((part) => encodeURIComponent(part))
     .join("/");

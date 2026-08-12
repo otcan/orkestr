@@ -48,6 +48,7 @@ import {
   WhatsAppStatusResponse,
 } from "./api.service";
 import { appendPendingFiles, messageWithAttachmentPaths, PendingFile, removePendingFile, uploadPendingFiles } from "./thread-uploads";
+import { canonicalThreadPanelUrl, navigateCanonicalThreadTarget } from "./canonical-thread-navigation.js";
 
 type Panel = "chat" | "history" | "delivery" | "timers" | "attach" | "settings" | "workers" | "runtime" | "raw" | "ops" | "files" | "userTimers" | "userDesk" | "userJobs" | "userConnectors";
 type CodexRateLimitKey = "primary" | "secondary";
@@ -795,7 +796,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.modelDetailsOpen = false;
     this.slashHelpOpen = false;
     this.gitDetailsThreadId = "";
-    this.pushPath(this.selectedId, this.activePanel);
+    if (this.pushPath(this.selectedId, this.activePanel)) return;
     this.beginThreadLoad(thread.id);
     this.clearThreadPanelState();
     this.syncThreadMetaDraft(thread, true);
@@ -923,7 +924,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     if (this.activePanel === "raw" && panel !== "raw") this.closeRawStream();
     this.activePanel = panel;
     const thread = this.selectedThread();
-    if (thread) this.pushPath(this.threadSlug(thread), panel);
+    if (thread && this.pushPath(this.threadSlug(thread), panel)) return;
     if (panel === "history") await this.loadHistory();
     if (panel === "delivery") await this.loadDeliveryTraces();
     if (panel === "timers") await this.loadTimers();
@@ -3448,30 +3449,36 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   threadUrl(thread: ThreadSummary): string {
-    const canonical = this.canonicalThreadPanelUrl(thread, "chat");
-    if (canonical) return canonical.toString();
+    const canonical = this.canonicalPanelUrl(thread, "chat");
+    if (canonical) return canonical;
     return this.pathForPanel(this.threadSlug(thread), "chat");
   }
 
   rawUrl(thread: ThreadSummary): string {
-    const canonical = this.canonicalThreadPanelUrl(thread, "raw");
-    return canonical ? `${canonical.pathname}${canonical.search}${canonical.hash}` : `/ng/thread/${encodeURIComponent(this.threadSlug(thread))}/raw`;
+    const canonical = this.canonicalPanelUrl(thread, "raw");
+    if (canonical) {
+      const target = new URL(canonical);
+      return target.origin === globalThis.location?.origin
+        ? `${target.pathname}${target.search}${target.hash}`
+        : target.toString();
+    }
+    return `/ng/thread/${encodeURIComponent(this.threadSlug(thread))}/raw`;
   }
 
   threadCanonicalLinkAvailable(thread: ThreadSummary | null = this.selectedThread()): boolean {
-    return Boolean(thread && this.canonicalThreadPanelUrl(thread, this.activePanel));
+    return Boolean(thread && this.canonicalPanelUrl(thread, this.activePanel));
   }
 
   selectedThreadUrl(thread: ThreadSummary): string {
-    return this.canonicalThreadPanelUrl(thread, this.activePanel, true)?.toString() || this.threadUrl(thread);
+    return this.canonicalPanelUrl(thread, this.activePanel, true) || this.threadUrl(thread);
   }
 
   async copySelectedThreadLink(thread: ThreadSummary | null = this.selectedThread()): Promise<void> {
     if (!thread) return;
-    const target = this.canonicalThreadPanelUrl(thread, this.activePanel, true);
+    const target = this.canonicalPanelUrl(thread, this.activePanel, true);
     if (!target) return;
     try {
-      await globalThis.navigator?.clipboard?.writeText(target.toString());
+      await globalThis.navigator?.clipboard?.writeText(target);
       this.linkNotice = "Link copied";
       globalThis.setTimeout(() => {
         if (this.linkNotice === "Link copied") this.linkNotice = "";
@@ -4667,14 +4674,23 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     }
   }
 
-  private pushPath(id: string, panel: Panel = "chat"): void {
+  private pushPath(id: string, panel: Panel = "chat"): boolean {
     const next = this.pathForPanel(id, panel);
-    if (globalThis.location?.pathname === next) return;
-    globalThis.history?.pushState({}, "", next);
+    return navigateCanonicalThreadTarget(next, {
+      currentUrl: globalThis.location?.href,
+      mode: "push",
+      history: globalThis.history,
+      location: globalThis.location,
+    }).crossOrigin;
   }
 
-  private replacePath(id: string, panel: Panel = "chat"): void {
-    globalThis.history?.replaceState({}, "", this.pathForPanel(id, panel));
+  private replacePath(id: string, panel: Panel = "chat"): boolean {
+    return navigateCanonicalThreadTarget(this.pathForPanel(id, panel), {
+      currentUrl: globalThis.location?.href,
+      mode: "replace",
+      history: globalThis.history,
+      location: globalThis.location,
+    }).crossOrigin;
   }
 
   private pushOnboardingPath(): void {
@@ -4766,34 +4782,32 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     if (panel === "userJobs") return this.appPath("/jobs");
     if (panel === "userConnectors") return this.appPath("/connectors");
     const thread = this.resolveThread(id);
-    const canonical = thread ? this.canonicalThreadPanelUrl(thread, panel) : null;
-    if (canonical) return `${canonical.pathname}${canonical.search}${canonical.hash}`;
+    const canonical = thread ? this.canonicalPanelUrl(thread, panel) : "";
+    if (canonical) return canonical;
     const suffix = panel === "chat" ? "" : `/${panel}`;
     return this.appPath(`/thread/${encodeURIComponent(id)}${suffix}`);
   }
 
-  private canonicalThreadPanelUrl(thread: ThreadSummary, panel: Panel, preserveLocation = false): URL | null {
-    if (!thread.canonicalUrl) return null;
-    try {
-      const target = new URL(thread.canonicalUrl, globalThis.location?.origin || "http://localhost");
-      target.search = preserveLocation ? globalThis.location?.search || "" : "";
-      target.hash = preserveLocation ? globalThis.location?.hash || "" : "";
-      target.pathname = target.pathname.replace(/\/+$/, "");
-      if (panel !== "chat") target.pathname = `${target.pathname}/${encodeURIComponent(panel)}`;
-      return target;
-    } catch {
-      return null;
-    }
+  private canonicalPanelUrl(thread: ThreadSummary, panel: Panel, preserveLocation = false): string {
+    return canonicalThreadPanelUrl(
+      thread.canonicalUrl,
+      panel,
+      globalThis.location?.href,
+      preserveLocation,
+    );
   }
 
   private canonicalizeCurrentThreadRoute(): void {
     const thread = this.selectedThread();
     if (!thread) return;
-    const target = this.canonicalThreadPanelUrl(thread, this.activePanel, true);
+    const target = this.canonicalPanelUrl(thread, this.activePanel, true);
     if (!target) return;
-    const next = `${target.pathname}${target.search}${target.hash}`;
-    const current = `${globalThis.location?.pathname || ""}${globalThis.location?.search || ""}${globalThis.location?.hash || ""}`;
-    if (next !== current) globalThis.history?.replaceState({}, "", next);
+    navigateCanonicalThreadTarget(target, {
+      currentUrl: globalThis.location?.href,
+      mode: "replace",
+      history: globalThis.history,
+      location: globalThis.location,
+    });
   }
 
   private pushOpsPath(view: ToolsView): void {

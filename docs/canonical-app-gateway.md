@@ -82,3 +82,12 @@ instance/thread public references. Thread renames cannot change it. Converting
 an already-open thread route preserves its query string and fragment, while
 panel navigation appends the panel below the opaque thread reference. Host
 selection and connect-host policy are intentionally outside this feature.
+
+Link emission accepts only an explicitly configured application base:
+`ORKESTR_PUBLIC_APP_URL`, `ORKESTR_APP_URL`, or `ORKESTR_APP_HOST` (in that
+order). URL settings preserve their `http`/`https` scheme and port; a host-only
+setting implies HTTPS. Legacy public, tailnet, primary-domain, auth, and connect
+settings are not application-link fallbacks. When no explicit application base
+exists, Orkestr omits canonical links. A browser already on another origin uses
+a real cross-origin navigation to the configured app origin; same-origin panel
+changes continue to use browser history.

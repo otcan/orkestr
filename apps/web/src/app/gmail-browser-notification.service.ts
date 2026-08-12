@@ -1,6 +1,7 @@
 import { Injectable, inject } from "@angular/core";
 import { firstValueFrom } from "rxjs";
 import { ApiService, GmailNotificationRule } from "./api.service";
+import { buildThreadLinkIndex, resolveThreadLink, ThreadLinkIndex } from "./thread-link-index.js";
 
 type DeliveryCursor = Record<string, string>;
 
@@ -11,7 +12,7 @@ export class GmailBrowserNotificationService {
   private readonly pollIntervalMs = 30_000;
   private poller: ReturnType<typeof setInterval> | null = null;
   private syncing = false;
-  private readonly threadLinks = new Map<string, string>();
+  private threadLinks: ThreadLinkIndex = buildThreadLinkIndex();
 
   start(): void {
     if (this.poller) return;
@@ -46,13 +47,7 @@ export class GmailBrowserNotificationService {
         rules ? Promise.resolve(rules) : firstValueFrom(this.api.gmailNotifications()).then((result) => result.notifications || []),
         firstValueFrom(this.api.threads()).catch(() => ({ threads: [] })),
       ]);
-      this.threadLinks.clear();
-      for (const thread of threadPayload.threads || []) {
-        if (!thread.canonicalUrl) continue;
-        for (const candidate of [thread.id, thread.publicRef, thread.name, thread.bindingName, thread.title]) {
-          if (candidate) this.threadLinks.set(String(candidate), thread.canonicalUrl);
-        }
-      }
+      this.threadLinks = buildThreadLinkIndex(threadPayload.threads || []);
       this.process(availableRules);
     } catch {
       // Connector access can be unavailable before pairing or Gmail setup.
@@ -85,7 +80,7 @@ export class GmailBrowserNotificationService {
     notification.onclick = () => {
       globalThis.focus?.();
       if (rule.targetType === "thread" && rule.target) {
-        globalThis.location.href = this.threadLinks.get(String(rule.target)) || this.appPath(`/thread/${encodeURIComponent(rule.target)}`);
+        globalThis.location.href = resolveThreadLink(this.threadLinks, rule.target) || this.appPath(`/thread/${encodeURIComponent(rule.target)}`);
       }
       notification.close();
     };

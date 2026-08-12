@@ -980,7 +980,7 @@ export async function threadSummaryPayload(options: ThreadSummaryOptions = {}) {
     role: effectivePrincipal?.role || "admin",
     canonicalLinks: summaryEnv.ORKESTR_CANONICAL_APP_LINKS || "",
     canonicalGateway: summaryEnv.ORKESTR_CANONICAL_APP_GATEWAY || "",
-    appHost: summaryEnv.ORKESTR_APP_HOST || summaryEnv.ORKESTR_PUBLIC_APP_URL || summaryEnv.ORKESTR_PUBLIC_URL || "",
+    appBase: summaryEnv.ORKESTR_PUBLIC_APP_URL || summaryEnv.ORKESTR_APP_URL || summaryEnv.ORKESTR_APP_HOST || "",
   });
   const now = Date.now();
   if (

@@ -270,19 +270,17 @@ test("canonical thread links drive history, active-panel open/copy, and notifica
   const component = await fs.readFile("apps/web/src/app/app.component.ts", "utf8");
   const template = await fs.readFile("apps/web/src/app/app.component.html", "utf8");
   const gmailNotifications = await fs.readFile("apps/web/src/app/gmail-browser-notification.service.ts", "utf8");
-  const navigation = component.slice(component.indexOf("private pathForPanel("), component.indexOf("private pushOpsPath("));
 
   assert.match(component, /this\.threads\s*=.*\n\s*this\.canonicalizeCurrentThreadRoute\(\)/);
-  assert.match(navigation, /this\.canonicalThreadPanelUrl\(thread, panel\)/);
-  assert.match(navigation, /globalThis\.history\?\.replaceState\(\{\}, "", next\)/);
-  assert.match(navigation, /target\.search = preserveLocation \? globalThis\.location\?\.search/);
-  assert.match(navigation, /target\.hash = preserveLocation \? globalThis\.location\?\.hash/);
+  assert.match(component, /navigateCanonicalThreadTarget\(next/);
+  assert.match(component, /navigateCanonicalThreadTarget\(target/);
+  assert.match(component, /private canonicalPanelUrl/);
   assert.match(component, /selectedThreadUrl\(thread: ThreadSummary\)/);
-  assert.match(component, /canonicalThreadPanelUrl\(thread, this\.activePanel, true\)/);
+  assert.match(component, /this\.canonicalPanelUrl\(thread, this\.activePanel, true\)/);
   assert.match(template, /threadCanonicalLinkAvailable\(thread\)/);
   assert.match(template, /\[href\]="selectedThreadUrl\(thread\)"/);
   assert.match(template, /copySelectedThreadLink\(thread\)/);
-  assert.match(gmailNotifications, /threadLinks\.get\(String\(rule\.target\)\) \|\| this\.appPath/);
+  assert.match(gmailNotifications, /resolveThreadLink\(this\.threadLinks, rule\.target\) \|\| this\.appPath/);
 });
 
 test("thread management panel scaffold includes template and styles", async () => {
