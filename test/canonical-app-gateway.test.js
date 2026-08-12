@@ -92,7 +92,7 @@ test("local canonical gateway serves an instance-scoped SPA and uses uniform 404
   const keys = [
     "ORKESTR_HOME", "ORKESTR_THREAD_STORE", "ORKESTR_BROKER_INSTANCE_STORE",
     "ORKESTR_CANONICAL_INSTANCE_URLS", "ORKESTR_CANONICAL_APP_GATEWAY", "ORKESTR_CANONICAL_APP_LINKS",
-    "ORKESTR_APP_HOST",
+    "ORKESTR_APP_HOST", "ORKESTR_PUBLIC_APP_URL", "ORKESTR_PUBLIC_URL", "ORKESTR_PUBLIC_HTTPS_URL",
     "ORKESTR_INSTANCE_ID", "ORKESTR_OVERLAY_DIR", "ORKESTR_AUTH_REQUIRED",
   ];
   const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
@@ -107,7 +107,9 @@ test("local canonical gateway serves an instance-scoped SPA and uses uniform 404
     ORKESTR_INSTANCE_ID: "private-local-id",
     ORKESTR_AUTH_REQUIRED: "0",
   });
-  delete process.env.ORKESTR_OVERLAY_DIR;
+  for (const key of ["ORKESTR_OVERLAY_DIR", "ORKESTR_PUBLIC_APP_URL", "ORKESTR_PUBLIC_URL", "ORKESTR_PUBLIC_HTTPS_URL"]) {
+    delete process.env[key];
+  }
   t.after(async () => {
     for (const [key, value] of Object.entries(previous)) {
       if (value === undefined) delete process.env[key]; else process.env[key] = value;

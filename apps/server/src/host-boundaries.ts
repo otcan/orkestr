@@ -195,6 +195,16 @@ function localCliRequest(request: any): boolean {
   return directLoopbackRequest(request) && request?.orkestrMachineAuth === "cli";
 }
 
+function localWhatsAppInboundRequest(request: any): boolean {
+  if (!directLoopbackRequest(request) || request?.orkestrMachineAuth !== "whatsapp_inbound") return false;
+  const method = String(request?.method || "GET").toUpperCase();
+  const pathname = new URL(String(request?.originalUrl || request?.url || "/"), "http://orkestr.local").pathname;
+  return method === "POST" && [
+    "/api/connectors/whatsapp/inbound",
+    "/api/connectors/whatsapp/inbound-media",
+  ].includes(pathname);
+}
+
 function targetAtBase(base: string, rawUrl: string): string {
   if (!base) return "";
   const source = new URL(rawUrl || "/", "http://orkestr.local");
@@ -264,7 +274,7 @@ export function rejectUnknownHostBoundaryRequest(request: any, response: any, en
 
 export async function enforceHostBoundaryRequest(request: any, response: any, env = process.env): Promise<boolean> {
   if (!hostBoundariesEnabled(env)) return false;
-  if (localProbeRequest(request) || localCliRequest(request)) return false;
+  if (localProbeRequest(request) || localCliRequest(request) || localWhatsAppInboundRequest(request)) return false;
   const rawUrl = String(request?.originalUrl || request?.url || "/");
   const origin = effectiveRequestOrigin(request, env);
   const { boundaries, appOrigin, connectOrigins } = allowedBoundaryOrigins(env);

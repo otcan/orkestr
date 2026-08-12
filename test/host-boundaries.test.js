@@ -160,7 +160,7 @@ test("handoff routes allow only connect/auth origins, redirect app, and reject u
   await cleanup(home);
 });
 
-test("direct loopback reaches authentication but only probes and verified CLI requests bypass host boundaries", async () => {
+test("direct loopback reaches authentication but only probes and exact verified machine routes bypass host boundaries", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-host-probes-"));
   const runtimeEnv = env(home);
   const direct = request("/metrics", "127.0.0.1:19812", { remoteAddress: "127.0.0.1" });
@@ -178,6 +178,30 @@ test("direct loopback reaches authentication but only probes and verified CLI re
   const cliSpy = responseSpy();
   assert.equal(rejectUnknownHostBoundaryRequest(cli, cliSpy.response, runtimeEnv), false);
   assert.equal((await enforce(cli, runtimeEnv)).handled, false);
+
+  for (const pathname of [
+    "/api/connectors/whatsapp/inbound",
+    "/api/connectors/whatsapp/inbound-media",
+  ]) {
+    const inbound = request(pathname, "127.0.0.1:19812", { method: "POST", remoteAddress: "127.0.0.1" });
+    inbound.orkestrMachineAuth = "whatsapp_inbound";
+    assert.equal((await enforce(inbound, runtimeEnv)).handled, false, pathname);
+  }
+
+  const wrongInboundMethod = request("/api/connectors/whatsapp/inbound", "127.0.0.1:19812", {
+    method: "GET",
+    remoteAddress: "127.0.0.1",
+  });
+  wrongInboundMethod.orkestrMachineAuth = "whatsapp_inbound";
+  assert.equal((await enforce(wrongInboundMethod, runtimeEnv)).statusCode, 404);
+
+  const wrongInboundRoute = request("/api/threads", "127.0.0.1:19812", { method: "POST", remoteAddress: "127.0.0.1" });
+  wrongInboundRoute.orkestrMachineAuth = "whatsapp_inbound";
+  assert.equal((await enforce(wrongInboundRoute, runtimeEnv)).statusCode, 404);
+
+  const remoteInbound = request("/api/connectors/whatsapp/inbound", "app.example.test", { method: "POST" });
+  remoteInbound.orkestrMachineAuth = "whatsapp_inbound";
+  assert.equal((await enforce(remoteInbound, runtimeEnv)).handled, false);
 
   const unauthenticated = request("/api/threads", "127.0.0.1:19812", { remoteAddress: "127.0.0.1" });
   const unauthenticatedSpy = responseSpy();
@@ -361,15 +385,17 @@ test("live server keeps the connect pairing page, assets, and primitive APIs on 
     "ORKESTR_CANONICAL_INSTANCE_URLS", "ORKESTR_CANONICAL_APP_GATEWAY",
     "ORKESTR_CANONICAL_APP_LINKS", "ORKESTR_PUBLIC_APP_URL",
     "ORKESTR_CONNECT_PUBLIC_URL", "ORKESTR_PUBLIC_AUTH_URL",
-    "ORKESTR_PRIMARY_DOMAIN",
+    "ORKESTR_PRIMARY_DOMAIN", "ORKESTR_COOKIE_DOMAIN",
     "ORKESTR_AUTH_REQUIRED", "ORKESTR_OVERLAY_DIR", "ORKESTR_RECOVER_RUNNING_ON_START",
     "ORKESTR_TRUST_PROXY_HEADERS", "ORKESTR_TRUSTED_PROXY_IPS",
+    "ORKESTR_WHATSAPP_INBOUND_TOKEN",
   ];
   const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
   Object.assign(process.env, env(home, {
     ORKESTR_PUBLIC_APP_URL: "http://app.example.test",
     ORKESTR_CONNECT_PUBLIC_URL: "http://connect.example.test",
     ORKESTR_PRIMARY_DOMAIN: "example.test",
+    ORKESTR_COOKIE_DOMAIN: "example.test",
     ORKESTR_AUTH_REQUIRED: "0",
     ORKESTR_RECOVER_RUNNING_ON_START: "0",
   }));
@@ -424,6 +450,18 @@ test("live server keeps the connect pairing page, assets, and primitive APIs on 
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ enabled: false }),
   })).status, 404);
+
+  process.env.ORKESTR_WHATSAPP_INBOUND_TOKEN = "test-whatsapp-inbound-token";
+  const inbound = await call("/api/connectors/whatsapp/inbound", `127.0.0.1:${port}`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: "Bearer test-whatsapp-inbound-token",
+    },
+    body: JSON.stringify({}),
+  });
+  assert.equal(inbound.status, 400);
+  assert.equal(JSON.parse(inbound.body.toString()).error, "whatsapp_event_id_required");
 
   const handoff = await call("/setup/pairing?return=%2Fsetup", "app.example.test");
   assert.equal(handoff.status, 308);
