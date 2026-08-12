@@ -52,6 +52,24 @@ arbitrary instance ID. Key, authorization, relay-account, or WhatsApp-target
 changes fail closed. Raw registration intents must never be placed in broker
 records, list responses, events, metrics, or logs.
 
+When a broker record predates canonical references, the tenant may adopt that
+exact record once. Adoption does not trust knowledge of the legacy UUID or a
+copied public key. The tenant encrypts an intent-, instance-, and target-bound
+adoption proof with its existing broker channel key; the broker decrypts it
+against the legacy record and also requires the existing client-key fingerprint,
+authorization scope, relay account, and WhatsApp target to match. It then adds
+the intent hashes and public reference to the same record. If the adoption
+response or local cache write is lost, an exact intent replay may include the
+same proof and still returns that record with a fresh channel. Missing, invalid,
+cross-intent, key-mismatched, authorization-mismatched, or target-mismatched
+proofs fail closed. Open registration still cannot select arbitrary instance
+IDs.
+
+Broker base URLs are canonicalized before cache, intent, and request use, so
+hostname case, default ports, and trailing path slashes do not fork an intent.
+Only absolute HTTP(S) URLs without credentials, query strings, or fragments are
+accepted.
+
 After the instance identity and broker registration cache are durable, the
 tenant removes only the exact matching pending intent. If cleanup is interrupted,
 the next cache reuse reconciles the matching cache and removes the leftover

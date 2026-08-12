@@ -19,9 +19,13 @@ export function parseBrokerRegistrationIntentId(value) {
   return intentId;
 }
 
-function normalizeBrokerBase(value) {
+export function normalizeBrokerBaseUrl(value) {
+  const configured = clean(value);
   try {
-    const url = new URL(clean(value));
+    const url = new URL(configured);
+    if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.search || url.hash || configured.includes("?") || configured.includes("#")) {
+      throw new Error("invalid");
+    }
     const pathname = url.pathname.replace(/\/+$/, "");
     return `${url.origin}${pathname}`;
   } catch {
@@ -32,7 +36,7 @@ function normalizeBrokerBase(value) {
 function assertBinding(record, binding) {
   if (
     clean(record.clientKeyFingerprint) !== clean(binding.clientKeyFingerprint) ||
-    normalizeBrokerBase(record.brokerBaseUrl) !== normalizeBrokerBase(binding.brokerBaseUrl) ||
+    normalizeBrokerBaseUrl(record.brokerBaseUrl) !== normalizeBrokerBaseUrl(binding.brokerBaseUrl) ||
     clean(record.targetScopeHash) !== clean(binding.targetScopeHash) ||
     clean(record.authScopeHash) !== clean(binding.authScopeHash)
   ) {
@@ -47,8 +51,7 @@ export async function readBrokerRegistrationIntent(env = process.env) {
   if (!clean(record.clientKeyFingerprint) || !clean(record.targetScopeHash) || !clean(record.authScopeHash)) {
     throw Object.assign(new Error("broker_registration_intent_binding_invalid"), { statusCode: 500 });
   }
-  normalizeBrokerBase(record.brokerBaseUrl);
-  return record;
+  return { ...record, brokerBaseUrl: normalizeBrokerBaseUrl(record.brokerBaseUrl) };
 }
 
 export async function ensureBrokerRegistrationIntent(binding, env = process.env, options = {}) {
@@ -65,7 +68,7 @@ export async function ensureBrokerRegistrationIntent(binding, env = process.env,
     schemaVersion: 1,
     registrationIntentId: parseBrokerRegistrationIntentId(bytes.toString("base64url")),
     clientKeyFingerprint: clean(binding.clientKeyFingerprint),
-    brokerBaseUrl: normalizeBrokerBase(binding.brokerBaseUrl),
+    brokerBaseUrl: normalizeBrokerBaseUrl(binding.brokerBaseUrl),
     targetScopeHash: clean(binding.targetScopeHash),
     authScopeHash: clean(binding.authScopeHash),
     status: "pending",
@@ -89,5 +92,3 @@ export async function clearBrokerRegistrationIntent(intent, env = process.env, o
   await removeIntent(dataPaths(env).brokerRegistrationIntent);
   return true;
 }
-
-export const __brokerRegistrationIntentTestInternals = { normalizeBrokerBase };

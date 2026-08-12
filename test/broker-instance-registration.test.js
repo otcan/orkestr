@@ -26,7 +26,7 @@ import { startServer } from "../apps/server/src/server.js";
 import { isInstancePublicRef } from "../packages/core/src/canonical-public-references.js";
 import { generateInstancePublicRef } from "../packages/core/src/canonical-public-references.js";
 import { readInstanceIdentity, writeInstanceIdentity } from "../packages/core/src/instance-identity.js";
-import { readBrokerRegistrationIntent } from "../packages/core/src/broker-registration-intent.js";
+import { normalizeBrokerBaseUrl, readBrokerRegistrationIntent } from "../packages/core/src/broker-registration-intent.js";
 import { writeSqliteBrokerRegistry } from "../packages/core/src/broker-instance-sqlite-store.js";
 
 function request(headers = {}) {
@@ -489,6 +489,210 @@ test("feature-off broker force and target changes do not request the cached inst
   assert.equal(calls.length, 3);
   assert.equal(calls.every((body) => body.brokerInstanceId === undefined), true);
   assert.equal(calls.every((body) => body.registrationIntentId === undefined), true);
+});
+
+test("legacy broker registration adopts canonically with channel proof in open and token modes", async (t) => {
+  for (const mode of ["open", "token"]) {
+    const clientHome = await fs.mkdtemp(path.join(os.tmpdir(), `orkestr-broker-adopt-client-${mode}-`));
+    const brokerHome = await fs.mkdtemp(path.join(os.tmpdir(), `orkestr-broker-adopt-server-${mode}-`));
+    t.after(() => Promise.all([
+      fs.rm(clientHome, { recursive: true, force: true }),
+      fs.rm(brokerHome, { recursive: true, force: true }),
+    ]));
+    const tokenEnv = mode === "token" ? { ORKESTR_BROKER_REGISTRATION_TOKEN: "adoption-token" } : {};
+    const legacyClientEnv = {
+      ORKESTR_HOME: clientHome,
+      ORKESTR_BROKER_BASE_URL: "https://broker.example.test///",
+      ...tokenEnv,
+    };
+    const legacyBrokerEnv = {
+      ORKESTR_HOME: brokerHome,
+      ORKESTR_BROKER_INSTANCE_STORE: "json",
+      ...(mode === "open" ? { ORKESTR_BROKER_REGISTRATION_OPEN: "1" } : tokenEnv),
+    };
+    const calls = [];
+    const legacy = await ensureBrokerClientRegistration(legacyClientEnv, {
+      fetchImpl: localBrokerFetch(legacyBrokerEnv, calls),
+    });
+    assert.equal(legacy.publicRef, undefined);
+    assert.equal((await listBrokerInstances(legacyBrokerEnv)).instances.length, 1);
+
+    const canonicalClientEnv = {
+      ...legacyClientEnv,
+      ORKESTR_BROKER_BASE_URL: "https://broker.example.test",
+      ORKESTR_CANONICAL_INSTANCE_URLS: "1",
+    };
+    const canonicalBrokerEnv = { ...legacyBrokerEnv, ORKESTR_CANONICAL_INSTANCE_URLS: "1" };
+    const adopted = await ensureBrokerClientRegistration(canonicalClientEnv, {
+      fetchImpl: localBrokerFetch(canonicalBrokerEnv, calls),
+    });
+    const instances = await listBrokerInstances(canonicalBrokerEnv);
+    assert.equal(instances.instances.length, 1);
+    assert.equal(adopted.instanceId, legacy.instanceId);
+    assert.equal(adopted.publicRef, instances.instances[0].publicRef);
+    assert.equal(isInstancePublicRef(adopted.publicRef), true);
+    assert.equal(calls[1].brokerInstanceId, legacy.instanceId);
+    assert.ok(calls[1].legacyAdoptionProof?.envelope?.ciphertext);
+    assert.ok(calls[1].registrationIntentId);
+
+    const reused = await ensureBrokerClientRegistration({
+      ...canonicalClientEnv,
+      ORKESTR_BROKER_BASE_URL: "https://broker.example.test/",
+    }, { fetchImpl: localBrokerFetch(canonicalBrokerEnv, calls) });
+    assert.equal(reused.reused, true);
+    assert.equal(reused.instanceId, legacy.instanceId);
+    assert.equal(calls.length, 2);
+    const cache = JSON.parse(await fs.readFile(path.join(clientHome, "secrets", "broker-client-registration.json"), "utf8"));
+    assert.equal(cache.brokerBaseUrl, "https://broker.example.test");
+  }
+});
+
+test("legacy adoption exact replay recovers identity-sync and cache-write loss in open and token modes", async (t) => {
+  for (const mode of ["open", "token"]) {
+    for (const failure of ["identity", "cache"]) {
+      const clientHome = await fs.mkdtemp(path.join(os.tmpdir(), `orkestr-broker-adopt-retry-${mode}-${failure}-`));
+      const brokerHome = await fs.mkdtemp(path.join(os.tmpdir(), `orkestr-broker-adopt-retry-server-${mode}-${failure}-`));
+      t.after(() => Promise.all([
+        fs.rm(clientHome, { recursive: true, force: true }),
+        fs.rm(brokerHome, { recursive: true, force: true }),
+      ]));
+      const tokenEnv = mode === "token" ? { ORKESTR_BROKER_REGISTRATION_TOKEN: "adoption-retry-token" } : {};
+      const clientEnv = { ORKESTR_HOME: clientHome, ORKESTR_BROKER_BASE_URL: "https://broker.example.test/", ...tokenEnv };
+      const brokerEnv = {
+        ORKESTR_HOME: brokerHome,
+        ORKESTR_BROKER_INSTANCE_STORE: "json",
+        ...(mode === "open" ? { ORKESTR_BROKER_REGISTRATION_OPEN: "1" } : tokenEnv),
+      };
+      const calls = [];
+      const legacy = await ensureBrokerClientRegistration(clientEnv, { fetchImpl: localBrokerFetch(brokerEnv, calls) });
+      const canonicalClientEnv = { ...clientEnv, ORKESTR_CANONICAL_INSTANCE_URLS: "1" };
+      const canonicalBrokerEnv = { ...brokerEnv, ORKESTR_CANONICAL_INSTANCE_URLS: "1" };
+      const failureOptions = failure === "identity"
+        ? { async syncRegistrationIdentity() { throw new Error("synthetic_adoption_identity_loss"); } }
+        : { async writeRegistrationCache() { throw new Error("synthetic_adoption_cache_loss"); } };
+      await assert.rejects(ensureBrokerClientRegistration(canonicalClientEnv, {
+        fetchImpl: localBrokerFetch(canonicalBrokerEnv, calls),
+        ...failureOptions,
+      }), /synthetic_adoption_identity_loss|broker_client_registration_cache_write_failed/);
+      assert.equal((await listBrokerInstances(canonicalBrokerEnv)).instances.length, 1);
+      const pending = await readBrokerRegistrationIntent(canonicalClientEnv);
+      assert.ok(pending?.registrationIntentId);
+
+      const recovered = await ensureBrokerClientRegistration({
+        ...canonicalClientEnv,
+        ORKESTR_BROKER_BASE_URL: "https://broker.example.test",
+      }, { fetchImpl: localBrokerFetch(canonicalBrokerEnv, calls) });
+      const instances = await listBrokerInstances(canonicalBrokerEnv);
+      assert.equal(instances.instances.length, 1);
+      assert.equal(recovered.instanceId, legacy.instanceId);
+      assert.equal(recovered.publicRef, instances.instances[0].publicRef);
+      assert.equal(calls.length, 3);
+      assert.equal(calls[1].registrationIntentId, pending.registrationIntentId);
+      assert.equal(calls[2].registrationIntentId, pending.registrationIntentId);
+      assert.ok(calls[2].legacyAdoptionProof?.envelope?.ciphertext);
+      assert.equal(await readBrokerRegistrationIntent(canonicalClientEnv), null);
+    }
+  }
+});
+
+test("legacy adoption proof is possession-bound, intent-bound, and exact-replay safe", async (t) => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-broker-adoption-proof-"));
+  t.after(() => fs.rm(home, { recursive: true, force: true }));
+  const legacyEnv = { ORKESTR_HOME: home, ORKESTR_BROKER_REGISTRATION_OPEN: "1", ORKESTR_BROKER_INSTANCE_STORE: "json" };
+  const canonicalEnv = { ...legacyEnv, ORKESTR_CANONICAL_INSTANCE_URLS: "1" };
+  const client = __brokerInstanceRegistryTestInternals.createX25519Identity();
+  const attacker = __brokerInstanceRegistryTestInternals.createX25519Identity();
+  const target = "+49 176 111111";
+  const legacy = await registerBrokerInstance({
+    env: legacyEnv,
+    request: request(),
+    body: { encryptionPublicKey: client.publicKey, whatsappNumber: target, relayAccountId: "sender" },
+  });
+  const intent = registrationIntentId();
+  const targetScopeHash = crypto.createHash("sha256").update(JSON.stringify({
+    relayAccountId: "sender",
+    whatsappTargetHash: crypto.createHash("sha256").update("49176111111@c.us").digest("hex"),
+  })).digest("hex");
+  const baseBody = {
+    brokerInstanceId: legacy.instanceId,
+    registrationIntentId: intent,
+    encryptionPublicKey: client.publicKey,
+    whatsappNumber: target,
+    relayAccountId: "sender",
+  };
+  await assert.rejects(registerBrokerInstance({ env: canonicalEnv, request: request(), body: baseBody }), /broker_registration_adoption_proof_required/);
+
+  const proofPayload = {
+    kind: "broker_registration_legacy_adoption_v1",
+    instanceId: legacy.instanceId,
+    registrationIntentId: intent,
+    authorizationCredentialHash: "open",
+    targetScopeHash,
+  };
+  const proofWith = (privateKey, payload = proofPayload) => ({
+    channelId: legacy.channelId,
+    envelope: encryptBrokerChannelPayload(payload, {
+      clientPrivateKey: privateKey,
+      brokerPublicKey: legacy.broker.publicKey,
+      channelId: legacy.channelId,
+    }),
+  });
+  await assert.rejects(registerBrokerInstance({
+    env: canonicalEnv,
+    request: request(),
+    body: { ...baseBody, legacyAdoptionProof: proofWith(attacker.privateKey) },
+  }), /broker_registration_adoption_proof_denied/);
+  await assert.rejects(registerBrokerInstance({
+    env: canonicalEnv,
+    request: request(),
+    body: { ...baseBody, legacyAdoptionProof: proofWith(client.privateKey, { ...proofPayload, registrationIntentId: registrationIntentId() }) },
+  }), /broker_registration_adoption_proof_mismatch/);
+  await assert.rejects(registerBrokerInstance({
+    env: canonicalEnv,
+    request: request(),
+    body: { ...baseBody, encryptionPublicKey: attacker.publicKey, legacyAdoptionProof: proofWith(client.privateKey) },
+  }), /broker_registration_adoption_key_conflict/);
+  await assert.rejects(registerBrokerInstance({
+    env: canonicalEnv,
+    request: request(),
+    body: { ...baseBody, whatsappNumber: "+49 176 222222", legacyAdoptionProof: proofWith(client.privateKey) },
+  }), /broker_registration_adoption_target_conflict/);
+
+  const adopted = await registerBrokerInstance({
+    env: canonicalEnv,
+    request: request(),
+    body: { ...baseBody, legacyAdoptionProof: proofWith(client.privateKey) },
+  });
+  assert.equal(adopted.instanceId, legacy.instanceId);
+  assert.equal((await listBrokerInstances(canonicalEnv)).instances.length, 1);
+  const replayed = await registerBrokerInstance({
+    env: canonicalEnv,
+    request: request(),
+    body: { ...baseBody, legacyAdoptionProof: proofWith(client.privateKey) },
+  });
+  assert.equal(replayed.replayed, true);
+  assert.equal(replayed.instanceId, adopted.instanceId);
+  assert.equal(replayed.publicRef, adopted.publicRef);
+  assert.notEqual(replayed.channelId, adopted.channelId);
+  await assert.rejects(registerBrokerInstance({
+    env: canonicalEnv,
+    request: request(),
+    body: { ...baseBody, registrationIntentId: registrationIntentId(), legacyAdoptionProof: proofWith(client.privateKey) },
+  }), /broker_requested_instance_id_requires_token|broker_registration_intent_rebind_denied/);
+});
+
+test("broker base URL normalization is strict and canonical", () => {
+  assert.equal(normalizeBrokerBaseUrl("HTTPS://Broker.Example.Test:443/path///"), "https://broker.example.test/path");
+  assert.equal(normalizeBrokerBaseUrl("http://broker.example.test:80/"), "http://broker.example.test");
+  for (const invalid of [
+    "file:///tmp/broker",
+    "broker.example.test",
+    "https://user@broker.example.test",
+    "https://broker.example.test?tenant=one",
+    "https://broker.example.test/#fragment",
+  ]) {
+    assert.throws(() => normalizeBrokerBaseUrl(invalid), /broker_registration_intent_broker_invalid/);
+  }
 });
 
 test("registration intent recovers a real remote commit before local identity sync", async (t) => {

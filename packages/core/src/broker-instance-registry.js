@@ -21,6 +21,7 @@ import { withCanonicalPublicReferenceLock } from "./canonical-public-reference-l
 import {
   clearBrokerRegistrationIntent,
   ensureBrokerRegistrationIntent,
+  normalizeBrokerBaseUrl,
   parseBrokerRegistrationIntentId,
   readBrokerRegistrationIntent,
 } from "./broker-registration-intent.js";
@@ -76,6 +77,12 @@ function brokerRegistrationTargetScopeHash(body = {}) {
   return sha256(JSON.stringify({
     relayAccountId: clean(body.relayAccountId || body.whatsappRelayAccountId),
     whatsappTargetHash: brokerWhatsAppChatHash(body),
+  }));
+}
+function brokerRegistrationRecordTargetScopeHash(record = {}) {
+  return sha256(JSON.stringify({
+    relayAccountId: clean(record.relayAccountId),
+    whatsappTargetHash: clean(record.whatsappChatHash),
   }));
 }
 function brokerRegistrationAuthScopeHash(token = {}) {
@@ -387,10 +394,57 @@ async function registerBrokerInstanceLocked({ body = {}, request = {}, env = pro
   if (intentReplay && rawRequestedInstanceId && rawRequestedInstanceId !== intentReplay.instance.instanceId) {
     throw Object.assign(new Error("broker_registration_intent_instance_conflict"), { statusCode: 409 });
   }
-  const requestedInstanceId = intentReplay?.instance.instanceId || requestedBrokerInstanceId(body, token);
-  const existingIndex = intentReplay?.index ?? (requestedInstanceId
+  const legacyCandidateIndex = !intentReplay && rawRequestedInstanceId
+    ? registry.instances.findIndex((instance) => instance.instanceId === rawRequestedInstanceId)
+    : -1;
+  const legacyCandidate = legacyCandidateIndex >= 0 ? registry.instances[legacyCandidateIndex] : null;
+  const legacyAdoption = Boolean(
+    canonicalInstanceUrlsEnabled(env) &&
+      registrationIntentHash &&
+      legacyCandidate &&
+      !legacyCandidate.registrationIntentHash,
+  );
+  if (legacyAdoption) {
+    if (legacyCandidate.encryptionPublicKeyFingerprint !== keyFingerprint) {
+      throw Object.assign(new Error("broker_registration_adoption_key_conflict"), { statusCode: 409 });
+    }
+    if (legacyCandidate.registrationTokenHash !== token.tokenHash) {
+      throw Object.assign(new Error("broker_registration_adoption_auth_conflict"), { statusCode: 409 });
+    }
+    if (brokerRegistrationRecordTargetScopeHash(legacyCandidate) !== registrationIntentScopeHash) {
+      throw Object.assign(new Error("broker_registration_adoption_target_conflict"), { statusCode: 409 });
+    }
+    const proof = body.legacyAdoptionProof;
+    if (!proof || clean(proof.channelId) !== legacyCandidate.channelId) {
+      throw Object.assign(new Error("broker_registration_adoption_proof_required"), { statusCode: 401 });
+    }
+    const adoptionBrokerChannel = await ensureBrokerChannel(env);
+    let proofPayload;
+    try {
+      proofPayload = decryptBrokerChannelPayload(proof.envelope || proof, {
+        brokerPrivateKey: adoptionBrokerChannel.privateKey,
+        instancePublicKey: legacyCandidate.encryptionPublicKey,
+        channelId: legacyCandidate.channelId,
+      });
+    } catch {
+      throw Object.assign(new Error("broker_registration_adoption_proof_denied"), { statusCode: 401 });
+    }
+    if (
+      clean(proofPayload.kind) !== "broker_registration_legacy_adoption_v1" ||
+      clean(proofPayload.instanceId) !== legacyCandidate.instanceId ||
+      clean(proofPayload.registrationIntentId) !== registrationIntentId ||
+      clean(proofPayload.authorizationCredentialHash) !== token.tokenHash ||
+      clean(proofPayload.targetScopeHash) !== registrationIntentScopeHash
+    ) {
+      throw Object.assign(new Error("broker_registration_adoption_proof_mismatch"), { statusCode: 409 });
+    }
+  }
+  const requestedInstanceId = intentReplay?.instance.instanceId || (legacyAdoption
+    ? legacyCandidate.instanceId
+    : requestedBrokerInstanceId(body, token));
+  const existingIndex = intentReplay?.index ?? (legacyAdoption ? legacyCandidateIndex : (requestedInstanceId
     ? registry.instances.findIndex((instance) => instance.instanceId === requestedInstanceId)
-    : -1);
+    : -1));
   const existing = existingIndex >= 0 ? registry.instances[existingIndex] : null;
   if (existing?.registrationIntentHash && registrationIntentHash && existing.registrationIntentHash !== registrationIntentHash) {
     throw Object.assign(new Error("broker_registration_intent_rebind_denied"), { statusCode: 409 });
@@ -449,7 +503,7 @@ async function registerBrokerInstanceLocked({ body = {}, request = {}, env = pro
   record.lastSeenAt = createdAt;
   if (existingIndex >= 0) registry.instances[existingIndex] = record;
   else registry.instances.push(record);
-  await writeRegistry(registry, env);
+  await writeRegistry(registry, env, { allowAssignment: legacyAdoption });
   await appendEvent({
     type: intentReplay ? "broker_instance_registration_replayed" : "broker_instance_registered",
     action: "broker.instances.register",
@@ -850,14 +904,18 @@ export async function ensureBrokerClientRegistration(env = process.env, options 
 
 async function ensureBrokerClientRegistrationLocked(env = process.env, options = {}) {
   const paths = await ensureDataDirs(env);
-  const brokerBaseUrl = clean(env.ORKESTR_BROKER_BASE_URL || env.ORKESTR_DEMO_BROKER_BASE_URL || options.brokerBaseUrl);
-  if (!brokerBaseUrl) return { ok: false, reason: "broker_base_url_missing" };
+  const configuredBrokerBaseUrl = clean(env.ORKESTR_BROKER_BASE_URL || env.ORKESTR_DEMO_BROKER_BASE_URL || options.brokerBaseUrl);
+  if (!configuredBrokerBaseUrl) return { ok: false, reason: "broker_base_url_missing" };
+  const brokerBaseUrl = normalizeBrokerBaseUrl(configuredBrokerBaseUrl);
   const configuredInstanceId = clean(env.ORKESTR_BROKER_INSTANCE_ID || env.ORKESTR_INSTANCE_ID || options.instanceId);
   const whatsappNumber = clean(env.ORKESTR_DEMO_WHATSAPP_NUMBER || env.ORKESTR_DEMO_WA_NUMBER);
   const whatsappTargetHash = brokerWhatsAppChatHash({ whatsappNumber });
   const relayAccountId = brokerClientRelayAccountId(env);
   const clientTargetScopeHash = brokerRegistrationTargetScopeHash({ whatsappNumber, relayAccountId });
-  const cached = await readJson(paths.brokerClientRegistration, null);
+  const rawCached = await readJson(paths.brokerClientRegistration, null);
+  const cached = rawCached?.brokerBaseUrl
+    ? { ...rawCached, brokerBaseUrl: normalizeBrokerBaseUrl(rawCached.brokerBaseUrl) }
+    : rawCached;
   const canonicalRefs = canonicalInstanceUrlsEnabled(env);
   const cacheIsComplete = Boolean(
     cached?.instanceId &&
@@ -931,12 +989,29 @@ async function ensureBrokerClientRegistrationLocked(env = process.env, options =
         authScopeHash: clientAuthScopeHash,
       }, env, { writeIntent: options.writeRegistrationIntent });
   }
+  const legacyAdoptionProof = canonicalRefs && cached?.instanceId && !cached?.publicRef && registrationIntent
+    ? {
+      channelId: cached.channelId,
+      envelope: encryptBrokerChannelPayload({
+        kind: "broker_registration_legacy_adoption_v1",
+        instanceId: cached.instanceId,
+        registrationIntentId: registrationIntent.registrationIntentId,
+        authorizationCredentialHash: token ? sha256(token) : "open",
+        targetScopeHash: clientTargetScopeHash,
+      }, {
+        clientPrivateKey: client.privateKey,
+        brokerPublicKey: cached.brokerPublicKey,
+        channelId: cached.channelId,
+      }),
+    }
+    : undefined;
   const registrationBody = {
     displayName: clean(env.ORKESTR_DEMO_INSTANCE_NAME || env.ORKESTR_SERVICE_NAME || os.hostname()),
     version: clean(env.ORKESTR_VERSION || env.npm_package_version),
     capabilities: brokerClientCapabilities(env),
     encryptionPublicKey: client.publicKey,
     registrationIntentId: registrationIntent?.registrationIntentId || undefined,
+    legacyAdoptionProof,
     brokerInstanceId: desiredInstanceId || (canonicalRefs ? cached?.instanceId : undefined) || undefined,
     endpointBaseUrl: clean(env.ORKESTR_DEMO_INTERNAL_BASE_URL || env.ORKESTR_API_BASE || env.ORKESTR_PUBLIC_APP_URL) || undefined,
     connectBaseUrl: clean(env.ORKESTR_CONNECT_PUBLIC_BASE_URL || env.ORKESTR_DEMO_PUBLIC_BASE_URL) || undefined,
