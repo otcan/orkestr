@@ -91,7 +91,8 @@ test("local canonical gateway serves an instance-scoped SPA and uses uniform 404
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-canonical-gateway-"));
   const keys = [
     "ORKESTR_HOME", "ORKESTR_THREAD_STORE", "ORKESTR_BROKER_INSTANCE_STORE",
-    "ORKESTR_CANONICAL_INSTANCE_URLS", "ORKESTR_CANONICAL_APP_GATEWAY",
+    "ORKESTR_CANONICAL_INSTANCE_URLS", "ORKESTR_CANONICAL_APP_GATEWAY", "ORKESTR_CANONICAL_APP_LINKS",
+    "ORKESTR_APP_HOST",
     "ORKESTR_INSTANCE_ID", "ORKESTR_OVERLAY_DIR", "ORKESTR_AUTH_REQUIRED",
   ];
   const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
@@ -101,6 +102,8 @@ test("local canonical gateway serves an instance-scoped SPA and uses uniform 404
     ORKESTR_BROKER_INSTANCE_STORE: "json",
     ORKESTR_CANONICAL_INSTANCE_URLS: "1",
     ORKESTR_CANONICAL_APP_GATEWAY: "1",
+    ORKESTR_CANONICAL_APP_LINKS: "1",
+    ORKESTR_APP_HOST: "app.example.test",
     ORKESTR_INSTANCE_ID: "private-local-id",
     ORKESTR_AUTH_REQUIRED: "0",
   });
@@ -137,6 +140,12 @@ test("local canonical gateway serves an instance-scoped SPA and uses uniform 404
   const api = await fetch(`http://127.0.0.1:${port}/instance/${instanceRef}/api/version?source=canonical`);
   assert.equal(api.status, 200);
   assert.equal((await api.json()).name, "orkestr-oss");
+  const summaryResponse = await fetch(`http://127.0.0.1:${port}/instance/${instanceRef}/api/threads`);
+  assert.equal(summaryResponse.status, 200);
+  const summary = (await summaryResponse.json()).threads.find((item) => item.publicRef === thread.publicRef);
+  assert.equal(summary.canonicalUrl, `https://app.example.test/instance/${instanceRef}/thread/${thread.publicRef}`);
+  assert.equal(summary.canonicalPath, `/instance/${instanceRef}/thread/${thread.publicRef}`);
+  assert.doesNotMatch(summary.canonicalUrl, /private-local-id|private-thread-id|Private thread name/);
 
   const userChallenge = await createPairingChallenge({
     env: process.env,

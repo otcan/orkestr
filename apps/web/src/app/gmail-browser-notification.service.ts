@@ -11,6 +11,7 @@ export class GmailBrowserNotificationService {
   private readonly pollIntervalMs = 30_000;
   private poller: ReturnType<typeof setInterval> | null = null;
   private syncing = false;
+  private readonly threadLinks = new Map<string, string>();
 
   start(): void {
     if (this.poller) return;
@@ -41,7 +42,17 @@ export class GmailBrowserNotificationService {
     if (this.syncing) return;
     this.syncing = true;
     try {
-      const availableRules = rules || (await firstValueFrom(this.api.gmailNotifications())).notifications || [];
+      const [availableRules, threadPayload] = await Promise.all([
+        rules ? Promise.resolve(rules) : firstValueFrom(this.api.gmailNotifications()).then((result) => result.notifications || []),
+        firstValueFrom(this.api.threads()).catch(() => ({ threads: [] })),
+      ]);
+      this.threadLinks.clear();
+      for (const thread of threadPayload.threads || []) {
+        if (!thread.canonicalUrl) continue;
+        for (const candidate of [thread.id, thread.publicRef, thread.name, thread.bindingName, thread.title]) {
+          if (candidate) this.threadLinks.set(String(candidate), thread.canonicalUrl);
+        }
+      }
       this.process(availableRules);
     } catch {
       // Connector access can be unavailable before pairing or Gmail setup.
@@ -74,7 +85,7 @@ export class GmailBrowserNotificationService {
     notification.onclick = () => {
       globalThis.focus?.();
       if (rule.targetType === "thread" && rule.target) {
-        globalThis.location.href = this.appPath(`/thread/${encodeURIComponent(rule.target)}`);
+        globalThis.location.href = this.threadLinks.get(String(rule.target)) || this.appPath(`/thread/${encodeURIComponent(rule.target)}`);
       }
       notification.close();
     };

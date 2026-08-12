@@ -59,3 +59,26 @@ buffered; only HTML is buffered to rewrite the base path.
 
 This phase adds canonical ingress only. Host-boundary changes, legacy
 redirects, and canonical link generation belong to later rollout work.
+
+## Canonical link emission
+
+Canonical link emission is a separate, default-off rollout step. After the
+gateway is enabled and the application host is configured, enable it with:
+
+```sh
+ORKESTR_APP_HOST=app.example.test
+ORKESTR_CANONICAL_APP_LINKS=1
+```
+
+All three canonical feature flags must be enabled before Orkestr emits links.
+Thread summaries then include `canonicalUrl` and `canonicalPath`, the WebUI
+uses the opaque route for navigation and copy/open actions, Gmail browser
+notifications open it when available, and watcher alerts render it for the
+operator. Legacy URLs and response shapes stay unchanged while link emission
+is disabled.
+
+The emitted URL contains only the configured app host and the persisted
+instance/thread public references. Thread renames cannot change it. Converting
+an already-open thread route preserves its query string and fragment, while
+panel navigation appends the panel below the opaque thread reference. Host
+selection and connect-host policy are intentionally outside this feature.

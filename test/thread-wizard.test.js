@@ -266,6 +266,25 @@ test("thread links do not persist the raw panel", async () => {
   assert.ok(!threadUrl.includes('this.activePanel === "raw" ? "raw" : "chat"'));
 });
 
+test("canonical thread links drive history, active-panel open/copy, and notification fallbacks", async () => {
+  const component = await fs.readFile("apps/web/src/app/app.component.ts", "utf8");
+  const template = await fs.readFile("apps/web/src/app/app.component.html", "utf8");
+  const gmailNotifications = await fs.readFile("apps/web/src/app/gmail-browser-notification.service.ts", "utf8");
+  const navigation = component.slice(component.indexOf("private pathForPanel("), component.indexOf("private pushOpsPath("));
+
+  assert.match(component, /this\.threads\s*=.*\n\s*this\.canonicalizeCurrentThreadRoute\(\)/);
+  assert.match(navigation, /this\.canonicalThreadPanelUrl\(thread, panel\)/);
+  assert.match(navigation, /globalThis\.history\?\.replaceState\(\{\}, "", next\)/);
+  assert.match(navigation, /target\.search = preserveLocation \? globalThis\.location\?\.search/);
+  assert.match(navigation, /target\.hash = preserveLocation \? globalThis\.location\?\.hash/);
+  assert.match(component, /selectedThreadUrl\(thread: ThreadSummary\)/);
+  assert.match(component, /canonicalThreadPanelUrl\(thread, this\.activePanel, true\)/);
+  assert.match(template, /threadCanonicalLinkAvailable\(thread\)/);
+  assert.match(template, /\[href\]="selectedThreadUrl\(thread\)"/);
+  assert.match(template, /copySelectedThreadLink\(thread\)/);
+  assert.match(gmailNotifications, /threadLinks\.get\(String\(rule\.target\)\) \|\| this\.appPath/);
+});
+
 test("thread management panel scaffold includes template and styles", async () => {
   const sources = await read([
     "apps/web/src/app/thread-management-panel.component.ts",

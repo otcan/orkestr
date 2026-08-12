@@ -182,6 +182,7 @@ export interface WatcherAlert {
   message?: string;
   status?: string;
   threadId?: string;
+  canonicalThreadUrl?: string;
   messageId?: string;
   routerTraceId?: string;
   watcherThreadId?: string | null;
@@ -1179,6 +1180,8 @@ export interface EventArchivesResponse {
 export interface ThreadSummary {
   id: string;
   publicRef?: string;
+  canonicalUrl?: string;
+  canonicalPath?: string;
   ownerUserId?: string;
   name?: string;
   title?: string;

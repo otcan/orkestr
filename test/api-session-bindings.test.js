@@ -10,6 +10,7 @@ import {
 } from "../packages/core/src/api-session-bindings.js";
 import { listWatcherAlerts, recordWatcherAlert, updateWatcherAlertLifecycle } from "../packages/core/src/watcher-alerts.js";
 import { createThread, listThreadMessages } from "../packages/core/src/threads.js";
+import { writeInstanceIdentity } from "../packages/core/src/instance-identity.js";
 import { whereAmI } from "../packages/core/src/whereiam.js";
 import {
   deliverWhatsAppReplies,
@@ -268,6 +269,37 @@ test("watcher alerts create the configured watcher thread, redact secrets, and d
   assert.doesNotMatch(messages[0].text, /secret-value/);
   assert.doesNotMatch(messages[0].text, /must-not-render/);
   assert.doesNotMatch(JSON.stringify(listed), /must-not-render|secret-value/);
+});
+
+test("watcher alerts link to canonical public thread routes without leaking names or internal ids", async (t) => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-watcher-canonical-link-"));
+  t.after(() => fs.rm(home, { recursive: true, force: true }));
+  const runtimeEnv = env(home, {
+    ORKESTR_CANONICAL_INSTANCE_URLS: "1",
+    ORKESTR_CANONICAL_APP_GATEWAY: "1",
+    ORKESTR_CANONICAL_APP_LINKS: "1",
+    ORKESTR_APP_HOST: "app.example.test",
+    ORKESTR_WATCHER_THREAD_NAME: "synthetic-watcher",
+  });
+  const instanceRef = "ins_AQEBAQEBAQEBAQEBAQEBAQ";
+  await writeInstanceIdentity({ internalInstanceId: "private-instance-id", publicRef: instanceRef }, runtimeEnv);
+  const target = await createThread({
+    id: "private-target-id",
+    name: "Hostile target ?secret=1",
+  }, runtimeEnv);
+
+  const recorded = await recordWatcherAlert({
+    source: "test.canonical",
+    code: "needs_operator",
+    message: "review the affected thread",
+    threadId: target.id,
+  }, runtimeEnv);
+  const messages = await listThreadMessages(recorded.thread.id, runtimeEnv);
+  const expected = `https://app.example.test/instance/${instanceRef}/thread/${target.publicRef}`;
+
+  assert.equal(recorded.alert.canonicalThreadUrl, expected);
+  assert.match(messages[0].text, new RegExp(`thread: ${expected.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
+  assert.doesNotMatch(messages[0].text, /private-target-id|Hostile target|secret=1|private-instance-id/);
 });
 
 test("watcher alerts group unresolved repeats beyond the time window and reopen after resolution", async () => {

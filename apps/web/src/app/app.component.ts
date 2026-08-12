@@ -152,6 +152,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   filterText = "";
   draft = "";
   error = "";
+  linkNotice = "";
   apiOnline = false;
   busy = false;
   appReady = false;
@@ -384,6 +385,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       this.apiOnline = true;
       this.trackThreadActivity(payload.threads);
       this.threads = [...payload.threads].sort((a, b) => this.activityMs(b) - this.activityMs(a));
+      this.canonicalizeCurrentThreadRoute();
       this.seedReadStateIfNeeded(this.threads);
       this.normalizeUserModeView();
       if (this.shouldAutoOpenOnboarding()) {
@@ -751,6 +753,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       this.apiOnline = true;
       this.appReady = true;
       this.threads = [...threads].sort((a, b) => this.activityMs(b) - this.activityMs(a));
+      this.canonicalizeCurrentThreadRoute();
       this.seedReadStateIfNeeded(this.threads);
       if (!this.isRouteLevelUserPanel(this.activePanel) && !this.selectedId && this.threads.length) {
         this.selectedId = this.threadSlug(this.threads[0]);
@@ -3445,11 +3448,39 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   threadUrl(thread: ThreadSummary): string {
+    const canonical = this.canonicalThreadPanelUrl(thread, "chat");
+    if (canonical) return canonical.toString();
     return this.pathForPanel(this.threadSlug(thread), "chat");
   }
 
   rawUrl(thread: ThreadSummary): string {
-    return `/ng/thread/${encodeURIComponent(this.threadSlug(thread))}/raw`;
+    const canonical = this.canonicalThreadPanelUrl(thread, "raw");
+    return canonical ? `${canonical.pathname}${canonical.search}${canonical.hash}` : `/ng/thread/${encodeURIComponent(this.threadSlug(thread))}/raw`;
+  }
+
+  threadCanonicalLinkAvailable(thread: ThreadSummary | null = this.selectedThread()): boolean {
+    return Boolean(thread && this.canonicalThreadPanelUrl(thread, this.activePanel));
+  }
+
+  selectedThreadUrl(thread: ThreadSummary): string {
+    return this.canonicalThreadPanelUrl(thread, this.activePanel, true)?.toString() || this.threadUrl(thread);
+  }
+
+  async copySelectedThreadLink(thread: ThreadSummary | null = this.selectedThread()): Promise<void> {
+    if (!thread) return;
+    const target = this.canonicalThreadPanelUrl(thread, this.activePanel, true);
+    if (!target) return;
+    try {
+      await globalThis.navigator?.clipboard?.writeText(target.toString());
+      this.linkNotice = "Link copied";
+      globalThis.setTimeout(() => {
+        if (this.linkNotice === "Link copied") this.linkNotice = "";
+        this.renderNow();
+      }, 1500);
+    } catch (error) {
+      this.error = this.errorText(error);
+    }
+    this.renderNow();
   }
 
   messageKey(message: ThreadMessage): string {
@@ -4734,8 +4765,35 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     if (panel === "userDesk") return this.appPath("/desk");
     if (panel === "userJobs") return this.appPath("/jobs");
     if (panel === "userConnectors") return this.appPath("/connectors");
+    const thread = this.resolveThread(id);
+    const canonical = thread ? this.canonicalThreadPanelUrl(thread, panel) : null;
+    if (canonical) return `${canonical.pathname}${canonical.search}${canonical.hash}`;
     const suffix = panel === "chat" ? "" : `/${panel}`;
     return this.appPath(`/thread/${encodeURIComponent(id)}${suffix}`);
+  }
+
+  private canonicalThreadPanelUrl(thread: ThreadSummary, panel: Panel, preserveLocation = false): URL | null {
+    if (!thread.canonicalUrl) return null;
+    try {
+      const target = new URL(thread.canonicalUrl, globalThis.location?.origin || "http://localhost");
+      target.search = preserveLocation ? globalThis.location?.search || "" : "";
+      target.hash = preserveLocation ? globalThis.location?.hash || "" : "";
+      target.pathname = target.pathname.replace(/\/+$/, "");
+      if (panel !== "chat") target.pathname = `${target.pathname}/${encodeURIComponent(panel)}`;
+      return target;
+    } catch {
+      return null;
+    }
+  }
+
+  private canonicalizeCurrentThreadRoute(): void {
+    const thread = this.selectedThread();
+    if (!thread) return;
+    const target = this.canonicalThreadPanelUrl(thread, this.activePanel, true);
+    if (!target) return;
+    const next = `${target.pathname}${target.search}${target.hash}`;
+    const current = `${globalThis.location?.pathname || ""}${globalThis.location?.search || ""}${globalThis.location?.hash || ""}`;
+    if (next !== current) globalThis.history?.replaceState({}, "", next);
   }
 
   private pushOpsPath(view: ToolsView): void {

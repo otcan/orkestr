@@ -338,6 +338,10 @@
           </p>
         </div>
         <div class="head-actions cockpit-actions">
+          @if (threadCanonicalLinkAvailable(thread)) {
+            <a class="button secondary" [href]="selectedThreadUrl(thread)" target="_blank" rel="noreferrer">OPEN</a>
+            <button class="secondary" type="button" (click)="copySelectedThreadLink(thread)">{{ linkNotice || "COPY LINK" }}</button>
+          }
           @if (isAdminMode()) {
             <button class="system-mini-card" type="button" (click)="openTools('system')" title="Open system resources">
               <span>
