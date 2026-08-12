@@ -13,6 +13,7 @@ import { validateDesktopShareSession } from "../../../packages/core/src/desktop-
 import { appendEvent } from "../../../packages/storage/src/store.js";
 import { desktopCapabilityRequired } from "../../../packages/browsers/src/desktop-capability-broker.js";
 import { hostBoundaryUpgradeDenied } from "./host-boundaries.js";
+import { appendSanitizedForwardedHeaders, rawUpgradeHeaderAllowed } from "./upgrade-forwarded-headers.js";
 
 type DesktopTarget = {
   slug: string;
@@ -287,11 +288,12 @@ function rawUpgradeHeaders(request: IncomingMessage, target: DesktopTarget): str
     if (name.toLowerCase() === "host") {
       sawHost = true;
       lines.push(`Host: 127.0.0.1:${target.port}`);
-    } else {
+    } else if (rawUpgradeHeaderAllowed(name)) {
       lines.push(`${name}: ${value}`);
     }
   }
   if (!sawHost) lines.push(`Host: 127.0.0.1:${target.port}`);
+  appendSanitizedForwardedHeaders(lines, request);
   lines.push("", "");
   return lines.join("\r\n");
 }

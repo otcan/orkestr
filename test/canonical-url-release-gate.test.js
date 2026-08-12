@@ -30,6 +30,7 @@ test("canonical URL release gate plans every deterministic security surface", as
     "test/canonical-thread-navigation.test.js",
     "test/canonical-url-release-gate.test.js",
     "test/host-boundaries.test.js",
+    "test/upgrade-forwarded-headers.test.js",
     "test/security.test.js",
     "test/static-ui.test.js",
   ]) assert.ok(planned.includes(required), required);

@@ -5,6 +5,7 @@ import tls from "node:tls";
 import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
 import { brokerProxyAuthHeader } from "./broker-instance-app-proxy.js";
+import { appendSanitizedForwardedHeaders, rawUpgradeHeaderAllowed } from "./upgrade-forwarded-headers.js";
 
 export type CanonicalBrokerTarget = {
   instanceId: string;
@@ -112,9 +113,10 @@ function rawUpgradeHeaders(request: IncomingMessage, target: CanonicalBrokerTarg
     const value = request.rawHeaders[index + 1] || "";
     const lowered = name.toLowerCase();
     if (lowered === "host") { host = true; lines.push(`Host: ${target.baseUrl.host}`); }
-    else if (!["x-forwarded-prefix", "x-orkestr-broker-instance-id", "x-orkestr-broker-auth"].includes(lowered)) lines.push(`${name}: ${value}`);
+    else if (rawUpgradeHeaderAllowed(lowered) && !["x-forwarded-prefix", "x-orkestr-broker-instance-id", "x-orkestr-broker-auth"].includes(lowered)) lines.push(`${name}: ${value}`);
   }
   if (!host) lines.push(`Host: ${target.baseUrl.host}`);
+  appendSanitizedForwardedHeaders(lines, request);
   lines.push(`X-Forwarded-Prefix: ${target.prefixPath.replace(/\/+$/, "")}`);
   lines.push(`X-Orkestr-Broker-Instance-Id: ${target.instanceId}`);
   lines.push(`X-Orkestr-Broker-Auth: ${auth}`, "", "");

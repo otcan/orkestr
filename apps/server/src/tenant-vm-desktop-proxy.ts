@@ -8,6 +8,7 @@ import type { Duplex } from "node:stream";
 import { getTenantVm } from "../../../packages/core/src/tenant-vm-registry.js";
 import { tenantDesktopShareCookiePresent } from "../../../packages/core/src/tenant-desktop-share-routing.js";
 import { hostBoundaryUpgradeDenied } from "./host-boundaries.js";
+import { appendSanitizedForwardedHeaders, rawUpgradeHeaderAllowed } from "./upgrade-forwarded-headers.js";
 
 type TenantDesktopTarget = {
   tenantVmId: string;
@@ -138,11 +139,12 @@ function rawUpgradeHeaders(request: IncomingMessage, target: TenantDesktopTarget
     if (name.toLowerCase() === "host") {
       sawHost = true;
       lines.push(`Host: ${target.baseUrl.host}`);
-    } else {
+    } else if (rawUpgradeHeaderAllowed(name)) {
       lines.push(`${name}: ${value}`);
     }
   }
   if (!sawHost) lines.push(`Host: ${target.baseUrl.host}`);
+  appendSanitizedForwardedHeaders(lines, request);
   lines.push("", "");
   return lines.join("\r\n");
 }

@@ -38,6 +38,7 @@ export const canonicalUrlReleaseStages = [
       "test/canonical-thread-navigation.test.js",
       "test/canonical-url-release-gate.test.js",
       "test/host-boundaries.test.js",
+      "test/upgrade-forwarded-headers.test.js",
       "test/auth-config.test.js",
       "test/security.test.js",
       "test/system-doctor.test.js",
