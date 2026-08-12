@@ -338,7 +338,7 @@ function encodeBrokerAuthHeader(body: unknown): string {
   return Buffer.from(JSON.stringify(body), "utf8").toString("base64url");
 }
 
-async function brokerProxyAuthHeader(request: any, target: BrokerAppTarget): Promise<string> {
+export async function brokerProxyAuthHeader(request: any, target: BrokerAppTarget): Promise<string> {
   const session = request?.orkestrSecuritySession || {};
   const tenantOwner = await ownerUserForBrokerInstance(target.instanceId);
   const userId = tenantOwner.userId || String(session.userId || "");

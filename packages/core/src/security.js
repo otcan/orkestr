@@ -1888,6 +1888,11 @@ export function instanceAppSessionCookiePath(instanceId = "") {
   return id ? `/i/${encodeURIComponent(id)}/app` : "/";
 }
 
+export function canonicalInstanceAppSessionCookiePath(instancePublicRef = "") {
+  const ref = String(instancePublicRef || "").trim();
+  return ref ? `/instance/${encodeURIComponent(ref)}` : "/";
+}
+
 export function clearSessionCookieHeaders(env = process.env, options = {}) {
   const urls = publicUrlConfig(env);
   const cookieDomain = cookieDomainMatchesHost(urls.cookieDomain, options.requestHost) ? urls.cookieDomain : "";

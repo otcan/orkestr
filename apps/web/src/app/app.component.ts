@@ -4450,7 +4450,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   private resolveThread(value: string): ThreadSummary | undefined {
     const id = decodeURIComponent(String(value || "").trim());
     return this.threads.find((thread) =>
-      [thread.id, thread.name, thread.bindingName, thread.title, thread.codexThreadId, thread.threadId]
+      [thread.publicRef, thread.id, thread.name, thread.bindingName, thread.title, thread.codexThreadId, thread.threadId]
         .filter(Boolean)
         .some((candidate) => String(candidate) === id),
     );

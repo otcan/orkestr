@@ -2,7 +2,7 @@ import path from "node:path";
 import fs from "node:fs/promises";
 import { dataPaths, ensureDataDirs, userDataPaths } from "./paths.js";
 import { readJson, writeJson } from "./store.js";
-import { assignThreadPublicRefs, listThreadRecords, rollbackThreadPublicRefAssignments, saveThreadRecords } from "./thread-registry.js";
+import { assignThreadPublicRefs, findThreadRecordByPublicRef, listThreadRecords, rollbackThreadPublicRefAssignments, saveThreadRecords } from "./thread-registry.js";
 import {
   appendThreadMessageRecord,
   deleteThreadMessageRecords,
@@ -27,6 +27,9 @@ export function createThreadRepository(env = process.env) {
   return {
     list() {
       return listThreadRecords(env);
+    },
+    findByPublicRef(publicRef) {
+      return findThreadRecordByPublicRef(publicRef, env);
     },
     save(threads) {
       return saveThreadRecords(threads, env);

@@ -95,7 +95,7 @@ export function registerStaticFallback(app: INestApplication): void {
         .type("text/html; charset=utf-8")
         .send(publicSite);
     }
-    return serveStaticPath(url || "/", response);
+    return serveStaticPath(url || "/", response, String(request.orkestrCanonicalPrefix || ""));
   });
 }
 
@@ -450,7 +450,13 @@ async function servePublicAsset(requestUrl: string, response: any) {
   }
 }
 
-async function serveStaticPath(requestUrl: string, response: any) {
+function rewriteStaticBase(body: Buffer, prefixPath = ""): Buffer | string {
+  if (!prefixPath) return body;
+  const base = prefixPath.endsWith("/") ? prefixPath : `${prefixPath}/`;
+  return body.toString("utf8").replace(/<base\s+href=(["'])\/\1\s*\/?>/i, `<base href="${base}" />`);
+}
+
+async function serveStaticPath(requestUrl: string, response: any, prefixPath = "") {
   const url = new URL(requestUrl, "http://localhost");
   const requested = decodeURIComponent(url.pathname === "/" ? "/index.html" : url.pathname);
   const assetPath = requested === "/favicon.ico" ? "/favicon.svg" : requested;
@@ -465,7 +471,7 @@ async function serveStaticPath(requestUrl: string, response: any) {
       .status(200)
       .header("cache-control", "no-store")
       .type(mimeTypes.get(ext) || "application/octet-stream")
-      .send(body);
+      .send(ext === ".html" ? rewriteStaticBase(body, prefixPath) : body);
   } catch {
     try {
       const body = await fs.readFile(path.join(publicDir, "index.html"));
@@ -473,7 +479,7 @@ async function serveStaticPath(requestUrl: string, response: any) {
         .status(200)
         .header("cache-control", "no-store")
         .type("text/html; charset=utf-8")
-        .send(body);
+        .send(rewriteStaticBase(body, prefixPath));
     } catch {
       return response
         .status(503)

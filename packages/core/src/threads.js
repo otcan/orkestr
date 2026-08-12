@@ -20,6 +20,7 @@ import {
   assertUniquePublicRefs,
   canonicalInstanceUrlsEnabled,
   generateUniquePublicRef,
+  parseThreadPublicRef,
 } from "./canonical-public-references.js";
 import { withCanonicalPublicReferenceLock } from "./canonical-public-reference-lock.js";
 
@@ -154,6 +155,14 @@ export async function getThread(threadId, env = process.env) {
     threads.find((thread) => thread.name === id) ||
     threads.find((thread) => thread.bindingName === id) ||
     null;
+}
+
+export async function getThreadByPublicRefForPrincipal(publicRef, principal, env = process.env) {
+  const value = parseThreadPublicRef(publicRef);
+  const thread = await createThreadRepository(env).findByPublicRef(value);
+  if (!thread) return null;
+  assertResourceAccess(principal, thread, "thread_access", env);
+  return thread;
 }
 
 export async function getThreadForPrincipal(threadId, principal, env = process.env) {

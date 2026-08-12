@@ -37,6 +37,7 @@ import {
 import { AppModule } from "./app.module.js";
 import { startBrokerClientHeartbeat } from "./broker-client-heartbeat.js";
 import { attachBrokerInstanceAppProxyUpgrade, registerBrokerInstanceAppProxy } from "./broker-instance-app-proxy.js";
+import { attachCanonicalAppGatewayUpgrade, preflightCanonicalAppRequest, registerCanonicalAppGateway } from "./canonical-app-gateway.js";
 import { JsonErrorFilter } from "./common/json-error.filter.js";
 import { attachDesktopProxyUpgrade, registerDesktopProxy } from "./desktop-proxy.js";
 import { attachTenantVmDesktopProxyUpgrade, registerTenantVmDesktopProxy } from "./tenant-vm-desktop-proxy.js";
@@ -96,6 +97,10 @@ export async function createApp(): Promise<INestApplication> {
         (request as any).orkestrMachineAuth = (result as any).machineAuth || null;
         (request as any).orkestrMachineAuthContext = (result as any).machineAuthContext || null;
         (request as any).orkestrDesktopShare = (result as any).desktopShare || null;
+        const canonicalPreflight = await preflightCanonicalAppRequest(request);
+        if (!canonicalPreflight.ok) {
+          return response.status(404).type("text/plain; charset=utf-8").send("not found");
+        }
         const scopedShareAuth = authorizeScopedShareSessionRequest(request, result.session || null);
         if (!scopedShareAuth.ok) {
           return response
@@ -199,7 +204,7 @@ function authorizeAuthIntentSessionRequest(request: any, session: any) {
   const allowedActions = Array.isArray(session.allowedActions) ? session.allowedActions : [];
   if (!allowedActions.some((action: string) => String(action || "").startsWith("orkestr_auth."))) return { ok: true };
   const method = String(request?.method || "GET").toUpperCase();
-  const url = String(request?.originalUrl || request?.url || "").split("?")[0];
+  const url = requestPolicyUrl(request).split("?")[0];
   const parts = routePartsFromApiRequest(request);
   if (/^\/review\/google\/[^/]+(?:\/|$)/.test(url)) return { ok: true };
   if (method === "GET" && (url === "/connect/google" || url === "/connect/google/start" || /^\/connect\/google\/review\/[^/]+\/[^/]+$/.test(url))) return { ok: true };
@@ -253,7 +258,7 @@ function googleConnectConnectorEntryRequest(request: any, instanceId: string, me
   if (rest.length !== 2 || rest[0]?.toLowerCase() !== "connectors") return { ok: false, connectId: "" };
   const service = String(rest[1] || "").trim().toLowerCase();
   if (service !== "gmail") return { ok: false, connectId: "" };
-  const params = new URL(String(request?.originalUrl || request?.url || "/"), "http://localhost").searchParams;
+  const params = new URL(requestPolicyUrl(request), "http://localhost").searchParams;
   if (params.get("mcp") !== "tools/call") return { ok: false, connectId: "" };
   if (params.get("tool") !== "orkestr_auth") return { ok: false, connectId: "" };
   if (params.get("service") !== service) return { ok: false, connectId: "" };
@@ -358,7 +363,7 @@ function authorizeConnectorResourceRequest(request: any, principal: any) {
 }
 
 function connectorRouteFromApiRequest(request: any) {
-  const url = String(request?.originalUrl || request?.url || "").split("?")[0];
+  const url = requestPolicyUrl(request).split("?")[0];
   const parts = url.split("/").filter(Boolean);
   if (parts[0] !== "api" || parts[1] !== "connectors") return null;
   return {
@@ -422,7 +427,7 @@ function isUserConnectorRoute(route: { method: string; connector: string; action
 }
 
 function routePartsFromApiRequest(request: any) {
-  const url = String(request?.originalUrl || request?.url || "").split("?")[0];
+  const url = requestPolicyUrl(request).split("?")[0];
   return url.split("/").filter(Boolean).map((part) => {
     try {
       return decodeURIComponent(part).trim();
@@ -510,7 +515,7 @@ async function ambiguousThreadRoute(threadId: string) {
 }
 
 function threadIdFromApiRequest(request: any) {
-  const url = String(request?.originalUrl || request?.url || "").split("?")[0];
+  const url = requestPolicyUrl(request).split("?")[0];
   const parts = url.split("/").filter(Boolean);
   if (parts[0] !== "api" || parts[1] !== "threads") return "";
   let id = "";
@@ -521,6 +526,10 @@ function threadIdFromApiRequest(request: any) {
   }
   if (!id || id === "summary") return "";
   return id;
+}
+
+function requestPolicyUrl(request: any): string {
+  return String(request?.orkestrPolicyUrl || request?.originalUrl || request?.url || "/");
 }
 
 export async function startServer({ port = 19812, host = "127.0.0.1", openBrowser = false } = {}) {
@@ -612,6 +621,7 @@ export async function startServer({ port = 19812, host = "127.0.0.1", openBrowse
   });
 
   registerTenantVmDesktopProxy(app);
+  registerCanonicalAppGateway(app);
   registerBrokerInstanceAppProxy(app);
   registerDesktopProxy(app);
   registerStaticFallback(app);
@@ -620,6 +630,7 @@ export async function startServer({ port = 19812, host = "127.0.0.1", openBrowse
   attachTenantVmDesktopProxyUpgrade(app.getHttpServer());
   attachDesktopProxyUpgrade(app.getHttpServer());
   attachThreadStreamUpgrade(app.getHttpServer());
+  attachCanonicalAppGatewayUpgrade(app.getHttpServer());
   await app.listen(port, host);
   whatsappDeliveryScheduler.schedule();
   void runMailboxDeliveryPump(serverEnv).catch((error) => {

@@ -53,9 +53,13 @@ import {
   securityStatus,
   securitySessionReturnScope,
   instanceAppSessionCookiePath,
+  canonicalInstanceAppSessionCookiePath,
   sessionCookieHeader,
   setSecurityPairingEnabled,
 } from "../../../../../packages/core/src/security.js";
+import { brokerInstance } from "../../../../../packages/core/src/broker-instance-registry.js";
+import { canonicalAppGatewayEnabled } from "../../../../../packages/core/src/canonical-public-references.js";
+import { readInstanceIdentity } from "../../../../../packages/core/src/instance-identity.js";
 import { publicConfig } from "../../../../../packages/storage/src/config.js";
 import { ensureDataDirs } from "../../../../../packages/storage/src/paths.js";
 import { eventArchiveDownloadPath, eventStorageStatus, listEventArchives, rotateEvents } from "../../../../../packages/storage/src/store.js";
@@ -793,10 +797,21 @@ export class SystemController {
       ip: String(request?.ip || request?.socket?.remoteAddress || request?.connection?.remoteAddress || "").replace(/^::ffff:/, ""),
       allowApproveCode: false,
     } as any);
-    response.setHeader("set-cookie", sessionCookieHeader(result.token, process.env, {
-      requestHost: String(request?.headers?.["x-forwarded-host"] || request?.headers?.host || ""),
+    const requestHost = String(request?.headers?.["x-forwarded-host"] || request?.headers?.host || "");
+    const cookies = [sessionCookieHeader(result.token, process.env, {
+      requestHost,
       path: result.session?.instanceId ? instanceAppSessionCookiePath(result.session.instanceId) : "/",
-    }));
+    })];
+    if (result.session?.instanceId && canonicalAppGatewayEnabled(process.env)) {
+      const record = await brokerInstance(result.session.instanceId, process.env).catch(() => null);
+      const local = record ? null : await readInstanceIdentity(process.env).catch(() => null);
+      const publicRef = record?.publicRef || (local?.internalInstanceId === result.session.instanceId ? local?.publicRef || "" : "");
+      if (publicRef) cookies.push(sessionCookieHeader(result.token, process.env, {
+        requestHost,
+        path: canonicalInstanceAppSessionCookiePath(publicRef),
+      }));
+    }
+    response.setHeader("set-cookie", cookies);
     return {
       ok: true,
       session: result.session,

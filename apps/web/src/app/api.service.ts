@@ -1178,6 +1178,7 @@ export interface EventArchivesResponse {
 
 export interface ThreadSummary {
   id: string;
+  publicRef?: string;
   ownerUserId?: string;
   name?: string;
   title?: string;

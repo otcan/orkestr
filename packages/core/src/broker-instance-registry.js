@@ -5,6 +5,7 @@ import { readJson, writeJson, writeSecretJson, appendEvent } from "../../storage
 import {
   assignSqliteBrokerInstancePublicRefs,
   getSqliteBrokerInstance,
+  getSqliteBrokerInstanceByPublicRef,
   readSqliteBrokerRegistry,
   rollbackSqliteBrokerInstancePublicRefs,
   writeSqliteBrokerRegistry,
@@ -561,6 +562,16 @@ export async function brokerInstance(instanceId, env = process.env) {
   if (sqlite.available) return sqlite.instance;
   const registry = await readRegistry(env);
   return registry.instances.find((instance) => instance.instanceId === clean(instanceId)) || null;
+}
+
+export async function brokerInstanceByPublicRef(publicRef, env = process.env) {
+  const value = parseInstancePublicRef(publicRef);
+  const sqlite = await getSqliteBrokerInstanceByPublicRef(value, env);
+  if (sqlite.available) return sqlite.instance;
+  const registry = await readRegistry(env);
+  const matches = registry.instances.filter((instance) => instance.publicRef === value);
+  if (matches.length > 1) throw Object.assign(new Error("instance_public_ref_collision"), { statusCode: 500 });
+  return matches[0] || null;
 }
 
 function expired(record) {

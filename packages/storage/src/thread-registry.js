@@ -27,6 +27,18 @@ export async function listThreadRecords(env = process.env) {
   return records.slice();
 }
 
+export async function findThreadRecordByPublicRef(publicRef, env = process.env) {
+  const value = String(publicRef || "");
+  const db = await openThreadDatabase(env);
+  if (db) {
+    const row = db.prepare("select data from orkestr_threads where public_ref = ?").get(value);
+    return row ? JSON.parse(row.data) : null;
+  }
+  const matches = (await listThreadRecords(env)).filter((record) => record?.publicRef === value);
+  if (matches.length > 1) throw Object.assign(new Error("thread_public_ref_collision"), { statusCode: 500 });
+  return matches[0] || null;
+}
+
 export async function saveThreadRecords(threads, env = process.env) {
   return saveThreadRecordsValidated(threads, env);
 }

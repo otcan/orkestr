@@ -7,6 +7,7 @@ import { DatabaseSync } from "node:sqlite";
 import {
   assertPublicRefInvariant,
   assertUniquePublicRefs,
+  canonicalAppGatewayEnabled,
   canonicalInstanceUrlsEnabled,
   generateInstancePublicRef,
   generateThreadPublicRef,
@@ -84,6 +85,9 @@ test("canonical URL feature flag is explicit and defaults off", () => {
   assert.equal(canonicalInstanceUrlsEnabled({}), false);
   assert.equal(canonicalInstanceUrlsEnabled({ ORKESTR_CANONICAL_INSTANCE_URLS: "true" }), true);
   assert.equal(canonicalInstanceUrlsEnabled({ ORKESTR_CANONICAL_INSTANCE_URLS: "0" }), false);
+  assert.equal(canonicalAppGatewayEnabled({ ORKESTR_CANONICAL_INSTANCE_URLS: "1" }), false);
+  assert.equal(canonicalAppGatewayEnabled({ ORKESTR_CANONICAL_APP_GATEWAY: "1" }), false);
+  assert.equal(canonicalAppGatewayEnabled({ ORKESTR_CANONICAL_INSTANCE_URLS: "1", ORKESTR_CANONICAL_APP_GATEWAY: "1" }), true);
 });
 
 test("new thread public references remain stable across rename", async (t) => {

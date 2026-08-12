@@ -120,6 +120,13 @@ export async function getSqliteBrokerInstance(instanceId, env = process.env) {
   return { available: true, instance: rowToInstance(row) };
 }
 
+export async function getSqliteBrokerInstanceByPublicRef(publicRef, env = process.env) {
+  const db = await openBrokerDatabase(env);
+  if (!db) return { available: false, instance: null };
+  const row = db.prepare("select * from orkestr_broker_instances where public_ref = ?").get(clean(publicRef));
+  return { available: true, instance: rowToInstance(row) };
+}
+
 async function loadSqlite(mode) {
   try {
     sqliteModulePromise ||= import("node:sqlite");
