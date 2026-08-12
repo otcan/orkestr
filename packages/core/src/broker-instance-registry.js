@@ -2,13 +2,22 @@ import crypto from "node:crypto";
 import os from "node:os";
 import { dataPaths, ensureDataDirs } from "../../storage/src/paths.js";
 import { readJson, writeJson, writeSecretJson, appendEvent } from "../../storage/src/store.js";
-import { getSqliteBrokerInstance, readSqliteBrokerRegistry, writeSqliteBrokerRegistry } from "./broker-instance-sqlite-store.js";
+import {
+  assignSqliteBrokerInstancePublicRefs,
+  getSqliteBrokerInstance,
+  readSqliteBrokerRegistry,
+  rollbackSqliteBrokerInstancePublicRefs,
+  writeSqliteBrokerRegistry,
+} from "./broker-instance-sqlite-store.js";
 import {
   assertUniquePublicRefs,
+  assertPublicRefInvariant,
   canonicalInstanceUrlsEnabled,
   generateUniquePublicRef,
+  parseInstancePublicRef,
 } from "./canonical-public-references.js";
-import { readInstanceIdentity } from "./instance-identity.js";
+import { readInstanceIdentity, syncBrokerAuthoritativeInstanceIdentity } from "./instance-identity.js";
+import { withCanonicalPublicReferenceLock } from "./canonical-public-reference-lock.js";
 const DEFAULT_MAX_INSTANCES = 10000;
 const DEFAULT_RATE_WINDOW_MS = 60_000;
 const DEFAULT_RATE_LIMIT = 30;
@@ -156,13 +165,30 @@ async function readRegistry(env = process.env) {
   };
 }
 
-async function writeRegistry(registry, env = process.env) {
+async function writeRegistry(registry, env = process.env, options = {}) {
   assertUniquePublicRefs(registry.instances, "instance");
   const localIdentity = await readInstanceIdentity(env);
   if (localIdentity?.publicRef) {
     assertUniquePublicRefs([{ id: localIdentity.internalInstanceId, publicRef: localIdentity.publicRef }, ...registry.instances], "instance");
   }
-  if (await writeSqliteBrokerRegistry(registry, env)) return;
+  const current = options.previousRegistry || await readRegistry(env);
+  const priorById = new Map(current.instances.map((instance) => [clean(instance.instanceId), instance]));
+  for (const instance of registry.instances) {
+    const prior = priorById.get(clean(instance.instanceId));
+    if (!prior) continue;
+    if (!(options.rollbackAssignments === true && prior.publicRef && !instance.publicRef)) {
+      assertPublicRefInvariant(prior.publicRef, instance.publicRef, "instance", options);
+    }
+    if (!options.rollbackAssignments && prior.publicRefAssignedAt && prior.publicRefAssignedAt !== instance.publicRefAssignedAt) {
+      throw Object.assign(new Error("broker_instance_public_ref_metadata_immutable"), { statusCode: 409 });
+    }
+  }
+  const sqliteWritten = options.allowAssignment
+    ? await assignSqliteBrokerInstancePublicRefs(registry, env)
+    : options.rollbackAssignments
+      ? await rollbackSqliteBrokerInstancePublicRefs(registry, env)
+      : await writeSqliteBrokerRegistry(registry, env);
+  if (sqliteWritten) return;
   const paths = await ensureDataDirs(env);
   await writeJson(paths.brokerInstances, {
     schemaVersion: 1,
@@ -273,6 +299,13 @@ function requestedBrokerInstanceId(body = {}, token = {}) {
 }
 
 export async function registerBrokerInstance({ body = {}, request = {}, env = process.env, trustedAdmin = false } = {}) {
+  return withCanonicalPublicReferenceLock(
+    () => registerBrokerInstanceLocked({ body, request, env, trustedAdmin }),
+    env,
+  );
+}
+
+async function registerBrokerInstanceLocked({ body = {}, request = {}, env = process.env, trustedAdmin = false } = {}) {
   const token = assertRegistrationToken({ body, request, env, trustedAdmin });
   const encryptionPublicKey = clean(body.encryptionPublicKey || body.publicKey);
   parsePublicKey(encryptionPublicKey);
@@ -420,20 +453,81 @@ export async function readBrokerInstanceRegistry(env = process.env) {
   return readRegistry(env);
 }
 
-export async function writeBrokerInstanceRegistry(registry, env = process.env, options = {}) {
+export async function writeBrokerInstanceRegistry(registry, env = process.env) {
+  return withCanonicalPublicReferenceLock(() => writeBrokerInstanceRegistryLocked(registry, env), env);
+}
+
+export async function updateBrokerInstanceRecord(instanceId, patch = {}, env = process.env) {
+  return withCanonicalPublicReferenceLock(async () => {
+    if (Object.hasOwn(patch, "publicRef") || Object.hasOwn(patch, "publicRefAssignedAt")) {
+      throw Object.assign(new Error("broker_instance_public_ref_immutable"), { statusCode: 409 });
+    }
+    const registry = await readRegistry(env);
+    const id = clean(instanceId);
+    const index = registry.instances.findIndex((instance) => clean(instance.instanceId) === id);
+    if (index < 0) throw Object.assign(new Error("broker_instance_not_found"), { statusCode: 404 });
+    registry.instances[index] = { ...registry.instances[index], ...patch, instanceId: registry.instances[index].instanceId };
+    await writeRegistry(registry, env);
+    return registry.instances[index];
+  }, env);
+}
+
+async function writeBrokerInstanceRegistryLocked(registry, env = process.env) {
   const current = await readRegistry(env);
   const existingById = new Map(current.instances.map((instance) => [clean(instance.instanceId), instance]));
   for (const candidate of Array.isArray(registry?.instances) ? registry.instances : []) {
     const prior = existingById.get(clean(candidate.instanceId));
     if (!prior) continue;
     if (prior.publicRef !== candidate.publicRef || prior.publicRefAssignedAt !== candidate.publicRefAssignedAt) {
-      const oneTimeAssignment = options.allowPublicRefAssignment === true && !prior.publicRef && candidate.publicRef;
-      if (!oneTimeAssignment && options.restorePublicRefs !== true) {
-        throw Object.assign(new Error("broker_instance_public_ref_immutable"), { statusCode: 409 });
-      }
+      throw Object.assign(new Error("broker_instance_public_ref_immutable"), { statusCode: 409 });
     }
   }
   await writeRegistry(registry, env);
+  return readRegistry(env);
+}
+
+export async function assignBrokerInstancePublicRefs(assignments = [], env = process.env) {
+  return withCanonicalPublicReferenceLock(() => assignBrokerInstancePublicRefsLocked(assignments, env), env);
+}
+
+async function assignBrokerInstancePublicRefsLocked(assignments = [], env = process.env) {
+  const registry = await readRegistry(env);
+  const byId = new Map(assignments.map((item) => [clean(item.instanceId), item]));
+  const found = new Set();
+  const next = {
+    ...registry,
+    instances: registry.instances.map((instance) => {
+      const assignment = byId.get(clean(instance.instanceId));
+      if (!assignment) return instance;
+      found.add(clean(instance.instanceId));
+      assertPublicRefInvariant(instance.publicRef, assignment.publicRef, "instance", { allowAssignment: true });
+      return instance.publicRef ? instance : { ...instance, publicRef: assignment.publicRef, publicRefAssignedAt: assignment.publicRefAssignedAt };
+    }),
+  };
+  if (found.size !== byId.size) throw Object.assign(new Error("broker_instance_public_ref_assignment_stale"), { statusCode: 409 });
+  await writeRegistry(next, env, { previousRegistry: registry, allowAssignment: true });
+  return readRegistry(env);
+}
+
+export async function rollbackBrokerInstancePublicRefAssignments(assignments = [], env = process.env) {
+  return withCanonicalPublicReferenceLock(() => rollbackBrokerInstancePublicRefAssignmentsLocked(assignments, env), env);
+}
+
+async function rollbackBrokerInstancePublicRefAssignmentsLocked(assignments = [], env = process.env) {
+  const expected = new Map(assignments.map((item) => [clean(item.instanceId), item]));
+  const registry = await readRegistry(env);
+  const next = {
+    ...registry,
+    instances: registry.instances.map((instance) => {
+      const assignment = expected.get(clean(instance.instanceId));
+      if (!assignment || instance.publicRef !== assignment.publicRef || instance.publicRefAssignedAt !== assignment.publicRefAssignedAt) return instance;
+      const reverted = { ...instance };
+      delete reverted.publicRef;
+      delete reverted.publicRefAssignedAt;
+      return reverted;
+    }),
+  };
+  await writeRegistry(next, env, { previousRegistry: registry, rollbackAssignments: true });
   return readRegistry(env);
 }
 
@@ -494,6 +588,13 @@ export function decryptBrokerChannelPayload(envelope, { brokerPrivateKey, instan
 }
 
 export async function heartbeatBrokerInstance(instanceId, { body = {}, request = {}, env = process.env } = {}) {
+  return withCanonicalPublicReferenceLock(
+    () => heartbeatBrokerInstanceLocked(instanceId, { body, request, env }),
+    env,
+  );
+}
+
+async function heartbeatBrokerInstanceLocked(instanceId, { body = {}, request = {}, env = process.env } = {}) {
   const registry = await readRegistry(env);
   const record = registry.instances.find((instance) => instance.instanceId === clean(instanceId));
   if (!record) throw Object.assign(new Error("broker_instance_not_found"), { statusCode: 404 });
@@ -664,7 +765,9 @@ export async function ensureBrokerClientRegistration(env = process.env, options 
   const cached = await readJson(paths.brokerClientRegistration, null);
   const cacheMatchesTarget = !whatsappTargetHash || cached?.whatsappTargetHash === whatsappTargetHash;
   const cacheMatchesInstance = !desiredInstanceId || cached?.instanceId === desiredInstanceId;
-  if (cached?.instanceId && cached?.channelId && cached?.brokerBaseUrl === brokerBaseUrl && cacheMatchesTarget && cacheMatchesInstance && !truthy(env.ORKESTR_BROKER_FORCE_REREGISTER)) {
+  const canonicalRefs = canonicalInstanceUrlsEnabled(env);
+  if (cached?.instanceId && cached?.channelId && cached?.brokerBaseUrl === brokerBaseUrl && cacheMatchesTarget && cacheMatchesInstance && !truthy(env.ORKESTR_BROKER_FORCE_REREGISTER) && (!canonicalRefs || cached.publicRef)) {
+    if (canonicalRefs) await syncBrokerAuthoritativeInstanceIdentity({ instanceId: cached.instanceId, publicRef: cached.publicRef }, env);
     return { ok: true, reused: true, ...cached };
   }
   const client = await ensureClientIdentity(env);
@@ -682,7 +785,7 @@ export async function ensureBrokerClientRegistration(env = process.env, options 
     version: clean(env.ORKESTR_VERSION || env.npm_package_version),
     capabilities: brokerClientCapabilities(env),
     encryptionPublicKey: client.publicKey,
-    brokerInstanceId: desiredInstanceId || undefined,
+    brokerInstanceId: desiredInstanceId || cached?.instanceId || undefined,
     endpointBaseUrl: clean(env.ORKESTR_DEMO_INTERNAL_BASE_URL || env.ORKESTR_API_BASE || env.ORKESTR_PUBLIC_APP_URL) || undefined,
     connectBaseUrl: clean(env.ORKESTR_CONNECT_PUBLIC_BASE_URL || env.ORKESTR_DEMO_PUBLIC_BASE_URL) || undefined,
     setupUrl: clean(env.ORKESTR_CONNECT_PUBLIC_SETUP_URL || env.ORKESTR_DEMO_PUBLIC_SETUP_URL) || undefined,
@@ -710,10 +813,17 @@ export async function ensureBrokerClientRegistration(env = process.env, options 
       status: response.status || 0,
     };
   }
+  if (canonicalRefs && !payload?.publicRef) {
+    return { ok: false, reason: "broker_instance_public_ref_missing", status: response.status || 0 };
+  }
+  if (canonicalRefs) {
+    await syncBrokerAuthoritativeInstanceIdentity({ instanceId: payload.instanceId, publicRef: payload.publicRef }, env);
+  }
   const registration = {
     schemaVersion: 1,
     brokerBaseUrl,
     instanceId: payload.instanceId,
+    ...(payload.publicRef ? { publicRef: parseInstancePublicRef(payload.publicRef) } : {}),
     channelId: payload.channelId,
     brokerKeyId: payload.broker.keyId || "",
     brokerPublicKey: payload.broker.publicKey,

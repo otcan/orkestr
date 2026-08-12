@@ -7,7 +7,12 @@ import {
   parseThreadPublicRef,
 } from "./canonical-public-references.js";
 import { readInstanceIdentity, writeInstanceIdentity } from "./instance-identity.js";
-import { readBrokerInstanceRegistry, writeBrokerInstanceRegistry } from "./broker-instance-registry.js";
+import {
+  assignBrokerInstancePublicRefs,
+  readBrokerInstanceRegistry,
+  rollbackBrokerInstancePublicRefAssignments,
+} from "./broker-instance-registry.js";
+import { withCanonicalPublicReferenceLock } from "./canonical-public-reference-lock.js";
 
 const modes = new Set(["dry-run", "apply"]);
 
@@ -21,6 +26,10 @@ function migrationError(code, statusCode = 400) {
 
 function instanceInternalId(identity, env) {
   return clean(identity?.internalInstanceId || env.ORKESTR_INSTANCE_ID || env.ORKESTR_RELEASE_INSTANCE_ID || env.ORKESTR_SERVICE_NAME || "local");
+}
+
+function brokerManagedInstance(env) {
+  return Boolean(clean(env.ORKESTR_BROKER_BASE_URL || env.ORKESTR_DEMO_BROKER_BASE_URL));
 }
 
 function validateExisting(identity, brokerInstances, threads) {
@@ -44,7 +53,8 @@ export function planCanonicalPublicReferenceMigration({ identity = null, brokerI
   ]);
   const threadReserved = new Set(threads.map((thread) => clean(thread.publicRef)).filter(Boolean));
   const assign = mode === "apply";
-  const instancePublicRef = identity?.publicRef || (assign ? generateUniquePublicRef("instance", instanceReserved, randomBytes) : null);
+  const awaitBrokerRef = !identity?.publicRef && brokerManagedInstance(env);
+  const instancePublicRef = identity?.publicRef || (!awaitBrokerRef && assign ? generateUniquePublicRef("instance", instanceReserved, randomBytes) : null);
   const plannedThreads = threads.map((thread) => ({
     id: clean(thread.id),
     priorPublicRef: clean(thread.publicRef) || null,
@@ -65,14 +75,14 @@ export function planCanonicalPublicReferenceMigration({ identity = null, brokerI
       internalInstanceId: instanceInternalId(identity, env),
       priorPublicRef: clean(identity?.publicRef) || null,
       publicRef: instancePublicRef,
-      action: identity?.publicRef ? "unchanged" : "backfill",
+      action: identity?.publicRef ? "unchanged" : awaitBrokerRef ? "await_broker" : "backfill",
     },
     brokerInstances: plannedBrokerInstances,
     threads: plannedThreads,
     summary: {
       instancesScanned: 1,
       brokerInstancesScanned: brokerInstances.length,
-      instancesToBackfill: (identity?.publicRef ? 0 : 1) + plannedBrokerInstances.filter((item) => item.action === "backfill").length,
+      instancesToBackfill: (!identity?.publicRef && !awaitBrokerRef ? 1 : 0) + plannedBrokerInstances.filter((item) => item.action === "backfill").length,
       threadsScanned: threads.length,
       threadsToBackfill: plannedThreads.filter((item) => item.action === "backfill").length,
     },
@@ -90,11 +100,19 @@ export async function migrateCanonicalPublicReferences({
   if (mode === "apply" && !canonicalInstanceUrlsEnabled(env)) {
     throw migrationError("canonical_instance_urls_disabled", 409);
   }
+  return withCanonicalPublicReferenceLock(
+    () => migrateCanonicalPublicReferencesLocked({ mode, env, now, randomBytes, storage }),
+    env,
+  );
+}
+
+async function migrateCanonicalPublicReferencesLocked({ mode, env, now, randomBytes, storage }) {
   const repository = storage.repository || createThreadRepository(env);
   const readIdentity = storage.readIdentity || readInstanceIdentity;
   const writeIdentity = storage.writeIdentity || writeInstanceIdentity;
   const readBrokerRegistry = storage.readBrokerRegistry || readBrokerInstanceRegistry;
-  const writeBrokerRegistry = storage.writeBrokerRegistry || writeBrokerInstanceRegistry;
+  const assignBrokerRefs = storage.assignBrokerRefs || assignBrokerInstancePublicRefs;
+  const rollbackBrokerRefs = storage.rollbackBrokerRefs || rollbackBrokerInstancePublicRefAssignments;
   const identity = await readIdentity(env);
   const brokerRegistry = await readBrokerRegistry(env);
   const threads = await repository.list();
@@ -102,27 +120,23 @@ export async function migrateCanonicalPublicReferences({
   plan.generatedAt = now;
   if (mode === "dry-run") return { ok: true, applied: false, ...plan };
 
-  const assignments = new Map(plan.threads.map((item) => [item.id, item.publicRef]));
-  const nextThreads = threads.map((thread) => thread.publicRef ? thread : {
-    ...thread,
-    publicRef: assignments.get(clean(thread.id)),
-    publicRefAssignedAt: now,
-  });
-  const brokerAssignments = new Map(plan.brokerInstances.map((item) => [item.instanceId, item.publicRef]));
-  const nextBrokerRegistry = {
-    ...brokerRegistry,
-    instances: brokerRegistry.instances.map((instance) => instance.publicRef ? instance : {
-      ...instance,
-      publicRef: brokerAssignments.get(clean(instance.instanceId)),
-      publicRefAssignedAt: now,
-    }),
-  };
-  assertUniquePublicRefs(nextThreads, "thread");
+  const threadAssignments = plan.threads.filter((item) => item.action === "backfill").map((item) => ({
+    id: item.id, publicRef: item.publicRef, publicRefAssignedAt: now,
+  }));
+  const brokerAssignments = plan.brokerInstances.filter((item) => item.action === "backfill").map((item) => ({
+    instanceId: item.instanceId, publicRef: item.publicRef, publicRefAssignedAt: now,
+  }));
   try {
-    await repository.save(nextThreads);
+    if (repository.assignPublicRefs) await repository.assignPublicRefs(threadAssignments);
+    else {
+      const byId = new Map(threadAssignments.map((item) => [item.id, item]));
+      const nextThreads = threads.map((thread) => byId.has(clean(thread.id)) ? { ...thread, ...byId.get(clean(thread.id)) } : thread);
+      await repository.save(nextThreads);
+    }
   } catch (error) {
     try {
-      await repository.save(threads);
+      if (repository.rollbackPublicRefAssignments) await repository.rollbackPublicRefAssignments(threadAssignments);
+      else await repository.save(threads);
     } catch (restoreError) {
       throw Object.assign(migrationError("canonical_public_ref_migration_recovery_failed", 500), {
         cause: error,
@@ -132,10 +146,11 @@ export async function migrateCanonicalPublicReferences({
     throw error;
   }
   try {
-    await writeBrokerRegistry(nextBrokerRegistry, env, { allowPublicRefAssignment: true });
+    await assignBrokerRefs(brokerAssignments, env);
   } catch (error) {
     try {
-      await repository.save(threads);
+      if (repository.rollbackPublicRefAssignments) await repository.rollbackPublicRefAssignments(threadAssignments);
+      else await repository.save(threads);
     } catch (restoreError) {
       throw Object.assign(migrationError("canonical_public_ref_migration_recovery_failed", 500), {
         cause: error,
@@ -145,7 +160,7 @@ export async function migrateCanonicalPublicReferences({
     throw error;
   }
   try {
-    await writeIdentity({
+    if (plan.instance.action === "backfill") await writeIdentity({
       internalInstanceId: plan.instance.internalInstanceId,
       publicRef: plan.instance.publicRef,
       createdAt: identity?.createdAt,
@@ -153,8 +168,9 @@ export async function migrateCanonicalPublicReferences({
     }, env);
   } catch (error) {
     try {
-      await writeBrokerRegistry(brokerRegistry, env, { restorePublicRefs: true });
-      await repository.save(threads);
+      await rollbackBrokerRefs(brokerAssignments, env);
+      if (repository.rollbackPublicRefAssignments) await repository.rollbackPublicRefAssignments(threadAssignments);
+      else await repository.save(threads);
     } catch (restoreError) {
       throw Object.assign(migrationError("canonical_public_ref_migration_recovery_failed", 500), {
         cause: error,

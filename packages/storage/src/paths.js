@@ -19,6 +19,7 @@ export function dataPaths(env = process.env) {
     secrets: path.join(home, "secrets"),
     config: path.join(home, "config.json"),
     instanceIdentity: env.ORKESTR_INSTANCE_IDENTITY_FILE || path.join(home, "instance-identity.json"),
+    canonicalPublicRefLock: env.ORKESTR_CANONICAL_PUBLIC_REF_LOCK || path.join(home, "canonical-public-refs"),
     runtimeSettings: env.ORKESTR_RUNTIME_SETTINGS_FILE || path.join(home, "runtime-settings.json"),
     agents: path.join(home, "agents.json"),
     waitlist: path.join(home, "waitlist.json"),

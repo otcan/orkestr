@@ -22,6 +22,8 @@ import {
 import { authorizeHttpRequest } from "../packages/core/src/security.js";
 import { startServer } from "../apps/server/src/server.js";
 import { isInstancePublicRef } from "../packages/core/src/canonical-public-references.js";
+import { generateInstancePublicRef } from "../packages/core/src/canonical-public-references.js";
+import { readInstanceIdentity, writeInstanceIdentity } from "../packages/core/src/instance-identity.js";
 
 function request(headers = {}) {
   return {
@@ -197,6 +199,61 @@ test("broker client registration cache is scoped to the declared WhatsApp number
   assert.equal(calls[1].body.whatsappNumber, "+49 176 222222");
   assert.equal(cached.whatsappTargetHash.length, 64);
   assert.equal(JSON.stringify(cached).includes("49176"), false);
+});
+
+test("broker public reference is authoritative for first registration, cache reuse, and reconnect", async (t) => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-broker-client-public-ref-"));
+  t.after(() => fs.rm(home, { recursive: true, force: true }));
+  const publicRef = generateInstancePublicRef();
+  const calls = [];
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_BROKER_BASE_URL: "https://broker.example.test",
+    ORKESTR_CANONICAL_INSTANCE_URLS: "1",
+  };
+  const fetchImpl = async (_url, options = {}) => {
+    calls.push(JSON.parse(options.body));
+    return {
+      ok: true,
+      status: 200,
+      async json() {
+        return {
+          ok: true, instanceId: "11111111-2222-4333-8444-555555555555", publicRef,
+          channelId: `channel-${calls.length}`, registeredAt: "2026-08-12T12:00:00.000Z",
+          broker: { keyId: "broker-key", publicKey: "synthetic-broker-key" },
+        };
+      },
+    };
+  };
+  const first = await ensureBrokerClientRegistration(env, { fetchImpl });
+  const reused = await ensureBrokerClientRegistration(env, { fetchImpl });
+  const reconnect = await ensureBrokerClientRegistration({ ...env, ORKESTR_BROKER_FORCE_REREGISTER: "1" }, { fetchImpl });
+  assert.equal(first.publicRef, publicRef);
+  assert.equal(reused.reused, true);
+  assert.equal(reconnect.publicRef, publicRef);
+  assert.equal(calls[1].brokerInstanceId, first.instanceId);
+  assert.equal((await readInstanceIdentity(env)).publicRef, publicRef);
+});
+
+test("broker public reference accepts equal migrated identity and rejects conflicts", async (t) => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-broker-client-ref-conflict-"));
+  t.after(() => fs.rm(home, { recursive: true, force: true }));
+  const publicRef = generateInstancePublicRef();
+  const env = { ORKESTR_HOME: home, ORKESTR_BROKER_BASE_URL: "https://broker.example.test", ORKESTR_CANONICAL_INSTANCE_URLS: "1" };
+  await writeInstanceIdentity({ internalInstanceId: "broker-instance", publicRef }, env);
+  const fetchImpl = async () => ({
+    ok: true, status: 200,
+    async json() { return { ok: true, instanceId: "broker-instance", publicRef, channelId: "channel", broker: { publicKey: "key" } }; },
+  });
+  assert.equal((await ensureBrokerClientRegistration(env, { fetchImpl })).publicRef, publicRef);
+  await fs.rm(path.join(home, "secrets", "broker-client-registration.json"), { force: true });
+  const conflictRef = generateInstancePublicRef();
+  const conflictingFetch = async () => ({
+    ok: true, status: 200,
+    async json() { return { ok: true, instanceId: "broker-instance", publicRef: conflictRef, channelId: "channel-2", broker: { publicKey: "key" } }; },
+  });
+  await assert.rejects(ensureBrokerClientRegistration(env, { fetchImpl: conflictingFetch }), /broker_instance_public_ref_conflict/);
+  assert.equal((await readInstanceIdentity(env)).publicRef, publicRef);
 });
 
 test("broker client registration prefers canonical broker base over demo fallback", async () => {

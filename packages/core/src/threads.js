@@ -21,6 +21,7 @@ import {
   canonicalInstanceUrlsEnabled,
   generateUniquePublicRef,
 } from "./canonical-public-references.js";
+import { withCanonicalPublicReferenceLock } from "./canonical-public-reference-lock.js";
 
 const runningThreadIds = new Set();
 const messageMutationQueues = new Map();
@@ -180,6 +181,10 @@ async function saveThreads(threads, env) {
 }
 
 export async function createThread(input = {}, env = process.env) {
+  return withCanonicalPublicReferenceLock(() => createThreadLocked(input, env), env);
+}
+
+async function createThreadLocked(input = {}, env = process.env) {
   const threads = await listThreads(env);
   const requestedId = normalizeThreadId(input.id || input.threadId);
   const name = String(input.name || input.displayName || requestedId || "New Thread").trim();
@@ -364,6 +369,10 @@ export async function createThreadForPrincipal(input = {}, principal, env = proc
 }
 
 export async function updateThread(threadId, patch = {}, env = process.env) {
+  return withCanonicalPublicReferenceLock(() => updateThreadLocked(threadId, patch, env), env);
+}
+
+async function updateThreadLocked(threadId, patch = {}, env = process.env) {
   const id = normalizeThreadId(threadId);
   const threads = await listThreads(env);
   let updated = null;
@@ -422,6 +431,10 @@ function descendantThreadIds(threads, rootIds) {
 }
 
 export async function deleteThread(threadId, options = {}, env = process.env) {
+  return withCanonicalPublicReferenceLock(() => deleteThreadLocked(threadId, options, env), env);
+}
+
+async function deleteThreadLocked(threadId, options = {}, env = process.env) {
   const id = normalizeThreadId(threadId);
   const threads = await listThreads(env);
   const target = threads.find((thread) => thread.id === id || thread.name === id || thread.bindingName === id);

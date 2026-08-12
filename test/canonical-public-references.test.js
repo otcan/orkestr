@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { DatabaseSync } from "node:sqlite";
 import {
   assertPublicRefInvariant,
   assertUniquePublicRefs,
@@ -19,12 +20,14 @@ import {
   migrateCanonicalPublicReferences,
   planCanonicalPublicReferenceMigration,
 } from "../packages/core/src/canonical-public-reference-migration.js";
-import { readInstanceIdentity } from "../packages/core/src/instance-identity.js";
-import { createThread, getThread, listThreads, updateThread } from "../packages/core/src/threads.js";
+import { ensureInstanceIdentity, readInstanceIdentity, syncBrokerAuthoritativeInstanceIdentity } from "../packages/core/src/instance-identity.js";
+import { createThread, deleteThread, getThread, listThreads, updateThread } from "../packages/core/src/threads.js";
 import { createThreadRepository } from "../packages/storage/src/repositories.js";
 import { closeThreadRegistryCache } from "../packages/storage/src/thread-registry.js";
 import {
   readBrokerInstanceRegistry,
+  assignBrokerInstancePublicRefs,
+  updateBrokerInstanceRecord,
   writeBrokerInstanceRegistry,
 } from "../packages/core/src/broker-instance-registry.js";
 
@@ -252,7 +255,15 @@ test("broker instance public references are immutable across ordinary registry u
       publicRefAssignedAt: "2026-08-12T10:00:00.000Z",
     }],
   };
-  await writeBrokerInstanceRegistry(base, env, { allowPublicRefAssignment: true });
+  const unassigned = { ...base.instances[0] };
+  delete unassigned.publicRef;
+  delete unassigned.publicRefAssignedAt;
+  await writeBrokerInstanceRegistry({ ...base, instances: [unassigned] }, env);
+  await assignBrokerInstancePublicRefs([{
+    instanceId: base.instances[0].instanceId,
+    publicRef,
+    publicRefAssignedAt: base.instances[0].publicRefAssignedAt,
+  }], env);
   const updated = await writeBrokerInstanceRegistry({
     ...base,
     instances: [{ ...base.instances[0], displayName: "Renamed" }],
@@ -288,4 +299,88 @@ test("apply is blocked while canonical instance URLs are disabled", async (t) =>
   delete env.ORKESTR_CANONICAL_INSTANCE_URLS;
   t.after(() => fs.rm(home, { recursive: true, force: true }));
   await assert.rejects(migrateCanonicalPublicReferences({ mode: "apply", env }), /canonical_instance_urls_disabled/);
+});
+
+for (const store of ["json", "sqlite"]) {
+  test(`direct stores enforce immutable unique public references (${store})`, async (t) => {
+    const { home, env } = await temporaryEnv(store);
+    t.after(async () => { await closeThreadRegistryCache(env); await fs.rm(home, { recursive: true, force: true }); });
+    const repository = createThreadRepository(env);
+    await repository.save([{ id: "one", name: "One" }, { id: "two", name: "Two" }]);
+    const oneRef = generateThreadPublicRef();
+    await repository.assignPublicRefs([{ id: "one", publicRef: oneRef, publicRefAssignedAt: "2026-08-12T12:00:00.000Z" }]);
+    await assert.rejects(repository.save([{ id: "one", name: "One", publicRef: generateThreadPublicRef() }, { id: "two", name: "Two" }]), /thread_public_ref_immutable/);
+    await assert.rejects(repository.save([{ id: "one", name: "One", publicRef: oneRef }, { id: "two", name: "Two", publicRef: oneRef }]), /thread_public_ref_collision/);
+
+    await writeBrokerInstanceRegistry({ broker: {}, rateLimits: {}, instances: [
+      { instanceId: "broker-one", channelId: "one", encryptionPublicKey: "key" },
+      { instanceId: "broker-two", channelId: "two", encryptionPublicKey: "key" },
+    ] }, env);
+    const instanceRef = generateInstancePublicRef();
+    await assignBrokerInstancePublicRefs([{ instanceId: "broker-one", publicRef: instanceRef, publicRefAssignedAt: "2026-08-12T12:01:00.000Z" }], env);
+    const registry = await readBrokerInstanceRegistry(env);
+    await assert.rejects(writeBrokerInstanceRegistry({ ...registry, instances: registry.instances.map((item) => item.instanceId === "broker-one" ? { ...item, publicRef: generateInstancePublicRef() } : item) }, env), /public_ref_immutable/);
+    await assert.rejects(writeBrokerInstanceRegistry({ ...registry, instances: registry.instances.map((item) => ({ ...item, publicRef: instanceRef })) }, env), /(?:instance_public_ref_collision|broker_instance_public_ref_immutable)/);
+    if (store === "sqlite") {
+      const threadDb = new DatabaseSync(path.join(home, "threads.sqlite"));
+      const brokerDb = new DatabaseSync(path.join(home, "broker-instances.sqlite"));
+      assert.equal(threadDb.prepare("pragma table_info(orkestr_threads)").all().some((item) => item.name === "public_ref"), true);
+      assert.equal(brokerDb.prepare("pragma table_info(orkestr_broker_instances)").all().some((item) => item.name === "public_ref"), true);
+      assert.equal(threadDb.prepare("pragma index_list(orkestr_threads)").all().some((item) => item.name === "idx_orkestr_threads_public_ref" && item.unique === 1), true);
+      assert.equal(brokerDb.prepare("pragma index_list(orkestr_broker_instances)").all().some((item) => item.name === "idx_broker_instances_public_ref" && item.unique === 1), true);
+      threadDb.close();
+      brokerDb.close();
+    }
+  });
+}
+
+test("migration lock preserves concurrent thread mutations and never resurrects deletes", async (t) => {
+  const { home, env } = await temporaryEnv("json");
+  t.after(() => fs.rm(home, { recursive: true, force: true }));
+  await createThread({ id: "existing", name: "Existing" }, { ...env, ORKESTR_CANONICAL_INSTANCE_URLS: "0" });
+  const migration = migrateCanonicalPublicReferences({ mode: "apply", env });
+  const create = createThread({ id: "concurrent", name: "Concurrent" }, env);
+  const update = updateThread("existing", { name: "Updated" }, env);
+  await Promise.all([migration, create, update]);
+  assert.equal((await getThread("existing", env)).name, "Updated");
+  assert.equal(isThreadPublicRef((await getThread("existing", env)).publicRef), true);
+  assert.equal(isThreadPublicRef((await getThread("concurrent", env)).publicRef), true);
+
+  const deleting = deleteThread("existing", {}, env);
+  const repeat = migrateCanonicalPublicReferences({ mode: "apply", env });
+  await Promise.all([deleting, repeat]);
+  assert.equal(await getThread("existing", env), null);
+});
+
+test("migration field assignment preserves concurrent broker operational updates", async (t) => {
+  const { home, env } = await temporaryEnv("json");
+  t.after(() => fs.rm(home, { recursive: true, force: true }));
+  await writeBrokerInstanceRegistry({ broker: {}, rateLimits: {}, instances: [{
+    instanceId: "broker-operational", channelId: "channel", encryptionPublicKey: "key", status: "registered",
+  }] }, env);
+  const migration = migrateCanonicalPublicReferences({ mode: "apply", env });
+  const disable = updateBrokerInstanceRecord("broker-operational", {
+    status: "disabled", disabledAt: "2026-08-12T13:00:00.000Z", auditStatus: "reviewed",
+  }, env);
+  await Promise.all([migration, disable]);
+  const record = (await readBrokerInstanceRegistry(env)).instances[0];
+  assert.equal(record.status, "disabled");
+  assert.equal(record.auditStatus, "reviewed");
+  assert.equal(isInstancePublicRef(record.publicRef), true);
+});
+
+test("broker-managed identity waits for the authoritative ref and rejects a concurrent conflict", async (t) => {
+  const { home, env } = await temporaryEnv("json");
+  t.after(() => fs.rm(home, { recursive: true, force: true }));
+  env.ORKESTR_BROKER_BASE_URL = "https://broker.example.test";
+  assert.equal(await ensureInstanceIdentity(env), null);
+  const authoritative = generateInstancePublicRef();
+  const conflicting = generateInstancePublicRef();
+  const synced = syncBrokerAuthoritativeInstanceIdentity({ instanceId: "broker-managed", publicRef: authoritative }, env);
+  const conflict = syncBrokerAuthoritativeInstanceIdentity({ instanceId: "broker-managed", publicRef: conflicting }, env);
+  const [first, second] = await Promise.allSettled([synced, conflict]);
+  assert.equal(first.status, "fulfilled");
+  assert.equal(second.status, "rejected");
+  assert.match(second.reason.message, /broker_instance_public_ref_conflict/);
+  assert.equal((await readInstanceIdentity(env)).publicRef, authoritative);
 });
