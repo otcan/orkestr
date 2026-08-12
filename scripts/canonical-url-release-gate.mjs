@@ -36,6 +36,7 @@ export const canonicalUrlReleaseStages = [
       "test/canonical-app-gateway.test.js",
       "test/canonical-app-links.test.js",
       "test/canonical-thread-navigation.test.js",
+      "test/canonical-url-release-gate.test.js",
       "test/host-boundaries.test.js",
       "test/auth-config.test.js",
       "test/security.test.js",
