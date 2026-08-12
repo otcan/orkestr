@@ -183,8 +183,16 @@ function compatibilityPath(rawUrl = ""): boolean {
 function localProbeRequest(request: any): boolean {
   const method = String(request?.method || "GET").toUpperCase();
   const pathname = new URL(String(request?.originalUrl || request?.url || "/"), "http://orkestr.local").pathname;
-  return method === "GET" && loopback(remoteAddress(request)) && directHostIsLoopback(request) &&
+  return method === "GET" && directLoopbackRequest(request) &&
     ["/api/health", "/api/ready", "/metrics", "/api/metrics"].includes(pathname);
+}
+
+function directLoopbackRequest(request: any): boolean {
+  return loopback(remoteAddress(request)) && directHostIsLoopback(request);
+}
+
+function localCliRequest(request: any): boolean {
+  return directLoopbackRequest(request) && request?.orkestrMachineAuth === "cli";
 }
 
 function targetAtBase(base: string, rawUrl: string): string {
@@ -236,7 +244,9 @@ function allowedBoundaryOrigins(env = process.env) {
 
 export function rejectUnknownHostBoundaryRequest(request: any, response: any, env = process.env): boolean {
   if (!hostBoundariesEnabled(env)) return false;
-  if (localProbeRequest(request)) return false;
+  // Authentication runs after this early host filter. Let direct loopback
+  // traffic reach it, then require the verified CLI machine principal below.
+  if (directLoopbackRequest(request)) return false;
   const origin = effectiveRequestOrigin(request, env);
   const { appOrigin, connectOrigins } = allowedBoundaryOrigins(env);
   if (origin && appOrigin && connectOrigins.size && !connectOrigins.has(appOrigin) && origin === appOrigin) return false;
@@ -254,7 +264,7 @@ export function rejectUnknownHostBoundaryRequest(request: any, response: any, en
 
 export async function enforceHostBoundaryRequest(request: any, response: any, env = process.env): Promise<boolean> {
   if (!hostBoundariesEnabled(env)) return false;
-  if (localProbeRequest(request)) return false;
+  if (localProbeRequest(request) || localCliRequest(request)) return false;
   const rawUrl = String(request?.originalUrl || request?.url || "/");
   const origin = effectiveRequestOrigin(request, env);
   const { boundaries, appOrigin, connectOrigins } = allowedBoundaryOrigins(env);

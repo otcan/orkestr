@@ -160,13 +160,24 @@ test("handoff routes allow only connect/auth origins, redirect app, and reject u
   await cleanup(home);
 });
 
-test("only direct loopback health and monitoring probes bypass public host boundaries", async () => {
+test("direct loopback reaches authentication but only probes and verified CLI requests bypass host boundaries", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-host-probes-"));
   const runtimeEnv = env(home);
   const direct = request("/metrics", "127.0.0.1:19812", { remoteAddress: "127.0.0.1" });
   const directSpy = responseSpy();
   assert.equal(rejectUnknownHostBoundaryRequest(direct, directSpy.response, runtimeEnv), false);
   assert.equal((await enforce(direct, runtimeEnv)).handled, false);
+
+  const cli = request("/api/threads", "127.0.0.1:19812", { remoteAddress: "127.0.0.1" });
+  cli.orkestrMachineAuth = "cli";
+  const cliSpy = responseSpy();
+  assert.equal(rejectUnknownHostBoundaryRequest(cli, cliSpy.response, runtimeEnv), false);
+  assert.equal((await enforce(cli, runtimeEnv)).handled, false);
+
+  const unauthenticated = request("/api/threads", "127.0.0.1:19812", { remoteAddress: "127.0.0.1" });
+  const unauthenticatedSpy = responseSpy();
+  assert.equal(rejectUnknownHostBoundaryRequest(unauthenticated, unauthenticatedSpy.response, runtimeEnv), false);
+  assert.equal((await enforce(unauthenticated, runtimeEnv)).statusCode, 404);
 
   const spoof = request("/metrics", "attacker.invalid", {
     remoteAddress: "127.0.0.1",
