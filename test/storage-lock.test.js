@@ -65,6 +65,24 @@ test("storage lock serializes three cross-process contenders without lost writes
   assert.equal(await fs.readFile(counter, "utf8"), "45");
 });
 
+test("storage lock does not reclaim a newly created lock before its owner record is visible", async (t) => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-storage-lock-initializing-"));
+  t.after(() => fs.rm(home, { recursive: true, force: true }));
+  const target = path.join(home, "canonical");
+  const lockPath = `${target}.lock`;
+  await fs.mkdir(lockPath);
+
+  const contender = withStorageFileLock(target, async () => "acquired", {
+    heartbeatMs: 5,
+    staleMs: 10,
+    timeoutMs: 500,
+  });
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(await fs.stat(lockPath).then(() => true, () => false), true);
+  await fs.rm(lockPath, { recursive: true, force: true });
+  assert.equal(await contender, "acquired");
+});
+
 test("storage lock release cannot remove a successor lock", async (t) => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-storage-lock-successor-"));
   t.after(() => fs.rm(home, { recursive: true, force: true }));
