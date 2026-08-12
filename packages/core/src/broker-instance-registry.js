@@ -756,16 +756,34 @@ export async function sendBrokerClientHeartbeat(env = process.env, options = {})
 }
 
 export async function ensureBrokerClientRegistration(env = process.env, options = {}) {
+  if (!canonicalInstanceUrlsEnabled(env)) return ensureBrokerClientRegistrationLocked(env, options);
+  return withCanonicalPublicReferenceLock(() => ensureBrokerClientRegistrationLocked(env, options), env);
+}
+
+async function ensureBrokerClientRegistrationLocked(env = process.env, options = {}) {
   const paths = await ensureDataDirs(env);
   const brokerBaseUrl = clean(env.ORKESTR_BROKER_BASE_URL || env.ORKESTR_DEMO_BROKER_BASE_URL || options.brokerBaseUrl);
   if (!brokerBaseUrl) return { ok: false, reason: "broker_base_url_missing" };
-  const desiredInstanceId = clean(env.ORKESTR_BROKER_INSTANCE_ID || env.ORKESTR_INSTANCE_ID || options.instanceId);
+  const configuredInstanceId = clean(env.ORKESTR_BROKER_INSTANCE_ID || env.ORKESTR_INSTANCE_ID || options.instanceId);
   const whatsappNumber = clean(env.ORKESTR_DEMO_WHATSAPP_NUMBER || env.ORKESTR_DEMO_WA_NUMBER);
   const whatsappTargetHash = brokerWhatsAppChatHash({ whatsappNumber });
   const cached = await readJson(paths.brokerClientRegistration, null);
+  const canonicalRefs = canonicalInstanceUrlsEnabled(env);
+  const cacheIsComplete = Boolean(
+    cached?.instanceId &&
+      cached?.channelId &&
+      cached?.brokerBaseUrl &&
+      cached?.brokerPublicKey &&
+      (!canonicalRefs || cached?.publicRef),
+  );
+  const persistedIdentity = canonicalRefs ? await readInstanceIdentity(env) : null;
+  const recoveryInstanceId = !cacheIsComplete ? clean(persistedIdentity?.internalInstanceId) : "";
+  if (configuredInstanceId && recoveryInstanceId && configuredInstanceId !== recoveryInstanceId) {
+    throw Object.assign(new Error("broker_instance_identity_id_conflict"), { statusCode: 409 });
+  }
+  const desiredInstanceId = configuredInstanceId || recoveryInstanceId;
   const cacheMatchesTarget = !whatsappTargetHash || cached?.whatsappTargetHash === whatsappTargetHash;
   const cacheMatchesInstance = !desiredInstanceId || cached?.instanceId === desiredInstanceId;
-  const canonicalRefs = canonicalInstanceUrlsEnabled(env);
   if (cached?.instanceId && cached?.channelId && cached?.brokerBaseUrl === brokerBaseUrl && cacheMatchesTarget && cacheMatchesInstance && !truthy(env.ORKESTR_BROKER_FORCE_REREGISTER) && (!canonicalRefs || cached.publicRef)) {
     if (canonicalRefs) await syncBrokerAuthoritativeInstanceIdentity({ instanceId: cached.instanceId, publicRef: cached.publicRef }, env);
     return { ok: true, reused: true, ...cached };
@@ -785,7 +803,7 @@ export async function ensureBrokerClientRegistration(env = process.env, options 
     version: clean(env.ORKESTR_VERSION || env.npm_package_version),
     capabilities: brokerClientCapabilities(env),
     encryptionPublicKey: client.publicKey,
-    brokerInstanceId: desiredInstanceId || cached?.instanceId || undefined,
+    brokerInstanceId: desiredInstanceId || (canonicalRefs ? cached?.instanceId : undefined) || undefined,
     endpointBaseUrl: clean(env.ORKESTR_DEMO_INTERNAL_BASE_URL || env.ORKESTR_API_BASE || env.ORKESTR_PUBLIC_APP_URL) || undefined,
     connectBaseUrl: clean(env.ORKESTR_CONNECT_PUBLIC_BASE_URL || env.ORKESTR_DEMO_PUBLIC_BASE_URL) || undefined,
     setupUrl: clean(env.ORKESTR_CONNECT_PUBLIC_SETUP_URL || env.ORKESTR_DEMO_PUBLIC_SETUP_URL) || undefined,
@@ -817,6 +835,9 @@ export async function ensureBrokerClientRegistration(env = process.env, options 
     return { ok: false, reason: "broker_instance_public_ref_missing", status: response.status || 0 };
   }
   if (canonicalRefs) {
+    if (persistedIdentity?.publicRef && parseInstancePublicRef(payload.publicRef) !== persistedIdentity.publicRef) {
+      throw Object.assign(new Error("broker_instance_public_ref_conflict"), { statusCode: 409 });
+    }
     await syncBrokerAuthoritativeInstanceIdentity({ instanceId: payload.instanceId, publicRef: payload.publicRef }, env);
   }
   const registration = {
@@ -832,7 +853,17 @@ export async function ensureBrokerClientRegistration(env = process.env, options 
     registeredAt: payload.registeredAt || nowIso(),
     updatedAt: nowIso(),
   };
-  await writeSecretJson(paths.brokerClientRegistration, registration);
+  const writeRegistrationCache = options.writeRegistrationCache || writeSecretJson;
+  try {
+    await writeRegistrationCache(paths.brokerClientRegistration, registration);
+  } catch (cause) {
+    throw Object.assign(new Error("broker_client_registration_cache_write_failed", { cause }), {
+      statusCode: 500,
+      recoverable: canonicalRefs,
+      instanceId: registration.instanceId,
+      publicRef: registration.publicRef || "",
+    });
+  }
   return { ok: true, reused: false, ...registration };
 }
 

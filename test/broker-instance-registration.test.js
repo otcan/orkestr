@@ -256,6 +256,202 @@ test("broker public reference accepts equal migrated identity and rejects confli
   assert.equal((await readInstanceIdentity(env)).publicRef, publicRef);
 });
 
+test("broker client registration recovers a cache-write crash from persisted canonical identity", async (t) => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-broker-client-cache-crash-"));
+  t.after(() => fs.rm(home, { recursive: true, force: true }));
+  const instanceId = "11111111-2222-4333-8444-666666666666";
+  const publicRef = generateInstancePublicRef();
+  const calls = [];
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_BROKER_BASE_URL: "https://broker.example.test",
+    ORKESTR_CANONICAL_INSTANCE_URLS: "1",
+  };
+  const fetchImpl = async (_url, options = {}) => {
+    calls.push(JSON.parse(options.body));
+    return {
+      ok: true,
+      status: 200,
+      async json() {
+        return {
+          ok: true,
+          instanceId,
+          publicRef,
+          channelId: `channel-${calls.length}`,
+          broker: { keyId: "broker-key", publicKey: "synthetic-broker-key" },
+        };
+      },
+    };
+  };
+
+  await assert.rejects(
+    ensureBrokerClientRegistration(env, {
+      fetchImpl,
+      async writeRegistrationCache() {
+        throw new Error("synthetic_cache_write_failure");
+      },
+    }),
+    (error) => {
+      assert.equal(error.message, "broker_client_registration_cache_write_failed");
+      assert.equal(error.recoverable, true);
+      assert.equal(error.instanceId, instanceId);
+      assert.equal(error.publicRef, publicRef);
+      assert.match(error.cause?.message || "", /synthetic_cache_write_failure/);
+      return true;
+    },
+  );
+  const persistedIdentity = await readInstanceIdentity(env);
+  assert.equal(persistedIdentity.internalInstanceId, instanceId);
+  assert.equal(persistedIdentity.publicRef, publicRef);
+  await assert.rejects(
+    fs.access(path.join(home, "secrets", "broker-client-registration.json")),
+    (error) => error?.code === "ENOENT",
+  );
+
+  const recovered = await ensureBrokerClientRegistration(env, { fetchImpl });
+  assert.equal(recovered.instanceId, instanceId);
+  assert.equal(recovered.publicRef, publicRef);
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].brokerInstanceId, undefined);
+  assert.equal(calls[1].brokerInstanceId, instanceId);
+  const cached = JSON.parse(await fs.readFile(path.join(home, "secrets", "broker-client-registration.json"), "utf8"));
+  assert.equal(cached.instanceId, instanceId);
+  assert.equal(cached.publicRef, publicRef);
+});
+
+test("broker client registration retry fails closed when persisted and returned public refs differ", async (t) => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-broker-client-cache-retry-conflict-"));
+  t.after(() => fs.rm(home, { recursive: true, force: true }));
+  const instanceId = "11111111-2222-4333-8444-777777777777";
+  const publicRef = generateInstancePublicRef();
+  const conflictingRef = generateInstancePublicRef();
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_BROKER_BASE_URL: "https://broker.example.test",
+    ORKESTR_CANONICAL_INSTANCE_URLS: "1",
+  };
+  await writeInstanceIdentity({ internalInstanceId: instanceId, publicRef }, env);
+  let requestedInstanceId = "";
+  const fetchImpl = async (_url, options = {}) => {
+    requestedInstanceId = JSON.parse(options.body).brokerInstanceId;
+    return {
+      ok: true,
+      status: 200,
+      async json() {
+        return {
+          ok: true,
+          instanceId,
+          publicRef: conflictingRef,
+          channelId: "channel-conflict",
+          broker: { publicKey: "synthetic-broker-key" },
+        };
+      },
+    };
+  };
+
+  await assert.rejects(ensureBrokerClientRegistration(env, { fetchImpl }), /broker_instance_public_ref_conflict/);
+  assert.equal(requestedInstanceId, instanceId);
+  assert.equal((await readInstanceIdentity(env)).publicRef, publicRef);
+  await assert.rejects(
+    fs.access(path.join(home, "secrets", "broker-client-registration.json")),
+    (error) => error?.code === "ENOENT",
+  );
+});
+
+test("canonical broker client registration serializes concurrent first registration", async (t) => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-broker-client-concurrent-first-"));
+  t.after(() => fs.rm(home, { recursive: true, force: true }));
+  const instanceId = "11111111-2222-4333-8444-888888888888";
+  const publicRef = generateInstancePublicRef();
+  let calls = 0;
+  let releaseRegistration;
+  const registrationPaused = new Promise((resolve) => {
+    releaseRegistration = resolve;
+  });
+  let firstCallStarted;
+  const firstCallObserved = new Promise((resolve) => {
+    firstCallStarted = resolve;
+  });
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_BROKER_BASE_URL: "https://broker.example.test",
+    ORKESTR_CANONICAL_INSTANCE_URLS: "1",
+  };
+  const fetchImpl = async () => {
+    calls += 1;
+    firstCallStarted();
+    await registrationPaused;
+    return {
+      ok: true,
+      status: 200,
+      async json() {
+        return {
+          ok: true,
+          instanceId,
+          publicRef,
+          channelId: "channel-concurrent",
+          broker: { keyId: "broker-key", publicKey: "synthetic-broker-key" },
+        };
+      },
+    };
+  };
+
+  const first = ensureBrokerClientRegistration(env, { fetchImpl });
+  await firstCallObserved;
+  const second = ensureBrokerClientRegistration(env, { fetchImpl });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(calls, 1);
+  releaseRegistration();
+  const [registered, reused] = await Promise.all([first, second]);
+
+  assert.equal(calls, 1);
+  assert.equal(registered.reused, false);
+  assert.equal(reused.reused, true);
+  assert.equal(registered.instanceId, instanceId);
+  assert.equal(reused.instanceId, instanceId);
+  assert.equal(reused.publicRef, publicRef);
+});
+
+test("feature-off broker force and target changes do not request the cached instance id", async (t) => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-broker-client-legacy-reregister-"));
+  t.after(() => fs.rm(home, { recursive: true, force: true }));
+  const calls = [];
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_BROKER_BASE_URL: "https://broker.example.test",
+    ORKESTR_DEMO_WHATSAPP_NUMBER: "+49 176 111111",
+  };
+  const fetchImpl = async (_url, options = {}) => {
+    const body = JSON.parse(options.body);
+    calls.push(body);
+    return {
+      ok: true,
+      status: 200,
+      async json() {
+        return {
+          ok: true,
+          instanceId: `legacy-instance-${calls.length}`,
+          channelId: `legacy-channel-${calls.length}`,
+          broker: { keyId: "broker-key", publicKey: "synthetic-broker-key" },
+        };
+      },
+    };
+  };
+
+  const first = await ensureBrokerClientRegistration(env, { fetchImpl });
+  const forced = await ensureBrokerClientRegistration({ ...env, ORKESTR_BROKER_FORCE_REREGISTER: "1" }, { fetchImpl });
+  const changedTarget = await ensureBrokerClientRegistration({
+    ...env,
+    ORKESTR_DEMO_WHATSAPP_NUMBER: "+49 176 222222",
+  }, { fetchImpl });
+
+  assert.equal(first.instanceId, "legacy-instance-1");
+  assert.equal(forced.instanceId, "legacy-instance-2");
+  assert.equal(changedTarget.instanceId, "legacy-instance-3");
+  assert.equal(calls.length, 3);
+  assert.equal(calls.every((body) => body.brokerInstanceId === undefined), true);
+});
+
 test("broker client registration prefers canonical broker base over demo fallback", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-broker-client-base-precedence-"));
   const calls = [];
