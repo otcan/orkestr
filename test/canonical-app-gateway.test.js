@@ -195,6 +195,10 @@ test("broker canonical gateway preserves HTTP bodies, queries, HTML base, stream
     response.end("<!doctype html><base href=\"/\"><main>tenant</main>");
   });
   const upstreamWss = new WebSocketServer({ noServer: true });
+  t.after(() => new Promise((resolve) => {
+    for (const clientSocket of upstreamWss.clients) clientSocket.terminate();
+    upstreamWss.close(() => resolve());
+  }));
   upstream.on("upgrade", (request, socket, head) => {
     upstreamWss.handleUpgrade(request, socket, head, (clientSocket) => {
       clientSocket.on("message", (body) => clientSocket.send(`${request.url}|${body.toString()}`));
@@ -278,8 +282,10 @@ test("broker canonical gateway preserves HTTP bodies, queries, HTML base, stream
     const socket = new WebSocket(`ws://127.0.0.1:${port}/instance/${registration.publicRef}/api/socket?keep=1`, {
       headers: { cookie },
     });
+    let message = "";
     socket.once("open", () => socket.send("ping"));
-    socket.once("message", (body) => { resolve(body.toString()); socket.close(); });
+    socket.once("message", (body) => { message = body.toString(); socket.close(); });
+    socket.once("close", () => resolve(message));
     socket.once("error", reject);
   });
   assert.equal(wsMessage, `/instance/${registration.publicRef}/api/socket?keep=1|ping`);
