@@ -199,6 +199,34 @@ test("failed apply restores thread persistence and leaves no partial identity", 
   assert.deepEqual((await readBrokerInstanceRegistry(env)).instances.map((instance) => instance.publicRef), [undefined]);
 });
 
+test("failed initial thread save restores a store that mutated before throwing", async (t) => {
+  const { home, env } = await temporaryEnv("json");
+  t.after(() => fs.rm(home, { recursive: true, force: true }));
+  const legacy = [{ id: "legacy", ownerUserId: "admin", name: "Legacy" }];
+  let persisted = structuredClone(legacy);
+  let saveCalls = 0;
+  const repository = {
+    async list() {
+      return structuredClone(persisted);
+    },
+    async save(records) {
+      persisted = structuredClone(records);
+      saveCalls += 1;
+      if (saveCalls === 1) throw new Error("synthetic_post_commit_mirror_failure");
+      return structuredClone(persisted);
+    },
+  };
+  await assert.rejects(migrateCanonicalPublicReferences({
+    mode: "apply",
+    env,
+    storage: { repository },
+  }), /synthetic_post_commit_mirror_failure/);
+  assert.equal(saveCalls, 2);
+  assert.deepEqual(persisted, legacy);
+  assert.equal(await readInstanceIdentity(env), null);
+  assert.deepEqual((await readBrokerInstanceRegistry(env)).instances, []);
+});
+
 test("local and broker instance references share one collision domain", () => {
   const duplicate = generateInstancePublicRef(bytes(8));
   assert.throws(() => planCanonicalPublicReferenceMigration({

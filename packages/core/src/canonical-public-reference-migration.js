@@ -118,7 +118,19 @@ export async function migrateCanonicalPublicReferences({
     }),
   };
   assertUniquePublicRefs(nextThreads, "thread");
-  await repository.save(nextThreads);
+  try {
+    await repository.save(nextThreads);
+  } catch (error) {
+    try {
+      await repository.save(threads);
+    } catch (restoreError) {
+      throw Object.assign(migrationError("canonical_public_ref_migration_recovery_failed", 500), {
+        cause: error,
+        restoreError,
+      });
+    }
+    throw error;
+  }
   try {
     await writeBrokerRegistry(nextBrokerRegistry, env, { allowPublicRefAssignment: true });
   } catch (error) {
