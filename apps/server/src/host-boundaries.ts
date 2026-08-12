@@ -184,7 +184,7 @@ function localProbeRequest(request: any): boolean {
   const method = String(request?.method || "GET").toUpperCase();
   const pathname = new URL(String(request?.originalUrl || request?.url || "/"), "http://orkestr.local").pathname;
   return method === "GET" && directLoopbackRequest(request) &&
-    ["/api/health", "/api/ready", "/metrics", "/api/metrics"].includes(pathname);
+    ["/api/health", "/api/ready", "/api/version", "/metrics", "/api/metrics"].includes(pathname);
 }
 
 function directLoopbackRequest(request: any): boolean {

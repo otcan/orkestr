@@ -168,6 +168,11 @@ test("direct loopback reaches authentication but only probes and verified CLI re
   assert.equal(rejectUnknownHostBoundaryRequest(direct, directSpy.response, runtimeEnv), false);
   assert.equal((await enforce(direct, runtimeEnv)).handled, false);
 
+  const version = request("/api/version", "127.0.0.1:19812", { remoteAddress: "127.0.0.1" });
+  const versionSpy = responseSpy();
+  assert.equal(rejectUnknownHostBoundaryRequest(version, versionSpy.response, runtimeEnv), false);
+  assert.equal((await enforce(version, runtimeEnv)).handled, false);
+
   const cli = request("/api/threads", "127.0.0.1:19812", { remoteAddress: "127.0.0.1" });
   cli.orkestrMachineAuth = "cli";
   const cliSpy = responseSpy();
