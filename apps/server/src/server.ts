@@ -38,6 +38,11 @@ import { AppModule } from "./app.module.js";
 import { startBrokerClientHeartbeat } from "./broker-client-heartbeat.js";
 import { attachBrokerInstanceAppProxyUpgrade, registerBrokerInstanceAppProxy } from "./broker-instance-app-proxy.js";
 import { attachCanonicalAppGatewayUpgrade, preflightCanonicalAppRequest, registerCanonicalAppGateway } from "./canonical-app-gateway.js";
+import {
+  attachHostBoundaryUpgrade,
+  enforceHostBoundaryRequest,
+  rejectUnknownHostBoundaryRequest,
+} from "./host-boundaries.js";
 import { JsonErrorFilter } from "./common/json-error.filter.js";
 import { attachDesktopProxyUpgrade, registerDesktopProxy } from "./desktop-proxy.js";
 import { attachTenantVmDesktopProxyUpgrade, registerTenantVmDesktopProxy } from "./tenant-vm-desktop-proxy.js";
@@ -71,6 +76,10 @@ function whatsappDeliveryPollIntervalMs(env = process.env) {
 
 export async function createApp(): Promise<INestApplication> {
   const app = await NestFactory.create(AppModule, { logger: false });
+  app.use((request, response, next) => {
+    if (rejectUnknownHostBoundaryRequest(request, response, process.env)) return;
+    next();
+  });
   app.use(createObservabilityMiddleware(process.env));
   app.use((request, response, next) => {
     const route = String((request as any)?.originalUrl || (request as any)?.url || "").split("?")[0];
@@ -101,6 +110,7 @@ export async function createApp(): Promise<INestApplication> {
         if (!canonicalPreflight.ok) {
           return response.status(404).type("text/plain; charset=utf-8").send("not found");
         }
+        if (await enforceHostBoundaryRequest(request, response, process.env)) return;
         const scopedShareAuth = authorizeScopedShareSessionRequest(request, result.session || null);
         if (!scopedShareAuth.ok) {
           return response
@@ -631,6 +641,7 @@ export async function startServer({ port = 19812, host = "127.0.0.1", openBrowse
   attachDesktopProxyUpgrade(app.getHttpServer());
   attachThreadStreamUpgrade(app.getHttpServer());
   attachCanonicalAppGatewayUpgrade(app.getHttpServer());
+  attachHostBoundaryUpgrade(app.getHttpServer());
   await app.listen(port, host);
   whatsappDeliveryScheduler.schedule();
   void runMailboxDeliveryPump(serverEnv).catch((error) => {

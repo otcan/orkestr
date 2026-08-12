@@ -7,6 +7,7 @@ import type { IncomingMessage, Server } from "node:http";
 import type { Duplex } from "node:stream";
 import { getTenantVm } from "../../../packages/core/src/tenant-vm-registry.js";
 import { tenantDesktopShareCookiePresent } from "../../../packages/core/src/tenant-desktop-share-routing.js";
+import { hostBoundaryUpgradeDenied } from "./host-boundaries.js";
 
 type TenantDesktopTarget = {
   tenantVmId: string;
@@ -162,6 +163,7 @@ export function registerTenantVmDesktopProxy(app: INestApplication): void {
 
 export function attachTenantVmDesktopProxyUpgrade(server: Server): void {
   server.on("upgrade", async (request: IncomingMessage, socket: Duplex, head: Buffer) => {
+    if (hostBoundaryUpgradeDenied(request)) return;
     if (!parseTenantDesktopUrl(request.url)) return;
     if (!tenantDesktopShareCookiePresent(request.headers?.cookie || "")) {
       writeUpgradeError(socket, 401, "desktop_share_cookie_required");

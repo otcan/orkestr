@@ -20,6 +20,10 @@ import {
   proxyCanonicalBrokerUpgrade,
   type CanonicalBrokerTarget,
 } from "./canonical-broker-app-proxy.js";
+import {
+  hostBoundaryUpgradeDenied,
+  internalCanonicalUpgradeHeader,
+} from "./host-boundaries.js";
 
 export type CanonicalAppRoute = {
   instancePublicRef: string;
@@ -190,6 +194,7 @@ export function registerCanonicalAppGateway(app: INestApplication): void {
 export function attachCanonicalAppGatewayUpgrade(server: Server): void {
   if (!canonicalAppGatewayEnabled(process.env)) return;
   server.prependListener("upgrade", async (request: IncomingMessage, socket: Duplex, head: Buffer) => {
+    if (hostBoundaryUpgradeDenied(request)) return;
     let route: CanonicalAppRoute | null = null;
     try { route = parseCanonicalAppUrl(request.url || ""); } catch { upgradeNotFound(socket); return; }
     if (!route) return;
@@ -219,8 +224,10 @@ function proxyLocalUpgrade(request: IncomingMessage, socket: Duplex, head: Buffe
     for (let index = 0; index < request.rawHeaders.length; index += 2) {
       const name = request.rawHeaders[index] || "";
       const value = request.rawHeaders[index + 1] || "";
+      if (name.toLowerCase() === "x-orkestr-internal-canonical-upgrade") continue;
       lines.push(name.toLowerCase() === "host" ? `Host: 127.0.0.1:${port}` : `${name}: ${value}`);
     }
+    lines.push(`X-Orkestr-Internal-Canonical-Upgrade: ${internalCanonicalUpgradeHeader()}`);
     upstream.write(`${lines.join("\r\n")}\r\n\r\n`);
     if (head.length) upstream.write(head);
     socket.pipe(upstream).pipe(socket);

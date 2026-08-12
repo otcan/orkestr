@@ -14,6 +14,7 @@ import { clearSessionCookieHeaders, instanceAppSessionCookiePath, securityCookie
 import { listTenantVms } from "../../../packages/core/src/tenant-vm-registry.js";
 import { getUser } from "../../../packages/core/src/users.js";
 import { instanceSetupReturnPath } from "./instance-connect-setup.js";
+import { hostBoundaryUpgradeDenied } from "./host-boundaries.js";
 
 type BrokerAppRoute = {
   instanceId: string;
@@ -532,6 +533,7 @@ export function registerBrokerInstanceAppProxy(app: INestApplication): void {
 
 export function attachBrokerInstanceAppProxyUpgrade(server: Server): void {
   server.on("upgrade", async (request: IncomingMessage, socket: Duplex, head: Buffer) => {
+    if (hostBoundaryUpgradeDenied(request)) return;
     const route = parseBrokerAppUrl(request.url);
     if (!route) return;
     if (!(await upgradeHasInstanceSession(request, route.instanceId))) {

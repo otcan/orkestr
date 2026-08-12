@@ -57,8 +57,8 @@ endpoint with method, body, and query intact. HTTP fragments are browser-only
 and never reach the gateway. Streaming responses are piped rather than
 buffered; only HTML is buffered to rewrite the base path.
 
-This phase adds canonical ingress only. Host-boundary changes, legacy
-redirects, and canonical link generation belong to later rollout work.
+This phase adds canonical ingress only. Host-boundary enforcement and legacy
+redirects remain separate, default-off rollout steps.
 
 ## Canonical link emission
 
@@ -92,3 +92,46 @@ settings are not application-link fallbacks. When no explicit application base
 exists, Orkestr omits canonical links. A browser already on another origin uses
 a real cross-origin navigation to the configured app origin; same-origin panel
 changes continue to use browser history.
+
+## Application and connect/auth host boundaries
+
+After the reference migration, gateway, and canonical-link checks are green,
+an operator may separate browser responsibilities with another default-off
+flag:
+
+```sh
+ORKESTR_HOST_BOUNDARIES=1
+ORKESTR_PUBLIC_APP_URL=https://app.example.test
+ORKESTR_CONNECT_PUBLIC_URL=https://connect.example.test
+```
+
+The application origin serves canonical ingress and normal application routes.
+The connect/auth origin serves setup and OAuth handoffs plus only the static
+shell and method-specific pairing/OAuth primitives required to complete those
+flows. It does not serve thread, control-plane, or administrator security APIs.
+An application-origin setup or OAuth handoff is redirected to the configured
+connect/auth origin with its query string intact. Canonical routes arriving on
+the connect/auth origin are redirected to the application origin.
+
+The boundary compares the effective scheme and host. Forwarded host/protocol
+headers are ignored unless `ORKESTR_TRUST_PROXY_HEADERS=1` and the direct peer
+appears in the explicit `ORKESTR_TRUSTED_PROXY_IPS` list. Missing, malformed,
+unknown, or mixed host configuration fails with a uniform `404`; request hosts
+are never copied into redirect destinations.
+
+While this compatibility phase is enabled, authorized and unambiguous
+`/thread/{id-or-name}` and `/ng/thread/{id-or-name}` requests redirect to the
+opaque canonical application URL. Redirects require the full canonical flag
+set and persisted instance/thread public references. Ambiguous, unauthorized,
+and unknown selectors all fail identically. The existing
+`/i/{internal-id}/app/...` and shared-app `/i/{internal-id}/a/{slug}/s/...`
+flows remain available on configured application and connect/auth origins;
+these internal-ID compatibility routes are deprecated and should not be used
+for newly emitted links.
+
+Run `orkestr doctor system --json` or `orkestr doctor router --json` before
+enablement. The checks report aggregate configuration, migration readiness,
+legacy-selector ambiguity, cookie/forwarded-header hazards, and recent
+wrong-host traffic without exposing private selectors or hostnames. Roll back
+host separation by setting `ORKESTR_HOST_BOUNDARIES=0`; stored public references
+and the three earlier canonical feature flags are unchanged.

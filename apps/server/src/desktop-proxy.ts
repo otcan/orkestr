@@ -12,6 +12,7 @@ import { onDesktopShareLifecycle } from "../../../packages/core/src/desktop-shar
 import { validateDesktopShareSession } from "../../../packages/core/src/desktop-shares.js";
 import { appendEvent } from "../../../packages/storage/src/store.js";
 import { desktopCapabilityRequired } from "../../../packages/browsers/src/desktop-capability-broker.js";
+import { hostBoundaryUpgradeDenied } from "./host-boundaries.js";
 
 type DesktopTarget = {
   slug: string;
@@ -310,6 +311,7 @@ export function registerDesktopProxy(app: INestApplication): void {
 
 export function attachDesktopProxyUpgrade(server: Server): void {
   server.on("upgrade", async (request: IncomingMessage, socket: Duplex, head: Buffer) => {
+    if (hostBoundaryUpgradeDenied(request)) return;
     if (!parseDesktopUrl(request.url)) return;
     const auth: any = await authorizeHttpRequest(request).catch((error) => ({
       ok: false,

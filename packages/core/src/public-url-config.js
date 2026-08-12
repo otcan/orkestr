@@ -85,9 +85,13 @@ export function publicUrlConfig(env = process.env) {
   const connectUrl = normalizeUrl(env.ORKESTR_CONNECT_PUBLIC_URL || "");
   const appUrlHost = hostnameFromUrl(appUrl);
   const authUrlHost = hostnameFromUrl(authUrl);
+  const connectUrlHost = hostnameFromUrl(connectUrl);
+  const separatedIdentityHost = [authUrlHost, connectUrlHost]
+    .filter(Boolean)
+    .some((host) => host !== appUrlHost);
   const configuredCookieDomain =
     cookieDomain(env.ORKESTR_COOKIE_DOMAIN || "") ||
-    (primaryDomain && appUrlHost && authUrlHost && appUrlHost !== authUrlHost ? primaryDomain : "");
+    (primaryDomain && appUrlHost && separatedIdentityHost ? primaryDomain : "");
 
   return {
     primaryDomain,
