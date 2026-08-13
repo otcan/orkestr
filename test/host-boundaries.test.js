@@ -188,12 +188,39 @@ test("direct loopback reaches authentication but only probes and exact verified 
     assert.equal((await enforce(inbound, runtimeEnv)).handled, false, pathname);
   }
 
+  for (const [method, pathname] of [
+    ["GET", "/api/mailboxes/lookup"],
+    ["POST", "/api/mailboxes/ingest-spool"],
+  ]) {
+    const mailboxMta = request(pathname, "127.0.0.1:19812", { method, remoteAddress: "127.0.0.1" });
+    mailboxMta.orkestrMachineAuth = "mailbox_mta";
+    assert.equal((await enforce(mailboxMta, runtimeEnv)).handled, false, `${method} ${pathname}`);
+  }
+
   const wrongInboundMethod = request("/api/connectors/whatsapp/inbound", "127.0.0.1:19812", {
     method: "GET",
     remoteAddress: "127.0.0.1",
   });
   wrongInboundMethod.orkestrMachineAuth = "whatsapp_inbound";
   assert.equal((await enforce(wrongInboundMethod, runtimeEnv)).statusCode, 404);
+
+  const wrongMailboxMtaMethod = request("/api/mailboxes/lookup", "127.0.0.1:19812", {
+    method: "POST",
+    remoteAddress: "127.0.0.1",
+  });
+  wrongMailboxMtaMethod.orkestrMachineAuth = "mailbox_mta";
+  assert.equal((await enforce(wrongMailboxMtaMethod, runtimeEnv)).statusCode, 404);
+
+  const wrongMailboxMtaRoute = request("/api/threads", "127.0.0.1:19812", {
+    method: "GET",
+    remoteAddress: "127.0.0.1",
+  });
+  wrongMailboxMtaRoute.orkestrMachineAuth = "mailbox_mta";
+  assert.equal((await enforce(wrongMailboxMtaRoute, runtimeEnv)).statusCode, 404);
+
+  const remoteMailboxMta = request("/api/mailboxes/lookup", "attacker.invalid", { method: "GET" });
+  remoteMailboxMta.orkestrMachineAuth = "mailbox_mta";
+  assert.equal((await enforce(remoteMailboxMta, runtimeEnv)).statusCode, 404);
 
   const wrongInboundRoute = request("/api/threads", "127.0.0.1:19812", { method: "POST", remoteAddress: "127.0.0.1" });
   wrongInboundRoute.orkestrMachineAuth = "whatsapp_inbound";
