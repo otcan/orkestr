@@ -1570,13 +1570,13 @@ test("local whatsapp text send forwards mentions to the WhatsApp client", async 
     const result = await sendLocalWhatsAppMessage({
       accountId: "responder",
       chatId: "mentions@g.us",
-      text: "@66378837028965 New order",
+      text: "{{mention:0}} New order",
       mentions: ["66378837028965@lid"],
       env,
     });
     assert.deepEqual(calls, [{
       chatId: "mentions@g.us",
-      text: "@66378837028965 New order",
+      text: "@905339208177 New order",
       options: { mentions: ["905339208177@c.us"] },
     }]);
     assert.deepEqual(result.mentions, ["905339208177@c.us"]);

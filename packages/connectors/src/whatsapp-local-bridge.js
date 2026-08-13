@@ -1583,6 +1583,16 @@ async function resolveWhatsAppMentionIds(client, mentions = []) {
   ).filter(Boolean);
 }
 
+function renderWhatsAppMentionPlaceholders(text = "", mentions = []) {
+  let rendered = String(text || "");
+  for (const [index, mention] of mentions.entries()) {
+    const user = String(mention || "").split("@", 1)[0].trim();
+    if (!user) continue;
+    rendered = rendered.replaceAll(`{{mention:${index}}}`, `@${user}`);
+  }
+  return rendered;
+}
+
 export async function sendWhatsAppTextWithConfirmation({
   client,
   chatId = "",
@@ -7116,17 +7126,18 @@ export async function sendLocalWhatsAppMessage({ chatId = "", text = "", account
     const cleanText = String(text || "");
     if (cleanText.trim()) {
       resolvedMentions = await resolveWhatsAppMentionIds(runtime.client, mentions);
+      const outboundText = renderWhatsAppMentionPlaceholders(cleanText, resolvedMentions);
       const routeOwnText = routeSentMessage === true;
       if (!routeOwnText) {
-        rememberOutboundText(selectedAccountId, chatId, cleanText, env, { crossAccount: crossAccountEchoSuppression !== false });
+        rememberOutboundText(selectedAccountId, chatId, outboundText, env, { crossAccount: crossAccountEchoSuppression !== false });
       } else {
-        outboundMessageTextKeys.delete(textKey(selectedAccountId, chatId, cleanText));
-        outboundMessageTextKeys.delete(anyAccountTextKey(chatId, cleanText));
+        outboundMessageTextKeys.delete(textKey(selectedAccountId, chatId, outboundText));
+        outboundMessageTextKeys.delete(anyAccountTextKey(chatId, outboundText));
       }
       const message = await sendWhatsAppTextWithConfirmation({
         client: runtime.client,
         chatId,
-        text: cleanText,
+        text: outboundText,
         mentions: resolvedMentions,
         env,
         allowUnconfirmed: state.chatOpsReady === false && state.runtimeUsable !== false,
@@ -7139,7 +7150,7 @@ export async function sendLocalWhatsAppMessage({ chatId = "", text = "", account
           id: message?.id || { _serialized: messageId },
           fromMe: true,
           to: message?.to || chatId,
-          body: sentMessageText(message) || cleanText,
+          body: sentMessageText(message) || outboundText,
           timestamp: message?.timestamp || Math.floor(Date.now() / 1000),
         };
         const result = await handleInboundMessage(selectedAccountId, routableMessage, env, { client: runtime.client });
