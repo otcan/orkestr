@@ -3,6 +3,7 @@ import { ChangeDetectorRef, Component, EventEmitter, Input, OnDestroy, OnInit, O
 import { FormsModule } from "@angular/forms";
 import { firstValueFrom } from "rxjs";
 import { Agent, AgentTemplate, ApiService, BrowserSession, ConnectorStatus, DesktopLeaseRecord, DesktopShareRecord, EventArchive, EventRecord, EventStorageStatus, OrkestrUser, OutlookOAuthPollResponse, ReleaseInstance, ReleaseInstancesResponse, ReleaseRolloutResponse, SecureSecretMetadata, SecurityChallenge, SecuritySession, SetupStatus, TenantVm, TimerDoctorResponse, TimerRecord, ThreadSummary, UserIdentity, UserOutlookOAuthStartResponse, VersionResponse, WatcherAlert, WhatsAppDoctorAccount, WhatsAppDoctorBinding, WhatsAppDoctorResponse, WhatsAppOutboxJob } from "./api.service";
+import { MailboxInboxPanelComponent } from "./mailbox-inbox-panel.component";
 import { MailboxRoutesPanelComponent } from "./mailbox-routes-panel.component";
 import { OpsWaitlistComponent } from "./ops-waitlist.component";
 
@@ -49,7 +50,7 @@ interface BrokerSavedView {
 
 @Component({
   selector: "ork-ops-page",
-  imports: [DatePipe, FormsModule, MailboxRoutesPanelComponent, OpsWaitlistComponent],
+  imports: [DatePipe, FormsModule, MailboxInboxPanelComponent, MailboxRoutesPanelComponent, OpsWaitlistComponent],
   templateUrl: "./ops-page.component.html",
 })
 export class OpsPageComponent implements OnInit, OnDestroy {

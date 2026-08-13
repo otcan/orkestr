@@ -635,3 +635,24 @@ test("mailbox route CLI prints an attended approval retry and forwards the scope
   assert.equal(stdout, "route-approved\n");
   assert.deepEqual(JSON.parse(calls[1].options.body), { threadId: "thread-1", mode: "process_immediately", approval: "CODE1234" });
 });
+
+test("mailbox messages CLI requires a managed thread context and uses the read projection", async () => {
+  const calls = [];
+  let stdout = "";
+  let stderr = "";
+  const context = {
+    baseUrl: "http://orkestr.test",
+    env: { ORKESTR_DISABLE_CLI_AUTH: "1" },
+    stdout: { write: (chunk) => { stdout += chunk; } },
+    stderr: { write: (chunk) => { stderr += chunk; } },
+    fetchImpl: async (url) => {
+      calls.push(String(url));
+      return new Response(JSON.stringify({ ok: true, messages: [{ receivedAt: "2026-01-01T00:00:00.000Z", from: "sender@example.test", subject: "Forwarding", body: "Code 246810" }] }), { headers: { "content-type": "application/json" } });
+    },
+  };
+  assert.equal(await runCli(["mailboxes", "messages", "mailbox-1", "--thread-id", "thread-1"], context), 0);
+  assert.deepEqual(calls, ["http://orkestr.test/api/mailboxes/mailbox-1/messages?threadId=thread-1"]);
+  assert.match(stdout, /Code 246810/);
+  assert.equal(await runCli(["mailboxes", "messages", "mailbox-1"], context), 1);
+  assert.match(stderr, /--thread-id/);
+});

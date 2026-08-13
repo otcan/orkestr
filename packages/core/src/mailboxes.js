@@ -55,6 +55,7 @@ export {
   retryMailboxRouteWork,
   revokeMailboxRoute,
 } from "./mailbox-routes.js";
+export { listMailboxInboxMessages } from "./mailbox-inbox-read.js";
 export {
   deleteMailboxForPrincipal,
   rotateMailboxForPrincipal,

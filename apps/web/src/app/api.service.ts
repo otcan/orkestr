@@ -985,6 +985,27 @@ export interface MailboxRouteStatus {
   context: { pending: number; reserved: number; consumed: number; cancelled: number };
 }
 
+export interface MailboxInboxMessage {
+  id: string;
+  receivedAt: string;
+  from: string;
+  subject: string;
+  body: string;
+  messageId: string;
+  attachmentCount: number;
+  state: string;
+  suppressionReason: string;
+}
+
+export interface MailboxInboxResponse {
+  ok: boolean;
+  mode: string;
+  shadowDenied: boolean;
+  limit?: number;
+  messages: MailboxInboxMessage[];
+  nextCursor: string | null;
+}
+
 export interface MailboxRouteApproval {
   id: string;
   approveCode?: string;
@@ -2469,6 +2490,10 @@ export class ApiService {
 
   mailboxRouteStatus(mailboxId: string): Observable<{ ok: boolean; status: MailboxRouteStatus }> {
     return this.http.get<{ ok: boolean; status: MailboxRouteStatus }>(this.api(`/mailboxes/${encodeURIComponent(mailboxId)}/route-status`));
+  }
+
+  mailboxMessages(mailboxId: string, threadId: string, cursor = "", limit = 25): Observable<MailboxInboxResponse> {
+    return this.http.get<MailboxInboxResponse>(this.api(`/mailboxes/${encodeURIComponent(mailboxId)}/messages${this.query({ threadId, cursor, limit })}`));
   }
 
   createMailboxRoute(mailboxId: string, body: { threadId: string; mode: MailboxRoute["mode"]; newThread?: { name: string }; approval?: string }): Observable<MailboxRouteMutation> {

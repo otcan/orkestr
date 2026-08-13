@@ -1395,10 +1395,18 @@ test("ops mailboxes page exposes explicit route setup and durable status", async
   const api = await fs.readFile("apps/web/src/app/api.service.ts", "utf8");
   const controller = await fs.readFile("apps/server/src/modules/mailboxes/mailboxes.controller.ts", "utf8");
   const cli = await fs.readFile("apps/cli/src/mailbox-command.js", "utf8");
+  const inboxTemplate = await fs.readFile("apps/web/src/app/mailbox-inbox-panel.component.html", "utf8");
+  const inboxComponent = await fs.readFile("apps/web/src/app/mailbox-inbox-panel.component.ts", "utf8");
 
   assert.match(opsComponent, /MailboxRoutesPanelComponent/);
+  assert.match(opsComponent, /MailboxInboxPanelComponent/);
   assert.match(opsComponent, /id: "mailboxes", label: "Mailboxes", kind: "oss-optional"/);
   assert.match(opsTemplate, /<ork-mailbox-routes-panel><\/ork-mailbox-routes-panel>/);
+  assert.match(opsTemplate, /<ork-mailbox-inbox-panel><\/ork-mailbox-inbox-panel>/);
+  assert.match(inboxTemplate, /Read forwarded mail without opening a thread/);
+  assert.match(inboxTemplate, /never wake a thread, append a message, or change delivery state/i);
+  assert.match(inboxTemplate, /exact mailbox <code>read<\/code> grant/i);
+  assert.match(inboxComponent, /mailboxMessages\(this\.selectedMailboxId, this\.selectedThreadId/);
   assert.match(panelTemplate, /One explicit route per main mailbox/);
   assert.match(panelTemplate, /Create explicit route/);
   assert.match(panelTemplate, /Revoke route/);
@@ -1418,11 +1426,15 @@ test("ops mailboxes page exposes explicit route setup and durable status", async
   assert.match(api, /export interface MailboxRouteStatus/);
   assert.match(api, /running: number; completed: number; failed: number/);
   assert.match(api, /mailboxRoutes\(mailboxId: string\)/);
+  assert.match(api, /export interface MailboxInboxMessage/);
+  assert.match(api, /mailboxMessages\(mailboxId: string, threadId: string/);
   assert.match(api, /moveMailboxRoute\(mailboxId: string, routeId: string/);
   assert.match(api, /revokeMailboxRoute\(mailboxId: string, routeId: string/);
   assert.match(controller, /approval: String\(body\.approval \|\| ""\)\.trim\(\), request/);
   assert.match(cli, /--approval/);
   assert.match(cli, /Retry the same route command with --approval/);
+  assert.match(cli, /mailboxes messages <mailbox-id> --thread-id <thread-id>/);
+  assert.match(controller, /@Get\(":mailboxId\/messages"\)/);
 });
 
 test("ops audit view exposes normalized filterable events", async () => {

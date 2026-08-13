@@ -361,6 +361,22 @@ uses the stable delivery client-message ID, so a retry cannot append twice.
 The final policy/claim check runs immediately before append; a revocation that
 begins after that cross-store check is still contained by the same deterministic
 thread-message idempotency key. VM mailbox relay is separate and unchanged.
+
+### Managed mailbox inbox
+
+Forwarded mail can be read without opening, waking, or delivering to a thread.
+Use `GET /api/mailboxes/:mailboxId/messages?threadId=:threadId` or
+`orkestr mailboxes messages <mailbox-id> --thread-id <thread-id>`. In enforce
+mode, the caller must own the mailbox and the selected thread must hold that
+mailbox's exact `read` grant. An administrator has no implicit mailbox-wide
+read bypass; an admin-owned mailbox also needs its own explicitly granted
+thread context. The projection is paginated and bounded, and every read emits
+a content-free policy audit event. It reads only the bounded mailbox-source
+retention already recorded by ingress; it does not create a route, alter
+listener state, or replay an email. Shadow mode returns a content-redacted
+projection, while off mode declines the request rather than falling back to
+unmanaged inbox access.
+
 Break-glass is never an implicit admin bypass: it requires the exact target and
 action, an admin's recent authentication, a reason, and a change reference; it
 is audited before use and expires within fifteen minutes.
