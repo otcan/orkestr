@@ -5747,9 +5747,9 @@ async function listThreadMessageSets(env, state = null, config = {}, options = {
 }
 
 /**
- * @param {{ chatId?: string, text?: string, accountId?: string, attachments?: Array<Record<string, unknown>>, crossAccountEchoSuppression?: boolean, routeSentMessage?: boolean, config?: Record<string, unknown> | null, env?: Record<string, string | undefined>, fetchImpl?: typeof fetch }} [options]
+ * @param {{ chatId?: string, text?: string, accountId?: string, mentions?: string[], attachments?: Array<Record<string, unknown>>, crossAccountEchoSuppression?: boolean, routeSentMessage?: boolean, config?: Record<string, unknown> | null, env?: Record<string, string | undefined>, fetchImpl?: typeof fetch }} [options]
  */
-export async function sendWhatsAppText({ chatId = "", text = "", accountId = "", attachments = [], crossAccountEchoSuppression = true, routeSentMessage = false, config = null, env = process.env, fetchImpl = fetch } = {}) {
+export async function sendWhatsAppText({ chatId = "", text = "", accountId = "", mentions = [], attachments = [], crossAccountEchoSuppression = true, routeSentMessage = false, config = null, env = process.env, fetchImpl = fetch } = {}) {
   const resolvedConfig = config || await readConnectorConfig("whatsapp", env).catch(() => ({}));
   const bridgeUrl = configuredBridgeUrl(resolvedConfig, env);
   const normalizedAttachments = Array.isArray(attachments)
@@ -5768,6 +5768,7 @@ export async function sendWhatsAppText({ chatId = "", text = "", accountId = "",
       chatId,
       text: appendLocalAttachmentFailureNotes(text, safeSkipped),
       accountId,
+      mentions,
       attachments: localAttachments.attachments,
       env,
       crossAccountEchoSuppression,
@@ -5792,6 +5793,7 @@ export async function sendWhatsAppText({ chatId = "", text = "", accountId = "",
     body: JSON.stringify({
       to: chatId,
       text: outboundText,
+      ...(Array.isArray(mentions) && mentions.length ? { mentions } : {}),
       ...(runtimeAccountId ? { accountId: runtimeAccountId } : {}),
       ...(sendablePathAttachments.length ? { paths: sendablePathAttachments.map((attachment) => attachment.path) } : {}),
       ...(sendableInlineAttachments.length ? { attachments: sendableInlineAttachments } : {}),

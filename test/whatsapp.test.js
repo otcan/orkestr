@@ -1544,6 +1544,42 @@ test("local whatsapp send continues when chat ops probe is unavailable", async (
   }
 });
 
+test("local whatsapp text send forwards mentions to the WhatsApp client", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-mentions-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "responder",
+    ORKESTR_WHATSAPP_SEND_CONFIRMATION_REQUIRED: "0",
+  };
+  const calls = [];
+  const runtime = {
+    client: {
+      async sendMessage(chatId, text, options) {
+        calls.push({ chatId, text, options });
+        return { id: { _serialized: "mention-delivered" } };
+      },
+    },
+  };
+
+  try {
+    setLocalWhatsAppRuntimeForTest("responder", runtime, {}, env);
+    await sendLocalWhatsAppMessage({
+      accountId: "responder",
+      chatId: "mentions@g.us",
+      text: "@66378837028965 New order",
+      mentions: ["66378837028965@lid"],
+      env,
+    });
+    assert.deepEqual(calls, [{
+      chatId: "mentions@g.us",
+      text: "@66378837028965 New order",
+      options: { mentions: ["66378837028965@lid"] },
+    }]);
+  } finally {
+    await resetLocalWhatsAppBridgeForTest(env);
+  }
+});
+
 test("local whatsapp active status chat ops probe does not dereference arbitrary chats by default", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-chatops-list-only-"));
   const env = {

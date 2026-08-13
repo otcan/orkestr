@@ -1575,6 +1575,7 @@ export async function sendWhatsAppTextWithConfirmation({
   client,
   chatId = "",
   text = "",
+  mentions = [],
   maxAttempts = 2,
   retryDelayMs = 500,
   env = process.env,
@@ -1582,13 +1583,17 @@ export async function sendWhatsAppTextWithConfirmation({
   allowUnconfirmed = false,
   confirmationSkipReason = "",
 } = {}) {
+  const normalizedMentions = Array.isArray(mentions)
+    ? mentions.map((mention) => String(mention || "").trim()).filter(Boolean)
+    : [String(mentions || "").trim()].filter(Boolean);
+  const sendOptions = normalizedMentions.length ? { mentions: normalizedMentions } : undefined;
   let lastError = null;
   const attempts = Math.max(1, Number(maxAttempts || 1));
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
       const sentAtMs = Date.now();
       const sentMessage = await withSendOperationTimeout(
-        client.sendMessage(chatId, text),
+        client.sendMessage(chatId, text, sendOptions),
         "whatsapp_send_message",
         env,
         operationTimeoutMs,
@@ -7076,9 +7081,9 @@ function localWhatsAppOutboundAttachmentMaxBytes(env = process.env) {
 }
 
 /**
- * @param {{ chatId?: string, text?: string, accountId?: string, attachments?: Array<Record<string, unknown>>, env?: Record<string, string | undefined>, crossAccountEchoSuppression?: boolean, routeSentMessage?: boolean }} [options]
+ * @param {{ chatId?: string, text?: string, accountId?: string, mentions?: string[], attachments?: Array<Record<string, unknown>>, env?: Record<string, string | undefined>, crossAccountEchoSuppression?: boolean, routeSentMessage?: boolean }} [options]
  */
-export async function sendLocalWhatsAppMessage({ chatId = "", text = "", accountId = "", attachments = [], env = process.env, crossAccountEchoSuppression = true, routeSentMessage = false } = {}) {
+export async function sendLocalWhatsAppMessage({ chatId = "", text = "", accountId = "", mentions = [], attachments = [], env = process.env, crossAccountEchoSuppression = true, routeSentMessage = false } = {}) {
   const selectedAccountId = accountId
     ? await normalizeManagedAccountId(accountId, env)
     : localWhatsAppAccountIdsForEnv(env).find((id) => {
@@ -7110,6 +7115,7 @@ export async function sendLocalWhatsAppMessage({ chatId = "", text = "", account
         client: runtime.client,
         chatId,
         text: cleanText,
+        mentions,
         env,
         allowUnconfirmed: state.chatOpsReady === false && state.runtimeUsable !== false,
         confirmationSkipReason: "chat_ops_degraded",
