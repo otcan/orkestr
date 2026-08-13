@@ -1571,6 +1571,18 @@ function unconfirmedSendError(chatId = "") {
   return error;
 }
 
+async function resolveWhatsAppMentionIds(client, mentions = []) {
+  const normalized = Array.isArray(mentions)
+    ? mentions.map((mention) => String(mention || "").trim()).filter(Boolean)
+    : [String(mentions || "").trim()].filter(Boolean);
+  if (!normalized.length || typeof client?.getContactLidAndPhone !== "function") return normalized;
+  const resolved = await client.getContactLidAndPhone(normalized).catch(() => null);
+  if (!Array.isArray(resolved) || resolved.length !== normalized.length) return normalized;
+  return resolved.map((contact, index) =>
+    String(contact?.pn || contact?.lid || normalized[index] || "").trim(),
+  ).filter(Boolean);
+}
+
 export async function sendWhatsAppTextWithConfirmation({
   client,
   chatId = "",
@@ -1583,9 +1595,7 @@ export async function sendWhatsAppTextWithConfirmation({
   allowUnconfirmed = false,
   confirmationSkipReason = "",
 } = {}) {
-  const normalizedMentions = Array.isArray(mentions)
-    ? mentions.map((mention) => String(mention || "").trim()).filter(Boolean)
-    : [String(mentions || "").trim()].filter(Boolean);
+  const normalizedMentions = await resolveWhatsAppMentionIds(client, mentions);
   const sendOptions = normalizedMentions.length ? { mentions: normalizedMentions } : undefined;
   let lastError = null;
   const attempts = Math.max(1, Number(maxAttempts || 1));
@@ -7101,9 +7111,11 @@ export async function sendLocalWhatsAppMessage({ chatId = "", text = "", account
   const sent = [];
   const skipped = [];
   const routed = [];
+  let resolvedMentions = [];
   try {
     const cleanText = String(text || "");
     if (cleanText.trim()) {
+      resolvedMentions = await resolveWhatsAppMentionIds(runtime.client, mentions);
       const routeOwnText = routeSentMessage === true;
       if (!routeOwnText) {
         rememberOutboundText(selectedAccountId, chatId, cleanText, env, { crossAccount: crossAccountEchoSuppression !== false });
@@ -7115,7 +7127,7 @@ export async function sendLocalWhatsAppMessage({ chatId = "", text = "", account
         client: runtime.client,
         chatId,
         text: cleanText,
-        mentions,
+        mentions: resolvedMentions,
         env,
         allowUnconfirmed: state.chatOpsReady === false && state.runtimeUsable !== false,
         confirmationSkipReason: "chat_ops_degraded",
@@ -7225,6 +7237,7 @@ export async function sendLocalWhatsAppMessage({ chatId = "", text = "", account
     ids: sent.map((entry) => entry.id).filter(Boolean),
     accountId: selectedAccountId,
     sent,
+    ...(resolvedMentions.length ? { mentions: resolvedMentions } : {}),
     ...(skipped.length ? { skipped } : {}),
     ...(routed.length ? { routed } : {}),
   };

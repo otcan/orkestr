@@ -1554,6 +1554,10 @@ test("local whatsapp text send forwards mentions to the WhatsApp client", async 
   const calls = [];
   const runtime = {
     client: {
+      async getContactLidAndPhone(ids) {
+        assert.deepEqual(ids, ["66378837028965@lid"]);
+        return [{ lid: "66378837028965@lid", pn: "905339208177@c.us" }];
+      },
       async sendMessage(chatId, text, options) {
         calls.push({ chatId, text, options });
         return { id: { _serialized: "mention-delivered" } };
@@ -1563,7 +1567,7 @@ test("local whatsapp text send forwards mentions to the WhatsApp client", async 
 
   try {
     setLocalWhatsAppRuntimeForTest("responder", runtime, {}, env);
-    await sendLocalWhatsAppMessage({
+    const result = await sendLocalWhatsAppMessage({
       accountId: "responder",
       chatId: "mentions@g.us",
       text: "@66378837028965 New order",
@@ -1573,8 +1577,9 @@ test("local whatsapp text send forwards mentions to the WhatsApp client", async 
     assert.deepEqual(calls, [{
       chatId: "mentions@g.us",
       text: "@66378837028965 New order",
-      options: { mentions: ["66378837028965@lid"] },
+      options: { mentions: ["905339208177@c.us"] },
     }]);
+    assert.deepEqual(result.mentions, ["905339208177@c.us"]);
   } finally {
     await resetLocalWhatsAppBridgeForTest(env);
   }
