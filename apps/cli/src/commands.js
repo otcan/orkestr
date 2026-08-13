@@ -2093,7 +2093,7 @@ Advanced:
   orkestr whatsapp bind-thread <thread> --name <group name> [--wa-participant jid]... [--json]
   orkestr timers [list|doctor|run <timer-id>] [--json]
   orkestr jobs run [--owner-user-id user] [--target-thread thread] [--max-results N] [--signal-mode record_only|notify_passively] [--json]
-  orkestr mailboxes [list|status|create|verify|delete|rotate|ingest|retry|relay-audits|dead-letters|replay] [--json]
+  orkestr mailboxes [list|status|create|verify|delete|rotate|ingest|messages|retry|relay-audits|dead-letters|replay] [--json]
   orkestr connect approve <code> [--json]
   orkestr security [challenges|sessions|approve <challenge-id>|reject <challenge-id>|revoke <session-id|all>] [--json]
   orkestr desktop [share [slug]|approve <challenge-id>] [--json]

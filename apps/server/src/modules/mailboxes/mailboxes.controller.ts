@@ -10,6 +10,7 @@ import {
   mailboxForPrincipal,
   mailboxThreadDeliveryStatus,
   listMailboxThreadListeners,
+  listMailboxInboxMessages,
   listMailboxRoutes,
   mailboxRouteStatus,
   mailboxInfrastructureStatus,
@@ -175,6 +176,17 @@ export class MailboxesController {
       return { ok: true, status: await mailboxThreadDeliveryStatus({ mailbox } as any) };
     } catch (error) {
       rethrowHttp(error, "mailbox_delivery_status_failed");
+    }
+  }
+
+  @Get(":mailboxId/messages")
+  async messages(@Req() request: any, @Param("mailboxId") mailboxId: string, @Query("threadId") threadId = "", @Query("cursor") cursor = "", @Query("limit") limit = "") {
+    try {
+      const principal = requestPrincipal(request);
+      const mailbox = await mailboxForPrincipal(mailboxId, principal);
+      return await listMailboxInboxMessages({ mailbox, threadId, cursor, limit, principal } as any);
+    } catch (error) {
+      rethrowHttp(error, "mailbox_inbox_read_failed");
     }
   }
 
