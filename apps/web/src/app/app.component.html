@@ -48,13 +48,15 @@
       <nav class="user-mode-nav" aria-label="User navigation">
         <button class="secondary" type="button" [class.active]="isUserNavPanelActive('chat')" (click)="openPanel('chat')">Chat</button>
         <button class="secondary" type="button" [class.active]="isUserNavPanelActive('files')" (click)="openPanel('files')">Files</button>
+        <button class="secondary" type="button" [class.active]="isUserNavPanelActive('instanceSettings')" (click)="openPanel('instanceSettings')">Settings</button>
         <button class="secondary" type="button" [class.active]="isUserNavPanelActive('userTimers')" (click)="openPanel('userTimers')">Automations</button>
         <button class="secondary" type="button" [class.active]="isUserNavPanelActive('userDesk')" (click)="openPanel('userDesk')">Desk</button>
         <button class="secondary" type="button" [class.active]="isUserNavPanelActive('userJobs')" (click)="openPanel('userJobs')">Jobs</button>
-        <button class="secondary" type="button" [class.active]="isUserNavPanelActive('userConnectors')" (click)="openPanel('userConnectors')">Connectors</button>
       </nav>
     } @else {
       <nav class="user-mode-nav" aria-label="Workspace navigation">
+        <button class="secondary" type="button" [class.active]="activePanel === 'files'" (click)="openPanel('files')">Files</button>
+        <button class="secondary" type="button" [class.active]="activePanel === 'instanceSettings'" (click)="openPanel('instanceSettings')">Settings</button>
         <button class="secondary" type="button" [class.active]="activePanel === 'userJobs'" (click)="openPanel('userJobs')">Jobs</button>
       </nav>
     }
@@ -281,6 +283,8 @@
       <ork-ops-page [toolsView]="toolsView" (toolsViewChange)="setToolsView($event)"></ork-ops-page>
     } @else if (activePanel === "files") {
       <ork-files-page></ork-files-page>
+    } @else if (activePanel === "instanceSettings") {
+      <ork-instance-settings-page></ork-instance-settings-page>
     } @else if (activePanel === "userTimers") {
       <ork-user-timers-page></ork-user-timers-page>
     } @else if (activePanel === "userDesk") {

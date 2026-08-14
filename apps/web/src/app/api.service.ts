@@ -350,6 +350,79 @@ export interface WorkspaceFoldersResponse {
 
 export interface FileBrowserResponse extends WorkspaceFoldersResponse {}
 
+export interface InstanceFileMount {
+  id: string;
+  name: string;
+  permissions: { read?: boolean; upload?: boolean; createFolder?: boolean; delete?: boolean };
+}
+
+export interface InstanceFileEntry {
+  name: string;
+  path: string;
+  type: string;
+  directory: boolean;
+  hidden?: boolean;
+  size?: number | null;
+  modifiedAt?: string | null;
+  previewable?: boolean;
+  downloadable?: boolean;
+}
+
+export interface InstanceFilesResponse {
+  ok: boolean;
+  mount: InstanceFileMount;
+  mounts: InstanceFileMount[];
+  path: string;
+  parent?: string | null;
+  entries: InstanceFileEntry[];
+  truncated?: boolean;
+  files?: Array<{ name: string; path: string; size: number }>;
+}
+
+export interface InstanceFilePreviewResponse {
+  ok: boolean;
+  mount: InstanceFileMount;
+  path: string;
+  name: string;
+  size: number;
+  contentType: string;
+  content: string;
+}
+
+export interface InstanceConfigDocument {
+  schemaVersion: number;
+  generation: number;
+  createdAt: string;
+  updatedAt: string;
+  metadata: Record<string, unknown>;
+  runtime: Record<string, unknown>;
+  capabilities: Record<string, unknown>;
+  connectors: Record<string, unknown>;
+  desktops: Record<string, unknown>;
+  mailboxes: Record<string, unknown>;
+}
+
+export interface InstanceStatusDocument {
+  schemaVersion: number;
+  desiredGeneration: number;
+  observedGeneration: number;
+  state: string;
+  generatedAt: string;
+  lastSuccessfulReconciliationAt?: string;
+  conditions: Array<{ code: string; status: string; subsystem: string }>;
+  subsystems: Record<string, { state: string }>;
+}
+
+export interface InstanceContextResponse {
+  ok: boolean;
+  instance: { internalInstanceId?: string; publicRef: string; canonicalPath: string };
+}
+
+export interface InstanceStatusResponse extends InstanceContextResponse {
+  config: InstanceConfigDocument;
+  status: InstanceStatusDocument;
+}
+
 export interface SystemDoctorCheck {
   id: string;
   label: string;
@@ -2674,6 +2747,44 @@ export class ApiService {
 
   deleteFile(path: string): Observable<FileBrowserResponse> {
     return this.http.delete<FileBrowserResponse>(this.api(`/files?path=${encodeURIComponent(path)}`));
+  }
+
+  instanceContext(): Observable<InstanceContextResponse> {
+    return this.http.get<InstanceContextResponse>(this.api("/instance/context"));
+  }
+
+  instanceStatus(): Observable<InstanceStatusResponse> {
+    return this.http.get<InstanceStatusResponse>(this.api("/instance/status"));
+  }
+
+  instanceFiles(mount = "", currentPath = ""): Observable<InstanceFilesResponse> {
+    const params = new URLSearchParams();
+    if (mount) params.set("mount", mount);
+    if (currentPath) params.set("path", currentPath);
+    const query = params.toString();
+    return this.http.get<InstanceFilesResponse>(this.api(`/instance/files${query ? `?${query}` : ""}`));
+  }
+
+  instanceFilePreview(mount: string, filePath: string): Observable<InstanceFilePreviewResponse> {
+    const params = new URLSearchParams({ mount, path: filePath });
+    return this.http.get<InstanceFilePreviewResponse>(this.api(`/instance/files/preview?${params}`));
+  }
+
+  instanceFileDownloadUrl(mount: string, filePath: string): string {
+    const params = new URLSearchParams({ mount, path: filePath });
+    return this.api(`/instance/files/download?${params}`);
+  }
+
+  createInstanceFolder(mount: string, currentPath: string, name: string): Observable<InstanceFilesResponse> {
+    return this.http.post<InstanceFilesResponse>(this.api("/instance/files/folders"), { mount, path: currentPath, name });
+  }
+
+  uploadInstanceFiles(mount: string, currentPath: string, files: File[]): Observable<InstanceFilesResponse> {
+    const body = new FormData();
+    body.append("mount", mount);
+    body.append("path", currentPath);
+    for (const file of files) body.append("files", file, file.name);
+    return this.http.post<InstanceFilesResponse>(this.api("/instance/files/uploads"), body);
   }
 
   modelStatus(): Observable<Record<string, unknown>> {

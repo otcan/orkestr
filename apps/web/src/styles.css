@@ -4236,6 +4236,37 @@ ork-first-thread-wizard.first-thread-host {
   color: #7cff8e;
 }
 
+.files-page .card {
+  border: 1px solid rgba(119, 205, 126, 0.16);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.035);
+  padding: 16px;
+}
+
+.files-page .row-between {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.files-page .card h3 {
+  margin: 0;
+  color: #f3fff4;
+}
+
+.files-page .card pre {
+  max-height: min(58vh, 680px);
+  overflow: auto;
+  border: 1px solid rgba(119, 205, 126, 0.14);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.24);
+  padding: 12px;
+  color: #dff7e1;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .visually-hidden {
   position: absolute;
   width: 1px;

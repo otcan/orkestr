@@ -2,7 +2,7 @@ import { DatePipe } from "@angular/common";
 import { Component, OnInit, inject } from "@angular/core";
 import { FormsModule } from "@angular/forms";
 import { firstValueFrom } from "rxjs";
-import { ApiService, FileBrowserResponse, WorkspaceFolderEntry } from "./api.service";
+import { ApiService, InstanceFileEntry, InstanceFileMount, InstanceFilePreviewResponse, InstanceFilesResponse } from "./api.service";
 
 @Component({
   selector: "ork-files-page",
@@ -14,23 +14,25 @@ export class FilesPageComponent implements OnInit {
 
   busy = false;
   uploadBusy = false;
-  deletingPath = "";
+  previewBusy = false;
   error = "";
   notice = "";
+  currentMount = "";
   currentPath = "";
   parentPath: string | null = null;
-  roots: WorkspaceFolderEntry[] = [];
-  entries: WorkspaceFolderEntry[] = [];
+  mounts: InstanceFileMount[] = [];
+  entries: InstanceFileEntry[] = [];
+  preview: InstanceFilePreviewResponse | null = null;
   newFolderName = "";
 
   ngOnInit(): void {
     void this.loadFiles();
   }
 
-  async loadFiles(path = this.currentPath): Promise<void> {
+  async loadFiles(path = this.currentPath, mount = this.currentMount): Promise<void> {
     this.busy = true;
     try {
-      this.applyListing(await firstValueFrom(this.api.files(path)));
+      this.applyListing(await firstValueFrom(this.api.instanceFiles(mount, path)));
     } catch (error) {
       this.error = this.errorText(error);
     } finally {
@@ -43,7 +45,7 @@ export class FilesPageComponent implements OnInit {
     if (!name || this.busy) return;
     this.busy = true;
     try {
-      this.applyListing(await firstValueFrom(this.api.createFileFolder(this.currentPath, name)));
+      this.applyListing(await firstValueFrom(this.api.createInstanceFolder(this.currentMount, this.currentPath, name)));
       this.newFolderName = "";
       this.notice = "Folder created.";
     } catch (error) {
@@ -58,7 +60,7 @@ export class FilesPageComponent implements OnInit {
     if (!selected.length || this.uploadBusy) return;
     this.uploadBusy = true;
     try {
-      const result = await firstValueFrom(this.api.uploadFiles(this.currentPath, selected));
+      const result = await firstValueFrom(this.api.uploadInstanceFiles(this.currentMount, this.currentPath, selected));
       this.applyListing(result);
       this.notice = `${result.files?.length || selected.length} file${selected.length === 1 ? "" : "s"} uploaded.`;
     } catch (error) {
@@ -68,26 +70,32 @@ export class FilesPageComponent implements OnInit {
     }
   }
 
-  async deleteEntry(entry: WorkspaceFolderEntry): Promise<void> {
-    if (!entry.path || this.deletingPath) return;
-    this.deletingPath = entry.path;
+  async previewEntry(entry: InstanceFileEntry): Promise<void> {
+    if (entry.directory || !entry.previewable || this.previewBusy) return;
+    this.previewBusy = true;
     try {
-      this.applyListing(await firstValueFrom(this.api.deleteFile(entry.path)));
-      this.notice = "Deleted.";
+      this.preview = await firstValueFrom(this.api.instanceFilePreview(this.currentMount, entry.path));
+      this.error = "";
     } catch (error) {
       this.error = this.errorText(error);
     } finally {
-      this.deletingPath = "";
+      this.previewBusy = false;
     }
   }
 
-  openEntry(entry: WorkspaceFolderEntry): void {
-    if (!entry.directory || !entry.path) return;
-    void this.loadFiles(entry.path);
+  openEntry(entry: InstanceFileEntry): void {
+    if (!entry.path) return;
+    if (entry.directory) void this.loadFiles(entry.path);
+    else void this.previewEntry(entry);
   }
 
-  openPath(path = ""): void {
-    void this.loadFiles(path);
+  openPath(path = "", mount = this.currentMount): void {
+    this.preview = null;
+    void this.loadFiles(path, mount);
+  }
+
+  downloadUrl(entry: InstanceFileEntry): string {
+    return this.api.instanceFileDownloadUrl(this.currentMount, entry.path);
   }
 
   formatBytes(value: unknown): string {
@@ -98,16 +106,17 @@ export class FilesPageComponent implements OnInit {
     return `${Math.round(bytes / 1024 / 102.4) / 10} MB`;
   }
 
-  entryKind(entry: WorkspaceFolderEntry): string {
+  entryKind(entry: InstanceFileEntry): string {
     return entry.directory ? "folder" : "file";
   }
 
-  private applyListing(payload: FileBrowserResponse): void {
+  private applyListing(payload: InstanceFilesResponse): void {
+    this.currentMount = payload.mount?.id || this.currentMount;
     this.currentPath = payload.path || "";
     this.parentPath = payload.parent || null;
-    this.roots = payload.roots || [];
+    this.mounts = payload.mounts || [];
     this.entries = payload.entries || [];
-    this.error = payload.ok === false ? payload.error || "file_browser_error" : "";
+    this.error = payload.ok === false ? "file_browser_error" : "";
   }
 
   private errorText(error: unknown): string {

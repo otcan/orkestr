@@ -23,9 +23,24 @@ import {
   parseCanonicalAppUrl,
   resolveCanonicalRoute,
 } from "../dist/server/apps/server/src/canonical-app-gateway.js";
+import { legacyInstanceRouteTarget } from "../dist/server/apps/server/src/legacy-instance-redirects.js";
 
 const instanceRef = "ins_AQEBAQEBAQEBAQEBAQEBAQ";
 const threadRef = "thr_AgICAgICAgICAgICAgICAg";
+
+test("legacy cockpit GET routes map to the lean instance surface without touching attended primitives", () => {
+  assert.equal(legacyInstanceRouteTarget("/files?folder=notes"), "/files?folder=notes");
+  assert.equal(legacyInstanceRouteTarget("/ng/files"), "/files");
+  assert.equal(legacyInstanceRouteTarget("/ops/connectors"), "/settings");
+  assert.equal(legacyInstanceRouteTarget("/ops/mailboxes"), "/settings");
+  assert.equal(legacyInstanceRouteTarget("/mailboxes"), "/settings");
+  assert.equal(legacyInstanceRouteTarget("/connectors"), "/settings");
+  assert.equal(legacyInstanceRouteTarget("/setup/whatsapp"), "/setup/whatsapp");
+  assert.equal(legacyInstanceRouteTarget("/setup/whatsapp", { setupReady: true }), "/settings");
+  assert.equal(legacyInstanceRouteTarget("/setup/pairing"), "");
+  assert.equal(legacyInstanceRouteTarget("/connectors/gmail?intent=1"), "");
+  assert.equal(legacyInstanceRouteTarget("/oauth/gmail/callback?state=test"), "");
+});
 
 test("canonical app paths preserve opaque refs, suffixes, and query strings", () => {
   assert.deepEqual(parseCanonicalAppUrl(`/instance/${instanceRef}/thread/${threadRef}/history?before=a%2Fb&limit=4`), {
@@ -128,6 +143,13 @@ test("local canonical gateway serves an instance-scoped SPA and uses uniform 404
   assert.equal(known.status, 200);
   assert.match(knownHtml, new RegExp(`<base href="/instance/${instanceRef}/"`));
   assert.doesNotMatch(knownHtml, /private-local-id|private-thread-id|Private thread name/);
+  const legacyFiles = await fetch(`http://127.0.0.1:${port}/files?folder=notes`, {
+    redirect: "manual",
+    headers: { host: "app.example.test" },
+  });
+  assert.equal(legacyFiles.status, 302);
+  assert.equal(legacyFiles.headers.get("location"), `https://app.example.test/instance/${instanceRef}/files?folder=notes`);
+  assert.equal(legacyFiles.headers.get("deprecation"), "true");
 
   const failures = await Promise.all([
     fetch(`http://127.0.0.1:${port}/instance/ins_AwMDAwMDAwMDAwMDAwMDAw/thread/${thread.publicRef}`),
@@ -142,6 +164,35 @@ test("local canonical gateway serves an instance-scoped SPA and uses uniform 404
   const api = await fetch(`http://127.0.0.1:${port}/instance/${instanceRef}/api/version?source=canonical`);
   assert.equal(api.status, 200);
   assert.equal((await api.json()).name, "orkestr-oss");
+  const instanceContext = await fetch(`http://127.0.0.1:${port}/instance/${instanceRef}/api/instance/context`);
+  assert.equal(instanceContext.status, 200);
+  assert.deepEqual((await instanceContext.json()).instance, {
+    publicRef: instanceRef,
+    canonicalPath: `/instance/${instanceRef}/`,
+  });
+  const instanceConfig = await fetch(`http://127.0.0.1:${port}/instance/${instanceRef}/api/instance/config`);
+  assert.equal(instanceConfig.status, 200);
+  assert.equal(instanceConfig.headers.get("etag"), '"1"');
+  const patchedConfig = await fetch(`http://127.0.0.1:${port}/instance/${instanceRef}/api/instance/config`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json", "if-match": '"1"' },
+    body: JSON.stringify({ patch: { metadata: { label: "Canonical instance" } } }),
+  });
+  assert.equal(patchedConfig.status, 200);
+  const patchedConfigPayload = await patchedConfig.json();
+  assert.equal(patchedConfigPayload.config.generation, 2);
+  assert.equal(patchedConfigPayload.config.metadata.label, "Canonical instance");
+  const stalePatch = await fetch(`http://127.0.0.1:${port}/instance/${instanceRef}/api/instance/config`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json", "if-match": '"1"' },
+    body: JSON.stringify({ patch: { metadata: { label: "Stale" } } }),
+  });
+  assert.equal(stalePatch.status, 409);
+  const instanceFiles = await fetch(`http://127.0.0.1:${port}/instance/${instanceRef}/api/instance/files`);
+  assert.equal(instanceFiles.status, 200);
+  const instanceFilesPayload = await instanceFiles.json();
+  assert.ok(instanceFilesPayload.mount.id);
+  assert.ok(instanceFilesPayload.mounts.every((mount) => !("path" in mount) && !("rootPath" in mount)));
   const summaryResponse = await fetch(`http://127.0.0.1:${port}/instance/${instanceRef}/api/threads`);
   assert.equal(summaryResponse.status, 200);
   const summary = (await summaryResponse.json()).threads.find((item) => item.publicRef === thread.publicRef);
@@ -160,10 +211,11 @@ test("local canonical gateway serves an instance-scoped SPA and uses uniform 404
   const userCookie = sessionCookieHeader(userSession.token, process.env).split(";")[0];
   const restricted = await Promise.all([
     fetch(`http://127.0.0.1:${port}/instance/${instanceRef}/api/settings`, { headers: { cookie: userCookie } }),
+    fetch(`http://127.0.0.1:${port}/instance/${instanceRef}/api/instance/status`, { headers: { cookie: userCookie } }),
     fetch(`http://127.0.0.1:${port}/instance/${instanceRef}/api/connectors/linkedin`, { headers: { cookie: userCookie } }),
     fetch(`http://127.0.0.1:${port}/instance/${instanceRef}/api/threads/private-thread-id`, { headers: { cookie: userCookie } }),
   ]);
-  assert.deepEqual(restricted.map((response) => response.status), [403, 403, 403]);
+  assert.deepEqual(restricted.map((response) => response.status), [403, 403, 403, 403]);
   const unauthorizedPage = await fetch(
     `http://127.0.0.1:${port}/instance/${instanceRef}/thread/${thread.publicRef}`,
     { headers: { cookie: userCookie } },

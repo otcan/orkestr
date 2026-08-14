@@ -48,6 +48,7 @@ import { JsonErrorFilter } from "./common/json-error.filter.js";
 import { attachDesktopProxyUpgrade, registerDesktopProxy } from "./desktop-proxy.js";
 import { attachTenantVmDesktopProxyUpgrade, registerTenantVmDesktopProxy } from "./tenant-vm-desktop-proxy.js";
 import { registerStaticFallback } from "./static-fallback.js";
+import { registerLegacyInstanceRedirects } from "./legacy-instance-redirects.js";
 import { attachThreadStreamUpgrade } from "./thread-stream.js";
 import { reportServerError } from "./watcher-reporting.js";
 import {
@@ -634,6 +635,7 @@ export async function startServer({ port = 19812, host = "127.0.0.1", openBrowse
 
   registerTenantVmDesktopProxy(app);
   registerCanonicalAppGateway(app);
+  registerLegacyInstanceRedirects(app);
   registerBrokerInstanceAppProxy(app);
   registerDesktopProxy(app);
   registerStaticFallback(app);

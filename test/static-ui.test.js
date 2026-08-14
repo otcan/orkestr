@@ -1764,7 +1764,7 @@ test("web shell switches to a constrained non-admin user mode", async () => {
   assert.match(component, /uiRuntimeReady\(\): boolean/);
   assert.match(component, /uiRuntimeReady\(\): boolean\s*\{\s*return true;/);
   assert.match(component, /panelAllowedForCurrentUser\(panel: Panel\): boolean/);
-  assert.match(component, /\["chat", "history", "delivery", "timers", "files", "userTimers", "userDesk", "userJobs", "userConnectors"\]\.includes\(panel\)/);
+  assert.match(component, /\["chat", "history", "delivery", "timers", "files", "instanceSettings", "userTimers", "userDesk", "userJobs", "userConnectors"\]\.includes\(panel\)/);
   assert.match(component, /normalizeUserModeView\(\)/);
   assert.match(component, /isUserNavPanelActive\(panel: Panel\): boolean/);
   assert.match(component, /isRouteLevelUserPanel\(panel: Panel\): boolean/);
@@ -1774,9 +1774,10 @@ test("web shell switches to a constrained non-admin user mode", async () => {
   assert.match(template, /class="user-mode-nav"/);
   assert.match(template, /\(click\)="openPanel\('chat'\)">Chat<\/button>/);
   assert.match(template, /\(click\)="openPanel\('files'\)">Files<\/button>/);
+  assert.match(template, /\(click\)="openPanel\('instanceSettings'\)">Settings<\/button>/);
   assert.match(template, /\(click\)="openPanel\('userTimers'\)">Automations<\/button>/);
   assert.match(template, /\(click\)="openPanel\('userDesk'\)">Desk<\/button>/);
-  assert.match(template, /\(click\)="openPanel\('userConnectors'\)">Connectors<\/button>/);
+  assert.doesNotMatch(template, /\(click\)="openPanel\('userConnectors'\)">Connectors<\/button>/);
   assert.doesNotMatch(template, /\(click\)="openPanel\('userSkills'\)">Skills<\/button>/);
   assert.match(template, /\[placeholder\]="sidebarSearchPlaceholder\(\)"/);
   assert.match(template, /@if \(isAdminMode\(\) && visibleChildWorkers\(thread\)\.length > 0\)/);
@@ -1904,7 +1905,7 @@ test("web shell exposes a user connector management page", async () => {
   assert.match(template, /@else if \(connectorLoginActive\(\)\)/);
   assert.match(template, /class="connector-login-shell"/);
   assert.match(template, /<ork-user-connectors-page><\/ork-user-connectors-page>/);
-  assert.match(template, /\(click\)="openPanel\('userConnectors'\)"/);
+  assert.doesNotMatch(template, /\(click\)="openPanel\('userConnectors'\)"/);
   assert.match(connectorsComponent, /selector: "ork-user-connectors-page"/);
   assert.match(connectorsComponent, /imports: \[FormsModule, GmailNotificationsPanelComponent, GoogleWorkspaceAccessPanelComponent\]/);
   assert.match(connectorsComponent, /import \{ GoogleWorkspaceAccessPanelComponent \}/);
@@ -2049,7 +2050,7 @@ test("web shell exposes a user-scoped files page", async () => {
   const filesComponent = await fs.readFile("apps/web/src/app/files-page.component.ts", "utf8");
   const filesTemplate = await fs.readFile("apps/web/src/app/files-page.component.html", "utf8");
   const api = await fs.readFile("apps/web/src/app/api.service.ts", "utf8");
-  const controller = await fs.readFile("apps/server/src/modules/system/system.controller.ts", "utf8");
+  const controller = await fs.readFile("apps/server/src/modules/instance/instance.controller.ts", "utf8");
   const styles = await fs.readFile("apps/web/src/styles.css", "utf8");
 
   assert.match(component, /import \{ FilesPageComponent \} from "\.\/files-page\.component"/);
@@ -2057,23 +2058,26 @@ test("web shell exposes a user-scoped files page", async () => {
   assert.match(component, /parts\[0\] === "files"/);
   assert.match(component, /parts\[0\] === "ng" && parts\[1\] === "files"/);
   assert.match(component, /!this\.isRouteLevelUserPanel\(this\.activePanel\) && !this\.selectedId && this\.threads\.length/);
-  assert.match(component, /panel === "files"\) return this\.appPath\("\/files"\)/);
+  assert.match(component, /panel === "files"\) return this\.instancePath\("\/files"\)/);
   assert.match(component, /globalThis\.document\.title = "Files · Orkestr"/);
   assert.match(template, /<ork-files-page><\/ork-files-page>/);
   assert.match(template, /\(click\)="openPanel\('files'\)"/);
   assert.match(filesComponent, /selector: "ork-files-page"/);
-  assert.match(filesComponent, /this\.api\.files\(path\)/);
-  assert.match(filesComponent, /this\.api\.createFileFolder\(this\.currentPath, name\)/);
-  assert.match(filesComponent, /this\.api\.uploadFiles\(this\.currentPath, selected\)/);
-  assert.match(filesComponent, /this\.api\.deleteFile\(entry\.path\)/);
+  assert.match(filesComponent, /this\.api\.instanceFiles\(mount, path\)/);
+  assert.match(filesComponent, /this\.api\.createInstanceFolder\(this\.currentMount, this\.currentPath, name\)/);
+  assert.match(filesComponent, /this\.api\.uploadInstanceFiles\(this\.currentMount, this\.currentPath, selected\)/);
+  assert.match(filesComponent, /this\.api\.instanceFilePreview\(this\.currentMount, entry\.path\)/);
+  assert.doesNotMatch(filesComponent, /deleteFile\(/);
   assert.match(filesTemplate, /type="file"/);
-  assert.match(filesTemplate, /\[class\.active\]="currentPath === root\.path"/);
-  assert.match(api, /createFileFolder\(currentPath: string, name: string\)/);
-  assert.match(api, /uploadFiles\(currentPath: string, files: File\[\]\)/);
-  assert.match(api, /deleteFile\(path: string\)/);
+  assert.match(filesTemplate, /\[class\.active\]="currentMount === mount\.id"/);
+  assert.match(filesTemplate, /Download<\/a>/);
+  assert.match(api, /createInstanceFolder\(mount: string, currentPath: string, name: string\)/);
+  assert.match(api, /uploadInstanceFiles\(mount: string, currentPath: string, files: File\[\]\)/);
+  assert.match(api, /instanceFilePreview\(mount: string, filePath: string\)/);
   assert.match(controller, /@Post\("files\/folders"\)/);
   assert.match(controller, /@Post\("files\/uploads"\)/);
-  assert.match(controller, /@Delete\("files"\)/);
+  assert.match(controller, /@Get\("files\/preview"\)/);
+  assert.match(controller, /@Get\("files\/download"\)/);
   assert.match(styles, /\.files-page/);
   assert.match(styles, /\.file-row/);
 });
@@ -2084,10 +2088,11 @@ test("web shell keeps broker-mounted tenant routes under base href", async () =>
   assert.match(component, /private appBasePath\(\): string/);
   assert.match(component, /private locationPathParts\(\): string\[\]/);
   assert.match(component, /private appPath\(path: string\): string/);
+  assert.match(component, /private instancePath\(path: string\): string/);
   assert.match(component, /const parts = this\.locationPathParts\(\)/);
   assert.match(component, /if \(panel === "userConnectors"\) return this\.appPath\("\/connectors"\)/);
   assert.match(component, /return this\.appPath\(`\/thread\/\$\{encodeURIComponent\(id\)\}\$\{suffix\}`\)/);
-  assert.match(component, /return this\.appPath\(view === "system" \? "\/ops" : `\/ops\/\$\{view\}`\)/);
+  assert.match(component, /return this\.instancePath\("\/settings"\)/);
 });
 
 test("mobile desktop shell wraps noVNC with phone-first controls", async () => {
