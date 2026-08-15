@@ -858,9 +858,6 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       return;
     }
     this.mobileSidebarOpen = false;
-    globalThis.document
-      ?.querySelectorAll<HTMLDetailsElement>("details.thread-tools-menu[open]")
-      .forEach((menu) => menu.removeAttribute("open"));
     if (!this.panelAllowedForCurrentUser(panel)) {
       this.activePanel = "chat";
       const thread = this.selectedThread();
@@ -3448,17 +3445,12 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     return `/ng/thread/${encodeURIComponent(this.threadSlug(thread))}/raw`;
   }
 
-  threadCanonicalLinkAvailable(thread: ThreadSummary | null = this.selectedThread()): boolean {
-    return Boolean(thread && this.canonicalPanelUrl(thread, this.activePanel));
+  currentViewLinkAvailable(): boolean {
+    return Boolean(this.currentViewUrl());
   }
 
-  selectedThreadUrl(thread: ThreadSummary): string {
-    return this.canonicalPanelUrl(thread, this.activePanel, true) || this.threadUrl(thread);
-  }
-
-  async copySelectedThreadLink(thread: ThreadSummary | null = this.selectedThread()): Promise<void> {
-    if (!thread) return;
-    const target = this.canonicalPanelUrl(thread, this.activePanel, true);
+  async copyCurrentViewLink(): Promise<void> {
+    const target = this.currentViewUrl();
     if (!target) return;
     try {
       await globalThis.navigator?.clipboard?.writeText(target);
@@ -3471,6 +3463,19 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       this.error = this.errorText(error);
     }
     this.renderNow();
+  }
+
+  private currentViewUrl(): string {
+    if (["files", "instanceSettings", "instanceTimers", "instanceDesktops"].includes(this.activePanel)) {
+      const target = this.pathForPanel("", this.activePanel);
+      try {
+        return new URL(target, globalThis.location?.href || "http://localhost/").toString();
+      } catch {
+        return "";
+      }
+    }
+    const thread = this.selectedThread();
+    return thread ? this.canonicalPanelUrl(thread, this.activePanel, true) : "";
   }
 
   messageKey(message: ThreadMessage): string {

@@ -1786,15 +1786,16 @@ test("web shell switches to a constrained non-admin user mode", async () => {
   assert.match(component, /isRouteLevelUserPanel\(panel: Panel\): boolean/);
   assert.match(component, /This user account is limited to one chat\./);
   assert.match(template, /\[class\.user-mode\]="isUserMode\(\)"/);
-  assert.match(template, /class="instance-sidebar-nav"/);
+  assert.match(template, /class="instance-topbar-nav"/);
   assert.match(template, /aria-label="Instance navigation"/);
   assert.doesNotMatch(template, /class="user-mode-card"/);
   assert.doesNotMatch(template, /class="user-mode-nav"/);
-  assert.match(template, /\(click\)="openPanel\('chat'\)">Threads<\/button>/);
   assert.match(template, /\(click\)="openPanel\('files'\)">Files<\/button>/);
   assert.match(template, /\(click\)="openPanel\('instanceDesktops'\)">Desktops<\/button>/);
   assert.match(template, /\(click\)="openPanel\('instanceTimers'\)">Timers<\/button>/);
-  assert.match(template, /\(click\)="openPanel\('instanceSettings'\)">Settings<\/button>/);
+  assert.doesNotMatch(template, /\(click\)="openPanel\('instanceSettings'\)">Settings<\/button>/);
+  assert.match(template, /\(click\)="copyCurrentViewLink\(\)"/);
+  assert.doesNotMatch(template, />OPEN<\/a>|OPEN LINK/);
   assert.doesNotMatch(template, /openPanel\('userJobs'\)/);
   assert.doesNotMatch(template, />Jobs<\/button>/);
   assert.doesNotMatch(template, /\(click\)="openPanel\('userConnectors'\)">Connectors<\/button>/);
@@ -1806,8 +1807,8 @@ test("web shell switches to a constrained non-admin user mode", async () => {
   assert.match(template, /@if \(isAdminMode\(\)\) \{\s*<div class="codex-control-scroll"/s);
   assert.match(template, /\[inputReady\]="threadInputReady\(\)"/);
   assert.match(composerTemplate, /\[disabled\]="!inputReady"/);
-  assert.match(styles, /\.instance-sidebar-nav/);
-  assert.match(styles, /\.instance-sidebar-brand/);
+  assert.match(styles, /\.instance-topbar-nav/);
+  assert.match(styles, /\.instance-topbar-brand/);
 });
 
 test("web shell exposes an instance-scoped timer management page", async () => {

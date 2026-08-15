@@ -9,24 +9,31 @@ test("instance shell uses one lean navigation and canonical desktop and timer ro
     fs.readFile("apps/web/src/styles.css", "utf8"),
   ]);
 
-  assert.match(template, /<nav class="instance-sidebar-nav" aria-label="Instance navigation">/);
+  assert.match(template, /<nav class="instance-topbar-nav" aria-label="Instance navigation">/);
   assert.equal((template.match(/<nav\b/g) || []).length, 1);
-  for (const destination of ["Threads", "Files", "Desktops", "Timers", "Settings"]) {
+  for (const destination of ["Files", "Desktops", "Timers"]) {
     assert.match(template, new RegExp(`>${destination}<\\/button>`));
   }
+  const instanceNavigation = template.match(/<nav class="instance-topbar-nav"[\s\S]*?<\/nav>/)?.[0] || "";
+  assert.doesNotMatch(instanceNavigation, />Settings<|>OPEN<|OPEN LINK/);
+  assert.match(instanceNavigation, /copyCurrentViewLink\(\)/);
+  assert.doesNotMatch(template, /Orkestr instance|instanceContext\?\.publicRef/);
   assert.doesNotMatch(template, /class="user-mode-nav"/);
   assert.doesNotMatch(template, /class="user-mode-card"/);
   assert.doesNotMatch(template, /openPanel\('userJobs'\)/);
   assert.doesNotMatch(template, />Jobs<\/button>/);
   assert.doesNotMatch(template, /<ork-ops-page/);
   assert.doesNotMatch(template, /class="panel-tabs"/);
-  assert.match(template, /<details class="thread-tools-menu">/);
+  assert.match(template, /<section class="thread-tools-menu" aria-label="Thread tools">/);
+  assert.match(template, /<strong class="thread-tools-title">Thread tools<\/strong>/);
+  assert.doesNotMatch(template, /<details class="thread-tools-menu"|<summary>Thread tools<\/summary>/);
   assert.match(component, /panel === "instanceDesktops"\) return this\.instancePath\("\/desktops"\)/);
   assert.match(component, /panel === "instanceTimers"\) return this\.instancePath\("\/timers"\)/);
   assert.doesNotMatch(component, /type Panel = [^;]*"userJobs"/);
   assert.doesNotMatch(component, /OpsPageComponent|openTools\(|toolsView/);
-  assert.match(styles, /\.instance-sidebar-nav\s*\{/);
-  assert.match(styles, /\.chat > :is\([\s\S]*ork-user-desk-page[\s\S]*overflow-y:\s*auto/s);
+  assert.match(styles, /\.instance-topbar-nav\s*\{/);
+  assert.match(styles, /\.chat > :is\([\s\S]*ork-user-desk-page[\s\S]*overflow:\s*hidden/s);
+  assert.match(styles, /ork-user-desk-page[\s\S]*> \.panel-body[\s\S]*overflow-y:\s*auto/s);
   assert.match(styles, /\.instance-metric-strip\s*\{/);
 });
 

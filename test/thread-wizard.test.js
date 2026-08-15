@@ -27,7 +27,8 @@ test("main UI exposes a guided first thread generation flow", async () => {
   assert.ok(sources.includes("sidebarSearchPlaceholder"));
   assert.ok(sources.includes("agent, project, thread"));
   assert.ok(sources.includes("sidebar-new-thread"));
-  assert.ok(sources.includes("(click)=\"openPanel('instanceSettings')\""));
+  assert.ok(sources.includes("(click)=\"openPanel('instanceDesktops')\""));
+  assert.ok(sources.includes("copyCurrentViewLink"));
   assert.ok(sources.includes("[setupSection]=\"setupSection\""));
   assert.ok(sources.includes("handleSetupSectionChange"));
   assert.ok(sources.includes("Create the demo thread"));
@@ -266,7 +267,7 @@ test("thread links do not persist the raw panel", async () => {
   assert.ok(!threadUrl.includes('this.activePanel === "raw" ? "raw" : "chat"'));
 });
 
-test("canonical thread links drive history, active-panel open/copy, and notification fallbacks", async () => {
+test("canonical thread links drive history, current-view copy, and notification fallbacks", async () => {
   const component = await fs.readFile("apps/web/src/app/app.component.ts", "utf8");
   const template = await fs.readFile("apps/web/src/app/app.component.html", "utf8");
   const gmailNotifications = await fs.readFile("apps/web/src/app/gmail-browser-notification.service.ts", "utf8");
@@ -278,11 +279,13 @@ test("canonical thread links drive history, active-panel open/copy, and notifica
   assert.match(component, /navigateCanonicalThreadTarget\(target/);
   assert.match(component, /navigateLegacyThreadPath\(next/);
   assert.match(component, /private canonicalPanelUrl/);
-  assert.match(component, /selectedThreadUrl\(thread: ThreadSummary\)/);
+  assert.match(component, /currentViewLinkAvailable\(\): boolean/);
+  assert.match(component, /copyCurrentViewLink\(\): Promise<void>/);
+  assert.match(component, /private currentViewUrl\(\): string/);
   assert.match(component, /this\.canonicalPanelUrl\(thread, this\.activePanel, true\)/);
-  assert.match(template, /threadCanonicalLinkAvailable\(thread\)/);
-  assert.match(template, /\[href\]="selectedThreadUrl\(thread\)"/);
-  assert.match(template, /copySelectedThreadLink\(thread\)/);
+  assert.match(template, /currentViewLinkAvailable\(\)/);
+  assert.match(template, /copyCurrentViewLink\(\)/);
+  assert.doesNotMatch(template, /\[href\]="selectedThreadUrl\(thread\)"|>OPEN<\/a>/);
   assert.match(gmailNotifications, /resolveThreadLink\(this\.threadLinks, rule\.target\) \|\| this\.appPath/);
 });
 

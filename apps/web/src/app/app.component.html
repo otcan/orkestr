@@ -20,6 +20,24 @@
   </main>
 } @else if (appReady) {
 <main class="app-shell" [class.sidebar-resizing]="sidebarResizing" [class.user-mode]="isUserMode()" [class.mobile-sidebar-open]="mobileSidebarOpen" [style.--sidebar-width.px]="sidebarWidth">
+  <header class="instance-topbar">
+    <button class="instance-topbar-brand" type="button" (click)="openPanel('chat')">
+      <strong>Orkestr</strong>
+      @if (selectedThread(); as topbarThread) {
+        <span aria-hidden="true">›</span>
+        <em>{{ threadTitle(topbarThread) }}</em>
+      }
+    </button>
+    <nav class="instance-topbar-nav" aria-label="Instance navigation">
+      <button class="secondary" type="button" [class.active]="activePanel === 'files'" (click)="openPanel('files')">Files</button>
+      <button class="secondary" type="button" [class.active]="activePanel === 'instanceDesktops'" (click)="openPanel('instanceDesktops')">Desktops</button>
+      <button class="secondary" type="button" [class.active]="activePanel === 'instanceTimers'" (click)="openPanel('instanceTimers')">Timers</button>
+      @if (currentViewLinkAvailable()) {
+        <button class="secondary copy-link-action" type="button" (click)="copyCurrentViewLink()">{{ linkNotice || "COPY LINK" }}</button>
+      }
+    </nav>
+  </header>
+
   <button
     class="secondary mobile-instance-menu"
     type="button"
@@ -29,22 +47,6 @@
   >Menu</button>
 
   <aside id="thread-sidebar" class="sidebar">
-    <div class="instance-sidebar-heading">
-      <button class="instance-sidebar-brand" type="button" (click)="openPanel('chat')">
-        <span>Orkestr instance</span>
-        <strong>{{ instanceContext?.publicRef || sidebarTitle() }}</strong>
-      </button>
-      <span class="health" [class.ok]="apiOnline">{{ apiOnline ? "online" : "loading" }}</span>
-    </div>
-
-    <nav class="instance-sidebar-nav" aria-label="Instance navigation">
-      <button class="secondary" type="button" [class.active]="isUserNavPanelActive('chat')" (click)="openPanel('chat')">Threads</button>
-      <button class="secondary" type="button" [class.active]="activePanel === 'files'" (click)="openPanel('files')">Files</button>
-      <button class="secondary" type="button" [class.active]="activePanel === 'instanceDesktops'" (click)="openPanel('instanceDesktops')">Desktops</button>
-      <button class="secondary" type="button" [class.active]="activePanel === 'instanceTimers'" (click)="openPanel('instanceTimers')">Timers</button>
-      <button class="secondary" type="button" [class.active]="activePanel === 'instanceSettings'" (click)="openPanel('instanceSettings')">Settings</button>
-    </nav>
-
     <div class="sidebar-heading">
       <div>
         <p class="eyebrow">Conversations</p>
@@ -334,16 +336,10 @@
             }
           </p>
         </div>
-        <div class="head-actions cockpit-actions">
-          @if (threadCanonicalLinkAvailable(thread)) {
-            <a class="button secondary" [href]="selectedThreadUrl(thread)" target="_blank" rel="noreferrer">OPEN</a>
-            <button class="secondary" type="button" (click)="copySelectedThreadLink(thread)">{{ linkNotice || "COPY LINK" }}</button>
-          }
-        </div>
       </header>
 
-      <details class="thread-tools-menu">
-        <summary>Thread tools</summary>
+      <section class="thread-tools-menu" aria-label="Thread tools">
+        <strong class="thread-tools-title">Thread tools</strong>
         <div class="thread-tools-popover">
         <button type="button" [class.active]="activePanel === 'chat'" (click)="openPanel('chat')">Chat</button>
         @if (isAdminMode() && rawTerminalAvailable(thread)) {
@@ -426,7 +422,7 @@
         </div>
         }
         </div>
-      </details>
+      </section>
 
       @if (modelDetailsOpen) {
         @if (selectedThread(); as modelThread) {
