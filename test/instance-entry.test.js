@@ -113,7 +113,7 @@ test("instance entry promotes a name into an instance-bound pairing redirect", a
   assert.equal(location.searchParams.get("return"), `/instance/${localRef}`);
 });
 
-test("configured primary instance opens its direct host without creating another gateway challenge", async () => {
+test("instance entry never promotes a configured primary host", async () => {
   const response = {
     statusCode: 0,
     headers: {},
@@ -142,6 +142,8 @@ test("configured primary instance opens its direct host without creating another
 
   assert.equal(handled, true);
   assert.equal(response.statusCode, 303);
-  assert.equal(response.headers.location, "https://main.ops.example.test/");
-  assert.match(renderInstanceEntry("", "https://main.ops.example.test"), /Open Main Orkestr/);
+  const location = new URL(response.headers.location);
+  assert.equal(location.origin, "https://connect.example.test");
+  assert.equal(location.searchParams.get("instanceId"), "local-internal");
+  assert.doesNotMatch(renderInstanceEntry(), /Open Main Orkestr|main\.ops\.example\.test/);
 });

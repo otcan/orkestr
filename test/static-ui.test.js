@@ -1217,6 +1217,15 @@ test("server keeps public pages on the configured public site host only", async 
     assert.equal(pairedPrivateRootResponse.status, 200);
     assertAngularShell(pairedPrivateRootHtml);
     assert.doesNotMatch(pairedPrivateRootHtml, /Invite-only private beta/);
+
+    process.env.ORKESTR_PUBLIC_APP_URL = "https://orkestr.example.test";
+    const overlappingHostResponse = await fetch(`http://127.0.0.1:${port}/`, {
+      headers: { "x-forwarded-host": "orkestr.example.test", "x-forwarded-proto": "https" },
+    });
+    const overlappingHostHtml = await overlappingHostResponse.text();
+    assert.equal(overlappingHostResponse.status, 200);
+    assertPublicShell(overlappingHostHtml);
+    assert.doesNotMatch(overlappingHostHtml, /<h1>Which Orkestr\?<\/h1>/);
   } finally {
     await new Promise((resolve) => server.close(resolve));
     if (prior.home === undefined) delete process.env.ORKESTR_HOME;
@@ -1306,6 +1315,8 @@ test("mobile thread view uses an off-canvas drawer so the active chat stays visi
   assert.match(styles, /\.mobile-instance-menu\s*{\s*display:\s*inline-flex/);
   assert.match(styles, /\.chat-head \.head-actions\.cockpit-actions\s*{\s*display:\s*none/);
   assert.match(styles, /\.thread-tools-popover\s*{\s*flex-wrap:\s*nowrap;\s*overflow-x:\s*auto/s);
+  assert.match(styles, /@media \(max-width: 860px\)[\s\S]*?\.instance-topbar-nav\s*{[\s\S]*?grid-template-columns:\s*repeat\(4, minmax\(0, 1fr\)\)/s);
+  assert.match(styles, /@media \(max-width: 480px\)[\s\S]*?\.composer-row\s*{\s*grid-template-columns:\s*minmax\(0, 1fr\)/s);
 });
 
 test("thread sidebar treats runtime interruption messages as errors", async () => {

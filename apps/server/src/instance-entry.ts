@@ -7,7 +7,6 @@ import { parseInstancePublicRef } from "../../../packages/core/src/canonical-pub
 import { readInstanceIdentity } from "../../../packages/core/src/instance-identity.js";
 import { instanceSetupPairingRedirectPath } from "./instance-connect-setup.js";
 import { publicPairingUrl } from "./public-site.js";
-import { primaryInstanceUrl } from "./primary-instance-url.js";
 
 type InstanceEntryTarget = {
   internalInstanceId: string;
@@ -127,7 +126,7 @@ function escapeHtml(value = ""): string {
     .replace(/"/g, "&quot;");
 }
 
-export function renderInstanceEntry(error = "", primaryUrl = ""): string {
+export function renderInstanceEntry(error = ""): string {
   const notice = error
     ? `<p class="notice" role="alert">${escapeHtml(error)}</p>`
     : "";
@@ -148,10 +147,7 @@ export function renderInstanceEntry(error = "", primaryUrl = ""): string {
     label { display: grid; gap: 8px; margin-top: 22px; color: #d9f2da; font-weight: 700; }
     input { width: 100%; min-height: 48px; border: 1px solid #456d4b; border-radius: 10px; background: #040805; color: #f2fff2; font: inherit; padding: 12px 14px; }
     input:focus { outline: 2px solid #63d47188; border-color: #63d471; }
-    button, .primary-link { width: 100%; min-height: 46px; margin-top: 12px; border: 0; border-radius: 10px; background: #63d471; color: #061006; cursor: pointer; font: inherit; font-weight: 800; }
-    .primary-link { display: flex; align-items: center; justify-content: center; text-decoration: none; }
-    .or { display: flex; align-items: center; gap: 10px; margin: 18px 0 0; color: #6f896f; font-size: 12px; font-weight: 800; text-transform: uppercase; }
-    .or::before, .or::after { content: ""; flex: 1; height: 1px; background: #29422d; }
+    button { width: 100%; min-height: 46px; margin-top: 12px; border: 0; border-radius: 10px; background: #63d471; color: #061006; cursor: pointer; font: inherit; font-weight: 800; }
     .hint { margin-bottom: 0; font-size: 13px; }
     .notice { border: 1px solid #775b35; border-radius: 9px; background: #291d0c; color: #ffe0a3; padding: 10px 12px; }
   </style>
@@ -162,7 +158,6 @@ export function renderInstanceEntry(error = "", primaryUrl = ""): string {
     <h1>Which Orkestr?</h1>
     <p>Enter the instance name or its <code>ins_…</code> ID. Orkestr will not show an instance directory or choose one for you.</p>
     ${notice}
-    ${primaryUrl ? `<a class="primary-link" href="${escapeHtml(primaryUrl)}">Open Main Orkestr</a><p class="or">or open another</p>` : ""}
     <form method="post" action="/instance-entry" autocomplete="off">
       <label>Instance
         <input name="instance" required maxlength="120" autofocus autocapitalize="none" spellcheck="false" placeholder="Instance name or ins_… ID">
@@ -175,8 +170,8 @@ export function renderInstanceEntry(error = "", primaryUrl = ""): string {
 </html>`;
 }
 
-function sendEntry(response: any, message = "", status = 200, env = process.env): boolean {
-  response.status(status).header("cache-control", "no-store").type("text/html; charset=utf-8").send(renderInstanceEntry(message, primaryInstanceUrl(env)));
+function sendEntry(response: any, message = "", status = 200): boolean {
+  response.status(status).header("cache-control", "no-store").type("text/html; charset=utf-8").send(renderInstanceEntry(message));
   return true;
 }
 
@@ -191,19 +186,12 @@ export async function maybeHandleInstanceEntry(
   if (!appHost(env) || requestHost(request) !== appHost(env)) return false;
   if (url.pathname === "/" && options.authenticated) return false;
   if (!["/", "/instance-entry"].includes(url.pathname)) return false;
-  if (String(request?.method || "GET").toUpperCase() !== "POST") return sendEntry(response, "", 200, env);
-  if (entryRateLimited(request)) return sendEntry(response, "That instance could not be opened. Check the name or ID and try again.", 429, env);
+  if (String(request?.method || "GET").toUpperCase() !== "POST") return sendEntry(response);
+  if (entryRateLimited(request)) return sendEntry(response, "That instance could not be opened. Check the name or ID and try again.", 429);
   const target = await resolveInstanceEntry(clean(request?.body?.instance), env, options.dependencies);
-  if (!target) return sendEntry(response, "That instance could not be opened. Check the name or ID and try again.", 200, env);
-  const readLocal = options.dependencies?.readLocalIdentity || readInstanceIdentity;
-  const local = await readLocal(env).catch(() => null);
-  const primaryUrl = primaryInstanceUrl(env);
-  if (primaryUrl && local?.internalInstanceId === target.internalInstanceId) {
-    response.status(303).header("cache-control", "no-store").header("location", `${primaryUrl}/`).send("Continue to Main Orkestr.");
-    return true;
-  }
+  if (!target) return sendEntry(response, "That instance could not be opened. Check the name or ID and try again.");
   const pairing = publicPairingUrl(env);
-  if (!pairing) return sendEntry(response, "That instance could not be opened. Check the name or ID and try again.", 200, env);
+  if (!pairing) return sendEntry(response, "That instance could not be opened. Check the name or ID and try again.");
   const returnPath = `/instance/${encodeURIComponent(target.publicRef)}/`;
   const redirect = new URL(instanceSetupPairingRedirectPath(target.internalInstanceId, returnPath), pairing);
   response.status(303).header("cache-control", "no-store").header("location", redirect.toString()).send("Continue to Orkestr access.");

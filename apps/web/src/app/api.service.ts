@@ -415,7 +415,18 @@ export interface InstanceStatusDocument {
 
 export interface InstanceContextResponse {
   ok: boolean;
-  instance: { internalInstanceId?: string; publicRef: string; canonicalPath: string; primaryInstanceUrl?: string };
+  instance: { internalInstanceId?: string; publicRef: string; canonicalPath: string; accountSwitcherEnabled?: boolean };
+}
+
+export interface InstanceAccount {
+  publicRef: string;
+  displayName: string;
+  canonicalPath: string;
+}
+
+export interface InstanceAccountsResponse {
+  ok: boolean;
+  accounts: InstanceAccount[];
 }
 
 export interface InstanceStatusResponse extends InstanceContextResponse {
@@ -2669,6 +2680,17 @@ export class ApiService {
 
   instanceContext(): Observable<InstanceContextResponse> {
     return this.http.get<InstanceContextResponse>(this.api("/instance/context"));
+  }
+
+  instanceAccounts(): Observable<InstanceAccountsResponse> {
+    return this.http.get<InstanceAccountsResponse>(this.api("/instance/accounts"));
+  }
+
+  openInstanceAccount(publicRef: string): Observable<{ ok: boolean; account: InstanceAccount; url: string }> {
+    return this.http.post<{ ok: boolean; account: InstanceAccount; url: string }>(
+      this.api(`/instance/accounts/${encodeURIComponent(publicRef)}/session`),
+      {},
+    );
   }
 
   logoutBrowserSession(): Observable<{ ok: boolean }> {

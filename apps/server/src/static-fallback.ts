@@ -80,6 +80,14 @@ export function registerStaticFallback(app: INestApplication): void {
         .type("text/plain; charset=utf-8")
         .send("User-agent: *\nAllow: /\n");
     }
+    const publicSite = renderPublicSite(url, process.env, { host: requestHostHeader(request) });
+    if (publicSite) {
+      return response
+        .status(200)
+        .header("cache-control", "no-store")
+        .type("text/html; charset=utf-8")
+        .send(publicSite);
+    }
     if (["/", "/instance-entry"].includes(publicPath)) {
       const authenticated = Boolean(request?.orkestrSecuritySession) || await requestHasSecuritySession(request, process.env);
       if (await maybeHandleInstanceEntry(request, response, url, { authenticated, env: process.env })) return;
@@ -91,14 +99,6 @@ export function registerStaticFallback(app: INestApplication): void {
         .header("cache-control", "no-store")
         .header("location", privatePublicRedirect)
         .send("Redirecting to Orkestr authentication.");
-    }
-    const publicSite = renderPublicSite(url, process.env, { host: requestHostHeader(request) });
-    if (publicSite) {
-      return response
-        .status(200)
-        .header("cache-control", "no-store")
-        .type("text/html; charset=utf-8")
-        .send(publicSite);
     }
     return serveStaticPath(url || "/", response, String(request.orkestrCanonicalPrefix || ""));
   });

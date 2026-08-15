@@ -323,22 +323,47 @@ textarea:focus {
 }
 
 .instance-account-popover button,
-.instance-account-primary {
+.instance-account-option {
   width: 100%;
 }
 
-.instance-account-primary {
+.instance-account-list {
+  display: grid;
+  gap: 7px;
+  max-height: min(320px, 46vh);
+  overflow-y: auto;
+}
+
+.instance-account-option {
   display: flex;
   align-items: center;
-  justify-content: center;
-  min-height: 38px;
-  border: 1px solid rgba(99, 212, 113, 0.55);
-  border-radius: 8px;
-  background: rgba(52, 128, 58, 0.34);
-  color: #b9ffbf;
-  font-size: 0.78rem;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+  text-align: left;
+}
+
+.instance-account-option strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.instance-account-option small {
+  flex: 0 0 auto;
+  color: #8cff9b;
   font-weight: 900;
-  text-decoration: none;
+}
+
+.instance-account-empty {
+  border: 1px dashed rgba(119, 205, 126, 0.24);
+  border-radius: 8px;
+  padding: 10px;
+}
+
+.instance-logout-action {
+  white-space: nowrap;
 }
 
 .sidebar {
@@ -1102,6 +1127,7 @@ textarea:focus {
 
 .chat {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto auto minmax(0, 1fr) auto;
   min-width: 0;
   min-height: 0;
@@ -4335,6 +4361,12 @@ ork-first-thread-wizard.first-thread-host {
   padding: 10px;
 }
 
+.chat > ork-thread-composer {
+  display: block;
+  min-width: 0;
+  width: 100%;
+}
+
 .composer-row {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
@@ -4686,7 +4718,7 @@ ork-first-thread-wizard.first-thread-host {
   .app-shell {
     display: grid;
     grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: 56px minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
     height: 100dvh;
     max-height: 100dvh;
   }
@@ -4751,8 +4783,14 @@ ork-first-thread-wizard.first-thread-host {
   .instance-topbar {
     grid-column: 1;
     grid-row: 1;
+    flex-wrap: wrap;
     gap: 8px;
-    padding: 8px 10px 8px 62px;
+    padding: max(8px, env(safe-area-inset-top)) 10px 8px;
+  }
+
+  .instance-topbar-brand {
+    flex: 1 1 calc(100% - 52px);
+    margin-left: 52px;
   }
 
   .instance-topbar-brand em,
@@ -4761,10 +4799,12 @@ ork-first-thread-wizard.first-thread-host {
   }
 
   .instance-topbar-nav {
-    flex: 1 1 auto;
-    justify-content: flex-start;
-    overflow-x: auto;
-    scrollbar-width: none;
+    display: grid;
+    flex: 1 0 100%;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 6px;
+    width: 100%;
+    overflow: visible;
   }
 
   .instance-topbar-nav::-webkit-scrollbar {
@@ -4772,13 +4812,31 @@ ork-first-thread-wizard.first-thread-host {
   }
 
   .instance-topbar-nav button {
+    width: 100%;
     min-height: 38px;
-    padding: 7px 9px;
+    min-width: 0;
+    padding: 7px 6px;
+    font-size: 0.72rem;
+  }
+
+  .instance-account-menu,
+  .instance-account-menu > summary {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .instance-account-menu > summary {
+    display: grid;
+    min-height: 38px;
+    place-items: center;
+    padding: 7px 6px;
+    font-size: 0.72rem;
   }
 
   .instance-account-popover {
     position: fixed;
-    top: 60px;
+    z-index: 100;
+    top: max(62px, calc(env(safe-area-inset-top) + 54px));
     right: 10px;
   }
 
@@ -4834,6 +4892,14 @@ ork-first-thread-wizard.first-thread-host {
   }
 
   .message {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .message-body,
+  .attachments,
+  .queued-files {
+    min-width: 0;
     max-width: 100%;
   }
 
@@ -4927,6 +4993,10 @@ ork-first-thread-wizard.first-thread-host {
     grid-template-columns: auto minmax(0, 1fr);
   }
 
+  .composer {
+    padding-bottom: max(10px, env(safe-area-inset-bottom));
+  }
+
   .plan-composer-banner {
     align-items: stretch;
     flex-direction: column;
@@ -4972,5 +5042,39 @@ ork-first-thread-wizard.first-thread-host {
 
   .file-toolbar code {
     flex-basis: 100%;
+  }
+}
+
+@media (max-width: 480px) {
+  .instance-topbar-nav {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .chat {
+    padding: 8px;
+  }
+
+  .chat-head,
+  .messages,
+  .panel-body {
+    padding: 10px;
+  }
+
+  .composer-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .composer-tools {
+    display: flex;
+  }
+
+  .composer-tools button {
+    flex: 1 1 0;
+  }
+
+  .composer-actions {
+    display: grid;
+    grid-column: 1;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }

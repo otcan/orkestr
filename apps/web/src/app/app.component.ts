@@ -31,6 +31,7 @@ import {
   ApiService,
   ConnectorStatus,
   CreditUsageSummary,
+  InstanceAccount,
   InstanceContextResponse,
   RouterTraceRecord,
   SetupStatus,
@@ -147,6 +148,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   opsSystem: Record<string, unknown> | null = null;
   setupStatus: SetupStatus | null = null;
   instanceContext: InstanceContextResponse["instance"] | null = null;
+  instanceAccounts: InstanceAccount[] = [];
   versionInfo: VersionResponse | null = null;
   currentUser: OrkestrUser | null = null;
   selectedId = "";
@@ -155,6 +157,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   error = "";
   linkNotice = "";
   logoutBusy = false;
+  accountSwitchBusyRef = "";
   apiOnline = false;
   busy = false;
   appReady = false;
@@ -353,7 +356,10 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       if (whatsappResult.status === "fulfilled") this.whatsappStatusDetails = whatsappResult.value;
       if (userResult.status === "fulfilled") this.currentUser = userResult.value.user;
       if (versionResult.status === "fulfilled") this.versionInfo = versionResult.value;
-      if (instanceContextResult.status === "fulfilled") this.instanceContext = instanceContextResult.value.instance;
+      if (instanceContextResult.status === "fulfilled") {
+        this.instanceContext = instanceContextResult.value.instance;
+        void this.loadInstanceAccounts();
+      }
       this.appReady = true;
       if (this.isPairingRequiredFromSetup()) {
         this.apiOnline = true;
@@ -3475,8 +3481,35 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     }
   }
 
-  primaryInstanceUrl(): string {
-    return String(this.instanceContext?.primaryInstanceUrl || "").trim();
+  accountSwitcherEnabled(): boolean {
+    return this.instanceContext?.accountSwitcherEnabled === true;
+  }
+
+  async loadInstanceAccounts(): Promise<void> {
+    if (!this.accountSwitcherEnabled()) {
+      this.instanceAccounts = [];
+      return;
+    }
+    try {
+      const payload = await firstValueFrom(this.api.instanceAccounts());
+      this.instanceAccounts = payload.accounts || [];
+    } catch {
+      this.instanceAccounts = [];
+    }
+    this.renderNow();
+  }
+
+  async openInstanceAccount(account: InstanceAccount): Promise<void> {
+    if (this.accountSwitchBusyRef) return;
+    this.accountSwitchBusyRef = account.publicRef;
+    try {
+      const result = await firstValueFrom(this.api.openInstanceAccount(account.publicRef));
+      globalThis.location?.assign(result.url || account.canonicalPath);
+    } catch (error) {
+      this.error = this.errorText(error);
+      this.accountSwitchBusyRef = "";
+      this.renderNow();
+    }
   }
 
   async logoutBrowser(): Promise<void> {

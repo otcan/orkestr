@@ -35,24 +35,38 @@
       @if (currentViewLinkAvailable()) {
         <button class="secondary copy-link-action" type="button" (click)="copyCurrentViewLink()">{{ linkNotice || "COPY LINK" }}</button>
       }
-      <details class="instance-account-menu">
-        <summary>ACCOUNT</summary>
-        <div class="instance-account-popover">
-          <strong>Accounts</strong>
-          <small>Switch accounts or open another deployment.</small>
-          @if (primaryInstanceUrl()) {
-            <a class="instance-account-primary" [href]="primaryInstanceUrl()">Main Orkestr</a>
-          }
-          <form method="post" [attr.action]="instanceChooserUrl()" autocomplete="off">
-            <label for="instance-switch-input">Open another instance</label>
-            <input id="instance-switch-input" name="instance" required maxlength="120" autocapitalize="none" spellcheck="false" placeholder="Name or ins_… ID" />
-            <button type="submit">SIGN IN</button>
-          </form>
-          <button class="secondary danger-soft" type="button" (click)="logoutBrowser()" [disabled]="logoutBusy">
-            {{ logoutBusy ? "LOGGING OUT…" : "LOG OUT" }}
-          </button>
-        </div>
-      </details>
+      @if (accountSwitcherEnabled()) {
+        <details class="instance-account-menu">
+          <summary>ACCOUNTS</summary>
+          <div class="instance-account-popover">
+            <strong>Accounts</strong>
+            <small>Open an enabled child Orkestr without signing in again.</small>
+            <div class="instance-account-list">
+              @for (account of instanceAccounts; track account.publicRef) {
+                <button
+                  class="instance-account-option"
+                  type="button"
+                  (click)="openInstanceAccount(account)"
+                  [disabled]="!!accountSwitchBusyRef"
+                >
+                  <strong>{{ account.displayName }}</strong>
+                  <small>{{ accountSwitchBusyRef === account.publicRef ? "OPENING…" : "OPEN" }}</small>
+                </button>
+              } @empty {
+                <small class="instance-account-empty">No enabled child instances are currently available.</small>
+              }
+            </div>
+            <form method="post" [attr.action]="instanceChooserUrl()" autocomplete="off">
+              <label for="instance-switch-input">Log in to another instance</label>
+              <input id="instance-switch-input" name="instance" required maxlength="120" autocapitalize="none" spellcheck="false" placeholder="Name or ins_… ID" />
+              <button type="submit">CONTINUE</button>
+            </form>
+          </div>
+        </details>
+      }
+      <button class="secondary instance-logout-action danger-soft" type="button" (click)="logoutBrowser()" [disabled]="logoutBusy">
+        {{ logoutBusy ? "LOGGING OUT…" : "LOG OUT" }}
+      </button>
     </nav>
   </header>
 

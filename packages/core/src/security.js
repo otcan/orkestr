@@ -1325,12 +1325,13 @@ export async function revokeSecuritySession(sessionId, { env = process.env, revo
   const config = await readSecurityConfig(env);
   const before = config.sessions || [];
   const revokedSession = before.find((session) => session.id === id) || null;
-  const sessions = before.filter((session) => session.id !== id);
+  const sessions = before.filter((session) => session.id !== id && session.parentSessionId !== id);
   if (sessions.length === before.length) throw challengeError("security_session_not_found", 404);
   await writeSecurityConfig({ ...config, sessions }, env);
   await appendEvent({
     type: "security_session_revoked",
     sessionId: id,
+    derivedSessionCount: before.length - sessions.length - 1,
     userId: revokedSession?.userId || null,
     role: revokedSession?.role || null,
     revokedBy,
@@ -1549,6 +1550,81 @@ export async function pairBrowser({ challengeId, userAgent = "", ip = "", env = 
   };
 }
 
+export async function deriveInstanceSecuritySession({
+  sourceSession = null,
+  instanceId = "",
+  userAgent = "",
+  ip = "",
+  env = process.env,
+} = {}) {
+  const sourceId = String(sourceSession?.id || "").trim();
+  const targetInstanceId = String(instanceId || "").trim();
+  if (!sourceId) throw challengeError("source_browser_session_required", 401);
+  if (!targetInstanceId) throw challengeError("instance_id_required", 400);
+  if (sourceSession?.shareId || normalizeAllowedActions(sourceSession?.allowedActions || []).length) {
+    throw challengeError("source_browser_session_scope_denied", 403);
+  }
+  if (String(sourceSession?.role || "").trim().toLowerCase() !== "admin") {
+    throw challengeError("admin_required", 403);
+  }
+  const config = await readSecurityConfig(env);
+  const now = Date.now();
+  const persistedSource = (config.sessions || []).find((session) =>
+    session.id === sourceId && Date.parse(session.expiresAt || "") > now,
+  );
+  if (!persistedSource || persistedSource.parentSessionId) {
+    throw challengeError("source_browser_session_invalid", 401);
+  }
+  if (
+    normalizeUserId(persistedSource.userId) !== normalizeUserId(sourceSession.userId) ||
+    String(persistedSource.role || "admin").trim().toLowerCase() !== "admin"
+  ) {
+    throw challengeError("source_browser_session_mismatch", 403);
+  }
+  const token = randomToken(32);
+  const createdAt = nowIso();
+  const expiresAt = new Date(Math.min(
+    Date.parse(persistedSource.expiresAt || "") || now + sessionTtlMs,
+    now + sessionTtlMs,
+  )).toISOString();
+  const session = {
+    id: randomToken(10),
+    challengeId: persistedSource.challengeId || "",
+    parentSessionId: persistedSource.id,
+    instanceId: targetInstanceId,
+    tokenHash: sha256(token),
+    userId: normalizeUserId(persistedSource.userId || defaultAdminUser(env).id),
+    role: "admin",
+    userAgent: String(userAgent || persistedSource.userAgent || "").slice(0, 240),
+    createdAt,
+    lastAccessedAt: createdAt,
+    lastIp: String(ip || "").slice(0, 80),
+    shareId: "",
+    appSlug: "",
+    allowedActions: [],
+    authIntent: null,
+    expiresAt,
+  };
+  await writeSecurityConfig({
+    ...config,
+    sessions: [
+      ...(config.sessions || []).filter((item) => !(
+        item.parentSessionId === persistedSource.id && item.instanceId === targetInstanceId
+      )),
+      session,
+    ],
+  }, env);
+  await appendEvent({
+    type: "security_instance_session_derived",
+    sessionId: session.id,
+    parentSessionId: persistedSource.id,
+    instanceId: targetInstanceId,
+    userId: session.userId,
+    role: session.role,
+  }, env).catch(() => {});
+  return { ok: true, token, session: publicSession(session) };
+}
+
 export async function verifySecurityToken(token, env = process.env, options = {}) {
   return Boolean(await securitySessionForToken(token, env, options));
 }
@@ -1563,6 +1639,16 @@ export async function securitySessionForToken(token, env = process.env, options 
     Date.parse(item.expiresAt || "") > now && item.tokenHash === hash,
   );
   if (!session) return null;
+  if (session.parentSessionId) {
+    const parent = (config.sessions || []).find((item) =>
+      item.id === session.parentSessionId &&
+      !item.parentSessionId &&
+      Date.parse(item.expiresAt || "") > now &&
+      normalizeUserId(item.userId) === normalizeUserId(session.userId) &&
+      String(item.role || "admin").trim().toLowerCase() === String(session.role || "admin").trim().toLowerCase(),
+    );
+    if (!parent) return null;
+  }
   if (options?.touch !== false) await touchSecuritySession(config, session, { env, request: options?.request }).catch(() => {});
   return {
     ...session,
