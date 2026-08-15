@@ -712,21 +712,11 @@ export class OpsPageComponent implements OnInit, OnDestroy {
   async shareDesktop(browser: BrowserSession): Promise<void> {
     const slug = this.browserSlug(browser);
     if (!slug || this.browserActionBusy(browser)) return;
-    const changeRef = window.prompt("Enter the approved incident or change reference for this break-glass desktop share:", "")?.trim();
-    if (!changeRef) {
-      this.error = "A change or incident reference is required for break-glass desktop shares.";
-      this.renderNow();
-      return;
-    }
-    const threadId = window.prompt("Enter the exact thread ID authorized for this break-glass desktop share:", "")?.trim();
-    if (!threadId) {
-      this.error = "An exact thread ID is required for break-glass desktop shares.";
-      this.renderNow();
-      return;
-    }
+    const request = this.desktopShareRequest(browser);
+    if (!request) return;
     this.activeBrowserActionSlug = slug;
     try {
-      const result = await firstValueFrom(this.api.createDesktopShare(slug, { threadId, breakGlass: true, breakGlassReason: "ops_desktop_share", breakGlassChangeRef: changeRef }));
+      const result = await firstValueFrom(this.api.createDesktopShare(slug, request));
       if (navigator?.clipboard && result.url) {
         await navigator.clipboard.writeText(result.url).catch(() => undefined);
       }
@@ -781,10 +771,33 @@ export class OpsPageComponent implements OnInit, OnDestroy {
     }
   }
 
-  openBrowserDesktop(browser: BrowserSession): void {
-    const url = this.browserOpenUrl(browser);
-    if (!url) return;
-    window.open(url, "_blank", "noopener,noreferrer");
+  async openBrowserDesktop(browser: BrowserSession): Promise<void> {
+    const slug = this.browserSlug(browser);
+    if (!slug || !this.browserOpenUrl(browser) || this.browserActionBusy(browser)) return;
+    const request = this.desktopShareRequest(browser);
+    if (!request) return;
+    const pendingWindow = window.open("about:blank", "_blank");
+    if (pendingWindow) {
+      try {
+        pendingWindow.opener = null;
+      } catch {
+        // Some browsers block assigning opener on a newly opened tab.
+      }
+    }
+    this.activeBrowserActionSlug = slug;
+    try {
+      const result = await firstValueFrom(this.api.createDesktopShare(slug, request));
+      if (!result.url) throw new Error("Desktop share did not return a URL.");
+      if (pendingWindow) pendingWindow.location.href = result.url;
+      else window.location.assign(result.url);
+      this.error = "";
+    } catch (error) {
+      pendingWindow?.close();
+      this.error = this.errorText(error);
+    } finally {
+      this.activeBrowserActionSlug = "";
+      this.renderNow();
+    }
   }
 
   formatBytes(value: unknown): string {
@@ -902,6 +915,33 @@ export class OpsPageComponent implements OnInit, OnDestroy {
     if (!String(browser.desk_url || browser.url || "").trim() && this.browserType(browser) !== "desktop") return "";
     const encodedSlug = encodeURIComponent(slug);
     return `/desktop/${encodedSlug}/vnc.html?autoconnect=1&resize=scale&view_only=false&path=desktop/${encodedSlug}/websockify`;
+  }
+
+  private desktopShareRequest(browser: BrowserSession): Record<string, unknown> | null {
+    const relatedThreads = this.desktopThreads(browser);
+    if (relatedThreads.length === 1) {
+      const threadId = String(relatedThreads[0]["id"] || "").trim();
+      if (threadId) return { threadId, start: false };
+    }
+    const changeRef = window.prompt("Enter the approved incident or change reference for this break-glass desktop share:", "")?.trim();
+    if (!changeRef) {
+      this.error = "A change or incident reference is required for break-glass desktop shares.";
+      this.renderNow();
+      return null;
+    }
+    const threadId = window.prompt("Enter the exact thread ID authorized for this break-glass desktop share:", "")?.trim();
+    if (!threadId) {
+      this.error = "An exact thread ID is required for break-glass desktop shares.";
+      this.renderNow();
+      return null;
+    }
+    return {
+      threadId,
+      start: false,
+      breakGlass: true,
+      breakGlassReason: "ops_desktop_share",
+      breakGlassChangeRef: changeRef,
+    };
   }
 
   desktopThreads(browser: BrowserSession): Array<Record<string, unknown>> {

@@ -44,7 +44,7 @@
         }
         <div class="desktop-actions user-desk-actions">
           @if (browserOpenUrl(browser)) {
-            <a class="button-link" [href]="browserOpenUrl(browser)" target="_blank" rel="noreferrer">Open Desktop</a>
+            <button type="button" (click)="openDesktop(browser)" [disabled]="actionBusy(browser)">Open Desktop</button>
           }
           @if (!browserLease(browser) && primaryThread()) {
             <button type="button" (click)="acquireDesk(browser)" [disabled]="actionBusy(browser)">Reserve</button>

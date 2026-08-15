@@ -125,11 +125,46 @@ export class UserDeskPageComponent implements OnInit {
       const payload = await firstValueFrom(this.api.createDesktopShare(slug, {
         threadId: String(lease?.threadId || this.primaryThread()?.id || ""),
         fencingToken: String(lease?.fencingToken || ""),
+        start: false,
       }));
       this.shareUrl = payload.url || "";
       this.notice = this.shareUrl ? "Share link ready." : "Share requested.";
       this.error = "";
     } catch (error) {
+      this.error = this.errorText(error);
+    } finally {
+      this.activeSlug = "";
+      this.busy = false;
+    }
+  }
+
+  async openDesktop(browser: BrowserSession): Promise<void> {
+    const slug = this.browserSlug(browser);
+    const threadId = String(this.browserLease(browser)?.threadId || this.primaryThread()?.id || "").trim();
+    if (!slug || !threadId || !this.browserOpenUrl(browser) || this.busy) return;
+    const pendingWindow = window.open("about:blank", "_blank");
+    if (pendingWindow) {
+      try {
+        pendingWindow.opener = null;
+      } catch {
+        // Some browsers block assigning opener on a newly opened tab.
+      }
+    }
+    this.busy = true;
+    this.activeSlug = slug;
+    try {
+      const lease = this.browserLease(browser);
+      const payload = await firstValueFrom(this.api.createDesktopShare(slug, {
+        threadId,
+        fencingToken: String(lease?.fencingToken || ""),
+        start: false,
+      }));
+      if (!payload.url) throw new Error("Desktop share did not return a URL.");
+      if (pendingWindow) pendingWindow.location.href = payload.url;
+      else window.location.assign(payload.url);
+      this.error = "";
+    } catch (error) {
+      pendingWindow?.close();
       this.error = this.errorText(error);
     } finally {
       this.activeSlug = "";
