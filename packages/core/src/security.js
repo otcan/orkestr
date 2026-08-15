@@ -1846,6 +1846,9 @@ function isAllowedBeforePairing(request) {
   if (method === "POST" && url === "/api/connectors/whatsapp/bridge/repair/send-email") return true;
   if (method === "GET" && /^\/api\/setup\/security\/challenges\/[^/]+$/.test(url)) return true;
   if (method === "POST" && url === "/api/setup/security/pair") return true;
+  // Logout must remain reachable when the browser presents an expired or
+  // already-revoked cookie so the response can remove every cookie variant.
+  if (method === "POST" && url === "/api/setup/security/logout") return true;
   return false;
 }
 

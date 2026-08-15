@@ -22,6 +22,7 @@ test("instance shell uses one lean navigation and canonical desktop and timer ro
   assert.match(instanceNavigation, /openInstanceAccount\(account\)/);
   assert.match(instanceNavigation, /Log in to another instance/);
   assert.match(instanceNavigation, /logoutBrowser\(\)/);
+  assert.match(component, /finally\s*\{[\s\S]*?location\?\.replace\(this\.instanceChooserUrl\(\)\)/);
   assert.match(instanceNavigation, /name="instance"/);
   assert.doesNotMatch(instanceNavigation, /Main Orkestr|primaryInstanceUrl/);
   assert.doesNotMatch(template, /Orkestr instance|instanceContext\?\.publicRef/);

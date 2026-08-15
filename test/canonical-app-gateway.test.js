@@ -279,6 +279,20 @@ test("local canonical gateway serves an instance-scoped SPA and uses uniform 404
     { headers: { cookie: adminCookie } },
   );
   assert.equal(afterLogout.status, 401);
+  const repeatedLogout = await fetch(
+    `http://127.0.0.1:${port}/instance/${instanceRef}/api/setup/security/logout`,
+    { method: "POST", headers: { cookie: adminCookie } },
+  );
+  assert.equal(repeatedLogout.status, 200);
+  assert.deepEqual(await repeatedLogout.json(), { ok: true });
+  assert.match(repeatedLogout.headers.get("set-cookie") || "", /Max-Age=0/);
+  const repeatedRootLogout = await fetch(
+    `http://127.0.0.1:${port}/api/setup/security/logout`,
+    { method: "POST", headers: { cookie: adminCookie } },
+  );
+  assert.equal(repeatedRootLogout.status, 200);
+  assert.deepEqual(await repeatedRootLogout.json(), { ok: true });
+  assert.match(repeatedRootLogout.headers.get("set-cookie") || "", /Path=\/;[^,]*Max-Age=0/);
 });
 
 test("broker canonical gateway preserves HTTP bodies, queries, HTML base, streaming, and canonical cookie scope", async (t) => {
@@ -429,6 +443,13 @@ test("broker canonical gateway preserves HTTP bodies, queries, HTML base, stream
   assert.match(logout.headers.get("set-cookie") || "", /Max-Age=0/);
   const afterLogout = await fetch(`${base}/api/version`, { headers: { cookie } });
   assert.equal(afterLogout.status, 404);
+  const repeatedLogout = await fetch(`${base}/api/setup/security/logout`, {
+    method: "POST",
+    headers: { cookie },
+  });
+  assert.equal(repeatedLogout.status, 200);
+  assert.deepEqual(await repeatedLogout.json(), { ok: true });
+  assert.match(repeatedLogout.headers.get("set-cookie") || "", /Max-Age=0/);
 
   const disabledChallenge = await createPairingChallenge({ env: process.env, instanceId: registration.instanceId });
   await approvePairingChallenge(disabledChallenge.challengeId, { approvedBy: "node:test", env: process.env });

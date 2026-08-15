@@ -3517,11 +3517,11 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.logoutBusy = true;
     try {
       await firstValueFrom(this.api.logoutBrowserSession());
-      globalThis.location?.assign(this.instanceChooserUrl());
-    } catch (error) {
-      this.error = this.errorText(error);
-      this.logoutBusy = false;
-      this.renderNow();
+    } finally {
+      // A stale service worker, expired session, or transient API failure must
+      // never strand the user in the authenticated shell. replace() also keeps
+      // Safari's back/forward cache from restoring the pre-logout screen.
+      globalThis.location?.replace(this.instanceChooserUrl());
     }
   }
 

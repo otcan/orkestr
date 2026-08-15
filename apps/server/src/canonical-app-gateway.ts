@@ -135,6 +135,9 @@ export async function preflightCanonicalAppRequest(request: any): Promise<{ matc
   let route: CanonicalAppRoute | null = null;
   try { route = parseCanonicalAppUrl(rawUrl); } catch { return { matched: true, ok: false }; }
   if (!route) return { matched: true, ok: false };
+  // An expired canonical session cannot resolve its instance. Let the logout
+  // handler clear the stale cookie without disclosing whether the ref exists.
+  if (canonicalLogoutRequest(request, route)) return { matched: true, ok: true };
   const instance = await resolveInstance(route, request).catch(() => null);
   if (!instance) return { matched: true, ok: false };
   const session = request?.orkestrSecuritySession;
@@ -179,17 +182,17 @@ export function registerCanonicalAppGateway(app: INestApplication): void {
     try { route = parseCanonicalAppUrl(request.originalUrl || request.url); } catch { notFound(response); return; }
     if (!route) { notFound(response); return; }
     void (async () => {
+      if (canonicalLogoutRequest(request, route)) {
+        return logoutBrowserSession(request, response, {
+          instanceId: String(request?.orkestrSecuritySession?.instanceId || ""),
+          instancePublicRef: route.instancePublicRef,
+        });
+      }
       const saved = request.orkestrCanonicalGateway as CanonicalGatewayContext | undefined;
       const instance = saved?.route?.instancePublicRef === route.instancePublicRef
         ? saved.instance
         : await resolveCanonicalRoute(route, request).catch(() => null);
       if (!instance) return notFound(response);
-      if (canonicalLogoutRequest(request, route)) {
-        return logoutBrowserSession(request, response, {
-          instanceId: instance.internalInstanceId,
-          instancePublicRef: route.instancePublicRef,
-        });
-      }
       if (instance.kind === "broker") {
         const target = targetFor(route, instance);
         if (!target) return notFound(response);
