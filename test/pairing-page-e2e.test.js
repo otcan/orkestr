@@ -175,7 +175,7 @@ test("mobile thread routes keep the selected conversation visible and open threa
     assert.ok(initial.firstMessageBottom > 0);
     assert.equal(initial.pageOverflows, false);
 
-    await page.click("button.mobile-thread-switcher");
+    await page.click("button.mobile-instance-menu");
     await page.waitForFunction(() => {
       const drawer = document.querySelector("#thread-sidebar")?.getBoundingClientRect();
       return Boolean(drawer) && Number(drawer.left) >= -1;

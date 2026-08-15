@@ -1129,9 +1129,9 @@ test("server keeps public pages on the configured public site host only", async 
   process.env.ORKESTR_PUBLIC_SITE_URL = "https://orkestr.example.test";
   process.env.ORKESTR_PRIMARY_DOMAIN = "orkestr.example.test";
   process.env.ORKESTR_PUBLIC_URL = "https://app.orkestr.example.test";
+  process.env.ORKESTR_PUBLIC_APP_URL = "https://app.orkestr.example.test";
   process.env.ORKESTR_AUTH_REQUIRED = "1";
   delete process.env.ORKESTR_OVERLAY_DIR;
-  delete process.env.ORKESTR_PUBLIC_APP_URL;
   delete process.env.ORKESTR_PUBLIC_AUTH_URL;
   delete process.env.ORKESTR_PUBLIC_HTTPS_URL;
   delete process.env.ORKESTR_CONNECT_PUBLIC_URL;
@@ -1182,11 +1182,11 @@ test("server keeps public pages on the configured public site host only", async 
 
     assert.equal(publicResponse.status, 200);
     assertPublicShell(publicHtml);
-    assert.equal(privateRootResponse.status, 302);
-    assert.equal(
-      privateRootResponse.headers.get("location"),
-      "https://orkestr.example.test/setup/pairing?return=https%3A%2F%2Fapp.orkestr.example.test%2F",
-    );
+    const privateRootHtml = await privateRootResponse.text();
+    assert.equal(privateRootResponse.status, 200);
+    assert.match(privateRootHtml, /<h1>Which Orkestr\?<\/h1>/);
+    assert.match(privateRootHtml, /name="instance"/);
+    assert.doesNotMatch(privateRootHtml, /Approve this browser|orkestr security approve|orkestr connect approve/);
     assert.equal(privateTermsResponse.status, 302);
     assert.equal(
       privateTermsResponse.headers.get("location"),
@@ -1273,7 +1273,7 @@ test("mobile thread view uses an off-canvas drawer so the active chat stays visi
 
   assert.match(template, /\[class\.mobile-sidebar-open\]="mobileSidebarOpen"/);
   assert.match(template, /id="thread-sidebar"/);
-  assert.match(template, /class="secondary mobile-thread-switcher"/);
+  assert.match(template, /class="secondary mobile-instance-menu"/);
   assert.match(template, /\(click\)="openMobileSidebar\(\)"/);
   assert.match(template, /class="mobile-sidebar-backdrop"/);
   assert.match(component, /mobileSidebarOpen = false/);
@@ -1282,9 +1282,9 @@ test("mobile thread view uses an off-canvas drawer so the active chat stays visi
   assert.match(component, /this\.mobileSidebarOpen = false;\s*this\.selectedId = this\.threadSlug\(thread\)/);
   assert.match(styles, /@media \(max-width: 860px\)\s*{[\s\S]*?\.sidebar\s*{[\s\S]*?position:\s*fixed/s);
   assert.match(styles, /\.app-shell\.mobile-sidebar-open \.sidebar\s*{\s*transform:\s*translateX\(0\)/);
-  assert.match(styles, /\.mobile-thread-switcher\s*{\s*display:\s*inline-flex/);
+  assert.match(styles, /\.mobile-instance-menu\s*{\s*display:\s*inline-flex/);
   assert.match(styles, /\.chat-head \.head-actions\.cockpit-actions\s*{\s*display:\s*none/);
-  assert.match(styles, /\.panel-tabs\s*{\s*flex-wrap:\s*nowrap;\s*overflow-x:\s*auto/s);
+  assert.match(styles, /\.thread-tools-popover\s*{\s*flex-wrap:\s*nowrap;\s*overflow-x:\s*auto/s);
 });
 
 test("thread sidebar treats runtime interruption messages as errors", async () => {
@@ -1315,7 +1315,8 @@ test("instance desktop links are brokered and only shown for running desktops", 
   const component = await fs.readFile("apps/web/src/app/user-desk-page.component.ts", "utf8");
   const appTemplate = await fs.readFile("apps/web/src/app/app.component.html", "utf8");
 
-  assert.match(appTemplate, />DESKTOPS<\/button>/);
+  assert.match(appTemplate, />Desktops<\/button>/);
+  assert.doesNotMatch(appTemplate, />DESKTOPS<\/button>/);
   assert.match(appTemplate, /\(click\)="openPanel\('instanceDesktops'\)"/);
   assert.match(template, /@if \(browserRunning\(browser\)\)/);
   assert.doesNotMatch(template, /@if \(browser\.desk_url \|\| browser\.url\)/);
@@ -1764,7 +1765,7 @@ test("web shell switches to a constrained non-admin user mode", async () => {
   assert.match(component, /isRouteLevelUserPanel\(panel: Panel\): boolean/);
   assert.match(component, /This user account is limited to one chat\./);
   assert.match(template, /\[class\.user-mode\]="isUserMode\(\)"/);
-  assert.match(template, /class="instance-nav"/);
+  assert.match(template, /class="instance-sidebar-nav"/);
   assert.match(template, /aria-label="Instance navigation"/);
   assert.doesNotMatch(template, /class="user-mode-card"/);
   assert.doesNotMatch(template, /class="user-mode-nav"/);
@@ -1784,8 +1785,8 @@ test("web shell switches to a constrained non-admin user mode", async () => {
   assert.match(template, /@if \(isAdminMode\(\)\) \{\s*<div class="codex-control-scroll"/s);
   assert.match(template, /\[inputReady\]="threadInputReady\(\)"/);
   assert.match(composerTemplate, /\[disabled\]="!inputReady"/);
-  assert.match(styles, /\.instance-nav/);
-  assert.match(styles, /\.instance-nav-links/);
+  assert.match(styles, /\.instance-sidebar-nav/);
+  assert.match(styles, /\.instance-sidebar-brand/);
 });
 
 test("web shell exposes an instance-scoped timer management page", async () => {

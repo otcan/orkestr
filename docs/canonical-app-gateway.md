@@ -93,6 +93,15 @@ exists, Orkestr omits canonical links. A browser already on another origin uses
 a real cross-origin navigation to the configured app origin; same-origin panel
 changes continue to use browser history.
 
+An unauthenticated visit to the configured application root asks for one
+instance name or opaque `ins_…` reference. It does not expose a selector,
+instance directory, or automatic default. The configured local name and
+`ORKESTR_INSTANCE_ALIASES` are routing hints only; registered broker display
+names work only when they resolve uniquely. Unknown, ambiguous, disabled, and
+expired instances receive the same generic response. A successful resolution
+promotes the hint into an immutable internal instance ID plus canonical return
+path before the normal browser-pairing authorization begins.
+
 ## Application and connect/auth host boundaries
 
 After the reference migration, gateway, and canonical-link checks are green,
@@ -103,6 +112,8 @@ flag:
 ORKESTR_HOST_BOUNDARIES=1
 ORKESTR_PUBLIC_APP_URL=https://app.example.test
 ORKESTR_CONNECT_PUBLIC_URL=https://connect.example.test
+ORKESTR_INSTANCE_NAME=Main
+ORKESTR_INSTANCE_ALIASES=primary,personal
 ```
 
 The application origin serves canonical ingress and normal application routes.

@@ -1,3 +1,5 @@
+import { parseInstancePublicRef } from "../../../packages/core/src/canonical-public-references.js";
+
 const setupSections = new Set(["system", "security", "secrets", "maintenance", "codex", "gmail", "outlook", "whatsapp", "browsers"]);
 const appRouteRoots = new Set(["connectors", "desktops", "files", "ops", "skills", "thread", "timers"]);
 const connectorAuthIntentSections = new Set(["gmail"]);
@@ -82,6 +84,14 @@ function normalizeScopedAppReturn(instanceId: string, path: string, search = "")
 function normalizeUnscopedAppReturn(instanceId: string, path: string, search = ""): string {
   const parts = path.split("/").filter(Boolean);
   const root = String(parts[0] || "");
+  if (root === "instance" && parts[1]) {
+    try {
+      parseInstancePublicRef(parts[1]);
+      return `${path}${search}`;
+    } catch {
+      return "";
+    }
+  }
   if (root === "setup") return setupSectionAppPath(instanceId, parts[1] || "", search);
   if (root === "onboarding" || (root === "ng" && parts[1] === "onboarding")) return tenantAppPath(instanceId);
   if (root === "connectors" && connectorAuthIntentSections.has(normalizeSetupSection(parts[1] || ""))) return connectorAppPath(instanceId, parts[1] || "", search);

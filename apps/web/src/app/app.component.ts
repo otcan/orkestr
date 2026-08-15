@@ -857,6 +857,10 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       this.enterPairingRequired();
       return;
     }
+    this.mobileSidebarOpen = false;
+    globalThis.document
+      ?.querySelectorAll<HTMLDetailsElement>("details.thread-tools-menu[open]")
+      .forEach((menu) => menu.removeAttribute("open"));
     if (!this.panelAllowedForCurrentUser(panel)) {
       this.activePanel = "chat";
       const thread = this.selectedThread();

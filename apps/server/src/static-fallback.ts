@@ -5,6 +5,7 @@ import { resolveBrokerConnectInstance } from "../../../packages/core/src/broker-
 import { securityCookieName, verifySecurityToken } from "../../../packages/core/src/security.js";
 import { resolveSharedAppShare } from "../../../packages/core/src/shared-apps.js";
 import { instanceSetupPairingRedirectPath, normalizeInstanceId } from "./instance-connect-setup.js";
+import { maybeHandleInstanceEntry } from "./instance-entry.js";
 import { renderOAuthHomepage } from "./oauth-homepage.js";
 import { publicPairingUrl, publicSiteAllowedForHost, publicSitePath, renderPublicSite, renderPublicSiteCss } from "./public-site.js";
 
@@ -78,6 +79,10 @@ export function registerStaticFallback(app: INestApplication): void {
         .header("cache-control", "public, max-age=300")
         .type("text/plain; charset=utf-8")
         .send("User-agent: *\nAllow: /\n");
+    }
+    if (["/", "/instance-entry"].includes(publicPath)) {
+      const authenticated = Boolean(request?.orkestrSecuritySession) || await requestHasSecuritySession(request, process.env);
+      if (await maybeHandleInstanceEntry(request, response, url, { authenticated, env: process.env })) return;
     }
     const privatePublicRedirect = await privatePublicPathRedirectUrl(request, url, process.env);
     if (privatePublicRedirect) {
