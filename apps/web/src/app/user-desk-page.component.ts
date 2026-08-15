@@ -1,6 +1,6 @@
 import { DatePipe } from "@angular/common";
 import { Component, OnInit, inject } from "@angular/core";
-import { firstValueFrom } from "rxjs";
+import { firstValueFrom, timeout } from "rxjs";
 import { ApiService, BrowserSession, DesktopLeaseRecord, ThreadSummary } from "./api.service";
 
 @Component({
@@ -26,13 +26,14 @@ export class UserDeskPageComponent implements OnInit {
 
   async load(): Promise<void> {
     this.busy = true;
+    this.error = "";
     try {
-      const threads = await firstValueFrom(this.api.threads());
+      const threads = await firstValueFrom(this.api.threads().pipe(timeout({ first: 15_000 })));
       this.threads = threads.threads || [];
       const threadId = this.primaryThread()?.id || "";
       const [browsers, leases] = await Promise.all([
-        firstValueFrom(this.api.browserSessions(threadId)),
-        firstValueFrom(this.api.desktopLeases(false, threadId)),
+        firstValueFrom(this.api.browserSessions(threadId).pipe(timeout({ first: 15_000 }))),
+        firstValueFrom(this.api.desktopLeases(false, threadId).pipe(timeout({ first: 15_000 }))),
       ]);
       this.browsers = browsers.sessions || browsers.browsers || [];
       this.leases = leases.desktopLeases || [];

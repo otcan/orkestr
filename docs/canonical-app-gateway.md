@@ -133,6 +133,23 @@ appears in the explicit `ORKESTR_TRUSTED_PROXY_IPS` list. Missing, malformed,
 unknown, or mixed host configuration fails with a uniform `404`; request hosts
 are never copied into redirect destinations.
 
+An operator may expose one primary instance through an independently protected
+local HTTPS reverse proxy without requiring a second Orkestr pairing challenge:
+
+```sh
+ORKESTR_PRIMARY_INSTANCE_URL=https://operator.example.test
+ORKESTR_TRUST_PROXY_HEADERS=1
+ORKESTR_TRUSTED_PROXY_IPS=127.0.0.1
+ORKESTR_TRUSTED_OPERATOR_PROXY=1
+ORKESTR_TRUSTED_OPERATOR_ORIGINS=https://operator.example.test
+```
+
+This path is default-off. It accepts only HTTPS origins listed exactly in
+`ORKESTR_TRUSTED_OPERATOR_ORIGINS`, only when the direct peer is loopback, and
+only after the forwarded host has passed the normal trusted-proxy checks. The
+reverse proxy must provide its own operator authentication. Other hosts and
+instance routes continue to use normal browser pairing.
+
 While this compatibility phase is enabled, authorized and unambiguous
 `/thread/{id-or-name}` and `/ng/thread/{id-or-name}` requests redirect to the
 opaque canonical application URL. Redirects require the full canonical flag

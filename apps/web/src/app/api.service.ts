@@ -415,7 +415,7 @@ export interface InstanceStatusDocument {
 
 export interface InstanceContextResponse {
   ok: boolean;
-  instance: { internalInstanceId?: string; publicRef: string; canonicalPath: string };
+  instance: { internalInstanceId?: string; publicRef: string; canonicalPath: string; primaryInstanceUrl?: string };
 }
 
 export interface InstanceStatusResponse extends InstanceContextResponse {
@@ -2669,6 +2669,10 @@ export class ApiService {
 
   instanceContext(): Observable<InstanceContextResponse> {
     return this.http.get<InstanceContextResponse>(this.api("/instance/context"));
+  }
+
+  logoutBrowserSession(): Observable<{ ok: boolean }> {
+    return this.http.post<{ ok: boolean }>(this.api("/setup/security/logout"), {});
   }
 
   instanceStatus(): Observable<InstanceStatusResponse> {

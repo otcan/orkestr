@@ -121,6 +121,34 @@ console.log(JSON.stringify({ ok: true, sessions: [{
   assert.deepEqual(payload.sessions, []);
 });
 
+test("managed desktop inventory deduplicates concurrent probes and briefly caches the result", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-browserctl-cache-"));
+  const browserctl = path.join(home, "browserctl.js");
+  const counter = path.join(home, "calls.txt");
+  await fs.writeFile(browserctl, `#!/usr/bin/env node
+const fs = require("node:fs");
+const file = ${JSON.stringify(counter)};
+const calls = Number(fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "0") + 1;
+fs.writeFileSync(file, String(calls));
+setTimeout(() => console.log(JSON.stringify({ ok: true, sessions: [{ slug: "desk", status: "running" }] })), 80);
+`);
+  await fs.chmod(browserctl, 0o755);
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_BROWSER_DESKTOP_MODE: "browserctl",
+    ORKESTR_BROWSERCTL_PATH: browserctl,
+    ORKESTR_BROWSER_SESSIONS_CACHE_MS: "1000",
+  };
+
+  const [first, second] = await Promise.all([listBrowserSessions(env), listBrowserSessions(env)]);
+  const third = await listBrowserSessions(env);
+
+  assert.deepEqual(first.sessions.map((session) => session.slug), ["desk"]);
+  assert.deepEqual(second.sessions.map((session) => session.slug), ["desk"]);
+  assert.deepEqual(third.sessions.map((session) => session.slug), ["desk"]);
+  assert.equal(await fs.readFile(counter, "utf8"), "1");
+});
+
 test("disabled desktop mode reports no instance desktops", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-browsers-disabled-"));
   const env = {

@@ -1754,6 +1754,14 @@ function isAllowedBeforePairing(request) {
 
 export async function authorizeHttpRequest(request, env = process.env) {
   const status = await securityStatus(env);
+  // This marker is set only by the server after validating an explicitly
+  // enabled, exact-origin request arriving from the local reverse proxy.
+  if (request?.orkestrTrustedOperatorProxy === true) return {
+    ok: true,
+    status,
+    principal: adminPrincipal(defaultAdminUser(env)),
+    machineAuth: "trusted_operator_proxy",
+  };
   const shareAuth = String(request?.url || "").startsWith("/desktop/")
     ? await authorizeDesktopShareHttpRequest(request, env).catch((error) => ({
         ok: false,

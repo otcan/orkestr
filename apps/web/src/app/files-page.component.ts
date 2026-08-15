@@ -1,7 +1,7 @@
 import { DatePipe } from "@angular/common";
 import { Component, OnInit, inject } from "@angular/core";
 import { FormsModule } from "@angular/forms";
-import { firstValueFrom } from "rxjs";
+import { firstValueFrom, timeout } from "rxjs";
 import { ApiService, InstanceFileEntry, InstanceFileMount, InstanceFilePreviewResponse, InstanceFilesResponse } from "./api.service";
 
 @Component({
@@ -31,8 +31,9 @@ export class FilesPageComponent implements OnInit {
 
   async loadFiles(path = this.currentPath, mount = this.currentMount): Promise<void> {
     this.busy = true;
+    this.error = "";
     try {
-      this.applyListing(await firstValueFrom(this.api.instanceFiles(mount, path)));
+      this.applyListing(await firstValueFrom(this.api.instanceFiles(mount, path).pipe(timeout({ first: 15_000 }))));
     } catch (error) {
       this.error = this.errorText(error);
     } finally {

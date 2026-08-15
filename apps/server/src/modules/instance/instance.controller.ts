@@ -15,6 +15,7 @@ import {
 } from "../../../../../packages/core/src/instance-virtual-files.js";
 import { requestPrincipal } from "../../../../../packages/core/src/principal.js";
 import { isAdminPrincipal } from "../../../../../packages/core/src/policy.js";
+import { primaryInstanceUrl } from "../../primary-instance-url.js";
 
 function assertInstanceControlAccess(request: any): void {
   const principal = requestPrincipal(request);
@@ -39,7 +40,14 @@ function expectedGeneration(ifMatch: string | undefined, body: Record<string, un
 export class InstanceController {
   @Get("context")
   async context() {
-    return { ok: true, instance: await getLocalInstanceContext(process.env) };
+    const primaryUrl = primaryInstanceUrl(process.env);
+    return {
+      ok: true,
+      instance: {
+        ...(await getLocalInstanceContext(process.env)),
+        ...(primaryUrl ? { primaryInstanceUrl: primaryUrl } : {}),
+      },
+    };
   }
 
   @Get("config")

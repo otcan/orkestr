@@ -65,6 +65,7 @@ import { ensureDataDirs } from "../../../../../packages/storage/src/paths.js";
 import { eventArchiveDownloadPath, eventStorageStatus, listEventArchives, rotateEvents } from "../../../../../packages/storage/src/store.js";
 import { instanceSetupReturnPath } from "../../instance-connect-setup.js";
 import { httpError } from "../../common/http.js";
+import { logoutBrowserSession } from "../../browser-session-logout.js";
 import { sanitizedThreadActionInput } from "../threads/thread-route-helpers.js";
 
 const execFileAsync = promisify(execFile);
@@ -786,6 +787,16 @@ export class SystemController {
   @HttpCode(200)
   async revokeSetupSecuritySession(@Param("sessionId") sessionId: string) {
     return revokeSecuritySession(sessionId, { revokedBy: "browser" });
+  }
+
+  @Post("setup/security/logout")
+  @HttpCode(200)
+  async logoutSetupSecuritySession(@Req() request: any, @Res() response: any) {
+    const canonical = request?.orkestrCanonicalGateway?.route || null;
+    await logoutBrowserSession(request, response, {
+      instanceId: String(request?.orkestrSecuritySession?.instanceId || ""),
+      instancePublicRef: String(canonical?.instancePublicRef || ""),
+    });
   }
 
   @Post("setup/security/pair")

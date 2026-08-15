@@ -384,8 +384,29 @@ test("broker canonical gateway preserves HTTP bodies, queries, HTML base, stream
   });
   assert.equal(wsMessage, `/instance/${registration.publicRef}/api/socket?keep=1|ping`);
 
+  const logout = await fetch(`${base}/api/setup/security/logout`, {
+    method: "POST",
+    headers: { cookie },
+  });
+  assert.equal(logout.status, 200);
+  assert.deepEqual(await logout.json(), { ok: true });
+  assert.match(logout.headers.get("set-cookie") || "", /Max-Age=0/);
+  const afterLogout = await fetch(`${base}/api/version`, { headers: { cookie } });
+  assert.equal(afterLogout.status, 404);
+
+  const disabledChallenge = await createPairingChallenge({ env: process.env, instanceId: registration.instanceId });
+  await approvePairingChallenge(disabledChallenge.challengeId, { approvedBy: "node:test", env: process.env });
+  const disabledPair = await fetch(`http://127.0.0.1:${port}/api/setup/security/pair`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ challengeId: disabledChallenge.challengeId }),
+  });
+  const disabledCookie = disabledPair.headers.getSetCookie()
+    .find((value) => value.includes(`Path=/instance/${registration.publicRef}`))
+    .split(";")[0];
+
   await updateBrokerInstanceRecord(registration.instanceId, { disabledAt: new Date().toISOString() }, process.env);
-  const disabled = await fetch(`${base}/api/version`, { headers: { cookie } });
+  const disabled = await fetch(`${base}/api/version`, { headers: { cookie: disabledCookie } });
   assert.equal(disabled.status, 404);
   assert.equal(await disabled.text(), "not found");
 });

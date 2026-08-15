@@ -25,6 +25,7 @@ import {
   internalCanonicalUpgradeHeader,
 } from "./host-boundaries.js";
 import { appendSanitizedForwardedHeaders, rawUpgradeHeaderAllowed } from "./upgrade-forwarded-headers.js";
+import { logoutBrowserSession } from "./browser-session-logout.js";
 
 export type CanonicalAppRoute = {
   instancePublicRef: string;
@@ -164,6 +165,11 @@ function targetFor(route: CanonicalAppRoute, instance: ResolvedInstance): Canoni
   };
 }
 
+function canonicalLogoutRequest(request: any, route: CanonicalAppRoute): boolean {
+  if (String(request?.method || "GET").toUpperCase() !== "POST") return false;
+  return new URL(route.upstreamPath || "/", "http://orkestr.local").pathname === "/api/setup/security/logout";
+}
+
 export function registerCanonicalAppGateway(app: INestApplication): void {
   if (!canonicalAppGatewayEnabled(process.env)) return;
   const expressApp = app.getHttpAdapter().getInstance();
@@ -178,6 +184,12 @@ export function registerCanonicalAppGateway(app: INestApplication): void {
         ? saved.instance
         : await resolveCanonicalRoute(route, request).catch(() => null);
       if (!instance) return notFound(response);
+      if (canonicalLogoutRequest(request, route)) {
+        return logoutBrowserSession(request, response, {
+          instanceId: instance.internalInstanceId,
+          instancePublicRef: route.instancePublicRef,
+        });
+      }
       if (instance.kind === "broker") {
         const target = targetFor(route, instance);
         if (!target) return notFound(response);

@@ -17,6 +17,9 @@ test("instance shell uses one lean navigation and canonical desktop and timer ro
   const instanceNavigation = template.match(/<nav class="instance-topbar-nav"[\s\S]*?<\/nav>/)?.[0] || "";
   assert.doesNotMatch(instanceNavigation, />Settings<|>OPEN<|OPEN LINK/);
   assert.match(instanceNavigation, /copyCurrentViewLink\(\)/);
+  assert.match(instanceNavigation, /class="instance-account-menu"/);
+  assert.match(instanceNavigation, /logoutBrowser\(\)/);
+  assert.match(instanceNavigation, /name="instance"/);
   assert.doesNotMatch(template, /Orkestr instance|instanceContext\?\.publicRef/);
   assert.doesNotMatch(template, /class="user-mode-nav"/);
   assert.doesNotMatch(template, /class="user-mode-card"/);

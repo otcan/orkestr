@@ -154,6 +154,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   draft = "";
   error = "";
   linkNotice = "";
+  logoutBusy = false;
   apiOnline = false;
   busy = false;
   appReady = false;
@@ -3463,6 +3464,32 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       this.error = this.errorText(error);
     }
     this.renderNow();
+  }
+
+  instanceChooserUrl(): string {
+    const appUrl = String(this.setupStatus?.urls?.appUrl || globalThis.location?.origin || "").trim();
+    try {
+      return new URL("/instance-entry", `${appUrl.replace(/\/+$/, "")}/`).toString();
+    } catch {
+      return "/instance-entry";
+    }
+  }
+
+  primaryInstanceUrl(): string {
+    return String(this.instanceContext?.primaryInstanceUrl || "").trim();
+  }
+
+  async logoutBrowser(): Promise<void> {
+    if (this.logoutBusy) return;
+    this.logoutBusy = true;
+    try {
+      await firstValueFrom(this.api.logoutBrowserSession());
+      globalThis.location?.assign(this.instanceChooserUrl());
+    } catch (error) {
+      this.error = this.errorText(error);
+      this.logoutBusy = false;
+      this.renderNow();
+    }
   }
 
   private currentViewUrl(): string {

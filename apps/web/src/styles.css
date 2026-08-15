@@ -265,6 +265,82 @@ textarea:focus {
   color: #9affaa;
 }
 
+.instance-account-menu {
+  position: relative;
+}
+
+.instance-account-menu > summary {
+  min-height: 36px;
+  list-style: none;
+  border: 1px solid rgba(119, 205, 126, 0.3);
+  border-radius: 8px;
+  background: rgba(20, 42, 22, 0.72);
+  padding: 9px 11px;
+  color: #dff7e1;
+  cursor: pointer;
+  font-size: 0.76rem;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.instance-account-menu > summary::-webkit-details-marker {
+  display: none;
+}
+
+.instance-account-menu[open] > summary {
+  border-color: rgba(126, 247, 142, 0.58);
+  color: #9affaa;
+}
+
+.instance-account-popover {
+  position: absolute;
+  z-index: 50;
+  top: calc(100% + 10px);
+  right: 0;
+  display: grid;
+  gap: 10px;
+  width: min(340px, calc(100vw - 24px));
+  border: 1px solid rgba(119, 205, 126, 0.3);
+  border-radius: 12px;
+  background: #081109;
+  padding: 14px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.58);
+}
+
+.instance-account-popover > small,
+.instance-account-popover label {
+  color: rgba(235, 255, 230, 0.65);
+  font-size: 0.75rem;
+}
+
+.instance-account-popover form {
+  display: grid;
+  gap: 8px;
+}
+
+.instance-account-popover input {
+  min-width: 0;
+}
+
+.instance-account-popover button,
+.instance-account-primary {
+  width: 100%;
+}
+
+.instance-account-primary {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 38px;
+  border: 1px solid rgba(99, 212, 113, 0.55);
+  border-radius: 8px;
+  background: rgba(52, 128, 58, 0.34);
+  color: #b9ffbf;
+  font-size: 0.78rem;
+  font-weight: 900;
+  text-decoration: none;
+}
+
 .sidebar {
   grid-column: 1;
   grid-row: 2;
@@ -4698,6 +4774,12 @@ ork-first-thread-wizard.first-thread-host {
   .instance-topbar-nav button {
     min-height: 38px;
     padding: 7px 9px;
+  }
+
+  .instance-account-popover {
+    position: fixed;
+    top: 60px;
+    right: 10px;
   }
 
   .panel-body,

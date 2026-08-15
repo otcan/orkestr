@@ -51,6 +51,7 @@ import { attachTenantVmDesktopProxyUpgrade, registerTenantVmDesktopProxy } from 
 import { registerStaticFallback } from "./static-fallback.js";
 import { registerLegacyInstanceRedirects } from "./legacy-instance-redirects.js";
 import { attachThreadStreamUpgrade } from "./thread-stream.js";
+import { applyTrustedOperatorProxy, attachTrustedOperatorProxyUpgrade } from "./trusted-operator-proxy.js";
 import { reportServerError } from "./watcher-reporting.js";
 import {
   createRuntimeWhatsAppSyncRunner,
@@ -85,6 +86,7 @@ export async function createApp(): Promise<INestApplication> {
   app.useBodyParser("urlencoded", { extended: false, limit: "8kb" });
   app.use((request, response, next) => {
     sanitizeForwardedHostHeaders(request, process.env);
+    applyTrustedOperatorProxy(request, process.env);
     if (rejectUnknownHostBoundaryRequest(request, response, process.env)) return;
     next();
   });
@@ -651,6 +653,9 @@ export async function startServer({ port = 19812, host = "127.0.0.1", openBrowse
   attachThreadStreamUpgrade(app.getHttpServer());
   attachCanonicalAppGatewayUpgrade(app.getHttpServer());
   attachHostBoundaryUpgrade(app.getHttpServer());
+  // This listener is intentionally attached after the host-boundary listener:
+  // prependListener then makes the exact-host rewrite run before the boundary.
+  attachTrustedOperatorProxyUpgrade(app.getHttpServer());
   await app.listen(port, host);
   whatsappDeliveryScheduler.schedule();
   void runMailboxDeliveryPump(serverEnv).catch((error) => {

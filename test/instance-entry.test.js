@@ -112,3 +112,36 @@ test("instance entry promotes a name into an instance-bound pairing redirect", a
   assert.equal(location.searchParams.get("instanceId"), "local-internal");
   assert.equal(location.searchParams.get("return"), `/instance/${localRef}`);
 });
+
+test("configured primary instance opens its direct host without creating another gateway challenge", async () => {
+  const response = {
+    statusCode: 0,
+    headers: {},
+    body: "",
+    status(value) { this.statusCode = value; return this; },
+    header(name, value) { this.headers[name] = value; return this; },
+    type(value) { this.headers["content-type"] = value; return this; },
+    send(value) { this.body = value; return this; },
+  };
+  const env = {
+    ORKESTR_PUBLIC_APP_URL: "https://app.example.test",
+    ORKESTR_PUBLIC_AUTH_URL: "https://connect.example.test",
+    ORKESTR_INSTANCE_NAME: "Main",
+    ORKESTR_PRIMARY_INSTANCE_URL: "https://main.ops.example.test/",
+  };
+  const local = { internalInstanceId: "local-internal", publicRef: localRef };
+  const handled = await maybeHandleInstanceEntry({
+    method: "POST",
+    headers: { host: "app.example.test" },
+    body: { instance: "Main" },
+    ip: "192.0.2.11",
+  }, response, "/instance-entry", {
+    env,
+    dependencies: dependencies({ local }),
+  });
+
+  assert.equal(handled, true);
+  assert.equal(response.statusCode, 303);
+  assert.equal(response.headers.location, "https://main.ops.example.test/");
+  assert.match(renderInstanceEntry("", "https://main.ops.example.test"), /Open Main Orkestr/);
+});
