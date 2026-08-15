@@ -115,6 +115,7 @@ test("local canonical gateway serves an instance-scoped SPA and uses uniform 404
     "ORKESTR_CANONICAL_INSTANCE_URLS", "ORKESTR_CANONICAL_APP_GATEWAY", "ORKESTR_CANONICAL_APP_LINKS",
     "ORKESTR_APP_HOST", "ORKESTR_PUBLIC_APP_URL", "ORKESTR_PUBLIC_URL", "ORKESTR_PUBLIC_HTTPS_URL",
     "ORKESTR_INSTANCE_ID", "ORKESTR_OVERLAY_DIR", "ORKESTR_AUTH_REQUIRED",
+    "ORKESTR_UNSAFE_ALLOW_PUBLIC_UNAUTHENTICATED",
   ];
   const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
   Object.assign(process.env, {
@@ -127,6 +128,7 @@ test("local canonical gateway serves an instance-scoped SPA and uses uniform 404
     ORKESTR_APP_HOST: "app.example.test",
     ORKESTR_INSTANCE_ID: "private-local-id",
     ORKESTR_AUTH_REQUIRED: "0",
+    ORKESTR_UNSAFE_ALLOW_PUBLIC_UNAUTHENTICATED: "1",
   });
   for (const key of ["ORKESTR_OVERLAY_DIR", "ORKESTR_PUBLIC_APP_URL", "ORKESTR_PUBLIC_URL", "ORKESTR_PUBLIC_HTTPS_URL"]) {
     delete process.env[key];
@@ -243,6 +245,40 @@ test("local canonical gateway serves an instance-scoped SPA and uses uniform 404
   );
   assert.equal(malformedEncodedInstance.status, 404);
   assert.equal(await malformedEncodedInstance.text(), "not found");
+
+  for (const apiPath of ["api/threads", "%61pi/threads"]) {
+    const unauthenticatedApi = await fetch(
+      `http://127.0.0.1:${port}/instance/${instanceRef}/${apiPath}`,
+    );
+    assert.equal(unauthenticatedApi.status, 401, apiPath);
+  }
+
+  const adminChallenge = await createPairingChallenge({
+    env: process.env,
+    instanceId: "private-local-id",
+  });
+  await approvePairingChallenge(adminChallenge.challengeId, { approvedBy: "node:test", env: process.env });
+  const adminSession = await pairBrowser({ challengeId: adminChallenge.challengeId, env: process.env });
+  const adminCookie = sessionCookieHeader(adminSession.token, process.env, {
+    path: `/instance/${instanceRef}`,
+  }).split(";")[0];
+  const authenticatedApi = await fetch(
+    `http://127.0.0.1:${port}/instance/${instanceRef}/api/threads`,
+    { headers: { cookie: adminCookie } },
+  );
+  assert.equal(authenticatedApi.status, 200);
+  const logout = await fetch(
+    `http://127.0.0.1:${port}/instance/${instanceRef}/api/setup/security/logout`,
+    { method: "POST", headers: { cookie: adminCookie } },
+  );
+  assert.equal(logout.status, 200);
+  assert.deepEqual(await logout.json(), { ok: true });
+  assert.match(logout.headers.get("set-cookie") || "", /Max-Age=0/);
+  const afterLogout = await fetch(
+    `http://127.0.0.1:${port}/instance/${instanceRef}/api/threads`,
+    { headers: { cookie: adminCookie } },
+  );
+  assert.equal(afterLogout.status, 401);
 });
 
 test("broker canonical gateway preserves HTTP bodies, queries, HTML base, streaming, and canonical cookie scope", async (t) => {

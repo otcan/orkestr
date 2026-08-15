@@ -1814,7 +1814,18 @@ async function securitySessionForRequest(request, env = process.env) {
 
 function isAllowedBeforePairing(request) {
   const method = String(request?.method || "GET").toUpperCase();
-  const url = String(request?.originalUrl || request?.url || "").split("?")[0];
+  const rawUrl = String(request?.originalUrl || request?.url || "").split("?")[0];
+  let url = rawUrl;
+  try {
+    const parts = new URL(rawUrl || "/", "http://orkestr.local").pathname
+      .split("/")
+      .filter(Boolean);
+    if (decodeURIComponent(parts[0] || "") === "instance" && parts[1]) {
+      url = `/${parts.slice(2).map((part) => decodeURIComponent(part)).join("/")}`;
+    }
+  } catch {
+    // Canonical parsing fails closed later; keep the original path here.
+  }
   if (url.startsWith("/desktop/")) return false;
   if (!url.startsWith("/api/") && !url.startsWith("/oauth/")) return true;
   if (url.startsWith("/oauth/")) return true;
