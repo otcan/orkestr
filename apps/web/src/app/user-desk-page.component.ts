@@ -141,7 +141,7 @@ export class UserDeskPageComponent implements OnInit {
   async openDesktop(browser: BrowserSession): Promise<void> {
     const slug = this.browserSlug(browser);
     const threadId = String(this.browserLease(browser)?.threadId || this.primaryThread()?.id || "").trim();
-    if (!slug || !threadId || !this.browserOpenUrl(browser) || this.busy) return;
+    if (!slug || !threadId || !this.browserRunning(browser) || this.busy) return;
     const pendingWindow = window.open("about:blank", "_blank");
     if (pendingWindow) {
       try {
@@ -200,11 +200,44 @@ export class UserDeskPageComponent implements OnInit {
     return browser.configured === true || Boolean(browser.preparedAt);
   }
 
-  browserOpenUrl(browser: BrowserSession): string {
-    if (!this.browserRunning(browser)) return "";
-    const slug = this.browserSlug(browser);
-    if (!slug) return "";
-    return `/desktop/${encodeURIComponent(slug)}/vnc.html?autoconnect=1&resize=scale&view_only=false&path=desktop/${encodeURIComponent(slug)}/websockify`;
+  runningCount(): number {
+    return this.browsers.filter((browser) => this.browserRunning(browser)).length;
+  }
+
+  availableCount(): number {
+    return this.browsers.filter((browser) => !this.browserLease(browser)).length;
+  }
+
+  attentionCount(): number {
+    return this.browsers.filter((browser) => {
+      const lease = this.browserLease(browser);
+      return Boolean(browser.launchError) || Boolean(lease?.stale || lease?.expired);
+    }).length;
+  }
+
+  browserHealthLabel(browser: BrowserSession): string {
+    if (browser.launchError) return "Needs attention";
+    if (this.browserRunning(browser)) return "Ready";
+    if (this.browserConfigured(browser)) return "Stopped";
+    return "Not prepared";
+  }
+
+  browserHealthClass(browser: BrowserSession): string {
+    if (browser.launchError) return "bad";
+    if (this.browserRunning(browser)) return "live";
+    return "ready";
+  }
+
+  browserThreads(browser: BrowserSession): Array<Record<string, unknown>> {
+    return Array.isArray(browser.relatedThreads) ? browser.relatedThreads : [];
+  }
+
+  browserThreadLabel(thread: Record<string, unknown>): string {
+    return String(thread["title"] || thread["name"] || thread["bindingName"] || thread["id"] || "Thread").trim();
+  }
+
+  browserLastActivity(browser: BrowserSession): string {
+    return String(browser.lastOpenedAt || browser.preparedAt || browser.stoppedAt || "").trim();
   }
 
   browserLease(browser: BrowserSession): DesktopLeaseRecord | null {

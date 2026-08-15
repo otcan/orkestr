@@ -1160,56 +1160,6 @@ export interface AutomationDoctorResponse {
   issues: AutomationDoctorIssue[];
 }
 
-export interface JobAlertRoute {
-  id: string;
-  targetThreadId: string;
-  label?: string;
-  address: string;
-  createdAt?: string;
-  updatedAt?: string;
-  lastReceivedAt?: string | null;
-  receivedCount?: number;
-  enabled?: boolean;
-}
-
-export interface JobAlertRouteResponse {
-  routes: JobAlertRoute[];
-  inbound: {
-    domain?: string | null;
-    configured?: boolean;
-    relayConfigured?: boolean;
-    relayEndpoint?: string;
-  };
-}
-
-export interface OrkestrMailDraft {
-  id: string;
-  ownerUserId?: string;
-  threadId?: string;
-  to: string[];
-  subject: string;
-  body: string;
-  status: "draft" | "sent" | "send_failed" | string;
-  provider?: string;
-  createdAt?: string;
-  updatedAt?: string;
-  sentAt?: string;
-  lastError?: string;
-}
-
-export interface CalendarExportResponse {
-  event: {
-    uid: string;
-    title: string;
-    startsAt: string;
-    endsAt: string;
-    description?: string;
-    location?: string;
-  };
-  ics: string;
-  googleCalendarUrl: string;
-}
-
 export interface TimerDoctorIssue {
   severity: string;
   code: string;
@@ -2582,38 +2532,6 @@ export class ApiService {
       this.api(`/mailboxes/${encodeURIComponent(mailboxId)}/routes/${encodeURIComponent(routeId)}`),
       { body: reason ? { reason } : {} },
     );
-  }
-
-  jobAlertRoutes(): Observable<JobAlertRouteResponse> {
-    return this.http.get<JobAlertRouteResponse>(this.api("/jobs/alert-routes"));
-  }
-
-  createJobAlertRoute(body: { targetThreadId: string; label?: string; rotate?: boolean }): Observable<{ route: JobAlertRoute; created: boolean; inbound: JobAlertRouteResponse["inbound"] }> {
-    return this.http.post<{ route: JobAlertRoute; created: boolean; inbound: JobAlertRouteResponse["inbound"] }>(this.api("/jobs/alert-routes"), body);
-  }
-
-  testJobAlertRoute(routeId: string): Observable<{ ok: boolean; route: JobAlertRoute; result: Record<string, unknown> }> {
-    return this.http.post<{ ok: boolean; route: JobAlertRoute; result: Record<string, unknown> }>(this.api(`/jobs/alert-routes/${encodeURIComponent(routeId)}/test`), {});
-  }
-
-  orkestrMailDrafts(threadId = ""): Observable<{ drafts: OrkestrMailDraft[] }> {
-    return this.http.get<{ drafts: OrkestrMailDraft[] }>(this.api(`/mail-drafts${this.query({ threadId })}`));
-  }
-
-  createOrkestrMailDraft(body: Record<string, unknown>): Observable<{ draft: OrkestrMailDraft }> {
-    return this.http.post<{ draft: OrkestrMailDraft }>(this.api("/mail-drafts"), body);
-  }
-
-  updateOrkestrMailDraft(draftId: string, body: Record<string, unknown>): Observable<{ draft: OrkestrMailDraft }> {
-    return this.http.patch<{ draft: OrkestrMailDraft }>(this.api(`/mail-drafts/${encodeURIComponent(draftId)}`), body);
-  }
-
-  sendOrkestrMailDraft(draftId: string): Observable<{ ok: boolean; draft: OrkestrMailDraft; delivery: Record<string, unknown> }> {
-    return this.http.post<{ ok: boolean; draft: OrkestrMailDraft; delivery: Record<string, unknown> }>(this.api(`/mail-drafts/${encodeURIComponent(draftId)}/send`), {});
-  }
-
-  createCalendarExport(body: Record<string, unknown>): Observable<CalendarExportResponse> {
-    return this.http.post<CalendarExportResponse>(this.api("/jobs/calendar-exports"), body);
   }
 
   automations(): Observable<{ automations: AutomationRecord[] }> {

@@ -8,6 +8,9 @@ export function legacyInstanceRouteTarget(rawUrl = "", { setupReady = false } = 
   const parts = parsed.pathname.split("/").filter(Boolean);
   let target = "";
   if (parts[0] === "files" || (parts[0] === "ng" && parts[1] === "files")) target = "/files";
+  else if (parts[0] === "timers" || (parts[0] === "ng" && parts[1] === "timers")) target = "/timers";
+  else if (["desktops", "desk"].includes(parts[0]) || (parts[0] === "ng" && parts[1] === "desk")) target = "/desktops";
+  else if (parts[0] === "jobs" || (parts[0] === "ng" && parts[1] === "jobs")) target = "/settings";
   else if (parts[0] === "settings") target = "/settings";
   else if (parts[0] === "ops" || parts[0] === "mailboxes") target = "/settings";
   else if (parts[0] === "connectors" && !parts[1]) target = "/settings";
