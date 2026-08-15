@@ -1745,14 +1745,34 @@ function sessionMatchesBrokerAppRoute(session = {}, route = null) {
 
 export function securitySessionReturnScope(session = null, returnPath = "", options = {}) {
   const route = googleWorkspaceConnectReturnRouteFromUrl(returnPath || "");
+  const canonicalRoute = canonicalInstanceReturnRoute(returnPath || "");
   const expectedInstanceId = String(options.instanceId || "").trim();
   const hasSession = Boolean(session?.id);
-  if (!route) {
+  if (!route && !canonicalRoute) {
     return {
       scoped: false,
       validForReturn: hasSession,
       reason: hasSession ? "session_valid" : "session_missing",
     };
+  }
+  if (canonicalRoute) {
+    const result = {
+      scoped: true,
+      kind: "canonical_instance",
+      instanceId: expectedInstanceId,
+      publicRef: canonicalRoute.publicRef,
+      validForReturn: false,
+      reason: "session_missing",
+    };
+    if (!hasSession) return result;
+    if (session.shareId) return { ...result, reason: "share_session_not_valid_for_instance_app" };
+    if (!expectedInstanceId) return { ...result, reason: "instance_missing" };
+    if (String(session.instanceId || "").trim() !== expectedInstanceId) return { ...result, reason: "instance_mismatch" };
+    const allowedActions = Array.isArray(session.allowedActions) ? session.allowedActions : [];
+    if (allowedActions.some((action) => String(action || "").startsWith("orkestr_auth."))) {
+      return { ...result, reason: "auth_intent_session_not_valid_for_instance_app" };
+    }
+    return { ...result, validForReturn: true, reason: "session_valid" };
   }
   const instanceId = route.instanceId || expectedInstanceId;
   const result = {
@@ -1772,6 +1792,19 @@ export function securitySessionReturnScope(session = null, returnPath = "", opti
     return { ...result, reason: "google_connect_scope_mismatch" };
   }
   return { ...result, validForReturn: true, reason: "session_valid" };
+}
+
+function canonicalInstanceReturnRoute(returnPath = "") {
+  let parsed;
+  try {
+    parsed = new URL(String(returnPath || ""), "http://orkestr.local");
+  } catch {
+    return null;
+  }
+  if (parsed.origin !== "http://orkestr.local") return null;
+  const parts = parsed.pathname.split("/").filter(Boolean);
+  if (parts[0] !== "instance" || !/^ins_[A-Za-z0-9_-]{22}$/.test(String(parts[1] || ""))) return null;
+  return { publicRef: parts[1] };
 }
 
 function sessionCreatedAtMs(session = {}) {

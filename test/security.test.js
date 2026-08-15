@@ -7,7 +7,7 @@ import { startServer } from "../apps/server/src/server.js";
 import { createGoogleWorkspaceConnectLink } from "../packages/connectors/src/google-workspace.js";
 import { __brokerInstanceRegistryTestInternals, encryptBrokerChannelPayload } from "../packages/core/src/broker-instance-registry.js";
 import { adminPrincipal, userPrincipal } from "../packages/core/src/principal.js";
-import { approvePairingChallenge, authorizeHttpRequest, createPairingChallenge, listPairingChallenges, pairBrowser, securityStatus } from "../packages/core/src/security.js";
+import { approvePairingChallenge, authorizeHttpRequest, createPairingChallenge, listPairingChallenges, pairBrowser, securitySessionReturnScope, securityStatus } from "../packages/core/src/security.js";
 import { registerThreadResource, readThreadResourcePolicy } from "../packages/core/src/thread-resource-grants.js";
 import { createTenantVm } from "../packages/core/src/tenant-vm-registry.js";
 import { createThread } from "../packages/core/src/threads.js";
@@ -30,6 +30,27 @@ const priorWhatsappAutostart = saveEnv(["ORKESTR_WHATSAPP_AUTOSTART", "WHATSAPP_
 process.env.ORKESTR_WHATSAPP_AUTOSTART = "0";
 process.env.WHATSAPP_LOCAL_AUTOSTART = "0";
 test.after(() => restoreEnv(priorWhatsappAutostart));
+
+test("canonical instance pairing returns require a matching instance session", () => {
+  const returnPath = "/instance/ins_AQEBAQEBAQEBAQEBAQEBAQ/";
+  const globalSession = { id: "global-session", instanceId: "", allowedActions: [] };
+  const matchingSession = { id: "matching-session", instanceId: "main", allowedActions: [] };
+  const authIntentSession = { id: "intent-session", instanceId: "main", allowedActions: ["orkestr_auth.google.connect"] };
+
+  assert.deepEqual(securitySessionReturnScope(globalSession, returnPath, { instanceId: "main" }), {
+    scoped: true,
+    kind: "canonical_instance",
+    instanceId: "main",
+    publicRef: "ins_AQEBAQEBAQEBAQEBAQEBAQ",
+    validForReturn: false,
+    reason: "instance_mismatch",
+  });
+  assert.equal(securitySessionReturnScope(matchingSession, returnPath, { instanceId: "main" }).validForReturn, true);
+  assert.equal(
+    securitySessionReturnScope(authIntentSession, returnPath, { instanceId: "main" }).reason,
+    "auth_intent_session_not_valid_for_instance_app",
+  );
+});
 
 async function json(response) {
   return response.json();

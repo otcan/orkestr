@@ -1129,7 +1129,9 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   private isScopedPairingReturnUrl(returnUrl = ""): boolean {
     try {
       const target = new URL(returnUrl, globalThis.location?.href || "http://localhost/");
+      const parts = target.pathname.split("/").filter(Boolean);
       return this.isBrokerInstanceReturnUrl(returnUrl) ||
+        (parts[0] === "instance" && /^ins_[A-Za-z0-9_-]{22}$/.test(parts[1] || "")) ||
         (["/connect/google", "/connect/google/start"].includes(target.pathname) && Boolean(target.searchParams.get("connect") || target.searchParams.get("connect_id")));
     } catch {
       return false;

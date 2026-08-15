@@ -1279,6 +1279,7 @@ test("pairing return stays same-origin and Codex warnings stay non-blocking", as
   assert.match(component, /Connect Codex Agent before starting coding agents or sending coding-agent tasks\./);
   assert.match(component, /sameOriginPairingReturnUrl/);
   assert.match(component, /isScopedPairingReturnUrl/);
+  assert.match(component, /parts\[0\] === "instance" && \/\^ins_/);
   assert.match(component, /\["\/connect\/google", "\/connect\/google\/start"\]/);
   assert.match(component, /target\.origin === current\.origin/);
   assert.doesNotMatch(component, /allowedOrigins\.includes\(target\.origin\)/);
