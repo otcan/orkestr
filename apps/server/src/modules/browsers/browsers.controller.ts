@@ -67,11 +67,14 @@ function desktopShareNotReadyReason(browser: any, fallback = "desktop_share_not_
 @Controller("api")
 export class BrowsersController {
   @Get("browsers")
-  async browsers(@Req() request: any, @Query("threadId") threadId = "", @Query("breakGlass") breakGlass = "", @Query("reason") reason = "", @Query("changeRef") changeRef = "") {
+  async browsers(@Req() request: any, @Query("threadId") threadId = "", @Query("inventory") inventory = "", @Query("breakGlass") breakGlass = "", @Query("reason") reason = "", @Query("changeRef") changeRef = "") {
     const principal = requestPrincipal(request);
+    const ownerInventory = String(inventory || "").trim() === "owner";
+    if (ownerInventory && !isAdminPrincipal(principal)) throw httpError("desktop_owner_inventory_admin_required", 403);
     const payload = await listBrowserSessions(process.env, {
       principal,
       threadId: String(threadId || "").trim(),
+      ownerInventory,
       publicProjection: true,
       ...this.breakGlassInputs(principal, { breakGlass, breakGlassReason: reason, breakGlassChangeRef: changeRef }),
     });
@@ -79,11 +82,14 @@ export class BrowsersController {
   }
 
   @Get("browser-sessions")
-  async browserSessions(@Req() request: any, @Query("threadId") threadId = "", @Query("breakGlass") breakGlass = "", @Query("reason") reason = "", @Query("changeRef") changeRef = "") {
+  async browserSessions(@Req() request: any, @Query("threadId") threadId = "", @Query("inventory") inventory = "", @Query("breakGlass") breakGlass = "", @Query("reason") reason = "", @Query("changeRef") changeRef = "") {
     const principal = requestPrincipal(request);
+    const ownerInventory = String(inventory || "").trim() === "owner";
+    if (ownerInventory && !isAdminPrincipal(principal)) throw httpError("desktop_owner_inventory_admin_required", 403);
     return listBrowserSessions(process.env, {
       principal,
       threadId: String(threadId || "").trim(),
+      ownerInventory,
       publicProjection: true,
       ...this.breakGlassInputs(principal, { breakGlass, breakGlassReason: reason, breakGlassChangeRef: changeRef }),
     });

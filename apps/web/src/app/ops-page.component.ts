@@ -201,7 +201,7 @@ export class OpsPageComponent implements OnInit, OnDestroy {
     if (showBusy) this.busy = true;
     this.opsBrowsersLoading = true;
     if (!this.opsBrowsers.length) this.opsBrowserMessage = "";
-    const browsersRequest = firstValueFrom(this.api.browserSessions());
+    const browsersRequest = firstValueFrom(this.api.browserSessions("", "", true));
     browsersRequest
       .then((payload) => this.applyBrowserSessions(payload))
       .catch((error) => this.applyBrowserSessionsError(error))

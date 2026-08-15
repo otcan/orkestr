@@ -2977,9 +2977,10 @@ export class ApiService {
     return this.http.post<ThreadUploadResponse>(this.api(`/threads/${encodeURIComponent(id)}/uploads`), body);
   }
 
-  browserSessions(threadId = "", breakGlassReason = ""): Observable<{ sessions: BrowserSession[]; browsers?: BrowserSession[]; source?: string; error?: string; message?: string }> {
+  browserSessions(threadId = "", breakGlassReason = "", ownerInventory = false): Observable<{ sessions: BrowserSession[]; browsers?: BrowserSession[]; source?: string; error?: string; message?: string }> {
     const params = new URLSearchParams();
     if (threadId) params.set("threadId", threadId);
+    if (ownerInventory) params.set("inventory", "owner");
     if (breakGlassReason) {
       params.set("breakGlass", "1");
       params.set("reason", breakGlassReason);

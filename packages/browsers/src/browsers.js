@@ -5,8 +5,10 @@ import { promisify } from "node:util";
 import { dataPaths, ensureDataDirs, userDataPaths } from "../../storage/src/paths.js";
 import { appendEvent, readJson, writeJson } from "../../storage/src/store.js";
 import { isAdminPrincipal } from "../../core/src/policy.js";
-import { assertDesktopAccess, filterDesktopSessionsForThread } from "../../core/src/desktop-access.js";
+import { assertDesktopAccess, desktopResourceId, filterDesktopSessionsForThread } from "../../core/src/desktop-access.js";
 import { desktopCatalogFromEnv } from "../../core/src/runtime-settings.js";
+import { readThreadResourcePolicy } from "../../core/src/thread-resource-grants.js";
+import { listThreadsForPrincipal } from "../../core/src/threads.js";
 import { normalizeUserId } from "../../core/src/users.js";
 import { assertDesktopLeaseForOperation, attachDesktopStateToSessions } from "./desktop-leases.js";
 import { isBrowserctlUnavailableError, listManagedDesktopSessions, managedDesktopAction, managedDesktopOpenUrl } from "./browserctl.js";
@@ -110,9 +112,10 @@ export async function listBrowserSessions(env = process.env, options = {}) {
     try {
       const payload = await listManagedDesktopSessions(env, options);
       const visible = filterVisibleBrowserSessions(payload.sessions || [], env);
-      const sessions = await filterDesktopSessionsForThread(visible, {
+      let sessions = await filterDesktopSessionsForThread(visible, {
         ...options,
       }, env);
+      sessions = await includeOwnedDesktopInventory(visible, sessions, options, env);
       return {
         ...payload,
         sessions: options.publicProjection === true ? sessions.map(redactDesktopSession) : sessions,
@@ -130,14 +133,59 @@ export async function listBrowserSessions(env = process.env, options = {}) {
     }
   }
   const listed = await listProfileBrowsers(env, options);
-  const sessions = await filterDesktopSessionsForThread(listed, {
+  let sessions = await filterDesktopSessionsForThread(listed, {
     ...options,
   }, env);
+  sessions = await includeOwnedDesktopInventory(listed, sessions, options, env);
   return {
     ok: true,
     source: "profiles",
     sessions: options.publicProjection === true ? sessions.map(redactDesktopSession) : sessions,
   };
+}
+
+async function includeOwnedDesktopInventory(allSessions = [], filteredSessions = [], options = {}, env = process.env) {
+  if (options.ownerInventory !== true || !isAdminPrincipal(options.principal || {})) return filteredSessions;
+  const ownerUserId = normalizeUserId(options.principal?.userId || env.ORKESTR_ADMIN_USER_ID || "admin");
+  const [policy, threads] = await Promise.all([
+    readThreadResourcePolicy(env),
+    listThreadsForPrincipal(options.principal, env),
+  ]);
+  const threadById = new Map((threads || []).map((thread) => [String(thread.id || ""), thread]));
+  const included = new Map((filteredSessions || []).map((session) => [String(session.slug || session.id || ""), session]));
+
+  for (const session of Array.isArray(allSessions) ? allSessions : []) {
+    const slug = String(session?.slug || session?.id || "").trim();
+    if (!slug) continue;
+    const resourceId = String(session?.resourceId || session?.desktopId || desktopResourceId(slug, ownerUserId, env)).trim();
+    const resource = (policy.resources || []).find((item) => item.resourceType === "desktop" && item.id === resourceId && !item.retiredAt);
+    if (!resource || normalizeUserId(resource.ownerUserId) !== ownerUserId) continue;
+    const relatedThreads = (policy.grants || [])
+      .filter((grant) => grant.resourceType === "desktop" && grant.resourceId === resourceId && !grant.revokedAt)
+      .map((grant) => threadById.get(String(grant.threadId || "")))
+      .filter(Boolean)
+      .map((thread) => ({ id: thread.id, name: thread.name, title: thread.title, state: thread.state }));
+    const existing = included.get(slug);
+    included.set(slug, {
+      ...(existing || session),
+      resourceId,
+      relatedThreads,
+      desktopAccess: existing?.desktopAccess || {
+        allowed: false,
+        granted: false,
+        inventoryOnly: true,
+        mode: "enforce",
+        reason: "desktop_owner_inventory_only",
+        resourceId,
+        resourceKey: slug,
+        ownerUserId,
+      },
+    });
+  }
+
+  return (Array.isArray(allSessions) ? allSessions : [])
+    .map((session) => included.get(String(session?.slug || session?.id || "").trim()))
+    .filter(Boolean);
 }
 
 const DESKTOP_ENDPOINT_FIELD = /cdp|debug.?port|profile|endpoint|upstream|local.?control|(?:^|_)(?:web|vnc|novnc|rfb)_?port|desk_?url/i;

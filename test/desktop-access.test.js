@@ -94,6 +94,26 @@ test("same-owner threads see and acquire only explicitly granted desktops", asyn
   assert.equal(opened.slug, "linkedin");
 });
 
+test("admin owner inventory includes exact-bound desktops without granting unscoped access", async () => {
+  const { env, principal, threadA, threadB } = await fixture();
+
+  const scoped = await listBrowserSessions(env, { principal });
+  assert.deepEqual(scoped.sessions, []);
+
+  const inventory = await listBrowserSessions(env, { principal, ownerInventory: true });
+  assert.deepEqual(inventory.sessions.map((item) => item.slug), ["linkedin", "pa"]);
+  const linkedin = inventory.sessions.find((item) => item.slug === "linkedin");
+  const pa = inventory.sessions.find((item) => item.slug === "pa");
+  assert.equal(linkedin.desktopAccess.inventoryOnly, true);
+  assert.equal(linkedin.desktopAccess.allowed, false);
+  assert.deepEqual(linkedin.relatedThreads.map((thread) => thread.id), [threadA.id]);
+  assert.deepEqual(pa.relatedThreads.map((thread) => thread.id), [threadB.id]);
+
+  const unscoped = await authorizeDesktopAccess({ principal, desktopSlug: "linkedin", permission: "operate" }, env);
+  assert.equal(unscoped.allowed, false);
+  assert.equal(unscoped.reason, "desktop_thread_scope_required");
+});
+
 test("scoped enforcement protects both sides of an exact thread and desktop binding", async () => {
   const { env, principal, threadA, threadB } = await fixture();
   const resource = (await readThreadResourcePolicy(env)).resources.find((item) => item.resourceType === "desktop" && item.resourceKey === "linkedin");
