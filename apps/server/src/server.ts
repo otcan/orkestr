@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { NestFactory } from "@nestjs/core";
 import type { INestApplication } from "@nestjs/common";
+import type { NestExpressApplication } from "@nestjs/platform-express";
 import { loadOverlayExecutorAdapters, recoverInterruptedExecutions } from "../../../packages/core/src/executors.js";
 import {
   setThreadConnectorDeliverySignalHandler,
@@ -77,7 +78,11 @@ function whatsappDeliveryPollIntervalMs(env = process.env) {
 }
 
 export async function createApp(): Promise<INestApplication> {
-  const app = await NestFactory.create(AppModule, { logger: false });
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, { logger: false });
+  // Static fallback routes are registered before Nest initializes its default
+  // parsers. Register the small form parser explicitly so the public instance
+  // entry POST can resolve the submitted name/reference in the live server.
+  app.useBodyParser("urlencoded", { extended: false, limit: "8kb" });
   app.use((request, response, next) => {
     sanitizeForwardedHostHeaders(request, process.env);
     if (rejectUnknownHostBoundaryRequest(request, response, process.env)) return;

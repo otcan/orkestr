@@ -10,6 +10,7 @@ import { __brokerInstanceRegistryTestInternals, registerBrokerInstance } from ".
 import { approvePairingChallenge, createPairingChallenge, listPairingChallenges, pairBrowser, sessionCookieHeader } from "../packages/core/src/security.js";
 import { userPrincipal } from "../packages/core/src/principal.js";
 import { createTenantVm } from "../packages/core/src/tenant-vm-registry.js";
+import { writeInstanceIdentity } from "../packages/core/src/instance-identity.js";
 import { userDataPaths } from "../packages/storage/src/paths.js";
 
 const publicRuntimeEnvKeys = [
@@ -1124,6 +1125,7 @@ test("server keeps public pages on the configured public site host only", async 
     connectPublicUrl: process.env.ORKESTR_CONNECT_PUBLIC_URL,
     pairingUrl: process.env.ORKESTR_PAIRING_URL,
     authRequired: process.env.ORKESTR_AUTH_REQUIRED,
+    instanceName: process.env.ORKESTR_INSTANCE_NAME,
   };
   process.env.ORKESTR_HOME = home;
   process.env.ORKESTR_PUBLIC_SITE_URL = "https://orkestr.example.test";
@@ -1131,11 +1133,13 @@ test("server keeps public pages on the configured public site host only", async 
   process.env.ORKESTR_PUBLIC_URL = "https://app.orkestr.example.test";
   process.env.ORKESTR_PUBLIC_APP_URL = "https://app.orkestr.example.test";
   process.env.ORKESTR_AUTH_REQUIRED = "1";
+  process.env.ORKESTR_INSTANCE_NAME = "Main Orkestr";
   delete process.env.ORKESTR_OVERLAY_DIR;
   delete process.env.ORKESTR_PUBLIC_AUTH_URL;
   delete process.env.ORKESTR_PUBLIC_HTTPS_URL;
   delete process.env.ORKESTR_CONNECT_PUBLIC_URL;
   delete process.env.ORKESTR_PAIRING_URL;
+  await writeInstanceIdentity({ internalInstanceId: "local-instance", publicRef: "ins_AQEBAQEBAQEBAQEBAQEBAQ" }, process.env);
   const server = await startServer({ port: 0, host: "127.0.0.1" });
   const { port } = server.address();
   try {
@@ -1146,6 +1150,16 @@ test("server keeps public pages on the configured public site host only", async 
     const privateRootResponse = await fetch(`http://127.0.0.1:${port}/`, {
       redirect: "manual",
       headers: { "x-forwarded-host": "app.orkestr.example.test", "x-forwarded-proto": "https" },
+    });
+    const instanceEntryResponse = await fetch(`http://127.0.0.1:${port}/instance-entry`, {
+      method: "POST",
+      redirect: "manual",
+      headers: {
+        "content-type": "application/x-www-form-urlencoded",
+        "x-forwarded-host": "app.orkestr.example.test",
+        "x-forwarded-proto": "https",
+      },
+      body: new URLSearchParams({ instance: "Main Orkestr" }),
     });
     const privateTermsResponse = await fetch(`http://127.0.0.1:${port}/terms`, {
       redirect: "manual",
@@ -1187,6 +1201,11 @@ test("server keeps public pages on the configured public site host only", async 
     assert.match(privateRootHtml, /<h1>Which Orkestr\?<\/h1>/);
     assert.match(privateRootHtml, /name="instance"/);
     assert.doesNotMatch(privateRootHtml, /Approve this browser|orkestr security approve|orkestr connect approve/);
+    assert.equal(instanceEntryResponse.status, 303);
+    assert.equal(
+      instanceEntryResponse.headers.get("location"),
+      "https://orkestr.example.test/setup/pairing?instanceId=local-instance&return=%2Finstance%2Fins_AQEBAQEBAQEBAQEBAQEBAQ",
+    );
     assert.equal(privateTermsResponse.status, 302);
     assert.equal(
       privateTermsResponse.headers.get("location"),
@@ -1222,6 +1241,8 @@ test("server keeps public pages on the configured public site host only", async 
     else process.env.ORKESTR_PAIRING_URL = prior.pairingUrl;
     if (prior.authRequired === undefined) delete process.env.ORKESTR_AUTH_REQUIRED;
     else process.env.ORKESTR_AUTH_REQUIRED = prior.authRequired;
+    if (prior.instanceName === undefined) delete process.env.ORKESTR_INSTANCE_NAME;
+    else process.env.ORKESTR_INSTANCE_NAME = prior.instanceName;
   }
 });
 
