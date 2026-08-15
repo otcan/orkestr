@@ -3,6 +3,7 @@ import type { IncomingMessage, Server } from "node:http";
 import type { Duplex } from "node:stream";
 import { appendEvent } from "../../../packages/storage/src/store.js";
 import { canonicalThreadLink, explicitCanonicalAppBase } from "../../../packages/core/src/canonical-app-links.js";
+import { desktopShareBaseDomain } from "../../../packages/core/src/desktop-share-http.js";
 import { readInstanceIdentity } from "../../../packages/core/src/instance-identity.js";
 import { assertResourceAccess } from "../../../packages/core/src/policy.js";
 import { listThreads } from "../../../packages/core/src/threads.js";
@@ -180,6 +181,28 @@ function compatibilityPath(rawUrl = ""): boolean {
   );
 }
 
+function desktopSharePath(method = "GET", rawUrl = ""): boolean {
+  if (String(method || "GET").trim().toUpperCase() !== "GET") return false;
+  const pathname = new URL(rawUrl || "/", "http://orkestr.local").pathname;
+  return /^\/desktop-share\/[^/]+(?:\/[^/]+)?$/.test(pathname) ||
+    /^\/api\/desktop-shares\/[^/]+\/(?:open|status)$/.test(pathname) ||
+    /^\/desktop\/[^/]+(?:\/|$)/.test(pathname);
+}
+
+function desktopShareOrigin(origin = "", env = process.env): boolean {
+  const domain = desktopShareBaseDomain(env);
+  if (!origin || !domain) return false;
+  try {
+    const hostname = new URL(origin).hostname.toLowerCase();
+    const suffix = `.${domain}`;
+    if (!hostname.endsWith(suffix)) return false;
+    const label = hostname.slice(0, -suffix.length);
+    return Boolean(label) && !label.includes(".") && /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label);
+  } catch {
+    return false;
+  }
+}
+
 function localProbeRequest(request: any): boolean {
   const method = String(request?.method || "GET").toUpperCase();
   const pathname = new URL(String(request?.originalUrl || request?.url || "/"), "http://orkestr.local").pathname;
@@ -266,10 +289,11 @@ export function rejectUnknownHostBoundaryRequest(request: any, response: any, en
   // traffic reach it, then require the verified CLI machine principal below.
   if (directLoopbackRequest(request)) return false;
   const origin = effectiveRequestOrigin(request, env);
+  const rawUrl = String(request?.originalUrl || request?.url || "/");
+  if (desktopShareOrigin(origin, env) && desktopSharePath(request?.method, rawUrl)) return false;
   const { appOrigin, connectOrigins } = allowedBoundaryOrigins(env);
   if (origin && appOrigin && connectOrigins.size && !connectOrigins.has(appOrigin) && origin === appOrigin) return false;
   if (origin && appOrigin && connectOrigins.size && !connectOrigins.has(appOrigin) && connectOrigins.has(origin)) {
-    const rawUrl = String(request?.originalUrl || request?.url || "/");
     if (compatibilityPath(rawUrl) || handoffPath(rawUrl) || connectSupportPath(request?.method, rawUrl) ||
         canonicalPath(rawUrl) || legacyThreadRoute(rawUrl)) return false;
   }
@@ -286,6 +310,8 @@ export async function enforceHostBoundaryRequest(request: any, response: any, en
   const rawUrl = String(request?.originalUrl || request?.url || "/");
   const origin = effectiveRequestOrigin(request, env);
   const { boundaries, appOrigin, connectOrigins } = allowedBoundaryOrigins(env);
+
+  if (desktopShareOrigin(origin, env) && desktopSharePath(request?.method, rawUrl)) return false;
 
   if (!origin || !appOrigin || !connectOrigins.size || connectOrigins.has(appOrigin)) {
     recordDenial("invalid_host_or_config", env);
@@ -381,7 +407,11 @@ export function attachHostBoundaryUpgrade(server: Server, env = process.env): vo
     const { appOrigin, connectOrigins } = allowedBoundaryOrigins(env);
     const rawUrl = String(request.url || "/");
     const configured = Boolean(origin && appOrigin && connectOrigins.size && !connectOrigins.has(appOrigin));
-    const allowed = configured && (origin === appOrigin || (connectOrigins.has(origin) && compatibilityPath(rawUrl)));
+    const allowed = configured && (
+      origin === appOrigin ||
+      (connectOrigins.has(origin) && compatibilityPath(rawUrl)) ||
+      (desktopShareOrigin(origin, env) && desktopSharePath(request.method, rawUrl))
+    );
     if (allowed) return;
     recordDenial(configured ? "wrong_host" : "invalid_host_or_config", env);
     denyUpgrade(request, socket);

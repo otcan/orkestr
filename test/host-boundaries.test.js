@@ -354,6 +354,43 @@ test("connect host serves only method-specific pairing primitives and OAuth star
   await cleanup(home);
 });
 
+test("random desktop-share hosts admit only the brokered share surface", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-host-desktop-share-"));
+  const runtimeEnv = env(home, { ORKESTR_DESKTOP_SHARE_BASE_DOMAIN: "desk.example.test" });
+  const shareHost = "share-abc123.desk.example.test";
+
+  for (const url of [
+    "/desktop-share/share-id?key=sample",
+    "/desktop-share/share-subdomain/share-id?key=sample",
+    "/api/desktop-shares/share-id/open?key=sample",
+    "/api/desktop-shares/share-id/status?key=sample",
+    "/desktop/linkedin/vnc.html",
+    "/desktop/linkedin/websockify",
+  ]) {
+    const req = request(url, shareHost);
+    const early = responseSpy();
+    assert.equal(rejectUnknownHostBoundaryRequest(req, early.response, runtimeEnv), false, url);
+    assert.equal((await enforce(req, runtimeEnv)).handled, false, url);
+  }
+
+  for (const [method, url] of [
+    ["GET", "/"],
+    ["GET", "/api/threads"],
+    ["POST", "/api/desktop-shares/share-id/open"],
+    ["GET", "/desktop-share"],
+  ]) {
+    const req = request(url, shareHost, { method });
+    const early = responseSpy();
+    assert.equal(rejectUnknownHostBoundaryRequest(req, early.response, runtimeEnv), true, `${method} ${url}`);
+    assert.deepEqual([early.result.statusCode, early.result.body], [404, "not found"]);
+  }
+
+  const nestedLabel = request("/desktop/linkedin/vnc.html", "nested.share.desk.example.test");
+  const nestedSpy = responseSpy();
+  assert.equal(rejectUnknownHostBoundaryRequest(nestedLabel, nestedSpy.response, runtimeEnv), true);
+  await cleanup(home);
+});
+
 test("doctor requires a shared cookie scope and accepts the public URL inferred primary domain", async (t) => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-host-cookie-doctor-"));
   t.after(() => cleanup(home));
@@ -376,6 +413,7 @@ test("upgrade gate rejects connect and unknown thread WebSockets before downstre
   const runtimeEnv = env(home, {
     ORKESTR_PUBLIC_APP_URL: "http://app.example.test",
     ORKESTR_CONNECT_PUBLIC_URL: "http://connect.example.test",
+    ORKESTR_DESKTOP_SHARE_BASE_DOMAIN: "desk.example.test",
   });
   let downstreamTouches = 0;
   const server = http.createServer();
@@ -400,9 +438,11 @@ test("upgrade gate rejects connect and unknown thread WebSockets before downstre
 
   const compatible = await upgrade(port, "connect.example.test", "/i/sample/app/api/threads/sample/stream");
   const canonical = await upgrade(port, "app.example.test", `/instance/${instanceRef}/thread/thr_AgICAgICAgICAgICAgICAg/stream`);
+  const desktopShare = await upgrade(port, "share-abc123.desk.example.test", "/desktop/linkedin/websockify");
   assert.match(compatible, /^HTTP\/1\.1 418 Teapot/);
   assert.match(canonical, /^HTTP\/1\.1 418 Teapot/);
-  assert.equal(downstreamTouches, 2);
+  assert.match(desktopShare, /^HTTP\/1\.1 418 Teapot/);
+  assert.equal(downstreamTouches, 3);
 });
 
 test("live server keeps the connect pairing page, assets, and primitive APIs on their bounded host", async (t) => {

@@ -355,9 +355,9 @@ function serveDesktopSharePage(response: any) {
       return true;
     }
     function showDesktop(desktopUrl) {
-      if (desktopFrame.getAttribute('src') !== desktopUrl) desktopFrame.setAttribute('src', desktopUrl);
-      main.hidden = true;
-      viewer.hidden = false;
+      const target = new URL(desktopUrl, location.origin);
+      if (target.origin !== location.origin) throw new Error('desktop_share_origin_mismatch');
+      location.replace(target.href);
     }
     function lifecycleTime(value) {
       if (!value) return 'unknown';
