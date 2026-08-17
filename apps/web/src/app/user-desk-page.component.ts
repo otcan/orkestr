@@ -51,14 +51,30 @@ export class UserDeskPageComponent implements OnInit {
     if (!slug || this.busy) return;
     this.busy = true;
     this.activeSlug = slug;
+    const attemptId = globalThis.crypto?.randomUUID?.() || `desktop-action-${Date.now()}`;
     try {
-      const lease = this.browserLease(browser);
+      let lease = this.browserLease(browser);
+      let recoveryWarnings: DesktopAccessWarning[] = [];
+      if (action !== "stop" && (!lease || lease.stale || lease.expired)) {
+        const thread = this.primaryThread();
+        if (!thread) throw new Error("A thread is required to reserve this desktop.");
+        const acquired = await firstValueFrom(this.api.acquireDesktopLease(slug, {
+          threadId: thread.id,
+          threadName: thread.name || thread.title || thread.id,
+          mode: "exclusive",
+          purpose: "user_desk_action",
+          attemptId,
+        }));
+        lease = acquired.lease || null;
+        recoveryWarnings = acquired.warnings || [];
+      }
       const payload = await firstValueFrom(this.api.browserAction(slug, action, {
         threadId: String(lease?.threadId || this.primaryThread()?.id || ""),
         fencingToken: String(lease?.fencingToken || ""),
         reason: "user_desk",
+        attemptId,
       }));
-      this.actionWarnings[slug] = payload.warnings || [];
+      this.actionWarnings[slug] = this.mergeWarnings(recoveryWarnings, payload.warnings || []);
       this.browsers = this.upsertBrowser(payload.browser || browser);
       const label = { prepare: "prepared", start: "started", stop: "stopped", restart: "restarted" }[action];
       this.notice = `${this.browserLabel(payload.browser || browser)} ${label}.`;
@@ -88,7 +104,9 @@ export class UserDeskPageComponent implements OnInit {
       }));
       this.actionWarnings[slug] = payload.warnings || [];
       if (payload.lease) this.leases = this.upsertLease(payload.lease);
-      this.notice = `${this.browserLabel(browser)} reserved.`;
+      this.notice = payload.autoRecovered
+        ? `${this.browserLabel(browser)} recovered from its expired reservation and reserved.`
+        : `${this.browserLabel(browser)} reserved.`;
       this.error = "";
       await this.load();
     } catch (error) {
@@ -328,5 +346,9 @@ export class UserDeskPageComponent implements OnInit {
     if (!response || typeof response !== "object") return;
     const warnings = (response as { warnings?: unknown }).warnings;
     if (Array.isArray(warnings)) this.actionWarnings[slug] = warnings as DesktopAccessWarning[];
+  }
+
+  private mergeWarnings(...groups: DesktopAccessWarning[][]): DesktopAccessWarning[] {
+    return [...new Map(groups.flat().map((warning) => [warning.code, warning])).values()];
   }
 }

@@ -52,7 +52,7 @@ import {
   desktopOperationWarnings,
   desktopShareNotReadyReason,
   desktopShareReady,
-  emitDesktopAccessChatWarning,
+  desktopStoppedLeaseRecoveryOptions,
 } from "./desktop-warning-response.js";
 
 @Controller("api")
@@ -128,9 +128,9 @@ export class BrowsersController {
     if (body.force === true && !isAdminPrincipal(principal)) throw httpError("desktop_force_acquire_admin_required", 403);
     await this.assertDesktopSanitized("acquire", principal, slug, { ...body, ownerUserId });
     const attemptId = desktopAttemptId(request, body);
-    const result = await acquireDesktopLease(slug, { ...body, ownerUserId, attemptId }, process.env, { principal, ...breakGlassOptions });
     const threadId = String(body.threadId || body.ownerThreadId || "").trim();
-    await emitDesktopAccessChatWarning({ threadId, attemptId, warnings: result.warnings }, process.env);
+    const recoveryOptions = await desktopStoppedLeaseRecoveryOptions({ slug, threadId, principal });
+    const result = await acquireDesktopLease(slug, { ...body, ownerUserId, attemptId }, process.env, { principal, ...breakGlassOptions, ...recoveryOptions });
     if (!result.ok) throw httpError("desktop_leased", 409, { attemptId, warnings: result.warnings, lease: result.lease });
     return result;
   }
@@ -200,7 +200,6 @@ export class BrowsersController {
       ...breakGlassOptions,
     }, process.env);
     const warnings = await desktopOperationWarnings({ slug, threadId, ownerUserId, operation: "share", attemptId, principal, breakGlassOptions, decision: accessDecision });
-    await emitDesktopAccessChatWarning({ threadId, attemptId, warnings }, process.env);
     let browser: any = null;
     let startError = "";
     const startRequested = body.start !== false;
@@ -434,7 +433,6 @@ export class BrowsersController {
       };
       await this.assertDesktopSanitized(normalized || "action", principal, slug, body);
       warnings = await desktopOperationWarnings({ slug, threadId, ownerUserId, operation: normalized, attemptId, principal, breakGlassOptions });
-      await emitDesktopAccessChatWarning({ threadId, attemptId, warnings }, process.env);
       if (normalized === "prepare") return { browser: redactDesktopSession(await prepareVirtualBrowser(slug, process.env, desktopOptions)), attemptId, warnings };
       if (normalized === "start" || normalized === "open") return { browser: redactDesktopSession(await openVirtualBrowser(slug, process.env, "", desktopOptions)), attemptId, warnings };
       if (normalized === "open-url" || normalized === "openurl" || normalized === "navigate") {
@@ -458,7 +456,6 @@ export class BrowsersController {
         const errorCode = String((error as Error)?.message || "browser_action_failed");
         const errorWarnings = await desktopOperationWarnings({ slug, threadId, ownerUserId, operation: action, attemptId, principal, breakGlassOptions, errorCode });
         warnings = [...new Map([...warnings, ...errorWarnings].map((warning) => [warning.code, warning])).values()];
-        await emitDesktopAccessChatWarning({ threadId, attemptId, warnings }, process.env);
         throw httpError(errorCode, statusCode, { attemptId, warnings });
       }
       throw error;

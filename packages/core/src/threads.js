@@ -653,22 +653,6 @@ export async function appendThreadMessage(threadId, input, env = process.env) {
         notificationId: String(input.shadowBoundaryWarning.notificationId || "").trim(),
       };
     }
-    if (Array.isArray(input.desktopAccessWarnings)) {
-      nextMessage.desktopAccessWarnings = input.desktopAccessWarnings.slice(0, 12).map((warning) => ({
-        schemaVersion: Number(warning?.schemaVersion || 1) || 1,
-        id: String(warning?.id || "").trim(),
-        attemptId: String(warning?.attemptId || "").trim(),
-        code: String(warning?.code || "desktop_warning").trim().toLowerCase(),
-        severity: String(warning?.severity || "warning").trim().toLowerCase(),
-        blocking: warning?.blocking === true,
-        operation: String(warning?.operation || "").trim().toLowerCase(),
-        desktopSlug: String(warning?.desktopSlug || "").trim().toLowerCase(),
-        threadId: String(warning?.threadId || "").trim() || null,
-        message: String(warning?.message || "").trim(),
-        recommendedAction: String(warning?.recommendedAction || "").trim(),
-        observedAt: String(warning?.observedAt || "").trim(),
-      }));
-    }
     nextMessage = normalizeNoReplyAssistantMessage(nextMessage);
     if (input.forceDeliveryAfterInterrupt === true) nextMessage.forceDeliveryAfterInterrupt = true;
     if (input.steerActiveTurn === true || input.steerActiveTurn === false) nextMessage.steerActiveTurn = input.steerActiveTurn;

@@ -1902,6 +1902,8 @@ test("web shell exposes an instance-scoped desktop page", async () => {
   assert.match(deskComponent, /this\.api\.browserSessions\(threadId\)/);
   assert.match(deskComponent, /this\.api\.desktopLeases\(false, threadId\)/);
   assert.match(deskComponent, /this\.api\.acquireDesktopLease\(slug/);
+  assert.match(deskComponent, /action !== "stop" && \(!lease \|\| lease\.stale \|\| lease\.expired\)/);
+  assert.match(deskComponent, /recovered from its expired reservation and reserved/);
   assert.match(deskComponent, /this\.api\.releaseDesktopLease\(slug/);
   assert.match(deskComponent, /this\.api\.createDesktopShare\(slug, \{/);
   assert.match(deskTemplate, /<h3>Desktops<\/h3>/);

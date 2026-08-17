@@ -3,7 +3,7 @@ import { isAdminPrincipal, resourceOwnerUserId } from "../../core/src/policy.js"
 import { normalizeUserId } from "../../core/src/users.js";
 import { assertDesktopAccess, authorizeDesktopAccess, desktopAccessMode } from "../../core/src/desktop-access.js";
 import { desktopLeaseStore, normalizeDesktopSlug } from "./desktop-lease-store.js";
-import { desktopAccessWarnings, desktopWarningAttemptId } from "./desktop-access-warnings.js";
+import { desktopAccessWarnings, desktopWarningAttemptId, stoppedDesktopLeaseRecoveryState } from "./desktop-access-warnings.js";
 
 export { normalizeDesktopSlug } from "./desktop-lease-store.js";
 
@@ -364,6 +364,17 @@ export async function acquireDesktopLease(slug, payload = {}, env = process.env,
   const expiresAt = ttlMs > 0 ? new Date(Date.parse(now) + ttlMs).toISOString() : null;
   const store = desktopLeaseStore(env);
   const attemptId = desktopWarningAttemptId(payload);
+  const existingLease = await activeDesktopLeaseStatus(desktopSlug, env, { ownerUserId });
+  const desktopState = stoppedDesktopLeaseRecoveryState(options?.desktopState);
+  const recoveryCandidate = options?.allowStoppedLeaseRecovery === true && desktopState && existingLease &&
+    existingLease.threadId !== threadId && (existingLease.expired === true || existingLease.stale === true) && existingLease.stealable === true
+    ? {
+        id: existingLease.id,
+        threadId: existingLease.threadId,
+        heartbeatAt: existingLease.heartbeatAt,
+        expiresAt: existingLease.expiresAt,
+      }
+    : null;
   const result = await store.acquire(
     {
       desktopSlug,
@@ -379,7 +390,11 @@ export async function acquireDesktopLease(slug, payload = {}, env = process.env,
       expiresAt,
       metadata: payload.metadata,
     },
-    { force: payload.force === true, releaseReason: payload.force ? "force_acquired" : "superseded" },
+    {
+      force: payload.force === true,
+      releaseReason: payload.force ? "force_acquired" : recoveryCandidate ? "expired_stopped_auto_recovery" : "superseded",
+      recoveryCandidate,
+    },
   );
   if (!result.ok) {
     const lease = await activeDesktopLeaseStatus(desktopSlug, env, { ownerUserId });
@@ -393,11 +408,20 @@ export async function acquireDesktopLease(slug, payload = {}, env = process.env,
     };
   }
   const lease = await activeDesktopLeaseStatus(desktopSlug, env, { ownerUserId });
+  const recovery = result.recovered === true ? {
+    performed: true,
+    reason: "expired_stopped_auto_recovery",
+    desktopState,
+    previousLeaseId: String(result.previousLease?.id || ""),
+    previousThreadId: String(result.previousLease?.threadId || ""),
+  } : null;
   return {
     ok: true,
     attemptId,
     lease,
-    warnings: desktopAccessWarnings({ desktopSlug, threadId, operation: "acquire", attemptId, lease, decision: accessDecision }),
+    warnings: desktopAccessWarnings({ desktopSlug, threadId, operation: "acquire", attemptId, lease, decision: accessDecision, recovery }),
+    autoRecovered: recovery?.performed === true,
+    recovery,
     renewed: result.renewed === true,
     previousLease: publicDesktopLease(result.previousLease, new Map(), Date.now(), env),
   };

@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { normalizeDesktopSlug } from "./desktop-lease-store.js";
 
 const ACTION_OPERATIONS = new Set(["acquire", "connect", "open", "open-url", "prepare", "restart", "share", "start"]);
+const STOPPED_DESKTOP_STATES = new Set(["closed", "exited", "failed", "inactive", "prepared", "stopped"]);
 
 function clean(value = "") {
   return String(value || "").trim();
@@ -55,6 +56,11 @@ export function desktopWarningAttemptId(input = {}) {
   return clean(input.attemptId || input.requestId || input.idempotencyKey) || randomUUID();
 }
 
+export function stoppedDesktopLeaseRecoveryState(value = "") {
+  const state = lower(value);
+  return STOPPED_DESKTOP_STATES.has(state) ? state : "";
+}
+
 export function desktopAccessWarnings(input = {}) {
   const session = input.session && typeof input.session === "object" ? input.session : {};
   const lease = input.lease && typeof input.lease === "object" ? input.lease : session.lease || null;
@@ -70,6 +76,14 @@ export function desktopAccessWarnings(input = {}) {
   const add = (value) => {
     if (!warnings.some((item) => item.code === value.code)) warnings.push(warning({ ...value, attemptId, operation, desktopSlug, threadId, lease, observedAt }));
   };
+
+  if (input.recovery?.performed === true) {
+    add({
+      code: "desktop_lease_auto_recovered",
+      message: `Orkestr automatically released the expired or stale reservation for ${desktopSlug || "this desktop"} because the desktop was ${clean(input.recovery.desktopState) || "stopped"}, then reserved it for this thread.`,
+      recommendedAction: "No lease cleanup is needed; continue starting or connecting to the desktop.",
+    });
+  }
 
   if (lease?.expired === true || errorCode === "desktop_lease_expired") {
     add({

@@ -2968,8 +2968,8 @@ export class ApiService {
     return this.http.get<{ ok: boolean; desktopLeases: DesktopLeaseRecord[]; staleAfterMs?: number; generatedAt?: string }>(this.api(`/desktops/leases${query}`));
   }
 
-  acquireDesktopLease(slug: string, body: Record<string, unknown>): Observable<{ ok: boolean; lease?: DesktopLeaseRecord; attemptId?: string; warnings?: DesktopAccessWarning[] }> {
-    return this.http.post<{ ok: boolean; lease?: DesktopLeaseRecord; attemptId?: string; warnings?: DesktopAccessWarning[] }>(this.api(`/desktops/${encodeURIComponent(slug)}/acquire`), body);
+  acquireDesktopLease(slug: string, body: Record<string, unknown>): Observable<{ ok: boolean; lease?: DesktopLeaseRecord; attemptId?: string; warnings?: DesktopAccessWarning[]; autoRecovered?: boolean; recovery?: Record<string, unknown> | null }> {
+    return this.http.post<{ ok: boolean; lease?: DesktopLeaseRecord; attemptId?: string; warnings?: DesktopAccessWarning[]; autoRecovered?: boolean; recovery?: Record<string, unknown> | null }>(this.api(`/desktops/${encodeURIComponent(slug)}/acquire`), body);
   }
 
   releaseDesktopLease(slug: string, body: Record<string, unknown>): Observable<{ ok: boolean; lease?: DesktopLeaseRecord | null }> {

@@ -1,9 +1,7 @@
 import { activeDesktopLeaseStatus } from "../../../../../packages/browsers/src/desktop-leases.js";
-import { desktopAccessWarnings, desktopWarningAttemptId } from "../../../../../packages/browsers/src/desktop-access-warnings.js";
+import { listBrowserSessions } from "../../../../../packages/browsers/src/browsers.js";
+import { desktopAccessWarnings, desktopWarningAttemptId, stoppedDesktopLeaseRecoveryState } from "../../../../../packages/browsers/src/desktop-access-warnings.js";
 import { authorizeDesktopAccess } from "../../../../../packages/core/src/desktop-access.js";
-import { emitDesktopAccessChatWarning } from "../../../../../packages/core/src/desktop-access-chat-warning.js";
-
-export { emitDesktopAccessChatWarning };
 
 export function desktopShareReady(browser: any): boolean {
   if (!browser) return false;
@@ -22,6 +20,16 @@ export function desktopShareNotReadyReason(browser: any, fallback = "desktop_sha
 
 export function desktopAttemptId(request: any, input: Record<string, unknown> = {}) {
   return desktopWarningAttemptId({ attemptId: input.attemptId || request?.orkestrRequestId || request?.headers?.["x-request-id"] });
+}
+
+export async function desktopStoppedLeaseRecoveryOptions({ slug, threadId, principal, env = process.env }: any) {
+  const payload = await listBrowserSessions(env, { principal, threadId, publicProjection: true }).catch(() => null);
+  const desktop = (payload?.sessions || []).find((session: any) => String(session?.slug || session?.id || "").trim().toLowerCase() === String(slug || "").trim().toLowerCase());
+  const desktopState = stoppedDesktopLeaseRecoveryState(desktop?.status || desktop?.state);
+  return {
+    allowStoppedLeaseRecovery: Boolean(desktopState),
+    desktopState,
+  };
 }
 
 export async function desktopOperationWarnings({ slug, threadId, ownerUserId, operation, attemptId, principal, breakGlassOptions = {}, decision = null, errorCode = "", env = process.env }: any) {
