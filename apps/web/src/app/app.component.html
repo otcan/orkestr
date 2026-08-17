@@ -48,15 +48,16 @@
                   type="button"
                   (click)="openInstanceAccount(account)"
                   [disabled]="!!accountSwitchBusyRef"
+                  [attr.aria-label]="'Open ' + account.displayName + ' in a new tab'"
                 >
                   <strong>{{ account.displayName }}</strong>
-                  <small>{{ accountSwitchBusyRef === account.publicRef ? "OPENING…" : "OPEN" }}</small>
+                  <small>{{ accountSwitchBusyRef === account.publicRef ? "OPENING…" : "OPEN ↗" }}</small>
                 </button>
               } @empty {
                 <small class="instance-account-empty">No enabled child instances are currently available.</small>
               }
             </div>
-            <form method="post" [attr.action]="instanceChooserUrl()" autocomplete="off">
+            <form method="post" target="_blank" [attr.action]="instanceChooserUrl()" autocomplete="off">
               <label for="instance-switch-input">Log in to another instance</label>
               <input id="instance-switch-input" name="instance" required maxlength="120" autocapitalize="none" spellcheck="false" placeholder="Name or ins_… ID" />
               <button type="submit">CONTINUE</button>

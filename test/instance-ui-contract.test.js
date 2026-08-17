@@ -20,8 +20,13 @@ test("instance shell uses one lean navigation and canonical desktop and timer ro
   assert.match(instanceNavigation, /@if \(accountSwitcherEnabled\(\)\)/);
   assert.match(instanceNavigation, /class="instance-account-menu"/);
   assert.match(instanceNavigation, /openInstanceAccount\(account\)/);
+  assert.match(instanceNavigation, /aria-label.*in a new tab/);
   assert.match(instanceNavigation, /Log in to another instance/);
+  assert.match(instanceNavigation, /<form method="post" target="_blank"/);
   assert.match(instanceNavigation, /logoutBrowser\(\)/);
+  assert.match(component, /globalThis\.open\?\.\("about:blank", "_blank"\)/);
+  assert.match(component, /accountTab\.location\.replace\(result\.url \|\| account\.canonicalPath\)/);
+  assert.match(component, /finally\s*\{\s*this\.accountSwitchBusyRef = "";/);
   assert.match(component, /finally\s*\{[\s\S]*?location\?\.replace\(this\.instanceChooserUrl\(\)\)/);
   assert.match(instanceNavigation, /name="instance"/);
   assert.doesNotMatch(instanceNavigation, /Main Orkestr|primaryInstanceUrl/);

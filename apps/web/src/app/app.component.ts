@@ -3503,12 +3503,27 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   async openInstanceAccount(account: InstanceAccount): Promise<void> {
     if (this.accountSwitchBusyRef) return;
+    // Open the tab during the click event. Waiting for the session API first
+    // causes mobile browsers to treat window.open() as an unsolicited popup.
+    const accountTab = globalThis.open?.("about:blank", "_blank") || null;
+    if (!accountTab) {
+      this.error = "Your browser blocked the new account tab. Allow pop-ups for Orkestr and try again.";
+      this.renderNow();
+      return;
+    }
+    try {
+      accountTab.opener = null;
+    } catch {
+      // The new tab can still be navigated when a browser protects this field.
+    }
     this.accountSwitchBusyRef = account.publicRef;
     try {
       const result = await firstValueFrom(this.api.openInstanceAccount(account.publicRef));
-      globalThis.location?.assign(result.url || account.canonicalPath);
+      accountTab.location.replace(result.url || account.canonicalPath);
     } catch (error) {
+      accountTab.close();
       this.error = this.errorText(error);
+    } finally {
       this.accountSwitchBusyRef = "";
       this.renderNow();
     }
