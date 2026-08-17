@@ -162,7 +162,12 @@ function targetFor(route: CanonicalAppRoute, instance: ResolvedInstance): Canoni
   if (!baseUrl) return null;
   return {
     instanceId: instance.internalInstanceId,
-    upstreamPath: `/instance/${encodeURIComponent(route.instancePublicRef)}${route.upstreamPath}`,
+    // The canonical prefix belongs to the broker-facing URL. Tenant instances
+    // serve their application at root, just like the legacy /i/:id/app proxy,
+    // and use X-Forwarded-Prefix plus the rewritten <base> for browser URLs.
+    // Forwarding the public prefix upstream makes tenant API routes fall
+    // through to the SPA shell, leaving the browser stuck on "Loading".
+    upstreamPath: route.upstreamPath,
     prefixPath: route.prefixPath,
     baseUrl,
   };

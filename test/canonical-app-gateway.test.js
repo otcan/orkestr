@@ -320,6 +320,11 @@ test("broker canonical gateway preserves HTTP bodies, queries, HTML base, stream
   });
 
   const upstream = http.createServer((request, response) => {
+    if (request.url === "/api/setup/status") {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ ok: true, url: request.url }));
+      return;
+    }
     if (request.url?.includes("/stream")) {
       response.writeHead(200, { "content-type": "text/event-stream" });
       response.write("data: first\n\n");
@@ -416,9 +421,12 @@ test("broker canonical gateway preserves HTTP bodies, queries, HTML base, stream
   });
   assert.deepEqual(await postResponse.json(), {
     method: "POST",
-    url: `/instance/${registration.publicRef}/api/echo?keep=a%2Fb&n=2`,
+    url: "/api/echo?keep=a%2Fb&n=2",
     body: JSON.stringify({ hello: "world" }),
   });
+  const setupStatusResponse = await fetch(`${base}/api/setup/status`, { headers: { cookie } });
+  assert.equal(setupStatusResponse.headers.get("content-type"), "application/json");
+  assert.deepEqual(await setupStatusResponse.json(), { ok: true, url: "/api/setup/status" });
   const streamResponse = await fetch(`${base}/api/stream`, { headers: { cookie } });
   assert.equal(streamResponse.headers.get("content-type"), "text/event-stream");
   assert.equal(await streamResponse.text(), "data: first\n\ndata: final\n\n");
@@ -432,7 +440,7 @@ test("broker canonical gateway preserves HTTP bodies, queries, HTML base, stream
     socket.once("close", () => resolve(message));
     socket.once("error", reject);
   });
-  assert.equal(wsMessage, `/instance/${registration.publicRef}/api/socket?keep=1|ping`);
+  assert.equal(wsMessage, "/api/socket?keep=1|ping");
 
   const logout = await fetch(`${base}/api/setup/security/logout`, {
     method: "POST",
