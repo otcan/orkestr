@@ -3,6 +3,7 @@ import { isAdminPrincipal, resourceOwnerUserId } from "../../core/src/policy.js"
 import { normalizeUserId } from "../../core/src/users.js";
 import { assertDesktopAccess, authorizeDesktopAccess, desktopAccessMode } from "../../core/src/desktop-access.js";
 import { desktopLeaseStore, normalizeDesktopSlug } from "./desktop-lease-store.js";
+import { desktopAccessWarnings, desktopWarningAttemptId } from "./desktop-access-warnings.js";
 
 export { normalizeDesktopSlug } from "./desktop-lease-store.js";
 
@@ -156,7 +157,7 @@ export async function attachDesktopStateToSessions(sessions = [], env = process.
       .sort((left, right) => activityMs(right) - activityMs(left))
       .slice(0, 8)
       .map(publicDesktopThread);
-    return {
+    const decorated = {
       ...session,
       lease,
       leased: !!lease,
@@ -164,6 +165,16 @@ export async function attachDesktopStateToSessions(sessions = [], env = process.
       leaseOwnerLabel: lease?.ownerThreadLabel || null,
       relatedThreads,
       relatedThreadCount: relatedThreads.length,
+    };
+    return {
+      ...decorated,
+      warnings: desktopAccessWarnings({
+        session: decorated,
+        lease,
+        decision: session?.desktopAccess,
+        threadId: options?.threadId,
+        operation: "status",
+      }),
     };
   });
 }
@@ -326,7 +337,7 @@ export async function acquireDesktopLease(slug, payload = {}, env = process.env,
       throw error;
     }
   }
-  await assertDesktopAccess({
+  const accessDecision = await assertDesktopAccess({
     principal: options?.principal,
     threadId,
     desktopSlug,
@@ -352,6 +363,7 @@ export async function acquireDesktopLease(slug, payload = {}, env = process.env,
   const now = nowIso();
   const expiresAt = ttlMs > 0 ? new Date(Date.parse(now) + ttlMs).toISOString() : null;
   const store = desktopLeaseStore(env);
+  const attemptId = desktopWarningAttemptId(payload);
   const result = await store.acquire(
     {
       desktopSlug,
@@ -370,16 +382,22 @@ export async function acquireDesktopLease(slug, payload = {}, env = process.env,
     { force: payload.force === true, releaseReason: payload.force ? "force_acquired" : "superseded" },
   );
   if (!result.ok) {
+    const lease = await activeDesktopLeaseStatus(desktopSlug, env, { ownerUserId });
     return {
       ok: false,
       error: "desktop_leased",
-      lease: publicDesktopLease(result.conflict, new Map(), Date.now(), env),
+      attemptId,
+      lease,
+      warnings: desktopAccessWarnings({ desktopSlug, threadId, operation: "acquire", attemptId, lease, decision: accessDecision, errorCode: "desktop_lease_owned_by_other_thread" }),
       message: `Desktop ${desktopSlug} is already leased for ${ownerUserId}.`,
     };
   }
+  const lease = await activeDesktopLeaseStatus(desktopSlug, env, { ownerUserId });
   return {
     ok: true,
-    lease: await activeDesktopLeaseStatus(desktopSlug, env, { ownerUserId }),
+    attemptId,
+    lease,
+    warnings: desktopAccessWarnings({ desktopSlug, threadId, operation: "acquire", attemptId, lease, decision: accessDecision }),
     renewed: result.renewed === true,
     previousLease: publicDesktopLease(result.previousLease, new Map(), Date.now(), env),
   };

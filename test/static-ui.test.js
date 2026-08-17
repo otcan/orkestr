@@ -1909,6 +1909,10 @@ test("web shell exposes an instance-scoped desktop page", async () => {
   assert.match(deskTemplate, /Assigned threads/);
   assert.match(deskTemplate, /Open Desktop/);
   assert.match(deskTemplate, /Reserve/);
+  assert.match(deskTemplate, /desktop-warning-list/);
+  assert.match(deskTemplate, /warning\.recommendedAction/);
+  assert.match(deskComponent, /captureErrorWarnings/);
+  assert.match(api, /interface DesktopAccessWarning/);
   assert.match(api, /interface DesktopLeaseRecord/);
   assert.match(api, /desktopLeases\(includeReleased = false, threadId = "", breakGlassReason = ""\)/);
   assert.match(api, /acquireDesktopLease\(slug: string/);
@@ -1919,6 +1923,7 @@ test("web shell exposes an instance-scoped desktop page", async () => {
   assert.match(opsComponent, /forceReleaseDesktopLease\(lease: DesktopLeaseRecord\)/);
   assert.match(opsTemplate, /Desktop leases/);
   assert.match(styles, /\.instance-desktop-grid/);
+  assert.match(styles, /\.desktop-warning\.error/);
   assert.match(styles, /\.desktop-lease-list/);
 });
 

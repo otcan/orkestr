@@ -94,6 +94,18 @@
           <div class="notice error">{{ browser.launchError }}</div>
         }
 
+        @if (browserWarnings(browser).length) {
+          <div class="desktop-warning-list" role="alert" aria-live="polite">
+            @for (warning of browserWarnings(browser); track warning.code) {
+              <div class="desktop-warning" [class.error]="warning.severity === 'error'">
+                <strong>{{ warningTitle(warning) }}</strong>
+                <span>{{ warning.message }}</span>
+                <small>{{ warning.recommendedAction }}</small>
+              </div>
+            }
+          </div>
+        }
+
         <div class="desktop-actions instance-desktop-actions">
           @if (browserRunning(browser)) {
             <button type="button" (click)="openDesktop(browser)" [disabled]="actionBusy(browser)">Open Desktop</button>

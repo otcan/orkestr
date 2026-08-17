@@ -278,6 +278,23 @@ export interface BrowserSession {
   leaseOwnerLabel?: string | null;
   relatedThreads?: Array<Record<string, unknown>>;
   relatedThreadCount?: number;
+  warnings?: DesktopAccessWarning[];
+}
+
+export interface DesktopAccessWarning {
+  schemaVersion: number;
+  id: string;
+  attemptId: string;
+  code: string;
+  severity: "info" | "warning" | "error" | string;
+  blocking: boolean;
+  operation: string;
+  desktopSlug: string;
+  threadId?: string | null;
+  message: string;
+  recommendedAction: string;
+  lease?: Record<string, unknown> | null;
+  observedAt: string;
 }
 
 export interface DesktopShareResponse {
@@ -292,6 +309,8 @@ export interface DesktopShareResponse {
     status?: string;
     expiresAt?: string;
   };
+  attemptId?: string;
+  warnings?: DesktopAccessWarning[];
 }
 
 export interface DesktopShareRecord {
@@ -2933,8 +2952,8 @@ export class ApiService {
     return this.http.get<{ sessions: BrowserSession[]; browsers?: BrowserSession[]; source?: string; error?: string; message?: string }>(this.api(`/browser-sessions${query}`));
   }
 
-  browserAction(slug: string, action: string, body: Record<string, unknown> = {}): Observable<{ browser: BrowserSession }> {
-    return this.http.post<{ browser: BrowserSession }>(this.api(`/browser-sessions/${encodeURIComponent(slug)}/${encodeURIComponent(action)}`), body);
+  browserAction(slug: string, action: string, body: Record<string, unknown> = {}): Observable<{ browser: BrowserSession; attemptId?: string; warnings?: DesktopAccessWarning[] }> {
+    return this.http.post<{ browser: BrowserSession; attemptId?: string; warnings?: DesktopAccessWarning[] }>(this.api(`/browser-sessions/${encodeURIComponent(slug)}/${encodeURIComponent(action)}`), body);
   }
 
   desktopLeases(includeReleased = false, threadId = "", breakGlassReason = ""): Observable<{ ok: boolean; desktopLeases: DesktopLeaseRecord[]; staleAfterMs?: number; generatedAt?: string }> {
@@ -2949,8 +2968,8 @@ export class ApiService {
     return this.http.get<{ ok: boolean; desktopLeases: DesktopLeaseRecord[]; staleAfterMs?: number; generatedAt?: string }>(this.api(`/desktops/leases${query}`));
   }
 
-  acquireDesktopLease(slug: string, body: Record<string, unknown>): Observable<{ ok: boolean; lease?: DesktopLeaseRecord }> {
-    return this.http.post<{ ok: boolean; lease?: DesktopLeaseRecord }>(this.api(`/desktops/${encodeURIComponent(slug)}/acquire`), body);
+  acquireDesktopLease(slug: string, body: Record<string, unknown>): Observable<{ ok: boolean; lease?: DesktopLeaseRecord; attemptId?: string; warnings?: DesktopAccessWarning[] }> {
+    return this.http.post<{ ok: boolean; lease?: DesktopLeaseRecord; attemptId?: string; warnings?: DesktopAccessWarning[] }>(this.api(`/desktops/${encodeURIComponent(slug)}/acquire`), body);
   }
 
   releaseDesktopLease(slug: string, body: Record<string, unknown>): Observable<{ ok: boolean; lease?: DesktopLeaseRecord | null }> {

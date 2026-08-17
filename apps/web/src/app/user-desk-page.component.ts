@@ -1,7 +1,7 @@
 import { DatePipe } from "@angular/common";
 import { Component, OnInit, inject } from "@angular/core";
 import { firstValueFrom, timeout } from "rxjs";
-import { ApiService, BrowserSession, DesktopLeaseRecord, ThreadSummary } from "./api.service";
+import { ApiService, BrowserSession, DesktopAccessWarning, DesktopLeaseRecord, ThreadSummary } from "./api.service";
 
 @Component({
   selector: "ork-user-desk-page",
@@ -19,6 +19,7 @@ export class UserDeskPageComponent implements OnInit {
   browsers: BrowserSession[] = [];
   leases: DesktopLeaseRecord[] = [];
   threads: ThreadSummary[] = [];
+  actionWarnings: Record<string, DesktopAccessWarning[]> = {};
 
   ngOnInit(): void {
     void this.load();
@@ -57,12 +58,14 @@ export class UserDeskPageComponent implements OnInit {
         fencingToken: String(lease?.fencingToken || ""),
         reason: "user_desk",
       }));
+      this.actionWarnings[slug] = payload.warnings || [];
       this.browsers = this.upsertBrowser(payload.browser || browser);
       const label = { prepare: "prepared", start: "started", stop: "stopped", restart: "restarted" }[action];
       this.notice = `${this.browserLabel(payload.browser || browser)} ${label}.`;
       this.error = "";
       await this.load();
     } catch (error) {
+      this.captureErrorWarnings(slug, error);
       this.error = this.errorText(error);
     } finally {
       this.activeSlug = "";
@@ -83,11 +86,13 @@ export class UserDeskPageComponent implements OnInit {
         mode: "exclusive",
         purpose: "user_desk",
       }));
+      this.actionWarnings[slug] = payload.warnings || [];
       if (payload.lease) this.leases = this.upsertLease(payload.lease);
       this.notice = `${this.browserLabel(browser)} reserved.`;
       this.error = "";
       await this.load();
     } catch (error) {
+      this.captureErrorWarnings(slug, error);
       this.error = this.errorText(error);
     } finally {
       this.activeSlug = "";
@@ -104,6 +109,7 @@ export class UserDeskPageComponent implements OnInit {
     this.activeSlug = slug;
     try {
       await firstValueFrom(this.api.releaseDesktopLease(slug, { threadId, fencingToken: lease?.fencingToken, reason: "user_released" }));
+      this.actionWarnings[slug] = [];
       this.leases = this.leases.filter((item) => this.leaseSlug(item) !== slug);
       this.notice = `${this.browserLabel(browser)} released.`;
       this.error = "";
@@ -128,10 +134,12 @@ export class UserDeskPageComponent implements OnInit {
         fencingToken: String(lease?.fencingToken || ""),
         start: false,
       }));
+      this.actionWarnings[slug] = payload.warnings || [];
       this.shareUrl = payload.url || "";
       this.notice = this.shareUrl ? "Share link ready." : "Share requested.";
       this.error = "";
     } catch (error) {
+      this.captureErrorWarnings(slug, error);
       this.error = this.errorText(error);
     } finally {
       this.activeSlug = "";
@@ -160,12 +168,14 @@ export class UserDeskPageComponent implements OnInit {
         fencingToken: String(lease?.fencingToken || ""),
         start: false,
       }));
+      this.actionWarnings[slug] = payload.warnings || [];
       if (!payload.url) throw new Error("Desktop share did not return a URL.");
       if (pendingWindow) pendingWindow.location.href = payload.url;
       else window.location.assign(payload.url);
       this.error = "";
     } catch (error) {
       pendingWindow?.close();
+      this.captureErrorWarnings(slug, error);
       this.error = this.errorText(error);
     } finally {
       this.activeSlug = "";
@@ -212,8 +222,21 @@ export class UserDeskPageComponent implements OnInit {
   attentionCount(): number {
     return this.browsers.filter((browser) => {
       const lease = this.browserLease(browser);
-      return Boolean(browser.launchError) || Boolean(lease?.stale || lease?.expired);
+      return Boolean(browser.launchError) || Boolean(lease?.stale || lease?.expired) || this.browserWarnings(browser).length > 0;
     }).length;
+  }
+
+  browserWarnings(browser: BrowserSession): DesktopAccessWarning[] {
+    const slug = this.browserSlug(browser);
+    const embedded = Array.isArray(browser.warnings) ? browser.warnings : [];
+    const attempted = Array.isArray(this.actionWarnings[slug]) ? this.actionWarnings[slug] : [];
+    const unique = new Map<string, DesktopAccessWarning>();
+    for (const warning of [...embedded, ...attempted]) unique.set(warning.code, warning);
+    return [...unique.values()];
+  }
+
+  warningTitle(warning: DesktopAccessWarning): string {
+    return String(warning.code || "desktop_warning").replace(/^desktop_/, "").replaceAll("_", " ");
   }
 
   browserHealthLabel(browser: BrowserSession): string {
@@ -297,5 +320,13 @@ export class UserDeskPageComponent implements OnInit {
       if (record.status) return `HTTP ${record.status}${record.statusText ? ` ${record.statusText}` : ""}`;
     }
     return String(error || "Unknown error");
+  }
+
+  private captureErrorWarnings(slug: string, error: unknown): void {
+    if (!error || typeof error !== "object") return;
+    const response = (error as { error?: unknown }).error;
+    if (!response || typeof response !== "object") return;
+    const warnings = (response as { warnings?: unknown }).warnings;
+    if (Array.isArray(warnings)) this.actionWarnings[slug] = warnings as DesktopAccessWarning[];
   }
 }

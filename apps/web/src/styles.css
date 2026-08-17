@@ -3368,6 +3368,43 @@ ork-first-thread-wizard.first-thread-host {
   padding-top: 4px;
 }
 
+.desktop-warning-list {
+  display: grid;
+  gap: 8px;
+}
+
+.desktop-warning {
+  display: grid;
+  gap: 5px;
+  border: 1px solid rgba(245, 183, 74, 0.52);
+  border-radius: 8px;
+  background: rgba(86, 54, 7, 0.42);
+  color: #fde68a;
+  padding: 10px 11px;
+}
+
+.desktop-warning.error {
+  border-color: rgba(248, 113, 113, 0.55);
+  background: rgba(127, 29, 29, 0.28);
+  color: #fecaca;
+}
+
+.desktop-warning strong {
+  font-size: 0.76rem;
+  letter-spacing: 0.04em;
+  text-transform: capitalize;
+}
+
+.desktop-warning span,
+.desktop-warning small {
+  overflow-wrap: anywhere;
+}
+
+.desktop-warning small {
+  color: currentColor;
+  opacity: 0.78;
+}
+
 .timer-create-panel {
   margin: 18px 0;
   border: 1px solid rgba(119, 205, 126, 0.18);

@@ -17,6 +17,7 @@ import {
   publicDesktopLeases,
   releaseDesktopLease,
 } from "../../../../../packages/browsers/src/desktop-leases.js";
+import { desktopAccessWarnings, desktopWarningAttemptId } from "../../../../../packages/browsers/src/desktop-access-warnings.js";
 import {
   createDesktopShare,
   desktopShareCookieHeader,
@@ -35,11 +36,13 @@ import { isAdminPrincipal, resourceOwnerUserId } from "../../../../../packages/c
 import { getThreadForPrincipal } from "../../../../../packages/core/src/threads.js";
 import {
   assertDesktopAccess,
+  authorizeDesktopAccess,
   advanceDesktopResourceGeneration,
   backfillThreadDesktopGrants,
   listThreadDesktopGrants,
   setThreadDesktopGrants,
 } from "../../../../../packages/core/src/desktop-access.js";
+import { emitDesktopAccessChatWarning } from "../../../../../packages/core/src/desktop-access-chat-warning.js";
 import {
   consumeDesktopCapability,
   desktopCapabilityRequired,
@@ -136,8 +139,11 @@ export class BrowsersController {
     }
     if (body.force === true && !isAdminPrincipal(principal)) throw httpError("desktop_force_acquire_admin_required", 403);
     await this.assertDesktopSanitized("acquire", principal, slug, { ...body, ownerUserId });
-    const result = await acquireDesktopLease(slug, { ...body, ownerUserId }, process.env, { principal, ...breakGlassOptions });
-    if (!result.ok) throw httpError("desktop_leased", 409);
+    const attemptId = this.desktopAttemptId(request, body);
+    const result = await acquireDesktopLease(slug, { ...body, ownerUserId, attemptId }, process.env, { principal, ...breakGlassOptions });
+    const threadId = String(body.threadId || body.ownerThreadId || "").trim();
+    await emitDesktopAccessChatWarning({ threadId, attemptId, warnings: result.warnings }, process.env);
+    if (!result.ok) throw httpError("desktop_leased", 409, { attemptId, warnings: result.warnings, lease: result.lease });
     return result;
   }
 
@@ -190,13 +196,14 @@ export class BrowsersController {
     const principal = requestPrincipal(request);
     const breakGlassOptions = this.breakGlassInputs(principal, body);
     const threadId = String(body.threadId || body.ownerThreadId || "").trim();
+    const attemptId = this.desktopAttemptId(request, body);
     const ownerUserId = threadId ? await this.ownerUserIdFromLeaseBody(body, principal) : String(body.ownerUserId || "").trim();
     if (desktopCapabilityRequired(process.env, { threadId, desktopSlug: slug }) && !breakGlassOptions.breakGlass) {
       const resolved = await resolveExactDesktopGrant({ principal, threadId, permission: "share", scope: "visible_interaction", audience: "desktop-share" }, process.env);
       if (resolved.selection.resource.resourceKey !== normalizeDesktopSlug(slug)) throw httpError("desktop_server_resolved_target_mismatch", 403);
     }
     await this.assertDesktopSanitized("share", principal, slug, body);
-    await assertDesktopAccess({
+    const accessDecision = await assertDesktopAccess({
       principal,
       threadId,
       desktopSlug: slug,
@@ -204,6 +211,8 @@ export class BrowsersController {
       permission: "share",
       ...breakGlassOptions,
     }, process.env);
+    const warnings = await this.desktopOperationWarnings({ slug, threadId, ownerUserId, operation: "share", attemptId, principal, breakGlassOptions, decision: accessDecision });
+    await emitDesktopAccessChatWarning({ threadId, attemptId, warnings }, process.env);
     let browser: any = null;
     let startError = "";
     const startRequested = body.start !== false;
@@ -219,8 +228,8 @@ export class BrowsersController {
       } catch (error) {
         startError = String((error as Error)?.message || error || "desktop_start_failed");
       }
-      if (startError) throw httpError(startError, 503);
-      if (!desktopShareReady(browser)) throw httpError(desktopShareNotReadyReason(browser), 503);
+      if (startError) throw httpError(startError, 503, { attemptId, warnings });
+      if (!desktopShareReady(browser)) throw httpError(desktopShareNotReadyReason(browser), 503, { attemptId, warnings });
     }
     const share = await createDesktopShare({
       desktopSlug: slug,
@@ -233,6 +242,8 @@ export class BrowsersController {
     });
     return {
       ...share,
+      attemptId,
+      warnings,
       browser: redactDesktopSession(browser),
       desktopStart: {
         requested: startRequested,
@@ -406,11 +417,15 @@ export class BrowsersController {
 
   private async runAction(request: any, slug: string, action: string, body: Record<string, unknown> = {}) {
     const principal = requestPrincipal(request);
+    const threadId = String(body.threadId || body.ownerThreadId || "").trim();
+    const attemptId = this.desktopAttemptId(request, body);
+    let ownerUserId = String(body.ownerUserId || "").trim();
+    let breakGlassOptions: any = {};
+    let warnings: any[] = [];
     try {
       const normalized = String(action || "").trim().toLowerCase();
-      const threadId = String(body.threadId || body.ownerThreadId || "").trim();
-      const ownerUserId = threadId ? await this.ownerUserIdFromLeaseBody(body, principal) : String(body.ownerUserId || "").trim();
-      const breakGlassOptions = this.breakGlassInputs(principal, body);
+      ownerUserId = threadId ? await this.ownerUserIdFromLeaseBody(body, principal) : ownerUserId;
+      breakGlassOptions = this.breakGlassInputs(principal, body);
       if (desktopCapabilityRequired(process.env, { threadId, desktopSlug: slug }) && !breakGlassOptions.breakGlass) {
         const consumed = await consumeDesktopCapability({
           capability: String(body.desktopCapability || "").trim(),
@@ -430,28 +445,55 @@ export class BrowsersController {
         ...breakGlassOptions,
       };
       await this.assertDesktopSanitized(normalized || "action", principal, slug, body);
-      if (normalized === "prepare") return { browser: redactDesktopSession(await prepareVirtualBrowser(slug, process.env, desktopOptions)) };
-      if (normalized === "start" || normalized === "open") return { browser: redactDesktopSession(await openVirtualBrowser(slug, process.env, "", desktopOptions)) };
+      warnings = await this.desktopOperationWarnings({ slug, threadId, ownerUserId, operation: normalized, attemptId, principal, breakGlassOptions });
+      await emitDesktopAccessChatWarning({ threadId, attemptId, warnings }, process.env);
+      if (normalized === "prepare") return { browser: redactDesktopSession(await prepareVirtualBrowser(slug, process.env, desktopOptions)), attemptId, warnings };
+      if (normalized === "start" || normalized === "open") return { browser: redactDesktopSession(await openVirtualBrowser(slug, process.env, "", desktopOptions)), attemptId, warnings };
       if (normalized === "open-url" || normalized === "openurl" || normalized === "navigate") {
-        return { browser: redactDesktopSession(await openUrlInVirtualBrowser(slug, String(body.url || body.href || ""), process.env, desktopOptions)) };
+        return { browser: redactDesktopSession(await openUrlInVirtualBrowser(slug, String(body.url || body.href || ""), process.env, desktopOptions)), attemptId, warnings };
       }
-      if (normalized === "stop") return { browser: redactDesktopSession(await stopVirtualBrowser(slug, process.env, desktopOptions)) };
+      if (normalized === "stop") return { browser: redactDesktopSession(await stopVirtualBrowser(slug, process.env, desktopOptions)), attemptId, warnings };
       if (normalized === "restart") {
         const browser = await restartVirtualBrowser(slug, process.env, desktopOptions);
         await advanceDesktopResourceGeneration(slug, ownerUserId, { reason: "desktop_restarted" }, process.env);
-        return { browser: redactDesktopSession(browser) };
+        return { browser: redactDesktopSession(browser), attemptId, warnings };
       }
       if (normalized === "cleanup") {
         const browser = await cleanupVirtualBrowser(slug, process.env, desktopOptions);
         await advanceDesktopResourceGeneration(slug, ownerUserId, { reason: "desktop_cleaned" }, process.env);
-        return { browser: redactDesktopSession(browser) };
+        return { browser: redactDesktopSession(browser), attemptId, warnings };
       }
       throw httpError("unknown_browser_action", 404);
     } catch (error) {
       const statusCode = Number((error as { statusCode?: number })?.statusCode || 0);
-      if (statusCode) throw httpError(String((error as Error)?.message || "browser_action_failed"), statusCode);
+      if (statusCode) {
+        const errorCode = String((error as Error)?.message || "browser_action_failed");
+        const errorWarnings = await this.desktopOperationWarnings({ slug, threadId, ownerUserId, operation: action, attemptId, principal, breakGlassOptions, errorCode });
+        warnings = [...new Map([...warnings, ...errorWarnings].map((warning) => [warning.code, warning])).values()];
+        await emitDesktopAccessChatWarning({ threadId, attemptId, warnings }, process.env);
+        throw httpError(errorCode, statusCode, { attemptId, warnings });
+      }
       throw error;
     }
+  }
+
+  private desktopAttemptId(request: any, input: Record<string, unknown> = {}) {
+    return desktopWarningAttemptId({ attemptId: input.attemptId || request?.orkestrRequestId || request?.headers?.["x-request-id"] });
+  }
+
+  private async desktopOperationWarnings({ slug, threadId, ownerUserId, operation, attemptId, principal, breakGlassOptions = {}, decision = null, errorCode = "" }: any) {
+    const [lease, accessDecision] = await Promise.all([
+      activeDesktopLeaseStatus(slug, process.env, { principal, ownerUserId }).catch(() => null),
+      decision ? Promise.resolve(decision) : authorizeDesktopAccess({
+        principal,
+        threadId,
+        desktopSlug: slug,
+        ownerUserId,
+        permission: operation === "share" ? "share" : operation === "acquire" ? "acquire" : "operate",
+        ...breakGlassOptions,
+      }, process.env).catch(() => null),
+    ]);
+    return desktopAccessWarnings({ desktopSlug: slug, threadId, operation, attemptId, lease, decision: accessDecision, errorCode });
   }
 
   private async assertDesktopSanitized(action: string, principal: any, slug: string, input: Record<string, unknown> = {}) {

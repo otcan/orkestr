@@ -517,6 +517,7 @@ function safeLease(lease = null) {
     threadName: clean(lease.threadName || lease.ownerThreadLabel),
     mode: clean(lease.mode),
     stale: lease.stale === true,
+    expired: lease.expired === true,
     stealable: lease.stealable === true,
     acquiredAt: clean(lease.acquiredAt),
     heartbeatAt: clean(lease.heartbeatAt),
@@ -569,6 +570,7 @@ function publicDesktopRecord(session = {}) {
     leaseOwnerLabel: clean(session.leaseOwnerLabel),
     notes: clean(session.notes || session.purpose).slice(0, 1000),
     source: clean(session.source),
+    warnings: Array.isArray(session.warnings) ? session.warnings : [],
   };
 }
 
