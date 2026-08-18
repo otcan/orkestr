@@ -22,6 +22,7 @@ import {
 import { deleteTimerForPrincipal, listTimersForPrincipal } from "../../../../../packages/core/src/timers.js";
 import {
   appendThreadMessage,
+  assertThreadOperational,
   createThreadForPrincipal,
   deleteThreadForPrincipal,
   enqueueThreadInputForPrincipal,
@@ -29,6 +30,7 @@ import {
   listThreadMessages,
   updateThread,
 } from "../../../../../packages/core/src/threads.js";
+import { restoreRetiredThread, retireThread } from "../../../../../packages/core/src/thread-retirement.js";
 import { requestPrincipal } from "../../../../../packages/core/src/principal.js";
 import { isAdminPrincipal } from "../../../../../packages/core/src/policy.js";
 import { parseThreadInputCommand } from "../../../../../packages/core/src/thread-commands.js";
@@ -199,6 +201,10 @@ function refreshIdleThreadMetadataQuery(query: Record<string, unknown> = {}): bo
     optionalBodyBoolean(query, "liveMetadata", false);
 }
 
+function includeRetiredThreadsQuery(query: Record<string, unknown> = {}): boolean {
+  return String(query.includeRetired || "").trim().toLowerCase() === "true";
+}
+
 function safeCloneSegment(value: string): string {
   const withoutGitSuffix = value.replace(/\.git$/i, "");
   const tail = withoutGitSuffix.split(/[/:]/).filter(Boolean).at(-1) || "repo";
@@ -357,8 +363,8 @@ export class ThreadsController {
     private readonly threadRuntimeService: ThreadRuntimeService,
   ) {}
 
-  private async assertThreadSanitized(action: string, principal: any, thread: any, input: Record<string, unknown> = {}) {
-    return this.threadActionSanitizer.assertAllowed(action, principal, thread, input);
+  private async assertThreadSanitized(action: string, principal: any, thread: any, input: Record<string, unknown> = {}, options: { allowRetired?: boolean } = {}) {
+    return this.threadActionSanitizer.assertAllowed(action, principal, thread, input, options);
   }
 
   private assertThreadAdminOnly(action: string, principal: any) {
@@ -477,6 +483,7 @@ export class ThreadsController {
     return threadSummaryPayload({
       principal: requestPrincipal(request),
       includeAllUserThreads: includeAllUserThreadsQuery(query),
+      includeRetired: includeRetiredThreadsQuery(query),
       refreshIdleMetadata: refreshIdleThreadMetadataQuery(query),
     });
   }
@@ -536,6 +543,7 @@ export class ThreadsController {
     const principal = requestPrincipal(request);
     const thread = await getThread(threadId);
     if (!thread) throw httpError("thread_not_found", 404);
+    assertThreadOperational(thread);
     const parsedCommand = body.parseCommands === true || body.controlAllowed === true || body.originOwner === true
       ? parseThreadInputCommand(body)
       : { command: null, text: String(body.text || "") };
@@ -1016,6 +1024,31 @@ export class ThreadsController {
     const thread = await getThread(threadId);
     if (!thread) throw httpError("thread_not_found", 404);
     return { thread };
+  }
+
+  @Post(":threadId/retire")
+  @HttpCode(200)
+  async retire(@Req() request: any, @Param("threadId") threadId: string, @Body() body: Record<string, unknown> = {}) {
+    const principal = requestPrincipal(request);
+    const thread = await getThread(threadId);
+    if (!thread) throw httpError("thread_not_found", 404);
+    await this.assertThreadSanitized("thread.retire", principal, thread, body, { allowRetired: true });
+    const result: any = await retireThread(thread.id, {
+      actorUserId: principal?.userId || "system",
+      reason: String(body.reason || "retired_by_owner"),
+    });
+    return { ...result, thread: await threadRuntimeSummary(result.thread, await listThreadMessages(result.thread.id)) };
+  }
+
+  @Post(":threadId/restore")
+  @HttpCode(200)
+  async restore(@Req() request: any, @Param("threadId") threadId: string, @Body() body: Record<string, unknown> = {}) {
+    const principal = requestPrincipal(request);
+    const thread = await getThread(threadId);
+    if (!thread) throw httpError("thread_not_found", 404);
+    await this.assertThreadSanitized("thread.restore", principal, thread, body, { allowRetired: true });
+    const result: any = await restoreRetiredThread(thread.id, { actorUserId: principal?.userId || "system" });
+    return { ...result, thread: await threadRuntimeSummary(result.thread, await listThreadMessages(result.thread.id)) };
   }
 
   @Delete(":threadId")

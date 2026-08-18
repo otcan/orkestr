@@ -6,6 +6,7 @@ import {
 import { assertSanitizedAction } from "../../../../../packages/core/src/llm-sanitizer.js";
 import { isAdminPrincipal } from "../../../../../packages/core/src/policy.js";
 import {
+  assertThreadOperational,
   enqueueThreadInputForPrincipal,
   getThread,
   updateThread,
@@ -33,7 +34,8 @@ export class ThreadRuntimeService {
 
 @Injectable()
 export class ThreadActionSanitizerService {
-  async assertAllowed(action: string, principal: any, thread: any, input: Record<string, unknown> = {}) {
+  async assertAllowed(action: string, principal: any, thread: any, input: Record<string, unknown> = {}, { allowRetired = false }: { allowRetired?: boolean } = {}) {
+    if (!allowRetired) assertThreadOperational(thread);
     if (isAdminPrincipal(principal)) return null;
     const capabilities = await userScopedCapabilityHints({
       userId: thread?.ownerUserId || principal?.userId || "",

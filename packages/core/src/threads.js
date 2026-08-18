@@ -148,6 +148,19 @@ export async function listThreadsForPrincipal(principal, env = process.env) {
   return filterResourcesForPrincipal(await listThreads(env), principal, env);
 }
 
+export function isThreadRetired(thread = {}) {
+  const state = String(thread?.state || "").trim().toLowerCase();
+  return Boolean(thread?.retiredAt) || state === "retiring" || state === "retired";
+}
+
+export function assertThreadOperational(thread = {}) {
+  if (!isThreadRetired(thread)) return;
+  const error = new Error("thread_retired");
+  error.statusCode = 410;
+  error.code = "thread_retired";
+  throw error;
+}
+
 export async function getThread(threadId, env = process.env) {
   const id = normalizeThreadId(threadId);
   const threads = await listThreads(env);
@@ -564,6 +577,7 @@ export async function appendThreadMessage(threadId, input, env = process.env) {
     error.statusCode = 404;
     throw error;
   }
+  assertThreadOperational(thread);
   const messageRepository = createThreadMessageRepository(env);
   const filePath = await messageRepository.pathForThread(thread.id);
   const message = await enqueueMessageMutation(filePath, async () => {
@@ -768,6 +782,7 @@ async function activeDuplicateThreadInput(threadId, input, env = process.env) {
 
 export async function enqueueThreadInput(threadId, input, env = process.env) {
   const thread = await getThread(threadId, env);
+  if (thread) assertThreadOperational(thread);
   const nextInput = whatsappBindingInputDefaults(thread, input);
   const duplicate = await activeDuplicateThreadInput(thread?.id || threadId, nextInput, env);
   if (duplicate) {
@@ -789,6 +804,7 @@ export async function enqueueThreadInput(threadId, input, env = process.env) {
 
 export async function enqueueThreadInputForPrincipal(threadId, input, principal, env = process.env) {
   const thread = await getThreadForPrincipal(threadId, principal, env);
+  assertThreadOperational(thread);
   const nextInput = whatsappBindingInputDefaults(thread, { ...input, ownerUserId: thread.ownerUserId });
   const duplicate = await activeDuplicateThreadInput(thread.id, nextInput, env);
   if (duplicate) {

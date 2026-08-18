@@ -5,7 +5,7 @@ import { RAW_TERMINAL_RUNTIME_KIND } from "../../../packages/core/src/raw-termin
 import { resolveCodexThreadMetadata, resolveCodexThreadMetadataBatch, runtimeStatus } from "../../../packages/core/src/runtime-leases.js";
 import { isAdminPrincipal, resourceOwnerUserId } from "../../../packages/core/src/policy.js";
 import { adminPrincipal } from "../../../packages/core/src/principal.js";
-import { getThread, listThreadMessages, listThreads, listThreadsForPrincipal } from "../../../packages/core/src/threads.js";
+import { getThread, isThreadRetired, listThreadMessages, listThreads, listThreadsForPrincipal } from "../../../packages/core/src/threads.js";
 import { detectThreadGitState } from "../../../packages/core/src/thread-workers.js";
 import { defaultAdminUser, normalizeUserId } from "../../../packages/core/src/users.js";
 import { appendEvent } from "../../../packages/storage/src/store.js";
@@ -19,6 +19,7 @@ type ThreadSummaryOptions = {
   payloadCacheTtlMs?: number;
   runtimeStatusCacheTtlMs?: number;
   includeAllUserThreads?: boolean;
+  includeRetired?: boolean;
   principal?: Record<string, any> | null;
   sampleRuntime?: boolean;
   refreshMetadata?: boolean;
@@ -355,15 +356,16 @@ function threadSummarySlowMs(): number {
   return Number.isFinite(parsed) ? Math.max(0, parsed) : 1500;
 }
 
-async function listThreadSummaryScope(principal: Record<string, any> | null, includeAllUserThreads: boolean) {
+async function listThreadSummaryScope(principal: Record<string, any> | null, includeAllUserThreads: boolean, includeRetired = false) {
   const effectivePrincipal = principal || adminPrincipal(defaultAdminUser());
+  const visible = (thread: any) => thread.threadKind !== "task-agent" && (includeRetired || !isThreadRetired(thread));
   if (includeAllUserThreads || !isAdminPrincipal(effectivePrincipal)) {
-    return (await listThreadsForPrincipal(effectivePrincipal)).filter((thread: any) => thread.threadKind !== "task-agent");
+    return (await listThreadsForPrincipal(effectivePrincipal)).filter(visible);
   }
 
   const ownerUserId = normalizeUserId(effectivePrincipal.userId || defaultAdminUser().id);
   const threads = await listThreads();
-  return threads.filter((thread: any) => resourceOwnerUserId(thread) === ownerUserId && thread.threadKind !== "task-agent");
+  return threads.filter((thread: any) => resourceOwnerUserId(thread) === ownerUserId && visible(thread));
 }
 
 async function listThreadMessagesForSummary(threadId: string) {
@@ -543,6 +545,7 @@ async function cachedSummaryRuntimeStatus(thread: any, messages: any[] = [], ttl
 }
 
 function threadSummaryState(thread: any, status: any): string {
+  if (isThreadRetired(thread)) return "retired";
   const state = nonEmptyString(status?.state) || nonEmptyString(thread?.state) || "sleeping";
   if (status) return state;
   return transientRuntimeStates.has(state.toLowerCase()) && !hasOpenRuntimeLease(thread) ? "sleeping" : state;
@@ -903,7 +906,7 @@ export async function threadRuntimeSummary(thread: any, messages: any[] = [], op
     codexThreadId: resolvedCodexThreadId || null,
     status: state,
     state,
-    routeEligible: true,
+    routeEligible: !isThreadRetired(thread),
     sessionName,
     paneId,
     tmuxTarget: paneId,
@@ -969,12 +972,14 @@ export async function threadSummaryPayload(options: ThreadSummaryOptions = {}) {
   const stalePayloadTtlMs = threadSummaryStalePayloadTtlMs();
   const principal = options.principal || null;
   const includeAllUserThreads = options.includeAllUserThreads === true;
+  const includeRetired = options.includeRetired === true;
   const refreshIdleMetadata = options.refreshIdleMetadata === true;
   const effectivePrincipal = principal || adminPrincipal(defaultAdminUser());
   const payloadCacheKey = JSON.stringify({
     cacheTtlMs,
     home: summaryEnv.ORKESTR_HOME || "",
     includeAllUserThreads,
+    includeRetired,
     refreshIdleMetadata,
     userId: effectivePrincipal?.userId || "admin",
     role: effectivePrincipal?.role || "admin",
@@ -1012,7 +1017,7 @@ export async function threadSummaryPayload(options: ThreadSummaryOptions = {}) {
     const instanceIdentity = canonicalAppLinksEnabled(summaryEnv)
       ? await readInstanceIdentity(summaryEnv).catch(() => null)
       : null;
-    const threads = await listThreadSummaryScope(effectivePrincipal, includeAllUserThreads);
+    const threads = await listThreadSummaryScope(effectivePrincipal, includeAllUserThreads, includeRetired);
     const activeThreadIds = new Set(threads.map((thread: any) => String(thread?.id || "")).filter(Boolean));
     for (const id of threadMetadataCache.keys()) {
       if (!activeThreadIds.has(id)) threadMetadataCache.delete(id);

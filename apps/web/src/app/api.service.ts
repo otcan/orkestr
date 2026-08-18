@@ -1261,6 +1261,10 @@ export interface ThreadSummary {
   title?: string;
   bindingName?: string;
   state?: string;
+  retiredAt?: string | null;
+  retiredBy?: string | null;
+  retirementReason?: string | null;
+  restoredAt?: string | null;
   status?: string;
   publicStatus?: string;
   publicStatusCode?: string;
@@ -2754,9 +2758,20 @@ export class ApiService {
     return this.http.get<Record<string, unknown>>(this.api("/models/status"));
   }
 
-  threads(options: { includeAllUsers?: boolean } = {}): Observable<{ threads: ThreadSummary[] }> {
-    const query = options.includeAllUsers ? "?includeAllUsers=true" : "";
+  threads(options: { includeAllUsers?: boolean; includeRetired?: boolean } = {}): Observable<{ threads: ThreadSummary[] }> {
+    const params = new URLSearchParams();
+    if (options.includeAllUsers) params.set("includeAllUsers", "true");
+    if (options.includeRetired) params.set("includeRetired", "true");
+    const query = params.size ? `?${params.toString()}` : "";
     return this.http.get<{ threads: ThreadSummary[] }>(this.api(`/threads${query}`));
+  }
+
+  retireThread(id: string, reason = ""): Observable<{ ok: boolean; thread: ThreadSummary }> {
+    return this.http.post<{ ok: boolean; thread: ThreadSummary }>(this.api(`/threads/${encodeURIComponent(id)}/retire`), { reason });
+  }
+
+  restoreThread(id: string): Observable<{ ok: boolean; thread: ThreadSummary }> {
+    return this.http.post<{ ok: boolean; thread: ThreadSummary }>(this.api(`/threads/${encodeURIComponent(id)}/restore`), {});
   }
 
   createThread(body: Record<string, unknown>): Observable<{ thread: ThreadSummary }> {

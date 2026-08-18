@@ -215,6 +215,8 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   creatingWhatsAppChat = false;
   detachingWhatsAppChat = false;
   deletingThread = false;
+  retiringThread = false;
+  showArchivedThreads = false;
   deleteThreadConfirm = "";
   deleteThreadWorkers = false;
   creditUsage: CreditUsageSummary | null = null;
@@ -341,7 +343,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     if (showBusy) this.busy = true;
     try {
       const [threadsResult, systemResult, setupResult, timersResult, whatsappResult, userResult, versionResult, instanceContextResult] = await Promise.allSettled([
-        firstValueFrom(this.api.threads()),
+        firstValueFrom(this.api.threads({ includeRetired: this.showArchivedThreads })),
         firstValueFrom(this.api.systemSummary()),
         firstValueFrom(this.api.setupStatus()),
         firstValueFrom(this.api.timers()),
@@ -2286,22 +2288,78 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   filteredThreads(): ThreadSummary[] {
     const needle = this.filterText.trim().toLowerCase();
-    if (!needle) return this.threads;
-    return this.threads.filter((thread) => this.threadMatchesFilter(thread));
+    const visible = this.sidebarThreads();
+    if (!needle) return visible;
+    return visible.filter((thread) => this.threadMatchesFilter(thread));
+  }
+
+  threadRetired(thread: ThreadSummary | null): boolean {
+    const state = String(thread?.state || thread?.status || "").trim().toLowerCase();
+    return Boolean(thread?.retiredAt) || state === "retiring" || state === "retired";
+  }
+
+  private sidebarThreads(): ThreadSummary[] {
+    return this.threads.filter((thread) => this.threadRetired(thread) === this.showArchivedThreads);
   }
 
   threadTreeRoots(): ThreadSummary[] {
-    const roots = this.threads
-      .filter((thread) => !thread.parentThreadId || !this.threads.some((candidate) => candidate.id === thread.parentThreadId))
+    const visible = this.sidebarThreads();
+    const visibleIds = new Set(visible.map((thread) => thread.id));
+    const roots = visible
+      .filter((thread) => !thread.parentThreadId || !visibleIds.has(thread.parentThreadId))
       .filter((thread) => this.threadVisibleInTree(thread));
     return roots.sort((a, b) => this.familyActivityMs(b) - this.familyActivityMs(a));
   }
 
   visibleChildWorkers(thread: ThreadSummary | null): ThreadSummary[] {
-    const children = this.childWorkers(thread);
+    const children = this.childWorkers(thread).filter((worker) => this.sidebarThreads().some((candidate) => candidate.id === worker.id));
     const needle = this.filterText.trim();
     if (!needle || this.threadMatchesFilter(thread)) return children;
     return children.filter((worker) => this.threadMatchesFilter(worker));
+  }
+
+  async toggleArchivedThreads(): Promise<void> {
+    this.showArchivedThreads = !this.showArchivedThreads;
+    this.selectedId = "";
+    this.filterText = "";
+    await this.refresh(false);
+  }
+
+  async retireSelectedThread(thread: ThreadSummary | null = this.selectedThread()): Promise<void> {
+    if (!thread || this.retiringThread || this.threadRetired(thread)) return;
+    const confirmed = typeof globalThis.confirm === "function"
+      ? globalThis.confirm(`Retire "${this.threadTitle(thread)}"? Its history stays available in Archived. Timers, routes, grants, and queued work stay disabled until reconfigured.`)
+      : true;
+    if (!confirmed) return;
+    this.retiringThread = true;
+    this.busy = true;
+    try {
+      await firstValueFrom(this.api.retireThread(thread.id));
+      this.selectedId = "";
+      await this.refresh(false);
+    } catch (error) {
+      this.error = this.errorText(error);
+    } finally {
+      this.retiringThread = false;
+      this.busy = false;
+      this.renderNow();
+    }
+  }
+
+  async restoreSelectedThread(thread: ThreadSummary | null = this.selectedThread()): Promise<void> {
+    if (!thread || this.retiringThread || !this.threadRetired(thread)) return;
+    this.retiringThread = true;
+    this.busy = true;
+    try {
+      await firstValueFrom(this.api.restoreThread(thread.id));
+      await this.refresh(false);
+    } catch (error) {
+      this.error = this.errorText(error);
+    } finally {
+      this.retiringThread = false;
+      this.busy = false;
+      this.renderNow();
+    }
   }
 
   selectedThread(): ThreadSummary | null {
@@ -5050,7 +5108,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   private threadVisibleInTree(thread: ThreadSummary): boolean {
     if (!this.filterText.trim()) return true;
-    return this.threadMatchesFilter(thread) || this.childWorkers(thread).some((worker) => this.threadMatchesFilter(worker));
+    return this.threadMatchesFilter(thread) || this.visibleChildWorkers(thread).some((worker) => this.threadMatchesFilter(worker));
   }
 
   private threadMatchesFilter(thread: ThreadSummary | null): boolean {

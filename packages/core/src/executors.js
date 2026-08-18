@@ -7,6 +7,7 @@ import { appendAgentMessage, listAgentMessages, updateAgentMessage } from "./mes
 import { readOverlay } from "./overlay.js";
 import {
   appendThreadMessage,
+  assertThreadOperational,
   getThread,
   listThreadMessages,
   nextQueuedThreadMessage,
@@ -214,7 +215,15 @@ export async function runNextThreadMessage(threadId, options = {}, env = process
     error.statusCode = 404;
     throw error;
   }
+  assertThreadOperational(thread);
   return withThreadLock(thread.id, async () => {
+    const current = await getThread(thread.id, env);
+    if (!current) {
+      const error = new Error("thread_not_found");
+      error.statusCode = 404;
+      throw error;
+    }
+    assertThreadOperational(current);
     const executorId = options.executorId || thread.executor?.id || (await defaultExecutorId(env));
     const adapter = getExecutorAdapter(executorId);
     if (!adapter) {
