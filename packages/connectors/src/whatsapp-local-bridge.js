@@ -862,6 +862,26 @@ function targetInboundFailureSafeMessage(code = "", status = 0) {
   return "Target instance could not accept the brokered WhatsApp message.";
 }
 
+function localWhatsAppSystemMessageType(message = {}) {
+  return String(message?.type || message?._data?.type || "").trim().toLowerCase();
+}
+
+function localWhatsAppSystemMessageSubtype(message = {}) {
+  return String(
+    message?.subtype ||
+      message?._data?.subtype ||
+      message?._data?.notificationType ||
+      "",
+  ).trim().toLowerCase();
+}
+
+function isLocalWhatsAppSystemMessage(message = {}) {
+  const type = localWhatsAppSystemMessageType(message);
+  if (["gp2", "group_notification", "notification", "e2e_notification", "protocol"].includes(type)) return true;
+  const subtype = localWhatsAppSystemMessageSubtype(message);
+  return Boolean(type === "chat" && subtype && /^(create|add|remove|promote|demote|subject|description|picture|invite)$/.test(subtype));
+}
+
 function targetInboundFailureSetupUrl({ payload = {}, tenantRoute = null, chatId = "", env = process.env } = {}) {
   return String(
     payload?.routingFailure?.appUrl ||
@@ -3914,6 +3934,19 @@ export async function handleInboundMessage(accountId, message, env = process.env
       chatId,
     }, env).catch(() => {});
     return { skipped: "invalid_conversation_id", eventId, chatId, from, fromMe: routeFromMe };
+  }
+  if (isLocalWhatsAppSystemMessage(message)) {
+    await appendEvent({
+      type: "whatsapp_local_inbound_system_message_skipped",
+      accountId,
+      eventId,
+      chatId,
+      from,
+      fromMe: routeFromMe,
+      messageType: localWhatsAppSystemMessageType(message),
+      messageSubtype: localWhatsAppSystemMessageSubtype(message),
+    }, env).catch(() => {});
+    return { skipped: "system_message", eventId, chatId, from, fromMe: routeFromMe };
   }
   const terminalEchoReplay = fromMe && protocolEventId
     ? await claimTransformedMediaEchoTerminalReplayAudit({ accountId, chatId, eventId: protocolEventId, env }).catch(() => null)
