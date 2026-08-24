@@ -5,7 +5,7 @@ import { RAW_TERMINAL_RUNTIME_KIND } from "../../../packages/core/src/raw-termin
 import { resolveCodexThreadMetadata, resolveCodexThreadMetadataBatch, runtimeStatus } from "../../../packages/core/src/runtime-leases.js";
 import { isAdminPrincipal, resourceOwnerUserId } from "../../../packages/core/src/policy.js";
 import { adminPrincipal } from "../../../packages/core/src/principal.js";
-import { getThread, listThreadMessages, listThreads, listThreadsForPrincipal } from "../../../packages/core/src/threads.js";
+import { getThread, listThreadMessages, listThreads, listThreadsForPrincipal, threadIsRetired } from "../../../packages/core/src/threads.js";
 import { detectThreadGitState } from "../../../packages/core/src/thread-workers.js";
 import { defaultAdminUser, normalizeUserId } from "../../../packages/core/src/users.js";
 import { appendEvent } from "../../../packages/storage/src/store.js";
@@ -17,6 +17,8 @@ type ThreadSummaryOptions = {
   payloadCacheTtlMs?: number;
   runtimeStatusCacheTtlMs?: number;
   includeAllUserThreads?: boolean;
+  includeRetired?: boolean;
+  lifecycleFilter?: "active" | "retired" | "all" | string;
   principal?: Record<string, any> | null;
   sampleRuntime?: boolean;
   refreshMetadata?: boolean;
@@ -31,6 +33,14 @@ type ThreadRuntimeMode =
   | "agent"
   | "sleeping"
   | "unknown";
+
+function normalizedThreadLifecycleFilter(value: unknown, includeRetired = false): "active" | "retired" | "all" {
+  const raw = String(value || "").trim().toLowerCase();
+  if (raw === "retired" || raw === "archived") return "retired";
+  if (raw === "all" || raw === "any") return "all";
+  if (includeRetired) return "all";
+  return "active";
+}
 
 const threadMetadataCache = new Map<string, {
   cacheKey: string;
@@ -353,13 +363,14 @@ function threadSummarySlowMs(): number {
 
 async function listThreadSummaryScope(principal: Record<string, any> | null, includeAllUserThreads: boolean) {
   const effectivePrincipal = principal || adminPrincipal(defaultAdminUser());
+  const visible = (thread: any) => thread.threadKind !== "task-agent";
   if (includeAllUserThreads || !isAdminPrincipal(effectivePrincipal)) {
-    return (await listThreadsForPrincipal(effectivePrincipal)).filter((thread: any) => thread.threadKind !== "task-agent");
+    return (await listThreadsForPrincipal(effectivePrincipal)).filter(visible);
   }
 
   const ownerUserId = normalizeUserId(effectivePrincipal.userId || defaultAdminUser().id);
   const threads = await listThreads();
-  return threads.filter((thread: any) => resourceOwnerUserId(thread) === ownerUserId && thread.threadKind !== "task-agent");
+  return threads.filter((thread: any) => resourceOwnerUserId(thread) === ownerUserId && visible(thread));
 }
 
 async function listThreadMessagesForSummary(threadId: string) {
@@ -957,12 +968,15 @@ export async function threadSummaryPayload(options: ThreadSummaryOptions = {}) {
   const stalePayloadTtlMs = threadSummaryStalePayloadTtlMs();
   const principal = options.principal || null;
   const includeAllUserThreads = options.includeAllUserThreads === true;
+  const lifecycleFilter = normalizedThreadLifecycleFilter(options.lifecycleFilter, options.includeRetired === true);
+  const includeRetired = lifecycleFilter === "all";
   const refreshIdleMetadata = options.refreshIdleMetadata === true;
   const effectivePrincipal = principal || adminPrincipal(defaultAdminUser());
   const payloadCacheKey = JSON.stringify({
     cacheTtlMs,
     home: process.env.ORKESTR_HOME || "",
     includeAllUserThreads,
+    lifecycleFilter,
     refreshIdleMetadata,
     userId: effectivePrincipal?.userId || "admin",
     role: effectivePrincipal?.role || "admin",
@@ -994,7 +1008,15 @@ export async function threadSummaryPayload(options: ThreadSummaryOptions = {}) {
   }
   const computePayload = (async () => {
     const startedAt = Date.now();
-    const threads = await listThreadSummaryScope(effectivePrincipal, includeAllUserThreads);
+    const scopedThreads = await listThreadSummaryScope(effectivePrincipal, includeAllUserThreads);
+    const retiredThreads = scopedThreads.filter((thread: any) => threadIsRetired(thread));
+    const activeThreads = scopedThreads.filter((thread: any) => !threadIsRetired(thread));
+    const retiredWorkerCountByParentThreadId = retiredThreads.reduce((counts: Record<string, number>, thread: any) => {
+      const parentId = String(thread.parentThreadId || thread.rootThreadId || "").trim();
+      if (parentId) counts[parentId] = (counts[parentId] || 0) + 1;
+      return counts;
+    }, {});
+    const threads = lifecycleFilter === "all" ? scopedThreads : lifecycleFilter === "retired" ? retiredThreads : activeThreads;
     const activeThreadIds = new Set(threads.map((thread: any) => String(thread?.id || "")).filter(Boolean));
     for (const id of threadMetadataCache.keys()) {
       if (!activeThreadIds.has(id)) threadMetadataCache.delete(id);
@@ -1021,6 +1043,10 @@ export async function threadSummaryPayload(options: ThreadSummaryOptions = {}) {
       : new Map<string, Record<string, unknown>>();
     const payload = {
       generatedAt: new Date().toISOString(),
+      retiredThreadCount: retiredThreads.length,
+      retiredWorkerCountByParentThreadId,
+      includeRetired,
+      lifecycleFilter,
       threads: await Promise.all(threads.map(async (thread: any) => {
         const messages = messagesByThreadId.get(String(thread.id || "")) || [];
         const sampleRuntime = runtimeSampleByThreadId.get(String(thread.id || "")) === true;

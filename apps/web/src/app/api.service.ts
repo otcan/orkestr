@@ -1131,6 +1131,16 @@ export interface ThreadSummary {
   title?: string;
   bindingName?: string;
   state?: string;
+  lifecycleState?: string;
+  retired?: boolean;
+  retiredAt?: string | null;
+  retiredBy?: string | null;
+  retiredByUserId?: string | null;
+  retiredReason?: string | null;
+  retirementSource?: string | null;
+  restoredAt?: string | null;
+  restoredBy?: string | null;
+  restoredByUserId?: string | null;
   status?: string;
   publicStatus?: string;
   publicStatusCode?: string;
@@ -1292,6 +1302,31 @@ export interface ThreadSummary {
   } | null;
   runtime?: Record<string, unknown> | null;
   [key: string]: unknown;
+}
+
+export interface ThreadListResponse {
+  generatedAt?: string;
+  includeRetired?: boolean;
+  lifecycleFilter?: "active" | "retired" | "all" | string;
+  retiredThreadCount?: number;
+  retiredWorkerCountByParentThreadId?: Record<string, number>;
+  threads: ThreadSummary[];
+}
+
+export interface ThreadWorkerRetireResponse {
+  ok: boolean;
+  dryRun?: boolean;
+  parentThreadId?: string;
+  scanned?: number;
+  retiredCount?: number;
+  skippedCount?: number;
+  results?: Array<{
+    threadId?: string;
+    title?: string;
+    status?: "eligible" | "retired" | "skipped" | string;
+    reason?: string;
+    blockers?: string[];
+  }>;
 }
 
 export interface ThreadMessage {
@@ -1894,9 +1929,11 @@ export class ApiService {
     return text ? `?${text}` : "";
   }
 
-  threadSummaryStreamUrl(): string {
+  threadSummaryStreamUrl(options: { includeRetired?: boolean; lifecycle?: "active" | "retired" | "all" | string } = {}): string {
     const base = globalThis.location?.href || "http://localhost/";
     const url = new URL(this.api("/threads/summary/stream"), base);
+    if (options.lifecycle) url.searchParams.set("lifecycle", String(options.lifecycle));
+    else if (options.includeRetired) url.searchParams.set("includeRetired", "true");
     url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
     return url.toString();
   }
@@ -2572,9 +2609,13 @@ export class ApiService {
     return this.http.get<Record<string, unknown>>(this.api("/models/status"));
   }
 
-  threads(options: { includeAllUsers?: boolean } = {}): Observable<{ threads: ThreadSummary[] }> {
-    const query = options.includeAllUsers ? "?includeAllUsers=true" : "";
-    return this.http.get<{ threads: ThreadSummary[] }>(this.api(`/threads${query}`));
+  threads(options: { includeAllUsers?: boolean; includeRetired?: boolean; lifecycle?: "active" | "retired" | "all" | string } = {}): Observable<ThreadListResponse> {
+    const params = new URLSearchParams();
+    if (options.includeAllUsers) params.set("includeAllUsers", "true");
+    if (options.lifecycle) params.set("lifecycle", String(options.lifecycle));
+    else if (options.includeRetired) params.set("includeRetired", "true");
+    const query = params.toString() ? `?${params.toString()}` : "";
+    return this.http.get<ThreadListResponse>(this.api(`/threads${query}`));
   }
 
   createThread(body: Record<string, unknown>): Observable<{ thread: ThreadSummary }> {
@@ -2585,6 +2626,20 @@ export class ApiService {
     const suffix = deleteWorkers ? "?deleteWorkers=true" : "";
     return this.http.delete<{ ok: boolean; deletedThreads: string[]; deletedCount: number; deletedTimers?: string[] }>(
       this.api(`/threads/${encodeURIComponent(id)}${suffix}`),
+    );
+  }
+
+  retireThread(id: string, reason = "manual"): Observable<{ ok: boolean; thread: ThreadSummary }> {
+    return this.http.post<{ ok: boolean; thread: ThreadSummary }>(
+      this.api(`/threads/${encodeURIComponent(id)}/retire`),
+      { reason },
+    );
+  }
+
+  restoreThread(id: string): Observable<{ ok: boolean; thread: ThreadSummary }> {
+    return this.http.post<{ ok: boolean; thread: ThreadSummary }>(
+      this.api(`/threads/${encodeURIComponent(id)}/restore`),
+      {},
     );
   }
 
@@ -2614,6 +2669,13 @@ export class ApiService {
 
   createThreadWorker(id: string, body: Record<string, unknown>): Observable<ThreadWorkerResponse> {
     return this.http.post<ThreadWorkerResponse>(this.api(`/threads/${encodeURIComponent(id)}/workers`), body);
+  }
+
+  retireThreadWorkers(id: string, options: { dryRun?: boolean; reason?: string } = {}): Observable<ThreadWorkerRetireResponse> {
+    return this.http.post<ThreadWorkerRetireResponse>(
+      this.api(`/threads/${encodeURIComponent(id)}/workers/retire`),
+      options,
+    );
   }
 
   updateThreadBinding(id: string, body: Record<string, unknown>): Observable<ThreadBindingResponse> {

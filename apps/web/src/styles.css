@@ -314,6 +314,15 @@ textarea:focus {
   width: 100%;
 }
 
+.show-retired-toggle {
+  width: 100%;
+  min-height: 30px;
+  border-color: rgba(207, 184, 74, 0.26);
+  color: #e7dda8;
+  font-size: 0.74rem;
+  padding: 6px 10px;
+}
+
 .sidebar-create-thread {
   width: 100%;
 }
@@ -495,6 +504,11 @@ textarea:focus {
   background: rgba(21, 45, 22, 0.38);
 }
 
+.thread-entry.retired {
+  border-color: rgba(207, 184, 74, 0.18);
+  opacity: 0.78;
+}
+
 .thread-item {
   display: grid;
   grid-template-columns: 38px minmax(0, 1fr);
@@ -538,6 +552,16 @@ textarea:focus {
 .thread-item.error.active {
   border-color: rgba(240, 109, 82, 0.72);
   box-shadow: inset 3px 0 0 #f06d52;
+}
+
+.thread-item.retired:not(.active) {
+  border-color: rgba(207, 184, 74, 0.22);
+  background: rgba(42, 39, 21, 0.22);
+  box-shadow: inset 3px 0 0 rgba(207, 184, 74, 0.42);
+}
+
+.thread-item.retired .status-dot {
+  opacity: 0.58;
 }
 
 .worker-tree {
@@ -636,6 +660,13 @@ textarea:focus {
   line-height: 1.35;
 }
 
+.thread-retired-label {
+  color: #d9ce94 !important;
+  font-size: 0.68rem;
+  font-weight: 800;
+  -webkit-line-clamp: 1 !important;
+}
+
 .processing-line {
   display: inline-flex;
   align-items: center;
@@ -694,6 +725,13 @@ textarea:focus {
   background: rgba(207, 184, 74, 0.2);
   color: #fff2aa;
   text-transform: none;
+}
+
+.retired-badge,
+.retired-count {
+  border-color: rgba(207, 184, 74, 0.36);
+  background: rgba(207, 184, 74, 0.2);
+  color: #fff2aa;
 }
 
 .processing-count {
@@ -2586,6 +2624,16 @@ ork-first-thread-wizard.first-thread-host {
   justify-content: flex-start;
 }
 
+.worker-retire-actions {
+  justify-content: flex-end;
+  max-width: min(100%, 360px);
+}
+
+.worker-retire-actions button {
+  min-height: 34px;
+  padding: 7px 10px;
+}
+
 .settings-toggle {
   gap: 9px;
   justify-content: flex-start;
@@ -3294,6 +3342,18 @@ ork-first-thread-wizard.first-thread-host {
   border-radius: 12px;
   background: rgba(3, 9, 12, 0.55);
   padding: 12px;
+}
+
+.worker-retire-preview {
+  border: 1px solid rgba(207, 184, 74, 0.18);
+  border-radius: 8px;
+  background: rgba(42, 39, 21, 0.18);
+  padding: 10px;
+}
+
+.worker-retire-row {
+  border-color: rgba(207, 184, 74, 0.18);
+  background: rgba(8, 17, 8, 0.52);
 }
 
 .worker-row p {

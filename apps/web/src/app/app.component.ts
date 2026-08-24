@@ -35,8 +35,10 @@ import {
   RouterTraceRecord,
   SetupStatus,
   ThreadAttachResponse,
+  ThreadListResponse,
   ThreadMessage,
   ThreadMessagesResponse,
+  ThreadWorkerRetireResponse,
   ThreadSummary,
   TimerRecord,
   OrkestrUser,
@@ -210,6 +212,12 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   creatingWhatsAppChat = false;
   detachingWhatsAppChat = false;
   deletingThread = false;
+  retiringThreadId = "";
+  retiringWorkerThreadsParentId = "";
+  workerRetirePreview: ThreadWorkerRetireResponse | null = null;
+  showRetiredThreads = false;
+  retiredThreadCount = 0;
+  retiredWorkerCountByParentThreadId: Record<string, number> = {};
   deleteThreadConfirm = "";
   deleteThreadWorkers = false;
   creditUsage: CreditUsageSummary | null = null;
@@ -337,7 +345,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     if (showBusy) this.busy = true;
     try {
       const [threadsResult, systemResult, setupResult, timersResult, whatsappResult, userResult, versionResult] = await Promise.allSettled([
-        firstValueFrom(this.api.threads()),
+        firstValueFrom(this.api.threads({ includeRetired: this.showRetiredThreads })),
         firstValueFrom(this.api.systemSummary()),
         firstValueFrom(this.api.setupStatus()),
         firstValueFrom(this.api.timers()),
@@ -382,6 +390,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       }
       const payload = threadsResult.value;
       this.apiOnline = true;
+      this.applyThreadListMeta(payload);
       this.trackThreadActivity(payload.threads);
       this.threads = [...payload.threads].sort((a, b) => this.activityMs(b) - this.activityMs(a));
       this.seedReadStateIfNeeded(this.threads);
@@ -661,7 +670,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       return;
     }
     if (this.summarySocket && this.summarySocket.readyState <= WebSocket.OPEN) return;
-    const socket = new WebSocket(this.api.threadSummaryStreamUrl());
+    const socket = new WebSocket(this.api.threadSummaryStreamUrl({ includeRetired: this.showRetiredThreads }));
     this.summarySocket = socket;
     socket.onopen = () => {
       if (this.summarySocket !== socket) return;
@@ -730,13 +739,14 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   private async handleSummaryStreamMessage(raw: unknown): Promise<void> {
     if (this.sharedAppActive()) return;
     if (this.pairingRequired || !this.uiRuntimeReady()) return;
-    let payload: { type?: string; threads?: ThreadSummary[] };
+    let payload: (ThreadListResponse & { type?: string });
     try {
       payload = JSON.parse(String(raw || "{}"));
     } catch {
       return;
     }
     if (payload.type !== "threads_summary" || !Array.isArray(payload.threads)) return;
+    this.applyThreadListMeta(payload);
     await this.applyThreadSummaryStream(payload.threads);
   }
 
@@ -771,6 +781,18 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     } finally {
       this.applyingSummary = false;
     }
+  }
+
+  private applyThreadListMeta(payload: Partial<ThreadListResponse> = {}): void {
+    this.retiredThreadCount = Math.max(0, Number(payload.retiredThreadCount || 0) || 0);
+    this.retiredWorkerCountByParentThreadId = payload.retiredWorkerCountByParentThreadId || {};
+  }
+
+  async toggleRetiredThreads(): Promise<void> {
+    this.showRetiredThreads = !this.showRetiredThreads;
+    this.disconnectSummaryStream();
+    await this.refresh(false);
+    this.connectSummaryStream();
   }
 
   async selectThread(thread: ThreadSummary, event: MouseEvent): Promise<void> {
@@ -2138,6 +2160,85 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     }
   }
 
+  async retireSelectedThread(thread: ThreadSummary | null = this.selectedThread()): Promise<void> {
+    if (!thread || this.retiringThreadId) return;
+    const title = this.threadTitle(thread);
+    const confirmed = typeof globalThis.confirm === "function"
+      ? globalThis.confirm(`Retire "${title}" from the default Orkestr thread list? History is preserved and can be restored.`)
+      : true;
+    if (!confirmed) return;
+    this.retiringThreadId = thread.id;
+    this.busy = true;
+    try {
+      await firstValueFrom(this.api.retireThread(thread.id, "manual"));
+      if (!this.showRetiredThreads && this.selectedId === this.threadSlug(thread)) {
+        this.selectedId = "";
+        this.activePanel = "chat";
+      }
+      await this.refresh(false);
+    } catch (error) {
+      this.error = this.errorText(error);
+    } finally {
+      this.retiringThreadId = "";
+      this.busy = false;
+      this.renderNow();
+    }
+  }
+
+  async restoreSelectedThread(thread: ThreadSummary | null = this.selectedThread()): Promise<void> {
+    if (!thread || this.retiringThreadId) return;
+    this.retiringThreadId = thread.id;
+    this.busy = true;
+    try {
+      await firstValueFrom(this.api.restoreThread(thread.id));
+      await this.refresh(false);
+    } catch (error) {
+      this.error = this.errorText(error);
+    } finally {
+      this.retiringThreadId = "";
+      this.busy = false;
+      this.renderNow();
+    }
+  }
+
+  async previewRetireWorkers(thread: ThreadSummary | null = this.selectedThread()): Promise<void> {
+    const parent = this.workerParentThread(thread);
+    if (!parent || this.retiringWorkerThreadsParentId) return;
+    this.retiringWorkerThreadsParentId = parent.id;
+    this.busy = true;
+    try {
+      this.workerRetirePreview = await firstValueFrom(this.api.retireThreadWorkers(parent.id, { dryRun: true }));
+    } catch (error) {
+      this.error = this.errorText(error);
+    } finally {
+      this.retiringWorkerThreadsParentId = "";
+      this.busy = false;
+      this.renderNow();
+    }
+  }
+
+  async retireEligibleWorkers(thread: ThreadSummary | null = this.selectedThread()): Promise<void> {
+    const parent = this.workerParentThread(thread);
+    if (!parent || this.retiringWorkerThreadsParentId) return;
+    const eligibleCount = this.workerRetireEligibleCount(this.workerRetirePreviewFor(parent));
+    const confirmed = typeof globalThis.confirm === "function"
+      ? globalThis.confirm(`Retire ${eligibleCount || "eligible"} worker thread${eligibleCount === 1 ? "" : "s"} from "${this.threadTitle(parent)}"?`)
+      : true;
+    if (!confirmed) return;
+    this.retiringWorkerThreadsParentId = parent.id;
+    this.busy = true;
+    try {
+      this.workerRetirePreview = await firstValueFrom(this.api.retireThreadWorkers(parent.id, { reason: "bulk_worker_retire" }));
+      await this.refresh(false);
+    } catch (error) {
+      this.error = this.errorText(error);
+    } finally {
+      this.retiringWorkerThreadsParentId = "";
+      this.busy = false;
+      this.renderNow();
+    }
+  }
+
   async createSidebarWorker(thread: ThreadSummary | null = this.selectedThread()): Promise<void> {
     const parent = this.workerParentThread(thread);
     const task = this.sidebarWorkerTask.trim();
@@ -3075,6 +3176,23 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       .sort((a, b) => Number(a.workerIndex || 0) - Number(b.workerIndex || 0) || this.activityMs(b) - this.activityMs(a));
   }
 
+  threadIsRetired(thread: ThreadSummary | null): boolean {
+    if (!thread) return false;
+    return thread.retired === true || String(thread.lifecycleState || "").trim().toLowerCase() === "retired";
+  }
+
+  retiredWorkerCount(thread: ThreadSummary | null): number {
+    if (!thread) return 0;
+    return Math.max(0, Number(this.retiredWorkerCountByParentThreadId[thread.id] || 0) || 0);
+  }
+
+  retiredStatusLabel(thread: ThreadSummary | null): string {
+    if (!this.threadIsRetired(thread)) return "";
+    const retiredAt = String(thread?.retiredAt || "").trim();
+    const reason = String(thread?.retiredReason || "").trim();
+    return ["Retired", retiredAt ? new Date(retiredAt).toLocaleDateString() : "", reason && reason !== "manual" ? reason : ""].filter(Boolean).join(" · ");
+  }
+
   familyWorkers(thread: ThreadSummary | null): ThreadSummary[] {
     if (!thread) return [];
     return this.childWorkers(this.parentThread(thread) || thread);
@@ -3088,6 +3206,30 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   workerParentThread(thread: ThreadSummary | null): ThreadSummary | null {
     if (!thread) return null;
     return this.parentThread(thread) || thread;
+  }
+
+  workerRetirePreviewFor(thread: ThreadSummary | null): ThreadWorkerRetireResponse | null {
+    const parent = this.workerParentThread(thread);
+    if (!parent || this.workerRetirePreview?.parentThreadId !== parent.id) return null;
+    return this.workerRetirePreview;
+  }
+
+  workerRetireEligibleCount(preview: ThreadWorkerRetireResponse | null): number {
+    if (!preview?.results?.length) return 0;
+    return preview.results.filter((result) => result.status === "eligible" || result.status === "retired").length;
+  }
+
+  workerRetireSkippedCount(preview: ThreadWorkerRetireResponse | null): number {
+    if (!preview?.results?.length) return 0;
+    return preview.results.filter((result) => result.status === "skipped").length;
+  }
+
+  workerRetireResultLabel(result: { blockers?: string[]; reason?: string; status?: string } | null): string {
+    if (!result) return "";
+    const blockers = Array.isArray(result.blockers) ? result.blockers.filter(Boolean) : [];
+    if (blockers.length) return blockers.join(", ");
+    if (result.reason) return String(result.reason);
+    return String(result.status || "");
   }
 
   defaultRepoPath(thread: ThreadSummary | null): string {

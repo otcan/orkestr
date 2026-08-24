@@ -15,9 +15,9 @@ import { acquireRuntimeLeaseFileLock, withRuntimeLeaseLock } from "../packages/c
 import { completeThreadSecurityApproveCommand } from "../packages/core/src/security-thread-command.js";
 import { ensureDataDirs } from "../packages/storage/src/paths.js";
 import { parseThreadInputCommand } from "../packages/core/src/thread-commands.js";
-import { createPairingChallenge, getPairingChallenge } from "../packages/core/src/security.js";
+import { approvePairingChallenge, createPairingChallenge, getPairingChallenge, pairBrowser, sessionCookieHeader } from "../packages/core/src/security.js";
 import { createThreadWorker, detectThreadGitState, listThreadWorkers, refreshThreadGitState, syncSafeThreadWorkersWithParents, syncThreadWorkerWithParent, updateThreadRepo } from "../packages/core/src/thread-workers.js";
-import { appendThreadMessage, createThread, deleteThread, enqueueThreadInput, enqueueThreadInputForPrincipal, getThread, listThreadMessages, listThreads, updateThread, updateThreadMessage } from "../packages/core/src/threads.js";
+import { appendThreadMessage, createThread, deleteThread, enqueueThreadInput, enqueueThreadInputForPrincipal, getThread, listThreadMessages, listThreads, restoreThread, retireThread, threadIsRetired, updateThread, updateThreadMessage } from "../packages/core/src/threads.js";
 import { adminPrincipal } from "../packages/core/src/principal.js";
 
 const execFileAsync = promisify(execFile);
@@ -412,6 +412,124 @@ test("threads can be deleted with their workers and stored messages", async () =
   assert.deepEqual(threads, []);
   assert.deepEqual(parentMessages, []);
   assert.deepEqual(workerMessages, []);
+});
+
+test("thread retirement is metadata-only and summary lifecycle filters hide retired threads by default", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-retire-"));
+  const priorHome = process.env.ORKESTR_HOME;
+  process.env.ORKESTR_HOME = home;
+  resetThreadSummaryCachesForTest();
+  try {
+    await createThread({ id: "retire-parent", name: "Retire Parent" });
+    await createThread({ id: "retire-worker", name: "Retire Worker", parentThreadId: "retire-parent", rootThreadId: "retire-parent" });
+    await appendThreadMessage("retire-parent", { role: "assistant", text: "parent message" });
+    await appendThreadMessage("retire-worker", { role: "assistant", text: "worker message" });
+
+    const retired = await retireThread("retire-worker", { retiredByUserId: "admin", reason: "done", retirementSource: "test" });
+    assert.equal(threadIsRetired(retired), true);
+    assert.equal(retired.lifecycleState, "retired");
+    assert.equal(retired.retiredByUserId, "admin");
+    assert.equal(retired.retirementSource, "test");
+    assert.equal((await listThreadMessages("retire-worker")).length, 1);
+    assert.equal((await listThreads()).length, 2);
+
+    const activePayload = await threadSummaryPayload({ cacheTtlMs: 0, payloadCacheTtlMs: 0, lifecycleFilter: "active" });
+    assert.deepEqual(activePayload.threads.map((thread) => thread.id), ["retire-parent"]);
+    assert.equal(activePayload.retiredThreadCount, 1);
+    assert.equal(activePayload.retiredWorkerCountByParentThreadId["retire-parent"], 1);
+    assert.equal(activePayload.lifecycleFilter, "active");
+
+    const allPayload = await threadSummaryPayload({ cacheTtlMs: 0, payloadCacheTtlMs: 0, lifecycleFilter: "all" });
+    assert.deepEqual(new Set(allPayload.threads.map((thread) => thread.id)), new Set(["retire-parent", "retire-worker"]));
+    assert.equal(allPayload.includeRetired, true);
+    assert.equal(allPayload.lifecycleFilter, "all");
+
+    const retiredPayload = await threadSummaryPayload({ cacheTtlMs: 0, payloadCacheTtlMs: 0, lifecycleFilter: "retired" });
+    assert.deepEqual(retiredPayload.threads.map((thread) => thread.id), ["retire-worker"]);
+    assert.equal(retiredPayload.lifecycleFilter, "retired");
+
+    const restored = await restoreThread("retire-worker", { restoredByUserId: "admin" });
+    assert.equal(threadIsRetired(restored), false);
+    assert.equal(restored.lifecycleState, "active");
+    assert.equal(restored.restoredByUserId, "admin");
+    assert.equal((await listThreadMessages("retire-worker")).length, 1);
+    const restoredPayload = await threadSummaryPayload({ cacheTtlMs: 0, payloadCacheTtlMs: 0 });
+    assert.deepEqual(new Set(restoredPayload.threads.map((thread) => thread.id)), new Set(["retire-parent", "retire-worker"]));
+  } finally {
+    resetThreadSummaryCachesForTest();
+    restoreEnvValue("ORKESTR_HOME", priorHome);
+  }
+});
+
+test("bulk worker retirement route previews and skips unsafe queued workers", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-worker-retire-route-"));
+  const priorHome = process.env.ORKESTR_HOME;
+  process.env.ORKESTR_HOME = home;
+  resetThreadSummaryCachesForTest();
+  let server;
+  try {
+    await createThread({ id: "bulk-retire-parent", name: "Bulk Retire Parent" });
+    await createThread({ id: "bulk-retire-worker-a", name: "Bulk Retire Worker A", parentThreadId: "bulk-retire-parent", rootThreadId: "bulk-retire-parent", workerIndex: 1 });
+    await createThread({ id: "bulk-retire-worker-b", name: "Bulk Retire Worker B", parentThreadId: "bulk-retire-parent", rootThreadId: "bulk-retire-parent", workerIndex: 2 });
+    await appendThreadMessage("bulk-retire-worker-a", { role: "assistant", text: "done", state: "completed" });
+    await appendThreadMessage("bulk-retire-worker-b", { role: "user", text: "still queued", state: "queued" });
+
+    server = await startServer({ port: 0, host: "127.0.0.1" });
+    const { port } = server.address();
+    const challenge = await createPairingChallenge({ env: process.env });
+    await approvePairingChallenge(challenge.challengeId, { env: process.env, approvedBy: "node-test" });
+    const paired = await pairBrowser({ challengeId: challenge.challengeId, env: process.env, userAgent: "node-test", ip: "127.0.0.1" });
+    const cookie = sessionCookieHeader(paired.token, process.env, { requestHost: "127.0.0.1" }).split(";")[0];
+    const postJson = (body) => fetch(`http://127.0.0.1:${port}/api/threads/bulk-retire-parent/workers/retire`, {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify(body),
+    });
+
+    const parentDryRunResponse = await fetch(`http://127.0.0.1:${port}/api/threads/bulk-retire-parent/retire`, {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({ dryRun: true }),
+    });
+    assert.equal(parentDryRunResponse.status, 200);
+    const parentDryRun = await parentDryRunResponse.json();
+    assert.deepEqual(parentDryRun.blockers, ["active_worker_threads"]);
+
+    const dryRunResponse = await postJson({ dryRun: true });
+    assert.equal(dryRunResponse.status, 200);
+    const dryRun = await dryRunResponse.json();
+    assert.equal(dryRun.dryRun, true);
+    assert.equal(dryRun.scanned, 2);
+    assert.deepEqual(Object.fromEntries(dryRun.results.map((result) => [result.threadId, result.status])), {
+      "bulk-retire-worker-a": "eligible",
+      "bulk-retire-worker-b": "skipped",
+    });
+    assert.deepEqual(dryRun.results.find((result) => result.threadId === "bulk-retire-worker-b").blockers, ["runtime_active", "active_messages"]);
+
+    const applyResponse = await postJson({ reason: "test_bulk_retire" });
+    assert.equal(applyResponse.status, 200);
+    const applied = await applyResponse.json();
+    assert.equal(applied.retiredCount, 1);
+    assert.equal(applied.skippedCount, 1);
+    assert.equal(threadIsRetired(await getThread("bulk-retire-worker-a")), true);
+    assert.equal(threadIsRetired(await getThread("bulk-retire-worker-b")), false);
+
+    const activeResponse = await fetch(`http://127.0.0.1:${port}/api/threads?lifecycle=active`, { headers: { cookie } });
+    assert.equal(activeResponse.status, 200);
+    const activePayload = await activeResponse.json();
+    const activeIds = activePayload.threads.map((thread) => thread.id);
+    assert.equal(activeIds.includes("bulk-retire-worker-a"), false);
+    assert.equal(activeIds.includes("bulk-retire-worker-b"), true);
+
+    const retiredResponse = await fetch(`http://127.0.0.1:${port}/api/threads?lifecycle=retired`, { headers: { cookie } });
+    assert.equal(retiredResponse.status, 200);
+    const retiredPayload = await retiredResponse.json();
+    assert.deepEqual(retiredPayload.threads.map((thread) => thread.id), ["bulk-retire-worker-a"]);
+  } finally {
+    if (server) await new Promise((resolve) => server.close(resolve));
+    resetThreadSummaryCachesForTest();
+    restoreEnvValue("ORKESTR_HOME", priorHome);
+  }
 });
 
 test("threads default to wake-on-message and sleep without a runtime lease", async () => {
