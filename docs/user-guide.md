@@ -283,14 +283,17 @@ before it is made discoverable; an explicitly declared child scope can only
 further intersect that snapshot. Subsequent parent additions do not widen that
 child; parent revocations narrow it immediately. Resource records bind a native
 identifier to its owner and tenant/VM boundary and status; grants provide only
-use permission and never provision an instance, credential, endpoint, or
-mailbox. The instance lifecycle must register an active resource before an
+use permission, may carry a future `expiresAt` ceiling, and never provision an
+instance, credential, endpoint, or mailbox. The instance lifecycle must
+register an active resource before an
 administrator can grant it. In desktop `enforce` mode, registration and
 generation come from the desktop lifecycle; a grant cannot create a desktop.
 Desktop catalog auto-registration is retained only for `off`/`shadow` rollout
 compatibility while existing grants are migrated.
 Decisions include the exact resource, policy revision, grant revision, and
-resource generation for callers that need to reject stale work.
+resource generation for callers that need to reject stale work. Expiry values
+are validated on write, persisted transactionally, and fail closed on use;
+connector bearers are capped at the earliest effective grant expiry.
 Declared child scopes also receive a nonzero child policy revision, so a
 short-lived connector execution token can bind to that direct child grant while
 remaining dependent on every ancestor grant and the captured ceiling.

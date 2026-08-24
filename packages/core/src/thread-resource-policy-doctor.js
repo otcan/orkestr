@@ -8,6 +8,7 @@ import {
   effectiveThreadResourceGrantFromSnapshot,
   readThreadResourcePolicy,
   threadResourceAccessMode,
+  threadResourceGrantIsCurrent,
   threadResourceWritePlan,
 } from "./thread-resource-grants.js";
 import { threadResourcePolicyStoreMode } from "./thread-resource-policy-store.js";
@@ -113,7 +114,7 @@ export async function threadResourcePolicyDoctorReport(env = process.env, now = 
     revision: state.revision,
     counts: {
       resources: countBy(state.resources),
-      grants: countBy(state.grants.filter((item) => !item.revokedAt)),
+      grants: countBy(state.grants.filter((item) => threadResourceGrantIsCurrent(item, now))),
       policies: countBy(state.policies),
       listeners: state.mailboxListeners.length,
       deliveries: Object.fromEntries(["pending", "claimed", "delivered", "revoked", "quarantined", "dead-letter"].map((name) => [name, state.mailboxDeliveries.filter((item) => item.state === name).length])),

@@ -16,6 +16,7 @@ import {
   threadResourceAccessMode,
   threadResourceAccessModeFor,
   threadResourceBoundaryId,
+  threadResourceGrantIsCurrent,
 } from "./thread-resource-policy-model.js";
 import { normalizeUserId } from "./users.js";
 import { recordThreadResourceAccessMetric, recordThreadResourceBreakGlassMetric } from "./observability.js";
@@ -262,7 +263,7 @@ export async function listThreadResourceGrants(threadId = "", resourceType = "",
   if (!thread) throw policyError("thread_not_found", 404);
   if (!canAccessOwner(principal || {}, resourceOwnerUserId(thread, env), env)) throw policyError("thread_access_forbidden", 403);
   const state = await readState(env);
-  const grants = state.grants.filter((grant) => grant.threadId === thread.id && !grant.revokedAt && (!type || grant.resourceType === type));
+  const grants = state.grants.filter((grant) => grant.threadId === thread.id && threadResourceGrantIsCurrent(grant) && (!type || grant.resourceType === type));
   const policy = type ? state.policies.find((item) => item.threadId === thread.id && item.resourceType === type) || null : null;
   return { ok: true, mode: type ? threadResourceAccessMode(type, env) : null, policyRevision: state.revision, resourcePolicyRevision: policy?.revision || 0, explicitEmpty: policy?.explicitEmpty === true, threadId: thread.id, resourceType: type || null, grants, resources: state.resources.filter((resource) => grants.some((grant) => grant.resourceId === resource.id && grant.resourceType === resource.resourceType)) };
 }

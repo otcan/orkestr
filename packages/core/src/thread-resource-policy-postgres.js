@@ -164,6 +164,7 @@ async function ensureSchema(pool) {
       thread_id text not null,
       resource_type text not null,
       resource_id text not null,
+      expires_at text,
       revoked_at text,
       data jsonb not null
     );
@@ -278,6 +279,7 @@ async function ensureSchema(pool) {
     ["resource_id", "text not null default ''"], ["thread_id", "text not null default ''"], ["permission", "text not null default ''"],
     ["boundary_id", "text not null default ''"], ["owner_user_id", "text not null default ''"], ["change_ref", "text not null default ''"],
   ]) await pool.query(`alter table orkestr_thread_resource_audit_outbox add column if not exists ${column} ${definition}`);
+  await pool.query("alter table orkestr_thread_resource_grants add column if not exists expires_at text");
   // Deliberately do not import JSON/SQLite state: an operator must use an
   // explicit, evidence-reviewed migration rather than inferred legacy rows.
   await pool.query("insert into orkestr_thread_resource_meta(key, value) values ($1, $2) on conflict(key) do nothing", ["schema_version", "1"]);
@@ -352,7 +354,7 @@ async function replaceState(client, state = {}, auditOutboxUpserts = []) {
   ]) await client.query(`delete from ${table}`);
   for (const item of state.resources || []) await insert(client, tables.resources, ["resource_type", "resource_id"], [item.resourceType, item.id], item);
   for (const item of state.policies || []) await insert(client, tables.policies, ["thread_id", "resource_type"], [item.threadId, item.resourceType], item);
-  for (const item of state.grants || []) await insert(client, tables.grants, ["id", "thread_id", "resource_type", "resource_id", "revoked_at"], [item.id, item.threadId, item.resourceType, item.resourceId, item.revokedAt || null], item);
+  for (const item of state.grants || []) await insert(client, tables.grants, ["id", "thread_id", "resource_type", "resource_id", "expires_at", "revoked_at"], [item.id, item.threadId, item.resourceType, item.resourceId, item.expiresAt || null, item.revokedAt || null], item);
   for (const item of state.ceilings || []) await insert(client, tables.ceilings, ["thread_id", "resource_type", "resource_id"], [item.threadId, item.resourceType, item.resourceId], item);
   for (const item of (state.mutations || []).slice(-1000)) await insert(client, tables.mutations, ["action", "idempotency_key"], [item.action, item.idempotencyKey], item);
   for (const item of state.mailboxListeners || []) await insert(client, tables.mailboxListeners, ["id", "resource_type", "resource_id", "thread_id", "filter_key", "idempotency_key", "status", "revoked_at"], [item.id, item.resourceType, item.resourceId, item.threadId, item.filterKey, item.idempotencyKey || "", item.status, item.revokedAt || null], item);
