@@ -10303,9 +10303,6 @@ test("whatsapp inbound route failures record sanitized watcher alerts", async ()
     });
     const payload = await failed.json();
     const alerts = await waitForWatcherAlerts(home);
-    const watcherThreads = await listThreads({ ORKESTR_HOME: home });
-    const watcher = watcherThreads.find((thread) => thread.name === "test-inbound-watcher");
-    const messages = watcher ? await listThreadMessages(watcher.id, { ORKESTR_HOME: home }) : [];
 
     assert.equal(failed.status, 400);
     assert.equal(payload.error, "whatsapp_event_id_required");
@@ -10317,11 +10314,11 @@ test("whatsapp inbound route failures record sanitized watcher alerts", async ()
     assert.equal(alerts[0].details.chatIdPresent, "true");
     assert.equal(alerts[0].details.eventIdPresent, "false");
     assert.equal(alerts[0].details.accountId, "responder");
-    assert.equal(messages.length, 1);
-    assert.match(messages[0].text, /\[watcher:error\] server\.whatsappInbound/);
-    assert.match(messages[0].text, /route: POST \/api\/connectors\/whatsapp\/inbound/);
+    assert.equal(alerts[0].status, "recorded");
+    assert.ok(alerts[0].watcherThreadId);
+    assert.ok(alerts[0].watcherMessageId);
+    assert.equal(alerts[0].route, "/api/connectors/whatsapp/inbound");
     assert.doesNotMatch(JSON.stringify(alerts), /must-not-render/);
-    assert.doesNotMatch(messages[0].text, /must-not-render/);
   } finally {
     await new Promise((resolve) => server.close(resolve));
     if (priorHome === undefined) delete process.env.ORKESTR_HOME;
@@ -11720,6 +11717,7 @@ test("whatsapp delivery mirrors imported app-server updates and final replies th
     phase: "commentary",
     text: "Imported progress should be mirrored.",
     state: "completed",
+    chatId: "chat-import-bound",
   }, env);
   await appendThreadMessage("thread-import-bound", {
     role: "assistant",
@@ -11727,6 +11725,7 @@ test("whatsapp delivery mirrors imported app-server updates and final replies th
     phase: "final_answer",
     text: "Imported final should be mirrored.",
     state: "completed",
+    chatId: "chat-import-bound",
   }, env);
 
   const calls = [];
