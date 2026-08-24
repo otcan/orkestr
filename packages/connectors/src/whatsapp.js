@@ -24,7 +24,7 @@ import {
   turnIdFor,
 } from "../../core/src/router-traces.js";
 import { recordWatcherAlert } from "../../core/src/watcher-alerts.js";
-import { appendThreadMessage, createThreadForPrincipal, enqueueThreadInputForPrincipal, getThread, getThreadMessage, listThreadMessages, listThreads, listThreadsForPrincipal, updateThread, updateThreadMessage } from "../../core/src/threads.js";
+import { appendThreadMessage, createThreadForPrincipal, enqueueThreadInputForPrincipal, getThread, getThreadMessage, isThreadRetired, listThreadMessages, listThreads, listThreadsForPrincipal, updateThread, updateThreadMessage } from "../../core/src/threads.js";
 import { resolveCurrentCodexGeneration } from "../../core/src/codex-generation.js";
 import { adminUserId, findOrCreateExternalUser, getUser, normalizeUserId } from "../../core/src/users.js";
 import { dataPaths, ensureDataDirs } from "../../storage/src/paths.js";
@@ -2049,6 +2049,7 @@ async function routeThread(input, config, env) {
   const threads = await listThreads(env);
   if (explicit) {
     const thread = threads.find((item) => item.id === explicit || item.name === explicit || item.bindingName === explicit) || null;
+    if (thread && isThreadRetired(thread)) return { threadId: "", binding: null };
     const binding = thread?.binding || null;
     if (binding && !whatsappBindingIsRouteEligible(binding)) return { threadId: "", binding: null };
     return { threadId: explicit, binding };
@@ -2058,6 +2059,7 @@ async function routeThread(input, config, env) {
   const registryBinding = registryRoute?.selected || null;
   if (registryRoute?.ok && registryBinding?.threadId) {
     const sourceThread = threads.find((item) => item.id === registryBinding.threadId) || null;
+    if (sourceThread && isThreadRetired(sourceThread)) return { threadId: "", binding: null };
     const sourceBinding = sourceThread?.binding && typeof sourceThread.binding === "object" && !Array.isArray(sourceThread.binding)
       ? sourceThread.binding
       : null;
@@ -2088,7 +2090,7 @@ async function routeThread(input, config, env) {
       safeMessage: "Multiple Orkestr WhatsApp bindings matched this chat. Retire one duplicate binding or create a narrower binding.",
     });
   }
-  const matchedThreads = threads.filter((item) => whatsappInboundThreadMatchesBinding({
+  const matchedThreads = threads.filter((item) => !isThreadRetired(item) && whatsappInboundThreadMatchesBinding({
     thread: item,
     chatId,
     accountId,
@@ -2109,6 +2111,7 @@ async function routeThread(input, config, env) {
   const thread = matchedThreads[0] || null;
   if (thread) return { threadId: thread.id, binding: thread.binding || null };
   const chatBoundThreads = threads.filter((item) => {
+    if (isThreadRetired(item)) return false;
     const binding = item?.binding || {};
     if (String(binding.connector || "whatsapp").trim().toLowerCase() !== "whatsapp") return false;
     if (!whatsappBindingIsRouteEligible(binding)) return false;

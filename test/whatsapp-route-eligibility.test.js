@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { deliverWhatsAppReplies, routeWhatsAppInbound } from "../packages/connectors/src/whatsapp.js";
+import { upsertWhatsAppBinding } from "../packages/connectors/src/whatsapp-account-bindings.js";
 import { upsertWhatsAppConnectorAccount } from "../packages/connectors/src/whatsapp-account-registry.js";
 import { listLocalWhatsAppChats, localWhatsAppUnreadRecoveryBoundChats } from "../packages/connectors/src/whatsapp-local-bridge.js";
 import { appendThreadMessage, createThread, listThreadMessages, listThreads } from "../packages/core/src/threads.js";
@@ -50,6 +51,37 @@ test("retired WhatsApp bindings are not routable or recovered", async () => {
   assert.equal((await listThreadMessages("retired-thread", env)).length, 0);
   assert.deepEqual(localWhatsAppUnreadRecoveryBoundChats(await listThreads(env), "main", env), []);
   assert.deepEqual((await listLocalWhatsAppChats("main", env)).chats, []);
+});
+
+test("a retired thread state fences an otherwise eligible registry WhatsApp route", async () => {
+  const env = await testEnv("orkestr-wa-retired-registry-route-");
+  await createThread({
+    id: "retired-registry-thread",
+    name: "Retired Registry Thread",
+    state: "retired",
+    retiredAt: new Date().toISOString(),
+    binding: { connector: "whatsapp", chatId: "wa-registry-retired@g.us", enabled: true, routeEligible: true },
+  }, env);
+  await upsertWhatsAppBinding({
+    level: "chat",
+    threadId: "retired-registry-thread",
+    chatId: "wa-registry-retired@g.us",
+    accountId: "main",
+    enabled: true,
+    routeEligible: true,
+  }, env);
+
+  await assert.rejects(
+    () => routeWhatsAppInbound({
+      eventId: "wa-retired-registry-route-1",
+      chatId: "wa-registry-retired@g.us",
+      accountId: "main",
+      from: "wa-contact-user@c.us",
+      text: "must not route",
+    }, env),
+    /whatsapp_target_required/,
+  );
+  assert.deepEqual(await listThreadMessages("retired-registry-thread", env), []);
 });
 
 test("disabled duplicate bindings do not hide an eligible WhatsApp chat", async () => {

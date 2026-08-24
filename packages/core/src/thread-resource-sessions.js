@@ -1,5 +1,5 @@
 import crypto, { randomBytes, randomUUID } from "node:crypto";
-import { listThreads } from "./threads.js";
+import { isThreadRetired, listThreads } from "./threads.js";
 import { canAccessOwner } from "./policy.js";
 import {
   effectiveThreadResourceGrantFromSnapshot,
@@ -124,6 +124,17 @@ function rootForThread(threadId = "", threadsById = new Map()) {
   return "";
 }
 
+function hasRetiredThreadInLineage(threadId = "", threadsById = new Map()) {
+  let cursor = threadsById.get(clean(threadId)) || null;
+  const seen = new Set();
+  while (cursor?.id && !seen.has(cursor.id)) {
+    if (isThreadRetired(cursor)) return true;
+    seen.add(cursor.id);
+    cursor = threadsById.get(clean(cursor.parentThreadId)) || null;
+  }
+  return false;
+}
+
 function sameActions(left = [], right = []) {
   return left.length === right.length && left.every((action, index) => action === right[index]);
 }
@@ -195,6 +206,14 @@ export async function assertConnectorMcpResourceAccess(auth = {}, input = {}, en
   if (!declared) return auth;
   const resourceType = normalizeThreadResourceType(requested.resourceType || value.resourceType);
   const mode = threadResourceAccessMode(resourceType, env);
+  // Retirement is a lifecycle fence, not an enforce-mode rollout option. A
+  // previously issued resource bearer can never keep a retired thread alive.
+  if (resourceTokenDeclared(auth) && value.threadId) {
+    const threads = await listThreads(env);
+    if (hasRetiredThreadInLineage(value.threadId, new Map(threads.map((thread) => [thread.id, thread])))) {
+      deny("resource_thread_retired", 410);
+    }
+  }
   if (mode !== "enforce") return auth;
   if (auth.operator && targetDeclared) deny("resource_operator_target_denied");
   if (auth.operator) return auth;
@@ -231,6 +250,7 @@ export async function assertConnectorMcpResourceAccess(auth = {}, input = {}, en
 
   const [state, threads] = await Promise.all([readThreadResourcePolicy(env), listThreads(env)]);
   const threadsById = new Map(threads.map((thread) => [thread.id, thread]));
+  if (hasRetiredThreadInLineage(value.threadId, threadsById)) deny("resource_thread_retired", 410);
   if (rootForThread(value.threadId, threadsById) !== value.rootThreadId) deny("resource_root_scope_denied");
   const resource = state.resources.find((item) => item.resourceType === value.resourceType && item.id === value.resourceId) || null;
   if (!resource || resource.status !== "active" || resource.retiredAt || resource.boundaryId !== value.boundaryId || resource.ownerUserId !== clean(auth.ownerUserId)) deny("resource_target_denied");
@@ -298,6 +318,7 @@ export async function issueConnectorMcpResourceToken(input = {}, env = process.e
   if (!Number.isFinite(requestedTtlMs) || requestedTtlMs < 1_000 || requestedTtlMs > maxTokenLifetimeMs) deny("resource_token_ttl_invalid", 400);
   const [state, threads] = await Promise.all([readThreadResourcePolicy(env), listThreads(env)]);
   const threadsById = new Map(threads.map((thread) => [thread.id, thread]));
+  if (hasRetiredThreadInLineage(threadId, threadsById)) deny("resource_token_issue_thread_retired", 410);
   const resource = state.resources.find((item) => item.resourceType === resourceType && item.id === resourceId) || null;
   if (!resource || resource.status !== "active" || resource.retiredAt || !canAccessOwner(principal || {}, resource.ownerUserId, env)) deny("resource_token_issue_forbidden");
   const rootThreadId = rootForThread(threadId, threadsById);

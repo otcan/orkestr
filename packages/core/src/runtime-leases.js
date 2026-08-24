@@ -1367,6 +1367,12 @@ export async function wakeThread(threadId, options = {}, env = process.env) {
     error.statusCode = 404;
     throw error;
   }
+  if (String(thread.retiredAt || "").trim() || ["retiring", "retired"].includes(String(thread.state || "").trim().toLowerCase())) {
+    const error = new Error("thread_retired");
+    error.statusCode = 410;
+    error.code = "thread_retired";
+    throw error;
+  }
   if (threadUsesNativeCodexRuntime(thread, env)) {
     return resumeCodexRuntimeThread(thread, env);
   }
@@ -3723,6 +3729,10 @@ export async function deliverPendingThreadInputs(threadId, env = process.env, op
   }
   const thread = await getThread(threadId, env);
   if (!thread) return [];
+  if (String(thread.retiredAt || "").trim() || ["retiring", "retired"].includes(String(thread.state || "").trim().toLowerCase())) {
+    await appendEvent({ type: "thread_input_delivery_blocked", threadId: thread.id, reason: "thread_retired" }, env).catch(() => null);
+    return [];
+  }
   if (threadUsesApiAgent(thread, env)) {
     if (options.processApiAgent !== true) {
       await appendEvent({ type: "thread_input_delivery_skipped", threadId: thread.id, reason: "api_agent_thread" }, env).catch(() => null);
@@ -4017,6 +4027,10 @@ export function requestThreadWake(threadId, options = {}, env = process.env) {
     void wakeThread(threadId, options, env).catch(async (error) => {
       const errorText = error instanceof Error ? error.message : String(error);
       const current = await getThread(threadId, env).catch(() => null);
+      if (error?.code === "thread_retired" || String(current?.retiredAt || "").trim() || ["retiring", "retired"].includes(String(current?.state || "").trim().toLowerCase())) {
+        await appendEvent({ type: "runtime_wake_blocked", threadId, reason: "thread_retired" }, env).catch(() => {});
+        return;
+      }
       const nativeCodexRuntime = current && threadUsesNativeCodexRuntime(current, env);
       await updateThread(threadId, nativeCodexRuntime ? {
         state: "failed",

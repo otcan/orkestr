@@ -97,6 +97,9 @@
           aria-label="Mark all Orkestr thread messages as read"
           (click)="markAllThreadsRead()"
         >Read all</button>
+        <button class="secondary" type="button" (click)="toggleArchivedThreads()">
+          {{ showArchivedThreads ? "Active" : "Archived" }}
+        </button>
       </div>
     </div>
 
@@ -1319,6 +1322,15 @@
                 <input name="thread-delete-confirm-{{ thread.id }}" [(ngModel)]="deleteThreadConfirm" [placeholder]="threadTitle(thread)" />
               </label>
               <div class="settings-actions">
+                @if (threadRetired(thread)) {
+                  <button type="button" (click)="restoreSelectedThread(thread)" [disabled]="busy || retiringThread">
+                    {{ retiringThread ? "Restoring" : "Restore thread" }}
+                  </button>
+                } @else {
+                  <button class="secondary" type="button" (click)="retireSelectedThread(thread)" [disabled]="busy || retiringThread">
+                    {{ retiringThread ? "Retiring" : "Retire thread" }}
+                  </button>
+                }
                 <button class="danger-soft" type="button" (click)="deleteSelectedThread(thread)" [disabled]="busy || deletingThread || !threadDeleteConfirmMatches(thread)">
                   {{ deletingThread ? "Deleting" : "Delete thread" }}
                 </button>

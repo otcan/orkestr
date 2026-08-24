@@ -1,6 +1,6 @@
 import crypto, { randomBytes, randomUUID } from "node:crypto";
 import { appendEvent } from "../../storage/src/store.js";
-import { getThread, listThreads } from "../../core/src/threads.js";
+import { getThread, isThreadRetired, listThreads } from "../../core/src/threads.js";
 import { assertDesktopAccess, desktopAccessMode } from "../../core/src/desktop-access.js";
 import {
   effectiveThreadResourceGrantFromSnapshot,
@@ -152,6 +152,7 @@ export async function resolveExactDesktopGrant(input = {}, env = process.env) {
   if (!principalId(principal)) await deny("desktop_runtime_principal_required", input, env, 401);
   const thread = await getThread(threadId, env);
   if (!thread) await deny("desktop_thread_not_found", input, env, 404);
+  if (isThreadRetired(thread)) await deny("desktop_thread_retired", input, env, 410);
   const [state, threads, lineage] = await Promise.all([
     readThreadResourcePolicy(env),
     listThreads(env),
@@ -355,6 +356,7 @@ export async function consumeDesktopCapability(input = {}, env = process.env) {
   if (Date.parse(found.expiresAt) <= Date.now()) await deny("desktop_capability_expired", input, env, 401);
   const [thread, threads] = await Promise.all([getThread(found.threadId, env), listThreads(env)]);
   if (!thread) await deny("desktop_thread_not_found", input, env, 404);
+  if (isThreadRetired(thread)) await deny("desktop_thread_retired", input, env, 410);
   const threadsById = new Map(threads.map((item) => [item.id, item]));
   const resource = state.resources.find((item) => item.resourceType === "desktop" && item.id === found.resourceId) || null;
   if (!resource || resource.status !== "active" || resource.retiredAt || resource.boundaryId !== threadResourceBoundaryId(env)) await deny("desktop_capability_resource_stale", input, env, 403);
