@@ -42,10 +42,14 @@ import { listEvents } from "../packages/storage/src/store.js";
 
 const execFileAsync = promisify(execFile);
 const priorWhatsappAutostart = {
+  ORKESTR_AUTH_REQUIRED: process.env.ORKESTR_AUTH_REQUIRED,
+  ORKESTR_UNSAFE_ALLOW_PUBLIC_UNAUTHENTICATED: process.env.ORKESTR_UNSAFE_ALLOW_PUBLIC_UNAUTHENTICATED,
   ORKESTR_WHATSAPP_AUTOSTART: process.env.ORKESTR_WHATSAPP_AUTOSTART,
   WHATSAPP_LOCAL_AUTOSTART: process.env.WHATSAPP_LOCAL_AUTOSTART,
 };
 
+process.env.ORKESTR_AUTH_REQUIRED = "0";
+process.env.ORKESTR_UNSAFE_ALLOW_PUBLIC_UNAUTHENTICATED = "1";
 process.env.ORKESTR_WHATSAPP_AUTOSTART = "0";
 process.env.WHATSAPP_LOCAL_AUTOSTART = "0";
 
