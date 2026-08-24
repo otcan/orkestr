@@ -58,6 +58,7 @@ test("CLI help exposes local service commands promised by the installer", async 
   assert.match(stdout.text(), /orkestr vm-slice create <owner-user-id>/);
   assert.match(stdout.text(), /vm-slice \[list\|status <slice-id>\|provision <slice-id>\|destroy <slice-id>/);
   assert.match(stdout.text(), /orkestr task-agent spawn <parent-thread>/);
+  assert.match(stdout.text(), /orkestr instance config \[get\|status\|patch\]/);
 });
 
 test("CLI API client aborts stalled requests on its own deadline", async () => {
@@ -99,6 +100,15 @@ test("CLI spawns a scoped specialist task agent", async () => {
     stdout,
     stderr: capture(),
     fetchImpl: fakeFetch({
+      "GET /api/whereiam": {
+        ok: true,
+        matched: true,
+        thread: {
+          id: "worker-thread",
+          parentThreadId: "parent-thread",
+          rootThreadId: "parent-thread",
+        },
+      },
       "POST /api/threads/parent-thread/task-agents": {
         taskAgent: { id: "task-id", threadId: "task-thread", profileId: "sre_engineer", status: "held" },
       },
@@ -106,12 +116,17 @@ test("CLI spawns a scoped specialist task agent", async () => {
   });
 
   assert.equal(code, 0);
-  assert.equal(seen.length, 1);
-  assert.deepEqual(seen[0].body, {
+  assert.equal(seen.length, 2);
+  assert.equal(seen[0].key, "GET /api/whereiam");
+  assert.equal(seen[1].key, "POST /api/threads/parent-thread/task-agents");
+  assert.deepEqual(seen[1].body, {
     profile: "sre_engineer",
     task: "Diagnose watcher restarts",
     contextRefs: ["watcher logs", "release state"],
     autoRun: false,
+    originThreadId: "worker-thread",
+    originRootThreadId: "parent-thread",
+    requestedParentThreadId: "parent-thread",
   });
   assert.match(stdout.text(), /task-thread/);
 });
@@ -1167,6 +1182,40 @@ test("CLI prints non-secret runtime settings from local state", async () => {
   assert.equal(payload.settings.profile, undefined);
   assert.equal(payload.settings.desktops.gmailAuth, "gmail");
   assert.equal(payload.settings.codex.permissionPrompts.alwaysApprove.requiresExplicitScope, true);
+});
+
+test("CLI reads and patches instance desired state through the shared API", async () => {
+  const stdout = capture();
+  const seen = [];
+  const context = {
+    env: { ORKESTR_DISABLE_CLI_AUTH: "1" },
+    stdout,
+    stderr: capture(),
+    fetchImpl: fakeFetch({
+      "GET /api/instance/config": {
+        ok: true,
+        config: { schemaVersion: 1, generation: 4, metadata: { label: "Demo" } },
+      },
+      "PATCH /api/instance/config": (request) => ({
+        ok: true,
+        config: { schemaVersion: 1, generation: 5, ...request.body.patch },
+      }),
+    }, seen),
+  };
+
+  assert.equal(await runCli(["--api", "http://orkestr.test", "instance", "config", "get", "--json"], context), 0);
+  assert.equal(JSON.parse(stdout.text()).config.generation, 4);
+  assert.equal(await runCli([
+    "--api", "http://orkestr.test", "instance", "config", "patch",
+    "--generation", "4",
+    "--patch", JSON.stringify({ metadata: { label: "Updated" } }),
+    "--json",
+  ], context), 0);
+  assert.deepEqual(seen.at(-1).body, {
+    expectedGeneration: 4,
+    patch: { metadata: { label: "Updated" } },
+  });
+  assert.equal(seen.at(-1).key, "PATCH /api/instance/config");
 });
 
 test("CLI creates a Google Workspace connect link for agents", async () => {

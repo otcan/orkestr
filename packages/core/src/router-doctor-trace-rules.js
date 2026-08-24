@@ -65,9 +65,12 @@ export function traceShortCircuitedBeforeRuntime(trace = {}) {
     "desktop_share_approved",
     "desktop_share_approve_failed",
     "duplicate_event_id",
+    "duplicate_of_rejection",
     "duplicate_status_command",
     "google_workspace_connect",
     "status_command",
+    "inbound_security_denied",
+    "inbound_security_blocked",
   ]);
   if ([...reasons].some((reason) => knownLocalTerminalReasons.has(reason))) return true;
   return trace.terminal === true && lower(trace.currentPhase) === "skipped";

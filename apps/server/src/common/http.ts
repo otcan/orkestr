@@ -1,7 +1,7 @@
 import { HttpException } from "@nestjs/common";
 
-export function httpError(message: string, statusCode: number): HttpException {
-  return new HttpException({ error: message }, statusCode);
+export function httpError(message: string, statusCode: number, extra: Record<string, unknown> = {}): HttpException {
+  return new HttpException({ error: message, ...extra }, statusCode);
 }
 
 export function ensureAttachmentsArray(body: Record<string, unknown> | null | undefined): void {

@@ -5,6 +5,7 @@ import {
   enqueueMailboxThreadDeliveries,
   isMailboxThreadPolicyUnavailable,
 } from "../../core/src/mailbox-thread-delivery.js";
+import { dispatchMailboxRouteWork } from "../../core/src/mailbox-routes.js";
 import { getMailbox, routeMailboxMessage } from "../../core/src/mailboxes.js";
 import { acceptingMailboxStatuses } from "../../core/src/mailbox-normalization.js";
 
@@ -42,9 +43,10 @@ export async function ingestMailboxMessage(input = {}, env = process.env) {
     try {
       const delivery = await enqueueMailboxThreadDeliveries(routed.mailboxDeliveryInput, env);
       const dispatched = await dispatchMailboxThreadDeliveries({ deliveryIds: delivery.deliveryIds }, env);
+      const routeDispatch = await dispatchMailboxRouteWork({ workIds: delivery.routeSource?.workId ? [delivery.routeSource.workId] : [] }, env);
       const completed = await markConnectorInboxEvent(inbox.event.id, {
         state: "routed",
-        result: { deliveryIds: delivery.deliveryIds, unrouted: delivery.unrouted, dispatch: dispatched.results },
+        result: { deliveryIds: delivery.deliveryIds, unrouted: delivery.unrouted, dispatch: dispatched.results, routeDispatch: routeDispatch.results },
       }, env);
       return {
         ...publicRouted(routed),
@@ -52,6 +54,7 @@ export async function ingestMailboxMessage(input = {}, env = process.env) {
         created: inbox.created,
         delivery,
         dispatch: dispatched,
+        routeDispatch,
         inboxEvent: completed,
       };
     } catch (error) {
@@ -93,11 +96,12 @@ export async function replayMailboxPolicyOutageSpool({ limit = 25 } = {}, env = 
     try {
       const delivery = await enqueueMailboxThreadDeliveries({ mailbox, message: event.payload, idempotencyKey: event.id }, env);
       const dispatched = await dispatchMailboxThreadDeliveries({ deliveryIds: delivery.deliveryIds }, env);
+      const routeDispatch = await dispatchMailboxRouteWork({ workIds: delivery.routeSource?.workId ? [delivery.routeSource.workId] : [] }, env);
       const completed = await markConnectorInboxEvent(event.id, {
         state: "routed",
         nextAttemptAt: "",
         error: "",
-        result: { deliveryIds: delivery.deliveryIds, unrouted: delivery.unrouted, dispatch: dispatched.results },
+        result: { deliveryIds: delivery.deliveryIds, unrouted: delivery.unrouted, dispatch: dispatched.results, routeDispatch: routeDispatch.results },
       }, env);
       results.push({ id: event.id, state: completed.state, deliveryIds: delivery.deliveryIds });
     } catch (error) {

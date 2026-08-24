@@ -301,7 +301,7 @@ export class UserConnectorsPageComponent implements OnDestroy, OnInit {
   }
 
   deskPath(): string {
-    return this.appPath("/desk");
+    return this.appPath("/desktops");
   }
 
   private connectorIntentService(): string {

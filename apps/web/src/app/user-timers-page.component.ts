@@ -165,6 +165,30 @@ export class UserTimersPageComponent implements OnInit {
     return values.join(" · ");
   }
 
+  enabledCount(): number {
+    return this.automations.filter((automation) => automation.enabled !== false).length;
+  }
+
+  pausedCount(): number {
+    return this.automations.filter((automation) => automation.enabled === false).length;
+  }
+
+  failedCount(): number {
+    return this.automations.filter((automation) => Boolean(automation.lastError)).length;
+  }
+
+  automationOutcomeLabel(automation: AutomationRecord): string {
+    if (automation.lastError) return "Failed";
+    if (automation.lastRunAt) return "Completed";
+    return "Not run yet";
+  }
+
+  automationOutcomeClass(automation: AutomationRecord): string {
+    if (automation.lastError) return "bad";
+    if (automation.lastRunAt) return "ready";
+    return "pending";
+  }
+
   doctorCount(name: string): number {
     return Number(this.doctor?.counts?.[name as keyof NonNullable<AutomationDoctorResponse["counts"]>] || 0) || 0;
   }

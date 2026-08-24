@@ -206,6 +206,46 @@ would-deny decisions during rollout; switch to `enforce` after grants are
 reviewed. Legacy share links without a thread, boundary, and grant revision are
 revoked in enforcement mode.
 
+An operator may enforce a reviewed desktop incrementally while the global mode
+remains `shadow` by setting `ORKESTR_DESKTOP_ENFORCED_BINDINGS_JSON` to an array
+of exact `{ "threadId": "...", "resourceId": "..." }` bindings. A protected
+thread is enforced for every desktop request, and a protected desktop is
+enforced for every requesting thread, so a mismatched pair fails closed. The
+resource ID must come from the private instance policy; do not publish real
+thread or account bindings. Malformed non-empty configuration fails closed.
+
+### Brokered Desktop Capabilities
+
+In desktop `enforce` mode, including a scoped enforced binding, normal API and agent inventory projections redact
+browser control endpoints, profile paths, and noVNC/CDP details. A caller first
+selects its thread; the server resolves exactly one active desktop grant for
+that thread and creates an exclusive, finite, heartbeat-current lease. It may
+then issue a short-lived, single-use capability bound to the authenticated
+principal, exact thread, current lease fencing version, runtime identity,
+resource generation, and grant revision. Callers cannot use a raw endpoint or
+select a different desktop with that capability. Replays, expired capabilities,
+replaced leases, stale grants, and invalid attestations are denied before a
+browser connection is made and produce redacted audit decisions.
+
+External-account desktop registration additionally requires a private-overlay
+attestation record keyed by the server-resolved resource ID. The record is an
+opaque, verified account-reference and isolation-evidence hash with matching
+resource owner and boundary, verifier, issue/expiry timestamps, and a
+visible-noVNC requirement when applicable. Do not put account names, VM
+bindings, ports, profiles, endpoint URLs, or attestation values in this
+repository or public environment files. For an attested external LinkedIn
+desktop, CDP click/type/navigate operations are denied; writes remain an
+attended visible noVNC workflow. Generic managed desktops, such as Gmail,
+retain their existing brokered operations when their resource policy does not
+require visible noVNC interaction.
+
+`off` and `shadow` retain migration compatibility and do not require a desktop
+capability or attestation. Before enabling `enforce`, private operators must
+deploy the broker/attestation source, register each account lifecycle, migrate
+explicit per-thread grants, verify exclusive tenant/desktop isolation, and
+remove legacy shared endpoint paths. Those private rollout artifacts are not
+part of Orkestr OSS.
+
 ### Thread Resource Policy Rollout
 
 Desktop grants are backed by the transactional thread-resource policy database,
@@ -321,6 +361,22 @@ uses the stable delivery client-message ID, so a retry cannot append twice.
 The final policy/claim check runs immediately before append; a revocation that
 begins after that cross-store check is still contained by the same deterministic
 thread-message idempotency key. VM mailbox relay is separate and unchanged.
+
+### Managed mailbox inbox
+
+Forwarded mail can be read without opening, waking, or delivering to a thread.
+Use `GET /api/mailboxes/:mailboxId/messages?threadId=:threadId` or
+`orkestr mailboxes messages <mailbox-id> --thread-id <thread-id>`. In enforce
+mode, the caller must own the mailbox and the selected thread must hold that
+mailbox's exact `read` grant. An administrator has no implicit mailbox-wide
+read bypass; an admin-owned mailbox also needs its own explicitly granted
+thread context. The projection is paginated and bounded, and every read emits
+a content-free policy audit event. It reads only the bounded mailbox-source
+retention already recorded by ingress; it does not create a route, alter
+listener state, or replay an email. Shadow mode returns a content-redacted
+projection, while off mode declines the request rather than falling back to
+unmanaged inbox access.
+
 Break-glass is never an implicit admin bypass: it requires the exact target and
 action, an admin's recent authentication, a reason, and a change reference; it
 is audited before use and expires within fifteen minutes.

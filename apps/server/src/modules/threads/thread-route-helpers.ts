@@ -116,5 +116,18 @@ export function sanitizedThreadActionInput(input: Record<string, unknown> = {}):
   for (const key of ["ownerContactIds", "ownerContactAliases", "authorizedContactIds", "authorizedContactAliases", "additionalParticipantIds", "contextRefs"]) {
     if (Array.isArray(input[key])) result[key] = input[key].map((value) => String(value || "").slice(0, 500)).filter(Boolean);
   }
+  const participantIdentity = input.participantIdentityV2;
+  if (participantIdentity && typeof participantIdentity === "object" && !Array.isArray(participantIdentity)) {
+    const identities = Array.isArray((participantIdentity as any).identities) ? (participantIdentity as any).identities : [];
+    const grants = Array.isArray((participantIdentity as any).grants) ? (participantIdentity as any).grants : [];
+    result.participantIdentityV2 = {
+      version: Number((participantIdentity as any).version || 2),
+      identityCount: identities.length,
+      verifiedAliasCount: identities.reduce((count: number, identity: any) => (
+        count + (Array.isArray(identity?.aliases) ? identity.aliases.filter((alias: any) => alias?.verified === true).length : 0)
+      ), 0),
+      grantRoles: [...new Set(grants.map((grant: any) => String(grant?.role || "").trim()).filter(Boolean))],
+    };
+  }
   return result;
 }

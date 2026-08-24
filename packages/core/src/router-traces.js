@@ -2,8 +2,10 @@ import crypto from "node:crypto";
 import { dataPaths } from "../../storage/src/paths.js";
 import { appendEvent, readJson, writeJson } from "../../storage/src/store.js";
 import { recordWatcherAlert } from "./watcher-alerts.js";
+import { diagnoseRouterTrace } from "./router-trace-diagnostics.js";
 
 export { routerTraceMetrics } from "./router-trace-metrics.js";
+export { diagnoseRouterTrace } from "./router-trace-diagnostics.js";
 
 export const routerTracePhases = [
   "received",
@@ -60,11 +62,6 @@ function outboxRetentionLimit(env = process.env) {
   return Math.max(100, Math.min(20_000, Number.isFinite(parsed) ? Math.floor(parsed) : retentionLimit(env)));
 }
 
-function stuckThresholdMs(env = process.env) {
-  const parsed = Number(env.ORKESTR_ROUTER_TRACE_STUCK_MS || 10 * 60 * 1000);
-  return Math.max(30_000, Number.isFinite(parsed) ? Math.floor(parsed) : 10 * 60 * 1000);
-}
-
 function safeError(value) {
   return clean(value?.message || value).replace(/\s+/g, " ").slice(0, 500);
 }
@@ -100,6 +97,12 @@ function safeMeta(input = {}) {
     "intentId",
     "status",
     "terminalState",
+    "failureCode",
+    "classification",
+    "effectiveRole",
+    "policyRevision",
+    "bindingRevision",
+    "remediation",
   ]) {
     const value = clean(input[key]);
     if (value) output[key] = value.slice(0, 200);
@@ -109,6 +112,7 @@ function safeMeta(input = {}) {
     if (value !== null) output[key] = value;
   }
   if (input.terminal !== undefined) output.terminal = Boolean(input.terminal);
+  if (input.retryable !== undefined) output.retryable = Boolean(input.retryable);
   return output;
 }
 
@@ -233,6 +237,13 @@ function publicTrace(trace = {}, env = process.env) {
     retryCount: Number(trace.retryCount || 0) || 0,
     lastError: clean(trace.lastError),
     ownerProcess: clean(trace.ownerProcess),
+    failureCode: clean(trace.failureCode),
+    classification: clean(trace.classification),
+    effectiveRole: clean(trace.effectiveRole),
+    policyRevision: clean(trace.policyRevision),
+    bindingRevision: clean(trace.bindingRevision),
+    retryable: trace.retryable === undefined || trace.retryable === null ? null : trace.retryable === true,
+    remediation: clean(trace.remediation),
     createdAt: clean(trace.createdAt),
     updatedAt: clean(trace.updatedAt),
     phases: Array.isArray(trace.phases) ? trace.phases : [],
@@ -269,6 +280,13 @@ export async function recordRouterTraceEvent(input = {}, env = process.env) {
     retryCount: Math.max(Number(previous.retryCount || 0) || 0, Number(input.retryCount || input.attempts || 0) || 0),
     lastError: safeError(input.error) || clean(input.lastError || previous.lastError),
     ownerProcess: clean(input.ownerProcess || previous.ownerProcess),
+    failureCode: clean(input.failureCode || previous.failureCode),
+    classification: clean(input.classification || previous.classification),
+    effectiveRole: clean(input.effectiveRole || previous.effectiveRole),
+    policyRevision: clean(input.policyRevision || previous.policyRevision),
+    bindingRevision: clean(input.bindingRevision || previous.bindingRevision),
+    retryable: input.retryable === undefined ? previous.retryable ?? null : input.retryable === true,
+    remediation: clean(input.remediation || previous.remediation).slice(0, 500),
     createdAt: clean(previous.createdAt) || now,
     updatedAt: duplicatePhase ? clean(previous.updatedAt) || now : now,
     phases: duplicatePhase ? previousPhases : [...previousPhases, phase].slice(-200),
@@ -292,6 +310,10 @@ export async function recordRouterTraceEvent(input = {}, env = process.env) {
     reason: phase.reason || "",
     error: phase.error || "",
     terminal: next.terminal === true,
+    failureCode: next.failureCode || "",
+    classification: next.classification || "",
+    effectiveRole: next.effectiveRole || "",
+    retryable: next.retryable,
   }, env).catch(() => {});
   if (watcherAlertPhases.has(phase.phase) && !retryableWhatsAppMirrorFailure(phase, next)) {
     await recordWatcherAlert({
@@ -444,40 +466,6 @@ export async function listRouterOutbox(filters = {}, env = process.env) {
     if (clean(filters.status) && clean(item.status) !== lower(filters.status)) return false;
     return true;
   });
-}
-
-export function diagnoseRouterTrace(trace = {}, env = process.env) {
-  const updatedMs = Date.parse(clean(trace.updatedAt));
-  const ageMs = Number.isFinite(updatedMs) ? Date.now() - updatedMs : 0;
-  const currentPhase = lower(trace.currentPhase);
-  const terminal = trace.terminal === true || terminalPhases.has(currentPhase);
-  const stuck = !terminal && ageMs >= stuckThresholdMs(env) && [
-    "queued",
-    "delivery_started",
-    "delivered_to_runtime",
-    "mirror_claimed",
-    "mirror_failed",
-    "runtime_failed",
-    "stuck",
-  ].includes(currentPhase);
-  let recovery = "No recovery needed.";
-  if (stuck && ["queued", "delivery_started"].includes(currentPhase)) {
-    recovery = "Check the assigned runtime and wake or retry the delivery queue; do not duplicate the inbound message.";
-  } else if (stuck && currentPhase === "delivered_to_runtime") {
-    recovery = "Inspect runtime output and assistant message import before retrying; the user input may already be visible to the runtime.";
-  } else if (stuck && ["mirror_claimed", "mirror_failed"].includes(currentPhase)) {
-    recovery = "Check connector status and retry the durable outbox item for this turn.";
-  } else if (stuck && currentPhase === "runtime_failed") {
-    recovery = "Repair or restart the runtime, then explicitly retry the queued turn if the user still expects a reply.";
-  }
-  return {
-    stuck,
-    ageMs,
-    terminal,
-    currentPhase,
-    recovery,
-    lastError: clean(trace.lastError),
-  };
 }
 
 export async function detectStuckRouterTraces(env = process.env) {

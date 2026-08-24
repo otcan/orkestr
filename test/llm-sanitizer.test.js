@@ -46,6 +46,8 @@ test("LLM sanitizer payload declares LLM-only fail-closed policy", async () => {
   assert.equal(payload.action, "thread.input");
   assert.equal(payload.policy.llmOnly, true);
   assert.equal(payload.policy.failClosed, true);
+  assert.equal(payload.policy.authorizationContextIncluded, true);
+  assert.equal(payload.actor.userId, "alice");
   assert.equal(payload.principal.userId, "alice");
   assert.equal(payload.resource.ownerUserId, "alice");
   assert.match(payload.requestedAt, /^\d{4}-\d{2}-\d{2}T/);
@@ -445,6 +447,55 @@ test("OpenAI LLM sanitizer retries transient HTTP failures before fail-closed", 
     assert.equal(decision.reason, "same-user chat allowed");
     assert.equal(calls.length, 2);
     assert.equal(calls[0].metadata.orkestr_runtime, "llm-sanitizer");
+    assert.deepEqual(calls[0].reasoning, { effort: "low" });
+    assert.equal(calls[0].max_output_tokens, 600);
+    assert.equal(calls[0].text.format.type, "json_schema");
+    assert.equal(calls[0].text.format.strict, true);
+    assert.deepEqual(calls[0].text.format.schema.required, ["allow", "reason", "category"]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("OpenAI LLM sanitizer only adds GPT-5 reasoning controls when supported", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-sanitizer-openai-reasoning-"));
+  const originalFetch = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = async (_url, options) => {
+    calls.push(JSON.parse(options.body));
+    return {
+      ok: true,
+      status: 200,
+      async json() {
+        return {
+          id: `resp_sanitizer_${calls.length}`,
+          model: calls.at(-1).model,
+          output_text: JSON.stringify({ allow: true, reason: "allowed", category: "same_user" }),
+          usage: { input_tokens: 100, output_tokens: 12 },
+        };
+      },
+    };
+  };
+
+  try {
+    await sanitizeAction(request(), {
+      ORKESTR_HOME: home,
+      OPENAI_API_KEY: "sk-test",
+      ORKESTR_LLM_SANITIZER_PROVIDER: "openai",
+      ORKESTR_LLM_SANITIZER_MODEL: "gpt-4.1-mini",
+    });
+    await sanitizeAction(request(), {
+      ORKESTR_HOME: home,
+      OPENAI_API_KEY: "sk-test",
+      ORKESTR_LLM_SANITIZER_PROVIDER: "openai",
+      ORKESTR_LLM_SANITIZER_MODEL: "gpt-5-nano",
+      ORKESTR_LLM_SANITIZER_REASONING_EFFORT: "minimal",
+      ORKESTR_LLM_SANITIZER_MAX_OUTPUT_TOKENS: "320",
+    });
+
+    assert.equal(calls[0].reasoning, undefined);
+    assert.deepEqual(calls[1].reasoning, { effort: "minimal" });
+    assert.equal(calls[1].max_output_tokens, 320);
   } finally {
     globalThis.fetch = originalFetch;
   }
