@@ -3,10 +3,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { setGeneratedLocalWhatsAppGroupPicture } from "../packages/connectors/src/whatsapp-chat-picture.js";
+import { setLocalWhatsAppGroupPictureFromFile } from "../packages/connectors/src/whatsapp-chat-picture.js";
 
 test("local whatsapp group picture fallback uses WAWebWid for LID-era groups", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-picture-wid-"));
+  const picturePath = path.join(home, "group-picture.jpg");
+  await fs.writeFile(picturePath, "test-fixture", "utf8");
   const calls = [];
   const priorWindow = globalThis.window;
   const chatWid = { _serialized: "120363429022300057@g.us", wid: true };
@@ -71,16 +73,16 @@ test("local whatsapp group picture fallback uses WAWebWid for LID-era groups", a
     },
   };
   const MessageMedia = { fromFilePath: (filePath) => ({ filePath }) };
-  const result = await setGeneratedLocalWhatsAppGroupPicture({
+  const result = await setLocalWhatsAppGroupPictureFromFile({
     client,
     MessageMedia,
     chatId: "120363429022300057@g.us",
-    title: "Jobs-n8n",
+    picturePath,
     accountId: "sender",
     env: { ...process.env, ORKESTR_HOME: home },
   });
 
-  assert.equal(result.updated, true);
+  assert.equal(result, true);
   assert.equal(calls.find((call) => call.type === "get").value, chatWid);
   assert.equal(calls.find((call) => call.type === "find").value, chatWid);
   assert.equal(calls.find((call) => call.type === "send").value, chatWid);

@@ -40,7 +40,9 @@ export async function setGeneratedLocalWhatsAppGroupPicture({
   return { updated, picturePath };
 }
 
-async function setLocalWhatsAppGroupPictureFromFile({
+// Kept separate from generation so callers that already have approved image
+// media can use the same WhatsApp Web compatibility fallback.
+export async function setLocalWhatsAppGroupPictureFromFile({
   client,
   MessageMedia,
   chatId = "",
