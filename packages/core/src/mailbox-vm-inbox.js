@@ -1,5 +1,5 @@
 import { appendEvent } from "../../storage/src/store.js";
-import { ensureConnectorInboxEvent, markConnectorInboxEvent } from "../../connectors/src/connector-inbox.js";
+import { ensureConnectorInboxEvent, markConnectorInboxEvent } from "../../storage/src/connector-inbox.js";
 import { enqueueMailboxThreadDeliveries } from "./mailbox-thread-delivery.js";
 import { normalizeMailbox, publicMailbox } from "./mailbox-normalization.js";
 import { adminPrincipal } from "./principal.js";

@@ -12,7 +12,7 @@ import {
 } from "./mailboxes.js";
 import { isAdminPrincipal, policyError } from "./policy.js";
 import { resolveTenantVmTarget, targetResolutionMetadata } from "./target-resolver.js";
-import { ensureConnectorInboxEvent, getConnectorInboxEvent } from "../../connectors/src/connector-inbox.js";
+import { ensureConnectorInboxEvent, getConnectorInboxEvent } from "../../storage/src/connector-inbox.js";
 
 export async function retryMailboxRelayForPrincipal(relayAuditId, input = {}, principal = {}, env = process.env) {
   if (!isAdminPrincipal(principal)) throw policyError("mailbox_relay_retry_admin_required", 403);
