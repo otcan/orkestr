@@ -3,6 +3,12 @@ import fs from "node:fs/promises";
 import { realpathSync } from "node:fs";
 import http from "node:http";
 import { fileURLToPath, URL } from "node:url";
+import {
+  classifyWhatsAppBridgeFailure,
+  newWhatsAppBridgeRequestId,
+  sanitizeWhatsAppBridgePayload,
+  sanitizeWhatsAppBridgeResponseExcerpt,
+} from "../packages/connectors/src/whatsapp-bridge-diagnostics.js";
 
 function clean(value = "") {
   return String(value || "").trim();
@@ -100,9 +106,39 @@ export function assertParentWhatsAppBridgeSendAllowed(payload = {}, policy = par
   return true;
 }
 
-function json(res, status, payload) {
-  res.writeHead(status, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
+function json(res, status, payload, headers = {}) {
+  res.writeHead(status, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store", ...headers });
   res.end(JSON.stringify(payload));
+}
+
+function safeIdentifier(value = "") {
+  const text = clean(value);
+  return /^[A-Za-z0-9._:-]{1,160}$/.test(text) ? text : "";
+}
+
+function requestCorrelation(req) {
+  const requestId = newWhatsAppBridgeRequestId(safeIdentifier(req?.headers?.["x-request-id"]));
+  return {
+    requestId,
+    correlationId: safeIdentifier(req?.headers?.["x-correlation-id"]) || requestId,
+  };
+}
+
+function responseCorrelationHeaders({ requestId = "", correlationId = "", upstreamRequestId = "" } = {}) {
+  return {
+    "x-request-id": requestId,
+    "x-orkestr-bridge-request-id": requestId,
+    "x-correlation-id": correlationId,
+    ...(upstreamRequestId ? { "x-orkestr-upstream-request-id": upstreamRequestId } : {}),
+  };
+}
+
+function logProxyRequest(logger, fields = {}) {
+  try {
+    logger?.info?.(JSON.stringify({ event: "parent_whatsapp_bridge_proxy_request", ...fields }));
+  } catch {
+    // Observability must never change proxy delivery behavior.
+  }
 }
 
 function upstreamUrl(upstreamBase, pathname, search = "") {
@@ -193,16 +229,43 @@ export function createParentWhatsAppBridgeProxy(options = {}) {
   const mcpUpstream = clean(options.mcpUpstream ?? options.env?.ORKESTR_PARENT_CONNECTORS_MCP_UPSTREAM ?? process.env.ORKESTR_PARENT_CONNECTORS_MCP_UPSTREAM) ||
     "http://127.0.0.1:18914/mcp";
   const defaultAccount = clean(policy.defaultAccount) || "responder";
+  const logger = options.logger === undefined ? console : options.logger;
   return http.createServer(async (req, res) => {
+    const startedAt = Date.now();
+    const { requestId, correlationId } = requestCorrelation(req);
+    const requestUrl = new URL(req.url || "/", "http://orkestr-parent-wa-bridge.local");
+    let route = null;
     try {
       const requestAuthorization = upstreamBearerAuthorization(req);
       const proxyTokenAuthorized = token && requestAuthorization === `Bearer ${token}`;
       const forwardAuthorization = !proxyTokenAuthorized && allowUpstreamBearer ? requestAuthorization : "";
       if (token && !proxyTokenAuthorized && !forwardAuthorization) {
-        return json(res, 401, { ok: false, error: "unauthorized" });
+        logProxyRequest(logger, {
+          requestId,
+          correlationId,
+          method: String(req.method || "GET").toUpperCase(),
+          route: requestUrl.pathname,
+          status: 401,
+          classification: "authentication",
+          retryable: false,
+          durationMs: Date.now() - startedAt,
+        });
+        return json(res, 401, { ok: false, error: "unauthorized" }, responseCorrelationHeaders({ requestId, correlationId }));
       }
-      const route = routeFor(req, { upstreamBase, defaultAccount, mcpUpstream });
-      if (!route) return json(res, 404, { ok: false, error: "unsupported_whatsapp_bridge_route" });
+      route = routeFor(req, { upstreamBase, defaultAccount, mcpUpstream });
+      if (!route) {
+        logProxyRequest(logger, {
+          requestId,
+          correlationId,
+          method: String(req.method || "GET").toUpperCase(),
+          route: requestUrl.pathname,
+          status: 404,
+          classification: "route_configuration",
+          retryable: false,
+          durationMs: Date.now() - startedAt,
+        });
+        return json(res, 404, { ok: false, error: "unsupported_whatsapp_bridge_route" }, responseCorrelationHeaders({ requestId, correlationId }));
+      }
       const body = ["POST", "PUT", "PATCH"].includes(route.method) ? await readBody(req) : undefined;
       // Forwarded scoped bearer tokens are enforced by the upstream Orkestr bridge.
       if (route.send && body && !forwardAuthorization) {
@@ -214,6 +277,8 @@ export function createParentWhatsAppBridgeProxy(options = {}) {
           ...(body ? { "content-type": String(req.headers["content-type"] || "application/json") } : {}),
           ...(route.mcp && req.headers.accept ? { accept: String(req.headers.accept) } : {}),
           ...(route.mcp && req.headers["mcp-protocol-version"] ? { "mcp-protocol-version": String(req.headers["mcp-protocol-version"]) } : {}),
+          "x-request-id": requestId,
+          "x-correlation-id": correlationId,
           ...(await upstreamAuthHeaders({
             upstreamToken: clean(options.upstreamToken ?? options.env?.ORKESTR_PARENT_WA_BRIDGE_UPSTREAM_TOKEN ?? process.env.ORKESTR_PARENT_WA_BRIDGE_UPSTREAM_TOKEN),
             upstreamCookie: clean(options.upstreamCookie ?? options.env?.ORKESTR_PARENT_WA_BRIDGE_UPSTREAM_COOKIE ?? process.env.ORKESTR_PARENT_WA_BRIDGE_UPSTREAM_COOKIE),
@@ -234,14 +299,64 @@ export function createParentWhatsAppBridgeProxy(options = {}) {
           : JSON.stringify({ ok: upstreamResponse.ok, chatId: payload.chatId || "", isGroup: true, participants: payload.participants || [] });
         contentType = "application/json; charset=utf-8";
       }
-      res.writeHead(upstreamResponse.status, { "content-type": contentType, "cache-control": "no-store" });
+      const upstreamRequestId = safeIdentifier(
+        upstreamResponse.headers.get("x-request-id") ||
+          upstreamResponse.headers.get("x-correlation-id") ||
+          upstreamResponse.headers.get("x-amzn-requestid"),
+      );
+      const parsedPayload = (() => {
+        try {
+          return text ? JSON.parse(text) : {};
+        } catch {
+          return {};
+        }
+      })();
+      const failure = upstreamResponse.ok
+        ? { failureCode: "", classification: "", retryable: false }
+        : classifyWhatsAppBridgeFailure({
+            status: upstreamResponse.status,
+            payload: sanitizeWhatsAppBridgePayload(parsedPayload),
+          });
+      logProxyRequest(logger, {
+        requestId,
+        correlationId,
+        upstreamRequestId,
+        method: route.method,
+        route: requestUrl.pathname,
+        upstreamPath: route.url.pathname,
+        status: upstreamResponse.status,
+        contentType: clean(contentType).slice(0, 160),
+        ...(failure.failureCode ? { failureCode: failure.failureCode } : {}),
+        ...(failure.classification ? { classification: failure.classification } : {}),
+        ...(!upstreamResponse.ok ? { retryable: failure.retryable } : {}),
+        durationMs: Date.now() - startedAt,
+      });
+      res.writeHead(upstreamResponse.status, {
+        "content-type": contentType,
+        "cache-control": "no-store",
+        ...responseCorrelationHeaders({ requestId, correlationId, upstreamRequestId }),
+      });
       res.end(output);
     } catch (error) {
       const status = Number(error?.statusCode || error?.status || 502);
-      json(res, Number.isInteger(status) && status >= 400 && status < 600 ? status : 502, {
-        ok: false,
-        error: error?.message || String(error),
+      const responseStatus = Number.isInteger(status) && status >= 400 && status < 600 ? status : 502;
+      const failure = classifyWhatsAppBridgeFailure({ status: responseStatus });
+      logProxyRequest(logger, {
+        requestId,
+        correlationId,
+        method: String(req.method || "GET").toUpperCase(),
+        route: requestUrl.pathname,
+        ...(route?.url?.pathname ? { upstreamPath: route.url.pathname } : {}),
+        status: responseStatus,
+        failureCode: failure.failureCode,
+        classification: failure.classification,
+        retryable: failure.retryable,
+        durationMs: Date.now() - startedAt,
       });
+      json(res, responseStatus, {
+        ok: false,
+        error: sanitizeWhatsAppBridgeResponseExcerpt(error?.message || String(error), null, 240),
+      }, responseCorrelationHeaders({ requestId, correlationId }));
     }
   });
 }

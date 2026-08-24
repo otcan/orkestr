@@ -103,11 +103,18 @@ function safeMeta(input = {}) {
     "policyRevision",
     "bindingRevision",
     "remediation",
+    "requestId",
+    "correlationId",
+    "upstreamRequestId",
+    "contentType",
+    "bodyFingerprint",
+    "responseExcerpt",
+    "upstreamPath",
   ]) {
     const value = clean(input[key]);
     if (value) output[key] = value.slice(0, 200);
   }
-  for (const key of ["attempt", "attempts", "retryCount", "messageCursor"]) {
+  for (const key of ["attempt", "attempts", "retryCount", "messageCursor", "statusCode", "responseBytes"]) {
     const value = optionalNumber(input[key]);
     if (value !== null) output[key] = value;
   }

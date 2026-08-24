@@ -129,6 +129,10 @@ import {
   whatsappAccountLookupKeys,
 } from "./whatsapp-account-identity.js";
 import { maybeApprovePairingChallengeFromWhatsApp, maybeBindApprovedBrokerChat } from "./whatsapp-security-approval.js";
+import {
+  newWhatsAppBridgeRequestId,
+  readWhatsAppBridgeResponse,
+} from "./whatsapp-bridge-diagnostics.js";
 
 export { formatWhatsAppOutboundText } from "./whatsapp-formatting.js";
 export { initialQueueDeliveryState } from "./whatsapp-outbound-mirror.js";
@@ -1036,7 +1040,8 @@ function whatsappRouterAttachmentSummaryText(attachments = []) {
 
 function nonRetryableWhatsAppOutboundError(error) {
   const message = pickString(error?.message, error);
-  return /\bunknown_whatsapp_account\b/i.test(message) ||
+  return error?.retryable === false ||
+    /\bunknown_whatsapp_account\b/i.test(message) ||
     /\bwhatsapp_bridge_not_configured\b/i.test(message);
 }
 
@@ -3207,9 +3212,14 @@ async function sendClaimedWhatsAppText({
 } = {}) {
   const routerTraceId = pickString(intent?.routerTraceId);
   const turnId = pickString(intent?.turnId) || (routerTraceId ? turnIdFor({ routerTraceId }) : "");
+  const ownerUserId = resourceOwnerUserId(thread || {}, env);
+  const bodyKey = whatsappOutboundBodyKey({ chatId, text, attachments });
+  const canonicalFinalIdempotencyKey = deliveryType === "final" && routerTraceId && bodyKey
+    ? [ownerUserId, "whatsapp", accountId, chatId, threadId || "", `trace:${routerTraceId}`, `payload:${bodyKey}`, "final"].join("|")
+    : "";
   const outboxResult = await ensureConnectorOutboxJob({
-    tenantId: resourceOwnerUserId(thread || {}, env),
-    ownerUserId: resourceOwnerUserId(thread || {}, env),
+    tenantId: ownerUserId,
+    ownerUserId,
     connector: "whatsapp",
     accountId,
     chatId,
@@ -3223,6 +3233,7 @@ async function sendClaimedWhatsAppText({
         : messageSourceRevision(message)
     ),
     deliveryType,
+    ...(canonicalFinalIdempotencyKey ? { idempotencyKey: canonicalFinalIdempotencyKey } : {}),
     payload: {
       text,
       ...(routerUpdateType ? { routerUpdateType } : {}),
@@ -3233,10 +3244,11 @@ async function sendClaimedWhatsAppText({
       routerUpdateType: routerUpdateType || "",
       parentMessageId: parentMessageId || "",
       textKey,
-      bodyKey: whatsappOutboundBodyKey({ chatId, text, attachments }),
+      bodyKey,
       routerTraceId,
       turnId,
       routerOutboxId: intent?.outboxId || "",
+      ...(canonicalFinalIdempotencyKey ? { canonicalFinalProjection: true } : {}),
       ...(finalProjectionGeneration(message) ? { runtimeGeneration: finalProjectionGeneration(message) } : {}),
     },
   }, env);
@@ -3621,7 +3633,16 @@ async function sendClaimedWhatsAppText({
   await markRouterOutboxItem(intent?.outboxId, { status: "claimed" }, env).catch(() => null);
 
   try {
-    const payload = await sendWhatsAppText({ chatId, text, accountId, attachments, config, env, fetchImpl });
+    const payload = await sendWhatsAppText({
+      chatId,
+      text,
+      accountId,
+      attachments,
+      correlationId: routerTraceId,
+      config,
+      env,
+      fetchImpl,
+    });
     const delivery = {
       kind,
       deliveryType,
@@ -3716,6 +3737,9 @@ async function sendClaimedWhatsAppText({
     return { delivery };
   } catch (error) {
     const errorText = error.message || String(error);
+    const bridgeDiagnostics = error?.bridgeDiagnostics && typeof error.bridgeDiagnostics === "object"
+      ? error.bridgeDiagnostics
+      : null;
     const terminalFailure = nonRetryableWhatsAppOutboundError(error);
     const uncertainDelivery = uncertainWhatsAppOutboundDeliveryError(error);
     const terminalOutboxState = terminalFailure
@@ -3757,6 +3781,15 @@ async function sendClaimedWhatsAppText({
         ...(terminalFailure ? { nonRetryable: true } : {}),
         ...(uncertainDelivery ? { deliveryUncertain: true, retrySuppressed: true } : {}),
         ...(!terminalFailure && !uncertainDelivery ? { retryAfterAt: retryAt } : {}),
+        ...(bridgeDiagnostics ? {
+          bridgeFailure: {
+            ...bridgeDiagnostics,
+            retryable: !terminalFailure && !uncertainDelivery && error?.retryable !== false,
+          },
+          failureCode: pickString(error?.failureCode, bridgeDiagnostics.failureCode),
+          failureClassification: pickString(error?.failureClassification, bridgeDiagnostics.classification),
+          retryable: !terminalFailure && !uncertainDelivery && error?.retryable !== false,
+        } : {}),
       },
     }, env).catch(() => null);
     await patchAssistantMirrorDeliveryState({
@@ -3782,7 +3815,20 @@ async function sendClaimedWhatsAppText({
       routerTraceId,
       turnId,
       connector: "whatsapp",
-      phase: terminalFailure || uncertainDelivery ? "skipped" : "mirror_failed",
+      phase: terminalFailure ? "mirror_failed" : uncertainDelivery ? "skipped" : "mirror_failed",
+      reason: pickString(error?.failureCode, bridgeDiagnostics?.failureCode),
+      failureCode: pickString(error?.failureCode, bridgeDiagnostics?.failureCode),
+      classification: pickString(error?.failureClassification, bridgeDiagnostics?.classification),
+      retryable: terminalFailure || uncertainDelivery ? false : error?.retryable !== false,
+      requestId: pickString(bridgeDiagnostics?.requestId),
+      correlationId: pickString(bridgeDiagnostics?.correlationId),
+      upstreamRequestId: pickString(bridgeDiagnostics?.upstreamRequestId),
+      statusCode: Number(bridgeDiagnostics?.status || error?.statusCode || 0) || undefined,
+      responseBytes: Number(bridgeDiagnostics?.responseBytes || 0) || undefined,
+      contentType: pickString(bridgeDiagnostics?.contentType),
+      bodyFingerprint: pickString(bridgeDiagnostics?.bodyFingerprint),
+      responseExcerpt: pickString(bridgeDiagnostics?.responseExcerpt),
+      upstreamPath: pickString(bridgeDiagnostics?.upstreamPath),
       threadId,
       messageId,
       chatId,
@@ -5715,13 +5761,22 @@ function bridgeErrorText(value) {
   return pickString(message, code, JSON.stringify(value));
 }
 
-function whatsappSendFailureMessage(payload = {}, status = 0) {
-  return pickString(
+function whatsappSendFailureMessage(payload = {}, status = 0, diagnostics = {}) {
+  const reason = pickString(
     bridgeErrorText(payload.error),
     bridgeErrorText(payload.reason),
     bridgeErrorText(payload.message),
+    diagnostics.failureCode,
     status ? `whatsapp_send_failed_${status}` : "whatsapp_send_failed",
   );
+  const context = [
+    status ? `status=${status}` : "",
+    diagnostics.contentType ? `content_type=${diagnostics.contentType}` : "",
+    diagnostics.requestId ? `request_id=${diagnostics.requestId}` : "",
+    diagnostics.upstreamRequestId ? `upstream_request_id=${diagnostics.upstreamRequestId}` : "",
+    diagnostics.responseExcerpt ? `response=${JSON.stringify(diagnostics.responseExcerpt)}` : "",
+  ].filter(Boolean);
+  return context.length ? `${reason} (${context.join(", ")})` : reason;
 }
 
 async function listThreadMessageSets(env, state = null, config = {}, options = {}) {
@@ -5773,9 +5828,9 @@ async function listThreadMessageSets(env, state = null, config = {}, options = {
 }
 
 /**
- * @param {{ chatId?: string, text?: string, accountId?: string, mentions?: string[], attachments?: Array<Record<string, unknown>>, crossAccountEchoSuppression?: boolean, routeSentMessage?: boolean, config?: Record<string, unknown> | null, env?: Record<string, string | undefined>, fetchImpl?: typeof fetch }} [options]
+ * @param {{ chatId?: string, text?: string, accountId?: string, mentions?: string[], attachments?: Array<Record<string, unknown>>, crossAccountEchoSuppression?: boolean, routeSentMessage?: boolean, requestId?: string, correlationId?: string, config?: Record<string, unknown> | null, env?: Record<string, string | undefined>, fetchImpl?: typeof fetch }} [options]
  */
-export async function sendWhatsAppText({ chatId = "", text = "", accountId = "", mentions = [], attachments = [], crossAccountEchoSuppression = true, routeSentMessage = false, config = null, env = process.env, fetchImpl = fetch } = {}) {
+export async function sendWhatsAppText({ chatId = "", text = "", accountId = "", mentions = [], attachments = [], crossAccountEchoSuppression = true, routeSentMessage = false, requestId = "", correlationId = "", config = null, env = process.env, fetchImpl = fetch } = {}) {
   const resolvedConfig = config || await readConnectorConfig("whatsapp", env).catch(() => ({}));
   const bridgeUrl = configuredBridgeUrl(resolvedConfig, env);
   const normalizedAttachments = Array.isArray(attachments)
@@ -5810,10 +5865,16 @@ export async function sendWhatsAppText({ chatId = "", text = "", accountId = "",
   const sendablePathAttachments = externalBridgeCanReadPaths ? normalizedAttachments : [];
   const sendableInlineAttachments = inlineAttachments.attachments;
   const outboundText = appendLocalAttachmentFailureNotes(text, inlineAttachments.skipped);
-  const headers = bridgeRequestHeaders(resolvedConfig, env, { "content-type": "application/json" });
+  const bridgeRequestId = newWhatsAppBridgeRequestId(requestId);
+  const headers = bridgeRequestHeaders(resolvedConfig, env, {
+    "content-type": "application/json",
+    "x-request-id": bridgeRequestId,
+    ...(correlationId ? { "x-correlation-id": correlationId } : {}),
+  });
   const runtimeAccountId = await resolveBridgeRuntimeAccountId(accountId, { config: resolvedConfig, env, fetchImpl });
   const hasMedia = sendablePathAttachments.length || sendableInlineAttachments.length;
-  const response = await fetchImpl(whatsappBridgeEndpointUrl(bridgeUrl, hasMedia ? "/send-media" : "/send-text"), {
+  const endpoint = whatsappBridgeEndpointUrl(bridgeUrl, hasMedia ? "/send-media" : "/send-text");
+  const response = await fetchImpl(endpoint, {
     method: "POST",
     headers,
     body: JSON.stringify({
@@ -5828,11 +5889,23 @@ export async function sendWhatsAppText({ chatId = "", text = "", accountId = "",
     }),
     signal: AbortSignal.timeout(Number(env.WHATSAPP_SEND_TIMEOUT_MS || 10_000)),
   });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok || payload.ok === false) {
-    const error = new Error(whatsappSendFailureMessage(payload, response.status));
+  const parsed = await readWhatsAppBridgeResponse(response, {
+    requestId: bridgeRequestId,
+    correlationId,
+    upstreamPath: endpoint.pathname,
+    excerptLimit: env.ORKESTR_WHATSAPP_BRIDGE_DIAGNOSTIC_EXCERPT_MAX,
+    sensitiveValues: [outboundText, chatId, accountId, runtimeAccountId],
+  });
+  const failed = !response.ok || parsed.payload.ok === false;
+  const payload = failed ? parsed.safePayload : parsed.payload;
+  if (failed) {
+    const error = new Error(whatsappSendFailureMessage(payload, response.status, parsed.diagnostics));
     error.statusCode = response.status || 502;
     error.payload = payload;
+    error.bridgeDiagnostics = parsed.diagnostics;
+    error.failureCode = parsed.diagnostics.failureCode;
+    error.failureClassification = parsed.diagnostics.classification;
+    error.retryable = parsed.diagnostics.retryable;
     throw error;
   }
   return payload;
