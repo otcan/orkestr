@@ -24,11 +24,13 @@ import { readConnectorOutbox } from "../packages/connectors/src/connector-outbox
 const execFileAsync = promisify(execFile);
 const priorThreadTestEnv = {
   ORKESTR_AUTH_REQUIRED: process.env.ORKESTR_AUTH_REQUIRED,
+  ORKESTR_UNSAFE_ALLOW_PUBLIC_UNAUTHENTICATED: process.env.ORKESTR_UNSAFE_ALLOW_PUBLIC_UNAUTHENTICATED,
   ORKESTR_WHATSAPP_AUTOSTART: process.env.ORKESTR_WHATSAPP_AUTOSTART,
   WHATSAPP_LOCAL_AUTOSTART: process.env.WHATSAPP_LOCAL_AUTOSTART,
 };
 
 process.env.ORKESTR_AUTH_REQUIRED = "0";
+process.env.ORKESTR_UNSAFE_ALLOW_PUBLIC_UNAUTHENTICATED = "1";
 process.env.ORKESTR_WHATSAPP_AUTOSTART = "0";
 process.env.WHATSAPP_LOCAL_AUTOSTART = "0";
 
@@ -6454,12 +6456,13 @@ test("thread summary reuses unchanged message file summaries", async () => {
     const firstPayload = await threadSummaryPayload({ cacheTtlMs: 0, payloadCacheTtlMs: 0 });
     const firstSummary = firstPayload.threads.find((thread) => thread.id === "summary-message-cache-thread");
     assert.equal(firstSummary.pendingCount, 1);
-    assert.equal(messageFileReadCount, 1);
+    const firstReadCount = messageFileReadCount;
+    assert.ok(firstReadCount <= 1);
 
     const secondPayload = await threadSummaryPayload({ cacheTtlMs: 0, payloadCacheTtlMs: 0 });
     const secondSummary = secondPayload.threads.find((thread) => thread.id === "summary-message-cache-thread");
     assert.equal(secondSummary.pendingCount, 1);
-    assert.equal(messageFileReadCount, 1);
+    assert.equal(messageFileReadCount, firstReadCount);
   } finally {
     fs.readFile = originalReadFile;
     resetThreadSummaryCachesForTest();

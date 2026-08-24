@@ -145,6 +145,9 @@ export function boundThreadWhatsAppAssistantOrigin({ message = {}, thread = null
   if (String(binding.connector || "whatsapp").trim().toLowerCase() !== "whatsapp") return false;
   const bindingChatId = pickString(binding.chatId);
   const messageChatId = pickString(message.chatId);
+  const source = pickString(message.source).toLowerCase();
+  const phase = pickString(message.phase).toLowerCase();
+  if (bindingChatId && !messageChatId && source === "orkestr_runtime" && phase === "runtime_interrupted") return true;
   return Boolean(bindingChatId && messageChatId === bindingChatId);
 }
 
