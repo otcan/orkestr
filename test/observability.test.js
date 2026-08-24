@@ -2,8 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   metricsRequestAllowed,
+  evaluateRuntimeControlReleaseGate,
   recordBackgroundLoopMetrics,
   recordMailboxThreadDeliveryMetrics,
+  recordRuntimeControlMetric,
   recordTaskAgentLifecycleMetric,
   recordThreadResourceAccessMetric,
   recordThreadResourceBreakGlassMetric,
@@ -32,6 +34,44 @@ test("observability route templates scrub dynamic IDs", () => {
     routeTemplateFromUrl("/api/tenant-vms/tenant-vm-123/desktop-shares/desk-share-456/status"),
     "/api/tenant-vms/:tenantVmId/desktop-shares/:shareId/status",
   );
+});
+
+test("runtime control metrics keep phase and outcomes low-cardinality", () => {
+  resetObservabilityForTests();
+  recordRuntimeControlMetric({ signal: "false_recovery", outcome: "avoided" });
+  recordRuntimeControlMetric({ signal: "unresolved_steering_input", outcome: "retryable" });
+  recordRuntimeControlMetric({ signal: "stop_latency", outcome: "completed", phase: "mcp", durationMs: 240 });
+  recordRuntimeControlMetric({ signal: "stop_latency", outcome: "completed", phase: "private-phase-name", durationMs: 10 });
+
+  const metrics = renderOpenMetrics();
+  assert.match(metrics, /orkestr_runtime_control_events_total\{signal="false_recovery",outcome="avoided"\} 1/);
+  assert.match(metrics, /orkestr_runtime_control_events_total\{signal="unresolved_steering_input",outcome="retryable"\} 1/);
+  assert.match(metrics, /orkestr_runtime_stop_latency_seconds_count\{phase="mcp",result="completed"\} 1/);
+  assert.match(metrics, /orkestr_runtime_stop_latency_seconds_count\{phase="unknown",result="completed"\} 1/);
+  assert.equal(metrics.includes("private-phase-name"), false);
+});
+
+test("runtime control release gate reports every invariant independently", () => {
+  const healthy = evaluateRuntimeControlReleaseGate({ maxStopLatencyMs: 4999 }, { ORKESTR_RUNTIME_STOP_LATENCY_GATE_MS: "5000" });
+  const blocked = evaluateRuntimeControlReleaseGate({
+    falseRecoveries: 1,
+    unresolvedSteeringInputs: 2,
+    duplicateTurns: 1,
+    maxStopLatencyMs: 5001,
+    checkpointResumeFailures: 1,
+    pendingFinalDeliveries: 3,
+  }, { ORKESTR_RUNTIME_STOP_LATENCY_GATE_MS: "5000" });
+
+  assert.equal(healthy.ok, true);
+  assert.equal(blocked.ok, false);
+  assert.deepEqual(blocked.checks.map(({ signal, ok }) => [signal, ok]), [
+    ["false_recovery", false],
+    ["unresolved_steering_input", false],
+    ["duplicate_turn", false],
+    ["stop_latency_ms", false],
+    ["checkpoint_resume_failure", false],
+    ["pending_final_delivery", false],
+  ]);
 });
 
 test("metrics endpoint defaults to local-only unless public or token auth is configured", () => {

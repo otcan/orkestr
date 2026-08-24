@@ -2,13 +2,11 @@ import { appendEvent } from "../../storage/src/store.js";
 import { getThread, updateThread } from "./threads.js";
 import { completeRuntimeLiveness, recordRuntimeLiveness } from "./runtime-liveness.js";
 import { currentCodexGenerationMatches } from "./codex-generation.js";
+import { injectRuntimeFault, runtimeNowIso } from "./runtime-fault-injection.js";
+import { recordRuntimeControlMetric } from "./observability.js";
 
 function clean(value) {
   return String(value || "").trim();
-}
-
-function nowIso() {
-  return new Date().toISOString();
 }
 
 function generation(thread = {}, input = {}) {
@@ -69,7 +67,7 @@ function deliveredDuplicateMatches(delivery = null, input = {}) {
 async function coalesceDeliveredDuplicate(thread, runtime, current, input = {}, env = process.env) {
   const messageId = clean(input.messageId);
   if (!deliveredDuplicateMatches(current, input) || clean(current?.messageId) === messageId) return null;
-  const at = nowIso();
+  const at = runtimeNowIso(env);
   const finalDelivery = {
     ...current,
     supersededMessageIds: uniqueStrings([...(current.supersededMessageIds || []), messageId]),
@@ -135,7 +133,7 @@ export async function markRuntimeFinalDeliveryPending(threadId, input = {}, env 
   }
   const coalesced = await coalesceDeliveredDuplicate(thread, runtime, current, input, env);
   if (coalesced) return coalesced;
-  const at = nowIso();
+  const at = runtimeNowIso(env);
   const finalDelivery = {
     messageId,
     parentMessageId: clean(input.parentMessageId) || null,
@@ -153,9 +151,16 @@ export async function markRuntimeFinalDeliveryPending(threadId, input = {}, env 
     error: null,
     updatedAt: at,
   };
+  await injectRuntimeFault("final_persistence", {
+    threadId: thread.id,
+    messageId,
+    runtimeGeneration: finalDelivery.runtimeGeneration,
+    turnId: finalDelivery.turnId,
+  }, env);
   const updated = await updateThread(thread.id, {
     runtime: { ...runtime, finalDelivery },
   }, env);
+  recordRuntimeControlMetric({ signal: "pending_final_delivery", outcome: "pending" });
   await recordRuntimeLiveness(thread.id, {
     runtimeGeneration: finalDelivery.runtimeGeneration,
     turnId: finalDelivery.turnId,
@@ -200,7 +205,7 @@ export async function acknowledgeRuntimeFinalDelivery(threadId, input = {}, env 
     return { ok: false, acknowledged: false, reason: "final_delivery_not_found" };
   }
   if (clean(current.status) === "delivered") return { ok: true, acknowledged: true, duplicate: true, finalDelivery: current, thread };
-  const at = clean(input.deliveredAt) || nowIso();
+  const at = clean(input.deliveredAt) || runtimeNowIso(env);
   const finalDelivery = {
     ...current,
     status: "delivered",
@@ -211,7 +216,14 @@ export async function acknowledgeRuntimeFinalDelivery(threadId, input = {}, env 
     error: null,
     updatedAt: at,
   };
+  await injectRuntimeFault("delivery_acknowledgement", {
+    threadId: thread.id,
+    messageId: current.messageId,
+    runtimeGeneration: current.runtimeGeneration,
+    turnId: current.turnId,
+  }, env);
   const updated = await updateThread(thread.id, { runtime: { ...runtime, finalDelivery } }, env);
+  recordRuntimeControlMetric({ signal: "delivery_acknowledgement", outcome: "delivered" });
   const supersededExecution = Boolean(
     clean(runtime.liveness?.turnId) &&
     clean(finalDelivery.turnId) &&
@@ -270,7 +282,7 @@ export async function recordRuntimeFinalDeliveryFailure(threadId, input = {}, en
     }
     return { ok: false, recorded: false, reason: "final_delivery_not_found" };
   }
-  const at = nowIso();
+  const at = runtimeNowIso(env);
   const status = clean(input.status || "failed_retryable");
   const finalDelivery = {
     ...current,

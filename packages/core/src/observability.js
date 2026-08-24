@@ -14,6 +14,32 @@ const mailboxDeliveryStates = new Set(["pending", "claimed", "delivered", "revok
 const mailboxRouteWorkStates = new Set(["pending", "claimed", "accepted", "running", "completed", "failed", "delivered", "dead-letter", "cancelled", "context_pending"]);
 const breakGlassOutcomes = new Set(["allowed", "denied", "blocked"]);
 const shadowBoundaryWarningOutcomes = new Set(["emitted", "deduplicated", "failed"]);
+const runtimeControlSignals = new Set([
+  "false_recovery",
+  "unresolved_steering_input",
+  "duplicate_turn",
+  "checkpoint_resume",
+  "pending_final_delivery",
+  "runtime_acceptance",
+  "stop_latency",
+  "transport_send",
+  "delivery_acknowledgement",
+]);
+const runtimeControlOutcomes = new Set([
+  "accepted",
+  "avoided",
+  "blocked",
+  "completed",
+  "delivered",
+  "detected",
+  "failed",
+  "pending",
+  "prevented",
+  "resumed",
+  "retryable",
+]);
+const runtimeStopPhases = new Set(["model", "tool", "mcp", "child_process", "approval", "finalization", "unknown"]);
+const runtimeFinalDeliveryStates = new Set(["pending", "failed_retryable", "delivery_uncertain", "failed", "dead_letter", "suppressed", "skipped"]);
 const counters = new Map();
 const histograms = new Map();
 const startedAt = Date.now();
@@ -241,6 +267,36 @@ export function recordShadowBoundaryChatWarningMetric({ resourceType = "unknown"
   });
 }
 
+export function recordRuntimeControlMetric({ signal = "unknown", outcome = "unknown", phase = "unknown", durationMs = null } = {}) {
+  const normalizedSignal = enumLabel(signal, runtimeControlSignals);
+  const normalizedOutcome = enumLabel(outcome, runtimeControlOutcomes);
+  incrementCounter("orkestr_runtime_control_events_total", {
+    signal: normalizedSignal,
+    outcome: normalizedOutcome,
+  });
+  if (signal === "stop_latency" || durationMs != null) {
+    observeHistogram(
+      "orkestr_runtime_stop_latency_seconds",
+      countValue(durationMs) / 1000,
+      { phase: enumLabel(phase, runtimeStopPhases), result: normalizedOutcome },
+      [0.01, 0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 30],
+    );
+  }
+}
+
+export function evaluateRuntimeControlReleaseGate(input = {}, env = process.env) {
+  const stopLatencyTargetMs = Math.max(1, Number(env.ORKESTR_RUNTIME_STOP_LATENCY_GATE_MS || 5_000) || 5_000);
+  const checks = [
+    { signal: "false_recovery", actual: countValue(input.falseRecoveries), limit: 0 },
+    { signal: "unresolved_steering_input", actual: countValue(input.unresolvedSteeringInputs), limit: 0 },
+    { signal: "duplicate_turn", actual: countValue(input.duplicateTurns), limit: 0 },
+    { signal: "stop_latency_ms", actual: countValue(input.maxStopLatencyMs), limit: stopLatencyTargetMs },
+    { signal: "checkpoint_resume_failure", actual: countValue(input.checkpointResumeFailures), limit: 0 },
+    { signal: "pending_final_delivery", actual: countValue(input.pendingFinalDeliveries), limit: 0 },
+  ].map((check) => ({ ...check, ok: check.actual <= check.limit }));
+  return { ok: checks.every((check) => check.ok), checks };
+}
+
 function statusClass(statusCode) {
   if (!statusCode) return "unknown";
   return `${Math.floor(statusCode / 100)}xx`;
@@ -371,6 +427,9 @@ async function collectStateMetricLines(env = process.env) {
   const runtimeCounts = new Map();
   const taskAgentCounts = new Map();
   const pendingCounts = new Map();
+  const pendingFinalCounts = new Map();
+  const unresolvedSteeringCounts = new Map();
+  let resumableCheckpoints = 0;
   const add = (map, labels, amount = 1) => {
     const key = JSON.stringify(safeLabels(labels));
     const current = map.get(key) || { labels: safeLabels(labels), value: 0 };
@@ -383,6 +442,11 @@ async function collectStateMetricLines(env = process.env) {
     const state = labelValue(thread.state || "unknown");
     add(threadCounts, { kind, state });
     add(runtimeCounts, { kind, state: labelValue(thread.runtime?.state || thread.state || "unknown") });
+    const finalDeliveryStatus = lower(thread.runtime?.finalDelivery?.status);
+    if (finalDeliveryStatus && finalDeliveryStatus !== "delivered") {
+      add(pendingFinalCounts, { state: enumLabel(finalDeliveryStatus, runtimeFinalDeliveryStates) });
+    }
+    if (thread.runtime?.checkpoint?.checkpointId) resumableCheckpoints += 1;
     if (kind === "task_agent") add(taskAgentCounts, { status: labelValue(thread.agentTaskStatus || thread.state || "unknown") });
     if (!includeQueues) continue;
     const candidates = await listThreadMessageCandidates(thread.id, {
@@ -396,6 +460,9 @@ async function collectStateMetricLines(env = process.env) {
         delivery_state: labelValue(message.deliveryState || message.state),
         connector: labelValue(message.connector || message.originSurface || "direct"),
       });
+      if (["awaiting_active_turn", "codex_app_server_sending", "operator_required"].includes(lower(message.deliveryState))) {
+        add(unresolvedSteeringCounts, { state: labelValue(message.deliveryState) });
+      }
     }
   }
 
@@ -403,6 +470,9 @@ async function collectStateMetricLines(env = process.env) {
   renderGaugeSeries(lines, "orkestr_runtime_threads_current", "Current Orkestr runtime threads by public kind and runtime state.", runtimeCounts);
   renderGaugeSeries(lines, "orkestr_task_agents_current", "Current task-agent threads by task status.", taskAgentCounts);
   renderGaugeSeries(lines, "orkestr_thread_pending_inputs_current", "Current pending user inputs by state, delivery state, and connector.", pendingCounts);
+  renderGaugeSeries(lines, "orkestr_runtime_pending_final_deliveries_current", "Current runtime finals awaiting a terminal connector acknowledgement.", pendingFinalCounts);
+  renderGaugeSeries(lines, "orkestr_runtime_unresolved_steering_inputs_current", "Current accepted steering inputs without a terminal runtime disposition.", unresolvedSteeringCounts);
+  renderGauge(lines, "orkestr_runtime_resumable_checkpoints_current", "Current durable runtime checkpoints available for scoped resume.", resumableCheckpoints);
   renderGauge(lines, "orkestr_metrics_threads_scanned", "Number of Orkestr threads scanned while rendering this metrics response.", threads.length);
   return lines;
 }

@@ -23,6 +23,7 @@ import {
   parseThreadPublicRef,
 } from "./canonical-public-references.js";
 import { withCanonicalPublicReferenceLock } from "./canonical-public-reference-lock.js";
+import { injectRuntimeFault } from "./runtime-fault-injection.js";
 
 const runningThreadIds = new Set();
 const messageMutationQueues = new Map();
@@ -821,6 +822,12 @@ export async function appendThreadMessage(threadId, input, env = process.env) {
     if (resolvedAttachments.attachments.length) {
       nextMessage.attachments = resolvedAttachments.attachments;
     }
+    await injectRuntimeFault("message_persistence", {
+      threadId: thread.id,
+      messageId: nextMessage.id,
+      role: nextMessage.role,
+      source: nextMessage.source,
+    }, env);
     if (sqlite) await messageRepository.append(thread.id, nextMessage);
     else await messageRepository.save(thread.id, [...messages, nextMessage]);
     return nextMessage;

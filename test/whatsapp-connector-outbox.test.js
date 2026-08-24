@@ -97,6 +97,79 @@ test("whatsapp delivery terminalizes a tenant-scoped connector outbox job", asyn
   assert.equal(thread.runtime.liveness.completionStatus, "completed");
 });
 
+test("delayed WhatsApp transport converges to exactly one eventual final reply", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-delayed-final-"));
+  let transportFaults = 1;
+  const runtimeEnv = env(home, {
+    ORKESTR_CONNECTOR_OUTBOX_RETRY_BACKOFF_MS: "0",
+    ORKESTR_TEST_RUNTIME_FAULT_INJECTOR: {
+      transport_send: async () => {
+        if (transportFaults-- <= 0) return;
+        throw new Error("injected_transport_delay");
+      },
+    },
+  });
+  await writeConnectorConfig("whatsapp", { bridgeMode: "external", bridgeUrl: "http://wa.example.test" }, runtimeEnv);
+  await createThread({
+    id: "thread-wa-delayed-final",
+    ownerUserId: "tenant-example",
+    name: "Delayed final thread",
+    binding: {
+      connector: "whatsapp",
+      chatId: "chat-delayed-final",
+      responderAccountId: "responder",
+      outboundAccountId: "responder",
+      mirrorToWhatsApp: true,
+    },
+  }, runtimeEnv);
+  const parent = await appendThreadMessage("thread-wa-delayed-final", {
+    role: "user",
+    source: "whatsapp_inbound",
+    connector: "whatsapp",
+    chatId: "chat-delayed-final",
+    accountId: "responder",
+    text: "finish the report",
+  }, runtimeEnv);
+  const reply = await appendThreadMessage("thread-wa-delayed-final", {
+    role: "assistant",
+    source: "codex-app-server",
+    phase: "final_answer",
+    parentMessageId: parent.id,
+    connector: "whatsapp",
+    chatId: "chat-delayed-final",
+    accountId: "responder",
+    text: "The report is complete.",
+  }, runtimeEnv);
+  await markRuntimeFinalDeliveryPending("thread-wa-delayed-final", {
+    messageId: reply.id,
+    parentMessageId: parent.id,
+    runtimeGeneration: "delayed-generation",
+    turnId: "delayed-turn",
+    connector: "whatsapp",
+    chatId: "chat-delayed-final",
+  }, runtimeEnv);
+  let sends = 0;
+  const fetchImpl = async (_url, options = {}) => {
+    if (options.method === "POST") sends += 1;
+    return response({ ok: true, ids: ["wa-delayed-final-1"] });
+  };
+
+  const delayed = await deliverWhatsAppReplies(runtimeEnv, fetchImpl);
+  const delivered = await deliverWhatsAppReplies(runtimeEnv, fetchImpl);
+  const duplicateScan = await deliverWhatsAppReplies(runtimeEnv, fetchImpl);
+  const thread = await getThread("thread-wa-delayed-final", runtimeEnv);
+  const outbox = await readConnectorOutbox(runtimeEnv);
+
+  assert.equal(delayed.failed.length, 1);
+  assert.equal(delivered.delivered.length, 1);
+  assert.equal(duplicateScan.delivered.length, 0);
+  assert.equal(sends, 1);
+  assert.equal(outbox.jobs.filter((job) => job.sourceMessageId === reply.id).length, 1);
+  assert.equal(outbox.jobs.find((job) => job.sourceMessageId === reply.id)?.state, "delivered");
+  assert.equal(thread.runtime.finalDelivery.status, "delivered");
+  assert.equal(thread.runtime.finalDelivery.connectorMessageId, "wa-delayed-final-1");
+});
+
 test("whatsapp connector outbox does not mirror CLI finals from a WhatsApp-bound thread", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-connector-outbox-cli-bound-"));
   const runtimeEnv = env(home);

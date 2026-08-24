@@ -19,6 +19,8 @@ import { tenantDesktopSharePath } from "./tenant-desktop-share-routing.js";
 import { parseThreadInputCommand } from "./thread-commands.js";
 import { completeRuntimeLiveness, recordRuntimeLiveness } from "./runtime-liveness.js";
 import { markRuntimeFinalDeliveryPending } from "./runtime-final-delivery.js";
+import { injectRuntimeFault, runtimeNowMs, runtimeStopPhaseFor } from "./runtime-fault-injection.js";
+import { recordRuntimeControlMetric } from "./observability.js";
 
 export const API_AGENT_RUNTIME_KIND = "api-agent";
 
@@ -2088,6 +2090,12 @@ async function runTenantApiAgentToolResultResponse({
         },
         input: { tool: call.name, args },
       }, env);
+      await injectRuntimeFault("tool_mcp_execution", {
+        threadId: thread.id,
+        messageId: message.id,
+        tool: clean(call.name),
+        toolDepth,
+      }, env);
       output = await runTenantApiAgentTool(call.name, args, { principal, thread, fetchImpl }, env);
     } catch (error) {
       output = { ok: false, error: clean(error?.message || error || "tool_failed") };
@@ -2522,6 +2530,7 @@ async function completeApiAgentMessage(thread, message, text, env = process.env,
 }
 
 export async function stopApiAgentThread(threadId, options = {}, env = process.env) {
+  const stopStartedAt = runtimeNowMs(env);
   const thread = await getThread(threadId, env);
   if (!thread) return { ok: false, stopped: false, reason: "thread_not_found" };
   const messages = await listThreadMessages(thread.id, env);
@@ -2588,6 +2597,13 @@ export async function stopApiAgentThread(threadId, options = {}, env = process.e
     cancelledMessageIds,
     ownerUserId: threadOwnerUserId(thread, env),
   }, env).catch(() => {});
+  const stopPhase = controllers.size > 0 ? "model" : runtimeStopPhaseFor(thread);
+  recordRuntimeControlMetric({
+    signal: "stop_latency",
+    outcome: "completed",
+    phase: stopPhase,
+    durationMs: runtimeNowMs(env) - stopStartedAt,
+  });
   return {
     ok: true,
     stopped: true,

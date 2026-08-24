@@ -55,3 +55,6 @@ git diff --check
 The fault cases include turns older than one hour, first-probe preservation,
 second-probe recovery, approval preemption, stale runtime generations,
 checkpoint resumption, connector retry, and exact final-delivery acknowledgment.
+The focused ORK-369 gap matrix, deterministic injection boundaries, release-gate
+output, and attended rollout/rollback procedure are documented in
+`docs/runtime-liveness-fault-validation.md`.
