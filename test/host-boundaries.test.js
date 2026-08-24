@@ -477,6 +477,7 @@ test("live server keeps the connect pairing page, assets, and primitive APIs on 
     "ORKESTR_CONNECT_PUBLIC_URL", "ORKESTR_PUBLIC_AUTH_URL",
     "ORKESTR_PRIMARY_DOMAIN", "ORKESTR_COOKIE_DOMAIN",
     "ORKESTR_AUTH_REQUIRED", "ORKESTR_OVERLAY_DIR", "ORKESTR_RECOVER_RUNNING_ON_START",
+    "ORKESTR_UNSAFE_ALLOW_PUBLIC_UNAUTHENTICATED",
     "ORKESTR_TRUST_PROXY_HEADERS", "ORKESTR_TRUSTED_PROXY_IPS",
     "ORKESTR_WHATSAPP_INBOUND_TOKEN",
   ];
@@ -492,6 +493,7 @@ test("live server keeps the connect pairing page, assets, and primitive APIs on 
   for (const key of ["ORKESTR_PUBLIC_AUTH_URL", "ORKESTR_OVERLAY_DIR", "ORKESTR_TRUST_PROXY_HEADERS", "ORKESTR_TRUSTED_PROXY_IPS"]) {
     delete process.env[key];
   }
+  delete process.env.ORKESTR_UNSAFE_ALLOW_PUBLIC_UNAUTHENTICATED;
   const server = await startServer({ port: 0, host: "127.0.0.1" });
   t.after(async () => {
     await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));

@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 function clean(value = "") {
@@ -22,6 +23,77 @@ function positiveInteger(value, fallback, minimum = 1) {
 
 function truthy(value) {
   return ["1", "true", "yes", "on"].includes(clean(value).toLowerCase());
+}
+
+const scrubbedCiEnvKeys = [
+  "ORKESTR_HOME",
+  "ORKESTR_OVERLAY_DIR",
+  "ORKESTR_PUBLIC_APP_URL",
+  "ORKESTR_PUBLIC_AUTH_URL",
+  "ORKESTR_PUBLIC_URL",
+  "ORKESTR_APP_URL",
+  "ORKESTR_APP_HOST",
+  "ORKESTR_PUBLIC_HTTPS_URL",
+  "ORKESTR_HTTPS_URL",
+  "ORKESTR_TAILSCALE_HTTPS_NAME",
+  "ORKESTR_CONNECT_PUBLIC_URL",
+  "WHATSAPP_BRIDGE_URL",
+  "ORKESTR_WHATSAPP_BRIDGE_TOKEN",
+  "WHATSAPP_BRIDGE_TOKEN",
+  "ORKESTR_WHATSAPP_INBOUND_TOKEN",
+  "WHATSAPP_INBOUND_TOKEN",
+  "ORKESTR_WHATSAPP_ACCOUNT_CLIENT_IDS",
+  "WHATSAPP_LOCAL_ACCOUNT_CLIENT_IDS",
+  "ORKESTR_WHATSAPP_ACCOUNT_SESSION_ROOTS",
+  "WHATSAPP_LOCAL_ACCOUNT_SESSION_ROOTS",
+  "ORKESTR_WHATSAPP_DEFAULT_RESPONDER_ACCOUNT_ID",
+  "WHATSAPP_LOCAL_DEFAULT_RESPONDER_ACCOUNT_ID",
+  "GMAIL_OAUTH_CLIENT_ID",
+  "GMAIL_OAUTH_CLIENT_SECRET",
+  "GMAIL_OAUTH_REDIRECT_URI",
+  "GOOGLE_OAUTH_CLIENT_ID",
+  "GOOGLE_OAUTH_CLIENT_SECRET",
+  "GOOGLE_OAUTH_REDIRECT_URI",
+  "ORKESTR_GOOGLE_OAUTH_APPS_JSON",
+  "ORKESTR_GOOGLE_OAUTH_DEFAULT_APP",
+  "ORKESTR_GOOGLE_OAUTH_ALLOWED_CAPABILITIES",
+  "OUTLOOK_OAUTH_CLIENT_ID",
+  "MICROSOFT_OAUTH_CLIENT_ID",
+  "JIRA_OAUTH_CLIENT_ID",
+  "JIRA_OAUTH_CLIENT_SECRET",
+  "ATLASSIAN_OAUTH_CLIENT_ID",
+  "ATLASSIAN_OAUTH_CLIENT_SECRET",
+  "SHOPIFY_OAUTH_CLIENT_ID",
+  "SHOPIFY_OAUTH_CLIENT_SECRET",
+  "SHOPIFY_CLIENT_ID",
+  "SHOPIFY_CLIENT_SECRET",
+  "SHOPIFY_API_KEY",
+  "SHOPIFY_API_SECRET",
+  "ORKESTR_GMAIL_AUTH_DESKTOP_SLUG",
+  "ORKESTR_GOOGLE_AUTH_DESKTOP_SLUG",
+  "ORKESTR_GOOGLE_MARKETING_AUTH_DESKTOP_SLUG",
+];
+
+export function buildCiTestEnv(env = process.env) {
+  const next = { ...env };
+  for (const key of scrubbedCiEnvKeys) delete next[key];
+  return {
+    ...next,
+    ORKESTR_HOME: fs.mkdtempSync(path.join(os.tmpdir(), "orkestr-ci-home-")),
+    ORKESTR_AUTH_REQUIRED: "0",
+    ORKESTR_UNSAFE_ALLOW_PUBLIC_UNAUTHENTICATED: "1",
+    ORKESTR_RECOVER_RUNNING_ON_START: "0",
+    ORKESTR_WHATSAPP_AUTOSTART: "0",
+    WHATSAPP_LOCAL_AUTOSTART: "0",
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "",
+    WHATSAPP_LOCAL_ACCOUNT_IDS: "",
+    WHATSAPP_BRIDGE_MODE: "local",
+    ORKESTR_WHATSAPP_EXTERNAL_BRIDGE_ENABLED: "0",
+    WHATSAPP_EXTERNAL_BRIDGE_ENABLED: "0",
+    ORKESTR_WHATSAPP_DEBUG_FOOTER: "0",
+    WA_DEBUG_FOOTER: "0",
+    WA_APPEND_DEBUG_FOOTER: "0",
+  };
 }
 
 export function discoverTestFiles(root = process.cwd()) {
@@ -127,7 +199,7 @@ export async function runCiTests(options = parseCiTestRunnerArgs()) {
 
   const child = spawn(process.execPath, testArgs, {
     cwd: options.root,
-    env: process.env,
+    env: buildCiTestEnv(process.env),
     stdio: ["ignore", "pipe", "pipe"],
   });
 

@@ -11,7 +11,12 @@ function runScript(args, env) {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, ["scripts/secure-secrets-migrate-env.mjs", ...args], {
       cwd: repoRoot,
-      env: { ...process.env, ...env },
+      env: {
+        PATH: process.env.PATH,
+        HOME: process.env.HOME,
+        TMPDIR: process.env.TMPDIR,
+        ...env,
+      },
       stdio: ["ignore", "pipe", "pipe"],
     });
     let stdout = "";

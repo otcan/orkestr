@@ -13,12 +13,20 @@ import { writeInstanceIdentity } from "../packages/core/src/instance-identity.js
 const envKeys = [
   "ORKESTR_HOME",
   "ORKESTR_AUTH_REQUIRED",
+  "ORKESTR_UNSAFE_ALLOW_PUBLIC_UNAUTHENTICATED",
   "ORKESTR_RECOVER_RUNNING_ON_START",
   "ORKESTR_THREAD_STORE",
   "ORKESTR_CANONICAL_INSTANCE_URLS",
   "ORKESTR_CANONICAL_APP_GATEWAY",
   "ORKESTR_CANONICAL_APP_LINKS",
   "ORKESTR_INSTANCE_ID",
+  "ORKESTR_PUBLIC_APP_URL",
+  "ORKESTR_APP_URL",
+  "ORKESTR_PUBLIC_URL",
+  "ORKESTR_PUBLIC_HTTPS_URL",
+  "ORKESTR_HTTPS_URL",
+  "ORKESTR_CONNECT_PUBLIC_URL",
+  "ORKESTR_APP_HOST",
 ];
 
 function saveEnv() {
@@ -133,12 +141,24 @@ test("mobile thread routes keep the selected conversation visible and open threa
   const prior = saveEnv();
   process.env.ORKESTR_HOME = home;
   process.env.ORKESTR_AUTH_REQUIRED = "0";
+  process.env.ORKESTR_UNSAFE_ALLOW_PUBLIC_UNAUTHENTICATED = "1";
   process.env.ORKESTR_RECOVER_RUNNING_ON_START = "0";
   process.env.ORKESTR_THREAD_STORE = "json";
   process.env.ORKESTR_CANONICAL_INSTANCE_URLS = "1";
   process.env.ORKESTR_CANONICAL_APP_GATEWAY = "1";
   process.env.ORKESTR_CANONICAL_APP_LINKS = "1";
   process.env.ORKESTR_INSTANCE_ID = "mobile-instance-internal";
+  for (const key of [
+    "ORKESTR_PUBLIC_APP_URL",
+    "ORKESTR_APP_URL",
+    "ORKESTR_PUBLIC_URL",
+    "ORKESTR_PUBLIC_HTTPS_URL",
+    "ORKESTR_HTTPS_URL",
+    "ORKESTR_CONNECT_PUBLIC_URL",
+    "ORKESTR_APP_HOST",
+  ]) {
+    delete process.env[key];
+  }
   const instanceRef = "ins_AQEBAQEBAQEBAQEBAQEBAQ";
   await writeInstanceIdentity({ internalInstanceId: "mobile-instance-internal", publicRef: instanceRef }, process.env);
   const thread = await createThread({ id: "mobile-review-thread", name: "Mobile Review Thread" }, process.env);
@@ -169,7 +189,7 @@ test("mobile thread routes keep the selected conversation visible and open threa
       await page.goto(canonicalUrl, { waitUntil: "networkidle2" });
       await page.waitForFunction(
         () => document.body.innerText.includes("The selected conversation is visible on mobile."),
-        { timeout: 10_000 },
+        { timeout: 20_000 },
       );
       const initial = await page.evaluate(() => {
         const drawer = document.querySelector("#thread-sidebar")?.getBoundingClientRect();

@@ -3250,8 +3250,10 @@ test("local whatsapp chat creation promotes the automatically added sender as an
 });
 
 test("local whatsapp group participant add validates participant input before browser work", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-participant-validation-"));
+  const env = { ORKESTR_HOME: home, ORKESTR_WHATSAPP_ACCOUNT_IDS: "responder" };
   await assert.rejects(
-    () => addLocalWhatsAppGroupParticipants({ accountId: "responder", chatId: "fixture-group@g.us" }),
+    () => addLocalWhatsAppGroupParticipants({ accountId: "responder", chatId: "fixture-group@g.us", env }),
     /whatsapp_group_participants_required/,
   );
 });

@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import {
+  buildCiTestEnv,
   buildNodeTestArgs,
   discoverTestFiles,
   normalizeShard,
@@ -72,4 +73,35 @@ test("CI test runner discovers test files and builds node arguments", async () =
     "--test-force-exit",
     "test/b.test.js",
   ]);
+});
+
+test("CI test runner scrubs production connector and public URL env", () => {
+  const env = buildCiTestEnv({
+    PATH: "/bin",
+    ORKESTR_HOME: "/prod/home",
+    ORKESTR_PUBLIC_HTTPS_URL: "https://app.example.test",
+    ORKESTR_APP_HOST: "app.example.test",
+    ORKESTR_AUTH_REQUIRED: "1",
+    GMAIL_OAUTH_CLIENT_SECRET: "real-secret",
+    WHATSAPP_BRIDGE_MODE: "external",
+    WHATSAPP_BRIDGE_URL: "https://bridge.example.test",
+    ORKESTR_WHATSAPP_BRIDGE_TOKEN: "bridge-secret",
+    ORKESTR_WHATSAPP_INBOUND_TOKEN: "inbound-secret",
+    ORKESTR_WHATSAPP_EXTERNAL_BRIDGE_ENABLED: "1",
+    ORKESTR_WHATSAPP_DEBUG_FOOTER: "1",
+  });
+
+  assert.equal(env.PATH, "/bin");
+  assert.match(env.ORKESTR_HOME, /orkestr-ci-home-/);
+  assert.equal(env.ORKESTR_AUTH_REQUIRED, "0");
+  assert.equal(env.ORKESTR_UNSAFE_ALLOW_PUBLIC_UNAUTHENTICATED, "1");
+  assert.equal(env.WHATSAPP_BRIDGE_MODE, "local");
+  assert.equal(env.ORKESTR_WHATSAPP_EXTERNAL_BRIDGE_ENABLED, "0");
+  assert.equal(env.ORKESTR_WHATSAPP_DEBUG_FOOTER, "0");
+  assert.equal(env.ORKESTR_PUBLIC_HTTPS_URL, undefined);
+  assert.equal(env.ORKESTR_APP_HOST, undefined);
+  assert.equal(env.GMAIL_OAUTH_CLIENT_SECRET, undefined);
+  assert.equal(env.WHATSAPP_BRIDGE_URL, undefined);
+  assert.equal(env.ORKESTR_WHATSAPP_BRIDGE_TOKEN, undefined);
+  assert.equal(env.ORKESTR_WHATSAPP_INBOUND_TOKEN, undefined);
 });
