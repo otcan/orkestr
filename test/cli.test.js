@@ -10,6 +10,7 @@ import { createDesktopShare, desktopShareStatus, openDesktopShare } from "../pac
 import { userPrincipal } from "../packages/core/src/principal.js";
 import { writeRuntimeSettings } from "../packages/core/src/runtime-settings.js";
 import { approvePairingChallenge, createPairingChallenge, getPairingChallenge, pairBrowser } from "../packages/core/src/security.js";
+import { defaultWhatsAppReplyPrefix } from "../packages/core/src/whatsapp-defaults.js";
 
 function capture() {
   let text = "";
@@ -1700,6 +1701,9 @@ test("CLI creates threads through the public API", async () => {
 test("CLI creates Orkestr threads with integrated WhatsApp binding", async () => {
   const stdout = capture();
   const seen = [];
+  // The CLI intentionally inherits the installation's public reply prefix.
+  // Keep this assertion independent of a local deployment overlay.
+  const replyPrefix = defaultWhatsAppReplyPrefix();
   const code = await runCli([
     "create",
     "Project Fitness",
@@ -1744,7 +1748,7 @@ test("CLI creates Orkestr threads with integrated WhatsApp binding", async () =>
     bridgeAccountId: "responder",
     responderAccountId: "responder",
     outboundAccountId: "responder",
-    replyPrefix: "otcanclaw:",
+    replyPrefix,
   });
   assert.match(stdout.text(), /"ok": true/);
 });
