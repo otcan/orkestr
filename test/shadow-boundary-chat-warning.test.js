@@ -70,7 +70,12 @@ test("selected ungranted shadow targets append one deterministic warning with pu
 
     assert.equal(first.ok, true);
     assert.equal(repeated.ok, true);
+    // The notice is history-only assistant output. It must never create a
+    // second user/Codex input while the actual selection is being handled.
+    assert.equal(messages.length, 1);
+    assert.deepEqual(messages.map((message) => message.role), ["assistant"]);
     assert.equal(warnings.length, 1);
+    assert.equal(warnings[0].state, "completed");
     assert.equal(warnings[0].phase, "notification");
     assert.equal(warnings[0].text, `Warning: this ${resourceType} target was selected under shadow authorization without an effective thread grant. Add an explicit grant before switching ${resourceType} access to enforce.`);
     assert.deepEqual(warnings[0].shadowBoundaryWarning, {
