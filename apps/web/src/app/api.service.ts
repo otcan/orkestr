@@ -182,6 +182,7 @@ export interface WatcherAlert {
   message?: string;
   status?: string;
   threadId?: string;
+  canonicalThreadUrl?: string;
   messageId?: string;
   routerTraceId?: string;
   watcherThreadId?: string | null;
@@ -277,6 +278,23 @@ export interface BrowserSession {
   leaseOwnerLabel?: string | null;
   relatedThreads?: Array<Record<string, unknown>>;
   relatedThreadCount?: number;
+  warnings?: DesktopAccessWarning[];
+}
+
+export interface DesktopAccessWarning {
+  schemaVersion: number;
+  id: string;
+  attemptId: string;
+  code: string;
+  severity: "info" | "warning" | "error" | string;
+  blocking: boolean;
+  operation: string;
+  desktopSlug: string;
+  threadId?: string | null;
+  message: string;
+  recommendedAction: string;
+  lease?: Record<string, unknown> | null;
+  observedAt: string;
 }
 
 export interface DesktopShareResponse {
@@ -291,6 +309,8 @@ export interface DesktopShareResponse {
     status?: string;
     expiresAt?: string;
   };
+  attemptId?: string;
+  warnings?: DesktopAccessWarning[];
 }
 
 export interface DesktopShareRecord {
@@ -348,6 +368,90 @@ export interface WorkspaceFoldersResponse {
 }
 
 export interface FileBrowserResponse extends WorkspaceFoldersResponse {}
+
+export interface InstanceFileMount {
+  id: string;
+  name: string;
+  permissions: { read?: boolean; upload?: boolean; createFolder?: boolean; delete?: boolean };
+}
+
+export interface InstanceFileEntry {
+  name: string;
+  path: string;
+  type: string;
+  directory: boolean;
+  hidden?: boolean;
+  size?: number | null;
+  modifiedAt?: string | null;
+  previewable?: boolean;
+  downloadable?: boolean;
+}
+
+export interface InstanceFilesResponse {
+  ok: boolean;
+  mount: InstanceFileMount;
+  mounts: InstanceFileMount[];
+  path: string;
+  parent?: string | null;
+  entries: InstanceFileEntry[];
+  truncated?: boolean;
+  files?: Array<{ name: string; path: string; size: number }>;
+}
+
+export interface InstanceFilePreviewResponse {
+  ok: boolean;
+  mount: InstanceFileMount;
+  path: string;
+  name: string;
+  size: number;
+  contentType: string;
+  content: string;
+}
+
+export interface InstanceConfigDocument {
+  schemaVersion: number;
+  generation: number;
+  createdAt: string;
+  updatedAt: string;
+  metadata: Record<string, unknown>;
+  runtime: Record<string, unknown>;
+  capabilities: Record<string, unknown>;
+  connectors: Record<string, unknown>;
+  desktops: Record<string, unknown>;
+  mailboxes: Record<string, unknown>;
+}
+
+export interface InstanceStatusDocument {
+  schemaVersion: number;
+  desiredGeneration: number;
+  observedGeneration: number;
+  state: string;
+  generatedAt: string;
+  lastSuccessfulReconciliationAt?: string;
+  conditions: Array<{ code: string; status: string; subsystem: string }>;
+  subsystems: Record<string, { state: string }>;
+}
+
+export interface InstanceContextResponse {
+  ok: boolean;
+  instance: { internalInstanceId?: string; publicRef: string; canonicalPath: string; accountSwitcherEnabled?: boolean };
+}
+
+export interface InstanceAccount {
+  publicRef: string;
+  displayName: string;
+  canonicalPath: string;
+}
+
+export interface InstanceAccountsResponse {
+  ok: boolean;
+  accounts: InstanceAccount[];
+}
+
+export interface InstanceStatusResponse extends InstanceContextResponse {
+  config: InstanceConfigDocument;
+  status: InstanceStatusDocument;
+}
 
 export interface SystemDoctorCheck {
   id: string;
@@ -950,6 +1054,79 @@ export interface TimerRecord {
   lastError?: string;
 }
 
+export interface MailboxRecord {
+  id: string;
+  ownerUserId?: string;
+  address: string;
+  displayName?: string;
+  purpose?: string;
+  status?: string;
+  target?: { type?: string; tenantVmId?: string };
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface MailboxRoute {
+  id: string;
+  mailboxResourceId: string;
+  mailboxId: string;
+  threadId: string;
+  mode: "append_only" | "process_immediately" | "context_next_turn";
+  generation: number;
+  status: string;
+  policyRevision?: number;
+  createdAt?: string;
+  updatedAt?: string;
+  revokedAt?: string | null;
+  reason?: string | null;
+}
+
+export interface MailboxRouteStatus {
+  route: MailboxRoute | null;
+  sources: { received: number; suppressed: number; unrouted: number; deadLetter: number };
+  processing: { pending: number; claimed: number; accepted: number; running: number; completed: number; failed: number; delivered: number; deadLetter: number; cancelled: number };
+  context: { pending: number; reserved: number; consumed: number; cancelled: number };
+}
+
+export interface MailboxInboxMessage {
+  id: string;
+  receivedAt: string;
+  from: string;
+  subject: string;
+  body: string;
+  messageId: string;
+  attachmentCount: number;
+  state: string;
+  suppressionReason: string;
+}
+
+export interface MailboxInboxResponse {
+  ok: boolean;
+  mode: string;
+  shadowDenied: boolean;
+  limit?: number;
+  messages: MailboxInboxMessage[];
+  nextCursor: string | null;
+}
+
+export interface MailboxRouteApproval {
+  id: string;
+  approveCode?: string;
+  expiresAt?: string;
+  approveCommand?: string;
+  authIntent?: Record<string, string>;
+}
+
+export interface MailboxRouteMutation {
+  ok: boolean;
+  status?: "approval_required";
+  action?: string;
+  route?: MailboxRoute;
+  policyRevision?: number;
+  idempotent?: boolean;
+  challenge?: MailboxRouteApproval;
+}
+
 export interface AutomationRecord {
   automationId: string;
   rawId: string;
@@ -1011,56 +1188,6 @@ export interface AutomationDoctorResponse {
     byType?: Record<string, number>;
   };
   issues: AutomationDoctorIssue[];
-}
-
-export interface JobAlertRoute {
-  id: string;
-  targetThreadId: string;
-  label?: string;
-  address: string;
-  createdAt?: string;
-  updatedAt?: string;
-  lastReceivedAt?: string | null;
-  receivedCount?: number;
-  enabled?: boolean;
-}
-
-export interface JobAlertRouteResponse {
-  routes: JobAlertRoute[];
-  inbound: {
-    domain?: string | null;
-    configured?: boolean;
-    relayConfigured?: boolean;
-    relayEndpoint?: string;
-  };
-}
-
-export interface OrkestrMailDraft {
-  id: string;
-  ownerUserId?: string;
-  threadId?: string;
-  to: string[];
-  subject: string;
-  body: string;
-  status: "draft" | "sent" | "send_failed" | string;
-  provider?: string;
-  createdAt?: string;
-  updatedAt?: string;
-  sentAt?: string;
-  lastError?: string;
-}
-
-export interface CalendarExportResponse {
-  event: {
-    uid: string;
-    title: string;
-    startsAt: string;
-    endsAt: string;
-    description?: string;
-    location?: string;
-  };
-  ics: string;
-  googleCalendarUrl: string;
 }
 
 export interface TimerDoctorIssue {
@@ -1126,6 +1253,9 @@ export interface EventArchivesResponse {
 
 export interface ThreadSummary {
   id: string;
+  publicRef?: string;
+  canonicalUrl?: string;
+  canonicalPath?: string;
   ownerUserId?: string;
   name?: string;
   title?: string;
@@ -2403,36 +2533,35 @@ export class ApiService {
     return this.http.get<{ timers: TimerRecord[] }>(this.api("/timers"));
   }
 
-  jobAlertRoutes(): Observable<JobAlertRouteResponse> {
-    return this.http.get<JobAlertRouteResponse>(this.api("/jobs/alert-routes"));
+  mailboxes(): Observable<{ ok: boolean; mailboxes: MailboxRecord[] }> {
+    return this.http.get<{ ok: boolean; mailboxes: MailboxRecord[] }>(this.api("/mailboxes"));
   }
 
-  createJobAlertRoute(body: { targetThreadId: string; label?: string; rotate?: boolean }): Observable<{ route: JobAlertRoute; created: boolean; inbound: JobAlertRouteResponse["inbound"] }> {
-    return this.http.post<{ route: JobAlertRoute; created: boolean; inbound: JobAlertRouteResponse["inbound"] }>(this.api("/jobs/alert-routes"), body);
+  mailboxRoutes(mailboxId: string): Observable<{ ok: boolean; routes: MailboxRoute[] }> {
+    return this.http.get<{ ok: boolean; routes: MailboxRoute[] }>(this.api(`/mailboxes/${encodeURIComponent(mailboxId)}/routes`));
   }
 
-  testJobAlertRoute(routeId: string): Observable<{ ok: boolean; route: JobAlertRoute; result: Record<string, unknown> }> {
-    return this.http.post<{ ok: boolean; route: JobAlertRoute; result: Record<string, unknown> }>(this.api(`/jobs/alert-routes/${encodeURIComponent(routeId)}/test`), {});
+  mailboxRouteStatus(mailboxId: string): Observable<{ ok: boolean; status: MailboxRouteStatus }> {
+    return this.http.get<{ ok: boolean; status: MailboxRouteStatus }>(this.api(`/mailboxes/${encodeURIComponent(mailboxId)}/route-status`));
   }
 
-  orkestrMailDrafts(threadId = ""): Observable<{ drafts: OrkestrMailDraft[] }> {
-    return this.http.get<{ drafts: OrkestrMailDraft[] }>(this.api(`/mail-drafts${this.query({ threadId })}`));
+  mailboxMessages(mailboxId: string, threadId: string, cursor = "", limit = 25): Observable<MailboxInboxResponse> {
+    return this.http.get<MailboxInboxResponse>(this.api(`/mailboxes/${encodeURIComponent(mailboxId)}/messages${this.query({ threadId, cursor, limit })}`));
   }
 
-  createOrkestrMailDraft(body: Record<string, unknown>): Observable<{ draft: OrkestrMailDraft }> {
-    return this.http.post<{ draft: OrkestrMailDraft }>(this.api("/mail-drafts"), body);
+  createMailboxRoute(mailboxId: string, body: { threadId: string; mode: MailboxRoute["mode"]; newThread?: { name: string }; approval?: string }): Observable<MailboxRouteMutation> {
+    return this.http.post<MailboxRouteMutation>(this.api(`/mailboxes/${encodeURIComponent(mailboxId)}/routes`), body);
   }
 
-  updateOrkestrMailDraft(draftId: string, body: Record<string, unknown>): Observable<{ draft: OrkestrMailDraft }> {
-    return this.http.patch<{ draft: OrkestrMailDraft }>(this.api(`/mail-drafts/${encodeURIComponent(draftId)}`), body);
+  moveMailboxRoute(mailboxId: string, routeId: string, body: { threadId: string; mode: MailboxRoute["mode"]; approval?: string }): Observable<MailboxRouteMutation> {
+    return this.http.patch<MailboxRouteMutation>(this.api(`/mailboxes/${encodeURIComponent(mailboxId)}/routes/${encodeURIComponent(routeId)}`), body);
   }
 
-  sendOrkestrMailDraft(draftId: string): Observable<{ ok: boolean; draft: OrkestrMailDraft; delivery: Record<string, unknown> }> {
-    return this.http.post<{ ok: boolean; draft: OrkestrMailDraft; delivery: Record<string, unknown> }>(this.api(`/mail-drafts/${encodeURIComponent(draftId)}/send`), {});
-  }
-
-  createCalendarExport(body: Record<string, unknown>): Observable<CalendarExportResponse> {
-    return this.http.post<CalendarExportResponse>(this.api("/jobs/calendar-exports"), body);
+  revokeMailboxRoute(mailboxId: string, routeId: string, reason = ""): Observable<{ ok: boolean; route: MailboxRoute; policyRevision?: number; idempotent?: boolean }> {
+    return this.http.delete<{ ok: boolean; route: MailboxRoute; policyRevision?: number; idempotent?: boolean }>(
+      this.api(`/mailboxes/${encodeURIComponent(mailboxId)}/routes/${encodeURIComponent(routeId)}`),
+      { body: reason ? { reason } : {} },
+    );
   }
 
   automations(): Observable<{ automations: AutomationRecord[] }> {
@@ -2566,6 +2695,59 @@ export class ApiService {
 
   deleteFile(path: string): Observable<FileBrowserResponse> {
     return this.http.delete<FileBrowserResponse>(this.api(`/files?path=${encodeURIComponent(path)}`));
+  }
+
+  instanceContext(): Observable<InstanceContextResponse> {
+    return this.http.get<InstanceContextResponse>(this.api("/instance/context"));
+  }
+
+  instanceAccounts(): Observable<InstanceAccountsResponse> {
+    return this.http.get<InstanceAccountsResponse>(this.api("/instance/accounts"));
+  }
+
+  openInstanceAccount(publicRef: string): Observable<{ ok: boolean; account: InstanceAccount; url: string }> {
+    return this.http.post<{ ok: boolean; account: InstanceAccount; url: string }>(
+      this.api(`/instance/accounts/${encodeURIComponent(publicRef)}/session`),
+      {},
+    );
+  }
+
+  logoutBrowserSession(): Observable<{ ok: boolean }> {
+    return this.http.post<{ ok: boolean }>(this.api("/setup/security/logout"), {});
+  }
+
+  instanceStatus(): Observable<InstanceStatusResponse> {
+    return this.http.get<InstanceStatusResponse>(this.api("/instance/status"));
+  }
+
+  instanceFiles(mount = "", currentPath = ""): Observable<InstanceFilesResponse> {
+    const params = new URLSearchParams();
+    if (mount) params.set("mount", mount);
+    if (currentPath) params.set("path", currentPath);
+    const query = params.toString();
+    return this.http.get<InstanceFilesResponse>(this.api(`/instance/files${query ? `?${query}` : ""}`));
+  }
+
+  instanceFilePreview(mount: string, filePath: string): Observable<InstanceFilePreviewResponse> {
+    const params = new URLSearchParams({ mount, path: filePath });
+    return this.http.get<InstanceFilePreviewResponse>(this.api(`/instance/files/preview?${params}`));
+  }
+
+  instanceFileDownloadUrl(mount: string, filePath: string): string {
+    const params = new URLSearchParams({ mount, path: filePath });
+    return this.api(`/instance/files/download?${params}`);
+  }
+
+  createInstanceFolder(mount: string, currentPath: string, name: string): Observable<InstanceFilesResponse> {
+    return this.http.post<InstanceFilesResponse>(this.api("/instance/files/folders"), { mount, path: currentPath, name });
+  }
+
+  uploadInstanceFiles(mount: string, currentPath: string, files: File[]): Observable<InstanceFilesResponse> {
+    const body = new FormData();
+    body.append("mount", mount);
+    body.append("path", currentPath);
+    for (const file of files) body.append("files", file, file.name);
+    return this.http.post<InstanceFilesResponse>(this.api("/instance/files/uploads"), body);
   }
 
   modelStatus(): Observable<Record<string, unknown>> {
@@ -2758,9 +2940,10 @@ export class ApiService {
     return this.http.post<ThreadUploadResponse>(this.api(`/threads/${encodeURIComponent(id)}/uploads`), body);
   }
 
-  browserSessions(threadId = "", breakGlassReason = ""): Observable<{ sessions: BrowserSession[]; browsers?: BrowserSession[]; source?: string; error?: string; message?: string }> {
+  browserSessions(threadId = "", breakGlassReason = "", ownerInventory = false): Observable<{ sessions: BrowserSession[]; browsers?: BrowserSession[]; source?: string; error?: string; message?: string }> {
     const params = new URLSearchParams();
     if (threadId) params.set("threadId", threadId);
+    if (ownerInventory) params.set("inventory", "owner");
     if (breakGlassReason) {
       params.set("breakGlass", "1");
       params.set("reason", breakGlassReason);
@@ -2769,8 +2952,8 @@ export class ApiService {
     return this.http.get<{ sessions: BrowserSession[]; browsers?: BrowserSession[]; source?: string; error?: string; message?: string }>(this.api(`/browser-sessions${query}`));
   }
 
-  browserAction(slug: string, action: string, body: Record<string, unknown> = {}): Observable<{ browser: BrowserSession }> {
-    return this.http.post<{ browser: BrowserSession }>(this.api(`/browser-sessions/${encodeURIComponent(slug)}/${encodeURIComponent(action)}`), body);
+  browserAction(slug: string, action: string, body: Record<string, unknown> = {}): Observable<{ browser: BrowserSession; attemptId?: string; warnings?: DesktopAccessWarning[] }> {
+    return this.http.post<{ browser: BrowserSession; attemptId?: string; warnings?: DesktopAccessWarning[] }>(this.api(`/browser-sessions/${encodeURIComponent(slug)}/${encodeURIComponent(action)}`), body);
   }
 
   desktopLeases(includeReleased = false, threadId = "", breakGlassReason = ""): Observable<{ ok: boolean; desktopLeases: DesktopLeaseRecord[]; staleAfterMs?: number; generatedAt?: string }> {
@@ -2785,8 +2968,8 @@ export class ApiService {
     return this.http.get<{ ok: boolean; desktopLeases: DesktopLeaseRecord[]; staleAfterMs?: number; generatedAt?: string }>(this.api(`/desktops/leases${query}`));
   }
 
-  acquireDesktopLease(slug: string, body: Record<string, unknown>): Observable<{ ok: boolean; lease?: DesktopLeaseRecord }> {
-    return this.http.post<{ ok: boolean; lease?: DesktopLeaseRecord }>(this.api(`/desktops/${encodeURIComponent(slug)}/acquire`), body);
+  acquireDesktopLease(slug: string, body: Record<string, unknown>): Observable<{ ok: boolean; lease?: DesktopLeaseRecord; attemptId?: string; warnings?: DesktopAccessWarning[]; autoRecovered?: boolean; recovery?: Record<string, unknown> | null }> {
+    return this.http.post<{ ok: boolean; lease?: DesktopLeaseRecord; attemptId?: string; warnings?: DesktopAccessWarning[]; autoRecovered?: boolean; recovery?: Record<string, unknown> | null }>(this.api(`/desktops/${encodeURIComponent(slug)}/acquire`), body);
   }
 
   releaseDesktopLease(slug: string, body: Record<string, unknown>): Observable<{ ok: boolean; lease?: DesktopLeaseRecord | null }> {

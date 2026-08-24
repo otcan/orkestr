@@ -18,6 +18,7 @@ import {
 import { renderOpenMetrics, resetObservabilityForTests } from "../packages/core/src/observability.js";
 import { appendThreadMessage, createThread, deleteThread, getThread, listThreadMessages, updateThread } from "../packages/core/src/threads.js";
 import { listThreadWorkers } from "../packages/core/src/thread-workers.js";
+import { listEvents } from "../packages/storage/src/store.js";
 
 async function testEnv() {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-task-agent-"));
@@ -108,6 +109,59 @@ test("task agent final answers are steered back to the parent exactly once", asy
   const summary = await taskAgentSummary(current, env);
   assert.equal(summary.status, "completed");
   assert.equal(summary.result.messageId, result.id);
+});
+
+test("task agent creation rejects stale parent ids from the current Orkestr context", async () => {
+  const env = await testEnv();
+  await createThread({ id: "features-parent", name: "Features", cwd: path.dirname(env.ORKESTR_HOME) }, env);
+  await createThread({ id: "features-worker", name: "Features Worker", parentThreadId: "features-parent", rootThreadId: "features-parent", cwd: path.dirname(env.ORKESTR_HOME) }, env);
+  await createThread({ id: "stale-parent", name: "Old E2E Parent", cwd: path.dirname(env.ORKESTR_HOME) }, env);
+
+  await assert.rejects(
+    () => createTaskAgent("stale-parent", {
+      task: "This should stay scoped to the current features tree.",
+      originThreadId: "features-worker",
+      originRootThreadId: "features-parent",
+      requestedParentThreadId: "stale-parent",
+    }, env),
+    /task_agent_parent_mismatch/,
+  );
+
+  const staleTasks = await listTaskAgents("stale-parent", env);
+  const events = await listEvents(env, 20);
+  assert.equal(staleTasks.length, 0);
+  assert.equal(events.some((event) => event.type === "task_agent_parent_mismatch" && event.threadId === "stale-parent"), true);
+});
+
+test("task agent results fail closed when the recorded parent binding drifts", async () => {
+  const env = await testEnv();
+  const parent = await createThread({ id: "bound-parent", name: "Bound Parent", cwd: path.dirname(env.ORKESTR_HOME) }, env);
+  await createThread({ id: "wrong-parent", name: "Wrong Parent", cwd: path.dirname(env.ORKESTR_HOME) }, env);
+  const { taskAgent } = await createTaskAgent(parent.id, {
+    task: "Do not leak this result.",
+    requestedParentThreadId: parent.id,
+  }, env);
+  const drifted = await updateThread(taskAgent.id, { parentThreadId: "wrong-parent" }, env);
+  const result = await appendThreadMessage(taskAgent.id, {
+    role: "assistant",
+    source: "codex-app-server",
+    phase: "final_answer",
+    text: "Sensitive SRE result for the original parent only.",
+    state: "completed",
+  }, env);
+
+  const summary = await completeTaskAgentFromMessage(drifted, result, env, { deliver: false });
+  const current = await getThread(taskAgent.id, env);
+  const originalMessages = await listThreadMessages(parent.id, env);
+  const wrongMessages = await listThreadMessages("wrong-parent", env);
+  const events = await listEvents(env, 20);
+
+  assert.equal(summary, null);
+  assert.equal(current.agentTaskStatus, "failed");
+  assert.equal(current.lastError, "task_agent_parent_mismatch");
+  assert.equal(originalMessages.length, 0);
+  assert.equal(wrongMessages.length, 0);
+  assert.equal(events.some((event) => event.type === "task_agent_result_parent_rejected" && event.taskAgentThreadId === taskAgent.id), true);
 });
 
 test("task agent reconciliation completes a durable delivering_result retry after parent result append", async () => {

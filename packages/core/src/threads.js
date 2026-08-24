@@ -1,6 +1,6 @@
 import path from "node:path";
 import fs from "node:fs/promises";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { ensureDataDirs } from "../../storage/src/paths.js";
 import { appendEvent } from "../../storage/src/store.js";
 import { createThreadMessageRepository, createThreadRepository } from "../../storage/src/repositories.js";
@@ -10,6 +10,19 @@ import { assertResourceAccess, assertThreadLimit, filterResourcesForPrincipal, i
 import { resolveThreadAttachments } from "./thread-attachments.js";
 import { userScopedCapabilityHints } from "./user-skills.js";
 import { adminUserId, getUser, normalizeUserId } from "./users.js";
+import {
+  consumeMailboxContextsForHumanTurn,
+  releaseMailboxContextsForHumanTurn,
+  reserveMailboxContextsForHumanTurn,
+} from "./mailbox-routes.js";
+import {
+  assertPublicRefInvariant,
+  assertUniquePublicRefs,
+  canonicalInstanceUrlsEnabled,
+  generateUniquePublicRef,
+  parseThreadPublicRef,
+} from "./canonical-public-references.js";
+import { withCanonicalPublicReferenceLock } from "./canonical-public-reference-lock.js";
 
 const runningThreadIds = new Set();
 const messageMutationQueues = new Map();
@@ -46,6 +59,7 @@ const messageStringFields = [
   "originTransport",
   "senderParticipantId",
   "senderTrustLevel",
+  "senderEffectiveRole",
   "senderPolicyMode",
   "executorKind",
   "executorTransport",
@@ -75,6 +89,8 @@ const messageStringFields = [
   "idempotencyKey",
   "signalKind",
   "signalMode",
+  "mailboxExecutionPolicy",
+  "mailboxContextClaimId",
 ];
 
 function safeThreadId(threadId) {
@@ -141,6 +157,14 @@ export async function getThread(threadId, env = process.env) {
     null;
 }
 
+export async function getThreadByPublicRefForPrincipal(publicRef, principal, env = process.env) {
+  const value = parseThreadPublicRef(publicRef);
+  const thread = await createThreadRepository(env).findByPublicRef(value);
+  if (!thread) return null;
+  assertResourceAccess(principal, thread, "thread_access", env);
+  return thread;
+}
+
 export async function getThreadForPrincipal(threadId, principal, env = process.env) {
   const id = normalizeThreadId(threadId);
   const matches = (await listThreads(env))
@@ -161,10 +185,15 @@ export async function getThreadForPrincipal(threadId, principal, env = process.e
 }
 
 async function saveThreads(threads, env) {
+  assertUniquePublicRefs(threads, "thread");
   return createThreadRepository(env).save(threads);
 }
 
 export async function createThread(input = {}, env = process.env) {
+  return withCanonicalPublicReferenceLock(() => createThreadLocked(input, env), env);
+}
+
+async function createThreadLocked(input = {}, env = process.env) {
   const threads = await listThreads(env);
   const requestedId = normalizeThreadId(input.id || input.threadId);
   const name = String(input.name || input.displayName || requestedId || "New Thread").trim();
@@ -184,8 +213,13 @@ export async function createThread(input = {}, env = process.env) {
   const codexThreadId = String(input.codexThreadId || input.executor?.codexThreadId || input.executor?.metadata?.codexThreadId || "").trim();
   const codexSessionId = String(input.codexSessionId || input.executor?.codexSessionId || input.executor?.metadata?.codexSessionId || "").trim();
 
+  const publicRefAssignedAt = canonicalInstanceUrlsEnabled(env) ? nowIso() : "";
   const thread = {
     id: requestedId || randomUUID(),
+    ...(publicRefAssignedAt ? {
+      publicRef: generateUniquePublicRef("thread", new Set(threads.map((item) => String(item.publicRef || "")).filter(Boolean))),
+      publicRefAssignedAt,
+    } : {}),
     ownerUserId,
     name,
     title: String(input.title || name).trim(),
@@ -222,6 +256,10 @@ export async function createThread(input = {}, env = process.env) {
     parentThreadId: String(input.parentThreadId || "").trim() || null,
     rootThreadId: String(input.rootThreadId || input.parentThreadId || "").trim() || null,
     threadKind: String(input.threadKind || "").trim() || null,
+    agentParentThreadId: String(input.agentParentThreadId || "").trim() || null,
+    agentRequestedParentThreadId: String(input.agentRequestedParentThreadId || "").trim() || null,
+    agentOriginThreadId: String(input.agentOriginThreadId || "").trim() || null,
+    agentOriginRootThreadId: String(input.agentOriginRootThreadId || "").trim() || null,
     agentTaskId: String(input.agentTaskId || "").trim() || null,
     agentProfileId: String(input.agentProfileId || "").trim() || null,
     agentTaskStatus: String(input.agentTaskStatus || "").trim() || null,
@@ -340,12 +378,20 @@ export async function createThreadForPrincipal(input = {}, principal, env = proc
 }
 
 export async function updateThread(threadId, patch = {}, env = process.env) {
+  return withCanonicalPublicReferenceLock(() => updateThreadLocked(threadId, patch, env), env);
+}
+
+async function updateThreadLocked(threadId, patch = {}, env = process.env) {
   const id = normalizeThreadId(threadId);
   const threads = await listThreads(env);
   let updated = null;
   let changed = false;
   const next = threads.map((thread) => {
     if (thread.id !== id && thread.name !== id && thread.bindingName !== id) return thread;
+    assertPublicRefInvariant(thread.publicRef, Object.prototype.hasOwnProperty.call(patch, "publicRef") ? patch.publicRef : thread.publicRef, "thread");
+    if (thread.publicRefAssignedAt && Object.prototype.hasOwnProperty.call(patch, "publicRefAssignedAt") && patch.publicRefAssignedAt !== thread.publicRefAssignedAt) {
+      throw Object.assign(new Error("thread_public_ref_metadata_immutable"), { statusCode: 400 });
+    }
     const candidate = {
       ...thread,
       ...patch,
@@ -394,6 +440,10 @@ function descendantThreadIds(threads, rootIds) {
 }
 
 export async function deleteThread(threadId, options = {}, env = process.env) {
+  return withCanonicalPublicReferenceLock(() => deleteThreadLocked(threadId, options, env), env);
+}
+
+async function deleteThreadLocked(threadId, options = {}, env = process.env) {
   const id = normalizeThreadId(threadId);
   const threads = await listThreads(env);
   const target = threads.find((thread) => thread.id === id || thread.name === id || thread.bindingName === id);
@@ -531,6 +581,17 @@ export async function appendThreadMessage(threadId, input, env = process.env) {
           );
       if (duplicate) return { ...duplicate, duplicate: true, duplicateReason: "client_message_id" };
     }
+    if (role === "assistant" && input.dedupeAssistantByIdempotencyKey === true && clientMessageId) {
+      const candidate = sqlite
+        ? await messageRepository.find(thread.id, { clientMessageId, role: "assistant" })
+        : [...messages].reverse().find((existing) =>
+            existing.role === "assistant" &&
+            existing.source === source &&
+            clientInputIdempotencyKey(existing) === clientMessageId
+          );
+      const duplicate = candidate && candidate.source === source ? candidate : null;
+      if (duplicate) return { ...duplicate, duplicate: true, duplicateReason: "assistant_idempotency_key" };
+    }
     const externalId = String(input.externalId || "").trim();
     if (role === "user" && externalId && whatsappOrigin({ ...input, role, source })) {
       const candidate = sqlite
@@ -582,9 +643,19 @@ export async function appendThreadMessage(threadId, input, env = process.env) {
         reason: String(input.securityClassification.reason || "").trim(),
       };
     }
+    if (input.shadowBoundaryWarning && typeof input.shadowBoundaryWarning === "object" && !Array.isArray(input.shadowBoundaryWarning)) {
+      nextMessage.shadowBoundaryWarning = {
+        eligible: input.shadowBoundaryWarning.eligible === true,
+        emitted: input.shadowBoundaryWarning.emitted === true,
+        resourceType: String(input.shadowBoundaryWarning.resourceType || "").trim().toLowerCase(),
+        mode: String(input.shadowBoundaryWarning.mode || "").trim().toLowerCase(),
+        reason: String(input.shadowBoundaryWarning.reason || "").trim().toLowerCase(),
+        notificationId: String(input.shadowBoundaryWarning.notificationId || "").trim(),
+      };
+    }
     nextMessage = normalizeNoReplyAssistantMessage(nextMessage);
     if (input.forceDeliveryAfterInterrupt === true) nextMessage.forceDeliveryAfterInterrupt = true;
-    if (input.steerActiveTurn === true) nextMessage.steerActiveTurn = true;
+    if (input.steerActiveTurn === true || input.steerActiveTurn === false) nextMessage.steerActiveTurn = input.steerActiveTurn;
     if (input.recoveryContinuation === true) nextMessage.recoveryContinuation = true;
     if (!nextMessage.text && !nextMessage.promptFile) {
       const error = new Error("message_text_required");
@@ -632,6 +703,12 @@ function clientInputIdempotencyKey(input = {}) {
     input.idempotencyKey ||
     "",
   ).trim();
+}
+
+function mailboxContextClaimKey(threadId = "", input = {}) {
+  const clientMessageId = clientInputIdempotencyKey(input);
+  if (!clientMessageId) return randomUUID();
+  return `mailbox-context:${createHash("sha256").update(`${threadId}:${clientMessageId}`).digest("hex").slice(0, 40)}`;
 }
 
 function whatsappOrigin(input = {}) {
@@ -747,11 +824,43 @@ export async function enqueueThreadInputForPrincipal(threadId, input, principal,
       },
     }, env);
   }
-  return appendThreadMessage(thread.id, {
+  // Context-next-turn mailbox routes reserve their durable context only for an
+  // authenticated human input. The reservation is released if this message is
+  // not durably created, and a passive delivery marker prevents it steering an
+  // already-running turn.
+  const mailboxContextClaimId = mailboxContextClaimKey(thread.id, nextInput);
+  // Reconcile a durable append that survived a crash before its context state
+  // was consumed. The claim id is deterministic for a client idempotency key,
+  // so a retry sees the same reserved context rather than attaching it to a
+  // later, unrelated human request.
+  const knownMessageClaims = (await listThreadMessages(thread.id, env)).map((message) => ({
+    claimId: String(message.mailboxContextClaimId || "").trim(),
+    messageId: String(message.id || "").trim(),
+  })).filter((item) => item.claimId && item.messageId);
+  const reservation = await reserveMailboxContextsForHumanTurn({ threadId: thread.id, claimId: mailboxContextClaimId, knownMessageClaims }, env);
+  const contextualInput = reservation.contexts.length ? {
     ...nextInput,
-    role: "user",
-    state: "queued",
-  }, env);
+    text: [reservation.text, String(nextInput.text || "").trim() ? `Human request:\n${String(nextInput.text || "").trim()}` : ""].filter(Boolean).join("\n\n"),
+    mailboxContextClaimId,
+    codexDeliveryMode: "passive",
+    steerActiveTurn: false,
+  } : nextInput;
+  try {
+    const message = await appendThreadMessage(thread.id, {
+      ...contextualInput,
+      role: "user",
+      state: "queued",
+    }, env);
+    if (reservation.contexts.length && (!message.duplicate || String(message.mailboxContextClaimId || "") === mailboxContextClaimId)) {
+      await consumeMailboxContextsForHumanTurn(mailboxContextClaimId, message.id, env);
+    } else if (reservation.contexts.length) {
+      await releaseMailboxContextsForHumanTurn(mailboxContextClaimId, env);
+    }
+    return message;
+  } catch (error) {
+    if (reservation.contexts.length) await releaseMailboxContextsForHumanTurn(mailboxContextClaimId, env).catch(() => {});
+    throw error;
+  }
 }
 
 export async function updateThreadMessage(threadId, messageId, patch, env = process.env) {

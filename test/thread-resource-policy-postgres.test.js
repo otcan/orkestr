@@ -30,6 +30,7 @@ const stateTables = new Set([
   "orkestr_thread_resource_policy", "orkestr_thread_resources", "orkestr_thread_resource_grants",
   "orkestr_thread_resource_ceilings", "orkestr_thread_resource_mutations", "orkestr_mailbox_thread_listeners",
   "orkestr_mailbox_thread_deliveries", "orkestr_mailbox_thread_pump_leases", "orkestr_thread_resource_sessions",
+  "orkestr_mailbox_routes", "orkestr_mailbox_sources", "orkestr_mailbox_route_work", "orkestr_mailbox_contexts",
 ]);
 
 function clone(value) {
@@ -61,6 +62,7 @@ function fakePolicyPool() {
     if (table === "orkestr_thread_resource_mutations") return `${columns.action}|${columns.idempotency_key}`;
     if (table === "orkestr_mailbox_thread_listeners" || table === "orkestr_mailbox_thread_deliveries" || table === "orkestr_thread_resource_sessions") return columns.id;
     if (table === "orkestr_mailbox_thread_pump_leases") return columns.name;
+    if (table === "orkestr_mailbox_routes" || table === "orkestr_mailbox_sources" || table === "orkestr_mailbox_route_work" || table === "orkestr_mailbox_contexts") return columns.id;
     return data.id;
   };
   const lower = (sql) => String(sql).replace(/\s+/g, " ").trim().toLowerCase();
@@ -253,6 +255,10 @@ test("PostgreSQL policy store commits complete state, preserves audit, and rolls
       state.mailboxListeners = [{ id: "listener-1", resourceType: "mailbox", resourceId: "mail-1", threadId: "thread-1", filterKey: "filter", filter: {}, idempotencyKey: "listener-request", generation: 1, status: "active", grantRevision: 1, policyRevision: 1, resourceGeneration: 1, createdAt: audit.createdAt, updatedAt: audit.createdAt, revokedAt: null, revokedBy: null, reason: null }];
       state.mailboxDeliveries = [{ id: "delivery-1", dedupeKey: "delivery-1", resourceType: "mailbox", resourceId: "mail-1", mailboxId: "mail-1", listenerId: "listener-1", listenerGeneration: 1, threadId: "thread-1", state: "pending", epoch: 1, attemptCount: 0, maxAttempts: 5, nextAttemptAt: audit.createdAt, claimToken: null, claimExpiresAt: null, grantRevision: 1, policyRevision: 1, resourceGeneration: 1, messageKey: "message-hash", payload: {}, reason: null, createdAt: audit.createdAt, updatedAt: audit.createdAt, deliveredAt: null }];
       state.mailboxPumpLeases = [{ name: "mailbox-thread-delivery", token: "lease", expiresAt: audit.createdAt, updatedAt: audit.createdAt }];
+      state.mailboxRoutes = [{ id: "route-1", resourceId: "mail-1", mailboxId: "mail-1", threadId: "thread-1", mode: "append_only", status: "active", generation: 1, createdAt: audit.createdAt, updatedAt: audit.createdAt }];
+      state.mailboxSources = [{ id: "source-1", dedupeKey: "source-1", resourceId: "mail-1", mailboxId: "mail-1", messageKey: "message-hash", state: "stored", payload: {}, createdAt: audit.createdAt, updatedAt: audit.createdAt }];
+      state.mailboxRouteWork = [{ id: "route-work-1", dedupeKey: "route-work-1", routeId: "route-1", sourceId: "source-1", threadId: "thread-1", mode: "append_only", state: "pending", createdAt: audit.createdAt, updatedAt: audit.createdAt }];
+      state.mailboxContexts = [{ id: "context-1", workId: "route-work-1", routeId: "route-1", sourceId: "source-1", threadId: "thread-1", status: "pending", createdAt: audit.createdAt, updatedAt: audit.createdAt }];
       state.resourceSessions = [{ id: "session-1", jtiHash: "jti", tokenIdHash: "token", bearerHash: "bearer", audience: "orkestr-connectors-mcp", scopes: ["connectors:read"], principalKind: "external_instance", principalId: "instance", ownerUserId: "admin", instanceId: "instance", accountId: "account", accountService: "whatsapp", resourceType: "oxrm", resourceId: resource().id, actions: ["read"], threadId: "thread-1", grantThreadId: "thread-1", rootThreadId: "thread-1", boundaryId: "local", policyRevision: 1, grantRevision: 1, resourceGeneration: 1, state: "active", epoch: 1, issuedAt: audit.createdAt, expiresAt: "2026-01-01T00:01:00.000Z", lastUsedAt: null, createdAt: audit.createdAt, updatedAt: audit.createdAt, invalidatedAt: null, invalidationReason: null }];
       return { state, auditOutboxUpserts: [audit] };
     }, env);
@@ -265,6 +271,10 @@ test("PostgreSQL policy store commits complete state, preserves audit, and rolls
     assert.equal(committed.mailboxListeners.length, 1);
     assert.equal(committed.mailboxDeliveries.length, 1);
     assert.equal(committed.mailboxPumpLeases.length, 1);
+    assert.equal(committed.mailboxRoutes.length, 1);
+    assert.equal(committed.mailboxSources.length, 1);
+    assert.equal(committed.mailboxRouteWork.length, 1);
+    assert.equal(committed.mailboxContexts.length, 1);
     assert.equal(committed.resourceSessions[0].audience, "orkestr-connectors-mcp");
     assert.deepEqual(committed.policyAuditOutbox.find((item) => item.id === audit.id), audit);
     assert.equal((await readThreadResourcePolicyState({ ...env, ORKESTR_THREAD_RESOURCE_POLICY_STORE: "postgresql" })).revision, 1);

@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { NestFactory } from "@nestjs/core";
 import type { INestApplication } from "@nestjs/common";
+import type { NestExpressApplication } from "@nestjs/platform-express";
 import { loadOverlayExecutorAdapters, recoverInterruptedExecutions } from "../../../packages/core/src/executors.js";
 import {
   setThreadConnectorDeliverySignalHandler,
@@ -37,11 +38,20 @@ import {
 import { AppModule } from "./app.module.js";
 import { startBrokerClientHeartbeat } from "./broker-client-heartbeat.js";
 import { attachBrokerInstanceAppProxyUpgrade, registerBrokerInstanceAppProxy } from "./broker-instance-app-proxy.js";
+import { attachCanonicalAppGatewayUpgrade, preflightCanonicalAppRequest, registerCanonicalAppGateway } from "./canonical-app-gateway.js";
+import {
+  attachHostBoundaryUpgrade,
+  enforceHostBoundaryRequest,
+  rejectUnknownHostBoundaryRequest,
+  sanitizeForwardedHostHeaders,
+} from "./host-boundaries.js";
 import { JsonErrorFilter } from "./common/json-error.filter.js";
 import { attachDesktopProxyUpgrade, registerDesktopProxy } from "./desktop-proxy.js";
 import { attachTenantVmDesktopProxyUpgrade, registerTenantVmDesktopProxy } from "./tenant-vm-desktop-proxy.js";
 import { registerStaticFallback } from "./static-fallback.js";
+import { registerLegacyInstanceRedirects } from "./legacy-instance-redirects.js";
 import { attachThreadStreamUpgrade } from "./thread-stream.js";
+import { applyTrustedOperatorProxy, attachTrustedOperatorProxyUpgrade } from "./trusted-operator-proxy.js";
 import { reportServerError } from "./watcher-reporting.js";
 import {
   createRuntimeWhatsAppSyncRunner,
@@ -69,7 +79,17 @@ function whatsappDeliveryPollIntervalMs(env = process.env) {
 }
 
 export async function createApp(): Promise<INestApplication> {
-  const app = await NestFactory.create(AppModule, { logger: false });
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, { logger: false });
+  // Static fallback routes are registered before Nest initializes its default
+  // parsers. Register the small form parser explicitly so the public instance
+  // entry POST can resolve the submitted name/reference in the live server.
+  app.useBodyParser("urlencoded", { extended: false, limit: "8kb" });
+  app.use((request, response, next) => {
+    sanitizeForwardedHostHeaders(request, process.env);
+    applyTrustedOperatorProxy(request, process.env);
+    if (rejectUnknownHostBoundaryRequest(request, response, process.env)) return;
+    next();
+  });
   app.use(createObservabilityMiddleware(process.env));
   app.use((request, response, next) => {
     const route = String((request as any)?.originalUrl || (request as any)?.url || "").split("?")[0];
@@ -96,6 +116,11 @@ export async function createApp(): Promise<INestApplication> {
         (request as any).orkestrMachineAuth = (result as any).machineAuth || null;
         (request as any).orkestrMachineAuthContext = (result as any).machineAuthContext || null;
         (request as any).orkestrDesktopShare = (result as any).desktopShare || null;
+        const canonicalPreflight = await preflightCanonicalAppRequest(request);
+        if (!canonicalPreflight.ok) {
+          return response.status(404).type("text/plain; charset=utf-8").send("not found");
+        }
+        if (await enforceHostBoundaryRequest(request, response, process.env)) return;
         const scopedShareAuth = authorizeScopedShareSessionRequest(request, result.session || null);
         if (!scopedShareAuth.ok) {
           return response
@@ -199,7 +224,7 @@ function authorizeAuthIntentSessionRequest(request: any, session: any) {
   const allowedActions = Array.isArray(session.allowedActions) ? session.allowedActions : [];
   if (!allowedActions.some((action: string) => String(action || "").startsWith("orkestr_auth."))) return { ok: true };
   const method = String(request?.method || "GET").toUpperCase();
-  const url = String(request?.originalUrl || request?.url || "").split("?")[0];
+  const url = requestPolicyUrl(request).split("?")[0];
   const parts = routePartsFromApiRequest(request);
   if (/^\/review\/google\/[^/]+(?:\/|$)/.test(url)) return { ok: true };
   if (method === "GET" && (url === "/connect/google" || url === "/connect/google/start" || /^\/connect\/google\/review\/[^/]+\/[^/]+$/.test(url))) return { ok: true };
@@ -253,7 +278,7 @@ function googleConnectConnectorEntryRequest(request: any, instanceId: string, me
   if (rest.length !== 2 || rest[0]?.toLowerCase() !== "connectors") return { ok: false, connectId: "" };
   const service = String(rest[1] || "").trim().toLowerCase();
   if (service !== "gmail") return { ok: false, connectId: "" };
-  const params = new URL(String(request?.originalUrl || request?.url || "/"), "http://localhost").searchParams;
+  const params = new URL(requestPolicyUrl(request), "http://localhost").searchParams;
   if (params.get("mcp") !== "tools/call") return { ok: false, connectId: "" };
   if (params.get("tool") !== "orkestr_auth") return { ok: false, connectId: "" };
   if (params.get("service") !== service) return { ok: false, connectId: "" };
@@ -358,7 +383,7 @@ function authorizeConnectorResourceRequest(request: any, principal: any) {
 }
 
 function connectorRouteFromApiRequest(request: any) {
-  const url = String(request?.originalUrl || request?.url || "").split("?")[0];
+  const url = requestPolicyUrl(request).split("?")[0];
   const parts = url.split("/").filter(Boolean);
   if (parts[0] !== "api" || parts[1] !== "connectors") return null;
   return {
@@ -422,7 +447,7 @@ function isUserConnectorRoute(route: { method: string; connector: string; action
 }
 
 function routePartsFromApiRequest(request: any) {
-  const url = String(request?.originalUrl || request?.url || "").split("?")[0];
+  const url = requestPolicyUrl(request).split("?")[0];
   return url.split("/").filter(Boolean).map((part) => {
     try {
       return decodeURIComponent(part).trim();
@@ -510,7 +535,7 @@ async function ambiguousThreadRoute(threadId: string) {
 }
 
 function threadIdFromApiRequest(request: any) {
-  const url = String(request?.originalUrl || request?.url || "").split("?")[0];
+  const url = requestPolicyUrl(request).split("?")[0];
   const parts = url.split("/").filter(Boolean);
   if (parts[0] !== "api" || parts[1] !== "threads") return "";
   let id = "";
@@ -521,6 +546,10 @@ function threadIdFromApiRequest(request: any) {
   }
   if (!id || id === "summary") return "";
   return id;
+}
+
+function requestPolicyUrl(request: any): string {
+  return String(request?.orkestrPolicyUrl || request?.originalUrl || request?.url || "/");
 }
 
 export async function startServer({ port = 19812, host = "127.0.0.1", openBrowser = false } = {}) {
@@ -612,6 +641,8 @@ export async function startServer({ port = 19812, host = "127.0.0.1", openBrowse
   });
 
   registerTenantVmDesktopProxy(app);
+  registerCanonicalAppGateway(app);
+  registerLegacyInstanceRedirects(app);
   registerBrokerInstanceAppProxy(app);
   registerDesktopProxy(app);
   registerStaticFallback(app);
@@ -620,6 +651,11 @@ export async function startServer({ port = 19812, host = "127.0.0.1", openBrowse
   attachTenantVmDesktopProxyUpgrade(app.getHttpServer());
   attachDesktopProxyUpgrade(app.getHttpServer());
   attachThreadStreamUpgrade(app.getHttpServer());
+  attachCanonicalAppGatewayUpgrade(app.getHttpServer());
+  attachHostBoundaryUpgrade(app.getHttpServer());
+  // This listener is intentionally attached after the host-boundary listener:
+  // prependListener then makes the exact-host rewrite run before the boundary.
+  attachTrustedOperatorProxyUpgrade(app.getHttpServer());
   await app.listen(port, host);
   whatsappDeliveryScheduler.schedule();
   void runMailboxDeliveryPump(serverEnv).catch((error) => {

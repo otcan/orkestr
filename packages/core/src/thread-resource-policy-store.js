@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import { ensureDataDirs } from "../../storage/src/paths.js";
 import { migrateLegacyDesktopGrants } from "./thread-resource-policy-sqlite-migration.js";
+import { readThreadResourcePolicySqliteState as readState } from "./thread-resource-policy-sqlite-state.js";
 import {
   clearThreadResourcePolicyPostgresCache,
   closeThreadResourcePolicyPostgresPools,
@@ -211,6 +212,38 @@ function ensureSchema(db) {
       expires_at text not null,
       updated_at text not null
     );
+    create table if not exists orkestr_mailbox_routes (
+      id text primary key,
+      resource_id text not null,
+      status text not null,
+      data_json text not null
+    );
+    create unique index if not exists idx_mailbox_routes_active_resource
+      on orkestr_mailbox_routes(resource_id) where status = 'active';
+    create table if not exists orkestr_mailbox_sources (
+      id text primary key,
+      dedupe_key text not null unique,
+      resource_id text not null,
+      data_json text not null
+    );
+    create table if not exists orkestr_mailbox_route_work (
+      id text primary key,
+      dedupe_key text not null unique,
+      route_id text not null,
+      state text not null,
+      data_json text not null
+    );
+    create index if not exists idx_mailbox_route_work_claim
+      on orkestr_mailbox_route_work(state, route_id);
+    create table if not exists orkestr_mailbox_contexts (
+      id text primary key,
+      work_id text not null unique,
+      thread_id text not null,
+      status text not null,
+      data_json text not null
+    );
+    create index if not exists idx_mailbox_contexts_pending
+      on orkestr_mailbox_contexts(thread_id, status);
     create table if not exists orkestr_thread_resource_audit_outbox (
       id text primary key,
       action text not null,
@@ -322,73 +355,12 @@ function ensureColumn(db, table, column, definition) {
   if (!columns.includes(column)) db.exec(`alter table ${table} add column ${column} ${definition}`);
 }
 
-function parseJson(value, fallback) {
-  try { const parsed = JSON.parse(String(value || "")); return parsed == null ? fallback : parsed; } catch { return fallback; }
-}
-
-function meta(db, key, fallback = "") {
-  const row = db.prepare("select value from orkestr_thread_resource_meta where key = ?").get(key);
-  return row ? row.value : fallback;
-}
-
 function setMeta(db, key, value) {
   db.prepare("insert into orkestr_thread_resource_meta(key, value) values (?, ?) on conflict(key) do update set value = excluded.value").run(key, String(value));
 }
 
-function readState(db) {
-  return {
-    version: 1,
-    revision: Number(meta(db, "revision", "0")) || 0,
-    updatedAt: meta(db, "updated_at", "") || null,
-    policies: db.prepare("select * from orkestr_thread_resource_policy").all().map((row) => ({ threadId: row.thread_id, resourceType: row.resource_type, revision: Number(row.revision || 0), explicitEmpty: Boolean(row.explicit_empty), inheritanceMode: row.inheritance_mode || "explicit", parentSnapshotRevision: Number(row.parent_snapshot_revision || 0), createdAt: row.created_at, updatedAt: row.updated_at })),
-    resources: db.prepare("select * from orkestr_thread_resources").all().map((row) => ({ id: row.resource_id, nativeId: row.native_id || row.resource_key, resourceType: row.resource_type, resourceKey: row.resource_key, ownerUserId: row.owner_user_id, boundaryId: row.boundary_id, generation: Number(row.generation || 1), status: row.status || (row.retired_at ? "retired" : "active"), backend: row.backend || "", createdAt: row.created_at, updatedAt: row.updated_at, retiredAt: row.retired_at || null })),
-    grants: db.prepare("select * from orkestr_thread_resource_grants").all().map((row) => ({ id: row.id, threadId: row.thread_id, resourceType: row.resource_type, resourceId: row.resource_id, resourceKey: row.resource_key, ownerUserId: row.owner_user_id, boundaryId: row.boundary_id, permissions: parseJson(row.permissions_json, []), revision: Number(row.revision || 1), source: row.source || "", createdAt: row.created_at, updatedAt: row.updated_at, revokedAt: row.revoked_at || null, revokedBy: row.revoked_by || null, reason: row.reason || null })),
-    ceilings: db.prepare("select * from orkestr_thread_resource_ceilings").all().map((row) => ({ threadId: row.thread_id, resourceType: row.resource_type, resourceId: row.resource_id, permissions: parseJson(row.permissions_json, []), parentThreadId: row.parent_thread_id, createdAt: row.created_at })),
-    mutations: db.prepare("select * from orkestr_thread_resource_mutations").all().map((row) => ({ action: row.action, idempotencyKey: row.idempotency_key, result: parseJson(row.result_json, {}), policyRevision: Number(row.policy_revision || 0), createdAt: row.created_at })),
-    mailboxListeners: db.prepare("select * from orkestr_mailbox_thread_listeners").all().map((row) => ({
-      id: row.id, resourceType: row.resource_type, resourceId: row.resource_id, threadId: row.thread_id,
-      filterKey: row.filter_key, filter: parseJson(row.filter_json, {}), idempotencyKey: row.idempotency_key || "", generation: Number(row.generation || 1),
-      status: row.status, grantRevision: Number(row.grant_revision || 0), policyRevision: Number(row.policy_revision || 0),
-      resourceGeneration: Number(row.resource_generation || 1), createdAt: row.created_at, updatedAt: row.updated_at,
-      revokedAt: row.revoked_at || null, revokedBy: row.revoked_by || null, reason: row.reason || null,
-    })),
-    mailboxDeliveries: db.prepare("select * from orkestr_mailbox_thread_deliveries").all().map((row) => ({
-      id: row.id, dedupeKey: row.dedupe_key, resourceType: row.resource_type, resourceId: row.resource_id,
-      mailboxId: row.mailbox_id, listenerId: row.listener_id || null, listenerGeneration: Number(row.listener_generation || 0),
-      threadId: row.thread_id || null, state: row.state, epoch: Number(row.epoch || 1), attemptCount: Number(row.attempt_count || 0), maxAttempts: Number(row.max_attempts || 1),
-      nextAttemptAt: row.next_attempt_at || null, claimToken: row.claim_token || null, claimExpiresAt: row.claim_expires_at || null,
-      grantRevision: Number(row.grant_revision || 0), policyRevision: Number(row.policy_revision || 0), resourceGeneration: Number(row.resource_generation || 1),
-      messageKey: row.message_key, payload: parseJson(row.payload_json, {}), reason: row.reason || null,
-      createdAt: row.created_at, updatedAt: row.updated_at, deliveredAt: row.delivered_at || null,
-    })),
-    mailboxPumpLeases: db.prepare("select * from orkestr_mailbox_thread_pump_leases").all().map((row) => ({ name: row.name, token: row.token, expiresAt: row.expires_at, updatedAt: row.updated_at })),
-    policyAuditOutbox: db.prepare("select * from orkestr_thread_resource_audit_outbox order by created_at asc").all().map((row) => ({
-      id: row.id, action: row.action, resourceType: row.resource_type || "", resourceId: row.resource_id || "", threadId: row.thread_id || "",
-      permission: row.permission || "", boundaryId: row.boundary_id || "", ownerUserId: row.owner_user_id || "", changeRef: row.change_ref || "", outcome: row.outcome,
-      actorUserId: row.actor_user_id, reason: row.reason || "", expiresAt: row.expires_at || null,
-      policyRevision: Number(row.policy_revision || 0), state: row.state, claimToken: row.claim_token || null,
-      claimExpiresAt: row.claim_expires_at || null, deliveredAt: row.delivered_at || null, createdAt: row.created_at,
-    })),
-    resourceSessions: db.prepare("select * from orkestr_thread_resource_sessions").all().map((row) => ({
-      id: row.id, jtiHash: row.jti_hash, tokenIdHash: row.token_id_hash, bearerHash: row.bearer_hash || "", audience: row.audience || "",
-      scopes: parseJson(row.scopes_json, []), principalKind: row.principal_kind || "external_instance", principalId: row.principal_id || "",
-      ownerUserId: row.owner_user_id || "", instanceId: row.instance_id || "", accountId: row.account_id || "", accountService: row.account_service || "",
-      resourceType: row.resource_type, resourceId: row.resource_id, actions: parseJson(row.actions_json, []),
-      connectorService: row.connector_service || "", connectorAccountId: row.connector_account_id || "", connectorConversationId: row.connector_conversation_id || "",
-      connectorBindingId: row.connector_binding_id || "", connectorTargetThreadId: row.connector_target_thread_id || "", connectorOperationRef: row.connector_operation_ref || "",
-      connectorTool: row.connector_tool || "", connectorAction: row.connector_action || "",
-      threadId: row.thread_id, grantThreadId: row.grant_thread_id || row.thread_id, rootThreadId: row.root_thread_id, boundaryId: row.boundary_id,
-      policyRevision: Number(row.policy_revision || 0), grantRevision: Number(row.grant_revision || 0),
-      resourceGeneration: Number(row.resource_generation || 1), state: row.state, epoch: Number(row.epoch || 1),
-      issuedAt: row.issued_at, expiresAt: row.expires_at, lastUsedAt: row.last_used_at || null,
-      createdAt: row.created_at, updatedAt: row.updated_at, invalidatedAt: row.invalidated_at || null,
-      invalidationReason: row.invalidation_reason || null,
-    })),
-  };
-}
-
 function replaceState(db, state = {}, auditOutboxUpserts = []) {
-  db.exec("delete from orkestr_thread_resource_sessions; delete from orkestr_mailbox_thread_pump_leases; delete from orkestr_mailbox_thread_deliveries; delete from orkestr_mailbox_thread_listeners; delete from orkestr_thread_resource_grants; delete from orkestr_thread_resources; delete from orkestr_thread_resource_policy; delete from orkestr_thread_resource_ceilings; delete from orkestr_thread_resource_mutations;");
+  db.exec("delete from orkestr_thread_resource_sessions; delete from orkestr_mailbox_contexts; delete from orkestr_mailbox_route_work; delete from orkestr_mailbox_sources; delete from orkestr_mailbox_routes; delete from orkestr_mailbox_thread_pump_leases; delete from orkestr_mailbox_thread_deliveries; delete from orkestr_mailbox_thread_listeners; delete from orkestr_thread_resource_grants; delete from orkestr_thread_resources; delete from orkestr_thread_resource_policy; delete from orkestr_thread_resource_ceilings; delete from orkestr_thread_resource_mutations;");
   const resource = db.prepare("insert into orkestr_thread_resources(resource_type, resource_id, native_id, resource_key, owner_user_id, boundary_id, generation, status, backend, created_at, updated_at, retired_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
   for (const item of state.resources || []) resource.run(item.resourceType, item.id, item.nativeId || item.resourceKey, item.resourceKey, item.ownerUserId, item.boundaryId, item.generation, item.status || (item.retiredAt ? "retired" : "active"), item.backend || "", item.createdAt, item.updatedAt, item.retiredAt || null);
   const policy = db.prepare("insert into orkestr_thread_resource_policy(thread_id, resource_type, revision, explicit_empty, inheritance_mode, parent_snapshot_revision, created_at, updated_at) values (?, ?, ?, ?, ?, ?, ?, ?)");
@@ -405,6 +377,14 @@ function replaceState(db, state = {}, auditOutboxUpserts = []) {
   for (const item of state.mailboxDeliveries || []) delivery.run(item.id, item.dedupeKey, item.resourceType, item.resourceId, item.mailboxId, item.listenerId || null, item.listenerGeneration || 0, item.threadId || null, item.state, item.epoch || 1, item.attemptCount || 0, item.maxAttempts || 1, item.nextAttemptAt || null, item.claimToken || null, item.claimExpiresAt || null, item.grantRevision || 0, item.policyRevision || 0, item.resourceGeneration || 1, item.messageKey, JSON.stringify(item.payload || {}), item.reason || null, item.createdAt, item.updatedAt, item.deliveredAt || null);
   const pumpLease = db.prepare("insert into orkestr_mailbox_thread_pump_leases(name, token, expires_at, updated_at) values (?, ?, ?, ?)");
   for (const item of state.mailboxPumpLeases || []) pumpLease.run(item.name, item.token, item.expiresAt, item.updatedAt);
+  const route = db.prepare("insert into orkestr_mailbox_routes(id, resource_id, status, data_json) values (?, ?, ?, ?)");
+  for (const item of state.mailboxRoutes || []) route.run(item.id, item.resourceId, item.status, JSON.stringify(item));
+  const source = db.prepare("insert into orkestr_mailbox_sources(id, dedupe_key, resource_id, data_json) values (?, ?, ?, ?)");
+  for (const item of state.mailboxSources || []) source.run(item.id, item.dedupeKey, item.resourceId, JSON.stringify(item));
+  const routeWork = db.prepare("insert into orkestr_mailbox_route_work(id, dedupe_key, route_id, state, data_json) values (?, ?, ?, ?, ?)");
+  for (const item of state.mailboxRouteWork || []) routeWork.run(item.id, item.dedupeKey, item.routeId, item.state, JSON.stringify(item));
+  const mailboxContext = db.prepare("insert into orkestr_mailbox_contexts(id, work_id, thread_id, status, data_json) values (?, ?, ?, ?, ?)");
+  for (const item of state.mailboxContexts || []) mailboxContext.run(item.id, item.workId, item.threadId, item.status, JSON.stringify(item));
   const resourceSession = db.prepare("insert into orkestr_thread_resource_sessions(id, jti_hash, token_id_hash, bearer_hash, audience, scopes_json, principal_kind, principal_id, owner_user_id, instance_id, account_id, account_service, connector_service, connector_account_id, connector_conversation_id, connector_binding_id, connector_target_thread_id, connector_operation_ref, resource_type, resource_id, actions_json, connector_tool, connector_action, thread_id, grant_thread_id, root_thread_id, boundary_id, policy_revision, grant_revision, resource_generation, state, epoch, issued_at, expires_at, last_used_at, created_at, updated_at, invalidated_at, invalidation_reason) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
   for (const item of state.resourceSessions || []) {
     resourceSession.run(item.id, item.jtiHash, item.tokenIdHash, item.bearerHash || "", item.audience || "", JSON.stringify(item.scopes || []),

@@ -20,11 +20,14 @@ export class JsonErrorFilter implements ExceptionFilter {
       this.reporter?.({ exception, statusCode, message, request });
     }
 
+    const body = exception instanceof HttpException && exception.getResponse() && typeof exception.getResponse() === "object"
+      ? exception.getResponse()
+      : { error: message };
     response
       .status(statusCode)
       .header("cache-control", "no-store")
       .type("application/json; charset=utf-8")
-      .send({ error: message });
+      .send({ ...(body as Record<string, unknown>), error: message });
   }
 }
 

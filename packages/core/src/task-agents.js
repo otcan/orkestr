@@ -12,6 +12,12 @@ import {
 } from "./threads.js";
 import { getTaskAgentProfile } from "./task-agent-profiles.js";
 import {
+  expectedTaskAgentParentThreadId,
+  rejectTaskAgentResultParentDrift,
+  taskAgentOriginPromptLines,
+  validateTaskAgentParentBinding,
+} from "./task-agent-parent-binding.js";
+import {
   activeTaskStates,
   canCorrectMissingResultFailure,
   clean,
@@ -65,10 +71,11 @@ function parentWorkspace(parent) {
   return clean(parent.cwd || parent.workspace || parent.repoPath || parent.worktreePath);
 }
 
-function taskPrompt(parent, profile, task, contextRefs) {
+function taskPrompt(parent, profile, task, contextRefs, origin = {}) {
   return [
     `Specialist profile: ${profile.id}`,
     `Parent Orkestr thread: ${parent.id}`,
+    ...taskAgentOriginPromptLines({ ...origin, parentThreadId: parent.id }),
     parent.ownerUserId ? `Owner user: ${parent.ownerUserId}` : "",
     parentWorkspace(parent) ? `Scoped workspace: ${parentWorkspace(parent)}` : "",
     "",
@@ -108,6 +115,7 @@ export async function createTaskAgent(parentThreadId, input = {}, env = process.
   const parent = await getThread(parentThreadId, env);
   if (!parent) throw httpError("thread_not_found", 404);
   if (isTaskAgentThread(parent)) throw httpError("task_agent_cannot_spawn_task_agent", 409);
+  const origin = await validateTaskAgentParentBinding(parent, input, env);
   const profile = getTaskAgentProfile(input.profile || input.profileId || "sre_engineer");
   if (!profile) throw httpError("task_agent_profile_not_found", 404);
   const task = clean(input.task || input.prompt || input.message).slice(0, 100_000);
@@ -122,7 +130,7 @@ export async function createTaskAgent(parentThreadId, input = {}, env = process.
   const contextRefs = normalizeContextRefs(input.contextRefs || input.context_refs);
   const autoRun = input.autoRun !== false;
   const initialStatus = autoRun ? "queued" : "held";
-  const prompt = taskPrompt(parent, profile, task, contextRefs);
+  const prompt = taskPrompt(parent, profile, task, contextRefs, origin);
   const workspace = parentWorkspace(parent);
   const child = await createThread({
     id: childId,
@@ -155,6 +163,10 @@ export async function createTaskAgent(parentThreadId, input = {}, env = process.
     parentThreadId: parent.id,
     rootThreadId: rootThreadId(parent),
     threadKind: "task-agent",
+    agentParentThreadId: parent.id,
+    agentRequestedParentThreadId: origin.requestedParentThreadId || parent.id,
+    agentOriginThreadId: origin.originThreadId || null,
+    agentOriginRootThreadId: origin.originRootThreadId || null,
     agentTaskId: taskId,
     agentProfileId: profile.id,
     agentTaskStatus: "created",
@@ -181,6 +193,8 @@ export async function createTaskAgent(parentThreadId, input = {}, env = process.
     taskAgentThreadId: child.id,
     taskId,
     profileId: profile.id,
+    originThreadId: origin.originThreadId || null,
+    originRootThreadId: origin.originRootThreadId || null,
   }, env);
   recordTaskAgentLifecycleMetric("created", initialStatus);
   const { developerInstructions, ...publicProfile } = profile;
@@ -222,6 +236,12 @@ async function enqueueParentResult(thread, sourceMessage, status, resultText, en
   return withTaskResultLock(thread.id, async () => {
     const current = await getThread(thread.id, env);
     if (!current || !isTaskAgentThread(current)) return null;
+    const expectedParentThreadId = expectedTaskAgentParentThreadId(current);
+    if (expectedParentThreadId && clean(current.parentThreadId) !== expectedParentThreadId) {
+      await rejectTaskAgentResultParentDrift(current, sourceMessage, env);
+      recordTaskAgentLifecycleMetric("result_parent_rejected", "failed");
+      return null;
+    }
     const sourceMessageId = clean(sourceMessage?.id);
     const resultTurnId = clean(options.turnId || sourceMessage?.codexTurnId || sourceMessage?.turnId || current.agentTaskResultTurnId || current.runtime?.lastTurnId || current.runtime?.activeTurnId);
     const correction = status === "completed" && canCorrectMissingResultFailure(current);

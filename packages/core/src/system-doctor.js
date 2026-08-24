@@ -12,6 +12,7 @@ import { eventStorageCheck } from "./event-storage-doctor.js";
 import { threadResourcePolicyDoctorCheck } from "./thread-resource-policy-doctor.js";
 import { publicUrlIdentityConfigNames, publicUrlIdentityDiagnostics, publicUrlIdentityRecords } from "./public-url-config.js";
 import { securityStatus } from "./security.js";
+import { hostBoundaryDoctorChecks } from "./host-boundary-doctor.js";
 
 const execFileAsync = promisify(execFile);
 function nowIso() {
@@ -470,7 +471,8 @@ export async function systemDoctor({ env = process.env, home = os.homedir() } = 
   }
 
   const urlDropInCheck = await publicUrlDropInIdentityCheck(env);
-  const checks = [...pathChecks, ...commandChecks, publicUrlIdentityCheck(env), urlDropInCheck, await eventStorageCheck(env), await threadResourcePolicyDoctorCheck(env), ...securityDoctorChecks];
+  const hostBoundaryChecks = await hostBoundaryDoctorChecks(env);
+  const checks = [...pathChecks, ...commandChecks, publicUrlIdentityCheck(env), urlDropInCheck, ...hostBoundaryChecks, await eventStorageCheck(env), await threadResourcePolicyDoctorCheck(env), ...securityDoctorChecks];
   const { counts, status, summary } = summarize(checks);
   const issues = checks
     .filter((check) => check.status !== "ok")

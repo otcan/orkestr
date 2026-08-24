@@ -13,6 +13,10 @@ const tables = Object.freeze({
   mailboxListeners: "orkestr_mailbox_thread_listeners",
   mailboxDeliveries: "orkestr_mailbox_thread_deliveries",
   mailboxPumpLeases: "orkestr_mailbox_thread_pump_leases",
+  mailboxRoutes: "orkestr_mailbox_routes",
+  mailboxSources: "orkestr_mailbox_sources",
+  mailboxRouteWork: "orkestr_mailbox_route_work",
+  mailboxContexts: "orkestr_mailbox_contexts",
   resourceSessions: "orkestr_thread_resource_sessions",
   policyAuditOutbox: "orkestr_thread_resource_audit_outbox",
 });
@@ -206,6 +210,38 @@ async function ensureSchema(pool) {
       name text primary key,
       data jsonb not null
     );
+    create table if not exists orkestr_mailbox_routes (
+      id text primary key,
+      resource_id text not null,
+      status text not null,
+      data jsonb not null
+    );
+    create unique index if not exists idx_mailbox_routes_active_resource
+      on orkestr_mailbox_routes(resource_id) where status = 'active';
+    create table if not exists orkestr_mailbox_sources (
+      id text primary key,
+      dedupe_key text not null unique,
+      resource_id text not null,
+      data jsonb not null
+    );
+    create table if not exists orkestr_mailbox_route_work (
+      id text primary key,
+      dedupe_key text not null unique,
+      route_id text not null,
+      state text not null,
+      data jsonb not null
+    );
+    create index if not exists idx_mailbox_route_work_claim
+      on orkestr_mailbox_route_work(state, route_id);
+    create table if not exists orkestr_mailbox_contexts (
+      id text primary key,
+      work_id text not null unique,
+      thread_id text not null,
+      status text not null,
+      data jsonb not null
+    );
+    create index if not exists idx_mailbox_contexts_pending
+      on orkestr_mailbox_contexts(thread_id, status);
     create table if not exists orkestr_thread_resource_sessions (
       id text primary key,
       jti_hash text not null unique,
@@ -282,13 +318,17 @@ async function readState(client) {
   const mailboxListeners = await rows(client, tables.mailboxListeners);
   const mailboxDeliveries = await rows(client, tables.mailboxDeliveries);
   const mailboxPumpLeases = await rows(client, tables.mailboxPumpLeases);
+  const mailboxRoutes = await rows(client, tables.mailboxRoutes);
+  const mailboxSources = await rows(client, tables.mailboxSources);
+  const mailboxRouteWork = await rows(client, tables.mailboxRouteWork);
+  const mailboxContexts = await rows(client, tables.mailboxContexts);
   const resourceSessions = await rows(client, tables.resourceSessions);
   const audit = await client.query(`select * from ${tables.policyAuditOutbox} order by created_at asc`);
   return {
     version: 1,
     revision: Number(revision || 0) || 0,
     updatedAt: updatedAt || null,
-    policies, resources, grants, ceilings, mutations, mailboxListeners, mailboxDeliveries, mailboxPumpLeases, resourceSessions,
+    policies, resources, grants, ceilings, mutations, mailboxListeners, mailboxDeliveries, mailboxPumpLeases, mailboxRoutes, mailboxSources, mailboxRouteWork, mailboxContexts, resourceSessions,
     policyAuditOutbox: audit.rows.map((row) => ({
       id: row.id, action: row.action, resourceType: row.resource_type || "", resourceId: row.resource_id || "", threadId: row.thread_id || "",
       permission: row.permission || "", boundaryId: row.boundary_id || "", ownerUserId: row.owner_user_id || "", changeRef: row.change_ref || "", outcome: row.outcome, actorUserId: row.actor_user_id,
@@ -306,7 +346,8 @@ async function insert(client, table, columns = [], values = [], item = {}) {
 
 async function replaceState(client, state = {}, auditOutboxUpserts = []) {
   for (const table of [
-    tables.resourceSessions, tables.mailboxPumpLeases, tables.mailboxDeliveries, tables.mailboxListeners,
+    tables.resourceSessions, tables.mailboxContexts, tables.mailboxRouteWork, tables.mailboxSources, tables.mailboxRoutes,
+    tables.mailboxPumpLeases, tables.mailboxDeliveries, tables.mailboxListeners,
     tables.grants, tables.resources, tables.policies, tables.ceilings, tables.mutations,
   ]) await client.query(`delete from ${table}`);
   for (const item of state.resources || []) await insert(client, tables.resources, ["resource_type", "resource_id"], [item.resourceType, item.id], item);
@@ -317,6 +358,10 @@ async function replaceState(client, state = {}, auditOutboxUpserts = []) {
   for (const item of state.mailboxListeners || []) await insert(client, tables.mailboxListeners, ["id", "resource_type", "resource_id", "thread_id", "filter_key", "idempotency_key", "status", "revoked_at"], [item.id, item.resourceType, item.resourceId, item.threadId, item.filterKey, item.idempotencyKey || "", item.status, item.revokedAt || null], item);
   for (const item of state.mailboxDeliveries || []) await insert(client, tables.mailboxDeliveries, ["id", "dedupe_key", "resource_type", "resource_id", "state"], [item.id, item.dedupeKey, item.resourceType, item.resourceId, item.state], item);
   for (const item of state.mailboxPumpLeases || []) await insert(client, tables.mailboxPumpLeases, ["name"], [item.name], item);
+  for (const item of state.mailboxRoutes || []) await insert(client, tables.mailboxRoutes, ["id", "resource_id", "status"], [item.id, item.resourceId, item.status], item);
+  for (const item of state.mailboxSources || []) await insert(client, tables.mailboxSources, ["id", "dedupe_key", "resource_id"], [item.id, item.dedupeKey, item.resourceId], item);
+  for (const item of state.mailboxRouteWork || []) await insert(client, tables.mailboxRouteWork, ["id", "dedupe_key", "route_id", "state"], [item.id, item.dedupeKey, item.routeId, item.state], item);
+  for (const item of state.mailboxContexts || []) await insert(client, tables.mailboxContexts, ["id", "work_id", "thread_id", "status"], [item.id, item.workId, item.threadId, item.status], item);
   for (const item of state.resourceSessions || []) await insert(client, tables.resourceSessions, ["id", "jti_hash", "resource_type", "resource_id", "state"], [item.id, item.jtiHash, item.resourceType, item.resourceId, item.state], item);
 
   // Security/audit rows are never part of wholesale state replacement. Existing

@@ -169,7 +169,7 @@ test("whereAmI exposes public tenant setup URL without wildcard bind API base", 
   assert.doesNotMatch(JSON.stringify(payload.publicUrls), /0\.0\.0\.0|127\.0\.0\.1|localhost|10\./);
 });
 
-test("whereAmI exposes configured managed desktop catalog with local control context", async () => {
+test("whereAmI redacts configured managed desktop control endpoints", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-whereiam-desktop-catalog-"));
   const workspace = path.join(home, "users", "firat", "workspaces", "firat-jobs");
   await fs.mkdir(workspace, { recursive: true });
@@ -204,7 +204,8 @@ test("whereAmI exposes configured managed desktop catalog with local control con
   assert.equal(payload.desktops.defaults.default, "desktop");
   assert.equal(payload.desktops.known[0].label, "Firat Jobs StepStone");
   assert.equal(desktop.label, "Firat Jobs StepStone");
-  assert.equal(desktop.localControl.cdpUrl, "http://127.0.0.1:9222/");
+  assert.equal(desktop.endpointRedacted, true);
+  assert.equal(JSON.stringify(desktop).includes("127.0.0.1"), false);
   assert.equal(desktop.workspacePath, "/opt/orkestr/workspace/firat-jobs");
   assert.ok(desktop.availableActions.includes("observe"));
 });

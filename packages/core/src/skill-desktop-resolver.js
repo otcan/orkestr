@@ -8,6 +8,10 @@ function lower(value = "") {
   return clean(value).toLowerCase();
 }
 
+function truthy(value) {
+  return value === true || ["1", "true", "yes", "on"].includes(lower(value));
+}
+
 function principalUserId(principal = {}) {
   return clean(principal.userId || principal.id || "admin") || "admin";
 }
@@ -56,6 +60,7 @@ export async function resolveSkillDesktopTarget({
   env = process.env,
   args = {},
   principal = {},
+  threadId = "",
   action = "skill.desktop.resolve",
 } = {}) {
   const explicitArg = clean(args.target || args.slug);
@@ -81,6 +86,10 @@ export async function resolveSkillDesktopTarget({
     explicitTargetId,
     ownerUserId: principalUserId(principal),
     principal,
+    threadId,
+    operation: args.operation,
+    dryRun: truthy(args.dryRun) || truthy(args.dry_run),
+    preflight: truthy(args.preflight),
     action,
     candidates,
     allowSingleInference: !requiredDesktop,

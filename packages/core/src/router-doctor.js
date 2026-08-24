@@ -8,8 +8,28 @@ import { queueNoticeWithoutRuntimeDelivery, runtimeDeliveryMissingAssistantIssue
 import { orphanedWhatsAppFinalAnswerIssues } from "./router-doctor-whatsapp-final-mirror.js";
 import { abortable, throwIfAborted } from "./router-doctor-abort.js";
 import { repairIssue } from "./router-doctor-repairs.js";
+import { hostBoundaryRouterIssues } from "./host-boundary-doctor.js";
 function clean(value = "") {
   return String(value || "").trim();
+}
+
+function participantIdentityDoctorSummary(status = {}) {
+  const roleSummary = {};
+  for (const role of ["owner", "trusted", "blocked"]) {
+    const identities = Array.isArray(status.roles?.[role]) ? status.roles[role] : [];
+    roleSummary[role] = {
+      identities: identities.length,
+      verifiedAliases: identities.reduce((count, identity) => count + (Array.isArray(identity.aliases) ? identity.aliases.length : 0), 0),
+    };
+  }
+  return {
+    enabled: status.enabled === true,
+    configured: status.configured === true,
+    valid: status.valid !== false,
+    revision: clean(status.revision),
+    error: clean(status.error),
+    roles: roleSummary,
+  };
 }
 
 function lower(value = "") {
@@ -166,6 +186,18 @@ async function inspectThread(thread, options = {}) {
   ).catch((error) => ({ state: "error", error: clean(error?.message || error) })), signal);
   const checks = [];
   const repairs = [];
+  const participantIdentity = typeof options.whatsappParticipantIdentityStatusFn === "function"
+    ? options.whatsappParticipantIdentityStatusFn(thread.binding || {}, env)
+    : { enabled: false, configured: false, valid: true, revision: "", roles: {} };
+  const participantIdentitySummary = participantIdentityDoctorSummary(participantIdentity);
+
+  if (participantIdentity.configured && !participantIdentity.valid) {
+    checks.push(issue("whatsapp_participant_identity_invalid", "error", "WhatsApp participant identity grants are invalid and inbound routing is failing closed.", {
+      threadId: thread.id,
+      failureCode: participantIdentity.error,
+      remediation: "Repair alias collisions or owner/trusted overlap in the binding before using explicit replay.",
+    }));
+  }
 
   const accountId = accountIdForThread(thread);
   if (!accountReady(whatsappStatus, accountId)) {
@@ -187,6 +219,19 @@ async function inspectThread(thread, options = {}) {
         routerTraceId: trace.routerTraceId,
         currentPhase: trace.currentPhase,
         missingPhases: missing,
+      }));
+    }
+    if (trace.failureCode === "whatsapp_inbound_sender_denied" || ["inbound_security_denied", "inbound_security_blocked", "duplicate_of_rejection"].includes(lower(trace.phases?.at(-1)?.reason))) {
+      checks.push(issue("whatsapp_inbound_terminal_denial", "info", "WhatsApp inbound was rejected terminally and will not be retried automatically.", {
+        threadId: trace.threadId,
+        routerTraceId: trace.routerTraceId,
+        failureCode: trace.failureCode || "whatsapp_inbound_sender_denied",
+        classification: trace.classification || "",
+        effectiveRole: trace.effectiveRole || "unknown",
+        policyRevision: trace.policyRevision || "",
+        bindingRevision: trace.bindingRevision || "",
+        retryable: false,
+        remediation: trace.remediation || "Correct the participant binding, then use explicit linked replay.",
       }));
     }
   }
@@ -321,6 +366,7 @@ async function inspectThread(thread, options = {}) {
     runtime: { state: clean(status.state || thread.state), promptReady: status.promptReady === true, working: status.working === true },
     traceCount: traces.length,
     messageCount: messages.length,
+    participantIdentity: participantIdentitySummary,
     checks,
     repairs,
   };
@@ -383,7 +429,7 @@ export async function doctorWhatsAppRouter(options = {}) {
   }
 
   const routerOutbox = routerTraceId ? await abortable(listRouterOutbox({ routerTraceId }, env), signal) : [];
-  const checks = threadReports.flatMap((report) => report.checks);
+  const checks = [...await hostBoundaryRouterIssues(env), ...threadReports.flatMap((report) => report.checks)];
   const repairs = threadReports.flatMap((report) => report.repairs);
   const errors = checks.filter((item) => item.severity === "error").length;
   const warnings = checks.filter((item) => item.severity === "warn").length;

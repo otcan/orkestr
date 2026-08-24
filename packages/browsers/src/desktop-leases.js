@@ -3,8 +3,12 @@ import { isAdminPrincipal, resourceOwnerUserId } from "../../core/src/policy.js"
 import { normalizeUserId } from "../../core/src/users.js";
 import { assertDesktopAccess, authorizeDesktopAccess, desktopAccessMode } from "../../core/src/desktop-access.js";
 import { desktopLeaseStore, normalizeDesktopSlug } from "./desktop-lease-store.js";
+import { desktopAccessWarnings, desktopWarningAttemptId, stoppedDesktopLeaseRecoveryState } from "./desktop-access-warnings.js";
 
 export { normalizeDesktopSlug } from "./desktop-lease-store.js";
+
+const DEFAULT_LEASE_STALE_MS = 15 * 60_000;
+const MAX_HEARTBEAT_FUTURE_SKEW_MS = 60_000;
 
 function nowIso() {
   return new Date().toISOString();
@@ -21,6 +25,11 @@ function parseLeaseDurationMs(value, fallbackMs) {
   const unit = match[2] || "ms";
   const factor = { ms: 1, s: 1000, m: 60_000, h: 60 * 60_000, d: 24 * 60 * 60_000 }[unit] || 1;
   return Math.max(0, Math.round(amount * factor));
+}
+
+function leaseStaleAfterMs(env = process.env) {
+  const configured = Number(env.ORKESTR_DESKTOP_LEASE_STALE_MS);
+  return Number.isFinite(configured) && configured > 0 ? configured : DEFAULT_LEASE_STALE_MS;
 }
 
 function threadAllowsLeaseSteal(thread) {
@@ -148,7 +157,7 @@ export async function attachDesktopStateToSessions(sessions = [], env = process.
       .sort((left, right) => activityMs(right) - activityMs(left))
       .slice(0, 8)
       .map(publicDesktopThread);
-    return {
+    const decorated = {
       ...session,
       lease,
       leased: !!lease,
@@ -156,6 +165,16 @@ export async function attachDesktopStateToSessions(sessions = [], env = process.
       leaseOwnerLabel: lease?.ownerThreadLabel || null,
       relatedThreads,
       relatedThreadCount: relatedThreads.length,
+    };
+    return {
+      ...decorated,
+      warnings: desktopAccessWarnings({
+        session: decorated,
+        lease,
+        decision: session?.desktopAccess,
+        threadId: options?.threadId,
+        operation: "status",
+      }),
     };
   });
 }
@@ -165,7 +184,7 @@ export function publicDesktopLease(lease, threadsById = new Map(), nowMs = Date.
   const thread = threadsById.get(lease.threadId) || null;
   const heartbeatMs = Date.parse(lease.heartbeatAt || "");
   const expiresMs = Date.parse(lease.expiresAt || "");
-  const staleAfterMs = Number(env.ORKESTR_DESKTOP_LEASE_STALE_MS || 15 * 60_000);
+  const staleAfterMs = leaseStaleAfterMs(env);
   const heartbeatAgeMs = Number.isFinite(heartbeatMs) ? Math.max(0, nowMs - heartbeatMs) : null;
   const expired = Number.isFinite(expiresMs) && expiresMs <= nowMs;
   const stale = heartbeatAgeMs != null && heartbeatAgeMs > staleAfterMs;
@@ -223,7 +242,7 @@ export async function activeDesktopLeaseStatus(desktopSlug, env = process.env, o
 }
 
 export async function assertDesktopLeaseForOperation(slug, env = process.env, options = {}) {
-  if (desktopAccessMode(env) !== "enforce") return null;
+  if (desktopAccessMode(env, { ...options, desktopSlug: slug }) !== "enforce") return null;
   if (options?.authorizedBreakGlass === true) return null;
   const desktopSlug = normalizeDesktopSlug(slug);
   const threadId = String(options?.threadId || "").trim();
@@ -240,7 +259,46 @@ export async function assertDesktopLeaseForOperation(slug, env = process.env, op
     error.statusCode = lease ? 409 : 403;
     throw error;
   }
+  const nowMs = Date.now();
+  const expiresAtMs = Date.parse(lease.expiresAt || "");
+  if (!Number.isFinite(expiresAtMs)) {
+    const error = new Error("desktop_lease_expiry_invalid");
+    error.statusCode = 403;
+    throw error;
+  }
+  if (expiresAtMs <= nowMs) {
+    const error = new Error("desktop_lease_expired");
+    error.statusCode = 403;
+    throw error;
+  }
+  const heartbeatAtMs = Date.parse(lease.heartbeatAt || "");
+  if (!Number.isFinite(heartbeatAtMs) || heartbeatAtMs > nowMs + MAX_HEARTBEAT_FUTURE_SKEW_MS) {
+    const error = new Error("desktop_lease_heartbeat_invalid");
+    error.statusCode = 403;
+    throw error;
+  }
+  if (nowMs - heartbeatAtMs > leaseStaleAfterMs(env)) {
+    const error = new Error("desktop_lease_heartbeat_stale");
+    error.statusCode = 403;
+    throw error;
+  }
+  if (lease.mode !== "exclusive") {
+    const error = new Error("desktop_lease_must_be_exclusive");
+    error.statusCode = 409;
+    throw error;
+  }
+  if (options?.expectedLeaseId && lease.id !== String(options.expectedLeaseId)) {
+    const error = new Error("desktop_lease_replaced");
+    error.statusCode = 409;
+    throw error;
+  }
+  if (options?.expectedFencingVersion && Number(lease.fencingVersion) !== Number(options.expectedFencingVersion)) {
+    const error = new Error("desktop_lease_replaced");
+    error.statusCode = 409;
+    throw error;
+  }
   if (!fencingToken || lease.fencingToken !== fencingToken) {
+    if (options?.expectedLeaseId && !options?.fencingToken) return lease;
     const error = new Error(fencingToken ? "lease_fencing_token_invalid" : "lease_fencing_token_required");
     error.statusCode = 409;
     throw error;
@@ -267,17 +325,19 @@ export async function acquireDesktopLease(slug, payload = {}, env = process.env,
     error.statusCode = 403;
     throw error;
   }
-  if (
-    payload.force === true &&
-    desktopAccessMode(env) === "enforce" &&
-    options?.principal &&
-    !String(payload.reason || payload.breakGlassReason || "").trim()
-  ) {
-    const error = new Error("desktop_force_acquire_reason_required");
-    error.statusCode = 400;
-    throw error;
+  if (payload.force === true && desktopAccessMode(env, { ...payload, desktopSlug, ownerUserId }) === "enforce") {
+    if (!isAdminPrincipal(options?.principal) || options?.breakGlass !== true) {
+      const error = new Error("desktop_force_acquire_break_glass_required");
+      error.statusCode = 403;
+      throw error;
+    }
+    if (!String(options?.breakGlassReason || payload.breakGlassReason || payload.reason || "").trim() || !String(options?.breakGlassChangeRef || payload.breakGlassChangeRef || payload.changeRef || "").trim()) {
+      const error = new Error("desktop_force_acquire_break_glass_evidence_required");
+      error.statusCode = 400;
+      throw error;
+    }
   }
-  await assertDesktopAccess({
+  const accessDecision = await assertDesktopAccess({
     principal: options?.principal,
     threadId,
     desktopSlug,
@@ -288,10 +348,33 @@ export async function acquireDesktopLease(slug, payload = {}, env = process.env,
     breakGlassChangeRef: options?.breakGlassChangeRef || payload.breakGlassChangeRef || payload.changeRef || payload.changeReference,
     recentAuthAt: options?.recentAuthAt,
   }, env);
+  const requestedMode = String(payload.mode || "exclusive").trim();
+  if (desktopAccessMode(env, { ...payload, desktopSlug, ownerUserId }) === "enforce" && requestedMode !== "exclusive") {
+    const error = new Error("desktop_lease_must_be_exclusive");
+    error.statusCode = 409;
+    throw error;
+  }
   const ttlMs = parseLeaseDurationMs(payload.ttlMs ?? payload.ttl ?? payload.expiresIn, Number(env.ORKESTR_DESKTOP_LEASE_TTL_MS || 4 * 60 * 60_000));
+  if (desktopAccessMode(env, { ...payload, desktopSlug, ownerUserId }) === "enforce" && ttlMs <= 0) {
+    const error = new Error("desktop_lease_expiry_required");
+    error.statusCode = 400;
+    throw error;
+  }
   const now = nowIso();
   const expiresAt = ttlMs > 0 ? new Date(Date.parse(now) + ttlMs).toISOString() : null;
   const store = desktopLeaseStore(env);
+  const attemptId = desktopWarningAttemptId(payload);
+  const existingLease = await activeDesktopLeaseStatus(desktopSlug, env, { ownerUserId });
+  const desktopState = stoppedDesktopLeaseRecoveryState(options?.desktopState);
+  const recoveryCandidate = options?.allowStoppedLeaseRecovery === true && desktopState && existingLease &&
+    existingLease.threadId !== threadId && (existingLease.expired === true || existingLease.stale === true) && existingLease.stealable === true
+    ? {
+        id: existingLease.id,
+        threadId: existingLease.threadId,
+        heartbeatAt: existingLease.heartbeatAt,
+        expiresAt: existingLease.expiresAt,
+      }
+    : null;
   const result = await store.acquire(
     {
       desktopSlug,
@@ -299,7 +382,7 @@ export async function acquireDesktopLease(slug, payload = {}, env = process.env,
       threadId,
       codexThreadId: payload.codexThreadId,
       threadName: payload.threadName,
-      mode: payload.mode,
+      mode: requestedMode,
       purpose: payload.purpose,
       runId: payload.runId,
       acquiredAt: now,
@@ -307,19 +390,38 @@ export async function acquireDesktopLease(slug, payload = {}, env = process.env,
       expiresAt,
       metadata: payload.metadata,
     },
-    { force: payload.force === true, releaseReason: payload.force ? "force_acquired" : "superseded" },
+    {
+      force: payload.force === true,
+      releaseReason: payload.force ? "force_acquired" : recoveryCandidate ? "expired_stopped_auto_recovery" : "superseded",
+      recoveryCandidate,
+    },
   );
   if (!result.ok) {
+    const lease = await activeDesktopLeaseStatus(desktopSlug, env, { ownerUserId });
     return {
       ok: false,
       error: "desktop_leased",
-      lease: publicDesktopLease(result.conflict, new Map(), Date.now(), env),
+      attemptId,
+      lease,
+      warnings: desktopAccessWarnings({ desktopSlug, threadId, operation: "acquire", attemptId, lease, decision: accessDecision, errorCode: "desktop_lease_owned_by_other_thread" }),
       message: `Desktop ${desktopSlug} is already leased for ${ownerUserId}.`,
     };
   }
+  const lease = await activeDesktopLeaseStatus(desktopSlug, env, { ownerUserId });
+  const recovery = result.recovered === true ? {
+    performed: true,
+    reason: "expired_stopped_auto_recovery",
+    desktopState,
+    previousLeaseId: String(result.previousLease?.id || ""),
+    previousThreadId: String(result.previousLease?.threadId || ""),
+  } : null;
   return {
     ok: true,
-    lease: await activeDesktopLeaseStatus(desktopSlug, env, { ownerUserId }),
+    attemptId,
+    lease,
+    warnings: desktopAccessWarnings({ desktopSlug, threadId, operation: "acquire", attemptId, lease, decision: accessDecision, recovery }),
+    autoRecovered: recovery?.performed === true,
+    recovery,
     renewed: result.renewed === true,
     previousLease: publicDesktopLease(result.previousLease, new Map(), Date.now(), env),
   };
@@ -329,7 +431,7 @@ export async function heartbeatDesktopLease(slug, threadId, env = process.env, o
   const ownerUserId = ownerUserIdForPrincipal(options?.principal, env, options?.ownerUserId);
   await assertDesktopAccess({ principal: options?.principal, threadId, desktopSlug: slug, ownerUserId, permission: "acquire" }, env);
   const fencingToken = String(options?.fencingToken || "").trim();
-  if (desktopAccessMode(env) === "enforce" && !fencingToken) {
+  if (desktopAccessMode(env, { ...options, threadId, desktopSlug: slug, ownerUserId }) === "enforce" && !fencingToken) {
     return { ok: false, reason: "lease_fencing_token_required", lease: await activeDesktopLeaseStatus(slug, env, { ownerUserId }) };
   }
   const result = await desktopLeaseStore(env).heartbeat(slug, threadId, ownerUserId, fencingToken);
@@ -341,7 +443,7 @@ export async function releaseDesktopLease(slug, options = {}, env = process.env)
   if (!options?.force) {
     await assertDesktopAccess({ principal: options?.principal, threadId: options?.threadId, desktopSlug: slug, ownerUserId, permission: "acquire" }, env);
   }
-  if (desktopAccessMode(env) === "enforce" && !options?.force && !String(options?.fencingToken || "").trim()) {
+  if (desktopAccessMode(env, { ...options, desktopSlug: slug, ownerUserId }) === "enforce" && !options?.force && !String(options?.fencingToken || "").trim()) {
     return { ok: false, reason: "lease_fencing_token_required", lease: await activeDesktopLeaseStatus(slug, env, { ownerUserId }) };
   }
   const result = await desktopLeaseStore(env).release(slug, { ...options, ownerUserId });

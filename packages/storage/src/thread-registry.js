@@ -1,6 +1,8 @@
 import fs from "node:fs/promises";
 import { ensureDataDirs } from "./paths.js";
 import { readJson, writeJson } from "./store.js";
+import { assertPublicRefInvariant, assertUniquePublicRefs } from "./public-references.js";
+import { withStorageFileLock } from "./storage-lock.js";
 
 const dbCache = new Map();
 const dbPaths = new WeakMap();
@@ -25,8 +27,90 @@ export async function listThreadRecords(env = process.env) {
   return records.slice();
 }
 
+export async function findThreadRecordByPublicRef(publicRef, env = process.env) {
+  const value = String(publicRef || "");
+  const db = await openThreadDatabase(env);
+  if (db) {
+    const row = db.prepare("select data from orkestr_threads where public_ref = ?").get(value);
+    return row ? JSON.parse(row.data) : null;
+  }
+  const matches = (await listThreadRecords(env)).filter((record) => record?.publicRef === value);
+  if (matches.length > 1) throw Object.assign(new Error("thread_public_ref_collision"), { statusCode: 500 });
+  return matches[0] || null;
+}
+
 export async function saveThreadRecords(threads, env = process.env) {
+  return saveThreadRecordsValidated(threads, env);
+}
+
+async function saveThreadRecordsValidated(threads, env, options = {}) {
   const records = dedupeThreadRecords(Array.isArray(threads) ? threads : []);
+  const db = await openThreadDatabase(env);
+  if (!db) {
+    const paths = await ensureDataDirs(env);
+    validateThreadPublicRefs(await readJson(paths.threads, []), records, options);
+    await writeJson(paths.threads, records);
+    return records;
+  }
+  validateThreadPublicRefs(await listThreadRecords(env), records, options);
+  replaceThreadRows(db, records);
+  cacheThreadRecords(db, records);
+  const paths = await ensureDataDirs(env);
+  await writeJson(paths.threads, records);
+  return records;
+}
+
+export async function assignThreadPublicRefs(assignments = [], env = process.env) {
+  const paths = await ensureDataDirs(env);
+  return withStorageFileLock(paths.canonicalPublicRefLock, () => assignThreadPublicRefsLocked(assignments, env));
+}
+
+async function assignThreadPublicRefsLocked(assignments = [], env = process.env) {
+  const records = await listThreadRecords(env);
+  const byId = new Map(assignments.map((item) => [String(item.id || "").trim(), item]));
+  const found = new Set();
+  const next = records.map((record) => {
+    const assignment = byId.get(String(record.id || "").trim());
+    if (!assignment) return record;
+    found.add(String(record.id || "").trim());
+    assertPublicRefInvariant(record.publicRef, assignment.publicRef, "thread", { allowAssignment: true });
+    return record.publicRef ? record : { ...record, publicRef: assignment.publicRef, publicRefAssignedAt: assignment.publicRefAssignedAt };
+  });
+  if (found.size !== byId.size) throw Object.assign(new Error("thread_public_ref_assignment_stale"), { statusCode: 409 });
+  return saveThreadRecordsValidated(next, env, { allowAssignment: true });
+}
+
+export async function rollbackThreadPublicRefAssignments(assignments = [], env = process.env) {
+  const paths = await ensureDataDirs(env);
+  return withStorageFileLock(paths.canonicalPublicRefLock, () => rollbackThreadPublicRefAssignmentsLocked(assignments, env));
+}
+
+async function rollbackThreadPublicRefAssignmentsLocked(assignments = [], env = process.env) {
+  const expected = new Map(assignments.map((item) => [String(item.id || "").trim(), item]));
+  const current = await listThreadRecords(env);
+  const next = current.map((record) => {
+    const assignment = expected.get(String(record.id || "").trim());
+    if (!assignment || record.publicRef !== assignment.publicRef || record.publicRefAssignedAt !== assignment.publicRefAssignedAt) return record;
+    const reverted = { ...record };
+    delete reverted.publicRef;
+    delete reverted.publicRefAssignedAt;
+    return reverted;
+  });
+  return saveThreadRecordsInternal(next, env);
+}
+
+function validateThreadPublicRefs(previous, next, options = {}) {
+  assertUniquePublicRefs(next, "thread");
+  const priorById = new Map((previous || []).map((record) => [String(record?.id || "").trim(), record]));
+  for (const record of next) {
+    const prior = priorById.get(String(record?.id || "").trim());
+    if (!prior) continue;
+    assertPublicRefInvariant(prior.publicRef, record.publicRef, "thread", options);
+    if (prior.publicRefAssignedAt && prior.publicRefAssignedAt !== record.publicRefAssignedAt) throw Object.assign(new Error("thread_public_ref_metadata_immutable"), { statusCode: 409 });
+  }
+}
+
+async function saveThreadRecordsInternal(records, env) {
   const db = await openThreadDatabase(env);
   if (!db) {
     const paths = await ensureDataDirs(env);
@@ -151,6 +235,8 @@ function ensureSchema(db) {
       id text primary key,
       name text,
       binding_name text,
+      public_ref text,
+      public_ref_assigned_at text,
       created_at text,
       updated_at text,
       data text not null
@@ -162,6 +248,14 @@ function ensureSchema(db) {
       value text not null
     );
   `);
+  ensureColumn(db, "orkestr_threads", "public_ref", "text");
+  ensureColumn(db, "orkestr_threads", "public_ref_assigned_at", "text");
+  db.exec("create unique index if not exists idx_orkestr_threads_public_ref on orkestr_threads(public_ref) where public_ref is not null");
+}
+
+function ensureColumn(db, table, column, type) {
+  if (db.prepare(`pragma table_info(${table})`).all().some((item) => item.name === column)) return;
+  db.exec(`alter table ${table} add column ${column} ${type}`);
 }
 
 async function migrateJsonThreadsIfNeeded(db, paths, existed) {
@@ -178,8 +272,8 @@ function replaceThreadRows(db, threads) {
   try {
     db.exec("delete from orkestr_threads");
     const insert = db.prepare(`
-      insert into orkestr_threads(id, name, binding_name, created_at, updated_at, data)
-      values (?, ?, ?, ?, ?, ?)
+      insert into orkestr_threads(id, name, binding_name, public_ref, public_ref_assigned_at, created_at, updated_at, data)
+      values (?, ?, ?, ?, ?, ?, ?, ?)
     `);
     for (const thread of threads) {
       const id = String(thread?.id || "").trim();
@@ -188,6 +282,8 @@ function replaceThreadRows(db, threads) {
         id,
         String(thread?.name || ""),
         String(thread?.bindingName || thread?.binding?.displayName || ""),
+        String(thread?.publicRef || "") || null,
+        String(thread?.publicRefAssignedAt || "") || null,
         String(thread?.createdAt || ""),
         String(thread?.updatedAt || ""),
         JSON.stringify(thread),

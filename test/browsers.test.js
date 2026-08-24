@@ -19,7 +19,10 @@ import {
 } from "../packages/browsers/src/browsers.js";
 import { operateManagedDesktop } from "../packages/browsers/src/desktop-operator.js";
 import { acquireDesktopLease, activeDesktopLeaseStatus, publicDesktopLeases } from "../packages/browsers/src/desktop-leases.js";
-import { userPrincipal } from "../packages/core/src/principal.js";
+import { issueDesktopCapability } from "../packages/browsers/src/desktop-capability-broker.js";
+import { advanceDesktopResourceGeneration, setThreadDesktopGrants } from "../packages/core/src/desktop-access.js";
+import { adminPrincipal, userPrincipal } from "../packages/core/src/principal.js";
+import { readThreadResourcePolicy } from "../packages/core/src/thread-resource-grants.js";
 import { createThread } from "../packages/core/src/threads.js";
 import { listEvents } from "../packages/storage/src/store.js";
 
@@ -116,6 +119,34 @@ console.log(JSON.stringify({ ok: true, sessions: [{
   assert.equal(payload.source, "instance");
   assert.equal(payload.error, "instance_desktops_not_provisioned");
   assert.deepEqual(payload.sessions, []);
+});
+
+test("managed desktop inventory deduplicates concurrent probes and briefly caches the result", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-browserctl-cache-"));
+  const browserctl = path.join(home, "browserctl.js");
+  const counter = path.join(home, "calls.txt");
+  await fs.writeFile(browserctl, `#!/usr/bin/env node
+const fs = require("node:fs");
+const file = ${JSON.stringify(counter)};
+const calls = Number(fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "0") + 1;
+fs.writeFileSync(file, String(calls));
+setTimeout(() => console.log(JSON.stringify({ ok: true, sessions: [{ slug: "desk", status: "running" }] })), 80);
+`);
+  await fs.chmod(browserctl, 0o755);
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_BROWSER_DESKTOP_MODE: "browserctl",
+    ORKESTR_BROWSERCTL_PATH: browserctl,
+    ORKESTR_BROWSER_SESSIONS_CACHE_MS: "1000",
+  };
+
+  const [first, second] = await Promise.all([listBrowserSessions(env), listBrowserSessions(env)]);
+  const third = await listBrowserSessions(env);
+
+  assert.deepEqual(first.sessions.map((session) => session.slug), ["desk"]);
+  assert.deepEqual(second.sessions.map((session) => session.slug), ["desk"]);
+  assert.deepEqual(third.sessions.map((session) => session.slug), ["desk"]);
+  assert.equal(await fs.readFile(counter, "utf8"), "1");
 });
 
 test("disabled desktop mode reports no instance desktops", async () => {
@@ -324,9 +355,9 @@ if (command === "list") {
   }
 });
 
-test("managed desktop operator observes and controls a CDP page", async () => {
+test("generic Gmail managed desktop operations remain compatible in enforce mode", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-desktop-operator-"));
-  let pageUrl = "https://www.linkedin.com/feed/";
+  let pageUrl = "https://mail.google.com/mail/u/0/";
   let searchValue = "";
   const server = http.createServer((request, response) => {
     const requestUrl = String(request.url || "");
@@ -335,7 +366,7 @@ test("managed desktop operator observes and controls a CDP page", async () => {
       response.end(JSON.stringify([{
         id: "page-1",
         type: "page",
-        title: "LinkedIn Feed",
+        title: "Gmail Inbox",
         url: pageUrl,
         webSocketDebuggerUrl: `ws://127.0.0.1:${server.address().port}/devtools/page/page-1`,
       }]));
@@ -366,9 +397,9 @@ test("managed desktop operator observes and controls a CDP page", async () => {
             result: {
               type: "object",
               value: {
-                title: "LinkedIn Feed",
+                title: "Gmail Inbox",
                 url: pageUrl,
-                bodyText: `Signed in as Test User. Search value: ${searchValue}. Recent update from Example GmbH.`,
+                bodyText: `Signed in as Test User. Search value: ${searchValue}. Recent message from Example GmbH.`,
                 textLength: 86,
                 links: [{ text: "Example GmbH", href: "https://www.linkedin.com/company/example", selector: "a:nth-of-type(1)" }],
                 fields: [{ label: "Search", selector: "input:nth-of-type(1)", value: searchValue }],
@@ -388,8 +419,8 @@ test("managed desktop operator observes and controls a CDP page", async () => {
   await fs.writeFile(browserctl, `#!/usr/bin/env node
 const [command, slug] = process.argv.slice(2);
 const session = {
-  slug: slug || "linkedin",
-  label: "LinkedIn",
+  slug: slug || "gmail",
+  label: "Gmail",
   type: "desktop",
   status: "running",
   cdp_url: ${JSON.stringify(cdpUrl)},
@@ -405,14 +436,44 @@ if (["list", "health", "start", "stop", "restart"].includes(command)) {
   await fs.chmod(browserctl, 0o755);
   const env = {
     ORKESTR_HOME: home,
+    ORKESTR_ADMIN_USER_ID: "admin",
+    ORKESTR_DESKTOP_ACCESS_MODE: "enforce",
     ORKESTR_BROWSERCTL_PATH: browserctl,
     ORKESTR_DESKTOP_LEASE_FILE: path.join(home, "desktop-leases.json"),
   };
 
   try {
-    const observed = await operateManagedDesktop("linkedin", { operation: "observe" }, env);
-    const typed = await operateManagedDesktop("linkedin", { operation: "type", field: "Search", value: "founder" }, env);
-    const clicked = await operateManagedDesktop("linkedin", { operation: "click", text: "People" }, env);
+    const principal = adminPrincipal("admin");
+    const thread = await createThread({ id: "gmail-capability-thread", ownerUserId: "admin", name: "Gmail capability" }, env);
+    await advanceDesktopResourceGeneration("gmail", "admin", { reason: "test_registered" }, env);
+    await setThreadDesktopGrants(thread.id, ["gmail"], { principal, reason: "test_grant" }, env);
+    const resource = (await readThreadResourcePolicy(env)).resources.find((item) => item.resourceType === "desktop" && item.resourceKey === "gmail");
+    env.ORKESTR_DESKTOP_ACCOUNT_ATTESTATIONS_JSON = JSON.stringify({
+      [resource.id]: {
+        status: "verified",
+        attestationId: "opaque-gmail-attestation",
+        canonicalAccountRefHash: "c".repeat(64),
+        isolationEvidenceHash: "d".repeat(64),
+        resourceId: resource.id,
+        ownerUserId: "admin",
+        boundaryId: resource.boundaryId,
+        verifier: "private-overlay-verifier",
+        verifiedAt: new Date(Date.now() - 1_000).toISOString(),
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+        isolationAttested: true,
+        requiresVisibleNoVnc: false,
+      },
+    });
+    const acquired = await acquireDesktopLease("gmail", { threadId: thread.id, runId: "gmail-runtime", mode: "exclusive", ttlMs: 60_000 }, env, { principal });
+    assert.equal(acquired.ok, true);
+    const issue = (scope) => issueDesktopCapability({ principal, threadId: thread.id, fencingToken: acquired.lease.fencingToken, audience: "managed-desktop-operator", scope }, env);
+    const observedCapability = await issue("observe");
+    const typedCapability = await issue("visible_interaction");
+    const clickedCapability = await issue("visible_interaction");
+    const options = (desktopCapability) => ({ principal, threadId: thread.id, fencingToken: acquired.lease.fencingToken, desktopCapability });
+    const observed = await operateManagedDesktop("gmail", { operation: "observe" }, env, options(observedCapability.capability));
+    const typed = await operateManagedDesktop("gmail", { operation: "type", field: "Search", value: "founder" }, env, options(typedCapability.capability));
+    const clicked = await operateManagedDesktop("gmail", { operation: "click", text: "People" }, env, options(clickedCapability.capability));
 
     assert.equal(observed.ok, true);
     assert.match(observed.page.bodyText, /Signed in as Test User/);
