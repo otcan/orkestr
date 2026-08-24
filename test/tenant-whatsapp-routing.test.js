@@ -391,7 +391,7 @@ test("local WhatsApp bridge forwards an attachment recovered after a text-only s
     eventId: "false_wa-group-attachment-recovery@g.us_msg-1",
     chatId: "wa-group-attachment-recovery@g.us",
     accountId: "sender",
-    from: "279611011236064@lid",
+    from: "90000000000002@lid",
     text: "Candidate CV",
   };
 

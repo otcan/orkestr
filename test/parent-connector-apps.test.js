@@ -59,7 +59,7 @@ test("named Google OAuth apps keep the production client as the default", () => 
       "otcan-claw": {
         clientId: "testing-client",
         clientSecret: "testing-secret",
-        approvedTesters: ["can@mayamilk.com"],
+        approvedTesters: ["workspace-owner@example.test"],
       },
     }),
   };
@@ -73,7 +73,7 @@ test("named Google OAuth apps keep the production client as the default", () => 
   assert.equal(testingApp.clientId, "testing-client");
   assert.equal(testingApp.clientSecret, "testing-secret");
   assert.equal(testingApp.redirectUri, config.redirectUri);
-  assert.deepEqual(testingApp.approvedTesters, ["can@mayamilk.com"]);
+  assert.deepEqual(testingApp.approvedTesters, ["workspace-owner@example.test"]);
   assert.throws(() => resolveGoogleOAuthAppConfig("missing", config, env), /google_oauth_app_not_found/);
 });
 

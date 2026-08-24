@@ -273,7 +273,7 @@ test("Gmail jobs poll rejects LinkedIn network suggestions", async () => {
   }, [{
     id: "linkedin-network-1",
     threadId: "gmail-thread-linkedin-network-1",
-    subject: "Firat, add Venkatesh Meka to your network at linkedin.com",
+    subject: "Firat, add Alex Example to your network at linkedin.com",
     from: "messages-noreply@linkedin.com",
     snippet: "People you may know",
     text: "People you may know. Connect on LinkedIn https://www.linkedin.com/comm/mynetwork/send-invite/venkatesh-meka/",

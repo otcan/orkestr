@@ -228,6 +228,16 @@ function localWhatsAppInboundRequest(request: any): boolean {
   ].includes(pathname);
 }
 
+function localWhatsAppBridgeSendRequest(request: any): boolean {
+  if (!directLoopbackRequest(request) || request?.orkestrMachineAuth !== "whatsapp_bridge") return false;
+  const method = String(request?.method || "GET").toUpperCase();
+  const pathname = new URL(String(request?.originalUrl || request?.url || "/"), "http://orkestr.local").pathname;
+  return method === "POST" && [
+    "/api/connectors/whatsapp/bridge/send-text",
+    "/api/connectors/whatsapp/bridge/send-media",
+  ].includes(pathname);
+}
+
 function localMailboxMtaRequest(request: any): boolean {
   if (!directLoopbackRequest(request) || request?.orkestrMachineAuth !== "mailbox_mta") return false;
   const method = String(request?.method || "GET").toUpperCase();
@@ -306,7 +316,13 @@ export function rejectUnknownHostBoundaryRequest(request: any, response: any, en
 
 export async function enforceHostBoundaryRequest(request: any, response: any, env = process.env): Promise<boolean> {
   if (!hostBoundariesEnabled(env)) return false;
-  if (localProbeRequest(request) || localCliRequest(request) || localWhatsAppInboundRequest(request) || localMailboxMtaRequest(request)) return false;
+  if (
+    localProbeRequest(request) ||
+    localCliRequest(request) ||
+    localWhatsAppInboundRequest(request) ||
+    localWhatsAppBridgeSendRequest(request) ||
+    localMailboxMtaRequest(request)
+  ) return false;
   const rawUrl = String(request?.originalUrl || request?.url || "/");
   const origin = effectiveRequestOrigin(request, env);
   const { boundaries, appOrigin, connectOrigins } = allowedBoundaryOrigins(env);

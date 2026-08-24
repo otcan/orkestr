@@ -188,6 +188,15 @@ test("direct loopback reaches authentication but only probes and exact verified 
     assert.equal((await enforce(inbound, runtimeEnv)).handled, false, pathname);
   }
 
+  for (const pathname of [
+    "/api/connectors/whatsapp/bridge/send-text",
+    "/api/connectors/whatsapp/bridge/send-media",
+  ]) {
+    const bridgeSend = request(pathname, "127.0.0.1:19812", { method: "POST", remoteAddress: "127.0.0.1" });
+    bridgeSend.orkestrMachineAuth = "whatsapp_bridge";
+    assert.equal((await enforce(bridgeSend, runtimeEnv)).handled, false, pathname);
+  }
+
   for (const [method, pathname] of [
     ["GET", "/api/mailboxes/lookup"],
     ["POST", "/api/mailboxes/ingest-spool"],
@@ -203,6 +212,20 @@ test("direct loopback reaches authentication but only probes and exact verified 
   });
   wrongInboundMethod.orkestrMachineAuth = "whatsapp_inbound";
   assert.equal((await enforce(wrongInboundMethod, runtimeEnv)).statusCode, 404);
+
+  const wrongBridgeMethod = request("/api/connectors/whatsapp/bridge/send-text", "127.0.0.1:19812", {
+    method: "GET",
+    remoteAddress: "127.0.0.1",
+  });
+  wrongBridgeMethod.orkestrMachineAuth = "whatsapp_bridge";
+  assert.equal((await enforce(wrongBridgeMethod, runtimeEnv)).statusCode, 404);
+
+  const wrongBridgeRoute = request("/api/connectors/whatsapp/bridge/accounts", "127.0.0.1:19812", {
+    method: "POST",
+    remoteAddress: "127.0.0.1",
+  });
+  wrongBridgeRoute.orkestrMachineAuth = "whatsapp_bridge";
+  assert.equal((await enforce(wrongBridgeRoute, runtimeEnv)).statusCode, 404);
 
   const wrongMailboxMtaMethod = request("/api/mailboxes/lookup", "127.0.0.1:19812", {
     method: "POST",

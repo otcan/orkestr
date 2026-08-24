@@ -135,7 +135,7 @@ test("brokered WhatsApp approval automatically binds the approved direct chat to
     body: {
       displayName: "demo vm",
       encryptionPublicKey: client.publicKey,
-      whatsappNumber: "+49 176 32400662",
+      whatsappNumber: "+1 555 010 0001",
     },
   });
   await createThread({
@@ -146,7 +146,7 @@ test("brokered WhatsApp approval automatically binds the approved direct chat to
     state: "ready",
     binding: {
       connector: "whatsapp",
-      chatId: "120363425280218500@g.us",
+      chatId: "120363400000000010@g.us",
       responderAccountId: "responder",
       outboundAccountId: "responder",
       enabled: true,
@@ -155,22 +155,22 @@ test("brokered WhatsApp approval automatically binds the approved direct chat to
   const challenge = await createPairingChallenge({ env, instanceId: registration.instanceId });
 
   const approval = await routeWhatsAppInbound({
-    eventId: "false_4917632400662@c.us_auto_bind_1",
-    chatId: "4917632400662@c.us",
+    eventId: "false_15550100001@c.us_auto_bind_1",
+    chatId: "15550100001@c.us",
     accountId: "sender",
-    from: "4917632400662@c.us",
+    from: "15550100001@c.us",
     text: `orkestr connect approve ${challenge.challenge.approveCode}`,
   }, env);
 
   assert.equal(approval.approvedSecurityChallenge, true);
   assert.equal(approval.event.autoBinding.threadId, "onboarding-admin-orkestr-de");
   const resolved = await resolveWhatsAppBinding({
-    chatId: "4917632400662@c.us",
+    chatId: "15550100001@c.us",
     accountId: "sender",
   }, { env, status: { mode: "external", accounts: [{ accountId: "sender", ready: true }] } });
   assert.equal(resolved.selected.threadId, "onboarding-admin-orkestr-de");
   assert.equal(resolved.selected.level, "chat");
-  assert.equal(resolved.selected.chatId, "4917632400662@c.us");
+  assert.equal(resolved.selected.chatId, "15550100001@c.us");
   assert.equal(resolved.selected.responderAccountId, "sender");
 });
 
@@ -195,7 +195,7 @@ test("approved brokered WhatsApp chats self-heal missing bindings on the next me
     body: {
       displayName: "demo vm",
       encryptionPublicKey: client.publicKey,
-      whatsappNumber: "+49 176 32400662",
+      whatsappNumber: "+1 555 010 0001",
     },
   });
   await createThread({
@@ -206,7 +206,7 @@ test("approved brokered WhatsApp chats self-heal missing bindings on the next me
     state: "ready",
     binding: {
       connector: "whatsapp",
-      chatId: "120363425280218500@g.us",
+      chatId: "120363400000000010@g.us",
       responderAccountId: "responder",
       outboundAccountId: "responder",
       enabled: true,
@@ -220,25 +220,25 @@ test("approved brokered WhatsApp chats self-heal missing bindings on the next me
         ignoredReason: "security_approval_command",
         challengeId: "old-challenge",
         instanceId: registration.instanceId,
-        chatId: "4917632400662@c.us",
+        chatId: "15550100001@c.us",
         accountId: "sender",
-        from: "4917632400662@c.us",
+        from: "15550100001@c.us",
       }],
     },
     input: {
-      chatId: "4917632400662@c.us",
+      chatId: "15550100001@c.us",
       accountId: "sender",
-      from: "4917632400662@c.us",
+      from: "15550100001@c.us",
       text: "hi",
     },
-    chatId: "4917632400662@c.us",
+    chatId: "15550100001@c.us",
     accountId: "sender",
   });
 
   assert.equal(result.ok, true);
   assert.equal(result.binding.threadId, "onboarding-admin-orkestr-de");
   const resolved = await resolveWhatsAppBinding({
-    chatId: "4917632400662@c.us",
+    chatId: "15550100001@c.us",
     accountId: "sender",
   }, { env, status: { mode: "external", accounts: [{ accountId: "sender", ready: true }] } });
   assert.equal(resolved.selected.threadId, "onboarding-admin-orkestr-de");

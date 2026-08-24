@@ -98,3 +98,16 @@ export function findWhatsAppAccountByAnyId(accounts = [], accountId = "", env = 
     });
   }) || null;
 }
+
+export function readyWhatsAppRuntimeAccountId(status = {}) {
+  const accounts = [
+    ...(Array.isArray(status?.accounts) ? status.accounts : []),
+    ...(Array.isArray(status?.health?.accounts) ? status.health.accounts : []),
+  ];
+  const account = accounts.find((candidate) =>
+    Boolean(candidate?.ready || candidate?.state === "ready" || candidate?.status === "ready") &&
+    candidate?.chatOpsReady !== false &&
+    candidate?.runtimeUsable !== false
+  );
+  return clean(account?.runtimeAccountId || account?.accountId || account?.id);
+}

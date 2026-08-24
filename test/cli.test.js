@@ -586,11 +586,11 @@ test("CLI updates WhatsApp binding owner aliases", async () => {
     "update",
     "thread:owner-alias-thread:whatsapp",
     "--owner-contact",
-    "4917632400662@c.us",
+    "15550100001@c.us",
     "--owner-contact-alias",
-    "66378837028965@lid",
+    "90000000000001@lid",
     "--authorized-contact",
-    "4917632400662@c.us",
+    "15550100001@c.us",
     "--json",
   ], {
     stdout,
@@ -601,16 +601,16 @@ test("CLI updates WhatsApp binding owner aliases", async () => {
         binding: {
           id: "thread:owner-alias-thread:whatsapp",
           state: "ready",
-          ownerContactAliases: ["66378837028965@lid"],
+          ownerContactAliases: ["90000000000001@lid"],
         },
       },
     }, seen),
   });
 
   assert.equal(code, 0);
-  assert.deepEqual(seen[0].body.ownerContactIds, ["4917632400662@c.us"]);
-  assert.deepEqual(seen[0].body.ownerContactAliases, ["66378837028965@lid"]);
-  assert.deepEqual(seen[0].body.authorizedContactIds, ["4917632400662@c.us"]);
+  assert.deepEqual(seen[0].body.ownerContactIds, ["15550100001@c.us"]);
+  assert.deepEqual(seen[0].body.ownerContactAliases, ["90000000000001@lid"]);
+  assert.deepEqual(seen[0].body.authorizedContactIds, ["15550100001@c.us"]);
   assert.match(stdout.text(), /owner-alias-thread/);
 });
 
@@ -1714,37 +1714,38 @@ test("CLI creates Orkestr threads with integrated WhatsApp binding", async () =>
     stdout,
     stderr: capture(),
     fetchImpl: fakeFetch({
-      "POST /api/connectors/whatsapp/bridge/chats": {
+      "POST /api/threads": { thread: { id: "thread-fitness", name: "Project Fitness", state: "sleeping" } },
+      "POST /api/connectors/whatsapp/thread-groups": {
         ok: true,
         chat: { id: "wa-group-zero@g.us", name: "Project Fitness", generated: true },
+        thread: { id: "thread-fitness", name: "Project Fitness", state: "ready" },
+        binding: { chatId: "wa-group-zero@g.us" },
         senderContactId: "wa-contact-alice@c.us",
         responderContactId: "wa-contact-bob@c.us",
         responderAccountId: "responder",
       },
-      "POST /api/threads": { thread: { id: "thread-fitness", name: "Project Fitness", state: "sleeping" } },
-      "PUT /api/threads/thread-fitness/binding": { ok: true, binding: { chatId: "wa-group-zero@g.us" } },
     }, seen),
   });
 
   assert.equal(code, 0);
-  assert.equal(seen[0].key, "POST /api/connectors/whatsapp/bridge/chats");
-  assert.deepEqual(seen[0].body, {
+  assert.equal(seen[0].key, "POST /api/threads");
+  assert.deepEqual(seen[0].body, { name: "Project Fitness" });
+  assert.equal(seen[1].key, "POST /api/connectors/whatsapp/thread-groups");
+  assert.deepEqual(seen[1].body, {
+    threadId: "thread-fitness",
     name: "Project Fitness",
     participantIds: ["wa-contact-alice@c.us"],
     adminParticipantIds: ["wa-contact-alice@c.us"],
     promoteParticipantsAsAdmins: true,
+    generatePicture: true,
+    mirrorToWhatsApp: true,
+    forceNew: false,
     replyAccountId: "responder",
     bridgeAccountId: "responder",
     responderAccountId: "responder",
     outboundAccountId: "responder",
+    replyPrefix: "otcanclaw:",
   });
-  assert.equal(seen[1].key, "POST /api/threads");
-  assert.deepEqual(seen[1].body, { name: "Project Fitness" });
-  assert.equal(seen[2].key, "PUT /api/threads/thread-fitness/binding");
-  assert.equal(seen[2].body.chatId, "wa-group-zero@g.us");
-  assert.equal(seen[2].body.generated, true);
-  assert.equal(seen[2].body.senderContactId, "wa-contact-alice@c.us");
-  assert.equal(seen[2].body.responderContactId, "wa-contact-bob@c.us");
   assert.match(stdout.text(), /"ok": true/);
 });
 
@@ -2430,20 +2431,20 @@ test("CLI applies configured WhatsApp chat-name and reply prefixes", async () =>
       stdout,
       stderr: capture(),
       fetchImpl: fakeFetch({
-        "POST /api/connectors/whatsapp/bridge/chats": {
+        "POST /api/threads": { thread: { id: "thread-easylab", name: "acme-easylab", state: "sleeping" } },
+        "POST /api/connectors/whatsapp/thread-groups": {
           ok: true,
           chat: { id: "wa-group-one@g.us", name: "acme-easylab", generated: true },
+          thread: { id: "thread-easylab", name: "acme-easylab", state: "ready" },
+          binding: { displayName: "acme-easylab", chatId: "wa-group-one@g.us" },
         },
-        "POST /api/threads": { thread: { id: "thread-easylab", name: "acme-easylab", state: "sleeping" } },
-        "PUT /api/threads/thread-easylab/binding": { ok: true, binding: { chatId: "wa-group-one@g.us" } },
       }, seen),
     });
 
     assert.equal(code, 0);
-    assert.equal(seen[0].body.name, "acme-easylab");
-    assert.deepEqual(seen[1].body, { name: "acme-easylab" });
-    assert.equal(seen[2].body.displayName, "acme-easylab");
-    assert.equal(seen[2].body.replyPrefix, "agent:");
+    assert.deepEqual(seen[0].body, { name: "acme-easylab" });
+    assert.equal(seen[1].body.name, "acme-easylab");
+    assert.equal(seen[1].body.replyPrefix, "agent:");
   } finally {
     if (previousNamePrefix === undefined) delete process.env.ORKESTR_WHATSAPP_CHAT_NAME_PREFIX;
     else process.env.ORKESTR_WHATSAPP_CHAT_NAME_PREFIX = previousNamePrefix;

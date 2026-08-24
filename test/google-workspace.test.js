@@ -164,7 +164,7 @@ test("whatsapp google connect link starts user-scoped oauth with selected scopes
     "otcan-claw": {
       clientId: "testing-client",
       clientSecret: "testing-secret",
-      approvedTesters: ["can@mayamilk.com"],
+      approvedTesters: ["workspace-owner@example.test"],
     },
   });
   const alice = userPrincipal({ id: "alice" });
@@ -175,7 +175,7 @@ test("whatsapp google connect link starts user-scoped oauth with selected scopes
       id: "thread-1",
       binding: { chatId: "wa-chat", responderAccountId: "wa-responder" },
     },
-    account: "can@mayamilk.com",
+    account: "workspace-owner@example.test",
     oauthAppId: "otcan-claw",
     useMode: "explicit_only",
     capabilities: ["gmail_read", "calendar_read"],
@@ -432,7 +432,7 @@ test("brokered google workspace oauth provisions the Gmail grant to the tenant V
     brokerTenantThreadId: "firat-jobs",
     brokerTenantChatId: "firat-wa",
     brokerTenantAccountId: "de-wa",
-    account: "firatkahya@gmail.com",
+    account: "tenant-user@example.test",
     alias: "firat-jobs",
     useMode: "explicit_only",
     setAsThreadDefault: true,
@@ -484,21 +484,21 @@ test("brokered google workspace oauth provisions the Gmail grant to the tenant V
         });
       }
       if (String(url) === "https://gmail.googleapis.com/gmail/v1/users/me/profile") {
-        return jsonResponse({ emailAddress: "FiratKahya@Gmail.com" });
+        return jsonResponse({ emailAddress: "tenant-user@example.test" });
       }
       assert.equal(String(url), "https://tenant.example.test/api/broker/google-workspace/grants");
       const decrypted = await decryptBrokerClientPayload(JSON.parse(options.body), { ORKESTR_HOME: tenantHome });
       assert.equal(decrypted.payload.userId, "firat");
       assert.equal(decrypted.payload.threadId, "firat-jobs");
       assert.equal(decrypted.payload.chatId, "firat-wa");
-      assert.equal(decrypted.payload.account, "firatkahya@gmail.com");
+      assert.equal(decrypted.payload.account, "tenant-user@example.test");
       assert.equal(decrypted.payload.connectionAlias, "firat-jobs");
       assert.equal(decrypted.payload.connectionUseMode, "explicit_only");
       assert.equal(decrypted.payload.setAsThreadDefault, true);
       assert.equal(decrypted.payload.token.accessToken, brokeredAccessToken);
       assert.equal(decrypted.payload.token.refreshToken, "brokered-refresh");
-      assert.equal(decrypted.payload.token.account, "firatkahya@gmail.com");
-      assert.equal(decrypted.payload.token.email, "firatkahya@gmail.com");
+      assert.equal(decrypted.payload.token.account, "tenant-user@example.test");
+      assert.equal(decrypted.payload.token.email, "tenant-user@example.test");
       return jsonResponse({ ok: true, grant: { ok: true } });
     },
   );

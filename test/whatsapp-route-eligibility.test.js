@@ -101,8 +101,8 @@ test("owner contact aliases can route WhatsApp group messages", async () => {
       senderAccountId: "main",
       responderAccountId: "main",
       outboundAccountId: "main",
-      senderContactId: "4917632400662@c.us",
-      ownerContactAliases: ["66378837028965@lid"],
+      senderContactId: "15550100001@c.us",
+      ownerContactAliases: ["90000000000001@lid"],
     },
   }, env);
 
@@ -110,7 +110,7 @@ test("owner contact aliases can route WhatsApp group messages", async () => {
     eventId: "wa-owner-alias-route-1",
     chatId: "wa-owner-alias@g.us",
     accountId: "main",
-    from: "66378837028965@lid",
+    from: "90000000000001@lid",
     text: "please run the desktop fix",
   }, env);
   const messages = await listThreadMessages("owner-alias-route-thread", env);
@@ -118,7 +118,7 @@ test("owner contact aliases can route WhatsApp group messages", async () => {
   assert.equal(routed.threadId, "owner-alias-route-thread");
   assert.equal(messages.length, 1);
   assert.equal(messages[0].senderTrustLevel, "owner");
-  assert.equal(messages[0].senderParticipantId, "66378837028965@lid");
+  assert.equal(messages[0].senderParticipantId, "90000000000001@lid");
 });
 
 test("generated thread routes preserve raw account aliases for lid sender trust", async () => {
@@ -128,8 +128,8 @@ test("generated thread routes preserve raw account aliases for lid sender trust"
   await upsertWhatsAppConnectorAccount({
     accountId: "sender",
     displayName: "Sender",
-    phoneNumber: "+905555154214",
-    contactId: "905555154214@c.us",
+    phoneNumber: "+15550100002",
+    contactId: "15550100002@c.us",
     autostart: true,
   }, env);
   await createThread({
@@ -145,8 +145,8 @@ test("generated thread routes preserve raw account aliases for lid sender trust"
       senderAccountId: "sender",
       responderAccountId: "sender",
       outboundAccountId: "sender",
-      senderContactId: "4917632400662@c.us",
-      responderContactId: "905555154214@c.us",
+      senderContactId: "15550100001@c.us",
+      responderContactId: "15550100002@c.us",
     },
   }, env);
 
@@ -154,7 +154,7 @@ test("generated thread routes preserve raw account aliases for lid sender trust"
     eventId: "wa-generated-raw-alias-lid",
     chatId: "wa-generated-raw-alias@g.us",
     accountId: "sender",
-    from: "66378837028965@lid",
+    from: "90000000000001@lid",
     text: "progress?",
   }, env);
   const messages = await listThreadMessages("generated-raw-alias-thread", env);
@@ -162,7 +162,7 @@ test("generated thread routes preserve raw account aliases for lid sender trust"
   assert.equal(routed.threadId, "generated-raw-alias-thread");
   assert.equal(messages.length, 1);
   assert.equal(messages[0].senderTrustLevel, "trusted");
-  assert.equal(messages[0].senderParticipantId, "66378837028965@lid");
+  assert.equal(messages[0].senderParticipantId, "90000000000001@lid");
 });
 
 test("retired WhatsApp bindings reserve the chat and block auto-provision resurrection", async () => {

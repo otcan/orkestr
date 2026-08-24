@@ -84,10 +84,10 @@ test("Google Workspace agent tools use the explicitly selected connection and re
     grantedScopes: ["https://www.googleapis.com/auth/calendar.events.readonly"],
   }, env, { alias: "owner", setAsMain: true });
   const extra = await saveGoogleWorkspaceConnectionToken({
-    ...token("can@mayamilk.com", "mayamilk-access"),
+    ...token("workspace-owner@example.test", "workspace-access"),
     capabilities: ["calendar_read"],
     grantedScopes: ["https://www.googleapis.com/auth/calendar.events.readonly"],
-  }, env, { alias: "mayamilk", useMode: "explicit_only" });
+  }, env, { alias: "workspace", useMode: "explicit_only" });
 
   const calls = [];
   const executed = await runTenantApiAgentGoogleWorkspaceTool("orkestr_list_google_calendar_events", {
@@ -106,9 +106,9 @@ test("Google Workspace agent tools use the explicitly selected connection and re
 
   assert.equal(executed.handled, true);
   assert.equal(executed.result.accountId, extra.connection.connectionId);
-  assert.equal(executed.result.account, "can@mayamilk.com");
+  assert.equal(executed.result.account, "workspace-owner@example.test");
   assert.equal(executed.result.selectionSource, "explicit");
-  assert.equal(calls[0].authorization, "Bearer mayamilk-access");
+  assert.equal(calls[0].authorization, "Bearer workspace-access");
 });
 
 test("multiple Google accounts are stored independently and selected deterministically", async () => {
@@ -117,8 +117,8 @@ test("multiple Google accounts are stored independently and selected determinist
     alias: "owner",
     setAsMain: true,
   });
-  const mayamilk = await saveGoogleWorkspaceConnectionToken(token("can@mayamilk.com"), env, {
-    alias: "mayamilk",
+  const workspace = await saveGoogleWorkspaceConnectionToken(token("workspace-owner@example.test"), env, {
+    alias: "workspace",
     useMode: "explicit_only",
   });
   const saim = await saveGoogleWorkspaceConnectionToken(token("saim@example.com"), env, {
@@ -142,9 +142,9 @@ test("multiple Google accounts are stored independently and selected determinist
   assert.equal(defaultSelection.connection.connectionId, main.connection.connectionId);
   assert.equal(defaultSelection.selectionSource, "user_default");
 
-  const explicitSelection = await resolveGoogleWorkspaceConnection({ account: "mayamilk" }, env);
-  assert.equal(explicitSelection.connection.connectionId, mayamilk.connection.connectionId);
-  assert.equal(explicitSelection.token.accessToken, "access-can@mayamilk.com");
+  const explicitSelection = await resolveGoogleWorkspaceConnection({ account: "workspace" }, env);
+  assert.equal(explicitSelection.connection.connectionId, workspace.connection.connectionId);
+  assert.equal(explicitSelection.token.accessToken, "access-workspace-owner@example.test");
   assert.equal(explicitSelection.selectionSource, "explicit");
 
   const threadSelection = await resolveGoogleWorkspaceConnection({ threadId: "saim-linkedin" }, env);

@@ -34,7 +34,7 @@ function profile() {
     connectors: {
       whatsapp: {
         enabled: true,
-        chatId: "120363425486269879@g.us",
+        chatId: "120363400000000011@g.us",
         chatName: "Tenant Demo Slice",
         accountId: "sender",
         routeMode: "control-plane-forward",
@@ -50,7 +50,7 @@ test("tenant VM bootstrap builds the first WhatsApp-bound Codex thread input", (
   assert.equal(input.ownerUserId, "tenant-demo");
   assert.equal(input.runtimeKind, "codex-app-server");
   assert.equal(input.executor.transport, "app-server");
-  assert.equal(input.binding.chatId, "120363425486269879@g.us");
+  assert.equal(input.binding.chatId, "120363400000000011@g.us");
   assert.equal(input.binding.senderAccountId, "sender");
   assert.equal(input.binding.acl.receive.mode, "all-users");
   assert.equal(input.binding.inboundSecurity.mode, "all-users");
@@ -75,14 +75,14 @@ test("tenant VM bootstrap creates an idempotent route target for forwarded Whats
   assert.equal(second.created, false);
 
   const thread = await getThread("tenant-demo-slice", env);
-  assert.equal(thread.binding.chatId, "120363425486269879@g.us");
+  assert.equal(thread.binding.chatId, "120363400000000011@g.us");
   assert.equal(thread.binding.tenantVmBootstrap, true);
   assert.equal(thread.binding.inboundSecurity.mode, "all-users");
   assert.equal(thread.runtimeKind, "codex-app-server");
 
   const routed = await routeWhatsAppInbound({
     eventId: "tenant-demo-forwarded-1",
-    chatId: "120363425486269879@g.us",
+    chatId: "120363400000000011@g.us",
     accountId: "sender",
     from: "491700000001@c.us",
     text: "hello from the tenant VM slice",

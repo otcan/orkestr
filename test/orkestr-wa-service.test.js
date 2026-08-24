@@ -410,10 +410,10 @@ test("WA readiness checker reports missing and unready required accounts", () =>
   const result = evaluateWaServiceReadiness({
     ok: true,
     accounts: [
-      { accountId: "sender", runtimeAccountId: "905555154214", ready: true, state: "ready" },
+      { accountId: "sender", runtimeAccountId: "15550100002", ready: true, state: "ready" },
       { accountId: "responder", ready: false, state: "qr_required", qrAvailable: true },
     ],
-  }, ["905555154214", "responder", "audit"]);
+  }, ["15550100002", "responder", "audit"]);
 
   assert.equal(result.ok, false);
   assert.deepEqual(result.missing, ["audit"]);

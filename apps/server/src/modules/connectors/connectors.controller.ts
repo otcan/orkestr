@@ -58,7 +58,7 @@ import {
   routeWhatsAppInbound,
   sendWhatsAppText,
 } from "../../../../../packages/connectors/src/whatsapp.js";
-import { createAndBindWhatsAppThreadGroup } from "../../../../../packages/connectors/src/whatsapp-thread-groups.js";
+import { createAndBindWhatsAppThreadGroup, createExternalWhatsAppChat } from "../../../../../packages/connectors/src/whatsapp-thread-groups.js";
 import { assertWhatsAppBridgeBindingAcl } from "../../../../../packages/connectors/src/whatsapp-account-bindings.js";
 import { assertWhatsAppBridgeTokenContext } from "../../../../../packages/connectors/src/whatsapp-binding-acl.js";
 import { loginCodexWithApiKey, startCodexDeviceAuth } from "../../../../../packages/connectors/src/codex.js";
@@ -90,7 +90,7 @@ import {
 } from "../../../../../packages/connectors/src/whatsapp-local-bridge.js";
 import { routedWhatsAppTypingTarget, runWithRoutedWhatsAppTyping } from "../../../../../packages/connectors/src/whatsapp-router-typing.js";
 import { startWhatsAppTyping, stopWhatsAppTyping } from "../../../../../packages/connectors/src/whatsapp-typing.js";
-import { findWhatsAppAccountByAnyId } from "../../../../../packages/connectors/src/whatsapp-account-identity.js";
+import { findWhatsAppAccountByAnyId, readyWhatsAppRuntimeAccountId } from "../../../../../packages/connectors/src/whatsapp-account-identity.js";
 import { whatsappWorkerConversation } from "../../../../../packages/connectors/src/whatsapp-worker-client.js";
 import { writeConnectorConfig } from "../../../../../packages/storage/src/config.js";
 import { dataPaths } from "../../../../../packages/storage/src/paths.js";
@@ -729,8 +729,10 @@ export class ConnectorsController {
   @Post("whatsapp/bridge/chats")
   @HttpCode(200)
   async whatsappBridgeCreateChat(@Req() request: any, @Body() body: Record<string, unknown> = {}) {
-    const receivingAccountId = String(body.receivingAccountId || body.inboundAccountId || body.senderAccountId || "").trim();
-    const replyAccountId = String(body.replyAccountId || body.bridgeAccountId || body.responderAccountId || body.outboundAccountId || "").trim();
+    const status = await getWhatsAppStatus();
+    const readyAccountId = readyWhatsAppRuntimeAccountId(status);
+    const receivingAccountId = String(body.receivingAccountId || body.inboundAccountId || body.senderAccountId || readyAccountId).trim();
+    const replyAccountId = String(body.replyAccountId || body.bridgeAccountId || body.responderAccountId || body.outboundAccountId || receivingAccountId || readyAccountId).trim();
     assertBridgeAccountScope("manage", {
       accountId: replyAccountId || receivingAccountId,
     }, request.orkestrMachineAuthContext);
@@ -743,17 +745,23 @@ export class ConnectorsController {
         "ORKESTR_WHATSAPP_OWNER_CONTACT_IDS",
       );
     const promoteParticipantsAsAdmins = optionalBodyBoolean(body, "promoteParticipantsAsAdmins", participantIds.length > 0);
-    const runtimeReceivingAccountId = await resolveLocalWhatsAppRuntimeAccountId(receivingAccountId);
-    const runtimeReplyAccountId = await resolveLocalWhatsAppRuntimeAccountId(replyAccountId);
-    const result = await createLocalWhatsAppChat({
+    const input = {
       name: String(body.name || body.displayName || ""),
-      senderAccountId: runtimeReceivingAccountId,
-      responderAccountId: runtimeReplyAccountId,
+      senderAccountId: receivingAccountId,
+      responderAccountId: replyAccountId,
       participantIds,
       adminParticipantIds: bodyStringArray(body, "adminParticipantIds"),
       promoteParticipantsAsAdmins,
       generatePicture: optionalBodyBoolean(body, "generatePicture", true),
-    }) as Record<string, any>;
+    };
+    const result = String(status.mode || "").trim() === "local"
+      ? await createLocalWhatsAppChat({
+          ...input,
+          senderAccountId: await resolveLocalWhatsAppRuntimeAccountId(receivingAccountId),
+          responderAccountId: await resolveLocalWhatsAppRuntimeAccountId(replyAccountId),
+        }) as Record<string, any>
+      : await createExternalWhatsAppChat(input, process.env) as Record<string, any>;
+    if (!result) throw httpError("whatsapp_bridge_not_configured", 503);
     return {
       ...result,
       senderAccountId: receivingAccountId || result.senderAccountId,
@@ -779,8 +787,10 @@ export class ConnectorsController {
         "ORKESTR_WHATSAPP_DEFAULT_PARTICIPANT_IDS",
         "ORKESTR_WHATSAPP_OWNER_CONTACT_IDS",
       );
-    const receivingAccountId = String(body.receivingAccountId || body.inboundAccountId || body.senderAccountId || "").trim();
-    const replyAccountId = String(body.replyAccountId || body.bridgeAccountId || body.responderAccountId || body.outboundAccountId || "").trim();
+    const status = await getWhatsAppStatus();
+    const readyAccountId = readyWhatsAppRuntimeAccountId(status);
+    const receivingAccountId = String(body.receivingAccountId || body.inboundAccountId || body.senderAccountId || readyAccountId).trim();
+    const replyAccountId = String(body.replyAccountId || body.bridgeAccountId || body.responderAccountId || body.outboundAccountId || receivingAccountId || readyAccountId).trim();
     const options = {
       name: String(body.name || body.displayName || ""),
       senderAccountId: receivingAccountId,
@@ -794,7 +804,6 @@ export class ConnectorsController {
       replyPrefix: String(body.replyPrefix || ""),
       forceNew: optionalBodyBoolean(body, "forceNew", false),
     };
-    const status = await getWhatsAppStatus();
     const dependencies = String(status.mode || "").trim() === "local"
       ? {
           createChat: async (input: Record<string, unknown> = {}) => {

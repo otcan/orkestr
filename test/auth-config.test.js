@@ -175,9 +175,9 @@ test("pairing session cookie can cover app and auth subdomains", () => {
 
 test("pairing session cookie is host-only for temporary Cloudflare hosts", () => {
   const header = sessionCookieHeader("token-value", {
-    ORKESTR_PRIMARY_DOMAIN: "ops.oguzcanunver.com",
-    ORKESTR_APP_HOST: "orkestr.app.ops.oguzcanunver.com",
-    ORKESTR_AUTH_HOST: "auth.ops.oguzcanunver.com",
+    ORKESTR_PRIMARY_DOMAIN: "ops.example.test",
+    ORKESTR_APP_HOST: "orkestr.app.ops.example.test",
+    ORKESTR_AUTH_HOST: "auth.ops.example.test",
   }, { requestHost: "doctor-interfaces-nearly-consistently.trycloudflare.com" });
 
   assert.match(header, /orkestr_session=token-value/);

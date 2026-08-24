@@ -13,6 +13,7 @@ import { exactSecurityApproveChallengeId } from "../../core/src/raw-terminal-com
 import { publicHttpUrl, tenantPublicSetupUrl } from "../../core/src/tenant-public-urls.js";
 import { getThread, listThreads } from "../../core/src/threads.js";
 import { setGeneratedLocalWhatsAppGroupPicture } from "./whatsapp-chat-picture.js";
+import { provisionWhatsAppGroupSetup } from "./whatsapp-group-setup.js";
 import { sendGmailMessage } from "./google-workspace.js";
 import { enrichGmailTokenAccount, readGmailToken } from "./gmail.js";
 import { listHostNativeGmailAccounts, sendHostNativeGmailMessage } from "./gmail-host-native.js";
@@ -1581,6 +1582,17 @@ async function resolveWhatsAppMentionIds(client, mentions = []) {
   return resolved.map((contact, index) =>
     String(contact?.pn || contact?.lid || normalized[index] || "").trim(),
   ).filter(Boolean);
+}
+
+async function resolveWhatsAppParticipantAliases(client, participantIds = []) {
+  const normalized = normalizeGroupParticipantIds(participantIds);
+  if (!normalized.length || typeof client?.getContactLidAndPhone !== "function") return normalized;
+  const resolved = await client.getContactLidAndPhone(normalized).catch(() => null);
+  if (!Array.isArray(resolved) || resolved.length !== normalized.length) return normalized;
+  return normalizeGroupParticipantIds([
+    ...normalized,
+    ...resolved.flatMap((contact) => [contact?.pn, contact?.lid]),
+  ]);
 }
 
 function renderWhatsAppMentionPlaceholders(text = "", mentions = []) {
@@ -6599,37 +6611,39 @@ export async function createLocalWhatsAppChat({ name = "", senderAccountId = "",
     ...(promoteParticipantsAsAdmins ? participants : []),
     ...adminParticipants,
   ]);
-  let adminPromotion = null;
-  if (promoteIds.length && isGroupChatId(chatId)) {
-    adminPromotion = await promoteLocalWhatsAppGroupParticipants({
-      accountId: responder,
+  const setup = isGroupChatId(chatId)
+    ? await provisionWhatsAppGroupSetup({
+        adminParticipantIds: promoteIds,
+        generatePicture,
+        promoteAdmins: (ids) => promoteLocalWhatsAppGroupParticipants({
+          accountId: responder,
+          chatId,
+          participantIds: ids,
+          env,
+        }),
+        setPicture: async () => {
+          const dependencies = await loadBridgeDependencies();
+          return setGeneratedLocalWhatsAppGroupPicture({
+            client: responderRuntime.client,
+            MessageMedia: dependencies.whatsapp.MessageMedia,
+            chatId,
+            title,
+            accountId: responder,
+            env,
+          });
+        },
+      }, env)
+    : { ok: true, adminPromotion: null, picture: null };
+  const { adminPromotion, picture } = setup;
+  if (setup.ok === false) {
+    await appendEvent({
+      type: "whatsapp_group_setup_incomplete",
       chatId,
-      participantIds: promoteIds,
-      env,
-    }).catch((error) => ({ ok: false, error: error?.message || String(error), participantIds: promoteIds }));
-  }
-  let picture = null;
-  if (generatePicture && isGroupChatId(chatId)) {
-    try {
-      const dependencies = await loadBridgeDependencies();
-      picture = await setGeneratedLocalWhatsAppGroupPicture({
-        client: responderRuntime.client,
-        MessageMedia: dependencies.whatsapp.MessageMedia,
-        chatId,
-        title,
-        accountId: responder,
-        env,
-      });
-    } catch (error) {
-      picture = { updated: false, error: error?.message || String(error) };
-      await appendEvent({
-        type: "whatsapp_chat_picture_generate_error",
-        chatId,
-        name: title,
-        accountId: responder,
-        error: picture.error,
-      }, env);
-    }
+      name: title,
+      accountId: responder,
+      adminError: adminPromotion?.ok === false ? adminPromotion.error || "whatsapp_admin_promotion_incomplete" : "",
+      pictureError: picture && picture.updated !== true ? picture.error || "whatsapp_picture_incomplete" : "",
+    }, env);
   }
   await appendEvent({
     type: "whatsapp_local_chat_created",
@@ -6660,6 +6674,7 @@ export async function createLocalWhatsAppChat({ name = "", senderAccountId = "",
     promotedParticipantIds: promoteIds,
     adminPromotion,
     picture,
+    setup,
     bridgeResponse: createdGroup,
   };
 }
@@ -6703,7 +6718,7 @@ export async function generateLocalWhatsAppChatPicture({ accountId = "", chatId 
 export async function promoteLocalWhatsAppGroupParticipants({ accountId = "", chatId = "", participantIds = [], env = process.env } = {}) {
   const normalized = normalizeAccountId(accountId, env);
   const id = String(chatId || "").trim();
-  const participants = normalizeGroupParticipantIds(participantIds);
+  const requestedParticipants = normalizeGroupParticipantIds(participantIds);
   if (!id) {
     const error = new Error("whatsapp_chat_id_required");
     error.statusCode = 400;
@@ -6714,7 +6729,7 @@ export async function promoteLocalWhatsAppGroupParticipants({ accountId = "", ch
     error.statusCode = 400;
     throw error;
   }
-  if (!participants.length) {
+  if (!requestedParticipants.length) {
     const error = new Error("whatsapp_admin_participants_required");
     error.statusCode = 400;
     throw error;
@@ -6730,6 +6745,7 @@ export async function promoteLocalWhatsAppGroupParticipants({ accountId = "", ch
     }
     throw localWhatsAppNotReadyError();
   }
+  const participants = await resolveWhatsAppParticipantAliases(runtime.client, requestedParticipants);
   try {
     const cachedResult = await applyCachedLocalWhatsAppGroupAdminAction({
       runtime,
@@ -6898,7 +6914,7 @@ async function applyCachedLocalWhatsAppGroupAdminAction({ runtime = null, chatId
 export async function demoteLocalWhatsAppGroupParticipants({ accountId = "", chatId = "", participantIds = [], env = process.env } = {}) {
   const normalized = normalizeAccountId(accountId, env);
   const id = String(chatId || "").trim();
-  const participants = normalizeGroupParticipantIds(participantIds);
+  const requestedParticipants = normalizeGroupParticipantIds(participantIds);
   if (!id) {
     const error = new Error("whatsapp_chat_id_required");
     error.statusCode = 400;
@@ -6909,7 +6925,7 @@ export async function demoteLocalWhatsAppGroupParticipants({ accountId = "", cha
     error.statusCode = 400;
     throw error;
   }
-  if (!participants.length) {
+  if (!requestedParticipants.length) {
     const error = new Error("whatsapp_admin_participants_required");
     error.statusCode = 400;
     throw error;
@@ -6925,6 +6941,7 @@ export async function demoteLocalWhatsAppGroupParticipants({ accountId = "", cha
     }
     throw localWhatsAppNotReadyError();
   }
+  const participants = await resolveWhatsAppParticipantAliases(runtime.client, requestedParticipants);
   try {
     const cachedResult = await applyCachedLocalWhatsAppGroupAdminAction({
       runtime,

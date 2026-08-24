@@ -171,12 +171,12 @@ test("named Google OAuth app survives authorization, callback storage, and refre
       "otcan-claw": {
         clientId: "testing-client",
         clientSecret: "testing-secret",
-        approvedTesters: ["can@mayamilk.com"],
+        approvedTesters: ["workspace-owner@example.test"],
       },
     }),
   };
   const started = await startGmailOAuth(env, {
-    account: "can@mayamilk.com",
+    account: "workspace-owner@example.test",
     oauthAppId: "otcan-claw",
     useMode: "explicit_only",
   });
@@ -203,7 +203,7 @@ test("named Google OAuth app survives authorization, callback storage, and refre
       });
     }
     if (String(url) === "https://gmail.googleapis.com/gmail/v1/users/me/profile") {
-      return jsonResponse({ emailAddress: "can@mayamilk.com" });
+      return jsonResponse({ emailAddress: "workspace-owner@example.test" });
     }
     throw new Error(`unexpected_url:${url}`);
   });
@@ -211,7 +211,7 @@ test("named Google OAuth app survives authorization, callback storage, and refre
   const stored = await readGmailToken(env, { connectionId: listed.connections[0].connectionId });
 
   assert.equal(stored.oauthAppId, "otcan-claw");
-  assert.equal(stored.account, "can@mayamilk.com");
+  assert.equal(stored.account, "workspace-owner@example.test");
   assert.equal(listed.connections[0].oauthAppId, "otcan-claw");
   assert.deepEqual(callbackCalls, [
     "https://oauth2.googleapis.com/token",
@@ -493,8 +493,8 @@ test("gmail oauth adds an explicit-only account without replacing the main accou
   }), { account: "owner@example.com" });
 
   const started = await startGmailOAuth(env, {
-    account: "can@mayamilk.com",
-    alias: "mayamilk",
+    account: "workspace-owner@example.test",
+    alias: "workspace",
     useMode: "explicit_only",
   });
   const extraAccess = `ya29.${"x".repeat(90)}`;
@@ -506,7 +506,7 @@ test("gmail oauth adds an explicit-only account without replacing the main accou
         return jsonResponse({ access_token: extraAccess, refresh_token: "extra-refresh", expires_in: 3600 });
       }
       if (String(url) === "https://gmail.googleapis.com/gmail/v1/users/me/profile") {
-        return jsonResponse({ emailAddress: "can@mayamilk.com" });
+        return jsonResponse({ emailAddress: "workspace-owner@example.test" });
       }
       throw new Error(`unexpected_url:${url}`);
     },
@@ -515,13 +515,13 @@ test("gmail oauth adds an explicit-only account without replacing the main accou
   const generic = await listGoogleWorkspaceConnections(env);
   const all = await listGoogleWorkspaceConnections(env, { includeExplicit: true });
   const defaultSelection = await resolveGoogleWorkspaceConnection({}, env);
-  const explicitSelection = await resolveGoogleWorkspaceConnection({ account: "mayamilk" }, env);
+  const explicitSelection = await resolveGoogleWorkspaceConnection({ account: "workspace" }, env);
 
-  assert.equal(result.account, "can@mayamilk.com");
+  assert.equal(result.account, "workspace-owner@example.test");
   assert.equal(all.connections.length, 2);
   assert.deepEqual(generic.connections.map((connection) => connection.email), ["owner@example.com"]);
   assert.equal(defaultSelection.connection.email, "owner@example.com");
-  assert.equal(explicitSelection.connection.email, "can@mayamilk.com");
+  assert.equal(explicitSelection.connection.email, "workspace-owner@example.test");
   assert.equal(explicitSelection.selectionSource, "explicit");
 });
 

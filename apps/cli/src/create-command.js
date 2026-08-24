@@ -18,20 +18,6 @@ export async function createCommand(argv, ctx) {
   const replyPrefix = firstFlagValue(argv, ["--reply-prefix"]) || defaultWhatsAppReplyPrefix();
   const explicitChatId = firstFlagValue(argv, ["--chat-id"]);
 
-  let whatsappGroup = null;
-  let chatId = explicitChatId;
-  if (!noWhatsApp && !chatId) {
-    whatsappGroup = await createWhatsAppGroup({
-      argv,
-      ctx,
-      displayName,
-      outboundAccountId,
-      senderAccountId,
-    });
-    chatId = String(whatsappGroup?.chat?.id || "").trim();
-    if (!chatId) throw new Error("WhatsApp chat was created but no chat id was returned.");
-  }
-
   const threadPayload = await requestJson("/api/threads", {
     ...ctx,
     method: "POST",
@@ -41,8 +27,23 @@ export async function createCommand(argv, ctx) {
   const threadId = String(thread?.id || "").trim();
   if (!threadId) throw new Error("Orkestr thread create did not return an id.");
 
+  let whatsappGroup = null;
+  let chatId = explicitChatId;
   let bindingPayload = null;
-  if (!noWhatsApp && chatId) {
+  if (!noWhatsApp && !chatId) {
+    whatsappGroup = await createWhatsAppThreadGroup({
+      argv,
+      ctx,
+      threadId,
+      displayName,
+      replyPrefix,
+      outboundAccountId,
+      senderAccountId,
+    });
+    chatId = String(whatsappGroup?.chat?.id || "").trim();
+    if (!chatId) throw new Error("WhatsApp chat was created but no chat id was returned.");
+    bindingPayload = whatsappGroup;
+  } else if (!noWhatsApp && chatId) {
     bindingPayload = await requestJson(`/api/threads/${encodeURIComponent(threadId)}/binding`, {
       ...ctx,
       method: "PUT",
@@ -59,7 +60,7 @@ export async function createCommand(argv, ctx) {
   }
 
   if (json) {
-    ctx.stdout.write(`${JSON.stringify({ ok: true, thread, whatsappGroup, binding: bindingPayload?.binding || null }, null, 2)}\n`);
+    ctx.stdout.write(`${JSON.stringify({ ok: true, thread: whatsappGroup?.thread || thread, whatsappGroup, binding: bindingPayload?.binding || null }, null, 2)}\n`);
   } else {
     ctx.stdout.write(`Created Orkestr thread: ${threadName(thread)}\t${threadId}\n`);
     ctx.stdout.write(`Runtime: ${thread.state || "sleeping"}\n`);
@@ -71,7 +72,7 @@ export async function createCommand(argv, ctx) {
   return 0;
 }
 
-function createWhatsAppGroup({ argv, ctx, displayName, outboundAccountId, senderAccountId }) {
+function createWhatsAppThreadGroup({ argv, ctx, threadId, displayName, replyPrefix, outboundAccountId, senderAccountId }) {
   const participantIds = repeatedFlagValues(argv, ["--wa-participant", "--participant"]);
   const promoteParticipantsAsAdmins = !argv.includes("--no-wa-admin") && !argv.includes("--no-admin");
   const adminParticipantIds = uniqueList([
@@ -79,10 +80,14 @@ function createWhatsAppGroup({ argv, ctx, displayName, outboundAccountId, sender
     ...repeatedFlagValues(argv, ["--wa-admin", "--admin-participant"]),
   ]);
   const body = {
+    threadId,
     name: displayName,
     participantIds,
     adminParticipantIds,
     promoteParticipantsAsAdmins,
+    generatePicture: true,
+    mirrorToWhatsApp: true,
+    forceNew: false,
   };
   if (outboundAccountId) {
     body.replyAccountId = outboundAccountId;
@@ -94,7 +99,8 @@ function createWhatsAppGroup({ argv, ctx, displayName, outboundAccountId, sender
     body.receivingAccountId = senderAccountId;
     body.senderAccountId = senderAccountId;
   }
-  return requestJson("/api/connectors/whatsapp/bridge/chats", {
+  if (replyPrefix) body.replyPrefix = replyPrefix;
+  return requestJson("/api/connectors/whatsapp/thread-groups", {
     ...ctx,
     method: "POST",
     body,

@@ -28,7 +28,7 @@ test("parent WhatsApp bridge proxy enforces account and recipient allowlists", (
     ORKESTR_PARENT_WA_BRIDGE_DEFAULT_ACCOUNT: "responder",
     ORKESTR_PARENT_WA_BRIDGE_ALLOWED_ACCOUNTS: "responder",
     ORKESTR_PARENT_WA_BRIDGE_ALLOWED_PHONE_NUMBERS: "+4917600000000",
-    ORKESTR_PARENT_WA_BRIDGE_ALLOWED_RECIPIENTS: "66378837028965@lid",
+    ORKESTR_PARENT_WA_BRIDGE_ALLOWED_RECIPIENTS: "90000000000001@lid",
   });
 
   assert.equal(assertParentWhatsAppBridgeSendAllowed({
@@ -37,7 +37,7 @@ test("parent WhatsApp bridge proxy enforces account and recipient allowlists", (
   }, policy), true);
   assert.equal(assertParentWhatsAppBridgeSendAllowed({
     accountId: "responder",
-    to: "66378837028965@lid",
+    to: "90000000000001@lid",
   }, policy), true);
 
   assert.throws(

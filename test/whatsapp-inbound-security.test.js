@@ -122,13 +122,13 @@ test("WhatsApp inbound security treats owner contact aliases as owners", () => {
       id: "thread:owner-alias-wa-thread:whatsapp",
       chatId: "owner-alias-chat@g.us",
       senderAccountId: "main",
-      senderContactId: "4917632400662@c.us",
-      ownerContactAliases: ["66378837028965@lid"],
+      senderContactId: "15550100001@c.us",
+      ownerContactAliases: ["90000000000001@lid"],
     },
     input: {
       chatId: "owner-alias-chat@g.us",
       accountId: "main",
-      from: "66378837028965@lid",
+      from: "90000000000001@lid",
       text: "please run the desktop fix",
     },
     thread: {

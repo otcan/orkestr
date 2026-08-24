@@ -105,7 +105,7 @@ export function classifyWhatsAppInboundRequest(text = "") {
     ["prompt_injection", /\b(ignore|forget|bypass|override)\b.{0,80}\b(previous|prior|system|developer|instruction|policy|guardrail)s?\b/],
     ["secret_exfiltration", /\b(show|print|dump|reveal|send|exfiltrate)\b.{0,80}\b(secret|token|api key|apikey|password|cookie|session|credential|env|\.env)\b/],
     ["cross_context_access", /\b(other|another|different)\b.{0,60}\b(chat|thread|session|person|client|customer|workspace)\b/],
-    ["identity_abuse", /\b(send|message|reply|call)\b.{0,80}\b(as oğuzcan|as oguzcan|on behalf of|from oğuzcan|from oguzcan)\b/],
+    ["identity_abuse", /\b(send|message|reply|call)\b.{0,80}\b(as (?:the )?(?:owner|administrator)|on behalf of|from (?:the )?(?:owner|administrator))\b/],
     ["router_takeover", /\b(switch|rebind|assign|wake|sleep|reset)\b.{0,80}\b(router|thread|session|binding|codex|agent)\b/],
     ["host_execution", /\b(run|execute|shell|terminal|sudo|chmod|curl|wget|rm -rf|ssh|scp|kubectl|docker)\b/],
   ];

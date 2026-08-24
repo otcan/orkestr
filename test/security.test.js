@@ -910,8 +910,8 @@ test("tenant CLI setup status uses instance connector scope", async () => {
       provider: "google_workspace",
       accessToken: `ya29.${"t".repeat(90)}`,
       refreshToken: "refresh-token",
-      account: "oguzcanunver@gmail.com",
-      email: "oguzcanunver@gmail.com",
+      account: "owner@example.test",
+      email: "owner@example.test",
       capabilities: ["gmail_read", "gmail_actions", "gmail_send", "gmail_drafts"],
       grantedScopes: [
         "openid",
@@ -928,7 +928,7 @@ test("tenant CLI setup status uses instance connector scope", async () => {
       const url = String(input instanceof Request ? input.url : input);
       if (url === "https://gmail.googleapis.com/gmail/v1/users/me/profile") {
         assert.equal(options.headers?.authorization, `Bearer ya29.${"t".repeat(90)}`);
-        return new Response(JSON.stringify({ emailAddress: "oguzcanunver@gmail.com" }), {
+        return new Response(JSON.stringify({ emailAddress: "owner@example.test" }), {
           status: 200,
           headers: { "content-type": "application/json" },
         });
@@ -945,7 +945,7 @@ test("tenant CLI setup status uses instance connector scope", async () => {
 
     assert.notEqual(status.redacted, true);
     assert.equal(gmail.state, "connected");
-    assert.equal(gmail.details.account, "oguzcanunver@gmail.com");
+    assert.equal(gmail.details.account, "owner@example.test");
     assert.notEqual(gmail.details.overlay, true);
     assert.deepEqual(gmail.details.capabilities, ["gmail_read", "gmail_actions", "gmail_send", "gmail_drafts"]);
 
@@ -1329,7 +1329,7 @@ test("broker instance connector challenge preserves trusted Google Workspace app
   process.env.ORKESTR_PUBLIC_AUTH_URL = "https://connect.orkestr.de/setup/pairing";
 
   const instanceId = "instance-firat";
-  const chatId = "120363428493624197@g.us";
+  const chatId = "120363400000000012@g.us";
   await createUser({ id: "firat", role: "user", displayName: "Fırat" }, process.env);
   await createTenantVm({
     id: "firat-jobs-vm",

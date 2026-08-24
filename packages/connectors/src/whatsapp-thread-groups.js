@@ -46,7 +46,7 @@ function threadGroupBinding(thread = {}, group = {}, options = {}, env = process
   }, env);
 }
 
-async function createExternalWhatsAppChat(options = {}, env = process.env, fetchImpl = fetch) {
+export async function createExternalWhatsAppChat(options = {}, env = process.env, fetchImpl = fetch) {
   const bridgeUrl = await configuredWhatsAppBridgeUrl(env);
   if (!bridgeUrl) return null;
   const config = await readConnectorConfig("whatsapp", env);
@@ -130,5 +130,8 @@ export async function createAndBindWhatsAppThreadGroup(thread, options = {}, env
     senderAccountId: binding.senderAccountId,
     responderAccountId: binding.responderAccountId,
     participantIds,
+    setup: group.setup || null,
+    adminPromotion: group.adminPromotion || group.setup?.adminPromotion || null,
+    picture: group.picture || group.setup?.picture || null,
   };
 }

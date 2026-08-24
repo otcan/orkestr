@@ -779,7 +779,7 @@ test("attended Gmail approval cannot be reused with different account policy", a
       service: "gmail",
       action: "connect",
       user_id: "admin",
-      alias: "mayamilk",
+      alias: "workspace",
       use_mode: "explicit_only",
       set_as_main: false,
       set_as_thread_default: false,
@@ -790,7 +790,7 @@ test("attended Gmail approval cannot be reused with different account policy", a
       service: "gmail",
       action: "connect",
       user_id: "admin",
-      alias: "mayamilk",
+      alias: "workspace",
       use_mode: "explicit_only",
       set_as_main: true,
       set_as_thread_default: false,
@@ -814,7 +814,7 @@ test("attended Gmail OAuth app selection cannot fall back to the default profile
       "otcan-claw": {
         clientId: "testing-client",
         clientSecret: "testing-secret",
-        approvedTesters: ["can@mayamilk.com"],
+        approvedTesters: ["workspace-owner@example.test"],
       },
     }),
   });
@@ -823,7 +823,7 @@ test("attended Gmail OAuth app selection cannot fall back to the default profile
       service: "gmail",
       action: "connect",
       user_id: "admin",
-      account_hint: "can@mayamilk.com",
+      account_hint: "workspace-owner@example.test",
       oauth_app: "otcan-claw",
       use_mode: "explicit_only",
     }, item.env);
@@ -834,7 +834,7 @@ test("attended Gmail OAuth app selection cannot fall back to the default profile
       service: "gmail",
       action: "connect",
       user_id: "admin",
-      account_hint: "can@mayamilk.com",
+      account_hint: "workspace-owner@example.test",
       use_mode: "explicit_only",
       approval: pending.challenge.approve_code,
     }, item.env);
@@ -1314,7 +1314,7 @@ test("connector doctor recognizes phone identities through their runtime alias",
     gateway: { ok: true },
     worker: { ok: true, state: "ready" },
     accounts: [{
-      accountId: "905555154214",
+      accountId: "15550100002",
       runtimeAccountId: "sender",
       legacyRoleAliases: ["sender"],
       ready: false,

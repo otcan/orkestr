@@ -119,7 +119,7 @@ test("real WhatsApp E2E injected mode requires only responder and keeps sender i
   }, {}, {
     selected: {
       bindingId: "thread:real-wa:whatsapp",
-      authorizedContactIds: ["491763240@c.us"],
+      authorizedContactIds: ["15550100004@c.us"],
       responderAccountId: "905555154",
       runtimeAccountId: "responder",
     },
@@ -130,7 +130,7 @@ test("real WhatsApp E2E injected mode requires only responder and keeps sender i
   assert.equal(preflight.required.sender, null);
   assert.equal(preflight.observed.sender.accountId, "sender");
   assert.equal(preflight.observed.sender.ready, false);
-  assert.deepEqual(preflight.required.senderContactIds, ["491763240@c.us"]);
+  assert.deepEqual(preflight.required.senderContactIds, ["15550100004@c.us"]);
 });
 
 test("real WhatsApp E2E manual-send mode requires only the responder account", () => {
@@ -178,15 +178,15 @@ test("real WhatsApp E2E manual-send mode discovers authorized sender contacts fr
       threadId: "onboarding-admin-orkestr-de",
       chatId: "fixture-group@g.us",
       displayName: "orkestr.example.test",
-      authorizedContactIds: ["663788370@lid", "+491763240", "491763240@c.us"],
-      acl: { send: { mode: "users", users: ["+491763240", "491763240@c.us"] } },
+      authorizedContactIds: ["663788370@lid", "+491763240", "15550100004@c.us"],
+      acl: { send: { mode: "users", users: ["+491763240", "15550100004@c.us"] } },
       responderAccountId: "905555154",
       runtimeAccountId: "responder",
     },
   });
 
   assert.equal(preflight.required.sender, null);
-  assert.deepEqual(preflight.required.senderContactIds, ["663788370@lid", "+491763240", "491763240@c.us"]);
+  assert.deepEqual(preflight.required.senderContactIds, ["663788370@lid", "+491763240", "15550100004@c.us"]);
   assert.equal(preflight.observed.binding.displayName, "orkestr.example.test");
 });
 
@@ -216,14 +216,14 @@ test("real WhatsApp E2E rejects a requested sender contact outside the binding",
 test("real WhatsApp E2E preflight matches accounts by phone or contact id aliases", () => {
   const preflight = validateWhatsAppPreflight({
     senderAccountId: "+491760000",
-    responderAccountId: "905555154@c.us",
+    responderAccountId: "15550100005@c.us",
     manualSend: false,
   }, {
     mode: "local",
     state: "paired",
     accounts: [
       { accountId: "sender-runtime", state: "ready", ready: true, phoneNumber: "+491760000", contactId: "491760000@c.us" },
-      { accountId: "responder-runtime", state: "ready", ready: true, phoneNumber: "+905555154", contactId: "905555154@c.us" },
+      { accountId: "responder-runtime", state: "ready", ready: true, phoneNumber: "+905555154", contactId: "15550100005@c.us" },
     ],
   }, {}, {
     selected: {

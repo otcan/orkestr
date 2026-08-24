@@ -26,7 +26,9 @@ import { deliverWhatsAppReplies, formatWhatsAppOutboundText, getWhatsAppChatMess
 import { addLocalWhatsAppGroupParticipants, cleanupLocalWhatsAppChromeLocks, clearLocalWhatsAppChatTypingState, createLocalWhatsAppChat, demoteLocalWhatsAppGroupParticipants, forwardLocalWhatsAppInbound, getLocalWhatsAppBridgeStatus, handleInboundMessage, inboundRoutingFailureNoticeText, listLocalWhatsAppChats, listLocalWhatsAppChatParticipants, localWhatsAppAccountIdsForEnv, localWhatsAppConnectedPageReadyFallbackEligible, localWhatsAppInboundForwardTarget, localWhatsAppMessageRouteFields, localWhatsAppReadyFallbackEligible, localWhatsAppTypingClearRetryDelaysMs, localWhatsAppUnreadRecoveryBoundChats, localWhatsAppUnreadRecoveryIntervalMs, normalizeGroupParticipantIds, notifyLocalWhatsAppPairingRequired, promoteLocalWhatsAppGroupParticipants, recoverConfiguredLocalWhatsAppAccounts, recoverLocalWhatsAppChatMessages, recoverUnreadLocalWhatsAppMessages, recoverableLocalWhatsAppAccountIds, reduceLocalWhatsAppBridgeState, resetLocalWhatsAppBridgeForTest, restartRecoverableLocalWhatsAppAccount, sendLocalWhatsAppMessage, sendLocalWhatsAppRepairQrEmail, sendWhatsAppTextWithConfirmation, setLocalWhatsAppRuntimeForTest, setLocalWhatsAppRuntimeRecoveryHooksForTest, startLocalWhatsAppAccount, startLocalWhatsAppTyping, stopLocalWhatsAppTyping, syncLocalWhatsAppTypingTargets, webCacheRoot } from "../packages/connectors/src/whatsapp-local-bridge.js";
 import { routedWhatsAppTypingTarget, runWithRoutedWhatsAppTyping } from "../packages/connectors/src/whatsapp-router-typing.js";
 import { upsertWhatsAppBinding } from "../packages/connectors/src/whatsapp-account-bindings.js";
+import { readyWhatsAppRuntimeAccountId } from "../packages/connectors/src/whatsapp-account-identity.js";
 import { createAndBindWhatsAppThreadGroup } from "../packages/connectors/src/whatsapp-thread-groups.js";
+import { provisionWhatsAppGroupSetup } from "../packages/connectors/src/whatsapp-group-setup.js";
 import { prepareWhatsAppTableAttachments } from "../packages/connectors/src/whatsapp-table-attachments.js";
 import { canRecoverLiveWhatsAppOutboundIntent, mergeWhatsAppOutboundIntents, mergeWhatsAppOutboundMirrorCursors } from "../packages/connectors/src/whatsapp-outbound-intents.js";
 import { formatWhatsAppQueueNotice } from "../packages/connectors/src/whatsapp-outbound-mirror.js";
@@ -1555,8 +1557,8 @@ test("local whatsapp text send forwards mentions to the WhatsApp client", async 
   const runtime = {
     client: {
       async getContactLidAndPhone(ids) {
-        assert.deepEqual(ids, ["66378837028965@lid"]);
-        return [{ lid: "66378837028965@lid", pn: "905339208177@c.us" }];
+        assert.deepEqual(ids, ["90000000000001@lid"]);
+        return [{ lid: "90000000000001@lid", pn: "15550100003@c.us" }];
       },
       async sendMessage(chatId, text, options) {
         calls.push({ chatId, text, options });
@@ -1571,15 +1573,15 @@ test("local whatsapp text send forwards mentions to the WhatsApp client", async 
       accountId: "responder",
       chatId: "mentions@g.us",
       text: "{{mention:0}} New order",
-      mentions: ["66378837028965@lid"],
+      mentions: ["90000000000001@lid"],
       env,
     });
     assert.deepEqual(calls, [{
       chatId: "mentions@g.us",
-      text: "@905339208177 New order",
-      options: { mentions: ["905339208177@c.us"] },
+      text: "@15550100003 New order",
+      options: { mentions: ["15550100003@c.us"] },
     }]);
-    assert.deepEqual(result.mentions, ["905339208177@c.us"]);
+    assert.deepEqual(result.mentions, ["15550100003@c.us"]);
   } finally {
     await resetLocalWhatsAppBridgeForTest(env);
   }
@@ -3099,6 +3101,92 @@ test("local whatsapp group participant ids are normalized for created test chats
   );
 });
 
+test("WhatsApp group setup retries admin promotion and picture assignment", async () => {
+  const calls = [];
+  const env = { ORKESTR_WHATSAPP_GROUP_SETUP_RETRY_DELAYS_MS: "0,0,0" };
+  let adminAttempts = 0;
+  let pictureAttempts = 0;
+  const result = await provisionWhatsAppGroupSetup({
+    adminParticipantIds: ["owner@lid"],
+    async promoteAdmins(participantIds) {
+      adminAttempts += 1;
+      calls.push(["admins", adminAttempts, participantIds]);
+      if (adminAttempts < 2) throw new Error("group_metadata_pending");
+      return { ok: true, participantIds };
+    },
+    async setPicture() {
+      pictureAttempts += 1;
+      calls.push(["picture", pictureAttempts]);
+      return { ok: true, updated: pictureAttempts >= 3 };
+    },
+  }, env);
+
+  assert.equal(result.ok, true);
+  assert.equal(result.adminPromotion.attemptCount, 2);
+  assert.equal(result.picture.attemptCount, 3);
+  assert.deepEqual(calls, [
+    ["admins", 1, ["owner@lid"]],
+    ["admins", 2, ["owner@lid"]],
+    ["picture", 1],
+    ["picture", 2],
+    ["picture", 3],
+  ]);
+});
+
+test("WhatsApp group creation selects the ready runtime account", () => {
+  assert.equal(readyWhatsAppRuntimeAccountId({
+    accounts: [
+      { accountId: "disconnected", runtimeAccountId: "responder", ready: false },
+      { accountId: "15550100002", runtimeAccountId: "sender", ready: true, chatOpsReady: true, runtimeUsable: true },
+    ],
+  }), "sender");
+  assert.equal(readyWhatsAppRuntimeAccountId({
+    health: { accounts: [{ accountId: "491700000000", runtimeAccountId: "secondary", state: "ready" }] },
+  }), "secondary");
+});
+
+test("local whatsapp admin promotion resolves phone JIDs to group LIDs", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-promote-lid-"));
+  const env = { ORKESTR_HOME: home, ORKESTR_WHATSAPP_ACCOUNT_IDS: "sender" };
+  const calls = [];
+  try {
+    setLocalWhatsAppRuntimeForTest("sender", {
+      client: {
+        async getContactLidAndPhone(participantIds) {
+          calls.push(["resolve", participantIds]);
+          return [{ pn: "15550100001@c.us", lid: "90000000000001@lid" }];
+        },
+        async getChatById(chatId) {
+          calls.push(["chat", chatId]);
+          return {
+            isGroup: true,
+            async promoteParticipants(participantIds) {
+              calls.push(["promote", participantIds]);
+              return { status: 200 };
+            },
+          };
+        },
+      },
+    }, {}, env);
+
+    const result = await promoteLocalWhatsAppGroupParticipants({
+      accountId: "sender",
+      chatId: "120363400000000002@g.us",
+      participantIds: ["15550100001@c.us"],
+      env,
+    });
+
+    assert.equal(result.ok, true);
+    assert.deepEqual(calls, [
+      ["resolve", ["15550100001@c.us"]],
+      ["chat", "120363400000000002@g.us"],
+      ["promote", ["15550100001@c.us", "90000000000001@lid"]],
+    ]);
+  } finally {
+    await resetLocalWhatsAppBridgeForTest(env);
+  }
+});
+
 test("local whatsapp chat creation promotes the automatically added sender as an admin", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-create-sender-admin-"));
   const env = {
@@ -3469,6 +3557,11 @@ test("whatsapp thread group creation binds an existing thread idempotently", asy
         responderAccountId: "account-1",
         senderContactId: "wa-contact-primary@c.us",
         responderContactId: "wa-contact-tenant@c.us",
+        setup: {
+          ok: true,
+          adminPromotion: { ok: true, attemptCount: 2 },
+          picture: { ok: true, updated: true, attemptCount: 2 },
+        },
       };
     },
   });
@@ -3485,6 +3578,9 @@ test("whatsapp thread group creation binds an existing thread idempotently", asy
   assert.equal(updated.binding.mirrorToWhatsApp, true);
   assert.equal(updated.binding.responderAccountId, "account-1");
   assert.deepEqual(createCalls.map((call) => call.participantIds), [["wa-contact-primary@c.us"]]);
+  assert.equal(created.setup.ok, true);
+  assert.equal(created.adminPromotion.attemptCount, 2);
+  assert.equal(created.picture.updated, true);
   assert.equal(reused.reused, true);
   assert.equal(reused.binding.chatId, "wa-group-two@g.us");
 });
@@ -5389,7 +5485,7 @@ test("local whatsapp inbound retries a transient media download with a refreshed
   const baseMessage = {
     id: { _serialized: eventId, remote: chatId },
     from: chatId,
-    author: "279611011236064@lid",
+    author: "90000000000002@lid",
     fromMe: false,
     body: "Candidate CV",
     hasMedia: true,
@@ -5485,7 +5581,7 @@ test("local whatsapp cached inbound media downloads through the browser message 
   const result = await handleInboundMessage("sender", {
     id: { _serialized: eventId, remote: chatId },
     from: chatId,
-    author: "279611011236064@lid",
+    author: "90000000000002@lid",
     fromMe: false,
     body: "cached-candidate.docx",
     hasMedia: true,
@@ -5538,7 +5634,7 @@ test("local whatsapp exact recovery loads and routes one scoped media event by i
       return {
         id: { _serialized: eventId, remote: chatId },
         from: chatId,
-        author: "279611011236064@lid",
+        author: "90000000000002@lid",
         fromMe: false,
         body: "exact-candidate.docx",
         hasMedia: true,
@@ -5618,7 +5714,7 @@ test("local whatsapp exact recovery resolves a bare event id from the scoped bro
           return {
             id: { id: eventId, _serialized: eventId, remote: chatId },
             from: chatId,
-            author: "279611011236064@lid",
+            author: "90000000000002@lid",
             fromMe: false,
             body: "bare-exact-candidate.docx",
             hasMedia: true,
@@ -5692,7 +5788,7 @@ test("local whatsapp inbound does not route a caption when media download retrie
   const result = await handleInboundMessage("sender", {
     id: { _serialized: `false_${chatId}_media-failed-1`, remote: chatId },
     from: chatId,
-    author: "279611011236064@lid",
+    author: "90000000000002@lid",
     fromMe: false,
     body: "Do not route without this file",
     hasMedia: true,
@@ -5737,7 +5833,7 @@ test("local whatsapp inbound routes link text when generated preview media canno
   const result = await handleInboundMessage("sender", {
     id: { _serialized: `false_${chatId}_link-preview-failed-1`, remote: chatId },
     from: chatId,
-    author: "279611011236064@lid",
+    author: "90000000000002@lid",
     fromMe: false,
     body: "Read https://example.test/challenge and assess it",
     hasMedia: true,
@@ -8906,7 +9002,7 @@ test("whatsapp chat history is read from external bridge", async () => {
     return response({
       ok: true,
       messages: [
-        { id: "m1", body: "/connect google", fromMe: false, from: "chat-history@g.us", author: "491763240@c.us", timestamp: 1780910000 },
+        { id: "m1", body: "/connect google", fromMe: false, from: "chat-history@g.us", author: "15550100004@c.us", timestamp: 1780910000 },
       ],
     });
   });
@@ -8925,7 +9021,7 @@ test("whatsapp chat history is read from external bridge", async () => {
     id: "m1",
     body: "/connect google",
     fromMe: false,
-    author: "491763240@c.us",
+    author: "15550100004@c.us",
     timestamp: "2026-06-08T09:13:20.000Z",
   }]);
 });
@@ -8982,7 +9078,7 @@ test("whatsapp chat history maps numeric public account ids to runtime external 
         ok: true,
         ready: true,
         accounts: [
-          { id: "sender", ready: true, state: "ready", phoneNumber: "+491763240", contactId: "491763240@c.us" },
+          { id: "sender", ready: true, state: "ready", phoneNumber: "+491763240", contactId: "15550100004@c.us" },
         ],
       });
     }
@@ -9019,7 +9115,7 @@ test("whatsapp external sends map numeric public account ids to runtime bridge a
           ok: true,
           ready: true,
           accounts: [
-            { id: "sender", ready: true, state: "ready", phoneNumber: "+491763240", contactId: "491763240@c.us" },
+            { id: "sender", ready: true, state: "ready", phoneNumber: "+491763240", contactId: "15550100004@c.us" },
           ],
         });
       }
@@ -9268,7 +9364,7 @@ test("whatsapp approval command accepts parent auth intent chat for tenant conne
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-approve-auth-intent-chat-"));
   const env = externalBridgeEnv(home);
   const instanceId = "82f83473-4fce-4c63-ae22-08d3cd0c148a";
-  const chatId = "120363428493624197@g.us";
+  const chatId = "120363400000000012@g.us";
   const connectId = "connect-firat-google";
   const created = await createPairingChallenge({
     env,
@@ -9298,7 +9394,7 @@ test("whatsapp approval command accepts parent auth intent chat for tenant conne
     eventId: "wa-approval-command-auth-intent-chat-1",
     chatId,
     accountId: "sender",
-    from: "66378837028965@lid",
+    from: "90000000000001@lid",
     text: `orkestr connect approve ${created.challenge.approveCode}`,
   }, env);
   const listed = await listPairingChallenges({ env, includeExpired: true });
@@ -9314,7 +9410,7 @@ test("whatsapp approval command rejects parent auth intent from wrong account", 
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-approve-auth-intent-wrong-account-"));
   const env = externalBridgeEnv(home);
   const instanceId = "82f83473-4fce-4c63-ae22-08d3cd0c148a";
-  const chatId = "120363428493624197@g.us";
+  const chatId = "120363400000000012@g.us";
   const connectId = "connect-firat-google-wrong-account";
   const created = await createPairingChallenge({
     env,
@@ -9344,7 +9440,7 @@ test("whatsapp approval command rejects parent auth intent from wrong account", 
     eventId: "wa-approval-command-auth-intent-chat-wrong-account-1",
     chatId,
     accountId: "other-account",
-    from: "66378837028965@lid",
+    from: "90000000000001@lid",
     text: `orkestr connect approve ${created.challenge.approveCode}`,
   }, env);
   const listed = await listPairingChallenges({ env, includeExpired: true });

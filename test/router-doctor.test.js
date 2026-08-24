@@ -61,8 +61,8 @@ test("WhatsApp router doctor treats runtime account aliases as ready", async () 
       state: "paired",
       ready: true,
       accounts: [{
-        id: "905555154214",
-        accountId: "905555154214",
+        id: "15550100002",
+        accountId: "15550100002",
         runtimeAccountId: "responder",
         legacyRoleAliases: ["responder"],
         ready: true,
