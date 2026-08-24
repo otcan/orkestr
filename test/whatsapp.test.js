@@ -9860,10 +9860,18 @@ test("whatsapp doctor skips optional idle accounts in global health", async () =
     "WHATSAPP_LOCAL_DEFAULT_RESPONDER_ACCOUNT_ID",
     "ORKESTR_CODEX_BIN",
     "ORKESTR_RECOVER_RUNNING_ON_START",
+    "WHATSAPP_BRIDGE_MODE",
+    "ORKESTR_WHATSAPP_EXTERNAL_BRIDGE_ENABLED",
+    "WHATSAPP_EXTERNAL_BRIDGE_ENABLED",
+    "WHATSAPP_BRIDGE_URL",
   ].map((key) => [key, process.env[key]]));
   process.env.ORKESTR_HOME = home;
   delete process.env.ORKESTR_AUTH_REQUIRED;
   delete process.env.ORKESTR_PUBLIC_HTTPS_URL;
+  process.env.WHATSAPP_BRIDGE_MODE = "local";
+  delete process.env.ORKESTR_WHATSAPP_EXTERNAL_BRIDGE_ENABLED;
+  delete process.env.WHATSAPP_EXTERNAL_BRIDGE_ENABLED;
+  delete process.env.WHATSAPP_BRIDGE_URL;
   process.env.ORKESTR_WHATSAPP_ACCOUNT_IDS = "sender,responder";
   delete process.env.WHATSAPP_LOCAL_ACCOUNT_IDS;
   process.env.ORKESTR_WHATSAPP_STRICT_ACCOUNT_IDS = "1";
@@ -9939,10 +9947,18 @@ test("whatsapp doctor fails selected QR-required accounts", async () => {
     "ORKESTR_WHATSAPP_AUTOSTART_ACCOUNT_IDS",
     "ORKESTR_CODEX_BIN",
     "ORKESTR_RECOVER_RUNNING_ON_START",
+    "WHATSAPP_BRIDGE_MODE",
+    "ORKESTR_WHATSAPP_EXTERNAL_BRIDGE_ENABLED",
+    "WHATSAPP_EXTERNAL_BRIDGE_ENABLED",
+    "WHATSAPP_BRIDGE_URL",
   ].map((key) => [key, process.env[key]]));
   process.env.ORKESTR_HOME = home;
   delete process.env.ORKESTR_AUTH_REQUIRED;
   delete process.env.ORKESTR_PUBLIC_HTTPS_URL;
+  process.env.WHATSAPP_BRIDGE_MODE = "local";
+  delete process.env.ORKESTR_WHATSAPP_EXTERNAL_BRIDGE_ENABLED;
+  delete process.env.WHATSAPP_EXTERNAL_BRIDGE_ENABLED;
+  delete process.env.WHATSAPP_BRIDGE_URL;
   process.env.ORKESTR_WHATSAPP_ACCOUNT_IDS = "responder";
   process.env.ORKESTR_WHATSAPP_AUTOSTART = "0";
   process.env.WHATSAPP_LOCAL_AUTOSTART = "0";
@@ -9989,11 +10005,19 @@ test("whatsapp bridge injection ignores cross-account outbound text echoes", asy
   const priorBridgeToken = process.env.ORKESTR_WHATSAPP_BRIDGE_TOKEN;
   const priorAccountIds = process.env.ORKESTR_WHATSAPP_ACCOUNT_IDS;
   const priorConfirmation = process.env.ORKESTR_WHATSAPP_SEND_CONFIRMATION_REQUIRED;
+  const priorBridgeMode = process.env.WHATSAPP_BRIDGE_MODE;
+  const priorExternalBridge = process.env.ORKESTR_WHATSAPP_EXTERNAL_BRIDGE_ENABLED;
+  const priorLegacyExternalBridge = process.env.WHATSAPP_EXTERNAL_BRIDGE_ENABLED;
+  const priorBridgeUrl = process.env.WHATSAPP_BRIDGE_URL;
   process.env.ORKESTR_HOME = home;
   process.env.ORKESTR_AUTH_REQUIRED = "1";
   process.env.ORKESTR_WHATSAPP_BRIDGE_TOKEN = "bridge-e2e-secret";
   process.env.ORKESTR_WHATSAPP_ACCOUNT_IDS = "sender,responder";
   process.env.ORKESTR_WHATSAPP_SEND_CONFIRMATION_REQUIRED = "0";
+  process.env.WHATSAPP_BRIDGE_MODE = "local";
+  delete process.env.ORKESTR_WHATSAPP_EXTERNAL_BRIDGE_ENABLED;
+  delete process.env.WHATSAPP_EXTERNAL_BRIDGE_ENABLED;
+  delete process.env.WHATSAPP_BRIDGE_URL;
   const chatId = "chat-bridge-inject-echo@g.us";
   const text = "The push is done. I’ll check that the workspace is clean.\n\ndbg: m:gpt-5.5/xh";
   const sent = [];
@@ -10049,6 +10073,14 @@ test("whatsapp bridge injection ignores cross-account outbound text echoes", asy
     else process.env.ORKESTR_WHATSAPP_ACCOUNT_IDS = priorAccountIds;
     if (priorConfirmation === undefined) delete process.env.ORKESTR_WHATSAPP_SEND_CONFIRMATION_REQUIRED;
     else process.env.ORKESTR_WHATSAPP_SEND_CONFIRMATION_REQUIRED = priorConfirmation;
+    if (priorBridgeMode === undefined) delete process.env.WHATSAPP_BRIDGE_MODE;
+    else process.env.WHATSAPP_BRIDGE_MODE = priorBridgeMode;
+    if (priorExternalBridge === undefined) delete process.env.ORKESTR_WHATSAPP_EXTERNAL_BRIDGE_ENABLED;
+    else process.env.ORKESTR_WHATSAPP_EXTERNAL_BRIDGE_ENABLED = priorExternalBridge;
+    if (priorLegacyExternalBridge === undefined) delete process.env.WHATSAPP_EXTERNAL_BRIDGE_ENABLED;
+    else process.env.WHATSAPP_EXTERNAL_BRIDGE_ENABLED = priorLegacyExternalBridge;
+    if (priorBridgeUrl === undefined) delete process.env.WHATSAPP_BRIDGE_URL;
+    else process.env.WHATSAPP_BRIDGE_URL = priorBridgeUrl;
   }
 });
 
@@ -10059,11 +10091,19 @@ test("whatsapp bridge send-media accepts inline attachments and stages them loca
   const priorBridgeToken = process.env.ORKESTR_WHATSAPP_BRIDGE_TOKEN;
   const priorAccountIds = process.env.ORKESTR_WHATSAPP_ACCOUNT_IDS;
   const priorConfirmation = process.env.ORKESTR_WHATSAPP_SEND_CONFIRMATION_REQUIRED;
+  const priorBridgeMode = process.env.WHATSAPP_BRIDGE_MODE;
+  const priorExternalBridge = process.env.ORKESTR_WHATSAPP_EXTERNAL_BRIDGE_ENABLED;
+  const priorLegacyExternalBridge = process.env.WHATSAPP_EXTERNAL_BRIDGE_ENABLED;
+  const priorBridgeUrl = process.env.WHATSAPP_BRIDGE_URL;
   process.env.ORKESTR_HOME = home;
   process.env.ORKESTR_AUTH_REQUIRED = "1";
   process.env.ORKESTR_WHATSAPP_BRIDGE_TOKEN = "bridge-inline-secret";
   process.env.ORKESTR_WHATSAPP_ACCOUNT_IDS = "responder";
   process.env.ORKESTR_WHATSAPP_SEND_CONFIRMATION_REQUIRED = "0";
+  process.env.WHATSAPP_BRIDGE_MODE = "local";
+  delete process.env.ORKESTR_WHATSAPP_EXTERNAL_BRIDGE_ENABLED;
+  delete process.env.WHATSAPP_EXTERNAL_BRIDGE_ENABLED;
+  delete process.env.WHATSAPP_BRIDGE_URL;
   const chatId = "chat-bridge-inline-media@g.us";
   const body = "inline report payload";
   const sent = [];
@@ -10127,6 +10167,14 @@ test("whatsapp bridge send-media accepts inline attachments and stages them loca
     else process.env.ORKESTR_WHATSAPP_ACCOUNT_IDS = priorAccountIds;
     if (priorConfirmation === undefined) delete process.env.ORKESTR_WHATSAPP_SEND_CONFIRMATION_REQUIRED;
     else process.env.ORKESTR_WHATSAPP_SEND_CONFIRMATION_REQUIRED = priorConfirmation;
+    if (priorBridgeMode === undefined) delete process.env.WHATSAPP_BRIDGE_MODE;
+    else process.env.WHATSAPP_BRIDGE_MODE = priorBridgeMode;
+    if (priorExternalBridge === undefined) delete process.env.ORKESTR_WHATSAPP_EXTERNAL_BRIDGE_ENABLED;
+    else process.env.ORKESTR_WHATSAPP_EXTERNAL_BRIDGE_ENABLED = priorExternalBridge;
+    if (priorLegacyExternalBridge === undefined) delete process.env.WHATSAPP_EXTERNAL_BRIDGE_ENABLED;
+    else process.env.WHATSAPP_EXTERNAL_BRIDGE_ENABLED = priorLegacyExternalBridge;
+    if (priorBridgeUrl === undefined) delete process.env.WHATSAPP_BRIDGE_URL;
+    else process.env.WHATSAPP_BRIDGE_URL = priorBridgeUrl;
   }
 });
 
@@ -10137,11 +10185,19 @@ test("whatsapp bridge injection can enter through responder while routing as sen
   const priorBridgeToken = process.env.ORKESTR_WHATSAPP_BRIDGE_TOKEN;
   const priorAccountIds = process.env.ORKESTR_WHATSAPP_ACCOUNT_IDS;
   const priorAutorun = process.env.ORKESTR_WHATSAPP_API_AGENT_AUTORUN;
+  const priorBridgeMode = process.env.WHATSAPP_BRIDGE_MODE;
+  const priorExternalBridge = process.env.ORKESTR_WHATSAPP_EXTERNAL_BRIDGE_ENABLED;
+  const priorLegacyExternalBridge = process.env.WHATSAPP_EXTERNAL_BRIDGE_ENABLED;
+  const priorBridgeUrl = process.env.WHATSAPP_BRIDGE_URL;
   process.env.ORKESTR_HOME = home;
   process.env.ORKESTR_AUTH_REQUIRED = "1";
   process.env.ORKESTR_WHATSAPP_BRIDGE_TOKEN = "bridge-e2e-secret";
   process.env.ORKESTR_WHATSAPP_ACCOUNT_IDS = "sender,responder";
   process.env.ORKESTR_WHATSAPP_API_AGENT_AUTORUN = "0";
+  process.env.WHATSAPP_BRIDGE_MODE = "local";
+  delete process.env.ORKESTR_WHATSAPP_EXTERNAL_BRIDGE_ENABLED;
+  delete process.env.WHATSAPP_EXTERNAL_BRIDGE_ENABLED;
+  delete process.env.WHATSAPP_BRIDGE_URL;
   const chatId = "chat-bridge-inject-route@g.us";
   await createThread({
     id: "bridge-inject-route-thread",
@@ -10199,6 +10255,14 @@ test("whatsapp bridge injection can enter through responder while routing as sen
     else process.env.ORKESTR_WHATSAPP_ACCOUNT_IDS = priorAccountIds;
     if (priorAutorun === undefined) delete process.env.ORKESTR_WHATSAPP_API_AGENT_AUTORUN;
     else process.env.ORKESTR_WHATSAPP_API_AGENT_AUTORUN = priorAutorun;
+    if (priorBridgeMode === undefined) delete process.env.WHATSAPP_BRIDGE_MODE;
+    else process.env.WHATSAPP_BRIDGE_MODE = priorBridgeMode;
+    if (priorExternalBridge === undefined) delete process.env.ORKESTR_WHATSAPP_EXTERNAL_BRIDGE_ENABLED;
+    else process.env.ORKESTR_WHATSAPP_EXTERNAL_BRIDGE_ENABLED = priorExternalBridge;
+    if (priorLegacyExternalBridge === undefined) delete process.env.WHATSAPP_EXTERNAL_BRIDGE_ENABLED;
+    else process.env.WHATSAPP_EXTERNAL_BRIDGE_ENABLED = priorLegacyExternalBridge;
+    if (priorBridgeUrl === undefined) delete process.env.WHATSAPP_BRIDGE_URL;
+    else process.env.WHATSAPP_BRIDGE_URL = priorBridgeUrl;
   }
 });
 
