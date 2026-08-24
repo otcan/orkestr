@@ -287,6 +287,7 @@ async function whatsappApprovalPriorRoutedBindingAllowed({ input = {}, state = {
           accountId: pickString(expectedAccountId, eventAccountId),
           from: pickString(event.from),
           fromMe: false,
+          env,
         });
       } catch {
         return false;

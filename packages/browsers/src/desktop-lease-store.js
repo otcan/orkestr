@@ -163,7 +163,7 @@ export class DesktopLeaseStore {
       .sort((left, right) => Date.parse(right.acquiredAt || "") - Date.parse(left.acquiredAt || ""))[0] || null;
   }
 
-  async acquire(lease, { force = false, releaseReason = "superseded" } = {}) {
+  async acquire(lease, { force = false, releaseReason = "superseded", recoveryCandidate = null } = {}) {
     const normalized = normalizeLease(lease);
     if (!normalized) {
       const error = new Error("invalid_desktop_lease");
@@ -173,7 +173,12 @@ export class DesktopLeaseStore {
     return this.mutateState((state) => {
       const active = state.desktopLeases.find((item) => item.desktopSlug === normalized.desktopSlug && item.ownerUserId === normalized.ownerUserId && !item.releasedAt) || null;
       const now = nowIso();
-      if (active && active.threadId !== normalized.threadId && !force) return { ok: false, conflict: active, lease: null };
+      const recoveryMatches = active && recoveryCandidate &&
+        active.id === String(recoveryCandidate.id || "").trim() &&
+        active.threadId === String(recoveryCandidate.threadId || "").trim() &&
+        String(active.heartbeatAt || "") === String(recoveryCandidate.heartbeatAt || "") &&
+        String(active.expiresAt || "") === String(recoveryCandidate.expiresAt || "");
+      if (active && active.threadId !== normalized.threadId && !force && !recoveryMatches) return { ok: false, conflict: active, lease: null };
       if (active && active.threadId === normalized.threadId) {
         Object.assign(active, {
           ...active,
@@ -187,7 +192,7 @@ export class DesktopLeaseStore {
           fencingToken: active.fencingToken,
           fencingVersion: active.fencingVersion,
         });
-        return { ok: true, lease: active, renewed: true, previousLease: null };
+        return { ok: true, lease: active, renewed: true, recovered: false, previousLease: null };
       }
       if (active) Object.assign(active, { releasedAt: now, releaseReason, updatedAt: now });
       state.fencingCounter = Math.max(0, Number(state.fencingCounter || 0) || 0) + 1;
@@ -199,7 +204,7 @@ export class DesktopLeaseStore {
         fencingToken: randomUUID(),
         fencingVersion: state.fencingCounter,
       });
-      return { ok: true, lease: state.desktopLeases[0], renewed: false, previousLease: active || null };
+      return { ok: true, lease: state.desktopLeases[0], renewed: false, recovered: Boolean(active && recoveryMatches), previousLease: active || null };
     });
   }
 

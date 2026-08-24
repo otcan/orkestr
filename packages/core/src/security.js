@@ -1325,12 +1325,13 @@ export async function revokeSecuritySession(sessionId, { env = process.env, revo
   const config = await readSecurityConfig(env);
   const before = config.sessions || [];
   const revokedSession = before.find((session) => session.id === id) || null;
-  const sessions = before.filter((session) => session.id !== id);
+  const sessions = before.filter((session) => session.id !== id && session.parentSessionId !== id);
   if (sessions.length === before.length) throw challengeError("security_session_not_found", 404);
   await writeSecurityConfig({ ...config, sessions }, env);
   await appendEvent({
     type: "security_session_revoked",
     sessionId: id,
+    derivedSessionCount: before.length - sessions.length - 1,
     userId: revokedSession?.userId || null,
     role: revokedSession?.role || null,
     revokedBy,
@@ -1549,6 +1550,81 @@ export async function pairBrowser({ challengeId, userAgent = "", ip = "", env = 
   };
 }
 
+export async function deriveInstanceSecuritySession({
+  sourceSession = null,
+  instanceId = "",
+  userAgent = "",
+  ip = "",
+  env = process.env,
+} = {}) {
+  const sourceId = String(sourceSession?.id || "").trim();
+  const targetInstanceId = String(instanceId || "").trim();
+  if (!sourceId) throw challengeError("source_browser_session_required", 401);
+  if (!targetInstanceId) throw challengeError("instance_id_required", 400);
+  if (sourceSession?.shareId || normalizeAllowedActions(sourceSession?.allowedActions || []).length) {
+    throw challengeError("source_browser_session_scope_denied", 403);
+  }
+  if (String(sourceSession?.role || "").trim().toLowerCase() !== "admin") {
+    throw challengeError("admin_required", 403);
+  }
+  const config = await readSecurityConfig(env);
+  const now = Date.now();
+  const persistedSource = (config.sessions || []).find((session) =>
+    session.id === sourceId && Date.parse(session.expiresAt || "") > now,
+  );
+  if (!persistedSource || persistedSource.parentSessionId) {
+    throw challengeError("source_browser_session_invalid", 401);
+  }
+  if (
+    normalizeUserId(persistedSource.userId) !== normalizeUserId(sourceSession.userId) ||
+    String(persistedSource.role || "admin").trim().toLowerCase() !== "admin"
+  ) {
+    throw challengeError("source_browser_session_mismatch", 403);
+  }
+  const token = randomToken(32);
+  const createdAt = nowIso();
+  const expiresAt = new Date(Math.min(
+    Date.parse(persistedSource.expiresAt || "") || now + sessionTtlMs,
+    now + sessionTtlMs,
+  )).toISOString();
+  const session = {
+    id: randomToken(10),
+    challengeId: persistedSource.challengeId || "",
+    parentSessionId: persistedSource.id,
+    instanceId: targetInstanceId,
+    tokenHash: sha256(token),
+    userId: normalizeUserId(persistedSource.userId || defaultAdminUser(env).id),
+    role: "admin",
+    userAgent: String(userAgent || persistedSource.userAgent || "").slice(0, 240),
+    createdAt,
+    lastAccessedAt: createdAt,
+    lastIp: String(ip || "").slice(0, 80),
+    shareId: "",
+    appSlug: "",
+    allowedActions: [],
+    authIntent: null,
+    expiresAt,
+  };
+  await writeSecurityConfig({
+    ...config,
+    sessions: [
+      ...(config.sessions || []).filter((item) => !(
+        item.parentSessionId === persistedSource.id && item.instanceId === targetInstanceId
+      )),
+      session,
+    ],
+  }, env);
+  await appendEvent({
+    type: "security_instance_session_derived",
+    sessionId: session.id,
+    parentSessionId: persistedSource.id,
+    instanceId: targetInstanceId,
+    userId: session.userId,
+    role: session.role,
+  }, env).catch(() => {});
+  return { ok: true, token, session: publicSession(session) };
+}
+
 export async function verifySecurityToken(token, env = process.env, options = {}) {
   return Boolean(await securitySessionForToken(token, env, options));
 }
@@ -1563,6 +1639,16 @@ export async function securitySessionForToken(token, env = process.env, options 
     Date.parse(item.expiresAt || "") > now && item.tokenHash === hash,
   );
   if (!session) return null;
+  if (session.parentSessionId) {
+    const parent = (config.sessions || []).find((item) =>
+      item.id === session.parentSessionId &&
+      !item.parentSessionId &&
+      Date.parse(item.expiresAt || "") > now &&
+      normalizeUserId(item.userId) === normalizeUserId(session.userId) &&
+      String(item.role || "admin").trim().toLowerCase() === String(session.role || "admin").trim().toLowerCase(),
+    );
+    if (!parent) return null;
+  }
   if (options?.touch !== false) await touchSecuritySession(config, session, { env, request: options?.request }).catch(() => {});
   return {
     ...session,
@@ -1659,14 +1745,34 @@ function sessionMatchesBrokerAppRoute(session = {}, route = null) {
 
 export function securitySessionReturnScope(session = null, returnPath = "", options = {}) {
   const route = googleWorkspaceConnectReturnRouteFromUrl(returnPath || "");
+  const canonicalRoute = canonicalInstanceReturnRoute(returnPath || "");
   const expectedInstanceId = String(options.instanceId || "").trim();
   const hasSession = Boolean(session?.id);
-  if (!route) {
+  if (!route && !canonicalRoute) {
     return {
       scoped: false,
       validForReturn: hasSession,
       reason: hasSession ? "session_valid" : "session_missing",
     };
+  }
+  if (canonicalRoute) {
+    const result = {
+      scoped: true,
+      kind: "canonical_instance",
+      instanceId: expectedInstanceId,
+      publicRef: canonicalRoute.publicRef,
+      validForReturn: false,
+      reason: "session_missing",
+    };
+    if (!hasSession) return result;
+    if (session.shareId) return { ...result, reason: "share_session_not_valid_for_instance_app" };
+    if (!expectedInstanceId) return { ...result, reason: "instance_missing" };
+    if (String(session.instanceId || "").trim() !== expectedInstanceId) return { ...result, reason: "instance_mismatch" };
+    const allowedActions = Array.isArray(session.allowedActions) ? session.allowedActions : [];
+    if (allowedActions.some((action) => String(action || "").startsWith("orkestr_auth."))) {
+      return { ...result, reason: "auth_intent_session_not_valid_for_instance_app" };
+    }
+    return { ...result, validForReturn: true, reason: "session_valid" };
   }
   const instanceId = route.instanceId || expectedInstanceId;
   const result = {
@@ -1686,6 +1792,19 @@ export function securitySessionReturnScope(session = null, returnPath = "", opti
     return { ...result, reason: "google_connect_scope_mismatch" };
   }
   return { ...result, validForReturn: true, reason: "session_valid" };
+}
+
+function canonicalInstanceReturnRoute(returnPath = "") {
+  let parsed;
+  try {
+    parsed = new URL(String(returnPath || ""), "http://orkestr.local");
+  } catch {
+    return null;
+  }
+  if (parsed.origin !== "http://orkestr.local") return null;
+  const parts = parsed.pathname.split("/").filter(Boolean);
+  if (parts[0] !== "instance" || !/^ins_[A-Za-z0-9_-]{22}$/.test(String(parts[1] || ""))) return null;
+  return { publicRef: parts[1] };
 }
 
 function sessionCreatedAtMs(session = {}) {
@@ -1728,7 +1847,18 @@ async function securitySessionForRequest(request, env = process.env) {
 
 function isAllowedBeforePairing(request) {
   const method = String(request?.method || "GET").toUpperCase();
-  const url = String(request?.originalUrl || request?.url || "").split("?")[0];
+  const rawUrl = String(request?.originalUrl || request?.url || "").split("?")[0];
+  let url = rawUrl;
+  try {
+    const parts = new URL(rawUrl || "/", "http://orkestr.local").pathname
+      .split("/")
+      .filter(Boolean);
+    if (decodeURIComponent(parts[0] || "") === "instance" && parts[1]) {
+      url = `/${parts.slice(2).map((part) => decodeURIComponent(part)).join("/")}`;
+    }
+  } catch {
+    // Canonical parsing fails closed later; keep the original path here.
+  }
   if (url.startsWith("/desktop/")) return false;
   if (!url.startsWith("/api/") && !url.startsWith("/oauth/")) return true;
   if (url.startsWith("/oauth/")) return true;
@@ -1749,11 +1879,22 @@ function isAllowedBeforePairing(request) {
   if (method === "POST" && url === "/api/connectors/whatsapp/bridge/repair/send-email") return true;
   if (method === "GET" && /^\/api\/setup\/security\/challenges\/[^/]+$/.test(url)) return true;
   if (method === "POST" && url === "/api/setup/security/pair") return true;
+  // Logout must remain reachable when the browser presents an expired or
+  // already-revoked cookie so the response can remove every cookie variant.
+  if (method === "POST" && url === "/api/setup/security/logout") return true;
   return false;
 }
 
 export async function authorizeHttpRequest(request, env = process.env) {
   const status = await securityStatus(env);
+  // This marker is set only by the server after validating an explicitly
+  // enabled, exact-origin request arriving from the local reverse proxy.
+  if (request?.orkestrTrustedOperatorProxy === true) return {
+    ok: true,
+    status,
+    principal: adminPrincipal(defaultAdminUser(env)),
+    machineAuth: "trusted_operator_proxy",
+  };
   const shareAuth = String(request?.url || "").startsWith("/desktop/")
     ? await authorizeDesktopShareHttpRequest(request, env).catch((error) => ({
         ok: false,
@@ -1886,6 +2027,11 @@ function normalizeCookiePath(value = "/") {
 export function instanceAppSessionCookiePath(instanceId = "") {
   const id = String(instanceId || "").trim();
   return id ? `/i/${encodeURIComponent(id)}/app` : "/";
+}
+
+export function canonicalInstanceAppSessionCookiePath(instancePublicRef = "") {
+  const ref = String(instancePublicRef || "").trim();
+  return ref ? `/instance/${encodeURIComponent(ref)}` : "/";
 }
 
 export function clearSessionCookieHeaders(env = process.env, options = {}) {

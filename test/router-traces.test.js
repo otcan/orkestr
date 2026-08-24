@@ -130,3 +130,34 @@ test("router trace suppresses watcher alerts for retryable WhatsApp mirror failu
   assert.equal(traces[0].lastError, "whatsapp_local_bridge_not_ready");
   assert.equal(alerts.total, 0);
 });
+
+test("router trace preserves redacted terminal denial evidence", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-router-traces-wa-denial-"));
+  const env = { ORKESTR_HOME: home };
+  await recordRouterTraceEvent({
+    connector: "whatsapp",
+    accountId: "wa-receiver",
+    chatId: "synthetic@g.us",
+    sourceEventId: "denied-event-1",
+    threadId: "thread-denied",
+    phase: "skipped",
+    reason: "inbound_security_denied",
+    terminal: true,
+    failureCode: "whatsapp_inbound_sender_denied",
+    classification: "host_execution",
+    effectiveRole: "trusted",
+    policyRevision: "policy-7",
+    bindingRevision: "binding-9",
+    retryable: false,
+    remediation: "Verify an owner alias, then use explicit replay.",
+  }, env);
+
+  const trace = (await listRouterTraces({ threadId: "thread-denied" }, env))[0];
+  const metrics = await routerTraceMetrics(env);
+  assert.equal(trace.failureCode, "whatsapp_inbound_sender_denied");
+  assert.equal(trace.classification, "host_execution");
+  assert.equal(trace.effectiveRole, "trusted");
+  assert.equal(trace.retryable, false);
+  assert.match(trace.diagnostics.remediation, /explicit replay/);
+  assert.equal(metrics.terminalDenied, 1);
+});

@@ -29,6 +29,10 @@ import {
   whatsappBindingPrecedence,
 } from "./whatsapp-binding-registry.js";
 import { whatsappWorkerHealth } from "./whatsapp-worker-client.js";
+import {
+  dualWriteWhatsAppParticipantIdentity,
+  whatsappParticipantIdentityStatus,
+} from "./whatsapp-participant-identity.js";
 
 function pickString(...values) {
   for (const value of values) {
@@ -433,7 +437,7 @@ function normalizeBindingAcl(input = {}, current = {}) {
   };
 }
 
-function normalizeBindingPatch(thread = {}, input = {}) {
+function normalizeBindingPatch(thread = {}, input = {}, env = process.env) {
   const current = thread?.binding && typeof thread.binding === "object" ? thread.binding : {};
   const responderAccountId = pickString(
     input.replyAccountId,
@@ -492,6 +496,9 @@ function normalizeBindingPatch(thread = {}, input = {}) {
     authorizedContactIds: listInput(input.authorizedContactIds, current.authorizedContactIds || []),
     authorizedContactAliases: listInput(input.authorizedContactAliases, current.authorizedContactAliases || []),
     inboundSecurity,
+    participantIdentityV2: input.participantIdentityV2 && typeof input.participantIdentityV2 === "object" && !Array.isArray(input.participantIdentityV2)
+      ? input.participantIdentityV2
+      : current.participantIdentityV2 || null,
     additionalParticipantsEnabled,
     additionalParticipantIds,
     additionalParticipantLabels: input.additionalParticipantLabels && typeof input.additionalParticipantLabels === "object" && !Array.isArray(input.additionalParticipantLabels)
@@ -504,6 +511,7 @@ function normalizeBindingPatch(thread = {}, input = {}) {
     acl: normalizeBindingAcl(input, current),
     updatedAt: new Date().toISOString(),
   };
+  return dualWriteWhatsAppParticipantIdentity(binding, env);
 }
 
 export async function upsertWhatsAppThreadBinding(input = {}, env = process.env) {
@@ -524,7 +532,7 @@ export async function upsertWhatsAppThreadBinding(input = {}, env = process.env)
     error.statusCode = 404;
     throw error;
   }
-  const binding = normalizeBindingPatch(thread, input);
+  const binding = normalizeBindingPatch(thread, input, env);
   const updated = await updateThread(thread.id, {
     binding,
     bindingName: binding.displayName,
@@ -607,6 +615,7 @@ export function normalizeWhatsAppBinding(input = {}, { accounts = [], env = proc
     responderAccountId,
     ...(responderAccount ? whatsappAccountLookupKeys(responderAccount, env) : []),
   ]);
+  const participantIdentity = whatsappParticipantIdentityStatus(binding, env);
   return {
     id: bindingId,
     bindingId,
@@ -641,6 +650,9 @@ export function normalizeWhatsAppBinding(input = {}, { accounts = [], env = proc
     inboundSecurity: binding.inboundSecurity && typeof binding.inboundSecurity === "object" && !Array.isArray(binding.inboundSecurity)
       ? binding.inboundSecurity
       : null,
+    participantIdentityV2: binding.participantIdentityV2 && typeof binding.participantIdentityV2 === "object" && !Array.isArray(binding.participantIdentityV2)
+      ? binding.participantIdentityV2
+      : null,
     authorizedContactIds: unique([
       pickString(binding.senderContactId),
       pickString(binding.ownerContactId),
@@ -651,6 +663,10 @@ export function normalizeWhatsAppBinding(input = {}, { accounts = [], env = proc
       ...(Array.isArray(binding.authorizedContactAliases) ? binding.authorizedContactAliases : []),
       ...(Array.isArray(binding.additionalParticipantIds) ? binding.additionalParticipantIds : []),
     ]),
+    participantIdentity,
+    ownerParticipantAliases: participantIdentity.roles.owner.flatMap((identity) => identity.aliases),
+    trustedParticipantAliases: participantIdentity.roles.trusted.flatMap((identity) => identity.aliases),
+    blockedParticipantAliases: participantIdentity.roles.blocked.flatMap((identity) => identity.aliases),
     accountIds,
     legacyFields: {
       senderAccountId: legacySenderAccountId || null,

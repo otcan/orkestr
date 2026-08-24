@@ -432,6 +432,7 @@ async function handleRequest(req, res, env = process.env, bridge = defaultBridge
       accountId: clean(body.accountId),
       chatId: clean(body.to || body.chatId),
       text: clean(body.text),
+      mentions: Array.isArray(body.mentions) ? body.mentions.map(clean).filter(Boolean) : [],
       attachments: paths.map((filePath) => ({ path: filePath })),
       crossAccountEchoSuppression: body.crossAccountEchoSuppression !== false,
       env,

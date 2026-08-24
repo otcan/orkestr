@@ -20,6 +20,8 @@ import {
 } from "../../browsers/src/browsers.js";
 import { operateManagedDesktop } from "../../browsers/src/desktop-operator.js";
 import { acquireDesktopLease } from "../../browsers/src/desktop-leases.js";
+import { stoppedDesktopLeaseRecoveryState } from "../../browsers/src/desktop-access-warnings.js";
+import { issueDesktopCapability } from "../../browsers/src/desktop-capability-broker.js";
 import { getGmailMessage, listGmailMessages } from "../../connectors/src/gmail.js";
 import { resolveGoogleWorkspaceConnection } from "../../connectors/src/google-workspace-connections.js";
 import {
@@ -148,7 +150,7 @@ function automationDoctorOptions(context = {}, env = process.env) {
   const threadId = clean(context.thread?.id);
   return {
     connectorStatusProvider: (provider, connectorPrincipal = principal) => connectorAuthStatus(provider, env, { principal: connectorPrincipal }),
-    browserSessionsProvider: () => listBrowserSessions(env, { principal, threadId }),
+    browserSessionsProvider: () => listBrowserSessions(env, { principal, threadId, publicProjection: true }),
   };
 }
 
@@ -516,6 +518,7 @@ function safeLease(lease = null) {
     threadName: clean(lease.threadName || lease.ownerThreadLabel),
     mode: clean(lease.mode),
     stale: lease.stale === true,
+    expired: lease.expired === true,
     stealable: lease.stealable === true,
     acquiredAt: clean(lease.acquiredAt),
     heartbeatAt: clean(lease.heartbeatAt),
@@ -568,6 +571,7 @@ function publicDesktopRecord(session = {}) {
     leaseOwnerLabel: clean(session.leaseOwnerLabel),
     notes: clean(session.notes || session.purpose).slice(0, 1000),
     source: clean(session.source),
+    warnings: Array.isArray(session.warnings) ? session.warnings : [],
   };
 }
 
@@ -657,7 +661,7 @@ function desktopForSkill(skill = {}, desktops = [], env = process.env, args = {}
 
 async function safeDesktopInventory(principal = {}, thread = null, env = process.env) {
   try {
-    const payload = await listBrowserSessions(env, { principal, threadId: clean(thread?.id) });
+    const payload = await listBrowserSessions(env, { principal, threadId: clean(thread?.id), publicProjection: true });
     return {
       ok: payload?.ok !== false,
       source: clean(payload?.source),
@@ -678,20 +682,25 @@ async function safeDesktopInventory(principal = {}, thread = null, env = process
 
 async function ensureAgentDesktopLease(slug = "", principal = {}, thread = null, env = process.env) {
   if (!thread?.id) {
-    if (desktopAccessMode(env) !== "enforce") return null;
+    if (desktopAccessMode(env, { threadId: clean(thread?.id), desktopSlug: slug }) !== "enforce") return null;
     const error = new Error("desktop_thread_scope_required");
     error.statusCode = 403;
     throw error;
   }
+  const inventory = await listBrowserSessions(env, { principal, threadId: clean(thread.id), publicProjection: true }).catch(() => null);
+  const desktop = (inventory?.sessions || []).find((session) => clean(session?.slug || session?.id) === clean(slug));
+  const desktopState = stoppedDesktopLeaseRecoveryState(desktop?.status || desktop?.state);
   const acquired = await acquireDesktopLease(slug, {
     threadId: thread.id,
     threadName: clean(thread.title || thread.name || thread.id),
     mode: "exclusive",
     purpose: "tenant_api_agent",
-  }, env, { principal });
+    runId: clean(thread.runtime?.activeTurnId || thread.executor?.codexThreadId || `tenant-api:${thread.id}`),
+  }, env, { principal, allowStoppedLeaseRecovery: Boolean(desktopState), desktopState });
   if (!acquired?.ok) {
     const error = new Error(acquired?.error || "desktop_lease_failed");
     error.statusCode = 409;
+    error.desktopAccessWarnings = acquired?.warnings || [];
     throw error;
   }
   return acquired.lease;
@@ -850,6 +859,7 @@ async function runSkillAction(args = {}, principal = {}, thread = null, env = pr
       env,
       args,
       principal,
+      threadId: clean(thread?.id),
       action: `skill.${skill.id}.${action}`,
     });
     if (!resolved.ok) {
@@ -1808,6 +1818,7 @@ export async function runTenantApiAgentTool(name = "", args = {}, context = {}, 
         env,
         args,
         principal,
+        threadId: clean(thread?.id),
         action: "skill.desktop.operate",
       }) : { ok: false, error: "skill_not_found" };
       if (!resolved.ok) {
@@ -1831,6 +1842,7 @@ export async function runTenantApiAgentTool(name = "", args = {}, context = {}, 
         env,
         args: { ...args, target: slug },
         principal,
+        threadId: clean(thread?.id),
         action: "desktop.operate",
       });
       if (!resolved.ok) {
@@ -1847,6 +1859,13 @@ export async function runTenantApiAgentTool(name = "", args = {}, context = {}, 
       targetSelection = resolved.targetSelection;
     }
     const lease = await ensureAgentDesktopLease(slug, principal, thread, env);
+    const capability = await issueDesktopCapability({
+      principal,
+      threadId: clean(thread?.id),
+      fencingToken: clean(lease?.fencingToken),
+      audience: "managed-desktop-operator",
+      scope: ["click", "type", "navigate"].includes(clean(args.operation).toLowerCase()) ? "visible_interaction" : "observe",
+    }, env);
     const result = await operateManagedDesktop(slug, {
       operation: args.operation,
       url: args.url,
@@ -1857,7 +1876,12 @@ export async function runTenantApiAgentTool(name = "", args = {}, context = {}, 
       value: args.value,
       waitMs: args.waitMs,
       maxText: args.maxText,
-    }, env, { principal, threadId: clean(thread?.id), fencingToken: clean(lease?.fencingToken) });
+    }, env, {
+      principal,
+      threadId: clean(thread?.id),
+      fencingToken: clean(lease?.fencingToken),
+      desktopCapability: capability.capability,
+    });
     return { ...result, targetSelection };
   }
   if (tool === "orkestr_connect_workspace_runtime") {

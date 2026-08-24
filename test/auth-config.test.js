@@ -72,6 +72,28 @@ test("public URL config prefers explicit public app and auth URLs over legacy al
   assert.equal(urls.authHost, "auth.ops.example.test");
 });
 
+test("public URL config infers a shared cookie domain for distinct app and connect hosts", () => {
+  const urls = publicUrlConfig({
+    ORKESTR_PRIMARY_DOMAIN: "example.test",
+    ORKESTR_PUBLIC_APP_URL: "https://app.example.test",
+    ORKESTR_CONNECT_PUBLIC_URL: "https://connect.example.test",
+  });
+
+  assert.equal(urls.cookieDomain, "example.test");
+});
+
+test("explicit app URL wins over a legacy public connect URL", () => {
+  const urls = publicUrlConfig({
+    ORKESTR_PRIMARY_DOMAIN: "example.test",
+    ORKESTR_APP_URL: "https://app.example.test",
+    ORKESTR_PUBLIC_URL: "https://connect.example.test",
+    ORKESTR_CONNECT_PUBLIC_URL: "https://connect.example.test",
+  });
+
+  assert.equal(urls.appUrl, "https://app.example.test");
+  assert.equal(urls.cookieDomain, "example.test");
+});
+
 test("public URL identity diagnostics accept one hosted URL family", () => {
   const diagnostics = publicUrlIdentityDiagnostics({
     ORKESTR_PRIMARY_DOMAIN: "orkestr.example.test",

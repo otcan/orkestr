@@ -1,9 +1,16 @@
 import crypto from "node:crypto";
 import {
   ensureConnectorInboxEvent,
+  getConnectorInboxEvent,
   listConnectorInboxEvents,
   markConnectorInboxEvent,
 } from "./connector-inbox.js";
+import {
+  classifyConnectorInboxDelivery,
+  connectorInboxEventIsTerminal,
+  connectorInboxReplayEventId,
+  duplicateConnectorInboxOutcome,
+} from "./connector-inbox-outcomes.js";
 import { prepareConnectorInboxMediaDelivery } from "./connector-inbox-media.js";
 import { isRoutableWhatsAppConversationId } from "./whatsapp-identifiers.js";
 import { exactSecurityApproveChallengeId } from "../../core/src/raw-terminal-commands.js";
@@ -100,16 +107,23 @@ export async function deliverConnectorInboxEvent(event = {}, env = process.env, 
       signal: AbortSignal.timeout(Math.max(1000, Number(env.ORKESTR_CONNECTOR_INBOX_DELIVERY_TIMEOUT_MS || 60_000) || 60_000)),
     });
     const payload = await response.json().catch(() => ({}));
-    if (!response.ok || payload?.ok === false) {
-      const error = new Error(clean(payload?.error) || `connector_inbound_http_${response.status}`);
+    const classified = classifyConnectorInboxDelivery({ response, payload });
+    if (classified.state === "failed_retryable") {
+      const error = new Error(classified.failureCode || `connector_inbound_http_${response.status}`);
       error.statusCode = response.status;
+      error.deliveryClassification = classified;
+      error.deliveryPayload = payload;
       throw error;
     }
     return markConnectorInboxEvent(event.id, {
-      state: "delivered",
+      state: classified.state,
       attemptCount,
       nextAttemptAt: "",
-      error: "",
+      error: classified.state === "rejected_terminal" ? classified.failureCode : "",
+      outcome: classified.outcome,
+      httpStatus: classified.status,
+      retryable: classified.retryable,
+      failureCode: classified.failureCode,
       result: {
         target: route.target,
         routeMode: route.route?.routeMode || "local",
@@ -118,6 +132,23 @@ export async function deliverConnectorInboxEvent(event = {}, env = process.env, 
       },
     }, env);
   } catch (error) {
+    const classified = error?.deliveryClassification || classifyConnectorInboxDelivery({
+      error,
+      payload: error?.deliveryPayload || error?.payload || {},
+    });
+    if (classified.state === "rejected_terminal") {
+      return markConnectorInboxEvent(event.id, {
+        state: "rejected_terminal",
+        attemptCount,
+        nextAttemptAt: "",
+        error: classified.failureCode,
+        outcome: classified.outcome,
+        httpStatus: classified.status,
+        retryable: false,
+        failureCode: classified.failureCode,
+        result: error?.deliveryPayload ? { response: error.deliveryPayload } : event.result,
+      }, env);
+    }
     const terminal = attemptCount >= maxAttempts(env);
     const nextAttemptAt = terminal ? "" : new Date(Date.now() + retryDelayMs(attemptCount, env)).toISOString();
     return markConnectorInboxEvent(event.id, {
@@ -125,8 +156,51 @@ export async function deliverConnectorInboxEvent(event = {}, env = process.env, 
       attemptCount,
       nextAttemptAt,
       error: clean(error?.message) || "connector_inbound_delivery_failed",
+      outcome: "retryable_failure",
+      httpStatus: classified.status,
+      retryable: true,
+      failureCode: classified.failureCode,
     }, env);
   }
+}
+
+function duplicateInboxResponse(event = {}) {
+  const outcome = duplicateConnectorInboxOutcome(event);
+  const rejected = outcome === "duplicate_rejected";
+  return {
+    ok: !rejected,
+    duplicate: true,
+    rejected,
+    outcome,
+    state: event.state,
+    eventId: event.id,
+    attemptCount: event.attemptCount,
+    error: rejected ? event.error || event.failureCode || "connector_inbound_rejected" : "",
+    failureCode: rejected ? event.failureCode || event.error || "connector_inbound_rejected" : "",
+    retryable: false,
+    result: event.result,
+    ...securityApprovalResponse(event.result?.response || {}),
+  };
+}
+
+function deliveredInboxResponse(event = {}, { sourceEventId = "", attachmentRecovery = false } = {}) {
+  const response = event?.result?.response || {};
+  return {
+    ok: event?.state === "delivered",
+    queued: event?.state === "failed_retryable",
+    rejected: event?.state === "rejected_terminal",
+    outcome: event?.outcome || "",
+    eventId: event?.id || "",
+    sourceEventId,
+    attachmentRecovery,
+    state: event?.state || "unknown",
+    attemptCount: event?.attemptCount || 0,
+    error: event?.error || "",
+    failureCode: event?.failureCode || "",
+    retryable: event?.retryable,
+    result: event?.result || null,
+    ...securityApprovalResponse(response),
+  };
 }
 
 export async function routeWhatsAppInboundFromWorker(payload = {}, env = process.env, fetchImpl = fetch) {
@@ -143,7 +217,13 @@ export async function routeWhatsAppInboundFromWorker(payload = {}, env = process
     accountId: payload.accountId,
     conversationId,
     payload,
+    replayOfId: payload.connectorInboxReplay?.replayOfEventId,
+    replayId: payload.connectorInboxReplay?.replayId,
   }, env);
+  if (!ensured.created && ensured.event.state === "rejected_terminal") {
+    await markConnectorInboxEvent(ensured.event.id, { outcome: "duplicate_rejected", retryable: false }, env);
+    return duplicateInboxResponse({ ...ensured.event, outcome: "duplicate_rejected" });
+  }
   const previousAttachmentCount = attachmentCount(ensured.event?.payload);
   const currentAttachmentCount = attachmentCount(payload);
   const stagedForConnectorGateway = payload.attachmentsStagedForConnectorGateway === true;
@@ -173,30 +253,37 @@ export async function routeWhatsAppInboundFromWorker(payload = {}, env = process
       payload: deliveryPayload,
     }, env);
   }
-  if (!ensured.created && ensured.event.state === "delivered") {
-    return {
-      ok: true,
-      duplicate: true,
-      state: "delivered",
-      eventId: inboxId,
-      result: ensured.event.result,
-      ...securityApprovalResponse(ensured.event.result?.response || {}),
-    };
+  if (!ensured.created && connectorInboxEventIsTerminal(ensured.event)) {
+    await markConnectorInboxEvent(ensured.event.id, { outcome: "duplicate_accepted", retryable: false }, env);
+    return duplicateInboxResponse({ ...ensured.event, outcome: "duplicate_accepted" });
   }
   const delivered = await deliverConnectorInboxEvent(ensured.event, env, fetchImpl);
-  const response = delivered?.result?.response || {};
-  return {
-    ok: delivered?.state === "delivered",
-    queued: delivered?.state === "failed_retryable",
-    eventId: inboxId,
-    sourceEventId: inboxId === id ? "" : id,
-    attachmentRecovery: inboxId !== id,
-    state: delivered?.state || "unknown",
-    attemptCount: delivered?.attemptCount || 0,
-    error: delivered?.error || "",
-    result: delivered?.result || null,
-    ...securityApprovalResponse(response),
+  return deliveredInboxResponse(delivered, { sourceEventId: inboxId === id ? "" : id, attachmentRecovery: inboxId !== id });
+}
+
+export async function replayConnectorInboxEvent(sourceEventId = "", options = {}, env = process.env, fetchImpl = fetch) {
+  const source = await getConnectorInboxEvent(sourceEventId, env);
+  if (!source) throw Object.assign(new Error("connector_inbox_replay_source_missing"), { statusCode: 404 });
+  const uncertainDeadLetterAllowed = source.state === "dead_letter" && options.allowUncertainDeadLetter === true;
+  if (source.state !== "rejected_terminal" && !uncertainDeadLetterAllowed) {
+    throw Object.assign(new Error("connector_inbox_replay_source_not_rejected"), { statusCode: 409 });
+  }
+  const replayId = clean(options.replayId || options.idempotencyKey);
+  const eventId = connectorInboxReplayEventId(source.id, replayId);
+  const payload = {
+    ...source.payload,
+    eventId,
+    sourceEventId: source.id,
+    connectorInboxReplay: {
+      explicit: true,
+      replayId,
+      replayOfEventId: source.id,
+      requestedBy: clean(options.requestedBy || "operator"),
+      reason: clean(options.reason || "authorization_corrected"),
+    },
   };
+  const result = await routeWhatsAppInboundFromWorker(payload, env, fetchImpl);
+  return { ...result, explicitReplay: true, replayId, replayOfEventId: source.id };
 }
 
 export async function retryConnectorInbox(env = process.env, fetchImpl = fetch) {

@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { ensureConnectorOutboxJob, listConnectorOutboxJobs, readConnectorOutbox, releaseConnectorOutboxClaim } from "../packages/connectors/src/connector-outbox.js";
+import { whatsappParticipantIdentityStatus } from "../packages/connectors/src/whatsapp-participant-identity.js";
 import { doctorWhatsAppRouter } from "../packages/core/src/router-doctor.js";
 import { listRouterTraces, recordRouterTraceEvent } from "../packages/core/src/router-traces.js";
 import { appendThreadMessage, createThread, listThreadMessages, updateThread } from "../packages/core/src/threads.js";
@@ -78,7 +79,12 @@ test("WhatsApp router doctor records successful run telemetry unless delegated",
   const env = runtimeEnv(home);
   const thread = await createWhatsAppThread(env);
 
-  const report = await doctorWhatsAppRouter({ thread: thread.id, env, whatsappStatusFn: readyWhatsAppStatus });
+  const report = await doctorWhatsAppRouter({
+    thread: thread.id,
+    env,
+    whatsappStatusFn: readyWhatsAppStatus,
+    whatsappParticipantIdentityStatusFn: whatsappParticipantIdentityStatus,
+  });
   const events = await listEvents(env, 10);
   const recorded = events.find((event) => event.type === "router_doctor_whatsapp_run");
 
@@ -88,6 +94,67 @@ test("WhatsApp router doctor records successful run telemetry unless delegated",
   await doctorWhatsAppRouter({ thread: thread.id, env, whatsappStatusFn: readyWhatsAppStatus, recordRunEvent: false });
   const afterDelegatedRun = await listEvents(env, 10);
   assert.equal(afterDelegatedRun.filter((event) => event.type === "router_doctor_whatsapp_run").length, 1);
+});
+
+test("WhatsApp router doctor reports terminal denial classification and effective role", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-router-doctor-denial-"));
+  const env = runtimeEnv(home, { ORKESTR_WHATSAPP_PARTICIPANT_IDENTITY_V2: "1" });
+  const thread = await createWhatsAppThread(env);
+  await updateThread(thread.id, {
+    binding: {
+      ...thread.binding,
+      senderAccountId: "responder",
+      participantIdentityV2: {
+        version: 2,
+        accountId: "responder",
+        identities: [{
+          id: "synthetic-owner",
+          aliases: [{ kind: "phone", value: "+15550100077", verified: true }],
+        }],
+        grants: [{ identityId: "synthetic-owner", role: "owner" }],
+      },
+    },
+  }, env);
+  await recordRouterTraceEvent({
+    connector: "whatsapp",
+    accountId: "responder",
+    chatId: "chat-1",
+    sourceEventId: "denied-doctor-event",
+    threadId: thread.id,
+    phase: "received",
+  }, env);
+  await recordRouterTraceEvent({
+    connector: "whatsapp",
+    accountId: "responder",
+    chatId: "chat-1",
+    sourceEventId: "denied-doctor-event",
+    threadId: thread.id,
+    phase: "skipped",
+    reason: "inbound_security_denied",
+    terminal: true,
+    failureCode: "whatsapp_inbound_sender_denied",
+    classification: "host_execution",
+    effectiveRole: "trusted",
+    policyRevision: "policy-7",
+    bindingRevision: "binding-9",
+    retryable: false,
+    remediation: "Promote only a verified owner identity, then replay explicitly.",
+  }, env);
+
+  const report = await doctorWhatsAppRouter({
+    thread: thread.id,
+    env,
+    whatsappStatusFn: readyWhatsAppStatus,
+    whatsappParticipantIdentityStatusFn: whatsappParticipantIdentityStatus,
+  });
+  const denial = report.checks.find((check) => check.code === "whatsapp_inbound_terminal_denial");
+  assert.equal(report.ok, true);
+  assert.equal(denial.classification, "host_execution");
+  assert.equal(denial.effectiveRole, "trusted");
+  assert.equal(denial.retryable, false);
+  assert.match(denial.remediation, /replay explicitly/);
+  assert.deepEqual(report.threads[0].participantIdentity.roles.owner, { identities: 1, verifiedAliases: 1 });
+  assert.doesNotMatch(JSON.stringify(report.threads[0].participantIdentity), /15550100077/);
 });
 
 test("WhatsApp router doctor treats scoped tenant send bridge as ready", async () => {

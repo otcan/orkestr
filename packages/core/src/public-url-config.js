@@ -72,7 +72,7 @@ function cookieDomain(value = "") {
 
 export function publicUrlConfig(env = process.env) {
   const primaryDomain = hostFromValue(env.ORKESTR_PRIMARY_DOMAIN || env.ORKESTR_DOMAIN || "");
-  const explicitAppUrl = normalizeUrl(env.ORKESTR_PUBLIC_APP_URL || env.ORKESTR_PUBLIC_URL || env.ORKESTR_APP_URL || "");
+  const explicitAppUrl = normalizeUrl(env.ORKESTR_PUBLIC_APP_URL || env.ORKESTR_APP_URL || env.ORKESTR_PUBLIC_URL || "");
   const legacyHttpsUrl = normalizeUrl(env.ORKESTR_PUBLIC_HTTPS_URL || env.ORKESTR_HTTPS_URL || env.ORKESTR_TAILSCALE_HTTPS_NAME || "");
   const appHost = hostFromValue(env.ORKESTR_APP_HOST || hostnameFromUrl(explicitAppUrl) || "");
   const inferredAppUrl = explicitAppUrl || (appHost ? httpsUrlFromHost(appHost) : "");
@@ -85,9 +85,13 @@ export function publicUrlConfig(env = process.env) {
   const connectUrl = normalizeUrl(env.ORKESTR_CONNECT_PUBLIC_URL || "");
   const appUrlHost = hostnameFromUrl(appUrl);
   const authUrlHost = hostnameFromUrl(authUrl);
+  const connectUrlHost = hostnameFromUrl(connectUrl);
+  const separatedIdentityHost = [authUrlHost, connectUrlHost]
+    .filter(Boolean)
+    .some((host) => host !== appUrlHost);
   const configuredCookieDomain =
     cookieDomain(env.ORKESTR_COOKIE_DOMAIN || "") ||
-    (primaryDomain && appUrlHost && authUrlHost && appUrlHost !== authUrlHost ? primaryDomain : "");
+    (primaryDomain && appUrlHost && separatedIdentityHost ? primaryDomain : "");
 
   return {
     primaryDomain,

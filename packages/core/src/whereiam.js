@@ -273,8 +273,7 @@ function desktopActions(session = {}) {
   const control = session.control && typeof session.control === "object" ? session.control : {};
   const actions = new Set(["status"]);
   const openUrl = safeUrl(session.desk_url || session.url);
-  const cdpUrl = safeUrl(session.cdp_url || session.cdpUrl, { localOnly: true });
-  const controllable = Boolean(cdpUrl || control.start === true);
+  const controllable = control.start === true;
   if (openUrl || control.start === true) actions.add("open");
   if (control.prepare === true || control.health === true) actions.add("prepare");
   if (control.start === true) actions.add("start");
@@ -293,7 +292,6 @@ function desktopActions(session = {}) {
 
 function publicDesktopRecord(session = {}) {
   const slug = clean(session.slug || session.id);
-  const cdpUrl = safeUrl(session.cdp_url || session.cdpUrl, { localOnly: true });
   return {
     slug,
     id: slug,
@@ -302,9 +300,7 @@ function publicDesktopRecord(session = {}) {
     access: clean(session.access || "desktop"),
     state: clean(session.state || session.status || "unknown"),
     status: clean(session.status || session.state || "unknown"),
-    url: safeUrl(session.desk_url || session.url),
-    localControl: cdpUrl ? { cdpUrl, localOnly: true } : null,
-    debugPort: Number(session.debugPort || session.debug_port || 0) || null,
+    endpointRedacted: true,
     availableActions: desktopActions(session),
     control: {
       prepare: session.control?.prepare === true || session.control?.health === true,
@@ -324,12 +320,8 @@ function publicDesktopRecord(session = {}) {
 
 function configuredDesktopRecord(item = {}, settings = {}) {
   const slug = clean(item.slug || item.id);
-  const cdpUrl = safeUrl(item.cdpUrl || item.cdp_url, { localOnly: true });
   const availableActions = new Set(["status"]);
-  if (safeUrl(item.url || item.deskUrl || item.desk_url)) availableActions.add("open");
-  if (cdpUrl) {
-    for (const action of ["observe", "navigate", "click", "type", "extract"]) availableActions.add(action);
-  }
+  if (item.control?.start === true) for (const action of ["open", "observe", "navigate", "click", "type", "extract"]) availableActions.add(action);
   return {
     slug,
     id: slug,
@@ -338,9 +330,7 @@ function configuredDesktopRecord(item = {}, settings = {}) {
     access: clean(item.access || "desktop"),
     state: settings?.enabled === false || settings?.provisioned === false ? "not_provisioned" : clean(item.state || item.status || "known"),
     status: settings?.enabled === false || settings?.provisioned === false ? "not_provisioned" : clean(item.status || item.state || "known"),
-    url: safeUrl(item.url || item.deskUrl || item.desk_url),
-    localControl: cdpUrl ? { cdpUrl, localOnly: true } : null,
-    debugPort: Number(item.debugPort || item.debug_port || 0) || null,
+    endpointRedacted: true,
     availableActions: [...availableActions],
     control: {
       prepare: item.control?.prepare === true,
@@ -383,7 +373,7 @@ function mergeDesktopRecords(known = [], live = []) {
       label: clean(desktop.label) || clean(prior.label) || desktop.slug,
       notes: clean(desktop.notes) || clean(prior.notes),
       workspacePath: clean(desktop.workspacePath) || clean(prior.workspacePath),
-      localControl: desktop.localControl || prior.localControl || null,
+      endpointRedacted: true,
       availableActions: [...new Set([...(prior.availableActions || []), ...(desktop.availableActions || [])])],
     });
   }
@@ -399,7 +389,7 @@ async function desktopInventoryContext(principal = null, settings = {}, env = pr
   let error = "";
   let message = "";
   try {
-    payload = await cachedBrowserSessions(env, { principal, threadId, desktopPolicyRevision: access.revision });
+    payload = await cachedBrowserSessions(env, { principal, threadId, desktopPolicyRevision: access.revision, publicProjection: true });
     live = (payload?.sessions || []).map(publicDesktopRecord).filter((desktop) => desktop.slug);
   } catch (caught) {
     error = clean(caught?.message || caught || "desktop_inventory_failed");

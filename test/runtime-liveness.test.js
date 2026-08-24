@@ -200,6 +200,116 @@ test("runtime completion waits for the exact final connector acknowledgement", a
   assert.equal(thread.runtime.liveness.phase, "complete");
 });
 
+test("runtime final delivery keeps canonical delivery when duplicate final projection appears later", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-runtime-duplicate-final-delivery-"));
+  const env = { ORKESTR_HOME: home };
+  await createThread({
+    id: "runtime-duplicate-final-thread",
+    name: "Runtime duplicate final delivery",
+    executorId: "codex",
+    executor: { type: "codex", codexThreadId: "runtime-duplicate-generation" },
+    runtime: { runtimeGeneration: "runtime-duplicate-generation", activeTurnId: "runtime-duplicate-turn" },
+  }, env);
+
+  await markRuntimeFinalDeliveryPending("runtime-duplicate-final-thread", {
+    messageId: "assistant-final-canonical",
+    parentMessageId: "user-message-1",
+    runtimeGeneration: "runtime-duplicate-generation",
+    turnId: "runtime-duplicate-turn",
+    connector: "whatsapp",
+    chatId: "features@g.us",
+    accountId: "sender",
+  }, env);
+  await acknowledgeRuntimeFinalDelivery("runtime-duplicate-final-thread", {
+    messageId: "assistant-final-canonical",
+    deliveredAt: "2026-08-10T09:47:30.000Z",
+    outboxJobId: "outbox-canonical",
+    connectorMessageId: "wa-canonical",
+  }, env);
+
+  const duplicate = await markRuntimeFinalDeliveryPending("runtime-duplicate-final-thread", {
+    messageId: "assistant-final-unix-seconds-duplicate",
+    parentMessageId: "user-message-1",
+    runtimeGeneration: "runtime-duplicate-generation",
+    turnId: "runtime-duplicate-turn",
+    connector: "whatsapp",
+    chatId: "features@g.us",
+    accountId: "sender",
+  }, env);
+  const duplicateFailure = await recordRuntimeFinalDeliveryFailure("runtime-duplicate-final-thread", {
+    messageId: "assistant-final-unix-seconds-duplicate",
+    status: "failed_retryable",
+    error: "duplicate outbox failed after canonical delivery",
+  }, env);
+  const duplicateAck = await acknowledgeRuntimeFinalDelivery("runtime-duplicate-final-thread", {
+    messageId: "assistant-final-unix-seconds-duplicate",
+    deliveredAt: "2026-08-10T09:47:35.000Z",
+    outboxJobId: "outbox-duplicate",
+    connectorMessageId: "wa-duplicate",
+  }, env);
+  const thread = await getThread("runtime-duplicate-final-thread", env);
+
+  assert.equal(duplicate.duplicate, true);
+  assert.equal(duplicate.superseded, true);
+  assert.equal(duplicate.pending, false);
+  assert.equal(duplicateFailure.recorded, false);
+  assert.equal(duplicateFailure.reason, "final_delivery_already_delivered");
+  assert.equal(duplicateAck.acknowledged, true);
+  assert.equal(duplicateAck.duplicate, true);
+  assert.equal(thread.runtime.finalDelivery.messageId, "assistant-final-canonical");
+  assert.equal(thread.runtime.finalDelivery.status, "delivered");
+  assert.equal(thread.runtime.finalDelivery.connectorMessageId, "wa-canonical");
+  assert.deepEqual(thread.runtime.finalDelivery.supersededMessageIds, ["assistant-final-unix-seconds-duplicate"]);
+});
+
+test("runtime final delivery does not coalesce different turns in the same generation", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-runtime-generation-is-not-duplicate-"));
+  const env = { ORKESTR_HOME: home };
+  await createThread({
+    id: "runtime-generation-is-not-duplicate-thread",
+    name: "Runtime generation is not duplicate identity",
+    executorId: "codex",
+    executor: { type: "codex", codexThreadId: "runtime-shared-generation" },
+    runtime: { runtimeGeneration: "runtime-shared-generation", activeTurnId: "turn-2" },
+  }, env);
+
+  await markRuntimeFinalDeliveryPending("runtime-generation-is-not-duplicate-thread", {
+    messageId: "assistant-final-turn-1",
+    parentMessageId: "user-message-1",
+    runtimeGeneration: "runtime-shared-generation",
+    turnId: "turn-1",
+    connector: "whatsapp",
+    chatId: "features@g.us",
+    accountId: "sender",
+  }, env);
+  await acknowledgeRuntimeFinalDelivery("runtime-generation-is-not-duplicate-thread", {
+    messageId: "assistant-final-turn-1",
+    deliveredAt: "2026-08-10T09:47:30.000Z",
+    outboxJobId: "outbox-turn-1",
+    connectorMessageId: "wa-turn-1",
+  }, env);
+
+  const nextTurn = await markRuntimeFinalDeliveryPending("runtime-generation-is-not-duplicate-thread", {
+    messageId: "assistant-final-turn-2",
+    parentMessageId: "user-message-2",
+    runtimeGeneration: "runtime-shared-generation",
+    turnId: "turn-2",
+    connector: "whatsapp",
+    chatId: "features@g.us",
+    accountId: "sender",
+  }, env);
+  const thread = await getThread("runtime-generation-is-not-duplicate-thread", env);
+
+  assert.equal(nextTurn.pending, true);
+  assert.equal(nextTurn.duplicate, undefined);
+  assert.equal(thread.runtime.finalDelivery.messageId, "assistant-final-turn-2");
+  assert.equal(thread.runtime.finalDelivery.status, "pending");
+  assert.equal(thread.runtime.finalDelivery.turnId, "turn-2");
+  assert.equal(thread.runtime.finalDelivery.parentMessageId, "user-message-2");
+  assert.equal(thread.runtime.finalDelivery.connectorMessageId, undefined);
+  assert.equal(thread.runtime.finalDelivery.supersededMessageIds, undefined);
+});
+
 test("an old final acknowledgement cannot complete a newer turn", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-runtime-old-final-ack-"));
   const env = { ORKESTR_HOME: home };

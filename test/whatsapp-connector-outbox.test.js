@@ -96,6 +96,65 @@ test("whatsapp delivery terminalizes a tenant-scoped connector outbox job", asyn
   assert.equal(thread.runtime.liveness.completionStatus, "completed");
 });
 
+test("whatsapp suppresses a superseded Codex final while a safe reset is between generations", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-superseded-final-"));
+  const runtimeEnv = env(home);
+  await writeConnectorConfig("whatsapp", { bridgeMode: "external", bridgeUrl: "http://wa.local" }, runtimeEnv);
+  const oldGeneration = "safe-reset-old-generation";
+  await createThread({
+    id: "thread-wa-superseded-final",
+    ownerUserId: "tenant-a",
+    name: "WA Superseded Final",
+    executor: { type: "codex" },
+    runtime: {
+      runtimeKind: "codex-app-server",
+      safeReset: { codexThreadId: oldGeneration },
+    },
+    binding: {
+      connector: "whatsapp",
+      chatId: "safe-reset-chat",
+      responderAccountId: "responder",
+      outboundAccountId: "responder",
+      mirrorToWhatsApp: true,
+    },
+  }, runtimeEnv);
+  const parent = await appendThreadMessage("thread-wa-superseded-final", {
+    role: "user",
+    source: "whatsapp_inbound",
+    state: "completed",
+    connector: "whatsapp",
+    chatId: "safe-reset-chat",
+    accountId: "responder",
+    text: "Do not send the old reply.",
+  }, runtimeEnv);
+  const reply = await appendThreadMessage("thread-wa-superseded-final", {
+    role: "assistant",
+    source: "codex-app-server",
+    phase: "final_answer",
+    state: "completed",
+    parentMessageId: parent.id,
+    connector: "whatsapp",
+    chatId: "safe-reset-chat",
+    accountId: "responder",
+    text: "This superseded final must stay local.",
+    codexThreadId: oldGeneration,
+    finalProjectionRuntimeGeneration: oldGeneration,
+    finalProjectionSourceRevision: "1",
+  }, runtimeEnv);
+  let sends = 0;
+
+  await deliverWhatsAppReplies(runtimeEnv, async () => {
+    sends += 1;
+    return response({ ok: true, ids: ["must-not-send"] });
+  });
+
+  const outbox = await readConnectorOutbox(runtimeEnv);
+  const job = outbox.jobs.find((item) => item.sourceMessageId === reply.id);
+  assert.equal(sends, 0);
+  assert.equal(job?.state, "suppressed");
+  assert.equal(job?.error, "superseded_codex_generation");
+});
+
 test("whatsapp connector outbox backs off retryable bridge failures", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-connector-outbox-backoff-"));
   const runtimeEnv = env(home, { ORKESTR_CONNECTOR_OUTBOX_RETRY_BACKOFF_MS: "60000" });
