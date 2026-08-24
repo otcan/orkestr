@@ -29,6 +29,7 @@ import {
 } from "./thread-message-visibility.js";
 import { probeLiveCodexThreadState } from "./codex-app-server-live-state.js";
 import { recordRuntimeLiveness, recordRuntimeLivenessProbeFailure } from "./runtime-liveness.js";
+import { recordRuntimeControlMetric } from "./observability.js";
 import {
   activeTurnIdsFromClientState,
   activeTurnRecoveryPending,
@@ -503,6 +504,7 @@ async function enqueueSafeResetContinuationInput(thread, codexId, turn, resetRes
   if (!latestUser || (!originalText && !promptFile)) return null;
   const refreshedThread = resetResult?.thread || thread;
   const checkpoint = matchingRuntimeCheckpoint(refreshedThread, latestUser);
+  if (checkpoint) recordRuntimeControlMetric({ signal: "checkpoint_resume", outcome: "resumed" });
   const text = recoveryContinuationText(originalText, checkpoint);
   const newCodexThreadId = resetResult?.newCodexThreadId || codexThreadId(refreshedThread) || codexId;
   const whatsappParent = noticeWhatsappParent(turn, refreshedThread);
@@ -857,6 +859,7 @@ export async function recoverStaleCodexAppServerTurns(env = process.env, options
         appServerStateFromStatus(probe?.state?.status || null) === "awaiting_approval"
       );
       if (probe?.ok && liveExecution) {
+        recordRuntimeControlMetric({ signal: "false_recovery", outcome: "avoided" });
         await recordRuntimeLiveness(thread.id, {
           runtimeGeneration: codexId,
           turnId: clean(probe.state.activeTurnId || thread.runtime?.activeTurnId),

@@ -5831,7 +5831,7 @@ test("Codex app-server steers WhatsApp input into active turns by default", asyn
     HOME: path.join(home, "runtime-home"),
     PATH: `${fake.bin}${path.delimiter}${process.env.PATH || ""}`,
     FAKE_CODEX_STATE: fake.stateFile,
-    ORKESTR_CODEX_APP_SERVER_ACTIVE_TURN_RETRY_MS: "60000",
+    ORKESTR_CODEX_APP_SERVER_ACTIVE_TURN_RETRY_MS: "250",
   };
   try {
     const thread = await createThread({ id: "app-server-wa-queue-thread", name: "App Server WA Queue Thread", cwd: home, executorId: "codex", executor: { type: "codex" } }, env);
@@ -6242,6 +6242,86 @@ test("Codex app-server plain input steers the active turn without interrupting",
       call.method === "turn/start" &&
       call.params?.input?.some((item) => item.text === "urgent next turn")
     ));
+  } finally {
+    stopCodexAppServerClients();
+  }
+});
+
+test("multiple messages steer one live turn and boundary faults retain terminal dispositions", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-multi-steer-faults-"));
+  const fake = await createFakeCodex(home);
+  let steeringFaults = 1;
+  let acceptanceFaults = 1;
+  const env = {
+    ORKESTR_HOME: path.join(home, "orkestr"),
+    HOME: path.join(home, "runtime-home"),
+    PATH: `${fake.bin}${path.delimiter}${process.env.PATH || ""}`,
+    FAKE_CODEX_STATE: fake.stateFile,
+    ORKESTR_CODEX_APP_SERVER_ACTIVE_TURN_RETRY_MS: "60000",
+    ORKESTR_TEST_RUNTIME_FAULT_INJECTOR: {
+      steering_submission: async () => {
+        if (steeringFaults <= 0) return;
+        steeringFaults -= 1;
+        throw new Error("injected_steering_submission");
+      },
+      runtime_acceptance: async ({ operation }) => {
+        if (operation !== "turn_steer" || acceptanceFaults <= 0) return;
+        acceptanceFaults -= 1;
+        throw new Error("injected_runtime_acceptance");
+      },
+    },
+  };
+  try {
+    const thread = await createThread({ id: "multi-steer-fault-thread", name: "Multi steer fault thread", cwd: home, executorId: "codex", executor: { type: "codex" } }, env);
+    const started = await startCodexAppServerThread(thread, env);
+    const activeTurnId = "multi-steer-live-turn";
+    await updateThread(started.thread.id, {
+      state: "working",
+      runtime: { ...(started.thread.runtime || {}), runtimeKind: "codex-app-server", state: "working", activeTurnId },
+    }, env);
+    const initialState = JSON.parse(await fs.readFile(fake.stateFile, "utf8"));
+    const codexThread = initialState.threads.find((item) => item.id === started.thread.codexThreadId);
+    codexThread.status = { type: "active", activeFlags: ["running"] };
+    codexThread.activeTurnId = activeTurnId;
+    codexThread.turns.push({
+      id: activeTurnId,
+      threadId: started.thread.codexThreadId,
+      status: "inProgress",
+      items: [{ type: "userMessage", id: "multi-steer-original", content: [{ type: "text", text: "original task" }] }],
+    });
+    await fs.writeFile(fake.stateFile, JSON.stringify(initialState, null, 2));
+    await markAppServerTurnActive(started.thread, env);
+    const enqueue = (text) => enqueueThreadInput(started.thread.id, {
+      text,
+      source: "whatsapp_inbound",
+      connector: "whatsapp",
+      chatId: "chat-multi-steer",
+    }, env);
+    const inputs = [await enqueue("first update")];
+    await deliverCodexAppServerPendingInputs(await getThread(started.thread.id, env), env);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    await deliverCodexAppServerPendingInputs(await getThread(started.thread.id, env), env);
+    for (const text of ["second update", "third update"]) {
+      inputs.push(await enqueue(text));
+      await deliverCodexAppServerPendingInputs(await getThread(started.thread.id, env), env);
+    }
+    const messages = await listThreadMessages(started.thread.id, env);
+    const rawState = JSON.parse(await fs.readFile(fake.stateFile, "utf8"));
+    const steerCalls = rawState.calls.filter((call) => call.method === "turn/steer" && call.params.expectedTurnId === activeTurnId);
+
+    assert.equal(steeringFaults, 0);
+    assert.equal(acceptanceFaults, 0);
+    assert.deepEqual(inputs.map((input) => {
+      const stored = messages.find((message) => message.id === input.id);
+      return [stored.state, stored.deliveryState, stored.codexTurnId];
+    }), [
+      ["completed", "delivered", activeTurnId],
+      ["completed", "delivered", activeTurnId],
+      ["completed", "delivered", activeTurnId],
+    ]);
+    assert.equal(steerCalls.length, 3);
+    assert.deepEqual(steerCalls.map((call) => call.params.input[0].text), ["first update", "second update", "third update"]);
+    assert.equal(rawState.calls.some((call) => call.method === "turn/start" && call.params?.input?.some((item) => inputs.some((input) => item.text === input.text))), false);
   } finally {
     stopCodexAppServerClients();
   }

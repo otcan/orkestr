@@ -453,6 +453,74 @@ test("tenant api-agent stop aliases cancel running and queued work before model 
   assert.equal(messages.some((message) => message.role === "assistant"), false);
 });
 
+test("tenant api-agent tool and MCP execution faults converge to one terminal answer", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-tool-fault-"));
+  let injected = 0;
+  const env = await allowSanitizerEnv(home, {
+    ORKESTR_TEST_RUNTIME_FAULT_INJECTOR: {
+      tool_mcp_execution: async ({ tool }) => {
+        injected += 1;
+        assert.equal(tool, "orkestr_list_timers");
+        throw new Error("injected_tool_mcp_execution");
+      },
+    },
+  });
+  await createThread({
+    id: "api-agent-tool-fault-thread",
+    ownerUserId: "example-user",
+    name: "API agent tool fault thread",
+    runtimeKind: "api-agent",
+    executorId: "api-agent",
+    executor: { type: "api-agent", metadata: { runtimeKind: "api-agent" } },
+    binding: { connector: "whatsapp", chatId: "chat-tool-fault", outboundAccountId: "responder" },
+  }, env);
+  const principal = userPrincipal({ id: "example-user", role: "user" });
+  const input = await enqueueThreadInputForPrincipal("api-agent-tool-fault-thread", {
+    text: "List my timers",
+    source: "whatsapp_inbound",
+    connector: "whatsapp",
+    chatId: "chat-tool-fault",
+    accountId: "responder",
+  }, principal, env);
+  let modelCalls = 0;
+  const result = await processApiAgentThreadInput("api-agent-tool-fault-thread", env, {
+    fetchImpl: async () => {
+      modelCalls += 1;
+      if (modelCalls === 1) {
+        return response({
+          id: "resp_tool_fault_1",
+          model: "gpt-5-mini",
+          output: [{
+            type: "function_call",
+            call_id: "call_tool_fault_1",
+            name: "orkestr_list_timers",
+            arguments: "{}",
+          }],
+          usage: { input_tokens: 10, output_tokens: 5 },
+        });
+      }
+      return response({
+        id: "resp_tool_fault_2",
+        model: "gpt-5-mini",
+        output_text: "I could not list the timers because the tool execution failed.",
+        output: [],
+        usage: { input_tokens: 12, output_tokens: 10 },
+      });
+    },
+  });
+  const messages = await listThreadMessages("api-agent-tool-fault-thread", env);
+  const storedInput = messages.find((message) => message.id === input.id);
+  const finals = messages.filter((message) => message.role === "assistant" && message.phase === "final_answer");
+
+  assert.equal(result.ok, true);
+  assert.equal(injected, 1);
+  assert.equal(modelCalls, 2);
+  assert.equal(storedInput.state, "completed");
+  assert.equal(storedInput.deliveryState, "delivered");
+  assert.equal(finals.length, 1);
+  assert.match(finals[0].text, /tool execution failed/i);
+});
+
 test("tenant api-agent sanitizer receives scoped WhatsApp capability for api-agent input", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-sanitizer-caps-"));
   const script = path.join(home, "capability-sanitizer.mjs");

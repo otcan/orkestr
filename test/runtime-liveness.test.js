@@ -15,7 +15,151 @@ import {
   recordRuntimeFinalDeliveryFailure,
   runtimeFinalDeliveryPending,
 } from "../packages/core/src/runtime-final-delivery.js";
-import { createThread, getThread, updateThread } from "../packages/core/src/threads.js";
+import { appendThreadMessage, createThread, getThread, listThreadMessages, updateThread } from "../packages/core/src/threads.js";
+import { runtimeFaultBoundaries, runtimeStopPhaseFor } from "../packages/core/src/runtime-fault-injection.js";
+import { parseThreadInputCommand } from "../packages/core/src/thread-commands.js";
+
+function failBoundaryOnce(boundary) {
+  let remaining = 1;
+  return async ({ boundary: observed }) => {
+    if (observed !== boundary || remaining <= 0) return;
+    remaining -= 1;
+    const error = new Error(`injected_${boundary}`);
+    error.code = "runtime_fault_injected";
+    throw error;
+  };
+}
+
+test("runtime fault boundaries remain explicit and low-cardinality", () => {
+  assert.deepEqual(runtimeFaultBoundaries(), [
+    "message_persistence",
+    "steering_submission",
+    "runtime_acceptance",
+    "tool_mcp_execution",
+    "checkpoint_persistence",
+    "final_persistence",
+    "transport_send",
+    "delivery_acknowledgement",
+  ]);
+});
+
+test("all stop aliases share one control action and phase taxonomy", () => {
+  for (const alias of ["/interrupt", "/stop", "/cancel", "/quit"]) {
+    const parsed = parseThreadInputCommand({ text: `${alias} trailing text is ignored` });
+    assert.equal(parsed.command, "stop");
+  }
+  assert.deepEqual([
+    "model_output",
+    "tool_execution",
+    "mcp_call",
+    "child_process",
+    "awaiting_approval",
+    "final_delivery",
+  ].map((phase) => runtimeStopPhaseFor({ runtime: { liveness: { phase } } })), [
+    "model",
+    "tool",
+    "mcp",
+    "child_process",
+    "approval",
+    "finalization",
+  ]);
+});
+
+test("message, checkpoint, final, and acknowledgement faults converge without losing accepted state", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-runtime-persistence-faults-"));
+  const baseEnv = { ORKESTR_HOME: home };
+  await createThread({
+    id: "runtime-persistence-fault-thread",
+    name: "Runtime persistence fault thread",
+    codexThreadId: "fault-generation",
+    executor: { type: "codex", codexThreadId: "fault-generation" },
+    runtime: { runtimeGeneration: "fault-generation", activeTurnId: "fault-turn" },
+  }, baseEnv);
+
+  const messageEnv = { ...baseEnv, ORKESTR_TEST_RUNTIME_FAULT_INJECTOR: failBoundaryOnce("message_persistence") };
+  await assert.rejects(() => appendThreadMessage("runtime-persistence-fault-thread", {
+    role: "user",
+    source: "test",
+    text: "durable input",
+    clientMessageId: "fault-input-1",
+    state: "queued",
+  }, messageEnv), /injected_message_persistence/);
+  assert.equal((await listThreadMessages("runtime-persistence-fault-thread", baseEnv)).length, 0);
+  const message = await appendThreadMessage("runtime-persistence-fault-thread", {
+    role: "user",
+    source: "test",
+    text: "durable input",
+    clientMessageId: "fault-input-1",
+    state: "queued",
+  }, messageEnv);
+
+  const checkpointEnv = { ...baseEnv, ORKESTR_TEST_RUNTIME_FAULT_INJECTOR: failBoundaryOnce("checkpoint_persistence") };
+  const checkpointInput = {
+    runtimeGeneration: "fault-generation",
+    turnId: "fault-turn",
+    executionId: "fault-execution",
+    checkpointId: "fault-checkpoint",
+    payload: { cursor: 7 },
+  };
+  await assert.rejects(() => saveRuntimeCheckpoint("runtime-persistence-fault-thread", checkpointInput, checkpointEnv), /injected_checkpoint_persistence/);
+  assert.equal((await getThread("runtime-persistence-fault-thread", baseEnv)).runtime.checkpoint, undefined);
+  await saveRuntimeCheckpoint("runtime-persistence-fault-thread", checkpointInput, checkpointEnv);
+
+  const finalInput = {
+    messageId: "fault-final",
+    parentMessageId: message.id,
+    runtimeGeneration: "fault-generation",
+    turnId: "fault-turn",
+    connector: "whatsapp",
+  };
+  const finalEnv = { ...baseEnv, ORKESTR_TEST_RUNTIME_FAULT_INJECTOR: failBoundaryOnce("final_persistence") };
+  await assert.rejects(() => markRuntimeFinalDeliveryPending("runtime-persistence-fault-thread", finalInput, finalEnv), /injected_final_persistence/);
+  assert.equal((await getThread("runtime-persistence-fault-thread", baseEnv)).runtime.finalDelivery, undefined);
+  await markRuntimeFinalDeliveryPending("runtime-persistence-fault-thread", finalInput, finalEnv);
+
+  const ackEnv = { ...baseEnv, ORKESTR_TEST_RUNTIME_FAULT_INJECTOR: failBoundaryOnce("delivery_acknowledgement") };
+  await assert.rejects(() => acknowledgeRuntimeFinalDelivery("runtime-persistence-fault-thread", {
+    messageId: "fault-final",
+    connectorMessageId: "connector-final-1",
+  }, ackEnv), /injected_delivery_acknowledgement/);
+  assert.equal((await getThread("runtime-persistence-fault-thread", baseEnv)).runtime.finalDelivery.status, "pending");
+  await acknowledgeRuntimeFinalDelivery("runtime-persistence-fault-thread", {
+    messageId: "fault-final",
+    connectorMessageId: "connector-final-1",
+  }, ackEnv);
+
+  const terminal = await getThread("runtime-persistence-fault-thread", baseEnv);
+  assert.equal(terminal.runtime.checkpoint.checkpointId, "fault-checkpoint");
+  assert.deepEqual(terminal.runtime.checkpoint.payload, { cursor: 7 });
+  assert.equal(terminal.runtime.finalDelivery.status, "delivered");
+  assert.equal(terminal.runtime.finalDelivery.connectorMessageId, "connector-final-1");
+});
+
+test("controlled liveness clock preserves healthy work beyond one hour", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-runtime-controlled-clock-"));
+  const clock = { nowMs: Date.parse("2026-08-24T00:00:00.000Z") };
+  const env = { ORKESTR_HOME: home, ORKESTR_TEST_RUNTIME_CLOCK: clock };
+  await createThread({
+    id: "runtime-controlled-clock-thread",
+    name: "Runtime controlled clock thread",
+    codexThreadId: "clock-generation",
+    executor: { type: "codex", codexThreadId: "clock-generation" },
+    runtime: { runtimeGeneration: "clock-generation", activeTurnId: "clock-turn" },
+  }, env);
+  const input = { runtimeGeneration: "clock-generation", turnId: "clock-turn", executionId: "clock-execution" };
+  const started = await recordRuntimeLiveness("runtime-controlled-clock-thread", { ...input, evidenceType: "tool_started" }, env);
+  clock.nowMs += 61 * 60_000;
+  await recordRuntimeLiveness("runtime-controlled-clock-thread", { ...input, evidenceType: "mcp_progress" }, env);
+  clock.nowMs += 61 * 60_000;
+  const healthy = await recordRuntimeLiveness("runtime-controlled-clock-thread", { ...input, evidenceType: "child_heartbeat" }, env);
+
+  assert.equal(started.liveness.startedAt, "2026-08-24T00:00:00.000Z");
+  assert.equal(healthy.liveness.startedAt, started.liveness.startedAt);
+  assert.equal(healthy.liveness.lastEvidenceAt, "2026-08-24T02:02:00.000Z");
+  assert.equal(healthy.liveness.lastEvidenceType, "child_heartbeat");
+  assert.equal(healthy.liveness.consecutiveProbeFailures, 0);
+  assert.equal(healthy.liveness.completedAt, undefined);
+});
 
 test("runtime liveness requires two failed probes and resets failures on evidence", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-runtime-liveness-"));

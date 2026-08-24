@@ -27,6 +27,8 @@ import { recordWatcherAlert } from "../../core/src/watcher-alerts.js";
 import { appendThreadMessage, createThreadForPrincipal, enqueueThreadInputForPrincipal, getThread, getThreadMessage, isThreadRetired, listThreadMessages, listThreads, listThreadsForPrincipal, updateThread, updateThreadMessage } from "../../core/src/threads.js";
 import { resolveCurrentCodexGeneration } from "../../core/src/codex-generation.js";
 import { adminUserId, findOrCreateExternalUser, getUser, normalizeUserId } from "../../core/src/users.js";
+import { injectRuntimeFault } from "../../core/src/runtime-fault-injection.js";
+import { recordRuntimeControlMetric } from "../../core/src/observability.js";
 import { dataPaths, ensureDataDirs } from "../../storage/src/paths.js";
 import { readConnectorConfig } from "../../storage/src/config.js";
 import { appendEvent, readJson, writeJson } from "../../storage/src/store.js";
@@ -3621,7 +3623,16 @@ async function sendClaimedWhatsAppText({
   await markRouterOutboxItem(intent?.outboxId, { status: "claimed" }, env).catch(() => null);
 
   try {
+    await injectRuntimeFault("transport_send", {
+      connector: "whatsapp",
+      threadId,
+      messageId,
+      turnId,
+      deliveryType,
+      outboxJobId: outboxClaim.job.id,
+    }, env);
     const payload = await sendWhatsAppText({ chatId, text, accountId, attachments, config, env, fetchImpl });
+    recordRuntimeControlMetric({ signal: "transport_send", outcome: "delivered" });
     const delivery = {
       kind,
       deliveryType,
@@ -3718,6 +3729,7 @@ async function sendClaimedWhatsAppText({
     const errorText = error.message || String(error);
     const terminalFailure = nonRetryableWhatsAppOutboundError(error);
     const uncertainDelivery = uncertainWhatsAppOutboundDeliveryError(error);
+    recordRuntimeControlMetric({ signal: "transport_send", outcome: terminalFailure || uncertainDelivery ? "failed" : "retryable" });
     const terminalOutboxState = terminalFailure
       ? "dead_letter"
       : uncertainDelivery

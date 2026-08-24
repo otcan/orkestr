@@ -1,6 +1,8 @@
 import { appendEvent } from "../../storage/src/store.js";
 import { getThread, updateThread } from "./threads.js";
 import { currentCodexGenerationMatches, resolveCurrentCodexGeneration } from "./codex-generation.js";
+import { injectRuntimeFault, runtimeNowIso, runtimeNowMs } from "./runtime-fault-injection.js";
+import { recordRuntimeControlMetric } from "./observability.js";
 
 const EVIDENCE_TYPES = new Set([
   "model_started",
@@ -24,10 +26,6 @@ const TRANSPORT_ONLY_EVIDENCE_TYPES = new Set([
 
 function clean(value) {
   return String(value || "").trim();
-}
-
-function nowIso() {
-  return new Date().toISOString();
 }
 
 function runtimeGeneration(thread = {}, input = {}) {
@@ -90,7 +88,7 @@ export async function recordRuntimeLiveness(threadId, input = {}, env = process.
     error.statusCode = 400;
     throw error;
   }
-  const at = clean(input.at) || nowIso();
+  const at = clean(input.at) || runtimeNowIso(env);
   const runtime = thread.runtime && typeof thread.runtime === "object" ? thread.runtime : {};
   const current = runtime.liveness && typeof runtime.liveness === "object" ? runtime.liveness : {};
   const generation = runtimeGeneration(thread, input);
@@ -169,7 +167,7 @@ export async function recordRuntimeLivenessProbeFailure(threadId, input = {}, en
     return { ok: false, lost: false, reason: "stale_turn" };
   }
   const failures = Math.max(0, Number(current.consecutiveProbeFailures) || 0) + 1;
-  const at = nowIso();
+  const at = runtimeNowIso(env);
   const liveness = {
     ...current,
     runtimeGeneration: runtimeGeneration(thread, input) || current.runtimeGeneration || null,
@@ -201,10 +199,10 @@ export async function saveRuntimeCheckpoint(threadId, input = {}, env = process.
   }, env);
   if (!liveness.ok) return liveness;
   const thread = liveness.thread;
-  const at = nowIso();
+  const at = runtimeNowIso(env);
   const checkpoint = {
     version: 1,
-    checkpointId: clean(input.checkpointId) || `${clean(liveness.liveness?.executionId || thread.id)}:${Date.now()}`,
+    checkpointId: clean(input.checkpointId) || `${clean(liveness.liveness?.executionId || thread.id)}:${runtimeNowMs(env)}`,
     runtimeGeneration: clean(liveness.liveness?.runtimeGeneration) || null,
     executionId: clean(liveness.liveness?.executionId) || null,
     turnId: clean(liveness.liveness?.turnId) || null,
@@ -214,12 +212,19 @@ export async function saveRuntimeCheckpoint(threadId, input = {}, env = process.
     createdAt: at,
     updatedAt: at,
   };
+  await injectRuntimeFault("checkpoint_persistence", {
+    threadId: thread.id,
+    checkpointId: checkpoint.checkpointId,
+    runtimeGeneration: checkpoint.runtimeGeneration,
+    turnId: checkpoint.turnId,
+  }, env);
   const updated = await updateThread(thread.id, {
     runtime: {
       ...(thread.runtime || {}),
       checkpoint,
     },
   }, env);
+  recordRuntimeControlMetric({ signal: "checkpoint_resume", outcome: "accepted" });
   await appendEvent({
     type: "runtime_checkpoint_saved",
     threadId: thread.id,
@@ -244,7 +249,7 @@ export async function completeRuntimeLiveness(threadId, input = {}, env = proces
   if (current.turnId && turnId && clean(current.turnId) !== turnId) {
     return { ok: false, completed: false, reason: "stale_turn" };
   }
-  const at = nowIso();
+  const at = runtimeNowIso(env);
   const liveness = {
     ...current,
     phase: clean(input.phase || "complete"),

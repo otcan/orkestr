@@ -61,6 +61,8 @@ import { recordRouterTraceEvent } from "./router-traces.js";
 import { completeRuntimeLiveness, recordRuntimeLiveness } from "./runtime-liveness.js";
 import { currentCodexGenerationMatches, generationScopedRuntimePatch, rolloutGenerationMode } from "./codex-generation.js";
 import { reconcileCodexFinalProjection } from "./codex-final-projection.js";
+import { injectRuntimeFault, runtimeNowMs, runtimeStopPhaseFor } from "./runtime-fault-injection.js";
+import { recordRuntimeControlMetric } from "./observability.js";
 
 const appServerDeliveryTimers = new Map();
 const appServerHistorySyncTimes = new Map();
@@ -1144,6 +1146,7 @@ export async function interruptCodexAppServerThread(thread, env = process.env) {
 }
 
 export async function stopCodexAppServerThread(thread, env = process.env) {
+  const stopStartedAt = runtimeNowMs(env);
   const current = await getThread(thread?.id, env).catch(() => null) || thread;
   const id = codexThreadId(current);
   if (!current?.id || !id) return { stopped: false, interrupted: false, reason: "codex_thread_id_required" };
@@ -1168,6 +1171,12 @@ export async function stopCodexAppServerThread(thread, env = process.env) {
   }));
   const interruptError = clean(interrupted?.error);
   if (approvalError || interruptError) {
+    recordRuntimeControlMetric({
+      signal: "stop_latency",
+      outcome: "failed",
+      phase: pendingRequest ? "approval" : runtimeStopPhaseFor(current),
+      durationMs: runtimeNowMs(env) - stopStartedAt,
+    });
     await appendEvent({
       type: "codex_app_server_stop_failed",
       threadId: current.id,
@@ -1213,6 +1222,12 @@ export async function stopCodexAppServerThread(thread, env = process.env) {
     phase: "cancelled",
     summary: "Stopped by user",
   }, env).catch(() => {});
+  recordRuntimeControlMetric({
+    signal: "stop_latency",
+    outcome: "completed",
+    phase: pendingRequest ? "approval" : runtimeStopPhaseFor(current),
+    durationMs: runtimeNowMs(env) - stopStartedAt,
+  });
   return {
     stopped: true,
     interrupted: Boolean(interrupted?.interrupted),
@@ -1242,6 +1257,14 @@ async function drainCodexAppServerNotifications(client, { cycles = 3, until = nu
 async function startCodexAppServerTurn({ client, thread, id, pending, env, runtimeEnv = env, observedVia = "codex_app_server_turn_start" }) {
   const result = await client.request("turn/start", turnStartParams(thread, pending, runtimeEnv));
   const turnId = clean(result?.turn?.id || result?.turnId);
+  await injectRuntimeFault("runtime_acceptance", {
+    operation: "turn_start",
+    threadId: thread.id,
+    messageId: pending?.id,
+    runtimeGeneration: id,
+    turnId,
+  }, env);
+  recordRuntimeControlMetric({ signal: "runtime_acceptance", outcome: "accepted" });
   const status = clean(result?.turn?.status || result?.status).toLowerCase();
   const terminalResult = ["completed", "failed", "interrupted", "aborted", "cancelled", "canceled"].includes(status);
   const completedKey = turnId && client.turnParentKey ? client.turnParentKey(id, turnId) : "";
@@ -1440,6 +1463,12 @@ export async function sendCodexAppServerInput(thread, message, env = process.env
         ownerProcess: activeTurnId,
         reason: "codex_app_server_turn_steer",
       }, env);
+      await injectRuntimeFault("steering_submission", {
+        threadId: thread.id,
+        messageId: pending.id,
+        runtimeGeneration: id,
+        turnId: activeTurnId,
+      }, env);
       result = await client.request("turn/steer", {
         threadId: id,
         expectedTurnId: activeTurnId,
@@ -1447,6 +1476,14 @@ export async function sendCodexAppServerInput(thread, message, env = process.env
       });
       observedVia = "codex_app_server_turn_steer";
       deliveryTurnId = clean(result?.turn?.id || result?.turnId || activeTurnId) || activeTurnId;
+      await injectRuntimeFault("runtime_acceptance", {
+        operation: "turn_steer",
+        threadId: thread.id,
+        messageId: pending.id,
+        runtimeGeneration: id,
+        turnId: deliveryTurnId,
+      }, env);
+      recordRuntimeControlMetric({ signal: "runtime_acceptance", outcome: "accepted" });
       const completed = await updateThreadMessage(thread.id, pending.id, {
         state: "completed",
         deliveryState: "delivered",
@@ -1479,6 +1516,30 @@ export async function sendCodexAppServerInput(thread, message, env = process.env
       await appendEvent({ type: "thread_input_delivered", threadId: thread.id, messageId: message.id, observedVia }, env).catch(() => {});
       return { message: completed, result, observedVia, steered: true };
     } catch (error) {
+      if (error?.runtimeFaultBoundary === "runtime_acceptance" && result) {
+        const reconciled = await updateThreadMessage(thread.id, pending.id, {
+          state: "completed",
+          deliveryState: "delivered",
+          deliveredAt: nowIso(),
+          observedVia: "codex_app_server_turn_steer_acceptance_reconciled",
+          deliveryClaimId: null,
+          codexThreadId: id,
+          codexTurnId: deliveryTurnId,
+          error: null,
+        }, env);
+        recordRuntimeControlMetric({ signal: "runtime_acceptance", outcome: "accepted" });
+        recordRuntimeControlMetric({ signal: "duplicate_turn", outcome: "prevented" });
+        await appendEvent({
+          type: "codex_app_server_runtime_acceptance_reconciled",
+          threadId: thread.id,
+          codexThreadId: id,
+          messageId: pending.id,
+          turnId: deliveryTurnId,
+          operation: "turn_steer",
+        }, env).catch(() => {});
+        return { message: reconciled, result, observedVia: reconciled.observedVia, steered: true, reconciled: true };
+      }
+      recordRuntimeControlMetric({ signal: "unresolved_steering_input", outcome: "retryable" });
       await appendEvent({
         type: "codex_app_server_input_steer_failed",
         threadId: thread.id,
