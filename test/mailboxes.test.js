@@ -337,7 +337,7 @@ test("malformed raw MIME boundaries do not fabricate attachment metadata", async
   assert.deepEqual(normalized.attachments, []);
 });
 
-test("VM-target mailbox ingest records relay audit only and never enters main connector inbox", async () => {
+test("VM-target mailbox ingest durably spools content for exact relay without exposing it in relay audits", async () => {
   const env = await fixture();
   await createTenantVm({
     id: "relay-vm",
@@ -369,7 +369,10 @@ test("VM-target mailbox ingest records relay audit only and never enters main co
 
   assert.equal(first.action, "vm_relay_queued");
   assert.equal(second.action, "deduped");
-  assert.deepEqual(await listConnectorInboxEvents({}, env), []);
+  const inbox = await listConnectorInboxEvents({}, env);
+  assert.equal(inbox.length, 1);
+  assert.equal(inbox[0].accountId, mailbox.id);
+  assert.equal(inbox[0].payload.body.text, "full secret body that belongs only on the tenant VM");
 
   const audits = await listMailboxRelayAudits({ tenantVmId: "relay-vm" }, env);
   assert.equal(audits.length, 1);
@@ -424,7 +427,7 @@ test("VM-target mailbox relay dead-letters stale target instead of re-inferring 
   assert.equal(JSON.stringify(deadLetters[0]).includes("must not move"), false);
 });
 
-test("forwarding verification candidates are extracted without storing full body fields", async () => {
+test("forwarding verification candidates retain only a bounded query body and no raw MIME", async () => {
   const env = await fixture();
   const mailbox = await createMailbox({ ownerUserId: "owner", purpose: "verify", suffix: "gmail", status: "verification-pending" }, env);
   const text = "Use forwarding confirmation code 123456789 or visit https://mail-settings.google.com/mail/vf-abc123 to confirm.";
@@ -445,7 +448,8 @@ test("forwarding verification candidates are extracted without storing full body
   }, env);
   const [event] = await listConnectorInboxEvents({}, env);
   assert.equal(event.payload.verificationCandidates.length, 2);
-  assert.equal(Object.hasOwn(event.payload, "body"), false);
+  assert.equal(event.payload.body.text, text);
+  assert.equal(Object.hasOwn(event.payload.body, "html"), false);
   assert.equal(Object.hasOwn(event.payload, "raw"), false);
 });
 

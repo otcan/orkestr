@@ -315,24 +315,34 @@ export async function provisionTenantSlice(tenantSliceId, input = {}, env = proc
     registryVm = await ensureTenantVm(plan.tenantVm, env);
     const stagedWhatsappRoute = await stageTenantSliceWhatsAppRoute(slice, registryVm, input, env);
     const whatsappBridgeUrl = stagedWhatsappRoute?.bridgeSendToken ? parentWhatsAppBridgeUrl(input, env) : "";
-    const executionInput = stagedWhatsappRoute?.token
+    const mailboxRelayToken = clean(input.mailboxRelayToken || env.ORKESTR_MAILBOX_RELAY_TOKEN);
+    const runtimeEnvPatch = {
+      ...(mailboxRelayToken ? {
+        ORKESTR_MAILBOX_RELAY_TOKEN: mailboxRelayToken,
+        ORKESTR_MAILBOX_ACCESS_MODE: "enforce",
+      } : {}),
+      ...(stagedWhatsappRoute?.token ? {
+        ORKESTR_WHATSAPP_INBOUND_TOKEN: stagedWhatsappRoute.token,
+        ...(stagedWhatsappRoute.bridgeSendToken ? {
+          WHATSAPP_BRIDGE_MODE: "external",
+          ORKESTR_WHATSAPP_EXTERNAL_BRIDGE_ENABLED: "1",
+          WHATSAPP_BRIDGE_URL: whatsappBridgeUrl,
+          WHATSAPP_BRIDGE_TOKEN: stagedWhatsappRoute.bridgeSendToken,
+          ORKESTR_CONNECTORS_MCP_URL: `${whatsappBridgeUrl.replace(/\/+$/g, "")}/mcp`,
+          ORKESTR_CONNECTORS_MCP_BEARER_TOKEN: stagedWhatsappRoute.bridgeSendToken,
+        } : {}),
+      } : {}),
+    };
+    const executionInput = Object.keys(runtimeEnvPatch).length
       ? {
         ...input,
         runtimeEnv: {
           ...(input.runtimeEnv && typeof input.runtimeEnv === "object" && !Array.isArray(input.runtimeEnv) ? input.runtimeEnv : {}),
-          ORKESTR_WHATSAPP_INBOUND_TOKEN: stagedWhatsappRoute.token,
-          ...(stagedWhatsappRoute.bridgeSendToken ? {
-            WHATSAPP_BRIDGE_MODE: "external",
-            ORKESTR_WHATSAPP_EXTERNAL_BRIDGE_ENABLED: "1",
-            WHATSAPP_BRIDGE_URL: whatsappBridgeUrl,
-            WHATSAPP_BRIDGE_TOKEN: stagedWhatsappRoute.bridgeSendToken,
-            ORKESTR_CONNECTORS_MCP_URL: `${whatsappBridgeUrl.replace(/\/+$/g, "")}/mcp`,
-            ORKESTR_CONNECTORS_MCP_BEARER_TOKEN: stagedWhatsappRoute.bridgeSendToken,
-          } : {}),
+          ...runtimeEnvPatch,
         },
       }
       : input;
-    const executionPlan = stagedWhatsappRoute?.token
+    const executionPlan = Object.keys(runtimeEnvPatch).length
       ? buildTenantSliceProvisioningPlan(slice, executionInput, env)
       : plan;
     const [command, ...args] = executionPlan.commands.apply;

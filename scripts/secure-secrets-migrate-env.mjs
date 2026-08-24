@@ -10,6 +10,7 @@ const candidates = [
   { name: "shopify/client-secret", env: ["SHOPIFY_OAUTH_CLIENT_SECRET", "SHOPIFY_CLIENT_SECRET", "SHOPIFY_API_SECRET"] },
   { name: "whatsapp/bridge-token", env: ["WHATSAPP_BRIDGE_TOKEN", "WA_HTTP_TOKEN"] },
   { name: "whatsapp/inbound-token", env: ["ORKESTR_WHATSAPP_INBOUND_TOKEN", "WHATSAPP_INBOUND_TOKEN"] },
+  { name: "mailbox/vm-relay-token", env: ["ORKESTR_MAILBOX_RELAY_TOKEN"] },
   { name: "orkestr/api-token", env: ["ORKESTR_API_TOKEN", "ORKESTR_CLI_AUTH_TOKEN"] },
   { name: "outlook/smtp-password", env: ["ORKESTR_OUTLOOK_SMTP_PASSWORD", "OUTLOOK_SMTP_PASSWORD"] },
   { name: "outlook/graph-access-token", env: ["ORKESTR_GRAPH_MAIL_ACCESS_TOKEN", "ORKESTR_OUTLOOK_GRAPH_ACCESS_TOKEN", "OUTLOOK_GRAPH_ACCESS_TOKEN"] },

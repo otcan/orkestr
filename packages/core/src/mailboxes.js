@@ -476,11 +476,18 @@ export async function routeMailboxMessage(input = {}, env = process.env) {
     }, env).catch(() => {});
     return {
       ok: true,
-      action: relay.deadLetter ? "vm_relay_dead_lettered" : relay.created ? "vm_relay_queued" : "deduped",
+      action: relay.deadLetter ? "vm_relay_dead_lettered" : relay.created ? "vm_relay_required" : "deduped",
       created: relay.created,
       mailbox: publicMailbox(mailbox, env),
       relayAudit: publicRelayAudit(relay.audit),
       deadLetter: relay.deadLetter || null,
+      connectorInboxInput: {
+        id: idempotencyKey,
+        connector: "mailbox",
+        accountId: mailbox.id,
+        conversationId: mailbox.id,
+        payload: message,
+      },
       idempotencyKey,
     };
   }

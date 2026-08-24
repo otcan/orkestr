@@ -200,7 +200,7 @@ test("forwarding verification ingest updates only scoped mailbox verification me
   assert.equal(JSON.stringify(updated).includes("Forwarding verification code"), false);
 });
 
-test("VM relay retry and dead-letter replay revalidate exact targets without main inbox processing", async () => {
+test("VM relay retry and dead-letter replay revalidate exact targets while preserving durable payloads", async () => {
   const env = await fixture();
   await createTenantVm({ id: "relay-vm", ownerUserId: "owner", status: "running", capabilities: ["mailboxes"] }, env);
   const mailbox = await createMailbox({
@@ -230,7 +230,11 @@ test("VM relay retry and dead-letter replay revalidate exact targets without mai
   assert.equal(deadLetters.length, 1);
   assert.equal(deadLetters[0].relayAuditId, routed.relayAudit.id);
   assert.equal(JSON.stringify(deadLetters[0]).includes("tenant-only payload"), false);
-  assert.deepEqual(await listConnectorInboxEvents({}, env), []);
+  const retained = await listConnectorInboxEvents({}, env);
+  assert.equal(retained.length, 1);
+  assert.equal(retained[0].connector, "mailbox");
+  assert.equal(retained[0].accountId, mailbox.id);
+  assert.equal(retained[0].payload.body.text, "tenant-only payload");
 
   await updateTenantVm("relay-vm", { status: "running" }, env);
   const replay = await replayMailboxDeadLetterForPrincipal(deadLetters[0].id, {
@@ -240,7 +244,10 @@ test("VM relay retry and dead-letter replay revalidate exact targets without mai
   assert.equal(replay.state, "queued");
   assert.equal(replay.tenantVmId, "relay-vm");
   assert.equal(replay.targetSelection.selectedInstanceId, "relay-vm");
-  assert.deepEqual(await listConnectorInboxEvents({}, env), []);
+  const replayEvents = await listConnectorInboxEvents({}, env);
+  assert.equal(replayEvents.length, 2);
+  assert.equal(replayEvents[0].replayOfId, routed.relayAudit.id);
+  assert.equal(replayEvents[0].payload.body.text, "tenant-only payload");
 });
 
 test("mailbox CLI exposes stable lifecycle and relay request contracts", async () => {

@@ -33,6 +33,7 @@ import { acceptingMailboxStatuses, extractAddress } from "../../../../../package
 import { isAdminPrincipal } from "../../../../../packages/core/src/policy.js";
 import { requestPrincipal } from "../../../../../packages/core/src/principal.js";
 import { httpError } from "../../common/http.js";
+import { ingestVmMailboxRelay } from "../../../../../packages/core/src/mailbox-vm-inbox.js";
 
 function mailboxBody(body: Record<string, unknown> = {}) {
   const output: Record<string, unknown> = {};
@@ -89,6 +90,17 @@ function rethrowHttp(error: any, fallback = "mailbox_request_failed"): never {
 
 @Controller("api/mailboxes")
 export class MailboxesController {
+  @Post("relay-inbound")
+  @HttpCode(202)
+  async relayInbound(@Req() request: any, @Body() body: Record<string, unknown> = {}) {
+    if (request.orkestrMachineAuth !== "mailbox_vm_relay") throw httpError("mailbox_vm_relay_auth_required", 403);
+    try {
+      return await ingestVmMailboxRelay(body, process.env);
+    } catch (error) {
+      rethrowHttp(error, "mailbox_vm_relay_ingest_failed");
+    }
+  }
+
   @Get("lookup")
   async lookup(@Req() request: any, @Query("address") address: string) {
     const principal = requestPrincipal(request);

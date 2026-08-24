@@ -12,6 +12,7 @@ import {
 } from "./mailboxes.js";
 import { isAdminPrincipal, policyError } from "./policy.js";
 import { resolveTenantVmTarget, targetResolutionMetadata } from "./target-resolver.js";
+import { ensureConnectorInboxEvent, getConnectorInboxEvent } from "../../connectors/src/connector-inbox.js";
 
 export async function retryMailboxRelayForPrincipal(relayAuditId, input = {}, principal = {}, env = process.env) {
   if (!isAdminPrincipal(principal)) throw policyError("mailbox_relay_retry_admin_required", 403);
@@ -114,6 +115,10 @@ export async function replayMailboxDeadLetterForPrincipal(deadLetterId, input = 
   if (!mailbox || mailbox.target.type !== "vm" || mailbox.target.tenantVmId !== deadLetter.tenantVmId) {
     throw mailboxError("mailbox_dead_letter_original_target_missing", 409);
   }
+  const originalPayload = deadLetter.relayAuditId
+    ? await getConnectorInboxEvent(deadLetter.relayAuditId, env)
+    : null;
+  if (!originalPayload?.payload) throw mailboxError("mailbox_vm_relay_payload_missing", 409);
 
   const resolution = await resolveTenantVmTarget({
     tenantVmId: deadLetter.tenantVmId,
@@ -148,6 +153,15 @@ export async function replayMailboxDeadLetterForPrincipal(deadLetterId, input = 
     ...store,
     relayAudits: [...store.relayAudits, audit],
   }, "mailbox.dead_letter.replay", key, { relayAuditId: audit.id, deadLetterId: deadLetter.id }), env);
+  await ensureConnectorInboxEvent({
+    id: audit.id,
+    connector: "mailbox",
+    accountId: audit.mailboxId,
+    conversationId: audit.mailboxId,
+    payload: originalPayload.payload,
+    replayOfId: deadLetter.relayAuditId,
+    replayId: audit.id,
+  }, env);
   await appendEvent({
     type: "mailbox_dead_letter_replay_queued",
     deadLetterId: deadLetter.id,

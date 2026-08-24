@@ -21,6 +21,7 @@ import {
 } from "../../../packages/connectors/src/whatsapp-local-bridge.js";
 import { clearWhatsAppDeliveryIdleCache } from "../../../packages/connectors/src/whatsapp.js";
 import { mailboxThreadDeliveryPumpIntervalMs, runMailboxDeliveryPump } from "../../../packages/connectors/src/mailbox-delivery-pump.js";
+import { mailboxVmRelayPumpIntervalMs, runVmMailboxRelayPump } from "../../../packages/connectors/src/mailbox-vm-relay.js";
 import { migrateThreadMessageStore } from "../../../packages/storage/src/thread-message-registry.js";
 import {
   createConnectorRuntimeSyncSignalHandler,
@@ -619,6 +620,17 @@ export async function startServer({ port = 19812, host = "127.0.0.1", openBrowse
     });
   }, mailboxThreadDeliveryPumpIntervalMs(serverEnv));
   mailboxDeliveryPoll.unref?.();
+  const mailboxVmRelayPoll = setInterval(() => {
+    runVmMailboxRelayPump(serverEnv).catch((error) => {
+      reportServerError(serverEnv, {
+        source: "server.mailboxVmRelayPump",
+        code: "mailbox_vm_relay_pump_failed",
+        message: error?.message || String(error),
+        error,
+      });
+    });
+  }, mailboxVmRelayPumpIntervalMs(serverEnv));
+  mailboxVmRelayPoll.unref?.();
   const brokerClientHeartbeat = startBrokerClientHeartbeat(serverEnv);
   const scheduleWhatsAppDeliveryFollowUp = () => {
     clearWhatsAppDeliveryIdleCache();
@@ -666,6 +678,14 @@ export async function startServer({ port = 19812, host = "127.0.0.1", openBrowse
       error,
     });
   });
+  void runVmMailboxRelayPump(serverEnv).catch((error) => {
+    reportServerError(serverEnv, {
+      source: "server.mailboxVmRelayPump.startup",
+      code: "mailbox_vm_relay_pump_startup_failed",
+      message: error?.message || String(error),
+      error,
+    });
+  });
   const startupRecoveryTimer = scheduleStartupRecovery(serverEnv);
 
   const url = `http://${host}:${port}`;
@@ -684,6 +704,7 @@ export async function startServer({ port = 19812, host = "127.0.0.1", openBrowse
     brokerClientHeartbeat.close();
     clearInterval(whatsappDeliveryPoll);
     clearInterval(mailboxDeliveryPoll);
+    clearInterval(mailboxVmRelayPoll);
     whatsappDeliveryScheduler.close();
     stopCodexAppServerClients();
     await stopLocalWhatsAppBridge(serverEnv).catch(() => {});

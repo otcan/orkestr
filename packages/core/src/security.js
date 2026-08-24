@@ -709,6 +709,39 @@ function jobAlertRelayTokens(env = process.env) {
   ];
 }
 
+function mailboxVmRelayTokens(env = process.env) {
+  return [
+    ...splitSecretList(env.ORKESTR_MAILBOX_RELAY_TOKEN),
+    ...splitSecretList(env.ORKESTR_MAILBOX_RELAY_TOKENS),
+  ];
+}
+
+function authorizeMailboxVmRelayMachineRequest(request, env = process.env) {
+  const method = String(request?.method || "GET").toUpperCase();
+  const url = String(request?.originalUrl || request?.url || "").split("?")[0];
+  if (method !== "POST" || url !== "/api/mailboxes/relay-inbound") return null;
+  const token = bearerToken(request?.headers?.authorization || request?.headers?.Authorization || "");
+  const configured = mailboxVmRelayTokens(env);
+  if (!configured.length) return { ok: false, statusCode: 503, error: "mailbox_vm_relay_auth_unconfigured", machineAuth: "mailbox_vm_relay" };
+  if (!token) return { ok: false, statusCode: 401, error: "mailbox_vm_relay_auth_required", machineAuth: "mailbox_vm_relay" };
+  if (!configured.some((candidate) => timingSafeSecretEqual(token, candidate))) {
+    return { ok: false, statusCode: 401, error: "mailbox_vm_relay_auth_invalid", machineAuth: "mailbox_vm_relay" };
+  }
+  return {
+    ok: true,
+    principal: adminPrincipal(defaultAdminUser(env)),
+    machineAuth: "mailbox_vm_relay",
+    machineAuthContext: {
+      tokenId: "configured-mailbox-vm-relay-token",
+      routeKind: "mailbox_vm_relay",
+      scopes: ["mailbox:relay:ingest"],
+      principalKind: "mail_relay",
+      principalId: "configured-mailbox-vm-relay-token",
+      instanceId: String(env.ORKESTR_TENANT_VM_ID || env.ORKESTR_INSTANCE_ID || "").trim() || null,
+    },
+  };
+}
+
 function isMailboxMtaMachineRoute(request) {
   const method = String(request?.method || "GET").toUpperCase();
   const url = String(request?.originalUrl || request?.url || "").split("?")[0];
@@ -1915,6 +1948,15 @@ export async function authorizeHttpRequest(request, env = process.env) {
     machineAuthContext: mailboxMtaAuth.machineAuthContext,
   };
   if (mailboxMtaAuth) return { ...mailboxMtaAuth, status };
+  const mailboxVmRelayAuth = authorizeMailboxVmRelayMachineRequest(request, env);
+  if (mailboxVmRelayAuth?.ok) return {
+    ok: true,
+    status,
+    principal: mailboxVmRelayAuth.principal,
+    machineAuth: mailboxVmRelayAuth.machineAuth,
+    machineAuthContext: mailboxVmRelayAuth.machineAuthContext,
+  };
+  if (mailboxVmRelayAuth) return { ...mailboxVmRelayAuth, status };
   const cliAuth = await authorizeCliMachineRequest(request, env);
   if (cliAuth?.ok) return { ok: true, status, principal: cliAuth.principal, machineAuth: cliAuth.machineAuth };
   const brokerProxyAuth = await authorizeBrokerProxyMachineRequest(request, env);

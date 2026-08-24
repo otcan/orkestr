@@ -8,6 +8,7 @@ import {
 import { dispatchMailboxRouteWork } from "../../core/src/mailbox-routes.js";
 import { getMailbox, routeMailboxMessage } from "../../core/src/mailboxes.js";
 import { acceptingMailboxStatuses } from "../../core/src/mailbox-normalization.js";
+import { dispatchVmMailboxRelay } from "./mailbox-vm-relay.js";
 
 function mailboxPolicyReplayDelayMs(attempt = 1, env = process.env) {
   const base = Math.max(1_000, Number(env.ORKESTR_MAILBOX_POLICY_REPLAY_RETRY_MS || 5_000) || 5_000);
@@ -36,6 +37,21 @@ async function recordMailboxIngress(mailbox, inbox, env) {
 
 export async function ingestMailboxMessage(input = {}, env = process.env) {
   const routed = await routeMailboxMessage(input, env);
+  if (routed.action === "vm_relay_required") {
+    const inbox = await ensureConnectorInboxEvent(routed.connectorInboxInput, env);
+    await recordMailboxIngress(routed.mailbox, inbox, env);
+    const relay = inbox.event.state === "routed"
+      ? { ok: true, audit: routed.relayAudit }
+      : await dispatchVmMailboxRelay(routed.relayAudit, env);
+    return {
+      ...publicRouted(routed),
+      action: relay.ok ? "vm_relay_delivered" : "vm_relay_queued",
+      created: inbox.created,
+      relayAudit: relay.audit || routed.relayAudit,
+      relayError: relay.ok ? "" : relay.error,
+      inboxEvent: relay.ok ? await ensureConnectorInboxEvent(routed.connectorInboxInput, env).then((result) => result.event) : inbox.event,
+    };
+  }
   if (routed.action === "mailbox_thread_delivery_required") {
     const inbox = await ensureConnectorInboxEvent(routed.connectorInboxInput, env);
     await recordMailboxIngress(routed.mailbox, inbox, env);

@@ -246,6 +246,13 @@ function localMailboxMtaRequest(request: any): boolean {
     (method === "POST" && pathname === "/api/mailboxes/ingest-spool");
 }
 
+function localMailboxVmRelayRequest(request: any): boolean {
+  if (!directLoopbackRequest(request) || request?.orkestrMachineAuth !== "mailbox_vm_relay") return false;
+  const method = String(request?.method || "GET").toUpperCase();
+  const pathname = new URL(String(request?.originalUrl || request?.url || "/"), "http://orkestr.local").pathname;
+  return method === "POST" && pathname === "/api/mailboxes/relay-inbound";
+}
+
 function targetAtBase(base: string, rawUrl: string): string {
   if (!base) return "";
   const source = new URL(rawUrl || "/", "http://orkestr.local");
@@ -321,7 +328,8 @@ export async function enforceHostBoundaryRequest(request: any, response: any, en
     localCliRequest(request) ||
     localWhatsAppInboundRequest(request) ||
     localWhatsAppBridgeSendRequest(request) ||
-    localMailboxMtaRequest(request)
+    localMailboxMtaRequest(request) ||
+    localMailboxVmRelayRequest(request)
   ) return false;
   const rawUrl = String(request?.originalUrl || request?.url || "/");
   const origin = effectiveRequestOrigin(request, env);

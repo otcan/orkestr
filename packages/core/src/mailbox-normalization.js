@@ -342,6 +342,12 @@ async function bodyParts(input = {}) {
   return { text, html };
 }
 
+async function retainedBody(input = {}, maxChars = 8_000) {
+  const { text, html } = await bodyParts(input);
+  const plain = text || html.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ");
+  return { text: plain.trim().slice(0, maxChars) };
+}
+
 async function bodySnippet(input = {}, maxChars = 500) {
   const { text, html } = await bodyParts(input);
   const source = text || html.replace(/<[^>]*>/g, " ");
@@ -415,6 +421,9 @@ export async function normalizeInboundMailboxMessage(input = {}, mailbox = {}) {
     headers,
     provenance,
     snippet: await bodySnippet(input),
+    // VM relay and the managed inbox need a bounded, durable query body. Raw
+    // MIME and HTML are intentionally not retained here.
+    body: await retainedBody(input),
     bodyHash: await bodyHash(input),
     sizeBytes: Math.max(0, Math.floor(Number(input.sizeBytes || input.body?.sizeBytes || mime?.sizeBytes || 0) || 0)),
     attachments,

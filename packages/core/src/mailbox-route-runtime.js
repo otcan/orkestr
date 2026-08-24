@@ -48,7 +48,7 @@ function publicSource(source = {}) {
 function mailboxPayload(mailbox = {}, message = {}) {
   const from = clean(message.headers?.from || message.from).slice(0, 500);
   const subject = clean(message.headers?.subject || message.subject).slice(0, 500);
-  const snippet = clean(message.snippet || message.body?.text || message.text).slice(0, 8_000);
+  const snippet = clean(message.body?.text || message.text || message.snippet).slice(0, 8_000);
   const attachments = (Array.isArray(message.attachments) ? message.attachments : []).slice(0, 20).map((attachment) => ({
     filename: clean(attachment?.filename || attachment?.name).slice(0, 200),
     contentType: clean(attachment?.contentType || attachment?.mimetype || attachment?.type).slice(0, 120),

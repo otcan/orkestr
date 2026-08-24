@@ -369,7 +369,21 @@ lease-protected pump reclaims due retries and expired claims; it also replays
 uses the stable delivery client-message ID, so a retry cannot append twice.
 The final policy/claim check runs immediately before append; a revocation that
 begins after that cross-store check is still contained by the same deterministic
-thread-message idempotency key. VM mailbox relay is separate and unchanged.
+thread-message idempotency key.
+
+VM-target mailboxes use a durable broker-to-tenant relay. The main instance
+retains a bounded normalized message before acknowledging SMTP, retries the
+exact tenant target with a dedicated bearer token, and keeps relay audit state
+until the target acknowledges the same idempotency key. The tenant mirrors the
+mailbox into its local mailbox list, stores the bounded body in managed mailbox
+history, and grants `discover`/`read` only to the VM bootstrap thread. Configure
+the same `ORKESTR_MAILBOX_RELAY_TOKEN` on broker and tenant, set the tenant's
+`ORKESTR_MAILBOX_ACCESS_MODE=enforce`, and ensure the tenant VM registry has an
+explicit endpoint plus `bootstrap.firstThreadId`. New tenant-slice provisioning
+propagates these settings automatically when the parent relay token is present.
+Messages accepted by releases predating durable VM relay contain audit metadata
+only and cannot be reconstructed unless a verification candidate or upstream
+mail provider is replayed explicitly.
 
 ### Managed mailbox inbox
 
