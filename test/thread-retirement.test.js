@@ -75,6 +75,8 @@ test("thread retirement hides by default, cancels queued work, and fences replay
     assert.equal(retired.disabledTimers, 1);
     const stored = await getThread("retire-worker");
     assert.equal(stored.state, "retired");
+    assert.equal(stored.lifecycleState, "retired");
+    assert.equal(stored.retired, true);
     assert.equal(stored.wakePolicy, "manual");
     assert.equal(stored.binding.enabled, false);
     assert.equal(stored.binding.routeEligible, false);
@@ -103,6 +105,8 @@ test("thread retirement hides by default, cancels queued work, and fences replay
     const restored = await restoreRetiredThread("retire-worker", { actorUserId: "admin" });
     assert.equal(restored.ok, true);
     assert.equal(restored.thread.state, "sleeping");
+    assert.equal(restored.thread.lifecycleState, "active");
+    assert.equal(restored.thread.retired, false);
     assert.equal(restored.thread.wakePolicy, "manual");
     assert.equal(restored.thread.binding.enabled, false);
     assert.equal((await listTimers()).find((entry) => entry.id === timer.id).enabled, false);

@@ -3171,7 +3171,8 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   threadIsRetired(thread: ThreadSummary | null): boolean {
     if (!thread) return false;
-    return thread.retired === true || String(thread.lifecycleState || "").trim().toLowerCase() === "retired";
+    const state = String(thread.state || thread.status || "").trim().toLowerCase();
+    return thread.retired === true || Boolean(thread.retiredAt) || String(thread.lifecycleState || "").trim().toLowerCase() === "retired" || state === "retiring" || state === "retired";
   }
 
   retiredWorkerCount(thread: ThreadSummary | null): number {

@@ -114,7 +114,15 @@ function optionalNumber(value) {
 
 export function threadLifecycleState(thread = {}) {
   const raw = String(thread.lifecycleState || thread.lifecycle || "").trim().toLowerCase();
-  if (raw === retiredLifecycleState || thread.retired === true || thread.archived === true) return retiredLifecycleState;
+  const state = String(thread.state || "").trim().toLowerCase();
+  if (
+    raw === retiredLifecycleState ||
+    thread.retired === true ||
+    thread.archived === true ||
+    thread.retiredAt ||
+    state === "retiring" ||
+    state === "retired"
+  ) return retiredLifecycleState;
   return "active";
 }
 
@@ -160,8 +168,7 @@ export async function listThreadsForPrincipal(principal, env = process.env) {
 }
 
 export function isThreadRetired(thread = {}) {
-  const state = String(thread?.state || "").trim().toLowerCase();
-  return Boolean(thread?.retiredAt) || state === "retiring" || state === "retired";
+  return threadIsRetired(thread);
 }
 
 export function assertThreadOperational(thread = {}) {
@@ -495,6 +502,7 @@ export async function restoreThread(threadId, options = {}, env = process.env) {
   const restored = await updateThread(thread.id, {
     lifecycleState: "active",
     retired: false,
+    retiredAt: null,
     restoredAt: nowIso(),
     restoredBy,
     restoredByUserId: restoredBy,

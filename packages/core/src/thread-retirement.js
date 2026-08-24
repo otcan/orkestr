@@ -238,6 +238,8 @@ export async function retireThread(threadId, options = {}, env = process.env) {
     disableThreadTimers(thread.id, env),
   ]);
   const retired = await updateThread(thread.id, {
+    lifecycleState: "retired",
+    retired: true,
     state: "retired",
     workerStatus: thread.workerStatus ? "retired" : thread.workerStatus,
     wakePolicy: "manual",
@@ -245,6 +247,9 @@ export async function retireThread(threadId, options = {}, env = process.env) {
     retiredAt: timestamp,
     retiringAt: null,
     retiredBy: actorUserId,
+    retiredByUserId: actorUserId,
+    retiredReason: reason,
+    retirementSource: clean(options.retirementSource || options.source || "manual") || "manual",
     retirementReason: reason,
     retirementPreviousWakePolicy: priorWakePolicy,
     desktopAccess: null,
@@ -294,6 +299,8 @@ export async function restoreRetiredThread(threadId, options = {}, env = process
   if (!isThreadRetired(thread)) return { ok: true, thread, idempotent: true };
   const actorUserId = clean(options.actorUserId || "system");
   const restored = await updateThread(thread.id, {
+    lifecycleState: "active",
+    retired: false,
     state: "sleeping",
     workerStatus: thread.workerStatus === "retired" ? "restored" : thread.workerStatus,
     wakePolicy: "manual",
@@ -301,6 +308,7 @@ export async function restoreRetiredThread(threadId, options = {}, env = process
     retiringAt: null,
     restoredAt: nowIso(),
     restoredBy: actorUserId,
+    restoredByUserId: actorUserId,
     runtime: {
       ...(thread.runtime || {}),
       state: "sleeping",

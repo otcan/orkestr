@@ -554,6 +554,7 @@ async function cachedSummaryRuntimeStatus(thread: any, messages: any[] = [], ttl
 }
 
 function threadSummaryState(thread: any, status: any): string {
+  if (threadIsRetired(thread)) return "retired";
   const state = nonEmptyString(status?.state) || nonEmptyString(thread?.state) || "sleeping";
   if (status) return state;
   return transientRuntimeStates.has(state.toLowerCase()) && !hasOpenRuntimeLease(thread) ? "sleeping" : state;
@@ -914,7 +915,7 @@ export async function threadRuntimeSummary(thread: any, messages: any[] = [], op
     codexThreadId: resolvedCodexThreadId || null,
     status: state,
     state,
-    routeEligible: true,
+    routeEligible: !threadIsRetired(thread),
     sessionName,
     paneId,
     tmuxTarget: paneId,

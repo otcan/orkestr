@@ -29,11 +29,10 @@ import {
   getThread,
   listThreadMessages,
   listThreads,
-  restoreThreadForPrincipal,
-  retireThreadForPrincipal,
   threadIsRetired,
   updateThread,
 } from "../../../../../packages/core/src/threads.js";
+import { restoreRetiredThread, retireThread } from "../../../../../packages/core/src/thread-retirement.js";
 import { requestPrincipal } from "../../../../../packages/core/src/principal.js";
 import { isAdminPrincipal } from "../../../../../packages/core/src/policy.js";
 import { parseThreadInputCommand } from "../../../../../packages/core/src/thread-commands.js";
@@ -397,8 +396,14 @@ export class ThreadsController {
     private readonly threadRuntimeService: ThreadRuntimeService,
   ) {}
 
-  private async assertThreadSanitized(action: string, principal: any, thread: any, input: Record<string, unknown> = {}) {
-    return this.threadActionSanitizer.assertAllowed(action, principal, thread, input);
+  private async assertThreadSanitized(
+    action: string,
+    principal: any,
+    thread: any,
+    input: Record<string, unknown> = {},
+    options: { allowRetired?: boolean } = {},
+  ) {
+    return this.threadActionSanitizer.assertAllowed(action, principal, thread, input, options);
   }
 
   private assertThreadAdminOnly(action: string, principal: any) {
@@ -1157,7 +1162,7 @@ export class ThreadsController {
     const principal = requestPrincipal(request);
     const target = await getThread(threadId);
     if (!target) throw httpError("thread_not_found", 404);
-    await this.assertThreadSanitized("thread.retire", principal, target, body);
+    await this.assertThreadSanitized("thread.retire", principal, target, body, { allowRetired: true });
     const preflight = await this.threadRetirementPreflight(target, principal);
     if (optionalBodyBoolean(body, "dryRun", false)) {
       return {
@@ -1177,12 +1182,14 @@ export class ThreadsController {
       }).catch(() => {});
       throw new HttpException({ error: "thread_retirement_blocked", blockers: preflight.blockers }, 409);
     }
-    const thread = await retireThreadForPrincipal(preflight.thread?.id || threadId, principal, {
+    const result: any = await retireThread(preflight.thread?.id || threadId, {
+      actorUserId: principal?.userId || "system",
       reason: optionalBodyString(body, "reason", "manual"),
+      retirementSource: "manual",
     });
     return {
       ok: true,
-      thread: await threadRuntimeSummary(thread, await listThreadMessages(thread.id)),
+      thread: await threadRuntimeSummary(result.thread, await listThreadMessages(result.thread.id)),
     };
   }
 
@@ -1192,11 +1199,11 @@ export class ThreadsController {
     const principal = requestPrincipal(request);
     const target = await getThread(threadId);
     if (!target) throw httpError("thread_not_found", 404);
-    await this.assertThreadSanitized("thread.restore", principal, target, body);
-    const thread = await restoreThreadForPrincipal(threadId, principal, {});
+    await this.assertThreadSanitized("thread.restore", principal, target, body, { allowRetired: true });
+    const result: any = await restoreRetiredThread(threadId, { actorUserId: principal?.userId || "system" });
     return {
       ok: true,
-      thread: await threadRuntimeSummary(thread, await listThreadMessages(thread.id)),
+      thread: await threadRuntimeSummary(result.thread, await listThreadMessages(result.thread.id)),
     };
   }
 
@@ -1237,10 +1244,12 @@ export class ThreadsController {
         });
         continue;
       }
-      const retired = await retireThreadForPrincipal(preflight.thread.id, principal, {
+      const result: any = await retireThread(preflight.thread.id, {
+        actorUserId: principal?.userId || "system",
         reason,
         retirementSource: "bulk_worker_retire",
       });
+      const retired = result.thread;
       results.push({
         threadId: retired.id,
         title: retired.title || retired.name || retired.id,
