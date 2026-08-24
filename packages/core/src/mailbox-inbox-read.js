@@ -1,4 +1,5 @@
 import { policyError } from "./policy.js";
+import { mailboxSourceIsRetained } from "./mailbox-message-retention.js";
 import {
   assertThreadResourceAccess,
   fenceThreadResourcePolicyDelivery,
@@ -64,9 +65,9 @@ function publicMailboxInboxMessage(source = {}) {
   };
 }
 
-function projectSources(state = {}, resourceId = "", cursor = null, limit = 25) {
+function projectSources(state = {}, resourceId = "", cursor = null, limit = 25, env = process.env) {
   const all = (state.mailboxSources || [])
-    .filter((source) => source.resourceId === resourceId)
+    .filter((source) => source.resourceId === resourceId && mailboxSourceIsRetained(source, env))
     .sort(compareNewestFirst)
     .filter((source) => sourceAfterCursor(source, cursor));
   const sources = all.slice(0, limit);
@@ -136,7 +137,7 @@ export async function listMailboxInboxMessages({ mailbox, threadId = "", cursor 
       Number(resource.generation) !== Number(decision.resourceGeneration)) {
       throw policyError("mailbox_inbox_authorization_stale", 403);
     }
-    return { result: projectSources(state, resourceId, decodedCursor, pageLimit), persist: false };
+    return { result: projectSources(state, resourceId, decodedCursor, pageLimit, env), persist: false };
   }, env);
   await auditRead({ decision, principal, outcome: "allowed", reason: "managed_source_projection" }, env);
   return { ok: true, mode, shadowDenied: false, limit: pageLimit, ...fenced.result };

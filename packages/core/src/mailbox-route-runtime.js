@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { appendEvent } from "../../storage/src/store.js";
 import { assertSanitizedAction } from "./llm-sanitizer.js";
+import { mailboxMessageRetentionDays, mailboxSourceIsRetained } from "./mailbox-message-retention.js";
 import { recordMailboxRouteMetrics } from "./observability.js";
 import { policyError } from "./policy.js";
 import {
@@ -116,19 +117,28 @@ function sourceHasActiveDelivery(state, sourceId) {
 
 function compactRouteSources(state, resourceId, env) {
   const limit = routeSourceRetentionLimit(env);
+  const retentionDays = mailboxMessageRetentionDays(env);
+  const expired = (state.mailboxSources || []).filter((source) =>
+    source.resourceId === resourceId && !mailboxSourceIsRetained(source, env) && !sourceHasActiveDelivery(state, source.id));
+  if (expired.length) {
+    const expiredIds = new Set(expired.map((source) => source.id));
+    state.mailboxSources = (state.mailboxSources || []).filter((source) => !expiredIds.has(source.id));
+    state.mailboxRouteWork = (state.mailboxRouteWork || []).filter((work) => !expiredIds.has(work.sourceId));
+    state.mailboxContexts = (state.mailboxContexts || []).filter((context) => !expiredIds.has(context.sourceId));
+  }
   const retained = (state.mailboxSources || []).filter((source) => source.resourceId === resourceId);
   const required = Math.max(0, retained.length - limit + 1);
-  if (!required) return { limit, pruned: 0, capacity: true };
+  if (!required) return { limit, retentionDays, pruned: expired.length, capacity: true };
   const removable = retained
     .filter((source) => !sourceHasActiveDelivery(state, source.id))
     .sort((left, right) => Date.parse(left.createdAt || "") - Date.parse(right.createdAt || ""))
     .slice(0, required);
-  if (!removable.length) return { limit, pruned: 0, capacity: false };
+  if (!removable.length) return { limit, retentionDays, pruned: expired.length, capacity: false };
   const removed = new Set(removable.map((source) => source.id));
   state.mailboxSources = (state.mailboxSources || []).filter((source) => !removed.has(source.id));
   state.mailboxRouteWork = (state.mailboxRouteWork || []).filter((work) => !removed.has(work.sourceId));
   state.mailboxContexts = (state.mailboxContexts || []).filter((context) => !removed.has(context.sourceId));
-  return { limit, pruned: removed.size, capacity: retained.length - removed.size < limit };
+  return { limit, retentionDays, pruned: expired.length + removed.size, capacity: retained.length - removed.size < limit };
 }
 
 export async function enqueueMailboxRouteSource({ mailbox, message, idempotencyKey } = {}, env = process.env) {
@@ -463,7 +473,7 @@ export async function cancelMailboxRouteWork({ mailbox, workId, principal = {}, 
 export async function mailboxRouteStatus({ mailbox } = {}, env = process.env) {
   const resourceId = mailboxResourceId(mailbox, env); const state = await readThreadResourcePolicy(env);
   const route = (state.mailboxRoutes || []).find((item) => item.resourceId === resourceId && item.status === "active") || null;
-  const sources = (state.mailboxSources || []).filter((item) => item.resourceId === resourceId);
+  const sources = (state.mailboxSources || []).filter((item) => item.resourceId === resourceId && mailboxSourceIsRetained(item, env));
   const work = (state.mailboxRouteWork || []).filter((item) => route && item.routeId === route.id);
   const contexts = (state.mailboxContexts || []).filter((item) => route && item.routeId === route.id);
   const count = (items, key) => items.filter((item) => item.state === key || item.status === key).length;

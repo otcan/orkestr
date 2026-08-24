@@ -44,11 +44,17 @@ Legacy mailbox listeners remain append-only, but an active listener and a route
 cannot be co-enabled for the same mailbox; revoke the listener before route
 promotion. Each ingress first receives a normalized source record; delivery,
 processing, and context status are reported separately by `orkestr mailboxes
-routes status --mailbox-id …`. Source content is immutable while retained, but
-retention is bounded per mailbox by `ORKESTR_MAILBOX_ROUTE_SOURCE_RETENTION_LIMIT`
-(default `1000`, maximum `100000`). The oldest source whose associated work and
-context are terminal is compacted with those terminal records before accepting
-new ingress. If every retained source is still active, the route-source layer
+routes status --mailbox-id …`. Source content is immutable while retained.
+Messages remain queryable for `ORKESTR_MAILBOX_MESSAGE_RETENTION_DAYS` (default
+`90`, minimum `1`, maximum `3650`), and expired terminal sources are removed
+during subsequent ingress. Reads and status projections exclude expired sources
+even before compaction. Storage is also bounded per mailbox by
+`ORKESTR_MAILBOX_ROUTE_SOURCE_RETENTION_LIMIT` (default `1000`, maximum
+`100000`); deployments that must retain every message in the time window should
+size this ceiling above their expected message volume. The oldest source whose
+associated work and context are terminal is compacted with those terminal
+records before accepting new ingress. If every retained source is still active,
+the route-source layer
 returns `mailbox_route_source_backpressure`; real connector ingress retains the
 message in its retry spool and leaves all live work untouched. The Ops count is
 therefore the retained count, not an all-time message counter.

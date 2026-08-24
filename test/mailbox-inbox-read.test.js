@@ -129,6 +129,25 @@ test("managed mailbox inbox pagination is stable across deduplicated concurrent 
   );
 });
 
+test("managed mailbox inbox retains messages for the configured 90-day window", async () => {
+  const scope = await fixture("retention-window");
+  scope.env.ORKESTR_MAILBOX_MESSAGE_RETENTION_DAYS = "90";
+  await ingest(scope, "<retention-old@example.test>", "Expired body", "Expired");
+  await mutateThreadResourcePolicy((state) => {
+    const source = state.mailboxSources.find((item) => item.payload?.messageId === "<retention-old@example.test>");
+    source.createdAt = new Date(Date.now() - 91 * 24 * 60 * 60 * 1_000).toISOString();
+    source.updatedAt = source.createdAt;
+    return { changed: true, skipPolicyEpoch: true };
+  }, scope.env);
+  await ingest(scope, "<retention-current@example.test>", "Current body", "Current");
+
+  const result = await listMailboxInboxMessages({ mailbox: scope.mailbox, threadId: scope.thread.id, principal: scope.owner }, scope.env);
+
+  assert.deepEqual(result.messages.map((message) => message.subject), ["Current"]);
+  const state = await readThreadResourcePolicy(scope.env);
+  assert.equal(state.mailboxSources.some((source) => source.payload?.messageId === "<retention-old@example.test>"), false);
+});
+
 test("managed mailbox inbox fails closed on a revision race and redacts shadow/off modes", async () => {
   const scope = await fixture("modes");
   await ingest(scope, "<modes@example.test>", "Code 445566");
