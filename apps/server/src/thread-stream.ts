@@ -31,6 +31,7 @@ const attachedServers = new WeakSet<Server>();
 
 type SummaryClient = {
   principal: Record<string, unknown>;
+  lifecycleFilter: "active" | "retired" | "all";
   lastSummaryBody: string;
   backpressuredAt: number;
 };
@@ -290,6 +291,15 @@ function summaryStreamPath(url: string | undefined): boolean {
   return parsed.pathname === "/api/threads/summary/stream";
 }
 
+function summaryStreamLifecycleFilter(url: string | undefined): "active" | "retired" | "all" {
+  const parsed = new URL(url || "/", "http://localhost");
+  const lifecycle = String(parsed.searchParams.get("lifecycle") || "").trim().toLowerCase();
+  if (lifecycle === "retired" || lifecycle === "archived") return "retired";
+  if (lifecycle === "all" || lifecycle === "any") return "all";
+  const includeRetired = String(parsed.searchParams.get("includeRetired") || parsed.searchParams.get("retired") || "").trim().toLowerCase();
+  return ["1", "true", "yes", "on"].includes(includeRetired) ? "all" : "active";
+}
+
 function summaryStreamIntervalMs(): number {
   const parsed = Number(process.env.ORKESTR_SUMMARY_STREAM_INTERVAL_MS || 10_000);
   return Number.isFinite(parsed) ? Math.max(5000, parsed) : 10_000;
@@ -439,10 +449,11 @@ export function attachThreadStreamUpgrade(server: Server): void {
         const principalKey = JSON.stringify({
           userId: String(state.principal?.userId || "admin"),
           role: String(state.principal?.role || "admin"),
+          lifecycleFilter: state.lifecycleFilter,
         });
         let prepared = payloadsByPrincipal.get(principalKey);
         if (!prepared) {
-          const payload = await threadSummaryPayload({ principal: state.principal });
+          const payload = await threadSummaryPayload({ principal: state.principal, lifecycleFilter: state.lifecycleFilter });
           prepared = {
             payload,
             stableBody: stableSummaryBody(payload),
@@ -482,8 +493,9 @@ export function attachThreadStreamUpgrade(server: Server): void {
     if (summaryStreamPath(request.url)) {
       const context = await authorizeThreadUpgradeRequest(request, socket);
       if (!context) return;
+      const lifecycleFilter = summaryStreamLifecycleFilter(request.url);
       wss.handleUpgrade(request, socket, head, (ws) => {
-        summaryClients.set(ws, { principal: context.principal, lastSummaryBody: "", backpressuredAt: 0 });
+        summaryClients.set(ws, { principal: context.principal, lifecycleFilter, lastSummaryBody: "", backpressuredAt: 0 });
         ensureSummaryTimer();
         wsSend(ws, {
           type: "transport_ready",

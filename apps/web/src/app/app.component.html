@@ -107,10 +107,15 @@
     @if (canCreateThreadFromSidebar()) {
       <button class="new-thread-button sidebar-new-thread" type="button" (click)="openThreadWizard()">{{ newThreadButtonLabel() }}</button>
     }
+    @if (isAdminMode() && (retiredThreadCount > 0 || showRetiredThreads)) {
+      <button class="secondary show-retired-toggle" type="button" (click)="toggleRetiredThreads()">
+        {{ showRetiredThreads ? "Hide retired" : "Show retired" }}{{ retiredThreadCount > 0 ? " (" + retiredThreadCount + ")" : "" }}
+      </button>
+    }
 
     <div class="thread-list" role="list" aria-label="Orkestr threads">
       @for (thread of threadTreeRoots(); track thread.id) {
-        <article class="thread-entry" [class.active]="isThreadFamilyActive(thread)">
+        <article class="thread-entry" [class.active]="isThreadFamilyActive(thread)" [class.retired]="threadIsRetired(thread)">
           <a
             class="thread-item tree-parent"
             [href]="threadUrl(thread)"
@@ -147,8 +152,14 @@
               @if (isThreadProcessing(thread)) {
                 <small class="processing-line"><i></i>{{ threadProcessingLabel(thread) }}</small>
               }
+              @if (threadIsRetired(thread)) {
+                <small class="thread-retired-label">{{ retiredStatusLabel(thread) }}</small>
+              }
             </span>
             <span class="thread-badges">
+              @if (threadIsRetired(thread)) {
+                <span class="pending retired-badge">RETIRED</span>
+              }
               @if (threadRuntimeModeShortLabel(thread)) {
                 <span
                   class="pending runtime-mode-badge"
@@ -190,6 +201,9 @@
               @if (isAdminMode() && childWorkers(thread).length > 0) {
                 <span class="pending worker-count">{{ childWorkers(thread).length }}</span>
               }
+              @if (isAdminMode() && !showRetiredThreads && retiredWorkerCount(thread) > 0) {
+                <span class="pending retired-count" title="Retired workers hidden">{{ retiredWorkerCount(thread) }} retired</span>
+              }
               @if ((thread.pendingCount || 0) > 0) {
                 <span class="pending">{{ thread.pendingCount }}</span>
               }
@@ -205,6 +219,7 @@
                   [class.active]="isSelected(worker)"
                   [class.processing]="isThreadProcessing(worker)"
                   [class.error]="isThreadLatestMessageFailed(worker)"
+                  [class.retired]="threadIsRetired(worker)"
                   (click)="selectThread(worker, $event)"
                 >
                   <span class="thread-leading">
@@ -235,8 +250,14 @@
                     @if (isThreadProcessing(worker)) {
                       <small class="processing-line"><i></i>{{ threadProcessingLabel(worker) }}</small>
                     }
+                    @if (threadIsRetired(worker)) {
+                      <small class="thread-retired-label">{{ retiredStatusLabel(worker) }}</small>
+                    }
                   </span>
                   <span class="thread-badges">
+                    @if (threadIsRetired(worker)) {
+                      <span class="pending retired-badge">RETIRED</span>
+                    }
                     @if (threadRuntimeModeShortLabel(worker)) {
                       <span
                         class="pending runtime-mode-badge"
@@ -1238,6 +1259,37 @@
               </div>
             </section>
 
+            <section class="settings-card">
+              <div class="panel-title compact-title">
+                <div>
+                  <p class="eyebrow">Lifecycle</p>
+                  <h3>{{ threadIsRetired(thread) ? "Restore thread" : "Retire thread" }}</h3>
+                </div>
+              </div>
+              <p class="helper">
+                Retiring hides the thread from the default list while preserving messages, uploads, timers, git metadata, and connector settings.
+              </p>
+              @if (threadIsRetired(thread)) {
+                <div class="settings-facts">
+                  <span>Retired</span>
+                  <strong>{{ retiredStatusLabel(thread) }}</strong>
+                  <span>Retired by</span>
+                  <strong>{{ thread.retiredByUserId || thread.retiredBy || "unknown" }}</strong>
+                </div>
+              }
+              <div class="settings-actions">
+                @if (threadIsRetired(thread)) {
+                  <button type="button" (click)="restoreSelectedThread(thread)" [disabled]="busy || retiringThreadId === thread.id">
+                    {{ retiringThreadId === thread.id ? "Restoring" : "Restore thread" }}
+                  </button>
+                } @else {
+                  <button type="button" (click)="retireSelectedThread(thread)" [disabled]="busy || retiringThreadId === thread.id">
+                    {{ retiringThreadId === thread.id ? "Retiring" : "Retire thread" }}
+                  </button>
+                }
+              </div>
+            </section>
+
             <section class="settings-card danger-card">
               <div class="panel-title compact-title">
                 <div>
@@ -1283,9 +1335,34 @@
               <p class="eyebrow">Parallel Work</p>
               <h3>{{ familyWorkers(thread).length }} workers</h3>
             </div>
+            <div class="settings-actions worker-retire-actions">
+              <button class="secondary" type="button" (click)="previewRetireWorkers(thread)" [disabled]="busy || retiringWorkerThreadsParentId === (workerParentThread(thread)?.id || '') || familyWorkers(thread).length === 0">
+                {{ retiringWorkerThreadsParentId === (workerParentThread(thread)?.id || '') ? "Checking" : "Preview retire" }}
+              </button>
+              <button type="button" (click)="retireEligibleWorkers(thread)" [disabled]="busy || retiringWorkerThreadsParentId === (workerParentThread(thread)?.id || '') || familyWorkers(thread).length === 0">
+                {{ retiringWorkerThreadsParentId === (workerParentThread(thread)?.id || '') ? "Retiring" : "Retire eligible" }}
+              </button>
+            </div>
           </div>
 
           <div class="worker-panel">
+            @if (workerRetirePreviewFor(thread); as preview) {
+              <div class="compact-list worker-retire-preview">
+                <article class="compact-row">
+                  <strong>{{ preview.dryRun ? "Retirement preview" : "Retirement result" }}</strong>
+                  <span>{{ workerRetireEligibleCount(preview) }} eligible · {{ workerRetireSkippedCount(preview) }} skipped</span>
+                </article>
+                @for (result of preview.results || []; track result.threadId) {
+                  <article class="compact-row worker-retire-row">
+                    <strong>{{ result.title || result.threadId }}</strong>
+                    <span>{{ result.status }}</span>
+                    @if (workerRetireResultLabel(result)) {
+                      <p>{{ workerRetireResultLabel(result) }}</p>
+                    }
+                  </article>
+                }
+              </div>
+            }
             <div class="compact-list">
               @if (parentThread(thread); as parent) {
                 <article class="compact-row">

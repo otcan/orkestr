@@ -3,8 +3,9 @@ import path from "node:path";
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { promisify } from "node:util";
-import { Body, Controller, Delete, Get, HttpCode, Param, Post, Query, Req } from "@nestjs/common";
+import { Body, Controller, Delete, Get, HttpCode, HttpException, Param, Post, Query, Req } from "@nestjs/common";
 import { deliverWhatsAppReplies } from "../../../../../packages/connectors/src/whatsapp.js";
+import { appendEvent } from "../../../../../packages/storage/src/store.js";
 import {
   completeCodexModeCommand,
   deliverPendingThreadInputs,
@@ -27,6 +28,10 @@ import {
   enqueueThreadInputForPrincipal,
   getThread,
   listThreadMessages,
+  listThreads,
+  restoreThreadForPrincipal,
+  retireThreadForPrincipal,
+  threadIsRetired,
   updateThread,
 } from "../../../../../packages/core/src/threads.js";
 import { requestPrincipal } from "../../../../../packages/core/src/principal.js";
@@ -55,6 +60,7 @@ import {
   threadNeedsCodexAppServerMigration,
   threadUsesCodexAppServer,
 } from "../../../../../packages/core/src/codex-app-server.js";
+import { refreshThreadGitState } from "../../../../../packages/core/src/thread-workers.js";
 import { codexThreadId, threadRuntimeSummary, threadSummaryPayload } from "../../thread-summary.js";
 import { ensureAttachmentsArray, httpError, validateRequestSchema } from "../../common/http.js";
 import {
@@ -71,6 +77,7 @@ import {
   assertThreadAdminOnly,
   optionalBodyBoolean,
   optionalBodyString,
+  threadIsActive,
 } from "./thread-route-helpers.js";
 
 const execFileAsync = promisify(execFile);
@@ -197,6 +204,39 @@ function refreshIdleThreadMetadataQuery(query: Record<string, unknown> = {}): bo
   return optionalBodyBoolean(query, "refreshIdleMetadata", false) ||
     optionalBodyBoolean(query, "refreshMetadata", false) ||
     optionalBodyBoolean(query, "liveMetadata", false);
+}
+
+function includeRetiredThreadsQuery(query: Record<string, unknown> = {}): boolean {
+  return optionalBodyBoolean(query, "includeRetired", false) ||
+    optionalBodyBoolean(query, "retired", false) ||
+    optionalBodyBoolean(query, "archived", false);
+}
+
+function lifecycleThreadsQuery(query: Record<string, unknown> = {}): "active" | "retired" | "all" {
+  const lifecycle = String(query.lifecycle || "").trim().toLowerCase();
+  if (lifecycle === "retired" || lifecycle === "archived") return "retired";
+  if (lifecycle === "all" || lifecycle === "any") return "all";
+  return includeRetiredThreadsQuery(query) ? "all" : "active";
+}
+
+function finiteThreadNumber(value: unknown): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function threadHasGitContext(thread: any): boolean {
+  return Boolean(String(thread?.repoPath || thread?.worktreePath || thread?.branchName || "").trim());
+}
+
+function workerRetirementGitBlockers(thread: any, refreshError: unknown = null): string[] {
+  if (!String(thread?.parentThreadId || "").trim()) return [];
+  if (refreshError && threadHasGitContext(thread)) return ["git_state_unknown"];
+  const blockers: string[] = [];
+  if (finiteThreadNumber(thread?.gitDirtyFiles ?? thread?.gitChangedFiles) > 0) blockers.push("worker_has_local_edits");
+  if (finiteThreadNumber(thread?.gitParentAhead) > 0) blockers.push("worker_has_unmerged_commits");
+  if (finiteThreadNumber(thread?.gitRemoteBehind) > 0) blockers.push("worker_remote_has_new_commits");
+  if (thread?.gitRemoteMissing === true && finiteThreadNumber(thread?.gitAhead ?? thread?.gitParentAhead) > 0) blockers.push("worker_remote_missing");
+  return blockers;
 }
 
 function safeCloneSegment(value: string): string {
@@ -472,11 +512,81 @@ export class ThreadsController {
     };
   }
 
+  private async threadRetirementPreflight(thread: any, principal: any) {
+    let current = thread;
+    let gitRefreshError: unknown = null;
+    if (String(thread.parentThreadId || "").trim() && threadHasGitContext(thread)) {
+      try {
+        const refreshed: any = await refreshThreadGitState(thread.id);
+        current = refreshed?.thread || current;
+      } catch (error) {
+        gitRefreshError = error;
+      }
+    }
+    const [messages, timers, runtime] = await Promise.all([
+      listThreadMessages(current.id).catch(() => []),
+      listTimersForPrincipal(principal).catch(() => []),
+      this.threadRuntimeService.status(current.id).catch(() => null),
+    ]);
+    const blockers: string[] = [...workerRetirementGitBlockers(current, gitRefreshError)];
+    if (threadIsActive(runtime)) blockers.push("runtime_active");
+    if (!String(current.parentThreadId || "").trim()) {
+      const activeWorkers = (await listThreads().catch(() => []))
+        .filter((item: any) => item.parentThreadId === current.id && item.threadKind !== "task-agent" && !threadIsRetired(item));
+      if (activeWorkers.length > 0) blockers.push("active_worker_threads");
+    }
+    if (messages.some((message: any) => ["queued", "pending_delivery", "awaiting_ack", "running"].includes(String(message.state || "").trim().toLowerCase()))) {
+      blockers.push("active_messages");
+    }
+    if (messages.some((message: any) => {
+      const phase = String(message.phase || "").trim().toLowerCase();
+      const state = String(message.state || "").trim().toLowerCase();
+      return ["approval", "needs_approval", "awaiting_approval"].includes(phase) || ["approval", "needs_approval", "awaiting_approval"].includes(state);
+    })) {
+      blockers.push("pending_approval");
+    }
+    const threadKeys = new Set([current.id, current.name, current.bindingName, current.title].map((value) => String(value || "").trim()).filter(Boolean));
+    if (timers.some((timer: any) => {
+      if (timer.enabled === false) return false;
+      const targetType = String(timer.targetType || (timer.threadId ? "thread" : "")).trim().toLowerCase();
+      if (targetType && targetType !== "thread") return false;
+      return threadKeys.has(String(timer.target || timer.threadId || "").trim());
+    })) {
+      blockers.push("enabled_timer");
+    }
+    const binding = current.binding && typeof current.binding === "object" ? current.binding : null;
+    if (
+      binding &&
+      String(binding.connector || "").trim().toLowerCase() === "whatsapp" &&
+      binding.retired !== true &&
+      binding.enabled !== false &&
+      String(binding.chatId || "").trim()
+    ) {
+      blockers.push("active_whatsapp_binding");
+    }
+    const uniqueBlockers = [...new Set(blockers)];
+    await appendEvent({
+      type: "thread_retirement_checked",
+      threadId: current.id,
+      parentThreadId: current.parentThreadId || null,
+      blockerCount: uniqueBlockers.length,
+      blockers: uniqueBlockers,
+    }).catch(() => {});
+    return {
+      eligible: uniqueBlockers.length === 0,
+      blockers: uniqueBlockers,
+      runtime,
+      messageCount: messages.length,
+      thread: current,
+    };
+  }
+
   @Get()
   async list(@Req() request: any, @Query() query: Record<string, unknown> = {}) {
     return threadSummaryPayload({
       principal: requestPrincipal(request),
       includeAllUserThreads: includeAllUserThreadsQuery(query),
+      lifecycleFilter: lifecycleThreadsQuery(query),
       refreshIdleMetadata: refreshIdleThreadMetadataQuery(query),
     });
   }
@@ -1039,6 +1149,124 @@ export class ThreadsController {
       }
     }
     return { ...result, deletedTimers };
+  }
+
+  @Post(":threadId/retire")
+  @HttpCode(200)
+  async retire(@Req() request: any, @Param("threadId") threadId: string, @Body() body: Record<string, unknown> = {}) {
+    const principal = requestPrincipal(request);
+    const target = await getThread(threadId);
+    if (!target) throw httpError("thread_not_found", 404);
+    await this.assertThreadSanitized("thread.retire", principal, target, body);
+    const preflight = await this.threadRetirementPreflight(target, principal);
+    if (optionalBodyBoolean(body, "dryRun", false)) {
+      return {
+        ok: true,
+        dryRun: true,
+        eligible: preflight.eligible,
+        blockers: preflight.blockers,
+        thread: await threadRuntimeSummary(target, await listThreadMessages(target.id)),
+      };
+    }
+    if (!preflight.eligible) {
+      await appendEvent({
+        type: "thread_retire_skipped",
+        threadId: target.id,
+        parentThreadId: target.parentThreadId || null,
+        blockers: preflight.blockers,
+      }).catch(() => {});
+      throw new HttpException({ error: "thread_retirement_blocked", blockers: preflight.blockers }, 409);
+    }
+    const thread = await retireThreadForPrincipal(preflight.thread?.id || threadId, principal, {
+      reason: optionalBodyString(body, "reason", "manual"),
+    });
+    return {
+      ok: true,
+      thread: await threadRuntimeSummary(thread, await listThreadMessages(thread.id)),
+    };
+  }
+
+  @Post(":threadId/restore")
+  @HttpCode(200)
+  async restore(@Req() request: any, @Param("threadId") threadId: string, @Body() body: Record<string, unknown> = {}) {
+    const principal = requestPrincipal(request);
+    const target = await getThread(threadId);
+    if (!target) throw httpError("thread_not_found", 404);
+    await this.assertThreadSanitized("thread.restore", principal, target, body);
+    const thread = await restoreThreadForPrincipal(threadId, principal, {});
+    return {
+      ok: true,
+      thread: await threadRuntimeSummary(thread, await listThreadMessages(thread.id)),
+    };
+  }
+
+  @Post(":threadId/workers/retire")
+  @HttpCode(200)
+  async retireWorkers(@Req() request: any, @Param("threadId") threadId: string, @Body() body: Record<string, unknown> = {}) {
+    const principal = requestPrincipal(request);
+    assertThreadAdminOnly("thread.workers.retire", principal);
+    const parent = await getThread(threadId);
+    if (!parent) throw httpError("thread_not_found", 404);
+    const dryRun = optionalBodyBoolean(body, "dryRun", false);
+    const reason = optionalBodyString(body, "reason", "bulk_worker_retire") || "bulk_worker_retire";
+    const workers = (await listThreads())
+      .filter((thread: any) => thread.parentThreadId === parent.id && thread.threadKind !== "task-agent")
+      .sort((left: any, right: any) => Number(left.workerIndex || 0) - Number(right.workerIndex || 0) || String(left.createdAt || "").localeCompare(String(right.createdAt || "")));
+    const results: Array<Record<string, unknown>> = [];
+    for (const worker of workers) {
+      if (threadIsRetired(worker)) {
+        results.push({ threadId: worker.id, status: "skipped", reason: "already_retired", blockers: [] });
+        continue;
+      }
+      const preflight = await this.threadRetirementPreflight(worker, principal);
+      if (!preflight.eligible || dryRun) {
+        const status = preflight.eligible ? "eligible" : "skipped";
+        if (!preflight.eligible) {
+          await appendEvent({
+            type: "thread_retire_skipped",
+            threadId: preflight.thread.id,
+            parentThreadId: preflight.thread.parentThreadId || null,
+            blockers: preflight.blockers,
+          }).catch(() => {});
+        }
+        results.push({
+          threadId: preflight.thread.id,
+          title: preflight.thread.title || preflight.thread.name || preflight.thread.id,
+          status,
+          blockers: preflight.blockers,
+        });
+        continue;
+      }
+      const retired = await retireThreadForPrincipal(preflight.thread.id, principal, {
+        reason,
+        retirementSource: "bulk_worker_retire",
+      });
+      results.push({
+        threadId: retired.id,
+        title: retired.title || retired.name || retired.id,
+        status: "retired",
+        blockers: [],
+      });
+    }
+    const retiredCount = results.filter((result) => result.status === "retired").length;
+    const skippedCount = results.filter((result) => result.status === "skipped").length;
+    await appendEvent({
+      type: "thread_retire_bulk_completed",
+      threadId: parent.id,
+      scanned: workers.length,
+      retiredCount,
+      skippedCount,
+      dryRun,
+    }).catch(() => {});
+    return {
+      ok: true,
+      dryRun,
+      parentThreadId: parent.id,
+      scanned: workers.length,
+      retiredCount,
+      skippedCount,
+      results,
+    };
   }
 
 }

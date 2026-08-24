@@ -115,6 +115,37 @@ test("web thread input allows Orkestr control commands", async () => {
   assert.ok(sendThreadInput.includes("controlAllowed: true"));
 });
 
+test("main UI exposes non-destructive thread retirement controls", async () => {
+  const sources = await read([
+    "apps/web/src/app/app.component.ts",
+    "apps/web/src/app/app.component.html",
+    "apps/web/src/app/api.service.ts",
+    "apps/web/src/styles.css",
+    "apps/server/src/thread-summary.ts",
+    "apps/server/src/modules/threads/threads.controller.ts",
+    "apps/server/src/modules/threads/thread-workers.controller.ts",
+  ]);
+
+  assert.ok(sources.includes("Show retired"));
+  assert.ok(sources.includes("Retire thread"));
+  assert.ok(sources.includes("Restore thread"));
+  assert.ok(sources.includes("Preview retire"));
+  assert.ok(sources.includes("Retire eligible"));
+  assert.ok(sources.includes("retireThread("));
+  assert.ok(sources.includes("restoreThread("));
+  assert.ok(sources.includes("retireThreadWorkers("));
+  assert.ok(sources.includes("lifecycleFilter"));
+  assert.ok(sources.includes('lifecycle === "retired"'));
+  assert.ok(sources.includes("thread_retirement_checked"));
+  assert.ok(sources.includes("thread_retire_bulk_completed"));
+  assert.ok(sources.includes("thread_retirement_blocked"));
+  assert.ok(sources.includes("active_whatsapp_binding"));
+  assert.ok(sources.includes("worker_has_local_edits"));
+  assert.ok(sources.includes("worker_has_unmerged_commits"));
+  assert.ok(sources.includes("Delete thread"));
+  assert.ok(sources.includes("this.api.deleteThread"));
+});
+
 test("web thread input renders optimistic user messages before server refresh", async () => {
   const sources = await read([
     "apps/web/src/app/app.component.ts",

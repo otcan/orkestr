@@ -28,6 +28,7 @@ const runningThreadIds = new Set();
 const messageMutationQueues = new Map();
 const activeInputStates = new Set(["queued", "pending_delivery", "awaiting_ack", "running"]);
 const whatsappSources = new Set(["whatsapp", "whatsapp_inbound", "whatsapp_client"]);
+const retiredLifecycleState = "retired";
 const messageStringFields = [
   "connector",
   "externalId",
@@ -109,6 +110,16 @@ function optionalNumber(value) {
   if (value === null || value === undefined || value === "") return null;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+export function threadLifecycleState(thread = {}) {
+  const raw = String(thread.lifecycleState || thread.lifecycle || "").trim().toLowerCase();
+  if (raw === retiredLifecycleState || thread.retired === true || thread.archived === true) return retiredLifecycleState;
+  return "active";
+}
+
+export function threadIsRetired(thread = {}) {
+  return threadLifecycleState(thread) === retiredLifecycleState;
 }
 
 function visibleMessageMutationFields(patch = {}) {
@@ -224,6 +235,15 @@ async function createThreadLocked(input = {}, env = process.env) {
     name,
     title: String(input.title || name).trim(),
     state: String(input.state || "sleeping").trim(),
+    lifecycleState: threadLifecycleState(input),
+    retired: threadIsRetired(input),
+    retiredAt: String(input.retiredAt || "").trim() || null,
+    retiredBy: String(input.retiredBy || input.retiredByUserId || "").trim() || null,
+    retiredByUserId: String(input.retiredByUserId || input.retiredBy || "").trim() || null,
+    retiredReason: String(input.retiredReason || "").trim() || null,
+    restoredAt: String(input.restoredAt || "").trim() || null,
+    restoredBy: String(input.restoredBy || input.restoredByUserId || "").trim() || null,
+    restoredByUserId: String(input.restoredByUserId || input.restoredBy || "").trim() || null,
     wakePolicy: String(input.wakePolicy || "wake-on-message").trim(),
     cwd: String(input.cwd || input.projectRoot || input.workspace || "").trim(),
     workspace: String(input.workspace || input.cwd || input.projectRoot || "").trim(),
@@ -414,6 +434,93 @@ async function updateThreadLocked(threadId, patch = {}, env = process.env) {
   }
   if (changed) await saveThreads(next, env);
   return updated;
+}
+
+export async function retireThread(threadId, options = {}, env = process.env) {
+  const id = normalizeThreadId(threadId);
+  const thread = await getThread(id, env);
+  if (!thread) {
+    const error = new Error("thread_not_found");
+    error.statusCode = 404;
+    throw error;
+  }
+  if (threadIsRetired(thread)) return thread;
+  const now = nowIso();
+  const retiredBy = String(options.retiredBy || options.retiredByUserId || options.actorUserId || "").trim() || null;
+  const retired = await updateThread(thread.id, {
+    lifecycleState: retiredLifecycleState,
+    retired: true,
+    retiredAt: now,
+    retiredBy,
+    retiredByUserId: retiredBy,
+    retiredReason: String(options.reason || options.retiredReason || "").trim() || "manual",
+    retirementSource: String(options.retirementSource || options.source || "manual").trim() || "manual",
+  }, env);
+  await appendEvent({
+    type: "thread_retired",
+    threadId: retired.id,
+    parentThreadId: retired.parentThreadId || null,
+    rootThreadId: retired.rootThreadId || null,
+    retiredBy: retired.retiredBy || retired.retiredByUserId || null,
+    retiredByUserId: retired.retiredByUserId || retired.retiredBy || null,
+    reason: retired.retiredReason || "",
+    retirementSource: retired.retirementSource || "manual",
+  }, env).catch(() => {});
+  return retired;
+}
+
+export async function restoreThread(threadId, options = {}, env = process.env) {
+  const id = normalizeThreadId(threadId);
+  const thread = await getThread(id, env);
+  if (!thread) {
+    const error = new Error("thread_not_found");
+    error.statusCode = 404;
+    throw error;
+  }
+  if (!threadIsRetired(thread)) return thread;
+  const restoredBy = String(options.restoredBy || options.restoredByUserId || options.actorUserId || "").trim() || null;
+  const restored = await updateThread(thread.id, {
+    lifecycleState: "active",
+    retired: false,
+    restoredAt: nowIso(),
+    restoredBy,
+    restoredByUserId: restoredBy,
+  }, env);
+  await appendEvent({
+    type: "thread_restored",
+    threadId: restored.id,
+    parentThreadId: restored.parentThreadId || null,
+    rootThreadId: restored.rootThreadId || null,
+    restoredBy: restored.restoredBy || restored.restoredByUserId || null,
+    restoredByUserId: restored.restoredByUserId || restored.restoredBy || null,
+  }, env).catch(() => {});
+  return restored;
+}
+
+export async function retireThreadForPrincipal(threadId, principal, options = {}, env = process.env) {
+  const target = await getThreadForPrincipal(threadId, principal, env);
+  if (!target) {
+    const error = new Error("thread_not_found");
+    error.statusCode = 404;
+    throw error;
+  }
+  return retireThread(target.id, {
+    ...options,
+    retiredBy: options.retiredBy || principal?.userId || "",
+  }, env);
+}
+
+export async function restoreThreadForPrincipal(threadId, principal, options = {}, env = process.env) {
+  const target = await getThreadForPrincipal(threadId, principal, env);
+  if (!target) {
+    const error = new Error("thread_not_found");
+    error.statusCode = 404;
+    throw error;
+  }
+  return restoreThread(target.id, {
+    ...options,
+    restoredBy: options.restoredBy || principal?.userId || "",
+  }, env);
 }
 
 function comparableThreadState(thread = {}) {
