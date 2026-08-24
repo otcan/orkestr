@@ -147,6 +147,10 @@ export function normalizeGrant(raw = {}, env = process.env) {
     source: clean(raw.source || "explicit") || "explicit",
     createdAt: clean(raw.createdAt) || nowIso(),
     updatedAt: clean(raw.updatedAt || raw.createdAt) || nowIso(),
+    // Keep legacy/malformed persisted expiry text intact so the current-grant
+    // check below can fail it closed rather than accidentally treating it as
+    // an unbounded grant. New writes use exactGrantExpiry and are canonical.
+    expiresAt: clean(raw.expiresAt ?? raw.expires_at) || null,
     revokedAt: clean(raw.revokedAt) || null,
     revokedBy: clean(raw.revokedBy) || null,
     reason: clean(raw.reason) || null,
@@ -248,8 +252,45 @@ export function exactGrantPermissions(resourceType, entry = {}) {
   return normalized;
 }
 
+export function normalizeThreadResourceGrantExpiry(value = "") {
+  const raw = clean(value);
+  if (!raw) return null;
+  const timestamp = Date.parse(raw);
+  return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : null;
+}
+
+// A missing expiry is deliberately unbounded. Any non-empty expiry which
+// cannot be parsed, including an old malformed row, is not current. This
+// keeps a persistence error from widening a live authorization decision.
+export function threadResourceGrantIsCurrent(grant = {}, now = Date.now()) {
+  if (clean(grant.revokedAt)) return false;
+  const expiresAt = clean(grant.expiresAt ?? grant.expires_at);
+  if (!expiresAt) return true;
+  const timestamp = Date.parse(expiresAt);
+  return Number.isFinite(timestamp) && timestamp > now;
+}
+
+export function exactGrantExpiry(entry = {}, fallback = {}) {
+  const source = Object.hasOwn(entry, "expiresAt") || Object.hasOwn(entry, "expires_at") ? entry : fallback;
+  if (!Object.hasOwn(source, "expiresAt") && !Object.hasOwn(source, "expires_at")) return null;
+  const value = source.expiresAt ?? source.expires_at;
+  if (value === null || value === undefined || clean(value) === "") return null;
+  const expiresAt = normalizeThreadResourceGrantExpiry(value);
+  if (!expiresAt || Date.parse(expiresAt) <= Date.now()) throw policyError("thread_resource_grant_expiry_invalid", 400);
+  return expiresAt;
+}
+
+export function earliestThreadResourceGrantExpiry(...values) {
+  const timestamps = values
+    .map((value) => clean(value))
+    .filter(Boolean)
+    .map((value) => Date.parse(value))
+    .filter(Number.isFinite);
+  return timestamps.length ? new Date(Math.min(...timestamps)).toISOString() : null;
+}
+
 function directGrants(state, threadId, resource) {
-  return state.grants.filter((grant) => !grant.revokedAt && grant.threadId === threadId && grant.resourceType === resource.resourceType && grant.resourceId === resource.id && grant.ownerUserId === resource.ownerUserId && grant.boundaryId === resource.boundaryId);
+  return state.grants.filter((grant) => threadResourceGrantIsCurrent(grant) && grant.threadId === threadId && grant.resourceType === resource.resourceType && grant.resourceId === resource.id && grant.ownerUserId === resource.ownerUserId && grant.boundaryId === resource.boundaryId);
 }
 
 export function declaredChildScopeEntries(thread = {}, resourceType = "") {
@@ -259,7 +300,7 @@ export function declaredChildScopeEntries(thread = {}, resourceType = "") {
     if (normalizeThreadResourceType(item.resourceType || item.type || (item.desktopSlug || item.slug ? "desktop" : "")) !== resourceType) return [];
     const nativeId = safeThreadResourceSegment(item.nativeId || item.resourceNativeId || item.resourceId || item.id || item.resourceKey || item.key || item.slug || item.desktopSlug || item.mailboxId || item.instanceId, "");
     if (!nativeId) throw policyError("thread_resource_child_scope_invalid", 400);
-    return [{ nativeId, permissions: exactGrantPermissions(resourceType, item) }];
+    return [{ nativeId, permissions: exactGrantPermissions(resourceType, item), expiresAt: exactGrantExpiry(item) }];
   });
 }
 
@@ -271,6 +312,11 @@ export function declaredScopePermissions(entries = [], resource = {}) {
   const matching = entries.filter((entry) => entry.nativeId === resource.nativeId || entry.nativeId === resource.resourceKey || entry.nativeId === resource.id);
   if (!matching.length) return null;
   return new Set(matching.flatMap((entry) => entry.permissions));
+}
+
+export function declaredScopeExpiry(entries = [], resource = {}) {
+  const matching = entries.filter((entry) => entry.nativeId === resource.nativeId || entry.nativeId === resource.resourceKey || entry.nativeId === resource.id);
+  return earliestThreadResourceGrantExpiry(...matching.map((entry) => entry.expiresAt));
 }
 
 export async function effectiveThreadResourceGrant(state, thread, resource, permission, env, seen = new Set()) {
@@ -293,9 +339,20 @@ export async function effectiveThreadResourceGrant(state, thread, resource, perm
   // explicit child restriction. Explicit policy rows and direct grants narrow.
   const narrowed = (policy?.inheritanceMode !== "snapshot_ceiling" && Boolean(policy)) || state.grants.some((grant) => !grant.revokedAt && grant.threadId === thread.id && grant.resourceType === resource.resourceType) || declaredChildScope(thread, resource.resourceType);
   if (policy?.explicitEmpty) return null;
-  if (!narrowed) return { ...parentGrant, inheritedByThreadId: thread.id, inheritedFromThreadId: parentGrant.threadId };
+  if (!narrowed) return {
+    ...parentGrant,
+    effectiveExpiresAt: earliestThreadResourceGrantExpiry(parentGrant.effectiveExpiresAt, parentGrant.expiresAt),
+    inheritedByThreadId: thread.id,
+    inheritedFromThreadId: parentGrant.threadId,
+  };
   if (!directGrant) return null;
-  return { ...directGrant, inheritedByThreadId: thread.id, inheritedFromThreadId: parentGrant.threadId, revision: Math.max(parentGrant.revision, directGrant.revision) };
+  return {
+    ...directGrant,
+    effectiveExpiresAt: earliestThreadResourceGrantExpiry(parentGrant.effectiveExpiresAt, parentGrant.expiresAt, directGrant.expiresAt),
+    inheritedByThreadId: thread.id,
+    inheritedFromThreadId: parentGrant.threadId,
+    revision: Math.max(parentGrant.revision, directGrant.revision),
+  };
 }
 
 export function effectiveThreadResourceGrantForLineage(state, lineage = [], resource, permission) {
@@ -304,7 +361,10 @@ export function effectiveThreadResourceGrantForLineage(state, lineage = [], reso
     const thread = lineage[index];
     const direct = directGrants(state, thread.id, resource);
     const directGrant = direct.find((grant) => grant.permissions.includes(permission)) || null;
-    if (index === 0) { effective = directGrant; continue; }
+    if (index === 0) {
+      effective = directGrant ? { ...directGrant, effectiveExpiresAt: earliestThreadResourceGrantExpiry(directGrant.expiresAt) } : null;
+      continue;
+    }
     // A descendant direct grant is only a restriction of an already-effective
     // ancestor grant. It can never re-root a denied lineage.
     if (!effective) return null;
@@ -315,7 +375,13 @@ export function effectiveThreadResourceGrantForLineage(state, lineage = [], reso
     if (policy?.explicitEmpty) return null;
     if (!narrowed) continue;
     if (!directGrant) return null;
-    effective = { ...directGrant, inheritedByThreadId: thread.id, inheritedFromThreadId: effective.threadId, revision: Math.max(effective.revision, directGrant.revision) };
+    effective = {
+      ...directGrant,
+      effectiveExpiresAt: earliestThreadResourceGrantExpiry(effective.effectiveExpiresAt, effective.expiresAt, directGrant.expiresAt),
+      inheritedByThreadId: thread.id,
+      inheritedFromThreadId: effective.threadId,
+      revision: Math.max(effective.revision, directGrant.revision),
+    };
   }
   return effective;
 }

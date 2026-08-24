@@ -249,7 +249,7 @@ test("PostgreSQL policy store commits complete state, preserves audit, and rolls
       state.revision = 1;
       state.resources = [resource()];
       state.policies = [{ threadId: "thread-1", resourceType: "oxrm", revision: 1, explicitEmpty: false, inheritanceMode: "explicit", parentSnapshotRevision: 0, createdAt: audit.createdAt, updatedAt: audit.createdAt }];
-      state.grants = [{ id: "grant-1", threadId: "thread-1", resourceType: "oxrm", resourceId: resource().id, resourceKey: "crm", ownerUserId: "admin", boundaryId: "local", permissions: ["read"], revision: 1, source: "admin", createdAt: audit.createdAt, updatedAt: audit.createdAt, revokedAt: null, revokedBy: null, reason: null }];
+      state.grants = [{ id: "grant-1", threadId: "thread-1", resourceType: "oxrm", resourceId: resource().id, resourceKey: "crm", ownerUserId: "admin", boundaryId: "local", permissions: ["read"], revision: 1, source: "admin", createdAt: audit.createdAt, updatedAt: audit.createdAt, expiresAt: "2026-01-01T00:05:00.000Z", revokedAt: null, revokedBy: null, reason: null }];
       state.ceilings = [{ threadId: "thread-1", resourceType: "oxrm", resourceId: resource().id, permissions: ["read"], parentThreadId: "parent", createdAt: audit.createdAt }];
       state.mutations = [{ action: "grant.replace", idempotencyKey: "request-1", result: { ok: true }, policyRevision: 1, createdAt: audit.createdAt }];
       state.mailboxListeners = [{ id: "listener-1", resourceType: "mailbox", resourceId: "mail-1", threadId: "thread-1", filterKey: "filter", filter: {}, idempotencyKey: "listener-request", generation: 1, status: "active", grantRevision: 1, policyRevision: 1, resourceGeneration: 1, createdAt: audit.createdAt, updatedAt: audit.createdAt, revokedAt: null, revokedBy: null, reason: null }];
@@ -266,6 +266,7 @@ test("PostgreSQL policy store commits complete state, preserves audit, and rolls
     assert.equal(committed.resources.length, 1);
     assert.equal(committed.policies.length, 1);
     assert.equal(committed.grants.length, 1);
+    assert.equal(committed.grants[0].expiresAt, "2026-01-01T00:05:00.000Z");
     assert.equal(committed.ceilings.length, 1);
     assert.equal(committed.mutations.length, 1);
     assert.equal(committed.mailboxListeners.length, 1);
@@ -385,18 +386,40 @@ test("real PostgreSQL policy store round-trips a transactional record when an is
     ORKESTR_THREAD_RESOURCE_POLICY_POSTGRES_URL: realPostgresUrl,
   };
   const markerId = `local:admin:oxrm:${marker}`;
+  const grantExpiresAt = new Date(Date.now() + 5 * 60_000).toISOString();
   let inserted = false;
   try {
     await withThreadResourcePolicyTransaction((state) => {
       state.resources.push({ ...resource(markerId), nativeId: marker, resourceKey: marker });
+      state.grants.push({
+        id: `grant-${marker}`,
+        threadId: `thread-${marker}`,
+        resourceType: "oxrm",
+        resourceId: markerId,
+        resourceKey: marker,
+        ownerUserId: "admin",
+        boundaryId: "local",
+        permissions: ["read"],
+        revision: 1,
+        source: "integration",
+        createdAt: grantExpiresAt,
+        updatedAt: grantExpiresAt,
+        expiresAt: grantExpiresAt,
+        revokedAt: null,
+        revokedBy: null,
+        reason: null,
+      });
       return { state };
     }, env);
     inserted = true;
-    assert.equal((await readThreadResourcePolicyState(env)).resources.some((item) => item.id === markerId), true);
+    const committed = await readThreadResourcePolicyState(env);
+    assert.equal(committed.resources.some((item) => item.id === markerId), true);
+    assert.equal(committed.grants.find((item) => item.id === `grant-${marker}`)?.expiresAt, grantExpiresAt);
   } finally {
     if (inserted) {
       await withThreadResourcePolicyTransaction((state) => {
         state.resources = state.resources.filter((item) => item.id !== markerId);
+        state.grants = state.grants.filter((item) => item.id !== `grant-${marker}`);
         return { state };
       }, env);
     }

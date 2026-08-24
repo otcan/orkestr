@@ -325,6 +325,23 @@ test("issued resource tokens enforce lifetime and are revoked with their effecti
   await assert.rejects(() => authorizeConnectorMcpToken(active.token, item.env), /connector_mcp_token_invalid/);
 });
 
+test("issued resource tokens are capped by the earliest inherited grant expiry", async () => {
+  const item = await fixture();
+  const parent = await createThread({ id: "expiring-resource-parent", name: "Expiring resource parent", ownerUserId: "tenant" }, item.env);
+  const parentExpiry = new Date(Date.now() + 3 * 60_000).toISOString();
+  await setThreadResourceGrants(parent.id, "oxrm", [{ resourceId: "crm-primary", permissions: ["read"], expiresAt: parentExpiry }], { principal: item.principal }, item.env);
+  const child = await createThread({ id: "expiring-resource-child", name: "Expiring resource child", ownerUserId: "tenant", parentThreadId: parent.id }, item.env);
+  // A child direct restriction must remain bounded by the parent's current
+  // grant even though it becomes the effective grant source for the session.
+  await setThreadResourceGrants(child.id, "oxrm", [{ resourceId: "crm-primary", permissions: ["read"] }], { principal: item.principal }, item.env);
+  const issued = await issueConnectorMcpResourceToken(issueInput(item, { threadId: child.id, targetThreadId: child.id, ttlMs: 5 * 60_000 }), item.env);
+  const session = (await readThreadResourcePolicy(item.env)).resourceSessions.find((item) => item.bearerHash);
+
+  assert.equal(issued.expiresAt, parentExpiry);
+  assert.equal(session?.expiresAt, parentExpiry);
+  assert.equal(session?.grantThreadId, child.id);
+});
+
 test("parent grant replacement invalidates an inherited child session through grantThreadId", async () => {
   const item = await fixture();
   const parent = await createThread({ id: "resource-source-parent", name: "Resource source parent", ownerUserId: "tenant" }, item.env);

@@ -127,6 +127,7 @@ function ensureSchema(db) {
       source text,
       created_at text not null,
       updated_at text not null,
+      expires_at text,
       revoked_at text,
       revoked_by text,
       reason text
@@ -317,6 +318,7 @@ function ensureSchema(db) {
   ensureColumn(db, "orkestr_thread_resource_policy", "parent_snapshot_revision", "integer not null default 0");
   ensureColumn(db, "orkestr_thread_resources", "native_id", "text not null default ''");
   ensureColumn(db, "orkestr_thread_resources", "status", "text not null default 'active'");
+  ensureColumn(db, "orkestr_thread_resource_grants", "expires_at", "text");
   ensureColumn(db, "orkestr_mailbox_thread_deliveries", "epoch", "integer not null default 1");
   ensureColumn(db, "orkestr_mailbox_thread_listeners", "idempotency_key", "text not null default ''");
   ensureColumn(db, "orkestr_thread_resource_audit_outbox", "claim_token", "text");
@@ -365,8 +367,8 @@ function replaceState(db, state = {}, auditOutboxUpserts = []) {
   for (const item of state.resources || []) resource.run(item.resourceType, item.id, item.nativeId || item.resourceKey, item.resourceKey, item.ownerUserId, item.boundaryId, item.generation, item.status || (item.retiredAt ? "retired" : "active"), item.backend || "", item.createdAt, item.updatedAt, item.retiredAt || null);
   const policy = db.prepare("insert into orkestr_thread_resource_policy(thread_id, resource_type, revision, explicit_empty, inheritance_mode, parent_snapshot_revision, created_at, updated_at) values (?, ?, ?, ?, ?, ?, ?, ?)");
   for (const item of state.policies || []) policy.run(item.threadId, item.resourceType, item.revision, item.explicitEmpty ? 1 : 0, item.inheritanceMode || "explicit", item.parentSnapshotRevision || 0, item.createdAt, item.updatedAt);
-  const grant = db.prepare("insert into orkestr_thread_resource_grants(id, thread_id, resource_type, resource_id, resource_key, owner_user_id, boundary_id, permissions_json, revision, source, created_at, updated_at, revoked_at, revoked_by, reason) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
-  for (const item of state.grants || []) grant.run(item.id, item.threadId, item.resourceType, item.resourceId, item.resourceKey, item.ownerUserId, item.boundaryId, JSON.stringify(item.permissions || []), item.revision, item.source || "", item.createdAt, item.updatedAt, item.revokedAt || null, item.revokedBy || null, item.reason || null);
+  const grant = db.prepare("insert into orkestr_thread_resource_grants(id, thread_id, resource_type, resource_id, resource_key, owner_user_id, boundary_id, permissions_json, revision, source, created_at, updated_at, expires_at, revoked_at, revoked_by, reason) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+  for (const item of state.grants || []) grant.run(item.id, item.threadId, item.resourceType, item.resourceId, item.resourceKey, item.ownerUserId, item.boundaryId, JSON.stringify(item.permissions || []), item.revision, item.source || "", item.createdAt, item.updatedAt, item.expiresAt || null, item.revokedAt || null, item.revokedBy || null, item.reason || null);
   const ceiling = db.prepare("insert into orkestr_thread_resource_ceilings(thread_id, resource_type, resource_id, permissions_json, parent_thread_id, created_at) values (?, ?, ?, ?, ?, ?)");
   for (const item of state.ceilings || []) ceiling.run(item.threadId, item.resourceType, item.resourceId, JSON.stringify(item.permissions || []), item.parentThreadId, item.createdAt);
   const mutation = db.prepare("insert into orkestr_thread_resource_mutations(action, idempotency_key, result_json, policy_revision, created_at) values (?, ?, ?, ?, ?)");

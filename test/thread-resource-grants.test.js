@@ -14,7 +14,11 @@ import {
   threadResourceId,
   validateThreadResourceAuthorizationBinding,
 } from "../packages/core/src/thread-resource-grants.js";
-import { openThreadResourcePolicyDatabase, readThreadResourcePolicyState } from "../packages/core/src/thread-resource-policy-store.js";
+import {
+  openThreadResourcePolicyDatabase,
+  readThreadResourcePolicyState,
+  withThreadResourcePolicyTransaction,
+} from "../packages/core/src/thread-resource-policy-store.js";
 import { resolveTargetInstance, requireResolvedTargetInstance } from "../packages/core/src/target-resolver.js";
 import { listEvents } from "../packages/storage/src/store.js";
 
@@ -74,6 +78,33 @@ test("transactional resource policies isolate same-owner threads and persist an 
     () => setThreadResourceGrants(parent.id, "oxrm", [], { principal, expectedPolicyRevision: first.resourcePolicyRevision }, env),
     /thread_resource_policy_revision_conflict/,
   );
+});
+
+test("grant expiry is persisted, rejects invalid writes, and fails closed on use", async () => {
+  const { env, principal, parent } = await fixture();
+  const expiresAt = new Date(Date.now() + 4 * 60_000).toISOString();
+  const written = await setThreadResourceGrants(parent.id, "oxrm", [{ resourceId: "xrm-a", permissions: ["read"], expiresAt }], { principal }, env);
+
+  assert.equal(written.grants[0].expiresAt, expiresAt);
+  assert.equal((await readThreadResourcePolicyState(env)).grants[0].expiresAt, expiresAt);
+  assert.equal((await authorizeThreadResourceAccess({ principal, threadId: parent.id, resourceType: "oxrm", resourceId: "xrm-a", permission: "read" }, env)).granted, true);
+  await assert.rejects(
+    () => setThreadResourceGrants(parent.id, "oxrm", [{ resourceId: "xrm-a", permissions: ["read"], expiresAt: "not-a-timestamp" }], { principal }, env),
+    /thread_resource_grant_expiry_invalid/,
+  );
+  await assert.rejects(
+    () => setThreadResourceGrants(parent.id, "oxrm", [{ resourceId: "xrm-a", permissions: ["read"], expiresAt: new Date(Date.now() - 1_000).toISOString() }], { principal }, env),
+    /thread_resource_grant_expiry_invalid/,
+  );
+
+  await withThreadResourcePolicyTransaction((state) => {
+    state.grants[0].expiresAt = "corrupt-expiry";
+    return { state };
+  }, env);
+  const denied = await authorizeThreadResourceAccess({ principal, threadId: parent.id, resourceType: "oxrm", resourceId: "xrm-a", permission: "read" }, env);
+  assert.equal(denied.granted, false);
+  assert.equal(denied.reason, "oxrm_grant_required");
+  assert.equal((await listThreadResourceGrants(parent.id, "oxrm", principal, env)).grants.length, 0);
 });
 
 test("child ceilings prevent later widening and parent revocation narrows immediately", async () => {
@@ -137,6 +168,20 @@ test("declared child scope intersects the parent snapshot at creation", async ()
   const denied = await authorizeThreadResourceAccess({ principal, threadId: child.id, resourceType: "oxrm", resourceId: "xrm-b", permission: "read" }, env);
   assert.equal(allowed.granted, true);
   assert.equal(denied.granted, false);
+});
+
+test("declared child grant expiry is bounded by the captured parent ceiling", async () => {
+  const { env, principal, parent } = await fixture();
+  const parentExpiry = new Date(Date.now() + 4 * 60_000).toISOString();
+  const childExpiry = new Date(Date.now() + 3 * 60_000).toISOString();
+  await setThreadResourceGrants(parent.id, "oxrm", [{ resourceId: "xrm-a", permissions: ["read"], expiresAt: parentExpiry }], { principal }, env);
+  const child = await createThread({
+    id: "expiring-scoped-child", ownerUserId: "admin", name: "Expiring scoped child", parentThreadId: parent.id,
+    resourceGrants: [{ resourceType: "oxrm", resourceId: "xrm-a", permissions: ["read"], expiresAt: childExpiry }],
+  }, env);
+  const childGrant = (await readThreadResourcePolicyState(env)).grants.find((grant) => grant.threadId === child.id && grant.resourceType === "oxrm");
+  assert.equal(childGrant?.expiresAt, childExpiry);
+  assert.equal((await authorizeThreadResourceAccess({ principal, threadId: child.id, resourceType: "oxrm", resourceId: "xrm-a", permission: "read" }, env)).granted, true);
 });
 
 test("oXRM resolution filters to grants before explicit or inferred selection", async () => {

@@ -12,8 +12,11 @@ import {
   THREAD_RESOURCE_PERMISSIONS,
   THREAD_RESOURCE_TYPES,
   declaredChildScopeEntries,
+  declaredScopeExpiry,
   declaredScopePermissions,
+  earliestThreadResourceGrantExpiry,
   effectiveThreadResourceGrantForLineage,
+  exactGrantExpiry,
   exactGrantPermissions,
   normalizeGrant,
   normalizeResource,
@@ -22,6 +25,7 @@ import {
   threadResourceAccessMode,
   threadResourceAccessModeFor,
   threadResourceBoundaryId,
+  threadResourceGrantIsCurrent,
 } from "./thread-resource-policy-model.js";
 import {
   mutateThreadResourcePolicy,
@@ -109,7 +113,14 @@ export async function setThreadResourceGrants(threadId = "", resourceType = "", 
   const legacyDesktopCatalogCompatibility = type === THREAD_RESOURCE_TYPES.desktop && scopedMode !== "enforce";
   const normalizedMap = new Map((Array.isArray(entries) ? entries : []).map((entry) => typeof entry === "string" ? { resourceKey: entry } : entry || {}).map((entry) => {
     const nativeId = safeThreadResourceSegment(entry.nativeId || entry.resourceNativeId || entry.resourceId || entry.id || entry.resourceKey || entry.key || entry.slug || entry.desktopSlug || entry.mailboxId || entry.instanceId, "");
-    return { nativeId, resourceKey: safeThreadResourceSegment(entry.resourceKey || entry.key || entry.slug || entry.desktopSlug || entry.mailboxId || entry.instanceId || nativeId, ""), permissions: exactGrantPermissions(type, entry), reason: clean(entry.reason || options.reason), generation: entry.generation || entry.resourceGeneration };
+    return {
+      nativeId,
+      resourceKey: safeThreadResourceSegment(entry.resourceKey || entry.key || entry.slug || entry.desktopSlug || entry.mailboxId || entry.instanceId || nativeId, ""),
+      permissions: exactGrantPermissions(type, entry),
+      expiresAt: exactGrantExpiry(entry, options),
+      reason: clean(entry.reason || options.reason),
+      generation: entry.generation || entry.resourceGeneration,
+    };
   }).filter((entry) => entry.resourceKey && entry.nativeId).map((entry) => [entry.nativeId, entry]));
   const normalized = [...normalizedMap.values()];
   const actorUserId = clean(principal?.userId || "system");
@@ -138,7 +149,7 @@ export async function setThreadResourceGrants(threadId = "", resourceType = "", 
       if (!resource && legacyDesktopCatalogCompatibility) { resource = candidate; state.resources.push(resource); }
       if (!resource) throw policyError("thread_resource_not_registered", 404);
       if (resource.ownerUserId !== ownerUserId || resource.boundaryId !== boundaryId || resource.status !== "active") throw policyError("thread_resource_instance_unavailable", 409);
-      const grant = normalizeGrant({ threadId: thread.id, resourceType: type, resourceId: resource.id, resourceKey: resource.resourceKey, ownerUserId, boundaryId, permissions: entry.permissions, revision: state.revision + 1, source: clean(options.source || "admin"), reason: entry.reason }, env);
+      const grant = normalizeGrant({ threadId: thread.id, resourceType: type, resourceId: resource.id, resourceKey: resource.resourceKey, ownerUserId, boundaryId, permissions: entry.permissions, revision: state.revision + 1, source: clean(options.source || "admin"), expiresAt: entry.expiresAt, reason: entry.reason }, env);
       state.grants.push(grant); return grant;
     });
     for (const grant of created) affectedResourceIds.add(grant.resourceId);
@@ -193,7 +204,7 @@ export async function captureChildThreadResourceCeiling(childThread = {}, env = 
     if (snapshotRecorded) return { noChange: true, result: { captured: 0, existing: true } };
     const candidates = new Map();
     for (const cursor of lineage) {
-      for (const grant of state.grants.filter((item) => !item.revokedAt && item.threadId === cursor.id)) {
+      for (const grant of state.grants.filter((item) => threadResourceGrantIsCurrent(item) && item.threadId === cursor.id)) {
         const resource = state.resources.find((item) => item.resourceType === grant.resourceType && item.id === grant.resourceId);
         if (resource?.status === "active" && !resource.retiredAt) candidates.set(`${resource.resourceType}:${resource.id}`, resource);
       }
@@ -203,12 +214,29 @@ export async function captureChildThreadResourceCeiling(childThread = {}, env = 
       const scopeEntries = declaredScopes[resource.resourceType] || [];
       const scopePermissions = scopeEntries.length ? declaredScopePermissions(scopeEntries, resource) : null;
       const permissions = [];
+      const effectiveExpiries = [];
       for (const permission of THREAD_RESOURCE_PERMISSIONS[resource.resourceType] || []) {
-        if (effectiveThreadResourceGrantForLineage(state, lineage, resource, permission) && (!scopeEntries.length || scopePermissions?.has(permission))) permissions.push(permission);
+        const effectiveGrant = effectiveThreadResourceGrantForLineage(state, lineage, resource, permission);
+        if (effectiveGrant && (!scopeEntries.length || scopePermissions?.has(permission))) {
+          permissions.push(permission);
+          effectiveExpiries.push(effectiveGrant.effectiveExpiresAt || effectiveGrant.expiresAt);
+        }
       }
       if (!permissions.length) continue;
       captured.push({ threadId: childId, resourceType: resource.resourceType, resourceId: resource.id, permissions, parentThreadId: parent.id, createdAt });
-      if (scopeEntries.length) childScopeGrants.push(normalizeGrant({ threadId: childId, resourceType: resource.resourceType, resourceId: resource.id, resourceKey: resource.resourceKey, ownerUserId: resource.ownerUserId, boundaryId: resource.boundaryId, permissions, revision: state.revision + 1, source: "child_scope", reason: "declared_child_scope" }, env));
+      if (scopeEntries.length) childScopeGrants.push(normalizeGrant({
+        threadId: childId,
+        resourceType: resource.resourceType,
+        resourceId: resource.id,
+        resourceKey: resource.resourceKey,
+        ownerUserId: resource.ownerUserId,
+        boundaryId: resource.boundaryId,
+        permissions,
+        revision: state.revision + 1,
+        source: "child_scope",
+        expiresAt: earliestThreadResourceGrantExpiry(...effectiveExpiries, declaredScopeExpiry(scopeEntries, resource)),
+        reason: "declared_child_scope",
+      }, env));
     }
     state.ceilings.push(...captured);
     state.grants.push(...childScopeGrants.filter(Boolean));
@@ -226,7 +254,7 @@ export async function captureChildThreadResourceCeiling(childThread = {}, env = 
 }
 
 export async function threadResourcePolicySummary(threadId = "", principal = null, env = process.env) {
-  const state = await readThreadResourcePolicy(env); const grants = threadId ? state.grants.filter((grant) => grant.threadId === clean(threadId) && !grant.revokedAt) : [];
+  const state = await readThreadResourcePolicy(env); const grants = threadId ? state.grants.filter((grant) => grant.threadId === clean(threadId) && threadResourceGrantIsCurrent(grant)) : [];
   const policies = threadId ? state.policies.filter((policy) => policy.threadId === clean(threadId)) : [];
   return { version: state.version, revision: state.revision, threadId: clean(threadId) || null, explicitGrantCount: grants.length, grantsByType: Object.fromEntries(Object.keys(THREAD_RESOURCE_PERMISSIONS).map((type) => [type, grants.filter((grant) => grant.resourceType === type).map((grant) => grant.resourceKey)])), policies: Object.fromEntries(policies.map((policy) => [policy.resourceType, { revision: policy.revision, explicitEmpty: policy.explicitEmpty, inheritanceMode: policy.inheritanceMode, parentSnapshotRevision: policy.parentSnapshotRevision }])), modes: Object.fromEntries(Object.keys(THREAD_RESOURCE_PERMISSIONS).map((type) => [type, threadResourceAccessMode(type, env)])), writeModes: Object.fromEntries(Object.keys(THREAD_RESOURCE_PERMISSIONS).map((type) => [type, threadResourceWritePlan(type, env)])), principalRole: clean(principal?.role) || null };
 }
