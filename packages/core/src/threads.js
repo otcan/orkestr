@@ -685,6 +685,24 @@ export async function listThreadMessagesForPrincipal(threadId, principal, env = 
   return listThreadMessages(thread.id, env);
 }
 
+async function appendThreadAttachmentEvents(thread, message, outcomes = [], env = process.env) {
+  for (const outcome of Array.isArray(outcomes) ? outcomes : []) {
+    const materialized = ["materialized", "reused"].includes(String(outcome.status || ""));
+    await appendEvent({
+      type: materialized ? "thread_attachment_materialized" : "thread_attachment_skipped",
+      threadId: thread.id,
+      messageId: message.id,
+      ownerUserId: message.ownerUserId || thread.ownerUserId || null,
+      filename: String(outcome.filename || "artifact"),
+      reason: String(outcome.reason || (outcome.status === "reused" ? "already_materialized" : "")),
+      outcome: String(outcome.status || ""),
+      attachmentId: String(outcome.attachmentId || ""),
+      size: Number(outcome.size || 0) || 0,
+      maxBytes: Number(outcome.maxBytes || 0) || 0,
+    }, env);
+  }
+}
+
 export async function appendThreadMessage(threadId, input, env = process.env) {
   const thread = await getThread(threadId, env);
   if (!thread) {
@@ -695,6 +713,7 @@ export async function appendThreadMessage(threadId, input, env = process.env) {
   assertThreadOperational(thread);
   const messageRepository = createThreadMessageRepository(env);
   const filePath = await messageRepository.pathForThread(thread.id);
+  let attachmentOutcomes = [];
   const message = await enqueueMessageMutation(filePath, async () => {
     const sqlite = await messageRepository.usesSqlite();
     const messages = sqlite ? null : await messageRepository.list(thread.id);
@@ -797,6 +816,8 @@ export async function appendThreadMessage(threadId, input, env = process.env) {
       attachments: Array.isArray(input.attachments) ? input.attachments : [],
       env,
     });
+    nextMessage.text = resolvedAttachments.text;
+    attachmentOutcomes = resolvedAttachments.artifactOutcomes;
     if (resolvedAttachments.attachments.length) {
       nextMessage.attachments = resolvedAttachments.attachments;
     }
@@ -815,6 +836,7 @@ export async function appendThreadMessage(threadId, input, env = process.env) {
     }, env);
     return message;
   }
+  await appendThreadAttachmentEvents(thread, message, attachmentOutcomes, env);
   await updateThread(thread.id, { state: activeInputStates.has(message.state) ? message.state : thread.state }, env);
   await appendEvent({ type: `thread_message_${message.state}`, threadId: thread.id, messageId: message.id, source: message.source, role: message.role, ownerUserId: message.ownerUserId }, env);
   return message;
@@ -1003,7 +1025,8 @@ export async function updateThreadMessage(threadId, messageId, patch, env = proc
   }
   const messageRepository = createThreadMessageRepository(env);
   const filePath = await messageRepository.pathForThread(thread.id);
-  return enqueueMessageMutation(filePath, async () => {
+  let attachmentOutcomes = [];
+  const result = await enqueueMessageMutation(filePath, async () => {
     const sqlite = await messageRepository.usesSqlite();
     const storedMessage = sqlite ? await messageRepository.get(thread.id, messageId) : null;
     const messages = sqlite ? (storedMessage ? [storedMessage] : []) : await messageRepository.list(thread.id);
@@ -1036,6 +1059,8 @@ export async function updateThreadMessage(threadId, messageId, patch, env = proc
           attachments: sourceAttachments,
           env,
         });
+        updated.text = resolvedAttachments.text;
+        attachmentOutcomes = resolvedAttachments.artifactOutcomes;
         if (resolvedAttachments.attachments.length) updated.attachments = resolvedAttachments.attachments;
         else delete updated.attachments;
       }
@@ -1068,6 +1093,8 @@ export async function updateThreadMessage(threadId, messageId, patch, env = proc
     }
     return updated;
   });
+  await appendThreadAttachmentEvents(thread, result, attachmentOutcomes, env);
+  return result;
 }
 
 export async function deleteThreadMessage(threadId, messageId, options = {}, env = process.env) {

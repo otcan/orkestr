@@ -5,6 +5,12 @@ import path from "node:path";
 import { isAdminPrincipal, resourceOwnerUserId } from "./policy.js";
 import { adminUserId, normalizeUserId } from "./users.js";
 import { dataPaths } from "../../storage/src/paths.js";
+import {
+  extractSandboxArtifactUriReferences,
+  resolveSandboxArtifactCandidate,
+  rewriteSandboxArtifactUris,
+  sandboxArtifactPathCandidates,
+} from "./thread-sandbox-artifacts.js";
 
 const explicitPathKeys = ["path", "saved_path", "filePath", "localPath"];
 const markdownLinkPattern = /!?\[[^\]\n]*]\(([^)\n]+)\)/g;
@@ -286,6 +292,7 @@ export function extractThreadAttachmentPathCandidates({ text = "", attachments =
 
   const source = String(text || "");
   for (const match of source.matchAll(markdownLinkPattern)) {
+    if (/^(?:sandbox:|file:)/i.test(String(match[1] || "").trim().replace(/^<|>$/g, ""))) continue;
     const candidate = resolveTextCandidate(match[1], thread);
     if (candidate) candidates.push({ ...candidate, source: "markdown_link" });
   }
@@ -293,6 +300,7 @@ export function extractThreadAttachmentPathCandidates({ text = "", attachments =
     const candidate = resolveTextCandidate(match[2], thread);
     if (candidate) candidates.push({ ...candidate, source: "plain_path" });
   }
+  candidates.push(...sandboxArtifactPathCandidates(source));
   return candidates;
 }
 
@@ -387,6 +395,7 @@ function dedupeAttachments(attachments = []) {
 }
 
 export async function resolveThreadAttachments({ thread = {}, text = "", attachments = [], env = process.env } = {}) {
+  const sandboxReferences = extractSandboxArtifactUriReferences(text);
   const remoteDescriptors = [];
   for (const attachment of Array.isArray(attachments) ? attachments : []) {
     const descriptor = metadataForRemoteAttachment(attachment);
@@ -394,15 +403,42 @@ export async function resolveThreadAttachments({ thread = {}, text = "", attachm
   }
   const resolved = [];
   const skipped = [];
+  const artifactOutcomes = [];
   const seenPaths = new Set();
+  const acceptedSandboxUriHashes = new Set();
   for (const candidate of extractThreadAttachmentPathCandidates({ text, attachments, thread })) {
+    if (candidate.invalid) {
+      skipped.push({ path: "", raw: "", reason: candidate.reason });
+      artifactOutcomes.push({ status: "skipped", filename: safeFileName(candidate.filename || "artifact"), reason: candidate.reason });
+      continue;
+    }
     if (textCandidateSource(candidate.source) && candidate.lineReference) continue;
+    if (candidate.sandboxArtifact && acceptedSandboxUriHashes.has(candidate.sandboxUriHash)) continue;
+    if (candidate.sandboxArtifact) {
+      const result = await resolveSandboxArtifactCandidate({
+        candidate,
+        thread,
+        env,
+        classifyPath: (filePath) => classifyThreadAttachmentPath(filePath, { thread, env }),
+        metadataForPath: metadataForAttachment,
+      });
+      if (result.skipped) skipped.push(result.skipped);
+      if (result.outcome) artifactOutcomes.push(result.outcome);
+      if (result.attachment) {
+        acceptedSandboxUriHashes.add(candidate.sandboxUriHash);
+        if (!seenPaths.has(result.attachment.path)) {
+          seenPaths.add(result.attachment.path);
+          resolved.push(result.attachment);
+        }
+      }
+      continue;
+    }
     let realPath = path.resolve(candidate.path);
     try {
       realPath = await fs.realpath(realPath);
     } catch {
       if (shouldReportMissingCandidate(candidate)) {
-        skipped.push({ path: candidate.path, raw: candidate.raw || "", reason: "attachment_path_missing" });
+        skipped.push({ path: candidate.path, raw: candidate.sandboxArtifact ? "" : candidate.raw || "", reason: "attachment_path_missing" });
       }
       continue;
     }
@@ -418,18 +454,25 @@ export async function resolveThreadAttachments({ thread = {}, text = "", attachm
     }
     const policy = classifyThreadAttachmentPath(realPath, { thread, env });
     if (!policy.ok) {
-      skipped.push({ path: realPath, raw: candidate.raw || "", reason: policy.reason });
+      skipped.push({ path: realPath, raw: candidate.sandboxArtifact ? "" : candidate.raw || "", reason: policy.reason });
+      continue;
+    }
+    stats ||= await fs.stat(realPath).catch(() => null);
+    if (!stats || !stats.isFile()) {
+      skipped.push({ path: realPath, raw: candidate.sandboxArtifact ? "" : candidate.raw || "", reason: "attachment_path_not_file" });
       continue;
     }
     seenPaths.add(realPath);
-    stats ||= await fs.stat(realPath).catch(() => null);
-    if (!stats || !stats.isFile()) {
-      skipped.push({ path: realPath, raw: candidate.raw || "", reason: "attachment_path_not_file" });
-      continue;
-    }
-    resolved.push(metadataForAttachment(candidate, realPath, stats));
+    const attachment = metadataForAttachment(candidate, realPath, stats);
+    resolved.push(attachment);
+    if (pickString(attachment.sandboxUriHash)) acceptedSandboxUriHashes.add(pickString(attachment.sandboxUriHash));
   }
-  return { attachments: dedupeAttachments([...remoteDescriptors, ...resolved]), skipped };
+  return {
+    attachments: dedupeAttachments([...remoteDescriptors, ...resolved]),
+    skipped,
+    text: rewriteSandboxArtifactUris(text, sandboxReferences, acceptedSandboxUriHashes),
+    artifactOutcomes,
+  };
 }
 
 export function attachmentDownloadUrl(threadId, attachment = {}) {
