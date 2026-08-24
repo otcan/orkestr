@@ -31,6 +31,7 @@ function mockBridge(overrides = {}) {
     createLocalWhatsAppChat: async (payload) => ({ ok: true, chatId: "demo-group@g.us", ...payload }),
     demoteLocalWhatsAppGroupParticipants: async (payload) => ({ ok: true, ...payload }),
     generateLocalWhatsAppChatPicture: async (payload) => ({ ok: true, ...payload }),
+    getLocalWhatsAppGroupInvite: async (payload) => ({ ok: true, inviteCode: "invite-code", inviteUrl: "https://chat.whatsapp.com/invite-code", ...payload }),
     getLocalWhatsAppBridgeStatus: async () => ({ ok: true, ready: true, state: "ready", accounts: [] }),
     getLocalWhatsAppQrSvg: async () => "<svg></svg>",
     listLocalWhatsAppChatMessages: async () => ({ ok: true, messages: [] }),
@@ -359,6 +360,38 @@ test("standalone WA service generates a scoped group picture inside the worker",
     generateLocalWhatsAppChatPicture: async ({ accountId, chatId: targetChatId, title }) => {
       calls.push([accountId, targetChatId, title]);
       return { ok: true, accountId, chatId: targetChatId, title };
+    },
+  }));
+});
+
+test("standalone WA service exposes group invite links inside the worker", async () => {
+  const home = await testHome("orkestr-wa-service-group-invite-");
+  const calls = [];
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WA_SERVICE_AUTH_DISABLED: "1",
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "sender",
+  };
+  const chatId = "120363400000000001@g.us";
+
+  await withWaService(env, async ({ bridgeUrl }) => {
+    const response = await fetch(`${bridgeUrl}/accounts/sender/chats/${encodeURIComponent(chatId)}/invite`);
+
+    assert.equal(response.status, 200);
+    const payload = await response.json();
+    assert.equal(payload.ok, true);
+    assert.equal(payload.inviteUrl, "https://chat.whatsapp.com/invite-code");
+    assert.deepEqual(calls, [["sender", chatId]]);
+  }, mockBridge({
+    getLocalWhatsAppGroupInvite: async ({ accountId, chatId: targetChatId }) => {
+      calls.push([accountId, targetChatId]);
+      return {
+        ok: true,
+        accountId,
+        chatId: targetChatId,
+        inviteCode: "invite-code",
+        inviteUrl: "https://chat.whatsapp.com/invite-code",
+      };
     },
   }));
 });

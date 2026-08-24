@@ -382,6 +382,37 @@ function rolloutMessageNearTextKey(message) {
   ].join("\n");
 }
 
+function rolloutFinalDuplicateKey(message) {
+  const role = String(message?.role || "").trim().toLowerCase();
+  const phase = String(message?.phase || "final_answer").trim().toLowerCase();
+  if (role !== "assistant" || phase !== "final_answer") return "";
+  const text = normalizedTextKey(message?.text);
+  if (!text) return "";
+  const generation = String(message?.codexThreadId || message?.executorThreadId || "").trim();
+  const turnId = String(message?.codexTurnId || message?.executorTurnId || "").trim();
+  const parentId = String(message?.parentMessageId || "").trim();
+  if (!generation && !turnId && !parentId) return "";
+  return [generation, turnId, parentId, phase, text].join("\n");
+}
+
+function rolloutFinalDuplicateKeySet(messages = []) {
+  return new Set(messages.map(rolloutFinalDuplicateKey).filter(Boolean));
+}
+
+async function rolloutFinalDuplicateExists(threadId, candidate, existingKeys, env = process.env) {
+  const key = rolloutFinalDuplicateKey(candidate);
+  if (!key) return false;
+  if (existingKeys.has(key)) return true;
+  const fresh = await listThreadMessageCandidates(threadId, {
+    tailLimit: rolloutMessageHistoryLimit(env),
+  }, env).catch(() => []);
+  if (fresh.some((message) => rolloutFinalDuplicateKey(message) === key)) {
+    existingKeys.add(key);
+    return true;
+  }
+  return false;
+}
+
 async function runtimeLeasesPath(env) {
   const paths = await ensureDataDirs(env);
   return paths.runtimeLeases;
@@ -4206,6 +4237,7 @@ async function appendRolloutMessages({ thread, rolloutPath, generation = "", bod
       .filter((message) => message.role === "assistant")
       .map(rolloutMessageNearTextKey),
   );
+  const existingFinalDuplicateKeys = rolloutFinalDuplicateKeySet(existing);
   const latestExistingMs = Math.max(0, ...existing.map(messageTimeMs).filter(Number.isFinite));
   let appended = 0;
   let completedTurnId = "";
@@ -4217,7 +4249,7 @@ async function appendRolloutMessages({ thread, rolloutPath, generation = "", bod
     if (existingEventKeys.has(eventKey) || existingTextKeys.has(textKey)) continue;
     const whatsappParent = latestRolloutWhatsAppInput(existing, message.timestamp, thread);
     const parentTurnId = String(whatsappParent?.codexTurnId || whatsappParent?.executorTurnId || "").trim();
-    const appendedMessage = await appendThreadMessage(thread.id, {
+    const candidateMessage = {
       role: "assistant",
       source: message.source,
       text: message.text,
@@ -4238,7 +4270,9 @@ async function appendRolloutMessages({ thread, rolloutPath, generation = "", bod
       codexThreadId: codexId,
       codexTurnId: parentTurnId || null,
       executorTurnId: parentTurnId || null,
-    }, env);
+    };
+    if (await rolloutFinalDuplicateExists(thread.id, candidateMessage, existingFinalDuplicateKeys, env)) continue;
+    const appendedMessage = await appendThreadMessage(thread.id, candidateMessage, env);
     if (String(message.phase || "final_answer").trim().toLowerCase() === "final_answer") {
       await reconcileCodexFinalProjection({
         thread,
@@ -4252,6 +4286,8 @@ async function appendRolloutMessages({ thread, rolloutPath, generation = "", bod
     }
     existingEventKeys.add(eventKey);
     existingTextKeys.add(textKey);
+    const finalDuplicateKey = rolloutFinalDuplicateKey(appendedMessage);
+    if (finalDuplicateKey) existingFinalDuplicateKeys.add(finalDuplicateKey);
     appended += 1;
     if (String(message.phase || "final_answer").trim().toLowerCase() === "final_answer" && parentTurnId) {
       completedTurnId = parentTurnId;
@@ -4453,6 +4489,7 @@ async function syncLeaseRollout(lease, env = process.env) {
       .filter((message) => message.role === "assistant")
       .map(rolloutMessageNearTextKey),
   );
+  const existingFinalDuplicateKeys = rolloutFinalDuplicateKeySet(existing);
   const projectionFence = await fenceRolloutGeneration(currentLease.threadId, generation, "active_lease_before_projection", env);
   if (!projectionFence.ok) {
     return { lease: resetLeaseRolloutForGeneration(currentLease, projectionFence.generation), appended: 0 };
@@ -4464,7 +4501,8 @@ async function syncLeaseRollout(lease, env = process.env) {
     const textKey = rolloutMessageNearTextKey(message);
     if (existingEventKeys.has(eventKey) || existingTextKeys.has(textKey)) continue;
     const whatsappParent = latestRolloutWhatsAppInput(existing, message.timestamp, thread);
-    const appendedMessage = await appendThreadMessage(currentLease.threadId, {
+    const parentTurnId = String(whatsappParent?.codexTurnId || whatsappParent?.executorTurnId || "").trim();
+    const candidateMessage = {
       role: "assistant",
       source: message.source,
       text: message.text,
@@ -4483,7 +4521,11 @@ async function syncLeaseRollout(lease, env = process.env) {
       executorTransport: "cli-rollout",
       executorThreadId: generation || null,
       codexThreadId: generation || null,
-    }, env);
+      codexTurnId: parentTurnId || null,
+      executorTurnId: parentTurnId || null,
+    };
+    if (await rolloutFinalDuplicateExists(currentLease.threadId, candidateMessage, existingFinalDuplicateKeys, env)) continue;
+    const appendedMessage = await appendThreadMessage(currentLease.threadId, candidateMessage, env);
     if (String(message.phase || "final_answer").trim().toLowerCase() === "final_answer") {
       await reconcileCodexFinalProjection({
         thread,
@@ -4497,6 +4539,8 @@ async function syncLeaseRollout(lease, env = process.env) {
     }
     existingEventKeys.add(eventKey);
     existingTextKeys.add(textKey);
+    const finalDuplicateKey = rolloutFinalDuplicateKey(appendedMessage);
+    if (finalDuplicateKey) existingFinalDuplicateKeys.add(finalDuplicateKey);
     appended += 1;
   }
   const commitFence = await fenceRolloutGeneration(currentLease.threadId, generation, "active_lease_before_cursor_commit", env);

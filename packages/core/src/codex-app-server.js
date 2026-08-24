@@ -46,6 +46,7 @@ import {
   codexAppServerMessageFields,
   latestWhatsAppParent,
   threadWhatsAppBindingParent,
+  whatsappOrigin,
   whatsappProjectionFields,
 } from "./codex-app-server-whatsapp.js";
 import { ensureRuntimeAgentsFile } from "./agent-context.js";
@@ -2581,9 +2582,14 @@ export async function hydrateCodexAppServerThreadMessages(thread, codexThread, e
       } else if (["agentMessage", "plan", "exitedReviewMode", "contextCompaction"].includes(type)) {
         const text = type === "contextCompaction" ? "Codex compacted the conversation context." : itemText(item);
         if (!text) continue;
-        const whatsappParent =
-          await latestWhatsAppParent(thread, timestamp, env) ||
-          threadWhatsAppBindingParent(thread);
+        const turnParent = [...messages].reverse().find((message) =>
+          clean(message?.role).toLowerCase() === "user" &&
+          clean(message?.codexThreadId || message?.executorThreadId) === clean(codexThread.id) &&
+          clean(message?.codexTurnId || message?.executorTurnId) === turnId
+        ) || null;
+        const whatsappParent = turnParent
+          ? whatsappOrigin(turnParent) ? turnParent : null
+          : await latestWhatsAppParent(thread, timestamp, env) || threadWhatsAppBindingParent(thread);
         const result = await upsertHydratedCodexMessage(thread, {
           role: "assistant",
           source: "codex-app-server-import",

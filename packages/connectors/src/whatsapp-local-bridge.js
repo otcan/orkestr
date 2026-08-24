@@ -1340,12 +1340,15 @@ export async function forwardLocalWhatsAppInbound(input = {}, env = process.env,
     }
     if (!response.ok || payload?.ok === false) {
       const code = targetInboundFailureCode(payload, response.status);
-      const safeMessage = targetInboundFailureSafeMessage(code, response.status);
+      const upstreamFailure = payload?.routingFailure && typeof payload.routingFailure === "object" && !Array.isArray(payload.routingFailure)
+        ? payload.routingFailure
+        : {};
+      const safeMessage = String(upstreamFailure.safeMessage || "").trim() || targetInboundFailureSafeMessage(code, response.status);
       const error = new Error(code);
       error.statusCode = response.status || 502;
       error.payload = payload;
       error.routingFailure = normalizeRoutingFailure({
-        ...(payload?.routingFailure && typeof payload.routingFailure === "object" ? payload.routingFailure : {}),
+        ...upstreamFailure,
         code,
         safeMessage,
         setupUrl: targetInboundFailureSetupUrl({ payload, tenantRoute: deliveryTenantRoute, chatId, env }),
@@ -6442,6 +6445,109 @@ export async function listLocalWhatsAppChatParticipants({ accountId = "", chatId
     chatId: id,
     ready: Boolean(state.ready && state.chatOpsReady !== false && state.runtimeUsable !== false),
     participants,
+  };
+}
+
+export async function getLocalWhatsAppGroupInvite({ accountId = "", chatId = "", env = process.env } = {}) {
+  const normalized = normalizeAccountId(accountId, env);
+  const id = String(chatId || "").trim();
+  if (!id) {
+    const error = new Error("whatsapp_chat_id_required");
+    error.statusCode = 400;
+    throw error;
+  }
+  if (!isGroupChatId(id)) {
+    const error = new Error("whatsapp_group_chat_required");
+    error.statusCode = 400;
+    throw error;
+  }
+  const { runtime, ready, staleReadyRuntime } = localWhatsAppOperationRuntime(normalized);
+  if (!ready) {
+    if (staleReadyRuntime) {
+      return recoverLocalWhatsAppAccountAfterGroupReadError(
+        normalized,
+        localWhatsAppNotReadyError("whatsapp_local_bridge_stale_runtime"),
+        env,
+      );
+    }
+    return { accountId: normalized, chatId: id, ready: false, inviteCode: "", inviteUrl: "" };
+  }
+
+  const directInviteCode = runtime?.client?.pupPage && typeof runtime.client.pupPage.evaluate === "function"
+    ? await runtime.client.pupPage.evaluate(async (groupId) => {
+      try {
+        if (typeof window.require === "function") {
+          const mexJob = window.require("WAWebMexFetchGroupInviteCodeJob");
+          if (mexJob && typeof mexJob.fetchMexGroupInviteCode === "function") {
+            const result = await mexJob.fetchMexGroupInviteCode(groupId);
+            return String(result?.code || result || "").trim();
+          }
+          const inviteJob = window.require("WAWebGroupInviteJob");
+          if (inviteJob && typeof inviteJob.queryGroupInviteCode === "function") {
+            const widFactory = window.require("WAWebWidFactory");
+            const wid = widFactory?.createWid ? widFactory.createWid(groupId) : groupId;
+            const result = await inviteJob.queryGroupInviteCode(wid, true);
+            return String(result?.code || result || "").trim();
+          }
+        }
+        if (window.Store?.GroupInvite?.fetchMexGroupInviteCode) {
+          const result = await window.Store.GroupInvite.fetchMexGroupInviteCode(groupId);
+          return String(result?.code || result || "").trim();
+        }
+        if (window.Store?.GroupInvite?.queryGroupInviteCode && window.Store?.WidFactory?.createWid) {
+          const result = await window.Store.GroupInvite.queryGroupInviteCode(window.Store.WidFactory.createWid(groupId), true);
+          return String(result?.code || result || "").trim();
+        }
+        return "";
+      } catch {
+        return "";
+      }
+    }, id).catch(() => "")
+    : "";
+  if (directInviteCode) {
+    return {
+      ok: true,
+      accountId: normalized,
+      chatId: id,
+      ready: true,
+      inviteCode: directInviteCode,
+      inviteUrl: `https://chat.whatsapp.com/${directInviteCode}`,
+      source: "page_job",
+    };
+  }
+
+  let chat;
+  try {
+    chat = await runtime.client.getChatById(id);
+  } catch (error) {
+    if (recoverableLocalWhatsAppRuntimeError(error)) {
+      return recoverLocalWhatsAppAccountAfterGroupReadError(normalized, error, env);
+    }
+    throw error;
+  }
+  if (!chat?.isGroup) {
+    const error = new Error("whatsapp_group_chat_required");
+    error.statusCode = 400;
+    throw error;
+  }
+  if (typeof chat.getInviteCode !== "function") {
+    const error = new Error("whatsapp_group_invite_unavailable");
+    error.statusCode = 501;
+    throw error;
+  }
+  const inviteCode = String(await chat.getInviteCode() || "").trim();
+  if (!inviteCode) {
+    const error = new Error("whatsapp_group_invite_empty");
+    error.statusCode = 502;
+    throw error;
+  }
+  return {
+    ok: true,
+    accountId: normalized,
+    chatId: id,
+    ready: true,
+    inviteCode,
+    inviteUrl: `https://chat.whatsapp.com/${inviteCode}`,
   };
 }
 

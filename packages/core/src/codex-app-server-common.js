@@ -204,6 +204,30 @@ function findExistingEventMessage(messages = [], input = {}) {
   return messages.find((message) => eventMessageIdentity(message) === identity) || null;
 }
 
+function duplicateFinalEventMessage(left = {}, right = {}) {
+  const leftRole = clean(left.role).toLowerCase();
+  const rightRole = clean(right.role).toLowerCase();
+  const leftPhase = clean(left.phase || "final_answer").toLowerCase();
+  const rightPhase = clean(right.phase || "final_answer").toLowerCase();
+  if (leftRole !== "assistant" || rightRole !== "assistant") return false;
+  if (leftPhase !== "final_answer" || rightPhase !== "final_answer") return false;
+  if (!codexEventMessageSource(left.source || right.source)) return false;
+  if (!codexEventMessageSource(right.source || left.source)) return false;
+  if (!clean(left.text) || clean(left.text) !== clean(right.text)) return false;
+  if (!clean(left.codexThreadId || left.executorThreadId) || clean(left.codexThreadId || left.executorThreadId) !== clean(right.codexThreadId || right.executorThreadId)) return false;
+  if (!clean(left.codexTurnId || left.executorTurnId) || clean(left.codexTurnId || left.executorTurnId) !== clean(right.codexTurnId || right.executorTurnId)) return false;
+  return clean(left.parentMessageId) === clean(right.parentMessageId) &&
+    clean(left.connector) === clean(right.connector) &&
+    clean(left.chatId) === clean(right.chatId) &&
+    clean(left.accountId) === clean(right.accountId);
+}
+
+async function findDuplicateFinalEventMessage(threadId, input = {}, env = process.env) {
+  if (!duplicateFinalEventMessage(input, input)) return null;
+  const messages = await listThreadMessages(threadId, env).catch(() => []);
+  return [...messages].reverse().find((message) => duplicateFinalEventMessage(message, input)) || null;
+}
+
 function eventMessagePatchChanged(existing = {}, patch = {}) {
   for (const [key, value] of Object.entries(patch || {})) {
     if (value === undefined) continue;
@@ -516,6 +540,10 @@ export async function appendOrUpdateEventMessage(thread, input, env = process.en
         phase: clean(input.phase || (clean(input.role).toLowerCase() === "assistant" ? "final_answer" : "")).toLowerCase(),
       }, env).catch(() => null);
     }
+  }
+  if (!existing) {
+    existing = await findDuplicateFinalEventMessage(thread.id, input, env);
+    if (existing) return { ...existing, coalescedUpdate: true, coalescedDuplicateFinal: true };
   }
   if (existing) {
     const patch = {
