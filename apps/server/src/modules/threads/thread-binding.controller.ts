@@ -2,6 +2,7 @@ import { Body, Controller, Param, Put, Req } from "@nestjs/common";
 import { getThread } from "../../../../../packages/core/src/threads.js";
 import { requestPrincipal } from "../../../../../packages/core/src/principal.js";
 import { defaultWhatsAppReplyPrefix } from "../../../../../packages/core/src/whatsapp-defaults.js";
+import { dualWriteWhatsAppParticipantIdentity } from "../../../../../packages/connectors/src/whatsapp-participant-identity.js";
 import { threadBindingUpdateSchema } from "../../../../../packages/shared/src/api-schemas.js";
 import { httpError, validateRequestSchema } from "../../common/http.js";
 import {
@@ -112,7 +113,7 @@ export class ThreadBindingController {
     const inboundAccountId = optionalAccountId(body, current, ["receivingAccountId", "inboundAccountId", "senderAccountId"]);
     const responderConnectorAccountId = optionalAccountId(body, current, ["replyAccountId", "bridgeAccountId", "responderConnectorAccountId", "responderAccountId", "outboundAccountId"]);
     const outboundAccountId = optionalAccountId(body, current, ["replyAccountId", "bridgeAccountId", "outboundAccountId", "responderConnectorAccountId", "responderAccountId"]) || responderConnectorAccountId;
-    const binding = {
+    const bindingDraft = {
       ...current,
       connector: optionalBodyString(body, "connector", current.connector || "whatsapp") || "whatsapp",
       chatId: optionalBodyString(body, "chatId", current.chatId || ""),
@@ -142,6 +143,9 @@ export class ThreadBindingController {
       authorizedContactIds: optionalBodyStringArray(body, "authorizedContactIds", current.authorizedContactIds || []),
       authorizedContactAliases: optionalBodyStringArray(body, "authorizedContactAliases", current.authorizedContactAliases || []),
       inboundSecurity,
+      participantIdentityV2: body.participantIdentityV2 && typeof body.participantIdentityV2 === "object" && !Array.isArray(body.participantIdentityV2)
+        ? body.participantIdentityV2
+        : current.participantIdentityV2 || null,
       generated: optionalBodyBoolean(body, "generated", current.generated === true),
       outboundAccountId,
       ownerAuthorTags: optionalBodyStringArray(body, "ownerAuthorTags", current.ownerAuthorTags || []),
@@ -154,6 +158,12 @@ export class ThreadBindingController {
       } : {}),
       updatedAt: new Date().toISOString(),
     };
+    let binding;
+    try {
+      binding = dualWriteWhatsAppParticipantIdentity(bindingDraft, process.env);
+    } catch (error) {
+      throw httpError(String((error as Error)?.message || "wa_participant_identity_invalid"), Number((error as any)?.statusCode || 400));
+    }
     const updated = await this.threadBindingService.updateWhatsAppBinding(
       thread,
       binding,

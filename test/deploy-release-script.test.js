@@ -200,6 +200,8 @@ test("release deploy script exposes versioned install, status, and rollback", as
   assert.match(script, /--require-tagged\|--require-tagged-releases/);
   assert.match(script, /--release-label "\$\{ORKESTR_RELEASE_LABEL:-\}"/);
   assert.match(script, /if ! release_is_complete "\$release_dir"/);
+  assert.match(script, /make_release_runtime_readable "\$release_dir"/);
+  assert.match(script, /chmod -R a\+rX "\$release_dir"/);
   assert.match(script, /worktree add --detach/);
   assert.match(script, /LC_ALL=C tr -c 'A-Za-z0-9\._\+-' '-'/);
   assert.match(manifest, /schemaVersion/);

@@ -6,6 +6,7 @@ import { normalizeUserId } from "../../core/src/users.js";
 import { activeDesktopLeaseStatus, attachDesktopStateToSessions } from "./desktop-leases.js";
 
 const execFileAsync = promisify(execFile);
+const localInventoryCache = new Map();
 
 function browserctlCommand(env = process.env) {
   return String(env.ORKESTR_BROWSERCTL_PATH || env.ORKESTR_BROWSERCTL || "browserctl").trim();
@@ -82,6 +83,46 @@ function scopedBrowserctlEnv(env = process.env, options = {}) {
     ORKESTR_DESKTOP_VNC_PORT_BASE: String(numberEnv(env, "ORKESTR_DESKTOP_VNC_PORT_BASE", 5901) + scope.portOffset),
     ORKESTR_DESKTOP_DISPLAY_BASE: String(numberEnv(env, "ORKESTR_DESKTOP_DISPLAY_BASE", 90) + scope.portOffset),
   };
+}
+
+function inventoryCacheTtlMs(env = process.env) {
+  const parsed = Number(env.ORKESTR_BROWSER_SESSIONS_CACHE_MS || 15_000);
+  return Number.isFinite(parsed) ? Math.max(0, Math.floor(parsed)) : 15_000;
+}
+
+function inventoryCacheKey(env = process.env, options = {}) {
+  const scoped = scopedBrowserctlEnv(env, options);
+  return JSON.stringify({
+    command: browserctlCommand(env),
+    home: String(scoped.ORKESTR_HOME || ""),
+    ownerUserId: String(scoped.ORKESTR_BROWSER_OWNER_USER_ID || ""),
+    scope: String(scoped.ORKESTR_BROWSER_SCOPE || "admin"),
+  });
+}
+
+function invalidateLocalInventory(env = process.env, options = {}) {
+  localInventoryCache.delete(inventoryCacheKey(env, options));
+}
+
+async function listLocalDesktopInventory(env = process.env, options = {}) {
+  const ttlMs = inventoryCacheTtlMs(env);
+  if (ttlMs <= 0) return runBrowserctl(["list", "--json"], scopedBrowserctlEnv(env, options));
+  const key = inventoryCacheKey(env, options);
+  const now = Date.now();
+  const cached = localInventoryCache.get(key);
+  if (cached?.payload && cached.expiresAt > now) return cached.payload;
+  if (cached?.inFlight) return cached.inFlight;
+  const inFlight = runBrowserctl(["list", "--json"], scopedBrowserctlEnv(env, options))
+    .then((payload) => {
+      localInventoryCache.set(key, { payload, expiresAt: Date.now() + ttlMs, inFlight: null });
+      return payload;
+    })
+    .catch((error) => {
+      localInventoryCache.delete(key);
+      throw error;
+    });
+  localInventoryCache.set(key, { payload: cached?.payload || null, expiresAt: cached?.expiresAt || 0, inFlight });
+  return inFlight;
 }
 
 function tagSessionScope(session, env = process.env, options = {}) {
@@ -263,7 +304,7 @@ export function isBrowserctlUnavailableError(error) {
 export async function listManagedDesktopSessions(env = process.env, options = {}) {
   const remote = await listRemoteDesktopSessions(env, options);
   if (remote) return remote;
-  const payload = await runBrowserctl(["list", "--json"], scopedBrowserctlEnv(env, options));
+  const payload = await listLocalDesktopInventory(env, options);
   const sessions = Array.isArray(payload?.sessions) ? payload.sessions.map(normalizeBrowserctlSession) : [];
   return {
     ...payload,
@@ -280,6 +321,7 @@ export async function managedDesktopAction(slug, action, env = process.env, opti
   const args = [normalized, slug];
   if (normalized === "cleanup") args.push("--safe");
   const payload = await runBrowserctl(args, scopedBrowserctlEnv(env, options));
+  invalidateLocalInventory(env, options);
   const session = payload?.session
     ? normalizeBrowserctlSession(payload.session)
     : (await listManagedDesktopSessions(env, options)).sessions.find((item) => item.slug === slug);

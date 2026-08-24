@@ -4,9 +4,9 @@ import { FormsModule } from "@angular/forms";
 import { firstValueFrom } from "rxjs";
 import { FirstThreadWizardComponent } from "./first-thread-wizard.component";
 import { FilesPageComponent } from "./files-page.component";
+import { InstanceSettingsPageComponent } from "./instance-settings-page.component";
 import { OnboardingPageComponent } from "./onboarding-page.component";
 import { PairingRequiredPageComponent } from "./pairing-required-page.component";
-import { OpsPageComponent, ToolsView } from "./ops-page.component";
 import { RawTerminalController } from "./raw-terminal.controller";
 import { SharedAppPageComponent } from "./shared-app-page.component";
 import { ConnectorStore } from "./stores/connector.store";
@@ -17,7 +17,6 @@ import { ThreadComposerComponent } from "./thread-composer.component";
 import { ThreadMessageListComponent } from "./thread-message-list.component";
 import { UserConnectorsPageComponent } from "./user-connectors-page.component";
 import { UserDeskPageComponent } from "./user-desk-page.component";
-import { UserJobsPageComponent } from "./user-jobs-page.component";
 import { UserTimersPageComponent } from "./user-timers-page.component";
 import { hasProposedPlanEnvelope, renderMessageTextHtml } from "./message-renderer";
 import {
@@ -32,6 +31,8 @@ import {
   ApiService,
   ConnectorStatus,
   CreditUsageSummary,
+  InstanceAccount,
+  InstanceContextResponse,
   RouterTraceRecord,
   SetupStatus,
   ThreadAttachResponse,
@@ -50,8 +51,9 @@ import {
   WhatsAppStatusResponse,
 } from "./api.service";
 import { appendPendingFiles, messageWithAttachmentPaths, PendingFile, removePendingFile, uploadPendingFiles } from "./thread-uploads";
+import { canonicalThreadPanelUrl, navigateCanonicalThreadTarget, navigateLegacyThreadPath } from "./canonical-thread-navigation.js";
 
-type Panel = "chat" | "history" | "delivery" | "timers" | "attach" | "settings" | "workers" | "runtime" | "raw" | "ops" | "files" | "userTimers" | "userDesk" | "userJobs" | "userConnectors";
+type Panel = "chat" | "history" | "delivery" | "timers" | "attach" | "settings" | "workers" | "runtime" | "raw" | "files" | "instanceSettings" | "instanceTimers" | "instanceDesktops" | "userConnectors";
 type CodexRateLimitKey = "primary" | "secondary";
 type SetupPageMode = "setup" | "onboarding";
 type SetupSection = "system" | "security" | "secrets" | "maintenance" | "codex" | "gmail" | "whatsapp" | "browsers";
@@ -76,7 +78,7 @@ const MESSAGE_PAGE_LIMIT = 100;
 
 @Component({
   selector: "ork-root",
-  imports: [DatePipe, FormsModule, FirstThreadWizardComponent, FilesPageComponent, OpsPageComponent, OnboardingPageComponent, PairingRequiredPageComponent, SharedAppPageComponent, ThreadComposerComponent, ThreadMessageListComponent, UserConnectorsPageComponent, UserDeskPageComponent, UserJobsPageComponent, UserTimersPageComponent],
+  imports: [DatePipe, FormsModule, FirstThreadWizardComponent, FilesPageComponent, InstanceSettingsPageComponent, OnboardingPageComponent, PairingRequiredPageComponent, SharedAppPageComponent, ThreadComposerComponent, ThreadMessageListComponent, UserConnectorsPageComponent, UserDeskPageComponent, UserTimersPageComponent],
   templateUrl: "./app.component.html",
 })
 export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
@@ -93,7 +95,6 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.setupSection = this.setupSectionFromPath();
     this.selectedId = this.idFromPath();
     this.activePanel = this.panelFromPath();
-    this.toolsView = this.toolsViewFromPath();
     this.normalizeLegacyRoutePath();
     if (this.pairingRequired) {
       this.enterPairingRequired();
@@ -148,12 +149,17 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   attachDetails: ThreadAttachResponse | null = null;
   opsSystem: Record<string, unknown> | null = null;
   setupStatus: SetupStatus | null = null;
+  instanceContext: InstanceContextResponse["instance"] | null = null;
+  instanceAccounts: InstanceAccount[] = [];
   versionInfo: VersionResponse | null = null;
   currentUser: OrkestrUser | null = null;
   selectedId = "";
   filterText = "";
   draft = "";
   error = "";
+  linkNotice = "";
+  logoutBusy = false;
+  accountSwitchBusyRef = "";
   apiOnline = false;
   busy = false;
   appReady = false;
@@ -166,7 +172,6 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   setupPageMode: SetupPageMode = "setup";
   setupSection: SetupSection = "system";
   activePanel: Panel = "chat";
-  toolsView: ToolsView = "system";
   approveText = "Approved. Proceed.";
   interruptText = "";
   timerLabel = "Thread timer";
@@ -296,7 +301,6 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.setupSection = this.setupSectionFromPath();
     this.selectedId = this.idFromPath();
     this.activePanel = this.panelFromPath();
-    this.toolsView = this.toolsViewFromPath();
     this.sidebarWidth = this.loadSidebarWidth();
     this.normalizeLegacyRoutePath();
     this.updateDocumentTitle();
@@ -344,7 +348,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     }
     if (showBusy) this.busy = true;
     try {
-      const [threadsResult, systemResult, setupResult, timersResult, whatsappResult, userResult, versionResult] = await Promise.allSettled([
+      const [threadsResult, systemResult, setupResult, timersResult, whatsappResult, userResult, versionResult, instanceContextResult] = await Promise.allSettled([
         firstValueFrom(this.api.threads({ includeRetired: this.showRetiredThreads })),
         firstValueFrom(this.api.systemSummary()),
         firstValueFrom(this.api.setupStatus()),
@@ -352,6 +356,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
         firstValueFrom(this.api.whatsappStatus()),
         firstValueFrom(this.api.currentUser()),
         firstValueFrom(this.api.version()),
+        firstValueFrom(this.api.instanceContext()),
       ]);
       if (systemResult.status === "fulfilled") this.opsSystem = systemResult.value;
       if (setupResult.status === "fulfilled") this.setupStatus = setupResult.value;
@@ -359,6 +364,10 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       if (whatsappResult.status === "fulfilled") this.whatsappStatusDetails = whatsappResult.value;
       if (userResult.status === "fulfilled") this.currentUser = userResult.value.user;
       if (versionResult.status === "fulfilled") this.versionInfo = versionResult.value;
+      if (instanceContextResult.status === "fulfilled") {
+        this.instanceContext = instanceContextResult.value.instance;
+        void this.loadInstanceAccounts();
+      }
       this.appReady = true;
       if (this.isPairingRequiredFromSetup()) {
         this.apiOnline = true;
@@ -393,12 +402,29 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       this.applyThreadListMeta(payload);
       this.trackThreadActivity(payload.threads);
       this.threads = [...payload.threads].sort((a, b) => this.activityMs(b) - this.activityMs(a));
+      if (this.canonicalizeInstanceRoute()) return;
+      if (this.canonicalizeCurrentThreadRoute()) return;
       this.seedReadStateIfNeeded(this.threads);
-      this.normalizeUserModeView();
+      if (this.normalizeUserModeView()) return;
       if (this.shouldAutoOpenOnboarding()) {
         this.onboardingActive = true;
         this.setupPageMode = "setup";
         this.replaceSetupPath(this.setupSection || "system");
+      }
+      if (this.onboardingActive && this.setupStatus?.setupState === "ready" && this.codexAgentReady()) {
+        this.onboardingActive = false;
+        this.activePanel = "instanceSettings";
+        const target = this.instancePath("/settings");
+        if (/^https?:\/\//i.test(target)) {
+          if (navigateCanonicalThreadTarget(target, {
+            currentUrl: globalThis.location?.href,
+            mode: "replace",
+            history: globalThis.history,
+            location: globalThis.location,
+          }).crossOrigin) return;
+        } else {
+          globalThis.history?.replaceState({}, "", target);
+        }
       }
       if (this.onboardingActive) {
         this.updateDocumentTitle();
@@ -407,7 +433,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       }
       if (!this.isRouteLevelUserPanel(this.activePanel) && !this.selectedId && this.threads.length) {
         this.selectedId = this.threadSlug(this.threads[0]);
-        this.replacePath(this.selectedId, this.activePanel);
+        if (this.replacePath(this.selectedId, this.activePanel)) return;
       }
       const selected = this.selectedThread();
       this.syncThreadMetaDraft(selected);
@@ -597,7 +623,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   panelAllowedForCurrentUser(panel: Panel): boolean {
     if (this.isAdminMode()) return true;
-    return ["chat", "history", "delivery", "timers", "files", "userTimers", "userDesk", "userJobs", "userConnectors"].includes(panel);
+    return ["chat", "history", "delivery", "timers", "files", "instanceSettings", "instanceTimers", "instanceDesktops", "userConnectors"].includes(panel);
   }
 
   isUserNavPanelActive(panel: Panel): boolean {
@@ -606,7 +632,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   private isRouteLevelUserPanel(panel: Panel): boolean {
-    return ["ops", "files", "userTimers", "userDesk", "userJobs", "userConnectors"].includes(panel);
+    return ["files", "instanceSettings", "instanceTimers", "instanceDesktops", "userConnectors"].includes(panel);
   }
 
   rawTerminalAvailable(thread: ThreadSummary | null = this.selectedThread()): boolean {
@@ -761,10 +787,11 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       this.apiOnline = true;
       this.appReady = true;
       this.threads = [...threads].sort((a, b) => this.activityMs(b) - this.activityMs(a));
+      if (this.canonicalizeCurrentThreadRoute()) return;
       this.seedReadStateIfNeeded(this.threads);
       if (!this.isRouteLevelUserPanel(this.activePanel) && !this.selectedId && this.threads.length) {
         this.selectedId = this.threadSlug(this.threads[0]);
-        this.replacePath(this.selectedId, this.activePanel);
+        if (this.replacePath(this.selectedId, this.activePanel)) return;
       }
       const selected = this.selectedThread();
       this.syncThreadMetaDraft(selected);
@@ -814,7 +841,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.modelDetailsOpen = false;
     this.slashHelpOpen = false;
     this.gitDetailsThreadId = "";
-    this.pushPath(this.selectedId, this.activePanel);
+    if (this.pushPath(this.selectedId, this.activePanel)) return;
     this.beginThreadLoad(thread.id);
     this.clearThreadPanelState();
     this.syncThreadMetaDraft(thread, true);
@@ -839,18 +866,19 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.scrollAfterRender = this.activePanel === "chat";
   }
 
-  private normalizeUserModeView(): void {
-    if (!this.isUserMode()) return;
+  private normalizeUserModeView(): boolean {
+    if (!this.isUserMode()) return false;
     if (this.activePanel === "raw") this.closeRawStream();
     this.modelDetailsOpen = false;
     this.gitDetailsThreadId = "";
     this.onboardingActive = false;
     if (!this.canCreateThreadFromSidebar()) this.threadWizardOpen = false;
-    if (this.activePanel === "ops" || !this.panelAllowedForCurrentUser(this.activePanel)) {
+    if (!this.panelAllowedForCurrentUser(this.activePanel)) {
       this.activePanel = "chat";
       const thread = this.selectedThread();
-      if (thread) this.replacePath(this.threadSlug(thread), "chat");
+      if (thread && this.replacePath(this.threadSlug(thread), "chat")) return true;
     }
+    return false;
   }
 
   async openPanel(panel: Panel): Promise<void> {
@@ -858,15 +886,12 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       this.enterPairingRequired();
       return;
     }
+    this.mobileSidebarOpen = false;
     if (!this.panelAllowedForCurrentUser(panel)) {
       this.activePanel = "chat";
       const thread = this.selectedThread();
-      if (thread) this.replacePath(this.threadSlug(thread), "chat");
+      if (thread && this.replacePath(this.threadSlug(thread), "chat")) return;
       this.renderNow();
-      return;
-    }
-    if (panel === "ops") {
-      this.openTools(this.toolsView);
       return;
     }
     if (panel === "files") {
@@ -881,38 +906,38 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       this.renderNow();
       return;
     }
-    if (panel === "userTimers") {
+    if (panel === "instanceSettings") {
       this.modelDetailsOpen = false;
       this.slashHelpOpen = false;
       this.gitDetailsThreadId = "";
       this.threadWizardOpen = false;
       if (this.activePanel === "raw") this.closeRawStream();
-      this.activePanel = "userTimers";
-      this.pushPath("", "userTimers");
+      this.activePanel = "instanceSettings";
+      this.pushPath("", "instanceSettings");
       this.updateDocumentTitle();
       this.renderNow();
       return;
     }
-    if (panel === "userDesk") {
+    if (panel === "instanceTimers") {
       this.modelDetailsOpen = false;
       this.slashHelpOpen = false;
       this.gitDetailsThreadId = "";
       this.threadWizardOpen = false;
       if (this.activePanel === "raw") this.closeRawStream();
-      this.activePanel = "userDesk";
-      this.pushPath("", "userDesk");
+      this.activePanel = "instanceTimers";
+      this.pushPath("", "instanceTimers");
       this.updateDocumentTitle();
       this.renderNow();
       return;
     }
-    if (panel === "userJobs") {
+    if (panel === "instanceDesktops") {
       this.modelDetailsOpen = false;
       this.slashHelpOpen = false;
       this.gitDetailsThreadId = "";
       this.threadWizardOpen = false;
       if (this.activePanel === "raw") this.closeRawStream();
-      this.activePanel = "userJobs";
-      this.pushPath("", "userJobs");
+      this.activePanel = "instanceDesktops";
+      this.pushPath("", "instanceDesktops");
       this.updateDocumentTitle();
       this.renderNow();
       return;
@@ -942,7 +967,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     if (this.activePanel === "raw" && panel !== "raw") this.closeRawStream();
     this.activePanel = panel;
     const thread = this.selectedThread();
-    if (thread) this.pushPath(this.threadSlug(thread), panel);
+    if (thread && this.pushPath(this.threadSlug(thread), panel)) return;
     if (panel === "history") await this.loadHistory();
     if (panel === "delivery") await this.loadDeliveryTraces();
     if (panel === "timers") await this.loadTimers();
@@ -960,37 +985,6 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.renderNow();
   }
 
-  openTools(view: ToolsView = this.toolsView): void {
-    if (this.pairingRequired) {
-      this.enterPairingRequired();
-      return;
-    }
-    if (this.isUserMode()) {
-      this.activePanel = "chat";
-      const thread = this.selectedThread();
-      if (thread) this.replacePath(this.threadSlug(thread), "chat");
-      this.renderNow();
-      return;
-    }
-    if (this.activePanel === "raw") this.closeRawStream();
-    this.modelDetailsOpen = false;
-    this.slashHelpOpen = false;
-    this.gitDetailsThreadId = "";
-    this.threadWizardOpen = false;
-    this.onboardingActive = false;
-    this.toolsView = view;
-    this.activePanel = "ops";
-    this.pushOpsPath(view);
-    this.updateDocumentTitle();
-    this.renderNow();
-  }
-
-  setToolsView(view: ToolsView): void {
-    this.toolsView = view;
-    this.pushOpsPath(view);
-    this.updateDocumentTitle();
-  }
-
   openOnboarding(): void {
     if (this.pairingRequired) {
       this.enterPairingRequired();
@@ -999,7 +993,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     if (this.isUserMode()) {
       this.activePanel = "chat";
       const thread = this.selectedThread();
-      if (thread) this.replacePath(this.threadSlug(thread), "chat");
+      if (thread && this.replacePath(this.threadSlug(thread), "chat")) return;
       this.renderNow();
       return;
     }
@@ -1019,7 +1013,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       this.activePanel = "chat";
       this.onboardingActive = false;
       const thread = this.selectedThread();
-      if (thread) this.replacePath(this.threadSlug(thread), "chat");
+      if (thread && this.replacePath(this.threadSlug(thread), "chat")) return;
       this.renderNow();
       return;
     }
@@ -1062,11 +1056,10 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       this.threadWizardOpen = false;
       if (this.selectedThread()) {
         this.activePanel = "chat";
-        this.pushPath(this.selectedId, "chat");
+        if (this.pushPath(this.selectedId, "chat")) return;
       } else {
-        this.activePanel = "ops";
-        this.toolsView = "connectors";
-        this.pushOpsPath("connectors");
+        this.activePanel = "instanceSettings";
+        this.pushPath("", "instanceSettings");
       }
       this.updateDocumentTitle();
       await this.refresh(false);
@@ -1080,9 +1073,8 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       globalThis.history?.pushState({}, "", this.appPath("/"));
     } else {
       this.threadWizardOpen = false;
-      this.activePanel = "ops";
-      this.toolsView = "connectors";
-      this.pushOpsPath("connectors");
+      this.activePanel = "instanceSettings";
+      this.pushPath("", "instanceSettings");
     }
     this.updateDocumentTitle();
     await this.refresh(false);
@@ -1159,7 +1151,9 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   private isScopedPairingReturnUrl(returnUrl = ""): boolean {
     try {
       const target = new URL(returnUrl, globalThis.location?.href || "http://localhost/");
+      const parts = target.pathname.split("/").filter(Boolean);
       return this.isBrokerInstanceReturnUrl(returnUrl) ||
+        (parts[0] === "instance" && /^ins_[A-Za-z0-9_-]{22}$/.test(parts[1] || "")) ||
         (["/connect/google", "/connect/google/start"].includes(target.pathname) && Boolean(target.searchParams.get("connect") || target.searchParams.get("connect_id")));
     } catch {
       return false;
@@ -2414,7 +2408,6 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   selectedThread(): ThreadSummary | null {
     if (this.onboardingActive) return null;
     if (this.threadWizardOpen) return null;
-    if (this.activePanel === "ops") return null;
     if (!this.selectedId) return this.threads[0] || null;
     return this.resolveThread(this.selectedId) || null;
   }
@@ -3587,11 +3580,121 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   threadUrl(thread: ThreadSummary): string {
+    const canonical = this.canonicalPanelUrl(thread, "chat");
+    if (canonical) return canonical;
     return this.pathForPanel(this.threadSlug(thread), "chat");
   }
 
   rawUrl(thread: ThreadSummary): string {
+    const canonical = this.canonicalPanelUrl(thread, "raw");
+    if (canonical) {
+      const target = new URL(canonical);
+      return target.origin === globalThis.location?.origin
+        ? `${target.pathname}${target.search}${target.hash}`
+        : target.toString();
+    }
     return `/ng/thread/${encodeURIComponent(this.threadSlug(thread))}/raw`;
+  }
+
+  currentViewLinkAvailable(): boolean {
+    return Boolean(this.currentViewUrl());
+  }
+
+  async copyCurrentViewLink(): Promise<void> {
+    const target = this.currentViewUrl();
+    if (!target) return;
+    try {
+      await globalThis.navigator?.clipboard?.writeText(target);
+      this.linkNotice = "Link copied";
+      globalThis.setTimeout(() => {
+        if (this.linkNotice === "Link copied") this.linkNotice = "";
+        this.renderNow();
+      }, 1500);
+    } catch (error) {
+      this.error = this.errorText(error);
+    }
+    this.renderNow();
+  }
+
+  instanceChooserUrl(): string {
+    const appUrl = String(this.setupStatus?.urls?.appUrl || globalThis.location?.origin || "").trim();
+    try {
+      return new URL("/instance-entry", `${appUrl.replace(/\/+$/, "")}/`).toString();
+    } catch {
+      return "/instance-entry";
+    }
+  }
+
+  accountSwitcherEnabled(): boolean {
+    return this.instanceContext?.accountSwitcherEnabled === true;
+  }
+
+  async loadInstanceAccounts(): Promise<void> {
+    if (!this.accountSwitcherEnabled()) {
+      this.instanceAccounts = [];
+      return;
+    }
+    try {
+      const payload = await firstValueFrom(this.api.instanceAccounts());
+      this.instanceAccounts = payload.accounts || [];
+    } catch {
+      this.instanceAccounts = [];
+    }
+    this.renderNow();
+  }
+
+  async openInstanceAccount(account: InstanceAccount): Promise<void> {
+    if (this.accountSwitchBusyRef) return;
+    // Open the tab during the click event. Waiting for the session API first
+    // causes mobile browsers to treat window.open() as an unsolicited popup.
+    const accountTab = globalThis.open?.("about:blank", "_blank") || null;
+    if (!accountTab) {
+      this.error = "Your browser blocked the new account tab. Allow pop-ups for Orkestr and try again.";
+      this.renderNow();
+      return;
+    }
+    try {
+      accountTab.opener = null;
+    } catch {
+      // The new tab can still be navigated when a browser protects this field.
+    }
+    this.accountSwitchBusyRef = account.publicRef;
+    try {
+      const result = await firstValueFrom(this.api.openInstanceAccount(account.publicRef));
+      accountTab.location.replace(result.url || account.canonicalPath);
+    } catch (error) {
+      accountTab.close();
+      this.error = this.errorText(error);
+    } finally {
+      this.accountSwitchBusyRef = "";
+      this.renderNow();
+    }
+  }
+
+  async logoutBrowser(): Promise<void> {
+    if (this.logoutBusy) return;
+    this.logoutBusy = true;
+    try {
+      await firstValueFrom(this.api.logoutBrowserSession());
+    } finally {
+      // A stale service worker, expired session, or transient API failure must
+      // never strand the user in the authenticated shell. replace() also keeps
+      // Safari's back/forward cache from restoring the pre-logout screen.
+      globalThis.location?.replace(this.instanceChooserUrl());
+    }
+  }
+
+  private currentViewUrl(): string {
+    if (["files", "instanceSettings", "instanceTimers", "instanceDesktops"].includes(this.activePanel)) {
+      const target = this.pathForPanel("", this.activePanel);
+      try {
+        return new URL(target, globalThis.location?.href || "http://localhost/").toString();
+      } catch {
+        return "";
+      }
+    }
+    const thread = this.selectedThread();
+    return thread ? this.canonicalPanelUrl(thread, this.activePanel, true) : "";
   }
 
   messageKey(message: ThreadMessage): string {
@@ -4592,7 +4695,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   private resolveThread(value: string): ThreadSummary | undefined {
     const id = decodeURIComponent(String(value || "").trim());
     return this.threads.find((thread) =>
-      [thread.id, thread.name, thread.bindingName, thread.title, thread.codexThreadId, thread.threadId]
+      [thread.publicRef, thread.id, thread.name, thread.bindingName, thread.title, thread.codexThreadId, thread.threadId]
         .filter(Boolean)
         .some((candidate) => String(candidate) === id),
     );
@@ -4689,6 +4792,44 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     return normalized === "/" ? `${base}/` : `${base}${normalized}`;
   }
 
+  private instancePath(path: string): string {
+    const canonicalPath = String(this.instanceContext?.canonicalPath || "").trim();
+    if (!canonicalPath || this.appBasePath().startsWith("/instance/")) return this.appPath(path);
+    const suffix = String(path || "/").replace(/^\/+/, "");
+    const appUrl = String(this.setupStatus?.urls?.appUrl || globalThis.location?.origin || "").trim();
+    if (!appUrl) return this.appPath(path);
+    try {
+      return new URL(`${canonicalPath}${suffix}`, `${appUrl.replace(/\/+$/, "")}/`).toString();
+    } catch {
+      return this.appPath(path);
+    }
+  }
+
+  private canonicalizeInstanceRoute(): boolean {
+    if (!this.instanceContext?.canonicalPath || this.appBasePath().startsWith("/instance/")) return false;
+    const parts = this.locationPathParts();
+    if (this.sharedAppParts(parts) || this.pairingPathParts(parts) || parts.includes("thread")) return false;
+    if (this.connectorLoginProvider(parts)) return false;
+    let suffix = "";
+    if (!parts.length) suffix = "";
+    else if (parts[0] === "files" || (parts[0] === "ng" && parts[1] === "files")) suffix = "files";
+    else if (["settings", "ops", "mailboxes"].includes(parts[0]) || (parts[0] === "connectors" && !parts[1])) suffix = "settings";
+    else if (parts[0] === "setup" || parts[0] === "onboarding" || (parts[0] === "ng" && parts[1] === "onboarding")) {
+      suffix = this.setupStatus?.setupState === "ready" ? "settings" : `setup/${this.setupSection || "system"}`;
+    } else if (parts[0] === "timers") suffix = "timers";
+    else if (["desktops", "desk"].includes(parts[0])) suffix = "desktops";
+    else if (parts[0] === "jobs") suffix = "settings";
+    else return false;
+    const target = this.instancePath(`/${suffix}`);
+    if (!/^https?:\/\//i.test(target)) return false;
+    return navigateCanonicalThreadTarget(target, {
+      currentUrl: globalThis.location?.href,
+      mode: "replace",
+      history: globalThis.history,
+      location: globalThis.location,
+    }).crossOrigin;
+  }
+
   private setupPageModeFromPath(): SetupPageMode {
     return "setup";
   }
@@ -4701,24 +4842,18 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   private panelFromPath(): Panel {
     const parts = this.locationPathParts();
     if (this.sharedAppParts(parts)) return "chat";
-    if (parts[0] === "ops" || (parts[0] === "ng" && parts[1] === "ops")) return "ops";
+    if (parts[0] === "ops" || (parts[0] === "ng" && parts[1] === "ops")) return "instanceSettings";
     if (parts[0] === "files" || (parts[0] === "ng" && parts[1] === "files")) return "files";
-    if (parts[0] === "timers" || (parts[0] === "ng" && parts[1] === "timers")) return "userTimers";
-    if (parts[0] === "desk" || (parts[0] === "ng" && parts[1] === "desk")) return "userDesk";
-    if (parts[0] === "jobs" || (parts[0] === "ng" && parts[1] === "jobs")) return "userJobs";
-    if (parts[0] === "connectors" || (parts[0] === "ng" && parts[1] === "connectors")) return "userConnectors";
+    if (parts[0] === "settings" || parts[0] === "mailboxes") return "instanceSettings";
+    if (parts[0] === "timers" || (parts[0] === "ng" && parts[1] === "timers")) return "instanceTimers";
+    if (["desktops", "desk"].includes(parts[0]) || (parts[0] === "ng" && parts[1] === "desk")) return "instanceDesktops";
+    if (parts[0] === "jobs" || (parts[0] === "ng" && parts[1] === "jobs")) return "instanceSettings";
+    if (parts[0] === "connectors") return parts[1] ? "userConnectors" : "instanceSettings";
+    if (parts[0] === "ng" && parts[1] === "connectors") return parts[2] ? "userConnectors" : "instanceSettings";
     if (parts[0] === "skills" || (parts[0] === "ng" && parts[1] === "skills")) return "chat";
     const threadIndex = parts.indexOf("thread");
     const panel = String(parts[threadIndex + 2] || "");
-    return ["history", "delivery", "timers", "attach", "settings", "workers", "runtime", "raw", "ops", "files"].includes(panel) ? panel as Panel : "chat";
-  }
-
-  private toolsViewFromPath(): ToolsView {
-    const parts = this.locationPathParts();
-    const candidate = parts[0] === "ops"
-      ? String(parts[1] || "system")
-      : parts[0] === "ng" && parts[1] === "ops" ? String(parts[2] || "system") : "system";
-    return ["system", "timers", "desktops", "models", "settings", "connectors", "users", "waitlist", "audit"].includes(candidate) ? candidate as ToolsView : "system";
+    return ["history", "delivery", "timers", "attach", "settings", "workers", "runtime", "raw", "files"].includes(panel) ? panel as Panel : "chat";
   }
 
   private normalizeLegacyRoutePath(): void {
@@ -4738,8 +4873,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       return;
     }
     if (parts[0] === "ng" && parts[1] === "ops") {
-      const suffix = parts[2] ? `/${parts[2]}` : "";
-      globalThis.history?.replaceState({}, "", this.appPath(`/ops${suffix}`));
+      globalThis.history?.replaceState({}, "", this.appPath("/settings"));
       return;
     }
     if (parts[0] === "ng" && parts[1] === "files") {
@@ -4751,16 +4885,24 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       return;
     }
     if (parts[0] === "ng" && parts[1] === "desk") {
-      globalThis.history?.replaceState({}, "", this.appPath("/desk"));
+      globalThis.history?.replaceState({}, "", this.instancePath("/desktops"));
       return;
     }
     if (parts[0] === "ng" && parts[1] === "jobs") {
-      globalThis.history?.replaceState({}, "", this.appPath("/jobs"));
+      globalThis.history?.replaceState({}, "", this.instancePath("/settings"));
+      return;
+    }
+    if (parts[0] === "desk") {
+      globalThis.history?.replaceState({}, "", this.instancePath("/desktops"));
+      return;
+    }
+    if (parts[0] === "jobs") {
+      globalThis.history?.replaceState({}, "", this.instancePath("/settings"));
       return;
     }
     if (parts[0] === "ng" && parts[1] === "connectors") {
       const suffix = parts[2] ? `/${parts[2]}` : "";
-      globalThis.history?.replaceState({}, "", this.appPath(`/connectors${suffix}`));
+      globalThis.history?.replaceState({}, "", suffix ? this.appPath(`/connectors${suffix}`) : this.appPath("/settings"));
       return;
     }
     if (parts[0] === "ng" && parts[1] === "skills") {
@@ -4774,18 +4916,48 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     }
     const threadIndex = parts.indexOf("thread");
     if (threadIndex >= 0 && parts[threadIndex + 2] === "ops") {
-      globalThis.history?.replaceState({}, "", this.opsPath(this.toolsView));
+      globalThis.history?.replaceState({}, "", this.instancePath("/settings"));
+      return;
+    }
+    if (parts[0] === "ops" || parts[0] === "mailboxes" || (parts[0] === "connectors" && !parts[1])) {
+      globalThis.history?.replaceState({}, "", this.appPath("/settings"));
     }
   }
 
-  private pushPath(id: string, panel: Panel = "chat"): void {
+  private pushPath(id: string, panel: Panel = "chat"): boolean {
     const next = this.pathForPanel(id, panel);
-    if (globalThis.location?.pathname === next) return;
-    globalThis.history?.pushState({}, "", next);
+    if (!/^https?:\/\//i.test(next)) {
+      navigateLegacyThreadPath(next, {
+        currentUrl: globalThis.location?.href,
+        mode: "push",
+        history: globalThis.history,
+      });
+      return false;
+    }
+    return navigateCanonicalThreadTarget(next, {
+      currentUrl: globalThis.location?.href,
+      mode: "push",
+      history: globalThis.history,
+      location: globalThis.location,
+    }).crossOrigin;
   }
 
-  private replacePath(id: string, panel: Panel = "chat"): void {
-    globalThis.history?.replaceState({}, "", this.pathForPanel(id, panel));
+  private replacePath(id: string, panel: Panel = "chat"): boolean {
+    const next = this.pathForPanel(id, panel);
+    if (!/^https?:\/\//i.test(next)) {
+      navigateLegacyThreadPath(next, {
+        currentUrl: globalThis.location?.href,
+        mode: "replace",
+        history: globalThis.history,
+      });
+      return false;
+    }
+    return navigateCanonicalThreadTarget(next, {
+      currentUrl: globalThis.location?.href,
+      mode: "replace",
+      history: globalThis.history,
+      location: globalThis.location,
+    }).crossOrigin;
   }
 
   private pushOnboardingPath(): void {
@@ -4870,29 +5042,43 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   private pathForPanel(id: string, panel: Panel): string {
-    if (panel === "ops") return this.opsPath(this.toolsView);
-    if (panel === "files") return this.appPath("/files");
-    if (panel === "userTimers") return this.appPath("/timers");
-    if (panel === "userDesk") return this.appPath("/desk");
-    if (panel === "userJobs") return this.appPath("/jobs");
+    if (panel === "files") return this.instancePath("/files");
+    if (panel === "instanceSettings") return this.instancePath("/settings");
+    if (panel === "instanceTimers") return this.instancePath("/timers");
+    if (panel === "instanceDesktops") return this.instancePath("/desktops");
     if (panel === "userConnectors") return this.appPath("/connectors");
+    const thread = this.resolveThread(id);
+    const canonical = thread ? this.canonicalPanelUrl(thread, panel) : "";
+    if (canonical) return canonical;
     const suffix = panel === "chat" ? "" : `/${panel}`;
     return this.appPath(`/thread/${encodeURIComponent(id)}${suffix}`);
   }
 
-  private pushOpsPath(view: ToolsView): void {
-    const next = this.opsPath(view);
-    if (globalThis.location?.pathname === next) return;
-    globalThis.history?.pushState({}, "", next);
+  private canonicalPanelUrl(thread: ThreadSummary, panel: Panel, preserveLocation = false): string {
+    return canonicalThreadPanelUrl(
+      thread.canonicalUrl,
+      panel,
+      globalThis.location?.href,
+      preserveLocation,
+    );
   }
 
-  private opsPath(view: ToolsView): string {
-    return this.appPath(view === "system" ? "/ops" : `/ops/${view}`);
+  private canonicalizeCurrentThreadRoute(): boolean {
+    const thread = this.selectedThread();
+    if (!thread) return false;
+    const target = this.canonicalPanelUrl(thread, this.activePanel, true);
+    if (!target) return false;
+    return navigateCanonicalThreadTarget(target, {
+      currentUrl: globalThis.location?.href,
+      mode: "replace",
+      history: globalThis.history,
+      location: globalThis.location,
+    }).crossOrigin;
   }
 
   private shouldAutoOpenOnboarding(): boolean {
     if (this.isUserMode()) return false;
-    if (this.onboardingActive || !this.setupStatus || this.setupStatus.setupState === "ready") return false;
+    if (this.onboardingActive || !this.setupStatus || !this.codexStatusAuthoritative() || this.codexAgentReady()) return false;
     if (this.setupStatus.onboarding?.autoOpen === false) return false;
     if (this.readOnboardingFlag("skipped") || this.readOnboardingFlag("completed")) return false;
     const parts = this.locationPathParts();
@@ -5114,20 +5300,20 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       globalThis.document.title = this.setupPageMode === "setup" ? "Setup · Orkestr" : "Onboarding · Orkestr";
       return;
     }
-    if (this.activePanel === "ops") {
-      globalThis.document.title = "Ops · Orkestr";
-      return;
-    }
     if (this.activePanel === "files") {
       globalThis.document.title = "Files · Orkestr";
       return;
     }
-    if (this.activePanel === "userTimers") {
-      globalThis.document.title = "Automations · Orkestr";
+    if (this.activePanel === "instanceSettings") {
+      globalThis.document.title = "Instance Settings · Orkestr";
       return;
     }
-    if (this.activePanel === "userDesk") {
-      globalThis.document.title = "Desk · Orkestr";
+    if (this.activePanel === "instanceTimers") {
+      globalThis.document.title = "Timers · Orkestr";
+      return;
+    }
+    if (this.activePanel === "instanceDesktops") {
+      globalThis.document.title = "Desktops · Orkestr";
       return;
     }
     if (this.activePanel === "userConnectors") {

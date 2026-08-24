@@ -4,6 +4,7 @@ import {
 } from "../../../../../packages/core/src/threads.js";
 import { addAttachmentDownloadUrls } from "../../../../../packages/core/src/thread-attachments.js";
 import { visibleThreadMessages } from "../../../../../packages/core/src/thread-message-visibility.js";
+import { canonicalTimestamp, timestampMs } from "../../../../../packages/core/src/timestamp-normalization.js";
 import {
   syncCodexRuntimeThreadMessages,
   threadUsesNativeCodexRuntime,
@@ -14,9 +15,14 @@ function messageCursor(message: any, index: number): number {
   return Number(message?.cursor || 0) || index + 1;
 }
 
+function normalizedMessageTimestamp(message: any): string {
+  return canonicalTimestamp(message?.timestamp) ||
+    canonicalTimestamp(message?.createdAt) ||
+    canonicalTimestamp(message?.updatedAt);
+}
+
 function messageTimestampMs(message: any): number {
-  const ms = Date.parse(String(message?.timestamp || message?.createdAt || ""));
-  return Number.isFinite(ms) ? ms : 0;
+  return timestampMs(normalizedMessageTimestamp(message));
 }
 
 export function chronologicalMessages(messages: any[] = []) {
@@ -94,7 +100,7 @@ function latestPendingQuestion(messages: any[] = []) {
 function bridgeMessage(thread: any, message: any, index: number) {
   const role = String(message?.role || "assistant").trim() === "user" ? "user" : "assistant";
   const text = String(message?.text || "").trim();
-  const timestamp = message?.timestamp || message?.createdAt || new Date().toISOString();
+  const timestamp = normalizedMessageTimestamp(message) || new Date().toISOString();
   const phase = message?.phase || (role === "assistant" ? "final_answer" : null);
   return addAttachmentDownloadUrls(thread, {
     ...message,
@@ -127,9 +133,9 @@ function duplicateAdjacentAssistant(previous: any, current: any): boolean {
   if (!liveCodexDisplaySource(previous) || !liveCodexDisplaySource(current)) return false;
   if (String(previous.phase || "") !== String(current.phase || "")) return false;
   if (!normalizedMessageText(current.text) || normalizedMessageText(previous.text) !== normalizedMessageText(current.text)) return false;
-  const previousMs = Date.parse(String(previous.timestamp || previous.createdAt || ""));
-  const currentMs = Date.parse(String(current.timestamp || current.createdAt || ""));
-  return Number.isFinite(previousMs) && Number.isFinite(currentMs) && Math.abs(currentMs - previousMs) <= 5000;
+  const previousMs = messageTimestampMs(previous);
+  const currentMs = messageTimestampMs(current);
+  return Boolean(previousMs && currentMs && Math.abs(currentMs - previousMs) <= 5000);
 }
 
 function codexAppServerDisplaySource(message: any): boolean {
@@ -173,10 +179,10 @@ export function threadMessagePage(thread: any, rawMessages: any[] = [], query: R
   const limit = requestedLimit ? Math.min(requestedLimit, 100) : 100;
   const orderedMessages = visibleThreadMessages(chronologicalMessages(rawMessages));
   const pendingQuestion = latestPendingQuestion(orderedMessages);
-  let messages = dedupeDisplayMessages(orderedMessages.map((message, index) => bridgeMessage(thread, message, index)).filter((message) => message.text));
+  let messages = orderedMessages.map((message, index) => bridgeMessage(thread, message, index)).filter((message) => message.text);
   if (since > 0) messages = messages.filter((message) => Number(message.cursor || 0) > since);
   if (before > 0) messages = messages.filter((message) => Number(message.cursor || 0) < before);
-  messages = messages.slice(-limit);
+  messages = dedupeDisplayMessages(messages.slice(-limit));
   const allCursors = rawMessages.map((message, index) => messageCursor(message, index));
   const cursor = Math.max(0, ...allCursors);
   const oldestCursor = messages.length ? Number(messages[0]?.cursor || 0) : null;

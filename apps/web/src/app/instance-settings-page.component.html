@@ -1,0 +1,61 @@
+<section class="files-page instance-settings-page">
+  <header class="files-head">
+    <div>
+      <p class="eyebrow">Instance</p>
+      <h2>Settings and status</h2>
+      <p class="subline">
+        <span class="status-pill">{{ busy ? "loading" : snapshot?.status?.state || "unavailable" }}</span>
+        @if (snapshot?.instance?.publicRef) {
+          <code>{{ snapshot?.instance?.publicRef }}</code>
+        }
+      </p>
+    </div>
+    <button class="secondary" type="button" (click)="refresh()" [disabled]="busy">Reload</button>
+  </header>
+
+  @if (error) {
+    <div class="notice error">{{ error }}</div>
+  }
+
+  @if (snapshot; as current) {
+    <section class="card">
+      <div class="row-between">
+        <div>
+          <p class="eyebrow">Reconciliation</p>
+          <h3>{{ current.status.state }}</h3>
+        </div>
+        <span class="status-pill">
+          desired {{ current.status.desiredGeneration }} · observed {{ current.status.observedGeneration }}
+        </span>
+      </div>
+      <div class="file-list">
+        @for (subsystem of current.status.subsystems | keyvalue; track subsystem.key) {
+          <article class="file-row">
+            <strong>{{ subsystem.key }}</strong>
+            <span class="status-pill">{{ subsystem.value.state }}</span>
+          </article>
+        }
+      </div>
+      @for (condition of current.status.conditions; track condition.subsystem + condition.code) {
+        <p class="subline"><code>{{ condition.subsystem }}</code> {{ condition.code }}</p>
+      }
+      <small>Updated {{ current.status.generatedAt | date: "MMM d, HH:mm:ss" }}</small>
+    </section>
+
+    @if (mailboxConfigured()) {
+      <section class="card">
+        <p class="eyebrow">Mailboxes</p>
+        <h3>Configured mailbox resources</h3>
+        <p class="subline">Mailbox routing is read-only in the cockpit. Use the Orkestr conversation or CLI for attended changes.</p>
+        <pre><code>{{ current.config.mailboxes | json }}</code></pre>
+      </section>
+    }
+
+    <section class="card">
+      <p class="eyebrow">Desired state</p>
+      <h3>Instance manifest</h3>
+      <p class="subline">Non-secret, generation-controlled configuration. Runtime health is reported separately above.</p>
+      <pre><code>{{ desiredJson() }}</code></pre>
+    </section>
+  }
+</section>

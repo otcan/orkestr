@@ -3,6 +3,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { acquireDesktopLease, heartbeatDesktopLease, releaseDesktopLease } from "../../browsers/src/desktop-leases.js";
 import { operateManagedDesktop } from "../../browsers/src/desktop-operator.js";
+import { issueDesktopCapability } from "../../browsers/src/desktop-capability-broker.js";
 
 function clean(value) {
   return String(value || "").trim();
@@ -62,6 +63,7 @@ export function createOrkestrLinkedInDesktopAdapter(options = {}) {
   const fencingToken = clean(options.fencingToken || options.lease?.fencingToken);
   const operate = options.operateManagedDesktopFn || operateManagedDesktop;
   const heartbeat = options.heartbeatDesktopLeaseFn || heartbeatDesktopLease;
+  const issueCapability = options.issueDesktopCapabilityFn || issueDesktopCapability;
 
   async function heartbeatLease() {
     if (!threadId) return null;
@@ -70,6 +72,13 @@ export function createOrkestrLinkedInDesktopAdapter(options = {}) {
 
   async function observe(action = {}, context = {}) {
     await heartbeatLease();
+    const capability = await issueCapability({
+      principal: options.principal,
+      threadId,
+      fencingToken,
+      audience: "managed-desktop-operator",
+      scope: "observe",
+    }, env);
     const observed = await operate(
       desktopSlug,
       {
@@ -78,7 +87,7 @@ export function createOrkestrLinkedInDesktopAdapter(options = {}) {
         waitMs: options.waitMs || env.ORKESTR_LINKEDIN_OBSERVE_WAIT_MS || 750,
       },
       env,
-      { principal: options.principal, ownerUserId, threadId, fencingToken },
+      { principal: options.principal, ownerUserId, threadId, fencingToken, desktopCapability: capability.capability },
     );
     const page = observed?.page || {};
     return {

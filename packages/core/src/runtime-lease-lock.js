@@ -5,6 +5,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 
 const queues = new Map();
 const OWNER_FILE = "owner.json";
+const OWNER_INITIALIZATION_GRACE_MS = 1_000;
 const lockContext = new AsyncLocalStorage();
 
 function sleep(ms) {
@@ -185,6 +186,12 @@ export async function acquireRuntimeLeaseFileLock(filePath, { timeoutMs = 10_000
         fs.stat(lockPath).catch(() => null),
       ]);
       const owner = record.owner;
+      if (!stat) continue;
+      if (!owner && Date.now() - Number(stat.mtimeMs || 0) <= Math.max(staleMs, OWNER_INITIALIZATION_GRACE_MS)) {
+        if (Date.now() - startedAt >= timeoutMs) throw lockTimeoutError();
+        await sleep(10 + Math.floor(Math.random() * 20));
+        continue;
+      }
       if (await reclaimableOwner(owner, record.ownerStat, stat?.mtimeMs || 0, staleMs)) {
         const stalePath = `${lockPath}.stale.${process.pid}.${randomUUID()}`;
         const moved = await fs.rename(lockPath, stalePath).then(() => true, () => false);

@@ -186,3 +186,30 @@ test("system doctor reports missing required host tools as errors", async () => 
   assert.match(tmux?.summary || "", /tmux is not available/);
   assert.ok(doctor.issues.some((issue) => issue.code === "tmux"));
 });
+
+test("system doctor reports host-boundary readiness and safe remediation without private selectors", async () => {
+  const { home, env } = await fakeHost();
+  const doctor = await systemDoctor({
+    env: {
+      ...env,
+      ORKESTR_HOST_BOUNDARIES: "1",
+      ORKESTR_CANONICAL_INSTANCE_URLS: "1",
+      ORKESTR_CANONICAL_APP_GATEWAY: "1",
+      ORKESTR_CANONICAL_APP_LINKS: "1",
+      ORKESTR_PUBLIC_APP_URL: "https://app.example.test",
+      ORKESTR_CONNECT_PUBLIC_URL: "https://app.example.test",
+      ORKESTR_TRUST_PROXY_HEADERS: "1",
+      ORKESTR_TRUSTED_PROXY_IPS: "",
+    },
+    home,
+  });
+  const config = doctor.checks.find((item) => item.id === "host_boundary_config");
+  const proxy = doctor.checks.find((item) => item.id === "forwarded_host_trust");
+  const readiness = doctor.checks.find((item) => item.id === "canonical_route_readiness");
+
+  assert.equal(config?.status, "error");
+  assert.equal(proxy?.status, "warning");
+  assert.equal(readiness?.status, "error");
+  assert.match(config?.repair || "", /dedicated application origin/);
+  assert.doesNotMatch(JSON.stringify([config, proxy, readiness]), /thread name|thread id|private-instance/);
+});

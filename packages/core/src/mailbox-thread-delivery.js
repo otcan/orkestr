@@ -1,8 +1,21 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { appendEvent } from "../../storage/src/store.js";
 import { policyError } from "./policy.js";
 import { appendThreadMessage } from "./threads.js";
 import { evaluateMailboxThreadDeliveryShadow } from "./mailbox-thread-delivery-shadow.js";
+import { enqueueMailboxRouteSource } from "./mailbox-routes.js";
+import {
+  mailboxResourceId,
+  mailboxThreadDeliveryId as deliveryId,
+  mailboxThreadFilterKey as filterKey,
+  mailboxThreadPayload as mailboxPayload,
+  mailboxThreadQuarantineId as quarantineId,
+  mailboxThreadSystemPrincipal as systemPrincipal,
+  matchesMailboxThreadFilter as matches,
+  normalizedMailboxThreadFilter as normalizedFilter,
+  publicMailboxThreadListener as publicListener,
+  requireMailboxThreadPolicyMode as policyModeRequired,
+} from "./mailbox-thread-delivery-model.js";
 import {
   mailboxPumpRunKey,
   mailboxThreadDeliveryPumpLeaseMs,
@@ -17,110 +30,17 @@ import {
   mutateThreadResourcePolicy,
   readThreadResourcePolicy,
   threadResourceAccessMode,
-  threadResourceId,
 } from "./thread-resource-grants.js";
 
 const clean = (value = "") => String(value || "").trim();
 const lower = (value = "") => clean(value).toLowerCase();
 const nowIso = () => new Date().toISOString();
-const hash = (value = "") => createHash("sha256").update(String(value || "")).digest("hex");
 const activeDeliveryStates = new Set(["pending", "claimed"]);
-const listenerFilterKeys = new Set(["fromIncludes", "subjectIncludes", "hasAttachments", "verificationOnly"]);
 const localPumpRuns = new Map();
 const mailboxPumpLeaseName = "mailbox-thread-delivery";
 
 export { mailboxThreadDeliveryPumpIntervalMs, mailboxThreadDeliveryPumpLimit };
 export { mailboxThreadDeliveryStatus } from "./mailbox-thread-delivery-status.js";
-
-function mailboxResourceId(mailbox = {}, env = process.env) {
-  return threadResourceId("mailbox", mailbox.id, mailbox.ownerUserId, env);
-}
-
-function publicListener(listener = {}) {
-  return {
-    id: listener.id,
-    mailboxResourceId: listener.resourceId,
-    threadId: listener.threadId,
-    filter: { ...(listener.filter || {}) },
-    generation: listener.generation,
-    status: listener.status,
-    grantRevision: listener.grantRevision,
-    policyRevision: listener.policyRevision,
-    resourceGeneration: listener.resourceGeneration,
-    createdAt: listener.createdAt,
-    updatedAt: listener.updatedAt,
-    revokedAt: listener.revokedAt || null,
-    reason: listener.reason || null,
-  };
-}
-
-function normalizedFilter(input = {}) {
-  const source = input && typeof input === "object" && !Array.isArray(input) ? input : {};
-  if (Object.keys(source).some((key) => !listenerFilterKeys.has(key))) throw policyError("mailbox_listener_filter_invalid", 400);
-  const filter = {};
-  for (const key of ["fromIncludes", "subjectIncludes"]) {
-    if (source[key] === undefined || source[key] === null || source[key] === "") continue;
-    const value = lower(source[key]).slice(0, 200);
-    if (!value) throw policyError("mailbox_listener_filter_invalid", 400);
-    filter[key] = value;
-  }
-  for (const key of ["hasAttachments", "verificationOnly"]) {
-    if (source[key] === undefined || source[key] === null) continue;
-    if (typeof source[key] !== "boolean") throw policyError("mailbox_listener_filter_invalid", 400);
-    filter[key] = source[key];
-  }
-  return filter;
-}
-
-function filterKey(filter = {}) {
-  return hash(JSON.stringify(filter));
-}
-
-function matches(listener = {}, message = {}) {
-  const filter = listener.filter || {};
-  if (filter.fromIncludes && !lower(message.headers?.from).includes(filter.fromIncludes)) return false;
-  if (filter.subjectIncludes && !lower(message.headers?.subject).includes(filter.subjectIncludes)) return false;
-  if (filter.hasAttachments === true && !(message.attachments || []).length) return false;
-  if (filter.hasAttachments === false && (message.attachments || []).length) return false;
-  if (filter.verificationOnly === true && !(message.verificationCandidates || []).length) return false;
-  if (filter.verificationOnly === false && (message.verificationCandidates || []).length) return false;
-  return true;
-}
-
-function mailboxPayload(mailbox = {}, message = {}) {
-  const from = clean(message.headers?.from).slice(0, 500);
-  const subject = clean(message.headers?.subject).slice(0, 500);
-  const snippet = clean(message.snippet).slice(0, 500);
-  return {
-    text: [
-      `[Mailbox message for ${mailbox.address}]`,
-      from ? `From: ${from}` : "",
-      subject ? `Subject: ${subject}` : "",
-      "",
-      snippet || "(No text body was supplied.)",
-    ].filter((line, index) => line || index === 3).join("\n"),
-    from,
-    subject,
-    messageId: clean(message.headers?.messageId).slice(0, 500),
-    attachmentCount: Array.isArray(message.attachments) ? message.attachments.length : 0,
-  };
-}
-
-function deliveryId(resourceId, messageKey, listenerId, generation) {
-  return `mbd-${hash(`${resourceId}:${messageKey}:${listenerId}:${generation}`).slice(0, 48)}`;
-}
-
-function quarantineId(resourceId, messageKey) {
-  return deliveryId(resourceId, messageKey, "unrouted", 0);
-}
-
-function systemPrincipal(mailbox = {}) {
-  return { kind: "system", userId: mailbox.ownerUserId || "system" };
-}
-
-function policyModeRequired(env = process.env) {
-  if (threadResourceAccessMode("mailbox", env) === "off") throw policyError("mailbox_listener_policy_mode_required", 409);
-}
 
 export async function createMailboxThreadListener({ mailbox, threadId, filter = {}, principal = {}, idempotencyKey = "", expectedPolicyRevision } = {}, env = process.env) {
   if (!mailbox?.id || mailbox?.target?.type !== "main") throw policyError("mailbox_listener_main_mailbox_required", 409);
@@ -138,6 +58,11 @@ export async function createMailboxThreadListener({ mailbox, threadId, filter = 
     if (Number(decision.policyRevision) !== Number(state.revision)) throw policyError("mailbox_listener_policy_revision_conflict", 409);
     const resource = state.resources.find((item) => item.resourceType === "mailbox" && item.id === resourceId);
     if (!resource || resource.status !== "active" || resource.retiredAt) throw policyError("mailbox_listener_resource_inactive", 409);
+    // Routes own exactly one delivery path for a mailbox. Leaving a legacy
+    // listener active beside a route can append the same inbound message twice.
+    if ((state.mailboxRoutes || []).some((route) => route.resourceId === resourceId && route.status === "active" && !route.revokedAt)) {
+      throw policyError("mailbox_listener_route_active", 409);
+    }
     const existing = (state.mailboxListeners || []).find((item) => item.resourceId === resourceId && item.threadId === threadId && item.filterKey === key && item.status === "active" && !item.revokedAt);
     if (existing) return { noChange: true, result: { listener: existing, idempotent: true } };
     const prior = clean(idempotencyKey) && (state.mailboxListeners || []).find((item) => item.idempotencyKey === clean(idempotencyKey));
@@ -220,6 +145,16 @@ export async function enqueueMailboxThreadDeliveries({ mailbox, message, idempot
   const resourceId = mailboxResourceId(mailbox, env);
   const messageKey = clean(idempotencyKey);
   if (!messageKey) throw policyError("mailbox_message_idempotency_required", 400);
+  // Route sources retain immutable ingress content while they are live. Their
+  // terminal records are compacted under the bounded route-source retention
+  // policy; legacy listeners never acquire execution or context semantics.
+  const routeSource = await enqueueMailboxRouteSource({ mailbox, message, idempotencyKey: messageKey }, env);
+  // Do not acknowledge an ingress that could not obtain bounded source
+  // capacity. The connector inbox keeps it durable for the existing retry
+  // path instead of silently marking the message as routed without a source.
+  if (routeSource.skipped === "mailbox_route_source_backpressure") {
+    throw policyError("mailbox_route_source_backpressure", 503);
+  }
   const snapshot = await readThreadResourcePolicy(env);
   const resource = snapshot.resources.find((item) => item.resourceType === "mailbox" && item.id === resourceId && item.status === "active" && !item.retiredAt) || null;
   const candidates = resource ? (snapshot.mailboxListeners || []).filter((item) => item.resourceId === resourceId && item.status === "active" && !item.revokedAt && matches(item, message)) : [];
@@ -253,7 +188,7 @@ export async function enqueueMailboxThreadDeliveries({ mailbox, message, idempot
     recordMailboxThreadDeliveryMetrics({ state: delivery.state, lagMs: Date.now() - Date.parse(delivery.createdAt || "") });
   }
   await appendEvent({ type: result.result.unrouted ? "mailbox_thread_delivery_unrouted" : "mailbox_thread_delivery_queued", mailboxId: mailbox.id, resourceId, deliveryCount: result.result.queued, idempotencyKey: messageKey }, env).catch(() => {});
-  return { ok: true, deliveryIds: result.result.deliveries.map((item) => item.id), queued: result.result.queued, unrouted: result.result.unrouted, policyRevision: result.state.revision, idempotent: result.result.idempotent };
+  return { ok: true, deliveryIds: result.result.deliveries.map((item) => item.id), queued: result.result.queued, unrouted: result.result.unrouted, policyRevision: result.state.revision, idempotent: result.result.idempotent, routeSource };
 }
 
 export async function routeMainMailboxThreadDelivery({ mailbox, message, idempotencyKey, publicMailbox } = {}, env = process.env) {

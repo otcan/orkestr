@@ -246,6 +246,7 @@ test("standalone WA service allows demo onboarding send within routing policy", 
         accountId: "sender",
         to: "15550001111@c.us",
         text: "Open your demo setup link.",
+        mentions: ["15550009999@c.us"],
       }),
     });
     assert.equal(response.status, 200);
@@ -255,6 +256,7 @@ test("standalone WA service allows demo onboarding send within routing policy", 
     assert.equal(sent[0].accountId, "sender");
     assert.equal(sent[0].chatId, "15550001111@c.us");
     assert.equal(sent[0].text, "Open your demo setup link.");
+    assert.deepEqual(sent[0].mentions, ["15550009999@c.us"]);
   }, mockBridge({
     sendLocalWhatsAppMessage: async (payload) => {
       sent.push(payload);

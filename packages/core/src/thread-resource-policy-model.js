@@ -2,13 +2,9 @@ import { randomUUID } from "node:crypto";
 import { policyError } from "./policy.js";
 import { getThread } from "./threads.js";
 import { normalizeUserId } from "./users.js";
+import { THREAD_RESOURCE_PERMISSIONS, THREAD_RESOURCE_TYPES } from "./thread-resource-policy-constants.js";
 
-export const THREAD_RESOURCE_TYPES = Object.freeze({ desktop: "desktop", oxrm: "oxrm", mailbox: "mailbox" });
-export const THREAD_RESOURCE_PERMISSIONS = Object.freeze({
-  desktop: Object.freeze(["discover", "acquire", "operate", "share"]),
-  oxrm: Object.freeze(["discover", "read", "write", "execute"]),
-  mailbox: Object.freeze(["discover", "read", "subscribe", "manage"]),
-});
+export { THREAD_RESOURCE_PERMISSIONS, THREAD_RESOURCE_TYPES } from "./thread-resource-policy-constants.js";
 
 const truthy = new Set(["1", "true", "yes", "on"]);
 const modes = new Set(["off", "shadow", "enforce"]);
@@ -55,6 +51,42 @@ export function threadResourceAccessMode(resourceType = "", env = process.env) {
   // Desktop remains rollout-safe. New resource types are opt-in until their explicit
   // bindings have been configured, so existing instance-level integrations keep working.
   return type === THREAD_RESOURCE_TYPES.desktop || type === THREAD_RESOURCE_TYPES.oxrm ? "shadow" : "off";
+}
+
+function desktopEnforcedBindings(env = process.env) {
+  const raw = clean(env.ORKESTR_DESKTOP_ENFORCED_BINDINGS_JSON);
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return null;
+    const bindings = parsed.map((item) => ({
+      threadId: clean(item?.threadId),
+      resourceId: clean(item?.resourceId || item?.desktopId),
+    })).filter((item) => item.threadId && item.resourceId);
+    return bindings.length === parsed.length ? bindings : null;
+  } catch {
+    return null;
+  }
+}
+
+// Operators can graduate one exact thread/desktop binding from shadow to
+// enforcement without changing the rollout mode for unrelated desktops. Both
+// sides of a protected binding trigger enforcement: the protected thread
+// cannot drift to another desktop, and another thread cannot target the
+// protected desktop. Invalid non-empty configuration fails closed globally.
+export function threadResourceAccessModeFor(resourceType = "", input = {}, env = process.env) {
+  const type = normalizeThreadResourceType(resourceType);
+  const configured = threadResourceAccessMode(type, env);
+  if (type !== THREAD_RESOURCE_TYPES.desktop || configured !== "shadow") return configured;
+  const bindings = desktopEnforcedBindings(env);
+  if (bindings === null) return "enforce";
+  if (!bindings.length) return configured;
+  const threadId = clean(input.threadId || input.thread?.id);
+  const resourceId = clean(input.resourceId || input.desktopId || input.id);
+  return bindings.some((binding) =>
+    (threadId && binding.threadId === threadId) ||
+    (resourceId && binding.resourceId === resourceId)
+  ) ? "enforce" : configured;
 }
 
 export function normalizeResource(raw = {}, env = process.env) {
@@ -159,6 +191,10 @@ export function normalizeThreadResourcePolicyState(raw = {}, env = process.env) 
     mailboxListeners: Array.isArray(raw?.mailboxListeners) ? raw.mailboxListeners : [],
     mailboxDeliveries: Array.isArray(raw?.mailboxDeliveries) ? raw.mailboxDeliveries : [],
     mailboxPumpLeases: Array.isArray(raw?.mailboxPumpLeases) ? raw.mailboxPumpLeases : [],
+    mailboxRoutes: Array.isArray(raw?.mailboxRoutes) ? raw.mailboxRoutes : [],
+    mailboxSources: Array.isArray(raw?.mailboxSources) ? raw.mailboxSources : [],
+    mailboxRouteWork: Array.isArray(raw?.mailboxRouteWork) ? raw.mailboxRouteWork : [],
+    mailboxContexts: Array.isArray(raw?.mailboxContexts) ? raw.mailboxContexts : [],
     resourceSessions: (Array.isArray(raw?.resourceSessions) ? raw.resourceSessions : []).map((item) => ({
       id: clean(item?.id), jtiHash: clean(item?.jtiHash), tokenIdHash: clean(item?.tokenIdHash), bearerHash: clean(item?.bearerHash), audience: clean(item?.audience),
       scopes: Array.isArray(item?.scopes) ? item.scopes.map((scope) => clean(scope).toLowerCase()).filter(Boolean) : [],

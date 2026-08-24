@@ -2,6 +2,10 @@ import {
   whatsappAclDeniedError,
   whatsappBindingAclAllows,
 } from "./whatsapp-binding-acl.js";
+import {
+  canonicalWhatsAppParticipantAlias,
+  resolveWhatsAppParticipantIdentity,
+} from "./whatsapp-participant-identity.js";
 
 function pickString(...values) {
   for (const value of values) {
@@ -19,12 +23,7 @@ function listValues(...values) {
 }
 
 export function comparableParticipantId(value) {
-  const raw = pickString(value).toLowerCase();
-  const withoutPrefix = raw.replace(/^whatsapp:/, "");
-  const withoutContactDomain = withoutPrefix.replace(/@(c\.us|s\.whatsapp\.net)$/i, "");
-  const compactPhone = withoutContactDomain.replace(/[()\s.-]+/g, "");
-  const phoneLike = compactPhone.match(/^\+?([0-9]{5,})$/);
-  return phoneLike ? phoneLike[1] : raw;
+  return canonicalWhatsAppParticipantAlias(value)?.canonical || "";
 }
 
 export function participantIdSet(values = []) {
@@ -94,7 +93,7 @@ export function whatsappDisplayName(input = {}, fallback = "") {
   );
 }
 
-export function whatsappInboundThreadMatchesBinding({ thread = {}, chatId = "", accountId = "", from = "", fromMe = false, aclContext = null } = {}) {
+export function whatsappInboundThreadMatchesBinding({ thread = {}, chatId = "", accountId = "", from = "", fromMe = false, aclContext = null, env = process.env } = {}) {
   const binding = thread?.binding || {};
   const senderAccountId = pickString(binding.senderAccountId, binding.inboundAccountId);
   const senderContactId = pickString(binding.senderContactId);
@@ -103,28 +102,33 @@ export function whatsappInboundThreadMatchesBinding({ thread = {}, chatId = "", 
     if (accountId && !bindingAccountIds(binding).has(accountId)) return false;
     if (!fromMe) {
       if (responderContactId && comparableParticipantId(from) === comparableParticipantId(responderContactId)) return false;
-      const inboundSecurity = binding.inboundSecurity && typeof binding.inboundSecurity === "object" && !Array.isArray(binding.inboundSecurity)
-        ? binding.inboundSecurity
-        : {};
-      const ownerContactIds = listValues(
-        senderContactId,
-        binding.ownerContactId,
-        binding.ownerContactIds,
-        binding.authorizedContactId,
-        binding.authorizedContactIds,
-        binding.ownerContactAliases,
-        binding.authorizedContactAliases,
-        inboundSecurity.ownerParticipantIds,
-        inboundSecurity.ownerParticipants,
-        inboundSecurity.ownerContactIds,
-        inboundSecurity.ownerContactAliases,
-      );
-      const senderContactMatches = participantIdSet(ownerContactIds).has(comparableParticipantId(from));
-      const trustGroupBoundary = generatedSingleAccountGroupBindingCanTrustGroupBoundary(binding, chatId, from);
-      if (!senderContactMatches && !trustGroupBoundary) {
-        const additionalParticipantsEnabled = binding.additionalParticipantsEnabled === true || binding.allowOtherPeopleConfirmed === true;
-        if (!additionalParticipantsEnabled) return false;
-        if (!participantIdSet(binding.additionalParticipantIds).has(comparableParticipantId(from))) return false;
+      const participantIdentity = resolveWhatsAppParticipantIdentity(binding, { accountId, senderId: from, fromMe }, env);
+      if (participantIdentity.enabled) {
+        if (!["owner", "trusted"].includes(participantIdentity.effectiveRole)) return false;
+      } else {
+        const inboundSecurity = binding.inboundSecurity && typeof binding.inboundSecurity === "object" && !Array.isArray(binding.inboundSecurity)
+          ? binding.inboundSecurity
+          : {};
+        const ownerContactIds = listValues(
+          senderContactId,
+          binding.ownerContactId,
+          binding.ownerContactIds,
+          binding.authorizedContactId,
+          binding.authorizedContactIds,
+          binding.ownerContactAliases,
+          binding.authorizedContactAliases,
+          inboundSecurity.ownerParticipantIds,
+          inboundSecurity.ownerParticipants,
+          inboundSecurity.ownerContactIds,
+          inboundSecurity.ownerContactAliases,
+        );
+        const senderContactMatches = participantIdSet(ownerContactIds).has(comparableParticipantId(from));
+        const trustGroupBoundary = generatedSingleAccountGroupBindingCanTrustGroupBoundary(binding, chatId, from);
+        if (!senderContactMatches && !trustGroupBoundary) {
+          const additionalParticipantsEnabled = binding.additionalParticipantsEnabled === true || binding.allowOtherPeopleConfirmed === true;
+          if (!additionalParticipantsEnabled) return false;
+          if (!participantIdSet(binding.additionalParticipantIds).has(comparableParticipantId(from))) return false;
+        }
       }
     }
   }

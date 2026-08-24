@@ -22,7 +22,7 @@ function element({ hidden = false, attributes = {} } = {}) {
   };
 }
 
-test("expired desktop-share shell replaces an established noVNC iframe with the renewal state", async () => {
+test("expired desktop-share shell replaces an established desktop view with the renewal state", async () => {
   const source = await fs.readFile("apps/server/src/static-fallback.ts", "utf8");
   const desktopShareStart = source.indexOf("function serveDesktopSharePage");
   const scriptStart = source.indexOf("<script>", desktopShareStart) + "<script>".length;
@@ -76,4 +76,57 @@ test("expired desktop-share shell replaces an established noVNC iframe with the 
   assert.equal(nodes.mobile.getAttribute("href"), null);
   assert.match(nodes.summary.textContent, /expired/i);
   assert.match(nodes.status.textContent, /expired/i);
+});
+
+test("approved desktop shares navigate the top-level tab instead of framing noVNC", async () => {
+  const source = await fs.readFile("apps/server/src/static-fallback.ts", "utf8");
+  const desktopShareStart = source.indexOf("function serveDesktopSharePage");
+  const scriptStart = source.indexOf("<script>", desktopShareStart) + "<script>".length;
+  const scriptEnd = source.indexOf("</script>", scriptStart);
+  const script = source.slice(scriptStart, scriptEnd);
+  const nodes = {
+    challenge: element(),
+    status: element(),
+    lifecycle: element(),
+    summary: element(),
+    open: element(),
+    mobile: element(),
+    copy: element(),
+    "share-panel": element(),
+    viewer: element({ hidden: true }),
+    "desktop-frame": element(),
+  };
+  let navigation = "";
+  let calls = 0;
+  const location = {
+    pathname: "/desktop-share/fixture/share-fixture",
+    search: "?key=sample",
+    origin: "https://app.example.test",
+    replace(value) { navigation = String(value); },
+  };
+  const context = {
+    URL,
+    URLSearchParams,
+    Date,
+    Number,
+    location,
+    document: { getElementById: (id) => nodes[id] },
+    navigator: { clipboard: { writeText: async () => undefined } },
+    fetch: async () => {
+      calls += 1;
+      return {
+        ok: true,
+        json: async () => calls === 1
+          ? { ok: true, share: {}, attempt: { challenge: "desk-fixture" } }
+          : { ok: true, approved: true, desktopUrl: "/desktop/linkedin/vnc.html", share: {}, attempt: {} },
+      };
+    },
+    setTimeout: () => 0,
+  };
+
+  vm.runInNewContext(script, context);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(navigation, "https://app.example.test/desktop/linkedin/vnc.html");
+  assert.equal(nodes["desktop-frame"].getAttribute("src"), null);
 });

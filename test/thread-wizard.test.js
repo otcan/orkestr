@@ -27,7 +27,8 @@ test("main UI exposes a guided first thread generation flow", async () => {
   assert.ok(sources.includes("sidebarSearchPlaceholder"));
   assert.ok(sources.includes("agent, project, thread"));
   assert.ok(sources.includes("sidebar-new-thread"));
-  assert.ok(sources.includes("(click)=\"openTools('settings')\""));
+  assert.ok(sources.includes("(click)=\"openPanel('instanceDesktops')\""));
+  assert.ok(sources.includes("copyCurrentViewLink"));
   assert.ok(sources.includes("[setupSection]=\"setupSection\""));
   assert.ok(sources.includes("handleSetupSectionChange"));
   assert.ok(sources.includes("Create the demo thread"));
@@ -295,6 +296,28 @@ test("thread links do not persist the raw panel", async () => {
   assert.ok(!activateThread.includes('this.activePanel === "raw" ? "raw" : "chat"'));
   assert.ok(threadUrl.includes('this.pathForPanel(this.threadSlug(thread), "chat")'));
   assert.ok(!threadUrl.includes('this.activePanel === "raw" ? "raw" : "chat"'));
+});
+
+test("canonical thread links drive history, current-view copy, and notification fallbacks", async () => {
+  const component = await fs.readFile("apps/web/src/app/app.component.ts", "utf8");
+  const template = await fs.readFile("apps/web/src/app/app.component.html", "utf8");
+  const gmailNotifications = await fs.readFile("apps/web/src/app/gmail-browser-notification.service.ts", "utf8");
+
+  assert.equal(component.match(/if \(this\.canonicalizeCurrentThreadRoute\(\)\) return;/g)?.length, 2);
+  assert.match(component, /if \(this\.replacePath\(this\.selectedId, this\.activePanel\)\) return;/);
+  assert.match(component, /if \(this\.pushPath\(this\.selectedId, "chat"\)\) return;/);
+  assert.match(component, /navigateCanonicalThreadTarget\(next/);
+  assert.match(component, /navigateCanonicalThreadTarget\(target/);
+  assert.match(component, /navigateLegacyThreadPath\(next/);
+  assert.match(component, /private canonicalPanelUrl/);
+  assert.match(component, /currentViewLinkAvailable\(\): boolean/);
+  assert.match(component, /copyCurrentViewLink\(\): Promise<void>/);
+  assert.match(component, /private currentViewUrl\(\): string/);
+  assert.match(component, /this\.canonicalPanelUrl\(thread, this\.activePanel, true\)/);
+  assert.match(template, /currentViewLinkAvailable\(\)/);
+  assert.match(template, /copyCurrentViewLink\(\)/);
+  assert.doesNotMatch(template, /\[href\]="selectedThreadUrl\(thread\)"|>OPEN<\/a>/);
+  assert.match(gmailNotifications, /resolveThreadLink\(this\.threadLinks, rule\.target\) \|\| this\.appPath/);
 });
 
 test("thread management panel scaffold includes template and styles", async () => {

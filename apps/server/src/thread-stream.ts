@@ -19,6 +19,7 @@ import {
   rawStructuredTurnActive,
 } from "../../../packages/core/src/raw-terminal-watch.js";
 import { threadSummaryPayload } from "./thread-summary.js";
+import { hostBoundaryUpgradeDenied } from "./host-boundaries.js";
 import {
   stableSummaryBody,
   summaryStreamClientBackpressured,
@@ -488,6 +489,7 @@ export function attachThreadStreamUpgrade(server: Server): void {
   };
 
   server.on("upgrade", async (request, socket, head) => {
+    if (hostBoundaryUpgradeDenied(request)) return;
     if (summaryStreamPath(request.url)) {
       const context = await authorizeThreadUpgradeRequest(request, socket);
       if (!context) return;

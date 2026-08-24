@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import { ensureDataDirs } from "../../storage/src/paths.js";
 import { readJson } from "../../storage/src/store.js";
+import { assertPublicRefInvariant, assertUniquePublicRefs } from "../../storage/src/public-references.js";
 
 const dbCache = new Map();
 let sqliteModulePromise = null;
@@ -55,8 +56,22 @@ export async function readSqliteBrokerRegistry(env = process.env) {
 }
 
 export async function writeSqliteBrokerRegistry(registry, env = process.env) {
+  return writeSqliteBrokerRegistryInternal(registry, env);
+}
+
+export async function assignSqliteBrokerInstancePublicRefs(registry, env = process.env) {
+  return writeSqliteBrokerRegistryInternal(registry, env, { allowAssignment: true });
+}
+
+export async function rollbackSqliteBrokerInstancePublicRefs(registry, env = process.env) {
+  return writeSqliteBrokerRegistryInternal(registry, env, { rollbackAssignments: true });
+}
+
+async function writeSqliteBrokerRegistryInternal(registry, env, options = {}) {
   const db = await openBrokerDatabase(env);
   if (!db) return false;
+  const previous = db.prepare("select * from orkestr_broker_instances").all().map(rowToInstance);
+  validateBrokerPublicRefs(previous, registry.instances, options);
   db.exec("begin immediate");
   try {
     db.exec("delete from orkestr_broker_instances");
@@ -73,10 +88,42 @@ export async function writeSqliteBrokerRegistry(registry, env = process.env) {
   }
 }
 
+function validateBrokerPublicRefs(previous = [], next = [], options = {}) {
+  assertUniquePublicRefs(next, "instance");
+  const priorById = new Map(previous.map((record) => [clean(record.instanceId), record]));
+  for (const record of next) {
+    const prior = priorById.get(clean(record.instanceId));
+    if (!prior) continue;
+    if (!(options.rollbackAssignments === true && prior.publicRef && !record.publicRef)) {
+      assertPublicRefInvariant(prior.publicRef, record.publicRef, "instance", options);
+    }
+    if (!options.rollbackAssignments && prior.publicRefAssignedAt && prior.publicRefAssignedAt !== record.publicRefAssignedAt) {
+      throw Object.assign(new Error("broker_instance_public_ref_metadata_immutable"), { statusCode: 409 });
+    }
+    for (const field of [
+      "registrationIntentHash",
+      "registrationIntentBindingHash",
+      "registrationIntentAuthScopeHash",
+      "registrationIntentScopeHash",
+    ]) {
+      if (prior[field] && prior[field] !== record[field]) {
+        throw Object.assign(new Error("broker_registration_intent_binding_immutable"), { statusCode: 409 });
+      }
+    }
+  }
+}
+
 export async function getSqliteBrokerInstance(instanceId, env = process.env) {
   const db = await openBrokerDatabase(env);
   if (!db) return { available: false, instance: null };
   const row = db.prepare("select * from orkestr_broker_instances where instance_id = ?").get(clean(instanceId));
+  return { available: true, instance: rowToInstance(row) };
+}
+
+export async function getSqliteBrokerInstanceByPublicRef(publicRef, env = process.env) {
+  const db = await openBrokerDatabase(env);
+  if (!db) return { available: false, instance: null };
+  const row = db.prepare("select * from orkestr_broker_instances where public_ref = ?").get(clean(publicRef));
   return { available: true, instance: rowToInstance(row) };
 }
 
@@ -101,6 +148,8 @@ function ensureBrokerSchema(db) {
       channel_id text not null,
       status text,
       display_name text,
+      public_ref text,
+      public_ref_assigned_at text,
       version text,
       capabilities_json text not null default '[]',
       encryption_public_key text not null,
@@ -108,6 +157,10 @@ function ensureBrokerSchema(db) {
       signing_public_key text,
       channel_key_hash text,
       registration_token_hash text,
+      registration_intent_hash text,
+      registration_intent_binding_hash text,
+      registration_intent_auth_scope_hash text,
+      registration_intent_scope_hash text,
       request_ip text,
       user_agent text,
       endpoint_base_url text,
@@ -132,6 +185,19 @@ function ensureBrokerSchema(db) {
     create index if not exists idx_broker_instances_request_ip_created on orkestr_broker_instances(request_ip, created_at);
     create index if not exists idx_broker_instances_relay on orkestr_broker_instances(relay_account_id);
   `);
+  ensureColumn(db, "orkestr_broker_instances", "public_ref", "text");
+  ensureColumn(db, "orkestr_broker_instances", "public_ref_assigned_at", "text");
+  ensureColumn(db, "orkestr_broker_instances", "registration_intent_hash", "text");
+  ensureColumn(db, "orkestr_broker_instances", "registration_intent_binding_hash", "text");
+  ensureColumn(db, "orkestr_broker_instances", "registration_intent_auth_scope_hash", "text");
+  ensureColumn(db, "orkestr_broker_instances", "registration_intent_scope_hash", "text");
+  db.exec("create unique index if not exists idx_broker_instances_public_ref on orkestr_broker_instances(public_ref) where public_ref is not null");
+  db.exec("create unique index if not exists idx_broker_instances_registration_intent on orkestr_broker_instances(registration_intent_hash) where registration_intent_hash is not null");
+}
+
+function ensureColumn(db, table, column, type) {
+  if (db.prepare(`pragma table_info(${table})`).all().some((item) => item.name === column)) return;
+  db.exec(`alter table ${table} add column ${column} ${type}`);
 }
 
 function getBrokerMeta(db, key, fallback = null) {
@@ -166,6 +232,8 @@ function rowToInstance(row) {
   return {
     ...data,
     instanceId: row.instance_id,
+    publicRef: row.public_ref || data.publicRef || "",
+    publicRefAssignedAt: row.public_ref_assigned_at || data.publicRefAssignedAt || "",
     channelId: row.channel_id,
     status: row.status || data.status || "registered",
     displayName: row.display_name || data.displayName || "",
@@ -176,6 +244,10 @@ function rowToInstance(row) {
     signingPublicKey: row.signing_public_key || data.signingPublicKey || "",
     channelKeyHash: row.channel_key_hash || data.channelKeyHash || "",
     registrationTokenHash: row.registration_token_hash || data.registrationTokenHash || "",
+    registrationIntentHash: row.registration_intent_hash || data.registrationIntentHash || "",
+    registrationIntentBindingHash: row.registration_intent_binding_hash || data.registrationIntentBindingHash || "",
+    registrationIntentAuthScopeHash: row.registration_intent_auth_scope_hash || data.registrationIntentAuthScopeHash || "",
+    registrationIntentScopeHash: row.registration_intent_scope_hash || data.registrationIntentScopeHash || "",
     requestIp: row.request_ip || data.requestIp || "",
     userAgent: row.user_agent || data.userAgent || "",
     endpointBaseUrl: row.endpoint_base_url || data.endpointBaseUrl || "",
@@ -211,6 +283,10 @@ function normalizeInstanceRecord(instance = {}) {
     signingPublicKey: clean(instance.signingPublicKey).slice(0, 4096),
     channelKeyHash: clean(instance.channelKeyHash),
     registrationTokenHash: clean(instance.registrationTokenHash),
+    registrationIntentHash: clean(instance.registrationIntentHash),
+    registrationIntentBindingHash: clean(instance.registrationIntentBindingHash),
+    registrationIntentAuthScopeHash: clean(instance.registrationIntentAuthScopeHash),
+    registrationIntentScopeHash: clean(instance.registrationIntentScopeHash),
     requestIp: clean(instance.requestIp),
     userAgent: clean(instance.userAgent).slice(0, 300),
     endpointBaseUrl: clean(instance.endpointBaseUrl).slice(0, 500),
@@ -235,17 +311,20 @@ function insertBrokerInstanceRow(db, instance) {
   const record = normalizeInstanceRecord(instance);
   db.prepare(`
     insert into orkestr_broker_instances(
-      instance_id, channel_id, status, display_name, version, capabilities_json,
+      instance_id, channel_id, status, display_name, public_ref, public_ref_assigned_at, version, capabilities_json,
       encryption_public_key, encryption_public_key_fingerprint, signing_public_key,
-      channel_key_hash, registration_token_hash, request_ip, user_agent,
+      channel_key_hash, registration_token_hash, registration_intent_hash, registration_intent_binding_hash,
+      registration_intent_auth_scope_hash, registration_intent_scope_hash, request_ip, user_agent,
       endpoint_base_url, connect_base_url, setup_url, relay_account_id, whatsapp_chat_hash,
       last_heartbeat_ip, last_heartbeat_at, last_seen_at, expires_at, disabled_at,
       audit_status, audit_updated_at, limits_json, created_at, updated_at, data
-    ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     on conflict(instance_id) do update set
       channel_id = excluded.channel_id,
       status = excluded.status,
       display_name = excluded.display_name,
+      public_ref = excluded.public_ref,
+      public_ref_assigned_at = excluded.public_ref_assigned_at,
       version = excluded.version,
       capabilities_json = excluded.capabilities_json,
       encryption_public_key = excluded.encryption_public_key,
@@ -253,6 +332,10 @@ function insertBrokerInstanceRow(db, instance) {
       signing_public_key = excluded.signing_public_key,
       channel_key_hash = excluded.channel_key_hash,
       registration_token_hash = excluded.registration_token_hash,
+      registration_intent_hash = excluded.registration_intent_hash,
+      registration_intent_binding_hash = excluded.registration_intent_binding_hash,
+      registration_intent_auth_scope_hash = excluded.registration_intent_auth_scope_hash,
+      registration_intent_scope_hash = excluded.registration_intent_scope_hash,
       request_ip = excluded.request_ip,
       user_agent = excluded.user_agent,
       endpoint_base_url = excluded.endpoint_base_url,
@@ -275,6 +358,8 @@ function insertBrokerInstanceRow(db, instance) {
     record.channelId,
     record.status,
     record.displayName,
+    record.publicRef || null,
+    record.publicRefAssignedAt || null,
     record.version,
     JSON.stringify(record.capabilities),
     record.encryptionPublicKey,
@@ -282,6 +367,10 @@ function insertBrokerInstanceRow(db, instance) {
     record.signingPublicKey,
     record.channelKeyHash,
     record.registrationTokenHash,
+    record.registrationIntentHash || null,
+    record.registrationIntentBindingHash || null,
+    record.registrationIntentAuthScopeHash || null,
+    record.registrationIntentScopeHash || null,
     record.requestIp,
     record.userAgent,
     record.endpointBaseUrl,

@@ -1,6 +1,6 @@
 {
   "name": "orkestr-oss",
-  "version": "0.1.0-alpha.178",
+  "version": "0.1.0-alpha.186",
   "description": "Self-hosted agent workstation: Codex threads, connectors, virtual browsers, WhatsApp, and timers.",
   "type": "module",
   "bin": {
@@ -20,8 +20,10 @@
     "oss:boundary-check": "node scripts/oss-boundary-check.mjs",
     "deploy:split-plan": "node scripts/deployment-split-plan.mjs",
     "secrets:migrate-env": "node scripts/secure-secrets-migrate-env.mjs",
+    "canonical-refs:migrate": "node scripts/migrate-canonical-public-references.mjs",
     "test:tenant-isolation": "node --test --test-concurrency=1 --test-force-exit test/use-control.test.js test/security.test.js test/checks.test.js test/gmail.test.js test/outlook.test.js test/browsers.test.js test/codex-app-server.test.js test/whatsapp.test.js test/whereiam.test.js test/tenant-vm-registry.test.js test/tenant-vm-provisioning.test.js test/tenant-slices.test.js test/tenant-whatsapp-routing.test.js",
     "release:regression": "node scripts/release-regression.mjs",
+    "release:canonical-urls": "node scripts/canonical-url-release-gate.mjs",
     "e2e:whatsapp-real": "node scripts/real-wa-e2e.mjs",
     "e2e:whatsapp-demo-onboarding": "node scripts/real-wa-demo-onboarding.mjs",
     "web:build": "ng build web",

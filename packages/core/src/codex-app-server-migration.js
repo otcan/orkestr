@@ -8,6 +8,7 @@ import {
   threadUsesCodexAppServer,
 } from "./codex-app-server.js";
 import { codexSessionId, codexThreadId, nowIso } from "./codex-app-server-common.js";
+import { generationScopedRuntimePatch, staleGenerationRuntimeState } from "./codex-generation.js";
 
 function migrationPatch(thread, codexId) {
   const sessionId = codexSessionId(thread) || codexId;
@@ -55,6 +56,67 @@ function resultFor(thread, action, extra = {}) {
     codexThreadId: codexThreadId(thread) || null,
     action,
     ...extra,
+  };
+}
+
+/**
+ * Backfill generation markers without importing or starting a Codex thread.
+ * This is intentionally safe to run repeatedly during an upgrade or doctor
+ * repair. Conflicting durable identities are reported, never guessed.
+ */
+export async function migrateCodexRuntimeGenerationState(options = {}, env = process.env) {
+  const dryRun = options.dryRun === true;
+  const results = [];
+  for (const thread of await listThreads(env)) {
+    const state = staleGenerationRuntimeState(thread);
+    if (state.resolution.ambiguous) {
+      results.push({ threadId: thread.id, migrated: false, reason: state.resolution.reason });
+      continue;
+    }
+    const generation = state.resolution.id;
+    const runtime = thread.runtime && typeof thread.runtime === "object" ? thread.runtime : {};
+    const needsMigration = Boolean(
+      generation && (
+        runtime.runtimeGeneration !== generation ||
+        runtime.codexThreadId !== generation ||
+        (runtime.operatorRolloutPath && !runtime.operatorRolloutGeneration) ||
+        state.staleRollout ||
+        state.staleFinalDelivery
+      )
+    );
+    if (!needsMigration) continue;
+    if (dryRun) {
+      results.push({ threadId: thread.id, migrated: false, generation, reason: "generation_state_backfill" });
+      continue;
+    }
+    const patch = generationScopedRuntimePatch(thread, generation, { codexSessionId: codexSessionId(thread) || generation });
+    const nextRuntime = {
+      ...patch.runtime,
+      ...(runtime.operatorRolloutPath && !state.staleRollout ? { operatorRolloutGeneration: generation } : {}),
+      ...(state.staleRollout ? {
+        operatorRolloutPath: null,
+        operatorRolloutOffset: 0,
+        operatorRolloutGeneration: null,
+        operatorRolloutSyncedAt: null,
+      } : {}),
+      ...(state.staleFinalDelivery ? { finalDelivery: null } : {}),
+    };
+    await updateThread(thread.id, { ...patch, runtime: nextRuntime }, env);
+    await appendEvent({
+      type: "codex_runtime_generation_migrated",
+      threadId: thread.id,
+      runtimeGeneration: generation,
+      rolloutInvalidated: state.staleRollout,
+      finalDeliveryInvalidated: state.staleFinalDelivery,
+    }, env).catch(() => {});
+    results.push({ threadId: thread.id, migrated: true, generation });
+  }
+  return {
+    ok: true,
+    dryRun,
+    migrated: results.filter((item) => item.migrated).length,
+    blocked: results.filter((item) => item.reason === "durable_codex_generation_ambiguous").length,
+    results,
   };
 }
 

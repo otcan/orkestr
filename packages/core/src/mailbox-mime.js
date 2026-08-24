@@ -36,6 +36,18 @@ function addressToString(address = null) {
   return email || name;
 }
 
+function headerValue(headers = [], name = "") {
+  const key = clean(name).toLowerCase();
+  if (!key || !Array.isArray(headers)) return "";
+  // PostalMime keeps the original header list so that extensions it does not
+  // project onto top-level fields remain available to the ingress policy.
+  return headers
+    .filter((header) => clean(header?.key).toLowerCase() === key)
+    .map((header) => clean(header?.value))
+    .filter(Boolean)
+    .join(" ");
+}
+
 export async function parseRawMime(rawMime = "") {
   const source = rawBuffer(rawMime);
   const parsed = await PostalMime.parse(source, {
@@ -48,6 +60,10 @@ export async function parseRawMime(rawMime = "") {
       subject: clean(parsed.subject),
       from: addressToString(parsed.from),
       date: clean(parsed.date),
+      autoSubmitted: headerValue(parsed.headers, "auto-submitted").slice(0, 120),
+      references: headerValue(parsed.headers, "references").slice(0, 4_000),
+      inReplyTo: headerValue(parsed.headers, "in-reply-to").slice(0, 1_000),
+      xOrkestrOrigin: headerValue(parsed.headers, "x-orkestr-origin").slice(0, 120),
     },
     body: {
       text: clean(parsed.text),

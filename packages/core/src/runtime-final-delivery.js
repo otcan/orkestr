@@ -1,6 +1,7 @@
 import { appendEvent } from "../../storage/src/store.js";
 import { getThread, updateThread } from "./threads.js";
 import { completeRuntimeLiveness, recordRuntimeLiveness } from "./runtime-liveness.js";
+import { currentCodexGenerationMatches } from "./codex-generation.js";
 
 function clean(value) {
   return String(value || "").trim();
@@ -23,6 +24,79 @@ function matchesPendingDelivery(delivery = null, input = {}) {
   return true;
 }
 
+function uniqueStrings(values = []) {
+  const seen = new Set();
+  const result = [];
+  for (const value of values) {
+    const item = clean(value);
+    if (!item || seen.has(item)) continue;
+    seen.add(item);
+    result.push(item);
+  }
+  return result;
+}
+
+function sameKnownDeliveryField(delivery = {}, input = {}, field = "") {
+  const left = clean(delivery?.[field]);
+  const right = clean(input?.[field]);
+  return !left || !right || left === right;
+}
+
+function deliverySupersedesMessage(delivery = {}, messageId = "") {
+  const id = clean(messageId);
+  if (!id) return false;
+  return (Array.isArray(delivery?.supersededMessageIds) ? delivery.supersededMessageIds : [])
+    .some((value) => clean(value) === id);
+}
+
+function deliveredDuplicateMatches(delivery = null, input = {}) {
+  const messageId = clean(input.messageId);
+  if (!delivery || clean(delivery.status) !== "delivered" || !messageId) return false;
+  if (clean(delivery.messageId) === messageId || deliverySupersedesMessage(delivery, messageId)) return true;
+  for (const field of ["runtimeGeneration", "connector", "chatId", "accountId"]) {
+    if (!sameKnownDeliveryField(delivery, input, field)) return false;
+  }
+  const deliveryTurnId = clean(delivery.turnId);
+  const inputTurnId = clean(input.turnId);
+  const deliveryParentMessageId = clean(delivery.parentMessageId);
+  const inputParentMessageId = clean(input.parentMessageId);
+  return Boolean(
+    (deliveryTurnId && inputTurnId && deliveryTurnId === inputTurnId) ||
+    (deliveryParentMessageId && inputParentMessageId && deliveryParentMessageId === inputParentMessageId)
+  );
+}
+
+async function coalesceDeliveredDuplicate(thread, runtime, current, input = {}, env = process.env) {
+  const messageId = clean(input.messageId);
+  if (!deliveredDuplicateMatches(current, input) || clean(current?.messageId) === messageId) return null;
+  const at = nowIso();
+  const finalDelivery = {
+    ...current,
+    supersededMessageIds: uniqueStrings([...(current.supersededMessageIds || []), messageId]),
+    updatedAt: at,
+  };
+  const updated = await updateThread(thread.id, { runtime: { ...runtime, finalDelivery } }, env);
+  await appendEvent({
+    type: "runtime_final_delivery_duplicate_coalesced",
+    threadId: thread.id,
+    messageId,
+    canonicalMessageId: current.messageId,
+    turnId: current.turnId || clean(input.turnId) || null,
+    runtimeGeneration: current.runtimeGeneration || clean(input.runtimeGeneration) || null,
+  }, env).catch(() => {});
+  return {
+    ok: true,
+    pending: false,
+    acknowledged: true,
+    recorded: false,
+    duplicate: true,
+    superseded: true,
+    reason: "final_delivery_already_delivered",
+    finalDelivery: updated.runtime?.finalDelivery || finalDelivery,
+    thread: updated,
+  };
+}
+
 export function runtimeFinalDeliveryPending(thread = {}, turnId = "") {
   const delivery = thread?.runtime?.finalDelivery || null;
   if (!delivery || clean(delivery.status) !== "pending") return false;
@@ -33,6 +107,25 @@ export function runtimeFinalDeliveryPending(thread = {}, turnId = "") {
 export async function markRuntimeFinalDeliveryPending(threadId, input = {}, env = process.env) {
   const thread = await getThread(threadId, env);
   if (!thread) return { ok: false, pending: false, reason: "thread_not_found" };
+  const observedGeneration = clean(input.runtimeGeneration || input.codexThreadId);
+  if (observedGeneration) {
+    const match = currentCodexGenerationMatches(thread, observedGeneration);
+    // A connector-only thread may not yet have a Codex generation. It cannot
+    // be a superseded Codex execution, so retain the normal final-delivery
+    // contract for that legacy/general path. Once a generation is known,
+    // every mutation must match it.
+    if (!match.ok && (match.resolution?.id || match.resolution?.ambiguous)) {
+      await appendEvent({
+        type: "runtime_final_delivery_generation_rejected",
+        threadId: thread.id,
+        observedGeneration,
+        expectedGeneration: match.resolution?.id || null,
+        reason: match.reason,
+        operation: "pending",
+      }, env).catch(() => {});
+      return { ok: false, pending: false, reason: match.reason };
+    }
+  }
   const messageId = clean(input.messageId);
   if (!messageId) return { ok: false, pending: false, reason: "message_id_required" };
   const runtime = thread.runtime && typeof thread.runtime === "object" ? thread.runtime : {};
@@ -40,6 +133,8 @@ export async function markRuntimeFinalDeliveryPending(threadId, input = {}, env 
   if (clean(current?.messageId) === messageId && clean(current?.status) === "delivered") {
     return { ok: true, pending: false, duplicate: true, finalDelivery: current, thread };
   }
+  const coalesced = await coalesceDeliveredDuplicate(thread, runtime, current, input, env);
+  if (coalesced) return coalesced;
   const at = nowIso();
   const finalDelivery = {
     messageId,
@@ -49,6 +144,7 @@ export async function markRuntimeFinalDeliveryPending(threadId, input = {}, env 
     connector: clean(input.connector || "whatsapp"),
     chatId: clean(input.chatId) || null,
     accountId: clean(input.accountId) || null,
+    projectionSource: clean(input.projectionSource) || clean(current?.projectionSource) || null,
     status: "pending",
     completionStatus: clean(input.completionStatus || "completed"),
     pendingAt: clean(current?.messageId) === messageId ? current.pendingAt || at : at,
@@ -82,7 +178,27 @@ export async function acknowledgeRuntimeFinalDelivery(threadId, input = {}, env 
   if (!thread) return { ok: false, acknowledged: false, reason: "thread_not_found" };
   const runtime = thread.runtime && typeof thread.runtime === "object" ? thread.runtime : {};
   const current = runtime.finalDelivery && typeof runtime.finalDelivery === "object" ? runtime.finalDelivery : null;
-  if (!matchesPendingDelivery(current, input)) return { ok: false, acknowledged: false, reason: "final_delivery_not_found" };
+  const deliveryGeneration = clean(current?.runtimeGeneration);
+  if (deliveryGeneration) {
+    const match = currentCodexGenerationMatches(thread, deliveryGeneration);
+    if (!match.ok && (match.resolution?.id || match.resolution?.ambiguous)) {
+      await appendEvent({
+        type: "runtime_final_delivery_generation_rejected",
+        threadId: thread.id,
+        observedGeneration: deliveryGeneration,
+        expectedGeneration: match.resolution?.id || null,
+        reason: match.reason,
+        operation: "acknowledge",
+      }, env).catch(() => {});
+      return { ok: false, acknowledged: false, reason: match.reason };
+    }
+  }
+  if (!matchesPendingDelivery(current, input)) {
+    if (deliveredDuplicateMatches(current, input)) {
+      return { ok: true, acknowledged: true, duplicate: true, superseded: true, finalDelivery: current, thread };
+    }
+    return { ok: false, acknowledged: false, reason: "final_delivery_not_found" };
+  }
   if (clean(current.status) === "delivered") return { ok: true, acknowledged: true, duplicate: true, finalDelivery: current, thread };
   const at = clean(input.deliveredAt) || nowIso();
   const finalDelivery = {
@@ -126,7 +242,34 @@ export async function recordRuntimeFinalDeliveryFailure(threadId, input = {}, en
   if (!thread) return { ok: false, recorded: false, reason: "thread_not_found" };
   const runtime = thread.runtime && typeof thread.runtime === "object" ? thread.runtime : {};
   const current = runtime.finalDelivery && typeof runtime.finalDelivery === "object" ? runtime.finalDelivery : null;
-  if (!matchesPendingDelivery(current, input)) return { ok: false, recorded: false, reason: "final_delivery_not_found" };
+  const deliveryGeneration = clean(current?.runtimeGeneration);
+  if (deliveryGeneration) {
+    const match = currentCodexGenerationMatches(thread, deliveryGeneration);
+    if (!match.ok && (match.resolution?.id || match.resolution?.ambiguous)) {
+      await appendEvent({
+        type: "runtime_final_delivery_generation_rejected",
+        threadId: thread.id,
+        observedGeneration: deliveryGeneration,
+        expectedGeneration: match.resolution?.id || null,
+        reason: match.reason,
+        operation: "failure",
+      }, env).catch(() => {});
+      return { ok: false, recorded: false, reason: match.reason };
+    }
+  }
+  if (!matchesPendingDelivery(current, input)) {
+    if (deliveredDuplicateMatches(current, input)) {
+      await appendEvent({
+        type: "runtime_final_delivery_duplicate_failure_suppressed",
+        threadId: thread.id,
+        messageId: clean(input.messageId) || null,
+        canonicalMessageId: current?.messageId || null,
+        turnId: current?.turnId || clean(input.turnId) || null,
+      }, env).catch(() => {});
+      return { ok: true, recorded: false, duplicate: true, superseded: true, reason: "final_delivery_already_delivered", finalDelivery: current, thread };
+    }
+    return { ok: false, recorded: false, reason: "final_delivery_not_found" };
+  }
   const at = nowIso();
   const status = clean(input.status || "failed_retryable");
   const finalDelivery = {

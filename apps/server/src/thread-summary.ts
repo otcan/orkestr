@@ -11,6 +11,8 @@ import { defaultAdminUser, normalizeUserId } from "../../../packages/core/src/us
 import { appendEvent } from "../../../packages/storage/src/store.js";
 import { createThreadMessageRepository } from "../../../packages/storage/src/repositories.js";
 import { visibleThreadMessages } from "../../../packages/core/src/thread-message-visibility.js";
+import { canonicalAppLinksEnabled, canonicalThreadLinkData } from "../../../packages/core/src/canonical-app-links.js";
+import { readInstanceIdentity } from "../../../packages/core/src/instance-identity.js";
 
 type ThreadSummaryOptions = {
   cacheTtlMs?: number;
@@ -24,6 +26,8 @@ type ThreadSummaryOptions = {
   refreshMetadata?: boolean;
   refreshIdleMetadata?: boolean;
   codexMetadataById?: Map<string, Record<string, unknown>>;
+  env?: NodeJS.ProcessEnv;
+  instanceIdentity?: Record<string, unknown> | null;
 };
 
 type ThreadRuntimeMode =
@@ -825,6 +829,12 @@ async function cachedThreadMetadata(
 }
 
 export async function threadRuntimeSummary(thread: any, messages: any[] = [], options: ThreadSummaryOptions = {}) {
+  const summaryEnv = options.env || process.env;
+  const canonicalLink = await canonicalThreadLinkData(thread, summaryEnv, {
+    ...(Object.prototype.hasOwnProperty.call(options, "instanceIdentity")
+      ? { instanceIdentity: options.instanceIdentity }
+      : {}),
+  });
   const ttlMs = Number(options.cacheTtlMs ?? 0) || 0;
   const shouldSampleRuntime = options.sampleRuntime !== false;
   const shouldRefreshMetadata = options.refreshMetadata !== false;
@@ -898,6 +908,7 @@ export async function threadRuntimeSummary(thread: any, messages: any[] = [], op
   });
   const summary = {
     ...thread,
+    ...canonicalLink,
     ...gitState,
     threadId: resolvedCodexThreadId || thread.id,
     codexThreadId: resolvedCodexThreadId || null,
@@ -962,6 +973,7 @@ export async function threadRuntimeSummary(thread: any, messages: any[] = [], op
 }
 
 export async function threadSummaryPayload(options: ThreadSummaryOptions = {}) {
+  const summaryEnv = options.env || process.env;
   const cacheTtlMs = Number(options.cacheTtlMs ?? threadSummaryCacheTtlMs()) || 0;
   const payloadCacheTtlMs = Number(options.payloadCacheTtlMs ?? threadSummaryPayloadCacheTtlMs()) || 0;
   const runtimeStatusCacheTtlMs = Number(options.runtimeStatusCacheTtlMs ?? threadSummaryRuntimeStatusCacheTtlMs()) || 0;
@@ -974,12 +986,15 @@ export async function threadSummaryPayload(options: ThreadSummaryOptions = {}) {
   const effectivePrincipal = principal || adminPrincipal(defaultAdminUser());
   const payloadCacheKey = JSON.stringify({
     cacheTtlMs,
-    home: process.env.ORKESTR_HOME || "",
+    home: summaryEnv.ORKESTR_HOME || "",
     includeAllUserThreads,
     lifecycleFilter,
     refreshIdleMetadata,
     userId: effectivePrincipal?.userId || "admin",
     role: effectivePrincipal?.role || "admin",
+    canonicalLinks: summaryEnv.ORKESTR_CANONICAL_APP_LINKS || "",
+    canonicalGateway: summaryEnv.ORKESTR_CANONICAL_APP_GATEWAY || "",
+    appBase: summaryEnv.ORKESTR_PUBLIC_APP_URL || summaryEnv.ORKESTR_APP_URL || summaryEnv.ORKESTR_APP_HOST || "",
   });
   const now = Date.now();
   if (
@@ -1008,6 +1023,9 @@ export async function threadSummaryPayload(options: ThreadSummaryOptions = {}) {
   }
   const computePayload = (async () => {
     const startedAt = Date.now();
+    const instanceIdentity = canonicalAppLinksEnabled(summaryEnv)
+      ? await readInstanceIdentity(summaryEnv).catch(() => null)
+      : null;
     const scopedThreads = await listThreadSummaryScope(effectivePrincipal, includeAllUserThreads);
     const retiredThreads = scopedThreads.filter((thread: any) => threadIsRetired(thread));
     const activeThreads = scopedThreads.filter((thread: any) => !threadIsRetired(thread));
@@ -1059,6 +1077,8 @@ export async function threadSummaryPayload(options: ThreadSummaryOptions = {}) {
             sampleRuntime,
             refreshMetadata: sampleRuntime || refreshIdleMetadata,
             codexMetadataById,
+            instanceIdentity,
+            env: summaryEnv,
           },
         );
       })),

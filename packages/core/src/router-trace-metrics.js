@@ -26,6 +26,7 @@ export async function routerTraceMetrics(env = process.env) {
     stuck: traces.filter((trace) => trace.diagnostics?.stuck === true).length,
     failed: traces.filter((trace) => failurePhases.has(trace.currentPhase)).length,
     terminal: traces.filter((trace) => trace.terminal === true).length,
+    terminalDenied: traces.filter((trace) => trace.failureCode === "whatsapp_inbound_sender_denied" && trace.retryable === false).length,
     updatedAt: store.updatedAt || "",
   };
 }

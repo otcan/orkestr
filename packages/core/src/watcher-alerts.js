@@ -1,7 +1,8 @@
 import crypto from "node:crypto";
 import { dataPaths } from "../../storage/src/paths.js";
 import { appendEvent, readJson, writeJson } from "../../storage/src/store.js";
-import { appendThreadMessage, createThread, listThreads } from "./threads.js";
+import { appendThreadMessage, createThread, getThread, listThreads } from "./threads.js";
+import { canonicalThreadLink } from "./canonical-app-links.js";
 
 function clean(value) {
   return String(value || "").trim();
@@ -173,7 +174,7 @@ function formatAlert(alert = {}) {
     `code: ${clean(alert.code || "unhandled_error")}`,
     `message: ${redact(alert.message || alert.error?.message || "unknown_error", 1000)}`,
   ];
-  if (alert.threadId) lines.push(`thread: ${clean(alert.threadId)}`);
+  if (alert.canonicalThreadUrl || alert.threadId) lines.push(`thread: ${clean(alert.canonicalThreadUrl || alert.threadId)}`);
   if (alert.messageId) lines.push(`message: ${clean(alert.messageId)}`);
   if (alert.routerTraceId) lines.push(`routerTrace: ${clean(alert.routerTraceId)}`);
   if (alert.route) lines.push(`route: ${clean(alert.method)} ${clean(alert.route)}`.trim());
@@ -226,7 +227,7 @@ function formatLifecycleAlertMessage(alert = {}, entry = {}) {
     `alert: ${clean(alert.id)}`,
     `status: ${clean(alert.status || "recorded")}`,
   ];
-  if (alert.threadId) lines.push(`thread: ${clean(alert.threadId)}`);
+  if (alert.canonicalThreadUrl || alert.threadId) lines.push(`thread: ${clean(alert.canonicalThreadUrl || alert.threadId)}`);
   if (entry.actorUserId) lines.push(`operator: ${clean(entry.actorUserId)}`);
   if (entry.reason) lines.push(`reason: ${redact(entry.reason, 500)}`);
   lines.push(`time: ${clean(entry.at) || nowIso()}`);
@@ -237,7 +238,7 @@ export async function recordWatcherAlert(input = {}, env = process.env) {
   if (!enabled(env)) return { ok: false, skipped: true, reason: "watcher_disabled" };
   const error = safeError(input.error);
   const createdAt = clean(input.createdAt) || nowIso();
-  const alert = {
+  let alert = {
     id: hashAlert({ ...input, error }),
     severity: lower(input.severity || "error") || "error",
     source: clean(input.source || "orkestr"),
@@ -253,6 +254,11 @@ export async function recordWatcherAlert(input = {}, env = process.env) {
     mirrorToConnector: input.mirrorToConnector === true,
     createdAt,
   };
+  if (alert.threadId) {
+    const targetThread = await getThread(alert.threadId, env).catch(() => null);
+    const canonicalThreadUrl = await canonicalThreadLink(targetThread, env).catch(() => "");
+    if (canonicalThreadUrl) alert = { ...alert, canonicalThreadUrl };
+  }
   const store = await readAlertStore(env);
   const matchingAlerts = store.alerts.filter((item) => clean(item.id) === alert.id);
   const latest = matchingAlerts.at(-1);

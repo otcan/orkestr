@@ -7,6 +7,7 @@ import { CodexModule } from "./modules/codex/codex.module.js";
 import { ConnectorsModule } from "./modules/connectors/connectors.module.js";
 import { GmailNotificationsModule } from "./modules/gmail-notifications/gmail-notifications.module.js";
 import { JobsModule } from "./modules/jobs/jobs.module.js";
+import { InstanceModule } from "./modules/instance/instance.module.js";
 import { MailboxesModule } from "./modules/mailboxes/mailboxes.module.js";
 import { ReleaseModule } from "./modules/release/release.module.js";
 import { RouterTracesModule } from "./modules/router-traces/router-traces.module.js";
@@ -27,6 +28,7 @@ import { UsersModule } from "./modules/users/users.module.js";
     ConnectorsModule,
     GmailNotificationsModule,
     JobsModule,
+    InstanceModule,
     MailboxesModule,
     ReleaseModule,
     RouterTracesModule,
