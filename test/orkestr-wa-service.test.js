@@ -28,6 +28,7 @@ async function testHome(prefix) {
 
 function mockBridge(overrides = {}) {
   return {
+    addLocalWhatsAppGroupParticipants: async (payload) => ({ ok: true, ...payload }),
     createLocalWhatsAppChat: async (payload) => ({ ok: true, chatId: "demo-group@g.us", ...payload }),
     demoteLocalWhatsAppGroupParticipants: async (payload) => ({ ok: true, ...payload }),
     generateLocalWhatsAppChatPicture: async (payload) => ({ ok: true, ...payload }),
@@ -333,6 +334,35 @@ test("standalone WA service promotes and demotes group admins inside the worker"
     },
     demoteLocalWhatsAppGroupParticipants: async ({ accountId, chatId: targetChatId, participantIds }) => {
       calls.push(["demote", accountId, targetChatId, participantIds]);
+      return { ok: true, accountId, chatId: targetChatId, participantIds };
+    },
+  }));
+});
+
+test("standalone WA service adds group participants inside the worker", async () => {
+  const home = await testHome("orkestr-wa-service-group-participants-add-");
+  const calls = [];
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WA_SERVICE_AUTH_DISABLED: "1",
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "sender",
+  };
+  const chatId = "120363400000000001@g.us";
+  const participantId = "15550100001@c.us";
+
+  await withWaService(env, async ({ bridgeUrl }) => {
+    const workerEnv = { ...env, ORKESTR_WA_WORKER_URL: bridgeUrl };
+    const added = await whatsappWorkerConversation("sender", chatId, "add-participants", {
+      participantIds: [participantId],
+      autoSendInviteV4: true,
+      comment: "Join the project group.",
+    }, workerEnv);
+
+    assert.equal(added.ok, true);
+    assert.deepEqual(calls, [["sender", chatId, [participantId], true, "Join the project group."]]);
+  }, mockBridge({
+    addLocalWhatsAppGroupParticipants: async ({ accountId, chatId: targetChatId, participantIds, autoSendInviteV4, comment }) => {
+      calls.push([accountId, targetChatId, participantIds, autoSendInviteV4, comment]);
       return { ok: true, accountId, chatId: targetChatId, participantIds };
     },
   }));

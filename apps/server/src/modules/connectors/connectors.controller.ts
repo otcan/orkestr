@@ -828,10 +828,17 @@ export class ConnectorsController {
       accountId,
       chatId,
     }, request.orkestrMachineAuthContext);
+    const runtimeAccountId = await resolveLocalWhatsAppRuntimeAccountId(accountId);
+    const title = String(body.title || body.name || "");
+    try {
+      return await whatsappWorkerConversation(runtimeAccountId, chatId, "set_picture", { title }, process.env);
+    } catch (error: any) {
+      if (!["whatsapp_worker_unavailable", "whatsapp_worker_unconfigured"].includes(String(error?.message || ""))) throw error;
+    }
     return generateLocalWhatsAppChatPicture({
-      accountId: await resolveLocalWhatsAppRuntimeAccountId(accountId),
+      accountId: runtimeAccountId,
       chatId,
-      title: String(body.title || body.name || ""),
+      title,
     });
   }
 
@@ -845,12 +852,25 @@ export class ConnectorsController {
   @HttpCode(200)
   async whatsappBridgeAddGroupParticipants(@Req() request: any, @Param("accountId") accountId: string, @Param("chatId") chatId: string, @Body() body: Record<string, unknown> = {}) {
     await assertWhatsAppBridgeBindingAcl("manage", { accountId, chatId }, request.orkestrMachineAuthContext);
+    const runtimeAccountId = await resolveLocalWhatsAppRuntimeAccountId(accountId);
+    const participantIds = bodyStringArray(body, "participantIds").concat(bodyStringArray(body, "participants"));
+    const autoSendInviteV4 = optionalBodyBoolean(body, "autoSendInviteV4", true);
+    const comment = String(body.comment || "");
+    try {
+      return await whatsappWorkerConversation(runtimeAccountId, chatId, "add-participants", {
+        participantIds,
+        autoSendInviteV4,
+        comment,
+      }, process.env);
+    } catch (error: any) {
+      if (!["whatsapp_worker_unavailable", "whatsapp_worker_unconfigured"].includes(String(error?.message || ""))) throw error;
+    }
     return addLocalWhatsAppGroupParticipants({
-      accountId: await resolveLocalWhatsAppRuntimeAccountId(accountId),
+      accountId: runtimeAccountId,
       chatId,
-      participantIds: bodyStringArray(body, "participantIds").concat(bodyStringArray(body, "participants")),
-      autoSendInviteV4: optionalBodyBoolean(body, "autoSendInviteV4", true),
-      comment: String(body.comment || ""),
+      participantIds,
+      autoSendInviteV4,
+      comment,
     });
   }
 

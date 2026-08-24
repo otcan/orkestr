@@ -140,6 +140,16 @@ export function whatsappWorkerConversation(accountId = "", conversationId = "", 
     return requestWhatsAppWorker(`/accounts/${account}/chats/${conversation}/history?limit=${Math.max(1, Number(options.limit || 30) || 30)}`, {}, env);
   }
   if (action === "participants") return requestWhatsAppWorker(`/accounts/${account}/chats/${conversation}/participants`, {}, env);
+  if (action === "add_participants" || action === "add-participants") {
+    return requestWhatsAppWorker(`/accounts/${account}/chats/${conversation}/participants`, {
+      method: "POST",
+      body: {
+        participantIds: options.participantIds || [],
+        autoSendInviteV4: options.autoSendInviteV4 !== false,
+        comment: clean(options.comment),
+      },
+    }, env);
+  }
   if (action === "invite") return requestWhatsAppWorker(`/accounts/${account}/chats/${conversation}/invite`, {}, env);
   if (["promote_admins", "demote_admins", "promote-admins", "demote-admins"].includes(action)) {
     const suffix = action === "demote_admins" || action === "demote-admins" ? "/admins/demote" : "/admins";

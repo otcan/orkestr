@@ -335,6 +335,23 @@ async function handleRequest(req, res, env = process.env, bridge = defaultBridge
       env,
     }));
   }
+  if (method === "POST" && params) {
+    requireAuth(req, env);
+    const body = await readJsonBody(req);
+    const participantIds = [
+      ...(Array.isArray(body.participantIds) ? body.participantIds : []),
+      ...(Array.isArray(body.participants) ? body.participants : []),
+    ].map(clean).filter(Boolean);
+    requireServicePolicy(req, url, env, body, { accounts: [params.accountId], recipients: [params.chatId], recipientScope: "history" });
+    return json(res, 200, await bridge.addLocalWhatsAppGroupParticipants({
+      accountId: params.accountId,
+      chatId: params.chatId,
+      participantIds,
+      autoSendInviteV4: body.autoSendInviteV4 !== false,
+      comment: clean(body.comment),
+      env,
+    }));
+  }
 
   params = routeMatch(url.pathname, "/accounts/:accountId/chats/:chatId/picture");
   if (method === "POST" && params) {
