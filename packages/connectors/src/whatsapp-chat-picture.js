@@ -59,7 +59,30 @@ async function setLocalWhatsAppGroupPictureFromFile({
     updated = await chat.setPicture(media);
   } catch (error) {
     if (!client?.pupPage || typeof client.pupPage.evaluate !== "function") throw error;
-    updated = await client.pupPage.evaluate((id, value) => window.WWebJS.setPicture(id, value), chatId, media);
+    updated = await client.pupPage.evaluate(async (id, value) => {
+      const browserWindow = globalThis.window;
+      const moduleRequire = browserWindow.require;
+      const widFactory = moduleRequire("WAWebWidFactory");
+      const chatWid = widFactory.createWid(id);
+      const thumbnail = await browserWindow.WWebJS.cropAndResizeImage(value, {
+        asDataUrl: true,
+        mimetype: "image/jpeg",
+        size: 96,
+      });
+      const profilePic = await browserWindow.WWebJS.cropAndResizeImage(value, {
+        asDataUrl: true,
+        mimetype: "image/jpeg",
+        size: 640,
+      });
+      const collections = moduleRequire("WAWebCollections");
+      const collection =
+        collections.ProfilePicThumb.get(chatWid) ||
+        await collections.ProfilePicThumb.find(chatWid);
+      if (!collection?.canSet()) return false;
+      const result = await moduleRequire("WAWebContactProfilePicThumbBridge")
+        .sendSetPicture(chatWid, thumbnail, profilePic);
+      return result ? result.status === 200 : false;
+    }, chatId, media);
   }
   await appendEvent({
     type: "whatsapp_chat_picture_set",

@@ -4439,6 +4439,194 @@ test("Codex app-server history hydration projects WhatsApp final replies", async
   assert.equal(consumeThreadConnectorDeliverySignalCount(), 1);
 });
 
+test("Codex app-server history hydration does not borrow stale WhatsApp parents for non-WhatsApp turns", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-history-nonwa-"));
+  const env = { ORKESTR_HOME: path.join(home, "orkestr") };
+  consumeThreadConnectorDeliverySignalCount();
+  const thread = await createThread({
+    id: "app-server-history-nonwa-thread",
+    name: "History Non-WA Thread",
+    cwd: home,
+    executorId: "codex",
+    executor: { type: "codex" },
+    binding: { connector: "whatsapp", chatId: "chat-history-stale-wa", outboundAccountId: "wa-history" },
+  }, env);
+  await appendThreadMessage(thread.id, {
+    role: "user",
+    source: "whatsapp_inbound",
+    connector: "whatsapp",
+    chatId: "chat-history-stale-wa",
+    accountId: "wa-history",
+    text: "Old WhatsApp turn",
+    state: "completed",
+    deliveryState: "delivered",
+    codexThreadId: "codex-history-nonwa-thread",
+    codexTurnId: "old-wa-turn",
+    createdAt: "2026-08-19T10:00:00.000Z",
+  }, env);
+  await appendThreadMessage(thread.id, {
+    role: "user",
+    source: "cli",
+    text: "CLI sanity check",
+    state: "completed",
+    deliveryState: "delivered",
+    codexThreadId: "codex-history-nonwa-thread",
+    codexTurnId: "cli-turn",
+    createdAt: "2026-08-19T10:01:00.000Z",
+  }, env);
+  const codexThread = {
+    id: "codex-history-nonwa-thread",
+    turns: [
+      {
+        id: "cli-turn",
+        threadId: "codex-history-nonwa-thread",
+        status: "completed",
+        createdAt: "2026-08-19T10:01:00.000Z",
+        items: [
+          { type: "agentMessage", id: "history-nonwa-final", text: "CLI final", phase: "final_answer" },
+        ],
+      },
+    ],
+  };
+
+  const result = await hydrateCodexAppServerThreadMessages(thread, codexThread, env);
+  const messages = await listThreadMessages(thread.id, env);
+  const reply = messages.find((message) => message.role === "assistant" && message.text === "CLI final");
+  const outbox = await readConnectorOutbox(env);
+
+  assert.equal(result.created, 1);
+  assert.equal(reply?.parentMessageId || null, null);
+  assert.equal(reply?.connector || "", "");
+  assert.equal(reply?.chatId || "", "");
+  assert.equal(reply?.accountId || "", "");
+  assert.equal(outbox.jobs.filter((job) => job.sourceMessageId === reply?.id).length, 0);
+  assert.equal(consumeThreadConnectorDeliverySignalCount(), 0);
+});
+
+test("Codex app-server live projection does not borrow stale WhatsApp parents for remembered CLI turns", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-live-nonwa-"));
+  const env = { ORKESTR_HOME: path.join(home, "orkestr") };
+  consumeThreadConnectorDeliverySignalCount();
+  const codexThreadId = "codex-live-nonwa-thread";
+  const turnId = "live-cli-turn";
+  const thread = await createThread({
+    id: "app-server-live-nonwa-thread",
+    name: "Live Non-WA Thread",
+    cwd: home,
+    executorId: "codex",
+    executor: { type: "codex", codexThreadId, codexSessionId: codexThreadId },
+    runtimeKind: "codex-app-server",
+    codexThreadId,
+    codexSessionId: codexThreadId,
+    binding: { connector: "whatsapp", chatId: "chat-live-stale-wa", outboundAccountId: "wa-live" },
+    runtime: {
+      runtimeKind: "codex-app-server",
+      state: "ready",
+      codexThreadId,
+      codexSessionId: codexThreadId,
+      runtimeGeneration: codexThreadId,
+    },
+  }, env);
+  await appendThreadMessage(thread.id, {
+    role: "user",
+    source: "whatsapp_inbound",
+    connector: "whatsapp",
+    chatId: "chat-live-stale-wa",
+    accountId: "wa-live",
+    text: "Old WhatsApp turn",
+    state: "completed",
+    deliveryState: "delivered",
+    codexThreadId,
+    codexTurnId: "old-live-wa-turn",
+  }, env);
+  const cliInput = await appendThreadMessage(thread.id, {
+    role: "user",
+    source: "cli",
+    text: "CLI sanity check",
+    state: "completed",
+    deliveryState: "delivered",
+    codexThreadId,
+    codexTurnId: turnId,
+  }, env);
+  const client = new CodexAppServerClient({ env });
+  client.rememberTurnParent(codexThreadId, turnId, cliInput);
+
+  const reply = await client.projectItem(
+    { type: "agentMessage", id: "live-nonwa-final", text: "CLI final", phase: "final_answer" },
+    { threadId: codexThreadId, turnId, timestamp: "2026-08-19T10:02:00.000Z" },
+    codexThreadId,
+  );
+  const outbox = await readConnectorOutbox(env);
+
+  assert.equal(reply?.parentMessageId || null, null);
+  assert.equal(reply?.connector || "", "");
+  assert.equal(reply?.chatId || "", "");
+  assert.equal(reply?.accountId || "", "");
+  assert.equal(outbox.jobs.filter((job) => job.sourceMessageId === reply?.id).length, 0);
+  assert.equal(consumeThreadConnectorDeliverySignalCount(), 0);
+});
+
+test("Codex app-server live projection coalesces duplicate final items in one turn", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-live-final-dupe-"));
+  const env = { ORKESTR_HOME: path.join(home, "orkestr") };
+  consumeThreadConnectorDeliverySignalCount();
+  const codexThreadId = "codex-live-final-dupe-thread";
+  const turnId = "live-final-dupe-turn";
+  const thread = await createThread({
+    id: "app-server-live-final-dupe-thread",
+    name: "Live Final Dupe Thread",
+    cwd: home,
+    executorId: "codex",
+    executor: { type: "codex", codexThreadId, codexSessionId: codexThreadId },
+    runtimeKind: "codex-app-server",
+    codexThreadId,
+    codexSessionId: codexThreadId,
+    binding: { connector: "whatsapp", chatId: "chat-live-final-dupe", outboundAccountId: "wa-live" },
+    runtime: {
+      runtimeKind: "codex-app-server",
+      state: "ready",
+      codexThreadId,
+      codexSessionId: codexThreadId,
+      runtimeGeneration: codexThreadId,
+    },
+  }, env);
+  const inbound = await appendThreadMessage(thread.id, {
+    role: "user",
+    source: "whatsapp_inbound",
+    connector: "whatsapp",
+    chatId: "chat-live-final-dupe",
+    accountId: "wa-live",
+    text: "Please answer once",
+    state: "completed",
+    deliveryState: "delivered",
+    codexThreadId,
+    codexTurnId: turnId,
+  }, env);
+  const client = new CodexAppServerClient({ env });
+  client.rememberTurnParent(codexThreadId, turnId, inbound);
+
+  const first = await client.projectItem(
+    { type: "agentMessage", id: "msg_first_final", text: "One final only.", phase: "final_answer" },
+    { threadId: codexThreadId, turnId, timestamp: "2026-08-19T10:02:00.000Z" },
+    codexThreadId,
+  );
+  const second = await client.projectItem(
+    { type: "agentMessage", id: "item-2", text: "One final only.", phase: "final_answer" },
+    { threadId: codexThreadId, turnId, timestamp: "2026-08-19T10:02:01.000Z" },
+    codexThreadId,
+  );
+  const messages = await listThreadMessages(thread.id, env);
+  const replies = messages.filter((message) => message.role === "assistant" && message.text === "One final only.");
+  const outbox = await readConnectorOutbox(env);
+
+  assert.equal(first?.id, second?.id);
+  assert.equal(replies.length, 1);
+  assert.equal(replies[0].parentMessageId, inbound.id);
+  assert.equal(replies[0].connector, "whatsapp");
+  assert.equal(outbox.jobs.filter((job) => job.sourceMessageId === replies[0].id && job.deliveryType === "final").length, 1);
+  assert.equal(consumeThreadConnectorDeliverySignalCount(), 1);
+});
+
 test("Codex app-server history hydration dedupes existing rollout messages", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-rollout-dedupe-"));
   const env = { ORKESTR_HOME: path.join(home, "orkestr") };

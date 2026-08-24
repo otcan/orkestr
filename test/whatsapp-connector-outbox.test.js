@@ -96,6 +96,59 @@ test("whatsapp delivery terminalizes a tenant-scoped connector outbox job", asyn
   assert.equal(thread.runtime.liveness.completionStatus, "completed");
 });
 
+test("whatsapp connector outbox does not mirror CLI finals from a WhatsApp-bound thread", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-connector-outbox-cli-bound-"));
+  const runtimeEnv = env(home);
+  await writeConnectorConfig("whatsapp", { bridgeMode: "external", bridgeUrl: "http://wa.local" }, runtimeEnv);
+  await createThread({
+    id: "thread-wa-outbox-cli-bound",
+    ownerUserId: "tenant-a",
+    name: "WA Bound CLI Thread",
+    binding: {
+      connector: "whatsapp",
+      chatId: "shared-chat",
+      responderAccountId: "responder",
+      outboundAccountId: "responder",
+      mirrorToWhatsApp: true,
+    },
+  }, runtimeEnv);
+  await appendThreadMessage("thread-wa-outbox-cli-bound", {
+    role: "user",
+    source: "whatsapp_inbound",
+    state: "completed",
+    connector: "whatsapp",
+    chatId: "shared-chat",
+    accountId: "responder",
+    text: "previous WhatsApp message",
+  }, runtimeEnv);
+  const cliParent = await appendThreadMessage("thread-wa-outbox-cli-bound", {
+    role: "user",
+    source: "cli",
+    state: "completed",
+    text: "CLI sanity check",
+  }, runtimeEnv);
+  const cliReply = await appendThreadMessage("thread-wa-outbox-cli-bound", {
+    role: "assistant",
+    source: "codex-app-server",
+    phase: "final_answer",
+    state: "completed",
+    parentMessageId: cliParent.id,
+    text: "job-ops",
+  }, runtimeEnv);
+
+  const calls = [];
+  const delivery = await deliverWhatsAppReplies(runtimeEnv, async (url, options = {}) => {
+    calls.push({ url, body: JSON.parse(String(options.body || "{}")) });
+    return response({ ok: true, ids: ["unexpected-cli-send"] });
+  });
+  const outbox = await readConnectorOutbox(runtimeEnv);
+  const job = outbox.jobs.find((item) => item.sourceMessageId === cliReply.id);
+
+  assert.equal(delivery.delivered.length, 0);
+  assert.equal(calls.length, 0);
+  assert.equal(job, undefined);
+});
+
 test("whatsapp suppresses a superseded Codex final while a safe reset is between generations", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-superseded-final-"));
   const runtimeEnv = env(home);

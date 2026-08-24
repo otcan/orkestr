@@ -73,6 +73,86 @@ test("active runtime rollout sync projects final answers without waiting for the
   assert.equal(consumeThreadConnectorDeliverySignalCount(), 1);
 });
 
+test("active runtime rollout sync skips final already projected by live app-server", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-active-rollout-live-duplicate-"));
+  const rolloutPath = path.join(home, "rollout.jsonl");
+  const env = { ORKESTR_HOME: path.join(home, "orkestr") };
+  const generation = "33333333-3333-4333-8333-333333333333";
+  const turnId = "turn-wa-route-ok";
+  await ensureDataDirs(env);
+  await createThread({
+    id: "active-rollout-live-duplicate-thread",
+    name: "Active Rollout Live Duplicate Thread",
+    state: "working",
+    codexThreadId: generation,
+    executor: { type: "codex", codexThreadId: generation },
+    runtime: { runtimeKind: "codex-app-server", codexThreadId: generation, runtimeGeneration: generation },
+    binding: {
+      connector: "whatsapp",
+      chatId: "chat-live-duplicate",
+      responderAccountId: "sender",
+      outboundAccountId: "sender",
+    },
+  }, env);
+  const parent = await appendThreadMessage("active-rollout-live-duplicate-thread", {
+    role: "user",
+    source: "whatsapp_inbound",
+    connector: "whatsapp",
+    chatId: "chat-live-duplicate",
+    accountId: "sender",
+    text: "visibility smoke",
+    timestamp: "2026-07-19T15:10:00.000Z",
+    state: "completed",
+    deliveryState: "delivered",
+    codexThreadId: generation,
+    codexTurnId: turnId,
+  }, env);
+  await appendThreadMessage("active-rollout-live-duplicate-thread", {
+    role: "assistant",
+    source: "codex-app-server",
+    phase: "final_answer",
+    state: "completed",
+    parentMessageId: parent.id,
+    connector: "whatsapp",
+    chatId: "chat-live-duplicate",
+    accountId: "sender",
+    text: "WA_ROUTE_OK",
+    timestamp: "2026-07-19T15:10:02.000Z",
+    codexThreadId: generation,
+    codexTurnId: turnId,
+  }, env);
+  await fs.writeFile(rolloutPath, [
+    JSON.stringify({ type: "session_meta", payload: { id: generation } }),
+    JSON.stringify({
+      timestamp: "2026-07-19T15:10:03.000Z",
+      type: "response_item",
+      payload: {
+        type: "message",
+        role: "assistant",
+        phase: "final_answer",
+        content: [{ type: "output_text", text: "WA_ROUTE_OK" }],
+      },
+    }),
+  ].join("\n") + "\n", "utf8");
+  await fs.writeFile(dataPaths(env).runtimeLeases, JSON.stringify([{
+    id: "active-rollout-live-duplicate-lease",
+    threadId: "active-rollout-live-duplicate-thread",
+    sessionName: "active-rollout-live-duplicate-session",
+    rolloutPath,
+    rolloutGeneration: generation,
+    rolloutOffset: 0,
+    startedAt: "2026-07-19T15:10:00.000Z",
+  }]), "utf8");
+
+  const result = await syncActiveRuntimeRolloutMessages(env);
+  const messages = await listThreadMessages("active-rollout-live-duplicate-thread", env);
+  const outbox = await readConnectorOutbox(env);
+
+  assert.equal(result.appended, 0);
+  assert.equal(messages.filter((message) => message.text === "WA_ROUTE_OK").length, 1);
+  assert.equal(outbox.jobs.some((job) => job.payload?.text === "WA_ROUTE_OK"), false);
+});
+
 test("active rollout generation fence drops content read before a safe-reset generation change", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-active-rollout-generation-fence-"));
   const rolloutPath = path.join(home, "old-rollout.jsonl");

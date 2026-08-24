@@ -11289,6 +11289,82 @@ test("local whatsapp bridge runs api-agent tenant chats without waking legacy ru
   assert.equal(sendCalls[0].body.text, "Hi! How can I help you today?");
 });
 
+test("local whatsapp bridge skips group system messages before routing", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-system-message-skip-"));
+  const env = externalBridgeEnv(home, {
+    ORKESTR_WA_WORKER_EVENT_SINK_URL: "http://connector-gateway.test/internal/whatsapp/inbound",
+    ORKESTR_WA_WORKER_EVENT_TOKEN: "worker-event-token",
+  });
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => {
+    throw new Error("system WhatsApp events must not be forwarded");
+  };
+
+  let result;
+  try {
+    result = await handleInboundMessage("sender", {
+      id: { _serialized: "false_wa-system-group@g.us_12345_wa-owner@lid", remote: "wa-system-group@g.us" },
+      from: "wa-system-group@g.us",
+      author: "wa-owner@lid",
+      fromMe: false,
+      body: "otcanClaw-CampaignManager",
+      type: "gp2",
+      timestamp: 1_780_000_000,
+    }, env);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  const events = await listEvents(env, 20);
+  assert.equal(result.skipped, "system_message");
+  assert.equal(result.chatId, "wa-system-group@g.us");
+  assert.equal(events.some((event) =>
+    event.type === "whatsapp_local_inbound_system_message_skipped" &&
+    event.chatId === "wa-system-group@g.us" &&
+    event.messageType === "gp2"
+  ), true);
+});
+
+test("local whatsapp connector gateway failures preserve target routing safe message", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-gateway-safe-message-"));
+  const env = externalBridgeEnv(home, {
+    ORKESTR_WA_WORKER_EVENT_SINK_URL: "http://connector-gateway.test/internal/whatsapp/inbound",
+    ORKESTR_WA_WORKER_EVENT_TOKEN: "worker-event-token",
+  });
+
+  await assert.rejects(
+    () => forwardLocalWhatsAppInbound({
+      eventId: "wa-gateway-safe-message-1",
+      chatId: "wa-gateway-safe-message@g.us",
+      accountId: "sender",
+      from: "unknown-sender@lid",
+      text: "hello",
+    }, env, async () => response({
+      ok: false,
+      error: "whatsapp_inbound_sender_denied",
+      routingFailure: {
+        code: "whatsapp_inbound_sender_denied",
+        capability: "whatsapp",
+        userFacingCategory: "connector",
+        safeMessage: "This WhatsApp sender is not allowed to control this Orkestr chat.",
+        retryable: false,
+      },
+    }, false, 403)),
+    (error) => {
+      assert.equal(error.message, "whatsapp_inbound_sender_denied");
+      assert.equal(error.routingFailure.code, "whatsapp_inbound_sender_denied");
+      assert.equal(error.routingFailure.safeMessage, "This WhatsApp sender is not allowed to control this Orkestr chat.");
+      assert.doesNotMatch(error.routingFailure.safeMessage, /broker WhatsApp inbound token/i);
+      return true;
+    },
+  );
+
+  const traces = await listRouterTraces({}, env);
+  assert.equal(traces[0].currentPhase, "runtime_failed");
+  assert.equal(traces[0].lastError, "This WhatsApp sender is not allowed to control this Orkestr chat.");
+  assert.doesNotMatch(traces[0].lastError, /broker WhatsApp inbound token/i);
+});
+
 test("local whatsapp inbound failures explain missing user capabilities", () => {
   const gmail = inboundRoutingFailureNoticeText(new Error("gmail capability missing"));
   const desktop = inboundRoutingFailureNoticeText(new Error("desktop capability false"));

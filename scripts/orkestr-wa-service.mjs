@@ -7,6 +7,7 @@ import {
   createLocalWhatsAppChat,
   demoteLocalWhatsAppGroupParticipants,
   generateLocalWhatsAppChatPicture,
+  getLocalWhatsAppGroupInvite,
   getLocalWhatsAppBridgeStatus,
   getLocalWhatsAppQrSvg,
   listLocalWhatsAppChatMessages,
@@ -238,6 +239,7 @@ const defaultBridge = {
   createLocalWhatsAppChat,
   demoteLocalWhatsAppGroupParticipants,
   generateLocalWhatsAppChatPicture,
+  getLocalWhatsAppGroupInvite,
   getLocalWhatsAppBridgeStatus,
   getLocalWhatsAppQrSvg,
   listLocalWhatsAppChatMessages,
@@ -343,6 +345,17 @@ async function handleRequest(req, res, env = process.env, bridge = defaultBridge
       accountId: params.accountId,
       chatId: params.chatId,
       title: clean(body.title || body.name),
+      env,
+    }));
+  }
+
+  params = routeMatch(url.pathname, "/accounts/:accountId/chats/:chatId/invite");
+  if (method === "GET" && params) {
+    requireAuth(req, env);
+    requireServicePolicy(req, url, env, {}, { accounts: [params.accountId], recipients: [params.chatId], recipientScope: "history" });
+    return json(res, 200, await bridge.getLocalWhatsAppGroupInvite({
+      accountId: params.accountId,
+      chatId: params.chatId,
       env,
     }));
   }

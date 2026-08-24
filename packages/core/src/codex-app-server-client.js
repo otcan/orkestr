@@ -104,6 +104,21 @@ function existingRecoveryNoticeForTurn(messages = [], turnId = "") {
   }) || null;
 }
 
+async function whatsappParentForTurn({
+  thread,
+  timestamp,
+  explicitParent = null,
+  rememberedParent = null,
+  fallbackForKnownNonWhatsApp = false,
+  env = process.env,
+}) {
+  if (explicitParent && whatsappOrigin(explicitParent)) return explicitParent;
+  if (rememberedParent && whatsappOrigin(rememberedParent)) return rememberedParent;
+  if (rememberedParent && !fallbackForKnownNonWhatsApp) return null;
+  return await latestWhatsAppParent(thread, timestamp || nowIso(), env) ||
+    threadWhatsAppBindingParent(thread);
+}
+
 function pendingRequestForCodexThread(pendingRequests, codexThreadId) {
   const id = clean(codexThreadId);
   if (!id) return null;
@@ -464,11 +479,12 @@ export class CodexAppServerClient {
           itemId: params.itemId || message.id,
           requestId: message.id,
         }),
-        ...whatsappProjectionFields(
-          await latestWhatsAppParent(thread, params.timestamp || nowIso(), this.env) ||
-            threadWhatsAppBindingParent(thread),
+        ...whatsappProjectionFields(await whatsappParentForTurn({
           thread,
-        ),
+          timestamp: params.timestamp || nowIso(),
+          rememberedParent: this.turnParent(codexId, params.turnId),
+          env: this.env,
+        }), thread),
       }, this.env).then((messageRecord) => {
         if (messageRecord) notifyMessageHandler({ thread, message: messageRecord });
       }).catch(() => null);
@@ -520,9 +536,13 @@ export class CodexAppServerClient {
     }, this.env).catch(() => {});
     const text = approvalPromptText(message.method, params);
     if (text) {
-      const whatsappParent =
-        await latestWhatsAppParent(thread, params.timestamp || nowIso(), this.env) ||
-        threadWhatsAppBindingParent(thread);
+      const rememberedParent = this.turnParent(codexId, params.turnId);
+      const whatsappParent = await whatsappParentForTurn({
+        thread,
+        timestamp: params.timestamp || nowIso(),
+        rememberedParent,
+        env: this.env,
+      });
       const messageRecord = await appendOrUpdateEventMessage(thread, {
         role: "assistant",
         source: "codex-app-server",
@@ -854,9 +874,14 @@ export class CodexAppServerClient {
               return;
             }
             const text = codexConversationInterruptionNoticeText();
-            const whatsappParent =
-              await latestWhatsAppParent(thread, params.timestamp || nowIso(), this.env) ||
-              threadWhatsAppBindingParent(thread);
+            const rememberedParent = this.turnParent(threadId, turnId);
+            const whatsappParent = await whatsappParentForTurn({
+              thread,
+              timestamp: params.timestamp || nowIso(),
+              rememberedParent,
+              fallbackForKnownNonWhatsApp: true,
+              env: this.env,
+            });
             const messageRecord = await appendOrUpdateEventMessage(thread, {
               role: "assistant",
               source: "orkestr_runtime",
@@ -980,11 +1005,13 @@ export class CodexAppServerClient {
     const turnId = clean(params.turnId || item.turnId);
     const rememberedParent = this.turnParent(codexId, turnId);
     const explicitParent = params.parentMessage && whatsappOrigin(params.parentMessage) ? params.parentMessage : null;
-    const whatsappParent =
-      explicitParent ||
-      (rememberedParent && whatsappOrigin(rememberedParent) ? rememberedParent : null) ||
-      await latestWhatsAppParent(thread, timestamp, this.env) ||
-      threadWhatsAppBindingParent(thread);
+    const whatsappParent = await whatsappParentForTurn({
+      thread,
+      timestamp,
+      explicitParent,
+      rememberedParent,
+      env: this.env,
+    });
     const message = await appendOrUpdateEventMessage(thread, {
       role: "assistant",
       source: "codex-app-server",

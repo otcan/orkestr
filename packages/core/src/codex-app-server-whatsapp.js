@@ -9,8 +9,9 @@ function timestampMs(value) {
 }
 
 export function whatsappOrigin(message = {}) {
-  return clean(message.connector).toLowerCase() === "whatsapp" ||
-    whatsappSources.has(clean(message.source).toLowerCase());
+  const candidate = message || {};
+  return clean(candidate.connector).toLowerCase() === "whatsapp" ||
+    whatsappSources.has(clean(candidate.source).toLowerCase());
 }
 
 export function latestWhatsAppInput(messages = [], beforeTimestamp = null, thread = null) {
@@ -53,9 +54,17 @@ function whatsappParentAccountId(parent = null, thread = null) {
 }
 
 export function whatsappProjectionFields(parent = null, thread = null) {
+  if (!parent) {
+    return {
+      parentMessageId: null,
+      connector: "",
+      chatId: "",
+      accountId: "",
+    };
+  }
   return {
     parentMessageId: parent?.id || null,
-    connector: parent ? "whatsapp" : "",
+    connector: "whatsapp",
     chatId: whatsappParentChatId(parent, thread),
     accountId: whatsappParentAccountId(parent, thread),
   };
