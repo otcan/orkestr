@@ -833,10 +833,10 @@ async function assertInboundForwardTargetHealthy(target = "", tenantRoute = null
   }
 }
 
-function targetInboundFailureCode(payload = {}, status = 0) {
+function targetInboundFailureCode(payload = {}, status = 0, { targetSource = "" } = {}) {
   const raw = String(payload?.routingFailure?.code || payload?.error || "").trim();
   if ((status === 401 || status === 403) && raw === "browser_pairing_required") return "whatsapp_inbound_token_invalid";
-  if (raw === "whatsapp_target_required") return "target_codex_not_configured";
+  if (raw === "whatsapp_target_required" && targetSource !== "connector_mcp_gateway") return "target_codex_not_configured";
   return raw || `whatsapp_inbound_forward_failed_${status || "unknown"}`;
 }
 
@@ -1319,7 +1319,7 @@ export async function forwardLocalWhatsAppInbound(input = {}, env = process.env,
       return { forwarded: true, queued: true, target, targetSource, routeMode, payload };
     }
     if (!response.ok || payload?.ok === false) {
-      const code = targetInboundFailureCode(payload, response.status);
+      const code = targetInboundFailureCode(payload, response.status, { targetSource });
       const safeMessage = targetInboundFailureSafeMessage(code, response.status);
       const error = new Error(code);
       error.statusCode = response.status || 502;
