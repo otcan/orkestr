@@ -4,6 +4,13 @@ import { pathToFileURL } from "node:url";
 import { acquireDesktopLease, heartbeatDesktopLease, releaseDesktopLease } from "../../browsers/src/desktop-leases.js";
 import { operateManagedDesktop } from "../../browsers/src/desktop-operator.js";
 import { issueDesktopCapability } from "../../browsers/src/desktop-capability-broker.js";
+import { appendEvent } from "../../storage/src/store.js";
+import {
+  assertLinkedInOutreachScope,
+  bindLinkedInOutreachPlan,
+  publicLinkedInOutreachScope,
+  sanitizeLinkedInOutreachOutput,
+} from "./linkedin-outreach-scope.js";
 
 function clean(value) {
   return String(value || "").trim();
@@ -64,6 +71,12 @@ export function createOrkestrLinkedInDesktopAdapter(options = {}) {
   const operate = options.operateManagedDesktopFn || operateManagedDesktop;
   const heartbeat = options.heartbeatDesktopLeaseFn || heartbeatDesktopLease;
   const issueCapability = options.issueDesktopCapabilityFn || issueDesktopCapability;
+  const outreachScope = publicLinkedInOutreachScope(options.outreachScope);
+
+  function assertActionScope(action = {}, context = {}) {
+    const supplied = action?.input?.outreachScope ? action.input : context;
+    assertLinkedInOutreachScope(supplied, outreachScope);
+  }
 
   async function heartbeatLease() {
     if (!threadId) return null;
@@ -71,6 +84,7 @@ export function createOrkestrLinkedInDesktopAdapter(options = {}) {
   }
 
   async function observe(action = {}, context = {}) {
+    assertActionScope(action, context);
     await heartbeatLease();
     const capability = await issueCapability({
       principal: options.principal,
@@ -117,6 +131,7 @@ export function createOrkestrLinkedInDesktopAdapter(options = {}) {
   }
 
   async function perform(action = {}, context = {}) {
+    assertActionScope(action, context);
     await heartbeatLease();
     const approvals = Array.isArray(action?.input?.approvals) ? action.input.approvals : [];
     if (options.acceptPreverifiedWrites === true) {
@@ -174,6 +189,40 @@ export async function executeLinkedInMcpPlan(plan = {}, options = {}) {
   const threadId = planThreadId(plan, options, runId);
   const threadName = clean(options.threadName || plan.threadName || `LinkedIn MCP Runtime ${runId}`);
   const ownerUserId = clean(options.ownerUserId || plan.ownerUserId || "");
+  const appendAudit = options.appendEventFn || appendEvent;
+  let bound;
+  try {
+    bound = await bindLinkedInOutreachPlan(plan, { ...options, threadId, desktopSlug }, env);
+  } catch (error) {
+    const safeScope = publicLinkedInOutreachScope(error?.outreachScope || plan.outreachScope || plan);
+    await Promise.resolve(appendAudit({
+      type: "linkedin_outreach_scope_rejected",
+      runId,
+      threadId,
+      desktopSlug,
+      bindingId: safeScope.bindingId,
+      bindingFingerprint: safeScope.bindingFingerprint,
+      outreachWorkspaceId: safeScope.outreachWorkspaceId,
+      linkedinAccountAlias: safeScope.linkedinAccountAlias,
+      oxrmEndpointId: safeScope.oxrmEndpointId,
+      reason: clean(error?.code || error?.message || "linkedin_outreach_scope_rejected"),
+    }, env)).catch(() => {});
+    throw error;
+  }
+  const scopedPlan = bound.plan;
+  const outreachScope = bound.scope;
+  const safeScope = publicLinkedInOutreachScope(outreachScope);
+  await Promise.resolve(appendAudit({
+    type: "linkedin_outreach_scope_resolved",
+    runId,
+    threadId,
+    desktopSlug,
+    bindingId: safeScope.bindingId,
+    bindingFingerprint: safeScope.bindingFingerprint,
+    outreachWorkspaceId: safeScope.outreachWorkspaceId,
+    linkedinAccountAlias: safeScope.linkedinAccountAlias,
+    oxrmEndpointId: safeScope.oxrmEndpointId,
+  }, env)).catch(() => {});
   const leaseFns = {
     acquireDesktopLeaseFn: options.acquireDesktopLeaseFn || acquireDesktopLease,
     releaseDesktopLeaseFn: options.releaseDesktopLeaseFn || releaseDesktopLease,
@@ -204,6 +253,7 @@ export async function executeLinkedInMcpPlan(plan = {}, options = {}) {
         desktopSlug,
         threadId,
         error: acquired?.error || "desktop_lease_failed",
+        outreachScope: safeScope,
         lease: acquired?.lease || null,
         results: [],
       };
@@ -218,26 +268,40 @@ export async function executeLinkedInMcpPlan(plan = {}, options = {}) {
     desktopSlug,
     threadId,
     ownerUserId,
+    outreachScope,
     lease,
     fencingToken: lease?.fencingToken,
     heartbeatDesktopLeaseFn: leaseFns.heartbeatDesktopLeaseFn,
   });
+  const oxrm = Object.freeze({
+    endpoint: outreachScope.oxrmEndpoint,
+    endpointId: outreachScope.oxrmEndpointId,
+    outreachWorkspaceId: outreachScope.outreachWorkspaceId,
+    linkedinAccountAlias: outreachScope.linkedinAccountAlias,
+  });
   const server = linkedin.createLinkedInMcpServer({
-    handlers: linkedin.createLinkedInRuntimeHandlers({ desktop }),
+    handlers: linkedin.createLinkedInRuntimeHandlers({ desktop, outreachScope: safeScope, oxrm }),
+    outreachScope: safeScope,
   });
 
   const results = [];
   let ok = true;
   try {
-    for (const call of plan.calls) {
-      const result = await server.callTool(call.tool, call.input || {}, {
+    for (const call of scopedPlan.calls) {
+      assertLinkedInOutreachScope(call.input || {}, safeScope);
+      const rawResult = await server.callTool(call.tool, call.input || {}, {
         runId,
-        plan,
+        plan: scopedPlan,
         safety: call.safety || null,
+        outreachScope: safeScope,
+        outreachScopeStage: call.outreachScopeStage,
       });
+      const result = sanitizeLinkedInOutreachOutput(rawResult, outreachScope);
       results.push({
         tool: call.tool,
         ok: result.ok !== false,
+        outreachScope: safeScope,
+        outreachScopeStage: call.outreachScopeStage,
         result,
       });
       if (result.ok === false || result.blocked === true) {
@@ -262,6 +326,7 @@ export async function executeLinkedInMcpPlan(plan = {}, options = {}) {
     runId,
     desktopSlug,
     threadId,
+    outreachScope: safeScope,
     lease,
     results,
   };
@@ -271,8 +336,9 @@ export function parseLinkedInRuntimeArgs(argv = [], env = process.env) {
   const options = {
     planPath: "",
     output: "",
+    outreachBindingsFile: clean(env.ORKESTR_LINKEDIN_OUTREACH_BINDINGS_FILE),
     modulePath: clean(env.ORKESTR_LINKEDIN_MODULE || env.ORKESTR_LINKEDIN_RUNTIME_MODULE),
-    desktopSlug: clean(env.ORKESTR_LINKEDIN_DESKTOP_SLUG || "linkedin"),
+    desktopSlug: clean(env.ORKESTR_LINKEDIN_DESKTOP_SLUG),
     threadId: "",
     threadName: "",
     ownerUserId: "",
@@ -285,6 +351,7 @@ export function parseLinkedInRuntimeArgs(argv = [], env = process.env) {
     const arg = argv[index];
     if (arg === "--plan") options.planPath = clean(argv[++index]);
     else if (arg === "--output") options.output = clean(argv[++index]);
+    else if (arg === "--bindings") options.outreachBindingsFile = clean(argv[++index]);
     else if (arg === "--module") options.modulePath = clean(argv[++index]);
     else if (arg === "--desktop") options.desktopSlug = clean(argv[++index]);
     else if (arg === "--thread-id") options.threadId = clean(argv[++index]);

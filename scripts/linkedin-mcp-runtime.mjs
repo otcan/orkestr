@@ -15,7 +15,9 @@ Usage:
 Options:
   --module <specifier>       Module/path exporting ork-linkedin runtime helpers.
                              Defaults to ORKESTR_LINKEDIN_MODULE or "ork-linkedin".
-  --desktop <slug>           Managed desktop slug. Defaults to "linkedin".
+  --bindings <file>          Private LinkedIn outreach binding registry.
+                             Defaults to ORKESTR_LINKEDIN_OUTREACH_BINDINGS_FILE.
+  --desktop <slug>           Exact managed desktop slug. Defaults to the scoped plan.
   --thread-id <id>           Desktop lease owner thread id.
   --thread-name <name>       Desktop lease display name.
   --owner-user-id <id>       Optional tenant owner.
@@ -25,6 +27,10 @@ Options:
   --continue-on-blocker      Continue after blocked/failed call.
   --accept-preverified-writes
                              Accept approvals that already carry verifiedSend evidence.
+
+Every plan must provide threadId, desktopSlug, bindingId, outreachWorkspaceId,
+and linkedinAccountAlias matching exactly one configured binding. The raw oXRM
+endpoint is resolved from that binding and is never emitted in runtime output.
 
 The runtime uses Orkestr managed desktop leases. LinkedIn write calls fail
 closed unless verified visible-send evidence is available; Orkestr must not use
