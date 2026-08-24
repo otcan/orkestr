@@ -314,6 +314,42 @@ test("failed thread message mutations do not leak rejections or poison the queue
   assert.equal(updated.state, "completed");
 });
 
+test("queued WhatsApp input revisions are state-bounded and idempotent", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-input-revision-"));
+  const env = { ORKESTR_HOME: home };
+  await createThread({ id: "wa-input-revision-thread", name: "WA Input Revision Thread", executorId: "noop" }, env);
+  const message = await appendThreadMessage("wa-input-revision-thread", {
+    role: "user",
+    source: "whatsapp_inbound",
+    text: "review this",
+    state: "queued",
+    whatsappInboundRevisionIds: [],
+  }, env);
+  const options = {
+    expectedStates: ["queued", "pending_delivery"],
+    stateConflictError: "whatsapp_inbound_revision_expired",
+    idempotencyField: "whatsappInboundRevisionIds",
+    idempotencyKey: "revision-public-1",
+  };
+  const revised = await updateThreadMessage("wa-input-revision-thread", message.id, {
+    attachments: [{ remote: true, remoteThreadId: "source-thread", remoteAttachmentId: "report", filename: "report.pdf" }],
+    whatsappInboundRevisionIds: ["revision-public-1"],
+  }, env, options);
+  const duplicate = await updateThreadMessage("wa-input-revision-thread", message.id, {
+    whatsappInboundRevisionIds: ["revision-public-1"],
+  }, env, options);
+  await updateThreadMessage("wa-input-revision-thread", message.id, { state: "completed" }, env);
+
+  assert.equal(revised.attachments[0].filename, "report.pdf");
+  assert.equal(duplicate.duplicate, true);
+  await assert.rejects(
+    updateThreadMessage("wa-input-revision-thread", message.id, {
+      whatsappInboundRevisionIds: ["revision-public-2"],
+    }, env, { ...options, idempotencyKey: "revision-public-2" }),
+    /whatsapp_inbound_revision_expired/,
+  );
+});
+
 test("whatsapp thread inputs suppress duplicate external ids atomically", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-external-id-dedupe-"));
   const env = { ORKESTR_HOME: home };

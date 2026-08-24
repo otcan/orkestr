@@ -96,6 +96,7 @@ import {
   remoteWhatsAppRuntimeBinding,
   syncRemoteWhatsAppThreadMessages,
 } from "./whatsapp-remote-runtime.js";
+import { coalesceWhatsAppInboundRevision, finishWhatsAppInboundRevision } from "./whatsapp-inbound-revisions.js";
 import { resolveWhatsAppBinding } from "./whatsapp-account-bindings.js";
 import { materializeRemoteWhatsAppAttachments } from "./whatsapp-remote-artifacts.js";
 import { whatsappWorkerHealth } from "./whatsapp-worker-client.js";
@@ -3987,115 +3988,6 @@ function formatWhatsAppRouterStatus({ thread = {}, status = {}, messages = [], n
   return lines.join("\n");
 }
 
-function timestampMs(value) {
-  const ms = Date.parse(String(value || ""));
-  return Number.isFinite(ms) ? ms : 0;
-}
-
-function sameWhatsAppInboundSender(left = {}, right = {}) {
-  const leftFrom = pickString(left.from, left.sender, left.author);
-  const rightFrom = pickString(right.from, right.sender, right.author);
-  return !leftFrom || !rightFrom || leftFrom === rightFrom;
-}
-
-function coalescedWhatsAppText(left = "", right = "") {
-  const first = String(left || "").trim();
-  const second = String(right || "").trim();
-  if (!first) return second;
-  if (!second || first.includes(second)) return first;
-  return `${first}\n\n${second}`;
-}
-
-function coalescedWhatsAppAttachments(...groups) {
-  const seen = new Set();
-  const merged = [];
-  for (const group of groups) {
-    for (const attachment of Array.isArray(group) ? group : []) {
-      const key = [
-        pickString(attachment?.path, attachment?.url, attachment?.id),
-        pickString(attachment?.filename, attachment?.name),
-        pickString(attachment?.mimetype, attachment?.type),
-      ].join("\n");
-      if (key.trim() && seen.has(key)) continue;
-      if (key.trim()) seen.add(key);
-      merged.push(attachment);
-    }
-  }
-  return merged;
-}
-
-function hasWhatsAppInboundAttachments(message = {}) {
-  return Array.isArray(message.attachments) && message.attachments.length > 0;
-}
-
-function whatsappInboundPayloadsCanCoalesce(existing = {}, input = {}) {
-  if (!hasWhatsAppInboundAttachments(existing) && !hasWhatsAppInboundAttachments(input)) return false;
-  const existingText = String(existing.text || "").trim();
-  const nextText = String(input.text || "").trim();
-  if (existingText && nextText && existingText === nextText) return false;
-  return true;
-}
-
-function recentCoalescibleWhatsAppInput(messages = [], input = {}, env = process.env) {
-  const windowMs = whatsappInboundCoalesceMs(env);
-  if (windowMs <= 0 || pickString(input.promptFile)) return null;
-  const receivedMs = timestampMs(input.receivedAt || input.timestamp) || Date.now();
-  return [...messages].reverse().find((message) => {
-    if (message?.role !== "user") return false;
-    if (message.source !== "whatsapp_inbound" || message.connector !== "whatsapp") return false;
-    if (pickString(message.promptFile)) return false;
-    if (!whatsappInboundPayloadsCanCoalesce(message, input)) return false;
-    if (pickString(message.chatId) !== pickString(input.chatId)) return false;
-    if (!sameWhatsAppInboundSender(message, input)) return false;
-    const state = pickString(message.state).toLowerCase();
-    if (state === "failed" || state === "cancelled") return false;
-    const messageMs = timestampMs(message.createdAt || message.timestamp);
-    if (!messageMs || receivedMs - messageMs < 0 || receivedMs - messageMs > windowMs) return false;
-    return !messages.some((candidate) =>
-      candidate?.role === "assistant" &&
-      candidate.parentMessageId === message.id &&
-      candidate.state === "completed"
-    );
-  }) || null;
-}
-
-async function coalesceWhatsAppInboundThreadMessage({ thread, messageInput, eventId, canonicalEventId, routerTraceId, turnId, accountId, env = process.env } = {}) {
-  if (!thread?.id) return null;
-  const messages = await listThreadMessages(thread.id, env).catch(() => []);
-  const existing = recentCoalescibleWhatsAppInput(messages, messageInput, env);
-  if (!existing) return null;
-  const coalescedEventIds = [
-    ...new Set([
-      ...(Array.isArray(existing.coalescedEventIds) ? existing.coalescedEventIds : []),
-      pickString(existing.sourceEventId),
-      eventId,
-    ].filter(Boolean)),
-  ];
-  const patch = {
-    text: coalescedWhatsAppText(existing.text, messageInput.text),
-    attachments: coalescedWhatsAppAttachments(existing.attachments, messageInput.attachments),
-    coalescedEventIds,
-    coalescedAt: new Date().toISOString(),
-    coalescedCount: coalescedEventIds.length,
-  };
-  if (messageInput.steerActiveTurn === true) patch.steerActiveTurn = true;
-  if (pickString(messageInput.codexDeliveryMode)) patch.codexDeliveryMode = pickString(messageInput.codexDeliveryMode);
-  const message = await updateThreadMessage(thread.id, existing.id, patch, env);
-  await appendEvent({
-    type: "whatsapp_inbound_coalesced",
-    eventId,
-    canonicalEventId,
-    routerTraceId,
-    turnId,
-    threadId: thread.id,
-    messageId: message.id,
-    chatId: pickString(messageInput.chatId),
-    accountId,
-    coalescedCount: patch.coalescedCount,
-  }, env).catch(() => {});
-  return message;
-}
-
 async function handleWhatsAppRouterStatusCommand({
   input = {},
   thread,
@@ -4682,6 +4574,8 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
 
   let text = stripWhatsAppDebugFooter(pickString(input.text, input.body, input.message));
   const promptFile = pickString(input.promptFile);
+  let attachments = Array.isArray(input.attachments) ? input.attachments : [];
+  if (!text && !promptFile && attachments.length) text = whatsappRouterAttachmentSummaryText(attachments);
   if (!text && !promptFile) {
     await recordRouterTraceEvent({
       routerTraceId: initialTraceId,
@@ -4703,7 +4597,6 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
   const accountId = pickString(input.accountId, threadRoute.binding?.outboundAccountId);
   const routerTraceId = initialTraceId;
   const turnId = initialTurnId;
-  let attachments = Array.isArray(input.attachments) ? input.attachments : [];
   const localBridgeTransformedMediaEchoChecked =
     input?.transformedMediaEchoChecked?.source === "local_bridge" &&
     input?.transformedMediaEchoChecked?.checked !== false;
@@ -5202,6 +5095,44 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
     };
   }
   const remoteRuntime = threadId && thread ? remoteWhatsAppRuntimeBinding(thread, env) : null;
+  const remoteCoalesced = remoteRuntime
+    ? await coalesceWhatsAppInboundRevision({
+        thread,
+        messageInput,
+        input,
+        state,
+        eventId,
+        canonicalEventId,
+        routerTraceId,
+        turnId,
+        accountId,
+        coalesceWindowMs: whatsappInboundCoalesceMs(env),
+        env,
+      })
+    : null;
+  if (remoteCoalesced) {
+    return finishWhatsAppInboundRevision({
+      coalesced: remoteCoalesced,
+      input,
+      state,
+      writeState: writeWhatsAppState,
+      thread,
+      threadRoute,
+      remoteRuntime,
+      eventId,
+      canonicalEventId,
+      routerTraceId,
+      turnId,
+      threadId,
+      chatId,
+      from,
+      accountId,
+      inboundDedupeKey,
+      scheduleThreadKick: scheduleWhatsAppApiAgentThreadKick,
+      env,
+      fetchImpl,
+    });
+  }
   if (remoteRuntime) {
     let message = threadId
       ? await appendThreadMessage(thread.id, {
@@ -5404,62 +5335,41 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
     messageInput.steerActiveTurn = true;
   }
   const coalescedMessage = threadId && thread && !preemptiveStop
-    ? await coalesceWhatsAppInboundThreadMessage({
+    ? await coalesceWhatsAppInboundRevision({
         thread,
         messageInput,
+        input,
+        state,
         eventId,
         canonicalEventId,
         routerTraceId,
         turnId,
         accountId,
+        coalesceWindowMs: whatsappInboundCoalesceMs(env),
         env,
       })
     : null;
   if (coalescedMessage) {
-    const event = {
+    return finishWhatsAppInboundRevision({
+      coalesced: coalescedMessage,
+      input,
+      state,
+      writeState: writeWhatsAppState,
+      thread,
+      threadRoute,
       eventId,
       canonicalEventId,
       routerTraceId,
       turnId,
-      agentId: null,
       threadId,
-      messageId: coalescedMessage.id,
       chatId,
       from,
       accountId,
-      attachments: Array.isArray(input.attachments) ? input.attachments : [],
-      ...(inboundDedupeKey ? { inboundDedupeKey } : {}),
-      coalesced: true,
-      receivedAt: pickString(input.timestamp, input.receivedAt) || new Date().toISOString(),
-    };
-    state.inboundEvents = [...(state.inboundEvents || []), event];
-    await writeWhatsAppState(state, env);
-    await ensureRouterTurn({ routerTraceId, turnId, connector: "whatsapp", accountId, chatId, eventId, threadId, messageId: coalescedMessage.id, state: "queued" }, env).catch(() => null);
-    await recordRouterTraceEvent({
-      routerTraceId,
-      turnId,
-      connector: "whatsapp",
-      accountId,
-      chatId,
-      sourceEventId: eventId,
-      threadId,
-      messageId: coalescedMessage.id,
-      phase: "queued",
-      reason: "coalesced_inbound_burst",
-    }, env).catch(() => {});
-    if (thread && input.deferApiAgentAutoRun !== true) scheduleWhatsAppApiAgentThreadKick(thread, env);
-    return {
-      duplicate: false,
-      coalesced: true,
-      event,
-      agentId: null,
-      threadId,
-      ownerUserId: resourceOwnerUserId(thread, env),
-      autoProvisioned: threadRoute.autoProvisioned === true,
-      createdThread: threadRoute.createdThread === true,
-      userId: threadRoute.user?.id || null,
-      message: coalescedMessage,
-    };
+      inboundDedupeKey,
+      scheduleThreadKick: scheduleWhatsAppApiAgentThreadKick,
+      env,
+      fetchImpl,
+    });
   }
   let message = threadId
     ? await enqueueThreadInputForPrincipal(threadId, messageInput, await principalForThread(thread, env), env)

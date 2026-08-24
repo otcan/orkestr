@@ -10469,6 +10469,157 @@ test("whatsapp remote runtime route forwards inbound input and mirrors queue not
   assert.match(sendCalls[0].text, /^Added after the current Codex turn/);
 });
 
+test("whatsapp remote runtime edits one routed input when recovered attachments arrive", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-remote-input-edit-"));
+  const env = externalBridgeEnv(home, {
+    ORKESTR_REMOTE_THREAD_BACKENDS_JSON: JSON.stringify({
+      personal: { baseUrl: "http://parent.example.test", token: "public-test-token" },
+    }),
+  });
+  await createThread({
+    id: "public-remote-input-edit",
+    name: "Public Remote Input Edit",
+    binding: {
+      connector: "whatsapp",
+      chatId: "chat-remote-input-edit",
+      responderAccountId: "responder",
+      remoteBackend: "personal",
+      remoteThreadId: "parent-thread",
+    },
+  }, env);
+  const calls = [];
+  const fetchImpl = async (url, options = {}) => {
+    const parsed = new URL(String(url));
+    calls.push({ method: options.method, path: parsed.pathname, body: JSON.parse(options.body || "{}") });
+    if (parsed.pathname === "/threads/parent-thread/input") {
+      return response({
+        ok: true,
+        message: {
+          id: "parent-user-input-edit",
+          role: "user",
+          source: "whatsapp_inbound",
+          state: "queued",
+          deliveryState: "pending_delivery",
+        },
+      });
+    }
+    if (parsed.pathname === "/threads/parent-thread/messages/parent-user-input-edit/whatsapp-inbound-revision") {
+      return response({
+        ok: true,
+        message: { id: "parent-user-input-edit", state: "queued", deliveryState: "pending_delivery" },
+      });
+    }
+    throw new Error(`unexpected fetch ${parsed.href}`);
+  };
+  const baseEventId = "false_chat-remote-input-edit_BASE_sender@lid";
+  const first = await routeWhatsAppInbound({
+    eventId: baseEventId,
+    chatId: "chat-remote-input-edit",
+    accountId: "responder",
+    from: "sender@lid",
+    text: "review these files",
+    timestamp: "2026-08-24T09:00:00.000Z",
+  }, env, fetchImpl);
+  const revision = await routeWhatsAppInbound({
+    eventId: `${baseEventId}:attachments:publicfixture1`,
+    sourceEventId: baseEventId,
+    attachmentRecovery: true,
+    chatId: "chat-remote-input-edit",
+    accountId: "responder",
+    from: "sender@lid",
+    text: "review these files",
+    attachments: [
+      { filename: "alpha.pdf", mimetype: "application/pdf", remote: true, remoteThreadId: "source-thread", remoteAttachmentId: "alpha" },
+      { filename: "beta.pdf", mimetype: "application/pdf", remote: true, remoteThreadId: "source-thread", remoteAttachmentId: "beta" },
+    ],
+    timestamp: "2026-08-24T09:00:20.000Z",
+  }, env, fetchImpl);
+  const duplicate = await routeWhatsAppInbound({
+    eventId: `${baseEventId}:attachments:publicfixture1`,
+    sourceEventId: baseEventId,
+    attachmentRecovery: true,
+    chatId: "chat-remote-input-edit",
+    accountId: "responder",
+    from: "sender@lid",
+    text: "review these files",
+    attachments: [
+      { filename: "alpha.pdf", mimetype: "application/pdf", remote: true, remoteThreadId: "source-thread", remoteAttachmentId: "alpha" },
+      { filename: "beta.pdf", mimetype: "application/pdf", remote: true, remoteThreadId: "source-thread", remoteAttachmentId: "beta" },
+    ],
+  }, env, fetchImpl);
+  const messages = await listThreadMessages("public-remote-input-edit", env);
+
+  assert.equal(first.message.id, revision.message.id);
+  assert.equal(revision.coalesced, true);
+  assert.equal(revision.attachmentUpdateMode, "remote_edit");
+  assert.equal(duplicate.duplicate, true);
+  assert.equal(messages.filter((message) => message.role === "user").length, 1);
+  assert.deepEqual(messages[0].attachments.map((attachment) => attachment.filename), ["alpha.pdf", "beta.pdf"]);
+  assert.equal(calls.filter((call) => call.path.endsWith("/input")).length, 1);
+  assert.equal(calls.filter((call) => call.method === "PATCH").length, 1);
+  assert.deepEqual(calls.find((call) => call.method === "PATCH").body.attachments.map((attachment) => attachment.filename), ["alpha.pdf", "beta.pdf"]);
+});
+
+test("whatsapp remote attachment revision falls back without another Codex input when edit expired", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-remote-input-edit-expired-"));
+  const env = externalBridgeEnv(home, {
+    ORKESTR_REMOTE_THREAD_BACKENDS_JSON: JSON.stringify({
+      personal: { baseUrl: "http://parent.example.test", token: "public-test-token" },
+    }),
+  });
+  await createThread({
+    id: "public-remote-input-edit-expired",
+    name: "Public Remote Input Edit Expired",
+    binding: {
+      connector: "whatsapp",
+      chatId: "chat-remote-input-edit-expired",
+      responderAccountId: "responder",
+      remoteBackend: "personal",
+      remoteThreadId: "parent-thread",
+    },
+  }, env);
+  const calls = [];
+  const fetchImpl = async (url, options = {}) => {
+    const parsed = new URL(String(url));
+    calls.push({ method: options.method, path: parsed.pathname });
+    if (parsed.pathname === "/threads/parent-thread/input") {
+      return response({ ok: true, message: { id: "parent-user-expired", role: "user", source: "whatsapp_inbound", state: "completed", deliveryState: "delivered" } });
+    }
+    if (parsed.pathname.endsWith("/whatsapp-inbound-revision")) {
+      return response({ ok: false, error: "whatsapp_inbound_revision_expired" }, false, 410);
+    }
+    throw new Error(`unexpected fetch ${parsed.href}`);
+  };
+  const baseEventId = "false_chat-remote-input-edit-expired_BASE_sender@lid";
+  await routeWhatsAppInbound({
+    eventId: baseEventId,
+    chatId: "chat-remote-input-edit-expired",
+    accountId: "responder",
+    from: "sender@lid",
+    text: "review this",
+  }, env, fetchImpl);
+  const revision = await routeWhatsAppInbound({
+    eventId: `${baseEventId}:attachments:expiredfixture1`,
+    sourceEventId: baseEventId,
+    attachmentRecovery: true,
+    chatId: "chat-remote-input-edit-expired",
+    accountId: "responder",
+    from: "sender@lid",
+    text: "review this",
+    attachments: [{ filename: "late.pdf", mimetype: "application/pdf", remote: true, remoteThreadId: "source-thread", remoteAttachmentId: "late" }],
+  }, env, fetchImpl);
+  const messages = await listThreadMessages("public-remote-input-edit-expired", env);
+
+  assert.equal(revision.coalesced, true);
+  assert.equal(revision.fallback, true);
+  assert.equal(revision.fallbackReason, "remote_edit_unsupported_or_expired");
+  assert.equal(messages.filter((message) => message.role === "user").length, 1);
+  assert.equal(messages.filter((message) => message.role === "assistant").length, 0);
+  assert.equal(messages[0].whatsappInboundRevisionNotice, "Attachment update saved on the original WhatsApp input; Codex input was not submitted again.");
+  assert.equal(calls.filter((call) => call.path.endsWith("/input")).length, 1);
+  assert.equal(calls.filter((call) => call.method === "PATCH").length, 1);
+});
+
 test("whatsapp remote runtime imports parent replies and mirrors them once through public bridge", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-remote-reply-"));
   const env = externalBridgeEnv(home, {
@@ -16150,6 +16301,86 @@ test("whatsapp inbound coalesces short text and attachment bursts into one threa
     "false_coalesce-chat@g.us_MSG1_user@lid",
     "false_coalesce-chat@g.us_MSG2_user@lid",
   ]);
+});
+
+test("whatsapp inbound routes an attachment-only message as one coherent input", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-attachment-only-input-"));
+  const env = externalBridgeEnv(home);
+  await createThread({
+    id: "attachment-only-thread",
+    name: "Attachment Only Thread",
+    binding: {
+      connector: "whatsapp",
+      chatId: "attachment-only-chat@g.us",
+      enabled: true,
+      allowOtherPeople: true,
+      responderAccountId: "sender",
+      outboundAccountId: "sender",
+    },
+  }, env);
+  const routed = await routeWhatsAppInbound({
+    eventId: "false_attachment-only-chat@g.us_MEDIA_sender@lid",
+    chatId: "attachment-only-chat@g.us",
+    accountId: "sender",
+    from: "sender@lid",
+    text: "",
+    attachments: [
+      { filename: "front.jpg", mimetype: "image/jpeg", remote: true, remoteThreadId: "source-thread", remoteAttachmentId: "front" },
+      { filename: "back.jpg", mimetype: "image/jpeg", remote: true, remoteThreadId: "source-thread", remoteAttachmentId: "back" },
+    ],
+  }, env);
+  const messages = await listThreadMessages("attachment-only-thread", env);
+
+  assert.equal(routed.duplicate, false);
+  assert.equal(messages.length, 1);
+  assert.match(messages[0].text, /WhatsApp attachment received/);
+  assert.match(messages[0].text, /front\.jpg/);
+  assert.match(messages[0].text, /back\.jpg/);
+  assert.deepEqual(messages[0].attachments.map((attachment) => attachment.filename), ["front.jpg", "back.jpg"]);
+});
+
+test("whatsapp recovered attachment revision targets the original input beyond the burst window", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-recovered-input-edit-"));
+  const env = externalBridgeEnv(home, { ORKESTR_WHATSAPP_INBOUND_COALESCE_MS: "1000" });
+  await createThread({
+    id: "recovered-input-edit-thread",
+    name: "Recovered Input Edit Thread",
+    binding: {
+      connector: "whatsapp",
+      chatId: "recovered-input-edit-chat@g.us",
+      enabled: true,
+      allowOtherPeople: true,
+      responderAccountId: "sender",
+      outboundAccountId: "sender",
+    },
+  }, env);
+  const sourceEventId = "false_recovered-input-edit-chat@g.us_BASE_sender@lid";
+  const first = await routeWhatsAppInbound({
+    eventId: sourceEventId,
+    chatId: "recovered-input-edit-chat@g.us",
+    accountId: "sender",
+    from: "sender@lid",
+    text: "extract the totals",
+    timestamp: "2026-08-24T09:00:00.000Z",
+  }, env);
+  const revision = await routeWhatsAppInbound({
+    eventId: `${sourceEventId}:attachments:latefixture1`,
+    sourceEventId,
+    attachmentRecovery: true,
+    chatId: "recovered-input-edit-chat@g.us",
+    accountId: "sender",
+    from: "sender@lid",
+    text: "extract the totals",
+    attachments: [{ filename: "totals.csv", mimetype: "text/csv", remote: true, remoteThreadId: "source-thread", remoteAttachmentId: "totals" }],
+    timestamp: "2026-08-24T09:00:20.000Z",
+  }, env);
+  const messages = await listThreadMessages("recovered-input-edit-thread", env);
+
+  assert.equal(first.message.id, revision.message.id);
+  assert.equal(revision.coalesced, true);
+  assert.equal(revision.attachmentRecovery, true);
+  assert.equal(messages.filter((message) => message.role === "user").length, 1);
+  assert.equal(messages[0].attachments[0].filename, "totals.csv");
 });
 
 test("generated single-account whatsapp groups tolerate missing responder identity for lid senders", async () => {
