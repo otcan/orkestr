@@ -11,6 +11,12 @@ import {
   rewriteSandboxArtifactUris,
   sandboxArtifactPathCandidates,
 } from "./thread-sandbox-artifacts.js";
+import {
+  isRemoteThreadAttachmentDescriptor,
+  metadataForRemoteAttachment,
+} from "./thread-remote-attachments.js";
+
+export { isRemoteThreadAttachmentDescriptor };
 
 const explicitPathKeys = ["path", "saved_path", "filePath", "localPath"];
 const markdownLinkPattern = /!?\[[^\]\n]*]\(([^)\n]+)\)/g;
@@ -229,60 +235,6 @@ function attachmentPath(attachment = {}) {
   return "";
 }
 
-function remoteAttachmentId(attachment = {}) {
-  return pickString(attachment.remoteAttachmentId, attachment.remoteArtifactId, attachment.artifactId);
-}
-
-export function isRemoteThreadAttachmentDescriptor(attachment = {}) {
-  if (attachmentPath(attachment)) return false;
-  const source = pickString(attachment.source).toLowerCase();
-  return attachment.remote === true ||
-    source === "remote_runtime_attachment" ||
-    source === "remote_artifact" ||
-    Boolean(remoteAttachmentId(attachment));
-}
-
-function remoteAttachmentDescriptorId(attachment = {}) {
-  const existing = pickString(attachment.id);
-  if (existing) return existing;
-  const key = [
-    pickString(attachment.remoteBackend),
-    pickString(attachment.remoteThreadId),
-    pickString(attachment.remoteMessageId),
-    remoteAttachmentId(attachment),
-  ].join("\n");
-  const hash = crypto.createHash("sha256").update(key).digest("hex");
-  return `ratt_${hash.slice(0, 32)}`;
-}
-
-function metadataForRemoteAttachment(attachment = {}) {
-  if (!isRemoteThreadAttachmentDescriptor(attachment)) return null;
-  const remoteId = remoteAttachmentId(attachment);
-  const remoteThreadId = pickString(attachment.remoteThreadId);
-  if (!remoteId || !remoteThreadId) return null;
-  const filename = safeFileName(pickString(attachment.filename, attachment.name, remoteId));
-  const mimetype = inferMimeType(filename, pickString(attachment.mimetype, attachment.type));
-  const remoteDownloadUrl = pickString(attachment.remoteDownloadUrl, attachment.downloadUrl);
-  return {
-    id: remoteAttachmentDescriptorId(attachment),
-    kind: inferKind(mimetype, attachment.kind),
-    filename,
-    name: pickString(attachment.name, filename),
-    mimetype,
-    size: Number(attachment.size || 0) || 0,
-    source: pickString(attachment.source, "remote_runtime_attachment"),
-    downloadable: false,
-    remote: true,
-    remoteBackend: pickString(attachment.remoteBackend),
-    remoteThreadId,
-    remoteMessageId: pickString(attachment.remoteMessageId),
-    remoteAttachmentId: remoteId,
-    ...(pickString(attachment.remoteArtifactId, attachment.artifactId) ? { remoteArtifactId: pickString(attachment.remoteArtifactId, attachment.artifactId) } : {}),
-    ...(remoteDownloadUrl ? { remoteDownloadUrl } : {}),
-    ...(pickString(attachment.sha256) ? { sha256: pickString(attachment.sha256) } : {}),
-  };
-}
-
 export function extractThreadAttachmentPathCandidates({ text = "", attachments = [], thread = {} } = {}) {
   const candidates = [];
   for (const attachment of Array.isArray(attachments) ? attachments : []) {
@@ -398,7 +350,7 @@ export async function resolveThreadAttachments({ thread = {}, text = "", attachm
   const sandboxReferences = extractSandboxArtifactUriReferences(text);
   const remoteDescriptors = [];
   for (const attachment of Array.isArray(attachments) ? attachments : []) {
-    const descriptor = metadataForRemoteAttachment(attachment);
+    const descriptor = metadataForRemoteAttachment(attachment, { safeFileName, inferMimeType, inferKind });
     if (descriptor) remoteDescriptors.push(descriptor);
   }
   const resolved = [];
