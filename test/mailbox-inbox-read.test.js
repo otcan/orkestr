@@ -129,6 +129,22 @@ test("managed mailbox inbox pagination is stable across deduplicated concurrent 
   );
 });
 
+test("managed mailbox inbox uses a 25-message default when HTTP supplies an empty limit", async () => {
+  const scope = await fixture("default-limit");
+  await ingest(scope, "<default-limit-1@example.test>", "First body", "First");
+  await ingest(scope, "<default-limit-2@example.test>", "Second body", "Second");
+
+  const result = await listMailboxInboxMessages({
+    mailbox: scope.mailbox,
+    threadId: scope.thread.id,
+    principal: scope.owner,
+    limit: "",
+  }, scope.env);
+
+  assert.equal(result.limit, 25);
+  assert.deepEqual(result.messages.map((message) => message.subject), ["Second", "First"]);
+});
+
 test("managed mailbox inbox retains messages for the configured 90-day window", async () => {
   const scope = await fixture("retention-window");
   scope.env.ORKESTR_MAILBOX_MESSAGE_RETENTION_DAYS = "90";

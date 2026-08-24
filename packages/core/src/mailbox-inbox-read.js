@@ -11,6 +11,7 @@ import {
 const clean = (value = "") => String(value || "").trim();
 
 function inboxLimit(value) {
+  if (!clean(value)) return 25;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? Math.max(1, Math.min(100, Math.floor(parsed))) : 25;
 }
