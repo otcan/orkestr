@@ -983,6 +983,8 @@ export class ConnectorsController {
       chatId: String(body.to || body.chatId || ""),
       text: String(body.text || ""),
       accountId: String(body.accountId || ""),
+      requestId: String(request?.headers?.["x-request-id"] || ""),
+      correlationId: String(request?.headers?.["x-correlation-id"] || ""),
       crossAccountEchoSuppression: body.crossAccountEchoSuppression !== false,
       routeSentMessage: body.routeSentMessage === true,
     });
@@ -1003,6 +1005,8 @@ export class ConnectorsController {
       chatId: String(body.to || body.chatId || ""),
       text: String(body.text || ""),
       accountId: String(body.accountId || ""),
+      requestId: String(request?.headers?.["x-request-id"] || ""),
+      correlationId: String(request?.headers?.["x-correlation-id"] || ""),
       attachments: [
         ...paths.map((filePath) => ({ path: filePath })),
         ...inlineAttachments,

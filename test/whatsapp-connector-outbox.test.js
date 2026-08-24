@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import { appendThreadMessage, createThread, deleteThreadMessage, getThread, updateThreadMessage } from "../packages/core/src/threads.js";
 import { markRuntimeFinalDeliveryPending } from "../packages/core/src/runtime-final-delivery.js";
+import { listRouterTraces } from "../packages/core/src/router-traces.js";
 import { applyConnectorOutboxJobAction, ensureConnectorOutboxJob, readConnectorOutbox } from "../packages/connectors/src/connector-outbox.js";
 import { applyWhatsAppConnectorOutboxAction, deliverWhatsAppReplies } from "../packages/connectors/src/whatsapp.js";
 import { retryRecoverableWhatsAppOutboxJobsForAccounts } from "../packages/connectors/src/whatsapp-outbox-recovery.js";
@@ -277,6 +278,119 @@ test("whatsapp connector outbox backs off retryable bridge failures", async () =
 
   assert.equal(calls.filter((item) => item === "/send-text").length, 2);
   assert.equal(retry.delivered.length, 1);
+});
+
+test("WhatsApp route 404 terminalizes once and deduplicates same-trace final projections", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-route-404-terminal-"));
+  const runtimeEnv = env(home, {
+    ORKESTR_CONNECTOR_OUTBOX_RETRY_BACKOFF_MS: "0",
+    ORKESTR_WATCHER_DEDUPE_MS: "60000",
+  });
+  await writeConnectorConfig("whatsapp", { bridgeMode: "external", bridgeUrl: "http://wa.local" }, runtimeEnv);
+  await createThread({
+    id: "thread-wa-route-404",
+    ownerUserId: "tenant-a",
+    name: "WA Route 404 Thread",
+    binding: {
+      connector: "whatsapp",
+      chatId: "shared-chat",
+      responderAccountId: "responder",
+      outboundAccountId: "responder",
+      mirrorToWhatsApp: true,
+    },
+  }, runtimeEnv);
+  const routerTraceId = "rt_route_configuration_404";
+  const turnId = "turn_route_configuration_404";
+  const parent = await appendThreadMessage("thread-wa-route-404", {
+    role: "user",
+    source: "whatsapp_inbound",
+    state: "completed",
+    connector: "whatsapp",
+    chatId: "shared-chat",
+    accountId: "responder",
+    routerTraceId,
+    turnId,
+    text: "status?",
+  }, runtimeEnv);
+  const firstReply = await appendThreadMessage("thread-wa-route-404", {
+    role: "assistant",
+    source: "codex-app-server",
+    phase: "final_answer",
+    state: "completed",
+    parentMessageId: parent.id,
+    chatId: "shared-chat",
+    accountId: "responder",
+    routerTraceId,
+    turnId,
+    text: "One canonical reply.",
+  }, runtimeEnv);
+  let sendCalls = 0;
+  const fetchImpl = async (url) => {
+    if (url.pathname === "/health") {
+      return response({ ok: true, ready: true, accounts: [{ id: "responder", ready: true }] });
+    }
+    assert.equal(url.pathname, "/send-text");
+    sendCalls += 1;
+    return new Response("Cannot POST /send-text", {
+      status: 404,
+      headers: {
+        "content-type": "text/plain; charset=utf-8",
+        "x-request-id": "proxy-terminal-404",
+        "x-orkestr-upstream-request-id": "parent-terminal-404",
+      },
+    });
+  };
+
+  const first = await deliverWhatsAppReplies(runtimeEnv, fetchImpl);
+  const firstOutbox = await readConnectorOutbox(runtimeEnv);
+  const firstJob = firstOutbox.jobs.find((item) => item.sourceMessageId === firstReply.id);
+  const firstTrace = (await listRouterTraces({ routerTraceId }, runtimeEnv))[0];
+
+  assert.equal(first.failed.length, 1);
+  assert.equal(sendCalls, 1);
+  assert.equal(firstJob.state, "dead_letter");
+  assert.equal(firstJob.attemptCount, 1);
+  assert.equal(firstJob.metadata.nonRetryable, true);
+  assert.equal(firstJob.metadata.failureCode, "whatsapp_bridge_route_not_found");
+  assert.equal(firstJob.metadata.failureClassification, "route_configuration");
+  assert.equal(firstJob.metadata.retryable, false);
+  assert.equal(firstJob.metadata.bridgeFailure.status, 404);
+  assert.equal(firstJob.metadata.bridgeFailure.requestId, "proxy-terminal-404");
+  assert.equal(firstJob.metadata.bridgeFailure.upstreamRequestId, "parent-terminal-404");
+  assert.match(firstJob.metadata.bridgeFailure.responseExcerpt, /Cannot POST \/send-text/);
+  assert.equal(firstTrace.currentPhase, "mirror_failed");
+  assert.equal(firstTrace.terminal, true);
+  assert.equal(firstTrace.retryable, false);
+  assert.equal(firstTrace.failureCode, "whatsapp_bridge_route_not_found");
+  assert.equal(firstTrace.classification, "route_configuration");
+  assert.equal(firstTrace.phases.at(-1).requestId, "proxy-terminal-404");
+  assert.equal(firstTrace.phases.at(-1).statusCode, 404);
+
+  const duplicateReply = await appendThreadMessage("thread-wa-route-404", {
+    role: "assistant",
+    source: "codex-app-server",
+    phase: "final_answer",
+    state: "completed",
+    parentMessageId: parent.id,
+    chatId: "shared-chat",
+    accountId: "responder",
+    routerTraceId,
+    turnId,
+    text: "One canonical reply.",
+  }, runtimeEnv);
+  const duplicate = await deliverWhatsAppReplies(runtimeEnv, fetchImpl);
+  const finalOutbox = await readConnectorOutbox(runtimeEnv);
+  const canonicalJobs = finalOutbox.jobs.filter((item) =>
+    item.connector === "whatsapp" && item.threadId === "thread-wa-route-404" && item.deliveryType === "final"
+  );
+  const alerts = await readJson(dataPaths(runtimeEnv).watcherAlerts, { alerts: [] });
+
+  assert.equal(sendCalls, 1);
+  assert.equal(canonicalJobs.length, 1);
+  assert.equal(canonicalJobs[0].id, firstJob.id);
+  assert.equal(canonicalJobs[0].attemptCount, 1);
+  assert.equal(duplicate.skipped.find((item) => item.messageId === duplicateReply.id)?.reason, "connector_outbox_dead_letter");
+  assert.equal(alerts.alerts.filter((item) => item.routerTraceId === routerTraceId).length, 1);
 });
 
 test("whatsapp connector outbox auto-retries recoverable bridge failures after account recovery", async () => {
