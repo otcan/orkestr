@@ -10,8 +10,9 @@ import {
   redactDeniedThreadAttachmentPaths,
   resolveThreadAttachments,
 } from "../packages/core/src/thread-attachments.js";
-import { appendThreadMessage, createThread, listThreadMessages } from "../packages/core/src/threads.js";
+import { appendThreadMessage, createThread, listThreadMessages, updateThreadMessage } from "../packages/core/src/threads.js";
 import { dataPaths } from "../packages/storage/src/paths.js";
+import { listEvents } from "../packages/storage/src/store.js";
 
 test("thread attachment extraction normalizes allowed paths and dedupes text and explicit attachments", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-attachments-"));
@@ -36,6 +37,121 @@ test("thread attachment extraction normalizes allowed paths and dedupes text and
   assert.equal(stored.attachments[0].filename, "report.txt");
   assert.equal(stored.attachments[0].mimetype, "text/plain");
   assert.equal(stored.attachments[0].size, "report body".length);
+});
+
+test("sandbox artifact URIs materialize encoded Markdown and plain links once in durable thread storage", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-sandbox-artifact-"));
+  const env = { ORKESTR_HOME: home, ORKESTR_ADMIN_USER_ID: "admin" };
+  const workspace = path.join(home, "workspace");
+  await fs.mkdir(workspace, { recursive: true });
+  const sourcePath = path.join(workspace, "release bundle.zip");
+  await fs.writeFile(sourcePath, "zip payload", "utf8");
+  const encodedPath = sourcePath.split(path.sep).map(encodeURIComponent).join("/");
+  const sandboxUri = `sandbox:/${encodedPath.replace(/^\/+/, "")}`;
+  const thread = await createThread({
+    id: "sandbox-artifact-thread",
+    name: "Sandbox Artifact Thread",
+    ownerUserId: "alice",
+    cwd: workspace,
+    workspace,
+  }, env);
+  const rawText = `Download: [bundle](${sandboxUri})\nPlain: ${sandboxUri}`;
+
+  const message = await appendThreadMessage(thread.id, {
+    role: "assistant",
+    source: "codex-rollout",
+    phase: "final_answer",
+    text: rawText,
+  }, env);
+
+  assert.equal(message.attachments.length, 1);
+  assert.equal(message.attachments[0].filename, "release bundle.zip");
+  assert.equal(message.attachments[0].mimetype, "application/zip");
+  assert.equal(message.attachments[0].size, "zip payload".length);
+  assert.equal(message.attachments[0].source, "sandbox_artifact");
+  assert.equal(message.attachments[0].materialized, true);
+  assert.notEqual(message.attachments[0].path, sourcePath);
+  assert.match(message.attachments[0].path, /uploads\/sandbox-artifact-thread\/artifacts/);
+  assert.equal((message.text.match(/Attached: release bundle\.zip/g) || []).length, 2);
+  assert.doesNotMatch(message.text, /sandbox:/i);
+
+  await fs.rm(sourcePath);
+  assert.equal(await fs.readFile(message.attachments[0].path, "utf8"), "zip payload");
+  const replayed = await updateThreadMessage(thread.id, message.id, { text: rawText }, env);
+  assert.equal(replayed.attachments.length, 1);
+  assert.equal(replayed.attachments[0].path, message.attachments[0].path);
+  assert.doesNotMatch(replayed.text, /sandbox:/i);
+
+  const events = await listEvents(env, 20);
+  const materialized = events.find((event) => event.type === "thread_attachment_materialized");
+  assert.equal(materialized?.messageId, message.id);
+  assert.equal(materialized?.filename, "release bundle.zip");
+  assert.equal(JSON.stringify(materialized).includes(sourcePath), false);
+});
+
+test("file URIs use the same durable sandbox artifact path", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-file-artifact-"));
+  const env = { ORKESTR_HOME: home };
+  const workspace = path.join(home, "workspace");
+  await fs.mkdir(workspace, { recursive: true });
+  const sourcePath = path.join(workspace, "notes.txt");
+  await fs.writeFile(sourcePath, "notes", "utf8");
+  const thread = { id: "file-artifact-thread", cwd: workspace, workspace, ownerUserId: "alice" };
+
+  const resolved = await resolveThreadAttachments({
+    thread,
+    text: `Notes: file://${sourcePath}`,
+    env,
+  });
+
+  assert.equal(resolved.attachments.length, 1);
+  assert.equal(resolved.attachments[0].filename, "notes.txt");
+  assert.notEqual(resolved.attachments[0].path, sourcePath);
+  assert.equal(resolved.text, "Notes: Attached: notes.txt");
+});
+
+test("sandbox artifact URIs reject missing, oversized, directory, secret-root, ownership, symlink, relative, and traversal candidates", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-sandbox-negative-"));
+  const env = { ORKESTR_HOME: home, ORKESTR_THREAD_ATTACHMENT_MAX_BYTES: "4" };
+  const paths = dataPaths(env);
+  const workspace = path.join(home, "workspace");
+  await fs.mkdir(workspace, { recursive: true });
+  await fs.mkdir(paths.secrets, { recursive: true });
+  const oversizedPath = path.join(workspace, "large.zip");
+  const missingPath = path.join(workspace, "expired.zip");
+  const secretPath = path.join(paths.secrets, "credential.txt");
+  const secretLinkPath = path.join(workspace, "secret-link.txt");
+  const outsidePath = path.join(home, "other-owner", "outside.txt");
+  await fs.mkdir(path.dirname(outsidePath), { recursive: true });
+  await fs.writeFile(oversizedPath, "12345", "utf8");
+  await fs.writeFile(secretPath, "nope", "utf8");
+  await fs.writeFile(outsidePath, "safe", "utf8");
+  await fs.symlink(secretPath, secretLinkPath);
+  const thread = { id: "sandbox-negative-thread", cwd: workspace, workspace, ownerUserId: "alice" };
+  const text = [
+    `[missing](sandbox:${missingPath})`,
+    `[large](sandbox:${oversizedPath})`,
+    `[directory](sandbox:${workspace})`,
+    `[secret](sandbox:${secretPath})`,
+    `[secret-symlink](sandbox:${secretLinkPath})`,
+    `[other-owner](sandbox:${outsidePath})`,
+    "[relative](sandbox:relative.zip)",
+    `[traversal](sandbox:${workspace}/%2e%2e/workspace/large.zip)`,
+  ].join("\n");
+
+  const resolved = await resolveThreadAttachments({ thread, text, env });
+  const reasons = resolved.skipped.map((item) => item.reason);
+
+  assert.deepEqual(resolved.attachments, []);
+  assert.ok(reasons.includes("attachment_path_missing"));
+  assert.ok(reasons.includes("attachment_too_large"));
+  assert.ok(reasons.includes("attachment_path_not_file"));
+  assert.ok(reasons.includes("attachment_path_forbidden"));
+  assert.ok(reasons.includes("attachment_path_not_allowed"));
+  assert.ok(reasons.includes("attachment_uri_not_absolute"));
+  assert.ok(reasons.includes("attachment_uri_traversal"));
+  assert.doesNotMatch(resolved.text, /sandbox:/i);
+  assert.equal(resolved.text.split("\n").every((line) => line === "Attachment unavailable"), true);
 });
 
 test("thread attachment policy denies secrets and arbitrary paths by default", async () => {

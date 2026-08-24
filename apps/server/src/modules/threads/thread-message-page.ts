@@ -210,7 +210,8 @@ export function threadMessagePage(thread: any, rawMessages: any[] = [], query: R
 }
 
 export async function threadHistoryPayload(thread: any) {
-  const messages = chronologicalMessages(await listThreadMessages(thread.id));
+  const messages = chronologicalMessages(await listThreadMessages(thread.id))
+    .map((message) => addAttachmentDownloadUrls(thread, message));
   return {
     thread,
     orkestrThreadId: thread.id,

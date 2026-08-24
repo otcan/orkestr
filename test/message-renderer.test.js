@@ -62,3 +62,11 @@ test("message renderer does not format tables inside fenced code blocks", () => 
   assert.match(html, /<pre class="orkestr-code-block"><code>/);
   assert.match(html, /\| A \| B \|/);
 });
+
+test("message renderer keeps non-HTTP sandbox URIs outside the anchor boundary", () => {
+  const html = renderMessageTextHtml("[download](sandbox:/workspace/report.zip)");
+
+  assert.doesNotMatch(html, /<a\b/i);
+  assert.doesNotMatch(html, /href=/i);
+  assert.match(html, /sandbox:\/workspace\/report\.zip/);
+});

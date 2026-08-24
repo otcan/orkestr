@@ -14198,6 +14198,62 @@ test("whatsapp delivery sends allowed local paths as media attachments and does 
   assert.equal(storedReply.attachments[0].filename, "report.txt");
 });
 
+test("whatsapp delivery sends sandbox ZIP artifacts through send-media and does not replay them", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-sandbox-artifact-"));
+  const env = externalBridgeEnv(home);
+  const workspace = path.join(home, "workspace");
+  await fs.mkdir(workspace, { recursive: true });
+  const sourcePath = path.join(workspace, "release bundle.zip");
+  await fs.writeFile(sourcePath, "zip payload", "utf8");
+  await createThread({
+    id: "thread-wa-sandbox-artifact",
+    name: "WA Sandbox Artifact",
+    cwd: workspace,
+    workspace,
+  }, env);
+  await writeConnectorConfig("whatsapp", {
+    bridgeMode: "external",
+    bridgeUrl: "http://wa.local",
+    threadRoutes: { "chat-sandbox-artifact": "thread-wa-sandbox-artifact" },
+  }, env);
+
+  const routed = await routeWhatsAppInbound({ eventId: "wa-sandbox-artifact-1", chatId: "chat-sandbox-artifact", text: "send bundle" }, env);
+  const encoded = sourcePath.split(path.sep).map(encodeURIComponent).join("/");
+  const reply = await appendThreadMessage("thread-wa-sandbox-artifact", {
+    role: "assistant",
+    source: "codex-rollout",
+    phase: "final_answer",
+    state: "completed",
+    text: `[Download bundle](sandbox:/${encoded.replace(/^\/+/, "")})`,
+    parentMessageId: routed.message.id,
+    connector: "whatsapp",
+    chatId: "chat-sandbox-artifact",
+  }, env);
+  await fs.rm(sourcePath);
+
+  const calls = [];
+  const delivery = await deliverWhatsAppReplies(env, async (url, options) => {
+    calls.push({ url, body: JSON.parse(options.body) });
+    return response({ ok: true, ids: ["sent-sandbox-bundle"] });
+  });
+  const duplicate = await deliverWhatsAppReplies(env, async () => {
+    throw new Error("should not resend sandbox artifact");
+  });
+  const storedReply = (await listThreadMessages("thread-wa-sandbox-artifact", env)).find((message) => message.id === reply.id);
+
+  assert.equal(delivery.delivered.length, 1);
+  assert.equal(duplicate.delivered.length, 0);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url.pathname, "/send-media");
+  assert.equal(calls[0].body.paths.length, 1);
+  assert.notEqual(calls[0].body.paths[0], sourcePath);
+  assert.match(calls[0].body.paths[0], /uploads\/thread-wa-sandbox-artifact\/artifacts/);
+  assert.doesNotMatch(calls[0].body.text, /sandbox:/i);
+  assert.equal(storedReply.attachments.length, 1);
+  assert.equal(storedReply.attachments[0].filename, "release bundle.zip");
+  assert.equal(storedReply.attachments[0].mimetype, "application/zip");
+});
+
 test("whatsapp tenant relay sends local report links as inline bridge media instead of parent bridge paths", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-tenant-relay-attachment-"));
   const env = await externalBridgeEnvWithAllowingSanitizer(home, {
