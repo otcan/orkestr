@@ -1,13 +1,13 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { Body, Controller, Get, HttpCode, Param, Post, Query, Req, Res, UploadedFiles, UseInterceptors } from "@nestjs/common";
+import { Body, Controller, Get, HttpCode, Param, Patch, Post, Query, Req, Res, UploadedFiles, UseInterceptors } from "@nestjs/common";
 import { AnyFilesInterceptor } from "@nestjs/platform-express";
-import { getThread, getThreadForPrincipal, listThreadMessages } from "../../../../../packages/core/src/threads.js";
+import { getThread, getThreadForPrincipal, getThreadMessage, listThreadMessages, updateThreadMessage } from "../../../../../packages/core/src/threads.js";
 import { resolveStoredThreadAttachment, resolveThreadAttachments } from "../../../../../packages/core/src/thread-attachments.js";
 import { ensureDataDirs } from "../../../../../packages/storage/src/paths.js";
 import { threadMessagesQuerySchema, threadUploadSchema } from "../../../../../packages/shared/src/api-schemas.js";
-import { httpError, validateRequestSchema } from "../../common/http.js";
+import { ensureAttachmentsArray, httpError, validateRequestSchema } from "../../common/http.js";
 import { requestPrincipal } from "../../../../../packages/core/src/principal.js";
 import { ThreadActionSanitizerService } from "./thread-application.services.js";
 import { scheduleNativeCodexHistorySync, syncNativeCodexHistory, threadHistoryPayload, threadMessagePage } from "./thread-message-page.js";
@@ -41,6 +41,46 @@ export class ThreadMessagesController {
     if (!thread) throw httpError("thread_not_found", 404);
     scheduleNativeCodexHistorySync(thread);
     return threadMessagePage(thread, await listThreadMessages(thread.id), query, null);
+  }
+
+  @Patch(":threadId/messages/:messageId/whatsapp-inbound-revision")
+  async reviseWhatsAppInbound(
+    @Req() request: any,
+    @Param("threadId") threadId: string,
+    @Param("messageId") messageId: string,
+    @Body() body: Record<string, unknown> = {},
+  ) {
+    ensureAttachmentsArray(body);
+    const thread = await getThreadForPrincipal(threadId, requestPrincipal(request));
+    if (!thread) throw httpError("thread_not_found", 404);
+    const current: any = await getThreadMessage(thread.id, messageId);
+    if (!current) throw httpError("message_not_found", 404);
+    if (String(current.role || "").trim().toLowerCase() !== "user" || String(current.source || "").trim() !== "whatsapp_inbound") {
+      throw httpError("whatsapp_inbound_revision_target_invalid", 409);
+    }
+    const publicMessageId = String(body.publicMessageId || "").trim();
+    if (!publicMessageId || (current.publicMessageId && String(current.publicMessageId) !== publicMessageId)) {
+      throw httpError("whatsapp_inbound_revision_source_mismatch", 409);
+    }
+    const revisionId = String(body.revisionId || body.sourceEventId || "").trim();
+    if (!revisionId) throw httpError("whatsapp_inbound_revision_id_required", 400);
+    const revisionIds = [...new Set([
+      ...(Array.isArray(current.whatsappInboundRevisionIds) ? current.whatsappInboundRevisionIds : []),
+      revisionId,
+    ].map((value) => String(value || "").trim()).filter(Boolean))];
+    const message = await updateThreadMessage(thread.id, current.id, {
+      text: String(body.text || current.text || ""),
+      attachments: Array.isArray(body.attachments) ? body.attachments : current.attachments,
+      whatsappInboundRevisionIds: revisionIds,
+      whatsappInboundRevisedAt: new Date().toISOString(),
+      whatsappInboundRevisionSource: "remote_whatsapp_router",
+    }, process.env, {
+      expectedStates: ["queued", "pending_delivery"],
+      stateConflictError: "whatsapp_inbound_revision_expired",
+      idempotencyField: "whatsappInboundRevisionIds",
+      idempotencyKey: revisionId,
+    });
+    return { ok: true, duplicate: message.duplicate === true, threadId: thread.id, message };
   }
 
   @Post(":threadId/uploads")

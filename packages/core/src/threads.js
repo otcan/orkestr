@@ -1016,7 +1016,7 @@ export async function enqueueThreadInputForPrincipal(threadId, input, principal,
   }
 }
 
-export async function updateThreadMessage(threadId, messageId, patch, env = process.env) {
+export async function updateThreadMessage(threadId, messageId, patch, env = process.env, options = {}) {
   const thread = await getThread(threadId, env);
   if (!thread) {
     const error = new Error("thread_not_found");
@@ -1040,6 +1040,19 @@ export async function updateThreadMessage(threadId, messageId, patch, env = proc
       if (message.id !== messageId) {
         next.push(message);
         continue;
+      }
+      const expectedStates = Array.isArray(options.expectedStates)
+        ? options.expectedStates.map((value) => String(value || "").trim().toLowerCase()).filter(Boolean)
+        : [];
+      if (expectedStates.length && !expectedStates.includes(String(message.state || "").trim().toLowerCase())) {
+        const error = new Error(String(options.stateConflictError || "message_state_conflict"));
+        error.statusCode = Number(options.stateConflictStatusCode || 409) || 409;
+        throw error;
+      }
+      const idempotencyField = String(options.idempotencyField || "").trim();
+      const idempotencyKey = String(options.idempotencyKey || "").trim();
+      if (idempotencyField && idempotencyKey && Array.isArray(message[idempotencyField]) && message[idempotencyField].includes(idempotencyKey)) {
+        return { ...message, duplicate: true, duplicateReason: "message_update_idempotency_key" };
       }
       previous = message;
       const nextRevision = visibleMutationFields.length

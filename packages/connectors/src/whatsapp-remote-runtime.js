@@ -206,6 +206,39 @@ export async function enqueueRemoteWhatsAppThreadInput({ thread, message, input 
   };
 }
 
+export async function updateRemoteWhatsAppThreadInput({ thread, message, revisionId = "" } = {}, env = process.env, fetchImpl = fetch) {
+  const remote = remoteWhatsAppRuntimeBinding(thread, env);
+  if (!remote) return null;
+  const remoteMessageId = pickString(message?.remoteMessageId);
+  if (!remoteMessageId) {
+    const error = new Error("whatsapp_remote_input_edit_unsupported");
+    error.statusCode = 409;
+    throw error;
+  }
+  const backend = backendForBinding(remote.binding, env);
+  const payload = await remoteJson(
+    backend,
+    `threads/${encodeURIComponent(remote.remoteThreadId)}/messages/${encodeURIComponent(remoteMessageId)}/whatsapp-inbound-revision`,
+    fetchImpl,
+    {
+      method: "PATCH",
+      body: JSON.stringify({
+        publicMessageId: message?.id || "",
+        revisionId: pickString(revisionId),
+        text: pickString(message?.text),
+        attachments: Array.isArray(message?.attachments) ? message.attachments : [],
+      }),
+    },
+  );
+  return {
+    ...remote,
+    backend,
+    payload,
+    message: payload?.message || null,
+    duplicate: payload?.duplicate === true,
+  };
+}
+
 async function fetchRemoteThreadMessages(remote, env = process.env, fetchImpl = fetch) {
   const backend = backendForBinding(remote.binding, env);
   const payload = await remoteJson(
