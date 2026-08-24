@@ -4,6 +4,7 @@ import http from "node:http";
 import path from "node:path";
 import { URL } from "node:url";
 import {
+  addLocalWhatsAppGroupParticipants,
   createLocalWhatsAppChat,
   demoteLocalWhatsAppGroupParticipants,
   generateLocalWhatsAppChatPicture,
@@ -236,6 +237,7 @@ function routeMatch(pathname, pattern) {
 }
 
 const defaultBridge = {
+  addLocalWhatsAppGroupParticipants,
   createLocalWhatsAppChat,
   demoteLocalWhatsAppGroupParticipants,
   generateLocalWhatsAppChatPicture,
