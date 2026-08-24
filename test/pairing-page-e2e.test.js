@@ -8,8 +8,18 @@ import { approvePairingChallenge, createPairingChallenge, listPairingChallenges,
 import { createAppShare } from "../packages/core/src/shared-apps.js";
 import { adminPrincipal } from "../packages/core/src/principal.js";
 import { appendThreadMessage, createThread } from "../packages/core/src/threads.js";
+import { writeInstanceIdentity } from "../packages/core/src/instance-identity.js";
 
-const envKeys = ["ORKESTR_HOME", "ORKESTR_AUTH_REQUIRED", "ORKESTR_RECOVER_RUNNING_ON_START"];
+const envKeys = [
+  "ORKESTR_HOME",
+  "ORKESTR_AUTH_REQUIRED",
+  "ORKESTR_RECOVER_RUNNING_ON_START",
+  "ORKESTR_THREAD_STORE",
+  "ORKESTR_CANONICAL_INSTANCE_URLS",
+  "ORKESTR_CANONICAL_APP_GATEWAY",
+  "ORKESTR_CANONICAL_APP_LINKS",
+  "ORKESTR_INSTANCE_ID",
+];
 
 function saveEnv() {
   return Object.fromEntries(envKeys.map((key) => [key, process.env[key]]));
@@ -124,7 +134,14 @@ test("mobile thread routes keep the selected conversation visible and open threa
   process.env.ORKESTR_HOME = home;
   process.env.ORKESTR_AUTH_REQUIRED = "0";
   process.env.ORKESTR_RECOVER_RUNNING_ON_START = "0";
-  await createThread({ id: "mobile-review-thread", name: "Mobile Review Thread" }, process.env);
+  process.env.ORKESTR_THREAD_STORE = "json";
+  process.env.ORKESTR_CANONICAL_INSTANCE_URLS = "1";
+  process.env.ORKESTR_CANONICAL_APP_GATEWAY = "1";
+  process.env.ORKESTR_CANONICAL_APP_LINKS = "1";
+  process.env.ORKESTR_INSTANCE_ID = "mobile-instance-internal";
+  const instanceRef = "ins_AQEBAQEBAQEBAQEBAQEBAQ";
+  await writeInstanceIdentity({ internalInstanceId: "mobile-instance-internal", publicRef: instanceRef }, process.env);
+  const thread = await createThread({ id: "mobile-review-thread", name: "Mobile Review Thread" }, process.env);
   await appendThreadMessage("mobile-review-thread", {
     role: "assistant",
     state: "completed",
@@ -144,38 +161,51 @@ test("mobile thread routes keep the selected conversation visible and open threa
       args: ["--no-sandbox", "--disable-setuid-sandbox"],
     });
     const page = await browser.newPage();
-    await page.setViewport({ width: 390, height: 844, deviceScaleFactor: 1, isMobile: true, hasTouch: true });
     const errors = [];
     page.on("pageerror", (error) => errors.push(error.message || String(error)));
+    const canonicalUrl = `${baseUrl}/instance/${instanceRef}/thread/${thread.publicRef}`;
+    for (const width of [320, 375, 390, 768, 860]) {
+      await page.setViewport({ width, height: width <= 390 ? 844 : 900, deviceScaleFactor: 1, isMobile: width <= 390, hasTouch: width <= 390 });
+      await page.goto(canonicalUrl, { waitUntil: "networkidle2" });
+      await page.waitForFunction(
+        () => document.body.innerText.includes("The selected conversation is visible on mobile."),
+        { timeout: 10_000 },
+      );
+      const initial = await page.evaluate(() => {
+        const drawer = document.querySelector("#thread-sidebar")?.getBoundingClientRect();
+        const chat = document.querySelector(".chat")?.getBoundingClientRect();
+        const firstMessage = document.querySelector(".message")?.getBoundingClientRect();
+        const composer = document.querySelector(".composer")?.getBoundingClientRect();
+        const navItems = [...document.querySelectorAll(".instance-topbar-nav > button, .instance-topbar-nav > details")]
+          .map((node) => node.getBoundingClientRect());
+        return {
+          drawerRight: drawer?.right || 0,
+          chatLeft: chat?.left || 0,
+          chatWidth: chat?.width || 0,
+          firstMessageTop: firstMessage?.top || 0,
+          firstMessageBottom: firstMessage?.bottom || 0,
+          composerLeft: composer?.left || 0,
+          composerRight: composer?.right || 0,
+          viewportWidth: window.innerWidth,
+          viewportHeight: window.innerHeight,
+          pageOverflows: document.documentElement.scrollWidth > window.innerWidth,
+          navFits: navItems.every((item) => item.left >= -1 && item.right <= window.innerWidth + 1),
+        };
+      });
+      assert.ok(initial.drawerRight <= 1, `drawer at ${width}px`);
+      assert.equal(initial.chatLeft, 0, `chat left at ${width}px`);
+      assert.ok(initial.chatWidth >= width - 10, `chat width at ${width}px`);
+      assert.ok(initial.firstMessageTop < initial.viewportHeight, `message top at ${width}px`);
+      assert.ok(initial.firstMessageBottom > 0, `message bottom at ${width}px`);
+      assert.ok(
+        initial.composerLeft >= -1 && initial.composerRight <= initial.viewportWidth + 1,
+        `composer at ${width}px: ${JSON.stringify(initial)}`,
+      );
+      assert.equal(initial.pageOverflows, false, `page overflow at ${width}px`);
+      assert.equal(initial.navFits, true, `top navigation at ${width}px`);
+    }
 
-    await page.goto(`${baseUrl}/thread/mobile-review-thread`, { waitUntil: "networkidle2" });
-    await page.waitForFunction(
-      () => document.body.innerText.includes("The selected conversation is visible on mobile."),
-      { timeout: 10_000 },
-    );
-
-    const initial = await page.evaluate(() => {
-      const drawer = document.querySelector("#thread-sidebar")?.getBoundingClientRect();
-      const chat = document.querySelector(".chat")?.getBoundingClientRect();
-      const firstMessage = document.querySelector(".message")?.getBoundingClientRect();
-      return {
-        drawerRight: drawer?.right || 0,
-        chatLeft: chat?.left || 0,
-        chatWidth: chat?.width || 0,
-        firstMessageTop: firstMessage?.top || 0,
-        firstMessageBottom: firstMessage?.bottom || 0,
-        viewportHeight: window.innerHeight,
-        pageOverflows: document.documentElement.scrollWidth > window.innerWidth,
-      };
-    });
-    assert.ok(initial.drawerRight <= 1);
-    assert.equal(initial.chatLeft, 0);
-    assert.ok(initial.chatWidth >= 380);
-    assert.ok(initial.firstMessageTop < initial.viewportHeight);
-    assert.ok(initial.firstMessageBottom > 0);
-    assert.equal(initial.pageOverflows, false);
-
-    await page.click("button.mobile-thread-switcher");
+    await page.click("button.mobile-instance-menu");
     await page.waitForFunction(() => {
       const drawer = document.querySelector("#thread-sidebar")?.getBoundingClientRect();
       return Boolean(drawer) && Number(drawer.left) >= -1;
@@ -379,6 +409,60 @@ test("pairing page keeps a new Google connect challenge open when the browser co
     assert.equal(command, `orkestr connect approve ${newChallenge.challenge.approveCode}`);
     const challenges = await listPairingChallenges({ env: process.env, includeExpired: true });
     assert.equal(challenges.challenges.find((item) => item.id === newChallenge.challengeId)?.status, "pending");
+  } finally {
+    if (browser) await browser.close();
+    await new Promise((resolve) => server.close(resolve));
+    restoreEnv(prior);
+  }
+});
+
+test("pairing page keeps a canonical instance challenge open when only a global session exists", async (t) => {
+  const puppeteer = await loadPuppeteer(t);
+  if (!puppeteer) return;
+  const chrome = await findChrome();
+  if (!chrome) {
+    t.skip("No Chrome or Chromium executable available for browser e2e.");
+    return;
+  }
+
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-pairing-canonical-scope-e2e-"));
+  const prior = saveEnv();
+  process.env.ORKESTR_HOME = home;
+  process.env.ORKESTR_AUTH_REQUIRED = "1";
+  process.env.ORKESTR_RECOVER_RUNNING_ON_START = "0";
+
+  const globalChallenge = await createPairingChallenge({ env: process.env });
+  await approvePairingChallenge(globalChallenge.challengeId, { env: process.env });
+  const globalPair = await pairBrowser({ challengeId: globalChallenge.challengeId, env: process.env });
+  const requestedPath = "/instance/ins_AQEBAQEBAQEBAQEBAQEBAQ/";
+  const instanceChallenge = await createPairingChallenge({
+    env: process.env,
+    instanceId: "main",
+    requestedPath,
+  });
+  const server = await startServer({ port: 0, host: "127.0.0.1" });
+  const { port } = server.address();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  let browser;
+
+  try {
+    browser = await puppeteer.launch({
+      headless: "new",
+      executablePath: chrome,
+      args: ["--no-sandbox", "--disable-setuid-sandbox"],
+    });
+    const page = await browser.newPage();
+    await page.setCookie({ name: securityCookieName(process.env), value: globalPair.token, url: baseUrl });
+    const pairingUrl = `${baseUrl}/setup/pairing?instanceId=main&challengeId=${encodeURIComponent(instanceChallenge.challengeId)}&return=${encodeURIComponent(requestedPath)}`;
+    await page.goto(pairingUrl, { waitUntil: "networkidle2" });
+    await page.waitForFunction(() => document.body.innerText.includes("Approve this browser"));
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
+
+    const current = new URL(page.url());
+    assert.equal(current.pathname, "/setup/pairing");
+    assert.equal(current.searchParams.get("challengeId"), instanceChallenge.challengeId);
+    const challenges = await listPairingChallenges({ env: process.env, includeExpired: true });
+    assert.equal(challenges.challenges.find((item) => item.id === instanceChallenge.challengeId)?.status, "pending");
   } finally {
     if (browser) await browser.close();
     await new Promise((resolve) => server.close(resolve));

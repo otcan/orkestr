@@ -10,6 +10,7 @@ import { __brokerInstanceRegistryTestInternals, registerBrokerInstance } from ".
 import { approvePairingChallenge, createPairingChallenge, listPairingChallenges, pairBrowser, sessionCookieHeader } from "../packages/core/src/security.js";
 import { userPrincipal } from "../packages/core/src/principal.js";
 import { createTenantVm } from "../packages/core/src/tenant-vm-registry.js";
+import { writeInstanceIdentity } from "../packages/core/src/instance-identity.js";
 import { userDataPaths } from "../packages/storage/src/paths.js";
 
 const publicRuntimeEnvKeys = [
@@ -1124,18 +1125,21 @@ test("server keeps public pages on the configured public site host only", async 
     connectPublicUrl: process.env.ORKESTR_CONNECT_PUBLIC_URL,
     pairingUrl: process.env.ORKESTR_PAIRING_URL,
     authRequired: process.env.ORKESTR_AUTH_REQUIRED,
+    instanceName: process.env.ORKESTR_INSTANCE_NAME,
   };
   process.env.ORKESTR_HOME = home;
   process.env.ORKESTR_PUBLIC_SITE_URL = "https://orkestr.example.test";
   process.env.ORKESTR_PRIMARY_DOMAIN = "orkestr.example.test";
   process.env.ORKESTR_PUBLIC_URL = "https://app.orkestr.example.test";
+  process.env.ORKESTR_PUBLIC_APP_URL = "https://app.orkestr.example.test";
   process.env.ORKESTR_AUTH_REQUIRED = "1";
+  process.env.ORKESTR_INSTANCE_NAME = "Main Orkestr";
   delete process.env.ORKESTR_OVERLAY_DIR;
-  delete process.env.ORKESTR_PUBLIC_APP_URL;
   delete process.env.ORKESTR_PUBLIC_AUTH_URL;
   delete process.env.ORKESTR_PUBLIC_HTTPS_URL;
   delete process.env.ORKESTR_CONNECT_PUBLIC_URL;
   delete process.env.ORKESTR_PAIRING_URL;
+  await writeInstanceIdentity({ internalInstanceId: "local-instance", publicRef: "ins_AQEBAQEBAQEBAQEBAQEBAQ" }, process.env);
   const server = await startServer({ port: 0, host: "127.0.0.1" });
   const { port } = server.address();
   try {
@@ -1146,6 +1150,16 @@ test("server keeps public pages on the configured public site host only", async 
     const privateRootResponse = await fetch(`http://127.0.0.1:${port}/`, {
       redirect: "manual",
       headers: { "x-forwarded-host": "app.orkestr.example.test", "x-forwarded-proto": "https" },
+    });
+    const instanceEntryResponse = await fetch(`http://127.0.0.1:${port}/instance-entry`, {
+      method: "POST",
+      redirect: "manual",
+      headers: {
+        "content-type": "application/x-www-form-urlencoded",
+        "x-forwarded-host": "app.orkestr.example.test",
+        "x-forwarded-proto": "https",
+      },
+      body: new URLSearchParams({ instance: "Main Orkestr" }),
     });
     const privateTermsResponse = await fetch(`http://127.0.0.1:${port}/terms`, {
       redirect: "manual",
@@ -1182,10 +1196,15 @@ test("server keeps public pages on the configured public site host only", async 
 
     assert.equal(publicResponse.status, 200);
     assertPublicShell(publicHtml);
-    assert.equal(privateRootResponse.status, 302);
+    const privateRootHtml = await privateRootResponse.text();
+    assert.equal(privateRootResponse.status, 200);
+    assert.match(privateRootHtml, /<h1>Which Orkestr\?<\/h1>/);
+    assert.match(privateRootHtml, /name="instance"/);
+    assert.doesNotMatch(privateRootHtml, /Approve this browser|orkestr security approve|orkestr connect approve/);
+    assert.equal(instanceEntryResponse.status, 303);
     assert.equal(
-      privateRootResponse.headers.get("location"),
-      "https://orkestr.example.test/setup/pairing?return=https%3A%2F%2Fapp.orkestr.example.test%2F",
+      instanceEntryResponse.headers.get("location"),
+      "https://orkestr.example.test/setup/pairing?instanceId=local-instance&return=%2Finstance%2Fins_AQEBAQEBAQEBAQEBAQEBAQ",
     );
     assert.equal(privateTermsResponse.status, 302);
     assert.equal(
@@ -1198,6 +1217,15 @@ test("server keeps public pages on the configured public site host only", async 
     assert.equal(pairedPrivateRootResponse.status, 200);
     assertAngularShell(pairedPrivateRootHtml);
     assert.doesNotMatch(pairedPrivateRootHtml, /Invite-only private beta/);
+
+    process.env.ORKESTR_PUBLIC_APP_URL = "https://orkestr.example.test";
+    const overlappingHostResponse = await fetch(`http://127.0.0.1:${port}/`, {
+      headers: { "x-forwarded-host": "orkestr.example.test", "x-forwarded-proto": "https" },
+    });
+    const overlappingHostHtml = await overlappingHostResponse.text();
+    assert.equal(overlappingHostResponse.status, 200);
+    assertPublicShell(overlappingHostHtml);
+    assert.doesNotMatch(overlappingHostHtml, /<h1>Which Orkestr\?<\/h1>/);
   } finally {
     await new Promise((resolve) => server.close(resolve));
     if (prior.home === undefined) delete process.env.ORKESTR_HOME;
@@ -1222,6 +1250,8 @@ test("server keeps public pages on the configured public site host only", async 
     else process.env.ORKESTR_PAIRING_URL = prior.pairingUrl;
     if (prior.authRequired === undefined) delete process.env.ORKESTR_AUTH_REQUIRED;
     else process.env.ORKESTR_AUTH_REQUIRED = prior.authRequired;
+    if (prior.instanceName === undefined) delete process.env.ORKESTR_INSTANCE_NAME;
+    else process.env.ORKESTR_INSTANCE_NAME = prior.instanceName;
   }
 });
 
@@ -1249,6 +1279,7 @@ test("pairing return stays same-origin and Codex warnings stay non-blocking", as
   assert.match(component, /Connect Codex Agent before starting coding agents or sending coding-agent tasks\./);
   assert.match(component, /sameOriginPairingReturnUrl/);
   assert.match(component, /isScopedPairingReturnUrl/);
+  assert.match(component, /parts\[0\] === "instance" && \/\^ins_/);
   assert.match(component, /\["\/connect\/google", "\/connect\/google\/start"\]/);
   assert.match(component, /target\.origin === current\.origin/);
   assert.doesNotMatch(component, /allowedOrigins\.includes\(target\.origin\)/);
@@ -1273,7 +1304,7 @@ test("mobile thread view uses an off-canvas drawer so the active chat stays visi
 
   assert.match(template, /\[class\.mobile-sidebar-open\]="mobileSidebarOpen"/);
   assert.match(template, /id="thread-sidebar"/);
-  assert.match(template, /class="secondary mobile-thread-switcher"/);
+  assert.match(template, /class="secondary mobile-instance-menu"/);
   assert.match(template, /\(click\)="openMobileSidebar\(\)"/);
   assert.match(template, /class="mobile-sidebar-backdrop"/);
   assert.match(component, /mobileSidebarOpen = false/);
@@ -1282,9 +1313,11 @@ test("mobile thread view uses an off-canvas drawer so the active chat stays visi
   assert.match(component, /this\.mobileSidebarOpen = false;\s*this\.selectedId = this\.threadSlug\(thread\)/);
   assert.match(styles, /@media \(max-width: 860px\)\s*{[\s\S]*?\.sidebar\s*{[\s\S]*?position:\s*fixed/s);
   assert.match(styles, /\.app-shell\.mobile-sidebar-open \.sidebar\s*{\s*transform:\s*translateX\(0\)/);
-  assert.match(styles, /\.mobile-thread-switcher\s*{\s*display:\s*inline-flex/);
+  assert.match(styles, /\.mobile-instance-menu\s*{\s*display:\s*inline-flex/);
   assert.match(styles, /\.chat-head \.head-actions\.cockpit-actions\s*{\s*display:\s*none/);
-  assert.match(styles, /\.panel-tabs\s*{\s*flex-wrap:\s*nowrap;\s*overflow-x:\s*auto/s);
+  assert.match(styles, /\.thread-tools-popover\s*{\s*flex-wrap:\s*nowrap;\s*overflow-x:\s*auto/s);
+  assert.match(styles, /@media \(max-width: 860px\)[\s\S]*?\.instance-topbar-nav\s*{[\s\S]*?grid-template-columns:\s*repeat\(4, minmax\(0, 1fr\)\)/s);
+  assert.match(styles, /@media \(max-width: 480px\)[\s\S]*?\.composer-row\s*{\s*grid-template-columns:\s*minmax\(0, 1fr\)/s);
 });
 
 test("thread sidebar treats runtime interruption messages as errors", async () => {
@@ -1310,41 +1343,36 @@ test("thread reload signature tracks final message identity", async () => {
   assert.match(api, /lastMessageId\?: string \| null/);
 });
 
-test("ops desktop links are only shown for running desktops", async () => {
-  const template = await fs.readFile("apps/web/src/app/ops-page.component.html", "utf8");
-  const component = await fs.readFile("apps/web/src/app/ops-page.component.ts", "utf8");
+test("instance desktop links are brokered and only shown for running desktops", async () => {
+  const template = await fs.readFile("apps/web/src/app/user-desk-page.component.html", "utf8");
+  const component = await fs.readFile("apps/web/src/app/user-desk-page.component.ts", "utf8");
   const appTemplate = await fs.readFile("apps/web/src/app/app.component.html", "utf8");
 
-  assert.match(appTemplate, />DESKTOPS<\/button>/);
-  assert.match(appTemplate, /\(click\)="openTools\('desktops'\)"/);
-  assert.match(template, /@if \(browserOpenUrl\(browser\)\)/);
+  assert.match(appTemplate, />Desktops<\/button>/);
+  assert.doesNotMatch(appTemplate, />DESKTOPS<\/button>/);
+  assert.match(appTemplate, /\(click\)="openPanel\('instanceDesktops'\)"/);
+  assert.match(template, /@if \(browserRunning\(browser\)\)/);
   assert.doesNotMatch(template, /@if \(browser\.desk_url \|\| browser\.url\)/);
-  assert.match(template, /\[disabled\]="browserActionBusy\(browser\)"/);
+  assert.match(template, /\[disabled\]="actionBusy\(browser\)"/);
   assert.doesNotMatch(template, /browserAction\(browser, 'start'\)" \[disabled\]="busy"/);
-  assert.match(component, /browserOpenUrl\(browser: BrowserSession\): string/);
-  assert.match(component, /openBrowserDesktop\(browser: BrowserSession\): void/);
-  assert.match(component, /browserIsRunning\(browser: BrowserSession\): boolean/);
+  assert.match(component, /openDesktop\(browser: BrowserSession\): Promise<void>/);
+  assert.match(component, /browserRunning\(browser: BrowserSession\): boolean/);
   assert.match(component, /"active", "running"/);
-  assert.match(component, /\/desktop\/\$\{encodedSlug\}\/vnc\.html\?autoconnect=1&resize=scale&view_only=false&path=desktop\/\$\{encodedSlug\}\/websockify/);
+  assert.match(component, /this\.api\.createDesktopShare\(slug, \{/);
   assert.doesNotMatch(component, /return String\(browser\.desk_url \|\| browser\.url \|\| ""\)\.trim\(\)/);
-  assert.match(template, /\(click\)="openBrowserDesktop\(browser\)"/);
+  assert.match(template, /\(click\)="openDesktop\(browser\)"/);
   assert.match(template, />Open Desktop<\/button>/);
-  assert.match(template, />Share Link<\/button>/);
-  assert.match(template, />Threads<\/strong>/);
-  assert.match(template, /desktopThreads\(browser\)/);
-  assert.match(component, /desktopThreads\(browser: BrowserSession\)/);
-  assert.match(component, /desktopThreadHref\(thread: Record<string, unknown>\)/);
+  assert.match(template, />Share<\/button>/);
+  assert.match(template, />Assigned threads<\/strong>/);
+  assert.match(template, /browserThreads\(browser\)/);
+  assert.match(component, /browserThreads\(browser: BrowserSession\)/);
   assert.doesNotMatch(template, /pid \{\{ browserPid/);
   assert.doesNotMatch(template, /CDP \{\{ browser\.debugPort/);
-  assert.doesNotMatch(template, /browserOwner\(browser\)/);
   assert.doesNotMatch(template, />Open Desk<\/a>/);
   assert.doesNotMatch(template, />Mobile<\/a>/);
   assert.doesNotMatch(template, />CDP<\/a>/);
-  assert.doesNotMatch(component, /browserMobileUrl\(browser: BrowserSession\): string/);
-  assert.match(component, /shouldShowBrowserAction\(browser: BrowserSession/);
-  assert.match(component, /action === "restart"\) return running/);
-  assert.match(template, /\[class\.live\]="browserIsRunning\(browser\)"/);
-  assert.match(component, /activeBrowserActionSlug/);
+  assert.match(template, /\[class\]="browserHealthClass\(browser\)"/);
+  assert.match(component, /activeSlug = ""/);
 });
 
 test("thread STOP control is contextual to the runtime panel", async () => {
@@ -1395,10 +1423,18 @@ test("ops mailboxes page exposes explicit route setup and durable status", async
   const api = await fs.readFile("apps/web/src/app/api.service.ts", "utf8");
   const controller = await fs.readFile("apps/server/src/modules/mailboxes/mailboxes.controller.ts", "utf8");
   const cli = await fs.readFile("apps/cli/src/mailbox-command.js", "utf8");
+  const inboxTemplate = await fs.readFile("apps/web/src/app/mailbox-inbox-panel.component.html", "utf8");
+  const inboxComponent = await fs.readFile("apps/web/src/app/mailbox-inbox-panel.component.ts", "utf8");
 
   assert.match(opsComponent, /MailboxRoutesPanelComponent/);
+  assert.match(opsComponent, /MailboxInboxPanelComponent/);
   assert.match(opsComponent, /id: "mailboxes", label: "Mailboxes", kind: "oss-optional"/);
   assert.match(opsTemplate, /<ork-mailbox-routes-panel><\/ork-mailbox-routes-panel>/);
+  assert.match(opsTemplate, /<ork-mailbox-inbox-panel><\/ork-mailbox-inbox-panel>/);
+  assert.match(inboxTemplate, /Read forwarded mail without opening a thread/);
+  assert.match(inboxTemplate, /never wake a thread, append a message, or change delivery state/i);
+  assert.match(inboxTemplate, /exact mailbox <code>read<\/code> grant/i);
+  assert.match(inboxComponent, /mailboxMessages\(this\.selectedMailboxId, this\.selectedThreadId/);
   assert.match(panelTemplate, /One explicit route per main mailbox/);
   assert.match(panelTemplate, /Create explicit route/);
   assert.match(panelTemplate, /Revoke route/);
@@ -1418,11 +1454,15 @@ test("ops mailboxes page exposes explicit route setup and durable status", async
   assert.match(api, /export interface MailboxRouteStatus/);
   assert.match(api, /running: number; completed: number; failed: number/);
   assert.match(api, /mailboxRoutes\(mailboxId: string\)/);
+  assert.match(api, /export interface MailboxInboxMessage/);
+  assert.match(api, /mailboxMessages\(mailboxId: string, threadId: string/);
   assert.match(api, /moveMailboxRoute\(mailboxId: string, routeId: string/);
   assert.match(api, /revokeMailboxRoute\(mailboxId: string, routeId: string/);
   assert.match(controller, /approval: String\(body\.approval \|\| ""\)\.trim\(\), request/);
   assert.match(cli, /--approval/);
   assert.match(cli, /Retry the same route command with --approval/);
+  assert.match(cli, /mailboxes messages <mailbox-id> --thread-id <thread-id>/);
+  assert.match(controller, /@Get\(":mailboxId\/messages"\)/);
 });
 
 test("ops audit view exposes normalized filterable events", async () => {
@@ -1436,7 +1476,7 @@ test("ops audit view exposes normalized filterable events", async () => {
   const styles = await fs.readFile("apps/web/src/styles.css", "utf8");
 
   assert.match(component, /export type ToolsView = .*"audit"/);
-  assert.match(appComponent, /"connectors", "mailboxes", "users", "waitlist", "audit"/);
+  assert.doesNotMatch(appComponent, /OpsPageComponent|toolsView/);
   assert.match(template, /visibleToolTabs\(\)/);
   assert.match(template, /\[class\.active\]="toolsView === tab\.id"/);
   assert.match(component, /id: "audit", label: "Audit", kind: "oss-core"/);
@@ -1550,7 +1590,7 @@ test("ops waitlist view exposes secure approval workflow", async () => {
 
   assert.match(opsComponent, /export type ToolsView = .*"waitlist"/);
   assert.match(opsComponent, /OpsWaitlistComponent/);
-  assert.match(appComponent, /"connectors", "mailboxes", "users", "waitlist", "audit"/);
+  assert.doesNotMatch(appComponent, /OpsPageComponent|toolsView/);
   assert.match(opsComponent, /id: "waitlist", label: "Waitlist", kind: "managed"/);
   assert.match(opsTemplate, /visibleToolTabs\(\)/);
   assert.match(opsTemplate, /<ork-ops-waitlist><\/ork-ops-waitlist>/);
@@ -1752,19 +1792,25 @@ test("web shell switches to a constrained non-admin user mode", async () => {
   assert.match(component, /uiRuntimeReady\(\): boolean/);
   assert.match(component, /uiRuntimeReady\(\): boolean\s*\{\s*return true;/);
   assert.match(component, /panelAllowedForCurrentUser\(panel: Panel\): boolean/);
-  assert.match(component, /\["chat", "history", "delivery", "timers", "files", "userTimers", "userDesk", "userJobs", "userConnectors"\]\.includes\(panel\)/);
+  assert.match(component, /\["chat", "history", "delivery", "timers", "files", "instanceSettings", "instanceTimers", "instanceDesktops", "userConnectors"\]\.includes\(panel\)/);
   assert.match(component, /normalizeUserModeView\(\)/);
   assert.match(component, /isUserNavPanelActive\(panel: Panel\): boolean/);
   assert.match(component, /isRouteLevelUserPanel\(panel: Panel\): boolean/);
   assert.match(component, /This user account is limited to one chat\./);
   assert.match(template, /\[class\.user-mode\]="isUserMode\(\)"/);
-  assert.match(template, /class="user-mode-card"/);
-  assert.match(template, /class="user-mode-nav"/);
-  assert.match(template, /\(click\)="openPanel\('chat'\)">Chat<\/button>/);
+  assert.match(template, /class="instance-topbar-nav"/);
+  assert.match(template, /aria-label="Instance navigation"/);
+  assert.doesNotMatch(template, /class="user-mode-card"/);
+  assert.doesNotMatch(template, /class="user-mode-nav"/);
   assert.match(template, /\(click\)="openPanel\('files'\)">Files<\/button>/);
-  assert.match(template, /\(click\)="openPanel\('userTimers'\)">Automations<\/button>/);
-  assert.match(template, /\(click\)="openPanel\('userDesk'\)">Desk<\/button>/);
-  assert.match(template, /\(click\)="openPanel\('userConnectors'\)">Connectors<\/button>/);
+  assert.match(template, /\(click\)="openPanel\('instanceDesktops'\)">Desktops<\/button>/);
+  assert.match(template, /\(click\)="openPanel\('instanceTimers'\)">Timers<\/button>/);
+  assert.doesNotMatch(template, /\(click\)="openPanel\('instanceSettings'\)">Settings<\/button>/);
+  assert.match(template, /\(click\)="copyCurrentViewLink\(\)"/);
+  assert.doesNotMatch(template, />OPEN<\/a>|OPEN LINK/);
+  assert.doesNotMatch(template, /openPanel\('userJobs'\)/);
+  assert.doesNotMatch(template, />Jobs<\/button>/);
+  assert.doesNotMatch(template, /\(click\)="openPanel\('userConnectors'\)">Connectors<\/button>/);
   assert.doesNotMatch(template, /\(click\)="openPanel\('userSkills'\)">Skills<\/button>/);
   assert.match(template, /\[placeholder\]="sidebarSearchPlaceholder\(\)"/);
   assert.match(template, /@if \(isAdminMode\(\) && visibleChildWorkers\(thread\)\.length > 0\)/);
@@ -1773,11 +1819,11 @@ test("web shell switches to a constrained non-admin user mode", async () => {
   assert.match(template, /@if \(isAdminMode\(\)\) \{\s*<div class="codex-control-scroll"/s);
   assert.match(template, /\[inputReady\]="threadInputReady\(\)"/);
   assert.match(composerTemplate, /\[disabled\]="!inputReady"/);
-  assert.match(styles, /\.user-mode-card/);
-  assert.match(styles, /\.user-mode-nav/);
+  assert.match(styles, /\.instance-topbar-nav/);
+  assert.match(styles, /\.instance-topbar-brand/);
 });
 
-test("web shell exposes a user automation management page", async () => {
+test("web shell exposes an instance-scoped timer management page", async () => {
   const template = await fs.readFile("apps/web/src/app/app.component.html", "utf8");
   const component = await fs.readFile("apps/web/src/app/app.component.ts", "utf8");
   const timersComponent = await fs.readFile("apps/web/src/app/user-timers-page.component.ts", "utf8");
@@ -1786,14 +1832,14 @@ test("web shell exposes a user automation management page", async () => {
   const styles = await fs.readFile("apps/web/src/styles.css", "utf8");
 
   assert.match(component, /import \{ UserTimersPageComponent \} from "\.\/user-timers-page\.component"/);
-  assert.match(component, /type Panel = .*"userTimers"/);
+  assert.match(component, /type Panel = .*"instanceTimers"/);
   assert.match(component, /parts\[0\] === "timers"/);
   assert.match(component, /parts\[0\] === "ng" && parts\[1\] === "timers"/);
   assert.match(component, /!this\.isRouteLevelUserPanel\(this\.activePanel\) && !this\.selectedId && this\.threads\.length/);
-  assert.match(component, /panel === "userTimers"\) return this\.appPath\("\/timers"\)/);
-  assert.match(component, /globalThis\.document\.title = "Automations · Orkestr"/);
+  assert.match(component, /panel === "instanceTimers"\) return this\.instancePath\("\/timers"\)/);
+  assert.match(component, /globalThis\.document\.title = "Timers · Orkestr"/);
   assert.match(template, /<ork-user-timers-page><\/ork-user-timers-page>/);
-  assert.match(template, /\(click\)="openPanel\('userTimers'\)"/);
+  assert.match(template, /\(click\)="openPanel\('instanceTimers'\)"/);
   assert.match(timersComponent, /selector: "ork-user-timers-page"/);
   assert.match(timersComponent, /this\.api\.threads\(\)/);
   assert.match(timersComponent, /this\.api\.automations\(\)/);
@@ -1804,13 +1850,13 @@ test("web shell exposes a user automation management page", async () => {
   assert.match(timersComponent, /this\.api\.resumeAutomation\(automation\.automationId\)/);
   assert.match(timersComponent, /this\.api\.deleteAutomation\(automation\.automationId\)/);
   assert.match(timersComponent, /targetType: "thread"/);
-  assert.match(timersTemplate, /Automations/);
-  assert.match(timersTemplate, /Doctor/);
+  assert.match(timersTemplate, /<h3>Timers<\/h3>/);
+  assert.match(timersTemplate, /Timer health/);
   assert.match(timersTemplate, /automation-doctor-counts/);
   assert.match(timersTemplate, /name="user-timer-target"/);
-  assert.match(timersTemplate, /Run once/);
+  assert.match(timersTemplate, /Run now/);
   assert.match(timersTemplate, /Pause/);
-  assert.match(timersTemplate, /Resume/);
+  assert.match(timersTemplate, /Enable/);
   assert.match(api, /automations\(\): Observable<\{ automations: AutomationRecord\[\] \}>/);
   assert.match(api, /automationDoctor\(\): Observable<AutomationDoctorResponse>/);
   assert.match(api, /pauseAutomation\(id: string\)/);
@@ -1833,7 +1879,7 @@ test("automation doctor entry points forward owner connector principals", async 
   assert.match(tenantTools, /connectorAuthStatus\(provider, env, \{ principal: connectorPrincipal \}\)/);
 });
 
-test("web shell exposes a user desktop desk page", async () => {
+test("web shell exposes an instance-scoped desktop page", async () => {
   const template = await fs.readFile("apps/web/src/app/app.component.html", "utf8");
   const component = await fs.readFile("apps/web/src/app/app.component.ts", "utf8");
   const deskComponent = await fs.readFile("apps/web/src/app/user-desk-page.component.ts", "utf8");
@@ -1844,21 +1890,31 @@ test("web shell exposes a user desktop desk page", async () => {
   const styles = await fs.readFile("apps/web/src/styles.css", "utf8");
 
   assert.match(component, /import \{ UserDeskPageComponent \} from "\.\/user-desk-page\.component"/);
-  assert.match(component, /type Panel = .*"userDesk"/);
+  assert.match(component, /type Panel = .*"instanceDesktops"/);
+  assert.match(component, /\["desktops", "desk"\]\.includes\(parts\[0\]\)/);
   assert.match(component, /parts\[0\] === "desk"/);
   assert.match(component, /parts\[0\] === "ng" && parts\[1\] === "desk"/);
-  assert.match(component, /panel === "userDesk"\) return this\.appPath\("\/desk"\)/);
-  assert.match(component, /globalThis\.document\.title = "Desk · Orkestr"/);
+  assert.match(component, /panel === "instanceDesktops"\) return this\.instancePath\("\/desktops"\)/);
+  assert.match(component, /globalThis\.document\.title = "Desktops · Orkestr"/);
   assert.match(template, /<ork-user-desk-page><\/ork-user-desk-page>/);
-  assert.match(template, /\(click\)="openPanel\('userDesk'\)"/);
+  assert.match(template, /\(click\)="openPanel\('instanceDesktops'\)"/);
   assert.match(deskComponent, /selector: "ork-user-desk-page"/);
   assert.match(deskComponent, /this\.api\.browserSessions\(threadId\)/);
   assert.match(deskComponent, /this\.api\.desktopLeases\(false, threadId\)/);
   assert.match(deskComponent, /this\.api\.acquireDesktopLease\(slug/);
+  assert.match(deskComponent, /action !== "stop" && \(!lease \|\| lease\.stale \|\| lease\.expired\)/);
+  assert.match(deskComponent, /recovered from its expired reservation and reserved/);
   assert.match(deskComponent, /this\.api\.releaseDesktopLease\(slug/);
   assert.match(deskComponent, /this\.api\.createDesktopShare\(slug, \{/);
+  assert.match(deskTemplate, /<h3>Desktops<\/h3>/);
+  assert.match(deskTemplate, /instance-metric-strip/);
+  assert.match(deskTemplate, /Assigned threads/);
   assert.match(deskTemplate, /Open Desktop/);
   assert.match(deskTemplate, /Reserve/);
+  assert.match(deskTemplate, /desktop-warning-list/);
+  assert.match(deskTemplate, /warning\.recommendedAction/);
+  assert.match(deskComponent, /captureErrorWarnings/);
+  assert.match(api, /interface DesktopAccessWarning/);
   assert.match(api, /interface DesktopLeaseRecord/);
   assert.match(api, /desktopLeases\(includeReleased = false, threadId = "", breakGlassReason = ""\)/);
   assert.match(api, /acquireDesktopLease\(slug: string/);
@@ -1868,7 +1924,8 @@ test("web shell exposes a user desktop desk page", async () => {
   assert.match(opsComponent, /breakGlassChangeRef: changeRef/);
   assert.match(opsComponent, /forceReleaseDesktopLease\(lease: DesktopLeaseRecord\)/);
   assert.match(opsTemplate, /Desktop leases/);
-  assert.match(styles, /\.user-desk-grid/);
+  assert.match(styles, /\.instance-desktop-grid/);
+  assert.match(styles, /\.desktop-warning\.error/);
   assert.match(styles, /\.desktop-lease-list/);
 });
 
@@ -1892,7 +1949,7 @@ test("web shell exposes a user connector management page", async () => {
   assert.match(template, /@else if \(connectorLoginActive\(\)\)/);
   assert.match(template, /class="connector-login-shell"/);
   assert.match(template, /<ork-user-connectors-page><\/ork-user-connectors-page>/);
-  assert.match(template, /\(click\)="openPanel\('userConnectors'\)"/);
+  assert.doesNotMatch(template, /\(click\)="openPanel\('userConnectors'\)"/);
   assert.match(connectorsComponent, /selector: "ork-user-connectors-page"/);
   assert.match(connectorsComponent, /imports: \[FormsModule, GmailNotificationsPanelComponent, GoogleWorkspaceAccessPanelComponent\]/);
   assert.match(connectorsComponent, /import \{ GoogleWorkspaceAccessPanelComponent \}/);
@@ -2037,7 +2094,7 @@ test("web shell exposes a user-scoped files page", async () => {
   const filesComponent = await fs.readFile("apps/web/src/app/files-page.component.ts", "utf8");
   const filesTemplate = await fs.readFile("apps/web/src/app/files-page.component.html", "utf8");
   const api = await fs.readFile("apps/web/src/app/api.service.ts", "utf8");
-  const controller = await fs.readFile("apps/server/src/modules/system/system.controller.ts", "utf8");
+  const controller = await fs.readFile("apps/server/src/modules/instance/instance.controller.ts", "utf8");
   const styles = await fs.readFile("apps/web/src/styles.css", "utf8");
 
   assert.match(component, /import \{ FilesPageComponent \} from "\.\/files-page\.component"/);
@@ -2045,23 +2102,26 @@ test("web shell exposes a user-scoped files page", async () => {
   assert.match(component, /parts\[0\] === "files"/);
   assert.match(component, /parts\[0\] === "ng" && parts\[1\] === "files"/);
   assert.match(component, /!this\.isRouteLevelUserPanel\(this\.activePanel\) && !this\.selectedId && this\.threads\.length/);
-  assert.match(component, /panel === "files"\) return this\.appPath\("\/files"\)/);
+  assert.match(component, /panel === "files"\) return this\.instancePath\("\/files"\)/);
   assert.match(component, /globalThis\.document\.title = "Files · Orkestr"/);
   assert.match(template, /<ork-files-page><\/ork-files-page>/);
   assert.match(template, /\(click\)="openPanel\('files'\)"/);
   assert.match(filesComponent, /selector: "ork-files-page"/);
-  assert.match(filesComponent, /this\.api\.files\(path\)/);
-  assert.match(filesComponent, /this\.api\.createFileFolder\(this\.currentPath, name\)/);
-  assert.match(filesComponent, /this\.api\.uploadFiles\(this\.currentPath, selected\)/);
-  assert.match(filesComponent, /this\.api\.deleteFile\(entry\.path\)/);
+  assert.match(filesComponent, /this\.api\.instanceFiles\(mount, path\)/);
+  assert.match(filesComponent, /this\.api\.createInstanceFolder\(this\.currentMount, this\.currentPath, name\)/);
+  assert.match(filesComponent, /this\.api\.uploadInstanceFiles\(this\.currentMount, this\.currentPath, selected\)/);
+  assert.match(filesComponent, /this\.api\.instanceFilePreview\(this\.currentMount, entry\.path\)/);
+  assert.doesNotMatch(filesComponent, /deleteFile\(/);
   assert.match(filesTemplate, /type="file"/);
-  assert.match(filesTemplate, /\[class\.active\]="currentPath === root\.path"/);
-  assert.match(api, /createFileFolder\(currentPath: string, name: string\)/);
-  assert.match(api, /uploadFiles\(currentPath: string, files: File\[\]\)/);
-  assert.match(api, /deleteFile\(path: string\)/);
+  assert.match(filesTemplate, /\[class\.active\]="currentMount === mount\.id"/);
+  assert.match(filesTemplate, /Download<\/a>/);
+  assert.match(api, /createInstanceFolder\(mount: string, currentPath: string, name: string\)/);
+  assert.match(api, /uploadInstanceFiles\(mount: string, currentPath: string, files: File\[\]\)/);
+  assert.match(api, /instanceFilePreview\(mount: string, filePath: string\)/);
   assert.match(controller, /@Post\("files\/folders"\)/);
   assert.match(controller, /@Post\("files\/uploads"\)/);
-  assert.match(controller, /@Delete\("files"\)/);
+  assert.match(controller, /@Get\("files\/preview"\)/);
+  assert.match(controller, /@Get\("files\/download"\)/);
   assert.match(styles, /\.files-page/);
   assert.match(styles, /\.file-row/);
 });
@@ -2072,10 +2132,11 @@ test("web shell keeps broker-mounted tenant routes under base href", async () =>
   assert.match(component, /private appBasePath\(\): string/);
   assert.match(component, /private locationPathParts\(\): string\[\]/);
   assert.match(component, /private appPath\(path: string\): string/);
+  assert.match(component, /private instancePath\(path: string\): string/);
   assert.match(component, /const parts = this\.locationPathParts\(\)/);
   assert.match(component, /if \(panel === "userConnectors"\) return this\.appPath\("\/connectors"\)/);
   assert.match(component, /return this\.appPath\(`\/thread\/\$\{encodeURIComponent\(id\)\}\$\{suffix\}`\)/);
-  assert.match(component, /return this\.appPath\(view === "system" \? "\/ops" : `\/ops\/\$\{view\}`\)/);
+  assert.match(component, /return this\.instancePath\("\/settings"\)/);
 });
 
 test("mobile desktop shell wraps noVNC with phone-first controls", async () => {

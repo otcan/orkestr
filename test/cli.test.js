@@ -58,6 +58,7 @@ test("CLI help exposes local service commands promised by the installer", async 
   assert.match(stdout.text(), /orkestr vm-slice create <owner-user-id>/);
   assert.match(stdout.text(), /vm-slice \[list\|status <slice-id>\|provision <slice-id>\|destroy <slice-id>/);
   assert.match(stdout.text(), /orkestr task-agent spawn <parent-thread>/);
+  assert.match(stdout.text(), /orkestr instance config \[get\|status\|patch\]/);
 });
 
 test("CLI API client aborts stalled requests on its own deadline", async () => {
@@ -1181,6 +1182,40 @@ test("CLI prints non-secret runtime settings from local state", async () => {
   assert.equal(payload.settings.profile, undefined);
   assert.equal(payload.settings.desktops.gmailAuth, "gmail");
   assert.equal(payload.settings.codex.permissionPrompts.alwaysApprove.requiresExplicitScope, true);
+});
+
+test("CLI reads and patches instance desired state through the shared API", async () => {
+  const stdout = capture();
+  const seen = [];
+  const context = {
+    env: { ORKESTR_DISABLE_CLI_AUTH: "1" },
+    stdout,
+    stderr: capture(),
+    fetchImpl: fakeFetch({
+      "GET /api/instance/config": {
+        ok: true,
+        config: { schemaVersion: 1, generation: 4, metadata: { label: "Demo" } },
+      },
+      "PATCH /api/instance/config": (request) => ({
+        ok: true,
+        config: { schemaVersion: 1, generation: 5, ...request.body.patch },
+      }),
+    }, seen),
+  };
+
+  assert.equal(await runCli(["--api", "http://orkestr.test", "instance", "config", "get", "--json"], context), 0);
+  assert.equal(JSON.parse(stdout.text()).config.generation, 4);
+  assert.equal(await runCli([
+    "--api", "http://orkestr.test", "instance", "config", "patch",
+    "--generation", "4",
+    "--patch", JSON.stringify({ metadata: { label: "Updated" } }),
+    "--json",
+  ], context), 0);
+  assert.deepEqual(seen.at(-1).body, {
+    expectedGeneration: 4,
+    patch: { metadata: { label: "Updated" } },
+  });
+  assert.equal(seen.at(-1).key, "PATCH /api/instance/config");
 });
 
 test("CLI creates a Google Workspace connect link for agents", async () => {

@@ -8,6 +8,7 @@ import { queueNoticeWithoutRuntimeDelivery, runtimeDeliveryMissingAssistantIssue
 import { orphanedWhatsAppFinalAnswerIssues } from "./router-doctor-whatsapp-final-mirror.js";
 import { abortable, throwIfAborted } from "./router-doctor-abort.js";
 import { repairIssue } from "./router-doctor-repairs.js";
+import { hostBoundaryRouterIssues } from "./host-boundary-doctor.js";
 function clean(value = "") {
   return String(value || "").trim();
 }
@@ -428,7 +429,7 @@ export async function doctorWhatsAppRouter(options = {}) {
   }
 
   const routerOutbox = routerTraceId ? await abortable(listRouterOutbox({ routerTraceId }, env), signal) : [];
-  const checks = threadReports.flatMap((report) => report.checks);
+  const checks = [...await hostBoundaryRouterIssues(env), ...threadReports.flatMap((report) => report.checks)];
   const repairs = threadReports.flatMap((report) => report.repairs);
   const errors = checks.filter((item) => item.severity === "error").length;
   const warnings = checks.filter((item) => item.severity === "warn").length;

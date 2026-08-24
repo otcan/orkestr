@@ -8,6 +8,7 @@ function positional(argv) {
     "--idempotency-key",
     "--label",
     "--limit",
+    "--cursor",
     "--local-part",
     "--mailbox",
     "--mailbox-id",
@@ -179,6 +180,15 @@ function mailboxQueryString(argv = []) {
   return params.size ? `?${params.toString()}` : "";
 }
 
+function mailboxInboxQueryString(argv = []) {
+  const params = new URLSearchParams();
+  for (const [flag, key] of [["--thread", "threadId"], ["--thread-id", "threadId"], ["--cursor", "cursor"], ["--limit", "limit"]]) {
+    const value = flagValue(argv, flag);
+    if (value) params.set(key, value);
+  }
+  return params.toString();
+}
+
 function formatMailboxTable(mailboxes = []) {
   if (!mailboxes.length) return "No mailboxes.\n";
   return [
@@ -308,6 +318,16 @@ export async function mailboxesCommand(argv, ctx) {
     else ctx.stdout.write(`${payload.action || "mailbox_ingested"} ${payload.mailbox?.id || ""}\n`);
     return 0;
   }
+  if (subcommand === "messages" || subcommand === "inbox") {
+    const mailboxId = positional(rest)[0] || flagValue(rest, "--mailbox") || flagValue(rest, "--mailbox-id");
+    const threadId = flagValue(rest, "--thread") || flagValue(rest, "--thread-id");
+    if (!mailboxId || !threadId) throw new Error("Usage: orkestr mailboxes messages <mailbox-id> --thread-id <thread-id> [--cursor cursor] [--limit N] [--json]");
+    const query = mailboxInboxQueryString(rest);
+    const payload = await requestJson(`/api/mailboxes/${encodeURIComponent(mailboxId)}/messages?${query}`, ctx);
+    if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+    else ctx.stdout.write(`${(payload.messages || []).map((message) => `${message.receivedAt || "-"}\t${message.from || "-"}\t${message.subject || "-"}\n${message.body || ""}`).join("\n\n")}\n`);
+    return 0;
+  }
   if (subcommand === "relay-audits" || subcommand === "relay-audit") {
     const payload = await requestJson(`/api/mailboxes/relay-audits${mailboxQueryString(rest)}`, ctx);
     if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
@@ -396,5 +416,5 @@ export async function mailboxesCommand(argv, ctx) {
     }
     throw new Error("Usage: orkestr mailboxes routes <list|status|create|move|revoke|retry|cancel|context-discard> --mailbox-id id");
   }
-  throw new Error("Usage: orkestr mailboxes [list|status|create|verify|delete|rotate|ingest|retry|relay-audits|dead-letters|replay|routes] [--json]");
+  throw new Error("Usage: orkestr mailboxes [list|status|create|verify|delete|rotate|ingest|messages|retry|relay-audits|dead-letters|replay|routes] [--json]");
 }

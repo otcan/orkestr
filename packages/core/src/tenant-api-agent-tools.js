@@ -20,6 +20,7 @@ import {
 } from "../../browsers/src/browsers.js";
 import { operateManagedDesktop } from "../../browsers/src/desktop-operator.js";
 import { acquireDesktopLease } from "../../browsers/src/desktop-leases.js";
+import { stoppedDesktopLeaseRecoveryState } from "../../browsers/src/desktop-access-warnings.js";
 import { issueDesktopCapability } from "../../browsers/src/desktop-capability-broker.js";
 import { getGmailMessage, listGmailMessages } from "../../connectors/src/gmail.js";
 import { resolveGoogleWorkspaceConnection } from "../../connectors/src/google-workspace-connections.js";
@@ -517,6 +518,7 @@ function safeLease(lease = null) {
     threadName: clean(lease.threadName || lease.ownerThreadLabel),
     mode: clean(lease.mode),
     stale: lease.stale === true,
+    expired: lease.expired === true,
     stealable: lease.stealable === true,
     acquiredAt: clean(lease.acquiredAt),
     heartbeatAt: clean(lease.heartbeatAt),
@@ -569,6 +571,7 @@ function publicDesktopRecord(session = {}) {
     leaseOwnerLabel: clean(session.leaseOwnerLabel),
     notes: clean(session.notes || session.purpose).slice(0, 1000),
     source: clean(session.source),
+    warnings: Array.isArray(session.warnings) ? session.warnings : [],
   };
 }
 
@@ -684,16 +687,20 @@ async function ensureAgentDesktopLease(slug = "", principal = {}, thread = null,
     error.statusCode = 403;
     throw error;
   }
+  const inventory = await listBrowserSessions(env, { principal, threadId: clean(thread.id), publicProjection: true }).catch(() => null);
+  const desktop = (inventory?.sessions || []).find((session) => clean(session?.slug || session?.id) === clean(slug));
+  const desktopState = stoppedDesktopLeaseRecoveryState(desktop?.status || desktop?.state);
   const acquired = await acquireDesktopLease(slug, {
     threadId: thread.id,
     threadName: clean(thread.title || thread.name || thread.id),
     mode: "exclusive",
     purpose: "tenant_api_agent",
     runId: clean(thread.runtime?.activeTurnId || thread.executor?.codexThreadId || `tenant-api:${thread.id}`),
-  }, env, { principal });
+  }, env, { principal, allowStoppedLeaseRecovery: Boolean(desktopState), desktopState });
   if (!acquired?.ok) {
     const error = new Error(acquired?.error || "desktop_lease_failed");
     error.statusCode = 409;
+    error.desktopAccessWarnings = acquired?.warnings || [];
     throw error;
   }
   return acquired.lease;

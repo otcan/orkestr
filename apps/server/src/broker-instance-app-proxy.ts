@@ -14,6 +14,8 @@ import { clearSessionCookieHeaders, instanceAppSessionCookiePath, securityCookie
 import { listTenantVms } from "../../../packages/core/src/tenant-vm-registry.js";
 import { getUser } from "../../../packages/core/src/users.js";
 import { instanceSetupReturnPath } from "./instance-connect-setup.js";
+import { hostBoundaryUpgradeDenied } from "./host-boundaries.js";
+import { appendSanitizedForwardedHeaders, rawUpgradeHeaderAllowed } from "./upgrade-forwarded-headers.js";
 
 type BrokerAppRoute = {
   instanceId: string;
@@ -338,7 +340,7 @@ function encodeBrokerAuthHeader(body: unknown): string {
   return Buffer.from(JSON.stringify(body), "utf8").toString("base64url");
 }
 
-async function brokerProxyAuthHeader(request: any, target: BrokerAppTarget): Promise<string> {
+export async function brokerProxyAuthHeader(request: any, target: BrokerAppTarget): Promise<string> {
   const session = request?.orkestrSecuritySession || {};
   const tenantOwner = await ownerUserForBrokerInstance(target.instanceId);
   const userId = tenantOwner.userId || String(session.userId || "");
@@ -499,13 +501,14 @@ function rawUpgradeHeaders(request: IncomingMessage, target: BrokerAppTarget, br
     if (lowered === "host") {
       sawHost = true;
       lines.push(`Host: ${target.baseUrl.host}`);
-    } else if (["x-forwarded-prefix", "x-orkestr-broker-instance-id", "x-orkestr-broker-auth"].includes(lowered)) {
+    } else if (!rawUpgradeHeaderAllowed(lowered) || ["x-forwarded-prefix", "x-orkestr-broker-instance-id", "x-orkestr-broker-auth"].includes(lowered)) {
       continue;
     } else {
       lines.push(`${name}: ${value}`);
     }
   }
   if (!sawHost) lines.push(`Host: ${target.baseUrl.host}`);
+  appendSanitizedForwardedHeaders(lines, request);
   lines.push(`X-Forwarded-Prefix: ${target.prefixPath.replace(/\/+$/, "")}`);
   lines.push(`X-Orkestr-Broker-Instance-Id: ${target.instanceId}`);
   if (brokerAuth) lines.push(`X-Orkestr-Broker-Auth: ${brokerAuth}`);
@@ -532,6 +535,7 @@ export function registerBrokerInstanceAppProxy(app: INestApplication): void {
 
 export function attachBrokerInstanceAppProxyUpgrade(server: Server): void {
   server.on("upgrade", async (request: IncomingMessage, socket: Duplex, head: Buffer) => {
+    if (hostBoundaryUpgradeDenied(request)) return;
     const route = parseBrokerAppUrl(request.url);
     if (!route) return;
     if (!(await upgradeHasInstanceSession(request, route.instanceId))) {

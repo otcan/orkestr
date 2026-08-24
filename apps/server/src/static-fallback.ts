@@ -5,6 +5,7 @@ import { resolveBrokerConnectInstance } from "../../../packages/core/src/broker-
 import { securityCookieName, verifySecurityToken } from "../../../packages/core/src/security.js";
 import { resolveSharedAppShare } from "../../../packages/core/src/shared-apps.js";
 import { instanceSetupPairingRedirectPath, normalizeInstanceId } from "./instance-connect-setup.js";
+import { maybeHandleInstanceEntry } from "./instance-entry.js";
 import { renderOAuthHomepage } from "./oauth-homepage.js";
 import { publicPairingUrl, publicSiteAllowedForHost, publicSitePath, renderPublicSite, renderPublicSiteCss } from "./public-site.js";
 
@@ -79,14 +80,6 @@ export function registerStaticFallback(app: INestApplication): void {
         .type("text/plain; charset=utf-8")
         .send("User-agent: *\nAllow: /\n");
     }
-    const privatePublicRedirect = await privatePublicPathRedirectUrl(request, url, process.env);
-    if (privatePublicRedirect) {
-      return response
-        .status(302)
-        .header("cache-control", "no-store")
-        .header("location", privatePublicRedirect)
-        .send("Redirecting to Orkestr authentication.");
-    }
     const publicSite = renderPublicSite(url, process.env, { host: requestHostHeader(request) });
     if (publicSite) {
       return response
@@ -95,7 +88,19 @@ export function registerStaticFallback(app: INestApplication): void {
         .type("text/html; charset=utf-8")
         .send(publicSite);
     }
-    return serveStaticPath(url || "/", response);
+    if (["/", "/instance-entry"].includes(publicPath)) {
+      const authenticated = Boolean(request?.orkestrSecuritySession) || await requestHasSecuritySession(request, process.env);
+      if (await maybeHandleInstanceEntry(request, response, url, { authenticated, env: process.env })) return;
+    }
+    const privatePublicRedirect = await privatePublicPathRedirectUrl(request, url, process.env);
+    if (privatePublicRedirect) {
+      return response
+        .status(302)
+        .header("cache-control", "no-store")
+        .header("location", privatePublicRedirect)
+        .send("Redirecting to Orkestr authentication.");
+    }
+    return serveStaticPath(url || "/", response, String(request.orkestrCanonicalPrefix || ""));
   });
 }
 
@@ -355,9 +360,9 @@ function serveDesktopSharePage(response: any) {
       return true;
     }
     function showDesktop(desktopUrl) {
-      if (desktopFrame.getAttribute('src') !== desktopUrl) desktopFrame.setAttribute('src', desktopUrl);
-      main.hidden = true;
-      viewer.hidden = false;
+      const target = new URL(desktopUrl, location.origin);
+      if (target.origin !== location.origin) throw new Error('desktop_share_origin_mismatch');
+      location.replace(target.href);
     }
     function lifecycleTime(value) {
       if (!value) return 'unknown';
@@ -450,7 +455,13 @@ async function servePublicAsset(requestUrl: string, response: any) {
   }
 }
 
-async function serveStaticPath(requestUrl: string, response: any) {
+function rewriteStaticBase(body: Buffer, prefixPath = ""): Buffer | string {
+  if (!prefixPath) return body;
+  const base = prefixPath.endsWith("/") ? prefixPath : `${prefixPath}/`;
+  return body.toString("utf8").replace(/<base\s+href=(["'])\/\1\s*\/?>/i, `<base href="${base}" />`);
+}
+
+async function serveStaticPath(requestUrl: string, response: any, prefixPath = "") {
   const url = new URL(requestUrl, "http://localhost");
   const requested = decodeURIComponent(url.pathname === "/" ? "/index.html" : url.pathname);
   const assetPath = requested === "/favicon.ico" ? "/favicon.svg" : requested;
@@ -465,7 +476,7 @@ async function serveStaticPath(requestUrl: string, response: any) {
       .status(200)
       .header("cache-control", "no-store")
       .type(mimeTypes.get(ext) || "application/octet-stream")
-      .send(body);
+      .send(ext === ".html" ? rewriteStaticBase(body, prefixPath) : body);
   } catch {
     try {
       const body = await fs.readFile(path.join(publicDir, "index.html"));
@@ -473,7 +484,7 @@ async function serveStaticPath(requestUrl: string, response: any) {
         .status(200)
         .header("cache-control", "no-store")
         .type("text/html; charset=utf-8")
-        .send(body);
+        .send(rewriteStaticBase(body, prefixPath));
     } catch {
       return response
         .status(503)

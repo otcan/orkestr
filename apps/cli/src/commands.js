@@ -54,6 +54,7 @@ export async function runCli(argv = process.argv.slice(2), context = {}) {
     if (command === "list") return await list(args, ctx);
     if (command === "status") return await statusCommand(args, ctx);
     if (command === "version") return await versionCommand(args, ctx);
+    if (command === "instance" && ["config", "status"].includes(args[0])) return await instanceConfigCommand(args, ctx);
     if (command === "instances" || command === "instance") return await releaseInstancesCommand(args, ctx);
     if (command === "whereiam" || command === "whereami") return await whereiamCommand(args, ctx);
     if (command === "settings") return await settingsCommand(args, ctx);
@@ -586,6 +587,41 @@ async function settingsCommand(argv, ctx) {
   if (json) ctx.stdout.write(`${JSON.stringify({ settings }, null, 2)}\n`);
   else ctx.stdout.write(`${formatSettings(settings)}\n`);
   return 0;
+}
+
+async function instanceConfigCommand(argv, ctx) {
+  const group = positional(argv)[0] || "config";
+  const action = positional(argv)[1] || (group === "status" ? "status" : "get");
+  const json = argv.includes("--json");
+  if (group === "status" || action === "status") {
+    const payload = await requestJson("/api/instance/status", ctx);
+    ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+    return payload?.status?.state === "Degraded" ? 1 : 0;
+  }
+  if (group !== "config") throw new Error("Usage: orkestr instance config [get|status|patch] [--json]");
+  if (action === "get") {
+    const payload = await requestJson("/api/instance/config", ctx);
+    if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+    else ctx.stdout.write(`${JSON.stringify(payload?.config || {}, null, 2)}\n`);
+    return 0;
+  }
+  if (action !== "patch") throw new Error("Usage: orkestr instance config [get|status|patch] [--json]");
+  const generation = Number(flagValue(argv, "--generation"));
+  if (!Number.isInteger(generation) || generation < 0) {
+    throw new Error("orkestr instance config patch requires --generation <current-generation>");
+  }
+  const inline = flagValue(argv, "--patch");
+  const raw = inline || await readStdin(ctx.stdin);
+  if (!raw) throw new Error("orkestr instance config patch requires --patch '<json>' or JSON on stdin");
+  let patch;
+  try { patch = JSON.parse(raw); } catch { throw new Error("instance_config_patch_json_invalid"); }
+  const payload = await requestJson("/api/instance/config", {
+    ...ctx,
+    method: "PATCH",
+    body: { expectedGeneration: generation, patch },
+  });
+  ctx.stdout.write(`${JSON.stringify(json ? payload : payload?.config || {}, null, 2)}\n`);
+  return payload?.ok === false ? 1 : 0;
 }
 
 async function doctorCommand(argv, ctx) {
@@ -2054,6 +2090,7 @@ function writeUsage(stream) {
   orkestr status [--json]
   orkestr version [--json]
   orkestr instances [--probe] [--json]
+  orkestr instance config [get|status|patch] [--generation N] [--patch json] [--json]
   orkestr service [status|start|stop|restart|logs] [--service orkestr] [--lines 100] [--no-follow]
   orkestr start|stop|restart
   orkestr update
@@ -2093,7 +2130,7 @@ Advanced:
   orkestr whatsapp bind-thread <thread> --name <group name> [--wa-participant jid]... [--json]
   orkestr timers [list|doctor|run <timer-id>] [--json]
   orkestr jobs run [--owner-user-id user] [--target-thread thread] [--max-results N] [--signal-mode record_only|notify_passively] [--json]
-  orkestr mailboxes [list|status|create|verify|delete|rotate|ingest|retry|relay-audits|dead-letters|replay] [--json]
+  orkestr mailboxes [list|status|create|verify|delete|rotate|ingest|messages|retry|relay-audits|dead-letters|replay] [--json]
   orkestr connect approve <code> [--json]
   orkestr security [challenges|sessions|approve <challenge-id>|reject <challenge-id>|revoke <session-id|all>] [--json]
   orkestr desktop [share [slug]|approve <challenge-id>] [--json]
@@ -2249,6 +2286,7 @@ function positional(argv) {
     "--command",
     "--cwd",
     "--executor",
+    "--generation",
     "--domain",
     "--email",
     "--href",
@@ -2316,6 +2354,7 @@ function positional(argv) {
     "--admin-participant",
     "--wa-participant",
     "--participant",
+    "--patch",
     "--wa-title",
     "--outbound-account",
     "--inbound-account",

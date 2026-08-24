@@ -18,6 +18,9 @@ export function dataPaths(env = process.env) {
     oauth: path.join(home, "oauth"),
     secrets: path.join(home, "secrets"),
     config: path.join(home, "config.json"),
+    instanceIdentity: env.ORKESTR_INSTANCE_IDENTITY_FILE || path.join(home, "instance-identity.json"),
+    canonicalPublicRefLock: env.ORKESTR_CANONICAL_PUBLIC_REF_LOCK || path.join(home, "canonical-public-refs"),
+    instances: env.ORKESTR_INSTANCE_STATE_ROOT || path.join(home, "instances"),
     runtimeSettings: env.ORKESTR_RUNTIME_SETTINGS_FILE || path.join(home, "runtime-settings.json"),
     agents: path.join(home, "agents.json"),
     waitlist: path.join(home, "waitlist.json"),
@@ -53,6 +56,7 @@ export function dataPaths(env = process.env) {
     brokerInstancesDb: env.ORKESTR_BROKER_INSTANCES_DB || path.join(home, "broker-instances.sqlite"),
     brokerChannel: env.ORKESTR_BROKER_CHANNEL_FILE || path.join(home, "secrets", "broker-channel.json"),
     brokerClientIdentity: env.ORKESTR_BROKER_CLIENT_IDENTITY_FILE || path.join(home, "secrets", "broker-client-identity.json"),
+    brokerRegistrationIntent: env.ORKESTR_BROKER_REGISTRATION_INTENT_FILE || path.join(home, "secrets", "broker-registration-intent.json"),
     brokerClientRegistration: env.ORKESTR_BROKER_CLIENT_REGISTRATION_FILE || path.join(home, "secrets", "broker-client-registration.json"),
     releaseInstances: env.ORKESTR_RELEASE_INSTANCES_FILE || path.join(home, "release-instances.json"),
     releaseWhatsAppNotifications: path.join(home, "release-whatsapp-notifications.json"),
@@ -83,6 +87,7 @@ export async function ensureDataDirs(env = process.env) {
   const paths = dataPaths(env);
   await fs.mkdir(paths.home, { recursive: true });
   await fs.mkdir(paths.userDataRoot, { recursive: true });
+  await fs.mkdir(paths.instances, { recursive: true, mode: 0o700 });
   await fs.mkdir(paths.browsers, { recursive: true });
   await fs.mkdir(paths.files, { recursive: true });
   await fs.mkdir(paths.messages, { recursive: true });

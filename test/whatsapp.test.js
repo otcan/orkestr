@@ -1544,6 +1544,47 @@ test("local whatsapp send continues when chat ops probe is unavailable", async (
   }
 });
 
+test("local whatsapp text send forwards mentions to the WhatsApp client", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-mentions-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "responder",
+    ORKESTR_WHATSAPP_SEND_CONFIRMATION_REQUIRED: "0",
+  };
+  const calls = [];
+  const runtime = {
+    client: {
+      async getContactLidAndPhone(ids) {
+        assert.deepEqual(ids, ["66378837028965@lid"]);
+        return [{ lid: "66378837028965@lid", pn: "905339208177@c.us" }];
+      },
+      async sendMessage(chatId, text, options) {
+        calls.push({ chatId, text, options });
+        return { id: { _serialized: "mention-delivered" } };
+      },
+    },
+  };
+
+  try {
+    setLocalWhatsAppRuntimeForTest("responder", runtime, {}, env);
+    const result = await sendLocalWhatsAppMessage({
+      accountId: "responder",
+      chatId: "mentions@g.us",
+      text: "{{mention:0}} New order",
+      mentions: ["66378837028965@lid"],
+      env,
+    });
+    assert.deepEqual(calls, [{
+      chatId: "mentions@g.us",
+      text: "@905339208177 New order",
+      options: { mentions: ["905339208177@c.us"] },
+    }]);
+    assert.deepEqual(result.mentions, ["905339208177@c.us"]);
+  } finally {
+    await resetLocalWhatsAppBridgeForTest(env);
+  }
+});
+
 test("local whatsapp active status chat ops probe does not dereference arbitrary chats by default", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-chatops-list-only-"));
   const env = {
@@ -2326,6 +2367,59 @@ test("dedicated whatsapp worker accepts durable MCP retry queue without a failur
     assert.deepEqual(sent, []);
     const events = await listEvents(env);
     assert.equal(events.some((event) => event.type === "whatsapp_local_inbound_forward_queued"), true);
+    assert.equal(events.some((event) => event.type === "whatsapp_local_inbound_failure_notice_delivered"), false);
+  } finally {
+    globalThis.fetch = originalFetch;
+    await resetLocalWhatsAppBridgeForTest(env);
+  }
+});
+
+test("dedicated whatsapp worker does not reply to an unregistered chat", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-worker-unregistered-"));
+  const chatId = "491700000099@c.us";
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "sender",
+    ORKESTR_WHATSAPP_SEND_CONFIRMATION_REQUIRED: "0",
+    ORKESTR_WA_WORKER_SOCKET: "/run/orkestr-wa/sender.sock",
+    ORKESTR_WA_WORKER_EVENT_SINK_URL: "http://127.0.0.1:18914/internal/whatsapp/inbound",
+    ORKESTR_WA_WORKER_EVENT_TOKEN: "worker-event-token",
+  };
+  const sent = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => response({
+    ok: false,
+    error: "whatsapp_target_required",
+    routingFailure: {
+      code: "whatsapp_target_required",
+      capability: "whatsapp",
+      userFacingCategory: "routing",
+      safeMessage: "This WhatsApp chat is not connected to a thread.",
+    },
+  }, false, 400);
+
+  try {
+    const result = await handleInboundMessage("sender", {
+      id: { _serialized: `false_${chatId}_worker-unregistered-1`, remote: chatId },
+      fromMe: false,
+      from: chatId,
+      body: "hello",
+      timestamp: 1_780_000_000,
+    }, env, {
+      client: {
+        async sendMessage(to, body) {
+          sent.push({ to, body });
+          return { id: { _serialized: `true_${chatId}_unexpected-notice` } };
+        },
+      },
+    });
+
+    assert.equal(result.error, "whatsapp_target_required");
+    assert.equal(result.routingFailure.code, "whatsapp_target_required");
+    assert.equal(result.noticeSent, false);
+    assert.equal(result.noticeReason, "routing_failure_not_user_notifiable");
+    assert.deepEqual(sent, []);
+    const events = await listEvents(env);
     assert.equal(events.some((event) => event.type === "whatsapp_local_inbound_failure_notice_delivered"), false);
   } finally {
     globalThis.fetch = originalFetch;

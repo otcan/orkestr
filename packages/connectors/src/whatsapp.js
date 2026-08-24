@@ -98,6 +98,7 @@ import {
 } from "./whatsapp-remote-runtime.js";
 import { resolveWhatsAppBinding } from "./whatsapp-account-bindings.js";
 import { materializeRemoteWhatsAppAttachments } from "./whatsapp-remote-artifacts.js";
+import { whatsappWorkerHealth } from "./whatsapp-worker-client.js";
 import {
   boundThreadWhatsAppAssistantOrigin,
   completePassiveMirrorParent,
@@ -743,6 +744,21 @@ export function mapLocalWhatsAppStatusFromHealth(health) {
   };
 }
 
+function dedicatedWhatsAppWorkerConfigured(env = process.env) {
+  return Boolean(pickString(env.ORKESTR_WA_WORKER_SOCKET, env.ORKESTR_WA_WORKER_URL));
+}
+
+function mapDedicatedWhatsAppWorkerStatus(health = {}, bridgeUrl = "") {
+  const mapped = mapLocalWhatsAppStatusFromHealth(health);
+  return {
+    ...mapped,
+    ok: health.ok !== false,
+    mode: "worker",
+    bridgeUrl: bridgeUrl || localWhatsAppBridgeBasePath,
+    summary: String(mapped.summary || "").replace(/^Built-in WhatsApp bridge/, "WhatsApp worker"),
+  };
+}
+
 async function getLocalStatus(env, options = {}) {
   const diagnostic = options.probeChatOps === true || options.deep === true || options.read === true || options.force === true;
   const health = await getLocalWhatsAppBridgeStatus(env, diagnostic ? options : { ...options, probeChatOps: false });
@@ -752,6 +768,13 @@ async function getLocalStatus(env, options = {}) {
 export async function getWhatsAppStatus(env = process.env, fetchImpl = fetch, options = {}) {
   const config = await readConnectorConfig("whatsapp", env);
   const bridgeUrl = configuredBridgeUrl(config, env);
+  if (dedicatedWhatsAppWorkerConfigured(env) && options.preferWorker !== false) {
+    const workerHealthFn = typeof options.workerHealthFn === "function" ? options.workerHealthFn : whatsappWorkerHealth;
+    const workerHealth = await Promise.resolve(workerHealthFn(env)).catch(() => null);
+    if (workerHealth?.ok !== false && workerHealth) {
+      return mapDedicatedWhatsAppWorkerStatus(workerHealth, bridgeUrl);
+    }
+  }
   if (!bridgeUrl) {
     if (bridgeMode(config, env) === "local") return getLocalStatus(env, options);
     return {
@@ -5747,9 +5770,9 @@ async function listThreadMessageSets(env, state = null, config = {}, options = {
 }
 
 /**
- * @param {{ chatId?: string, text?: string, accountId?: string, attachments?: Array<Record<string, unknown>>, crossAccountEchoSuppression?: boolean, routeSentMessage?: boolean, config?: Record<string, unknown> | null, env?: Record<string, string | undefined>, fetchImpl?: typeof fetch }} [options]
+ * @param {{ chatId?: string, text?: string, accountId?: string, mentions?: string[], attachments?: Array<Record<string, unknown>>, crossAccountEchoSuppression?: boolean, routeSentMessage?: boolean, config?: Record<string, unknown> | null, env?: Record<string, string | undefined>, fetchImpl?: typeof fetch }} [options]
  */
-export async function sendWhatsAppText({ chatId = "", text = "", accountId = "", attachments = [], crossAccountEchoSuppression = true, routeSentMessage = false, config = null, env = process.env, fetchImpl = fetch } = {}) {
+export async function sendWhatsAppText({ chatId = "", text = "", accountId = "", mentions = [], attachments = [], crossAccountEchoSuppression = true, routeSentMessage = false, config = null, env = process.env, fetchImpl = fetch } = {}) {
   const resolvedConfig = config || await readConnectorConfig("whatsapp", env).catch(() => ({}));
   const bridgeUrl = configuredBridgeUrl(resolvedConfig, env);
   const normalizedAttachments = Array.isArray(attachments)
@@ -5768,6 +5791,7 @@ export async function sendWhatsAppText({ chatId = "", text = "", accountId = "",
       chatId,
       text: appendLocalAttachmentFailureNotes(text, safeSkipped),
       accountId,
+      mentions,
       attachments: localAttachments.attachments,
       env,
       crossAccountEchoSuppression,
@@ -5792,6 +5816,7 @@ export async function sendWhatsAppText({ chatId = "", text = "", accountId = "",
     body: JSON.stringify({
       to: chatId,
       text: outboundText,
+      ...(Array.isArray(mentions) && mentions.length ? { mentions } : {}),
       ...(runtimeAccountId ? { accountId: runtimeAccountId } : {}),
       ...(sendablePathAttachments.length ? { paths: sendablePathAttachments.map((attachment) => attachment.path) } : {}),
       ...(sendableInlineAttachments.length ? { attachments: sendableInlineAttachments } : {}),

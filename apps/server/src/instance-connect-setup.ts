@@ -1,5 +1,7 @@
+import { parseInstancePublicRef } from "../../../packages/core/src/canonical-public-references.js";
+
 const setupSections = new Set(["system", "security", "secrets", "maintenance", "codex", "gmail", "outlook", "whatsapp", "browsers"]);
-const appRouteRoots = new Set(["connectors", "desk", "files", "ops", "skills", "thread", "timers"]);
+const appRouteRoots = new Set(["connectors", "desktops", "files", "ops", "skills", "thread", "timers"]);
 const connectorAuthIntentSections = new Set(["gmail"]);
 
 export function normalizeInstanceId(value = ""): string {
@@ -50,7 +52,7 @@ function connectorAppPath(instanceId: string, connector: string, search = ""): s
 function setupSectionAppPath(instanceId: string, section = "", search = ""): string {
   const normalizedSection = normalizeSetupSection(section);
   if (["gmail", "outlook", "whatsapp"].includes(normalizedSection)) return connectorAppPath(instanceId, normalizedSection, search);
-  if (normalizedSection === "browsers") return `${tenantAppPath(instanceId, "desk")}${searchWithoutCompact(search)}`;
+  if (normalizedSection === "browsers") return `${tenantAppPath(instanceId, "desktops")}${searchWithoutCompact(search)}`;
   if (["security", "secrets", "maintenance"].includes(normalizedSection)) return `${tenantAppPath(instanceId, "ops/settings")}${searchWithoutCompact(search)}`;
   if (normalizedSection === "system") return `${tenantAppPath(instanceId, "ops")}${searchWithoutCompact(search)}`;
   return `${tenantAppPath(instanceId)}${searchWithoutCompact(search)}`;
@@ -82,9 +84,19 @@ function normalizeScopedAppReturn(instanceId: string, path: string, search = "")
 function normalizeUnscopedAppReturn(instanceId: string, path: string, search = ""): string {
   const parts = path.split("/").filter(Boolean);
   const root = String(parts[0] || "");
+  if (root === "instance" && parts[1]) {
+    try {
+      parseInstancePublicRef(parts[1]);
+      return `${path}${search}`;
+    } catch {
+      return "";
+    }
+  }
   if (root === "setup") return setupSectionAppPath(instanceId, parts[1] || "", search);
   if (root === "onboarding" || (root === "ng" && parts[1] === "onboarding")) return tenantAppPath(instanceId);
   if (root === "connectors" && connectorAuthIntentSections.has(normalizeSetupSection(parts[1] || ""))) return connectorAppPath(instanceId, parts[1] || "", search);
+  if (root === "desk" || (root === "ng" && parts[1] === "desk")) return `${tenantAppPath(instanceId, "desktops")}${search}`;
+  if (root === "jobs" || (root === "ng" && parts[1] === "jobs")) return `${tenantAppPath(instanceId, "settings")}${search}`;
   if (appRouteRoots.has(root)) return `${tenantAppPath(instanceId, parts.join("/"))}${search}`;
   if (root === "ng" && parts[1] === "connectors" && connectorAuthIntentSections.has(normalizeSetupSection(parts[2] || ""))) return connectorAppPath(instanceId, parts[2] || "", search);
   if (root === "ng" && appRouteRoots.has(String(parts[1] || ""))) return `${tenantAppPath(instanceId, parts.slice(1).join("/"))}${search}`;
