@@ -214,6 +214,12 @@ enforced for every requesting thread, so a mismatched pair fails closed. The
 resource ID must come from the private instance policy; do not publish real
 thread or account bindings. Malformed non-empty configuration fails closed.
 
+LinkedIn outreach adds a stricter route contract on top of desktop grants: the
+thread, LinkedIn desktop/account, outreach workspace, and exact oXRM endpoint
+must come from one reviewed private binding. See
+[LinkedIn Outreach Scope](linkedin-outreach-scope.md) for the public-safe plan,
+status, audit, detached-worker, recovery, and requeue contract.
+
 ### Brokered Desktop Capabilities
 
 In desktop `enforce` mode, including a scoped enforced binding, normal API and agent inventory projections redact

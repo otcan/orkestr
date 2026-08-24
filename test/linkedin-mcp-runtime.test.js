@@ -2,6 +2,37 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { executeLinkedInMcpPlan, parseLinkedInRuntimeArgs } from "../packages/core/src/linkedin-mcp-runtime.js";
 
+const outreachBinding = Object.freeze({
+  bindingId: "binding-example-a",
+  threadId: "thread-linkedin-a",
+  desktopSlug: "linkedin-a",
+  outreachWorkspaceId: "workspace-example-a",
+  linkedinAccountAlias: "account-example-a",
+  oxrmEndpointId: "oxrm-example-a",
+  oxrmEndpoint: "https://oxrm-a.example.invalid/mcp",
+});
+
+function scopedPlan({ runId = "run-demo", calls = [] } = {}) {
+  return {
+    contractVersion: "linkedin.mcp.v1",
+    runId,
+    threadId: outreachBinding.threadId,
+    desktopSlug: outreachBinding.desktopSlug,
+    bindingId: outreachBinding.bindingId,
+    outreachWorkspaceId: outreachBinding.outreachWorkspaceId,
+    linkedinAccountAlias: outreachBinding.linkedinAccountAlias,
+    calls,
+  };
+}
+
+function scopedOptions(options = {}) {
+  return {
+    outreachBindings: [outreachBinding],
+    appendEventFn: async () => {},
+    ...options,
+  };
+}
+
 function fakeLinkedInModule() {
   return {
     createLinkedInRuntimeHandlers({ desktop }) {
@@ -49,9 +80,7 @@ function fakeLinkedInModule() {
 test("LinkedIn MCP runtime acquires a desktop lease and executes read/prepare calls", async () => {
   const calls = [];
   const result = await executeLinkedInMcpPlan(
-    {
-      contractVersion: "linkedin.mcp.v1",
-      runId: "run-demo",
+    scopedPlan({
       calls: [
         { tool: "linkedin.inspect_limits", input: { account: "demo" } },
         {
@@ -59,11 +88,9 @@ test("LinkedIn MCP runtime acquires a desktop lease and executes read/prepare ca
           input: { candidates: [{ candidateId: "candidate-1" }], templates: {} },
         },
       ],
-    },
-    {
+    }),
+    scopedOptions({
       linkedinModule: fakeLinkedInModule(),
-      desktopSlug: "linkedin",
-      threadId: "thread-linkedin",
       acquireDesktopLeaseFn: async (slug, payload) => {
         calls.push(["acquire", slug, payload.threadId]);
         return { ok: true, lease: { desktopSlug: slug, threadId: payload.threadId } };
@@ -81,18 +108,21 @@ test("LinkedIn MCP runtime acquires a desktop lease and executes read/prepare ca
         desktop: { slug: "linkedin" },
         page: { title: "LinkedIn", url: "https://www.linkedin.com/", bodyText: "LinkedIn home" },
       }),
-    },
+      issueDesktopCapabilityFn: async () => ({ capability: "capability-example" }),
+    }),
   );
 
   assert.equal(result.ok, true);
   assert.equal(result.results.length, 2);
   assert.deepEqual(calls.map((call) => call[0]), ["acquire", "heartbeat", "release"]);
+  assert.equal(result.outreachScope.outreachWorkspaceId, outreachBinding.outreachWorkspaceId);
+  assert.equal(result.outreachScope.oxrmEndpointId, outreachBinding.oxrmEndpointId);
+  assert.equal(JSON.stringify(result).includes(outreachBinding.oxrmEndpoint), false);
 });
 
 test("LinkedIn MCP runtime fails write calls closed without verified evidence", async () => {
   const result = await executeLinkedInMcpPlan(
-    {
-      contractVersion: "linkedin.mcp.v1",
+    scopedPlan({
       runId: "run-write",
       calls: [
         {
@@ -100,8 +130,8 @@ test("LinkedIn MCP runtime fails write calls closed without verified evidence", 
           input: { approvals: [{ candidateId: "candidate-1", approved: true }] },
         },
       ],
-    },
-    {
+    }),
+    scopedOptions({
       linkedinModule: fakeLinkedInModule(),
       acquireLease: false,
       desktopAdapter: {
@@ -116,7 +146,7 @@ test("LinkedIn MCP runtime fails write calls closed without verified evidence", 
           };
         },
       },
-    },
+    }),
   );
 
   assert.equal(result.ok, false);
@@ -125,8 +155,7 @@ test("LinkedIn MCP runtime fails write calls closed without verified evidence", 
 
 test("LinkedIn MCP runtime can accept preverified visible-send evidence explicitly", async () => {
   const result = await executeLinkedInMcpPlan(
-    {
-      contractVersion: "linkedin.mcp.v1",
+    scopedPlan({
       runId: "run-preverified",
       calls: [
         {
@@ -134,12 +163,12 @@ test("LinkedIn MCP runtime can accept preverified visible-send evidence explicit
           input: { approvals: [{ candidateId: "candidate-1", approved: true, verifiedSend: true }] },
         },
       ],
-    },
-    {
+    }),
+    scopedOptions({
       linkedinModule: fakeLinkedInModule(),
       acquireLease: false,
       acceptPreverifiedWrites: true,
-    },
+    }),
   );
 
   assert.equal(result.ok, true);
@@ -147,8 +176,9 @@ test("LinkedIn MCP runtime can accept preverified visible-send evidence explicit
 });
 
 test("LinkedIn MCP runtime argument parser keeps safe defaults", () => {
-  const options = parseLinkedInRuntimeArgs(["--plan", "plan.json", "--desktop", "linkedin", "--continue-on-blocker"], {});
+  const options = parseLinkedInRuntimeArgs(["--plan", "plan.json", "--bindings", "bindings.json", "--desktop", "linkedin", "--continue-on-blocker"], {});
   assert.equal(options.planPath, "plan.json");
+  assert.equal(options.outreachBindingsFile, "bindings.json");
   assert.equal(options.desktopSlug, "linkedin");
   assert.equal(options.stopOnBlocker, false);
   assert.equal(options.releaseLease, true);
