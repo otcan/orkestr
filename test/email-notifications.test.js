@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { sendEmail, waitlistNotificationConfig } from "../packages/core/src/email-notifications.js";
+import { workflowLeadNotificationConfig } from "../packages/core/src/workflow-lead-notifications.js";
 
 test("waitlist notifications can use Outlook SMTP environment aliases", () => {
   const config = waitlistNotificationConfig({
@@ -12,6 +13,24 @@ test("waitlist notifications can use Outlook SMTP environment aliases", () => {
   assert.equal(config.configured, true);
   assert.deepEqual(config.recipients, ["admin@example.test"]);
   assert.equal(config.from, "notifications@example.test");
+});
+
+test("workflow pilot notifications prefer a dedicated recipient and fall back to waitlist routing", () => {
+  const dedicated = workflowLeadNotificationConfig({
+    ORKESTR_WORKFLOW_PILOT_NOTIFY_EMAIL: "pilot@example.test",
+    ORKESTR_WAITLIST_NOTIFY_EMAIL: "beta@example.test",
+    ORKESTR_SMTP_HOST: "smtp.example.test",
+    ORKESTR_SMTP_FROM: "notifications@example.test",
+  });
+  const fallback = workflowLeadNotificationConfig({
+    ORKESTR_WAITLIST_NOTIFY_EMAIL: "beta@example.test",
+    ORKESTR_SMTP_HOST: "smtp.example.test",
+    ORKESTR_SMTP_FROM: "notifications@example.test",
+  });
+  assert.deepEqual(dedicated.recipients, ["pilot@example.test"]);
+  assert.deepEqual(fallback.recipients, ["beta@example.test"]);
+  assert.equal(dedicated.configured, true);
+  assert.equal(fallback.configured, true);
 });
 
 test("waitlist notifications prefer generic SMTP settings over Outlook aliases", () => {

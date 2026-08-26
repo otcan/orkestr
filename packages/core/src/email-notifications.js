@@ -7,7 +7,7 @@ import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 
-function clean(value = "") {
+export function clean(value = "") {
   return String(value || "").trim();
 }
 
@@ -31,21 +31,21 @@ function envBoolValue(env = process.env, names = [], fallback = false) {
   return fallback;
 }
 
-function splitEmailList(value = "") {
+export function splitEmailList(value = "") {
   return String(value || "")
     .split(/[,\s]+/)
     .map((item) => clean(item))
     .filter(Boolean);
 }
 
-function mailProvider(env = process.env) {
+export function mailProvider(env = process.env) {
   const explicit = envValue(env, ["ORKESTR_MAIL_PROVIDER", "ORKESTR_EMAIL_PROVIDER"]).toLowerCase();
   if (explicit) return explicit;
   if (graphEmailConfigured(env)) return "graph";
   return "smtp";
 }
 
-function smtpEmailConfig(env = process.env) {
+export function smtpEmailConfig(env = process.env) {
   const secure = envBoolValue(env, ["ORKESTR_SMTP_SECURE", "ORKESTR_OUTLOOK_SMTP_SECURE", "OUTLOOK_SMTP_SECURE"], false);
   const user = envValue(env, ["ORKESTR_SMTP_USER", "ORKESTR_OUTLOOK_SMTP_USER", "OUTLOOK_SMTP_USER"]);
   const from = envValue(env, ["ORKESTR_SMTP_FROM", "ORKESTR_OUTLOOK_SMTP_FROM", "OUTLOOK_SMTP_FROM", "ORKESTR_MAIL_FROM"]) || user;
@@ -82,7 +82,7 @@ function smtpEmailConfig(env = process.env) {
   };
 }
 
-function graphEmailConfigured(env = process.env) {
+export function graphEmailConfigured(env = process.env) {
   return Boolean(
     envValue(env, [
       "ORKESTR_GRAPH_MAIL_ACCESS_TOKEN",
@@ -95,7 +95,7 @@ function graphEmailConfigured(env = process.env) {
   );
 }
 
-function graphEmailConfig(env = process.env) {
+export function graphEmailConfig(env = process.env) {
   const smtp = smtpEmailConfig(env);
   const endpoint = envValue(env, ["ORKESTR_GRAPH_MAIL_ENDPOINT", "ORKESTR_OUTLOOK_GRAPH_ENDPOINT"]) || "https://graph.microsoft.com/v1.0";
   const user = envValue(env, ["ORKESTR_GRAPH_MAIL_USER", "ORKESTR_OUTLOOK_GRAPH_USER", "OUTLOOK_GRAPH_USER"]) || "me";
