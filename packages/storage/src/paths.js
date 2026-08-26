@@ -24,6 +24,7 @@ export function dataPaths(env = process.env) {
     runtimeSettings: env.ORKESTR_RUNTIME_SETTINGS_FILE || path.join(home, "runtime-settings.json"),
     agents: path.join(home, "agents.json"),
     waitlist: path.join(home, "waitlist.json"),
+    workflowLeads: env.ORKESTR_WORKFLOW_LEADS_FILE || path.join(home, "workflow-leads.json"),
     users: path.join(home, "users.json"),
     tenantVms: path.join(home, "tenant-vms.json"),
     tenantSlices: path.join(home, "tenant-slices.json"),

@@ -6,8 +6,8 @@ import { securityCookieName, verifySecurityToken } from "../../../packages/core/
 import { resolveSharedAppShare } from "../../../packages/core/src/shared-apps.js";
 import { instanceSetupPairingRedirectPath, normalizeInstanceId } from "./instance-connect-setup.js";
 import { maybeHandleInstanceEntry } from "./instance-entry.js";
-import { renderOAuthHomepage } from "./oauth-homepage.js";
-import { publicPairingUrl, publicSiteAllowedForHost, publicSitePath, renderPublicSite, renderPublicSiteCss } from "./public-site.js";
+import { publicPairingUrl, publicSiteAllowedForHost, publicSitePath } from "./public-site.js";
+import { maybeServePublicSite } from "./public-site-static.js";
 
 const publicDir = path.resolve(process.cwd(), "dist/web/browser");
 const publicAssetDir = path.resolve(process.cwd(), "docs/assets");
@@ -59,35 +59,7 @@ export function registerStaticFallback(app: INestApplication): void {
       return servePublicAsset(url, response);
     }
     const publicPath = new URL(url || "/", "http://localhost").pathname;
-    if (publicPath === "/about" && publicSiteAllowedForHost(requestHostHeader(request), process.env)) {
-      return response
-        .status(200)
-        .header("cache-control", "no-store")
-        .type("text/html; charset=utf-8")
-        .send(renderOAuthHomepage(process.env));
-    }
-    if (publicPath === "/public-site.css" && publicSiteAllowedForHost(requestHostHeader(request), process.env)) {
-      return response
-        .status(200)
-        .header("cache-control", "public, max-age=300")
-        .type("text/css; charset=utf-8")
-        .send(renderPublicSiteCss());
-    }
-    if (publicPath === "/robots.txt" && publicSiteAllowedForHost(requestHostHeader(request), process.env)) {
-      return response
-        .status(200)
-        .header("cache-control", "public, max-age=300")
-        .type("text/plain; charset=utf-8")
-        .send("User-agent: *\nAllow: /\n");
-    }
-    const publicSite = renderPublicSite(url, process.env, { host: requestHostHeader(request) });
-    if (publicSite) {
-      return response
-        .status(200)
-        .header("cache-control", "no-store")
-        .type("text/html; charset=utf-8")
-        .send(publicSite);
-    }
+    if (maybeServePublicSite(request, response, url, process.env)) return;
     if (["/", "/instance-entry"].includes(publicPath)) {
       const authenticated = Boolean(request?.orkestrSecuritySession) || await requestHasSecuritySession(request, process.env);
       if (await maybeHandleInstanceEntry(request, response, url, { authenticated, env: process.env })) return;

@@ -72,28 +72,25 @@ function assertAngularShell(html) {
 }
 
 function assertPublicShell(html) {
-  assert.match(html, /<title>Orkestr<\/title>/);
-  assert.match(html, /<h1>Orkestr<\/h1>/);
-  assert.match(html, /Invite-only private beta/);
-  assert.match(html, /Orkestr is an invite-only assistant application/);
-  assert.match(html, /Purpose of the Orkestr app:/);
+  assert.match(html, /<title>AI Operations Layer \| Orkestr<\/title>/);
+  assert.match(html, /AI operations,/);
+  assert.match(html, /under human control/);
+  assert.match(html, /managed private deployment/);
   assert.match(html, /name="application-name" content="Orkestr"/);
   assert.match(html, /property="og:site_name" content="Orkestr"/);
+  assert.match(html, /name="twitter:card" content="summary_large_image"/);
   assert.match(html, /rel="stylesheet" href="\/public-site\.css"/);
   assert.doesNotMatch(html, /<style>/);
-  assert.match(html, /Gmail access is optional and user approved/);
-  assert.match(html, /current public integration requests Gmail send access/);
-  assert.match(html, /cannot read the user's inbox or existing email/);
-  assert.match(html, /No Google user data used for advertising or model training/);
-  assert.match(html, /Join waitlist/);
-  assert.match(html, /id="waitlist-form"/);
-  assert.match(html, /\/api\/public\/waitlist/);
-  assert.match(html, /name="timezone"/);
-  assert.match(html, /resolvedOptions\(\)\.timeZone/);
-  assert.match(html, /View OSS repo/);
+  assert.match(html, /Map one workflow/);
+  assert.match(html, /SYNTHETIC CONSOLE WALKTHROUGH/);
+  assert.match(html, /Approval required/);
+  assert.match(html, /data-event="map_workflow_hero"/);
+  assert.match(html, /\/api\/public\/events/);
+  assert.doesNotMatch(html, /id="waitlist-form"/);
+  assert.doesNotMatch(html, /Join waitlist/);
   assert.match(html, /href="\/privacy"/);
   assert.match(html, /href="\/terms"/);
-  assert.doesNotMatch(html, />Open app</);
+  assert.match(html, />Sign in</);
   assert.doesNotMatch(html, /<ork-root(?:\s|>)/);
 }
 
@@ -153,6 +150,15 @@ test("server serves the public site at root and Angular UI at app routes", async
     const dataDeletionResponse = await fetch(`http://127.0.0.1:${port}/data-deletion`);
     const supportResponse = await fetch(`http://127.0.0.1:${port}/support`);
     const betaResponse = await fetch(`http://127.0.0.1:${port}/beta`);
+    const betaHtml = await betaResponse.text();
+    const securityResponse = await fetch(`http://127.0.0.1:${port}/security`);
+    const securityHtml = await securityResponse.text();
+    const deploymentResponse = await fetch(`http://127.0.0.1:${port}/deployment`);
+    const developersResponse = await fetch(`http://127.0.0.1:${port}/developers`);
+    const useCasesResponse = await fetch(`http://127.0.0.1:${port}/use-cases`);
+    const workflowResponse = await fetch(`http://127.0.0.1:${port}/workflow`);
+    const workflowHtml = await workflowResponse.text();
+    const waitlistRedirect = await fetch(`http://127.0.0.1:${port}/waitlist`, { redirect: "manual" });
     const publicAssetResponse = await fetch(`http://127.0.0.1:${port}/public-assets/orkestr-three-screen-demo.png`);
     const publicCssResponse = await fetch(`http://127.0.0.1:${port}/public-site.css`);
     const publicCss = await publicCssResponse.text();
@@ -187,7 +193,7 @@ test("server serves the public site at root and Angular UI at app routes", async
     assert.equal(appResponse.status, 200);
     assertAngularShell(appHtml);
     assert.equal(termsResponse.status, 200);
-    assert.match(termsHtml, /Only connect accounts you own or are authorized to use/);
+    assert.match(termsHtml, /Only connect accounts and systems you own or are authorized to use/);
     assert.equal(privacyResponse.status, 200);
     assert.match(privacyHtml, /Google user data Orkestr accesses/);
     assert.match(privacyHtml, /id="google-data-sharing"/);
@@ -209,7 +215,8 @@ test("server serves the public site at root and Angular UI at app routes", async
     const expandedHomeHtml = await (await fetch(`http://127.0.0.1:${port}/`)).text();
     const expandedPrivacyHtml = await (await fetch(`http://127.0.0.1:${port}/privacy`)).text();
     const expandedAboutHtml = await (await fetch(`http://127.0.0.1:${port}/about`)).text();
-    assert.match(expandedHomeHtml, /read selected Gmail signals/);
+    assert.match(expandedHomeHtml, /AI operations,/);
+    assert.doesNotMatch(expandedHomeHtml, /read selected Gmail signals/);
     assert.match(expandedPrivacyHtml, /gmail\.readonly/);
     assert.match(expandedPrivacyHtml, /calendar\.events\.owned/);
     assert.match(expandedPrivacyHtml, /Notification rules default to bounded message metadata and snippets/);
@@ -220,6 +227,20 @@ test("server serves the public site at root and Angular UI at app routes", async
     assert.equal(dataDeletionResponse.status, 200);
     assert.equal(supportResponse.status, 200);
     assert.equal(betaResponse.status, 200);
+    assert.match(betaHtml, /Start a private Orkestr workspace/);
+    assert.match(betaHtml, /id="waitlist-form"/);
+    assert.match(betaHtml, /\/api\/public\/waitlist/);
+    assert.equal(securityResponse.status, 200);
+    assert.match(securityHtml, /Control starts with the deployment boundary/);
+    assert.match(securityHtml, /does not claim security certification/);
+    assert.equal(deploymentResponse.status, 200);
+    assert.equal(developersResponse.status, 200);
+    assert.equal(useCasesResponse.status, 200);
+    assert.equal(workflowResponse.status, 200);
+    assert.match(workflowHtml, /id="workflow-form"/);
+    assert.match(workflowHtml, /\/api\/public\/workflow-leads/);
+    assert.equal(waitlistRedirect.status, 302);
+    assert.equal(waitlistRedirect.headers.get("location"), "/beta#waitlist");
     assert.equal(publicAssetResponse.status, 200);
     assert.match(publicAssetResponse.headers.get("content-type") || "", /image\/png/);
     assert.equal(publicCssResponse.status, 200);
@@ -1213,10 +1234,10 @@ test("server keeps public pages on the configured public site host only", async 
     );
     assert.equal(privateThreadResponse.status, 200);
     assertAngularShell(privateThreadHtml);
-    assert.doesNotMatch(privateThreadHtml, /Invite-only private beta/);
+    assert.doesNotMatch(privateThreadHtml, /AI operations,/);
     assert.equal(pairedPrivateRootResponse.status, 200);
     assertAngularShell(pairedPrivateRootHtml);
-    assert.doesNotMatch(pairedPrivateRootHtml, /Invite-only private beta/);
+    assert.doesNotMatch(pairedPrivateRootHtml, /AI operations,/);
 
     process.env.ORKESTR_PUBLIC_APP_URL = "https://orkestr.example.test";
     const overlappingHostResponse = await fetch(`http://127.0.0.1:${port}/`, {

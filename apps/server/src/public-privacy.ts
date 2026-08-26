@@ -11,7 +11,7 @@ type PrivacyPage = {
   body: string;
 };
 
-export const publicPrivacyPolicyVersion = googleWorkspacePrivacyPolicyVersion;
+export const publicPrivacyPolicyVersion = `${googleWorkspacePrivacyPolicyVersion}-commercial-20260826`;
 
 function clean(value = "") {
   return String(value || "").trim();
@@ -28,7 +28,7 @@ function escapeHtml(value = "") {
 function operatorDetails(env = process.env) {
   const name = clean(env.ORKESTR_PUBLIC_OPERATOR_NAME || "Orkestr");
   const address = clean(env.ORKESTR_PUBLIC_OPERATOR_ADDRESS);
-  const contact = clean(env.ORKESTR_PUBLIC_CONTACT || env.ORKESTR_SUPPORT_EMAIL || "Ask the person who invited you.");
+  const contact = clean(env.ORKESTR_PUBLIC_CONTACT || env.ORKESTR_SUPPORT_EMAIL || "Contact the operator of this deployment.");
   return { name, address, contact };
 }
 
@@ -83,12 +83,12 @@ export function publicPrivacyPage(env = process.env): PrivacyPage {
     title: "Privacy",
     heading: "Privacy",
     summary: "How Orkestr accesses, uses, stores, protects, and shares personal information and Google user data.",
-    body: `<main class="legal-page privacy-policy">
+    body: `<main class="legal-page privacy-policy" id="main-content">
   <section class="legal-hero">
     <p class="eyebrow">Data handling</p>
     <h1>Privacy Policy</h1>
     <p class="lead">This policy explains how Orkestr accesses, uses, stores, protects, and shares personal information, including data connected through Google Workspace.</p>
-    <p class="policy-meta">Version ${publicPrivacyPolicyVersion} · Effective July 31, 2026</p>
+    <p class="policy-meta">Version ${publicPrivacyPolicyVersion} · Effective August 26, 2026</p>
   </section>
   <section class="legal-content">
     <article id="scope">
@@ -99,6 +99,8 @@ export function publicPrivacyPage(env = process.env): PrivacyPage {
     <article id="data-we-process">
       <h2>2. Information Orkestr processes</h2>
       <p>Orkestr processes information needed to provide user-requested workflows: account and contact details, chat messages, files, task outputs, timers, workspace records, connector status, managed-browser activity, security records, and technical service logs. Orkestr does not ask users to provide account passwords through chat.</p>
+      <p>Workflow Pilot inquiries are stored separately from personal-beta waitlist records. They include the contact name, work email, company and role, the submitted workflow description, frequency and volume, systems, owner, approvals and exceptions, current cost or delay, success criteria, consent, qualification result, and notification status.</p>
+      <p>The public site records a limited set of first-party interaction events such as page path, CTA name, form start, validation outcome, and submission outcome. These analytics events do not contain form field values, workflow descriptions, credentials, or cross-site tracking identifiers.</p>
     </article>
     <article id="google-data-access">
       <h2>3. Google user data Orkestr accesses</h2>
@@ -133,6 +135,7 @@ export function publicPrivacyPage(env = process.env): PrivacyPage {
       <h2>6. Storage and retention</h2>
       <p>Google OAuth credentials are stored in the connected user's isolated connector storage and retained until the user disconnects the account, the grant is revoked, the account is deleted, or the credentials expire and are no longer needed. A disconnect requests revocation from Google before deleting the local credential record.</p>
       <p>${storageDescription} Connection requests are one-time and expire. Encrypted credential records may remain temporarily in protected operational backups until those backups rotate.</p>
+      <p>Workflow Pilot submissions are retained in the private deployment only for qualification, follow-up, security, and recordkeeping, and are deleted on a valid request unless a minimal record must be retained for dispute handling, abuse prevention, or law. The operator should configure and document a deployment-specific retention period before production collection.</p>
     </article>
     <article id="google-data-protection">
       <h2>7. Data protection mechanisms</h2>
@@ -154,10 +157,11 @@ export function publicPrivacyPage(env = process.env): PrivacyPage {
       <h2>9. User controls, revocation, and deletion</h2>
       <p>Users can decline Google access and continue using Orkestr without Gmail. A connected account can be disconnected from Orkestr setup, which revokes the Google grant and removes locally stored credentials. Users can also revoke Orkestr from their Google Account permissions page.</p>
       <p>Users may request access, correction, export, restriction, or deletion of their Orkestr data through the invitation chat, the <a href="/data-deletion">data deletion page</a>, or ${contactHtml(operator.contact)}. Some minimal records may be retained where required for security, abuse prevention, dispute handling, or law.</p>
+      <p>Workflow Pilot contacts may use the same contact to withdraw consent or request deletion of their commercial lead record. Withdrawing a commercial inquiry does not affect a separate personal-beta account.</p>
     </article>
     <article id="legal-bases">
       <h2>10. Legal bases and international processing</h2>
-      <p>Depending on the context, Orkestr processes data to provide the service requested by the user, based on the user's consent for optional connectors, for legitimate security and reliability interests, and to meet legal obligations. Providers may process data in countries outside the user's country; Orkestr relies on the provider's applicable contractual and legal transfer safeguards.</p>
+      <p>Depending on the context, Orkestr processes data to provide the service requested by the user, to assess and respond to a Workflow Pilot inquiry based on the contact's consent, for legitimate security and reliability interests, and to meet legal obligations. Providers may process data in countries outside the user's country; Orkestr relies on the provider's applicable contractual and legal transfer safeguards.</p>
     </article>
     <article id="policy-changes">
       <h2>11. Changes and contact</h2>
