@@ -5,7 +5,7 @@ export function workflowIntakePage(): PublicPage {
     id: "workflow",
     title: "Workflow Pilot",
     summary: "Map one repeated workflow for an Orkestr managed private pilot, including volume, systems, ownership, approvals, measurable pain, and success criteria.",
-    body: `<main id="main-content"> 
+    body: `<main id="main-content">
       <section class="page-hero workflow-hero"><p class="section-index">ORKESTR WORKFLOW PILOT</p><h1>Map one workflow.</h1><p class="lead">Tell us where repeated work crosses systems, who owns the outcome, where approval belongs, and what improvement would make a pilot worthwhile.</p><div class="qualification-strip"><span>Repeated volume</span><span>Named owner</span><span>System crossing</span><span>Measurable pain</span></div></section>
       <section class="workflow-intake" aria-labelledby="intake-title">
         <div class="intake-context"><p class="section-index">QUALIFICATION BEFORE SCHEDULING</p><h2 id="intake-title">A bounded map is more useful than a generic demo call.</h2><p>We review the workflow first. If it has a viable pilot boundary and scheduling is configured, the confirmation step offers a scheduling handoff.</p><h3>What happens next</h3><ol><li>We check whether the work is repeated and measurable.</li><li>We identify the systems, owner, approval, and exception boundary.</li><li>We respond with fit, open questions, and a pilot-mapping next step.</li></ol><p class="legal-note">Do not include passwords, credentials, personal records, customer data, or confidential document contents. A submission is an inquiry, not a purchase commitment.</p></div>
