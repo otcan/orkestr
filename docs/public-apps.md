@@ -32,10 +32,14 @@ unauthorized app slugs use the same `404` response after sign-in.
 
 ## Access model
 
-Apps are default-deny. An operator creates an app with opaque `tenantRef` and
-`targetRef` values, then grants a Keycloak subject, group, or role the app role
-`viewer`, `editor`, or `admin`. App roles apply only inside that app; they do
-not grant Orkestr control-plane administrator access.
+Apps are default-deny. The registry starts empty: signing in grants no app
+access. An operator must first create each separate application boundary with
+one of the explicit types `orkestr-ui`, `desktop`, or `oxrm`, bind it to opaque
+`tenantRef` and `targetRef` values, and then grant a Keycloak subject, group,
+or role the app role `viewer`, `editor`, or `admin`. A grant to one app type
+does not imply access to another app, desktop, oXRM target, Orkestr thread, or
+control-plane API. App roles apply only inside that app; they do not grant
+Orkestr control-plane administrator access.
 
 The user-facing APIs are:
 
@@ -61,8 +65,11 @@ Google credentials, magic-link authenticator binaries/configuration, DNS,
 reverse-proxy vhosts, or oXRM target mappings. Apply those through the private
 release process after the OSS gateway and tests are released.
 
-The private oXRM adapter is also responsible for mapping an opaque `targetRef`
-to its isolated oXRM deployment and for enforcing the app role on each oXRM
-operation. It must obtain that binding from the server-side app resolution,
-not from an environment value exposed to the browser. Do not add an arbitrary
-URL proxy or a target-map JSON value to this public repository.
+Each private app adapter is responsible for mapping its opaque `targetRef` to
+its isolated deployment and for enforcing the app role on every operation.
+That includes a separate protected adapter for the Orkestr UI and for each
+managed desktop surface; neither may turn a launcher grant into raw API,
+thread, desktop-control, or endpoint access. An oXRM adapter must obtain its
+binding from the server-side app resolution, not from an environment value
+exposed to the browser. Do not add an arbitrary URL proxy or a target-map JSON
+value to this public repository.

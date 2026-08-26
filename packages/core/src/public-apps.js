@@ -6,7 +6,10 @@ import { withStorageFileLock } from "../../storage/src/storage-lock.js";
 import { isAdminPrincipal } from "./policy.js";
 import { publicUrlConfig } from "./public-url-config.js";
 
-const appTypes = new Set(["oxrm"]);
+// A stable launcher is an application boundary, not a generic redirect. Keep
+// each supported surface explicit so a grant to the Orkestr UI cannot be
+// mistaken for a desktop or oXRM grant (and vice versa).
+const appTypes = new Set(["orkestr-ui", "desktop", "oxrm"]);
 const appStatuses = new Set(["active", "disabled"]);
 const grantKinds = new Set(["subject", "group", "role"]);
 const appRoles = new Set(["viewer", "editor", "admin"]);

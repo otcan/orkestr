@@ -133,6 +133,44 @@ test("public app target and tenant values reject URL-shaped caller input", async
   );
 });
 
+test("public app classes keep Orkestr UI, desktop, and oXRM grants distinct", async (t) => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-public-app-types-"));
+  const prior = saveEnv(["ORKESTR_HOME"]);
+  process.env.ORKESTR_HOME = home;
+  t.after(async () => {
+    restoreEnv(prior);
+    await fs.rm(home, { recursive: true, force: true });
+  });
+
+  const admin = adminPrincipal({ id: "operator" });
+  const [ui, desktop, oxrm] = await Promise.all([
+    createPublicApp({ slug: "workbench", type: "orkestr-ui", tenantRef: "tenant-ui", targetRef: "ui-target" }, { principal: admin }),
+    createPublicApp({ slug: "research-desktop", type: "desktop", tenantRef: "tenant-desktop", targetRef: "desktop-target" }, { principal: admin }),
+    createPublicApp({ slug: "crm", type: "oxrm", tenantRef: "tenant-crm", targetRef: "crm-target" }, { principal: admin }),
+  ]);
+  for (const app of [ui, desktop, oxrm]) {
+    await createPublicAppGrant(app.app.id, {
+      kind: "subject",
+      value: "person-1",
+      role: "viewer",
+    }, { principal: admin });
+  }
+
+  const listed = await listPublicAppsForSession({
+    principal: userPrincipal({ id: "person" }),
+    session: { oidcSubject: "person-1" },
+  });
+  assert.deepEqual(listed.apps.map((app) => [app.slug, app.type]).sort(), [
+    ["crm", "oxrm"],
+    ["research-desktop", "desktop"],
+    ["workbench", "orkestr-ui"],
+  ]);
+  await assert.rejects(
+    createPublicApp({ slug: "unknown", type: "anything", tenantRef: "tenant", targetRef: "target" }, { principal: admin }),
+    /public_app_type_unsupported/,
+  );
+});
+
 test("public app registry serializes concurrent create and grant mutations", async (t) => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-public-apps-race-"));
   const prior = saveEnv(["ORKESTR_HOME"]);
