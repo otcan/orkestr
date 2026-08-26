@@ -68,8 +68,11 @@ export function publicAuthStatus(env = process.env) {
   );
   const passwordless = envBool(env, "ORKESTR_AUTH_PASSWORDLESS", true);
   const requireEmailFactor = envBool(env, "ORKESTR_AUTH_REQUIRE_EMAIL_FACTOR", true);
-  const requirePhoneFactor = envBool(env, "ORKESTR_AUTH_REQUIRE_PHONE_FACTOR", true);
+  // Phone verification is a per-client policy. Employee-facing Keycloak apps
+  // default to verified email (or a verified Google identity), not phone.
+  const requirePhoneFactor = envBool(env, "ORKESTR_AUTH_REQUIRE_PHONE_FACTOR", false);
   const keycloakConfigured = provider === "keycloak" && Boolean(issuer && clientId);
+  const keycloakOidcEnabled = keycloakConfigured && envBool(env, "ORKESTR_KEYCLOAK_OIDC_ENABLED", false) && Boolean(urls.appUrl);
   const outlookConfigured = Boolean(outlookUser || outlookFrom);
   const effectiveMailProvider = mailProvider || (graphConfigured ? "graph" : "outlook");
 
@@ -85,7 +88,7 @@ export function publicAuthStatus(env = process.env) {
       passwordless,
       emailRequired: true,
       emailUnique: true,
-      phoneRequired: true,
+      phoneRequired: requirePhoneFactor,
       phoneUnique: false,
       requiredFactors: [
         ...(requireEmailFactor ? ["email"] : []),
@@ -96,9 +99,10 @@ export function publicAuthStatus(env = process.env) {
       issuer,
       realm,
       clientId,
+      oidcEnabled: keycloakOidcEnabled,
       accountUrl,
       adminUrl,
-      requiredActions: ["verify email", "verify phone"],
+      requiredActions: ["verify email", ...(requirePhoneFactor ? ["verify phone"] : [])],
     },
     mail: {
       provider: effectiveMailProvider === "graph" ? "graph" : "outlook",

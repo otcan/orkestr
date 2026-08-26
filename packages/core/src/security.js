@@ -3,6 +3,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { dataPaths, ensureDataDirs } from "../../storage/src/paths.js";
 import { appendEvent, readJson, writeSecretJson } from "../../storage/src/store.js";
+import { withStorageFileLock } from "../../storage/src/storage-lock.js";
 import { authorizeDesktopShareHttpRequest } from "./desktop-shares.js";
 import { decryptBrokerClientPayload } from "./broker-instance-registry.js";
 import { adminPrincipal, principalFromSecuritySession, userPrincipal } from "./principal.js";
@@ -13,9 +14,11 @@ import { readWhatsAppScopedTokenRecords } from "./whatsapp-scoped-tokens.js";
 
 const execFileAsync = promisify(execFile);
 const cookieName = "orkestr_session";
+const oidcCookieName = "__Host-orkestr_app_session";
 const challengeTtlMs = 10 * 60 * 1000;
 const challengeAuditTtlMs = 24 * 60 * 60 * 1000;
 const sessionTtlMs = 90 * 24 * 60 * 60 * 1000;
+const oidcRevocationTtlMs = sessionTtlMs;
 const defaultJobsJdCacheSources = ["gmail", "freelance_de", "9am"];
 const commandStatusCache = new Map();
 const pairAttemptCache = new Map();
@@ -140,11 +143,12 @@ function approvalInstructions(env = process.env) {
 }
 
 async function readSecurityConfig(env = process.env) {
-  const config = await readJson(secretPath(env), { enabled: false, sessions: [], challenges: [] });
+  const config = await readJson(secretPath(env), { enabled: false, sessions: [], challenges: [], oidcRevocations: [] });
   return {
     enabled: config.enabled === true,
     sessions: Array.isArray(config.sessions) ? config.sessions : [],
     challenges: Array.isArray(config.challenges) ? config.challenges : [],
+    oidcRevocations: Array.isArray(config.oidcRevocations) ? config.oidcRevocations : [],
   };
 }
 
@@ -157,10 +161,24 @@ async function writeSecurityConfig(config, env = process.env) {
     challenges: (config.challenges || [])
       .map((challenge) => normalizeChallenge(challenge, now))
       .filter((challenge) => keepChallengeInAuditLog(challenge, now)),
+    oidcRevocations: (config.oidcRevocations || []).filter((revocation) => Date.parse(revocation.expiresAt || "") > now),
     updatedAt: nowIso(),
   };
   await writeSecretJson(secretPath(env), next);
   return next;
+}
+
+async function mutateOidcSecurityConfig(env = process.env, operation) {
+  return withStorageFileLock(secretPath(env), async () => {
+    const config = await readSecurityConfig(env);
+    const result = await operation(config);
+    await writeSecurityConfig(config, env);
+    return result;
+  }, {
+    timeoutMs: Number(env.ORKESTR_OIDC_SECURITY_LOCK_TIMEOUT_MS || 30_000),
+    staleMs: Number(env.ORKESTR_OIDC_SECURITY_LOCK_STALE_MS || 120_000),
+    heartbeatMs: Number(env.ORKESTR_OIDC_SECURITY_LOCK_HEARTBEAT_MS || 10_000),
+  });
 }
 
 function keepChallengeInAuditLog(challenge, now = Date.now()) {
@@ -222,6 +240,7 @@ function publicSession(session = {}) {
     appSlug: session.appSlug || "",
     allowedActions: Array.isArray(session.allowedActions) ? session.allowedActions : [],
     authIntent: normalizeAuthIntent(session.authIntent),
+    authProvider: session.authProvider || "browser_pairing",
     expiresAt: session.expiresAt || "",
   };
 }
@@ -1145,6 +1164,10 @@ export function securityCookieName() {
   return cookieName;
 }
 
+export function oidcSecurityCookieName() {
+  return oidcCookieName;
+}
+
 export async function securityStatus(env = process.env) {
   const config = await readSecurityConfig(env);
   const urls = publicUrlConfig(env);
@@ -1380,6 +1403,35 @@ export async function revokeAllSecuritySessions({ env = process.env, revokedBy =
   return { ok: true, revoked };
 }
 
+export async function revokeOidcSecuritySessions({ subject = "", sid = "", env = process.env } = {}) {
+  const oidcSubject = String(subject || "").trim();
+  const oidcSid = String(sid || "").trim();
+  if (!oidcSubject && !oidcSid) throw challengeError("oidc_logout_identity_required", 400);
+  const revoked = await mutateOidcSecurityConfig(env, async (config) => {
+    const revokedAt = nowIso();
+    const revocation = {
+      sidHash: oidcSid ? sha256(oidcSid) : "",
+      subjectHash: oidcSubject ? sha256(oidcSubject) : "",
+      revokedAt,
+      expiresAt: new Date(Date.now() + oidcRevocationTtlMs).toISOString(),
+    };
+    const existing = (config.oidcRevocations || []).some((item) =>
+      item.sidHash === revocation.sidHash && item.subjectHash === revocation.subjectHash,
+    );
+    if (!existing) config.oidcRevocations.push(revocation);
+    const sessions = (config.sessions || []).filter((session) => {
+      if (session.authProvider !== "oidc") return false;
+      if (oidcSid) return String(session.oidcSid || "") === oidcSid;
+      return String(session.oidcSubject || "") === oidcSubject;
+    });
+    const ids = new Set(sessions.map((session) => session.id));
+    config.sessions = (config.sessions || []).filter((session) => !ids.has(session.id));
+    return sessions;
+  });
+  await appendEvent({ type: "security_oidc_sessions_revoked", count: revoked.length, authProvider: "oidc" }, env).catch(() => {});
+  return { ok: true, revoked: revoked.map((session) => session.id) };
+}
+
 export async function setSecurityPairingEnabled(enabled, { env = process.env, updatedBy = "cli" } = {}) {
   const config = await readSecurityConfig(env);
   const nextEnabled = enabled === true;
@@ -1581,6 +1633,91 @@ export async function pairBrowser({ challengeId, userAgent = "", ip = "", env = 
     session: publicSession(session),
     redirectPath: sameOriginRedirectPath(challenge.requestedPath || ""),
   };
+}
+
+function oidcSessionUserId(subject = "") {
+  return `oidc-${sha256(subject).slice(0, 40)}`;
+}
+
+function oidcClaimList(value = []) {
+  const raw = Array.isArray(value) ? value : [];
+  return [...new Set(raw
+    .map((item) => String(item || "").trim())
+    .filter((item) => item && item.length <= 200 && !/[\r\n\0]/.test(item)))].sort();
+}
+
+function oidcIdentityRevoked(config = {}, subject = "", sid = "", issuedAt = "") {
+  const subjectHash = sha256(subject);
+  const sidHash = sid ? sha256(sid) : "";
+  const issuedAtMs = Date.parse(issuedAt || "");
+  return (config.oidcRevocations || []).some((item) => {
+    if (sidHash && item.sidHash === sidHash) return true;
+    const revokedAtMs = Date.parse(item.revokedAt || "");
+    return Boolean(item.subjectHash) && item.subjectHash === subjectHash &&
+      Number.isFinite(issuedAtMs) && Number.isFinite(revokedAtMs) && issuedAtMs <= revokedAtMs;
+  });
+}
+
+// OIDC identities are verified by the OIDC module before reaching this helper.
+// We store only the durable subject and authorization claims required to
+// re-check local app grants; the browser never receives these fields.
+export async function createOidcSecuritySession({
+  subject = "",
+  sid = "",
+  displayName = "",
+  groups = [],
+  roles = [],
+  issuedAt = "",
+  userAgent = "",
+  ip = "",
+  env = process.env,
+} = {}) {
+  const oidcSubject = String(subject || "").trim();
+  if (!oidcSubject || oidcSubject.length > 320 || /[\r\n\0]/.test(oidcSubject)) {
+    throw challengeError("oidc_subject_required", 401);
+  }
+  const oidcSid = String(sid || "").trim().slice(0, 320);
+  const oidcIssuedAt = String(issuedAt || "").trim();
+  if (!Number.isFinite(Date.parse(oidcIssuedAt))) throw challengeError("oidc_issued_at_required", 401);
+  const token = randomToken(32);
+  const createdAt = nowIso();
+  const session = {
+    id: randomToken(10),
+    challengeId: "",
+    instanceId: "",
+    tokenHash: sha256(token),
+    userId: oidcSessionUserId(oidcSubject),
+    role: "user",
+    displayName: String(displayName || "").trim().slice(0, 160),
+    userAgent: String(userAgent || "").slice(0, 240),
+    createdAt,
+    lastAccessedAt: createdAt,
+    lastIp: String(ip || "").slice(0, 80),
+    shareId: "",
+    appSlug: "",
+    allowedActions: [],
+    authIntent: null,
+    authProvider: "oidc",
+    oidcSubject,
+    oidcSid,
+    oidcGroups: oidcClaimList(groups),
+    oidcRoles: oidcClaimList(roles),
+    expiresAt: new Date(Date.now() + sessionTtlMs).toISOString(),
+  };
+  await mutateOidcSecurityConfig(env, async (config) => {
+    if (oidcIdentityRevoked(config, oidcSubject, oidcSid, oidcIssuedAt)) {
+      throw challengeError("oidc_session_revoked", 401);
+    }
+    config.enabled = true;
+    config.sessions.push(session);
+  });
+  await appendEvent({
+    type: "security_oidc_session_created",
+    sessionId: session.id,
+    userId: session.userId,
+    authProvider: "oidc",
+  }, env).catch(() => {});
+  return { ok: true, token, session: publicSession(session) };
 }
 
 export async function deriveInstanceSecuritySession({
@@ -1851,7 +1988,11 @@ function newestSessionCandidate(candidates = []) {
 }
 
 async function securitySessionForRequest(request, env = process.env) {
-  const tokens = [...new Set(cookieValues(request?.headers?.cookie || ""))];
+  const cookieHeader = request?.headers?.cookie || "";
+  const tokens = [...new Set([
+    ...cookieValues(cookieHeader, oidcCookieName),
+    ...cookieValues(cookieHeader, cookieName),
+  ])];
   if (!tokens.length) return null;
   const route = sharedAppRequestRoute(request);
   const brokerRoute = brokerAppRequestRoute(request);
@@ -2045,12 +2186,14 @@ function cookieDomainMatchesHost(cookieDomain = "", host = "") {
 
 export function sessionCookieHeader(token, env = process.env, options = {}) {
   const urls = publicUrlConfig(env);
-  const cookieDomain = cookieDomainMatchesHost(urls.cookieDomain, options.requestHost) ? urls.cookieDomain : "";
-  const secure = String(env.ORKESTR_COOKIE_SECURE || "").trim() === "1" ||
+  const hostOnly = options.hostOnly === true;
+  const cookieDomain = !hostOnly && cookieDomainMatchesHost(urls.cookieDomain, options.requestHost) ? urls.cookieDomain : "";
+  const secure = hostOnly || String(env.ORKESTR_COOKIE_SECURE || "").trim() === "1" ||
     Boolean(String(urls.appUrl || env.ORKESTR_PUBLIC_HTTPS_URL || "").startsWith("https://"));
-  const cookiePath = normalizeCookiePath(options.path || "/");
+  const cookiePath = hostOnly ? "/" : normalizeCookiePath(options.path || "/");
+  const name = options.name === oidcCookieName ? oidcCookieName : cookieName;
   return [
-    `${cookieName}=${encodeURIComponent(token)}`,
+    `${name}=${encodeURIComponent(token)}`,
     `Path=${cookiePath}`,
     cookieDomain ? `Domain=${cookieDomain}` : "",
     "HttpOnly",
@@ -2078,8 +2221,9 @@ export function canonicalInstanceAppSessionCookiePath(instancePublicRef = "") {
 
 export function clearSessionCookieHeaders(env = process.env, options = {}) {
   const urls = publicUrlConfig(env);
-  const cookieDomain = cookieDomainMatchesHost(urls.cookieDomain, options.requestHost) ? urls.cookieDomain : "";
-  const secure = String(env.ORKESTR_COOKIE_SECURE || "").trim() === "1" ||
+  const hostOnly = options.hostOnly === true;
+  const cookieDomain = !hostOnly && cookieDomainMatchesHost(urls.cookieDomain, options.requestHost) ? urls.cookieDomain : "";
+  const secure = hostOnly || String(env.ORKESTR_COOKIE_SECURE || "").trim() === "1" ||
     Boolean(String(urls.appUrl || env.ORKESTR_PUBLIC_HTTPS_URL || "").startsWith("https://"));
   const paths = [
     "/",
@@ -2087,12 +2231,13 @@ export function clearSessionCookieHeaders(env = process.env, options = {}) {
     ...(Array.isArray(options.paths) ? options.paths.map(normalizeCookiePath) : []),
   ].filter(Boolean);
   const uniquePaths = [...new Set(paths)];
-  const domains = cookieDomain ? ["", cookieDomain] : [""];
+  const domains = hostOnly ? [""] : cookieDomain ? ["", cookieDomain] : [""];
+  const name = options.name === oidcCookieName ? oidcCookieName : cookieName;
   const headers = [];
   for (const path of uniquePaths) {
     for (const domain of domains) {
       headers.push([
-        `${cookieName}=`,
+        `${name}=`,
         `Path=${path}`,
         domain ? `Domain=${domain}` : "",
         "HttpOnly",

@@ -2028,6 +2028,24 @@ export interface CreditUsageResponse {
   usage: CreditUsageSummary;
 }
 
+/** Public projection of an app granted to the current OIDC user. */
+export interface PublicAppCard {
+  id: string;
+  slug: string;
+  type: "oxrm";
+  status: "active" | "disabled";
+  title: string;
+  description: string;
+  icon: string;
+  path: string;
+  url?: string;
+  role: "viewer" | "editor" | "admin";
+}
+
+export interface PublicAppsResponse {
+  apps: PublicAppCard[];
+}
+
 export interface AdminCreditUsageResponse {
   generatedAt?: string;
   tenants: CreditUsageSummary[];
@@ -3101,5 +3119,13 @@ export class ApiService {
       this.api(`/shared-apps/i/${encodeURIComponent(instanceId)}/a/${encodeURIComponent(appSlug)}/s/${encodeURIComponent(shareToken)}/actions/${encodeURIComponent(action)}`),
       body,
     );
+  }
+
+  myPublicApps(): Observable<PublicAppsResponse> {
+    return this.http.get<PublicAppsResponse>(this.api("/me/apps"));
+  }
+
+  publicApp(slug: string): Observable<{ ok: boolean; app: PublicAppCard }> {
+    return this.http.get<{ ok: boolean; app: PublicAppCard }>(this.api(`/apps/${encodeURIComponent(slug)}`));
   }
 }

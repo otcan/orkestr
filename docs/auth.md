@@ -6,9 +6,11 @@ local Orkestr home directory.
 
 ## User Model
 
-- Email is the unique login identifier.
-- Phone number is required for login, but it is not unique. Shared family or
-  company numbers are allowed.
+- Keycloak subject (`sub`) is the durable login identity. Verified email
+  establishes onboarding eligibility; it is not used as an immutable principal
+  or copied into the Orkestr app session.
+- Phone verification is optional and configured per Keycloak client. It is not
+  required for the employee-facing app launcher by default.
 - Orkestr does not store passwords.
 - Orkestr stores local roles, status, limits, and contact fields in
   `users.json`.
@@ -18,15 +20,22 @@ local Orkestr home directory.
 
 ## Keycloak Policy
 
-Configure Keycloak for passwordless login with both verification factors:
+Configure Keycloak for verified-email login. The employee-facing app launcher
+accepts either a passwordless email flow or the Google identity provider:
 
 - email verification
-- phone verification
+- Google identity broker (optional)
+
+Email magic-link login is an authenticator choice in Keycloak, not an Orkestr
+mailbox flow. Pin and review the chosen Keycloak authenticator in the private
+deployment. If a client needs phone verification, enable
+`ORKESTR_AUTH_REQUIRE_PHONE_FACTOR=1` for that deployment/client policy.
 
 The public OSS app exposes the desired policy through `/api/setup/status`:
 
 - `auth.provider`
 - `auth.keycloak`
+- `auth.keycloak.oidcEnabled`
 - `auth.login`
 - `auth.mail`
 - `auth.storage`
@@ -35,18 +44,28 @@ Use environment variables to point Orkestr at the external identity provider:
 
 ```env
 ORKESTR_AUTH_PROVIDER=keycloak
-ORKESTR_KEYCLOAK_ISSUER=https://keycloak.example.com/realms/orkestr
+ORKESTR_KEYCLOAK_ISSUER=https://keycloak.example.test/realms/orkestr
 ORKESTR_KEYCLOAK_CLIENT_ID=orkestr
+ORKESTR_KEYCLOAK_OIDC_ENABLED=1
+ORKESTR_PUBLIC_APPS=1
 ```
 
 Or use URL plus realm:
 
 ```env
 ORKESTR_AUTH_PROVIDER=keycloak
-ORKESTR_KEYCLOAK_URL=https://keycloak.example.com
+ORKESTR_KEYCLOAK_URL=https://keycloak.example.test
 ORKESTR_KEYCLOAK_REALM=orkestr
 ORKESTR_KEYCLOAK_CLIENT_ID=orkestr
+ORKESTR_KEYCLOAK_OIDC_ENABLED=1
+ORKESTR_PUBLIC_APPS=1
 ```
+
+When OIDC is enabled, Orkestr uses Authorization Code + PKCE at
+`/auth/login` and `/auth/callback`. The callback must be an exact registered
+Keycloak redirect URI on the public app origin, for example
+`https://app.example.test/auth/callback`. The OIDC app session uses a host-only
+`__Host-` cookie; it is intentionally separate from browser-pairing cookies.
 
 ## Outlook Mail
 
