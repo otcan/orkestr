@@ -31,5 +31,10 @@ NODE
 )
 
 if [ "${#server_build_deps[@]}" -gt 0 ]; then
-  npm install --omit=dev --no-save --package-lock=false --ignore-scripts --no-audit --no-fund "${server_build_deps[@]}"
+  npm install --include=dev --no-save --package-lock=false --ignore-scripts --no-audit --no-fund "${server_build_deps[@]}"
+fi
+
+if [ ! -x node_modules/.bin/tsc ]; then
+  echo "Runtime dependency install did not provide the TypeScript compiler required by build:server." >&2
+  exit 1
 fi
