@@ -124,9 +124,11 @@ test("release deploy script exposes versioned install, status, and rollback", as
   assert.match(script, /exposure_check="\$\(bool_value "\$\{ORKESTR_DEPLOY_EXPOSURE_CHECK:-1\}"\)"/);
   assert.match(script, /\/api\/threads \/api\/users \/api\/timers \/api\/browser-sessions \/api\/desktops\/leases \/api\/connectors \/api\/whereiam/);
   assert.match(script, /Public exposure check failed: unauthenticated/);
-  assert.match(script, /expected 401/);
+  assert.match(script, /expected 401 or 403/);
+  assert.match(script, /\[ "\$code" != "401" \] && \[ "\$code" != "403" \]/);
   assert.match(script, /blocked_count/);
   assert.match(script, /\^0\+\$/);
+  assert.match(script, /returned 401\/403/);
   assert.match(script, /blocked by TLS\/network/);
   assert.match(script, /sync_versioned_env/);
   assert.match(script, /ensure_connector_security_env/);

@@ -288,17 +288,17 @@ deploy_public_exposure_check() {
       blocked_count=$((blocked_count + 1))
       continue
     fi
-    if [ "$code" != "401" ]; then
-      echo "Public exposure check failed: unauthenticated $url returned HTTP $code; expected 401." >&2
+    if [ "$code" != "401" ] && [ "$code" != "403" ]; then
+      echo "Public exposure check failed: unauthenticated $url returned HTTP $code; expected 401 or 403." >&2
       echo "Refusing to mark deploy healthy because a private API may be exposed." >&2
       return 1
     fi
   done
   if [ "$blocked_count" -gt 0 ]; then
-    echo "Public exposure check passed: unauthenticated private APIs returned 401 or were blocked by TLS/network from $base."
+    echo "Public exposure check passed: unauthenticated private APIs returned 401/403 or were blocked by TLS/network from $base."
     return 0
   fi
-  echo "Public exposure check passed: unauthenticated private APIs returned 401 from $base."
+  echo "Public exposure check passed: unauthenticated private APIs returned 401/403 from $base."
 }
 
 write_history_event() {

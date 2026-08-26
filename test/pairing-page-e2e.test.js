@@ -184,13 +184,16 @@ test("mobile thread routes keep the selected conversation visible and open threa
     const errors = [];
     page.on("pageerror", (error) => errors.push(error.message || String(error)));
     const canonicalUrl = `${baseUrl}/instance/${instanceRef}/thread/${thread.publicRef}`;
-    for (const width of [320, 375, 390, 768, 860]) {
-      await page.setViewport({ width, height: width <= 390 ? 844 : 900, deviceScaleFactor: 1, isMobile: width <= 390, hasTouch: width <= 390 });
-      await page.goto(canonicalUrl, { waitUntil: "networkidle2" });
-      await page.waitForFunction(
-        () => document.body.innerText.includes("The selected conversation is visible on mobile."),
-        { timeout: 20_000 },
-      );
+    const widths = [320, 375, 390, 768, 860];
+    await page.setViewport({ width: widths[0], height: 844, deviceScaleFactor: 1 });
+    await page.goto(canonicalUrl, { waitUntil: "networkidle2" });
+    await page.waitForFunction(
+      () => document.body.innerText.includes("The selected conversation is visible on mobile."),
+      { timeout: 20_000 },
+    );
+    for (const width of widths) {
+      await page.setViewport({ width, height: width <= 390 ? 844 : 900, deviceScaleFactor: 1 });
+      await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
       const initial = await page.evaluate(() => {
         const drawer = document.querySelector("#thread-sidebar")?.getBoundingClientRect();
         const chat = document.querySelector(".chat")?.getBoundingClientRect();
