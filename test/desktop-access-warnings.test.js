@@ -87,7 +87,7 @@ test("a rejected lock attempt returns warnings only in its API result", async ()
 });
 
 test("a stopped desktop automatically releases an expired stealable lease and reserves it for the requester", async () => {
-  const env = await fixture();
+  const env = await fixture({ ORKESTR_DESKTOP_LEASE_STALE_MS: "60000" });
   const owner = await createThread({ id: "recovery-owner", ownerUserId: "admin", name: "Recovery owner" }, env);
   const requester = await createThread({ id: "recovery-requester", ownerUserId: "admin", name: "Recovery requester" }, env);
   await acquireDesktopLease("example-desk", { threadId: owner.id, ttlMs: 1 }, env, { principal: adminPrincipal() });
