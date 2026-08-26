@@ -1,0 +1,42 @@
+<main class="public-apps-shell">
+  <header class="public-apps-header">
+    <a class="public-apps-brand" href="/apps" aria-label="Orkestr applications">Orkestr</a>
+    <span>Applications</span>
+  </header>
+
+  <section class="public-apps-content" aria-live="polite">
+    @if (busy) {
+      <p class="public-apps-muted">Loading your applications…</p>
+    } @else if (error) {
+      <h1>Application unavailable</h1>
+      <p class="public-apps-muted">{{ error }}</p>
+      <a class="button secondary" href="/apps">Back to applications</a>
+    } @else if (selected; as app) {
+      <p class="public-apps-eyebrow">{{ app.type }}</p>
+      <h1>{{ app.title }}</h1>
+      @if (app.description) {
+        <p class="public-apps-muted">{{ app.description }}</p>
+      }
+      <p class="public-apps-note">You are authorized as {{ app.role }}. This stable entry is bound to your account; workspace routing stays server-side.</p>
+      <a class="button secondary" href="/apps">All applications</a>
+    } @else {
+      <p class="public-apps-eyebrow">Account workspace</p>
+      <h1>Your applications</h1>
+      <p class="public-apps-muted">Only applications granted to your account appear here.</p>
+      <div class="public-apps-grid">
+        @for (app of apps; track app.id) {
+          <article class="public-app-card">
+            <p class="public-apps-eyebrow">{{ app.type }}</p>
+            <h2>{{ app.title }}</h2>
+            @if (app.description) {
+              <p>{{ app.description }}</p>
+            }
+            <button type="button" (click)="open(app)">Open</button>
+          </article>
+        } @empty {
+          <p class="public-apps-muted">No applications are currently assigned to this account.</p>
+        }
+      </div>
+    }
+  </section>
+</main>

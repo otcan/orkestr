@@ -14,6 +14,8 @@ import { RouterTracesModule } from "./modules/router-traces/router-traces.module
 import { SystemModule } from "./modules/system/system.module.js";
 import { SecureInputModule } from "./modules/secure-input/secure-input.module.js";
 import { SharedAppsModule } from "./modules/shared-apps/shared-apps.module.js";
+import { PublicAppsModule } from "./modules/public-apps/public-apps.module.js";
+import { KeycloakOidcModule } from "./modules/keycloak-oidc/keycloak-oidc.module.js";
 import { ThreadsModule } from "./modules/threads/threads.module.js";
 import { TimersModule } from "./modules/timers/timers.module.js";
 import { TenantSlicesModule } from "./modules/tenant-slices/tenant-slices.module.js";
@@ -35,6 +37,8 @@ import { UsersModule } from "./modules/users/users.module.js";
     BrokerModule,
     SecureInputModule,
     SharedAppsModule,
+    PublicAppsModule,
+    KeycloakOidcModule,
     BrowsersModule,
     AgentsModule,
     ThreadsModule,

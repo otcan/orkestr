@@ -5,7 +5,7 @@ import { publicUrlConfig, publicUrlIdentityDiagnostics } from "../packages/core/
 import { sessionCookieHeader } from "../packages/core/src/security.js";
 import { getSetupStatus, publicSetupStatus } from "../packages/core/src/setup.js";
 
-test("auth status describes Keycloak passwordless email and phone policy", async () => {
+test("auth status describes Keycloak email-first policy and supports an explicit phone factor", async () => {
   const auth = publicAuthStatus({
     ORKESTR_AUTH_PROVIDER: "keycloak",
     ORKESTR_KEYCLOAK_ISSUER: "https://keycloak.example.test/realms/orkestr",
@@ -20,12 +20,37 @@ test("auth status describes Keycloak passwordless email and phone policy", async
   assert.equal(auth.login.passwordless, true);
   assert.equal(auth.login.emailUnique, true);
   assert.equal(auth.login.phoneUnique, false);
-  assert.deepEqual(auth.login.requiredFactors, ["email", "phone"]);
+  assert.deepEqual(auth.login.requiredFactors, ["email"]);
+  assert.equal(auth.login.phoneRequired, false);
   assert.equal(auth.keycloak.realm, "orkestr");
+  assert.equal(auth.keycloak.oidcEnabled, false);
   assert.equal(auth.mail.provider, "outlook");
   assert.equal(auth.mail.configured, true);
   assert.equal(auth.storage.genericIdentityLinks, false);
   assert.equal(JSON.stringify(auth).includes("super-secret"), false);
+});
+
+test("auth status can require a phone factor for a Keycloak client", () => {
+  const auth = publicAuthStatus({
+    ORKESTR_AUTH_PROVIDER: "keycloak",
+    ORKESTR_KEYCLOAK_ISSUER: "https://keycloak.example.test/realms/orkestr",
+    ORKESTR_KEYCLOAK_CLIENT_ID: "orkestr-web",
+    ORKESTR_AUTH_REQUIRE_PHONE_FACTOR: "1",
+  });
+  assert.equal(auth.login.phoneRequired, true);
+  assert.deepEqual(auth.login.requiredFactors, ["email", "phone"]);
+  assert.deepEqual(auth.keycloak.requiredActions, ["verify email", "verify phone"]);
+});
+
+test("auth status reports the explicit public Keycloak OIDC gateway", () => {
+  const auth = publicAuthStatus({
+    ORKESTR_AUTH_PROVIDER: "keycloak",
+    ORKESTR_KEYCLOAK_ISSUER: "https://keycloak.example.test/realms/orkestr",
+    ORKESTR_KEYCLOAK_CLIENT_ID: "orkestr-web",
+    ORKESTR_KEYCLOAK_OIDC_ENABLED: "1",
+    ORKESTR_PUBLIC_APP_URL: "https://app.example.test",
+  });
+  assert.equal(auth.keycloak.oidcEnabled, true);
 });
 
 test("auth status describes Microsoft Graph mail without exposing token config", async () => {
@@ -200,7 +225,7 @@ test("setup status exposes public auth policy without secrets", async () => {
   assert.equal(status.auth.provider, "keycloak");
   assert.equal(status.auth.keycloak.issuer, "https://keycloak.example.test/realms/orkestr");
   assert.equal(status.auth.login.emailRequired, true);
-  assert.equal(status.auth.login.phoneRequired, true);
+  assert.equal(status.auth.login.phoneRequired, false);
   assert.equal(JSON.stringify(status.auth).includes("super-secret"), false);
 });
 

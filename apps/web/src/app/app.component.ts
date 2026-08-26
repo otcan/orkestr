@@ -7,6 +7,7 @@ import { FilesPageComponent } from "./files-page.component";
 import { InstanceSettingsPageComponent } from "./instance-settings-page.component";
 import { OnboardingPageComponent } from "./onboarding-page.component";
 import { PairingRequiredPageComponent } from "./pairing-required-page.component";
+import { PublicAppsPageComponent } from "./public-apps-page.component";
 import { RawTerminalController } from "./raw-terminal.controller";
 import { SharedAppPageComponent } from "./shared-app-page.component";
 import { ConnectorStore } from "./stores/connector.store";
@@ -78,7 +79,7 @@ const MESSAGE_PAGE_LIMIT = 100;
 
 @Component({
   selector: "ork-root",
-  imports: [DatePipe, FormsModule, FirstThreadWizardComponent, FilesPageComponent, InstanceSettingsPageComponent, OnboardingPageComponent, PairingRequiredPageComponent, SharedAppPageComponent, ThreadComposerComponent, ThreadMessageListComponent, UserConnectorsPageComponent, UserDeskPageComponent, UserTimersPageComponent],
+  imports: [DatePipe, FormsModule, FirstThreadWizardComponent, FilesPageComponent, InstanceSettingsPageComponent, OnboardingPageComponent, PairingRequiredPageComponent, PublicAppsPageComponent, SharedAppPageComponent, ThreadComposerComponent, ThreadMessageListComponent, UserConnectorsPageComponent, UserDeskPageComponent, UserTimersPageComponent],
   templateUrl: "./app.component.html",
 })
 export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
@@ -102,6 +103,13 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     }
     if (this.onboardingActive) {
       this.closeRawStream();
+      this.updateDocumentTitle();
+      this.renderNow();
+      return;
+    }
+    if (this.publicAppsActive()) {
+      this.closeRawStream();
+      this.disconnectSummaryStream();
       this.updateDocumentTitle();
       this.renderNow();
       return;
@@ -307,7 +315,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     globalThis.addEventListener?.("popstate", this.popStateHandler);
     this.gmailBrowserNotifications.start();
     void this.refresh(true);
-    if (!this.sharedAppActive() && !this.pairingRequired) {
+    if (!this.sharedAppActive() && !this.publicAppsActive() && !this.pairingRequired) {
       this.connectSummaryStream();
       this.systemPoller = setInterval(() => void this.loadSystemSummarySilent(), 30_000);
     }
@@ -334,7 +342,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   async refresh(showBusy = true): Promise<void> {
-    if (this.sharedAppActive()) {
+    if (this.sharedAppActive() || this.publicAppsActive()) {
       this.appReady = true;
       this.apiOnline = true;
       this.closeRawStream();
@@ -689,7 +697,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   private connectSummaryStream(): void {
-    if (this.sharedAppActive()) return;
+    if (this.sharedAppActive() || this.publicAppsActive()) return;
     if (!this.appReady || this.pairingRequired || !this.uiRuntimeReady()) return;
     if (this.destroyed || typeof globalThis.WebSocket === "undefined") {
       this.startFallbackPolling();
@@ -719,7 +727,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   private scheduleSummaryReconnect(): void {
-    if (this.sharedAppActive()) return;
+    if (this.sharedAppActive() || this.publicAppsActive()) return;
     if (this.destroyed || this.pairingRequired || !this.appReady || !this.uiRuntimeReady() || this.summaryReconnectTimer) return;
     this.summaryReconnectTimer = setTimeout(() => {
       this.summaryReconnectTimer = undefined;
@@ -728,7 +736,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   private startFallbackPolling(): void {
-    if (this.sharedAppActive()) return;
+    if (this.sharedAppActive() || this.publicAppsActive()) return;
     if (this.pairingRequired || !this.appReady || !this.uiRuntimeReady()) return;
     if (this.fallbackPoller) return;
     this.fallbackPoller = setInterval(() => void this.refresh(false), 30_000);
@@ -752,7 +760,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   private async loadSystemSummarySilent(): Promise<void> {
-    if (this.sharedAppActive()) return;
+    if (this.sharedAppActive() || this.publicAppsActive()) return;
     if (!this.onboardingActive && !this.pairingRequired && !this.uiRuntimeReady()) return;
     try {
       this.opsSystem = await firstValueFrom(this.api.systemSummary());
@@ -763,7 +771,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   private async handleSummaryStreamMessage(raw: unknown): Promise<void> {
-    if (this.sharedAppActive()) return;
+    if (this.sharedAppActive() || this.publicAppsActive()) return;
     if (this.pairingRequired || !this.uiRuntimeReady()) return;
     let payload: (ThreadListResponse & { type?: string });
     try {
@@ -777,7 +785,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   private async applyThreadSummaryStream(threads: ThreadSummary[]): Promise<void> {
-    if (this.sharedAppActive()) return;
+    if (this.sharedAppActive() || this.publicAppsActive()) return;
     if (this.pairingRequired || !this.uiRuntimeReady()) return;
     if (this.applyingSummary) return;
     this.applyingSummary = true;
@@ -4748,7 +4756,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   private onboardingFromPath(): boolean {
     const parts = this.locationPathParts();
-    if (this.sharedAppParts(parts)) return false;
+    if (this.sharedAppParts(parts) || parts[0] === "apps") return false;
     if (this.pairingPathParts(parts)) return false;
     return parts[0] === "setup" || parts[0] === "onboarding" || (parts[0] === "ng" && parts[1] === "onboarding");
   }
@@ -4809,7 +4817,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   private canonicalizeInstanceRoute(): boolean {
     if (!this.instanceContext?.canonicalPath || this.appBasePath().startsWith("/instance/")) return false;
     const parts = this.locationPathParts();
-    if (this.sharedAppParts(parts) || this.pairingPathParts(parts) || parts.includes("thread")) return false;
+    if (this.sharedAppParts(parts) || parts[0] === "apps" || this.pairingPathParts(parts) || parts.includes("thread")) return false;
     if (this.connectorLoginProvider(parts)) return false;
     let suffix = "";
     if (!parts.length) suffix = "";
@@ -4842,7 +4850,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   private panelFromPath(): Panel {
     const parts = this.locationPathParts();
-    if (this.sharedAppParts(parts)) return "chat";
+    if (this.sharedAppParts(parts) || parts[0] === "apps") return "chat";
     if (parts[0] === "ops" || (parts[0] === "ng" && parts[1] === "ops")) return "instanceSettings";
     if (parts[0] === "files" || (parts[0] === "ng" && parts[1] === "files")) return "files";
     if (parts[0] === "settings" || parts[0] === "mailboxes") return "instanceSettings";
@@ -4859,7 +4867,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   private normalizeLegacyRoutePath(): void {
     const parts = this.locationPathParts();
-    if (this.sharedAppParts(parts)) return;
+    if (this.sharedAppParts(parts) || parts[0] === "apps") return;
     const retiredSetupSections = new Set(["google-marketing", "openai", "linkedin", "mail", "outlook"]);
     if (parts[0] === "setup" && retiredSetupSections.has(String(parts[1] || "").toLowerCase())) {
       globalThis.history?.replaceState({}, "", this.appPath("/setup"));
@@ -5023,6 +5031,10 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   sharedAppActive(): boolean {
     const parts = globalThis.location?.pathname?.split("/").filter(Boolean) || [];
     return Boolean(this.sharedAppParts(parts));
+  }
+
+  publicAppsActive(): boolean {
+    return this.locationPathParts()[0] === "apps";
   }
 
   connectorLoginActive(): boolean {
@@ -5289,6 +5301,10 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     }
     if (this.sharedAppActive()) {
       globalThis.document.title = "Shared App · Orkestr";
+      return;
+    }
+    if (this.publicAppsActive()) {
+      globalThis.document.title = "Applications · Orkestr";
       return;
     }
     if (this.connectorLoginActive()) {

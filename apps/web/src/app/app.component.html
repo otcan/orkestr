@@ -5,6 +5,8 @@
   ></ork-pairing-required-page>
 } @else if (sharedAppActive()) {
   <ork-shared-app-page></ork-shared-app-page>
+} @else if (publicAppsActive()) {
+  <ork-public-apps-page></ork-public-apps-page>
 } @else if (onboardingActive) {
   <ork-onboarding-page
     [mode]="setupPageMode"
