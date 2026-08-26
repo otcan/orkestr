@@ -11,7 +11,11 @@ import { listThreads, listThreadsForPrincipal, updateThread } from "./threads.js
 import { containedUserPolicyPath, tenantIsolationBoundary, threadUsesContainedUserPolicy } from "./tenant-policy.js";
 import { tenantPublicUrls } from "./tenant-public-urls.js";
 import { adminUserId, normalizeUserId } from "./users.js";
-import { builtinUserSkillDefinitions, userScopedCapabilityHints } from "./user-skills.js";
+import {
+  builtinUserSkillDefinitions,
+  userScopedCapabilityHints,
+  userSkillCapabilitySnapshot,
+} from "./user-skills.js";
 import { desktopAccessPolicySummary, filterDesktopSessionsForThread } from "./desktop-access.js";
 
 const desktopInventoryLiveCache = new Map();
@@ -422,7 +426,20 @@ async function capabilityHints(thread = null, options = {}, env = process.env) {
   if (threadUsesContainedUserPolicy(thread || { ownerUserId }, env)) {
     return userScopedCapabilityHints({ userId: ownerUserId, thread: thread || { ownerUserId } }, env);
   }
-  const enabledSkills = builtinUserSkillDefinitions().map((definition) => definition.id);
+  const builtInSkills = builtinUserSkillDefinitions().map((skill) => ({
+    id: skill.id,
+    label: skill.label,
+    category: skill.category,
+    enabled: true,
+    scopes: [...skill.scopes],
+    requiresConnector: clean(skill.requiresConnector),
+    requiresDesktop: clean(skill.requiresDesktop),
+  }));
+  const skillSnapshot = await userSkillCapabilitySnapshot(ownerUserId, env);
+  const customSkills = skillSnapshot.skills.filter((skill) => skill.builtIn !== true);
+  const enabledCustomSkills = customSkills.filter((skill) => skill.enabled === true);
+  const disabledCustomSkills = customSkills.filter((skill) => skill.enabled !== true);
+  const enabledSkills = [...builtInSkills.map((skill) => skill.id), ...enabledCustomSkills.map((skill) => skill.id)];
   return {
     threads: true,
     whereiam: true,
@@ -440,20 +457,12 @@ async function capabilityHints(thread = null, options = {}, env = process.env) {
     privateOperatorData: true,
     skillRegistry: {
       userId: ownerUserId,
-      source: "admin-defaults",
-      userFound: true,
+      source: customSkills.length ? "admin-defaults+user-skill-registry" : "admin-defaults",
+      userFound: skillSnapshot.userFound,
     },
     enabledSkills,
-    disabledSkills: [],
-    skills: builtinUserSkillDefinitions().map((skill) => ({
-      id: skill.id,
-      label: skill.label,
-      category: skill.category,
-      enabled: true,
-      scopes: [...skill.scopes],
-      requiresConnector: clean(skill.requiresConnector),
-      requiresDesktop: clean(skill.requiresDesktop),
-    })),
+    disabledSkills: disabledCustomSkills.map((skill) => skill.id),
+    skills: [...builtInSkills, ...customSkills],
   };
 }
 

@@ -12,7 +12,7 @@ import { createTenantVm } from "../packages/core/src/tenant-vm-registry.js";
 import { createTenantSlice } from "../packages/core/src/tenant-slices.js";
 import { userPrincipal } from "../packages/core/src/principal.js";
 import { approvePairingChallenge, createPairingChallenge, pairBrowser, sessionCookieHeader } from "../packages/core/src/security.js";
-import { setUserSkillForPrincipal } from "../packages/core/src/user-skills.js";
+import { createUserSkillForPrincipal, setUserSkillForPrincipal } from "../packages/core/src/user-skills.js";
 import { upsertUser } from "../packages/core/src/users.js";
 
 test("runtime AGENTS.md points agents to dynamic whereiam discovery", async () => {
@@ -208,6 +208,41 @@ test("whereAmI redacts configured managed desktop control endpoints", async () =
   assert.equal(JSON.stringify(desktop).includes("127.0.0.1"), false);
   assert.equal(desktop.workspacePath, "/opt/orkestr/workspace/firat-jobs");
   assert.ok(desktop.availableActions.includes("observe"));
+});
+
+test("whereAmI includes enabled custom skills for an administrator-owned tenant runtime", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-whereiam-admin-skills-home-"));
+  const workspace = path.join(home, "workspaces", "firat-jobs");
+  await fs.mkdir(workspace, { recursive: true });
+  const env = { ORKESTR_HOME: home, ORKESTR_ADMIN_USER_ID: "firat" };
+  const admin = userPrincipal(await upsertUser({ id: "firat", role: "admin", displayName: "Firat" }, env));
+  await createUserSkillForPrincipal("firat", {
+    id: "captcha",
+    name: "CAPTCHA",
+    enabled: true,
+    metadata: { tenantScoped: true, apiKey: "must-not-leak" },
+  }, admin, env);
+  await createUserSkillForPrincipal("firat", {
+    id: "disabled-custom",
+    name: "Disabled Custom",
+    enabled: false,
+  }, admin, env);
+  await createThread({
+    id: "firat-jobs",
+    ownerUserId: "firat",
+    name: "Firat Jobs",
+    cwd: workspace,
+    workspace,
+  }, env);
+
+  const payload = await whereAmI({ cwd: workspace, principal: admin }, env);
+
+  assert.equal(payload.capabilities.skillRegistry.source, "admin-defaults+user-skill-registry");
+  assert.ok(payload.capabilities.enabledSkills.includes("captcha"));
+  assert.ok(payload.capabilities.disabledSkills.includes("disabled-custom"));
+  assert.equal(payload.capabilities.skills.find((skill) => skill.id === "captcha")?.enabled, true);
+  assert.equal(payload.capabilities.skills.find((skill) => skill.id === "disabled-custom")?.enabled, false);
+  assert.doesNotMatch(JSON.stringify(payload.capabilities.skills), /must-not-leak/);
 });
 
 test("whereAmI exposes server-owned contained user runtime policy metadata", async () => {
