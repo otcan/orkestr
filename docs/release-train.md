@@ -337,8 +337,8 @@ orkestr-deploy status
 ```
 
 For any deploy with a public app URL, `orkestr-deploy` also runs a no-cookie
-public exposure gate after the service restart. The gate must observe `401`
-from private routes including `/api/threads`, `/api/users`, `/api/timers`,
+public exposure gate after the service restart. The gate must observe `401` or
+`403` from private routes including `/api/threads`, `/api/users`, `/api/timers`,
 `/api/browser-sessions`, `/api/desktops/leases`, `/api/connectors`, and
 `/api/whereiam`. A `200` from any of those routes means the deploy is unsafe and
 must not be reported complete. Disable this only for disposable local tests with
