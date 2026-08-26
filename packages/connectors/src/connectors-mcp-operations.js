@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import {
   applyConnectorOutboxJobAction,
   claimConnectorOutboxJob,
+  connectorOutboxPayloadHash,
   ensureConnectorOutboxJob,
   listConnectorOutboxJobs,
   markConnectorOutboxJob,
@@ -31,6 +32,11 @@ import { connectorMcpStructuredResult, connectorsMcpInputSchemas } from "./conne
 import { assertConnectorMcpScope } from "./connectors-mcp-auth.js";
 import { runConnectorMcpRuntime } from "./connectors-mcp-runtime-operations.js";
 import { assertConnectorMcpResourceAccess, connectorMcpResourceTokenDeclared } from "../../core/src/thread-resource-sessions.js";
+import {
+  outboundMessageApprovalPreview,
+  outboundMessageApprovalRequired,
+  outboundMessageIntent,
+} from "./outbound-message-approval.js";
 
 function clean(value = "") {
   return String(value || "").trim();
@@ -76,7 +82,9 @@ function operationAction(tool = "", input = {}) {
   return `connectors_mcp:${clean(tool)}:${clean(input.service)}:${clean(input.action)}`;
 }
 
-function operationIntent(tool = "", input = {}) {
+function operationIntent(tool = "", input = {}, auth = {}) {
+  const action = operationAction(tool, input);
+  if (tool === "orkestr_messaging") return outboundMessageIntent(input, auth, action);
   const stable = {
     tool: clean(tool),
     service: clean(input.service),
@@ -101,7 +109,7 @@ function operationIntent(tool = "", input = {}) {
     setAsThreadDefault: input.set_as_thread_default === true,
   };
   return {
-    connectorMcpAction: operationAction(tool, input),
+    connectorMcpAction: action,
     operationHash: crypto.createHash("sha256").update(JSON.stringify(stable)).digest("hex"),
   };
 }
@@ -113,6 +121,21 @@ async function challengeRequired(tool = "", input = {}, auth = {}, env = process
   }
   if (tool === "orkestr_routing") return input.action !== "status";
   if (tool === "orkestr_messaging" && input.action === "set_typing") return false;
+  if (tool === "orkestr_messaging" && (typeof input.text !== "string" || !clean(input.idempotency_key))) return false;
+  if (tool === "orkestr_messaging" && outboundMessageApprovalRequired(input, auth, env)) {
+    const accountId = clean(auth.accountId || input.account_id || "sender");
+    const tenantId = clean(auth.instanceId || auth.ownerUserId || "admin");
+    const existing = (await listConnectorOutboxJobs({ connector: input.service }, env).catch(() => ({ jobs: [] }))).jobs
+      .find((job) =>
+        clean(job.idempotencyKey) === clean(input.idempotency_key) &&
+        clean(job.accountId) === accountId &&
+        clean(job.chatId) === clean(input.conversation_id) &&
+        clean(job.tenantId) === tenantId
+      );
+    const payloadHash = connectorOutboxPayloadHash({ text: input.text, attachmentRefs: input.attachment_refs || [] });
+    if (existing && existing.payloadHash === payloadHash && ["delivered", "partial_delivery"].includes(existing.state)) return false;
+    return true;
+  }
   if (tool !== "orkestr_messaging" || !auth.operator) return false;
   const statuses = await listWhatsAppBindingStatuses({ env }).catch(() => ({ bindings: [] }));
   return !statuses.bindings.some((binding) =>
@@ -125,7 +148,7 @@ async function challengeRequired(tool = "", input = {}, auth = {}, env = process
 async function requireAttendedApproval(tool = "", input = {}, auth = {}, request = null, env = process.env) {
   if (!(await challengeRequired(tool, input, auth, env))) return null;
   const action = operationAction(tool, input);
-  const authIntent = operationIntent(tool, input);
+  const authIntent = operationIntent(tool, input, auth);
   if (clean(input.approval)) {
     await consumeApprovedPairingChallengeForAction(input.approval, {
       env,
@@ -163,7 +186,7 @@ function unsupported(input = {}) {
   });
 }
 
-function challengeResult(input = {}, challenge = null) {
+function challengeResult(input = {}, challenge = null, auth = {}) {
   return connectorMcpStructuredResult({
     service: input.service,
     action: input.action,
@@ -171,7 +194,11 @@ function challengeResult(input = {}, challenge = null) {
     accountId: input.account_id,
     conversationId: input.conversation_id,
     challenge,
-    error: { code: "connector_operation_approval_required", requiresUserAction: true },
+    ...(input.action === "send_text" ? { data: { preview: outboundMessageApprovalPreview(input, auth) } } : {}),
+    error: {
+      code: input.action === "send_text" ? "outbound_confirmation_required" : "connector_operation_approval_required",
+      requiresUserAction: true,
+    },
   });
 }
 
@@ -341,9 +368,23 @@ async function runMessaging(input, auth, env) {
       data: delivered,
     });
   } catch (error) {
+    const partialDelivery = error?.partialDelivery || error?.payload?.partialDelivery || null;
     const uncertain = /not_confirmed|timeout/i.test(clean(error?.message));
-    const state = uncertain ? "delivery_uncertain" : "failed_retryable";
-    await markConnectorOutboxJob(ensured.job.id, { state, failedAt: new Date().toISOString(), error: clean(error?.message) }, env);
+    const state = partialDelivery ? "partial_delivery" : uncertain ? "delivery_uncertain" : "failed_retryable";
+    await markConnectorOutboxJob(ensured.job.id, {
+      state,
+      failedAt: new Date().toISOString(),
+      error: clean(error?.message),
+      ...(partialDelivery ? {
+        brokerAck: { partialDelivery },
+        metadata: {
+          ...(ensured.job.metadata || {}),
+          nonRetryable: true,
+          requiresFreshApproval: true,
+          partialDelivery,
+        },
+      } : {}),
+    }, env);
     throw Object.assign(error, { operationRef: ensured.job.id, deliveryState: state });
   }
 }
@@ -457,7 +498,7 @@ export async function runConnectorMcpTool(tool = "", rawInput = {}, { auth = {},
   if (["webui", "codex"].includes(input.service)) return unsupported(input);
   if (tool === "orkestr_routing") await assertConnectorMcpRoutingTargetScope(input, scoped, env);
   const challenge = await requireAttendedApproval(tool, input, scoped, request, env);
-  if (challenge) return challengeResult(input, challenge);
+  if (challenge) return challengeResult(input, challenge, scoped);
   try {
     if (tool === "orkestr_auth") return await runAuth(input, scoped, env);
     if (tool === "orkestr_messaging") return await runMessaging(input, scoped, env);
@@ -477,8 +518,8 @@ export async function runConnectorMcpTool(tool = "", rawInput = {}, { auth = {},
       threadId: scoped.threadId,
       error: {
         code: clean(error?.message) || "connector_operation_failed",
-        retryable: Number(error?.statusCode || 500) >= 500 && error?.deliveryState !== "delivery_uncertain",
-        requiresUserAction: Number(error?.statusCode || 0) === 401 || Number(error?.statusCode || 0) === 403,
+        retryable: Number(error?.statusCode || 500) >= 500 && !["delivery_uncertain", "partial_delivery"].includes(error?.deliveryState),
+        requiresUserAction: Number(error?.statusCode || 0) === 401 || Number(error?.statusCode || 0) === 403 || error?.deliveryState === "partial_delivery",
       },
     });
   }

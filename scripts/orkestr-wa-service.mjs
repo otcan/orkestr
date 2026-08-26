@@ -527,6 +527,7 @@ export function createOrkestrWaService({ env = process.env, bridge = defaultBrid
         ok: false,
         error: clean(error?.message || String(error)) || "wa_service_error",
         auditEvent: error?.auditEvent || undefined,
+        partialDelivery: error?.partialDelivery || undefined,
       });
     }
   });

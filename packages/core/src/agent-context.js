@@ -174,6 +174,11 @@ Safety rules:
 - Do not read files under \`ORKESTR_HOME/secrets\`.
 - Do not inspect WhatsApp Web session state, Gmail tokens, or browser profile
   storage directly.
+- Outbound connector access is not implied by read access. For personal or
+  external messages, use only the brokered connector operation and wait for
+  its exact attended approval when requested. Never bypass an approval,
+  partial-delivery stop, or connector failure through CDP, DevTools,
+  \`window.WWebJS\`, a service-owned browser, or direct session-state access.
 - Do not assume a desktop is free because a profile directory exists; acquire a
   lease first.
 - Do not treat Orkestr browser-pairing challenge IDs as OpenAI, Codex, or

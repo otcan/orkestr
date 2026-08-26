@@ -40,7 +40,7 @@ async function close(server) {
   await new Promise((resolve) => server.close(resolve));
 }
 
-function fakeWorker({ healthHandler = null } = {}) {
+function fakeWorker({ healthHandler = null, sendHandler = null } = {}) {
   const calls = [];
   const server = http.createServer(async (req, res) => {
     const chunks = [];
@@ -57,6 +57,10 @@ function fakeWorker({ healthHandler = null } = {}) {
       return;
     }
     if (req.url === "/send-text") {
+      if (typeof sendHandler === "function") {
+        await sendHandler(req, res, body);
+        return;
+      }
       res.end(JSON.stringify({ ok: true, messageId: "wa-message-1", chatId: body.to }));
       return;
     }
@@ -623,6 +627,96 @@ test("connector MCP messaging uses the durable idempotency ledger", async () => 
     assert.equal(second.status, "delivered");
     assert.equal(second.data.duplicate, true);
     assert.equal(item.worker.calls.filter((call) => call.url === "/send-text").length, 1);
+  } finally {
+    await item.close();
+  }
+});
+
+test("configured personal WhatsApp sends require an exact attended approval", async () => {
+  const item = await fixture({ envOverrides: { ORKESTR_WHATSAPP_ATTENDED_SEND_ACCOUNT_IDS: "sender" } });
+  const input = {
+    service: "whatsapp",
+    action: "send_text",
+    account_id: "sender",
+    conversation_id: "491700000000@c.us",
+    text: "Please sign the attached letter.",
+    attachment_refs: [],
+    idempotency_key: "personal-send-1",
+  };
+  try {
+    const pending = await callConnectorsMcpTool("orkestr_messaging", input, item.env);
+    assert.equal(pending.status, "approval_required");
+    assert.equal(pending.error.code, "outbound_confirmation_required");
+    assert.equal(pending.data.preview.accountId, "sender");
+    assert.equal(pending.data.preview.attachmentCount, 0);
+    assert.notEqual(pending.data.preview.recipient, input.conversation_id);
+    assert.doesNotMatch(JSON.stringify(pending.data.preview), /Please sign/);
+    assert.equal(item.worker.calls.some((call) => call.url === "/send-text"), false);
+
+    await approvePairingChallenge(pending.challenge.approve_code, { env: item.env, approvedBy: "test" });
+    const altered = await callConnectorsMcpTool("orkestr_messaging", {
+      ...input,
+      text: "Send a different message.",
+      approval: pending.challenge.approve_code,
+    }, item.env);
+    assert.equal(altered.ok, false);
+    assert.match(JSON.stringify(altered), /pairing_challenge_intent_scope_denied/);
+    assert.equal(item.worker.calls.some((call) => call.url === "/send-text"), false);
+
+    const delivered = await callConnectorsMcpTool("orkestr_messaging", {
+      ...input,
+      approval: pending.challenge.approve_code,
+    }, item.env);
+    const duplicate = await callConnectorsMcpTool("orkestr_messaging", input, item.env);
+    assert.equal(delivered.status, "delivered");
+    assert.equal(duplicate.status, "delivered");
+    assert.equal(duplicate.data.duplicate, true);
+    assert.equal(item.worker.calls.filter((call) => call.url === "/send-text").length, 1);
+  } finally {
+    await item.close();
+  }
+});
+
+test("connector MCP terminalizes partial WhatsApp delivery and does not retry it", async () => {
+  const item = await fixture({
+    scoped: true,
+    workerOptions: {
+      sendHandler(_req, res) {
+        res.statusCode = 409;
+        res.end(JSON.stringify({
+          ok: false,
+          error: "whatsapp_partial_delivery",
+          partialDelivery: {
+            accountId: "sender",
+            chatId: "firat-jobs@g.us",
+            sent: [{ id: "wa-text-1", kind: "text" }],
+            failedKind: "attachment",
+            failureCode: "media_failed",
+          },
+        }));
+      },
+    },
+  });
+  const input = {
+    service: "whatsapp",
+    action: "send_text",
+    account_id: "sender",
+    conversation_id: "firat-jobs@g.us",
+    text: "Cover text",
+    idempotency_key: "partial-send-1",
+  };
+  try {
+    const first = await callConnectorsMcpTool("orkestr_messaging", input, item.env);
+    const second = await callConnectorsMcpTool("orkestr_messaging", input, item.env);
+    const [job] = (await listConnectorOutboxJobs({ connector: "whatsapp" }, item.env)).jobs;
+
+    assert.equal(first.status, "partial_delivery");
+    assert.equal(first.error.retryable, false);
+    assert.equal(first.error.requires_user_action, true);
+    assert.equal(second.status, "partial_delivery");
+    assert.equal(item.worker.calls.filter((call) => call.url === "/send-text").length, 1);
+    assert.equal(job.state, "partial_delivery");
+    assert.equal(job.metadata.requiresFreshApproval, true);
   } finally {
     await item.close();
   }

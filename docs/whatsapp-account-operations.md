@@ -36,6 +36,20 @@ orkestr whatsapp accounts list --json
 orkestr whatsapp accounts doctor --json
 ```
 
+Accounts that represent a personal identity or otherwise require an attended
+send must be listed separately:
+
+```bash
+ORKESTR_WHATSAPP_ATTENDED_SEND_ACCOUNT_IDS=personal
+```
+
+For those account ids, `orkestr_messaging` returns
+`outbound_confirmation_required` before delivery. Approval is bound to the
+exact account, conversation, message digest, attachment references, and
+idempotency key. Normal server-owned routing and mirroring remain unattended;
+do not grant `connectors:send:automated` or `whatsapp:send:automated` to an
+agent-facing bearer merely to suppress the challenge.
+
 Release checks should require only routed accounts:
 
 ```bash
@@ -69,7 +83,9 @@ WA_HTTP_TOKEN=<local-secret>
 
 The skill may expose explicit commands such as `status`, `pair-code`,
 `send-text`, `chats`, and `history`, but it should only run when an operator or
-agent intentionally invokes that skill.
+agent intentionally invokes that skill. Its service-owned Chromium connection
+must use Puppeteer's private process pipe; do not expose a DevTools WebSocket or
+use CDP/session-state scripts as a send fallback.
 
 ## Phone Pairing Code Auth
 

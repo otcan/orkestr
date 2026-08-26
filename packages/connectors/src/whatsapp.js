@@ -5828,6 +5828,8 @@ export async function sendWhatsAppText({ chatId = "", text = "", accountId = "",
     error.failureCode = parsed.diagnostics.failureCode;
     error.failureClassification = parsed.diagnostics.classification;
     error.retryable = parsed.diagnostics.retryable;
+    error.partialDelivery = parsed.payload?.partialDelivery || null;
+    if (error.partialDelivery) error.retryable = false;
     throw error;
   }
   return payload;
