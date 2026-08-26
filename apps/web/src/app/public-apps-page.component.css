@@ -1,0 +1,83 @@
+.public-apps-shell {
+  min-height: 100vh;
+  min-height: 100dvh;
+  color: #e5f7df;
+}
+
+.public-apps-header {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  border-bottom: 1px solid rgba(119, 205, 126, 0.2);
+  background: rgba(3, 8, 3, 0.9);
+  padding: 18px clamp(20px, 5vw, 72px);
+}
+
+.public-apps-brand {
+  color: #e5f7df;
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.public-apps-header span,
+.public-apps-muted,
+.public-apps-note,
+.public-app-card p {
+  color: #a7c39c;
+}
+
+.public-apps-content {
+  width: min(980px, calc(100% - 40px));
+  margin: 0 auto;
+  padding: clamp(36px, 8vw, 96px) 0;
+}
+
+.public-apps-content h1,
+.public-apps-content h2,
+.public-apps-content p {
+  margin-top: 0;
+}
+
+.public-apps-content h1 {
+  font-size: clamp(30px, 5vw, 52px);
+}
+
+.public-apps-eyebrow {
+  color: #76eb85;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.public-apps-note {
+  max-width: 640px;
+  line-height: 1.6;
+}
+
+.public-apps-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 16px;
+  margin-top: 28px;
+}
+
+.public-app-card {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  min-height: 220px;
+  border: 1px solid rgba(119, 205, 126, 0.26);
+  border-radius: 14px;
+  background: rgba(5, 16, 6, 0.86);
+  padding: 22px;
+}
+
+.public-app-card h2 {
+  margin-bottom: 0;
+}
+
+.public-app-card button {
+  align-self: end;
+  justify-self: start;
+}

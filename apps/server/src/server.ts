@@ -50,6 +50,7 @@ import { JsonErrorFilter } from "./common/json-error.filter.js";
 import { attachDesktopProxyUpgrade, registerDesktopProxy } from "./desktop-proxy.js";
 import { attachTenantVmDesktopProxyUpgrade, registerTenantVmDesktopProxy } from "./tenant-vm-desktop-proxy.js";
 import { registerStaticFallback } from "./static-fallback.js";
+import { preflightPublicAppRequest } from "./public-app-gateway.js";
 import { registerLegacyInstanceRedirects } from "./legacy-instance-redirects.js";
 import { attachThreadStreamUpgrade } from "./thread-stream.js";
 import { applyTrustedOperatorProxy, attachTrustedOperatorProxyUpgrade } from "./trusted-operator-proxy.js";
@@ -120,6 +121,17 @@ export async function createApp(): Promise<INestApplication> {
         const canonicalPreflight = await preflightCanonicalAppRequest(request);
         if (!canonicalPreflight.ok) {
           return response.status(404).type("text/plain; charset=utf-8").send("not found");
+        }
+        const publicAppPreflight = await preflightPublicAppRequest(request);
+        if (!publicAppPreflight.ok) {
+          return response.status(404).type("text/plain; charset=utf-8").send("not found");
+        }
+        if (publicAppPreflight.loginPath) {
+          return response
+            .status(302)
+            .header("cache-control", "no-store")
+            .header("location", publicAppPreflight.loginPath)
+            .send("Redirecting to sign in.");
         }
         if (await enforceHostBoundaryRequest(request, response, process.env)) return;
         const scopedShareAuth = authorizeScopedShareSessionRequest(request, result.session || null);
