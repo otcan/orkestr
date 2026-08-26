@@ -3829,6 +3829,56 @@ test("local whatsapp send times out hung browser sends without retrying", async 
   assert.equal(attempts, 1);
 });
 
+test("local WhatsApp reports partial delivery when text succeeds before media fails", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-partial-delivery-"));
+  const attachmentPath = path.join(home, "visa-letter.txt");
+  await fs.writeFile(attachmentPath, "letter");
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "personal",
+    ORKESTR_WHATSAPP_SEND_CONFIRMATION_REQUIRED: "0",
+  };
+  const calls = [];
+  const runtime = {
+    MessageMedia: {
+      fromFilePath(filePath) {
+        return { filePath, mimetype: "text/plain" };
+      },
+    },
+    client: {
+      async sendMessage(to, body) {
+        calls.push({ to, body });
+        if (typeof body !== "string") throw new Error("media_upload_failed");
+        return { id: { _serialized: "wa-cover-text" } };
+      },
+    },
+  };
+
+  try {
+    setLocalWhatsAppRuntimeForTest("personal", runtime, {}, env);
+    await assert.rejects(
+      () => sendLocalWhatsAppMessage({
+        accountId: "personal",
+        chatId: "491700000000@c.us",
+        text: "Please sign this.",
+        attachments: [{ path: attachmentPath, filename: "visa-letter.txt", mimetype: "text/plain" }],
+        env,
+      }),
+      (error) => {
+        assert.equal(error.message, "whatsapp_partial_delivery");
+        assert.equal(error.statusCode, 409);
+        assert.equal(error.retryable, false);
+        assert.deepEqual(error.partialDelivery.sent, [{ id: "wa-cover-text", kind: "text" }]);
+        assert.equal(error.partialDelivery.failedKind, "attachment");
+        return true;
+      },
+    );
+    assert.equal(calls.length, 2);
+  } finally {
+    await resetLocalWhatsAppBridgeForTest(env);
+  }
+});
+
 function testImageMimetype(filePath = "") {
   const extension = path.extname(filePath).toLowerCase();
   if (extension === ".jpg" || extension === ".jpeg") return "image/jpeg";
@@ -7567,7 +7617,7 @@ test("local whatsapp phone pairing replaces an existing qr runtime", async () =>
 
   class Client {
     constructor(options) {
-      calls.push(["client", options.pairWithPhoneNumber?.phoneNumber, options.puppeteer?.protocolTimeout, options.userAgent]);
+      calls.push(["client", options.pairWithPhoneNumber?.phoneNumber, options.puppeteer?.protocolTimeout, options.userAgent, options.puppeteer?.pipe]);
     }
 
     on(event) {
@@ -7605,6 +7655,7 @@ test("local whatsapp phone pairing replaces an existing qr runtime", async () =>
     const clientCall = calls.find((call) => Array.isArray(call) && call[0] === "client");
     assert.deepEqual(clientCall.slice(0, 3), ["client", "155512345", 345000]);
     assert.match(clientCall[3], /Chrome\/147\.0\.0\.0/);
+    assert.equal(clientCall[4], true);
     assert.equal(result.state, "starting");
     const events = await listEvents(env);
     assert.ok(events.find((event) => event.type === "whatsapp_local_pairing_runtime_replaced"));

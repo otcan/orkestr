@@ -2518,6 +2518,7 @@ function puppeteerOptions(env = process.env) {
   const protocolTimeout = puppeteerProtocolTimeoutMs(env);
   return {
     headless: true,
+    pipe: true,
     ...(executablePath ? { executablePath } : {}),
     protocolTimeout,
     args: [
@@ -7388,6 +7389,24 @@ export async function sendLocalWhatsAppMessage({ chatId = "", text = "", account
       }
     }
   } catch (error) {
+    if (sent.length) {
+      const partial = new Error("whatsapp_partial_delivery");
+      partial.statusCode = 409;
+      partial.retryable = false;
+      partial.cause = error;
+      partial.partialDelivery = {
+        accountId: selectedAccountId,
+        chatId,
+        sent: sent.map((entry) => ({
+          id: String(entry.id || ""),
+          kind: String(entry.kind || ""),
+          ...(entry.filename ? { filename: String(entry.filename) } : {}),
+        })),
+        failedKind: Array.isArray(attachments) && attachments.length ? "attachment" : "message",
+        failureCode: String(error?.message || "whatsapp_send_failed").slice(0, 160),
+      };
+      throw partial;
+    }
     if (selectedAccountId && recoverableLocalWhatsAppRuntimeError(error)) {
       return recoverLocalWhatsAppAccountAfterSendError(selectedAccountId, error, env);
     }

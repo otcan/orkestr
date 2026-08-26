@@ -94,6 +94,8 @@ export function requestWhatsAppWorker(pathname = "/health", { method = "GET", bo
             ? 503
             : res.statusCode || 502;
           error.payload = payload;
+          error.partialDelivery = payload?.partialDelivery || null;
+          if (error.partialDelivery) error.retryable = false;
           finish(reject, error);
           return;
         }

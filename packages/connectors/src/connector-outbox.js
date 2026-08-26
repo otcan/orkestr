@@ -15,7 +15,7 @@ import {
   withPostgresTransaction,
 } from "./connector-outbox-postgres.js";
 
-export const terminalStates = new Set(["delivered", "skipped", "skipped_policy", "suppressed", "dead_letter", "cancelled", "delivery_uncertain"]);
+export const terminalStates = new Set(["delivered", "skipped", "skipped_policy", "suppressed", "dead_letter", "cancelled", "delivery_uncertain", "partial_delivery"]);
 const operatorActions = new Set(["retry", "suppress", "mark_delivered", "mark-delivered", "replay", "dead_letter", "dead-letter"]);
 const dbCache = new Map();
 let sqliteModulePromise = null;
@@ -76,7 +76,7 @@ export function connectorOutboxPostgresMode(env = process.env) {
 function statusRank(value) {
   const status = clean(value || "pending").toLowerCase();
   if (status === "delivered") return 6;
-  if (status === "dead_letter" || status === "suppressed" || status === "skipped" || status === "skipped_policy" || status === "cancelled" || status === "delivery_uncertain") return 5;
+  if (status === "dead_letter" || status === "suppressed" || status === "skipped" || status === "skipped_policy" || status === "cancelled" || status === "delivery_uncertain" || status === "partial_delivery") return 5;
   if (status === "claimed" || status === "sent_to_broker") return 4;
   if (status === "failed_retryable") return 3;
   if (status === "pending") return 2;
@@ -1141,6 +1141,11 @@ export async function applyConnectorOutboxJobAction(jobIdOrKey = "", action = ""
   if (!current) {
     const error = new Error("connector_outbox_job_missing");
     error.statusCode = 404;
+    throw error;
+  }
+  if (clean(current.state).toLowerCase() === "partial_delivery" && ["retry", "replay"].includes(normalized)) {
+    const error = new Error("connector_outbox_partial_delivery_retry_requires_new_send");
+    error.statusCode = 409;
     throw error;
   }
   const patch = operatorPatchForAction(current, normalized, options);

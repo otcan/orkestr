@@ -69,6 +69,25 @@ test("connector outbox idempotency is tenant scoped and terminal states block du
   assert.equal(terminalClaim.reason, "connector_outbox_delivered");
 });
 
+test("connector outbox refuses to retry a partial external delivery", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-connector-outbox-partial-"));
+  const runtimeEnv = env(home);
+  const created = await ensureConnectorOutboxJob(whatsappJob({ tenantId: "tenant-a" }), runtimeEnv);
+  await markConnectorOutboxJob(created.job.id, {
+    state: "partial_delivery",
+    failedAt: new Date().toISOString(),
+    metadata: { requiresFreshApproval: true },
+  }, runtimeEnv);
+
+  await assert.rejects(
+    () => applyConnectorOutboxJobAction(created.job.id, "retry", { operator: "test" }, runtimeEnv),
+    /connector_outbox_partial_delivery_retry_requires_new_send/,
+  );
+  const jobs = await listConnectorOutboxJobs({ connector: "whatsapp" }, runtimeEnv);
+  assert.equal(jobs.jobs[0].state, "partial_delivery");
+  assert.equal(connectorOutboxTerminalState(jobs.jobs[0].state), true);
+});
+
 test("connector outbox SQLite fingerprint advances on durable job changes", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-connector-outbox-fingerprint-"));
   const runtimeEnv = env(home, { ORKESTR_CONNECTOR_OUTBOX_STORE: "sqlite" });
