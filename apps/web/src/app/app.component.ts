@@ -5015,12 +5015,22 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     if (instanceId) params.set("instanceId", instanceId);
     const challengeId = source.get("challengeId") || source.get("challenge") || "";
     if (challengeId) params.set("challengeId", challengeId);
-    const returnTo = source.get("return");
+    const returnTo = source.get("return") || this.currentPairingReturnPath();
     if (returnTo) params.set("return", returnTo);
     const query = params.toString();
     const next = query ? `/setup/pairing?${query}` : "/setup/pairing";
     if (`${globalThis.location?.pathname || ""}${globalThis.location?.search || ""}` === next) return;
     globalThis.history?.replaceState({}, "", next);
+  }
+
+  private currentPairingReturnPath(): string {
+    try {
+      const current = new URL(globalThis.location?.href || "http://localhost/");
+      if (current.pathname === "/setup/pairing") return "";
+      return `${current.pathname}${current.search}${current.hash}`;
+    } catch {
+      return "";
+    }
   }
 
   private sameOriginPairingReturnUrl(): string {

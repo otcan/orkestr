@@ -119,7 +119,7 @@ test("pairing required page generates and consumes a challenge in a real browser
 
     await approvePairingChallenge(challengeId);
     await page.waitForFunction(() => !document.body.innerText.includes("Approve this browser"), { timeout: 15_000 });
-    assert.equal(new URL(page.url()).pathname, "/");
+    assert.equal(new URL(page.url()).pathname, "/thread/Test");
     assert.deepEqual(errors, []);
   } finally {
     if (browser) await browser.close();
@@ -292,6 +292,56 @@ test("pairing page stores tenant app return path on generated challenge", async 
     assert.ok(challenge);
     assert.equal(challenge.requestedPath, expectedPath);
     assert.equal(challenge.status, "pending");
+    assert.deepEqual(errors, []);
+  } finally {
+    if (browser) await browser.close();
+    await new Promise((resolve) => server.close(resolve));
+    restoreEnv(prior);
+  }
+});
+
+test("pairing page preserves current launcher route when no return query is present", async (t) => {
+  const puppeteer = await loadPuppeteer(t);
+  if (!puppeteer) return;
+  const chrome = await findChrome();
+  if (!chrome) {
+    t.skip("No Chrome or Chromium executable available for browser e2e.");
+    return;
+  }
+
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-pairing-launcher-return-e2e-"));
+  const prior = saveEnv();
+  process.env.ORKESTR_HOME = home;
+  process.env.ORKESTR_AUTH_REQUIRED = "1";
+  process.env.ORKESTR_RECOVER_RUNNING_ON_START = "0";
+
+  const server = await startServer({ port: 0, host: "127.0.0.1" });
+  const { port } = server.address();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  let browser;
+
+  try {
+    browser = await puppeteer.launch({
+      headless: "new",
+      executablePath: chrome,
+      args: ["--no-sandbox", "--disable-setuid-sandbox"],
+    });
+    const page = await browser.newPage();
+    const errors = [];
+    page.on("pageerror", (error) => errors.push(error.message || String(error)));
+
+    await page.goto(`${baseUrl}/launcher`, { waitUntil: "networkidle2" });
+    await page.waitForFunction(() => document.body.innerText.includes("Approve this browser"), { timeout: 10_000 });
+    await page.waitForFunction(() => document.body.innerText.includes("orkestr connect approve"), { timeout: 10_000 });
+
+    const challenges = await listPairingChallenges({ env: process.env, includeExpired: true });
+    const challenge = challenges.challenges.find((item) => item.requestedPath === "/launcher");
+    assert.ok(challenge);
+    assert.equal(challenge.status, "pending");
+
+    await approvePairingChallenge(challenge.id, { env: process.env });
+    await page.waitForFunction(() => !document.body.innerText.includes("Approve this browser"), { timeout: 15_000 });
+    assert.equal(new URL(page.url()).pathname, "/launcher");
     assert.deepEqual(errors, []);
   } finally {
     if (browser) await browser.close();

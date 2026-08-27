@@ -29,6 +29,8 @@ const instanceRef = "ins_AQEBAQEBAQEBAQEBAQEBAQ";
 const threadRef = "thr_AgICAgICAgICAgICAgICAg";
 
 test("legacy cockpit GET routes map to the lean instance surface without touching attended primitives", () => {
+  assert.equal(legacyInstanceRouteTarget("/launcher"), "/launcher");
+  assert.equal(legacyInstanceRouteTarget("/ng/launcher?tab=ops"), "/launcher?tab=ops");
   assert.equal(legacyInstanceRouteTarget("/files?folder=notes"), "/files?folder=notes");
   assert.equal(legacyInstanceRouteTarget("/ng/files"), "/files");
   assert.equal(legacyInstanceRouteTarget("/timers?view=due"), "/timers?view=due");

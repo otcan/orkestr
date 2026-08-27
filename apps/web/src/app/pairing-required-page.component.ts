@@ -162,12 +162,23 @@ export class PairingRequiredPageComponent implements OnInit, OnDestroy {
 
   requestedPath(): string {
     const raw = new URLSearchParams(globalThis.location?.search || "").get("return") || "";
-    if (!raw) return "";
+    const fallback = this.currentRequestPath();
+    if (!raw) return fallback;
     try {
       const current = new URL(globalThis.location?.href || "http://localhost/");
       const target = new URL(raw, current);
       if (target.origin !== current.origin) return "";
       return `${target.pathname}${target.search}${target.hash}`;
+    } catch {
+      return "";
+    }
+  }
+
+  private currentRequestPath(): string {
+    try {
+      const current = new URL(globalThis.location?.href || "http://localhost/");
+      const path = `${current.pathname}${current.search}${current.hash}`;
+      return current.pathname === "/setup/pairing" ? "" : path;
     } catch {
       return "";
     }
