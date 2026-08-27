@@ -278,11 +278,24 @@ test("public app HTTP routes expose only granted projections and deny ordinary b
   }, { principal: admin });
   const oidc = await createOidcSecuritySession({ subject: "allowed-subject", issuedAt: new Date().toISOString() });
   const ordinary = await createOidcSecuritySession({ subject: "ordinary-subject", issuedAt: new Date().toISOString() });
+  const nativeFetch = globalThis.fetch;
+  globalThis.fetch = async (input, options) => {
+    if (String(input) === "https://keycloak.example.test/realms/orkestr/.well-known/openid-configuration") {
+      return new Response(JSON.stringify({
+        issuer: "https://keycloak.example.test/realms/orkestr",
+        authorization_endpoint: "https://keycloak.example.test/realms/orkestr/protocol/openid-connect/auth",
+        token_endpoint: "https://keycloak.example.test/realms/orkestr/protocol/openid-connect/token",
+        jwks_uri: "https://keycloak.example.test/realms/orkestr/protocol/openid-connect/certs",
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    return nativeFetch(input, options);
+  };
   const server = await startServer({ port: 0, host: "127.0.0.1" });
   const address = server.address();
   const baseUrl = `http://127.0.0.1:${typeof address === "object" && address ? address.port : 0}`;
   t.after(async () => {
     await new Promise((resolve) => server.close(resolve));
+    globalThis.fetch = nativeFetch;
     restoreEnv(prior);
     await fs.rm(home, { recursive: true, force: true });
   });
@@ -290,6 +303,10 @@ test("public app HTTP routes expose only granted projections and deny ordinary b
   const unsigned = await fetch(`${baseUrl}/apps/operations`, { redirect: "manual" });
   assert.equal(unsigned.status, 302);
   assert.equal(unsigned.headers.get("location"), "/auth/login?return=%2Fapps%2Foperations");
+
+  const login = await fetch(`${baseUrl}${unsigned.headers.get("location")}`, { redirect: "manual" });
+  assert.equal(login.status, 302);
+  assert.match(login.headers.get("location") || "", /^https:\/\/keycloak\.example\.test\/realms\/orkestr\/protocol\/openid-connect\/auth\?/);
 
   const denied = await fetch(`${baseUrl}/apps/operations`, {
     headers: { cookie: `__Host-orkestr_app_session=${encodeURIComponent(ordinary.token)}` },
