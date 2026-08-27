@@ -359,6 +359,8 @@ test("generic Gmail managed desktop operations remain compatible in enforce mode
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-desktop-operator-"));
   let pageUrl = "https://mail.google.com/mail/u/0/";
   let searchValue = "";
+  let typeExpression = "";
+  let insertedText = "";
   const server = http.createServer((request, response) => {
     const requestUrl = String(request.url || "");
     if (requestUrl === "/json/list") {
@@ -379,6 +381,12 @@ test("generic Gmail managed desktop operations remain compatible in enforce mode
   wss.on("connection", (ws) => {
     ws.on("message", (raw) => {
       const message = JSON.parse(String(raw || "{}"));
+      if (message.method === "Input.insertText") {
+        insertedText = String(message.params?.text || "");
+        searchValue = insertedText;
+        ws.send(JSON.stringify({ id: message.id, result: {} }));
+        return;
+      }
       if (message.method === "Runtime.evaluate") {
         const expression = String(message.params?.expression || "");
         if (expression.includes("desktop_click_target_not_found")) {
@@ -386,8 +394,7 @@ test("generic Gmail managed desktop operations remain compatible in enforce mode
           return;
         }
         if (expression.includes("desktop_type_target_not_found")) {
-          const match = expression.match(/const nextValue = \"([^\"]*)\"/);
-          searchValue = match ? JSON.parse(`"${match[1]}"`) : "";
+          typeExpression = expression;
           ws.send(JSON.stringify({ id: message.id, result: { result: { type: "object", value: { ok: true, field: "Search", url: pageUrl } } } }));
           return;
         }
@@ -479,6 +486,8 @@ if (["list", "health", "start", "stop", "restart"].includes(command)) {
     assert.match(observed.page.bodyText, /Signed in as Test User/);
     assert.equal(typed.actionResult.field, "Search");
     assert.equal(typed.page.fields[0].value, "founder");
+    assert.match(typeExpression, /el\.select\(\)/);
+    assert.equal(insertedText, "founder");
     assert.equal(clicked.actionResult.clicked, "People");
     assert.equal(clicked.page.links[0].text, "Example GmbH");
   } finally {

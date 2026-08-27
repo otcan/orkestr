@@ -241,12 +241,11 @@ function clickScript(selector, text) {
 `;
 }
 
-function typeScript(selector, target, value) {
+function typeScript(selector, target) {
   return `
 (() => {
   const wantedSelector = ${JSON.stringify(clean(selector))};
   const wantedTarget = ${JSON.stringify(clean(target).toLowerCase())};
-  const nextValue = ${JSON.stringify(String(value || ""))};
   const normalize = (value) => String(value || "").replace(/\\s+/g, " ").trim().toLowerCase();
   const labelFor = (el) => {
     if (!el) return "";
@@ -265,12 +264,19 @@ function typeScript(selector, target, value) {
   if (!el) return { ok: false, error: "desktop_type_target_not_found" };
   el.scrollIntoView({ block: "center", inline: "center" });
   el.focus();
-  el.value = nextValue;
-  el.dispatchEvent(new Event("input", { bubbles: true }));
-  el.dispatchEvent(new Event("change", { bubbles: true }));
+  if (typeof el.select === "function") el.select();
   return { ok: true, field: String(el.getAttribute("aria-label") || el.getAttribute("placeholder") || el.name || el.id || el.tagName || "").slice(0, 200), url: location.href };
 })()
 `;
+}
+
+async function replaceFocusedText(client, value) {
+  const key = { key: "a", code: "KeyA", windowsVirtualKeyCode: 65, modifiers: 2 };
+  await client.call("Input.dispatchKeyEvent", { type: "keyDown", ...key });
+  await client.call("Input.dispatchKeyEvent", { type: "keyUp", ...key });
+  await client.call("Input.dispatchKeyEvent", { type: "keyDown", key: "Backspace", code: "Backspace", windowsVirtualKeyCode: 8 });
+  await client.call("Input.dispatchKeyEvent", { type: "keyUp", key: "Backspace", code: "Backspace", windowsVirtualKeyCode: 8 });
+  await client.call("Input.insertText", { text: String(value || "") });
 }
 
 async function evaluateJson(client, expression) {
@@ -377,7 +383,8 @@ export async function operateManagedDesktop(slug = "", args = {}, env = process.
       actionResult = await evaluateJson(client, clickScript(args.selector, args.text || args.targetText || args.label));
       await sleep(waitMs || 1000);
     } else if (operation === "type") {
-      actionResult = await evaluateJson(client, typeScript(args.selector, args.target || args.label || args.field, args.value));
+      actionResult = await evaluateJson(client, typeScript(args.selector, args.target || args.label || args.field));
+      if (actionResult?.ok !== false) await replaceFocusedText(client, args.value);
       await sleep(waitMs);
     } else if (operation === "navigate") {
       await sleep(waitMs || 1500);
