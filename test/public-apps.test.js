@@ -325,6 +325,12 @@ test("public app HTTP routes expose only granted projections and deny ordinary b
   assert.equal(JSON.stringify(minePayload).includes("tenant-internal-7"), false);
   assert.equal(JSON.stringify(minePayload).includes("target-internal-9"), false);
 
+  for (const path of ["/api/desktops/leases", "/api/threads"]) {
+    const rawApi = await fetch(`${baseUrl}${path}`, { headers: { cookie } });
+    assert.equal(rawApi.status, 403);
+    assert.equal((await rawApi.json()).error, "oidc_app_scope_denied");
+  }
+
   const exact = await fetch(`${baseUrl}/api/apps/operations`, { headers: { cookie } });
   assert.equal(exact.status, 200);
   assert.equal(JSON.stringify(await exact.json()).includes("target-internal-9"), false);

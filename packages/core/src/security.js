@@ -2059,6 +2059,15 @@ function isAllowedBeforePairing(request) {
   return false;
 }
 
+function isAllowedForOidcAppSession(request) {
+  if (isAllowedBeforePairing(request)) return true;
+  const method = String(request?.method || "GET").toUpperCase();
+  const url = String(request?.originalUrl || request?.url || "").split("?")[0];
+  if (method === "GET" && url === "/api/me/apps") return true;
+  if (method === "GET" && /^\/api\/apps\/[^/]+$/.test(url)) return true;
+  return false;
+}
+
 export async function authorizeHttpRequest(request, env = process.env) {
   const status = await securityStatus(env);
   // This marker is set only by the server after validating an explicitly
@@ -2147,6 +2156,14 @@ export async function authorizeHttpRequest(request, env = process.env) {
         status,
         statusCode: 403,
         error: "user_disabled",
+      };
+    }
+    if (session.authProvider === "oidc" && !isAllowedForOidcAppSession(request)) {
+      return {
+        ok: false,
+        status,
+        statusCode: 403,
+        error: "oidc_app_scope_denied",
       };
     }
     const principal = principalFromSecuritySession({
