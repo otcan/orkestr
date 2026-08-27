@@ -204,6 +204,75 @@ async function browserCheck(env) {
   });
 }
 
+function desktopMode(env = process.env) {
+  const configured = String(env.ORKESTR_BROWSER_DESKTOP_MODE || "").trim().toLowerCase();
+  if (configured) return configured;
+  return String(env.ORKESTR_BROWSERCTL_PATH || env.ORKESTR_BROWSERCTL || "").trim() ? "browserctl" : "profiles";
+}
+
+function browserctlCommand(env = process.env) {
+  return String(env.ORKESTR_BROWSERCTL_PATH || env.ORKESTR_BROWSERCTL || "browserctl").trim();
+}
+
+async function runJsonCommand(command, args = [], env = process.env, timeoutMs = 5000) {
+  try {
+    const result = await execFileAsync(command, args, {
+      env: commandEnv(env),
+      timeout: timeoutMs,
+      maxBuffer: 2 * 1024 * 1024,
+    });
+    return { ok: true, payload: JSON.parse(result.stdout || "{}") };
+  } catch (error) {
+    return {
+      ok: false,
+      error: cleanMessage(error),
+      code: error?.code || "",
+    };
+  }
+}
+
+function desktopAddressConflictRows(sessions = []) {
+  const rows = new Map();
+  for (const session of Array.isArray(sessions) ? sessions : []) {
+    const conflicts = [
+      ...(Array.isArray(session?.addressConflicts) ? session.addressConflicts : []),
+      ...(Array.isArray(session?.readiness?.addressConflicts) ? session.readiness.addressConflicts : []),
+    ];
+    for (const conflict of conflicts) {
+      const field = firstLine(conflict?.field);
+      const value = firstLine(conflict?.value);
+      const slugs = Array.isArray(conflict?.slugs) ? conflict.slugs.map(firstLine).filter(Boolean).sort() : [];
+      if (!field || !value || slugs.length < 2) continue;
+      rows.set(`${field}:${value}:${slugs.join(",")}`, { field, value, slugs });
+    }
+  }
+  return [...rows.values()];
+}
+
+async function desktopRuntimeCheck(env) {
+  if (desktopMode(env) !== "browserctl") return null;
+  const command = browserctlCommand(env);
+  const result = await runJsonCommand(command, ["list", "--json"], env, 5000);
+  if (!result.ok) {
+    return doctorCheck("desktop_runtime", "Managed desktops", "error", `${command} list failed${result.error ? ` (${result.error})` : ""}.`, {
+      command,
+      repair: "Fix the browserctl command or run the installer desktop provisioning step again.",
+    });
+  }
+  const sessions = Array.isArray(result.payload?.sessions) ? result.payload.sessions : [];
+  const conflicts = desktopAddressConflictRows(sessions);
+  if (conflicts.length) {
+    return doctorCheck("desktop_runtime_addresses", "Managed desktop addresses", "error", `${conflicts.length} desktop runtime address conflict(s) detected.`, {
+      command,
+      conflicts,
+      repair: "Assign each managed desktop a unique display, debugPort, vncPort, and webPort in the desktop catalog, then restart the affected desktops.",
+    });
+  }
+  return doctorCheck("desktop_runtime", "Managed desktops", "ok", `${sessions.length} managed desktop session(s) reported by browserctl.`, {
+    command,
+  });
+}
+
 function securityChecks(security) {
   const checks = [];
   if (security.externallyLocal) {
@@ -456,6 +525,7 @@ export async function systemDoctor({ env = process.env, home = os.homedir() } = 
     writablePathCheck("workspace_root", "Workspace root", paths.workspaces, env),
     writablePathCheck("secret_store", "Secret store", paths.secrets, env),
   ]);
+  const desktopRuntimeDoctorCheck = await desktopRuntimeCheck(env);
 
   let security = null;
   let securityDoctorChecks = [];
@@ -472,7 +542,17 @@ export async function systemDoctor({ env = process.env, home = os.homedir() } = 
 
   const urlDropInCheck = await publicUrlDropInIdentityCheck(env);
   const hostBoundaryChecks = await hostBoundaryDoctorChecks(env);
-  const checks = [...pathChecks, ...commandChecks, publicUrlIdentityCheck(env), urlDropInCheck, ...hostBoundaryChecks, await eventStorageCheck(env), await threadResourcePolicyDoctorCheck(env), ...securityDoctorChecks];
+  const checks = [
+    ...pathChecks,
+    ...commandChecks,
+    ...(desktopRuntimeDoctorCheck ? [desktopRuntimeDoctorCheck] : []),
+    publicUrlIdentityCheck(env),
+    urlDropInCheck,
+    ...hostBoundaryChecks,
+    await eventStorageCheck(env),
+    await threadResourcePolicyDoctorCheck(env),
+    ...securityDoctorChecks,
+  ];
   const { counts, status, summary } = summarize(checks);
   const issues = checks
     .filter((check) => check.status !== "ok")

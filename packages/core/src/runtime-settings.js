@@ -1,5 +1,6 @@
 import { ensureDataDirs } from "../../storage/src/paths.js";
 import { readJson, writeJson } from "../../storage/src/store.js";
+import { normalizeDesktopAddressFields } from "./desktop-runtime-addresses.js";
 
 const APPROVE_REPLIES = ["/approve", "approve", "approved", "yes", "y", "allow", "go", "proceed"];
 const DENY_REPLIES = ["/deny", "deny", "no", "n", "reject", "stop", "cancel"];
@@ -100,6 +101,7 @@ function normalizeDesktopCatalogRows(rows = []) {
       url: safeHttpUrl(source.deskUrl || source.desk_url || source.publicUrl || source.public_url),
       cdpUrl: safeHttpUrl(source.cdpUrl || source.cdp_url || source.localCdpUrl || source.local_cdp_url, { localOnly: true }),
       workspacePath: safeAbsolutePath(source.workspacePath || source.workspace || source.runtimeWorkspace),
+      ...normalizeDesktopAddressFields(source),
       enabled: source.enabled !== false,
     });
   }

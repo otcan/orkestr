@@ -91,6 +91,10 @@ test("runtime settings include configured managed desktop catalog", async () => 
         purpose: "Logged-in browser for Firat job applications.",
         cdpUrl: "http://127.0.0.1:9222",
         workspacePath: "/opt/orkestr/workspace/firat-jobs",
+        display: ":117",
+        debugPort: 19317,
+        vncPort: 15917,
+        webPort: 16117,
       },
     ]),
   };
@@ -102,6 +106,10 @@ test("runtime settings include configured managed desktop catalog", async () => 
   assert.equal(settings.desktops.items[0].label, "Firat Jobs StepStone");
   assert.equal(settings.desktops.items[0].cdpUrl, "http://127.0.0.1:9222/");
   assert.equal(settings.desktops.items[0].workspacePath, "/opt/orkestr/workspace/firat-jobs");
+  assert.equal(settings.desktops.items[0].displayNumber, 117);
+  assert.equal(settings.desktops.items[0].debugPort, 19317);
+  assert.equal(settings.desktops.items[0].vncPort, 15917);
+  assert.equal(settings.desktops.items[0].webPort, 16117);
 });
 
 test("legacy runtime profiles still map to Codex safety settings", async () => {

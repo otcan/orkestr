@@ -1,7 +1,7 @@
 import { parseInstancePublicRef } from "../../../packages/core/src/canonical-public-references.js";
 
 const setupSections = new Set(["system", "security", "secrets", "maintenance", "codex", "gmail", "outlook", "whatsapp", "browsers"]);
-const appRouteRoots = new Set(["connectors", "desktops", "files", "ops", "skills", "thread", "timers"]);
+const appRouteRoots = new Set(["connectors", "desktops", "files", "launcher", "ops", "skills", "thread", "timers"]);
 const connectorAuthIntentSections = new Set(["gmail"]);
 
 export function normalizeInstanceId(value = ""): string {

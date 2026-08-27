@@ -17,7 +17,7 @@ import {
   prepareVirtualBrowser,
   stopVirtualBrowser,
 } from "../packages/browsers/src/browsers.js";
-import { operateManagedDesktop } from "../packages/browsers/src/desktop-operator.js";
+import { detectDesktopBrowserChallenge, operateManagedDesktop } from "../packages/browsers/src/desktop-operator.js";
 import { acquireDesktopLease, activeDesktopLeaseStatus, publicDesktopLeases } from "../packages/browsers/src/desktop-leases.js";
 import { issueDesktopCapability } from "../packages/browsers/src/desktop-capability-broker.js";
 import { advanceDesktopResourceGeneration, setThreadDesktopGrants } from "../packages/core/src/desktop-access.js";
@@ -355,6 +355,93 @@ if (command === "list") {
   }
 });
 
+test("managed desktop observations flag browser challenges for attended completion", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-browser-challenge-"));
+  const threadId = "desktop-challenge-thread";
+  const server = http.createServer((request, response) => {
+    if (String(request.url || "") === "/json/list") {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify([{
+        id: "page-1",
+        type: "page",
+        title: "Just a moment...",
+        url: "https://example.test/protected",
+        webSocketDebuggerUrl: `ws://127.0.0.1:${server.address().port}/devtools/page/page-1`,
+      }]));
+      return;
+    }
+    response.writeHead(404, { "content-type": "application/json" });
+    response.end(JSON.stringify({ ok: false }));
+  });
+  const wss = new WebSocketServer({ server });
+  wss.on("connection", (ws) => {
+    ws.on("message", (raw) => {
+      const message = JSON.parse(String(raw || "{}"));
+      if (message.method === "Runtime.evaluate") {
+        ws.send(JSON.stringify({
+          id: message.id,
+          result: {
+            result: {
+              type: "object",
+              value: {
+                title: "Just a moment...",
+                url: "https://example.test/protected",
+                bodyText: "Checking if the site connection is secure. Cloudflare Ray ID: test-ray",
+                textLength: 76,
+                links: [],
+                fields: [],
+                buttons: [{ text: "Verify you are human", selector: "button:nth-of-type(1)" }],
+              },
+            },
+          },
+        }));
+        return;
+      }
+      ws.send(JSON.stringify({ id: message.id, result: {} }));
+    });
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const cdpUrl = `http://127.0.0.1:${server.address().port}`;
+  const browserctl = path.join(home, "browserctl.js");
+  await fs.writeFile(browserctl, `#!/usr/bin/env node
+const [command, slug] = process.argv.slice(2);
+const session = {
+  slug: slug || "desktop",
+  label: "Desktop",
+  type: "desktop",
+  status: "running",
+  cdp_url: ${JSON.stringify(cdpUrl)},
+  control: { start: true, stop: true, restart: true, health: true }
+};
+if (["list", "health", "start"].includes(command)) {
+  console.log(JSON.stringify(command === "list" ? { ok: true, sessions: [session] } : { ok: true, session }));
+} else process.exit(2);
+`);
+  await fs.chmod(browserctl, 0o755);
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_BROWSERCTL_PATH: browserctl,
+    ORKESTR_DESKTOP_LEASE_FILE: path.join(home, "desktop-leases.json"),
+  };
+
+  try {
+    const principal = adminPrincipal("admin");
+    await createThread({ id: threadId, ownerUserId: "admin", name: "Desktop challenge" }, env);
+    const acquired = await acquireDesktopLease("desktop", { threadId, mode: "exclusive", ttlMs: 60_000 }, env, { principal });
+    assert.equal(acquired.ok, true);
+    const observed = await operateManagedDesktop("desktop", { operation: "observe" }, env, { threadId, principal });
+
+    assert.equal(observed.ok, true);
+    assert.equal(observed.browserChallenge.detected, true);
+    assert.equal(observed.browserChallenge.provider, "cloudflare");
+    assert.equal(observed.browserChallenge.requiresAttendedDesktop, true);
+    assert.match(observed.browserChallenge.recommendedAction, /same managed desktop/);
+  } finally {
+    await new Promise((resolve) => wss.close(resolve));
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
 test("generic Gmail managed desktop operations remain compatible in enforce mode", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-desktop-operator-"));
   let pageUrl = "https://mail.google.com/mail/u/0/";
@@ -539,6 +626,52 @@ test("oss browserctl exposes real noVNC desktop sessions in dry run", async () =
   const cleaned = await run("cleanup", "linkedin", "--safe");
   assert.equal(cleaned.session.cleaned, true);
   assert.equal(cleaned.session.status, "not_prepared");
+});
+
+test("oss browserctl fails fast when desktop runtime addresses collide", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-browserctl-address-conflict-"));
+  const script = path.resolve("scripts/browserctl.mjs");
+  const env = {
+    ...process.env,
+    ORKESTR_HOME: home,
+    ORKESTR_BROWSERCTL_DRY_RUN: "1",
+    ORKESTR_BROWSER_VISIBLE_SLUGS: "alpha beta",
+    ORKESTR_DESKTOP_CATALOG_JSON: JSON.stringify([
+      { slug: "alpha", display: ":415", debugPort: 34101, vncPort: 34201, webPort: 34301 },
+      { slug: "beta", displayNumber: 415, debugPort: 34102, vncPort: 34202, webPort: 34302 },
+    ]),
+  };
+  const run = async (...args) => {
+    const { stdout } = await execFileAsync(process.execPath, [script, ...args], { env });
+    return JSON.parse(stdout);
+  };
+
+  const listed = await run("list", "--json");
+  const alpha = listed.sessions.find((session) => session.slug === "alpha");
+  const beta = listed.sessions.find((session) => session.slug === "beta");
+
+  assert.equal(alpha.status, "configuration_error");
+  assert.equal(beta.status, "configuration_error");
+  assert.equal(alpha.control.start, false);
+  assert.equal(alpha.runtimeAddressConflict, true);
+  assert.deepEqual(alpha.addressConflicts, [{ field: "display", value: ":415", slugs: ["alpha", "beta"] }]);
+  await assert.rejects(
+    () => execFileAsync(process.execPath, [script, "start", "alpha"], { env }),
+    (error) => {
+      assert.match(error.stderr, /desktop_runtime_address_conflict/);
+      assert.match(error.stderr, /display :415 shared by alpha, beta/);
+      return true;
+    },
+  );
+});
+
+test("desktop browser challenge classifier ignores normal pages", () => {
+  assert.deepEqual(detectDesktopBrowserChallenge({
+    title: "Projektliste | SOLCOM",
+    url: "https://www.example.test/projects",
+    bodyText: "Project list for consultants and freelancers.",
+    links: [{ text: "Projects" }],
+  }), { detected: false });
 });
 
 test("oss browserctl marks stale tracked desktop state degraded and restarts cleanly", async () => {
