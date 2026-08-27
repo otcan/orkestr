@@ -7,6 +7,9 @@ const allowedEvents = new Set([
   "map_workflow_deployment", "github_click", "docs_click", "map_workflow_use_cases",
   "workflow_form_start", "workflow_validation_error", "workflow_submit_success", "workflow_submit_error",
   "qualified_schedule_click",
+  "book_call_header", "book_call_mobile", "book_call_footer", "book_call_hero", "book_call_final", "see_how_it_works",
+  "book_call_security", "book_call_deployment", "book_call_developers", "book_call_use_cases",
+  "booking_calendar_click", "booking_email_click", "security_github_click",
 ]);
 
 const allowedPaths = new Set(["/", "/use-cases", "/security", "/deployment", "/developers", "/workflow", "/beta", "/privacy", "/terms", "/acceptable-use", "/data-deletion", "/support"]);

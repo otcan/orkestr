@@ -5,26 +5,27 @@ release.
 
 ## Message contract
 
-- Category: **AI Operations Layer**.
-- Definition: Orkestr coordinates bounded workflows across approved systems,
-  keeps operational state visible, and stops at configured human-control points.
-- Buyer: the operations leader who owns a repeated, cross-system workflow and
-  its outcome.
+- Category: **reliable AI workflow automation**, with **AI Operations Layer** as
+  a secondary technical description rather than the opening message.
+- Definition: Orkestr connects the tools a team already uses, handles routine
+  steps, and asks for approval before important actions.
+- Buyer: the manager who owns repeated work and its outcome.
 - Delivery: **managed private deployment**, either in an isolated managed
   environment or customer-controlled infrastructure.
 - Product surface: **Orkestr Console** is the operator-facing view of named
   workflows, state, exceptions, approvals, resources, and history.
-- Entry offer: **Orkestr Workflow Pilot**.
-- Primary CTA: **Map one workflow**.
+- Entry offer: a direct, no-preparation 20-minute conversation.
+- Primary CTA: **Book a 20-minute call**.
+- Secondary CTA: **See how it works** or **See a real example**.
 
 The homepage ten-second test is successful when a cold visitor can answer:
 
-1. What is it? An AI operations layer.
-2. What does it do? Coordinates repeated work across systems.
-3. How is it controlled? Visible state, bounded access, approval, pause, and
-   revocation.
-4. How is it delivered? As a managed private deployment.
-5. How do I start? Map one workflow.
+1. What does it do? Makes repetitive work run reliably across existing tools.
+2. Who stays in control? A person approves important decisions.
+3. What can I inspect? Current status, warnings, decisions, and history.
+4. Where can it run? In a dedicated managed environment or infrastructure the
+   organization controls.
+5. How do I start? Book a 20-minute call without completing a qualification form.
 
 ## Approved claims
 
@@ -52,6 +53,8 @@ specific deployed and tested boundary.
 
 ## Sales conversation guardrail
 
-Sell the mapping, implementation, hardening, release, and operation of one
-bounded workflow. Do not sell a generic AI transformation, unrestricted access
-to every system, or a product capability that exists only in a private adapter.
+Start with a plain-language conversation about one repeated task. Sell the
+mapping, implementation, hardening, release, and operation only after the task
+and boundaries are understood. Do not sell a generic AI transformation,
+unrestricted access to every system, or a product capability that exists only
+in a private adapter.

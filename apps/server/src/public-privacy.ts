@@ -99,8 +99,8 @@ export function publicPrivacyPage(env = process.env): PrivacyPage {
     <article id="data-we-process">
       <h2>2. Information Orkestr processes</h2>
       <p>Orkestr processes information needed to provide user-requested workflows: account and contact details, chat messages, files, task outputs, timers, workspace records, connector status, managed-browser activity, security records, and technical service logs. Orkestr does not ask users to provide account passwords through chat.</p>
-      <p>Workflow Pilot inquiries are stored separately from personal-beta waitlist records. They include the contact name, work email, company and role, the submitted workflow description, frequency and volume, systems, owner, approvals and exceptions, current cost or delay, success criteria, consent, qualification result, and notification status.</p>
-      <p>The public site records a limited set of first-party interaction events such as page path, CTA name, form start, validation outcome, and submission outcome. These analytics events do not contain form field values, workflow descriptions, credentials, or cross-site tracking identifiers.</p>
+      <p>Commercial inquiries are stored separately from personal-beta waitlist records. The public booking page does not collect a detailed process map. If a visitor follows a configured scheduling link, the selected scheduling provider processes the booking information under its own privacy notice. Legacy or direct commercial inquiry records may include contact and process information the person chose to submit.</p>
+      <p>The public site records a limited set of first-party interaction events such as page path, CTA name, booking click, and public-form outcome where a form is present. These analytics events do not contain form field values, process descriptions, credentials, or cross-site tracking identifiers.</p>
     </article>
     <article id="google-data-access">
       <h2>3. Google user data Orkestr accesses</h2>

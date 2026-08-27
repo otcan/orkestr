@@ -106,3 +106,7 @@ to route commercial qualification notifications independently. When it is not
 set, Orkestr falls back to the configured waitlist notification recipient so a
 valid public submission is not silently orphaned. A qualified submission only
 receives a scheduling link when `ORKESTR_WORKFLOW_PILOT_SCHEDULING_URL` is set.
+The public `/workflow` page uses the same setting for its direct 20-minute
+booking handoff. It renders the configured public contact as an email fallback
+when no safe HTTP(S) scheduling URL is present; it never guesses a scheduling
+provider or event URL.

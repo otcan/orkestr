@@ -3,6 +3,8 @@ import {
   publicAppUrl,
   publicCanonicalUrl,
   publicRepoUrl,
+  publicSiteBaseUrl,
+  normalizePublicUrl,
   type PublicPage,
   type PublicPageId,
 } from "./public-site-config.js";
@@ -38,9 +40,43 @@ function analyticsScript(home = false) {
   </script>`;
 }
 
+function structuredData(page: PublicPage, env = process.env) {
+  const base = publicSiteBaseUrl(env);
+  if (!base) return "";
+  const canonical = publicCanonicalUrl(page.canonicalPath || (page.id === "home" ? "/" : `/${page.id}`), env);
+  const repo = normalizePublicUrl(publicRepoUrl(env));
+  const graph: Array<Record<string, unknown>> = [
+    {
+      "@type": "Organization",
+      "@id": `${base}/#organization`,
+      name: "Orkestr",
+      url: `${base}/`,
+      ...(repo ? { sameAs: [repo] } : {}),
+    },
+    {
+      "@type": "WebSite",
+      "@id": `${base}/#website`,
+      name: "Orkestr",
+      url: `${base}/`,
+      publisher: { "@id": `${base}/#organization` },
+    },
+  ];
+  if (page.id !== "home" && canonical) {
+    graph.push({
+      "@type": "BreadcrumbList",
+      itemListElement: [
+        { "@type": "ListItem", position: 1, name: "Home", item: `${base}/` },
+        { "@type": "ListItem", position: 2, name: page.title, item: canonical },
+      ],
+    });
+  }
+  const json = JSON.stringify({ "@context": "https://schema.org", "@graph": graph }).replace(/</g, "\\u003c");
+  return `<script type="application/ld+json">${json}</script>`;
+}
+
 export function renderPublicShell(page: PublicPage, env = process.env) {
   const home = page.id === "home";
-  const pageTitle = home ? "AI Operations Layer | Orkestr" : `${page.title} | Orkestr`;
+  const pageTitle = `${page.title} | Orkestr`;
   const canonical = publicCanonicalUrl(page.canonicalPath || (home ? "/" : `/${page.id}`), env);
   const appUrl = publicAppUrl(env);
   const repo = publicRepoUrl(env);
@@ -52,6 +88,7 @@ export function renderPublicShell(page: PublicPage, env = process.env) {
   <title>${escapeHtml(pageTitle)}</title>
   <meta name="description" content="${escapeHtml(page.summary)}">
   <meta name="application-name" content="Orkestr">
+  <meta name="robots" content="index,follow,max-image-preview:large">
   <meta name="theme-color" content="#f2efe6">
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="Orkestr">
@@ -59,8 +96,11 @@ export function renderPublicShell(page: PublicPage, env = process.env) {
   <meta property="og:description" content="${escapeHtml(page.summary)}">
   ${canonical ? `<meta property="og:url" content="${escapeHtml(canonical)}"><link rel="canonical" href="${escapeHtml(canonical)}">` : ""}
   <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="${escapeHtml(pageTitle)}">
+  <meta name="twitter:description" content="${escapeHtml(page.summary)}">
   <link rel="icon" type="image/svg+xml" href="/favicon.svg">
   <link rel="stylesheet" href="/public-site.css">
+  ${structuredData(page, env)}
 </head>
 <body class="page-${page.id}">
   <a class="skip-link" href="#main-content">Skip to content</a>
@@ -74,22 +114,22 @@ export function renderPublicShell(page: PublicPage, env = process.env) {
     </nav>
     <div class="header-actions">
       <a class="text-action" href="${escapeHtml(appUrl)}" data-event="sign_in_click">Sign in</a>
-      <a class="button button-small" href="/workflow" data-event="map_workflow_header">Map one workflow</a>
+      <a class="button button-small" href="/workflow" data-event="book_call_header">Book a 20-minute call</a>
     </div>
     <details class="mobile-menu">
       <summary aria-label="Open navigation">Menu</summary>
       <nav aria-label="Mobile navigation">
-        <a href="/use-cases">Use cases</a><a href="/deployment">Deployment</a><a href="/security">Security</a><a href="/developers">Developers</a><a href="${escapeHtml(appUrl)}">Sign in</a>
+        <a href="/use-cases">Use cases</a><a href="/deployment">Deployment</a><a href="/security">Security</a><a href="/developers">Developers</a><a href="/workflow" data-event="book_call_mobile">Book a 20-minute call</a><a href="${escapeHtml(appUrl)}">Sign in</a>
       </nav>
     </details>
   </header>
   ${page.body}
   <footer class="footer">
-    <div class="footer-brand"><a class="wordmark inverse" href="/"><span>O</span> Orkestr</a><p>AI operations, under human control.</p></div>
-    <nav aria-label="Product links"><strong>Evaluate</strong><a href="/use-cases">Use cases</a><a href="/security">Security</a><a href="/deployment">Deployment</a><a href="/workflow">Workflow Pilot</a></nav>
+    <div class="footer-brand"><a class="wordmark inverse" href="/"><span>O</span> Orkestr</a><p>Reliable work, with people in control.</p></div>
+    <nav aria-label="Product links"><strong>Explore</strong><a href="/use-cases">Use cases</a><a href="/security">Security</a><a href="/deployment">Deployment</a><a href="/workflow" data-event="book_call_footer">Book a call</a></nav>
     <nav aria-label="Technical links"><strong>Build</strong><a href="/developers">Developers</a><a href="${escapeHtml(repo)}" rel="noreferrer">GitHub</a><a href="/beta">Personal beta</a><a href="/support">Support</a></nav>
     <nav aria-label="Legal links"><strong>Legal</strong><a href="/terms">Terms</a><a href="/privacy">Privacy</a><a href="/acceptable-use">Acceptable use</a><a href="/data-deletion">Data deletion</a></nav>
-    <p class="footer-note">Managed private deployment. Public-alpha OSS core. Capabilities vary by deployment.</p>
+    <p class="footer-note">Private deployment options. Open-source core. Available connections and actions vary by deployment.</p>
   </footer>
   ${analyticsScript(home)}
 </body>

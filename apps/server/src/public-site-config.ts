@@ -66,6 +66,15 @@ export function publicContact(env = process.env) {
   return clean(env.ORKESTR_PUBLIC_CONTACT || env.ORKESTR_SUPPORT_EMAIL || "Contact the operator of this deployment.");
 }
 
+export function publicContactEmail(env = process.env) {
+  const contact = publicContact(env);
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contact) ? contact : "";
+}
+
+export function publicSchedulingUrl(env = process.env) {
+  return normalizePublicUrl(env.ORKESTR_WORKFLOW_PILOT_SCHEDULING_URL || "");
+}
+
 export function publicSiteBaseUrl(env = process.env) {
   const configured = normalizePublicUrl(env.ORKESTR_PUBLIC_SITE_URL || env.ORKESTR_PRIMARY_PUBLIC_URL || "");
   if (configured) return configured;

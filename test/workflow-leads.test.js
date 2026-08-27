@@ -98,7 +98,7 @@ test("public workflow and analytics endpoints remain anonymous while storing onl
     const tracked = await fetch(`http://127.0.0.1:${port}/api/public/events`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ event: "map_workflow_hero", path: "/", workflowDescription: "must not be stored" }),
+      body: JSON.stringify({ event: "book_call_hero", path: "/", workflowDescription: "must not be stored" }),
     });
     const ignored = await fetch(`http://127.0.0.1:${port}/api/public/events`, {
       method: "POST",
@@ -115,7 +115,7 @@ test("public workflow and analytics endpoints remain anonymous while storing onl
     assert.equal(tracked.status, 202);
     assert.equal(ignored.status, 202);
     assert.equal(analytics.length, 1);
-    assert.deepEqual(analytics.map(({ event, path }) => ({ event, path })), [{ event: "map_workflow_hero", path: "/" }]);
+    assert.deepEqual(analytics.map(({ event, path }) => ({ event, path })), [{ event: "book_call_hero", path: "/" }]);
     assert.equal(JSON.stringify(analytics).includes("must not be stored"), false);
   } finally {
     await new Promise((resolve) => server.close(resolve));

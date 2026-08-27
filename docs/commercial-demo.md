@@ -18,8 +18,8 @@ demo controls. Its adjacent four-caption walkthrough is the reduced-motion and
 non-animated alternative. The diagram is understandable with JavaScript and
 animation disabled.
 
-This evidence does not claim that an ERP or invoice adapter is enabled in every
-installation. The page labels connector availability and workflow configuration
-as deployment-specific. No real deployment screenshot or customer record may
-replace the synthetic proof without separate privacy, security, claims, and
-publication approval.
+This evidence does not claim that a purchase-system or invoice connection is
+enabled in every installation. The page labels connection availability and
+process rules as deployment-specific. No real deployment screenshot or customer
+record may replace the illustrative proof without separate privacy, security,
+claims, and publication approval.
