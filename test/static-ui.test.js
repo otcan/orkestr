@@ -1142,32 +1142,16 @@ test("ops page exposes release broker inventory", async () => {
 
 test("server keeps public pages on the configured public site host only", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-static-ui-public-host-"));
-  const prior = {
-    home: process.env.ORKESTR_HOME,
-    overlay: process.env.ORKESTR_OVERLAY_DIR,
-    publicSiteUrl: process.env.ORKESTR_PUBLIC_SITE_URL,
-    primaryDomain: process.env.ORKESTR_PRIMARY_DOMAIN,
-    publicUrl: process.env.ORKESTR_PUBLIC_URL,
-    publicAppUrl: process.env.ORKESTR_PUBLIC_APP_URL,
-    publicAuthUrl: process.env.ORKESTR_PUBLIC_AUTH_URL,
-    publicHttpsUrl: process.env.ORKESTR_PUBLIC_HTTPS_URL,
-    connectPublicUrl: process.env.ORKESTR_CONNECT_PUBLIC_URL,
-    pairingUrl: process.env.ORKESTR_PAIRING_URL,
-    authRequired: process.env.ORKESTR_AUTH_REQUIRED,
-    instanceName: process.env.ORKESTR_INSTANCE_NAME,
-  };
+  const prior = snapshotEnv(publicRuntimeEnvKeys);
+  clearEnv(publicRuntimeEnvKeys);
   process.env.ORKESTR_HOME = home;
   process.env.ORKESTR_PUBLIC_SITE_URL = "https://orkestr.example.test";
   process.env.ORKESTR_PRIMARY_DOMAIN = "orkestr.example.test";
   process.env.ORKESTR_PUBLIC_URL = "https://app.orkestr.example.test";
   process.env.ORKESTR_PUBLIC_APP_URL = "https://app.orkestr.example.test";
+  process.env.ORKESTR_PUBLIC_AUTH_URL = "https://orkestr.example.test/setup/pairing";
   process.env.ORKESTR_AUTH_REQUIRED = "1";
   process.env.ORKESTR_INSTANCE_NAME = "Main Orkestr";
-  delete process.env.ORKESTR_OVERLAY_DIR;
-  delete process.env.ORKESTR_PUBLIC_AUTH_URL;
-  delete process.env.ORKESTR_PUBLIC_HTTPS_URL;
-  delete process.env.ORKESTR_CONNECT_PUBLIC_URL;
-  delete process.env.ORKESTR_PAIRING_URL;
   await writeInstanceIdentity({ internalInstanceId: "local-instance", publicRef: "ins_AQEBAQEBAQEBAQEBAQEBAQ" }, process.env);
   const server = await startServer({ port: 0, host: "127.0.0.1" });
   const { port } = server.address();
@@ -1257,30 +1241,7 @@ test("server keeps public pages on the configured public site host only", async 
     assert.doesNotMatch(overlappingHostHtml, /<h1>Which Orkestr\?<\/h1>/);
   } finally {
     await new Promise((resolve) => server.close(resolve));
-    if (prior.home === undefined) delete process.env.ORKESTR_HOME;
-    else process.env.ORKESTR_HOME = prior.home;
-    if (prior.overlay === undefined) delete process.env.ORKESTR_OVERLAY_DIR;
-    else process.env.ORKESTR_OVERLAY_DIR = prior.overlay;
-    if (prior.publicSiteUrl === undefined) delete process.env.ORKESTR_PUBLIC_SITE_URL;
-    else process.env.ORKESTR_PUBLIC_SITE_URL = prior.publicSiteUrl;
-    if (prior.primaryDomain === undefined) delete process.env.ORKESTR_PRIMARY_DOMAIN;
-    else process.env.ORKESTR_PRIMARY_DOMAIN = prior.primaryDomain;
-    if (prior.publicUrl === undefined) delete process.env.ORKESTR_PUBLIC_URL;
-    else process.env.ORKESTR_PUBLIC_URL = prior.publicUrl;
-    if (prior.publicAppUrl === undefined) delete process.env.ORKESTR_PUBLIC_APP_URL;
-    else process.env.ORKESTR_PUBLIC_APP_URL = prior.publicAppUrl;
-    if (prior.publicAuthUrl === undefined) delete process.env.ORKESTR_PUBLIC_AUTH_URL;
-    else process.env.ORKESTR_PUBLIC_AUTH_URL = prior.publicAuthUrl;
-    if (prior.publicHttpsUrl === undefined) delete process.env.ORKESTR_PUBLIC_HTTPS_URL;
-    else process.env.ORKESTR_PUBLIC_HTTPS_URL = prior.publicHttpsUrl;
-    if (prior.connectPublicUrl === undefined) delete process.env.ORKESTR_CONNECT_PUBLIC_URL;
-    else process.env.ORKESTR_CONNECT_PUBLIC_URL = prior.connectPublicUrl;
-    if (prior.pairingUrl === undefined) delete process.env.ORKESTR_PAIRING_URL;
-    else process.env.ORKESTR_PAIRING_URL = prior.pairingUrl;
-    if (prior.authRequired === undefined) delete process.env.ORKESTR_AUTH_REQUIRED;
-    else process.env.ORKESTR_AUTH_REQUIRED = prior.authRequired;
-    if (prior.instanceName === undefined) delete process.env.ORKESTR_INSTANCE_NAME;
-    else process.env.ORKESTR_INSTANCE_NAME = prior.instanceName;
+    restoreEnv(prior);
   }
 });
 
@@ -1821,7 +1782,7 @@ test("web shell switches to a constrained non-admin user mode", async () => {
   assert.match(component, /uiRuntimeReady\(\): boolean/);
   assert.match(component, /uiRuntimeReady\(\): boolean\s*\{\s*return true;/);
   assert.match(component, /panelAllowedForCurrentUser\(panel: Panel\): boolean/);
-  assert.match(component, /\["chat", "history", "delivery", "timers", "files", "instanceSettings", "instanceTimers", "instanceDesktops", "userConnectors"\]\.includes\(panel\)/);
+  assert.match(component, /\["chat", "history", "delivery", "timers", "files", "instanceApps", "instanceSettings", "instanceTimers", "instanceDesktops", "userConnectors"\]\.includes\(panel\)/);
   assert.match(component, /normalizeUserModeView\(\)/);
   assert.match(component, /isUserNavPanelActive\(panel: Panel\): boolean/);
   assert.match(component, /isRouteLevelUserPanel\(panel: Panel\): boolean/);
