@@ -74,6 +74,14 @@ test("instance pairing retains a canonical instance return path", () => {
     `/instance/${localRef}/desktops?view=all`,
   );
   assert.equal(
+    instanceSetupReturnPath("internal-id", "/apps"),
+    "/i/internal-id/app/apps",
+  );
+  assert.equal(
+    instanceSetupReturnPath("internal-id", "/ng/apps?tab=ops"),
+    "/i/internal-id/app/apps?tab=ops",
+  );
+  assert.equal(
     instanceSetupReturnPath("internal-id", "/instance/not-an-instance/desktops"),
     "/i/internal-id/app/",
   );

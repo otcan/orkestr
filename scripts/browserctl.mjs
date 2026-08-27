@@ -6,6 +6,12 @@ import net from "node:net";
 import { randomUUID } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
 import { execFileSync, spawn } from "node:child_process";
+import {
+  desktopAddressConflictMessage,
+  desktopAddressConflictsForSlug,
+  desktopRuntimeAddresses,
+  normalizeDesktopAddressFields,
+} from "../packages/core/src/desktop-runtime-addresses.js";
 import { probeRfbFramebuffer } from "./browserctl-visual-readiness.mjs";
 
 const defaultCatalog = [
@@ -83,6 +89,7 @@ function normalizeCatalogRows(rows = []) {
       label: cleanText(source.label || source.title) || titleFromSlug(slug),
       purpose: cleanText(source.purpose || source.notes || source.description) || "Managed browser desktop.",
       startUrl: safeUrl(source.startUrl || source.start_url || source.url, { allowAboutBlank: true }) || "about:blank",
+      ...normalizeDesktopAddressFields(source),
       enabled: source.enabled !== false,
     });
   }
@@ -175,13 +182,23 @@ function statePath(slug) {
 }
 
 function portsForSlug(slug) {
+  const desktops = catalog({ includeHidden: true });
   const index = desktopIndex(slug);
-  return {
-    debugPort: numberEnv("ORKESTR_BROWSER_DEBUG_PORT_BASE", 9222) + index,
-    vncPort: numberEnv("ORKESTR_DESKTOP_VNC_PORT_BASE", 5901) + index,
-    webPort: numberEnv("ORKESTR_DESKTOP_WEB_PORT_BASE", 6080) + index,
-    displayNumber: numberEnv("ORKESTR_DESKTOP_DISPLAY_BASE", 90) + index,
-  };
+  return desktopRuntimeAddresses(desktops[index] || { slug }, index, {
+    debugPortBase: numberEnv("ORKESTR_BROWSER_DEBUG_PORT_BASE", 9222),
+    vncPortBase: numberEnv("ORKESTR_DESKTOP_VNC_PORT_BASE", 5901),
+    webPortBase: numberEnv("ORKESTR_DESKTOP_WEB_PORT_BASE", 6080),
+    displayBase: numberEnv("ORKESTR_DESKTOP_DISPLAY_BASE", 90),
+  });
+}
+
+function addressConflictsForSlug(slug) {
+  return desktopAddressConflictsForSlug(catalog({ includeHidden: true }), slug, {
+    debugPortBase: numberEnv("ORKESTR_BROWSER_DEBUG_PORT_BASE", 9222),
+    vncPortBase: numberEnv("ORKESTR_DESKTOP_VNC_PORT_BASE", 5901),
+    webPortBase: numberEnv("ORKESTR_DESKTOP_WEB_PORT_BASE", 6080),
+    displayBase: numberEnv("ORKESTR_DESKTOP_DISPLAY_BASE", 90),
+  });
 }
 
 function desktopUrl(slug) {
@@ -641,6 +658,19 @@ async function sessionRecord(value) {
   const vncPort = Number(state.vncPort || ports.vncPort);
   const webPort = Number(state.webPort || ports.webPort);
   const display = String(state.display || `:${ports.displayNumber}`);
+  const addressConflicts = addressConflictsForSlug(slug);
+  const runtimeAddressConflict = addressConflicts.length > 0;
+  const effectiveReadiness = runtimeAddressConflict
+    ? {
+      ...readiness,
+      ok: false,
+      status: "desktop_runtime_address_conflict",
+      issues: ["desktop_runtime_address_conflict", ...readiness.issues.filter((issue) => issue !== "desktop_runtime_address_conflict")],
+      addressConflicts,
+    }
+    : readiness;
+  const effectiveRunning = !runtimeAddressConflict && running;
+  const effectiveStatus = runtimeAddressConflict ? "configuration_error" : status;
 
   return {
     id: slug,
@@ -652,45 +682,47 @@ async function sessionRecord(value) {
     access: "desk",
     ...browserScope(),
     configured: prepared,
-    status,
-    state: status,
+    status: effectiveStatus,
+    state: effectiveStatus,
     url: prepared ? desktopUrl(slug) : desktop.startUrl,
     desk_url: prepared ? desktopUrl(slug) : null,
     desk_proxy_url: prepared ? desktopUrl(slug) : null,
-    cdp_url: running || state.startedAt ? `http://127.0.0.1:${debugPort}` : null,
+    cdp_url: effectiveRunning || state.startedAt ? `http://127.0.0.1:${debugPort}` : null,
     cdp_ok: cdpOpen,
     web_ok: webOpen,
-    visual_ok: readiness.ok,
-    bridge_ok: readiness.bridgeOk,
-    browser_ok: readiness.browserOk,
-    state_drift: readiness.issues.includes("stale_state"),
-    readiness,
+    visual_ok: effectiveReadiness.ok,
+    bridge_ok: effectiveReadiness.bridgeOk,
+    browser_ok: effectiveReadiness.browserOk,
+    state_drift: effectiveReadiness.issues.includes("stale_state"),
+    readiness: effectiveReadiness,
+    runtimeAddressConflict,
+    addressConflicts,
     owner_service: "orkestr-oss",
     profileDir: profileDir(slug),
     profile: profileDir(slug),
     profile_path: profileDir(slug),
-    root_pid: running ? state.chromePid || state.websockifyPid || state.xvfbPid || null : null,
-    chrome_pid: running ? state.chromePid || null : null,
-    websockify_pid: running ? state.websockifyPid || null : null,
-    vnc_pid: running ? state.x11vncPid || null : null,
+    root_pid: effectiveRunning ? state.chromePid || state.websockifyPid || state.xvfbPid || null : null,
+    chrome_pid: effectiveRunning ? state.chromePid || null : null,
+    websockify_pid: effectiveRunning ? state.websockifyPid || null : null,
+    vnc_pid: effectiveRunning ? state.x11vncPid || null : null,
     debugPort,
     web_port: webPort,
     vnc_port: vncPort,
     display,
-    safe_cleanup: prepared && !running,
+    safe_cleanup: prepared && !effectiveRunning,
     control: {
       health: true,
       prepare: true,
-      start: true,
-      stop: Boolean(running || state.startedAt),
-      restart: prepared,
-      cleanup: prepared && !running,
+      start: !runtimeAddressConflict,
+      stop: Boolean(effectiveRunning || state.startedAt),
+      restart: prepared && !runtimeAddressConflict,
+      cleanup: prepared && !effectiveRunning,
     },
     preparedAt: state.preparedAt || null,
     lastOpenedAt: state.startedAt || null,
     stoppedAt: state.stoppedAt || null,
     cleanedAt: state.cleanedAt || null,
-    launchError: state.launchError || null,
+    launchError: runtimeAddressConflict ? desktopAddressConflictMessage(slug, addressConflicts) : state.launchError || null,
     source: "orkestr-browserctl",
   };
 }
@@ -703,6 +735,13 @@ async function listSessions() {
 async function startDesktop(value) {
   const desktop = desktopBySlug(value);
   const slug = desktop.slug;
+  const addressConflicts = addressConflictsForSlug(slug);
+  if (addressConflicts.length) {
+    throw Object.assign(new Error(desktopAddressConflictMessage(slug, addressConflicts)), {
+      statusCode: 409,
+      conflicts: addressConflicts,
+    });
+  }
   const current = await sessionRecord(slug);
   if (current.status === "running") return current;
   if (current.status === "degraded" || current.state_drift) {

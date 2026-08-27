@@ -1,0 +1,75 @@
+<section class="panel-body instance-resource-page app-launcher-page">
+  <header class="instance-page-header">
+    <div>
+      <p class="eyebrow">Instance resources</p>
+      <h3>Apps</h3>
+      <p>Open the tools registered for this Orkestr instance.</p>
+    </div>
+    <button class="secondary" type="button" (click)="load()" [disabled]="busy">Refresh</button>
+  </header>
+
+  <div class="instance-metric-strip" aria-label="App summary">
+    <article>
+      <span>Total</span>
+      <strong>{{ counts.total || apps.length }}</strong>
+    </article>
+    <article>
+      <span>Internal</span>
+      <strong>{{ counts.internal || 0 }}</strong>
+    </article>
+    <article>
+      <span>External</span>
+      <strong>{{ counts.external || 0 }}</strong>
+    </article>
+    <article [class.warning]="(counts.attention || 0) > 0">
+      <span>Needs attention</span>
+      <strong>{{ counts.attention || 0 }}</strong>
+    </article>
+  </div>
+
+  @if (error) {
+    <div class="notice error">{{ error }}</div>
+  }
+
+  <div class="app-launcher-grid">
+    @for (app of apps; track app.slug || app.id) {
+      <article class="app-launcher-card">
+        <div class="app-launcher-card-head">
+          <div>
+            <p class="eyebrow">{{ app.category || "apps" }} · {{ app.type || "web" }}</p>
+            <h4>{{ app.label }}</h4>
+          </div>
+          <span [class]="healthClass(app)">{{ healthLabel(app) }}</span>
+        </div>
+
+        <p>{{ appDescription(app) }}</p>
+
+        @if (app.tags?.length) {
+          <div class="app-launcher-tags">
+            @for (tag of app.tags; track tag) {
+              <span>{{ tag }}</span>
+            }
+          </div>
+        }
+
+        <div class="app-launcher-actions">
+          <a class="button" [href]="appHref(app)" [target]="appTarget(app)" rel="noreferrer">Open</a>
+          @if (app.external) {
+            <span>External</span>
+          } @else {
+            <span>Orkestr</span>
+          }
+        </div>
+      </article>
+    } @empty {
+      <div class="empty-state">
+        <strong>{{ busy ? "Loading apps…" : "No apps registered" }}</strong>
+        <p>Launcher entries can be provided by runtime settings or an overlay file.</p>
+      </div>
+    }
+  </div>
+
+  @if (generatedAt) {
+    <small class="app-launcher-updated">Updated {{ generatedAt | date: "MMM d, HH:mm" }}</small>
+  }
+</section>

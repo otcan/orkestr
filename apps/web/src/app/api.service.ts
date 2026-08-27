@@ -126,6 +126,37 @@ export interface ReleaseRolloutResponse {
   generatedAt?: string;
 }
 
+export interface LauncherAppHealth {
+  status?: string;
+  statusCode?: number;
+  latencyMs?: number;
+  checkedAt?: string;
+  error?: string;
+}
+
+export interface LauncherApp {
+  id: string;
+  slug: string;
+  label: string;
+  description?: string;
+  type?: string;
+  category?: string;
+  url: string;
+  external?: boolean;
+  target?: string;
+  tags?: string[];
+  adminOnly?: boolean;
+  source?: string;
+  health?: LauncherAppHealth;
+}
+
+export interface LauncherAppsResponse {
+  ok?: boolean;
+  apps: LauncherApp[];
+  counts?: Record<string, number>;
+  generatedAt?: string;
+}
+
 export interface TenantVmWhatsAppRoute {
   chatId?: string;
   chatName?: string;
@@ -3044,6 +3075,10 @@ export class ApiService {
 
   desktopShares(includeTerminal = true): Observable<{ ok: boolean; shares: DesktopShareRecord[]; migrationAmbiguities?: Array<Record<string, unknown>> }> {
     return this.http.get<{ ok: boolean; shares: DesktopShareRecord[]; migrationAmbiguities?: Array<Record<string, unknown>> }>(this.api(`/desktop-shares?includeTerminal=${includeTerminal ? "1" : "0"}`));
+  }
+
+  launcherApps(includeHealth = false): Observable<LauncherAppsResponse> {
+    return this.http.get<LauncherAppsResponse>(this.api(`/apps${includeHealth ? "?health=1" : ""}`));
   }
 
   revokeDesktopShare(shareId: string, reason = "operator_revoked"): Observable<{ ok: boolean; share: DesktopShareRecord }> {
