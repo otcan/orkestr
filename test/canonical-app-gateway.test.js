@@ -153,6 +153,13 @@ test("local canonical gateway serves an instance-scoped SPA and uses uniform 404
   assert.equal(known.status, 200);
   assert.match(knownHtml, new RegExp(`<base href="/instance/${instanceRef}/"`));
   assert.doesNotMatch(knownHtml, /private-local-id|private-thread-id|Private thread name/);
+  const launcher = await fetch(`http://127.0.0.1:${port}/instance/${instanceRef}/launcher`, {
+    redirect: "manual",
+  });
+  const launcherHtml = await launcher.text();
+  assert.equal(launcher.status, 200);
+  assert.match(launcherHtml, new RegExp(`<base href="/instance/${instanceRef}/"`));
+  assert.doesNotMatch(launcherHtml, /private-local-id|private-thread-id|Private thread name/);
   const legacyFiles = await fetch(`http://127.0.0.1:${port}/files?folder=notes`, {
     redirect: "manual",
     headers: { host: "app.example.test" },

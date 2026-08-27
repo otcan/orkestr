@@ -55,6 +55,7 @@ export function registerLegacyInstanceRedirects(app: INestApplication): void {
   const expressApp = app.getHttpAdapter().getInstance();
   expressApp.use((request: any, response: any, next: () => void) => {
     if (!request?.orkestrPrincipal || !["GET", "HEAD"].includes(String(request.method || "GET").toUpperCase())) return next();
+    if (request?.orkestrCanonicalGateway || request?.orkestrCanonicalPrefix) return next();
     const hosts = appHostnames(process.env);
     const host = requestHost(request);
     if (hosts.size && !hosts.has(host) && !loopbackHost(host)) return next();
