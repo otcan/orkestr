@@ -31,6 +31,7 @@
       }
     </button>
     <nav class="instance-topbar-nav" aria-label="Instance navigation">
+      <button class="secondary" type="button" [class.active]="activePanel === 'instanceApps'" (click)="openPanel('instanceApps')">Apps</button>
       <button class="secondary" type="button" [class.active]="activePanel === 'files'" (click)="openPanel('files')">Files</button>
       <button class="secondary" type="button" [class.active]="activePanel === 'instanceDesktops'" (click)="openPanel('instanceDesktops')">Desktops</button>
       <button class="secondary" type="button" [class.active]="activePanel === 'instanceTimers'" (click)="openPanel('instanceTimers')">Timers</button>
@@ -341,7 +342,9 @@
   ></button>
 
   <section class="chat">
-    @if (activePanel === "files") {
+    @if (activePanel === "instanceApps") {
+      <ork-app-launcher-page></ork-app-launcher-page>
+    } @else if (activePanel === "files") {
       <ork-files-page></ork-files-page>
     } @else if (activePanel === "instanceSettings") {
       <ork-instance-settings-page></ork-instance-settings-page>

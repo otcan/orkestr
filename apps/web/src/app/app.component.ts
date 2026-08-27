@@ -2,6 +2,7 @@ import { DatePipe } from "@angular/common";
 import { AfterViewChecked, ChangeDetectorRef, Component, ElementRef, OnDestroy, OnInit, ViewChild, inject, signal } from "@angular/core";
 import { FormsModule } from "@angular/forms";
 import { firstValueFrom } from "rxjs";
+import { AppLauncherPageComponent } from "./app-launcher-page.component";
 import { FirstThreadWizardComponent } from "./first-thread-wizard.component";
 import { FilesPageComponent } from "./files-page.component";
 import { InstanceSettingsPageComponent } from "./instance-settings-page.component";
@@ -54,7 +55,7 @@ import {
 import { appendPendingFiles, messageWithAttachmentPaths, PendingFile, removePendingFile, uploadPendingFiles } from "./thread-uploads";
 import { canonicalThreadPanelUrl, navigateCanonicalThreadTarget, navigateLegacyThreadPath } from "./canonical-thread-navigation.js";
 
-type Panel = "chat" | "history" | "delivery" | "timers" | "attach" | "settings" | "workers" | "runtime" | "raw" | "files" | "instanceSettings" | "instanceTimers" | "instanceDesktops" | "userConnectors";
+type Panel = "chat" | "history" | "delivery" | "timers" | "attach" | "settings" | "workers" | "runtime" | "raw" | "files" | "instanceApps" | "instanceSettings" | "instanceTimers" | "instanceDesktops" | "userConnectors";
 type CodexRateLimitKey = "primary" | "secondary";
 type SetupPageMode = "setup" | "onboarding";
 type SetupSection = "system" | "security" | "secrets" | "maintenance" | "codex" | "gmail" | "whatsapp" | "browsers";
@@ -79,7 +80,7 @@ const MESSAGE_PAGE_LIMIT = 100;
 
 @Component({
   selector: "ork-root",
-  imports: [DatePipe, FormsModule, FirstThreadWizardComponent, FilesPageComponent, InstanceSettingsPageComponent, OnboardingPageComponent, PairingRequiredPageComponent, PublicAppsPageComponent, SharedAppPageComponent, ThreadComposerComponent, ThreadMessageListComponent, UserConnectorsPageComponent, UserDeskPageComponent, UserTimersPageComponent],
+  imports: [DatePipe, FormsModule, AppLauncherPageComponent, FirstThreadWizardComponent, FilesPageComponent, InstanceSettingsPageComponent, OnboardingPageComponent, PairingRequiredPageComponent, PublicAppsPageComponent, SharedAppPageComponent, ThreadComposerComponent, ThreadMessageListComponent, UserConnectorsPageComponent, UserDeskPageComponent, UserTimersPageComponent],
   templateUrl: "./app.component.html",
 })
 export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
@@ -631,7 +632,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   panelAllowedForCurrentUser(panel: Panel): boolean {
     if (this.isAdminMode()) return true;
-    return ["chat", "history", "delivery", "timers", "files", "instanceSettings", "instanceTimers", "instanceDesktops", "userConnectors"].includes(panel);
+    return ["chat", "history", "delivery", "timers", "files", "instanceApps", "instanceSettings", "instanceTimers", "instanceDesktops", "userConnectors"].includes(panel);
   }
 
   isUserNavPanelActive(panel: Panel): boolean {
@@ -640,7 +641,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   private isRouteLevelUserPanel(panel: Panel): boolean {
-    return ["files", "instanceSettings", "instanceTimers", "instanceDesktops", "userConnectors"].includes(panel);
+    return ["files", "instanceApps", "instanceSettings", "instanceTimers", "instanceDesktops", "userConnectors"].includes(panel);
   }
 
   rawTerminalAvailable(thread: ThreadSummary | null = this.selectedThread()): boolean {
@@ -910,6 +911,18 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       if (this.activePanel === "raw") this.closeRawStream();
       this.activePanel = "files";
       this.pushPath("", "files");
+      this.updateDocumentTitle();
+      this.renderNow();
+      return;
+    }
+    if (panel === "instanceApps") {
+      this.modelDetailsOpen = false;
+      this.slashHelpOpen = false;
+      this.gitDetailsThreadId = "";
+      this.threadWizardOpen = false;
+      if (this.activePanel === "raw") this.closeRawStream();
+      this.activePanel = "instanceApps";
+      this.pushPath("", "instanceApps");
       this.updateDocumentTitle();
       this.renderNow();
       return;
@@ -3694,7 +3707,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   private currentViewUrl(): string {
-    if (["files", "instanceSettings", "instanceTimers", "instanceDesktops"].includes(this.activePanel)) {
+    if (["files", "instanceApps", "instanceSettings", "instanceTimers", "instanceDesktops"].includes(this.activePanel)) {
       const target = this.pathForPanel("", this.activePanel);
       try {
         return new URL(target, globalThis.location?.href || "http://localhost/").toString();
@@ -4821,6 +4834,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     if (this.connectorLoginProvider(parts)) return false;
     let suffix = "";
     if (!parts.length) suffix = "";
+    else if (parts[0] === "launcher" || (parts[0] === "ng" && parts[1] === "launcher")) suffix = "launcher";
     else if (parts[0] === "files" || (parts[0] === "ng" && parts[1] === "files")) suffix = "files";
     else if (["settings", "ops", "mailboxes"].includes(parts[0]) || (parts[0] === "connectors" && !parts[1])) suffix = "settings";
     else if (parts[0] === "setup" || parts[0] === "onboarding" || (parts[0] === "ng" && parts[1] === "onboarding")) {
@@ -4852,6 +4866,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     const parts = this.locationPathParts();
     if (this.sharedAppParts(parts) || parts[0] === "apps") return "chat";
     if (parts[0] === "ops" || (parts[0] === "ng" && parts[1] === "ops")) return "instanceSettings";
+    if (parts[0] === "launcher" || (parts[0] === "ng" && parts[1] === "launcher")) return "instanceApps";
     if (parts[0] === "files" || (parts[0] === "ng" && parts[1] === "files")) return "files";
     if (parts[0] === "settings" || parts[0] === "mailboxes") return "instanceSettings";
     if (parts[0] === "timers" || (parts[0] === "ng" && parts[1] === "timers")) return "instanceTimers";
@@ -4883,6 +4898,10 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     }
     if (parts[0] === "ng" && parts[1] === "ops") {
       globalThis.history?.replaceState({}, "", this.appPath("/settings"));
+      return;
+    }
+    if (parts[0] === "ng" && parts[1] === "launcher") {
+      globalThis.history?.replaceState({}, "", this.instancePath("/launcher"));
       return;
     }
     if (parts[0] === "ng" && parts[1] === "files") {
@@ -5056,6 +5075,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   private pathForPanel(id: string, panel: Panel): string {
     if (panel === "files") return this.instancePath("/files");
+    if (panel === "instanceApps") return this.instancePath("/launcher");
     if (panel === "instanceSettings") return this.instancePath("/settings");
     if (panel === "instanceTimers") return this.instancePath("/timers");
     if (panel === "instanceDesktops") return this.instancePath("/desktops");
@@ -5319,6 +5339,10 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     }
     if (this.activePanel === "files") {
       globalThis.document.title = "Files · Orkestr";
+      return;
+    }
+    if (this.activePanel === "instanceApps") {
+      globalThis.document.title = "Apps · Orkestr";
       return;
     }
     if (this.activePanel === "instanceSettings") {

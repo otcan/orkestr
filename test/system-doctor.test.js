@@ -124,6 +124,40 @@ test("system doctor warns when active URL drop-ins mix public and private instan
   assert.ok(doctor.issues.some((issue) => issue.code === "public_url_dropins"));
 });
 
+test("system doctor reports browserctl desktop address conflicts", async () => {
+  const { home, env } = await fakeHost();
+  const payload = JSON.stringify({
+    ok: true,
+    sessions: [
+      {
+        slug: "alpha",
+        status: "configuration_error",
+        addressConflicts: [{ field: "display", value: ":115", slugs: ["alpha", "beta"] }],
+      },
+      {
+        slug: "beta",
+        status: "configuration_error",
+        readiness: { addressConflicts: [{ field: "display", value: ":115", slugs: ["alpha", "beta"] }] },
+      },
+    ],
+  });
+  await writeCommand(path.join(home, "bin"), "browserctl", `printf '%s\\n' '${payload}'`);
+
+  const doctor = await systemDoctor({
+    env: {
+      ...env,
+      ORKESTR_BROWSER_DESKTOP_MODE: "browserctl",
+    },
+    home,
+  });
+  const check = doctor.checks.find((item) => item.id === "desktop_runtime_addresses");
+
+  assert.equal(doctor.status, "broken");
+  assert.equal(check?.status, "error");
+  assert.deepEqual(check?.conflicts, [{ field: "display", value: ":115", slugs: ["alpha", "beta"] }]);
+  assert.match(check?.repair || "", /unique display, debugPort, vncPort, and webPort/);
+});
+
 test("system doctor allows role-specific public auth and connect drop-ins", async () => {
   const { home, env } = await fakeHost();
   const dropInDir = path.join(home, "dropins");

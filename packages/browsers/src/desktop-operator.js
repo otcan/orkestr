@@ -8,6 +8,10 @@ function clean(value) {
   return String(value || "").trim();
 }
 
+function lower(value) {
+  return clean(value).toLowerCase();
+}
+
 function clampInt(value, fallback, min, max) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return fallback;
@@ -295,7 +299,7 @@ async function evaluateJson(client, expression) {
 
 function summarizeObservation(observed, maxText = 8000) {
   const page = observed && typeof observed === "object" ? observed : {};
-  return {
+  const summary = {
     title: clean(page.title).slice(0, 300),
     url: clean(page.url),
     bodyText: clean(page.bodyText).slice(0, maxText),
@@ -303,6 +307,30 @@ function summarizeObservation(observed, maxText = 8000) {
     links: Array.isArray(page.links) ? page.links.slice(0, 40) : [],
     fields: Array.isArray(page.fields) ? page.fields.slice(0, 40) : [],
     buttons: Array.isArray(page.buttons) ? page.buttons.slice(0, 60) : [],
+  };
+  return { ...summary, browserChallenge: detectDesktopBrowserChallenge(summary) };
+}
+
+export function detectDesktopBrowserChallenge(page = {}) {
+  const labels = [
+    page.title,
+    page.url,
+    page.bodyText,
+    ...(Array.isArray(page.links) ? page.links.map((link) => link.text) : []),
+    ...(Array.isArray(page.fields) ? page.fields.map((field) => `${field.label || ""} ${field.placeholder || ""}`) : []),
+    ...(Array.isArray(page.buttons) ? page.buttons.map((button) => button.text) : []),
+  ].map(clean).filter(Boolean).join(" ");
+  const haystack = lower(labels);
+  const cloudflare = /\b(?:cloudflare|cf-chl|cf-turnstile|cf-ray|checking if the site connection is secure|checking your browser|just a moment|attention required)\b/.test(haystack);
+  const captcha = /\b(?:captcha|recaptcha|hcaptcha|turnstile|verify you are human|prove you are human|security check)\b/.test(haystack);
+  const accessDenied = /\b(?:access denied|request blocked|enable cookies to continue|unusual traffic)\b/.test(haystack);
+  if (!cloudflare && !captcha && !accessDenied) return { detected: false };
+  return {
+    detected: true,
+    provider: cloudflare ? "cloudflare" : captcha ? "captcha" : "unknown",
+    kind: cloudflare && /turnstile|cf-turnstile/.test(haystack) ? "turnstile" : cloudflare ? "cloudflare_challenge" : captcha ? "captcha" : "browser_access_challenge",
+    requiresAttendedDesktop: true,
+    recommendedAction: "Open the same managed desktop and complete the browser challenge there; Orkestr keeps the browser profile for later runs.",
   };
 }
 
@@ -403,6 +431,7 @@ export async function operateManagedDesktop(slug = "", args = {}, env = process.
         state: clean(session?.state || session?.status),
       },
       page: observed,
+      browserChallenge: observed.browserChallenge,
     };
   } finally {
     client.close();
