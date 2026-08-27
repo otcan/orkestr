@@ -48,6 +48,9 @@ const publicRuntimeEnvKeys = [
   "GOOGLE_OAUTH_CLIENT_SECRET",
   "GMAIL_OAUTH_REDIRECT_URI",
   "GOOGLE_OAUTH_REDIRECT_URI",
+  "ORKESTR_WORKFLOW_PILOT_SCHEDULING_URL",
+  "ORKESTR_PUBLIC_CONTACT",
+  "ORKESTR_SUPPORT_EMAIL",
 ];
 
 function snapshotEnv(keys) {
@@ -72,19 +75,22 @@ function assertAngularShell(html) {
 }
 
 function assertPublicShell(html) {
-  assert.match(html, /<title>AI Operations Layer \| Orkestr<\/title>/);
-  assert.match(html, /AI operations,/);
-  assert.match(html, /under human control/);
-  assert.match(html, /managed private deployment/);
+  assert.match(html, /<title>Reliable AI Workflow Automation \| Orkestr<\/title>/);
+  assert.match(html, /Make repetitive work run reliably/);
+  assert.match(html, /asks for approval before anything important happens/);
+  assert.match(html, /Private deployment options/);
   assert.match(html, /name="application-name" content="Orkestr"/);
   assert.match(html, /property="og:site_name" content="Orkestr"/);
   assert.match(html, /name="twitter:card" content="summary_large_image"/);
   assert.match(html, /rel="stylesheet" href="\/public-site\.css"/);
   assert.doesNotMatch(html, /<style>/);
-  assert.match(html, /Map one workflow/);
-  assert.match(html, /SYNTHETIC CONSOLE WALKTHROUGH/);
+  assert.match(html, /Book a 20-minute call/);
+  assert.match(html, /PRODUCT WALKTHROUGH/);
   assert.match(html, /Approval required/);
-  assert.match(html, /data-event="map_workflow_hero"/);
+  assert.match(html, /data-event="book_call_hero"/);
+  assert.match(html, /Request arrives/);
+  assert.match(html, /Manager approves/);
+  assert.doesNotMatch(html, />ERP</);
   assert.match(html, /\/api\/public\/events/);
   assert.doesNotMatch(html, /id="waitlist-form"/);
   assert.doesNotMatch(html, /Join waitlist/);
@@ -215,7 +221,7 @@ test("server serves the public site at root and Angular UI at app routes", async
     const expandedHomeHtml = await (await fetch(`http://127.0.0.1:${port}/`)).text();
     const expandedPrivacyHtml = await (await fetch(`http://127.0.0.1:${port}/privacy`)).text();
     const expandedAboutHtml = await (await fetch(`http://127.0.0.1:${port}/about`)).text();
-    assert.match(expandedHomeHtml, /AI operations,/);
+    assert.match(expandedHomeHtml, /Make repetitive work run reliably/);
     assert.doesNotMatch(expandedHomeHtml, /read selected Gmail signals/);
     assert.match(expandedPrivacyHtml, /gmail\.readonly/);
     assert.match(expandedPrivacyHtml, /calendar\.events\.owned/);
@@ -231,14 +237,16 @@ test("server serves the public site at root and Angular UI at app routes", async
     assert.match(betaHtml, /id="waitlist-form"/);
     assert.match(betaHtml, /\/api\/public\/waitlist/);
     assert.equal(securityResponse.status, 200);
-    assert.match(securityHtml, /Control starts with the deployment boundary/);
-    assert.match(securityHtml, /does not claim security certification/);
+    assert.match(securityHtml, /Your systems stay under your control/);
+    assert.match(securityHtml, /does not claim a security certification/);
     assert.equal(deploymentResponse.status, 200);
     assert.equal(developersResponse.status, 200);
     assert.equal(useCasesResponse.status, 200);
     assert.equal(workflowResponse.status, 200);
-    assert.match(workflowHtml, /id="workflow-form"/);
-    assert.match(workflowHtml, /\/api\/public\/workflow-leads/);
+    assert.match(workflowHtml, /Let’s talk about the work you want to simplify/);
+    assert.match(workflowHtml, /data-booking-configured="false"/);
+    assert.doesNotMatch(workflowHtml, /id="workflow-form"/);
+    assert.doesNotMatch(workflowHtml, /\/api\/public\/workflow-leads/);
     assert.equal(waitlistRedirect.status, 302);
     assert.equal(waitlistRedirect.headers.get("location"), "/beta#waitlist");
     assert.equal(publicAssetResponse.status, 200);

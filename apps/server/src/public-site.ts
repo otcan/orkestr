@@ -12,17 +12,17 @@ import {
 import { legalPage } from "./public-site-legal.js";
 import { renderPublicShell } from "./public-site-shell.js";
 import { renderCommercialSiteCss } from "./public-site-style.js";
-import { workflowIntakePage } from "./public-workflow-intake.js";
+import { workflowBookingPage } from "./public-workflow-booking.js";
 
 export { publicPairingUrl, publicSiteAllowedForHost, publicSiteBaseUrl, publicSiteHost, publicSitePath };
 
 function publicPage(pageId: PublicPageId, env = process.env) {
-  if (pageId === "home") return commercialHomePage();
-  if (pageId === "security") return securityPage();
+  if (pageId === "home") return commercialHomePage(env);
+  if (pageId === "security") return securityPage(env);
   if (pageId === "deployment") return deploymentPage(env);
   if (pageId === "developers") return developersPage(env);
   if (pageId === "use-cases") return useCasesPage();
-  if (pageId === "workflow") return workflowIntakePage();
+  if (pageId === "workflow") return workflowBookingPage(env);
   return legalPage(pageId, env);
 }
 
