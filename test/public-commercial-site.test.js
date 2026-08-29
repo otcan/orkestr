@@ -24,7 +24,10 @@ test("commercial homepage sells bounded business systems and managed operation",
   assert.match(html, /data-event="describe_project_hero"/);
   assert.match(html, /APIs when available/);
   assert.match(html, /The browser when they are not/);
-  assert.match(html, /Public Opportunity Monitor · Daily Run #042/);
+  assert.match(html, /id="requirement-example">“Our internal ordering system needs replacing\.”<\/blockquote>/);
+  assert.match(html, /class="active" aria-pressed="true" data-requirement="Our internal ordering system needs replacing\.">Replace a system<\/button>/);
+  assert.match(html, /Internal Ordering Renewal · Migration Run #042/);
+  assert.match(html, /Record mapping conflict/);
   assert.match(html, /Not every project needs this layer/);
   assert.match(html, /Orkestr builds systems that do work/);
   assert.match(html, /public or authorized sources/i);
