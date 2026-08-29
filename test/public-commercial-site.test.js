@@ -9,25 +9,27 @@ const baseEnv = {
   ORKESTR_PUBLIC_CONTACT: "hello@example.test",
 };
 
-test("commercial homepage sells the managed AI operations layer and bounded workflow pilot", () => {
+test("commercial homepage sells a managed workflow audit and operating outcome", () => {
   const html = renderPublicSite("/", baseEnv, { host: "product.example.test" });
 
-  assert.match(html, /<title>Managed AI Operations Layer \| Orkestr<\/title>/);
+  assert.match(html, /<title>Managed AI Workflow Automation &amp; AI Agents \| Orkestr<\/title>/);
   assert.match(html, /Your software stores the work/);
   assert.match(html, /Orkestr moves it forward/);
-  assert.match(html, /coordinates persistent AI agents/);
-  assert.match(html, /Request arrives/);
-  assert.match(html, /Information is checked/);
-  assert.match(html, /Manager approves/);
-  assert.match(html, /Work is completed/);
-  assert.match(html, />Map one workflow<\/a>/);
-  assert.match(html, /data-event="map_workflow_hero"/);
-  assert.match(html, /ORKESTR WORKFLOW PILOT/);
-  assert.match(html, /WHAT THE PILOT INCLUDES/);
-  assert.match(html, /One implemented workflow/);
-  assert.match(html, /Measurement and rollout recommendation/);
+  assert.match(html, /Show us a repetitive process across your ERP, CRM, email/);
+  assert.match(html, /Incoming customer request/);
+  assert.match(html, /Order and account checked/);
+  assert.match(html, /ERP updated and reply sent/);
+  assert.match(html, />Book a workflow audit<\/a>/);
+  assert.match(html, /data-event="book_audit_hero"/);
+  assert.match(html, /We build the automation for you/);
+  assert.match(html, /APIs when available/);
+  assert.match(html, /The browser when they’re not/);
+  assert.match(html, /Customer Order Exception #10452/);
+  assert.match(html, /If the workflow does not improve the operation, it should not scale/);
+  assert.match(html, /The difference is not the model/);
+  assert.match(html, /Client Portal/);
+  assert.doesNotMatch(html, /Personal beta/);
   assert.doesNotMatch(html, /Book a 20-minute call/);
-  assert.doesNotMatch(html, />ERP</);
   assert.match(html, /rel="canonical" href="https:\/\/product\.example\.test\/"/);
   assert.match(html, /"@type":"Organization"/);
   assert.match(html, /"@type":"WebSite"/);
@@ -37,8 +39,8 @@ test("commercial homepage sells the managed AI operations layer and bounded work
 test("workflow route collects a bounded map before offering a scheduling handoff", () => {
   const html = renderPublicSite("/workflow", baseEnv, { host: "product.example.test" });
 
-  assert.match(html, /<title>Map an AI Workflow Pilot \| Orkestr<\/title>/);
-  assert.match(html, /Map one workflow worth fixing/);
+  assert.match(html, /<title>Book a Workflow Audit \| Orkestr<\/title>/);
+  assert.match(html, /Show us one workflow worth fixing/);
   assert.match(html, /A useful workflow map beats a generic demo call/);
   assert.match(html, /id="workflow-form"/);
   assert.match(html, /\/api\/public\/workflow-leads/);
@@ -47,7 +49,7 @@ test("workflow route collects a bounded map before offering a scheduling handoff
   assert.match(html, /consentToContact/);
   assert.match(html, /id="scheduling-handoff"/);
   assert.match(html, /qualified_schedule_click/);
-  assert.match(html, />Send workflow for review<\/button>/);
+  assert.match(html, />Request workflow audit<\/button>/);
   assert.match(html, /"@type":"BreadcrumbList"/);
 });
 
@@ -76,7 +78,7 @@ test("commercial detail pages keep plain-language headings, evidence, limitation
     assert.match(html, new RegExp(`<title>${title} \\| Orkestr<\\/title>`));
     assert.match(html, new RegExp(heading));
     assert.match(html, new RegExp(evidence));
-    assert.match(html, /Map one workflow/);
+    assert.match(html, /Book a workflow audit/);
     assert.match(html, /"@type":"BreadcrumbList"/);
     assert.match(html, new RegExp(`rel="canonical" href="https:\\/\\/product\\.example\\.test${path}"`));
   }
@@ -86,7 +88,7 @@ test("sitemap and responsive CSS retain commercial routes and accessible progres
   const sitemap = renderPublicSitemap(baseEnv);
   const css = renderPublicSiteCss();
 
-  for (const path of ["/", "/workflow", "/security", "/deployment", "/use-cases", "/developers"]) {
+  for (const path of ["/", "/workflow", "/security", "/deployment", "/use-cases", "/developers", "/impressum"]) {
     assert.match(sitemap, new RegExp(`https:\\/\\/product\\.example\\.test${path === "/" ? "/" : path}`));
   }
   assert.match(css, /:focus-visible/);
@@ -94,6 +96,8 @@ test("sitemap and responsive CSS retain commercial routes and accessible progres
   assert.match(css, /@media \(prefers-reduced-motion: reduce\)/);
   assert.match(css, /overflow-x: hidden/);
   assert.match(css, /\.workflow-form/);
-  assert.match(css, /\.pilot-offer/);
+  assert.match(css, /\.browser-section/);
+  assert.match(css, /\.workflow-card-grid/);
+  assert.match(css, /\.approval-card/);
   assert.match(css, /\.field-grid\.two/);
 });

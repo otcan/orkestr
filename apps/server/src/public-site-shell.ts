@@ -107,29 +107,29 @@ export function renderPublicShell(page: PublicPage, env = process.env) {
   <header class="topbar">
     <a class="wordmark" href="/" aria-label="Orkestr home"><span>O</span> Orkestr</a>
     <nav class="desktop-nav" aria-label="Primary navigation">
+      <a href="/#how-it-works" data-event="nav_how_it_works">How it works</a>
       ${navLink("/use-cases", "Use cases", page.id, "use-cases", "nav_use_cases")}
       ${navLink("/deployment", "Deployment", page.id, "deployment", "nav_deployment")}
       ${navLink("/security", "Security", page.id, "security", "nav_security")}
-      ${navLink("/developers", "Developers", page.id, "developers", "nav_developers")}
     </nav>
     <div class="header-actions">
-      <a class="text-action" href="${escapeHtml(appUrl)}" data-event="sign_in_click">Sign in</a>
-      <a class="button button-small" href="/workflow" data-event="map_workflow_header">Map one workflow</a>
+      <a class="button button-small" href="/workflow" data-event="book_audit_header">Book a workflow audit</a>
     </div>
     <details class="mobile-menu">
       <summary aria-label="Open navigation">Menu</summary>
       <nav aria-label="Mobile navigation">
-        <a href="/use-cases">Use cases</a><a href="/deployment">Deployment</a><a href="/security">Security</a><a href="/developers">Developers</a><a href="/workflow" data-event="map_workflow_mobile">Map one workflow</a><a href="${escapeHtml(appUrl)}">Sign in</a>
+        <a href="/#how-it-works">How it works</a><a href="/use-cases">Use cases</a><a href="/deployment">Deployment</a><a href="/security">Security</a><a href="/workflow" data-event="book_audit_mobile">Book a workflow audit</a>
       </nav>
     </details>
   </header>
   ${page.body}
   <footer class="footer">
-    <div class="footer-brand"><a class="wordmark inverse" href="/"><span>O</span> Orkestr</a><p>Persistent, connected, supervised AI operations.</p></div>
-    <nav aria-label="Product links"><strong>Explore</strong><a href="/use-cases">Use cases</a><a href="/security">Security</a><a href="/deployment">Deployment</a><a href="/workflow" data-event="map_workflow_footer">Map a workflow</a></nav>
-    <nav aria-label="Technical links"><strong>Build</strong><a href="/developers">Developers</a><a href="${escapeHtml(repo)}" rel="noreferrer">GitHub</a><a href="/beta">Personal beta</a><a href="/support">Support</a></nav>
-    <nav aria-label="Legal links"><strong>Legal</strong><a href="/terms">Terms</a><a href="/privacy">Privacy</a><a href="/acceptable-use">Acceptable use</a><a href="/data-deletion">Data deletion</a></nav>
-    <p class="footer-note">Private deployment options. Open-source core. Available connections and actions vary by deployment.</p>
+    <div class="footer-brand"><a class="wordmark inverse" href="/"><span>O</span> Orkestr</a><p>Show us a repetitive process. We build the operating layer that runs it across the software you already have.</p></div>
+    <nav aria-label="Product links"><strong>Product</strong><a href="/#how-it-works">How it works</a><a href="/use-cases">Use cases</a><a href="/deployment">Deployment</a><a href="/security">Security</a></nav>
+    <nav aria-label="Resource links"><strong>Resources</strong><a href="/developers">Developers</a><a href="${escapeHtml(repo)}" rel="noreferrer">GitHub</a><a href="${escapeHtml(repo)}/tree/main/docs" rel="noreferrer">Documentation</a></nav>
+    <nav aria-label="Company links"><strong>Company</strong><a href="/support">Contact</a><a href="/impressum">Impressum</a><a href="/privacy">Privacy</a><a href="/terms">Terms</a></nav>
+    <nav aria-label="Customer links"><strong>Existing customers</strong><a href="${escapeHtml(appUrl)}" data-event="client_portal_click">Client Portal</a></nav>
+    <p class="footer-note">Managed private deployments. Open-source core. Available systems, permissions, and actions vary by workflow.</p>
   </footer>
   ${analyticsScript(home)}
 </body>

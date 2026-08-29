@@ -11,7 +11,7 @@ type PrivacyPage = {
   body: string;
 };
 
-export const publicPrivacyPolicyVersion = `${googleWorkspacePrivacyPolicyVersion}-commercial-20260829`;
+export const publicPrivacyPolicyVersion = `${googleWorkspacePrivacyPolicyVersion}-commercial-v2-20260829`;
 
 function clean(value = "") {
   return String(value || "").trim();
@@ -99,7 +99,7 @@ export function publicPrivacyPage(env = process.env): PrivacyPage {
     <article id="data-we-process">
       <h2>2. Information Orkestr processes</h2>
       <p>Orkestr processes information needed to provide user-requested workflows: account and contact details, chat messages, files, task outputs, timers, workspace records, connector status, managed-browser activity, security records, and technical service logs. Orkestr does not ask users to provide account passwords through chat.</p>
-      <p>Commercial Workflow Pilot inquiries are stored separately from personal-beta waitlist records. The public workflow map collects the contact's name, work email, company, role, workflow description, frequency and approximate volume, systems involved, workflow owner, approval and exception boundaries, current cost or delay, success criteria, and contact consent. If a qualified visitor follows a configured scheduling link after submission, the selected scheduling provider processes the booking information under its own privacy notice.</p>
+      <p>Commercial Workflow Audit and Pilot inquiries are stored separately from personal-beta waitlist records. The public workflow map collects the contact's name, work email, company, role, workflow description, frequency and approximate volume, systems involved, workflow owner, approval and exception boundaries, current cost or delay, success criteria, and contact consent. If a qualified visitor follows a configured scheduling link after submission, the selected scheduling provider processes the booking information under its own privacy notice.</p>
       <p>The public site records a limited set of first-party interaction events such as page path, CTA name, workflow-form start, validation outcome, submission outcome, and qualified scheduling click. These analytics events do not contain form field values, process descriptions, credentials, or cross-site tracking identifiers.</p>
     </article>
     <article id="google-data-access">
