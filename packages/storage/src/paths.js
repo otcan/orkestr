@@ -25,6 +25,7 @@ export function dataPaths(env = process.env) {
     agents: path.join(home, "agents.json"),
     waitlist: path.join(home, "waitlist.json"),
     workflowLeads: env.ORKESTR_WORKFLOW_LEADS_FILE || path.join(home, "workflow-leads.json"),
+    projectInquiries: env.ORKESTR_PROJECT_INQUIRIES_FILE || path.join(home, "project-inquiries.json"),
     users: path.join(home, "users.json"),
     tenantVms: path.join(home, "tenant-vms.json"),
     tenantSlices: path.join(home, "tenant-slices.json"),

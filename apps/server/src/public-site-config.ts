@@ -4,6 +4,12 @@ export type PublicPageId =
   | "deployment"
   | "developers"
   | "use-cases"
+  | "project"
+  | "websites-commerce"
+  | "business-systems"
+  | "opportunity-intelligence"
+  | "web-data-monitoring"
+  | "automation"
   | "workflow"
   | "terms"
   | "privacy"
@@ -131,6 +137,12 @@ export function publicSitePath(pathname = ""): PublicPageId | "" {
     "/deployment": "deployment",
     "/developers": "developers",
     "/use-cases": "use-cases",
+    "/project": "project",
+    "/websites-commerce": "websites-commerce",
+    "/business-systems": "business-systems",
+    "/opportunity-intelligence": "opportunity-intelligence",
+    "/web-data-monitoring": "web-data-monitoring",
+    "/automation": "automation",
     "/workflow": "workflow",
     "/terms": "terms",
     "/privacy": "privacy",

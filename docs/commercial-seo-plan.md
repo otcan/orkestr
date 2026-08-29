@@ -1,63 +1,42 @@
 # Commercial SEO Plan
 
-The commercial site should earn qualified conversations by answering the
-questions managers ask while evaluating repeated work. Traffic without relevant
-business intent is not a success measure.
+Organic search should produce relevant Project Discovery conversations, not
+undifferentiated traffic.
 
 ## Search position
 
-The homepage owns the category **AI Operations Layer**, supported by the
-plain-language description **managed private AI workflow automation**.
-Initial high-intent themes are:
+The homepage owns **Business Systems & Automation** and the proposition that
+Orkestr builds and operates software that does work for businesses. Initial
+high-intent themes include:
 
-- AI workflow automation with human approval
-- AI operations automation
-- ERP automation
-- business process automation with AI
-- AI agents for business operations
-- browser workflow automation
-- AI CRM and email workflow automation
-- legacy software automation
-- internal process automation
-- invoice exception automation
-- customer onboarding automation
-- renewal preparation automation
-- service escalation automation
+- business website and e-commerce development
+- B2B customer portals and internal applications
+- legacy system modernization and replacement
+- tender, grant, RFP, and opportunity monitoring
+- web data collection and change monitoring
+- authorized browser and web workflow automation
+- AI workflow and operations automation
+- email, document, ERP, CRM, and internal process automation
 
-Use these themes only where the page answers the intent. Do not repeat phrases
-mechanically or create thin keyword pages.
+Use these phrases only where a page answers the intent. Do not create thin
+keyword pages or market scraping as the product.
 
 ## Page responsibilities
 
-- `/`: operational pain, Workflow Audit, browser execution, measurement,
-  product proof, deployment, and conversion
-- `/use-cases`: practical finance, customer, revenue, and service examples
-- `/security`: private environment, approved access, human approval, and limits
-- `/deployment`: managed-private and customer-controlled deployment choices
-- `/developers`: open-source core, architecture, quick start, and technical limits
-- `/workflow`: Workflow Audit map and qualified scheduling handoff
+- `/`: broad proposition, five solution verbs, delivery, platform proof, trust,
+  and Project Discovery conversion
+- `/use-cases`: solution overview and internal links
+- five solution routes: focused intent, outcomes, delivery, and boundaries
+- `/project`: general inquiry conversion
+- `/automation` and `/workflow`: specialized workflow-automation intent
+- `/security`, `/deployment`, `/developers`: procurement and technical evidence
 
-Each page has one H1, a unique title and description, a canonical URL, social
-metadata, and clear internal links. Organization and WebSite structured data
-use only the public product name, site, and repository. Detail pages add factual
-breadcrumbs. The sitemap and robots behavior remain server generated.
+Every indexable page has one H1, unique title and description, canonical URL,
+social metadata, factual structured data, and useful internal links. Evidence is
+limited to labelled product demonstrations, public code, tests, documentation,
+and approved case studies.
 
-## Evidence and authority
-
-Publish only evidence that can be inspected: product walkthroughs labelled as
-illustrative, the public repository, tests and documentation, operating
-boundaries, and genuine case studies with publication approval. Do not publish
-invented logos, testimonials, certifications, benchmarks, or return figures.
-
-Useful future content should come from real buyer questions and implementation
-evidence. Prioritize one substantive guide or approved case study over many
-shallow posts. Add German pages only after a human-reviewed German information
-architecture and `hreflang` plan exist.
-
-## Measurement
-
-The primary measure is qualified Workflow Audit requests from organic search. Supporting
-measures are workflow-page visits, form starts, validation errors, successful
-submissions, qualified scheduling clicks, non-branded impressions and clicks,
-and conversion by landing page. Page views alone are not a commercial success
-measure.
+Primary measurement is relevant Project Discovery submissions. Supporting
+measures are solution visits, project-form starts, successful submissions,
+readiness-qualified scheduling clicks, workflow-audit conversions, and organic
+conversion by landing page. Analytics remain allowlisted and metadata-only.

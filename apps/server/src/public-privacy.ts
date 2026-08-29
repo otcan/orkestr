@@ -11,7 +11,7 @@ type PrivacyPage = {
   body: string;
 };
 
-export const publicPrivacyPolicyVersion = `${googleWorkspacePrivacyPolicyVersion}-commercial-v2-20260829`;
+export const publicPrivacyPolicyVersion = `${googleWorkspacePrivacyPolicyVersion}-commercial-v3-20260829`;
 
 function clean(value = "") {
   return String(value || "").trim();
@@ -99,8 +99,8 @@ export function publicPrivacyPage(env = process.env): PrivacyPage {
     <article id="data-we-process">
       <h2>2. Information Orkestr processes</h2>
       <p>Orkestr processes information needed to provide user-requested workflows: account and contact details, chat messages, files, task outputs, timers, workspace records, connector status, managed-browser activity, security records, and technical service logs. Orkestr does not ask users to provide account passwords through chat.</p>
-      <p>Commercial Workflow Audit and Pilot inquiries are stored separately from personal-beta waitlist records. The public workflow map collects the contact's name, work email, company, role, workflow description, frequency and approximate volume, systems involved, workflow owner, approval and exception boundaries, current cost or delay, success criteria, and contact consent. If a qualified visitor follows a configured scheduling link after submission, the selected scheduling provider processes the booking information under its own privacy notice.</p>
-      <p>The public site records a limited set of first-party interaction events such as page path, CTA name, workflow-form start, validation outcome, submission outcome, and qualified scheduling click. These analytics events do not contain form field values, process descriptions, credentials, or cross-site tracking identifiers.</p>
+      <p>Commercial Project Discovery and Workflow Audit inquiries are stored separately from each other and from personal-beta waitlist records. The Project Discovery form collects the contact's name, work email, company, role, project category and name, desired outcome, current situation, expected users or volume, system or source categories, decision owner, constraints, success criteria, timeframe, and contact consent. The specialized Workflow Audit form collects the workflow-specific information described on that form. If a qualified visitor follows a configured scheduling link after submission, the selected scheduling provider processes the booking information under its own privacy notice.</p>
+      <p>The public site records a limited set of first-party interaction events such as page path, CTA name, form start, validation outcome, submission outcome, and qualified scheduling click. These analytics events do not contain form field values, project or process descriptions, credentials, or cross-site tracking identifiers.</p>
     </article>
     <article id="google-data-access">
       <h2>3. Google user data Orkestr accesses</h2>
@@ -135,7 +135,7 @@ export function publicPrivacyPage(env = process.env): PrivacyPage {
       <h2>6. Storage and retention</h2>
       <p>Google OAuth credentials are stored in the connected user's isolated connector storage and retained until the user disconnects the account, the grant is revoked, the account is deleted, or the credentials expire and are no longer needed. A disconnect requests revocation from Google before deleting the local credential record.</p>
       <p>${storageDescription} Connection requests are one-time and expire. Encrypted credential records may remain temporarily in protected operational backups until those backups rotate.</p>
-      <p>Workflow Pilot submissions are retained in the private deployment only for qualification, follow-up, security, and recordkeeping, and are deleted on a valid request unless a minimal record must be retained for dispute handling, abuse prevention, or law. The operator should configure and document a deployment-specific retention period before production collection.</p>
+      <p>Project Discovery and Workflow Audit submissions are retained in the private deployment only for assessment, follow-up, security, and recordkeeping, and are deleted on a valid request unless a minimal record must be retained for dispute handling, abuse prevention, or law. The operator should configure and document a deployment-specific retention period before production collection.</p>
     </article>
     <article id="google-data-protection">
       <h2>7. Data protection mechanisms</h2>
@@ -157,11 +157,11 @@ export function publicPrivacyPage(env = process.env): PrivacyPage {
       <h2>9. User controls, revocation, and deletion</h2>
       <p>Users can decline Google access and continue using Orkestr without Gmail. A connected account can be disconnected from Orkestr setup, which revokes the Google grant and removes locally stored credentials. Users can also revoke Orkestr from their Google Account permissions page.</p>
       <p>Users may request access, correction, export, restriction, or deletion of their Orkestr data through the invitation chat, the <a href="/data-deletion">data deletion page</a>, or ${contactHtml(operator.contact)}. Some minimal records may be retained where required for security, abuse prevention, dispute handling, or law.</p>
-      <p>Workflow Pilot contacts may use the same contact to withdraw consent or request deletion of their commercial lead record. Withdrawing a commercial inquiry does not affect a separate personal-beta account.</p>
+      <p>Project Discovery and Workflow Audit contacts may use the same contact to withdraw consent or request deletion of their commercial inquiry record. Withdrawing a commercial inquiry does not affect a separate personal-beta account.</p>
     </article>
     <article id="legal-bases">
       <h2>10. Legal bases and international processing</h2>
-      <p>Depending on the context, Orkestr processes data to provide the service requested by the user, to assess and respond to a Workflow Pilot inquiry based on the contact's consent, for legitimate security and reliability interests, and to meet legal obligations. Providers may process data in countries outside the user's country; Orkestr relies on the provider's applicable contractual and legal transfer safeguards.</p>
+      <p>Depending on the context, Orkestr processes data to provide the service requested by the user, to assess and respond to a Project Discovery or Workflow Audit inquiry based on the contact's consent, for legitimate security and reliability interests, and to meet legal obligations. Providers may process data in countries outside the user's country; Orkestr relies on the provider's applicable contractual and legal transfer safeguards.</p>
     </article>
     <article id="policy-changes">
       <h2>11. Changes and contact</h2>

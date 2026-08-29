@@ -1,130 +1,106 @@
 import type { PublicPage } from "./public-site-config.js";
-import { renderConsoleEvidence, renderCoordinationDiagram } from "./public-site-components.js";
+import { renderConsoleEvidence, renderProjectDeliveryDiagram } from "./public-site-components.js";
 
-function miniWorkflow(
-  id: string,
-  useCaseId: string,
-  eyebrow: string,
-  heading: string,
-  description: string,
-  steps: string[],
-  systems: string[],
-) {
-  return `<article class="workflow-card" id="${id}">
-    <p class="section-index">${eyebrow}</p>
-    <h3>${heading}</h3>
-    <p>${description}</p>
-    <ol class="mini-flow">${steps.map((step, index) => `<li><span>${String(index + 1).padStart(2, "0")}</span>${step}</li>`).join("")}</ol>
-    <div class="system-tags" aria-label="Systems touched">${systems.map((system) => `<span>${system}</span>`).join("")}</div>
-    <a href="/use-cases#${useCaseId}">Explore ${eyebrow.toLowerCase()} workflows <span aria-hidden="true">→</span></a>
-  </article>`;
+type Offer = {
+  verb: string;
+  title: string;
+  request: string;
+  examples: string[];
+  path: string;
+};
+
+const offers: Offer[] = [
+  { verb: "BUILD", title: "Websites & commerce", request: "We need a new website, customer portal, or online store.", examples: ["Business websites", "E-commerce", "Customer portals", "Internal tools"], path: "/websites-commerce" },
+  { verb: "REPLACE", title: "Business systems", request: "Our current system is outdated or no longer fits how we work.", examples: ["Legacy modernization", "Internal applications", "System replacement", "Process redesign"], path: "/business-systems" },
+  { verb: "FIND", title: "Opportunity intelligence", request: "Find opportunities relevant to us before we miss them.", examples: ["Tenders", "Grants", "RFPs", "Projects and suppliers"], path: "/opportunity-intelligence" },
+  { verb: "COLLECT", title: "Web data & monitoring", request: "Continuously collect and structure information we currently find manually.", examples: ["Public or authorized sources", "Structured extraction", "Change monitoring", "Alerts and research"], path: "/web-data-monitoring" },
+  { verb: "AUTOMATE", title: "Operational workflows", request: "Our people repeatedly move information between systems.", examples: ["Email and documents", "Business software", "Browser applications", "Approvals"], path: "/automation" },
+];
+
+function offerCard(offer: Offer) {
+  return `<article class="offer-card"><span>${offer.verb}</span><h3>${offer.title}</h3><blockquote>“${offer.request}”</blockquote><ul>${offer.examples.map((example) => `<li>${example}</li>`).join("")}</ul><a href="${offer.path}" data-event="offer_${offer.verb.toLowerCase()}_click">Explore ${offer.verb.toLowerCase()} projects <span aria-hidden="true">→</span></a></article>`;
+}
+
+function exampleProject(index: string, label: string, quote: string, system: string, components: string[]) {
+  return `<article class="example-project"><p class="section-index">${index} · ${label}</p><blockquote>“${quote}”</blockquote><strong>${system}</strong><ul>${components.map((component) => `<li>${component}</li>`).join("")}</ul></article>`;
 }
 
 export function commercialHomePage(): PublicPage {
   return {
     id: "home",
-    title: "Managed AI Workflow Automation & AI Agents",
-    summary: "Orkestr builds and operates AI workflows across your ERP, CRM, email, browser applications and internal systems. Automate repetitive operations while keeping human approval where it matters.",
+    title: "Business Systems, Data & AI Automation",
+    summary: "Orkestr designs, builds, deploys and operates websites, business systems, data products and AI-powered automation around real company requirements.",
     canonicalPath: "/",
     body: `<main id="main-content">
-  <section class="hero commercial-hero">
+  <section class="hero commercial-hero v3-hero">
     <div class="hero-copy">
-      <p class="eyebrow">AI OPERATIONS LAYER</p>
-      <h1>Your software stores the work. <em>Orkestr moves it forward.</em></h1>
-      <p class="lead">Show us a repetitive process across your ERP, CRM, email, internal software, or browser tools.</p>
-      <p class="hero-detail">We map it, build the AI workflow, deploy it in a controlled environment, and operate it with your team.</p>
-      <div class="actions"><a class="button" href="/workflow" data-event="book_audit_hero">Book a workflow audit</a><a class="button button-ghost" href="#how-it-works" data-event="see_how_it_works">See how it works</a></div>
-      <p class="microcopy hero-trust">Private deployment <span aria-hidden="true">·</span> Human approval where needed <span aria-hidden="true">·</span> Works with browser-only systems</p>
+      <p class="eyebrow">BUILT AND OPERATED BY ORKESTR</p>
+      <h1>Tell us what your business needs to do. <em>We build the system that does it.</em></h1>
+      <p class="lead">Come with an outcome, even if you do not have a technical specification.</p>
+      <p class="hero-detail">Orkestr designs, builds, deploys, and operates business software, data systems, and AI-powered automation.</p>
+      <div class="actions"><a class="button" href="/project" data-event="describe_project_hero">Describe your project</a><a class="button button-ghost" href="#what-we-build" data-event="see_what_we_build">See what we build</a></div>
+      <p class="microcopy hero-trust">Websites &amp; commerce <span aria-hidden="true">·</span> Business systems <span aria-hidden="true">·</span> Data &amp; monitoring <span aria-hidden="true">·</span> AI automation</p>
     </div>
-    ${renderCoordinationDiagram()}
+    ${renderProjectDeliveryDiagram()}
   </section>
 
-  <section class="section problem-section" id="how-it-works" aria-labelledby="problem-title">
-    <div class="problem-copy"><p class="section-index">THE WORK BETWEEN THE SYSTEMS</p><h2 id="problem-title">You don’t need another AI tool.</h2><p class="section-lead">You already have the software. The problem is everything your people still have to do between those systems.</p><ul class="manual-work"><li>Open emails</li><li>Look up information</li><li>Copy data between applications</li><li>Check documents</li><li>Chase approvals</li><li>Update records and follow up</li></ul><p class="section-lead compact-lead">Orkestr turns those repetitive steps into one controlled workflow.</p></div>
-    <div class="before-after" aria-label="Process before and with Orkestr">
-      <article><p class="comparison-label">BEFORE ORKESTR</p><h3>Nine manual handoffs</h3><ol><li>Customer request arrives</li><li>Employee opens email</li><li>Searches ERP</li><li>Checks CRM</li><li>Opens supplier portal</li><li>Copies information</li><li>Asks manager and waits</li><li>Updates ERP</li><li>Replies to customer</li></ol></article>
-      <article class="after"><p class="comparison-label">WITH ORKESTR</p><h3>One controlled workflow</h3><ol><li>Request arrives</li><li>Orkestr gathers and checks the information</li><li>Human approves the decision if required</li><li>Orkestr completes the work and records what happened</li></ol></article>
-    </div>
+  <section class="section offer-section" id="what-we-build" aria-labelledby="offer-title">
+    <div class="section-heading"><p class="section-index">START WITH THE PROBLEM, NOT THE TECHNOLOGY</p><h2 id="offer-title">Tell us what needs to happen.</h2><p class="section-lead">You do not need to decide whether the answer is an AI agent, custom application, crawler, integration, or automation. We determine what should be built.</p></div>
+    <div class="offer-grid">${offers.map(offerCard).join("")}</div>
   </section>
 
-  <section class="section managed-offer" aria-labelledby="offer-title">
-    <div><p class="section-index">MANAGED IMPLEMENTATION</p><h2 id="offer-title">We build the automation for you.</h2><p class="section-lead">Orkestr is not another automation platform your team has to learn. You show us the workflow. We map, build, deploy, and operate it with you.</p></div>
-    <div class="offer-decisions"><p>We identify:</p><ul><li>what can be automated</li><li>which systems are involved</li><li>where AI is useful</li><li>where deterministic rules are safer</li><li>where human approval should remain</li><li>what exceptions must be handled</li></ul></div>
-    <aside class="offer-contract"><span>You provide the process.</span><strong>We provide the operating layer.</strong><a class="button" href="/workflow" data-event="discuss_workflow_offer">Discuss a workflow</a></aside>
+  <section class="ugly-problem" aria-labelledby="ugly-title">
+    <div><p class="section-index">BRING US AN UGLY PROBLEM</p><h2 id="ugly-title">You do not need to know the solution.</h2><p class="section-lead">A concrete business problem is a better starting point than a list of fashionable technologies. Understanding the system is our job.</p><a class="button button-light" href="/project" data-event="describe_project_ugly">Describe the problem</a></div>
+    <div class="problem-quotes" aria-label="Example project starting points"><blockquote>“We check 40 websites every morning.”</blockquote><blockquote>“Our internal system is 15 years old and nobody wants to touch it.”</blockquote><blockquote>“We need online ordering but do not know what stack to use.”</blockquote><blockquote>“Someone copies every customer email into three systems.”</blockquote><blockquote>“We keep missing tenders because nobody has time to search.”</blockquote></div>
   </section>
 
-  <section class="browser-section" aria-labelledby="browser-title">
-    <div class="browser-copy"><p class="section-index">THE BROWSER IS AN INTEGRATION SURFACE</p><h2 id="browser-title">No API? That doesn’t necessarily stop us.</h2><p>Important work still happens inside legacy ERP systems, supplier portals, internal web applications, logistics platforms, custom software, and administrative dashboards.</p><p>Orkestr can use direct integrations where available and controlled browser execution where they are not.</p><strong class="browser-statement">APIs when available.<br>The browser when they’re not.</strong></div>
-    <div class="system-map" role="img" aria-label="Orkestr connects ERP, CRM, email, files, browser-only systems, and human approval">
-      <div class="map-core"><span>OPERATING LAYER</span><strong>Orkestr</strong></div>
-      <div class="map-node erp"><span>DIRECT OR BROWSER</span><strong>ERP</strong></div>
-      <div class="map-node crm"><span>DIRECT</span><strong>CRM</strong></div>
-      <div class="map-node email"><span>DIRECT</span><strong>Email</strong></div>
-      <div class="map-node browser"><span>CONTROLLED BROWSER</span><strong>Internal application</strong></div>
-      <div class="map-node files"><span>APPROVED SOURCE</span><strong>Files</strong></div>
-      <div class="map-node person"><span>DECISION GATE</span><strong>Human approval</strong></div>
+  <section class="section example-projects" aria-labelledby="examples-title">
+    <div class="section-heading"><p class="section-index">ILLUSTRATIVE PROJECT BRIEFS</p><h2 id="examples-title">Different requirements. One accountable delivery model.</h2><p class="section-lead">These examples show the kinds of systems Orkestr can assess. They are not claims of completed customer projects or fixed packages.</p></div>
+    <div class="example-project-grid">
+      ${exampleProject("01", "BUILD", "We need a B2B website with customer ordering.", "A maintainable commerce system", ["Product and account experience", "Ordering workflow", "Administration", "Deployment and support"])}
+      ${exampleProject("02", "REPLACE", "Our internal ordering tool needs replacing.", "A staged business-system replacement", ["Process and data discovery", "New application", "Migration plan", "Controlled cutover"])}
+      ${exampleProject("03", "FIND", "Surface relevant public tenders every day.", "An opportunity intelligence system", ["Approved source collection", "Normalization", "Matching and review", "Alerts with provenance"])}
+      ${exampleProject("04", "AUTOMATE", "Move requests through email and internal software.", "A supervised operational workflow", ["Trigger and context", "Rules and agent work", "Browser execution", "Approval and history"])}
     </div>
   </section>
 
-  <section class="section use-case-showcase" id="use-cases" aria-labelledby="use-cases-title">
-    <div class="section-heading"><p class="section-index">CONCRETE OPERATIONS</p><h2 id="use-cases-title">What does an AI operations layer actually do?</h2><p class="section-lead">It moves one bounded process through the systems and decisions already involved.</p></div>
-    <div class="workflow-card-grid">
-      ${miniWorkflow("sales", "revenue", "Sales operations", "From enquiry to prepared follow-up", "Orkestr researches the company, checks CRM history, gathers the relevant context, and prepares the next action.", ["New enquiry", "Research and history check", "Prepare next action", "Sales review", "CRM update and follow-up"], ["Email", "Browser", "CRM", "Approval"])}
-      ${miniWorkflow("service", "service", "Customer operations", "From customer request to resolution", "Orkestr identifies the account, retrieves order or service information, checks the relevant systems, and prepares the resolution.", ["Customer request", "Account identified", "Systems checked", "Exception or routine path", "Resolution recorded"], ["Email", "CRM", "ERP", "Service portal"])}
-      ${miniWorkflow("finance", "finance", "Finance", "From invoice to approved action", "Orkestr extracts the information, checks it against available records, identifies discrepancies, and routes the case appropriately.", ["Invoice received", "Data extracted", "Records compared", "Approval if needed", "Workflow continues"], ["Documents", "ERP", "Purchase records", "Approval"])}
-      ${miniWorkflow("operations", "onboarding", "Internal operations", "From request to completed internal process", "Orkestr gathers information across internal systems, detects missing data, coordinates approvals, and updates the relevant records.", ["Request submitted", "Required data gathered", "Missing input chased", "Approvals coordinated", "Records updated"], ["Form", "Internal app", "Files", "Email"])}
-    </div>
+  <section class="section project-delivery" id="how-we-work" aria-labelledby="delivery-title">
+    <div><p class="section-index">FROM REQUIREMENT TO OPERATING SYSTEM</p><h2 id="delivery-title">We build the system—and define how it stays useful.</h2><p class="section-lead">The implementation may be conventional software, a data pipeline, integrations, an Orkestr-powered operating layer, or a careful combination. The requirement decides.</p></div>
+    <ol class="phase-list five"><li><span>01</span><div><h3>Project Discovery</h3><p>Understand the outcome, existing systems, users, constraints, risks, and definition of success.</p></div></li><li><span>02</span><div><h3>Solution Design</h3><p>Determine the architecture, interfaces, data, integrations, automation, and AI where appropriate.</p></div></li><li><span>03</span><div><h3>Proposal</h3><p>Define scope, deliverables, milestones, responsibilities, boundaries, and operating model before implementation.</p></div></li><li><span>04</span><div><h3>Build &amp; Deploy</h3><p>Implement, test, release, and put the bounded system into a controlled production environment.</p></div></li><li><span>05</span><div><h3>Managed Operation</h3><p>Monitor, maintain, support, and improve the system under the agreed responsibility model.</p></div></li></ol>
+    <a class="button" href="/project" data-event="describe_project_engagement">Start Project Discovery</a>
   </section>
 
-  <section class="section approval-section" aria-labelledby="approval-title">
-    <div><p class="section-index">THE HUMAN ROLE</p><h2 id="approval-title">Automate the work. Keep control of the decisions.</h2><p class="section-lead">Routine work keeps moving. High-consequence decisions stay with people.</p><p>Orkestr workflows can stop at predefined approval points. Your team sees what happened, what information was found, what the workflow recommends, and what happens after approval.</p><p class="history-note">Every action remains visible in the execution history.</p></div>
-    <article class="approval-card" aria-label="Illustrative approval case">
-      <div class="approval-card-head"><span>APPROVAL REQUIRED</span><strong>Invoice discrepancy detected</strong></div>
-      <dl class="approval-values"><div><dt>Invoice</dt><dd>€48,420</dd></div><div><dt>PO value</dt><dd>€43,900</dd></div><div class="difference"><dt>Difference</dt><dd>€4,520</dd></div></dl>
-      <ul><li>Supplier history checked <span>✓</span></li><li>Purchase order checked <span>✓</span></li><li>Relevant documents attached <span>✓</span></li></ul>
-      <p class="approval-label">DECISION</p><div class="approval-actions"><button type="button" disabled>Approve next action</button><button type="button" disabled>Review case</button></div><small>Public-safe demonstration. Controls are intentionally inactive.</small>
-    </article>
-  </section>
-
-  <section class="section engagement" aria-labelledby="engagement-title">
-    <div><p class="section-index">HOW ENGAGEMENT STARTS</p><h2 id="engagement-title">Start with one workflow.</h2><p class="section-lead">You do not need an enterprise-wide AI transformation project. Start with one process already costing time, causing delays, or creating unnecessary manual work.</p><a class="button" href="/workflow" data-event="book_audit_engagement">Book a workflow audit</a></div>
-    <ol class="phase-list five"><li><span>01</span><div><h3>Workflow Audit</h3><p>Map the process, systems, decisions, exceptions, and current bottlenecks.</p></div></li><li><span>02</span><div><h3>Workflow Design</h3><p>Define what Orkestr should do, what stays deterministic, and where people approve.</p></div></li><li><span>03</span><div><h3>Pilot Deployment</h3><p>Connect the necessary systems and implement the workflow in a controlled environment.</p></div></li><li><span>04</span><div><h3>Measure</h3><p>Compare the implemented workflow with the existing process before expanding.</p></div></li><li><span>05</span><div><h3>Operate and Expand</h3><p>Keep proven work running and add the next process only after value is visible.</p></div></li></ol>
-  </section>
-
-  <section class="measurement-section" aria-labelledby="measurement-title">
-    <div><p class="section-index">MEASUREMENT BEFORE SCALE</p><h2 id="measurement-title">Automation should produce a measurable result.</h2><p>We do not evaluate a workflow by asking whether the AI looks impressive. Before implementation, we define the operational baseline.</p></div>
-    <ul class="metric-list"><li>Minutes of human work per case</li><li>Number of manual touches</li><li>Response time</li><li>Backlog</li><li>Error rate</li><li>Exception rate</li><li>Cases processed per employee</li><li>Cost per completed process</li></ul>
-    <blockquote>If the workflow does not improve the operation, it should not scale.</blockquote>
-  </section>
-
-  <section class="proof-section" id="proof" aria-labelledby="proof-title">
-    <div class="section-heading inverse"><p class="section-index">PRODUCT EVIDENCE</p><h2 id="proof-title">Built to run real workflows.</h2><p>Orkestr coordinates agents, APIs, controlled browser execution, files, communication channels, deterministic rules, human approvals, and persistent workflow state around a bounded operational process.</p></div>
+  <section class="proof-section" id="platform" aria-labelledby="platform-title">
+    <div class="section-heading inverse"><p class="section-index">BUILT ON ORKESTR</p><h2 id="platform-title">An operating layer when the system needs to keep working.</h2><p>Managed systems can use Orkestr to coordinate agents, schedules, browser execution, files, communication channels, approvals, persistent jobs, monitoring, and recovery.</p><p>Not every project needs this layer. Conventional websites and applications use standard software components first; Orkestr is added where ongoing operational work makes it useful.</p></div>
     ${renderConsoleEvidence()}
   </section>
 
+  <section class="browser-section" aria-labelledby="browser-title">
+    <div class="browser-copy"><p class="section-index">MESSY SYSTEMS ARE NORMAL</p><h2 id="browser-title">No API? That does not necessarily stop us.</h2><p>Important work still happens inside legacy systems, supplier portals, public websites, internal applications, logistics platforms, and administrative dashboards.</p><p>We use direct integrations where available and controlled browser execution where appropriate and authorized.</p><strong class="browser-statement">APIs when available.<br>The browser when they are not.</strong></div>
+    <div class="system-map" role="img" aria-label="Orkestr can coordinate direct integrations, files, websites, browser-only software, and human decisions"><div class="map-core"><span>OPERATING LAYER</span><strong>Orkestr</strong></div><div class="map-node erp"><span>STANDARD SOFTWARE</span><strong>Applications</strong></div><div class="map-node crm"><span>DIRECT</span><strong>APIs</strong></div><div class="map-node email"><span>AUTHORIZED</span><strong>Web sources</strong></div><div class="map-node browser"><span>CONTROLLED BROWSER</span><strong>Legacy systems</strong></div><div class="map-node files"><span>APPROVED SOURCE</span><strong>Files &amp; data</strong></div><div class="map-node person"><span>DECISION GATE</span><strong>Human review</strong></div></div>
+  </section>
+
+  <section class="section approval-section" aria-labelledby="approval-title">
+    <div><p class="section-index">HUMAN CONTROL WHERE IT MATTERS</p><h2 id="approval-title">Automate the work. Keep control of the decisions.</h2><p class="section-lead">Not every Orkestr project needs approval gates. When a managed workflow does, it can stop at a defined boundary and show the evidence before a person decides.</p><p class="history-note">Routine work can keep moving. High-consequence actions remain visible and reviewable.</p></div>
+    <article class="approval-card" aria-label="Illustrative opportunity review"><div class="approval-card-head"><span>REVIEW REQUIRED</span><strong>Opportunity matched</strong></div><dl class="approval-values"><div><dt>Source</dt><dd>Public</dd></div><div><dt>Deadline</dt><dd>18 days</dd></div><div class="difference"><dt>Fit</dt><dd>Review</dd></div></dl><ul><li>Source link recorded <span>✓</span></li><li>Required criteria checked <span>✓</span></li><li>Matching reason attached <span>✓</span></li></ul><p class="approval-label">DECISION</p><div class="approval-actions"><button type="button" disabled>Add to shortlist</button><button type="button" disabled>Review evidence</button></div><small>Public-safe illustration. Controls are inactive.</small></article>
+  </section>
+
   <section class="section deployment-summary" aria-labelledby="deployment-title">
-    <div class="section-heading"><p class="section-index">DEPLOYMENT</p><h2 id="deployment-title">Your workflow. Your systems. Controlled access.</h2><p class="section-lead">Orkestr is deployed around the systems involved in the workflow rather than requiring the company to replace them.</p></div>
-    <div class="deployment-columns"><article><span>01</span><h3>Existing systems</h3><ul><li>ERP and CRM</li><li>Email and databases</li><li>Internal applications</li><li>Files and web portals</li></ul></article><article><span>02</span><h3>Controlled execution</h3><ul><li>Defined workflow scope</li><li>Explicit permissions</li><li>Human approval</li><li>History and exceptions</li></ul></article><article><span>03</span><h3>Private deployment</h3><ul><li>Customer-specific configuration</li><li>Controlled connections</li><li>Workflow-level boundaries</li><li>Managed operation</li></ul></article></div>
+    <div class="section-heading"><p class="section-index">DEPLOYMENT &amp; OPERATION</p><h2 id="deployment-title">Your requirement. A defined production boundary.</h2><p class="section-lead">Hosting, integrations, permissions, monitoring, support, data responsibilities, and release ownership are agreed for the system being built.</p></div>
+    <div class="deployment-columns"><article><span>01</span><h3>Existing environment</h3><ul><li>Current software and data</li><li>Approved websites and services</li><li>Users and business owners</li><li>Constraints and dependencies</li></ul></article><article><span>02</span><h3>Controlled implementation</h3><ul><li>Defined project scope</li><li>Explicit access</li><li>Testing and failure paths</li><li>Release and rollback</li></ul></article><article><span>03</span><h3>Operating model</h3><ul><li>Private or customer-controlled environment</li><li>Monitoring and maintenance</li><li>Support responsibilities</li><li>Measured improvement</li></ul></article></div>
     <a class="text-link" href="/deployment" data-event="deployment_detail_click">Read about deployment <span aria-hidden="true">→</span></a>
   </section>
 
-  <section class="section security-summary" aria-labelledby="security-title">
-    <div><p class="section-index">SECURITY</p><h2 id="security-title">AI access should be limited to what the workflow requires.</h2></div>
-    <div><p class="section-lead">Giving a general-purpose AI unrestricted access to company systems is a bad architecture. Orkestr workflows are designed around explicit tasks, systems, and permissions.</p><p>The workflow should know what it may access, what it may change, when it must stop, when it needs approval, and what must be recorded.</p><a class="text-link" href="/security" data-event="security_approach_click">Read our security approach <span aria-hidden="true">→</span></a></div>
-  </section>
+  <section class="section security-summary" aria-labelledby="security-title"><div><p class="section-index">SECURITY</p><h2 id="security-title">Access should be no broader than the system requires.</h2></div><div><p class="section-lead">A project begins with explicit users, data, sources, systems, permissions, stop conditions, and recording requirements.</p><p>Orkestr does not bypass access controls. Web-data projects use public or authorized sources, and agentic workflows are bounded around approved tasks.</p><a class="text-link" href="/security" data-event="security_approach_click">Read our security approach <span aria-hidden="true">→</span></a></div></section>
 
-  <section class="why-section" aria-labelledby="why-title">
-    <div><p class="section-index">WHY ORKESTR</p><h2 id="why-title">The difference is not the model.</h2><p class="section-lead">The model is one component. The difficult part is making AI reliably participate in an actual business process.</p></div>
-    <ul><li>Connecting systems</li><li>Maintaining context</li><li>Handling exceptions</li><li>Controlling permissions</li><li>Waiting for approvals</li><li>Resuming work</li><li>Recording what happened</li><li>Keeping the workflow running after the demo</li></ul>
-    <p class="why-close">That is the layer Orkestr provides.</p>
-  </section>
+  <section class="why-section" aria-labelledby="why-title"><div><p class="section-index">WHY ORKESTR</p><h2 id="why-title">The difficult part is not writing a demo.</h2><p class="section-lead">The difficult part is turning a business requirement into a system that keeps working.</p></div><ul><li>Understanding the real process</li><li>Choosing the right architecture</li><li>Connecting imperfect systems</li><li>Handling data and exceptions</li><li>Controlling permissions</li><li>Testing failure paths</li><li>Deploying with rollback</li><li>Maintaining the live operation</li></ul><p class="why-close">Orkestr builds systems that do work.</p></section>
 
   <section class="section faq" aria-labelledby="faq-title">
-    <div><p class="section-index">FAQ</p><h2 id="faq-title">Straight answers before the audit.</h2></div>
-    <div class="faq-list"><details><summary>Is Orkestr another SaaS automation platform?</summary><p>No. Orkestr implementations are currently delivered as managed workflow deployments. We work with your team to map, build, deploy, and operate the workflow.</p></details><details><summary>Do we need to replace our existing software?</summary><p>No. The purpose of Orkestr is to work across the systems you already use.</p></details><details><summary>What if our software does not have an API?</summary><p>Depending on the system and workflow, Orkestr can use controlled browser execution in addition to direct integrations.</p></details><details><summary>Does AI make decisions automatically?</summary><p>Not necessarily. Workflows can include rules, confidence thresholds, and explicit human approval points. The level of autonomy depends on the process.</p></details><details><summary>Where should we start?</summary><p>Choose a repetitive, frequent process expensive enough to matter. Good candidates usually involve employees repeatedly moving information between several systems.</p></details><details><summary>Is Orkestr self-service?</summary><p>Not currently. We begin by understanding the workflow and designing the implementation with you.</p></details></div>
+    <div><p class="section-index">FAQ</p><h2 id="faq-title">Straight answers before Discovery.</h2></div>
+    <div class="faq-list"><details><summary>Is Orkestr a general software agency?</summary><p>No. Orkestr focuses on bounded business systems and automation that can be designed, deployed, and operated with clear responsibility. We use an operating platform and engineering capability rather than selling open-ended development capacity.</p></details><details><summary>Do we need a technical specification?</summary><p>No. Start with the outcome, current situation, users, constraints, and definition of success. Project Discovery determines what should be built.</p></details><details><summary>Do you only build AI systems?</summary><p>No. Conventional software is often the right foundation. We add AI, agents, browser execution, and automation only where they create a defensible operational benefit.</p></details><details><summary>Can you work with old or browser-only software?</summary><p>Potentially. We assess direct integration, controlled browser execution, staged replacement, or a new interface around the existing system. Feasibility depends on access, risk, and the specific software.</p></details><details><summary>Do you offer web scraping?</summary><p>Web extraction can be one implementation technique inside a data system. Sources must be public or explicitly authorized, and source terms, privacy, rate limits, reliability, and maintenance are reviewed during Discovery.</p></details><details><summary>Is Orkestr self-service?</summary><p>Not currently. Projects are delivered as managed implementations with an agreed scope, deployment boundary, and operating model.</p></details></div>
   </section>
 
-  <section class="final-cta" aria-labelledby="final-title"><p class="section-index">SHOW US THE WORK</p><h2 id="final-title">Show us the work your team should not be doing manually.</h2><p>Pick one repetitive workflow. We’ll map the systems, handoffs, approvals, and exceptions and determine what can realistically be automated.</p><div class="actions"><a class="button button-light" href="/workflow" data-event="book_audit_final">Book a workflow audit</a><a class="text-link inverse-link" href="/workflow#workflow-form" data-event="map_workflow_final">Or map the workflow in writing <span aria-hidden="true">→</span></a></div><p class="final-note">No platform migration required. Start with one workflow.</p></section>
+  <section class="final-cta" aria-labelledby="final-title"><p class="section-index">PROJECT DISCOVERY</p><h2 id="final-title">Show us what your business needs to do.</h2><p>Describe one requirement, broken system, repeated search, data problem, or manual process. We will determine what can realistically be built and how it should operate.</p><div class="actions"><a class="button button-light" href="/project" data-event="describe_project_final">Describe your project</a><a class="text-link inverse-link" href="/use-cases" data-event="see_what_we_build">See what we build <span aria-hidden="true">→</span></a></div><p class="final-note">No technical specification required. Start with a concrete outcome.</p></section>
 </main>`,
   };
 }

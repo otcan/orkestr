@@ -75,23 +75,23 @@ function assertAngularShell(html) {
 }
 
 function assertPublicShell(html) {
-  assert.match(html, /<title>Managed AI Workflow Automation &amp; AI Agents \| Orkestr<\/title>/);
-  assert.match(html, /Your software stores the work/);
-  assert.match(html, /Orkestr moves it forward/);
-  assert.match(html, /Human approval where needed/);
-  assert.match(html, /Private deployment/);
+  assert.match(html, /<title>Business Systems, Data &amp; AI Automation \| Orkestr<\/title>/);
+  assert.match(html, /Tell us what your business needs to do/);
+  assert.match(html, /We build the system that does it/);
+  assert.match(html, /Human control where it matters/i);
+  assert.match(html, /Managed Operation/);
   assert.match(html, /name="application-name" content="Orkestr"/);
   assert.match(html, /property="og:site_name" content="Orkestr"/);
   assert.match(html, /name="twitter:card" content="summary_large_image"/);
   assert.match(html, /rel="stylesheet" href="\/public-site\.css"/);
   assert.doesNotMatch(html, /<style>/);
-  assert.match(html, /Book a workflow audit/);
+  assert.match(html, /Describe your project/);
   assert.match(html, /ORKESTR CONSOLE · PUBLIC DEMO/);
-  assert.match(html, /Waiting for approval/);
-  assert.match(html, /data-event="book_audit_hero"/);
-  assert.match(html, /Incoming customer request/);
-  assert.match(html, /MANAGER APPROVAL/);
-  assert.match(html, /ERP updated and reply sent/);
+  assert.match(html, /Human review/);
+  assert.match(html, /data-event="describe_project_hero"/);
+  assert.match(html, /Public Opportunity Monitor/);
+  assert.match(html, /Project Discovery/);
+  assert.match(html, /public or authorized sources/i);
   assert.doesNotMatch(html, /Personal beta/);
   assert.match(html, /\/api\/public\/events/);
   assert.doesNotMatch(html, /id="waitlist-form"/);
@@ -167,6 +167,8 @@ test("server serves the public site at root and Angular UI at app routes", async
     const useCasesResponse = await fetch(`http://127.0.0.1:${port}/use-cases`);
     const workflowResponse = await fetch(`http://127.0.0.1:${port}/workflow`);
     const workflowHtml = await workflowResponse.text();
+    const projectResponse = await fetch(`http://127.0.0.1:${port}/project`);
+    const projectHtml = await projectResponse.text();
     const waitlistRedirect = await fetch(`http://127.0.0.1:${port}/waitlist`, { redirect: "manual" });
     const publicAssetResponse = await fetch(`http://127.0.0.1:${port}/public-assets/orkestr-three-screen-demo.png`);
     const publicCssResponse = await fetch(`http://127.0.0.1:${port}/public-site.css`);
@@ -224,7 +226,7 @@ test("server serves the public site at root and Angular UI at app routes", async
     const expandedHomeHtml = await (await fetch(`http://127.0.0.1:${port}/`)).text();
     const expandedPrivacyHtml = await (await fetch(`http://127.0.0.1:${port}/privacy`)).text();
     const expandedAboutHtml = await (await fetch(`http://127.0.0.1:${port}/about`)).text();
-    assert.match(expandedHomeHtml, /Your software stores the work/);
+    assert.match(expandedHomeHtml, /Tell us what your business needs to do/);
     assert.doesNotMatch(expandedHomeHtml, /read selected Gmail signals/);
     assert.match(expandedPrivacyHtml, /gmail\.readonly/);
     assert.match(expandedPrivacyHtml, /calendar\.events\.owned/);
@@ -249,6 +251,10 @@ test("server serves the public site at root and Angular UI at app routes", async
     assert.match(workflowHtml, /Show us one workflow worth fixing/);
     assert.match(workflowHtml, /id="workflow-form"/);
     assert.match(workflowHtml, /\/api\/public\/workflow-leads/);
+    assert.equal(projectResponse.status, 200);
+    assert.match(projectHtml, /Tell us what your business needs to do/);
+    assert.match(projectHtml, /id="project-form"/);
+    assert.match(projectHtml, /\/api\/public\/project-inquiries/);
     assert.equal(waitlistRedirect.status, 302);
     assert.equal(waitlistRedirect.headers.get("location"), "/beta#waitlist");
     assert.equal(publicAssetResponse.status, 200);

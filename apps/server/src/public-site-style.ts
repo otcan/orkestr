@@ -1,4 +1,5 @@
 import { waitlistCss } from "./public-waitlist.js";
+import { publicSiteV3Css } from "./public-site-v3-style.js";
 
 export function renderCommercialSiteCss() {
   return `
@@ -339,9 +340,10 @@ h3 { margin: 0; font-size: 22px; line-height: 1.15; letter-spacing: -.025em; }
 .legal-content ul { display: grid; gap: 10px; padding-left: 22px; }
 .legal-content code { overflow-wrap: anywhere; color: var(--ink); }
 .policy-meta { margin-top: 18px !important; font-size: 14px !important; font-weight: 750; }
+${publicSiteV3Css}
 ${waitlistCss()}
 .beta-page .waitlist-band { display: grid; grid-template-columns: .7fr 1.3fr; gap: clamp(36px,7vw,90px); padding: clamp(60px,8vw,112px) clamp(20px,7vw,110px); border-top: 1px solid var(--line); }
-.footer { display: grid; grid-template-columns: 1.35fr repeat(4,minmax(120px,.75fr)); gap: 34px; padding: 58px clamp(20px,5vw,80px) 34px; background: var(--dark); color: #edf2ed; }
+.footer { display: grid; grid-template-columns: 1.35fr repeat(5,minmax(110px,.68fr)); gap: 30px; padding: 58px clamp(20px,5vw,80px) 34px; background: var(--dark); color: #edf2ed; }
 .wordmark.inverse { color: #fff; }
 .wordmark.inverse span { background: #fff; color: var(--dark); }
 .footer-brand p { color: #9eaaa0; }

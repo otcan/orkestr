@@ -2,12 +2,14 @@ import { Body, Controller, Get, HttpCode, Param, Post, Query, Req, Res } from "@
 import { resolveBrokerConnectInstance } from "../../../../../packages/core/src/broker-instance-registry.js";
 import { submitWaitlistEntry } from "../../../../../packages/core/src/user-waitlist.js";
 import { submitWorkflowLead } from "../../../../../packages/core/src/workflow-leads.js";
+import { submitProjectInquiry } from "../../../../../packages/core/src/project-inquiries.js";
 import { recordPublicSiteEvent } from "../../../../../packages/core/src/public-site-events.js";
 import { httpError } from "../../common/http.js";
 import { instanceSetupPairingRedirectPath, normalizeInstanceId } from "../../instance-connect-setup.js";
 
 const waitlistSubmitAttempts = new Map<string, number[]>();
 const workflowSubmitAttempts = new Map<string, number[]>();
+const projectSubmitAttempts = new Map<string, number[]>();
 const analyticsSubmitAttempts = new Map<string, number[]>();
 
 function requestIp(request: any): string {
@@ -43,6 +45,14 @@ export class PublicController {
     assertSubmitRate(request, workflowSubmitAttempts, 6, "workflow_submit_rate_limited");
     const result = await submitWorkflowLead(body, process.env);
     return { ...result, schedulingUrl: result.lead?.schedulingUrl };
+  }
+
+  @Post("project-inquiries")
+  @HttpCode(200)
+  async submitProjectInquiry(@Req() request: any, @Body() body: Record<string, unknown> = {}) {
+    assertSubmitRate(request, projectSubmitAttempts, 6, "project_submit_rate_limited");
+    const result = await submitProjectInquiry(body, process.env);
+    return { ...result, schedulingUrl: result.inquiry?.schedulingUrl };
   }
 
   @Post("events")

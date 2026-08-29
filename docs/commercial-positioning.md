@@ -1,66 +1,50 @@
 # Commercial Positioning Contract
 
-Status: approved implementation contract for the `commercial-repositioning`
-release.
+Status: approved implementation contract for the `homepage-v3` release.
 
 ## Message contract
 
-- Category: **AI Operations Layer**.
-- Definition: show Orkestr a repetitive business process; Orkestr builds and
-  operates the AI layer that runs it across the software already in place.
-- Buyer: the operations leader who owns a repeated, expensive process and its
-  outcome.
-- Delivery: **managed private deployment**, either in an isolated managed
-  environment or customer-controlled infrastructure.
-- Product surface: **Orkestr Console** is the operator-facing view of named
-  workflows, state, exceptions, approvals, resources, and history.
-- Entry offer: **Orkestr Workflow Audit**, followed by a bounded Pilot
-  Deployment and Managed Operation only when the measured result supports it.
-- Primary CTA: **Book a workflow audit**.
-- Secondary CTA: **See how it works**.
+- Descriptor: **Orkestr · Business Systems & Automation**.
+- Proposition: tell Orkestr what the business needs to do; Orkestr designs,
+  builds, deploys, and operates the bounded system that does it.
+- Scope device: **BUILD · REPLACE · FIND · COLLECT · AUTOMATE**.
+- Outcomes: websites and commerce, internal or legacy system replacement,
+  opportunity intelligence, web data and monitoring, and operational
+  automation.
+- Delivery: Project Discovery, Solution Design, Proposal, Build & Deploy, and
+  Managed Operation.
+- Primary CTA: **Describe your project**.
+- Specialized offer: Workflow Audit remains available at `/automation` and
+  `/workflow`; it is not the universal entry point.
 
-The homepage five-second test is successful when a cold visitor can answer:
+The five-second test succeeds when a visitor understands that they can bring an
+outcome without a technical specification, Orkestr chooses and builds the right
+kind of system, and the responsibility can continue after launch.
 
-1. What does it do? Builds and operates workflows across existing software.
-2. Who stays in control? A person approves sensitive or irreversible actions.
-3. What can I inspect? Current status, exceptions, decisions, and history.
-4. Where can it run? In a managed private environment or infrastructure the
-   organization controls.
-5. How do I start? Bring one expensive repeated process to a Workflow Audit.
+## Differentiation
 
-## Approved claims
+Orkestr is not sold as a generic software agency or open-ended development
+capacity. The work is bounded around a real business requirement, production
+responsibility, and an operating model. Conventional applications use standard
+software first. The Orkestr operating layer is added only where persistent
+agents, schedules, controlled browsers, monitoring, approvals, or recovery are
+useful.
 
-- Orkestr has a public MIT-licensed, public-alpha core.
-- It supports persistent threads, managed agent runtimes, scoped connectors,
-  managed browser or desktop resources, timers, warnings, and visible history.
-- A deployment can configure approval gates and stop a workflow before a
-  consequential action.
-- Orkestr can be delivered in a managed isolated or customer-controlled private
-  environment.
-- Customer-specific configuration, credentials, infrastructure, and evidence
-  remain outside the public repository.
-- Capabilities and connector availability vary by deployment.
-- Direct integrations and controlled browser execution can be combined when a
-  bounded workflow touches software without a suitable API.
+Web scraping is an implementation technique, never the product. Public copy
+uses **Web Data & Monitoring** and limits collection to public or explicitly
+authorized sources. It never promises access-control bypass or universal source
+compatibility.
 
-## Prohibited or qualified claims
+## Claims guardrails
+
+The public core can support persistent threads, agent runtimes, scoped
+connectors, browser resources, timers, status, interruptions, and history. It
+does not prove that every proposed website, legacy migration, source adapter,
+integration, or customer-specific system already exists. Project examples and
+Console records must be clearly labelled as illustrative.
 
 Do not describe Orkestr as hosted multi-user SaaS, general team RBAC, an AI
-employee, unsupervised autonomy, self-driving operations, enterprise-grade,
-certified, compliant by default, zero-risk, or universally integrated.
-
-Do not publish customer logos, customer data, real deployment screenshots, or
-performance and ROI figures without explicit approval and evidence. Security,
-compliance, connector, scale, and availability statements must describe the
-specific deployed and tested boundary.
-
-## Sales conversation guardrail
-
-Start with a Workflow Audit of one repeated process. Define a measurable
-baseline, then sell the pilot as a concrete implementation: workflow and
-systems map, rule-versus-AI design, approval boundaries, isolated deployment,
-one implemented workflow, operator view, and exception testing. Move into
-Managed Operation only when the measured result supports it. Offer scheduling
-only after the workflow and boundaries are useful enough to review. Do not sell
-a generic AI transformation, unrestricted access to every system, or a product
-capability that exists only in a private adapter.
+employee, unrestricted autonomy, an enterprise-wide transformation, universally
+integrated, certified, compliant by default, or guaranteed to produce ROI.
+Feasibility, data rights, source stability, migration risk, deployment,
+security, scope, support, and price are established per project.

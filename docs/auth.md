@@ -80,6 +80,7 @@ ORKESTR_OUTLOOK_SMTP_USER=notifications@example.com
 ORKESTR_OUTLOOK_SMTP_FROM=notifications@example.com
 ORKESTR_WAITLIST_NOTIFY_EMAIL=admin@example.com
 ORKESTR_WORKFLOW_PILOT_NOTIFY_EMAIL=pilot-review@example.com
+ORKESTR_PROJECT_DISCOVERY_NOTIFY_EMAIL=project-review@example.com
 ```
 
 Orkestr can also send outbound notifications through Microsoft Graph `sendMail`
@@ -94,13 +95,20 @@ ORKESTR_GRAPH_MAIL_SENDER=sender@example.com
 ORKESTR_GRAPH_MAIL_TOKEN_COMMAND_JSON=["/usr/local/bin/example-graph-token"]
 ORKESTR_WAITLIST_NOTIFY_EMAIL=admin@example.com
 ORKESTR_WORKFLOW_PILOT_NOTIFY_EMAIL=pilot-review@example.com
+ORKESTR_PROJECT_DISCOVERY_NOTIFY_EMAIL=project-review@example.com
 ```
 
 Orkestr reports whether Outlook or Graph mail delivery is configured, but it
 does not expose SMTP passwords, access tokens, or token commands through the API
 or UI.
 
-Workflow Audit and Pilot submissions are stored separately from beta waitlist entries.
+Project Discovery inquiries, Workflow Audit leads, and beta waitlist entries are
+stored separately.
+Set `ORKESTR_PROJECT_DISCOVERY_NOTIFY_EMAIL` (or its plural form) for broad
+commercial inquiries. Ready submissions receive a scheduling link only when
+`ORKESTR_PROJECT_DISCOVERY_SCHEDULING_URL` is configured. The public `/project`
+page never embeds that URL before a submission passes readiness checks.
+
 Set `ORKESTR_WORKFLOW_PILOT_NOTIFY_EMAIL` (or the plural comma-separated form)
 to route commercial qualification notifications independently. When it is not
 set, Orkestr falls back to the configured waitlist notification recipient so a
