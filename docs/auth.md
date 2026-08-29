@@ -100,7 +100,7 @@ Orkestr reports whether Outlook or Graph mail delivery is configured, but it
 does not expose SMTP passwords, access tokens, or token commands through the API
 or UI.
 
-Workflow Pilot submissions are stored separately from beta waitlist entries.
+Workflow Audit and Pilot submissions are stored separately from beta waitlist entries.
 Set `ORKESTR_WORKFLOW_PILOT_NOTIFY_EMAIL` (or the plural comma-separated form)
 to route commercial qualification notifications independently. When it is not
 set, Orkestr falls back to the configured waitlist notification recipient so a

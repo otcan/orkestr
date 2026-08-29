@@ -8,14 +8,26 @@ function legalBody(eyebrow: string, heading: string, intro: string, sections: Ar
 
 export function legalPage(pageId: PublicPageId, env = process.env): PublicPage {
   if (pageId === "privacy") return { id: "privacy", canonicalPath: "/privacy", ...publicPrivacyPage(env) };
+  const legalName = String(env.ORKESTR_PUBLIC_LEGAL_NAME || "Orkestr").trim();
+  const legalAddress = String(env.ORKESTR_PUBLIC_LEGAL_ADDRESS || "Postal provider details are available from the operator contact.").trim();
   const pages: Partial<Record<PublicPageId, PublicPage>> = {
+    impressum: {
+      id: "impressum", title: "Impressum", summary: "Provider and contact information for the operator of the Orkestr commercial website.",
+      body: legalBody("PROVIDER INFORMATION", "Impressum", "Provider and contact information for this Orkestr commercial deployment.", [
+        ["Provider", legalName],
+        ["Postal address", legalAddress],
+        ["Contact", publicContact(env)],
+        ["Service description", "Managed design, deployment, and operation of bounded AI workflows using the Orkestr open-source core and customer-specific private configuration."],
+        ["Deployment responsibility", "The operator named here is responsible for this commercial website. Self-hosted and customer-controlled Orkestr environments remain the responsibility of their respective operators."],
+      ]),
+    },
     terms: {
       id: "terms", title: "Terms", summary: "Plain-language terms for Orkestr's public-alpha software, private beta, and commercial inquiries.",
       body: legalBody("TERMS", "Terms", "Orkestr is public-alpha software. The personal beta is invite-only, and submitting a commercial workflow inquiry is not a purchase agreement.", [
         ["Your responsibility", "Only connect accounts and systems you own or are authorized to use. Do not ask Orkestr to impersonate people, steal data, break laws, run scams, or bypass account controls."],
         ["Service behavior", "Orkestr may process instructions, files, connector metadata, managed-browser activity, timers, and task outputs to perform an authorized workflow. Review important outputs before consequential action."],
         ["Alpha and beta availability", "Features can fail, change, or be withdrawn. The operator may pause a deployment or account for reliability, security, legal, or abuse-prevention reasons."],
-        ["Commercial inquiries", "Submitting a workflow map or scheduling a qualification call asks Orkestr to assess a possible pilot. It does not guarantee availability, scope, price, schedule, or delivery."],
+        ["Commercial inquiries", "Submitting a workflow map or requesting a Workflow Audit asks Orkestr to assess a possible managed pilot. It does not guarantee availability, scope, price, schedule, or delivery."],
         ["Open source", `The generic public core is available at ${publicRepoUrl(env)}. Private deployment overlays, customer configuration, operational evidence, and secrets are not part of the OSS repository.`],
       ]),
     },
@@ -50,7 +62,7 @@ export function legalPage(pageId: PublicPageId, env = process.env): PublicPage {
     },
     beta: {
       id: "beta", title: "Personal Beta", summary: "The preserved invite-only Orkestr personal beta, including consent disclosures and access request flow.",
-      body: `<main class="legal-page beta-page" id="main-content"><section class="legal-hero"><p class="eyebrow">PERSONAL BETA</p><h1>Start a private Orkestr workspace.</h1><p class="lead">The personal experience remains invite-only and separate from commercial Workflow Pilot inquiries.</p></section><section class="legal-content"><article><h2>Invite-only</h2><p>Access is limited to people explicitly invited by the operator.</p></article><article><h2>Expected instability</h2><p>Features can fail, responses can be imperfect, and live connectors may need manual repair.</p></article><article><h2>Human review</h2><p>Review important output before sending, publishing, paying, applying, or taking irreversible action.</p></article><article><h2>Consent and control</h2><p>Requesting access requires the beta terms and privacy notice. Connected accounts can be declined, disconnected, or revoked.</p></article></section>${renderWaitlistSection()}</main>`,
+      body: `<main class="legal-page beta-page" id="main-content"><section class="legal-hero"><p class="eyebrow">PERSONAL BETA</p><h1>Start a private Orkestr workspace.</h1><p class="lead">The personal experience remains invite-only and separate from commercial Workflow Audit and Pilot inquiries.</p></section><section class="legal-content"><article><h2>Invite-only</h2><p>Access is limited to people explicitly invited by the operator.</p></article><article><h2>Expected instability</h2><p>Features can fail, responses can be imperfect, and live connectors may need manual repair.</p></article><article><h2>Human review</h2><p>Review important output before sending, publishing, paying, applying, or taking irreversible action.</p></article><article><h2>Consent and control</h2><p>Requesting access requires the beta terms and privacy notice. Connected accounts can be declined, disconnected, or revoked.</p></article></section>${renderWaitlistSection()}</main>`,
     },
   };
   return pages[pageId] || pages.beta!;

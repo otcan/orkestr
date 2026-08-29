@@ -15,9 +15,10 @@ quiet, inspectable, and controlled.
 - Buttons: rectangular, high contrast, minimum 44px target
 - Panels: one-pixel boundaries, minimal radius, no decorative glass effects
 
-Core components are the coordination diagram, trust strip, process cards,
-Workflow Pilot package, phase list, access comparison, synthetic Console proof,
-captioned walkthrough, evidence cards, FAQ, and workflow-map form.
+Core components are the live process map, before-and-after comparison, managed
+implementation contract, browser execution system map, miniature workflow
+chains, approval case, five-step engagement path, measurement baseline,
+public-safe Console evidence, deployment columns, FAQ, and Workflow Audit form.
 
 ## Responsive and accessible behavior
 
@@ -25,7 +26,7 @@ Semantic source order is content order. Desktop grids collapse to one column
 below 760px. The coordination chain becomes vertical; Console regions stack;
 responsibility and evidence grids become cards rather than horizontal tables.
 Navigation remains keyboard reachable through a native `details` menu. The
-mobile header puts workflow mapping inside the menu so the wordmark and navigation never
+mobile header puts Workflow Audit booking inside the menu so the wordmark and navigation never
 fight for horizontal space.
 
 Every interactive control has a visible focus ring. Text and controls maintain

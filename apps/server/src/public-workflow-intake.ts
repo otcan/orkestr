@@ -3,18 +3,18 @@ import type { PublicPage } from "./public-site-config.js";
 export function workflowIntakePage(): PublicPage {
   return {
     id: "workflow",
-    title: "Map an AI Workflow Pilot",
-    summary: "Map one repeated operational workflow for a managed private Orkestr pilot, including its systems, owner, approvals, volume, measurable pain, and success criteria.",
+    title: "Book a Workflow Audit",
+    summary: "Start an Orkestr Workflow Audit by mapping one repeated operational process, its systems, owner, approvals, volume, measurable pain, and success criteria.",
     body: `<main id="main-content">
       <section class="page-hero workflow-hero">
-        <p class="section-index">ORKESTR WORKFLOW PILOT</p>
-        <h1>Map one workflow worth fixing.</h1>
-        <p class="lead">Show us where repeated work crosses systems, who owns the result, where approval belongs, and what a successful pilot should improve.</p>
+        <p class="section-index">ORKESTR WORKFLOW AUDIT</p>
+        <h1>Show us one workflow worth fixing.</h1>
+        <p class="lead">Map where repeated work crosses systems, who owns the result, where approval belongs, and what a successful pilot should improve.</p>
         <div class="qualification-strip" aria-label="Strong workflow signals"><span>Repeated volume</span><span>Named owner</span><span>System crossing</span><span>Measurable pain</span></div>
       </section>
       <section class="workflow-intake" aria-labelledby="intake-title">
         <aside class="intake-context">
-          <p class="section-index">A FOUR-MINUTE MAP</p>
+          <p class="section-index">THE AUDIT STARTS HERE</p>
           <h2 id="intake-title">A useful workflow map beats a generic demo call.</h2>
           <p>We review the process before asking for a meeting. If Orkestr is not a sensible fit, we will say so. If the workflow has a viable pilot boundary, we respond with the open questions and next step.</p>
           <h3>What makes a strong first workflow</h3>
@@ -51,8 +51,8 @@ export function workflowIntakePage(): PublicPage {
 
           <label class="honeypot" aria-hidden="true"><span>Company website</span><input name="companyWebsite" tabindex="-1" autocomplete="off"></label>
           <input name="formStartedAt" type="hidden">
-          <label class="check"><input name="consentToContact" type="checkbox" required><span>I agree that Orkestr may process this information to assess and contact me about a Workflow Pilot. I have read the <a href="/privacy">privacy notice</a>.</span></label>
-          <button class="button submit-workflow" type="submit">Send workflow for review</button>
+          <label class="check"><input name="consentToContact" type="checkbox" required><span>I agree that Orkestr may process this information to assess and contact me about a Workflow Audit and possible pilot. I have read the <a href="/privacy">privacy notice</a>.</span></label>
+          <button class="button submit-workflow" type="submit">Request workflow audit</button>
           <p class="form-status" id="workflow-status" role="status" aria-live="polite"></p>
           <div class="scheduling-handoff" id="scheduling-handoff" hidden></div>
         </form>

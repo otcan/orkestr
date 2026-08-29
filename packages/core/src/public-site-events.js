@@ -10,9 +10,12 @@ const allowedEvents = new Set([
   "book_call_header", "book_call_mobile", "book_call_footer", "book_call_hero", "book_call_final", "see_how_it_works",
   "book_call_security", "book_call_deployment", "book_call_developers", "book_call_use_cases",
   "booking_calendar_click", "booking_email_click", "security_github_click",
+  "nav_how_it_works", "book_audit_header", "book_audit_mobile", "book_audit_hero",
+  "book_audit_engagement", "book_audit_final", "discuss_workflow_offer", "workflow_console_view",
+  "deployment_detail_click", "security_approach_click", "client_portal_click",
 ]);
 
-const allowedPaths = new Set(["/", "/use-cases", "/security", "/deployment", "/developers", "/workflow", "/beta", "/privacy", "/terms", "/acceptable-use", "/data-deletion", "/support"]);
+const allowedPaths = new Set(["/", "/use-cases", "/security", "/deployment", "/developers", "/workflow", "/beta", "/privacy", "/impressum", "/terms", "/acceptable-use", "/data-deletion", "/support"]);
 
 export async function recordPublicSiteEvent(input = {}, env = process.env) {
   const event = String(input.event || "").trim().toLowerCase();

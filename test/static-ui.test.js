@@ -75,29 +75,31 @@ function assertAngularShell(html) {
 }
 
 function assertPublicShell(html) {
-  assert.match(html, /<title>Managed AI Operations Layer \| Orkestr<\/title>/);
+  assert.match(html, /<title>Managed AI Workflow Automation &amp; AI Agents \| Orkestr<\/title>/);
   assert.match(html, /Your software stores the work/);
   assert.match(html, /Orkestr moves it forward/);
-  assert.match(html, /human approval where mistakes matter/);
-  assert.match(html, /Managed private deployment/);
+  assert.match(html, /Human approval where needed/);
+  assert.match(html, /Private deployment/);
   assert.match(html, /name="application-name" content="Orkestr"/);
   assert.match(html, /property="og:site_name" content="Orkestr"/);
   assert.match(html, /name="twitter:card" content="summary_large_image"/);
   assert.match(html, /rel="stylesheet" href="\/public-site\.css"/);
   assert.doesNotMatch(html, /<style>/);
-  assert.match(html, /Map one workflow/);
-  assert.match(html, /PRODUCT WALKTHROUGH/);
-  assert.match(html, /Approval required/);
-  assert.match(html, /data-event="map_workflow_hero"/);
-  assert.match(html, /Request arrives/);
-  assert.match(html, /Manager approves/);
-  assert.doesNotMatch(html, />ERP</);
+  assert.match(html, /Book a workflow audit/);
+  assert.match(html, /ORKESTR CONSOLE · PUBLIC DEMO/);
+  assert.match(html, /Waiting for approval/);
+  assert.match(html, /data-event="book_audit_hero"/);
+  assert.match(html, /Incoming customer request/);
+  assert.match(html, /MANAGER APPROVAL/);
+  assert.match(html, /ERP updated and reply sent/);
+  assert.doesNotMatch(html, /Personal beta/);
   assert.match(html, /\/api\/public\/events/);
   assert.doesNotMatch(html, /id="waitlist-form"/);
   assert.doesNotMatch(html, /Join waitlist/);
   assert.match(html, /href="\/privacy"/);
   assert.match(html, /href="\/terms"/);
-  assert.match(html, />Sign in</);
+  assert.match(html, />Client Portal</);
+  assert.doesNotMatch(html, />Sign in</);
   assert.doesNotMatch(html, /<ork-root(?:\s|>)/);
 }
 
@@ -244,7 +246,7 @@ test("server serves the public site at root and Angular UI at app routes", async
     assert.equal(developersResponse.status, 200);
     assert.equal(useCasesResponse.status, 200);
     assert.equal(workflowResponse.status, 200);
-    assert.match(workflowHtml, /Map one workflow worth fixing/);
+    assert.match(workflowHtml, /Show us one workflow worth fixing/);
     assert.match(workflowHtml, /id="workflow-form"/);
     assert.match(workflowHtml, /\/api\/public\/workflow-leads/);
     assert.equal(waitlistRedirect.status, 302);

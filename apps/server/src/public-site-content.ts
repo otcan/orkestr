@@ -8,7 +8,7 @@ function pageIntro(eyebrow: string, heading: string, summary: string) {
 }
 
 function workflowCta(event: string, heading: string) {
-  return `<section class="final-cta compact"><h2>${heading}</h2><a class="button button-light" href="/workflow" data-event="${event}">Map one workflow</a></section>`;
+  return `<section class="final-cta compact"><h2>${heading}</h2><a class="button button-light" href="/workflow" data-event="${event}">Book a workflow audit</a></section>`;
 }
 
 export function securityPage(env = process.env): PublicPage {

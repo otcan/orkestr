@@ -7,6 +7,7 @@ export type PublicPageId =
   | "workflow"
   | "terms"
   | "privacy"
+  | "impressum"
   | "acceptable-use"
   | "data-deletion"
   | "support"
@@ -133,6 +134,7 @@ export function publicSitePath(pathname = ""): PublicPageId | "" {
     "/workflow": "workflow",
     "/terms": "terms",
     "/privacy": "privacy",
+    "/impressum": "impressum",
     "/acceptable-use": "acceptable-use",
     "/data-deletion": "data-deletion",
     "/support": "support",
