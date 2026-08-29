@@ -9,19 +9,24 @@ const baseEnv = {
   ORKESTR_PUBLIC_CONTACT: "hello@example.test",
 };
 
-test("commercial homepage uses plain language, consistent booking CTAs, and factual SEO metadata", () => {
+test("commercial homepage sells the managed AI operations layer and bounded workflow pilot", () => {
   const html = renderPublicSite("/", baseEnv, { host: "product.example.test" });
 
-  assert.match(html, /<title>Reliable AI Workflow Automation \| Orkestr<\/title>/);
-  assert.match(html, /<h1>Make repetitive work run reliably\.<\/h1>/);
-  assert.match(html, /Orkestr connects the tools your team already uses/);
+  assert.match(html, /<title>Managed AI Operations Layer \| Orkestr<\/title>/);
+  assert.match(html, /Your software stores the work/);
+  assert.match(html, /Orkestr moves it forward/);
+  assert.match(html, /coordinates persistent AI agents/);
   assert.match(html, /Request arrives/);
   assert.match(html, /Information is checked/);
   assert.match(html, /Manager approves/);
   assert.match(html, /Work is completed/);
-  assert.match(html, />Book a 20-minute call<\/a>/);
-  assert.match(html, /data-event="book_call_hero"/);
-  assert.doesNotMatch(html, /Map one workflow/);
+  assert.match(html, />Map one workflow<\/a>/);
+  assert.match(html, /data-event="map_workflow_hero"/);
+  assert.match(html, /ORKESTR WORKFLOW PILOT/);
+  assert.match(html, /WHAT THE PILOT INCLUDES/);
+  assert.match(html, /One implemented workflow/);
+  assert.match(html, /Measurement and rollout recommendation/);
+  assert.doesNotMatch(html, /Book a 20-minute call/);
   assert.doesNotMatch(html, />ERP</);
   assert.match(html, /rel="canonical" href="https:\/\/product\.example\.test\/"/);
   assert.match(html, /"@type":"Organization"/);
@@ -29,33 +34,33 @@ test("commercial homepage uses plain language, consistent booking CTAs, and fact
   assert.doesNotMatch(html, /"@type":"BreadcrumbList"/);
 });
 
-test("workflow route removes qualification intake and uses the configured scheduler directly", () => {
-  const html = renderPublicSite("/workflow", {
-    ...baseEnv,
-    ORKESTR_WORKFLOW_PILOT_SCHEDULING_URL: "https://calendar.example.test/orkestr/20-minute-call?secret=ignored",
-  }, { host: "product.example.test" });
+test("workflow route collects a bounded map before offering a scheduling handoff", () => {
+  const html = renderPublicSite("/workflow", baseEnv, { host: "product.example.test" });
 
-  assert.match(html, /<title>Book a 20-Minute Workflow Call \| Orkestr<\/title>/);
-  assert.match(html, /Let’s talk about the work you want to simplify/);
-  assert.match(html, /data-booking-configured="true"/);
-  assert.match(html, /href="https:\/\/calendar\.example\.test\/orkestr\/20-minute-call"/);
-  assert.match(html, /target="_blank" rel="noreferrer"/);
-  assert.match(html, /Email hello@example\.test/);
-  assert.doesNotMatch(html, /<form/);
-  assert.doesNotMatch(html, /workflow-form/);
-  assert.doesNotMatch(html, /workflow-leads/);
-  assert.doesNotMatch(html, /monthlyVolume|workflowOwner|consentToContact/);
+  assert.match(html, /<title>Map an AI Workflow Pilot \| Orkestr<\/title>/);
+  assert.match(html, /Map one workflow worth fixing/);
+  assert.match(html, /A useful workflow map beats a generic demo call/);
+  assert.match(html, /id="workflow-form"/);
+  assert.match(html, /\/api\/public\/workflow-leads/);
+  assert.match(html, /monthlyVolume/);
+  assert.match(html, /workflowOwner/);
+  assert.match(html, /consentToContact/);
+  assert.match(html, /id="scheduling-handoff"/);
+  assert.match(html, /qualified_schedule_click/);
+  assert.match(html, />Send workflow for review<\/button>/);
   assert.match(html, /"@type":"BreadcrumbList"/);
 });
 
-test("workflow route falls back to a concise booking email when no safe scheduler is configured", () => {
-  const html = renderPublicSite("/workflow", baseEnv, { host: "product.example.test" });
+test("workflow route never exposes or depends on a scheduler before qualification", () => {
+  const html = renderPublicSite("/workflow", {
+    ...baseEnv,
+    ORKESTR_WORKFLOW_PILOT_SCHEDULING_URL: "https://calendar.example.test/orkestr/qualification",
+  }, { host: "product.example.test" });
 
-  assert.match(html, /data-booking-configured="false"/);
-  assert.match(html, /Online scheduling is being connected/);
-  assert.match(html, /mailto:hello@example\.test\?subject=Orkestr%2020-minute%20call/);
-  assert.doesNotMatch(html, /Qualification before scheduling/i);
-  assert.doesNotMatch(html, /generic demo call/i);
+  assert.match(html, /id="workflow-form"/);
+  assert.doesNotMatch(html, /calendar\.example\.test/);
+  assert.doesNotMatch(html, /Online scheduling is being connected/);
+  assert.doesNotMatch(html, /mailto:/);
 });
 
 test("commercial detail pages keep plain-language headings, evidence, limitations, and unique metadata", () => {
@@ -71,7 +76,7 @@ test("commercial detail pages keep plain-language headings, evidence, limitation
     assert.match(html, new RegExp(`<title>${title} \\| Orkestr<\\/title>`));
     assert.match(html, new RegExp(heading));
     assert.match(html, new RegExp(evidence));
-    assert.match(html, /Book a 20-minute call/);
+    assert.match(html, /Map one workflow/);
     assert.match(html, /"@type":"BreadcrumbList"/);
     assert.match(html, new RegExp(`rel="canonical" href="https:\\/\\/product\\.example\\.test${path}"`));
   }
@@ -88,5 +93,7 @@ test("sitemap and responsive CSS retain commercial routes and accessible progres
   assert.match(css, /@media \(max-width: 760px\)/);
   assert.match(css, /@media \(prefers-reduced-motion: reduce\)/);
   assert.match(css, /overflow-x: hidden/);
-  assert.doesNotMatch(css, /\.workflow-form/);
+  assert.match(css, /\.workflow-form/);
+  assert.match(css, /\.pilot-offer/);
+  assert.match(css, /\.field-grid\.two/);
 });

@@ -1,41 +1,46 @@
 # Commercial Site Release QA
 
-Release scope: plain-language commercial simplification, direct call booking,
-credibility evidence, responsive redesign, and SEO foundations.
+Release scope: managed AI Operations Layer positioning, a concrete Workflow
+Pilot offer, qualified workflow mapping, credibility evidence, responsive
+design, and SEO foundations.
 
 ## Changed surfaces
 
-- Homepage message, proof flow, trust evidence, FAQ, and booking CTAs
-- `/workflow` direct scheduling handoff and concise email fallback
+- Homepage message, proof flow, pilot deliverables, trust evidence, FAQ, and
+  workflow-map CTAs
+- `/workflow` qualification map and post-submission scheduling handoff
 - Security access comparison, evidence, data boundaries, and limitations
 - Deployment options, rollout, responsibilities, and secure pairing explanation
 - Practical finance, customer, revenue, and service use cases
 - Developer architecture, public/private boundary, and quick start
 - Unique metadata, canonical URLs, social fields, structured data, sitemap tests,
-  and booking analytics events
+  and conversion analytics events
 - Mobile header, responsive cards and flows, focus, contrast, overflow, and
   reduced-motion behavior
 
 The authenticated app host, secure connect host, personal beta intake, legacy
-commercial lead API, connector authorization, and private deployment overlays
-remain separate surfaces.
+connector authorization and private deployment overlays remain separate
+surfaces. Commercial workflow leads and personal-beta waitlist entries use
+separate records and endpoints.
 
 ## Pre-release evidence
 
 | Gate | Result |
 | --- | --- |
 | Server build | Pass |
-| Web production build | Pass; initial bundle 1.19 MB raw / 251.63 kB estimated transfer |
-| Focused public site, static server, analytics, and legacy lead suite | 49/49 pass |
-| Full CI test runner | 2,114 tests; 2,108 pass; 6 opt-in/environment skips; 0 failures |
+| Web production build | Pass; initial bundle 1.19 MB raw / 252.66 kB estimated transfer |
+| Focused public site, static server, analytics, and workflow-lead suite | 49/49 pass |
+| Browser render | Pass at 1440px and 390px for `/` and `/workflow`; no horizontal overflow |
+| Browser workflow submission | Pass; successful confirmation with no scheduler configured |
+| Full CI test runner | Required before deployment; not rerun in this focused conversion pass |
 | `npm run smoke` | Pass |
-| `npm run oss:boundary-check` | Pass; 636 public files scanned |
+| `npm run oss:boundary-check` | Pass; 643 public files scanned |
 | `git diff --check` | Pass |
 
-The aggregate skips require opt-in or external infrastructure and are not failed
-assertions against the commercial site. Real WhatsApp delivery is not selected
-because this change does not touch WhatsApp behavior and repository policy makes
-that diagnostic optional.
+The focused verification covers the changed commercial surfaces. Full CI and
+production deployment checks remain release gates. Real WhatsApp delivery is
+not selected because this change does not touch WhatsApp behavior and repository
+policy makes that diagnostic optional.
 
 ## Route and conversion checks
 
@@ -47,15 +52,16 @@ Focused render and server tests cover `/`, `/workflow`, `/use-cases`,
 - factual Organization and WebSite structured data
 - breadcrumbs on non-home pages
 - the existing sitemap routes
-- consistent `Book a 20-minute call` CTAs
-- absence of the old workflow form, fields, and submission JavaScript
-- direct use of a configured safe HTTP(S) scheduling URL
-- concise public-contact fallback when scheduling is not configured
-- allowlisted first-party booking analytics without submitted process data
+- consistent `Map one workflow` CTAs
+- presence of the bounded workflow form, consent, validation, and submission
+  JavaScript
+- first-party submission before any qualified scheduling handoff
+- successful inquiry capture when scheduling is not configured
+- allowlisted first-party conversion analytics without submitted process data
 
-The legacy lead endpoint remains available for compatibility and retains its
-validation, storage, notification, and privacy tests. It is no longer called by
-the rendered `/workflow` page.
+The workflow-lead endpoint validates, qualifies, stores, and notifies separately
+from the personal-beta waitlist. It may return a configured scheduling URL only
+for a qualified workflow.
 
 ## Responsive and accessibility checks
 
@@ -63,21 +69,22 @@ Automated contracts verify a global visible focus ring, semantic landmarks,
 native details navigation, a 760-pixel narrow-layout breakpoint, no page-level
 horizontal overflow, and reduced-motion handling. At the narrow breakpoint:
 
-- the header exposes booking inside the menu
+- the header exposes workflow mapping inside the menu
 - the request-to-result flow becomes vertical
 - proof panels and walkthrough steps stack
 - trust, access, evidence, responsibility, and use-case grids become one column
 - use-case shortcuts remain horizontally scrollable inside their own region
-- booking and final CTA controls use the available width
+- workflow-form and final CTA controls use the available width
 
 Post-deployment verification must still exercise the public routes at desktop
 and phone widths. Release signoff requires readable content, reachable keyboard
-focus, no horizontal page overflow, and a truthful scheduling state.
+focus, no horizontal page overflow, a functional submission state, and no
+pre-qualification scheduler exposure.
 
 ## Claims review
 
-- The opening describes the manager outcome before introducing a technical
-  category.
+- The opening states the AI Operations Layer category, operating outcome,
+  private delivery model, and human-control boundary.
 - Trust claims are limited to verifiable product behavior: private deployment
   options, approved connections, human approval, visible status and history,
   and the public open-source core.
@@ -96,8 +103,10 @@ orkestr rollback --to <previous-release-id>
 
 After deployment, verify all six commercial routes, the personal beta route,
 the public app Keycloak sign-in, the public-app launcher boundary, and the
-no-cookie private-API exposure gate. A scheduling button may be called live only
-when `ORKESTR_WORKFLOW_PILOT_SCHEDULING_URL` contains the owner-approved event
-URL; otherwise the page must show the configured email fallback. Roll back on
+no-cookie private-API exposure gate. A scheduling button may appear after a
+qualified submission only when `ORKESTR_WORKFLOW_PILOT_SCHEDULING_URL` contains
+the owner-approved event URL; otherwise the submission remains queued for
+review. Roll back on
 host crossover, private API exposure, broken application authentication,
-unreadable responsive layout, or misleading booking state.
+unreadable responsive layout, failed workflow submission, or misleading
+qualification state.
