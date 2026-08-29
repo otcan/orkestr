@@ -107,29 +107,31 @@ export function renderPublicShell(page: PublicPage, env = process.env) {
   <header class="topbar">
     <a class="wordmark" href="/" aria-label="Orkestr home"><span>O</span> Orkestr</a>
     <nav class="desktop-nav" aria-label="Primary navigation">
-      <a href="/#how-it-works" data-event="nav_how_it_works">How it works</a>
-      ${navLink("/use-cases", "Use cases", page.id, "use-cases", "nav_use_cases")}
+      ${navLink("/use-cases", "What we build", page.id, "use-cases", "nav_what_we_build")}
+      <a href="/#how-we-work" data-event="nav_how_we_work">How we work</a>
+      <a href="/#platform" data-event="nav_orkestr">Orkestr</a>
       ${navLink("/deployment", "Deployment", page.id, "deployment", "nav_deployment")}
       ${navLink("/security", "Security", page.id, "security", "nav_security")}
     </nav>
     <div class="header-actions">
-      <a class="button button-small" href="/workflow" data-event="book_audit_header">Book a workflow audit</a>
+      <a class="button button-small" href="/project" data-event="describe_project_header">Describe your project</a>
     </div>
     <details class="mobile-menu">
       <summary aria-label="Open navigation">Menu</summary>
       <nav aria-label="Mobile navigation">
-        <a href="/#how-it-works">How it works</a><a href="/use-cases">Use cases</a><a href="/deployment">Deployment</a><a href="/security">Security</a><a href="/workflow" data-event="book_audit_mobile">Book a workflow audit</a>
+        <a href="/use-cases">What we build</a><a href="/#how-we-work">How we work</a><a href="/#platform">Orkestr</a><a href="/deployment">Deployment</a><a href="/security">Security</a><a href="/project" data-event="describe_project_mobile">Describe your project</a>
       </nav>
     </details>
   </header>
   ${page.body}
   <footer class="footer">
-    <div class="footer-brand"><a class="wordmark inverse" href="/"><span>O</span> Orkestr</a><p>Show us a repetitive process. We build the operating layer that runs it across the software you already have.</p></div>
-    <nav aria-label="Product links"><strong>Product</strong><a href="/#how-it-works">How it works</a><a href="/use-cases">Use cases</a><a href="/deployment">Deployment</a><a href="/security">Security</a></nav>
+    <div class="footer-brand"><a class="wordmark inverse" href="/"><span>O</span> Orkestr</a><p>Tell us what your business needs to do. We build and operate the system that does it.</p></div>
+    <nav aria-label="Solution links"><strong>Solutions</strong><a href="/websites-commerce">Build</a><a href="/business-systems">Replace</a><a href="/opportunity-intelligence">Find</a><a href="/web-data-monitoring">Collect</a><a href="/automation">Automate</a></nav>
+    <nav aria-label="Orkestr links"><strong>Orkestr</strong><a href="/#how-we-work">How we work</a><a href="/#platform">Operating layer</a><a href="/deployment">Deployment</a><a href="/security">Security</a></nav>
     <nav aria-label="Resource links"><strong>Resources</strong><a href="/developers">Developers</a><a href="${escapeHtml(repo)}" rel="noreferrer">GitHub</a><a href="${escapeHtml(repo)}/tree/main/docs" rel="noreferrer">Documentation</a></nav>
     <nav aria-label="Company links"><strong>Company</strong><a href="/support">Contact</a><a href="/impressum">Impressum</a><a href="/privacy">Privacy</a><a href="/terms">Terms</a></nav>
     <nav aria-label="Customer links"><strong>Existing customers</strong><a href="${escapeHtml(appUrl)}" data-event="client_portal_click">Client Portal</a></nav>
-    <p class="footer-note">Managed private deployments. Open-source core. Available systems, permissions, and actions vary by workflow.</p>
+    <p class="footer-note">Managed implementations. Open-source operating core. Scope, deployment, access, and support vary by project.</p>
   </footer>
   ${analyticsScript(home)}
 </body>

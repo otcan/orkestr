@@ -13,9 +13,17 @@ const allowedEvents = new Set([
   "nav_how_it_works", "book_audit_header", "book_audit_mobile", "book_audit_hero",
   "book_audit_engagement", "book_audit_final", "discuss_workflow_offer", "workflow_console_view",
   "deployment_detail_click", "security_approach_click", "client_portal_click",
+  "nav_what_we_build", "nav_how_we_work", "nav_orkestr",
+  "describe_project_header", "describe_project_mobile", "describe_project_hero",
+  "describe_project_ugly", "describe_project_engagement", "describe_project_final",
+  "see_what_we_build", "offer_build_click", "offer_replace_click", "offer_find_click",
+  "offer_collect_click", "offer_automate_click", "solution_describe_project",
+  "automation_audit_click", "platform_console_view",
+  "project_form_start", "project_validation_error", "project_submit_success",
+  "project_submit_error", "project_schedule_click",
 ]);
 
-const allowedPaths = new Set(["/", "/use-cases", "/security", "/deployment", "/developers", "/workflow", "/beta", "/privacy", "/impressum", "/terms", "/acceptable-use", "/data-deletion", "/support"]);
+const allowedPaths = new Set(["/", "/use-cases", "/websites-commerce", "/business-systems", "/opportunity-intelligence", "/web-data-monitoring", "/automation", "/project", "/security", "/deployment", "/developers", "/workflow", "/beta", "/privacy", "/impressum", "/terms", "/acceptable-use", "/data-deletion", "/support"]);
 
 export async function recordPublicSiteEvent(input = {}, env = process.env) {
   const event = String(input.event || "").trim().toLowerCase();

@@ -1,5 +1,7 @@
 import { commercialHomePage } from "./public-site-home.js";
-import { deploymentPage, developersPage, securityPage, useCasesPage } from "./public-site-content.js";
+import { deploymentPage, developersPage, securityPage } from "./public-site-content.js";
+import { projectIntakePage } from "./public-project-intake.js";
+import { solutionPage, whatWeBuildPage } from "./public-site-solutions.js";
 import {
   publicCanonicalUrl,
   publicPairingUrl,
@@ -21,7 +23,9 @@ function publicPage(pageId: PublicPageId, env = process.env) {
   if (pageId === "security") return securityPage(env);
   if (pageId === "deployment") return deploymentPage(env);
   if (pageId === "developers") return developersPage(env);
-  if (pageId === "use-cases") return useCasesPage();
+  if (pageId === "use-cases") return whatWeBuildPage();
+  if (pageId === "project") return projectIntakePage();
+  if (["websites-commerce", "business-systems", "opportunity-intelligence", "web-data-monitoring", "automation"].includes(pageId)) return solutionPage(pageId);
   if (pageId === "workflow") return workflowIntakePage();
   return legalPage(pageId, env);
 }
@@ -39,7 +43,7 @@ export function renderPublicSiteCss() {
 }
 
 export function renderPublicSitemap(env = process.env) {
-  const paths = ["/", "/use-cases", "/security", "/deployment", "/developers", "/workflow", "/beta", "/privacy", "/impressum", "/terms", "/acceptable-use", "/data-deletion", "/support"];
+  const paths = ["/", "/use-cases", "/websites-commerce", "/business-systems", "/opportunity-intelligence", "/web-data-monitoring", "/automation", "/project", "/security", "/deployment", "/developers", "/workflow", "/beta", "/privacy", "/impressum", "/terms", "/acceptable-use", "/data-deletion", "/support"];
   const urls = paths.map((path) => publicCanonicalUrl(path, env)).filter(Boolean);
   if (!urls.length) return "";
   return `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls.map((url) => `  <url><loc>${url.replace(/&/g, "&amp;").replace(/</g, "&lt;")}</loc></url>`).join("\n")}\n</urlset>\n`;

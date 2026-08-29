@@ -2039,7 +2039,7 @@ function isAllowedBeforePairing(request) {
   if (method === "GET" && /^\/(?:api\/)?desktop-shares\/[^/]+\/(?:open|status)$/.test(url)) return true;
   if (method === "GET" && /^\/(?:api\/)?tenant-vms\/[^/]+\/desktop-shares\/[^/]+\/(?:open|status)$/.test(url)) return true;
   if (method === "GET" && ["/api/health", "/api/ready", "/api/version", "/api/setup/status", "/api/setup/security/session-scope"].some((path) => url.startsWith(path))) return true;
-  if (method === "POST" && ["/api/public/waitlist", "/api/public/workflow-leads", "/api/public/events"].includes(url)) return true;
+  if (method === "POST" && ["/api/public/waitlist", "/api/public/workflow-leads", "/api/public/project-inquiries", "/api/public/events"].includes(url)) return true;
   if (method === "POST" && (url === "/api/setup/security/challenge" || url === "/api/setup/security/challenges")) return true;
   if (method === "POST" && /^\/api\/shared-apps\/i\/[^/]+\/a\/[^/]+\/s\/[^/]+\/challenge$/.test(url)) return true;
   if (method === "GET" && /^\/api\/shared-apps\/i\/[^/]+\/a\/[^/]+\/s\/[^/]+\/challenges\/[^/]+$/.test(url)) return true;
