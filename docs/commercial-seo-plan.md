@@ -6,8 +6,8 @@ business intent is not a success measure.
 
 ## Search position
 
-The homepage owns the plain-language category **reliable AI workflow
-automation**. “AI Operations Layer” remains a secondary technical description.
+The homepage owns the category **AI Operations Layer**, supported by the
+plain-language description **managed private AI workflow automation**.
 Initial high-intent themes are:
 
 - AI workflow automation with human approval
@@ -24,12 +24,12 @@ mechanically or create thin keyword pages.
 
 ## Page responsibilities
 
-- `/`: category, manager outcome, trust, proof, and booking
+- `/`: category, operational pain, pilot offer, trust, proof, and conversion
 - `/use-cases`: practical finance, customer, revenue, and service examples
 - `/security`: private environment, approved access, human approval, and limits
 - `/deployment`: managed-private and customer-controlled deployment choices
 - `/developers`: open-source core, architecture, quick start, and technical limits
-- `/workflow`: direct call booking and expectations
+- `/workflow`: bounded workflow mapping and qualified scheduling handoff
 
 Each page has one H1, a unique title and description, a canonical URL, social
 metadata, and clear internal links. Organization and WebSite structured data
@@ -50,8 +50,8 @@ architecture and `hreflang` plan exist.
 
 ## Measurement
 
-The primary measure is qualified calls from organic search. Supporting measures
-are booking-page visits, calendar clicks, email-booking clicks, scheduler
-completion when provider callbacks are available, non-branded impressions and
-clicks, and conversion by landing page. Page views alone are not a commercial
-success measure.
+The primary measure is qualified workflow maps from organic search. Supporting
+measures are workflow-page visits, form starts, validation errors, successful
+submissions, qualified scheduling clicks, non-branded impressions and clicks,
+and conversion by landing page. Page views alone are not a commercial success
+measure.

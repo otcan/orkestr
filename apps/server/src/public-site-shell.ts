@@ -114,19 +114,19 @@ export function renderPublicShell(page: PublicPage, env = process.env) {
     </nav>
     <div class="header-actions">
       <a class="text-action" href="${escapeHtml(appUrl)}" data-event="sign_in_click">Sign in</a>
-      <a class="button button-small" href="/workflow" data-event="book_call_header">Book a 20-minute call</a>
+      <a class="button button-small" href="/workflow" data-event="map_workflow_header">Map one workflow</a>
     </div>
     <details class="mobile-menu">
       <summary aria-label="Open navigation">Menu</summary>
       <nav aria-label="Mobile navigation">
-        <a href="/use-cases">Use cases</a><a href="/deployment">Deployment</a><a href="/security">Security</a><a href="/developers">Developers</a><a href="/workflow" data-event="book_call_mobile">Book a 20-minute call</a><a href="${escapeHtml(appUrl)}">Sign in</a>
+        <a href="/use-cases">Use cases</a><a href="/deployment">Deployment</a><a href="/security">Security</a><a href="/developers">Developers</a><a href="/workflow" data-event="map_workflow_mobile">Map one workflow</a><a href="${escapeHtml(appUrl)}">Sign in</a>
       </nav>
     </details>
   </header>
   ${page.body}
   <footer class="footer">
-    <div class="footer-brand"><a class="wordmark inverse" href="/"><span>O</span> Orkestr</a><p>Reliable work, with people in control.</p></div>
-    <nav aria-label="Product links"><strong>Explore</strong><a href="/use-cases">Use cases</a><a href="/security">Security</a><a href="/deployment">Deployment</a><a href="/workflow" data-event="book_call_footer">Book a call</a></nav>
+    <div class="footer-brand"><a class="wordmark inverse" href="/"><span>O</span> Orkestr</a><p>Persistent, connected, supervised AI operations.</p></div>
+    <nav aria-label="Product links"><strong>Explore</strong><a href="/use-cases">Use cases</a><a href="/security">Security</a><a href="/deployment">Deployment</a><a href="/workflow" data-event="map_workflow_footer">Map a workflow</a></nav>
     <nav aria-label="Technical links"><strong>Build</strong><a href="/developers">Developers</a><a href="${escapeHtml(repo)}" rel="noreferrer">GitHub</a><a href="/beta">Personal beta</a><a href="/support">Support</a></nav>
     <nav aria-label="Legal links"><strong>Legal</strong><a href="/terms">Terms</a><a href="/privacy">Privacy</a><a href="/acceptable-use">Acceptable use</a><a href="/data-deletion">Data deletion</a></nav>
     <p class="footer-note">Private deployment options. Open-source core. Available connections and actions vary by deployment.</p>

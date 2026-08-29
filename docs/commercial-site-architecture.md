@@ -4,7 +4,7 @@
 
 | Host | Responsibility |
 | --- | --- |
-| `orkestr.de` | Commercial evaluation, direct call booking, public documentation links, legal pages, and preserved personal beta |
+| `orkestr.de` | Commercial evaluation, workflow-pilot qualification, public documentation links, legal pages, and preserved personal beta |
 | `app.orkestr.de` | Authenticated Orkestr application and authorized application launcher |
 | `connect.orkestr.de` | Secure pairing and connector authorization entry |
 
@@ -14,8 +14,8 @@ the instance chooser or private Angular cockpit.
 
 ## Route map
 
-- `/`: plain-language reliable workflow automation homepage
-- `/workflow`: direct 20-minute booking handoff with concise email fallback
+- `/`: managed AI Operations Layer and Workflow Pilot homepage
+- `/workflow`: bounded workflow map with qualified scheduling handoff
 - `/use-cases`: concrete process chains
 - `/security`: isolation, scoped connections, controls, boundaries, limitations
 - `/deployment`: managed isolated and customer-controlled models
@@ -25,7 +25,7 @@ the instance chooser or private Angular cockpit.
   legal and support routes
 
 Desktop navigation prioritizes Use Cases, Deployment, Security, Developers,
-Sign in, and Book a 20-minute call. Mobile navigation exposes the same
+Sign in, and Map one workflow. Mobile navigation exposes the same
 destinations without horizontal scrolling. GitHub remains in Developers and
 the footer.
 
@@ -42,10 +42,11 @@ the footer.
 
 Canonical and Open Graph URLs use `ORKESTR_PUBLIC_SITE_URL`. Sign in uses
 `ORKESTR_PUBLIC_APP_URL`; secure pairing uses `ORKESTR_CONNECT_PUBLIC_URL` or
-the configured public auth URL. Booking uses
-`ORKESTR_WORKFLOW_PILOT_SCHEDULING_URL`; the public page does not invent a
-provider URL. When scheduling is not configured it renders the public contact
-as an email fallback and clearly says online scheduling is still being connected.
+the configured public auth URL. The workflow map always submits to the
+first-party `/api/public/workflow-leads` endpoint. A qualified response may
+include `ORKESTR_WORKFLOW_PILOT_SCHEDULING_URL`; the public page never exposes
+that provider URL before qualification and does not depend on a scheduler to
+capture an inquiry.
 
 The public shell emits factual Organization and WebSite structured data.
 Non-home commercial pages also emit BreadcrumbList data. Titles, descriptions,

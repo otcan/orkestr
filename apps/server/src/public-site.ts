@@ -12,7 +12,7 @@ import {
 import { legalPage } from "./public-site-legal.js";
 import { renderPublicShell } from "./public-site-shell.js";
 import { renderCommercialSiteCss } from "./public-site-style.js";
-import { workflowBookingPage } from "./public-workflow-booking.js";
+import { workflowIntakePage } from "./public-workflow-intake.js";
 
 export { publicPairingUrl, publicSiteAllowedForHost, publicSiteBaseUrl, publicSiteHost, publicSitePath };
 
@@ -22,7 +22,7 @@ function publicPage(pageId: PublicPageId, env = process.env) {
   if (pageId === "deployment") return deploymentPage(env);
   if (pageId === "developers") return developersPage(env);
   if (pageId === "use-cases") return useCasesPage();
-  if (pageId === "workflow") return workflowBookingPage(env);
+  if (pageId === "workflow") return workflowIntakePage();
   return legalPage(pageId, env);
 }
 

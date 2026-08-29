@@ -75,19 +75,20 @@ function assertAngularShell(html) {
 }
 
 function assertPublicShell(html) {
-  assert.match(html, /<title>Reliable AI Workflow Automation \| Orkestr<\/title>/);
-  assert.match(html, /Make repetitive work run reliably/);
-  assert.match(html, /asks for approval before anything important happens/);
-  assert.match(html, /Private deployment options/);
+  assert.match(html, /<title>Managed AI Operations Layer \| Orkestr<\/title>/);
+  assert.match(html, /Your software stores the work/);
+  assert.match(html, /Orkestr moves it forward/);
+  assert.match(html, /human approval where mistakes matter/);
+  assert.match(html, /Managed private deployment/);
   assert.match(html, /name="application-name" content="Orkestr"/);
   assert.match(html, /property="og:site_name" content="Orkestr"/);
   assert.match(html, /name="twitter:card" content="summary_large_image"/);
   assert.match(html, /rel="stylesheet" href="\/public-site\.css"/);
   assert.doesNotMatch(html, /<style>/);
-  assert.match(html, /Book a 20-minute call/);
+  assert.match(html, /Map one workflow/);
   assert.match(html, /PRODUCT WALKTHROUGH/);
   assert.match(html, /Approval required/);
-  assert.match(html, /data-event="book_call_hero"/);
+  assert.match(html, /data-event="map_workflow_hero"/);
   assert.match(html, /Request arrives/);
   assert.match(html, /Manager approves/);
   assert.doesNotMatch(html, />ERP</);
@@ -221,7 +222,7 @@ test("server serves the public site at root and Angular UI at app routes", async
     const expandedHomeHtml = await (await fetch(`http://127.0.0.1:${port}/`)).text();
     const expandedPrivacyHtml = await (await fetch(`http://127.0.0.1:${port}/privacy`)).text();
     const expandedAboutHtml = await (await fetch(`http://127.0.0.1:${port}/about`)).text();
-    assert.match(expandedHomeHtml, /Make repetitive work run reliably/);
+    assert.match(expandedHomeHtml, /Your software stores the work/);
     assert.doesNotMatch(expandedHomeHtml, /read selected Gmail signals/);
     assert.match(expandedPrivacyHtml, /gmail\.readonly/);
     assert.match(expandedPrivacyHtml, /calendar\.events\.owned/);
@@ -243,10 +244,9 @@ test("server serves the public site at root and Angular UI at app routes", async
     assert.equal(developersResponse.status, 200);
     assert.equal(useCasesResponse.status, 200);
     assert.equal(workflowResponse.status, 200);
-    assert.match(workflowHtml, /Let’s talk about the work you want to simplify/);
-    assert.match(workflowHtml, /data-booking-configured="false"/);
-    assert.doesNotMatch(workflowHtml, /id="workflow-form"/);
-    assert.doesNotMatch(workflowHtml, /\/api\/public\/workflow-leads/);
+    assert.match(workflowHtml, /Map one workflow worth fixing/);
+    assert.match(workflowHtml, /id="workflow-form"/);
+    assert.match(workflowHtml, /\/api\/public\/workflow-leads/);
     assert.equal(waitlistRedirect.status, 302);
     assert.equal(waitlistRedirect.headers.get("location"), "/beta#waitlist");
     assert.equal(publicAssetResponse.status, 200);
