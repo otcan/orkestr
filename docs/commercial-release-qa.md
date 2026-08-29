@@ -1,22 +1,24 @@
 # Commercial Site Release QA
 
-Release scope: Homepage V3 business-systems positioning, five solution routes,
-general Project Discovery intake, retained Workflow Audit specialization,
-public-safe platform proof, responsive design, privacy, and analytics.
+Release scope: Homepage V4 simplified business-systems positioning, a
+booking-first Project Discovery route, adaptive quick intake, retained solution
+and Workflow Audit routes, public-safe proof, responsive design, privacy, and
+metadata-only analytics.
 
 ## Changed surfaces
 
-- Homepage hero, rotating requirement diagram, solution breadth, ugly-problem
-  prompts, project examples, delivery model, platform proof, browser capability,
-  human control, deployment, security, FAQ, and Project Discovery CTAs
+- Six-section homepage: hero, three service groups, three problem examples,
+  four-step delivery, one platform proof block, and final booking CTA
 - `/use-cases` plus BUILD, REPLACE, FIND, COLLECT, and AUTOMATE detail routes
-- `/project` intake and `/api/public/project-inquiries`
+- `/project` direct scheduler action or native call-request fallback, four-answer
+  adaptive brief, optional context, and `/api/public/project-inquiries`
 - Header, footer, metadata, sitemap, privacy, terms, event allowlist, and docs
 - Existing `/workflow` remains the specialized automation entry offer
 
 Project inquiries, workflow leads, and personal-beta waitlist records use
-separate files and endpoints. Scheduler URLs appear only in ready or qualified
-post-submission responses.
+separate files and endpoints. A configured Project Discovery scheduler is a
+direct booking action. Without it, the short inquiry is the native fallback.
+The specialized Workflow Audit scheduler remains qualification-gated.
 
 ## Required gates
 
@@ -29,8 +31,8 @@ post-submission responses.
 - `git diff --check`
 - desktop and phone render of all commercial and legal routes with no horizontal
   overflow and reachable form controls
-- synthetic Project Discovery and Workflow Audit submissions with no scheduler
-  configured
+- synthetic quick and detailed Project Discovery submissions, with and without a
+  scheduler, plus a Workflow Audit submission with no scheduler configured
 - unauthenticated private API, application, auth, and privacy exposure gates
 
 ## ORK-448 local evidence
@@ -60,6 +62,26 @@ as a later selectable scenario and dedicated solution route.
 | OSS boundary | Pass; 648 files scanned |
 | Diff check | Pass |
 
+## ORK-450–455 Homepage V4 conversion evidence
+
+The V4 candidate reduces the homepage to six direct sections and changes
+Project Discovery from a long qualification gate to an immediate booking action
+plus a four-answer adaptive fallback. FIND and COLLECT remain available on
+supporting pages and inside work-and-data automation, but do not lead the main
+commercial narrative.
+
+| Gate | Result |
+| --- | --- |
+| Production build | Pass; web bundle 1.19 MB raw / 252.66 kB estimated transfer |
+| Changed-surface suite | 111/111 pass |
+| CI test runner | 2,124 pass, 6 skip, 0 fail (2,130 total) |
+| Desktop and phone render | Pass at 1440×1000 and 390×844; zero horizontal overflow |
+| Booking modes | Pass; direct configured calendar and native no-calendar fallback |
+| Homepage contract | Pass; exactly six top-level V4 sections |
+| Smoke | Pass |
+| OSS boundary | Pass; 649 files scanned |
+| Diff check | Pass |
+
 Responsive browser rendering, production route checks, both synthetic intake
 submissions, and unauthenticated exposure checks remain post-merge release-train
 gates and must not be inferred from the local source contracts alone.
@@ -74,4 +96,5 @@ After deployment, verify version and health, every sitemap route, both intake
 paths, responsive behavior, public/private host separation, no private markers,
 and application authentication. Roll back using the release train's recorded
 prior release id on route failure, private exposure, broken authentication,
-unreadable layout, failed inquiry capture, or premature scheduler exposure.
+unreadable layout, failed inquiry capture, unsafe scheduler exposure, or broken
+booking fallback.

@@ -11,7 +11,7 @@ type PrivacyPage = {
   body: string;
 };
 
-export const publicPrivacyPolicyVersion = `${googleWorkspacePrivacyPolicyVersion}-commercial-v3-20260829`;
+export const publicPrivacyPolicyVersion = `${googleWorkspacePrivacyPolicyVersion}-commercial-v4-20260830`;
 
 function clean(value = "") {
   return String(value || "").trim();
@@ -88,7 +88,7 @@ export function publicPrivacyPage(env = process.env): PrivacyPage {
     <p class="eyebrow">Data handling</p>
     <h1>Privacy Policy</h1>
     <p class="lead">This policy explains how Orkestr accesses, uses, stores, protects, and shares personal information, including data connected through Google Workspace.</p>
-    <p class="policy-meta">Version ${publicPrivacyPolicyVersion} · Effective August 29, 2026</p>
+    <p class="policy-meta">Version ${publicPrivacyPolicyVersion} · Effective August 30, 2026</p>
   </section>
   <section class="legal-content">
     <article id="scope">
@@ -99,8 +99,8 @@ export function publicPrivacyPage(env = process.env): PrivacyPage {
     <article id="data-we-process">
       <h2>2. Information Orkestr processes</h2>
       <p>Orkestr processes information needed to provide user-requested workflows: account and contact details, chat messages, files, task outputs, timers, workspace records, connector status, managed-browser activity, security records, and technical service logs. Orkestr does not ask users to provide account passwords through chat.</p>
-      <p>Commercial Project Discovery and Workflow Audit inquiries are stored separately from each other and from personal-beta waitlist records. The Project Discovery form collects the contact's name, work email, company, role, project category and name, desired outcome, current situation, expected users or volume, system or source categories, decision owner, constraints, success criteria, timeframe, and contact consent. The specialized Workflow Audit form collects the workflow-specific information described on that form. If a qualified visitor follows a configured scheduling link after submission, the selected scheduling provider processes the booking information under its own privacy notice.</p>
-      <p>The public site records a limited set of first-party interaction events such as page path, CTA name, form start, validation outcome, submission outcome, and qualified scheduling click. These analytics events do not contain form field values, project or process descriptions, credentials, or cross-site tracking identifiers.</p>
+      <p>Commercial Project Discovery and Workflow Audit inquiries are stored separately from each other and from personal-beta waitlist records. The short Project Discovery form requires a project category, desired outcome, contact name, work email, and contact consent. A visitor may optionally add the current situation, company, role, expected users or volume, system or source categories, constraints, success criteria, and timeframe. The specialized Workflow Audit form collects the workflow-specific information described on that form. If a visitor opens a configured scheduling link, the selected scheduling provider processes the booking information under its own privacy notice.</p>
+      <p>The public site records a limited set of first-party interaction events such as page path, CTA name, project-category selection, form start, optional-detail expansion, validation outcome, submission outcome, and scheduling click. These analytics events do not contain form field values, project or process descriptions, credentials, or cross-site tracking identifiers.</p>
     </article>
     <article id="google-data-access">
       <h2>3. Google user data Orkestr accesses</h2>

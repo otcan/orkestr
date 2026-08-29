@@ -24,6 +24,12 @@ function required(value, name, max) {
   return text;
 }
 
+function optional(value, name, max) {
+  const text = clean(value);
+  if (text.length > max) throw projectInquiryError(`project_${name}_too_long`, 400);
+  return text;
+}
+
 function validEmail(value) {
   const email = lower(value);
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw projectInquiryError("project_email_invalid", 400);
@@ -44,7 +50,7 @@ function readiness(inquiry) {
 }
 
 function schedulingUrlFor(inquiry, env = process.env) {
-  if (!inquiry.readiness?.ready) return "";
+  if (inquiry.intakeMode !== "quick" && !inquiry.readiness?.ready) return "";
   const configured = clean(env.ORKESTR_PROJECT_DISCOVERY_SCHEDULING_URL);
   if (!configured) return "";
   try {
@@ -58,27 +64,45 @@ function normalizeInput(input = {}) {
   if (clean(input.companyWebsite)) throw projectInquiryError("project_submit_rejected", 400);
   const started = Number(input.formStartedAt || 0);
   if (started > 0 && Date.now() - started < 1200) throw projectInquiryError("project_submit_too_fast", 400);
+  const intakeMode = lower(input.intakeMode) === "quick" ? "quick" : "detailed";
   const projectType = lower(input.projectType);
-  const timeframe = lower(input.timeframe);
+  const timeframe = lower(input.timeframe) || (intakeMode === "quick" ? "exploring" : "");
   if (!projectTypes.has(projectType)) throw projectInquiryError("project_type_invalid", 400);
   if (!timeframes.has(timeframe)) throw projectInquiryError("project_timeframe_invalid", 400);
   if (!bool(input.consentToContact)) throw projectInquiryError("project_contact_consent_required", 400);
-  const inquiry = {
+  const desiredOutcome = required(input.desiredOutcome, "desired_outcome", 2400);
+  const quickProjectName = `${projectType === "not-sure" ? "Project" : projectType} · ${desiredOutcome.slice(0, 120)}`;
+  const shared = {
+    intakeMode,
     contactName: required(input.contactName, "contact_name", 120),
     workEmail: validEmail(input.workEmail),
+    projectType,
+    desiredOutcome,
+    timeframe,
+    consentToContact: true,
+  };
+  const inquiry = intakeMode === "quick" ? {
+    ...shared,
+    projectName: optional(input.projectName, "name", 160) || quickProjectName,
+    company: optional(input.company, "company", 160),
+    role: optional(input.role, "role", 160),
+    currentSituation: optional(input.currentSituation, "current_situation", 2000),
+    usersAndVolume: optional(input.usersAndVolume, "users_and_volume", 1200),
+    systemsOrSources: optional(input.systemsOrSources, "systems_or_sources", 1600),
+    decisionOwner: optional(input.decisionOwner, "decision_owner", 200),
+    constraints: optional(input.constraints, "constraints", 1600),
+    successCriteria: optional(input.successCriteria, "success_criteria", 1600),
+  } : {
+    ...shared,
     company: required(input.company, "company", 160),
     role: required(input.role, "role", 160),
-    projectType,
     projectName: required(input.projectName, "name", 160),
-    desiredOutcome: required(input.desiredOutcome, "desired_outcome", 2400),
     currentSituation: required(input.currentSituation, "current_situation", 2000),
     usersAndVolume: required(input.usersAndVolume, "users_and_volume", 1200),
     systemsOrSources: required(input.systemsOrSources, "systems_or_sources", 1600),
     decisionOwner: required(input.decisionOwner, "decision_owner", 200),
     constraints: required(input.constraints, "constraints", 1600),
     successCriteria: required(input.successCriteria, "success_criteria", 1600),
-    timeframe,
-    consentToContact: true,
   };
   return { ...inquiry, readiness: readiness(inquiry) };
 }
@@ -132,7 +156,7 @@ export async function submitProjectInquiry(input = {}, env = process.env, deps =
   };
   state.inquiries.push(inquiry);
   await writeJson(dataPaths(env).projectInquiries, state);
-  await appendEvent({ type: "project_inquiry_submitted", projectInquiryId: inquiry.id, readyForDiscovery: inquiry.readiness.ready }, env);
+  await appendEvent({ type: "project_inquiry_submitted", projectInquiryId: inquiry.id, intakeMode: inquiry.intakeMode, readyForDiscovery: inquiry.readiness.ready }, env);
   const notify = deps.sendProjectInquiryNotification || sendProjectInquiryNotification;
   try {
     const result = await notify(inquiry, env);
@@ -142,7 +166,10 @@ export async function submitProjectInquiry(input = {}, env = process.env, deps =
   }
   state.inquiries[state.inquiries.length - 1] = inquiry;
   await writeJson(dataPaths(env).projectInquiries, state);
-  return { ok: true, submitted: true, message: inquiry.readiness.ready ? "Your project is ready for Discovery review." : "Your project was submitted for review.", inquiry: publicResult(inquiry, env) };
+  const message = inquiry.intakeMode === "quick"
+    ? "Your project brief is queued. We will reply using your work email."
+    : inquiry.readiness.ready ? "Your project is ready for Discovery review." : "Your project was submitted for review.";
+  return { ok: true, submitted: true, message, inquiry: publicResult(inquiry, env) };
 }
 
 export async function listProjectInquiries(env = process.env) {

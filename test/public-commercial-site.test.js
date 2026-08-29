@@ -9,31 +9,28 @@ const baseEnv = {
   ORKESTR_PUBLIC_CONTACT: "hello@example.test",
 };
 
-test("commercial homepage sells bounded business systems and managed operation", () => {
+test("commercial homepage presents one simple booking-first business-system journey", () => {
   const html = renderPublicSite("/", baseEnv, { host: "product.example.test" });
 
-  assert.match(html, /<title>Business Systems, Data &amp; AI Automation \| Orkestr<\/title>/);
-  assert.match(html, /Tell us what your business needs to do/);
-  assert.match(html, /We build the system that does it/);
-  assert.match(html, /business software, data systems, and AI-powered automation/);
-  for (const verb of ["BUILD", "REPLACE", "FIND", "COLLECT", "AUTOMATE"]) assert.match(html, new RegExp(`>${verb}<`));
-  assert.match(html, /Bring us an ugly problem/i);
-  assert.match(html, /Project Discovery/);
-  assert.match(html, /Managed Operation/);
-  assert.match(html, />Describe your project<\/a>/);
-  assert.match(html, /data-event="describe_project_hero"/);
-  assert.match(html, /APIs when available/);
-  assert.match(html, /The browser when they are not/);
-  assert.match(html, /id="requirement-example">“Our internal ordering system needs replacing\.”<\/blockquote>/);
-  assert.match(html, /class="active" aria-pressed="true" data-requirement="Our internal ordering system needs replacing\.">Replace a system<\/button>/);
+  assert.match(html, /<title>Business Systems &amp; Automation \| Orkestr<\/title>/);
+  assert.match(html, /Need a better system for your business/);
+  assert.match(html, /Book a 20-minute project call/);
+  assert.match(html, /data-event="book_project_hero"/);
+  assert.equal((html.match(/<section class="v4-section/g) || []).length, 6);
+  for (const heading of ["Build new systems", "Modernize existing systems", "Automate work and data"]) assert.match(html, new RegExp(heading));
+  assert.match(html, /We need a new B2B website/);
+  assert.match(html, /Our internal system is old/);
+  assert.match(html, /repeatedly searches websites/);
+  for (const step of ["Talk", "Define", "Build", "Operate"]) assert.match(html, new RegExp(`<h3>${step}<\/h3>`));
   assert.match(html, /Internal Ordering Renewal · Migration Run #042/);
-  assert.match(html, /Record mapping conflict/);
-  assert.match(html, /Not every project needs this layer/);
-  assert.match(html, /Orkestr builds systems that do work/);
-  assert.match(html, /public or authorized sources/i);
+  assert.match(html, /More than a hand-off/);
   assert.match(html, /Client Portal/);
   assert.doesNotMatch(html, /Personal beta/);
-  assert.doesNotMatch(html, /Book a 20-minute call/);
+  assert.doesNotMatch(html, /Bring us an ugly problem/i);
+  assert.doesNotMatch(html, /class="browser-section"/);
+  assert.doesNotMatch(html, /class="approval-card"/);
+  assert.doesNotMatch(html, /class="section faq"/);
+  assert.doesNotMatch(html, /id="requirement-example"/);
   assert.match(html, /rel="canonical" href="https:\/\/product\.example\.test\/"/);
   assert.match(html, /"@type":"Organization"/);
   assert.match(html, /"@type":"WebSite"/);
@@ -69,19 +66,30 @@ test("workflow route never exposes or depends on a scheduler before qualificatio
   assert.doesNotMatch(html, /mailto:/);
 });
 
-test("project route collects a broad requirement before offering Discovery scheduling", () => {
+test("project route exposes direct booking and a four-answer adaptive alternative", () => {
   const html = renderPublicSite("/project", { ...baseEnv, ORKESTR_PROJECT_DISCOVERY_SCHEDULING_URL: "https://calendar.example.test/discovery" }, { host: "product.example.test" });
 
-  assert.match(html, /<title>Describe Your Business System Project \| Orkestr<\/title>/);
-  assert.match(html, /Tell us what your business needs to do/);
-  assert.match(html, /id="project-form"/);
+  assert.match(html, /<title>Book a Project Call \| Orkestr<\/title>/);
+  assert.match(html, /Let’s talk about what should work better/);
+  assert.match(html, /20-minute project call/i);
+  assert.match(html, /href="https:\/\/calendar\.example\.test\/discovery"/);
+  assert.match(html, /data-event="project_booking_click"/);
+  assert.match(html, /id="quick-project-form"/);
   assert.match(html, /\/api\/public\/project-inquiries/);
-  assert.match(html, /projectType/);
-  assert.match(html, /desiredOutcome/);
+  for (const field of ["projectType", "desiredOutcome", "contactName", "workEmail"]) assert.match(html, new RegExp(`name="${field}"[^>]*required|name="${field}"[^>]*type="[^"]+"[^>]*required`));
+  assert.match(html, /name="intakeMode" type="hidden" value="quick"/);
   assert.match(html, /systemsOrSources/);
   assert.match(html, /consentToContact/);
+  assert.match(html, /Optional: What happens today/);
+  assert.match(html, /project_type_selected/);
+  assert.doesNotMatch(html, /Submit project for review/);
+});
+
+test("project route falls back to a native call request when no scheduler is configured", () => {
+  const html = renderPublicSite("/project", baseEnv, { host: "product.example.test" });
+  assert.match(html, /Request a project call/);
+  assert.match(html, /href="#quick-project-form" data-event="project_call_request_click"/);
   assert.doesNotMatch(html, /calendar\.example\.test/);
-  assert.match(html, /Only need workflow automation/);
 });
 
 test("commercial detail pages keep plain-language headings, evidence, limitations, and unique metadata", () => {
@@ -97,7 +105,7 @@ test("commercial detail pages keep plain-language headings, evidence, limitation
     assert.match(html, new RegExp(`<title>${title} \\| Orkestr<\\/title>`));
     assert.match(html, new RegExp(heading));
     assert.match(html, new RegExp(evidence));
-    assert.match(html, /Describe your project/);
+    assert.match(html, /Book a project call/);
     assert.match(html, /"@type":"BreadcrumbList"/);
     assert.match(html, new RegExp(`rel="canonical" href="https:\\/\\/product\\.example\\.test${path}"`));
   }
@@ -115,7 +123,7 @@ test("solution pages are bounded, truthful, and preserve the specialized automat
     const html = renderPublicSite(path, baseEnv, { host: "product.example.test" });
     assert.match(html, new RegExp(heading));
     assert.match(html, new RegExp(boundary));
-    assert.match(html, /Describe your project/);
+    assert.match(html, /Book a project call/);
     assert.match(html, /Illustrative|BOUNDARIES|What Discovery must establish/);
   }
 });
@@ -132,9 +140,8 @@ test("sitemap and responsive CSS retain commercial routes and accessible progres
   assert.match(css, /@media \(prefers-reduced-motion: reduce\)/);
   assert.match(css, /overflow-x: hidden/);
   assert.match(css, /\.workflow-form/);
-  assert.match(css, /\.browser-section/);
-  assert.match(css, /\.offer-grid/);
-  assert.match(css, /\.requirement-delivery/);
-  assert.match(css, /\.approval-card/);
+  assert.match(css, /\.v4-service-grid/);
+  assert.match(css, /\.project-booking-hero/);
+  assert.match(css, /\.project-type-options/);
   assert.match(css, /\.field-grid\.two/);
 });

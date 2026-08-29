@@ -21,6 +21,11 @@ const allowedEvents = new Set([
   "automation_audit_click", "platform_console_view",
   "project_form_start", "project_validation_error", "project_submit_success",
   "project_submit_error", "project_schedule_click",
+  "book_project_header", "book_project_mobile", "book_project_hero", "book_project_final",
+  "nav_examples", "see_services", "see_examples", "service_group_click", "quick_project_final",
+  "project_booking_click", "project_call_request_click", "project_quick_start",
+  "project_type_selected", "project_quick_form_start", "project_quick_validation_error",
+  "project_quick_submit_success", "project_quick_submit_error", "project_detail_expand",
 ]);
 
 const allowedPaths = new Set(["/", "/use-cases", "/websites-commerce", "/business-systems", "/opportunity-intelligence", "/web-data-monitoring", "/automation", "/project", "/security", "/deployment", "/developers", "/workflow", "/beta", "/privacy", "/impressum", "/terms", "/acceptable-use", "/data-deletion", "/support"]);

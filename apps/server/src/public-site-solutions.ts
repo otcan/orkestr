@@ -82,7 +82,7 @@ export const solutionDefinitions: SolutionDefinition[] = [
 ];
 
 function projectCta(heading: string, event = "solution_describe_project") {
-  return `<section class="final-cta compact"><div><p class="section-index">PROJECT DISCOVERY</p><h2>${heading}</h2></div><a class="button button-light" href="/project" data-event="${event}">Describe your project</a></section>`;
+  return `<section class="final-cta compact"><div><p class="section-index">PROJECT DISCOVERY</p><h2>${heading}</h2></div><a class="button button-light" href="/project#book" data-event="${event}">Book a project call</a></section>`;
 }
 
 function solutionCard(solution: SolutionDefinition) {
@@ -111,7 +111,7 @@ export function solutionPage(pageId: PublicPageId): PublicPage {
     summary: solution.summary,
     canonicalPath: solution.path,
     body: `<main id="main-content">
-      <section class="page-hero solution-hero"><p class="section-index">${solution.verb} · BUSINESS SYSTEMS &amp; AUTOMATION</p><h1>${solution.heading}</h1><p class="lead">${solution.lead}</p><blockquote>“${solution.request}”</blockquote><div class="actions"><a class="button" href="/project" data-event="solution_describe_project">Describe your project</a>${solution.automationAudit ? '<a class="button button-ghost" href="/workflow" data-event="automation_audit_click">Book a Workflow Audit</a>' : ""}</div></section>
+      <section class="page-hero solution-hero"><p class="section-index">${solution.verb} · BUSINESS SYSTEMS &amp; AUTOMATION</p><h1>${solution.heading}</h1><p class="lead">${solution.lead}</p><blockquote>“${solution.request}”</blockquote><div class="actions"><a class="button" href="/project#book" data-event="solution_describe_project">Book a project call</a>${solution.automationAudit ? '<a class="button button-ghost" href="/workflow" data-event="automation_audit_click">Book a Workflow Audit</a>' : ""}</div></section>
       <section class="section solution-outcomes" aria-labelledby="outcomes-title"><div><p class="section-index">POSSIBLE OUTCOMES</p><h2 id="outcomes-title">A bounded system—not an open-ended transformation.</h2></div><ul>${solution.outcomes.map((outcome) => `<li>${outcome}</li>`).join("")}</ul></section>
       <section class="section solution-delivery" aria-labelledby="delivery-title"><div><p class="section-index">FROM REQUIREMENT TO OPERATION</p><h2 id="delivery-title">What the work can include.</h2></div><ol class="phase-list">${solution.stages.map(([title, text], index) => `<li><span>${String(index + 1).padStart(2, "0")}</span><div><h3>${title}</h3><p>${text}</p></div></li>`).join("")}</ol></section>
       <section class="why-section solution-proof" aria-labelledby="proof-title"><div><p class="section-index">WHY ORKESTR</p><h2 id="proof-title">${solution.proofTitle}</h2></div><p class="section-lead">${solution.proofText}</p></section>

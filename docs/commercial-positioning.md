@@ -1,25 +1,28 @@
 # Commercial Positioning Contract
 
-Status: approved implementation contract for the `homepage-v3` release.
+Status: approved implementation contract for the `homepage-v4` release.
 
 ## Message contract
 
 - Descriptor: **Orkestr · Business Systems & Automation**.
-- Proposition: tell Orkestr what the business needs to do; Orkestr designs,
-  builds, deploys, and operates the bounded system that does it.
-- Scope device: **BUILD · REPLACE · FIND · COLLECT · AUTOMATE**.
+- Proposition: Orkestr designs, builds, modernizes, and operates the software
+  behind real business work.
+- Homepage scope device: **Build new systems · Modernize existing systems ·
+  Automate work and data**.
 - Outcomes: websites and commerce, internal or legacy system replacement,
   opportunity intelligence, web data and monitoring, and operational
   automation.
-- Delivery: Project Discovery, Solution Design, Proposal, Build & Deploy, and
-  Managed Operation.
-- Primary CTA: **Describe your project**.
+- Delivery: Talk, Define, Build, and Operate. Detailed Project Discovery,
+  Solution Design, Proposal, and delivery boundaries follow after fit is clear.
+- Primary CTA: **Book a 20-minute project call**.
+- Secondary conversion: a four-answer adaptive project brief.
 - Specialized offer: Workflow Audit remains available at `/automation` and
   `/workflow`; it is not the universal entry point.
 
-The five-second test succeeds when a visitor understands that they can bring an
-outcome without a technical specification, Orkestr chooses and builds the right
-kind of system, and the responsibility can continue after launch.
+The five-second test succeeds when a visitor understands what Orkestr builds,
+that they can begin without a technical specification, and how to book a short
+conversation. FIND and COLLECT remain capabilities and supporting routes; they
+do not define the homepage hierarchy.
 
 ## Differentiation
 

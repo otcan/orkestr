@@ -75,24 +75,23 @@ function assertAngularShell(html) {
 }
 
 function assertPublicShell(html) {
-  assert.match(html, /<title>Business Systems, Data &amp; AI Automation \| Orkestr<\/title>/);
-  assert.match(html, /Tell us what your business needs to do/);
-  assert.match(html, /We build the system that does it/);
-  assert.match(html, /Human control where it matters/i);
-  assert.match(html, /Managed Operation/);
+  assert.match(html, /<title>Business Systems &amp; Automation \| Orkestr<\/title>/);
+  assert.match(html, /Need a better system for your business/);
+  assert.match(html, /Build new systems/);
+  assert.match(html, /Modernize existing systems/);
+  assert.match(html, /Automate work and data/);
   assert.match(html, /name="application-name" content="Orkestr"/);
   assert.match(html, /property="og:site_name" content="Orkestr"/);
   assert.match(html, /name="twitter:card" content="summary_large_image"/);
   assert.match(html, /rel="stylesheet" href="\/public-site\.css"/);
   assert.doesNotMatch(html, /<style>/);
-  assert.match(html, /Describe your project/);
+  assert.match(html, /Book a project call/);
   assert.match(html, /ORKESTR CONSOLE · PUBLIC DEMO/);
   assert.match(html, /Human review/);
-  assert.match(html, /data-event="describe_project_hero"/);
-  assert.match(html, /Our internal ordering system needs replacing/);
+  assert.match(html, /data-event="book_project_hero"/);
+  assert.match(html, /Our internal system is old/);
   assert.match(html, /Internal Ordering Renewal/);
-  assert.match(html, /Project Discovery/);
-  assert.match(html, /public or authorized sources/i);
+  assert.match(html, /START WITH 20 MINUTES/);
   assert.doesNotMatch(html, /Personal beta/);
   assert.match(html, /\/api\/public\/events/);
   assert.doesNotMatch(html, /id="waitlist-form"/);
@@ -227,7 +226,7 @@ test("server serves the public site at root and Angular UI at app routes", async
     const expandedHomeHtml = await (await fetch(`http://127.0.0.1:${port}/`)).text();
     const expandedPrivacyHtml = await (await fetch(`http://127.0.0.1:${port}/privacy`)).text();
     const expandedAboutHtml = await (await fetch(`http://127.0.0.1:${port}/about`)).text();
-    assert.match(expandedHomeHtml, /Tell us what your business needs to do/);
+    assert.match(expandedHomeHtml, /Need a better system for your business/);
     assert.doesNotMatch(expandedHomeHtml, /read selected Gmail signals/);
     assert.match(expandedPrivacyHtml, /gmail\.readonly/);
     assert.match(expandedPrivacyHtml, /calendar\.events\.owned/);
@@ -253,8 +252,8 @@ test("server serves the public site at root and Angular UI at app routes", async
     assert.match(workflowHtml, /id="workflow-form"/);
     assert.match(workflowHtml, /\/api\/public\/workflow-leads/);
     assert.equal(projectResponse.status, 200);
-    assert.match(projectHtml, /Tell us what your business needs to do/);
-    assert.match(projectHtml, /id="project-form"/);
+    assert.match(projectHtml, /Let’s talk about what should work better/);
+    assert.match(projectHtml, /id="quick-project-form"/);
     assert.match(projectHtml, /\/api\/public\/project-inquiries/);
     assert.equal(waitlistRedirect.status, 302);
     assert.equal(waitlistRedirect.headers.get("location"), "/beta#waitlist");

@@ -108,25 +108,24 @@ export function renderPublicShell(page: PublicPage, env = process.env) {
     <a class="wordmark" href="/" aria-label="Orkestr home"><span>O</span> Orkestr</a>
     <nav class="desktop-nav" aria-label="Primary navigation">
       ${navLink("/use-cases", "What we build", page.id, "use-cases", "nav_what_we_build")}
+      <a href="/#examples" data-event="nav_examples">Examples</a>
       <a href="/#how-we-work" data-event="nav_how_we_work">How we work</a>
-      <a href="/#platform" data-event="nav_orkestr">Orkestr</a>
-      ${navLink("/deployment", "Deployment", page.id, "deployment", "nav_deployment")}
       ${navLink("/security", "Security", page.id, "security", "nav_security")}
     </nav>
     <div class="header-actions">
-      <a class="button button-small" href="/project" data-event="describe_project_header">Describe your project</a>
+      <a class="button button-small" href="/project#book" data-event="book_project_header">Book a project call</a>
     </div>
     <details class="mobile-menu">
       <summary aria-label="Open navigation">Menu</summary>
       <nav aria-label="Mobile navigation">
-        <a href="/use-cases">What we build</a><a href="/#how-we-work">How we work</a><a href="/#platform">Orkestr</a><a href="/deployment">Deployment</a><a href="/security">Security</a><a href="/project" data-event="describe_project_mobile">Describe your project</a>
+        <a href="/use-cases">What we build</a><a href="/#examples">Examples</a><a href="/#how-we-work">How we work</a><a href="/security">Security</a><a href="/project#book" data-event="book_project_mobile">Book a project call</a>
       </nav>
     </details>
   </header>
   ${page.body}
   <footer class="footer">
-    <div class="footer-brand"><a class="wordmark inverse" href="/"><span>O</span> Orkestr</a><p>Tell us what your business needs to do. We build and operate the system that does it.</p></div>
-    <nav aria-label="Solution links"><strong>Solutions</strong><a href="/websites-commerce">Build</a><a href="/business-systems">Replace</a><a href="/opportunity-intelligence">Find</a><a href="/web-data-monitoring">Collect</a><a href="/automation">Automate</a></nav>
+    <div class="footer-brand"><a class="wordmark inverse" href="/"><span>O</span> Orkestr</a><p>We design, build, modernize, and operate systems for real business work.</p></div>
+    <nav aria-label="Solution links"><strong>What we build</strong><a href="/websites-commerce">New systems</a><a href="/business-systems">System modernization</a><a href="/automation">Work &amp; data automation</a></nav>
     <nav aria-label="Orkestr links"><strong>Orkestr</strong><a href="/#how-we-work">How we work</a><a href="/#platform">Operating layer</a><a href="/deployment">Deployment</a><a href="/security">Security</a></nav>
     <nav aria-label="Resource links"><strong>Resources</strong><a href="/developers">Developers</a><a href="${escapeHtml(repo)}" rel="noreferrer">GitHub</a><a href="${escapeHtml(repo)}/tree/main/docs" rel="noreferrer">Documentation</a></nav>
     <nav aria-label="Company links"><strong>Company</strong><a href="/support">Contact</a><a href="/impressum">Impressum</a><a href="/privacy">Privacy</a><a href="/terms">Terms</a></nav>

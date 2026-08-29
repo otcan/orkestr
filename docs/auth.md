@@ -105,9 +105,12 @@ or UI.
 Project Discovery inquiries, Workflow Audit leads, and beta waitlist entries are
 stored separately.
 Set `ORKESTR_PROJECT_DISCOVERY_NOTIFY_EMAIL` (or its plural form) for broad
-commercial inquiries. Ready submissions receive a scheduling link only when
-`ORKESTR_PROJECT_DISCOVERY_SCHEDULING_URL` is configured. The public `/project`
-page never embeds that URL before a submission passes readiness checks.
+commercial inquiries. When `ORKESTR_PROJECT_DISCOVERY_SCHEDULING_URL` is
+configured with a valid public HTTP(S) URL, `/project` presents it as the direct
+20-minute booking action and returns it after a short project brief. When it is
+not configured, the page uses the same inquiry endpoint as a native call-request
+fallback. Detailed legacy submissions still receive the link only after the
+existing readiness checks.
 
 Set `ORKESTR_WORKFLOW_PILOT_NOTIFY_EMAIL` (or the plural comma-separated form)
 to route commercial qualification notifications independently. When it is not
