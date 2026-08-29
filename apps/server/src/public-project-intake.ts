@@ -36,7 +36,7 @@ export function projectIntakePage(): PublicPage {
             <legend><span>02</span> The requirement</legend>
             <p>Start with the outcome. We will help determine the implementation.</p>
             <label><span>What kind of project is this?</span><select name="projectType" required><option value="">Select</option><option value="build">Build — website, commerce, portal, or application</option><option value="replace">Replace — modernize an outdated business system</option><option value="find">Find — opportunity intelligence and matching</option><option value="collect">Collect — web data and monitoring</option><option value="automate">Automate — recurring operational work</option><option value="not-sure">Not sure yet</option></select></label>
-            <label><span>Project name</span><input name="projectName" required maxlength="160" placeholder="Public tender discovery system"></label>
+            <label><span>Project name</span><input name="projectName" required maxlength="160" placeholder="Internal ordering system replacement"></label>
             <label><span>What should the business be able to do?</span><textarea name="desiredOutcome" required rows="5" maxlength="2400" placeholder="Describe the outcome in plain language. What should become possible when the project works?"></textarea></label>
             <label><span>What happens today?</span><textarea name="currentSituation" required rows="4" maxlength="2000" placeholder="Current process, existing software, manual workaround, or why the capability does not exist yet."></textarea></label>
           </fieldset>

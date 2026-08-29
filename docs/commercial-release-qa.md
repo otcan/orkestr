@@ -44,6 +44,22 @@ post-submission responses.
 | OSS boundary | Pass; 648 files scanned |
 | Diff check | Pass |
 
+## ORK-449 system-first follow-up evidence
+
+ORK-449 changes the homepage's default requirement, Console proof, approval
+example, and Project Discovery placeholder from opportunity discovery to a
+legacy business-system replacement. Opportunity intelligence remains available
+as a later selectable scenario and dedicated solution route.
+
+| Gate | Result |
+| --- | --- |
+| Production build | Pass; web bundle 1.19 MB raw / 252.66 kB estimated transfer |
+| Changed-surface suite | 51/51 pass |
+| Full CI runner | 2,122 pass, 6 skip, 0 fail (2,128 total) |
+| Smoke | Pass |
+| OSS boundary | Pass; 648 files scanned |
+| Diff check | Pass |
+
 Responsive browser rendering, production route checks, both synthetic intake
 submissions, and unauthenticated exposure checks remain post-merge release-train
 gates and must not be inferred from the local source contracts alone.

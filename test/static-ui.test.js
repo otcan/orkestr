@@ -89,7 +89,8 @@ function assertPublicShell(html) {
   assert.match(html, /ORKESTR CONSOLE · PUBLIC DEMO/);
   assert.match(html, /Human review/);
   assert.match(html, /data-event="describe_project_hero"/);
-  assert.match(html, /Public Opportunity Monitor/);
+  assert.match(html, /Our internal ordering system needs replacing/);
+  assert.match(html, /Internal Ordering Renewal/);
   assert.match(html, /Project Discovery/);
   assert.match(html, /public or authorized sources/i);
   assert.doesNotMatch(html, /Personal beta/);

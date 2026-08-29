@@ -9,7 +9,9 @@ high-value—not like an AI template or generic agency portfolio.
 - Rust accent `#b63718`, muted text `#5f635a`
 - Large direct headings and restrained monospace operating labels
 - One-pixel boundaries, minimal radius, high-contrast 44px controls
-- Requirement-to-operation diagram with switchable illustrative requirements
+- Requirement-to-operation diagram with switchable illustrative requirements;
+  system replacement is the default story and opportunity intelligence remains
+  a later selectable example
 - Five BUILD · REPLACE · FIND · COLLECT · AUTOMATE cards
 - “Bring us an ugly problem” statements and illustrative project briefs
 - Delivery phases, browser integration map, approval evidence, Orkestr Console,
