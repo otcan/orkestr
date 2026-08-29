@@ -8,7 +8,7 @@ function pageIntro(eyebrow: string, heading: string, summary: string) {
 }
 
 function projectCta(heading: string) {
-  return `<section class="final-cta compact"><h2>${heading}</h2><a class="button button-light" href="/project" data-event="solution_describe_project">Describe your project</a></section>`;
+  return `<section class="final-cta compact"><h2>${heading}</h2><a class="button button-light" href="/project#book" data-event="solution_describe_project">Book a project call</a></section>`;
 }
 
 export function securityPage(env = process.env): PublicPage {

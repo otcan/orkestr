@@ -37,6 +37,7 @@ export async function sendProjectInquiryNotification(inquiry = {}, env = process
   const lines = [
     "A new Orkestr Project Discovery inquiry was submitted.",
     "",
+    `Intake: ${clean(inquiry.intakeMode) || "detailed"}`,
     `Contact: ${clean(inquiry.contactName)} <${clean(inquiry.workEmail)}>`,
     `Company / role: ${clean(inquiry.company)} / ${clean(inquiry.role)}`,
     `Project type: ${clean(inquiry.projectType)}`,

@@ -82,6 +82,10 @@ export function publicSchedulingUrl(env = process.env) {
   return normalizePublicUrl(env.ORKESTR_WORKFLOW_PILOT_SCHEDULING_URL || "");
 }
 
+export function publicProjectSchedulingUrl(env = process.env) {
+  return normalizePublicUrl(env.ORKESTR_PROJECT_DISCOVERY_SCHEDULING_URL || "");
+}
+
 export function publicSiteBaseUrl(env = process.env) {
   const configured = normalizePublicUrl(env.ORKESTR_PUBLIC_SITE_URL || env.ORKESTR_PRIMARY_PUBLIC_URL || "");
   if (configured) return configured;

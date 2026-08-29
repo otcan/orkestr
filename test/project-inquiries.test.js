@@ -30,6 +30,19 @@ function validProject(overrides = {}) {
   };
 }
 
+function validQuickProject(overrides = {}) {
+  return {
+    intakeMode: "quick",
+    contactName: "Sam Example",
+    workEmail: "sam@example.test",
+    projectType: "replace",
+    desiredOutcome: "Replace our old internal ordering tool with a reliable system that staff can use without spreadsheets or duplicate entry.",
+    consentToContact: true,
+    formStartedAt: Date.now() - 5_000,
+    ...overrides,
+  };
+}
+
 test("project inquiries are validated, assessed, notified, and stored separately", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-project-inquiries-"));
   const env = { ORKESTR_HOME: home, ORKESTR_PROJECT_DISCOVERY_SCHEDULING_URL: "https://calendar.example.test/discovery" };
@@ -80,6 +93,25 @@ test("project inquiry validation rejects spam, missing consent, invalid categori
   await assert.rejects(() => submitProjectInquiry(validProject({ formStartedAt: Date.now() }), env), /project_submit_too_fast/);
 });
 
+test("quick project briefs require only four answers and receive the configured booking handoff", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-quick-project-"));
+  const env = { ORKESTR_HOME: home, ORKESTR_PROJECT_DISCOVERY_SCHEDULING_URL: "https://calendar.example.test/discovery" };
+  const submitted = await submitProjectInquiry(validQuickProject(), env, {
+    async sendProjectInquiryNotification() { return { ok: false, configured: false, skippedReason: "test" }; },
+  });
+  const stored = await listProjectInquiries(env);
+
+  assert.equal(submitted.submitted, true);
+  assert.equal(submitted.inquiry.readyForDiscovery, false);
+  assert.equal(submitted.inquiry.schedulingUrl, "https://calendar.example.test/discovery");
+  assert.match(submitted.message, /reply using your work email/i);
+  assert.equal(stored.inquiries[0].intakeMode, "quick");
+  assert.equal(stored.inquiries[0].company, "");
+  assert.equal(stored.inquiries[0].role, "");
+  assert.equal(stored.inquiries[0].timeframe, "exploring");
+  assert.match(stored.inquiries[0].projectName, /^replace · Replace our old/);
+});
+
 test("public Project Discovery and analytics endpoints stay anonymous and analytics remain metadata-only", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-project-api-"));
   const keys = ["ORKESTR_HOME", "ORKESTR_AUTH_REQUIRED", "ORKESTR_PROJECT_DISCOVERY_SCHEDULING_URL", "ORKESTR_PROJECT_DISCOVERY_NOTIFY_EMAILS", "ORKESTR_PROJECT_DISCOVERY_NOTIFY_EMAIL"];
@@ -101,7 +133,7 @@ test("public Project Discovery and analytics endpoints stay anonymous and analyt
     const tracked = await fetch(`http://127.0.0.1:${port}/api/public/events`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ event: "describe_project_hero", path: "/", desiredOutcome: "must not be stored" }),
+      body: JSON.stringify({ event: "book_project_hero", path: "/", desiredOutcome: "must not be stored" }),
     });
     const ignored = await fetch(`http://127.0.0.1:${port}/api/public/events`, {
       method: "POST",
@@ -117,7 +149,7 @@ test("public Project Discovery and analytics endpoints stay anonymous and analyt
     assert.equal(payload.schedulingUrl, undefined);
     assert.equal(tracked.status, 202);
     assert.equal(ignored.status, 202);
-    assert.deepEqual(analytics.map(({ event, path: eventPath }) => ({ event, path: eventPath })), [{ event: "describe_project_hero", path: "/" }]);
+    assert.deepEqual(analytics.map(({ event, path: eventPath }) => ({ event, path: eventPath })), [{ event: "book_project_hero", path: "/" }]);
     assert.equal(JSON.stringify(analytics).includes("must not be stored"), false);
   } finally {
     await new Promise((resolve) => server.close(resolve));

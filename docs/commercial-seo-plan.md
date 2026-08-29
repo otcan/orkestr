@@ -23,8 +23,8 @@ keyword pages or market scraping as the product.
 
 ## Page responsibilities
 
-- `/`: broad proposition, five solution verbs, delivery, platform proof, trust,
-  and Project Discovery conversion
+- `/`: broad proposition, three service groups, examples, four-step delivery,
+  one platform proof, and booking conversion
 - `/use-cases`: solution overview and internal links
 - five solution routes: focused intent, outcomes, delivery, and boundaries
 - `/project`: general inquiry conversion
@@ -37,6 +37,6 @@ limited to labelled product demonstrations, public code, tests, documentation,
 and approved case studies.
 
 Primary measurement is relevant Project Discovery submissions. Supporting
-measures are solution visits, project-form starts, successful submissions,
-readiness-qualified scheduling clicks, workflow-audit conversions, and organic
+measures are project-call clicks, solution visits, short-form starts, optional
+detail expansion, successful submissions, scheduling clicks, workflow-audit conversions, and organic
 conversion by landing page. Analytics remain allowlisted and metadata-only.

@@ -24,7 +24,7 @@ function publicPage(pageId: PublicPageId, env = process.env) {
   if (pageId === "deployment") return deploymentPage(env);
   if (pageId === "developers") return developersPage(env);
   if (pageId === "use-cases") return whatWeBuildPage();
-  if (pageId === "project") return projectIntakePage();
+  if (pageId === "project") return projectIntakePage(env);
   if (["websites-commerce", "business-systems", "opportunity-intelligence", "web-data-monitoring", "automation"].includes(pageId)) return solutionPage(pageId);
   if (pageId === "workflow") return workflowIntakePage();
   return legalPage(pageId, env);
