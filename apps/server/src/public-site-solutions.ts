@@ -27,7 +27,7 @@ export const solutionDefinitions: SolutionDefinition[] = [
     outcomes: ["Business and service websites", "B2B and B2C commerce", "Customer and partner portals", "Focused internal tools"],
     stages: [["Discover", "Define users, journeys, content, transactions, ownership, and success."], ["Design", "Plan the interface, data model, integrations, administration, and delivery boundary."], ["Build", "Implement the application using standard web technologies and only the automation the requirement needs."], ["Operate", "Deploy, monitor, maintain, and improve the live system under an agreed model."]],
     proofTitle: "Software first. AI only where it earns its place.",
-    proofText: "A conventional website or application does not need to pretend to be an AI product. Orkestr uses standard software components for the core experience and adds its operating layer only when ongoing agents, schedules, browser work, monitoring, or approvals are useful.",
+    proofText: "Orkestr uses standard software components for the core website or application, adding its operating layer when ongoing agents, schedules, browser work, monitoring, or approvals create practical value.",
     boundaries: ["Hosting, content ownership, support, analytics, and release responsibility are agreed before launch.", "Payment, identity, tax, accessibility, and regulatory requirements depend on the project and selected providers.", "Illustrative examples are not fixed packages or claims of universal integration."],
   },
   {
