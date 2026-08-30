@@ -5684,6 +5684,7 @@ test("local whatsapp exact recovery loads and routes one scoped media event by i
   };
   const chatId = "chat-media-exact-recovery@g.us";
   const eventId = `false_${chatId}_media-exact-recovery-1`;
+  let browserFallbackSource = "";
   const client = {
     async getMessageById(id) {
       assert.equal(id, eventId);
@@ -5702,8 +5703,9 @@ test("local whatsapp exact recovery loads and routes one scoped media event by i
       };
     },
     pupPage: {
-      async evaluate(_callback, id) {
+      async evaluate(callback, id) {
         assert.equal(id, eventId);
+        browserFallbackSource = String(callback);
         return {
           data: Buffer.from("exact candidate cv").toString("base64"),
           filename: "exact-candidate.docx",
@@ -5740,6 +5742,12 @@ test("local whatsapp exact recovery loads and routes one scoped media event by i
     assert.equal(result.routed[0].eventId, eventId);
     assert.equal(attachment.filename, "exact-candidate.docx");
     assert.equal(await fs.readFile(attachment.path, "utf8"), "exact candidate cv");
+    assert.match(browserFallbackSource, /resolveMediaBlob/);
+    assert.match(browserFallbackSource, /isUserInitiated:\s*true/);
+    assert.ok((await listEvents(env, 20)).some((event) =>
+      event.type === "whatsapp_local_inbound_media_download_browser_blob_recovered"
+      && event.eventId === eventId
+    ));
   } finally {
     await resetLocalWhatsAppBridgeForTest(env);
   }

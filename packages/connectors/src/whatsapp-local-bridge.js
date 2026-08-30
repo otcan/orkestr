@@ -3389,6 +3389,51 @@ async function refreshedInboundMediaMessage(message, client = null) {
   return refreshed?.hasMedia && typeof refreshed.downloadMedia === "function" ? refreshed : message;
 }
 
+async function downloadInboundMediaFromBrowserBlob(message, client = null, env = process.env) {
+  const eventId = serializedMessageId(message);
+  if (!eventId || !client?.pupPage || typeof client.pupPage.evaluate !== "function") return null;
+  return withInboundMediaDownloadTimeout(client.pupPage.evaluate(async (messageId) => {
+    const collections = window.require?.("WAWebCollections");
+    const model = collections?.Msg?.get?.(messageId)
+      || (typeof collections?.Msg?.getMessagesById === "function"
+        ? (await collections.Msg.getMessagesById([messageId]))?.messages?.[0]
+        : null);
+    if (!model) return null;
+
+    let resolved = null;
+    if (typeof window.WWebJS?.resolveMediaBlob === "function") {
+      resolved = await window.WWebJS.resolveMediaBlob(messageId);
+    } else {
+      if (!model.mediaData || model.mediaData.mediaStage === "REUPLOADING") return null;
+      await model.downloadMedia({
+        downloadEvenIfExpensive: true,
+        rmrReason: 1,
+        isUserInitiated: true,
+      });
+      const stage = String(model.mediaData?.mediaStage || "");
+      if (stage.includes("ERROR") || stage === "FETCHING") return null;
+      const cache = window.require?.("WAWebMediaInMemoryBlobCache")?.InMemoryMediaBlobCache;
+      const cached = cache?.get?.(model.mediaObject?.filehash);
+      const blob = cached || model.mediaObject?.mediaBlob?.forceToBlob?.() || null;
+      if (blob) {
+        resolved = {
+          blob,
+          mimetype: model.mimetype,
+          filename: model.filename,
+          filesize: model.size,
+        };
+      }
+    }
+    if (!resolved?.blob || typeof resolved.blob.arrayBuffer !== "function") return null;
+    return {
+      data: await window.WWebJS.arrayBufferToBase64Async(await resolved.blob.arrayBuffer()),
+      mimetype: String(resolved.mimetype || model.mimetype || ""),
+      filename: String(resolved.filename || model.filename || ""),
+      filesize: Number(resolved.filesize || model.size || 0) || undefined,
+    };
+  }, eventId), env);
+}
+
 async function downloadInboundMediaFromBrowserStore(message, client = null, env = process.env) {
   const eventId = serializedMessageId(message);
   const chatId = localWhatsAppMessageRouteFields(message).chatId;
@@ -3461,11 +3506,12 @@ async function downloadInboundMedia(accountId, message, env = process.env, { cli
         ? media.some((item) => item?.data)
         : Boolean(media?.data);
       if (!hasDownloadedMedia) {
+        let blobError = null;
         try {
-          media = await downloadInboundMediaFromBrowserStore(candidate || message, client, env);
+          media = await downloadInboundMediaFromBrowserBlob(candidate || message, client, env);
           if (media?.data) {
             await appendEvent({
-              type: "whatsapp_local_inbound_media_download_browser_store_recovered",
+              type: "whatsapp_local_inbound_media_download_browser_blob_recovered",
               accountId,
               eventId,
               attempt,
@@ -3473,7 +3519,26 @@ async function downloadInboundMedia(accountId, message, env = process.env, { cli
             }, env).catch(() => {});
           }
         } catch (fallbackError) {
-          if (!primaryError) primaryError = fallbackError;
+          blobError = fallbackError;
+        }
+        const hasBrowserBlobMedia = Array.isArray(media)
+          ? media.some((item) => item?.data)
+          : Boolean(media?.data);
+        if (!hasBrowserBlobMedia) {
+          try {
+            media = await downloadInboundMediaFromBrowserStore(candidate || message, client, env);
+            if (media?.data) {
+              await appendEvent({
+                type: "whatsapp_local_inbound_media_download_browser_store_recovered",
+                accountId,
+                eventId,
+                attempt,
+                primaryError: primaryError?.message || blobError?.message || "",
+              }, env).catch(() => {});
+            }
+          } catch (fallbackError) {
+            if (!primaryError) primaryError = blobError || fallbackError;
+          }
         }
       }
       const hasRecoveredMedia = Array.isArray(media)
@@ -4237,7 +4302,7 @@ export async function handleInboundMessage(accountId, message, env = process.env
   }
 }
 
-export async function recoverLocalWhatsAppChatMessages({ accountId = "", chatId = "", limit = 20, unreadOnly = true, markSeen = true, sinceMs = 0, eventIds = [] } = {}, env = process.env) {
+export async function recoverLocalWhatsAppChatMessages({ accountId = "", chatId = "", limit = 20, unreadOnly = true, markSeen = true, sinceMs = 0, eventIds = /** @type {string[]} */ ([]) } = {}, env = process.env) {
   const exactEventIds = [...new Set((Array.isArray(eventIds) ? eventIds : []).map((value) => String(value || "").trim()).filter(Boolean))].slice(0, 20);
   if (exactEventIds.length) {
     return recoverLocalWhatsAppMessagesById({ accountId, chatId, eventIds: exactEventIds }, env);

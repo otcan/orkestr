@@ -883,6 +883,7 @@ export class ConnectorsController {
       limit: Number(body.limit || 20) || 20,
       unreadOnly: body.unreadOnly !== false,
       markSeen: body.markSeen !== false,
+      eventIds: bodyStringArray(body, "eventIds").slice(0, 20),
     };
     try {
       return await whatsappWorkerConversation(runtimeAccountId, chatId, "recover", options, process.env);
