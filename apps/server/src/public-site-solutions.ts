@@ -26,9 +26,9 @@ export const solutionDefinitions: SolutionDefinition[] = [
     request: "We need a new B2B website where approved customers can find products and place orders.",
     outcomes: ["Business and service websites", "B2B and B2C commerce", "Customer and partner portals", "Focused internal tools"],
     stages: [["Discover", "Define users, journeys, content, transactions, ownership, and success."], ["Design", "Plan the interface, data model, integrations, administration, and delivery boundary."], ["Build", "Implement the application using standard web technologies and only the automation the requirement needs."], ["Operate", "Deploy, monitor, maintain, and improve the live system under an agreed model."]],
-    proofTitle: "Software first. AI only where it earns its place.",
+    proofTitle: "Strong software, with AI where it creates value.",
     proofText: "Orkestr uses standard software components for the core website or application, adding its operating layer when ongoing agents, schedules, browser work, monitoring, or approvals create practical value.",
-    boundaries: ["Hosting, content ownership, support, analytics, and release responsibility are agreed before launch.", "Payment, identity, tax, accessibility, and regulatory requirements depend on the project and selected providers.", "Illustrative examples are not fixed packages or claims of universal integration."],
+    boundaries: ["Hosting, content ownership, support, analytics, and release responsibility are agreed before launch.", "Payment, identity, tax, accessibility, and regulatory requirements depend on the project and selected providers.", "The proposal defines the exact project scope, integrations, and commercial model."],
   },
   {
     id: "business-systems", path: "/business-systems", verb: "REPLACE", title: "Legacy & Internal Business Systems",
@@ -38,8 +38,8 @@ export const solutionDefinitions: SolutionDefinition[] = [
     request: "Our internal ordering system is fifteen years old and no longer fits how the business works.",
     outcomes: ["Legacy system replacement", "Internal applications", "Process and interface redesign", "Staged data migration"],
     stages: [["Discover", "Map users, workflows, data, integrations, hidden rules, and failure risks."], ["Design", "Choose what to preserve, replace, simplify, integrate, or retire."], ["Migrate", "Build and validate the new system with representative data and a staged cutover."], ["Operate", "Monitor the production system, support users, and improve it without losing the rollback path."]],
-    proofTitle: "Modernization without a blind rewrite.",
-    proofText: "The goal is a safer operating system for the business, not a fashionable stack. Some projects replace the application. Others preserve a stable core and add a new interface, integration, or automated layer around it.",
+    proofTitle: "Staged modernization around a working business.",
+    proofText: "The right modernization path may replace the application or preserve a stable core while adding a new interface, integration, or automated layer around it.",
     boundaries: ["Migration scope and data quality must be inspected before a fixed implementation promise.", "Production access, backups, retention, and cutover approval stay explicit.", "A discovery phase can recommend staged improvement instead of full replacement."],
   },
   {
@@ -62,7 +62,7 @@ export const solutionDefinitions: SolutionDefinition[] = [
     request: "We check dozens of approved websites every morning and manually copy changes into a spreadsheet.",
     outcomes: ["Structured web collection", "Change and availability monitoring", "Alerts and exports", "Research and enrichment pipelines"],
     stages: [["Define", "Agree the permitted sources, fields, frequency, evidence, and downstream use."], ["Collect", "Use the most stable authorized method available: API, feed, browser, or extraction."], ["Validate", "Detect missing fields, layout changes, duplicates, and uncertain records."], ["Operate", "Monitor collection health, maintain source adapters, record provenance, and deliver updates."]],
-    proofTitle: "Scraping is a technique—not the product.",
+    proofTitle: "Reliable, structured data is the product.",
     proofText: "The product is reliable, structured information with known provenance and an operating owner. The collection method depends on the source and can change over time without changing the business outcome.",
     boundaries: ["Orkestr does not bypass access controls or collect from sources the customer is not authorized to use.", "Terms, privacy, copyright, robots guidance, rate limits, and personal-data exposure require source-specific review.", "Source changes and anti-automation controls can affect feasibility and maintenance cost."],
   },
@@ -74,9 +74,9 @@ export const solutionDefinitions: SolutionDefinition[] = [
     request: "Our staff spend hours moving information between email, documents, and an internal browser application.",
     outcomes: ["Email and document workflows", "ERP, CRM, and internal tools", "Browser-only applications", "Approvals and exception handling"],
     stages: [["Audit", "Map triggers, systems, handoffs, decisions, exceptions, and the current baseline."], ["Bound", "Define allowed actions, deterministic rules, agent work, approvals, and stop conditions."], ["Pilot", "Implement one controlled workflow and test representative normal and failure cases."], ["Operate", "Monitor completion, interventions, errors, history, and measurable operating value." ]],
-    proofTitle: "Persistent work—not a chatbot session.",
+    proofTitle: "Persistent work across the systems your team uses.",
     proofText: "The Orkestr operating layer coordinates named threads, schedules, browser execution, files, communication channels, approvals, interruptions, history, and recovery around the defined process.",
-    boundaries: ["Connections and actions are configured for each deployment.", "High-consequence or irreversible steps need an appropriate review policy.", "Orkestr is not a catalogue of one-click automations or unrestricted autonomous access."],
+    boundaries: ["Connections and actions are configured for each deployment.", "High-consequence or irreversible steps need an appropriate review policy.", "Each workflow has a defined process, permission scope, and review policy."],
     automationAudit: true,
   },
 ];
@@ -97,7 +97,7 @@ export function whatWeBuildPage(): PublicPage {
     body: `<main id="main-content">
       <section class="page-hero"><p class="section-index">WHAT WE BUILD</p><h1>Five ways to turn a business requirement into a working system.</h1><p class="lead">Bring the outcome, the broken process, or the opportunity. Orkestr determines whether the answer is conventional software, data engineering, integrations, automation, AI—or a careful combination.</p></section>
       <section class="section solution-index" aria-labelledby="solution-index-title"><div class="section-heading"><p class="section-index">BUILD · REPLACE · FIND · COLLECT · AUTOMATE</p><h2 id="solution-index-title">Start with what needs to happen.</h2></div><div class="offer-grid">${solutionDefinitions.map(solutionCard).join("")}</div></section>
-      <section class="section solution-principle"><div><p class="section-index">ONE PRINCIPLE</p><h2>We do not prescribe AI before understanding the work.</h2></div><div><p class="section-lead">Deterministic software is safer for some requirements. AI is useful for others. Orkestr combines the right components around the business outcome and keeps the operating boundary visible.</p><a class="text-link" href="/#platform">See the Orkestr operating layer <span aria-hidden="true">→</span></a></div></section>
+      <section class="section solution-principle"><div><p class="section-index">ONE PRINCIPLE</p><h2>Technology follows the work.</h2></div><div><p class="section-lead">Deterministic software handles clear rules. AI supports interpretation and judgment where it creates value. Orkestr combines both around the business outcome and keeps the operating boundary visible.</p><a class="text-link" href="/#platform">See the Orkestr operating layer <span aria-hidden="true">→</span></a></div></section>
       ${projectCta("What does your business need to do?")}
     </main>`,
   };

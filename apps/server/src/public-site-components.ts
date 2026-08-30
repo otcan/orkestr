@@ -39,21 +39,24 @@ export function renderProjectDeliveryDiagram() {
 
 type ConsoleLocale = "en" | "de" | "tr";
 
-const consoleCopy: Record<ConsoleLocale, { title: string; note: string; queue: string; states: string[]; heading: string; review: string; steps: Array<[string, string, string]>; actions: string[]; context: string; systems: Array<[string, string]>; boundary: string; limits: Array<[string, string]>; walkthrough: string[] }> = {
+const consoleCopy: Record<ConsoleLocale, { proofLabel: string; queueAria: string; runAria: string; contextAria: string; walkthroughAria: string; title: string; note: string; queue: string; states: string[]; heading: string; review: string; steps: Array<[string, string, string]>; actions: string[]; context: string; systems: Array<[string, string]>; boundary: string; limits: Array<[string, string]>; walkthrough: string[] }> = {
   en: {
+    proofLabel: "ORKESTR CONSOLE · PUBLIC DEMO", queueAria: "Managed system queue", runAria: "Selected managed-system run", contextAria: "Managed system context", walkthroughAria: "Execution state summary",
     title: "Internal Ordering Renewal · Migration Run #042", note: "Public-safe illustrative data. Available systems, connections, and controls depend on the deployment.", queue: "MIGRATION RUNS · 4", states: ["Completed", "Reviewing exceptions", "Staged", "Awaiting approval"], heading: "Twelve legacy records need an owner decision", review: "Human review",
     steps: [["08:00", "Legacy snapshot read", "The approved export was loaded without changing the existing system."], ["08:05", "Migration rules applied", "Fields, relationships, and known business rules were mapped into the new model."], ["08:11", "Validation completed", "2,486 records passed the configured structural and reconciliation checks."], ["08:12", "Exception queue prepared", "An owner reviews twelve records whose legacy ownership is missing or ambiguous."], ["Next", "Record decisions", "Every approved correction remains attached to its source record and rule."], ["Next", "Release migration batch", "The validated batch advances only after the agreed cutover approval."]],
-    actions: ["Approve mapping", "Review record", "Demo controls are inactive."], context: "SYSTEM COMPONENTS", systems: [["Legacy database", "Read only"], ["Migration service", "Staged"], ["New application", "Ready"], ["Rollback", "Available"]], boundary: "BOUNDARY", limits: [["Owner", "Operations lead"], ["Legacy access", "Read only"], ["Changes", "Staged"], ["Cutover", "Human"]], walkthrough: ["Snapshot read", "Rules applied", "Validation passed", "Human review", "Record decisions", "Release batch"],
+    actions: ["Approve mapping", "Review record", "Illustrative public view."], context: "SYSTEM COMPONENTS", systems: [["Legacy database", "Read only"], ["Migration service", "Staged"], ["New application", "Ready"], ["Rollback", "Available"]], boundary: "BOUNDARY", limits: [["Owner", "Operations lead"], ["Legacy access", "Read only"], ["Changes", "Staged"], ["Cutover", "Human"]], walkthrough: ["Snapshot read", "Rules applied", "Validation passed", "Human review", "Record decisions", "Release batch"],
   },
   de: {
+    proofLabel: "ORKESTR-KONSOLE · ÖFFENTLICHE DEMO", queueAria: "Warteschlange des betreuten Systems", runAria: "Ausgewählter Systemlauf", contextAria: "Kontext des betreuten Systems", walkthroughAria: "Zusammenfassung des Ausführungsstatus",
     title: "Erneuerung internes Bestellsystem · Migrationslauf #042", note: "Illustrative, öffentlich geeignete Beispieldaten. Verfügbare Systeme, Verbindungen und Kontrollen unterscheiden sich je Bereitstellung.", queue: "MIGRATIONSLÄUFE · 4", states: ["Abgeschlossen", "Ausnahmen werden geprüft", "Vorbereitet", "Freigabe ausstehend"], heading: "Zwölf Altdatensätze benötigen eine Entscheidung", review: "Menschliche Prüfung",
     steps: [["08:00", "Altdaten-Snapshot gelesen", "Der freigegebene Export wurde geladen, ohne das bestehende System zu verändern."], ["08:05", "Migrationsregeln angewendet", "Felder, Beziehungen und bekannte Geschäftsregeln wurden in das neue Modell übertragen."], ["08:11", "Validierung abgeschlossen", "2.486 Datensätze haben die konfigurierten Struktur- und Abgleichprüfungen bestanden."], ["08:12", "Ausnahmeliste vorbereitet", "Eine verantwortliche Person prüft zwölf Datensätze mit fehlender oder unklarer Zuordnung."], ["Danach", "Entscheidungen erfassen", "Jede freigegebene Korrektur bleibt mit Quelldatensatz und Regel verbunden."], ["Danach", "Migrationspaket freigeben", "Das geprüfte Paket wird erst nach der vereinbarten Umstellungsfreigabe weitergegeben."]],
-    actions: ["Zuordnung freigeben", "Datensatz prüfen", "Demo-Steuerelemente sind inaktiv."], context: "SYSTEMKOMPONENTEN", systems: [["Altdatenbank", "Nur lesen"], ["Migrationsdienst", "Vorbereitet"], ["Neue Anwendung", "Bereit"], ["Rückfallweg", "Verfügbar"]], boundary: "GRENZE", limits: [["Verantwortung", "Betriebsleitung"], ["Altsystemzugriff", "Nur lesen"], ["Änderungen", "Vorbereitet"], ["Umstellung", "Menschlich"]], walkthrough: ["Snapshot gelesen", "Regeln angewendet", "Validierung bestanden", "Menschliche Prüfung", "Entscheidungen erfassen", "Paket freigeben"],
+    actions: ["Zuordnung freigeben", "Datensatz prüfen", "Illustrative öffentliche Ansicht."], context: "SYSTEMKOMPONENTEN", systems: [["Altdatenbank", "Nur lesen"], ["Migrationsdienst", "Vorbereitet"], ["Neue Anwendung", "Bereit"], ["Rückfallweg", "Verfügbar"]], boundary: "GRENZE", limits: [["Verantwortung", "Betriebsleitung"], ["Altsystemzugriff", "Nur lesen"], ["Änderungen", "Vorbereitet"], ["Umstellung", "Menschlich"]], walkthrough: ["Snapshot gelesen", "Regeln angewendet", "Validierung bestanden", "Menschliche Prüfung", "Entscheidungen erfassen", "Paket freigeben"],
   },
   tr: {
-    title: "Şirket İçi Sipariş Sistemi Yenileme · Geçiş Çalışması #042", note: "Herkese açık gösterime uygun temsili veriler. Kullanılabilen sistemler, bağlantılar ve kontroller kuruluma göre değişir.", queue: "VERİ GEÇİŞLERİ · 4", states: ["Tamamlandı", "İstisnalar inceleniyor", "Hazırlandı", "Onay bekliyor"], heading: "On iki eski kayıt için sorumlu kararı gerekiyor", review: "İnsan incelemesi",
-    steps: [["08:00", "Eski sistem görüntüsü okundu", "Onaylı dışa aktarım mevcut sistem değiştirilmeden yüklendi."], ["08:05", "Geçiş kuralları uygulandı", "Alanlar, ilişkiler ve bilinen iş kuralları yeni modele eşlendi."], ["08:11", "Doğrulama tamamlandı", "2.486 kayıt yapı ve mutabakat kontrollerini geçti."], ["08:12", "İstisna kuyruğu hazırlandı", "Bir sorumlu, sahipliği eksik veya belirsiz on iki kaydı inceliyor."], ["Sonraki", "Kararları kaydet", "Onaylanan her düzeltme kaynak kayıt ve kuralla ilişkili kalır."], ["Sonraki", "Geçiş paketini yayınla", "Doğrulanmış paket yalnızca kararlaştırılan geçiş onayından sonra ilerler."]],
-    actions: ["Eşlemeyi onayla", "Kaydı incele", "Demo kontrolleri etkin değildir."], context: "SİSTEM BİLEŞENLERİ", systems: [["Eski veritabanı", "Salt okunur"], ["Geçiş hizmeti", "Hazırlandı"], ["Yeni uygulama", "Hazır"], ["Geri dönüş", "Mevcut"]], boundary: "SINIR", limits: [["Sorumlu", "Operasyon yöneticisi"], ["Eski sistem erişimi", "Salt okunur"], ["Değişiklikler", "Hazırlandı"], ["Canlıya geçiş", "İnsan onayı"]], walkthrough: ["Görüntü okundu", "Kurallar uygulandı", "Doğrulama geçti", "İnsan incelemesi", "Kararları kaydet", "Paketi yayınla"],
+    proofLabel: "ORKESTR KONSOLU · HERKESE AÇIK DEMO", queueAria: "Yönetilen sistem kuyruğu", runAria: "Seçili sistem çalışması", contextAria: "Yönetilen sistem bağlamı", walkthroughAria: "Çalışma durumu özeti",
+    title: "Şirket İçi Sipariş Sistemi Yenileme · Geçiş Çalışması #042", note: "Herkese açık gösterime uygun temsili veriler. Kullanılabilen sistemler, bağlantılar ve kontroller kuruluma göre değişir.", queue: "VERİ GEÇİŞLERİ · 4", states: ["Tamamlandı", "İstisnalar inceleniyor", "Hazırlandı", "Onay bekliyor"], heading: "On iki eski kayıt için süreç sahibinin kararı bekleniyor", review: "İnsan incelemesi",
+    steps: [["08:00", "Eski sistemin anlık görüntüsü okundu", "Onaylı dışa aktarım mevcut sistem değiştirilmeden yüklendi."], ["08:05", "Geçiş kuralları uygulandı", "Alanlar, ilişkiler ve bilinen iş kuralları yeni modele eşlendi."], ["08:11", "Doğrulama tamamlandı", "2.486 kayıt yapı ve mutabakat kontrollerini geçti."], ["08:12", "İstisna kuyruğu hazırlandı", "Süreç sahibi, sahipliği eksik veya belirsiz on iki kaydı inceliyor."], ["Sonraki", "Kararları kaydet", "Onaylanan her düzeltme kaynak kayıt ve kuralla ilişkili kalır."], ["Sonraki", "Geçiş paketini devreye al", "Doğrulanmış paket yalnızca kararlaştırılan geçiş onayından sonra ilerler."]],
+    actions: ["Eşlemeyi onayla", "Kaydı incele", "Temsili herkese açık görünüm."], context: "SİSTEM BİLEŞENLERİ", systems: [["Eski veritabanı", "Salt okunur"], ["Geçiş hizmeti", "Hazırlandı"], ["Yeni uygulama", "Hazır"], ["Geri dönüş", "Mevcut"]], boundary: "SINIR", limits: [["Sorumlu", "Operasyon yöneticisi"], ["Eski sistem erişimi", "Salt okunur"], ["Değişiklikler", "Hazırlandı"], ["Canlıya geçiş", "İnsan onayı"]], walkthrough: ["Anlık görüntü okundu", "Kurallar uygulandı", "Doğrulama geçti", "İnsan incelemesi", "Kararları kaydet", "Paketi devreye al"],
   },
 };
 
@@ -61,24 +64,24 @@ export function renderConsoleEvidence(locale: ConsoleLocale = "en") {
   const copy = consoleCopy[locale];
   const queueIds = ["RUN-039", "RUN-042", "RUN-043", "CUTOVER"];
   return `<figure class="console-proof" aria-labelledby="console-proof-title" data-view-event="platform_console_view">
-    <figcaption><span class="proof-label">ORKESTR CONSOLE · PUBLIC DEMO</span><strong id="console-proof-title">${copy.title}</strong><small>${copy.note}</small></figcaption>
+    <figcaption><span class="proof-label">${copy.proofLabel}</span><strong id="console-proof-title">${copy.title}</strong><small>${copy.note}</small></figcaption>
     <div class="console-grid">
-      <section class="console-sidebar" aria-label="Managed system queue">
+      <section class="console-sidebar" aria-label="${copy.queueAria}">
         <p class="console-kicker">${copy.queue}</p>
         ${copy.states.map((state, index) => `<div class="queue-item ${index === 1 ? "selected" : "muted"}"><span>${queueIds[index]}</span><strong>${state}</strong></div>`).join("")}
       </section>
-      <section class="console-main" aria-label="Selected managed-system run">
+      <section class="console-main" aria-label="${copy.runAria}">
         <div class="console-header"><div><p>${copy.title}</p><h3>${copy.heading}</h3></div><span class="status status-approval">${copy.review}</span></div>
         <ol class="timeline">
           ${copy.steps.map(([time, title, text], index) => `<li class="${index < 3 ? "complete" : index === 3 ? "current" : ""}"><span>${time}</span><div><strong>${title}</strong><p>${text}</p>${index === 3 ? `<div class="proof-actions"><button type="button" disabled>${copy.actions[0]}</button><button type="button" disabled>${copy.actions[1]}</button><small>${copy.actions[2]}</small></div>` : ""}</div></li>`).join("")}
         </ol>
       </section>
-      <aside class="console-context" aria-label="Managed system context">
+      <aside class="console-context" aria-label="${copy.contextAria}">
         <p class="console-kicker">${copy.context}</p><ul>${copy.systems.map(([name, state]) => `<li>${name} <span>${state}</span></li>`).join("")}</ul>
         <p class="console-kicker">${copy.boundary}</p><ul>${copy.limits.map(([name, state]) => `<li>${name} <span>${state}</span></li>`).join("")}</ul>
       </aside>
     </div>
-    <ol class="walkthrough" aria-label="Execution state summary">
+    <ol class="walkthrough" aria-label="${copy.walkthroughAria}">
       ${copy.walkthrough.map((text, index) => `<li${index === 3 ? ' class="waiting"' : ""}><span>${index < 3 ? "✓" : index === 3 ? "●" : "○"}</span><strong>${text}</strong></li>`).join("")}
     </ol>
   </figure>`;

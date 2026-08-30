@@ -249,7 +249,7 @@ test("server serves the public site at root and Angular UI at app routes", async
     assert.match(betaHtml, /\/api\/public\/waitlist/);
     assert.equal(securityResponse.status, 200);
     assert.match(securityHtml, /Your systems stay under your control/);
-    assert.match(securityHtml, /does not claim a security certification/);
+    assert.match(securityHtml, /Certifications and regulatory requirements are assessed per deployment/);
     assert.equal(deploymentResponse.status, 200);
     assert.equal(developersResponse.status, 200);
     assert.equal(useCasesResponse.status, 200);
