@@ -87,6 +87,7 @@ test("team pages present one accountable founder with factual Person data", () =
     assert.match(html, /"@type":"Person"/);
     assert.match(html, /"@type":"ProfilePage"/);
     assert.doesNotMatch(html, /Our team of|Unser Team aus|uzman ekibimiz/i);
+    assert.doesNotMatch(html, /larger team|permanent Orkestr team|größer dar|dauerhaftes Orkestr-Team|daha büyük bir ekip|kalıcı bir Orkestr ekibi|göstermez/i);
   }
 });
 
