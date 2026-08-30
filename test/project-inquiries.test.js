@@ -135,6 +135,11 @@ test("public Project Discovery and analytics endpoints stay anonymous and analyt
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ event: "book_project_hero", path: "/", desiredOutcome: "must not be stored" }),
     });
+    const localizedTracked = await fetch(`http://127.0.0.1:${port}/api/public/events`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ event: "book_project_hero", path: "/de" }),
+    });
     const ignored = await fetch(`http://127.0.0.1:${port}/api/public/events`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -148,8 +153,9 @@ test("public Project Discovery and analytics endpoints stay anonymous and analyt
     assert.equal(payload.inquiry.readyForDiscovery, true);
     assert.equal(payload.schedulingUrl, undefined);
     assert.equal(tracked.status, 202);
+    assert.equal(localizedTracked.status, 202);
     assert.equal(ignored.status, 202);
-    assert.deepEqual(analytics.map(({ event, path: eventPath }) => ({ event, path: eventPath })), [{ event: "book_project_hero", path: "/" }]);
+    assert.deepEqual(analytics.map(({ event, path: eventPath }) => ({ event, path: eventPath })), [{ event: "book_project_hero", path: "/" }, { event: "book_project_hero", path: "/de" }]);
     assert.equal(JSON.stringify(analytics).includes("must not be stored"), false);
   } finally {
     await new Promise((resolve) => server.close(resolve));

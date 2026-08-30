@@ -32,13 +32,13 @@ function serviceCard(service: typeof services[number]) {
 export function commercialHomePage(): PublicPage {
   return {
     id: "home",
-    title: "Business Systems & Automation",
+    title: "Custom Business Software & Automation",
     summary: "Orkestr designs, builds, modernizes, and operates websites, business software, data systems, and automation around real business needs.",
     canonicalPath: "/",
     body: `<main id="main-content" class="v4-home">
   <section class="v4-section v4-hero" aria-labelledby="home-title">
     <div class="v4-hero-copy">
-      <p class="eyebrow">BUSINESS SYSTEMS · BUILT &amp; OPERATED</p>
+      <p class="eyebrow">CUSTOM BUSINESS SOFTWARE · BUILT &amp; OPERATED</p>
       <h1 id="home-title">Need a better system for your business?</h1>
       <p class="lead">Orkestr designs, builds, modernizes, and operates the software behind real business work.</p>
       <p class="hero-detail">From websites and internal tools to data systems and automation. Start with a short conversation—no technical specification required.</p>

@@ -12,7 +12,7 @@ const baseEnv = {
 test("commercial homepage presents one simple booking-first business-system journey", () => {
   const html = renderPublicSite("/", baseEnv, { host: "product.example.test" });
 
-  assert.match(html, /<title>Business Systems &amp; Automation \| Orkestr<\/title>/);
+  assert.match(html, /<title>Custom Business Software &amp; Automation \| Orkestr<\/title>/);
   assert.match(html, /Need a better system for your business/);
   assert.match(html, /Book a 20-minute project call/);
   assert.match(html, /data-event="book_project_hero"/);
@@ -34,7 +34,60 @@ test("commercial homepage presents one simple booking-first business-system jour
   assert.match(html, /rel="canonical" href="https:\/\/product\.example\.test\/"/);
   assert.match(html, /"@type":"Organization"/);
   assert.match(html, /"@type":"WebSite"/);
+  assert.match(html, /"@type":"Person"/);
+  for (const alternate of ['hreflang="en" href="https://product.example.test/"', 'hreflang="de-DE" href="https://product.example.test/de"', 'hreflang="tr-TR" href="https://product.example.test/tr"', 'hreflang="x-default"']) assert.match(html, new RegExp(alternate));
   assert.doesNotMatch(html, /"@type":"BreadcrumbList"/);
+});
+
+test("German and Turkish homepages are native, canonical, and reciprocal", () => {
+  const expectations = [
+    ["/de", "de-DE", "Individuelle Unternehmenssoftware", "Braucht Ihr Unternehmen ein besseres System", "/de/projekt#book"],
+    ["/tr", "tr-TR", "Özel İş Yazılımı", "İşletmeniz için daha iyi bir sisteme", "/tr/proje#book"],
+  ];
+  for (const [path, language, title, heading, booking] of expectations) {
+    const html = renderPublicSite(path, baseEnv, { host: "product.example.test" });
+    assert.match(html, new RegExp(`<html lang="${language}">`));
+    assert.match(html, new RegExp(`<title>${title}`));
+    assert.match(html, new RegExp(heading));
+    assert.match(html, new RegExp(`href="${booking}"`));
+    assert.match(html, new RegExp(`rel="canonical" href="https:\/\/product\.example\.test${path}"`));
+    for (const alternate of ["en", "de-DE", "tr-TR"]) assert.match(html, new RegExp(`hreflang="${alternate}"`));
+    assert.match(html, /class="language-switcher"/);
+    assert.doesNotMatch(html, /Internal Ordering Renewal/);
+  }
+});
+
+test("localized commercial routes keep focused intent and a working short project form", () => {
+  const pages = [
+    ["/de/altsystem-modernisieren", "Altsysteme modernisieren", "Projektgespräch buchen"],
+    ["/de/ki-prozessautomatisierung", "Geschäftsprozesse mit KI", "Workflow-Audit"],
+    ["/tr/eski-sistem-modernizasyonu", "Eski sisteminizi", "Proje görüşmesi planla"],
+    ["/tr/yapay-zeka-is-akisi-otomasyonu", "iş süreçlerini yapay zekâ", "İş Akışı Analizi"],
+  ];
+  for (const [path, heading, cta] of pages) {
+    const html = renderPublicSite(path, baseEnv, { host: "product.example.test" });
+    assert.match(html, new RegExp(heading, "i"));
+    assert.match(html, new RegExp(cta, "i"));
+    assert.match(html, /"@type":"BreadcrumbList"/);
+  }
+  for (const path of ["/de/projekt", "/tr/proje"]) {
+    const html = renderPublicSite(path, baseEnv, { host: "product.example.test" });
+    assert.match(html, /id="quick-project-form"/);
+    assert.match(html, /\/api\/public\/project-inquiries/);
+    for (const field of ["projectType", "desiredOutcome", "contactName", "workEmail", "consentToContact"]) assert.match(html, new RegExp(`name="${field}"`));
+  }
+});
+
+test("team pages present one accountable founder with factual Person data", () => {
+  const expectations = [["/team", "Orkestr is led"], ["/de/team", "Orkestr wird"], ["/tr/ekip", "Orkestr'i Oğuzcan"]];
+  for (const [path, heading] of expectations) {
+    const html = renderPublicSite(path, baseEnv, { host: "product.example.test" });
+    assert.match(html, new RegExp(heading));
+    assert.match(html, /Oğuzcan Ünver/);
+    assert.match(html, /"@type":"Person"/);
+    assert.match(html, /"@type":"ProfilePage"/);
+    assert.doesNotMatch(html, /Our team of|Unser Team aus|uzman ekibimiz/i);
+  }
 });
 
 test("workflow route collects a bounded map before offering a scheduling handoff", () => {
@@ -128,13 +181,19 @@ test("solution pages are bounded, truthful, and preserve the specialized automat
   }
 });
 
-test("sitemap and responsive CSS retain commercial routes and accessible progressive enhancement", () => {
+test("sitemap prioritizes localized commercial routes and accessible progressive enhancement", () => {
   const sitemap = renderPublicSitemap(baseEnv);
   const css = renderPublicSiteCss();
 
-  for (const path of ["/", "/project", "/workflow", "/websites-commerce", "/business-systems", "/opportunity-intelligence", "/web-data-monitoring", "/automation", "/security", "/deployment", "/use-cases", "/developers", "/impressum"]) {
+  for (const path of ["/", "/workflow", "/websites-commerce", "/business-systems", "/opportunity-intelligence", "/web-data-monitoring", "/automation", "/security", "/deployment", "/use-cases", "/developers", "/team", "/de", "/de/altsystem-modernisieren", "/de/ki-prozessautomatisierung", "/de/team", "/tr", "/tr/eski-sistem-modernizasyonu", "/tr/yapay-zeka-is-akisi-otomasyonu", "/tr/ekip"]) {
     assert.match(sitemap, new RegExp(`https:\\/\\/product\\.example\\.test${path === "/" ? "/" : path}`));
   }
+  for (const path of ["/beta", "/privacy", "/impressum", "/terms", "/support", "/project"]) assert.doesNotMatch(sitemap, new RegExp(`<loc>https:\\/\\/product\\.example\\.test${path}<\\/loc>`));
+  assert.match(sitemap, /xmlns:xhtml=/);
+  assert.match(sitemap, /hreflang="de-DE"/);
+  assert.match(sitemap, /hreflang="tr-TR"/);
+  assert.match(sitemap, /hreflang="x-default"/);
+  assert.match(sitemap, /<lastmod>2026-08-30<\/lastmod>/);
   assert.match(css, /:focus-visible/);
   assert.match(css, /@media \(max-width: 760px\)/);
   assert.match(css, /@media \(prefers-reduced-motion: reduce\)/);
@@ -143,5 +202,27 @@ test("sitemap and responsive CSS retain commercial routes and accessible progres
   assert.match(css, /\.v4-service-grid/);
   assert.match(css, /\.project-booking-hero/);
   assert.match(css, /\.project-type-options/);
+  assert.match(css, /\.language-switcher/);
+  assert.match(css, /\.team-profile/);
   assert.match(css, /\.field-grid\.two/);
+});
+
+test("personal beta remains available but is removed from commercial indexing", () => {
+  const html = renderPublicSite("/beta", baseEnv, { host: "product.example.test" });
+  assert.match(html, /<meta name="robots" content="noindex,follow">/);
+  assert.match(html, /Start a private Orkestr workspace/);
+});
+
+test("every sitemap location renders a unique canonical public page", () => {
+  const sitemap = renderPublicSitemap(baseEnv);
+  const locations = [...sitemap.matchAll(/<loc>([^<]+)<\/loc>/g)].map((match) => match[1]);
+  assert.equal(locations.length, 32);
+  assert.equal(new Set(locations).size, locations.length);
+  for (const location of locations) {
+    const path = new URL(location).pathname;
+    const html = renderPublicSite(path, baseEnv, { host: "product.example.test" });
+    assert.match(html, /<main id="main-content"/);
+    assert.match(html, new RegExp(`rel="canonical" href="${location.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"`));
+    assert.match(html, /<h1[^>]*>[^<]+<\/h1>/);
+  }
 });
