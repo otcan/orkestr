@@ -61,7 +61,7 @@ export function legalPage(pageId: PublicPageId, env = process.env): PublicPage {
       ]),
     },
     beta: {
-      id: "beta", title: "Personal Beta", summary: "The preserved invite-only Orkestr personal beta, including consent disclosures and access request flow.",
+      id: "beta", title: "Personal Beta", summary: "The preserved invite-only Orkestr personal beta, including consent disclosures and access request flow.", indexable: false,
       body: `<main class="legal-page beta-page" id="main-content"><section class="legal-hero"><p class="eyebrow">PERSONAL BETA</p><h1>Start a private Orkestr workspace.</h1><p class="lead">The personal experience remains invite-only and separate from commercial Project Discovery and Workflow Audit inquiries.</p></section><section class="legal-content"><article><h2>Invite-only</h2><p>Access is limited to people explicitly invited by the operator.</p></article><article><h2>Expected instability</h2><p>Features can fail, responses can be imperfect, and live connectors may need manual repair.</p></article><article><h2>Human review</h2><p>Review important output before sending, publishing, paying, applying, or taking irreversible action.</p></article><article><h2>Consent and control</h2><p>Requesting access requires the beta terms and privacy notice. Connected accounts can be declined, disconnected, or revoked.</p></article></section>${renderWaitlistSection()}</main>`,
     },
   };

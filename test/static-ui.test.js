@@ -75,7 +75,7 @@ function assertAngularShell(html) {
 }
 
 function assertPublicShell(html) {
-  assert.match(html, /<title>Business Systems &amp; Automation \| Orkestr<\/title>/);
+  assert.match(html, /<title>Custom Business Software &amp; Automation \| Orkestr<\/title>/);
   assert.match(html, /Need a better system for your business/);
   assert.match(html, /Build new systems/);
   assert.match(html, /Modernize existing systems/);
@@ -165,6 +165,11 @@ test("server serves the public site at root and Angular UI at app routes", async
     const deploymentResponse = await fetch(`http://127.0.0.1:${port}/deployment`);
     const developersResponse = await fetch(`http://127.0.0.1:${port}/developers`);
     const useCasesResponse = await fetch(`http://127.0.0.1:${port}/use-cases`);
+    const germanHomeResponse = await fetch(`http://127.0.0.1:${port}/de`);
+    const germanHomeHtml = await germanHomeResponse.text();
+    const turkishTeamResponse = await fetch(`http://127.0.0.1:${port}/tr/ekip`);
+    const turkishTeamHtml = await turkishTeamResponse.text();
+    const localizedSlashRedirect = await fetch(`http://127.0.0.1:${port}/de/`, { redirect: "manual" });
     const workflowResponse = await fetch(`http://127.0.0.1:${port}/workflow`);
     const workflowHtml = await workflowResponse.text();
     const projectResponse = await fetch(`http://127.0.0.1:${port}/project`);
@@ -239,6 +244,7 @@ test("server serves the public site at root and Angular UI at app routes", async
     assert.equal(supportResponse.status, 200);
     assert.equal(betaResponse.status, 200);
     assert.match(betaHtml, /Start a private Orkestr workspace/);
+    assert.match(betaHtml, /content="noindex,follow"/);
     assert.match(betaHtml, /id="waitlist-form"/);
     assert.match(betaHtml, /\/api\/public\/waitlist/);
     assert.equal(securityResponse.status, 200);
@@ -247,6 +253,13 @@ test("server serves the public site at root and Angular UI at app routes", async
     assert.equal(deploymentResponse.status, 200);
     assert.equal(developersResponse.status, 200);
     assert.equal(useCasesResponse.status, 200);
+    assert.equal(germanHomeResponse.status, 200);
+    assert.match(germanHomeHtml, /<html lang="de-DE">/);
+    assert.match(germanHomeHtml, /Braucht Ihr Unternehmen ein besseres System/);
+    assert.equal(turkishTeamResponse.status, 200);
+    assert.match(turkishTeamHtml, /Oğuzcan Ünver/);
+    assert.equal(localizedSlashRedirect.status, 301);
+    assert.equal(localizedSlashRedirect.headers.get("location"), "/de");
     assert.equal(workflowResponse.status, 200);
     assert.match(workflowHtml, /Show us one workflow worth fixing/);
     assert.match(workflowHtml, /id="workflow-form"/);

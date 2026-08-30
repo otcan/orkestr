@@ -1,5 +1,6 @@
 export type PublicPageId =
   | "home"
+  | "team"
   | "security"
   | "deployment"
   | "developers"
@@ -19,12 +20,86 @@ export type PublicPageId =
   | "support"
   | "beta";
 
+export type PublicLocale = "en" | "de" | "tr";
+
+export type PublicSiteRoute = {
+  pageId: PublicPageId;
+  locale: PublicLocale;
+};
+
 export type PublicPage = {
   id: PublicPageId;
   title: string;
   summary: string;
   body: string;
   canonicalPath?: string;
+  locale?: PublicLocale;
+  indexable?: boolean;
+};
+
+export const publicLocales: PublicLocale[] = ["en", "de", "tr"];
+
+export const publicLocaleTags: Record<PublicLocale, string> = {
+  en: "en",
+  de: "de-DE",
+  tr: "tr-TR",
+};
+
+export const publicLocaleOpenGraphTags: Record<PublicLocale, string> = {
+  en: "en_US",
+  de: "de_DE",
+  tr: "tr_TR",
+};
+
+const localizedPagePaths: Record<PublicLocale, Partial<Record<PublicPageId, string>>> = {
+  en: {
+    home: "/",
+    team: "/team",
+    security: "/security",
+    deployment: "/deployment",
+    developers: "/developers",
+    "use-cases": "/use-cases",
+    project: "/project",
+    "websites-commerce": "/websites-commerce",
+    "business-systems": "/business-systems",
+    "opportunity-intelligence": "/opportunity-intelligence",
+    "web-data-monitoring": "/web-data-monitoring",
+    automation: "/automation",
+    workflow: "/workflow",
+    terms: "/terms",
+    privacy: "/privacy",
+    impressum: "/impressum",
+    "acceptable-use": "/acceptable-use",
+    "data-deletion": "/data-deletion",
+    support: "/support",
+    beta: "/beta",
+  },
+  de: {
+    home: "/de",
+    team: "/de/team",
+    "use-cases": "/de/leistungen",
+    "websites-commerce": "/de/websites-onlineshops",
+    "business-systems": "/de/altsystem-modernisieren",
+    "opportunity-intelligence": "/de/ausschreibungsmonitoring",
+    "web-data-monitoring": "/de/web-monitoring",
+    automation: "/de/ki-prozessautomatisierung",
+    project: "/de/projekt",
+    security: "/de/sicherheit",
+    deployment: "/de/betrieb",
+  },
+  tr: {
+    home: "/tr",
+    team: "/tr/ekip",
+    "use-cases": "/tr/hizmetler",
+    "websites-commerce": "/tr/web-sitesi-e-ticaret",
+    "business-systems": "/tr/eski-sistem-modernizasyonu",
+    "opportunity-intelligence": "/tr/ihale-firsat-takibi",
+    "web-data-monitoring": "/tr/web-veri-izleme",
+    automation: "/tr/yapay-zeka-is-akisi-otomasyonu",
+    project: "/tr/proje",
+    security: "/tr/guvenlik",
+    deployment: "/tr/devreye-alma",
+  },
 };
 
 const defaultRepoUrl = "https://github.com/otcan/orkestr";
@@ -132,31 +207,23 @@ export function publicPairingUrl(env = process.env) {
   }
 }
 
-export function publicSitePath(pathname = ""): PublicPageId | "" {
+export function publicPagePath(pageId: PublicPageId, locale: PublicLocale = "en") {
+  return localizedPagePaths[locale]?.[pageId] || "";
+}
+
+export function publicSiteRoute(pathname = ""): PublicSiteRoute | null {
   const path = clean(pathname || "/").replace(/\/+$/, "") || "/";
-  const routes: Record<string, PublicPageId> = {
-    "/": "home",
-    "/public": "home",
-    "/security": "security",
-    "/deployment": "deployment",
-    "/developers": "developers",
-    "/use-cases": "use-cases",
-    "/project": "project",
-    "/websites-commerce": "websites-commerce",
-    "/business-systems": "business-systems",
-    "/opportunity-intelligence": "opportunity-intelligence",
-    "/web-data-monitoring": "web-data-monitoring",
-    "/automation": "automation",
-    "/workflow": "workflow",
-    "/terms": "terms",
-    "/privacy": "privacy",
-    "/impressum": "impressum",
-    "/acceptable-use": "acceptable-use",
-    "/data-deletion": "data-deletion",
-    "/support": "support",
-    "/beta": "beta",
-  };
-  return routes[path] || "";
+  if (path === "/public") return { pageId: "home", locale: "en" };
+  for (const locale of publicLocales) {
+    for (const [pageId, routePath] of Object.entries(localizedPagePaths[locale])) {
+      if (path === routePath) return { pageId: pageId as PublicPageId, locale };
+    }
+  }
+  return null;
+}
+
+export function publicSitePath(pathname = ""): PublicPageId | "" {
+  return publicSiteRoute(pathname)?.pageId || "";
 }
 
 export function publicCanonicalUrl(pathname: string, env = process.env) {
