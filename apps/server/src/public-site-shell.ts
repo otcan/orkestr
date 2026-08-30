@@ -23,7 +23,7 @@ const shellCopy: Record<PublicLocale, Record<string, string>> = {
     orkestr: "Orkestr", operating: "Operating layer", deployment: "Deployment", resources: "Resources",
     developers: "Developers", documentation: "Documentation", company: "Company", team: "Team", contact: "Contact",
     customers: "Existing customers", portal: "Client Portal", note: "Managed implementations. Open-source operating core. Scope, deployment, access, and support vary by project.",
-    breadcrumbHome: "Home", language: "Language",
+    breadcrumbHome: "Home", language: "Language", impressum: "Imprint", privacy: "Privacy", terms: "Terms",
   },
   de: {
     skip: "Zum Inhalt springen", home: "Orkestr Startseite", primary: "Hauptnavigation", menu: "Menü",
@@ -33,7 +33,7 @@ const shellCopy: Record<PublicLocale, Record<string, string>> = {
     orkestr: "Orkestr", operating: "Betriebsebene", deployment: "Betrieb", resources: "Ressourcen",
     developers: "Entwicklung", documentation: "Dokumentation", company: "Unternehmen", team: "Team", contact: "Kontakt",
     customers: "Bestehende Kunden", portal: "Kundenportal", note: "Betreute Implementierungen. Open-Source-Betriebskern. Umfang, Bereitstellung, Zugriff und Support werden je Projekt vereinbart.",
-    breadcrumbHome: "Startseite", language: "Sprache",
+    breadcrumbHome: "Startseite", language: "Sprache", impressum: "Impressum", privacy: "Datenschutz", terms: "Nutzungsbedingungen",
   },
   tr: {
     skip: "İçeriğe geç", home: "Orkestr ana sayfa", primary: "Ana navigasyon", menu: "Menü",
@@ -43,7 +43,7 @@ const shellCopy: Record<PublicLocale, Record<string, string>> = {
     orkestr: "Orkestr", operating: "İşletim katmanı", deployment: "Devreye alma", resources: "Kaynaklar",
     developers: "Geliştiriciler", documentation: "Dokümantasyon", company: "Şirket", team: "Ekip", contact: "İletişim",
     customers: "Mevcut müşteriler", portal: "Müşteri Portalı", note: "Yönetilen uygulamalar. Açık kaynak işletim çekirdeği. Kapsam, devreye alma, erişim ve destek her proje için ayrıca belirlenir.",
-    breadcrumbHome: "Ana sayfa", language: "Dil",
+    breadcrumbHome: "Ana sayfa", language: "Dil", impressum: "Yasal bilgiler", privacy: "Gizlilik", terms: "Kullanım koşulları",
   },
 };
 
@@ -202,7 +202,7 @@ export function renderPublicShell(page: PublicPage, env = process.env) {
     <nav aria-label="${copy.solutions}"><strong>${copy.solutions}</strong><a href="${pageHref("websites-commerce", locale)}">${copy.newSystems}</a><a href="${pageHref("business-systems", locale)}">${copy.modernization}</a><a href="${pageHref("automation", locale)}">${copy.automation}</a></nav>
     <nav aria-label="${copy.orkestr}"><strong>${copy.orkestr}</strong><a href="${homePath}#how-we-work">${copy.process}</a><a href="${homePath}#platform">${copy.operating}</a><a href="${pageHref("deployment", locale)}">${copy.deployment}</a><a href="${pageHref("security", locale)}">${copy.security}</a></nav>
     <nav aria-label="${copy.resources}"><strong>${copy.resources}</strong><a href="/developers">${copy.developers}</a><a href="${escapeHtml(repo)}" rel="noreferrer">GitHub</a><a href="${escapeHtml(repo)}/tree/main/docs" rel="noreferrer">${copy.documentation}</a></nav>
-    <nav aria-label="${copy.company}"><strong>${copy.company}</strong><a href="${pageHref("team", locale)}">${copy.team}</a><a href="/support">${copy.contact}</a><a href="/impressum">Impressum</a><a href="/privacy">Privacy</a><a href="/terms">Terms</a></nav>
+    <nav aria-label="${copy.company}"><strong>${copy.company}</strong><a href="${pageHref("team", locale)}">${copy.team}</a><a href="/support">${copy.contact}</a><a href="/impressum">${copy.impressum}</a><a href="/privacy">${copy.privacy}</a><a href="/terms">${copy.terms}</a></nav>
     <nav aria-label="${copy.customers}"><strong>${copy.customers}</strong><a href="${escapeHtml(appUrl)}" data-event="client_portal_click">${copy.portal}</a></nav>
     <p class="footer-note">${copy.note}</p>
   </footer>

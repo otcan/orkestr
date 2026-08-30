@@ -18,8 +18,8 @@ export function projectIntakePage(env = process.env): PublicPage {
         <div class="project-booking-copy">
           <p class="section-index">PROJECT DISCOVERY</p>
           <h1 id="project-title">Let’s talk about what should work better.</h1>
-          <p class="lead">A 20-minute conversation is enough to understand the problem and decide whether there is a credible next step.</p>
-          <ul><li>No technical specification required</li><li>No sales presentation to prepare</li><li>No commitment after the call</li></ul>
+          <p class="lead">A 20-minute conversation is enough to understand the problem and identify a practical next step.</p>
+          <ul><li>Bring the business need</li><li>We will guide the technical questions</li><li>Decide the next step after the call</li></ul>
         </div>
         <aside class="booking-panel" id="book" aria-labelledby="booking-title">
           <p>20-MINUTE PROJECT CALL</p>
@@ -33,7 +33,7 @@ export function projectIntakePage(env = process.env): PublicPage {
       <section class="quick-intake-section" aria-labelledby="quick-intake-title">
         <div class="quick-intake-copy">
           <p class="section-index">SHORT PROJECT BRIEF</p>
-          <h2 id="quick-intake-title">Give us the useful part.</h2>
+          <h2 id="quick-intake-title">Share the essentials.</h2>
           <p>Four answers are enough to begin. Add context only if it is easy to share.</p>
           <p class="legal-note"><strong>Do not send confidential records.</strong> Leave out passwords, credentials, personal data, private documents, and production access details.</p>
         </div>
@@ -74,7 +74,7 @@ export function projectIntakePage(env = process.env): PublicPage {
         </form>
       </section>
 
-      <section class="project-expectations" aria-label="What happens next"><p class="section-index">WHAT HAPPENS NEXT</p><ol><li><span>01</span><p><strong>We review the need.</strong> We look for a concrete outcome and a sensible project boundary.</p></li><li><span>02</span><p><strong>We talk.</strong> We ask about users, systems, constraints, and what success means.</p></li><li><span>03</span><p><strong>You get a clear next step.</strong> That may be discovery, a scoped proposal, or an honest no-fit answer.</p></li></ol></section>
+      <section class="project-expectations" aria-label="What happens next"><p class="section-index">WHAT HAPPENS NEXT</p><ol><li><span>01</span><p><strong>We review the need.</strong> We look for a concrete outcome and a sensible project scope.</p></li><li><span>02</span><p><strong>We talk.</strong> We ask about users, systems, constraints, and what success means.</p></li><li><span>03</span><p><strong>You get a clear next step.</strong> That may be discovery, a scoped proposal, or a recommendation for a better route.</p></li></ol></section>
 
       <script>
         (() => {

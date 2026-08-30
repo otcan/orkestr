@@ -23,7 +23,7 @@ test("commercial homepage presents one simple booking-first business-system jour
   assert.match(html, /repeatedly searches websites/);
   for (const step of ["Talk", "Define", "Build", "Operate"]) assert.match(html, new RegExp(`<h3>${step}<\/h3>`));
   assert.match(html, /Internal Ordering Renewal · Migration Run #042/);
-  assert.match(html, /More than a hand-off/);
+  assert.match(html, /Built to keep working after launch/);
   assert.match(html, /Client Portal/);
   assert.doesNotMatch(html, /Personal beta/);
   assert.doesNotMatch(html, /Bring us an ugly problem/i);
@@ -41,10 +41,10 @@ test("commercial homepage presents one simple booking-first business-system jour
 
 test("German and Turkish homepages are native, canonical, and reciprocal", () => {
   const expectations = [
-    ["/de", "de-DE", "Individuelle Unternehmenssoftware", "Braucht Ihr Unternehmen ein besseres System", "/de/projekt#book"],
-    ["/tr", "tr-TR", "Özel İş Yazılımı", "İşletmeniz için daha iyi bir sisteme", "/tr/proje#book"],
+    ["/de", "de-DE", "Individuelle Unternehmenssoftware", "Braucht Ihr Unternehmen ein besseres System", "/de/projekt#book", "ORKESTR-KONSOLE · ÖFFENTLICHE DEMO", "Datenschutz"],
+    ["/tr", "tr-TR", "Özel İş Yazılımı", "İşletmeniz için daha iyi bir sisteme", "/tr/proje#book", "ORKESTR KONSOLU · HERKESE AÇIK DEMO", "Gizlilik"],
   ];
-  for (const [path, language, title, heading, booking] of expectations) {
+  for (const [path, language, title, heading, booking, consoleLabel, privacyLabel] of expectations) {
     const html = renderPublicSite(path, baseEnv, { host: "product.example.test" });
     assert.match(html, new RegExp(`<html lang="${language}">`));
     assert.match(html, new RegExp(`<title>${title}`));
@@ -53,7 +53,10 @@ test("German and Turkish homepages are native, canonical, and reciprocal", () =>
     assert.match(html, new RegExp(`rel="canonical" href="https:\/\/product\.example\.test${path}"`));
     for (const alternate of ["en", "de-DE", "tr-TR"]) assert.match(html, new RegExp(`hreflang="${alternate}"`));
     assert.match(html, /class="language-switcher"/);
+    assert.match(html, new RegExp(consoleLabel));
+    assert.match(html, new RegExp(`>${privacyLabel}<`));
     assert.doesNotMatch(html, /Internal Ordering Renewal/);
+    assert.doesNotMatch(html, /ORKESTR CONSOLE · PUBLIC DEMO/);
   }
 });
 
@@ -88,6 +91,30 @@ test("team pages present one accountable founder with factual Person data", () =
     assert.match(html, /"@type":"ProfilePage"/);
     assert.doesNotMatch(html, /Our team of|Unser Team aus|uzman ekibimiz/i);
     assert.doesNotMatch(html, /larger team|permanent Orkestr team|größer dar|dauerhaftes Orkestr-Team|daha büyük bir ekip|kalıcı bir Orkestr ekibi|göstermez/i);
+  }
+});
+
+test("public copy avoids defensive internal-positioning language across every locale", () => {
+  const sitemap = renderPublicSitemap(baseEnv);
+  const indexedPaths = [...sitemap.matchAll(/<loc>https:\/\/product\.example\.test([^<]*)<\/loc>/g)].map((match) => match[1] || "/");
+  const utilityPaths = ["/project", "/de/projekt", "/tr/proje", "/privacy", "/terms", "/impressum", "/acceptable-use", "/data-deletion", "/support", "/beta"];
+  const banned = /pretend|larger team|permanent Orkestr team|größer dar|dauerhaftes Orkestr-Team|daha büyük bir ekip|kalıcı bir Orkestr ekibi|honest no-fit|ehrliche Absage|uygun değil yanıtı|modischer Technologie|moda bir teknoloji|not every project|nicht jedes Projekt|her proje her|we do not prescribe|empfehlen keine KI|önermiyoruz|nützlichen Teil|gerekli kısmı|more than a hand-off|mehr als eine Software-Übergabe|teslim edip gitmek/i;
+  const paths = [...new Set([...indexedPaths, ...utilityPaths])];
+  assert.equal(paths.length, 42);
+  for (const path of paths) {
+    const html = renderPublicSite(path, baseEnv, { host: "product.example.test" });
+    assert.doesNotMatch(html, banned, path);
+  }
+});
+
+test("localized commercial routes do not leak English section labels", () => {
+  const sitemap = renderPublicSitemap(baseEnv);
+  const paths = [...sitemap.matchAll(/<loc>https:\/\/product\.example\.test\/(de|tr)(\/[^<]*)?<\/loc>/g)].map((match) => `/${match[1]}${match[2] || ""}`);
+  paths.push("/de/projekt", "/tr/proje");
+  assert.equal(new Set(paths).size, 22);
+  for (const path of new Set(paths)) {
+    const html = renderPublicSite(path, baseEnv, { host: "product.example.test" });
+    assert.doesNotMatch(html, /BUSINESS SYSTEMS &amp; AUTOMATION|PROJECT DISCOVERY|ORKESTR CONSOLE · PUBLIC DEMO/, path);
   }
 });
 
@@ -167,10 +194,10 @@ test("commercial detail pages keep plain-language headings, evidence, limitation
 
 test("solution pages are bounded, truthful, and preserve the specialized automation audit", () => {
   const expectations = [
-    ["/websites-commerce", "Software first", "standard web technologies"],
-    ["/business-systems", "Modernization without a blind rewrite", "staged migration"],
+    ["/websites-commerce", "Strong software", "standard web technologies"],
+    ["/business-systems", "Staged modernization", "staged migration"],
     ["/opportunity-intelligence", "Never manually search", "public or explicitly authorized"],
-    ["/web-data-monitoring", "Scraping is a technique", "does not bypass access controls"],
+    ["/web-data-monitoring", "Reliable, structured data", "does not bypass access controls"],
     ["/automation", "Persistent work", "Book a Workflow Audit"],
   ];
   for (const [path, heading, boundary] of expectations) {

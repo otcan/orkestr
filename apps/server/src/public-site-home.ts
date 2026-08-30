@@ -73,12 +73,12 @@ export function commercialHomePage(): PublicPage {
   </section>
 
   <section class="v4-section v4-proof" id="platform" aria-labelledby="proof-title">
-    <div class="v4-proof-copy"><p class="section-index">BUILT ON ORKESTR</p><h2 id="proof-title">More than a hand-off.</h2><p>When a system needs scheduled work, browser execution, persistent jobs, human decisions, or recovery, the Orkestr operating layer keeps that work visible and controlled.</p><p>Not every project needs every capability. We use the simplest architecture that fits the requirement.</p><ul><li>APIs when available</li><li>Controlled browser execution when appropriate</li><li>Explicit access and human review where needed</li></ul><a class="text-link inverse-link" href="/security" data-event="security_approach_click">See how access is controlled <span aria-hidden="true">→</span></a></div>
+    <div class="v4-proof-copy"><p class="section-index">BUILT ON ORKESTR</p><h2 id="proof-title">Built to keep working after launch.</h2><p>When a system needs scheduled work, browser execution, persistent jobs, human decisions, or recovery, the Orkestr operating layer keeps that work visible and controlled.</p><p>Each project uses the smallest set of capabilities needed for the requirement.</p><ul><li>APIs when available</li><li>Controlled browser execution when appropriate</li><li>Explicit access and human review where needed</li></ul><a class="text-link inverse-link" href="/security" data-event="security_approach_click">See how access is controlled <span aria-hidden="true">→</span></a></div>
     ${renderConsoleEvidence()}
   </section>
 
   <section class="v4-section v4-final" aria-labelledby="final-title">
-    <p class="section-index">START WITH 20 MINUTES</p><h2 id="final-title">Tell us what should work better.</h2><p>A short conversation is enough to decide whether there is a credible next step. No technical specification and no platform migration required.</p><div class="actions"><a class="button button-light" href="/project#book" data-event="book_project_final">Book a 20-minute project call</a><a class="text-link inverse-link" href="/project#quick-project-form" data-event="quick_project_final">Or describe it in 60 seconds <span aria-hidden="true">→</span></a></div>
+    <p class="section-index">START WITH 20 MINUTES</p><h2 id="final-title">Tell us what should work better.</h2><p>A short conversation is enough to clarify the need and identify a practical next step. No technical specification and no platform migration required.</p><div class="actions"><a class="button button-light" href="/project#book" data-event="book_project_final">Book a 20-minute project call</a><a class="text-link inverse-link" href="/project#quick-project-form" data-event="quick_project_final">Or describe it in 60 seconds <span aria-hidden="true">→</span></a></div>
   </section>
 </main>`,
   };
