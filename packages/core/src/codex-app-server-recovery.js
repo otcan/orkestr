@@ -186,6 +186,7 @@ function autoSafeResetCooldownActive(thread = {}, env = process.env) {
 
 function shouldAutoSafeResetRepeatedStaleTurn(thread = {}, messages = [], turn = null, options = {}, env = process.env) {
   if (!turn) return false;
+  if (["model_capacity", "terminal_failure"].includes(clean(turn.reason).toLowerCase())) return false;
   if (typeof options.autoSafeResetThread !== "function") return false;
   if (!staleRecoveryAutoSafeResetEnabled(env)) return false;
   if (autoSafeResetCooldownActive(thread, env)) return false;
@@ -235,8 +236,29 @@ function staleRecoveryRuntimePatch(thread = {}, options = {}) {
     lastStaleTurnRecoveryCodexThreadId: codexId || null,
     lastStaleTurnRecoveryLatestUserMessageId: clean(turn?.latestUser?.id) || null,
     lastStaleTurnRecoveryReason: clean(options.reason) || null,
+    lastStaleTurnRecoveryError: clean(turn?.terminalError) || null,
     lastStaleTurnRecoveryAutoSafeResetAttempted: Boolean(options.autoSafeResetAttempted),
   };
+}
+
+function terminalFailureReason(error = "") {
+  const normalized = clean(error).toLowerCase();
+  if (!normalized) return "";
+  if (/selected model is at capacity|model\s+.+\s+at capacity|server is overloaded|temporarily unavailable due to (?:high )?demand/.test(normalized)) {
+    return "model_capacity";
+  }
+  return "terminal_failure";
+}
+
+function deliveredTurnWithTerminalFailure(thread = {}, turn = null) {
+  if (!turn || clean(thread?.runtime?.lastTurnStatus).toLowerCase() !== "failed") return turn;
+  const runtimeTurnId = clean(thread?.runtime?.lastTurnId);
+  const deliveredTurnId = clean(messageTurnId(turn?.latestUser));
+  if (!runtimeTurnId || !deliveredTurnId || runtimeTurnId !== deliveredTurnId) return turn;
+  const terminalError = clean(thread?.runtime?.lastTurnError || thread?.lastError);
+  const reason = terminalFailureReason(terminalError);
+  if (!reason) return turn;
+  return { ...turn, reason, terminalError };
 }
 
 async function persistStaleRecoveryRuntimePatch(threadId, runtimePatch = null, resetResult = null, env = process.env, extra = {}) {
@@ -310,6 +332,24 @@ function staleTurnNoticeText(reason = "no_assistant_response", options = {}) {
     ? options.doctorLines.map((line) => clean(line)).filter(Boolean)
     : [];
   const withDoctor = (lines) => [...lines, ...doctorLines].join("\n");
+  if (reason === "model_capacity") {
+    return withDoctor([
+      "Codex model temporarily unavailable",
+      "",
+      "Codex stopped because the selected model was at capacity.",
+      "Your progress updates and workspace changes were preserved.",
+      "Use /model to select another available model, then send the next instruction normally to continue.",
+    ]);
+  }
+  if (reason === "terminal_failure") {
+    return withDoctor([
+      "Codex turn failed",
+      "",
+      "Codex reported a terminal error before a final answer was recorded.",
+      "Your progress updates and workspace changes were preserved.",
+      "Send the next instruction normally to retry, or switch models if the failure repeats.",
+    ]);
+  }
   if (noticeCause === "dynamic_exec_callback_stalled") {
     return withDoctor([
       "Codex tool response lost",
@@ -638,7 +678,7 @@ async function appendStaleTurnNotice(thread, messages, turn, env = process.env, 
     thread,
     await listThreadMessages(thread.id, env).catch(() => messages),
   );
-  const freshTurn = refreshedTurnState(freshMessages, turn);
+  const freshTurn = deliveredTurnWithTerminalFailure(thread, refreshedTurnState(freshMessages, turn));
   if (!freshTurn) return { notice: null, appended: false, skipped: true, messages: freshMessages, turn: null };
   const latestUser = freshTurn?.latestUser || null;
   const noticeCause = recoveryNoticeCause(options);
@@ -772,6 +812,8 @@ function recoveryScanKey(thread, clientState, messagesFingerprint, options = {},
     safeResetAt: runtime.safeReset?.resetAt || thread?.executor?.metadata?.lastSafeReset?.resetAt || "",
     pendingRequest: runtime.pendingRequest || null,
     lastTurnStatus: runtime.lastTurnStatus || "",
+    lastTurnId: runtime.lastTurnId || "",
+    lastTurnError: runtime.lastTurnError || "",
     codexStatus: runtime.codexStatus || null,
     autoSafeResetAvailable: typeof options.autoSafeResetThread === "function",
     clientActiveTurnId: clientState?.activeTurnId || "",
@@ -834,7 +876,7 @@ export async function recoverStaleCodexAppServerTurns(env = process.env, options
       if (updated) thread = updated;
     }
     const scanMessages = recoveryScanMessages(messages, staleRuntimeCandidate, env);
-    const incompleteTurn = latestIncompleteDeliveredTurn(scanMessages);
+    const incompleteTurn = deliveredTurnWithTerminalFailure(thread, latestIncompleteDeliveredTurn(scanMessages));
     let staleRuntime = staleRuntimeCandidate;
     let recoveryBlockedByPendingApproval = staleRecoveryPendingApproval(thread, clientState);
     let shouldRecoverTurn = recoveryBlockedByPendingApproval ? false : shouldRecoverIncompleteTurn(thread, clientState, incompleteTurn, env);
@@ -912,7 +954,7 @@ export async function recoverStaleCodexAppServerTurns(env = process.env, options
     if (noticeTurn) {
       const syncResult = await syncCodexHistoryBeforeRecoveryNotice(thread, env);
       noticeMessages = recoveryEligibleMessages(thread, await listThreadMessages(thread.id, env).catch(() => messages));
-      freshNoticeTurn = refreshedTurnState(noticeMessages, noticeTurn);
+      freshNoticeTurn = deliveredTurnWithTerminalFailure(thread, refreshedTurnState(noticeMessages, noticeTurn));
       if (!freshNoticeTurn && syncResult?.synced) {
         await appendEvent({
           type: "codex_app_server_recovery_history_sync_resolved",
@@ -931,7 +973,8 @@ export async function recoverStaleCodexAppServerTurns(env = process.env, options
     }
     if (freshNoticeTurn) {
       const noticeCause = recoveryNoticeCause(options, activeTurnRecoveryCause);
-      const repeatAfterSafeResetLines = durableStaleRecoveryRepeated(thread, freshNoticeTurn)
+      const terminalFailure = ["model_capacity", "terminal_failure"].includes(clean(freshNoticeTurn?.reason).toLowerCase());
+      const repeatAfterSafeResetLines = !terminalFailure && durableStaleRecoveryRepeated(thread, freshNoticeTurn)
         ? [
             "",
             "Doctor: this replay followed an earlier stale-turn recovery, so Orkestr is escalating across the fresh Codex session.",
@@ -1000,12 +1043,22 @@ export async function recoverStaleCodexAppServerTurns(env = process.env, options
         state: "ready",
         activeTurnId: null,
         pendingRequest: null,
-        codexStatus: shouldRecoverActiveTurn ? { type: "idle" } : clientState?.status || { type: "idle" },
+        codexStatus: { type: "idle" },
         recoveredAt,
         ...(recoveryRuntimePatch || {}),
       },
     }, env).catch(() => null);
     if (recoveredThread) thread = recoveredThread;
+    if (client) {
+      client.threadStates.set(codexId, {
+        ...(client.threadStates.get(codexId) || clientState || {}),
+        activeTurnId: "",
+        activeTurnIds: [],
+        activeTurnObservedAt: null,
+        status: { type: "idle" },
+        statusObservedAt: recoveredAt,
+      });
+    }
     recovered += 1;
     let autoSafeResetResult = null;
     let autoSafeResetError = "";

@@ -4345,6 +4345,7 @@ async function reconcileDetachedRolloutCompletion(thread, runtime, completedTurn
       activeTurnId: null,
       lastTurnId: turnId,
       lastTurnStatus: "completed",
+      lastTurnError: null,
       codexStatus: { type: "idle" },
       updatedAt: nowIso(),
     },
