@@ -89,7 +89,9 @@ function assertPublicShell(html) {
   assert.match(html, /ORKESTR CONSOLE · PUBLIC DEMO/);
   assert.match(html, /Human review/);
   assert.match(html, /data-event="book_project_hero"/);
-  assert.match(html, /Our internal system is old/);
+  assert.match(html, /connected-business-system\.png/);
+  assert.match(html, /Approved batch starts from a read-only snapshot/);
+  assert.match(html, /Decision hook/);
   assert.match(html, /Internal Ordering Renewal/);
   assert.match(html, /START WITH 20 MINUTES/);
   assert.doesNotMatch(html, /Personal beta/);
