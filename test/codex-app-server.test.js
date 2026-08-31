@@ -1719,6 +1719,7 @@ test("Codex app-server failed turns record reused refresh tokens as broken auth"
     const updated = await getThread(started.thread.id, env);
     const health = await readCodexAuthHealth(env);
     assert.equal(updated.state, "failed");
+    assert.match(updated.runtime.lastTurnError, /refresh token was already used/);
     assert.equal(health.state, "broken");
     assert.equal(health.reason, "codex_refresh_token_reused");
     assert.equal(health.threadId, started.thread.id);
@@ -4344,6 +4345,104 @@ test("Codex app-server recovery reports progress-only turns with no final answer
     assert.equal(second.appended, 0);
     assert.equal(messagesAfterSecond.filter((message) => message.source === "orkestr_runtime" && message.phase === "runtime_interrupted").length, 1);
     assert.equal(messagesAfterSecond.find((message) => message.id === notice.id)?.noticeCause, "orkestr_restart");
+  } finally {
+    stopCodexAppServerClients();
+  }
+});
+
+test("Codex app-server recovery reports model capacity without safe-resetting preserved work", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-capacity-recovery-"));
+  const fake = await createFakeCodex(home);
+  const env = {
+    ORKESTR_HOME: path.join(home, "orkestr"),
+    HOME: path.join(home, "runtime-home"),
+    PATH: `${fake.bin}${path.delimiter}${process.env.PATH || ""}`,
+    FAKE_CODEX_STATE: fake.stateFile,
+    ORKESTR_CODEX_APP_SERVER_STALE_FINAL_GRACE_MS: "0",
+    ORKESTR_CODEX_APP_SERVER_AUTO_SAFE_RESET_COOLDOWN_MS: "0",
+  };
+  let safeResetCalls = 0;
+  try {
+    const thread = await createThread({
+      id: "app-server-capacity-recovery-thread",
+      name: "App Server Capacity Recovery Thread",
+      state: "failed",
+      lastError: "Selected model is at capacity. Please try a different model.",
+      executorId: "codex",
+      executor: {
+        type: "codex",
+        transport: "app-server",
+        codexThreadId: "capacity-recovery-codex-thread",
+        codexSessionId: "capacity-recovery-codex-thread",
+      },
+      runtimeKind: "codex-app-server",
+      codexThreadId: "capacity-recovery-codex-thread",
+      codexSessionId: "capacity-recovery-codex-thread",
+      runtime: {
+        runtimeKind: "codex-app-server",
+        state: "failed",
+        activeTurnId: null,
+        codexStatus: { type: "systemError" },
+        lastTurnId: "capacity-turn",
+        lastTurnStatus: "failed",
+        lastTurnError: "Selected model is at capacity. Please try a different model.",
+        staleTurnRecoveryStreak: 1,
+      },
+    }, env);
+    const input = await appendThreadMessage(thread.id, {
+      role: "user",
+      source: "whatsapp",
+      connector: "whatsapp",
+      chatId: "chat-capacity-recovery",
+      text: "Continue the release work.",
+      state: "completed",
+      deliveryState: "delivered",
+      observedVia: "codex_app_server_turn_start",
+      codexThreadId: "capacity-recovery-codex-thread",
+      codexTurnId: "capacity-turn",
+      recoveryContinuation: true,
+      replayedFromMessageId: "prior-input",
+    }, env);
+    await appendThreadMessage(thread.id, {
+      role: "assistant",
+      source: "codex-app-server",
+      phase: "commentary",
+      text: "The workspace edits are complete; I am running verification.",
+      state: "completed",
+      parentMessageId: input.id,
+      connector: "whatsapp",
+      chatId: "chat-capacity-recovery",
+      codexThreadId: "capacity-recovery-codex-thread",
+      codexTurnId: "capacity-turn",
+    }, env);
+
+    const result = await recoverAfterConfirmedRuntimeLoss(env, {
+      autoSafeResetThread: async () => {
+        safeResetCalls += 1;
+        return { ok: true };
+      },
+    });
+    const updated = await getThread(thread.id, env);
+    const messages = await listThreadMessages(thread.id, env);
+    const notice = messages.find((message) => message.source === "orkestr_runtime" && message.phase === "runtime_interrupted");
+
+    assert.equal(result.recovered, 1);
+    assert.equal(result.appended, 1);
+    assert.equal(result.autoSafeReset, 0);
+    assert.equal(safeResetCalls, 0);
+    assert.equal(updated.state, "ready");
+    assert.equal(updated.lastError, null);
+    assert.equal(updated.runtime.lastTurnStatus, "failed");
+    assert.match(updated.runtime.lastTurnError, /Selected model is at capacity/);
+    assert.equal(updated.runtime.codexStatus.type, "idle");
+    assert.equal(updated.runtime.lastStaleTurnRecoveryReason, "model_capacity");
+    assert.match(updated.runtime.lastStaleTurnRecoveryError, /Selected model is at capacity/);
+    assert.equal(updated.runtime.lastStaleTurnRecoveryAutoSafeResetAttempted, false);
+    assert.equal(notice.recoveryReason, "model_capacity");
+    assert.match(notice.text, /^Codex model temporarily unavailable/);
+    assert.match(notice.text, /selected model was at capacity/);
+    assert.match(notice.text, /workspace changes were preserved/);
+    assert.doesNotMatch(notice.text, /safe-reset|Doctor:/);
   } finally {
     stopCodexAppServerClients();
   }

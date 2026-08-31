@@ -834,6 +834,7 @@ function containedRuntimeBase(runtime = {}) {
     "pendingRequest",
     "lastTurnId",
     "lastTurnStatus",
+    "lastTurnError",
     "progress",
     "recoveredAt",
   ]) {
@@ -2469,6 +2470,7 @@ async function reconcileHydratedCodexTurnCompletion(thread, completedTurnId, env
       activeTurnId: null,
       lastTurnId: turnId,
       lastTurnStatus: "completed",
+      lastTurnError: null,
       state: "ready",
       codexStatus: { type: "idle" },
       updatedAt: nowIso(),
