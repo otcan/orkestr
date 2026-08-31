@@ -111,18 +111,25 @@ function structuredData(page: PublicPage, env = process.env) {
   const locale = page.locale || "en";
   const canonical = publicCanonicalUrl(page.canonicalPath || pageHref(page.id, locale), env);
   const repo = normalizePublicUrl(publicRepoUrl(env));
-  const personId = `${base}/team#oguzcan-unver`;
+  const founderId = `${base}/team#oguzcan-unver`;
+  const developerId = `${base}/team#firat-kahya`;
   const graph: Array<Record<string, unknown>> = [
     {
       "@type": "Organization", "@id": `${base}/#organization`, name: "Orkestr", url: `${base}/`,
-      founder: { "@id": personId }, ...(repo ? { sameAs: [repo] } : {}),
+      founder: { "@id": founderId }, employee: [{ "@id": founderId }, { "@id": developerId }], ...(repo ? { sameAs: [repo] } : {}),
     },
     {
       "@type": "WebSite", "@id": `${base}/#website`, name: "Orkestr", url: `${base}/`,
       inLanguage: publicLocales.map((item) => publicLocaleTags[item]), publisher: { "@id": `${base}/#organization` },
     },
     {
-      "@type": "Person", "@id": personId, name: "Oğuzcan Ünver", jobTitle: "Founder",
+      "@type": "Person", "@id": founderId, name: "Oğuzcan Ünver", jobTitle: "Founder",
+      image: `${base}/assets/site/oguzcan-unver.png`,
+      worksFor: { "@id": `${base}/#organization` },
+    },
+    {
+      "@type": "Person", "@id": developerId, name: "Fırat Kahya", jobTitle: "Full-stack developer",
+      image: `${base}/assets/site/firat-kahya.jpeg`,
       worksFor: { "@id": `${base}/#organization` },
     },
   ];
@@ -136,7 +143,7 @@ function structuredData(page: PublicPage, env = process.env) {
     });
   }
   if (page.id === "team" && canonical) {
-    graph.push({ "@type": "ProfilePage", "@id": `${canonical}#profile`, url: canonical, inLanguage: publicLocaleTags[locale], mainEntity: { "@id": personId } });
+    graph.push({ "@type": "AboutPage", "@id": `${canonical}#team`, url: canonical, inLanguage: publicLocaleTags[locale], mainEntity: { "@id": `${base}/#organization` }, about: [{ "@id": founderId }, { "@id": developerId }] });
   }
   const json = JSON.stringify({ "@context": "https://schema.org", "@graph": graph }).replace(/</g, "\\u003c");
   return `<script type="application/ld+json">${json}</script>`;

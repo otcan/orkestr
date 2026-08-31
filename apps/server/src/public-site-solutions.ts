@@ -1,4 +1,5 @@
 import type { PublicPage, PublicPageId } from "./public-site-config.js";
+import { renderSolutionVisual } from "./public-site-visuals.js";
 
 type SolutionDefinition = {
   id: PublicPageId;
@@ -112,6 +113,7 @@ export function solutionPage(pageId: PublicPageId): PublicPage {
     canonicalPath: solution.path,
     body: `<main id="main-content">
       <section class="page-hero solution-hero"><p class="section-index">${solution.verb} · BUSINESS SYSTEMS &amp; AUTOMATION</p><h1>${solution.heading}</h1><p class="lead">${solution.lead}</p><blockquote>“${solution.request}”</blockquote><div class="actions"><a class="button" href="/project#book" data-event="solution_describe_project">Book a project call</a>${solution.automationAudit ? '<a class="button button-ghost" href="/workflow" data-event="automation_audit_click">Book a Workflow Audit</a>' : ""}</div></section>
+      ${renderSolutionVisual(solution.id)}
       <section class="section solution-outcomes" aria-labelledby="outcomes-title"><div><p class="section-index">POSSIBLE OUTCOMES</p><h2 id="outcomes-title">A bounded system—not an open-ended transformation.</h2></div><ul>${solution.outcomes.map((outcome) => `<li>${outcome}</li>`).join("")}</ul></section>
       <section class="section solution-delivery" aria-labelledby="delivery-title"><div><p class="section-index">FROM REQUIREMENT TO OPERATION</p><h2 id="delivery-title">What the work can include.</h2></div><ol class="phase-list">${solution.stages.map(([title, text], index) => `<li><span>${String(index + 1).padStart(2, "0")}</span><div><h3>${title}</h3><p>${text}</p></div></li>`).join("")}</ol></section>
       <section class="why-section solution-proof" aria-labelledby="proof-title"><div><p class="section-index">WHY ORKESTR</p><h2 id="proof-title">${solution.proofTitle}</h2></div><p class="section-lead">${solution.proofText}</p></section>

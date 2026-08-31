@@ -8,17 +8,26 @@ function legalBody(eyebrow: string, heading: string, intro: string, sections: Ar
 
 export function legalPage(pageId: PublicPageId, env = process.env): PublicPage {
   if (pageId === "privacy") return { id: "privacy", canonicalPath: "/privacy", ...publicPrivacyPage(env) };
-  const legalName = String(env.ORKESTR_PUBLIC_LEGAL_NAME || "Orkestr").trim();
-  const legalAddress = String(env.ORKESTR_PUBLIC_LEGAL_ADDRESS || "Postal provider details are available from the operator contact.").trim();
+  const legalName = String(env.ORKESTR_PUBLIC_LEGAL_NAME || "Taraftech UG (haftungsbeschränkt)").trim();
+  const legalAddress = String(env.ORKESTR_PUBLIC_LEGAL_ADDRESS || "Herzogstraße 26, 66953 Pirmasens, Deutschland").trim();
+  const legalRepresentative = String(env.ORKESTR_PUBLIC_LEGAL_REPRESENTATIVE || "Oğuzcan Ünver").trim();
+  const legalRegister = String(env.ORKESTR_PUBLIC_LEGAL_REGISTER || "Handelsregister HRB 31600, Amtsgericht Zweibrücken").trim();
+  const legalPhone = String(env.ORKESTR_PUBLIC_LEGAL_PHONE || "+49 (0) 6331 4913 896").trim();
+  const legalEmail = String(env.ORKESTR_PUBLIC_LEGAL_EMAIL || "info@taraftech.de").trim();
+  const legalTaxNumber = String(env.ORKESTR_PUBLIC_LEGAL_TAX_NUMBER || "35/666/00831").trim();
   const pages: Partial<Record<PublicPageId, PublicPage>> = {
     impressum: {
       id: "impressum", title: "Impressum", summary: "Provider and contact information for the operator of the Orkestr commercial website.",
-      body: legalBody("PROVIDER INFORMATION", "Impressum", "Provider and contact information for this Orkestr commercial deployment.", [
-        ["Provider", legalName],
-        ["Postal address", legalAddress],
-        ["Contact", publicContact(env)],
-        ["Service description", "Managed discovery, design, build, deployment, and operation of bounded business software, data systems, and automation. Some projects use the Orkestr open-source operating core and customer-specific private configuration."],
-        ["Deployment responsibility", "The operator named here is responsible for this commercial website. Self-hosted and customer-controlled Orkestr environments remain the responsibility of their respective operators."],
+      body: legalBody("ANGABEN GEMÄẞ § 5 DDG", "Impressum", "Anbieterkennzeichnung und Kontaktangaben für die geschäftsmäßige Orkestr-Website.", [
+        ["Diensteanbieter", legalName],
+        ["Anschrift", legalAddress],
+        ["Vertreten durch", legalRepresentative],
+        ["Registereintrag", legalRegister],
+        ["Kontakt", `Telefon: ${legalPhone} · E-Mail: ${legalEmail}`],
+        ["Steuerangaben", `Steuernummer: ${legalTaxNumber}`],
+        ["Leistungsangebot", "Konzeption, Entwicklung, Modernisierung, Bereitstellung und betreuter Betrieb abgegrenzter Unternehmenssoftware, Datensysteme und Automatisierung. Projekte können den öffentlichen Orkestr-Kern und kundenspezifische private Konfiguration verbinden."],
+        ["Verbraucherstreitbeilegung", "Wir sind weder verpflichtet noch bereit, an Streitbeilegungsverfahren vor einer Verbraucherschlichtungsstelle teilzunehmen."],
+        ["Verantwortung für Bereitstellungen", "Der hier genannte Diensteanbieter ist für diese geschäftliche Website verantwortlich. Selbst betriebene und kundenseitig kontrollierte Orkestr-Umgebungen bleiben in der Verantwortung des jeweiligen Betreibers."],
       ]),
     },
     terms: {

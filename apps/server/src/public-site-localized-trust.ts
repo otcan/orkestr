@@ -1,4 +1,5 @@
 import { publicPagePath, type PublicLocale, type PublicPage } from "./public-site-config.js";
+import { renderSecurityDocumentEvidence } from "./public-site-security-evidence.js";
 
 type TrustCopy = {
   title: string; summary: string; eyebrow: string; heading: string; lead: string;
@@ -45,23 +46,37 @@ const deploymentCopy: Record<"de" | "tr", TrustCopy> = {
   },
 };
 
-export function localizedTrustPage(pageId: "security" | "deployment", locale: "de" | "tr"): PublicPage {
+export function localizedTrustPage(pageId: "security" | "deployment", locale: "de" | "tr", env = process.env): PublicPage {
   const copy = pageId === "security" ? securityCopy[locale] : deploymentCopy[locale];
+  const evidence = pageId === "security" ? renderSecurityDocumentEvidence(locale, env) : "";
   return {
     id: pageId, locale, title: copy.title, summary: copy.summary, canonicalPath: publicPagePath(pageId, locale),
-    body: `<main id="main-content"><section class="page-hero"><p class="section-index">${copy.eyebrow}</p><h1>${copy.heading}</h1><p class="lead">${copy.lead}</p></section><section class="section trust-section"><div class="section-heading"><p class="section-index">${copy.sectionLabel}</p><h2>${copy.sectionHeading}</h2></div><div class="trust-pillars">${copy.cards.map(([title, text], index) => `<article><span>0${index + 1}</span><h3>${title}</h3><p>${text}</p></article>`).join("")}</div></section><section class="section boundary-table"><div><p class="section-index">${copy.boundaryLabel}</p><h2>${copy.boundaryHeading}</h2></div><dl>${copy.boundaries.map(([term, text]) => `<div><dt>${term}</dt><dd>${text}</dd></div>`).join("")}</dl></section><section class="section limitations"><div><p class="section-index">${copy.limitLabel}</p><h2>${copy.limitHeading}</h2></div><ul>${copy.limits.map((text) => `<li>${text}</li>`).join("")}</ul></section><section class="final-cta compact"><h2>${copy.cta}</h2><a class="button button-light" href="${publicPagePath("project", locale)}#book">${copy.book}</a></section></main>`,
+    body: `<main id="main-content"><section class="page-hero"><p class="section-index">${copy.eyebrow}</p><h1>${copy.heading}</h1><p class="lead">${copy.lead}</p></section><section class="section trust-section"><div class="section-heading"><p class="section-index">${copy.sectionLabel}</p><h2>${copy.sectionHeading}</h2></div><div class="trust-pillars">${copy.cards.map(([title, text], index) => `<article><span>0${index + 1}</span><h3>${title}</h3><p>${text}</p></article>`).join("")}</div></section>${evidence}<section class="section boundary-table"><div><p class="section-index">${copy.boundaryLabel}</p><h2>${copy.boundaryHeading}</h2></div><dl>${copy.boundaries.map(([term, text]) => `<div><dt>${term}</dt><dd>${text}</dd></div>`).join("")}</dl></section><section class="section limitations"><div><p class="section-index">${copy.limitLabel}</p><h2>${copy.limitHeading}</h2></div><ul>${copy.limits.map((text) => `<li>${text}</li>`).join("")}</ul></section><section class="final-cta compact"><h2>${copy.cta}</h2><a class="button button-light" href="${publicPagePath("project", locale)}#book">${copy.book}</a></section></main>`,
   };
 }
 
-const teamCopy: Record<PublicLocale, { title: string; summary: string; eyebrow: string; heading: string; lead: string; role: string; intro: string; work: Array<[string, string]>; principle: string; transparent: string; cta: string; book: string }> = {
+type TeamCopy = {
+  title: string;
+  summary: string;
+  eyebrow: string;
+  heading: string;
+  lead: string;
+  peopleLabel: string;
+  peopleHeading: string;
+  roles: [string, string];
+  cta: string;
+  book: string;
+};
+
+const teamCopy: Record<PublicLocale, TeamCopy> = {
   en: {
-    title: "Team", summary: "Meet Oğuzcan Ünver, the founder leading Orkestr project discovery, architecture, implementation, deployment, and managed operation.", eyebrow: "TEAM", heading: "Orkestr is led by Oğuzcan Ünver.", lead: "From the first conversation through launch and ongoing operation, you work directly with Oğuzcan.", role: "Founder · Orkestr", intro: "Oğuzcan leads every Orkestr project from discovery and solution architecture through implementation, deployment, and ongoing operation.", work: [["Understand the work", "Turn an unclear business need into users, systems, constraints, risks, and a definition of success."], ["Build the system", "Combine conventional software, data engineering, integrations, browser execution, and AI where each creates practical value."], ["Keep it working", "Define production ownership, monitoring, maintenance, support, and a safe path for change."]], principle: "Build the simplest system that can reliably produce the required business outcome.", transparent: "That direct working relationship keeps decisions fast and responsibility clear.", cta: "Tell Oğuzcan what should work better.", book: "Book a project call",
+    title: "Team", summary: "Meet Oğuzcan Ünver and Fırat Kahya, the people planning and building Orkestr business systems.", eyebrow: "TEAM", heading: "Plan the work with the people building it.", lead: "The same people who shape the scope stay close to architecture, implementation, release, and operation.", peopleLabel: "CORE TEAM", peopleHeading: "Direct access. Clear ownership.", roles: ["Founder · Product & delivery", "Full-stack developer"], cta: "What should your business system do better?", book: "Book a project call",
   },
   de: {
-    title: "Team", summary: "Lernen Sie Oğuzcan Ünver kennen, den Gründer, der bei Orkestr Projektklärung, Architektur, Umsetzung, Bereitstellung und den betreuten Betrieb verantwortet.", eyebrow: "TEAM", heading: "Orkestr wird von Oğuzcan Ünver geführt.", lead: "Vom ersten Gespräch bis zum Produktivbetrieb arbeiten Sie direkt mit Oğuzcan.", role: "Gründer · Orkestr", intro: "Oğuzcan führt jedes Orkestr-Projekt von der Projektklärung und Lösungsarchitektur über die Umsetzung und Bereitstellung bis zum laufenden Betrieb.", work: [["Die Arbeit verstehen", "Einen noch unklaren Bedarf in Nutzergruppen, Systeme, Rahmenbedingungen, Risiken und messbare Erfolgskriterien übersetzen."], ["Das System bauen", "Klassische Software, Datenverarbeitung, Integrationen, Browserausführung und KI dort verbinden, wo sie praktischen Nutzen schaffen."], ["Den Betrieb sichern", "Produktionsverantwortung, Monitoring, Wartung, Support und einen sicheren Änderungsweg festlegen."]], principle: "Das einfachste System bauen, das das benötigte Geschäftsergebnis zuverlässig liefert.", transparent: "Diese direkte Zusammenarbeit sorgt für kurze Entscheidungswege und klare Verantwortung.", cta: "Erzählen Sie Oğuzcan, was besser funktionieren soll.", book: "Projektgespräch buchen",
+    title: "Team", summary: "Lernen Sie Oğuzcan Ünver und Fırat Kahya kennen – die Menschen, die Orkestr-Unternehmenssysteme planen und entwickeln.", eyebrow: "TEAM", heading: "Planen Sie direkt mit den Menschen, die das System bauen.", lead: "Die Menschen, die den Umfang klären, bleiben auch bei Architektur, Umsetzung, Release und Betrieb nah am Projekt.", peopleLabel: "KERNTEAM", peopleHeading: "Direkter Austausch. Klare Verantwortung.", roles: ["Gründer · Produkt & Umsetzung", "Full-Stack-Entwickler"], cta: "Was soll in Ihrem Unternehmen besser funktionieren?", book: "Projektgespräch buchen",
   },
   tr: {
-    title: "Ekip", summary: "Orkestr projelerinde keşif, çözüm mimarisi, geliştirme, devreye alma ve işletim sorumluluğunu üstlenen kurucu Oğuzcan Ünver'i tanıyın.", eyebrow: "EKİP", heading: "Orkestr'i Oğuzcan Ünver yönetiyor.", lead: "İlk görüşmeden canlı işletime kadar projenizi doğrudan Oğuzcan ile yürütürsünüz.", role: "Kurucu · Orkestr", intro: "Oğuzcan; ihtiyaçların netleştirilmesinden çözüm mimarisine, geliştirmeden devreye alma ve işletime kadar her Orkestr projesini doğrudan yürütür.", work: [["İhtiyacı anlamak", "Belirsiz bir iş ihtiyacını kullanıcılar, sistemler, kısıtlar, riskler ve ölçülebilir başarı kriterleriyle netleştirir."], ["Sistemi geliştirmek", "Standart yazılımı, veri mühendisliğini, entegrasyonları, tarayıcı işlemlerini ve yapay zekâyı ihtiyaca göre birleştirir."], ["Sistemi işletmek", "Canlı ortam sorumluluğunu, izlemeyi, bakımı, desteği ve güvenli değişiklik sürecini belirler."]], principle: "Gereken iş sonucunu güvenilir biçimde üreten en sade sistemi kurmak.", transparent: "Bu doğrudan çalışma biçimi kararları hızlandırır ve sorumluluğu net tutar.", cta: "Neyin daha iyi çalışması gerektiğini Oğuzcan'a anlatın.", book: "Proje görüşmesi planla",
+    title: "Ekip", summary: "Orkestr iş sistemlerini planlayan ve geliştiren Oğuzcan Ünver ile Fırat Kahya'yı tanıyın.", eyebrow: "EKİP", heading: "Projeyi, sistemi geliştiren insanlarla birlikte planlayın.", lead: "Kapsamı belirleyen ekip; mimari, geliştirme, yayın ve işletim boyunca projenin içinde kalır.", peopleLabel: "ÇEKİRDEK EKİP", peopleHeading: "Doğrudan iletişim. Net sorumluluk.", roles: ["Kurucu · Ürün ve proje teslimi", "Full Stack Geliştirici"], cta: "İşletmenizde neyin daha iyi çalışması gerekiyor?", book: "Proje görüşmesi planla",
   },
 };
 
@@ -69,6 +84,6 @@ export function teamPage(locale: PublicLocale = "en"): PublicPage {
   const copy = teamCopy[locale];
   return {
     id: "team", locale, title: copy.title, summary: copy.summary, canonicalPath: publicPagePath("team", locale),
-    body: `<main id="main-content"><section class="page-hero team-hero"><p class="section-index">${copy.eyebrow}</p><h1>${copy.heading}</h1><p class="lead">${copy.lead}</p></section><section class="section team-profile"><article class="founder-card"><span class="founder-monogram" aria-hidden="true">OÜ</span><div><p class="section-index">${copy.role}</p><h2>Oğuzcan Ünver</h2><p>${copy.intro}</p></div></article><div class="team-work">${copy.work.map(([title, text], index) => `<article><span>0${index + 1}</span><h3>${title}</h3><p>${text}</p></article>`).join("")}</div></section><section class="section team-principle"><blockquote>${copy.principle}</blockquote><p>${copy.transparent}</p></section><section class="final-cta compact"><h2>${copy.cta}</h2><a class="button button-light" href="${publicPagePath("project", locale)}#book">${copy.book}</a></section></main>`,
+    body: `<main id="main-content"><section class="page-hero team-hero"><p class="section-index">${copy.eyebrow}</p><h1>${copy.heading}</h1><p class="lead">${copy.lead}</p></section><section class="section team-directory" aria-labelledby="team-directory-title"><div class="team-directory-heading"><p class="section-index">${copy.peopleLabel}</p><h2 id="team-directory-title">${copy.peopleHeading}</h2></div><div class="team-grid"><article class="team-member-card" id="oguzcan-unver"><img src="/assets/site/oguzcan-unver.png" width="262" height="262" alt="Oğuzcan Ünver" loading="eager" decoding="async"><div><h3>Oğuzcan Ünver</h3><p>${copy.roles[0]}</p></div></article><article class="team-member-card" id="firat-kahya"><img src="/assets/site/firat-kahya.jpeg" width="261" height="262" alt="Fırat Kahya" loading="eager" decoding="async"><div><h3>Fırat Kahya</h3><p>${copy.roles[1]}</p></div></article></div></section><section class="final-cta compact"><h2>${copy.cta}</h2><a class="button button-light" href="${publicPagePath("project", locale)}#book">${copy.book}</a></section></main>`,
   };
 }

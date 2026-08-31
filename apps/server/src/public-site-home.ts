@@ -1,5 +1,6 @@
 import type { PublicPage } from "./public-site-config.js";
 import { renderConsoleEvidence } from "./public-site-components.js";
+import { renderConnectedExamples, renderHomepageSystemVisual } from "./public-site-visuals.js";
 
 const services = [
   {
@@ -45,11 +46,11 @@ export function commercialHomePage(): PublicPage {
       <div class="actions"><a class="button" href="/project#book" data-event="book_project_hero">Book a 20-minute project call</a><a class="button button-ghost" href="#services" data-event="see_services">See what we build</a></div>
       <ul class="v4-trust" aria-label="Engagement principles"><li>Start with the problem</li><li>Clear proposal before build</li><li>Managed after launch</li></ul>
     </div>
-    <article class="v4-brief-card" aria-label="Example Orkestr project brief">
+    <div class="v4-hero-visual">${renderHomepageSystemVisual()}<article class="v4-brief-card" aria-label="Example Orkestr project brief">
       <div class="v4-brief-head"><span>PROJECT BRIEF</span><strong>Internal ordering system</strong></div>
       <dl><div><dt>Problem</dt><dd>An old tool no longer supports how orders are handled.</dd></div><div><dt>Build</dt><dd>A staged replacement around users, data, and approvals.</dd></div><div><dt>Operate</dt><dd>Deploy, monitor, support, and improve the live system.</dd></div></dl>
       <p><span aria-hidden="true">●</span> Outcome first. Technology second.</p>
-    </article>
+    </article></div>
   </section>
 
   <section class="v4-section v4-services" id="services" aria-labelledby="services-title">
@@ -59,11 +60,7 @@ export function commercialHomePage(): PublicPage {
 
   <section class="v4-section v4-examples" id="examples" aria-labelledby="examples-title">
     <div class="v4-section-head"><p class="section-index">START WITH A REAL PROBLEM</p><h2 id="examples-title">You do not need to arrive with a specification.</h2></div>
-    <div class="v4-example-list">
-      <article><span>BUILD</span><blockquote>“We need a new B2B website where customers can place orders.”</blockquote><p>Website, account experience, ordering, administration, and launch.</p></article>
-      <article><span>MODERNIZE</span><blockquote>“Our internal system is old, fragile, and no longer fits the business.”</blockquote><p>Discovery, replacement design, migration plan, and controlled cutover.</p></article>
-      <article><span>AUTOMATE</span><blockquote>“Our team repeatedly searches websites and moves the results by hand.”</blockquote><p>Authorized collection, structured data, review, alerts, and operation.</p></article>
-    </div>
+    ${renderConnectedExamples()}
     <a class="text-link" href="/use-cases" data-event="see_examples">See more examples <span aria-hidden="true">→</span></a>
   </section>
 
