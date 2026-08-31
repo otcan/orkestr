@@ -33,7 +33,7 @@ function publicPage(pageId: PublicPageId, env = process.env, locale: PublicLocal
     if (pageId === "use-cases") return localizedWhatWeBuildPage(locale);
     if (["websites-commerce", "business-systems", "opportunity-intelligence", "web-data-monitoring", "automation"].includes(pageId)) return localizedSolutionPage(pageId, locale);
     if (pageId === "project") return localizedProjectIntakePage(locale, env);
-    if (pageId === "security" || pageId === "deployment") return localizedTrustPage(pageId, locale);
+    if (pageId === "security" || pageId === "deployment") return localizedTrustPage(pageId, locale, env);
     if (pageId === "team") return teamPage(locale);
   }
   if (pageId === "home") return commercialHomePage();
@@ -63,7 +63,7 @@ export function renderPublicSiteCss() {
 export function renderPublicSitemap(env = process.env) {
   const localizedIds: PublicPageId[] = ["home", "use-cases", "websites-commerce", "business-systems", "automation", "web-data-monitoring", "opportunity-intelligence", "security", "deployment", "team"];
   const englishOnlyIds: PublicPageId[] = ["developers", "workflow"];
-  const lastmod = /^\d{4}-\d{2}-\d{2}$/.test(String(env.ORKESTR_PUBLIC_SITE_LASTMOD || "")) ? String(env.ORKESTR_PUBLIC_SITE_LASTMOD) : "2026-08-30";
+  const lastmod = /^\d{4}-\d{2}-\d{2}$/.test(String(env.ORKESTR_PUBLIC_SITE_LASTMOD || "")) ? String(env.ORKESTR_PUBLIC_SITE_LASTMOD) : "2026-08-31";
   const xml = (value: string) => value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;");
   const entries: string[] = [];
   for (const pageId of localizedIds) {

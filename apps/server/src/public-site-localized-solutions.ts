@@ -1,4 +1,5 @@
 import { publicPagePath, type PublicLocale, type PublicPage, type PublicPageId } from "./public-site-config.js";
+import { renderSolutionVisual } from "./public-site-visuals.js";
 
 type LocalizedSolution = {
   id: "websites-commerce" | "business-systems" | "opportunity-intelligence" | "web-data-monitoring" | "automation";
@@ -150,6 +151,7 @@ export function localizedSolutionPage(pageId: PublicPageId, locale: "de" | "tr")
   return {
     id: solution.id, locale, title: solution.title, summary: solution.summary, canonicalPath: publicPagePath(solution.id, locale),
     body: `<main id="main-content"><section class="page-hero solution-hero"><p class="section-index">${solution.verb} · ${copy.categoryLabel}</p><h1>${solution.heading}</h1><p class="lead">${solution.lead}</p><blockquote>“${solution.request}”</blockquote><div class="actions"><a class="button" href="${publicPagePath("project", locale)}#book" data-event="solution_describe_project">${copy.book}</a>${audit}</div></section>
+      ${renderSolutionVisual(solution.id, locale)}
       <section class="section solution-outcomes"><div><p class="section-index">${copy.outcomes}</p><h2>${copy.outcomeHeading}</h2></div><ul>${solution.outcomes.map((item) => `<li>${item}</li>`).join("")}</ul></section>
       <section class="section solution-delivery"><div><p class="section-index">${copy.delivery}</p><h2>${copy.deliveryHeading}</h2></div><ol>${solution.stages.map(([title, text], index) => `<li><span>0${index + 1}</span><div><h3>${title}</h3><p>${text}</p></div></li>`).join("")}</ol></section>
       <section class="section solution-proof"><div><p class="section-index">${copy.evidence}</p><h2>${solution.proofTitle}</h2></div><p class="section-lead">${solution.proofText}</p></section>

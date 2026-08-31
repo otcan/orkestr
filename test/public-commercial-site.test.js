@@ -18,9 +18,12 @@ test("commercial homepage presents one simple booking-first business-system jour
   assert.match(html, /data-event="book_project_hero"/);
   assert.equal((html.match(/<section class="v4-section/g) || []).length, 6);
   for (const heading of ["Build new systems", "Modernize existing systems", "Automate work and data"]) assert.match(html, new RegExp(heading));
-  assert.match(html, /We need a new B2B website/);
-  assert.match(html, /Our internal system is old/);
-  assert.match(html, /repeatedly searches websites/);
+  assert.match(html, /connected-business-system\.png/);
+  assert.equal((html.match(/class="real-example-card"/g) || []).length, 3);
+  assert.match(html, /An approved customer submits a mixed-stock order/);
+  assert.match(html, /Approved batch starts from a read-only snapshot/);
+  assert.match(html, /A daily schedule checks approved sources/);
+  for (const hook of ["Trigger", "Connections", "Decision hook", "Outcome"]) assert.match(html, new RegExp(`<dt>${hook}<\/dt>`));
   for (const step of ["Talk", "Define", "Build", "Operate"]) assert.match(html, new RegExp(`<h3>${step}<\/h3>`));
   assert.match(html, /Internal Ordering Renewal · Migration Run #042/);
   assert.match(html, /Built to keep working after launch/);
@@ -54,6 +57,8 @@ test("German and Turkish homepages are native, canonical, and reciprocal", () =>
     for (const alternate of ["en", "de-DE", "tr-TR"]) assert.match(html, new RegExp(`hreflang="${alternate}"`));
     assert.match(html, /class="language-switcher"/);
     assert.match(html, new RegExp(consoleLabel));
+    assert.match(html, /connected-business-system\.png/);
+    assert.match(html, /class="real-example-grid"/);
     assert.match(html, new RegExp(`>${privacyLabel}<`));
     assert.doesNotMatch(html, /Internal Ordering Renewal/);
     assert.doesNotMatch(html, /ORKESTR CONSOLE · PUBLIC DEMO/);
@@ -81,17 +86,33 @@ test("localized commercial routes keep focused intent and a working short projec
   }
 });
 
-test("team pages present one accountable founder with factual Person data", () => {
-  const expectations = [["/team", "Orkestr is led"], ["/de/team", "Orkestr wird"], ["/tr/ekip", "Orkestr'i Oğuzcan"]];
+test("team pages present the two-person delivery team with approved portraits and factual Person data", () => {
+  const expectations = [["/team", "Plan the work"], ["/de/team", "Planen Sie direkt"], ["/tr/ekip", "Projeyi, sistemi"]];
   for (const [path, heading] of expectations) {
     const html = renderPublicSite(path, baseEnv, { host: "product.example.test" });
     assert.match(html, new RegExp(heading));
     assert.match(html, /Oğuzcan Ünver/);
-    assert.match(html, /"@type":"Person"/);
-    assert.match(html, /"@type":"ProfilePage"/);
+    assert.match(html, /Fırat Kahya/);
+    assert.match(html, /assets\/site\/oguzcan-unver\.png/);
+    assert.match(html, /assets\/site\/firat-kahya\.jpeg/);
+    assert.equal((html.match(/"@type":"Person"/g) || []).length, 2);
+    assert.match(html, /"@type":"AboutPage"/);
+    assert.equal((html.match(/class="team-member-card"/g) || []).length, 2);
     assert.doesNotMatch(html, /Our team of|Unser Team aus|uzman ekibimiz/i);
     assert.doesNotMatch(html, /larger team|permanent Orkestr team|größer dar|dauerhaftes Orkestr-Team|daha büyük bir ekip|kalıcı bir Orkestr ekibi|göstermez/i);
   }
+});
+
+test("impressum uses the current Taraftech provider identity and DDG wording", () => {
+  const html = renderPublicSite("/impressum", baseEnv, { host: "product.example.test" });
+  assert.match(html, /ANGABEN GEMÄẞ § 5 DDG/);
+  assert.match(html, /Taraftech UG \(haftungsbeschränkt\)/);
+  assert.match(html, /Herzogstraße 26, 66953 Pirmasens/);
+  assert.match(html, /Oğuzcan Ünver/);
+  assert.match(html, /HRB 31600, Amtsgericht Zweibrücken/);
+  assert.match(html, /info@taraftech\.de/);
+  assert.match(html, /Steuernummer: 35\/666\/00831/);
+  assert.doesNotMatch(html, /§ 5 TMG|Online-Streitbeilegung|ec\.europa\.eu\/consumers\/odr/);
 });
 
 test("public copy avoids defensive internal-positioning language across every locale", () => {
@@ -192,6 +213,16 @@ test("commercial detail pages keep plain-language headings, evidence, limitation
   }
 });
 
+test("security pages link claims to maintained public security files in every locale", () => {
+  const paths = ["/security", "/de/sicherheit", "/tr/guvenlik"];
+  const documents = ["SECURITY.md", "docs/route-security-matrix.md", "docs/public-private-repository-boundary.md", "docs/dependency-security-review-2026-08-26.md"];
+  for (const path of paths) {
+    const html = renderPublicSite(path, baseEnv, { host: "product.example.test" });
+    assert.equal((html.match(/class="security-document-card"/g) || []).length, 4);
+    for (const document of documents) assert.match(html, new RegExp(document.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  }
+});
+
 test("solution pages are bounded, truthful, and preserve the specialized automation audit", () => {
   const expectations = [
     ["/websites-commerce", "Strong software", "standard web technologies"],
@@ -206,7 +237,9 @@ test("solution pages are bounded, truthful, and preserve the specialized automat
     assert.match(html, new RegExp(boundary));
     assert.match(html, /Book a project call/);
     assert.match(html, /Illustrative|BOUNDARIES|What Discovery must establish/);
+    assert.match(html, /class="solution-system-flow"/);
   }
+  assert.match(renderPublicSite("/business-systems", baseEnv, { host: "product.example.test" }), /legacy-modernization\.png/);
 });
 
 test("sitemap prioritizes localized commercial routes and accessible progressive enhancement", () => {
@@ -221,7 +254,7 @@ test("sitemap prioritizes localized commercial routes and accessible progressive
   assert.match(sitemap, /hreflang="de-DE"/);
   assert.match(sitemap, /hreflang="tr-TR"/);
   assert.match(sitemap, /hreflang="x-default"/);
-  assert.match(sitemap, /<lastmod>2026-08-30<\/lastmod>/);
+  assert.match(sitemap, /<lastmod>2026-08-31<\/lastmod>/);
   assert.match(css, /:focus-visible/);
   assert.match(css, /@media \(max-width: 760px\)/);
   assert.match(css, /@media \(prefers-reduced-motion: reduce\)/);
@@ -231,7 +264,10 @@ test("sitemap prioritizes localized commercial routes and accessible progressive
   assert.match(css, /\.project-booking-hero/);
   assert.match(css, /\.project-type-options/);
   assert.match(css, /\.language-switcher/);
-  assert.match(css, /\.team-profile/);
+  assert.match(css, /\.team-directory/);
+  assert.match(css, /\.real-example-grid/);
+  assert.match(css, /\.solution-system-flow/);
+  assert.match(css, /\.security-document-grid/);
   assert.match(css, /\.field-grid\.two/);
 });
 
