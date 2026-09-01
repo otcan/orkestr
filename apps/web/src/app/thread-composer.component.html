@@ -38,6 +38,17 @@
       @if (adminMode) {
         <button class="secondary command-help-button" type="button" (click)="openHelp.emit()" title="Command help" aria-haspopup="dialog" [attr.aria-expanded]="slashHelpOpen">Help</button>
       }
+      @if (replyToWhatsAppAvailable) {
+        <label class="composer-whatsapp-reply">
+          <input
+            type="checkbox"
+            [ngModel]="replyToWhatsApp"
+            (ngModelChange)="handleReplyToWhatsAppChange($event)"
+            [ngModelOptions]="{ standalone: true }"
+          />
+          Also send reply to WhatsApp
+        </label>
+      }
     </div>
     <textarea
       #composerInput

@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { createReadStream } from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { Body, Controller, Get, HttpCode, Param, Patch, Post, Query, Req, Res, UploadedFiles, UseInterceptors } from "@nestjs/common";
@@ -9,6 +10,8 @@ import { ensureDataDirs } from "../../../../../packages/storage/src/paths.js";
 import { threadMessagesQuerySchema, threadUploadSchema } from "../../../../../packages/shared/src/api-schemas.js";
 import { ensureAttachmentsArray, httpError, validateRequestSchema } from "../../common/http.js";
 import { requestPrincipal } from "../../../../../packages/core/src/principal.js";
+import { attachmentEncryptionPolicy } from "../../../../../packages/core/src/attachment-encryption-registry.js";
+import { hydrateEncryptedPublishedAttachmentPaths, validateEncryptedPublishedAttachment } from "../../../../../packages/core/src/encrypted-attachment-publication.js";
 import { ThreadActionSanitizerService } from "./thread-application.services.js";
 import { scheduleNativeCodexHistorySync, syncNativeCodexHistory, threadHistoryPayload, threadMessagePage } from "./thread-message-page.js";
 
@@ -141,22 +144,35 @@ export class ThreadMessagesController {
     const principal = requestPrincipal(request);
     const thread = await getThreadForPrincipal(threadId, principal);
     if (!thread) throw httpError("thread_not_found", 404);
+    const storedMessages = await listThreadMessages(thread.id);
     const resolved = await resolveStoredThreadAttachment({
       thread,
-      messages: await listThreadMessages(thread.id),
+      messages: storedMessages.map((message) => ({
+        ...message,
+        attachments: hydrateEncryptedPublishedAttachmentPaths(thread, message.attachments, process.env),
+      })),
       attachmentId,
       env: process.env,
     });
     if (!resolved.found) throw httpError("attachment_not_found", 404);
     if (!resolved.allowed) throw httpError(resolved.reason || "attachment_forbidden", 403);
     const attachment = resolved.attachment || {};
+    const encryptionPolicy = await attachmentEncryptionPolicy(thread.ownerUserId);
+    if (encryptionPolicy.enabled && attachment.encrypted !== true) {
+      throw httpError("attachment_encryption_required", 409);
+    }
+    if (attachment.encrypted === true) {
+      const validation = await validateEncryptedPublishedAttachment(attachment, { thread, env: process.env });
+      if (!validation.ok) throw httpError(`attachment_encryption_${validation.reason}`, 409);
+    }
     const filePath = String(resolved.path || "");
     if (!filePath) throw httpError("attachment_path_missing", 403);
-    const buffer = await fs.readFile(filePath);
+    const stat = await fs.stat(filePath).catch(() => null);
+    if (!stat?.isFile()) throw httpError("attachment_file_missing", 404);
     response.setHeader("content-type", String(attachment.mimetype || "application/octet-stream"));
-    response.setHeader("content-length", String(buffer.length));
+    response.setHeader("content-length", String(stat.size));
     response.setHeader("content-disposition", `attachment; filename="${contentDispositionFilename(String(attachment.filename || attachment.name || "attachment"))}"`);
-    return response.send(buffer);
+    return createReadStream(filePath).pipe(response);
   }
 
   @Get(":threadId/history")

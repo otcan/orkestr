@@ -165,6 +165,83 @@ export const threadInputSchema = {
   },
 };
 
+export const threadUiInputSchema = {
+  ...idParams("threadId"),
+  body: {
+    type: "object",
+    properties: {
+      text: stringValue,
+      clientMessageId: stringValue,
+      idempotencyKey: stringValue,
+      replyDelivery: { type: "string", enum: ["ui_only", "bound_whatsapp"] },
+      attachments: {
+        type: "array",
+        items: objectValue,
+      },
+    },
+    additionalProperties: false,
+  },
+};
+
+export const attachmentEncryptionRecipientSchema = {
+  body: {
+    type: "object",
+    required: ["recipient"],
+    properties: {
+      recipient: { type: "string", minLength: 1, maxLength: 500 },
+      label: { type: "string", maxLength: 120 },
+    },
+    additionalProperties: false,
+  },
+};
+
+export const attachmentEncryptionVerifySchema = {
+  ...idParams("recipientId"),
+  body: {
+    type: "object",
+    required: ["proof"],
+    properties: {
+      proof: { type: "string", minLength: 1, maxLength: 500 },
+    },
+    additionalProperties: false,
+  },
+};
+
+export const attachmentEncryptionRevokeSchema = {
+  ...idParams("recipientId"),
+  body: {
+    type: "object",
+    properties: {
+      reason: { type: "string", maxLength: 300 },
+    },
+    additionalProperties: false,
+  },
+};
+
+export const attachmentEncryptionPolicySchema = {
+  body: {
+    type: "object",
+    required: ["enabled", "required"],
+    properties: {
+      enabled: { type: "boolean" },
+      required: { type: "boolean" },
+    },
+    additionalProperties: false,
+  },
+};
+
+export const attachmentEncryptionMigrationSchema = {
+  body: {
+    type: "object",
+    required: ["threadId"],
+    properties: {
+      threadId: { type: "string", minLength: 1 },
+      dryRun: { type: "boolean" },
+    },
+    additionalProperties: false,
+  },
+};
+
 export const threadMessagesQuerySchema = {
   ...idParams("threadId"),
   querystring: {

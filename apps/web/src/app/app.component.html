@@ -1478,11 +1478,14 @@
           [planHint]="planComposerHint(thread)"
           [placeholder]="composerPlaceholder(thread)"
           [rows]="composerRows()"
+          [replyToWhatsAppAvailable]="uiReplyDeliveryAvailable(thread)"
+          [replyToWhatsApp]="uiReplyDeliveryEnabled(thread)"
           (queueFiles)="queueFiles($event)"
           (removeFile)="removePendingFile($event)"
           (send)="sendMessage()"
           (sendNow)="sendMessageNow()"
           (openHelp)="openSlashHelp()"
+          (replyToWhatsAppChange)="setUiReplyDeliveryEnabled(thread, $event)"
         ></ork-thread-composer>
       }
     } @else {

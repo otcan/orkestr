@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import { dataPaths, ensureDataDirs } from "../../storage/src/paths.js";
 import { appendEvent, readJson, writeJson } from "../../storage/src/store.js";
+import { assertTestStoragePath } from "../../storage/src/test-storage-isolation.js";
 import {
   clearConnectorOutboxPostgresCache,
   connectorOutboxWherePostgres,
@@ -126,6 +127,7 @@ async function openConnectorOutboxDatabase(env = process.env) {
   const sqlite = await loadSqlite(mode);
   if (!sqlite) return null;
   const paths = await ensureDataDirs(env);
+  assertTestStoragePath(paths.connectorOutboxDb, env, "connector_outbox_sqlite");
   if (dbCache.has(paths.connectorOutboxDb)) return dbCache.get(paths.connectorOutboxDb);
   const existed = await fs.stat(paths.connectorOutboxDb).then((stat) => stat.size > 0, () => false);
   const db = new sqlite.DatabaseSync(paths.connectorOutboxDb);

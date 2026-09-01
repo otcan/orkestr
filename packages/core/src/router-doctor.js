@@ -319,6 +319,7 @@ async function inspectThread(thread, options = {}) {
     whatsappMessageFn: whatsappMessage,
     accountIdForThreadFn: accountIdForThread,
     issueFn: issue,
+    env,
   }));
   for (const job of connectorOutboxJobs.filter((item) => ["claimed", "sent_to_broker"].includes(lower(item.state)))) {
     const claimAge = ageMs(job.claimedAt || job.updatedAt);

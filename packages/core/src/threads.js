@@ -4,10 +4,13 @@ import { createHash, randomUUID } from "node:crypto";
 import { ensureDataDirs } from "../../storage/src/paths.js";
 import { appendEvent } from "../../storage/src/store.js";
 import { createThreadMessageRepository, createThreadRepository } from "../../storage/src/repositories.js";
+import { threadRecordSnapshotRevision } from "../../storage/src/thread-registry.js";
+import { snapshotEnvironment } from "../../storage/src/test-storage-isolation.js";
 import { assertSanitizedAction } from "./llm-sanitizer.js";
 import { normalizeNoReplyAssistantMessage } from "./no-reply.js";
 import { assertResourceAccess, assertThreadLimit, filterResourcesForPrincipal, isAdminPrincipal, policyError, resourceOwnerUserId } from "./policy.js";
 import { resolveThreadAttachments } from "./thread-attachments.js";
+import { encryptedPublishedAttachmentPath, hydrateEncryptedPublishedAttachmentPaths, publishThreadAttachmentsEncrypted } from "./encrypted-attachment-publication.js";
 import { userScopedCapabilityHints } from "./user-skills.js";
 import { adminUserId, getUser, normalizeUserId } from "./users.js";
 import {
@@ -24,6 +27,7 @@ import {
 } from "./canonical-public-references.js";
 import { withCanonicalPublicReferenceLock } from "./canonical-public-reference-lock.js";
 import { injectRuntimeFault } from "./runtime-fault-injection.js";
+import { recordRegistryWriteRejectionMetric, recordWatcherAlertMetric } from "./observability.js";
 
 const runningThreadIds = new Set();
 const messageMutationQueues = new Map();
@@ -216,13 +220,26 @@ export async function getThreadForPrincipal(threadId, principal, env = process.e
   return null;
 }
 
-async function saveThreads(threads, env) {
+async function saveThreads(threads, env, options = {}) {
   assertUniquePublicRefs(threads, "thread");
-  return createThreadRepository(env).save(threads);
+  try {
+    return await createThreadRepository(env).save(threads, options);
+  } catch (error) {
+    if (["thread_registry_revision_conflict", "thread_registry_unexpected_removal"].includes(String(error?.code || error?.message || ""))) {
+      recordRegistryWriteRejectionMetric({ store: "threads", code: error?.code || error?.message });
+      recordWatcherAlertMetric({
+        source: "thread_registry",
+        code: error?.code || error?.message,
+        severity: "critical",
+      });
+    }
+    throw error;
+  }
 }
 
 export async function createThread(input = {}, env = process.env) {
-  return withCanonicalPublicReferenceLock(() => createThreadLocked(input, env), env);
+  const operationEnv = snapshotEnvironment(env);
+  return withCanonicalPublicReferenceLock(() => createThreadLocked(input, operationEnv), operationEnv);
 }
 
 async function createThreadLocked(input = {}, env = process.env) {
@@ -367,13 +384,15 @@ async function createThreadLocked(input = {}, env = process.env) {
     const { captureChildThreadResourceCeiling } = await import("./thread-resource-grants.js");
     await captureChildThreadResourceCeiling(thread, env);
   }
+  const expectedRevision = threadRecordSnapshotRevision(threads);
   threads.push(thread);
-  await saveThreads(threads, env);
+  await saveThreads(threads, env, { expectedRevision });
   await appendEvent({ type: "thread_created", threadId: thread.id, name: thread.name, ownerUserId: thread.ownerUserId }, env);
   return thread;
 }
 
 export async function createThreadForPrincipal(input = {}, principal, env = process.env) {
+  env = snapshotEnvironment(env);
   if (!isAdminPrincipal(principal) && !String(principal?.userId || "").trim()) {
     throw policyError("thread_owner_required", 403);
   }
@@ -419,12 +438,14 @@ export async function createThreadForPrincipal(input = {}, principal, env = proc
 }
 
 export async function updateThread(threadId, patch = {}, env = process.env) {
-  return withCanonicalPublicReferenceLock(() => updateThreadLocked(threadId, patch, env), env);
+  const operationEnv = snapshotEnvironment(env);
+  return withCanonicalPublicReferenceLock(() => updateThreadLocked(threadId, patch, operationEnv), operationEnv);
 }
 
 async function updateThreadLocked(threadId, patch = {}, env = process.env) {
   const id = normalizeThreadId(threadId);
   const threads = await listThreads(env);
+  const expectedRevision = threadRecordSnapshotRevision(threads);
   let updated = null;
   let changed = false;
   const next = threads.map((thread) => {
@@ -453,11 +474,12 @@ async function updateThreadLocked(threadId, patch = {}, env = process.env) {
     error.statusCode = 404;
     throw error;
   }
-  if (changed) await saveThreads(next, env);
+  if (changed) await saveThreads(next, env, { expectedRevision });
   return updated;
 }
 
 export async function retireThread(threadId, options = {}, env = process.env) {
+  env = snapshotEnvironment(env);
   const id = normalizeThreadId(threadId);
   const thread = await getThread(id, env);
   if (!thread) {
@@ -491,6 +513,7 @@ export async function retireThread(threadId, options = {}, env = process.env) {
 }
 
 export async function restoreThread(threadId, options = {}, env = process.env) {
+  env = snapshotEnvironment(env);
   const id = normalizeThreadId(threadId);
   const thread = await getThread(id, env);
   if (!thread) {
@@ -520,6 +543,7 @@ export async function restoreThread(threadId, options = {}, env = process.env) {
 }
 
 export async function retireThreadForPrincipal(threadId, principal, options = {}, env = process.env) {
+  env = snapshotEnvironment(env);
   const target = await getThreadForPrincipal(threadId, principal, env);
   if (!target) {
     const error = new Error("thread_not_found");
@@ -533,6 +557,7 @@ export async function retireThreadForPrincipal(threadId, principal, options = {}
 }
 
 export async function restoreThreadForPrincipal(threadId, principal, options = {}, env = process.env) {
+  env = snapshotEnvironment(env);
   const target = await getThreadForPrincipal(threadId, principal, env);
   if (!target) {
     const error = new Error("thread_not_found");
@@ -569,12 +594,14 @@ function descendantThreadIds(threads, rootIds) {
 }
 
 export async function deleteThread(threadId, options = {}, env = process.env) {
-  return withCanonicalPublicReferenceLock(() => deleteThreadLocked(threadId, options, env), env);
+  const operationEnv = snapshotEnvironment(env);
+  return withCanonicalPublicReferenceLock(() => deleteThreadLocked(threadId, options, operationEnv), operationEnv);
 }
 
 async function deleteThreadLocked(threadId, options = {}, env = process.env) {
   const id = normalizeThreadId(threadId);
   const threads = await listThreads(env);
+  const expectedRevision = threadRecordSnapshotRevision(threads);
   const target = threads.find((thread) => thread.id === id || thread.name === id || thread.bindingName === id);
   if (!target) {
     const error = new Error("thread_not_found");
@@ -591,7 +618,10 @@ async function deleteThreadLocked(threadId, options = {}, env = process.env) {
   }
   const deletedIds = descendantThreadIds(threads, [target.id]);
   const next = threads.filter((thread) => !deletedIds.has(thread.id));
-  await saveThreads(next, env);
+  await saveThreads(next, env, {
+    expectedRevision,
+    expectedRemovedIds: [...deletedIds],
+  });
   const paths = await ensureDataDirs(env);
   const messageRepository = createThreadMessageRepository(env);
   for (const deletedId of deletedIds) {
@@ -608,6 +638,7 @@ async function deleteThreadLocked(threadId, options = {}, env = process.env) {
 }
 
 export async function deleteThreadForPrincipal(threadId, principal, options = {}, env = process.env) {
+  env = snapshotEnvironment(env);
   const target = await getThreadForPrincipal(threadId, principal, env);
   return deleteThread(target.id, options, env);
 }
@@ -705,6 +736,7 @@ async function appendThreadAttachmentEvents(thread, message, outcomes = [], env 
 }
 
 export async function appendThreadMessage(threadId, input, env = process.env) {
+  env = snapshotEnvironment(env);
   const thread = await getThread(threadId, env);
   if (!thread) {
     const error = new Error("thread_not_found");
@@ -802,6 +834,9 @@ export async function appendThreadMessage(threadId, input, env = process.env) {
         notificationId: String(input.shadowBoundaryWarning.notificationId || "").trim(),
       };
     }
+    if (input.replyDeliveryIntent && typeof input.replyDeliveryIntent === "object" && !Array.isArray(input.replyDeliveryIntent)) {
+      nextMessage.replyDeliveryIntent = structuredClone(input.replyDeliveryIntent);
+    }
     nextMessage = normalizeNoReplyAssistantMessage(nextMessage);
     if (input.forceDeliveryAfterInterrupt === true) nextMessage.forceDeliveryAfterInterrupt = true;
     if (input.steerActiveTurn === true || input.steerActiveTurn === false) nextMessage.steerActiveTurn = input.steerActiveTurn;
@@ -819,8 +854,14 @@ export async function appendThreadMessage(threadId, input, env = process.env) {
     });
     nextMessage.text = resolvedAttachments.text;
     attachmentOutcomes = resolvedAttachments.artifactOutcomes;
-    if (resolvedAttachments.attachments.length) {
-      nextMessage.attachments = resolvedAttachments.attachments;
+    const publishedAttachments = role === "assistant"
+      ? await publishThreadAttachmentsEncrypted({ thread, attachments: resolvedAttachments.attachments, env })
+      : { attachments: resolvedAttachments.attachments };
+    if (publishedAttachments.encrypted === true) {
+      attachmentOutcomes = attachmentOutcomes.map((outcome) => ({ ...outcome, filename: "encrypted-artifact" }));
+    }
+    if (publishedAttachments.attachments.length) {
+      nextMessage.attachments = publishedAttachments.attachments;
     }
     await injectRuntimeFault("message_persistence", {
       threadId: thread.id,
@@ -925,6 +966,7 @@ async function activeDuplicateThreadInput(threadId, input, env = process.env) {
 }
 
 export async function enqueueThreadInput(threadId, input, env = process.env) {
+  env = snapshotEnvironment(env);
   const thread = await getThread(threadId, env);
   if (thread) assertThreadOperational(thread);
   const nextInput = whatsappBindingInputDefaults(thread, input);
@@ -947,6 +989,7 @@ export async function enqueueThreadInput(threadId, input, env = process.env) {
 }
 
 export async function enqueueThreadInputForPrincipal(threadId, input, principal, env = process.env) {
+  env = snapshotEnvironment(env);
   const thread = await getThreadForPrincipal(threadId, principal, env);
   assertThreadOperational(thread);
   const nextInput = whatsappBindingInputDefaults(thread, { ...input, ownerUserId: thread.ownerUserId });
@@ -1024,6 +1067,7 @@ export async function enqueueThreadInputForPrincipal(threadId, input, principal,
 }
 
 export async function updateThreadMessage(threadId, messageId, patch, env = process.env, options = {}) {
+  env = snapshotEnvironment(env);
   const thread = await getThread(threadId, env);
   if (!thread) {
     const error = new Error("thread_not_found");
@@ -1072,7 +1116,11 @@ export async function updateThreadMessage(threadId, messageId, patch, env = proc
         updatedAt: nowIso(),
       });
       if (normalizeAttachments) {
-        const sourceAttachments = Array.isArray(updated.attachments) ? updated.attachments : [];
+        const sourceAttachments = hydrateEncryptedPublishedAttachmentPaths(
+          thread,
+          Array.isArray(updated.attachments) ? updated.attachments : [],
+          env,
+        );
         const resolvedAttachments = await resolveThreadAttachments({
           thread,
           text: updated.text,
@@ -1081,7 +1129,13 @@ export async function updateThreadMessage(threadId, messageId, patch, env = proc
         });
         updated.text = resolvedAttachments.text;
         attachmentOutcomes = resolvedAttachments.artifactOutcomes;
-        if (resolvedAttachments.attachments.length) updated.attachments = resolvedAttachments.attachments;
+        const publishedAttachments = updated.role === "assistant"
+          ? await publishThreadAttachmentsEncrypted({ thread, attachments: resolvedAttachments.attachments, env })
+          : { attachments: resolvedAttachments.attachments };
+        if (publishedAttachments.encrypted === true) {
+          attachmentOutcomes = attachmentOutcomes.map((outcome) => ({ ...outcome, filename: "encrypted-artifact" }));
+        }
+        if (publishedAttachments.attachments.length) updated.attachments = publishedAttachments.attachments;
         else delete updated.attachments;
       }
       next.push(updated);
@@ -1118,11 +1172,30 @@ export async function updateThreadMessage(threadId, messageId, patch, env = proc
 }
 
 export async function deleteThreadMessage(threadId, messageId, options = {}, env = process.env) {
-  return updateThreadMessage(threadId, messageId, {
+  env = snapshotEnvironment(env);
+  const thread = await getThread(threadId, env);
+  const current = await getThreadMessage(threadId, messageId, env);
+  const encryptedAttachments = (Array.isArray(current?.attachments) ? current.attachments : [])
+    .filter((attachment) => attachment?.encrypted === true);
+  const updated = await updateThreadMessage(threadId, messageId, {
     deletedAt: String(options.deletedAt || "").trim() || nowIso(),
     deletedBy: String(options.deletedBy || options.actor || "").trim(),
     deleteReason: String(options.reason || options.deleteReason || "").trim(),
+    ...(encryptedAttachments.length ? { attachments: [] } : {}),
   }, env);
+  for (const attachment of encryptedAttachments) {
+    const filePath = encryptedPublishedAttachmentPath(thread || { id: threadId }, attachment, env);
+    if (filePath) await fs.rm(filePath, { force: true }).catch(() => {});
+  }
+  if (encryptedAttachments.length) {
+    await appendEvent({
+      type: "thread_attachment_encrypted_deleted",
+      threadId: thread?.id || threadId,
+      messageId,
+      attachmentIds: encryptedAttachments.map((attachment) => String(attachment.id || "").trim()).filter(Boolean),
+    }, env).catch(() => {});
+  }
+  return updated;
 }
 
 export async function nextQueuedThreadMessage(threadId, env = process.env) {

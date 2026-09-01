@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { assertTestStorageHome } from "./test-storage-isolation.js";
 
 export function appHome(env = process.env) {
   return path.resolve(env.ORKESTR_HOME || path.join(os.homedir(), ".orkestr"));
@@ -32,6 +33,7 @@ export function dataPaths(env = process.env) {
     userDataRoot: path.join(home, "users"),
     threads: path.join(home, "threads.json"),
     threadsDb: path.join(home, "threads.sqlite"),
+    threadRegistryLock: path.join(home, "thread-registry-write"),
     threadMessages: path.join(home, "thread-messages"),
     threadMessagesDb: path.join(home, "thread-messages.sqlite"),
     runtimeLeases: path.join(home, "runtime-leases.json"),
@@ -49,6 +51,8 @@ export function dataPaths(env = process.env) {
     gmailSignalJobRecordsRoot: env.ORKESTR_GMAIL_SIGNAL_RECORD_ROOT || path.join(path.dirname(home), ".openclaw", "workspace", "Orkestr", ".data", "workspaces", "157ea1bfc66836fd", "oxrm", "jobseeker-can", "files", "records", "job-search", "gmail"),
     mailboxes: env.ORKESTR_MAILBOXES_FILE || path.join(home, "mailboxes.json"),
     connectorOutbox: path.join(home, "connector-outbox.json"),
+    attachmentEncryption: env.ORKESTR_ATTACHMENT_ENCRYPTION_FILE || path.join(home, "attachment-encryption.json"),
+    attachmentEncryptionMigrations: env.ORKESTR_ATTACHMENT_ENCRYPTION_MIGRATIONS_FILE || path.join(home, "attachment-encryption-migrations.json"),
     connectorOutboxDb: env.ORKESTR_CONNECTOR_OUTBOX_DB || path.join(home, "connector-outbox.sqlite"),
     connectorPromptPushes: path.join(home, "connector-prompt-pushes.json"),
     apiSessionBindings: path.join(home, "api-session-bindings.json"),
@@ -87,6 +91,7 @@ export function userDataPaths(userId, env = process.env) {
 
 export async function ensureDataDirs(env = process.env) {
   const paths = dataPaths(env);
+  assertTestStorageHome(paths.home, env);
   await fs.mkdir(paths.home, { recursive: true });
   await fs.mkdir(paths.userDataRoot, { recursive: true });
   await fs.mkdir(paths.instances, { recursive: true, mode: 0o700 });

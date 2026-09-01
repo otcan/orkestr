@@ -95,7 +95,9 @@ test("retired WhatsApp bindings block auto-provision resurrection", async () => 
 });
 
 test("local WhatsApp group creation defaults to the autostart responder account", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-default-responder-"));
   const env = {
+    ORKESTR_HOME: home,
     ORKESTR_WHATSAPP_ACCOUNT_IDS: "sender,responder",
     ORKESTR_WHATSAPP_AUTOSTART: "1",
     ORKESTR_WHATSAPP_AUTOSTART_ACCOUNT_IDS: "responder",

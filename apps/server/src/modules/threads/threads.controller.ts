@@ -27,6 +27,7 @@ import {
   deleteThreadForPrincipal,
   enqueueThreadInputForPrincipal,
   getThread,
+  getThreadForPrincipal,
   listThreadMessages,
   listThreads,
   threadIsRetired,
@@ -36,6 +37,7 @@ import { restoreRetiredThread, retireThread } from "../../../../../packages/core
 import { requestPrincipal } from "../../../../../packages/core/src/principal.js";
 import { isAdminPrincipal } from "../../../../../packages/core/src/policy.js";
 import { parseThreadInputCommand } from "../../../../../packages/core/src/thread-commands.js";
+import { createUiReplyDeliveryIntent, publicReplyDeliveryIntentMessage } from "../../../../../packages/core/src/reply-delivery-intent.js";
 import { launchNativeTerminal } from "../../../../../packages/core/src/native-terminal.js";
 import {
   rawAttachPollIntervalMs,
@@ -67,6 +69,7 @@ import {
   threadCreateSchema,
   threadInputSchema,
   threadInterruptSchema,
+  threadUiInputSchema,
 } from "../../../../../packages/shared/src/api-schemas.js";
 import {
   ThreadActionSanitizerService,
@@ -80,6 +83,14 @@ import {
 } from "./thread-route-helpers.js";
 
 const execFileAsync = promisify(execFile);
+const trustedUiInput = Symbol("trusted-ui-input");
+
+function stripReplyDeliveryAuthority(body: Record<string | symbol, unknown>): Record<string | symbol, unknown> {
+  const next = { ...body };
+  delete next.replyDelivery;
+  delete next.replyDeliveryIntent;
+  return next;
+}
 
 type RuntimeTypeTarget = "codex-app-server" | "raw-terminal";
 
@@ -646,6 +657,8 @@ export class ThreadsController {
   @Post(":threadId/input")
   @HttpCode(202)
   async input(@Req() request: any, @Param("threadId") threadId: string, @Body() body: Record<string, unknown> = {}) {
+    const serverTrustedUiInput = (body as Record<string | symbol, unknown>)[trustedUiInput] === true;
+    body = (serverTrustedUiInput ? body : stripReplyDeliveryAuthority(body)) as Record<string, unknown>;
     validateRequestSchema(threadInputSchema, { params: { threadId }, body });
     ensureAttachmentsArray(body);
     const principal = requestPrincipal(request);
@@ -867,6 +880,37 @@ export class ThreadsController {
     return queuedInputResponse(thread, message, message.duplicate ? message.duplicateReason || "duplicate_input" : "pending_delivery");
   }
 
+  @Post(":threadId/ui-input")
+  @HttpCode(202)
+  async uiInput(@Req() request: any, @Param("threadId") threadId: string, @Body() body: Record<string, unknown> = {}) {
+    validateRequestSchema(threadUiInputSchema, { params: { threadId }, body });
+    ensureAttachmentsArray(body);
+    const principal = requestPrincipal(request);
+    const thread = await getThread(threadId);
+    if (!thread) throw httpError("thread_not_found", 404);
+    await getThreadForPrincipal(thread.id, principal);
+    const replyDeliveryIntent = createUiReplyDeliveryIntent(thread, {
+      mode: body.replyDelivery,
+      requestedByUserId: principal.userId,
+      env: process.env,
+    });
+    const trustedBody: Record<string | symbol, unknown> = {
+      text: String(body.text || ""),
+      attachments: Array.isArray(body.attachments) ? body.attachments : [],
+      clientMessageId: String(body.clientMessageId || ""),
+      idempotencyKey: String(body.idempotencyKey || ""),
+      parseCommands: true,
+      controlAllowed: true,
+      source: "ui",
+      originSurface: "webui",
+      originTransport: "authenticated-http",
+      ...(replyDeliveryIntent ? { replyDeliveryIntent } : {}),
+      [trustedUiInput]: true,
+    };
+    const result: any = await this.input(request, thread.id, trustedBody as Record<string, unknown>);
+    return { ...result, ...(result?.message ? { message: publicReplyDeliveryIntentMessage(result.message) } : {}) };
+  }
+
   @Post(":threadId/attach")
   @HttpCode(200)
   async attach(@Req() request: any, @Param("threadId") threadId: string, @Body() body: Record<string, unknown> = {}) {
@@ -1013,6 +1057,8 @@ export class ThreadsController {
   @Post(":threadId/interrupt")
   @HttpCode(200)
   async interrupt(@Req() request: any, @Param("threadId") threadId: string, @Body() body: Record<string, unknown> = {}) {
+    const serverTrustedUiInput = (body as Record<string | symbol, unknown>)[trustedUiInput] === true;
+    body = (serverTrustedUiInput ? body : stripReplyDeliveryAuthority(body)) as Record<string, unknown>;
     validateRequestSchema(threadInterruptSchema, { params: { threadId }, body });
     const principal = requestPrincipal(request);
     const thread = await getThread(threadId);
@@ -1079,6 +1125,33 @@ export class ThreadsController {
       };
     }
     return { ok: true, interrupted, runtime: result.status };
+  }
+
+  @Post(":threadId/ui-interrupt")
+  @HttpCode(200)
+  async uiInterrupt(@Req() request: any, @Param("threadId") threadId: string, @Body() body: Record<string, unknown> = {}) {
+    validateRequestSchema(threadUiInputSchema, { params: { threadId }, body });
+    ensureAttachmentsArray(body);
+    const principal = requestPrincipal(request);
+    const thread = await getThread(threadId);
+    if (!thread) throw httpError("thread_not_found", 404);
+    await getThreadForPrincipal(thread.id, principal);
+    const replyDeliveryIntent = createUiReplyDeliveryIntent(thread, {
+      mode: body.replyDelivery,
+      requestedByUserId: principal.userId,
+      env: process.env,
+    });
+    const trustedBody: Record<string | symbol, unknown> = {
+      text: String(body.text || ""),
+      attachments: Array.isArray(body.attachments) ? body.attachments : [],
+      source: "ui",
+      originSurface: "webui",
+      originTransport: "authenticated-http",
+      ...(replyDeliveryIntent ? { replyDeliveryIntent } : {}),
+      [trustedUiInput]: true,
+    };
+    const result: any = await this.interrupt(request, thread.id, trustedBody as Record<string, unknown>);
+    return { ...result, ...(result?.message ? { message: publicReplyDeliveryIntentMessage(result.message) } : {}) };
   }
 
   @Post(":threadId/approve")

@@ -23,6 +23,9 @@
         @if (message.state && message.state !== "completed") {
           <em>{{ messageDeliveryStateLabel(message) }}</em>
         }
+        @if (replyDeliveryLabel(message)) {
+          <em class="phase-badge">{{ replyDeliveryLabel(message) }}</em>
+        }
       </div>
       @if (messageFailureDetail(message)) {
         <div class="message-failure">
@@ -48,9 +51,9 @@
         <div class="attachments">
           @for (attachment of message.attachments || []; track attachmentLabel(attachment)) {
             @if (attachmentDownloadUrl(attachment)) {
-              <a [href]="attachmentDownloadUrl(attachment)" [attr.download]="attachmentLabel(attachment)">{{ attachmentLabel(attachment) }}</a>
+              <a [href]="attachmentDownloadUrl(attachment)" [attr.download]="attachmentLabel(attachment)">{{ attachmentLabel(attachment) }}{{ attachmentEncrypted(attachment) ? " · encrypted (age)" : "" }}</a>
             } @else {
-              <span>{{ attachmentLabel(attachment) }}</span>
+              <span>{{ attachmentLabel(attachment) }}{{ attachmentEncrypted(attachment) ? " · encrypted (age)" : "" }}</span>
             }
           }
         </div>

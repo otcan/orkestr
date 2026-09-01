@@ -1,30 +1,54 @@
 import fs from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { ensureDataDirs } from "./paths.js";
-import { readJson, writeJson } from "./store.js";
+import { appendEvent, readJson, writeJson } from "./store.js";
 import { assertPublicRefInvariant, assertUniquePublicRefs } from "./public-references.js";
 import { withStorageFileLock } from "./storage-lock.js";
+import { assertTestStoragePath } from "./test-storage-isolation.js";
 
 const dbCache = new Map();
 const dbPaths = new WeakMap();
 const threadListCache = new Map();
 let sqliteModulePromise = null;
+const snapshotRevisionSymbol = Symbol.for("orkestr.threadRegistrySnapshotRevision");
+
+export function threadRecordSnapshotRevision(records = []) {
+  return String(records?.[snapshotRevisionSymbol] ?? "");
+}
+
+function attachSnapshotRevision(records = [], revision = "") {
+  if (!Array.isArray(records)) return records;
+  Object.defineProperty(records, snapshotRevisionSymbol, {
+    configurable: true,
+    enumerable: false,
+    writable: false,
+    value: String(revision ?? ""),
+  });
+  return records;
+}
+
+function jsonSnapshotRevision(records = []) {
+  return createHash("sha256").update(JSON.stringify(records)).digest("hex");
+}
 
 export async function listThreadRecords(env = process.env) {
   const db = await openThreadDatabase(env);
   if (!db) {
     const paths = await ensureDataDirs(env);
-    return dedupeThreadRecords(await readJson(paths.threads, []));
+    const records = dedupeThreadRecords(await readJson(paths.threads, []));
+    return attachSnapshotRevision(records, jsonSnapshotRevision(records));
   }
   const dbPath = dbPaths.get(db);
   const dataVersion = threadDatabaseVersion(db);
   const cached = dbPath ? threadListCache.get(dbPath) : null;
-  if (cached?.dataVersion === dataVersion) return cached.records.slice();
+  if (cached?.dataVersion === dataVersion) return attachSnapshotRevision(cached.records.slice(), cached.revision);
   const rows = db
     .prepare("select data from orkestr_threads order by created_at asc, id asc")
     .all();
   const records = dedupeThreadRecords(rows.map((row) => JSON.parse(row.data)));
-  if (dbPath) threadListCache.set(dbPath, { dataVersion, records });
-  return records.slice();
+  const revision = threadRegistryRevision(db);
+  if (dbPath) threadListCache.set(dbPath, { dataVersion, records, revision });
+  return attachSnapshotRevision(records.slice(), revision);
 }
 
 export async function findThreadRecordByPublicRef(publicRef, env = process.env) {
@@ -39,25 +63,46 @@ export async function findThreadRecordByPublicRef(publicRef, env = process.env) 
   return matches[0] || null;
 }
 
-export async function saveThreadRecords(threads, env = process.env) {
-  return saveThreadRecordsValidated(threads, env);
+export async function saveThreadRecords(threads, env = process.env, options = {}) {
+  return saveThreadRecordsValidated(threads, env, options);
 }
 
 async function saveThreadRecordsValidated(threads, env, options = {}) {
   const records = dedupeThreadRecords(Array.isArray(threads) ? threads : []);
+  const writeOptions = {
+    ...options,
+    expectedRevision: options.expectedRevision ?? threadRecordSnapshotRevision(threads),
+  };
+  const paths = await ensureDataDirs(env);
+  return withStorageFileLock(paths.threadRegistryLock, async () => {
+    try {
+      return await saveThreadRecordsValidatedUnlocked(records, env, writeOptions, paths);
+    } catch (error) {
+      await auditThreadRegistryWriteRejection(error, env);
+      throw error;
+    }
+  });
+}
+
+async function saveThreadRecordsValidatedUnlocked(records, env, writeOptions, paths) {
   const db = await openThreadDatabase(env);
   if (!db) {
-    const paths = await ensureDataDirs(env);
-    validateThreadPublicRefs(await readJson(paths.threads, []), records, options);
+    const previous = dedupeThreadRecords(await readJson(paths.threads, []));
+    const currentRevision = jsonSnapshotRevision(previous);
+    validateExpectedRevision(currentRevision, writeOptions.expectedRevision);
+    validateThreadReplacement(previous, records, writeOptions);
+    validateThreadPublicRefs(previous, records, writeOptions);
     await writeJson(paths.threads, records);
-    return records;
+    return attachSnapshotRevision(records, jsonSnapshotRevision(records));
   }
-  validateThreadPublicRefs(await listThreadRecords(env), records, options);
-  replaceThreadRows(db, records);
-  cacheThreadRecords(db, records);
-  const paths = await ensureDataDirs(env);
+  const previous = await listThreadRecords(env);
+  validateThreadPublicRefs(previous, records, writeOptions);
+  const revision = replaceThreadRows(db, records, {
+    ...writeOptions,
+  });
+  cacheThreadRecords(db, records, revision);
   await writeJson(paths.threads, records);
-  return records;
+  return attachSnapshotRevision(records, revision);
 }
 
 export async function assignThreadPublicRefs(assignments = [], env = process.env) {
@@ -77,7 +122,10 @@ async function assignThreadPublicRefsLocked(assignments = [], env = process.env)
     return record.publicRef ? record : { ...record, publicRef: assignment.publicRef, publicRefAssignedAt: assignment.publicRefAssignedAt };
   });
   if (found.size !== byId.size) throw Object.assign(new Error("thread_public_ref_assignment_stale"), { statusCode: 409 });
-  return saveThreadRecordsValidated(next, env, { allowAssignment: true });
+  return saveThreadRecordsValidated(next, env, {
+    allowAssignment: true,
+    expectedRevision: threadRecordSnapshotRevision(records),
+  });
 }
 
 export async function rollbackThreadPublicRefAssignments(assignments = [], env = process.env) {
@@ -96,7 +144,45 @@ async function rollbackThreadPublicRefAssignmentsLocked(assignments = [], env = 
     delete reverted.publicRefAssignedAt;
     return reverted;
   });
-  return saveThreadRecordsInternal(next, env);
+  return saveThreadRecordsInternal(next, env, {
+    expectedRevision: threadRecordSnapshotRevision(current),
+  });
+}
+
+function normalizedThreadIds(records = []) {
+  return new Set((Array.isArray(records) ? records : [])
+    .map((record) => String(record?.id || "").trim())
+    .filter(Boolean));
+}
+
+function validateExpectedRevision(currentRevision = "", expectedRevision = undefined) {
+  if (expectedRevision === undefined || expectedRevision === null || expectedRevision === "") return;
+  if (String(currentRevision) === String(expectedRevision)) return;
+  throw Object.assign(new Error("thread_registry_revision_conflict"), {
+    code: "thread_registry_revision_conflict",
+    statusCode: 409,
+    expectedRevision: String(expectedRevision),
+    currentRevision: String(currentRevision),
+  });
+}
+
+function validateThreadReplacement(previous = [], next = [], options = {}) {
+  const previousIds = normalizedThreadIds(previous);
+  const nextIds = normalizedThreadIds(next);
+  const removedIds = [...previousIds].filter((id) => !nextIds.has(id)).sort();
+  if (!removedIds.length) return;
+  const expectedRemovedIds = [...new Set((options.expectedRemovedIds || [])
+    .map((value) => String(value || "").trim())
+    .filter(Boolean))].sort();
+  if (JSON.stringify(removedIds) === JSON.stringify(expectedRemovedIds)) return;
+  throw Object.assign(new Error("thread_registry_unexpected_removal"), {
+    code: "thread_registry_unexpected_removal",
+    statusCode: 409,
+    previousCount: previousIds.size,
+    nextCount: nextIds.size,
+    removedCount: removedIds.length,
+    removedIds: removedIds.slice(0, 20),
+  });
 }
 
 function validateThreadPublicRefs(previous, next, options = {}) {
@@ -110,18 +196,45 @@ function validateThreadPublicRefs(previous, next, options = {}) {
   }
 }
 
-async function saveThreadRecordsInternal(records, env) {
+async function saveThreadRecordsInternal(records, env, options = {}) {
+  const paths = await ensureDataDirs(env);
+  return withStorageFileLock(paths.threadRegistryLock, async () => {
+    try {
+      return await saveThreadRecordsInternalUnlocked(records, env, options, paths);
+    } catch (error) {
+      await auditThreadRegistryWriteRejection(error, env);
+      throw error;
+    }
+  });
+}
+
+async function saveThreadRecordsInternalUnlocked(records, env, options, paths) {
   const db = await openThreadDatabase(env);
   if (!db) {
-    const paths = await ensureDataDirs(env);
+    const previous = dedupeThreadRecords(await readJson(paths.threads, []));
+    const currentRevision = jsonSnapshotRevision(previous);
+    validateExpectedRevision(currentRevision, options.expectedRevision);
+    validateThreadReplacement(previous, records, options);
     await writeJson(paths.threads, records);
-    return records;
+    return attachSnapshotRevision(records, jsonSnapshotRevision(records));
   }
-  replaceThreadRows(db, records);
-  cacheThreadRecords(db, records);
-  const paths = await ensureDataDirs(env);
+  const revision = replaceThreadRows(db, records, options);
+  cacheThreadRecords(db, records, revision);
   await writeJson(paths.threads, records);
-  return records;
+  return attachSnapshotRevision(records, revision);
+}
+
+async function auditThreadRegistryWriteRejection(error, env = process.env) {
+  const code = String(error?.code || error?.message || "");
+  if (!["thread_registry_revision_conflict", "thread_registry_unexpected_removal"].includes(code)) return;
+  await appendEvent({
+    type: "thread_registry_write_rejected",
+    severity: "critical",
+    code,
+    previousCount: Number(error?.previousCount || 0),
+    nextCount: Number(error?.nextCount || 0),
+    removedCount: Number(error?.removedCount || 0),
+  }, env).catch(() => {});
 }
 
 export async function closeThreadRegistryCache(env = null) {
@@ -205,6 +318,7 @@ async function openThreadDatabase(env) {
   if (!sqlite) return null;
 
   const paths = await ensureDataDirs(env);
+  assertTestStoragePath(paths.threadsDb, env, "thread_registry_sqlite");
   if (dbCache.has(paths.threadsDb)) return dbCache.get(paths.threadsDb);
 
   const existed = await fs.stat(paths.threadsDb).then((stat) => stat.size > 0, () => false);
@@ -267,9 +381,13 @@ async function migrateJsonThreadsIfNeeded(db, paths, existed) {
   setMeta(db, "threads_json_migrated_at", new Date().toISOString());
 }
 
-function replaceThreadRows(db, threads) {
+function replaceThreadRows(db, threads, options = {}) {
   db.exec("begin immediate");
   try {
+    const previous = db.prepare("select id from orkestr_threads").all();
+    const currentRevision = threadRegistryRevision(db);
+    validateExpectedRevision(currentRevision, options.expectedRevision);
+    validateThreadReplacement(previous, threads, options);
     db.exec("delete from orkestr_threads");
     const insert = db.prepare(`
       insert into orkestr_threads(id, name, binding_name, public_ref, public_ref_assigned_at, created_at, updated_at, data)
@@ -289,8 +407,11 @@ function replaceThreadRows(db, threads) {
         JSON.stringify(thread),
       );
     }
+    const revision = currentRevision + 1;
+    setMeta(db, "threads_revision", String(revision));
     setMeta(db, "threads_updated_at", new Date().toISOString());
     db.exec("commit");
+    return revision;
   } catch (error) {
     db.exec("rollback");
     throw error;
@@ -301,12 +422,17 @@ function threadDatabaseVersion(db) {
   return Number(db.prepare("pragma data_version").get()?.data_version || 0);
 }
 
-function cacheThreadRecords(db, records) {
+function threadRegistryRevision(db) {
+  return Number(db.prepare("select value from orkestr_meta where key = ?").get("threads_revision")?.value || 0);
+}
+
+function cacheThreadRecords(db, records, revision = threadRegistryRevision(db)) {
   const dbPath = dbPaths.get(db);
   if (!dbPath) return;
   threadListCache.set(dbPath, {
     dataVersion: threadDatabaseVersion(db),
     records: Array.isArray(records) ? records.slice() : [],
+    revision,
   });
 }
 

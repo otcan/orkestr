@@ -22,6 +22,7 @@ import { TimersModule } from "./modules/timers/timers.module.js";
 import { TenantSlicesModule } from "./modules/tenant-slices/tenant-slices.module.js";
 import { TenantVmsModule } from "./modules/tenant-vms/tenant-vms.module.js";
 import { UsersModule } from "./modules/users/users.module.js";
+import { AttachmentEncryptionModule } from "./modules/attachment-encryption/attachment-encryption.module.js";
 
 @Module({
   imports: [
@@ -48,6 +49,7 @@ import { UsersModule } from "./modules/users/users.module.js";
     TenantSlicesModule,
     TenantVmsModule,
     UsersModule,
+    AttachmentEncryptionModule,
   ],
 })
 export class AppModule {}

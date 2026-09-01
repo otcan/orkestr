@@ -28,6 +28,9 @@ import { appendThreadMessage, createThreadForPrincipal, enqueueThreadInputForPri
 import { resolveCurrentCodexGeneration } from "../../core/src/codex-generation.js";
 import { adminUserId, findOrCreateExternalUser, getUser, normalizeUserId } from "../../core/src/users.js";
 import { injectRuntimeFault } from "../../core/src/runtime-fault-injection.js";
+import { isNoReplyAssistantMessage } from "../../core/src/no-reply.js";
+import { recordUiReplyDeliveryMetric, replyDeliveryBindingFence, replyDeliveryIntentStatusPatch } from "../../core/src/reply-delivery-intent.js";
+import { encryptedAttachmentDeliveryGate, hydrateEncryptedPublishedAttachmentPaths } from "../../core/src/encrypted-attachment-publication.js";
 import { recordRuntimeControlMetric } from "../../core/src/observability.js";
 import { dataPaths, ensureDataDirs } from "../../storage/src/paths.js";
 import { readConnectorConfig } from "../../storage/src/config.js";
@@ -155,6 +158,13 @@ const suppressibleWhatsAppUpdateDeliveryTypes = new Set([
   "queue_notice",
   "router_update",
 ]);
+
+async function patchUiReplyDeliveryParent({ kind, threadId, parent, status, reason = "", outboxId = "", connectorMessageId = "", env = process.env } = {}) {
+  if (kind !== "thread" || !threadId || !parent?.id) return null;
+  const patch = replyDeliveryIntentStatusPatch(parent, status, { reason, outboxId, connectorMessageId });
+  if (!patch) return null;
+  return updateThreadMessage(threadId, parent.id, patch, env).catch(() => null);
+}
 
 function positiveInteger(value, fallback, minimum = 1) {
   if (value === undefined || value === null || String(value).trim() === "") return fallback;
@@ -3255,6 +3265,13 @@ async function sendClaimedWhatsAppText({
       ...(finalProjectionGeneration(message) ? { runtimeGeneration: finalProjectionGeneration(message) } : {}),
     },
   }, env);
+  const uiReplyIntent = replyDeliveryBindingFence(parent || {}, thread || {});
+  if (uiReplyIntent.applies) {
+    recordUiReplyDeliveryMetric(
+      outboxResult.created === true ? "outbox_created" : "duplicate_suppressed",
+      uiReplyIntent.intent?.requestedAt,
+    );
+  }
   if (connectorOutboxTerminalState(outboxResult.job?.state)) {
     const outboxState = String(outboxResult.job?.state || "").trim().toLowerCase();
     if (intent?.intentId) {
@@ -3292,6 +3309,15 @@ async function sendClaimedWhatsAppText({
         },
         env,
       });
+      await patchUiReplyDeliveryParent({
+        kind,
+        threadId,
+        parent,
+        status: "delivered",
+        outboxId: outboxResult.job.id,
+        connectorMessageId: outboundDeliveryAckIds({ brokerAck: outboxResult.job?.brokerAck })[0] || "",
+        env,
+      });
     } else {
       await patchAssistantMirrorDeliveryState({
         kind,
@@ -3305,6 +3331,15 @@ async function sendClaimedWhatsAppText({
           deliveryLastAttemptAt: pickString(outboxResult.job?.terminalAt, outboxResult.job?.updatedAt, new Date().toISOString()),
           deliveryError: pickString(outboxResult.job?.error),
         },
+        env,
+      });
+      await patchUiReplyDeliveryParent({
+        kind,
+        threadId,
+        parent,
+        status: outboxState === "delivery_uncertain" ? "delivery_unknown" : "retry_exhausted",
+        reason: pickString(outboxResult.job?.error, `connector_outbox_${outboxState}`),
+        outboxId: outboxResult.job.id,
         env,
       });
     }
@@ -3322,6 +3357,14 @@ async function sendClaimedWhatsAppText({
     }, env).catch(() => {});
     return { skipped: { reason: `connector_outbox_${outboxResult.job.state}` } };
   }
+  await patchUiReplyDeliveryParent({
+    kind,
+    threadId,
+    parent,
+    status: "queued",
+    outboxId: outboxResult.job.id,
+    env,
+  });
   if (deliveryType === "final") {
     const fence = await supersededCodexFinalDeliveryFence({
       threadId,
@@ -3717,6 +3760,15 @@ async function sendClaimedWhatsAppText({
       },
       env,
     });
+    await patchUiReplyDeliveryParent({
+      kind,
+      threadId,
+      parent,
+      status: "delivered",
+      outboxId: outboxClaim.job.id,
+      connectorMessageId: ackIds[0] || "",
+      env,
+    });
     await markRouterOutboxItem(intent?.outboxId, { status: "delivered", deliveredAt: delivery.deliveredAt }, env).catch(() => null);
     await recordRouterTraceEvent({
       routerTraceId,
@@ -3819,6 +3871,17 @@ async function sendClaimedWhatsAppText({
       },
       env,
     });
+    if (terminalFailure || uncertainDelivery) {
+      await patchUiReplyDeliveryParent({
+        kind,
+        threadId,
+        parent,
+        status: uncertainDelivery ? "delivery_unknown" : "retry_exhausted",
+        reason: errorText,
+        outboxId: outboxClaim.job.id,
+        env,
+      });
+    }
     await markRouterOutboxItem(intent?.outboxId, {
       status: terminalFailure || uncertainDelivery ? "skipped" : "failed",
       attempts: Number(intent?.attempts || 0) + 1,
@@ -6904,14 +6967,59 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
         }
         continue;
       }
-      if (!shouldMirrorWhatsAppReply(message)) continue;
       const parent = messages.find((entry) => entry.id === message.parentMessageId);
+      if (!shouldMirrorWhatsAppReply(message)) {
+        if (isNoReplyAssistantMessage(message)) {
+          await patchUiReplyDeliveryParent({
+            kind,
+            threadId,
+            parent,
+            status: "policy_skipped",
+            reason: "no_reply",
+            env,
+          });
+        }
+        continue;
+      }
       const whatsappOrigin =
         parent?.connector === "whatsapp" ||
         parent?.source === "whatsapp_inbound" ||
         message.connector === "whatsapp" ||
         boundThreadWhatsAppAssistantOrigin({ message, thread, kind });
       if (!whatsappOrigin) continue;
+      const replyDeliveryFence = replyDeliveryBindingFence(parent || {}, thread || {});
+      const snapshotChatId = replyDeliveryFence.applies ? pickString(replyDeliveryFence.intent?.target?.chatId) : "";
+      const snapshotAccountId = replyDeliveryFence.applies ? pickString(replyDeliveryFence.intent?.target?.accountId) : "";
+      if (replyDeliveryFence.applies && !replyDeliveryFence.allowed) {
+        const skippedChatId = snapshotChatId || pickString(message.chatId, parent?.chatId);
+        const skippedAccountId = snapshotAccountId || pickString(message.accountId, parent?.accountId);
+        await skipWhatsAppOutboundCandidate({
+          state,
+          outboundIntents,
+          kind,
+          deliveryType: "final",
+          agentId,
+          threadId,
+          messageId: message.id,
+          parentMessageId: message.parentMessageId,
+          chatId: skippedChatId,
+          accountId: skippedAccountId,
+          message,
+          parent,
+          reason: replyDeliveryFence.reason,
+          env,
+        });
+        await patchUiReplyDeliveryParent({
+          kind,
+          threadId,
+          parent,
+          status: "policy_skipped",
+          reason: replyDeliveryFence.reason,
+          env,
+        });
+        skipped.push({ agentId, threadId, messageId: message.id, reason: replyDeliveryFence.reason });
+        continue;
+      }
       const liveRecovery = canRecoverLiveWhatsAppOutboundIntent({
         state,
         messageSetKey,
@@ -6922,10 +7030,10 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
         kind,
         env,
       });
-      const chatId = pickString(message.chatId, parent?.chatId, thread?.binding?.chatId);
-      const accountId = kind === "thread"
+      const chatId = snapshotChatId || pickString(message.chatId, parent?.chatId, thread?.binding?.chatId);
+      const accountId = snapshotAccountId || (kind === "thread"
         ? pickString(thread?.binding?.replyAccountId, thread?.binding?.bridgeAccountId, thread?.binding?.responderConnectorAccountId, thread?.binding?.responderAccountId, thread?.binding?.outboundAccountId, message.accountId, parent?.accountId)
-        : pickString(message.accountId, parent?.accountId);
+        : pickString(message.accountId, parent?.accountId));
       const messagePhase = pickString(message.phase || "final_answer").toLowerCase();
       const deliveryType = messagePhase === "signal" ? "signal" : message.source === "orkestr_runtime" ? "router_update" : "final";
       const existingIntent = findWhatsAppOutboundIntent(outboundIntents, {
@@ -7007,7 +7115,11 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
         env,
         messageId: message.id,
       });
-      const sourceMessageAttachments = Array.isArray(message.attachments) ? message.attachments : [];
+      const sourceMessageAttachments = hydrateEncryptedPublishedAttachmentPaths(
+        thread,
+        Array.isArray(message.attachments) ? message.attachments : [],
+        env,
+      );
       const remoteMaterialized = await materializeRemoteWhatsAppAttachments({
         thread,
         message,
@@ -7026,6 +7138,35 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
         env,
       });
       const attachments = resolvedOutboundAttachments.attachments;
+      const encryptedDeliveryGate = await encryptedAttachmentDeliveryGate(thread || {}, attachments, env);
+      if (!encryptedDeliveryGate.allowed) {
+        await skipWhatsAppOutboundCandidate({
+          state,
+          outboundIntents,
+          kind,
+          deliveryType,
+          agentId,
+          threadId,
+          messageId: message.id,
+          parentMessageId: message.parentMessageId,
+          chatId,
+          accountId,
+          message,
+          parent,
+          reason: encryptedDeliveryGate.reason,
+          env,
+        });
+        await patchUiReplyDeliveryParent({
+          kind,
+          threadId,
+          parent,
+          status: "policy_skipped",
+          reason: encryptedDeliveryGate.reason,
+          env,
+        });
+        skipped.push({ agentId, threadId, messageId: message.id, reason: encryptedDeliveryGate.reason });
+        continue;
+      }
       const outboundText = appendLocalAttachmentFailureNotes(preparedOutbound.text, resolvedOutboundAttachments.skipped);
       const formattedText = formatWhatsAppOutboundText(redactDeniedThreadAttachmentPaths(outboundText, {
         thread,

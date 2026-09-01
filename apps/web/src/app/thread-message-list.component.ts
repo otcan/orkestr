@@ -80,11 +80,28 @@ export class ThreadMessageListComponent {
     return String(message.error || "Orkestr could not confirm this message reached Codex.").trim();
   }
 
+  replyDeliveryLabel(message: ThreadMessage): string {
+    const intent = message["replyDeliveryIntent"] as Record<string, unknown> | undefined;
+    if (!intent || intent["channel"] !== "whatsapp") return "";
+    const status = String(intent["status"] || "").trim();
+    if (status === "pending_reply") return "WhatsApp reply requested";
+    if (status === "queued") return "WhatsApp delivery queued";
+    if (status === "delivered") return "WhatsApp delivered";
+    if (status === "policy_skipped") return `WhatsApp skipped${intent["reason"] ? `: ${String(intent["reason"]).replace(/_/g, " ")}` : ""}`;
+    if (status === "delivery_unknown") return "WhatsApp delivery unknown";
+    if (status === "retry_exhausted") return "WhatsApp delivery failed";
+    return status.replace(/_/g, " ");
+  }
+
   attachmentLabel(attachment: Record<string, unknown>): string {
     return String(attachment["name"] || attachment["filename"] || attachment["path"] || attachment["saved_path"] || "attachment");
   }
 
   attachmentDownloadUrl(attachment: Record<string, unknown>): string {
     return String(attachment["downloadUrl"] || "").trim();
+  }
+
+  attachmentEncrypted(attachment: Record<string, unknown>): boolean {
+    return attachment["encrypted"] === true;
   }
 }
