@@ -187,6 +187,13 @@ export function recordWatcherAlertMetric({ source = "unknown", code = "unknown",
   });
 }
 
+export function recordRegistryWriteRejectionMetric({ store = "unknown", code = "unknown" } = {}) {
+  incrementCounter("orkestr_registry_write_rejections_total", {
+    store: labelValue(store),
+    code: labelValue(code),
+  });
+}
+
 export function recordWhatsAppDeliveryMetrics({ source = "unknown", result = null, error = null, durationMs = 0 } = {}) {
   const failed = Array.isArray(result?.failed) ? result.failed.length : 0;
   const skipped = Array.isArray(result?.skipped) ? result.skipped.length : 0;

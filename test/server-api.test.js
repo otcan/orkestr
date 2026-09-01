@@ -420,6 +420,7 @@ test("server exposes health, readiness, version, and agent message APIs", async 
       body: JSON.stringify({
         text: "Please inspect the uploaded file.",
         attachments: upload.attachments,
+        autoRun: false,
       }),
     });
     const messagePage = await request(baseUrl, `/api/threads/${createdThread.thread.id}/messages`);

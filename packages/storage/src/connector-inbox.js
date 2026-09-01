@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { assertTestStoragePath } from "./test-storage-isolation.js";
 
 const databases = new Map();
 
@@ -16,6 +17,7 @@ function databasePath(env = process.env) {
 
 async function database(env = process.env) {
   const filePath = databasePath(env);
+  assertTestStoragePath(filePath, env, "connector_inbox_sqlite");
   if (databases.has(filePath)) return databases.get(filePath);
   await fs.mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
   const db = new DatabaseSync(filePath);

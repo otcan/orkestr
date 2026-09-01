@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { assertTestStorageHome } from "./test-storage-isolation.js";
 
 export function appHome(env = process.env) {
   return path.resolve(env.ORKESTR_HOME || path.join(os.homedir(), ".orkestr"));
@@ -32,6 +33,7 @@ export function dataPaths(env = process.env) {
     userDataRoot: path.join(home, "users"),
     threads: path.join(home, "threads.json"),
     threadsDb: path.join(home, "threads.sqlite"),
+    threadRegistryLock: path.join(home, "thread-registry-write"),
     threadMessages: path.join(home, "thread-messages"),
     threadMessagesDb: path.join(home, "thread-messages.sqlite"),
     runtimeLeases: path.join(home, "runtime-leases.json"),
@@ -87,6 +89,7 @@ export function userDataPaths(userId, env = process.env) {
 
 export async function ensureDataDirs(env = process.env) {
   const paths = dataPaths(env);
+  assertTestStorageHome(paths.home, env);
   await fs.mkdir(paths.home, { recursive: true });
   await fs.mkdir(paths.userDataRoot, { recursive: true });
   await fs.mkdir(paths.instances, { recursive: true, mode: 0o700 });

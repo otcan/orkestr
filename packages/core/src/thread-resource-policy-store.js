@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import { ensureDataDirs } from "../../storage/src/paths.js";
 import { migrateLegacyDesktopGrants } from "./thread-resource-policy-sqlite-migration.js";
 import { readThreadResourcePolicySqliteState as readState } from "./thread-resource-policy-sqlite-state.js";
+import { assertTestStoragePath } from "../../storage/src/test-storage-isolation.js";
 import {
   clearThreadResourcePolicyPostgresCache,
   closeThreadResourcePolicyPostgresPools,
@@ -54,6 +55,7 @@ export async function openThreadResourcePolicyDatabase(env = process.env) {
   const sqlite = await loadSqlite(mode);
   if (!sqlite) throw Object.assign(new Error("thread_resource_policy_transactional_store_required"), { statusCode: 503 });
   const paths = await ensureDataDirs(env);
+  assertTestStoragePath(paths.threadResourcePolicyDb, env, "thread_resource_policy_sqlite");
   if (databases.has(paths.threadResourcePolicyDb)) return databases.get(paths.threadResourcePolicyDb);
   if (databaseOpenPromises.has(paths.threadResourcePolicyDb)) return databaseOpenPromises.get(paths.threadResourcePolicyDb);
   const opening = (async () => {

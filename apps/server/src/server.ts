@@ -7,6 +7,8 @@ import type { INestApplication } from "@nestjs/common";
 import type { NestExpressApplication } from "@nestjs/platform-express";
 import { loadOverlayExecutorAdapters, recoverInterruptedExecutions } from "../../../packages/core/src/executors.js";
 import {
+  activateThreadInputDeliveryScheduler,
+  closeThreadInputDeliveryScheduler,
   setThreadConnectorDeliverySignalHandler,
   setThreadInputDeliveryFailureHandler,
   syncPaneProgressForActiveLeases,
@@ -28,6 +30,7 @@ import {
   whatsAppDeliveryFollowUpDelayMs,
 } from "../../../packages/connectors/src/whatsapp-sync-signal.js";
 import { ensureDataDirs } from "../../../packages/storage/src/paths.js";
+import { snapshotEnvironment } from "../../../packages/storage/src/test-storage-isolation.js";
 import { authorizeHttpRequest } from "../../../packages/core/src/security.js";
 import { getThreadForPrincipal, listThreads } from "../../../packages/core/src/threads.js";
 import { isAdminPrincipal } from "../../../packages/core/src/policy.js";
@@ -565,9 +568,10 @@ function requestPolicyUrl(request: any): string {
   return String(request?.orkestrPolicyUrl || request?.originalUrl || request?.url || "/");
 }
 
-export async function startServer({ port = 19812, host = "127.0.0.1", openBrowser = false } = {}) {
-  const serverEnv = { ...process.env };
+export async function startServer({ port = 19812, host = "127.0.0.1", openBrowser = false, env = process.env } = {}) {
+  const serverEnv = snapshotEnvironment(env);
   await ensureDataDirs(serverEnv);
+  activateThreadInputDeliveryScheduler(serverEnv);
   await migrateThreadMessageStore(serverEnv);
   if (serverEnv.ORKESTR_RECOVER_RUNNING_ON_START !== "0") {
     await recoverInterruptedExecutions(serverEnv);
@@ -707,6 +711,7 @@ export async function startServer({ port = 19812, host = "127.0.0.1", openBrowse
   }
 
   return serverHandle(app, timer, runtimeMonitor, paneProgressMonitor, async () => {
+    await closeThreadInputDeliveryScheduler(serverEnv);
     await recordServerShutdown(process.env.ORKESTR_SHUTDOWN_SIGNAL || "server_close", serverEnv).catch(() => {});
     clearConnectorDeliverySignalHandler();
     connectorRuntimeSyncSignal.close();

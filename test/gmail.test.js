@@ -234,7 +234,9 @@ test("named Google OAuth app survives authorization, callback storage, and refre
 });
 
 test("broker refresh selects the OAuth app that issued the token", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-gmail-broker-refresh-"));
   const env = {
+    ORKESTR_HOME: home,
     GMAIL_OAUTH_CLIENT_ID: "production-client",
     GMAIL_OAUTH_CLIENT_SECRET: "production-secret",
     GMAIL_OAUTH_REDIRECT_URI: "https://connect.example.test/oauth/gmail/callback",

@@ -68,6 +68,8 @@ test("CI test runner discovers test files and builds node arguments", async () =
   assert.deepEqual(files, ["test/b.test.js", "test/nested/a.test.js"]);
   assert.equal(options.concurrency, 3);
   assert.deepEqual(args, [
+    "--import",
+    "./test/test-bootstrap.mjs",
     "--test",
     "--test-concurrency=3",
     "--test-force-exit",
@@ -79,6 +81,12 @@ test("CI test runner scrubs production connector and public URL env", () => {
   const env = buildCiTestEnv({
     PATH: "/bin",
     ORKESTR_HOME: "/prod/home",
+    ORKESTR_CONNECTOR_INBOX_DB: "/prod/connector-inbox.sqlite",
+    ORKESTR_THREAD_RESOURCE_POLICY_DB: "/prod/thread-policy.sqlite",
+    ORKESTR_PUBLIC_APPS_FILE: "/prod/public-apps.json",
+    ORKESTR_CONNECTOR_OUTBOX_STORE: "postgres",
+    ORKESTR_CONNECTOR_OUTBOX_POSTGRES_URL: "postgres://production.invalid/orkestr",
+    PGHOST: "production-db.invalid",
     ORKESTR_PUBLIC_HTTPS_URL: "https://app.example.test",
     ORKESTR_APP_HOST: "app.example.test",
     ORKESTR_AUTH_REQUIRED: "1",
@@ -99,6 +107,13 @@ test("CI test runner scrubs production connector and public URL env", () => {
   assert.equal(env.ORKESTR_WHATSAPP_EXTERNAL_BRIDGE_ENABLED, "0");
   assert.equal(env.ORKESTR_WHATSAPP_DEBUG_FOOTER, "0");
   assert.equal(env.ORKESTR_PUBLIC_HTTPS_URL, undefined);
+  assert.equal(env.ORKESTR_CONNECTOR_INBOX_DB, undefined);
+  assert.equal(env.ORKESTR_THREAD_RESOURCE_POLICY_DB, undefined);
+  assert.equal(env.ORKESTR_PUBLIC_APPS_FILE, undefined);
+  assert.equal(env.ORKESTR_AUTO_RUN_THREAD_INPUT, "0");
+  assert.equal(env.ORKESTR_CONNECTOR_OUTBOX_STORE, "sqlite");
+  assert.equal(env.ORKESTR_CONNECTOR_OUTBOX_POSTGRES_URL, undefined);
+  assert.equal(env.PGHOST, undefined);
   assert.equal(env.ORKESTR_APP_HOST, undefined);
   assert.equal(env.GMAIL_OAUTH_CLIENT_SECRET, undefined);
   assert.equal(env.WHATSAPP_BRIDGE_URL, undefined);

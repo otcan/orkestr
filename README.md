@@ -390,6 +390,7 @@ See [docs/oss-managed-boundary.md](docs/oss-managed-boundary.md).
 - [Task agents](docs/task-agents.md)
 - [Framework and deployment](docs/framework-deployment.md)
 - [LLM-assisted release procedures](docs/llm-assisted-release-procedures.md)
+- [Test storage isolation](docs/test-storage-isolation.md)
 - [OSS vs managed boundary](docs/oss-managed-boundary.md)
 - [Architecture diagram](docs/architecture-diagram.md)
 - [Demo script](docs/demo-script.md)
@@ -404,8 +405,11 @@ See [docs/oss-managed-boundary.md](docs/oss-managed-boundary.md).
 ```bash
 npm ci
 npm run build
-node --test
+npm test
 ```
+
+Use the npm test commands so the temporary-home bootstrap loads before the
+application. See [test storage isolation](docs/test-storage-isolation.md).
 
 Release and live E2E work uses the
 [LLM-assisted release procedures](docs/llm-assisted-release-procedures.md).

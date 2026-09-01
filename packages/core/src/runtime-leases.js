@@ -7,6 +7,16 @@ import { promisify } from "node:util";
 import { dataPaths, ensureDataDirs } from "../../storage/src/paths.js";
 import { createThreadMessageRepository } from "../../storage/src/repositories.js";
 import { appendEvent, readJson, writeJson } from "../../storage/src/store.js";
+import { snapshotEnvironment } from "../../storage/src/test-storage-isolation.js";
+import {
+  acquireThreadInputDeliveryLock,
+  activateThreadInputDeliveryScope,
+  closeThreadInputDeliveryScope,
+  releaseThreadInputDeliveryLock,
+  resetThreadInputDeliverySchedulerForTest,
+  scheduleThreadInputDeliveryTask,
+  threadInputDeliveryScopeStatus,
+} from "./thread-input-delivery-scheduler.js";
 import { ensureRuntimeAgentsFile } from "./agent-context.js";
 import { recordCodexRuntimeAuthInvalidSignal } from "./codex-auth-health.js";
 import { deployDrainActiveSync } from "./deploy-drain.js";
@@ -82,8 +92,6 @@ import { readCodexRolloutSessionMeta, validateCodexRolloutGeneration } from "./c
 setConnectorOutboxJobAdapter(ensureConnectorOutboxJob);
 
 const execFileAsync = promisify(execFile);
-const deliveryLocks = new Set();
-const deliveryTimers = new Map();
 let runtimeSyncInFlight = null;
 const rolloutSyncInFlight = new Map();
 const rolloutSyncLeaseCache = new Map();
@@ -147,6 +155,10 @@ function runtimeLeaseStoreLockTimeoutMs(env = process.env) {
 
 function runtimeCacheScope(env = process.env) {
   return dataPaths(env).home;
+}
+
+function threadInputDeliveryScope(env = process.env) {
+  return runtimeCacheScope(env);
 }
 
 function whatsappOrigin(message = {}) {
@@ -3699,27 +3711,28 @@ async function sendThreadInputToPane(thread, message, status, env = process.env)
 function scheduleThreadInputDelivery(threadId, env = process.env, delayMs = 0) {
   const id = String(threadId || "").trim();
   if (!id) return;
-  if (deployDrainActiveSync(env)) {
+  const deliveryEnv = snapshotEnvironment(env);
+  const scope = threadInputDeliveryScope(deliveryEnv);
+  if (!threadInputDeliveryScopeStatus(scope).active) return;
+  if (deployDrainActiveSync(deliveryEnv)) {
     setImmediate(() => {
-      void appendEvent({ type: "thread_input_delivery_deferred", threadId: id, reason: "deploy_draining" }, env).catch(() => {});
+      void appendEvent({ type: "thread_input_delivery_deferred", threadId: id, reason: "deploy_draining" }, deliveryEnv).catch(() => {});
     });
     return;
   }
-  const current = deliveryTimers.get(id);
-  if (current) clearTimeout(current);
-  const timer = setTimeout(() => {
-    deliveryTimers.delete(id);
-    void deliverPendingThreadInputs(id, env).catch((error) => {
+  scheduleThreadInputDeliveryTask({
+    scope,
+    threadId: id,
+    delayMs,
+    task: () => deliverPendingThreadInputs(id, deliveryEnv).catch((error) => {
       const errorText = error instanceof Error ? error.message : String(error);
       void appendEvent({
         type: "thread_input_delivery_scheduler_failed",
         threadId: id,
         error: errorText,
-      }, env).catch(() => {});
-    });
-  }, Math.max(0, Number(delayMs) || 0));
-  if (typeof timer.unref === "function") timer.unref();
-  deliveryTimers.set(id, timer);
+      }, deliveryEnv).catch(() => {});
+    }),
+  });
 }
 
 export async function deliverPendingThreadInputs(threadId, env = process.env, options = {}) {
@@ -3758,8 +3771,8 @@ export async function deliverPendingThreadInputs(threadId, env = process.env, op
     await appendEvent({ type: "thread_input_delivery_blocked", threadId: thread.id, reason: "codex_app_server_migration_required" }, env).catch(() => null);
     return [];
   }
-  if (deliveryLocks.has(thread.id)) return [];
-  deliveryLocks.add(thread.id);
+  const deliveryScope = threadInputDeliveryScope(env);
+  if (!acquireThreadInputDeliveryLock(deliveryScope, thread.id)) return [];
   const delivered = [];
   try {
     for (;;) {
@@ -3997,7 +4010,7 @@ export async function deliverPendingThreadInputs(threadId, env = process.env, op
       }
     }
   } finally {
-    deliveryLocks.delete(thread.id);
+    releaseThreadInputDeliveryLock(deliveryScope, thread.id);
   }
   return delivered;
 }
@@ -4007,31 +4020,45 @@ export function requestThreadInputDelivery(threadId, env = process.env, delayMs 
 }
 
 export function resetThreadInputDeliveryTimersForTest() {
-  for (const timer of deliveryTimers.values()) clearTimeout(timer);
-  deliveryTimers.clear();
+  resetThreadInputDeliverySchedulerForTest();
+}
+
+export function activateThreadInputDeliveryScheduler(env = process.env) {
+  activateThreadInputDeliveryScope(threadInputDeliveryScope(snapshotEnvironment(env)));
+}
+
+export async function closeThreadInputDeliveryScheduler(env = process.env) {
+  const scope = threadInputDeliveryScope(snapshotEnvironment(env));
+  return closeThreadInputDeliveryScope(scope);
+}
+
+export function threadInputDeliverySchedulerStatus(env = process.env) {
+  const scope = threadInputDeliveryScope(snapshotEnvironment(env));
+  return threadInputDeliveryScopeStatus(scope);
 }
 
 export function requestThreadWake(threadId, options = {}, env = process.env) {
-  if (deployDrainActiveSync(env)) {
+  const wakeEnv = snapshotEnvironment(env);
+  if (deployDrainActiveSync(wakeEnv)) {
     setImmediate(() => {
       void appendEvent({
         type: "runtime_wake_deferred",
         threadId,
         reason: options.reason || "wake",
         deferredReason: "deploy_draining",
-      }, env).catch(() => {});
+      }, wakeEnv).catch(() => {});
     });
     return;
   }
   setImmediate(() => {
-    void wakeThread(threadId, options, env).catch(async (error) => {
+    void wakeThread(threadId, options, wakeEnv).catch(async (error) => {
       const errorText = error instanceof Error ? error.message : String(error);
-      const current = await getThread(threadId, env).catch(() => null);
+      const current = await getThread(threadId, wakeEnv).catch(() => null);
       if (error?.code === "thread_retired" || String(current?.retiredAt || "").trim() || ["retiring", "retired"].includes(String(current?.state || "").trim().toLowerCase())) {
-        await appendEvent({ type: "runtime_wake_blocked", threadId, reason: "thread_retired" }, env).catch(() => {});
+        await appendEvent({ type: "runtime_wake_blocked", threadId, reason: "thread_retired" }, wakeEnv).catch(() => {});
         return;
       }
-      const nativeCodexRuntime = current && threadUsesNativeCodexRuntime(current, env);
+      const nativeCodexRuntime = current && threadUsesNativeCodexRuntime(current, wakeEnv);
       await updateThread(threadId, nativeCodexRuntime ? {
         state: "failed",
         lastError: errorText,
@@ -4045,14 +4072,14 @@ export function requestThreadWake(threadId, options = {}, env = process.env) {
       } : {
         state: "sleeping",
         lastError: errorText,
-      }, env).catch(() => {});
+      }, wakeEnv).catch(() => {});
       await appendEvent({
         type: "runtime_wake_failed",
         threadId,
         reason: options.reason || "wake",
         error: errorText,
         runtimeKind: nativeCodexRuntime ? "codex-app-server" : "codex-tmux",
-      }, env).catch(() => {});
+      }, wakeEnv).catch(() => {});
     });
   });
 }

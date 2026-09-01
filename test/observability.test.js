@@ -5,6 +5,7 @@ import {
   evaluateRuntimeControlReleaseGate,
   recordBackgroundLoopMetrics,
   recordMailboxThreadDeliveryMetrics,
+  recordRegistryWriteRejectionMetric,
   recordRuntimeControlMetric,
   recordTaskAgentLifecycleMetric,
   recordThreadResourceAccessMetric,
@@ -113,6 +114,8 @@ test("observability records loop, delivery, task-agent, and watcher counters", (
   });
   recordTaskAgentLifecycleMetric("result_completed", "completed");
   recordWatcherAlertMetric({ source: "server.runtimeMonitor", code: "runtime_sync_failed", severity: "error" });
+  recordRegistryWriteRejectionMetric({ store: "threads", code: "thread_registry_unexpected_removal" });
+  recordWatcherAlertMetric({ source: "thread_registry", code: "thread_registry_unexpected_removal", severity: "critical" });
   recordThreadResourceAccessMetric({ resourceType: "mailbox", permission: "subscribe", mode: "shadow", shadowDenied: true, durationMs: 12 });
   recordThreadResourceInvalidationMetric({ resourceType: "desktop", subject: "share", reason: "Message-ID <person@example.test>" });
   recordMailboxThreadDeliveryMetrics({ state: "dead-letter", lagMs: 1_000 });
@@ -126,6 +129,8 @@ test("observability records loop, delivery, task-agent, and watcher counters", (
   assert.match(metrics, /orkestr_whatsapp_delivery_messages_total\{source="delivery_scheduler",state="sent"\} 2/);
   assert.match(metrics, /orkestr_task_agent_lifecycle_total\{event="result_completed",status="completed"\} 1/);
   assert.match(metrics, /orkestr_watcher_alerts_total\{source="server.runtimemonitor",code="runtime_sync_failed",severity="error"\} 1/);
+  assert.match(metrics, /orkestr_registry_write_rejections_total\{store="threads",code="thread_registry_unexpected_removal"\} 1/);
+  assert.match(metrics, /orkestr_watcher_alerts_total\{source="thread_registry",code="thread_registry_unexpected_removal",severity="critical"\} 1/);
   assert.match(metrics, /orkestr_thread_resource_access_decisions_total\{resource_type="mailbox",permission="subscribe",mode="shadow",outcome="shadow_denied"\} 1/);
   assert.match(metrics, /orkestr_thread_resource_shadow_mismatches_total\{resource_type="mailbox",permission="subscribe"\} 1/);
   assert.match(metrics, /orkestr_thread_resource_invalidations_total\{resource_type="desktop",subject="share",reason="unknown"\} 1/);
