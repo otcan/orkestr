@@ -1,6 +1,7 @@
 import { DatePipe } from "@angular/common";
-import { Component, EventEmitter, Input, Output } from "@angular/core";
+import { Component, EventEmitter, Input, Output, inject } from "@angular/core";
 import { ThreadMessage } from "./api.service";
+import { AttachmentDecryptionService } from "./attachment-decryption.service";
 import { hasProposedPlanEnvelope, renderMessageTextHtml } from "./message-renderer";
 
 @Component({
@@ -9,6 +10,8 @@ import { hasProposedPlanEnvelope, renderMessageTextHtml } from "./message-render
   templateUrl: "./thread-message-list.component.html",
 })
 export class ThreadMessageListComponent {
+  private readonly attachmentDecryption = inject(AttachmentDecryptionService);
+
   @Input() messages: ThreadMessage[] = [];
   @Input() loading = false;
   @Input() sending = false;
@@ -16,6 +19,8 @@ export class ThreadMessageListComponent {
   @Input() implementingPlan = false;
   @Input() threadInputReady = true;
   @Output() implementPlan = new EventEmitter<void>();
+  attachmentDownloadBusy: Record<string, boolean> = {};
+  attachmentDownloadErrors: Record<string, string> = {};
 
   messageKey(message: ThreadMessage): string {
     return String(message.id || message.eventId || message.cursor || `${message.role}:${message.createdAt}:${message.text}`);
@@ -103,5 +108,27 @@ export class ThreadMessageListComponent {
 
   attachmentEncrypted(attachment: Record<string, unknown>): boolean {
     return attachment["encrypted"] === true;
+  }
+
+  attachmentKey(attachment: Record<string, unknown>): string {
+    return String(attachment["id"] || attachment["downloadUrl"] || this.attachmentLabel(attachment));
+  }
+
+  async downloadEncryptedAttachment(attachment: Record<string, unknown>): Promise<void> {
+    const key = this.attachmentKey(attachment);
+    const downloadUrl = this.attachmentDownloadUrl(attachment);
+    if (!downloadUrl || this.attachmentDownloadBusy[key]) return;
+    this.attachmentDownloadBusy[key] = true;
+    this.attachmentDownloadErrors[key] = "";
+    try {
+      await this.attachmentDecryption.download(downloadUrl);
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error || "attachment_decryption_failed");
+      this.attachmentDownloadErrors[key] = reason === "attachment_identity_locked"
+        ? "Unlock your attachment key in Instance Settings, then try again."
+        : "This protected attachment could not be decrypted or validated on this browser.";
+    } finally {
+      this.attachmentDownloadBusy[key] = false;
+    }
   }
 }

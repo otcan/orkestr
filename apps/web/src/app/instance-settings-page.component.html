@@ -22,10 +22,10 @@
       <div class="row-between">
         <div>
           <p class="eyebrow">Attachment protection</p>
-          <h3>Recipient encryption</h3>
-          <p class="subline">Published attachments use interoperable age encryption. Your private key is used only in this browser to verify possession and is never sent to Orkestr.</p>
+          <h3>Encrypted WebUI downloads</h3>
+          <p class="subline">Every future attachment is published as age ciphertext. This browser decrypts it locally and saves the original file; your private identity is never sent to Orkestr.</p>
         </div>
-        <span class="status-pill">{{ attachmentEncryption?.ready ? "ready" : "key required" }}</span>
+        <span class="status-pill">{{ attachmentEncryption?.policy?.required ? "enforced" : attachmentEncryption?.ready ? "ready to enforce" : "key required" }}</span>
       </div>
 
       @if (encryptionError) {
@@ -39,8 +39,44 @@
           (ngModelChange)="setEncryptionRequired($event)"
           [disabled]="encryptionBusy || !hasActiveEncryptionRecipient()"
         />
-        Require encryption for every published attachment and export
+        Require encryption for every future WebUI attachment and export
       </label>
+
+      <div class="settings-stack attachment-browser-key">
+        <div class="row-between">
+          <div>
+            <strong>This browser</strong>
+            <p class="subline">{{ browserKeyUnlocked() ? "Unlocked for automatic local downloads" : "A private age identity is required to open protected downloads" }}</p>
+          </div>
+          <span class="status-pill">{{ browserKeyUnlocked() ? "unlocked" : "locked" }}</span>
+        </div>
+        @if (!browserKeyUnlocked()) {
+          <label class="settings-field attachment-identity-field">
+            <span>Private age identity</span>
+            <input type="password" autocomplete="off" [(ngModel)]="browserIdentity" placeholder="AGE-SECRET-KEY-1…" />
+          </label>
+          <label class="checkbox-row settings-toggle">
+            <input type="checkbox" [(ngModel)]="rememberBrowserIdentity" />
+            Remember only in this browser profile
+          </label>
+          <div class="settings-actions compact-actions">
+            <button type="button" (click)="unlockBrowserKey()" [disabled]="encryptionBusy || !browserIdentity.trim()">Unlock local downloads</button>
+            <button class="secondary" type="button" (click)="createBrowserKey()" [disabled]="encryptionBusy">Create and enroll a browser key</button>
+          </div>
+        } @else {
+          <div class="settings-actions compact-actions">
+            <button class="secondary" type="button" (click)="lockBrowserKey()" [disabled]="encryptionBusy">Forget key on this browser</button>
+          </div>
+        }
+        @if (generatedRecoveryIdentity) {
+          <div class="notice warning attachment-recovery-key">
+            <strong>Save this recovery key now.</strong>
+            <p>Losing this browser profile and this key makes existing ciphertext unrecoverable.</p>
+            <code>{{ generatedRecoveryIdentity }}</code>
+            <button class="secondary" type="button" (click)="downloadRecoveryIdentity()">Save recovery key</button>
+          </div>
+        }
+      </div>
 
       <div class="file-list">
         @for (key of attachmentEncryption?.keys || []; track key.id) {
@@ -55,11 +91,15 @@
                 <button class="secondary" type="button" (click)="beginRecipientVerification(key)" [disabled]="encryptionBusy">Verify possession</button>
               } @else {
                 <label class="settings-field attachment-identity-field">
-                  <span>Private age identity (processed locally, then cleared)</span>
+                  <span>Private age identity (processed and optionally remembered locally)</span>
                   <input type="password" autocomplete="off" [(ngModel)]="verificationIdentity" placeholder="AGE-SECRET-KEY-1…" />
                 </label>
+                <label class="checkbox-row settings-toggle">
+                  <input type="checkbox" [(ngModel)]="rememberBrowserIdentity" />
+                  Remember only in this browser profile
+                </label>
                 <div class="settings-actions compact-actions">
-                  <button type="button" (click)="verifyRecipient(key)" [disabled]="encryptionBusy || !verificationIdentity.trim()">Decrypt challenge and verify</button>
+                  <button type="button" (click)="verifyRecipient(key)" [disabled]="encryptionBusy || (!verificationIdentity.trim() && !browserKeyUnlocked())">Decrypt challenge and verify</button>
                   <button class="secondary" type="button" (click)="cancelRecipientVerification()" [disabled]="encryptionBusy">Cancel</button>
                 </div>
               }
@@ -86,23 +126,7 @@
         </div>
       </div>
 
-      <div class="settings-stack attachment-migration-form">
-        <label class="settings-field">
-          <span>Legacy attachment migration</span>
-          <input [(ngModel)]="migrationThreadId" placeholder="Thread ID" autocomplete="off" />
-        </label>
-        <div class="settings-actions">
-          <button class="secondary" type="button" (click)="migrateAttachments(true)" [disabled]="encryptionBusy || !migrationThreadId.trim()">Preview migration</button>
-          <button type="button" (click)="migrateAttachments(false)" [disabled]="encryptionBusy || !migrationThreadId.trim() || attachmentEncryption?.policy?.required !== true">Run encrypted migration</button>
-        </div>
-        @if (migrationResult; as migration) {
-          <p class="subline">
-            {{ migration.dryRun ? "Preview" : "Completed" }}:
-            {{ migration.plan.candidateAttachments }} candidate attachment(s),
-            {{ migration.migratedAttachments }} migrated.
-          </p>
-        }
-      </div>
+      <p class="subline">Historical attachments are left unchanged. WhatsApp receives the text reply, while protected files remain WebUI-only.</p>
     </section>
 
     <section class="card">

@@ -30,7 +30,7 @@ import { adminUserId, findOrCreateExternalUser, getUser, normalizeUserId } from 
 import { injectRuntimeFault } from "../../core/src/runtime-fault-injection.js";
 import { isNoReplyAssistantMessage } from "../../core/src/no-reply.js";
 import { recordUiReplyDeliveryMetric, replyDeliveryBindingFence, replyDeliveryIntentStatusPatch } from "../../core/src/reply-delivery-intent.js";
-import { encryptedAttachmentDeliveryGate, hydrateEncryptedPublishedAttachmentPaths } from "../../core/src/encrypted-attachment-publication.js";
+import { hydrateEncryptedPublishedAttachmentPaths } from "../../core/src/encrypted-attachment-publication.js";
 import { recordRuntimeControlMetric } from "../../core/src/observability.js";
 import { dataPaths, ensureDataDirs } from "../../storage/src/paths.js";
 import { readConnectorConfig } from "../../storage/src/config.js";
@@ -46,6 +46,7 @@ import {
 import { syncWhatsAppTypingTargets } from "./whatsapp-typing.js";
 import { routerUpdateWhatsAppDeliveryTarget } from "./whatsapp-router-updates.js";
 import { attachmentDeliveryKey, prepareWhatsAppTableAttachments } from "./whatsapp-table-attachments.js";
+import { appendWebUiEncryptedAttachmentNotice, webUiEncryptedAttachmentDelivery } from "./whatsapp-webui-encrypted-attachments.js";
 import { appendWhatsAppDebugFooter, formatWhatsAppOutboundText, stripWhatsAppDebugFooter } from "./whatsapp-formatting.js";
 import {
   bindingAccountIds,
@@ -7137,37 +7138,12 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
         ],
         env,
       });
-      const attachments = resolvedOutboundAttachments.attachments;
-      const encryptedDeliveryGate = await encryptedAttachmentDeliveryGate(thread || {}, attachments, env);
-      if (!encryptedDeliveryGate.allowed) {
-        await skipWhatsAppOutboundCandidate({
-          state,
-          outboundIntents,
-          kind,
-          deliveryType,
-          agentId,
-          threadId,
-          messageId: message.id,
-          parentMessageId: message.parentMessageId,
-          chatId,
-          accountId,
-          message,
-          parent,
-          reason: encryptedDeliveryGate.reason,
-          env,
-        });
-        await patchUiReplyDeliveryParent({
-          kind,
-          threadId,
-          parent,
-          status: "policy_skipped",
-          reason: encryptedDeliveryGate.reason,
-          env,
-        });
-        skipped.push({ agentId, threadId, messageId: message.id, reason: encryptedDeliveryGate.reason });
-        continue;
-      }
-      const outboundText = appendLocalAttachmentFailureNotes(preparedOutbound.text, resolvedOutboundAttachments.skipped);
+      const protectedDelivery = webUiEncryptedAttachmentDelivery(resolvedOutboundAttachments.attachments);
+      const attachments = protectedDelivery.attachments;
+      const outboundText = appendWebUiEncryptedAttachmentNotice(
+        appendLocalAttachmentFailureNotes(preparedOutbound.text, resolvedOutboundAttachments.skipped),
+        protectedDelivery.protectedCount,
+      );
       const formattedText = formatWhatsAppOutboundText(redactDeniedThreadAttachmentPaths(outboundText, {
         thread,
         principal: await principalForThread(thread || {}, env),
