@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import { ensureDataDirs } from "../../storage/src/paths.js";
 import { readJson } from "../../storage/src/store.js";
 import { assertPublicRefInvariant, assertUniquePublicRefs } from "../../storage/src/public-references.js";
+import { assertTestStoragePath } from "../../storage/src/test-storage-isolation.js";
 
 const dbCache = new Map();
 let sqliteModulePromise = null;
@@ -29,6 +30,7 @@ export async function openBrokerDatabase(env = process.env) {
   const sqlite = await loadSqlite(mode);
   if (!sqlite) return null;
   const paths = await ensureDataDirs(env);
+  assertTestStoragePath(paths.brokerInstancesDb, env, "broker_instances_sqlite");
   if (dbCache.has(paths.brokerInstancesDb)) return dbCache.get(paths.brokerInstancesDb);
   const existed = await fs.stat(paths.brokerInstancesDb).then((stat) => stat.size > 0, () => false);
   const db = new sqlite.DatabaseSync(paths.brokerInstancesDb);

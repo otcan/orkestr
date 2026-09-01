@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { assertTestStoragePath } from "../../storage/src/test-storage-isolation.js";
 
 function clean(value = "") {
   return String(value || "").trim();
@@ -28,6 +29,7 @@ export async function stageConnectorAttachment({ bytes, filename = "attachment",
   if (!payload.length) throw Object.assign(new Error("connector_attachment_empty"), { statusCode: 400 });
   if (payload.length > maxBytes) throw Object.assign(new Error("connector_attachment_too_large"), { statusCode: 413 });
   const root = stageRoot(env);
+  assertTestStoragePath(root, env, "connector_attachment_stage");
   await fs.mkdir(root, { recursive: true, mode: 0o700 });
   const ref = `att_${crypto.randomBytes(24).toString("base64url")}`;
   const filePath = path.join(root, `${ref}-${safeFilename(filename)}`);
@@ -47,6 +49,7 @@ export async function stageConnectorAttachment({ bytes, filename = "attachment",
 
 export async function resolveConnectorAttachmentRefs(refs = [], env = process.env) {
   const root = stageRoot(env);
+  assertTestStoragePath(root, env, "connector_attachment_stage");
   const resolved = [];
   for (const ref of Array.isArray(refs) ? refs : []) {
     const metadata = JSON.parse(await fs.readFile(refPath(ref, env), "utf8"));

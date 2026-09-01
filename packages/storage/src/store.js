@@ -4,6 +4,7 @@ import path from "node:path";
 import { pipeline } from "node:stream/promises";
 import { createGzip } from "node:zlib";
 import { dataPaths, ensureDataDirs } from "./paths.js";
+import { assertTestStoragePath } from "./test-storage-isolation.js";
 
 const writeQueues = new Map();
 const eventArchivePattern = /^events-\d{8}-\d{6}(?:-\d+)?\.jsonl(?:\.gz)?$/;
@@ -27,10 +28,12 @@ export async function readJson(filePath, fallback) {
 }
 
 export async function writeJson(filePath, value) {
+  assertTestStoragePath(filePath, process.env, "json");
   return enqueueFileWrite(filePath, () => writeJsonAtomic(filePath, value));
 }
 
 export async function writeSecretJson(filePath, value) {
+  assertTestStoragePath(filePath, process.env, "secret_json");
   await fs.mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
   await writeJson(filePath, value);
   await fs.chmod(filePath, 0o600);

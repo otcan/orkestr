@@ -5,6 +5,7 @@ import { constants as fsConstants } from "node:fs";
 import { ingestMailboxMessage } from "./mailbox-inbox.js";
 import { listMailboxes } from "../../core/src/mailboxes.js";
 import { acceptingMailboxStatuses, extractAddress } from "../../core/src/mailbox-normalization.js";
+import { assertTestStoragePath } from "../../storage/src/test-storage-isolation.js";
 
 const socketMapName = "mailboxes";
 const spoolIdPattern = /^mail-[a-f0-9-]{36}\.eml$/;
@@ -26,6 +27,7 @@ export async function spoolPostfixMailboxMessage(rawMime = Buffer.alloc(0), env 
   const source = Buffer.isBuffer(rawMime) ? rawMime : Buffer.from(rawMime || "");
   const spoolId = `mail-${crypto.randomUUID()}.eml`;
   const filePath = mailboxSpoolPath(spoolId, env);
+  assertTestStoragePath(filePath, env, "mailbox_spool");
   await fs.mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
   await fs.writeFile(filePath, source, { flag: "wx", mode: 0o600 });
   return { spoolId, filePath, sizeBytes: source.length };
@@ -33,6 +35,7 @@ export async function spoolPostfixMailboxMessage(rawMime = Buffer.alloc(0), env 
 
 export async function ingestPostfixSpoolFile({ spoolId = "", ...envelope } = {}, env = process.env) {
   const filePath = mailboxSpoolPath(spoolId, env);
+  assertTestStoragePath(filePath, env, "mailbox_spool");
   let handle;
   try {
     handle = await fs.open(filePath, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
