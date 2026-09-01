@@ -117,6 +117,40 @@ test("global mandatory mode fails closed before automatic browser enrollment com
   assert.equal(published.attachments[0].encrypted, true);
 });
 
+test("doctor ignores pre-enforcement plaintext but rejects plaintext published after enforcement", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-attachment-doctor-cutoff-"));
+  const runtimeEnv = env(home);
+  const enforcedEnv = { ...runtimeEnv, ORKESTR_ATTACHMENT_ENCRYPTION_REQUIRED: "1" };
+  await createThread({ id: "thread-doctor-cutoff", ownerUserId: "tenant-a", name: "Doctor cutoff" }, runtimeEnv);
+  const sourcePath = path.join(home, "legacy.txt");
+  await fs.writeFile(sourcePath, "legacy plaintext", { mode: 0o600 });
+
+  await appendThreadMessage("thread-doctor-cutoff", {
+    role: "assistant",
+    source: "codex-app-server",
+    state: "completed",
+    text: "Historical",
+    attachments: [{ path: sourcePath, name: "legacy.txt" }],
+  }, runtimeEnv);
+  await enroll(enforcedEnv);
+
+  const afterEnrollment = await attachmentEncryptionDoctorCheck(enforcedEnv);
+  assert.equal(afterEnrollment.status, "ok");
+  assert.equal(afterEnrollment.historicalPlaintextMessageAttachments, 1);
+
+  await appendThreadMessage("thread-doctor-cutoff", {
+    role: "assistant",
+    source: "codex-app-server",
+    state: "completed",
+    text: "Policy bypass simulation",
+    attachments: [{ path: sourcePath, name: "legacy.txt" }],
+  }, runtimeEnv);
+  const bypass = await attachmentEncryptionDoctorCheck(enforcedEnv);
+  assert.equal(bypass.status, "error");
+  assert.equal(bypass.plaintextMessageAttachments, 1);
+  assert.equal(bypass.historicalPlaintextMessageAttachments, 1);
+});
+
 test("mandatory publication stores only opaque age ciphertext and leaves the source untouched", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-attachment-publish-"));
   const runtimeEnv = env(home);

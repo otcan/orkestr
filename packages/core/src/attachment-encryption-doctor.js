@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { dataPaths } from "../../storage/src/paths.js";
 import { readJson } from "../../storage/src/store.js";
-import { attachmentEncryptionPolicy, attachmentEncryptionStatus } from "./attachment-encryption-registry.js";
+import { attachmentEncryptionStatus } from "./attachment-encryption-registry.js";
 import { validateEncryptedPublishedAttachment } from "./encrypted-attachment-publication.js";
 import { listThreadMessages, listThreads } from "./threads.js";
 
@@ -24,15 +24,23 @@ async function publicationResidue(env = process.env) {
 }
 
 async function publicationMessageFindings(env = process.env) {
-  const findings = { plaintext: 0, undeliverable: 0 };
+  const findings = { plaintext: 0, historicalPlaintext: 0, undeliverable: 0 };
   for (const thread of await listThreads(env)) {
-    const policy = await attachmentEncryptionPolicy(thread.ownerUserId, env);
+    const status = await attachmentEncryptionStatus(thread.ownerUserId, env);
+    const policy = status.policy;
     if (!policy.enabled) continue;
+    const firstVerifiedAt = status.keys
+      .map((key) => Date.parse(key.verifiedAt || ""))
+      .filter(Number.isFinite)
+      .sort((left, right) => left - right)[0];
+    const enforcementAt = Date.parse(policy.updatedAt || "") || firstVerifiedAt || 0;
     for (const message of await listThreadMessages(thread.id, env)) {
       if (String(message.role || "").trim().toLowerCase() !== "assistant") continue;
       for (const attachment of Array.isArray(message.attachments) ? message.attachments : []) {
         if (attachment.encrypted !== true) {
-          findings.plaintext += 1;
+          const publishedAt = Date.parse(message.createdAt || message.timestamp || message.updatedAt || "");
+          if (enforcementAt && (!Number.isFinite(publishedAt) || publishedAt >= enforcementAt)) findings.plaintext += 1;
+          else findings.historicalPlaintext += 1;
           continue;
         }
         const validation = await validateEncryptedPublishedAttachment(attachment, { thread, env });
@@ -64,6 +72,7 @@ export async function attachmentEncryptionDoctorCheck(env = process.env) {
       plaintextPublicationFiles: residue.plaintext,
       incompletePublicationFiles: residue.incomplete,
       plaintextMessageAttachments: messageFindings.plaintext,
+      historicalPlaintextMessageAttachments: messageFindings.historicalPlaintext,
       undeliverableCiphertextAttachments: messageFindings.undeliverable,
       repair: "Quarantine publication residue, verify ciphertext checksums, and rerun migration before publishing attachments.",
     };
@@ -107,8 +116,9 @@ export async function attachmentEncryptionDoctorCheck(env = process.env) {
     activeRecipients: status.keys.filter((key) => key.status === "active").length,
     revokedRecipients: status.keys.filter((key) => key.status === "revoked").length,
     pendingRecipients: status.keys.filter((key) => key.status === "pending_verification").length,
+    historicalPlaintextMessageAttachments: messageFindings.historicalPlaintext,
     summary: status.policy.enabled
-      ? `${status.keys.filter((key) => key.status === "active").length} verified recipient(s); published attachments fail closed.`
+      ? `${status.keys.filter((key) => key.status === "active").length} verified recipient(s); published attachments fail closed; ${messageFindings.historicalPlaintext} historical plaintext attachment(s) left unchanged.`
       : "Recipient encryption is available and not enabled for this owner.",
   };
 }
