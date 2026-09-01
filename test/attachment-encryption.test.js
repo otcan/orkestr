@@ -22,7 +22,7 @@ import { migrateThreadAttachmentsToEncryption } from "../packages/core/src/attac
 import { attachmentEncryptionDoctorCheck } from "../packages/core/src/attachment-encryption-doctor.js";
 import { ensureAutomaticAttachmentEnrollment } from "../packages/core/src/browser-attachment-auto-enrollment.js";
 import { decodeOrkestrAttachmentPayload } from "../packages/core/src/browser-attachment-payload.js";
-import { appendThreadMessage, createThread, deleteThreadMessage, getThread, listThreadMessages } from "../packages/core/src/threads.js";
+import { appendThreadMessage, createThread, deleteThreadMessage, getThread, listThreadMessages, updateThreadMessage } from "../packages/core/src/threads.js";
 import { deliverWhatsAppReplies } from "../packages/connectors/src/whatsapp.js";
 import {
   appendWebUiEncryptedAttachmentNotice,
@@ -125,12 +125,15 @@ test("doctor ignores pre-enforcement plaintext but rejects plaintext published a
   const sourcePath = path.join(home, "legacy.txt");
   await fs.writeFile(sourcePath, "legacy plaintext", { mode: 0o600 });
 
-  await appendThreadMessage("thread-doctor-cutoff", {
+  const historical = await appendThreadMessage("thread-doctor-cutoff", {
     role: "assistant",
     source: "codex-app-server",
     state: "completed",
     text: "Historical",
     attachments: [{ path: sourcePath, name: "legacy.txt" }],
+  }, runtimeEnv);
+  await updateThreadMessage("thread-doctor-cutoff", historical.id, {
+    createdAt: String(Math.floor(Date.parse(historical.createdAt) / 1_000)),
   }, runtimeEnv);
   await enroll(enforcedEnv);
 

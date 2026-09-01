@@ -6,6 +6,20 @@ import { attachmentEncryptionStatus } from "./attachment-encryption-registry.js"
 import { validateEncryptedPublishedAttachment } from "./encrypted-attachment-publication.js";
 import { listThreadMessages, listThreads } from "./threads.js";
 
+function timestampMs(value) {
+  const text = String(value ?? "").trim();
+  if (!text) return Number.NaN;
+  if (/^-?\d+(?:\.\d+)?$/.test(text)) {
+    const numeric = Number(text);
+    if (!Number.isFinite(numeric)) return Number.NaN;
+    const magnitude = Math.abs(numeric);
+    if (magnitude >= 1e15) return numeric / 1_000_000;
+    if (magnitude >= 1e12) return numeric;
+    return numeric * 1_000;
+  }
+  return Date.parse(text);
+}
+
 async function publicationResidue(env = process.env) {
   const root = path.join(dataPaths(env).home, "uploads");
   const findings = { plaintext: 0, incomplete: 0 };
@@ -30,15 +44,15 @@ async function publicationMessageFindings(env = process.env) {
     const policy = status.policy;
     if (!policy.enabled) continue;
     const firstVerifiedAt = status.keys
-      .map((key) => Date.parse(key.verifiedAt || ""))
+      .map((key) => timestampMs(key.verifiedAt))
       .filter(Number.isFinite)
       .sort((left, right) => left - right)[0];
-    const enforcementAt = Date.parse(policy.updatedAt || "") || firstVerifiedAt || 0;
+    const enforcementAt = timestampMs(policy.updatedAt) || firstVerifiedAt || 0;
     for (const message of await listThreadMessages(thread.id, env)) {
       if (String(message.role || "").trim().toLowerCase() !== "assistant") continue;
       for (const attachment of Array.isArray(message.attachments) ? message.attachments : []) {
         if (attachment.encrypted !== true) {
-          const publishedAt = Date.parse(message.createdAt || message.timestamp || message.updatedAt || "");
+          const publishedAt = timestampMs(message.createdAt || message.timestamp || message.updatedAt);
           if (enforcementAt && (!Number.isFinite(publishedAt) || publishedAt >= enforcementAt)) findings.plaintext += 1;
           else findings.historicalPlaintext += 1;
           continue;
