@@ -23,6 +23,8 @@ export class ThreadComposerComponent {
   @Input() planHint = "";
   @Input() placeholder = "Message";
   @Input() rows = 2;
+  @Input() replyToWhatsAppAvailable = false;
+  @Input() replyToWhatsApp = true;
 
   @Output() draftChange = new EventEmitter<string>();
   @Output() queueFiles = new EventEmitter<FileList | null>();
@@ -30,6 +32,7 @@ export class ThreadComposerComponent {
   @Output() send = new EventEmitter<void>();
   @Output() sendNow = new EventEmitter<void>();
   @Output() openHelp = new EventEmitter<void>();
+  @Output() replyToWhatsAppChange = new EventEmitter<boolean>();
 
   @ViewChild("composerInput") private readonly composerInput?: ElementRef<HTMLTextAreaElement>;
 
@@ -54,6 +57,11 @@ export class ThreadComposerComponent {
   handleDraftChange(value: string): void {
     this.draft = value;
     this.draftChange.emit(value);
+  }
+
+  handleReplyToWhatsAppChange(value: boolean): void {
+    this.replyToWhatsApp = value;
+    this.replyToWhatsAppChange.emit(value);
   }
 
   handleKeydown(event: KeyboardEvent): void {

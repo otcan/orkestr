@@ -4477,6 +4477,40 @@ ork-first-thread-wizard.first-thread-host {
   gap: 8px;
 }
 
+.composer-whatsapp-reply {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 190px;
+  color: var(--muted);
+  font-size: 0.72rem;
+  line-height: 1.25;
+}
+
+.composer-whatsapp-reply input {
+  flex: 0 0 auto;
+}
+
+.attachment-key-row {
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
+.attachment-key-row > div:first-child {
+  display: grid;
+  gap: 4px;
+  min-width: min(100%, 260px);
+}
+
+.attachment-key-row code {
+  overflow-wrap: anywhere;
+}
+
+.attachment-identity-field,
+.attachment-recipient-form {
+  flex: 1 0 100%;
+}
+
 .plan-composer-banner {
   display: flex;
   align-items: center;
@@ -5163,10 +5197,16 @@ ork-first-thread-wizard.first-thread-host {
 
   .composer-tools {
     display: flex;
+    flex-wrap: wrap;
   }
 
   .composer-tools button {
     flex: 1 1 0;
+  }
+
+  .composer-whatsapp-reply {
+    flex: 1 0 100%;
+    max-width: none;
   }
 
   .composer-actions {

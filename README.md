@@ -338,6 +338,11 @@ Default remote rules:
 
 See [SECURITY.md](SECURITY.md).
 
+Generated attachments and exports can be configured for mandatory publication
+as recipient-encrypted age files. Enrollment includes a private-key possession
+challenge, and the private identity stays in the browser. See
+[docs/attachment-encryption.md](docs/attachment-encryption.md).
+
 ## Updates And Releases
 
 ### On-Box Update Watcher

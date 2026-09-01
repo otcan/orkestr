@@ -240,6 +240,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   creatingSidebarWorker = false;
   creatingWorkerParentId = "";
   pendingFiles: PendingFile[] = [];
+  replyToWhatsAppByThread: Record<string, boolean> = {};
   draggingUpload = false;
   rawConnectionState = "idle";
   rawConnectionDetail = "";
@@ -1241,7 +1242,9 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       const text = messageWithAttachmentPaths(originalText, attachments);
       this.updateOptimisticUserMessage(thread.id, optimisticId, { text, attachments });
       this.markThreadActive(thread.id, 120_000);
-      const response = await firstValueFrom(this.api.sendThreadInput(thread.id, text, attachments));
+      const response = await firstValueFrom(this.api.sendThreadInput(thread.id, text, attachments, {
+        replyDelivery: this.uiReplyDeliveryMode(thread),
+      }));
       this.replaceOptimisticUserMessage(thread.id, optimisticId, response.message);
       this.queueMessagePaneScrollToBottom();
       await this.refresh(false);
@@ -1252,6 +1255,37 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     } finally {
       this.sending = false;
     }
+  }
+
+  uiReplyDeliveryAvailable(thread: ThreadSummary | null): boolean {
+    const binding = thread?.binding || null;
+    return Boolean(
+      thread?.id &&
+      String(binding?.connector || "whatsapp").toLowerCase() === "whatsapp" &&
+      String(binding?.chatId || "").trim() &&
+      String(binding?.replyAccountId || binding?.bridgeAccountId || binding?.responderConnectorAccountId || binding?.responderAccountId || binding?.outboundAccountId || "").trim() &&
+      binding?.enabled !== false &&
+      binding?.routeEligible !== false &&
+      binding?.mirrorToWhatsApp !== false &&
+      binding?.mirrorReplies !== false &&
+      binding?.deprecated !== true &&
+      binding?.retired !== true,
+    );
+  }
+
+  uiReplyDeliveryEnabled(thread: ThreadSummary | null): boolean {
+    if (!thread?.id || !this.uiReplyDeliveryAvailable(thread)) return false;
+    return this.replyToWhatsAppByThread[thread.id] !== false;
+  }
+
+  setUiReplyDeliveryEnabled(thread: ThreadSummary | null, enabled: boolean): void {
+    if (!thread?.id) return;
+    this.replyToWhatsAppByThread = { ...this.replyToWhatsAppByThread, [thread.id]: enabled };
+    this.renderNow();
+  }
+
+  uiReplyDeliveryMode(thread: ThreadSummary | null): "ui_only" | "bound_whatsapp" {
+    return this.uiReplyDeliveryEnabled(thread) ? "bound_whatsapp" : "ui_only";
   }
 
   async sendMessageNow(): Promise<void> {
@@ -1269,7 +1303,9 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       const text = messageWithAttachmentPaths(originalText, attachments);
       this.updateOptimisticUserMessage(thread.id, optimisticId, { text, attachments });
       this.markThreadActive(thread.id, 120_000);
-      const response = await firstValueFrom(this.api.interruptThread(thread.id, text, attachments));
+      const response = await firstValueFrom(this.api.interruptThread(thread.id, text, attachments, {
+        replyDelivery: this.uiReplyDeliveryMode(thread),
+      }));
       this.replaceOptimisticUserMessage(thread.id, optimisticId, response.message);
       this.queueMessagePaneScrollToBottom();
       await this.refresh(false);
@@ -1290,7 +1326,9 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.implementingPlan = true;
     try {
       this.markThreadActive(thread.id, 120_000);
-      const response = await firstValueFrom(this.api.sendThreadInput(thread.id, "/implement"));
+      const response = await firstValueFrom(this.api.sendThreadInput(thread.id, "/implement", [], {
+        replyDelivery: this.uiReplyDeliveryMode(thread),
+      }));
       this.replaceOptimisticUserMessage(thread.id, optimisticId, response.message);
       this.queueMessagePaneScrollToBottom();
       await this.refresh(false);

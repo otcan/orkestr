@@ -44,6 +44,7 @@ import {
   threadWhatsAppBindingParent,
   whatsappOrigin,
   whatsappProjectionFields,
+  replyDeliveryProjectionParent,
 } from "./codex-app-server-whatsapp.js";
 import { requestUserInputAnswers } from "./codex-app-server-user-input.js";
 import { appendTurnLifecycleEvent } from "./turn-lifecycle.js";
@@ -114,6 +115,8 @@ async function whatsappParentForTurn({
 }) {
   if (explicitParent && whatsappOrigin(explicitParent)) return explicitParent;
   if (rememberedParent && whatsappOrigin(rememberedParent)) return rememberedParent;
+  const requestedReplyParent = replyDeliveryProjectionParent(rememberedParent);
+  if (requestedReplyParent) return requestedReplyParent;
   if (rememberedParent && !fallbackForKnownNonWhatsApp) return null;
   return await latestWhatsAppParent(thread, timestamp || nowIso(), env) ||
     threadWhatsAppBindingParent(thread);

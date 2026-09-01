@@ -2,6 +2,7 @@ import { resourceOwnerUserId } from "./policy.js";
 import { recordRouterTraceEvent } from "./router-traces.js";
 import { updateThreadMessage } from "./threads.js";
 import { abortable, throwIfAborted } from "./router-doctor-abort.js";
+import { replyDeliveryBindingFence, replyDeliveryIntentStatusPatch, trustedUiReplyDeliveryIntent } from "./reply-delivery-intent.js";
 
 function clean(value = "") {
   return String(value || "").trim();
@@ -13,6 +14,11 @@ function lower(value = "") {
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+function uiReplyOrphanGraceMs(env = process.env) {
+  const parsed = Number(env.ORKESTR_WEBUI_WHATSAPP_REPLY_ORPHAN_GRACE_MS || 120_000);
+  return Number.isFinite(parsed) ? Math.max(0, parsed) : 120_000;
 }
 
 export function sourceRevisionForMessage(message = {}) {
@@ -52,6 +58,7 @@ export function orphanedWhatsAppFinalAnswerIssues({
   whatsappMessageFn = null,
   accountIdForThreadFn = null,
   issueFn = null,
+  env = process.env,
 } = {}) {
   const makeIssue = typeof issueFn === "function"
     ? issueFn
@@ -69,6 +76,31 @@ export function orphanedWhatsAppFinalAnswerIssues({
       sourceRevision: sourceRevisionForMessage(message),
     }));
   }
+  const existingMessageIds = new Set(issues.map((issue) => clean(issue.messageId)));
+  for (const parent of messages) {
+    const intent = trustedUiReplyDeliveryIntent(parent);
+    if (!intent || !["pending_reply", "queued"].includes(lower(intent.status))) continue;
+    const message = messages.find((candidate) =>
+      candidate.role === "assistant" &&
+      lower(candidate.state) === "completed" &&
+      lower(candidate.phase || "final_answer") === "final_answer" &&
+      clean(candidate.parentMessageId) === clean(parent.id)
+    );
+    if (!message || existingMessageIds.has(clean(message.id))) continue;
+    const completedAt = Date.parse(clean(message.updatedAt || message.createdAt));
+    if (Number.isFinite(completedAt) && Date.now() - completedAt < uiReplyOrphanGraceMs(env)) continue;
+    const job = outboxJobForFinalMessage(connectorOutboxJobs, message);
+    if (job || deliveredWhatsAppMirrorMessage(message)) continue;
+    issues.push(makeIssue("orphaned_ui_whatsapp_reply_delivery", "error", "Completed WebUI-requested final has no WhatsApp connector outbox job.", {
+      threadId: thread.id,
+      messageId: message.id,
+      parentMessageId: parent.id,
+      replyDeliveryIntentId: clean(intent.id),
+      chatId: clean(intent.target?.chatId),
+      accountId: clean(intent.target?.accountId),
+      sourceRevision: sourceRevisionForMessage(message),
+    }));
+  }
   return issues;
 }
 
@@ -77,6 +109,13 @@ export async function repairOrphanedWhatsAppFinalAnswer(item = {}, context = {})
   if (typeof ensureConnectorOutboxJobFn !== "function") return null;
   const message = (Array.isArray(context.messages) ? context.messages : []).find((entry) => clean(entry.id) === clean(item.messageId));
   if (!message) return null;
+  const parent = (Array.isArray(context.messages) ? context.messages : []).find((entry) => clean(entry.id) === clean(item.parentMessageId || message.parentMessageId));
+  const fence = replyDeliveryBindingFence(parent || {}, thread || {});
+  if (fence.applies && !fence.allowed) {
+    const patch = replyDeliveryIntentStatusPatch(parent, "policy_skipped", { reason: fence.reason });
+    if (patch) await updateThreadMessage(thread.id, parent.id, patch, env).catch(() => null);
+    return { ok: false, skipped: true, reason: fence.reason };
+  }
   const chatId = clean(item.chatId || message.chatId || thread?.binding?.chatId);
   if (!chatId) return null;
   const accountId = clean(item.accountId || message.accountId || (typeof accountIdForThreadFn === "function" ? accountIdForThreadFn(thread) : ""));

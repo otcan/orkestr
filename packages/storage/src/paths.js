@@ -51,6 +51,8 @@ export function dataPaths(env = process.env) {
     gmailSignalJobRecordsRoot: env.ORKESTR_GMAIL_SIGNAL_RECORD_ROOT || path.join(path.dirname(home), ".openclaw", "workspace", "Orkestr", ".data", "workspaces", "157ea1bfc66836fd", "oxrm", "jobseeker-can", "files", "records", "job-search", "gmail"),
     mailboxes: env.ORKESTR_MAILBOXES_FILE || path.join(home, "mailboxes.json"),
     connectorOutbox: path.join(home, "connector-outbox.json"),
+    attachmentEncryption: env.ORKESTR_ATTACHMENT_ENCRYPTION_FILE || path.join(home, "attachment-encryption.json"),
+    attachmentEncryptionMigrations: env.ORKESTR_ATTACHMENT_ENCRYPTION_MIGRATIONS_FILE || path.join(home, "attachment-encryption-migrations.json"),
     connectorOutboxDb: env.ORKESTR_CONNECTOR_OUTBOX_DB || path.join(home, "connector-outbox.sqlite"),
     connectorPromptPushes: path.join(home, "connector-prompt-pushes.json"),
     apiSessionBindings: path.join(home, "api-session-bindings.json"),
