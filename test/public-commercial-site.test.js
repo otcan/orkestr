@@ -265,6 +265,8 @@ test("sitemap prioritizes localized commercial routes and accessible progressive
   assert.match(css, /\.project-type-options/);
   assert.match(css, /\.language-switcher/);
   assert.match(css, /\.team-directory/);
+  assert.match(css, /width: clamp\(118px,14vw,172px\)/);
+  assert.match(css, /border-radius: 999px/);
   assert.match(css, /\.real-example-grid/);
   assert.match(css, /\.solution-system-flow/);
   assert.match(css, /\.security-document-grid/);
