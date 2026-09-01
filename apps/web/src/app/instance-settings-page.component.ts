@@ -2,8 +2,9 @@ import { DatePipe, JsonPipe, KeyValuePipe } from "@angular/common";
 import { Component, OnInit, inject } from "@angular/core";
 import { FormsModule } from "@angular/forms";
 import { firstValueFrom } from "rxjs";
-import * as age from "age-encryption";
-import { ApiService, AttachmentEncryptionKey, AttachmentEncryptionMigrationResult, AttachmentEncryptionStatus, InstanceStatusResponse } from "./api.service";
+import { ApiService, AttachmentEncryptionKey, AttachmentEncryptionStatus, InstanceStatusResponse } from "./api.service";
+import { AttachmentDecryptionService } from "./attachment-decryption.service";
+import { AttachmentEncryptionBootstrapService } from "./attachment-encryption-bootstrap.service";
 
 @Component({
   selector: "ork-instance-settings-page",
@@ -12,6 +13,8 @@ import { ApiService, AttachmentEncryptionKey, AttachmentEncryptionMigrationResul
 })
 export class InstanceSettingsPageComponent implements OnInit {
   private readonly api = inject(ApiService);
+  private readonly attachmentDecryption = inject(AttachmentDecryptionService);
+  private readonly attachmentEncryptionBootstrap = inject(AttachmentEncryptionBootstrapService);
 
   busy = false;
   error = "";
@@ -21,10 +24,10 @@ export class InstanceSettingsPageComponent implements OnInit {
   recipientPublicKey = "";
   verificationIdentity = "";
   verifyingKeyId = "";
+  browserIdentity = "";
+  rememberBrowserIdentity = true;
   encryptionBusy = false;
   encryptionError = "";
-  migrationThreadId = "";
-  migrationResult: AttachmentEncryptionMigrationResult | null = null;
 
   ngOnInit(): void {
     void this.refresh();
@@ -51,8 +54,43 @@ export class InstanceSettingsPageComponent implements OnInit {
     return Object.keys(this.snapshot?.config?.mailboxes || {}).length > 0;
   }
 
-  hasActiveEncryptionRecipient(): boolean {
-    return Boolean(this.attachmentEncryption?.keys?.some((key) => key.status === "active"));
+  browserKeyUnlocked(): boolean {
+    return this.attachmentDecryption.isUnlocked();
+  }
+
+  async unlockBrowserKey(): Promise<void> {
+    if (!this.browserIdentity.trim() || this.encryptionBusy) return;
+    this.encryptionBusy = true;
+    try {
+      await this.attachmentDecryption.unlock(this.browserIdentity, this.rememberBrowserIdentity);
+      await this.attachmentEncryptionBootstrap.ensureReady(true);
+      this.browserIdentity = "";
+      this.encryptionError = "";
+      this.attachmentEncryption = await firstValueFrom(this.api.attachmentEncryptionStatus());
+    } catch (error) {
+      this.encryptionError = this.errorText(error);
+    } finally {
+      this.encryptionBusy = false;
+    }
+  }
+
+  downloadRecoveryIdentity(): void {
+    const identity = this.attachmentDecryption.exportIdentity();
+    if (!identity) return;
+    const blob = new Blob([`${identity}\n`], { type: "text/plain" });
+    const objectUrl = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = objectUrl;
+    link.download = "orkestr-age-recovery-key.txt";
+    link.rel = "noopener";
+    link.hidden = true;
+    document.body.appendChild(link);
+    try {
+      link.click();
+    } finally {
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1_000);
+    }
   }
 
   async registerRecipient(): Promise<void> {
@@ -84,13 +122,14 @@ export class InstanceSettingsPageComponent implements OnInit {
   }
 
   async verifyRecipient(key: AttachmentEncryptionKey): Promise<void> {
-    if (!key.challenge?.ciphertext || !this.verificationIdentity.trim() || this.encryptionBusy) return;
+    if (!key.challenge?.ciphertext || (!this.verificationIdentity.trim() && !this.browserKeyUnlocked()) || this.encryptionBusy) return;
     this.encryptionBusy = true;
     try {
       const ciphertext = Uint8Array.from(atob(key.challenge.ciphertext), (character) => character.charCodeAt(0));
-      const decrypter = new age.Decrypter();
-      decrypter.addIdentity(this.verificationIdentity.trim());
-      const proof = await decrypter.decrypt(ciphertext, "text");
+      if (this.verificationIdentity.trim()) {
+        await this.attachmentDecryption.unlock(this.verificationIdentity, this.rememberBrowserIdentity);
+      }
+      const proof = await this.attachmentDecryption.decryptText(ciphertext);
       await firstValueFrom(this.api.verifyAttachmentEncryptionRecipient(key.id, proof));
       this.encryptionError = "";
       this.attachmentEncryption = await firstValueFrom(this.api.attachmentEncryptionStatus());
@@ -103,20 +142,6 @@ export class InstanceSettingsPageComponent implements OnInit {
     }
   }
 
-  async setEncryptionRequired(required: boolean): Promise<void> {
-    if (this.encryptionBusy) return;
-    this.encryptionBusy = true;
-    try {
-      await firstValueFrom(this.api.updateAttachmentEncryptionPolicy({ enabled: required, required }));
-      this.encryptionError = "";
-      this.attachmentEncryption = await firstValueFrom(this.api.attachmentEncryptionStatus());
-    } catch (error) {
-      this.encryptionError = this.errorText(error);
-    } finally {
-      this.encryptionBusy = false;
-    }
-  }
-
   async revokeRecipient(key: AttachmentEncryptionKey): Promise<void> {
     if (this.encryptionBusy || !window.confirm(`Revoke ${key.fingerprint} for future publications? Existing encrypted files will not change.`)) return;
     this.encryptionBusy = true;
@@ -124,21 +149,6 @@ export class InstanceSettingsPageComponent implements OnInit {
       await firstValueFrom(this.api.revokeAttachmentEncryptionRecipient(key.id));
       this.encryptionError = "";
       this.attachmentEncryption = await firstValueFrom(this.api.attachmentEncryptionStatus());
-    } catch (error) {
-      this.encryptionError = this.errorText(error);
-    } finally {
-      this.encryptionBusy = false;
-    }
-  }
-
-  async migrateAttachments(dryRun: boolean): Promise<void> {
-    const threadId = this.migrationThreadId.trim();
-    if (!threadId || this.encryptionBusy) return;
-    if (!dryRun && !window.confirm("Encrypt every legacy published attachment in this thread? This cannot be rolled back to plaintext.")) return;
-    this.encryptionBusy = true;
-    try {
-      this.migrationResult = await firstValueFrom(this.api.migrateAttachmentEncryption(threadId, dryRun));
-      this.encryptionError = "";
     } catch (error) {
       this.encryptionError = this.errorText(error);
     } finally {

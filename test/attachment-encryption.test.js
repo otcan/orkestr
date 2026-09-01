@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -19,8 +20,14 @@ import {
 } from "../packages/core/src/encrypted-attachment-publication.js";
 import { migrateThreadAttachmentsToEncryption } from "../packages/core/src/attachment-encryption-migration.js";
 import { attachmentEncryptionDoctorCheck } from "../packages/core/src/attachment-encryption-doctor.js";
+import { ensureAutomaticAttachmentEnrollment } from "../packages/core/src/browser-attachment-auto-enrollment.js";
+import { decodeOrkestrAttachmentPayload } from "../packages/core/src/browser-attachment-payload.js";
 import { appendThreadMessage, createThread, deleteThreadMessage, getThread, listThreadMessages } from "../packages/core/src/threads.js";
 import { deliverWhatsAppReplies } from "../packages/connectors/src/whatsapp.js";
+import {
+  appendWebUiEncryptedAttachmentNotice,
+  webUiEncryptedAttachmentDelivery,
+} from "../packages/connectors/src/whatsapp-webui-encrypted-attachments.js";
 import { writeConnectorConfig } from "../packages/storage/src/config.js";
 
 function env(home, extra = {}) {
@@ -78,6 +85,36 @@ test("recipient activation requires private-key possession and public status omi
   assert.equal(status.keys[0].status, "active");
   assert.equal("recipient" in status.keys[0], false);
   assert.equal(status.keys[0].challenge, null);
+});
+
+test("global mandatory mode fails closed before automatic browser enrollment completes", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-attachment-required-bootstrap-"));
+  const runtimeEnv = env(home, { ORKESTR_ATTACHMENT_ENCRYPTION_REQUIRED: "1" });
+  await createThread({ id: "thread-required-bootstrap", ownerUserId: "tenant-a", name: "Required bootstrap" }, runtimeEnv);
+  const sourcePath = path.join(home, "future.txt");
+  await fs.writeFile(sourcePath, "future ciphertext", { mode: 0o600 });
+
+  assert.equal((await attachmentEncryptionStatus("tenant-a", runtimeEnv)).policy.required, true);
+  await assert.rejects(
+    appendThreadMessage("thread-required-bootstrap", {
+      role: "assistant",
+      source: "codex-app-server",
+      state: "completed",
+      text: "Before enrollment",
+      attachments: [{ path: sourcePath, name: "future.txt" }],
+    }, runtimeEnv),
+    /attachment_encryption_verified_recipient_required/,
+  );
+
+  await enroll(runtimeEnv);
+  const published = await appendThreadMessage("thread-required-bootstrap", {
+    role: "assistant",
+    source: "codex-app-server",
+    state: "completed",
+    text: "After enrollment",
+    attachments: [{ path: sourcePath, name: "future.txt" }],
+  }, runtimeEnv);
+  assert.equal(published.attachments[0].encrypted, true);
 });
 
 test("mandatory publication stores only opaque age ciphertext and leaves the source untouched", async () => {
@@ -316,7 +353,7 @@ test("migration resumes from a durable ciphertext checkpoint without republishin
   assert.equal((await attachmentEncryptionDoctorCheck(runtimeEnv)).status, "ok");
 });
 
-test("WhatsApp receives the ciphertext publication and never the original artifact path", async () => {
+test("WhatsApp receives text only while protected attachments remain WebUI-only", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-attachment-whatsapp-"));
   const runtimeEnv = env(home, {
     ORKESTR_WHATSAPP_EXTERNAL_BRIDGE_ENABLED: "1",
@@ -369,8 +406,124 @@ test("WhatsApp receives the ciphertext publication and never the original artifa
 
   assert.equal(result.delivered.some((delivery) => delivery.messageId === reply.id), true);
   assert.equal(calls.length, 1);
-  assert.equal(calls[0].url.pathname, "/send-media");
-  assert.equal(calls[0].body.paths.length, 1);
-  assert.match(calls[0].body.paths[0], /\/published\/attachment-[0-9a-f-]+\.age$/);
-  assert.notEqual(calls[0].body.paths[0], sourcePath);
+  assert.equal(calls[0].url.pathname, "/send-text");
+  assert.equal("paths" in calls[0].body, false);
+  assert.equal("attachments" in calls[0].body, false);
+  assert.match(calls[0].body.text, /1 protected attachment is available in the Orkestr WebUI\./);
+  assert.equal(JSON.stringify(calls[0].body).includes(sourcePath), false);
+  assert.equal(JSON.stringify(calls[0].body).includes(".age"), false);
+});
+
+test("WhatsApp drops an entire mixed attachment batch when it contains a WebUI ciphertext", () => {
+  const publication = { id: "encrypted", encrypted: true, filename: "attachment-encrypted.age" };
+  const incidental = { id: "plain", path: "/tmp/incidental.txt" };
+  const protectedDelivery = webUiEncryptedAttachmentDelivery([publication, incidental]);
+
+  assert.equal(protectedDelivery.protectedCount, 1);
+  assert.deepEqual(protectedDelivery.attachments, []);
+  assert.equal(
+    appendWebUiEncryptedAttachmentNotice("Report ready.", protectedDelivery.protectedCount),
+    "Report ready.\n\n1 protected attachment is available in the Orkestr WebUI.",
+  );
+});
+
+test("WebUI decrypts authenticated age payloads locally and has no historical migration control", async () => {
+  const [payloadDecoder, service, bootstrap, appComponent, messageComponent, messageTemplate, settingsComponent, settingsTemplate] = await Promise.all([
+    fs.readFile(new URL("../packages/core/src/browser-attachment-payload.js", import.meta.url), "utf8"),
+    fs.readFile(new URL("../apps/web/src/app/attachment-decryption.service.ts", import.meta.url), "utf8"),
+    fs.readFile(new URL("../apps/web/src/app/attachment-encryption-bootstrap.service.ts", import.meta.url), "utf8"),
+    fs.readFile(new URL("../apps/web/src/app/app.component.ts", import.meta.url), "utf8"),
+    fs.readFile(new URL("../apps/web/src/app/thread-message-list.component.ts", import.meta.url), "utf8"),
+    fs.readFile(new URL("../apps/web/src/app/thread-message-list.component.html", import.meta.url), "utf8"),
+    fs.readFile(new URL("../apps/web/src/app/instance-settings-page.component.ts", import.meta.url), "utf8"),
+    fs.readFile(new URL("../apps/web/src/app/instance-settings-page.component.html", import.meta.url), "utf8"),
+  ]);
+  const webUi = [payloadDecoder, service, bootstrap, appComponent, messageComponent, messageTemplate, settingsComponent, settingsTemplate].join("\n");
+
+  assert.match(service, /new age\.Decrypter\(\)/);
+  assert.match(payloadDecoder, /crypto\.subtle\.digest\("SHA-256"/);
+  assert.match(service, /credentials: "same-origin"/);
+  assert.match(payloadDecoder, /attachment_payload_checksum_mismatch/);
+  assert.match(service, /link\.download = attachment\.filename/);
+  assert.match(messageTemplate, /downloadEncryptedAttachment\(attachment\)/);
+  assert.doesNotMatch(messageTemplate, /\[href\]="attachmentDownloadUrl\(attachment\)"[^\n]*encrypted/);
+  assert.match(service, /age\.generateIdentity\(\)/);
+  assert.match(bootstrap, /registerAttachmentEncryptionRecipient/);
+  assert.match(bootstrap, /verifyAttachmentEncryptionRecipient/);
+  assert.match(bootstrap, /updateAttachmentEncryptionPolicy\(\{ enabled: true, required: true \}\)/);
+  assert.match(appComponent, /await this\.bootstrapAttachmentEncryption\(\)/);
+  assert.match(appComponent, /setTimeout\(\(\) =>/);
+  assert.match(settingsTemplate, /Protection is enrolled and enforced automatically after login/);
+  assert.match(settingsTemplate, /never sends its private identity to Orkestr/i);
+  assert.doesNotMatch(webUi, /migrateAttachments\(/);
+  assert.doesNotMatch(settingsTemplate, /Legacy attachment migration/);
+});
+
+test("automatic browser enrollment verifies possession and enables fail-closed policy without user input", async () => {
+  const calls = [];
+  let policyRequired = false;
+  let recipientReady = false;
+  const result = await ensureAutomaticAttachmentEnrollment({
+    async ensureIdentity() {
+      calls.push("identity");
+      return "age1browser";
+    },
+    async registerRecipient(recipient) {
+      calls.push(`register:${recipient}`);
+      return { key: { id: "key-1", status: "pending_verification", challenge: { ciphertext: "challenge" } } };
+    },
+    async decryptChallenge(ciphertext) {
+      calls.push(`decrypt:${ciphertext}`);
+      return "proof";
+    },
+    async verifyRecipient(recipientId, proof) {
+      calls.push(`verify:${recipientId}:${proof}`);
+      recipientReady = true;
+    },
+    async status() {
+      calls.push("status");
+      return { ready: recipientReady, policy: { enabled: policyRequired, required: policyRequired } };
+    },
+    async requirePolicy() {
+      calls.push("require");
+      policyRequired = true;
+    },
+  });
+
+  assert.equal(result.ready, true);
+  assert.equal(result.policy.required, true);
+  assert.deepEqual(calls, [
+    "identity",
+    "register:age1browser",
+    "decrypt:challenge",
+    "verify:key-1:proof",
+    "status",
+    "require",
+    "status",
+  ]);
+});
+
+test("browser payload decoder restores original metadata and rejects changed plaintext", async () => {
+  const content = Buffer.from("browser-local plaintext", "utf8");
+  const metadata = Buffer.from(JSON.stringify({
+    version: 1,
+    filename: "../board/report.txt",
+    mimetype: "text/plain",
+    plaintextSize: content.length,
+    plaintextChecksum: createHash("sha256").update(content).digest("hex"),
+  }), "utf8");
+  const payload = Buffer.concat([
+    Buffer.from(`ORKESTR-ATTACHMENT-PAYLOAD/1\n${metadata.length}\n`, "utf8"),
+    metadata,
+    content,
+  ]);
+
+  const decoded = await decodeOrkestrAttachmentPayload(payload);
+  assert.equal(decoded.filename, "_board_report.txt");
+  assert.equal(decoded.mimetype, "text/plain");
+  assert.equal(Buffer.from(decoded.bytes).toString("utf8"), "browser-local plaintext");
+
+  const changed = Buffer.from(payload);
+  changed[changed.length - 1] ^= 1;
+  await assert.rejects(decodeOrkestrAttachmentPayload(changed), /attachment_payload_checksum_mismatch/);
 });

@@ -2520,6 +2520,7 @@ ork-first-thread-wizard.first-thread-host {
 
 .attachments span,
 .attachments a,
+.attachments button,
 .file-chip {
   display: inline-flex;
   align-items: center;
@@ -2531,6 +2532,19 @@ ork-first-thread-wizard.first-thread-host {
   font-weight: 800;
   padding: 7px 10px;
   text-decoration: none;
+}
+
+.attachments button {
+  min-height: 0;
+  border: 1px solid rgba(126, 247, 142, 0.3);
+  cursor: pointer;
+}
+
+.attachments .attachment-download-error {
+  border: 1px solid rgba(255, 120, 93, 0.28);
+  background: rgba(83, 23, 17, 0.72);
+  color: #ffd1c4;
+  font-weight: 700;
 }
 
 .file-chip button {
@@ -2549,6 +2563,19 @@ ork-first-thread-wizard.first-thread-host {
 .notice.error {
   background: rgba(83, 23, 17, 0.86);
   color: #ffd1c4;
+}
+
+.notice.warning {
+  border: 1px solid rgba(245, 190, 84, 0.28);
+  background: rgba(91, 62, 10, 0.5);
+  color: #ffe0a3;
+}
+
+.attachment-browser-key {
+  border: 1px solid rgba(119, 205, 126, 0.16);
+  border-radius: 12px;
+  background: rgba(3, 9, 4, 0.5);
+  padding: 14px;
 }
 
 .empty-state,

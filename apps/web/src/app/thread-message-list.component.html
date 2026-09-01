@@ -51,7 +51,22 @@
         <div class="attachments">
           @for (attachment of message.attachments || []; track attachmentLabel(attachment)) {
             @if (attachmentDownloadUrl(attachment)) {
-              <a [href]="attachmentDownloadUrl(attachment)" [attr.download]="attachmentLabel(attachment)">{{ attachmentLabel(attachment) }}{{ attachmentEncrypted(attachment) ? " · encrypted (age)" : "" }}</a>
+              @if (attachmentEncrypted(attachment)) {
+                <button
+                  class="attachment-download"
+                  type="button"
+                  (click)="downloadEncryptedAttachment(attachment)"
+                  [disabled]="attachmentDownloadBusy[attachmentKey(attachment)]"
+                  title="Fetch ciphertext and decrypt it locally in this browser"
+                >
+                  {{ attachmentDownloadBusy[attachmentKey(attachment)] ? "Decrypting…" : "Secure download" }}
+                </button>
+                @if (attachmentDownloadErrors[attachmentKey(attachment)]) {
+                  <span class="attachment-download-error">{{ attachmentDownloadErrors[attachmentKey(attachment)] }}</span>
+                }
+              } @else {
+                <a [href]="attachmentDownloadUrl(attachment)" [attr.download]="attachmentLabel(attachment)">{{ attachmentLabel(attachment) }}</a>
+              }
             } @else {
               <span>{{ attachmentLabel(attachment) }}{{ attachmentEncrypted(attachment) ? " · encrypted (age)" : "" }}</span>
             }
