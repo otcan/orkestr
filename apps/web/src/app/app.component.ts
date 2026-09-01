@@ -3,6 +3,7 @@ import { AfterViewChecked, ChangeDetectorRef, Component, ElementRef, OnDestroy, 
 import { FormsModule } from "@angular/forms";
 import { firstValueFrom } from "rxjs";
 import { AppLauncherPageComponent } from "./app-launcher-page.component";
+import { AttachmentEncryptionBootstrapService } from "./attachment-encryption-bootstrap.service";
 import { FirstThreadWizardComponent } from "./first-thread-wizard.component";
 import { FilesPageComponent } from "./files-page.component";
 import { InstanceSettingsPageComponent } from "./instance-settings-page.component";
@@ -85,6 +86,7 @@ const MESSAGE_PAGE_LIMIT = 100;
 })
 export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   private readonly api = inject(ApiService);
+  private readonly attachmentEncryptionBootstrap = inject(AttachmentEncryptionBootstrapService);
   private readonly cdr = inject(ChangeDetectorRef);
   private readonly connectorStore = inject(ConnectorStore);
   private readonly gmailBrowserNotifications = inject(GmailBrowserNotificationService);
@@ -166,6 +168,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   filterText = "";
   draft = "";
   error = "";
+  attachmentEncryptionError = "";
   linkNotice = "";
   logoutBusy = false;
   accountSwitchBusyRef = "";
@@ -251,6 +254,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   private fallbackPoller?: ReturnType<typeof setInterval>;
   private systemPoller?: ReturnType<typeof setInterval>;
   private summaryReconnectTimer?: ReturnType<typeof setTimeout>;
+  private attachmentEncryptionRetryTimer?: ReturnType<typeof setTimeout>;
   private summarySocket?: WebSocket;
   private destroyed = false;
   private applyingSummary = false;
@@ -328,6 +332,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.stopFallbackPolling();
     if (this.systemPoller) clearInterval(this.systemPoller);
     if (this.summaryReconnectTimer) clearTimeout(this.summaryReconnectTimer);
+    if (this.attachmentEncryptionRetryTimer) clearTimeout(this.attachmentEncryptionRetryTimer);
     this.summarySocket?.close();
     if (this.scrollFrame && typeof globalThis.cancelAnimationFrame === "function") {
       globalThis.cancelAnimationFrame(this.scrollFrame);
@@ -378,13 +383,14 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
         this.instanceContext = instanceContextResult.value.instance;
         void this.loadInstanceAccounts();
       }
-      this.appReady = true;
       if (this.isPairingRequiredFromSetup()) {
         this.apiOnline = true;
         this.enterPairingRequired();
         return;
       }
       this.pairingRequired = false;
+      if (userResult.status === "fulfilled") await this.bootstrapAttachmentEncryption();
+      this.appReady = true;
       if (await this.redirectPairedBrowserFromPairingPath()) return;
       if (!this.uiRuntimeReady() && !this.onboardingActive) {
         this.apiOnline = true;
@@ -460,6 +466,25 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     } finally {
       this.busy = false;
       this.renderNow();
+    }
+  }
+
+  private async bootstrapAttachmentEncryption(): Promise<void> {
+    if (this.attachmentEncryptionRetryTimer) {
+      clearTimeout(this.attachmentEncryptionRetryTimer);
+      this.attachmentEncryptionRetryTimer = undefined;
+    }
+    try {
+      await this.attachmentEncryptionBootstrap.ensureReady();
+      this.attachmentEncryptionError = "";
+    } catch {
+      this.attachmentEncryptionError = "Protected attachment setup is retrying automatically. Mandatory publication remains fail-closed until this browser is ready.";
+      if (!this.destroyed) {
+        this.attachmentEncryptionRetryTimer = setTimeout(() => {
+          this.attachmentEncryptionRetryTimer = undefined;
+          void this.bootstrapAttachmentEncryption();
+        }, 5_000);
+      }
     }
   }
 

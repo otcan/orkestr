@@ -2,9 +2,9 @@ import { DatePipe, JsonPipe, KeyValuePipe } from "@angular/common";
 import { Component, OnInit, inject } from "@angular/core";
 import { FormsModule } from "@angular/forms";
 import { firstValueFrom } from "rxjs";
-import * as age from "age-encryption";
 import { ApiService, AttachmentEncryptionKey, AttachmentEncryptionStatus, InstanceStatusResponse } from "./api.service";
 import { AttachmentDecryptionService } from "./attachment-decryption.service";
+import { AttachmentEncryptionBootstrapService } from "./attachment-encryption-bootstrap.service";
 
 @Component({
   selector: "ork-instance-settings-page",
@@ -14,6 +14,7 @@ import { AttachmentDecryptionService } from "./attachment-decryption.service";
 export class InstanceSettingsPageComponent implements OnInit {
   private readonly api = inject(ApiService);
   private readonly attachmentDecryption = inject(AttachmentDecryptionService);
+  private readonly attachmentEncryptionBootstrap = inject(AttachmentEncryptionBootstrapService);
 
   busy = false;
   error = "";
@@ -25,7 +26,6 @@ export class InstanceSettingsPageComponent implements OnInit {
   verifyingKeyId = "";
   browserIdentity = "";
   rememberBrowserIdentity = true;
-  generatedRecoveryIdentity = "";
   encryptionBusy = false;
   encryptionError = "";
 
@@ -54,10 +54,6 @@ export class InstanceSettingsPageComponent implements OnInit {
     return Object.keys(this.snapshot?.config?.mailboxes || {}).length > 0;
   }
 
-  hasActiveEncryptionRecipient(): boolean {
-    return Boolean(this.attachmentEncryption?.keys?.some((key) => key.status === "active"));
-  }
-
   browserKeyUnlocked(): boolean {
     return this.attachmentDecryption.isUnlocked();
   }
@@ -67,37 +63,8 @@ export class InstanceSettingsPageComponent implements OnInit {
     this.encryptionBusy = true;
     try {
       await this.attachmentDecryption.unlock(this.browserIdentity, this.rememberBrowserIdentity);
+      await this.attachmentEncryptionBootstrap.ensureReady(true);
       this.browserIdentity = "";
-      this.encryptionError = "";
-    } catch (error) {
-      this.encryptionError = this.errorText(error);
-    } finally {
-      this.encryptionBusy = false;
-    }
-  }
-
-  lockBrowserKey(): void {
-    this.attachmentDecryption.lock();
-    this.browserIdentity = "";
-    this.generatedRecoveryIdentity = "";
-  }
-
-  async createBrowserKey(): Promise<void> {
-    if (this.encryptionBusy) return;
-    this.encryptionBusy = true;
-    try {
-      const identity = await age.generateIdentity();
-      const recipient = await this.attachmentDecryption.unlock(identity, true);
-      this.generatedRecoveryIdentity = identity;
-      const registered = await firstValueFrom(this.api.registerAttachmentEncryptionRecipient({
-        recipient,
-        label: "This browser",
-      }));
-      if (!registered.key.challenge?.ciphertext) throw new Error("attachment_encryption_challenge_missing");
-      const ciphertext = Uint8Array.from(atob(registered.key.challenge.ciphertext), (character) => character.charCodeAt(0));
-      const proof = await this.attachmentDecryption.decryptText(ciphertext);
-      await firstValueFrom(this.api.verifyAttachmentEncryptionRecipient(registered.key.id, proof));
-      this.rememberBrowserIdentity = true;
       this.encryptionError = "";
       this.attachmentEncryption = await firstValueFrom(this.api.attachmentEncryptionStatus());
     } catch (error) {
@@ -108,8 +75,9 @@ export class InstanceSettingsPageComponent implements OnInit {
   }
 
   downloadRecoveryIdentity(): void {
-    if (!this.generatedRecoveryIdentity) return;
-    const blob = new Blob([`${this.generatedRecoveryIdentity}\n`], { type: "text/plain" });
+    const identity = this.attachmentDecryption.exportIdentity();
+    if (!identity) return;
+    const blob = new Blob([`${identity}\n`], { type: "text/plain" });
     const objectUrl = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = objectUrl;
@@ -170,20 +138,6 @@ export class InstanceSettingsPageComponent implements OnInit {
     } finally {
       this.verificationIdentity = "";
       this.verifyingKeyId = "";
-      this.encryptionBusy = false;
-    }
-  }
-
-  async setEncryptionRequired(required: boolean): Promise<void> {
-    if (this.encryptionBusy) return;
-    this.encryptionBusy = true;
-    try {
-      await firstValueFrom(this.api.updateAttachmentEncryptionPolicy({ enabled: required, required }));
-      this.encryptionError = "";
-      this.attachmentEncryption = await firstValueFrom(this.api.attachmentEncryptionStatus());
-    } catch (error) {
-      this.encryptionError = this.errorText(error);
-    } finally {
       this.encryptionBusy = false;
     }
   }

@@ -701,6 +701,10 @@
         <div class="notice error">{{ error }}</div>
       }
 
+      @if (attachmentEncryptionError) {
+        <div class="notice error">{{ attachmentEncryptionError }}</div>
+      }
+
       @if (shouldShowCodexNotice()) {
         <div class="notice">
           <strong>{{ codexRuntimeNoticeTitle() }}</strong>

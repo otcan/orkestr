@@ -18,6 +18,21 @@ export class AttachmentDecryptionService {
     return Boolean(this.identity);
   }
 
+  async ensureIdentity(): Promise<string> {
+    if (this.identity) {
+      try {
+        return await age.identityToRecipient(this.identity);
+      } catch {
+        this.lock();
+      }
+    }
+    return this.unlock(await age.generateIdentity(), true);
+  }
+
+  exportIdentity(): string {
+    return this.identity;
+  }
+
   async unlock(identity: string, remember = true): Promise<string> {
     const candidate = String(identity || "").trim();
     if (!candidate.startsWith("AGE-SECRET-KEY-1")) throw new Error("attachment_identity_invalid");

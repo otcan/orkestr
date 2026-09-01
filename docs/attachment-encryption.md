@@ -14,27 +14,28 @@ a separate transport, database, and secret-management concern.
 
 ## Key enrollment
 
-Open Instance Settings and either create a browser key or add an existing
-`age1...` recipient public key. Orkestr encrypts a random, short-lived proof to
-the recipient. The browser decrypts the proof with the private age identity and
-returns only the random proof. The private identity is never sent to the server.
-It can be remembered in that browser profile for automatic downloads or kept
-only in memory for the current page session.
+The first authenticated WebUI session creates a browser-local age identity,
+registers its public `age1...` recipient, decrypts the server's random,
+short-lived possession challenge, and enables the mandatory policy
+automatically. Enrollment is idempotent and retries after transient failures.
+Only the random proof and public recipient leave the browser; the private
+identity never enters Orkestr.
 
-Save a separately protected recovery copy before depending on a browser-created
-identity. Losing every recipient identity makes existing ciphertext
-unrecoverable.
+The identity is remembered in that browser profile so later downloads are
+automatic. Instance Settings offers an optional recovery-key export and an
+advanced path for adding a separate recovery recipient. Losing every enrolled
+identity makes its existing ciphertext unrecoverable.
 
 Confirm the displayed SHA-256 fingerprint out of band before enabling the
 policy. Multiple verified recipients can be active, including an explicit
 recovery recipient. Every recipient is included in the immutable publication
 snapshot.
 
-The per-owner toggle in Instance Settings enables fail-closed enforcement. An
-operator can additionally set `ORKESTR_ATTACHMENT_ENCRYPTION_REQUIRED=1` after
-at least one recipient is active; that environment setting cannot be disabled
-from the WebUI. Do not set it before key enrollment, because attachment
-publication will correctly stop when no verified recipient exists.
+The browser enables the per-owner fail-closed policy as part of enrollment. For
+production, operators must additionally set
+`ORKESTR_ATTACHMENT_ENCRYPTION_REQUIRED=1`; that environment setting cannot be
+disabled from the WebUI. It is safe to set before the first browser enrollment:
+attachment publication remains blocked until automatic enrollment completes.
 
 ## Publication boundary
 

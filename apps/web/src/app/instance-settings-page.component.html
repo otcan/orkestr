@@ -23,7 +23,7 @@
         <div>
           <p class="eyebrow">Attachment protection</p>
           <h3>Encrypted WebUI downloads</h3>
-          <p class="subline">Every future attachment is published as age ciphertext. This browser decrypts it locally and saves the original file; your private identity is never sent to Orkestr.</p>
+          <p class="subline">Protection is enrolled and enforced automatically after login. Every future attachment is published as age ciphertext; this browser decrypts it locally and never sends its private identity to Orkestr.</p>
         </div>
         <span class="status-pill">{{ attachmentEncryption?.policy?.required ? "enforced" : attachmentEncryption?.ready ? "ready to enforce" : "key required" }}</span>
       </div>
@@ -32,27 +32,24 @@
         <div class="notice error">{{ encryptionError }}</div>
       }
 
-      <label class="checkbox-row settings-toggle">
-        <input
-          type="checkbox"
-          [ngModel]="attachmentEncryption?.policy?.required === true"
-          (ngModelChange)="setEncryptionRequired($event)"
-          [disabled]="encryptionBusy || !hasActiveEncryptionRecipient()"
-        />
-        Require encryption for every future WebUI attachment and export
-      </label>
+      <div class="settings-facts">
+        <span>Enrollment</span>
+        <strong>Automatic</strong>
+        <span>Publication</span>
+        <strong>{{ attachmentEncryption?.policy?.required ? "Mandatory and fail-closed" : "Preparing automatically" }}</strong>
+      </div>
 
       <div class="settings-stack attachment-browser-key">
         <div class="row-between">
           <div>
             <strong>This browser</strong>
-            <p class="subline">{{ browserKeyUnlocked() ? "Unlocked for automatic local downloads" : "A private age identity is required to open protected downloads" }}</p>
+            <p class="subline">{{ browserKeyUnlocked() ? "Automatically enrolled for local downloads" : "Automatic browser enrollment is still preparing" }}</p>
           </div>
           <span class="status-pill">{{ browserKeyUnlocked() ? "unlocked" : "locked" }}</span>
         </div>
         @if (!browserKeyUnlocked()) {
           <label class="settings-field attachment-identity-field">
-            <span>Private age identity</span>
+            <span>Existing recovery identity (optional)</span>
             <input type="password" autocomplete="off" [(ngModel)]="browserIdentity" placeholder="AGE-SECRET-KEY-1…" />
           </label>
           <label class="checkbox-row settings-toggle">
@@ -60,20 +57,11 @@
             Remember only in this browser profile
           </label>
           <div class="settings-actions compact-actions">
-            <button type="button" (click)="unlockBrowserKey()" [disabled]="encryptionBusy || !browserIdentity.trim()">Unlock local downloads</button>
-            <button class="secondary" type="button" (click)="createBrowserKey()" [disabled]="encryptionBusy">Create and enroll a browser key</button>
+            <button type="button" (click)="unlockBrowserKey()" [disabled]="encryptionBusy || !browserIdentity.trim()">Restore recovery key</button>
           </div>
         } @else {
           <div class="settings-actions compact-actions">
-            <button class="secondary" type="button" (click)="lockBrowserKey()" [disabled]="encryptionBusy">Forget key on this browser</button>
-          </div>
-        }
-        @if (generatedRecoveryIdentity) {
-          <div class="notice warning attachment-recovery-key">
-            <strong>Save this recovery key now.</strong>
-            <p>Losing this browser profile and this key makes existing ciphertext unrecoverable.</p>
-            <code>{{ generatedRecoveryIdentity }}</code>
-            <button class="secondary" type="button" (click)="downloadRecoveryIdentity()">Save recovery key</button>
+            <button class="secondary" type="button" (click)="downloadRecoveryIdentity()" [disabled]="encryptionBusy">Save optional recovery key</button>
           </div>
         }
       </div>
@@ -108,7 +96,7 @@
             }
           </article>
         } @empty {
-          <p class="subline">Add an age recipient public key, then prove that you hold its private identity before enabling mandatory encryption.</p>
+          <p class="subline">This browser is enrolling its recipient automatically.</p>
         }
       </div>
 
@@ -122,7 +110,7 @@
           <input [(ngModel)]="recipientPublicKey" placeholder="age1…" autocomplete="off" />
         </label>
         <div class="settings-actions">
-          <button type="button" (click)="registerRecipient()" [disabled]="encryptionBusy || !recipientPublicKey.trim()">Add and challenge key</button>
+          <button type="button" (click)="registerRecipient()" [disabled]="encryptionBusy || !recipientPublicKey.trim()">Add optional recovery recipient</button>
         </div>
       </div>
 
