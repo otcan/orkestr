@@ -1308,6 +1308,8 @@ function runtimeWorkspace(thread, env) {
 }
 
 function runtimeCommand(thread, workspace = "", env = process.env) {
+  const rawTerminalCommand = String(thread?.command || "").trim();
+  if (threadUsesRawTerminalMode(thread) && rawTerminalCommand) return rawTerminalCommand;
   const explicit = String(env.ORKESTR_RUNTIME_CODEX_COMMAND || "").trim();
   const base = explicit ||
     (testLikeRuntimeEnvironment(workspace, env) && !allowRealCodexInTests(env)
