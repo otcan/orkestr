@@ -177,7 +177,9 @@ function canonicalPath(rawUrl = ""): boolean {
 function compatibilityPath(rawUrl = ""): boolean {
   const parts = pathParts(rawUrl);
   return parts[0] === "i" && Boolean(parts[1]) && (
-    parts[2] === "app" || (parts[2] === "a" && Boolean(parts[3]) && parts[4] === "s")
+    parts[2] === "app" ||
+    (parts[2] === "setup" && parts.length === 3) ||
+    (parts[2] === "a" && Boolean(parts[3]) && parts[4] === "s")
   );
 }
 
