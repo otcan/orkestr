@@ -5826,7 +5826,7 @@ test("local whatsapp exact recovery resolves a bare event id from the scoped bro
   }
 });
 
-test("local whatsapp inbound does not route a caption when media download retries are exhausted", async () => {
+test("local whatsapp inbound records one history-only warning and permits late recovery when media retries are exhausted", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-media-failed-"));
   const env = {
     ORKESTR_HOME: home,
@@ -5849,8 +5849,10 @@ test("local whatsapp inbound does not route a caption when media download retrie
     },
   }, env);
 
-  const result = await handleInboundMessage("sender", {
-    id: { _serialized: `false_${chatId}_media-failed-1`, remote: chatId },
+  const eventId = `false_${chatId}_media-failed-1`;
+  let mediaReady = false;
+  const message = {
+    id: { _serialized: eventId, remote: chatId },
     from: chatId,
     author: "90000000000002@lid",
     fromMe: false,
@@ -5860,15 +5862,92 @@ test("local whatsapp inbound does not route a caption when media download retrie
     timestamp: 1_780_000_001,
     async downloadMedia() {
       attempts += 1;
+      if (mediaReady) {
+        return {
+          data: Buffer.from("late attachment").toString("base64"),
+          filename: "late.txt",
+          mimetype: "text/plain",
+        };
+      }
       throw new Error("r");
     },
-  }, env);
-  const messages = await listThreadMessages("media-failed-thread", env);
+  };
+  const result = await handleInboundMessage("sender", message, env);
+  const repeated = await handleInboundMessage("sender", message, env);
+  let messages = await listThreadMessages("media-failed-thread", env);
 
   assert.equal(result.error, "whatsapp_inbound_media_download_failed");
   assert.equal(result.retryable, true);
-  assert.equal(attempts, 2);
-  assert.equal(messages.length, 0);
+  assert.equal(result.mediaFailureWarning.recorded, true);
+  assert.equal(repeated.mediaFailureWarning.recorded, false);
+  assert.equal(repeated.mediaFailureWarning.duplicate, true);
+  assert.equal(attempts, 4);
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].role, "assistant");
+  assert.equal(messages[0].source, "whatsapp-inbound-media-warning");
+  assert.equal(messages[0].phase, "notification");
+  assert.equal(messages[0].state, "completed");
+  assert.equal(messages[0].connector, "whatsapp");
+  assert.equal(messages[0].eventId, result.eventId);
+  assert.match(messages[0].text, /could not download/);
+  assert.match(messages[0].text, /not sent to the assistant/);
+
+  mediaReady = true;
+  const recovered = await handleInboundMessage("sender", message, env);
+  messages = await listThreadMessages("media-failed-thread", env);
+
+  assert.equal(recovered.routed.threadId, "media-failed-thread");
+  assert.equal(messages.length, 2);
+  assert.deepEqual(messages.map((entry) => entry.role), ["assistant", "user"]);
+  assert.match(messages[1].externalId, /media-failed-1$/);
+  assert.equal(messages[1].text, "Do not route without this file");
+  assert.equal(messages[1].attachments[0].filename, "late.txt");
+  assert.equal(await fs.readFile(messages[1].attachments[0].path, "utf8"), "late attachment");
+});
+
+test("local whatsapp voice download exhaustion is visible without creating a user input", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-voice-failed-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "sender",
+    ORKESTR_WHATSAPP_INBOUND_MEDIA_DOWNLOAD_ATTEMPTS: "1",
+    ORKESTR_WHATSAPP_INBOUND_MEDIA_DOWNLOAD_RETRY_MS: "0",
+    ORKESTR_WHATSAPP_INBOUND_MEDIA_DOWNLOAD_TIMEOUT_MS: "100",
+  };
+  const chatId = "chat-voice-failed@g.us";
+  await createThread({
+    id: "voice-failed-thread",
+    name: "Voice failed",
+    binding: {
+      connector: "whatsapp",
+      chatId,
+      responderAccountId: "sender",
+      outboundAccountId: "sender",
+      enabled: true,
+    },
+  }, env);
+
+  const result = await handleInboundMessage("sender", {
+    id: { _serialized: `false_${chatId}_voice-failed-1`, remote: chatId },
+    from: chatId,
+    author: "90000000000002@lid",
+    fromMe: false,
+    body: "",
+    hasMedia: true,
+    type: "ptt",
+    timestamp: 1_780_000_001,
+    async downloadMedia() {
+      throw new Error("media unavailable");
+    },
+  }, env);
+  const messages = await listThreadMessages("voice-failed-thread", env);
+
+  assert.equal(result.error, "whatsapp_inbound_media_download_failed");
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].role, "assistant");
+  assert.equal(messages[0].source, "whatsapp-inbound-media-warning");
+  assert.match(messages[0].text, /voice-note event/);
+  assert.match(messages[0].text, /send it as an audio file/);
 });
 
 test("local whatsapp inbound routes link text when generated preview media cannot download", async () => {

@@ -20,6 +20,7 @@ import { listHostNativeGmailAccounts, sendHostNativeGmailMessage } from "./gmail
 import { connectorAuthStatus } from "./connector-auth.js";
 import { listConnectorScopePaths } from "./connector-storage.js";
 import { claimWhatsAppInboundFailureNotice } from "./whatsapp-inbound-notice-ledger.js";
+import { recordWhatsAppInboundMediaFailure } from "./whatsapp-inbound-media-failures.js";
 import {
   bindingAccountIds as whatsappBindingAccountIds,
   whatsappBindingIsRouteEligible,
@@ -4114,6 +4115,12 @@ export async function handleInboundMessage(accountId, message, env = process.env
       retryable: error?.retryable === true,
     }, env).catch(() => {});
     if (!failedInboundMediaCanRouteAsLinkText(message, text)) {
+      const warning = await recordWhatsAppInboundMediaFailure({
+        accountId,
+        eventId,
+        chatId,
+        messageType: message?.type || message?._data?.type || "",
+      }, env).catch(() => ({ recorded: false, reason: "warning_record_failed" }));
       return {
         error: error?.message || String(error),
         retryable: error?.retryable === true,
@@ -4121,6 +4128,7 @@ export async function handleInboundMessage(accountId, message, env = process.env
         chatId,
         from,
         fromMe: routeFromMe,
+        mediaFailureWarning: warning,
       };
     }
     attachments = [];
