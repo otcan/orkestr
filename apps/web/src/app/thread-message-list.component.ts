@@ -18,7 +18,9 @@ export class ThreadMessageListComponent {
   @Input() sendingNow = false;
   @Input() implementingPlan = false;
   @Input() threadInputReady = true;
+  @Input() retryingMessageIds: Record<string, boolean> = {};
   @Output() implementPlan = new EventEmitter<void>();
+  @Output() resend = new EventEmitter<ThreadMessage>();
   attachmentDownloadBusy: Record<string, boolean> = {};
   attachmentDownloadErrors: Record<string, string> = {};
 
@@ -80,16 +82,39 @@ export class ThreadMessageListComponent {
     return state.replace(/_/g, " ");
   }
 
+  messageFailureSummary(message: ThreadMessage): string {
+    if (String(message.state || "").toLowerCase() !== "failed") return "";
+    return String(message["failureSummary"] || "Orkestr could not confirm delivery.").trim();
+  }
+
   messageFailureDetail(message: ThreadMessage): string {
     if (String(message.state || "").toLowerCase() !== "failed") return "";
-    return String(message.error || "Orkestr could not confirm this message reached Codex.").trim();
+    return String(message["failureDetail"] || "The message is still visible here. You can resend it without retyping it.").trim();
+  }
+
+  messageFailureTechnical(message: ThreadMessage): string {
+    if (String(message.state || "").toLowerCase() !== "failed") return "";
+    return String(message["failureTechnical"] || message.error || "").trim();
+  }
+
+  messageCanResend(message: ThreadMessage): boolean {
+    if (String(message.role || "").toLowerCase() !== "user" || String(message.state || "").toLowerCase() !== "failed") return false;
+    if (message["retryable"] === false) return false;
+    return message["localOnly"] === true
+      || String(message["originSurface"] || "").toLowerCase() === "webui"
+      || String(message["observedVia"] || "").toLowerCase() === "ui_send_failed"
+      || String(message.source || "").toLowerCase() === "ui";
+  }
+
+  messageRetrying(message: ThreadMessage): boolean {
+    return this.retryingMessageIds[String(message.id || "")] === true;
   }
 
   replyDeliveryLabel(message: ThreadMessage): string {
     const intent = message["replyDeliveryIntent"] as Record<string, unknown> | undefined;
     if (!intent || intent["channel"] !== "whatsapp") return "";
     const status = String(intent["status"] || "").trim();
-    if (status === "pending_reply") return "WhatsApp reply requested";
+    if (status === "pending_reply") return "";
     if (status === "queued") return "WhatsApp delivery queued";
     if (status === "delivered") return "WhatsApp delivered";
     if (status === "policy_skipped") return `WhatsApp skipped${intent["reason"] ? `: ${String(intent["reason"]).replace(/_/g, " ")}` : ""}`;

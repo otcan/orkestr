@@ -203,7 +203,7 @@ test("WebUI input authority is server-stamped and generic input cannot forge rep
     const accepted = await fetch(`http://127.0.0.1:${port}/api/threads/thread-ui-input-authority/ui-input`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ text: "trusted UI input", replyDelivery: "bound_whatsapp" }),
+      body: JSON.stringify({ text: "trusted UI input", clientMessageId: "webui-retry-safe-1", replyDelivery: "bound_whatsapp" }),
     });
     assert.equal(accepted.status, 202);
     const acceptedPayload = await accepted.json();
@@ -211,11 +211,22 @@ test("WebUI input authority is server-stamped and generic input cannot forge rep
     assert.equal("target" in acceptedPayload.message.replyDeliveryIntent, false);
     assert.equal("serverAuthored" in acceptedPayload.message.replyDeliveryIntent, false);
 
+    const duplicate = await fetch(`http://127.0.0.1:${port}/api/threads/thread-ui-input-authority/ui-input`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text: "trusted UI input", clientMessageId: "webui-retry-safe-1", replyDelivery: "bound_whatsapp" }),
+    });
+    const duplicatePayload = await duplicate.json();
+    assert.equal(duplicate.status, 202);
+    assert.equal(duplicatePayload.message.id, acceptedPayload.message.id);
+    assert.equal(duplicatePayload.message.clientMessageId, "webui-retry-safe-1");
+
     const messages = await listThreadMessages("thread-ui-input-authority", runtimeEnv);
     const forgedMessage = messages.find((message) => message.text === "forged generic input");
     const trustedMessage = messages.find((message) => message.text === "trusted UI input");
     assert.equal(forgedMessage.replyDeliveryIntent, undefined);
     assert.equal(trustedMessage.source, "ui");
+    assert.equal(messages.filter((message) => message.clientMessageId === "webui-retry-safe-1").length, 1);
     assert.equal(trustedMessage.originSurface, "webui");
     assert.equal(trustedMessage.replyDeliveryIntent.serverAuthored, true);
     assert.equal(trustedMessage.replyDeliveryIntent.target.chatId, "chat-authority");

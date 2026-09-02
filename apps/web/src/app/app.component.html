@@ -729,7 +729,9 @@
             [sendingNow]="sendingNow"
             [implementingPlan]="implementingPlan"
             [threadInputReady]="threadInputReady()"
+            [retryingMessageIds]="resendingMessageIds"
             (implementPlan)="implementPlanSelected()"
+            (resend)="resendFailedMessage($event)"
           ></ork-thread-message-list>
         </section>
       }

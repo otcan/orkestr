@@ -27,11 +27,33 @@
           <em class="phase-badge">{{ replyDeliveryLabel(message) }}</em>
         }
       </div>
-      @if (messageFailureDetail(message)) {
-        <div class="message-failure">
-          <strong>Not delivered</strong>
-          <span>{{ messageFailureDetail(message) }}</span>
-        </div>
+      @if (messageFailureSummary(message)) {
+        <section class="message-failure" role="alert">
+          <div class="message-failure-heading">
+            <span class="message-failure-mark" aria-hidden="true">!</span>
+            <div>
+              <strong>Message not sent</strong>
+              <span>{{ messageFailureSummary(message) }}</span>
+            </div>
+          </div>
+          <p>{{ messageFailureDetail(message) }}</p>
+          @if (messageFailureTechnical(message)) {
+            <details>
+              <summary>Technical details</summary>
+              <code>{{ messageFailureTechnical(message) }}</code>
+            </details>
+          }
+          @if (messageCanResend(message)) {
+            <button
+              class="secondary message-resend-button"
+              type="button"
+              (click)="resend.emit(message)"
+              [disabled]="sending || sendingNow || implementingPlan || messageRetrying(message) || !threadInputReady"
+            >
+              {{ messageRetrying(message) ? "Resending…" : "Resend message" }}
+            </button>
+          }
+        </section>
       }
       <div class="message-body" [innerHTML]="messageTextHtml(message)"></div>
       @if (messagePhase(message) === "plan") {

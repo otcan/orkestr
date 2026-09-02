@@ -55,6 +55,7 @@ import {
 } from "./api.service";
 import { appendPendingFiles, messageWithAttachmentPaths, PendingFile, removePendingFile, uploadPendingFiles } from "./thread-uploads";
 import { canonicalThreadPanelUrl, navigateCanonicalThreadTarget, navigateLegacyThreadPath } from "./canonical-thread-navigation.js";
+import { describeUiSendFailure, UiSendFailureDescription } from "./ui-send-failure.js";
 
 type Panel = "chat" | "history" | "delivery" | "timers" | "attach" | "settings" | "workers" | "runtime" | "raw" | "files" | "instanceApps" | "instanceSettings" | "instanceTimers" | "instanceDesktops" | "userConnectors";
 type CodexRateLimitKey = "primary" | "secondary";
@@ -74,6 +75,16 @@ interface ThreadMessagePageState {
   oldestCursor: number | null;
   hasMoreBefore: boolean;
   loadingOlder: boolean;
+}
+
+interface UiSendRetryPayload {
+  threadId: string;
+  originalText: string;
+  pendingFiles: PendingFile[];
+  attachments: Array<Record<string, unknown>>;
+  mode: "send" | "interrupt";
+  replyDelivery: "ui_only" | "bound_whatsapp";
+  clientMessageId: string;
 }
 
 const DEFAULT_WHATSAPP_REPLY_PREFIX = "orkestr:";
@@ -244,6 +255,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   creatingWorkerParentId = "";
   pendingFiles: PendingFile[] = [];
   replyToWhatsAppByThread: Record<string, boolean> = {};
+  resendingMessageIds: Record<string, boolean> = {};
   draggingUpload = false;
   rawConnectionState = "idle";
   rawConnectionDetail = "";
@@ -271,6 +283,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   private scrollAfterRender = true;
   private scrollFrame = 0;
   private readonly lastActivityByThread = new Map<string, number>();
+  private readonly uiSendRetryPayloads = new Map<string, UiSendRetryPayload>();
   private readonly threadLoadTokens = new Map<string, number>();
   private threadLoadSequence = 0;
   private textStateThreadId = "";
@@ -340,6 +353,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.rawTerminal.dispose();
     this.sidebarResizeEnd();
     this.gmailBrowserNotifications.stop();
+    this.uiSendRetryPayloads.clear();
     globalThis.removeEventListener?.("popstate", this.popStateHandler);
   }
 
@@ -1258,25 +1272,39 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     const originalText = this.draft.trim();
     if (!originalText && this.pendingFiles.length === 0) return;
     if (!this.guardCodexRuntime()) return;
+    this.error = "";
     const pendingFiles = [...this.pendingFiles];
     const optimisticId = this.appendOptimisticUserMessage(thread.id, originalText, pendingFiles);
+    const clientMessageId = `webui-${optimisticId}`;
+    const replyDelivery = this.uiReplyDeliveryMode(thread);
+    this.uiSendRetryPayloads.set(optimisticId, {
+      threadId: thread.id,
+      originalText,
+      pendingFiles,
+      attachments: [],
+      mode: "send",
+      replyDelivery,
+      clientMessageId,
+    });
+    this.updateOptimisticUserMessage(thread.id, optimisticId, { clientMessageId, retryMode: "send" });
     this.clearSubmittedComposer(thread);
     this.sending = true;
     try {
       const attachments = await uploadPendingFiles(this.api, thread.id, pendingFiles);
       const text = messageWithAttachmentPaths(originalText, attachments);
       this.updateOptimisticUserMessage(thread.id, optimisticId, { text, attachments });
+      this.updateUiSendRetryPayload(optimisticId, attachments);
       this.markThreadActive(thread.id, 120_000);
       const response = await firstValueFrom(this.api.sendThreadInput(thread.id, text, attachments, {
-        replyDelivery: this.uiReplyDeliveryMode(thread),
+        replyDelivery,
+        clientMessageId,
       }));
       this.replaceOptimisticUserMessage(thread.id, optimisticId, response.message);
+      this.uiSendRetryPayloads.delete(optimisticId);
       this.queueMessagePaneScrollToBottom();
       await this.refresh(false);
     } catch (error) {
-      const detail = this.errorText(error);
-      this.error = detail;
-      this.failOptimisticUserMessage(thread.id, optimisticId, detail);
+      this.failOptimisticUserMessage(thread.id, optimisticId, describeUiSendFailure(error));
     } finally {
       this.sending = false;
     }
@@ -1319,26 +1347,109 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     const originalText = this.draft.trim();
     if (!originalText && this.pendingFiles.length === 0) return;
     if (!this.guardCodexRuntime()) return;
+    this.error = "";
     const pendingFiles = [...this.pendingFiles];
     const optimisticId = this.appendOptimisticUserMessage(thread.id, originalText, pendingFiles, "interrupt", "interrupting");
+    const clientMessageId = `webui-${optimisticId}`;
+    const replyDelivery = this.uiReplyDeliveryMode(thread);
+    this.uiSendRetryPayloads.set(optimisticId, {
+      threadId: thread.id,
+      originalText,
+      pendingFiles,
+      attachments: [],
+      mode: "interrupt",
+      replyDelivery,
+      clientMessageId,
+    });
+    this.updateOptimisticUserMessage(thread.id, optimisticId, { clientMessageId, retryMode: "interrupt" });
     this.clearSubmittedComposer(thread);
     this.sendingNow = true;
     try {
       const attachments = await uploadPendingFiles(this.api, thread.id, pendingFiles);
       const text = messageWithAttachmentPaths(originalText, attachments);
       this.updateOptimisticUserMessage(thread.id, optimisticId, { text, attachments });
+      this.updateUiSendRetryPayload(optimisticId, attachments);
       this.markThreadActive(thread.id, 120_000);
       const response = await firstValueFrom(this.api.interruptThread(thread.id, text, attachments, {
-        replyDelivery: this.uiReplyDeliveryMode(thread),
+        replyDelivery,
+        clientMessageId,
       }));
       this.replaceOptimisticUserMessage(thread.id, optimisticId, response.message);
+      this.uiSendRetryPayloads.delete(optimisticId);
       this.queueMessagePaneScrollToBottom();
       await this.refresh(false);
     } catch (error) {
-      const detail = this.errorText(error);
-      this.error = detail;
-      this.failOptimisticUserMessage(thread.id, optimisticId, detail);
+      this.failOptimisticUserMessage(thread.id, optimisticId, describeUiSendFailure(error));
     } finally {
+      this.sendingNow = false;
+    }
+  }
+
+  async resendFailedMessage(message: ThreadMessage): Promise<void> {
+    const thread = this.selectedThread();
+    const messageId = String(message.id || "").trim();
+    if (!thread || !messageId || this.sending || this.sendingNow || this.implementingPlan || this.resendingMessageIds[messageId]) return;
+    if (!this.guardCodexRuntime()) return;
+    const remembered = this.uiSendRetryPayloads.get(messageId);
+    if (remembered && remembered.threadId !== thread.id) return;
+    const pendingAttachments = (message.attachments || []).some((attachment) => attachment["pending"] === true);
+    if (pendingAttachments && !remembered?.pendingFiles.length) {
+      this.failOptimisticUserMessage(thread.id, messageId, describeUiSendFailure(new Error("attachment_retry_data_unavailable")));
+      return;
+    }
+    const mode = remembered?.mode || (String(message["retryMode"] || "") === "interrupt" ? "interrupt" : "send");
+    const uncertainClientFailure = message["localOnly"] === true || String(message["observedVia"] || "") === "ui_send_failed";
+    const clientMessageId = uncertainClientFailure
+      ? remembered?.clientMessageId || String(message["clientMessageId"] || `webui-${messageId}`)
+      : `webui-retry-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    const replyDelivery = remembered?.replyDelivery || this.uiReplyDeliveryMode(thread);
+    this.error = "";
+    this.resendingMessageIds = { ...this.resendingMessageIds, [messageId]: true };
+    this.sending = mode === "send";
+    this.sendingNow = mode === "interrupt";
+    this.updateOptimisticUserMessage(thread.id, messageId, {
+      state: "queued",
+      deliveryState: mode === "interrupt" ? "interrupting" : "sending",
+      failureSummary: "",
+      failureDetail: "",
+      failureTechnical: "",
+      error: "",
+      retryable: true,
+      clientMessageId,
+    });
+    try {
+      let attachments = remembered?.attachments || (message.attachments || []).filter((attachment) => attachment["pending"] !== true);
+      if (!attachments.length && remembered?.pendingFiles.length) {
+        attachments = await uploadPendingFiles(this.api, thread.id, remembered.pendingFiles);
+      }
+      const text = remembered
+        ? messageWithAttachmentPaths(remembered.originalText, attachments)
+        : String(message.text || "").trim();
+      this.updateOptimisticUserMessage(thread.id, messageId, { text, attachments });
+      this.uiSendRetryPayloads.set(messageId, {
+        threadId: thread.id,
+        originalText: remembered?.originalText || text,
+        pendingFiles: remembered?.pendingFiles || [],
+        attachments,
+        mode,
+        replyDelivery,
+        clientMessageId,
+      });
+      this.markThreadActive(thread.id, 120_000);
+      const response = await firstValueFrom(mode === "interrupt"
+        ? this.api.interruptThread(thread.id, text, attachments, { replyDelivery, clientMessageId })
+        : this.api.sendThreadInput(thread.id, text, attachments, { replyDelivery, clientMessageId }));
+      this.replaceOptimisticUserMessage(thread.id, messageId, response.message);
+      this.uiSendRetryPayloads.delete(messageId);
+      this.queueMessagePaneScrollToBottom();
+      await this.refresh(false);
+    } catch (error) {
+      this.failOptimisticUserMessage(thread.id, messageId, describeUiSendFailure(error));
+    } finally {
+      const remaining = { ...this.resendingMessageIds };
+      delete remaining[messageId];
+      this.resendingMessageIds = remaining;
+      this.sending = false;
       this.sendingNow = false;
     }
   }
@@ -1358,9 +1469,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       this.queueMessagePaneScrollToBottom();
       await this.refresh(false);
     } catch (error) {
-      const detail = this.errorText(error);
-      this.error = detail;
-      this.failOptimisticUserMessage(thread.id, optimisticId, detail);
+      this.failOptimisticUserMessage(thread.id, optimisticId, describeUiSendFailure(error));
     } finally {
       this.implementingPlan = false;
     }
@@ -2552,10 +2661,16 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     }));
   }
 
-  private failOptimisticUserMessage(threadId: string, optimisticId: string, detail: string): void {
+  private updateUiSendRetryPayload(optimisticId: string, attachments: Array<Record<string, unknown>>): void {
+    const current = this.uiSendRetryPayloads.get(optimisticId);
+    if (!current) return;
+    this.uiSendRetryPayloads.set(optimisticId, { ...current, attachments });
+  }
+
+  private failOptimisticUserMessage(threadId: string, optimisticId: string, failure: UiSendFailureDescription): void {
     this.messageCache.update((cache) => ({
       ...cache,
-      [threadId]: failOptimisticThreadMessage(cache[threadId] || [], optimisticId, detail),
+      [threadId]: failOptimisticThreadMessage(cache[threadId] || [], optimisticId, failure),
     }));
   }
 

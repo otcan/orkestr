@@ -3005,10 +3005,11 @@ export class ApiService {
     id: string,
     text: string,
     attachments: Array<Record<string, unknown>> = [],
-    options: { replyDelivery?: "ui_only" | "bound_whatsapp" } = {},
+    options: { replyDelivery?: "ui_only" | "bound_whatsapp"; clientMessageId?: string } = {},
   ): Observable<ThreadInputResponse> {
     const body: Record<string, unknown> = { text, replyDelivery: options.replyDelivery || "ui_only" };
     if (attachments.length) body["attachments"] = attachments;
+    if (options.clientMessageId) body["clientMessageId"] = options.clientMessageId;
     return this.http.post<ThreadInputResponse>(this.api(`/threads/${encodeURIComponent(id)}/ui-input`), body);
   }
 
@@ -3040,10 +3041,11 @@ export class ApiService {
     id: string,
     text = "",
     attachments: Array<Record<string, unknown>> = [],
-    options: { replyDelivery?: "ui_only" | "bound_whatsapp" } = {},
+    options: { replyDelivery?: "ui_only" | "bound_whatsapp"; clientMessageId?: string } = {},
   ): Observable<ThreadInputResponse> {
     const body: Record<string, unknown> = { text, replyDelivery: options.replyDelivery || "ui_only" };
     if (attachments.length) body["attachments"] = attachments;
+    if (options.clientMessageId) body["clientMessageId"] = options.clientMessageId;
     return this.http.post<ThreadInputResponse>(this.api(`/threads/${encodeURIComponent(id)}/ui-interrupt`), body);
   }
 

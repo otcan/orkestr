@@ -1144,6 +1144,8 @@ export class ThreadsController {
     const trustedBody: Record<string | symbol, unknown> = {
       text: String(body.text || ""),
       attachments: Array.isArray(body.attachments) ? body.attachments : [],
+      clientMessageId: String(body.clientMessageId || ""),
+      idempotencyKey: String(body.idempotencyKey || ""),
       source: "ui",
       originSurface: "webui",
       originTransport: "authenticated-http",

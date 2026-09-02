@@ -113,6 +113,7 @@ test("web thread input uses the server-stamped UI route", async () => {
 
   assert.ok(sendThreadInput.includes("/ui-input"));
   assert.ok(sendThreadInput.includes('replyDelivery: options.replyDelivery || "ui_only"'));
+  assert.ok(sendThreadInput.includes('body["clientMessageId"] = options.clientMessageId'));
   assert.ok(!sendThreadInput.includes("parseCommands: true"));
   assert.ok(!sendThreadInput.includes("controlAllowed: true"));
 });
@@ -198,21 +199,45 @@ test("web chat paginates older messages without dropping cached history", async 
   assert.ok(sources.includes("for (const message of serverMessages)"));
 });
 
-test("chat messages show delivery failure reasons", async () => {
+test("chat messages explain failed sends and provide a safe resend action", async () => {
   const sources = await read([
     "apps/web/src/app/app.component.ts",
     "apps/web/src/app/app.component.html",
     "apps/web/src/app/thread-message-list.component.ts",
     "apps/web/src/app/thread-message-list.component.html",
+    "apps/web/src/app/ui-send-failure.js",
     "apps/web/src/styles.css",
   ]);
 
+  assert.ok(sources.includes("messageFailureSummary(message)"));
   assert.ok(sources.includes("messageFailureDetail(message)"));
-  assert.ok(sources.includes("Not delivered"));
+  assert.ok(sources.includes("Technical details"));
+  assert.ok(sources.includes("Resend message"));
+  assert.ok(sources.includes("resendFailedMessage"));
+  assert.ok(sources.includes("clientMessageId"));
+  assert.ok(sources.includes("prevents a duplicate"));
   assert.ok(sources.includes("Delivery failed"));
   assert.ok(sources.includes(".message-failure"));
+  assert.ok(sources.includes(".message-resend-button"));
+  assert.ok(!sources.includes("WhatsApp reply requested"));
   assert.ok(sources.includes("attachmentDownloadUrl(attachment)"));
   assert.ok(sources.includes("[attr.download]=\"attachmentLabel(attachment)\""));
+});
+
+test("thread composer keeps secondary controls compact below the editor", async () => {
+  const sources = await read([
+    "apps/web/src/app/thread-composer.component.html",
+    "apps/web/src/styles.css",
+  ]);
+
+  assert.ok(sources.includes(">Attach</button>"));
+  assert.ok(sources.includes("Reply in WhatsApp"));
+  assert.ok(!sources.includes("Also send reply to WhatsApp"));
+  assert.ok(sources.includes('"editor editor"'));
+  assert.ok(sources.includes('"tools actions"'));
+  assert.ok(sources.includes("grid-area: editor"));
+  assert.ok(sources.includes("grid-area: tools"));
+  assert.ok(sources.includes("grid-area: actions"));
 });
 
 test("web UI exposes browser terminal attach for app-server threads", async () => {

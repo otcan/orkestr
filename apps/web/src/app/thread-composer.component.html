@@ -34,7 +34,7 @@
   }
   <div class="composer-row">
     <div class="composer-tools">
-      <button class="secondary upload-button" type="button" (click)="composerFilePicker.click()" title="Upload files">Upload</button>
+      <button class="secondary upload-button" type="button" (click)="composerFilePicker.click()" title="Attach files">Attach</button>
       @if (adminMode) {
         <button class="secondary command-help-button" type="button" (click)="openHelp.emit()" title="Command help" aria-haspopup="dialog" [attr.aria-expanded]="slashHelpOpen">Help</button>
       }
@@ -46,7 +46,7 @@
             (ngModelChange)="handleReplyToWhatsAppChange($event)"
             [ngModelOptions]="{ standalone: true }"
           />
-          Also send reply to WhatsApp
+          <span>Reply in WhatsApp</span>
         </label>
       }
     </div>
