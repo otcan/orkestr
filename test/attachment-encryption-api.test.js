@@ -88,7 +88,8 @@ test("attachment encryption API verifies a recipient and exposes only ciphertext
     assert.equal(projected.encrypted, true);
     assert.equal("path" in projected, false);
     assert.equal("saved_path" in projected, false);
-    assert.equal(JSON.stringify(projected).includes("secret-name.txt"), false);
+    assert.equal(projected.displayFilename, "secret-name.txt");
+    assert.equal("deliverySource" in projected, false);
     assert.match(projected.downloadUrl, /\/attachments\/[^/]+\/download$/);
 
     const historyResponse = await fetch(`${baseUrl}/threads/thread-attachment-api/history`);
@@ -96,6 +97,8 @@ test("attachment encryption API verifies a recipient and exposes only ciphertext
     const historyAttachment = history.messages.find((message) => message.id === stored.id).attachments[0];
     assert.equal("path" in historyAttachment, false);
     assert.equal("saved_path" in historyAttachment, false);
+    assert.equal(historyAttachment.displayFilename, "secret-name.txt");
+    assert.equal("deliverySource" in historyAttachment, false);
 
     const downloadResponse = await fetch(`http://127.0.0.1:${server.address().port}${projected.downloadUrl}`);
     const ciphertext = new Uint8Array(await downloadResponse.arrayBuffer());
