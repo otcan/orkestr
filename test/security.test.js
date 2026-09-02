@@ -52,6 +52,31 @@ test("canonical instance pairing returns require a matching instance session", (
   );
 });
 
+test("broker app returns reuse the matching instance session without a second challenge", () => {
+  const rawReturnPath = "/i/tenant-instance/app/thread/local-vm/raw";
+  const desktopsReturnPath = "/i/tenant-instance/app/desktops";
+  const matchingSession = { id: "tenant-session", instanceId: "tenant-instance", allowedActions: [] };
+  const wrongInstanceSession = { id: "wrong-session", instanceId: "other-instance", allowedActions: [] };
+  const authIntentSession = {
+    id: "intent-session",
+    instanceId: "tenant-instance",
+    allowedActions: ["orkestr_auth.google.connect"],
+  };
+
+  for (const returnPath of [rawReturnPath, desktopsReturnPath]) {
+    const accepted = securitySessionReturnScope(matchingSession, returnPath);
+    assert.equal(accepted.kind, "broker_app");
+    assert.equal(accepted.instanceId, "tenant-instance");
+    assert.equal(accepted.validForReturn, true);
+    assert.equal(accepted.reason, "session_valid");
+    assert.equal(securitySessionReturnScope(wrongInstanceSession, returnPath).reason, "instance_mismatch");
+    assert.equal(
+      securitySessionReturnScope(authIntentSession, returnPath).reason,
+      "auth_intent_session_not_valid_for_instance_app",
+    );
+  }
+});
+
 async function json(response) {
   return response.json();
 }

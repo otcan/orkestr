@@ -42,6 +42,9 @@ test("instance shell uses one lean navigation and canonical desktop and timer ro
   assert.doesNotMatch(template, /<details class="thread-tools-menu"|<summary>Thread tools<\/summary>/);
   assert.match(component, /panel === "instanceDesktops"\) return this\.instancePath\("\/desktops"\)/);
   assert.match(component, /panel === "instanceTimers"\) return this\.instancePath\("\/timers"\)/);
+  assert.match(component, /rawTerminalAvailable[\s\S]+?thread\.rawTerminalActive === true[\s\S]+?thread\.runtimeKind === "raw-terminal"/);
+  assert.match(component, /panel === "raw"\) return this\.rawTerminalAvailable\(\)/);
+  assert.match(template, /@if \(rawTerminalAvailable\(thread\)\)/);
   assert.doesNotMatch(component, /type Panel = [^;]*"userJobs"/);
   assert.doesNotMatch(component, /OpsPageComponent|openTools\(|toolsView/);
   assert.match(styles, /\.instance-topbar-nav\s*\{/);
@@ -79,6 +82,7 @@ test("desktop and timer pages expose focused instance health and action hierarch
   assert.match(desktopTemplate, /Open Desktop/);
   assert.match(desktopTemplate, /Share/);
   assert.match(desktopComponent, /this\.api\.createDesktopShare\(slug, \{/);
+  assert.doesNotMatch(desktopComponent, /this\.api\.threads\(\)/);
   assert.doesNotMatch(desktopTemplate, /\/desktop\/[^\s]+\/vnc\.html/);
 
   assert.match(timerTemplate, /<h3>Timers<\/h3>/);

@@ -7,11 +7,11 @@ import { WebSocketServer, type WebSocket } from "ws";
 import { approvePairingChallenge, authorizeHttpRequest } from "../../../packages/core/src/security.js";
 import { runtimeStatus } from "../../../packages/core/src/runtime-leases.js";
 import { getThreadForPrincipal, listThreadMessages } from "../../../packages/core/src/threads.js";
-import { isAdminPrincipal } from "../../../packages/core/src/policy.js";
 import { threadUsesCodexAppServer } from "../../../packages/core/src/codex-app-server-common.js";
 import { recordCodexRuntimeAuthInvalidSignal } from "../../../packages/core/src/codex-auth-health.js";
 import { paneProgressFromText } from "../../../packages/core/src/pane-progress.js";
 import { rawControlCommandMayMatch, rawSecurityApproveChallengeId } from "../../../packages/core/src/raw-terminal-commands.js";
+import { principalMayUseThreadRawTerminal } from "../../../packages/core/src/raw-terminal-mode.js";
 import {
   rawAttachPollIntervalMs,
   rawAttachWatchPayload,
@@ -524,14 +524,13 @@ export function attachThreadStreamUpgrade(server: Server): void {
     const context = await authorizeThreadUpgradeRequest(request, socket);
     if (!context) return;
     const principal = context.principal;
-    if (!isAdminPrincipal(principal)) {
-      writeUpgradeError(socket, 403, "raw_terminal_admin_required");
-      return;
-    }
-
     const thread = await getThreadForPrincipal(target.threadId, principal).catch(() => null);
     if (!thread) {
       writeUpgradeError(socket, 404, "thread_not_found");
+      return;
+    }
+    if (!principalMayUseThreadRawTerminal(thread, principal)) {
+      writeUpgradeError(socket, 403, "raw_terminal_admin_required");
       return;
     }
 

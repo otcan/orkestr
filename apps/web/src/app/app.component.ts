@@ -658,6 +658,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   panelAllowedForCurrentUser(panel: Panel): boolean {
     if (this.isAdminMode()) return true;
+    if (panel === "raw") return this.rawTerminalAvailable();
     return ["chat", "history", "delivery", "timers", "files", "instanceApps", "instanceSettings", "instanceTimers", "instanceDesktops", "userConnectors"].includes(panel);
   }
 
@@ -671,7 +672,12 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   rawTerminalAvailable(thread: ThreadSummary | null = this.selectedThread()): boolean {
-    return this.isAdminMode() && this.embeddedRawTerminalAvailable(thread);
+    if (!thread || !this.embeddedRawTerminalAvailable(thread)) return false;
+    if (this.isAdminMode()) return true;
+    return thread.rawTerminalActive === true ||
+      thread.runtimeKind === "raw-terminal" ||
+      thread.runtimeTransport === "raw-terminal" ||
+      thread.runtimeControlPath === "raw-terminal";
   }
 
   embeddedRawTerminalAvailable(thread: ThreadSummary | null = this.selectedThread()): boolean {
