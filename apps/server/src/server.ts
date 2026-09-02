@@ -70,6 +70,7 @@ import {
   timerLoopIntervalMs,
 } from "./server-runtime-sync.js";
 import { recordServerShutdown } from "./server-lifecycle.js";
+import { trackUpgradedSockets } from "./http-server-lifecycle.js";
 
 export {
   paneProgressMonitorIntervalMs,
@@ -735,15 +736,17 @@ export function serverHandle(
   paneProgressMonitor?: NodeJS.Timeout,
   cleanup?: () => void | Promise<void>,
 ) {
+  const httpServer = app.getHttpServer();
+  const closeUpgradedSockets = trackUpgradedSockets(httpServer);
   return {
-    address: () => app.getHttpServer().address(),
+    address: () => httpServer.address(),
     close: (callback?: (error?: Error) => void) => {
       if (timer) clearInterval(timer);
       if (runtimeMonitor) clearInterval(runtimeMonitor);
       if (paneProgressMonitor) clearInterval(paneProgressMonitor);
-      const httpServer = app.getHttpServer();
       Promise.resolve(cleanup?.())
         .then(() => {
+          closeUpgradedSockets();
           httpServer.closeIdleConnections?.();
           httpServer.closeAllConnections?.();
         })
