@@ -11,6 +11,7 @@ import {
   activeAttachmentEncryptionRecipients,
   attachmentEncryptionPolicy,
 } from "./attachment-encryption-registry.js";
+import { classifyThreadAttachmentPath } from "./thread-attachments.js";
 
 const payloadMagic = "ORKESTR-ATTACHMENT-PAYLOAD/1";
 const ageHeader = Buffer.from("age-encryption.org/v1\n", "utf8");
@@ -55,7 +56,7 @@ function payloadHeader(metadata) {
   ]);
 }
 
-function encryptedAttachmentMetadata({ id, filename, ciphertext, recipients, policy, createdAt, sourceAttachmentId }) {
+function encryptedAttachmentMetadata({ id, filename, ciphertext, recipients, policy, createdAt, sourceAttachmentId, deliverySource }) {
   return {
     id,
     name: filename,
@@ -68,6 +69,7 @@ function encryptedAttachmentMetadata({ id, filename, ciphertext, recipients, pol
     createdAt,
     retention: "policy_managed",
     sourceAttachmentId: clean(sourceAttachmentId),
+    deliverySource,
     encryption: {
       format: "age",
       formatVersion: 1,
@@ -77,6 +79,20 @@ function encryptedAttachmentMetadata({ id, filename, ciphertext, recipients, pol
       recipientFingerprints: recipients.map((recipient) => recipient.fingerprint),
       originalMetadataEncrypted: true,
     },
+  };
+}
+
+function encryptedAttachmentDeliverySource(attachment = {}, sourcePath = "", source = {}) {
+  const filename = clean(attachment.filename || attachment.name) || path.basename(sourcePath) || "attachment";
+  return {
+    id: clean(attachment.id),
+    path: sourcePath,
+    filename,
+    name: clean(attachment.name) || filename,
+    mimetype: clean(attachment.mimetype || attachment.mimeType || attachment.type) || "application/octet-stream",
+    kind: clean(attachment.kind) || "file",
+    size: Number(source.size || 0) || 0,
+    checksum: clean(source.checksum),
   };
 }
 
@@ -127,6 +143,51 @@ export async function validateEncryptedPublishedAttachment(attachment = {}, { th
   const ciphertext = await fileDigest(filePath);
   if (clean(attachment.checksum) !== ciphertext.checksum) return { ok: false, reason: "ciphertext_checksum_mismatch" };
   return { ok: true, filePath, size: stat.size, checksum: ciphertext.checksum };
+}
+
+export async function validateEncryptedWhatsAppDeliverySource(attachment = {}, { thread = {}, env = process.env } = {}) {
+  if (attachment?.encrypted !== true) return { ok: false, reason: "attachment_not_encrypted" };
+  const source = attachment.deliverySource && typeof attachment.deliverySource === "object"
+    ? attachment.deliverySource
+    : null;
+  const suppliedPath = clean(source?.path);
+  if (!suppliedPath || !path.isAbsolute(suppliedPath)) {
+    return { ok: false, reason: "whatsapp_source_unavailable" };
+  }
+  const policy = classifyThreadAttachmentPath(suppliedPath, { thread, env });
+  if (!policy.ok) return { ok: false, reason: policy.reason };
+  const realPath = await fs.realpath(suppliedPath).catch(() => "");
+  if (!realPath || realPath !== path.resolve(suppliedPath)) {
+    return { ok: false, reason: "whatsapp_source_path_changed" };
+  }
+  const realPolicy = classifyThreadAttachmentPath(realPath, { thread, env });
+  if (!realPolicy.ok) return { ok: false, reason: realPolicy.reason };
+  const stat = await fs.stat(realPath).catch(() => null);
+  if (!stat?.isFile()) return { ok: false, reason: "whatsapp_source_missing" };
+  if (Number(source.size || 0) !== stat.size) {
+    return { ok: false, reason: "whatsapp_source_size_mismatch" };
+  }
+  const digest = await fileDigest(realPath);
+  if (!clean(source.checksum) || clean(source.checksum) !== digest.checksum) {
+    return { ok: false, reason: "whatsapp_source_checksum_mismatch" };
+  }
+  const filename = clean(source.filename || source.name) || path.basename(realPath) || "attachment";
+  return {
+    ok: true,
+    attachment: {
+      id: clean(source.id) || clean(attachment.sourceAttachmentId) || `whatsapp-source-${clean(attachment.id)}`,
+      path: realPath,
+      saved_path: realPath,
+      filename,
+      name: clean(source.name) || filename,
+      mimetype: clean(source.mimetype) || "application/octet-stream",
+      kind: clean(source.kind) || "file",
+      size: stat.size,
+      checksum: digest.checksum,
+      source: "orkestr_encrypted_whatsapp_source",
+      downloadable: false,
+    },
+  };
 }
 
 async function writeEncryptedPayload({ sourcePath, metadata, recipients, tempPath }) {
@@ -183,13 +244,14 @@ async function publishOne({ thread, attachment, recipients, policy, publicationD
     error.statusCode = 409;
     throw error;
   }
-  const sourceStat = await fs.stat(sourcePath).catch(() => null);
+  const realSourcePath = await fs.realpath(sourcePath).catch(() => "");
+  const sourceStat = realSourcePath ? await fs.stat(realSourcePath).catch(() => null) : null;
   if (!sourceStat?.isFile()) {
     const error = new Error("attachment_encryption_source_file_required");
     error.statusCode = 409;
     throw error;
   }
-  const source = await fileDigest(sourcePath);
+  const source = await fileDigest(realSourcePath);
   const metadata = originalMetadata(attachment, source);
   const id = randomUUID();
   const filename = `attachment-${id}.age`;
@@ -198,8 +260,8 @@ async function publishOne({ thread, attachment, recipients, policy, publicationD
   const createdAt = new Date().toISOString();
   let ciphertext;
   try {
-    ciphertext = await writeEncryptedPayload({ sourcePath, metadata, recipients, tempPath });
-    const sourceAfterWrite = await fileDigest(sourcePath);
+    ciphertext = await writeEncryptedPayload({ sourcePath: realSourcePath, metadata, recipients, tempPath });
+    const sourceAfterWrite = await fileDigest(realSourcePath);
     if (sourceAfterWrite.size !== source.size || sourceAfterWrite.checksum !== source.checksum) {
       throw new Error("attachment_encryption_source_changed_during_publication");
     }
@@ -217,6 +279,7 @@ async function publishOne({ thread, attachment, recipients, policy, publicationD
     policy,
     createdAt,
     sourceAttachmentId: attachment.id,
+    deliverySource: encryptedAttachmentDeliverySource(attachment, realSourcePath, source),
   });
   await appendEvent({
     type: "thread_attachment_encrypted_published",

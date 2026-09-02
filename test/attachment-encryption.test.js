@@ -17,7 +17,9 @@ import {
   encryptedAttachmentDeliveryGate,
   publishThreadAttachmentsEncrypted,
   validateEncryptedPublishedAttachment,
+  validateEncryptedWhatsAppDeliverySource,
 } from "../packages/core/src/encrypted-attachment-publication.js";
+import { publicEncryptedAttachment } from "../packages/core/src/encrypted-attachment-projection.js";
 import { reissueEncryptedThreadAttachment } from "../packages/core/src/encrypted-attachment-reissue.js";
 import { migrateThreadAttachmentsToEncryption } from "../packages/core/src/attachment-encryption-migration.js";
 import { attachmentEncryptionDoctorCheck } from "../packages/core/src/attachment-encryption-doctor.js";
@@ -159,7 +161,7 @@ test("doctor ignores pre-enforcement plaintext but rejects plaintext published a
   assert.equal(bypass.historicalPlaintextMessageAttachments, 1);
 });
 
-test("mandatory publication stores only opaque age ciphertext and leaves the source untouched", async () => {
+test("mandatory publication exposes only opaque age ciphertext and leaves the source untouched", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-attachment-publish-"));
   const runtimeEnv = env(home);
   const enrolled = await enroll(runtimeEnv);
@@ -177,16 +179,28 @@ test("mandatory publication stores only opaque age ciphertext and leaves the sou
     attachments: [{ path: sourcePath, name: "board-plan.txt", mimetype: "text/plain" }],
   }, runtimeEnv);
   const attachment = message.attachments[0];
+  const publicAttachment = publicEncryptedAttachment(attachment);
 
   assert.equal(await fs.readFile(sourcePath, "utf8"), "private attachment bytes");
   assert.equal(attachment.encrypted, true);
   assert.equal(attachment.mimetype, "application/age");
   assert.match(attachment.filename, /^attachment-[0-9a-f-]+\.age$/);
-  assert.equal(JSON.stringify(attachment).includes("board-plan.txt"), false);
-  assert.equal(JSON.stringify(attachment).includes("text/plain"), false);
+  assert.equal(attachment.deliverySource.path, await fs.realpath(sourcePath));
+  assert.equal(attachment.deliverySource.filename, "board-plan.txt");
+  assert.equal(JSON.stringify(publicAttachment).includes("board-plan.txt"), false);
+  assert.equal(JSON.stringify(publicAttachment).includes("text/plain"), false);
+  assert.equal("deliverySource" in publicAttachment, false);
+  assert.equal("sourceAttachmentId" in publicAttachment, false);
   assert.equal("path" in attachment, false);
   assert.equal("saved_path" in attachment, false);
   assert.equal((await validateEncryptedPublishedAttachment(attachment, { thread: await getThread("thread-encrypted", runtimeEnv), env: runtimeEnv })).ok, true);
+  const whatsAppSource = await validateEncryptedWhatsAppDeliverySource(attachment, {
+    thread: await getThread("thread-encrypted", runtimeEnv),
+    env: runtimeEnv,
+  });
+  assert.equal(whatsAppSource.ok, true);
+  assert.equal(whatsAppSource.attachment.path, await fs.realpath(sourcePath));
+  assert.equal(whatsAppSource.attachment.filename, "board-plan.txt");
 
   const decrypter = new age.Decrypter();
   decrypter.addIdentity(enrolled.identity);
@@ -486,7 +500,7 @@ test("migration resumes from a durable ciphertext checkpoint without republishin
   assert.equal((await attachmentEncryptionDoctorCheck(runtimeEnv)).status, "ok");
 });
 
-test("WhatsApp receives text only while protected attachments remain WebUI-only", async () => {
+test("WhatsApp receives validated plaintext sources while WebUI attachments remain encrypted", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-attachment-whatsapp-"));
   const runtimeEnv = env(home, {
     ORKESTR_WHATSAPP_EXTERNAL_BRIDGE_ENABLED: "1",
@@ -508,8 +522,11 @@ test("WhatsApp receives text only while protected attachments remain WebUI-only"
       mirrorToWhatsApp: true,
     },
   }, runtimeEnv);
-  const sourcePath = path.join(home, "original-export.zip");
-  await fs.writeFile(sourcePath, "original zip bytes", { mode: 0o600 });
+  const sourcePaths = await Promise.all(["first.zip", "second.pdf", "third.csv"].map(async (filename, index) => {
+    const filePath = path.join(home, filename);
+    await fs.writeFile(filePath, `original attachment ${index + 1}`, { mode: 0o600 });
+    return filePath;
+  }));
   const parent = await appendThreadMessage("thread-encrypted-wa", {
     role: "user",
     source: "whatsapp_inbound",
@@ -529,7 +546,11 @@ test("WhatsApp receives text only while protected attachments remain WebUI-only"
     phase: "final_answer",
     state: "completed",
     text: "Encrypted export attached.",
-    attachments: [{ path: sourcePath, name: "original-export.zip", mimetype: "application/zip" }],
+    attachments: [
+      { path: sourcePaths[0], name: "first.zip", mimetype: "application/zip" },
+      { path: sourcePaths[1], name: "second.pdf", mimetype: "application/pdf" },
+      { path: sourcePaths[2], name: "third.csv", mimetype: "text/csv" },
+    ],
   }, runtimeEnv);
   const calls = [];
   const result = await deliverWhatsAppReplies(runtimeEnv, async (url, options = {}) => {
@@ -539,25 +560,52 @@ test("WhatsApp receives text only while protected attachments remain WebUI-only"
 
   assert.equal(result.delivered.some((delivery) => delivery.messageId === reply.id), true);
   assert.equal(calls.length, 1);
-  assert.equal(calls[0].url.pathname, "/send-text");
-  assert.equal("paths" in calls[0].body, false);
+  assert.equal(calls[0].url.pathname, "/send-media");
+  assert.deepEqual(calls[0].body.paths, sourcePaths);
   assert.equal("attachments" in calls[0].body, false);
-  assert.match(calls[0].body.text, /1 protected attachment is available in the Orkestr WebUI\./);
-  assert.equal(JSON.stringify(calls[0].body).includes(sourcePath), false);
+  assert.doesNotMatch(calls[0].body.text, /protected attachment/);
   assert.equal(JSON.stringify(calls[0].body).includes(".age"), false);
+  const stored = (await listThreadMessages("thread-encrypted-wa", runtimeEnv)).find((message) => message.id === reply.id);
+  assert.equal(stored.attachments.length, 3);
+  assert.equal(stored.attachments.every((attachment) => attachment.encrypted === true), true);
 });
 
-test("WhatsApp drops an entire mixed attachment batch when it contains a WebUI ciphertext", () => {
+test("WhatsApp keeps ordinary attachments when a protected source is unavailable", async () => {
   const publication = { id: "encrypted", encrypted: true, filename: "attachment-encrypted.age" };
   const incidental = { id: "plain", path: "/tmp/incidental.txt" };
-  const protectedDelivery = webUiEncryptedAttachmentDelivery([publication, incidental]);
+  const protectedDelivery = await webUiEncryptedAttachmentDelivery([publication, incidental]);
 
   assert.equal(protectedDelivery.protectedCount, 1);
-  assert.deepEqual(protectedDelivery.attachments, []);
+  assert.equal(protectedDelivery.recoveredCount, 0);
+  assert.equal(protectedDelivery.unavailableCount, 1);
+  assert.deepEqual(protectedDelivery.attachments, [incidental]);
   assert.equal(
-    appendWebUiEncryptedAttachmentNotice("Report ready.", protectedDelivery.protectedCount),
-    "Report ready.\n\n1 protected attachment is available in the Orkestr WebUI.",
+    appendWebUiEncryptedAttachmentNotice("Report ready.", protectedDelivery.unavailableCount),
+    "Report ready.\n\n1 protected attachment could not be sent on WhatsApp. It remains available in the Orkestr WebUI.",
   );
+});
+
+test("WhatsApp refuses a protected source whose bytes changed after publication", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-attachment-whatsapp-changed-"));
+  const runtimeEnv = env(home);
+  await enroll(runtimeEnv);
+  await setAttachmentEncryptionPolicy({ enabled: true, required: true }, { userId: "tenant-a" }, runtimeEnv);
+  const thread = await createThread({ id: "thread-encrypted-wa-changed", ownerUserId: "tenant-a", name: "Changed WA" }, runtimeEnv);
+  const sourcePath = path.join(home, "changed.zip");
+  await fs.writeFile(sourcePath, "original bytes", { mode: 0o600 });
+  const published = await publishThreadAttachmentsEncrypted({
+    thread,
+    attachments: [{ path: sourcePath, name: "changed.zip", mimetype: "application/zip" }],
+    env: runtimeEnv,
+  });
+  await fs.writeFile(sourcePath, "changed bytes are rejected", { mode: 0o600 });
+
+  const delivery = await webUiEncryptedAttachmentDelivery(published.attachments, { thread, env: runtimeEnv });
+  assert.equal(delivery.protectedCount, 1);
+  assert.equal(delivery.recoveredCount, 0);
+  assert.equal(delivery.unavailableCount, 1);
+  assert.deepEqual(delivery.attachments, []);
+  assert.equal(delivery.unavailable[0].reason, "whatsapp_source_size_mismatch");
 });
 
 test("WebUI decrypts authenticated age payloads locally and has no historical migration control", async () => {

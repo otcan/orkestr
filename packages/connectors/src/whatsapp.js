@@ -7138,11 +7138,14 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
         ],
         env,
       });
-      const protectedDelivery = webUiEncryptedAttachmentDelivery(resolvedOutboundAttachments.attachments);
+      const protectedDelivery = await webUiEncryptedAttachmentDelivery(resolvedOutboundAttachments.attachments, {
+        thread,
+        env,
+      });
       const attachments = protectedDelivery.attachments;
       const outboundText = appendWebUiEncryptedAttachmentNotice(
         appendLocalAttachmentFailureNotes(preparedOutbound.text, resolvedOutboundAttachments.skipped),
-        protectedDelivery.protectedCount,
+        protectedDelivery.unavailableCount,
       );
       const formattedText = formatWhatsAppOutboundText(redactDeniedThreadAttachmentPaths(outboundText, {
         thread,
@@ -7167,7 +7170,9 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
         skipped.push({ agentId, threadId, messageId: message.id, reason: "duplicate_text" });
         continue;
       }
-      await persistMessageAttachmentsIfChanged(threadId, message, attachments, env);
+      if (!sourceMessageAttachments.some((attachment) => attachment?.encrypted === true)) {
+        await persistMessageAttachmentsIfChanged(threadId, message, attachments, env);
+      }
 
       const result = await sendWhatsAppOutboundCandidate({
         state,
