@@ -1,5 +1,5 @@
 import { DatePipe } from "@angular/common";
-import { Component, OnInit, inject } from "@angular/core";
+import { Component, Input, OnInit, inject } from "@angular/core";
 import { firstValueFrom, timeout } from "rxjs";
 import { ApiService, BrowserSession, DesktopAccessWarning, DesktopLeaseRecord, ThreadSummary } from "./api.service";
 
@@ -18,7 +18,7 @@ export class UserDeskPageComponent implements OnInit {
   shareUrl = "";
   browsers: BrowserSession[] = [];
   leases: DesktopLeaseRecord[] = [];
-  threads: ThreadSummary[] = [];
+  @Input() threads: ThreadSummary[] = [];
   actionWarnings: Record<string, DesktopAccessWarning[]> = {};
 
   ngOnInit(): void {
@@ -29,8 +29,6 @@ export class UserDeskPageComponent implements OnInit {
     this.busy = true;
     this.error = "";
     try {
-      const threads = await firstValueFrom(this.api.threads().pipe(timeout({ first: 15_000 })));
-      this.threads = threads.threads || [];
       const threadId = this.primaryThread()?.id || "";
       const [browsers, leases] = await Promise.all([
         firstValueFrom(this.api.browserSessions(threadId).pipe(timeout({ first: 15_000 }))),

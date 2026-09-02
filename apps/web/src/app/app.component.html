@@ -351,7 +351,7 @@
     } @else if (activePanel === "instanceTimers") {
       <ork-user-timers-page></ork-user-timers-page>
     } @else if (activePanel === "instanceDesktops") {
-      <ork-user-desk-page></ork-user-desk-page>
+      <ork-user-desk-page [threads]="threads"></ork-user-desk-page>
     } @else if (activePanel === "userConnectors") {
       <ork-user-connectors-page></ork-user-connectors-page>
     } @else if ((threadWizardOpen || !threads.length) && canCreateThreadFromSidebar()) {
@@ -401,8 +401,8 @@
         <strong class="thread-tools-title">Thread tools</strong>
         <div class="thread-tools-popover">
         <button type="button" [class.active]="activePanel === 'chat'" (click)="openPanel('chat')">Chat</button>
-        @if (isAdminMode() && rawTerminalAvailable(thread)) {
-          <button type="button" [class.active]="activePanel === 'raw'" (click)="openPanel('raw')" [disabled]="!codexAgentReady()">Raw</button>
+        @if (rawTerminalAvailable(thread)) {
+          <button type="button" [class.active]="activePanel === 'raw'" (click)="openPanel('raw')" [disabled]="isAdminMode() && !codexAgentReady()">Raw</button>
         }
         <button type="button" [class.active]="activePanel === 'history'" (click)="openPanel('history')">History</button>
         <button type="button" [class.active]="activePanel === 'delivery'" (click)="openPanel('delivery')">Delivery</button>

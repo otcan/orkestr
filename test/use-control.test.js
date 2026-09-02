@@ -1433,6 +1433,44 @@ test("user management API is admin-only and can pair a browser to a managed user
     const rawStreamStatus = await rejectedWebSocketStatus(`ws://127.0.0.1:${port}/api/threads/alice-existing/stream`, userCookie);
     assert.equal(rawStreamStatus, 403);
 
+    await createThread({
+      id: "alice-configured-terminal",
+      name: "Alice Configured Terminal",
+      ownerUserId: "alice-example.test",
+      runtimeKind: "raw-terminal",
+      terminalMode: "raw-terminal",
+      executor: { transport: "raw-terminal", metadata: { runtimeKind: "raw-terminal", terminalMode: "raw-terminal" } },
+    }, process.env);
+    await createThread({
+      id: "bob-configured-terminal",
+      name: "Bob Configured Terminal",
+      ownerUserId: "bob-example.test",
+      runtimeKind: "raw-terminal",
+      terminalMode: "raw-terminal",
+      executor: { transport: "raw-terminal", metadata: { runtimeKind: "raw-terminal", terminalMode: "raw-terminal" } },
+    }, process.env);
+    const ownerTerminalAttachResponse = await fetch(`${baseUrl}/api/threads/alice-configured-terminal/attach`, {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: userCookie },
+      body: JSON.stringify({ readOnly: true }),
+    });
+    const ownerTerminalAttach = await read(ownerTerminalAttachResponse);
+    assert.equal(ownerTerminalAttachResponse.status, 200);
+    assert.equal(ownerTerminalAttach.watchOnly, true);
+    const normalThreadAttachResponse = await fetch(`${baseUrl}/api/threads/alice-existing/attach`, {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: userCookie },
+      body: JSON.stringify({ readOnly: true }),
+    });
+    assert.equal(normalThreadAttachResponse.status, 403);
+    assert.equal((await read(normalThreadAttachResponse)).error, "thread_attach_admin_required");
+    const otherOwnerTerminalAttachResponse = await fetch(`${baseUrl}/api/threads/bob-configured-terminal/attach`, {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: userCookie },
+      body: JSON.stringify({ readOnly: true }),
+    });
+    assert.equal(otherOwnerTerminalAttachResponse.status, 403);
+
     const where = await read(await fetch(`${baseUrl}/api/whereiam`, { headers: { cookie: userCookie } }));
     assert.equal(where.user.userId, "alice-example.test");
     assert.equal(where.user.role, "user");

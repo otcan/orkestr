@@ -46,6 +46,7 @@ import {
   rawAttachWatchText,
   rawStructuredTurnActive,
 } from "../../../../../packages/core/src/raw-terminal-watch.js";
+import { principalMayUseThreadRawTerminal } from "../../../../../packages/core/src/raw-terminal-mode.js";
 import {
   API_AGENT_RUNTIME_KIND,
   defaultTenantThreadRuntime,
@@ -914,9 +915,12 @@ export class ThreadsController {
   @Post(":threadId/attach")
   @HttpCode(200)
   async attach(@Req() request: any, @Param("threadId") threadId: string, @Body() body: Record<string, unknown> = {}) {
-    this.assertThreadAdminOnly("thread.attach", requestPrincipal(request));
-    let thread = await getThread(threadId);
+    const principal = requestPrincipal(request);
+    let thread = await getThreadForPrincipal(threadId, principal);
     if (!thread) throw httpError("thread_not_found", 404);
+    if (!principalMayUseThreadRawTerminal(thread, principal)) {
+      this.assertThreadAdminOnly("thread.attach", principal);
+    }
     const readOnly = attachBoolean(body, "readOnly");
     const takeover = attachBoolean(body, "takeover");
     const interrupt = attachBoolean(body, "interrupt");

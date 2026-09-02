@@ -1,3 +1,5 @@
+import { isAdminPrincipal } from "./policy.js";
+
 export const RAW_TERMINAL_RUNTIME_KIND = "raw-terminal";
 export const RAW_TERMINAL_TRANSPORT = "raw-terminal";
 
@@ -32,6 +34,13 @@ export function threadUsesRawTerminalMode(thread = {}) {
   return transport === RAW_TERMINAL_TRANSPORT ||
     runtimeKind === RAW_TERMINAL_RUNTIME_KIND ||
     terminalMode === RAW_TERMINAL_RUNTIME_KIND;
+}
+
+// Callers must scope the thread to the principal before applying this policy.
+// Tenant owners may use only terminals that an administrator already configured;
+// arbitrary Codex-thread takeover remains an administrator-only operation.
+export function principalMayUseThreadRawTerminal(thread = {}, principal = {}) {
+  return isAdminPrincipal(principal) || threadUsesRawTerminalMode(thread);
 }
 
 export function rawTerminalModePatch(thread = {}, fields = {}) {

@@ -1957,6 +1957,12 @@ export function securitySessionReturnScope(session = null, returnPath = "", opti
   if (session.shareId) return { ...result, reason: "share_session_not_valid_for_instance_app" };
   if (instanceId && String(session.instanceId || "").trim() !== instanceId) return { ...result, reason: "instance_mismatch" };
   const allowedActions = Array.isArray(session.allowedActions) ? session.allowedActions : [];
+  if (route.kind === "broker_app" && !route.connectId) {
+    if (allowedActions.some((action) => String(action || "").startsWith("orkestr_auth."))) {
+      return { ...result, reason: "auth_intent_session_not_valid_for_instance_app" };
+    }
+    return { ...result, validForReturn: true, reason: "session_valid" };
+  }
   const exactAction = route.connectId ? `orkestr_auth.google.connect:${route.connectId}` : "orkestr_auth.google.connect";
   if (!allowedActions.includes(exactAction)) {
     return { ...result, reason: "google_connect_scope_mismatch" };

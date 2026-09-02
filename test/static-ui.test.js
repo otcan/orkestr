@@ -1909,7 +1909,7 @@ test("web shell exposes an instance-scoped desktop page", async () => {
   assert.match(component, /parts\[0\] === "ng" && parts\[1\] === "desk"/);
   assert.match(component, /panel === "instanceDesktops"\) return this\.instancePath\("\/desktops"\)/);
   assert.match(component, /globalThis\.document\.title = "Desktops · Orkestr"/);
-  assert.match(template, /<ork-user-desk-page><\/ork-user-desk-page>/);
+  assert.match(template, /<ork-user-desk-page \[threads\]="threads"><\/ork-user-desk-page>/);
   assert.match(template, /\(click\)="openPanel\('instanceDesktops'\)"/);
   assert.match(deskComponent, /selector: "ork-user-desk-page"/);
   assert.match(deskComponent, /this\.api\.browserSessions\(threadId\)/);

@@ -2,11 +2,23 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { threadNeedsCodexAppServerMigration, threadUsesCodexAppServer } from "../packages/core/src/codex-app-server-common.js";
 import {
+  principalMayUseThreadRawTerminal,
   rawTerminalModePatch,
   rawTerminalSessionName,
   rawTerminalTtlMs,
   threadUsesRawTerminalMode,
 } from "../packages/core/src/raw-terminal-mode.js";
+
+test("tenant owners may use only a preconfigured raw terminal", () => {
+  const user = { userId: "tenant-owner", role: "user" };
+  const admin = { userId: "admin", role: "admin" };
+  const rawThread = { runtimeKind: "raw-terminal" };
+  const codexThread = { runtimeKind: "codex-app-server" };
+
+  assert.equal(principalMayUseThreadRawTerminal(rawThread, user), true);
+  assert.equal(principalMayUseThreadRawTerminal(codexThread, user), false);
+  assert.equal(principalMayUseThreadRawTerminal(codexThread, admin), true);
+});
 
 test("raw terminal mode uses canonical thread tmux names and bypasses app-server migration guard", () => {
   const thread = {
