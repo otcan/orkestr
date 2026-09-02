@@ -57,9 +57,11 @@
                   type="button"
                   (click)="downloadEncryptedAttachment(attachment)"
                   [disabled]="attachmentDownloadBusy[attachmentKey(attachment)]"
+                  [attr.aria-busy]="attachmentDownloadBusy[attachmentKey(attachment)] ? 'true' : null"
+                  [attr.aria-label]="'Download ' + attachmentLabel(attachment) + ' securely'"
                   title="Fetch ciphertext and decrypt it locally in this browser"
                 >
-                  {{ attachmentDownloadBusy[attachmentKey(attachment)] ? "Decrypting…" : "Secure download" }}
+                  {{ attachmentLabel(attachment) }}
                 </button>
                 @if (attachmentDownloadErrors[attachmentKey(attachment)]) {
                   <span class="attachment-download-error">{{ attachmentDownloadErrors[attachmentKey(attachment)] }}</span>

@@ -187,7 +187,11 @@ test("mandatory publication exposes only opaque age ciphertext and leaves the so
   assert.match(attachment.filename, /^attachment-[0-9a-f-]+\.age$/);
   assert.equal(attachment.deliverySource.path, await fs.realpath(sourcePath));
   assert.equal(attachment.deliverySource.filename, "board-plan.txt");
-  assert.equal(JSON.stringify(publicAttachment).includes("board-plan.txt"), false);
+  assert.equal(publicAttachment.displayFilename, "board-plan.txt");
+  assert.equal(publicEncryptedAttachment({
+    ...attachment,
+    deliverySource: { ...attachment.deliverySource, filename: "../../private/board-plan.txt" },
+  }).displayFilename, "board-plan.txt");
   assert.equal(JSON.stringify(publicAttachment).includes("text/plain"), false);
   assert.equal("deliverySource" in publicAttachment, false);
   assert.equal("sourceAttachmentId" in publicAttachment, false);
@@ -627,6 +631,9 @@ test("WebUI decrypts authenticated age payloads locally and has no historical mi
   assert.match(payloadDecoder, /attachment_payload_checksum_mismatch/);
   assert.match(service, /link\.download = attachment\.filename/);
   assert.match(messageTemplate, /downloadEncryptedAttachment\(attachment\)/);
+  assert.match(messageComponent, /attachment\["displayFilename"\]/);
+  assert.match(messageTemplate, /\{\{ attachmentLabel\(attachment\) \}\}/);
+  assert.doesNotMatch(messageTemplate, /Secure download/);
   assert.doesNotMatch(messageTemplate, /\[href\]="attachmentDownloadUrl\(attachment\)"[^\n]*encrypted/);
   assert.match(service, /age\.generateIdentity\(\)/);
   assert.match(bootstrap, /registerAttachmentEncryptionRecipient/);

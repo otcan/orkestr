@@ -2,6 +2,7 @@ const encryptedAttachmentAllowedFields = new Set([
   "id",
   "name",
   "filename",
+  "displayFilename",
   "mimetype",
   "size",
   "checksum",
@@ -13,11 +14,23 @@ const encryptedAttachmentAllowedFields = new Set([
   "encryption",
 ]);
 
+function attachmentDisplayFilename(attachment = {}) {
+  const candidate = String(
+    attachment.displayFilename ||
+    attachment.deliverySource?.filename ||
+    attachment.deliverySource?.name ||
+    "",
+  ).trim();
+  return candidate.split(/[\\/]/).at(-1)?.replace(/[\r\n]/g, "").trim() || "";
+}
+
 export function publicEncryptedAttachment(attachment = {}) {
   if (attachment?.encrypted !== true) return attachment;
-  return Object.fromEntries(
+  const projected = Object.fromEntries(
     Object.entries(attachment).filter(([key]) => encryptedAttachmentAllowedFields.has(key)),
   );
+  const displayFilename = attachmentDisplayFilename(attachment);
+  return displayFilename ? { ...projected, displayFilename } : projected;
 }
 
 export function publicEncryptedAttachmentMessage(message = {}) {
