@@ -55,7 +55,7 @@ function payloadHeader(metadata) {
   ]);
 }
 
-function encryptedAttachmentMetadata({ id, filename, ciphertext, recipients, policy, createdAt }) {
+function encryptedAttachmentMetadata({ id, filename, ciphertext, recipients, policy, createdAt, sourceAttachmentId }) {
   return {
     id,
     name: filename,
@@ -67,6 +67,7 @@ function encryptedAttachmentMetadata({ id, filename, ciphertext, recipients, pol
     encrypted: true,
     createdAt,
     retention: "policy_managed",
+    sourceAttachmentId: clean(sourceAttachmentId),
     encryption: {
       format: "age",
       formatVersion: 1,
@@ -208,7 +209,15 @@ async function publishOne({ thread, attachment, recipients, policy, publicationD
     await fs.rm(tempPath, { force: true }).catch(() => {});
     throw error;
   }
-  const published = encryptedAttachmentMetadata({ id, filename, ciphertext, recipients, policy, createdAt });
+  const published = encryptedAttachmentMetadata({
+    id,
+    filename,
+    ciphertext,
+    recipients,
+    policy,
+    createdAt,
+    sourceAttachmentId: attachment.id,
+  });
   await appendEvent({
     type: "thread_attachment_encrypted_published",
     threadId: clean(thread.id),
@@ -224,7 +233,13 @@ async function publishOne({ thread, attachment, recipients, policy, publicationD
 }
 
 export async function publishThreadAttachmentsEncrypted({ thread = {}, attachments = [], env = process.env } = {}) {
-  const list = Array.isArray(attachments) ? attachments : [];
+  const supplied = Array.isArray(attachments) ? attachments : [];
+  const representedSourceIds = new Set(supplied
+    .filter((attachment) => attachment?.encrypted === true)
+    .map((attachment) => clean(attachment.sourceAttachmentId))
+    .filter(Boolean));
+  const list = supplied.filter((attachment) => attachment?.encrypted === true ||
+    !representedSourceIds.has(clean(attachment?.id)));
   if (!list.length) return { attachments: [], encrypted: false, policy: null };
   const policy = await attachmentEncryptionPolicy(thread.ownerUserId, env);
   if (!policy.enabled) return { attachments: list, encrypted: false, policy };

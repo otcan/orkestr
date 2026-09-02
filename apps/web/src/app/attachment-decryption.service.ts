@@ -1,6 +1,9 @@
 import { Injectable } from "@angular/core";
 import * as age from "age-encryption";
-import { decodeOrkestrAttachmentPayload } from "../../../../packages/core/src/browser-attachment-payload.js";
+import {
+  browserAttachmentRecipientMatch,
+  decodeOrkestrAttachmentPayload,
+} from "../../../../packages/core/src/browser-attachment-payload.js";
 
 const rememberedIdentityKey = "orkestr.attachment-age-identity.v1";
 
@@ -69,8 +72,29 @@ export class AttachmentDecryptionService {
     return decrypter.decrypt(ciphertext, "text");
   }
 
-  async download(downloadUrl: string): Promise<DecryptedAttachment> {
+  async download(encryptedAttachment: Record<string, unknown>): Promise<DecryptedAttachment> {
     if (!this.identity) throw new Error("attachment_identity_locked");
+    let selectedAttachment = encryptedAttachment;
+    let downloadUrl = String(selectedAttachment["downloadUrl"] || "").trim();
+    if (!downloadUrl) throw new Error("attachment_download_url_missing");
+    const recipient = await age.identityToRecipient(this.identity);
+    if (await browserAttachmentRecipientMatch(selectedAttachment, recipient) === false) {
+      const reissueUrl = downloadUrl.replace(/\/download(?:[?#].*)?$/, "/reissue");
+      if (reissueUrl === downloadUrl) throw new Error("attachment_reissue_url_invalid");
+      const reissueResponse = await fetch(reissueUrl, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { accept: "application/json" },
+      });
+      if (!reissueResponse.ok) throw new Error(`attachment_reissue_failed_${reissueResponse.status}`);
+      const reissued = await reissueResponse.json() as { attachment?: Record<string, unknown> };
+      if (!reissued.attachment || await browserAttachmentRecipientMatch(reissued.attachment, recipient) !== true) {
+        throw new Error("attachment_reissue_recipient_missing");
+      }
+      Object.assign(encryptedAttachment, reissued.attachment);
+      selectedAttachment = reissued.attachment;
+      downloadUrl = String(selectedAttachment["downloadUrl"] || "").trim();
+    }
     const response = await fetch(downloadUrl, { credentials: "same-origin", headers: { accept: "application/age" } });
     if (!response.ok) throw new Error(`attachment_download_failed_${response.status}`);
     const decrypter = new age.Decrypter();

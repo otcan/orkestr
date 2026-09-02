@@ -18,10 +18,15 @@ import {
   publishThreadAttachmentsEncrypted,
   validateEncryptedPublishedAttachment,
 } from "../packages/core/src/encrypted-attachment-publication.js";
+import { reissueEncryptedThreadAttachment } from "../packages/core/src/encrypted-attachment-reissue.js";
 import { migrateThreadAttachmentsToEncryption } from "../packages/core/src/attachment-encryption-migration.js";
 import { attachmentEncryptionDoctorCheck } from "../packages/core/src/attachment-encryption-doctor.js";
 import { ensureAutomaticAttachmentEnrollment } from "../packages/core/src/browser-attachment-auto-enrollment.js";
 import { decodeOrkestrAttachmentPayload } from "../packages/core/src/browser-attachment-payload.js";
+import {
+  browserAttachmentRecipientFingerprint,
+  browserAttachmentRecipientMatch,
+} from "../packages/core/src/browser-attachment-payload.js";
 import { appendThreadMessage, createThread, deleteThreadMessage, getThread, listThreadMessages, updateThreadMessage } from "../packages/core/src/threads.js";
 import { deliverWhatsAppReplies } from "../packages/connectors/src/whatsapp.js";
 import {
@@ -203,6 +208,35 @@ test("mandatory publication stores only opaque age ciphertext and leaves the sou
   assert.equal(doctor.undeliverableCiphertextAttachments, 1);
 });
 
+test("assistant message updates do not publish duplicate ciphertext for an existing source", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-attachment-update-dedup-"));
+  const runtimeEnv = env(home);
+  await enroll(runtimeEnv);
+  await setAttachmentEncryptionPolicy({ enabled: true, required: true }, { userId: "tenant-a" }, runtimeEnv);
+  const thread = await createThread({ id: "thread-update-dedup", ownerUserId: "tenant-a", name: "Update dedupe", cwd: home }, runtimeEnv);
+  const sourcePath = path.join(home, "report.zip");
+  await fs.writeFile(sourcePath, "one report", { mode: 0o600 });
+  const text = `[report.zip](${sourcePath})`;
+
+  const message = await appendThreadMessage(thread.id, {
+    role: "assistant",
+    source: "codex-app-server",
+    state: "completed",
+    text,
+  }, runtimeEnv);
+  const unchanged = await updateThreadMessage(thread.id, message.id, { text }, runtimeEnv);
+  const revised = await updateThreadMessage(thread.id, message.id, { text: `Ready: ${text}` }, runtimeEnv);
+  const publicationDir = path.dirname(encryptedPublishedAttachmentPath(thread, message.attachments[0], runtimeEnv));
+
+  assert.equal(message.attachments.length, 1);
+  assert.ok(message.attachments[0].sourceAttachmentId);
+  assert.equal(unchanged.attachments.length, 1);
+  assert.equal(unchanged.attachments[0].id, message.attachments[0].id);
+  assert.equal(revised.attachments.length, 1);
+  assert.equal(revised.attachments[0].id, message.attachments[0].id);
+  assert.deepEqual(await fs.readdir(publicationDir), [message.attachments[0].filename]);
+});
+
 test("publication streams content across age chunk boundaries and cleans a partially failed batch", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-attachment-stream-"));
   const runtimeEnv = env(home);
@@ -264,6 +298,68 @@ test("each active recipient can decrypt the immutable publication snapshot", asy
     decrypter.addIdentity(enrolled.identity);
     assert.equal(decodePublishedPayload(await decrypter.decrypt(ciphertext)).content.toString("utf8"), "recoverable ciphertext");
   }
+});
+
+test("a newly enrolled browser can reissue an unchanged source without server-side private keys", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-attachment-reissue-"));
+  const runtimeEnv = env(home);
+  const primary = await enroll(runtimeEnv, "Primary");
+  await setAttachmentEncryptionPolicy({ enabled: true, required: true }, { userId: "tenant-a" }, runtimeEnv);
+  const thread = await createThread({ id: "thread-reissue", ownerUserId: "tenant-a", name: "Reissue", cwd: home }, runtimeEnv);
+  const sourcePath = path.join(home, "reissue.txt");
+  await fs.writeFile(sourcePath, "reissue me", { mode: 0o600 });
+  const message = await appendThreadMessage(thread.id, {
+    role: "assistant",
+    source: "codex-app-server",
+    state: "completed",
+    text: `[reissue.txt](${sourcePath})`,
+  }, runtimeEnv);
+  const previousPath = encryptedPublishedAttachmentPath(thread, message.attachments[0], runtimeEnv);
+  const later = await enroll(runtimeEnv, "Later browser");
+  assert.equal(message.attachments[0].encryption.recipientIds.length, 1);
+
+  const reissued = await reissueEncryptedThreadAttachment({
+    thread,
+    attachmentId: message.attachments[0].id,
+    env: runtimeEnv,
+  });
+  const current = (await listThreadMessages(thread.id, runtimeEnv)).find((candidate) => candidate.id === message.id);
+  const ciphertext = await fs.readFile(encryptedPublishedAttachmentPath(thread, reissued.attachment, runtimeEnv));
+  const decrypter = new age.Decrypter();
+  decrypter.addIdentity(later.identity);
+
+  assert.equal(reissued.attachment.encryption.recipientIds.length, 2);
+  assert.equal(current.attachments.length, 1);
+  assert.equal(current.attachments[0].id, reissued.attachment.id);
+  assert.equal(await fs.stat(previousPath).then(() => true).catch(() => false), false);
+  assert.equal(decodePublishedPayload(await decrypter.decrypt(ciphertext)).content.toString("utf8"), "reissue me");
+  assert.equal(await fs.readFile(sourcePath, "utf8"), "reissue me");
+  assert.ok(primary.key.id);
+});
+
+test("attachment reissue fails closed when the original source has changed", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-attachment-reissue-changed-"));
+  const runtimeEnv = env(home);
+  await enroll(runtimeEnv);
+  await setAttachmentEncryptionPolicy({ enabled: true, required: true }, { userId: "tenant-a" }, runtimeEnv);
+  const thread = await createThread({ id: "thread-reissue-changed", ownerUserId: "tenant-a", name: "Changed source", cwd: home }, runtimeEnv);
+  const sourcePath = path.join(home, "changed.txt");
+  await fs.writeFile(sourcePath, "original", { mode: 0o600 });
+  const message = await appendThreadMessage(thread.id, {
+    role: "assistant",
+    source: "codex-app-server",
+    state: "completed",
+    text: `[changed.txt](${sourcePath})`,
+  }, runtimeEnv);
+  await fs.writeFile(sourcePath, "replacement with different bytes", { mode: 0o600 });
+
+  await assert.rejects(
+    reissueEncryptedThreadAttachment({ thread, attachmentId: message.attachments[0].id, env: runtimeEnv }),
+    /attachment_reissue_source_unavailable/,
+  );
+  const current = (await listThreadMessages(thread.id, runtimeEnv)).find((candidate) => candidate.id === message.id);
+  assert.equal(current.attachments[0].id, message.attachments[0].id);
+  assert.equal((await validateEncryptedPublishedAttachment(current.attachments[0], { thread, env: runtimeEnv })).ok, true);
 });
 
 test("message deletion purges ciphertext and attachment metadata without touching the source", async () => {
@@ -563,4 +659,21 @@ test("browser payload decoder restores original metadata and rejects changed pla
   const changed = Buffer.from(payload);
   changed[changed.length - 1] ^= 1;
   await assert.rejects(decodeOrkestrAttachmentPayload(changed), /attachment_payload_checksum_mismatch/);
+});
+
+test("browser detects when an immutable publication predates its local recipient", async () => {
+  const currentIdentity = await age.generateIdentity();
+  const currentRecipient = await age.identityToRecipient(currentIdentity);
+  const otherRecipient = await age.identityToRecipient(await age.generateIdentity());
+  const currentFingerprint = await browserAttachmentRecipientFingerprint(currentRecipient);
+  const otherFingerprint = await browserAttachmentRecipientFingerprint(otherRecipient);
+
+  assert.match(currentFingerprint, /^SHA256:[a-f0-9]{32}$/);
+  assert.equal(await browserAttachmentRecipientMatch({
+    encryption: { recipientFingerprints: [currentFingerprint] },
+  }, currentRecipient), true);
+  assert.equal(await browserAttachmentRecipientMatch({
+    encryption: { recipientFingerprints: [otherFingerprint] },
+  }, currentRecipient), false);
+  assert.equal(await browserAttachmentRecipientMatch({ encryption: {} }, currentRecipient), null);
 });

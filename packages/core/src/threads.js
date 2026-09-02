@@ -1083,8 +1083,8 @@ export async function updateThreadMessage(threadId, messageId, patch, env = proc
     const messages = sqlite ? (storedMessage ? [storedMessage] : []) : await messageRepository.list(thread.id);
     let updated = null;
     let previous = null;
-    const normalizeAttachments = Object.prototype.hasOwnProperty.call(patch || {}, "text") ||
-      Object.prototype.hasOwnProperty.call(patch || {}, "attachments");
+    const patchIncludesText = Object.prototype.hasOwnProperty.call(patch || {}, "text");
+    const patchIncludesAttachments = Object.prototype.hasOwnProperty.call(patch || {}, "attachments");
     const visibleMutationFields = visibleMessageMutationFields(patch);
     const next = [];
     for (const message of messages) {
@@ -1115,6 +1115,8 @@ export async function updateThreadMessage(threadId, messageId, patch, env = proc
         ...(nextRevision ? { revision: nextRevision } : {}),
         updatedAt: nowIso(),
       });
+      const normalizeAttachments = patchIncludesAttachments ||
+        (patchIncludesText && String(updated.text || "") !== String(message.text || ""));
       if (normalizeAttachments) {
         const sourceAttachments = hydrateEncryptedPublishedAttachmentPaths(
           thread,
