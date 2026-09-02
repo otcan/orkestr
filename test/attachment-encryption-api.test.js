@@ -78,7 +78,7 @@ test("attachment encryption API verifies a recipient and exposes only ciphertext
       source: "codex-app-server",
       phase: "final_answer",
       state: "completed",
-      text: "Encrypted file",
+      text: `Encrypted file: [download](${sourcePath})`,
       attachments: [{ path: sourcePath, name: "secret-name.txt", mimetype: "text/plain" }],
     }, process.env);
 
@@ -106,6 +106,38 @@ test("attachment encryption API verifies a recipient and exposes only ciphertext
     decryptDownload.addIdentity(identity);
     const decrypted = await decryptDownload.decrypt(ciphertext);
     assert.equal(Buffer.from(decrypted).includes(Buffer.from("server download proof")), true);
+
+    const laterIdentity = await age.generateIdentity();
+    const laterRecipient = await age.identityToRecipient(laterIdentity);
+    const laterRegisteredResponse = await fetch(`${baseUrl}/attachment-encryption/recipients`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ recipient: laterRecipient, label: "Later API browser" }),
+    });
+    const laterRegistered = await laterRegisteredResponse.json();
+    const laterChallengeDecrypter = new age.Decrypter();
+    laterChallengeDecrypter.addIdentity(laterIdentity);
+    const laterProof = await laterChallengeDecrypter.decrypt(Buffer.from(laterRegistered.key.challenge.ciphertext, "base64"), "text");
+    const laterVerifyResponse = await fetch(`${baseUrl}/attachment-encryption/recipients/${laterRegistered.key.id}/verify`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ proof: laterProof }),
+    });
+    assert.equal(laterVerifyResponse.status, 201);
+
+    const reissueResponse = await fetch(
+      `http://127.0.0.1:${server.address().port}${projected.downloadUrl.replace(/\/download$/, "/reissue")}`,
+      { method: "POST" },
+    );
+    const reissued = await reissueResponse.json();
+    assert.equal(reissueResponse.status, 200);
+    assert.equal(reissued.attachment.encryption.recipientIds.length, 2);
+    assert.equal("sourceAttachmentId" in reissued.attachment, false);
+    const reissuedDownload = await fetch(`http://127.0.0.1:${server.address().port}${reissued.attachment.downloadUrl}`);
+    const laterDecrypter = new age.Decrypter();
+    laterDecrypter.addIdentity(laterIdentity);
+    const laterPlaintext = await laterDecrypter.decrypt(new Uint8Array(await reissuedDownload.arrayBuffer()));
+    assert.equal(Buffer.from(laterPlaintext).includes(Buffer.from("server download proof")), true);
   } finally {
     await new Promise((resolve) => server.close(resolve));
     restoreEnv(prior);

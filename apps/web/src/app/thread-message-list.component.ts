@@ -121,12 +121,21 @@ export class ThreadMessageListComponent {
     this.attachmentDownloadBusy[key] = true;
     this.attachmentDownloadErrors[key] = "";
     try {
-      await this.attachmentDecryption.download(downloadUrl);
+      await this.attachmentDecryption.download(attachment);
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error || "attachment_decryption_failed");
-      this.attachmentDownloadErrors[key] = reason === "attachment_identity_locked"
-        ? "Unlock your attachment key in Instance Settings, then try again."
-        : "This protected attachment could not be decrypted or validated on this browser.";
+      console.warn("Orkestr protected attachment download failed", { attachmentId: key, reason });
+      if (reason === "attachment_identity_locked") {
+        this.attachmentDownloadErrors[key] = "This browser’s protected-download key is not ready yet. Reload and try again.";
+      } else if (reason === "attachment_not_encrypted_for_this_browser") {
+        this.attachmentDownloadErrors[key] = "This file was created before this browser joined. Ask the thread to generate it again for this browser.";
+      } else if (reason.startsWith("attachment_reissue_failed_")) {
+        this.attachmentDownloadErrors[key] = "This browser joined after the file was created, and Orkestr could not safely refresh the encrypted copy. Ask the thread to generate it again.";
+      } else if (reason.startsWith("attachment_download_failed_")) {
+        this.attachmentDownloadErrors[key] = "The encrypted file could not be fetched. Reload and try again.";
+      } else {
+        this.attachmentDownloadErrors[key] = "The protected file could not be decrypted or did not pass its integrity check.";
+      }
     } finally {
       this.attachmentDownloadBusy[key] = false;
     }

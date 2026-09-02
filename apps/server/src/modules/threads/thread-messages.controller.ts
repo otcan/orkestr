@@ -5,13 +5,15 @@ import { randomUUID } from "node:crypto";
 import { Body, Controller, Get, HttpCode, Param, Patch, Post, Query, Req, Res, UploadedFiles, UseInterceptors } from "@nestjs/common";
 import { AnyFilesInterceptor } from "@nestjs/platform-express";
 import { getThread, getThreadForPrincipal, getThreadMessage, listThreadMessages, updateThreadMessage } from "../../../../../packages/core/src/threads.js";
-import { resolveStoredThreadAttachment, resolveThreadAttachments } from "../../../../../packages/core/src/thread-attachments.js";
+import { attachmentDownloadUrl, resolveStoredThreadAttachment, resolveThreadAttachments } from "../../../../../packages/core/src/thread-attachments.js";
 import { ensureDataDirs } from "../../../../../packages/storage/src/paths.js";
 import { threadMessagesQuerySchema, threadUploadSchema } from "../../../../../packages/shared/src/api-schemas.js";
 import { ensureAttachmentsArray, httpError, validateRequestSchema } from "../../common/http.js";
 import { requestPrincipal } from "../../../../../packages/core/src/principal.js";
 import { attachmentEncryptionPolicy } from "../../../../../packages/core/src/attachment-encryption-registry.js";
 import { hydrateEncryptedPublishedAttachmentPaths, validateEncryptedPublishedAttachment } from "../../../../../packages/core/src/encrypted-attachment-publication.js";
+import { reissueEncryptedThreadAttachment } from "../../../../../packages/core/src/encrypted-attachment-reissue.js";
+import { publicEncryptedAttachment } from "../../../../../packages/core/src/encrypted-attachment-projection.js";
 import { ThreadActionSanitizerService } from "./thread-application.services.js";
 import { scheduleNativeCodexHistorySync, syncNativeCodexHistory, threadHistoryPayload, threadMessagePage } from "./thread-message-page.js";
 
@@ -173,6 +175,27 @@ export class ThreadMessagesController {
     response.setHeader("content-length", String(stat.size));
     response.setHeader("content-disposition", `attachment; filename="${contentDispositionFilename(String(attachment.filename || attachment.name || "attachment"))}"`);
     return createReadStream(filePath).pipe(response);
+  }
+
+  @Post(":threadId/attachments/:attachmentId/reissue")
+  @HttpCode(200)
+  async reissueAttachment(
+    @Req() request: any,
+    @Param("threadId") threadId: string,
+    @Param("attachmentId") attachmentId: string,
+  ) {
+    const thread = await getThreadForPrincipal(threadId, requestPrincipal(request));
+    if (!thread) throw httpError("thread_not_found", 404);
+    try {
+      const result = await reissueEncryptedThreadAttachment({ thread, attachmentId, env: process.env });
+      const attachment = publicEncryptedAttachment({
+        ...result.attachment,
+        downloadUrl: attachmentDownloadUrl(thread.id, result.attachment),
+      });
+      return { ok: true, attachment };
+    } catch (error: any) {
+      throw httpError(String(error?.message || "attachment_reissue_failed"), Number(error?.statusCode || 409));
+    }
   }
 
   @Get(":threadId/history")

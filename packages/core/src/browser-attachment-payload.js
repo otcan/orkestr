@@ -31,6 +31,21 @@ async function sha256Hex(bytes) {
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
+export async function browserAttachmentRecipientFingerprint(recipient = "") {
+  const value = String(recipient || "").trim();
+  if (!value) return "";
+  return `SHA256:${(await sha256Hex(new TextEncoder().encode(value))).slice(0, 32)}`;
+}
+
+export async function browserAttachmentRecipientMatch(attachment = {}, recipient = "") {
+  const fingerprints = Array.isArray(attachment?.encryption?.recipientFingerprints)
+    ? attachment.encryption.recipientFingerprints.map((value) => String(value || "").trim()).filter(Boolean)
+    : [];
+  if (!fingerprints.length) return null;
+  const fingerprint = await browserAttachmentRecipientFingerprint(recipient);
+  return Boolean(fingerprint && fingerprints.includes(fingerprint));
+}
+
 export async function decodeOrkestrAttachmentPayload(value) {
   const bytes = new Uint8Array(value);
   const newline = 0x0a;
