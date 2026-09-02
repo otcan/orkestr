@@ -787,6 +787,7 @@ test("raw terminal takeover creates canonical tmux session and expires after war
       id: "raw-takeover-thread",
       name: "Raw Takeover Thread",
       cwd: path.join(home, "workspace"),
+      command: "/usr/local/bin/levent-vm-ssh",
       executor: {
         id: "codex",
         type: "codex",
@@ -813,7 +814,9 @@ test("raw terminal takeover creates canonical tmux session and expires after war
     assert.equal(status.sessionName, "orkestr-thread-raw-takeover-thread");
     assert.equal(leases[0].runtimeKind, "raw-terminal");
     assert.equal(leases[0].ttlMs, 1);
+    assert.equal(leases[0].command, "/usr/local/bin/levent-vm-ssh");
     assert.match(log, /__CALL__\tnew-session\t-d\t-s\torkestr-thread-raw-takeover-thread/);
+    assert.match(log, /\t\/usr\/local\/bin\/levent-vm-ssh(?:\n|$)/);
 
     await new Promise((resolve) => setTimeout(resolve, 5));
     await syncRuntimeLeases(env);

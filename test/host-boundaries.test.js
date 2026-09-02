@@ -315,10 +315,13 @@ test("feature-off and compatibility routes preserve legacy behavior", async () =
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-host-compat-"));
   const runtimeEnv = env(home);
   assert.equal((await enforce(request("/thread/legacy", "attacker.invalid"), { ...runtimeEnv, ORKESTR_HOST_BOUNDARIES: "0" })).handled, false);
+  assert.equal((await enforce(request("/i/private/setup", "connect.example.test"), runtimeEnv)).handled, false);
+  assert.equal((await enforce(request("/i/private/setup", "app.example.test"), runtimeEnv)).handled, false);
   assert.equal((await enforce(request("/i/private/app/thread/legacy", "connect.example.test"), runtimeEnv)).handled, false);
   assert.equal((await enforce(request("/i/private/a/sample/s/token", "connect.example.test"), runtimeEnv)).handled, false);
   assert.equal((await enforce(request("/i/private/app/thread/legacy", "app.example.test"), runtimeEnv)).handled, false);
   assert.equal((await enforce(request("/i/private/a/sample/s/token", "attacker.invalid"), runtimeEnv)).statusCode, 404);
+  assert.equal((await enforce(request("/i/private/setup/extra", "connect.example.test"), runtimeEnv)).statusCode, 404);
   assert.equal((await enforce(request("/i/private/app/thread/legacy", ""), runtimeEnv)).statusCode, 404);
   await cleanup(home);
 });
@@ -509,6 +512,9 @@ test("live server keeps the connect pairing page, assets, and primitive APIs on 
   const html = page.body.toString();
   assert.equal(page.status, 200);
   assert.match(html, /main\.js/);
+  const missingInstanceSetup = await call("/i/missing/setup", "connect.example.test");
+  assert.equal(missingInstanceSetup.status, 404);
+  assert.equal(missingInstanceSetup.body.toString(), "broker_instance_not_found");
   assert.equal((await call("/main.js", "connect.example.test")).status, 200);
   assert.equal((await call("/api/version", "connect.example.test")).status, 200);
   assert.equal((await call("/api/setup/status", "connect.example.test")).status, 200);
