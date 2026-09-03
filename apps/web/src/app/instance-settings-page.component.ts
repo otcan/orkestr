@@ -5,10 +5,11 @@ import { firstValueFrom } from "rxjs";
 import { ApiService, AttachmentEncryptionKey, AttachmentEncryptionStatus, InstanceStatusResponse } from "./api.service";
 import { AttachmentDecryptionService } from "./attachment-decryption.service";
 import { AttachmentEncryptionBootstrapService } from "./attachment-encryption-bootstrap.service";
+import { HushDeviceManagementPanelComponent } from "./hush-device-management-panel.component";
 
 @Component({
   selector: "ork-instance-settings-page",
-  imports: [DatePipe, FormsModule, JsonPipe, KeyValuePipe],
+  imports: [DatePipe, FormsModule, HushDeviceManagementPanelComponent, JsonPipe, KeyValuePipe],
   templateUrl: "./instance-settings-page.component.html",
 })
 export class InstanceSettingsPageComponent implements OnInit {

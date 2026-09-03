@@ -1,0 +1,111 @@
+:host {
+  display: block;
+}
+
+.hush-devices,
+.hush-card,
+.hush-device-list,
+.hush-form {
+  display: grid;
+  gap: 12px;
+}
+
+.hush-devices {
+  margin-top: 18px;
+  padding-top: 18px;
+  border-top: 1px solid rgba(128, 210, 138, 0.18);
+}
+
+.hush-devices-head,
+.hush-section-head,
+.hush-device-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.hush-devices h3,
+.hush-devices h4 {
+  margin: 0;
+}
+
+.hush-devices p,
+.hush-devices small,
+.hush-empty {
+  color: #a9bea4;
+}
+
+.hush-card {
+  padding: 14px;
+  border: 1px solid rgba(128, 210, 138, 0.16);
+  border-radius: 8px;
+  background: rgba(3, 11, 12, 0.24);
+}
+
+.hush-form {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.hush-form label {
+  display: grid;
+  gap: 5px;
+}
+
+.hush-form label > span {
+  color: #8cff9b;
+  font-size: 0.72rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.hush-form .settings-actions,
+.hush-form .hush-empty {
+  grid-column: 1 / -1;
+}
+
+.hush-notice {
+  padding: 10px 12px;
+  border: 1px solid rgba(128, 210, 138, 0.25);
+  border-radius: 8px;
+  background: rgba(18, 47, 24, 0.42);
+  color: #d9ffe0;
+}
+
+.hush-notice.error {
+  border-color: rgba(255, 116, 96, 0.3);
+  background: rgba(78, 21, 17, 0.48);
+  color: #ffd1c4;
+}
+
+.hush-device-row {
+  padding-top: 12px;
+  border-top: 1px solid rgba(128, 210, 138, 0.12);
+}
+
+.hush-device-row > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.hush-device-row strong,
+.hush-device-row small {
+  overflow-wrap: anywhere;
+}
+
+.hush-pairing-state {
+  color: #aeeeff !important;
+}
+
+@media (max-width: 720px) {
+  .hush-devices-head,
+  .hush-section-head,
+  .hush-device-row {
+    flex-direction: column;
+  }
+
+  .hush-form {
+    grid-template-columns: 1fr;
+  }
+}

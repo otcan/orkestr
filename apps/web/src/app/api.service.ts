@@ -1521,6 +1521,48 @@ export interface AttachmentEncryptionMigrationResult {
   migratedAttachments: number;
 }
 
+/**
+ * Owner-facing projections for the Hush mobile capability. The server resolves
+ * a profile's private target and never exposes it to this client.
+ */
+export interface HushProfileSummary {
+  id: string;
+  label: string;
+  status: "active" | "disabled" | "revoked" | string;
+  expiresAt?: string | null;
+}
+
+export interface HushPairedDevice {
+  id: string;
+  label: string;
+  status: "pending" | "paired" | "revoked" | "expired" | string;
+  pairedAt?: string | null;
+  lastSeenAt?: string | null;
+  expiresAt?: string | null;
+}
+
+export interface HushProfilesResponse {
+  profiles: HushProfileSummary[];
+}
+
+export interface HushDevicesResponse {
+  devices: HushPairedDevice[];
+}
+
+export interface HushPairingApprovalResponse {
+  ok: boolean;
+  pairing: {
+    status: "approved" | "pending" | "expired" | "revoked" | string;
+    expiresAt?: string | null;
+  };
+  device?: HushPairedDevice;
+}
+
+export interface HushDeviceRevocationResponse {
+  ok: boolean;
+  device: HushPairedDevice;
+}
+
 export interface ThreadWorkerRetireResponse {
   ok: boolean;
   dryRun?: boolean;
@@ -2987,6 +3029,22 @@ export class ApiService {
 
   migrateAttachmentEncryption(threadId: string, dryRun = true): Observable<AttachmentEncryptionMigrationResult> {
     return this.http.post<AttachmentEncryptionMigrationResult>(this.api("/attachment-encryption/migrate"), { threadId, dryRun });
+  }
+
+  hushProfiles(): Observable<HushProfilesResponse> {
+    return this.http.get<HushProfilesResponse>(this.api("/mobile/profiles"));
+  }
+
+  hushDevices(): Observable<HushDevicesResponse> {
+    return this.http.get<HushDevicesResponse>(this.api("/mobile/devices"));
+  }
+
+  approveHushPairing(profileId: string, pairingCode: string): Observable<HushPairingApprovalResponse> {
+    return this.http.post<HushPairingApprovalResponse>(this.api(`/mobile/profiles/${encodeURIComponent(profileId)}/pairings/approve`), { pairingCode });
+  }
+
+  revokeHushDevice(deviceId: string): Observable<HushDeviceRevocationResponse> {
+    return this.http.post<HushDeviceRevocationResponse>(this.api(`/mobile/devices/${encodeURIComponent(deviceId)}/revoke`), {});
   }
 
   updateThreadRepo(id: string, body: Record<string, unknown>): Observable<ThreadRepoResponse> {
