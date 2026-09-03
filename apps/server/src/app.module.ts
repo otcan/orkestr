@@ -23,6 +23,7 @@ import { TenantSlicesModule } from "./modules/tenant-slices/tenant-slices.module
 import { TenantVmsModule } from "./modules/tenant-vms/tenant-vms.module.js";
 import { UsersModule } from "./modules/users/users.module.js";
 import { AttachmentEncryptionModule } from "./modules/attachment-encryption/attachment-encryption.module.js";
+import { VagentModule } from "./modules/vagent/vagent.module.js";
 
 @Module({
   imports: [
@@ -50,6 +51,7 @@ import { AttachmentEncryptionModule } from "./modules/attachment-encryption/atta
     TenantVmsModule,
     UsersModule,
     AttachmentEncryptionModule,
+    VagentModule,
   ],
 })
 export class AppModule {}

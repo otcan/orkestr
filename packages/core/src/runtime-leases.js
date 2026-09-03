@@ -2110,7 +2110,7 @@ function immediateThreadCommand(message) {
   if (!["queued", "pending_delivery"].includes(String(message.state || ""))) return null;
   const securityChallengeId = threadSecurityApproveChallengeId(message);
   if (securityChallengeId) return { command: "security_approve", rawCommand: "security_approve", text: securityChallengeId };
-  const parsed = parseThreadInputCommand({ text: message.text });
+  const parsed = parseThreadInputCommand(message);
   if (parsed.command === "interrupt") return parsed;
   if (parsed.command === "stop" || parsed.command === "reset" || parsed.command === "hard_reset" || parsed.command === "safe_reset") return parsed;
   if ((parsed.command === "plan" || parsed.command === "code") && !parsed.text) return parsed;
@@ -2120,7 +2120,7 @@ function immediateThreadCommand(message) {
 function codexModeCommandWithText(message) {
   if (!message || message.role !== "user") return null;
   if (!["queued", "pending_delivery"].includes(String(message.state || ""))) return null;
-  const parsed = parseThreadInputCommand({ text: message.text });
+  const parsed = parseThreadInputCommand(message);
   if ((parsed.command === "plan" || parsed.command === "code") && parsed.text) return parsed;
   return null;
 }
@@ -3864,7 +3864,7 @@ export async function deliverPendingThreadInputs(threadId, env = process.env, op
 
       let next = messages.find((message) => message.role === "user" && ["queued", "pending_delivery", "awaiting_ack"].includes(message.state));
       if (!next) break;
-      const parsedCommand = parseThreadInputCommand({ text: next.text });
+      const parsedCommand = parseThreadInputCommand(next);
       if ((parsedCommand.command === "plan" || parsedCommand.command === "code") && parsedCommand.text) {
         const payloadMessageId = await splitCodexModeCommandMessage(thread, next, parsedCommand, env);
         if (payloadMessageId) delivered.push(payloadMessageId);

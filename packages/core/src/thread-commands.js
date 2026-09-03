@@ -44,6 +44,9 @@ function switchModeCommand(text = "") {
 
 export function parseThreadInputCommand(input = {}) {
   const text = String(input.text || "");
+  if (String(input.commandProcessing || "").trim().toLowerCase() === "disabled") {
+    return { command: null, text };
+  }
   const match = text.trimStart().match(/^\/([a-z][a-z0-9_-]*)(?:\b|$)([\s:.,-]*)([\s\S]*)$/i);
   if (!match) return { command: null, text };
 

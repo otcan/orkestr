@@ -17,12 +17,41 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 function acceptsType(schema: Record<string, unknown>, value: unknown): boolean {
   const type = String(schema["type"] || "").trim();
   if (!type) return true;
+  if (schema["strict"] === true) {
+    if (type === "integer") return typeof value === "number" && Number.isInteger(value);
+    if (type === "string" || type === "boolean" || type === "number") return typeof value === type;
+    if (type === "array") return Array.isArray(value);
+    if (type === "object") return isPlainObject(value);
+  }
   if (type === "string") return ["string", "number", "boolean"].includes(typeof value);
   if (type === "boolean") return typeof value === "boolean" || ["true", "false", "1", "0", "yes", "no", "on", "off"].includes(String(value).trim().toLowerCase());
   if (type === "number" || type === "integer") return typeof value === "number" || (typeof value === "string" && value.trim() !== "" && Number.isFinite(Number(value)));
   if (type === "array") return Array.isArray(value);
   if (type === "object") return isPlainObject(value);
   return true;
+}
+
+function validateValue(schema: Record<string, unknown>, value: unknown, label: string): void {
+  if (!acceptsType(schema, value)) throw httpError(`${label} must be ${schema["type"]}`, 400);
+  const type = String(schema["type"] || "").trim();
+  if (type === "string") {
+    const length = String(value).length;
+    if (typeof schema["minLength"] === "number" && length < schema["minLength"]) {
+      throw httpError(`${label} must be at least ${schema["minLength"]} characters`, 400);
+    }
+    if (typeof schema["maxLength"] === "number" && length > schema["maxLength"]) {
+      throw httpError(`${label} must be at most ${schema["maxLength"]} characters`, 400);
+    }
+  }
+  if (Array.isArray(schema["enum"]) && !schema["enum"].some((allowed) => allowed === value)) {
+    throw httpError(`${label} is invalid`, 400);
+  }
+  if (type === "object") validateObjectSection(schema, value, label);
+  if (type === "array" && Array.isArray(value) && isPlainObject(schema["items"])) {
+    for (const [index, item] of value.entries()) {
+      validateValue(schema["items"] as Record<string, unknown>, item, `${label}[${index}]`);
+    }
+  }
 }
 
 function validateObjectSection(schema: Record<string, unknown> | undefined, value: unknown, label: string): void {
@@ -43,17 +72,7 @@ function validateObjectSection(schema: Record<string, unknown> | undefined, valu
   for (const [key, propertySchema] of Object.entries(properties)) {
     if (!Object.prototype.hasOwnProperty.call(target, key)) continue;
     if (!isPlainObject(propertySchema)) continue;
-    const fieldValue = target[key];
-    if (!acceptsType(propertySchema, fieldValue)) {
-      throw httpError(`${label}.${key} must be ${propertySchema["type"]}`, 400);
-    }
-    if (propertySchema["type"] === "array" && Array.isArray(fieldValue) && isPlainObject(propertySchema["items"])) {
-      for (const [index, item] of fieldValue.entries()) {
-        if (!acceptsType(propertySchema["items"] as Record<string, unknown>, item)) {
-          throw httpError(`${label}.${key}[${index}] must be ${(propertySchema["items"] as Record<string, unknown>)["type"]}`, 400);
-        }
-      }
-    }
+    validateValue(propertySchema, target[key], `${label}.${key}`);
   }
 }
 

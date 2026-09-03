@@ -735,6 +735,56 @@ function mailboxVmRelayTokens(env = process.env) {
   ];
 }
 
+function isVagentMachineRoute(request) {
+  const method = String(request?.method || "GET").toUpperCase();
+  const url = String(request?.originalUrl || request?.url || "").split("?")[0];
+  return method === "POST" && url === "/api/integrations/vagent";
+}
+
+function vagentEnabled(env = process.env) {
+  return envFlag(env.ORKESTR_VAGENT_ENABLED);
+}
+
+async function authorizeVagentMachineRequest(request, env = process.env) {
+  if (!isVagentMachineRoute(request)) return null;
+  if (!vagentEnabled(env)) {
+    return { ok: false, statusCode: 404, error: "vagent_integration_disabled", machineAuth: "vagent" };
+  }
+  const configured = String(env.ORKESTR_VAGENT_AUTH_TOKEN || "").trim();
+  if (!configured) {
+    return { ok: false, statusCode: 503, error: "vagent_auth_unconfigured", machineAuth: "vagent" };
+  }
+  // Vagent uses the Authorization header value verbatim; unlike most of our
+  // machine clients it does not require a Bearer prefix.
+  const received = String(request?.headers?.authorization || request?.headers?.Authorization || "").trim();
+  if (!received) return { ok: false, statusCode: 401, error: "vagent_auth_required", machineAuth: "vagent" };
+  if (!timingSafeSecretEqual(received, configured)) {
+    return { ok: false, statusCode: 401, error: "vagent_auth_invalid", machineAuth: "vagent" };
+  }
+  const configuredUserId = String(env.ORKESTR_VAGENT_USER_ID || "").trim();
+  const user = configuredUserId ? await getUser(configuredUserId, env) : null;
+  if (configuredUserId && !user) {
+    return { ok: false, statusCode: 503, error: "vagent_user_not_found", machineAuth: "vagent" };
+  }
+  if (user?.status === "disabled") {
+    return { ok: false, statusCode: 403, error: "vagent_user_disabled", machineAuth: "vagent" };
+  }
+  const principal = user
+    ? userPrincipal({ ...user, source: "vagent" })
+    : { ...adminPrincipal(defaultAdminUser(env)), source: "vagent" };
+  return {
+    ok: true,
+    principal,
+    machineAuth: "vagent",
+    machineAuthContext: {
+      tokenId: "configured-vagent-token",
+      routeKind: "vagent",
+      scopes: ["thread:input", "thread:read"],
+      principalKind: "voice_adapter",
+    },
+  };
+}
+
 function authorizeMailboxVmRelayMachineRequest(request, env = process.env) {
   const method = String(request?.method || "GET").toUpperCase();
   const url = String(request?.originalUrl || request?.url || "").split("?")[0];
@@ -2113,6 +2163,15 @@ export async function authorizeHttpRequest(request, env = process.env) {
     machineAuthContext: mailboxVmRelayAuth.machineAuthContext,
   };
   if (mailboxVmRelayAuth) return { ...mailboxVmRelayAuth, status };
+  const vagentAuth = await authorizeVagentMachineRequest(request, env);
+  if (vagentAuth?.ok) return {
+    ok: true,
+    status,
+    principal: vagentAuth.principal,
+    machineAuth: vagentAuth.machineAuth,
+    machineAuthContext: vagentAuth.machineAuthContext,
+  };
+  if (vagentAuth) return { ...vagentAuth, status };
   const cliAuth = await authorizeCliMachineRequest(request, env);
   if (cliAuth?.ok) return { ok: true, status, principal: cliAuth.principal, machineAuth: cliAuth.machineAuth };
   const brokerProxyAuth = await authorizeBrokerProxyMachineRequest(request, env);
