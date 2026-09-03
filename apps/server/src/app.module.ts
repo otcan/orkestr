@@ -10,6 +10,7 @@ import { GmailNotificationsModule } from "./modules/gmail-notifications/gmail-no
 import { JobsModule } from "./modules/jobs/jobs.module.js";
 import { InstanceModule } from "./modules/instance/instance.module.js";
 import { MailboxesModule } from "./modules/mailboxes/mailboxes.module.js";
+import { MobileModule } from "./modules/mobile/mobile.module.js";
 import { ReleaseModule } from "./modules/release/release.module.js";
 import { RouterTracesModule } from "./modules/router-traces/router-traces.module.js";
 import { SystemModule } from "./modules/system/system.module.js";
@@ -37,6 +38,7 @@ import { MobileVoiceModule } from "./modules/mobile-voice/mobile-voice.module.js
     JobsModule,
     InstanceModule,
     MailboxesModule,
+    MobileModule,
     ReleaseModule,
     RouterTracesModule,
     BrokerModule,
