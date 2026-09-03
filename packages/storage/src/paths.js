@@ -56,6 +56,7 @@ export function dataPaths(env = process.env) {
     connectorOutboxDb: env.ORKESTR_CONNECTOR_OUTBOX_DB || path.join(home, "connector-outbox.sqlite"),
     connectorPromptPushes: path.join(home, "connector-prompt-pushes.json"),
     apiSessionBindings: path.join(home, "api-session-bindings.json"),
+    mobileVoiceTurns: env.ORKESTR_MOBILE_VOICE_TURNS_FILE || path.join(home, "mobile-voice-turns.json"),
     routerTraces: path.join(home, "router-traces.json"),
     watcherAlerts: path.join(home, "watcher-alerts.json"),
     brokerInstances: env.ORKESTR_BROKER_INSTANCES_FILE || path.join(home, "broker-instances.json"),
