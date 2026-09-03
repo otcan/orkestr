@@ -2,7 +2,8 @@ import path from "node:path";
 import { readJson } from "../../storage/src/store.js";
 import { normalizeUserId } from "./users.js";
 
-const defaultScopes = ["threads:read", "threads:write", "desktops:open"];
+const allowedScopes = new Set(["thread:input", "thread:read"]);
+const defaultScopes = ["thread:input", "thread:read"];
 
 function cleanId(value = "") {
   return String(value || "")
@@ -15,7 +16,7 @@ function cleanId(value = "") {
 
 function splitScopes(value = []) {
   const raw = Array.isArray(value) ? value : String(value || "").split(/[\s,]+/g);
-  return [...new Set(raw.map((item) => String(item || "").trim().toLowerCase()).filter(Boolean))].slice(0, 80);
+  return [...new Set(raw.map((item) => String(item || "").trim().toLowerCase()).filter((item) => allowedScopes.has(item)))].slice(0, 20);
 }
 
 function profileSourcePath(env = process.env) {
@@ -28,11 +29,17 @@ function profileSourcePath(env = process.env) {
 function normalizeProfile(input = {}) {
   const id = cleanId(input.id || input.profileId || input.slug || input.name);
   if (!id) return null;
+  const ownerUserIdRaw = String(input.ownerUserId || "").trim();
+  const userIdRaw = String(input.userId || "").trim();
+  const threadId = cleanId(input.threadId || input.thread || input.hushThreadId);
+  if (!ownerUserIdRaw || !userIdRaw || !threadId) return null;
   const role = String(input.role || "").trim().toLowerCase() === "admin" ? "admin" : "user";
   return {
     id,
     label: String(input.label || input.name || id).trim().slice(0, 120),
-    userId: normalizeUserId(input.userId || input.ownerUserId || input.email || id),
+    ownerUserId: normalizeUserId(ownerUserIdRaw),
+    userId: normalizeUserId(userIdRaw),
+    threadId,
     role,
     scopes: splitScopes(input.scopes || defaultScopes),
     enabled: input.enabled !== false,
@@ -44,7 +51,20 @@ function profileListFromPayload(payload = {}) {
   return Array.isArray(raw) ? raw.map(normalizeProfile).filter(Boolean) : [];
 }
 
-export async function listMobileProfiles({ env = process.env } = {}) {
+function principalOwnerId(principal = null) {
+  const raw = String(principal?.userId || "").trim();
+  return raw ? normalizeUserId(raw) : "";
+}
+
+function publicProfile(profile = {}) {
+  return {
+    id: profile.id || "",
+    label: profile.label || profile.id || "",
+    status: profile.enabled === false ? "disabled" : "active",
+  };
+}
+
+export async function readMobileProfileRecords({ env = process.env } = {}) {
   const filePath = profileSourcePath(env);
   if (!filePath) return { profiles: [], source: "unconfigured" };
   const payload = await readJson(filePath, null).catch(() => null);
@@ -55,8 +75,21 @@ export async function listMobileProfiles({ env = process.env } = {}) {
   };
 }
 
-export async function getMobileProfile(profileId = "", { env = process.env } = {}) {
+export async function listMobileProfiles({ env = process.env, principal = null } = {}) {
+  const ownerUserId = principalOwnerId(principal);
+  const records = await readMobileProfileRecords({ env });
+  const profiles = ownerUserId
+    ? records.profiles.filter((profile) => profile.ownerUserId === ownerUserId)
+    : records.profiles;
+  return { profiles: profiles.map(publicProfile) };
+}
+
+export async function getMobileProfile(profileId = "", { env = process.env, principal = null } = {}) {
   const id = cleanId(profileId);
   if (!id) return null;
-  return (await listMobileProfiles({ env })).profiles.find((profile) => profile.id === id) || null;
+  const ownerUserId = principalOwnerId(principal);
+  const profile = (await readMobileProfileRecords({ env })).profiles.find((item) => item.id === id) || null;
+  if (!profile) return null;
+  if (ownerUserId && profile.ownerUserId !== ownerUserId) return null;
+  return { ...profile };
 }

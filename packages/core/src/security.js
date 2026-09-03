@@ -6,7 +6,7 @@ import { appendEvent, readJson, writeSecretJson } from "../../storage/src/store.
 import { withStorageFileLock } from "../../storage/src/storage-lock.js";
 import { authorizeDesktopShareHttpRequest } from "./desktop-shares.js";
 import { decryptBrokerClientPayload } from "./broker-instance-registry.js";
-import { authorizeMobileDeviceHttpRequest } from "./mobile-devices.js";
+import { authorizeMobileDeviceHttpRequest } from "./mobile-device-auth.js";
 import { adminPrincipal, principalFromSecuritySession, userPrincipal } from "./principal.js";
 import { publicUrlConfig } from "./public-url-config.js";
 import { defaultAdminUser, getUser, normalizeUserId } from "./users.js";
@@ -2105,9 +2105,9 @@ function isAllowedBeforePairing(request) {
   if (method === "POST" && /^\/api\/broker\/instances\/[^/]+\/whatsapp\/(?:onboarding|history)$/.test(url)) return true;
   if (method === "POST" && /^\/api\/broker\/instances\/[^/]+\/google-workspace\/(?:connect-link|refresh-token)$/.test(url)) return true;
   if (method === "POST" && url === "/api/broker/google-workspace/grants") return true;
-  if (method === "POST" && url === "/api/mobile/pairing/start") return true;
-  if (method === "GET" && /^\/api\/mobile\/pairing\/[^/]+\/poll$/.test(url)) return true;
-  if (method === "POST" && /^\/api\/mobile\/pairing\/[^/]+\/complete$/.test(url)) return true;
+  if (method === "POST" && (url === "/api/mobile/pairing/start" || url === "/api/mobile/pairings/start")) return true;
+  if (method === "GET" && /^\/api\/mobile\/pairings?\/[^/]+\/poll$/.test(url)) return true;
+  if (method === "POST" && /^\/api\/mobile\/pairings?\/[^/]+\/complete$/.test(url)) return true;
   if (method === "POST" && url === "/api/mobile/session/refresh") return true;
   if (method === "POST" && /^\/api\/connectors\/twilio\/voice\/[^/]+\/(?:incoming|gather)$/.test(url)) return true;
   if (method === "GET" && url === "/api/connectors/whatsapp/bridge/repair") return true;
