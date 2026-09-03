@@ -245,6 +245,24 @@ test("direct loopback reaches authentication but only probes and exact verified 
   remoteMailboxMta.orkestrMachineAuth = "mailbox_mta";
   assert.equal((await enforce(remoteMailboxMta, runtimeEnv)).statusCode, 404);
 
+  const vagent = request("/api/integrations/vagent", "127.0.0.1:19812", {
+    method: "POST",
+    remoteAddress: "127.0.0.1",
+  });
+  vagent.orkestrMachineAuth = "vagent";
+  assert.equal((await enforce(vagent, runtimeEnv)).handled, false);
+
+  const wrongVagentRoute = request("/api/threads", "127.0.0.1:19812", {
+    method: "POST",
+    remoteAddress: "127.0.0.1",
+  });
+  wrongVagentRoute.orkestrMachineAuth = "vagent";
+  assert.equal((await enforce(wrongVagentRoute, runtimeEnv)).statusCode, 404);
+
+  const remoteVagent = request("/api/integrations/vagent", "attacker.invalid", { method: "POST" });
+  remoteVagent.orkestrMachineAuth = "vagent";
+  assert.equal((await enforce(remoteVagent, runtimeEnv)).statusCode, 404);
+
   const wrongInboundRoute = request("/api/threads", "127.0.0.1:19812", { method: "POST", remoteAddress: "127.0.0.1" });
   wrongInboundRoute.orkestrMachineAuth = "whatsapp_inbound";
   assert.equal((await enforce(wrongInboundRoute, runtimeEnv)).statusCode, 404);
