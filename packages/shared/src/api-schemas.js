@@ -165,6 +165,28 @@ export const threadInputSchema = {
   },
 };
 
+// Vagent sends its payload beneath a `body` property. Keep this deliberately
+// narrow: the integration target is selected only by server configuration,
+// never by an externally supplied thread id or runtime option.
+export const vagentWebhookSchema = {
+  body: {
+    type: "object",
+    required: ["body"],
+    properties: {
+      body: {
+        type: "object",
+        required: ["prompt", "sessionID"],
+        properties: {
+          prompt: { type: "string", strict: true, minLength: 1, maxLength: 50000 },
+          sessionID: { type: "string", strict: true, minLength: 1, maxLength: 200 },
+        },
+        additionalProperties: false,
+      },
+    },
+    additionalProperties: false,
+  },
+};
+
 export const threadUiInputSchema = {
   ...idParams("threadId"),
   body: {

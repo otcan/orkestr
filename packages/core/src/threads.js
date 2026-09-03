@@ -97,6 +97,7 @@ const messageStringFields = [
   "signalMode",
   "mailboxExecutionPolicy",
   "mailboxContextClaimId",
+  "commandProcessing",
 ];
 
 function safeThreadId(threadId) {

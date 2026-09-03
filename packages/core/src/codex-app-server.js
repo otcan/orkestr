@@ -1720,13 +1720,13 @@ async function deliverCodexAppServerPendingInputsUnlocked(thread, env = process.
   const delivered = [];
   const messages = await listThreadMessageCandidates(thread.id, { states: [...pendingInputStates] }, env);
   const pendingMessages = messages.filter((message) => message.role === "user" && pendingInputStates.has(message.state));
-  const stopMessage = pendingMessages.find((message) => parseThreadInputCommand({ text: message.text }).command === "stop");
+  const stopMessage = pendingMessages.find((message) => parseThreadInputCommand(message).command === "stop");
   let next = stopMessage || pendingMessages[0];
   if (!next) return delivered;
   thread = await getThread(thread.id, env).catch(() => null) || thread;
   if (stopMessage) {
     const stopIndex = messages.findIndex((message) => message.id === stopMessage.id);
-    const parsedStop = parseThreadInputCommand({ text: stopMessage.text });
+    const parsedStop = parseThreadInputCommand(stopMessage);
     for (let index = 0; index < stopIndex; index += 1) {
       const candidate = messages[index];
       if (candidate?.role !== "user" || !pendingInputStates.has(clean(candidate.state))) continue;
@@ -1951,7 +1951,7 @@ async function deliverCodexAppServerClaimedPendingInput(thread, next, env = proc
     delivered.push(next.id);
     return delivered;
   }
-  const parsedCommand = parseThreadInputCommand({ text });
+  const parsedCommand = parseThreadInputCommand(next);
   if (parsedCommand.command === "model" || parsedCommand.command === "fast") {
     const completed = await completeCodexAppServerSettingsCommand(thread, next, parsedCommand, client, env);
     if (completed?.messageId) delivered.push(completed.messageId);

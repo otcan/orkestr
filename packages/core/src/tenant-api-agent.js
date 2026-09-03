@@ -2539,9 +2539,9 @@ export async function stopApiAgentThread(threadId, options = {}, env = process.e
     : messages.find((message) =>
       lower(message.role) === "user" &&
       ["queued", "pending_delivery"].includes(lower(message.state)) &&
-      parseThreadInputCommand({ text: message.text }).command === "stop"
+      parseThreadInputCommand(message).command === "stop"
     );
-  const parsed = parseThreadInputCommand({ text: controlMessage?.text || "/stop" });
+  const parsed = parseThreadInputCommand(controlMessage || { text: "/stop" });
   const controlIndex = controlMessage ? messages.findIndex((message) => message.id === controlMessage.id) : messages.length;
   const controllers = apiAgentRequestControllers.get(thread.id) || new Set();
   for (const controller of controllers) controller.abort("orkestr_stop");
@@ -2701,7 +2701,7 @@ export async function processApiAgentThreadInput(threadId, env = process.env, op
   const stopMessage = messages.find((message) =>
     lower(message.role) === "user" &&
     ["queued", "pending_delivery"].includes(lower(message.state)) &&
-    parseThreadInputCommand({ text: message.text }).command === "stop"
+    parseThreadInputCommand(message).command === "stop"
   );
   if (stopMessage) return stopApiAgentThread(thread.id, { messageId: stopMessage.id }, env);
   if (apiAgentRunning.has(thread.id)) return { ok: true, running: true };
