@@ -55,6 +55,16 @@ npm run release:regression -- \
   --expect "OK"
 ```
 
+After a Codex CLI update, also run a raw-terminal canary against an idle test
+thread. This verifies Orkestr can submit queued input when the terminal shows the
+Codex prompt placeholder instead of real typed text:
+
+```bash
+npm run release:regression -- \
+  --execute \
+  --raw-terminal-thread raw-terminal-test-thread-id
+```
+
 For public targets where protected APIs are intentionally inaccessible from the
 release shell, add `--allow-auth-blocked`. Those scenarios are recorded as
 skipped instead of passed, so the artifact still shows what was not verified.

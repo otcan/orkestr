@@ -3053,7 +3053,10 @@ function panePromptBodyText(paneText) {
     ? lines
       .slice(promptStart)
       .map((line, index) => {
-        if (index === 0) return line.replace(/^\s*(?:›|>)\s?/, "");
+        if (index === 0) {
+          const body = line.replace(/^\s*(?:›|>)\s?/, "").trim();
+          return /^Ask Codex to do anything\.?$/i.test(body) ? "" : body;
+        }
         return line;
       })
       .filter((line) => !/^\s*gpt-[^\n]*\s+·\s+/i.test(line.trim()))

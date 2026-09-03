@@ -4655,6 +4655,74 @@ test("thread input delivery submits queued input when stale working text leaves 
   }
 });
 
+test("thread input delivery submits queued input when the Codex placeholder follows stale working text", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-stale-working-placeholder-"));
+  const fakeTmux = await createFakeTmux(home);
+  const captureFile = path.join(home, "pane.txt");
+  const priorPath = process.env.PATH;
+  const priorTmuxLog = process.env.TMUX_LOG;
+  const priorTmuxState = process.env.TMUX_STATE;
+  const priorCaptureFile = process.env.TMUX_CAPTURE_FILE;
+  process.env.PATH = `${fakeTmux.bin}:${priorPath || ""}`;
+  process.env.TMUX_LOG = fakeTmux.log;
+  process.env.TMUX_STATE = fakeTmux.state;
+  process.env.TMUX_CAPTURE_FILE = captureFile;
+
+  try {
+    await fs.writeFile(
+      captureFile,
+      [
+        "◦ Working (24s • esc to interrupt)",
+        "",
+        "› Ask Codex to do anything",
+        "  gpt-5.5 xhigh · /workspace",
+      ].join("\n"),
+      "utf8",
+    );
+    const env = {
+      ORKESTR_HOME: path.join(home, "orkestr-home"),
+      HOME: path.join(home, "runtime-home"),
+      CODEX_HOME: path.join(home, "codex-home"),
+      PATH: process.env.PATH,
+      TMUX_LOG: fakeTmux.log,
+      TMUX_STATE: fakeTmux.state,
+      TMUX_CAPTURE_FILE: captureFile,
+      ORKESTR_DELIVERY_ACK_WAIT_MS: "0",
+      ORKESTR_DELIVERY_ACK_BACKOFF_MS: "10000",
+    };
+    await createThread({ id: "stale-working-placeholder-thread", name: "Stale Working Placeholder Thread" }, env);
+    await wakeThread("stale-working-placeholder-thread", { reason: "test" }, env);
+    const statusBefore = await runtimeStatus("stale-working-placeholder-thread", env);
+    assert.equal(statusBefore.working, true);
+    assert.equal(statusBefore.foregroundWorking, false);
+    assert.equal(statusBefore.promptReady, true);
+    assert.equal(statusBefore.progress.staleWorkingPrompt, true);
+
+    const input = await enqueueThreadInput("stale-working-placeholder-thread", {
+      source: "whatsapp_inbound",
+      connector: "whatsapp",
+      chatId: "chat-wa",
+      accountId: "main",
+      text: "queued after placeholder prompt",
+    }, env);
+
+    assert.deepEqual(await deliverPendingThreadInputs("stale-working-placeholder-thread", env), []);
+    const messages = await listThreadMessages("stale-working-placeholder-thread", env);
+    const updated = messages.find((message) => message.id === input.id);
+    const log = await fs.readFile(fakeTmux.log, "utf8");
+
+    assert.equal(updated.state, "awaiting_ack");
+    assert.equal(updated.deliveryState, "awaiting_ack");
+    assert.equal(updated.deliveryAttempt, 1);
+    assert.match(log, /__CALL__\tsend-keys\t-t\t%42\tC-m/);
+  } finally {
+    restoreEnvValue("PATH", priorPath);
+    restoreEnvValue("TMUX_LOG", priorTmuxLog);
+    restoreEnvValue("TMUX_STATE", priorTmuxState);
+    restoreEnvValue("TMUX_CAPTURE_FILE", priorCaptureFile);
+  }
+});
+
 test("raw-terminal delivery steers instant input while Codex is working", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-raw-steer-"));
   const fakeTmux = await createFakeTmux(home);

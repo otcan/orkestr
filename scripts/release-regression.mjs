@@ -33,6 +33,8 @@ Options:
                              for loopback targets.
   --execute                  Enable real chat injection checks.
   --thread THREAD_ID         Thread used by --execute chat injection.
+  --raw-terminal-thread ID   Raw Codex terminal canary used by --execute
+                             delivery handoff check.
   --linkedin-thread ID       LinkedIn-bound thread used by --execute delivery check.
   --message TEXT             Chat injection message.
   --expect TEXT              Expected final assistant reply for --thread.

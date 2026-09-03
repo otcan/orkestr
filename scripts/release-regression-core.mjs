@@ -90,6 +90,7 @@ export function parseReleaseRegressionArgs(argv = [], env = process.env) {
     execute: false,
     allowAuthBlocked: false,
     threadId: String(env.ORKESTR_RELEASE_TEST_THREAD || "").trim(),
+    rawTerminalThreadId: String(env.ORKESTR_RELEASE_RAW_TERMINAL_THREAD || "").trim(),
     linkedInThreadId: String(env.ORKESTR_RELEASE_LINKEDIN_THREAD || "").trim(),
     desktopSlug: String(env.ORKESTR_RELEASE_DESKTOP_SLUG || "").trim(),
     requiredWhatsAppAccounts: splitList(env.ORKESTR_RELEASE_REQUIRED_WHATSAPP_ACCOUNTS || env.ORKESTR_REQUIRED_WHATSAPP_ACCOUNTS),
@@ -112,6 +113,7 @@ export function parseReleaseRegressionArgs(argv = [], env = process.env) {
     else if (arg === "--execute") options.execute = true;
     else if (arg === "--allow-auth-blocked") options.allowAuthBlocked = true;
     else if (arg === "--thread") options.threadId = String(argv[++index] || "").trim();
+    else if (arg === "--raw-terminal-thread") options.rawTerminalThreadId = String(argv[++index] || "").trim();
     else if (arg === "--linkedin-thread") options.linkedInThreadId = String(argv[++index] || "").trim();
     else if (arg === "--desktop-slug") options.desktopSlug = String(argv[++index] || "").trim();
     else if (arg === "--required-whatsapp-accounts") options.requiredWhatsAppAccounts = splitList(argv[++index]);
@@ -494,6 +496,59 @@ async function pollThreadMessages(target, threadId, options, deps) {
   return { payload: latest?.payload || null, messages: Array.isArray(latest?.payload?.messages) ? latest.payload.messages : [] };
 }
 
+function messageDeliveryTokens(message = {}) {
+  return [
+    message.state,
+    message.deliveryState,
+    message.observedVia,
+  ].map((value) => String(value || "").trim().toLowerCase()).filter(Boolean);
+}
+
+function messageRuntimeAccepted(message = {}) {
+  const tokens = messageDeliveryTokens(message);
+  return tokens.some((token) => [
+    "awaiting_ack",
+    "awaiting_ack_unobserved",
+    "delivered",
+    "running",
+    "completed",
+  ].includes(token));
+}
+
+function messageRuntimeFailed(message = {}) {
+  return messageDeliveryTokens(message).some((token) => ["failed", "cancelled"].includes(token));
+}
+
+function messageDeliverySummary(message = {}) {
+  const tokens = messageDeliveryTokens(message);
+  return tokens.length ? tokens.join("/") : "missing";
+}
+
+async function pollRuntimeAcceptedMessage(target, threadId, messageId, text, options, deps) {
+  const deadline = Date.now() + Math.max(options.timeoutMs, options.pollMs);
+  let latest = null;
+  let latestMessage = null;
+  while (Date.now() <= deadline) {
+    latest = await requestJson(target, `/api/threads/${encodeURIComponent(threadId)}/messages?limit=20`, options, deps);
+    const messages = Array.isArray(latest.payload?.messages) ? latest.payload.messages : [];
+    latestMessage = messages.find((message) => String(message?.id || "") === messageId) ||
+      messages.find((message) => String(message.role || message.kind || "") === "user" && messageMatches(message, text)) ||
+      null;
+    if (latestMessage && messageRuntimeAccepted(latestMessage)) {
+      return { payload: latest.payload, messages, message: latestMessage };
+    }
+    if (latestMessage && messageRuntimeFailed(latestMessage)) {
+      throw new Error(`raw-terminal input reached terminal ${messageDeliverySummary(latestMessage)}`);
+    }
+    await sleep(options.pollMs);
+  }
+  return {
+    payload: latest?.payload || null,
+    messages: Array.isArray(latest?.payload?.messages) ? latest.payload.messages : [],
+    message: latestMessage,
+  };
+}
+
 async function checkChatInjection(target, options, artifacts, deps) {
   return runScenario("chat-injection", target, options, artifacts, async () => {
     if (!options.execute) return scenarioSkip("chat-injection", "requires_--execute");
@@ -525,6 +580,44 @@ async function checkChatInjection(target, options, artifacts, deps) {
       });
     } catch (error) {
       return scenarioAuthBlocked("chat-injection", error, options.allowAuthBlocked);
+    }
+  });
+}
+
+async function checkRawTerminalDelivery(target, options, artifacts, deps) {
+  return runScenario("raw-terminal-delivery", target, options, artifacts, async () => {
+    if (!options.execute) return scenarioSkip("raw-terminal-delivery", "requires_--execute");
+    if (!options.rawTerminalThreadId) return scenarioSkip("raw-terminal-delivery", "missing_--raw-terminal-thread");
+    const text = `ORK RAW TERMINAL RELEASE CHECK ${options.releaseId}: report delivery status only.`;
+    try {
+      const input = await requestJson(target, `/api/threads/${encodeURIComponent(options.rawTerminalThreadId)}/input`, {
+        ...options,
+        method: "POST",
+        body: {
+          text,
+          source: "release_regression_raw_terminal",
+          controlAllowed: false,
+        },
+      }, deps);
+      const messageId = String(input.payload?.message?.id || "").trim();
+      const immediate = input.payload?.message && typeof input.payload.message === "object" ? input.payload.message : null;
+      if (immediate && messageRuntimeFailed(immediate)) {
+        throw new Error(`raw-terminal input failed immediately: ${messageDeliverySummary(immediate)}`);
+      }
+      if (!messageId && !immediate) throw new Error("raw-terminal input did not return a message id");
+      const observed = immediate && messageRuntimeAccepted(immediate)
+        ? { message: immediate }
+        : await pollRuntimeAcceptedMessage(target, options.rawTerminalThreadId, messageId, text, options, deps);
+      if (!observed.message || !messageRuntimeAccepted(observed.message)) {
+        throw new Error(`raw-terminal input did not reach runtime before timeout; latest=${messageDeliverySummary(observed.message || {})}`);
+      }
+      return scenarioPass("raw-terminal-delivery", {
+        threadId: options.rawTerminalThreadId,
+        messageId,
+        deliveryState: messageDeliverySummary(observed.message),
+      });
+    } catch (error) {
+      return scenarioAuthBlocked("raw-terminal-delivery", error, options.allowAuthBlocked);
     }
   });
 }
@@ -561,7 +654,7 @@ async function checkLinkedInChat(target, options, artifacts, deps) {
 
 async function runTarget(target, options, artifacts, deps) {
   const scenarios = [];
-  for (const check of [checkCore, checkSetup, checkThreads, checkWhatsApp, checkDesktops, checkChatInjection, checkLinkedInChat]) {
+  for (const check of [checkCore, checkSetup, checkThreads, checkWhatsApp, checkDesktops, checkChatInjection, checkRawTerminalDelivery, checkLinkedInChat]) {
     scenarios.push(await check(target, options, artifacts, deps));
   }
   return {
