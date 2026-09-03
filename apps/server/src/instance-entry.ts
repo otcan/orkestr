@@ -184,7 +184,6 @@ export async function maybeHandleInstanceEntry(
   const env = options.env || process.env;
   const url = new URL(requestUrl || "/", "http://localhost");
   if (!appHost(env) || requestHost(request) !== appHost(env)) return false;
-  if (url.pathname === "/" && options.authenticated) return false;
   if (!["/", "/instance-entry"].includes(url.pathname)) return false;
   if (String(request?.method || "GET").toUpperCase() !== "POST") return sendEntry(response);
   if (entryRateLimited(request)) return sendEntry(response, "That instance could not be opened. Check the name or ID and try again.", 429);
@@ -192,7 +191,7 @@ export async function maybeHandleInstanceEntry(
   if (!target) return sendEntry(response, "That instance could not be opened. Check the name or ID and try again.");
   const pairing = publicPairingUrl(env);
   if (!pairing) return sendEntry(response, "That instance could not be opened. Check the name or ID and try again.");
-  const returnPath = `/instance/${encodeURIComponent(target.publicRef)}/`;
+  const returnPath = `/instance/${encodeURIComponent(target.publicRef)}/launcher`;
   const redirect = new URL(instanceSetupPairingRedirectPath(target.internalInstanceId, returnPath), pairing);
   response.status(303).header("cache-control", "no-store").header("location", redirect.toString()).send("Continue to Orkestr access.");
   return true;

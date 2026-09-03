@@ -447,6 +447,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
         this.error = "";
         return;
       }
+      if (this.defaultInstanceRootToLauncher()) return;
       if (!this.isRouteLevelUserPanel(this.activePanel) && !this.selectedId && this.threads.length) {
         this.selectedId = this.threadSlug(this.threads[0]);
         if (this.replacePath(this.selectedId, this.activePanel)) return;
@@ -830,6 +831,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       this.threads = [...threads].sort((a, b) => this.activityMs(b) - this.activityMs(a));
       if (this.canonicalizeCurrentThreadRoute()) return;
       this.seedReadStateIfNeeded(this.threads);
+      if (this.defaultInstanceRootToLauncher()) return;
       if (!this.isRouteLevelUserPanel(this.activePanel) && !this.selectedId && this.threads.length) {
         this.selectedId = this.threadSlug(this.threads[0]);
         if (this.replacePath(this.selectedId, this.activePanel)) return;
@@ -4896,13 +4898,32 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     }
   }
 
+  private defaultInstanceRootToLauncher(): boolean {
+    if (this.locationPathParts().length || this.onboardingActive || this.pairingRequired) return false;
+    if (!this.appBasePath().startsWith("/instance/") && !this.instanceContext?.canonicalPath) return false;
+    this.selectedId = "";
+    this.activePanel = "instanceApps";
+    const target = this.instancePath("/launcher");
+    if (/^https?:\/\//i.test(target)) {
+      return navigateCanonicalThreadTarget(target, {
+        currentUrl: globalThis.location?.href,
+        mode: "replace",
+        history: globalThis.history,
+        location: globalThis.location,
+      }).crossOrigin;
+    }
+    const current = `${globalThis.location?.pathname || ""}${globalThis.location?.search || ""}${globalThis.location?.hash || ""}`;
+    if (current !== target) globalThis.history?.replaceState({}, "", target);
+    return false;
+  }
+
   private canonicalizeInstanceRoute(): boolean {
     if (!this.instanceContext?.canonicalPath || this.appBasePath().startsWith("/instance/")) return false;
     const parts = this.locationPathParts();
     if (this.sharedAppParts(parts) || parts[0] === "apps" || this.pairingPathParts(parts) || parts.includes("thread")) return false;
     if (this.connectorLoginProvider(parts)) return false;
     let suffix = "";
-    if (!parts.length) suffix = "";
+    if (!parts.length) suffix = "launcher";
     else if (parts[0] === "launcher" || (parts[0] === "ng" && parts[1] === "launcher")) suffix = "launcher";
     else if (parts[0] === "files" || (parts[0] === "ng" && parts[1] === "files")) suffix = "files";
     else if (["settings", "ops", "mailboxes"].includes(parts[0]) || (parts[0] === "connectors" && !parts[1])) suffix = "settings";
