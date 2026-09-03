@@ -19,3 +19,10 @@ test("desktop open controls create brokered shares instead of navigating to dire
   assert.match(userDeskTemplate, /\(click\)="openDesktop\(browser\)"/);
   assert.doesNotMatch(userDeskTemplate, /\[href\]="browserOpenUrl\(browser\)"/);
 });
+
+test("user desktop lifecycle controls exchange the live lease for a single-use capability", async () => {
+  const userDeskComponent = await fs.readFile(userDeskComponentUrl, "utf8");
+
+  assert.match(userDeskComponent, /issueDesktopCapability\(threadId, \{[\s\S]+?fencingToken,[\s\S]+?scope: "lifecycle"/);
+  assert.match(userDeskComponent, /browserAction\(slug, action, \{[\s\S]+?desktopCapability: issued\.capability/);
+});

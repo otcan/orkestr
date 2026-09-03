@@ -29,7 +29,7 @@ import {
   openDesktopShare,
   revokeDesktopShare,
 } from "../../../../../packages/core/src/desktop-shares.js";
-import { assertSanitizedAction } from "../../../../../packages/core/src/llm-sanitizer.js";
+import { assertDesktopActionSanitized } from "../../../../../packages/core/src/desktop-action-sanitizer.js";
 import { requestPrincipal } from "../../../../../packages/core/src/principal.js";
 import { isAdminPrincipal, resourceOwnerUserId } from "../../../../../packages/core/src/policy.js";
 import { getThreadForPrincipal } from "../../../../../packages/core/src/threads.js";
@@ -463,19 +463,11 @@ export class BrowsersController {
   }
 
   private async assertDesktopSanitized(action: string, principal: any, slug: string, input: Record<string, unknown> = {}) {
-    if (isAdminPrincipal(principal)) return null;
-    return assertSanitizedAction({
-      action: `desktop.${String(action || "action").trim().toLowerCase() || "action"}`,
+    return assertDesktopActionSanitized({
+      action,
       principal,
-      resource: {
-        type: "desktop",
-        id: normalizeDesktopSlug(slug),
-        ownerUserId: String(principal?.userId || "").trim(),
-      },
-      input: {
-        slug: normalizeDesktopSlug(slug),
-        ...input,
-      },
+      desktopSlug: normalizeDesktopSlug(slug),
+      input,
     }, process.env);
   }
 
