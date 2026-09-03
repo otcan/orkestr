@@ -1,0 +1,85 @@
+<section class="hush-devices" aria-label="Hush mobile devices">
+  <header class="hush-devices-head">
+    <div>
+      <p class="eyebrow">Hush mobile</p>
+      <h3>Pair and manage devices</h3>
+      <small>Choose a server-owned Hush profile. Its private conversation binding stays on the server.</small>
+    </div>
+    <button class="secondary" type="button" (click)="load()" [disabled]="busy || approving || !!revokingDeviceId">Refresh</button>
+  </header>
+
+  @if (error) {
+    <div class="hush-notice error" role="alert">{{ error }}</div>
+  }
+  @if (notice && !error) {
+    <div class="hush-notice" aria-live="polite">{{ notice }}</div>
+  }
+
+  <article class="hush-card">
+    <h4>Approve a pairing code</h4>
+    <p>Enter the short-lived code shown in Hush, then select an existing managed profile. The code is cleared from this page after the request.</p>
+    <form class="hush-form" (ngSubmit)="approvePairing()">
+      <label>
+        <span>Pairing code</span>
+        <input
+          name="hush-pairing-code"
+          [(ngModel)]="pairingCode"
+          autocomplete="one-time-code"
+          autocapitalize="off"
+          spellcheck="false"
+          inputmode="text"
+          placeholder="Enter the code from Hush"
+          [disabled]="busy || approving"
+        />
+      </label>
+      <label>
+        <span>Managed Hush profile</span>
+        <select name="hush-profile" [(ngModel)]="selectedProfileId" [disabled]="busy || approving">
+          <option value="">Select a server-owned profile</option>
+          @for (profile of activeProfiles(); track profile.id) {
+            <option [value]="profile.id">{{ profileLabel(profile) }}</option>
+          }
+        </select>
+      </label>
+      @if (!activeProfiles().length && !busy) {
+        <p class="hush-empty">No active Hush profiles are available to this owner.</p>
+      }
+      <div class="settings-actions compact-actions">
+        <button type="submit" [disabled]="!canApprove()">{{ approving ? "Approving" : "Approve pairing" }}</button>
+      </div>
+    </form>
+    @if (pairingStatus) {
+      <small class="hush-pairing-state">Pairing {{ pairingStateLabel() }}@if (pairingExpiresAt) { · expires {{ pairingExpiresAt | date: "MMM d, HH:mm" }} }</small>
+    }
+  </article>
+
+  <section class="hush-card">
+    <div class="hush-section-head">
+      <div>
+        <h4>Paired devices</h4>
+        <small>Revoking a device invalidates its mobile credentials and requires a new owner-approved pairing.</small>
+      </div>
+      <span class="status-pill">{{ devices.length }} managed</span>
+    </div>
+    <div class="hush-device-list">
+      @for (device of devices; track device.id) {
+        <article class="hush-device-row">
+          <div>
+            <strong>{{ deviceLabel(device) }}</strong>
+            <small>{{ deviceState(device) }}</small>
+            @if (device.pairedAt) { <small>Paired {{ device.pairedAt | date: "MMM d, yyyy HH:mm" }}</small> }
+            @if (device.lastSeenAt) { <small>Last seen {{ device.lastSeenAt | date: "MMM d, yyyy HH:mm" }}</small> }
+            @if (device.expiresAt) { <small>Expires {{ device.expiresAt | date: "MMM d, yyyy HH:mm" }}</small> }
+          </div>
+          @if (deviceCanRevoke(device)) {
+            <button class="secondary danger-soft" type="button" (click)="revokeDevice(device)" [disabled]="busy || approving || revokingDeviceId === device.id">
+              {{ revokingDeviceId === device.id ? "Revoking" : "Revoke" }}
+            </button>
+          }
+        </article>
+      } @empty {
+        <p class="hush-empty">No Hush devices are paired to this owner.</p>
+      }
+    </div>
+  </section>
+</section>
