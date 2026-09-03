@@ -153,6 +153,13 @@ function validClientTurnId(value) {
   return UUID_PATTERN.test(clean(value));
 }
 
+function deviceContextIdentifier(context, field) {
+  if (typeof context?.[field] !== "string") throw httpError("mobile_device_profile_unavailable", 403);
+  const value = context[field].trim();
+  if (!value || value.length > 512) throw httpError("mobile_device_profile_unavailable", 403);
+  return value;
+}
+
 /**
  * Returns only a context injected after device-proof authentication. This
  * function never reads body/query/header thread identifiers, so the caller
@@ -166,14 +173,11 @@ export function hushMobileDeviceContext(request = {}) {
     throw httpError("mobile_device_auth_required", 401);
   }
   const device = {
-    deviceId: clean(context.deviceId),
-    profileId: clean(context.profileId),
-    threadId: clean(context.threadId),
-    ownerUserId: clean(context.ownerUserId),
+    deviceId: deviceContextIdentifier(context, "deviceId"),
+    profileId: deviceContextIdentifier(context, "profileId"),
+    threadId: deviceContextIdentifier(context, "threadId"),
+    ownerUserId: deviceContextIdentifier(context, "ownerUserId"),
   };
-  if (!device.deviceId || !device.profileId || !device.threadId || !device.ownerUserId) {
-    throw httpError("mobile_device_profile_unavailable", 403);
-  }
   return device;
 }
 
