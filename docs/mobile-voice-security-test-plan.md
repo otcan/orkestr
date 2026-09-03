@@ -138,6 +138,7 @@ integration blockers are:
 - access/refresh expiry and rotation behavior, including refresh reuse denial;
 - rate-limit keys, windows, limits, and `Retry-After` behavior;
 - stable public authentication error codes and refresh-reuse behavior;
+- strict string types and bounds for every machine-auth context identifier;
 - whether revocation closes an already-open SSE immediately in addition to
   denying its reconnect and subsequent API requests.
 
