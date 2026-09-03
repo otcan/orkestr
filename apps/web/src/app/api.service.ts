@@ -3153,6 +3153,10 @@ export class ApiService {
     return this.http.post<{ browser: BrowserSession; attemptId?: string; warnings?: DesktopAccessWarning[] }>(this.api(`/browser-sessions/${encodeURIComponent(slug)}/${encodeURIComponent(action)}`), body);
   }
 
+  issueDesktopCapability(threadId: string, body: Record<string, unknown>): Observable<{ required: boolean; capability: string; expiresAt?: string; scope?: string }> {
+    return this.http.post<{ required: boolean; capability: string; expiresAt?: string; scope?: string }>(this.api(`/threads/${encodeURIComponent(threadId)}/desktop-capabilities`), body);
+  }
+
   desktopLeases(includeReleased = false, threadId = "", breakGlassReason = ""): Observable<{ ok: boolean; desktopLeases: DesktopLeaseRecord[]; staleAfterMs?: number; generatedAt?: string }> {
     const params = new URLSearchParams();
     if (includeReleased) params.set("include", "released");

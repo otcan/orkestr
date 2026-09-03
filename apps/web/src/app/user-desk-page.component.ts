@@ -66,9 +66,16 @@ export class UserDeskPageComponent implements OnInit {
         lease = acquired.lease || null;
         recoveryWarnings = acquired.warnings || [];
       }
+      const threadId = String(lease?.threadId || this.primaryThread()?.id || "");
+      const fencingToken = String(lease?.fencingToken || "");
+      const issued = await firstValueFrom(this.api.issueDesktopCapability(threadId, {
+        fencingToken,
+        scope: "lifecycle",
+      }));
       const payload = await firstValueFrom(this.api.browserAction(slug, action, {
-        threadId: String(lease?.threadId || this.primaryThread()?.id || ""),
-        fencingToken: String(lease?.fencingToken || ""),
+        threadId,
+        fencingToken,
+        desktopCapability: issued.capability,
         reason: "user_desk",
         attemptId,
       }));
