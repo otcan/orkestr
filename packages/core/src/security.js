@@ -6,6 +6,7 @@ import { appendEvent, readJson, writeSecretJson } from "../../storage/src/store.
 import { withStorageFileLock } from "../../storage/src/storage-lock.js";
 import { authorizeDesktopShareHttpRequest } from "./desktop-shares.js";
 import { decryptBrokerClientPayload } from "./broker-instance-registry.js";
+import { authorizeMobileDeviceHttpRequest } from "./mobile-devices.js";
 import { adminPrincipal, principalFromSecuritySession, userPrincipal } from "./principal.js";
 import { publicUrlConfig } from "./public-url-config.js";
 import { defaultAdminUser, getUser, normalizeUserId } from "./users.js";
@@ -2104,6 +2105,10 @@ function isAllowedBeforePairing(request) {
   if (method === "POST" && /^\/api\/broker\/instances\/[^/]+\/whatsapp\/(?:onboarding|history)$/.test(url)) return true;
   if (method === "POST" && /^\/api\/broker\/instances\/[^/]+\/google-workspace\/(?:connect-link|refresh-token)$/.test(url)) return true;
   if (method === "POST" && url === "/api/broker/google-workspace/grants") return true;
+  if (method === "POST" && url === "/api/mobile/pairing/start") return true;
+  if (method === "GET" && /^\/api\/mobile\/pairing\/[^/]+\/poll$/.test(url)) return true;
+  if (method === "POST" && /^\/api\/mobile\/pairing\/[^/]+\/complete$/.test(url)) return true;
+  if (method === "POST" && url === "/api/mobile/session/refresh") return true;
   if (method === "POST" && /^\/api\/connectors\/twilio\/voice\/[^/]+\/(?:incoming|gather)$/.test(url)) return true;
   if (method === "GET" && url === "/api/connectors/whatsapp/bridge/repair") return true;
   if (method === "POST" && url === "/api/connectors/whatsapp/bridge/repair/send-email") return true;
@@ -2174,6 +2179,15 @@ export async function authorizeHttpRequest(request, env = process.env) {
   if (vagentAuth) return { ...vagentAuth, status };
   const cliAuth = await authorizeCliMachineRequest(request, env);
   if (cliAuth?.ok) return { ok: true, status, principal: cliAuth.principal, machineAuth: cliAuth.machineAuth };
+  const mobileAuth = await authorizeMobileDeviceHttpRequest(request, env);
+  if (mobileAuth?.ok) return {
+    ok: true,
+    status,
+    principal: mobileAuth.principal,
+    machineAuth: mobileAuth.machineAuth,
+    machineAuthContext: mobileAuth.machineAuthContext || null,
+  };
+  if (mobileAuth) return { ...mobileAuth, status };
   const brokerProxyAuth = await authorizeBrokerProxyMachineRequest(request, env);
   if (brokerProxyAuth?.ok) return {
     ok: true,
