@@ -68,7 +68,7 @@ function searchWithoutCompact(search = ""): string {
 
 function normalizeScopedAppReturn(instanceId: string, path: string, search = ""): string {
   const scopedPrefix = `/i/${encodeURIComponent(instanceId)}/app`;
-  if (path === scopedPrefix) return `${scopedPrefix}/${search}`;
+  if (path === scopedPrefix) return `${tenantAppPath(instanceId, "launcher")}${search}`;
   if (!path.startsWith(`${scopedPrefix}/`)) return "";
   const parts = path.split("/").filter(Boolean);
   const routeRoot = String(parts[3] || "");
@@ -87,7 +87,7 @@ function normalizeUnscopedAppReturn(instanceId: string, path: string, search = "
   if (root === "instance" && parts[1]) {
     try {
       parseInstancePublicRef(parts[1]);
-      return `${path}${search}`;
+      return parts.length === 2 ? `${path}/launcher${search}` : `${path}${search}`;
     } catch {
       return "";
     }
@@ -104,7 +104,7 @@ function normalizeUnscopedAppReturn(instanceId: string, path: string, search = "
 }
 
 export function instanceSetupReturnPath(instanceId: string, rawReturnTo = "", rawConnector = ""): string {
-  const defaultReturn = rawConnector ? setupSectionAppPath(instanceId, rawConnector) : tenantAppPath(instanceId);
+  const defaultReturn = rawConnector ? setupSectionAppPath(instanceId, rawConnector) : tenantAppPath(instanceId, "launcher");
   const returnTo = String(rawReturnTo || "").trim();
   if (!returnTo) return defaultReturn;
   if (returnTo.startsWith("//")) return defaultReturn;

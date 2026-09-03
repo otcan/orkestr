@@ -70,6 +70,18 @@ test("instance entry alias normalization rejects path-like values", () => {
 
 test("instance pairing retains a canonical instance return path", () => {
   assert.equal(
+    instanceSetupReturnPath("internal-id"),
+    "/i/internal-id/app/launcher",
+  );
+  assert.equal(
+    instanceSetupReturnPath("internal-id", "/i/internal-id/app"),
+    "/i/internal-id/app/launcher",
+  );
+  assert.equal(
+    instanceSetupReturnPath("internal-id", `/instance/${localRef}`),
+    `/instance/${localRef}/launcher`,
+  );
+  assert.equal(
     instanceSetupReturnPath("internal-id", `/instance/${localRef}/desktops?view=all`),
     `/instance/${localRef}/desktops?view=all`,
   );
@@ -83,7 +95,7 @@ test("instance pairing retains a canonical instance return path", () => {
   );
   assert.equal(
     instanceSetupReturnPath("internal-id", "/instance/not-an-instance/desktops"),
-    "/i/internal-id/app/",
+    "/i/internal-id/app/launcher",
   );
 });
 
@@ -118,7 +130,7 @@ test("instance entry promotes a name into an instance-bound pairing redirect", a
   assert.equal(location.origin, "https://connect.example.test");
   assert.equal(location.pathname, "/setup/pairing");
   assert.equal(location.searchParams.get("instanceId"), "local-internal");
-  assert.equal(location.searchParams.get("return"), `/instance/${localRef}`);
+  assert.equal(location.searchParams.get("return"), `/instance/${localRef}/launcher`);
 });
 
 test("instance entry never promotes a configured primary host", async () => {
