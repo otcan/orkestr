@@ -11,6 +11,7 @@ test("Hush SSE starts promptly, never reflects raw stream errors, and closes aft
   assert.match(source, /: hush connected/);
   assert.match(source, /: hush keep-alive/);
   assert.match(source, /mobile_voice_stream_unavailable/);
+  assert.match(source, /await this\.mobileVoice\.deviceActive\(input\.device\)/);
   assert.doesNotMatch(source, /String\(error\?\.message/);
   assert.match(source, /if \(terminalTurn\(event\)\) \{[\s\S]*?response\.end\(\)/);
   assert.match(source, /if \(terminalTurn\(\{ turn: current \}\)\) \{[\s\S]*?response\.end\(\)/);

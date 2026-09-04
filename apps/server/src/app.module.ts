@@ -25,7 +25,6 @@ import { TenantVmsModule } from "./modules/tenant-vms/tenant-vms.module.js";
 import { UsersModule } from "./modules/users/users.module.js";
 import { AttachmentEncryptionModule } from "./modules/attachment-encryption/attachment-encryption.module.js";
 import { VagentModule } from "./modules/vagent/vagent.module.js";
-import { MobileVoiceModule } from "./modules/mobile-voice/mobile-voice.module.js";
 
 @Module({
   imports: [
@@ -54,7 +53,6 @@ import { MobileVoiceModule } from "./modules/mobile-voice/mobile-voice.module.js
     TenantVmsModule,
     UsersModule,
     AttachmentEncryptionModule,
-    MobileVoiceModule,
     VagentModule,
   ],
 })

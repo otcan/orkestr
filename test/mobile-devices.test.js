@@ -11,6 +11,7 @@ import {
   completeMobileDevicePairing,
   listMobileDevices,
   listMobileProfiles,
+  mobileDeviceContextIsActive,
   pollMobileDevicePairing,
   refreshMobileDeviceSession,
   startMobileDevicePairing,
@@ -18,6 +19,7 @@ import {
 import { sha256 } from "../packages/core/src/mobile-device-crypto.js";
 import { adminPrincipal } from "../packages/core/src/principal.js";
 import { approvePairingChallenge, authorizeHttpRequest, createPairingChallenge, pairBrowser } from "../packages/core/src/security.js";
+import { createThread, listThreadMessages } from "../packages/core/src/threads.js";
 
 function saveEnv(keys) {
   return Object.fromEntries(keys.map((key) => [key, process.env[key]]));
@@ -58,9 +60,8 @@ async function setupMobileEnv(t, extra = {}, options = {}) {
     profiles: [{
       id: "owner-phone",
       label: "Owner Phone",
-      userId: "admin",
-      role: "admin",
-      scopes: ["threads:read", "threads:write", "desktops:open"],
+      ownerUserId: "admin",
+      threadId: "hush-owner-thread",
     }],
   }));
   const keys = [
@@ -125,6 +126,7 @@ async function setupMobileEnv(t, extra = {}, options = {}) {
 
 async function pairApprovedDevice(t) {
   const { env } = await setupMobileEnv(t);
+  await createThread({ id: "hush-owner-thread", name: "Hush owner", ownerUserId: "admin" }, env);
   const keys = keyPair();
   const machineContext = {
     platform: "ios",
@@ -136,10 +138,11 @@ async function pairApprovedDevice(t) {
   const started = await startMobileDevicePairing({
     env,
     request: { headers: { "user-agent": "mobile-test" }, ip: "203.0.113.9" },
-    body: { profileId: "owner-phone", publicKeyJwk: keys.publicJwk, machineContext },
+    body: { deviceName: "Can Phone", publicKeyJwk: keys.publicJwk, machineContext },
   });
   await approveMobileDevicePairing(started.pairing.id, {
     env,
+    profileId: "owner-phone",
     principal: adminPrincipal({ id: "admin" }),
   });
   const polled = await pollMobileDevicePairing(started.pairing.id, { env, pollToken: started.pollToken });
@@ -166,6 +169,8 @@ test("mobile device pairing requires owner approval and one-time ES256 proof", a
   const profiles = await listMobileProfiles({ env });
   assert.deepEqual(profiles.profiles.map((profile) => profile.id), ["owner-phone"]);
   assert.equal(JSON.stringify(started).includes("\"d\""), false);
+  assert.equal(JSON.stringify(started).includes("owner-phone"), false);
+  assert.equal(JSON.stringify(started).includes("hush-owner-thread"), false);
   assert.equal(started.pairing.status, "pending");
   assert.match(started.pairing.approveCode, /^[A-Z0-9]+$/);
 
@@ -184,7 +189,7 @@ test("mobile device pairing requires owner approval and one-time ES256 proof", a
   );
 });
 
-test("mobile access uses per-request device proof and rejects replay", async (t) => {
+test("mobile access uses exact Hush context, rejects replay, and cannot authorize other APIs", async (t) => {
   const { env, keys, completed } = await pairApprovedDevice(t);
   const requestClaims = timedClaims({
     aud: "orkestr.mobile.request",
@@ -192,38 +197,57 @@ test("mobile access uses per-request device proof and rejects replay", async (t)
     did: completed.device.id,
     ath: sha256(completed.accessToken),
     method: "GET",
-    path: "/api/threads?scope=all",
+    path: "/api/mobile/voice-turns/turn-1",
     bodySha256: sha256(""),
     jti: "request-proof-1",
   });
   const request = {
     method: "GET",
-    url: "/api/threads?scope=all",
+    url: "/api/mobile/voice-turns/turn-1",
     headers: {
       authorization: `Bearer ${completed.accessToken}`,
       "x-orkestr-device-proof": signJwt(keys.privateKey, requestClaims),
     },
   };
+  const tokenOnly = await authorizeHttpRequest({ ...request, headers: { authorization: `Bearer ${completed.accessToken}` } }, env);
+  assert.equal(tokenOnly.ok, false);
+  assert.equal(tokenOnly.statusCode, 401);
+  const malformed = await authorizeHttpRequest({
+    ...request,
+    headers: { ...request.headers, "x-orkestr-device-proof": "malformed-proof" },
+  }, env);
+  assert.equal(malformed.ok, false);
+  assert.equal(malformed.statusCode, 401);
   const authorized = await authorizeHttpRequest(request, env);
   assert.equal(authorized.ok, true);
   assert.equal(authorized.machineAuth, "mobile_device");
   assert.deepEqual(authorized.machineAuthContext, {
-    tokenId: completed.session.accessTokenId,
-    routeKind: "mobile_device",
-    scopes: ["threads:read", "threads:write", "desktops:open"],
     principalKind: "mobile_device",
-    principalId: completed.device.id,
-    ownerUserId: "admin",
-    userId: "admin",
+    routeKind: "hush_mobile",
     deviceId: completed.device.id,
-    sessionId: completed.session.id,
     profileId: "owner-phone",
-    proofJti: "request-proof-1",
-    proofIat: requestClaims.iat,
+    threadId: "hush-owner-thread",
+    ownerUserId: "admin",
   });
+  assert.equal(await mobileDeviceContextIsActive(authorized.machineAuthContext, env), true);
   const replay = await authorizeMobileDeviceHttpRequest(request, env);
   assert.equal(replay.ok, false);
   assert.equal(replay.error, "mobile_device_proof_replayed");
+
+  const forbidden = await authorizeMobileDeviceHttpRequest({
+    ...request,
+    url: "/api/threads",
+    headers: {
+      ...request.headers,
+      "x-orkestr-device-proof": signJwt(keys.privateKey, timedClaims({
+        ...requestClaims,
+        path: "/api/threads",
+        jti: "request-proof-out-of-scope",
+      })),
+    },
+  }, env);
+  assert.equal(forbidden.statusCode, 403);
+  assert.equal(forbidden.error, "mobile_device_route_forbidden");
 });
 
 test("mobile refresh rotates refresh and access tokens", async (t) => {
@@ -263,7 +287,7 @@ test("mobile refresh rotates refresh and access tokens", async (t) => {
   );
   assert.equal(await authorizeMobileDeviceHttpRequest({
     method: "GET",
-    url: "/api/threads",
+    url: "/api/mobile/voice-turns/old-turn",
     headers: {
       authorization: `Bearer ${completed.accessToken}`,
       "x-orkestr-device-proof": signJwt(keys.privateKey, timedClaims({
@@ -272,7 +296,7 @@ test("mobile refresh rotates refresh and access tokens", async (t) => {
         did: completed.device.id,
         ath: sha256(completed.accessToken),
         method: "GET",
-        path: "/api/threads",
+        path: "/api/mobile/voice-turns/old-turn",
         bodySha256: sha256(""),
         jti: "old-access",
       })),
@@ -280,13 +304,42 @@ test("mobile refresh rotates refresh and access tokens", async (t) => {
   }, env), null);
 });
 
+test("expired mobile access is denied before controller authentication", async (t) => {
+  const { env, keys, completed } = await pairApprovedDevice(t);
+  const statePath = path.join(env.ORKESTR_HOME, "secrets", "mobile-devices.json");
+  const state = JSON.parse(await fs.readFile(statePath, "utf8"));
+  state.sessions[0].accessExpiresAt = "2000-01-01T00:00:00.000Z";
+  await fs.writeFile(statePath, `${JSON.stringify(state)}\n`);
+  const request = {
+    method: "GET",
+    url: "/api/mobile/voice-turns/expired-turn",
+    headers: {
+      authorization: `Bearer ${completed.accessToken}`,
+      "x-orkestr-device-proof": signJwt(keys.privateKey, timedClaims({
+        aud: "orkestr.mobile.request",
+        sid: completed.session.id,
+        did: completed.device.id,
+        ath: sha256(completed.accessToken),
+        method: "GET",
+        path: "/api/mobile/voice-turns/expired-turn",
+        bodySha256: sha256(""),
+        jti: "expired-access-proof",
+      })),
+    },
+  };
+  const denied = await authorizeHttpRequest(request, env);
+  assert.equal(denied.ok, false);
+  assert.equal(denied.statusCode, 401);
+  assert.equal(denied.error, "mobile_access_expired");
+});
+
 test("mobile public pairing start is client rate limited", async (t) => {
   const { env } = await setupMobileEnv(t, { ORKESTR_MOBILE_PAIRING_CLIENT_CREATE_LIMIT: "1" });
   const keys = keyPair();
   const request = { headers: { "user-agent": "same-device" }, ip: "198.51.100.10" };
-  await startMobileDevicePairing({ env, request, body: { profileId: "owner-phone", publicKeyJwk: keys.publicJwk } });
+  await startMobileDevicePairing({ env, request, body: { deviceName: "Rate limit phone", publicKeyJwk: keys.publicJwk } });
   await assert.rejects(
-    startMobileDevicePairing({ env, request, body: { profileId: "owner-phone", publicKeyJwk: keys.publicJwk } }),
+    startMobileDevicePairing({ env, request, body: { deviceName: "Rate limit phone", publicKeyJwk: keys.publicJwk } }),
     /mobile_pairing_client_rate_limited/,
   );
 });
@@ -309,6 +362,7 @@ test("mobile auth ignores unrelated bearer machine tokens without creating state
 
 test("mobile module exposes bounded public routes and owner controls", async (t) => {
   const { env, cleanup } = await setupMobileEnv(t, {}, { autoCleanup: false });
+  await createThread({ id: "hush-owner-thread", name: "Hush owner", ownerUserId: "admin" }, env);
   const ownerChallenge = await createPairingChallenge({
     env,
     request: { headers: { "user-agent": "owner-browser" }, ip: "127.0.0.1" },
@@ -336,20 +390,194 @@ test("mobile module exposes bounded public routes and owner controls", async (t)
   const start = await fetch(`${baseUrl}/api/mobile/pairing/start`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ profileId: "owner-phone", publicKeyJwk: keys.publicJwk }),
+    body: JSON.stringify({ deviceName: "HTTP phone", publicKeyJwk: keys.publicJwk }),
   });
   assert.equal(start.status, 200);
-  assert.equal((await start.json()).pairing.status, "pending");
+  const started = await start.json();
+  assert.equal(started.pairing.status, "pending");
+  assert.equal(JSON.stringify(started).includes("owner-phone"), false);
+  assert.equal(JSON.stringify(started).includes("hush-owner-thread"), false);
 
-  const unauthProfiles = await fetch(`${baseUrl}/api/mobile/owner/profiles`);
+  const unauthProfiles = await fetch(`${baseUrl}/api/mobile/profiles`);
   assert.equal(unauthProfiles.status, 401);
 
-  const ownerProfiles = await fetch(`${baseUrl}/api/mobile/owner/profiles`, {
+  const ownerProfiles = await fetch(`${baseUrl}/api/mobile/profiles`, {
     headers: { cookie: `orkestr_session=${encodeURIComponent(ownerSession.token)}` },
   });
   assert.equal(ownerProfiles.status, 200);
-  assert.deepEqual((await ownerProfiles.json()).profiles.map((profile) => profile.id), ["owner-phone"]);
+  const ownerProfilesBody = await ownerProfiles.json();
+  assert.deepEqual(ownerProfilesBody.profiles.map((profile) => profile.id), ["owner-phone"]);
+  assert.equal(JSON.stringify(ownerProfilesBody).includes("hush-owner-thread"), false);
+  assert.equal(JSON.stringify(ownerProfilesBody).includes("ownerUserId"), false);
 
-  const devices = await listMobileDevices({ env });
-  assert.deepEqual(devices.devices, []);
+  const approvedResponse = await fetch(`${baseUrl}/api/mobile/profiles/owner-phone/pairings/approve`, {
+    method: "POST",
+    headers: {
+      cookie: `orkestr_session=${encodeURIComponent(ownerSession.token)}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ pairingCode: started.pairing.approveCode }),
+  });
+  assert.equal(approvedResponse.status, 200);
+  assert.equal((await approvedResponse.json()).pairing.status, "approved");
+
+  const pollUrl = `${baseUrl}/api/mobile/pairing/${encodeURIComponent(started.pairing.id)}/poll?pollToken=${encodeURIComponent(started.pollToken)}`;
+  const polled = await (await fetch(pollUrl)).json();
+  const repeatedPoll = await (await fetch(pollUrl)).json();
+  assert.equal(repeatedPoll.challenge.id, polled.challenge.id);
+  assert.equal(repeatedPoll.challenge.nonce, polled.challenge.nonce);
+  assert.equal(JSON.stringify(polled).includes("owner-phone"), false);
+  assert.equal(JSON.stringify(polled).includes("hush-owner-thread"), false);
+
+  const completedResponse = await fetch(`${baseUrl}/api/mobile/pairing/${encodeURIComponent(started.pairing.id)}/complete`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      pollToken: started.pollToken,
+      challengeId: polled.challenge.id,
+      proof: signJwt(keys.privateKey, timedClaims({
+        aud: "orkestr.mobile.pairing",
+        pairingId: started.pairing.id,
+        challengeId: polled.challenge.id,
+        challenge: polled.challenge.nonce,
+        publicKeyThumbprint: polled.challenge.publicKeyThumbprint,
+        machineContextHash: polled.challenge.machineContextHash,
+        jti: "http-pair-proof",
+      })),
+    }),
+  });
+  assert.equal(completedResponse.status, 200);
+  const completed = await completedResponse.json();
+  assert.equal(completed.device.status, "paired");
+  assert.equal(JSON.stringify(completed).includes("hush-owner-thread"), false);
+  const deviceContext = {
+    deviceId: completed.device.id,
+    profileId: "owner-phone",
+    threadId: "hush-owner-thread",
+    ownerUserId: "admin",
+  };
+  assert.equal(await mobileDeviceContextIsActive(deviceContext, env), true);
+
+  const turnBody = JSON.stringify({
+    clientTurnId: "77777777-7777-4777-8777-777777777777",
+    transcript: "Give me the current status",
+    locale: "en-US",
+  });
+  const turnProof = signJwt(keys.privateKey, timedClaims({
+    aud: "orkestr.mobile.request",
+    sid: completed.session.id,
+    did: completed.device.id,
+    ath: sha256(completed.accessToken),
+    method: "POST",
+    path: "/api/mobile/voice-turns",
+    bodySha256: sha256(turnBody),
+    jti: "http-turn-proof",
+  }));
+  const turnResponse = await fetch(`${baseUrl}/api/mobile/voice-turns`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${completed.accessToken}`,
+      "content-type": "application/json",
+      "x-orkestr-content-sha256": sha256(turnBody),
+      "x-orkestr-device-proof": turnProof,
+    },
+    body: turnBody,
+  });
+  assert.equal(turnResponse.status, 202);
+  assert.equal((await turnResponse.json()).status, "queued");
+
+  const tamperedBody = JSON.stringify({
+    clientTurnId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    transcript: "Tampered after proof creation",
+    locale: "en-US",
+  });
+  const beforeTampered = (await listThreadMessages("hush-owner-thread", env)).length;
+  const tamperedResponse = await fetch(`${baseUrl}/api/mobile/voice-turns`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${completed.accessToken}`,
+      "content-type": "application/json",
+      "x-orkestr-content-sha256": sha256(turnBody),
+      "x-orkestr-device-proof": signJwt(keys.privateKey, timedClaims({
+        aud: "orkestr.mobile.request",
+        sid: completed.session.id,
+        did: completed.device.id,
+        ath: sha256(completed.accessToken),
+        method: "POST",
+        path: "/api/mobile/voice-turns",
+        bodySha256: sha256(turnBody),
+        jti: "http-tampered-body-proof",
+      })),
+    },
+    body: tamperedBody,
+  });
+  assert.equal(tamperedResponse.status, 401);
+  assert.equal((await listThreadMessages("hush-owner-thread", env)).length, beforeTampered);
+
+  const tokenOnly = await fetch(`${baseUrl}/api/mobile/voice-turns`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${completed.accessToken}`, "content-type": "application/json" },
+    body: JSON.stringify({
+      clientTurnId: "88888888-8888-4888-8888-888888888888",
+      transcript: "This must not dispatch",
+      locale: "en-US",
+    }),
+  });
+  assert.equal(tokenOnly.status, 401);
+
+  const devicesResponse = await fetch(`${baseUrl}/api/mobile/devices`, {
+    headers: { cookie: `orkestr_session=${encodeURIComponent(ownerSession.token)}` },
+  });
+  const devices = await devicesResponse.json();
+  assert.equal(devices.devices.length, 1);
+  assert.equal(devices.devices[0].status, "paired");
+  assert.equal(JSON.stringify(devices).includes("hush-owner-thread"), false);
+
+  const revoked = await fetch(`${baseUrl}/api/mobile/devices/${encodeURIComponent(completed.device.id)}/revoke`, {
+    method: "POST",
+    headers: { cookie: `orkestr_session=${encodeURIComponent(ownerSession.token)}`, "content-type": "application/json" },
+    body: "{}",
+  });
+  assert.equal(revoked.status, 200);
+  assert.equal(await mobileDeviceContextIsActive(deviceContext, env), false);
+
+  const beforeRevokedRetry = (await listThreadMessages("hush-owner-thread", env)).length;
+  const revokedBody = JSON.stringify({
+    clientTurnId: "99999999-9999-4999-8999-999999999999",
+    transcript: "This revoked device must not dispatch",
+    locale: "en-US",
+  });
+  const revokedRetry = await fetch(`${baseUrl}/api/mobile/voice-turns`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${completed.accessToken}`,
+      "content-type": "application/json",
+      "x-orkestr-content-sha256": sha256(revokedBody),
+      "x-orkestr-device-proof": signJwt(keys.privateKey, timedClaims({
+        aud: "orkestr.mobile.request",
+        sid: completed.session.id,
+        did: completed.device.id,
+        ath: sha256(completed.accessToken),
+        method: "POST",
+        path: "/api/mobile/voice-turns",
+        bodySha256: sha256(revokedBody),
+        jti: "http-revoked-proof",
+      })),
+    },
+    body: revokedBody,
+  });
+  assert.equal(revokedRetry.status, 401);
+  assert.equal((await listThreadMessages("hush-owner-thread", env)).length, beforeRevokedRetry);
+
+  let limitedResponse;
+  for (let index = 0; index < 5; index += 1) {
+    limitedResponse = await fetch(`${baseUrl}/api/mobile/pairing/start`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ deviceName: `Rate phone ${index}`, publicKeyJwk: keys.publicJwk }),
+    });
+    if (limitedResponse.status === 429) break;
+  }
+  assert.equal(limitedResponse.status, 429);
+  assert.ok(Number(limitedResponse.headers.get("retry-after")) > 0);
 });

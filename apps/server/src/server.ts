@@ -85,11 +85,15 @@ function whatsappDeliveryPollIntervalMs(env = process.env) {
 }
 
 export async function createApp(): Promise<INestApplication> {
-  const app = await NestFactory.create<NestExpressApplication>(AppModule, { logger: false });
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, { logger: false, rawBody: true });
   // Static fallback routes are registered before Nest initializes its default
   // parsers. Register the small form parser explicitly so the public instance
   // entry POST can resolve the submitted name/reference in the live server.
   app.useBodyParser("urlencoded", { extended: false, limit: "8kb" });
+  // Mobile device proofs bind the exact JSON payload hash. Register the JSON
+  // parser before authentication so Nest's rawBody support is available to
+  // the machine-auth boundary, not only to controllers.
+  app.useBodyParser("json", { limit: "100kb" });
   app.use((request, response, next) => {
     sanitizeForwardedHostHeaders(request, process.env);
     applyTrustedOperatorProxy(request, process.env);

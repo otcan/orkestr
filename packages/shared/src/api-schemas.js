@@ -187,24 +187,17 @@ export const vagentWebhookSchema = {
   },
 };
 
-// Hush is a device-bound mobile surface. Its authenticated device profile
-// selects the target thread on the server; callers may submit only text and a
-// client-generated idempotency key. In particular, raw audio, thread IDs, and
-// command/control switches are deliberately absent from this boundary.
-export const mobileVoiceTurnSchema = {
-  body: {
-    type: "object",
-    required: ["clientTurnId", "transcript", "locale"],
-    properties: {
-      clientTurnId: { type: "string", strict: true, minLength: 36, maxLength: 64 },
-      transcript: { type: "string", strict: true, minLength: 1, maxLength: 12000 },
-      locale: { type: "string", strict: true, minLength: 1, maxLength: 64 },
-    },
-    additionalProperties: false,
-  },
-};
-
-export const mobileVoiceTurnParamsSchema = idParams("turnId");
+export {
+  mobileDeviceParamsSchema,
+  mobilePairingApprovalSchema,
+  mobilePairingCompleteSchema,
+  mobilePairingParamsSchema,
+  mobilePairingPollSchema,
+  mobilePairingStartSchema,
+  mobileSessionRefreshSchema,
+  mobileVoiceTurnParamsSchema,
+  mobileVoiceTurnSchema,
+} from "./mobile-api-schemas.js";
 
 export const threadUiInputSchema = {
   ...idParams("threadId"),

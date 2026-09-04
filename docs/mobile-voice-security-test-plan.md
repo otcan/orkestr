@@ -124,25 +124,59 @@ must not make the system under test safer than production:
 incremental SSE decoder that tolerates split chunks, `Last-Event-ID` headers,
 eventual assertions, and safe-error checks.
 
-## Interfaces that must be fixed by the MobileModule
+## Implemented MobileModule pairing and authentication contract
 
-The turn controller, closed create schema, per-turn event IDs, SSE heartbeat,
-terminal close, server-selected binding, durable idempotency, parent-linked
-final selection, and safe deterministic speech are defined. The remaining
-integration blockers are:
+The native client uses these closed public routes:
 
-- pairing start, owner approval, signed proof, refresh, and revoke endpoint
-  paths and request/response schemas;
-- the canonical device-proof input, header names, timestamp skew, nonce
-  lifetime, and replay behavior;
-- access/refresh expiry and rotation behavior, including refresh reuse denial;
-- rate-limit keys, windows, limits, and `Retry-After` behavior;
-- stable public authentication error codes and refresh-reuse behavior;
-- strict string types and bounds for every machine-auth context identifier;
-- whether revocation closes an already-open SSE immediately in addition to
-  denying its reconnect and subsequent API requests.
+- `POST /api/mobile/pairing/start`
+- `GET /api/mobile/pairing/:pairingId/poll?pollToken=...`
+- `POST /api/mobile/pairing/:pairingId/complete`
+- `POST /api/mobile/session/refresh`
 
-These are interface decisions, not reasons to weaken the fixed requirements:
-proof is mandatory, the binding is server-owned, revocation is checked on every
-new authenticated request, work outlives transport, and final correlation is
-parent-linked.
+The authenticated owner UI uses `GET /api/mobile/profiles`,
+`POST /api/mobile/profiles/:profileId/pairings/approve`,
+`GET /api/mobile/devices`, and
+`POST /api/mobile/devices/:deviceId/revoke`. Public pairing responses and owner
+projections do not expose the private profile-to-thread or owner binding.
+
+The device generates and retains a P-256 private key. Pairing completion and
+every authenticated request carry an ES256 compact JWS. Authenticated and
+refresh requests use `X-Orkestr-Device-Proof`; access requests also use a
+Bearer access token. Request proofs bind `sid`, `did`, method, exact path and
+query, and the SHA-256 hash of the raw JSON body. They bind the access token
+with `ath`, or the refresh token with `rth`. A unique `jti`, numeric `iat` and
+`exp`, and the route-specific audience are mandatory. Proof expiry may be at
+most five minutes in the future, clock skew is bounded to 60 seconds, and a
+replayed `jti` is denied.
+
+Default lifetimes are ten minutes for pairing, two minutes for the approval
+challenge, ten minutes for access, and 30 days for refresh. Refresh rotates both
+credentials atomically, so the previous refresh and access credentials stop
+working. Pairing start defaults to 12 creations per client in ten minutes,
+three pending pairings per client, and 100 pending pairings globally. A limited
+request returns `429` and a positive `Retry-After`.
+
+The private profile binding is loaded from
+`ORKESTR_OVERLAY_DIR/mobile-profiles.json` (or the explicit
+`ORKESTR_MOBILE_PROFILES_FILE`) and requires `id`, `ownerUserId`, and
+`threadId`. Real bindings belong only in the private overlay. A public-shaped
+example is:
+
+```json
+{
+  "profiles": [
+    {
+      "id": "hush-primary",
+      "label": "Hush",
+      "ownerUserId": "example-owner",
+      "threadId": "example-thread"
+    }
+  ]
+}
+```
+
+Revocation removes live sessions immediately. New requests and reconnects are
+denied, and an already-open SSE checks the server-owned device/profile binding
+on each poll and closes with a safe stream failure after revocation. The
+background turn itself remains durable and is not cancelled by transport
+closure.

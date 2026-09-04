@@ -77,6 +77,9 @@ export class MobileVoiceController {
     const writePending = async () => {
       if (closed || response.writableEnded) return;
       try {
+        if (!(await this.mobileVoice.deviceActive(input.device))) {
+          throw new Error("mobile_device_revoked");
+        }
         const current = await this.mobileVoice.get(turnId, input);
         const events = await this.mobileVoice.events(turnId, afterEventId, input);
         for (const event of events) {

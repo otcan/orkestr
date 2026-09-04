@@ -57,6 +57,7 @@ export function jwkThumbprint(jwk = {}) {
 }
 
 export function contentSha256ForRequest(request = {}) {
+  if (Buffer.isBuffer(request?.rawBody)) return sha256(request.rawBody.toString("utf8"));
   const header = String(
     request?.headers?.["x-orkestr-content-sha256"] ||
     request?.headers?.["X-Orkestr-Content-Sha256"] ||

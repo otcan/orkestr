@@ -1,9 +1,15 @@
-import path from "node:path";
-import { dataPaths, ensureDataDirs } from "../../storage/src/paths.js";
-import { appendEvent, readJson, writeSecretJson } from "../../storage/src/store.js";
-import { withStorageFileLock } from "../../storage/src/storage-lock.js";
+import { appendEvent } from "../../storage/src/store.js";
 import { adminPrincipal, userPrincipal } from "./principal.js";
 import { getMobileProfile, listMobileProfiles } from "./mobile-device-profiles.js";
+import {
+  clientMobilePairing,
+  clientMobileSession,
+  ownerMobileDevice,
+  ownerMobilePairing,
+  ownerMobileProfile,
+} from "./mobile-device-projections.js";
+import { readMobileDeviceState, withMobileDeviceState } from "./mobile-device-state.js";
+import { getThreadForPrincipal } from "./threads.js";
 import {
   assertProofFresh,
   contentSha256ForRequest,
@@ -16,7 +22,7 @@ import {
   sha256,
   verifyEs256Proof,
 } from "./mobile-device-crypto.js";
-import { defaultAdminUser, getUser, normalizeUserId } from "./users.js";
+import { defaultAdminUser, getUser } from "./users.js";
 
 const pairingAudience = "orkestr.mobile.pairing";
 const requestAudience = "orkestr.mobile.request";
@@ -24,10 +30,6 @@ const refreshAudience = "orkestr.mobile.refresh";
 
 function mobileAuthEnabled(env = process.env) {
   return String(env.ORKESTR_MOBILE_AUTH_ENABLED || "1").trim() !== "0";
-}
-
-function mobileStatePath(env = process.env) {
-  return env.ORKESTR_MOBILE_DEVICES_FILE || path.join(dataPaths(env).secrets, "mobile-devices.json");
 }
 
 function positiveMs(env, key, fallback, min = 1000) {
@@ -66,10 +68,6 @@ function requestIp(request) {
     .slice(0, 80);
 }
 
-function cleanId(value = "") {
-  return String(value || "").trim().toLowerCase().replace(/[^a-z0-9_.-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 96);
-}
-
 function normalizeMachineContext(input = {}) {
   const value = input && typeof input === "object" && !Array.isArray(input) ? input : {};
   const platform = String(value.platform || "unknown").trim().toLowerCase().replace(/[^a-z0-9_.-]+/g, "-").slice(0, 32) || "unknown";
@@ -87,96 +85,6 @@ function machineContextHash(machineContext) {
   return sha256(JSON.stringify(machineContext));
 }
 
-async function readMobileState(env = process.env) {
-  const state = await readJson(mobileStatePath(env), { version: 1, pairings: [], devices: [], sessions: [], proofs: [] });
-  return {
-    version: 1,
-    pairings: Array.isArray(state.pairings) ? state.pairings : [],
-    devices: Array.isArray(state.devices) ? state.devices : [],
-    sessions: Array.isArray(state.sessions) ? state.sessions : [],
-    proofs: Array.isArray(state.proofs) ? state.proofs : [],
-  };
-}
-
-async function writeMobileState(state, env = process.env) {
-  await ensureDataDirs(env);
-  const now = Date.now();
-  const pairings = (state.pairings || [])
-    .filter((item) => Date.parse(item.expiresAt || item.updatedAt || "") > now || item.status !== "pending")
-    .slice(-500);
-  await writeSecretJson(mobileStatePath(env), {
-    version: 1,
-    pairings,
-    devices: state.devices || [],
-    sessions: (state.sessions || []).filter((item) => Date.parse(item.refreshExpiresAt || "") > now),
-    proofs: (state.proofs || []).filter((item) => Date.parse(item.expiresAt || "") > now),
-    updatedAt: nowIso(),
-  });
-}
-
-function withMobileState(env, operation) {
-  return withStorageFileLock(mobileStatePath(env), async () => {
-    const state = await readMobileState(env);
-    const result = await operation(state);
-    await writeMobileState(state, env);
-    return result;
-  }, {
-    timeoutMs: positiveMs(env, "ORKESTR_MOBILE_AUTH_LOCK_TIMEOUT_MS", 30_000),
-    staleMs: positiveMs(env, "ORKESTR_MOBILE_AUTH_LOCK_STALE_MS", 120_000),
-    heartbeatMs: positiveMs(env, "ORKESTR_MOBILE_AUTH_LOCK_HEARTBEAT_MS", 10_000),
-  });
-}
-
-function publicPairing(pairing = {}) {
-  return {
-    id: pairing.id || "",
-    approveCode: pairing.approveCode || "",
-    status: pairing.status || "pending",
-    profileId: pairing.profileId || "",
-    deviceName: pairing.deviceName || "",
-    machineContext: pairing.machineContext || normalizeMachineContext(),
-    createdAt: pairing.createdAt || "",
-    expiresAt: pairing.expiresAt || "",
-    requestedIp: pairing.requestedIp || "",
-    requestedUserAgent: pairing.requestedUserAgent || "",
-    approvedAt: pairing.approvedAt || "",
-    approvedBy: pairing.approvedBy || "",
-  };
-}
-
-function publicDevice(device = {}) {
-  return {
-    id: device.id || "",
-    profileId: device.profileId || "",
-    userId: device.userId || "",
-    role: device.role || "user",
-    scopes: Array.isArray(device.scopes) ? device.scopes : [],
-    deviceName: device.deviceName || "",
-    machineContext: device.machineContext || normalizeMachineContext(),
-    publicKeyThumbprint: device.publicKeyThumbprint || "",
-    status: device.status || "active",
-    createdAt: device.createdAt || "",
-    lastAccessedAt: device.lastAccessedAt || "",
-    revokedAt: device.revokedAt || "",
-    revokedBy: device.revokedBy || "",
-  };
-}
-
-function publicSession(session = {}) {
-  return {
-    id: session.id || "",
-    deviceId: session.deviceId || "",
-    profileId: session.profileId || "",
-    userId: session.userId || "",
-    role: session.role || "user",
-    scopes: Array.isArray(session.scopes) ? session.scopes : [],
-    accessTokenId: session.accessTokenId || "",
-    refreshTokenId: session.refreshTokenId || "",
-    accessExpiresAt: session.accessExpiresAt || "",
-    refreshExpiresAt: session.refreshExpiresAt || "",
-  };
-}
-
 function pairingByIdOrCode(state, value = "") {
   const id = String(value || "").trim();
   return (state.pairings || []).find((item) =>
@@ -184,35 +92,45 @@ function pairingByIdOrCode(state, value = "") {
   ) || null;
 }
 
+function pairingRateLimitError(code, retryAfterMs) {
+  const error = mobileAuthError(code, 429);
+  error.retryAfterSeconds = Math.max(1, Math.ceil(retryAfterMs / 1000));
+  return error;
+}
+
 function assertPairingStartAllowed(state, context, env) {
   const now = Date.now();
   const pending = (state.pairings || []).filter((item) => item.status === "pending" && Date.parse(item.expiresAt || "") > now);
   const globalLimit = positiveInt(env, "ORKESTR_MOBILE_PAIRING_GLOBAL_PENDING_LIMIT", 100);
-  if (globalLimit > 0 && pending.length >= globalLimit) throw mobileAuthError("mobile_pairing_global_rate_limited", 429);
+  const windowMs = positiveMs(env, "ORKESTR_MOBILE_PAIRING_CREATE_WINDOW_MS", 10 * 60_000);
+  if (globalLimit > 0 && pending.length >= globalLimit) throw pairingRateLimitError("mobile_pairing_global_rate_limited", windowMs);
   const clientPendingLimit = positiveInt(env, "ORKESTR_MOBILE_PAIRING_CLIENT_PENDING_LIMIT", 3);
   const clientPending = pending.filter((item) => item.requestedIp === context.ip && item.requestedUserAgent === context.userAgent);
   if (clientPendingLimit > 0 && clientPending.length >= clientPendingLimit) {
-    throw mobileAuthError("mobile_pairing_client_pending_rate_limited", 429);
+    throw pairingRateLimitError("mobile_pairing_client_pending_rate_limited", windowMs);
   }
-  const windowMs = positiveMs(env, "ORKESTR_MOBILE_PAIRING_CREATE_WINDOW_MS", 10 * 60_000);
   const createLimit = positiveInt(env, "ORKESTR_MOBILE_PAIRING_CLIENT_CREATE_LIMIT", 12);
   const recent = (state.pairings || []).filter((item) =>
     item.requestedIp === context.ip &&
     item.requestedUserAgent === context.userAgent &&
     now - Date.parse(item.createdAt || "") < windowMs
   );
-  if (createLimit > 0 && recent.length >= createLimit) throw mobileAuthError("mobile_pairing_client_rate_limited", 429);
+  if (createLimit > 0 && recent.length >= createLimit) throw pairingRateLimitError("mobile_pairing_client_rate_limited", windowMs);
 }
 
 export async function startMobileDevicePairing({ request = null, body = {}, env = process.env } = {}) {
   if (!mobileAuthEnabled(env)) throw mobileAuthError("mobile_auth_disabled", 404);
   const publicKeyJwk = normalizeDevicePublicJwk(body.publicKeyJwk || body.publicKey || {});
   const machineContext = normalizeMachineContext(body.machineContext || {});
+  if (typeof body.deviceName !== "string" || !body.deviceName.trim() || body.deviceName.trim().length > 120) {
+    throw mobileAuthError("mobile_device_name_invalid", 400);
+  }
+  const deviceName = body.deviceName.trim();
   const context = {
     ip: requestIp(request),
     userAgent: String(request?.headers?.["user-agent"] || "").slice(0, 240),
   };
-  return withMobileState(env, async (state) => {
+  return withMobileDeviceState(env, async (state) => {
     assertPairingStartAllowed(state, context, env);
     const pollToken = randomToken(32);
     const pairing = {
@@ -220,8 +138,7 @@ export async function startMobileDevicePairing({ request = null, body = {}, env 
       approveCode: randomToken(5).replace(/[^A-Za-z0-9]/g, "").slice(0, 8).toUpperCase(),
       pollTokenHash: sha256(pollToken),
       status: "pending",
-      profileId: cleanId(body.profileId || ""),
-      deviceName: String(body.deviceName || machineContext.deviceName || "").trim().slice(0, 120),
+      deviceName,
       publicKeyJwk,
       publicKeyThumbprint: jwkThumbprint(publicKeyJwk),
       machineContext,
@@ -232,61 +149,67 @@ export async function startMobileDevicePairing({ request = null, body = {}, env 
       expiresAt: new Date(Date.now() + pairingTtlMs(env)).toISOString(),
     };
     state.pairings.push(pairing);
-    await appendEvent({ type: "mobile_pairing_started", pairingId: pairing.id, profileId: pairing.profileId || null }, env).catch(() => {});
-    return { ok: true, pairing: publicPairing(pairing), pollToken };
+    await appendEvent({ type: "mobile_pairing_started", pairingId: pairing.id }, env).catch(() => {});
+    return { ok: true, pairing: clientMobilePairing(pairing, { includeApproveCode: true }), pollToken };
   });
 }
 
-export async function listMobilePairings({ env = process.env } = {}) {
-  const state = await readMobileState(env);
-  return { pairings: state.pairings.map(publicPairing).sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt))) };
-}
-
 export async function approveMobileDevicePairing(pairingId, { profileId = "", principal = null, env = process.env } = {}) {
-  if (String(principal?.role || "") !== "admin") throw mobileAuthError("mobile_owner_required", 403);
-  return withMobileState(env, async (state) => {
+  const ownerUserId = String(principal?.userId || "").trim();
+  if (!ownerUserId) throw mobileAuthError("mobile_owner_required", 403);
+  return withMobileDeviceState(env, async (state) => {
     const pairing = pairingByIdOrCode(state, pairingId);
     if (!pairing) throw mobileAuthError("mobile_pairing_not_found", 404);
     if (pairing.status !== "pending") throw mobileAuthError(`mobile_pairing_${pairing.status}`, 409);
     if (Date.parse(pairing.expiresAt || "") <= Date.now()) throw mobileAuthError("mobile_pairing_expired", 401);
-    const profile = await getMobileProfile(profileId || pairing.profileId, { env });
+    const profile = await getMobileProfile(profileId, { env });
     if (!profile) throw mobileAuthError("mobile_profile_not_found", 404);
-    const user = await getUser(profile.userId, env);
+    if (profile.ownerUserId !== ownerUserId) throw mobileAuthError("mobile_profile_forbidden", 403);
+    const user = await getUser(profile.ownerUserId, env);
     if (!user || user.status === "disabled") throw mobileAuthError("mobile_profile_user_unavailable", 403);
+    const thread = await getThreadForPrincipal(profile.threadId, principal, env).catch(() => null);
+    if (!thread || String(thread.id || "") !== profile.threadId || String(thread.ownerUserId || ownerUserId) !== ownerUserId) {
+      throw mobileAuthError("mobile_profile_thread_forbidden", 403);
+    }
     Object.assign(pairing, {
       status: "approved",
       profileId: profile.id,
-      userId: normalizeUserId(profile.userId),
-      role: profile.role,
-      scopes: profile.scopes,
+      ownerUserId,
+      threadId: profile.threadId,
+      role: user.role,
       approvedAt: nowIso(),
-      approvedBy: String(principal.userId || "admin").slice(0, 96),
+      approvedBy: ownerUserId.slice(0, 96),
     });
     await appendEvent({ type: "mobile_pairing_approved", pairingId: pairing.id, profileId: profile.id, approvedBy: pairing.approvedBy }, env).catch(() => {});
-    return { ok: true, pairing: publicPairing(pairing) };
+    return { ok: true, pairing: ownerMobilePairing(pairing) };
   });
 }
 
 export async function pollMobileDevicePairing(pairingId, { pollToken = "", env = process.env } = {}) {
-  return withMobileState(env, async (state) => {
+  return withMobileDeviceState(env, async (state) => {
     const pairing = pairingByIdOrCode(state, pairingId);
     if (!pairing || pairing.pollTokenHash !== sha256(pollToken)) throw mobileAuthError("mobile_pairing_not_found", 404);
     if (Date.parse(pairing.expiresAt || "") <= Date.now()) throw mobileAuthError("mobile_pairing_expired", 401);
-    if (pairing.status !== "approved") return { ok: true, pairing: publicPairing(pairing) };
-    const nonce = randomToken(32);
-    Object.assign(pairing, {
-      challengeId: `mc_${randomToken(12)}`,
-      challengeNonceHash: sha256(nonce),
-      challengeIssuedAt: nowIso(),
-      challengeExpiresAt: new Date(Date.now() + challengeTtlMs(env)).toISOString(),
-      challengeConsumedAt: "",
-    });
+    if (pairing.status !== "approved") return { ok: true, pairing: clientMobilePairing(pairing) };
+    const currentChallengeUsable = pairing.challengeId && pairing.challengeNonce && !pairing.challengeConsumedAt &&
+      Date.parse(pairing.challengeExpiresAt || "") > Date.now();
+    if (!currentChallengeUsable) {
+      const nonce = randomToken(32);
+      Object.assign(pairing, {
+        challengeId: `mc_${randomToken(12)}`,
+        challengeNonce: nonce,
+        challengeNonceHash: sha256(nonce),
+        challengeIssuedAt: nowIso(),
+        challengeExpiresAt: new Date(Date.now() + challengeTtlMs(env)).toISOString(),
+        challengeConsumedAt: "",
+      });
+    }
     return {
       ok: true,
-      pairing: publicPairing(pairing),
+      pairing: clientMobilePairing(pairing),
       challenge: {
         id: pairing.challengeId,
-        nonce,
+        nonce: pairing.challengeNonce,
         audience: pairingAudience,
         expiresAt: pairing.challengeExpiresAt,
         machineContext: pairing.machineContext,
@@ -308,7 +231,7 @@ function assertProofUnused(state, sessionId, deviceId, jti, env) {
 }
 
 export async function completeMobileDevicePairing(pairingId, { pollToken = "", challengeId = "", proof = "", env = process.env } = {}) {
-  return withMobileState(env, async (state) => {
+  return withMobileDeviceState(env, async (state) => {
     const pairing = pairingByIdOrCode(state, pairingId);
     if (!pairing || pairing.pollTokenHash !== sha256(pollToken)) throw mobileAuthError("mobile_pairing_not_found", 404);
     if (pairing.status !== "approved") throw mobileAuthError(`mobile_pairing_${pairing?.status || "missing"}`, 409);
@@ -330,9 +253,9 @@ export async function completeMobileDevicePairing(pairingId, { pollToken = "", c
     const device = {
       id: `md_${randomToken(12)}`,
       profileId: pairing.profileId,
-      userId: pairing.userId,
+      ownerUserId: pairing.ownerUserId,
+      threadId: pairing.threadId,
       role: pairing.role,
-      scopes: pairing.scopes || [],
       deviceName: pairing.deviceName,
       machineContext: pairing.machineContext,
       publicKeyJwk: pairing.publicKeyJwk,
@@ -345,9 +268,9 @@ export async function completeMobileDevicePairing(pairingId, { pollToken = "", c
       id: `ms_${randomToken(12)}`,
       deviceId: device.id,
       profileId: device.profileId,
-      userId: device.userId,
+      ownerUserId: device.ownerUserId,
+      threadId: device.threadId,
       role: device.role,
-      scopes: device.scopes,
       accessTokenId: `ma_${randomToken(8)}`,
       accessTokenHash: sha256(accessToken),
       accessExpiresAt: new Date(Date.now() + accessTtlMs(env)).toISOString(),
@@ -357,46 +280,105 @@ export async function completeMobileDevicePairing(pairingId, { pollToken = "", c
       createdAt: now,
       lastAccessedAt: now,
     };
-    Object.assign(pairing, { status: "completed", deviceId: device.id, completedAt: now, challengeConsumedAt: now });
+    Object.assign(pairing, {
+      status: "completed",
+      deviceId: device.id,
+      completedAt: now,
+      challengeConsumedAt: now,
+      challengeNonce: "",
+    });
     state.devices.push(device);
     state.sessions.push(session);
     await appendEvent({ type: "mobile_device_paired", pairingId: pairing.id, deviceId: device.id, profileId: device.profileId }, env).catch(() => {});
-    return { ok: true, device: publicDevice(device), session: publicSession(session), accessToken, refreshToken };
+    return {
+      ok: true,
+      device: ownerMobileDevice(device, session),
+      session: clientMobileSession(session),
+      accessToken,
+      refreshToken,
+    };
   });
 }
 
-export async function listMobileDevices({ env = process.env } = {}) {
-  const state = await readMobileState(env);
-  return { devices: state.devices.map(publicDevice).sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt))) };
+export async function listOwnerMobileProfiles({ principal = null, env = process.env } = {}) {
+  const ownerUserId = String(principal?.userId || "").trim();
+  if (!ownerUserId) throw mobileAuthError("mobile_owner_required", 403);
+  const configured = await listMobileProfiles({ env });
+  return {
+    profiles: configured.profiles
+      .filter((profile) => profile.ownerUserId === ownerUserId)
+      .map(ownerMobileProfile),
+  };
+}
+
+export async function listMobileDevices({ principal = null, env = process.env } = {}) {
+  const ownerUserId = String(principal?.userId || "").trim();
+  if (!ownerUserId) throw mobileAuthError("mobile_owner_required", 403);
+  const state = await readMobileDeviceState(env);
+  return {
+    devices: state.devices
+      .filter((device) => device.ownerUserId === ownerUserId)
+      .map((device) => ownerMobileDevice(
+        device,
+        state.sessions.find((session) => session.deviceId === device.id) || null,
+      ))
+      .sort((a, b) => String(b.pairedAt || "").localeCompare(String(a.pairedAt || ""))),
+  };
 }
 
 export async function revokeMobileDevice(deviceId, { principal = null, env = process.env } = {}) {
-  if (String(principal?.role || "") !== "admin") throw mobileAuthError("mobile_owner_required", 403);
-  return withMobileState(env, async (state) => {
-    const device = (state.devices || []).find((item) => item.id === deviceId);
+  const ownerUserId = String(principal?.userId || "").trim();
+  if (!ownerUserId) throw mobileAuthError("mobile_owner_required", 403);
+  return withMobileDeviceState(env, async (state) => {
+    const device = (state.devices || []).find((item) => item.id === deviceId && item.ownerUserId === ownerUserId);
     if (!device) throw mobileAuthError("mobile_device_not_found", 404);
-    Object.assign(device, { status: "revoked", revokedAt: nowIso(), revokedBy: String(principal.userId || "admin").slice(0, 96) });
+    Object.assign(device, { status: "revoked", revokedAt: nowIso(), revokedBy: ownerUserId.slice(0, 96) });
     state.sessions = (state.sessions || []).filter((session) => session.deviceId !== device.id);
     await appendEvent({ type: "mobile_device_revoked", deviceId: device.id, revokedBy: device.revokedBy }, env).catch(() => {});
-    return { ok: true, device: publicDevice(device) };
+    return { ok: true, device: ownerMobileDevice(device) };
   });
 }
 
-function machineContextFor(session, device, claims) {
+export async function mobileDeviceContextIsActive(context = {}, env = process.env) {
+  const deviceId = String(context?.deviceId || "").trim();
+  const profileId = String(context?.profileId || "").trim();
+  const threadId = String(context?.threadId || "").trim();
+  const ownerUserId = String(context?.ownerUserId || "").trim();
+  if (!deviceId || !profileId || !threadId || !ownerUserId) return false;
+  const state = await readMobileDeviceState(env);
+  const device = (state.devices || []).find((item) =>
+    item.id === deviceId &&
+    item.status === "active" &&
+    item.profileId === profileId &&
+    item.threadId === threadId &&
+    item.ownerUserId === ownerUserId
+  );
+  if (!device) return false;
+  const profile = await getMobileProfile(profileId, { env });
+  return Boolean(
+    profile &&
+    profile.enabled !== false &&
+    profile.threadId === threadId &&
+    profile.ownerUserId === ownerUserId
+  );
+}
+
+function machineContextFor(session, device, profile) {
   return {
-    tokenId: session.accessTokenId,
-    routeKind: "mobile_device",
-    scopes: Array.isArray(session.scopes) ? session.scopes : [],
     principalKind: "mobile_device",
-    principalId: device.id,
-    ownerUserId: session.userId,
-    userId: session.userId,
+    routeKind: "hush_mobile",
     deviceId: device.id,
-    sessionId: session.id,
     profileId: session.profileId,
-    proofJti: String(claims.jti || ""),
-    proofIat: Number(claims.iat || 0),
+    threadId: profile.threadId,
+    ownerUserId: session.ownerUserId,
   };
+}
+
+function hushVoiceRouteAllowed(request = {}) {
+  const method = String(request?.method || "GET").toUpperCase();
+  const path = requestProofPath(request).split("?")[0];
+  if (method === "POST" && /(?:^|\/)api\/mobile\/voice-turns$/.test(path)) return true;
+  return method === "GET" && /(?:^|\/)api\/mobile\/voice-turns\/[^/]+(?:\/events)?$/.test(path);
 }
 
 function validateRequestClaims(claims, session, device, token, request, audience) {
@@ -416,18 +398,27 @@ function validateRequestClaims(claims, session, device, token, request, audience
 export async function authorizeMobileDeviceHttpRequest(request, env = process.env) {
   const token = String(request?.headers?.authorization || "").replace(/^Bearer\s+/i, "").trim();
   if (!token) return null;
-  const initial = await readMobileState(env);
-  const initialSession = (initial.sessions || []).find((item) =>
-    item.accessTokenHash === sha256(token) && Date.parse(item.accessExpiresAt || "") > Date.now()
-  );
+  const tokenHash = sha256(token);
+  const initial = await readMobileDeviceState(env);
+  const initialSession = (initial.sessions || []).find((item) => item.accessTokenHash === tokenHash);
   if (!initialSession) return null;
-  return withMobileState(env, async (state) => {
-    const session = (state.sessions || []).find((item) =>
-      item.accessTokenHash === sha256(token) && Date.parse(item.accessExpiresAt || "") > Date.now()
-    );
-    if (!session) return null;
+  if (!hushVoiceRouteAllowed(request)) {
+    return { ok: false, statusCode: 403, error: "mobile_device_route_forbidden", machineAuth: "mobile_device" };
+  }
+  if (Date.parse(initialSession.accessExpiresAt || "") <= Date.now()) {
+    return { ok: false, statusCode: 401, error: "mobile_access_expired", machineAuth: "mobile_device" };
+  }
+  return withMobileDeviceState(env, async (state) => {
+    const session = (state.sessions || []).find((item) => item.accessTokenHash === tokenHash);
+    if (!session || Date.parse(session.accessExpiresAt || "") <= Date.now()) {
+      return { ok: false, statusCode: 401, error: "mobile_access_expired", machineAuth: "mobile_device" };
+    }
     const device = (state.devices || []).find((item) => item.id === session.deviceId && item.status === "active");
     if (!device) return { ok: false, statusCode: 401, error: "mobile_device_revoked", machineAuth: "mobile_device" };
+    const profile = await getMobileProfile(session.profileId, { env });
+    if (!profile || profile.ownerUserId !== session.ownerUserId || !profile.threadId) {
+      return { ok: false, statusCode: 403, error: "mobile_device_profile_unavailable", machineAuth: "mobile_device" };
+    }
     const proof = String(request?.headers?.["x-orkestr-device-proof"] || "");
     let claims;
     try {
@@ -444,18 +435,18 @@ export async function authorizeMobileDeviceHttpRequest(request, env = process.en
     }
     session.lastAccessedAt = nowIso();
     device.lastAccessedAt = session.lastAccessedAt;
-    const user = await getUser(session.userId, env);
+    const user = await getUser(session.ownerUserId, env);
     if (user?.status === "disabled") return { ok: false, statusCode: 403, error: "user_disabled", machineAuth: "mobile_device" };
-    const principal = session.role === "admin"
-      ? adminPrincipal({ ...(user || defaultAdminUser(env)), id: session.userId })
-      : userPrincipal({ ...(user || {}), id: session.userId, role: "user", source: "mobile-device" });
-    principal.source = "mobile-device";
-    return { ok: true, principal, machineAuth: "mobile_device", machineAuthContext: machineContextFor(session, device, claims) };
+    const principal = user?.role === "admin"
+      ? adminPrincipal({ ...(user || defaultAdminUser(env)), id: session.ownerUserId })
+      : userPrincipal({ ...(user || {}), id: session.ownerUserId, role: "user", source: "hush" });
+    principal.source = "hush";
+    return { ok: true, principal, machineAuth: "mobile_device", machineAuthContext: machineContextFor(session, device, profile) };
   });
 }
 
 export async function refreshMobileDeviceSession({ refreshToken = "", proof = "", request = null, env = process.env } = {}) {
-  return withMobileState(env, async (state) => {
+  return withMobileDeviceState(env, async (state) => {
     const session = (state.sessions || []).find((item) =>
       item.refreshTokenHash === sha256(refreshToken) && Date.parse(item.refreshExpiresAt || "") > Date.now()
     );
@@ -478,7 +469,7 @@ export async function refreshMobileDeviceSession({ refreshToken = "", proof = ""
     });
     device.lastAccessedAt = session.lastAccessedAt;
     await appendEvent({ type: "mobile_session_refreshed", deviceId: device.id, sessionId: session.id }, env).catch(() => {});
-    return { ok: true, session: publicSession(session), accessToken, refreshToken: nextRefreshToken };
+    return { ok: true, session: clientMobileSession(session), accessToken, refreshToken: nextRefreshToken };
   });
 }
 
