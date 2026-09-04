@@ -1,6 +1,9 @@
 import { listThreadMessages } from "./threads.js";
 import { clean } from "./codex-app-server-common.js";
-import { trustedUiReplyDeliveryIntent, uiReplyDeliveryProjectionParent } from "./reply-delivery-intent.js";
+import {
+  replyDeliveryProjectionParent as boundWhatsAppReplyDeliveryProjectionParent,
+  trustedReplyDeliveryIntent,
+} from "./reply-delivery-intent.js";
 
 const whatsappSources = new Set(["whatsapp", "whatsapp_inbound", "whatsapp_client"]);
 
@@ -46,18 +49,18 @@ export function threadWhatsAppBindingParent(thread = null) {
 }
 
 function whatsappParentChatId(parent = null, thread = null) {
-  const intent = trustedUiReplyDeliveryIntent(parent || {});
+  const intent = trustedReplyDeliveryIntent(parent || {});
   return clean(intent?.target?.chatId || parent?.chatId || thread?.binding?.chatId);
 }
 
 function whatsappParentAccountId(parent = null, thread = null) {
   const binding = thread?.binding || {};
-  const intent = trustedUiReplyDeliveryIntent(parent || {});
+  const intent = trustedReplyDeliveryIntent(parent || {});
   return clean(intent?.target?.accountId || parent?.accountId || binding.responderAccountId || binding.outboundAccountId);
 }
 
 export function replyDeliveryProjectionParent(message = null) {
-  return uiReplyDeliveryProjectionParent(message || {});
+  return boundWhatsAppReplyDeliveryProjectionParent(message || {});
 }
 
 export function whatsappProjectionFields(parent = null, thread = null) {

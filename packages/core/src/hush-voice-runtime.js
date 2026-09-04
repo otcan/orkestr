@@ -10,6 +10,7 @@ import {
 import { requestThreadInputDelivery, runtimeStatus } from "./runtime-leases.js";
 import { processApiAgentThreadInput, threadUsesApiAgent } from "./tenant-api-agent.js";
 import { snapshotEnvironment } from "../../storage/src/test-storage-isolation.js";
+import { createHushReplyDeliveryIntent } from "./reply-delivery-intent.js";
 
 export const HUSH_MOBILE_MACHINE_AUTH = "mobile_device";
 export const HUSH_MOBILE_ROUTE_KIND = "hush_mobile";
@@ -189,6 +190,7 @@ export function hushMobileDeviceContext(request = {}) {
     profileId: deviceContextIdentifier(context, "profileId"),
     threadId: deviceContextIdentifier(context, "threadId"),
     ownerUserId: deviceContextIdentifier(context, "ownerUserId"),
+    ...(context.mirrorRepliesToWhatsApp === true ? { mirrorRepliesToWhatsApp: true } : {}),
   };
   return device;
 }
@@ -279,13 +281,20 @@ export async function createHushVoiceTurn(input = {}, options = {}) {
     if (clean(thread.ownerUserId) && clean(thread.ownerUserId) !== clean(device.ownerUserId)) {
       throw httpError("mobile_voice_profile_thread_forbidden", 403);
     }
+    const replyDeliveryIntent = createHushReplyDeliveryIntent(thread, {
+      enabled: device.mirrorRepliesToWhatsApp === true,
+      requestedByUserId: device.ownerUserId,
+    });
     const message = await dependencies.enqueueThreadInputForPrincipal(thread.id, {
       source: "hush",
+      originSurface: "mobile",
+      originTransport: "hush-mobile",
       text: transcript,
       externalId: clean(device.deviceId),
       clientMessageId: `hush:${clean(device.deviceId)}:${clientTurnId}`,
       attachments: [],
       commandProcessing: "disabled",
+      ...(replyDeliveryIntent ? { replyDeliveryIntent } : {}),
     }, principal, env);
     const now = nowIso();
     const turn = {

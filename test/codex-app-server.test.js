@@ -40,6 +40,7 @@ import { cancelTaskAgent, createTaskAgent } from "../packages/core/src/task-agen
 import { CodexAppServerClient } from "../packages/core/src/codex-app-server-client.js";
 import { readConnectorOutbox } from "../packages/connectors/src/connector-outbox.js";
 import { reconcileCodexFinalProjection } from "../packages/core/src/codex-final-projection.js";
+import { createHushReplyDeliveryIntent } from "../packages/core/src/reply-delivery-intent.js";
 
 function response(payload, ok = true, status = 200) {
   return {
@@ -4538,6 +4539,66 @@ test("Codex app-server history hydration projects WhatsApp final replies", async
   assert.equal(consumeThreadConnectorDeliverySignalCount(), 1);
 });
 
+test("Codex app-server history hydration restores an opted-in Hush WhatsApp mirror", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-history-hush-wa-"));
+  const env = { ORKESTR_HOME: path.join(home, "orkestr") };
+  consumeThreadConnectorDeliverySignalCount();
+  const thread = await createThread({
+    id: "app-server-history-hush-wa-thread",
+    name: "History Hush WhatsApp Thread",
+    ownerUserId: "tenant-a",
+    cwd: home,
+    executorId: "codex",
+    executor: { type: "codex" },
+    binding: {
+      id: "hush-history-binding",
+      connector: "whatsapp",
+      chatId: "chat-history-hush-wa",
+      outboundAccountId: "wa-history",
+      enabled: true,
+      routeEligible: true,
+      mirrorToWhatsApp: true,
+    },
+  }, env);
+  const input = await appendThreadMessage(thread.id, {
+    role: "user",
+    source: "hush",
+    originSurface: "mobile",
+    originTransport: "hush-mobile",
+    text: "Recover and mirror this answer",
+    state: "completed",
+    deliveryState: "delivered",
+    codexThreadId: "codex-history-hush-wa-thread",
+    codexTurnId: "codex-history-hush-wa-turn",
+    replyDeliveryIntent: createHushReplyDeliveryIntent(thread, {
+      enabled: true,
+      requestedByUserId: "tenant-a",
+      id: "hush-history-intent",
+    }),
+  }, env);
+  const codexThread = {
+    id: "codex-history-hush-wa-thread",
+    turns: [{
+      id: "codex-history-hush-wa-turn",
+      threadId: "codex-history-hush-wa-thread",
+      status: "completed",
+      items: [{ type: "agentMessage", id: "history-hush-wa-final", text: "Recovered Hush answer.", phase: "final_answer" }],
+    }],
+  };
+
+  await hydrateCodexAppServerThreadMessages(thread, codexThread, env);
+  await hydrateCodexAppServerThreadMessages(thread, codexThread, env);
+  const messages = await listThreadMessages(thread.id, env);
+  const reply = messages.find((message) => message.role === "assistant" && message.text === "Recovered Hush answer.");
+  const outbox = await readConnectorOutbox(env);
+
+  assert.equal(reply?.parentMessageId, input.id);
+  assert.equal(reply?.connector, "whatsapp");
+  assert.equal(reply?.chatId, "chat-history-hush-wa");
+  assert.equal(outbox.jobs.filter((job) => job.sourceMessageId === reply?.id && job.deliveryType === "final").length, 1);
+  assert.equal(consumeThreadConnectorDeliverySignalCount(), 1);
+});
+
 test("Codex app-server history hydration does not borrow stale WhatsApp parents for non-WhatsApp turns", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-history-nonwa-"));
   const env = { ORKESTR_HOME: path.join(home, "orkestr") };
@@ -4663,6 +4724,76 @@ test("Codex app-server live projection does not borrow stale WhatsApp parents fo
   assert.equal(reply?.accountId || "", "");
   assert.equal(outbox.jobs.filter((job) => job.sourceMessageId === reply?.id).length, 0);
   assert.equal(consumeThreadConnectorDeliverySignalCount(), 0);
+});
+
+test("Codex app-server live projection mirrors an explicitly opted-in Hush reply through the durable outbox", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-live-hush-wa-"));
+  const env = { ORKESTR_HOME: path.join(home, "orkestr") };
+  consumeThreadConnectorDeliverySignalCount();
+  const codexThreadId = "codex-live-hush-wa-thread";
+  const turnId = "live-hush-wa-turn";
+  const thread = await createThread({
+    id: "app-server-live-hush-wa-thread",
+    name: "Live Hush WhatsApp Thread",
+    ownerUserId: "tenant-a",
+    cwd: home,
+    executorId: "codex",
+    executor: { type: "codex", codexThreadId, codexSessionId: codexThreadId },
+    runtimeKind: "codex-app-server",
+    codexThreadId,
+    codexSessionId: codexThreadId,
+    binding: {
+      id: "hush-wa-binding",
+      connector: "whatsapp",
+      chatId: "chat-live-hush-wa",
+      outboundAccountId: "wa-live",
+      enabled: true,
+      routeEligible: true,
+      mirrorToWhatsApp: true,
+    },
+    runtime: {
+      runtimeKind: "codex-app-server",
+      state: "ready",
+      codexThreadId,
+      codexSessionId: codexThreadId,
+      runtimeGeneration: codexThreadId,
+    },
+  }, env);
+  const hushInput = await appendThreadMessage(thread.id, {
+    role: "user",
+    source: "hush",
+    originSurface: "mobile",
+    originTransport: "hush-mobile",
+    text: "Mirror the final answer",
+    state: "completed",
+    deliveryState: "delivered",
+    codexThreadId,
+    codexTurnId: turnId,
+    replyDeliveryIntent: createHushReplyDeliveryIntent(thread, {
+      enabled: true,
+      requestedByUserId: "tenant-a",
+      id: "hush-wa-intent",
+    }),
+  }, env);
+  const client = new CodexAppServerClient({ env });
+  client.rememberTurnParent(codexThreadId, turnId, hushInput);
+
+  const reply = await client.projectItem(
+    { type: "agentMessage", id: "live-hush-wa-final", text: "Hush and WhatsApp final.", phase: "final_answer" },
+    { threadId: codexThreadId, turnId, timestamp: "2026-09-04T14:30:00.000Z" },
+    codexThreadId,
+  );
+  const outbox = await readConnectorOutbox(env);
+  const storedThread = await getThread(thread.id, env);
+
+  assert.equal(reply?.parentMessageId, hushInput.id);
+  assert.equal(reply?.connector, "whatsapp");
+  assert.equal(reply?.chatId, "chat-live-hush-wa");
+  assert.equal(reply?.accountId, "wa-live");
+  assert.equal(storedThread.runtime.finalDelivery.messageId, reply.id);
+  assert.equal(storedThread.runtime.finalDelivery.status, "pending");
+  assert.equal(outbox.jobs.filter((job) => job.sourceMessageId === reply?.id && job.deliveryType === "final").length, 1);
+  assert.equal(consumeThreadConnectorDeliverySignalCount(), 1);
 });
 
 test("Codex app-server live projection coalesces duplicate final items in one turn", async () => {

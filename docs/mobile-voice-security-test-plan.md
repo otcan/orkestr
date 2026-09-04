@@ -163,8 +163,12 @@ The private profile binding is preferably stored through Orkestr secure input
 under the global `hush-mobile-profiles` name. Existing deployments may instead
 load `ORKESTR_OVERLAY_DIR/mobile-profiles.json` (or the explicit
 `ORKESTR_MOBILE_PROFILES_FILE`). Each profile requires `id`, `ownerUserId`, and
-`threadId`. Real bindings belong only in encrypted private state or the private
-overlay. A public-shaped example is:
+`threadId`. The optional `mirrorRepliesToWhatsApp` flag defaults to `false`.
+When explicitly enabled, completed Hush replies use the profile thread's
+eligible WhatsApp binding and the normal durable, fenced connector outbox. The
+mobile client still receives no connector, chat, owner, or thread identifiers.
+Real bindings belong only in encrypted private state or the private overlay. A
+public-shaped example is:
 
 ```json
 {
@@ -173,7 +177,8 @@ overlay. A public-shaped example is:
       "id": "hush-primary",
       "label": "Hush",
       "ownerUserId": "example-owner",
-      "threadId": "example-thread"
+      "threadId": "example-thread",
+      "mirrorRepliesToWhatsApp": true
     }
   ]
 }
@@ -182,7 +187,7 @@ overlay. A public-shaped example is:
 An administrator can persist that JSON without putting it in shell history:
 
 ```bash
-printf '%s\n' '{"profiles":[{"id":"hush-primary","label":"Hush","ownerUserId":"example-owner","threadId":"example-thread"}]}' \
+printf '%s\n' '{"profiles":[{"id":"hush-primary","label":"Hush","ownerUserId":"example-owner","threadId":"example-thread","mirrorRepliesToWhatsApp":true}]}' \
   | orkestr secret set hush-mobile-profiles --global --stdin
 ```
 

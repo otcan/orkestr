@@ -64,6 +64,7 @@ async function setupMobileEnv(t, extra = {}, options = {}) {
         label: "Owner Phone",
         ownerUserId: "admin",
         threadId: "hush-owner-thread",
+        mirrorRepliesToWhatsApp: true,
       }],
     }));
   }
@@ -142,6 +143,7 @@ test("mobile profiles can come from encrypted secure input", async (t) => {
         label: "Owner Phone",
         ownerUserId: "admin",
         threadId: "hush-owner-thread",
+        mirrorRepliesToWhatsApp: true,
       }],
     }),
   }, adminPrincipal({ id: "admin" }), env);
@@ -153,6 +155,7 @@ test("mobile profiles can come from encrypted secure input", async (t) => {
     ownerUserId: "admin",
     threadId: "hush-owner-thread",
     enabled: true,
+    mirrorRepliesToWhatsApp: true,
   }]);
 });
 
@@ -260,6 +263,7 @@ test("mobile access uses exact Hush context, rejects replay, and cannot authoriz
     profileId: "owner-phone",
     threadId: "hush-owner-thread",
     ownerUserId: "admin",
+    mirrorRepliesToWhatsApp: true,
   });
   assert.equal(await mobileDeviceContextIsActive(authorized.machineAuthContext, env), true);
   const replay = await authorizeMobileDeviceHttpRequest(request, env);
@@ -441,6 +445,7 @@ test("mobile module exposes bounded public routes and owner controls", async (t)
   assert.deepEqual(ownerProfilesBody.profiles.map((profile) => profile.id), ["owner-phone"]);
   assert.equal(JSON.stringify(ownerProfilesBody).includes("hush-owner-thread"), false);
   assert.equal(JSON.stringify(ownerProfilesBody).includes("ownerUserId"), false);
+  assert.equal(JSON.stringify(ownerProfilesBody).includes("mirrorRepliesToWhatsApp"), false);
 
   const approvedResponse = await fetch(`${baseUrl}/api/mobile/profiles/owner-phone/pairings/approve`, {
     method: "POST",

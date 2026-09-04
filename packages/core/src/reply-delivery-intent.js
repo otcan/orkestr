@@ -97,11 +97,10 @@ export function whatsappReplyDeliveryBindingEligible(binding = {}) {
     binding.retired !== true;
 }
 
-export function createUiReplyDeliveryIntent(thread = {}, options = {}) {
-  if (clean(options.mode).toLowerCase() !== "bound_whatsapp") return null;
+function createBoundWhatsAppReplyDeliveryIntent(thread = {}, options = {}) {
   const binding = thread.binding || {};
   const requestedAt = clean(options.requestedAt) || nowIso();
-  const featureGate = uiReplyDeliveryFeatureGate(thread, options.env || process.env);
+  const featureGate = options.featureGate || { enabled: true, reason: "" };
   const eligible = featureGate.enabled && whatsappReplyDeliveryBindingEligible(binding);
   const target = {
     threadId: clean(thread.id),
@@ -115,6 +114,7 @@ export function createUiReplyDeliveryIntent(thread = {}, options = {}) {
     version: 1,
     id: clean(options.id) || randomUUID(),
     serverAuthored: true,
+    issuedFor: clean(options.issuedFor),
     channel: "whatsapp",
     mode: "bound_whatsapp",
     status: eligible ? "pending_reply" : "policy_skipped",
@@ -127,21 +127,59 @@ export function createUiReplyDeliveryIntent(thread = {}, options = {}) {
   return intent;
 }
 
-function serverUiReplyDeliveryIntent(message = {}) {
+export function createUiReplyDeliveryIntent(thread = {}, options = {}) {
+  if (clean(options.mode).toLowerCase() !== "bound_whatsapp") return null;
+  return createBoundWhatsAppReplyDeliveryIntent(thread, {
+    ...options,
+    issuedFor: "webui",
+    featureGate: uiReplyDeliveryFeatureGate(thread, options.env || process.env),
+  });
+}
+
+export function createHushReplyDeliveryIntent(thread = {}, options = {}) {
+  if (options.enabled !== true) return null;
+  return createBoundWhatsAppReplyDeliveryIntent(thread, {
+    ...options,
+    mode: "bound_whatsapp",
+    issuedFor: "hush-mobile",
+  });
+}
+
+function serverReplyDeliveryIntent(message = {}) {
   const intent = message.replyDeliveryIntent;
   if (!intent || typeof intent !== "object" || Array.isArray(intent)) return null;
   if (intent.serverAuthored !== true || intent.channel !== "whatsapp" || intent.mode !== "bound_whatsapp") return null;
-  if (clean(message.source).toLowerCase() !== "ui" || clean(message.originSurface).toLowerCase() !== "webui") return null;
+  const issuedFor = clean(intent.issuedFor).toLowerCase();
+  const source = clean(message.source).toLowerCase();
+  const originSurface = clean(message.originSurface).toLowerCase();
+  const originTransport = clean(message.originTransport).toLowerCase();
+  const trustedUi = (!issuedFor || issuedFor === "webui") && source === "ui" && originSurface === "webui";
+  const trustedHush = issuedFor === "hush-mobile" && source === "hush" &&
+    originSurface === "mobile" && originTransport === "hush-mobile";
+  if (!trustedUi && !trustedHush) return null;
   return intent;
 }
 
 export function trustedUiReplyDeliveryIntent(message = {}) {
-  const intent = serverUiReplyDeliveryIntent(message);
-  if (!intent) return null;
+  const intent = serverReplyDeliveryIntent(message);
+  if (!intent || clean(intent.issuedFor).toLowerCase() === "hush-mobile") return null;
   const target = intent.target;
   if (!target || typeof target !== "object" || Array.isArray(target)) return null;
   if (!clean(target.threadId) || !clean(target.chatId) || !clean(target.bindingRevision)) return null;
   return intent;
+}
+
+export function trustedHushReplyDeliveryIntent(message = {}) {
+  const intent = serverReplyDeliveryIntent(message);
+  if (!intent || clean(intent.issuedFor).toLowerCase() !== "hush-mobile") return null;
+  const target = intent.target;
+  if (!target || typeof target !== "object" || Array.isArray(target)) return null;
+  if (!clean(target.threadId) || !clean(target.chatId) || !clean(target.bindingRevision)) return null;
+  return intent;
+}
+
+export function trustedReplyDeliveryIntent(message = {}) {
+  return trustedUiReplyDeliveryIntent(message) || trustedHushReplyDeliveryIntent(message);
 }
 
 export function uiReplyDeliveryProjectionParent(message = {}) {
@@ -155,8 +193,19 @@ export function uiReplyDeliveryProjectionParent(message = {}) {
   };
 }
 
+export function replyDeliveryProjectionParent(message = {}) {
+  const intent = trustedReplyDeliveryIntent(message);
+  if (!intent || !["pending_reply", "queued"].includes(clean(intent.status).toLowerCase())) return null;
+  return {
+    ...message,
+    connector: "whatsapp",
+    chatId: clean(intent.target.chatId),
+    accountId: clean(intent.target.accountId),
+  };
+}
+
 export function replyDeliveryBindingFence(parent = {}, thread = {}) {
-  const intent = trustedUiReplyDeliveryIntent(parent);
+  const intent = trustedReplyDeliveryIntent(parent);
   if (!intent) return { applies: false, allowed: true, reason: "" };
   if (!["pending_reply", "queued"].includes(clean(intent.status).toLowerCase())) {
     return { applies: true, allowed: false, reason: clean(intent.reason) || `intent_${clean(intent.status) || "not_pending"}`, intent };
@@ -186,7 +235,7 @@ export function replyDeliveryBindingFence(parent = {}, thread = {}) {
 }
 
 export function replyDeliveryIntentStatusPatch(message = {}, status = "", options = {}) {
-  const intent = trustedUiReplyDeliveryIntent(message);
+  const intent = trustedReplyDeliveryIntent(message);
   if (!intent) return null;
   const normalized = clean(status).toLowerCase();
   if (!normalized) return null;
@@ -208,7 +257,7 @@ export function replyDeliveryIntentStatusPatch(message = {}, status = "", option
 }
 
 export function publicReplyDeliveryIntentMessage(message = {}) {
-  const intent = serverUiReplyDeliveryIntent(message);
+  const intent = serverReplyDeliveryIntent(message);
   if (!intent) return message;
   return {
     ...message,

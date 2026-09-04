@@ -41,6 +41,7 @@ function normalizeProfile(input = {}) {
     ownerUserId,
     threadId,
     enabled: input.enabled !== false,
+    mirrorRepliesToWhatsApp: input.mirrorRepliesToWhatsApp === true,
   };
 }
 

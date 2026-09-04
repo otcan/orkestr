@@ -2,7 +2,7 @@ import { resourceOwnerUserId } from "./policy.js";
 import { recordRouterTraceEvent } from "./router-traces.js";
 import { updateThreadMessage } from "./threads.js";
 import { abortable, throwIfAborted } from "./router-doctor-abort.js";
-import { replyDeliveryBindingFence, replyDeliveryIntentStatusPatch, trustedUiReplyDeliveryIntent } from "./reply-delivery-intent.js";
+import { replyDeliveryBindingFence, replyDeliveryIntentStatusPatch, trustedReplyDeliveryIntent } from "./reply-delivery-intent.js";
 
 function clean(value = "") {
   return String(value || "").trim();
@@ -78,7 +78,7 @@ export function orphanedWhatsAppFinalAnswerIssues({
   }
   const existingMessageIds = new Set(issues.map((issue) => clean(issue.messageId)));
   for (const parent of messages) {
-    const intent = trustedUiReplyDeliveryIntent(parent);
+    const intent = trustedReplyDeliveryIntent(parent);
     if (!intent || !["pending_reply", "queued"].includes(lower(intent.status))) continue;
     const message = messages.find((candidate) =>
       candidate.role === "assistant" &&

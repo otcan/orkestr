@@ -34,8 +34,8 @@ function dependencies(deliveries = []) {
   };
 }
 
-async function createHushThread(id, env) {
-  await createThread({ id, name: id, ownerUserId: "admin" }, env);
+async function createHushThread(id, env, extra = {}) {
+  await createThread({ id, name: id, ownerUserId: "admin", ...extra }, env);
 }
 
 async function createTurn({ env, deviceContext, clientTurnId, transcript, locale = "en-US", dependencies: dependencyOverrides = {} }) {
@@ -82,6 +82,52 @@ test("Hush accepts normal disabled-command input, persists only turn metadata, a
   assert.equal(stored.turns[0].contentHash.length, 64);
   assert.equal(JSON.stringify(stored).includes("/stop after you summarize this"), false);
   assert.equal(JSON.stringify(stored).includes("audio"), false);
+});
+
+test("Hush WhatsApp reply mirroring requires an explicit server profile flag and stores only a fenced delivery intent", async () => {
+  const env = await testEnv("whatsapp-mirror-intent");
+  await createHushThread("hush-thread", env, {
+    binding: {
+      id: "hush-wa-binding",
+      connector: "whatsapp",
+      chatId: "chat-hush",
+      responderAccountId: "account-hush",
+      enabled: true,
+      routeEligible: true,
+      mirrorToWhatsApp: true,
+    },
+  });
+  const mirroredContext = { ...device("phone-a", "hush-thread"), mirrorRepliesToWhatsApp: true };
+  const mirrored = await createTurn({
+    env,
+    deviceContext: mirroredContext,
+    clientTurnId: "11111111-1111-4111-8111-111111111112",
+    transcript: "Mirror only the answer",
+    dependencies: dependencies(),
+  });
+  await createTurn({
+    env,
+    deviceContext: device("phone-b", "hush-thread"),
+    clientTurnId: "11111111-1111-4111-8111-111111111113",
+    transcript: "Keep this answer in Hush",
+    dependencies: dependencies(),
+  });
+  const messages = await listThreadMessages("hush-thread", env);
+  const mirroredInput = messages.find((message) => message.text === "Mirror only the answer");
+  const isolatedInput = messages.find((message) => message.text === "Keep this answer in Hush");
+
+  assert.equal(mirroredInput.source, "hush");
+  assert.equal(mirroredInput.originSurface, "mobile");
+  assert.equal(mirroredInput.originTransport, "hush-mobile");
+  assert.equal(mirroredInput.connector || "", "");
+  assert.equal(mirroredInput.chatId || "", "");
+  assert.equal(mirroredInput.replyDeliveryIntent.issuedFor, "hush-mobile");
+  assert.equal(mirroredInput.replyDeliveryIntent.status, "pending_reply");
+  assert.equal(mirroredInput.replyDeliveryIntent.target.chatId, "chat-hush");
+  assert.equal(isolatedInput.replyDeliveryIntent, undefined);
+  assert.equal(JSON.stringify(mirrored).includes("chat-hush"), false);
+  assert.equal(JSON.stringify(mirrored).includes("account-hush"), false);
+  assert.equal(JSON.stringify(mirrored).includes("whatsapp"), false);
 });
 
 test("Hush clientTurnId is device-scoped, durable, and cannot be reused with different content", async () => {
@@ -473,5 +519,17 @@ test("Hush requires a complete verified device context and speaks markdown deter
       ownerUserId: "admin",
     },
   }), device("phone-a", "server-selected-thread"));
+  assert.deepEqual(hushMobileDeviceContext({
+    orkestrMachineAuth: HUSH_MOBILE_MACHINE_AUTH,
+    orkestrMachineAuthContext: {
+      principalKind: HUSH_MOBILE_MACHINE_AUTH,
+      routeKind: HUSH_MOBILE_ROUTE_KIND,
+      deviceId: "phone-a",
+      profileId: "hush-default",
+      threadId: "server-selected-thread",
+      ownerUserId: "admin",
+      mirrorRepliesToWhatsApp: true,
+    },
+  }), { ...device("phone-a", "server-selected-thread"), mirrorRepliesToWhatsApp: true });
   assert.equal(hushSpeech("Use ```const x = 1;``` then visit https://example.test/a."), "Use Code is shown in the text response. then visit link");
 });

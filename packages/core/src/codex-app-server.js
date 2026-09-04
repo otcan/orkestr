@@ -45,6 +45,7 @@ import { codexAppServerSocket, codexAppServerTransport } from "../../connectors/
 import {
   codexAppServerMessageFields,
   latestWhatsAppParent,
+  replyDeliveryProjectionParent,
   threadWhatsAppBindingParent,
   whatsappOrigin,
   whatsappProjectionFields,
@@ -2651,7 +2652,7 @@ export async function hydrateCodexAppServerThreadMessages(thread, codexThread, e
           clean(message?.codexTurnId || message?.executorTurnId) === turnId
         ) || null;
         const whatsappParent = turnParent
-          ? whatsappOrigin(turnParent) ? turnParent : null
+          ? whatsappOrigin(turnParent) ? turnParent : replyDeliveryProjectionParent(turnParent)
           : await latestWhatsAppParent(thread, timestamp, env) || threadWhatsAppBindingParent(thread);
         const result = await upsertHydratedCodexMessage(thread, {
           role: "assistant",

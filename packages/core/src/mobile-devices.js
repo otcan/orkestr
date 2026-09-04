@@ -371,6 +371,7 @@ function machineContextFor(session, device, profile) {
     profileId: session.profileId,
     threadId: profile.threadId,
     ownerUserId: session.ownerUserId,
+    ...(profile.mirrorRepliesToWhatsApp === true ? { mirrorRepliesToWhatsApp: true } : {}),
   };
 }
 
