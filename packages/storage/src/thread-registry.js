@@ -1,5 +1,7 @@
 import fs from "node:fs/promises";
-import { ensureDataDirs } from "./paths.js";
+import os from "node:os";
+import path from "node:path";
+import { appHome, ensureDataDirs } from "./paths.js";
 import { readJson, writeJson } from "./store.js";
 import { assertPublicRefInvariant, assertUniquePublicRefs } from "./public-references.js";
 import { withStorageFileLock } from "./storage-lock.js";
@@ -44,6 +46,7 @@ export async function saveThreadRecords(threads, env = process.env) {
 }
 
 async function saveThreadRecordsValidated(threads, env, options = {}) {
+  assertTestThreadStoreIsolation(env);
   const records = dedupeThreadRecords(Array.isArray(threads) ? threads : []);
   const db = await openThreadDatabase(env);
   if (!db) {
@@ -111,6 +114,7 @@ function validateThreadPublicRefs(previous, next, options = {}) {
 }
 
 async function saveThreadRecordsInternal(records, env) {
+  assertTestThreadStoreIsolation(env);
   const db = await openThreadDatabase(env);
   if (!db) {
     const paths = await ensureDataDirs(env);
@@ -122,6 +126,20 @@ async function saveThreadRecordsInternal(records, env) {
   const paths = await ensureDataDirs(env);
   await writeJson(paths.threads, records);
   return records;
+}
+
+function assertTestThreadStoreIsolation(env = process.env) {
+  if (!process.env.NODE_TEST_CONTEXT) return;
+  if (String(env.ORKESTR_TEST_ALLOW_NON_TEMP_HOME || "").trim() === "1") return;
+  const home = appHome(env);
+  const temporaryRoot = path.resolve(os.tmpdir());
+  const relative = path.relative(temporaryRoot, home);
+  const insideTemporaryRoot = relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative));
+  if (insideTemporaryRoot) return;
+  throw Object.assign(new Error(`test_thread_store_requires_temp_home:${home}`), {
+    code: "test_thread_store_requires_temp_home",
+    statusCode: 500,
+  });
 }
 
 export async function closeThreadRegistryCache(env = null) {

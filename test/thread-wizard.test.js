@@ -107,12 +107,14 @@ test("main UI exposes a guided first thread generation flow", async () => {
   assert.ok(!wizardSources.includes('executorId: "noop"'));
 });
 
-test("web thread input allows Orkestr control commands", async () => {
+test("web thread input uses the server-stamped UI route", async () => {
   const apiSource = await fs.readFile("apps/web/src/app/api.service.ts", "utf8");
   const sendThreadInput = apiSource.slice(apiSource.indexOf("sendThreadInput("), apiSource.indexOf("wakeThread("));
 
-  assert.ok(sendThreadInput.includes("parseCommands: true"));
-  assert.ok(sendThreadInput.includes("controlAllowed: true"));
+  assert.ok(sendThreadInput.includes("/ui-input"));
+  assert.ok(sendThreadInput.includes('replyDelivery: options.replyDelivery || "ui_only"'));
+  assert.ok(!sendThreadInput.includes("parseCommands: true"));
+  assert.ok(!sendThreadInput.includes("controlAllowed: true"));
 });
 
 test("main UI exposes non-destructive thread retirement controls", async () => {

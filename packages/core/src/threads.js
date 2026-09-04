@@ -8,6 +8,7 @@ import { assertSanitizedAction } from "./llm-sanitizer.js";
 import { normalizeNoReplyAssistantMessage } from "./no-reply.js";
 import { assertResourceAccess, assertThreadLimit, filterResourcesForPrincipal, isAdminPrincipal, policyError, resourceOwnerUserId } from "./policy.js";
 import { resolveThreadAttachments } from "./thread-attachments.js";
+import { hydrateEncryptedPublishedAttachmentPaths, publishThreadAttachmentsEncrypted } from "./encrypted-attachment-publication.js";
 import { userScopedCapabilityHints } from "./user-skills.js";
 import { adminUserId, getUser, normalizeUserId } from "./users.js";
 import {
@@ -802,6 +803,9 @@ export async function appendThreadMessage(threadId, input, env = process.env) {
         notificationId: String(input.shadowBoundaryWarning.notificationId || "").trim(),
       };
     }
+    if (input.replyDeliveryIntent && typeof input.replyDeliveryIntent === "object" && !Array.isArray(input.replyDeliveryIntent)) {
+      nextMessage.replyDeliveryIntent = structuredClone(input.replyDeliveryIntent);
+    }
     nextMessage = normalizeNoReplyAssistantMessage(nextMessage);
     if (input.forceDeliveryAfterInterrupt === true) nextMessage.forceDeliveryAfterInterrupt = true;
     if (input.steerActiveTurn === true || input.steerActiveTurn === false) nextMessage.steerActiveTurn = input.steerActiveTurn;
@@ -819,8 +823,14 @@ export async function appendThreadMessage(threadId, input, env = process.env) {
     });
     nextMessage.text = resolvedAttachments.text;
     attachmentOutcomes = resolvedAttachments.artifactOutcomes;
-    if (resolvedAttachments.attachments.length) {
-      nextMessage.attachments = resolvedAttachments.attachments;
+    const publishedAttachments = role === "assistant"
+      ? await publishThreadAttachmentsEncrypted({ thread, attachments: resolvedAttachments.attachments, env })
+      : { attachments: resolvedAttachments.attachments };
+    if (publishedAttachments.encrypted === true) {
+      attachmentOutcomes = attachmentOutcomes.map((outcome) => ({ ...outcome, filename: "encrypted-artifact" }));
+    }
+    if (publishedAttachments.attachments.length) {
+      nextMessage.attachments = publishedAttachments.attachments;
     }
     await injectRuntimeFault("message_persistence", {
       threadId: thread.id,
@@ -1072,7 +1082,11 @@ export async function updateThreadMessage(threadId, messageId, patch, env = proc
         updatedAt: nowIso(),
       });
       if (normalizeAttachments) {
-        const sourceAttachments = Array.isArray(updated.attachments) ? updated.attachments : [];
+        const sourceAttachments = hydrateEncryptedPublishedAttachmentPaths(
+          thread,
+          Array.isArray(updated.attachments) ? updated.attachments : [],
+          env,
+        );
         const resolvedAttachments = await resolveThreadAttachments({
           thread,
           text: updated.text,
@@ -1081,7 +1095,13 @@ export async function updateThreadMessage(threadId, messageId, patch, env = proc
         });
         updated.text = resolvedAttachments.text;
         attachmentOutcomes = resolvedAttachments.artifactOutcomes;
-        if (resolvedAttachments.attachments.length) updated.attachments = resolvedAttachments.attachments;
+        const publishedAttachments = updated.role === "assistant"
+          ? await publishThreadAttachmentsEncrypted({ thread, attachments: resolvedAttachments.attachments, env })
+          : { attachments: resolvedAttachments.attachments };
+        if (publishedAttachments.encrypted === true) {
+          attachmentOutcomes = attachmentOutcomes.map((outcome) => ({ ...outcome, filename: "encrypted-artifact" }));
+        }
+        if (publishedAttachments.attachments.length) updated.attachments = publishedAttachments.attachments;
         else delete updated.attachments;
       }
       next.push(updated);

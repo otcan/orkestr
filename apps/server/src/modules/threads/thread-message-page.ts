@@ -4,6 +4,8 @@ import {
 } from "../../../../../packages/core/src/threads.js";
 import { addAttachmentDownloadUrls } from "../../../../../packages/core/src/thread-attachments.js";
 import { visibleThreadMessages } from "../../../../../packages/core/src/thread-message-visibility.js";
+import { publicEncryptedAttachmentMessage } from "../../../../../packages/core/src/encrypted-attachment-projection.js";
+import { publicReplyDeliveryIntentMessage } from "../../../../../packages/core/src/reply-delivery-intent.js";
 import { canonicalTimestamp, timestampMs } from "../../../../../packages/core/src/timestamp-normalization.js";
 import {
   syncCodexRuntimeThreadMessages,
@@ -102,7 +104,7 @@ function bridgeMessage(thread: any, message: any, index: number) {
   const text = String(message?.text || "").trim();
   const timestamp = normalizedMessageTimestamp(message) || new Date().toISOString();
   const phase = message?.phase || (role === "assistant" ? "final_answer" : null);
-  return addAttachmentDownloadUrls(thread, {
+  return publicReplyDeliveryIntentMessage(publicEncryptedAttachmentMessage(addAttachmentDownloadUrls(thread, {
     ...message,
     cursor: messageCursor(message, index),
     timestamp,
@@ -114,7 +116,7 @@ function bridgeMessage(thread: any, message: any, index: number) {
     text,
     eventId: message?.eventId || message?.id || `${timestamp}:${index}`,
     awaitingInputCandidate: isNeedInputMessage({ ...message, role, phase, text }),
-  });
+  })));
 }
 
 function normalizedMessageText(value: unknown): string {
@@ -211,7 +213,9 @@ export function threadMessagePage(thread: any, rawMessages: any[] = [], query: R
 
 export async function threadHistoryPayload(thread: any) {
   const messages = chronologicalMessages(await listThreadMessages(thread.id))
-    .map((message) => addAttachmentDownloadUrls(thread, message));
+    .map((message) => publicReplyDeliveryIntentMessage(
+      publicEncryptedAttachmentMessage(addAttachmentDownloadUrls(thread, message)),
+    ));
   return {
     thread,
     orkestrThreadId: thread.id,

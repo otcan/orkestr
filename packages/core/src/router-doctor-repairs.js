@@ -61,7 +61,7 @@ export async function repairIssue(item = {}, context = {}) {
       : null;
     return { code: "release_stale_outbox_claim", ok: Boolean(released), outboxJobId: item.outboxJobId, state: released?.state || "" };
   }
-  if (item.code === "orphaned_whatsapp_final_answer" && repairSafe !== false) {
+  if (["orphaned_whatsapp_final_answer", "orphaned_ui_whatsapp_reply_delivery"].includes(item.code) && repairSafe !== false) {
     return repairOrphanedWhatsAppFinalAnswer(item, { ...context, ensureConnectorOutboxJobFn });
   }
   if (item.code === "queued_whatsapp_input_marked_terminal_without_runtime_delivery" && repairSafe !== false) {

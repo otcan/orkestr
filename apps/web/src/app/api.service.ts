@@ -1443,11 +1443,15 @@ export interface ThreadSummary {
     photoUrl?: string;
     profilePicUrl?: string;
     enabled?: boolean;
+    routeEligible?: boolean;
+    deprecated?: boolean;
+    retired?: boolean;
     allowOtherPeople?: boolean;
     additionalParticipantsEnabled?: boolean;
     additionalParticipantIds?: string[];
     additionalParticipantLabels?: Record<string, string>;
     mirrorToWhatsApp?: boolean;
+    mirrorReplies?: boolean;
     receivingAccountId?: string | null;
     replyAccountId?: string | null;
     bridgeAccountId?: string | null;
@@ -1472,6 +1476,36 @@ export interface ThreadListResponse {
   retiredThreadCount?: number;
   retiredWorkerCountByParentThreadId?: Record<string, number>;
   threads: ThreadSummary[];
+}
+
+export interface AttachmentEncryptionKey {
+  id: string;
+  label?: string;
+  fingerprint: string;
+  status: "pending_verification" | "active" | "revoked" | string;
+  createdAt?: string;
+  verifiedAt?: string;
+  revokedAt?: string;
+  revokedReason?: string;
+  challenge?: {
+    id: string;
+    ciphertext: string;
+    ciphertextChecksum: string;
+    expiresAt: string;
+    format: "age" | string;
+  } | null;
+}
+
+export interface AttachmentEncryptionStatus {
+  ok?: boolean;
+  ready: boolean;
+  policy: {
+    enabled: boolean;
+    required: boolean;
+    revision: number;
+    updatedAt?: string;
+  };
+  keys: AttachmentEncryptionKey[];
 }
 
 export interface ThreadWorkerRetireResponse {
@@ -2913,6 +2947,31 @@ export class ApiService {
     return this.http.put<ThreadBindingResponse>(this.api(`/threads/${encodeURIComponent(id)}/binding`), body);
   }
 
+  attachmentEncryptionStatus(): Observable<AttachmentEncryptionStatus> {
+    return this.http.get<AttachmentEncryptionStatus>(this.api("/attachment-encryption"));
+  }
+
+  registerAttachmentEncryptionRecipient(body: { recipient: string; label?: string }): Observable<{ key: AttachmentEncryptionKey }> {
+    return this.http.post<{ key: AttachmentEncryptionKey }>(this.api("/attachment-encryption/recipients"), body);
+  }
+
+  verifyAttachmentEncryptionRecipient(recipientId: string, proof: string): Observable<{ key: AttachmentEncryptionKey }> {
+    return this.http.post<{ key: AttachmentEncryptionKey }>(
+      this.api(`/attachment-encryption/recipients/${encodeURIComponent(recipientId)}/verify`),
+      { proof },
+    );
+  }
+
+  revokeAttachmentEncryptionRecipient(recipientId: string, reason = "recipient_revoked"): Observable<{ key: AttachmentEncryptionKey }> {
+    return this.http.request<{ key: AttachmentEncryptionKey }>("DELETE", this.api(`/attachment-encryption/recipients/${encodeURIComponent(recipientId)}`), {
+      body: { reason },
+    });
+  }
+
+  updateAttachmentEncryptionPolicy(body: { enabled: boolean; required: boolean }): Observable<AttachmentEncryptionStatus> {
+    return this.http.put<AttachmentEncryptionStatus>(this.api("/attachment-encryption/policy"), body);
+  }
+
   updateThreadRepo(id: string, body: Record<string, unknown>): Observable<ThreadRepoResponse> {
     return this.http.put<ThreadRepoResponse>(this.api(`/threads/${encodeURIComponent(id)}/repo`), body);
   }
@@ -2925,10 +2984,15 @@ export class ApiService {
     return this.http.post<ThreadSyncResponse>(this.api(`/threads/${encodeURIComponent(id)}/sync-parent`), {});
   }
 
-  sendThreadInput(id: string, text: string, attachments: Array<Record<string, unknown>> = []): Observable<ThreadInputResponse> {
-    const body: Record<string, unknown> = { text, parseCommands: true, controlAllowed: true };
+  sendThreadInput(
+    id: string,
+    text: string,
+    attachments: Array<Record<string, unknown>> = [],
+    options: { replyDelivery?: "ui_only" | "bound_whatsapp" } = {},
+  ): Observable<ThreadInputResponse> {
+    const body: Record<string, unknown> = { text, replyDelivery: options.replyDelivery || "ui_only" };
     if (attachments.length) body["attachments"] = attachments;
-    return this.http.post<ThreadInputResponse>(this.api(`/threads/${encodeURIComponent(id)}/input`), body);
+    return this.http.post<ThreadInputResponse>(this.api(`/threads/${encodeURIComponent(id)}/ui-input`), body);
   }
 
   setRuntimeSurface(id: string, runtime: "api" | "terminal"): Observable<ThreadInputResponse> {
@@ -2955,10 +3019,15 @@ export class ApiService {
     return this.http.post(this.api(`/threads/${encodeURIComponent(id)}/recover`), {});
   }
 
-  interruptThread(id: string, text = "", attachments: Array<Record<string, unknown>> = []): Observable<ThreadInputResponse> {
-    const body: Record<string, unknown> = { text };
+  interruptThread(
+    id: string,
+    text = "",
+    attachments: Array<Record<string, unknown>> = [],
+    options: { replyDelivery?: "ui_only" | "bound_whatsapp" } = {},
+  ): Observable<ThreadInputResponse> {
+    const body: Record<string, unknown> = { text, replyDelivery: options.replyDelivery || "ui_only" };
     if (attachments.length) body["attachments"] = attachments;
-    return this.http.post<ThreadInputResponse>(this.api(`/threads/${encodeURIComponent(id)}/interrupt`), body);
+    return this.http.post<ThreadInputResponse>(this.api(`/threads/${encodeURIComponent(id)}/ui-interrupt`), body);
   }
 
   approveThread(id: string, text = "Approved. Proceed."): Observable<unknown> {

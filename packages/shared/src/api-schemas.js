@@ -165,6 +165,24 @@ export const threadInputSchema = {
   },
 };
 
+export const threadUiInputSchema = {
+  ...idParams("threadId"),
+  body: {
+    type: "object",
+    properties: {
+      text: stringValue,
+      clientMessageId: stringValue,
+      idempotencyKey: stringValue,
+      replyDelivery: { type: "string", enum: ["ui_only", "bound_whatsapp"] },
+      attachments: {
+        type: "array",
+        items: objectValue,
+      },
+    },
+    additionalProperties: false,
+  },
+};
+
 export const threadMessagesQuerySchema = {
   ...idParams("threadId"),
   querystring: {

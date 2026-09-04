@@ -13,6 +13,7 @@ import { threadResourcePolicyDoctorCheck } from "./thread-resource-policy-doctor
 import { publicUrlIdentityConfigNames, publicUrlIdentityDiagnostics, publicUrlIdentityRecords } from "./public-url-config.js";
 import { securityStatus } from "./security.js";
 import { hostBoundaryDoctorChecks } from "./host-boundary-doctor.js";
+import { attachmentEncryptionDoctorCheck } from "./attachment-encryption-doctor.js";
 
 const execFileAsync = promisify(execFile);
 function nowIso() {
@@ -551,6 +552,7 @@ export async function systemDoctor({ env = process.env, home = os.homedir() } = 
     ...hostBoundaryChecks,
     await eventStorageCheck(env),
     await threadResourcePolicyDoctorCheck(env),
+    await attachmentEncryptionDoctorCheck(env),
     ...securityDoctorChecks,
   ];
   const { counts, status, summary } = summarize(checks);

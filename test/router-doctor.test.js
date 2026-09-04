@@ -10,6 +10,7 @@ import { listRouterTraces, recordRouterTraceEvent } from "../packages/core/src/r
 import { appendThreadMessage, createThread, listThreadMessages, updateThread } from "../packages/core/src/threads.js";
 import { createThreadMessageRepository } from "../packages/storage/src/repositories.js";
 import { listEvents } from "../packages/storage/src/store.js";
+import { createUiReplyDeliveryIntent } from "../packages/core/src/reply-delivery-intent.js";
 
 function runtimeEnv(home, extra = {}) {
   return {
@@ -544,6 +545,49 @@ test("WhatsApp router doctor repairs orphaned WhatsApp final answers by enqueuin
 
   assert.equal(repairedAgain.checks.some((check) => check.code === "orphaned_whatsapp_final_answer" && check.messageId === final.id), false);
   assert.equal(finalJobsAgain.length, 1);
+});
+
+test("WhatsApp router doctor repairs an orphaned WebUI-requested final without retargeting", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-router-doctor-ui-final-"));
+  const env = runtimeEnv(home);
+  const thread = await createWhatsAppThreadWithId(env, "ui-final");
+  const parent = await appendThreadMessage(thread.id, {
+    role: "user",
+    source: "ui",
+    originSurface: "webui",
+    text: "Reply in both places",
+    state: "completed",
+    replyDeliveryIntent: createUiReplyDeliveryIntent(thread, { mode: "bound_whatsapp", id: "intent-doctor-ui" }),
+  }, env);
+  const final = await appendThreadMessage(thread.id, {
+    role: "assistant",
+    source: "codex-app-server",
+    phase: "final_answer",
+    parentMessageId: parent.id,
+    text: "WebUI final missing its outbox projection.",
+    state: "completed",
+  }, env);
+
+  const before = await doctorWhatsAppRouter({
+    thread: thread.id,
+    env,
+    whatsappStatusFn: readyWhatsAppStatus,
+    listConnectorOutboxJobsFn: listConnectorOutboxJobs,
+  });
+  assert.equal(before.checks.some((check) => check.code === "orphaned_ui_whatsapp_reply_delivery" && check.messageId === final.id), true);
+
+  const repaired = await doctorWhatsAppRouter({
+    thread: thread.id,
+    repair: true,
+    env,
+    whatsappStatusFn: readyWhatsAppStatus,
+    listConnectorOutboxJobsFn: listConnectorOutboxJobs,
+    ensureConnectorOutboxJobFn: ensureConnectorOutboxJob,
+  });
+  const jobs = (await listConnectorOutboxJobs({ connector: "whatsapp", threadId: thread.id }, env)).jobs;
+  assert.equal(repaired.repairs.some((repair) => repair.messageId === final.id), true);
+  assert.equal(jobs.filter((job) => job.sourceMessageId === final.id).length, 1);
+  assert.equal(jobs.find((job) => job.sourceMessageId === final.id)?.chatId, `chat-${thread.id}`);
 });
 
 test("WhatsApp router doctor ignores historical finals without live mirror intent", async () => {
