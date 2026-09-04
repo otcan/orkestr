@@ -260,6 +260,7 @@ test("mobile access uses exact Hush context, rejects replay, and cannot authoriz
     principalKind: "mobile_device",
     routeKind: "hush_mobile",
     deviceId: completed.device.id,
+    sessionId: completed.session.id,
     profileId: "owner-phone",
     threadId: "hush-owner-thread",
     ownerUserId: "admin",
@@ -495,6 +496,47 @@ test("mobile module exposes bounded public routes and owner controls", async (t)
   };
   assert.equal(await mobileDeviceContextIsActive(deviceContext, env), true);
 
+  const realtimeCapabilityResponse = await fetch(`${baseUrl}/api/mobile/realtime`, {
+    headers: {
+      authorization: `Bearer ${completed.accessToken}`,
+      "x-orkestr-content-sha256": sha256(""),
+      "x-orkestr-device-proof": signJwt(keys.privateKey, timedClaims({
+        aud: "orkestr.mobile.request",
+        sid: completed.session.id,
+        did: completed.device.id,
+        ath: sha256(completed.accessToken),
+        method: "GET",
+        path: "/api/mobile/realtime",
+        bodySha256: sha256(""),
+        jti: "http-realtime-capability-proof",
+      })),
+    },
+  });
+  assert.equal(realtimeCapabilityResponse.status, 200);
+  assert.deepEqual(await realtimeCapabilityResponse.json(), { enabled: false, reason: "disabled" });
+
+  const pushBody = JSON.stringify({ token: "a".repeat(64), environment: "sandbox", operation: "upsert" });
+  const pushResponse = await fetch(`${baseUrl}/api/mobile/push-token`, {
+    method: "PUT",
+    headers: {
+      authorization: `Bearer ${completed.accessToken}`,
+      "content-type": "application/json",
+      "x-orkestr-content-sha256": sha256(pushBody),
+      "x-orkestr-device-proof": signJwt(keys.privateKey, timedClaims({
+        aud: "orkestr.mobile.request",
+        sid: completed.session.id,
+        did: completed.device.id,
+        ath: sha256(completed.accessToken),
+        method: "PUT",
+        path: "/api/mobile/push-token",
+        bodySha256: sha256(pushBody),
+        jti: "http-push-token-proof",
+      })),
+    },
+    body: pushBody,
+  });
+  assert.equal(pushResponse.status, 200);
+
   const turnBody = JSON.stringify({
     clientTurnId: "77777777-7777-4777-8777-777777777777",
     transcript: "Give me the current status",
@@ -577,6 +619,13 @@ test("mobile module exposes bounded public routes and owner controls", async (t)
   });
   assert.equal(revoked.status, 200);
   assert.equal(await mobileDeviceContextIsActive(deviceContext, env), false);
+  const pushPath = path.join(env.ORKESTR_HOME, "secrets", "mobile-push-tokens.json");
+  let pushState = JSON.parse(await fs.readFile(pushPath, "utf8"));
+  for (let attempt = 0; attempt < 50 && pushState.pushTokens.length; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    pushState = JSON.parse(await fs.readFile(pushPath, "utf8"));
+  }
+  assert.deepEqual(pushState.pushTokens, []);
 
   const beforeRevokedRetry = (await listThreadMessages("hush-owner-thread", env)).length;
   const revokedBody = JSON.stringify({

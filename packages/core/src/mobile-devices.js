@@ -340,6 +340,7 @@ export async function revokeMobileDevice(deviceId, { principal = null, env = pro
 }
 
 export async function mobileDeviceContextIsActive(context = {}, env = process.env) {
+  const sessionId = String(context?.sessionId || "").trim();
   const deviceId = String(context?.deviceId || "").trim();
   const profileId = String(context?.profileId || "").trim();
   const threadId = String(context?.threadId || "").trim();
@@ -354,12 +355,26 @@ export async function mobileDeviceContextIsActive(context = {}, env = process.en
     item.ownerUserId === ownerUserId
   );
   if (!device) return false;
+  if (sessionId) {
+    const session = (state.sessions || []).find((item) =>
+      item.id === sessionId &&
+      item.deviceId === deviceId &&
+      item.profileId === profileId &&
+      item.ownerUserId === ownerUserId &&
+      Date.parse(item.refreshExpiresAt || "") > Date.now()
+    );
+    if (!session) return false;
+  }
   const profile = await getMobileProfile(profileId, { env });
+  const user = await getUser(ownerUserId, env);
   return Boolean(
+    user &&
+    user.status !== "disabled" &&
     profile &&
     profile.enabled !== false &&
     profile.threadId === threadId &&
-    profile.ownerUserId === ownerUserId
+    profile.ownerUserId === ownerUserId &&
+    (context?.mirrorRepliesToWhatsApp !== true || profile.mirrorRepliesToWhatsApp === true)
   );
 }
 
@@ -368,6 +383,7 @@ function machineContextFor(session, device, profile) {
     principalKind: "mobile_device",
     routeKind: "hush_mobile",
     deviceId: device.id,
+    sessionId: session.id,
     profileId: session.profileId,
     threadId: profile.threadId,
     ownerUserId: session.ownerUserId,
@@ -379,7 +395,12 @@ function hushVoiceRouteAllowed(request = {}) {
   const method = String(request?.method || "GET").toUpperCase();
   const path = requestProofPath(request).split("?")[0];
   if (method === "POST" && /(?:^|\/)api\/mobile\/voice-turns$/.test(path)) return true;
-  return method === "GET" && /(?:^|\/)api\/mobile\/voice-turns\/[^/]+(?:\/events)?$/.test(path);
+  if (method === "GET" && /(?:^|\/)api\/mobile\/voice-turns\/[^/]+(?:\/events)?$/.test(path)) return true;
+  if (method === "GET" && /(?:^|\/)api\/mobile\/realtime$/.test(path)) return true;
+  if (method === "POST" && /(?:^|\/)api\/mobile\/realtime\/calls$/.test(path)) return true;
+  if (method === "GET" && /(?:^|\/)api\/mobile\/realtime\/calls\/[^/]+(?:\/events)?$/.test(path)) return true;
+  if (method === "DELETE" && /(?:^|\/)api\/mobile\/realtime\/calls\/[^/]+$/.test(path)) return true;
+  return method === "PUT" && /(?:^|\/)api\/mobile\/(?:push-token|live-activity-token)$/.test(path);
 }
 
 function validateRequestClaims(claims, session, device, token, request, audience) {

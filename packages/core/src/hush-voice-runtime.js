@@ -187,6 +187,9 @@ export function hushMobileDeviceContext(request = {}) {
   }
   const device = {
     deviceId: deviceContextIdentifier(context, "deviceId"),
+    ...(typeof context.sessionId === "string" && context.sessionId.trim()
+      ? { sessionId: deviceContextIdentifier(context, "sessionId") }
+      : {}),
     profileId: deviceContextIdentifier(context, "profileId"),
     threadId: deviceContextIdentifier(context, "threadId"),
     ownerUserId: deviceContextIdentifier(context, "ownerUserId"),

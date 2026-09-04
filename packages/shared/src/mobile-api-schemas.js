@@ -30,6 +30,47 @@ export const mobileVoiceTurnSchema = {
 
 export const mobileVoiceTurnParamsSchema = idParams("turnId");
 
+export const mobileRealtimeCallSchema = {
+  body: {
+    type: "object",
+    required: ["clientCallId", "offerSdp"],
+    properties: {
+      clientCallId: { type: "string", strict: true, minLength: 36, maxLength: 64 },
+      offerSdp: { type: "string", strict: true, minLength: 8, maxLength: 65_536 },
+    },
+    additionalProperties: false,
+  },
+};
+
+export const mobileRealtimeCallParamsSchema = idParams("callId");
+
+export const mobilePushTokenSchema = {
+  body: {
+    type: "object",
+    required: ["token", "environment", "operation"],
+    properties: {
+      token: { type: "string", strict: true, minLength: 16, maxLength: 4096 },
+      environment: { type: "string", enum: ["sandbox", "production"] },
+      operation: { type: "string", enum: ["upsert", "remove"] },
+    },
+    additionalProperties: false,
+  },
+};
+
+export const mobileLiveActivityTokenSchema = {
+  body: {
+    type: "object",
+    required: ["activityId", "token", "environment", "operation"],
+    properties: {
+      activityId: { type: "string", strict: true, minLength: 1, maxLength: 160 },
+      token: { type: "string", strict: true, minLength: 16, maxLength: 4096 },
+      environment: { type: "string", enum: ["sandbox", "production"] },
+      operation: { type: "string", enum: ["upsert", "remove"] },
+    },
+    additionalProperties: false,
+  },
+};
+
 const mobileDevicePublicKeySchema = {
   type: "object",
   required: ["kty", "crv", "x", "y"],
