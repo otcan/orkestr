@@ -156,11 +156,12 @@ working. Pairing start defaults to 12 creations per client in ten minutes,
 three pending pairings per client, and 100 pending pairings globally. A limited
 request returns `429` and a positive `Retry-After`.
 
-The private profile binding is loaded from
-`ORKESTR_OVERLAY_DIR/mobile-profiles.json` (or the explicit
-`ORKESTR_MOBILE_PROFILES_FILE`) and requires `id`, `ownerUserId`, and
-`threadId`. Real bindings belong only in the private overlay. A public-shaped
-example is:
+The private profile binding is preferably stored through Orkestr secure input
+under the global `hush-mobile-profiles` name. Existing deployments may instead
+load `ORKESTR_OVERLAY_DIR/mobile-profiles.json` (or the explicit
+`ORKESTR_MOBILE_PROFILES_FILE`). Each profile requires `id`, `ownerUserId`, and
+`threadId`. Real bindings belong only in encrypted private state or the private
+overlay. A public-shaped example is:
 
 ```json
 {
@@ -173,6 +174,13 @@ example is:
     }
   ]
 }
+```
+
+An administrator can persist that JSON without putting it in shell history:
+
+```bash
+printf '%s\n' '{"profiles":[{"id":"hush-primary","label":"Hush","ownerUserId":"example-owner","threadId":"example-thread"}]}' \
+  | orkestr secret set hush-mobile-profiles --global --stdin
 ```
 
 Revocation removes live sessions immediately. New requests and reconnects are

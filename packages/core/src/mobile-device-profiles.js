@@ -1,6 +1,9 @@
 import path from "node:path";
 import { readJson } from "../../storage/src/store.js";
-import { normalizeUserId } from "./users.js";
+import { resolveSecureSecretValue } from "./secure-secrets.js";
+import { adminUserId, normalizeUserId } from "./users.js";
+
+const defaultProfilesSecretName = "hush-mobile-profiles";
 
 function cleanId(value = "") {
   return String(value || "")
@@ -42,18 +45,41 @@ function normalizeProfile(input = {}) {
 }
 
 function profileListFromPayload(payload = {}) {
-  const raw = Array.isArray(payload) ? payload : payload.profiles || payload.mobileProfiles || [];
+  const value = payload && typeof payload === "object" ? payload : {};
+  const raw = Array.isArray(value) ? value : value.profiles || value.mobileProfiles || [];
   return Array.isArray(raw) ? raw.map(normalizeProfile).filter(Boolean) : [];
+}
+
+function parseSecretPayload(value = "") {
+  try {
+    const parsed = JSON.parse(String(value || ""));
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch {
+    return null;
+  }
 }
 
 export async function listMobileProfiles({ env = process.env } = {}) {
   const filePath = profileSourcePath(env);
-  if (!filePath) return { profiles: [], source: "unconfigured" };
-  const payload = await readJson(filePath, null).catch(() => null);
+  let payload = filePath ? await readJson(filePath, null).catch(() => null) : null;
+  let source = payload ? "overlay" : "unconfigured";
+  if (!payload) {
+    const secretName = String(env.ORKESTR_MOBILE_PROFILES_SECRET || defaultProfilesSecretName).trim();
+    const resolved = secretName
+      ? await resolveSecureSecretValue(secretName, {
+          ownerUserId: normalizeUserId(env.ORKESTR_ADMIN_USER_ID || adminUserId),
+          usedBy: "hush-mobile-profiles",
+        }, env).catch(() => null)
+      : null;
+    if (resolved?.value) {
+      payload = parseSecretPayload(resolved.value);
+      source = payload ? "secure-input" : "secure-input-invalid";
+    }
+  }
   const profiles = profileListFromPayload(payload).filter((profile) => profile.enabled);
   return {
     profiles: profiles.map((profile) => ({ ...profile })),
-    source: "overlay",
+    source,
   };
 }
 

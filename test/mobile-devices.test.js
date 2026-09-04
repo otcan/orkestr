@@ -18,6 +18,7 @@ import {
 } from "../packages/core/src/mobile-devices.js";
 import { sha256 } from "../packages/core/src/mobile-device-crypto.js";
 import { adminPrincipal } from "../packages/core/src/principal.js";
+import { setSecureSecret } from "../packages/core/src/secure-secrets.js";
 import { approvePairingChallenge, authorizeHttpRequest, createPairingChallenge, pairBrowser } from "../packages/core/src/security.js";
 import { createThread, listThreadMessages } from "../packages/core/src/threads.js";
 
@@ -56,18 +57,22 @@ function timedClaims(extra = {}) {
 async function setupMobileEnv(t, extra = {}, options = {}) {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-mobile-devices-"));
   const profilesFile = path.join(home, "mobile-profiles.json");
-  await fs.writeFile(profilesFile, JSON.stringify({
-    profiles: [{
-      id: "owner-phone",
-      label: "Owner Phone",
-      ownerUserId: "admin",
-      threadId: "hush-owner-thread",
-    }],
-  }));
+  if (options.profileSource !== "secure-input") {
+    await fs.writeFile(profilesFile, JSON.stringify({
+      profiles: [{
+        id: "owner-phone",
+        label: "Owner Phone",
+        ownerUserId: "admin",
+        threadId: "hush-owner-thread",
+      }],
+    }));
+  }
   const keys = [
     "ORKESTR_HOME",
     "ORKESTR_AUTH_REQUIRED",
+    "ORKESTR_OVERLAY_DIR",
     "ORKESTR_MOBILE_PROFILES_FILE",
+    "ORKESTR_MOBILE_PROFILES_SECRET",
     "ORKESTR_MOBILE_PAIRING_CLIENT_CREATE_LIMIT",
     "ORKESTR_RECOVER_RUNNING_ON_START",
     "ORKESTR_WHATSAPP_AUTOSTART",
@@ -94,7 +99,9 @@ async function setupMobileEnv(t, extra = {}, options = {}) {
   Object.assign(process.env, {
     ORKESTR_HOME: home,
     ORKESTR_AUTH_REQUIRED: "1",
-    ORKESTR_MOBILE_PROFILES_FILE: profilesFile,
+    ORKESTR_OVERLAY_DIR: "",
+    ORKESTR_MOBILE_PROFILES_FILE: options.profileSource === "secure-input" ? "" : profilesFile,
+    ORKESTR_MOBILE_PROFILES_SECRET: "hush-mobile-profiles",
     ORKESTR_RECOVER_RUNNING_ON_START: "0",
     ORKESTR_WHATSAPP_AUTOSTART: "0",
     WHATSAPP_LOCAL_AUTOSTART: "0",
@@ -123,6 +130,31 @@ async function setupMobileEnv(t, extra = {}, options = {}) {
   if (options.autoCleanup !== false) t.after(cleanup);
   return { env: process.env, home, profilesFile, cleanup };
 }
+
+test("mobile profiles can come from encrypted secure input", async (t) => {
+  const { env } = await setupMobileEnv(t, {}, { profileSource: "secure-input" });
+  await setSecureSecret({
+    scope: "global",
+    name: "hush-mobile-profiles",
+    value: JSON.stringify({
+      profiles: [{
+        id: "owner-phone",
+        label: "Owner Phone",
+        ownerUserId: "admin",
+        threadId: "hush-owner-thread",
+      }],
+    }),
+  }, adminPrincipal({ id: "admin" }), env);
+  const configured = await listMobileProfiles({ env });
+  assert.equal(configured.source, "secure-input");
+  assert.deepEqual(configured.profiles, [{
+    id: "owner-phone",
+    label: "Owner Phone",
+    ownerUserId: "admin",
+    threadId: "hush-owner-thread",
+    enabled: true,
+  }]);
+});
 
 async function pairApprovedDevice(t) {
   const { env } = await setupMobileEnv(t);
