@@ -18,6 +18,7 @@ import {
   mobileSessionRefreshSchema,
 } from "../../../../../packages/shared/src/api-schemas.js";
 import { validateRequestSchema } from "../../common/http.js";
+import { MobileRealtimeService } from "../mobile-realtime/mobile-realtime.service.js";
 
 function requireOwner(request: any) {
   const principal = request?.orkestrPrincipal || null;
@@ -31,6 +32,8 @@ function requireOwner(request: any) {
 
 @Controller("api/mobile")
 export class MobileController {
+  constructor(private readonly mobileRealtime: MobileRealtimeService) {}
+
   @Post("pairing/start")
   @HttpCode(200)
   async startPairing(
@@ -105,6 +108,10 @@ export class MobileController {
   @HttpCode(200)
   async ownerRevokeDevice(@Req() request: any, @Param("deviceId") deviceId: string) {
     validateRequestSchema(mobileDeviceParamsSchema, { params: { deviceId } });
-    return revokeMobileDevice(deviceId, { principal: requireOwner(request) });
+    const revoked = await revokeMobileDevice(deviceId, { principal: requireOwner(request) });
+    // Device/session revocation is already durable at this point. Provider and
+    // notification cleanup is best effort and must not delay the security result.
+    void this.mobileRealtime.revokeDevice(deviceId).catch(() => {});
+    return revoked;
   }
 }

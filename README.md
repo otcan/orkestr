@@ -401,6 +401,7 @@ See [docs/oss-managed-boundary.md](docs/oss-managed-boundary.md).
 - [Demo script](docs/demo-script.md)
 - [Minimal landing page](docs/landing-page.md)
 - [Secret manager](docs/secret-manager.md)
+- [Hush mobile Realtime gateway](docs/mobile-realtime.md)
 - [Security](SECURITY.md)
 - [Contributing](CONTRIBUTING.md)
 - [Roadmap](ROADMAP.md)
