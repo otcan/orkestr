@@ -135,12 +135,33 @@ function sameSecret(left = "", right = "") {
   return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
-function safeReturnPath(value = "") {
+function controlPlaneSettings(env = process.env) {
+  return {
+    enabled: enabled(env.ORKESTR_KEYCLOAK_CONTROL_PLANE_ENABLED),
+    adminRole: clean(env.ORKESTR_KEYCLOAK_CONTROL_PLANE_ADMIN_ROLE),
+    adminUserId: clean(env.ORKESTR_KEYCLOAK_CONTROL_PLANE_ADMIN_USER_ID),
+  };
+}
+
+function controlPlaneIdentity(identity = {}, env = process.env) {
+  const settings = controlPlaneSettings(env);
+  const roles = Array.isArray(identity.roles) ? identity.roles : [];
+  if (!settings.enabled || !settings.adminRole || !settings.adminUserId || !roles.includes(settings.adminRole)) return {};
+  return {
+    userId: settings.adminUserId,
+    role: "admin",
+    controlPlane: true,
+  };
+}
+
+function safeReturnPath(value = "", env = process.env) {
   const raw = clean(value) || "/apps";
   if (!raw.startsWith("/") || raw.startsWith("//")) return "/apps";
   try {
     const parsed = new URL(raw, "http://orkestr.local");
-    if (!parsed.pathname.startsWith("/apps")) return "/apps";
+    const appPath = parsed.pathname === "/apps" || parsed.pathname.startsWith("/apps/");
+    const controlPlanePath = controlPlaneSettings(env).enabled && parsed.pathname === "/launcher";
+    if (!appPath && !controlPlanePath) return "/apps";
     return `${parsed.pathname}${parsed.search}`;
   } catch {
     return "/apps";
@@ -195,7 +216,7 @@ export async function beginKeycloakLogin({ returnTo = "", loginHint = "", env = 
       stateHash: sha256(state),
       nonce,
       codeVerifier,
-      returnTo: safeReturnPath(returnTo),
+      returnTo: safeReturnPath(returnTo, env),
       expiresAt: new Date(Date.now() + stateTtlMs).toISOString(),
     });
   });
@@ -321,6 +342,7 @@ export async function completeKeycloakLogin({ code = "", state = "", userAgent =
   const identity = claimsForSession(claims, settings.clientId);
   const session = await createOidcSecuritySession({
     ...identity,
+    ...controlPlaneIdentity(identity, env),
     userAgent,
     ip,
     env,

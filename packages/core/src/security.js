@@ -1718,6 +1718,9 @@ export async function createOidcSecuritySession({
   displayName = "",
   groups = [],
   roles = [],
+  userId = "",
+  role = "user",
+  controlPlane = false,
   issuedAt = "",
   userAgent = "",
   ip = "",
@@ -1730,6 +1733,11 @@ export async function createOidcSecuritySession({
   const oidcSid = String(sid || "").trim().slice(0, 320);
   const oidcIssuedAt = String(issuedAt || "").trim();
   if (!Number.isFinite(Date.parse(oidcIssuedAt))) throw challengeError("oidc_issued_at_required", 401);
+  const mappedUserId = String(userId || "").trim().toLowerCase();
+  const controlPlaneAdmin = controlPlane === true && String(role || "").trim().toLowerCase() === "admin";
+  if (controlPlaneAdmin && (!mappedUserId || normalizeUserId(mappedUserId) !== mappedUserId)) {
+    throw challengeError("oidc_control_plane_user_invalid", 503);
+  }
   const token = randomToken(32);
   const createdAt = nowIso();
   const session = {
@@ -1737,8 +1745,8 @@ export async function createOidcSecuritySession({
     challengeId: "",
     instanceId: "",
     tokenHash: sha256(token),
-    userId: oidcSessionUserId(oidcSubject),
-    role: "user",
+    userId: controlPlaneAdmin ? mappedUserId : oidcSessionUserId(oidcSubject),
+    role: controlPlaneAdmin ? "admin" : "user",
     displayName: String(displayName || "").trim().slice(0, 160),
     userAgent: String(userAgent || "").slice(0, 240),
     createdAt,
@@ -1753,6 +1761,7 @@ export async function createOidcSecuritySession({
     oidcSid,
     oidcGroups: oidcClaimList(groups),
     oidcRoles: oidcClaimList(roles),
+    oidcControlPlane: controlPlaneAdmin,
     expiresAt: new Date(Date.now() + sessionTtlMs).toISOString(),
   };
   await mutateOidcSecurityConfig(env, async (config) => {
@@ -1767,6 +1776,7 @@ export async function createOidcSecuritySession({
     sessionId: session.id,
     userId: session.userId,
     authProvider: "oidc",
+    controlPlane: session.oidcControlPlane === true,
   }, env).catch(() => {});
   return { ok: true, token, session: publicSession(session) };
 }
@@ -2120,7 +2130,8 @@ function isAllowedBeforePairing(request) {
   return false;
 }
 
-function isAllowedForOidcAppSession(request) {
+function isAllowedForOidcAppSession(request, session = null) {
+  if (session?.oidcControlPlane === true) return true;
   if (isAllowedBeforePairing(request)) return true;
   const method = String(request?.method || "GET").toUpperCase();
   const url = String(request?.originalUrl || request?.url || "").split("?")[0];
@@ -2237,7 +2248,7 @@ export async function authorizeHttpRequest(request, env = process.env) {
         error: "user_disabled",
       };
     }
-    if (session.authProvider === "oidc" && !isAllowedForOidcAppSession(request)) {
+    if (session.authProvider === "oidc" && !isAllowedForOidcAppSession(request, session)) {
       return {
         ok: false,
         status,

@@ -67,6 +67,22 @@ Keycloak redirect URI on the public app origin, for example
 `https://app.example.test/auth/callback`. The OIDC app session uses a host-only
 `__Host-` cookie; it is intentionally separate from browser-pairing cookies.
 
+An operator may explicitly map one Keycloak realm role to the local control
+plane administrator. This is disabled by default and must name both the exact
+realm role and the existing local admin user. Orkestr does not infer this grant
+from email, display name, or a generic Keycloak account:
+
+```env
+ORKESTR_KEYCLOAK_CONTROL_PLANE_ENABLED=1
+ORKESTR_KEYCLOAK_CONTROL_PLANE_ADMIN_ROLE=orkestr-control-plane-admin
+ORKESTR_KEYCLOAK_CONTROL_PLANE_ADMIN_USER_ID=admin
+```
+
+Only a verified OIDC identity carrying that exact realm role receives
+control-plane scope. Other OIDC identities remain confined to their explicitly
+granted public applications. Use a dedicated role for this mapping; do not map
+a broad realm-default role.
+
 ## Outlook Mail
 
 Use Outlook SMTP in Keycloak for verification emails. Keep the SMTP secret in

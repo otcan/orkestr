@@ -84,6 +84,11 @@ test("CI test runner scrubs production connector and public URL env", () => {
     ORKESTR_CONNECTOR_INBOX_DB: "/prod/connector-inbox.sqlite",
     ORKESTR_THREAD_RESOURCE_POLICY_DB: "/prod/thread-policy.sqlite",
     ORKESTR_PUBLIC_APPS_FILE: "/prod/public-apps.json",
+    ORKESTR_API_SESSION_ID: "api-session-id",
+    CODEX_API_SESSION_ID: "codex-api-session-id",
+    CODEX_SESSION_ID: "codex-session-id",
+    CODEX_CONVERSATION_ID: "codex-conversation-id",
+    OPENAI_SESSION_ID: "openai-session-id",
     ORKESTR_CONNECTOR_OUTBOX_STORE: "postgres",
     ORKESTR_CONNECTOR_OUTBOX_POSTGRES_URL: "postgres://production.invalid/orkestr",
     PGHOST: "production-db.invalid",
@@ -110,6 +115,11 @@ test("CI test runner scrubs production connector and public URL env", () => {
   assert.equal(env.ORKESTR_CONNECTOR_INBOX_DB, undefined);
   assert.equal(env.ORKESTR_THREAD_RESOURCE_POLICY_DB, undefined);
   assert.equal(env.ORKESTR_PUBLIC_APPS_FILE, undefined);
+  assert.equal(env.ORKESTR_API_SESSION_ID, undefined);
+  assert.equal(env.CODEX_API_SESSION_ID, undefined);
+  assert.equal(env.CODEX_SESSION_ID, undefined);
+  assert.equal(env.CODEX_CONVERSATION_ID, undefined);
+  assert.equal(env.OPENAI_SESSION_ID, undefined);
   assert.equal(env.ORKESTR_AUTO_RUN_THREAD_INPUT, "0");
   assert.equal(env.ORKESTR_CONNECTOR_OUTBOX_STORE, "sqlite");
   assert.equal(env.ORKESTR_CONNECTOR_OUTBOX_POSTGRES_URL, undefined);

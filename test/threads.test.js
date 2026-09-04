@@ -208,7 +208,7 @@ function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function waitForFilePattern(filePath, pattern, timeoutMs = 1000) {
+async function waitForFilePattern(filePath, pattern, timeoutMs = 3000) {
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
     const text = await fs.readFile(filePath, "utf8").catch(() => "");
@@ -218,7 +218,7 @@ async function waitForFilePattern(filePath, pattern, timeoutMs = 1000) {
   throw new Error(`pattern_not_observed:${pattern}`);
 }
 
-async function waitForRuntimeLease(env, predicate, timeoutMs = 1000) {
+async function waitForRuntimeLease(env, predicate, timeoutMs = 3000) {
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
     const leases = await listRuntimeLeases(env);

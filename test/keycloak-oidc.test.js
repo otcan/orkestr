@@ -116,6 +116,68 @@ test("Keycloak OIDC uses code+PKCE, validates signed verified-email tokens, and 
   assert.equal(JSON.stringify(authorized.session).includes("employee@example.test"), false);
 });
 
+test("Keycloak control-plane access requires an explicit realm role and maps to the existing admin", async (t) => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-keycloak-control-plane-"));
+  const prior = saveEnv([
+    "ORKESTR_HOME", "ORKESTR_AUTH_PROVIDER", "ORKESTR_KEYCLOAK_OIDC_ENABLED",
+    "ORKESTR_KEYCLOAK_ISSUER", "ORKESTR_KEYCLOAK_CLIENT_ID", "ORKESTR_PUBLIC_APP_URL",
+    "ORKESTR_KEYCLOAK_CONTROL_PLANE_ENABLED", "ORKESTR_KEYCLOAK_CONTROL_PLANE_ADMIN_ROLE",
+    "ORKESTR_KEYCLOAK_CONTROL_PLANE_ADMIN_USER_ID",
+  ]);
+  const issuer = "https://keycloak-control.example.test/realms/orkestr";
+  Object.assign(process.env, configuredEnv(home, issuer), {
+    ORKESTR_KEYCLOAK_CONTROL_PLANE_ENABLED: "1",
+    ORKESTR_KEYCLOAK_CONTROL_PLANE_ADMIN_ROLE: "orkestr-control-plane-admin",
+    ORKESTR_KEYCLOAK_CONTROL_PLANE_ADMIN_USER_ID: "admin",
+  });
+  t.after(async () => {
+    restoreEnv(prior);
+    await fs.rm(home, { recursive: true, force: true });
+  });
+  const { privateKey, publicKey } = crypto.generateKeyPairSync("rsa", { modulusLength: 2048 });
+  const jwk = { ...publicKey.export({ format: "jwk" }), kid: "signing-key", use: "sig", alg: "RS256" };
+  const now = Math.floor(Date.now() / 1000);
+  const start = await beginKeycloakLogin({ returnTo: "/launcher", fetchImpl: oidcFixture({ issuer, privateKey, jwk, idToken: "" }) });
+  const authorization = new URL(start.authorizationUrl);
+  const idToken = jwt(privateKey, {
+    iss: issuer,
+    aud: "orkestr-web",
+    exp: now + 300,
+    iat: now,
+    nonce: authorization.searchParams.get("nonce"),
+    sub: "control-plane-subject",
+    email: "admin@example.test",
+    email_verified: true,
+    realm_access: { roles: ["orkestr-control-plane-admin"] },
+  });
+  const completed = await completeKeycloakLogin({
+    code: "authorization-code",
+    state: authorization.searchParams.get("state"),
+    fetchImpl: oidcFixture({ issuer, privateKey, jwk, idToken }),
+  });
+  assert.equal(completed.redirectPath, "/launcher");
+  assert.equal(completed.session.userId, "admin");
+  assert.equal(completed.session.role, "admin");
+  const cookie = sessionCookieHeader(completed.token, process.env, { name: oidcSecurityCookieName(), hostOnly: true, requestHost: "app.example.test" });
+  const authorized = await authorizeHttpRequest({ method: "GET", url: "/api/threads", headers: { cookie: cookie.split(";")[0] } });
+  assert.equal(authorized.ok, true);
+  assert.equal(authorized.principal.userId, "admin");
+  assert.equal(authorized.principal.role, "admin");
+
+  const ordinary = await createOidcSecuritySession({
+    subject: "ordinary-subject",
+    roles: ["employee"],
+    issuedAt: new Date().toISOString(),
+  });
+  const denied = await authorizeHttpRequest({
+    method: "GET",
+    url: "/api/threads",
+    headers: { cookie: `${oidcSecurityCookieName()}=${encodeURIComponent(ordinary.token)}` },
+  });
+  assert.equal(denied.ok, false);
+  assert.equal(denied.error, "oidc_app_scope_denied");
+});
+
 test("Keycloak OIDC fails closed on replay, unverified email, and invalid audience", async (t) => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-keycloak-oidc-deny-"));
   const prior = saveEnv([
