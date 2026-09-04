@@ -11,6 +11,10 @@ import {
 } from "../../../../../packages/core/src/public-apps.js";
 import { requestPrincipal } from "../../../../../packages/core/src/principal.js";
 import { keycloakOidcEnabled } from "../../../../../packages/core/src/keycloak-oidc.js";
+import { listLauncherApps } from "../../../../../packages/core/src/app-launcher.js";
+import { isAdminPrincipal } from "../../../../../packages/core/src/policy.js";
+import { publicUrlConfig } from "../../../../../packages/core/src/public-url-config.js";
+import { listInstanceAccounts, publicInstanceAccount } from "../../instance-account-switcher.js";
 import { httpError } from "../../common/http.js";
 
 function assertEnabled(): void {
@@ -25,6 +29,70 @@ function assertOidcSession(request: any): void {
 
 @Controller("api")
 export class PublicAppsController {
+  @Get("me/launcher")
+  async launcher(@Req() request: any) {
+    assertEnabled();
+    assertOidcSession(request);
+    const principal = requestPrincipal(request);
+    const appUrl = String(publicUrlConfig(process.env).appUrl || "").replace(/\/+$/, "");
+    const granted = await listPublicAppsForSession({
+      principal,
+      session: request?.orkestrSecuritySession || null,
+    });
+    if (!isAdminPrincipal(principal)) {
+      return {
+        ok: true,
+        appUrl,
+        workspaces: [],
+        apps: granted.apps.map((app: any) => ({
+          id: app.id,
+          slug: app.slug,
+          label: app.title,
+          description: app.description,
+          type: app.type,
+          category: "applications",
+          url: app.url || app.path,
+          external: false,
+          target: "_self",
+          tags: [app.role],
+        })),
+        counts: { total: granted.apps.length },
+        generatedAt: new Date().toISOString(),
+      };
+    }
+    const [launcher, accounts] = await Promise.all([
+      listLauncherApps({ principal, includeHealth: true }),
+      listInstanceAccounts(process.env),
+    ]);
+    const primaryLabel = String(process.env.ORKESTR_LAUNCHER_PRIMARY_LABEL || "This Orkestr").trim().slice(0, 80) || "This Orkestr";
+    const absoluteAppUrl = (value = "") => {
+      try { return new URL(value || "/", `${appUrl}/`).toString(); } catch { return appUrl; }
+    };
+    const launcherAppUrl = (app: any) => {
+      const value = String(app?.url || "/");
+      if (!value.startsWith("/") || value.startsWith("//")) return absoluteAppUrl(value);
+      return `${appUrl}/auth/login?${new URLSearchParams({ return: value }).toString()}`;
+    };
+    return {
+      ok: true,
+      appUrl,
+      workspaces: [
+        ...(appUrl ? [{ id: "primary", displayName: primaryLabel, url: appUrl, current: true }] : []),
+        ...accounts.map((account) => ({
+          ...publicInstanceAccount(account),
+          id: account.publicRef,
+          url: absoluteAppUrl(account.canonicalPath),
+        })),
+      ],
+      apps: launcher.apps.map((app: any) => ({
+        ...app,
+        url: launcherAppUrl(app),
+      })),
+      counts: launcher.counts,
+      generatedAt: launcher.generatedAt,
+    };
+  }
+
   @Get("me/apps")
   async mine(@Req() request: any) {
     assertEnabled();

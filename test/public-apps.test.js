@@ -325,6 +325,14 @@ test("public app HTTP routes expose only granted projections and deny ordinary b
   assert.equal(JSON.stringify(minePayload).includes("tenant-internal-7"), false);
   assert.equal(JSON.stringify(minePayload).includes("target-internal-9"), false);
 
+  const launcher = await fetch(`${baseUrl}/api/me/launcher`, { headers: { cookie } });
+  assert.equal(launcher.status, 200);
+  const launcherPayload = await launcher.json();
+  assert.deepEqual(launcherPayload.workspaces, []);
+  assert.deepEqual(launcherPayload.apps.map((app) => [app.slug, app.label]), [["operations", "operations"]]);
+  assert.equal(JSON.stringify(launcherPayload).includes("tenant-internal-7"), false);
+  assert.equal(JSON.stringify(launcherPayload).includes("target-internal-9"), false);
+
   for (const path of ["/api/desktops/leases", "/api/threads"]) {
     const rawApi = await fetch(`${baseUrl}${path}`, { headers: { cookie } });
     assert.equal(rawApi.status, 403);

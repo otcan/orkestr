@@ -82,6 +82,26 @@ test("public URL config separates app and auth hosts for hosted deployments", ()
   assert.equal(urls.sameOriginAuth, false);
 });
 
+test("public URL config keeps a standalone launcher in the same identity family", () => {
+  const urls = publicUrlConfig({
+    ORKESTR_PRIMARY_DOMAIN: "example.test",
+    ORKESTR_PUBLIC_APP_URL: "https://app.example.test",
+    ORKESTR_PUBLIC_AUTH_URL: "https://auth.example.test",
+    ORKESTR_PUBLIC_LAUNCHER_URL: "https://launcher.example.test",
+  });
+
+  assert.equal(urls.launcherUrl, "https://launcher.example.test");
+  assert.equal(urls.cookieDomain, "example.test");
+  const diagnostics = publicUrlIdentityDiagnostics({
+    ORKESTR_PRIMARY_DOMAIN: "example.test",
+    ORKESTR_PUBLIC_APP_URL: "https://app.example.test",
+    ORKESTR_PUBLIC_AUTH_URL: "https://auth.example.test",
+    ORKESTR_PUBLIC_LAUNCHER_URL: "https://launcher.example.test",
+  });
+  assert.equal(diagnostics.ok, true);
+  assert.ok(diagnostics.records.some((record) => record.name === "ORKESTR_PUBLIC_LAUNCHER_URL"));
+});
+
 test("public URL config prefers explicit public app and auth URLs over legacy aliases", () => {
   const urls = publicUrlConfig({
     ORKESTR_PRIMARY_DOMAIN: "ops.example.test",

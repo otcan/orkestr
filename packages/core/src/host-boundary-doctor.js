@@ -54,6 +54,7 @@ export async function hostBoundaryDoctorChecks(env = process.env) {
   const appOrigin = explicitCanonicalAppBase(env) ? new URL(explicitCanonicalAppBase(env)).origin : "";
   const connectOrigin = base(env.ORKESTR_CONNECT_PUBLIC_URL || env.ORKESTR_CONNECT_PUBLIC_BASE_URL);
   const authOrigin = base(env.ORKESTR_PUBLIC_AUTH_URL || env.ORKESTR_AUTH_URL);
+  const launcherOrigin = base(env.ORKESTR_PUBLIC_LAUNCHER_URL || env.ORKESTR_LAUNCHER_URL);
   const handoffOrigins = [...new Set([connectOrigin, authOrigin].filter(Boolean))];
   const checks = [];
   if (!appOrigin || !handoffOrigins.length) {
@@ -105,7 +106,7 @@ export async function hostBoundaryDoctorChecks(env = process.env) {
     : check("forwarded_host_trust", "Forwarded host trust", "ok", trustProxy ? "Forwarded headers are restricted to configured proxy addresses." : "Forwarded headers are ignored."));
 
   const cookieDomain = clean(publicUrlConfig(env).cookieDomain).replace(/^\./, "").toLowerCase();
-  const configuredHosts = [appOrigin, ...handoffOrigins]
+  const configuredHosts = [appOrigin, ...handoffOrigins, launcherOrigin]
     .filter(Boolean)
     .map((origin) => new URL(origin).hostname.toLowerCase());
   const cookieUnsafe = cookieDomain && configuredHosts.some((host) => host !== cookieDomain && !host.endsWith(`.${cookieDomain}`));

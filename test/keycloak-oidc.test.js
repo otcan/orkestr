@@ -116,6 +116,55 @@ test("Keycloak OIDC uses code+PKCE, validates signed verified-email tokens, and 
   assert.equal(JSON.stringify(authorized.session).includes("employee@example.test"), false);
 });
 
+test("Keycloak OIDC binds launcher login and callback to the configured launcher origin", async (t) => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-keycloak-launcher-"));
+  const prior = saveEnv([
+    "ORKESTR_HOME", "ORKESTR_AUTH_PROVIDER", "ORKESTR_KEYCLOAK_OIDC_ENABLED",
+    "ORKESTR_KEYCLOAK_ISSUER", "ORKESTR_KEYCLOAK_CLIENT_ID", "ORKESTR_PUBLIC_APP_URL",
+    "ORKESTR_PUBLIC_LAUNCHER_URL",
+  ]);
+  const issuer = "https://keycloak-launcher.example.test/realms/orkestr";
+  Object.assign(process.env, configuredEnv(home, issuer), {
+    ORKESTR_PUBLIC_LAUNCHER_URL: "https://launcher.example.test",
+  });
+  t.after(async () => {
+    restoreEnv(prior);
+    await fs.rm(home, { recursive: true, force: true });
+  });
+  const { privateKey, publicKey } = crypto.generateKeyPairSync("rsa", { modulusLength: 2048 });
+  const jwk = { ...publicKey.export({ format: "jwk" }), kid: "signing-key", use: "sig", alg: "RS256" };
+  const fixture = oidcFixture({ issuer, privateKey, jwk, idToken: "" });
+  const start = await beginKeycloakLogin({
+    returnTo: "/apps",
+    requestOrigin: "https://launcher.example.test",
+    fetchImpl: fixture,
+  });
+  const authorization = new URL(start.authorizationUrl);
+  assert.equal(authorization.searchParams.get("redirect_uri"), "https://launcher.example.test/auth/callback");
+  await assert.rejects(
+    beginKeycloakLogin({ requestOrigin: "https://attacker.example.test", fetchImpl: fixture }),
+    /oidc_redirect_origin_mismatch/,
+  );
+  const now = Math.floor(Date.now() / 1000);
+  const idToken = jwt(privateKey, {
+    iss: issuer,
+    aud: "orkestr-web",
+    exp: now + 300,
+    iat: now,
+    nonce: authorization.searchParams.get("nonce"),
+    sub: "launcher-subject",
+    email: "launcher@example.test",
+    email_verified: true,
+  });
+  const completed = await completeKeycloakLogin({
+    code: "launcher-code",
+    state: authorization.searchParams.get("state"),
+    requestOrigin: "https://launcher.example.test",
+    fetchImpl: oidcFixture({ issuer, privateKey, jwk, idToken }),
+  });
+  assert.equal(completed.redirectPath, "/apps");
+});
+
 test("Keycloak control-plane access requires an explicit realm role and maps to the existing admin", async (t) => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-keycloak-control-plane-"));
   const prior = saveEnv([
@@ -137,7 +186,7 @@ test("Keycloak control-plane access requires an explicit realm role and maps to 
   const { privateKey, publicKey } = crypto.generateKeyPairSync("rsa", { modulusLength: 2048 });
   const jwk = { ...publicKey.export({ format: "jwk" }), kid: "signing-key", use: "sig", alg: "RS256" };
   const now = Math.floor(Date.now() / 1000);
-  const start = await beginKeycloakLogin({ returnTo: "/launcher", fetchImpl: oidcFixture({ issuer, privateKey, jwk, idToken: "" }) });
+  const start = await beginKeycloakLogin({ returnTo: "/", fetchImpl: oidcFixture({ issuer, privateKey, jwk, idToken: "" }) });
   const authorization = new URL(start.authorizationUrl);
   const idToken = jwt(privateKey, {
     iss: issuer,
@@ -155,7 +204,7 @@ test("Keycloak control-plane access requires an explicit realm role and maps to 
     state: authorization.searchParams.get("state"),
     fetchImpl: oidcFixture({ issuer, privateKey, jwk, idToken }),
   });
-  assert.equal(completed.redirectPath, "/launcher");
+  assert.equal(completed.redirectPath, "/");
   assert.equal(completed.session.userId, "admin");
   assert.equal(completed.session.role, "admin");
   const cookie = sessionCookieHeader(completed.token, process.env, { name: oidcSecurityCookieName(), hostOnly: true, requestHost: "app.example.test" });

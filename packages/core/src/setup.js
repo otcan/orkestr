@@ -110,6 +110,7 @@ function publicSetupUrlStatus(urls = {}) {
     appUrl: String(urls?.appUrl || ""),
     authUrl: String(urls?.authUrl || ""),
     connectUrl: String(urls?.connectUrl || ""),
+    launcherUrl: String(urls?.launcherUrl || ""),
     sameOriginAuth: Boolean(urls?.sameOriginAuth),
   };
 }

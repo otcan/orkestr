@@ -524,6 +524,7 @@ export interface SetupStatus {
     appUrl?: string;
     authUrl?: string;
     connectUrl?: string;
+    launcherUrl?: string;
     sameOriginAuth?: boolean;
   };
   config?: Record<string, Record<string, string>>;
@@ -2166,6 +2167,23 @@ export interface PublicAppsResponse {
   apps: PublicAppCard[];
 }
 
+export interface LauncherDirectoryWorkspace {
+  id: string;
+  displayName: string;
+  url: string;
+  publicRef?: string;
+  current?: boolean;
+}
+
+export interface LauncherDirectoryResponse {
+  ok: boolean;
+  appUrl: string;
+  workspaces: LauncherDirectoryWorkspace[];
+  apps: LauncherApp[];
+  counts?: Record<string, number>;
+  generatedAt?: string;
+}
+
 export interface AdminCreditUsageResponse {
   generatedAt?: string;
   tenants: CreditUsageSummary[];
@@ -3306,6 +3324,10 @@ export class ApiService {
 
   myPublicApps(): Observable<PublicAppsResponse> {
     return this.http.get<PublicAppsResponse>(this.api("/me/apps"));
+  }
+
+  myLauncher(): Observable<LauncherDirectoryResponse> {
+    return this.http.get<LauncherDirectoryResponse>(this.api("/me/launcher"));
   }
 
   publicApp(slug: string): Observable<{ ok: boolean; app: PublicAppCard }> {

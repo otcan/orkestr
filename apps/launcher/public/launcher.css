@@ -1,19 +1,26 @@
-:host {
-  display: block;
-  min-height: 100%;
+:root {
+  color: #edf7ec;
+  background: #070b08;
+  color-scheme: dark;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
-.public-apps-shell {
+* { box-sizing: border-box; }
+
+[hidden] { display: none !important; }
+
+body {
   min-height: 100vh;
   min-height: 100dvh;
-  color: #edf7ec;
+  margin: 0;
+  overflow-x: hidden;
   background:
     radial-gradient(circle at 8% -10%, rgba(79, 180, 97, 0.22), transparent 34rem),
     radial-gradient(circle at 95% 18%, rgba(58, 106, 66, 0.14), transparent 28rem),
     #070b08;
 }
 
-.public-apps-header {
+.launcher-header {
   position: sticky;
   z-index: 2;
   top: 0;
@@ -29,7 +36,7 @@
   backdrop-filter: blur(18px);
 }
 
-.public-apps-brand {
+.brand {
   display: inline-flex;
   align-items: center;
   gap: 11px;
@@ -37,17 +44,9 @@
   text-decoration: none;
 }
 
-.public-apps-brand > span:last-child {
-  display: grid;
-  line-height: 1.05;
-}
-
-.public-apps-brand strong {
-  font-size: 15px;
-  letter-spacing: -0.02em;
-}
-
-.public-apps-brand small {
+.brand > span:last-child { display: grid; line-height: 1.05; }
+.brand strong { font-size: 15px; letter-spacing: -0.02em; }
+.brand small {
   margin-top: 4px;
   color: #89a38c;
   font-size: 11px;
@@ -70,8 +69,12 @@
   font-weight: 850;
 }
 
-.header-action {
-  min-height: 42px;
+.header-action,
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
   border: 1px solid rgba(137, 236, 153, 0.3);
   border-radius: 999px;
   color: #dff9e2;
@@ -81,24 +84,20 @@
   text-decoration: none;
 }
 
-.public-apps-content {
+.launcher-main {
   width: min(1120px, calc(100% - 40px));
   margin: 0 auto;
   padding: clamp(42px, 8vw, 88px) 0 max(56px, env(safe-area-inset-bottom));
 }
 
-.public-apps-content h1,
-.public-apps-content h2,
-.public-apps-content p {
-  margin-top: 0;
-}
+h1, h2, p { margin-top: 0; }
 
-.launcher-hero {
+.hero {
   max-width: 720px;
   margin-bottom: clamp(44px, 7vw, 76px);
 }
 
-.public-apps-content h1 {
+h1 {
   max-width: 680px;
   margin-bottom: 16px;
   font-size: clamp(36px, 7vw, 68px);
@@ -106,20 +105,16 @@
   letter-spacing: -0.055em;
 }
 
-.public-apps-muted,
-.public-apps-note,
-.card-copy span,
+.muted,
+.description,
 .empty-state p {
   color: #9db09f;
   line-height: 1.6;
 }
 
-.launcher-hero .public-apps-muted {
-  max-width: 620px;
-  font-size: clamp(16px, 2vw, 19px);
-}
+.hero .muted { max-width: 620px; font-size: clamp(16px, 2vw, 19px); }
 
-.public-apps-eyebrow {
+.eyebrow {
   margin-bottom: 12px;
   color: #79e68a;
   font-size: 11px;
@@ -128,13 +123,7 @@
   text-transform: uppercase;
 }
 
-.public-apps-note {
-  max-width: 640px;
-}
-
-.launcher-section + .launcher-section {
-  margin-top: 50px;
-}
+.directory-section + .directory-section { margin-top: 50px; }
 
 .section-heading {
   display: flex;
@@ -150,10 +139,7 @@
   letter-spacing: -0.035em;
 }
 
-.section-heading .public-apps-eyebrow {
-  margin-bottom: 6px;
-}
-
+.section-heading .eyebrow { margin-bottom: 6px; }
 .section-heading > span {
   display: grid;
   place-items: center;
@@ -165,15 +151,14 @@
   font-size: 12px;
 }
 
-.workspace-grid,
-.public-apps-grid {
+.card-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 14px;
 }
 
 .workspace-card,
-.public-app-card {
+.app-card {
   position: relative;
   display: flex;
   align-items: center;
@@ -185,53 +170,32 @@
   background: rgba(14, 23, 16, 0.82);
   color: inherit;
   padding: 18px;
+  font: inherit;
   text-align: left;
   text-decoration: none;
   transition: border-color 160ms ease, background 160ms ease, transform 160ms ease;
 }
 
-.workspace-card {
-  width: 100%;
-  font: inherit;
-  cursor: pointer;
-}
-
+.workspace-card { width: 100%; cursor: pointer; }
 .workspace-card:hover:not(:disabled),
-.public-app-card:hover {
+.app-card:hover {
   border-color: rgba(121, 230, 138, 0.48);
   background: rgba(19, 34, 22, 0.94);
   transform: translateY(-2px);
 }
 
 .workspace-card:focus-visible,
-.public-app-card:focus-visible,
-.header-action:focus-visible {
+.app-card:focus-visible,
+.header-action:focus-visible,
+.button:focus-visible {
   outline: 3px solid rgba(121, 230, 138, 0.35);
   outline-offset: 2px;
 }
 
-.workspace-card:disabled {
-  cursor: wait;
-  opacity: 0.68;
-}
+.workspace-card:disabled { cursor: wait; opacity: 0.68; }
+.workspace-icon { background: linear-gradient(145deg, #265a2f, #102615); color: #b8ffc2; }
 
-.workspace-error {
-  margin: 12px 2px 0;
-  color: #efb47d;
-  font-size: 13px;
-}
-
-.workspace-icon {
-  background: linear-gradient(145deg, #265a2f, #102615);
-  color: #b8ffc2;
-}
-
-.card-copy {
-  display: grid;
-  min-width: 0;
-  gap: 5px;
-}
-
+.card-copy { display: grid; min-width: 0; gap: 5px; }
 .card-copy strong {
   overflow: hidden;
   font-size: 17px;
@@ -247,21 +211,17 @@
   text-transform: uppercase;
 }
 
-.open-arrow {
-  flex: 0 0 auto;
-  margin-left: auto;
-  color: #7fe98e;
-  font-size: 20px;
-}
+.open-arrow { flex: 0 0 auto; margin-left: auto; color: #7fe98e; font-size: 20px; }
 
-.public-app-card {
+.app-card {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
   align-items: start;
   min-height: 190px;
 }
 
-.public-app-card .card-copy span {
+.app-card[aria-disabled="true"] { pointer-events: none; opacity: 0.55; }
+.app-card .description {
   display: -webkit-box;
   overflow: hidden;
   -webkit-box-orient: vertical;
@@ -269,7 +229,7 @@
   font-size: 14px;
 }
 
-.app-card-footer {
+.card-footer {
   display: flex;
   grid-column: 1 / -1;
   align-items: center;
@@ -278,12 +238,7 @@
   margin-top: 8px;
 }
 
-.health {
-  color: #83b68a;
-  font-size: 12px;
-  font-weight: 700;
-}
-
+.health { color: #83b68a; font-size: 12px; font-weight: 700; }
 .health::before {
   display: inline-block;
   width: 7px;
@@ -293,14 +248,8 @@
   background: #60d576;
   content: "";
 }
-
-.health.warning {
-  color: #e1b878;
-}
-
-.health.warning::before {
-  background: #d49c45;
-}
+.health.warning { color: #e1b878; }
+.health.warning::before { background: #d49c45; }
 
 .empty-state {
   grid-column: 1 / -1;
@@ -309,7 +258,9 @@
   padding: 28px;
 }
 
-.launcher-loading {
+.inline-error { margin: 12px 2px 0; color: #efb47d; font-size: 13px; }
+
+.loading {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -318,7 +269,7 @@
   color: #9db09f;
 }
 
-.launcher-loading span {
+.loading span {
   width: 8px;
   height: 8px;
   border-radius: 50%;
@@ -326,60 +277,34 @@
   animation: pulse 900ms ease-in-out infinite alternate;
 }
 
-.launcher-loading span:nth-child(2) { animation-delay: 150ms; }
-.launcher-loading span:nth-child(3) { animation-delay: 300ms; }
-.launcher-loading p { margin: 0 0 0 8px; }
+.loading span:nth-child(2) { animation-delay: 150ms; }
+.loading span:nth-child(3) { animation-delay: 300ms; }
+.loading p { margin: 0 0 0 8px; }
 
-@keyframes pulse {
-  to { opacity: 0.28; transform: translateY(-3px); }
-}
+@keyframes pulse { to { opacity: 0.28; transform: translateY(-3px); } }
 
 @media (max-width: 700px) {
-  .public-apps-header {
+  .launcher-header {
     min-height: 64px;
     padding-top: max(10px, env(safe-area-inset-top));
   }
-
-  .public-apps-content {
-    width: min(100% - 28px, 1120px);
-    padding-top: 38px;
-  }
-
-  .public-apps-content h1 {
-    font-size: clamp(38px, 12vw, 54px);
-  }
-
-  .workspace-grid,
-  .public-apps-grid {
-    grid-template-columns: 1fr;
-  }
-
+  .launcher-main { width: min(100% - 28px, 1120px); padding-top: 38px; }
+  h1 { font-size: clamp(38px, 12vw, 54px); }
+  .card-grid { grid-template-columns: 1fr; }
   .workspace-card,
-  .public-app-card {
-    min-height: 96px;
-    border-radius: 16px;
-    padding: 16px;
-  }
-
-  .public-app-card {
-    min-height: 174px;
-  }
-
-  .header-action {
-    min-height: 40px;
-    padding: 10px 13px;
-    font-size: 12px;
-  }
+  .app-card { min-height: 96px; border-radius: 16px; padding: 16px; }
+  .app-card { min-height: 174px; }
+  .header-action { min-height: 42px; padding: 10px 13px; font-size: 12px; }
 }
 
 @media (max-width: 380px) {
-  .public-apps-brand small { display: none; }
+  .brand small { display: none; }
   .header-action { padding-inline: 11px; }
   .card-icon { width: 38px; height: 38px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .workspace-card,
-  .public-app-card,
-  .launcher-loading span { animation: none; transition: none; }
+  .app-card,
+  .loading span { animation: none; transition: none; }
 }

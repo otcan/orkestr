@@ -5154,7 +5154,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   private pathForPanel(id: string, panel: Panel): string {
     if (panel === "files") return this.instancePath("/files");
-    if (panel === "instanceApps") return this.instancePath("/launcher");
+    if (panel === "instanceApps") return String(this.setupStatus?.urls?.launcherUrl || "").trim() || this.instancePath("/launcher");
     if (panel === "instanceSettings") return this.instancePath("/settings");
     if (panel === "instanceTimers") return this.instancePath("/timers");
     if (panel === "instanceDesktops") return this.instancePath("/desktops");
@@ -5403,7 +5403,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       return;
     }
     if (this.publicAppsActive()) {
-      globalThis.document.title = "Applications · Orkestr";
+      globalThis.document.title = "Launcher · Orkestr";
       return;
     }
     if (this.connectorLoginActive()) {
