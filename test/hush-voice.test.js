@@ -162,6 +162,224 @@ test("Hush finals are correlated to their exact parent even when concurrent turn
   assert.equal(firstFinal.speech, "First answer");
 });
 
+test("Hush recovers a parentless final from the same canonical Codex turn", async () => {
+  const env = await testEnv("same-codex-turn");
+  await createHushThread("hush-thread", env);
+  const context = device("phone-a", "hush-thread");
+  const options = { env, dependencies: dependencies() };
+  const turn = await createTurn({
+    env,
+    deviceContext: context,
+    clientTurnId: "40000000-0000-4000-8000-000000000001",
+    transcript: "Recover my completed answer",
+    dependencies: options.dependencies,
+  });
+  const input = (await listThreadMessages("hush-thread", env)).find((message) => message.source === "hush");
+  await updateThreadMessage("hush-thread", input.id, {
+    state: "completed",
+    deliveryState: "delivered",
+    codexThreadId: "codex-thread-a",
+    codexTurnId: "codex-turn-a",
+  }, env);
+  const assistant = await appendThreadMessage("hush-thread", {
+    role: "assistant",
+    state: "completed",
+    phase: "final_answer",
+    text: "Recovered answer",
+    codexThreadId: "codex-thread-a",
+    executorTurnId: "codex-turn-a",
+  }, env);
+
+  const recovered = await getHushVoiceTurn(turn.id, { device: context, principal: adminPrincipal() }, options);
+
+  assert.equal(recovered.status, "final");
+  assert.equal(recovered.answer, "Recovered answer");
+  const stored = JSON.parse(await fs.readFile(path.join(env.ORKESTR_HOME, "mobile-voice-turns.json"), "utf8"));
+  assert.equal(stored.turns[0].finalMessageId, assistant.id);
+});
+
+test("Hush rejects parentless finals from a different canonical Codex turn", async () => {
+  const env = await testEnv("different-codex-turn");
+  await createHushThread("hush-thread", env);
+  const context = device("phone-a", "hush-thread");
+  const options = { env, dependencies: dependencies() };
+  const turn = await createTurn({
+    env,
+    deviceContext: context,
+    clientTurnId: "40000000-0000-4000-8000-000000000002",
+    transcript: "Do not cross turns",
+    dependencies: options.dependencies,
+  });
+  const input = (await listThreadMessages("hush-thread", env)).find((message) => message.source === "hush");
+  await updateThreadMessage("hush-thread", input.id, { state: "completed", codexTurnId: "codex-turn-input" }, env);
+  await appendThreadMessage("hush-thread", {
+    role: "assistant",
+    state: "completed",
+    phase: "final_answer",
+    text: "Wrong turn answer",
+    codexTurnId: "codex-turn-final",
+  }, env);
+
+  const unresolved = await getHushVoiceTurn(turn.id, { device: context, principal: adminPrincipal() }, options);
+
+  assert.equal(unresolved.status, "queued");
+  assert.equal("answer" in unresolved, false);
+});
+
+test("Hush rejects parentless finals when either canonical Codex turn ID is missing", async (t) => {
+  for (const scenario of [
+    { label: "input", inputTurnId: "", finalTurnId: "codex-turn-final" },
+    { label: "final", inputTurnId: "codex-turn-input", finalTurnId: "" },
+  ]) {
+    await t.test(`missing ${scenario.label} turn ID`, async () => {
+      const env = await testEnv(`missing-${scenario.label}-turn`);
+      await createHushThread("hush-thread", env);
+      const context = device("phone-a", "hush-thread");
+      const options = { env, dependencies: dependencies() };
+      const turn = await createTurn({
+        env,
+        deviceContext: context,
+        clientTurnId: scenario.label === "input"
+          ? "40000000-0000-4000-8000-000000000003"
+          : "40000000-0000-4000-8000-000000000004",
+        transcript: `Missing ${scenario.label} turn ID`,
+        dependencies: options.dependencies,
+      });
+      const input = (await listThreadMessages("hush-thread", env)).find((message) => message.source === "hush");
+      await updateThreadMessage("hush-thread", input.id, {
+        state: "completed",
+        ...(scenario.inputTurnId ? { codexTurnId: scenario.inputTurnId } : {}),
+      }, env);
+      await appendThreadMessage("hush-thread", {
+        role: "assistant",
+        state: "completed",
+        phase: "final_answer",
+        text: "Uncorrelated answer",
+        ...(scenario.finalTurnId ? { executorTurnId: scenario.finalTurnId } : {}),
+      }, env);
+
+      const unresolved = await getHushVoiceTurn(turn.id, { device: context, principal: adminPrincipal() }, options);
+      assert.equal(unresolved.status, "queued");
+      assert.equal("answer" in unresolved, false);
+    });
+  }
+});
+
+test("Hush same-turn fallback rejects the wrong assistant role, phase, and state", async (t) => {
+  for (const scenario of [
+    { label: "role", role: "user", state: "completed", phase: "final_answer" },
+    { label: "phase", role: "assistant", state: "completed", phase: "commentary" },
+    { label: "state", role: "assistant", state: "running", phase: "final_answer" },
+  ]) {
+    await t.test(`wrong ${scenario.label}`, async () => {
+      const env = await testEnv(`wrong-${scenario.label}`);
+      await createHushThread("hush-thread", env);
+      const context = device("phone-a", "hush-thread");
+      const options = { env, dependencies: dependencies() };
+      const turn = await createTurn({
+        env,
+        deviceContext: context,
+        clientTurnId: scenario.label === "role"
+          ? "40000000-0000-4000-8000-000000000005"
+          : scenario.label === "phase"
+            ? "40000000-0000-4000-8000-000000000006"
+            : "40000000-0000-4000-8000-000000000007",
+        transcript: `Reject wrong ${scenario.label}`,
+        dependencies: options.dependencies,
+      });
+      const input = (await listThreadMessages("hush-thread", env)).find((message) => message.source === "hush");
+      await updateThreadMessage("hush-thread", input.id, { state: "completed", codexTurnId: "shared-turn" }, env);
+      await appendThreadMessage("hush-thread", {
+        ...scenario,
+        text: "Invalid candidate",
+        codexTurnId: "shared-turn",
+      }, env);
+
+      const unresolved = await getHushVoiceTurn(turn.id, { device: context, principal: adminPrincipal() }, options);
+      assert.equal(unresolved.status, "queued");
+      assert.equal("answer" in unresolved, false);
+    });
+  }
+});
+
+test("Hush same-turn reconciliation and SSE replay are idempotent", async () => {
+  const env = await testEnv("same-turn-replay");
+  await createHushThread("hush-thread", env);
+  const context = device("phone-a", "hush-thread");
+  const appendedEvents = [];
+  const replayDependencies = {
+    ...dependencies(),
+    appendEvent: async (event) => { appendedEvents.push(event); return event; },
+  };
+  const options = { env, dependencies: replayDependencies };
+  const turn = await createTurn({
+    env,
+    deviceContext: context,
+    clientTurnId: "40000000-0000-4000-8000-000000000008",
+    transcript: "Replay the recovered final",
+    dependencies: replayDependencies,
+  });
+  const input = (await listThreadMessages("hush-thread", env)).find((message) => message.source === "hush");
+  await updateThreadMessage("hush-thread", input.id, { state: "completed", executorTurnId: "replay-turn" }, env);
+  await appendThreadMessage("hush-thread", {
+    role: "assistant",
+    state: "completed",
+    phase: "final_answer",
+    text: "Stable replay answer",
+    codexTurnId: "replay-turn",
+  }, env);
+
+  const first = await getHushVoiceTurn(turn.id, { device: context, principal: adminPrincipal() }, options);
+  const second = await getHushVoiceTurn(turn.id, { device: context, principal: adminPrincipal() }, options);
+  const replay = await listHushVoiceTurnEvents(turn.id, 1, { device: context, principal: adminPrincipal() }, options);
+  const replayAgain = await listHushVoiceTurnEvents(turn.id, 1, { device: context, principal: adminPrincipal() }, options);
+
+  assert.deepEqual(second, first);
+  assert.deepEqual(replayAgain, replay);
+  assert.deepEqual(replay.map((event) => [event.eventId, event.type]), [[2, "final"]]);
+  assert.equal(appendedEvents.filter((event) => event.type === "hush_voice_turn_final").length, 1);
+});
+
+test("Hush same-turn fallback does not cross owner, profile, device, or thread boundaries", async () => {
+  const env = await testEnv("same-turn-isolation");
+  await createHushThread("hush-thread", env);
+  await createHushThread("foreign-thread", env);
+  const context = device("phone-a", "hush-thread");
+  const options = { env, dependencies: dependencies() };
+  const turn = await createTurn({
+    env,
+    deviceContext: context,
+    clientTurnId: "40000000-0000-4000-8000-000000000009",
+    transcript: "Keep this turn isolated",
+    dependencies: options.dependencies,
+  });
+  const input = (await listThreadMessages("hush-thread", env)).find((message) => message.source === "hush");
+  await updateThreadMessage("hush-thread", input.id, { state: "completed", codexTurnId: "shared-looking-turn" }, env);
+  await appendThreadMessage("foreign-thread", {
+    role: "assistant",
+    state: "completed",
+    phase: "final_answer",
+    text: "Foreign thread answer",
+    codexTurnId: "shared-looking-turn",
+  }, env);
+
+  const unresolved = await getHushVoiceTurn(turn.id, { device: context, principal: adminPrincipal() }, options);
+  assert.equal(unresolved.status, "queued");
+  assert.equal("answer" in unresolved, false);
+  await assert.rejects(
+    getHushVoiceTurn(turn.id, { device: device("phone-b", "hush-thread"), principal: adminPrincipal() }, options),
+    (error) => error?.statusCode === 404 && error?.code === "mobile_voice_turn_not_found",
+  );
+  await assert.rejects(
+    getHushVoiceTurn(turn.id, { device: device("phone-a", "hush-thread", "foreign-profile"), principal: adminPrincipal() }, options),
+    (error) => error?.statusCode === 404 && error?.code === "mobile_voice_turn_not_found",
+  );
+  await assert.rejects(
+    getHushVoiceTurn(turn.id, { device: context, principal: adminPrincipal("foreign-owner") }, options),
+    (error) => error?.statusCode === 403 && error?.code === "mobile_device_profile_forbidden",
+  );
+});
+
 test("Hush events replay durably from Last-Event-ID and expose only their device's turn", async () => {
   const env = await testEnv("events");
   await createHushThread("hush-thread", env);

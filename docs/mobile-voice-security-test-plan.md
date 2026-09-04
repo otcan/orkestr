@@ -96,7 +96,10 @@ inputMessageId, finalParentMessageId, text, speech, error
   the supplied cursor.
 - A final is accepted only when it is an assistant `completed`/
   `final_answer` message whose `parentMessageId` equals that turn's input
-  message ID.
+  message ID, or when both messages on that same thread share the same
+  non-empty canonical Codex/executor turn ID. Exact parent matching takes
+  precedence; timestamps and latest-answer ordering are never correlation
+  signals.
 - Complete text is retained for the authenticated turn response. Speech is a
   deterministic, bounded rendering of that same final; it is not another model
   completion.

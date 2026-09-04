@@ -132,11 +132,23 @@ function appendTurnEvent(turn, type) {
   }];
 }
 
-function completedFinalFor(message, parentMessageId) {
+function completedFinal(message) {
   return lower(message?.role) === "assistant" &&
     lower(message?.state) === "completed" &&
-    lower(message?.phase) === "final_answer" &&
-    clean(message?.parentMessageId) === clean(parentMessageId);
+    lower(message?.phase) === "final_answer";
+}
+
+function canonicalExecutorTurnId(message = {}) {
+  return clean(message?.codexTurnId || message?.executorTurnId);
+}
+
+function completedFinalFor(message, parentMessageId) {
+  return completedFinal(message) && clean(message?.parentMessageId) === clean(parentMessageId);
+}
+
+function completedFinalForExecutorTurn(message, turnId) {
+  const candidateTurnId = canonicalExecutorTurnId(message);
+  return completedFinal(message) && Boolean(turnId) && Boolean(candidateTurnId) && candidateTurnId === turnId;
 }
 
 function runtimeWorking(status = {}) {
@@ -321,7 +333,10 @@ export async function createHushVoiceTurn(input = {}, options = {}) {
 
 function reconcileTurn(turn, messages, status) {
   if (TERMINAL_STATES.has(lower(turn.status))) return false;
-  const final = messages.find((message) => completedFinalFor(message, turn.inputMessageId));
+  const input = messages.find((message) => clean(message?.id) === clean(turn.inputMessageId));
+  const exactFinal = messages.find((message) => completedFinalFor(message, turn.inputMessageId));
+  const inputTurnId = canonicalExecutorTurnId(input);
+  const final = exactFinal || messages.find((message) => completedFinalForExecutorTurn(message, inputTurnId));
   if (final) {
     turn.status = "final";
     turn.answer = clean(final.text);
@@ -331,7 +346,6 @@ function reconcileTurn(turn, messages, status) {
     appendTurnEvent(turn, "final");
     return true;
   }
-  const input = messages.find((message) => clean(message?.id) === clean(turn.inputMessageId));
   if (lower(input?.state) === "failed") {
     turn.status = "failed";
     turn.error = safeError({ code: "hush_runtime_failed", retryable: true });
