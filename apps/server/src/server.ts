@@ -71,6 +71,7 @@ import {
 } from "./server-runtime-sync.js";
 import { recordServerShutdown } from "./server-lifecycle.js";
 import { trackUpgradedSockets } from "./http-server-lifecycle.js";
+import { mobileJsonBodyParser } from "./mobile-json-body.js";
 
 export {
   paneProgressMonitorIntervalMs,
@@ -90,10 +91,10 @@ export async function createApp(): Promise<INestApplication> {
   // parsers. Register the small form parser explicitly so the public instance
   // entry POST can resolve the submitted name/reference in the live server.
   app.useBodyParser("urlencoded", { extended: false, limit: "8kb" });
-  // Mobile device proofs bind the exact JSON payload hash. Register the JSON
-  // parser before authentication so Nest's rawBody support is available to
-  // the machine-auth boundary, not only to controllers.
-  app.useBodyParser("json", { limit: "100kb" });
+  // Mobile proofs bind the exact JSON payload before authentication. Scope the
+  // early parser to the direct mobile API so broker/canonical proxy requests
+  // retain their unread streams for forwarding.
+  app.use("/api/mobile", mobileJsonBodyParser());
   app.use((request, response, next) => {
     sanitizeForwardedHostHeaders(request, process.env);
     applyTrustedOperatorProxy(request, process.env);
