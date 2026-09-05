@@ -44,6 +44,20 @@ export const mobileRealtimeCallSchema = {
 
 export const mobileRealtimeCallParamsSchema = idParams("callId");
 
+export const mobileRealtimeTurnSchema = {
+  ...mobileRealtimeCallParamsSchema,
+  body: {
+    type: "object",
+    required: ["clientTurnId", "text", "locale"],
+    properties: {
+      clientTurnId: { type: "string", strict: true, minLength: 36, maxLength: 64 },
+      text: { type: "string", strict: true, minLength: 1, maxLength: 50_000 },
+      locale: { type: "string", strict: true, minLength: 2, maxLength: 64 },
+    },
+    additionalProperties: false,
+  },
+};
+
 export const mobilePushTokenSchema = {
   body: {
     type: "object",

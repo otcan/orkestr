@@ -398,6 +398,7 @@ function hushVoiceRouteAllowed(request = {}) {
   if (method === "GET" && /(?:^|\/)api\/mobile\/voice-turns\/[^/]+(?:\/events)?$/.test(path)) return true;
   if (method === "GET" && /(?:^|\/)api\/mobile\/realtime$/.test(path)) return true;
   if (method === "POST" && /(?:^|\/)api\/mobile\/realtime\/calls$/.test(path)) return true;
+  if (method === "POST" && /(?:^|\/)api\/mobile\/realtime\/calls\/[^/]+\/turns$/.test(path)) return true;
   if (method === "GET" && /(?:^|\/)api\/mobile\/realtime\/calls\/[^/]+(?:\/events)?$/.test(path)) return true;
   if (method === "DELETE" && /(?:^|\/)api\/mobile\/realtime\/calls\/[^/]+$/.test(path)) return true;
   return method === "PUT" && /(?:^|\/)api\/mobile\/(?:push-token|live-activity-token)$/.test(path);

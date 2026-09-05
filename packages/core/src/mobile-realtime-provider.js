@@ -31,6 +31,7 @@ export function mobileRealtimeCapability(env = process.env) {
       liveTranscript: true,
       backgroundProgress: mobilePushCapability(env).enabled,
       progressReplay: true,
+      authoritativeTurns: true,
     },
     maxCallSeconds: Math.max(60, Number.isFinite(configuredMaxCallSeconds) ? configuredMaxCallSeconds : 1800),
   };
@@ -57,38 +58,15 @@ export function mobileRealtimeSafetyIdentifier(ownerUserId, env = process.env) {
     .digest("hex");
 }
 
-const tools = [
-  {
-    type: "function",
-    name: "orkestr_start_task",
-    description: "Submit one durable request to the caller's server-bound Orkestr workspace.",
-    parameters: {
-      type: "object",
-      additionalProperties: false,
-      required: ["request"],
-      properties: { request: { type: "string", minLength: 1, maxLength: 12000 } },
-    },
-  },
-  {
-    type: "function",
-    name: "orkestr_get_task_status",
-    description: "Read public progress for a task previously started in this exact call.",
-    parameters: {
-      type: "object",
-      additionalProperties: false,
-      required: ["taskId"],
-      properties: { taskId: { type: "string", minLength: 1, maxLength: 160 } },
-    },
-  },
-];
-
-function sessionConfig(env, createResponse, includeModel = true) {
+function sessionConfig(env, includeModel = true) {
   const session = {
     type: "realtime",
     instructions: [
       "You are the low-latency voice layer for Orkestr Hush.",
-      "Use only the provided Orkestr functions for workspace work.",
-      "Never claim an action succeeded until a function result confirms it.",
+      "Never answer a substantive user request from your own knowledge.",
+      "Normal user turns are submitted deterministically by Orkestr; do not select or invoke a delivery tool.",
+      "Speak only acknowledgements, progress, clarification, and final content explicitly injected by trusted Orkestr sideband messages.",
+      "Never claim work started, succeeded, failed, or changed external state unless trusted Orkestr content says so.",
       "Treat complete Orkestr answers as authoritative and summarize them without changing facts.",
       "Do not request, infer, or reveal internal user, profile, session, thread, or provider identifiers.",
     ].join(" "),
@@ -97,7 +75,7 @@ function sessionConfig(env, createResponse, includeModel = true) {
         turn_detection: {
           type: "semantic_vad",
           eagerness: "auto",
-          create_response: createResponse,
+          create_response: false,
           interrupt_response: true,
         },
         transcription: {
@@ -106,8 +84,8 @@ function sessionConfig(env, createResponse, includeModel = true) {
       },
       output: { voice: clean(env.ORKESTR_MOBILE_REALTIME_VOICE) },
     },
-    tools,
-    tool_choice: "auto",
+    tools: [],
+    tool_choice: "none",
     max_output_tokens: Math.max(128, Math.min(4096, Number(env.ORKESTR_MOBILE_REALTIME_MAX_OUTPUT_TOKENS || 1024))),
   };
   if (includeModel) session.model = clean(env.ORKESTR_MOBILE_REALTIME_MODEL);
@@ -116,7 +94,7 @@ function sessionConfig(env, createResponse, includeModel = true) {
 
 export function mobileRealtimeInitialSession(env = process.env) {
   assertMobileRealtimeConfigured(env);
-  return sessionConfig(env, false, true);
+  return sessionConfig(env, true);
 }
 
 export function mobileRealtimeActivationUpdate(env = process.env) {
@@ -124,7 +102,7 @@ export function mobileRealtimeActivationUpdate(env = process.env) {
   return {
     type: "session.update",
     event_id: `orkestr_activate_${Date.now()}`,
-    session: sessionConfig(env, true, false),
+    session: sessionConfig(env, false),
   };
 }
 

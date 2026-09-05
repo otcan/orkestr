@@ -6,6 +6,7 @@ import {
   mobilePushTokenSchema,
   mobileRealtimeCallParamsSchema,
   mobileRealtimeCallSchema,
+  mobileRealtimeTurnSchema,
 } from "../../../../../packages/shared/src/api-schemas.js";
 import { httpError, validateRequestSchema } from "../../common/http.js";
 import { MobileRealtimeService } from "./mobile-realtime.service.js";
@@ -53,6 +54,23 @@ export class MobileRealtimeController {
     return this.realtime.get(callId, {
       device: hushMobileDeviceContext(request),
       principal: requestPrincipal(request),
+    });
+  }
+
+  @Post("realtime/calls/:callId/turns")
+  @HttpCode(202)
+  submitTurn(
+    @Req() request: any,
+    @Param("callId") callId: string,
+    @Body() body: Record<string, unknown> = {},
+  ) {
+    validateRequestSchema(mobileRealtimeTurnSchema, { params: { callId }, body });
+    return this.realtime.submitTurn(callId, {
+      device: hushMobileDeviceContext(request),
+      principal: requestPrincipal(request),
+      clientTurnId: body.clientTurnId,
+      text: body.text,
+      locale: body.locale,
     });
   }
 
