@@ -234,6 +234,7 @@ export async function reserveMobileRealtimeCall(input = {}, options = {}) {
       leaseOwner: "",
       leaseExpiresAt: "",
       toolCalls: [],
+      turns: [],
       events: [],
     };
     appendCallEvent(call, { type: "call", stage: "connecting", detail: "Connecting securely." }, env);

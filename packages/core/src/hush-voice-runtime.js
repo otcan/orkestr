@@ -265,8 +265,12 @@ export async function createHushVoiceTurn(input = {}, options = {}) {
   const clientTurnId = clean(input.clientTurnId);
   const transcript = clean(input.transcript);
   const locale = clean(input.locale);
+  const configuredTranscriptLimit = Number(options.maxTranscriptLength);
+  const maxTranscriptLength = Number.isFinite(configuredTranscriptLimit)
+    ? Math.max(12_000, Math.min(50_000, Math.floor(configuredTranscriptLimit)))
+    : 12_000;
   if (!validClientTurnId(clientTurnId)) throw httpError("mobile_voice_turn_id_invalid", 400);
-  if (!transcript || transcript.length > 12000) throw httpError("mobile_voice_transcript_invalid", 400);
+  if (!transcript || transcript.length > maxTranscriptLength) throw httpError("mobile_voice_transcript_invalid", 400);
   if (!locale || locale.length > 64) throw httpError("mobile_voice_locale_invalid", 400);
   const contentHash = transcriptHash(transcript, locale);
   let created = false;
@@ -310,6 +314,15 @@ export async function createHushVoiceTurn(input = {}, options = {}) {
       clientTurnId,
       contentHash,
       locale,
+      ...(clean(input?.source?.kind) && clean(input?.source?.id) && clean(input?.source?.callId)
+        ? {
+            source: {
+              kind: clean(input.source.kind).slice(0, 40),
+              id: clean(input.source.id).slice(0, 200),
+              callId: clean(input.source.callId).slice(0, 200),
+            },
+          }
+        : {}),
       status: "queued",
       traceId: `hush-${randomUUID()}`,
       createdAt: now,
