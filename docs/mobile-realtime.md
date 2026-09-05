@@ -9,6 +9,7 @@ All routes require the existing Bearer access token and `X-Orkestr-Device-Proof`
 ```text
 GET    /api/mobile/realtime
 POST   /api/mobile/realtime/calls
+POST   /api/mobile/realtime/calls/:callId/turns
 GET    /api/mobile/realtime/calls/:callId
 GET    /api/mobile/realtime/calls/:callId/events
 DELETE /api/mobile/realtime/calls/:callId
@@ -16,9 +17,11 @@ PUT    /api/mobile/push-token
 PUT    /api/mobile/live-activity-token
 ```
 
-Call creation accepts only `clientCallId` and `offerSdp`. It is idempotent within the exact mobile session and rejects reuse with a different SDP. The event stream supports `Last-Event-ID` replay with a cursor local to the call.
+Call creation accepts only `clientCallId` and `offerSdp`. It is idempotent within the exact mobile session and rejects reuse with a different SDP. Typed call turns accept only `clientTurnId`, `text`, and `locale`; reuse with changed content is rejected. The event stream supports `Last-Event-ID` replay with a cursor local to the call.
 
-The provider can invoke only `orkestr_start_task({request})` and `orkestr_get_task_status({taskId})`. The dispatcher rechecks the call, device, session, profile, owner, and thread binding and never accepts a routing identifier from provider output or the phone.
+Every final spoken transcript and typed call turn is submitted deterministically through the same bound-thread pipeline as `POST /api/mobile/voice-turns`. Orkestr persists the call/source/content correlation before dispatch, and retries resolve to the same durable turn. The provider is configured with automatic responses and tools disabled; it may speak only an acknowledgement after durable acceptance or trusted progress/final content injected by the Orkestr sideband.
+
+The capability projection advertises `features.authoritativeTurns: true` only with this mandatory bridge active. The client must keep Realtime disabled when that flag is absent or false.
 
 ## Realtime configuration
 
@@ -43,7 +46,6 @@ ORKESTR_MOBILE_REALTIME_MAX_CALLS_PER_DEVICE=1
 ORKESTR_MOBILE_REALTIME_MAX_CALLS_PER_OWNER=2
 ORKESTR_MOBILE_REALTIME_MAX_CALLS_GLOBAL=100
 ORKESTR_MOBILE_REALTIME_CREATE_LIMIT_PER_MINUTE=6
-ORKESTR_MOBILE_REALTIME_TOOL_LIMIT_PER_MINUTE=30
 ORKESTR_MOBILE_REALTIME_CALL_RETENTION=2000
 ORKESTR_MOBILE_REALTIME_EVENT_RETENTION=2000
 ORKESTR_MOBILE_REALTIME_TRANSCRIPT_RETENTION=200
@@ -70,6 +72,6 @@ The publisher uses a token-free durable outbox with lease-based claiming, expone
 
 1. Run the server build, focused mobile security tests, the full CI suite, and `npm run oss:boundary-check`.
 2. Confirm `GET /api/mobile/realtime` is disabled for an owner outside the allowlist and enabled for an owner inside it.
-3. Establish a physical-device call and verify semantic VAD, barge-in, tool idempotency, SSE replay, network transitions, hangup, expiry, and revocation.
+3. Establish a physical-device call and verify exact-once spoken and typed thread input, no provider answer before durable acceptance, semantic VAD, barge-in, SSE replay, network transitions, hangup, expiry, and revocation.
 4. Verify APNs in both sandbox and production and test a remote Live Activity update from a suspended app.
 5. Keep asynchronous `/api/mobile/voice-turns` enabled as the degraded-mode fallback.

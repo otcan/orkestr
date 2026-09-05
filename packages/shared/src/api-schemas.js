@@ -198,6 +198,7 @@ export {
   mobilePushTokenSchema,
   mobileRealtimeCallParamsSchema,
   mobileRealtimeCallSchema,
+  mobileRealtimeTurnSchema,
   mobileSessionRefreshSchema,
   mobileVoiceTurnParamsSchema,
   mobileVoiceTurnSchema,

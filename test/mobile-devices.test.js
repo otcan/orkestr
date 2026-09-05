@@ -271,6 +271,33 @@ test("mobile access uses exact Hush context, rejects replay, and cannot authoriz
   assert.equal(replay.ok, false);
   assert.equal(replay.error, "mobile_device_proof_replayed");
 
+  const realtimeTurnBody = JSON.stringify({
+    clientTurnId: "45454545-4545-4454-8454-454545454545",
+    text: "Route this through the authoritative call bridge.",
+    locale: "en-US",
+  });
+  const realtimeTurnPath = "/api/mobile/realtime/calls/mrc_fixture/turns";
+  const realtimeTurnAuthorized = await authorizeMobileDeviceHttpRequest({
+    method: "POST",
+    url: realtimeTurnPath,
+    headers: {
+      authorization: `Bearer ${completed.accessToken}`,
+      "x-orkestr-content-sha256": sha256(realtimeTurnBody),
+      "x-orkestr-device-proof": signJwt(keys.privateKey, timedClaims({
+        aud: "orkestr.mobile.request",
+        sid: completed.session.id,
+        did: completed.device.id,
+        ath: sha256(completed.accessToken),
+        method: "POST",
+        path: realtimeTurnPath,
+        bodySha256: sha256(realtimeTurnBody),
+        jti: "request-proof-realtime-turn",
+      })),
+    },
+  }, env);
+  assert.equal(realtimeTurnAuthorized.ok, true);
+  assert.equal(realtimeTurnAuthorized.machineAuthContext.threadId, "hush-owner-thread");
+
   const forbidden = await authorizeMobileDeviceHttpRequest({
     ...request,
     url: "/api/threads",
