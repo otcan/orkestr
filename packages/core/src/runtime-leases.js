@@ -88,6 +88,7 @@ import {
 } from "./codex-generation.js";
 import { reconcileCodexFinalProjection } from "./codex-final-projection.js";
 import { readCodexRolloutSessionMeta, validateCodexRolloutGeneration } from "./codex-rollout-generation.js";
+import { replyDeliveryProjectionParent } from "./reply-delivery-intent.js";
 
 setConnectorOutboxJobAdapter(ensureConnectorOutboxJob);
 
@@ -4162,6 +4163,9 @@ export function parseAssistantRolloutMessages(body, threadId, baseOffset = 0, ge
     } else if (parsed?.type === "event_msg" && parsed.payload?.type === "agent_message") {
       text = String(parsed.payload.message || "").trim();
       phase = parsed.payload.phase || "final_answer";
+    } else if (parsed?.type === "event_msg" && parsed.payload?.type === "item_completed" && parsed.payload?.item?.type === "AgentMessage") {
+      text = collectMessageText(parsed.payload.item.content);
+      phase = parsed.payload.item.phase || "final_answer";
     } else if (parsed?.type === "event_msg" && parsed.payload?.type === "item_completed" && parsed.payload?.item?.type === "Plan") {
       text = String(parsed.payload.item.text || "").trim();
       phase = "plan";
@@ -4172,6 +4176,14 @@ export function parseAssistantRolloutMessages(body, threadId, baseOffset = 0, ge
     if (!text) continue;
     if (phase !== "plan" && hasProposedPlanEnvelope(text)) phase = "plan";
     const timestamp = parsed.timestamp || nowIso();
+    const metadata = parsed?.payload?.internal_chat_message_metadata_passthrough;
+    const codexTurnId = String(
+      parsed?.payload?.turn_id ||
+      parsed?.payload?.turnId ||
+      (metadata && typeof metadata === "object" ? metadata.turn_id || metadata.turnId : "") ||
+      "",
+    ).trim();
+    const codexItemId = String(parsed?.payload?.id || parsed?.payload?.item?.id || "").trim();
     const message = {
       cursor,
       role: "assistant",
@@ -4181,6 +4193,8 @@ export function parseAssistantRolloutMessages(body, threadId, baseOffset = 0, ge
       text,
       eventId: eventId({ threadId, generation, timestamp, role: "assistant", phase, text }),
       codexThreadId: generation || null,
+      codexTurnId: codexTurnId || null,
+      codexItemId: codexItemId || null,
       sourceFormat: parsed?.type === "response_item" ? "response_item" : "event_msg",
     };
     const key = ["assistant", String(phase || ""), normalizedTextKey(text)].join("\n");
@@ -4189,10 +4203,28 @@ export function parseAssistantRolloutMessages(body, threadId, baseOffset = 0, ge
       keyIndexes.set(key, messages.length);
       messages.push(message);
     } else if (messages[existingIndex]?.sourceFormat !== "response_item" && message.sourceFormat === "response_item") {
-      messages[existingIndex] = message;
+      const existing = messages[existingIndex];
+      messages[existingIndex] = {
+        ...existing,
+        ...message,
+        codexTurnId: message.codexTurnId || existing.codexTurnId || null,
+        codexItemId: message.codexItemId || existing.codexItemId || null,
+      };
     }
   }
   return messages.map(({ sourceFormat, ...message }) => message);
+}
+
+function exactRolloutTurnParent(messages = [], message = {}, generation = "") {
+  const turnId = String(message?.codexTurnId || message?.executorTurnId || "").trim();
+  if (!turnId) return null;
+  const expectedGeneration = String(generation || message?.codexThreadId || message?.executorThreadId || "").trim();
+  return [...messages].reverse().find((candidate) => {
+    if (String(candidate?.role || "").trim().toLowerCase() !== "user") return false;
+    if (String(candidate?.codexTurnId || candidate?.executorTurnId || "").trim() !== turnId) return false;
+    const candidateGeneration = String(candidate?.codexThreadId || candidate?.executorThreadId || "").trim();
+    return !expectedGeneration || !candidateGeneration || candidateGeneration === expectedGeneration;
+  }) || null;
 }
 
 function latestWhatsAppInput(messages = [], beforeTimestamp = null, thread = null) {
@@ -4290,8 +4322,18 @@ async function appendRolloutMessages({ thread, rolloutPath, generation = "", bod
     const eventKey = rolloutMessageEventKey(message);
     const textKey = rolloutMessageNearTextKey(message);
     if (existingEventKeys.has(eventKey) || existingTextKeys.has(textKey)) continue;
-    const whatsappParent = latestRolloutWhatsAppInput(existing, message.timestamp, thread);
-    const parentTurnId = String(whatsappParent?.codexTurnId || whatsappParent?.executorTurnId || "").trim();
+    const turnParent = exactRolloutTurnParent(existing, message, codexId);
+    const whatsappParent = turnParent
+      ? (whatsappOrigin(turnParent) ? turnParent : replyDeliveryProjectionParent(turnParent))
+      : latestRolloutWhatsAppInput(existing, message.timestamp, thread);
+    const parentMessage = turnParent || whatsappParent;
+    const parentTurnId = String(
+      message.codexTurnId ||
+      message.executorTurnId ||
+      parentMessage?.codexTurnId ||
+      parentMessage?.executorTurnId ||
+      "",
+    ).trim();
     const candidateMessage = {
       role: "assistant",
       source: message.source,
@@ -4301,7 +4343,7 @@ async function appendRolloutMessages({ thread, rolloutPath, generation = "", bod
       timestamp: message.timestamp,
       phase: message.phase,
       eventId: message.eventId,
-      parentMessageId: whatsappParent?.id || null,
+      parentMessageId: parentMessage?.id || null,
       connector: whatsappParent ? "whatsapp" : "",
       chatId: whatsappParentChatId(whatsappParent, thread),
       accountId: whatsappParentAccountId(whatsappParent, thread),
@@ -4313,6 +4355,8 @@ async function appendRolloutMessages({ thread, rolloutPath, generation = "", bod
       codexThreadId: codexId,
       codexTurnId: parentTurnId || null,
       executorTurnId: parentTurnId || null,
+      codexItemId: message.codexItemId || null,
+      executorItemId: message.codexItemId || null,
     };
     if (await rolloutFinalDuplicateExists(thread.id, candidateMessage, existingFinalDuplicateKeys, env)) continue;
     const appendedMessage = await appendThreadMessage(thread.id, candidateMessage, env);
@@ -4544,8 +4588,18 @@ async function syncLeaseRollout(lease, env = process.env) {
     const eventKey = rolloutMessageEventKey(message);
     const textKey = rolloutMessageNearTextKey(message);
     if (existingEventKeys.has(eventKey) || existingTextKeys.has(textKey)) continue;
-    const whatsappParent = latestRolloutWhatsAppInput(existing, message.timestamp, thread);
-    const parentTurnId = String(whatsappParent?.codexTurnId || whatsappParent?.executorTurnId || "").trim();
+    const turnParent = exactRolloutTurnParent(existing, message, generation);
+    const whatsappParent = turnParent
+      ? (whatsappOrigin(turnParent) ? turnParent : replyDeliveryProjectionParent(turnParent))
+      : latestRolloutWhatsAppInput(existing, message.timestamp, thread);
+    const parentMessage = turnParent || whatsappParent;
+    const parentTurnId = String(
+      message.codexTurnId ||
+      message.executorTurnId ||
+      parentMessage?.codexTurnId ||
+      parentMessage?.executorTurnId ||
+      "",
+    ).trim();
     const candidateMessage = {
       role: "assistant",
       source: message.source,
@@ -4555,7 +4609,7 @@ async function syncLeaseRollout(lease, env = process.env) {
       timestamp: message.timestamp,
       phase: message.phase,
       eventId: message.eventId,
-      parentMessageId: whatsappParent?.id || null,
+      parentMessageId: parentMessage?.id || null,
       connector: whatsappParent ? "whatsapp" : "",
       chatId: whatsappParentChatId(whatsappParent, thread),
       accountId: whatsappParentAccountId(whatsappParent, thread),
@@ -4567,6 +4621,8 @@ async function syncLeaseRollout(lease, env = process.env) {
       codexThreadId: generation || null,
       codexTurnId: parentTurnId || null,
       executorTurnId: parentTurnId || null,
+      codexItemId: message.codexItemId || null,
+      executorItemId: message.codexItemId || null,
     };
     if (await rolloutFinalDuplicateExists(currentLease.threadId, candidateMessage, existingFinalDuplicateKeys, env)) continue;
     const appendedMessage = await appendThreadMessage(currentLease.threadId, candidateMessage, env);

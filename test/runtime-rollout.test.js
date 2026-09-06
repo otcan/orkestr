@@ -606,6 +606,110 @@ test("detached rollout final answers clear matching active app-server turns", as
   assert.equal(reply?.codexTurnId, activeTurnId);
 });
 
+test("detached rollout metadata correlates a Hush final to its exact turn instead of the latest WhatsApp input", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-detached-rollout-hush-turn-"));
+  const rolloutPath = path.join(home, "rollout.jsonl");
+  const env = {
+    ORKESTR_HOME: path.join(home, "orkestr"),
+    ORKESTR_ROLLOUT_SYNC_LOOKBACK_BYTES: "8192",
+  };
+  const codexThreadId = "55555555-5555-4555-8555-555555555555";
+  const oldWhatsAppTurnId = "019e8891-0376-7503-829b-c1f2d8300b78";
+  const hushTurnId = "019e8891-0376-7503-829b-c1f2d8300b79";
+  await fs.mkdir(path.dirname(rolloutPath), { recursive: true });
+  await createThread({
+    id: "detached-rollout-hush-turn-thread",
+    name: "Detached Rollout Hush Turn Thread",
+    state: "working",
+    executorId: "codex",
+    executor: {
+      type: "codex",
+      transport: "app-server",
+      codexThreadId,
+      metadata: {
+        runtimeKind: "codex-app-server",
+        codexRolloutPath: rolloutPath,
+      },
+    },
+    runtime: {
+      runtimeKind: "codex-app-server",
+      state: "working",
+      activeTurnId: hushTurnId,
+      codexStatus: { type: "active", activeFlags: ["running"] },
+    },
+    binding: {
+      connector: "whatsapp",
+      chatId: "chat-hush-turn",
+      responderAccountId: "responder",
+      outboundAccountId: "responder",
+    },
+  }, env);
+  const staleWhatsAppParent = await appendThreadMessage("detached-rollout-hush-turn-thread", {
+    role: "user",
+    source: "whatsapp_inbound",
+    connector: "whatsapp",
+    chatId: "chat-hush-turn",
+    accountId: "responder",
+    text: "Older WhatsApp request",
+    timestamp: "2026-09-06T12:05:00.000Z",
+    state: "completed",
+    codexThreadId,
+    codexTurnId: oldWhatsAppTurnId,
+  }, env);
+  const hushParent = await appendThreadMessage("detached-rollout-hush-turn-thread", {
+    role: "user",
+    source: "hush",
+    originSurface: "mobile",
+    originTransport: "hush-mobile",
+    text: "Authoritative Hush request",
+    timestamp: "2026-09-06T12:06:00.000Z",
+    state: "completed",
+    deliveryState: "delivered",
+    codexThreadId,
+    codexTurnId: hushTurnId,
+  }, env);
+  const itemId = "msg_hush_authoritative_final";
+  await fs.writeFile(rolloutPath, [
+    JSON.stringify({
+      timestamp: "2026-09-06T12:06:03.000Z",
+      type: "event_msg",
+      payload: {
+        type: "item_completed",
+        thread_id: codexThreadId,
+        turn_id: hushTurnId,
+        item: { type: "AgentMessage", id: itemId, phase: "final_answer", content: [{ type: "Text", text: "Exact Hush answer" }] },
+      },
+    }),
+    JSON.stringify({
+      timestamp: "2026-09-06T12:06:03.001Z",
+      type: "response_item",
+      payload: {
+        type: "message",
+        id: itemId,
+        role: "assistant",
+        phase: "final_answer",
+        content: [{ type: "output_text", text: "Exact Hush answer" }],
+        internal_chat_message_metadata_passthrough: { turn_id: hushTurnId },
+      },
+    }),
+  ].join("\n") + "\n", "utf8");
+
+  const result = await syncRuntimeLeases(env);
+  const stored = await getThread("detached-rollout-hush-turn-thread", env);
+  const messages = await listThreadMessages("detached-rollout-hush-turn-thread", env);
+  const reply = messages.find((message) => message.text === "Exact Hush answer");
+
+  assert.equal(result.appended, 1);
+  assert.equal(reply?.parentMessageId, hushParent.id);
+  assert.notEqual(reply?.parentMessageId, staleWhatsAppParent.id);
+  assert.equal(reply?.codexTurnId, hushTurnId);
+  assert.equal(reply?.codexItemId, itemId);
+  assert.equal(reply?.connector || "", "");
+  assert.equal(stored.state, "ready");
+  assert.equal(stored.runtime.activeTurnId, null);
+  assert.equal(stored.runtime.lastTurnId, hushTurnId);
+});
+
 test("detached rollout sync does not attach a final answer to a queued app-server WhatsApp input", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-detached-rollout-queued-parent-"));
   const rolloutPath = path.join(home, "rollout.jsonl");
