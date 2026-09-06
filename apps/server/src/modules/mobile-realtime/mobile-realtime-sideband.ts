@@ -1,7 +1,11 @@
 import { randomUUID } from "node:crypto";
 import WebSocket from "ws";
 import { enqueueMobileRealtimePush } from "../../../../../packages/core/src/mobile-push.js";
-import { mobileRealtimeActivationUpdate } from "../../../../../packages/core/src/mobile-realtime-provider.js";
+import {
+  mobileRealtimeActivationUpdate,
+  mobileRealtimeProgressShouldSpeak,
+  mobileRealtimeTranscriptFailureShouldSpeak,
+} from "../../../../../packages/core/src/mobile-realtime-provider.js";
 import {
   claimMobileRealtimeLease,
   getMobileRealtimeCallInternal,
@@ -33,6 +37,7 @@ export class ManagedMobileRealtimeSideband {
   private activationReject: ((error: Error) => void) | null = null;
   private seenProviderEvents = new Set<string>();
   private trustedResponseMarkers = new Set<string>();
+  private lastDeliveryFailureSpokenAt = 0;
 
   constructor(
     private readonly localCallId: string,
@@ -171,13 +176,13 @@ export class ManagedMobileRealtimeSideband {
   }
 
   private async onCompletedUserTranscript(event: Record<string, any>): Promise<void> {
-    await recordMobileRealtimeTranscript(this.localCallId, {
+    const recorded = await recordMobileRealtimeTranscript(this.localCallId, {
       role: "user",
       providerItemId: event.item_id,
       text: event.transcript,
-    }).catch(() => {});
+    }).catch(() => null);
     const text = clean(event.transcript);
-    if (!text || !clean(event.item_id)) return;
+    if (!text || !clean(event.item_id) || recorded === null) return;
     try {
       await submitMobileRealtimeTurn({
         callId: this.localCallId,
@@ -190,7 +195,11 @@ export class ManagedMobileRealtimeSideband {
         "Trusted Orkestr state: this user turn is durably accepted and queued.",
         "Briefly acknowledge that Orkestr accepted the request. Do not answer the request or claim completion.",
       );
-    } catch {
+    } catch (error) {
+      if (!mobileRealtimeTranscriptFailureShouldSpeak(error)) return;
+      const now = Date.now();
+      if (now - this.lastDeliveryFailureSpokenAt < 10_000) return;
+      this.lastDeliveryFailureSpokenAt = now;
       try {
         this.createTrustedResponse(
           "Trusted Orkestr state: durable delivery failed. The user must retry this request.",
@@ -238,7 +247,7 @@ export class ManagedMobileRealtimeSideband {
     const call = await getMobileRealtimeCallInternal(this.localCallId).catch(() => null);
     if (call && result.event) await enqueueMobileRealtimePush(call, result.event).catch(() => {});
     if (result.turn?.status !== "final") {
-      if (result.event && ["working", "waiting_for_approval", "failed"].includes(result.event.stage)) {
+      if (result.event && mobileRealtimeProgressShouldSpeak(result.event.stage)) {
         try {
           this.createTrustedResponse(
             `Trusted Orkestr progress: ${clean(result.event.detail)}`,

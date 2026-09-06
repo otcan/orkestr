@@ -11,7 +11,9 @@ import {
   mobileRealtimeActivationUpdate,
   mobileRealtimeCapability,
   mobileRealtimeOwnerAllowed,
+  mobileRealtimeProgressShouldSpeak,
   mobileRealtimeSafetyIdentifier,
+  mobileRealtimeTranscriptFailureShouldSpeak,
 } from "../packages/core/src/mobile-realtime-provider.js";
 import {
   enqueueMobileRealtimePush,
@@ -99,6 +101,17 @@ test("realtime capability fails closed until every server-owned setting exists",
     ORKESTR_MOBILE_REALTIME_VOICE: "voice",
     ORKESTR_MOBILE_REALTIME_SAFETY_HMAC_KEY: "safety",
   }).features.authoritativeTurns, true);
+});
+
+test("realtime speech policy suppresses overlapping-turn chatter but retains actionable failures", () => {
+  assert.equal(mobileRealtimeTranscriptFailureShouldSpeak({ code: "mobile_realtime_task_already_active" }), false);
+  assert.equal(mobileRealtimeTranscriptFailureShouldSpeak(new Error("mobile_realtime_call_inactive")), false);
+  assert.equal(mobileRealtimeTranscriptFailureShouldSpeak({ code: "mobile_device_revoked" }), false);
+  assert.equal(mobileRealtimeTranscriptFailureShouldSpeak({ code: "mobile_realtime_provider_unavailable" }), true);
+  assert.equal(mobileRealtimeProgressShouldSpeak("working"), false);
+  assert.equal(mobileRealtimeProgressShouldSpeak("queued"), false);
+  assert.equal(mobileRealtimeProgressShouldSpeak("waiting_for_approval"), true);
+  assert.equal(mobileRealtimeProgressShouldSpeak("failed"), true);
 });
 
 test("provider negotiation is multipart, fail-closed, and uses a pseudonymous safety identifier", async () => {
