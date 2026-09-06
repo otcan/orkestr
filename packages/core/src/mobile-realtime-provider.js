@@ -45,6 +45,26 @@ export function mobileRealtimeOwnerAllowed(ownerUserId, env = process.env) {
   return allowed.has("*") || allowed.has(owner);
 }
 
+const silentTranscriptFailureCodes = new Set([
+  "mobile_device_revoked",
+  "mobile_realtime_call_inactive",
+  "mobile_realtime_task_already_active",
+]);
+const spokenProgressStages = new Set(["failed", "waiting_for_approval"]);
+
+/** @param {unknown} error */
+export function mobileRealtimeTranscriptFailureShouldSpeak(error = null) {
+  const candidate = error && typeof error === "object"
+    ? /** @type {{ code?: unknown, message?: unknown }} */ (error)
+    : {};
+  const code = clean(candidate.code || candidate.message || error);
+  return !silentTranscriptFailureCodes.has(code);
+}
+
+export function mobileRealtimeProgressShouldSpeak(stage = "") {
+  return spokenProgressStages.has(clean(stage));
+}
+
 export function assertMobileRealtimeConfigured(env = process.env) {
   const capability = mobileRealtimeCapability(env);
   if (!capability.enabled) throw providerError("mobile_realtime_unavailable", 503);
