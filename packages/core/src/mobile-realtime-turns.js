@@ -88,9 +88,6 @@ async function reserveTurn(callId, input, env) {
       markDirty();
       return { created: true };
     }
-    if (call.activeTaskRunning === true) {
-      throw httpError("mobile_realtime_task_already_active", 409, { retryable: true });
-    }
     const now = new Date().toISOString();
     call.turns = [...(call.turns || []), {
       sourceKind: input.sourceKind,
@@ -128,8 +125,6 @@ async function completeTurn(callId, input, env) {
     call.activeTaskId = stored.taskId;
     call.activeTaskRunning = true;
     call.taskProjectionHash = "";
-    call.finalSidebandDelivered = false;
-    call.finalSidebandDeliveredAt = "";
     markDirty();
     return { acceptance: acceptance(call, stored), eventRequired: true };
   }, env);

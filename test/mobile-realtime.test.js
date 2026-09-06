@@ -4,16 +4,15 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { adminPrincipal } from "../packages/core/src/principal.js";
-import { createThread, listThreadMessages } from "../packages/core/src/threads.js";
+import { appendThreadMessage, createThread, listThreadMessages } from "../packages/core/src/threads.js";
+import { syncMobileRealtimeThreadMirror } from "../packages/core/src/mobile-realtime-mirror.js";
 import {
   createOpenAIRealtimeCall,
   hangupOpenAIRealtimeCall,
   mobileRealtimeActivationUpdate,
   mobileRealtimeCapability,
   mobileRealtimeOwnerAllowed,
-  mobileRealtimeProgressShouldSpeak,
   mobileRealtimeSafetyIdentifier,
-  mobileRealtimeTranscriptFailureShouldSpeak,
 } from "../packages/core/src/mobile-realtime-provider.js";
 import {
   enqueueMobileRealtimePush,
@@ -30,6 +29,7 @@ import {
   recordMobileRealtimeProgress,
   recordMobileRealtimeTranscript,
   reserveMobileRealtimeCall,
+  setMobileRealtimeCallState,
   setMobileRealtimeProviderCall,
 } from "../packages/core/src/mobile-realtime-store.js";
 import { executeMobileRealtimeTool } from "../packages/core/src/mobile-realtime-tools.js";
@@ -101,17 +101,15 @@ test("realtime capability fails closed until every server-owned setting exists",
     ORKESTR_MOBILE_REALTIME_VOICE: "voice",
     ORKESTR_MOBILE_REALTIME_SAFETY_HMAC_KEY: "safety",
   }).features.authoritativeTurns, true);
-});
-
-test("realtime speech policy suppresses overlapping-turn chatter but retains actionable failures", () => {
-  assert.equal(mobileRealtimeTranscriptFailureShouldSpeak({ code: "mobile_realtime_task_already_active" }), false);
-  assert.equal(mobileRealtimeTranscriptFailureShouldSpeak(new Error("mobile_realtime_call_inactive")), false);
-  assert.equal(mobileRealtimeTranscriptFailureShouldSpeak({ code: "mobile_device_revoked" }), false);
-  assert.equal(mobileRealtimeTranscriptFailureShouldSpeak({ code: "mobile_realtime_provider_unavailable" }), true);
-  assert.equal(mobileRealtimeProgressShouldSpeak("working"), false);
-  assert.equal(mobileRealtimeProgressShouldSpeak("queued"), false);
-  assert.equal(mobileRealtimeProgressShouldSpeak("waiting_for_approval"), true);
-  assert.equal(mobileRealtimeProgressShouldSpeak("failed"), true);
+  const features = mobileRealtimeCapability({
+    ORKESTR_MOBILE_REALTIME_ENABLED: "1",
+    ORKESTR_OPENAI_API_KEY: "key",
+    ORKESTR_MOBILE_REALTIME_MODEL: "model",
+    ORKESTR_MOBILE_REALTIME_VOICE: "voice",
+    ORKESTR_MOBILE_REALTIME_SAFETY_HMAC_KEY: "safety",
+  }).features;
+  assert.equal(features.threadMirror, true);
+  assert.equal(features.threadMirrorVersion, 1);
 });
 
 test("provider negotiation is multipart, fail-closed, and uses a pseudonymous safety identifier", async () => {
@@ -131,11 +129,14 @@ test("provider negotiation is multipart, fail-closed, and uses a pseudonymous sa
   const session = JSON.parse(request.options.body.get("session"));
   assert.equal(session.model, "realtime-test-model");
   assert.equal(session.audio.input.turn_detection.create_response, false);
+  assert.equal(session.audio.input.turn_detection.eagerness, "high");
   assert.deepEqual(session.tools, []);
   assert.equal(session.tool_choice, "none");
   assert.equal(request.options.headers["OpenAI-Safety-Identifier"], mobileRealtimeSafetyIdentifier("admin", env));
   assert.equal(mobileRealtimeSafetyIdentifier("admin", env).length, 64);
   assert.equal(mobileRealtimeActivationUpdate(env).session.audio.input.turn_detection.create_response, false);
+  assert.equal(mobileRealtimeActivationUpdate({ ...env, ORKESTR_MOBILE_REALTIME_VAD_EAGERNESS: "medium" })
+    .session.audio.input.turn_detection.eagerness, "medium");
 });
 
 test("authoritative typed turns enter the bound thread exactly once and retain safe call correlation", async () => {
@@ -180,14 +181,15 @@ test("authoritative typed turns enter the bound thread exactly once and retain s
   assert.equal(stored.turns[0].sourceId, input.sourceId);
   assert.equal(stored.turns[0].turnId, first.turnId);
   assert.equal("text" in stored.turns[0], false);
-  await assert.rejects(
-    submitMobileRealtimeTurn({
-      ...input,
-      sourceId: "78787878-7878-4787-8787-787878787878",
-      text: "A second task cannot overlap the active one.",
-    }, { env, dependencies }),
-    /mobile_realtime_task_already_active/,
-  );
+  const followUp = await submitMobileRealtimeTurn({
+    ...input,
+    sourceId: "78787878-7878-4787-8787-787878787878",
+    text: "Add this follow-up to the same live thread.",
+  }, { env, dependencies });
+  assert.equal(followUp.accepted, true);
+  assert.notEqual(followUp.taskId, first.taskId);
+  assert.equal((await listThreadMessages("hush-realtime-thread", env))
+    .filter((message) => message.role === "user").length, 2);
   await assert.rejects(
     submitMobileRealtimeTurn({
       ...input,
@@ -320,6 +322,98 @@ test("a bound thread has only one live call and event replay is scoped to the ex
     }, { env }),
     /mobile_realtime_call_not_found/,
   );
+});
+
+test("thread mirror emits post-connect visible messages once without private routing metadata", async () => {
+  const env = await envFor("thread-mirror");
+  await createThread({ id: "hush-realtime-thread", name: "Realtime", ownerUserId: "admin" }, env);
+  await appendThreadMessage("hush-realtime-thread", {
+    role: "assistant",
+    source: "codex",
+    state: "completed",
+    phase: "final_answer",
+    text: "Historical context must not replay.",
+  }, env);
+  const reserved = await reserveMobileRealtimeCall({
+    device: device(),
+    principal: adminPrincipal(),
+    clientCallId: "92929292-9292-4292-8292-929292929292",
+    offerSdp,
+  }, { env, dependencies: reserveDependencies() });
+  await setMobileRealtimeProviderCall(reserved.call.id, { providerCallId: "rtc_mirror", answerSdp: "v=0\r\n" }, env);
+  await activateMobileRealtimeCall(reserved.call.id, env);
+  const input = await appendThreadMessage("hush-realtime-thread", {
+    role: "user",
+    source: "hush",
+    state: "queued",
+    text: "Mirror this request.",
+  }, env);
+  await appendThreadMessage("hush-realtime-thread", {
+    role: "assistant",
+    source: "codex",
+    state: "completed",
+    phase: "commentary",
+    parentMessageId: input.id,
+    codexThreadId: "private-codex-thread",
+    text: "I am checking the live state now.",
+  }, env);
+  await appendThreadMessage("hush-realtime-thread", {
+    role: "assistant",
+    source: "codex",
+    state: "completed",
+    phase: "reasoning",
+    parentMessageId: input.id,
+    text: "Private reasoning must remain hidden.",
+  }, env);
+  await appendThreadMessage("hush-realtime-thread", {
+    role: "assistant",
+    source: "codex",
+    state: "completed",
+    phase: "final_answer",
+    parentMessageId: input.id,
+    text: "The live state is healthy.",
+  }, env);
+
+  const first = await syncMobileRealtimeThreadMirror(reserved.call.id, { env });
+  const retry = await syncMobileRealtimeThreadMirror(reserved.call.id, { env });
+  assert.equal(first.length, 3);
+  assert.deepEqual(retry, []);
+  const events = await listMobileRealtimeCallEvents(reserved.call.id, 0, {
+    device: device(),
+    principal: adminPrincipal(),
+  }, { env });
+  const messages = events.filter((event) => event.type === "message");
+  assert.deepEqual(messages.map((event) => event.message.text), [
+    "Mirror this request.",
+    "I am checking the live state now.",
+    "The live state is healthy.",
+  ]);
+  assert.deepEqual(messages.map((event) => event.message.phase), ["input", "commentary", "final_answer"]);
+  assert.equal(messages[0].message.origin, "hush");
+  assert.equal(messages[1].message.origin, "thread");
+  const serialized = JSON.stringify(messages);
+  assert.equal(serialized.includes("hush-realtime-thread"), false);
+  assert.equal(serialized.includes("private-codex-thread"), false);
+  assert.equal(serialized.includes("Historical context"), false);
+  assert.equal(serialized.includes("Private reasoning"), false);
+});
+
+test("terminal realtime calls cannot regress into reconnecting", async () => {
+  const env = await envFor("terminal-fence");
+  const reserved = await reserveMobileRealtimeCall({
+    device: device(),
+    principal: adminPrincipal(),
+    clientCallId: "93939393-9393-4393-8393-939393939393",
+    offerSdp,
+  }, { env, dependencies: reserveDependencies() });
+  await setMobileRealtimeProviderCall(reserved.call.id, { providerCallId: "rtc_terminal", answerSdp: "v=0\r\n" }, env);
+  await activateMobileRealtimeCall(reserved.call.id, env);
+  const ended = await setMobileRealtimeCallState(reserved.call.id, "ended", "client_hangup", env);
+  const eventCount = ended.events.length;
+  const unchanged = await setMobileRealtimeCallState(reserved.call.id, "reconnecting", "sideband_disconnected", env);
+  assert.equal(unchanged.status, "ended");
+  assert.equal(unchanged.endReason, "client_hangup");
+  assert.equal(unchanged.events.length, eventCount);
 });
 
 test("tool idempotency is provider-call-derived and task IDs cannot cross calls", async () => {

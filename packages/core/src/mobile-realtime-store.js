@@ -4,7 +4,7 @@ import { ensureDataDirs } from "../../storage/src/paths.js";
 import { withStorageFileLock } from "../../storage/src/storage-lock.js";
 import { snapshotEnvironment } from "../../storage/src/test-storage-isolation.js";
 import { mobileDeviceContextIsActive } from "./mobile-devices.js";
-import { getThreadForPrincipal, threadIsRetired } from "./threads.js";
+import { getThreadForPrincipal, listThreadMessageCandidates, threadIsRetired } from "./threads.js";
 
 const ACTIVE_STATES = new Set(["creating", "connecting", "active", "reconnecting", "ending"]);
 const TERMINAL_STATES = new Set(["ended", "failed"]);
@@ -121,6 +121,7 @@ function appendCallEvent(call, input = {}, env = process.env) {
     occurredAt: nowIso(),
     requiresUserAction: input.requiresUserAction === true,
     ...(typeof input.answer === "string" ? { answer: input.answer.slice(0, 50_000) } : {}),
+    ...(input.message && typeof input.message === "object" ? { message: structuredClone(input.message) } : {}),
   };
   const limit = boundedInt(env, "ORKESTR_MOBILE_REALTIME_EVENT_RETENTION", 2000, 100, 20_000);
   call.events = [...(Array.isArray(call.events) ? call.events : []), event].slice(-limit);
@@ -170,6 +171,7 @@ export async function reserveMobileRealtimeCall(input = {}, options = {}) {
   const dependencies = {
     deviceActive: mobileDeviceContextIsActive,
     getThreadForPrincipal,
+    listThreadMessageCandidates,
     ...(options.dependencies || {}),
   };
   const device = input.device || {};
@@ -188,6 +190,13 @@ export async function reserveMobileRealtimeCall(input = {}, options = {}) {
       (clean(thread.ownerUserId) && clean(thread.ownerUserId) !== clean(device.ownerUserId))) {
     throw httpError("mobile_realtime_profile_thread_forbidden", 403);
   }
+  const currentMessages = await dependencies.listThreadMessageCandidates(thread.id, { tailLimit: 1 }, env);
+  const threadMirrorBaselineCursor = Math.max(
+    0,
+    ...(Array.isArray(currentMessages) ? currentMessages : [])
+      .map((message) => Number(message?.cursor || 0))
+      .filter(Number.isFinite),
+  );
   const offerHash = hash(offerSdp);
   return withCallStore(env, async (store, markDirty) => {
     const existing = store.calls.find((call) =>
@@ -228,6 +237,8 @@ export async function reserveMobileRealtimeCall(input = {}, options = {}) {
       endReason: "",
       activeTaskId: "",
       taskProjectionHash: "",
+      threadMirrorBaselineCursor,
+      threadMirrorSeenMessageIds: [],
       lastProviderEventId: "",
       lastEventId: 0,
       leaseGeneration: 0,
@@ -282,13 +293,20 @@ export async function setMobileRealtimeCallState(callId, status, reason = "", en
   return withCallStore(env, async (store, markDirty) => {
     const call = store.calls.find((item) => clean(item.id) === clean(callId));
     if (!call) return null;
-    call.status = clean(status);
+    const nextStatus = clean(status);
+    if (TERMINAL_STATES.has(clean(call.status))) return structuredClone(call);
+    if (clean(call.status) === "ending" && !TERMINAL_STATES.has(nextStatus)) return structuredClone(call);
+    if (clean(call.status) === nextStatus && (!reason || clean(call.endReason) === clean(reason))) {
+      return structuredClone(call);
+    }
+    call.status = nextStatus;
     if (["ended", "failed"].includes(call.status)) {
       call.endedAt ||= nowIso();
       call.endReason = clean(reason).slice(0, 120) || call.status;
       call.leaseOwner = "";
       call.leaseExpiresAt = "";
       call.answerSdp = "";
+      call.threadMirrorSeenMessageIds = [];
     }
     appendCallEvent(call, {
       type: "call",
@@ -340,6 +358,25 @@ export async function recordMobileRealtimeProgress(callId, event, env = process.
     if (dedupeKey && clean(call.lastProgressDedupeKey) === dedupeKey) return null;
     const created = appendCallEvent(call, event, env);
     call.lastProgressDedupeKey = dedupeKey;
+    markDirty();
+    return created;
+  });
+}
+
+export async function recordMobileRealtimeMirrorMessage(callId, sourceMessageId, message, env = process.env) {
+  return withCallStore(env, async (store, markDirty) => {
+    const call = store.calls.find((item) => clean(item.id) === clean(callId));
+    if (!call || !ACTIVE_STATES.has(clean(call.status))) return null;
+    const sourceId = clean(sourceMessageId);
+    if (!sourceId || (call.threadMirrorSeenMessageIds || []).includes(sourceId)) return null;
+    const created = appendCallEvent(call, {
+      type: "message",
+      stage: "active",
+      detail: "",
+      message,
+    }, env);
+    const limit = boundedInt(env, "ORKESTR_MOBILE_REALTIME_MIRROR_RETENTION", 20_000, 100, 20_000);
+    call.threadMirrorSeenMessageIds = [...(call.threadMirrorSeenMessageIds || []), sourceId].slice(-limit);
     markDirty();
     return created;
   });
@@ -412,16 +449,6 @@ export async function listMobileRealtimeCallsWithTasks(env = process.env) {
   return withCallStore(env, async (store) => store.calls
     .filter((call) => call.activeTaskRunning === true && clean(call.activeTaskId))
     .map((call) => structuredClone(call)));
-}
-
-export async function markMobileRealtimeFinalDelivered(callId, taskId, env = process.env) {
-  return mutateMobileRealtimeCall(callId, (call, markDirty) => {
-    if (clean(call.activeTaskId) !== clean(taskId)) return false;
-    call.finalSidebandDelivered = true;
-    call.finalSidebandDeliveredAt = nowIso();
-    markDirty();
-    return true;
-  }, env);
 }
 
 export async function setMobileRealtimeHangupPending(callId, pending, env = process.env) {
