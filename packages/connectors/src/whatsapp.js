@@ -29,7 +29,12 @@ import { resolveCurrentCodexGeneration } from "../../core/src/codex-generation.j
 import { adminUserId, findOrCreateExternalUser, getUser, normalizeUserId } from "../../core/src/users.js";
 import { injectRuntimeFault } from "../../core/src/runtime-fault-injection.js";
 import { isNoReplyAssistantMessage } from "../../core/src/no-reply.js";
-import { recordUiReplyDeliveryMetric, replyDeliveryBindingFence, replyDeliveryIntentStatusPatch } from "../../core/src/reply-delivery-intent.js";
+import {
+  recordUiReplyDeliveryMetric,
+  replyDeliveryBindingFence,
+  replyDeliveryIntentStatusPatch,
+  trustedHushReplyDeliveryIntent,
+} from "../../core/src/reply-delivery-intent.js";
 import { hydrateEncryptedPublishedAttachmentPaths } from "../../core/src/encrypted-attachment-publication.js";
 import { recordRuntimeControlMetric } from "../../core/src/observability.js";
 import { dataPaths, ensureDataDirs } from "../../storage/src/paths.js";
@@ -160,8 +165,9 @@ const suppressibleWhatsAppUpdateDeliveryTypes = new Set([
   "router_update",
 ]);
 
-async function patchUiReplyDeliveryParent({ kind, threadId, parent, status, reason = "", outboxId = "", connectorMessageId = "", env = process.env } = {}) {
+async function patchUiReplyDeliveryParent({ kind, threadId, parent, deliveryType = "", status, reason = "", outboxId = "", connectorMessageId = "", env = process.env } = {}) {
   if (kind !== "thread" || !threadId || !parent?.id) return null;
+  if (deliveryType && pickString(deliveryType).toLowerCase() !== "final") return null;
   const patch = replyDeliveryIntentStatusPatch(parent, status, { reason, outboxId, connectorMessageId });
   if (!patch) return null;
   return updateThreadMessage(threadId, parent.id, patch, env).catch(() => null);
@@ -3314,6 +3320,7 @@ async function sendClaimedWhatsAppText({
         kind,
         threadId,
         parent,
+        deliveryType,
         status: "delivered",
         outboxId: outboxResult.job.id,
         connectorMessageId: outboundDeliveryAckIds({ brokerAck: outboxResult.job?.brokerAck })[0] || "",
@@ -3338,6 +3345,7 @@ async function sendClaimedWhatsAppText({
         kind,
         threadId,
         parent,
+        deliveryType,
         status: outboxState === "delivery_uncertain" ? "delivery_unknown" : "retry_exhausted",
         reason: pickString(outboxResult.job?.error, `connector_outbox_${outboxState}`),
         outboxId: outboxResult.job.id,
@@ -3362,6 +3370,7 @@ async function sendClaimedWhatsAppText({
     kind,
     threadId,
     parent,
+    deliveryType,
     status: "queued",
     outboxId: outboxResult.job.id,
     env,
@@ -3765,6 +3774,7 @@ async function sendClaimedWhatsAppText({
       kind,
       threadId,
       parent,
+      deliveryType,
       status: "delivered",
       outboxId: outboxClaim.job.id,
       connectorMessageId: ackIds[0] || "",
@@ -3877,6 +3887,7 @@ async function sendClaimedWhatsAppText({
         kind,
         threadId,
         parent,
+        deliveryType,
         status: uncertainDelivery ? "delivery_unknown" : "retry_exhausted",
         reason: errorText,
         outboxId: outboxClaim.job.id,
@@ -6823,6 +6834,28 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
           message.connector === "whatsapp" ||
           boundThreadWhatsAppAssistantOrigin({ message, thread, kind });
         if (!whatsappOrigin) continue;
+        if (trustedHushReplyDeliveryIntent(parent)) {
+          await skipWhatsAppOutboundCandidate({
+            state,
+            outboundIntents,
+            kind,
+            deliveryType: "progress",
+            agentId,
+            threadId,
+            messageId: message.id,
+            parentMessageId: message.parentMessageId,
+            chatId: pickString(message.chatId, parent?.chatId, thread?.binding?.chatId),
+            accountId: kind === "thread"
+              ? pickString(thread?.binding?.responderAccountId, thread?.binding?.outboundAccountId, message.accountId, parent?.accountId)
+              : pickString(message.accountId, parent?.accountId),
+            message,
+            parent,
+            reason: "hush_final_only",
+            env,
+          });
+          skipped.push({ agentId, threadId, messageId: message.id, reason: "hush_final_only" });
+          continue;
+        }
         const liveRecovery = canRecoverLiveWhatsAppOutboundIntent({
           state,
           messageSetKey,

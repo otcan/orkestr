@@ -222,6 +222,121 @@ test("Hush-requested Codex final is delivered once and records durable intent co
   assert.equal(storedParent.replyDeliveryIntent.connectorMessageId, "wa-hush-final-1");
 });
 
+test("Hush reply delivery suppresses commentary and sends only the authoritative final", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-hush-final-only-reply-"));
+  const runtimeEnv = env(home);
+  await writeConnectorConfig("whatsapp", { bridgeMode: "external", bridgeUrl: "http://wa.local" }, runtimeEnv);
+  await createThread({ id: "thread-hush-final-only", ownerUserId: "tenant-a", name: "Hush final only", binding: binding() }, runtimeEnv);
+  const thread = await getThread("thread-hush-final-only", runtimeEnv);
+  const parent = await appendThreadMessage(thread.id, {
+    role: "user",
+    source: "hush",
+    originSurface: "mobile",
+    originTransport: "hush-mobile",
+    state: "completed",
+    text: "Send only the final result",
+    replyDeliveryIntent: createHushReplyDeliveryIntent(thread, {
+      enabled: true,
+      requestedByUserId: "tenant-a",
+      id: "intent-hush-final-only",
+    }),
+  }, runtimeEnv);
+  const projected = replyDeliveryProjectionParent(parent);
+  const progress = await appendThreadMessage(thread.id, {
+    role: "assistant",
+    source: "codex-app-server",
+    phase: "commentary",
+    state: "completed",
+    parentMessageId: parent.id,
+    connector: "whatsapp",
+    chatId: projected.chatId,
+    accountId: projected.accountId,
+    text: "This progress stays inside Orkestr.",
+  }, runtimeEnv);
+  const final = await appendThreadMessage(thread.id, {
+    role: "assistant",
+    source: "codex-app-server",
+    phase: "final_answer",
+    state: "completed",
+    parentMessageId: parent.id,
+    connector: "whatsapp",
+    chatId: projected.chatId,
+    accountId: projected.accountId,
+    text: "This authoritative final reaches WhatsApp.",
+  }, runtimeEnv);
+  const sends = [];
+  const result = await deliverWhatsAppReplies(runtimeEnv, async (_url, options = {}) => {
+    sends.push(JSON.parse(options.body).text);
+    return response({ ok: true, ids: ["wa-hush-final-only-1"] });
+  });
+  const storedParent = (await listThreadMessages(thread.id, runtimeEnv)).find((message) => message.id === parent.id);
+
+  assert.equal(result.delivered.length, 1);
+  assert.equal(result.delivered[0].messageId, final.id);
+  assert.equal(result.skipped.find((item) => item.messageId === progress.id)?.reason, "hush_final_only");
+  assert.deepEqual(sends, ["This authoritative final reaches WhatsApp."]);
+  assert.equal(storedParent.replyDeliveryIntent.status, "delivered");
+  assert.equal(storedParent.replyDeliveryIntent.connectorMessageId, "wa-hush-final-only-1");
+});
+
+test("a mirrored progress update does not consume a server reply intent before the final", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-reply-intent-progress-"));
+  const runtimeEnv = env(home);
+  await writeConnectorConfig("whatsapp", { bridgeMode: "external", bridgeUrl: "http://wa.local" }, runtimeEnv);
+  await createThread({ id: "thread-ui-progress-final", ownerUserId: "tenant-a", name: "UI progress then final", binding: binding() }, runtimeEnv);
+  const thread = await getThread("thread-ui-progress-final", runtimeEnv);
+  const parent = await appendThreadMessage(thread.id, {
+    role: "user",
+    source: "ui",
+    originSurface: "webui",
+    state: "completed",
+    text: "Mirror progress and final",
+    replyDeliveryIntent: createUiReplyDeliveryIntent(thread, { mode: "bound_whatsapp", id: "intent-ui-progress-final" }),
+  }, runtimeEnv);
+  const projected = replyDeliveryProjectionParent(parent);
+  const progress = await appendThreadMessage(thread.id, {
+    role: "assistant",
+    source: "codex-app-server",
+    phase: "commentary",
+    state: "completed",
+    parentMessageId: parent.id,
+    connector: "whatsapp",
+    chatId: projected.chatId,
+    accountId: projected.accountId,
+    text: "Visible progress.",
+  }, runtimeEnv);
+  const sentIds = [];
+  const fetchImpl = async (_url, options = {}) => {
+    const id = sentIds.length === 0 ? "wa-ui-progress-1" : "wa-ui-final-1";
+    sentIds.push({ id, text: JSON.parse(options.body).text });
+    return response({ ok: true, ids: [id] });
+  };
+
+  const progressDelivery = await deliverWhatsAppReplies(runtimeEnv, fetchImpl);
+  const afterProgress = (await listThreadMessages(thread.id, runtimeEnv)).find((message) => message.id === parent.id);
+  assert.equal(progressDelivery.delivered.some((item) => item.messageId === progress.id), true);
+  assert.notEqual(afterProgress.replyDeliveryIntent.status, "delivered");
+
+  const final = await appendThreadMessage(thread.id, {
+    role: "assistant",
+    source: "codex-app-server",
+    phase: "final_answer",
+    state: "completed",
+    parentMessageId: parent.id,
+    connector: "whatsapp",
+    chatId: projected.chatId,
+    accountId: projected.accountId,
+    text: "Visible final.",
+  }, runtimeEnv);
+  const finalDelivery = await deliverWhatsAppReplies(runtimeEnv, fetchImpl);
+  const storedParent = (await listThreadMessages(thread.id, runtimeEnv)).find((message) => message.id === parent.id);
+
+  assert.equal(finalDelivery.delivered.some((item) => item.messageId === final.id), true);
+  assert.deepEqual(sentIds.map((entry) => entry.text), ["Visible progress.", "Visible final."]);
+  assert.equal(storedParent.replyDeliveryIntent.status, "delivered");
+  assert.equal(storedParent.replyDeliveryIntent.connectorMessageId, "wa-ui-final-1");
+});
+
 test("UI-requested reply remains durably queued across a retryable WhatsApp outage", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-ui-reply-queued-"));
   const runtimeEnv = env(home);
