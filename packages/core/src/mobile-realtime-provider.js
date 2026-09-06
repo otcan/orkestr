@@ -32,6 +32,8 @@ export function mobileRealtimeCapability(env = process.env) {
       backgroundProgress: mobilePushCapability(env).enabled,
       progressReplay: true,
       authoritativeTurns: true,
+      threadMirror: true,
+      threadMirrorVersion: 1,
     },
     maxCallSeconds: Math.max(60, Number.isFinite(configuredMaxCallSeconds) ? configuredMaxCallSeconds : 1800),
   };
@@ -43,26 +45,6 @@ export function mobileRealtimeOwnerAllowed(ownerUserId, env = process.env) {
   if (!owner || !configured) return false;
   const allowed = new Set(configured.split(",").map(clean).filter(Boolean));
   return allowed.has("*") || allowed.has(owner);
-}
-
-const silentTranscriptFailureCodes = new Set([
-  "mobile_device_revoked",
-  "mobile_realtime_call_inactive",
-  "mobile_realtime_task_already_active",
-]);
-const spokenProgressStages = new Set(["failed", "waiting_for_approval"]);
-
-/** @param {unknown} error */
-export function mobileRealtimeTranscriptFailureShouldSpeak(error = null) {
-  const candidate = error && typeof error === "object"
-    ? /** @type {{ code?: unknown, message?: unknown }} */ (error)
-    : {};
-  const code = clean(candidate.code || candidate.message || error);
-  return !silentTranscriptFailureCodes.has(code);
-}
-
-export function mobileRealtimeProgressShouldSpeak(stage = "") {
-  return spokenProgressStages.has(clean(stage));
 }
 
 export function assertMobileRealtimeConfigured(env = process.env) {
@@ -79,22 +61,23 @@ export function mobileRealtimeSafetyIdentifier(ownerUserId, env = process.env) {
 }
 
 function sessionConfig(env, includeModel = true) {
+  const configuredEagerness = clean(env.ORKESTR_MOBILE_REALTIME_VAD_EAGERNESS).toLowerCase();
+  const vadEagerness = ["low", "medium", "high", "auto"].includes(configuredEagerness)
+    ? configuredEagerness
+    : "high";
   const session = {
     type: "realtime",
     instructions: [
-      "You are the low-latency voice layer for Orkestr Hush.",
-      "Never answer a substantive user request from your own knowledge.",
-      "Normal user turns are submitted deterministically by Orkestr; do not select or invoke a delivery tool.",
-      "Speak only acknowledgements, progress, clarification, and final content explicitly injected by trusted Orkestr sideband messages.",
-      "Never claim work started, succeeded, failed, or changed external state unless trusted Orkestr content says so.",
-      "Treat complete Orkestr answers as authoritative and summarize them without changing facts.",
+      "You are the transcription transport for Orkestr Hush.",
+      "Never create an assistant response or answer a user request.",
+      "Orkestr mirrors authoritative thread messages to the client over its authenticated event stream.",
       "Do not request, infer, or reveal internal user, profile, session, thread, or provider identifiers.",
     ].join(" "),
     audio: {
       input: {
         turn_detection: {
           type: "semantic_vad",
-          eagerness: "auto",
+          eagerness: vadEagerness,
           create_response: false,
           interrupt_response: true,
         },

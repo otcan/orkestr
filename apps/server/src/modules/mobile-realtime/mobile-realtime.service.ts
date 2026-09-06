@@ -9,6 +9,7 @@ import {
   upsertMobileLiveActivityToken,
   upsertMobilePushToken,
 } from "../../../../../packages/core/src/mobile-push.js";
+import { syncMobileRealtimeThreadMirror } from "../../../../../packages/core/src/mobile-realtime-mirror.js";
 import {
   createOpenAIRealtimeCall,
   hangupOpenAIRealtimeCall,
@@ -121,7 +122,9 @@ export class MobileRealtimeService implements OnModuleInit, OnModuleDestroy {
     return getMobileRealtimeCall(callId, input);
   }
 
-  events(callId: string, afterEventId: number, input: Record<string, unknown>) {
+  async events(callId: string, afterEventId: number, input: Record<string, unknown>) {
+    await getMobileRealtimeCall(callId, input);
+    await syncMobileRealtimeThreadMirror(callId).catch(() => []);
     return listMobileRealtimeCallEvents(callId, afterEventId, input);
   }
 
@@ -165,7 +168,9 @@ export class MobileRealtimeService implements OnModuleInit, OnModuleDestroy {
     const controller = new ManagedMobileRealtimeSideband(call.id, call.providerCallId, this.leaseOwner, () => {
       this.controllers.delete(call.id);
       void setMobileRealtimeCallState(call.id, "reconnecting", "sideband_disconnected")
-        .then(() => this.reconnect(call.id, Date.now() + 10_000))
+        .then((updated) => {
+          if (clean(updated?.status) === "reconnecting") return this.reconnect(call.id, Date.now() + 10_000);
+        })
         .catch(() => {});
     });
     this.controllers.set(call.id, controller);
@@ -180,11 +185,18 @@ export class MobileRealtimeService implements OnModuleInit, OnModuleDestroy {
 
   private async reconnect(callId: string, deadline: number): Promise<void> {
     if (this.shuttingDown || this.controllers.has(callId)) return;
-    const call = await getMobileRealtimeCallInternal(callId).catch(() => null);
-    if (!call || !["connecting", "active", "reconnecting"].includes(clean(call.status))) return;
     while (!this.shuttingDown && Date.now() < deadline) {
+      const call = await getMobileRealtimeCallInternal(callId).catch(() => null);
+      if (!call || !["connecting", "active", "reconnecting"].includes(clean(call.status))) return;
       try {
         await this.ensureController(call);
+        const current = await getMobileRealtimeCallInternal(callId).catch(() => null);
+        if (!current || !["connecting", "active", "reconnecting"].includes(clean(current.status))) {
+          const controller = this.controllers.get(callId);
+          this.controllers.delete(callId);
+          await controller?.stop();
+          return;
+        }
         await activateMobileRealtimeCall(callId).catch(() => {});
         return;
       } catch {

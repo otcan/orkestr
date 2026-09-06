@@ -111,8 +111,6 @@ async function completeTool(callId, toolCallId, output, taskId, env) {
     tool.completedAt = new Date().toISOString();
     if (taskId) {
       call.activeTaskId = clean(taskId);
-      call.finalSidebandDelivered = false;
-      call.finalSidebandDeliveredAt = "";
     }
     if (tool.name === "orkestr_start_task" && output?.ok === false) call.activeTaskRunning = false;
     markDirty();
@@ -216,9 +214,7 @@ export async function reconcileMobileRealtimeTask(callId, options = {}) {
     return null;
   }
   const projectionHash = hash(JSON.stringify({ status: turn.status, answer: turn.answer || "", error: turn.error || null }));
-  if (call.taskProjectionHash === projectionHash) {
-    return turn.status === "final" && call.finalSidebandDelivered !== true ? { event: null, turn } : null;
-  }
+  if (call.taskProjectionHash === projectionHash) return null;
   const details = {
     queued: ["queued", "Orkestr queued the request."],
     working: ["working", "Orkestr is working on the request."],

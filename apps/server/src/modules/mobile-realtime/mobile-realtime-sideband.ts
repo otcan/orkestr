@@ -1,15 +1,11 @@
 import { randomUUID } from "node:crypto";
 import WebSocket from "ws";
 import { enqueueMobileRealtimePush } from "../../../../../packages/core/src/mobile-push.js";
-import {
-  mobileRealtimeActivationUpdate,
-  mobileRealtimeProgressShouldSpeak,
-  mobileRealtimeTranscriptFailureShouldSpeak,
-} from "../../../../../packages/core/src/mobile-realtime-provider.js";
+import { syncMobileRealtimeThreadMirror } from "../../../../../packages/core/src/mobile-realtime-mirror.js";
+import { mobileRealtimeActivationUpdate } from "../../../../../packages/core/src/mobile-realtime-provider.js";
 import {
   claimMobileRealtimeLease,
   getMobileRealtimeCallInternal,
-  markMobileRealtimeFinalDelivered,
   mobileRealtimeEventPollIntervalMs,
   recordMobileRealtimeTranscript,
   releaseMobileRealtimeLease,
@@ -36,8 +32,6 @@ export class ManagedMobileRealtimeSideband {
   private activationResolve: (() => void) | null = null;
   private activationReject: ((error: Error) => void) | null = null;
   private seenProviderEvents = new Set<string>();
-  private trustedResponseMarkers = new Set<string>();
-  private lastDeliveryFailureSpokenAt = 0;
 
   constructor(
     private readonly localCallId: string,
@@ -102,32 +96,6 @@ export class ManagedMobileRealtimeSideband {
     this.socket.send(JSON.stringify(event));
   }
 
-  private createTrustedResponse(text: string, instructions: string): void {
-    const marker = randomUUID();
-    this.trustedResponseMarkers.add(marker);
-    try {
-      this.send({
-        type: "response.create",
-        event_id: `orkestr_authoritative_response_${randomUUID()}`,
-        response: {
-          conversation: "none",
-          input: [{
-            type: "message",
-            role: "system",
-            content: [{ type: "input_text", text }],
-          }],
-          instructions,
-          tools: [],
-          tool_choice: "none",
-          metadata: { orkestr_authority: marker },
-        },
-      });
-    } catch (error) {
-      this.trustedResponseMarkers.delete(marker);
-      throw error;
-    }
-  }
-
   private async onMessage(data: WebSocket.RawData): Promise<void> {
     let event: Record<string, any>;
     try {
@@ -164,14 +132,6 @@ export class ManagedMobileRealtimeSideband {
       this.authorizeProviderResponse(event);
       return;
     }
-    if (["response.output_audio_transcript.done", "response.audio_transcript.done"].includes(event.type)) {
-      await recordMobileRealtimeTranscript(this.localCallId, {
-        role: "assistant",
-        providerItemId: event.item_id || event.response_id,
-        text: event.transcript,
-      }).catch(() => {});
-      return;
-    }
     if (event.type === "response.function_call_arguments.done") this.rejectProviderTool(event);
   }
 
@@ -183,37 +143,16 @@ export class ManagedMobileRealtimeSideband {
     }).catch(() => null);
     const text = clean(event.transcript);
     if (!text || !clean(event.item_id) || recorded === null) return;
-    try {
-      await submitMobileRealtimeTurn({
-        callId: this.localCallId,
-        sourceKind: "provider_audio",
-        sourceId: clean(event.item_id),
-        text,
-        locale: clean(event.language) || "und",
-      });
-      this.createTrustedResponse(
-        "Trusted Orkestr state: this user turn is durably accepted and queued.",
-        "Briefly acknowledge that Orkestr accepted the request. Do not answer the request or claim completion.",
-      );
-    } catch (error) {
-      if (!mobileRealtimeTranscriptFailureShouldSpeak(error)) return;
-      const now = Date.now();
-      if (now - this.lastDeliveryFailureSpokenAt < 10_000) return;
-      this.lastDeliveryFailureSpokenAt = now;
-      try {
-        this.createTrustedResponse(
-          "Trusted Orkestr state: durable delivery failed. The user must retry this request.",
-          "Briefly say the request was not delivered and ask the user to retry. Do not answer the request.",
-        );
-      } catch {
-        // The durable SSE failure event remains available when speech fails.
-      }
-    }
+    await submitMobileRealtimeTurn({
+      callId: this.localCallId,
+      sourceKind: "provider_audio",
+      sourceId: clean(event.item_id),
+      text,
+      locale: clean(event.language) || "und",
+    }).catch(() => {});
   }
 
   private authorizeProviderResponse(event: Record<string, any>): void {
-    const authorityMarker = clean(event?.response?.metadata?.orkestr_authority);
-    if (authorityMarker && this.trustedResponseMarkers.delete(authorityMarker)) return;
     try {
       this.send({
         type: "response.cancel",
@@ -242,33 +181,12 @@ export class ManagedMobileRealtimeSideband {
   }
 
   private async pollTask(): Promise<void> {
+    if (this.closing) return;
+    await syncMobileRealtimeThreadMirror(this.localCallId).catch(() => []);
     const result = await reconcileMobileRealtimeTask(this.localCallId).catch(() => null);
     if (!result) return;
     const call = await getMobileRealtimeCallInternal(this.localCallId).catch(() => null);
     if (call && result.event) await enqueueMobileRealtimePush(call, result.event).catch(() => {});
-    if (result.turn?.status !== "final") {
-      if (result.event && mobileRealtimeProgressShouldSpeak(result.event.stage)) {
-        try {
-          this.createTrustedResponse(
-            `Trusted Orkestr progress: ${clean(result.event.detail)}`,
-            "Give the caller this Orkestr progress update in one short sentence. Do not claim completion.",
-          );
-        } catch {
-          // Structured progress remains durable over Orkestr SSE and APNs.
-        }
-      }
-      return;
-    }
-    if (call?.finalSidebandDelivered === true) return;
-    try {
-      this.createTrustedResponse(
-        `Authoritative Orkestr result:\n${clean(result.turn.answer).slice(0, 50_000)}`,
-        "Tell the user Orkestr finished. Give a concise faithful summary and say the complete text is in Hush.",
-      );
-      await markMobileRealtimeFinalDelivered(this.localCallId, result.turn.id).catch(() => {});
-    } catch {
-      // The complete answer remains durable and replayable over Orkestr SSE.
-    }
   }
 
   async stop(): Promise<void> {
@@ -278,7 +196,6 @@ export class ManagedMobileRealtimeSideband {
     if (this.taskTimer) clearInterval(this.taskTimer);
     this.leaseTimer = null;
     this.taskTimer = null;
-    this.trustedResponseMarkers.clear();
     this.socket?.close();
     this.socket = null;
     await releaseMobileRealtimeLease(this.localCallId, this.leaseOwner);
