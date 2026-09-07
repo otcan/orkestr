@@ -324,7 +324,7 @@ test("a bound thread has only one live call and event replay is scoped to the ex
   );
 });
 
-test("thread mirror emits post-connect visible messages once without private routing metadata", async () => {
+test("thread mirror emits only post-connect assistant final answers once without private routing metadata", async () => {
   const env = await envFor("thread-mirror");
   await createThread({ id: "hush-realtime-thread", name: "Realtime", ownerUserId: "admin" }, env);
   await appendThreadMessage("hush-realtime-thread", {
@@ -361,6 +361,14 @@ test("thread mirror emits post-connect visible messages once without private rou
     role: "assistant",
     source: "codex",
     state: "completed",
+    phase: "plan",
+    parentMessageId: input.id,
+    text: "This plan must stay in the thread.",
+  }, env);
+  await appendThreadMessage("hush-realtime-thread", {
+    role: "assistant",
+    source: "codex",
+    state: "completed",
     phase: "reasoning",
     parentMessageId: input.id,
     text: "Private reasoning must remain hidden.",
@@ -376,26 +384,25 @@ test("thread mirror emits post-connect visible messages once without private rou
 
   const first = await syncMobileRealtimeThreadMirror(reserved.call.id, { env });
   const retry = await syncMobileRealtimeThreadMirror(reserved.call.id, { env });
-  assert.equal(first.length, 3);
+  assert.equal(first.length, 1);
   assert.deepEqual(retry, []);
   const events = await listMobileRealtimeCallEvents(reserved.call.id, 0, {
     device: device(),
     principal: adminPrincipal(),
   }, { env });
   const messages = events.filter((event) => event.type === "message");
-  assert.deepEqual(messages.map((event) => event.message.text), [
-    "Mirror this request.",
-    "I am checking the live state now.",
-    "The live state is healthy.",
-  ]);
-  assert.deepEqual(messages.map((event) => event.message.phase), ["input", "commentary", "final_answer"]);
-  assert.equal(messages[0].message.origin, "hush");
-  assert.equal(messages[1].message.origin, "thread");
+  assert.deepEqual(messages.map((event) => event.message.text), ["The live state is healthy."]);
+  assert.deepEqual(messages.map((event) => event.message.role), ["assistant"]);
+  assert.deepEqual(messages.map((event) => event.message.phase), ["final_answer"]);
+  assert.equal(messages[0].message.origin, "thread");
   const serialized = JSON.stringify(messages);
   assert.equal(serialized.includes("hush-realtime-thread"), false);
   assert.equal(serialized.includes("private-codex-thread"), false);
   assert.equal(serialized.includes("Historical context"), false);
   assert.equal(serialized.includes("Private reasoning"), false);
+  assert.equal(serialized.includes("Mirror this request"), false);
+  assert.equal(serialized.includes("checking the live state"), false);
+  assert.equal(serialized.includes("plan must stay"), false);
 });
 
 test("terminal realtime calls cannot regress into reconnecting", async () => {
