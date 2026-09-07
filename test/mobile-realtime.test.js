@@ -34,6 +34,7 @@ import {
 } from "../packages/core/src/mobile-realtime-store.js";
 import { executeMobileRealtimeTool } from "../packages/core/src/mobile-realtime-tools.js";
 import { submitMobileRealtimeTurn } from "../packages/core/src/mobile-realtime-turns.js";
+import { substantiveMobileVoiceTranscript } from "../packages/core/src/mobile-realtime-voice-filter.js";
 import {
   mobileLiveActivityTokenSchema,
   mobilePushTokenSchema,
@@ -73,6 +74,15 @@ function reserveDependencies() {
 }
 
 const offerSdp = "v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\n";
+
+test("filler-only audio transcripts do not become authoritative turns", () => {
+  for (const filler of ["e", "Ah...", "uhm", "hmmmm", "ııı", "ähm", "mm-hmm", "şey"]) {
+    assert.equal(substantiveMobileVoiceTranscript(filler), false, filler);
+  }
+  for (const substantive of ["hello", "um stop", "Ah yes", "A", "I", "Ahmet"]) {
+    assert.equal(substantiveMobileVoiceTranscript(substantive), true, substantive);
+  }
+});
 
 test("mobile realtime schemas are closed and never accept routing fields", () => {
   assert.deepEqual(mobileRealtimeCallSchema.body.required, ["clientCallId", "offerSdp"]);

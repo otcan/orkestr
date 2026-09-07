@@ -12,6 +12,7 @@ import {
 } from "../../../../../packages/core/src/mobile-realtime-store.js";
 import { reconcileMobileRealtimeTask } from "../../../../../packages/core/src/mobile-realtime-tools.js";
 import { submitMobileRealtimeTurn } from "../../../../../packages/core/src/mobile-realtime-turns.js";
+import { substantiveMobileVoiceTranscript } from "../../../../../packages/core/src/mobile-realtime-voice-filter.js";
 
 function clean(value: unknown): string {
   return String(value || "").trim();
@@ -136,13 +137,14 @@ export class ManagedMobileRealtimeSideband {
   }
 
   private async onCompletedUserTranscript(event: Record<string, any>): Promise<void> {
+    const text = clean(event.transcript);
+    if (!text || !clean(event.item_id) || !substantiveMobileVoiceTranscript(text)) return;
     const recorded = await recordMobileRealtimeTranscript(this.localCallId, {
       role: "user",
       providerItemId: event.item_id,
-      text: event.transcript,
+      text,
     }).catch(() => null);
-    const text = clean(event.transcript);
-    if (!text || !clean(event.item_id) || recorded === null) return;
+    if (recorded === null) return;
     await submitMobileRealtimeTurn({
       callId: this.localCallId,
       sourceKind: "provider_audio",
