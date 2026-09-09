@@ -17,6 +17,10 @@ import {
   resetObservabilityForTests,
   routeTemplateFromUrl,
 } from "../packages/core/src/observability.js";
+import {
+  recordCodexInputDelivery,
+  recordCodexUserInputRequest,
+} from "../packages/core/src/codex-input-observability.js";
 
 test("observability route templates scrub dynamic IDs", () => {
   assert.equal(routeTemplateFromUrl("/api/threads/thread-123/messages"), "/api/threads/:threadId/messages");
@@ -50,6 +54,21 @@ test("runtime control metrics keep phase and outcomes low-cardinality", () => {
   assert.match(metrics, /orkestr_runtime_stop_latency_seconds_count\{phase="mcp",result="completed"\} 1/);
   assert.match(metrics, /orkestr_runtime_stop_latency_seconds_count\{phase="unknown",result="completed"\} 1/);
   assert.equal(metrics.includes("private-phase-name"), false);
+});
+
+test("Codex input metrics expose only bounded request and delivery labels", () => {
+  resetObservabilityForTests();
+  recordCodexUserInputRequest({ path: "native", outcome: "pending" });
+  recordCodexUserInputRequest({ path: "private-path", outcome: "private-outcome" });
+  recordCodexInputDelivery({ mode: "deferred", outcome: "queued", latencyMs: 250 });
+
+  const metrics = renderOpenMetrics();
+  assert.match(metrics, /orkestr_codex_user_input_requests_total\{path="native",outcome="pending"\} 1/);
+  assert.match(metrics, /orkestr_codex_user_input_requests_total\{path="unknown",outcome="unknown"\} 1/);
+  assert.match(metrics, /orkestr_codex_input_delivery_total\{mode="deferred",outcome="queued"\} 1/);
+  assert.match(metrics, /orkestr_codex_input_delivery_latency_seconds_count\{mode="deferred",outcome="queued"\} 1/);
+  assert.equal(metrics.includes("private-path"), false);
+  assert.equal(metrics.includes("private-outcome"), false);
 });
 
 test("runtime control release gate reports every invariant independently", () => {

@@ -55,6 +55,7 @@ import { runtimeFinalDeliveryPending } from "./runtime-final-delivery.js";
 import { reconcileCodexFinalProjection } from "./codex-final-projection.js";
 import { currentCodexGenerationMatches } from "./codex-generation.js";
 import { canonicalTimestamp } from "./timestamp-normalization.js";
+import { recordCodexUserInputRequest } from "./codex-input-observability.js";
 
 const execFileAsync = promisify(execFile);
 const clients = new Map();
@@ -511,6 +512,9 @@ export class CodexAppServerClient {
         requestId: String(message.id),
       }, this.env).catch(() => {});
       return;
+    }
+    if (message.method === "item/tool/requestUserInput") {
+      recordCodexUserInputRequest({ path: "native", outcome: "pending" });
     }
     await updateThread(thread.id, {
       state: "awaiting_approval",
@@ -1141,6 +1145,7 @@ export class CodexAppServerClient {
       this.respond(request.requestId, { decision });
     } else if (request.method === "item/tool/requestUserInput") {
       this.respond(request.requestId, { answers: requestUserInputAnswers(request, options.text || "") });
+      recordCodexUserInputRequest({ path: "native", outcome: "answered" });
     } else {
       this.respond(request.requestId, { decision });
     }

@@ -1309,6 +1309,56 @@ test("Codex app-server sends short chat replies to pending user-input requests",
   }
 });
 
+test("Codex app-server rejects replies to rollout questions without a native pending request", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-expired-question-"));
+  const fake = await createFakeCodex(home);
+  const env = {
+    ORKESTR_HOME: path.join(home, "orkestr"),
+    HOME: path.join(home, "runtime-home"),
+    PATH: `${fake.bin}${path.delimiter}${process.env.PATH || ""}`,
+    FAKE_CODEX_STATE: fake.stateFile,
+  };
+  try {
+    const thread = await createThread({ id: "app-server-expired-question-thread", name: "Expired Question Thread", cwd: home, executorId: "codex", executor: { type: "codex" } }, env);
+    const started = await startCodexAppServerThread(thread, env);
+    const question = await appendThreadMessage(started.thread.id, {
+      role: "assistant",
+      source: "codex-rollout",
+      phase: "need_input",
+      state: "completed",
+      text: "Codex needs input to continue:\n\n1. Scope: Which scope?\n   A. Full pool\n   B. Promoted only",
+      eventId: "expired-rollout-question",
+      codexThreadId: started.thread.codexThreadId,
+    }, env);
+    const input = await enqueueThreadInput(started.thread.id, {
+      text: "1-A",
+      source: "whatsapp_inbound",
+      connector: "whatsapp",
+      chatId: "chat-expired-question",
+    }, env);
+
+    const delivered = await deliverCodexAppServerPendingInputs(await getThread(started.thread.id, env), env);
+    const messages = await listThreadMessages(started.thread.id, env);
+    const failed = messages.find((message) => message.id === input.id);
+    const rejection = messages.find((message) => message.parentMessageId === input.id && message.source === "orkestr_runtime");
+    const rawState = JSON.parse(await fs.readFile(fake.stateFile, "utf8"));
+
+    assert.deepEqual(delivered, []);
+    assert.equal(failed.state, "failed");
+    assert.equal(failed.deliveryState, "expired_codex_user_input_request");
+    assert.equal(failed.answeredInputMessageId, question.id);
+    assert.equal(failed.observedVia, "codex_app_server_expired_user_input_request");
+    assert.match(failed.error, /no longer active/i);
+    assert.ok(rejection);
+    assert.match(rejection.text, /resend the intended instruction in full/i);
+    assert.equal(rejection.chatId, "chat-expired-question");
+    assert.ok(!rawState.calls.some((call) => call.method === "turn/start"));
+    assert.ok(!rawState.calls.some((call) => call.method === "turn/steer"));
+  } finally {
+    stopCodexAppServerClients();
+  }
+});
+
 test("Codex app-server auto-accepts command approvals for YOLO threads", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-yolo-approval-"));
   const fake = await createFakeCodex(home);
@@ -6053,7 +6103,7 @@ test("Codex app-server /safe-reset command starts fresh thread without deliverin
   }
 });
 
-test("Codex app-server steers WhatsApp input into active turns by default", async () => {
+test("Codex app-server queues WhatsApp input behind active turns by default", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-wa-queue-"));
   const fake = await createFakeCodex(home);
   const env = {
@@ -6061,7 +6111,7 @@ test("Codex app-server steers WhatsApp input into active turns by default", asyn
     HOME: path.join(home, "runtime-home"),
     PATH: `${fake.bin}${path.delimiter}${process.env.PATH || ""}`,
     FAKE_CODEX_STATE: fake.stateFile,
-    ORKESTR_CODEX_APP_SERVER_ACTIVE_TURN_RETRY_MS: "250",
+    ORKESTR_CODEX_APP_SERVER_ACTIVE_TURN_RETRY_MS: "60000",
   };
   try {
     const thread = await createThread({ id: "app-server-wa-queue-thread", name: "App Server WA Queue Thread", cwd: home, executorId: "codex", executor: { type: "codex" } }, env);
@@ -6099,10 +6149,10 @@ test("Codex app-server steers WhatsApp input into active turns by default", asyn
     const queued = messages.find((message) => message.id === input.id);
     const rawState = JSON.parse(await fs.readFile(fake.stateFile, "utf8"));
 
-    assert.deepEqual(delivered, [input.id]);
-    assert.equal(queued.state, "completed");
-    assert.equal(queued.deliveryState, "delivered");
-    assert.ok(rawState.calls.some((call) => call.method === "turn/steer"));
+    assert.deepEqual(delivered, []);
+    assert.equal(queued.state, "queued");
+    assert.equal(queued.deliveryState, "awaiting_active_turn");
+    assert.ok(!rawState.calls.some((call) => call.method === "turn/steer"));
     assert.ok(!rawState.calls.some((call) => call.method === "turn/start"));
   } finally {
     stopCodexAppServerClients();
@@ -6242,7 +6292,7 @@ test("Codex app-server delivers queued input when live status cleared a stale ac
   }
 });
 
-test("Codex app-server steers normal input into verified active turns by default", async () => {
+test("Codex app-server queues normal input behind verified active turns by default", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-generic-queue-"));
   const fake = await createFakeCodex(home);
   const env = {
@@ -6283,10 +6333,10 @@ test("Codex app-server steers normal input into verified active turns by default
     const completed = messages.find((message) => message.id === input.id);
     const rawState = JSON.parse(await fs.readFile(fake.stateFile, "utf8"));
 
-    assert.deepEqual(delivered, [input.id]);
-    assert.equal(completed.state, "completed");
-    assert.equal(completed.deliveryState, "delivered");
-    assert.ok(rawState.calls.some((call) => call.method === "turn/steer"));
+    assert.deepEqual(delivered, []);
+    assert.equal(completed.state, "queued");
+    assert.equal(completed.deliveryState, "awaiting_active_turn");
+    assert.ok(!rawState.calls.some((call) => call.method === "turn/steer"));
     assert.ok(!rawState.calls.some((call) => call.method === "turn/start"));
   } finally {
     stopCodexAppServerClients();
@@ -6411,7 +6461,7 @@ test("Codex app-server interrupt reads live active turns before reporting no act
   }
 });
 
-test("Codex app-server plain input steers the active turn without interrupting", async () => {
+test("Codex app-server plain input queues behind the active turn without interrupting", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-wa-now-"));
   const fake = await createFakeCodex(home);
   const env = {
@@ -6457,16 +6507,15 @@ test("Codex app-server plain input steers the active turn without interrupting",
     const messages = await listThreadMessages(started.thread.id, env);
     const completed = messages.find((message) => message.id === input.id);
     const rawState = JSON.parse(await fs.readFile(fake.stateFile, "utf8"));
-    const steerCall = rawState.calls.find((call) => call.method === "turn/steer");
     const activeTurn = rawState.threads.find((item) => item.id === started.thread.codexThreadId).turns.find((turn) => turn.id === "active-turn");
 
-    assert.deepEqual(delivered, [input.id]);
+    assert.deepEqual(delivered, []);
     assert.equal(completed.text, "urgent next turn");
-    assert.equal(completed.state, "completed");
-    assert.equal(completed.observedVia, "codex_app_server_turn_steer");
-    assert.equal(steerCall.params.expectedTurnId, "active-turn");
-    assert.equal(steerCall.params.input[0].text, "urgent next turn");
-    assert.ok(activeTurn.items.some((item) => item.id === "steer_active-turn"));
+    assert.equal(completed.state, "queued");
+    assert.equal(completed.deliveryState, "awaiting_active_turn");
+    assert.equal(completed.observedVia, undefined);
+    assert.ok(!activeTurn.items.some((item) => item.id === "steer_active-turn"));
+    assert.ok(!rawState.calls.some((call) => call.method === "turn/steer"));
     assert.ok(!rawState.calls.some((call) => call.method === "turn/interrupt" && call.params.turnId === "active-turn"));
     assert.ok(!rawState.calls.some((call) =>
       call.method === "turn/start" &&
@@ -6526,6 +6575,8 @@ test("multiple messages steer one live turn and boundary faults retain terminal 
       source: "whatsapp_inbound",
       connector: "whatsapp",
       chatId: "chat-multi-steer",
+      codexDeliveryMode: "instant_steer",
+      steerActiveTurn: true,
     }, env);
     const inputs = [await enqueue("first update")];
     await deliverCodexAppServerPendingInputs(await getThread(started.thread.id, env), env);

@@ -15433,7 +15433,7 @@ test("whatsapp /status reuses the first router reply when inbound state misses a
   assert.match(stripDebugFooter(calls[0].body.text), /^Thread: WA Status Command Duplicate Thread\nStatus: /);
 });
 
-test("whatsapp treats removed /now syntax as ordinary default-steer text", async () => {
+test("whatsapp treats removed /now syntax as ordinary queued text", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-now-notice-"));
   const env = externalBridgeEnv(home);
   await createThread({
@@ -15460,15 +15460,15 @@ test("whatsapp treats removed /now syntax as ordinary default-steer text", async
     return response({ ok: true, ids: ["sent-now-notice"] });
   });
 
-  assert.equal(routed.message.codexDeliveryMode, "instant_steer");
-  assert.equal(routed.message.steerActiveTurn, true);
+  assert.equal(routed.message.codexDeliveryMode, undefined);
+  assert.equal(routed.message.steerActiveTurn, undefined);
   assert.equal(routed.message.text, "/now fix the pairing number");
   assert.notEqual(routed.message.deliveryState, "interrupting");
   assert.equal(delivery.delivered.length, 0);
   assert.equal(calls.length, 0);
 });
 
-test("whatsapp inbound marks Codex API threads for default active-turn steer", async () => {
+test("whatsapp inbound queues Codex API thread input by default", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-instant-steer-"));
   const env = externalBridgeEnv(home);
   await createThread({
@@ -15494,11 +15494,11 @@ test("whatsapp inbound marks Codex API threads for default active-turn steer", a
   }, env);
 
   assert.equal(routed.threadId, "thread-wa-instant-steer");
-  assert.equal(routed.message.codexDeliveryMode, "instant_steer");
-  assert.equal(routed.message.steerActiveTurn, true);
+  assert.equal(routed.message.codexDeliveryMode, undefined);
+  assert.equal(routed.message.steerActiveTurn, undefined);
 });
 
-test("whatsapp inbound marks raw-terminal Codex threads for default active-turn steer", async () => {
+test("whatsapp inbound queues raw-terminal Codex thread input by default", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-raw-terminal-steer-"));
   const env = externalBridgeEnv(home);
   const created = await createThread({
@@ -15522,6 +15522,31 @@ test("whatsapp inbound marks raw-terminal Codex threads for default active-turn 
     eventId: "wa-raw-terminal-steer-1",
     chatId: "chat-raw-terminal-steer",
     text: "please incorporate this clarification",
+  }, env);
+
+  assert.equal(routed.message.codexDeliveryMode, undefined);
+  assert.equal(routed.message.steerActiveTurn, undefined);
+});
+
+test("whatsapp inbound marks Codex input for active-turn steer when explicitly configured", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-explicit-steer-"));
+  const env = externalBridgeEnv(home, { ORKESTR_WHATSAPP_INBOUND_STEER_DEFAULT: "1" });
+  await createThread({
+    id: "thread-wa-explicit-steer",
+    name: "WA Explicit Steer Thread",
+    runtimeKind: "codex-app-server",
+    binding: { connector: "whatsapp", chatId: "chat-explicit-steer", enabled: true },
+  }, env);
+  await writeConnectorConfig("whatsapp", {
+    bridgeMode: "external",
+    bridgeUrl: "http://wa.local",
+  }, env);
+
+  const routed = await routeWhatsAppInbound({
+    eventId: "wa-explicit-steer-1",
+    chatId: "chat-explicit-steer",
+    accountId: "account-1",
+    text: "incorporate this clarification now",
   }, env);
 
   assert.equal(routed.message.codexDeliveryMode, "instant_steer");

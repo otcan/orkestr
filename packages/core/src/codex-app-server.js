@@ -64,6 +64,7 @@ import { currentCodexGenerationMatches, generationScopedRuntimePatch, rolloutGen
 import { reconcileCodexFinalProjection } from "./codex-final-projection.js";
 import { injectRuntimeFault, runtimeNowMs, runtimeStopPhaseFor } from "./runtime-fault-injection.js";
 import { recordRuntimeControlMetric } from "./observability.js";
+import { recordCodexInputDelivery, recordCodexUserInputRequest } from "./codex-input-observability.js";
 
 const appServerDeliveryTimers = new Map();
 const appServerHistorySyncTimes = new Map();
@@ -118,7 +119,76 @@ function pendingInputEligibleForReadyRetry(message = {}) {
 function shouldSteerActiveTurnInput(message = {}) {
   const deliveryMode = clean(message?.codexDeliveryMode).toLowerCase();
   if (deliveryMode === "passive") return false;
-  return message?.steerActiveTurn !== false;
+  return message?.steerActiveTurn === true || deliveryMode === "instant_steer";
+}
+
+function messageCreatedAtMs(message = {}) {
+  const parsed = Date.parse(clean(message.createdAt || message.timestamp));
+  return Number.isFinite(parsed) ? parsed : Date.now();
+}
+
+function legacyRolloutQuestion(message = {}) {
+  return clean(message.role).toLowerCase() === "assistant" &&
+    clean(message.source).toLowerCase() === "codex-rollout" &&
+    clean(message.phase).toLowerCase() === "need_input" &&
+    !clean(message.codexRequestId);
+}
+
+async function legacyRolloutQuestionImmediatelyBefore(thread, input, env = process.env) {
+  const recent = await listThreadMessageCandidates(thread.id, { tailLimit: 50 }, env).catch(() => []);
+  const inputIndex = recent.findIndex((message) => message.id === input.id);
+  const preceding = inputIndex >= 0 ? recent.slice(0, inputIndex) : recent;
+  const priorConversationMessage = [...preceding].reverse().find((message) =>
+    ["assistant", "user"].includes(clean(message.role).toLowerCase())
+  );
+  return legacyRolloutQuestion(priorConversationMessage) ? priorConversationMessage : null;
+}
+
+async function rejectExpiredLegacyQuestionReply(thread, input, env = process.env) {
+  const question = await legacyRolloutQuestionImmediatelyBefore(thread, input, env);
+  if (!question) return null;
+  const errorText = "That Codex question is no longer active. Please resend the intended instruction in full instead of replying with an option label.";
+  const failed = await updateThreadMessage(thread.id, input.id, {
+    state: "failed",
+    deliveryState: "expired_codex_user_input_request",
+    deliveryClaimId: null,
+    answeredInputMessageId: question.id,
+    answeredInputEventId: question.eventId || null,
+    observedVia: "codex_app_server_expired_user_input_request",
+    error: errorText,
+  }, env);
+  const reply = await appendOrUpdateEventMessage(thread, {
+    role: "assistant",
+    source: "orkestr_runtime",
+    phase: "runtime_interrupted",
+    text: errorText,
+    state: "completed",
+    eventId: threadEventId({
+      codexThreadId: codexThreadId(thread),
+      turnId: clean(input.codexTurnId),
+      itemId: input.id,
+      type: "expired-user-input-request",
+      role: "assistant",
+      text: errorText,
+    }),
+    parentMessageId: input.id,
+    codexThreadId: codexThreadId(thread) || null,
+    ...whatsappProjectionFields(externalChatInput(input) ? input : null, thread),
+  }, env).catch(() => null);
+  if (reply) markConnectorDeliverySignal(reply);
+  recordCodexUserInputRequest({ path: "rollout", outcome: "expired" });
+  recordCodexInputDelivery({
+    mode: "deferred",
+    outcome: "rejected",
+    latencyMs: Date.now() - messageCreatedAtMs(input),
+  });
+  await appendEvent({
+    type: "codex_app_server_expired_user_input_reply_rejected",
+    threadId: thread.id,
+    messageId: input.id,
+    questionMessageId: question.id,
+  }, env).catch(() => {});
+  return { input: failed, reply };
 }
 
 async function recordMessageRouterTrace(message = {}, phase, context = {}, env = process.env) {
@@ -1486,6 +1556,11 @@ export async function sendCodexAppServerInput(thread, message, env = process.env
         turnId: deliveryTurnId,
       }, env);
       recordRuntimeControlMetric({ signal: "runtime_acceptance", outcome: "accepted" });
+      recordCodexInputDelivery({
+        mode: "turn_steer",
+        outcome: "accepted",
+        latencyMs: Date.now() - messageCreatedAtMs(pending),
+      });
       const completed = await updateThreadMessage(thread.id, pending.id, {
         state: "completed",
         deliveryState: "delivered",
@@ -1531,6 +1606,11 @@ export async function sendCodexAppServerInput(thread, message, env = process.env
         }, env);
         recordRuntimeControlMetric({ signal: "runtime_acceptance", outcome: "accepted" });
         recordRuntimeControlMetric({ signal: "duplicate_turn", outcome: "prevented" });
+        recordCodexInputDelivery({
+          mode: "turn_steer",
+          outcome: "accepted",
+          latencyMs: Date.now() - messageCreatedAtMs(pending),
+        });
         await appendEvent({
           type: "codex_app_server_runtime_acceptance_reconciled",
           threadId: thread.id,
@@ -1583,6 +1663,11 @@ export async function sendCodexAppServerInput(thread, message, env = process.env
       activeTurnId,
       nextAttemptAt,
     }, env).catch(() => {});
+    recordCodexInputDelivery({
+      mode: "deferred",
+      outcome: "queued",
+      latencyMs: Date.now() - messageCreatedAtMs(pending),
+    });
     scheduleCodexAppServerInputDelivery(thread.id, env, retryMs);
     return { message: { ...pending, state: "queued", deliveryState: "awaiting_active_turn" }, result: null, observedVia: "codex_app_server_awaiting_active_turn", deferred: true };
   }
@@ -1595,6 +1680,11 @@ export async function sendCodexAppServerInput(thread, message, env = process.env
   result = started.result;
   observedVia = started.observedVia;
   deliveryTurnId = started.turnId;
+  recordCodexInputDelivery({
+    mode: "turn_start",
+    outcome: "accepted",
+    latencyMs: Date.now() - messageCreatedAtMs(pending),
+  });
   runtimeIdentity = await currentCodexDeliveryRuntime(thread, id, env);
   if (started.staleRuntime === true || !runtimeIdentity.matches) {
     const acceptedByReplacedRuntime = await updateThreadMessage(thread.id, pending.id, {
@@ -1787,6 +1877,8 @@ async function deliverCodexAppServerPendingInputsUnlocked(thread, env = process.
 }
 
 async function deliverCodexAppServerClaimedPendingInput(thread, next, env = process.env, delivered = []) {
+  const expiredQuestionReply = await rejectExpiredLegacyQuestionReply(thread, next, env);
+  if (expiredQuestionReply) return delivered;
   let client;
   let runtimeEnv = env;
   try {
