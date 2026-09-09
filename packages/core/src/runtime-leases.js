@@ -89,6 +89,7 @@ import {
 import { reconcileCodexFinalProjection } from "./codex-final-projection.js";
 import { readCodexRolloutSessionMeta, validateCodexRolloutGeneration } from "./codex-rollout-generation.js";
 import { replyDeliveryProjectionParent } from "./reply-delivery-intent.js";
+import { recordCodexUserInputRequest } from "./codex-input-observability.js";
 
 setConnectorOutboxJobAdapter(ensureConnectorOutboxJob);
 
@@ -393,6 +394,18 @@ function rolloutMessageNearTextKey(message) {
     normalizedTextKey(message.text),
     rolloutMessageTimestampBucket(message),
   ].join("\n");
+}
+
+function rolloutMessageNearTextKeys(message) {
+  const bucket = rolloutMessageTimestampBucket(message);
+  if (bucket === "") return [rolloutMessageNearTextKey(message)];
+  return [-1, 0, 1].map((offset) => [
+    message.codexThreadId || message.executorThreadId || "",
+    message.role,
+    String(message.phase || ""),
+    normalizedTextKey(message.text),
+    Number(bucket) + offset,
+  ].join("\n"));
 }
 
 function rolloutFinalDuplicateKey(message) {
@@ -4110,6 +4123,16 @@ function parseJsonObject(value) {
   }
 }
 
+function requestUserInputFailureOutput(payload = {}) {
+  if (payload?.type !== "function_call_output") return false;
+  const output = typeof payload.output === "string"
+    ? payload.output
+    : JSON.stringify(payload.output ?? "");
+  return /request_user_input\s+is\s+(?:unavailable|unsupported|disabled)/i.test(output) ||
+    payload.isError === true ||
+    payload.is_error === true;
+}
+
 function formatRequestUserInput(argumentsText) {
   const args = parseJsonObject(argumentsText);
   const questions = Array.isArray(args?.questions) ? args.questions : [];
@@ -4141,9 +4164,10 @@ function formatRequestUserInput(argumentsText) {
   ].join("\n").trim();
 }
 
-export function parseAssistantRolloutMessages(body, threadId, baseOffset = 0, generation = "") {
+export function parseAssistantRolloutMessages(body, threadId, baseOffset = 0, generation = "", options = {}) {
   const messages = [];
   const keyIndexes = new Map();
+  const entries = [];
   let offset = baseOffset;
   for (const line of String(body || "").split("\n")) {
     const cursor = offset;
@@ -4155,6 +4179,14 @@ export function parseAssistantRolloutMessages(body, threadId, baseOffset = 0, ge
     } catch {
       continue;
     }
+    entries.push({ parsed, cursor });
+  }
+  const failedRequestCallIds = new Set(entries
+    .map(({ parsed }) => parsed?.payload)
+    .filter((payload) => requestUserInputFailureOutput(payload))
+    .map((payload) => String(payload.call_id || payload.callId || "").trim())
+    .filter(Boolean));
+  for (const { parsed, cursor } of entries) {
     let text = "";
     let phase = null;
     if (parsed?.type === "response_item" && parsed.payload?.type === "message" && parsed.payload?.role === "assistant") {
@@ -4170,6 +4202,16 @@ export function parseAssistantRolloutMessages(body, threadId, baseOffset = 0, ge
       text = String(parsed.payload.item.text || "").trim();
       phase = "plan";
     } else if (parsed?.type === "response_item" && parsed.payload?.type === "function_call" && parsed.payload?.name === "request_user_input") {
+      const callId = String(parsed.payload.call_id || parsed.payload.callId || "").trim();
+      const suppressReason = options.includeRequestUserInput === false
+        ? "native_request_authoritative"
+        : callId && failedRequestCallIds.has(callId)
+          ? "failed_call"
+          : "";
+      if (suppressReason) {
+        options.onRequestUserInputSuppressed?.({ callId, reason: suppressReason });
+        continue;
+      }
       text = formatRequestUserInput(parsed.payload.arguments);
       phase = "need_input";
     }
@@ -4303,14 +4345,17 @@ function shouldSyncDetachedRollout(thread = {}, activeLeaseThreadIds = new Set()
 }
 
 async function appendRolloutMessages({ thread, rolloutPath, generation = "", body, start, initialScan, projectionSource = "detached_rollout", env }) {
-  const parsed = parseAssistantRolloutMessages(body, thread.id, start, generation);
+  const parsed = parseAssistantRolloutMessages(body, thread.id, start, generation, {
+    includeRequestUserInput: false,
+    onRequestUserInputSuppressed: () => recordCodexUserInputRequest({ path: "rollout", outcome: "suppressed" }),
+  });
   if (!parsed.length) return { appended: 0, completedTurnId: null };
   const existing = await rolloutExistingMessages(thread.id, parsed, env);
   const existingEventKeys = new Set(existing.map(rolloutMessageEventKey));
   const existingTextKeys = new Set(
     existing
       .filter((message) => message.role === "assistant")
-      .map(rolloutMessageNearTextKey),
+      .flatMap(rolloutMessageNearTextKeys),
   );
   const existingFinalDuplicateKeys = rolloutFinalDuplicateKeySet(existing);
   const latestExistingMs = Math.max(0, ...existing.map(messageTimeMs).filter(Number.isFinite));
@@ -4372,7 +4417,7 @@ async function appendRolloutMessages({ thread, rolloutPath, generation = "", bod
       markConnectorDeliverySignal(appendedMessage);
     }
     existingEventKeys.add(eventKey);
-    existingTextKeys.add(textKey);
+    for (const nearKey of rolloutMessageNearTextKeys(message)) existingTextKeys.add(nearKey);
     const finalDuplicateKey = rolloutFinalDuplicateKey(appendedMessage);
     if (finalDuplicateKey) existingFinalDuplicateKeys.add(finalDuplicateKey);
     appended += 1;
@@ -4569,13 +4614,17 @@ async function syncLeaseRollout(lease, env = process.env) {
     return { lease: resetLeaseRolloutForGeneration(currentLease, readFence.generation), appended: 0 };
   }
   thread = readFence.thread;
-  const parsed = parseAssistantRolloutMessages(body, currentLease.threadId, start, generation);
+  const nativeCodexRuntime = threadUsesNativeCodexRuntime(thread);
+  const parsed = parseAssistantRolloutMessages(body, currentLease.threadId, start, generation, {
+    includeRequestUserInput: !nativeCodexRuntime,
+    onRequestUserInputSuppressed: () => recordCodexUserInputRequest({ path: "rollout", outcome: "suppressed" }),
+  });
   const existing = await rolloutExistingMessages(currentLease.threadId, parsed, env);
   const existingEventKeys = new Set(existing.map(rolloutMessageEventKey));
   const existingTextKeys = new Set(
     existing
       .filter((message) => message.role === "assistant")
-      .map(rolloutMessageNearTextKey),
+      .flatMap(rolloutMessageNearTextKeys),
   );
   const existingFinalDuplicateKeys = rolloutFinalDuplicateKeySet(existing);
   const projectionFence = await fenceRolloutGeneration(currentLease.threadId, generation, "active_lease_before_projection", env);
@@ -4638,7 +4687,7 @@ async function syncLeaseRollout(lease, env = process.env) {
       markConnectorDeliverySignal(appendedMessage);
     }
     existingEventKeys.add(eventKey);
-    existingTextKeys.add(textKey);
+    for (const nearKey of rolloutMessageNearTextKeys(message)) existingTextKeys.add(nearKey);
     const finalDuplicateKey = rolloutFinalDuplicateKey(appendedMessage);
     if (finalDuplicateKey) existingFinalDuplicateKeys.add(finalDuplicateKey);
     appended += 1;

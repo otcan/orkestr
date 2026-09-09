@@ -10,7 +10,7 @@ import { startServer } from "../apps/server/src/server.js";
 import { resetThreadSummaryCachesForTest, threadRuntimeSummary, threadSummaryPayload, threadSummaryRuntimeSnapshot } from "../apps/server/src/thread-summary.ts";
 import { stableSummaryBody, summaryStreamClientBackpressured } from "../apps/server/src/thread-stream-summary.js";
 import { runNextThreadMessage } from "../packages/core/src/executors.js";
-import { applyRuntimeCodexMode, clearRuntimeLeasesForThread, consumeThreadConnectorDeliverySignalCount, deliverPendingThreadInputs, doctorRuntimeResources, drainAllPendingThreadInputs, hardResetThreadRuntime, listRuntimeLeases, recoverStalePendingThreadInputs, resetThreadInputDeliveryTimersForTest, resetThreadRuntime, resolveCodexThreadMetadata, resolveCodexThreadMetadataBatch, runtimeStatus, setThreadConnectorDeliverySignalHandler, sleepThread, syncPaneProgressForActiveLeases, syncRuntimeLeases, syncRuntimeWindowName, takeoverRawTerminalThread, wakeThread } from "../packages/core/src/runtime-leases.js";
+import { applyRuntimeCodexMode, clearRuntimeLeasesForThread, consumeThreadConnectorDeliverySignalCount, deliverPendingThreadInputs, doctorRuntimeResources, drainAllPendingThreadInputs, hardResetThreadRuntime, listRuntimeLeases, parseAssistantRolloutMessages, recoverStalePendingThreadInputs, resetThreadInputDeliveryTimersForTest, resetThreadRuntime, resolveCodexThreadMetadata, resolveCodexThreadMetadataBatch, runtimeStatus, setThreadConnectorDeliverySignalHandler, sleepThread, syncPaneProgressForActiveLeases, syncRuntimeLeases, syncRuntimeWindowName, takeoverRawTerminalThread, wakeThread } from "../packages/core/src/runtime-leases.js";
 import { acquireRuntimeLeaseFileLock, withRuntimeLeaseLock } from "../packages/core/src/runtime-lease-lock.js";
 import { completeThreadSecurityApproveCommand } from "../packages/core/src/security-thread-command.js";
 import { ensureDataDirs } from "../packages/storage/src/paths.js";
@@ -8141,6 +8141,52 @@ test("Codex thread metadata keeps empty SQLite fields aligned", async (t) => {
   assert.equal(metadata.codexModelProvider, "openai");
   assert.equal(metadata.codexTokenUsage, undefined);
   assert.equal(metadata.codexRolloutPath, rolloutPath);
+});
+
+test("rollout parsing suppresses failed and app-server-owned user-input questions", () => {
+  const question = {
+    timestamp: "2026-09-09T14:57:05.912Z",
+    type: "response_item",
+    payload: {
+      type: "function_call",
+      name: "request_user_input",
+      call_id: "call_sync_scope",
+      arguments: JSON.stringify({
+        questions: [{
+          header: "Sync scope",
+          id: "sync_scope",
+          question: "Which records should be synchronized?",
+          options: [
+            { label: "Full pool", description: "Synchronize every validated record." },
+            { label: "Promoted only", description: "Synchronize only promoted records." },
+          ],
+        }],
+      }),
+    },
+  };
+  const unavailable = {
+    timestamp: "2026-09-09T14:57:05.987Z",
+    type: "response_item",
+    payload: {
+      type: "function_call_output",
+      call_id: "call_sync_scope",
+      output: "request_user_input is unavailable in Default mode",
+    },
+  };
+  const failedBody = `${JSON.stringify(question)}\n${JSON.stringify(unavailable)}\n`;
+  const suppressionReasons = [];
+
+  assert.equal(parseAssistantRolloutMessages(failedBody, "thread-failed-question").some((message) => message.phase === "need_input"), false);
+  assert.equal(parseAssistantRolloutMessages(`${JSON.stringify(question)}\n`, "thread-app-server-question", 0, "codex-generation", {
+    includeRequestUserInput: false,
+    onRequestUserInputSuppressed: ({ reason }) => suppressionReasons.push(reason),
+  }).some((message) => message.phase === "need_input"), false);
+  assert.deepEqual(suppressionReasons, ["native_request_authoritative"]);
+
+  const legacyMessages = parseAssistantRolloutMessages(`${JSON.stringify(question)}\n`, "thread-legacy-question");
+  assert.equal(legacyMessages.length, 1);
+  assert.equal(legacyMessages[0].phase, "need_input");
+  assert.match(legacyMessages[0].text, /Which records should be synchronized/);
 });
 
 test("thread runtime sync does not scrape legacy Codex plan questions before migration", async (t) => {

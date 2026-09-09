@@ -5,7 +5,10 @@ ORK-369.
 
 ## Input Control
 
-- Normal input steers a verified active turn by default.
+- Normal input queues behind a verified active turn by default.
+- Active-turn steering is opt-in through an explicit trusted caller flag, a
+  thread/chat binding, or the `ORKESTR_WHATSAPP_INBOUND_STEER_DEFAULT`
+  compatibility setting.
 - `/now` and `/steer` have no control meaning and are passed as ordinary text.
 - `/interrupt`, `/stop`, `/cancel`, and `/quit` are equivalent preemptive stop
   commands. They cancel pending approval/input requests, interrupt the active

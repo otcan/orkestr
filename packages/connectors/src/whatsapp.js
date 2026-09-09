@@ -1700,7 +1700,7 @@ function isCodexSteerCapableThread(thread = {}) {
 
 function deliveryModeRequestsInstantSteer(value = "") {
   const mode = pickString(value).toLowerCase().replace(/[\s-]+/g, "_");
-  return ["instant_steer", "steer", "active_turn_steer", "steer_active_turn"].includes(mode);
+  return ["1", "true", "on", "yes", "enabled", "enable", "instant_steer", "steer", "active_turn_steer", "steer_active_turn"].includes(mode);
 }
 
 function deliveryModeDisablesInstantSteer(value = "") {
@@ -1731,11 +1731,11 @@ function bindingDisablesWhatsAppInstantSteer(binding = {}) {
 }
 
 function whatsappInboundInstantSteerDefaultEnabled(env = process.env) {
-  return ![
+  return [
     env.ORKESTR_WHATSAPP_INBOUND_STEER_DEFAULT,
     env.ORKESTR_WHATSAPP_INBOUND_INSTANT_STEER_DEFAULT,
     env.ORKESTR_WHATSAPP_DEFAULT_STEER,
-  ].some((value) => deliveryModeDisablesInstantSteer(value));
+  ].some((value) => deliveryModeRequestsInstantSteer(value));
 }
 
 function whatsappInboundInstantSteerEnabled({ thread = null, binding = null, chatId = "", env = process.env } = {}) {
