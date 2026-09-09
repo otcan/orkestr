@@ -2157,7 +2157,27 @@ export async function authorizeHttpRequest(request, env = process.env) {
         error: error?.message || String(error),
       }))
     : null;
-  if (shareAuth?.ok) return { ok: true, status, principal: shareAuth.principal, desktopShare: shareAuth.share, desktopShareAttempt: shareAuth.attempt };
+  if (shareAuth?.ok) {
+    let shareSession = null;
+    if (shareAuth.oidcSessionId) {
+      shareSession = await securitySessionForRequest(request, env);
+      if (shareSession?.authProvider !== "oidc" || String(shareSession.id || "") !== shareAuth.oidcSessionId) {
+        return { ok: false, status, statusCode: 401, error: "oidc_desktop_session_required" };
+      }
+      const shareUser = await getUser(shareSession.userId, env);
+      if (shareUser?.status === "disabled") {
+        return { ok: false, status, statusCode: 403, error: "user_disabled" };
+      }
+    }
+    return {
+      ok: true,
+      status,
+      principal: shareAuth.principal,
+      session: shareSession,
+      desktopShare: shareAuth.share,
+      desktopShareAttempt: shareAuth.attempt,
+    };
+  }
   if (shareAuth && Number(shareAuth.statusCode || 0) >= 400) {
     return { ok: false, status, statusCode: shareAuth.statusCode, error: shareAuth.error || "desktop_share_forbidden" };
   }

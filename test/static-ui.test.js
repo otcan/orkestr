@@ -1371,7 +1371,7 @@ test("instance desktop links are brokered and only shown for running desktops", 
   assert.match(component, /openDesktop\(browser: BrowserSession\): Promise<void>/);
   assert.match(component, /browserRunning\(browser: BrowserSession\): boolean/);
   assert.match(component, /"active", "running"/);
-  assert.match(component, /this\.api\.createDesktopShare\(slug, \{/);
+  assert.match(component, /this\.api\.openDesktopSession\(slug, \{/);
   assert.doesNotMatch(component, /return String\(browser\.desk_url \|\| browser\.url \|\| ""\)\.trim\(\)/);
   assert.match(template, /\(click\)="openDesktop\(browser\)"/);
   assert.match(template, />Open Desktop<\/button>/);
@@ -1918,7 +1918,7 @@ test("web shell exposes an instance-scoped desktop page", async () => {
   assert.match(deskComponent, /action !== "stop" && \(!lease \|\| lease\.stale \|\| lease\.expired\)/);
   assert.match(deskComponent, /recovered from its expired reservation and reserved/);
   assert.match(deskComponent, /this\.api\.releaseDesktopLease\(slug/);
-  assert.match(deskComponent, /this\.api\.createDesktopShare\(slug, \{/);
+  assert.match(deskComponent, /this\.api\.openDesktopSession\(slug, \{/);
   assert.match(deskTemplate, /<h3>Desktops<\/h3>/);
   assert.match(deskTemplate, /instance-metric-strip/);
   assert.match(deskTemplate, /Assigned threads/);

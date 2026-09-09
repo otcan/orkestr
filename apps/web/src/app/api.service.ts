@@ -331,6 +331,8 @@ export interface DesktopAccessWarning {
 export interface DesktopShareResponse {
   ok: boolean;
   url: string;
+  authenticatedOpen?: boolean;
+  challengeRequired?: boolean;
   subdomain?: string;
   wildcardSubdomainConfigured?: boolean;
   share?: {
@@ -3237,6 +3239,10 @@ export class ApiService {
 
   createDesktopShare(slug: string, body: Record<string, unknown> = {}): Observable<DesktopShareResponse> {
     return this.http.post<DesktopShareResponse>(this.api(`/desktops/${encodeURIComponent(slug)}/share`), body);
+  }
+
+  openDesktopSession(slug: string, body: Record<string, unknown> = {}): Observable<DesktopShareResponse> {
+    return this.createDesktopShare(slug, { ...body, openForCurrentSession: true });
   }
 
   desktopShares(includeTerminal = true): Observable<{ ok: boolean; shares: DesktopShareRecord[]; migrationAmbiguities?: Array<Record<string, unknown>> }> {

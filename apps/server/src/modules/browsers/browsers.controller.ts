@@ -46,14 +46,11 @@ import {
   issueDesktopCapability,
   resolveExactDesktopGrant,
 } from "../../../../../packages/browsers/src/desktop-capability-broker.js";
+import { assertOidcDesktopSession } from "../../../../../packages/core/src/oidc-desktop-session.js";
 import { httpError } from "../../common/http.js";
-import {
-  desktopAttemptId,
-  desktopOperationWarnings,
-  desktopShareNotReadyReason,
-  desktopShareReady,
-  desktopStoppedLeaseRecoveryOptions,
-} from "./desktop-warning-response.js";
+import { desktopAttemptId, desktopOperationWarnings, desktopShareNotReadyReason,
+  desktopShareReady, desktopStoppedLeaseRecoveryOptions } from "./desktop-warning-response.js";
+import { oidcDesktopOpenResponse } from "./oidc-desktop-open.js";
 
 @Controller("api")
 export class BrowsersController {
@@ -180,8 +177,9 @@ export class BrowsersController {
 
   @Post("desktops/:slug/share")
   @HttpCode(201)
-  async shareDesktop(@Req() request: any, @Param("slug") slug: string, @Body() body: Record<string, unknown> = {}) {
+  async shareDesktop(@Req() request: any, @Res({ passthrough: true }) response: any, @Param("slug") slug: string, @Body() body: Record<string, unknown> = {}) {
     const principal = requestPrincipal(request);
+    if (body.openForCurrentSession === true) assertOidcDesktopSession(principal, request?.orkestrSecuritySession);
     const breakGlassOptions = this.breakGlassInputs(principal, body);
     const threadId = String(body.threadId || body.ownerThreadId || "").trim();
     const attemptId = desktopAttemptId(request, body);
@@ -227,6 +225,19 @@ export class BrowsersController {
       label: String(browser?.label || body.label || "").trim(),
       env: process.env,
     });
+    if (body.openForCurrentSession === true) {
+      return oidcDesktopOpenResponse({
+        request,
+        response,
+        share,
+        principal,
+        attemptId,
+        warnings,
+        browser,
+        startRequested,
+        startError,
+      });
+    }
     return {
       ...share,
       attemptId,
