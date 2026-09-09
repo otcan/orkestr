@@ -15,6 +15,12 @@ import {
   openDesktopShare,
   revokeDesktopShare,
 } from "../packages/core/src/desktop-shares.js";
+import { activateOidcDesktopSession } from "../packages/core/src/oidc-desktop-session.js";
+import {
+  authorizeHttpRequest,
+  createOidcSecuritySession,
+  oidcSecurityCookieName,
+} from "../packages/core/src/security.js";
 import {
   parseTenantDesktopSharePath,
   rewriteTenantDesktopUrl,
@@ -83,6 +89,70 @@ test("desktop shares require a random subdomain, link key, and per-browser chat 
     url: "/desktop/gmail/vnc.html",
     headers: { cookie: `orkestr_desktop_share=${encodeURIComponent(opened.cookie.value)}` },
   }, env), /desktop_share_slug_forbidden/);
+});
+
+test("Keycloak-authenticated desktop opens create an approved same-origin session without exposing a challenge", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-oidc-desktop-session-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_PUBLIC_HTTPS_URL: "https://app.example.test",
+    ORKESTR_DESKTOP_SHARE_BASE_DOMAIN: "desktop.example.test",
+  };
+  const oidc = await createOidcSecuritySession({
+    subject: "alice-subject",
+    displayName: "Alice",
+    issuedAt: new Date().toISOString(),
+    env,
+  });
+  const principal = {
+    kind: "user",
+    userId: oidc.session.userId,
+    role: "user",
+    source: "oidc-session",
+    sessionId: oidc.session.id,
+    displayName: "Alice",
+  };
+  const securitySession = { ...oidc.session, authProvider: "oidc" };
+  const created = await createDesktopShare({ desktopSlug: "linkedin", principal, env });
+  const activated = await activateOidcDesktopSession({
+    shareResult: created,
+    principal,
+    securitySession,
+    request: { headers: { "user-agent": "oidc-browser" } },
+    env,
+  });
+  const desktopCookie = `orkestr_desktop_share=${encodeURIComponent(activated.cookie.value)}`;
+  const oidcCookie = `${oidcSecurityCookieName()}=${encodeURIComponent(oidc.token)}`;
+  const auth = await authorizeHttpRequest({
+    url: activated.desktopUrl,
+    headers: { cookie: `${desktopCookie}; ${oidcCookie}` },
+  }, env);
+
+  assert.equal(activated.desktopUrl, "/desktop/linkedin/vnc.html?autoconnect=1&resize=scale&view_only=false&path=desktop/linkedin/websockify");
+  assert.equal(activated.attempt.status, "approved");
+  assert.equal(Object.hasOwn(activated.attempt, "challenge"), false);
+  assert.match(activated.cookie.header, /Path=\/desktop\/linkedin\//);
+  assert.match(activated.cookie.header, /;\s*HttpOnly\b/);
+  assert.match(activated.cookie.header, /;\s*Secure\b/);
+  assert.equal(auth.ok, true);
+  assert.equal(auth.principal.userId, oidc.session.userId);
+  const missingOidc = await authorizeHttpRequest({
+    url: activated.desktopUrl,
+    headers: { cookie: desktopCookie },
+  }, env);
+  assert.equal(missingOidc.ok, false);
+  assert.equal(missingOidc.error, "oidc_desktop_session_required");
+
+  const rejected = await createDesktopShare({ desktopSlug: "gmail", principal, env });
+  await assert.rejects(
+    () => activateOidcDesktopSession({
+      shareResult: rejected,
+      principal,
+      securitySession: { ...securitySession, authProvider: "browser-pairing" },
+      env,
+    }),
+    /oidc_desktop_session_required/,
+  );
 });
 
 test("desktop shares supersede older pending and active shares for the same owner desktop", async () => {

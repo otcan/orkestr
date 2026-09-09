@@ -35,7 +35,13 @@ export function desktopShareCookieName() {
   return shareCookieName;
 }
 
-export function desktopShareCookieHeader(value, env = process.env, maxAgeMs = null) {
+function desktopShareCookiePath(value = "/") {
+  const path = String(value || "/").trim();
+  if (!/^\/[A-Za-z0-9._~%/-]*$/.test(path) || path.startsWith("//")) return "/";
+  return path;
+}
+
+export function desktopShareCookieHeader(value, env = process.env, maxAgeMs = null, options = {}) {
   const configuredTtlMs = Number(env.ORKESTR_DESKTOP_SHARE_ACCESS_TTL_MS || 30 * 60 * 1000);
   const effectiveTtlMs = maxAgeMs == null
     ? (Number.isFinite(configuredTtlMs) ? Math.max(60_000, configuredTtlMs) : 30 * 60 * 1000)
@@ -43,7 +49,7 @@ export function desktopShareCookieHeader(value, env = process.env, maxAgeMs = nu
   const secure = String(env.ORKESTR_COOKIE_SECURE || "").trim() === "1" || publicHttpsBase(env).startsWith("https://") || Boolean(desktopShareBaseDomain(env));
   return [
     `${shareCookieName}=${encodeURIComponent(value)}`,
-    "Path=/",
+    `Path=${desktopShareCookiePath(options.path)}`,
     "HttpOnly",
     "SameSite=Lax",
     `Max-Age=${Math.floor(effectiveTtlMs / 1000)}`,

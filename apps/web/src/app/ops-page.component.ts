@@ -786,7 +786,7 @@ export class OpsPageComponent implements OnInit, OnDestroy {
     }
     this.activeBrowserActionSlug = slug;
     try {
-      const result = await firstValueFrom(this.api.createDesktopShare(slug, request));
+      const result = await firstValueFrom(this.api.openDesktopSession(slug, request));
       if (!result.url) throw new Error("Desktop share did not return a URL.");
       if (pendingWindow) pendingWindow.location.href = result.url;
       else window.location.assign(result.url);

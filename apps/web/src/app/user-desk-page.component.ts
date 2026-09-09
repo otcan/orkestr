@@ -186,7 +186,7 @@ export class UserDeskPageComponent implements OnInit {
     this.activeSlug = slug;
     try {
       const lease = this.browserLease(browser);
-      const payload = await firstValueFrom(this.api.createDesktopShare(slug, {
+      const payload = await firstValueFrom(this.api.openDesktopSession(slug, {
         threadId,
         fencingToken: String(lease?.fencingToken || ""),
         start: false,

@@ -487,10 +487,13 @@ export async function authorizeDesktopShareHttpRequest(request, env = process.en
   const attempt = share.attempts.find((item) => item.tokenHash === sha256(token) && Date.parse(item.expiresAt || "") > now);
   if (!attempt || attempt.status !== "approved") return null;
   const principal = principalForShare(share, env);
+  const approvedBy = String(attempt.approvedBy || "");
+  const oidcSessionId = approvedBy.startsWith("oidc-session:") ? approvedBy.slice("oidc-session:".length).trim() : "";
   return {
     ok: true,
     principal,
     share: publicShare(share),
     attempt: publicAttempt(attempt),
+    oidcSessionId,
   };
 }
