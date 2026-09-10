@@ -26,21 +26,34 @@ function tokenPreview(token = "") {
   return `${value.slice(0, 6)}...${value.slice(-6)}`;
 }
 
-function routeDiagnostics(routeTarget = {}, token = "", { enabled = false } = {}) {
+function routeDiagnostics(routeTarget = {}, token = "", { enabled = false, targetReachable = null } = {}) {
   const missing = [];
   if (!routeTarget.target) missing.push(routeTarget.routeMode === "broker" ? "brokerBaseUrl" : "baseUrl");
   if (!clean(token)) missing.push("routeToken");
   const configured = missing.length === 0;
-  const status = configured ? (enabled ? "active" : "prepared") : "incomplete";
+  const targetReachability = targetReachable === true
+    ? "reachable"
+    : targetReachable === false
+      ? "unreachable"
+      : "not_checked";
+  const status = configured
+    ? (enabled
+      ? (targetReachable === false ? "target_unreachable" : "active")
+      : "prepared")
+    : "incomplete";
   const nextAction = !routeTarget.target
     ? (routeTarget.routeMode === "broker" ? "set_broker_base_url" : "set_target_base_url")
     : !clean(token)
       ? "configure_route_token"
+      : enabled && targetReachable === false
+        ? "restore_target_reachability"
       : enabled
         ? "sync_whatsapp_inbound_token_to_target"
         : "enable_route_when_target_is_ready";
   const safeMessage = configured
-    ? enabled
+    ? enabled && targetReachable === false
+      ? "Route target is configured but not reachable. Do not forward until the target responds."
+      : enabled
       ? "Route is active. The target instance must also have the same WhatsApp inbound token."
       : "Route is prepared but disabled. Enable it only after the target instance accepts the inbound token."
     : "Route is incomplete and cannot receive brokered WhatsApp messages yet.";
@@ -48,6 +61,7 @@ function routeDiagnostics(routeTarget = {}, token = "", { enabled = false } = {}
     status,
     routeMode: routeTarget.routeMode || "",
     targetSource: routeTarget.targetSource || "",
+    targetReachability,
     tokenState: clean(token) ? "configured" : "missing",
     missing,
     nextAction,
@@ -155,6 +169,34 @@ function inboundApiTarget(baseUrl = "") {
   }
 }
 
+function routeHealthTimeoutMs(env = process.env) {
+  const parsed = Number.parseInt(clean(env.ORKESTR_TENANT_ROUTE_HEALTH_TIMEOUT_MS || "1500"), 10);
+  return Number.isFinite(parsed) ? Math.max(250, Math.min(10000, parsed)) : 1500;
+}
+
+async function tenantRouteTargetReachable(target = "", token = "", env = process.env, fetchImpl = globalThis.fetch) {
+  const url = clean(target);
+  if (!url || typeof fetchImpl !== "function") return false;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), routeHealthTimeoutMs(env));
+  try {
+    const headers = { "content-type": "application/json" };
+    const authToken = clean(token);
+    if (authToken) headers.authorization = `Bearer ${authToken}`;
+    const response = await fetchImpl(url, {
+      method: "POST",
+      headers,
+      body: "{}",
+      signal: controller.signal,
+    });
+    return response.status === 200 || response.status === 202 || response.status === 400 || response.status === 422;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 function tenantRouteTarget(vm = {}, input = {}) {
   const routeMode = normalizeRouteMode(
     input.routeMode ||
@@ -241,14 +283,15 @@ function routeAppUrl(vm = {}, env = process.env) {
   }, env).appUrl;
 }
 
-function publicRoute(vm, secret = {}, { includeToken = false, bridgeSendToken = null, env = process.env } = {}) {
+function publicRoute(vm, secret = {}, { includeToken = false, bridgeSendToken = null, env = process.env, targetReachable = null } = {}) {
   const token = clean(secret.token);
   const bridgeToken = clean(bridgeSendToken?.token);
   const routeTarget = tenantRouteTarget(vm);
   const enabled = vm.connectors?.whatsappRouteEnabled === true;
-  const diagnostics = routeDiagnostics(routeTarget, token, { enabled });
+  const diagnostics = routeDiagnostics(routeTarget, token, { enabled, targetReachable });
   const tokenSync = includeToken ? tokenSyncPayload(token, routeTarget) : null;
   const bridgeTokenSync = includeToken ? bridgeSendTokenSyncPayload(bridgeToken) : null;
+  const configuredReady = enabled && Boolean(routeTarget.target) && Boolean(token);
   return {
     tenantVmId: vm.id,
     ownerUserId: vm.ownerUserId,
@@ -256,7 +299,7 @@ function publicRoute(vm, secret = {}, { includeToken = false, bridgeSendToken = 
     chatName: clean(vm.connectors?.whatsappChatName),
     accountId: clean(vm.connectors?.whatsappAccountId),
     enabled,
-    forwardingReady: enabled && Boolean(routeTarget.target) && Boolean(token),
+    forwardingReady: configuredReady && targetReachable !== false,
     target: routeTarget.target,
     routeMode: routeTarget.routeMode,
     targetSource: routeTarget.targetSource,
@@ -270,6 +313,16 @@ function publicRoute(vm, secret = {}, { includeToken = false, bridgeSendToken = 
     ...(tokenSync ? { tokenSync } : {}),
     ...(bridgeTokenSync ? { bridgeTokenSync } : {}),
   };
+}
+
+async function publicRouteWithHealth(vm, secret = {}, options = {}) {
+  const routeTarget = tenantRouteTarget(vm);
+  const token = clean(secret.token);
+  const enabled = vm.connectors?.whatsappRouteEnabled === true;
+  const targetReachable = enabled && routeTarget.target && token
+    ? await tenantRouteTargetReachable(routeTarget.target, token, options.env || process.env, options.fetchImpl || globalThis.fetch)
+    : false;
+  return publicRoute(vm, secret, { ...options, targetReachable });
 }
 
 export async function configureTenantWhatsAppRoute(tenantVmId, input = {}, env = process.env) {
@@ -365,7 +418,7 @@ export async function disableTenantWhatsAppRoute(tenantVmId, env = process.env) 
 export async function listTenantWhatsAppRoutes(env = process.env) {
   const state = await readRouteSecrets(env);
   const vms = await listTenantVms(env);
-  return vms.map((vm) => publicRoute(vm, state.routes[vm.id] || {}, { env }));
+  return Promise.all(vms.map((vm) => publicRouteWithHealth(vm, state.routes[vm.id] || {}, { env })));
 }
 
 export async function tenantWhatsAppInboundForwardRoute(input = {}, env = process.env) {
