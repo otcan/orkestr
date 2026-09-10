@@ -301,6 +301,8 @@ export async function createHushVoiceTurn(input = {}, options = {}) {
       clientMessageId: `hush:${clean(device.deviceId)}:${clientTurnId}`,
       attachments: [],
       commandProcessing: "disabled",
+      codexDeliveryMode: "passive",
+      steerActiveTurn: false,
       ...(replyDeliveryIntent ? { replyDeliveryIntent } : {}),
     }, principal, env);
     const now = nowIso();

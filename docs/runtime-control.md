@@ -5,10 +5,14 @@ ORK-369.
 
 ## Input Control
 
-- Normal input queues behind a verified active turn by default.
-- Active-turn steering is opt-in through an explicit trusted caller flag, a
-  thread/chat binding, or the `ORKESTR_WHATSAPP_INBOUND_STEER_DEFAULT`
-  compatibility setting.
+- Trusted interactive WhatsApp and first-party WebUI input steers a verified
+  active turn by default.
+- Machine and durable request inputs remain passive and wait for an isolated
+  turn. Hush/Vagent voice requests, timers, mailbox routes, connector prompt
+  pushes, and similar callers must persist `steerActiveTurn: false` with
+  `codexDeliveryMode: passive`.
+- A thread/chat binding or `ORKESTR_WHATSAPP_INBOUND_STEER_DEFAULT=0` can opt a
+  WhatsApp route out of interactive steering.
 - `/now` and `/steer` have no control meaning and are passed as ordinary text.
 - `/interrupt`, `/stop`, `/cancel`, and `/quit` are equivalent preemptive stop
   commands. They cancel pending approval/input requests, interrupt the active

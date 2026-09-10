@@ -77,6 +77,8 @@ test("Hush accepts normal disabled-command input, persists only turn metadata, a
   assert.equal(messages.length, 1);
   assert.equal(messages[0].source, "hush");
   assert.equal(messages[0].commandProcessing, "disabled");
+  assert.equal(messages[0].codexDeliveryMode, "passive");
+  assert.equal(messages[0].steerActiveTurn, false);
   assert.equal(messages[0].clientMessageId, "hush:phone-a:11111111-1111-4111-8111-111111111111");
   assert.equal(parseThreadInputCommand(messages[0]).command, null);
   assert.equal(stored.turns[0].contentHash.length, 64);

@@ -91,6 +91,8 @@ export async function processVagentRequest(request, { env = process.env, depende
       text: request.prompt,
       externalId: request.sessionId,
       attachments: [],
+      codexDeliveryMode: "passive",
+      steerActiveTurn: false,
       // Speech recognition must not turn a misheard slash command into a
       // privileged runtime action. The text is still sent to the agent.
       commandProcessing: "disabled",

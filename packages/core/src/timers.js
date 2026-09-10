@@ -681,6 +681,8 @@ async function enqueueTimerMessage(timer, source, env, principal = null, options
     text: timer.prompt,
     promptFile: timer.promptFile || "",
     ownerUserId: timer.ownerUserId,
+    codexDeliveryMode: "passive",
+    steerActiveTurn: false,
   };
   if (timer.targetType !== "thread") return enqueueAgentMessage(timer.target, input, env);
   const thread = await getThread(timer.target, env).catch(() => null);
