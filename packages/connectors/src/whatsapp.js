@@ -2598,6 +2598,7 @@ async function ensureWhatsAppOutboundIntent({
   thread,
   messageSetKey,
   messageCursor,
+  priorQueueNoticeDelivered = false,
   env,
 } = {}) {
   const routerTraceId = pickString(message?.routerTraceId, parent?.routerTraceId);
@@ -2647,16 +2648,18 @@ async function ensureWhatsAppOutboundIntent({
     }
     return { intent: existing };
   }
-  const gate = canCreateWhatsAppOutboundIntent({
-    state,
-    messageSetKey,
-    messageCursor,
-    message,
-    parent,
-    thread,
-    kind,
-    env,
-  });
+  const gate = priorQueueNoticeDelivered
+    ? { ok: true, reason: "terminal_update_after_queue_notice" }
+    : canCreateWhatsAppOutboundIntent({
+      state,
+      messageSetKey,
+      messageCursor,
+      message,
+      parent,
+      thread,
+      kind,
+      env,
+    });
   if (!gate.ok) {
     await recordRouterTraceEvent({
       routerTraceId,
@@ -3962,6 +3965,7 @@ function generatedWhatsAppQueueNoticeText(text = "") {
     /^Queued your message while Orkestr prepares this thread(?:[:.]\s|$)/i,
     /^Runtime handoff is taking longer than expected(?:[:.]\s|$)/i,
     /^Waking this Orkestr thread and queued your message(?:[:.]\s|$)/i,
+    /^Waking Orkestr thread ["“][^"”]+["”]\. Your request is queued pending startup(?:[:.]\s|$)/i,
     /^Waking this thread\. Your message will run after startup(?:[:.]\s|$)/i,
     /^Queued your latest message while current work is still running(?:[:.]\s|$)/i,
     /^Queued behind current work(?:[:.]\s|$)/i,
@@ -6015,6 +6019,19 @@ function whatsappOutboundMirrorCursorPassed(state = null, messageSetKey = "", me
   return Boolean(existingCursor && cursor > 0 && cursor <= Number(existingCursor.cursor || 0));
 }
 
+function previouslyDeliveredQueueNotice(outboundDeliveries = [], sourceMessageId = "", env = process.env) {
+  const id = pickString(sourceMessageId);
+  if (!id) return false;
+  const recoveryWindowMs = whatsappLiveOutputRecoveryWindowMs(env);
+  if (recoveryWindowMs <= 0) return false;
+  const oldestAllowedMs = Date.now() - recoveryWindowMs;
+  return outboundDeliveries.some((delivery) =>
+    pickString(delivery?.sourceMessageId, delivery?.messageId) === id &&
+    ["queue_notice", "mode_queued"].includes(pickString(delivery?.deliveryType).toLowerCase()) &&
+    Date.parse(pickString(delivery?.deliveredAt)) >= oldestAllowedMs
+  );
+}
+
 function outOfBandNotificationBypassesMirrorCursor(message = {}) {
   const phase = pickString(message.phase).toLowerCase();
   return ["notification", "signal"].includes(phase) &&
@@ -6190,6 +6207,7 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
       if (routerUpdateTarget) {
         const deliveryId = `${message.id}:${routerUpdateTarget.routerUpdateType}`;
         if (deliveredIds.has(deliveryId)) continue;
+        const followsQueueNotice = previouslyDeliveredQueueNotice(outboundDeliveries, message.id, env);
         const chatId = routerUpdateTarget.chatId;
         const accountId = kind === "thread" ? routerUpdateTarget.accountId : pickString(message.accountId, routerUpdateTarget.accountId);
         const existingIntent = findWhatsAppOutboundIntent(outboundIntents, {
@@ -6203,8 +6221,8 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
           chatId,
           accountId,
         });
-        if (staleTerminalWhatsAppOutboundIntentPassedCursor({ state, messageSetKey, messageCursor, intent: existingIntent, env })) continue;
-        if (!existingIntent && whatsappOutboundMirrorCursorPassed(state, messageSetKey, messageCursor)) continue;
+        if (!followsQueueNotice && staleTerminalWhatsAppOutboundIntentPassedCursor({ state, messageSetKey, messageCursor, intent: existingIntent, env })) continue;
+        if (!followsQueueNotice && !existingIntent && whatsappOutboundMirrorCursorPassed(state, messageSetKey, messageCursor)) continue;
         if (
           routerUpdateTarget.skipIfAssistantOutput &&
           (completedAssistantReplyForParent(messages, message, chatId, state) || latestProgressReplyForParent(messages, message.id, env))
@@ -6253,6 +6271,7 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
           batchTextKeys,
           messageSetKey,
           messageCursor,
+          priorQueueNoticeDelivered: followsQueueNotice,
           message,
           thread,
           kind,
@@ -6514,7 +6533,7 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
           skipped.push({ agentId, threadId, messageId: message.id, reason: "assistant_output_available" });
           continue;
         }
-        const text = appendWhatsAppDebugFooter(formatWhatsAppQueueNotice(queueMessage, queueTarget.reason), {
+        const text = appendWhatsAppDebugFooter(formatWhatsAppQueueNotice(queueMessage, queueTarget.reason, thread), {
           message: queueMessage,
           thread: await debugThread(),
           messages: queueMessages,

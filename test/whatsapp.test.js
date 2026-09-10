@@ -338,7 +338,7 @@ function assertDebugFooter(text, { mode = "", messageType = "final", model = "[^
       ` · msg:${messageType}` +
       (fiveHour ? ` · 5h:${fiveHour}` : "(?: · 5h:\\d+%)?") +
       (weekly ? ` · wk:${weekly}` : "(?: · wk:\\d+%)?") +
-      `${queuePart} · load:\\d+% · api:\\d+% · help:/help` +
+      `${queuePart} · load:\\d+% · api-cpu:\\d+(?:\\.\\d+)?c · help:/help` +
       (mode === "plan" ? " · mode-switch:/code" : " · mode-switch:/plan") +
       runtimeSwitch +
       "$",
@@ -13264,7 +13264,7 @@ test("whatsapp delivery appends compact debug footer for plan-mode Codex updates
   assert.equal(stripDebugFooter(calls[0].body.text), "Milestone: routing check started.");
   assert.match(
     calls[0].body.text,
-    /\n\ndbg: m:gpt-5\.5\/xh · mode:plan · msg:update · 5h:88% · wk:66% · q:0 · load:\d+% · api:\d+% · help:\/help · mode-switch:\/code$/,
+    /\n\ndbg: m:gpt-5\.5\/xh · mode:plan · msg:update · 5h:88% · wk:66% · q:0 · load:\d+% · api-cpu:\d+(?:\.\d+)?c · help:\/help · mode-switch:\/code$/,
   );
 });
 
@@ -15238,6 +15238,17 @@ test("whatsapp delivery reports stale-ack recovery exhaustion as manual action",
     accountId: "account-1",
     text: "hi",
   }, env);
+
+  const calls = [];
+  const queued = await deliverWhatsAppReplies(env, async (url, options) => {
+    calls.push({ url, body: JSON.parse(options.body) });
+    return response({ ok: true, ids: ["sent-recovery-waking"] });
+  });
+
+  assert.equal(queued.delivered.length, 1);
+  assert.equal(queued.delivered[0].deliveryType, "queue_notice");
+  assert.match(stripDebugFooter(calls[0].body.text), /^Waking Orkestr thread "WA Recovery Exhausted Thread"/);
+
   await updateThreadMessage("thread-wa-recovery-exhausted", routed.message.id, {
     state: "failed",
     deliveryState: "failed",
@@ -15245,7 +15256,6 @@ test("whatsapp delivery reports stale-ack recovery exhaustion as manual action",
     error: "Thread input was not observed after stale-ack recovery; failing it to unblock later input.",
   }, env);
 
-  const calls = [];
   const delivery = await deliverWhatsAppReplies(env, async (url, options) => {
     calls.push({ url, body: JSON.parse(options.body) });
     return response({ ok: true, ids: ["sent-recovery-exhausted"] });
@@ -15259,11 +15269,51 @@ test("whatsapp delivery reports stale-ack recovery exhaustion as manual action",
   assert.equal(delivery.delivered[0].routerUpdateType, "recovery_exhausted");
   assert.equal(delivery.delivered[0].sourceMessageId, routed.message.id);
   assert.equal(duplicate.delivered.length, 0);
-  assert.equal(calls[0].body.to, "chat-recovery-exhausted");
-  assert.match(stripDebugFooter(calls[0].body.text), /^Manual recovery needed\.\n\nOrkestr stopped retrying this message to avoid duplicate input\./);
-  assert.match(stripDebugFooter(calls[0].body.text), /Open the thread or request \/restart, then resend if needed: "hi"\./);
-  assertDebugFooter(calls[0].body.text, { messageType: "update" });
+  assert.equal(calls.length, 2);
+  assert.equal(calls[1].body.to, "chat-recovery-exhausted");
+  assert.match(stripDebugFooter(calls[1].body.text), /^Manual recovery needed\.\n\nOrkestr stopped retrying this message to avoid duplicate input\./);
+  assert.match(stripDebugFooter(calls[1].body.text), /Open the thread or request \/restart, then resend if needed: "hi"\./);
+  assertDebugFooter(calls[1].body.text, { messageType: "update" });
   assert.equal(delivery.delivered.some((entry) => entry.deliveryType === "delivery_error"), false);
+});
+
+test("whatsapp delivery does not backfill recovery exhaustion after the live recovery window", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-recovery-exhausted-stale-"));
+  const env = externalBridgeEnv(home);
+  await createThread({ id: "thread-wa-recovery-exhausted-stale", name: "WA Stale Recovery Exhausted Thread" }, env);
+  await writeConnectorConfig("whatsapp", {
+    bridgeMode: "external",
+    bridgeUrl: "http://wa.local",
+    threadRoutes: { "chat-recovery-exhausted-stale": "thread-wa-recovery-exhausted-stale" },
+  }, env);
+  const routed = await routeWhatsAppInbound({
+    eventId: "wa-recovery-exhausted-stale-1",
+    chatId: "chat-recovery-exhausted-stale",
+    accountId: "account-1",
+    text: "old request",
+  }, env);
+  await deliverWhatsAppReplies(env, async () => response({ ok: true, ids: ["sent-stale-recovery-waking"] }));
+
+  const statePath = dataPaths(env).whatsapp;
+  const state = JSON.parse(await fs.readFile(statePath, "utf8"));
+  state.outboundDeliveries = state.outboundDeliveries.map((delivery) => ({
+    ...delivery,
+    deliveredAt: "2026-01-01T00:00:00.000Z",
+  }));
+  await fs.writeFile(statePath, `${JSON.stringify(state, null, 2)}\n`, "utf8");
+  await updateThreadMessage("thread-wa-recovery-exhausted-stale", routed.message.id, {
+    state: "failed",
+    deliveryState: "failed",
+    observedVia: "stale_ack_recovery_exhausted",
+    error: "Thread input was not observed after stale-ack recovery; failing it to unblock later input.",
+  }, env);
+
+  const delivery = await deliverWhatsAppReplies(env, async () => {
+    throw new Error("should not backfill an expired recovery notice");
+  });
+
+  assert.equal(delivery.delivered.length, 0);
+  assert.equal(delivery.failed.length, 0);
 });
 
 test("whatsapp router update notices strip pasted debug footers from previews", () => {
@@ -15573,7 +15623,7 @@ test("whatsapp delivery reports waking queue notices", async () => {
 
   assert.equal(delivery.delivered.length, 1);
   assert.equal(delivery.delivered[0].deliveryType, "queue_notice");
-  assert.match(stripDebugFooter(calls[0].body.text), /^Waking this thread\. Your message will run after startup: "wake test"\./);
+  assert.match(stripDebugFooter(calls[0].body.text), /^Waking Orkestr thread "WA Queue Waking Thread"\. Your request is queued pending startup: "wake test"\./);
   assertDebugFooter(calls[0].body.text, { messageType: "update", queueReason: "waking" });
 });
 
@@ -15720,6 +15770,10 @@ dbg: m:unknown · rt:api · msg:update · queue:20 · reason:active-turn`,
 Trace: rt_trace_456
 
 dbg: m:unknown · rt:api · msg:update · q:0`,
+    `Waking Orkestr thread "WA Named Thread". Your request is queued pending startup: "check another thread".
+Trace: rt_trace_789
+
+dbg: m:gpt-5.6-sol/xh · rt:api · msg:update · queue:1 · reason:waking`,
   ];
   for (const [index, text] of notices.entries()) {
     const routed = await routeWhatsAppInbound({

@@ -29,11 +29,16 @@ export function rawTerminalTtlMs(env = process.env) {
 
 export function threadUsesRawTerminalMode(thread = {}) {
   const transport = clean(thread?.executor?.transport || thread?.executor?.metadata?.transport).toLowerCase();
-  const runtimeKind = clean(thread?.runtimeKind || thread?.runtime?.runtimeKind || thread?.executor?.metadata?.runtimeKind).toLowerCase();
+  if (transport) return transport === RAW_TERMINAL_TRANSPORT;
+
+  const configuredRuntimeKind = clean(thread?.runtimeKind).toLowerCase();
+  if (configuredRuntimeKind) return configuredRuntimeKind === RAW_TERMINAL_RUNTIME_KIND;
+
+  const runtimeKind = clean(thread?.runtime?.runtimeKind || thread?.executor?.metadata?.runtimeKind).toLowerCase();
+  if (runtimeKind) return runtimeKind === RAW_TERMINAL_RUNTIME_KIND;
+
   const terminalMode = clean(thread?.terminalMode || thread?.runtime?.terminalMode || thread?.executor?.metadata?.terminalMode).toLowerCase();
-  return transport === RAW_TERMINAL_TRANSPORT ||
-    runtimeKind === RAW_TERMINAL_RUNTIME_KIND ||
-    terminalMode === RAW_TERMINAL_RUNTIME_KIND;
+  return terminalMode === RAW_TERMINAL_RUNTIME_KIND;
 }
 
 // Callers must scope the thread to the principal before applying this policy.

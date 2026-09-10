@@ -484,6 +484,7 @@ function stripQueuePreviewNoticeWrapper(text) {
     /^Queued your message while Orkestr prepares this thread:\s*["“](.*)["”]\.?\s*$/i,
     /^Runtime handoff is taking longer than expected:\s*["“](.*)["”]\.?\s*$/i,
     /^Waking this Orkestr thread and queued your message:\s*["“](.*)["”]\.?\s*$/i,
+    /^Waking Orkestr thread ["“][^"”]+["”]\. Your request is queued pending startup:\s*["“](.*)["”]\.?\s*$/i,
     /^Waking this thread\. Your message will run after startup:\s*["“](.*)["”]\.?\s*$/i,
     /^Queued your latest message while current work is still running:\s*["“](.*)["”]\.?\s*$/i,
     /^Queued behind current work:\s*["“](.*)["”]\.?\s*$/i,
@@ -503,6 +504,7 @@ function stripQueuePreviewNoticeWrapper(text) {
     /^Queued your message while Orkestr prepares this thread:\s*["“]?/i,
     /^Runtime handoff is taking longer than expected:\s*["“]?/i,
     /^Waking this Orkestr thread and queued your message:\s*["“]?/i,
+    /^Waking Orkestr thread ["“][^"”]+["”]\. Your request is queued pending startup:\s*["“]?/i,
     /^Waking this thread\. Your message will run after startup:\s*["“]?/i,
     /^Queued your latest message while current work is still running:\s*["“]?/i,
     /^Queued behind current work:\s*["“]?/i,
@@ -535,6 +537,7 @@ function generatedQueueNoticePreviewFragment(text) {
     "queued your message while orkestr prepares",
     "runtime handoff is taking longer than expected",
     "waking this orkestr thread and queued",
+    "waking orkestr thread",
     "waking this thread. your message will run after startup",
     "queued your latest message while current work",
     "queued behind current work",
@@ -561,7 +564,7 @@ function appendTraceReference(text = "", message = {}) {
   return lines.length ? `${text}\n${lines.join("\n")}` : text;
 }
 
-export function formatWhatsAppQueueNotice(message, reason = "") {
+export function formatWhatsAppQueueNotice(message, reason = "", thread = {}) {
   const preview = queueNoticePreview(message);
   const normalizedReason = String(reason || "").trim().toLowerCase();
   let notice = "";
@@ -574,7 +577,14 @@ export function formatWhatsAppQueueNotice(message, reason = "") {
     return appendTraceReference(notice, message);
   }
   if (["waiting_runtime_start", "waking"].includes(normalizedReason)) {
-    notice = `Waking this thread. Your message will run after startup${queueNoticePreviewClause(preview)}`;
+    const threadName = pickString(thread.name, thread.bindingName, thread.displayName, thread.title)
+      .replace(/["“”\r\n]+/g, "'")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 80);
+    notice = threadName
+      ? `Waking Orkestr thread "${threadName}". Your request is queued pending startup${queueNoticePreviewClause(preview)}`
+      : `Waking this Orkestr thread. Your request is queued pending startup${queueNoticePreviewClause(preview)}`;
     return appendTraceReference(notice, message);
   }
   if (normalizedReason === "awaiting_runtime_completion") {
