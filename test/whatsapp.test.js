@@ -4102,6 +4102,72 @@ test("local whatsapp inbound ignores recent outbound attachment echoes", async (
   }
 });
 
+test("local whatsapp suppresses an outbound media callback that races send confirmation without filename metadata", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-attachment-send-race-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "responder",
+    ORKESTR_WHATSAPP_INBOUND_MEDIA_DOWNLOAD_ATTEMPTS: "1",
+    ORKESTR_WHATSAPP_INBOUND_MEDIA_DOWNLOAD_RETRY_MS: "0",
+  };
+  const chatId = "chat-attachment-send-race@g.us";
+  const attachmentPath = path.join(home, "deck.age");
+  await fs.writeFile(attachmentPath, "encrypted deck");
+  await createBoundWhatsAppThreadForTest({ env, threadId: "attachment-send-race-thread", chatId });
+  let callbackPromise = null;
+  let downloadAttempts = 0;
+  const runtime = {
+    MessageMedia: {
+      fromFilePath(filePath) {
+        return { filePath, mimetype: "application/age" };
+      },
+    },
+    client: {
+      async sendMessage(to) {
+        callbackPromise = handleInboundMessage("responder", {
+          id: { _serialized: `true_${chatId}_callback-before-confirmation`, remote: chatId },
+          from: "responder@lid",
+          to,
+          fromMe: true,
+          body: "/9j/4AAQSkZJRgABAQAAAQABAAD",
+          hasMedia: true,
+          type: "document",
+          timestamp: 1_780_000_000,
+          _data: {},
+          async downloadMedia() {
+            downloadAttempts += 1;
+            throw new Error("outbound callback media is unavailable");
+          },
+        }, env, { ownOnly: true });
+        return { id: { _serialized: `true_${chatId}_delivered-after-callback` } };
+      },
+    },
+  };
+
+  try {
+    setLocalWhatsAppRuntimeForTest("responder", runtime, {}, env);
+    await sendLocalWhatsAppMessage({
+      accountId: "responder",
+      chatId,
+      attachments: [{ path: attachmentPath, filename: "deck.age", mimetype: "application/age" }],
+      env,
+    });
+    const callback = await callbackPromise;
+    const messages = await listThreadMessages("attachment-send-race-thread", env);
+    const events = await listEvents(env, 20);
+
+    assert.equal(callback.skipped, "outbound_echo_attachment_pending_send");
+    assert.equal(downloadAttempts, 1);
+    assert.equal(messages.length, 0);
+    assert.ok(events.some((event) =>
+      event.type === "whatsapp_outbound_echo_attachment_pending_send" &&
+      event.eventId.endsWith("callback-before-confirmation")
+    ));
+  } finally {
+    await resetLocalWhatsAppBridgeForTest(env);
+  }
+});
+
 test("local whatsapp transformed image echo defaults to shadow mode", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-transformed-shadow-default-"));
   const env = {

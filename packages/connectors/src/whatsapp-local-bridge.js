@@ -22,6 +22,12 @@ import { listConnectorScopePaths } from "./connector-storage.js";
 import { claimWhatsAppInboundFailureNotice } from "./whatsapp-inbound-notice-ledger.js";
 import { recordWhatsAppInboundMediaFailure } from "./whatsapp-inbound-media-failures.js";
 import {
+  claimPendingOutboundAttachmentEcho,
+  forgetPendingOutboundAttachmentEcho,
+  rememberPendingOutboundAttachmentEcho,
+  resetPendingOutboundAttachmentEchoes,
+} from "./whatsapp-pending-media-echo.js";
+import {
   bindingAccountIds as whatsappBindingAccountIds,
   whatsappBindingIsRouteEligible,
 } from "./whatsapp-inbound-routing.js";
@@ -3266,6 +3272,7 @@ export async function resetLocalWhatsAppBridgeForTest(env = process.env) {
   outboundMessageIds.clear();
   outboundMessageTextKeys.clear();
   outboundAttachmentKeys.clear();
+  resetPendingOutboundAttachmentEchoes();
   inboundFailureNoticeKeys.clear();
   inboundForwardLedgerKeys.clear();
   typingStartPromises.clear();
@@ -4055,6 +4062,9 @@ export async function handleInboundMessage(accountId, message, env = process.env
     }, env).catch(() => {});
     return { skipped: "system_message", eventId, chatId, from, fromMe: routeFromMe };
   }
+  const pendingAttachmentEcho = fromMe && message?.hasMedia
+    ? claimPendingOutboundAttachmentEcho(accountId, chatId, message, env)
+    : null;
   const terminalEchoReplay = fromMe && protocolEventId
     ? await claimTransformedMediaEchoTerminalReplayAudit({ accountId, chatId, eventId: protocolEventId, env }).catch(() => null)
     : null;
@@ -4114,6 +4124,18 @@ export async function handleInboundMessage(accountId, message, env = process.env
       error: error?.message || String(error),
       retryable: error?.retryable === true,
     }, env).catch(() => {});
+    if (pendingAttachmentEcho) {
+      rememberOutboundMessageId(eventId);
+      await appendEvent({
+        type: "whatsapp_outbound_echo_attachment_pending_send",
+        accountId,
+        eventId,
+        chatId,
+        messageType: message?.type || message?._data?.type || "",
+        downloadFailed: true,
+      }, env).catch(() => {});
+      return { skipped: "outbound_echo_attachment_pending_send", eventId, chatId };
+    }
     if (!failedInboundMediaCanRouteAsLinkText(message, text)) {
       const warning = await recordWhatsAppInboundMediaFailure({
         accountId,
@@ -7431,11 +7453,23 @@ export async function sendLocalWhatsAppMessage({ chatId = "", text = "", account
           ? sourceMedia
           : new MessageMedia(sourceMedia.mimetype, sourceMedia.data);
         const sendOptions = sendMediaAsDocument ? { sendMediaAsDocument: true } : {};
-        const message = await withSendOperationTimeout(
-          runtime.client.sendMessage(chatId, media, sendOptions),
-          "whatsapp_send_media",
+        const pendingAttachmentEcho = rememberPendingOutboundAttachmentEcho(
+          selectedAccountId,
+          chatId,
+          sendMediaAsDocument ? "document" : "image",
           env,
         );
+        let message;
+        try {
+          message = await withSendOperationTimeout(
+            runtime.client.sendMessage(chatId, media, sendOptions),
+            "whatsapp_send_media",
+            env,
+          );
+        } catch (error) {
+          forgetPendingOutboundAttachmentEcho(pendingAttachmentEcho);
+          throw error;
+        }
         const deliveredMessageId = serializedMessageId(message);
         rememberOutboundMessageId(deliveredMessageId);
         await rememberTransformedOutboundMediaEcho({
