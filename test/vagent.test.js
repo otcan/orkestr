@@ -147,6 +147,8 @@ test("Vagent sends normal fixed-thread input and returns only the exact parent-l
     text: "Tell me the deployment status.",
     externalId: "voice-session-1",
     attachments: [],
+    codexDeliveryMode: "passive",
+    steerActiveTurn: false,
     commandProcessing: "disabled",
   });
   assert.equal(result.response.text, "Deployment is healthy.\n\nDetails: `server.ts` https://example.test/status");

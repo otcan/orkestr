@@ -87,6 +87,8 @@ test("connector prompt pushes render source items and dedupe delivered messages"
   assert.equal(messages[0].connector, "gmail");
   assert.equal(messages[0].externalId, "m1");
   assert.equal(messages[0].visibility, "internal");
+  assert.equal(messages[0].codexDeliveryMode, "passive");
+  assert.equal(messages[0].steerActiveTurn, false);
   assert.equal(visibleThreadMessages(messages).length, 0);
   assert.equal(messages[0].text, "Summarize Hiring update from recruiter@example.com.");
 });

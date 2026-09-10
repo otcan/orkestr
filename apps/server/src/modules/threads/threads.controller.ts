@@ -902,6 +902,8 @@ export class ThreadsController {
       idempotencyKey: String(body.idempotencyKey || ""),
       parseCommands: true,
       controlAllowed: true,
+      codexDeliveryMode: "instant_steer",
+      steerActiveTurn: true,
       source: "ui",
       originSurface: "webui",
       originTransport: "authenticated-http",

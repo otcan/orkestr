@@ -217,6 +217,8 @@ test("WebUI input authority is server-stamped and generic input cannot forge rep
     assert.equal(forgedMessage.replyDeliveryIntent, undefined);
     assert.equal(trustedMessage.source, "ui");
     assert.equal(trustedMessage.originSurface, "webui");
+    assert.equal(trustedMessage.codexDeliveryMode, "instant_steer");
+    assert.equal(trustedMessage.steerActiveTurn, true);
     assert.equal(trustedMessage.replyDeliveryIntent.serverAuthored, true);
     assert.equal(trustedMessage.replyDeliveryIntent.target.chatId, "chat-authority");
   } finally {

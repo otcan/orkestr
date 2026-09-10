@@ -178,6 +178,8 @@ test("thread timers queue input on the target thread", async () => {
   assert.equal(messages.length, 1);
   assert.equal(messages[0].source, "timer_due");
   assert.equal(messages[0].text, "Run thread timer");
+  assert.equal(messages[0].codexDeliveryMode, "passive");
+  assert.equal(messages[0].steerActiveTurn, false);
 });
 
 test("Gmail timers block before prompt execution and dedupe reconnect notices", async () => {

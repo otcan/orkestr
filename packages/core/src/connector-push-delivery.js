@@ -47,6 +47,8 @@ function connectorPromptInput(push, item, text) {
     externalId: sourceItemId(item),
     text,
     ownerUserId: push.ownerUserId,
+    codexDeliveryMode: "passive",
+    steerActiveTurn: false,
   };
 }
 

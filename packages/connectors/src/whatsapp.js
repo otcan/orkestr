@@ -1731,11 +1731,11 @@ function bindingDisablesWhatsAppInstantSteer(binding = {}) {
 }
 
 function whatsappInboundInstantSteerDefaultEnabled(env = process.env) {
-  return [
+  return ![
     env.ORKESTR_WHATSAPP_INBOUND_STEER_DEFAULT,
     env.ORKESTR_WHATSAPP_INBOUND_INSTANT_STEER_DEFAULT,
     env.ORKESTR_WHATSAPP_DEFAULT_STEER,
-  ].some((value) => deliveryModeRequestsInstantSteer(value));
+  ].some((value) => deliveryModeDisablesInstantSteer(value));
 }
 
 function whatsappInboundInstantSteerEnabled({ thread = null, binding = null, chatId = "", env = process.env } = {}) {
