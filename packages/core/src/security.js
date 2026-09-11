@@ -2135,7 +2135,7 @@ function isAllowedForOidcAppSession(request, session = null) {
   if (isAllowedBeforePairing(request)) return true;
   const method = String(request?.method || "GET").toUpperCase();
   const url = String(request?.originalUrl || request?.url || "").split("?")[0];
-  if (method === "GET" && url === "/api/me/apps") return true;
+  if (method === "GET" && ["/api/me/apps", "/api/me/launcher"].includes(url)) return true;
   if (method === "GET" && /^\/api\/apps\/[^/]+$/.test(url)) return true;
   return false;
 }

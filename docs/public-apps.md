@@ -4,7 +4,7 @@ Public apps provide a stable, employee-facing application URL without exposing
 an Orkestr thread, a shared-link bearer token, a tenant ID, or a backend URL.
 
 ```text
-https://app.example.test/apps/operations
+https://launcher.example.test/apps/operations
 ```
 
 The `operations` slug is stable and non-secret. Orkestr resolves it on the
@@ -24,11 +24,24 @@ ORKESTR_KEYCLOAK_CLIENT_ID=orkestr-web
 ORKESTR_KEYCLOAK_OIDC_ENABLED=1
 ORKESTR_PUBLIC_APPS=1
 ORKESTR_PUBLIC_APP_URL=https://app.example.test
+ORKESTR_PUBLIC_LAUNCHER_URL=https://launcher.example.test
 ```
+
+Run `npm run web:build` to build both `dist/web/browser` and the independent
+`dist/launcher` bundle. The launcher does not bootstrap or serve the Orkestr
+WebUI bundle. Its root redirects to `/apps`, and its Keycloak callback creates
+a host-only launcher session. Register both the application and launcher
+`/auth/callback` URLs with the configured Keycloak client.
 
 Unauthenticated `/apps/:slug` requests redirect to `/auth/login`. A browser
 pairing session is not an app-launcher fallback. Unknown, disabled, and
 unauthorized app slugs use the same `404` response after sign-in.
+
+The launcher host is a separate, default-off host boundary. It admits only its
+static bundle, Keycloak login/callback, the current account's redacted launcher
+directory, exact granted-app resolution, and exact-instance session handoff.
+Thread, setup/pairing, system, desktop, WebSocket, and general control-plane
+routes remain unavailable on that host.
 
 ## Access model
 
@@ -45,6 +58,7 @@ The user-facing APIs are:
 
 ```text
 GET /api/me/apps
+GET /api/me/launcher
 GET /api/apps/:slug
 ```
 
@@ -57,6 +71,14 @@ An app workload adapter must repeat that exact resolution for every protected
 data or write request; it must not accept a target URL, tenant reference, or
 resource identifier from the browser. Authorization failures intentionally use
 the same response as an unavailable app.
+
+For an explicitly mapped control-plane administrator, the launcher directory
+also includes the primary Orkestr WebUI and enabled broker/release instances.
+Opening another Orkestr uses the existing server-side account switcher to mint
+an exact-instance child session before navigation. The browser never supplies
+an internal instance ID or endpoint. Relative built-in app links return through
+the application origin's Keycloak login, so the launcher session never becomes
+a broad cross-subdomain administrator cookie.
 
 ## Private rollout artifacts
 

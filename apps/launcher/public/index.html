@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#070b08" />
+    <title>Launcher · Orkestr</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="stylesheet" href="/launcher.css" />
+    <script src="/launcher.js" defer></script>
+  </head>
+  <body>
+    <header class="launcher-header">
+      <a class="brand" href="/apps" aria-label="Orkestr Launcher home">
+        <span class="brand-mark" aria-hidden="true">O</span>
+        <span><strong>Orkestr</strong><small>Launcher</small></span>
+      </a>
+      <a class="header-action" data-main-link hidden>Open Orkestr</a>
+    </header>
+
+    <main class="launcher-main">
+      <section class="loading" data-loading role="status" aria-live="polite">
+        <span></span><span></span><span></span>
+        <p>Loading your launcher…</p>
+      </section>
+
+      <section data-error hidden role="alert">
+        <p class="eyebrow">Orkestr Launcher</p>
+        <h1>Launcher unavailable</h1>
+        <p class="muted" data-error-message>This launcher could not be loaded.</p>
+        <a class="button" href="/apps">Try again</a>
+      </section>
+
+      <section data-directory hidden>
+        <div class="hero">
+          <p class="eyebrow">Your workspace</p>
+          <h1>Where do you want to work?</h1>
+          <p class="muted">Open any Orkestr workspace or connected application from one place.</p>
+        </div>
+
+        <section class="directory-section" data-workspaces-section hidden aria-labelledby="workspaces-title">
+          <div class="section-heading">
+            <div><p class="eyebrow">Orkestr</p><h2 id="workspaces-title">Workspaces</h2></div>
+            <span data-workspace-count>0</span>
+          </div>
+          <div class="card-grid workspace-grid" data-workspaces></div>
+          <p class="inline-error" data-workspace-error hidden role="alert"></p>
+        </section>
+
+        <section class="directory-section" aria-labelledby="applications-title">
+          <div class="section-heading">
+            <div><p class="eyebrow">Connected tools</p><h2 id="applications-title">Applications</h2></div>
+            <span data-app-count>0</span>
+          </div>
+          <div class="card-grid app-grid" data-apps></div>
+        </section>
+      </section>
+
+      <section data-app-detail hidden>
+        <p class="eyebrow" data-app-type>Application</p>
+        <h1 data-app-title>Application</h1>
+        <p class="muted" data-app-description></p>
+        <p class="muted" data-app-role></p>
+        <a class="button" href="/apps">Back to launcher</a>
+      </section>
+    </main>
+  </body>
+</html>

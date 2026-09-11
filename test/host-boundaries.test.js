@@ -344,6 +344,58 @@ test("feature-off and compatibility routes preserve legacy behavior", async () =
   await cleanup(home);
 });
 
+test("launcher host is a narrow standalone boundary and cannot reach the Orkestr control plane", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-host-launcher-"));
+  const runtimeEnv = env(home, { ORKESTR_PUBLIC_LAUNCHER_URL: "https://launcher.example.test" });
+  const root = await enforce(request("/", "launcher.example.test"), runtimeEnv);
+  assert.equal(root.statusCode, 308);
+  assert.equal(root.headers.location, "https://launcher.example.test/apps");
+  for (const url of [
+    "/launcher",
+    `/instance/${instanceRef}/launcher`,
+    "/i/internal-instance/app/launcher",
+  ]) {
+    const embedded = await enforce(request(url, "app.example.test"), runtimeEnv);
+    assert.equal(embedded.statusCode, 308, url);
+    assert.equal(embedded.headers.location, "https://launcher.example.test/apps", url);
+  }
+
+  for (const [method, url] of [
+    ["GET", "/apps"],
+    ["GET", "/apps/granted-app"],
+    ["GET", "/launcher.js"],
+    ["GET", "/launcher.css"],
+    ["GET", "/auth/login?return=%2Fapps"],
+    ["GET", "/auth/callback?code=sample&state=sample"],
+    ["GET", "/api/me/launcher"],
+    ["GET", "/api/me/apps"],
+    ["GET", "/api/apps/granted-app"],
+    ["POST", `/api/instance/accounts/${instanceRef}/session`],
+  ]) {
+    const req = request(url, "launcher.example.test", { method });
+    const early = responseSpy();
+    assert.equal(rejectUnknownHostBoundaryRequest(req, early.response, runtimeEnv), false, `${method} ${url}`);
+    assert.equal((await enforce(req, runtimeEnv)).handled, false, `${method} ${url}`);
+  }
+
+  for (const [method, url] of [
+    ["GET", "/api/threads"],
+    ["GET", "/api/system/summary"],
+    ["GET", "/api/instance/accounts"],
+    ["GET", "/main.js"],
+    ["GET", "/setup/pairing"],
+    ["POST", "/api/setup/security/challenge"],
+    ["GET", `/instance/${instanceRef}/`],
+    ["GET", "/desktop/sample/vnc.html"],
+  ]) {
+    const req = request(url, "launcher.example.test", { method });
+    const early = responseSpy();
+    assert.equal(rejectUnknownHostBoundaryRequest(req, early.response, runtimeEnv), true, `${method} ${url}`);
+    assert.deepEqual([early.result.statusCode, early.result.body], [404, "not found"]);
+  }
+  await cleanup(home);
+});
+
 test("connect host serves only method-specific pairing primitives and OAuth start", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-host-support-"));
   const runtimeEnv = env(home);
@@ -457,6 +509,7 @@ test("upgrade gate rejects connect and unknown thread WebSockets before downstre
   const runtimeEnv = env(home, {
     ORKESTR_PUBLIC_APP_URL: "http://app.example.test",
     ORKESTR_CONNECT_PUBLIC_URL: "http://connect.example.test",
+    ORKESTR_PUBLIC_LAUNCHER_URL: "http://launcher.example.test",
     ORKESTR_DESKTOP_SHARE_BASE_DOMAIN: "desk.example.test",
   });
   let downstreamTouches = 0;
@@ -476,8 +529,10 @@ test("upgrade gate rejects connect and unknown thread WebSockets before downstre
 
   const connectThread = await upgrade(port, "connect.example.test", "/api/threads/sample/stream");
   const unknownThread = await upgrade(port, "attacker.invalid", "/api/threads/sample/stream");
+  const launcher = await upgrade(port, "launcher.example.test", "/apps");
   assert.match(connectThread, /^HTTP\/1\.1 404 Not Found/);
   assert.match(unknownThread, /^HTTP\/1\.1 404 Not Found/);
+  assert.match(launcher, /^HTTP\/1\.1 404 Not Found/);
   assert.equal(downstreamTouches, 0);
 
   const compatible = await upgrade(port, "connect.example.test", "/i/sample/app/api/threads/sample/stream");

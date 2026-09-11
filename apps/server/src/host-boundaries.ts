@@ -36,6 +36,7 @@ export function configuredHostBoundaries(env = process.env) {
     appBase: explicitCanonicalAppBase(env),
     connectBase: explicitBase(env.ORKESTR_CONNECT_PUBLIC_URL || env.ORKESTR_CONNECT_PUBLIC_BASE_URL),
     authBase: explicitBase(env.ORKESTR_PUBLIC_AUTH_URL || env.ORKESTR_AUTH_URL),
+    launcherBase: explicitBase(env.ORKESTR_PUBLIC_LAUNCHER_URL || env.ORKESTR_LAUNCHER_URL),
   };
 }
 
@@ -168,6 +169,29 @@ function connectSupportPath(method = "GET", rawUrl = ""): boolean {
     pathname === "/api/broker/google-workspace/grants"
   )) return true;
   return false;
+}
+
+function launcherSupportPath(method = "GET", rawUrl = ""): boolean {
+  const verb = String(method || "GET").trim().toUpperCase();
+  const pathname = new URL(rawUrl || "/", "http://orkestr.local").pathname;
+  if (verb === "GET" && (pathname === "/" || pathname === "/apps" || pathname.startsWith("/apps/"))) return true;
+  if (verb === "GET" && (pathname === "/auth/login" || pathname === "/auth/callback")) return true;
+  if (verb === "GET" && (
+    pathname === "/favicon.ico" || pathname === "/favicon.svg" || pathname === "/manifest.webmanifest" ||
+    pathname.startsWith("/assets/") || pathname.startsWith("/media/") ||
+    pathname === "/launcher.js" || pathname === "/launcher.css"
+  )) return true;
+  if (verb === "GET" && ["/api/me/launcher", "/api/me/apps"].includes(pathname)) return true;
+  if (verb === "GET" && /^\/api\/apps\/[^/]+$/.test(pathname)) return true;
+  if (verb === "POST" && /^\/api\/instance\/accounts\/[^/]+\/session$/.test(pathname)) return true;
+  return false;
+}
+
+function embeddedLauncherPath(rawUrl = ""): boolean {
+  const parts = pathParts(rawUrl);
+  return (parts.length === 1 && parts[0] === "launcher") ||
+    (parts.length === 3 && parts[0] === "instance" && Boolean(parts[1]) && parts[2] === "launcher") ||
+    (parts.length === 4 && parts[0] === "i" && Boolean(parts[1]) && parts[2] === "app" && parts[3] === "launcher");
 }
 
 function canonicalPath(rawUrl = ""): boolean {
@@ -303,10 +327,11 @@ function redirect(response: any, location: string): void {
 function allowedBoundaryOrigins(env = process.env) {
   const boundaries = configuredHostBoundaries(env);
   const appOrigin = boundaries.appBase ? new URL(boundaries.appBase).origin : "";
+  const launcherOrigin = boundaries.launcherBase ? new URL(boundaries.launcherBase).origin : "";
   const connectOrigins = new Set([boundaries.connectBase, boundaries.authBase]
     .filter(Boolean)
     .map((value) => new URL(value).origin));
-  return { boundaries, appOrigin, connectOrigins };
+  return { boundaries, appOrigin, connectOrigins, launcherOrigin };
 }
 
 export function rejectUnknownHostBoundaryRequest(request: any, response: any, env = process.env): boolean {
@@ -317,7 +342,8 @@ export function rejectUnknownHostBoundaryRequest(request: any, response: any, en
   const origin = effectiveRequestOrigin(request, env);
   const rawUrl = String(request?.originalUrl || request?.url || "/");
   if (desktopShareOrigin(origin, env) && desktopSharePath(request?.method, rawUrl)) return false;
-  const { appOrigin, connectOrigins } = allowedBoundaryOrigins(env);
+  const { appOrigin, connectOrigins, launcherOrigin } = allowedBoundaryOrigins(env);
+  if (origin && launcherOrigin && origin === launcherOrigin && launcherSupportPath(request?.method, rawUrl)) return false;
   if (origin && appOrigin && connectOrigins.size && !connectOrigins.has(appOrigin) && origin === appOrigin) return false;
   if (origin && appOrigin && connectOrigins.size && !connectOrigins.has(appOrigin) && connectOrigins.has(origin)) {
     if (compatibilityPath(rawUrl) || handoffPath(rawUrl) || connectSupportPath(request?.method, rawUrl) ||
@@ -343,7 +369,24 @@ export async function enforceHostBoundaryRequest(request: any, response: any, en
   ) return false;
   const rawUrl = String(request?.originalUrl || request?.url || "/");
   const origin = effectiveRequestOrigin(request, env);
-  const { boundaries, appOrigin, connectOrigins } = allowedBoundaryOrigins(env);
+  const { boundaries, appOrigin, connectOrigins, launcherOrigin } = allowedBoundaryOrigins(env);
+
+  if (launcherOrigin && origin === launcherOrigin) {
+    request.orkestrLauncherBoundary = true;
+    if (new URL(rawUrl || "/", "http://orkestr.local").pathname === "/") {
+      redirect(response, targetAtBase(boundaries.launcherBase, "/apps"));
+      return true;
+    }
+    if (launcherSupportPath(request?.method, rawUrl)) return false;
+    recordDenial("wrong_host", env);
+    uniformNotFound(response);
+    return true;
+  }
+
+  if (launcherOrigin && origin === appOrigin && embeddedLauncherPath(rawUrl)) {
+    redirect(response, targetAtBase(boundaries.launcherBase, "/apps"));
+    return true;
+  }
 
   if (desktopShareOrigin(origin, env) && desktopSharePath(request?.method, rawUrl)) return false;
 

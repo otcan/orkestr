@@ -68,13 +68,29 @@ function assertHttpsUrl(value = "", code = "oidc_url_invalid", env = process.env
   return parsed;
 }
 
-function callbackUrl(env = process.env) {
+function allowedCallbackOrigins(env = process.env) {
+  const urls = publicUrlConfig(env);
+  return new Set([urls.appUrl, urls.launcherUrl]
+    .map((value) => clean(value).replace(/\/+$/, ""))
+    .filter(Boolean)
+    .map((value) => new URL(value).origin));
+}
+
+function callbackUrl(env = process.env, requestOrigin = "") {
   const configured = clean(env.ORKESTR_KEYCLOAK_REDIRECT_URI);
-  const appUrl = clean(publicUrlConfig(env).appUrl).replace(/\/+$/, "");
+  const urls = publicUrlConfig(env);
+  const appUrl = clean(urls.appUrl).replace(/\/+$/, "");
+  const requested = clean(requestOrigin).replace(/\/+$/, "");
+  if (requested) {
+    const parsedOrigin = assertHttpsUrl(requested, "oidc_redirect_origin_mismatch", env).origin;
+    if (!allowedCallbackOrigins(env).has(parsedOrigin)) throw oidcError("oidc_redirect_origin_mismatch", 503);
+    return `${parsedOrigin}/auth/callback`;
+  }
   const candidate = configured || (appUrl ? `${appUrl}/auth/callback` : "");
   const parsed = assertHttpsUrl(candidate, "oidc_redirect_uri_invalid", env);
-  if (parsed.pathname !== "/auth/callback" || parsed.search || parsed.hash) throw oidcError("oidc_redirect_uri_invalid", 503);
-  if (appUrl && parsed.origin !== new URL(appUrl).origin) throw oidcError("oidc_redirect_origin_mismatch", 503);
+  if (parsed.pathname !== "/auth/callback" || parsed.search || parsed.hash || !allowedCallbackOrigins(env).has(parsed.origin)) {
+    throw oidcError("oidc_redirect_uri_invalid", 503);
+  }
   return parsed.toString();
 }
 
@@ -160,7 +176,9 @@ function safeReturnPath(value = "", env = process.env) {
   try {
     const parsed = new URL(raw, "http://orkestr.local");
     const appPath = parsed.pathname === "/apps" || parsed.pathname.startsWith("/apps/");
-    const controlPlanePath = controlPlaneSettings(env).enabled && parsed.pathname === "/launcher";
+    const controlPlaneRoots = new Set(["", "launcher", "files", "desktops", "timers", "connectors", "settings", "instance", "thread"]);
+    const controlPlaneRoot = parsed.pathname.split("/").filter(Boolean)[0] || "";
+    const controlPlanePath = controlPlaneSettings(env).enabled && controlPlaneRoots.has(controlPlaneRoot);
     if (!appPath && !controlPlanePath) return "/apps";
     return `${parsed.pathname}${parsed.search}`;
   } catch {
@@ -202,10 +220,11 @@ async function discovery(settings, env = process.env, fetchImpl = fetch) {
   return value;
 }
 
-export async function beginKeycloakLogin({ returnTo = "", loginHint = "", env = process.env, fetchImpl = fetch } = {}) {
+export async function beginKeycloakLogin({ returnTo = "", loginHint = "", requestOrigin = "", env = process.env, fetchImpl = fetch } = {}) {
   const settings = keycloakOidcSettings(env);
   if (!settings.enabled) throw oidcError("oidc_login_unavailable", 404);
   const provider = await discovery(settings, env, fetchImpl);
+  const redirectUri = callbackUrl(env, requestOrigin);
   const state = randomToken(24);
   const nonce = randomToken(24);
   const codeVerifier = randomToken(48);
@@ -217,13 +236,14 @@ export async function beginKeycloakLogin({ returnTo = "", loginHint = "", env = 
       nonce,
       codeVerifier,
       returnTo: safeReturnPath(returnTo, env),
+      redirectUri,
       expiresAt: new Date(Date.now() + stateTtlMs).toISOString(),
     });
   });
   const target = new URL(provider.authorizationEndpoint);
   target.searchParams.set("response_type", "code");
   target.searchParams.set("client_id", settings.clientId);
-  target.searchParams.set("redirect_uri", settings.redirectUri);
+  target.searchParams.set("redirect_uri", redirectUri);
   target.searchParams.set("scope", "openid email profile");
   target.searchParams.set("state", state);
   target.searchParams.set("nonce", nonce);
@@ -317,17 +337,21 @@ function claimsForSession(claims = {}, clientId = "") {
   };
 }
 
-export async function completeKeycloakLogin({ code = "", state = "", userAgent = "", ip = "", env = process.env, fetchImpl = fetch } = {}) {
+export async function completeKeycloakLogin({ code = "", state = "", requestOrigin = "", userAgent = "", ip = "", env = process.env, fetchImpl = fetch } = {}) {
   const settings = keycloakOidcSettings(env);
   if (!settings.enabled) throw oidcError("oidc_login_unavailable", 404);
   const pending = await consumeState(state, env);
+  const redirectUri = callbackUrl(env, new URL(pending.redirectUri || settings.redirectUri).origin);
+  if (requestOrigin && new URL(redirectUri).origin !== new URL(callbackUrl(env, requestOrigin)).origin) {
+    throw oidcError("oidc_redirect_origin_mismatch", 401);
+  }
   const authorizationCode = clean(code);
   if (!authorizationCode) throw oidcError("oidc_code_missing", 401);
   const provider = await discovery(settings, env, fetchImpl);
   const form = new URLSearchParams({
     grant_type: "authorization_code",
     code: authorizationCode,
-    redirect_uri: settings.redirectUri,
+    redirect_uri: redirectUri,
     client_id: settings.clientId,
     code_verifier: pending.codeVerifier,
   });
