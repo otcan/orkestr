@@ -913,6 +913,7 @@ ensure_codex_app_server_split_for_target() {
   esac
   if [ "$mode_external_requested" = "1" ] && codex_app_server_service_is_active; then
     if [ "$(id -u)" -eq 0 ]; then
+      write_codex_app_server_wrapper
       write_codex_app_server_systemd_service 0
       write_codex_app_server_main_service_dropin
     fi
