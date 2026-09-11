@@ -172,6 +172,10 @@ test("release deploy script exposes versioned install, status, and rollback", as
   assert.match(script, /ExecStart=\/usr\/local\/bin\/orkestr-codex-app-server/);
   assert.match(script, /workdir="\$deploy_root"/);
   assert.match(script, /write_codex_app_server_systemd_service 0/);
+  assert.match(
+    script,
+    /if \[ "\$mode_external_requested" = "1" \] && codex_app_server_service_is_active; then[\s\S]*?write_codex_app_server_wrapper[\s\S]*?write_codex_app_server_systemd_service 0/,
+  );
   assert.match(script, /codexAppServerTransport/);
   assert.match(script, /appServerTransport/);
   assert.match(script, /deploy_guard_before_restart/);
