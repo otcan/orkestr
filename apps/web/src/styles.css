@@ -2325,6 +2325,11 @@ ork-first-thread-wizard.first-thread-host {
   line-height: 1.35;
 }
 
+.recovery-diagnostic .implement-command-button {
+  justify-self: start;
+  margin-top: 4px;
+}
+
 .assistant-info .message-meta {
   color: #9bd4ff;
   font-size: 0.7rem;

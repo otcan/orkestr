@@ -89,7 +89,7 @@ Environment:
   ORKESTR_ENABLE_HOST_CODEX Allow local macOS installs to prefer a verified host codex binary. Defaults to 0 on macOS.
   ORKESTR_ALLOW_MACOS_BREW_INSTALL Allow local macOS installs to run brew install for missing tools. Defaults to 0.
   ORKESTR_ALLOW_MACOS_ADMIN Permit local macOS install paths that may request administrator access. Defaults to 0.
-  ORKESTR_CODEX_VERSION     Codex CLI version. Defaults to 0.134.0.
+  ORKESTR_CODEX_VERSION     Codex CLI version. Defaults to 0.154.0.
   ORKESTR_LOCAL_CODEX_PREFIX Local Codex CLI install prefix. Defaults to $ORKESTR_HOME/codex-cli.
   ORKESTR_CODEX_APP_SERVER_MODE  Codex app-server transport. Defaults to external in --systemd mode.
   ORKESTR_CODEX_APP_SERVER_SOCKET Unix socket for external Codex app-server.
@@ -660,7 +660,7 @@ personal_wa_worker_service_name() {
 }
 
 codex_cli_version() {
-  echo "${ORKESTR_CODEX_VERSION:-0.134.0}"
+  echo "${ORKESTR_CODEX_VERSION:-0.154.0}"
 }
 
 codex_command_supports_app_server() {
@@ -2310,7 +2310,7 @@ codex_bin="${ORKESTR_CODEX_BIN:-codex}"
 mkdir -p "$(dirname "$socket")"
 rm -f "$socket"
 umask 077
-exec "$codex_bin" app-server --listen "unix://$socket"
+exec "$codex_bin" app-server --listen "unix://$socket" --enable remote_compaction_v2
 EOF
   chmod 0755 /usr/local/bin/orkestr-codex-app-server
 }

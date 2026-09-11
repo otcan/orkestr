@@ -843,7 +843,7 @@ codex_bin="${ORKESTR_CODEX_BIN:-codex}"
 mkdir -p "$(dirname "$socket")"
 rm -f "$socket"
 umask 077
-exec "$codex_bin" app-server --listen "unix://$socket"
+exec "$codex_bin" app-server --listen "unix://$socket" --enable remote_compaction_v2
 EOF
   chmod 0755 /usr/local/bin/orkestr-codex-app-server
 }

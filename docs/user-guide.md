@@ -549,6 +549,12 @@ Orkestr first with `codex --version`, `codex app-server --help`, and
 `codex login status`, then run
 `ORKESTR_ENABLE_HOST_CODEX=1 scripts/install.sh --local`.
 
+Managed Codex app-server processes enable the current remote-compaction path.
+If a turn ends with a remote-compaction 404, Orkestr safely resets the session
+once without replaying the turn. See
+[Codex Remote Compaction Recovery](codex-remote-compaction-recovery.md) for the
+CLI upgrade and explicit timer-retry procedure.
+
 Use the service commands for normal operation:
 
 ```bash

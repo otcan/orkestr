@@ -57,6 +57,13 @@ const messageStringFields = [
   "noticeCause",
   "recoverySource",
   "recoveryReason",
+  "recoveryAction",
+  "recoveryPolicy",
+  "failureClassification",
+  "endpointCategory",
+  "runtimeGeneration",
+  "failedTurnId",
+  "timerId",
   "replayedFromMessageId",
   "previousCodexThreadId",
   "previousRecoveryNoticeId",
@@ -812,6 +819,8 @@ export async function appendThreadMessage(threadId, input, env = process.env) {
       const value = String(input[key] || "").trim();
       if (value) nextMessage[key] = value;
     }
+    const upstreamStatus = optionalNumber(input.upstreamStatus);
+    if (upstreamStatus !== null) nextMessage.upstreamStatus = upstreamStatus;
     if (input.externalPrincipal && typeof input.externalPrincipal === "object" && !Array.isArray(input.externalPrincipal)) {
       nextMessage.externalPrincipal = Object.fromEntries(
         Object.entries(input.externalPrincipal)
@@ -842,6 +851,8 @@ export async function appendThreadMessage(threadId, input, env = process.env) {
     if (input.forceDeliveryAfterInterrupt === true) nextMessage.forceDeliveryAfterInterrupt = true;
     if (input.steerActiveTurn === true || input.steerActiveTurn === false) nextMessage.steerActiveTurn = input.steerActiveTurn;
     if (input.recoveryContinuation === true) nextMessage.recoveryContinuation = true;
+    if (input.operatorRetryRequired === true) nextMessage.operatorRetryRequired = true;
+    if (input.automaticTurnReplay === true || input.automaticTurnReplay === false) nextMessage.automaticTurnReplay = input.automaticTurnReplay;
     if (!nextMessage.text && !nextMessage.promptFile) {
       const error = new Error("message_text_required");
       error.statusCode = 400;

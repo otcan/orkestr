@@ -729,7 +729,9 @@
             [sendingNow]="sendingNow"
             [implementingPlan]="implementingPlan"
             [threadInputReady]="threadInputReady()"
+            [actionBusy]="busy"
             (implementPlan)="implementPlanSelected()"
+            (retryTimer)="retryTimerFromRecovery($event)"
           ></ork-thread-message-list>
         </section>
       }

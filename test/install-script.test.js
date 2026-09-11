@@ -67,6 +67,8 @@ test("install script exposes a host-native systemd VPS path", async () => {
   assert.match(script, /ORKESTR_CODEX_APP_SERVER_MODE/);
   assert.match(script, /ORKESTR_CODEX_APP_SERVER_SOCKET/);
   assert.match(script, /ORKESTR_CODEX_APP_SERVER_SERVICE_NAME/);
+  assert.match(script, /ORKESTR_CODEX_VERSION:-0\.154\.0/);
+  assert.match(script, /app-server --listen "unix:\/\/\$socket" --enable remote_compaction_v2/);
   assert.match(script, /--profile\)/);
   assert.doesNotMatch(script, /ORKESTR_INSTALL_PROFILE=\$install_profile/);
   assert.match(script, /--profile local-safe\|local-trusted/);

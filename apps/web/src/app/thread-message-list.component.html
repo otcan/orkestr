@@ -33,6 +33,24 @@
           <span>{{ messageFailureDetail(message) }}</span>
         </div>
       }
+      @if (isRemoteCompactionFailure(message)) {
+        <div class="message-failure recovery-diagnostic">
+          <strong>Manual retry required</strong>
+          <span>{{ remoteCompactionDiagnostic(message) }}</span>
+          <span>Orkestr resets the Codex session once, but does not replay this turn. Review partial external changes first.</span>
+          @if (recoveryTimerId(message)) {
+            <button
+              class="implement-command-button"
+              type="button"
+              (click)="retryTimer.emit(recoveryTimerId(message))"
+              [disabled]="actionBusy || sending || sendingNow"
+              title="Explicitly run this timer again after reviewing partial side effects"
+            >
+              Retry timer
+            </button>
+          }
+        </div>
+      }
       <div class="message-body" [innerHTML]="messageTextHtml(message)"></div>
       @if (messagePhase(message) === "plan") {
         <div class="plan-message-actions">

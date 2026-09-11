@@ -18,7 +18,9 @@ export class ThreadMessageListComponent {
   @Input() sendingNow = false;
   @Input() implementingPlan = false;
   @Input() threadInputReady = true;
+  @Input() actionBusy = false;
   @Output() implementPlan = new EventEmitter<void>();
+  @Output() retryTimer = new EventEmitter<string>();
   attachmentDownloadBusy: Record<string, boolean> = {};
   attachmentDownloadErrors: Record<string, string> = {};
 
@@ -83,6 +85,22 @@ export class ThreadMessageListComponent {
   messageFailureDetail(message: ThreadMessage): string {
     if (String(message.state || "").toLowerCase() !== "failed") return "";
     return String(message.error || "Orkestr could not confirm this message reached Codex.").trim();
+  }
+
+  isRemoteCompactionFailure(message: ThreadMessage): boolean {
+    return String(message["failureClassification"] || "").trim() === "codex_remote_compaction_404";
+  }
+
+  remoteCompactionDiagnostic(message: ThreadMessage): string {
+    const status = String(message["upstreamStatus"] || "404").trim();
+    const endpoint = String(message["endpointCategory"] || "codex_responses_compact").trim();
+    const generation = String(message["runtimeGeneration"] || message["codexThreadId"] || "unknown").trim();
+    const turn = String(message["failedTurnId"] || message["codexTurnId"] || "unknown").trim();
+    return `Upstream ${status} · ${endpoint} · generation ${generation} · turn ${turn}`;
+  }
+
+  recoveryTimerId(message: ThreadMessage): string {
+    return String(message["timerId"] || "").trim();
   }
 
   replyDeliveryLabel(message: ThreadMessage): string {
