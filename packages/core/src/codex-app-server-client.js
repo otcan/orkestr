@@ -56,6 +56,10 @@ import { reconcileCodexFinalProjection } from "./codex-final-projection.js";
 import { currentCodexGenerationMatches } from "./codex-generation.js";
 import { canonicalTimestamp } from "./timestamp-normalization.js";
 import { recordCodexUserInputRequest } from "./codex-input-observability.js";
+import {
+  classifyCodexRemoteCompactionFailure,
+  recordCodexRemoteCompactionRecovery,
+} from "./codex-remote-compaction-recovery.js";
 
 const execFileAsync = promisify(execFile);
 const clients = new Map();
@@ -758,6 +762,12 @@ export class CodexAppServerClient {
       const turnId = clean(turn.id);
       const status = clean(turn.status || "completed");
       const errorText = publicError(turn.error);
+      const remoteCompactionFailure = status === "failed"
+        ? classifyCodexRemoteCompactionFailure(turn.error || errorText, {
+            runtimeGeneration: threadId,
+            turnId,
+          })
+        : null;
       if (threadId) {
         const completedKey = this.turnParentKey(threadId, turnId);
         if (completedKey) {
@@ -774,6 +784,22 @@ export class CodexAppServerClient {
         }
         let thread = await threadForCodexThreadId(threadId, this.env);
         if (thread) {
+          if (remoteCompactionFailure) {
+            recordCodexRemoteCompactionRecovery("detected");
+            await appendEvent({
+              type: "codex_remote_compaction_failure_classified",
+              threadId: thread.id,
+              runtimeGeneration: remoteCompactionFailure.runtimeGeneration,
+              turnId: remoteCompactionFailure.turnId,
+              failureClassification: remoteCompactionFailure.classification,
+              upstreamStatus: remoteCompactionFailure.upstreamStatus,
+              endpointCategory: remoteCompactionFailure.endpointCategory,
+              recoveryPolicy: remoteCompactionFailure.recoveryPolicy,
+              automaticRecoveryLimit: remoteCompactionFailure.automaticRecoveryLimit,
+              automaticTurnReplay: false,
+              operatorRetryRequired: true,
+            }, this.env).catch(() => {});
+          }
           const { finishTaskAgentTurn, isTerminalTaskAgentThread } = await import("./task-agents.js");
           if (isTerminalTaskAgentThread(thread)) {
             const taskStatus = clean(thread.agentTaskStatus);
@@ -789,6 +815,7 @@ export class CodexAppServerClient {
                   lastTurnId: turnId || null,
                   lastTurnStatus: status,
                   lastTurnError: status === "failed" ? errorText || null : null,
+                  lastTurnFailure: remoteCompactionFailure,
                   pendingRequest: null,
                   codexStatus: { type: taskStatus === "failed" ? "systemError" : "idle" },
                   state: runtimeState,
@@ -824,6 +851,7 @@ export class CodexAppServerClient {
               lastTurnId: turnId || null,
               lastTurnStatus: status,
               lastTurnError: status === "failed" ? errorText || null : null,
+              lastTurnFailure: remoteCompactionFailure,
               pendingRequest: null,
               codexStatus: { type: status === "failed" ? "systemError" : "idle" },
               state: status === "failed" ? "failed" : "ready",
@@ -850,7 +878,7 @@ export class CodexAppServerClient {
             turnId,
             state: codexTurnConversationInterrupted(turn) ? "interrupted" : status === "failed" ? "failed" : "completed",
             source: "codex-app-server",
-            reason: errorText,
+            reason: remoteCompactionFailure?.classification || errorText,
           }, this.env).catch(() => {});
           if (status === "completed" && runtimeFinalDeliveryPending(thread, turnId)) {
             await recordRuntimeLiveness(thread.id, {

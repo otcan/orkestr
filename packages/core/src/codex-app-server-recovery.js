@@ -37,6 +37,14 @@ import {
   shouldSteerStaleActiveTurn,
   shouldRecoverStaleActiveTurn,
 } from "./codex-app-server-active-turn-recovery.js";
+import {
+  classifyCodexRemoteCompactionFailure,
+  codexRemoteCompactionFailureClass,
+  recordCodexRemoteCompactionRecovery,
+  remoteCompactionFailureForTurn,
+  remoteCompactionRecoveryAttempt,
+  remoteCompactionRecoveryAttempted,
+} from "./codex-remote-compaction-recovery.js";
 
 const recoveryScanCache = new Map();
 
@@ -186,6 +194,15 @@ function autoSafeResetCooldownActive(thread = {}, env = process.env) {
 
 function shouldAutoSafeResetRepeatedStaleTurn(thread = {}, messages = [], turn = null, options = {}, env = process.env) {
   if (!turn) return false;
+  const remoteCompactionFailure = remoteCompactionFailureForTurn(turn?.terminalFailure, {
+    runtimeGeneration: turn?.terminalFailure?.runtimeGeneration,
+    turnId: messageTurnId(turn?.latestUser),
+  });
+  if (remoteCompactionFailure) {
+    return typeof options.autoSafeResetThread === "function" &&
+      staleRecoveryAutoSafeResetEnabled(env) &&
+      !remoteCompactionRecoveryAttempted(thread, remoteCompactionFailure);
+  }
   if (["model_capacity", "terminal_failure"].includes(clean(turn.reason).toLowerCase())) return false;
   if (typeof options.autoSafeResetThread !== "function") return false;
   if (!staleRecoveryAutoSafeResetEnabled(env)) return false;
@@ -256,6 +273,23 @@ function deliveredTurnWithTerminalFailure(thread = {}, turn = null) {
   const deliveredTurnId = clean(messageTurnId(turn?.latestUser));
   if (!runtimeTurnId || !deliveredTurnId || runtimeTurnId !== deliveredTurnId) return turn;
   const terminalError = clean(thread?.runtime?.lastTurnError || thread?.lastError);
+  const runtimeGeneration = clean(turn?.latestUser?.codexThreadId || turn?.latestUser?.executorThreadId || codexThreadId(thread));
+  const terminalFailure = remoteCompactionFailureForTurn(thread?.runtime?.lastTurnFailure, {
+    runtimeGeneration,
+    turnId: deliveredTurnId,
+  }) || classifyCodexRemoteCompactionFailure(terminalError, {
+    runtimeGeneration,
+    turnId: deliveredTurnId,
+    observedAt: clean(thread?.runtime?.updatedAt),
+  });
+  if (terminalFailure) {
+    return {
+      ...turn,
+      reason: codexRemoteCompactionFailureClass,
+      terminalError,
+      terminalFailure,
+    };
+  }
   const reason = terminalFailureReason(terminalError);
   if (!reason) return turn;
   return { ...turn, reason, terminalError };
@@ -332,6 +366,20 @@ function staleTurnNoticeText(reason = "no_assistant_response", options = {}) {
     ? options.doctorLines.map((line) => clean(line)).filter(Boolean)
     : [];
   const withDoctor = (lines) => [...lines, ...doctorLines].join("\n");
+  if (reason === codexRemoteCompactionFailureClass) {
+    const timerId = clean(options.latestUser?.timerId);
+    const retryInstruction = timerId
+      ? `Review any partial external changes, then use Retry timer in Orkestr or run: orkestr timers run ${timerId}`
+      : "Review any partial external changes, then retry this work explicitly if it is still needed.";
+    return withDoctor([
+      "Codex context compaction failed (404)",
+      "",
+      "Codex stopped because the legacy remote context-compaction endpoint was unavailable.",
+      "Orkestr preserved this failed turn and will make one safe session-reset attempt.",
+      "The original turn will not run again automatically because it may already have changed external systems.",
+      retryInstruction,
+    ]);
+  }
   if (reason === "model_capacity") {
     return withDoctor([
       "Codex model temporarily unavailable",
@@ -451,7 +499,19 @@ function safeResetSucceeded(result = null) {
   return Boolean(result?.ok || result?.safeReset || result?.reset);
 }
 
-function safeResetRecoveryText() {
+function safeResetRecoveryText(turn = null) {
+  if (clean(turn?.reason).toLowerCase() === codexRemoteCompactionFailureClass) {
+    const timerId = clean(turn?.latestUser?.timerId);
+    return [
+      "Codex session recovered",
+      "",
+      "Orkestr saved recent context and started a fresh Codex session after the compaction failure.",
+      "It did not replay the failed turn.",
+      timerId
+        ? `Review partial work before using Retry timer or running: orkestr timers run ${timerId}`
+        : "Review partial work, then retry the task explicitly if it is still needed.",
+    ].join("\n");
+  }
   return [
     "Codex session recovered",
     "",
@@ -468,7 +528,7 @@ function safeResetRecoveryEventId(thread, codexId, turn, resetResult = {}) {
     itemId: `safe-reset-recovered:${latestUser?.id || "latest"}`,
     type: "turn/safe-reset-recovered",
     role: "assistant",
-    text: safeResetRecoveryText(),
+    text: safeResetRecoveryText(turn),
   });
 }
 
@@ -481,7 +541,7 @@ async function appendSafeResetRecoveryNotice(thread, codexId, turn, resetResult 
     role: "assistant",
     source: "orkestr_runtime",
     phase: "runtime_recovered",
-    text: safeResetRecoveryText(),
+    text: safeResetRecoveryText(turn),
     state: "completed",
     eventId: safeResetRecoveryEventId(refreshedThread, codexId, turn, resetResult),
     parentMessageId: latestUser?.id || null,
@@ -492,6 +552,9 @@ async function appendSafeResetRecoveryNotice(thread, codexId, turn, resetResult 
       itemId: "safe-reset-recovered",
     }),
     ...whatsappProjectionFields(whatsappParent, refreshedThread),
+    ...(clean(turn?.reason).toLowerCase() === codexRemoteCompactionFailureClass
+      ? { parentMessageId: latestUser?.id || whatsappParent?.id || null }
+      : {}),
   }, env);
 }
 
@@ -683,7 +746,8 @@ async function appendStaleTurnNotice(thread, messages, turn, env = process.env, 
   const latestUser = freshTurn?.latestUser || null;
   const noticeCause = recoveryNoticeCause(options);
   const recoverySource = clean(options.recoverySource || "");
-  const text = staleTurnNoticeText(freshTurn?.reason, options);
+  const textOptions = { ...options, latestUser, terminalFailure: freshTurn?.terminalFailure || null };
+  const text = staleTurnNoticeText(freshTurn?.reason, textOptions);
   const eventId = staleTurnEventId(thread, codexId, freshTurn, options);
   const existing = freshMessages.find((message) => message.eventId === eventId);
   const whatsappParent = noticeWhatsappParent(freshTurn, thread);
@@ -697,6 +761,16 @@ async function appendStaleTurnNotice(thread, messages, turn, env = process.env, 
     noticeCause: noticeCause || null,
     recoverySource: recoverySource || null,
     recoveryReason: freshTurn?.reason || null,
+    failureClassification: clean(freshTurn?.terminalFailure?.classification) || null,
+    upstreamStatus: freshTurn?.terminalFailure?.upstreamStatus || null,
+    endpointCategory: clean(freshTurn?.terminalFailure?.endpointCategory) || null,
+    runtimeGeneration: clean(freshTurn?.terminalFailure?.runtimeGeneration) || codexId || null,
+    failedTurnId: clean(freshTurn?.terminalFailure?.turnId) || clean(latestUser?.codexTurnId || latestUser?.executorTurnId) || null,
+    recoveryPolicy: clean(freshTurn?.terminalFailure?.recoveryPolicy) || null,
+    recoveryAction: freshTurn?.terminalFailure ? "review_partial_effects_then_retry_explicitly" : null,
+    timerId: clean(latestUser?.timerId) || null,
+    operatorRetryRequired: freshTurn?.terminalFailure?.operatorRetryRequired === true,
+    automaticTurnReplay: freshTurn?.terminalFailure?.automaticTurnReplay === true,
     codexThreadId: codexId,
     codexTurnId: clean(latestUser?.codexTurnId || latestUser?.executorTurnId || thread?.runtime?.activeTurnId) || null,
     ...codexAppServerMessageFields(codexId, {
@@ -704,6 +778,9 @@ async function appendStaleTurnNotice(thread, messages, turn, env = process.env, 
       itemId: "stale-no-reply",
     }),
     ...whatsappProjectionFields(whatsappParent, thread),
+    ...(freshTurn?.terminalFailure
+      ? { parentMessageId: latestUser?.id || whatsappParent?.id || null }
+      : {}),
   }, env);
   return { notice, appended: !existing && Boolean(notice?.id), skipped: false, messages: freshMessages, turn: freshTurn };
 }
@@ -728,6 +805,7 @@ function shouldRecoverIncompleteTurn(thread, clientState, turn, env = process.en
   if (liveActiveTurnId || liveStatusState === "working") return false;
   const threadState = clean(thread?.state).toLowerCase();
   if (["working", "queued", "pending_delivery", "awaiting_ack"].includes(threadState)) return false;
+  if (clean(turn?.reason).toLowerCase() === codexRemoteCompactionFailureClass) return true;
   if (!incompleteTurnMatchesRuntimeTurn(thread, turn) && !recentEnoughForStaleRecovery(turn, env)) return false;
   if (!turn.lastActivityMs) return true;
   return Date.now() - turn.lastActivityMs >= staleFinalGraceMs(env);
@@ -847,7 +925,7 @@ export async function recoverStaleCodexAppServerTurns(env = process.env, options
   const appServerThreads = threads.filter((thread) => threadUsesCodexAppServer(thread, env));
   if (!appServerThreads.length) return { recovered: 0, appended: 0, autoSafeReset: 0 };
   pruneRecoveryScanCache(new Set(appServerThreads.map((thread) => thread.id).filter(Boolean)));
-  const client = await getCodexAppServerClient({ env, home: runtimeHome(env) }).catch(() => null);
+  const client = options.client || await getCodexAppServerClient({ env, home: runtimeHome(env) }).catch(() => null);
   let recovered = 0;
   let appended = 0;
   let autoSafeReset = 0;
@@ -973,7 +1051,7 @@ export async function recoverStaleCodexAppServerTurns(env = process.env, options
     }
     if (freshNoticeTurn) {
       const noticeCause = recoveryNoticeCause(options, activeTurnRecoveryCause);
-      const terminalFailure = ["model_capacity", "terminal_failure"].includes(clean(freshNoticeTurn?.reason).toLowerCase());
+      const terminalFailure = ["model_capacity", "terminal_failure", codexRemoteCompactionFailureClass].includes(clean(freshNoticeTurn?.reason).toLowerCase());
       const repeatAfterSafeResetLines = !terminalFailure && durableStaleRecoveryRepeated(thread, freshNoticeTurn)
         ? [
             "",
@@ -1024,6 +1102,14 @@ export async function recoverStaleCodexAppServerTurns(env = process.env, options
     const recoveryTurn = freshNoticeTurn || noticeTurn;
     const recoveryReason = staleRecoveryReason(thread, recoveryTurn, activeTurnRecoveryCause, staleRuntime);
     const recoveredAt = nowIso();
+    const remoteCompactionFailure = remoteCompactionFailureForTurn(recoveryTurn?.terminalFailure, {
+      runtimeGeneration: recoveryTurn?.terminalFailure?.runtimeGeneration,
+      turnId: messageTurnId(recoveryTurn?.latestUser),
+    });
+    const remoteCompactionRecovery = autoSafeResetAttempted && remoteCompactionFailure
+      ? remoteCompactionRecoveryAttempt(remoteCompactionFailure, { attemptedAt: recoveredAt, status: "resetting" })
+      : null;
+    if (remoteCompactionRecovery) recordCodexRemoteCompactionRecovery("reset_attempted");
     const recoveryRuntimePatch = recoveryTurn
       ? staleRecoveryRuntimePatch(thread, {
           turn: recoveryTurn,
@@ -1046,6 +1132,7 @@ export async function recoverStaleCodexAppServerTurns(env = process.env, options
         codexStatus: { type: "idle" },
         recoveredAt,
         ...(recoveryRuntimePatch || {}),
+        ...(remoteCompactionRecovery ? { remoteCompactionRecovery } : {}),
       },
     }, env).catch(() => null);
     if (recoveredThread) thread = recoveredThread;
@@ -1063,7 +1150,9 @@ export async function recoverStaleCodexAppServerTurns(env = process.env, options
     let autoSafeResetResult = null;
     let autoSafeResetError = "";
     if (autoSafeResetAttempted) {
-      const resetReason = shouldRecoverActiveTurn
+      const resetReason = remoteCompactionFailure
+        ? "codex_remote_compaction_404_auto_safe_reset"
+        : shouldRecoverActiveTurn
         ? "stale_active_turn_auto_safe_reset"
         : "stale_turn_auto_safe_reset";
       try {
@@ -1079,15 +1168,25 @@ export async function recoverStaleCodexAppServerTurns(env = process.env, options
         });
         if (safeResetSucceeded(autoSafeResetResult)) {
           autoSafeReset += 1;
+          if (remoteCompactionFailure) recordCodexRemoteCompactionRecovery("reset_succeeded");
           await persistStaleRecoveryRuntimePatch(thread.id, recoveryRuntimePatch, autoSafeResetResult, env, {
             lastStaleTurnRecoveryAutoSafeReset: true,
             lastStaleTurnRecoveryAutoSafeResetAt: nowIso(),
             lastStaleTurnRecoveryAutoSafeResetOldCodexThreadId: autoSafeResetResult?.oldCodexThreadId || codexId || null,
             lastStaleTurnRecoveryAutoSafeResetNewCodexThreadId: autoSafeResetResult?.newCodexThreadId || null,
+            ...(remoteCompactionFailure ? {
+              remoteCompactionRecovery: remoteCompactionRecoveryAttempt(remoteCompactionFailure, {
+                attemptedAt: remoteCompactionRecovery?.attemptedAt,
+                status: "reset_succeeded",
+                newRuntimeGeneration: autoSafeResetResult?.newCodexThreadId,
+              }),
+            } : {}),
           });
-          const continuation = await enqueueSafeResetContinuationInput(thread, codexId, freshNoticeTurn || noticeTurn, autoSafeResetResult, env, {
-            previousRecoveryNoticeId: notice?.id || null,
-          }).catch(() => null);
+          const continuation = remoteCompactionFailure
+            ? null
+            : await enqueueSafeResetContinuationInput(thread, codexId, freshNoticeTurn || noticeTurn, autoSafeResetResult, env, {
+                previousRecoveryNoticeId: notice?.id || null,
+              }).catch(() => null);
           if (continuation?.id) {
             continued += 1;
             if (typeof options.continueThreadInput === "function") {
@@ -1102,8 +1201,18 @@ export async function recoverStaleCodexAppServerTurns(env = process.env, options
               }).catch(() => null);
             }
           } else {
+            if (remoteCompactionFailure) recordCodexRemoteCompactionRecovery("turn_replay_suppressed");
             await appendSafeResetRecoveryNotice(thread, codexId, freshNoticeTurn || noticeTurn, autoSafeResetResult, env).catch(() => null);
           }
+        } else if (remoteCompactionFailure) {
+          recordCodexRemoteCompactionRecovery("reset_failed");
+          await persistStaleRecoveryRuntimePatch(thread.id, recoveryRuntimePatch, autoSafeResetResult, env, {
+            remoteCompactionRecovery: remoteCompactionRecoveryAttempt(remoteCompactionFailure, {
+              attemptedAt: remoteCompactionRecovery?.attemptedAt,
+              status: "reset_failed",
+              error: "safe_reset_unsuccessful",
+            }),
+          });
         }
         await appendEvent({
           type: "codex_app_server_auto_safe_reset",
@@ -1120,6 +1229,16 @@ export async function recoverStaleCodexAppServerTurns(env = process.env, options
         }, env).catch(() => {});
       } catch (error) {
         autoSafeResetError = publicError(error);
+        if (remoteCompactionFailure) {
+          recordCodexRemoteCompactionRecovery("reset_failed");
+          await persistStaleRecoveryRuntimePatch(thread.id, recoveryRuntimePatch, null, env, {
+            remoteCompactionRecovery: remoteCompactionRecoveryAttempt(remoteCompactionFailure, {
+              attemptedAt: remoteCompactionRecovery?.attemptedAt,
+              status: "reset_failed",
+              error: autoSafeResetError,
+            }),
+          });
+        }
         await appendEvent({
           type: "codex_app_server_auto_safe_reset_failed",
           threadId: thread.id,
@@ -1152,6 +1271,11 @@ export async function recoverStaleCodexAppServerTurns(env = process.env, options
       autoSafeResetError: autoSafeResetError || null,
       autoSafeResetOldCodexThreadId: autoSafeResetResult?.oldCodexThreadId || null,
       autoSafeResetNewCodexThreadId: autoSafeResetResult?.newCodexThreadId || null,
+      failureClassification: remoteCompactionFailure?.classification || null,
+      upstreamStatus: remoteCompactionFailure?.upstreamStatus || null,
+      endpointCategory: remoteCompactionFailure?.endpointCategory || null,
+      automaticTurnReplay: remoteCompactionFailure ? false : null,
+      operatorRetryRequired: remoteCompactionFailure ? true : null,
     }, env).catch(() => {});
     recoveryScanCache.delete(thread.id);
   }

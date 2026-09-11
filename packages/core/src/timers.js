@@ -678,6 +678,7 @@ async function enqueueTimerMessage(timer, source, env, principal = null, options
   await assertTimerExecutionSanitized(timer, source, env, principal);
   const input = {
     source,
+    timerId: timer.id,
     text: timer.prompt,
     promptFile: timer.promptFile || "",
     ownerUserId: timer.ownerUserId,

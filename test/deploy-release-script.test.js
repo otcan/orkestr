@@ -197,6 +197,7 @@ test("release deploy script exposes versioned install, status, and rollback", as
   assert.match(stdout, /ORKESTR_RELEASE_WA_NOTIFY_EXCLUDE_CHAT_IDS/);
   assert.match(script, /ORKESTR_CODEX_APP_SERVER_MODE/);
   assert.match(script, /ORKESTR_CODEX_APP_SERVER_SERVICE_NAME/);
+  assert.match(script, /app-server --listen "unix:\/\/\$socket" --enable remote_compaction_v2/);
   assert.match(script, /tags_only_arg/);
   assert.match(script, /--allow-untagged\|--allow-untagged-releases/);
   assert.match(script, /--require-tagged\|--require-tagged-releases/);

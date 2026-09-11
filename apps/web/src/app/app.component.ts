@@ -1741,6 +1741,20 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     }
   }
 
+  async retryTimerFromRecovery(timerId: string): Promise<void> {
+    const id = String(timerId || "").trim();
+    if (!id || this.busy) return;
+    this.busy = true;
+    try {
+      await firstValueFrom(this.api.runTimer(id));
+      await Promise.all([this.loadTimers(), this.loadSelectedThread(true)]);
+    } catch (error) {
+      this.error = this.errorText(error);
+    } finally {
+      this.busy = false;
+    }
+  }
+
   async toggleTimer(timer: TimerRecord): Promise<void> {
     const thread = this.selectedThread();
     if (!thread || !timer.id || this.busy) return;

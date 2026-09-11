@@ -23,6 +23,7 @@ test("OSS demo GO path exposes Docker, Helm, and k3s smoke contracts", async () 
   assert.match(dockerfile, /ORKESTR_HOME=\/data/);
   assert.match(dockerfile, /EXPOSE 3000/);
   assert.match(dockerfile, /@openai\/codex@\$\{ORKESTR_CODEX_VERSION\}/);
+  assert.match(dockerfile, /ARG ORKESTR_CODEX_VERSION=0\.154\.0/);
   assert.match(dockerfile, /cloudflared-linux-\$\{cloudflared_arch\}/);
   assert.match(dockerfile, /cloudflared --version/);
   assert.match(entrypoint, /CODEX_HOME="\$\{CODEX_HOME:-\$ORKESTR_HOME\/codex\}"/);

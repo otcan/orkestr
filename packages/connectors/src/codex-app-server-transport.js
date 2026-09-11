@@ -17,8 +17,8 @@ export function codexAppServerUsesProxy(env = process.env) {
 }
 
 export function codexAppServerClientArgs(env = process.env) {
-  if (codexAppServerTransport(env) === "websocket") return ["app-server", "--listen", "stdio://"];
-  if (!codexAppServerUsesProxy(env)) return ["app-server", "--listen", "stdio://"];
+  if (codexAppServerTransport(env) === "websocket") return ["app-server", "--listen", "stdio://", "--enable", "remote_compaction_v2"];
+  if (!codexAppServerUsesProxy(env)) return ["app-server", "--listen", "stdio://", "--enable", "remote_compaction_v2"];
   const socket = codexAppServerSocket(env);
   return ["app-server", "proxy", ...(socket ? ["--sock", socket] : [])];
 }
