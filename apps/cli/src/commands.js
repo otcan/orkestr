@@ -916,9 +916,13 @@ async function whatsappOutboxCommand(argv, ctx) {
   }
   if (whatsappOutboxActions.has(subcommand)) {
     const jobIds = positional(rest);
-    if (!jobIds.length) throw new Error("Usage: orkestr whatsapp outbox <retry|suppress|mark-delivered|replay|dead-letter> <job-id>... [--reason text] [--json]");
+    if (!jobIds.length) throw new Error("Usage: orkestr whatsapp outbox <retry|suppress|mark-delivered|replay|dead-letter> <job-id>... [--reason text] [--allow-uncertain-replay --uncertain-replay-confirmation I_UNDERSTAND_THIS_MAY_DUPLICATE_A_MESSAGE] [--json]");
     const body = {
       reason: flagValue(rest, "--reason") || "",
+      ...(rest.includes("--allow-uncertain-replay") ? { allowDeliveryUncertainReplay: true } : {}),
+      ...(flagValue(rest, "--uncertain-replay-confirmation") ? {
+        deliveryUncertainReplayConfirmation: flagValue(rest, "--uncertain-replay-confirmation"),
+      } : {}),
     };
     const action = subcommand.replace(/_/g, "-");
     const payload = jobIds.length === 1
@@ -2308,6 +2312,7 @@ function positional(argv) {
     "--repo",
     "--repo-path",
     "--reason",
+    "--uncertain-replay-confirmation",
     "--reply-prefix",
     "--reply-account",
     "--bridge-account",
@@ -2398,6 +2403,7 @@ function positional(argv) {
     "--track-main",
     "--allow-untagged",
     "--allow-untagged-releases",
+    "--allow-uncertain-replay",
     "--require-tagged",
     "--require-tagged-releases",
     "--no-smoke",

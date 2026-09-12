@@ -17,6 +17,7 @@ import {
 } from "./connector-outbox-postgres.js";
 
 export const terminalStates = new Set(["delivered", "skipped", "skipped_policy", "suppressed", "dead_letter", "cancelled", "delivery_uncertain", "partial_delivery"]);
+export const deliveryUncertainReplayConfirmation = "I_UNDERSTAND_THIS_MAY_DUPLICATE_A_MESSAGE";
 const operatorActions = new Set(["retry", "suppress", "mark_delivered", "mark-delivered", "replay", "dead_letter", "dead-letter"]);
 const dbCache = new Map();
 let sqliteModulePromise = null;
@@ -1049,6 +1050,7 @@ function operatorPatchForAction(job = {}, action = "", options = {}) {
   const reason = clean(options.reason || options.error);
   const operator = clean(options.operator || options.operatorId || "operator");
   if (normalized === "retry" || normalized === "replay") {
+    const deliveryUncertainOverride = clean(job.state).toLowerCase() === "delivery_uncertain";
     return {
       state: "pending",
       claimedBy: "",
@@ -1066,6 +1068,12 @@ function operatorPatchForAction(job = {}, action = "", options = {}) {
         [`${normalized}RequestedBy`]: operator,
         [`${normalized}FromState`]: clean(job.state || "pending"),
         ...(reason ? { [`${normalized}Reason`]: reason } : {}),
+        ...(deliveryUncertainOverride ? {
+          deliveryUncertainOverride: true,
+          deliveryUncertainOverrideAt: now,
+          deliveryUncertainOverrideBy: operator,
+          deliveryUncertainOverrideReason: reason,
+        } : {}),
       },
     };
   }
@@ -1150,6 +1158,16 @@ export async function applyConnectorOutboxJobAction(jobIdOrKey = "", action = ""
     error.statusCode = 409;
     throw error;
   }
+  const deliveryUncertainOverride = clean(current.state).toLowerCase() === "delivery_uncertain" && ["retry", "replay"].includes(normalized);
+  if (deliveryUncertainOverride && !(
+    options.allowDeliveryUncertainReplay === true &&
+    clean(options.deliveryUncertainReplayConfirmation) === deliveryUncertainReplayConfirmation &&
+    clean(options.reason)
+  )) {
+    const error = new Error("connector_outbox_delivery_uncertain_retry_requires_override");
+    error.statusCode = 409;
+    throw error;
+  }
   const patch = operatorPatchForAction(current, normalized, options);
   const job = await markConnectorOutboxJob(current.id, patch, env);
   await appendEvent({
@@ -1165,6 +1183,7 @@ export async function applyConnectorOutboxJobAction(jobIdOrKey = "", action = ""
     previousState: current.state,
     state: job?.state || "",
     operator: clean(options.operator || options.operatorId || "operator"),
+    deliveryUncertainOverride: deliveryUncertainOverride || undefined,
   }, env).catch(() => {});
   return {
     ok: true,

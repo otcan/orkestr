@@ -6,7 +6,12 @@ import test from "node:test";
 import { appendThreadMessage, createThread, deleteThreadMessage, getThread, updateThreadMessage } from "../packages/core/src/threads.js";
 import { markRuntimeFinalDeliveryPending } from "../packages/core/src/runtime-final-delivery.js";
 import { listRouterTraces } from "../packages/core/src/router-traces.js";
-import { applyConnectorOutboxJobAction, ensureConnectorOutboxJob, readConnectorOutbox } from "../packages/connectors/src/connector-outbox.js";
+import {
+  applyConnectorOutboxJobAction,
+  deliveryUncertainReplayConfirmation,
+  ensureConnectorOutboxJob,
+  readConnectorOutbox,
+} from "../packages/connectors/src/connector-outbox.js";
 import { applyWhatsAppConnectorOutboxAction, deliverWhatsAppReplies } from "../packages/connectors/src/whatsapp.js";
 import { retryRecoverableWhatsAppOutboxJobsForAccounts } from "../packages/connectors/src/whatsapp-outbox-recovery.js";
 import { dataPaths } from "../packages/storage/src/paths.js";
@@ -1285,7 +1290,12 @@ test("whatsapp connector outbox replay overrides prior uncertainty for the same 
   const replayJob = outbox.jobs.find((item) => item.sourceMessageId === replayReply.id);
   assert.equal(replayJob?.state, "delivery_uncertain");
 
-  const replay = await applyConnectorOutboxJobAction(replayJob.id, "replay", { reason: "confirmed missing", operator: "tester" }, runtimeEnv);
+  const replay = await applyConnectorOutboxJobAction(replayJob.id, "replay", {
+    reason: "confirmed missing",
+    operator: "tester",
+    allowDeliveryUncertainReplay: true,
+    deliveryUncertainReplayConfirmation,
+  }, runtimeEnv);
   await applyWhatsAppConnectorOutboxAction(replay.job, "replay", { reason: "confirmed missing" }, runtimeEnv);
   const calls = [];
   const delivered = await deliverWhatsAppReplies(runtimeEnv, async (url, options) => {

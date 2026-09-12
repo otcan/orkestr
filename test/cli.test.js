@@ -1932,6 +1932,38 @@ test("CLI applies WhatsApp connector outbox actions", async () => {
   assert.match(stdout.text(), /intents=1/);
 });
 
+test("CLI passes the explicit duplicate-risk override for uncertain WhatsApp replay", async () => {
+  const stdout = capture();
+  const seen = [];
+  const confirmation = "I_UNDERSTAND_THIS_MAY_DUPLICATE_A_MESSAGE";
+  const code = await runCli([
+    "whatsapp", "outbox", "replay", "co_uncertain",
+    "--reason", "recipient history confirms missing",
+    "--allow-uncertain-replay",
+    "--uncertain-replay-confirmation", confirmation,
+    "--json",
+  ], {
+    stdout,
+    stderr: capture(),
+    fetchImpl: fakeFetch({
+      "POST /api/connectors/whatsapp/outbox/co_uncertain/replay": {
+        ok: true,
+        action: "replay",
+        previousState: "delivery_uncertain",
+        job: { id: "co_uncertain", state: "pending" },
+      },
+    }, seen),
+  });
+
+  assert.equal(code, 0);
+  assert.equal(seen[0].key, "POST /api/connectors/whatsapp/outbox/co_uncertain/replay");
+  assert.deepEqual(seen[0].body, {
+    reason: "recipient history confirms missing",
+    allowDeliveryUncertainReplay: true,
+    deliveryUncertainReplayConfirmation: confirmation,
+  });
+});
+
 test("CLI applies bulk WhatsApp connector outbox actions", async () => {
   const stdout = capture();
   const seen = [];

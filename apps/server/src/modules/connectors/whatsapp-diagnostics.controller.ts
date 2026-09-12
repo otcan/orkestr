@@ -317,6 +317,8 @@ async function applyWhatsAppOutboxOperatorAction(jobId: string, action: string, 
       operator: clean(body.operator || body.operatorId || "operator"),
       brokerAck: body.brokerAck,
       deliveredAt: clean(body.deliveredAt),
+      allowDeliveryUncertainReplay: body.allowDeliveryUncertainReplay === true,
+      deliveryUncertainReplayConfirmation: clean(body.deliveryUncertainReplayConfirmation),
     }, process.env);
     const job = result.job || {};
     const whatsapp = await applyWhatsAppConnectorOutboxAction(job, action, {
