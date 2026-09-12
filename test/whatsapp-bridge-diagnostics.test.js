@@ -130,6 +130,19 @@ test("WhatsApp bridge throttling and server failures remain retryable", async ()
   }
 });
 
+test("WhatsApp bridge not-ready responses remain retryable even when transported as HTTP 400", async () => {
+  for (const code of ["whatsapp_local_bridge_not_ready", "whatsapp_local_bridge_stale_runtime"]) {
+    const error = await captureSendFailure(JSON.stringify({ error: code }), {
+      contentType: "application/json",
+      status: 400,
+    });
+    assert.equal(error.statusCode, 400);
+    assert.equal(error.failureCode, code);
+    assert.equal(error.failureClassification, "availability");
+    assert.equal(error.retryable, true);
+  }
+});
+
 test("diagnostic excerpts enforce a hard size bound even when configured larger", async () => {
   const raw = `Bearer top-secret ${"z".repeat(2000)}`;
   const parsed = await readWhatsAppBridgeResponse(new Response(raw, {

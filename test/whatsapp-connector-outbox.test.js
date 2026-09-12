@@ -505,7 +505,11 @@ test("whatsapp connector outbox auto-retries recoverable bridge failures after a
   const calls = [];
   const failed = await deliverWhatsAppReplies(runtimeEnv, async (url) => {
     calls.push(url.pathname);
-    throw new Error("whatsapp_local_bridge_not_ready_recovered_after_send_runtime_error");
+    if (url.pathname === "/health") {
+      return response({ ok: true, ready: true, accounts: [{ id: "responder", ready: true }] });
+    }
+    assert.equal(url.pathname, "/send-text");
+    return response({ ok: false, error: "whatsapp_local_bridge_not_ready" }, false, 400);
   });
   const outboxAfterFailure = await readConnectorOutbox(runtimeEnv);
   const failedJob = outboxAfterFailure.jobs.find((item) => item.sourceMessageId === reply.id);
@@ -513,6 +517,9 @@ test("whatsapp connector outbox auto-retries recoverable bridge failures after a
   assert.equal(failed.failed.length, 1);
   assert.equal(failedJob?.state, "failed_retryable");
   assert.equal(failedJob.claimedBy, "retry_backoff");
+  assert.equal(failedJob.metadata.failureCode, "whatsapp_local_bridge_not_ready");
+  assert.equal(failedJob.metadata.failureClassification, "availability");
+  assert.equal(failedJob.metadata.retryable, true);
 
   const autoRetry = await retryRecoverableWhatsAppOutboxJobsForAccounts({
     accountIds: ["responder"],
