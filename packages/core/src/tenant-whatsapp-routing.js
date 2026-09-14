@@ -300,6 +300,7 @@ function publicRoute(vm, secret = {}, { includeToken = false, bridgeSendToken = 
     accountId: clean(vm.connectors?.whatsappAccountId),
     enabled,
     forwardingReady: configuredReady && targetReachable !== false,
+    targetReachability: diagnostics.targetReachability,
     target: routeTarget.target,
     routeMode: routeTarget.routeMode,
     targetSource: routeTarget.targetSource,
