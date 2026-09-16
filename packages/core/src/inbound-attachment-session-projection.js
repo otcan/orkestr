@@ -1,4 +1,21 @@
 const lifecycleStates = new Set(["receiving", "quarantined", "validating", "scanning", "ready", "rejected", "retryable", "cancelled", "expired"]);
+const publicErrorCodes = new Set([
+  "cancelled_by_user",
+  "inbound_upload_ciphertext_invalid",
+  "inbound_upload_ciphertext_missing",
+  "inbound_upload_ciphertext_tampered",
+  "inbound_upload_descriptor_expired",
+  "inbound_upload_descriptor_invalid",
+  "inbound_upload_key_unavailable",
+  "inbound_upload_permission_recheck_failed",
+  "inbound_upload_processing_failed",
+  "inbound_upload_session_expired",
+  "inbound_upload_scanner_rejected",
+  "inbound_upload_scanner_unavailable",
+  "inbound_upload_superseded",
+  "plaintext_lease_expired",
+  "restart_reconciliation_required",
+]);
 
 function clean(value = "") {
   return String(value || "").trim();
@@ -38,7 +55,7 @@ export function publicInboundAttachmentUploadSession(session = {}) {
     expiresAt: clean(session.expiresAt),
     updatedAt: clean(session.updatedAt || session.createdAt),
     retryable: session.state === "retryable",
-    error: clean(session.error),
+    error: publicErrorCodes.has(clean(session.error)) ? clean(session.error) : "",
     attachment: publicAttachment(session),
   };
 }

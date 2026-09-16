@@ -8,6 +8,7 @@ const defaultPlaintextLeaseMs = 30 * 60 * 1000;
 const defaultScannerTimeoutMs = 2 * 60 * 1000;
 const defaultScannerRejectExitCode = 10;
 const defaultCleanupIntervalMs = 5 * 60 * 1000;
+const ciphertextOverheadBytes = 256 * 1024;
 
 function clean(value = "") {
   return String(value || "").trim();
@@ -39,6 +40,7 @@ function scannerArguments(env = process.env) {
 export function inboundAttachmentUploadPolicy(env = process.env) {
   const required = enabled(env.ORKESTR_INBOUND_UPLOAD_ENCRYPTION_REQUIRED);
   const featureEnabled = required || enabled(env.ORKESTR_INBOUND_UPLOAD_ENCRYPTION_ENABLED);
+  const intakePaused = enabled(env.ORKESTR_INBOUND_UPLOAD_INTAKE_PAUSED);
   const command = clean(env.ORKESTR_INBOUND_UPLOAD_SCANNER_COMMAND);
   const args = scannerArguments(env);
   const scannerApproved = enabled(env.ORKESTR_INBOUND_UPLOAD_SCANNER_APPROVED);
@@ -49,6 +51,12 @@ export function inboundAttachmentUploadPolicy(env = process.env) {
     Array.isArray(args) &&
     args.includes("{file}"),
   );
+  // No production implementation may decrypt or scan untrusted plaintext in
+  // this API process. The only current executor is a test harness, deliberately
+  // gated by the storage bootstrap that is unavailable to a normal runtime.
+  const testIsolation = enabled(env.ORKESTR_INBOUND_UPLOAD_TEST_ISOLATION)
+    && env.ORKESTR_TEST_STORAGE_BOOTSTRAPPED === "1";
+  const isolationReady = testIsolation;
   const reason = !featureEnabled
     ? "inbound_upload_encryption_disabled"
     : !scannerApproved
@@ -57,13 +65,19 @@ export function inboundAttachmentUploadPolicy(env = process.env) {
         ? "inbound_upload_scanner_command_invalid"
         : !Array.isArray(args) || !args.includes("{file}")
           ? "inbound_upload_scanner_args_invalid"
-          : "";
+          : intakePaused
+            ? "inbound_upload_intake_paused"
+            : !isolationReady
+              ? "inbound_upload_isolation_contract_required"
+              : "";
   return {
     enabled: featureEnabled,
     required,
-    ready: featureEnabled && scannerConfigured,
+    ready: featureEnabled && scannerConfigured && !intakePaused && isolationReady,
     reason,
     scanner: scannerConfigured ? { command, args } : null,
+    intakePaused,
+    testIsolation,
     maxFileBytes: boundedInteger(env.ORKESTR_INBOUND_UPLOAD_MAX_FILE_BYTES, defaultMaxFileBytes, 1024, 100 * 1024 * 1024),
     maxFiles: boundedInteger(env.ORKESTR_INBOUND_UPLOAD_MAX_FILES, defaultMaxFiles, 1, 100),
     maxQuarantineBytes: boundedInteger(env.ORKESTR_INBOUND_UPLOAD_MAX_QUARANTINE_BYTES, defaultQuarantineBytes, defaultMaxFileBytes, 10 * 1024 * 1024 * 1024),
@@ -71,6 +85,21 @@ export function inboundAttachmentUploadPolicy(env = process.env) {
     plaintextLeaseMs: boundedInteger(env.ORKESTR_INBOUND_UPLOAD_PLAINTEXT_LEASE_MS, defaultPlaintextLeaseMs, 60_000, 24 * 60 * 60 * 1000),
     scannerTimeoutMs: boundedInteger(env.ORKESTR_INBOUND_UPLOAD_SCANNER_TIMEOUT_MS, defaultScannerTimeoutMs, 1000, 10 * 60 * 1000),
     scannerRejectExitCode: boundedInteger(env.ORKESTR_INBOUND_UPLOAD_SCANNER_REJECT_EXIT_CODE, defaultScannerRejectExitCode, 1, 255),
+    ciphertextOverheadBytes,
+    maxCiphertextBytes: boundedInteger(
+      env.ORKESTR_INBOUND_UPLOAD_MAX_CIPHERTEXT_BYTES,
+      defaultMaxFileBytes + ciphertextOverheadBytes,
+      1024 + ciphertextOverheadBytes,
+      101 * 1024 * 1024,
+    ),
+    maxOwnerQuarantineBytes: boundedInteger(env.ORKESTR_INBOUND_UPLOAD_MAX_OWNER_QUARANTINE_BYTES, defaultQuarantineBytes, defaultMaxFileBytes, 10 * 1024 * 1024 * 1024),
+    maxSessionsPerOwner: boundedInteger(env.ORKESTR_INBOUND_UPLOAD_MAX_SESSIONS_PER_OWNER, 100, 1, 10_000),
+    maxSessionsGlobal: boundedInteger(env.ORKESTR_INBOUND_UPLOAD_MAX_SESSIONS_GLOBAL, 10_000, 1, 100_000),
+    maxConcurrentProcessingPerOwner: boundedInteger(env.ORKESTR_INBOUND_UPLOAD_MAX_CONCURRENT_PROCESSING_PER_OWNER, 2, 1, 100),
+    maxConcurrentProcessingGlobal: boundedInteger(env.ORKESTR_INBOUND_UPLOAD_MAX_CONCURRENT_PROCESSING_GLOBAL, 20, 1, 1_000),
+    processingLeaseMs: boundedInteger(env.ORKESTR_INBOUND_UPLOAD_PROCESSING_LEASE_MS, defaultScannerTimeoutMs + 60_000, 30_000, 30 * 60 * 1000),
+    terminalRetentionMs: boundedInteger(env.ORKESTR_INBOUND_UPLOAD_TERMINAL_RETENTION_MS, 60 * 60 * 1000, 60_000, 7 * 24 * 60 * 60 * 1000),
+    partialUploadTtlMs: boundedInteger(env.ORKESTR_INBOUND_UPLOAD_PARTIAL_UPLOAD_TTL_MS, 60 * 60 * 1000, 60_000, 7 * 24 * 60 * 60 * 1000),
   };
 }
 

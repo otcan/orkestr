@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -16,11 +17,16 @@ import {
   ingestInboundAttachmentCiphertext,
   processInboundAttachmentUpload,
   reconcileInboundAttachmentQuarantine,
+  sweepInboundAttachmentQuarantine,
 } from "../packages/core/src/inbound-attachment-quarantine.js";
 import { inboundAttachmentKeyStatus, revokeInboundAttachmentKey, rotateInboundAttachmentKey } from "../packages/core/src/inbound-attachment-keys.js";
-import { inboundAttachmentCiphertextPath } from "../packages/core/src/inbound-attachment-files.js";
+import {
+  inboundAttachmentCiphertextPath,
+  inboundAttachmentLeaseDirectory,
+  inboundAttachmentReleasePath,
+} from "../packages/core/src/inbound-attachment-files.js";
 import { renderOpenMetrics, resetObservabilityForTests } from "../packages/core/src/observability.js";
-import { createThread } from "../packages/core/src/threads.js";
+import { createThread, updateThread } from "../packages/core/src/threads.js";
 
 function runtimeEnv(home, extra = {}) {
   return {
@@ -30,12 +36,32 @@ function runtimeEnv(home, extra = {}) {
     ORKESTR_INBOUND_UPLOAD_SCANNER_APPROVED: "1",
     ORKESTR_INBOUND_UPLOAD_SCANNER_COMMAND: process.execPath,
     ORKESTR_INBOUND_UPLOAD_SCANNER_ARGS: JSON.stringify(["-e", "process.exit(0)", "{file}"]),
+    ORKESTR_INBOUND_UPLOAD_TEST_ISOLATION: "1",
+    ORKESTR_TEST_STORAGE_BOOTSTRAPPED: "1",
     ...extra,
   };
 }
 
 function principal(userId) {
   return { kind: "user", role: "user", userId, source: "test", displayName: userId };
+}
+
+function runInboundChild(source, env, ...args) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, ["--input-type=module", "-e", source, ...args], {
+      env: { ...process.env, INBOUND_ATTACHMENT_TEST_ENV: JSON.stringify(env), NODE_TEST_CONTEXT: "1" },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => { stdout += chunk; });
+    child.stderr.on("data", (chunk) => { stderr += chunk; });
+    child.once("error", reject);
+    child.once("exit", (code) => {
+      if (code === 0) resolve(stdout);
+      else reject(new Error(`child exit ${code}: ${stderr || stdout}`));
+    });
+  });
 }
 
 function binaryStream(bytes, chunkSize = 5) {
@@ -226,15 +252,28 @@ test("inbound session idempotency, tenant isolation, key rotation, and restart r
   releasedRecord.release.expiresAt = new Date(0).toISOString();
   const stale = store.sessions.find((item) => item.id === later.session.id);
   stale.state = "validating";
-  stale.processingToken = "interrupted";
+  stale.processingToken = "stale-processing-token-000000000001";
+  stale.processingLease = {
+    token: stale.processingToken,
+    pid: 999999,
+    processStartIdentity: "linux:0",
+    expiresAt: new Date(0).toISOString(),
+  };
   await fs.writeFile(storePath, `${JSON.stringify(store)}\n`, { mode: 0o600 });
-  const orphan = path.join(dataPaths(first.env).home, "uploads", "inbound-quarantine", "plaintext", "orphan", "payload");
-  await fs.mkdir(path.dirname(orphan), { recursive: true, mode: 0o700 });
-  await fs.writeFile(orphan, "must disappear", { mode: 0o600 });
+  const leaseDir = inboundAttachmentLeaseDirectory(stale, stale.processingToken, first.env);
+  const staleRelease = inboundAttachmentReleasePath(stale, stale.processingToken, first.env);
+  const successorRelease = inboundAttachmentReleasePath(stale, "successor-processing-token-00000000001", first.env);
+  await fs.mkdir(leaseDir, { recursive: true, mode: 0o700 });
+  await fs.writeFile(path.join(leaseDir, "payload"), "stale", { mode: 0o600 });
+  await fs.mkdir(path.dirname(staleRelease), { recursive: true, mode: 0o700 });
+  await fs.writeFile(staleRelease, "stale", { mode: 0o600 });
+  await fs.writeFile(successorRelease, "successor", { mode: 0o600 });
   const reconciled = await reconcileInboundAttachmentQuarantine(first.env);
   assert.equal(reconciled.retryable >= 1, true);
   assert.equal(reconciled.removedPlaintext >= 1, true);
-  assert.equal(Boolean(await fs.stat(orphan).catch(() => null)), false);
+  assert.equal(Boolean(await fs.stat(leaseDir).catch(() => null)), false);
+  assert.equal(Boolean(await fs.stat(staleRelease).catch(() => null)), false);
+  assert.equal(await fs.readFile(successorRelease, "utf8"), "successor");
   assert.equal(Boolean(await fs.stat(releasedPath).catch(() => null)), false);
   const recovered = await inboundAttachmentUploadSession({ sessionId: later.session.id, principal: later.actor, env: first.env });
   assert.equal(recovered.state, "retryable");
@@ -245,12 +284,256 @@ test("inbound session idempotency, tenant isolation, key rotation, and restart r
   );
 });
 
+test("periodic sweep preserves a slow live scanner beyond its lease expiry", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-inbound-live-lease-"));
+  const content = "slow-live-scan";
+  const { env, session, actor } = await createSession(home, {
+    size: Buffer.byteLength(content),
+  });
+  await ingestInboundAttachmentCiphertext({
+    sessionId: session.id,
+    principal: actor,
+    input: Readable.from([await encryptedPayload(session, content)]),
+    env,
+  });
+  let entered;
+  let continueScan;
+  const scanning = new Promise((resolve) => { entered = resolve; });
+  const releaseScanner = new Promise((resolve) => { continueScan = resolve; });
+  const processing = processInboundAttachmentUpload({
+    sessionId: session.id,
+    principal: actor,
+    env,
+    scanner: async ({ filePath }) => {
+      entered(filePath);
+      await releaseScanner;
+      return true;
+    },
+  });
+  const scannerPath = await scanning;
+  const storePath = dataPaths(env).inboundAttachmentUploads;
+  const store = JSON.parse(await fs.readFile(storePath, "utf8"));
+  const record = store.sessions.find((item) => item.id === session.id);
+  record.processingLease.expiresAt = new Date(0).toISOString();
+  await fs.writeFile(storePath, `${JSON.stringify(store)}\n`, { mode: 0o600 });
+  const swept = await sweepInboundAttachmentQuarantine(env);
+  assert.equal(swept.removedPlaintext, 0);
+  assert.equal((await inboundAttachmentUploadSession({ sessionId: session.id, principal: actor, env })).state, "scanning");
+  assert.equal(await fs.readFile(scannerPath, "utf8"), content);
+  continueScan();
+  assert.equal((await processing).state, "ready");
+});
+
+test("publication rechecks revocation and projects stable errors without leaving a release", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-inbound-revoke-publish-"));
+  const content = "must-not-release";
+  const { env, session, actor, threadId } = await createSession(home, {
+    size: Buffer.byteLength(content),
+  });
+  await ingestInboundAttachmentCiphertext({
+    sessionId: session.id,
+    principal: actor,
+    input: Readable.from([await encryptedPayload(session, content)]),
+    env,
+  });
+  const rejected = await processInboundAttachmentUpload({
+    sessionId: session.id,
+    principal: actor,
+    env,
+    scanner: async () => {
+      await revokeInboundAttachmentKey("tenant-a", session.keyId, env);
+      return { verdict: "clean" };
+    },
+  });
+  assert.equal(rejected.state, "rejected");
+  assert.equal(rejected.error, "inbound_upload_key_unavailable");
+  const inbound = path.join(home, "uploads", threadId, "inbound");
+  assert.deepEqual(await fs.readdir(inbound).catch(() => []), []);
+
+  const retry = await createSession(home, {
+    threadId: "stable-error-thread",
+    idempotencyKey: "inbound-stable-error-0001",
+    size: Buffer.byteLength(content),
+  });
+  await ingestInboundAttachmentCiphertext({
+    sessionId: retry.session.id,
+    principal: retry.actor,
+    input: Readable.from([await encryptedPayload(retry.session, content)]),
+    env: retry.env,
+  });
+  const stable = await processInboundAttachmentUpload({
+    sessionId: retry.session.id,
+    principal: retry.actor,
+    env: retry.env,
+    scanner: async () => { throw new Error("/private/host/path must never project"); },
+  });
+  assert.equal(stable.state, "rejected");
+  assert.equal(stable.error, "inbound_upload_processing_failed");
+  assert.equal(JSON.stringify(stable).includes("/private/host/path"), false);
+
+  const ownership = await createSession(home, {
+    threadId: "owner-recheck-thread",
+    idempotencyKey: "inbound-owner-recheck-0001",
+    size: Buffer.byteLength(content),
+  });
+  await ingestInboundAttachmentCiphertext({
+    sessionId: ownership.session.id,
+    principal: ownership.actor,
+    input: Readable.from([await encryptedPayload(ownership.session, content)]),
+    env: ownership.env,
+  });
+  const ownerChanged = await processInboundAttachmentUpload({
+    sessionId: ownership.session.id,
+    principal: ownership.actor,
+    env: ownership.env,
+    scanner: async () => {
+      await updateThread(ownership.threadId, { ownerUserId: "tenant-b" }, ownership.env);
+      return true;
+    },
+  });
+  assert.equal(ownerChanged.state, "cancelled");
+  assert.equal(ownerChanged.error, "inbound_upload_permission_recheck_failed");
+  assert.deepEqual(await fs.readdir(path.join(home, "uploads", ownership.threadId, "inbound")).catch(() => []), []);
+});
+
+test("inbound quota, terminal retention, stale partial cleanup, and synchronous ready expiry are bounded", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-inbound-quota-"));
+  const env = runtimeEnv(home, {
+    ORKESTR_INBOUND_UPLOAD_MAX_SESSIONS_PER_OWNER: "1",
+    ORKESTR_INBOUND_UPLOAD_MAX_SESSIONS_GLOBAL: "1",
+  });
+  const actor = principal("tenant-a");
+  await createThread({ id: "quota-thread", name: "quota", ownerUserId: "tenant-a" }, env);
+  await assert.rejects(createInboundAttachmentUploadSessions({
+    threadId: "quota-thread",
+    principal: actor,
+    files: [{ idempotencyKey: "inbound-zero-size-0001", plaintextSize: 0 }],
+    env,
+  }), /inbound_upload_descriptor_invalid/);
+  const first = await createInboundAttachmentUploadSessions({
+    threadId: "quota-thread",
+    principal: actor,
+    files: [{ idempotencyKey: "inbound-quota-file-0001", plaintextSize: 4 }],
+    env,
+  });
+  await assert.rejects(createInboundAttachmentUploadSessions({
+    threadId: "quota-thread",
+    principal: actor,
+    files: [{ idempotencyKey: "inbound-quota-file-0002", plaintextSize: 4 }],
+    env,
+  }), /inbound_upload_quota_exceeded/);
+  const session = first.sessions[0];
+  const ciphertextPath = inboundAttachmentCiphertextPath({ ...session, ownerUserId: "tenant-a" }, env);
+  await fs.mkdir(path.dirname(ciphertextPath), { recursive: true, mode: 0o700 });
+  await fs.writeFile(ciphertextPath, "retained-ciphertext", { mode: 0o600 });
+  const temporaryPath = `${ciphertextPath}.crashed.tmp`;
+  await fs.writeFile(temporaryPath, "partial", { mode: 0o600 });
+  await fs.utimes(temporaryPath, new Date(0), new Date(0));
+  const storePath = dataPaths(env).inboundAttachmentUploads;
+  const store = JSON.parse(await fs.readFile(storePath, "utf8"));
+  const record = store.sessions.find((item) => item.id === session.id);
+  record.state = "rejected";
+  record.updatedAt = new Date(0).toISOString();
+  record.error = "inbound_upload_processing_failed";
+  await fs.writeFile(storePath, `${JSON.stringify(store)}\n`, { mode: 0o600 });
+  const swept = await sweepInboundAttachmentQuarantine(env);
+  assert.equal(swept.removedTemporaryCiphertext, 1);
+  assert.equal(Boolean(await fs.stat(ciphertextPath).catch(() => null)), false);
+  assert.equal(Boolean(await fs.stat(temporaryPath).catch(() => null)), false);
+
+  const ready = await createSession(home, {
+    threadId: "ready-expiry-thread",
+    idempotencyKey: "inbound-ready-expiry-0001",
+    size: 5,
+  });
+  await ingestInboundAttachmentCiphertext({
+    sessionId: ready.session.id,
+    principal: ready.actor,
+    input: Readable.from([await encryptedPayload(ready.session, "ready")]),
+    env: ready.env,
+  });
+  const published = await processInboundAttachmentUpload({
+    sessionId: ready.session.id,
+    principal: ready.actor,
+    env: ready.env,
+    scanner: async () => true,
+  });
+  const readyStore = JSON.parse(await fs.readFile(dataPaths(ready.env).inboundAttachmentUploads, "utf8"));
+  readyStore.sessions.find((item) => item.id === ready.session.id).release.expiresAt = new Date(0).toISOString();
+  await fs.writeFile(dataPaths(ready.env).inboundAttachmentUploads, `${JSON.stringify(readyStore)}\n`, { mode: 0o600 });
+  const expired = await inboundAttachmentUploadSession({ sessionId: ready.session.id, principal: ready.actor, env: ready.env });
+  assert.equal(expired.state, "expired");
+  assert.equal(Boolean(await fs.stat(published.attachment.path).catch(() => null)), false);
+});
+
+test("production remains blocked without an isolation contract and intake pause preserves required mode", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-inbound-policy-"));
+  const production = runtimeEnv(home);
+  delete production.ORKESTR_INBOUND_UPLOAD_TEST_ISOLATION;
+  delete production.ORKESTR_TEST_STORAGE_BOOTSTRAPPED;
+  const actor = principal("tenant-a");
+  await createThread({ id: "policy-thread", name: "policy", ownerUserId: "tenant-a" }, production);
+  const blocked = await inboundAttachmentUploadStatus({ threadId: "policy-thread", principal: actor, env: production });
+  assert.equal(blocked.ready, false);
+  assert.equal(blocked.reason, "inbound_upload_isolation_contract_required");
+  await assert.rejects(createInboundAttachmentUploadSessions({
+    threadId: "policy-thread",
+    principal: actor,
+    files: [{ idempotencyKey: "inbound-blocked-0001", plaintextSize: 1 }],
+    env: production,
+  }), /inbound_upload_isolation_contract_required/);
+
+  const paused = { ...runtimeEnv(home), ORKESTR_INBOUND_UPLOAD_ENCRYPTION_REQUIRED: "1", ORKESTR_INBOUND_UPLOAD_INTAKE_PAUSED: "1" };
+  const pausedStatus = await inboundAttachmentUploadStatus({ threadId: "policy-thread", principal: actor, env: paused });
+  assert.equal(pausedStatus.ready, false);
+  assert.equal(pausedStatus.required, true);
+  assert.equal(pausedStatus.reason, "inbound_upload_intake_paused");
+});
+
+test("sessions and key rotations serialize across independent processes", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-inbound-cross-process-"));
+  const env = runtimeEnv(home);
+  await createThread({ id: "cross-process-thread", name: "cross", ownerUserId: "tenant-a" }, env);
+  const quarantineUrl = new URL("../packages/core/src/inbound-attachment-quarantine.js", import.meta.url).href;
+  const keysUrl = new URL("../packages/core/src/inbound-attachment-keys.js", import.meta.url).href;
+  const source = `
+    import { createInboundAttachmentUploadSessions } from ${JSON.stringify(quarantineUrl)};
+    import { rotateInboundAttachmentKey } from ${JSON.stringify(keysUrl)};
+    const env = JSON.parse(process.env.INBOUND_ATTACHMENT_TEST_ENV);
+    Object.assign(process.env, env);
+    const principal = { kind: "user", role: "user", userId: "tenant-a", source: "test", displayName: "tenant-a" };
+    if (process.argv[1] === "rotate") {
+      await rotateInboundAttachmentKey("tenant-a", env);
+    } else {
+      await createInboundAttachmentUploadSessions({
+        threadId: "cross-process-thread",
+        principal,
+        files: [{ idempotencyKey: process.argv[2], plaintextSize: 8 }],
+        env,
+      });
+    }
+  `;
+  await Promise.all([
+    runInboundChild(source, env, "create", "inbound-cross-process-0001"),
+    runInboundChild(source, env, "create", "inbound-cross-process-0002"),
+    runInboundChild(source, env, "create", "inbound-cross-process-0003"),
+    runInboundChild(source, env, "rotate"),
+  ]);
+  const store = JSON.parse(await fs.readFile(dataPaths(env).inboundAttachmentUploads, "utf8"));
+  assert.equal(store.sessions.length, 3);
+  assert.equal(new Set(store.sessions.map((session) => session.idempotencyKey)).size, 3);
+  const keys = await inboundAttachmentKeyStatus("tenant-a", env);
+  assert.equal(keys.filter((key) => key.status === "active").length, 1);
+  assert.equal(keys.length >= 2, true);
+});
+
 test("HTTP ingress accepts age ciphertext and rejects plaintext uploads when required", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-inbound-api-"));
   const prior = Object.fromEntries([
     "ORKESTR_HOME", "ORKESTR_ADMIN_USER_ID", "ORKESTR_RECOVER_RUNNING_ON_START", "ORKESTR_WHATSAPP_AUTOSTART", "WHATSAPP_LOCAL_AUTOSTART",
     "ORKESTR_INBOUND_UPLOAD_ENCRYPTION_ENABLED", "ORKESTR_INBOUND_UPLOAD_ENCRYPTION_REQUIRED", "ORKESTR_INBOUND_UPLOAD_SCANNER_APPROVED",
-    "ORKESTR_INBOUND_UPLOAD_SCANNER_COMMAND", "ORKESTR_INBOUND_UPLOAD_SCANNER_ARGS", "ORKESTR_HOST_BOUNDARIES",
+    "ORKESTR_INBOUND_UPLOAD_SCANNER_COMMAND", "ORKESTR_INBOUND_UPLOAD_SCANNER_ARGS", "ORKESTR_INBOUND_UPLOAD_TEST_ISOLATION",
+    "ORKESTR_TEST_STORAGE_BOOTSTRAPPED", "ORKESTR_INBOUND_UPLOAD_INTAKE_PAUSED", "ORKESTR_HOST_BOUNDARIES",
   ].map((key) => [key, process.env[key]]));
   Object.assign(process.env, runtimeEnv(home, {
     ORKESTR_INBOUND_UPLOAD_ENCRYPTION_REQUIRED: "1",
@@ -290,6 +573,15 @@ test("HTTP ingress accepts age ciphertext and rejects plaintext uploads when req
     assert.equal(processed.status, 201);
     const complete = await processed.json();
     assert.equal(complete.session.state, "ready");
+    process.env.ORKESTR_INBOUND_UPLOAD_INTAKE_PAUSED = "1";
+    const pausedStatus = await fetch(`${baseUrl}/attachment-encryption/inbound/status?threadId=http-inbound-thread`);
+    assert.equal((await pausedStatus.json()).reason, "inbound_upload_intake_paused");
+    const pausedCreate = await fetch(`${baseUrl}/attachment-encryption/inbound/sessions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ threadId: "http-inbound-thread", files: [{ idempotencyKey: "inbound-http-paused-0001", plaintextSize: 1 }] }),
+    });
+    assert.equal(pausedCreate.status, 503);
     const plaintext = new FormData();
     plaintext.append("files", new Blob(["plain"], { type: "text/plain" }), "plain.txt");
     const rejected = await fetch(`${baseUrl}/threads/http-inbound-thread/uploads`, { method: "POST", body: plaintext });

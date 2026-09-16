@@ -30,7 +30,10 @@ import {
   whatsAppDeliveryFollowUpDelayMs,
 } from "../../../packages/connectors/src/whatsapp-sync-signal.js";
 import { ensureDataDirs } from "../../../packages/storage/src/paths.js";
-import { reconcileInboundAttachmentQuarantine } from "../../../packages/core/src/inbound-attachment-quarantine.js";
+import {
+  recoverInboundAttachmentStartupOrphans,
+  sweepInboundAttachmentQuarantine,
+} from "../../../packages/core/src/inbound-attachment-quarantine.js";
 import { inboundAttachmentCleanupIntervalMs, inboundAttachmentUploadPolicy } from "../../../packages/core/src/inbound-attachment-config.js";
 import { snapshotEnvironment } from "../../../packages/storage/src/test-storage-isolation.js";
 import { authorizeHttpRequest } from "../../../packages/core/src/security.js";
@@ -590,7 +593,7 @@ function requestPolicyUrl(request: any): string {
 export async function startServer({ port = 19812, host = "127.0.0.1", openBrowser = false, env = process.env } = {}) {
   const serverEnv = snapshotEnvironment(env);
   await ensureDataDirs(serverEnv);
-  await reconcileInboundAttachmentQuarantine(serverEnv);
+  await recoverInboundAttachmentStartupOrphans(serverEnv);
   activateThreadInputDeliveryScheduler(serverEnv);
   await migrateThreadMessageStore(serverEnv);
   if (serverEnv.ORKESTR_RECOVER_RUNNING_ON_START !== "0") {
@@ -641,7 +644,7 @@ export async function startServer({ port = 19812, host = "127.0.0.1", openBrowse
     });
   }, paneProgressMonitorIntervalMs());
   const inboundAttachmentCleanupPoll = setInterval(() => {
-    reconcileInboundAttachmentQuarantine(serverEnv).catch((error) => {
+    sweepInboundAttachmentQuarantine(serverEnv).catch((error) => {
       reportServerError(serverEnv, {
         source: "server.inboundAttachmentCleanup",
         code: "inbound_attachment_cleanup_failed",

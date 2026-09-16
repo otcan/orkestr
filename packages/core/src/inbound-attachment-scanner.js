@@ -8,6 +8,12 @@ function clean(value = "") {
 }
 
 export async function scanInboundAttachment(filePath, policy, injectedScanner) {
+  // The current command adapter is retained solely for the isolated test
+  // harness. Production must not inherit API-process privileges or environment
+  // into a scanner until the external worker contract is implemented.
+  if (!policy?.testIsolation) {
+    return { approved: false, retryable: true, reason: "scanner_not_ready" };
+  }
   if (typeof injectedScanner === "function") {
     const result = await injectedScanner({ filePath });
     if (result === true || result?.verdict === "clean" || result?.approved === true) return { approved: true };

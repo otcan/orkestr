@@ -4,9 +4,9 @@ import * as age from "age-encryption";
 import { dataPaths } from "../../storage/src/paths.js";
 import { appendEvent, readJson, writeSecretJson } from "../../storage/src/store.js";
 import { normalizeUserId } from "./users.js";
+import { withInboundAttachmentMutationLock } from "./inbound-attachment-store-lock.js";
 
 const registryVersion = 1;
-const mutationQueues = new Map();
 
 function clean(value = "") {
   return String(value || "").trim();
@@ -70,17 +70,6 @@ function signatureMatches(actual, expected) {
   return left.byteLength === right.byteLength && left.byteLength > 0 && timingSafeEqual(left, right);
 }
 
-function enqueue(env, operation) {
-  const key = dataPaths(env).inboundAttachmentKeys;
-  const prior = mutationQueues.get(key) || Promise.resolve();
-  const next = prior.then(operation, operation);
-  const settled = next.catch(() => {});
-  mutationQueues.set(key, settled);
-  return next.finally(() => {
-    if (mutationQueues.get(key) === settled) mutationQueues.delete(key);
-  });
-}
-
 function publicKey(record = {}) {
   return {
     id: clean(record.id),
@@ -98,7 +87,7 @@ function activeKey(registry, owner) {
   return registry.keys.find((key) => clean(key.ownerUserId) === owner && key.status === "active" && !key.revokedAt) || null;
 }
 
-async function createKey(registry, owner, env) {
+async function newKeyRecord(registry, owner) {
   const identity = await age.generateIdentity();
   const recipient = await age.identityToRecipient(identity);
   const version = registry.keys
@@ -115,50 +104,73 @@ async function createKey(registry, owner, env) {
     retiredAt: "",
     revokedAt: "",
   };
-  registry.keys.push(record);
-  await writeRegistry(registry, env);
-  await appendEvent({
-    type: "inbound_attachment_key_created",
-    ownerUserId: owner,
-    keyId: record.id,
-    keyVersion: version,
-  }, env).catch(() => {});
   return record;
+}
+
+async function appendKeyEvent(event, env) {
+  await appendEvent(event, env).catch(() => {});
 }
 
 export async function ensureInboundAttachmentKey(ownerUserId, env = process.env) {
   const owner = ownerId(ownerUserId, env);
-  return enqueue(env, async () => {
+  const existing = activeKey(await readRegistry(env), owner);
+  if (existing) return existing;
+  // Identity generation is intentionally outside the store lease. A second
+  // contender may win while this runs; its key is then returned below.
+  const candidate = await newKeyRecord(await readRegistry(env), owner);
+  const result = await withInboundAttachmentMutationLock(env, async () => {
     const registry = await readRegistry(env);
-    return activeKey(registry, owner) || createKey(registry, owner, env);
+    const current = activeKey(registry, owner);
+    if (current) return { key: current, created: false };
+    candidate.version = registry.keys
+      .filter((key) => clean(key.ownerUserId) === owner)
+      .reduce((highest, key) => Math.max(highest, Number(key.version || 0) || 0), 0) + 1;
+    registry.keys.push(candidate);
+    await writeRegistry(registry, env);
+    return { key: candidate, created: true };
   });
+  if (result.created) {
+    await appendKeyEvent({
+      type: "inbound_attachment_key_created",
+      ownerUserId: owner,
+      keyId: result.key.id,
+      keyVersion: result.key.version,
+    }, env);
+  }
+  return result.key;
 }
 
 export async function rotateInboundAttachmentKey(ownerUserId, env = process.env) {
   const owner = ownerId(ownerUserId, env);
-  return enqueue(env, async () => {
+  const candidate = await newKeyRecord(await readRegistry(env), owner);
+  const result = await withInboundAttachmentMutationLock(env, async () => {
     const registry = await readRegistry(env);
     const current = activeKey(registry, owner);
     if (current) {
       current.status = "retired";
       current.retiredAt = nowIso();
     }
-    const created = await createKey(registry, owner, env);
-    await appendEvent({
-      type: "inbound_attachment_key_rotated",
-      ownerUserId: owner,
-      previousKeyId: clean(current?.id),
-      keyId: created.id,
-      keyVersion: created.version,
-    }, env).catch(() => {});
-    return publicKey(created);
+    candidate.version = registry.keys
+      .filter((key) => clean(key.ownerUserId) === owner)
+      .reduce((highest, key) => Math.max(highest, Number(key.version || 0) || 0), 0) + 1;
+    registry.keys.push(candidate);
+    await writeRegistry(registry, env);
+    return { key: publicKey(candidate), previousKeyId: clean(current?.id) };
   });
+  await appendKeyEvent({
+    type: "inbound_attachment_key_rotated",
+    ownerUserId: owner,
+    previousKeyId: result.previousKeyId,
+    keyId: result.key.id,
+    keyVersion: result.key.version,
+  }, env);
+  return result.key;
 }
 
 export async function revokeInboundAttachmentKey(ownerUserId, keyId, env = process.env) {
   const owner = ownerId(ownerUserId, env);
   const wanted = clean(keyId);
-  return enqueue(env, async () => {
+  const revoked = await withInboundAttachmentMutationLock(env, async () => {
     const registry = await readRegistry(env);
     const key = registry.keys.find((candidate) => clean(candidate.ownerUserId) === owner && clean(candidate.id) === wanted);
     if (!key) {
@@ -169,9 +181,10 @@ export async function revokeInboundAttachmentKey(ownerUserId, keyId, env = proce
     key.status = "revoked";
     key.revokedAt = nowIso();
     await writeRegistry(registry, env);
-    await appendEvent({ type: "inbound_attachment_key_revoked", ownerUserId: owner, keyId: wanted }, env).catch(() => {});
     return publicKey(key);
   });
+  await appendKeyEvent({ type: "inbound_attachment_key_revoked", ownerUserId: owner, keyId: wanted }, env);
+  return revoked;
 }
 
 export async function inboundAttachmentKeyById(ownerUserId, keyId, env = process.env) {

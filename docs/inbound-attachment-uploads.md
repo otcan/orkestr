@@ -20,12 +20,13 @@ ORKESTR_INBOUND_UPLOAD_SCANNER_ARGS=["{file}"]
 ORKESTR_INBOUND_UPLOAD_SCANNER_REJECT_EXIT_CODE=10
 ```
 
-The command must be an absolute path. Its arguments are JSON and must contain
-`{file}` exactly where the scanner receives the temporary plaintext lease. Exit
-`0` means clean, the configured reject exit code means unsafe, and every other
-failure or timeout remains quarantined and retryable. Do not point this at a
-placeholder, an unreviewed script, or a scanner configured to upload documents
-outside the approved corporate boundary.
+The command configuration is retained for the future isolated scanner runtime,
+but it is not sufficient to activate this feature. The OSS API process refuses
+production intake with `inbound_upload_isolation_contract_required` until a
+separately validated worker contract decrypts, scans, and signs a fresh clean
+verdict outside the API process. A command path, wrapper, or 0600 directory is
+not an isolation boundary. The test-only scanner harness is unavailable in a
+normal runtime.
 
 The runtime creates a dedicated owner-scoped age identity under
 `ORKESTR_HOME/secrets/inbound-attachment-keys.json`. It is 0600 and contains
@@ -53,13 +54,22 @@ session is idempotent. A different retry for that session is rejected as a
 conflict.
 
 The service verifies ciphertext checksum and age authentication, writes exact
-plaintext bytes to a 0600 isolated lease, verifies the signed descriptor and
-session binding, then rechecks thread access before and after the scanner. Only
-a clean verdict is promoted into the thread's agent-readable attachment path.
-The lease is removed in `finally`; startup reconciliation removes abandoned
-leases, changes interrupted validation to `retryable`, and removes expired
-released plaintext. The server repeats reconciliation at the configured
-interval (default five minutes):
+plaintext bytes to a fenced temporary lease, verifies the descriptor and
+session binding, then rechecks the original owner/thread and key status before
+publication. A clean result is first staged outside the agent-visible path; a
+durable key/session lease fences the final rename and ready record. Startup
+recovery and the periodic sweep remove only an expired lease whose owner is
+proven dead. They do not recursively remove the plaintext directory or steal a
+slow live scanner.
+
+The HMAC descriptor is a server-side anti-tamper check. Browsers receive it
+over the authenticated HTTPS and trusted JavaScript boundary; they cannot
+independently verify its HMAC and it must not be represented as browser-key
+signing or substitution protection.
+
+The configured limits include ciphertext reservations, actual ciphertext
+usage, per-owner/global active session and processing caps, terminal retention,
+and stale partial-upload cleanup:
 
 ```ini
 ORKESTR_INBOUND_UPLOAD_CLEANUP_INTERVAL_MS=300000
@@ -68,6 +78,11 @@ ORKESTR_INBOUND_UPLOAD_MAX_FILES=20
 ORKESTR_INBOUND_UPLOAD_MAX_QUARANTINE_BYTES=524288000
 ORKESTR_INBOUND_UPLOAD_SESSION_TTL_MS=900000
 ORKESTR_INBOUND_UPLOAD_PLAINTEXT_LEASE_MS=1800000
+ORKESTR_INBOUND_UPLOAD_PROCESSING_LEASE_MS=180000
+ORKESTR_INBOUND_UPLOAD_MAX_SESSIONS_PER_OWNER=100
+ORKESTR_INBOUND_UPLOAD_MAX_SESSIONS_GLOBAL=10000
+ORKESTR_INBOUND_UPLOAD_MAX_CONCURRENT_PROCESSING_PER_OWNER=2
+ORKESTR_INBOUND_UPLOAD_MAX_CONCURRENT_PROCESSING_GLOBAL=20
 ```
 
 The browser retains only session IDs and per-file state in session storage. A
@@ -84,10 +99,9 @@ scanner outage also creates a watcher alert without filename, path, owner, or
 content labels. Rejected attachments are metrics only and are never passed to
 an agent.
 
-To stop new encrypted intake, unset the enabled/required flags and restart.
-This preserves ciphertext and does not convert it to a plaintext legacy upload.
-When encryption is required, leave the requirement in place until the scanner
-and key store are restored; a missing prerequisite must remain a visible 503,
-not a fallback path. This feature is not active merely because the code is
-present: activation, scanner approval, key-backup custody, and release-train
-validation are separate operator responsibilities.
+To stop new encrypted intake, set
+`ORKESTR_INBOUND_UPLOAD_INTAKE_PAUSED=1` and restart. Keep both encryption
+and required mode enabled; this preserves the plaintext legacy-upload block.
+Resume only by setting the pause flag to `0` after the validated isolated
+worker contract is available. Do not unset required mode as a rollback
+shortcut: that is a security downgrade, not an intake pause.

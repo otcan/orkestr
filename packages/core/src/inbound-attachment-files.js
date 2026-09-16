@@ -18,6 +18,11 @@ function safeSessionId(value = "") {
   return /^[a-zA-Z0-9_-]{16,160}$/.test(id) ? id : "";
 }
 
+function safeToken(value = "") {
+  const token = clean(value);
+  return /^[a-zA-Z0-9_-]{16,160}$/.test(token) ? token : "";
+}
+
 function ownerBucket(ownerUserId) {
   return createHash("sha256").update(clean(ownerUserId)).digest("hex").slice(0, 24);
 }
@@ -30,8 +35,16 @@ export function inboundAttachmentCiphertextPath(session, env = process.env) {
   return path.join(inboundAttachmentQuarantineRoot(env), "ciphertext", ownerBucket(session.ownerUserId), `${safeSessionId(session.id)}.age`);
 }
 
-export function inboundAttachmentReleasePath(session, env = process.env) {
-  return path.join(dataPaths(env).home, "uploads", safeThreadId(session.threadId), "inbound", `inbound-${safeSessionId(session.id)}`);
+export function inboundAttachmentReleasePath(session, token = session?.processingToken, env = process.env) {
+  return path.join(dataPaths(env).home, "uploads", safeThreadId(session.threadId), "inbound", `inbound-${safeSessionId(session.id)}-${safeToken(token)}`);
+}
+
+export function inboundAttachmentStagingPath(session, token, env = process.env) {
+  return path.join(inboundAttachmentQuarantineRoot(env), "staging", ownerBucket(session.ownerUserId), `${safeSessionId(session.id)}-${safeToken(token)}`);
+}
+
+export function inboundAttachmentLeaseDirectory(session, token, env = process.env) {
+  return path.join(inboundAttachmentQuarantineRoot(env), "plaintext", safeSessionId(session.id), safeToken(token));
 }
 
 export async function writeInboundAttachmentCiphertext(input, finalPath, maximumBytes) {

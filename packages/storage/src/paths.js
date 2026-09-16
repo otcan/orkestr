@@ -58,6 +58,9 @@ export function dataPaths(env = process.env) {
     // under the secret storage boundary.
     inboundAttachmentKeys: env.ORKESTR_INBOUND_ATTACHMENT_KEYS_FILE || path.join(home, "secrets", "inbound-attachment-keys.json"),
     inboundAttachmentUploads: env.ORKESTR_INBOUND_ATTACHMENT_UPLOADS_FILE || path.join(home, "inbound-attachment-uploads.json"),
+    // A single durable lease serializes the coupled session/key state. Key
+    // revocation must fence a concurrent publication, not merely its JSON file.
+    inboundAttachmentMutationLock: env.ORKESTR_INBOUND_ATTACHMENT_MUTATION_LOCK || path.join(home, "inbound-attachment-mutation"),
     connectorOutboxDb: env.ORKESTR_CONNECTOR_OUTBOX_DB || path.join(home, "connector-outbox.sqlite"),
     connectorPromptPushes: path.join(home, "connector-prompt-pushes.json"),
     apiSessionBindings: path.join(home, "api-session-bindings.json"),
