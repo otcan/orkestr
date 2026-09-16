@@ -74,8 +74,10 @@ export function inboundAttachmentWorkerRuntimeConfig(env = process.env) {
   const scannerRoot = clean(env.ORKESTR_INBOUND_UPLOAD_WORKER_SCANNER_ROOT);
   const scannerCommand = clean(env.ORKESTR_INBOUND_UPLOAD_WORKER_SCANNER_COMMAND);
   const scannerArgs = parseScannerArgs(env.ORKESTR_INBOUND_UPLOAD_WORKER_SCANNER_ARGS);
+  const scannerProbeArgs = parseScannerArgs(env.ORKESTR_INBOUND_UPLOAD_WORKER_SCANNER_PROBE_ARGS);
   const bwrapPath = clean(env.ORKESTR_INBOUND_UPLOAD_WORKER_BWRAP || "/usr/bin/bwrap");
   const workerUid = Number(env.ORKESTR_INBOUND_UPLOAD_WORKER_UID);
+  const transferGid = Number(env.ORKESTR_INBOUND_UPLOAD_WORKER_TRANSFER_GID);
   const config = {
     socketPath: clean(env.ORKESTR_INBOUND_UPLOAD_WORKER_SOCKET),
     token: clean(env.ORKESTR_INBOUND_UPLOAD_WORKER_TOKEN),
@@ -87,8 +89,10 @@ export function inboundAttachmentWorkerRuntimeConfig(env = process.env) {
     scannerRoot,
     scannerCommand,
     scannerArgs,
+    scannerProbeArgs,
     bwrapPath,
     workerUid,
+    transferGid,
     scannerApproved: enabled(env.ORKESTR_INBOUND_UPLOAD_SCANNER_APPROVED),
     scannerTimeoutMs: bounded(env.ORKESTR_INBOUND_UPLOAD_SCANNER_TIMEOUT_MS, 120_000, 1_000, 10 * 60 * 1000),
     verdictTtlMs: bounded(env.ORKESTR_INBOUND_UPLOAD_WORKER_VERDICT_TTL_MS, 60_000, 1_000, 5 * 60 * 1000),
@@ -105,8 +109,10 @@ export function inboundAttachmentWorkerRuntimeConfig(env = process.env) {
     config.scannerApproved && config.scannerArgs && config.scannerArgs.includes("{file}") &&
     (config.testMode || (
       Number.isInteger(config.workerUid) && config.workerUid > 0 &&
+      Number.isInteger(config.transferGid) && config.transferGid > 0 &&
       config.scannerRoot && path.isAbsolute(config.scannerRoot) &&
       config.scannerCommand.startsWith("/scanner/") &&
+      config.scannerProbeArgs &&
       path.isAbsolute(config.bwrapPath)
     ))
   );
@@ -116,6 +122,21 @@ export function inboundAttachmentWorkerRuntimeConfig(env = process.env) {
 async function requirePrivateFile(filePath, expectedUid, testMode) {
   const stat = await fs.stat(filePath).catch(() => null);
   if (!stat?.isFile() || (stat.mode & 0o077) !== 0 || (!testMode && stat.uid !== expectedUid)) throw fail("inbound_upload_worker_private_file_invalid");
+}
+
+async function requireDedicatedDirectory(directory, expectedUid, transferGid, testMode, transfer = false) {
+  const [link, stat, canonical] = await Promise.all([
+    fs.lstat(directory).catch(() => null),
+    fs.stat(directory).catch(() => null),
+    fs.realpath(directory).catch(() => ""),
+  ]);
+  const privateInvalid = stat.uid !== expectedUid || (stat.mode & 0o077) !== 0;
+  const transferInvalid = stat.uid !== expectedUid || stat.gid !== transferGid || (stat.mode & 0o007) !== 0
+    || (stat.mode & 0o070) !== 0o070 || (stat.mode & 0o2000) === 0;
+  if (!link?.isDirectory() || link.isSymbolicLink() || !stat?.isDirectory() || !canonical || (!testMode && (transfer ? transferInvalid : privateInvalid))) {
+    throw fail("inbound_upload_worker_storage_invalid");
+  }
+  return canonical;
 }
 
 async function assertWorkerRuntime(config) {
@@ -130,13 +151,31 @@ async function assertWorkerRuntime(config) {
   }
   await requirePrivateFile(config.signingKeyFile, config.workerUid, config.testMode);
   const [ciphertextRoot, handoffRoot, scratchRoot] = await Promise.all([
-    fs.stat(config.ciphertextRoot).catch(() => null),
-    fs.stat(config.handoffRoot).catch(() => null),
-    fs.stat(config.scratchRoot).catch(() => null),
+    requireDedicatedDirectory(config.ciphertextRoot, config.workerUid, config.transferGid, config.testMode, true),
+    requireDedicatedDirectory(config.handoffRoot, config.workerUid, config.transferGid, config.testMode, true),
+    requireDedicatedDirectory(config.scratchRoot, config.workerUid, config.transferGid, config.testMode),
   ]);
-  if (!ciphertextRoot?.isDirectory() || !handoffRoot?.isDirectory() || !scratchRoot?.isDirectory() || ciphertextRoot.dev !== handoffRoot.dev) {
+  if (new Set([ciphertextRoot, handoffRoot, scratchRoot]).size !== 3
+    || [ciphertextRoot, handoffRoot, scratchRoot].some((root, index, roots) => roots.some((other, otherIndex) => index !== otherIndex && (root.startsWith(other + path.sep) || other.startsWith(root + path.sep))))) {
     throw fail("inbound_upload_worker_storage_invalid");
   }
+  const [handoffStat, scratchStat] = await Promise.all([fs.stat(handoffRoot), fs.stat(scratchRoot)]);
+  if (handoffStat.dev !== scratchStat.dev) throw fail("inbound_upload_worker_storage_invalid");
+}
+
+async function probeSandbox(config) {
+  if (config.testMode) return;
+  const args = ["--die-with-parent", "--new-session", "--unshare-all", "--clearenv", "--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp", "--ro-bind", config.scannerRoot, "/scanner", "--chdir", "/tmp", "--", config.scannerCommand, ...config.scannerProbeArgs];
+  try {
+    await execFileAsync(config.bwrapPath, args, { timeout: Math.min(config.scannerTimeoutMs, 30_000), maxBuffer: 64 * 1024, env: {} });
+  } catch {
+    throw fail("inbound_upload_worker_sandbox_unavailable");
+  }
+}
+
+export async function assertInboundAttachmentWorkerRuntime(config, { probe = true } = {}) {
+  await assertWorkerRuntime(config);
+  if (probe) await probeSandbox(config);
 }
 
 async function runScanner(plaintextPath, config) {
@@ -168,7 +207,7 @@ async function runScanner(plaintextPath, config) {
 
 export async function inboundAttachmentWorkerHealth(config) {
   try {
-    await assertWorkerRuntime(config);
+    await assertInboundAttachmentWorkerRuntime(config);
     return {
       ready: true,
       protocol: inboundAttachmentWorkerProtocolVersion,
@@ -181,7 +220,7 @@ export async function inboundAttachmentWorkerHealth(config) {
 }
 
 export async function inboundAttachmentWorkerKeyAction(action, payload = {}, config) {
-  await assertWorkerRuntime(config);
+  await assertInboundAttachmentWorkerRuntime(config);
   const ownerUserId = clean(payload.ownerUserId);
   if (!ownerUserId) throw fail("inbound_upload_worker_key_owner_invalid", 400);
   if (action === "ensure") return ensureInboundAttachmentWorkerKey(config.keyRegistry, ownerUserId);
@@ -191,7 +230,7 @@ export async function inboundAttachmentWorkerKeyAction(action, payload = {}, con
 }
 
 export async function runInboundAttachmentWorkerScan(payload = {}, config) {
-  await assertWorkerRuntime(config);
+  await assertInboundAttachmentWorkerRuntime(config);
   const sessionId = safeSessionId(payload.sessionId);
   const processingToken = safeToken(payload.processingToken);
   const ownerUserId = clean(payload.ownerUserId);
@@ -225,7 +264,10 @@ export async function runInboundAttachmentWorkerScan(payload = {}, config) {
     const verdict = await runScanner(plaintextPath, config);
     if (!verdict.approved) return verdict;
     const plaintextDigest = await inboundAttachmentFileDigest(plaintextPath);
-    await fs.mkdir(path.dirname(handoffPath), { recursive: true, mode: 0o710 });
+    // The API needs group write permission on this child directory to atomically
+    // promote the verified handoff into its private staging directory.
+    await fs.mkdir(path.dirname(handoffPath), { recursive: true, mode: 0o730 });
+    await fs.chmod(path.dirname(handoffPath), 0o730);
     await fs.rename(plaintextPath, handoffPath);
     await fs.chmod(handoffPath, 0o640);
     moved = true;

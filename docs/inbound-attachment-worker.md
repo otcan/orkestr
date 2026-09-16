@@ -56,7 +56,9 @@ ORKESTR_INBOUND_UPLOAD_WORKER_SCANNER_ROOT=/opt/orkestr/inbound-scanner-root
 ORKESTR_INBOUND_UPLOAD_WORKER_SCANNER_COMMAND=/scanner/scan-inbound-attachment
 ORKESTR_INBOUND_UPLOAD_WORKER_SCANNER_ARGS=["{file}"]
 ORKESTR_INBOUND_UPLOAD_WORKER_UID=<numeric-dedicated-worker-uid>
+ORKESTR_INBOUND_UPLOAD_WORKER_TRANSFER_GID=<numeric-api-worker-transfer-group-id>
 ORKESTR_INBOUND_UPLOAD_WORKER_BWRAP=/usr/bin/bwrap
+ORKESTR_INBOUND_UPLOAD_WORKER_SCANNER_PROBE_ARGS=["--version"]
 ORKESTR_INBOUND_UPLOAD_SCANNER_APPROVED=1
 ORKESTR_INBOUND_UPLOAD_SCANNER_TIMEOUT_MS=120000
 ORKESTR_INBOUND_UPLOAD_WORKER_VERDICT_TTL_MS=60000
@@ -72,12 +74,22 @@ upload retryable and quarantined.
 ## Local permissions and service isolation
 
 Create a dedicated unprivileged worker user and a narrow shared group for the
-API/worker transfer. The ciphertext directory must be setgid to that group so
+API/worker transfer. The worker owns both transfer roots, while their group is
+the configured transfer group and their mode is setgid 2770. The ciphertext directory must be setgid to that group so
 the API's 0640 ciphertext files are readable by the worker; the handoff
 directory must be setgid so the worker's 0640 handoff files are readable by the
-API. The worker private registry, signing key, and scratch directory are owned
-by the worker and mode 0700/0600. The API account must not have access to them.
-The scanner root is read-only to the worker. Do not place any of these private
+API. The API-created ciphertext owner directories are 0770 and the
+worker-created handoff owner directories are 0730: both inherit the transfer
+group, and the latter grants the API group write/execute access for the atomic
+handoff-to-staging rename without directory listing access. The worker private
+registry, signing key, and scratch directory are owned by the worker and mode
+0700/0600. The API account must not have access to them.
+The scanner root is read-only to the worker. The scratch root stays worker-only
+0700. `ORKESTR_INBOUND_UPLOAD_WORKER_SCANNER_PROBE_ARGS` is required in
+production and must invoke the approved scanner's safe readiness operation;
+the worker runs it inside bubblewrap during startup and health checks. The
+scratch and handoff roots must be on the same filesystem because clean output
+is renamed atomically between them. Do not place any of these private
 files under `ORKESTR_HOME/secrets`.
 
 The reference worker command is:

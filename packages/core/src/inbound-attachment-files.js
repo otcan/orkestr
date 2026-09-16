@@ -53,7 +53,11 @@ export function inboundAttachmentLeaseDirectory(session, token, env = process.en
 
 export async function writeInboundAttachmentCiphertext(input, finalPath, maximumBytes, { mode = 0o640 } = {}) {
   const temporaryPath = `${finalPath}.${randomUUID()}.tmp`;
-  await fsp.mkdir(path.dirname(finalPath), { recursive: true, mode: 0o700 });
+  // The production ciphertext root is setgid to the API/worker transfer group.
+  // Its per-owner directories need group traversal for the worker to read the
+  // API-created ciphertext, but remain inaccessible to unrelated accounts.
+  await fsp.mkdir(path.dirname(finalPath), { recursive: true, mode: 0o770 });
+  await fsp.chmod(path.dirname(finalPath), 0o770);
   // A production worker runs under a separate unprivileged account. Operators
   // provision this directory setgid to the narrow shared group; the API never
   // writes plaintext here.

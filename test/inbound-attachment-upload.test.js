@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { generateKeyPairSync } from "node:crypto";
 import fs from "node:fs/promises";
+import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { Readable } from "node:stream";
@@ -24,9 +25,12 @@ import {
 import { inboundAttachmentKeyStatus, revokeInboundAttachmentKey, rotateInboundAttachmentKey } from "../packages/core/src/inbound-attachment-keys.js";
 import {
   inboundAttachmentCiphertextPath,
+  inboundAttachmentFileDigest,
   inboundAttachmentLeaseDirectory,
   inboundAttachmentReleasePath,
+  inboundAttachmentWorkerHandoffPath,
 } from "../packages/core/src/inbound-attachment-files.js";
+import { signInboundAttachmentWorkerRequest, verifyInboundAttachmentWorkerResponse } from "../packages/core/src/inbound-attachment-worker-contract.js";
 import { renderOpenMetrics, resetObservabilityForTests } from "../packages/core/src/observability.js";
 import { createThread, updateThread } from "../packages/core/src/threads.js";
 
@@ -94,6 +98,31 @@ function runInboundChild(source, env, ...args) {
       if (code === 0) resolve(stdout);
       else reject(new Error(`child exit ${code}: ${stderr || stdout}`));
     });
+  });
+}
+
+function rawWorkerRequest(socketPath, request) {
+  const body = JSON.stringify(request);
+  return new Promise((resolve, reject) => {
+    const client = http.request({
+      method: "POST",
+      socketPath,
+      path: request.pathname,
+      headers: { "content-type": "application/json", "content-length": Buffer.byteLength(body) },
+    }, (response) => {
+      const chunks = [];
+      response.on("data", (chunk) => chunks.push(chunk));
+      response.once("error", reject);
+      response.once("end", () => {
+        try {
+          resolve({ statusCode: response.statusCode, body: JSON.parse(Buffer.concat(chunks).toString("utf8")) });
+        } catch (error) {
+          reject(error);
+        }
+      });
+    });
+    client.once("error", reject);
+    client.end(body);
   });
 }
 
@@ -591,24 +620,105 @@ test("isolated worker owns private identities and only releases a signed exact h
   assert.equal(ready.state, "ready", JSON.stringify(ready));
   assert.equal(await fs.readFile(ready.attachment.path, "utf8"), content);
 
-  const staleScratch = path.join(env.ORKESTR_INBOUND_UPLOAD_WORKER_SCRATCH_ROOT, "stale", "payload");
+  const staleScratch = path.join(env.ORKESTR_INBOUND_UPLOAD_WORKER_SCRATCH_ROOT, "a".repeat(24), "inbound-stale-job-1234567890-abcdef0123456789", "payload");
+  const sentinel = path.join(env.ORKESTR_INBOUND_UPLOAD_WORKER_SCRATCH_ROOT, "operator-sentinel");
   await fs.mkdir(path.dirname(staleScratch), { recursive: true, mode: 0o700 });
   await fs.writeFile(staleScratch, "stale", { mode: 0o600 });
+  await fs.writeFile(sentinel, "preserve", { mode: 0o600 });
   await new Promise((resolve) => worker.close(resolve));
   worker = await startInboundAttachmentWorker(env);
   assert.equal(Boolean(await fs.stat(staleScratch).catch(() => null)), false);
+  assert.equal(await fs.readFile(sentinel, "utf8"), "preserve");
   const recovered = await inboundAttachmentUploadStatus({ threadId: "isolated-worker-thread", principal: actor, env });
   assert.equal(recovered.ready, true);
 
+  const liveScratch = path.join(env.ORKESTR_INBOUND_UPLOAD_WORKER_SCRATCH_ROOT, "b".repeat(24), "inbound-live-job-1234567890-abcdef0123456789", "payload");
+  await fs.mkdir(path.dirname(liveScratch), { recursive: true, mode: 0o700 });
+  await fs.writeFile(liveScratch, "live", { mode: 0o600 });
+  const secondSocketEnv = {
+    ...env,
+    ORKESTR_INBOUND_UPLOAD_WORKER_SOCKET: path.join(home, "isolated-worker", "run", "second-worker.sock"),
+  };
+  const workerScriptUrl = new URL("../scripts/orkestr-inbound-attachment-worker.mjs", import.meta.url).href;
+  const secondWorkerSource = `
+    import { startInboundAttachmentWorker } from ${JSON.stringify(workerScriptUrl)};
+    const env = JSON.parse(process.env.INBOUND_ATTACHMENT_TEST_ENV);
+    await startInboundAttachmentWorker(env);
+  `;
+  await assert.rejects(runInboundChild(secondWorkerSource, secondSocketEnv), /runtime_lease_store_locked/);
+  assert.equal(await fs.readFile(liveScratch, "utf8"), "live");
+
+  const invalidSocket = path.join(home, "isolated-worker", "run", "invalid-worker.sock");
+  const invalidConfigEnv = {
+    ...env,
+    ORKESTR_INBOUND_UPLOAD_WORKER_SOCKET: invalidSocket,
+    ORKESTR_INBOUND_UPLOAD_WORKER_SIGNING_KEY_FILE: path.join(home, "isolated-worker", "missing-private-key.pem"),
+  };
+  const invalidSentinel = path.join(env.ORKESTR_INBOUND_UPLOAD_WORKER_SCRATCH_ROOT, "invalid-config-sentinel");
+  await fs.writeFile(invalidSentinel, "preserve", { mode: 0o600 });
+  await assert.rejects(startInboundAttachmentWorker(invalidConfigEnv), /inbound_upload_worker_private_file_invalid/);
+  assert.equal(await fs.readFile(invalidSentinel, "utf8"), "preserve");
+  assert.equal(Boolean(await fs.lstat(invalidSocket).catch(() => null)), false);
+
   await new Promise((resolve) => worker.close(resolve));
+  const blockedSocketRoot = path.join(home, "isolated-worker", "blocked-socket-root");
+  const retryEnv = { ...env, ORKESTR_INBOUND_UPLOAD_WORKER_SOCKET: path.join(blockedSocketRoot, "worker.sock") };
+  await fs.writeFile(blockedSocketRoot, "not-a-directory", { mode: 0o600 });
+  await assert.rejects(startInboundAttachmentWorker(retryEnv), /inbound_upload_worker_socket_root_invalid/);
+  assert.equal(Boolean(await fs.stat(path.join(env.ORKESTR_INBOUND_UPLOAD_WORKER_SCRATCH_ROOT, ".worker-root.lock")).catch(() => null)), false);
+  await fs.rm(blockedSocketRoot);
+  await fs.mkdir(blockedSocketRoot, { mode: 0o750 });
+  worker = await startInboundAttachmentWorker(retryEnv);
+  await new Promise((resolve) => worker.close(resolve));
+
   const unavailable = await inboundAttachmentUploadStatus({ threadId: "isolated-worker-thread", principal: actor, env });
   assert.equal(unavailable.ready, false);
   assert.equal(unavailable.reason, "inbound_upload_worker_unavailable");
-  worker = await startInboundAttachmentWorker(env);
-
-  await new Promise((resolve) => worker.close(resolve));
   env.ORKESTR_INBOUND_UPLOAD_WORKER_SCANNER_ARGS = JSON.stringify(["-e", "setTimeout(() => process.exit(0), 200)", "{file}"]);
   worker = await startInboundAttachmentWorker(env);
+
+  const duplicateCreated = await createInboundAttachmentUploadSessions({
+    threadId: "isolated-worker-thread",
+    principal: actor,
+    files: [{ idempotencyKey: "inbound-isolated-worker-duplicate-scan", plaintextSize: Buffer.byteLength(content) }],
+    env,
+  });
+  const duplicateSession = duplicateCreated.sessions[0];
+  await ingestInboundAttachmentCiphertext({
+    sessionId: duplicateSession.id,
+    principal: actor,
+    input: Readable.from([await encryptedPayload(duplicateSession, content)]),
+    env,
+  });
+  const duplicateStoredSession = JSON.parse(await fs.readFile(dataPaths(env).inboundAttachmentUploads, "utf8")).sessions
+    .find((candidate) => candidate.id === duplicateSession.id);
+  assert.ok(duplicateStoredSession);
+  const duplicateCiphertext = await inboundAttachmentFileDigest(inboundAttachmentCiphertextPath(duplicateStoredSession, env));
+  const duplicateToken = "raw-duplicate-scan-token-1234567890";
+  const duplicatePayload = {
+    sessionId: duplicateStoredSession.id,
+    ownerUserId: duplicateStoredSession.ownerUserId,
+    threadId: duplicateStoredSession.threadId,
+    keyId: duplicateStoredSession.keyId,
+    keyVersion: duplicateStoredSession.keyVersion,
+    processingToken: duplicateToken,
+    ciphertextChecksum: duplicateCiphertext.checksum,
+    ciphertextSize: duplicateCiphertext.size,
+    plaintextSize: duplicateStoredSession.plaintextSize,
+    maxPlaintextBytes: 1024 * 1024,
+  };
+  const duplicateRequests = ["raw-duplicate-scan-nonce-000001", "raw-duplicate-scan-nonce-000002"].map((nonce) => signInboundAttachmentWorkerRequest({
+    pathname: "/v1/scan",
+    issuedAt: new Date().toISOString(),
+    nonce,
+    payload: duplicatePayload,
+  }, env.ORKESTR_INBOUND_UPLOAD_WORKER_TOKEN));
+  const duplicateResults = await Promise.all(duplicateRequests.map((request) => rawWorkerRequest(env.ORKESTR_INBOUND_UPLOAD_WORKER_SOCKET, request)));
+  assert.deepEqual(duplicateResults.map((result) => result.statusCode).sort(), [200, 409]);
+  assert.equal(duplicateResults.every((result) => verifyInboundAttachmentWorkerResponse(result.body, env.ORKESTR_INBOUND_UPLOAD_WORKER_TOKEN)), true);
+  assert.equal(duplicateResults.find((result) => result.statusCode === 409)?.body?.result?.error, "inbound_upload_worker_scan_in_flight");
+  await fs.rm(inboundAttachmentWorkerHandoffPath(duplicateStoredSession, duplicateToken, env), { force: true });
+
   const revocationCreated = await createInboundAttachmentUploadSessions({
     threadId: "isolated-worker-thread",
     principal: actor,
