@@ -730,8 +730,10 @@
             [implementingPlan]="implementingPlan"
             [threadInputReady]="threadInputReady()"
             [actionBusy]="busy"
+            [retryingMessageIds]="resendingMessageIds"
             (implementPlan)="implementPlanSelected()"
             (retryTimer)="retryTimerFromRecovery($event)"
+            (resend)="resendFailedMessage($event)"
           ></ork-thread-message-list>
         </section>
       }

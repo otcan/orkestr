@@ -6,6 +6,13 @@ interface OptimisticMessageOptions {
   source?: string;
 }
 
+interface OptimisticMessageFailure {
+  summary: string;
+  detail: string;
+  technical: string;
+  retryable: boolean;
+}
+
 function optimisticMessageId(): string {
   return `optimistic-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
@@ -61,12 +68,20 @@ export function updateOptimisticThreadMessage(
   return messages.map((message) => (message.id === optimisticId ? { ...message, ...patch } : message));
 }
 
-export function failOptimisticThreadMessage(messages: ThreadMessage[], optimisticId: string, error: string): ThreadMessage[] {
+export function failOptimisticThreadMessage(
+  messages: ThreadMessage[],
+  optimisticId: string,
+  failure: OptimisticMessageFailure,
+): ThreadMessage[] {
   return updateOptimisticThreadMessage(messages, optimisticId, {
     state: "failed",
     deliveryState: "failed",
     observedVia: "ui_send_failed",
-    error,
+    error: failure.technical,
+    failureSummary: failure.summary,
+    failureDetail: failure.detail,
+    failureTechnical: failure.technical,
+    retryable: failure.retryable,
   });
 }
 
