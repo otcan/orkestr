@@ -86,7 +86,9 @@ test("launcher host serves the standalone bundle and refuses the Orkestr WebUI b
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
     }
-    await fs.rm(home, { recursive: true, force: true });
+    // Shutdown bookkeeping can finish just after the HTTP close callback.
+    // Retry transient ENOTEMPTY, but still fail if scoped cleanup cannot finish.
+    await fs.rm(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
   const headers = { Host: "launcher.example.test", Cookie: `__Host-orkestr_app_session=${encodeURIComponent(session.token)}` };
   const page = await hostRequest(port, "/apps", headers);
