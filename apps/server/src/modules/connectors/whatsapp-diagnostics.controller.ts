@@ -41,6 +41,32 @@ function clean(value: unknown): string {
   return String(value || "").trim();
 }
 
+function publicDiagnosticCapabilities(value: unknown): Record<string, string> {
+  const capabilities = value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+  return {
+    auth: clean(capabilities.auth),
+    read: clean(capabilities.read),
+    send: clean(capabilities.send),
+    inbound: clean(capabilities.inbound),
+    groupCreate: clean(capabilities.groupCreate),
+  };
+}
+
+function publicDiagnosticProvenance(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const provenance = value as Record<string, unknown>;
+  return {
+    accountId: clean(provenance.accountId),
+    ownership: clean(provenance.ownership),
+    source: clean(provenance.source),
+    observedAt: clean(provenance.observedAt),
+    runtimeGeneration: Number(provenance.runtimeGeneration || 0) || null,
+    workerId: clean(provenance.workerId),
+    browserId: clean(provenance.browserId),
+    pageId: clean(provenance.pageId),
+  };
+}
+
 function whatsappAccountNotReadyReason(account: Record<string, any> = {}) {
   const error = clean(account.error);
   if (account.chatOpsReady === false || account.runtimeUsable === false) {
@@ -371,6 +397,30 @@ export class WhatsAppDiagnosticsController {
     const accounts = await listPersistentWhatsAppConnectorAccounts({ status });
     const account = assertAccountForPrincipal(findAccount(accounts, accountId), principal, "wa_account_read");
     return { account, status: filterStatusAccounts(status, [account]) };
+  }
+
+  @Get("accounts/:accountId/diagnostics")
+  async accountDiagnostics(@Req() request: any, @Param("accountId") accountId: string) {
+    const principal = requestPrincipal(request);
+    const status = await getWhatsAppStatus(process.env, fetch, {
+      probeChatOps: true,
+      read: true,
+      force: true,
+      readOnly: true,
+    });
+    const accounts = await listPersistentWhatsAppConnectorAccounts({ status });
+    assertAccountForPrincipal(findAccount(accounts, accountId), principal, "wa_account_read");
+    const runtime = findAccount(Array.isArray(status.accounts) ? status.accounts : [], accountId) || {};
+    return {
+      ok: true,
+      readOnly: true,
+      account: {
+        id: clean(runtime.id || runtime.accountId || accountId),
+        state: clean(runtime.state || runtime.status),
+        capabilities: publicDiagnosticCapabilities(runtime.capabilities),
+        provenance: publicDiagnosticProvenance(runtime.provenance),
+      },
+    };
   }
 
   @Get("accounts/:accountId/qr.svg")
