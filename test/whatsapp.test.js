@@ -6863,10 +6863,16 @@ test("local whatsapp recent recovery scans managed tenant route chats", async ()
     },
   };
   const calls = [];
+  const probes = [];
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (url, options) => {
     if (String(url).includes("/api/health")) return response({ ok: true }, true, 200);
-    calls.push({ url: String(url), options, body: JSON.parse(options.body) });
+    const body = JSON.parse(options.body);
+    if (options.method === "POST" && Object.keys(body).length === 0) {
+      probes.push({ url: String(url), body });
+      return response({ error: "whatsapp_chat_id_required" }, false, 400);
+    }
+    calls.push({ url: String(url), options, body });
     return response({ ok: true, threadId: "firat-jobs", messageId: "tenant-message" }, true, 202);
   };
 
@@ -6885,7 +6891,9 @@ test("local whatsapp recent recovery scans managed tenant route chats", async ()
     assert.equal(result.recovered.length, 1);
     assert.equal(result.recovered[0].chatId, chatId);
     assert.equal(result.recovered[0].recoveryMode, "recent");
-    assert.equal(calls.length, 1);
+    assert.equal(probes.length, 1);
+    assert.equal(probes[0].url, "https://tenant-recovery.example.test/api/connectors/whatsapp/inbound");
+    assert.equal(calls.length, 1, JSON.stringify(calls.map((call) => call.url)));
     assert.equal(calls[0].url, "https://tenant-recovery.example.test/api/connectors/whatsapp/inbound");
     assert.equal(calls[0].body.chatId, chatId);
     assert.equal(calls[0].body.text, "missed tenant hello");
