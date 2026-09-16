@@ -478,6 +478,27 @@ function publicBridgeAccount(account = {}) {
     updatedAt: pickString(account.updatedAt),
     runtimeAccountId: pickString(account.runtimeAccountId, rawId),
     legacyRoleAliases: id !== rawId && rawId ? [rawId] : [],
+    capabilities: account.capabilities && typeof account.capabilities === "object" && !Array.isArray(account.capabilities)
+      ? {
+          auth: pickString(account.capabilities.auth),
+          read: pickString(account.capabilities.read),
+          send: pickString(account.capabilities.send),
+          inbound: pickString(account.capabilities.inbound),
+          groupCreate: pickString(account.capabilities.groupCreate),
+        }
+      : {},
+    provenance: account.provenance && typeof account.provenance === "object" && !Array.isArray(account.provenance)
+      ? {
+          accountId: pickString(account.provenance.accountId),
+          ownership: pickString(account.provenance.ownership),
+          source: pickString(account.provenance.source),
+          observedAt: pickString(account.provenance.observedAt),
+          runtimeGeneration: Number(account.provenance.runtimeGeneration || 0) || null,
+          workerId: pickString(account.provenance.workerId),
+          browserId: pickString(account.provenance.browserId),
+          pageId: pickString(account.provenance.pageId),
+        }
+      : null,
   };
 }
 
@@ -794,7 +815,12 @@ export async function getWhatsAppStatus(env = process.env, fetchImpl = fetch, op
   const bridgeUrl = configuredBridgeUrl(config, env);
   if (dedicatedWhatsAppWorkerConfigured(env) && options.preferWorker !== false) {
     const workerHealthFn = typeof options.workerHealthFn === "function" ? options.workerHealthFn : whatsappWorkerHealth;
-    const workerHealth = await Promise.resolve(workerHealthFn(env)).catch(() => null);
+    const workerHealth = await Promise.resolve(workerHealthFn(env, {
+      force: options.force === true,
+      readOnly: options.readOnly === true,
+      probeChatOps: options.probeChatOps === true,
+      read: options.read === true,
+    })).catch(() => null);
     if (workerHealth?.ok !== false && workerHealth) {
       return mapDedicatedWhatsAppWorkerStatus(workerHealth, bridgeUrl);
     }

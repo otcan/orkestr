@@ -53,8 +53,19 @@ import {
   WhatsAppParticipant,
   WhatsAppStatusResponse,
 } from "./api.service";
-import { appendPendingFiles, messageWithAttachmentPaths, PendingFile, removePendingFile, uploadPendingFiles } from "./thread-uploads";
+import {
+  appendPendingFiles,
+  clearInboundUploadDraft,
+  messageWithAttachmentPaths,
+  PendingFile,
+  persistInboundUploadDraft,
+  recoverInboundUploadDraft,
+  removePendingFile,
+  updatePendingFileUploadState,
+  uploadPendingFiles,
+} from "./thread-uploads";
 import { canonicalThreadPanelUrl, navigateCanonicalThreadTarget, navigateLegacyThreadPath } from "./canonical-thread-navigation.js";
+import { describeUiSendFailure, UiSendFailureDescription } from "./ui-send-failure.js";
 
 type Panel = "chat" | "history" | "delivery" | "timers" | "attach" | "settings" | "workers" | "runtime" | "raw" | "files" | "instanceApps" | "instanceSettings" | "instanceTimers" | "instanceDesktops" | "userConnectors";
 type CodexRateLimitKey = "primary" | "secondary";
@@ -74,6 +85,16 @@ interface ThreadMessagePageState {
   oldestCursor: number | null;
   hasMoreBefore: boolean;
   loadingOlder: boolean;
+}
+
+interface UiSendRetryPayload {
+  threadId: string;
+  originalText: string;
+  pendingFiles: PendingFile[];
+  attachments: Array<Record<string, unknown>>;
+  mode: "send" | "interrupt";
+  replyDelivery: "ui_only" | "bound_whatsapp";
+  clientMessageId: string;
 }
 
 const DEFAULT_WHATSAPP_REPLY_PREFIX = "orkestr:";
@@ -244,6 +265,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   creatingWorkerParentId = "";
   pendingFiles: PendingFile[] = [];
   replyToWhatsAppByThread: Record<string, boolean> = {};
+  resendingMessageIds: Record<string, boolean> = {};
   draggingUpload = false;
   rawConnectionState = "idle";
   rawConnectionDetail = "";
@@ -271,6 +293,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   private scrollAfterRender = true;
   private scrollFrame = 0;
   private readonly lastActivityByThread = new Map<string, number>();
+  private readonly uiSendRetryPayloads = new Map<string, UiSendRetryPayload>();
   private readonly threadLoadTokens = new Map<string, number>();
   private threadLoadSequence = 0;
   private textStateThreadId = "";
@@ -340,6 +363,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.rawTerminal.dispose();
     this.sidebarResizeEnd();
     this.gmailBrowserNotifications.stop();
+    this.uiSendRetryPayloads.clear();
     globalThis.removeEventListener?.("popstate", this.popStateHandler);
   }
 
@@ -447,6 +471,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
         this.error = "";
         return;
       }
+      if (this.defaultInstanceRootToLauncher()) return;
       if (!this.isRouteLevelUserPanel(this.activePanel) && !this.selectedId && this.threads.length) {
         this.selectedId = this.threadSlug(this.threads[0]);
         if (this.replacePath(this.selectedId, this.activePanel)) return;
@@ -830,6 +855,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       this.threads = [...threads].sort((a, b) => this.activityMs(b) - this.activityMs(a));
       if (this.canonicalizeCurrentThreadRoute()) return;
       this.seedReadStateIfNeeded(this.threads);
+      if (this.defaultInstanceRootToLauncher()) return;
       if (!this.isRouteLevelUserPanel(this.activePanel) && !this.selectedId && this.threads.length) {
         this.selectedId = this.threadSlug(this.threads[0]);
         if (this.replacePath(this.selectedId, this.activePanel)) return;
@@ -891,6 +917,9 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.updateDocumentTitle();
     this.renderNow();
     await this.loadSelectedThread(true);
+    if (!this.pendingFiles.length && this.selectedThread()?.id === thread.id) {
+      this.pendingFiles = await recoverInboundUploadDraft(this.api, thread.id);
+    }
     this.renderNow();
   }
 
@@ -1264,25 +1293,42 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     const originalText = this.draft.trim();
     if (!originalText && this.pendingFiles.length === 0) return;
     if (!this.guardCodexRuntime()) return;
+    this.error = "";
     const pendingFiles = [...this.pendingFiles];
     const optimisticId = this.appendOptimisticUserMessage(thread.id, originalText, pendingFiles);
-    this.clearSubmittedComposer(thread);
+    const clientMessageId = `webui-${optimisticId}`;
+    const replyDelivery = this.uiReplyDeliveryMode(thread);
+    this.uiSendRetryPayloads.set(optimisticId, {
+      threadId: thread.id,
+      originalText,
+      pendingFiles,
+      attachments: [],
+      mode: "send",
+      replyDelivery,
+      clientMessageId,
+    });
+    this.updateOptimisticUserMessage(thread.id, optimisticId, { clientMessageId, retryMode: "send" });
     this.sending = true;
     try {
-      const attachments = await uploadPendingFiles(this.api, thread.id, pendingFiles);
+      const attachments = await uploadPendingFiles(this.api, thread.id, pendingFiles, (id, patch) => {
+        this.pendingFiles = updatePendingFileUploadState(this.pendingFiles, id, patch);
+        this.renderNow();
+      });
       const text = messageWithAttachmentPaths(originalText, attachments);
       this.updateOptimisticUserMessage(thread.id, optimisticId, { text, attachments });
+      this.updateUiSendRetryPayload(optimisticId, attachments);
       this.markThreadActive(thread.id, 120_000);
       const response = await firstValueFrom(this.api.sendThreadInput(thread.id, text, attachments, {
-        replyDelivery: this.uiReplyDeliveryMode(thread),
+        replyDelivery,
+        clientMessageId,
       }));
       this.replaceOptimisticUserMessage(thread.id, optimisticId, response.message);
+      this.clearSubmittedComposer(thread);
+      this.uiSendRetryPayloads.delete(optimisticId);
       this.queueMessagePaneScrollToBottom();
       await this.refresh(false);
     } catch (error) {
-      const detail = this.errorText(error);
-      this.error = detail;
-      this.failOptimisticUserMessage(thread.id, optimisticId, detail);
+      this.failOptimisticUserMessage(thread.id, optimisticId, describeUiSendFailure(error));
     } finally {
       this.sending = false;
     }
@@ -1325,26 +1371,120 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     const originalText = this.draft.trim();
     if (!originalText && this.pendingFiles.length === 0) return;
     if (!this.guardCodexRuntime()) return;
+    this.error = "";
     const pendingFiles = [...this.pendingFiles];
     const optimisticId = this.appendOptimisticUserMessage(thread.id, originalText, pendingFiles, "interrupt", "interrupting");
-    this.clearSubmittedComposer(thread);
+    const clientMessageId = `webui-${optimisticId}`;
+    const replyDelivery = this.uiReplyDeliveryMode(thread);
+    this.uiSendRetryPayloads.set(optimisticId, {
+      threadId: thread.id,
+      originalText,
+      pendingFiles,
+      attachments: [],
+      mode: "interrupt",
+      replyDelivery,
+      clientMessageId,
+    });
+    this.updateOptimisticUserMessage(thread.id, optimisticId, { clientMessageId, retryMode: "interrupt" });
     this.sendingNow = true;
     try {
-      const attachments = await uploadPendingFiles(this.api, thread.id, pendingFiles);
+      const attachments = await uploadPendingFiles(this.api, thread.id, pendingFiles, (id, patch) => {
+        this.pendingFiles = updatePendingFileUploadState(this.pendingFiles, id, patch);
+        this.renderNow();
+      });
       const text = messageWithAttachmentPaths(originalText, attachments);
       this.updateOptimisticUserMessage(thread.id, optimisticId, { text, attachments });
+      this.updateUiSendRetryPayload(optimisticId, attachments);
       this.markThreadActive(thread.id, 120_000);
       const response = await firstValueFrom(this.api.interruptThread(thread.id, text, attachments, {
-        replyDelivery: this.uiReplyDeliveryMode(thread),
+        replyDelivery,
+        clientMessageId,
       }));
       this.replaceOptimisticUserMessage(thread.id, optimisticId, response.message);
+      this.clearSubmittedComposer(thread);
+      this.uiSendRetryPayloads.delete(optimisticId);
       this.queueMessagePaneScrollToBottom();
       await this.refresh(false);
     } catch (error) {
-      const detail = this.errorText(error);
-      this.error = detail;
-      this.failOptimisticUserMessage(thread.id, optimisticId, detail);
+      this.failOptimisticUserMessage(thread.id, optimisticId, describeUiSendFailure(error));
     } finally {
+      this.sendingNow = false;
+    }
+  }
+
+  async resendFailedMessage(message: ThreadMessage): Promise<void> {
+    const thread = this.selectedThread();
+    const messageId = String(message.id || "").trim();
+    if (!thread || !messageId || this.sending || this.sendingNow || this.implementingPlan || this.resendingMessageIds[messageId]) return;
+    if (!this.guardCodexRuntime()) return;
+    const remembered = this.uiSendRetryPayloads.get(messageId);
+    if (remembered && remembered.threadId !== thread.id) return;
+    const pendingAttachments = (message.attachments || []).some((attachment) => attachment["pending"] === true);
+    if (pendingAttachments && !remembered?.pendingFiles.length) {
+      this.failOptimisticUserMessage(thread.id, messageId, describeUiSendFailure(new Error("attachment_retry_data_unavailable")));
+      return;
+    }
+    const mode = remembered?.mode || (String(message["retryMode"] || "") === "interrupt" ? "interrupt" : "send");
+    const uncertainClientFailure = message["localOnly"] === true || String(message["observedVia"] || "") === "ui_send_failed";
+    const clientMessageId = uncertainClientFailure
+      ? remembered?.clientMessageId || String(message["clientMessageId"] || `webui-${messageId}`)
+      : `webui-retry-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    const replyDelivery = remembered?.replyDelivery || this.uiReplyDeliveryMode(thread);
+    this.error = "";
+    this.resendingMessageIds = { ...this.resendingMessageIds, [messageId]: true };
+    this.sending = mode === "send";
+    this.sendingNow = mode === "interrupt";
+    this.updateOptimisticUserMessage(thread.id, messageId, {
+      state: "queued",
+      deliveryState: mode === "interrupt" ? "interrupting" : "sending",
+      failureSummary: "",
+      failureDetail: "",
+      failureTechnical: "",
+      error: "",
+      retryable: true,
+      clientMessageId,
+    });
+    try {
+      let attachments = remembered?.attachments || (message.attachments || []).filter((attachment) => attachment["pending"] !== true);
+      if (!attachments.length && remembered?.pendingFiles.length) {
+        attachments = await uploadPendingFiles(this.api, thread.id, remembered.pendingFiles, (id, patch) => {
+          this.pendingFiles = updatePendingFileUploadState(this.pendingFiles, id, patch);
+          this.renderNow();
+        });
+      }
+      const text = remembered
+        ? messageWithAttachmentPaths(remembered.originalText, attachments)
+        : String(message.text || "").trim();
+      this.updateOptimisticUserMessage(thread.id, messageId, { text, attachments });
+      this.uiSendRetryPayloads.set(messageId, {
+        threadId: thread.id,
+        originalText: remembered?.originalText || text,
+        pendingFiles: remembered?.pendingFiles || [],
+        attachments,
+        mode,
+        replyDelivery,
+        clientMessageId,
+      });
+      this.markThreadActive(thread.id, 120_000);
+      const response = await firstValueFrom(mode === "interrupt"
+        ? this.api.interruptThread(thread.id, text, attachments, { replyDelivery, clientMessageId })
+        : this.api.sendThreadInput(thread.id, text, attachments, { replyDelivery, clientMessageId }));
+      this.replaceOptimisticUserMessage(thread.id, messageId, response.message);
+      if (remembered && this.selectedThread()?.id === thread.id && this.draft.trim() === remembered.originalText
+        && this.pendingFiles.length === remembered.pendingFiles.length
+        && this.pendingFiles.every((file, index) => file.id === remembered.pendingFiles[index]?.id)) {
+        this.clearSubmittedComposer(thread);
+      }
+      this.uiSendRetryPayloads.delete(messageId);
+      this.queueMessagePaneScrollToBottom();
+      await this.refresh(false);
+    } catch (error) {
+      this.failOptimisticUserMessage(thread.id, messageId, describeUiSendFailure(error));
+    } finally {
+      const remaining = { ...this.resendingMessageIds };
+      delete remaining[messageId];
+      this.resendingMessageIds = remaining;
+      this.sending = false;
       this.sendingNow = false;
     }
   }
@@ -1364,9 +1504,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       this.queueMessagePaneScrollToBottom();
       await this.refresh(false);
     } catch (error) {
-      const detail = this.errorText(error);
-      this.error = detail;
-      this.failOptimisticUserMessage(thread.id, optimisticId, detail);
+      this.failOptimisticUserMessage(thread.id, optimisticId, describeUiSendFailure(error));
     } finally {
       this.implementingPlan = false;
     }
@@ -2456,7 +2594,13 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   removePendingFile(id: string): void {
+    const pending = this.pendingFiles.find((file) => file.id === id);
     this.pendingFiles = removePendingFile(this.pendingFiles, id);
+    const thread = this.selectedThread();
+    if (thread) persistInboundUploadDraft(thread.id, this.pendingFiles);
+    if (pending?.uploadSessionId) {
+      void firstValueFrom(this.api.cancelInboundAttachmentUpload(pending.uploadSessionId)).catch(() => undefined);
+    }
   }
 
   startSidebarResize(event: PointerEvent): void {
@@ -2556,6 +2700,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.draft = "";
     this.clearThreadTextField(thread, "draft");
     this.pendingFiles = [];
+    clearInboundUploadDraft(thread.id);
   }
 
   private updateOptimisticUserMessage(threadId: string, optimisticId: string, patch: Partial<ThreadMessage>): void {
@@ -2572,10 +2717,16 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     }));
   }
 
-  private failOptimisticUserMessage(threadId: string, optimisticId: string, detail: string): void {
+  private updateUiSendRetryPayload(optimisticId: string, attachments: Array<Record<string, unknown>>): void {
+    const current = this.uiSendRetryPayloads.get(optimisticId);
+    if (!current) return;
+    this.uiSendRetryPayloads.set(optimisticId, { ...current, attachments });
+  }
+
+  private failOptimisticUserMessage(threadId: string, optimisticId: string, failure: UiSendFailureDescription): void {
     this.messageCache.update((cache) => ({
       ...cache,
-      [threadId]: failOptimisticThreadMessage(cache[threadId] || [], optimisticId, detail),
+      [threadId]: failOptimisticThreadMessage(cache[threadId] || [], optimisticId, failure),
     }));
   }
 
@@ -4310,7 +4461,8 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   outboxJobActions(job: WhatsAppOutboxJob): string[] {
     const state = String(job.state || "pending").toLowerCase();
     if (state === "delivered") return ["replay"];
-    if (["suppressed", "dead_letter", "skipped", "skipped_policy", "cancelled", "delivery_uncertain"].includes(state)) return ["retry", "replay", "mark-delivered"];
+    if (state === "delivery_uncertain") return ["mark-delivered"];
+    if (["suppressed", "dead_letter", "skipped", "skipped_policy", "cancelled"].includes(state)) return ["retry", "replay", "mark-delivered"];
     if (state === "failed_retryable") return ["retry", "suppress", "mark-delivered", "dead-letter"];
     if (["pending", "claimed", "sent_to_broker"].includes(state)) return ["suppress", "mark-delivered", "dead-letter"];
     return ["retry", "suppress", "mark-delivered"];
@@ -4910,13 +5062,32 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     }
   }
 
+  private defaultInstanceRootToLauncher(): boolean {
+    if (this.locationPathParts().length || this.onboardingActive || this.pairingRequired) return false;
+    if (!this.appBasePath().startsWith("/instance/") && !this.instanceContext?.canonicalPath) return false;
+    this.selectedId = "";
+    this.activePanel = "instanceApps";
+    const target = this.instancePath("/launcher");
+    if (/^https?:\/\//i.test(target)) {
+      return navigateCanonicalThreadTarget(target, {
+        currentUrl: globalThis.location?.href,
+        mode: "replace",
+        history: globalThis.history,
+        location: globalThis.location,
+      }).crossOrigin;
+    }
+    const current = `${globalThis.location?.pathname || ""}${globalThis.location?.search || ""}${globalThis.location?.hash || ""}`;
+    if (current !== target) globalThis.history?.replaceState({}, "", target);
+    return false;
+  }
+
   private canonicalizeInstanceRoute(): boolean {
     if (!this.instanceContext?.canonicalPath || this.appBasePath().startsWith("/instance/")) return false;
     const parts = this.locationPathParts();
     if (this.sharedAppParts(parts) || parts[0] === "apps" || this.pairingPathParts(parts) || parts.includes("thread")) return false;
     if (this.connectorLoginProvider(parts)) return false;
     let suffix = "";
-    if (!parts.length) suffix = "";
+    if (!parts.length) suffix = "launcher";
     else if (parts[0] === "launcher" || (parts[0] === "ng" && parts[1] === "launcher")) suffix = "launcher";
     else if (parts[0] === "files" || (parts[0] === "ng" && parts[1] === "files")) suffix = "files";
     else if (["settings", "ops", "mailboxes"].includes(parts[0]) || (parts[0] === "connectors" && !parts[1])) suffix = "settings";
@@ -5168,7 +5339,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   private pathForPanel(id: string, panel: Panel): string {
     if (panel === "files") return this.instancePath("/files");
-    if (panel === "instanceApps") return this.instancePath("/launcher");
+    if (panel === "instanceApps") return String(this.setupStatus?.urls?.launcherUrl || "").trim() || this.instancePath("/launcher");
     if (panel === "instanceSettings") return this.instancePath("/settings");
     if (panel === "instanceTimers") return this.instancePath("/timers");
     if (panel === "instanceDesktops") return this.instancePath("/desktops");
@@ -5417,7 +5588,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       return;
     }
     if (this.publicAppsActive()) {
-      globalThis.document.title = "Applications · Orkestr";
+      globalThis.document.title = "Launcher · Orkestr";
       return;
     }
     if (this.connectorLoginActive()) {

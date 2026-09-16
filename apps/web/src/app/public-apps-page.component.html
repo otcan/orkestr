@@ -1,16 +1,24 @@
 <main class="public-apps-shell">
   <header class="public-apps-header">
-    <a class="public-apps-brand" href="/apps" aria-label="Orkestr applications">Orkestr</a>
-    <span>Applications</span>
+    <a class="public-apps-brand" href="/apps" aria-label="Orkestr Launcher home">
+      <span class="brand-mark" aria-hidden="true">O</span>
+      <span><strong>Orkestr</strong><small>Launcher</small></span>
+    </a>
+    @if (appUrl) {
+      <a class="header-action" [href]="appUrl">Open Orkestr</a>
+    }
   </header>
 
   <section class="public-apps-content" aria-live="polite">
     @if (busy) {
-      <p class="public-apps-muted">Loading your applications…</p>
+      <div class="launcher-loading" role="status">
+        <span></span><span></span><span></span>
+        <p>Loading your launcher…</p>
+      </div>
     } @else if (error) {
-      <h1>Application unavailable</h1>
+      <h1>Launcher unavailable</h1>
       <p class="public-apps-muted">{{ error }}</p>
-      <a class="button secondary" href="/apps">Back to applications</a>
+      <a class="button secondary" href="/apps">Try again</a>
     } @else if (selected; as app) {
       <p class="public-apps-eyebrow">{{ app.type }}</p>
       <h1>{{ app.title }}</h1>
@@ -18,25 +26,73 @@
         <p class="public-apps-muted">{{ app.description }}</p>
       }
       <p class="public-apps-note">You are authorized as {{ app.role }}. This stable entry is bound to your account; workspace routing stays server-side.</p>
-      <a class="button secondary" href="/apps">All applications</a>
+      <a class="button secondary" href="/apps">Back to launcher</a>
     } @else {
-      <p class="public-apps-eyebrow">Account workspace</p>
-      <h1>Your applications</h1>
-      <p class="public-apps-muted">Only applications granted to your account appear here.</p>
-      <div class="public-apps-grid">
-        @for (app of apps; track app.id) {
-          <article class="public-app-card">
-            <p class="public-apps-eyebrow">{{ app.type }}</p>
-            <h2>{{ app.title }}</h2>
-            @if (app.description) {
-              <p>{{ app.description }}</p>
+      <section class="launcher-hero">
+        <p class="public-apps-eyebrow">Your workspace</p>
+        <h1>Where do you want to work?</h1>
+        <p class="public-apps-muted">Open any Orkestr workspace or connected application from one place.</p>
+      </section>
+
+      @if (workspaces.length) {
+        <section class="launcher-section" aria-labelledby="workspaces-title">
+          <div class="section-heading">
+            <div>
+              <p class="public-apps-eyebrow">Orkestr</p>
+              <h2 id="workspaces-title">Workspaces</h2>
+            </div>
+            <span>{{ workspaces.length }}</span>
+          </div>
+          <div class="workspace-grid">
+            @for (workspace of workspaces; track workspace.id) {
+              <button class="workspace-card" type="button" (click)="openWorkspace(workspace)" [disabled]="!!openingWorkspaceId">
+                <span class="card-icon workspace-icon" aria-hidden="true">{{ workspaceInitial(workspace) }}</span>
+                <span class="card-copy">
+                  <strong>{{ workspace.displayName }}</strong>
+                  <small>{{ workspace.current ? "Primary workspace" : "Orkestr workspace" }}</small>
+                </span>
+                <span class="open-arrow" aria-hidden="true">{{ openingWorkspaceId === workspace.id ? "…" : "→" }}</span>
+              </button>
             }
-            <button type="button" (click)="open(app)">Open</button>
-          </article>
-        } @empty {
-          <p class="public-apps-muted">No applications are currently assigned to this account.</p>
-        }
-      </div>
+          </div>
+          @if (workspaceError) {
+            <p class="workspace-error" role="alert">{{ workspaceError }}</p>
+          }
+        </section>
+      }
+
+      <section class="launcher-section" aria-labelledby="applications-title">
+        <div class="section-heading">
+          <div>
+            <p class="public-apps-eyebrow">Connected tools</p>
+            <h2 id="applications-title">Applications</h2>
+          </div>
+          <span>{{ apps.length }}</span>
+        </div>
+        <div class="public-apps-grid">
+          @for (app of apps; track app.id) {
+            <a class="public-app-card" [href]="app.url" [target]="appTarget(app)" rel="noreferrer">
+              <span class="card-icon" aria-hidden="true">{{ appInitial(app) }}</span>
+              <span class="card-copy">
+                <small>{{ app.category || app.type || "Application" }}</small>
+                <strong>{{ app.label }}</strong>
+                @if (app.description) {
+                  <span>{{ app.description }}</span>
+                }
+              </span>
+              <span class="app-card-footer">
+                <span class="health" [class.warning]="app.health?.status === 'error'">{{ healthLabel(app) }}</span>
+                <span class="open-arrow" aria-hidden="true">↗</span>
+              </span>
+            </a>
+          } @empty {
+            <div class="empty-state">
+              <strong>No applications yet</strong>
+              <p class="public-apps-muted">Applications assigned to your account will appear here.</p>
+            </div>
+          }
+        </div>
+      </section>
     }
   </section>
 </main>

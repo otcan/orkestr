@@ -5,6 +5,7 @@ import path from "node:path";
 import { URL } from "node:url";
 import {
   addLocalWhatsAppGroupParticipants,
+  completeLocalWhatsAppGroupSetup,
   createLocalWhatsAppChat,
   demoteLocalWhatsAppGroupParticipants,
   generateLocalWhatsAppChatPicture,
@@ -26,6 +27,7 @@ import {
   stopLocalWhatsAppBridge,
   stopLocalWhatsAppTyping,
 } from "../packages/connectors/src/whatsapp-local-bridge.js";
+import { publicWhatsAppGroupCreateFailure } from "../packages/connectors/src/whatsapp-group-create-evidence.js";
 import {
   publicAccessPolicy,
   requireWaServicePolicy,
@@ -191,6 +193,27 @@ function publicAccount(account = {}) {
     updatedAt: clean(account.updatedAt),
     runtimeAccountId: clean(account.runtimeAccountId || account.accountId || account.id),
     legacyRoleAliases: Array.isArray(account.legacyRoleAliases) ? account.legacyRoleAliases.map(clean).filter(Boolean) : [],
+    capabilities: account.capabilities && typeof account.capabilities === "object" && !Array.isArray(account.capabilities)
+      ? {
+          auth: clean(account.capabilities.auth),
+          read: clean(account.capabilities.read),
+          send: clean(account.capabilities.send),
+          inbound: clean(account.capabilities.inbound),
+          groupCreate: clean(account.capabilities.groupCreate),
+        }
+      : {},
+    provenance: account.provenance && typeof account.provenance === "object" && !Array.isArray(account.provenance)
+      ? {
+          accountId: clean(account.provenance.accountId),
+          ownership: clean(account.provenance.ownership),
+          source: clean(account.provenance.source),
+          observedAt: clean(account.provenance.observedAt),
+          runtimeGeneration: Number(account.provenance.runtimeGeneration || 0) || null,
+          workerId: clean(account.provenance.workerId),
+          browserId: clean(account.provenance.browserId),
+          pageId: clean(account.provenance.pageId),
+        }
+      : null,
   };
 }
 
@@ -212,6 +235,25 @@ function publicHealth(status = {}, env = process.env) {
     activeTypingCount: Number.isFinite(Number(status.activeTypingCount)) ? Number(status.activeTypingCount) : 0,
     activeTyping: Array.isArray(status.activeTyping) ? status.activeTyping : [],
     updatedAt: new Date().toISOString(),
+  };
+}
+
+function publicDiagnosticHealth(status = {}, env = process.env) {
+  const health = publicHealth(status, env);
+  return {
+    ok: health.ok,
+    mode: health.mode,
+    state: health.state,
+    observedAt: new Date().toISOString(),
+    readOnly: true,
+    accounts: (health.accounts || []).map((account) => ({
+      id: clean(account.id || account.accountId),
+      label: clean(account.label),
+      state: clean(account.state),
+      capabilities: account.capabilities && typeof account.capabilities === "object" ? account.capabilities : {},
+      provenance: account.provenance && typeof account.provenance === "object" ? account.provenance : null,
+      error: clean(account.error).replace(/[^a-z0-9_:-]/gi, "_").slice(0, 120),
+    })),
   };
 }
 
@@ -238,6 +280,7 @@ function routeMatch(pathname, pattern) {
 
 const defaultBridge = {
   addLocalWhatsAppGroupParticipants,
+  completeLocalWhatsAppGroupSetup,
   createLocalWhatsAppChat,
   demoteLocalWhatsAppGroupParticipants,
   generateLocalWhatsAppChatPicture,
@@ -267,7 +310,12 @@ async function handleRequest(req, res, env = process.env, bridge = defaultBridge
   }
   if (method === "GET" && (url.pathname === "/diagnostics/health" || url.pathname === "/api/diagnostics/health")) {
     requireAuth(req, env);
-    const health = publicHealth(await bridge.getLocalWhatsAppBridgeStatus(env, { probeChatOps: true, read: true, force: url.searchParams.get("force") === "1" }), env);
+    const health = publicDiagnosticHealth(await bridge.getLocalWhatsAppBridgeStatus(env, {
+      probeChatOps: true,
+      read: true,
+      force: url.searchParams.get("force") === "1",
+      readOnly: url.searchParams.get("readOnly") !== "0",
+    }), env);
     return json(res, healthStatusCode(health), health);
   }
   if (method === "GET" && (url.pathname === "/accounts" || url.pathname === "/api/dashboard")) {
@@ -493,6 +541,26 @@ async function handleRequest(req, res, env = process.env, bridge = defaultBridge
       : await bridge.stopLocalWhatsAppTyping({ accountId, chatId, env }));
   }
 
+  params = routeMatch(url.pathname, "/accounts/:accountId/chats/:chatId/setup");
+  if (method === "POST" && params) {
+    requireAuth(req, env);
+    const body = await readJsonBody(req);
+    const adminParticipantIds = Array.isArray(body.adminParticipantIds) ? body.adminParticipantIds.map(clean).filter(Boolean) : [];
+    requireServicePolicy(req, url, env, body, {
+      accounts: [params.accountId],
+      recipients: adminParticipantIds,
+      recipientScope: "createChat",
+    });
+    return json(res, 200, await bridge.completeLocalWhatsAppGroupSetup({
+      accountId: params.accountId,
+      chatId: params.chatId,
+      title: clean(body.name || body.title),
+      adminParticipantIds,
+      generatePicture: body.generatePicture !== false,
+      env,
+    }));
+  }
+
   if (method === "POST" && url.pathname === "/chats") {
     requireAuth(req, env);
     const body = await readJsonBody(req);
@@ -510,6 +578,9 @@ async function handleRequest(req, res, env = process.env, bridge = defaultBridge
       adminParticipantIds: Array.isArray(body.adminParticipantIds) ? body.adminParticipantIds.map(clean).filter(Boolean) : [],
       promoteParticipantsAsAdmins: body.promoteParticipantsAsAdmins === true,
       generatePicture: body.generatePicture !== false,
+      deferSetup: body.deferSetup === true,
+      operationId: clean(body.operationId),
+      correlationId: clean(body.correlationId),
       env,
     }));
   }
@@ -528,6 +599,7 @@ export function createOrkestrWaService({ env = process.env, bridge = defaultBrid
         error: clean(error?.message || String(error)) || "wa_service_error",
         auditEvent: error?.auditEvent || undefined,
         partialDelivery: error?.partialDelivery || undefined,
+        groupCreateFailure: publicWhatsAppGroupCreateFailure(error) || undefined,
       });
     }
   });

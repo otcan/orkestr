@@ -6863,10 +6863,16 @@ test("local whatsapp recent recovery scans managed tenant route chats", async ()
     },
   };
   const calls = [];
+  const probes = [];
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (url, options) => {
     if (String(url).includes("/api/health")) return response({ ok: true }, true, 200);
-    calls.push({ url: String(url), options, body: JSON.parse(options.body) });
+    const body = JSON.parse(options.body);
+    if (options.method === "POST" && Object.keys(body).length === 0) {
+      probes.push({ url: String(url), body });
+      return response({ error: "whatsapp_chat_id_required" }, false, 400);
+    }
+    calls.push({ url: String(url), options, body });
     return response({ ok: true, threadId: "firat-jobs", messageId: "tenant-message" }, true, 202);
   };
 
@@ -6885,7 +6891,9 @@ test("local whatsapp recent recovery scans managed tenant route chats", async ()
     assert.equal(result.recovered.length, 1);
     assert.equal(result.recovered[0].chatId, chatId);
     assert.equal(result.recovered[0].recoveryMode, "recent");
-    assert.equal(calls.length, 1);
+    assert.equal(probes.length, 1);
+    assert.equal(probes[0].url, "https://tenant-recovery.example.test/api/connectors/whatsapp/inbound");
+    assert.equal(calls.length, 1, JSON.stringify(calls.map((call) => call.url)));
     assert.equal(calls[0].url, "https://tenant-recovery.example.test/api/connectors/whatsapp/inbound");
     assert.equal(calls[0].body.chatId, chatId);
     assert.equal(calls[0].body.text, "missed tenant hello");
@@ -8900,7 +8908,7 @@ test("local whatsapp send skips confirmation when chat ops are degraded", async 
   }
 });
 
-test("local whatsapp chat creation recovers unstarted Web comms before retrying later", async () => {
+test("local whatsapp chat creation preserves an uncertain Web comms failure without recovery", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-chat-comms-recover-"));
   const env = {
     ORKESTR_HOME: home,
@@ -8938,21 +8946,20 @@ test("local whatsapp chat creation recovers unstarted Web comms before retrying 
         env,
       }),
       (error) => {
-        assert.equal(error.message, "whatsapp_local_bridge_not_ready_recovered_after_chat_create_runtime_error");
-        assert.equal(error.statusCode, 503);
-        assert.equal(error.cause, commsError);
+        assert.equal(error.message, "whatsapp_group_create_outcome_unknown");
+        assert.equal(error.statusCode, 502);
+        assert.equal(error.groupCreateFailure.externalOutcome, "outcome_unknown");
+        assert.equal(error.groupCreateFailure.nextAction, "reconcile_operation");
         return true;
       },
     );
 
     assert.deepEqual(calls, [
       ["createGroup", "otcanClaw-watcher", ["owner@c.us"], { announce: false }],
-      ["restart", "responder", true, "chat_create_runtime_error"],
-      ["start", "responder", true, false],
     ]);
     const events = await listEvents(env);
-    assert.ok(events.find((event) => event.type === "whatsapp_local_chat_create_runtime_recovery_start"));
-    assert.ok(events.find((event) => event.type === "whatsapp_local_chat_create_runtime_recovery_started"));
+    assert.equal(events.some((event) => event.type === "whatsapp_local_chat_create_runtime_recovery_start"), false);
+    assert.equal(events.some((event) => event.type === "whatsapp_local_chat_create_runtime_recovery_started"), false);
   } finally {
     await resetLocalWhatsAppBridgeForTest(env);
   }

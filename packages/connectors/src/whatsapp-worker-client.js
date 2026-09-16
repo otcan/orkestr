@@ -119,9 +119,16 @@ export function requestWhatsAppWorker(pathname = "/health", { method = "GET", bo
   });
 }
 
-export function whatsappWorkerHealth(env = process.env) {
+export function whatsappWorkerHealth(env = process.env, options = {}) {
   const config = whatsappWorkerConfig(env);
-  return requestWhatsAppWorker("/health", { timeoutMs: config.healthTimeoutMs }, env);
+  const diagnostic = options.force === true || options.readOnly === true || options.probeChatOps === true || options.read === true;
+  const params = new URLSearchParams();
+  if (options.force === true) params.set("force", "1");
+  if (options.readOnly === true) params.set("readOnly", "1");
+  const pathname = diagnostic
+    ? `/diagnostics/health${params.size ? `?${params.toString()}` : ""}`
+    : "/health";
+  return requestWhatsAppWorker(pathname, { timeoutMs: config.healthTimeoutMs }, env);
 }
 
 export function whatsappWorkerAuth(accountId = "", action = "status", env = process.env) {

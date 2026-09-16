@@ -8,9 +8,11 @@ operators, proxies, and corporate scanners that do not hold a recipient private
 key.
 
 This boundary applies to outbound published attachments and exports. It does
-not encrypt chat text, database rows, secrets, inbound working uploads,
-worktrees, repositories, or mounted source files. Whole-platform encryption is
-a separate transport, database, and secret-management concern.
+not encrypt chat text, database rows, secrets, worktrees, repositories, or
+mounted source files. Browser-encrypted inbound uploads use a separate,
+scanner-gated tenant-key capability documented in
+[inbound attachment uploads](inbound-attachment-uploads.md). Whole-platform
+encryption is a separate transport, database, and secret-management concern.
 
 ## Key enrollment
 

@@ -5,6 +5,12 @@ const MAX_EXCERPT_LIMIT = 512;
 const MAX_STRUCTURED_KEYS = 24;
 const MAX_STRUCTURED_ITEMS = 10;
 const sensitiveKeyPattern = /(?:authorization|cookie|credential|password|secret|token|api[_-]?key|payload|attachments?|phone|recipient|chat(?:id)?|sender|from|to|text|body)/i;
+const transientAvailabilityFailureCodes = new Set([
+  "whatsapp_local_bridge_not_ready",
+  "whatsapp_local_bridge_stale_runtime",
+  "whatsapp_worker_timeout",
+  "whatsapp_worker_unavailable",
+]);
 
 function clean(value = "") {
   return String(value || "").trim();
@@ -96,6 +102,7 @@ export function classifyWhatsAppBridgeFailure({ status = 0, payload = {}, excerp
       (typeof payload?.error === "string" ? payload.error : "") ||
       (typeof payload?.reason === "string" ? payload.reason : ""),
   );
+  const normalizedCode = code.toLowerCase();
   if (Number(status) === 401) {
     return { failureCode: code || "whatsapp_bridge_authentication_failed", classification: "authentication", retryable: false };
   }
@@ -104,6 +111,16 @@ export function classifyWhatsAppBridgeFailure({ status = 0, payload = {}, excerp
   }
   if (Number(status) === 404) {
     return { failureCode: "whatsapp_bridge_route_not_found", classification: "route_configuration", retryable: false };
+  }
+  // The local bridge intentionally uses HTTP 400 while its account runtime is
+  // temporarily unavailable. Treat the trusted machine-readable availability
+  // code as authoritative so a disconnect enters the durable retry path instead
+  // of permanently dead-lettering a reply as a malformed request.
+  if (
+    transientAvailabilityFailureCodes.has(normalizedCode) ||
+    normalizedCode.startsWith("whatsapp_local_bridge_not_ready_recovered_after_")
+  ) {
+    return { failureCode: code, classification: "availability", retryable: true };
   }
   if ([408, 425, 429].includes(Number(status))) {
     return { failureCode: code || `whatsapp_bridge_transient_${status}`, classification: "transient", retryable: true };

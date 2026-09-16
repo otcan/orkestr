@@ -526,6 +526,7 @@ export interface SetupStatus {
     appUrl?: string;
     authUrl?: string;
     connectUrl?: string;
+    launcherUrl?: string;
     sameOriginAuth?: boolean;
   };
   config?: Record<string, Record<string, string>>;
@@ -1799,6 +1800,37 @@ export interface ThreadUploadResponse {
   attachments: Array<Record<string, unknown>>;
 }
 
+export interface InboundAttachmentUploadStatus {
+  enabled: boolean;
+  required: boolean;
+  ready: boolean;
+  reason?: string;
+  limits?: { maxFileBytes?: number; maxFiles?: number; sessionTtlMs?: number };
+}
+
+export interface InboundAttachmentUploadSession {
+  id: string;
+  state: "receiving" | "quarantined" | "validating" | "scanning" | "ready" | "rejected" | "retryable" | "cancelled" | "expired" | string;
+  keyId?: string;
+  keyVersion?: number;
+  recipient?: string;
+  descriptor?: {
+    version: number;
+    sessionId: string;
+    keyId: string;
+    keyVersion: number;
+    recipient: string;
+    purpose: string;
+    expiresAt: string;
+    maxPlaintextBytes: number;
+    signature: string;
+  } | null;
+  expiresAt?: string;
+  retryable?: boolean;
+  error?: string;
+  attachment?: Record<string, unknown> | null;
+}
+
 export interface ThreadInputResponse {
   ok?: boolean;
   message?: ThreadMessage;
@@ -2166,6 +2198,23 @@ export interface PublicAppCard {
 
 export interface PublicAppsResponse {
   apps: PublicAppCard[];
+}
+
+export interface LauncherDirectoryWorkspace {
+  id: string;
+  displayName: string;
+  url: string;
+  publicRef?: string;
+  current?: boolean;
+}
+
+export interface LauncherDirectoryResponse {
+  ok: boolean;
+  appUrl: string;
+  workspaces: LauncherDirectoryWorkspace[];
+  apps: LauncherApp[];
+  counts?: Record<string, number>;
+  generatedAt?: string;
 }
 
 export interface AdminCreditUsageResponse {
@@ -3065,10 +3114,11 @@ export class ApiService {
     id: string,
     text: string,
     attachments: Array<Record<string, unknown>> = [],
-    options: { replyDelivery?: "ui_only" | "bound_whatsapp" } = {},
+    options: { replyDelivery?: "ui_only" | "bound_whatsapp"; clientMessageId?: string } = {},
   ): Observable<ThreadInputResponse> {
     const body: Record<string, unknown> = { text, replyDelivery: options.replyDelivery || "ui_only" };
     if (attachments.length) body["attachments"] = attachments;
+    if (options.clientMessageId) body["clientMessageId"] = options.clientMessageId;
     return this.http.post<ThreadInputResponse>(this.api(`/threads/${encodeURIComponent(id)}/ui-input`), body);
   }
 
@@ -3100,10 +3150,11 @@ export class ApiService {
     id: string,
     text = "",
     attachments: Array<Record<string, unknown>> = [],
-    options: { replyDelivery?: "ui_only" | "bound_whatsapp" } = {},
+    options: { replyDelivery?: "ui_only" | "bound_whatsapp"; clientMessageId?: string } = {},
   ): Observable<ThreadInputResponse> {
     const body: Record<string, unknown> = { text, replyDelivery: options.replyDelivery || "ui_only" };
     if (attachments.length) body["attachments"] = attachments;
+    if (options.clientMessageId) body["clientMessageId"] = options.clientMessageId;
     return this.http.post<ThreadInputResponse>(this.api(`/threads/${encodeURIComponent(id)}/ui-interrupt`), body);
   }
 
@@ -3195,6 +3246,45 @@ export class ApiService {
       body.append("files", file, file.name);
     }
     return this.http.post<ThreadUploadResponse>(this.api(`/threads/${encodeURIComponent(id)}/uploads`), body);
+  }
+
+  inboundAttachmentUploadStatus(threadId: string): Observable<InboundAttachmentUploadStatus> {
+    return this.http.get<InboundAttachmentUploadStatus>(this.api(`/attachment-encryption/inbound/status?threadId=${encodeURIComponent(threadId)}`));
+  }
+
+  createInboundAttachmentUploadSessions(threadId: string, files: Array<{ idempotencyKey: string; plaintextSize: number }>): Observable<{ sessions: InboundAttachmentUploadSession[] }> {
+    return this.http.post<{ sessions: InboundAttachmentUploadSession[] }>(this.api("/attachment-encryption/inbound/sessions"), { threadId, files });
+  }
+
+  inboundAttachmentUploadSession(sessionId: string): Observable<{ session: InboundAttachmentUploadSession }> {
+    return this.http.get<{ session: InboundAttachmentUploadSession }>(this.api(`/attachment-encryption/inbound/sessions/${encodeURIComponent(sessionId)}`));
+  }
+
+  cancelInboundAttachmentUpload(sessionId: string): Observable<{ session: InboundAttachmentUploadSession }> {
+    return this.http.post<{ session: InboundAttachmentUploadSession }>(
+      this.api(`/attachment-encryption/inbound/sessions/${encodeURIComponent(sessionId)}/cancel`),
+      {},
+    );
+  }
+
+  async uploadInboundAttachmentCiphertext(sessionId: string, ciphertext: ReadableStream<Uint8Array>): Promise<InboundAttachmentUploadSession> {
+    const response = await fetch(this.api(`/attachment-encryption/inbound/sessions/${encodeURIComponent(sessionId)}/ciphertext`), {
+      method: "PUT",
+      credentials: "same-origin",
+      headers: { "content-type": "application/age", accept: "application/json" },
+      body: ciphertext as unknown as BodyInit,
+      duplex: "half",
+    } as RequestInit & { duplex: "half" });
+    const payload = await response.json().catch(() => ({})) as { error?: string; session?: InboundAttachmentUploadSession };
+    if (!response.ok || !payload.session) throw new Error(String(payload.error || `inbound_upload_failed_${response.status}`));
+    return payload.session;
+  }
+
+  processInboundAttachmentUpload(sessionId: string): Observable<{ session: InboundAttachmentUploadSession }> {
+    return this.http.post<{ session: InboundAttachmentUploadSession }>(
+      this.api(`/attachment-encryption/inbound/sessions/${encodeURIComponent(sessionId)}/process`),
+      {},
+    );
   }
 
   browserSessions(threadId = "", breakGlassReason = "", ownerInventory = false): Observable<{ sessions: BrowserSession[]; browsers?: BrowserSession[]; source?: string; error?: string; message?: string }> {
@@ -3312,6 +3402,10 @@ export class ApiService {
 
   myPublicApps(): Observable<PublicAppsResponse> {
     return this.http.get<PublicAppsResponse>(this.api("/me/apps"));
+  }
+
+  myLauncher(): Observable<LauncherDirectoryResponse> {
+    return this.http.get<LauncherDirectoryResponse>(this.api("/me/launcher"));
   }
 
   publicApp(slug: string): Observable<{ ok: boolean; app: PublicAppCard }> {

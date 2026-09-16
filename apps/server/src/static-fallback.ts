@@ -10,6 +10,7 @@ import { publicPairingUrl, publicSiteAllowedForHost, publicSitePath } from "./pu
 import { maybeServePublicSite } from "./public-site-static.js";
 
 const publicDir = path.resolve(process.cwd(), "dist/web/browser");
+const launcherDir = path.resolve(process.cwd(), "dist/launcher");
 const publicAssetDir = path.resolve(process.cwd(), "docs/assets");
 
 const mimeTypes = new Map<string, string>([
@@ -72,7 +73,12 @@ export function registerStaticFallback(app: INestApplication): void {
         .header("location", privatePublicRedirect)
         .send("Redirecting to Orkestr authentication.");
     }
-    return serveStaticPath(url || "/", response, String(request.orkestrCanonicalPrefix || ""));
+    return serveStaticPath(
+      url || "/",
+      response,
+      String(request.orkestrCanonicalPrefix || ""),
+      request.orkestrLauncherBoundary === true,
+    );
   });
 }
 
@@ -433,13 +439,14 @@ function rewriteStaticBase(body: Buffer, prefixPath = ""): Buffer | string {
   return body.toString("utf8").replace(/<base\s+href=(["'])\/\1\s*\/?>/i, `<base href="${base}" />`);
 }
 
-async function serveStaticPath(requestUrl: string, response: any, prefixPath = "") {
+async function serveStaticPath(requestUrl: string, response: any, prefixPath = "", launcher = false) {
+  const staticDir = launcher ? launcherDir : publicDir;
   const url = new URL(requestUrl, "http://localhost");
   const requested = decodeURIComponent(url.pathname === "/" ? "/index.html" : url.pathname);
   const assetPath = requested === "/favicon.ico" ? "/favicon.svg" : requested;
   const safePath = path.normalize(assetPath).replace(/^(\.\.[/\\])+/, "");
-  const filePath = path.join(publicDir, safePath);
-  const target = filePath.startsWith(publicDir) ? filePath : path.join(publicDir, "index.html");
+  const filePath = path.join(staticDir, safePath);
+  const target = filePath.startsWith(staticDir) ? filePath : path.join(staticDir, "index.html");
   const ext = path.extname(target);
 
   try {
@@ -451,7 +458,7 @@ async function serveStaticPath(requestUrl: string, response: any, prefixPath = "
       .send(ext === ".html" ? rewriteStaticBase(body, prefixPath) : body);
   } catch {
     try {
-      const body = await fs.readFile(path.join(publicDir, "index.html"));
+      const body = await fs.readFile(path.join(staticDir, "index.html"));
       return response
         .status(200)
         .header("cache-control", "no-store")
@@ -462,7 +469,9 @@ async function serveStaticPath(requestUrl: string, response: any, prefixPath = "
         .status(503)
         .header("cache-control", "no-store")
         .type("text/html; charset=utf-8")
-        .send("<!doctype html><title>Orkestr web bundle missing</title><h1>Orkestr web bundle missing</h1><p>Run <code>npm run web:verify-static</code> to check the served assets.</p>");
+        .send(launcher
+          ? "<!doctype html><title>Orkestr launcher missing</title><h1>Orkestr launcher missing</h1><p>Run <code>npm run launcher:build</code> to build the standalone launcher.</p>"
+          : "<!doctype html><title>Orkestr web bundle missing</title><h1>Orkestr web bundle missing</h1><p>Run <code>npm run web:verify-static</code> to check the served assets.</p>");
     }
   }
 }

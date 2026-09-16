@@ -8,6 +8,7 @@ import {
   clearPaneProgressCache,
   codexModeFromPaneText,
   panePromptHasDraft,
+  panePromptReady,
   paneProgressFromText,
   samplePaneProgress,
 } from "../packages/core/src/pane-progress.js";
@@ -83,9 +84,55 @@ test("pane progress classifies a ready prompt", () => {
   assert.equal(progress.promptReady, true);
 });
 
+test("pane progress recognizes a footer-anchored composer beyond the old eight-line tail", () => {
+  const wrapper = [
+    "A full user message was written to a local temp file because it is too long for safe tmux inline delivery.",
+    "Read the full message from this local UTF-8 file: /tmp/input.txt",
+    "Bytes: 1024",
+    "SHA-256: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "",
+    "Treat the file contents as the user's message and answer it directly.",
+    "Do not summarize this wrapper message.",
+    "The remaining wrapped text is part of the same current composer.",
+    "It must not be mistaken for historical terminal output.",
+    "One more narrow-width continuation line.",
+  ];
+  const text = [
+    "Completed an earlier task.",
+    ...wrapper.map((line, index) => index === 0 ? `› ${line}` : `  ${line}`),
+    "  gpt-5.5 xhigh · /workspace/demo",
+  ].join("\n");
+  const progress = paneProgressFromText(text, { tailLines: 8 });
+
+  assert.equal(panePromptReady(text), true);
+  assert.equal(progress.stateHint, "ready");
+  assert.equal(progress.promptReady, true);
+  assert.equal(progress.composer?.confidence, "high");
+  assert.equal(progress.composer?.reason, "footer_anchored_composer");
+});
+
+test("pane progress does not treat a historical prompt as a current composer", () => {
+  const text = [
+    "› historical question",
+    "ordinary transcript output",
+    "more transcript output",
+    "  gpt-5.5 xhigh · /workspace/demo",
+  ].join("\n");
+  const progress = paneProgressFromText(text, { tailLines: 8 });
+
+  assert.equal(panePromptReady(text), false);
+  assert.equal(progress.promptReady, false);
+  assert.equal(progress.stateHint, "unknown");
+  assert.equal(progress.composer?.reason, "historical_or_clipped_prompt");
+});
+
 test("pane prompt draft detection distinguishes empty and populated prompts", () => {
   assert.equal(panePromptHasDraft("All done.\n› \n  gpt-5.5 xhigh · /workspace"), false);
   assert.equal(panePromptHasDraft("Working\n› Write tests\n  gpt-5.5 xhigh · /workspace"), true);
+});
+
+test("pane prompt draft detection treats the Codex placeholder as empty", () => {
+  assert.equal(panePromptHasDraft("◦ Working (2s • esc to interrupt)\n› Ask Codex to do anything\n  gpt-5.5 xhigh · /workspace"), false);
 });
 
 test("pane progress classifies idle Codex skills hint with status footer as ready", () => {

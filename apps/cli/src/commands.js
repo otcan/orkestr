@@ -729,6 +729,7 @@ function whatsappUsage() {
     "  orkestr whatsapp accounts [list] [--json]",
     "  orkestr whatsapp accounts add [--id id] [--display-name name] [--owner user] [--json]",
     "  orkestr whatsapp accounts status <account-id> [--json]",
+    "  orkestr whatsapp accounts diagnostics <account-id> [--json]",
     "  orkestr whatsapp accounts update <account-id> [--display-name name] [--owner user] [--json]",
     "  orkestr whatsapp accounts pair <account-id> [--phone number] [--json]",
     "  orkestr whatsapp accounts reconnect <account-id> [--json]",
@@ -793,6 +794,18 @@ async function whatsappAccountsCommand(argv, ctx) {
     if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
     else ctx.stdout.write(formatWhatsAppAccountStatus(payload.account || {}));
     return payload.account?.ready === false ? 1 : 0;
+  }
+  if (subcommand === "diagnostics" || subcommand === "diagnose") {
+    const accountId = positional(rest)[0];
+    if (!accountId) throw new Error("Usage: orkestr whatsapp accounts diagnostics <account-id> [--json]");
+    const payload = await requestJson(`/api/connectors/whatsapp/accounts/${encodeURIComponent(accountId)}/diagnostics`, ctx);
+    if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+    else {
+      const account = payload.account || {};
+      const capabilities = Object.entries(account.capabilities || {}).map(([name, value]) => `${name}=${value}`).join(" ");
+      ctx.stdout.write(`WhatsApp diagnostics: ${account.id || accountId}\nState: ${account.state || "-"}\nCapabilities: ${capabilities || "-"}\n`);
+    }
+    return payload.ok === false ? 1 : 0;
   }
   if (subcommand === "update") {
     const accountId = positional(rest)[0];
@@ -916,9 +929,13 @@ async function whatsappOutboxCommand(argv, ctx) {
   }
   if (whatsappOutboxActions.has(subcommand)) {
     const jobIds = positional(rest);
-    if (!jobIds.length) throw new Error("Usage: orkestr whatsapp outbox <retry|suppress|mark-delivered|replay|dead-letter> <job-id>... [--reason text] [--json]");
+    if (!jobIds.length) throw new Error("Usage: orkestr whatsapp outbox <retry|suppress|mark-delivered|replay|dead-letter> <job-id>... [--reason text] [--allow-uncertain-replay --uncertain-replay-confirmation I_UNDERSTAND_THIS_MAY_DUPLICATE_A_MESSAGE] [--json]");
     const body = {
       reason: flagValue(rest, "--reason") || "",
+      ...(rest.includes("--allow-uncertain-replay") ? { allowDeliveryUncertainReplay: true } : {}),
+      ...(flagValue(rest, "--uncertain-replay-confirmation") ? {
+        deliveryUncertainReplayConfirmation: flagValue(rest, "--uncertain-replay-confirmation"),
+      } : {}),
     };
     const action = subcommand.replace(/_/g, "-");
     const payload = jobIds.length === 1
@@ -1148,11 +1165,16 @@ async function whatsappBindThreadCommand(argv, ctx) {
     body.outboundAccountId = responderAccountId;
   }
   if (replyPrefix) body.replyPrefix = replyPrefix;
-  const payload = await requestJson("/api/connectors/whatsapp/thread-groups", {
-    ...ctx,
-    method: "POST",
-    body,
-  });
+  let payload;
+  try {
+    payload = await requestJson("/api/connectors/whatsapp/thread-groups", {
+      ...ctx,
+      method: "POST",
+      body,
+    });
+  } catch (error) {
+    return writeWhatsAppGroupProvisioningFailure(error, { json, ctx });
+  }
   if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
   else {
     const chat = payload.chat || {};
@@ -1160,6 +1182,28 @@ async function whatsappBindThreadCommand(argv, ctx) {
     ctx.stdout.write(`Thread binding: ${payload.binding?.displayName || name}\t${payload.thread?.id || threadId}\n`);
   }
   return 0;
+}
+
+function writeWhatsAppGroupProvisioningFailure(error, { json, ctx }) {
+  const payload = error?.payload && typeof error.payload === "object" ? error.payload : null;
+  const failure = payload?.groupCreateFailure && typeof payload.groupCreateFailure === "object"
+    ? payload.groupCreateFailure
+    : null;
+  if (!failure) throw error;
+  const safe = {
+    ok: false,
+    operationId: String(failure.operationId || ""),
+    operation: "whatsapp_group_provisioning",
+    stage: String(failure.stage || ""),
+    code: String(failure.code || "whatsapp_group_provisioning_failed"),
+    resultKind: String(failure.resultKind || ""),
+    externalOutcome: String(failure.externalOutcome || "outcome_unknown"),
+    retryable: failure.retryable === true,
+    nextAction: String(failure.nextAction || "reconcile_operation"),
+  };
+  if (json) ctx.stdout.write(`${JSON.stringify(safe, null, 2)}\n`);
+  else ctx.stdout.write(`WhatsApp group provisioning: ${safe.externalOutcome}\nNext: ${safe.nextAction}\nOperation: ${safe.operationId || "-"}\n`);
+  return 1;
 }
 
 function formatWhatsAppAccounts(accounts = []) {
@@ -2123,7 +2167,7 @@ Advanced:
   orkestr settings [--json]
   orkestr secret [list|set|delete] [--global|--user user-id] [--json]
   orkestr codex [status|migrate] [--dry-run] [--json]
-  orkestr whatsapp accounts [list|add|status|update|pair|reconnect|disconnect|remove|doctor] [--json]
+  orkestr whatsapp accounts [list|add|status|diagnostics|update|pair|reconnect|disconnect|remove|doctor] [--json]
   orkestr whatsapp migrate [--dry-run] [--json]
   orkestr whatsapp bindings [list|create|status|resolve|update|delete] [--json]
   orkestr whatsapp codex [status|connect] --thread <thread> [--account id] [--json]
@@ -2308,6 +2352,7 @@ function positional(argv) {
     "--repo",
     "--repo-path",
     "--reason",
+    "--uncertain-replay-confirmation",
     "--reply-prefix",
     "--reply-account",
     "--bridge-account",
@@ -2398,6 +2443,7 @@ function positional(argv) {
     "--track-main",
     "--allow-untagged",
     "--allow-untagged-releases",
+    "--allow-uncertain-replay",
     "--require-tagged",
     "--require-tagged-releases",
     "--no-smoke",

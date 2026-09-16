@@ -55,10 +55,12 @@ import {
   getWhatsAppChatMessages,
   getWhatsAppChatParticipants,
   getWhatsAppStatus,
+  mapLocalWhatsAppStatusFromHealth,
   routeWhatsAppInbound,
   sendWhatsAppText,
 } from "../../../../../packages/connectors/src/whatsapp.js";
 import { createAndBindWhatsAppThreadGroup, createExternalWhatsAppChat } from "../../../../../packages/connectors/src/whatsapp-thread-groups.js";
+import { publicWhatsAppGroupCreateFailure } from "../../../../../packages/connectors/src/whatsapp-group-create-evidence.js";
 import { assertWhatsAppBridgeBindingAcl } from "../../../../../packages/connectors/src/whatsapp-account-bindings.js";
 import { assertWhatsAppBridgeTokenContext } from "../../../../../packages/connectors/src/whatsapp-binding-acl.js";
 import { loginCodexWithApiKey, startCodexDeviceAuth } from "../../../../../packages/connectors/src/codex.js";
@@ -666,13 +668,19 @@ export class ConnectorsController {
   }
 
   @Get("whatsapp/bridge/health")
-  async whatsappBridgeHealth() {
-    return getLocalWhatsAppBridgeStatus();
+  async whatsappBridgeHealth(@Req() request: any) {
+    const status = mapLocalWhatsAppStatusFromHealth(await getLocalWhatsAppBridgeStatus());
+    const accounts = scopedBridgeAccounts(status.accounts || [], request.orkestrMachineAuthContext);
+    return {
+      ...status,
+      accounts,
+      health: status.health ? { ...status.health, accounts } : status.health,
+    };
   }
 
   @Get("whatsapp/bridge/accounts")
   async whatsappBridgeAccounts(@Req() request: any) {
-    const status = await getLocalWhatsAppBridgeStatus();
+    const status = mapLocalWhatsAppStatusFromHealth(await getLocalWhatsAppBridgeStatus());
     return { accounts: scopedBridgeAccounts(status.accounts, request.orkestrMachineAuthContext), state: status.state };
   }
 
@@ -817,7 +825,24 @@ export class ConnectorsController {
           },
         }
       : {};
-    return createAndBindWhatsAppThreadGroup(thread, options, process.env, dependencies);
+    try {
+      return await createAndBindWhatsAppThreadGroup(thread, options, process.env, dependencies);
+    } catch (error: any) {
+      const failure = publicWhatsAppGroupCreateFailure(error);
+      if (!failure) throw error;
+      throw httpError(failure.code || "whatsapp_group_provisioning_failed", Number(error?.statusCode || 502), {
+        operationId: failure.operationId,
+        operation: failure.operation,
+        stage: failure.stage,
+        code: failure.code,
+        resultKind: failure.resultKind,
+        externalOutcome: failure.externalOutcome,
+        retryable: failure.retryable,
+        nextAction: failure.nextAction,
+        groupCreateFailure: failure,
+        provisioning: error?.provisioning || undefined,
+      });
+    }
   }
 
   @Post("whatsapp/bridge/chats/:chatId/picture")

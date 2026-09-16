@@ -72,6 +72,8 @@ test("release regression args parse named targets and default artifact root", ()
     "remote=https://example.invalid/",
     "--desktop-slug",
     "linkedin",
+    "--raw-terminal-thread",
+    "raw-terminal-test",
     "--orkestr-home",
     "/tmp/orkestr-explicit-home",
   ], {
@@ -84,6 +86,7 @@ test("release regression args parse named targets and default artifact root", ()
     { name: "remote", baseUrl: "https://example.invalid" },
   ]);
   assert.equal(options.desktopSlug, "linkedin");
+  assert.equal(options.rawTerminalThreadId, "raw-terminal-test");
   assert.equal(options.orkestrHome, "/tmp/orkestr-explicit-home");
   assert.equal(options.artifactDir, "/tmp/orkestr-explicit-home/release-checks/release-1");
 });
@@ -215,6 +218,57 @@ test("release regression execute mode verifies submitted chat input is visible",
   assert.ok(calls.some((call) => call.method === "POST" && call.route === "/api/threads/test-thread/input"));
   assert.equal(calls.find((call) => call.method === "POST")?.body.text, message);
   assert.equal(summary.targets[0].scenarios.find((item) => item.name === "chat-injection").status, "pass");
+});
+
+test("release regression execute mode verifies raw-terminal runtime handoff", async () => {
+  const artifactDir = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-release-regression-"));
+  const calls = [];
+  const releaseId = "release-raw";
+  const rawMessage = `ORK RAW TERMINAL RELEASE CHECK ${releaseId}: report delivery status only.`;
+  const routes = healthyRoutes({
+    "POST /api/threads/raw-terminal/input": ({ options }) => ({
+      ok: true,
+      message: {
+        id: "raw-message-1",
+        text: JSON.parse(options.body).text,
+        state: "queued",
+        deliveryState: "pending_delivery",
+      },
+    }),
+    "/api/threads/raw-terminal/messages?limit=20": {
+      messages: [
+        {
+          id: "raw-message-1",
+          role: "user",
+          text: rawMessage,
+          state: "awaiting_ack",
+          deliveryState: "awaiting_ack",
+        },
+      ],
+    },
+  });
+
+  const summary = await runReleaseRegression({
+    releaseId,
+    artifactDir,
+    targets: [{ name: "local", baseUrl: "http://127.0.0.1:19812" }],
+    timeoutMs: 100,
+    pollMs: 100,
+    headers: {},
+    execute: true,
+    rawTerminalThreadId: "raw-terminal",
+  }, {
+    fetch: fakeFetch(routes, calls),
+  });
+
+  assert.equal(summary.ok, true);
+  const rawScenario = summary.targets[0].scenarios.find((item) => item.name === "raw-terminal-delivery");
+  assert.equal(rawScenario.status, "pass");
+  assert.equal(rawScenario.deliveryState, "awaiting_ack/awaiting_ack");
+  const post = calls.find((call) => call.method === "POST" && call.route === "/api/threads/raw-terminal/input");
+  assert.equal(post.body.text, rawMessage);
+  assert.equal(post.body.source, "release_regression_raw_terminal");
+  assert.equal(post.body.controlAllowed, false);
 });
 
 test("release regression can record protected APIs as skipped for public targets", async () => {

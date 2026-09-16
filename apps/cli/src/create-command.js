@@ -31,15 +31,19 @@ export async function createCommand(argv, ctx) {
   let chatId = explicitChatId;
   let bindingPayload = null;
   if (!noWhatsApp && !chatId) {
-    whatsappGroup = await createWhatsAppThreadGroup({
-      argv,
-      ctx,
-      threadId,
-      displayName,
-      replyPrefix,
-      outboundAccountId,
-      senderAccountId,
-    });
+    try {
+      whatsappGroup = await createWhatsAppThreadGroup({
+        argv,
+        ctx,
+        threadId,
+        displayName,
+        replyPrefix,
+        outboundAccountId,
+        senderAccountId,
+      });
+    } catch (error) {
+      return writeWhatsAppGroupProvisioningFailure(error, { json, ctx, thread });
+    }
     chatId = String(whatsappGroup?.chat?.id || "").trim();
     if (!chatId) throw new Error("WhatsApp chat was created but no chat id was returned.");
     bindingPayload = whatsappGroup;
@@ -70,6 +74,29 @@ export async function createCommand(argv, ctx) {
     }
   }
   return 0;
+}
+
+function writeWhatsAppGroupProvisioningFailure(error, { json, ctx, thread }) {
+  const payload = error?.payload && typeof error.payload === "object" ? error.payload : null;
+  const failure = payload?.groupCreateFailure && typeof payload.groupCreateFailure === "object"
+    ? payload.groupCreateFailure
+    : null;
+  if (!failure) throw error;
+  const safe = {
+    ok: false,
+    thread: { id: String(thread?.id || ""), name: String(thread?.name || "") },
+    operationId: String(failure.operationId || ""),
+    operation: "whatsapp_group_provisioning",
+    stage: String(failure.stage || ""),
+    code: String(failure.code || "whatsapp_group_provisioning_failed"),
+    resultKind: String(failure.resultKind || ""),
+    externalOutcome: String(failure.externalOutcome || "outcome_unknown"),
+    retryable: failure.retryable === true,
+    nextAction: String(failure.nextAction || "reconcile_operation"),
+  };
+  if (json) ctx.stdout.write(`${JSON.stringify(safe, null, 2)}\n`);
+  else ctx.stdout.write(`Created Orkestr thread awaiting WhatsApp provisioning: ${safe.thread.id || "-"}\nWhatsApp group provisioning: ${safe.externalOutcome}\nNext: ${safe.nextAction}\n`);
+  return 1;
 }
 
 function createWhatsAppThreadGroup({ argv, ctx, threadId, displayName, replyPrefix, outboundAccountId, senderAccountId }) {

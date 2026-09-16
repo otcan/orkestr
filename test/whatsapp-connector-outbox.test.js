@@ -6,7 +6,12 @@ import test from "node:test";
 import { appendThreadMessage, createThread, deleteThreadMessage, getThread, updateThreadMessage } from "../packages/core/src/threads.js";
 import { markRuntimeFinalDeliveryPending } from "../packages/core/src/runtime-final-delivery.js";
 import { listRouterTraces } from "../packages/core/src/router-traces.js";
-import { applyConnectorOutboxJobAction, ensureConnectorOutboxJob, readConnectorOutbox } from "../packages/connectors/src/connector-outbox.js";
+import {
+  applyConnectorOutboxJobAction,
+  deliveryUncertainReplayConfirmation,
+  ensureConnectorOutboxJob,
+  readConnectorOutbox,
+} from "../packages/connectors/src/connector-outbox.js";
 import { applyWhatsAppConnectorOutboxAction, deliverWhatsAppReplies } from "../packages/connectors/src/whatsapp.js";
 import { retryRecoverableWhatsAppOutboxJobsForAccounts } from "../packages/connectors/src/whatsapp-outbox-recovery.js";
 import { dataPaths } from "../packages/storage/src/paths.js";
@@ -505,7 +510,11 @@ test("whatsapp connector outbox auto-retries recoverable bridge failures after a
   const calls = [];
   const failed = await deliverWhatsAppReplies(runtimeEnv, async (url) => {
     calls.push(url.pathname);
-    throw new Error("whatsapp_local_bridge_not_ready_recovered_after_send_runtime_error");
+    if (url.pathname === "/health") {
+      return response({ ok: true, ready: true, accounts: [{ id: "responder", ready: true }] });
+    }
+    assert.equal(url.pathname, "/send-text");
+    return response({ ok: false, error: "whatsapp_local_bridge_not_ready" }, false, 400);
   });
   const outboxAfterFailure = await readConnectorOutbox(runtimeEnv);
   const failedJob = outboxAfterFailure.jobs.find((item) => item.sourceMessageId === reply.id);
@@ -513,6 +522,9 @@ test("whatsapp connector outbox auto-retries recoverable bridge failures after a
   assert.equal(failed.failed.length, 1);
   assert.equal(failedJob?.state, "failed_retryable");
   assert.equal(failedJob.claimedBy, "retry_backoff");
+  assert.equal(failedJob.metadata.failureCode, "whatsapp_local_bridge_not_ready");
+  assert.equal(failedJob.metadata.failureClassification, "availability");
+  assert.equal(failedJob.metadata.retryable, true);
 
   const autoRetry = await retryRecoverableWhatsAppOutboxJobsForAccounts({
     accountIds: ["responder"],
@@ -1278,7 +1290,12 @@ test("whatsapp connector outbox replay overrides prior uncertainty for the same 
   const replayJob = outbox.jobs.find((item) => item.sourceMessageId === replayReply.id);
   assert.equal(replayJob?.state, "delivery_uncertain");
 
-  const replay = await applyConnectorOutboxJobAction(replayJob.id, "replay", { reason: "confirmed missing", operator: "tester" }, runtimeEnv);
+  const replay = await applyConnectorOutboxJobAction(replayJob.id, "replay", {
+    reason: "confirmed missing",
+    operator: "tester",
+    allowDeliveryUncertainReplay: true,
+    deliveryUncertainReplayConfirmation,
+  }, runtimeEnv);
   await applyWhatsAppConnectorOutboxAction(replay.job, "replay", { reason: "confirmed missing" }, runtimeEnv);
   const calls = [];
   const delivered = await deliverWhatsAppReplies(runtimeEnv, async (url, options) => {

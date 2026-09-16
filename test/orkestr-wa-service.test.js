@@ -96,7 +96,7 @@ test("standalone WA service health is passive and diagnostics probes chat operat
     assert.equal(dashboard.status, 200);
     assert.deepEqual(calls, [
       [env, { probeChatOps: false }],
-      [env, { probeChatOps: true, read: true, force: false }],
+      [env, { probeChatOps: true, read: true, force: false, readOnly: true }],
       [env, { probeChatOps: true }],
     ]);
   }, mockBridge({

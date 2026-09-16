@@ -83,10 +83,12 @@ export function publicUrlConfig(env = process.env) {
     (authHost ? httpsUrlFromHost(authHost) : "") ||
     appUrl;
   const connectUrl = normalizeUrl(env.ORKESTR_CONNECT_PUBLIC_URL || "");
+  const launcherUrl = normalizeUrl(env.ORKESTR_PUBLIC_LAUNCHER_URL || env.ORKESTR_LAUNCHER_URL || "");
   const appUrlHost = hostnameFromUrl(appUrl);
   const authUrlHost = hostnameFromUrl(authUrl);
   const connectUrlHost = hostnameFromUrl(connectUrl);
-  const separatedIdentityHost = [authUrlHost, connectUrlHost]
+  const launcherUrlHost = hostnameFromUrl(launcherUrl);
+  const separatedIdentityHost = [authUrlHost, connectUrlHost, launcherUrlHost]
     .filter(Boolean)
     .some((host) => host !== appUrlHost);
   const configuredCookieDomain =
@@ -100,6 +102,7 @@ export function publicUrlConfig(env = process.env) {
     appUrl,
     authUrl,
     connectUrl,
+    launcherUrl,
     cookieDomain: configuredCookieDomain,
     sameOriginAuth: Boolean(appUrl && authUrl && appUrl === authUrl),
   };
@@ -118,6 +121,8 @@ const identityConfigInputs = [
   ["ORKESTR_HTTPS_URL", "url"],
   ["ORKESTR_TAILSCALE_HTTPS_NAME", "url"],
   ["ORKESTR_PAIRING_URL", "url"],
+  ["ORKESTR_PUBLIC_LAUNCHER_URL", "url"],
+  ["ORKESTR_LAUNCHER_URL", "url"],
   ["ORKESTR_COOKIE_DOMAIN", "cookie"],
 ];
 
@@ -161,6 +166,7 @@ export function publicUrlIdentityDiagnostics(env = process.env) {
       appUrl: urls.appUrl,
       authUrl: urls.authUrl,
       connectUrl: urls.connectUrl,
+      launcherUrl: urls.launcherUrl,
       cookieDomain: urls.cookieDomain,
     },
     roots: grouped,

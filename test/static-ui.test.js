@@ -285,7 +285,7 @@ test("server serves the public site at root and Angular UI at app routes", async
     assert.equal(setupGmailResponse.status, 200);
     assert.equal(setupGoogleMarketingResponse.status, 200);
     assert.equal(instanceSetupResponse.status, 302);
-    assert.equal(instanceSetupResponse.headers.get("location"), `/setup/pairing?instanceId=${brokerRegistration.instanceId}&return=%2Fi%2F${brokerRegistration.instanceId}%2Fapp%2F`);
+    assert.equal(instanceSetupResponse.headers.get("location"), `/setup/pairing?instanceId=${brokerRegistration.instanceId}&return=%2Fi%2F${brokerRegistration.instanceId}%2Fapp%2Flauncher`);
     assert.equal(workflowOnboardingResponse.status, 200);
     assert.equal(legacyOnboardingResponse.status, 200);
     assert.equal(opsResponse.status, 200);
@@ -339,7 +339,7 @@ test("instance connect setup requires a registered broker UUID", async () => {
     const staleGmailReturn = await fetch(`http://127.0.0.1:${port}/i/${brokerRegistration.instanceId}/setup?return=%2Fi%2F${brokerRegistration.instanceId}%2Fapp%2Fsetup%2Fgmail%3Fcompact%3D1`, { redirect: "manual" });
     const unknown = await fetch(`http://127.0.0.1:${port}/i/demo-vm-001/setup`, { redirect: "manual" });
 
-    assertInstancePairingRedirect(registered, { instanceId: brokerRegistration.instanceId, returnPath: `/i/${brokerRegistration.instanceId}/app/` });
+    assertInstancePairingRedirect(registered, { instanceId: brokerRegistration.instanceId, returnPath: `/i/${brokerRegistration.instanceId}/app/launcher` });
     assertInstancePairingRedirect(gmailReturn, { instanceId: brokerRegistration.instanceId, connector: "gmail" });
     assertInstancePairingRedirect(gmailConnector, { instanceId: brokerRegistration.instanceId, connector: "gmail" });
     assertInstancePairingRedirect(staleCodexReturn, { instanceId: brokerRegistration.instanceId, returnPath: `/i/${brokerRegistration.instanceId}/app/` });
@@ -941,7 +941,7 @@ test("broker instance app path pairs on broker and proxies the VM WebUI", async 
     assert.equal(noSlash.status, 302);
     assert.equal(noSlash.headers.get("location"), `/i/${brokerRegistration.instanceId}/app/`);
     assert.equal(unpaired.status, 302);
-    assert.equal(unpaired.headers.get("location"), `/setup/pairing?instanceId=${brokerRegistration.instanceId}&return=%2Fi%2F${brokerRegistration.instanceId}%2Fapp%2F`);
+    assert.equal(unpaired.headers.get("location"), `/setup/pairing?instanceId=${brokerRegistration.instanceId}&return=%2Fi%2F${brokerRegistration.instanceId}%2Fapp%2Flauncher`);
     assertInstancePairingRedirect(unpairedLegacyGmailSetup, { instanceId: brokerRegistration.instanceId, connector: "gmail" });
     assert.equal(unpairedLegacyGoogleConnect.status, 302);
     {
@@ -1240,7 +1240,7 @@ test("server keeps public pages on the configured public site host only", async 
     assert.equal(instanceEntryResponse.status, 303);
     assert.equal(
       instanceEntryResponse.headers.get("location"),
-      "https://orkestr.example.test/setup/pairing?instanceId=local-instance&return=%2Finstance%2Fins_AQEBAQEBAQEBAQEBAQEBAQ",
+      "https://orkestr.example.test/setup/pairing?instanceId=local-instance&return=%2Finstance%2Fins_AQEBAQEBAQEBAQEBAQEBAQ%2Flauncher",
     );
     assert.equal(privateTermsResponse.status, 302);
     assert.equal(
@@ -1251,7 +1251,10 @@ test("server keeps public pages on the configured public site host only", async 
     assertAngularShell(privateThreadHtml);
     assert.doesNotMatch(privateThreadHtml, /AI operations,/);
     assert.equal(pairedPrivateRootResponse.status, 200);
-    assertAngularShell(pairedPrivateRootHtml);
+    // Without OIDC configured, pairing authenticates access but does not pick
+    // an instance. The app-host root keeps the explicit instance entry page.
+    assert.match(pairedPrivateRootHtml, /<h1>Which Orkestr\?<\/h1>/);
+    assert.match(pairedPrivateRootHtml, /name="instance"/);
     assert.doesNotMatch(pairedPrivateRootHtml, /AI operations,/);
 
     process.env.ORKESTR_PUBLIC_APP_URL = "https://orkestr.example.test";
@@ -1330,7 +1333,7 @@ test("mobile thread view uses an off-canvas drawer so the active chat stays visi
   assert.match(styles, /\.chat-head \.head-actions\.cockpit-actions\s*{\s*display:\s*none/);
   assert.match(styles, /\.thread-tools-popover\s*{\s*flex-wrap:\s*nowrap;\s*overflow-x:\s*auto/s);
   assert.match(styles, /@media \(max-width: 860px\)[\s\S]*?\.instance-topbar-nav\s*{[\s\S]*?grid-template-columns:\s*repeat\(4, minmax\(0, 1fr\)\)/s);
-  assert.match(styles, /@media \(max-width: 480px\)[\s\S]*?\.composer-row\s*{\s*grid-template-columns:\s*minmax\(0, 1fr\)/s);
+  assert.match(styles, /@media \(max-width: 480px\)[\s\S]*?\.composer-row\s*{[^}]*grid-template-columns:\s*minmax\(0, 1fr\)/s);
 });
 
 test("thread sidebar treats runtime interruption messages as errors", async () => {

@@ -281,6 +281,11 @@ export const attachmentEncryptionMigrationSchema = {
   },
 };
 
+export { inboundAttachmentStatusSchema, inboundAttachmentSessionCreateSchema } from "./inbound-attachment-schemas.js";
+
+export const inboundAttachmentSessionParamsSchema = idParams("sessionId");
+export const inboundAttachmentKeyParamsSchema = idParams("keyId");
+
 export const threadMessagesQuerySchema = {
   ...idParams("threadId"),
   querystring: {

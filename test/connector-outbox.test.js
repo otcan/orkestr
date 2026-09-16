@@ -9,6 +9,7 @@ import {
   claimConnectorOutboxJob,
   connectorOutboxRetentionLimit,
   connectorOutboxStoreFingerprint,
+  deliveryUncertainReplayConfirmation,
   connectorOutboxTerminalState,
   ensureConnectorOutboxJob,
   listConnectorOutboxJobs,
@@ -86,6 +87,35 @@ test("connector outbox refuses to retry a partial external delivery", async () =
   const jobs = await listConnectorOutboxJobs({ connector: "whatsapp" }, runtimeEnv);
   assert.equal(jobs.jobs[0].state, "partial_delivery");
   assert.equal(connectorOutboxTerminalState(jobs.jobs[0].state), true);
+});
+
+test("connector outbox requires an explicit duplicate-risk override for uncertain delivery replay", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-connector-outbox-uncertain-"));
+  const runtimeEnv = env(home);
+  const created = await ensureConnectorOutboxJob(whatsappJob({ tenantId: "tenant-a" }), runtimeEnv);
+  await markConnectorOutboxJob(created.job.id, {
+    state: "delivery_uncertain",
+    failedAt: new Date().toISOString(),
+    error: "whatsapp_send_not_confirmed",
+  }, runtimeEnv);
+
+  for (const action of ["retry", "replay"]) {
+    await assert.rejects(
+      () => applyConnectorOutboxJobAction(created.job.id, action, { reason: "confirmed missing", operator: "tester" }, runtimeEnv),
+      /connector_outbox_delivery_uncertain_retry_requires_override/,
+    );
+  }
+
+  const replay = await applyConnectorOutboxJobAction(created.job.id, "replay", {
+    reason: "recipient history confirms the message is missing",
+    operator: "tester",
+    allowDeliveryUncertainReplay: true,
+    deliveryUncertainReplayConfirmation,
+  }, runtimeEnv);
+  assert.equal(replay.job.state, "pending");
+  assert.equal(replay.job.metadata.deliveryUncertainOverride, true);
+  assert.equal(replay.job.metadata.deliveryUncertainOverrideBy, "tester");
+  assert.equal(replay.job.metadata.deliveryUncertainOverrideReason, "recipient history confirms the message is missing");
 });
 
 test("connector outbox SQLite fingerprint advances on durable job changes", async () => {

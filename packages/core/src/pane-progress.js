@@ -3,6 +3,14 @@ import fs from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { codexRuntimeAuthInvalidReason } from "./codex-auth-health.js";
+import {
+  inspectPaneComposer,
+  panePromptLine,
+  panePromptReady,
+  publicPaneComposer,
+} from "./pane-composer.js";
+
+export { panePromptHasDraft, panePromptLine, panePromptReady } from "./pane-composer.js";
 
 const execFileAsync = promisify(execFile);
 const progressCache = new Map();
@@ -74,12 +82,6 @@ function paneWorkingLineStillActiveAfterPrompt(line, distanceFromTail) {
 
 export function paneBackgroundTerminalLine(line) {
   return /^[•◦]?\s*Waiting for background terminal\b/i.test(String(line || "").trim());
-}
-
-export function panePromptLine(line) {
-  const text = String(line || "").trim();
-  if (/^(?:›|>)\s*Use\s+\/skills\s+to\s+list\s+available\s+skills\b/i.test(text)) return false;
-  return /^(?:›|>)(?:\s|$)/.test(text) && !/^(?:›|>)\s*\d+[.)]/.test(text);
 }
 
 function paneConversationInterruptedLine(line) {
@@ -184,23 +186,6 @@ export function paneBackgroundWork(text) {
   return lastBackgroundIndex > lastPromptIndex || lastBackgroundIndex >= Math.max(0, lines.length - 6);
 }
 
-export function panePromptReady(text) {
-  const lines = normalizedLines(text).map((line) => line.trim()).slice(-8);
-  return lines.some(panePromptLine) || paneIdleSkillsHintReady(lines);
-}
-
-export function panePromptHasDraft(text) {
-  const lines = normalizedLines(text).map((line) => line.trim()).slice(-8);
-  const prompt = lines.findLast(panePromptLine) || "";
-  return /^(?:›|>)\s*\S/.test(prompt);
-}
-
-function paneIdleSkillsHintReady(lines = []) {
-  const hintIndex = lines.findLastIndex((line) => /^(?:›|>)\s*Use\s+\/skills\s+to\s+list\s+available\s+skills\b/i.test(line));
-  if (hintIndex < 0) return false;
-  return lines.slice(hintIndex + 1).some((line) => /\bgpt-[^\s]+\s+\S+\s+·\s+\S+/i.test(line));
-}
-
 function paneHasRecentError(lines) {
   return lines.slice(-8).some((line) => (
     /\b(?:delivery failed|not delivered|unrecognized command|can't find pane|command failed|failed to deliver)\b/i.test(line) &&
@@ -236,6 +221,7 @@ export function paneProgressFromText(text, options = {}) {
   const working = paneWorking(text) || backgroundWork;
   const staleWorkingPrompt = paneStaleWorkingPrompt(text);
   const promptReady = !working && panePromptReady(text);
+  const composer = inspectPaneComposer(text);
   let stateHint = "unknown";
   if (codexAuthInvalid || paneHasRecentError(tailLines)) stateHint = "error";
   else if (planImplementationReady || planImplementationMenuVisible || codexMode === "plan") stateHint = "planning";
@@ -256,6 +242,7 @@ export function paneProgressFromText(text, options = {}) {
     tailLines,
     tailHash: tailHash(tailLines),
     promptReady,
+    composer: publicPaneComposer(composer),
     working,
     backgroundWork,
     staleWorkingPrompt,

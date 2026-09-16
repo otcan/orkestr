@@ -23,7 +23,8 @@ import { deployDrainActiveSync } from "./deploy-drain.js";
 import { assertCodexAuthenticated } from "../../connectors/src/codex.js";
 import { ensureConnectorOutboxJob, listConnectorOutboxJobs } from "../../connectors/src/connector-outbox.js";
 import { setConnectorOutboxJobAdapter } from "./connector-outbox-adapter.js";
-import { clearPaneProgressCache, paneBackgroundWork, panePromptHasDraft, publicPaneProgress, samplePaneProgress } from "./pane-progress.js";
+import { clearPaneProgressCache, paneBackgroundWork, publicPaneProgress, samplePaneProgress } from "./pane-progress.js";
+import { panePromptBodyText, panePromptHasDraft, panePromptLine, panePromptReady } from "./pane-composer.js";
 import {
   appendThreadMessage,
   getThreadMessage,
@@ -653,12 +654,6 @@ function paneWorkingLineStillActiveAfterPrompt(line, distanceFromTail) {
   return duration !== null && duration <= defaultWorkingAfterPromptMs && distanceFromTail <= 6;
 }
 
-function panePromptLine(line) {
-  const text = String(line || "").trim();
-  if (/^(?:›|>)\s*Use\s+\/skills\s+to\s+list\s+available\s+skills\b/i.test(text)) return false;
-  return /^(?:›|>)(?:\s|$)/.test(text) && !/^(?:›|>)\s*\d+[.)]/.test(text);
-}
-
 function paneWorking(text) {
   const lines = String(text || "").split("\n").map((line) => line.trim()).filter(Boolean).slice(-20);
   if (paneNeedInputMenuVisible(text)) return true;
@@ -667,17 +662,6 @@ function paneWorking(text) {
   const lastPromptIndex = lines.findLastIndex(panePromptLine);
   if (lastWorkingIndex > lastPromptIndex) return true;
   return paneWorkingLineStillActiveAfterPrompt(lines[lastWorkingIndex], lines.length - lastWorkingIndex);
-}
-
-function panePromptReady(text) {
-  const lines = String(text || "").split("\n").map((line) => line.trim()).filter(Boolean).slice(-8);
-  return lines.some(panePromptLine) || paneIdleSkillsHintReady(lines);
-}
-
-function paneIdleSkillsHintReady(lines = []) {
-  const hintIndex = lines.findLastIndex((line) => /^(?:›|>)\s*Use\s+\/skills\s+to\s+list\s+available\s+skills\b/i.test(line));
-  if (hintIndex < 0) return false;
-  return lines.slice(hintIndex + 1).some((line) => /\bgpt-[^\s]+\s+\S+\s+·\s+\S+/i.test(line));
 }
 
 function recentPaneText(text, lines = 16) {
@@ -817,6 +801,11 @@ export async function runtimeStatus(threadId, env = process.env, messagesOverrid
   const messages = Array.isArray(messagesOverride) ? messagesOverride : await listThreadMessages(thread.id, env);
   const pendingCount = messages.filter((message) => pendingInputStates.has(message.state)).length;
   const awaitingAckCount = messages.filter((message) => message.state === "awaiting_ack").length;
+  const blockedDelivery = messages.find((message) =>
+    message.role === "user" &&
+    pendingInputStates.has(String(message.state || "")) &&
+    message.deliveryState === "blocked_ambiguous_delivery",
+  ) || null;
   const nextDeliveryAttemptAt = messages
     .filter((message) => message.role === "user" && message.state === "awaiting_ack" && message.deliveryNextAttemptAt)
     .map((message) => String(message.deliveryNextAttemptAt))
@@ -859,7 +848,7 @@ export async function runtimeStatus(threadId, env = process.env, messagesOverrid
   }
   const lease = await activeLeaseForThread(thread.id, env, options);
   if (!lease) {
-    const state = pendingCount > 0 ? "waking" : "sleeping";
+    const state = blockedDelivery ? "blocked" : pendingCount > 0 ? "waking" : "sleeping";
     const status = {
       state,
       status: state,
@@ -885,6 +874,7 @@ export async function runtimeStatus(threadId, env = process.env, messagesOverrid
       planImplementationMenuVisible: false,
       planImplementationSelectedChoice: null,
       progress: null,
+      blockedDeliveryMessageId: blockedDelivery?.id || null,
     };
     return { ...status, turnLifecycle: turnLifecycleFromRuntimeStatus(status, messages) };
   }
@@ -928,6 +918,8 @@ export async function runtimeStatus(threadId, env = process.env, messagesOverrid
     ? "frozen"
     : working
       ? "working"
+      : blockedDelivery
+        ? "blocked"
       : needsResumeDirectoryConfirmation || needsCodexUpdatePromptSkip
       ? "waking"
       : promptReady
@@ -964,6 +956,8 @@ export async function runtimeStatus(threadId, env = process.env, messagesOverrid
     planImplementationReady,
     planImplementationMenuVisible,
     planImplementationSelectedChoice,
+    composer: progress?.composer || null,
+    blockedDeliveryMessageId: blockedDelivery?.id || null,
     progress,
   };
   return { ...status, turnLifecycle: turnLifecycleFromRuntimeStatus(status, messages) };
@@ -2746,7 +2740,7 @@ function staleWorkingPromptReady(status = {}) {
 
 function runtimeBlocksThreadInput(status = {}) {
   if (!status) return true;
-  if (status.frozen === true || status.state === "frozen") return true;
+  if (status.frozen === true || status.state === "frozen" || status.state === "blocked") return true;
   if (status.foregroundWorking === true || status.backgroundWork === true || status.planImplementationMenuVisible === true) return true;
   if (staleWorkingPromptReady(status)) return false;
   return Boolean(status.working === true || status.state === "working" || status.state === "running");
@@ -2947,6 +2941,59 @@ function deliveryAttempt(message) {
   return Math.max(0, Number(message?.deliveryAttempt || 0) || 0);
 }
 
+function hasSubmittedDeliveryProvenance(message = {}) {
+  if (deliveryAttempt(message) < 1) return false;
+  const observedVia = String(message.observedVia || "").trim().toLowerCase();
+  return /(?:^|_)tmux_(?:send|submit)(?:_[a-z]+)*_pending_ack$/.test(observedVia);
+}
+
+function deliveryAttemptMayBeAmbiguous(message = {}) {
+  if (deliveryAttempt(message) < 1) return false;
+  if (String(message.deliveryState || "").trim().toLowerCase() === "recovering_stale_ack") return false;
+  if (hasSubmittedDeliveryProvenance(message)) return true;
+  return String(message.state || "") === "pending_delivery" && Boolean(
+    String(message.deliveryInputMode || "").trim() ||
+    String(message.deliveryPayloadHash || "").trim() ||
+    String(message.deliveryInputFile || "").trim(),
+  );
+}
+
+function awaitingAcknowledgmentCandidate(message = {}) {
+  if (String(message.role || "") !== "user") return false;
+  if (String(message.state || "") === "awaiting_ack") return true;
+  const deliveryState = String(message.deliveryState || "").trim().toLowerCase();
+  if (["recovering_stale_ack", "retrying_stale_ready_runtime", "interrupting", "submitting_unsent_prompt"].includes(deliveryState)) return false;
+  return ["queued", "pending_delivery"].includes(String(message.state || "")) && hasSubmittedDeliveryProvenance(message);
+}
+
+async function reconcileAttemptedDeliveryState(thread, message, env = process.env) {
+  if (!awaitingAcknowledgmentCandidate(message) || message.state === "awaiting_ack") return message;
+  let restored = false;
+  const reconciled = await updateThreadMessage(thread.id, message.id, {
+    state: "awaiting_ack",
+    deliveryState: "awaiting_ack_reconciled",
+    deliveryReconciledAt: nowIso(),
+    error: null,
+  }, env, { expectedStates: [message.state] })
+    .then((updated) => {
+      restored = true;
+      return updated;
+    })
+    .catch(() => getThreadMessage(thread.id, message.id, env));
+  if (!awaitingAcknowledgmentCandidate(reconciled)) return null;
+  if (restored) {
+    await appendEvent({
+      type: "thread_input_attempt_reconciled",
+      threadId: thread.id,
+      messageId: message.id,
+      previousState: message.state,
+      previousDeliveryState: message.deliveryState || null,
+      observedVia: message.observedVia || null,
+    }, env).catch(() => {});
+  }
+  return reconciled;
+}
+
 function messageRequestsInstantSteer(message = {}) {
   return message.steerActiveTurn === true ||
     String(message.codexDeliveryMode || "").trim().toLowerCase() === "instant_steer";
@@ -2985,6 +3032,23 @@ function unsentPromptStableMs(env = process.env) {
   return Number.isFinite(parsed) ? Math.max(0, parsed) : 3000;
 }
 
+function unsentPromptRecoveryMax(env = process.env) {
+  const parsed = Number(env.ORKESTR_UNSENT_PROMPT_RECOVERY_MAX ?? 1);
+  return Number.isFinite(parsed) ? Math.max(0, parsed) : 1;
+}
+
+function unsentPromptRecoveryCount(message = {}) {
+  return Math.max(0, Number(message.deliverySubmitRecoveryCount || 0) || 0);
+}
+
+function recoveryMatchesRuntime(thread, message, status) {
+  if (!status?.paneId || status.working || status.foregroundWorking || status.backgroundWork || status.typingActive) return false;
+  if (message.deliveryPaneId && message.deliveryPaneId !== status.paneId) return false;
+  if (message.runtimeLeaseId && message.runtimeLeaseId !== status.lease?.id) return false;
+  const generation = codexThreadId(thread);
+  return !message.deliveryRolloutGeneration || !generation || message.deliveryRolloutGeneration === generation;
+}
+
 function deliveryFirstAttemptMs(message) {
   return timestampMs(message?.deliveryFirstAttemptAt) ||
     timestampMs(message?.deliveryLastAttemptAt) ||
@@ -3012,6 +3076,44 @@ function deliveryDueInMs(message) {
   const dueMs = Date.parse(message?.deliveryNextAttemptAt || "");
   if (!Number.isFinite(dueMs) || dueMs <= 0) return 0;
   return Math.max(0, dueMs - Date.now());
+}
+
+function ambiguousDeliveryNoticeMs(env = process.env) {
+  const parsed = Number(env.ORKESTR_AMBIGUOUS_DELIVERY_NOTICE_MS ?? 60_000);
+  return Number.isFinite(parsed) ? Math.max(1_000, parsed) : 60_000;
+}
+
+async function pauseAmbiguousDelivery(thread, message, env = process.env) {
+  const firstAttemptMs = deliveryFirstAttemptMs(message);
+  const noticeMs = ambiguousDeliveryNoticeMs(env);
+  const dueInMs = firstAttemptMs ? Math.max(0, firstAttemptMs + noticeMs - Date.now()) : noticeMs;
+  if (dueInMs > 0) {
+    scheduleThreadInputDelivery(thread.id, env, dueInMs);
+    return false;
+  }
+  const alreadyBlocked = message.deliveryState === "blocked_ambiguous_delivery";
+  const nextAttemptAt = isoAfter(noticeMs);
+  const errorText = "Orkestr cannot verify whether this input reached Codex. It will not replay or replace it automatically.";
+  const updated = await updateThreadMessage(thread.id, message.id, {
+    deliveryState: "blocked_ambiguous_delivery",
+    deliveryBlockedAt: message.deliveryBlockedAt || nowIso(),
+    deliveryNextAttemptAt: nextAttemptAt,
+    error: errorText,
+  }, env).catch(() => null);
+  await updateThread(thread.id, { state: "blocked", lastError: errorText }, env).catch(() => {});
+  if (!alreadyBlocked) {
+    markConnectorDeliverySignal(updated || message);
+    await appendEvent({
+      type: "thread_input_delivery_ambiguous",
+      threadId: thread.id,
+      messageId: message.id,
+      deliveryAttempt: deliveryAttempt(message),
+      deliveryState: message.deliveryState || null,
+      nextAttemptAt,
+    }, env).catch(() => {});
+  }
+  scheduleThreadInputDelivery(thread.id, env, noticeMs);
+  return true;
 }
 
 function staleAckRecoveryAttempts(env = process.env) {
@@ -3052,30 +3154,6 @@ function escapeRegex(value) {
 function leadingSlashCommand(message) {
   const match = inputTextForMessage(message).trimStart().match(/^(\/\S+)/);
   return match ? match[1].toLowerCase() : "";
-}
-
-function panePromptBodyText(paneText) {
-  const lines = String(paneText || "").split("\n");
-  let promptStart = -1;
-  for (let index = lines.length - 1; index >= 0; index -= 1) {
-    if (panePromptLine(lines[index].trim())) {
-      promptStart = index;
-      break;
-    }
-  }
-  return promptStart >= 0
-    ? lines
-      .slice(promptStart)
-      .map((line, index) => {
-        if (index === 0) return line.replace(/^\s*(?:›|>)\s?/, "");
-        return line;
-      })
-      .filter((line) => !/^\s*gpt-[^\n]*\s+·\s+/i.test(line.trim()))
-      .join(" ")
-    : lines
-      .map((line) => line.trim())
-      .filter((line) => /^›(?:\s|$)/.test(line))
-      .join(" ");
 }
 
 function paneContainsDeliveryText(paneText, messageText) {
@@ -3285,7 +3363,9 @@ async function failStuckPromptThreadInputDelivery(thread, message, status, env =
 }
 
 async function submitStableUnsentPromptDelivery(thread, message, status, env = process.env) {
-  if (message?.state !== "awaiting_ack" || !status?.paneId) return null;
+  if (message?.state !== "awaiting_ack" || !recoveryMatchesRuntime(thread, message, status)) return null;
+  if (unsentPromptRecoveryCount(message) >= unsentPromptRecoveryMax(env)) return null;
+  if (message.deliverySubmitRecoveryReservation?.state === "submitted") return null;
   const beforeText = await capturePane(status.paneId, 80).catch(() => "");
   if (!paneMatchesMessageDeliveryPromptExactly(beforeText, message)) return null;
   const beforePromptBody = compactDeliveryText(panePromptBodyText(beforeText));
@@ -3299,10 +3379,21 @@ async function submitStableUnsentPromptDelivery(thread, message, status, env = p
   const sentAt = nowIso();
   const nextAttemptAt = isoAfter(deliveryRetryBackoffMs(attempt, env));
   const rollout = await rolloutSnapshotForDelivery(thread, status.lease, env);
-  await updateThreadMessage(thread.id, message.id, {
+  const reservation = {
+    state: "reserved",
+    messageId: message.id,
+    payloadHash: message.deliveryPayloadHash || deliveryPayloadHash(message),
+    paneId: status.paneId,
+    leaseId: status.lease?.id || null,
+    generation: codexThreadId(thread) || null,
+    reservedAt: sentAt,
+  };
+  const reserved = await updateThreadMessage(thread.id, message.id, {
     state: "pending_delivery",
     deliveryState: "submitting_unsent_prompt",
     deliveryAttempt: attempt,
+    deliverySubmitRecoveryCount: unsentPromptRecoveryCount(message) + 1,
+    deliverySubmitRecoveryReservation: reservation,
     deliveryAckCheckCount: 0,
     deliveryLastAttemptAt: sentAt,
     deliveryNextAttemptAt: nextAttemptAt,
@@ -3310,23 +3401,42 @@ async function submitStableUnsentPromptDelivery(thread, message, status, env = p
     runtimeLeaseId: status.lease?.id || null,
     ...rollout,
     error: null,
-  }, env);
+  }, env, { expectedStates: ["awaiting_ack"] }).catch(() => null);
+  if (!reserved) return null;
+  const latestStatus = await runtimeStatus(thread.id, env).catch(() => null);
+  const latestMessage = await getThreadMessage(thread.id, message.id, env).catch(() => null);
+  const latestReservation = latestMessage?.deliverySubmitRecoveryReservation;
+  if (
+    latestMessage?.state !== "pending_delivery" ||
+    latestReservation?.state !== "reserved" ||
+    latestReservation.messageId !== reservation.messageId ||
+    latestReservation.payloadHash !== reservation.payloadHash ||
+    latestReservation.paneId !== reservation.paneId ||
+    latestReservation.leaseId !== reservation.leaseId ||
+    latestReservation.generation !== reservation.generation
+  ) return null;
+  if (!recoveryMatchesRuntime(thread, latestMessage, latestStatus)) return null;
+  const immediatelyBeforeKeys = await capturePane(latestStatus.paneId, 80).catch(() => "");
+  if (!paneMatchesMessageDeliveryPromptExactly(immediatelyBeforeKeys, latestMessage)) return null;
   for (const key of submitKeys(env)) {
-    await tmuxSendKeys(status.paneId, key);
+    await tmuxSendKeys(latestStatus.paneId, key);
   }
-  await updateThreadMessage(thread.id, message.id, {
+  const submitted = await updateThreadMessage(thread.id, message.id, {
     state: "awaiting_ack",
     deliveryState: "awaiting_ack",
     deliveryAttempt: attempt,
     deliveryAckCheckCount: 0,
     deliveryLastAttemptAt: sentAt,
     deliveryNextAttemptAt: nextAttemptAt,
+    deliverySubmitRecoveryCount: unsentPromptRecoveryCount(message) + 1,
+    deliverySubmitRecoveryReservation: { ...reservation, state: "submitted", submittedAt: nowIso() },
     observedVia: "tmux_submit_stable_unsent_prompt_pending_ack",
-    deliveryPaneId: status.paneId,
-    runtimeLeaseId: status.lease?.id || null,
+    deliveryPaneId: latestStatus.paneId,
+    runtimeLeaseId: latestStatus.lease?.id || null,
     ...rollout,
     error: null,
-  }, env);
+  }, env, { expectedStates: ["pending_delivery"] }).catch(() => null);
+  if (!submitted) return null;
   await appendEvent({
     type: "thread_input_delivery_attempted",
     threadId: thread.id,
@@ -3374,8 +3484,8 @@ async function recoverStaleThreadInputAck(thread, message, status, env = process
     return true;
   }
   if (!status?.paneId || !status.promptReady || status.working) return false;
-  const paneText = await capturePane(status.paneId, 40).catch(() => "");
-  if (paneContainsDeliveryText(paneText, inputTextForMessage(message))) return false;
+  const paneText = await capturePane(status.paneId, 80).catch(() => "");
+  if (paneContainsMessageDeliveryPrompt(paneText, message)) return false;
   const generation = codexThreadId(thread);
   if (message.deliveryRolloutGeneration && generation && message.deliveryRolloutGeneration !== generation) return false;
   const rolloutPath = String(
@@ -3820,8 +3930,10 @@ export async function deliverPendingThreadInputs(threadId, env = process.env, op
         if (completed?.messageId) delivered.push(completed.messageId);
         continue;
       }
-      const awaitingAck = messages.find((message) => message.role === "user" && message.state === "awaiting_ack");
+      let awaitingAck = messages.find(awaitingAcknowledgmentCandidate);
       if (awaitingAck) {
+        awaitingAck = await reconcileAttemptedDeliveryState(thread, awaitingAck, env);
+        if (!awaitingAck) continue;
         const status = await runtimeStatus(thread.id, env).catch(() => null);
         const acknowledged = await acknowledgeThreadInputDelivery(thread, awaitingAck, status, env);
         if (acknowledged) {
@@ -3837,6 +3949,18 @@ export async function deliverPendingThreadInputs(threadId, env = process.env, op
         if (await submitStableUnsentPromptDelivery(thread, awaitingAck, status, env)) continue;
         if (await failStuckPromptThreadInputDelivery(thread, awaitingAck, status, env)) continue;
         if (!status?.paneId || status.state === "sleeping") {
+          if (hasSubmittedDeliveryProvenance(awaitingAck)) {
+            const attempt = Math.max(1, deliveryAttempt(awaitingAck));
+            const nextAttemptAt = isoAfter(deliveryRetryBackoffMs(attempt, env));
+            await updateThreadMessage(thread.id, awaitingAck.id, {
+              state: "awaiting_ack",
+              deliveryState: "waiting_runtime_reconciliation",
+              deliveryNextAttemptAt: nextAttemptAt,
+              error: null,
+            }, env).catch(() => {});
+            scheduleThreadInputDelivery(thread.id, env, deliveryDueInMs({ deliveryNextAttemptAt: nextAttemptAt }));
+            break;
+          }
           const updated = await updateThreadMessage(thread.id, awaitingAck.id, {
             state: "queued",
             deliveryState: "waiting_runtime_start",
@@ -3876,7 +4000,18 @@ export async function deliverPendingThreadInputs(threadId, env = process.env, op
         break;
       }
 
-      let next = messages.find((message) => message.role === "user" && ["queued", "pending_delivery", "awaiting_ack"].includes(message.state));
+      const ambiguousAttempt = messages.find((message) => message.role === "user" &&
+        !awaitingAcknowledgmentCandidate(message) &&
+        (deliveryAttemptMayBeAmbiguous(message) || message.deliverySubmitRecoveryReservation?.state === "reserved"));
+      if (ambiguousAttempt) {
+        await pauseAmbiguousDelivery(thread, ambiguousAttempt, env);
+        break;
+      }
+
+      let next = messages.find((message) => message.role === "user" &&
+        ["queued", "pending_delivery", "awaiting_ack"].includes(message.state) &&
+        message.deliverySubmitRecoveryReservation?.state !== "reserved" &&
+        !deliveryAttemptMayBeAmbiguous(message));
       if (!next) break;
       const parsedCommand = parseThreadInputCommand(next);
       if ((parsedCommand.command === "plan" || parsedCommand.command === "code") && parsedCommand.text) {
@@ -5932,6 +6067,7 @@ function runtimeReadyForPendingRecovery(status = {}) {
 
 function stalePendingRecoveryCandidate(message = {}, staleMs = 60_000) {
   if (message.role !== "user" || !pendingInputStates.has(String(message.state || ""))) return false;
+  if (deliveryAttemptMayBeAmbiguous(message)) return false;
   if (stalePendingInputAgeMs(message) < staleMs) return false;
   const deliveryState = String(message.deliveryState || "").trim();
   if (!deliveryState) return true;
