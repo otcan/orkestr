@@ -38,8 +38,8 @@ jobs:
         run: npm run build
       - uses: actions/upload-artifact@v4
         with:
-          name: server-dist
-          path: dist/server
+          name: runtime-dist
+          path: dist
 
   test:
     runs-on: ubuntu-latest
@@ -63,8 +63,8 @@ jobs:
       - run: npm ci
       - uses: actions/download-artifact@v4
         with:
-          name: server-dist
-          path: dist/server
+          name: runtime-dist
+          path: dist
       - name: Test
         run: npm run test:ci
 
@@ -83,7 +83,7 @@ jobs:
       - run: npm ci
       - uses: actions/download-artifact@v4
         with:
-          name: server-dist
-          path: dist/server
+          name: runtime-dist
+          path: dist
       - run: npm run smoke
       - run: npm run demo:coding-agent

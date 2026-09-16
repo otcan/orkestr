@@ -6,4 +6,6 @@ if [ "${ORKESTR_BUILD_WEB_FROM_SOURCE:-0}" = "1" ]; then
 else
   npm run build:server
   npm run web:verify-static
+  npm run launcher:build
 fi
+npm run launcher:verify-static
