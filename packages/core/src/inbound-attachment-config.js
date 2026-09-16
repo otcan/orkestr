@@ -1,4 +1,5 @@
 import path from "node:path";
+import { inboundAttachmentWorkerStaticConfig } from "./inbound-attachment-worker-config.js";
 
 const defaultMaxFileBytes = 25 * 1024 * 1024;
 const defaultMaxFiles = 20;
@@ -44,26 +45,28 @@ export function inboundAttachmentUploadPolicy(env = process.env) {
   const command = clean(env.ORKESTR_INBOUND_UPLOAD_SCANNER_COMMAND);
   const args = scannerArguments(env);
   const scannerApproved = enabled(env.ORKESTR_INBOUND_UPLOAD_SCANNER_APPROVED);
-  const scannerConfigured = Boolean(
+  const testIsolation = enabled(env.ORKESTR_INBOUND_UPLOAD_TEST_ISOLATION)
+    && env.ORKESTR_TEST_STORAGE_BOOTSTRAPPED === "1";
+  const worker = inboundAttachmentWorkerStaticConfig(env);
+  const testScannerConfigured = Boolean(
     scannerApproved &&
     command &&
     path.isAbsolute(command) &&
     Array.isArray(args) &&
     args.includes("{file}"),
   );
-  // No production implementation may decrypt or scan untrusted plaintext in
-  // this API process. The only current executor is a test harness, deliberately
-  // gated by the storage bootstrap that is unavailable to a normal runtime.
-  const testIsolation = enabled(env.ORKESTR_INBOUND_UPLOAD_TEST_ISOLATION)
-    && env.ORKESTR_TEST_STORAGE_BOOTSTRAPPED === "1";
-  const isolationReady = testIsolation;
+  // Production plaintext handling is exclusively delegated to the worker. The
+  // legacy command is intentionally usable only by the storage-bootstrap test
+  // harness, never as a production fallback.
+  const scannerConfigured = testIsolation ? testScannerConfigured : scannerApproved && worker.configured;
+  const isolationReady = testIsolation || worker.configured;
   const reason = !featureEnabled
     ? "inbound_upload_encryption_disabled"
     : !scannerApproved
       ? "inbound_upload_scanner_not_approved"
-      : !command || !path.isAbsolute(command)
-        ? "inbound_upload_scanner_command_invalid"
-        : !Array.isArray(args) || !args.includes("{file}")
+    : testIsolation && (!command || !path.isAbsolute(command))
+      ? "inbound_upload_scanner_command_invalid"
+        : testIsolation && (!Array.isArray(args) || !args.includes("{file}"))
           ? "inbound_upload_scanner_args_invalid"
           : intakePaused
             ? "inbound_upload_intake_paused"
@@ -75,9 +78,10 @@ export function inboundAttachmentUploadPolicy(env = process.env) {
     required,
     ready: featureEnabled && scannerConfigured && !intakePaused && isolationReady,
     reason,
-    scanner: scannerConfigured ? { command, args } : null,
+    scanner: testIsolation && testScannerConfigured ? { command, args } : null,
     intakePaused,
     testIsolation,
+    worker,
     maxFileBytes: boundedInteger(env.ORKESTR_INBOUND_UPLOAD_MAX_FILE_BYTES, defaultMaxFileBytes, 1024, 100 * 1024 * 1024),
     maxFiles: boundedInteger(env.ORKESTR_INBOUND_UPLOAD_MAX_FILES, defaultMaxFiles, 1, 100),
     maxQuarantineBytes: boundedInteger(env.ORKESTR_INBOUND_UPLOAD_MAX_QUARANTINE_BYTES, defaultQuarantineBytes, defaultMaxFileBytes, 10 * 1024 * 1024 * 1024),

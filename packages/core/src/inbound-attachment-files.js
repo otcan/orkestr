@@ -43,14 +43,21 @@ export function inboundAttachmentStagingPath(session, token, env = process.env) 
   return path.join(inboundAttachmentQuarantineRoot(env), "staging", ownerBucket(session.ownerUserId), `${safeSessionId(session.id)}-${safeToken(token)}`);
 }
 
+export function inboundAttachmentWorkerHandoffPath(session, token, env = process.env) {
+  return path.join(inboundAttachmentQuarantineRoot(env), "handoff", ownerBucket(session.ownerUserId), `${safeSessionId(session.id)}-${safeToken(token)}`);
+}
+
 export function inboundAttachmentLeaseDirectory(session, token, env = process.env) {
   return path.join(inboundAttachmentQuarantineRoot(env), "plaintext", safeSessionId(session.id), safeToken(token));
 }
 
-export async function writeInboundAttachmentCiphertext(input, finalPath, maximumBytes) {
+export async function writeInboundAttachmentCiphertext(input, finalPath, maximumBytes, { mode = 0o640 } = {}) {
   const temporaryPath = `${finalPath}.${randomUUID()}.tmp`;
   await fsp.mkdir(path.dirname(finalPath), { recursive: true, mode: 0o700 });
-  const output = createWriteStream(temporaryPath, { flags: "wx", mode: 0o600 });
+  // A production worker runs under a separate unprivileged account. Operators
+  // provision this directory setgid to the narrow shared group; the API never
+  // writes plaintext here.
+  const output = createWriteStream(temporaryPath, { flags: "wx", mode });
   const digest = createHash("sha256");
   let size = 0;
   try {

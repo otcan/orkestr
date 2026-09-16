@@ -6,36 +6,32 @@ the existing browser-held recipient identities used for outbound downloads.
 It does not make an approved attachment secret from the scanner, Orkestr, or
 the agent that receives a released attachment.
 
-## Operator prerequisites
+## Activation boundary
 
-Inbound encryption is off by default. Enable it only after installing and
-reviewing an approved scanner wrapper on the Orkestr host:
+Inbound encryption is off by default. Production intake needs the dedicated
+[isolated worker contract](inbound-attachment-worker.md), including an
+approved scanner. The API process never decrypts production ciphertext and
+never stores an inbound age identity or worker signing private key.
 
 ```ini
 ORKESTR_INBOUND_UPLOAD_ENCRYPTION_ENABLED=1
 ORKESTR_INBOUND_UPLOAD_ENCRYPTION_REQUIRED=1
 ORKESTR_INBOUND_UPLOAD_SCANNER_APPROVED=1
-ORKESTR_INBOUND_UPLOAD_SCANNER_COMMAND=/opt/orkestr/bin/scan-inbound-attachment
-ORKESTR_INBOUND_UPLOAD_SCANNER_ARGS=["{file}"]
-ORKESTR_INBOUND_UPLOAD_SCANNER_REJECT_EXIT_CODE=10
 ```
 
-The command configuration is retained for the future isolated scanner runtime,
-but it is not sufficient to activate this feature. The OSS API process refuses
-production intake with `inbound_upload_isolation_contract_required` until a
-separately validated worker contract decrypts, scans, and signs a fresh clean
-verdict outside the API process. A command path, wrapper, or 0600 directory is
-not an isolation boundary. The test-only scanner harness is unavailable in a
-normal runtime.
+The API refuses production intake with
+`inbound_upload_isolation_contract_required` until its local worker socket,
+authentication secret, public verdict key, and exact quarantine roots are
+configured. It additionally checks worker health before creating a session or
+claiming a scan. The test-only scanner harness requires the test storage
+bootstrap and is unavailable in a normal runtime.
 
-The runtime creates a dedicated owner-scoped age identity under
-`ORKESTR_HOME/secrets/inbound-attachment-keys.json`. It is 0600 and contains
-private identities and the descriptor-signing secret; neither is returned to a
-browser or agent. Back up that file only through the approved secret-backup
-process. `GET/POST /api/attachment-encryption/inbound/keys` exposes public key
-status, rotation, and revocation for the authenticated owner. Rotation retires
-the old key so live sessions can finish; revocation blocks further processing
-of ciphertext for that key.
+The API-side registry contains only age recipients, key status, and the
+descriptor HMAC secret. The worker-owned registry contains the owner-scoped age
+identities and must be backed up through the worker's approved secret process.
+`GET/POST /api/attachment-encryption/inbound/keys` exposes only public key
+status. Rotation retires the old key so live sessions can finish; revocation
+blocks a release even if a scan was already in progress.
 
 ## Data path and lifecycle
 
@@ -53,14 +49,21 @@ claim while the scanner runs. Repeating the exact same ciphertext for a
 session is idempotent. A different retry for that session is rejected as a
 conflict.
 
-The service verifies ciphertext checksum and age authentication, writes exact
-plaintext bytes to a fenced temporary lease, verifies the descriptor and
-session binding, then rechecks the original owner/thread and key status before
-publication. A clean result is first staged outside the agent-visible path; a
-durable key/session lease fences the final rename and ready record. Startup
-recovery and the periodic sweep remove only an expired lease whose owner is
-proven dead. They do not recursively remove the plaintext directory or steal a
-slow live scanner.
+The API verifies ciphertext checksum, then sends only bounded session metadata,
+the ciphertext digest and processing token over an authenticated Unix socket.
+The worker decrypts to its private scratch directory, scans inside its Linux
+sandbox, and writes a single exact-byte handoff. It returns an Ed25519-signed
+clean verdict bound to the session, tenant owner, thread, key/version,
+processing token, ciphertext digest/size, plaintext digest/size, and expiry.
+The API verifies the signature, all bindings, the exact handoff bytes,
+descriptor, authority, key status, and lease immediately before publication.
+A clean result is staged outside the agent-visible path; a durable
+key/session lease fences the final rename and ready record. A malformed,
+misbound, expired, or untrusted verdict never releases plaintext.
+
+Worker restart deletes only its own scratch work. API startup recovery and the
+periodic sweep remove only an expired lease whose owner is proven dead. They do
+not recursively remove the plaintext directory or steal a slow live scanner.
 
 The HMAC descriptor is a server-side anti-tamper check. Browsers receive it
 over the authenticated HTTPS and trusted JavaScript boundary; they cannot
@@ -95,9 +98,10 @@ be retried. Removing an in-progress file cancels its server session.
 Monitor the bounded, low-cardinality
 `orkestr_inbound_attachment_upload_transitions_total` counter and
 `orkestr_inbound_attachment_scan_duration_seconds` histogram. A retryable
-scanner outage also creates a watcher alert without filename, path, owner, or
-content labels. Rejected attachments are metrics only and are never passed to
-an agent.
+worker/scanner outage also creates a watcher alert without filename, path,
+owner, or content labels. A missing or unhealthy worker blocks new intake; an
+in-flight session remains quarantined and retryable. Rejected attachments are
+metrics only and are never passed to an agent.
 
 To stop new encrypted intake, set
 `ORKESTR_INBOUND_UPLOAD_INTAKE_PAUSED=1` and restart. Keep both encryption

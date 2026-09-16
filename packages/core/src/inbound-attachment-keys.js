@@ -4,6 +4,8 @@ import * as age from "age-encryption";
 import { dataPaths } from "../../storage/src/paths.js";
 import { appendEvent, readJson, writeSecretJson } from "../../storage/src/store.js";
 import { normalizeUserId } from "./users.js";
+import { inboundAttachmentUploadPolicy } from "./inbound-attachment-config.js";
+import { inboundAttachmentWorkerKeyAction } from "./inbound-attachment-worker-client.js";
 import { withInboundAttachmentMutationLock } from "./inbound-attachment-store-lock.js";
 
 const registryVersion = 1;
@@ -87,6 +89,14 @@ function activeKey(registry, owner) {
   return registry.keys.find((key) => clean(key.ownerUserId) === owner && key.status === "active" && !key.revokedAt) || null;
 }
 
+function usesTestIdentity(env) {
+  return inboundAttachmentUploadPolicy(env).testIsolation === true;
+}
+
+function publicWorkerRecord(record = {}) {
+  return { ...publicKey(record) };
+}
+
 async function newKeyRecord(registry, owner) {
   const identity = await age.generateIdentity();
   const recipient = await age.identityToRecipient(identity);
@@ -115,6 +125,19 @@ export async function ensureInboundAttachmentKey(ownerUserId, env = process.env)
   const owner = ownerId(ownerUserId, env);
   const existing = activeKey(await readRegistry(env), owner);
   if (existing) return existing;
+  if (!usesTestIdentity(env)) {
+    const workerKey = await inboundAttachmentWorkerKeyAction("ensure", { ownerUserId: owner }, env);
+    const result = await withInboundAttachmentMutationLock(env, async () => {
+      const registry = await readRegistry(env);
+      const current = activeKey(registry, owner);
+      if (current) return { key: current, created: false };
+      registry.keys.push(publicWorkerRecord(workerKey));
+      await writeRegistry(registry, env);
+      return { key: publicWorkerRecord(workerKey), created: true };
+    });
+    if (result.created) await appendKeyEvent({ type: "inbound_attachment_key_created", ownerUserId: owner, keyId: result.key.id, keyVersion: result.key.version }, env);
+    return result.key;
+  }
   // Identity generation is intentionally outside the store lease. A second
   // contender may win while this runs; its key is then returned below.
   const candidate = await newKeyRecord(await readRegistry(env), owner);
@@ -142,6 +165,19 @@ export async function ensureInboundAttachmentKey(ownerUserId, env = process.env)
 
 export async function rotateInboundAttachmentKey(ownerUserId, env = process.env) {
   const owner = ownerId(ownerUserId, env);
+  if (!usesTestIdentity(env)) {
+    const workerKey = await inboundAttachmentWorkerKeyAction("rotate", { ownerUserId: owner }, env);
+    const result = await withInboundAttachmentMutationLock(env, async () => {
+      const registry = await readRegistry(env);
+      const current = activeKey(registry, owner);
+      if (current) { current.status = "retired"; current.retiredAt = nowIso(); }
+      registry.keys.push(publicWorkerRecord(workerKey));
+      await writeRegistry(registry, env);
+      return { key: publicWorkerRecord(workerKey), previousKeyId: clean(current?.id) };
+    });
+    await appendKeyEvent({ type: "inbound_attachment_key_rotated", ownerUserId: owner, previousKeyId: result.previousKeyId, keyId: result.key.id, keyVersion: result.key.version }, env);
+    return result.key;
+  }
   const candidate = await newKeyRecord(await readRegistry(env), owner);
   const result = await withInboundAttachmentMutationLock(env, async () => {
     const registry = await readRegistry(env);
@@ -170,6 +206,27 @@ export async function rotateInboundAttachmentKey(ownerUserId, env = process.env)
 export async function revokeInboundAttachmentKey(ownerUserId, keyId, env = process.env) {
   const owner = ownerId(ownerUserId, env);
   const wanted = clean(keyId);
+  if (!usesTestIdentity(env)) {
+    await withInboundAttachmentMutationLock(env, async () => {
+      const registry = await readRegistry(env);
+      const key = registry.keys.find((candidate) => clean(candidate.ownerUserId) === owner && clean(candidate.id) === wanted);
+      if (!key) throw Object.assign(new Error("inbound_attachment_key_not_found"), { statusCode: 404 });
+      key.status = "revoking";
+      key.updatedAt = nowIso();
+      await writeRegistry(registry, env);
+    });
+    const workerKey = await inboundAttachmentWorkerKeyAction("revoke", { ownerUserId: owner, keyId: wanted }, env);
+    const revoked = await withInboundAttachmentMutationLock(env, async () => {
+      const registry = await readRegistry(env);
+      const key = registry.keys.find((candidate) => clean(candidate.ownerUserId) === owner && clean(candidate.id) === wanted);
+      if (!key) throw Object.assign(new Error("inbound_attachment_key_not_found"), { statusCode: 404 });
+      Object.assign(key, publicWorkerRecord(workerKey));
+      await writeRegistry(registry, env);
+      return publicKey(key);
+    });
+    await appendKeyEvent({ type: "inbound_attachment_key_revoked", ownerUserId: owner, keyId: wanted }, env);
+    return revoked;
+  }
   const revoked = await withInboundAttachmentMutationLock(env, async () => {
     const registry = await readRegistry(env);
     const key = registry.keys.find((candidate) => clean(candidate.ownerUserId) === owner && clean(candidate.id) === wanted);
@@ -203,7 +260,7 @@ export async function inboundAttachmentKeyStatus(ownerUserId, env = process.env)
 }
 
 export async function inboundAttachmentRecipientDescriptor(session, key, policy, env = process.env) {
-  if (!key || clean(key.status) === "revoked" || !clean(key.recipient)) return null;
+  if (!key || !["active", "retired"].includes(clean(key.status)) || !clean(key.recipient)) return null;
   const registry = await readRegistry(env);
   const secret = clean(registry.descriptorSecret);
   if (!secret) throw new Error("inbound_attachment_descriptor_secret_unavailable");

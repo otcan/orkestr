@@ -1,11 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { createReadStream } from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
-import { Readable } from "node:stream";
-import * as age from "age-encryption";
 import { dataPaths } from "../../storage/src/paths.js";
-import { appendEvent, readJson, writeJson } from "../../storage/src/store.js";
+import { readJson, writeJson } from "../../storage/src/store.js";
 import { incrementCounter, observeHistogram } from "./observability.js";
 import { getThreadForPrincipal, assertThreadOperational } from "./threads.js";
 import { resourceOwnerUserId } from "./policy.js";
@@ -16,20 +13,25 @@ import {
   verifyInboundAttachmentRecipientDescriptor,
 } from "./inbound-attachment-keys.js";
 import { inboundAttachmentUploadPolicy, requireInboundAttachmentUploadReady } from "./inbound-attachment-config.js";
-import { writeInboundAttachmentPayload } from "./inbound-attachment-payload.js";
-import { recordWatcherAlert } from "./watcher-alerts.js";
-import { scanInboundAttachment } from "./inbound-attachment-scanner.js";
+import { inboundAttachmentWorkerHealth } from "./inbound-attachment-worker-client.js";
+import {
+  createInboundAttachmentUploadSessionsWorkflow,
+  ingestInboundAttachmentCiphertextWorkflow,
+  processInboundAttachmentUploadWorkflow,
+} from "./inbound-attachment-workflows.js";
+import { runInboundAttachmentMaintenance } from "./inbound-attachment-maintenance.js";
+import { removeInboundAttachmentArtifacts, removeOwnedInboundAttachmentArtifact } from "./inbound-attachment-artifacts.js";
+import { inboundAttachmentUploadReadiness } from "./inbound-attachment-readiness.js";
+import { inboundAttachmentProcessingLeaseIsStale } from "./inbound-attachment-stale-lease.js";
 import { inboundAttachmentUploadState, publicInboundAttachmentUploadSession } from "./inbound-attachment-session-projection.js";
 import { runtimeProcessIdentity, runtimeProcessIdentityAlive } from "./runtime-lease-lock.js";
 import { withInboundAttachmentMutationLock } from "./inbound-attachment-store-lock.js";
 import {
   inboundAttachmentCiphertextPath,
-  inboundAttachmentFileDigest,
   inboundAttachmentLeaseDirectory,
-  inboundAttachmentQuarantineRoot,
   inboundAttachmentReleasePath,
   inboundAttachmentStagingPath,
-  writeInboundAttachmentCiphertext,
+  inboundAttachmentWorkerHandoffPath,
 } from "./inbound-attachment-files.js";
 
 const storeVersion = 2;
@@ -48,6 +50,10 @@ const publicErrorCodes = new Set([
   "inbound_upload_session_expired",
   "inbound_upload_scanner_rejected",
   "inbound_upload_scanner_unavailable",
+  "inbound_upload_worker_verdict_binding_invalid",
+  "inbound_upload_worker_verdict_invalid",
+  "inbound_upload_worker_verdict_stale",
+  "inbound_upload_worker_verdict_untrusted",
   "inbound_upload_superseded",
   "plaintext_lease_expired",
   "restart_reconciliation_required",
@@ -166,13 +172,30 @@ function stableError(value, fallback = "inbound_upload_processing_failed") {
 
 function failureState(error) {
   const code = clean(error?.message || error);
-  if (["inbound_upload_scanner_unavailable", "inbound_upload_superseded", "restart_reconciliation_required"].includes(code)) {
+  if ([
+    "inbound_upload_scanner_unavailable",
+    "inbound_upload_superseded",
+    "restart_reconciliation_required",
+    "inbound_upload_worker_unavailable",
+    "inbound_upload_worker_timeout",
+    "inbound_upload_worker_not_ready",
+    "inbound_upload_worker_storage_invalid",
+    "inbound_upload_worker_sandbox_unavailable",
+  ].includes(code)) {
     return { state: "retryable", error: stableError(code, "inbound_upload_scanner_unavailable") };
   }
   if (["thread_not_found", "thread_access_forbidden", "inbound_upload_tenant_mismatch", "inbound_upload_permission_recheck_failed"].includes(code)) {
     return { state: "cancelled", error: "inbound_upload_permission_recheck_failed" };
   }
   if (["inbound_upload_descriptor_invalid", "inbound_upload_descriptor_expired"].includes(code)) {
+    return { state: "rejected", error: stableError(code) };
+  }
+  if ([
+    "inbound_upload_worker_verdict_binding_invalid",
+    "inbound_upload_worker_verdict_invalid",
+    "inbound_upload_worker_verdict_stale",
+    "inbound_upload_worker_verdict_untrusted",
+  ].includes(code)) {
     return { state: "rejected", error: stableError(code) };
   }
   if (code.includes("ciphertext") || code.includes("decrypt") || code.includes("age")) {
@@ -214,30 +237,9 @@ function leaseArtifactPaths(session, token, env) {
   return [
     inboundAttachmentLeaseDirectory(session, token, env),
     inboundAttachmentStagingPath(session, token, env),
+    inboundAttachmentWorkerHandoffPath(session, token, env),
     inboundAttachmentReleasePath(session, token, env),
   ];
-}
-
-function pathInside(root, target) {
-  const base = path.resolve(root);
-  const resolved = path.resolve(target);
-  return resolved.startsWith(`${base}${path.sep}`);
-}
-
-async function removeOwnedArtifact(target, root) {
-  if (!target || !pathInside(root, target)) return false;
-  await fsp.rm(target, { recursive: true, force: true }).catch(() => {});
-  return true;
-}
-
-async function removeArtifacts(paths, env) {
-  const quarantine = inboundAttachmentQuarantineRoot(env);
-  const uploads = path.join(dataPaths(env).home, "uploads");
-  let removed = 0;
-  for (const target of paths) {
-    if (await removeOwnedArtifact(target, quarantine) || await removeOwnedArtifact(target, uploads)) removed += 1;
-  }
-  return removed;
 }
 
 async function transitionExpiredSession(sessionId, env = process.env) {
@@ -262,168 +264,47 @@ async function expireReadySession(sessionId, env = process.env) {
     session.updatedAt = nowIso();
     return { changed: true, value: { session, releasePath } };
   });
-  if (expired?.releasePath) await removeArtifacts([expired.releasePath], env);
+  if (expired?.releasePath) await removeInboundAttachmentArtifacts([expired.releasePath], env);
   return expired?.session || null;
 }
 
 export async function inboundAttachmentUploadStatus({ threadId, principal, env = process.env } = {}) {
-  const thread = await requireThread(threadId, principal, env);
-  const policy = inboundAttachmentUploadPolicy(env);
-  return {
-    threadId: thread.id,
-    enabled: policy.enabled,
-    required: policy.required,
-    ready: policy.ready,
-    reason: policy.reason,
-    limits: { maxFileBytes: policy.maxFileBytes, maxFiles: policy.maxFiles, sessionTtlMs: policy.sessionTtlMs },
-  };
+  return inboundAttachmentUploadReadiness({ threadId, principal, env }, { requireThread, policyFor: inboundAttachmentUploadPolicy, workerHealth: inboundAttachmentWorkerHealth });
 }
 
 export async function createInboundAttachmentUploadSessions({ threadId, files = [], principal, env = process.env } = {}) {
-  const policy = requireInboundAttachmentUploadReady(env);
-  const thread = await requireThread(threadId, principal, env);
-  if (!Array.isArray(files) || !files.length || files.length > policy.maxFiles) throw fail("inbound_upload_files_invalid", 400);
-  const ownerUserId = clean(resourceOwnerUserId(thread, env));
-  const key = await ensureInboundAttachmentKey(ownerUserId, env);
-  const sessions = await mutateStore(env, async (store) => {
-    const result = [];
-    let changed = false;
-    let ownerReserved = quotaUsage(store.sessions, ownerUserId);
-    let globalReserved = quotaUsage(store.sessions);
-    let ownerCount = activeSessionCount(store.sessions, ownerUserId);
-    let globalCount = activeSessionCount(store.sessions);
-    for (const input of files) {
-      const idempotencyKey = safeIdempotencyKey(input?.idempotencyKey || input?.id);
-      const plaintextSize = Number(input?.plaintextSize ?? input?.size);
-      if (!idempotencyKey || !Number.isSafeInteger(plaintextSize) || plaintextSize < 1 || plaintextSize > policy.maxFileBytes) {
-        throw fail("inbound_upload_descriptor_invalid", 400);
-      }
-      const existing = store.sessions.find((session) =>
-        clean(session.ownerUserId) === ownerUserId && clean(session.threadId) === thread.id && clean(session.idempotencyKey) === idempotencyKey);
-      if (existing) {
-        if (Number(existing.plaintextSize) !== plaintextSize) throw fail("inbound_upload_idempotency_conflict", 409);
-        result.push(existing);
-        continue;
-      }
-      const ciphertextReservation = sessionCiphertextLimit(plaintextSize, policy);
-      if (ownerCount >= policy.maxSessionsPerOwner || globalCount >= policy.maxSessionsGlobal
-        || ownerReserved + ciphertextReservation > policy.maxOwnerQuarantineBytes
-        || globalReserved + ciphertextReservation > policy.maxQuarantineBytes) {
-        throw fail("inbound_upload_quota_exceeded", 413);
-      }
-      const createdAt = nowIso();
-      const session = {
-        id: `inbound-${randomUUID()}`,
-        ownerUserId,
-        threadId: thread.id,
-        idempotencyKey,
-        keyId: key.id,
-        keyVersion: key.version,
-        plaintextSize,
-        ciphertextReservation,
-        maxCiphertextBytes: ciphertextReservation,
-        state: "receiving",
-        createdAt,
-        updatedAt: createdAt,
-        expiresAt: new Date(Date.now() + policy.sessionTtlMs).toISOString(),
-        error: "",
-      };
-      store.sessions.push(session);
-      ownerReserved += ciphertextReservation;
-      globalReserved += ciphertextReservation;
-      ownerCount += 1;
-      globalCount += 1;
-      result.push(session);
-      changed = true;
-      recordMetric("receiving", "accepted");
-    }
-    return { changed, value: result };
+  return createInboundAttachmentUploadSessionsWorkflow({ threadId, files, principal, env }, {
+    requireUploadReady: requireInboundAttachmentUploadReady,
+    requireThread,
+    resourceOwnerUserId,
+    ensureKey: ensureInboundAttachmentKey,
+    keyById: inboundAttachmentKeyById,
+    recipientDescriptor: inboundAttachmentRecipientDescriptor,
+    mutateStore,
+    quotaUsage,
+    activeSessionCount,
+    sessionCiphertextLimit,
+    safeIdempotencyKey,
+    fail,
+    nowIso,
+    recordMetric,
+    publicSession: publicInboundAttachmentUploadSession,
   });
-  await Promise.all(sessions.map((session) => appendEvent({
-    type: "inbound_attachment_session_created",
-    threadId: session.threadId,
-    ownerUserId: session.ownerUserId,
-    keyVersion: session.keyVersion,
-    state: session.state,
-  }, env).catch(() => {})));
-  const descriptors = new Map(await Promise.all(sessions.map(async (session) => {
-    const sessionKey = await inboundAttachmentKeyById(ownerUserId, session.keyId, env);
-    return [session.id, await inboundAttachmentRecipientDescriptor(session, sessionKey, policy, env)];
-  })));
-  return {
-    threadId: thread.id,
-    sessions: sessions.map((session) => ({
-      ...publicInboundAttachmentUploadSession(session),
-      recipient: clean(descriptors.get(session.id)?.recipient),
-      descriptor: descriptors.get(session.id) || null,
-      purpose: "inbound_attachment_upload",
-    })),
-  };
 }
 
 export async function ingestInboundAttachmentCiphertext({ sessionId, principal, input, env = process.env } = {}) {
-  const { session } = await authorizedSession(sessionId, principal, env);
-  if (isReceivingExpired(session)) {
-    await transitionExpiredSession(session.id, env);
-    throw fail("inbound_upload_session_expired", 410);
-  }
-  if (session.state !== "receiving" && !(session.state === "quarantined" && session.ciphertext)) {
-    throw fail("inbound_upload_session_not_receiving", 409);
-  }
-  if (!input || typeof input[Symbol.asyncIterator] !== "function") throw fail("inbound_upload_ciphertext_required", 400);
-  const finalPath = inboundAttachmentCiphertextPath(session, env);
-  const ciphertext = await writeInboundAttachmentCiphertext(input, finalPath, Number(session.maxCiphertextBytes || 0));
-  let stored;
-  try {
-    stored = await mutateStore(env, async (store) => {
-      const current = store.sessions.find((item) => clean(item.id) === session.id);
-      if (!current) throw fail("inbound_upload_session_not_found", 404);
-      if (isReceivingExpired(current)) {
-        current.state = "expired";
-        current.error = "inbound_upload_session_expired";
-        current.updatedAt = nowIso();
-        return { changed: true, value: { expired: true, session: current } };
-      }
-      if (current.ciphertext) {
-        if (Number(current.ciphertext.size) !== ciphertext.size || clean(current.ciphertext.checksum) !== ciphertext.checksum) {
-          throw fail("inbound_upload_idempotency_conflict", 409);
-        }
-        return { changed: false, value: { session: current, duplicate: true } };
-      }
-      if (current.state !== "receiving") throw fail("inbound_upload_session_not_receiving", 409);
-      const remaining = store.sessions.filter((item) => clean(item.id) !== clean(current.id));
-      const policy = inboundAttachmentUploadPolicy(env);
-      if (quotaUsage(remaining, current.ownerUserId) + ciphertext.size > policy.maxOwnerQuarantineBytes
-        || quotaUsage(remaining) + ciphertext.size > policy.maxQuarantineBytes) {
-        throw fail("inbound_upload_quota_exceeded", 413);
-      }
-      await fsp.rename(ciphertext.temporaryPath, finalPath);
-      current.ciphertext = { size: ciphertext.size, checksum: ciphertext.checksum, storedAt: nowIso() };
-      current.state = "quarantined";
-      current.error = "";
-      current.updatedAt = nowIso();
-      recordMetric("quarantined", "accepted");
-      return { changed: true, value: { session: current, duplicate: false } };
-    });
-  } catch (error) {
-    await fsp.rm(ciphertext.temporaryPath, { force: true }).catch(() => {});
-    throw error;
-  }
-  await fsp.rm(ciphertext.temporaryPath, { force: true }).catch(() => {});
-  if (stored.expired) throw fail("inbound_upload_session_expired", 410);
-  await appendEvent({
-    type: "inbound_attachment_ciphertext_quarantined",
-    threadId: stored.session.threadId,
-    ownerUserId: stored.session.ownerUserId,
-    ciphertextSize: stored.session.ciphertext?.size || 0,
-    state: stored.session.state,
-  }, env).catch(() => {});
-  return publicInboundAttachmentUploadSession(stored.session);
-}
-
-async function staleProcessingLease(session) {
-  if (!isProcessingLeaseExpired(session)) return false;
-  return (await runtimeProcessIdentityAlive(session.processingLease)) === false;
+  return ingestInboundAttachmentCiphertextWorkflow({ sessionId, principal, input, env }, {
+    authorizedSession,
+    isReceivingExpired,
+    transitionExpiredSession,
+    fail,
+    mutateStore,
+    quotaUsage,
+    policyFor: inboundAttachmentUploadPolicy,
+    nowIso,
+    recordMetric,
+    publicSession: publicInboundAttachmentUploadSession,
+  });
 }
 
 async function claimProcessing(sessionId, principal, policy, env) {
@@ -436,7 +317,7 @@ async function claimProcessing(sessionId, principal, policy, env) {
     if (session.state === "ready") return { changed: false, value: { session, owned: false, artifacts: [] } };
     const artifacts = [];
     if (processingStates.has(session.state)) {
-      if (!await staleProcessingLease(session)) return { changed: false, value: { session, owned: false, artifacts } };
+      if (!await inboundAttachmentProcessingLeaseIsStale(session, { isProcessingLeaseExpired, runtimeProcessIdentityAlive })) return { changed: false, value: { session, owned: false, artifacts } };
       artifacts.push(...leaseArtifactPaths(session, session.processingToken, env));
       session.state = "retryable";
       session.error = "restart_reconciliation_required";
@@ -463,7 +344,7 @@ async function claimProcessing(sessionId, principal, policy, env) {
     session.updatedAt = nowIso();
     return { changed: true, value: { session: { ...session }, owned: true, artifacts } };
   });
-  await removeArtifacts(claimed.artifacts, env);
+  await removeInboundAttachmentArtifacts(claimed.artifacts, env);
   return claimed;
 }
 
@@ -508,7 +389,10 @@ async function publishStagedAttachment({ session, token, decoded, principal, pol
     const current = store.sessions.find((item) => clean(item.id) === clean(session.id));
     if (!current || current.state !== "scanning" || clean(current.processingToken) !== clean(token)) throw fail("inbound_upload_superseded", 409);
     const key = await inboundAttachmentKeyById(current.ownerUserId, current.keyId, env);
-    if (!key || key.status === "revoked" || !clean(key.identity)) throw fail("inbound_upload_key_unavailable", 409);
+    // In production the API deliberately has no decryption identity. The
+    // isolated worker has already bound its signed verdict to this key; the
+    // publish fence only needs to ensure that the public key was not revoked.
+    if (!key || !["active", "retired"].includes(key.status)) throw fail("inbound_upload_key_unavailable", 409);
     await fsp.mkdir(path.dirname(destination), { recursive: true, mode: 0o700 });
     await fsp.rename(stagePath, destination);
     await fsp.chmod(destination, 0o600);
@@ -530,118 +414,30 @@ async function publishStagedAttachment({ session, token, decoded, principal, pol
     try {
       await writeStore(store, env);
     } catch (error) {
-      await removeOwnedArtifact(destination, path.join(dataPaths(env).home, "uploads"));
+      await removeOwnedInboundAttachmentArtifact(destination, path.join(dataPaths(env).home, "uploads"));
       throw error;
     }
     return current;
   });
 }
 
-function startLeaseHeartbeat(sessionId, token, policy, env) {
-  const intervalMs = Math.max(1_000, Math.floor(policy.processingLeaseMs / 3));
-  let stopped = false;
-  let running = false;
-  const timer = setInterval(() => {
-    if (stopped || running) return;
-    running = true;
-    renewProcessingLease(sessionId, token, policy, env).catch(() => {}).finally(() => { running = false; });
-  }, intervalMs);
-  timer.unref?.();
-  return () => { stopped = true; clearInterval(timer); };
-}
-
 export async function processInboundAttachmentUpload({ sessionId, principal, env = process.env, scanner } = {}) {
-  const policy = inboundAttachmentUploadPolicy(env);
-  if (!policy.ready || (typeof scanner === "function" && !policy.testIsolation)) throw fail(policy.reason || "inbound_upload_not_ready", 503);
-  const claim = await claimProcessing(sessionId, principal, policy, env);
-  if (!claim.owned) return publicInboundAttachmentUploadSession(claim.session);
-  const session = claim.session;
-  const token = session.processingToken;
-  const startedAt = Date.now();
-  const leaseDir = inboundAttachmentLeaseDirectory(session, token, env);
-  const plaintextPath = path.join(leaseDir, "payload");
-  const stagePath = inboundAttachmentStagingPath(session, token, env);
-  const destination = inboundAttachmentReleasePath(session, token, env);
-  const stopHeartbeat = startLeaseHeartbeat(session.id, token, policy, env);
-  let published = false;
-  try {
-    const key = await inboundAttachmentKeyById(session.ownerUserId, session.keyId, env);
-    if (!key || key.status === "revoked" || !clean(key.identity)) throw fail("inbound_upload_key_unavailable", 409);
-    const cipherPath = inboundAttachmentCiphertextPath(session, env);
-    const stat = await fsp.stat(cipherPath).catch(() => null);
-    if (!stat?.isFile() || stat.size !== Number(session.ciphertext?.size || 0)) throw fail("inbound_upload_ciphertext_missing", 409);
-    const digest = await inboundAttachmentFileDigest(cipherPath);
-    if (clean(digest.checksum) !== clean(session.ciphertext?.checksum)) throw fail("inbound_upload_ciphertext_tampered", 409);
-    await fsp.mkdir(leaseDir, { recursive: true, mode: 0o700 });
-    await fsp.chmod(leaseDir, 0o700);
-    const decrypter = new age.Decrypter();
-    decrypter.addIdentity(key.identity);
-    const plaintext = await decrypter.decrypt(Readable.toWeb(createReadStream(cipherPath)));
-    const decoded = await writeInboundAttachmentPayload(plaintext, {
-      destinationPath: plaintextPath,
-      sessionId: session.id,
-      keyId: session.keyId,
-      plaintextSize: session.plaintextSize,
-      maxPlaintextBytes: policy.maxFileBytes,
-    });
-    await verifyInboundAttachmentRecipientDescriptor(decoded.descriptor, session, key, policy, env);
-    await assertSessionAuthority(session, principal, env);
-    await setScanning(session.id, token, policy, env);
-    const verdict = await scanInboundAttachment(plaintextPath, policy, scanner);
-    if (!verdict.approved) {
-      const state = verdict.retryable ? "retryable" : "rejected";
-      const error = verdict.retryable ? "inbound_upload_scanner_unavailable" : "inbound_upload_scanner_rejected";
-      const completed = await completeProcessing(session.id, token, { state, error }, env);
-      recordMetric(state, state, Date.now() - startedAt);
-      if (state === "retryable") {
-        await recordWatcherAlert({
-          source: "inbound_attachment_upload",
-          code: "scanner_unavailable",
-          severity: "warning",
-          message: "Inbound encrypted attachment remains quarantined because its approved scanner did not return a clean verdict.",
-          details: { state },
-        }, env).catch(() => {});
-      }
-      return publicInboundAttachmentUploadSession(completed);
-    }
-    await renewProcessingLease(session.id, token, policy, env);
-    await fsp.mkdir(path.dirname(stagePath), { recursive: true, mode: 0o700 });
-    await fsp.rename(plaintextPath, stagePath);
-    await fsp.chmod(stagePath, 0o600);
-    const completed = await publishStagedAttachment({ session, token, decoded, principal, policy, stagePath, destination, env });
-    published = true;
-    await fsp.rm(cipherPath, { force: true }).catch(() => {});
-    recordMetric("ready", "ready", Date.now() - startedAt);
-    await appendEvent({
-      type: "inbound_attachment_scan_approved",
-      threadId: completed.threadId,
-      ownerUserId: completed.ownerUserId,
-      state: completed.state,
-      plaintextSize: completed.release.size,
-      keyVersion: completed.keyVersion,
-    }, env).catch(() => {});
-    return publicInboundAttachmentUploadSession(completed);
-  } catch (error) {
-    const next = failureState(error);
-    const completed = await completeProcessing(session.id, token, { state: next.state, error: next.error }, env).catch(() => null);
-    recordMetric(next.state, next.state, Date.now() - startedAt);
-    if (next.state === "retryable") {
-      await recordWatcherAlert({
-        source: "inbound_attachment_upload",
-        code: "inbound_attachment_processing_retryable",
-        severity: "warning",
-        message: "Inbound encrypted attachment remains quarantined pending a retryable processing failure.",
-        details: { state: next.state },
-      }, env).catch(() => {});
-    }
-    if (completed) return publicInboundAttachmentUploadSession(completed);
-    // A competing fenced worker may have terminally changed this session.
-    // Never relay the original decoder/scanner error through that race.
-    throw fail("inbound_upload_superseded", 409);
-  } finally {
-    stopHeartbeat();
-    await removeArtifacts([leaseDir, stagePath, ...(published ? [] : [destination])], env);
-  }
+  return processInboundAttachmentUploadWorkflow({ sessionId, principal, env, scanner }, {
+    policyFor: inboundAttachmentUploadPolicy,
+    fail,
+    claimProcessing,
+    keyById: inboundAttachmentKeyById,
+    verifyDescriptor: verifyInboundAttachmentRecipientDescriptor,
+    assertSessionAuthority,
+    setScanning,
+    renewProcessingLease,
+    completeProcessing,
+    publishStagedAttachment,
+    failureState,
+    removeArtifacts: removeInboundAttachmentArtifacts,
+    recordMetric,
+    publicSession: publicInboundAttachmentUploadSession,
+  });
 }
 
 export async function inboundAttachmentUploadSession({ sessionId, principal, env = process.env } = {}) {
@@ -667,73 +463,21 @@ export async function cancelInboundAttachmentUpload({ sessionId, principal, env 
   return publicInboundAttachmentUploadSession(cancelled);
 }
 
-async function removeStaleTemporaryCiphertext(env, policy) {
-  const root = path.join(inboundAttachmentQuarantineRoot(env), "ciphertext");
-  const cutoff = Date.now() - policy.partialUploadTtlMs;
-  let removed = 0;
-  async function visit(directory) {
-    const entries = await fsp.readdir(directory, { withFileTypes: true }).catch(() => []);
-    for (const entry of entries) {
-      const target = path.join(directory, entry.name);
-      if (entry.isDirectory()) await visit(target);
-      else if (entry.isFile() && entry.name.endsWith(".tmp")) {
-        const stat = await fsp.stat(target).catch(() => null);
-        if (stat && stat.mtimeMs <= cutoff && await removeOwnedArtifact(target, root)) removed += 1;
-      }
-    }
-  }
-  await visit(root);
-  return removed;
-}
-
 async function runInboundAttachmentSweep(env = process.env, startup = false) {
-  const policy = inboundAttachmentUploadPolicy(env);
-  const now = Date.now();
-  const sweep = await mutateStore(env, async (store) => {
-    let changed = false;
-    const artifacts = [];
-    const ciphertext = [];
-    const retainedAt = now - policy.terminalRetentionMs;
-    for (const session of store.sessions) {
-      if (isReceivingExpired(session, now)) {
-        session.state = "expired";
-        session.error = "inbound_upload_session_expired";
-        session.updatedAt = nowIso(now);
-        changed = true;
-      }
-      if (processingStates.has(session.state) && isProcessingLeaseExpired(session, now) && await staleProcessingLease(session)) {
-        artifacts.push(...leaseArtifactPaths(session, session.processingToken, env));
-        session.state = "retryable";
-        session.error = "restart_reconciliation_required";
-        delete session.processingToken;
-        delete session.processingLease;
-        session.updatedAt = nowIso(now);
-        changed = true;
-      }
-      if (isReleaseExpired(session, now)) {
-        artifacts.push(clean(session.release?.path));
-        session.state = "expired";
-        session.error = "plaintext_lease_expired";
-        session.updatedAt = nowIso(now);
-        changed = true;
-      }
-      const updatedAt = Date.parse(clean(session.updatedAt || session.createdAt));
-      if (["rejected", "cancelled", "expired"].includes(session.state) && Number.isFinite(updatedAt) && updatedAt <= retainedAt) {
-        ciphertext.push(inboundAttachmentCiphertextPath(session, env));
-      }
-    }
-    return { changed, value: { sessions: store.sessions, artifacts, ciphertext } };
+  return runInboundAttachmentMaintenance({ env, startup }, {
+    policyFor: inboundAttachmentUploadPolicy,
+    mutateStore,
+    isReceivingExpired,
+    processingStates,
+    isProcessingLeaseExpired,
+    staleProcessingLease: (session) => inboundAttachmentProcessingLeaseIsStale(session, { isProcessingLeaseExpired, runtimeProcessIdentityAlive }),
+    leaseArtifactPaths,
+    isReleaseExpired,
+    clean,
+    nowIso,
+    removeArtifacts: removeInboundAttachmentArtifacts,
+    removeOwnedArtifact: removeOwnedInboundAttachmentArtifact,
   });
-  const removedPlaintext = await removeArtifacts(sweep.artifacts, env);
-  for (const target of sweep.ciphertext) await removeOwnedArtifact(target, path.join(inboundAttachmentQuarantineRoot(env), "ciphertext"));
-  const removedTemporaryCiphertext = await removeStaleTemporaryCiphertext(env, policy);
-  return {
-    retryable: sweep.sessions.filter((session) => session.state === "retryable").length,
-    expired: sweep.sessions.filter((session) => session.state === "expired").length,
-    removedPlaintext,
-    removedTemporaryCiphertext,
-    startup,
-  };
 }
 
 // Both paths recover only a lease proven expired and dead. The explicit names

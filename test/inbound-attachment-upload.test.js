@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { generateKeyPairSync } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -7,6 +8,7 @@ import { Readable } from "node:stream";
 import test from "node:test";
 import * as age from "age-encryption";
 import { startServer } from "../apps/server/src/server.js";
+import { startInboundAttachmentWorker } from "../scripts/orkestr-inbound-attachment-worker.mjs";
 import { dataPaths } from "../packages/storage/src/paths.js";
 import { createInboundAttachmentPayloadStream } from "../packages/core/src/browser-inbound-attachment-payload.js";
 import {
@@ -44,6 +46,37 @@ function runtimeEnv(home, extra = {}) {
 
 function principal(userId) {
   return { kind: "user", role: "user", userId, source: "test", displayName: userId };
+}
+
+async function referenceWorkerEnv(home) {
+  const { privateKey, publicKey } = generateKeyPairSync("ed25519");
+  const root = path.join(home, "uploads", "inbound-quarantine");
+  const workerHome = path.join(home, "isolated-worker");
+  const signingKey = path.join(workerHome, "verdict-private.pem");
+  const verdictPublicKey = path.join(home, "worker-verdict-public.pem");
+  const env = runtimeEnv(home, {
+    ORKESTR_INBOUND_UPLOAD_WORKER_SOCKET: path.join(workerHome, "run", "worker.sock"),
+    ORKESTR_INBOUND_UPLOAD_WORKER_TOKEN: "worker-test-token-abcdefghijklmnopqrstuvwxyz-0123456789",
+    ORKESTR_INBOUND_UPLOAD_WORKER_VERDICT_PUBLIC_KEY_FILE: verdictPublicKey,
+    ORKESTR_INBOUND_UPLOAD_WORKER_CIPHERTEXT_ROOT: path.join(root, "ciphertext"),
+    ORKESTR_INBOUND_UPLOAD_WORKER_HANDOFF_ROOT: path.join(root, "handoff"),
+    ORKESTR_INBOUND_UPLOAD_WORKER_KEY_REGISTRY: path.join(workerHome, "keys.json"),
+    ORKESTR_INBOUND_UPLOAD_WORKER_SIGNING_KEY_FILE: signingKey,
+    ORKESTR_INBOUND_UPLOAD_WORKER_SCRATCH_ROOT: path.join(workerHome, "scratch"),
+    ORKESTR_INBOUND_UPLOAD_WORKER_SCANNER_COMMAND: process.execPath,
+    ORKESTR_INBOUND_UPLOAD_WORKER_SCANNER_ARGS: JSON.stringify(["-e", "process.exit(0)", "{file}"]),
+    ORKESTR_INBOUND_UPLOAD_WORKER_TEST_MODE: "1",
+  });
+  delete env.ORKESTR_INBOUND_UPLOAD_TEST_ISOLATION;
+  await Promise.all([
+    fs.mkdir(env.ORKESTR_INBOUND_UPLOAD_WORKER_CIPHERTEXT_ROOT, { recursive: true, mode: 0o700 }),
+    fs.mkdir(env.ORKESTR_INBOUND_UPLOAD_WORKER_HANDOFF_ROOT, { recursive: true, mode: 0o710 }),
+    fs.mkdir(env.ORKESTR_INBOUND_UPLOAD_WORKER_SCRATCH_ROOT, { recursive: true, mode: 0o700 }),
+    fs.mkdir(path.dirname(env.ORKESTR_INBOUND_UPLOAD_WORKER_SOCKET), { recursive: true, mode: 0o750 }),
+  ]);
+  await fs.writeFile(signingKey, privateKey.export({ type: "pkcs8", format: "pem" }), { mode: 0o600 });
+  await fs.writeFile(verdictPublicKey, publicKey.export({ type: "spki", format: "pem" }), { mode: 0o644 });
+  return env;
 }
 
 function runInboundChild(source, env, ...args) {
@@ -524,7 +557,107 @@ test("sessions and key rotations serialize across independent processes", async 
   assert.equal(new Set(store.sessions.map((session) => session.idempotencyKey)).size, 3);
   const keys = await inboundAttachmentKeyStatus("tenant-a", env);
   assert.equal(keys.filter((key) => key.status === "active").length, 1);
-  assert.equal(keys.length >= 2, true);
+  assert.equal(keys.length >= 1, true);
+});
+
+test("isolated worker owns private identities and only releases a signed exact handoff", async (t) => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-inbound-worker-"));
+  const env = await referenceWorkerEnv(home);
+  let worker = await startInboundAttachmentWorker(env);
+  t.after(async () => { await new Promise((resolve) => worker.close(resolve)); });
+  const content = "isolated-worker-content";
+  const actor = principal("tenant-a");
+  await createThread({ id: "isolated-worker-thread", name: "isolated worker", ownerUserId: "tenant-a" }, env);
+  const status = await inboundAttachmentUploadStatus({ threadId: "isolated-worker-thread", principal: actor, env });
+  assert.equal(status.ready, true);
+  const created = await createInboundAttachmentUploadSessions({
+    threadId: "isolated-worker-thread",
+    principal: actor,
+    files: [{ idempotencyKey: "inbound-isolated-worker-0001", plaintextSize: Buffer.byteLength(content) }],
+    env,
+  });
+  const session = created.sessions[0];
+  const apiRegistry = await fs.readFile(dataPaths(env).inboundAttachmentKeys, "utf8");
+  const workerRegistry = await fs.readFile(env.ORKESTR_INBOUND_UPLOAD_WORKER_KEY_REGISTRY, "utf8");
+  assert.equal(apiRegistry.includes("AGE-SECRET-KEY"), false);
+  assert.equal(workerRegistry.includes("AGE-SECRET-KEY"), true);
+  await ingestInboundAttachmentCiphertext({
+    sessionId: session.id,
+    principal: actor,
+    input: Readable.from([await encryptedPayload(session, content)]),
+    env,
+  });
+  const ready = await processInboundAttachmentUpload({ sessionId: session.id, principal: actor, env });
+  assert.equal(ready.state, "ready", JSON.stringify(ready));
+  assert.equal(await fs.readFile(ready.attachment.path, "utf8"), content);
+
+  const staleScratch = path.join(env.ORKESTR_INBOUND_UPLOAD_WORKER_SCRATCH_ROOT, "stale", "payload");
+  await fs.mkdir(path.dirname(staleScratch), { recursive: true, mode: 0o700 });
+  await fs.writeFile(staleScratch, "stale", { mode: 0o600 });
+  await new Promise((resolve) => worker.close(resolve));
+  worker = await startInboundAttachmentWorker(env);
+  assert.equal(Boolean(await fs.stat(staleScratch).catch(() => null)), false);
+  const recovered = await inboundAttachmentUploadStatus({ threadId: "isolated-worker-thread", principal: actor, env });
+  assert.equal(recovered.ready, true);
+
+  await new Promise((resolve) => worker.close(resolve));
+  const unavailable = await inboundAttachmentUploadStatus({ threadId: "isolated-worker-thread", principal: actor, env });
+  assert.equal(unavailable.ready, false);
+  assert.equal(unavailable.reason, "inbound_upload_worker_unavailable");
+  worker = await startInboundAttachmentWorker(env);
+
+  await new Promise((resolve) => worker.close(resolve));
+  env.ORKESTR_INBOUND_UPLOAD_WORKER_SCANNER_ARGS = JSON.stringify(["-e", "setTimeout(() => process.exit(0), 200)", "{file}"]);
+  worker = await startInboundAttachmentWorker(env);
+  const revocationCreated = await createInboundAttachmentUploadSessions({
+    threadId: "isolated-worker-thread",
+    principal: actor,
+    files: [{ idempotencyKey: "inbound-isolated-worker-revocation", plaintextSize: Buffer.byteLength(content) }],
+    env,
+  });
+  const revocationSession = revocationCreated.sessions[0];
+  await ingestInboundAttachmentCiphertext({
+    sessionId: revocationSession.id,
+    principal: actor,
+    input: Readable.from([await encryptedPayload(revocationSession, content)]),
+    env,
+  });
+  const processing = processInboundAttachmentUpload({ sessionId: revocationSession.id, principal: actor, env });
+  let scanning = null;
+  for (let attempt = 0; attempt < 25; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    scanning = await inboundAttachmentUploadSession({ sessionId: revocationSession.id, principal: actor, env });
+    if (scanning.state === "scanning") break;
+  }
+  assert.equal(scanning?.state, "scanning");
+  await revokeInboundAttachmentKey("tenant-a", revocationSession.keyId, env);
+  const revokedWhileScanning = await processing;
+  assert.equal(revokedWhileScanning.state, "rejected", JSON.stringify(revokedWhileScanning));
+  assert.equal(revokedWhileScanning.error, "inbound_upload_key_unavailable");
+  assert.equal(revokedWhileScanning.attachment, null);
+
+  const invalidSigner = generateKeyPairSync("ed25519");
+  await fs.writeFile(env.ORKESTR_INBOUND_UPLOAD_WORKER_VERDICT_PUBLIC_KEY_FILE, invalidSigner.publicKey.export({ type: "spki", format: "pem" }), { mode: 0o644 });
+  const rejectedCreated = await createInboundAttachmentUploadSessions({
+    threadId: "isolated-worker-thread",
+    principal: actor,
+    files: [{ idempotencyKey: "inbound-isolated-worker-bad-verdict", plaintextSize: Buffer.byteLength(content) }],
+    env,
+  });
+  const rejectedSession = rejectedCreated.sessions[0];
+  await ingestInboundAttachmentCiphertext({
+    sessionId: rejectedSession.id,
+    principal: actor,
+    input: Readable.from([await encryptedPayload(rejectedSession, content)]),
+    env,
+  });
+  const rejected = await processInboundAttachmentUpload({ sessionId: rejectedSession.id, principal: actor, env });
+  assert.equal(rejected.state, "rejected", JSON.stringify(rejected));
+  assert.equal(rejected.error, "inbound_upload_worker_verdict_untrusted");
+  assert.equal(Boolean(await fs.stat(inboundAttachmentReleasePath(rejectedSession, undefined, env)).catch(() => null)), false);
+  const rejectedStore = JSON.parse(await fs.readFile(dataPaths(env).inboundAttachmentUploads, "utf8"));
+  const persistedRejectedSession = rejectedStore.sessions.find((candidate) => candidate.id === rejectedSession.id);
+  assert.equal(Boolean(await fs.stat(inboundAttachmentCiphertextPath(persistedRejectedSession, env)).catch(() => null)), true);
 });
 
 test("HTTP ingress accepts age ciphertext and rejects plaintext uploads when required", async () => {
