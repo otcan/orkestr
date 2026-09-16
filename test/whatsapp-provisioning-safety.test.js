@@ -300,7 +300,7 @@ test("forced read-only diagnostics attest the runtime without recovering or leak
     assert.equal(recoveries, 0);
     assert.equal(account.provenance.ownership, "verified");
     assert.equal(account.provenance.runtimeGeneration > 0, true);
-    assert.equal(account.capabilities.groupCreate, "degraded");
+    assert.equal(account.capabilities.groupCreate, "unknown");
     assert.equal(assertWhatsAppRuntimeBrowserOwnership(account.provenance, { accountId: "other", generation: account.provenance.runtimeGeneration }).ok, false);
     assert.doesNotMatch(JSON.stringify(status), /private|sessionRoot|clientId|debugger/i);
   } finally {

@@ -45,7 +45,9 @@ export function patchWhatsAppGroupProvisioningOperation(operation = {}, patch = 
 }
 
 export function publicWhatsAppGroupProvisioningOperation(operation = {}) {
-  const failure = publicWhatsAppGroupCreateFailure(operation.failure);
+  const failure = operation.failure && typeof operation.failure === "object"
+    ? publicWhatsAppGroupCreateFailure({ groupCreateFailure: operation.failure })
+    : null;
   return {
     operationId: clean(operation.id),
     operation: "whatsapp_group_provisioning",

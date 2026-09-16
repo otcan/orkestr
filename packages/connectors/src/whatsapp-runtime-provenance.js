@@ -34,12 +34,28 @@ export function attestWhatsAppRuntimeProvenance({ accountId = "", runtime = null
   };
 }
 
-export function assertWhatsAppRuntimeBrowserOwnership(provenance = {}, { accountId = "", generation = null } = {}) {
+export function assertWhatsAppRuntimeBrowserOwnership(provenance = {}, {
+  accountId = "",
+  runtime = null,
+  maxAgeMs = 60_000,
+  nowMs = Date.now(),
+} = {}) {
   const expectedAccountId = clean(accountId);
-  const expectedGeneration = Number(generation || 0) || 0;
-  const verified = provenance?.ownership === "verified" &&
+  const expected = attestWhatsAppRuntimeProvenance({ accountId: expectedAccountId, runtime });
+  const observedAtMs = Date.parse(clean(provenance?.observedAt));
+  const currentMs = Number(nowMs);
+  const ageLimitMs = Math.max(1, Math.min(Number(maxAgeMs) || 60_000, 300_000));
+  const fresh = Number.isFinite(observedAtMs) && Number.isFinite(currentMs) &&
+    observedAtMs <= currentMs + 5_000 && currentMs - observedAtMs <= ageLimitMs;
+  const verified = expected.ownership === "verified" &&
+    provenance?.ownership === "verified" &&
     clean(provenance?.accountId) === expectedAccountId &&
-    (!expectedGeneration || Number(provenance?.runtimeGeneration || 0) === expectedGeneration);
+    clean(provenance?.source) === clean(expected.source) &&
+    Number(provenance?.runtimeGeneration || 0) === Number(expected.runtimeGeneration || 0) &&
+    clean(provenance?.workerId) === clean(expected.workerId) &&
+    clean(provenance?.browserId) === clean(expected.browserId) &&
+    clean(provenance?.pageId) === clean(expected.pageId) &&
+    fresh;
   return verified
     ? { ok: true, provenance }
     : {

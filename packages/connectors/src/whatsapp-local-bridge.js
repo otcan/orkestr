@@ -1875,6 +1875,11 @@ function markLocalWhatsAppAccountReady(accountId, client, patch = {}) {
   });
 }
 
+function verifiedLocalWhatsAppLogoutReason(reason = "") {
+  const normalized = String(reason || "").trim().toLowerCase();
+  return ["logout", "auth_failure", "authentication_failure"].includes(normalized);
+}
+
 async function accountSnapshot(accountId, env = process.env, options = {}) {
   let state = accountStates.get(accountId) || defaultAccountState(accountId);
   const runtime = runtimes.get(accountId);
@@ -1943,16 +1948,30 @@ async function accountSnapshot(accountId, env = process.env, options = {}) {
   const runtimeMissing = Boolean(!hasClient && (effectiveState.ready || effectiveState.state === "authenticated" || (effectiveState.authenticated && effectiveState.started)));
   const runtimeUnavailable = effectiveState.runtimeUsable === false;
   const staleReadyRuntime = Boolean((effectiveState.ready || runtimeMissing) && !hasClient);
-  const ready = Boolean(effectiveState.ready && hasClient && !runtimeUnavailable);
-  const accountState = verifiedLogoutIsNewer ? "auth_failure" : staleReadyRuntime ? "stale_runtime" : effectiveState.state;
+  const diagnosticProbeFailed = readOnly && options.chatOpsProbe?.ok === false;
+  const runtimeReady = Boolean(effectiveState.ready && hasClient && !runtimeUnavailable);
+  const ready = runtimeReady && !diagnosticProbeFailed;
+  const accountState = verifiedLogoutIsNewer
+    ? "auth_failure"
+    : staleReadyRuntime
+      ? "stale_runtime"
+      : diagnosticProbeFailed && effectiveState.state === "ready"
+        ? "degraded"
+        : effectiveState.state;
   const qrAvailable = Boolean(state.qrAvailable || (await exists(qrPath(accountId, env))));
   return {
     ...effectiveState,
     state: accountState,
     ready,
-    chatOpsReady: effectiveState.chatOpsReady === false ? false : ready ? true : runtimeUnavailable ? false : null,
-    runtimeUsable: ready ? true : runtimeUnavailable ? false : null,
-    error: verifiedLogoutIsNewer ? "whatsapp_session_logout_verified" : staleReadyRuntime ? "whatsapp_local_runtime_missing" : effectiveState.error,
+    chatOpsReady: diagnosticProbeFailed ? false : effectiveState.chatOpsReady === false ? false : runtimeReady ? true : runtimeUnavailable ? false : null,
+    runtimeUsable: runtimeReady ? true : runtimeUnavailable ? false : null,
+    error: verifiedLogoutIsNewer
+      ? "whatsapp_session_logout_verified"
+      : staleReadyRuntime
+        ? "whatsapp_local_runtime_missing"
+        : diagnosticProbeFailed
+          ? "whatsapp_chat_ops_probe_failed"
+          : effectiveState.error,
     clientId: clientIdForAccount(accountId, env),
     sessionRoot: sessionRootForAccount(accountId, env),
     localAuthSessionDir: localAuthSessionDirForAccount(accountId, env),
@@ -1962,10 +1981,11 @@ async function accountSnapshot(accountId, env = process.env, options = {}) {
     started: Boolean(effectiveState.started || (!verifiedLogoutIsNewer && runtimes.has(accountId))),
     capabilities: {
       auth: verifiedLogoutIsNewer ? "unavailable" : effectiveState.authenticated ? "available" : "unknown",
-      read: ready && effectiveState.chatOpsReady !== false ? "available" : runtimeUnavailable ? "unavailable" : "unknown",
-      send: ready ? "available" : runtimeUnavailable ? "unavailable" : "unknown",
-      inbound: ready && effectiveState.chatOpsReady !== false ? "available" : runtimeUnavailable ? "unavailable" : "unknown",
-      groupCreate: ready && typeof runtime?.client?.createGroup === "function" ? "available" : ready ? "degraded" : runtimeUnavailable ? "unavailable" : "unknown",
+      read: diagnosticProbeFailed ? "degraded" : runtimeReady && effectiveState.chatOpsReady !== false ? "available" : runtimeUnavailable ? "unavailable" : "unknown",
+      send: runtimeReady ? "available" : runtimeUnavailable ? "unavailable" : "unknown",
+      inbound: diagnosticProbeFailed ? "degraded" : runtimeReady && effectiveState.chatOpsReady !== false ? "available" : runtimeUnavailable ? "unavailable" : "unknown",
+      // An SDK method proves API shape only. A create capability needs authoritative create evidence.
+      groupCreate: runtimeReady ? "unknown" : runtimeUnavailable ? "unavailable" : "unknown",
     },
     provenance: attestWhatsAppRuntimeProvenance({ accountId, runtime }),
   };
@@ -2517,10 +2537,21 @@ async function probeLocalWhatsAppAccountChatOps(accountId = "", env = process.en
 
 export async function getLocalWhatsAppBridgeStatus(env = process.env, options = {}) {
   const accountIds = await managedLocalWhatsAppAccountIds(env);
+  const chatOpsProbes = new Map();
   if (localWhatsAppStatusChatOpsProbeEnabled(env, options)) {
-    await Promise.all(accountIds.map((accountId) => probeLocalWhatsAppAccountChatOps(accountId, env, options).catch(() => null)));
+    const probes = await Promise.all(accountIds.map(async (accountId) => ({
+      accountId,
+      probe: await probeLocalWhatsAppAccountChatOps(accountId, env, options).catch((error) => ({
+        ok: false,
+        error: error?.message || String(error),
+      })),
+    })));
+    for (const { accountId, probe } of probes) chatOpsProbes.set(accountId, probe);
   }
-  const accounts = await Promise.all(accountIds.map((accountId) => accountSnapshot(accountId, env, options)));
+  const accounts = await Promise.all(accountIds.map((accountId) => accountSnapshot(accountId, env, {
+    ...options,
+    chatOpsProbe: chatOpsProbes.get(accountId) || null,
+  })));
   const state = reduceLocalWhatsAppBridgeState(accounts);
   const chatOpsReady = !accounts.some((account) => account.chatOpsReady === false);
   const runtimeUsable = !accounts.some((account) => account.runtimeUsable === false);
@@ -6221,6 +6252,8 @@ async function startLocalWhatsAppAccountOnce(normalized, env = process.env, opti
       await appendEvent({ type: "whatsapp_local_disconnected_after_failure", accountId: normalized, reason: String(reason || "") }, env);
       return;
     }
+    const disconnectReason = String(reason || "").trim();
+    const verifiedLogout = verifiedLocalWhatsAppLogoutReason(disconnectReason);
     setAccountState(normalized, {
       state: "disconnected",
       ready: false,
@@ -6229,10 +6262,9 @@ async function startLocalWhatsAppAccountOnce(normalized, env = process.env, opti
       pairingCode: "",
       pairingCodeUpdatedAt: null,
       error: String(reason || ""),
-      verifiedLogoutAt: nowIso(),
+      verifiedLogoutAt: verifiedLogout ? nowIso() : current.verifiedLogoutAt || null,
     });
     runtimes.delete(normalized);
-    const disconnectReason = String(reason || "").trim();
     await appendEvent({ type: "whatsapp_local_disconnected", accountId: normalized, reason: disconnectReason }, env);
     if (options.repairNotification !== false) {
       await notifyLocalWhatsAppPairingRequired({

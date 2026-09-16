@@ -5,6 +5,7 @@ import { readConnectorConfig } from "../../storage/src/config.js";
 import { bridgeRequestHeaders, configuredWhatsAppBridgeUrl, whatsappBridgeEndpointUrl } from "./whatsapp.js";
 import { createLocalWhatsAppChat, normalizeGroupParticipantIds } from "./whatsapp-local-bridge.js";
 import { dualWriteWhatsAppParticipantIdentity } from "./whatsapp-participant-identity.js";
+import { canonicalWhatsAppAccountId } from "./whatsapp-account-identity.js";
 import {
   newWhatsAppGroupProvisioningOperation,
   patchWhatsAppGroupProvisioningOperation,
@@ -12,6 +13,10 @@ import {
   whatsappGroupProvisioningOperation,
   withWhatsAppGroupProvisioningLock,
 } from "./whatsapp-group-provisioning.js";
+import {
+  transitionWhatsAppGroupProvisioning,
+  whatsappGroupProvisioningContextMatches,
+} from "./whatsapp-group-provisioning-store.js";
 import { adaptWhatsAppGroupCreateResult, publicWhatsAppGroupCreateFailure } from "./whatsapp-group-create-evidence.js";
 
 function clean(value) {
@@ -89,10 +94,11 @@ function provisioningError(operation, failure, statusCode = 409) {
 
 function provisionContext(thread = {}, options = {}, env = process.env) {
   const binding = currentBinding(thread);
+  const selectedAccountId = clean(options.responderAccountId || options.outboundAccountId || binding.responderAccountId || binding.outboundAccountId || options.senderAccountId || binding.senderAccountId);
   return {
     principalId: clean(options.ownerUserId || options.userId || thread.ownerUserId),
     instanceId: clean(options.instanceId || env.ORKESTR_INSTANCE_ID || env.ORKESTR_RELEASE_INSTANCE_ID),
-    accountId: clean(options.responderAccountId || options.outboundAccountId || binding.responderAccountId || binding.outboundAccountId || options.senderAccountId || binding.senderAccountId),
+    accountId: canonicalWhatsAppAccountId({ accountId: selectedAccountId }, env) || selectedAccountId,
   };
 }
 
@@ -114,22 +120,27 @@ async function prepareWhatsAppGroupProvisioning(thread, context, dependencies, e
   }, env);
 }
 
-async function claimWhatsAppGroupCreateDispatch(thread, operation, dependencies, env) {
-  return withCanonicalPublicReferenceLock(async () => {
-    const readThread = dependencies.getThread || getThread;
-    let current = await readThread(thread.id, env) || thread;
-    let active = whatsappGroupProvisioningOperation(current);
-    if (!active || active.id !== operation.id || completeGroupId(active.groupId)) {
-      return { claimed: false, current, operation: active || operation };
-    }
-    const retryableRejection = active.state === "rejected" && active.retryable === true;
-    if (active.state !== "prepared" && !retryableRejection) return { claimed: false, current, operation: active };
-    active = patchWhatsAppGroupProvisioningOperation(active, {
-      state: "dispatched", stage: "external_create", externalOutcome: "pending", retryable: false, nextAction: "await_result",
-    });
-    current = await persistOperation(current, active, dependencies, env);
-    return { claimed: true, current, operation: active };
-  }, env);
+async function claimWhatsAppGroupCreateDispatch(thread, operation, context, dependencies, env) {
+  let claimed = false;
+  const settled = await transitionWhatsAppGroupProvisioning({
+    threadId: thread.id,
+    operationId: operation.id,
+    context,
+    dependencies,
+    env,
+    transition: ({ operation: active }) => {
+      if (completeGroupId(active.groupId)) return null;
+      const retryableRejection = active.state === "rejected" && active.retryable === true;
+      if (active.state !== "prepared" && !retryableRejection) return null;
+      claimed = true;
+      return {
+        operation: patchWhatsAppGroupProvisioningOperation(active, {
+          state: "dispatched", stage: "external_create", externalOutcome: "pending", retryable: false, nextAction: "await_result",
+        }),
+      };
+    },
+  });
+  return { claimed: claimed && settled.accepted, current: settled.current || thread, operation: settled.operation || operation, reason: settled.reason || "" };
 }
 
 async function reconcileProvisioning(thread, operation, dependencies, env) {
@@ -214,35 +225,56 @@ async function completeExternalWhatsAppGroupSetup({ bridgeUrl, config, options, 
   }
 }
 
-async function bindKnownGroup(thread, operation, group, options, dependencies, env) {
-  const binding = threadGroupBinding(thread, group, options, env);
-  if (!completeGroupId(binding.chatId)) {
-    const failure = operationFailure(operation, { stage: "created", code: "whatsapp_group_id_unrecognized", resultKind: "unrecognized_group_id" });
-    const unknown = patchWhatsAppGroupProvisioningOperation(operation, { state: "outcome_unknown", stage: "created", externalOutcome: "outcome_unknown", failure, nextAction: failure.nextAction });
-    await persistOperation(thread, unknown, dependencies, env);
-    throw provisioningError(unknown, failure, 502);
-  }
-  const bound = patchWhatsAppGroupProvisioningOperation(operation, {
-    state: "bound", stage: "bound", externalOutcome: "created", groupId: binding.chatId,
-    failure: null, retryable: false, nextAction: "none",
-  });
+async function bindKnownGroup(thread, operation, group, options, context, dependencies, env) {
+  let binding = null;
   try {
-    const updated = await (dependencies.updateThread || updateThread)(thread.id, {
-      binding,
-      bindingName: binding.displayName,
-      whatsappGroupProvisioning: bound,
-    }, env);
-    return { updated, binding, operation: bound };
+    const settled = await transitionWhatsAppGroupProvisioning({
+      threadId: thread.id,
+      operationId: operation.id,
+      context,
+      dependencies,
+      env,
+      transition: ({ current, operation: active }) => {
+        const groupId = completeGroupId(active.groupId || group?.chat?.id || group?.chatId);
+        binding = threadGroupBinding(current, { ...group, chat: { ...(group?.chat || {}), id: groupId } }, options, env);
+        if (!groupId || !completeGroupId(binding.chatId)) return null;
+        return {
+          operation: patchWhatsAppGroupProvisioningOperation(active, {
+            state: "bound", stage: "bound", externalOutcome: "created", groupId: binding.chatId,
+            failure: null, retryable: false, nextAction: "none",
+          }),
+          threadPatch: { binding, bindingName: binding.displayName },
+        };
+      },
+    });
+    if (!settled.accepted || !binding) {
+      const failure = operationFailure(settled.operation || operation, {
+        stage: "created",
+        code: settled.reason === "context_mismatch" ? "whatsapp_group_provisioning_context_mismatch" : "whatsapp_group_provisioning_operation_lost",
+        nextAction: "review_operation",
+      });
+      throw provisioningError(settled.operation || operation, failure, 409);
+    }
+    return { updated: settled.current, binding: settled.current.binding || binding, operation: settled.operation };
   } catch (error) {
+    if (error?.groupCreateFailure) throw error;
     const failure = operationFailure(operation, {
       stage: "bound", code: "whatsapp_group_binding_save_failed", resultKind: "group_id",
       externalOutcome: "created", retryable: true, nextAction: "resume_binding",
     });
-    const failed = patchWhatsAppGroupProvisioningOperation(operation, {
-      state: "created", stage: "bound", externalOutcome: "created", failure, retryable: true, nextAction: "resume_binding",
-    });
-    await persistOperation(thread, failed, dependencies, env).catch(() => {});
-    throw provisioningError(failed, failure, Number(error?.statusCode || 503));
+    const failed = await transitionWhatsAppGroupProvisioning({
+      threadId: thread.id,
+      operationId: operation.id,
+      context,
+      dependencies,
+      env,
+      transition: ({ operation: active }) => ({
+        operation: patchWhatsAppGroupProvisioningOperation(active, {
+          state: "created", stage: "bound", externalOutcome: "created", failure, retryable: true, nextAction: "resume_binding",
+        }),
+      }),
+    }).catch(() => null);
+    throw provisioningError(failed?.operation || operation, failure, Number(error?.statusCode || 503));
   }
 }
 
@@ -258,12 +290,27 @@ export async function createAndBindWhatsAppThreadGroup(thread, options = {}, env
     if (clean(currentBinding(current).chatId)) {
       const binding = threadGroupBinding(current, { chat: { id: currentBinding(current).chatId } }, options, env);
       const prior = whatsappGroupProvisioningOperation(current);
-      const operation = prior && patchWhatsAppGroupProvisioningOperation(prior, {
-        state: "bound", stage: "bound", groupId: binding.chatId, externalOutcome: "created", nextAction: "none",
-      });
-      const updated = await (dependencies.updateThread || updateThread)(current.id, {
-        binding, bindingName: binding.displayName, ...(operation ? { whatsappGroupProvisioning: operation } : {}),
-      }, env);
+      let operation = prior;
+      let updated;
+      if (prior) {
+        const settled = await transitionWhatsAppGroupProvisioning({
+          threadId: current.id,
+          operationId: prior.id,
+          context,
+          dependencies,
+          env,
+          transition: ({ operation: active }) => ({
+            operation: patchWhatsAppGroupProvisioningOperation(active, {
+              state: "bound", stage: "bound", groupId: binding.chatId, externalOutcome: "created", nextAction: "none",
+            }),
+            threadPatch: { binding, bindingName: binding.displayName },
+          }),
+        });
+        updated = settled.current || current;
+        operation = settled.operation || prior;
+      } else {
+        updated = await (dependencies.updateThread || updateThread)(current.id, { binding, bindingName: binding.displayName }, env);
+      }
       return { ok: true, created: false, reused: true, thread: updated, chat: { id: binding.chatId, name: binding.displayName, isGroup: true, generated: currentBinding(current).generated === true }, binding, ...(operation ? { operation: publicWhatsAppGroupProvisioningOperation(operation) } : {}) };
     }
 
@@ -274,7 +321,7 @@ export async function createAndBindWhatsAppThreadGroup(thread, options = {}, env
       const updated = await (dependencies.updateThread || updateThread)(current.id, { binding, bindingName: binding.displayName }, env);
       return { ok: true, created: false, reused: true, thread: updated, chat: { id: binding.chatId, name: binding.displayName, isGroup: true, generated: currentBinding(current).generated === true }, binding };
     }
-    if (operation.threadId !== current.id || operation.principalId !== context.principalId || operation.accountId !== context.accountId) {
+    if (!whatsappGroupProvisioningContextMatches(operation, context, current.id)) {
       throw provisioningError(operation, operationFailure(operation, { code: "whatsapp_group_provisioning_context_mismatch", nextAction: "review_operation" }));
     }
     if (["dispatched", "outcome_unknown"].includes(operation.state) && !completeGroupId(operation.groupId)) {
@@ -282,23 +329,45 @@ export async function createAndBindWhatsAppThreadGroup(thread, options = {}, env
       if (!reconciled.ok) {
         const failure = operationFailure(operation, { stage: "reconcile", code: "whatsapp_group_outcome_unknown", nextAction: "review_operation" });
         const unknown = patchWhatsAppGroupProvisioningOperation(operation, { state: "outcome_unknown", stage: "reconcile", externalOutcome: "outcome_unknown", failure, nextAction: failure.nextAction });
-        await persistOperation(current, unknown, dependencies, env);
-        throw provisioningError(unknown, failure);
+        const settled = await transitionWhatsAppGroupProvisioning({
+          threadId: current.id, operationId: operation.id, context, dependencies, env,
+          transition: () => ({ operation: unknown }),
+        });
+        current = settled.current || current;
+        operation = settled.operation || operation;
+        if (!completeGroupId(operation.groupId)) {
+          const code = settled.reason === "context_mismatch" ? "whatsapp_group_provisioning_context_mismatch" : failure.code;
+          throw provisioningError(operation, operationFailure(operation, { ...failure, code }), 409);
+        }
+      } else {
+        const created = patchWhatsAppGroupProvisioningOperation(operation, {
+          state: "created", stage: "created", externalOutcome: "created", groupId: reconciled.groupId, reconciliationSource: reconciled.source,
+        });
+        const settled = await transitionWhatsAppGroupProvisioning({
+          threadId: current.id, operationId: operation.id, context, dependencies, env,
+          transition: () => ({ operation: created }),
+        });
+        current = settled.current || current;
+        operation = settled.operation || operation;
+        if (!completeGroupId(operation.groupId)) {
+          throw provisioningError(operation, operationFailure(operation, {
+            code: settled.reason === "context_mismatch" ? "whatsapp_group_provisioning_context_mismatch" : "whatsapp_group_provisioning_operation_lost",
+            nextAction: "review_operation",
+          }), 409);
+        }
       }
-      operation = patchWhatsAppGroupProvisioningOperation(operation, { state: "created", stage: "created", externalOutcome: "created", groupId: reconciled.groupId, reconciliationSource: reconciled.source });
-      current = await persistOperation(current, operation, dependencies, env);
     }
     if (completeGroupId(operation.groupId)) {
-      const bound = await bindKnownGroup(current, operation, { chat: { id: operation.groupId, name, generated: true } }, options, dependencies, env);
+      const bound = await bindKnownGroup(current, operation, { chat: { id: operation.groupId, name, generated: true } }, options, context, dependencies, env);
       return { ok: true, created: false, resumed: true, thread: bound.updated, chat: { id: bound.binding.chatId, name: bound.binding.displayName, isGroup: true, generated: true }, binding: bound.binding, operation: publicWhatsAppGroupProvisioningOperation(bound.operation) };
     }
 
-    const dispatch = await claimWhatsAppGroupCreateDispatch(current, operation, dependencies, env);
+    const dispatch = await claimWhatsAppGroupCreateDispatch(current, operation, context, dependencies, env);
     current = dispatch.current;
     operation = dispatch.operation;
     if (!dispatch.claimed) {
       if (completeGroupId(operation.groupId)) {
-        const bound = await bindKnownGroup(current, operation, { chat: { id: operation.groupId, name, generated: true } }, options, dependencies, env);
+        const bound = await bindKnownGroup(current, operation, { chat: { id: operation.groupId, name, generated: true } }, options, context, dependencies, env);
         return { ok: true, created: false, resumed: true, thread: bound.updated, chat: { id: bound.binding.chatId, name: bound.binding.displayName, isGroup: true, generated: true }, binding: bound.binding, operation: publicWhatsAppGroupProvisioningOperation(bound.operation) };
       }
       throw provisioningError(operation, operationFailure(operation, {
@@ -324,14 +393,27 @@ export async function createAndBindWhatsAppThreadGroup(thread, options = {}, env
         operationId: operation.id,
         correlationId: operation.id,
         onGroupCreated: async ({ chatId, resultKind, resultFingerprint, clientVersion }) => {
-          const latest = await readThread(current.id, env) || current;
-          const active = whatsappGroupProvisioningOperation(latest);
-          if (!active || active.id !== operation.id) throw provisioningError(operation, operationFailure(operation, { code: "whatsapp_group_provisioning_operation_lost" }));
-          operation = patchWhatsAppGroupProvisioningOperation(active, {
-            state: "created", stage: "created", externalOutcome: "created", groupId: chatId,
-            resultKind, resultFingerprint, clientVersion, nextAction: "bind_group",
+          const settled = await transitionWhatsAppGroupProvisioning({
+            threadId: current.id,
+            operationId: operation.id,
+            context,
+            dependencies,
+            env,
+            transition: ({ operation: active }) => ({
+              operation: patchWhatsAppGroupProvisioningOperation(active, {
+                state: "created", stage: "created", externalOutcome: "created", groupId: chatId,
+                resultKind, resultFingerprint, clientVersion, nextAction: "bind_group",
+              }),
+            }),
           });
-          current = await persistOperation(latest, operation, dependencies, env);
+          current = settled.current || current;
+          operation = settled.operation || operation;
+          if (!completeGroupId(operation.groupId)) {
+            throw provisioningError(operation, operationFailure(operation, {
+              code: settled.reason === "context_mismatch" ? "whatsapp_group_provisioning_context_mismatch" : "whatsapp_group_provisioning_operation_lost",
+              nextAction: "review_operation",
+            }), 409);
+          }
         },
         env,
       });
@@ -346,21 +428,40 @@ export async function createAndBindWhatsAppThreadGroup(thread, options = {}, env
         retryable: rejected && failure.retryable === true,
         nextAction: rejected ? failure.nextAction || "restore_sender_capability" : "reconcile_operation",
       });
-      await persistOperation(current, settled, dependencies, env).catch(() => {});
-      throw provisioningError(settled, settled.failure, Number(error?.statusCode || 502));
+      const persisted = await transitionWhatsAppGroupProvisioning({
+        threadId: current.id, operationId: operation.id, context, dependencies, env,
+        transition: () => ({ operation: settled }),
+      }).catch(() => null);
+      current = persisted?.current || current;
+      operation = persisted?.operation || operation;
+      if (completeGroupId(operation.groupId)) {
+        const bound = await bindKnownGroup(current, operation, { chat: { id: operation.groupId, name, generated: true } }, options, context, dependencies, env);
+        return { ok: true, created: false, resumed: true, thread: bound.updated, chat: { id: bound.binding.chatId, name: bound.binding.displayName, isGroup: true, generated: true }, binding: bound.binding, operation: publicWhatsAppGroupProvisioningOperation(bound.operation) };
+      }
+      throw provisioningError(persisted?.operation || settled, settled.failure, Number(error?.statusCode || 502));
     }
     const groupId = completeGroupId(group?.chat?.id || group?.chatId);
     if (!groupId) {
       const failure = operationFailure(operation, { code: "whatsapp_group_id_unrecognized", resultKind: "unrecognized_group_id" });
       const unknown = patchWhatsAppGroupProvisioningOperation(operation, { state: "outcome_unknown", stage: "external_create", externalOutcome: "outcome_unknown", failure, nextAction: failure.nextAction });
-      await persistOperation(current, unknown, dependencies, env);
-      throw provisioningError(unknown, failure, 502);
+      const persisted = await transitionWhatsAppGroupProvisioning({
+        threadId: current.id, operationId: operation.id, context, dependencies, env,
+        transition: () => ({ operation: unknown }),
+      });
+      current = persisted.current || current;
+      operation = persisted.operation || operation;
+      if (!completeGroupId(operation.groupId)) throw provisioningError(operation, failure, 502);
     }
     if (operation.groupId !== groupId) {
-      operation = patchWhatsAppGroupProvisioningOperation(operation, { state: "created", stage: "created", externalOutcome: "created", groupId, nextAction: "bind_group" });
-      current = await persistOperation(current, operation, dependencies, env);
+      const created = patchWhatsAppGroupProvisioningOperation(operation, { state: "created", stage: "created", externalOutcome: "created", groupId, nextAction: "bind_group" });
+      const persisted = await transitionWhatsAppGroupProvisioning({
+        threadId: current.id, operationId: operation.id, context, dependencies, env,
+        transition: () => ({ operation: created }),
+      });
+      current = persisted.current || current;
+      operation = persisted.operation || operation;
     }
-    const bound = await bindKnownGroup(current, operation, { ...group, chat: { ...(group.chat || {}), id: groupId, name } }, options, dependencies, env);
+    const bound = await bindKnownGroup(current, operation, { ...group, chat: { ...(group.chat || {}), id: operation.groupId || groupId, name } }, options, context, dependencies, env);
     return {
       ok: true, created: true, reused: false, thread: bound.updated,
       chat: group.chat || { id: bound.binding.chatId, name: bound.binding.displayName }, binding: bound.binding,
