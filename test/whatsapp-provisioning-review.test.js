@@ -15,6 +15,7 @@ import {
   startLocalWhatsAppAccount,
 } from "../packages/connectors/src/whatsapp-local-bridge.js";
 import { createThread, getThread, updateThread } from "../packages/core/src/threads.js";
+import { listEvents } from "../packages/storage/src/store.js";
 
 async function home(prefix) {
   return fs.mkdtemp(path.join(os.tmpdir(), prefix));
@@ -93,6 +94,44 @@ test("mocked lifecycle callbacks distinguish transient disconnect, unrelated QR,
     assert.equal(account(status, "sender").state, "auth_failure");
     assert.equal(account(status, "sender").error, "whatsapp_session_logout_verified");
     assert.ok(account(status, "sender").verifiedLogoutAt);
+  } finally {
+    await resetLocalWhatsAppBridgeForTest(env);
+  }
+});
+
+test("pairing notification requires explicit logout or auth failure", async () => {
+  const env = {
+    ORKESTR_HOME: await home("orkestr-wa-pairing-notification-review-"),
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "transient logout authloss",
+    ORKESTR_WHATSAPP_REPAIR_NOTIFY_EMAIL: "admin@example.test",
+  };
+  const clients = [];
+  const notifications = [];
+  const dependencies = mockLifecycleDependencies(clients);
+  const options = {
+    loadBridgeDependencies: dependencies,
+    repairNotifyOptions: {
+      sendGmailMessage: async (message) => {
+        notifications.push(message);
+        return { ok: true };
+      },
+    },
+  };
+  try {
+    await startLocalWhatsAppAccount("transient", env, options);
+    await clients[0].handlers.get("ready")();
+    await clients[0].handlers.get("disconnected")("NAVIGATION");
+    assert.equal(notifications.length, 0);
+    assert.equal((await listEvents(env, 50)).some((event) => event.type === "whatsapp_local_pairing_required_email_sent"), false);
+
+    await startLocalWhatsAppAccount("logout", env, options);
+    await clients[1].handlers.get("ready")();
+    await clients[1].handlers.get("disconnected")("LOGOUT");
+    await startLocalWhatsAppAccount("authloss", env, options);
+    await clients[2].handlers.get("auth_failure")("fixture_auth_failure");
+    assert.equal(notifications.length, 2);
+    assert.match(notifications[0].body, /Reason: disconnected:LOGOUT/);
+    assert.match(notifications[1].body, /Reason: auth_failure/);
   } finally {
     await resetLocalWhatsAppBridgeForTest(env);
   }

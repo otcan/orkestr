@@ -6266,7 +6266,7 @@ async function startLocalWhatsAppAccountOnce(normalized, env = process.env, opti
     });
     runtimes.delete(normalized);
     await appendEvent({ type: "whatsapp_local_disconnected", accountId: normalized, reason: disconnectReason }, env);
-    if (options.repairNotification !== false) {
+    if (verifiedLogout && options.repairNotification !== false) {
       await notifyLocalWhatsAppPairingRequired({
         accountId: normalized,
         reason: disconnectReason ? `disconnected:${disconnectReason}` : "disconnected",
