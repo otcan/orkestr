@@ -142,6 +142,73 @@ test("tenant WhatsApp routes can be prepared before a VM target exists", async (
   assert.equal(listed[0].forwardingReady, false);
 });
 
+test("tenant WhatsApp route listings expose reachable targets as forwarding-ready", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-tenant-wa-route-reachable-"));
+  const env = { ORKESTR_HOME: home, ORKESTR_TENANT_ROUTE_HEALTH_TIMEOUT_MS: "250" };
+  await createTenantVm({
+    id: "reachable-tenant",
+    ownerUserId: "reachable",
+    endpoint: { baseUrl: "https://reachable.example.test" },
+  }, env);
+  const configured = await configureTenantWhatsAppRoute("reachable-tenant", {
+    chatId: "wa-group-reachable@g.us",
+    accountId: "tenant-wa",
+  }, env);
+  const originalFetch = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url: String(url), authorization: options.headers?.authorization, body: options.body });
+    return response({ ok: false, error: "message_text_required" }, false, 422);
+  };
+  try {
+    const [listed] = await listTenantWhatsAppRoutes(env);
+
+    assert.equal(listed.tenantVmId, "reachable-tenant");
+    assert.equal(listed.forwardingReady, true);
+    assert.equal(listed.targetReachability, "reachable");
+    assert.equal(listed.diagnostics.targetReachability, "reachable");
+    assert.equal(listed.diagnostics.status, "active");
+    assert.equal(listed.diagnostics.nextAction, "sync_whatsapp_inbound_token_to_target");
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].url, "https://reachable.example.test/api/connectors/whatsapp/inbound");
+    assert.equal(calls[0].authorization, `Bearer ${configured.route.token}`);
+    assert.equal(calls[0].body, "{}");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("tenant WhatsApp route listings block forwarding when the target is unreachable", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-tenant-wa-route-unreachable-"));
+  const env = { ORKESTR_HOME: home, ORKESTR_TENANT_ROUTE_HEALTH_TIMEOUT_MS: "250" };
+  await createTenantVm({
+    id: "unreachable-tenant",
+    ownerUserId: "unreachable",
+    endpoint: { baseUrl: "https://unreachable.example.test" },
+  }, env);
+  await configureTenantWhatsAppRoute("unreachable-tenant", {
+    chatId: "wa-group-unreachable@g.us",
+    accountId: "tenant-wa",
+  }, env);
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => {
+    throw new TypeError("target offline");
+  };
+  try {
+    const [listed] = await listTenantWhatsAppRoutes(env);
+
+    assert.equal(listed.tenantVmId, "unreachable-tenant");
+    assert.equal(listed.forwardingReady, false);
+    assert.equal(listed.targetReachability, "unreachable");
+    assert.equal(listed.diagnostics.targetReachability, "unreachable");
+    assert.equal(listed.diagnostics.status, "target_unreachable");
+    assert.equal(listed.diagnostics.nextAction, "restore_target_reachability");
+    assert.match(listed.diagnostics.safeMessage, /not reachable/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("local WhatsApp bridge forwards tenant-routed chats with the scoped tenant token", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-tenant-wa-forward-"));
   const env = { ORKESTR_HOME: home };
