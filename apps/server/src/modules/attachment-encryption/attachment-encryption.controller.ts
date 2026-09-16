@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, HttpCode, HttpException, Param, Post, Put, Req } from "@nestjs/common";
+import { Body, Controller, Delete, Get, HttpCode, HttpException, Param, Post, Put, Query, Req } from "@nestjs/common";
 import {
   attachmentEncryptionStatus,
   registerAttachmentEncryptionRecipient,
@@ -6,6 +6,19 @@ import {
   setAttachmentEncryptionPolicy,
   verifyAttachmentEncryptionRecipient,
 } from "../../../../../packages/core/src/attachment-encryption-registry.js";
+import {
+  cancelInboundAttachmentUpload,
+  createInboundAttachmentUploadSessions,
+  inboundAttachmentUploadSession,
+  inboundAttachmentUploadStatus,
+  ingestInboundAttachmentCiphertext,
+  processInboundAttachmentUpload,
+} from "../../../../../packages/core/src/inbound-attachment-quarantine.js";
+import {
+  inboundAttachmentKeyStatus,
+  revokeInboundAttachmentKey,
+  rotateInboundAttachmentKey,
+} from "../../../../../packages/core/src/inbound-attachment-keys.js";
 import { requestPrincipal } from "../../../../../packages/core/src/principal.js";
 import { getThreadForPrincipal } from "../../../../../packages/core/src/threads.js";
 import { migrateThreadAttachmentsToEncryption } from "../../../../../packages/core/src/attachment-encryption-migration.js";
@@ -15,6 +28,10 @@ import {
   attachmentEncryptionRecipientSchema,
   attachmentEncryptionRevokeSchema,
   attachmentEncryptionVerifySchema,
+  inboundAttachmentSessionCreateSchema,
+  inboundAttachmentKeyParamsSchema,
+  inboundAttachmentSessionParamsSchema,
+  inboundAttachmentStatusSchema,
 } from "../../../../../packages/shared/src/api-schemas.js";
 import { validateRequestSchema } from "../../common/http.js";
 
@@ -31,6 +48,116 @@ export class AttachmentEncryptionController {
     try {
       const principal = requestPrincipal(request);
       return { ok: true, ...(await attachmentEncryptionStatus(principal.userId)) };
+    } catch (error) {
+      fail(error);
+    }
+  }
+
+  @Get("inbound/status")
+  async inboundStatus(@Req() request: any, @Query("threadId") threadId = "") {
+    try {
+      validateRequestSchema(inboundAttachmentStatusSchema, { querystring: { threadId } });
+      return { ok: true, ...(await inboundAttachmentUploadStatus({ threadId, principal: requestPrincipal(request) } as any)) };
+    } catch (error) {
+      fail(error);
+    }
+  }
+
+  @Get("inbound/keys")
+  async inboundKeys(@Req() request: any) {
+    try {
+      const principal = requestPrincipal(request);
+      return { ok: true, keys: await inboundAttachmentKeyStatus(principal.userId) };
+    } catch (error) {
+      fail(error);
+    }
+  }
+
+  @Post("inbound/keys/rotate")
+  @HttpCode(201)
+  async rotateInboundKey(@Req() request: any) {
+    try {
+      const principal = requestPrincipal(request);
+      return { ok: true, key: await rotateInboundAttachmentKey(principal.userId) };
+    } catch (error) {
+      fail(error);
+    }
+  }
+
+  @Post("inbound/keys/:keyId/revoke")
+  async revokeInboundKey(@Req() request: any, @Param("keyId") keyId: string) {
+    try {
+      validateRequestSchema(inboundAttachmentKeyParamsSchema, { params: { keyId } });
+      const principal = requestPrincipal(request);
+      return { ok: true, key: await revokeInboundAttachmentKey(principal.userId, keyId) };
+    } catch (error) {
+      fail(error);
+    }
+  }
+
+  @Post("inbound/sessions")
+  @HttpCode(201)
+  async createInboundSessions(@Req() request: any, @Body() body: Record<string, unknown> = {}) {
+    try {
+      validateRequestSchema(inboundAttachmentSessionCreateSchema, { body });
+      return {
+        ok: true,
+        ...(await createInboundAttachmentUploadSessions({
+          threadId: String(body.threadId || ""),
+          files: Array.isArray(body.files) ? body.files : [],
+          principal: requestPrincipal(request),
+        } as any)),
+      };
+    } catch (error) {
+      fail(error);
+    }
+  }
+
+  @Get("inbound/sessions/:sessionId")
+  async inboundSession(@Req() request: any, @Param("sessionId") sessionId: string) {
+    try {
+      validateRequestSchema(inboundAttachmentSessionParamsSchema, { params: { sessionId } });
+      return { ok: true, session: await inboundAttachmentUploadSession({ sessionId, principal: requestPrincipal(request) } as any) };
+    } catch (error) {
+      fail(error);
+    }
+  }
+
+  @Post("inbound/sessions/:sessionId/cancel")
+  async cancelInboundSession(@Req() request: any, @Param("sessionId") sessionId: string) {
+    try {
+      validateRequestSchema(inboundAttachmentSessionParamsSchema, { params: { sessionId } });
+      return { ok: true, session: await cancelInboundAttachmentUpload({ sessionId, principal: requestPrincipal(request) } as any) };
+    } catch (error) {
+      fail(error);
+    }
+  }
+
+  @Put("inbound/sessions/:sessionId/ciphertext")
+  @HttpCode(201)
+  async uploadInboundCiphertext(@Req() request: any, @Param("sessionId") sessionId: string) {
+    try {
+      validateRequestSchema(inboundAttachmentSessionParamsSchema, { params: { sessionId } });
+      const contentType = String(request?.headers?.["content-type"] || "").split(";")[0].trim().toLowerCase();
+      if (contentType !== "application/age") {
+        const error: any = new Error("inbound_upload_ciphertext_content_type_required");
+        error.statusCode = 415;
+        throw error;
+      }
+      return {
+        ok: true,
+        session: await ingestInboundAttachmentCiphertext({ sessionId, principal: requestPrincipal(request), input: request } as any),
+      };
+    } catch (error) {
+      fail(error);
+    }
+  }
+
+  @Post("inbound/sessions/:sessionId/process")
+  async processInboundSession(@Req() request: any, @Param("sessionId") sessionId: string) {
+    try {
+      validateRequestSchema(inboundAttachmentSessionParamsSchema, { params: { sessionId } });
+      return { ok: true, session: await processInboundAttachmentUpload({ sessionId, principal: requestPrincipal(request) } as any) };
     } catch (error) {
       fail(error);
     }

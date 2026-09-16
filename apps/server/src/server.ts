@@ -30,6 +30,8 @@ import {
   whatsAppDeliveryFollowUpDelayMs,
 } from "../../../packages/connectors/src/whatsapp-sync-signal.js";
 import { ensureDataDirs } from "../../../packages/storage/src/paths.js";
+import { reconcileInboundAttachmentQuarantine } from "../../../packages/core/src/inbound-attachment-quarantine.js";
+import { inboundAttachmentCleanupIntervalMs, inboundAttachmentUploadPolicy } from "../../../packages/core/src/inbound-attachment-config.js";
 import { snapshotEnvironment } from "../../../packages/storage/src/test-storage-isolation.js";
 import { authorizeHttpRequest } from "../../../packages/core/src/security.js";
 import { getThreadForPrincipal, listThreads } from "../../../packages/core/src/threads.js";
@@ -87,6 +89,17 @@ function whatsappDeliveryPollIntervalMs(env = process.env) {
 
 export async function createApp(): Promise<INestApplication> {
   const app = await NestFactory.create<NestExpressApplication>(AppModule, { logger: false, rawBody: true });
+  app.use((request: any, response: any, next: any) => {
+    const pathname = String(request?.originalUrl || request?.url || "").split("?")[0];
+    if (
+      request?.method === "POST" &&
+      /^\/api\/threads\/[^/]+\/uploads$/.test(pathname) &&
+      inboundAttachmentUploadPolicy(process.env).required
+    ) {
+      return response.status(409).json({ error: "inbound_upload_encryption_required" });
+    }
+    return next();
+  });
   // Static fallback routes are registered before Nest initializes its default
   // parsers. Register the small form parser explicitly so the public instance
   // entry POST can resolve the submitted name/reference in the live server.
@@ -577,6 +590,7 @@ function requestPolicyUrl(request: any): string {
 export async function startServer({ port = 19812, host = "127.0.0.1", openBrowser = false, env = process.env } = {}) {
   const serverEnv = snapshotEnvironment(env);
   await ensureDataDirs(serverEnv);
+  await reconcileInboundAttachmentQuarantine(serverEnv);
   activateThreadInputDeliveryScheduler(serverEnv);
   await migrateThreadMessageStore(serverEnv);
   if (serverEnv.ORKESTR_RECOVER_RUNNING_ON_START !== "0") {
@@ -626,6 +640,17 @@ export async function startServer({ port = 19812, host = "127.0.0.1", openBrowse
       });
     });
   }, paneProgressMonitorIntervalMs());
+  const inboundAttachmentCleanupPoll = setInterval(() => {
+    reconcileInboundAttachmentQuarantine(serverEnv).catch((error) => {
+      reportServerError(serverEnv, {
+        source: "server.inboundAttachmentCleanup",
+        code: "inbound_attachment_cleanup_failed",
+        message: error?.message || String(error),
+        error,
+      });
+    });
+  }, inboundAttachmentCleanupIntervalMs(serverEnv));
+  inboundAttachmentCleanupPoll.unref?.();
   const whatsappDeliveryScheduler = createWhatsAppDeliveryScheduler(serverEnv);
   const whatsappDeliveryPoll = setInterval(() => {
     whatsappDeliveryScheduler.schedule();
@@ -728,6 +753,7 @@ export async function startServer({ port = 19812, host = "127.0.0.1", openBrowse
     clearInterval(whatsappDeliveryPoll);
     clearInterval(mailboxDeliveryPoll);
     clearInterval(mailboxVmRelayPoll);
+    clearInterval(inboundAttachmentCleanupPoll);
     whatsappDeliveryScheduler.close();
     stopCodexAppServerClients();
     await stopLocalWhatsAppBridge(serverEnv).catch(() => {});

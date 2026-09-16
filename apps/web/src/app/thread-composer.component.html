@@ -19,6 +19,7 @@
       @for (file of pendingFiles; track file.id) {
         <span class="file-chip">
           {{ file.name }} <small>{{ formatBytes(file.size) }}</small>
+          @if (file.uploadState) { <small>{{ file.uploadState }}</small> }
           <button type="button" (click)="removeFile.emit(file.id)">×</button>
         </span>
       }
