@@ -253,7 +253,9 @@ function summaryStartIndex(lines, tail) {
 export async function runCiTests(options = parseCiTestRunnerArgs()) {
   const allFiles = discoverTestFiles(options.root);
   const files = selectShardFiles(allFiles, options.shard);
-  const testArgs = buildNodeTestArgs(options, options.shard.total > 1 ? files : []);
+  // Use the same discovery for sharded and full runs; Node's implicit test/
+  // discovery also executes subprocess fixtures that require caller arguments.
+  const testArgs = buildNodeTestArgs(options, files);
 
   if (options.plan) {
     return {

@@ -9,6 +9,7 @@ import {
   discoverTestFiles,
   normalizeShard,
   parseCiTestRunnerArgs,
+  runCiTests,
   selectShardFiles,
 } from "../scripts/ci-test-runner.mjs";
 
@@ -75,6 +76,21 @@ test("CI test runner discovers test files and builds node arguments", async () =
     "--test-force-exit",
     "test/b.test.js",
   ]);
+});
+
+test("unsharded CI selects tests explicitly without running subprocess fixtures", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-ci-plan-"));
+  try {
+    await fs.mkdir(path.join(root, "test", "fixtures"), { recursive: true });
+    await fs.writeFile(path.join(root, "test", "sample.test.js"), "");
+    await fs.writeFile(path.join(root, "test", "fixtures", "worker.mjs"), "");
+    const plan = await runCiTests(parseCiTestRunnerArgs(["--root", root, "--plan"], {}));
+    assert.deepEqual(plan.selectedFiles, ["test/sample.test.js"]);
+    assert.equal(plan.nodeArgs.at(-1), "test/sample.test.js");
+    assert.equal(plan.nodeArgs.some((arg) => arg.includes("worker.mjs")), false);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
 });
 
 test("CI test runner scrubs production connector and public URL env", () => {
