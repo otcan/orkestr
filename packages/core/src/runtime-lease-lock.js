@@ -61,6 +61,21 @@ async function currentProcessStartIdentity() {
   return processIdentity.state === "live" ? processIdentity.identity : null;
 }
 
+// Exposed for fenced work leases. `null` means the platform cannot prove
+// liveness; callers must retain data rather than guessing that a worker died.
+export async function runtimeProcessIdentity() {
+  return currentProcessStartIdentity();
+}
+
+export async function runtimeProcessIdentityAlive({ pid, processStartIdentity } = {}) {
+  const expected = typeof processStartIdentity === "string" ? processStartIdentity : "";
+  if (!expected) return null;
+  const observed = await readLinuxProcessStartIdentity(pid);
+  if (observed.state === "unknown" || observed.state === "malformed") return null;
+  if (observed.state === "dead") return false;
+  return observed.identity === expected;
+}
+
 async function readOwnerRecord(lockPath) {
   const file = path.join(lockPath, OWNER_FILE);
   try {

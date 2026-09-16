@@ -11,6 +11,7 @@ import { threadMessagesQuerySchema, threadUploadSchema } from "../../../../../pa
 import { ensureAttachmentsArray, httpError, validateRequestSchema } from "../../common/http.js";
 import { requestPrincipal } from "../../../../../packages/core/src/principal.js";
 import { attachmentEncryptionPolicy } from "../../../../../packages/core/src/attachment-encryption-registry.js";
+import { inboundAttachmentUploadPolicy } from "../../../../../packages/core/src/inbound-attachment-config.js";
 import { hydrateEncryptedPublishedAttachmentPaths, validateEncryptedPublishedAttachment } from "../../../../../packages/core/src/encrypted-attachment-publication.js";
 import { reissueEncryptedThreadAttachment } from "../../../../../packages/core/src/encrypted-attachment-reissue.js";
 import { publicEncryptedAttachment } from "../../../../../packages/core/src/encrypted-attachment-projection.js";
@@ -101,6 +102,10 @@ export class ThreadMessagesController {
     const principal = requestPrincipal(request);
     const thread = await getThread(threadId);
     if (!thread) throw httpError("thread_not_found", 404);
+    // Required encrypted ingress never accepts a plaintext browser fallback.
+    if (inboundAttachmentUploadPolicy(process.env).required) {
+      throw httpError("inbound_upload_encryption_required", 409);
+    }
     const files = uploadedFiles.length ? uploadedFiles : Array.isArray(body.files) ? body.files : [];
     if (!files.length) throw httpError("upload_files_required", 400);
     await this.threadActionSanitizer.assertAllowed("thread.upload", principal, thread, {
