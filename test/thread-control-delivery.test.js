@@ -276,6 +276,58 @@ test("submit-only recovery refuses a pasted draft from another pane", async () =
   });
 });
 
+test("no-pane submitted delivery waits for reconciliation without spinning or replaying", async () => {
+  await withFakeRuntime(async (env, fakeTmux) => {
+    await createThread({ id: "no-pane-submitted-thread", name: "No Pane Submitted" }, env);
+    const input = await appendThreadMessage("no-pane-submitted-thread", {
+      role: "user",
+      text: "already pasted before the runtime disappeared",
+    }, env);
+    await updateThreadMessage("no-pane-submitted-thread", input.id, {
+      state: "awaiting_ack",
+      deliveryState: "awaiting_ack",
+      deliveryAttempt: 1,
+      observedVia: "tmux_send_file_pending_ack",
+      deliveryNextAttemptAt: new Date(Date.now() - 1_000).toISOString(),
+    }, env);
+
+    const result = await Promise.race([
+      deliverPendingThreadInputs("no-pane-submitted-thread", env),
+      new Promise((resolve) => setTimeout(() => resolve("timed_out"), 500)),
+    ]);
+    const messages = await listThreadMessages("no-pane-submitted-thread", env);
+    const updated = messages.find((message) => message.id === input.id);
+    const log = await fs.readFile(fakeTmux.log, "utf8").catch(() => "");
+
+    assert.notEqual(result, "timed_out");
+    assert.equal(updated.state, "awaiting_ack");
+    assert.equal(updated.deliveryState, "waiting_runtime_reconciliation");
+    assert.ok(Date.parse(updated.deliveryNextAttemptAt) > Date.now());
+    assert.doesNotMatch(log, /__CALL__\tload-buffer/);
+    assert.doesNotMatch(log, /__CALL__\tpaste-buffer/);
+    assert.doesNotMatch(log, /__CALL__\tsend-keys\t-t\t%42\tC-m/);
+  });
+});
+
+test("terminal ambiguous-delivery history does not leave the runtime blocked", async () => {
+  await withFakeRuntime(async (env) => {
+    await createThread({ id: "terminal-blocked-history-thread", name: "Terminal Blocked History" }, env);
+    const input = await appendThreadMessage("terminal-blocked-history-thread", {
+      role: "user",
+      text: "already resolved",
+    }, env);
+    await updateThreadMessage("terminal-blocked-history-thread", input.id, {
+      state: "completed",
+      deliveryState: "blocked_ambiguous_delivery",
+    }, env);
+
+    const status = await runtimeStatus("terminal-blocked-history-thread", env);
+
+    assert.equal(status.state, "sleeping");
+    assert.equal(status.blockedDeliveryMessageId, null);
+  });
+});
+
 test("stale ack recovery appends a WhatsApp-visible pane interruption notice", async () => {
   await withFakeRuntime(async (env) => {
     await createThread({ id: "stale-ack-wa-notice-thread", name: "Stale Ack WA Notice" }, env);

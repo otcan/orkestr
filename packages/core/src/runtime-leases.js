@@ -802,7 +802,9 @@ export async function runtimeStatus(threadId, env = process.env, messagesOverrid
   const pendingCount = messages.filter((message) => pendingInputStates.has(message.state)).length;
   const awaitingAckCount = messages.filter((message) => message.state === "awaiting_ack").length;
   const blockedDelivery = messages.find((message) =>
-    message.role === "user" && message.deliveryState === "blocked_ambiguous_delivery",
+    message.role === "user" &&
+    pendingInputStates.has(String(message.state || "")) &&
+    message.deliveryState === "blocked_ambiguous_delivery",
   ) || null;
   const nextDeliveryAttemptAt = messages
     .filter((message) => message.role === "user" && message.state === "awaiting_ack" && message.deliveryNextAttemptAt)
@@ -3947,6 +3949,18 @@ export async function deliverPendingThreadInputs(threadId, env = process.env, op
         if (await submitStableUnsentPromptDelivery(thread, awaitingAck, status, env)) continue;
         if (await failStuckPromptThreadInputDelivery(thread, awaitingAck, status, env)) continue;
         if (!status?.paneId || status.state === "sleeping") {
+          if (hasSubmittedDeliveryProvenance(awaitingAck)) {
+            const attempt = Math.max(1, deliveryAttempt(awaitingAck));
+            const nextAttemptAt = isoAfter(deliveryRetryBackoffMs(attempt, env));
+            await updateThreadMessage(thread.id, awaitingAck.id, {
+              state: "awaiting_ack",
+              deliveryState: "waiting_runtime_reconciliation",
+              deliveryNextAttemptAt: nextAttemptAt,
+              error: null,
+            }, env).catch(() => {});
+            scheduleThreadInputDelivery(thread.id, env, deliveryDueInMs({ deliveryNextAttemptAt: nextAttemptAt }));
+            break;
+          }
           const updated = await updateThreadMessage(thread.id, awaitingAck.id, {
             state: "queued",
             deliveryState: "waiting_runtime_start",
