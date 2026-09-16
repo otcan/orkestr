@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { deliverPendingThreadInputs, setThreadInputDeliveryFailureHandler, sleepThread, wakeThread } from "../packages/core/src/runtime-leases.js";
+import { deliverPendingThreadInputs, runtimeStatus, setThreadInputDeliveryFailureHandler, sleepThread, wakeThread } from "../packages/core/src/runtime-leases.js";
 import {
   appendThreadMessage,
   createThread,
@@ -206,6 +206,73 @@ test("awaiting ack checks do not paste duplicate input into the same ready pane"
     assert.equal(updated.deliveryState, "awaiting_ack_unobserved");
     assert.doesNotMatch(log, /__CALL__\tload-buffer/);
     assert.doesNotMatch(log, /__CALL__\tpaste-buffer/);
+  });
+});
+
+test("ambiguous in-flight delivery blocks the queue instead of replaying input", async () => {
+  await withFakeRuntime(async (env, fakeTmux) => {
+    env.ORKESTR_AMBIGUOUS_DELIVERY_NOTICE_MS = "1";
+    await fs.writeFile(env.TMUX_CAPTURE_FILE, "ordinary transcript output\n", "utf8");
+    await createThread({ id: "ambiguous-delivery-thread", name: "Ambiguous Delivery" }, env);
+    await wakeThread("ambiguous-delivery-thread", { reason: "test" }, env);
+    const input = await appendThreadMessage("ambiguous-delivery-thread", {
+      role: "user",
+      text: "do not replay this input",
+    }, env);
+    await updateThreadMessage("ambiguous-delivery-thread", input.id, {
+      state: "pending_delivery",
+      deliveryState: "delivering",
+      deliveryAttempt: 1,
+      deliveryInputMode: "inline",
+      deliveryPayloadHash: "public-test-hash",
+      deliveryLastAttemptAt: new Date(Date.now() - 10_000).toISOString(),
+    }, env);
+
+    assert.deepEqual(await deliverPendingThreadInputs("ambiguous-delivery-thread", env), []);
+    const messages = await listThreadMessages("ambiguous-delivery-thread", env);
+    const updated = messages.find((message) => message.id === input.id);
+    const status = await runtimeStatus("ambiguous-delivery-thread", env);
+    const log = await fs.readFile(fakeTmux.log, "utf8");
+
+    assert.equal(updated.state, "pending_delivery");
+    assert.equal(updated.deliveryState, "blocked_ambiguous_delivery");
+    assert.match(updated.error, /cannot verify whether this input reached Codex/);
+    assert.equal(status.state, "blocked");
+    assert.doesNotMatch(log, /__CALL__\tload-buffer/);
+    assert.doesNotMatch(log, /__CALL__\tpaste-buffer/);
+    assert.doesNotMatch(log, /__CALL__\tsend-keys\t-t\t%42\tC-m/);
+  });
+});
+
+test("submit-only recovery refuses a pasted draft from another pane", async () => {
+  await withFakeRuntime(async (env, fakeTmux) => {
+    const text = "owned draft on a replaced pane";
+    await fs.writeFile(env.TMUX_CAPTURE_FILE, `› ${text}\n  gpt-5.5 xhigh · /workspace/demo\n`, "utf8");
+    await createThread({ id: "changed-pane-recovery-thread", name: "Changed Pane Recovery" }, env);
+    await wakeThread("changed-pane-recovery-thread", { reason: "test" }, env);
+    const input = await appendThreadMessage("changed-pane-recovery-thread", {
+      role: "user",
+      text,
+    }, env);
+    await updateThreadMessage("changed-pane-recovery-thread", input.id, {
+      state: "queued",
+      deliveryState: "waiting_runtime_start",
+      deliveryAttempt: 1,
+      observedVia: "tmux_send_pending_ack",
+      deliveryPaneId: "%replaced",
+      deliveryNextAttemptAt: new Date(Date.now() - 1_000).toISOString(),
+    }, env);
+
+    assert.deepEqual(await deliverPendingThreadInputs("changed-pane-recovery-thread", env), []);
+    const messages = await listThreadMessages("changed-pane-recovery-thread", env);
+    const updated = messages.find((message) => message.id === input.id);
+    const log = await fs.readFile(fakeTmux.log, "utf8");
+
+    assert.equal(updated.state, "awaiting_ack");
+    assert.equal(updated.deliveryAttempt, 1);
+    assert.doesNotMatch(log, /__CALL__\tload-buffer/);
+    assert.doesNotMatch(log, /__CALL__\tpaste-buffer/);
+    assert.doesNotMatch(log, /__CALL__\tsend-keys\t-t\t%42\tC-m/);
   });
 });
 

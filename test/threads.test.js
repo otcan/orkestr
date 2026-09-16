@@ -4330,7 +4330,7 @@ test("failed WhatsApp-origin thread delivery raises a connector delivery signal"
   }
 });
 
-test("thread input delivery submits an existing pasted temp-file prompt without repasting", async () => {
+test("thread input delivery restores a queued pasted temp-file prompt without repasting", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-stuck-file-prompt-"));
   const fakeTmux = await createFakeTmux(home);
   const captureFile = path.join(home, "pane.txt");
@@ -4356,7 +4356,24 @@ test("thread input delivery submits an existing pasted temp-file prompt without 
       "",
       "Treat the file contents as the user's message and answer it directly. Do not summarize this wrapper message.",
     ].join("\n");
-    const promptDraft = wrapper.split("\n").map((line, index) => index === 0 ? `› ${line}` : `  ${line}`).join("\n");
+    const wrappedPromptLines = wrapper.split("\n").flatMap((line) => {
+      if (!line) return [""];
+      const words = line.split(/\s+/).filter(Boolean);
+      const rows = [];
+      let row = "";
+      for (const word of words) {
+        if (row && row.length + word.length + 1 > 36) {
+          rows.push(row);
+          row = word;
+        } else {
+          row = row ? `${row} ${word}` : word;
+        }
+      }
+      if (row) rows.push(row);
+      return rows;
+    });
+    assert.ok(wrappedPromptLines.length > 10);
+    const promptDraft = wrappedPromptLines.map((line, index) => index === 0 ? `› ${line}` : `  ${line}`).join("\n");
     await fs.writeFile(captureFile, `${promptDraft}\n  gpt-5.5 xhigh · /workspace/demo\n`, "utf8");
     const env = {
       ORKESTR_HOME: path.join(home, "orkestr-home"),
@@ -4375,8 +4392,9 @@ test("thread input delivery submits an existing pasted temp-file prompt without 
     const input = await appendThreadMessage("stuck-file-prompt-thread", {
       role: "user",
       text,
-      state: "awaiting_ack",
-      deliveryState: "awaiting_ack",
+      state: "queued",
+      deliveryState: "waiting_runtime_start",
+      observedVia: "tmux_send_file_pending_ack",
       deliveryNextAttemptAt: new Date(Date.now() - 1000).toISOString(),
     }, env);
     await updateThreadMessage("stuck-file-prompt-thread", input.id, {
@@ -4388,6 +4406,10 @@ test("thread input delivery submits an existing pasted temp-file prompt without 
       deliveryNextAttemptAt: new Date(Date.now() - 1000).toISOString(),
     }, env);
 
+    const status = await runtimeStatus("stuck-file-prompt-thread", env);
+    assert.equal(status.promptReady, true);
+    assert.equal(status.state, "ready");
+
     assert.deepEqual(await deliverPendingThreadInputs("stuck-file-prompt-thread", env), []);
     const messages = await listThreadMessages("stuck-file-prompt-thread", env);
     const log = await fs.readFile(fakeTmux.log, "utf8");
@@ -4397,9 +4419,17 @@ test("thread input delivery submits an existing pasted temp-file prompt without 
     assert.equal(updated.deliveryState, "awaiting_ack");
     assert.equal(updated.deliveryAttempt, 2);
     assert.equal(updated.observedVia, "tmux_submit_stable_unsent_prompt_pending_ack");
+    assert.equal(updated.deliverySubmitRecoveryCount, 1);
     assert.match(log, /__CALL__\tsend-keys\t-t\t%42\tC-m/);
     assert.doesNotMatch(log, /__CALL__\tload-buffer/);
     assert.doesNotMatch(log, /__CALL__\tpaste-buffer/);
+
+    await updateThreadMessage("stuck-file-prompt-thread", input.id, {
+      deliveryNextAttemptAt: new Date(Date.now() - 1000).toISOString(),
+    }, env);
+    assert.deepEqual(await deliverPendingThreadInputs("stuck-file-prompt-thread", env), []);
+    const repeatedLog = await fs.readFile(fakeTmux.log, "utf8");
+    assert.equal([...repeatedLog.matchAll(/__CALL__\tsend-keys\t-t\t%42\tC-m/g)].length, 1);
   } finally {
     restoreEnvValue("PATH", priorPath);
     restoreEnvValue("TMUX_LOG", priorTmuxLog);
