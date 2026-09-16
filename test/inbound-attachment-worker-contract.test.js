@@ -223,7 +223,9 @@ test("production worker runtime probes bubblewrap and transfer roots under disti
   try {
     await execFile(bwrap, probeArgs, { uid: workerUid, gid: transferGid, env: { SHOULD_NOT_LEAK: "1" } });
   } catch (error) {
-    if (/operation not permitted|permission denied|namespace/i.test(String(error?.stderr || error?.message))) return t.skip("kernel namespace policy does not permit production bubblewrap");
+    if (/Creating new namespace failed: Operation not permitted|unshare(?:\([^)]*\))?: Operation not permitted/i.test(String(error?.stderr || error?.message))) {
+      return t.skip("kernel namespace policy does not permit production bubblewrap");
+    }
     throw error;
   }
 
@@ -303,7 +305,9 @@ test("production bubblewrap probe has an empty environment when kernel namespace
     ], { env: { SHOULD_NOT_LEAK: "1" }, timeout: 10_000 });
     assert.equal(result.stdout.includes("SHOULD_NOT_LEAK"), false);
   } catch (error) {
-    if (/operation not permitted|permission denied|namespace/i.test(String(error?.stderr || error?.message))) return t.skip("kernel namespace policy does not permit bubblewrap");
+    if (/Creating new namespace failed: Operation not permitted|unshare(?:\([^)]*\))?: Operation not permitted/i.test(String(error?.stderr || error?.message))) {
+      return t.skip("kernel namespace policy does not permit bubblewrap");
+    }
     throw error;
   }
 });
