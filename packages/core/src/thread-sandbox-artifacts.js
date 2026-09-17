@@ -163,10 +163,21 @@ export async function readSandboxArtifactSource(filePath, maxBytes) {
     if (stats.size > maxBytes) {
       return { ok: false, reason: "attachment_too_large", size: stats.size, maxBytes };
     }
-    const buffer = await handle.readFile();
-    if (buffer.length > maxBytes) {
-      return { ok: false, reason: "attachment_too_large", size: buffer.length, maxBytes };
+    const chunks = [];
+    let size = 0;
+    while (true) {
+      const chunk = Buffer.alloc(Math.min(64 * 1024, maxBytes - size + 1));
+      const { bytesRead } = await handle.read(chunk, 0, chunk.length, null);
+      if (!bytesRead) break;
+      size += bytesRead;
+      if (size > maxBytes) return { ok: false, reason: "attachment_too_large", size, maxBytes };
+      chunks.push(chunk.subarray(0, bytesRead));
     }
+    const after = await handle.stat();
+    if (after.size !== stats.size || after.mtimeMs !== stats.mtimeMs || after.ctimeMs !== stats.ctimeMs) {
+      return { ok: false, reason: "attachment_path_changed" };
+    }
+    const buffer = Buffer.concat(chunks, size);
     return { ok: true, buffer, stats };
   } catch {
     return { ok: false, reason: "attachment_read_failed" };
@@ -183,6 +194,7 @@ export async function materializeSandboxArtifact({ thread = {}, filename = "arti
   const storedName = `${digest}-${safeSandboxArtifactFilename(filename)}`;
   const destination = path.join(artifactDir, storedName);
   await fs.mkdir(artifactDir, { recursive: true, mode: 0o700 });
+  if (await fs.realpath(artifactDir) !== path.resolve(artifactDir)) throw new Error("sandbox_artifact_directory_changed");
   await fs.chmod(artifactDir, 0o700);
   const existingStats = await fs.lstat(destination).catch(() => null);
   const existing = existingStats?.isFile() && !existingStats.isSymbolicLink()
@@ -194,6 +206,8 @@ export async function materializeSandboxArtifact({ thread = {}, filename = "arti
   const temporary = path.join(artifactDir, `.${storedName}.${crypto.randomUUID()}.tmp`);
   await fs.writeFile(temporary, bytes, { flag: "wx", mode: 0o600 });
   try {
+    const handle = await fs.open(temporary, "r+");
+    try { await handle.sync(); } finally { await handle.close(); }
     await fs.rename(temporary, destination);
   } catch (error) {
     await fs.rm(temporary, { force: true }).catch(() => {});
@@ -207,6 +221,10 @@ export async function materializeSandboxArtifact({ thread = {}, filename = "arti
     }
   }
   await fs.chmod(destination, 0o600).catch(() => {});
+  if (process.platform !== "win32") {
+    const directory = await fs.open(artifactDir, "r");
+    try { await directory.sync(); } finally { await directory.close(); }
+  }
   return { path: destination, sha256: digest, reused: false };
 }
 

@@ -52,6 +52,7 @@ import { syncWhatsAppTypingTargets } from "./whatsapp-typing.js";
 import { routerUpdateWhatsAppDeliveryTarget } from "./whatsapp-router-updates.js";
 import { attachmentDeliveryKey, prepareWhatsAppTableAttachments } from "./whatsapp-table-attachments.js";
 import { appendWebUiEncryptedAttachmentNotice, webUiEncryptedAttachmentDelivery } from "./whatsapp-webui-encrypted-attachments.js";
+import { assertRequiredSnapshotsPresent, requiredOutboundSnapshots, snapshotCoversPath, validateOutboundSnapshots } from "../../core/src/outbound-attachment-snapshots.js";
 import { appendWhatsAppDebugFooter, formatWhatsAppOutboundText, stripWhatsAppDebugFooter } from "./whatsapp-formatting.js";
 import {
   bindingAccountIds,
@@ -3260,6 +3261,7 @@ async function sendClaimedWhatsAppText({
   const turnId = pickString(intent?.turnId) || (routerTraceId ? turnIdFor({ routerTraceId }) : "");
   const ownerUserId = resourceOwnerUserId(thread || {}, env);
   const bodyKey = whatsappOutboundBodyKey({ chatId, text, attachments });
+  const requiredAttachmentSnapshots = requiredOutboundSnapshots(message?.attachments);
   const canonicalFinalIdempotencyKey = deliveryType === "final" && routerTraceId && bodyKey
     ? [ownerUserId, "whatsapp", accountId, chatId, threadId || "", `trace:${routerTraceId}`, `payload:${bodyKey}`, "final"].join("|")
     : "";
@@ -3284,6 +3286,7 @@ async function sendClaimedWhatsAppText({
       text,
       ...(routerUpdateType ? { routerUpdateType } : {}),
       ...(attachments ? { attachments } : {}),
+      ...(requiredAttachmentSnapshots.length ? { requiredAttachmentSnapshots } : {}),
     },
     metadata: {
       kind,
@@ -3715,6 +3718,13 @@ async function sendClaimedWhatsAppText({
   await markRouterOutboxItem(intent?.outboxId, { status: "claimed" }, env).catch(() => null);
 
   try {
+    // Resolution may omit a missing file. Its persisted obligation must still
+    // fail the claimed job, never turn an intended media reply into text-only.
+    await validateOutboundSnapshots([
+      ...requiredAttachmentSnapshots,
+      ...(outboxClaim.job.payload?.requiredAttachmentSnapshots || []),
+    ], env);
+    assertRequiredSnapshotsPresent(requiredAttachmentSnapshots, attachments);
     await injectRuntimeFault("transport_send", {
       connector: "whatsapp",
       threadId,
@@ -5854,6 +5864,7 @@ async function listThreadMessageSets(env, state = null, config = {}, options = {
  * @param {{ chatId?: string, text?: string, accountId?: string, mentions?: string[], attachments?: Array<Record<string, unknown>>, crossAccountEchoSuppression?: boolean, routeSentMessage?: boolean, requestId?: string, correlationId?: string, config?: Record<string, unknown> | null, env?: Record<string, string | undefined>, fetchImpl?: typeof fetch }} [options]
  */
 export async function sendWhatsAppText({ chatId = "", text = "", accountId = "", mentions = [], attachments = [], crossAccountEchoSuppression = true, routeSentMessage = false, requestId = "", correlationId = "", config = null, env = process.env, fetchImpl = fetch } = {}) {
+  await validateOutboundSnapshots(attachments, env);
   const resolvedConfig = config || await readConnectorConfig("whatsapp", env).catch(() => ({}));
   const bridgeUrl = configuredBridgeUrl(resolvedConfig, env);
   const normalizedAttachments = Array.isArray(attachments)
@@ -5864,6 +5875,7 @@ export async function sendWhatsAppText({ chatId = "", text = "", accountId = "",
     : [];
   if (!bridgeUrl && bridgeMode(resolvedConfig, env) === "local") {
     const localAttachments = await prepareLocalBridgeAttachments(normalizedAttachments, env);
+    assertRequiredSnapshotsPresent(requiredOutboundSnapshots(normalizedAttachments), normalizedAttachments, localAttachments.skipped);
     const safeSkipped = localAttachments.skipped.map((attachment) => ({
       ...attachment,
       path: attachment.filename,
@@ -5885,6 +5897,7 @@ export async function sendWhatsAppText({ chatId = "", text = "", accountId = "",
   const inlineAttachments = externalBridgeCanReadPaths
     ? { attachments: [], skipped: [] }
     : await prepareExternalBridgeInlineAttachments(normalizedAttachments, env);
+  assertRequiredSnapshotsPresent(requiredOutboundSnapshots(normalizedAttachments), normalizedAttachments, inlineAttachments.skipped);
   const sendablePathAttachments = externalBridgeCanReadPaths ? normalizedAttachments : [];
   const sendableInlineAttachments = inlineAttachments.attachments;
   const outboundText = appendLocalAttachmentFailureNotes(text, inlineAttachments.skipped);
@@ -7203,7 +7216,9 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
       });
       const attachments = protectedDelivery.attachments;
       const outboundText = appendWebUiEncryptedAttachmentNotice(
-        appendLocalAttachmentFailureNotes(preparedOutbound.text, resolvedOutboundAttachments.skipped),
+        appendLocalAttachmentFailureNotes(preparedOutbound.text, resolvedOutboundAttachments.skipped.filter(
+          item => !snapshotCoversPath(attachments, item.path),
+        )),
         protectedDelivery.unavailableCount,
       );
       const formattedText = formatWhatsAppOutboundText(redactDeniedThreadAttachmentPaths(outboundText, {
@@ -7229,7 +7244,8 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
         skipped.push({ agentId, threadId, messageId: message.id, reason: "duplicate_text" });
         continue;
       }
-      if (!sourceMessageAttachments.some((attachment) => attachment?.encrypted === true)) {
+      if (!sourceMessageAttachments.some((attachment) => attachment?.encrypted === true) &&
+          !requiredOutboundSnapshots(sourceMessageAttachments).length) {
         await persistMessageAttachmentsIfChanged(threadId, message, attachments, env);
       }
 

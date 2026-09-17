@@ -14555,7 +14555,8 @@ test("whatsapp delivery sends allowed local paths as media attachments and does 
   assert.equal(delivery.delivered.length, 1);
   assert.equal(duplicate.delivered.length, 0);
   assert.equal(calls[0].url.pathname, "/send-media");
-  assert.deepEqual(calls[0].body.paths, [reportPath]);
+  assert.deepEqual(calls[0].body.paths, [storedReply.attachments[0].path]);
+  assert.notEqual(storedReply.attachments[0].path, reportPath);
   assert.match(stripDebugFooter(calls[0].body.text), new RegExp(reportPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   assert.equal(storedReply.attachments.length, 1);
   assert.match(storedReply.attachments[0].id, /^att_[a-f0-9]{32}$/);
@@ -14707,7 +14708,8 @@ test("whatsapp delivery sends admin temp screenshots as media attachments", asyn
 
   assert.equal(delivery.delivered.length, 1);
   assert.equal(calls[0].url.pathname, "/send-media");
-  assert.deepEqual(calls[0].body.paths, [screenshotPath]);
+  assert.deepEqual(calls[0].body.paths, [storedReply.attachments[0].path]);
+  assert.notEqual(storedReply.attachments[0].path, screenshotPath);
   assert.equal(delivery.delivered[0].attachments[0].filename, "portal-mobile.png");
   assert.equal(storedReply.attachments[0].mimetype, "image/png");
 });
@@ -14831,7 +14833,8 @@ test("whatsapp delivery exposes allowed local paths for user-owned chats while s
 
   assert.equal(delivery.delivered.length, 1);
   assert.equal(calls[0].url.pathname, "/send-media");
-  assert.deepEqual(calls[0].body.paths, [reportPath]);
+  assert.deepEqual(calls[0].body.paths, [storedReply.attachments[0].path]);
+  assert.notEqual(storedReply.attachments[0].path, reportPath);
   assert.match(visibleText, new RegExp(reportPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   assert.doesNotMatch(visibleText, /\[local file path omitted]/);
   assert.equal(storedReply.attachments.length, 1);
@@ -14876,7 +14879,8 @@ test("whatsapp delivery exposes allowed local paths for admin-role thread owners
 
   assert.equal(delivery.delivered.length, 1);
   assert.equal(calls[0].url.pathname, "/send-media");
-  assert.deepEqual(calls[0].body.paths, [reportPath]);
+  assert.deepEqual(calls[0].body.paths, [storedReply.attachments[0].path]);
+  assert.notEqual(storedReply.attachments[0].path, reportPath);
   assert.match(visibleText, new RegExp(reportPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   assert.doesNotMatch(visibleText, /\[local file path omitted]/);
   assert.equal(storedReply.attachments.length, 1);

@@ -357,6 +357,7 @@ export async function resolveThreadAttachments({ thread = {}, text = "", attachm
   const skipped = [];
   const artifactOutcomes = [];
   const seenPaths = new Set();
+  const snapshottedSourceHashes = new Set();
   const acceptedSandboxUriHashes = new Set();
   for (const candidate of extractThreadAttachmentPathCandidates({ text, attachments, thread })) {
     if (candidate.invalid) {
@@ -365,6 +366,9 @@ export async function resolveThreadAttachments({ thread = {}, text = "", attachm
       continue;
     }
     if (textCandidateSource(candidate.source) && candidate.lineReference) continue;
+    if (textCandidateSource(candidate.source) && candidate.path && snapshottedSourceHashes.has(
+      crypto.createHash("sha256").update(path.resolve(candidate.path)).digest("hex"),
+    )) continue;
     if (candidate.sandboxArtifact && acceptedSandboxUriHashes.has(candidate.sandboxUriHash)) continue;
     if (candidate.sandboxArtifact) {
       const result = await resolveSandboxArtifactCandidate({
@@ -417,6 +421,8 @@ export async function resolveThreadAttachments({ thread = {}, text = "", attachm
     seenPaths.add(realPath);
     const attachment = metadataForAttachment(candidate, realPath, stats);
     resolved.push(attachment);
+    const sourceHash = attachment.outboundSnapshot?.sourcePathHash || attachment.deliverySource?.outboundSnapshot?.sourcePathHash;
+    if (sourceHash) snapshottedSourceHashes.add(sourceHash);
     if (pickString(attachment.sandboxUriHash)) acceptedSandboxUriHashes.add(pickString(attachment.sandboxUriHash));
   }
   return {
