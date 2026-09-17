@@ -6,9 +6,40 @@ the existing browser-held recipient identities used for outbound downloads.
 It does not make an approved attachment secret from the scanner, Orkestr, or
 the agent that receives a released attachment.
 
-## Activation boundary
+## Transport encryption (trusted API)
 
-Inbound encryption is off by default. Production intake needs the dedicated
+For ciphertext-only browser uploads with ordinary server processing/storage:
+
+```ini
+ORKESTR_INBOUND_UPLOAD_ENCRYPTION_ENABLED=1
+ORKESTR_INBOUND_UPLOAD_ENCRYPTION_REQUIRED=1
+ORKESTR_INBOUND_UPLOAD_PROCESSING_MODE=transport
+```
+
+The browser encrypts the metadata and file stream using age's authenticated
+chunked format before the PUT. The `application/age` body contains ciphertext,
+not multipart plaintext. For compatibility with browsers without streaming
+request support, the bounded encrypted chunks are buffered as a Blob; the
+original file is never used as a network fallback. Control POSTs carry session
+IDs and sizes only. This is one encrypted stream per file, not a resumable
+per-chunk HTTP protocol.
+
+The trusted API owns the decryption identity, verifies the complete stream,
+descriptor, session, owner, limits and key status, then publishes normal file
+bytes. Temporary partial plaintext is private and never published before final
+authentication. This mode does not promise encryption at rest, secrecy from
+the API, or malware scanning; `scannedAt` remains empty. It requires neither a
+separate worker nor a service-identity migration. HTTPS and authenticated
+public-key delivery remain required. Required mode rejects legacy plaintext
+uploads, including while intake is paused or encryption is unready.
+
+Do not switch existing isolated-worker key registries into transport mode
+without key rotation: their identities are intentionally unavailable to the
+API. Mode changes are operator decisions, never error recovery fallbacks.
+
+## Isolated-worker activation boundary (default)
+
+Inbound encryption is off by default. In `isolated-worker` mode, intake needs the dedicated
 [isolated worker contract](inbound-attachment-worker.md), including an
 approved scanner. The API process never decrypts production ciphertext and
 never stores an inbound age identity or worker signing private key.
@@ -17,6 +48,7 @@ never stores an inbound age identity or worker signing private key.
 ORKESTR_INBOUND_UPLOAD_ENCRYPTION_ENABLED=1
 ORKESTR_INBOUND_UPLOAD_ENCRYPTION_REQUIRED=1
 ORKESTR_INBOUND_UPLOAD_SCANNER_APPROVED=1
+ORKESTR_INBOUND_UPLOAD_PROCESSING_MODE=isolated-worker
 ```
 
 The API refuses production intake with
@@ -33,7 +65,7 @@ identities and must be backed up through the worker's approved secret process.
 status. Rotation retires the old key so live sessions can finish; revocation
 blocks a release even if a scan was already in progress.
 
-## Data path and lifecycle
+## Shared data path and isolated-worker lifecycle
 
 For each selected file, the browser requests a short-lived session bound to the
 authenticated thread and its server-derived owner/tenant, file size, quota,

@@ -89,8 +89,8 @@ function activeKey(registry, owner) {
   return registry.keys.find((key) => clean(key.ownerUserId) === owner && key.status === "active" && !key.revokedAt) || null;
 }
 
-function usesTestIdentity(env) {
-  return inboundAttachmentUploadPolicy(env).testIsolation === true;
+function usesLocalIdentity(env) {
+  return inboundAttachmentUploadPolicy(env).localDecryption === true;
 }
 
 function publicWorkerRecord(record = {}) {
@@ -125,7 +125,7 @@ export async function ensureInboundAttachmentKey(ownerUserId, env = process.env)
   const owner = ownerId(ownerUserId, env);
   const existing = activeKey(await readRegistry(env), owner);
   if (existing) return existing;
-  if (!usesTestIdentity(env)) {
+  if (!usesLocalIdentity(env)) {
     const workerKey = await inboundAttachmentWorkerKeyAction("ensure", { ownerUserId: owner }, env);
     const result = await withInboundAttachmentMutationLock(env, async () => {
       const registry = await readRegistry(env);
@@ -165,7 +165,7 @@ export async function ensureInboundAttachmentKey(ownerUserId, env = process.env)
 
 export async function rotateInboundAttachmentKey(ownerUserId, env = process.env) {
   const owner = ownerId(ownerUserId, env);
-  if (!usesTestIdentity(env)) {
+  if (!usesLocalIdentity(env)) {
     const workerKey = await inboundAttachmentWorkerKeyAction("rotate", { ownerUserId: owner }, env);
     const result = await withInboundAttachmentMutationLock(env, async () => {
       const registry = await readRegistry(env);
@@ -206,7 +206,7 @@ export async function rotateInboundAttachmentKey(ownerUserId, env = process.env)
 export async function revokeInboundAttachmentKey(ownerUserId, keyId, env = process.env) {
   const owner = ownerId(ownerUserId, env);
   const wanted = clean(keyId);
-  if (!usesTestIdentity(env)) {
+  if (!usesLocalIdentity(env)) {
     await withInboundAttachmentMutationLock(env, async () => {
       const registry = await readRegistry(env);
       const key = registry.keys.find((candidate) => clean(candidate.ownerUserId) === owner && clean(candidate.id) === wanted);

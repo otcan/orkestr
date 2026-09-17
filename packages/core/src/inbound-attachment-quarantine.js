@@ -389,9 +389,8 @@ async function publishStagedAttachment({ session, token, decoded, principal, pol
     const current = store.sessions.find((item) => clean(item.id) === clean(session.id));
     if (!current || current.state !== "scanning" || clean(current.processingToken) !== clean(token)) throw fail("inbound_upload_superseded", 409);
     const key = await inboundAttachmentKeyById(current.ownerUserId, current.keyId, env);
-    // In production the API deliberately has no decryption identity. The
-    // isolated worker has already bound its signed verdict to this key; the
-    // publish fence only needs to ensure that the public key was not revoked.
+    // Both API-decrypted transport and isolated-worker uploads share the
+    // same atomic key-revocation and ownership fence before publication.
     if (!key || !["active", "retired"].includes(key.status)) throw fail("inbound_upload_key_unavailable", 409);
     await fsp.mkdir(path.dirname(destination), { recursive: true, mode: 0o700 });
     await fsp.rename(stagePath, destination);
@@ -405,7 +404,7 @@ async function publishStagedAttachment({ session, token, decoded, principal, pol
       mimetype: decoded.mimetype,
       size: decoded.size,
       checksum: decoded.checksum,
-      scannedAt: nowIso(),
+      scannedAt: policy.transportOnly ? null : nowIso(),
       expiresAt: new Date(Date.now() + policy.plaintextLeaseMs).toISOString(),
     };
     delete current.processingToken;

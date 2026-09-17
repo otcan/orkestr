@@ -3268,13 +3268,16 @@ export class ApiService {
   }
 
   async uploadInboundAttachmentCiphertext(sessionId: string, ciphertext: ReadableStream<Uint8Array>): Promise<InboundAttachmentUploadSession> {
+    // Safari/Firefox do not consistently support fetch request streams. Only
+    // already-encrypted chunks are buffered (bounded by the upload size limit).
+    // Never retry with the original File or plaintext multipart data.
+    const encryptedBody = await new Response(ciphertext).blob();
     const response = await fetch(this.api(`/attachment-encryption/inbound/sessions/${encodeURIComponent(sessionId)}/ciphertext`), {
       method: "PUT",
       credentials: "same-origin",
       headers: { "content-type": "application/age", accept: "application/json" },
-      body: ciphertext as unknown as BodyInit,
-      duplex: "half",
-    } as RequestInit & { duplex: "half" });
+      body: encryptedBody,
+    });
     const payload = await response.json().catch(() => ({})) as { error?: string; session?: InboundAttachmentUploadSession };
     if (!response.ok || !payload.session) throw new Error(String(payload.error || `inbound_upload_failed_${response.status}`));
     return payload.session;

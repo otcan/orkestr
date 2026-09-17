@@ -48,6 +48,9 @@ export function inboundAttachmentUploadPolicy(env = process.env) {
   const testIsolation = enabled(env.ORKESTR_INBOUND_UPLOAD_TEST_ISOLATION)
     && env.ORKESTR_TEST_STORAGE_BOOTSTRAPPED === "1";
   const worker = inboundAttachmentWorkerStaticConfig(env);
+  const processingMode = clean(env.ORKESTR_INBOUND_UPLOAD_PROCESSING_MODE) || "isolated-worker";
+  const transportOnly = processingMode === "transport";
+  const validMode = transportOnly || processingMode === "isolated-worker";
   const testScannerConfigured = Boolean(
     scannerApproved &&
     command &&
@@ -55,18 +58,19 @@ export function inboundAttachmentUploadPolicy(env = process.env) {
     Array.isArray(args) &&
     args.includes("{file}"),
   );
-  // Production plaintext handling is exclusively delegated to the worker. The
-  // legacy command is intentionally usable only by the storage-bootstrap test
-  // harness, never as a production fallback.
-  const scannerConfigured = testIsolation ? testScannerConfigured : scannerApproved && worker.configured;
-  const isolationReady = testIsolation || worker.configured;
+  // Isolation remains the default. Transport mode explicitly trusts the API
+  // with decryption and is never selected automatically after worker failure.
+  const scannerConfigured = transportOnly || (testIsolation ? testScannerConfigured : scannerApproved && worker.configured);
+  const isolationReady = transportOnly || testIsolation || worker.configured;
   const reason = !featureEnabled
     ? "inbound_upload_encryption_disabled"
-    : !scannerApproved
+    : !validMode
+      ? "inbound_upload_processing_mode_invalid"
+    : !transportOnly && !scannerApproved
       ? "inbound_upload_scanner_not_approved"
-    : testIsolation && (!command || !path.isAbsolute(command))
+    : !transportOnly && testIsolation && (!command || !path.isAbsolute(command))
       ? "inbound_upload_scanner_command_invalid"
-        : testIsolation && (!Array.isArray(args) || !args.includes("{file}"))
+        : !transportOnly && testIsolation && (!Array.isArray(args) || !args.includes("{file}"))
           ? "inbound_upload_scanner_args_invalid"
           : intakePaused
             ? "inbound_upload_intake_paused"
@@ -76,7 +80,10 @@ export function inboundAttachmentUploadPolicy(env = process.env) {
   return {
     enabled: featureEnabled,
     required,
-    ready: featureEnabled && scannerConfigured && !intakePaused && isolationReady,
+    ready: featureEnabled && validMode && scannerConfigured && !intakePaused && isolationReady,
+    processingMode,
+    transportOnly,
+    localDecryption: transportOnly || testIsolation,
     reason,
     scanner: testIsolation && testScannerConfigured ? { command, args } : null,
     intakePaused,

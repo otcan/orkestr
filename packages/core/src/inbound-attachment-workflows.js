@@ -141,7 +141,7 @@ export async function createInboundAttachmentUploadSessionsWorkflow({ threadId, 
   publicSession,
 }) {
   const policy = requireUploadReady(env);
-  if (!policy.testIsolation) await requireInboundAttachmentWorkerReady(env);
+  if (!policy.localDecryption) await requireInboundAttachmentWorkerReady(env);
   const thread = await requireThread(threadId, principal, env);
   if (!Array.isArray(files) || !files.length || files.length > policy.maxFiles) throw fail("inbound_upload_files_invalid", 400);
   const ownerUserId = clean(resourceOwnerUserId(thread, env));
@@ -263,7 +263,7 @@ export async function processInboundAttachmentUploadWorkflow({ sessionId, princi
 }) {
   const policy = policyFor(env);
   if (!policy.ready || (typeof scanner === "function" && !policy.testIsolation)) throw fail(policy.reason || "inbound_upload_not_ready", 503);
-  if (!policy.testIsolation) await requireInboundAttachmentWorkerReady(env);
+  if (!policy.localDecryption) await requireInboundAttachmentWorkerReady(env);
   const claim = await claimProcessing(sessionId, principal, policy, env);
   if (!claim.owned) return publicSession(claim.session);
   const session = claim.session;
@@ -276,7 +276,7 @@ export async function processInboundAttachmentUploadWorkflow({ sessionId, princi
   const stopHeartbeat = startLeaseHeartbeat(session.id, token, policy, renewProcessingLease, env);
   let published = false;
   try {
-    if (!policy.testIsolation) {
+    if (!policy.localDecryption) {
       const completed = await processIsolatedWorkerClaim({ session, token, principal, policy, startedAt, env, fail, keyById, verifyDescriptor, assertSessionAuthority, setScanning, renewProcessingLease, completeProcessing, publishStagedAttachment, recordMetric, publicSession });
       published = completed.state === "ready";
       return completed;
@@ -297,7 +297,9 @@ export async function processInboundAttachmentUploadWorkflow({ sessionId, princi
     await verifyDescriptor(decoded.descriptor, session, key, policy, env);
     await assertSessionAuthority(session, principal, env);
     await setScanning(session.id, token, policy, env);
-    const verdict = await scanInboundAttachment(plaintextPath, policy, scanner);
+    // Transport mode authenticates/decrypts the browser stream in the trusted
+    // API. It makes no malware-scanning or key-isolation promise.
+    const verdict = policy.transportOnly ? { approved: true } : await scanInboundAttachment(plaintextPath, policy, scanner);
     if (!verdict.approved) return completeScannerOutcome({ session, token, verdict, startedAt, env, completeProcessing, recordMetric, publicSession });
     await renewProcessingLease(session.id, token, policy, env);
     await fsp.mkdir(path.dirname(stagePath), { recursive: true, mode: 0o700 });
@@ -307,7 +309,7 @@ export async function processInboundAttachmentUploadWorkflow({ sessionId, princi
     published = true;
     await fsp.rm(cipherPath, { force: true }).catch(() => {});
     recordMetric("ready", "ready", Date.now() - startedAt);
-    await appendEvent({ type: "inbound_attachment_scan_approved", threadId: completed.threadId, ownerUserId: completed.ownerUserId, state: completed.state, plaintextSize: completed.release.size, keyVersion: completed.keyVersion }, env).catch(() => {});
+    await appendEvent({ type: policy.transportOnly ? "inbound_attachment_decrypted" : "inbound_attachment_scan_approved", threadId: completed.threadId, ownerUserId: completed.ownerUserId, state: completed.state, plaintextSize: completed.release.size, keyVersion: completed.keyVersion }, env).catch(() => {});
     return publicSession(completed);
   } catch (error) {
     const next = failureState(error);

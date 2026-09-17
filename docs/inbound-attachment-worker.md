@@ -5,6 +5,10 @@ attachments. It is deliberately not enabled by default and this repository does
 not install a service, scanner, key, group, or host directory for an operator.
 Review and approve those local controls before enabling the feature.
 
+This runbook applies to `PROCESSING_MODE=isolated-worker` only. For browser-side
+transport encryption with a trusted decrypting API, use the explicit `transport`
+mode in [inbound uploads](inbound-attachment-uploads.md); no worker is required.
+
 ## Boundary
 
 The API retains only a local Unix-socket authentication secret, the worker
