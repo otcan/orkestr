@@ -4,6 +4,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { ensureDataDirs } from "../../storage/src/paths.js";
 import { appendEvent } from "../../storage/src/store.js";
 import { createThreadMessageRepository, createThreadRepository } from "../../storage/src/repositories.js";
+import { draftAttachmentFingerprint, draftAttachmentIds, withDraftAttachmentClaims } from "./draft-attachment-claims.js";
 import { threadRecordSnapshotRevision } from "../../storage/src/thread-registry.js";
 import { snapshotEnvironment } from "../../storage/src/test-storage-isolation.js";
 import { assertSanitizedAction } from "./llm-sanitizer.js";
@@ -768,7 +769,12 @@ export async function appendThreadMessage(threadId, input, env = process.env) {
             existing.role === "user" &&
             clientInputIdempotencyKey(existing) === clientMessageId
           );
-      if (duplicate) return { ...duplicate, duplicate: true, duplicateReason: "client_message_id" };
+      if (duplicate) {
+        if ((duplicate.draftAttachmentFingerprint || draftAttachmentFingerprint(input)) && duplicate.draftAttachmentFingerprint !== draftAttachmentFingerprint(input)) {
+          throw Object.assign(new Error("draft_attachment_idempotency_conflict"), { statusCode: 409 });
+        }
+        return { ...duplicate, duplicate: true, duplicateReason: "client_message_id" };
+      }
     }
     if (role === "assistant" && input.dedupeAssistantByIdempotencyKey === true && clientMessageId) {
       const candidate = sqlite
@@ -853,37 +859,44 @@ export async function appendThreadMessage(threadId, input, env = process.env) {
     if (input.recoveryContinuation === true) nextMessage.recoveryContinuation = true;
     if (input.operatorRetryRequired === true) nextMessage.operatorRetryRequired = true;
     if (input.automaticTurnReplay === true || input.automaticTurnReplay === false) nextMessage.automaticTurnReplay = input.automaticTurnReplay;
-    if (!nextMessage.text && !nextMessage.promptFile) {
+    if (!nextMessage.text && !nextMessage.promptFile && !draftAttachmentIds(input).length) {
       const error = new Error("message_text_required");
       error.statusCode = 400;
       throw error;
     }
-    const resolvedAttachments = await resolveThreadAttachments({
-      thread,
-      text: nextMessage.text,
-      attachments: Array.isArray(input.attachments) ? input.attachments : [],
-      env,
+    return withDraftAttachmentClaims({ thread, input, messageId: nextMessage.id, env }, async (canonicalAttachments) => {
+      if (draftAttachmentIds(input).length) {
+        nextMessage.draftAttachmentFingerprint = draftAttachmentFingerprint(input);
+        nextMessage.text = [nextMessage.text, "Attached files saved for this Orkestr thread:",
+          ...canonicalAttachments.filter(item => item?.inboundUpload?.sessionId).map(item => `- ${item.path}`)].filter(Boolean).join("\n");
+      }
+      const resolvedAttachments = await resolveThreadAttachments({
+        thread,
+        text: nextMessage.text,
+        attachments: canonicalAttachments,
+        env,
+      });
+      nextMessage.text = resolvedAttachments.text;
+      attachmentOutcomes = resolvedAttachments.artifactOutcomes;
+      const publishedAttachments = role === "assistant"
+        ? await publishThreadAttachmentsEncrypted({ thread, attachments: resolvedAttachments.attachments, env })
+        : { attachments: resolvedAttachments.attachments };
+      if (publishedAttachments.encrypted === true) {
+        attachmentOutcomes = attachmentOutcomes.map((outcome) => ({ ...outcome, filename: "encrypted-artifact" }));
+      }
+      if (publishedAttachments.attachments.length) {
+        nextMessage.attachments = publishedAttachments.attachments;
+      }
+      await injectRuntimeFault("message_persistence", {
+        threadId: thread.id,
+        messageId: nextMessage.id,
+        role: nextMessage.role,
+        source: nextMessage.source,
+      }, env);
+      if (sqlite) await messageRepository.append(thread.id, nextMessage);
+      else await messageRepository.save(thread.id, [...messages, nextMessage]);
+      return nextMessage;
     });
-    nextMessage.text = resolvedAttachments.text;
-    attachmentOutcomes = resolvedAttachments.artifactOutcomes;
-    const publishedAttachments = role === "assistant"
-      ? await publishThreadAttachmentsEncrypted({ thread, attachments: resolvedAttachments.attachments, env })
-      : { attachments: resolvedAttachments.attachments };
-    if (publishedAttachments.encrypted === true) {
-      attachmentOutcomes = attachmentOutcomes.map((outcome) => ({ ...outcome, filename: "encrypted-artifact" }));
-    }
-    if (publishedAttachments.attachments.length) {
-      nextMessage.attachments = publishedAttachments.attachments;
-    }
-    await injectRuntimeFault("message_persistence", {
-      threadId: thread.id,
-      messageId: nextMessage.id,
-      role: nextMessage.role,
-      source: nextMessage.source,
-    }, env);
-    if (sqlite) await messageRepository.append(thread.id, nextMessage);
-    else await messageRepository.save(thread.id, [...messages, nextMessage]);
-    return nextMessage;
   });
   if (message.duplicate) {
     await appendEvent({

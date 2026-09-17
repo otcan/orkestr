@@ -1,4 +1,6 @@
-import { Body, Controller, Delete, Get, HttpCode, HttpException, Param, Post, Put, Query, Req } from "@nestjs/common";
+import { Body, Controller, Delete, Get, HttpCode, HttpException, Param, Post, Put, Query, Req, Res } from "@nestjs/common";
+import { inboundAttachmentPreviewStream } from "../../../../../packages/core/src/inbound-attachment-preview.js";
+import { attachmentFeaturePolicy } from "../../../../../packages/core/src/attachment-feature-policy.js";
 import {
   attachmentEncryptionStatus,
   registerAttachmentEncryptionRecipient,
@@ -43,6 +45,9 @@ function fail(error: any): never {
 
 @Controller("api/attachment-encryption")
 export class AttachmentEncryptionController {
+  @Get("features")
+  features() { return attachmentFeaturePolicy(); }
+
   @Get()
   async status(@Req() request: any) {
     try {
@@ -121,6 +126,19 @@ export class AttachmentEncryptionController {
     } catch (error) {
       fail(error);
     }
+  }
+
+  @Get("inbound/sessions/:sessionId/preview")
+  async inboundPreview(@Req() request: any, @Param("sessionId") sessionId: string, @Res() response: any) {
+    try {
+      const stream = await inboundAttachmentPreviewStream({ sessionId, principal: requestPrincipal(request) } as any);
+      response.setHeader("content-type", "application/age");
+      response.setHeader("cache-control", "no-store");
+      response.setHeader("x-content-type-options", "nosniff");
+      response.on("close", () => stream.destroy());
+      stream.on("error", () => response.destroy());
+      return stream.pipe(response);
+    } catch (error) { fail(error); }
   }
 
   @Post("inbound/sessions/:sessionId/cancel")

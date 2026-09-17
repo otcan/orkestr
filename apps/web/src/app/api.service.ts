@@ -1801,6 +1801,7 @@ export interface ThreadUploadResponse {
 }
 
 export interface InboundAttachmentUploadStatus {
+  features?: { eagerUploads: boolean; pastedAttachments: boolean; textPreview: boolean; archivePreview: boolean };
   enabled: boolean;
   required: boolean;
   ready: boolean;
@@ -3117,7 +3118,7 @@ export class ApiService {
     options: { replyDelivery?: "ui_only" | "bound_whatsapp"; clientMessageId?: string } = {},
   ): Observable<ThreadInputResponse> {
     const body: Record<string, unknown> = { text, replyDelivery: options.replyDelivery || "ui_only" };
-    if (attachments.length) body["attachments"] = attachments;
+    if (attachments.length) body["attachments"] = attachments.map(item => item["uploadSessionId"] ? { uploadSessionId: item["uploadSessionId"] } : item);
     if (options.clientMessageId) body["clientMessageId"] = options.clientMessageId;
     return this.http.post<ThreadInputResponse>(this.api(`/threads/${encodeURIComponent(id)}/ui-input`), body);
   }
@@ -3153,7 +3154,7 @@ export class ApiService {
     options: { replyDelivery?: "ui_only" | "bound_whatsapp"; clientMessageId?: string } = {},
   ): Observable<ThreadInputResponse> {
     const body: Record<string, unknown> = { text, replyDelivery: options.replyDelivery || "ui_only" };
-    if (attachments.length) body["attachments"] = attachments;
+    if (attachments.length) body["attachments"] = attachments.map(item => item["uploadSessionId"] ? { uploadSessionId: item["uploadSessionId"] } : item);
     if (options.clientMessageId) body["clientMessageId"] = options.clientMessageId;
     return this.http.post<ThreadInputResponse>(this.api(`/threads/${encodeURIComponent(id)}/ui-interrupt`), body);
   }
@@ -3267,16 +3268,18 @@ export class ApiService {
     );
   }
 
-  async uploadInboundAttachmentCiphertext(sessionId: string, ciphertext: ReadableStream<Uint8Array>): Promise<InboundAttachmentUploadSession> {
+  async uploadInboundAttachmentCiphertext(sessionId: string, ciphertext: ReadableStream<Uint8Array>, signal?: AbortSignal): Promise<InboundAttachmentUploadSession> {
     // Safari/Firefox do not consistently support fetch request streams. Only
     // already-encrypted chunks are buffered (bounded by the upload size limit).
     // Never retry with the original File or plaintext multipart data.
     const encryptedBody = await new Response(ciphertext).blob();
+    signal?.throwIfAborted();
     const response = await fetch(this.api(`/attachment-encryption/inbound/sessions/${encodeURIComponent(sessionId)}/ciphertext`), {
       method: "PUT",
       credentials: "same-origin",
       headers: { "content-type": "application/age", accept: "application/json" },
       body: encryptedBody,
+      signal,
     });
     const payload = await response.json().catch(() => ({})) as { error?: string; session?: InboundAttachmentUploadSession };
     if (!response.ok || !payload.session) throw new Error(String(payload.error || `inbound_upload_failed_${response.status}`));
@@ -3288,6 +3291,14 @@ export class ApiService {
       this.api(`/attachment-encryption/inbound/sessions/${encodeURIComponent(sessionId)}/process`),
       {},
     );
+  }
+
+  inboundAttachmentPreviewUrl(sessionId: string): string {
+    return this.api(`/attachment-encryption/inbound/sessions/${encodeURIComponent(sessionId)}/preview`);
+  }
+
+  attachmentFeatures(): Observable<{ eagerUploads: boolean; pastedAttachments: boolean; textPreview: boolean; archivePreview: boolean }> {
+    return this.http.get<{ eagerUploads: boolean; pastedAttachments: boolean; textPreview: boolean; archivePreview: boolean }>(this.api("/attachment-encryption/features"));
   }
 
   browserSessions(threadId = "", breakGlassReason = "", ownerInventory = false): Observable<{ sessions: BrowserSession[]; browsers?: BrowserSession[]; source?: string; error?: string; message?: string }> {

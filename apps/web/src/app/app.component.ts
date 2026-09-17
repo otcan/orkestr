@@ -4,6 +4,9 @@ import { FormsModule } from "@angular/forms";
 import { firstValueFrom } from "rxjs";
 import { AppLauncherPageComponent } from "./app-launcher-page.component";
 import { AttachmentEncryptionBootstrapService } from "./attachment-encryption-bootstrap.service";
+import { DraftUploadQueue } from "./draft-upload-queue";
+import { AttachmentPreviewComponent } from "./attachment-preview.component";
+import { AttachmentPreviewService } from "./attachment-preview.service";
 import { FirstThreadWizardComponent } from "./first-thread-wizard.component";
 import { FilesPageComponent } from "./files-page.component";
 import { InstanceSettingsPageComponent } from "./instance-settings-page.component";
@@ -102,11 +105,15 @@ const MESSAGE_PAGE_LIMIT = 100;
 
 @Component({
   selector: "ork-root",
-  imports: [DatePipe, FormsModule, AppLauncherPageComponent, FirstThreadWizardComponent, FilesPageComponent, InstanceSettingsPageComponent, OnboardingPageComponent, PairingRequiredPageComponent, PublicAppsPageComponent, SharedAppPageComponent, ThreadComposerComponent, ThreadMessageListComponent, UserConnectorsPageComponent, UserDeskPageComponent, UserTimersPageComponent],
+  imports: [DatePipe, FormsModule, AttachmentPreviewComponent, AppLauncherPageComponent, FirstThreadWizardComponent, FilesPageComponent, InstanceSettingsPageComponent, OnboardingPageComponent, PairingRequiredPageComponent, PublicAppsPageComponent, SharedAppPageComponent, ThreadComposerComponent, ThreadMessageListComponent, UserConnectorsPageComponent, UserDeskPageComponent, UserTimersPageComponent],
   templateUrl: "./app.component.html",
 })
 export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   private readonly api = inject(ApiService);
+  private readonly attachmentPreview = inject(AttachmentPreviewService);
+  private readonly draftUploads = new DraftUploadQueue(this.api, threadId => {
+    if (this.selectedThread()?.id === threadId) { this.pendingFiles = [...this.draftUploads.files(threadId)]; this.renderNow(); }
+  });
   private readonly attachmentEncryptionBootstrap = inject(AttachmentEncryptionBootstrapService);
   private readonly cdr = inject(ChangeDetectorRef);
   private readonly connectorStore = inject(ConnectorStore);
@@ -563,6 +570,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   private enterPairingRequired(setup: SetupStatus | null = this.setupStatus): void {
+    this.attachmentPreview.close(); this.draftUploads.dispose(); this.pendingFiles = [];
     if (setup) this.setupStatus = setup;
     this.apiOnline = true;
     this.appReady = true;
@@ -890,6 +898,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   async selectThread(thread: ThreadSummary, event: MouseEvent): Promise<void> {
+    this.attachmentPreview.close();
     if (event.metaKey || event.ctrlKey || event.shiftKey || event.button === 1) return;
     event.preventDefault();
     await this.activateThread(thread);
@@ -917,9 +926,8 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.updateDocumentTitle();
     this.renderNow();
     await this.loadSelectedThread(true);
-    if (!this.pendingFiles.length && this.selectedThread()?.id === thread.id) {
-      this.pendingFiles = await recoverInboundUploadDraft(this.api, thread.id);
-    }
+    await this.draftUploads.restore(thread.id);
+    if (this.selectedThread()?.id === thread.id) this.pendingFiles = [...this.draftUploads.files(thread.id)];
     this.renderNow();
   }
 
@@ -1290,6 +1298,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   async sendMessage(): Promise<void> {
     const thread = this.selectedThread();
     if (!thread || this.sending || this.sendingNow || this.implementingPlan) return;
+    if (this.pendingFiles.some(file => file.uploadState !== "ready")) { this.error = "Wait for uploads, retry, or remove unfinished attachments."; return; }
     const originalText = this.draft.trim();
     if (!originalText && this.pendingFiles.length === 0) return;
     if (!this.guardCodexRuntime()) return;
@@ -1323,7 +1332,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
         clientMessageId,
       }));
       this.replaceOptimisticUserMessage(thread.id, optimisticId, response.message);
-      this.clearSubmittedComposer(thread);
+      this.clearSubmittedComposer(thread, pendingFiles, originalText);
       this.uiSendRetryPayloads.delete(optimisticId);
       this.queueMessagePaneScrollToBottom();
       await this.refresh(false);
@@ -1368,6 +1377,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   async sendMessageNow(): Promise<void> {
     const thread = this.selectedThread();
     if (!thread || this.sending || this.sendingNow || this.implementingPlan) return;
+    if (this.pendingFiles.some(file => file.uploadState !== "ready")) { this.error = "Wait for uploads, retry, or remove unfinished attachments."; return; }
     const originalText = this.draft.trim();
     if (!originalText && this.pendingFiles.length === 0) return;
     if (!this.guardCodexRuntime()) return;
@@ -1401,7 +1411,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
         clientMessageId,
       }));
       this.replaceOptimisticUserMessage(thread.id, optimisticId, response.message);
-      this.clearSubmittedComposer(thread);
+      this.clearSubmittedComposer(thread, pendingFiles, originalText);
       this.uiSendRetryPayloads.delete(optimisticId);
       this.queueMessagePaneScrollToBottom();
       await this.refresh(false);
@@ -1473,7 +1483,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       if (remembered && this.selectedThread()?.id === thread.id && this.draft.trim() === remembered.originalText
         && this.pendingFiles.length === remembered.pendingFiles.length
         && this.pendingFiles.every((file, index) => file.id === remembered.pendingFiles[index]?.id)) {
-        this.clearSubmittedComposer(thread);
+        this.clearSubmittedComposer(thread, remembered.pendingFiles, remembered.originalText);
       }
       this.uiSendRetryPayloads.delete(messageId);
       this.queueMessagePaneScrollToBottom();
@@ -2589,18 +2599,20 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.rawTerminal.reconnect(thread.id);
   }
 
-  queueFiles(files: FileList | null): void {
-    this.pendingFiles = appendPendingFiles(this.pendingFiles, files);
+  queueFiles(files: FileList | File[] | null): void {
+    const thread = this.selectedThread();
+    if (!thread || !files?.length || this.sending || this.sendingNow) return;
+    try { this.draftUploads.add(thread.id, files); } catch (error) { this.error = String(error instanceof Error ? error.message : error); }
+  }
+
+  retryPendingFile(id: string): void {
+    const thread = this.selectedThread();
+    if (thread) this.draftUploads.retry(thread.id, id);
   }
 
   removePendingFile(id: string): void {
-    const pending = this.pendingFiles.find((file) => file.id === id);
-    this.pendingFiles = removePendingFile(this.pendingFiles, id);
     const thread = this.selectedThread();
-    if (thread) persistInboundUploadDraft(thread.id, this.pendingFiles);
-    if (pending?.uploadSessionId) {
-      void firstValueFrom(this.api.cancelInboundAttachmentUpload(pending.uploadSessionId)).catch(() => undefined);
-    }
+    if (thread && !this.sending && !this.sendingNow) this.draftUploads.remove(thread.id, id);
   }
 
   startSidebarResize(event: PointerEvent): void {
@@ -2696,11 +2708,12 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     return message.id;
   }
 
-  private clearSubmittedComposer(thread: ThreadSummary): void {
-    this.draft = "";
-    this.clearThreadTextField(thread, "draft");
-    this.pendingFiles = [];
-    clearInboundUploadDraft(thread.id);
+  private clearSubmittedComposer(thread: ThreadSummary, submitted: PendingFile[], submittedText: string): void {
+    this.draftUploads.submitted(thread.id, submitted.map(file => file.id));
+    if (this.selectedThread()?.id !== thread.id) return;
+    if (this.draft.trim() === submittedText.trim()) { this.draft = ""; this.clearThreadTextField(thread, "draft"); }
+    this.pendingFiles = [...this.draftUploads.files(thread.id)];
+    persistInboundUploadDraft(thread.id, this.pendingFiles);
   }
 
   private updateOptimisticUserMessage(threadId: string, optimisticId: string, patch: Partial<ThreadMessage>): void {
@@ -3928,6 +3941,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   async logoutBrowser(): Promise<void> {
+    this.attachmentPreview.close(); this.draftUploads.dispose(); this.pendingFiles = [];
     if (this.logoutBusy) return;
     this.logoutBusy = true;
     try {

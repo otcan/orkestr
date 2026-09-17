@@ -1,4 +1,4 @@
-const lifecycleStates = new Set(["receiving", "quarantined", "validating", "scanning", "ready", "rejected", "retryable", "cancelled", "expired"]);
+const lifecycleStates = new Set(["receiving", "quarantined", "validating", "scanning", "ready", "claiming", "claimed", "rejected", "retryable", "cancelled", "expired"]);
 const publicErrorCodes = new Set([
   "cancelled_by_user",
   "inbound_upload_ciphertext_invalid",
@@ -31,7 +31,7 @@ export function inboundAttachmentUploadState(value = "") {
 }
 
 function publicAttachment(session = {}) {
-  if (session.state !== "ready" || !session.release?.path) return null;
+  if (!["ready", "claimed"].includes(session.state) || !session.release?.path) return null;
   return {
     id: clean(session.release.attachmentId),
     name: clean(session.release.filename),
@@ -42,8 +42,10 @@ function publicAttachment(session = {}) {
     path: clean(session.release.path),
     saved_path: clean(session.release.path),
     source: "browser_encrypted_inbound",
+    uploadSessionId: clean(session.id),
     inboundUpload: {
-      state: "ready",
+      state: session.state,
+      sessionId: clean(session.id),
       scannedAt: clean(session.release.scannedAt),
       keyVersion: Number(session.keyVersion || 0),
     },

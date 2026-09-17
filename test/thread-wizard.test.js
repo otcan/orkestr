@@ -162,10 +162,10 @@ test("web thread input renders optimistic user messages before server refresh", 
   assert.ok(sources.includes("replaceOptimisticThreadMessage"));
   assert.ok(sources.includes("failOptimisticThreadMessage"));
   assert.ok(sources.includes("mergeServerMessagesWithOptimistic"));
-  assert.ok(sources.includes("clearSubmittedComposer(thread)"));
+  assert.ok(sources.includes("clearSubmittedComposer(thread, pendingFiles, originalText)"));
   assert.ok(sources.includes("const pendingFiles = [...this.pendingFiles]"));
   assert.ok(sendMessage.indexOf("appendOptimisticUserMessage") < sendMessage.indexOf("uploadPendingFiles"));
-  assert.ok(sendMessage.indexOf("clearSubmittedComposer(thread)") > sendMessage.indexOf("firstValueFrom(this.api.sendThreadInput"));
+  assert.ok(sendMessage.indexOf("clearSubmittedComposer(thread, pendingFiles, originalText)") > sendMessage.indexOf("firstValueFrom(this.api.sendThreadInput"));
   assert.ok(sendMessage.indexOf("appendOptimisticUserMessage") < sendMessage.indexOf("firstValueFrom(this.api.sendThreadInput"));
   assert.ok(sendMessage.includes("response.message"));
 });
@@ -203,12 +203,13 @@ test("encrypted upload and message retries preserve the current composer until a
   const source = await fs.readFile("apps/web/src/app/app.component.ts", "utf8");
   const sendNow = source.slice(source.indexOf("async sendMessageNow("), source.indexOf("async resendFailedMessage("));
   const retry = source.slice(source.indexOf("async resendFailedMessage("), source.indexOf("async implementPlanSelected("));
-  assert.ok(sendNow.indexOf("clearSubmittedComposer(thread)") > sendNow.indexOf("this.api.interruptThread("));
+  assert.ok(sendNow.indexOf("clearSubmittedComposer(thread, pendingFiles, originalText)") > sendNow.indexOf("this.api.interruptThread("));
   assert.ok(retry.includes("updatePendingFileUploadState"));
   assert.ok(retry.includes("this.selectedThread()?.id === thread.id"));
   assert.ok(retry.includes("this.draft.trim() === remembered.originalText"));
   assert.ok(retry.includes("file.id === remembered.pendingFiles[index]?.id"));
-  assert.ok(retry.indexOf("clearSubmittedComposer(thread)") > retry.indexOf("response.message"));
+  assert.ok(retry.indexOf("clearSubmittedComposer(thread, remembered.pendingFiles, remembered.originalText)") > retry.indexOf("response.message"));
+  assert.ok(source.includes("this.draftUploads.submitted(thread.id, submitted.map(file => file.id))"));
 });
 
 test("chat messages explain failed sends and provide a safe resend action", async () => {

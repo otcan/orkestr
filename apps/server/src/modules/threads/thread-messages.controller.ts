@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import { createReadStream } from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
+import { encryptedAttachmentPreview } from "../../../../../packages/core/src/attachment-preview.js";
 import { Body, Controller, Get, HttpCode, Param, Patch, Post, Query, Req, Res, UploadedFiles, UseInterceptors } from "@nestjs/common";
 import { AnyFilesInterceptor } from "@nestjs/platform-express";
 import { getThread, getThreadForPrincipal, getThreadMessage, listThreadMessages, updateThreadMessage } from "../../../../../packages/core/src/threads.js";
@@ -139,6 +140,23 @@ export class ThreadMessagesController {
     }
     const resolved = await (resolveThreadAttachments as any)({ thread, attachments, env: process.env });
     return { ok: true, threadId: thread.id, attachments: resolved.attachments.length ? resolved.attachments : attachments };
+  }
+
+  @Get(":threadId/attachments/:attachmentId/preview")
+  async previewAttachment(@Req() request: any, @Param("threadId") threadId: string,
+    @Param("attachmentId") attachmentId: string, @Res() response: any) {
+    const thread = await getThreadForPrincipal(threadId, requestPrincipal(request));
+    if (!thread) throw httpError("thread_not_found", 404);
+    const resolved = await resolveStoredThreadAttachment({ thread, messages: await listThreadMessages(thread.id), attachmentId, env: process.env });
+    if (!resolved.found || !resolved.allowed) throw httpError("attachment_not_found", 404);
+    if (resolved.attachment?.encrypted === true) throw httpError("attachment_preview_use_encrypted_download", 409);
+    const stream = await encryptedAttachmentPreview({ thread, attachment: { ...resolved.attachment, path: resolved.path } });
+    response.setHeader("content-type", "application/age");
+    response.setHeader("cache-control", "no-store");
+    response.setHeader("x-content-type-options", "nosniff");
+    response.on("close", () => stream.destroy());
+    stream.on("error", () => response.destroy());
+    return stream.pipe(response);
   }
 
   @Get(":threadId/attachments/:attachmentId/download")
