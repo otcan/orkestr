@@ -72,11 +72,12 @@ export class AttachmentDecryptionService {
     return decrypter.decrypt(ciphertext, "text");
   }
 
-  async download(encryptedAttachment: Record<string, unknown>): Promise<DecryptedAttachment> {
+  async read(encryptedAttachment: Record<string, unknown>, signal?: AbortSignal, maximumBytes = Infinity): Promise<DecryptedAttachment> {
     if (!this.identity) throw new Error("attachment_identity_locked");
     let selectedAttachment = encryptedAttachment;
     let downloadUrl = String(selectedAttachment["downloadUrl"] || "").trim();
     if (!downloadUrl) throw new Error("attachment_download_url_missing");
+    if (new URL(downloadUrl, document.baseURI).origin !== location.origin) throw new Error("attachment_download_origin_invalid");
     const recipient = await age.identityToRecipient(this.identity);
     if (await browserAttachmentRecipientMatch(selectedAttachment, recipient) === false) {
       const reissueUrl = downloadUrl.replace(/\/download(?:[?#].*)?$/, "/reissue");
@@ -85,6 +86,7 @@ export class AttachmentDecryptionService {
         method: "POST",
         credentials: "same-origin",
         headers: { accept: "application/json" },
+        signal,
       });
       if (!reissueResponse.ok) throw new Error(`attachment_reissue_failed_${reissueResponse.status}`);
       const reissued = await reissueResponse.json() as { attachment?: Record<string, unknown> };
@@ -95,17 +97,37 @@ export class AttachmentDecryptionService {
       selectedAttachment = reissued.attachment;
       downloadUrl = String(selectedAttachment["downloadUrl"] || "").trim();
     }
-    const response = await fetch(downloadUrl, { credentials: "same-origin", headers: { accept: "application/age" } });
+    const url = new URL(downloadUrl, document.baseURI);
+    if (url.origin !== location.origin) throw new Error("attachment_download_origin_invalid");
+    const response = await fetch(url, { credentials: "same-origin", headers: { accept: "application/age" }, signal });
     if (!response.ok) throw new Error(`attachment_download_failed_${response.status}`);
     const decrypter = new age.Decrypter();
     decrypter.addIdentity(this.identity);
     let plaintext: Uint8Array;
     try {
-      plaintext = new Uint8Array(await decrypter.decrypt(new Uint8Array(await response.arrayBuffer())));
+      if (Number(response.headers.get("content-length") || 0) > maximumBytes) throw new Error("attachment_preview_too_large");
+      const reader = response.body?.getReader();
+      if (!reader) throw new Error("attachment_download_empty");
+      const chunks: Uint8Array[] = []; let size = 0;
+      try {
+        for (;;) {
+          const next = await reader.read(); if (next.done) break;
+          size += next.value.byteLength;
+          if (size > maximumBytes) throw new Error("attachment_preview_too_large");
+          chunks.push(next.value);
+        }
+      } finally { await reader.cancel().catch(() => {}); }
+      const ciphertext = new Uint8Array(size); let offset = 0;
+      for (const chunk of chunks) { ciphertext.set(chunk, offset); offset += chunk.length; }
+      plaintext = new Uint8Array(await decrypter.decrypt(ciphertext));
     } catch {
       throw new Error("attachment_decryption_failed");
     }
-    const attachment = await decodeOrkestrAttachmentPayload(plaintext) as DecryptedAttachment;
+    return await decodeOrkestrAttachmentPayload(plaintext) as DecryptedAttachment;
+  }
+
+  async download(encryptedAttachment: Record<string, unknown>): Promise<DecryptedAttachment> {
+    const attachment = await this.read(encryptedAttachment);
     const downloadableBytes = new Uint8Array(attachment.bytes.byteLength);
     downloadableBytes.set(attachment.bytes);
     const blob = new Blob([downloadableBytes.buffer], { type: attachment.mimetype });

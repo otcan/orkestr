@@ -27,6 +27,26 @@ function clean(value = "") {
   return String(value || "").trim();
 }
 
+export async function cancelInboundAttachmentUploadWorkflow({ sessionId, principal, env }, {
+  authorizedSession, mutateStore, publicSession, nowIso, removeArtifacts, recordMetric,
+}) {
+  const { session } = await authorizedSession(sessionId, principal, env);
+  const protectedStates = new Set(["claiming", "claimed", "cancelled", "expired", "rejected"]);
+  if (protectedStates.has(session.state)) return publicSession(session);
+  const cancelled = await mutateStore(env, async store => {
+    const current = store.sessions.find(item => clean(item.id) === session.id);
+    if (!current || protectedStates.has(current.state)) return { changed: false, value: current || session };
+    current.state = "cancelled"; current.error = "cancelled_by_user"; current.updatedAt = nowIso();
+    return { changed: true, value: current };
+  });
+  if (cancelled.state === "cancelled") {
+    await fsp.rm(inboundAttachmentCiphertextPath(cancelled, env), { force: true }).catch(() => {});
+    if (cancelled.release?.path) await removeArtifacts([cancelled.release.path], env);
+    recordMetric("cancelled", "cancelled");
+  }
+  return publicSession(cancelled);
+}
+
 function startLeaseHeartbeat(sessionId, token, policy, renewProcessingLease, env) {
   const intervalMs = Math.max(1_000, Math.floor(policy.processingLeaseMs / 3));
   let stopped = false;

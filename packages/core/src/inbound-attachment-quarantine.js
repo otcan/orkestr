@@ -16,6 +16,7 @@ import { inboundAttachmentUploadPolicy, requireInboundAttachmentUploadReady } fr
 import { inboundAttachmentWorkerHealth } from "./inbound-attachment-worker-client.js";
 import {
   createInboundAttachmentUploadSessionsWorkflow,
+  cancelInboundAttachmentUploadWorkflow,
   ingestInboundAttachmentCiphertextWorkflow,
   processInboundAttachmentUploadWorkflow,
 } from "./inbound-attachment-workflows.js";
@@ -35,7 +36,7 @@ import {
 } from "./inbound-attachment-files.js";
 
 const storeVersion = 2;
-const terminalStates = new Set(["ready", "rejected", "cancelled", "expired"]);
+const terminalStates = new Set(["ready", "claiming", "claimed", "rejected", "cancelled", "expired"]);
 const processingStates = new Set(["validating", "scanning"]);
 const publicErrorCodes = new Set([
   "cancelled_by_user",
@@ -206,7 +207,7 @@ function failureState(error) {
 }
 
 function activeForQuota(session) {
-  return !terminalStates.has(clean(session.state));
+  return ["ready", "claiming"].includes(session.state) || !terminalStates.has(clean(session.state));
 }
 
 function reservedCiphertextBytes(session) {
@@ -314,7 +315,7 @@ async function claimProcessing(sessionId, principal, policy, env) {
   const claimed = await mutateStore(env, async (store) => {
     const session = store.sessions.find((item) => clean(item.id) === clean(sessionId));
     if (!session) throw fail("inbound_upload_session_not_found", 404);
-    if (session.state === "ready") return { changed: false, value: { session, owned: false, artifacts: [] } };
+    if (["ready", "claimed"].includes(session.state)) return { changed: false, value: { session, owned: false, artifacts: [] } };
     const artifacts = [];
     if (processingStates.has(session.state)) {
       if (!await inboundAttachmentProcessingLeaseIsStale(session, { isProcessingLeaseExpired, runtimeProcessIdentityAlive })) return { changed: false, value: { session, owned: false, artifacts } };
@@ -442,25 +443,21 @@ export async function processInboundAttachmentUpload({ sessionId, principal, env
 export async function inboundAttachmentUploadSession({ sessionId, principal, env = process.env } = {}) {
   const { session } = await authorizedSession(sessionId, principal, env);
   if (isReceivingExpired(session)) return publicInboundAttachmentUploadSession(await transitionExpiredSession(session.id, env));
-  if (isReleaseExpired(session)) return publicInboundAttachmentUploadSession(await expireReadySession(session.id, env));
+  if (isReleaseExpired(session)) {
+    const expired = await expireReadySession(session.id, env);
+    return publicInboundAttachmentUploadSession(expired || (await authorizedSession(sessionId, principal, env)).session);
+  }
   return publicInboundAttachmentUploadSession(session);
 }
 
 export async function cancelInboundAttachmentUpload({ sessionId, principal, env = process.env } = {}) {
-  const { session } = await authorizedSession(sessionId, principal, env);
-  if (terminalStates.has(session.state) || processingStates.has(session.state)) return publicInboundAttachmentUploadSession(session);
-  const cancelled = await mutateStore(env, async (store) => {
-    const current = store.sessions.find((item) => clean(item.id) === session.id);
-    if (!current || terminalStates.has(current.state) || processingStates.has(current.state)) return { changed: false, value: current || session };
-    current.state = "cancelled";
-    current.error = "cancelled_by_user";
-    current.updatedAt = nowIso();
-    return { changed: true, value: current };
+  return cancelInboundAttachmentUploadWorkflow({ sessionId, principal, env }, {
+    authorizedSession, mutateStore, publicSession: publicInboundAttachmentUploadSession,
+    nowIso, removeArtifacts: removeInboundAttachmentArtifacts, recordMetric,
   });
-  await fsp.rm(inboundAttachmentCiphertextPath(cancelled, env), { force: true }).catch(() => {});
-  recordMetric("cancelled", "cancelled");
-  return publicInboundAttachmentUploadSession(cancelled);
 }
+
+export { authorizedSession as resolveInboundAttachmentSession };
 
 async function runInboundAttachmentSweep(env = process.env, startup = false) {
   return runInboundAttachmentMaintenance({ env, startup }, {

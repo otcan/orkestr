@@ -1,5 +1,6 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
+import { reconcileDraftClaims } from "./draft-attachment-claims.js";
 import { inboundAttachmentCiphertextPath, inboundAttachmentQuarantineRoot } from "./inbound-attachment-files.js";
 
 async function removeStaleTemporaryCiphertext(env, policy, removeOwnedArtifact) {
@@ -29,12 +30,12 @@ export async function runInboundAttachmentMaintenance({ env, startup }, {
   const policy = policyFor(env);
   const now = Date.now();
   const sweep = await mutateStore(env, async (store) => {
-    let changed = false;
+    let changed = await reconcileDraftClaims(store, env);
     const artifacts = [];
     const ciphertext = [];
     const retainedAt = now - policy.terminalRetentionMs;
     for (const session of store.sessions) {
-      if (isReceivingExpired(session, now)) {
+      if (isReceivingExpired(session, now) || (["quarantined", "retryable"].includes(session.state) && Date.parse(session.expiresAt) <= now)) {
         session.state = "expired";
         session.error = "inbound_upload_session_expired";
         session.updatedAt = nowIso(now);
@@ -57,6 +58,7 @@ export async function runInboundAttachmentMaintenance({ env, startup }, {
         changed = true;
       }
       const updatedAt = Date.parse(clean(session.updatedAt || session.createdAt));
+      if (["rejected", "cancelled", "expired"].includes(session.state) && session.release?.path) artifacts.push(session.release.path);
       if (["rejected", "cancelled", "expired"].includes(session.state) && Number.isFinite(updatedAt) && updatedAt <= retainedAt) {
         ciphertext.push(inboundAttachmentCiphertextPath(session, env));
       }
