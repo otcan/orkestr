@@ -1,5 +1,11 @@
 # WhatsApp group creation adapter
 
+Some Web builds lazy-load the New Group bundle. A create may load the owned
+page's `WAWebNewGroupFlowLoadable.requireBundle` once, with a ten-second bound,
+before resolving the create function again. The read-only protocol probe does
+not load it. Failure to load or resolve the function is pre-dispatch failure;
+there is no SDK fallback or external retry.
+
 The worker uses a purpose-specific browser adapter instead of the SDK's
 `createGroup` orchestration. It runs exclusively through the owning connector
 client's page; it does not discover a browser by port or navigate a desktop.
