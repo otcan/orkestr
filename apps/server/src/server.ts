@@ -143,6 +143,7 @@ export async function createApp(): Promise<INestApplication> {
         (request as any).orkestrMachineAuth = (result as any).machineAuth || null;
         (request as any).orkestrMachineAuthContext = (result as any).machineAuthContext || null;
         (request as any).orkestrDesktopShare = (result as any).desktopShare || null;
+        (request as any).orkestrDesktopShareAttempt = (result as any).desktopShareAttempt || null;
         const canonicalPreflight = await preflightCanonicalAppRequest(request);
         if (!canonicalPreflight.ok) {
           return response.status(404).type("text/plain; charset=utf-8").send("not found");

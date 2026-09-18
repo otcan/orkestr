@@ -1,0 +1,45 @@
+import assert from "node:assert/strict";
+import fs from "node:fs/promises";
+import http from "node:http";
+import os from "node:os";
+import path from "node:path";
+import test from "node:test";
+import { readVirtualBrowserTarget } from "../packages/browsers/src/browsers.js";
+
+test("target adapter selects one raw record without UI decoration, cache or lifecycle writes", async (t) => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "desktop-target-adapter-"));
+  const methods = [];
+  let record = { slug: "desk", status: "running", ownerUserId: "alice", web_port: 6100 };
+  let duplicate = false;
+  const server = http.createServer((request, response) => {
+    methods.push(request.method);
+    assert.equal(request.headers["x-orkestr-owner-user-id"], "alice");
+    assert.equal(request.headers["x-orkestr-thread-id"], "thread-a");
+    response.setHeader("content-type", "application/json");
+    response.end(JSON.stringify({ ok: true, sessions: [record, ...(duplicate ? [record] : []), { slug: "unrelated", ownerUserId: "bob" }] }));
+  });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  t.after(async () => { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); });
+  const env = { ORKESTR_HOME: home, ORKESTR_BROWSER_DESKTOP_MODE: "browserctl", ORKESTR_BROWSER_API_URL: `http://127.0.0.1:${server.address().port}` };
+  const options = { principal: { kind: "user", role: "user", userId: "alice" }, threadId: "thread-a" };
+  const first = await readVirtualBrowserTarget("desk", env, options);
+  assert.equal(first.web_port, 6100);
+  assert.equal(first.relatedThreads, undefined);
+  assert.equal(first.warnings, undefined);
+  assert.equal(first.lease, undefined);
+  record.web_port = 6200;
+  assert.equal((await readVirtualBrowserTarget("desk", env, options)).web_port, 6200);
+  record.status = "stopped";
+  await assert.rejects(readVirtualBrowserTarget("desk", env, options), /desktop_not_running/);
+  record.status = "running";
+  record.ownerUserId = "bob";
+  await assert.rejects(readVirtualBrowserTarget("desk", env, options), /browser_session_not_found/);
+  record.ownerUserId = "alice";
+  duplicate = true;
+  await assert.rejects(readVirtualBrowserTarget("desk", env, options), /browser_session_not_found/);
+  duplicate = false;
+  await assert.rejects(readVirtualBrowserTarget("desk", { ...env, ORKESTR_BROWSER_VISIBLE_SLUGS: "other" }, options), /browser_session_not_found/);
+  await assert.rejects(readVirtualBrowserTarget("desk", { ...env, ORKESTR_BROWSER_DESKTOP_MODE: "disabled" }, options), /instance_desktops_disabled/);
+  assert.ok(methods.every(method => method === "GET"));
+  assert.deepEqual(await fs.readdir(home), []);
+});
