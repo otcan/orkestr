@@ -1,6 +1,7 @@
 import os from "node:os";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { withThreadMessageMutation } from "./thread-message-mutation.js";
 import { codexCommand, defaultCodexHome } from "../../connectors/src/codex.js";
 import { codexAppServerSocket, codexAppServerTransport } from "../../connectors/src/codex-app-server-transport.js";
 import { userDataPaths } from "../../storage/src/paths.js";
@@ -527,6 +528,10 @@ export async function threadForSupersededCodexGeneration(codexId, env = process.
 }
 
 export async function appendOrUpdateEventMessage(thread, input, env = process.env) {
+  return withThreadMessageMutation(thread.id, env, () => appendOrUpdateEventMessageLocked(thread, input, env));
+}
+
+async function appendOrUpdateEventMessageLocked(thread, input, env) {
   const eventId = clean(input.eventId);
   let existing = eventId ? await findThreadMessage(thread.id, { eventId }, env).catch(() => null) : null;
   if (!existing) {
@@ -550,6 +555,11 @@ export async function appendOrUpdateEventMessage(thread, input, env = process.en
       ...input,
       state: input.state || existing.state || "completed",
     };
+    if (existing.role === "assistant") {
+      for (const key of ["parentMessageId", "connector", "chatId", "accountId", "replyDeliveryIntent"]) {
+        if (existing[key] || !input[key]) delete patch[key];
+      }
+    }
     if (!eventMessagePatchChanged(existing, patch)) return existing;
     if (shouldCoalesceCodexEventMessageUpdate(existing, patch, env)) {
       return { ...existing, coalescedUpdate: true, coalescedText: clean(patch.text) };

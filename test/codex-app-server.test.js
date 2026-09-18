@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { once } from "node:events";
+import { createSubmission } from "../packages/core/src/codex-input-identity.js";
 import { WebSocketServer } from "ws";
 import {
   answerCodexAppServerPendingRequest,
@@ -4705,7 +4706,7 @@ test("Codex app-server history hydration does not borrow stale WhatsApp parents 
   const outbox = await readConnectorOutbox(env);
 
   assert.equal(result.created, 1);
-  assert.equal(reply?.parentMessageId || null, null);
+  assert.equal(reply?.parentMessageId, messages.find(message => message.source === "cli" && message.codexTurnId === "cli-turn").id);
   assert.equal(reply?.connector || "", "");
   assert.equal(reply?.chatId || "", "");
   assert.equal(reply?.accountId || "", "");
@@ -4768,7 +4769,7 @@ test("Codex app-server live projection does not borrow stale WhatsApp parents fo
   );
   const outbox = await readConnectorOutbox(env);
 
-  assert.equal(reply?.parentMessageId || null, null);
+  assert.equal(reply?.parentMessageId, cliInput.id);
   assert.equal(reply?.connector || "", "");
   assert.equal(reply?.chatId || "", "");
   assert.equal(reply?.accountId || "", "");
@@ -5040,7 +5041,8 @@ test("Codex app-server history sync adopts native turns without duplicating Orke
     assert.equal(orkestrInputs.length, 1);
     assert.equal(orkestrInputs[0].source, "manual");
     assert.equal(orkestrInputs[0].codexItemId, "user_" + orkestrInputs[0].codexTurnId);
-    assert.equal(nativeInputs.length, 1);
+    // Different native item IDs are distinct inputs even with identical text.
+    assert.equal(nativeInputs.length, 2);
     assert.equal(nativeInput?.source, "codex-app-server-import");
     assert.equal(nativeInput?.codexTurnId, nativeTurnId);
     assert.equal(nativeInput?.createdAt, nativeCreatedAt);
@@ -5588,7 +5590,7 @@ test("Codex app-server reclaims stale recovery ownership and delivers exactly on
   }
 });
 
-test("Codex app-server reconciles runtime acceptance after a crash without starting a duplicate turn", async () => {
+for (const acceptance of ["fresh", "historical", "unversioned"]) test(`Codex app-server fences ${acceptance} runtime acceptance after a crash without starting a duplicate turn`, async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-acceptance-reconcile-"));
   const fake = await createFakeCodex(home);
   const env = {
@@ -5606,16 +5608,19 @@ test("Codex app-server reconciles runtime acceptance after a crash without start
       connector: "whatsapp",
       chatId: "chat-acceptance-reconcile",
     }, env);
+    const codexSubmission = createSubmission(started.thread, input, started.thread.codexThreadId, "start", "", { id: started.thread.codexThreadId, turns: [] });
     await updateThreadMessage(started.thread.id, input.id, {
+      codexSubmission: acceptance === "unversioned" ? null : codexSubmission,
       state: "pending_delivery",
       deliveryState: "codex_app_server_sending",
-      deliveryLastAttemptAt: new Date().toISOString(),
+      deliveryLastAttemptAt: new Date(Date.now() - 120000).toISOString(),
       deliveryClaimId: "crashed-process-claim",
     }, env);
     const rawState = JSON.parse(await fs.readFile(fake.stateFile, "utf8"));
     const codexThread = rawState.threads.find((item) => item.id === started.thread.codexThreadId);
     codexThread.turns.push({
       id: "turn_accepted_before_restart",
+      startedAt: acceptance === "historical" ? "2020-01-01T00:00:00Z" : new Date().toISOString(),
       threadId: started.thread.codexThreadId,
       status: "completed",
       items: [{ type: "userMessage", id: "user_accepted_before_restart", content: [{ type: "text", text: "already accepted before restart" }] }],
@@ -5628,11 +5633,17 @@ test("Codex app-server reconciles runtime acceptance after a crash without start
     const finalState = JSON.parse(await fs.readFile(fake.stateFile, "utf8"));
     const duplicateTurns = finalState.calls.filter((call) => call.method === "turn/start" && call.params?.input?.some((item) => item.text === "already accepted before restart"));
 
-    assert.deepEqual(delivered, [input.id]);
-    assert.equal(completed.state, "completed");
-    assert.equal(completed.deliveryState, "delivered");
-    assert.equal(completed.observedVia, "codex_app_server_history_acceptance");
-    assert.equal(completed.codexTurnId, "turn_accepted_before_restart");
+    if (acceptance === "fresh") {
+      assert.deepEqual(delivered, [input.id]);
+      assert.equal(completed.state, "completed");
+      assert.equal(completed.deliveryState, "delivered");
+      assert.equal(completed.observedVia, "codex_app_server_history_acceptance");
+      assert.equal(completed.codexTurnId, "turn_accepted_before_restart");
+    } else {
+      assert.deepEqual(delivered, []);
+      assert.equal(completed.state, "awaiting_ack");
+      assert.equal(completed.deliveryState, "codex_acceptance_uncertain");
+    }
     assert.equal(duplicateTurns.length, 0);
   } finally {
     stopCodexAppServerClients();

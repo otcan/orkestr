@@ -7,6 +7,7 @@ import { createThreadMessageRepository, createThreadRepository } from "../../sto
 import { draftAttachmentFingerprint, draftAttachmentIds, withDraftAttachmentClaims } from "./draft-attachment-claims.js";
 import { threadRecordSnapshotRevision } from "../../storage/src/thread-registry.js";
 import { snapshotEnvironment } from "../../storage/src/test-storage-isolation.js";
+import { enqueueMessageMutation } from "./thread-message-mutation.js";
 import { assertSanitizedAction } from "./llm-sanitizer.js";
 import { normalizeNoReplyAssistantMessage } from "./no-reply.js";
 import { assertResourceAccess, assertThreadLimit, filterResourcesForPrincipal, isAdminPrincipal, policyError, resourceOwnerUserId } from "./policy.js";
@@ -31,7 +32,6 @@ import { injectRuntimeFault } from "./runtime-fault-injection.js";
 import { recordRegistryWriteRejectionMetric, recordWatcherAlertMetric } from "./observability.js";
 
 const runningThreadIds = new Set();
-const messageMutationQueues = new Map();
 const activeInputStates = new Set(["queued", "pending_delivery", "awaiting_ack", "running"]);
 const whatsappSources = new Set(["whatsapp", "whatsapp_inbound", "whatsapp_client"]);
 const retiredLifecycleState = "retired";
@@ -158,19 +158,6 @@ function restrictedCodexSecurityProfile(input = {}) {
   const requested = String(input.securityProfile || input.executor?.metadata?.securityProfile || "").trim();
   if (["demo-isolated", "quarantined-demo", "external-user", "private-user", "generated-whatsapp"].includes(requested.toLowerCase())) return requested;
   return "external-user";
-}
-
-async function enqueueMessageMutation(filePath, operation) {
-  const previous = messageMutationQueues.get(filePath) || Promise.resolve();
-  const next = previous.then(operation, operation);
-  const tracked = next.finally(() => {
-    if (messageMutationQueues.get(filePath) === tracked) messageMutationQueues.delete(filePath);
-  });
-  // `next` is returned to the caller. The tracked promise exists only to
-  // serialize and clean up the queue, so consume its mirrored rejection.
-  void tracked.catch(() => {});
-  messageMutationQueues.set(filePath, tracked);
-  return next;
 }
 
 export async function listThreads(env = process.env) {

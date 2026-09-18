@@ -108,7 +108,11 @@ export function replaceOptimisticThreadMessage(
 export function mergeServerMessagesWithOptimistic(
   serverMessages: ThreadMessage[],
   cachedMessages: ThreadMessage[],
+  supersededMessageIds: string[] = [],
 ): ThreadMessage[] {
+  const superseded = new Set(supersededMessageIds);
+  serverMessages = serverMessages.filter(message => !superseded.has(messageKey(message)));
+  cachedMessages = cachedMessages.filter(message => !superseded.has(messageKey(message)));
   const serverKeys = new Set(serverMessages.map((message) => messageKey(message)));
   const byKey = new Map<string, ThreadMessage>();
   for (const message of cachedMessages) {

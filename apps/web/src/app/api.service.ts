@@ -1600,6 +1600,7 @@ export interface ThreadMessage {
 }
 
 export interface ThreadMessagesResponse {
+  supersededMessageIds?: string[];
   thread?: ThreadSummary;
   messages: ThreadMessage[];
   cursor?: number;

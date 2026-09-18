@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { withThreadMessageMutation } from "./thread-message-mutation.js";
+import { canonicalTurnParent, canonicalUserPatch, createSubmission, identityMetric, matchCanonicalInput, uniqueAcceptedSubmission } from "./codex-input-identity.js";
 import { appendEvent } from "../../storage/src/store.js";
 import {
   appendThreadMessage,
@@ -379,27 +381,19 @@ function usableLiveDeliveryRuntime(probe = {}) {
 }
 
 function uncertainCodexRuntimeAcceptance(message = {}) {
-  return clean(message.state).toLowerCase() === "pending_delivery" &&
-    clean(message.deliveryState).toLowerCase() === "codex_app_server_sending" &&
-    Boolean(timestampMs(message.deliveryLastAttemptAt));
+  return ["pending_delivery", "awaiting_ack"].includes(clean(message.state).toLowerCase()) &&
+    ["codex_app_server_sending", "codex_acceptance_uncertain"].includes(clean(message.deliveryState).toLowerCase());
 }
 
 function acceptedCodexTurnForMessage(probe = {}, message = {}) {
   if (!probe?.ok || !uncertainCodexRuntimeAcceptance(message)) return null;
-  const expectedText = codexInputText(message);
-  if (!expectedText) return null;
-  const turns = Array.isArray(probe.thread?.turns) ? probe.thread.turns : [];
-  for (let index = turns.length - 1; index >= 0; index -= 1) {
-    const turn = turns[index] || {};
-    const accepted = (Array.isArray(turn.items) ? turn.items : []).some((item) =>
-      item?.type === "userMessage" && itemText(item) === expectedText
-    );
-    if (accepted) return turn;
-  }
-  return null;
+  const match = uniqueAcceptedSubmission(probe, message);
+  identityMetric(match ? "accepted" : "uncertain");
+  return match?.turn || null;
 }
 
 async function reconcileAcceptedExternalInput(thread, message, probe, env = process.env) {
+  if (message.codexSubmission?.threadId !== thread.id) return null;
   const turn = acceptedCodexTurnForMessage(probe, message);
   if (!turn) return null;
   const turnId = clean(turn.id);
@@ -510,6 +504,20 @@ async function operatorRequiredForDeliveryRecovery(thread, message, context = {}
 }
 
 async function verifiedExternalDeliveryRuntime(thread, message, client, env = process.env) {
+  if (uncertainCodexRuntimeAcceptance(message)) {
+    const probe = await probeLiveCodexThreadState(client, codexThreadId(thread)).catch(() => ({ ok: false }));
+    const accepted = await reconcileAcceptedExternalInput(thread, message, probe, env);
+    if (accepted) return { ok: true, thread, message: accepted, client, accepted: true };
+    const checks = (Number(message.codexAcceptanceChecks) || 0) + 1;
+    const held = await updateThreadMessage(thread.id, message.id, {
+      state: "awaiting_ack", deliveryState: "codex_acceptance_uncertain", codexAcceptanceChecks: checks,
+      deliveryRecoveryState: checks >= 5 ? "operator_required" : "checking",
+      deliveryClaimId: null, error: "Runtime acceptance is unconfirmed; input was not replayed.",
+    }, env);
+    if (checks < 5) scheduleCodexAppServerInputDelivery(thread.id, env, 15000);
+    else cancelCodexAppServerInputDelivery(thread.id);
+    return { ok: false, thread, message: held, client, reason: "acceptance_uncertain" };
+  }
   if (!externalChatInput(message)) return { ok: true, thread, message, client, verified: false };
   let currentThread = await getThread(thread.id, env).catch(() => null) || thread;
   let currentMessage = message;
@@ -1326,9 +1334,26 @@ async function drainCodexAppServerNotifications(client, { cycles = 3, until = nu
   return Boolean(until?.());
 }
 
+async function recordInputSubmission(client, thread, pending, id, mode, targetTurnId, env) {
+  const baseline = await client.request("thread/read", { threadId: id, includeTurns: true }).catch(() => null);
+  const codexSubmission = createSubmission(thread, pending, id, mode, targetTurnId, baseline?.thread);
+  const updated = await updateThreadMessage(thread.id, pending.id, { codexSubmission }, env);
+  Object.assign(pending, updated);
+}
+
+async function recordInputAcknowledgement(thread, pending, id, turnId, env) {
+  if (!turnId) return;
+  const current = await getThreadMessage(thread.id, pending.id, env);
+  const updated = await updateThreadMessage(thread.id, pending.id, { codexThreadId: id, codexTurnId: turnId,
+    codexSubmission: { ...current.codexSubmission, acceptedTurnId: turnId } }, env);
+  Object.assign(pending, updated);
+}
+
 async function startCodexAppServerTurn({ client, thread, id, pending, env, runtimeEnv = env, observedVia = "codex_app_server_turn_start" }) {
+  await recordInputSubmission(client, thread, pending, id, "start", "", env);
   const result = await client.request("turn/start", turnStartParams(thread, pending, runtimeEnv));
   const turnId = clean(result?.turn?.id || result?.turnId);
+  await recordInputAcknowledgement(thread, pending, id, turnId, env);
   await injectRuntimeFault("runtime_acceptance", {
     operation: "turn_start",
     threadId: thread.id,
@@ -1541,6 +1566,7 @@ export async function sendCodexAppServerInput(thread, message, env = process.env
         runtimeGeneration: id,
         turnId: activeTurnId,
       }, env);
+      await recordInputSubmission(client, thread, pending, id, "steer", activeTurnId, env);
       result = await client.request("turn/steer", {
         threadId: id,
         expectedTurnId: activeTurnId,
@@ -1548,6 +1574,7 @@ export async function sendCodexAppServerInput(thread, message, env = process.env
       });
       observedVia = "codex_app_server_turn_steer";
       deliveryTurnId = clean(result?.turn?.id || result?.turnId || activeTurnId) || activeTurnId;
+      await recordInputAcknowledgement(thread, pending, id, deliveryTurnId, env);
       await injectRuntimeFault("runtime_acceptance", {
         operation: "turn_steer",
         threadId: thread.id,
@@ -1622,6 +1649,11 @@ export async function sendCodexAppServerInput(thread, message, env = process.env
         return { message: reconciled, result, observedVia: reconciled.observedVia, steered: true, reconciled: true };
       }
       recordRuntimeControlMetric({ signal: "unresolved_steering_input", outcome: "retryable" });
+      if (/timeout|timed out|closed|disconnect|socket|ECONN|transport|EOF/i.test(publicError(error))) {
+        const held = await updateThreadMessage(thread.id, pending.id, { state: "awaiting_ack", deliveryState: "codex_acceptance_uncertain", deliveryClaimId: null }, env);
+        scheduleCodexAppServerInputDelivery(thread.id, env, 15000);
+        return { message: held, deferred: true, observedVia: "codex_acceptance_uncertain" };
+      }
       await appendEvent({
         type: "codex_app_server_input_steer_failed",
         threadId: thread.id,
@@ -1867,6 +1899,10 @@ async function deliverCodexAppServerPendingInputsUnlocked(thread, env = process.
     delivered.push(next.id);
     return delivered;
   }
+  if (next.deliveryClaimId && recentDeliveryClaim(next, env)) {
+    scheduleCodexAppServerInputDelivery(thread.id, env, 15000);
+    return delivered;
+  }
   const recoveryClaim = await claimExternalDeliveryRecovery(thread, next, env);
   if (!recoveryClaim.claimed) return delivered;
   try {
@@ -1887,6 +1923,13 @@ async function deliverCodexAppServerClaimedPendingInput(thread, next, env = proc
     client = await getCodexAppServerClient({ env: runtimeEnv, home: runtimeHome(runtimeEnv) });
   } catch (error) {
     const errorText = publicError(error);
+    if (uncertainCodexRuntimeAcceptance(next)) {
+      await updateThreadMessage(thread.id, next.id, {
+        state: "awaiting_ack", deliveryState: "codex_acceptance_uncertain", deliveryClaimId: null,
+        error: "Runtime unavailable; acceptance remains unconfirmed and input was not replayed.",
+      }, env);
+      return delivered;
+    }
     if (externalChatInput(next)) {
       await operatorRequiredForDeliveryRecovery(thread, next, {
         reason: "codex_app_server_unavailable",
@@ -1928,7 +1971,7 @@ async function deliverCodexAppServerClaimedPendingInput(thread, next, env = proc
       return delivered;
     }
   }
-  if (externalChatInput(next)) {
+  if (externalChatInput(next) || uncertainCodexRuntimeAcceptance(next)) {
     const readiness = await verifiedExternalDeliveryRuntime(thread, next, client, env);
     if (!readiness.ok) return delivered;
     if (readiness.accepted) {
@@ -2174,6 +2217,12 @@ async function deliverCodexAppServerClaimedPendingInput(thread, next, env = proc
     if (!result.deferred) delivered.push(result.message.id);
   } catch (error) {
     const errorText = publicError(error);
+    const submitted = await getThreadMessage(thread.id, next.id, env).catch(() => null);
+    if (submitted?.codexSubmission && (submitted.codexSubmission.acceptedTurnId || /timeout|timed out|closed|disconnect|socket|ECONN|transport|EOF/i.test(errorText))) {
+      await updateThreadMessage(thread.id, next.id, { state: "awaiting_ack", deliveryState: "codex_acceptance_uncertain", deliveryClaimId: null }, env);
+      scheduleCodexAppServerInputDelivery(thread.id, env, 15000);
+      return delivered;
+    }
     await updateThreadMessage(thread.id, next.id, {
       state: "failed",
       deliveryState: "failed",
@@ -2487,12 +2536,13 @@ function offsetCodexHistoryTimestamp(timestamp, offsetMs = 0) {
 }
 
 function codexHistoryTimestamp(turn = {}, item = {}, itemIndex = 0) {
+  // A user input happened at submission, never at the turn's completion.
+  const isUser = clean(item.type) === "userMessage";
   const itemCandidates = [
     item.timestamp,
     item.createdAt,
     item.created_at,
-    item.completedAt,
-    item.completed_at,
+    ...(!isUser ? [item.completedAt, item.completed_at] : []),
     item.startedAt,
     item.started_at,
   ];
@@ -2507,8 +2557,7 @@ function codexHistoryTimestamp(turn = {}, item = {}, itemIndex = 0) {
     turn.timestamp,
     turn.createdAt,
     turn.created_at,
-    turn.completedAt,
-    turn.completed_at,
+    ...(!isUser ? [turn.completedAt, turn.completed_at] : []),
     turn.startedAt,
     turn.started_at,
   ];
@@ -2602,7 +2651,12 @@ function duplicateHistoryMatch(existing = {}, input = {}) {
     compactHistoryText(existing.text) === compactHistoryText(input.text);
 }
 
-function matchingHydratedMessage(messages = [], input = {}) {
+function matchingHydratedMessage(messages = [], input = {}, historyItems = []) {
+  if (input.role === "user") {
+    const match = matchCanonicalInput(messages, input, historyItems);
+    identityMetric(match.outcome);
+    return match.message;
+  }
   const eventId = clean(input.eventId);
   if (eventId) {
     const existing = messages.find((message) => clean(message.eventId) === eventId);
@@ -2644,15 +2698,23 @@ function hydrationPatchChanged(existing, patch) {
   return false;
 }
 
-async function upsertHydratedCodexMessage(thread, input, messages, env = process.env) {
-  const existing = matchingHydratedMessage(messages, input);
+async function upsertHydratedCodexMessage(thread, input, messages, env = process.env, historyItems = []) {
+  return withThreadMessageMutation(thread.id, env, async () => {
+    const fresh = await listThreadMessages(thread.id, env);
+    messages.splice(0, messages.length, ...fresh);
+    return upsertHydratedCodexMessageLocked(thread, input, messages, env, historyItems);
+  });
+}
+
+async function upsertHydratedCodexMessageLocked(thread, input, messages, env, historyItems) {
+  const existing = matchingHydratedMessage(messages, input, historyItems);
   if (!existing) {
     const message = await appendThreadMessage(thread.id, input, env);
     messages.push(message);
     return { message, created: true, updated: false, changed: true };
   }
   const { timestamp, createdAt, ...patchInput } = input;
-  const patch = {
+  let patch = {
     ...patchInput,
     state: input.state || existing.state || "completed",
   };
@@ -2667,6 +2729,14 @@ async function upsertHydratedCodexMessage(thread, input, messages, env = process
     delete patch.executorItemId;
   }
   if (existing.source && existing.source !== "codex-app-server-import") patch.source = existing.source;
+  if (existing.role === "user" && existing.source !== "codex-app-server-import") {
+    patch = canonicalUserPatch(existing, input);
+  } else if (existing.role === "assistant") {
+    // Hydration must not erase or replace established correlation/routing.
+    for (const key of ["parentMessageId", "connector", "chatId", "accountId", "replyDeliveryIntent"]) {
+      if (existing[key] || !input[key]) delete patch[key];
+    }
+  }
   if (!hydrationPatchChanged(existing, patch)) {
     return { message: existing, created: false, updated: false, changed: false };
   }
@@ -2720,6 +2790,7 @@ export async function hydrateCodexAppServerThreadMessages(thread, codexThread, e
         if (!text) continue;
         const result = await upsertHydratedCodexMessage(thread, {
           role: "user",
+          ownerUserId: thread.ownerUserId,
           source: "codex-app-server-import",
           text,
           state: "completed",
@@ -2729,7 +2800,7 @@ export async function hydrateCodexAppServerThreadMessages(thread, codexThread, e
           codexItemId: item.id || null,
           ...(timestamp ? { timestamp, createdAt: timestamp } : {}),
           ...codexAppServerMessageFields(codexThread.id, { turnId, itemId: item.id }),
-        }, messages, env).catch(() => null);
+        }, messages, env, items).catch(() => null);
         if (result) {
           if (result.created) created += 1;
           if (result.updated) updated += 1;
@@ -2738,14 +2809,13 @@ export async function hydrateCodexAppServerThreadMessages(thread, codexThread, e
       } else if (["agentMessage", "plan", "exitedReviewMode", "contextCompaction"].includes(type)) {
         const text = type === "contextCompaction" ? "Codex compacted the conversation context." : itemText(item);
         if (!text) continue;
-        const turnParent = [...messages].reverse().find((message) =>
-          clean(message?.role).toLowerCase() === "user" &&
-          clean(message?.codexThreadId || message?.executorThreadId) === clean(codexThread.id) &&
-          clean(message?.codexTurnId || message?.executorTurnId) === turnId
-        ) || null;
+        const priorAssistant = messages.find(message => message.role === "assistant" && message.codexThreadId === codexThread.id && message.codexTurnId === turnId && message.codexItemId === item.id);
+        const turnParent = canonicalTurnParent(messages, clean(codexThread.id), turnId, priorAssistant?.parentMessageId);
+        const hasTurnInputs = messages.some(message => message.role === "user" && message.codexThreadId === codexThread.id && message.codexTurnId === turnId);
+        if (!turnParent) identityMetric("parent_unresolved");
         const whatsappParent = turnParent
           ? whatsappOrigin(turnParent) ? turnParent : replyDeliveryProjectionParent(turnParent)
-          : await latestWhatsAppParent(thread, timestamp, env) || threadWhatsAppBindingParent(thread);
+          : hasTurnInputs ? null : await latestWhatsAppParent(thread, timestamp, env) || threadWhatsAppBindingParent(thread);
         const result = await upsertHydratedCodexMessage(thread, {
           role: "assistant",
           source: "codex-app-server-import",
@@ -2760,6 +2830,7 @@ export async function hydrateCodexAppServerThreadMessages(thread, codexThread, e
           ...(timestamp ? { timestamp, createdAt: timestamp } : {}),
           ...codexAppServerMessageFields(codexThread.id, { turnId, itemId: item.id }),
           ...whatsappProjectionFields(whatsappParent, thread),
+          ...(turnParent ? { parentMessageId: turnParent.id } : {}),
         }, messages, env).catch(() => null);
         if (result) {
           if (result.created) created += 1;

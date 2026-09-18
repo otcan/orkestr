@@ -145,6 +145,7 @@ function codexAppServerDisplaySource(message: any): boolean {
 }
 
 function codexAppServerDuplicateKey(message: any): string {
+  if (message?.role === "user") return ""; // Identity, not text, owns user-input deduplication.
   if (!codexAppServerDisplaySource(message)) return "";
   const text = normalizedMessageText(message?.text);
   const appServerThreadId = String(message?.codexThreadId || message?.executorThreadId || "").trim();
@@ -179,7 +180,9 @@ export function threadMessagePage(thread: any, rawMessages: any[] = [], query: R
   const before = Math.max(0, Number.parseInt(String(query.before || "0"), 10) || 0);
   const requestedLimit = Math.max(0, Number.parseInt(String(query.limit || "0"), 10) || 0);
   const limit = requestedLimit ? Math.min(requestedLimit, 100) : 100;
-  const orderedMessages = visibleThreadMessages(chronologicalMessages(rawMessages));
+  const orderedMessages = visibleThreadMessages(chronologicalMessages(rawMessages.map((message, index) => ({
+    ...message, cursor: messageCursor(message, index),
+  }))));
   const pendingQuestion = latestPendingQuestion(orderedMessages);
   let messages = orderedMessages.map((message, index) => bridgeMessage(thread, message, index)).filter((message) => message.text);
   if (since > 0) messages = messages.filter((message) => Number(message.cursor || 0) > since);
@@ -197,6 +200,7 @@ export function threadMessagePage(thread: any, rawMessages: any[] = [], query: R
     before,
     limit,
     count: messages.length,
+    supersededMessageIds: rawMessages.filter(message => message.supersededBy).map(message => message.id),
     messages,
     cursor,
     currentCursor: cursor,
