@@ -7156,6 +7156,11 @@ export async function promoteLocalWhatsAppGroupParticipants({ accountId = "", ch
       participantIds: participants,
       promote: true,
     });
+    // A just-created group can precede its local metadata. Let bounded setup
+    // polling retry this read; SDK fallback here can trigger a sender reset.
+    if (["whatsapp_group_chat_required", "whatsapp_group_participants_unavailable"].includes(cachedResult?.error)) {
+      throw Object.assign(new Error("whatsapp_group_metadata_pending"), { statusCode: 503 });
+    }
     if (cachedResult?.ok) {
       await appendEvent({
         type: "whatsapp_local_group_admins_promoted",
@@ -7264,12 +7269,18 @@ async function applyCachedLocalWhatsAppGroupAdminAction({ runtime = null, chatId
       }
     }
     if (!found.length) return { ok: false, error: "whatsapp_admin_participants_not_found", missingParticipantIds: missing };
+    const changes = promoteAction
+      ? found.filter(participant => !participant.isAdmin && !participant.isSuperAdmin)
+      : found;
+    if (!changes.length) return {
+      ok: true, status: 200, participantIds: found.map(serialized), missingParticipantIds: missing, alreadyApplied: true,
+    };
     const action = moduleRequire("WAWebModifyParticipantsGroupAction");
     const fn = promoteAction ? action.promoteParticipants : action.demoteParticipants;
     const attempts = [
-      { shape: "participant_models", values: found },
-      { shape: "participant_wids", values: found.map((participant) => participant?.id).filter(Boolean) },
-      { shape: "serialized_ids", values: found.map((participant) => serialized(participant)).filter(Boolean) },
+      { shape: "participant_models", values: changes },
+      { shape: "participant_wids", values: changes.map((participant) => participant?.id).filter(Boolean) },
+      { shape: "serialized_ids", values: changes.map((participant) => serialized(participant)).filter(Boolean) },
     ].filter((attempt) => attempt.values.length);
     let result = null;
     let shape = "";

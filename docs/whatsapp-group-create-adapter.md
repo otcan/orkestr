@@ -6,6 +6,14 @@ before resolving the create function again. The read-only protocol probe does
 not load it. Failure to load or resolve the function is pre-dispatch failure;
 there is no SDK fallback or external retry.
 
+Post-create setup tolerates delayed group metadata without falling through to
+an SDK lookup that can reset the sender. Admin promotion excludes existing
+admins/the creator and is a no-op once applied. Receiving-account checks use
+trusted live account mappings as well as the legacy persisted account cache;
+they do not accept aliases from the inbound payload or grant receiving rights
+from the reply account. Explicit non-sender rejection is not successful inbox
+delivery and requires an operator replay after correction.
+
 The worker uses a purpose-specific browser adapter instead of the SDK's
 `createGroup` orchestration. It runs exclusively through the owning connector
 client's page; it does not discover a browser by port or navigate a desktop.
