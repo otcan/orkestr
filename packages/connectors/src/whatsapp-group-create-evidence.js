@@ -103,6 +103,24 @@ export function whatsappGroupCreateFailureEnvelope({
   };
 }
 
+// Only use for an account lookup rejected before calling the create SDK.
+export function unknownWhatsAppGroupAccountError(input = {}) {
+  return Object.assign(new Error("unknown_whatsapp_account"), {
+    statusCode: 404,
+    groupCreateFailure: {
+      operationId: clean(input.operationId),
+      operation: "whatsapp_group_provisioning",
+      stage: "prepared",
+      code: "unknown_whatsapp_account",
+      resultKind: "not_dispatched",
+      externalOutcome: "not_created",
+      retryable: false,
+      nextAction: "check_account_mapping",
+      correlationId: clean(input.correlationId),
+    },
+  });
+}
+
 export function publicWhatsAppGroupCreateFailure(error = {}) {
   const envelope = error?.groupCreateFailure && typeof error.groupCreateFailure === "object"
     ? error.groupCreateFailure

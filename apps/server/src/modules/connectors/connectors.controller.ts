@@ -59,7 +59,8 @@ import {
   routeWhatsAppInbound,
   sendWhatsAppText,
 } from "../../../../../packages/connectors/src/whatsapp.js";
-import { createAndBindWhatsAppThreadGroup, createExternalWhatsAppChat } from "../../../../../packages/connectors/src/whatsapp-thread-groups.js";
+import { createAndBindWhatsAppThreadGroup } from "../../../../../packages/connectors/src/whatsapp-thread-groups.js";
+import { createWhatsAppGroupForStatus } from "../../../../../packages/connectors/src/whatsapp-group-transport.js";
 import { publicWhatsAppGroupCreateFailure } from "../../../../../packages/connectors/src/whatsapp-group-create-evidence.js";
 import { assertWhatsAppBridgeBindingAcl } from "../../../../../packages/connectors/src/whatsapp-account-bindings.js";
 import { assertWhatsAppBridgeTokenContext } from "../../../../../packages/connectors/src/whatsapp-binding-acl.js";
@@ -76,7 +77,6 @@ import { normalizeUserId } from "../../../../../packages/core/src/users.js";
 import { publicRoutingFailurePayload } from "../../../../../packages/core/src/routing-failures.js";
 import {
   addLocalWhatsAppGroupParticipants,
-  createLocalWhatsAppChat,
   demoteLocalWhatsAppGroupParticipants,
   generateLocalWhatsAppChatPicture,
   getLocalWhatsAppBridgeStatus,
@@ -762,13 +762,7 @@ export class ConnectorsController {
       promoteParticipantsAsAdmins,
       generatePicture: optionalBodyBoolean(body, "generatePicture", true),
     };
-    const result = String(status.mode || "").trim() === "local"
-      ? await createLocalWhatsAppChat({
-          ...input,
-          senderAccountId: await resolveLocalWhatsAppRuntimeAccountId(receivingAccountId),
-          responderAccountId: await resolveLocalWhatsAppRuntimeAccountId(replyAccountId),
-        }) as Record<string, any>
-      : await createExternalWhatsAppChat(input, process.env) as Record<string, any>;
+    const result = await createWhatsAppGroupForStatus(input, status, process.env) as Record<string, any>;
     if (!result) throw httpError("whatsapp_bridge_not_configured", 503);
     return {
       ...result,
@@ -812,19 +806,9 @@ export class ConnectorsController {
       replyPrefix: String(body.replyPrefix || ""),
       forceNew: optionalBodyBoolean(body, "forceNew", false),
     };
-    const dependencies = String(status.mode || "").trim() === "local"
-      ? {
-          createChat: async (input: Record<string, unknown> = {}) => {
-            const runtimeReceivingAccountId = await resolveLocalWhatsAppRuntimeAccountId(String(input.senderAccountId || ""));
-            const runtimeReplyAccountId = await resolveLocalWhatsAppRuntimeAccountId(String(input.responderAccountId || input.outboundAccountId || ""));
-            return createLocalWhatsAppChat({
-              ...input,
-              senderAccountId: runtimeReceivingAccountId,
-              responderAccountId: runtimeReplyAccountId,
-            });
-          },
-        }
-      : {};
+    const dependencies = {
+      createChat: (input: Record<string, unknown> = {}) => createWhatsAppGroupForStatus(input, status, process.env),
+    };
     try {
       return await createAndBindWhatsAppThreadGroup(thread, options, process.env, dependencies);
     } catch (error: any) {
