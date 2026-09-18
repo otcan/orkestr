@@ -3302,7 +3302,7 @@ export class ApiService {
     return this.http.get<{ eagerUploads: boolean; pastedAttachments: boolean; textPreview: boolean; archivePreview: boolean }>(this.api("/attachment-encryption/features"));
   }
 
-  browserSessions(threadId = "", breakGlassReason = "", ownerInventory = false): Observable<{ sessions: BrowserSession[]; browsers?: BrowserSession[]; source?: string; error?: string; message?: string }> {
+  browserSessions(threadId = "", breakGlassReason = "", ownerInventory = false): Observable<{ ok?: boolean; sessions: BrowserSession[]; browsers?: BrowserSession[]; source?: string; error?: string; message?: string }> {
     const params = new URLSearchParams();
     if (threadId) params.set("threadId", threadId);
     if (ownerInventory) params.set("inventory", "owner");
@@ -3311,7 +3311,7 @@ export class ApiService {
       params.set("reason", breakGlassReason);
     }
     const query = params.size ? `?${params.toString()}` : "";
-    return this.http.get<{ sessions: BrowserSession[]; browsers?: BrowserSession[]; source?: string; error?: string; message?: string }>(this.api(`/browser-sessions${query}`));
+    return this.http.get<{ ok?: boolean; sessions: BrowserSession[]; browsers?: BrowserSession[]; source?: string; error?: string; message?: string }>(this.api(`/browser-sessions${query}`));
   }
 
   browserAction(slug: string, action: string, body: Record<string, unknown> = {}): Observable<{ browser: BrowserSession; attemptId?: string; warnings?: DesktopAccessWarning[] }> {

@@ -90,6 +90,16 @@ function inventoryCacheTtlMs(env = process.env) {
   return Number.isFinite(parsed) ? Math.max(0, Math.floor(parsed)) : 15_000;
 }
 
+function boundedTimeoutMs(value, fallback, { min = 100, max = 60_000 } = {}) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  return Math.min(max, Math.max(min, Math.floor(parsed)));
+}
+
+function desktopInventoryTimeoutMs(env = process.env) {
+  return boundedTimeoutMs(env.ORKESTR_BROWSER_INVENTORY_TIMEOUT_MS, 5_000, { max: 10_000 });
+}
+
 function inventoryCacheKey(env = process.env, options = {}) {
   const scoped = scopedBrowserctlEnv(env, options);
   return JSON.stringify({
@@ -106,13 +116,15 @@ function invalidateLocalInventory(env = process.env, options = {}) {
 
 async function listLocalDesktopInventory(env = process.env, options = {}) {
   const ttlMs = inventoryCacheTtlMs(env);
-  if (ttlMs <= 0) return runBrowserctl(["list", "--json"], scopedBrowserctlEnv(env, options));
+  const scopedEnv = scopedBrowserctlEnv(env, options);
+  const timeoutMs = desktopInventoryTimeoutMs(env);
+  if (ttlMs <= 0) return runBrowserctl(["list", "--json"], scopedEnv, { timeoutMs });
   const key = inventoryCacheKey(env, options);
   const now = Date.now();
   const cached = localInventoryCache.get(key);
   if (cached?.payload && cached.expiresAt > now) return cached.payload;
   if (cached?.inFlight) return cached.inFlight;
-  const inFlight = runBrowserctl(["list", "--json"], scopedBrowserctlEnv(env, options))
+  const inFlight = runBrowserctl(["list", "--json"], scopedEnv, { timeoutMs })
     .then((payload) => {
       localInventoryCache.set(key, { payload, expiresAt: Date.now() + ttlMs, inFlight: null });
       return payload;
@@ -136,18 +148,48 @@ function tagSessionScope(session, env = process.env, options = {}) {
   };
 }
 
+function browserRequestTimeoutError(timeoutMs) {
+  const error = new Error(`browser desktop inventory timed out after ${timeoutMs}ms`);
+  error.code = "browser_inventory_timeout";
+  error.statusCode = 503;
+  return error;
+}
+
 async function fetchBrowserJson(url, options = {}) {
-  const response = await fetch(url, {
-    ...options,
-    headers: { "content-type": "application/json", ...(options.headers || {}) },
-  });
-  if (!response.ok) {
-    const body = await response.text().catch(() => "");
-    const error = new Error(body || `browser API returned ${response.status}`);
-    error.statusCode = response.status;
+  const { timeoutMs = 0, signal, ...fetchOptions } = options;
+  const controller = timeoutMs > 0 ? new AbortController() : null;
+  let timedOut = false;
+  const abort = () => controller?.abort(signal?.reason);
+  if (signal?.aborted) abort();
+  else signal?.addEventListener?.("abort", abort, { once: true });
+  const timer = controller
+    ? setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, timeoutMs)
+    : null;
+  timer?.unref?.();
+  try {
+    const response = await fetch(url, {
+      ...fetchOptions,
+      signal: controller?.signal || signal,
+      headers: { "content-type": "application/json", ...(fetchOptions.headers || {}) },
+    });
+    if (!response.ok) {
+      const body = await response.text();
+      const error = new Error(body || `browser API returned ${response.status}`);
+      error.statusCode = response.status;
+      throw error;
+    }
+    // Await the body before releasing the deadline and caller's abort listener.
+    return await response.json();
+  } catch (error) {
+    if (timedOut) throw browserRequestTimeoutError(timeoutMs);
     throw error;
+  } finally {
+    if (timer) clearTimeout(timer);
+    signal?.removeEventListener?.("abort", abort);
   }
-  return response.json();
 }
 
 function openUrlError(message, statusCode = 400) {
@@ -169,19 +211,24 @@ function normalizeOpenUrl(value) {
   return parsed.href;
 }
 
-async function runBrowserctl(args, env = process.env) {
+async function runBrowserctl(args, env = process.env, options = {}) {
   const command = browserctlCommand(env);
+  const timeoutMs = boundedTimeoutMs(options.timeoutMs ?? env.ORKESTR_BROWSERCTL_TIMEOUT_MS, 45_000, { max: 5 * 60_000 });
   try {
     const result = await execFileAsync(command, args, {
       env: { ...process.env, ...env },
-      timeout: Number(env.ORKESTR_BROWSERCTL_TIMEOUT_MS || 45_000),
+      timeout: timeoutMs,
       maxBuffer: 5 * 1024 * 1024,
     });
     return result.stdout ? JSON.parse(result.stdout) : { ok: true };
   } catch (error) {
-    const detail = String(error?.stderr || error?.stdout || error?.message || "browserctl failed").trim();
+    const timedOut = error?.code === "ETIMEDOUT" || error?.killed === true;
+    const detail = timedOut
+      ? `browserctl timed out after ${timeoutMs}ms`
+      : String(error?.stderr || error?.stdout || error?.message || "browserctl failed").trim();
     const wrapped = new Error(detail);
-    wrapped.statusCode = error?.code === "ENOENT" ? 503 : 400;
+    wrapped.code = timedOut ? "browser_inventory_timeout" : error?.code;
+    wrapped.statusCode = error?.code === "ENOENT" || timedOut ? 503 : 400;
     wrapped.cause = error;
     throw wrapped;
   }
@@ -229,6 +276,7 @@ async function listRemoteDesktopSessions(env = process.env, options = {}) {
   const base = browserApiBase(env);
   if (!explicitUrl && !base) return null;
   const payload = await fetchBrowserJson(appendRemoteScope(explicitUrl || `${base}/api/browser-sessions`, options), {
+    timeoutMs: desktopInventoryTimeoutMs(env),
     headers: remoteDesktopHeaders(env, options),
   });
   const sessions = Array.isArray(payload?.sessions) ? payload.sessions.map(normalizeBrowserctlSession) : [];
