@@ -15,6 +15,7 @@ import { getThread, listThreads } from "../../core/src/threads.js";
 import { setGeneratedLocalWhatsAppGroupPicture } from "./whatsapp-chat-picture.js";
 import { provisionWhatsAppGroupSetup } from "./whatsapp-group-setup.js";
 import {
+  unknownWhatsAppGroupAccountError,
   adaptWhatsAppGroupCreateResult,
   whatsappGroupCreateFailureEnvelope,
 } from "./whatsapp-group-create-evidence.js";
@@ -6915,8 +6916,17 @@ export async function createLocalWhatsAppChat({ name = "", senderAccountId = "",
   }
   const participants = normalizeGroupParticipantIds(participantIds);
   const adminParticipants = normalizeGroupParticipantIds(adminParticipantIds);
-  const responder = await normalizeManagedAccountId(responderAccountId || senderAccountId || defaultResponderAccountId(env), env);
-  const sender = await normalizeManagedAccountId(senderAccountId || responder, env);
+  let responder;
+  let sender;
+  try {
+    responder = await normalizeManagedAccountId(responderAccountId || senderAccountId || defaultResponderAccountId(env), env);
+    sender = await normalizeManagedAccountId(senderAccountId || responder, env);
+  } catch (error) {
+    if (error?.message === "unknown_whatsapp_account") {
+      throw unknownWhatsAppGroupAccountError({ operationId, correlationId });
+    }
+    throw error;
+  }
   const responderRuntime = runtimes.get(responder);
   const responderState = accountStates.get(responder) || defaultAccountState(responder);
   if (!responderRuntime?.client || !responderState.ready) {

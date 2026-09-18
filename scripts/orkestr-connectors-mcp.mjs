@@ -9,6 +9,7 @@ import { listConnectorInboxEvents } from "../packages/connectors/src/connector-i
 import { parseConnectorInboxMediaMetadata, stageConnectorInboxMedia } from "../packages/connectors/src/connector-inbox-media.js";
 import { replayConnectorInboxEvent, retryConnectorInbox, routeWhatsAppInboundFromWorker } from "../packages/connectors/src/connectors-mcp-router.js";
 import { requestWhatsAppWorker, whatsappWorkerHealth } from "../packages/connectors/src/whatsapp-worker-client.js";
+import { publicWhatsAppGroupCreateFailure } from "../packages/connectors/src/whatsapp-group-create-evidence.js";
 import { requireWaServicePolicy } from "./orkestr-wa-policy.mjs";
 import { isMainModule } from "./main-module.mjs";
 
@@ -241,7 +242,11 @@ export function createConnectorsMcpGateway({ env = process.env, fetchImpl = fetc
       }, env);
       return res.json(payload);
     } catch (error) {
-      return res.status(Number(error?.statusCode || 502)).json({ ok: false, error: clean(error?.message) || "legacy_wa_proxy_failed" });
+      return res.status(Number(error?.statusCode || 502)).json({
+        ok: false,
+        error: clean(error?.message) || "legacy_wa_proxy_failed",
+        groupCreateFailure: publicWhatsAppGroupCreateFailure(error?.payload || error) || undefined,
+      });
     }
   });
   app.use((_req, res) => res.status(404).json({ ok: false, error: "connector_mcp_route_not_found" }));
