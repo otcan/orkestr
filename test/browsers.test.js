@@ -149,6 +149,49 @@ setTimeout(() => console.log(JSON.stringify({ ok: true, sessions: [{ slug: "desk
   assert.equal(await fs.readFile(counter, "utf8"), "1");
 });
 
+test("managed desktop inventory bounds stalled remote and local probes", async () => {
+  const remote = http.createServer(() => {});
+  await new Promise((resolve) => remote.listen(0, "127.0.0.1", resolve));
+  const { port } = remote.address();
+  const remoteHome = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-browserctl-remote-timeout-"));
+  const remoteStartedAt = Date.now();
+  try {
+    const remotePayload = await listBrowserSessions({
+      ORKESTR_HOME: remoteHome,
+      ORKESTR_BROWSER_DESKTOP_MODE: "browserctl",
+      ORKESTR_BROWSER_API_URL: `http://127.0.0.1:${port}`,
+      ORKESTR_BROWSER_INVENTORY_TIMEOUT_MS: "100",
+    });
+
+    assert.equal(remotePayload.ok, false);
+    assert.equal(remotePayload.error, "browser_desktop_system_unavailable");
+    assert.deepEqual(remotePayload.sessions, []);
+    assert.match(remotePayload.message, /timed out after 100ms/);
+    assert.ok(Date.now() - remoteStartedAt < 1_000);
+  } finally {
+    remote.closeAllConnections();
+    await new Promise((resolve) => remote.close(resolve));
+  }
+
+  const localHome = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-browserctl-local-timeout-"));
+  const browserctl = path.join(localHome, "browserctl.js");
+  await fs.writeFile(browserctl, "#!/usr/bin/env node\nsetTimeout(() => {}, 10_000);\n", "utf8");
+  await fs.chmod(browserctl, 0o755);
+  const localStartedAt = Date.now();
+  const localPayload = await listBrowserSessions({
+    ORKESTR_HOME: localHome,
+    ORKESTR_BROWSER_DESKTOP_MODE: "browserctl",
+    ORKESTR_BROWSERCTL_PATH: browserctl,
+    ORKESTR_BROWSER_INVENTORY_TIMEOUT_MS: "100",
+  });
+
+  assert.equal(localPayload.ok, false);
+  assert.equal(localPayload.error, "browser_desktop_system_unavailable");
+  assert.deepEqual(localPayload.sessions, []);
+  assert.match(localPayload.message, /timed out after 100ms/);
+  assert.ok(Date.now() - localStartedAt < 1_000);
+});
+
 test("disabled desktop mode reports no instance desktops", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-browsers-disabled-"));
   const env = {

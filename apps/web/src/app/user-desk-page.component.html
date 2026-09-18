@@ -8,24 +8,26 @@
     <button class="secondary" type="button" (click)="load()" [disabled]="busy">Refresh</button>
   </header>
 
-  <div class="instance-metric-strip" aria-label="Desktop summary">
-    <article>
-      <span>Total</span>
-      <strong>{{ browsers.length }}</strong>
-    </article>
-    <article>
-      <span>Running</span>
-      <strong>{{ runningCount() }}</strong>
-    </article>
-    <article>
-      <span>Available</span>
-      <strong>{{ availableCount() }}</strong>
-    </article>
-    <article [class.warning]="attentionCount() > 0">
-      <span>Needs attention</span>
-      <strong>{{ attentionCount() }}</strong>
-    </article>
-  </div>
+  @if (!inventoryUnavailable) {
+    <div class="instance-metric-strip" aria-label="Desktop summary">
+      <article>
+        <span>Total</span>
+        <strong>{{ browsers.length }}</strong>
+      </article>
+      <article>
+        <span>Running</span>
+        <strong>{{ runningCount() }}</strong>
+      </article>
+      <article>
+        <span>Available</span>
+        <strong>{{ availableCount() }}</strong>
+      </article>
+      <article [class.warning]="attentionCount() > 0">
+        <span>Needs attention</span>
+        <strong>{{ attentionCount() }}</strong>
+      </article>
+    </div>
+  }
 
   @if (error) {
     <div class="notice error">{{ error }}</div>
@@ -130,8 +132,8 @@
       </article>
     } @empty {
       <div class="empty-state">
-        <strong>{{ busy ? "Loading desktops…" : "No desktops registered" }}</strong>
-        <p>Desktops assigned to this instance will appear here.</p>
+        <strong>{{ busy ? "Loading desktops…" : inventoryUnavailable ? "Desktop inventory unavailable" : "No desktops registered" }}</strong>
+        <p>{{ inventoryUnavailable ? "The desktop service did not respond. Refresh to try again." : "Desktops assigned to this instance will appear here." }}</p>
       </div>
     }
   </div>

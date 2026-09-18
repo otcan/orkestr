@@ -28,3 +28,16 @@ test("user desktop lifecycle controls exchange the live lease for a single-use c
   assert.match(userDeskComponent, /issueDesktopCapability\(threadId, \{[\s\S]+?fencingToken,[\s\S]+?scope: "lifecycle"/);
   assert.match(userDeskComponent, /browserAction\(slug, action, \{[\s\S]+?desktopCapability: issued\.capability/);
 });
+
+test("desktop inventory bounds refreshes and keeps reservation loading independent", async () => {
+  const [userDeskComponent, userDeskTemplate] = await Promise.all([
+    fs.readFile(userDeskComponentUrl, "utf8"),
+    fs.readFile(userDeskTemplateUrl, "utf8"),
+  ]);
+
+  assert.match(userDeskComponent, /Promise\.allSettled\(/);
+  assert.match(userDeskComponent, /timeout\(\{ first: 7_000 \}\)/);
+  assert.match(userDeskComponent, /inventoryUnavailable = true/);
+  assert.match(userDeskTemplate, /Desktop inventory unavailable/);
+  assert.match(userDeskTemplate, /@if \(!inventoryUnavailable\)/);
+});

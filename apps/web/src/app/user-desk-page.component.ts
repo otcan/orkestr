@@ -16,6 +16,7 @@ export class UserDeskPageComponent implements OnInit {
   error = "";
   notice = "";
   shareUrl = "";
+  inventoryUnavailable = false;
   browsers: BrowserSession[] = [];
   leases: DesktopLeaseRecord[] = [];
   @Input() threads: ThreadSummary[] = [];
@@ -28,17 +29,28 @@ export class UserDeskPageComponent implements OnInit {
   async load(): Promise<void> {
     this.busy = true;
     this.error = "";
+    this.inventoryUnavailable = false;
     try {
       const threadId = this.primaryThread()?.id || "";
-      const [browsers, leases] = await Promise.all([
-        firstValueFrom(this.api.browserSessions(threadId).pipe(timeout({ first: 15_000 }))),
-        firstValueFrom(this.api.desktopLeases(false, threadId).pipe(timeout({ first: 15_000 }))),
+      const [browsersResult, leasesResult] = await Promise.allSettled([
+        firstValueFrom(this.api.browserSessions(threadId).pipe(timeout({ first: 7_000 }))),
+        firstValueFrom(this.api.desktopLeases(false, threadId).pipe(timeout({ first: 7_000 }))),
       ]);
-      this.browsers = browsers.sessions || browsers.browsers || [];
-      this.leases = leases.desktopLeases || [];
-      this.error = "";
-    } catch (error) {
-      this.error = this.errorText(error);
+      const errors: string[] = [];
+      if (browsersResult.status === "fulfilled" && browsersResult.value.ok !== false) {
+        this.browsers = browsersResult.value.sessions || browsersResult.value.browsers || [];
+      } else {
+        this.browsers = [];
+        this.inventoryUnavailable = true;
+        errors.push("Desktop inventory is unavailable. Refresh to try again.");
+      }
+      if (leasesResult.status === "fulfilled") {
+        this.leases = leasesResult.value.desktopLeases || [];
+      } else {
+        this.leases = [];
+        errors.push("Desktop reservations could not be loaded. Refresh to try again.");
+      }
+      this.error = errors.join(" ");
     } finally {
       this.busy = false;
     }
