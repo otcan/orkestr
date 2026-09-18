@@ -109,6 +109,7 @@ import {
 } from "./whatsapp-remote-runtime.js";
 import { coalesceWhatsAppInboundRevision, finishWhatsAppInboundRevision } from "./whatsapp-inbound-revisions.js";
 import { resolveWhatsAppBinding } from "./whatsapp-account-bindings.js";
+import { whatsappBindingInboundAccountPolicy } from "./whatsapp-binding-account-policy.js";
 import { materializeRemoteWhatsAppAttachments } from "./whatsapp-remote-artifacts.js";
 import { whatsappWorkerHealth } from "./whatsapp-worker-client.js";
 import {
@@ -1301,25 +1302,6 @@ function whatsappInboundAccountPolicy(input = {}, config = {}, state = {}, env =
   return { allowed: true };
 }
 
-function whatsappBindingInboundAccountPolicy(input = {}, binding = {}, state = {}, env = process.env) {
-  const accountId = pickString(input.accountId);
-  const senderAccountId = pickString(binding.senderAccountId, binding.inboundAccountId);
-  if (!accountId || !senderAccountId) return { allowed: true };
-  const accounts = activeConnectorAccounts(state);
-  const senderKeys = expandedAccountKeys([senderAccountId], accounts, env);
-  const inputAccount = findConnectorAccountByAnyId(accounts, accountId, env);
-  const inputKeys = comparableAccountKeys([
-    accountId,
-    ...(inputAccount ? accountLookupKeys(inputAccount, env) : accountLookupKeys({ accountId }, env)),
-  ]);
-  if (accountKeyIntersection(inputKeys, senderKeys)) return { allowed: true };
-  return {
-    allowed: false,
-    reason: "non_sender_account",
-    expectedAccountId: [...senderKeys][0] || senderAccountId,
-  };
-}
-
 function inputFromMe(input = {}) {
   return input.fromMe === true ||
     input.from_me === true ||
@@ -2103,7 +2085,10 @@ async function routeThread(input, config, env) {
     if (thread && isThreadRetired(thread)) return { threadId: "", binding: null };
     const binding = thread?.binding || null;
     if (binding && !whatsappBindingIsRouteEligible(binding)) return { threadId: "", binding: null };
-    return { threadId: explicit, binding };
+    const sender = pickString(binding?.senderAccountId, binding?.inboundAccountId);
+    const status = accountId && sender && comparableAccountKey(accountId) !== comparableAccountKey(sender)
+      ? await getWhatsAppStatus(env).catch(() => ({})) : {};
+    return { threadId: explicit, binding, accountPolicyAccounts: status.accounts || [] };
   }
   const whatsappStatus = await getWhatsAppStatus(env).catch(() => ({}));
   const registryRoute = await resolveWhatsAppBinding({ chatId, accountId }, { env, threads, status: whatsappStatus }).catch(() => null);
@@ -2130,7 +2115,7 @@ async function routeThread(input, config, env) {
         legacyFields: registryBinding.legacyFields,
       }
       : registryBinding;
-    return { threadId: registryBinding.threadId, binding };
+    return { threadId: registryBinding.threadId, binding, accountPolicyAccounts: whatsappStatus.accounts || [] };
   }
   if (registryRoute?.error === "wa_binding_ambiguous") {
     throw routingConflict("wa_binding_ambiguous", {
@@ -4667,7 +4652,10 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
   const threadId = threadRoute.threadId;
   const agentId = threadId ? "" : routeAgentId(input, config);
   const bindingAccountPolicy = threadRoute.binding
-    ? whatsappBindingInboundAccountPolicy(input, threadRoute.binding, state, env)
+    ? whatsappBindingInboundAccountPolicy(input, threadRoute.binding, {
+      ...state, connectorAccounts: threadRoute.accountPolicyAccounts?.length
+        ? threadRoute.accountPolicyAccounts : activeConnectorAccounts(state),
+    }, env)
     : { allowed: true };
   if (!bindingAccountPolicy.allowed) {
     await ensureRouterTurn({
