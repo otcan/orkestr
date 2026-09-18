@@ -193,6 +193,12 @@ function publicAccount(account = {}) {
     updatedAt: clean(account.updatedAt),
     runtimeAccountId: clean(account.runtimeAccountId || account.accountId || account.id),
     legacyRoleAliases: Array.isArray(account.legacyRoleAliases) ? account.legacyRoleAliases.map(clean).filter(Boolean) : [],
+    ...(account.groupCreateProtocol ? { groupCreateProtocol: {
+      adapter: ["sdk", "group_create_v1"].includes(account.groupCreateProtocol.adapter) ? account.groupCreateProtocol.adapter : "unknown",
+      available: account.groupCreateProtocol.available === true,
+      version: /^\d+(?:\.\d+){1,5}$/.test(account.groupCreateProtocol.version || "") ? account.groupCreateProtocol.version : "",
+      createArity: Number.isInteger(account.groupCreateProtocol.createArity) ? account.groupCreateProtocol.createArity : null,
+    } } : {}),
     capabilities: account.capabilities && typeof account.capabilities === "object" && !Array.isArray(account.capabilities)
       ? {
           auth: clean(account.capabilities.auth),
@@ -252,6 +258,7 @@ function publicDiagnosticHealth(status = {}, env = process.env) {
       state: clean(account.state),
       capabilities: account.capabilities && typeof account.capabilities === "object" ? account.capabilities : {},
       provenance: account.provenance && typeof account.provenance === "object" ? account.provenance : null,
+      ...(account.groupCreateProtocol ? { groupCreateProtocol: account.groupCreateProtocol } : {}),
       error: clean(account.error).replace(/[^a-z0-9_:-]/gi, "_").slice(0, 120),
     })),
   };

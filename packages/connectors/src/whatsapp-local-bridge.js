@@ -14,8 +14,10 @@ import { publicHttpUrl, tenantPublicSetupUrl } from "../../core/src/tenant-publi
 import { getThread, listThreads } from "../../core/src/threads.js";
 import { setGeneratedLocalWhatsAppGroupPicture } from "./whatsapp-chat-picture.js";
 import { provisionWhatsAppGroupSetup } from "./whatsapp-group-setup.js";
+import { createWhatsAppGroupWithClient, inspectWhatsAppGroupCreateProtocol } from "./whatsapp-group-create-client.js";
 import {
   unknownWhatsAppGroupAccountError,
+  publicWhatsAppGroupCreateFailure,
   adaptWhatsAppGroupCreateResult,
   whatsappGroupCreateFailureEnvelope,
 } from "./whatsapp-group-create-evidence.js";
@@ -1989,6 +1991,10 @@ async function accountSnapshot(accountId, env = process.env, options = {}) {
       groupCreate: runtimeReady ? "unknown" : runtimeUnavailable ? "unavailable" : "unknown",
     },
     provenance: attestWhatsAppRuntimeProvenance({ accountId, runtime }),
+    ...(readOnly && options.force === true && runtimeReady ? {
+      groupCreateProtocol: await withLocalWhatsAppProbeTimeout(inspectWhatsAppGroupCreateProtocol(runtime.client), "whatsapp_group_protocol_probe", env)
+        .catch(() => ({ available: false, adapter: "group_create_v1" })),
+    } : {}),
   };
 }
 
@@ -6962,7 +6968,7 @@ export async function createLocalWhatsAppChat({ name = "", senderAccountId = "",
   const clientVersion = String(responderRuntime.client?.version || responderRuntime.client?.info?.version || "").trim();
   try {
     if (participants.length) {
-      createdGroup = await responderRuntime.client.createGroup(title, participants, { announce: false });
+      createdGroup = await createWhatsAppGroupWithClient(responderRuntime.client, title, participants, { announce: false }, { operationId, correlationId });
       createEvidence = adaptWhatsAppGroupCreateResult(createdGroup);
       chatId = createEvidence.groupId;
     } else if (sender === responder) {
@@ -6979,12 +6985,13 @@ export async function createLocalWhatsAppChat({ name = "", senderAccountId = "",
         });
         throw error;
       }
-      createdGroup = await responderRuntime.client.createGroup(title, [senderContactId]);
+      createdGroup = await createWhatsAppGroupWithClient(responderRuntime.client, title, [senderContactId], undefined, { operationId, correlationId });
       autoAddedParticipantIds = [senderContactId];
       createEvidence = adaptWhatsAppGroupCreateResult(createdGroup);
       chatId = createEvidence.groupId;
     }
   } catch (error) {
+    if (publicWhatsAppGroupCreateFailure(error)) throw error;
     const failure = whatsappGroupCreateFailureEnvelope({
       operationId,
       stage: "external_create",

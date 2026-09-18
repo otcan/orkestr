@@ -137,6 +137,11 @@ export function publicWhatsAppGroupCreateFailure(error = {}) {
     nextAction: safeIdentifier(envelope.nextAction, 120),
     correlationId: safeIdentifier(envelope.correlationId, 180),
     clientVersion: safeIdentifier(envelope.clientVersion, 120),
+    ...(envelope.diagnostic ? { diagnostic: {
+      name: ["Error", "TypeError", "ReferenceError", "ServerStatusCodeError", "GroupAlreadyExistsError"].includes(envelope.diagnostic.name) ? envelope.diagnostic.name : "Error",
+      reason: /^(?:upstream_error|missing_function|missing_property_[A-Za-z_$]{1,48})$/.test(envelope.diagnostic.reason || "") ? envelope.diagnostic.reason : "upstream_error",
+      status: Number.isInteger(envelope.diagnostic.status) && envelope.diagnostic.status >= 100 && envelope.diagnostic.status <= 599 ? envelope.diagnostic.status : null,
+    } } : {}),
     resultFingerprint: /^[a-f0-9]{64}$/i.test(clean(envelope.resultFingerprint)) ? clean(envelope.resultFingerprint).toLowerCase() : "",
   };
 }
