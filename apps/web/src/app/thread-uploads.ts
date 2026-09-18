@@ -15,7 +15,7 @@ export interface PendingFile {
   restoredAttachment?: Record<string, unknown> | null;
 }
 
-export function appendPendingFiles(current: PendingFile[], files: FileList | null): PendingFile[] {
+export function appendPendingFiles(current: PendingFile[], files: FileList | File[] | null): PendingFile[] {
   if (!files?.length) return current;
   const next = [...current];
   for (const file of Array.from(files)) {
@@ -77,6 +77,7 @@ export async function recoverInboundUploadDraft(api: ApiService, threadId: strin
     if (!id || !sessionId || recovered.some((pending) => pending.id === id)) continue;
     try {
       const session = (await firstValueFrom(api.inboundAttachmentUploadSession(sessionId))).session;
+      if (["claimed", "cancelled", "expired", "rejected"].includes(session.state)) continue;
       const attachment = session.attachment || null;
       recovered.push({
         id,
@@ -84,13 +85,17 @@ export async function recoverInboundUploadDraft(api: ApiService, threadId: strin
         name: String(attachment?.["filename"] || attachment?.["name"] || "attachment"),
         size: Math.max(0, Number(attachment?.["size"] || 0) || 0),
         type: String(attachment?.["mimetype"] || "application/octet-stream"),
-        uploadState: attachment ? "ready" : session.state,
-        uploadError: attachment ? "" : "Select this file again to retry securely.",
+        uploadState: attachment ? "ready" : "retryable",
+        uploadError: attachment ? "" : session.state === "receiving" ? "Select this file again to retry securely." : "Retry to check processing and recover this attachment.",
         uploadSessionId: session.id,
         restoredAttachment: attachment,
       });
     } catch {
-      // Session expiry and authorization changes remain server-authoritative.
+      // A transient read failure must not erase the only recovery reference.
+      // No file metadata is persisted; authorization is rechecked on retry.
+      recovered.push({ id, file: null, name: "Attachment awaiting recovery", size: 0,
+        type: "application/octet-stream", uploadState: "retryable", uploadSessionId: sessionId,
+        uploadError: "Could not recover this attachment. Retry or remove it." });
     }
   }
   persistInboundUploadDraft(threadId, recovered);
@@ -108,13 +113,13 @@ function updateState(
   if (pending) Object.assign(pending, patch);
 }
 
-async function encryptAndUpload(api: ApiService, pending: PendingFile, session: InboundAttachmentUploadSession): Promise<InboundAttachmentUploadSession> {
+async function encryptAndUpload(api: ApiService, pending: PendingFile, session: InboundAttachmentUploadSession, signal?: AbortSignal): Promise<InboundAttachmentUploadSession> {
   if (!session.descriptor?.recipient || !pending.file?.stream) throw new Error("inbound_upload_descriptor_invalid");
   const encrypter = new age.Encrypter();
   encrypter.addRecipient(session.descriptor.recipient);
   const payload = createInboundAttachmentPayloadStream(pending.file, { descriptor: session.descriptor });
   const ciphertext = await encrypter.encrypt(payload);
-  return api.uploadInboundAttachmentCiphertext(session.id, ciphertext);
+  return api.uploadInboundAttachmentCiphertext(session.id, ciphertext, signal);
 }
 
 export async function uploadPendingFiles(
@@ -122,10 +127,16 @@ export async function uploadPendingFiles(
   threadId: string,
   pendingFiles: PendingFile[],
   onStatus?: (id: string, patch: Pick<PendingFile, "uploadState" | "uploadError" | "uploadSessionId">) => void,
+  options: { persist?: () => void; signal?: AbortSignal; requireEncryption?: boolean } = {},
 ): Promise<Array<Record<string, unknown>>> {
+  const persist = () => options.persist ? options.persist() : persistInboundUploadDraft(threadId, pendingFiles);
   if (!pendingFiles.length) return [];
+  if (pendingFiles.every(file => file.uploadState === "ready" && file.restoredAttachment)) {
+    return pendingFiles.map(file => file.restoredAttachment as Record<string, unknown>);
+  }
   const ingress = await firstValueFrom(api.inboundAttachmentUploadStatus(threadId));
   if (!ingress.enabled) {
+    if (options.requireEncryption) throw new Error("Encrypted uploads are unavailable. Retry when ready.");
     for (const pending of pendingFiles) {
       if (pending.size > 25 * 1024 * 1024) throw new Error(`${pending.name} is larger than 25 MB`);
     }
@@ -145,52 +156,59 @@ export async function uploadPendingFiles(
     .filter((pending) => pending.uploadState === "ready" && pending.restoredAttachment)
     .map((pending) => pending.restoredAttachment as Record<string, unknown>);
   const sourceFiles = pendingFiles.filter((pending) => !pending.restoredAttachment);
-  const unavailable = sourceFiles.filter((pending) => !pending.file);
+  const unavailable = sourceFiles.filter((pending) => !pending.file && !pending.uploadSessionId);
   if (unavailable.length) {
     for (const pending of unavailable) updateState(pendingFiles, pending.id, { uploadState: "retryable", uploadError: "Select this file again to retry securely." }, onStatus);
-    persistInboundUploadDraft(threadId, pendingFiles);
+    persist();
     throw new Error("Select the missing file again before retrying its encrypted upload.");
   }
   if (!sourceFiles.length) return attachments;
-  const created = await firstValueFrom(api.createInboundAttachmentUploadSessions(threadId, sourceFiles.map((pending) => ({
+  const fresh = sourceFiles.filter(pending => !pending.uploadSessionId);
+  const created = fresh.length ? await firstValueFrom(api.createInboundAttachmentUploadSessions(threadId, fresh.map((pending) => ({
     idempotencyKey: pending.id,
     plaintextSize: pending.size,
-  }))));
-  const sessions = new Map((created.sessions || []).map((session) => [session.id, session]));
-  const byPendingId = new Map(sourceFiles.map((pending, index) => [pending.id, created.sessions?.[index]]));
+  })))) : { sessions: [] };
+  const byPendingId = new Map(fresh.map((pending, index) => [pending.id, created.sessions?.[index]]));
   for (const pending of sourceFiles) {
-    let session = byPendingId.get(pending.id);
-    if (!session || !sessions.has(session.id)) throw new Error("inbound_upload_session_missing");
+    let session = pending.uploadSessionId
+      ? (await firstValueFrom(api.inboundAttachmentUploadSession(pending.uploadSessionId))).session : byPendingId.get(pending.id);
+    if (!session) throw new Error("inbound_upload_session_missing");
+    if (session.state === "receiving" && pending.file && !session.descriptor) {
+      session = (await firstValueFrom(api.createInboundAttachmentUploadSessions(threadId, [{idempotencyKey: pending.id, plaintextSize: pending.size}]))).sessions[0];
+    }
     updateState(pendingFiles, pending.id, { uploadState: session.state, uploadError: "", uploadSessionId: session.id }, onStatus);
-    persistInboundUploadDraft(threadId, pendingFiles);
+    persist();
     if (session.state === "ready" && session.attachment) {
       attachments.push(session.attachment);
       continue;
     }
     try {
       if (session.state === "receiving") {
+        if (!pending.file) throw Error("Select this file again to retry securely.");
         updateState(pendingFiles, pending.id, { uploadState: "encrypting", uploadError: "", uploadSessionId: session.id }, onStatus);
-        session = await encryptAndUpload(api, pending, session);
+        session = await encryptAndUpload(api, pending, session, options.signal);
       }
       if (session.state === "quarantined" || session.state === "retryable") {
-        updateState(pendingFiles, pending.id, { uploadState: "scanning", uploadError: "", uploadSessionId: session.id }, onStatus);
+        updateState(pendingFiles, pending.id, { uploadState: "processing", uploadError: "", uploadSessionId: session.id }, onStatus);
         session = (await firstValueFrom(api.processInboundAttachmentUpload(session.id))).session;
       }
       if (session.state !== "ready" || !session.attachment) throw new Error(session.error || `inbound_upload_${session.state}`);
       updateState(pendingFiles, pending.id, { uploadState: "ready", uploadError: "", uploadSessionId: session.id }, onStatus);
+      pending.restoredAttachment = session.attachment;
       attachments.push(session.attachment);
     } catch (error) {
       const detail = error instanceof Error ? error.message : "inbound_upload_failed";
       updateState(pendingFiles, pending.id, { uploadState: "retryable", uploadError: detail, uploadSessionId: session.id }, onStatus);
-      persistInboundUploadDraft(threadId, pendingFiles);
+      persist();
       throw error;
     }
   }
-  persistInboundUploadDraft(threadId, pendingFiles);
+  persist();
   return attachments;
 }
 
 export function messageWithAttachmentPaths(text: string, attachments: Array<Record<string, unknown>>): string {
+  if (attachments.some(item => item["uploadSessionId"])) return text;
   if (!attachments.length) return text;
   const paths = attachments
     .map((attachment) => String(attachment["path"] || attachment["saved_path"] || ""))

@@ -1,3 +1,5 @@
+import { attachmentFeaturePolicy } from "./attachment-feature-policy.js";
+
 export async function inboundAttachmentUploadReadiness({ threadId, principal, env }, { requireThread, policyFor, workerHealth }) {
   const thread = await requireThread(threadId, principal, env);
   const policy = policyFor(env);
@@ -6,6 +8,7 @@ export async function inboundAttachmentUploadReadiness({ threadId, principal, en
     threadId: thread.id,
     enabled: policy.enabled,
     required: policy.required,
+    features: attachmentFeaturePolicy(env),
     processingMode: policy.processingMode,
     ready: policy.ready && worker.ready,
     reason: policy.reason || worker.reason,

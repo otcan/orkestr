@@ -91,6 +91,7 @@
         <div class="attachments">
           @for (attachment of message.attachments || []; track attachmentLabel(attachment)) {
             @if (attachmentDownloadUrl(attachment)) {
+              <button type="button" (click)="preview.openAttachment(attachment)" [attr.aria-label]="'Preview ' + attachmentLabel(attachment)">Preview</button>
               @if (attachmentEncrypted(attachment)) {
                 <button
                   class="attachment-download"

@@ -1,0 +1,9 @@
+.file-chip { display:flex; flex-wrap:wrap; align-items:center; gap:6px; max-width:100%; }
+.file-chip button { min-width:44px; min-height:44px; }
+.attachment-name { overflow-wrap:anywhere; white-space:normal; text-align:left; max-width:100%; }
+.paste-attachment { display:grid; gap:10px; width:100%; padding:12px 0; }
+.paste-attachment label { display:grid; gap:6px; }
+.paste-attachment textarea, .paste-attachment input { box-sizing:border-box; width:100%; min-width:0; font-size:16px; }
+.paste-attachment textarea { max-height:40dvh; overflow:auto; }
+.paste-attachment button { min-height:44px; }
+@media(max-width:860px) { .composer-tools { flex-wrap:wrap; } .queued-files { max-height:25dvh; overflow:auto; } }

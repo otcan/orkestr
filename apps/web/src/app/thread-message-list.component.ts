@@ -2,6 +2,7 @@ import { DatePipe } from "@angular/common";
 import { Component, EventEmitter, Input, Output, inject } from "@angular/core";
 import { ThreadMessage } from "./api.service";
 import { AttachmentDecryptionService } from "./attachment-decryption.service";
+import { AttachmentPreviewService } from "./attachment-preview.service";
 import { hasProposedPlanEnvelope, renderMessageTextHtml } from "./message-renderer";
 
 @Component({
@@ -10,6 +11,7 @@ import { hasProposedPlanEnvelope, renderMessageTextHtml } from "./message-render
   templateUrl: "./thread-message-list.component.html",
 })
 export class ThreadMessageListComponent {
+  readonly preview = inject(AttachmentPreviewService);
   private readonly attachmentDecryption = inject(AttachmentDecryptionService);
 
   @Input() messages: ThreadMessage[] = [];

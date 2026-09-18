@@ -200,7 +200,6 @@ test("inbound encrypted upload quarantines ciphertext, scans a bounded lease, an
     scannerPath = filePath;
     assert.equal(await fs.readFile(filePath, "utf8"), content);
     assert.equal((await inboundAttachmentUploadSession({ sessionId: session.id, principal: actor, env })).state, "scanning");
-    assert.equal((await cancelInboundAttachmentUpload({ sessionId: session.id, principal: actor, env })).state, "scanning");
     return { verdict: "clean" };
     },
   });
@@ -210,6 +209,22 @@ test("inbound encrypted upload quarantines ciphertext, scans a bounded lease, an
   assert.equal(Boolean(await fs.stat(scannerPath).catch(() => null)), false);
   assert.match(ready.attachment.path, /uploads[\\/]inbound-thread[\\/]inbound[\\/]/);
   assert.equal((await inboundAttachmentUploadSession({ sessionId: session.id, principal: actor, env })).state, "ready");
+});
+
+test("cancelling during a live scan fences late publication and removes plaintext", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-inbound-cancel-"));
+  const content = "cancel during scan";
+  const { env, session, actor } = await createSession(home, { size: Buffer.byteLength(content) });
+  const ciphertext = await encryptedPayload(session, content);
+  await ingestInboundAttachmentCiphertext({ sessionId: session.id, principal: actor, input: Readable.from([ciphertext]), env });
+  let scannerPath;
+  await assert.rejects(processInboundAttachmentUpload({ sessionId: session.id, principal: actor, env, scanner: async ({filePath}) => {
+    scannerPath = filePath;
+    assert.equal((await cancelInboundAttachmentUpload({sessionId:session.id, principal:actor, env})).state,"cancelled");
+    return {verdict:"clean"};
+  }}), /superseded/);
+  assert.equal((await inboundAttachmentUploadSession({sessionId:session.id,principal:actor,env})).state,"cancelled");
+  await assert.rejects(fs.stat(scannerPath),/ENOENT/);
 });
 
 test("inbound upload rejects tampering, keeps scanner outages quarantined, and exposes only bounded telemetry", async () => {

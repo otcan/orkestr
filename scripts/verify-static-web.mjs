@@ -3,7 +3,7 @@ import path from "node:path";
 
 const root = process.cwd();
 const webRoot = path.join(root, "dist", "web", "browser");
-const required = ["index.html", "main.js", "polyfills.js", "styles.css", "favicon.svg"];
+const required = ["index.html", "main.js", "polyfills.js", "styles.css", "favicon.svg", "attachment-preview-worker.js"];
 const missing = required.filter((file) => !fs.existsSync(path.join(webRoot, file)));
 
 if (missing.length) {
@@ -16,6 +16,10 @@ if (missing.length) {
 }
 
 const index = fs.readFileSync(path.join(webRoot, "index.html"), "utf8");
+if (fs.readFileSync(path.join(webRoot, "attachment-preview-worker.js"), "utf8") !== fs.readFileSync(path.join(root, "apps/web/public/attachment-preview-worker.js"), "utf8")) {
+  console.error("Attachment preview worker bundle is stale. Rebuild with npm run web:build.");
+  process.exit(1);
+}
 for (const asset of ["main.js", "polyfills.js", "styles.css"]) {
   if (!index.includes(asset)) {
     console.error(`Static web index does not reference ${asset}. Rebuild with npm run web:build.`);

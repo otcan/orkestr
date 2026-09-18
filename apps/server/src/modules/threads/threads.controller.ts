@@ -1072,7 +1072,7 @@ export class ThreadsController {
     await this.assertThreadSanitized("thread.interrupt", principal, thread, body);
     if (threadUsesCodexAppServer(thread)) {
       const interrupted = await interruptCodexAppServerThread(thread).catch(() => ({ interrupted: false }));
-      if (String(body.text || "").trim()) {
+      if (String(body.text || "").trim() || (Array.isArray(body.attachments) && body.attachments.length)) {
         const message = await enqueueThreadInputForPrincipal(thread.id, {
           ...body,
           source: body.source || "interrupt",
@@ -1106,7 +1106,7 @@ export class ThreadsController {
       await new Promise((resolve) => execFile("tmux", ["send-keys", "-t", paneId, "Escape"], () => resolve(null)));
       await new Promise((resolve) => execFile("tmux", ["send-keys", "-t", paneId, "C-c"], () => resolve(null)));
     }
-    if (String(body.text || "").trim()) {
+    if (String(body.text || "").trim() || (Array.isArray(body.attachments) && body.attachments.length)) {
       const message = await enqueueThreadInputForPrincipal(result.thread.id, {
         ...body,
         source: body.source || "interrupt",

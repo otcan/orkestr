@@ -36,6 +36,8 @@ authorization.
 | Thread workers and repo sync | workers, repo metadata, parent sync, attach terminal | Admin only | thread controller admin guards |
 | Timers | `GET/POST/DELETE /api/timers`, run, doctor | Owner-scoped | timer principal helpers |
 | Files and workspaces | `GET /api/files`, `GET /api/system/files`, workspace folders | Owner-scoped | workspace principal helpers and path containment |
+| Draft attachment uploads | `/api/attachment-encryption/inbound/sessions/*` | Authenticated owner and bound thread | Server-resolved sessions, owner checks, bounded ciphertext intake, serialized claim/cancel/expiry transitions |
+| Attachment previews | `GET /api/attachment-encryption/inbound/sessions/:sessionId/preview`, `GET /api/threads/:threadId/attachments/:attachmentId/preview` | Authorized session/thread; encrypted to verified owner recipients | Scoped session/thread helpers, stored attachment ID resolution, path containment, bounded encrypted streams; no client storage paths |
 | Browser desktops | browsers, browser sessions, leases, broker capabilities, share links | Owner-scoped except share challenge bootstrap; capabilities bind the exact principal, thread, runtime, current fenced lease, grant revision, and resource generation | browser and desktop lease principal helpers, capability broker consumption transaction, and redacted inventory projections |
 | Mail connectors | Gmail and Outlook OAuth/messages/tests | Owner-scoped | connector principal storage helpers |
 | OAuth callback broker | `GET /oauth/gmail/callback`, future provider callbacks | Public callback, state-bound to one scoped user | short-lived OAuth state lookup and scoped token storage |

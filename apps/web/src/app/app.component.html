@@ -939,12 +939,14 @@
             <button class="secondary" type="button" (click)="filePicker.click()">Choose files</button>
           </div>
           <input #filePicker class="visually-hidden" type="file" multiple (change)="queueFiles(filePicker.files); filePicker.value = ''" />
-          <p class="helper">Dropped or selected files are saved into Orkestr and sent to Codex as local file paths with the message.</p>
+          <p class="helper">Files encrypt and upload immediately to temporary draft storage. They are shared with the agent only when you send the message.</p>
           <div class="file-list">
             @for (file of pendingFiles; track file.id) {
               <span class="file-chip">
-                {{ file.name }} <small>{{ formatBytes(file.size) }}</small>
-                <button type="button" (click)="removePendingFile(file.id)">×</button>
+                {{ file.name }} <small>{{ formatBytes(file.size) }} · {{ file.uploadState }}</small>
+                @if (file.uploadError) { <span role="alert">{{ file.uploadError }}</span> }
+                @if (file.uploadState === 'retryable') { <button type="button" (click)="retryPendingFile(file.id)">Retry</button> }
+                <button type="button" (click)="removePendingFile(file.id)" [attr.aria-label]="'Remove ' + file.name">×</button>
               </span>
             } @empty {
               <p class="empty">No files selected.</p>
@@ -1490,6 +1492,7 @@
           [replyToWhatsApp]="uiReplyDeliveryEnabled(thread)"
           (queueFiles)="queueFiles($event)"
           (removeFile)="removePendingFile($event)"
+          (retryFile)="retryPendingFile($event)"
           (send)="sendMessage()"
           (sendNow)="sendMessageNow()"
           (openHelp)="openSlashHelp()"
@@ -1535,3 +1538,4 @@
   }
 </main>
 }
+<ork-attachment-preview></ork-attachment-preview>
