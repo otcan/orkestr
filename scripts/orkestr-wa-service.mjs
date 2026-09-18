@@ -198,6 +198,7 @@ function publicAccount(account = {}) {
       available: account.groupCreateProtocol.available === true,
       version: /^\d+(?:\.\d+){1,5}$/.test(account.groupCreateProtocol.version || "") ? account.groupCreateProtocol.version : "",
       createArity: Number.isInteger(account.groupCreateProtocol.createArity) ? account.groupCreateProtocol.createArity : null,
+      bundleLoadable: account.groupCreateProtocol.bundleLoadable === true,
     } } : {}),
     capabilities: account.capabilities && typeof account.capabilities === "object" && !Array.isArray(account.capabilities)
       ? {

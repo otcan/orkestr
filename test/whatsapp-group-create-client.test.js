@@ -11,7 +11,7 @@ import { publicWhatsAppGroupCreateFailure } from "../packages/connectors/src/wha
 import { createLocalWhatsAppChat, setLocalWhatsAppRuntimeForTest, resetLocalWhatsAppBridgeForTest } from "../packages/connectors/src/whatsapp-local-bridge.js";
 import { createOrkestrWaService } from "../scripts/orkestr-wa-service.mjs";
 
-function fixture({ create, resolve, missingModule } = {}) {
+function fixture({ create, resolve, missingModule, timers = { setTimeout, clearTimeout } } = {}) {
   const calls = { creates: [], queries: [], sdk: 0 };
   const modules = {
     WAWebGroupCreateJob: { async createGroup(options, participants) {
@@ -34,7 +34,7 @@ function fixture({ create, resolve, missingModule } = {}) {
   } };
   const client = {
     pupPage: { async evaluate(fn, input) {
-      return vm.runInNewContext(`(${fn.toString()})(input)`, { window, input });
+      return vm.runInNewContext(`(${fn.toString()})(input)`, { window, input, ...timers });
     } },
     async createGroup() { calls.sdk += 1; throw Error("must not fall back after dispatch"); },
   };
@@ -90,6 +90,57 @@ test("missing module and unresolved participant fail before dispatch", async () 
     assert.equal(calls.creates.length, 0);
     assert.equal(calls.sdk, 0);
   }
+});
+
+test("lazy New Group bundle is loaded once before create but never by diagnostics", async () => {
+  const { client, modules, calls } = fixture();
+  const loaded = modules.WAWebGroupCreateJob;
+  modules.WAWebGroupCreateJob = {};
+  let loads = 0;
+  modules.WAWebNewGroupFlowLoadable = { async requireBundle() { loads++; modules.WAWebGroupCreateJob = loaded; } };
+  const probe = await inspectWhatsAppGroupCreateProtocol(client);
+  assert.equal(probe.available, false);
+  assert.equal(probe.bundleLoadable, true);
+  assert.equal(loads, 0);
+  assert.equal((await createWhatsAppGroupWithClient(client, "Public fixture", [])).gid, "fake-group@g.us");
+  assert.equal(loads, 1);
+  assert.equal(calls.creates.length, 1);
+  assert.equal(calls.sdk, 0);
+});
+
+test("bundle failure or missing function after load prevents external create", async () => {
+  for (const throws of [true, false]) {
+    const { client, modules, calls } = fixture();
+    modules.WAWebGroupCreateJob = {};
+    modules.WAWebNewGroupFlowLoadable = { async requireBundle() { if (throws) throw Error("private-token"); } };
+    await assert.rejects(createWhatsAppGroupWithClient(client, "Public fixture", []), error => {
+      assert.equal(error.groupCreateFailure.stage, "prepared");
+      assert.equal(error.groupCreateFailure.externalOutcome, "not_created");
+      return true;
+    });
+    assert.equal(calls.creates.length, 0);
+    assert.equal(calls.sdk, 0);
+  }
+});
+
+test("timed-out bundle loading cannot dispatch later when its promise resolves", async () => {
+  let finish;
+  const { client, modules, calls } = fixture({ timers: {
+    setTimeout(callback) { queueMicrotask(callback); return 1; }, clearTimeout() {},
+  } });
+  const loaded = modules.WAWebGroupCreateJob;
+  modules.WAWebGroupCreateJob = {};
+  modules.WAWebNewGroupFlowLoadable = { requireBundle() {
+    return new Promise(resolve => { finish = () => { modules.WAWebGroupCreateJob = loaded; resolve(); }; });
+  } };
+  await assert.rejects(createWhatsAppGroupWithClient(client, "Public fixture", []), error => {
+    assert.equal(error.groupCreateFailure.externalOutcome, "not_created");
+    return true;
+  });
+  finish();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(calls.creates.length, 0);
+  assert.equal(calls.sdk, 0);
 });
 
 test("post-dispatch exception keeps safe diagnostic and never falls back or retries", async () => {

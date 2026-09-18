@@ -18,7 +18,23 @@ export async function browserWhatsAppGroupCreate({ title = "", participantIds = 
   let stage = "prepared";
   let protocol = { adapter: "group_create_v1", available: false };
   try {
-    const job = window.require("WAWebGroupCreateJob");
+    const groupJob = () => { try { return window.require("WAWebGroupCreateJob"); } catch { return null; } };
+    let job = groupJob();
+    // Newer Web builds keep group creation in the New Group lazy bundle.
+    // Loading it is not a create and must finish before external dispatch.
+    let loader;
+    try { loader = window.require("WAWebNewGroupFlowLoadable"); } catch { /* Older build. */ }
+    const canLoad = typeof loader?.requireBundle === "function";
+    if (!probeOnly && typeof job?.createGroup !== "function" && canLoad) {
+      let timer;
+      try {
+        await Promise.race([
+          loader.requireBundle(),
+          new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("group_bundle_timeout")), 10000); }),
+        ]);
+      } finally { clearTimeout(timer); }
+      job = groupJob();
+    }
     const factory = window.require("WAWebWidFactory");
     const query = window.require("WAWebQueryExistsJob");
     const me = window.require("WAWebUserPrefsMeUser");
@@ -29,6 +45,7 @@ export async function browserWhatsAppGroupCreate({ title = "", participantIds = 
       version: /^\d+(?:\.\d+){1,5}$/.test(window.Debug?.VERSION || "") ? window.Debug.VERSION : "",
       // Protocol shape only; no page source, identities, or session material.
       createArity: typeof job?.createGroup === "function" ? job.createGroup.length : null,
+      bundleLoadable: canLoad,
     };
     if (probeOnly) return { ok: protocol.available, readOnly: true, protocol };
     if (!protocol.available) return { ok: false, stage, code: "whatsapp_group_protocol_unavailable", protocol };
