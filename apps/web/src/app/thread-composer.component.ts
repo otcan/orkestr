@@ -5,6 +5,7 @@ import { firstValueFrom } from "rxjs";
 import { FormsModule } from "@angular/forms";
 import { ThreadSummary } from "./api.service";
 import { PendingFile } from "./thread-uploads";
+import { shouldSubmitComposer } from "./composer-keyboard";
 
 @Component({
   selector: "ork-thread-composer",
@@ -79,7 +80,7 @@ export class ThreadComposerComponent {
   }
 
   handleKeydown(event: KeyboardEvent): void {
-    if (event.key !== "Enter" || event.shiftKey) return;
+    if (!shouldSubmitComposer(event, globalThis.matchMedia?.("(pointer: coarse)").matches === true)) return;
     event.preventDefault();
     this.submit();
   }

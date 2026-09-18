@@ -53,6 +53,7 @@ import { routerUpdateWhatsAppDeliveryTarget } from "./whatsapp-router-updates.js
 import { attachmentDeliveryKey, prepareWhatsAppTableAttachments } from "./whatsapp-table-attachments.js";
 import { appendWebUiEncryptedAttachmentNotice, webUiEncryptedAttachmentDelivery } from "./whatsapp-webui-encrypted-attachments.js";
 import { assertRequiredSnapshotsPresent, requiredOutboundSnapshots, snapshotCoversPath, validateOutboundSnapshots } from "../../core/src/outbound-attachment-snapshots.js";
+import { assertReplyAttachmentStagingReady, recoverRoutedReplyAttachments } from "../../core/src/outbound-attachment-staging.js";
 import { appendWhatsAppDebugFooter, formatWhatsAppOutboundText, stripWhatsAppDebugFooter } from "./whatsapp-formatting.js";
 import {
   bindingAccountIds,
@@ -3720,6 +3721,7 @@ async function sendClaimedWhatsAppText({
   try {
     // Resolution may omit a missing file. Its persisted obligation must still
     // fail the claimed job, never turn an intended media reply into text-only.
+    assertReplyAttachmentStagingReady(message);
     await validateOutboundSnapshots([
       ...requiredAttachmentSnapshots,
       ...(outboxClaim.job.payload?.requiredAttachmentSnapshots || []),
@@ -7183,6 +7185,16 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
         });
         skipped.push({ agentId, threadId, messageId: message.id, reason: "superseded_runtime_interruption" });
         continue;
+      }
+      if (message.outboundAttachmentStaging?.state === "failed_retryable") {
+        const recovered = await recoverRoutedReplyAttachments(thread, message, env).catch(() => null);
+        if (recovered?.staging?.state === "ready") {
+          const repaired = await updateThreadMessage(threadId, message.id, {
+            attachments: recovered.attachments,
+            outboundAttachmentStaging: recovered.staging,
+          }, env);
+          Object.assign(message, repaired);
+        }
       }
       const preparedOutbound = await prepareWhatsAppTableAttachments(pickString(message.text), {
         env,

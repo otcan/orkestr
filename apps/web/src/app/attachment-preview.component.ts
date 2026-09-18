@@ -1,4 +1,4 @@
-import { AfterViewChecked, Component, ElementRef, HostListener, ViewChild, inject } from "@angular/core";
+import { AfterViewChecked, Component, ElementRef, HostListener, ViewChild, inject, signal } from "@angular/core";
 import { AttachmentPreviewService } from "./attachment-preview.service";
 
 @Component({
@@ -25,7 +25,10 @@ export class AttachmentPreviewComponent implements AfterViewChecked {
   readonly preview = inject(AttachmentPreviewService);
   @ViewChild("panel") panel?: ElementRef<HTMLElement>;
   private focused = false;
-  get mobile(): boolean { return globalThis.innerWidth <= 860; }
+  private readonly mobileViewport = signal(globalThis.innerWidth <= 860);
+  get mobile(): boolean { return this.mobileViewport(); }
+  @HostListener("window:resize")
+  resize(): void { this.mobileViewport.set(globalThis.innerWidth <= 860); }
   ngAfterViewChecked(): void {
     if (this.panel && !this.focused) { this.panel.nativeElement.focus(); this.focused = true; }
     if (!this.panel) this.focused = false;

@@ -1592,6 +1592,7 @@ export interface ThreadMessage {
   timestamp?: string;
   state?: string;
   deliveryState?: string;
+  outboundAttachmentStaging?: { id: string; state: string; notice?: string };
   phase?: string;
   cursor?: number;
   attachments?: Array<Record<string, unknown>>;

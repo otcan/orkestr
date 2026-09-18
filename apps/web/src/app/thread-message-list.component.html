@@ -27,6 +27,12 @@
           <em class="phase-badge">{{ replyDeliveryLabel(message) }}</em>
         }
       </div>
+      @if (message.outboundAttachmentStaging?.state === 'failed_retryable') {
+        <section class="message-failure" role="alert">
+          <strong>Attachment delivery pending</strong>
+          <p>File could not be attached. Delivery will retry when the file is available. No attachment has been sent.</p>
+        </section>
+      }
       @if (messageFailureSummary(message)) {
         <section class="message-failure" role="alert">
           <div class="message-failure-heading">

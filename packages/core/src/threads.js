@@ -11,8 +11,9 @@ import { assertSanitizedAction } from "./llm-sanitizer.js";
 import { normalizeNoReplyAssistantMessage } from "./no-reply.js";
 import { assertResourceAccess, assertThreadLimit, filterResourcesForPrincipal, isAdminPrincipal, policyError, resourceOwnerUserId } from "./policy.js";
 import { resolveThreadAttachments } from "./thread-attachments.js";
-import { requiredOutboundSnapshots, snapshotRoutedAttachments, validateOutboundSnapshots } from "./outbound-attachment-snapshots.js";
-import { encryptedPublishedAttachmentPath, hydrateEncryptedPublishedAttachmentPaths, publishThreadAttachmentsEncrypted } from "./encrypted-attachment-publication.js";
+import { requiredOutboundSnapshots, validateOutboundSnapshots } from "./outbound-attachment-snapshots.js";
+import { applyReplyAttachmentStaging, prepareRoutedReplyAttachments } from "./outbound-attachment-staging.js";
+import { encryptedPublishedAttachmentPath, hydrateEncryptedPublishedAttachmentPaths } from "./encrypted-attachment-publication.js";
 import { userScopedCapabilityHints } from "./user-skills.js";
 import { adminUserId, getUser, normalizeUserId } from "./users.js";
 import {
@@ -879,12 +880,8 @@ export async function appendThreadMessage(threadId, input, env = process.env) {
       });
       nextMessage.text = resolvedAttachments.text;
       attachmentOutcomes = resolvedAttachments.artifactOutcomes;
-      resolvedAttachments.attachments = await snapshotRoutedAttachments({
-        thread, message: nextMessage, attachments: resolvedAttachments.attachments, env,
-      });
-      const publishedAttachments = role === "assistant"
-        ? await publishThreadAttachmentsEncrypted({ thread, attachments: resolvedAttachments.attachments, env })
-        : { attachments: resolvedAttachments.attachments };
+      const publishedAttachments = await prepareRoutedReplyAttachments({ thread, message: nextMessage, resolution: resolvedAttachments, env });
+      applyReplyAttachmentStaging(nextMessage, publishedAttachments);
       if (publishedAttachments.encrypted === true) {
         attachmentOutcomes = attachmentOutcomes.map((outcome) => ({ ...outcome, filename: "encrypted-artifact" }));
       }
@@ -1162,12 +1159,8 @@ export async function updateThreadMessage(threadId, messageId, patch, env = proc
         });
         updated.text = resolvedAttachments.text;
         attachmentOutcomes = resolvedAttachments.artifactOutcomes;
-        resolvedAttachments.attachments = await snapshotRoutedAttachments({
-          thread, message: updated, attachments: resolvedAttachments.attachments, env,
-        });
-        const publishedAttachments = updated.role === "assistant"
-          ? await publishThreadAttachmentsEncrypted({ thread, attachments: resolvedAttachments.attachments, env })
-          : { attachments: resolvedAttachments.attachments };
+        const publishedAttachments = await prepareRoutedReplyAttachments({ thread, message: updated, resolution: resolvedAttachments, env });
+        applyReplyAttachmentStaging(updated, publishedAttachments);
         if (publishedAttachments.encrypted === true) {
           attachmentOutcomes = attachmentOutcomes.map((outcome) => ({ ...outcome, filename: "encrypted-artifact" }));
         }
