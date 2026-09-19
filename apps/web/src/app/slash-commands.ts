@@ -36,6 +36,13 @@ export const SLASH_COMMANDS: SlashCommandInfo[] = [
     acceptsText: true,
   },
   {
+    command: "/effort",
+    aliases: [],
+    label: "Reasoning effort",
+    detail: "Set a supported reasoning effort for the current Codex model.",
+    acceptsText: true,
+  },
+  {
     command: "/now",
     aliases: ["/interrupt"],
     label: "Interrupt send",

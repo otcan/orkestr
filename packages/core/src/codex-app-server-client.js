@@ -1,4 +1,6 @@
 import readline from "node:readline";
+import { withCodexSettingsLock } from "./codex-settings-lock.js";
+import { withCanonicalPublicReferenceLock } from "./canonical-public-reference-lock.js";
 import os from "node:os";
 import { spawn, execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -637,8 +639,13 @@ export class CodexAppServerClient {
       const settings = params.threadSettings || {};
       const state = this.threadStates.get(codexId) || {};
       this.threadStates.set(codexId, { ...state, threadSettings: settings });
-      const thread = await threadForCodexThreadId(codexId, this.env);
-      if (thread) {
+      const candidate = await threadForCodexThreadId(codexId, this.env);
+      if (candidate) await withCodexSettingsLock(candidate.id, this.env, () => withCanonicalPublicReferenceLock(async () => {
+        const thread = await getThread(candidate.id, this.env);
+        if (!thread || codexThreadId(thread) !== codexId) return;
+        // Notifications have no operation ID. Keep explicit settings and any
+        // uncertain operation fenced; only its correlated RPC can confirm it.
+        if (thread.codexSettingsManaged || thread.codexSettingsPending || thread.codexSettingsUncertain) return;
         const model = normalizeCodexModel(settings.model) || null;
         const effort = normalizeReasoningEffort(settings.effort) || null;
         const serviceTier = normalizeCodexServiceTier(settings.serviceTier) || null;
@@ -669,7 +676,7 @@ export class CodexAppServerClient {
           effort,
           serviceTier,
         }, this.env).catch(() => {});
-      }
+      }, this.env));
       return;
     }
     if (message.method === "thread/status/changed" && codexId) {
