@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { persistObservedCodexMetadata } from "../packages/core/src/codex-observed-metadata.js";
 import fs from "node:fs/promises";
 import http from "node:http";
 import os from "node:os";
@@ -5965,6 +5966,10 @@ test("Codex app-server applies thread-scoped /model and /fast commands without s
     }, env);
     assert.deepEqual(await deliverCodexAppServerPendingInputs(await getThread(secondThread.id, env), env), [deniedCommand.id]);
 
+    await persistObservedCodexMetadata(first.thread.id, {
+      codexModel: "gpt-old", codexReasoningEffort: "low", codexServiceTier: null,
+      codexTokenUsage: { total_tokens: 42 },
+    }, env);
     const updatedFirst = await getThread(first.thread.id, env);
     const unchangedSecond = await getThread(secondThread.id, env);
     const messages = await listThreadMessages(first.thread.id, env);

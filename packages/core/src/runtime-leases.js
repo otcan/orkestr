@@ -54,6 +54,7 @@ import {
   threadUsesNativeCodexRuntime,
 } from "./runtime-codex-adapter.js";
 import { appendOrUpdateEventMessage, normalizeCodexModel, normalizeReasoningEffort } from "./codex-app-server-common.js";
+import { persistObservedCodexMetadata } from "./codex-observed-metadata.js";
 import { completeThreadSecurityApproveCommand, threadSecurityApproveChallengeId } from "./security-thread-command.js";
 import { threadUsesContainedUserPolicy } from "./tenant-policy.js";
 import { apiAgentRuntimeStatus, processApiAgentThreadInput, threadUsesApiAgent } from "./tenant-api-agent.js";
@@ -1238,32 +1239,6 @@ async function cachedRuntimeCodexThreadMetadata(threadOrId, env = process.env) {
   const value = await resolveCodexThreadMetadata(threadOrId, env);
   codexRuntimeMetadataCache.set(cacheKey, { value, expiresAt: Date.now() + ttlMs });
   return value;
-}
-
-function codexMetadataUpdatePatch(thread = {}, codexMetadata = {}) {
-  const executorMetadata = { ...(thread?.executor?.metadata || {}), ...codexMetadata };
-  if (codexMetadata.codexRolloutPath && codexMetadata.codexThreadId) {
-    executorMetadata.codexRolloutGeneration = codexMetadata.codexThreadId;
-  }
-  if (!normalizeCodexModel(executorMetadata.codexModel)) delete executorMetadata.codexModel;
-  if (!normalizeReasoningEffort(executorMetadata.codexReasoningEffort)) delete executorMetadata.codexReasoningEffort;
-  const provider = String(executorMetadata.codexModelProvider || "").trim();
-  if (provider.startsWith("/") || provider.toLowerCase().endsWith(".jsonl")) delete executorMetadata.codexModelProvider;
-  const patch = {
-    ...codexMetadata,
-    executor: {
-      ...(thread?.executor || {}),
-      codexThreadId: codexMetadata.codexThreadId || thread?.executor?.codexThreadId || "",
-      metadata: executorMetadata,
-    },
-  };
-  if (!codexMetadata.codexModel && thread?.codexModel && !normalizeCodexModel(thread.codexModel)) patch.codexModel = null;
-  if (!codexMetadata.codexReasoningEffort && thread?.codexReasoningEffort && !normalizeReasoningEffort(thread.codexReasoningEffort)) patch.codexReasoningEffort = null;
-  const threadProvider = String(thread?.codexModelProvider || "").trim();
-  if (!codexMetadata.codexModelProvider && threadProvider && (threadProvider.startsWith("/") || threadProvider.toLowerCase().endsWith(".jsonl"))) {
-    patch.codexModelProvider = null;
-  }
-  return patch;
 }
 
 async function resolveCodexThreadByWorkspace(workspace, startedAt, env = process.env) {
@@ -4645,7 +4620,7 @@ async function syncLeaseRollout(lease, env = process.env) {
   if (!thread) return { lease, appended: 0 };
   const codexMetadata = await cachedRuntimeCodexThreadMetadata(thread, env).catch(() => ({}));
   if (Object.keys(codexMetadata).length) {
-    await updateThread(lease.threadId, codexMetadataUpdatePatch(thread, codexMetadata), env).catch(() => {});
+    await persistObservedCodexMetadata(lease.threadId, codexMetadata, env).catch(() => {});
     thread = await getThread(lease.threadId, env).catch(() => thread) || thread;
   }
   const generation = codexThreadId(thread);
@@ -4916,7 +4891,7 @@ async function syncDetachedCodexRollouts(activeLeaseThreadIds = new Set(), env =
     const codexMetadata = await resolveCodexThreadMetadata(thread, env).catch(() => ({}));
     let currentThread = thread;
     if (Object.keys(codexMetadata).length) {
-      currentThread = await updateThread(thread.id, codexMetadataUpdatePatch(thread, codexMetadata), env).catch(() => thread);
+      currentThread = await persistObservedCodexMetadata(thread.id, codexMetadata, env).catch(() => thread);
     }
     const generation = codexThreadId(currentThread) || initialGeneration;
     // Always ask Codex for the current generation's path before considering a

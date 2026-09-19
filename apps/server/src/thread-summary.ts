@@ -1,6 +1,7 @@
 import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { normalizeCodexModel, normalizeCodexServiceTier, normalizeReasoningEffort } from "../../../packages/core/src/codex-app-server-common.js";
+import { explicitCodexSettings } from "../../../packages/core/src/codex-observed-metadata.js";
 import { RAW_TERMINAL_RUNTIME_KIND } from "../../../packages/core/src/raw-terminal-mode.js";
 import { resolveCodexThreadMetadata, resolveCodexThreadMetadataBatch, runtimeStatus } from "../../../packages/core/src/runtime-leases.js";
 import { isAdminPrincipal, resourceOwnerUserId } from "../../../packages/core/src/policy.js";
@@ -854,15 +855,18 @@ export async function threadRuntimeSummary(thread: any, messages: any[] = [], op
     preloadedLiveCodexMetadata,
   );
   const orderedMessages = chronologicalMessages(messages);
+  const configuredSettings = explicitCodexSettings(thread);
   const codexThread = {
     ...thread,
     ...liveCodexMetadata,
+    ...configuredSettings,
     executor: {
       ...(thread.executor || {}),
       codexThreadId: liveCodexMetadata.codexThreadId || thread.executor?.codexThreadId || "",
       metadata: {
         ...(thread.executor?.metadata || {}),
         ...liveCodexMetadata,
+        ...configuredSettings,
       },
     },
   };
