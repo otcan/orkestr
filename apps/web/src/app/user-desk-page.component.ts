@@ -17,6 +17,9 @@ export class UserDeskPageComponent implements OnInit {
   notice = "";
   shareUrl = "";
   inventoryUnavailable = false;
+  reservationsUnavailable = true;
+  private loadedThreadId: string | null = null;
+  private loadGeneration = 0;
   browsers: BrowserSession[] = [];
   leases: DesktopLeaseRecord[] = [];
   @Input() threads: ThreadSummary[] = [];
@@ -27,38 +30,49 @@ export class UserDeskPageComponent implements OnInit {
   }
 
   async load(): Promise<void> {
+    const generation = ++this.loadGeneration;
+    const threadId = this.primaryThread()?.id || "";
+    if (this.loadedThreadId !== threadId) {
+      this.browsers = [];
+      this.leases = [];
+      this.shareUrl = "";
+      this.actionWarnings = {};
+      this.loadedThreadId = threadId;
+    }
     this.busy = true;
     this.error = "";
-    this.inventoryUnavailable = false;
+    this.reservationsUnavailable = true;
     try {
-      const threadId = this.primaryThread()?.id || "";
       const [browsersResult, leasesResult] = await Promise.allSettled([
         firstValueFrom(this.api.browserSessions(threadId).pipe(timeout({ first: 7_000 }))),
         firstValueFrom(this.api.desktopLeases(false, threadId).pipe(timeout({ first: 7_000 }))),
       ]);
+      if (generation !== this.loadGeneration || threadId !== (this.primaryThread()?.id || "")) return;
       const errors: string[] = [];
       if (browsersResult.status === "fulfilled" && browsersResult.value.ok !== false) {
+        this.inventoryUnavailable = false;
         this.browsers = browsersResult.value.sessions || browsersResult.value.browsers || [];
       } else {
         this.browsers = [];
         this.inventoryUnavailable = true;
         errors.push("Desktop inventory is unavailable. Refresh to try again.");
       }
-      if (leasesResult.status === "fulfilled") {
+      if (leasesResult.status === "fulfilled" && leasesResult.value.ok !== false) {
         this.leases = leasesResult.value.desktopLeases || [];
+        this.reservationsUnavailable = false;
       } else {
-        this.leases = [];
+        // Keep the same-thread snapshot for context, never as action authority.
         errors.push("Desktop reservations could not be loaded. Refresh to try again.");
       }
       this.error = errors.join(" ");
     } finally {
-      this.busy = false;
+      if (generation === this.loadGeneration) this.busy = false;
     }
   }
 
   async browserAction(browser: BrowserSession, action: "prepare" | "start" | "stop" | "restart"): Promise<void> {
     const slug = this.browserSlug(browser);
-    if (!slug || this.busy) return;
+    if (!slug || this.actionBusy(browser)) return;
     this.busy = true;
     this.activeSlug = slug;
     const attemptId = globalThis.crypto?.randomUUID?.() || `desktop-action-${Date.now()}`;
@@ -109,7 +123,7 @@ export class UserDeskPageComponent implements OnInit {
   async acquireDesk(browser: BrowserSession): Promise<void> {
     const slug = this.browserSlug(browser);
     const thread = this.primaryThread();
-    if (!slug || !thread || this.busy) return;
+    if (!slug || !thread || this.actionBusy(browser)) return;
     this.busy = true;
     this.activeSlug = slug;
     try {
@@ -139,7 +153,7 @@ export class UserDeskPageComponent implements OnInit {
     const slug = this.browserSlug(browser);
     const lease = this.browserLease(browser);
     const threadId = String(lease?.threadId || this.primaryThread()?.id || "").trim();
-    if (!slug || !threadId || this.busy) return;
+    if (!slug || !threadId || this.actionBusy(browser)) return;
     this.busy = true;
     this.activeSlug = slug;
     try {
@@ -159,7 +173,7 @@ export class UserDeskPageComponent implements OnInit {
 
   async shareDesktop(browser: BrowserSession): Promise<void> {
     const slug = this.browserSlug(browser);
-    if (!slug || this.busy) return;
+    if (!slug || this.actionBusy(browser)) return;
     this.busy = true;
     this.activeSlug = slug;
     try {
@@ -185,7 +199,7 @@ export class UserDeskPageComponent implements OnInit {
   async openDesktop(browser: BrowserSession): Promise<void> {
     const slug = this.browserSlug(browser);
     const threadId = String(this.browserLease(browser)?.threadId || this.primaryThread()?.id || "").trim();
-    if (!slug || !threadId || !this.browserRunning(browser) || this.busy) return;
+    if (!slug || !threadId || !this.browserRunning(browser) || this.actionBusy(browser)) return;
     const pendingWindow = window.open("about:blank", "_blank");
     if (pendingWindow) {
       try {
@@ -250,7 +264,8 @@ export class UserDeskPageComponent implements OnInit {
     return this.browsers.filter((browser) => this.browserRunning(browser)).length;
   }
 
-  availableCount(): number {
+  availableCount(): number | null {
+    if (this.reservationsUnavailable) return null;
     return this.browsers.filter((browser) => !this.browserLease(browser)).length;
   }
 
@@ -307,18 +322,21 @@ export class UserDeskPageComponent implements OnInit {
   }
 
   leaseLabel(lease: DesktopLeaseRecord | null): string {
+    if (this.reservationsUnavailable) return "Reservation status unknown";
     if (!lease) return "Available";
     return String(lease.ownerThreadLabel || lease.threadName || lease.threadId || "Reserved").trim();
   }
 
   leaseClass(lease: DesktopLeaseRecord | null): string {
+    if (this.reservationsUnavailable) return "bad";
     if (!lease) return "ready";
     if (lease.stale || lease.expired) return "bad";
     return "live";
   }
 
   actionBusy(browser: BrowserSession): boolean {
-    return this.busy && (!this.activeSlug || this.activeSlug === this.browserSlug(browser));
+    return this.busy || this.inventoryUnavailable || this.reservationsUnavailable
+      || this.loadedThreadId !== (this.primaryThread()?.id || "");
   }
 
   canPrepare(browser: BrowserSession): boolean {

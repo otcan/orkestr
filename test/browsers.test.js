@@ -192,6 +192,40 @@ test("managed desktop inventory bounds stalled remote and local probes", async (
   assert.ok(Date.now() - localStartedAt < 1_000);
 });
 
+test("remote inventory deadline includes success and error response bodies and permits retry", async () => {
+  let status = 200;
+  let stall = true;
+  const remote = http.createServer((_, response) => {
+    response.writeHead(status, { "content-type": "application/json" });
+    if (stall) response.write("{");
+    else response.end(JSON.stringify({ sessions: [] }));
+  });
+  await new Promise((resolve) => remote.listen(0, "127.0.0.1", resolve));
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-browser-body-timeout-"));
+  const env = {
+    ORKESTR_HOME: home, ORKESTR_BROWSER_DESKTOP_MODE: "browserctl",
+    ORKESTR_BROWSER_API_URL: `http://127.0.0.1:${remote.address().port}`,
+    ORKESTR_BROWSER_INVENTORY_TIMEOUT_MS: "100",
+  };
+  try {
+    for (status of [200, 503]) {
+      const started = Date.now();
+      const payload = await listBrowserSessions(env);
+      assert.equal(payload.ok, false);
+      assert.match(payload.message, /timed out after 100ms/);
+      assert.ok(Date.now() - started < 1_000);
+    }
+    stall = false;
+    status = 200;
+    const recovered = await listBrowserSessions(env);
+    assert.equal(recovered.ok, true);
+    assert.deepEqual(recovered.sessions, []);
+  } finally {
+    remote.closeAllConnections();
+    await new Promise((resolve) => remote.close(resolve));
+  }
+});
+
 test("disabled desktop mode reports no instance desktops", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-browsers-disabled-"));
   const env = {

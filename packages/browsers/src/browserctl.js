@@ -169,13 +169,20 @@ async function fetchBrowserJson(url, options = {}) {
     }, timeoutMs)
     : null;
   timer?.unref?.();
-  let response;
   try {
-    response = await fetch(url, {
+    const response = await fetch(url, {
       ...fetchOptions,
       signal: controller?.signal || signal,
       headers: { "content-type": "application/json", ...(fetchOptions.headers || {}) },
     });
+    if (!response.ok) {
+      const body = await response.text();
+      const error = new Error(body || `browser API returned ${response.status}`);
+      error.statusCode = response.status;
+      throw error;
+    }
+    // Await the body before releasing the deadline and caller's abort listener.
+    return await response.json();
   } catch (error) {
     if (timedOut) throw browserRequestTimeoutError(timeoutMs);
     throw error;
@@ -183,13 +190,6 @@ async function fetchBrowserJson(url, options = {}) {
     if (timer) clearTimeout(timer);
     signal?.removeEventListener?.("abort", abort);
   }
-  if (!response.ok) {
-    const body = await response.text().catch(() => "");
-    const error = new Error(body || `browser API returned ${response.status}`);
-    error.statusCode = response.status;
-    throw error;
-  }
-  return response.json();
 }
 
 function openUrlError(message, statusCode = 400) {
@@ -218,6 +218,7 @@ async function runBrowserctl(args, env = process.env, options = {}) {
     const result = await execFileAsync(command, args, {
       env: { ...process.env, ...env },
       timeout: timeoutMs,
+      signal: options.signal,
       maxBuffer: 5 * 1024 * 1024,
     });
     return result.stdout ? JSON.parse(result.stdout) : { ok: true };
@@ -360,6 +361,30 @@ export async function listManagedDesktopSessions(env = process.env, options = {}
     source: "browserctl",
     sessions: await attachDesktopLeases(sessions, env, options),
   };
+}
+
+// Internal routing lookup: no lease/thread/UI enrichment and no lifecycle actions.
+// Legacy browserctl providers only expose list; select one record before applying
+// any higher-level policy. Deliberately bypass the UI inventory cache so a port
+// or runtime generation change cannot reuse a cached routing record.
+export async function readManagedDesktopSession(slug, env = process.env, options = {}) {
+  const explicitUrl = browserSessionsUrl(env);
+  const base = browserApiBase(env);
+  const payload = explicitUrl || base
+    ? await fetchBrowserJson(appendRemoteScope(explicitUrl || `${base}/api/browser-sessions`, options), {
+      timeoutMs: desktopInventoryTimeoutMs(env), signal: options.signal,
+      headers: remoteDesktopHeaders(env, options),
+    })
+    : await runBrowserctl(["list", "--json"], scopedBrowserctlEnv(env, options), {
+      timeoutMs: desktopInventoryTimeoutMs(env), signal: options.signal,
+    });
+  if (payload?.ok === false) throw Object.assign(new Error("desktop_inventory_unavailable"), { statusCode: 503 });
+  const matches = (Array.isArray(payload?.sessions) ? payload.sessions : [])
+    .filter((item) => String(item?.slug || item?.id || "").trim() === slug);
+  if (matches.length !== 1) return null;
+  const session = tagSessionScope(normalizeBrowserctlSession(matches[0]), env, options);
+  if (session.ownerUserId !== browserctlScope(env, options).ownerUserId) return null;
+  return session;
 }
 
 export async function managedDesktopAction(slug, action, env = process.env, options = {}) {

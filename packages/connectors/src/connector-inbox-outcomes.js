@@ -28,7 +28,7 @@ export function classifyConnectorInboxDelivery({ response = null, payload = {}, 
   const retryable = explicitRetryable(payload) ?? retryableStatus(status);
   const declaredOutcome = clean(payload?.outcome);
   const duplicateRejected = declaredOutcome === "duplicate_rejected" || payload?.duplicateRejected === true || (payload?.duplicate === true && payload?.rejected === true);
-  const rejected = duplicateRejected || declaredOutcome === "rejected_terminal";
+  const rejected = duplicateRejected || declaredOutcome === "rejected_terminal" || payload?.ignoredNonSenderAccount === true;
   if (response?.ok && payload?.ok !== false && !rejected) {
     return {
       state: "delivered",

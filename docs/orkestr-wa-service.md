@@ -188,3 +188,23 @@ not enforced.
 
 Only pass accounts that are intended to route Orkestr traffic to `--account`.
 Skill-only accounts are verified through their skill commands instead.
+
+## Group creation account identity
+
+Thread bindings and provisioning records retain canonical connector account IDs.
+For local and dedicated-worker modes, group creation resolves those IDs to the
+selected account's runtime ID before dispatch. Deferred admin/picture setup uses
+the same resolved account. External-only bridges keep their own account namespace;
+do not rewrite their IDs using an unrelated local worker.
+
+An unknown account rejected before the worker calls the group-create SDK is
+reported as `unknown_whatsapp_account`, `stage: prepared`,
+`externalOutcome: not_created`, and `nextAction: check_account_mapping`.
+The gateway preserves this sanitized failure envelope. This is a configuration
+problem, not proof of a lost WhatsApp login; do not relink or reset the session.
+
+Timeouts and other ambiguous create failures remain `outcome_unknown` and must
+not be blindly retried. Updating account routing does not clear older unresolved
+provisioning records: reconcile their external outcome before any new create.
+Validate with `test/whatsapp-group-transport.test.js`, which uses an isolated
+gateway/worker fixture and never creates a real WhatsApp group.

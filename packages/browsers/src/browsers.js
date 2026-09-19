@@ -11,7 +11,7 @@ import { readThreadResourcePolicy } from "../../core/src/thread-resource-grants.
 import { listThreadsForPrincipal } from "../../core/src/threads.js";
 import { normalizeUserId } from "../../core/src/users.js";
 import { assertDesktopLeaseForOperation, attachDesktopStateToSessions } from "./desktop-leases.js";
-import { isBrowserctlUnavailableError, listManagedDesktopSessions, managedDesktopAction, managedDesktopOpenUrl } from "./browserctl.js";
+import { isBrowserctlUnavailableError, listManagedDesktopSessions, readManagedDesktopSession, managedDesktopAction, managedDesktopOpenUrl } from "./browserctl.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -483,6 +483,24 @@ export async function ensureVirtualBrowserReady(slug, env = process.env, options
   const error = new Error(reason);
   error.statusCode = 503;
   throw error;
+}
+
+// Internal proxy adapter; caller must authorize the exact desktop before and
+// after awaiting this read. Unlike ensureVirtualBrowserReady, this never starts
+// or recovers a desktop as a side effect of fetching a static file.
+export async function readVirtualBrowserTarget(slug, env = process.env, options = {}) {
+  const unavailable = desktopUnavailableError(env);
+  if (unavailable) throw unavailable;
+  const session = desktopMode(env) === "profiles"
+    ? await publicBrowserRecord(browserBySlug(slug, env), env, options)
+    : await readManagedDesktopSession(slug, env, options);
+  if (!session || !filterVisibleBrowserSessions([session], env).length) {
+    throw Object.assign(new Error("browser_session_not_found"), { statusCode: 404 });
+  }
+  if (!virtualBrowserReady(session)) {
+    throw Object.assign(new Error("desktop_not_running"), { statusCode: 409 });
+  }
+  return session;
 }
 
 export async function prepareVirtualBrowser(slug, env = process.env, options = {}) {

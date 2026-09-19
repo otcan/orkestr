@@ -14,7 +14,10 @@ import { publicHttpUrl, tenantPublicSetupUrl } from "../../core/src/tenant-publi
 import { getThread, listThreads } from "../../core/src/threads.js";
 import { setGeneratedLocalWhatsAppGroupPicture } from "./whatsapp-chat-picture.js";
 import { provisionWhatsAppGroupSetup } from "./whatsapp-group-setup.js";
+import { createWhatsAppGroupWithClient, inspectWhatsAppGroupCreateProtocol } from "./whatsapp-group-create-client.js";
 import {
+  unknownWhatsAppGroupAccountError,
+  publicWhatsAppGroupCreateFailure,
   adaptWhatsAppGroupCreateResult,
   whatsappGroupCreateFailureEnvelope,
 } from "./whatsapp-group-create-evidence.js";
@@ -1988,6 +1991,10 @@ async function accountSnapshot(accountId, env = process.env, options = {}) {
       groupCreate: runtimeReady ? "unknown" : runtimeUnavailable ? "unavailable" : "unknown",
     },
     provenance: attestWhatsAppRuntimeProvenance({ accountId, runtime }),
+    ...(readOnly && options.force === true && runtimeReady ? {
+      groupCreateProtocol: await withLocalWhatsAppProbeTimeout(inspectWhatsAppGroupCreateProtocol(runtime.client), "whatsapp_group_protocol_probe", env)
+        .catch(() => ({ available: false, adapter: "group_create_v1" })),
+    } : {}),
   };
 }
 
@@ -6915,8 +6922,17 @@ export async function createLocalWhatsAppChat({ name = "", senderAccountId = "",
   }
   const participants = normalizeGroupParticipantIds(participantIds);
   const adminParticipants = normalizeGroupParticipantIds(adminParticipantIds);
-  const responder = await normalizeManagedAccountId(responderAccountId || senderAccountId || defaultResponderAccountId(env), env);
-  const sender = await normalizeManagedAccountId(senderAccountId || responder, env);
+  let responder;
+  let sender;
+  try {
+    responder = await normalizeManagedAccountId(responderAccountId || senderAccountId || defaultResponderAccountId(env), env);
+    sender = await normalizeManagedAccountId(senderAccountId || responder, env);
+  } catch (error) {
+    if (error?.message === "unknown_whatsapp_account") {
+      throw unknownWhatsAppGroupAccountError({ operationId, correlationId });
+    }
+    throw error;
+  }
   const responderRuntime = runtimes.get(responder);
   const responderState = accountStates.get(responder) || defaultAccountState(responder);
   if (!responderRuntime?.client || !responderState.ready) {
@@ -6952,7 +6968,7 @@ export async function createLocalWhatsAppChat({ name = "", senderAccountId = "",
   const clientVersion = String(responderRuntime.client?.version || responderRuntime.client?.info?.version || "").trim();
   try {
     if (participants.length) {
-      createdGroup = await responderRuntime.client.createGroup(title, participants, { announce: false });
+      createdGroup = await createWhatsAppGroupWithClient(responderRuntime.client, title, participants, { announce: false }, { operationId, correlationId });
       createEvidence = adaptWhatsAppGroupCreateResult(createdGroup);
       chatId = createEvidence.groupId;
     } else if (sender === responder) {
@@ -6969,12 +6985,13 @@ export async function createLocalWhatsAppChat({ name = "", senderAccountId = "",
         });
         throw error;
       }
-      createdGroup = await responderRuntime.client.createGroup(title, [senderContactId]);
+      createdGroup = await createWhatsAppGroupWithClient(responderRuntime.client, title, [senderContactId], undefined, { operationId, correlationId });
       autoAddedParticipantIds = [senderContactId];
       createEvidence = adaptWhatsAppGroupCreateResult(createdGroup);
       chatId = createEvidence.groupId;
     }
   } catch (error) {
+    if (publicWhatsAppGroupCreateFailure(error)) throw error;
     const failure = whatsappGroupCreateFailureEnvelope({
       operationId,
       stage: "external_create",
@@ -7139,6 +7156,11 @@ export async function promoteLocalWhatsAppGroupParticipants({ accountId = "", ch
       participantIds: participants,
       promote: true,
     });
+    // A just-created group can precede its local metadata. Let bounded setup
+    // polling retry this read; SDK fallback here can trigger a sender reset.
+    if (["whatsapp_group_chat_required", "whatsapp_group_participants_unavailable"].includes(cachedResult?.error)) {
+      throw Object.assign(new Error("whatsapp_group_metadata_pending"), { statusCode: 503 });
+    }
     if (cachedResult?.ok) {
       await appendEvent({
         type: "whatsapp_local_group_admins_promoted",
@@ -7247,12 +7269,18 @@ async function applyCachedLocalWhatsAppGroupAdminAction({ runtime = null, chatId
       }
     }
     if (!found.length) return { ok: false, error: "whatsapp_admin_participants_not_found", missingParticipantIds: missing };
+    const changes = promoteAction
+      ? found.filter(participant => !participant.isAdmin && !participant.isSuperAdmin)
+      : found;
+    if (!changes.length) return {
+      ok: true, status: 200, participantIds: found.map(serialized), missingParticipantIds: missing, alreadyApplied: true,
+    };
     const action = moduleRequire("WAWebModifyParticipantsGroupAction");
     const fn = promoteAction ? action.promoteParticipants : action.demoteParticipants;
     const attempts = [
-      { shape: "participant_models", values: found },
-      { shape: "participant_wids", values: found.map((participant) => participant?.id).filter(Boolean) },
-      { shape: "serialized_ids", values: found.map((participant) => serialized(participant)).filter(Boolean) },
+      { shape: "participant_models", values: changes },
+      { shape: "participant_wids", values: changes.map((participant) => participant?.id).filter(Boolean) },
+      { shape: "serialized_ids", values: changes.map((participant) => serialized(participant)).filter(Boolean) },
     ].filter((attempt) => attempt.values.length);
     let result = null;
     let shape = "";

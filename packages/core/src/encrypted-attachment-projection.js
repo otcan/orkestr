@@ -34,6 +34,8 @@ export function publicEncryptedAttachment(attachment = {}) {
 }
 
 export function publicEncryptedAttachmentMessage(message = {}) {
+  const { codexSubmission, ...visible } = message;
+  message = visible;
   const attachments = Array.isArray(message.attachments) ? message.attachments : [];
   if (!attachments.some((attachment) => attachment?.encrypted === true)) return message;
   return {

@@ -4604,7 +4604,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       const payload = await firstValueFrom(this.api.threadMessages(threadId, { limit: MESSAGE_PAGE_LIMIT }));
       if (this.threadLoadTokens.get(threadId) !== loadToken) return;
       const previousMessages = this.messageCache()[threadId] || [];
-      const nextMessages = mergeServerMessagesWithOptimistic(payload.messages || [], previousMessages);
+      const nextMessages = mergeServerMessagesWithOptimistic(payload.messages || [], previousMessages, payload.supersededMessageIds || []);
       const previousSignature = previousMessages.map((message) => this.messageKey(message)).join("|");
       const signature = nextMessages.map((message) => this.messageKey(message)).join("|");
       const changed = signature !== previousSignature;
@@ -4651,7 +4651,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     try {
       const payload = await firstValueFrom(this.api.threadMessages(threadId, { limit: MESSAGE_PAGE_LIMIT, before: oldestCursor }));
       const previousMessages = this.messageCache()[threadId] || [];
-      const nextMessages = mergeServerMessagesWithOptimistic(payload.messages || [], previousMessages);
+      const nextMessages = mergeServerMessagesWithOptimistic(payload.messages || [], previousMessages, payload.supersededMessageIds || []);
       this.messageCache.update((cache) => ({ ...cache, [threadId]: nextMessages }));
       this.updateOlderThreadMessagePageState(threadId, payload);
       this.renderNow();

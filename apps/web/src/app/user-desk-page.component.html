@@ -8,7 +8,7 @@
     <button class="secondary" type="button" (click)="load()" [disabled]="busy">Refresh</button>
   </header>
 
-  @if (!inventoryUnavailable) {
+  @if (!busy && !inventoryUnavailable && !reservationsUnavailable) {
     <div class="instance-metric-strip" aria-label="Desktop summary">
       <article>
         <span>Total</span>
@@ -86,7 +86,7 @@
 
         @if (browserLease(browser)) {
           <div class="desktop-lease" [class.stale]="browserLease(browser)?.stale || browserLease(browser)?.expired">
-            <strong>{{ browserLease(browser)?.stale || browserLease(browser)?.expired ? "Lease needs release" : "Active lease" }}</strong>
+            <strong>{{ reservationsUnavailable ? "Last known reservation (unverified)" : browserLease(browser)?.stale || browserLease(browser)?.expired ? "Lease needs release" : "Active lease" }}</strong>
             <span>{{ leaseLabel(browserLease(browser)) }}</span>
             <small>Heartbeat {{ browserLease(browser)?.heartbeatAt | date: "MMM d, HH:mm" }}</small>
           </div>

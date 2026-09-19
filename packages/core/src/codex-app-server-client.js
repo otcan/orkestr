@@ -1072,6 +1072,7 @@ export class CodexAppServerClient {
       }),
       timestamp,
       ...whatsappProjectionFields(whatsappParent, thread),
+      ...((params.parentMessage?.id || rememberedParent?.id) ? { parentMessageId: params.parentMessage?.id || rememberedParent.id } : {}),
     }, this.env);
     const finalAnswer = clean(phase).toLowerCase() === "final_answer";
     const finalProjection = finalAnswer
