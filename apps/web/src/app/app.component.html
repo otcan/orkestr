@@ -495,6 +495,8 @@
                 <button class="secondary icon-close" type="button" aria-label="Close model details" (click)="closeModelDetails()">×</button>
               </header>
 
+              <app-model-settings [threadId]="modelThread.id" (saved)="refresh(false)" />
+
               <div class="model-detail-meta">
                 <span>
                   <b>Provider</b>

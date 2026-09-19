@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { persistObservedCodexMetadata } from "../packages/core/src/codex-observed-metadata.js";
+import { withCodexSettingsLock } from "../packages/core/src/codex-settings-lock.js";
 import fs from "node:fs/promises";
 import http from "node:http";
 import os from "node:os";
@@ -151,8 +152,8 @@ rl.on("line", (line) => {
     if (Object.prototype.hasOwnProperty.call(params, "effort")) thread.effort = params.effort;
     if (Object.prototype.hasOwnProperty.call(params, "serviceTier")) thread.serviceTier = params.serviceTier;
     writeState(state);
-    send({ id, result: {} });
     send({ method: "thread/settings/updated", params: { threadId: thread.id, threadSettings: { model: thread.model || "gpt-test", modelProvider: "openai", effort: thread.effort || "medium", serviceTier: thread.serviceTier || null } } });
+    send({ id, result: {} });
     return;
   }
   if (message.method === "thread/list") return send({ id, result: { data: state.threads.map(({ turns, loaded, ...thread }) => ({ ...thread, status: loaded ? (thread.status || { type: "idle" }) : { type: "notLoaded" } })), nextCursor: null } });
@@ -5924,7 +5925,7 @@ test("Codex app-server exposes a recoverable failure after bounded ready retries
   }
 });
 
-test("Codex app-server applies thread-scoped /model and /fast commands without starting a turn", async () => {
+test("Codex app-server applies thread-scoped /model, /effort and /fast commands without starting a turn", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-thread-settings-"));
   const fake = await createFakeCodex(home);
   const env = {
@@ -5948,6 +5949,13 @@ test("Codex app-server applies thread-scoped /model and /fast commands without s
     }, env);
     assert.deepEqual(await deliverCodexAppServerPendingInputs(await getThread(first.thread.id, env), env), [modelCommand.id]);
 
+    const client = await getCodexAppServerClient({ env, home: env.HOME });
+    const originalPending = client.pendingRequestForThread;
+    client.pendingRequestForThread = () => ({ method: "item/tool/requestUserInput" });
+    const effortCommand = await enqueueThreadInput(first.thread.id, { text: "/effort medium", source: "ui_input" }, env);
+    assert.deepEqual(await deliverCodexAppServerPendingInputs(await getThread(first.thread.id, env), env), [effortCommand.id]);
+    client.pendingRequestForThread = originalPending;
+
     const fastCommand = await enqueueThreadInput(first.thread.id, {
       text: "/fast on",
       source: "whatsapp_inbound",
@@ -5958,7 +5966,7 @@ test("Codex app-server applies thread-scoped /model and /fast commands without s
     assert.deepEqual(await deliverCodexAppServerPendingInputs(await getThread(first.thread.id, env), env), [fastCommand.id]);
 
     const deniedCommand = await enqueueThreadInput(secondThread.id, {
-      text: "/fast on",
+      text: "/effort high",
       source: "whatsapp_inbound",
       connector: "whatsapp",
       chatId: "chat-settings-other",
@@ -5977,17 +5985,19 @@ test("Codex app-server applies thread-scoped /model and /fast commands without s
     const settingCalls = rawState.calls.filter((call) => call.method === "thread/settings/update");
 
     assert.equal(modelForThread(updatedFirst, env), "gpt-test");
-    assert.equal(effortForThread(updatedFirst, env), "high");
+    assert.equal(effortForThread(updatedFirst, env), "medium");
     assert.equal(serviceTierForThread(updatedFirst), "priority");
     assert.equal(unchangedSecond.codexServiceTier, null);
     assert.deepEqual(settingCalls.map((call) => call.params), [
       { threadId: first.thread.codexThreadId, model: "gpt-test", effort: "high" },
+      { threadId: first.thread.codexThreadId, model: "gpt-test", effort: "medium" },
       { threadId: first.thread.codexThreadId, serviceTier: "priority" },
     ]);
     assert.equal(rawState.calls.some((call) => call.method === "turn/start"), false);
     assert.equal(rawState.calls.some((call) => call.method === "turn/steer"), false);
     assert.ok(messages.some((message) => message.role === "assistant" && /Model set to gpt-test with high effort/.test(message.text)));
     assert.ok(messages.some((message) => message.role === "assistant" && /Fast mode enabled/.test(message.text)));
+    assert.ok(messages.some((message) => message.role === "assistant" && /Effort set to medium/.test(message.text)));
     const secondMessages = await listThreadMessages(secondThread.id, env);
     assert.ok(secondMessages.some((message) => message.role === "assistant" && /Only a thread owner or Orkestr admin/.test(message.text)));
   } finally {
@@ -6010,7 +6020,7 @@ test("Codex app-server settings commands cannot bypass contained thread policy",
     const started = await startCodexAppServerThread(thread, env);
     const command = await enqueueThreadInput(started.thread.id, {
       senderTrustLevel: "owner",
-      text: "/model gpt-test high",
+      text: "/effort high",
       source: "whatsapp_inbound",
       connector: "whatsapp",
       chatId: "chat-contained-settings",
@@ -6073,6 +6083,35 @@ test("Codex app-server persists external thread settings notifications", async (
     assert.equal(updated.codexReasoningEffort, "low");
     assert.equal(updated.codexServiceTier, null);
     assert.equal(updated.executor.metadata.codexModel, "gpt-small");
+
+    // A notification that began before a new intent must reread under the same
+    // lock. It cannot clear the newer fence, even when its values match.
+    let acquired;
+    let release;
+    const ready = new Promise((resolve) => { acquired = resolve; });
+    const proceed = new Promise((resolve) => { release = resolve; });
+    const mutation = withCodexSettingsLock(thread.id, env, async () => {
+      acquired();
+      await proceed;
+      await updateThread(thread.id, { codexSettingsManaged: true, codexSettingsUncertain: true, codexSettingsPending: { id: "new-operation", codexThreadId: started.thread.codexThreadId, expected: { model: "gpt-small", effort: "low" } } }, env);
+    });
+    await ready;
+    const delayedNotification = client.handleNotification({ method: "thread/settings/updated", params: {
+      threadId: started.thread.codexThreadId,
+      threadSettings: { model: "gpt-small", effort: "low", serviceTier: null },
+    } });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    release();
+    await mutation;
+    await delayedNotification;
+    assert.equal((await getThread(thread.id, env)).codexSettingsPending.id, "new-operation");
+    assert.equal((await getThread(thread.id, env)).codexSettingsUncertain, true);
+    await updateThread(thread.id, { codexModel: "gpt-test", codexReasoningEffort: "high", codexSettingsPending: null, codexSettingsUncertain: null }, env);
+    await client.handleNotification({ method: "thread/settings/updated", params: {
+      threadId: started.thread.codexThreadId,
+      threadSettings: { model: "gpt-small", effort: "low", serviceTier: null },
+    } });
+    assert.equal((await getThread(thread.id, env)).codexModel, "gpt-test");
   } finally {
     stopCodexAppServerClients();
   }

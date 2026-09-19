@@ -8,6 +8,14 @@ export interface HealthResponse {
   generatedAt: string;
 }
 
+export interface CodexModelControls {
+  readOnly: boolean;
+  readOnlyReason: string;
+  model: string | null;
+  effort: string | null;
+  models: Array<{ id: string; isDefault?: boolean; defaultReasoningEffort?: string; supportedReasoningEfforts: Array<string | { reasoningEffort: string }> }>;
+}
+
 export interface VersionResponse {
   name: string;
   version: string;
@@ -3110,6 +3118,14 @@ export class ApiService {
 
   syncThreadWithParent(id: string): Observable<ThreadSyncResponse> {
     return this.http.post<ThreadSyncResponse>(this.api(`/threads/${encodeURIComponent(id)}/sync-parent`), {});
+  }
+
+  getModelSettings(id: string): Observable<CodexModelControls> {
+    return this.http.get<CodexModelControls>(this.api(`/threads/${encodeURIComponent(id)}/model-settings`));
+  }
+
+  setModelSettings(id: string, model: string, effort: string): Observable<{ ok: boolean; model: string; effort: string }> {
+    return this.http.post<{ ok: boolean; model: string; effort: string }>(this.api(`/threads/${encodeURIComponent(id)}/model-settings`), { model, effort });
   }
 
   sendThreadInput(

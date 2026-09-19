@@ -6,7 +6,9 @@ function catalogModels(result = {}) {
     .map((model) => ({
       ...model,
       id: normalizeCodexModel(model.id || model.model),
-      supportedReasoningEfforts: Array.isArray(model.supportedReasoningEfforts) ? model.supportedReasoningEfforts : [],
+      supportedReasoningEfforts: [...new Set((Array.isArray(model.supportedReasoningEfforts) ? model.supportedReasoningEfforts : [])
+        .map((entry) => normalizeReasoningEffort(typeof entry === "string" ? entry : entry?.reasoningEffort)).filter(Boolean))]
+        .map((reasoningEffort) => ({ reasoningEffort })),
       serviceTiers: Array.isArray(model.serviceTiers) ? model.serviceTiers : [],
     }));
 }
@@ -63,6 +65,23 @@ export function resolveCodexThreadSettingsCommand({ command, text = "", thread =
     normalizeReasoningEffort(currentEntry?.defaultReasoningEffort);
   const currentTier = normalizeCodexServiceTier(thread.codexServiceTier || thread.executor?.metadata?.codexServiceTier);
   const tokens = clean(text).split(/\s+/).filter(Boolean);
+
+  if (command === "effort") {
+    if (tokens.length !== 1) return { ok: false, error: "Use /effort <level>. Use /model to list supported efforts." };
+    // A stale explicit model must never silently select the catalog default.
+    const explicitModel = thread.codexModel || thread.executor?.metadata?.codexModel;
+    const selected = explicitModel ? catalogModel(models, explicitModel) : defaultEntry;
+    const effort = normalizeReasoningEffort(tokens[0]);
+    if (!selected) return { ok: false, error: "The current model is unavailable. Use /model to select an available model." };
+    const supported = supportedEfforts(selected);
+    if (!effort || !supported.includes(effort)) return { ok: false, error: `Unsupported effort for ${selected.id}. Available: ${supported.join(", ") || "not reported"}.` };
+    return {
+      ok: true, action: "update",
+      patch: { codexModel: selected.id, codexReasoningEffort: effort },
+      runtimePatch: { model: selected.id, effort },
+      replyText: `Effort set to ${effort} for ${selected.id} in this thread.`,
+    };
+  }
 
   if (command === "model") {
     if (!tokens.length || tokens[0].toLowerCase() === "status") {

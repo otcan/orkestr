@@ -36,6 +36,7 @@ import {
 import { restoreRetiredThread, retireThread } from "../../../../../packages/core/src/thread-retirement.js";
 import { requestPrincipal } from "../../../../../packages/core/src/principal.js";
 import { isAdminPrincipal } from "../../../../../packages/core/src/policy.js";
+import { changeCodexModelControls, readCodexModelControls } from "../../../../../packages/core/src/codex-model-controls.js";
 import { parseThreadInputCommand } from "../../../../../packages/core/src/thread-commands.js";
 import { createUiReplyDeliveryIntent, publicReplyDeliveryIntentMessage } from "../../../../../packages/core/src/reply-delivery-intent.js";
 import { launchNativeTerminal } from "../../../../../packages/core/src/native-terminal.js";
@@ -1184,6 +1185,29 @@ export class ThreadsController {
       };
     }
     return this.input(request, threadId, { ...body, text: String(body.text || "Approved. Proceed."), source: body.source || "approval" });
+  }
+
+  @Get(":threadId/model-settings")
+  async modelSettings(@Req() request: any, @Param("threadId") threadId: string) {
+    const principal = requestPrincipal(request);
+    const thread = await getThreadForPrincipal(threadId, principal);
+    if (!thread) throw httpError("thread_not_found", 404);
+    return readCodexModelControls(thread, principal);
+  }
+
+  @Post(":threadId/model-settings")
+  @HttpCode(200)
+  async updateModelSettings(@Req() request: any, @Param("threadId") threadId: string, @Body() body: Record<string, unknown> = {}) {
+    const principal = requestPrincipal(request);
+    const thread = await getThreadForPrincipal(threadId, principal);
+    if (!thread) throw httpError("thread_not_found", 404);
+    const model = typeof body.model === "string" ? body.model.trim() : "";
+    const effort = typeof body.effort === "string" ? body.effort.trim() : "";
+    if (!model || /\s/.test(model) || !effort || /\s/.test(effort) || model.length > 128 || effort.length > 32) throw httpError("A model and supported effort are required.", 400);
+    await this.assertThreadSanitized("thread.model-settings", principal, thread, { model, effort });
+    const result: any = await changeCodexModelControls(thread, { command: "model", text: `${model} ${effort}`, principal });
+    if (!result.ok) throw httpError(result.error, 400);
+    return { ok: true, model: result.thread.codexModel, effort: result.thread.codexReasoningEffort };
   }
 
   @Post(":threadId/codex-mode")

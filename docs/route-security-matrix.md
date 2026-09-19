@@ -32,6 +32,8 @@ authorization.
 | Threads list and summary | `GET /api/threads`, `GET /api/threads/summary` | Owner-scoped, admin can request all | `threadSummaryPayload` with principal |
 | Thread summary WebSocket | `WS /api/threads/summary/stream` | Same scope as polling summary | WebSocket auth plus `threadSummaryPayload` principal |
 | Thread read/write | messages, input, wake, stop, reset, delete, binding, timers | Current owner or admin | HTTP thread route guard plus scoped core helpers |
+| Thread model catalog | `GET /api/threads/:id/model-settings` | Current owner or admin; raw terminal and tenant-policy threads read-only | Scoped thread lookup and shared model-control owner checks; bounded catalog fetch only on overlay open |
+| Thread model update | `POST /api/threads/:id/model-settings` | Current owner or admin; contained policy fails closed | Scoped lookup, existing thread action sanitizer, live model/effort validation, cross-process thread lock and correlated runtime acknowledgement |
 | Thread raw terminal | `WS /api/threads/:id/stream` | Admin only | WebSocket auth plus raw terminal admin guard |
 | Thread workers and repo sync | workers, repo metadata, parent sync, attach terminal | Admin only | thread controller admin guards |
 | Timers | `GET/POST/DELETE /api/timers`, run, doctor | Owner-scoped | timer principal helpers |

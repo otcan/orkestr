@@ -40,7 +40,7 @@ import {
   turnStartParams,
   userInputText,
 } from "./codex-app-server-common.js";
-import { codexModelCatalog, resolveCodexThreadSettingsCommand } from "./codex-thread-settings.js";
+import { changeCodexModelControls } from "./codex-model-controls.js";
 import { getCodexAppServerClient, stopCodexAppServerClients as stopCodexAppServerRuntimeClients } from "./codex-app-server-client.js";
 import { probeLiveCodexThreadState, readLiveCodexThreadState } from "./codex-app-server-live-state.js";
 import { codexAppServerSocket, codexAppServerTransport } from "../../connectors/src/codex-app-server-transport.js";
@@ -767,72 +767,16 @@ async function completeCodexAppServerModeCommand(thread, message, mode, env = pr
   };
 }
 
-async function listCodexAppServerModels(client) {
-  const data = [];
-  let cursor = null;
-  for (let page = 0; page < 10; page += 1) {
-    const result = await client.request("model/list", { limit: 100, ...(cursor ? { cursor } : {}) });
-    data.push(...codexModelCatalog(result));
-    cursor = clean(result?.nextCursor);
-    if (!cursor) break;
-  }
-  return data;
-}
-
-async function applyCodexAppServerThreadSettings(thread, runtimePatch = {}, persistedPatch = {}, client, env = process.env) {
-  const id = codexThreadId(thread);
-  if (!id) throw new Error("codex_thread_id_required");
-  const request = { threadId: id };
-  if (Object.prototype.hasOwnProperty.call(runtimePatch, "model")) request.model = runtimePatch.model;
-  if (Object.prototype.hasOwnProperty.call(runtimePatch, "effort")) request.effort = runtimePatch.effort;
-  if (Object.prototype.hasOwnProperty.call(runtimePatch, "serviceTier")) request.serviceTier = runtimePatch.serviceTier;
-  await client.request("thread/settings/update", request);
-  const updatedAt = nowIso();
-  const current = await getThread(thread.id, env).catch(() => null) || thread;
-  const updated = await updateThread(thread.id, {
-    ...persistedPatch,
-    codexModelUpdatedAt: updatedAt,
-    executor: {
-      ...(current.executor || {}),
-      metadata: {
-        ...(current.executor?.metadata || {}),
-        ...(Object.prototype.hasOwnProperty.call(persistedPatch, "codexModel") ? { codexModel: persistedPatch.codexModel } : {}),
-        ...(Object.prototype.hasOwnProperty.call(persistedPatch, "codexReasoningEffort") ? { codexReasoningEffort: persistedPatch.codexReasoningEffort } : {}),
-        ...(Object.prototype.hasOwnProperty.call(persistedPatch, "codexServiceTier") ? { codexServiceTier: persistedPatch.codexServiceTier } : {}),
-        codexModelUpdatedAt: updatedAt,
-      },
-    },
-  }, env);
-  await appendEvent({
-    type: "codex_app_server_thread_settings_updated",
-    threadId: thread.id,
-    codexThreadId: id,
-    model: normalizeCodexModel(runtimePatch.model) || null,
-    effort: normalizeReasoningEffort(runtimePatch.effort) || null,
-    serviceTier: normalizeCodexServiceTier(runtimePatch.serviceTier) || null,
-  }, env).catch(() => {});
-  return updated;
-}
-
 async function completeCodexAppServerSettingsCommand(thread, message, parsedCommand, client, env = process.env) {
   let resolved;
   try {
-    if (externalChatInput(message) && clean(message.senderEffectiveRole || message.senderTrustLevel).toLowerCase() !== "owner") {
-      resolved = { ok: false, error: "Only a thread owner or Orkestr admin can change Codex settings." };
-    } else if (threadUsesRestrictedCodexPolicy(thread, env)) {
-      resolved = { ok: false, error: "Codex settings for this contained thread are managed by tenant policy." };
-    } else {
-      const models = await listCodexAppServerModels(client);
-      resolved = resolveCodexThreadSettingsCommand({
-        command: parsedCommand.command,
-        text: parsedCommand.text,
-        thread,
-        models,
-      });
-    }
-    if (resolved.ok && resolved.action === "update") {
-      thread = await applyCodexAppServerThreadSettings(thread, resolved.runtimePatch, resolved.patch, client, env);
-    }
+    resolved = await changeCodexModelControls(thread, {
+      command: parsedCommand.command,
+      text: parsedCommand.text,
+      authorized: !externalChatInput(message) || ["owner", "admin"].includes(clean(message.senderEffectiveRole || message.senderTrustLevel).toLowerCase()),
+      client,
+    }, env);
+    if (resolved.thread) thread = resolved.thread;
   } catch (error) {
     resolved = { ok: false, error: `Could not update Codex thread settings: ${publicError(error)}` };
   }
@@ -2053,6 +1997,12 @@ async function deliverCodexAppServerClaimedPendingInput(thread, next, env = proc
   const approvalStatusState = appServerStateFromStatus(client.threadStates.get(id)?.status || thread.runtime?.codexStatus);
   const pendingApproval = client.pendingRequestForThread(thread, { includePersisted: approvalStatusState === "awaiting_approval" });
   const text = clean(next.text);
+  const parsedCommand = parseThreadInputCommand(next);
+  if (["model", "effort", "fast"].includes(parsedCommand.command)) {
+    const completed = await completeCodexAppServerSettingsCommand(thread, next, parsedCommand, client, env);
+    if (completed?.messageId) delivered.push(completed.messageId);
+    return delivered;
+  }
   if (pendingApproval?.method === "item/tool/requestUserInput") {
     await client.answerPendingRequest(thread, "answer", { text });
     await updateThreadMessage(thread.id, next.id, {
@@ -2085,12 +2035,6 @@ async function deliverCodexAppServerClaimedPendingInput(thread, next, env = proc
       observedVia: "codex_app_server_approval_declined",
     }, env);
     delivered.push(next.id);
-    return delivered;
-  }
-  const parsedCommand = parseThreadInputCommand(next);
-  if (parsedCommand.command === "model" || parsedCommand.command === "fast") {
-    const completed = await completeCodexAppServerSettingsCommand(thread, next, parsedCommand, client, env);
-    if (completed?.messageId) delivered.push(completed.messageId);
     return delivered;
   }
   if (parsedCommand.command === "plan" || parsedCommand.command === "code") {

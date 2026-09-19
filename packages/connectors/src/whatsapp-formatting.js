@@ -1,4 +1,5 @@
 import os from "node:os";
+import { capacityResetLabel } from "./whatsapp-capacity-reset.js";
 import { threadRequiresTenantIsolation } from "../../core/src/tenant-policy.js";
 import { codexAssistantSource, threadSuppressesWhatsAppDebugFooter } from "./whatsapp-mirror-policy.js";
 
@@ -306,6 +307,7 @@ export function whatsappDebugFooter({ message = {}, thread = {}, messages = [], 
   const queueNotice = String(deliveryType || "").trim() === "queue_notice";
   const fiveHourRemaining = codexRateLimitsDebugValue(thread, "fiveHour");
   const weeklyRemaining = codexRateLimitsDebugValue(thread, "weekly");
+  const weeklyReset = capacityResetLabel(codexRateLimitRecordForPeriod(thread, "weekly")?.resets_at, thread.whatsAppDebugOwnerTimezone);
   const parts = [
     `m:${codexModelDebugLabel(message, thread, env)}`,
     ...(codexFastDebugValue(message, thread) ? ["fast:on"] : []),
@@ -314,6 +316,7 @@ export function whatsappDebugFooter({ message = {}, thread = {}, messages = [], 
     `msg:${footerMessageType(deliveryType)}`,
     ...(fiveHourRemaining ? [`5h:${fiveHourRemaining}`] : []),
     ...(weeklyRemaining ? [`wk:${weeklyRemaining}`] : []),
+    ...(weeklyReset ? [`reset:${weeklyReset}`] : []),
     ...(queueNotice
       ? [`queue:${queueNoticeDebugCount(messages, message)}`, `reason:${queueNoticeDebugReason(message)}`]
       : [`q:${queueDebugCount(messages, message)}`]),

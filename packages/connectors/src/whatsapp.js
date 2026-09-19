@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
+import { withWhatsAppOwnerTimezone } from "./whatsapp-capacity-reset.js";
 import path from "node:path";
 import { enqueueAgentMessage, updateAgentMessage } from "../../core/src/messages.js";
 import { resourceOwnerUserId } from "../../core/src/policy.js";
@@ -6187,7 +6188,9 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
     let debugThreadPromise = null;
     const debugThread = () => {
       debugThreadPromise ||= kind === "thread"
-        ? threadWithLiveCodexDebugMetadata(thread, env)
+        ? threadWithLiveCodexDebugMetadata(thread, env).then((value) =>
+          [env.ORKESTR_WHATSAPP_DEBUG_FOOTER, env.WA_DEBUG_FOOTER, env.WA_APPEND_DEBUG_FOOTER].some((flag) => /^(1|true|on|yes)$/i.test(String(flag || "").trim()))
+            ? withWhatsAppOwnerTimezone(value, env) : value)
         : Promise.resolve(thread);
       return debugThreadPromise;
     };
