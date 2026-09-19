@@ -5,8 +5,38 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { promisify } from "node:util";
+import { isolatedSmokeBaseEnvironment } from "../scripts/smoke-environment.mjs";
 
 const execFileAsync = promisify(execFile);
+
+test("smoke environment isolates production routing, storage and connector settings", () => {
+  const env = {
+    PATH: "/usr/bin", LANG: "C.UTF-8",
+    ORKESTR_CANONICAL_APP_GATEWAY: "1", ORKESTR_HOST_BOUNDARIES: "1",
+    ORKESTR_THREAD_STORE: "sqlite", ORKESTR_THREAD_MESSAGES_DB: "/production/messages.db",
+    ORKESTR_CONNECTOR_OUTBOX_DB: "/production/outbox.db", ORKESTR_ENV_FILE: "/production/env",
+    ORKESTR_RECOVER_RUNNING_ON_START: "1", WHATSAPP_BRIDGE_URL: "https://production.invalid",
+    WA_HTTP_TOKEN: "sentinel", GMAIL_TOKEN: "sentinel", GOOGLE_TOKEN: "sentinel",
+    OUTLOOK_TOKEN: "sentinel", KEYCLOAK_CLIENT_SECRET: "sentinel",
+  };
+  assert.deepEqual(isolatedSmokeBaseEnvironment(env), { PATH: "/usr/bin", LANG: "C.UTF-8" });
+  assert.equal(env.ORKESTR_CANONICAL_APP_GATEWAY, "1", "does not mutate deploy environment");
+});
+
+test("deploy EXIT cleanup preserves failures and cleans only failed staging", async () => {
+  const script = await fs.readFile("scripts/deploy-git-release.sh", "utf8");
+  const cleanup = script.match(/^cleanup_deploy_on_exit\(\) \{[\s\S]*?^\}/m)?.[0];
+  assert.ok(cleanup);
+  for (const code of [0, 1, 75]) {
+    const command = `${cleanup}\ncleanup_deploy_drain_on_exit() { echo drain; }\ncleanup_incomplete_release() { echo staging; }\nstaging_release_dir=fixture\ntrap cleanup_deploy_on_exit EXIT\nexit ${code}`;
+    let result;
+    try { result = { ...(await execFileAsync("bash", ["-c", command])), code: 0 }; }
+    catch (error) { result = error; }
+    assert.equal(result.code, code);
+    assert.match(result.stdout, /drain/);
+    assert.equal(result.stdout.includes("staging"), code !== 0);
+  }
+});
 
 async function firstExisting(paths) {
   for (const candidate of paths) {

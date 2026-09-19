@@ -1028,8 +1028,7 @@ cleanup_deploy_drain_on_exit() {
 }
 
 cleanup_deploy_on_exit() {
-  local status
-  status=$?
+  local status=$?
   cleanup_deploy_drain_on_exit || true
   if [ "$status" -ne 0 ] && [ -n "${staging_release_dir:-}" ]; then
     echo "Cleaning failed release staging directory: $staging_release_dir" >&2

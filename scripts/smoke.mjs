@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { isolatedSmokeBaseEnvironment } from "./smoke-environment.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -35,7 +36,7 @@ function start(home, port) {
   const child = spawn(process.execPath, ["apps/server/src/server.js"], {
     cwd: repoRoot,
     env: {
-      ...process.env,
+      ...isolatedSmokeBaseEnvironment(process.env),
       ORKESTR_HOME: home,
       PORT: String(port),
       ORKESTR_PORT: String(port),
