@@ -9,4 +9,4 @@ small { opacity:.7; }
 .breadcrumb { overflow-wrap:anywhere; }
 nav button[aria-current="true"] { outline:2px solid currentColor; outline-offset:-2px; }
 pre { white-space:pre-wrap; overflow-wrap:anywhere; tab-size:2; font-size:14px; line-height:1.5; }
-@media(max-width:860px) { .attachment-panel { inset:0; width:100%; max-width:100%; height:100dvh; resize:none; padding:max(12px, env(safe-area-inset-top)) 12px max(12px, env(safe-area-inset-bottom)); } }
+@media(max-width:860px) { .attachment-panel { inset:0; width:100%; min-width:0; max-width:100%; height:100dvh; resize:none; overscroll-behavior:contain; padding:max(12px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) max(12px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left)); } }

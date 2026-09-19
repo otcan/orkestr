@@ -565,7 +565,11 @@ test("WhatsApp receives validated plaintext sources while WebUI attachments rema
   assert.equal(result.delivered.some((delivery) => delivery.messageId === reply.id), true);
   assert.equal(calls.length, 1);
   assert.equal(calls[0].url.pathname, "/send-media");
-  assert.deepEqual(calls[0].body.paths, sourcePaths);
+  assert.deepEqual(calls[0].body.paths, reply.attachments.map(attachment => attachment.deliverySource.path));
+  assert.equal(calls[0].body.paths.every(filePath => filePath.includes("/artifacts/")), true);
+  for (let index = 0; index < sourcePaths.length; index += 1) {
+    assert.deepEqual(await fs.readFile(calls[0].body.paths[index]), await fs.readFile(sourcePaths[index]));
+  }
   assert.equal("attachments" in calls[0].body, false);
   assert.doesNotMatch(calls[0].body.text, /protected attachment/);
   assert.equal(JSON.stringify(calls[0].body).includes(".age"), false);

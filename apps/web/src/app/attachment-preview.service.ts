@@ -25,7 +25,9 @@ export class AttachmentPreviewService {
   close(): void {
     this.generation++; this.abort?.abort(); this.worker?.terminate(); this.worker = null;
     if (this.timer) clearTimeout(this.timer);
-    this.state.set(empty()); this.previousFocus?.focus();
+    this.state.set(empty());
+    if (this.previousFocus?.isConnected) this.previousFocus.focus();
+    this.previousFocus = null; this.abort = null; this.timer = null;
     this.retryAction = null; this.downloadAction = null;
   }
   async openAttachment(attachment: Record<string, unknown>): Promise<void> {
@@ -70,7 +72,8 @@ export class AttachmentPreviewService {
     catch { if (generation === this.generation) this.state.update(state => ({ ...state, error: "Download unavailable. Retry from the attachment in the conversation." })); }
   }
   private async open(title: string, read: (signal: AbortSignal) => Promise<{filename: string; bytes: Uint8Array}>): Promise<void> {
-    this.close(); this.previousFocus = document.activeElement as HTMLElement;
+    const trigger = document.activeElement as HTMLElement;
+    this.close(); this.previousFocus = trigger;
     const generation = this.generation;
     const abort = new AbortController(); this.abort = abort;
     this.state.set({ ...empty(), open: true, busy: true, title, rootTitle: title });

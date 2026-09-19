@@ -1,5 +1,11 @@
 # Draft attachments and inline previews
 
+On coarse-pointer devices, Return inserts a newline; use Send or Ctrl/Cmd+Enter
+to submit. IME composition never submits, and Return in the pasted attachment
+filename does not submit the outer form. Preview layout follows viewport resize,
+includes all safe-area insets and returns focus to the latest connected trigger.
+Automated keyboard/focus checks do not replace physical iOS/Android qualification.
+
 File selection or drop starts browser age encryption immediately. The single-file
 upload pump bounds memory/CPU on mobile; it never falls back to plaintext multipart.
 Pasted text uses the same pipeline, with a filename and a 1 MiB text-editor limit.

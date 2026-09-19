@@ -3,14 +3,14 @@
 Orkestr can require every generated or published attachment to be encrypted to
 one or more verified `age` recipients. The WebUI fetches only the ciphertext,
 decrypts it locally, verifies the embedded plaintext checksum, and saves the
-original file. This protects the stored and downloaded artifact from storage
-operators, proxies, and corporate scanners that do not hold a recipient private
-key.
+original file. The published download is ciphertext, but this is not secrecy
+from the trusted Orkestr server: generated source files and routed connector
+snapshots can remain plaintext on that server.
 
 This boundary applies to outbound published attachments and exports. It does
 not encrypt chat text, database rows, secrets, worktrees, repositories, or
-mounted source files. Browser-encrypted inbound uploads use a separate,
-scanner-gated tenant-key capability documented in
+mounted source files. Browser-encrypted inbound uploads use the separate
+transport and optional isolated-worker capabilities documented in
 [inbound attachment uploads](inbound-attachment-uploads.md). Whole-platform
 encryption is a separate transport, database, and secret-management concern.
 
@@ -48,24 +48,27 @@ When the policy is enabled, Orkestr:
    the encrypted payload;
 3. encrypts that payload in the interoperable age file format;
 4. validates the complete ciphertext write and checksum;
-5. commits only an opaque `.age` attachment name and the ciphertext metadata
-   allowlist to the message;
+5. publishes only an opaque `.age` attachment name and the ciphertext metadata
+   allowlist in the WebUI attachment response;
 6. exposes only that ciphertext through the authenticated WebUI download API.
 
 The allowlist is limited to the opaque attachment ID/name, ciphertext size and
 checksum, format/algorithm version, policy revision, verified recipient IDs and
-fingerprints, retention state, and timestamps. Original metadata remains
-encrypted. Outbound attachment backups therefore contain ciphertext plus only
-this plaintext metadata allowlist; filesystem locations are derived at runtime
-and are not persisted in message records.
+fingerprints, retention state, and timestamps. Original metadata is encrypted
+in the browser download. Internal message records may also retain a private
+`deliverySource` for authorized WhatsApp delivery; this is removed from the
+public encrypted attachment response. Server backups must therefore be treated
+as sensitive and must not be assumed to contain ciphertext only.
 
 There is no plaintext fallback. If a required verified recipient is missing,
 the source cannot be read, the ciphertext write is incomplete, or validation
 fails, publication stops with a visible error.
 
-Protected attachments are WebUI-only. WhatsApp receives the text reply plus a
-notice that the protected file is available in Orkestr; it receives neither the
-plaintext source nor the `.age` file.
+Authorized WhatsApp routes receive the validated original file, not the `.age`
+download. When that source is unavailable, legacy publications can produce a
+WebUI-only notice. New routed snapshots instead retain a delivery obligation:
+missing or changed snapshot bytes fail the outbound job as retryable, before
+any text-only send. See [outbound attachment snapshots](outbound-attachment-snapshots.md).
 
 ## Rotation and historical files
 

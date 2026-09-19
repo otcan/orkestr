@@ -81,7 +81,7 @@
   </div>
   @if (pasteOpen) {
     <section class="paste-attachment" aria-label="Named text attachment">
-      <label>Name / filename <input name="paste-name" [(ngModel)]="pasteName" maxlength="240" /></label>
+      <label>Name / filename <input name="paste-name" [(ngModel)]="pasteName" maxlength="240" (keydown.enter)="$event.preventDefault()" /></label>
       <label>Content <textarea name="paste-content" [(ngModel)]="pasteText" rows="8" placeholder="Paste text or code here" spellcheck="false"></textarea></label>
       @if (pasteError) { <p role="alert">{{ pasteError }}</p> }
       <button type="button" (click)="addPaste()" [disabled]="sending || sendingNow || pendingFiles.length >= 20">Add attachment</button>

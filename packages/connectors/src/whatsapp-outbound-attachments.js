@@ -4,11 +4,23 @@ import { materializeRemoteWhatsAppAttachments } from "./whatsapp-remote-artifact
 import { prepareWhatsAppTableAttachments } from "./whatsapp-table-attachments.js";
 import { appendWebUiEncryptedAttachmentNotice, webUiEncryptedAttachmentDelivery } from "./whatsapp-webui-encrypted-attachments.js";
 import { formatWhatsAppOutboundText } from "./whatsapp-formatting.js";
+import { updateThreadMessage } from "../../core/src/threads.js";
+import { recoverRoutedReplyAttachments } from "../../core/src/outbound-attachment-staging.js";
+import { snapshotCoversPath } from "../../core/src/outbound-attachment-snapshots.js";
 
 const pickString = (...values) => values.map(value => String(value || "").trim()).find(Boolean) || "";
 
 // Both progress and final replies must use the same ownership and publication checks.
 export async function prepareWhatsAppOutboundAttachments({ thread, message, principal, env, fetchImpl }) {
+  if (message.outboundAttachmentStaging?.state === "failed_retryable") {
+    const recovered = await recoverRoutedReplyAttachments(thread, message, env).catch(() => null);
+    if (recovered?.staging?.state === "ready") {
+      const repaired = await updateThreadMessage(thread.id, message.id, {
+        attachments: recovered.attachments, outboundAttachmentStaging: recovered.staging,
+      }, env);
+      Object.assign(message, repaired);
+    }
+  }
   const prepared = await prepareWhatsAppTableAttachments(pickString(message.text), { env, messageId: message.id });
   const sourceMessageAttachments = hydrateEncryptedPublishedAttachmentPaths(
     thread, Array.isArray(message.attachments) ? message.attachments : [], env);
@@ -24,7 +36,9 @@ export async function prepareWhatsAppOutboundAttachments({ thread, message, prin
   });
   const protectedDelivery = await webUiEncryptedAttachmentDelivery(resolved.attachments, { thread, env });
   const body = appendWebUiEncryptedAttachmentNotice(
-    appendLocalAttachmentFailureNotes(prepared.text, resolved.skipped), protectedDelivery.unavailableCount);
+    appendLocalAttachmentFailureNotes(prepared.text, resolved.skipped.filter(
+      item => !snapshotCoversPath(protectedDelivery.attachments, item.path),
+    )), protectedDelivery.unavailableCount);
   const formatted = formatWhatsAppOutboundText(redactDeniedThreadAttachmentPaths(body, { thread, principal, env }));
   return {
     text: appendRemoteAttachmentFailureNotes(formatted, remote.skipped),
@@ -79,4 +93,3 @@ export function appendLocalAttachmentFailureNotes(text = "", skipped = []) {
     ...failures.map((line) => `- ${line}`),
   ].filter((line, index) => index !== 0 || line).join("\n");
 }
-

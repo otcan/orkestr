@@ -85,6 +85,7 @@ function encryptedAttachmentMetadata({ id, filename, ciphertext, recipients, pol
 function encryptedAttachmentDeliverySource(attachment = {}, sourcePath = "", source = {}) {
   const filename = clean(attachment.filename || attachment.name) || path.basename(sourcePath) || "attachment";
   return {
+    ...(attachment.outboundSnapshot ? { outboundSnapshot: attachment.outboundSnapshot } : {}),
     id: clean(attachment.id),
     path: sourcePath,
     filename,
@@ -185,6 +186,7 @@ export async function validateEncryptedWhatsAppDeliverySource(attachment = {}, {
       size: stat.size,
       checksum: digest.checksum,
       source: "orkestr_encrypted_whatsapp_source",
+      ...(source.outboundSnapshot ? { outboundSnapshot: source.outboundSnapshot } : {}),
       downloadable: false,
     },
   };
