@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { createOrkestrWaService, waServiceRoutingPolicy } from "../scripts/orkestr-wa-service.mjs";
-import { whatsappWorkerConversation } from "../packages/connectors/src/whatsapp-worker-client.js";
+import { whatsappWorkerConversation, whatsappWorkerSend } from "../packages/connectors/src/whatsapp-worker-client.js";
 import {
   checkWaServiceReadiness,
   evaluateWaServiceReadiness,
@@ -48,6 +48,19 @@ function mockBridge(overrides = {}) {
     ...overrides,
   };
 }
+
+test("service and worker RPC preserve safe partial evidence without raw provider details", async () => {
+  const home = await testHome("orkestr-wa-partial-rpc-");
+  const partialDelivery = { sent:[{id:"ack-1",kind:"text",path:"private-path"}], attachments:[{index:0,outcome:"uncertain"}],
+    stage:"send_media",failureCode:"provider_evaluation_failed",failedKind:"attachment",cause:"private-token" };
+  await withWaService({ORKESTR_HOME:home,ORKESTR_WA_SERVICE_AUTH_DISABLED:"1"},async({bridgeUrl})=>{
+    await assert.rejects(whatsappWorkerSend({accountId:"responder",conversationId:"fixture@c.us",text:"fixture"},{ORKESTR_WA_WORKER_URL:bridgeUrl}), error=>{
+      assert.equal(error.message,"whatsapp_partial_delivery"); assert.equal(error.retryable,false);
+      assert.equal(error.partialDelivery.stage,"send_media"); assert.equal(error.partialDelivery.attachments[0].outcome,"uncertain");
+      assert.equal(JSON.stringify(error.partialDelivery).includes("private"),false); return true;
+    });
+  },mockBridge({sendLocalWhatsAppMessage:async()=>{throw Object.assign(Error("whatsapp_partial_delivery"),{statusCode:409,partialDelivery});}}));
+});
 
 test("standalone WA service exposes sanitized health for configured accounts", async () => {
   const home = await testHome("orkestr-wa-service-health-");

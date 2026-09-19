@@ -1153,7 +1153,7 @@ export async function applyConnectorOutboxJobAction(jobIdOrKey = "", action = ""
     error.statusCode = 404;
     throw error;
   }
-  if (clean(current.state).toLowerCase() === "partial_delivery" && ["retry", "replay"].includes(normalized)) {
+  if ((clean(current.state).toLowerCase() === "partial_delivery" || current.metadata?.partialDelivery || current.brokerAck?.partialDelivery || clean(current.error) === "whatsapp_partial_delivery") && ["retry", "replay"].includes(normalized)) {
     const error = new Error("connector_outbox_partial_delivery_retry_requires_new_send");
     error.statusCode = 409;
     throw error;

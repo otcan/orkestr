@@ -5,5 +5,7 @@ export function attachmentFeaturePolicy(env = process.env) {
     pastedAttachments: enabled("ORKESTR_PASTED_ATTACHMENTS_ENABLED"),
     textPreview: enabled("ORKESTR_TEXT_PREVIEW_ENABLED"),
     archivePreview: enabled("ORKESTR_ARCHIVE_PREVIEW_ENABLED"),
+    pdfPreview: enabled("ORKESTR_PDF_PREVIEW_ENABLED"),
+    imagePreview: enabled("ORKESTR_IMAGE_PREVIEW_ENABLED"),
   };
 }

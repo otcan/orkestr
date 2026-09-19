@@ -89,6 +89,14 @@ test("connector outbox refuses to retry a partial external delivery", async () =
   assert.equal(connectorOutboxTerminalState(jobs.jobs[0].state), true);
 });
 
+test("legacy dead letters with partial delivery evidence cannot be replayed wholesale", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-legacy-partial-"));
+  const runtimeEnv = env(home);
+  const created = await ensureConnectorOutboxJob(whatsappJob({tenantId:"tenant-a"}),runtimeEnv);
+  await markConnectorOutboxJob(created.job.id,{state:"dead_letter",error:"whatsapp_partial_delivery"},runtimeEnv);
+  for (const action of ["retry","replay"]) await assert.rejects(applyConnectorOutboxJobAction(created.job.id,action,{},runtimeEnv),/partial_delivery_retry_requires_new_send/);
+});
+
 test("connector outbox requires an explicit duplicate-risk override for uncertain delivery replay", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-connector-outbox-uncertain-"));
   const runtimeEnv = env(home);

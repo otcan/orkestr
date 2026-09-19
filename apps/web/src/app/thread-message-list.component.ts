@@ -83,6 +83,7 @@ export class ThreadMessageListComponent {
   messageDeliveryStateLabel(message: ThreadMessage): string {
     const state = String(message.deliveryState || message.state || "").trim();
     if (state === "failed") return "Delivery failed";
+    if (state === "partial_delivery") return "WhatsApp delivery incomplete — attachments need review; do not resend the whole message";
     return state.replace(/_/g, " ");
   }
 

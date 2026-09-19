@@ -38,6 +38,25 @@ function env(home, extra = {}) {
   };
 }
 
+test("mirror durably retains partial attachment results and never repeats the text", async () => {
+  const home=await fs.mkdtemp(path.join(os.tmpdir(),"orkestr-partial-mirror-")), runtimeEnv=env(home);
+  await writeConnectorConfig("whatsapp",{bridgeMode:"external",bridgeUrl:"http://wa.local"},runtimeEnv);
+  await createThread({id:"partial-thread",ownerUserId:"tenant-a",name:"Fixture",binding:{connector:"whatsapp",chatId:"shared-chat",responderAccountId:"responder",outboundAccountId:"responder",mirrorToWhatsApp:true}},runtimeEnv);
+  const parent=await appendThreadMessage("partial-thread",{role:"user",source:"whatsapp_inbound",state:"completed",connector:"whatsapp",chatId:"shared-chat",accountId:"responder",text:"fixture"},runtimeEnv);
+  const reply=await appendThreadMessage("partial-thread",{role:"assistant",source:"codex-app-server",phase:"final_answer",state:"completed",parentMessageId:parent.id,chatId:"shared-chat",accountId:"responder",text:"fixture answer"},runtimeEnv);
+  let sends=0;
+  const transport=async url=>{
+    if(url.pathname==="/health")return response({ok:true,ready:true,accounts:[{id:"responder",ready:true}]});
+    sends++; return response({ok:false,error:"whatsapp_partial_delivery",partialDelivery:{sent:[{id:"ack-text",kind:"text"}],attachments:[{index:0,outcome:"uncertain"},{index:1,outcome:"not_attempted"}],failedKind:"attachment",failureCode:"provider_evaluation_failed",stage:"send_media"}},false,409);
+  };
+  await deliverWhatsAppReplies(runtimeEnv,transport);
+  const job=(await readConnectorOutbox(runtimeEnv)).jobs.find(x=>x.sourceMessageId===reply.id);
+  assert.equal(job.state,"partial_delivery"); assert.equal(job.metadata.retrySuppressed,true);
+  assert.equal(job.brokerAck.partialDelivery.sent[0].id,"ack-text");
+  await deliverWhatsAppReplies(runtimeEnv,transport); assert.equal(sends,1);
+  await assert.rejects(applyConnectorOutboxJobAction(job.id,"retry",{},runtimeEnv),/partial_delivery_retry_requires_new_send/);
+});
+
 test("whatsapp delivery terminalizes a tenant-scoped connector outbox job", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-connector-outbox-"));
   const runtimeEnv = env(home);

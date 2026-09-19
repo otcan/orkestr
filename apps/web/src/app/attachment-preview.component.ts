@@ -1,22 +1,29 @@
 import { AfterViewChecked, Component, ElementRef, HostListener, ViewChild, inject } from "@angular/core";
 import { AttachmentPreviewService } from "./attachment-preview.service";
+import { AttachmentVisualPreviewComponent } from "./attachment-visual-preview.component";
 
 @Component({
   selector: "ork-attachment-preview",
+  imports: [AttachmentVisualPreviewComponent],
   template: `@if (preview.state(); as state) { @if (state.open) {
     <aside #panel class="attachment-panel" [attr.role]="mobile ? 'dialog' : 'complementary'" [attr.aria-modal]="mobile ? 'true' : null" aria-labelledby="attachment-preview-title" tabindex="-1">
-      <header><h2 id="attachment-preview-title">{{ state.title }}</h2><button type="button" (click)="preview.close()" aria-label="Close attachment preview">Back / Close</button></header>
+      <header><h2 id="attachment-preview-title">Previewing: {{ state.title }}</h2><button type="button" (click)="preview.close()" aria-label="Close attachment preview">Back / Close</button></header>
+      @if (state.archive && state.title !== state.rootTitle) { <p class="breadcrumb">{{ state.rootTitle }} › {{ state.title }}</p> }
+      <p>{{ state.typeLabel }} · {{ state.size }} bytes</p>
+      <div class="actions"><button type="button" (click)="preview.download()">{{ state.archive ? 'Download archive' : 'Download file' }}</button><button type="button" (click)="preview.retry()" [disabled]="state.busy">Reload preview</button></div>
       <p aria-live="polite">{{ state.busy ? 'Loading preview…' : '' }}</p>
       @if (state.error) { <p role="alert">{{ state.error }}</p> }
       @if (state.archive) {
         <nav aria-label="Archive contents">
           @for (entry of state.entries; track entry.id) {
-            <button type="button" [disabled]="entry.directory || state.busy" (click)="preview.entry(entry)">{{ entry.name }} <small>{{ entry.size }} bytes</small></button>
+            <button type="button" [attr.aria-current]="state.title === entry.name ? 'true' : null" [disabled]="entry.directory || state.busy" (click)="preview.entry(entry)">{{ entry.name }} <small>{{ entry.size }} bytes</small></button>
           }
         </nav>
       }
       @if (state.truncated) { <p>Showing the first 256 KB. Download for the full content.</p> }
-      <pre tabindex="0"><code>{{ state.text }}</code></pre>
+      @if (state.bytes && (state.kind === 'pdf' || state.kind === 'image')) {
+        <ork-attachment-visual-preview [bytes]="state.bytes" [kind]="state.kind" [mediaType]="state.mediaType" />
+      } @else if (state.kind === 'text') { <pre tabindex="0"><code>{{ state.text }}</code></pre> }
     </aside>
   } }`,
   styleUrl: "./attachment-panel.css",

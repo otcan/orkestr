@@ -20,6 +20,7 @@ const runtimeControlOutcomes = new Set([
   "detected",
   "failed",
   "pending",
+  "partial_delivery",
   "prevented",
   "resumed",
   "retryable",

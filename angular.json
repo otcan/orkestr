@@ -15,6 +15,10 @@
             "index": "apps/web/src/index.html",
             "outputPath": "dist/web",
             "assets": [
+                { "glob": "pdf.worker.min.mjs", "input": "node_modules/pdfjs-dist/legacy/build", "output": "/pdfjs/" },
+              { "glob": "**/*", "input": "node_modules/pdfjs-dist/cmaps", "output": "/pdfjs/cmaps/" },
+              { "glob": "**/*", "input": "node_modules/pdfjs-dist/standard_fonts", "output": "/pdfjs/standard_fonts/" },
+                { "glob": "**/*", "ignore": ["quickjs*"], "input": "node_modules/pdfjs-dist/wasm", "output": "/pdfjs/wasm/" },
               {
                 "glob": "**/*",
                 "input": "apps/web/public",

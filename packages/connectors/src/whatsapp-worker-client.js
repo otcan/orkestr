@@ -1,5 +1,6 @@
 import http from "node:http";
 import https from "node:https";
+import { publicWhatsAppPartialDelivery } from "./whatsapp-delivery-evidence.js";
 
 function clean(value = "") {
   return String(value || "").trim();
@@ -94,7 +95,7 @@ export function requestWhatsAppWorker(pathname = "/health", { method = "GET", bo
             ? 503
             : res.statusCode || 502;
           error.payload = payload;
-          error.partialDelivery = payload?.partialDelivery || null;
+          error.partialDelivery = publicWhatsAppPartialDelivery(payload?.partialDelivery);
           if (error.partialDelivery) error.retryable = false;
           finish(reject, error);
           return;

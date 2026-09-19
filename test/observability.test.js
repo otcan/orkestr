@@ -44,11 +44,13 @@ test("observability route templates scrub dynamic IDs", () => {
 test("runtime control metrics keep phase and outcomes low-cardinality", () => {
   resetObservabilityForTests();
   recordRuntimeControlMetric({ signal: "false_recovery", outcome: "avoided" });
+  recordRuntimeControlMetric({ signal: "transport_send", outcome: "partial_delivery" });
   recordRuntimeControlMetric({ signal: "unresolved_steering_input", outcome: "retryable" });
   recordRuntimeControlMetric({ signal: "stop_latency", outcome: "completed", phase: "mcp", durationMs: 240 });
   recordRuntimeControlMetric({ signal: "stop_latency", outcome: "completed", phase: "private-phase-name", durationMs: 10 });
 
   const metrics = renderOpenMetrics();
+  assert.match(metrics, /orkestr_runtime_control_events_total\{signal="transport_send",outcome="partial_delivery"\} 1/);
   assert.match(metrics, /orkestr_runtime_control_events_total\{signal="false_recovery",outcome="avoided"\} 1/);
   assert.match(metrics, /orkestr_runtime_control_events_total\{signal="unresolved_steering_input",outcome="retryable"\} 1/);
   assert.match(metrics, /orkestr_runtime_stop_latency_seconds_count\{phase="mcp",result="completed"\} 1/);

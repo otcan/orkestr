@@ -1,5 +1,6 @@
 // No DOM, eval, network, filesystem extraction, or nested archive expansion.
 // The caller terminates this worker after five seconds and on viewer close.
+import { previewType } from "./attachment-preview-types.js";
 const INPUT_LIMIT = 25 * 1024 * 1024;
 const EXPANDED_LIMIT = 32 * 1024 * 1024;
 const ENTRY_LIMIT = 2 * 1024 * 1024;
@@ -33,7 +34,7 @@ export async function inflateBounded(bytes, format, maximum) {
 }
 function textPreview(bytes) {
   const prefix = bytes.subarray(0, TEXT_LIMIT);
-  if (prefix.includes(0)) reject("Binary content cannot be previewed as text.");
+  if (prefix.some(byte => byte < 32 && ![9, 10, 13].includes(byte))) reject("Binary content cannot be previewed as text. Download it instead.");
   // Streaming decode avoids mistaking a truncation in a UTF-8 sequence for a
   // corrupt file. The text is always interpolated, never interpreted as HTML.
   return { text: new TextDecoder("utf-8", { fatal: true }).decode(prefix, { stream: bytes.length > TEXT_LIMIT }), truncated: bytes.length > TEXT_LIMIT };
@@ -48,22 +49,36 @@ function numberOctal(bytes) {
 
 export class AttachmentPreview {
   bytes = new Uint8Array(); entries = []; kind = "text";
-  async open(bytes, filename, features = {textPreview:true, archivePreview:true}) {
+  features = {};
+  render(bytes, filename) {
+    const type = previewType(bytes);
+    const base = { ...type, filename, size: bytes.length, text: "", truncated: false };
+    if (type.kind === "pdf" || type.kind === "image") {
+      if (this.features[`${type.kind}Preview`] === false) reject("This preview type is disabled. Download the file instead.");
+      return { ...base, bytes: bytes.slice() };
+    }
+    if (type.kind === "archive") reject("Nested archives are download-only.");
+    if (this.features.textPreview === false) reject("Text previews are disabled. Download the file instead.");
+    return { ...base, ...textPreview(bytes) };
+  }
+  async open(bytes, filename, features = {textPreview:true, archivePreview:true, pdfPreview:true, imagePreview:true}) {
     if (!(bytes instanceof Uint8Array) || bytes.length > INPUT_LIMIT) reject("Preview input exceeds 25 MB.");
-    this.bytes = bytes; this.entries = []; this.kind = "text";
+    this.bytes = bytes; this.entries = []; this.kind = "text"; this.features = features;
     const name = String(filename).toLowerCase();
-    const compressed = (bytes[0] === 0x1f && bytes[1] === 0x8b) || (bytes[0] === 0x50 && bytes[1] === 0x4b) || /\.(tar|zip|gz|tgz|rar|7z)$/.test(name);
+    const detected = previewType(bytes);
+    if (["pdf", "image"].includes(detected.kind)) return { archive: false, entries: [], ...this.render(bytes, filename) };
+    const compressed = detected.kind === "archive" || /\.(tar|zip|gz|tgz|rar|7z)$/.test(name);
     if (compressed ? !features.archivePreview : !features.textPreview) reject("This preview type is disabled. Download the file instead.");
     if (bytes[0] === 0x1f && bytes[1] === 0x8b) {
       this.bytes = await inflateBounded(bytes, "gzip", Math.min(EXPANDED_LIMIT, Math.max(ENTRY_LIMIT, bytes.length * 100)));
-      if (!/\.(tar\.gz|tgz)$/.test(name)) return { archive: false, ...textPreview(this.bytes), entries: [] };
+      if (previewType(this.bytes).mediaType !== "application/x-tar" && !/\.(tar\.gz|tgz)$/.test(name)) return { archive: false, entries: [], ...this.render(this.bytes, String(filename).replace(/\.gz$/i, "")) };
       this.kind = "tar";
     } else if (bytes[0] === 0x50 && bytes[1] === 0x4b) this.kind = "zip";
-    else if (/\.tar$/.test(name)) this.kind = "tar";
+    else if (detected.mediaType === "application/x-tar" || /\.tar$/.test(name)) this.kind = "tar";
     else if (/\.(zip|gz|tgz|rar|7z|bz2|xz)$/.test(name)) reject();
-    if (this.kind === "text") return { archive: false, ...textPreview(bytes), entries: [] };
+    if (this.kind === "text") return { archive: false, entries: [], ...this.render(bytes, filename) };
     if (this.kind === "zip") this.zip(); else this.tar();
-    return { archive: true, text: "", truncated: false, entries: this.entries.map(({id, name, size, directory}) => ({id, name, size, directory})) };
+    return { archive: true, kind: "archive", typeLabel: `${this.kind.toUpperCase()} archive`, filename, size: bytes.length, text: "", truncated: false, entries: this.entries.map(({id, name, size, directory}) => ({id, name, size, directory})) };
   }
   add(entry) {
     if (this.entries.length >= COUNT_LIMIT || this.entries.some(item => item.name === entry.name)) reject();
@@ -129,7 +144,7 @@ export class AttachmentPreview {
       if (bytes.length !== entry.size || crc32(bytes) !== entry.checksum) reject("Archive integrity check failed.");
     }
     if (/\.(zip|tar|gz|tgz|rar|7z)$/i.test(entry.name)) reject("Nested archives are download-only.");
-    return textPreview(bytes);
+    return this.render(bytes, entry.name);
   }
 }
 
@@ -138,7 +153,7 @@ if (typeof self !== "undefined" && typeof self.postMessage === "function") {
   self.onmessage = async event => {
     try {
       const result = event.data.bytes ? await preview.open(event.data.bytes, event.data.filename, event.data.features) : await preview.entry(event.data.entryId);
-      self.postMessage({ ...result, error: "" });
+      self.postMessage({ ...result, error: "" }, result.bytes ? [result.bytes.buffer] : []);
     } catch (error) { self.postMessage({ error: error instanceof Error ? error.message : "Preview failed.", text: "" }); }
   };
 }

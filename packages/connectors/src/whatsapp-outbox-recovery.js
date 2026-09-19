@@ -49,7 +49,7 @@ export function uncertainWhatsAppOutboxError(value = "") {
 function recoverableJob(job = {}) {
   if (lower(job.connector) !== "whatsapp") return false;
   if (lower(job.state) !== "failed_retryable") return false;
-  if (job.metadata?.nonRetryable === true) return false;
+  if (job.metadata?.nonRetryable === true || job.metadata?.partialDelivery || job.metadata?.retrySuppressed === true || lower(job.error) === "whatsapp_partial_delivery") return false;
   if (
     uncertainWhatsAppOutboxError(job.error) ||
     uncertainWhatsAppOutboxError(job.metadata?.lastError) ||
@@ -61,6 +61,7 @@ function recoverableJob(job = {}) {
 }
 
 function strandedAutoRecoveryJob(job = {}, operator = "whatsapp-auto-recovery") {
+  if (job.metadata?.partialDelivery || job.metadata?.retrySuppressed === true || lower(job.error) === "whatsapp_partial_delivery") return false;
   if (lower(job.connector) !== "whatsapp" || lower(job.state) !== "pending") return false;
   const requestedBy = lower(job.metadata?.retryRequestedBy);
   return Boolean(

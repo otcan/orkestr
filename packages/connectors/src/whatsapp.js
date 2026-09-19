@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
+import { publicWhatsAppPartialDelivery } from "./whatsapp-delivery-evidence.js";
 import path from "node:path";
 import { enqueueAgentMessage, updateAgentMessage } from "../../core/src/messages.js";
 import { resourceOwnerUserId } from "../../core/src/policy.js";
@@ -1087,7 +1088,7 @@ function whatsappRouterAttachmentSummaryText(attachments = []) {
 
 function nonRetryableWhatsAppOutboundError(error) {
   const message = pickString(error?.message, error);
-  return error?.retryable === false ||
+  return error?.retryable === false || message === "whatsapp_partial_delivery" ||
     /\bunknown_whatsapp_account\b/i.test(message) ||
     /\bwhatsapp_bridge_not_configured\b/i.test(message);
 }
@@ -3826,10 +3827,12 @@ async function sendClaimedWhatsAppText({
     const bridgeDiagnostics = error?.bridgeDiagnostics && typeof error.bridgeDiagnostics === "object"
       ? error.bridgeDiagnostics
       : null;
-    const terminalFailure = nonRetryableWhatsAppOutboundError(error);
+    const partialDelivery = publicWhatsAppPartialDelivery(error?.partialDelivery);
+    const isPartial = errorText === "whatsapp_partial_delivery" || Boolean(partialDelivery);
+    const terminalFailure = isPartial || nonRetryableWhatsAppOutboundError(error);
     const uncertainDelivery = uncertainWhatsAppOutboundDeliveryError(error);
-    recordRuntimeControlMetric({ signal: "transport_send", outcome: terminalFailure || uncertainDelivery ? "failed" : "retryable" });
-    const terminalOutboxState = terminalFailure
+    recordRuntimeControlMetric({ signal: "transport_send", outcome: isPartial ? "partial_delivery" : terminalFailure || uncertainDelivery ? "failed" : "retryable" });
+    const terminalOutboxState = isPartial ? "partial_delivery" : terminalFailure
       ? "dead_letter"
       : uncertainDelivery
         ? "delivery_uncertain"
@@ -3857,6 +3860,7 @@ async function sendClaimedWhatsAppText({
     await finishOutboundDeliveryClaim({ state, claim: claimResult.claim, filePath: claimResult.filePath, status: "failed", error: errorText }, env, { persistState: writeWhatsAppState }).catch(() => {});
     await markConnectorOutboxJob(outboxClaim.job.id, {
       state: terminalOutboxState,
+      ...(partialDelivery ? { brokerAck: { partialDelivery } } : {}),
       failedAt: now,
       error: errorText,
       claimExpiresAt: retryAt,
@@ -3865,6 +3869,7 @@ async function sendClaimedWhatsAppText({
       ...(terminalFailure || uncertainDelivery ? { terminalAt: now } : {}),
       metadata: {
         ...(outboxClaim.job.metadata || {}),
+        ...(isPartial ? { partialDelivery, retrySuppressed: true, attachmentReviewRequired: true } : {}),
         ...(terminalFailure ? { nonRetryable: true } : {}),
         ...(uncertainDelivery ? { deliveryUncertain: true, retrySuppressed: true } : {}),
         ...(!terminalFailure && !uncertainDelivery ? { retryAfterAt: retryAt } : {}),
@@ -3887,7 +3892,7 @@ async function sendClaimedWhatsAppText({
       deliveryType,
       patch: {
         mirrorOutboxJobId: outboxClaim.job.id,
-        deliveryState: terminalFailure ? "failed" : uncertainDelivery ? "delivery_uncertain" : "failed_retryable",
+        deliveryState: isPartial ? "partial_delivery" : terminalFailure ? "failed" : uncertainDelivery ? "delivery_uncertain" : "failed_retryable",
         deliveryLastAttemptAt: now,
         deliveryError: errorText,
       },
@@ -5852,13 +5857,10 @@ export async function sendWhatsAppText({ chatId = "", text = "", accountId = "",
     : [];
   if (!bridgeUrl && bridgeMode(resolvedConfig, env) === "local") {
     const localAttachments = await prepareLocalBridgeAttachments(normalizedAttachments, env);
-    const safeSkipped = localAttachments.skipped.map((attachment) => ({
-      ...attachment,
-      path: attachment.filename,
-    }));
+    if (localAttachments.skipped.length) throw Object.assign(new Error("whatsapp_attachment_preflight_failed"), { statusCode: 422, retryable: false });
     const payload = await sendLocalWhatsAppMessage({
       chatId,
-      text: appendLocalAttachmentFailureNotes(text, safeSkipped),
+      text,
       accountId,
       mentions,
       attachments: localAttachments.attachments,
@@ -5866,7 +5868,7 @@ export async function sendWhatsAppText({ chatId = "", text = "", accountId = "",
       crossAccountEchoSuppression,
       routeSentMessage,
     });
-    return localAttachments.skipped.length ? { ...payload, skippedAttachments: localAttachments.skipped } : payload;
+    return payload;
   }
   if (!bridgeUrl) throw badRequest("whatsapp_bridge_not_configured");
   const externalBridgeCanReadPaths = externalBridgeCanReadLocalAttachmentPaths(resolvedConfig, env);
@@ -5875,7 +5877,8 @@ export async function sendWhatsAppText({ chatId = "", text = "", accountId = "",
     : await prepareExternalBridgeInlineAttachments(normalizedAttachments, env);
   const sendablePathAttachments = externalBridgeCanReadPaths ? normalizedAttachments : [];
   const sendableInlineAttachments = inlineAttachments.attachments;
-  const outboundText = appendLocalAttachmentFailureNotes(text, inlineAttachments.skipped);
+  if (inlineAttachments.skipped.length) throw Object.assign(new Error("whatsapp_attachment_preflight_failed"), { statusCode: 422, retryable: false });
+  const outboundText = text;
   const bridgeRequestId = newWhatsAppBridgeRequestId(requestId);
   const headers = bridgeRequestHeaders(resolvedConfig, env, {
     "content-type": "application/json",
@@ -5899,6 +5902,10 @@ export async function sendWhatsAppText({ chatId = "", text = "", accountId = "",
       ...(routeSentMessage === true ? { routeSentMessage: true } : {}),
     }),
     signal: AbortSignal.timeout(Number(env.WHATSAPP_SEND_TIMEOUT_MS || 10_000)),
+  }).catch(cause => {
+    // Once dispatched, a failed RPC is not evidence that the provider sent nothing.
+    if (!["AbortError", "TimeoutError", "TypeError"].includes(cause?.name) && !["ECONNRESET", "ETIMEDOUT", "EPIPE"].includes(cause?.code)) throw cause;
+    throw Object.assign(new Error("whatsapp_send_not_confirmed"), { statusCode: 504, cause });
   });
   const parsed = await readWhatsAppBridgeResponse(response, {
     requestId: bridgeRequestId,
@@ -5917,7 +5924,7 @@ export async function sendWhatsAppText({ chatId = "", text = "", accountId = "",
     error.failureCode = parsed.diagnostics.failureCode;
     error.failureClassification = parsed.diagnostics.classification;
     error.retryable = parsed.diagnostics.retryable;
-    error.partialDelivery = parsed.payload?.partialDelivery || null;
+    error.partialDelivery = publicWhatsAppPartialDelivery(parsed.payload?.partialDelivery);
     if (error.partialDelivery) error.retryable = false;
     throw error;
   }

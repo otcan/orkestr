@@ -1,4 +1,5 @@
 import { ArgumentsHost, Catch, ExceptionFilter, HttpException } from "@nestjs/common";
+import { publicWhatsAppPartialDelivery } from "../../../../packages/connectors/src/whatsapp-delivery-evidence.js";
 
 export type JsonErrorReporter = (input: {
   exception: unknown;
@@ -23,11 +24,14 @@ export class JsonErrorFilter implements ExceptionFilter {
     const body = exception instanceof HttpException && exception.getResponse() && typeof exception.getResponse() === "object"
       ? exception.getResponse()
       : { error: message };
+    const partialDelivery = message === "whatsapp_partial_delivery"
+      ? publicWhatsAppPartialDelivery((exception as { partialDelivery?: unknown })?.partialDelivery || (body as Record<string, unknown>)["partialDelivery"]) : null;
     response
       .status(statusCode)
       .header("cache-control", "no-store")
       .type("application/json; charset=utf-8")
-      .send({ ...(body as Record<string, unknown>), error: message });
+      .send({ ...(message === "whatsapp_partial_delivery" ? {} : body as Record<string, unknown>), error: message,
+        ...(partialDelivery ? { partialDelivery, retryable: false } : {}) });
   }
 }
 

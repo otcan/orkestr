@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { implicitAttachmentSensitive, rejectImplicitAttachment } from "./implicit-attachment-policy.js";
 import { isAdminPrincipal, resourceOwnerUserId } from "./policy.js";
 import { adminUserId, normalizeUserId } from "./users.js";
 import { dataPaths } from "../../storage/src/paths.js";
@@ -365,13 +366,15 @@ export async function resolveThreadAttachments({ thread = {}, text = "", attachm
       continue;
     }
     if (textCandidateSource(candidate.source) && candidate.lineReference) continue;
+    if (rejectImplicitAttachment(candidate, candidate.path, skipped)) continue;
     if (candidate.sandboxArtifact && acceptedSandboxUriHashes.has(candidate.sandboxUriHash)) continue;
     if (candidate.sandboxArtifact) {
       const result = await resolveSandboxArtifactCandidate({
         candidate,
         thread,
         env,
-        classifyPath: (filePath) => classifyThreadAttachmentPath(filePath, { thread, env }),
+        classifyPath: (filePath) => textCandidateSource(candidate.source) && implicitAttachmentSensitive(filePath)
+          ? { ok: false, reason: "attachment_requires_explicit_selection" } : classifyThreadAttachmentPath(filePath, { thread, env }),
         metadataForPath: metadataForAttachment,
       });
       if (result.skipped) skipped.push(result.skipped);
@@ -396,6 +399,7 @@ export async function resolveThreadAttachments({ thread = {}, text = "", attachm
     }
     let stats = null;
     if (textCandidateSource(candidate.source)) {
+      if (rejectImplicitAttachment(candidate, realPath, skipped)) continue;
       stats = await fs.stat(realPath).catch(() => null);
       if (!stats?.isFile()) {
         continue;

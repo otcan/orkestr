@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import fs from "node:fs/promises";
 import http from "node:http";
+import { publicWhatsAppPartialDelivery } from "../packages/connectors/src/whatsapp-delivery-evidence.js";
 import path from "node:path";
 import { URL } from "node:url";
 import {
@@ -606,7 +607,7 @@ export function createOrkestrWaService({ env = process.env, bridge = defaultBrid
         ok: false,
         error: clean(error?.message || String(error)) || "wa_service_error",
         auditEvent: error?.auditEvent || undefined,
-        partialDelivery: error?.partialDelivery || undefined,
+        partialDelivery: publicWhatsAppPartialDelivery(error?.partialDelivery) || undefined,
         groupCreateFailure: publicWhatsAppGroupCreateFailure(error) || undefined,
       });
     }

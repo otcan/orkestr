@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { gzipSync, deflateRawSync } from "node:zlib";
 import { AttachmentPreview, crc32, inflateBounded } from "../apps/web/public/attachment-preview-worker.js";
+import { previewType } from "../apps/web/public/attachment-preview-types.js";
 
 function zip(name, text, {method = 8, flags = 0x800, mode = 0x8000} = {}) {
   const raw = Buffer.from(text), filename = Buffer.from(name), compressed = method === 8 ? deflateRawSync(raw) : raw;
@@ -55,4 +56,30 @@ test("TAR, TGZ and GZIP previews and malicious TAR links",async()=>{
 test("no recursive expansion and oversized inputs fail closed",async()=>{
   const p=new AttachmentPreview();await p.open(zip("nested.zip","dummy"),"a.zip");await assert.rejects(p.entry(0),/Nested/);
   await assert.rejects(p.open(new Uint8Array(26*1024*1024),"a"),/25 MB/);
+});
+
+test("content detection overrides misleading extensions without executing HTML or SVG", async () => {
+  const p = new AttachmentPreview();
+  const pdf = Buffer.from("%PDF-1.7\nfixture");
+  const detected = await p.open(pdf, "misleading.txt");
+  assert.equal(detected.kind, "pdf"); assert.deepEqual(detected.bytes, pdf);
+  assert.equal((await p.open(Buffer.from("literal text"), "pretend.pdf")).kind, "text");
+  assert.equal((await p.open(Buffer.from('<svg onload="alert(1)"></svg>'), "a.svg")).kind, "text");
+  for (const bytes of [Buffer.from([1, 2, 3]), Buffer.from([255, 254, 253])]) await assert.rejects(p.open(bytes, "pretend.pdf"));
+  await assert.rejects(p.open(pdf, "a", {pdfPreview:false}), /disabled/);
+});
+test("raster signatures and dimensions are bounded before browser decoding", async () => {
+  const png = Buffer.alloc(24); png.set([137,80,78,71,13,10,26,10]); png.write("IHDR",12); png.writeUInt32BE(32,16); png.writeUInt32BE(48,20);
+  assert.equal(previewType(png).mediaType,"image/png");
+  assert.equal((await new AttachmentPreview().open(png,"photo.pdf")).kind,"image");
+  await assert.rejects(new AttachmentPreview().open(png,"photo",{imagePreview:false}),/disabled/);
+  png.writeUInt32BE(10000,16); png.writeUInt32BE(10000,20); assert.throws(()=>previewType(png),/dimensions/);
+  const gif=Buffer.from("GIF89a\x10\x00\x20\x00","binary"); assert.equal(previewType(gif).width,16);
+  assert.throws(()=>previewType(Buffer.from([255,216,255,192,0,9,8,255,255,255,255,0])),/dimensions/);
+});
+test("archive entries expose filename and detected type; hidden nested archives are rejected", async () => {
+  const p=new AttachmentPreview(); await p.open(zip("report.txt","%PDF-1.7\nfixture"),"bundle.zip");
+  const entry=await p.entry(0); assert.equal(entry.filename,"report.txt"); assert.equal(entry.kind,"pdf");
+  await p.open(zip("hidden.txt",zip("a","b")),"bundle.zip"); await assert.rejects(p.entry(0),/Nested/);
+  await assert.rejects(p.open(tar("a","b"),"no-extension",{archivePreview:false,textPreview:true}),/disabled/);
 });

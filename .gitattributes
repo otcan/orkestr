@@ -1,0 +1,2 @@
+# Preserve upstream PDF.js dependency license notices byte-for-byte on rebuild.
+dist/web/browser/pdfjs/**/LICENSE* whitespace=-blank-at-eol

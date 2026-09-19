@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { publicWhatsAppPartialDelivery, whatsappFailureEvidence } from "./whatsapp-delivery-evidence.js";
 import { dataPaths, ensureDataDirs } from "../../storage/src/paths.js";
 import { appendEvent, readJson, writeJson } from "../../storage/src/store.js";
 import { isRoutableWhatsAppConversationId } from "./whatsapp-identifiers.js";
@@ -7553,7 +7554,23 @@ export async function sendLocalWhatsAppMessage({ chatId = "", text = "", account
   const skipped = [];
   const routed = [];
   let resolvedMentions = [];
+  let stage = "preflight";
+  const normalizedAttachments = Array.isArray(attachments)
+    ? attachments.map(attachment => ({ ...attachment, path: String(attachment?.path || "").trim() })) : [];
+  const attachmentOutcomes = normalizedAttachments.map((_, index) => ({ index, outcome: "not_attempted" }));
   try {
+    if (normalizedAttachments.length > 100) throw Object.assign(new Error("attachment_invalid"), { statusCode: 400, retryable: false });
+    // Check the whole batch before sending its cover text. Do not silently skip files.
+    for (const [index, attachment] of normalizedAttachments.entries()) {
+      try {
+        if (!attachment.path) throw new Error("attachment_invalid");
+        const stat = await fs.stat(attachment.path);
+        if (!stat.isFile()) throw new Error("attachment_invalid");
+        if (stat.size > localWhatsAppOutboundAttachmentMaxBytes(env)) throw new Error("attachment_too_large");
+        await fs.access(attachment.path, fs.constants.R_OK);
+      } catch (error) { attachmentOutcomes[index].outcome = "failed_preflight"; throw error; }
+    }
+    stage = "send_text";
     const cleanText = String(text || "");
     if (cleanText.trim()) {
       resolvedMentions = await resolveWhatsAppMentionIds(runtime.client, mentions);
@@ -7600,26 +7617,15 @@ export async function sendLocalWhatsAppMessage({ chatId = "", text = "", account
         kind: "text",
       });
     }
-    const normalizedAttachments = Array.isArray(attachments)
-      ? attachments.map((attachment) => ({
-          ...attachment,
-          path: String(attachment?.path || "").trim(),
-        })).filter((attachment) => attachment.path)
-      : [];
     if (normalizedAttachments.length) {
+      stage = "prepare_media";
       const MessageMedia = runtime.MessageMedia || (await loadBridgeDependencies()).whatsapp.MessageMedia;
       const maxAttachmentBytes = localWhatsAppOutboundAttachmentMaxBytes(env);
-      for (const attachment of normalizedAttachments) {
+      for (const [index, attachment] of normalizedAttachments.entries()) {
+        stage = "prepare_media";
         const stat = await fs.stat(attachment.path);
         if (stat.size > maxAttachmentBytes) {
-          skipped.push({
-            path: attachment.path,
-            filename: attachment.filename || path.basename(attachment.path),
-            reason: "attachment_too_large",
-            size: stat.size,
-            maxBytes: maxAttachmentBytes,
-          });
-          continue;
+          throw new Error("attachment_too_large");
         }
         rememberOutboundAttachment(selectedAccountId, chatId, { ...attachment, size: stat.size }, env, {
           crossAccount: crossAccountEchoSuppression !== false,
@@ -7640,6 +7646,8 @@ export async function sendLocalWhatsAppMessage({ chatId = "", text = "", account
         );
         let message;
         try {
+          stage = "send_media";
+          attachmentOutcomes[index].outcome = "uncertain";
           message = await withSendOperationTimeout(
             runtime.client.sendMessage(chatId, media, sendOptions),
             "whatsapp_send_media",
@@ -7650,6 +7658,9 @@ export async function sendLocalWhatsAppMessage({ chatId = "", text = "", account
           throw error;
         }
         const deliveredMessageId = serializedMessageId(message);
+        stage = "confirm_media";
+        if (!deliveredMessageId) throw new Error("media_ack_missing");
+        attachmentOutcomes[index] = { index, outcome: "sent", id: deliveredMessageId };
         rememberOutboundMessageId(deliveredMessageId);
         await rememberTransformedOutboundMediaEcho({
           accountId: selectedAccountId,
@@ -7668,6 +7679,7 @@ export async function sendLocalWhatsAppMessage({ chatId = "", text = "", account
         sent.push({
           id: String(deliveredMessageId || ""),
           kind: "attachment",
+          index,
           path: attachment.path,
           filename: attachment.filename || path.basename(attachment.path),
           mimetype: attachment.mimetype || "",
@@ -7675,23 +7687,22 @@ export async function sendLocalWhatsAppMessage({ chatId = "", text = "", account
       }
     }
   } catch (error) {
-    if (sent.length) {
+    if (sent.length || attachmentOutcomes.some(entry => entry.outcome === "uncertain")) {
       const partial = new Error("whatsapp_partial_delivery");
       partial.statusCode = 409;
       partial.retryable = false;
       partial.cause = error;
-      partial.partialDelivery = {
-        accountId: selectedAccountId,
-        chatId,
-        sent: sent.map((entry) => ({
-          id: String(entry.id || ""),
-          kind: String(entry.kind || ""),
-          ...(entry.filename ? { filename: String(entry.filename) } : {}),
-        })),
+      partial.partialDelivery = publicWhatsAppPartialDelivery({
+        sent,
+        attachments: attachmentOutcomes,
         failedKind: Array.isArray(attachments) && attachments.length ? "attachment" : "message",
-        failureCode: String(error?.message || "whatsapp_send_failed").slice(0, 160),
-      };
+        ...whatsappFailureEvidence(error, stage),
+      });
       throw partial;
+    }
+    if (stage === "preflight" || stage === "prepare_media") {
+      const evidence = whatsappFailureEvidence(error, stage);
+      throw Object.assign(new Error(evidence.failureCode), { statusCode: 422, retryable: false, failureEvidence: evidence });
     }
     if (selectedAccountId && recoverableLocalWhatsAppRuntimeError(error)) {
       return recoverLocalWhatsAppAccountAfterSendError(selectedAccountId, error, env);

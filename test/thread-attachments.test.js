@@ -14,6 +14,17 @@ import { appendThreadMessage, createThread, listThreadMessages, updateThreadMess
 import { dataPaths } from "../packages/storage/src/paths.js";
 import { listEvents } from "../packages/storage/src/store.js";
 
+test("prose and symlink mentions do not implicitly export credential-like files",async()=>{
+  const home=await fs.mkdtemp(path.join(os.tmpdir(),"orkestr-implicit-attachment-"));
+  const workspace=path.join(home,"workspace"); await fs.mkdir(workspace);
+  const filePath=path.join(workspace,".env.production"),alias=path.join(workspace,"notes.txt");
+  await fs.writeFile(filePath,"SYNTHETIC_TEST_VALUE=fixture"); await fs.symlink(filePath,alias);
+  const thread={id:"test-thread",ownerUserId:"alice",cwd:workspace,workspace};
+  const result=await resolveThreadAttachments({thread,text:`Reviewed ${filePath} and ${alias}`,env:{ORKESTR_HOME:home}});
+  assert.equal(result.attachments.length,0); assert.equal(result.skipped.length,2);
+  assert.equal(result.skipped.every(x=>x.reason==="attachment_requires_explicit_selection"),true);
+});
+
 test("thread attachment extraction normalizes allowed paths and dedupes text and explicit attachments", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-attachments-"));
   const env = { ORKESTR_HOME: home };

@@ -3298,8 +3298,8 @@ export class ApiService {
     return this.api(`/attachment-encryption/inbound/sessions/${encodeURIComponent(sessionId)}/preview`);
   }
 
-  attachmentFeatures(): Observable<{ eagerUploads: boolean; pastedAttachments: boolean; textPreview: boolean; archivePreview: boolean }> {
-    return this.http.get<{ eagerUploads: boolean; pastedAttachments: boolean; textPreview: boolean; archivePreview: boolean }>(this.api("/attachment-encryption/features"));
+  attachmentFeatures(): Observable<{ eagerUploads: boolean; pastedAttachments: boolean; textPreview: boolean; archivePreview: boolean; pdfPreview: boolean; imagePreview: boolean }> {
+    return this.http.get<{ eagerUploads: boolean; pastedAttachments: boolean; textPreview: boolean; archivePreview: boolean; pdfPreview: boolean; imagePreview: boolean }>(this.api("/attachment-encryption/features"));
   }
 
   browserSessions(threadId = "", breakGlassReason = "", ownerInventory = false): Observable<{ ok?: boolean; sessions: BrowserSession[]; browsers?: BrowserSession[]; source?: string; error?: string; message?: string }> {

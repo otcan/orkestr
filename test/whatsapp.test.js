@@ -5500,7 +5500,7 @@ test("local whatsapp transformed image echo feature flag off routes the callback
   }
 });
 
-test("local WhatsApp bridge skips oversized media before encoding it", async () => {
+test("local WhatsApp bridge rejects oversized media before sending cover text", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-outbound-size-limit-"));
   const env = {
     ORKESTR_HOME: home,
@@ -5527,25 +5527,20 @@ test("local WhatsApp bridge skips oversized media before encoding it", async () 
 
   try {
     setLocalWhatsAppRuntimeForTest("responder", runtime, {}, env);
-    const result = await sendLocalWhatsAppMessage({
+    await assert.rejects(sendLocalWhatsAppMessage({
       accountId: "responder",
       chatId: "oversized-media@g.us",
       text: "The small delivery still goes through.",
       attachments: [{ path: attachmentPath, filename: "oversized.mp4", mimetype: "video/mp4" }],
       env,
-    });
-
-    assert.equal(sent.length, 1);
-    assert.equal(sent[0].body, "The small delivery still goes through.");
-    assert.equal(result.sent.length, 1);
-    assert.deepEqual(result.skipped.map((item) => item.filename), ["oversized.mp4"]);
-    assert.equal(result.skipped[0].reason, "attachment_too_large");
+    }), /attachment_too_large/);
+    assert.equal(sent.length, 0);
   } finally {
     await resetLocalWhatsAppBridgeForTest(env);
   }
 });
 
-test("local WhatsApp delivery tells the recipient when oversized media is withheld", async () => {
+test("local WhatsApp delivery fails preflight rather than claiming text-only success", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-outbound-size-note-"));
   const env = {
     ORKESTR_HOME: home,
@@ -5572,19 +5567,14 @@ test("local WhatsApp delivery tells the recipient when oversized media is withhe
 
   try {
     setLocalWhatsAppRuntimeForTest("responder", runtime, {}, env);
-    const result = await sendWhatsAppText({
+    await assert.rejects(sendWhatsAppText({
       accountId: "responder",
       chatId: "oversized-media@g.us",
       text: "Video export is ready.",
       attachments: [{ path: attachmentPath, filename: "oversized.mp4", mimetype: "video/mp4" }],
       env,
-    });
-
-    assert.equal(sent.length, 1);
-    assert.match(sent[0].body, /Video export is ready\./);
-    assert.match(sent[0].body, /Attachment not sent:\n- oversized\.mp4: attachment too large/);
-    assert.equal(result.skippedAttachments[0].filename, "oversized.mp4");
-    assert.equal(result.skippedAttachments[0].reason, "attachment_too_large");
+    }), /whatsapp_attachment_preflight_failed/);
+    assert.equal(sent.length, 0);
   } finally {
     await resetLocalWhatsAppBridgeForTest(env);
   }
