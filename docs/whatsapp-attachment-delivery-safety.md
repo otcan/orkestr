@@ -33,6 +33,26 @@ cause of an existing provider media-upload failure or certify its recovery.
 
 ## SRE investigation and recovery
 
+### Progress/final parity and gateway evidence (ORK-504)
+
+Progress and final replies share attachment preparation, including owner/path
+checks, remote materialization, encrypted-publication validation and table CSV
+generation. Table rows remain readable in the text message; the CSV note does
+not claim delivery before the send completes. Partial media failures retain the
+existing no-replay behavior.
+
+The legacy REST connector gateway must preserve the allowlisted
+`partialDelivery` envelope from the worker. Forwarding only the aggregate error
+loses the stage needed to distinguish file preparation, provider invocation and
+missing acknowledgments. Wrapped legacy partial errors are normalized without
+exposing their raw text. This gateway is a separate activation target: an
+API-only rollout does not update it.
+
+These changes do not identify the original production media exception. Keep
+that recovery item open until a scoped new attempt provides stage evidence and
+the underlying cause is corrected and validated. Never replay historical
+batches to collect diagnostics.
+
 Inspect the owner-scoped outbox through the authenticated Orkestr interface.
 Correlate a single job with its sanitized `stage`, `failureCode` and
 `failureFingerprint`; do not dump its message body or source file content.

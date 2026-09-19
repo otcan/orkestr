@@ -153,7 +153,11 @@ function replaceMarkdownTablesWithAttachmentNotes(source, tables, attachments) {
     const table = tables[tableIndex];
     if (table && index === table.start) {
       const attachment = attachments[tableIndex];
-      output.push(`${tables.length > 1 ? `Table ${tableIndex + 1}` : "Table"} attached: ${attachment.filename}`);
+      output.push(`${tables.length > 1 ? `Table ${tableIndex + 1}` : "Table"} (CSV: ${attachment.filename})`);
+      // Keep the information in the text message even when media delivery fails.
+      // A planned file is not a delivered file: do not announce "attached" here.
+      output.push(...table.rows.map(row => "- " + table.headers.map((header, column) =>
+        `${cleanCell(header)}: ${cleanCell(row[column])}`).join("; ")));
       index = table.end - 1;
       tableIndex += 1;
       continue;

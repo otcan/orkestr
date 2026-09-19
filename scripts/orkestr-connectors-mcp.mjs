@@ -10,6 +10,8 @@ import { parseConnectorInboxMediaMetadata, stageConnectorInboxMedia } from "../p
 import { replayConnectorInboxEvent, retryConnectorInbox, routeWhatsAppInboundFromWorker } from "../packages/connectors/src/connectors-mcp-router.js";
 import { requestWhatsAppWorker, whatsappWorkerHealth } from "../packages/connectors/src/whatsapp-worker-client.js";
 import { publicWhatsAppGroupCreateFailure } from "../packages/connectors/src/whatsapp-group-create-evidence.js";
+import { publicWhatsAppPartialDelivery } from "../packages/connectors/src/whatsapp-delivery-evidence.js";
+import { hasWhatsAppPartialDelivery } from "../packages/connectors/src/whatsapp-replay-safety.js";
 import { requireWaServicePolicy } from "./orkestr-wa-policy.mjs";
 import { isMainModule } from "./main-module.mjs";
 
@@ -242,9 +244,14 @@ export function createConnectorsMcpGateway({ env = process.env, fetchImpl = fetc
       }, env);
       return res.json(payload);
     } catch (error) {
+      const partial = hasWhatsAppPartialDelivery(error);
+      const partialDelivery = partial
+        ? publicWhatsAppPartialDelivery(error?.partialDelivery || error?.payload?.partialDelivery) : null;
       return res.status(Number(error?.statusCode || 502)).json({
         ok: false,
-        error: clean(error?.message) || "legacy_wa_proxy_failed",
+        error: partial ? "whatsapp_partial_delivery" : clean(error?.message) || "legacy_wa_proxy_failed",
+        ...(partial ? { retryable: false } : {}),
+        ...(partialDelivery ? { partialDelivery } : {}),
         groupCreateFailure: publicWhatsAppGroupCreateFailure(error?.payload || error) || undefined,
       });
     }

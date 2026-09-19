@@ -14447,7 +14447,7 @@ test("whatsapp delivery does not replay replies older than retained delivery led
   assert.deepEqual(delivery.skipped.find((item) => item.messageId === reply.id)?.reason, "stale_untracked_reply");
 });
 
-test("whatsapp delivery sends markdown tables as CSV attachments", async () => {
+for (const phase of ["final_answer", "commentary"]) for (const partial of [false, true]) test(`whatsapp ${phase} delivery sends markdown tables as CSV attachments (partial=${partial})`, async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-table-reply-"));
   const env = externalBridgeEnv(home);
   await createThread({ id: "thread-wa-table", name: "WA Table Thread" }, env);
@@ -14461,7 +14461,7 @@ test("whatsapp delivery sends markdown tables as CSV attachments", async () => {
   await appendThreadMessage("thread-wa-table", {
     role: "assistant",
     source: "codex-rollout",
-    phase: "final_answer",
+    phase,
     state: "completed",
     text: [
       "Here is the summary:",
@@ -14481,19 +14481,25 @@ test("whatsapp delivery sends markdown tables as CSV attachments", async () => {
   const calls = [];
   const delivery = await deliverWhatsAppReplies(env, async (url, options) => {
     calls.push({ url, body: JSON.parse(options.body) });
+    if (partial) return response({ ok: false, error: "whatsapp_partial_delivery", partialDelivery: {
+      sent: [{ kind: "text", id: "synthetic-text" }], attachments: [{ index: 0, outcome: "uncertain" }],
+      failedKind: "attachment", failureCode: "provider_rejected", stage: "send_media",
+    } }, false, 409);
     return response({ ok: true, ids: ["sent-table-text", "sent-table-csv"] });
   });
   const duplicate = await deliverWhatsAppReplies(env, async () => {
     throw new Error("should not resend table attachment");
   });
 
-  assert.equal(delivery.delivered.length, 1);
+  assert.equal(delivery.delivered.length, partial ? 0 : 1);
   assert.equal(duplicate.delivered.length, 0);
   assert.equal(calls.length, 1);
   assert.equal(calls[0].url.pathname, "/send-media");
   assert.equal(calls[0].body.to, "chat-table");
   assert.equal(calls[0].body.paths.length, 1);
-  assert.match(stripDebugFooter(calls[0].body.text), /^Here is the summary:\n\nTable attached: orkestr-table-.+\.csv\n\nDone\.$/);
+  assert.match(stripDebugFooter(calls[0].body.text), /Table \(CSV: orkestr-table-.+\.csv\)/);
+  assert.match(calls[0].body.text, /Name: Magie; Status: Ready; Notes: Daily 09:00/);
+  assert.match(calls[0].body.text, /Name: KDP; Status: Waiting; Notes: needs auth/);
   const csv = await fs.readFile(calls[0].body.paths[0], "utf8");
   assert.equal(csv, [
     "Name,Status,Notes",
@@ -14501,8 +14507,9 @@ test("whatsapp delivery sends markdown tables as CSV attachments", async () => {
     "KDP,Waiting,needs auth",
     "",
   ].join("\n"));
-  assert.equal(delivery.delivered[0].attachments.length, 1);
-  assert.equal(delivery.failed.length, 0);
+  if (!partial) assert.equal(delivery.delivered[0].attachments.length, 1);
+  assert.equal(delivery.failed.length, partial ? 1 : 0);
+  if (partial) assert.equal((await readConnectorOutbox(env)).jobs.some(job => job.state === "partial_delivery"), true);
 });
 
 test("whatsapp delivery sends allowed local paths as media attachments and does not replay them", async () => {

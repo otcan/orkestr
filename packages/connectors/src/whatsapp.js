@@ -15,7 +15,7 @@ import {
   acknowledgeRuntimeFinalDelivery,
   recordRuntimeFinalDeliveryFailure,
 } from "../../core/src/runtime-final-delivery.js";
-import { isRemoteThreadAttachmentDescriptor, redactDeniedThreadAttachmentPaths, resolveThreadAttachments } from "../../core/src/thread-attachments.js";
+import { appendLocalAttachmentFailureNotes, prepareWhatsAppOutboundAttachments } from "./whatsapp-outbound-attachments.js";
 import { approveDesktopShareChallenge } from "../../core/src/desktop-shares.js";
 import {
   ensureRouterTurn,
@@ -37,7 +37,6 @@ import {
   replyDeliveryIntentStatusPatch,
   trustedHushReplyDeliveryIntent,
 } from "../../core/src/reply-delivery-intent.js";
-import { hydrateEncryptedPublishedAttachmentPaths } from "../../core/src/encrypted-attachment-publication.js";
 import { recordRuntimeControlMetric } from "../../core/src/observability.js";
 import { dataPaths, ensureDataDirs } from "../../storage/src/paths.js";
 import { readConnectorConfig } from "../../storage/src/config.js";
@@ -52,8 +51,7 @@ import {
 } from "./whatsapp-local-bridge.js";
 import { syncWhatsAppTypingTargets } from "./whatsapp-typing.js";
 import { routerUpdateWhatsAppDeliveryTarget } from "./whatsapp-router-updates.js";
-import { attachmentDeliveryKey, prepareWhatsAppTableAttachments } from "./whatsapp-table-attachments.js";
-import { appendWebUiEncryptedAttachmentNotice, webUiEncryptedAttachmentDelivery } from "./whatsapp-webui-encrypted-attachments.js";
+import { attachmentDeliveryKey } from "./whatsapp-table-attachments.js";
 import { appendWhatsAppDebugFooter, formatWhatsAppOutboundText, stripWhatsAppDebugFooter } from "./whatsapp-formatting.js";
 import {
   bindingAccountIds,
@@ -112,7 +110,6 @@ import {
 import { coalesceWhatsAppInboundRevision, finishWhatsAppInboundRevision } from "./whatsapp-inbound-revisions.js";
 import { resolveWhatsAppBinding } from "./whatsapp-account-bindings.js";
 import { whatsappBindingInboundAccountPolicy } from "./whatsapp-binding-account-policy.js";
-import { materializeRemoteWhatsAppAttachments } from "./whatsapp-remote-artifacts.js";
 import { whatsappWorkerHealth } from "./whatsapp-worker-client.js";
 import {
   boundThreadWhatsAppAssistantOrigin,
@@ -561,52 +558,6 @@ async function persistMessageAttachmentsIfChanged(threadId, message, attachments
   await updateThreadMessage(threadId, message.id, { attachments }, env).catch(() => null);
 }
 
-function remoteAttachmentFailureReason(reason = "") {
-  return String(reason || "remote_attachment_unavailable").replace(/^remote_attachment_/, "").replace(/^remote_/, "").replace(/_/g, " ");
-}
-
-function appendRemoteAttachmentFailureNotes(text = "", skipped = []) {
-  const failures = (Array.isArray(skipped) ? skipped : [])
-    .map((item) => {
-      const filename = pickString(item.filename, item.remoteAttachmentId, "attachment");
-      const reason = remoteAttachmentFailureReason(item.reason);
-      return `${filename}: ${reason}`;
-    })
-    .filter(Boolean);
-  if (!failures.length) return text;
-  return [
-    String(text || "").trim(),
-    "",
-    "Attachment not sent:",
-    ...failures.map((line) => `- ${line}`),
-  ].filter((line, index) => index !== 0 || line).join("\n");
-}
-
-function localAttachmentFailureReason(reason = "") {
-  return String(reason || "attachment_unavailable").replace(/_/g, " ");
-}
-
-function appendLocalAttachmentFailureNotes(text = "", skipped = []) {
-  const seen = new Set();
-  const failures = (Array.isArray(skipped) ? skipped : [])
-    .map((item) => {
-      const filePath = pickString(item.raw, item.path);
-      if (!filePath) return "";
-      const reason = localAttachmentFailureReason(item.reason);
-      const key = `${filePath}\n${reason}`;
-      if (seen.has(key)) return "";
-      seen.add(key);
-      return `${filePath}: ${reason}`;
-    })
-    .filter(Boolean);
-  if (!failures.length) return text;
-  return [
-    String(text || "").trim(),
-    "",
-    "Attachment not sent:",
-    ...failures.map((line) => `- ${line}`),
-  ].filter((line, index) => index !== 0 || line).join("\n");
-}
 
 async function externalBridgeAccounts(bridgeUrl, healthPayload, fetchImpl, headers = {}, env = process.env, options = {}) {
   if (Array.isArray(healthPayload?.accounts)) return healthPayload.accounts.map(publicBridgeAccount);
@@ -6963,7 +6914,10 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
           skipped.push({ agentId, threadId, messageId: message.id, reason: "overtaken_by_final" });
           continue;
         }
-        const text = appendWhatsAppDebugFooter(formatWhatsAppOutboundText(pickString(message.text)), {
+        const { text: preparedText, attachments, sourceMessageAttachments } = await prepareWhatsAppOutboundAttachments({
+          thread, message, principal: await principalForThread(thread || {}, env), env, fetchImpl,
+        });
+        const text = appendWhatsAppDebugFooter(preparedText, {
           message,
           thread: await debugThread(),
           messages,
@@ -6975,7 +6929,8 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
           continue;
         }
 
-        const textKey = deliveryTextKey(chatId, `progress:${message.id}\n${text}`);
+        const attachmentKey = attachments.map(attachmentDeliveryKey).filter(Boolean).join("\n");
+        const textKey = deliveryTextKey(chatId, `progress:${message.id}\n${text}${attachmentKey ? `\nattachments:\n${attachmentKey}` : ""}`);
         if (deliveredTextKeys.has(textKey) || batchTextKeys.has(textKey)) {
           skipped.push({ agentId, threadId, messageId: message.id, reason: "duplicate_text" });
           continue;
@@ -7004,6 +6959,7 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
           accountId,
           textKey,
           text,
+          attachments,
           config,
           env,
           fetchImpl,
@@ -7013,6 +6969,9 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
           continue;
         }
         if (result.delivery) {
+          if (!sourceMessageAttachments.some(attachment => attachment?.encrypted === true)) {
+            await persistMessageAttachmentsIfChanged(threadId, message, attachments, env);
+          }
           delivered.push(result.delivery);
           await appendEvent({ type: "whatsapp_outbound_progress_delivered", agentId: agentId || null, threadId: threadId || null, messageId: message.id, chatId }, env);
         } else if (result.failure) {
@@ -7167,47 +7126,10 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
         skipped.push({ agentId, threadId, messageId: message.id, reason: "superseded_runtime_interruption" });
         continue;
       }
-      const preparedOutbound = await prepareWhatsAppTableAttachments(pickString(message.text), {
-        env,
-        messageId: message.id,
+      const { text: preparedText, attachments, sourceMessageAttachments } = await prepareWhatsAppOutboundAttachments({
+        thread, message, principal: await principalForThread(thread || {}, env), env, fetchImpl,
       });
-      const sourceMessageAttachments = hydrateEncryptedPublishedAttachmentPaths(
-        thread,
-        Array.isArray(message.attachments) ? message.attachments : [],
-        env,
-      );
-      const remoteMaterialized = await materializeRemoteWhatsAppAttachments({
-        thread,
-        message,
-        attachments: sourceMessageAttachments,
-        env,
-        fetchImpl,
-      });
-      const resolvedOutboundAttachments = await resolveThreadAttachments({
-        thread,
-        text: pickString(message.text),
-        attachments: [
-          ...sourceMessageAttachments.filter((attachment) => !isRemoteThreadAttachmentDescriptor(attachment)),
-          ...remoteMaterialized.attachments,
-          ...preparedOutbound.attachments,
-        ],
-        env,
-      });
-      const protectedDelivery = await webUiEncryptedAttachmentDelivery(resolvedOutboundAttachments.attachments, {
-        thread,
-        env,
-      });
-      const attachments = protectedDelivery.attachments;
-      const outboundText = appendWebUiEncryptedAttachmentNotice(
-        appendLocalAttachmentFailureNotes(preparedOutbound.text, resolvedOutboundAttachments.skipped),
-        protectedDelivery.unavailableCount,
-      );
-      const formattedText = formatWhatsAppOutboundText(redactDeniedThreadAttachmentPaths(outboundText, {
-        thread,
-        principal: await principalForThread(thread || {}, env),
-        env,
-      }));
-      const text = appendWhatsAppDebugFooter(appendRemoteAttachmentFailureNotes(formattedText, remoteMaterialized.skipped), {
+      const text = appendWhatsAppDebugFooter(preparedText, {
         message,
         thread: await debugThread(),
         messages,
