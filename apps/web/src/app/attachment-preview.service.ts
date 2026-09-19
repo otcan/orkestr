@@ -72,7 +72,9 @@ export class AttachmentPreviewService {
     catch { if (generation === this.generation) this.state.update(state => ({ ...state, error: "Download unavailable. Retry from the attachment in the conversation." })); }
   }
   private async open(title: string, read: (signal: AbortSignal) => Promise<{filename: string; bytes: Uint8Array}>): Promise<void> {
-    const trigger = document.activeElement as HTMLElement;
+    const active = document.activeElement as HTMLElement | null;
+    // Reload controls disappear with the panel; keep its external opener.
+    const trigger = this.state().open && active?.closest?.(".attachment-panel") ? this.previousFocus : active;
     this.close(); this.previousFocus = trigger;
     const generation = this.generation;
     const abort = new AbortController(); this.abort = abort;

@@ -14,15 +14,43 @@ async function harness(read = async () => ({ filename:"decoded.txt",bytes:new Ui
     [AttachmentDecryptionService,{read}], [AttachmentEncryptionBootstrapService,{ensureReady:async()=>{}}]]);
   const signal=value=>{const fn=()=>value;fn.set=next=>{value=next;};fn.update=update=>{value=update(value);};return fn;};
   class Worker { constructor(){workers.push(this);} postMessage(value){this.post=value;} terminate(){this.terminated=true;} }
-  const exports={};
+  const exports={}, document={baseURI:"https://example.invalid/",activeElement:{focus(){}}};
   vm.runInNewContext(outputText,{exports,require:name=>{
     if(name==="@angular/core")return {Injectable:()=>value=>value,inject:key=>services.get(key),signal};
     if(name==="rxjs")return {firstValueFrom:value=>value};
     return {ApiService,AttachmentDecryptionService,AttachmentEncryptionBootstrapService};
-  },Uint8Array,ArrayBuffer,AbortController,URL,Worker,document:{baseURI:"https://example.invalid/",activeElement:{focus(){}}},
+  },Uint8Array,ArrayBuffer,AbortController,URL,Worker,document,
   setTimeout:callback=>{timers.set(++tick,callback);return tick;},clearTimeout:id=>timers.delete(id)});
-  return {service:new exports.AttachmentPreviewService(),workers,timers};
+  return {service:new exports.AttachmentPreviewService(),workers,timers,document};
 }
+
+for (const pending of [false, true]) test(`reload retains the conversation opener through cancellation (pending=${pending})`,async()=>{
+  const {service,workers,document}=await harness();
+  const focused=[];
+  const opener={isConnected:true,closest:()=>null,focus:()=>focused.push("conversation")};
+  const reload={isConnected:true,closest:()=>({}),focus:()=>focused.push("reload")};
+  document.activeElement=opener;
+  if(pending)await service.openPending({name:"fixture.txt",file:{size:1,arrayBuffer:async()=>new Uint8Array([65]).buffer}});
+  else await service.openAttachment({filename:"fixture.txt",downloadUrl:"/api/files/a/download"});
+  const originalWorker=workers[0];
+  document.activeElement=reload;
+  service.retry();
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(workers.length,2);
+  assert.equal(originalWorker.terminated,true);
+  originalWorker.onmessage({data:{text:"STALE"}});
+  assert.notEqual(service.state().text,"STALE");
+  focused.length=0;
+  // Even a still-connected Reload button must not become the close target.
+  service.close();
+  assert.deepEqual(focused,["conversation"]);
+  assert.equal(workers[1].terminated,true);
+  workers[1].onmessage({data:{text:"LATE"}});
+  service.retry();
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(workers.length,2);
+  assert.equal(service.state().open,false);
+});
 
 test("preview identifies selected entry and fences replaced and closed worker replies",async()=>{
   const {service,workers}=await harness();
