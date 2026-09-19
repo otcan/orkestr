@@ -436,7 +436,7 @@ test("WhatsApp router doctor detects and requeues terminal user input without ru
   assert.equal(updated.deliveryState, "retrying_delivery");
 });
 
-test("WhatsApp router doctor releases stale connector outbox claims", async () => {
+test("WhatsApp router doctor quarantines stale connector outbox claims without retry", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-router-doctor-outbox-"));
   const env = runtimeEnv(home);
   const thread = await createWhatsAppThread(env);
@@ -480,7 +480,8 @@ test("WhatsApp router doctor releases stale connector outbox claims", async () =
   const job = store.jobs.find((item) => item.id === created.job.id);
 
   assert.equal(repaired.repairs.some((repair) => repair.code === "release_stale_outbox_claim" && repair.outboxJobId === created.job.id), true);
-  assert.equal(job.state, "pending");
+  assert.equal(job.state, "delivery_uncertain");
+  assert.equal(job.metadata.retrySuppressed, true);
   assert.equal(job.claimedBy, "");
 });
 

@@ -176,6 +176,15 @@ test("connector outbox supports Postgres backend operations", async () => {
     const terminalClaim = await claimConnectorOutboxJob(claimed.job.id, { claimant: "late-worker" }, runtimeEnv);
     assert.equal(terminalClaim.acquired, false);
     assert.equal(terminalClaim.reason, "connector_outbox_delivered");
+    const crash = await ensureConnectorOutboxJob(whatsappJob({tenantId:"tenant-pg",sourceMessageId:"crash",sourceEventId:"crash",state:"sent_to_broker",claimExpiresAt:"2020-01-01T00:00:00Z"}),runtimeEnv);
+    const quarantined = await claimConnectorOutboxJob(crash.job.id,{claimant:"replacement"},runtimeEnv);
+    assert.equal(quarantined.acquired,false);
+    assert.equal(quarantined.job.state,"delivery_uncertain");
+    assert.equal((await claimConnectorOutboxJob(crash.job.id,{},runtimeEnv)).acquired,false);
+    assert.equal((await markConnectorOutboxJob(crash.job.id,{state:"failed_retryable",error:"late",metadata:{}},runtimeEnv)).state,"delivery_uncertain");
+    const legacy = await ensureConnectorOutboxJob(whatsappJob({tenantId:"tenant-pg",sourceMessageId:"legacy",sourceEventId:"legacy",state:"failed_retryable",error:'HTTP 409: {"error":"whatsapp_partial_delivery"}'}),runtimeEnv);
+    assert.equal((await claimConnectorOutboxJob(legacy.job.id,{},runtimeEnv)).job.state,"partial_delivery");
+    assert.equal((await markConnectorOutboxJob(legacy.job.id,{state:"pending",error:"",metadata:{}},runtimeEnv)).state,"partial_delivery");
   } finally {
     __connectorOutboxTestInternals.setPostgresPoolFactory(null);
   }

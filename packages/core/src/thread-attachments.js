@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { implicitAttachmentSensitive, rejectImplicitAttachment } from "./implicit-attachment-policy.js";
+import { implicitAttachmentSensitive, implicitAttachmentSource, rejectImplicitAttachment } from "./implicit-attachment-policy.js";
 import { isAdminPrincipal, resourceOwnerUserId } from "./policy.js";
 import { adminUserId, normalizeUserId } from "./users.js";
 import { dataPaths } from "../../storage/src/paths.js";
@@ -373,7 +373,7 @@ export async function resolveThreadAttachments({ thread = {}, text = "", attachm
         candidate,
         thread,
         env,
-        classifyPath: (filePath) => textCandidateSource(candidate.source) && implicitAttachmentSensitive(filePath)
+        classifyPath: (filePath) => implicitAttachmentSource(candidate.source) && implicitAttachmentSensitive(filePath)
           ? { ok: false, reason: "attachment_requires_explicit_selection" } : classifyThreadAttachmentPath(filePath, { thread, env }),
         metadataForPath: metadataForAttachment,
       });

@@ -16,10 +16,20 @@ cause of an existing provider media-upload failure or certify its recovery.
 - Persist partial evidence in `brokerAck.partialDelivery` and metadata; the job
   becomes `partial_delivery`. The WebUI identifies incomplete delivery.
 - Whole-job retry/replay is refused for partial jobs, including legacy dead
-  letters whose error is `whatsapp_partial_delivery`. Automatic account-recovery
+  letters with HTTP-prefixed or JSON-wrapped `whatsapp_partial_delivery` errors. Automatic account-recovery
   replay excludes these jobs. Existing text/file acknowledgments must not be resent.
 - Prose mentions of credential-like filenames are not implicit attachment
-  approval. Explicit attachments retain the canonical owner/path/policy checks.
+  approval, including `sandbox:` and `file:` links and symlink aliases. Checks
+  run before materialization. Explicit attachments retain the canonical
+  owner/path/policy checks.
+- Expired WhatsApp `claimed`/`sent_to_broker` jobs become `delivery_uncertain`,
+  not automatically retryable. Legacy claim phases cannot prove whether a send
+  occurred, so this conservatively includes claims that may never have sent.
+  SQLite and PostgreSQL perform claim decisions under their transaction locks;
+  JSON retains its existing single-writer operational constraint.
+  Late retryable results cannot reopen quarantined sends. Reopening uncertain
+  work requires the existing explicit duplicate-risk acknowledgment and reason;
+  whole-job partial-delivery replay remains forbidden.
 
 ## SRE investigation and recovery
 
@@ -46,9 +56,10 @@ or claims a record is safe to replay. Before any separately approved new send:
 
 - Diagnose the real provider media exception using the preserved evidence; do
   not label transport restoration complete based only on mocked tests.
-- A process crash between provider acceptance and the final RPC response still
-  needs reconciliation. This patch persists component results when the RPC
-  returns; it is not a per-component write-ahead journal or exactly-once provider.
+- A process crash between provider acceptance and the final RPC response now
+  quarantines expired claims to prevent automatic replay. Determining which
+  files arrived still needs reconciliation: this is not a per-component
+  write-ahead journal or an exactly-once provider guarantee.
 - Cross-host staging/access, stale-obligation alerts and an attended missing-file
   recovery workflow need integration validation. No historical bulk replay.
 - Run the normal release train and tenant-isolation gate. Live sends, production

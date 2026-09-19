@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
+import { hasWhatsAppPartialDelivery, whatsappOutboxQuarantine, protectWhatsAppOutboxUpdate, requiresWhatsAppUncertainOverride } from "./whatsapp-replay-safety.js";
 import { dataPaths, ensureDataDirs } from "../../storage/src/paths.js";
 import { appendEvent, readJson, writeJson } from "../../storage/src/store.js";
 import { assertTestStoragePath } from "../../storage/src/test-storage-isolation.js";
@@ -737,155 +738,91 @@ function claimExpired(job = {}, nowMs = Date.now()) {
 }
 
 export async function claimConnectorOutboxJob(jobIdOrKey = "", { claimant = "" } = {}, env = process.env) {
-  const pg = await openConnectorOutboxPostgres(env);
-  if (pg) {
-    const nowMs = Date.now();
-    const now = new Date(nowMs).toISOString();
-    const result = await withPostgresTransaction(pg, async (client) => {
-      const job = await getConnectorOutboxJobRowPostgres(client, jobIdOrKey, env, { forUpdate: true });
-      if (!job) return { acquired: false, reason: "connector_outbox_job_missing" };
-      if (connectorOutboxTerminalState(job.state)) {
-        return { acquired: false, reason: `connector_outbox_${job.state}`, terminal: true, job };
-      }
-      if (!claimExpired(job, nowMs)) {
-        const reason = clean(job.state).toLowerCase() === "failed_retryable"
-          ? "connector_outbox_retry_scheduled"
-          : "connector_outbox_claim_active";
-        return { acquired: false, reason, job };
-      }
-      const claimed = normalizeConnectorOutboxJob({
-        ...job,
-        state: "claimed",
-        claimedBy: clean(claimant) || `pid:${process.pid}`,
-        claimedAt: now,
-        claimExpiresAt: new Date(nowMs + connectorOutboxClaimTtlMs(env)).toISOString(),
-        attemptCount: Number(job.attemptCount || 0) + 1,
-        updatedAt: now,
-      }, env);
-      await upsertConnectorOutboxJobRowPostgres(client, claimed);
-      await setConnectorOutboxMetaPostgres(client, "updated_at", now);
-      return { acquired: true, job: claimed };
-    });
-    if (result.acquired) {
-      await appendEvent({
-        type: "connector_outbox_job_claimed",
-        outboxJobId: result.job.id,
-        tenantId: result.job.tenantId,
-        connector: result.job.connector,
-        chatId: result.job.chatId,
-        threadId: result.job.threadId,
-        sourceMessageId: result.job.sourceMessageId,
-        deliveryType: result.job.deliveryType,
-        claimedBy: result.job.claimedBy,
-      }, env).catch(() => {});
-    }
-    return result;
-  }
-  const db = await openConnectorOutboxDatabase(env);
-  if (db) {
-    const job = getConnectorOutboxJobRow(db, jobIdOrKey, env);
+  function decide(job) {
     if (!job) return { acquired: false, reason: "connector_outbox_job_missing" };
-    const nowMs = Date.now();
-    const now = new Date(nowMs).toISOString();
+    const nowMs = Date.now(), now = new Date(nowMs).toISOString();
+    const quarantine = whatsappOutboxQuarantine(job, nowMs);
+    if (quarantine) return { acquired: false, terminal: true, changed: true,
+      reason: `connector_outbox_${quarantine.state}`, job: normalizeConnectorOutboxJob(quarantine, env) };
     if (connectorOutboxTerminalState(job.state)) {
       return { acquired: false, reason: `connector_outbox_${job.state}`, terminal: true, job };
     }
     if (!claimExpired(job, nowMs)) {
-      const reason = clean(job.state).toLowerCase() === "failed_retryable"
-        ? "connector_outbox_retry_scheduled"
-        : "connector_outbox_claim_active";
-      return { acquired: false, reason, job };
+      return { acquired: false, reason: clean(job.state).toLowerCase() === "failed_retryable"
+        ? "connector_outbox_retry_scheduled" : "connector_outbox_claim_active", job };
     }
-    const claimed = normalizeConnectorOutboxJob({
-      ...job,
-      state: "claimed",
-      claimedBy: clean(claimant) || `pid:${process.pid}`,
-      claimedAt: now,
-      claimExpiresAt: new Date(nowMs + connectorOutboxClaimTtlMs(env)).toISOString(),
-      attemptCount: Number(job.attemptCount || 0) + 1,
-      updatedAt: now,
-    }, env);
-    db.exec("begin immediate");
-    try {
-      upsertConnectorOutboxJobRow(db, claimed);
-      setConnectorOutboxMeta(db, "updated_at", now);
-      bumpConnectorOutboxRevision(db);
-      db.exec("commit");
-    } catch (error) {
-      db.exec("rollback");
-      throw error;
+    return { acquired: true, changed: true, job: normalizeConnectorOutboxJob({
+      ...job, state: "claimed", claimedBy: clean(claimant) || `pid:${process.pid}`,
+      claimedAt: now, claimExpiresAt: new Date(nowMs + connectorOutboxClaimTtlMs(env)).toISOString(),
+      attemptCount: Number(job.attemptCount || 0) + 1, updatedAt: now,
+    }, env) };
+  }
+
+  let result;
+  const pg = await openConnectorOutboxPostgres(env);
+  if (pg) {
+    result = await withPostgresTransaction(pg, async client => {
+      const next = decide(await getConnectorOutboxJobRowPostgres(client, jobIdOrKey, env, { forUpdate: true }));
+      if (next.changed) {
+        await upsertConnectorOutboxJobRowPostgres(client, next.job);
+        await setConnectorOutboxMetaPostgres(client, "updated_at", next.job.updatedAt);
+      }
+      return next;
+    });
+  } else {
+    const db = await openConnectorOutboxDatabase(env);
+    if (db) {
+      // The read and decision must share the write transaction: another process
+      // must not claim a job between our expiry check and its quarantine.
+      db.exec("begin immediate");
+      try {
+        result = decide(getConnectorOutboxJobRow(db, jobIdOrKey, env));
+        if (result.changed) {
+          upsertConnectorOutboxJobRow(db, result.job);
+          setConnectorOutboxMeta(db, "updated_at", result.job.updatedAt);
+          bumpConnectorOutboxRevision(db);
+        }
+        db.exec("commit");
+      } catch (error) { db.exec("rollback"); throw error; }
+    } else {
+      const store = await readConnectorOutbox(env);
+      const target = clean(jobIdOrKey);
+      const index = store.jobs.findIndex(job => job.id === target || job.idempotencyKey === target);
+      result = decide(index < 0 ? null : store.jobs[index]);
+      if (result.changed) {
+        store.jobs.splice(index, 1, result.job);
+        await writeConnectorOutbox(store, env);
+      }
     }
+  }
+  if (result.changed) {
+    const job = result.job;
     await appendEvent({
-      type: "connector_outbox_job_claimed",
-      outboxJobId: claimed.id,
-      tenantId: claimed.tenantId,
-      connector: claimed.connector,
-      chatId: claimed.chatId,
-      threadId: claimed.threadId,
-      sourceMessageId: claimed.sourceMessageId,
-      deliveryType: claimed.deliveryType,
-      claimedBy: claimed.claimedBy,
+      type: result.acquired ? "connector_outbox_job_claimed" : "connector_outbox_job_quarantined",
+      outboxJobId: job.id, tenantId: job.tenantId, connector: job.connector,
+      chatId: job.chatId, threadId: job.threadId, sourceMessageId: job.sourceMessageId,
+      deliveryType: job.deliveryType, claimedBy: job.claimedBy,
+      ...(!result.acquired ? { reason: job.metadata?.recoveryReason, state: job.state } : {}),
     }, env).catch(() => {});
-    return { acquired: true, job: claimed };
   }
-  const store = await readConnectorOutbox(env);
-  const target = clean(jobIdOrKey);
-  const nowMs = Date.now();
-  const now = new Date(nowMs).toISOString();
-  const ttlMs = connectorOutboxClaimTtlMs(env);
-  const index = store.jobs.findIndex((job) => job.id === target || job.idempotencyKey === target);
-  if (index < 0) return { acquired: false, reason: "connector_outbox_job_missing" };
-  const job = store.jobs[index];
-  if (connectorOutboxTerminalState(job.state)) {
-    return { acquired: false, reason: `connector_outbox_${job.state}`, terminal: true, job };
-  }
-  if (!claimExpired(job, nowMs)) {
-    const reason = clean(job.state).toLowerCase() === "failed_retryable"
-      ? "connector_outbox_retry_scheduled"
-      : "connector_outbox_claim_active";
-    return { acquired: false, reason, job };
-  }
-  const claimed = normalizeConnectorOutboxJob({
-    ...job,
-    state: "claimed",
-    claimedBy: clean(claimant) || `pid:${process.pid}`,
-    claimedAt: now,
-    claimExpiresAt: new Date(nowMs + ttlMs).toISOString(),
-    attemptCount: Number(job.attemptCount || 0) + 1,
-    updatedAt: now,
-  }, env);
-  store.jobs.splice(index, 1, claimed);
-  await writeConnectorOutbox(store, env);
-  await appendEvent({
-    type: "connector_outbox_job_claimed",
-    outboxJobId: claimed.id,
-    tenantId: claimed.tenantId,
-    connector: claimed.connector,
-    chatId: claimed.chatId,
-    threadId: claimed.threadId,
-    sourceMessageId: claimed.sourceMessageId,
-    deliveryType: claimed.deliveryType,
-    claimedBy: claimed.claimedBy,
-  }, env).catch(() => {});
-  return { acquired: true, job: claimed };
+  const { changed, ...publicResult } = result;
+  return publicResult;
 }
 
 export async function releaseConnectorOutboxClaim(jobIdOrKey = "", { reason = "" } = {}, env = process.env) {
+  function releasedJob(job) {
+    if (!job || connectorOutboxTerminalState(job.state)) return job;
+    return normalizeConnectorOutboxJob(whatsappOutboxQuarantine(job) || {
+      ...job, state: "pending", claimedBy: "", claimedAt: "", claimExpiresAt: "",
+      error: clean(reason || job.error), updatedAt: nowIso(),
+    }, env);
+  }
   const pg = await openConnectorOutboxPostgres(env);
   if (pg) {
     return withPostgresTransaction(pg, async (client) => {
-      const job = await getConnectorOutboxJobRowPostgres(client, jobIdOrKey, env, { forUpdate: true });
-      if (!job) return null;
-      if (connectorOutboxTerminalState(job.state)) return job;
-      const released = normalizeConnectorOutboxJob({
-        ...job,
-        state: "pending",
-        claimedBy: "",
-        claimedAt: "",
-        claimExpiresAt: "",
-        error: clean(reason || job.error),
-        updatedAt: nowIso(),
-      }, env);
+      const current = await getConnectorOutboxJobRowPostgres(client, jobIdOrKey, env, { forUpdate: true });
+      const released = releasedJob(current);
+      if (!released || released === current) return released;
       await upsertConnectorOutboxJobRowPostgres(client, released);
       await setConnectorOutboxMetaPostgres(client, "updated_at", released.updatedAt);
       return released;
@@ -893,56 +830,41 @@ export async function releaseConnectorOutboxClaim(jobIdOrKey = "", { reason = ""
   }
   const db = await openConnectorOutboxDatabase(env);
   if (db) {
-    const job = getConnectorOutboxJobRow(db, jobIdOrKey, env);
-    if (!job) return null;
-    if (connectorOutboxTerminalState(job.state)) return job;
-    const released = normalizeConnectorOutboxJob({
-      ...job,
-      state: "pending",
-      claimedBy: "",
-      claimedAt: "",
-      claimExpiresAt: "",
-      error: clean(reason || job.error),
-      updatedAt: nowIso(),
-    }, env);
     db.exec("begin immediate");
     try {
-      upsertConnectorOutboxJobRow(db, released);
-      setConnectorOutboxMeta(db, "updated_at", released.updatedAt);
-      bumpConnectorOutboxRevision(db);
+      const current = getConnectorOutboxJobRow(db, jobIdOrKey, env);
+      const released = releasedJob(current);
+      if (released && released !== current) {
+        upsertConnectorOutboxJobRow(db, released);
+        setConnectorOutboxMeta(db, "updated_at", released.updatedAt);
+        bumpConnectorOutboxRevision(db);
+      }
       db.exec("commit");
+      return released;
     } catch (error) {
       db.exec("rollback");
       throw error;
     }
-    return released;
   }
   const store = await readConnectorOutbox(env);
   const target = clean(jobIdOrKey);
   const index = store.jobs.findIndex((job) => job.id === target || job.idempotencyKey === target);
   if (index < 0) return null;
-  const job = store.jobs[index];
-  if (connectorOutboxTerminalState(job.state)) return job;
-  const released = normalizeConnectorOutboxJob({
-    ...job,
-    state: "pending",
-    claimedBy: "",
-    claimedAt: "",
-    claimExpiresAt: "",
-    error: clean(reason || job.error),
-    updatedAt: nowIso(),
-  }, env);
+  const released = releasedJob(store.jobs[index]);
+  if (released === store.jobs[index]) return released;
   store.jobs.splice(index, 1, released);
   await writeConnectorOutbox(store, env);
   return released;
 }
 
-export async function markConnectorOutboxJob(jobIdOrKey = "", patch = {}, env = process.env) {
+export async function markConnectorOutboxJob(jobIdOrKey = "", patch = {}, env = process.env, approvedUncertainVersion = null) {
   const pg = await openConnectorOutboxPostgres(env);
   if (pg) {
     const updated = await withPostgresTransaction(pg, async (client) => {
       const current = await getConnectorOutboxJobRowPostgres(client, jobIdOrKey, env, { forUpdate: true });
       if (!current) return null;
+      const protectedJob = protectWhatsAppOutboxUpdate(current, patch, approvedUncertainVersion);
+      if (protectedJob) patch = protectedJob;
       const state = clean(patch.state || current.state || "pending").toLowerCase();
       const next = normalizeConnectorOutboxJob({
         ...current,
@@ -976,21 +898,24 @@ export async function markConnectorOutboxJob(jobIdOrKey = "", patch = {}, env = 
   }
   const db = await openConnectorOutboxDatabase(env);
   if (db) {
-    const current = getConnectorOutboxJobRow(db, jobIdOrKey, env);
-    if (!current) return null;
-    const state = clean(patch.state || current.state || "pending").toLowerCase();
-    const updated = normalizeConnectorOutboxJob({
-      ...current,
-      ...patch,
-      state,
-      claimedBy: connectorOutboxTerminalState(state) ? "" : patch.claimedBy ?? current.claimedBy,
-      claimedAt: connectorOutboxTerminalState(state) ? "" : patch.claimedAt ?? current.claimedAt,
-      claimExpiresAt: connectorOutboxTerminalState(state) ? "" : patch.claimExpiresAt ?? current.claimExpiresAt,
-      terminalAt: connectorOutboxTerminalState(state) ? clean(patch.terminalAt) || nowIso() : clean(patch.terminalAt),
-      updatedAt: nowIso(),
-    }, env);
     db.exec("begin immediate");
+    let updated;
     try {
+      const current = getConnectorOutboxJobRow(db, jobIdOrKey, env);
+      if (!current) { db.exec("commit"); return null; }
+      const protectedJob = protectWhatsAppOutboxUpdate(current, patch, approvedUncertainVersion);
+      if (protectedJob) patch = protectedJob;
+      const state = clean(patch.state || current.state || "pending").toLowerCase();
+      updated = normalizeConnectorOutboxJob({
+        ...current,
+        ...patch,
+        state,
+        claimedBy: connectorOutboxTerminalState(state) ? "" : patch.claimedBy ?? current.claimedBy,
+        claimedAt: connectorOutboxTerminalState(state) ? "" : patch.claimedAt ?? current.claimedAt,
+        claimExpiresAt: connectorOutboxTerminalState(state) ? "" : patch.claimExpiresAt ?? current.claimExpiresAt,
+        terminalAt: connectorOutboxTerminalState(state) ? clean(patch.terminalAt) || nowIso() : clean(patch.terminalAt),
+        updatedAt: nowIso(),
+      }, env);
       upsertConnectorOutboxJobRow(db, updated);
       pruneConnectorOutboxRows(db, env);
       setConnectorOutboxMeta(db, "updated_at", updated.updatedAt);
@@ -1017,6 +942,8 @@ export async function markConnectorOutboxJob(jobIdOrKey = "", patch = {}, env = 
   const target = clean(jobIdOrKey);
   const index = store.jobs.findIndex((job) => job.id === target || job.idempotencyKey === target);
   if (index < 0) return null;
+  const protectedJob = protectWhatsAppOutboxUpdate(store.jobs[index], patch, approvedUncertainVersion);
+  if (protectedJob) patch = protectedJob;
   const state = clean(patch.state || store.jobs[index].state || "pending").toLowerCase();
   const updated = normalizeConnectorOutboxJob({
     ...store.jobs[index],
@@ -1050,7 +977,7 @@ function operatorPatchForAction(job = {}, action = "", options = {}) {
   const reason = clean(options.reason || options.error);
   const operator = clean(options.operator || options.operatorId || "operator");
   if (normalized === "retry" || normalized === "replay") {
-    const deliveryUncertainOverride = clean(job.state).toLowerCase() === "delivery_uncertain";
+    const deliveryUncertainOverride = requiresWhatsAppUncertainOverride(job);
     return {
       state: "pending",
       claimedBy: "",
@@ -1153,12 +1080,12 @@ export async function applyConnectorOutboxJobAction(jobIdOrKey = "", action = ""
     error.statusCode = 404;
     throw error;
   }
-  if ((clean(current.state).toLowerCase() === "partial_delivery" || current.metadata?.partialDelivery || current.brokerAck?.partialDelivery || clean(current.error) === "whatsapp_partial_delivery") && ["retry", "replay"].includes(normalized)) {
+  if (hasWhatsAppPartialDelivery(current) && ["retry", "replay"].includes(normalized)) {
     const error = new Error("connector_outbox_partial_delivery_retry_requires_new_send");
     error.statusCode = 409;
     throw error;
   }
-  const deliveryUncertainOverride = clean(current.state).toLowerCase() === "delivery_uncertain" && ["retry", "replay"].includes(normalized);
+  const deliveryUncertainOverride = requiresWhatsAppUncertainOverride(current) && ["retry", "replay"].includes(normalized);
   if (deliveryUncertainOverride && !(
     options.allowDeliveryUncertainReplay === true &&
     clean(options.deliveryUncertainReplayConfirmation) === deliveryUncertainReplayConfirmation &&
@@ -1169,7 +1096,7 @@ export async function applyConnectorOutboxJobAction(jobIdOrKey = "", action = ""
     throw error;
   }
   const patch = operatorPatchForAction(current, normalized, options);
-  const job = await markConnectorOutboxJob(current.id, patch, env);
+  const job = await markConnectorOutboxJob(current.id, patch, env, deliveryUncertainOverride ? current.updatedAt : null);
   await appendEvent({
     type: "connector_outbox_operator_action",
     outboxJobId: current.id,

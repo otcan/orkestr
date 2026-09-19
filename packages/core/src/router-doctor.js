@@ -325,7 +325,7 @@ async function inspectThread(thread, options = {}) {
     const claimAge = ageMs(job.claimedAt || job.updatedAt);
     const expired = clean(job.claimExpiresAt) ? dateMs(job.claimExpiresAt) <= Date.now() : claimAge >= outboxClaimTimeoutMs(env);
     if (expired) {
-      checks.push(issue("stale_outbox_claim", "error", "WhatsApp outbox job is claimed past its timeout and should be released for retry.", {
+      checks.push(issue("stale_outbox_claim", "error", "WhatsApp outbox claim expired without confirmed delivery; quarantine it for review, not automatic retry.", {
         threadId: thread.id,
         outboxJobId: job.id,
         state: job.state,

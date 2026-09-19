@@ -9,8 +9,12 @@ export function implicitAttachmentSensitive(filePath = "") {
     || [".npmrc", ".netrc", ".pgpass", "kubeconfig"].includes(name);
 }
 
+export function implicitAttachmentSource(source) {
+  return ["markdown_link", "plain_path", "sandbox_markdown_uri", "sandbox_plain_uri"].includes(source);
+}
+
 export function rejectImplicitAttachment(candidate, filePath, skipped) {
-  if (!["markdown_link", "plain_path"].includes(candidate.source) || !implicitAttachmentSensitive(filePath)) return false;
+  if (!implicitAttachmentSource(candidate.source) || !implicitAttachmentSensitive(filePath)) return false;
   skipped.push({ path: "", raw: "", reason: "attachment_requires_explicit_selection" });
   return true;
 }

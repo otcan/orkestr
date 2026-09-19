@@ -6,6 +6,7 @@ import {
   markConnectorOutboxJob,
 } from "./connector-outbox.js";
 import { resolveConnectorAttachmentRefs } from "./connector-staged-attachments.js";
+import { hasWhatsAppPartialDelivery } from "./whatsapp-replay-safety.js";
 import { connectorAuthStatus, disconnectConnectorAuth, startConnectorAuth } from "./connector-auth.js";
 import {
   listWhatsAppBindingStatuses,
@@ -247,13 +248,14 @@ async function runMessaging(input, auth, env) {
     });
   } catch (error) {
     const partialDelivery = error?.partialDelivery || error?.payload?.partialDelivery || null;
+    const partial = hasWhatsAppPartialDelivery(error);
     const uncertain = /not_confirmed|timeout/i.test(clean(error?.message));
-    const state = partialDelivery ? "partial_delivery" : uncertain ? "delivery_uncertain" : "failed_retryable";
+    const state = partial ? "partial_delivery" : uncertain ? "delivery_uncertain" : "failed_retryable";
     await markConnectorOutboxJob(ensured.job.id, {
       state,
       failedAt: new Date().toISOString(),
       error: clean(error?.message),
-      ...(partialDelivery ? {
+      ...(partial ? {
         brokerAck: { partialDelivery },
         metadata: {
           ...(ensured.job.metadata || {}),

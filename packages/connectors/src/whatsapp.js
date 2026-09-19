@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import { publicWhatsAppPartialDelivery } from "./whatsapp-delivery-evidence.js";
+import { hasWhatsAppPartialDelivery } from "./whatsapp-replay-safety.js";
 import path from "node:path";
 import { enqueueAgentMessage, updateAgentMessage } from "../../core/src/messages.js";
 import { resourceOwnerUserId } from "../../core/src/policy.js";
@@ -1088,7 +1089,7 @@ function whatsappRouterAttachmentSummaryText(attachments = []) {
 
 function nonRetryableWhatsAppOutboundError(error) {
   const message = pickString(error?.message, error);
-  return error?.retryable === false || message === "whatsapp_partial_delivery" ||
+  return error?.retryable === false || hasWhatsAppPartialDelivery(error) ||
     /\bunknown_whatsapp_account\b/i.test(message) ||
     /\bwhatsapp_bridge_not_configured\b/i.test(message);
 }
@@ -3828,7 +3829,7 @@ async function sendClaimedWhatsAppText({
       ? error.bridgeDiagnostics
       : null;
     const partialDelivery = publicWhatsAppPartialDelivery(error?.partialDelivery);
-    const isPartial = errorText === "whatsapp_partial_delivery" || Boolean(partialDelivery);
+    const isPartial = hasWhatsAppPartialDelivery(error);
     const terminalFailure = isPartial || nonRetryableWhatsAppOutboundError(error);
     const uncertainDelivery = uncertainWhatsAppOutboundDeliveryError(error);
     recordRuntimeControlMetric({ signal: "transport_send", outcome: isPartial ? "partial_delivery" : terminalFailure || uncertainDelivery ? "failed" : "retryable" });

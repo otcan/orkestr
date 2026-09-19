@@ -197,7 +197,7 @@ test("connector outbox preserves original creation time across idempotent active
   assert.equal(duplicate.job.payload.text, "new scan body");
 });
 
-test("connector outbox expired claims are retryable after broker downtime", async () => {
+test("WhatsApp expired claims quarantine unknown sends after broker downtime", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-connector-outbox-expired-"));
   const runtimeEnv = env(home);
   const old = new Date(Date.now() - 60_000).toISOString();
@@ -212,9 +212,10 @@ test("connector outbox expired claims are retryable after broker downtime", asyn
 
   const claim = await claimConnectorOutboxJob(job.id, { claimant: "new-worker" }, runtimeEnv);
 
-  assert.equal(claim.acquired, true);
-  assert.equal(claim.job.claimedBy, "new-worker");
-  assert.equal(claim.job.attemptCount, 2);
+  assert.equal(claim.acquired, false);
+  assert.equal(claim.job.state, "delivery_uncertain");
+  assert.equal(claim.job.claimedBy, "");
+  assert.equal(claim.job.attemptCount, 1);
 });
 
 test("connector outbox operator actions list and terminalize selected jobs", async () => {

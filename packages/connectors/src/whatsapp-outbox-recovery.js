@@ -1,5 +1,6 @@
 import { applyConnectorOutboxJobAction, listConnectorOutboxJobs } from "./connector-outbox.js";
 import { appendEvent } from "../../storage/src/store.js";
+import { hasWhatsAppPartialDelivery } from "./whatsapp-replay-safety.js";
 
 function clean(value = "") {
   return String(value || "").trim();
@@ -25,7 +26,7 @@ function unique(values = []) {
 export function recoverableWhatsAppOutboxError(value = "") {
   const reason = lower(value);
   if (!reason) return false;
-  if (uncertainWhatsAppOutboxError(reason)) return false;
+  if (uncertainWhatsAppOutboxError(reason) || hasWhatsAppPartialDelivery(reason)) return false;
   return reason.includes("whatsapp_local_bridge_not_ready") ||
     reason.includes("whatsapp_local_bridge_stale_runtime") ||
     reason.includes("whatsapp_local_bridge_not_ready_recovered") ||
@@ -49,7 +50,7 @@ export function uncertainWhatsAppOutboxError(value = "") {
 function recoverableJob(job = {}) {
   if (lower(job.connector) !== "whatsapp") return false;
   if (lower(job.state) !== "failed_retryable") return false;
-  if (job.metadata?.nonRetryable === true || job.metadata?.partialDelivery || job.metadata?.retrySuppressed === true || lower(job.error) === "whatsapp_partial_delivery") return false;
+  if (job.metadata?.nonRetryable === true || job.metadata?.retrySuppressed === true || hasWhatsAppPartialDelivery(job)) return false;
   if (
     uncertainWhatsAppOutboxError(job.error) ||
     uncertainWhatsAppOutboxError(job.metadata?.lastError) ||
@@ -61,7 +62,7 @@ function recoverableJob(job = {}) {
 }
 
 function strandedAutoRecoveryJob(job = {}, operator = "whatsapp-auto-recovery") {
-  if (job.metadata?.partialDelivery || job.metadata?.retrySuppressed === true || lower(job.error) === "whatsapp_partial_delivery") return false;
+  if (job.metadata?.retrySuppressed === true || hasWhatsAppPartialDelivery(job)) return false;
   if (lower(job.connector) !== "whatsapp" || lower(job.state) !== "pending") return false;
   const requestedBy = lower(job.metadata?.retryRequestedBy);
   return Boolean(
