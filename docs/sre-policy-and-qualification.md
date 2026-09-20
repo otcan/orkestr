@@ -43,6 +43,14 @@ and exact source-address rule/priority. They do not enumerate firewall state or
 prove that all VPN firewall residue is absent. Independent external probing is
 still required to test the public return path.
 
+Table normalization recognizes numeric IDs and the built-in `main` (254),
+`default` (253), and `local` (255) names. iproute2 omits the main table from a
+normal unfiltered route-get record, so an omitted route table means 254 only;
+it never matches an arbitrary reviewed table such as 1001. Missing rule tables,
+explicit nulls and unknown administrator aliases are not guessed. This follows
+the [iproute2 route printer](https://github.com/iproute2/iproute2/blob/main/ip/iproute.c),
+which suppresses the main-table field unless detailed output is requested.
+
 Collector stdout is minimized JSON including its canonical SHA-256 policy
 digest. An approved authenticated transport must write it atomically into a
 protected file on the independent monitoring node. Configure that exact source

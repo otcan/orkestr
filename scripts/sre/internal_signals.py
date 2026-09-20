@@ -22,6 +22,26 @@ from task_baseline import read_sample
 from systemd_posture import UNIT
 
 
+MISSING_TABLE = object()
+
+
+def table_id(value=MISSING_TABLE, *, route_get=False):
+    """Normalize only iproute2's built-ins and explicit numeric table IDs.
+
+    print_route omits RT_TABLE_MAIN for an unfiltered route-get result. Rule
+    records have no such default. Unknown administrator aliases are not guessed.
+    """
+    if value is MISSING_TABLE:
+        return 254 if route_get else None
+    if isinstance(value, str):
+        if value in {"local", "main", "default"}:
+            return {"local": 255, "main": 254, "default": 253}[value]
+        if not re.fullmatch(r"[1-9][0-9]{0,9}", value):
+            return None
+        value = int(value)
+    return value if type(value) is int and 1 <= value <= 4294967295 else None
+
+
 def protected_json(path):
     path = Path(os.path.abspath(path))
     check_directory_chain(path.parent)
@@ -95,13 +115,15 @@ def collect(policy, now=None, runner=subprocess.run, read_text=None):
             route = routes[0] if len(routes) == 1 else {}
             source = ipaddress.ip_address(expectation["source"])
             matching_rule = any(rule.get("priority") == expectation["priority"]
-                                and str(rule.get("table")) == str(expectation["table"])
+                                and table_id(rule.get("table", MISSING_TABLE)) == expectation["table"]
                                 and ipaddress.ip_network(rule.get("src", "all"), strict=False)
                                 == ipaddress.ip_network(str(source) + "/" + str(source.max_prefixlen)) for rule in rules
                                 if rule.get("src") not in (None, "all"))
             route_results.append(route.get("dev") == expectation["device"]
                                  and route.get("gateway") == expectation["gateway"]
-                                 and str(route.get("table")) == str(expectation["table"]) and matching_rule)
+                                 and route.get("type", "unicast") == "unicast"
+                                 and table_id(route.get("table", MISSING_TABLE), route_get=True) == expectation["table"]
+                                 and matching_rule)
         except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
             errors.append("route_read_failed")
     try:

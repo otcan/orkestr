@@ -10,7 +10,7 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts" / "sre"))
 from evidence_archive import digest
-from internal_signals import collect, load_signal, protected_json
+from internal_signals import collect, load_signal, protected_json, table_id
 from reachability import Monitor, classify, main
 from service_audit import AuditStore
 
@@ -29,6 +29,7 @@ class SignalTests(unittest.TestCase):
                       "/proc/pressure/memory": "some avg10=0.00 avg60=0.00 avg300=0.00 total=123\n",
                       "/proc/loadavg": "0.1 0.2 0.3 1/100 42", "/proc/sys/fs/file-nr": "100 0 1000"}
         self.route_device = "eth0"
+        self.route_table = {"table": 1001}
         self.rules = [{"src": "192.0.2.2", "priority": 100, "table": 1001}]
 
     def tearDown(self):
@@ -42,7 +43,7 @@ class SignalTests(unittest.TestCase):
             if args[2].startswith("nord"):
                 data = f"Id={args[2]}\nActiveState=inactive\nUnitFileState=masked\n"
         elif "route" in args:
-            data = json.dumps([{"dev": self.route_device, "gateway": "192.0.2.1", "table": 1001}])
+            data = json.dumps([{"dev": self.route_device, "gateway": "192.0.2.1", **self.route_table}])
         elif "rule" in args:
             data = json.dumps(self.rules)
         else:
@@ -71,6 +72,38 @@ class SignalTests(unittest.TestCase):
         self.route_device = "eth0"
         self.rules[0]["priority"] = 200
         self.assertFalse(self.sample()["route_ok"])
+
+    def test_known_tables_normalize_but_missing_rule_and_unknown_alias_do_not(self):
+        for value, expected in (("main", 254), ("default", 253), ("local", 255), ("1001", 1001), (1001, 1001)):
+            self.assertEqual(table_id(value), expected)
+        for value in (None, True, 1.0, "operator-table", "0254", "", -1, "4294967296"):
+            self.assertIsNone(table_id(value, route_get=True))
+        self.assertEqual(table_id(route_get=True), 254)
+        self.assertIsNone(table_id())
+
+    def test_main_named_numeric_and_omitted_route_get_table_agree(self):
+        expected = policy()
+        expected["routes"][0]["table"] = 254
+        for rule_table in ("main", "254", 254):
+            self.rules[0]["table"] = rule_table
+            for route_table in ({"table": "main"}, {"table": "254"}, {"table": 254}, {}):
+                self.route_table = route_table
+                self.assertTrue(collect(expected, 100, self.runner, self.reads.__getitem__)["route_ok"])
+
+    def test_absent_table_never_matches_arbitrary_policy_or_missing_rule(self):
+        self.route_table = {}
+        self.assertFalse(self.sample()["route_ok"])
+        expected = policy()
+        expected["routes"][0]["table"] = 254
+        self.rules[0].pop("table")
+        self.assertFalse(collect(expected, 100, self.runner, self.reads.__getitem__)["route_ok"])
+        self.rules[0]["table"] = "main"
+        self.route_table = {"table": None}
+        self.assertFalse(collect(expected, 100, self.runner, self.reads.__getitem__)["route_ok"])
+        self.route_table = {"table": "unknown-alias"}
+        self.assertFalse(collect(expected, 100, self.runner, self.reads.__getitem__)["route_ok"])
+        self.route_table = {"type": "local"}
+        self.assertFalse(collect(expected, 100, self.runner, self.reads.__getitem__)["route_ok"])
 
     def test_pressure_warns_even_before_public_probe_failure(self):
         self.reads["/proc/pressure/memory"] = "some avg10=20.00 total=100"

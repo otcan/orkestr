@@ -7,6 +7,7 @@ receipt JSON supplied by an application. No network transport is auto-selected.
 import hashlib
 import json
 import math
+import time
 
 from service_audit import token
 
@@ -26,10 +27,11 @@ def timestamp(value):
 
 
 class Archive:
-    def __init__(self, store, sink_id, retention_seconds=604800):
+    def __init__(self, store, sink_id, retention_seconds=604800, *, clock=time.time):
         if not token(sink_id) or type(retention_seconds) is not int or retention_seconds < 86400:
             raise ValueError("explicit sink identity and at least one day local retention required")
         self.store, self.sink_id, self.retention_seconds = store, sink_id, retention_seconds
+        self.clock = clock
         with store.db:
             store.db.execute("""CREATE TABLE IF NOT EXISTS exports (
                 id TEXT PRIMARY KEY, payload TEXT, receipt TEXT, created REAL NOT NULL)""")
@@ -87,7 +89,11 @@ class Archive:
         if not row:
             raise ValueError("unknown export")
         if row["receipt"]:
-            return json.loads(row["receipt"])
+            receipt = json.loads(row["receipt"])
+            acknowledged = timestamp(self.clock())
+            if acknowledged < row["created"] or receipt["retained_until"] < acknowledged + self.retention_seconds:
+                raise ValueError("recorded receipt lacks the required remaining retention horizon")
+            return receipt
         if not row["payload"]:
             raise ValueError("missing export payload")
         bundle = json.loads(row["payload"])
@@ -99,8 +105,9 @@ class Archive:
                 or response.get("immutable") is not True or not token(response.get("receipt_id"))):
             raise ValueError("export receipt missing, unbound or not immutable")
         until = timestamp(response.get("retained_until"))
-        if until < row["created"] + self.retention_seconds:
-            raise ValueError("off-host retention is shorter than local policy")
+        acknowledged = timestamp(self.clock())  # After I/O, including delayed delivery.
+        if acknowledged < row["created"] or until < acknowledged + self.retention_seconds:
+            raise ValueError("off-host receipt lacks the required remaining retention horizon")
         receipt = {key: response[key] for key in
                    ("bundle_id", "sink_id", "state", "immutable", "receipt_id", "retained_until")}
         with self.store.db:
@@ -124,8 +131,8 @@ class Archive:
             if not export or not export["receipt"]:
                 raise ValueError("acknowledged immutable export required before pruning")
             receipt = json.loads(export["receipt"])
-            if receipt["retained_until"] <= now or now < export["created"]:
-                raise ValueError("export retention expired or clock moved backwards")
+            if receipt["retained_until"] < now + self.retention_seconds or now < export["created"]:
+                raise ValueError("export retention horizon insufficient or clock moved backwards")
             if export["payload"] is None:
                 db.commit()
                 return 0
