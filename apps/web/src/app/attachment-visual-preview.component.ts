@@ -41,22 +41,25 @@ export class AttachmentVisualPreviewComponent implements AfterViewInit, OnChange
   private generation = 0;
   private observer: ResizeObserver | null = null;
   private width = 0;
+  private rendering = false;
+  private renderPending = false;
   ngAfterViewInit(): void {
     this.observer = new ResizeObserver(() => {
       const width = this.viewport.nativeElement.clientWidth;
       if (width === this.width) return;
       this.width = width;
-      if (!this.busy() && !this.error()) void this.render();
+      if (!this.error()) void this.render();
     });
     this.observer.observe(this.viewport.nativeElement); void this.open();
   }
   ngOnChanges(): void { if (this.canvas) void this.open(); }
   ngOnDestroy(): void { this.observer?.disconnect(); this.dispose(); }
   turn(delta: number): void { if (!this.busy()) { this.page.set(Math.max(1, Math.min(this.pages(), this.page() + delta))); void this.render(); } }
-  scale(factor: number): void { this.zoom.set(Math.max(0.5, Math.min(4, this.zoom() * factor))); void this.render(); }
-  fit(): void { this.zoom.set(1); void this.render(); }
+  scale(factor: number): void { if (!this.busy()) { this.zoom.set(Math.max(0.5, Math.min(4, this.zoom() * factor))); void this.render(); } }
+  fit(): void { if (!this.busy()) { this.zoom.set(1); void this.render(); } }
   private dispose(): void {
     this.generation++;
+    this.rendering = false; this.renderPending = false;
     if (this.timer) clearTimeout(this.timer);
     this.task?.cancel(); this.task = null;
     if (this.loading) void this.loading.destroy().catch(() => {});
@@ -108,6 +111,10 @@ export class AttachmentVisualPreviewComponent implements AfterViewInit, OnChange
   }
   private async render(): Promise<void> {
     if (!this.pdf && !this.bitmap) return;
+    // Rotation/keyboard viewport changes can arrive while PDF.js owns the
+    // canvas. Coalesce them, then draw once at the latest width.
+    if (this.rendering) { this.renderPending = true; return; }
+    this.rendering = true;
     const generation = this.generation;
     this.busy.set(true); this.deadline();
     try {
@@ -126,7 +133,13 @@ export class AttachmentVisualPreviewComponent implements AfterViewInit, OnChange
         this.task = null; page.cleanup();
       } else canvas.getContext("2d")!.drawImage(this.bitmap!, 0, 0, canvas.width, canvas.height);
       if (this.timer) clearTimeout(this.timer);
-      this.busy.set(false);
+      if (!this.renderPending) this.busy.set(false);
     } catch { if (generation === this.generation) this.fail("Unable to render this preview."); }
+    finally {
+      if (generation === this.generation) {
+        this.rendering = false;
+        if (this.renderPending) { this.renderPending = false; void this.render(); }
+      }
+    }
   }
 }
