@@ -7,6 +7,7 @@ if [ "${ORKESTR_INSTALL_DEV_DEPS:-0}" = "1" ] || [ "${ORKESTR_BUILD_WEB_FROM_SOU
   else
     npm install --include=dev
   fi
+  node scripts/patch-whatsapp-media-id.mjs
   exit 0
 fi
 
@@ -38,3 +39,7 @@ if [ ! -x node_modules/.bin/tsc ]; then
   echo "Runtime dependency install did not provide the TypeScript compiler required by build:server." >&2
   exit 1
 fi
+
+# The compiler-only install above disables lifecycle scripts; verify the media
+# compatibility patch again after the final dependency operation.
+node scripts/patch-whatsapp-media-id.mjs
