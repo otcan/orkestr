@@ -95,10 +95,12 @@ export class GoogleWorkspaceReviewController {
         userAgent: clean(request?.headers?.["user-agent"]),
         ip: requestIp(request),
         allowApproveCode: false,
+        reviewerSession: true,
       } as any);
       response.setHeader("set-cookie", sessionCookieHeader(paired.token, process.env, {
         requestHost: clean(request?.headers?.["x-forwarded-host"] || request?.headers?.host),
         path: "/",
+        hostOnly: true,
       }));
       return response.redirect(303, this.workspacePath());
     } catch {
@@ -175,7 +177,9 @@ export class GoogleWorkspaceReviewController {
   }
 
   @Post("actions/api/gmail-send")
-  async sendGmail(@Req() request: any) {
+  async sendGmail(@Req() request: any, @Body() body: Record<string, unknown> = {}) {
+    this.reviewPrincipal(request);
+    if (body.confirmed !== true) throw new BadRequestException("google_workspace_review_confirmation_required");
     const { principal, connection } = await this.reviewConnection(request);
     const sent = await sendGmailMessage({
       to: connection.email,
@@ -207,7 +211,9 @@ export class GoogleWorkspaceReviewController {
   }
 
   @Post("actions/api/calendar-create")
-  async createCalendarEvent(@Req() request: any) {
+  async createCalendarEvent(@Req() request: any, @Body() body: Record<string, unknown> = {}) {
+    this.reviewPrincipal(request);
+    if (body.confirmed !== true) throw new BadRequestException("google_workspace_review_confirmation_required");
     const { principal, connection } = await this.reviewConnection(request);
     const start = new Date(Date.now() + 60 * 60 * 1000);
     const end = new Date(start.getTime() + 30 * 60 * 1000);

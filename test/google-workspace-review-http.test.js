@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import { startServer } from "../apps/server/src/server.js";
 import { createGoogleWorkspaceReviewEnvironmentLink } from "../packages/connectors/src/google-workspace-review-environment.js";
+import { deriveInstanceSecuritySession, securitySessionForToken } from "../packages/core/src/security.js";
 
 const envKeys = [
   "ORKESTR_HOME",
@@ -89,6 +90,12 @@ test("reviewer password opens the actual isolated Orkestr cockpit", async () => 
     assert.equal(signedIn.headers.get("location"), "/thread/review-thread");
     const sessionCookie = (signedIn.headers.get("set-cookie") || "").split(";")[0];
     assert.match(sessionCookie, /^orkestr_session=/);
+    assert.doesNotMatch(signedIn.headers.get("set-cookie"), /Domain=/i);
+    const token = decodeURIComponent(sessionCookie.slice("orkestr_session=".length));
+    const session = await securitySessionForToken(token);
+    assert.equal(session.authProvider, "google_workspace_review");
+    assert.ok(Date.parse(session.expiresAt) - Date.now() <= 30 * 60_000);
+    await assert.rejects(deriveInstanceSecuritySession({ sourceSession: session, instanceId: "other-instance" }), /source_browser_session_invalid/);
 
     const apiBeforeSignIn = await fetch(`${root}/api/threads`);
     assert.equal(apiBeforeSignIn.status, 401);
@@ -134,6 +141,7 @@ test("reviewer password opens the actual isolated Orkestr cockpit", async () => 
     assert.equal(authorizeUrl.searchParams.get("redirect_uri"), "https://review.example.test/oauth/gmail/callback");
 
     const nativeFetch = globalThis.fetch;
+    const mutations = [];
     globalThis.fetch = async (url, options = {}) => {
       if (String(url) === "https://oauth2.googleapis.com/token") {
         return new Response(JSON.stringify({
@@ -156,9 +164,11 @@ test("reviewer password opens the actual isolated Orkestr cockpit", async () => 
         return new Response(JSON.stringify({ id: "review-draft", message: { id: "draft-message" } }), { headers: { "content-type": "application/json" } });
       }
       if (String(url) === "https://gmail.googleapis.com/gmail/v1/users/me/messages/send" && options.method === "POST") {
+        mutations.push("gmail-send");
         return new Response(JSON.stringify({ id: "sent-message" }), { headers: { "content-type": "application/json" } });
       }
       if (String(url).startsWith("https://www.googleapis.com/calendar/v3/calendars/primary/events") && options.method === "POST") {
+        mutations.push("calendar-create");
         return new Response(JSON.stringify({ id: "review-event", summary: "Orkestr Google OAuth review event", start: { dateTime: "2026-08-03T10:00:00Z" }, end: { dateTime: "2026-08-03T10:30:00Z" } }), { headers: { "content-type": "application/json" } });
       }
       if (String(url).startsWith("https://www.googleapis.com/calendar/v3/calendars/primary/events")) {
@@ -186,12 +196,24 @@ test("reviewer password opens the actual isolated Orkestr cockpit", async () => 
       assert.equal(read.message.subject, "Review subject");
       const draft = await (await nativeFetch(`${root}/review/google/actions/api/gmail-draft`, { method: "POST", headers: { cookie: sessionCookie } })).json();
       assert.equal(draft.draftId, "review-draft");
-      const sent = await (await nativeFetch(`${root}/review/google/actions/api/gmail-send`, { method: "POST", headers: { cookie: sessionCookie } })).json();
+      for (const action of ["gmail-send", "calendar-create"]) {
+        for (const body of [{}, { confirmed: false }, { confirmed: "true" }]) {
+          const denied = await nativeFetch(`${root}/review/google/actions/api/${action}`, {
+            method: "POST", headers: { cookie: sessionCookie, "content-type": "application/json" }, body: JSON.stringify(body),
+          });
+          assert.equal(denied.status, 400);
+          assert.match(await denied.text(), /google_workspace_review_confirmation_required/);
+        }
+      }
+      assert.deepEqual(mutations, [], "unconfirmed requests must never reach a provider mutation");
+      const confirmed = { method: "POST", headers: { cookie: sessionCookie, "content-type": "application/json" }, body: JSON.stringify({ confirmed: true }) };
+      const sent = await (await nativeFetch(`${root}/review/google/actions/api/gmail-send`, confirmed)).json();
       assert.equal(sent.messageId, "sent-message");
       const calendar = await (await nativeFetch(`${root}/review/google/actions/api/calendar-list`, { method: "POST", headers: { cookie: sessionCookie } })).json();
       assert.equal(calendar.events[0].summary, "Existing event");
-      const created = await (await nativeFetch(`${root}/review/google/actions/api/calendar-create`, { method: "POST", headers: { cookie: sessionCookie } })).json();
+      const created = await (await nativeFetch(`${root}/review/google/actions/api/calendar-create`, confirmed)).json();
       assert.equal(created.event.id, "review-event");
+      assert.deepEqual(mutations, ["gmail-send", "calendar-create"]);
     } finally {
       globalThis.fetch = nativeFetch;
     }
@@ -203,6 +225,10 @@ test("reviewer password opens the actual isolated Orkestr cockpit", async () => 
     const oldTicket = await fetch(`${root}/review/google/old-ticket`, { redirect: "manual" });
     assert.equal(oldTicket.status, 302);
     assert.equal(oldTicket.headers.get("location"), "/review/google");
+
+    process.env.ORKESTR_GOOGLE_WORKSPACE_REVIEW_ACCESS_SECRET = "rotated-review-signing-secret-32-characters";
+    const afterRotation = await fetch(`${root}/api/threads`, { headers: { cookie: sessionCookie } });
+    assert.equal(afterRotation.status, 401, "signing-secret rotation revokes cockpit access as well as review action access");
   } finally {
     await new Promise((resolve) => server.close(resolve));
     restoreEnv(prior);
