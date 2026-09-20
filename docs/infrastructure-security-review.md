@@ -61,6 +61,10 @@ remain visible in reports with separate reviewed/unresolved counts. No wildcard
 or test-directory suppression is supported. The initial two dispositions are
 self-authored local reviewer-session HMAC fixtures, independently confirmed by
 their author as never issued or used externally. They are not provider secrets.
+The same fixtures in the original worker commit are separately bound. Ten
+historical LinkedIn-detector locations were reviewed as field-name arrays or a
+variable/empty-string conditional, including identical lines repeated in merge
+commits. Exact locations are classified as nonsecret syntax, never whole paths.
 
 ```sh
 node scripts/security/secret-scan.mjs \
