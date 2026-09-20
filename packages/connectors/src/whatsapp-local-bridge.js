@@ -7637,7 +7637,8 @@ export async function sendLocalWhatsAppMessage({ chatId = "", text = "", account
         const media = sendMediaAsDocument
           ? sourceMedia
           : new MessageMedia(sourceMedia.mimetype, sourceMedia.data);
-        const sendOptions = sendMediaAsDocument ? { sendMediaAsDocument: true } : {};
+        // Await the provider's send result inside the existing bounded timeout.
+        const sendOptions = { waitUntilMsgSent: true, ...(sendMediaAsDocument ? { sendMediaAsDocument: true } : {}) };
         const pendingAttachmentEcho = rememberPendingOutboundAttachmentEcho(
           selectedAccountId,
           chatId,

@@ -37,7 +37,8 @@ async function fixture(run, { failAt = -1, missingAck = false } = {}) {
   for (const [index,name] of ["a.pdf","b.png","c.csv"].entries()) {
     const filePath=path.join(home,name); await fs.writeFile(filePath,"fixture"); attachments.push({path:filePath,filename:name,index});
   }
-  setLocalWhatsAppRuntimeForTest("personal",{MessageMedia:Media,client:{async sendMessage(to,body){
+  setLocalWhatsAppRuntimeForTest("personal",{MessageMedia:Media,client:{async sendMessage(to,body,options){
+    if (typeof body!=="string") assert.equal(options.waitUntilMsgSent,true);
     calls.push({to,kind:typeof body==="string"?"text":"attachment"});
     if (calls.length===failAt) throw Error("Evaluation failed: fake private provider detail");
     if (missingAck && typeof body!=="string") return {};
