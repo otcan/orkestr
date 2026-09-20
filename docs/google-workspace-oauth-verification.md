@@ -248,9 +248,13 @@ Reviewer password sessions expire after `ORKESTR_GOOGLE_WORKSPACE_REVIEW_ENV_TTL
 (5–1440 minutes, default 240), use a host-only cookie, and cannot derive a session
 for another instance. Rotating the review password or signing secret, disabling
 review access, or changing the review identity, hostname or home invalidates
-existing reviewer sessions. Older reviewer sessions with the ordinary browser
+existing reviewer sessions. Changing the configured session TTL also invalidates
+them. Older reviewer sessions with the ordinary browser
 lifetime require a fresh password sign-in after this upgrade. Keep the operator
 account separate from `ORKESTR_GOOGLE_WORKSPACE_REVIEW_USER_ID`.
+Retain that configured identity when disabling review access so legacy sessions
+cannot be mistaken for ordinary operator sessions; revoke those legacy sessions
+before removing or repurposing the reviewer identity configuration.
 
 The capabilities panel enables only granted actions. Sending the self-addressed
 test message and creating the no-guest calendar event display a confirmation
