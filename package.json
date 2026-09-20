@@ -62,7 +62,7 @@
     "@xterm/xterm": "^6.0.0",
     "age-encryption": "0.3.1",
     "express": "5.2.1",
-    "multer": "2.2.0",
+    "multer": "2.3.0",
     "pdfjs-dist": "6.3.289",
     "pg": "^8.21.0",
     "postal-mime": "^2.7.5",
@@ -93,7 +93,8 @@
     "zone.js": "^0.16.2"
   },
   "overrides": {
-    "qs": "6.15.2",
+    "qs": "6.16.0",
+    "multer": "$multer",
     "tar": "7.5.22",
     "whatsapp-web.js": {
       "puppeteer": "25.9.0"

@@ -16,7 +16,12 @@ test("framework and upload dependencies stay above the reviewed security floors"
   assert.equal(versionAt("node_modules/@angular/core"), "21.2.21");
   assert.equal(versionAt("node_modules/@angular/build"), "21.2.21");
   assert.equal(versionAt("node_modules/@nestjs/platform-express"), "11.2.3");
-  assert.equal(versionAt("node_modules/multer"), "2.2.0");
+  assert.equal(versionAt("node_modules/multer"), "2.3.0");
+  assert.equal(versionAt("node_modules/qs"), "6.16.0");
+  for (const [packagePath, entry] of Object.entries(lock.packages)) {
+    if (packagePath.endsWith("/node_modules/multer")) assert.equal(entry.version, "2.3.0", packagePath);
+    if (packagePath.endsWith("/node_modules/qs")) assert.equal(entry.version, "6.16.0", packagePath);
+  }
   assert.equal(versionAt("node_modules/@modelcontextprotocol/sdk"), "1.30.0");
   assert.ok(versionAt("node_modules/tar") > "7.5.20");
 });
