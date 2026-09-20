@@ -23,6 +23,22 @@ export function minimizeFindings(findings, salt) {
   });
 }
 
+export function applyReviewedFindings(findings, policy, now = Date.now()) {
+  if (policy?.schemaVersion !== 1 || policy.scanner !== scannerRelease.version || !Array.isArray(policy.findings) ||
+      policy.findings.length > 1000 || !Number.isFinite(now)) throw new Error("invalid_finding_review_policy");
+  const key = row => JSON.stringify([row.commit, row.path, row.detector, row.line]);
+  const reviews = new Map();
+  for (const row of policy.findings) {
+    if (!/^[a-f0-9]{40,64}$/.test(row.commit || "") || typeof row.path !== "string" || !row.path || /[\x00-\x1f*?]/.test(row.path) ||
+        !/^[a-zA-Z0-9_-]{1,100}$/.test(row.detector || "") || !Number.isSafeInteger(row.line) || row.line < 1 ||
+        !["synthetic_fixture", "nonsecret_syntax"].includes(row.classification) || !/^[A-Z]+-\d+$/.test(row.reviewRef || "") ||
+        !/^[a-zA-Z0-9_-]{1,100}$/.test(row.reviewedBy || "") || !Number.isFinite(Date.parse(row.expiresAt)) || reviews.has(key(row))) throw new Error("invalid_finding_review_policy");
+    if (Date.parse(row.expiresAt) > now) reviews.set(key(row), row);
+  }
+  return findings.map(row => reviews.has(key(row)) ? { ...row, status: "reviewed_nonsecret", reviewRef: reviews.get(key(row)).reviewRef,
+    classification: reviews.get(key(row)).classification } : row);
+}
+
 export async function scanRepository({ binary, repository, repositoryLabel, reportPath, baseCommit = "" }, runner = spawnSync) {
   if (!path.isAbsolute(binary || "") || !path.isAbsolute(repository || "") || !path.isAbsolute(reportPath || "") ||
       !/^[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+$/.test(repositoryLabel || "") || (baseCommit && !/^[a-f0-9]{40,64}$/.test(baseCommit))) throw new Error("explicit_scan_scope_required");
@@ -46,14 +62,17 @@ export async function scanRepository({ binary, repository, repositoryLabel, repo
     if (![0, 23].includes(scan.status) || scan.error) throw new Error("scanner_failed_no_coverage_claim");
     const stat = await fs.stat(rawReport);
     if (!stat.isFile() || stat.size > 64 * 1024 * 1024) throw new Error("invalid_scanner_report");
-    const findings = minimizeFindings(JSON.parse(await fs.readFile(rawReport, "utf8")), randomBytes(32));
-    if ((scan.status === 0) !== (findings.length === 0)) throw new Error("inconsistent_scanner_exit");
+    const rawFindings = minimizeFindings(JSON.parse(await fs.readFile(rawReport, "utf8")), randomBytes(32));
+    if ((scan.status === 0) !== (rawFindings.length === 0)) throw new Error("inconsistent_scanner_exit");
+    const policy = JSON.parse(await fs.readFile(new URL("./reviewed-secret-findings.json", import.meta.url), "utf8"));
+    const findings = applyReviewedFindings(rawFindings, policy);
+    const unresolved = findings.filter(row => row.status !== "reviewed_nonsecret").length;
     const report = { schemaVersion: 1, repository: repositoryLabel, scanner: scannerRelease.version,
       scope: baseCommit ? "commit_range" : "all_local_refs", baseCommit: baseCommit || null,
       generatedAt: new Date().toISOString(), findings, fingerprintScope: "per_report_salted_location_not_credential_value" };
     const handle = await fs.open(reportTarget, "wx", 0o600);
     try { await handle.writeFile(JSON.stringify(report, null, 2) + "\n"); await handle.sync(); } finally { await handle.close(); }
-    return { ok: findings.length === 0, findings: findings.length, scope: report.scope, scanner: scannerRelease.version };
+    return { ok: unresolved === 0, findings: findings.length, unresolved, reviewed: findings.length - unresolved, scope: report.scope, scanner: scannerRelease.version };
   } finally {
     await fs.rm(temporary, { recursive: true, force: true });
   }

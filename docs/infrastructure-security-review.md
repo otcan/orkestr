@@ -54,6 +54,14 @@ scanner output and minimizes the redacted JSON. Reports contain only repository,
 commit, path, detector, line, triage status and a per-report salted **location**
 fingerprint; this is not a credential-value fingerprint.
 
+Merge-result diffs are included, and external diff/textconv execution is disabled.
+The separate reviewed-finding policy can classify only exact immutable
+commit/path/detector/line locations, with reviewer, ticket and expiry. Findings
+remain visible in reports with separate reviewed/unresolved counts. No wildcard
+or test-directory suppression is supported. The initial two dispositions are
+self-authored local reviewer-session HMAC fixtures, independently confirmed by
+their author as never issued or used externally. They are not provider secrets.
+
 ```sh
 node scripts/security/secret-scan.mjs \
   --binary /absolute/verified/gitleaks \

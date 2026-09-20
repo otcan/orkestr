@@ -5,7 +5,7 @@ import fs from "node:fs/promises";
 import { writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { minimizeFindings, scannerRelease, scanRepository } from "../scripts/security/secret-scan.mjs";
+import { minimizeFindings, scannerRelease, scanRepository, applyReviewedFindings } from "../scripts/security/secret-scan.mjs";
 
 test("secret evidence excludes matches, values, messages, authors and original fingerprints", () => {
   const finding = { Commit: "a".repeat(40), File: "example.js", RuleID: "example-rule", StartLine: 2,
@@ -66,4 +66,18 @@ test("metadata fingerprints are salted and invalid reports fail closed", () => {
   assert.notEqual(minimizeFindings([finding], randomBytes(32))[0].fingerprint, minimizeFindings([finding], randomBytes(32))[0].fingerprint);
   for (const patch of [{ Commit: "bad" }, { File: "bad\npath" }, { RuleID: "raw value" }, { StartLine: 0 }]) assert.throws(() => minimizeFindings([{ ...finding, ...patch }], randomBytes(32)));
   assert.match(scannerRelease.archiveSha256, /^[a-f0-9]{64}$/);
+});
+
+test("nonsecret reviews bind exact immutable locations, scanner and expiry", () => {
+  const finding = { commit: "a".repeat(40), path: "test/example.js", detector: "example-rule", line: 1, status: "needs_private_triage" };
+  const review = { ...finding, classification: "synthetic_fixture", reviewRef: "ORK-478", reviewedBy: "operator", expiresAt: "2026-12-01" };
+  const policy = { schemaVersion: 1, scanner: scannerRelease.version, findings: [review] };
+  const now = Date.parse("2026-09-20");
+  assert.equal(applyReviewedFindings([finding], policy, now)[0].status, "reviewed_nonsecret");
+  for (const patch of [{ commit: "b".repeat(40) }, { path: "test/other.js" }, { line: 2 }, { detector: "other" }]) {
+    assert.equal(applyReviewedFindings([{ ...finding, ...patch }], policy, now)[0].status, "needs_private_triage");
+  }
+  assert.equal(applyReviewedFindings([finding], policy, Date.parse("2027-01-01"))[0].status, "needs_private_triage");
+  assert.throws(() => applyReviewedFindings([finding], { ...policy, scanner: "0.0.0" }, now), /invalid_finding/);
+  assert.throws(() => applyReviewedFindings([finding], { ...policy, findings: [{ ...review, path: "test/*" }] }, now), /invalid_finding/);
 });
