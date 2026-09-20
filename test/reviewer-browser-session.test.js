@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
+import { randomBytes } from "node:crypto";
 import test from "node:test";
 import { reviewerBrowserSessionActive, reviewerBrowserSessionFields } from "../packages/core/src/reviewer-browser-session.js";
 
 const env = {
   ORKESTR_HOME: "/fixture/review-instance",
   ORKESTR_GOOGLE_WORKSPACE_REVIEW_ACCESS_ENABLED: "1",
-  ORKESTR_GOOGLE_WORKSPACE_REVIEW_ACCESS_SECRET: "synthetic-signing-secret-32-characters",
+  ORKESTR_GOOGLE_WORKSPACE_REVIEW_ACCESS_SECRET: randomBytes(32).toString("hex"),
   ORKESTR_GOOGLE_WORKSPACE_REVIEW_PASSWORD: "synthetic-review-password",
   ORKESTR_GOOGLE_WORKSPACE_REVIEW_USER_ID: "reviewer",
   ORKESTR_GOOGLE_WORKSPACE_REVIEW_THREAD_ID: "review-thread",
@@ -27,7 +28,7 @@ test("rotation, disabling and changing reviewer identity/instance invalidate onl
   const session = { userId: "reviewer", ...reviewerBrowserSessionFields("reviewer", env) };
   for (const [key, value] of Object.entries({
     ORKESTR_GOOGLE_WORKSPACE_REVIEW_ACCESS_ENABLED: "0",
-    ORKESTR_GOOGLE_WORKSPACE_REVIEW_ACCESS_SECRET: "replacement-signing-secret-32-characters",
+    ORKESTR_GOOGLE_WORKSPACE_REVIEW_ACCESS_SECRET: randomBytes(32).toString("hex"),
     ORKESTR_GOOGLE_WORKSPACE_REVIEW_PASSWORD: "replacement-review-password",
     ORKESTR_GOOGLE_WORKSPACE_REVIEW_USER_ID: "other-reviewer",
     ORKESTR_GOOGLE_WORKSPACE_REVIEW_THREAD_ID: "other-thread",
