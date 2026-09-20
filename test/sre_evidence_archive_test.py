@@ -12,7 +12,8 @@ class ArchiveTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.store = AuditStore(self.tmp.name)
-        self.archive = Archive(self.store, "independent-vault", 86400)
+        self.clock = 100000
+        self.archive = Archive(self.store, "independent-vault", 86400, clock=lambda: self.clock)
         self.row = {"_PID": "1", "_COMM": "systemd", "_BOOT_ID": "a" * 32,
                     "UNIT": "example.service", "JOB_TYPE": "restart", "JOB_ID": "42",
                     "__CURSOR": "cursor-1", "__REALTIME_TIMESTAMP": "1000"}
@@ -53,7 +54,7 @@ class ArchiveTests(unittest.TestCase):
         prepared = self.archive.prepare(100000)
         with self.assertRaises(TimeoutError):
             self.archive.deliver(prepared["bundle_id"], lambda _: (_ for _ in ()).throw(TimeoutError()))
-        reopened = Archive(self.store, "independent-vault", 86400)
+        reopened = Archive(self.store, "independent-vault", 86400, clock=lambda: self.clock)
         self.assertEqual(reopened.prepare(110000), prepared)
         with self.assertRaises(ValueError):
             reopened.prune(prepared["bundle_id"], 110000)
@@ -97,6 +98,33 @@ class ArchiveTests(unittest.TestCase):
         self.archive.deliver(prepared["bundle_id"], self.receipt)
         with self.assertRaises(ValueError):
             self.archive.prune(prepared["bundle_id"], 300001)
+        self.assertEqual(self.store.summary(1)["total"], 1)
+
+    def test_delayed_acknowledgement_needs_full_horizon_from_receipt_time(self):
+        self.settle()
+        prepared = self.archive.prepare(100000)
+        self.clock = 250000
+        with self.assertRaises(ValueError):
+            self.archive.deliver(prepared["bundle_id"], self.receipt)
+        self.assertIsNone(self.store.db.execute("SELECT receipt FROM exports").fetchone()[0])
+        self.assertEqual(self.store.summary(1)["total"], 1)
+        self.archive.deliver(prepared["bundle_id"], lambda p: {**self.receipt(p), "retained_until": 500000})
+        self.assertEqual(self.archive.prune(prepared["bundle_id"], 250000), 1)
+
+    def test_sink_delay_is_measured_after_io_and_near_expiry_cannot_prune(self):
+        self.settle()
+        prepared = self.archive.prepare(100000)
+        def slow_sink(request):
+            self.clock = 250000
+            return self.receipt(request)
+        with self.assertRaises(ValueError):
+            self.archive.deliver(prepared["bundle_id"], slow_sink)
+        self.archive.deliver(prepared["bundle_id"], lambda p: {**self.receipt(p), "retained_until": 500000})
+        with self.assertRaises(ValueError):
+            self.archive.prune(prepared["bundle_id"], 450000)
+        self.clock = 450000
+        with self.assertRaises(ValueError):
+            self.archive.deliver(prepared["bundle_id"], self.receipt)
         self.assertEqual(self.store.summary(1)["total"], 1)
 
     def test_crash_rolls_back_tombstone_and_deletion_together(self):

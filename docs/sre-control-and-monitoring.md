@@ -155,10 +155,14 @@ new evidence. `deliver(bundle_id, sink)` retries the exact digest and bytes afte
 receipt loss. The authenticated sink must return the matching `bundle_id`,
 `sink_id`, literal `immutable: true`, `state: retained`, `receipt_id`, and
 `retained_until`. The sink must independently enforce the claimed retention and
-idempotency; untrusted JSON alone proves neither.
+idempotency; untrusted JSON alone proves neither. Acknowledgements are checked
+after sink I/O and must cover the full configured retention period from that
+time, including when delivery was delayed. Retention is promised only until the
+receipt's stated deadline, never indefinitely.
 
-Only explicit `prune(bundle_id, now)` removes local rows. It requires an
-unexpired receipt and exact unchanged row content; it retains recent rows and
+Only explicit `prune(bundle_id, now)` removes local rows. It requires a
+receipt covering the full configured retention period from pruning time and
+exact unchanged row content; it retains recent rows and
 unresolved alerts. Tombstones prevent replayed journal records from recreating
 pruned events. Control operation identities, monitor sequences, export receipts
 and journal cursor are retained. Rollback/crash during deletion rolls back the
@@ -168,8 +172,10 @@ necessary: exporting an unresolved alert does not settle it.
 Pruning recent or unresolved rows finalizes the batch without deleting those
 rows. Changed rows and settled rows reaching their retention age become eligible
 for a new export. The compact receipt/tombstone indexes grow with history; they
-are intentionally not silently vacuumed or truncated. Expired sink receipts
-block pruning and require operator reconciliation. Baseline/qualification
+are intentionally not silently vacuumed or truncated. Expired or near-expiry
+sink receipts block pruning and require operator reconciliation. Configure the
+sink with retention headroom for delayed acknowledgement/pruning; this code does
+not infer renewal or extend an existing receipt's deadline. Baseline/qualification
 stores and control-operation ledgers are not pruned by this event-only workflow.
 No host sink, transport credential, recipient or direct-mail fallback is included.
 
