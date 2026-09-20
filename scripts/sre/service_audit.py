@@ -29,7 +29,7 @@ def normalize_event(row, units):
     cursor, timestamp = row.get("__CURSOR"), row.get("__REALTIME_TIMESTAMP", "")
     if (not token(unit) or unit not in units or not isinstance(action, str) or action not in ACTIONS
             or not isinstance(boot, str) or not BOOT.fullmatch(boot)
-            or not isinstance(job, str) or not re.fullmatch(r"[0-9]{1,20}", job)
+            or not isinstance(job, str) or (job and not re.fullmatch(r"[0-9]{1,20}", job))
             or not isinstance(timestamp, str) or not re.fullmatch(r"[0-9]{1,20}", timestamp)
             or not isinstance(cursor, str) or not 0 < len(cursor) <= 1024
             or any(ord(c) < 32 for c in cursor)):
@@ -43,6 +43,8 @@ def normalize_event(row, units):
 
 
 def exact_attribution(event, receipts):
+    if not event.get("job_id"):
+        return None  # Missing correlation evidence must alert, not disappear.
     matches = []
     for receipt in receipts:
         if (receipt.get("boot_id"), receipt.get("job_id"), receipt.get("unit")) != (
@@ -117,6 +119,10 @@ class AuditStore:
         self.claim_kind("service-control")
         self.db.execute("BEGIN IMMEDIATE")
         try:
+            scope = json.dumps(sorted(units))
+            self.db.execute("INSERT OR IGNORE INTO state VALUES('units',?)", (scope,))
+            if self.db.execute("SELECT value FROM state WHERE key='units'").fetchone()[0] != scope:
+                raise ValueError("journal scope changed; use a new reviewed state directory")
             for row in rows:
                 cursor = row.get("__CURSOR")
                 if (not isinstance(cursor, str) or not 0 < len(cursor) <= 1024

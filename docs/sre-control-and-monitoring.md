@@ -23,6 +23,9 @@ deadline and a 64-KiB record bound. Its journal cursor and pending alert records
 commit in one SQLite transaction. Cursor loss/read errors fail closed; they
 never silently skip to the latest record. Initial history defaults to ten
 minutes; `--bootstrap-lookback-seconds` allows a reviewed interval up to one day.
+The watched-unit set is durably bound to its cursor; changing scope requires a
+new reviewed state directory. A known action without a job ID remains
+unattributed instead of being silently discarded.
 
 ```sh
 python3 scripts/sre/service_watch.py \

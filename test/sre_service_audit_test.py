@@ -41,7 +41,9 @@ class AuditTests(unittest.TestCase):
         self.assertIsNone(normalize_event(event(_PID="44"), {UNIT}))
         self.assertIsNone(normalize_event(event(_COMM="node"), {UNIT}))
         self.assertIsNone(normalize_event(event(UNIT="other.service"), {UNIT}))
-        self.assertIsNone(normalize_event(event(JOB_ID=""), {UNIT}))
+        without_job = normalize_event(event(JOB_ID=""), {UNIT})
+        self.assertIsNotNone(without_job)
+        self.assertIsNone(exact_attribution(without_job, [evidence(job_id="")]))
 
     def test_minimized_payload(self):
         self.ingest(MESSAGE="SECRET BODY", ENV="SECRET ENV", JOB_RESULT="secret")
@@ -58,6 +60,12 @@ class AuditTests(unittest.TestCase):
         self.ingest()
         self.ingest()
         self.assertEqual(self.store.summary(0)["total"], 1)
+
+    def test_changing_watched_units_cannot_silently_reuse_cursor(self):
+        self.ingest()
+        with self.assertRaises(ValueError):
+            self.store.ingest([], {UNIT, "another.service"}, 1)
+        self.assertEqual(self.store.cursor(), "cursor-1")
 
     def test_cursor_and_pending_are_atomic_and_durable(self):
         self.ingest()
