@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { withConnectorOutboxMutation } from "./connector-outbox-lock.js";
 import fs from "node:fs/promises";
 import { hasWhatsAppPartialDelivery, whatsappOutboxQuarantine, protectWhatsAppOutboxUpdate, requiresWhatsAppUncertainOverride } from "./whatsapp-replay-safety.js";
 import { dataPaths, ensureDataDirs } from "../../storage/src/paths.js";
@@ -621,6 +622,10 @@ export async function listConnectorOutboxJobs(filters = {}, env = process.env) {
 }
 
 export async function writeConnectorOutbox(store = {}, env = process.env) {
+  return withConnectorOutboxMutation(env, () => writeConnectorOutboxLocked(store, env));
+}
+
+async function writeConnectorOutboxLocked(store, env) {
   const pg = await openConnectorOutboxPostgres(env);
   if (pg) {
     const jobs = mergeConnectorOutboxJobs(store.jobs || [], [], env);
@@ -642,6 +647,10 @@ export async function writeConnectorOutbox(store = {}, env = process.env) {
 }
 
 export async function ensureConnectorOutboxJob(input = {}, env = process.env) {
+  return withConnectorOutboxMutation(env, () => ensureConnectorOutboxJobLocked(input, env));
+}
+
+async function ensureConnectorOutboxJobLocked(input, env) {
   const pg = await openConnectorOutboxPostgres(env);
   if (pg) {
     const job = normalizeConnectorOutboxJob(input, env);
@@ -738,6 +747,10 @@ function claimExpired(job = {}, nowMs = Date.now()) {
 }
 
 export async function claimConnectorOutboxJob(jobIdOrKey = "", { claimant = "" } = {}, env = process.env) {
+  return withConnectorOutboxMutation(env, () => claimConnectorOutboxJobLocked(jobIdOrKey, { claimant }, env));
+}
+
+async function claimConnectorOutboxJobLocked(jobIdOrKey, { claimant }, env) {
   function decide(job) {
     if (!job) return { acquired: false, reason: "connector_outbox_job_missing" };
     const nowMs = Date.now(), now = new Date(nowMs).toISOString();
@@ -810,6 +823,10 @@ export async function claimConnectorOutboxJob(jobIdOrKey = "", { claimant = "" }
 }
 
 export async function releaseConnectorOutboxClaim(jobIdOrKey = "", { reason = "" } = {}, env = process.env) {
+  return withConnectorOutboxMutation(env, () => releaseConnectorOutboxClaimLocked(jobIdOrKey, { reason }, env));
+}
+
+async function releaseConnectorOutboxClaimLocked(jobIdOrKey, { reason }, env) {
   function releasedJob(job) {
     if (!job || connectorOutboxTerminalState(job.state)) return job;
     return normalizeConnectorOutboxJob(whatsappOutboxQuarantine(job) || {
@@ -858,6 +875,10 @@ export async function releaseConnectorOutboxClaim(jobIdOrKey = "", { reason = ""
 }
 
 export async function markConnectorOutboxJob(jobIdOrKey = "", patch = {}, env = process.env, approvedUncertainVersion = null) {
+  return withConnectorOutboxMutation(env, () => markConnectorOutboxJobLocked(jobIdOrKey, patch, env, approvedUncertainVersion));
+}
+
+async function markConnectorOutboxJobLocked(jobIdOrKey, patch, env, approvedUncertainVersion) {
   const pg = await openConnectorOutboxPostgres(env);
   if (pg) {
     const updated = await withPostgresTransaction(pg, async (client) => {

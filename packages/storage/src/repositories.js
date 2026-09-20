@@ -4,6 +4,8 @@ import { dataPaths, ensureDataDirs, userDataPaths } from "./paths.js";
 import { readJson, writeJson } from "./store.js";
 import { assignThreadPublicRefs, findThreadRecordByPublicRef, listThreadRecords, rollbackThreadPublicRefAssignments, saveThreadRecords } from "./thread-registry.js";
 import { snapshotEnvironment } from "./test-storage-isolation.js";
+import { withStorageFileLock } from "./storage-lock.js";
+import { fenceStagingReferences } from "./staging-reference-fence.js";
 import {
   appendThreadMessageRecord,
   deleteThreadMessageRecords,
@@ -78,10 +80,16 @@ export function createThreadMessageRepository(env = process.env) {
       return nextThreadMessageCursor(threadId, repositoryEnv);
     },
     async append(threadId, message) {
-      return appendThreadMessageRecord(threadId, message, repositoryEnv);
+      return withStorageFileLock(await this.pathForThread(threadId), async () => {
+        await fenceStagingReferences(threadId, [message], repositoryEnv);
+        return appendThreadMessageRecord(threadId, message, repositoryEnv);
+      });
     },
     async update(threadId, messageId, message) {
-      return updateThreadMessageRecord(threadId, messageId, message, repositoryEnv);
+      return withStorageFileLock(await this.pathForThread(threadId), async () => {
+        await fenceStagingReferences(threadId, [message], repositoryEnv);
+        return updateThreadMessageRecord(threadId, messageId, message, repositoryEnv);
+      });
     },
     fingerprint(threadId) {
       return threadMessageStoreFingerprint(threadId, repositoryEnv);
@@ -90,26 +98,35 @@ export function createThreadMessageRepository(env = process.env) {
       return threadMessageStoreFingerprints(threadIds, repositoryEnv);
     },
     async save(threadId, messages) {
-      if (await replaceThreadMessageRecords(threadId, messages, repositoryEnv)) return messages;
-      return writeJson(await this.pathForThread(threadId), Array.isArray(messages) ? messages : []);
+      const file = await this.pathForThread(threadId);
+      return withStorageFileLock(file, async () => {
+        await fenceStagingReferences(threadId, Array.isArray(messages) ? messages : [], repositoryEnv);
+        if (await replaceThreadMessageRecords(threadId, messages, repositoryEnv)) return messages;
+        return writeJson(file, Array.isArray(messages) ? messages : []);
+      });
     },
     async mutate(threadId, operation) {
       const filePath = await this.pathForThread(threadId);
-      const current = await this.list(threadId);
-      const messages = Array.isArray(current) ? current : [];
-      const result = await operation(messages, filePath);
-      if (Array.isArray(result)) {
-        await this.save(threadId, result);
+      return withStorageFileLock(filePath, async () => {
+        const current = await this.list(threadId);
+        const messages = Array.isArray(current) ? current : [];
+        const result = await operation(messages, filePath);
+        if (Array.isArray(result)) {
+          await this.save(threadId, result);
+          return result;
+        }
+        if (result && Array.isArray(result.messages)) {
+          await this.save(threadId, result.messages);
+        }
         return result;
-      }
-      if (result && Array.isArray(result.messages)) {
-        await this.save(threadId, result.messages);
-      }
-      return result;
+      });
     },
     async delete(threadId) {
-      if (await deleteThreadMessageRecords(threadId, repositoryEnv)) return;
-      return fs.rm(await this.pathForThread(threadId), { force: true });
+      const file = await this.pathForThread(threadId);
+      return withStorageFileLock(file, async () => {
+        if (await deleteThreadMessageRecords(threadId, repositoryEnv)) return;
+        return fs.rm(file, { force: true });
+      });
     },
   };
 }

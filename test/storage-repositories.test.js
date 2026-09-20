@@ -12,6 +12,17 @@ import {
   createThreadRepository,
 } from "../packages/storage/src/repositories.js";
 
+test("repository mutations serialize read-modify-write without lost messages", async t => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-repository-race-"));
+  t.after(() => fs.rm(home, { recursive: true, force: true }));
+  const repository = createThreadMessageRepository({ ORKESTR_HOME: home });
+  await Promise.all(Array.from({ length: 6 }, (_, index) => repository.mutate("fixture", async messages => {
+    await new Promise(resolve => setTimeout(resolve, 2));
+    return [...messages, { id: `message-${index}` }];
+  })));
+  assert.equal((await repository.list("fixture")).length, 6);
+});
+
 test("storage repositories wrap thread, message, timer, user, and connector state files", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-repositories-"));
   const env = { ORKESTR_HOME: home };

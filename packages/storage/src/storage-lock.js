@@ -6,6 +6,13 @@ const context = new AsyncLocalStorage();
 
 export function withStorageFileLock(filePath, operation, options = {}) {
   const key = path.resolve(filePath);
-  if (context.getStore() === key) return operation();
-  return withRuntimeLeaseLock(key, () => context.run(key, operation), options);
+  const held = context.getStore();
+  if (held?.get(key)?.active) return operation();
+  return withRuntimeLeaseLock(key, async () => {
+    const lease = { active: true };
+    const next = new Map(held || []);
+    next.set(key, lease);
+    try { return await context.run(next, operation); }
+    finally { lease.active = false; }
+  }, options);
 }

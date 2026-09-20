@@ -18,6 +18,32 @@ function waitForLine(child, expected) {
   });
 }
 
+test("storage locks reenter an outer lock across a different nested lock", async t => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-lock-nested-"));
+  t.after(() => fs.rm(home, { recursive: true, force: true }));
+  const a = path.join(home, "a"), b = path.join(home, "b");
+  assert.equal(await withStorageFileLock(a, () => withStorageFileLock(b,
+    () => withStorageFileLock(a, () => "reentered", { timeoutMs: 50 }))), "reentered");
+});
+
+test("detached async context cannot reenter a lock after its lease is released", async t => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-lock-detached-"));
+  t.after(() => fs.rm(home, { recursive: true, force: true }));
+  const target = path.join(home, "a");
+  let trigger, detached, entered = false;
+  const gate = new Promise(resolve => { trigger = resolve; });
+  await withStorageFileLock(target, async () => {
+    detached = gate.then(() => withStorageFileLock(target, () => { entered = true; }));
+  });
+  await withStorageFileLock(target, async () => {
+    trigger();
+    await new Promise(resolve => setTimeout(resolve, 30));
+    assert.equal(entered, false);
+  });
+  await detached;
+  assert.equal(entered, true);
+});
+
 test("storage lock heartbeat prevents stale takeover of a live cross-process owner", async (t) => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-storage-lock-"));
   t.after(() => fs.rm(home, { recursive: true, force: true }));
