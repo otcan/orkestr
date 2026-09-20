@@ -21,6 +21,7 @@ import { adminPrincipal } from "../packages/core/src/principal.js";
 import { setSecureSecret } from "../packages/core/src/secure-secrets.js";
 import { approvePairingChallenge, authorizeHttpRequest, createPairingChallenge, pairBrowser } from "../packages/core/src/security.js";
 import { createThread, listThreadMessages } from "../packages/core/src/threads.js";
+import { assertMobileVoiceHttpStreams } from "./support/mobile-voice-http-stream.js";
 
 function saveEnv(keys) {
   return Object.fromEntries(keys.map((key) => [key, process.env[key]]));
@@ -522,6 +523,8 @@ test("mobile module exposes bounded public routes and owner controls", async (t)
     ownerUserId: "admin",
   };
   assert.equal(await mobileDeviceContextIsActive(deviceContext, env), true);
+
+  await assertMobileVoiceHttpStreams({ baseUrl, env, device: deviceContext, completed, privateKey: keys.privateKey, signJwt, timedClaims });
 
   const realtimeCapabilityResponse = await fetch(`${baseUrl}/api/mobile/realtime`, {
     headers: {

@@ -66,6 +66,9 @@ export class MobileVoiceController {
       principal: requestPrincipal(request),
     };
     let afterEventId = lastEventId(request?.headers?.["last-event-id"]);
+    // Resolve ownership before committing SSE headers. A valid device proof
+    // does not grant access to another device/profile's turn.
+    await this.mobileVoice.get(turnId, input);
     let closed = false;
     let timer: NodeJS.Timeout | null = null;
     let lastHeartbeatAt = Date.now();
