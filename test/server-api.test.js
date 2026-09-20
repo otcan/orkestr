@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { MULTIPART_FIELD_ARRAY_INDEX_LIMIT } from "../packages/shared/src/multipart-limits.js";
 import { paneProgressMonitorIntervalMs, recoverAfterStartup, runtimeMonitorIntervalMs, startServer, startupRecoveryDelayMs } from "../apps/server/src/server.js";
 import {
   recordServerStartup,
@@ -364,6 +365,32 @@ test("server exposes health, readiness, version, and agent message APIs", async 
       method: "POST",
       body: JSON.stringify({ mode: "plan" }),
     });
+    // All Nest multipart entrypoints must opt in to Multer's new sparse-array
+    // bound. Use limit+1 (not a resource-exhausting payload), with a real file
+    // preceding the rejected field so no storage action may survive rejection.
+    const multipartRoutes = [
+      `/api/threads/${createdThread.thread.id}/uploads`,
+      "/api/files/uploads",
+      "/api/instance/files/uploads",
+      "/api/connectors/whatsapp/inbound-media",
+    ];
+    for (const route of multipartRoutes) {
+      const rejectedForm = new FormData();
+      rejectedForm.append("files", new Blob(["must not be stored"]), "rejected-multipart.txt");
+      if (route === "/api/files/uploads") rejectedForm.append("path", workspaceRoot);
+      rejectedForm.append(`items[${MULTIPART_FIELD_ARRAY_INDEX_LIMIT + 1}]`, "rejected");
+      rejectedForm.append("items[key]", "must not convert a sparse array");
+      const rejected = await fetch(`${baseUrl}${route}`, { method: "POST", body: rejectedForm });
+      assert.equal(rejected.status, 400, route);
+      assert.equal((await rejected.json()).error, "Field name array index too large", route);
+      assert.equal((await fs.readdir(home, { recursive: true })).some(name => name.includes("rejected-multipart.txt")), false, route);
+      // Prove the same endpoint remains usable after draining the bad request.
+      const validForm = new FormData();
+      validForm.append("files", new Blob(["valid after rejection"]), "valid-multipart.txt");
+      if (route === "/api/files/uploads") validForm.append("path", workspaceRoot);
+      const valid = await fetch(`${baseUrl}${route}`, { method: "POST", body: validForm });
+      assert.ok(valid.ok, `${route}: ${valid.status} ${await valid.text()}`);
+    }
     const form = new FormData();
     form.append("files", new Blob(["hello attachment"], { type: "text/plain" }), "hello.txt");
     const uploadResponse = await fetch(`${baseUrl}/api/threads/${createdThread.thread.id}/uploads`, {

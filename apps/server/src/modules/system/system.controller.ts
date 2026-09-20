@@ -6,6 +6,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { Body, Controller, Delete, Get, HttpCode, HttpException, Param, Post, Query, Req, Res, UploadedFiles, UseInterceptors } from "@nestjs/common";
 import { AnyFilesInterceptor } from "@nestjs/platform-express";
+import { multipartUploadLimits } from "../../../../../packages/shared/src/multipart-limits.js";
 import { doctorRuntimeResources, listRuntimeLeases } from "../../../../../packages/core/src/runtime-leases.js";
 import { getSetupStatus, publicSetupStatus } from "../../../../../packages/core/src/setup.js";
 import { readRuntimeSettings, writeRuntimeSettings } from "../../../../../packages/core/src/runtime-settings.js";
@@ -1145,7 +1146,7 @@ export class SystemController {
 
   @Post("files/uploads")
   @HttpCode(200)
-  @UseInterceptors(AnyFilesInterceptor({ limits: { fileSize: 25 * 1024 * 1024, files: 20 } }))
+  @UseInterceptors(AnyFilesInterceptor({ limits: multipartUploadLimits() }))
   async uploadFiles(@Req() request: any, @UploadedFiles() uploadedFiles: any[] = [], @Body() body: Record<string, unknown> = {}) {
     return saveFilesForPrincipal(
       String(body.path || body.currentPath || ""),

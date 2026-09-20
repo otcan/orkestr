@@ -1,4 +1,5 @@
 import { ArgumentsHost, Catch, ExceptionFilter, HttpException } from "@nestjs/common";
+import multer from "multer";
 import { publicWhatsAppPartialDelivery } from "../../../../packages/connectors/src/whatsapp-delivery-evidence.js";
 
 export type JsonErrorReporter = (input: {
@@ -37,6 +38,8 @@ export class JsonErrorFilter implements ExceptionFilter {
 
 function statusForException(exception: unknown): number {
   if (exception instanceof HttpException) return exception.getStatus();
+  // Nest 11's Multer adapter predates this 2.3 limit and leaves it unwrapped.
+  if (exception instanceof multer.MulterError && (exception as { code?: string }).code === "LIMIT_FIELD_ARRAY_INDEX") return 400;
   const value = exception as { statusCode?: unknown; status?: unknown };
   return Number(value?.statusCode || value?.status || 500) || 500;
 }

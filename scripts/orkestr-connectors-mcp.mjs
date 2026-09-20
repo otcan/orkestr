@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import crypto from "node:crypto";
 import multer from "multer";
+import { multipartUploadLimits } from "../packages/shared/src/multipart-limits.js";
 import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { authorizeConnectorMcpRequest, authorizeConnectorMcpToken } from "../packages/connectors/src/connectors-mcp-auth.js";
@@ -178,10 +179,10 @@ export function createConnectorsMcpGateway({ env = process.env, fetchImpl = fetc
 
   const mediaUpload = multer({
     storage: multer.memoryStorage(),
-    limits: {
+    limits: multipartUploadLimits({
       fileSize: Math.max(1, Number(env.ORKESTR_CONNECTOR_INBOX_MEDIA_MAX_BYTES || 25 * 1024 * 1024) || 25 * 1024 * 1024),
       files: 20,
-    },
+    }),
   }).array("files", 20);
   app.post("/api/connectors/whatsapp/inbound-media", (req, res) => {
     if (!workerEventTokenAllowed(req, env)) return res.status(401).json({ ok: false, error: "whatsapp_worker_event_token_invalid" });

@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { Body, Controller, Delete, Get, HttpCode, Param, Patch, Post, Query, Req, Res, UploadedFiles, UseInterceptors } from "@nestjs/common";
 import { AnyFilesInterceptor } from "@nestjs/platform-express";
+import { multipartUploadLimits } from "../../../../../packages/shared/src/multipart-limits.js";
 import { getSetupStatus } from "../../../../../packages/core/src/setup.js";
 import { readRuntimeSettings } from "../../../../../packages/core/src/runtime-settings.js";
 import { runOverlayConnectorAction } from "../../../../../packages/connectors/src/connectors.js";
@@ -1156,7 +1157,7 @@ export class ConnectorsController {
 
   @Post("whatsapp/inbound-media")
   @HttpCode(201)
-  @UseInterceptors(AnyFilesInterceptor({ limits: { fileSize: 25 * 1024 * 1024, files: 20 } }))
+  @UseInterceptors(AnyFilesInterceptor({ limits: multipartUploadLimits() }))
   async whatsappInboundMedia(
     @Req() request: any,
     @Body() body: Record<string, unknown> = {},

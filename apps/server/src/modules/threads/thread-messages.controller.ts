@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 import { encryptedAttachmentPreview } from "../../../../../packages/core/src/attachment-preview.js";
 import { Body, Controller, Get, HttpCode, Param, Patch, Post, Query, Req, Res, UploadedFiles, UseInterceptors } from "@nestjs/common";
 import { AnyFilesInterceptor } from "@nestjs/platform-express";
+import { multipartUploadLimits } from "../../../../../packages/shared/src/multipart-limits.js";
 import { getThread, getThreadForPrincipal, getThreadMessage, listThreadMessages, updateThreadMessage } from "../../../../../packages/core/src/threads.js";
 import { attachmentDownloadUrl, resolveStoredThreadAttachment, resolveThreadAttachments } from "../../../../../packages/core/src/thread-attachments.js";
 import { ensureDataDirs } from "../../../../../packages/storage/src/paths.js";
@@ -92,7 +93,7 @@ export class ThreadMessagesController {
 
   @Post(":threadId/uploads")
   @HttpCode(201)
-  @UseInterceptors(AnyFilesInterceptor({ limits: { fileSize: 25 * 1024 * 1024, files: 20 } }))
+  @UseInterceptors(AnyFilesInterceptor({ limits: multipartUploadLimits() }))
   async uploads(
     @Req() request: any,
     @Param("threadId") threadId: string,

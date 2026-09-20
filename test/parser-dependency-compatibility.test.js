@@ -3,6 +3,7 @@ import { Readable } from "node:stream";
 import test from "node:test";
 import multer from "multer";
 import qs from "qs";
+import { multipartUploadLimits, MULTIPART_FIELD_ARRAY_INDEX_LIMIT } from "../packages/shared/src/multipart-limits.js";
 
 async function parseMultipart(form, limits = {}) {
   const encoded = new Request("http://fixture.invalid/upload", { method: "POST", body: form });
@@ -42,6 +43,13 @@ test("patched multipart array-index defense requires and honors an explicit limi
   const rejected = new FormData();
   rejected.append("items[3]", "value");
   await assert.rejects(parseMultipart(rejected, { fieldArrayIndexLimit: 2 }), { code: "LIMIT_FIELD_ARRAY_INDEX" });
+});
+
+test("shared multipart limits preserve per-route file bounds and cannot override the array defense", () => {
+  assert.deepEqual(multipartUploadLimits(), { fileSize: 25 * 1024 * 1024, files: 20, fieldArrayIndexLimit: 20 });
+  assert.deepEqual(multipartUploadLimits({ fileSize: 1234, files: 5, fieldArrayIndexLimit: Infinity }), {
+    fileSize: 1234, files: 5, fieldArrayIndexLimit: MULTIPART_FIELD_ARRAY_INDEX_LIMIT,
+  });
 });
 
 test("patched qs preserves plain form data and enforces the opted-in comma array bound", () => {
