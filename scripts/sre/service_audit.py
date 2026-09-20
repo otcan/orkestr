@@ -91,6 +91,8 @@ class AuditStore:
                 created REAL NOT NULL, next_attempt REAL NOT NULL,
                 attempts INTEGER NOT NULL DEFAULT 0, delivered INTEGER NOT NULL DEFAULT 0,
                 receipt TEXT, last_error TEXT);
+            CREATE TABLE IF NOT EXISTS archived_events (
+                id TEXT PRIMARY KEY, bundle_id TEXT NOT NULL);
         """)
 
     def close(self):
@@ -129,7 +131,8 @@ class AuditStore:
                     raise ValueError("invalid journal cursor")
                 event = normalize_event(row, units)
                 if event:
-                    exists = self.db.execute("SELECT 1 FROM events WHERE id=?", (event["event_id"],)).fetchone()
+                    exists = self.db.execute("SELECT 1 FROM events WHERE id=? UNION ALL SELECT 1 FROM archived_events WHERE id=?",
+                                             (event["event_id"], event["event_id"])).fetchone()
                     if not exists:
                         count = self.db.execute("SELECT count(*) FROM events").fetchone()[0]
                         if count >= self.max_events:

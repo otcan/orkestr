@@ -7,15 +7,17 @@ from pathlib import Path
 import re
 import stat
 import subprocess
+import time
 
 
 PROPERTIES = (
-    "Id", "LoadState", "ActiveState", "User", "TasksCurrent", "TasksMax",
+    "Id", "LoadState", "ActiveState", "User", "Group", "TasksCurrent", "TasksMax",
     "MemoryCurrent", "NoNewPrivileges", "PrivateTmp", "PrivateDevices",
     "ProtectSystem", "ProtectHome", "ProtectKernelTunables", "ProtectKernelModules",
     "ProtectControlGroups", "RestrictSUIDSGID", "LockPersonality", "UMask",
     "CapabilityBoundingSet", "AmbientCapabilities", "RestartUSec",
     "StartLimitBurst", "StartLimitIntervalUSec",
+    "RestrictAddressFamilies", "RestrictNamespaces", "ReadWritePaths",
 )
 UNIT = re.compile(r"[A-Za-z0-9_.@:-]+\.service\Z")
 
@@ -60,8 +62,31 @@ def inspect_paths(paths):
     return issues
 
 
-def evaluate(actual, profile):
+def property_matches(key, actual, expected):
+    if actual is None:
+        return False
+    if isinstance(expected, list):
+        if any(not isinstance(value, str) for value in expected):
+            raise ValueError("property sets must contain strings")
+        values = actual.split()
+        if key in {"CapabilityBoundingSet", "AmbientCapabilities"}:
+            return {value.lower() for value in values} == {value.lower() for value in expected}
+        return set(values) == set(expected)
+    if key in {"RestartUSec", "StartLimitIntervalUSec"} and type(expected) is int:
+        # systemctl displays durations (e.g. '1min 30s'), not bare microseconds.
+        factors = {"us": .000001, "ms": .001, "s": 1, "min": 60, "h": 3600, "d": 86400}
+        tokens = re.findall(r"([0-9]+(?:\.[0-9]+)?)(us|ms|min|s|h|d)", actual)
+        if not tokens or "".join(a+b for a, b in tokens) != actual.replace(" ", ""):
+            return False
+        return sum(float(value) * factors[unit] for value, unit in tokens) == expected
+    return str(actual) == str(expected)
+
+
+def evaluate(actual, profile, now=None):
     findings = []
+    now = time.time() if now is None else now
+    if "reviewUntil" in profile and (type(profile["reviewUntil"]) not in (int, float) or not profile["reviewUntil"] > now):
+        findings.append("profile_review_expired")
     if actual.get("LoadState") != "loaded":
         findings.append("unit_not_loaded")
     if actual.get("ActiveState") != "active":
@@ -70,7 +95,7 @@ def evaluate(actual, profile):
     if not isinstance(required, dict) or any(key not in PROPERTIES for key in required):
         raise ValueError("only allowlisted properties may be inspected")
     for key, expected in required.items():
-        if str(actual.get(key, "")) != str(expected):
+        if not property_matches(key, actual.get(key), expected):
             findings.append("property_drift:" + key)
     if actual.get("User") in (None, "", "0", "root") and not profile.get("rootException"):
         findings.append("undocumented_root_identity")
@@ -108,6 +133,8 @@ def collect(profile, runner=subprocess.run):
         return {"unit": unit, "ok": False, "findings": ["property_read_failed"]}
     actual = parse_properties(response.stdout)
     findings = evaluate(actual, profile)
+    if actual.get("Id") != unit:
+        findings.append("unit_identity_drift")
     paths = inspect_paths(profile.get("paths", []))
     if not profile.get("paths"):
         findings.append("persistence_paths_unreviewed")

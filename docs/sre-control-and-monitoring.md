@@ -66,8 +66,9 @@ Use a root/protected collector identity and export minimized evidence to a
 separately controlled sink. Local root-writable SQLite is not tamper-proof
 against a compromised root service. Retention stops collection at 10,000
 records rather than silently deleting unresolved evidence; alarm on capacity,
-cursor failures and pending age. An acknowledged off-host export/pruning
-workflow remains required before sustained production use.
+cursor failures and pending age. `evidence_archive.Archive` now provides the
+receipt-bound export and explicit pruning workflow below. An approved independent
+sink adapter and verified off-host retention remain activation requirements.
 
 ## Independent reachability
 
@@ -97,7 +98,17 @@ python3 scripts/sre/reachability.py \
 Run it from an explicitly approved independent node, normally every minute.
 Do not call an internal tunnel a public-path test. A failed port pair does not
 prove power loss. The classification helper distinguishes a *fresh, trusted*
-internal route/pressure signal, but the CLI does not yet ingest those signals.
+internal route/pressure signal. The CLI accepts `--internal-signal`,
+`--signal-source` and `--signal-policy-digest` together, from a protected file
+delivered by an approved authenticated collector. The source/policy binding is
+durable; it cannot be changed under the same probe identity. Bad ownership,
+symlinks, hardlinks, writable files, oversized data, expired samples and source
+drift are rejected. Public probing continues when internal telemetry is missing,
+and the invocation reports failure so the supervisor can detect the feed outage.
+Configured telemetry loss becomes `internal_signal_unavailable` when public
+probes succeed; it cannot falsely recover an existing internal-pressure incident.
+Fresh resource pressure or route drift is classified even while both public
+probes succeed, permitting early warning before loss of availability.
 HTTP failure remains `https_unreachable`, not a guessed application root cause.
 The node, cadence, idempotent alert adapter, destination, signed/internal health
 feed, evidence retention and isolated failure drill must be qualified before
@@ -133,6 +144,42 @@ candidate cgroup ceiling/backoff in isolation. Inventory writable paths/devices
 and privileged helpers before changing runtime users, mount protections or
 capabilities. Roll out one service at a time in an approved maintenance window,
 with health/routing/connector checks and rollback of only the new drop-in.
+
+## Export and retention
+
+`evidence_archive.Archive(store, sink_id, retention_seconds)` binds an explicit
+sink identity and at least one day of local retention to the ledger. `prepare`
+durably snapshots a bounded batch before I/O, including unresolved incidents.
+Changed versions are selected fairly so old pending obligations cannot starve
+new evidence. `deliver(bundle_id, sink)` retries the exact digest and bytes after
+receipt loss. The authenticated sink must return the matching `bundle_id`,
+`sink_id`, literal `immutable: true`, `state: retained`, `receipt_id`, and
+`retained_until`. The sink must independently enforce the claimed retention and
+idempotency; untrusted JSON alone proves neither.
+
+Only explicit `prune(bundle_id, now)` removes local rows. It requires an
+unexpired receipt and exact unchanged row content; it retains recent rows and
+unresolved alerts. Tombstones prevent replayed journal records from recreating
+pruned events. Control operation identities, monitor sequences, export receipts
+and journal cursor are retained. Rollback/crash during deletion rolls back the
+tombstone and row mutation together. Pending-age/queue-capacity alerts remain
+necessary: exporting an unresolved alert does not settle it.
+
+Pruning recent or unresolved rows finalizes the batch without deleting those
+rows. Changed rows and settled rows reaching their retention age become eligible
+for a new export. The compact receipt/tombstone indexes grow with history; they
+are intentionally not silently vacuumed or truncated. Expired sink receipts
+block pruning and require operator reconciliation. Baseline/qualification
+stores and control-operation ledgers are not pruned by this event-only workflow.
+No host sink, transport credential, recipient or direct-mail fallback is included.
+
+## Reviewed rollout and observation artifacts
+
+See [reviewed profiles and qualification](sre-policy-and-qualification.md) for
+the internal collector policy, hardening compiler, exact rollback artifacts,
+Gmail dependency exception checks and durable clean-window recorder. Generated
+artifacts require operator review and isolated compatibility testing before
+the separate staged maintenance activation.
 
 ## Qualification
 

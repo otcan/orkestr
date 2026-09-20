@@ -18,17 +18,18 @@ import time
 from urllib.parse import urlsplit
 
 from service_audit import AuditStore, token
+from internal_signals import load_signal
 
 
 def classify(ssh_ok, https_ok, internal=None, now=0, stale_seconds=120):
-    if ssh_ok and https_ok:
-        return "healthy"
     fresh = (isinstance(internal, dict) and isinstance(internal.get("observed_at"), (int, float))
              and 0 <= now - internal["observed_at"] <= stale_seconds)
     if fresh and internal.get("route_ok") is False:
         return "public_route_drift"
     if fresh and internal.get("resource_pressure") is True:
         return "resource_pressure"
+    if ssh_ok and https_ok:
+        return "healthy"
     if ssh_ok and not https_ok:
         return "https_unreachable"
     if https_ok and not ssh_ok:
@@ -38,7 +39,7 @@ def classify(ssh_ok, https_ok, internal=None, now=0, stale_seconds=120):
 
 
 class Monitor:
-    def __init__(self, store, probe_id, fail_after=3, recover_after=2, max_gap_seconds=180, targets=None):
+    def __init__(self, store, probe_id, fail_after=3, recover_after=2, max_gap_seconds=180, targets=None, internal_source=None):
         if (not token(probe_id) or any(not isinstance(value, int) or isinstance(value, bool) or not 1 <= value <= 10
                                        for value in (fail_after, recover_after))
                 or not isinstance(max_gap_seconds, (int, float)) or isinstance(max_gap_seconds, bool)
@@ -58,8 +59,16 @@ class Monitor:
         store.db.commit()
         # Policy/target changes must not reuse the old incident history. Bind
         # before probing, including when the database has no samples yet.
-        policy = json.dumps({"targets": targets, "fail_after": fail_after,
-                             "recover_after": recover_after, "max_gap_seconds": max_gap_seconds}, sort_keys=True)
+        binding = {"targets": targets, "fail_after": fail_after,
+                   "recover_after": recover_after, "max_gap_seconds": max_gap_seconds}
+        if internal_source is not None:
+            if (not isinstance(internal_source, dict) or set(internal_source) != {"source_id", "policy_digest"}
+                    or not token(internal_source["source_id"]) or not isinstance(internal_source["policy_digest"], str)
+                    or len(internal_source["policy_digest"]) != 64
+                    or any(c not in "0123456789abcdef" for c in internal_source["policy_digest"])):
+                raise ValueError("invalid internal telemetry binding")
+            binding["internal_source"] = internal_source
+        policy = json.dumps(binding, sort_keys=True)
         key = "probe_policy:" + probe_id
         with store.db:
             existing = store.db.execute("SELECT value FROM state WHERE key=?", (key,)).fetchone()
@@ -72,7 +81,7 @@ class Monitor:
 
     def observe(self, outcome, now):
         allowed = {"healthy", "public_route_drift", "resource_pressure", "https_unreachable",
-                   "ssh_unreachable", "public_path_unreachable", "host_or_public_path_unreachable"}
+                   "ssh_unreachable", "public_path_unreachable", "host_or_public_path_unreachable", "internal_signal_unavailable"}
         if (outcome not in allowed or not isinstance(now, (int, float)) or isinstance(now, bool)
                 or not math.isfinite(now) or now < 0):
             raise ValueError("invalid observation")
@@ -168,17 +177,36 @@ def main():
     parser.add_argument("--https-url", required=True)
     parser.add_argument("--probe-id", required=True)
     parser.add_argument("--state-directory", required=True)
+    parser.add_argument("--internal-signal", help="protected file delivered by an approved authenticated collector")
+    parser.add_argument("--signal-source")
+    parser.add_argument("--signal-policy-digest")
     args = parser.parse_args()
+    signal_options = [args.internal_signal, args.signal_source, args.signal_policy_digest]
+    if any(signal_options) and not all(signal_options):
+        parser.error("internal signal requires source identity and reviewed policy digest")
+    internal_source = {"source_id": args.signal_source, "policy_digest": args.signal_policy_digest} if args.internal_signal else None
     store = AuditStore(args.state_directory)
     try:
-        monitor = Monitor(store, args.probe_id, targets={"ssh": args.ssh_host, "https": args.https_url})
+        monitor = Monitor(store, args.probe_id, targets={"ssh": args.ssh_host, "https": args.https_url}, internal_source=internal_source)
         with ThreadPoolExecutor(max_workers=2) as executor:
             ssh = executor.submit(probe, "ssh", args.ssh_host)
             https = executor.submit(probe, "https", args.https_url)
-            outcome = classify(ssh.result(), https.result())
-        state = monitor.observe(outcome, time.time())
-        print(json.dumps({"observation": outcome, "monitor": state, "dispatch_enabled": False}))
-        return 0 if outcome == "healthy" else 2
+            ssh_ok, https_ok = ssh.result(), https.result()
+        now, internal, signal_state = time.time(), None, "not_configured"
+        if args.internal_signal:
+            try:
+                internal = load_signal(args.internal_signal, args.signal_source, args.signal_policy_digest, now)
+                signal_state = "fresh"
+            except (OSError, ValueError):
+                signal_state = "unavailable_or_untrusted"
+        outcome = classify(ssh_ok, https_ok, internal, now)
+        if outcome == "healthy" and signal_state == "unavailable_or_untrusted":
+            # Public success cannot prove recovery from internal pressure/route
+            # incidents while their configured trusted feed is unavailable.
+            outcome = "internal_signal_unavailable"
+        state = monitor.observe(outcome, now)
+        print(json.dumps({"observation": outcome, "monitor": state, "internal_signal": signal_state, "dispatch_enabled": False}))
+        return 0 if outcome == "healthy" and signal_state != "unavailable_or_untrusted" else 2
     finally:
         store.close()
 
