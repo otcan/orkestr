@@ -64,14 +64,21 @@ export function recordRuntimeControlMetric({ signal = "unknown", outcome = "unkn
 }
 
 export function evaluateRuntimeControlReleaseGate(input = {}, env = process.env) {
-  const stopLatencyTargetMs = Math.max(1, Number(env.ORKESTR_RUNTIME_STOP_LATENCY_GATE_MS || 5_000) || 5_000);
+  const configuredTarget = Number(env.ORKESTR_RUNTIME_STOP_LATENCY_GATE_MS ?? 5_000);
+  const stopLatencyTargetMs = Number.isFinite(configuredTarget) && configuredTarget > 0 ? configuredTarget : 5_000;
+  const measurement = (key, integer = true) => {
+    const value = input?.[key];
+    return typeof value === "number" && Number.isFinite(value) && value >= 0 && (!integer || Number.isSafeInteger(value))
+      ? value : null;
+  };
   const checks = [
-    { signal: "false_recovery", actual: countValue(input.falseRecoveries), limit: 0 },
-    { signal: "unresolved_steering_input", actual: countValue(input.unresolvedSteeringInputs), limit: 0 },
-    { signal: "duplicate_turn", actual: countValue(input.duplicateTurns), limit: 0 },
-    { signal: "stop_latency_ms", actual: countValue(input.maxStopLatencyMs), limit: stopLatencyTargetMs },
-    { signal: "checkpoint_resume_failure", actual: countValue(input.checkpointResumeFailures), limit: 0 },
-    { signal: "pending_final_delivery", actual: countValue(input.pendingFinalDeliveries), limit: 0 },
-  ].map((check) => ({ ...check, ok: check.actual <= check.limit }));
+    { signal: "false_recovery", actual: measurement("falseRecoveries"), limit: 0 },
+    { signal: "unresolved_steering_input", actual: measurement("unresolvedSteeringInputs"), limit: 0 },
+    { signal: "duplicate_turn", actual: measurement("duplicateTurns"), limit: 0 },
+    { signal: "stop_latency_ms", actual: measurement("maxStopLatencyMs", false), limit: stopLatencyTargetMs },
+    { signal: "checkpoint_resume_failure", actual: measurement("checkpointResumeFailures"), limit: 0 },
+    { signal: "pending_final_delivery", actual: measurement("pendingFinalDeliveries"), limit: 0 },
+  ].map((check) => ({ ...check, ok: check.actual !== null && check.actual <= check.limit,
+    ...(check.actual === null ? { reason: "missing_or_invalid_measurement" } : {}) }));
   return { ok: checks.every((check) => check.ok), checks };
 }

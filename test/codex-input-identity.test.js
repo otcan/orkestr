@@ -6,7 +6,7 @@ import test from "node:test";
 import { createThread, appendThreadMessage, listThreadMessages, updateThreadMessage } from "../packages/core/src/threads.js";
 import { codexInputText } from "../packages/core/src/codex-app-server-common.js";
 import { hydrateCodexAppServerThreadMessages } from "../packages/core/src/codex-app-server.js";
-import { matchCanonicalInput, createSubmission, uniqueAcceptedSubmission } from "../packages/core/src/codex-input-identity.js";
+import { matchCanonicalInput, createSubmission, uniqueAcceptedSubmission, inputDigest } from "../packages/core/src/codex-input-identity.js";
 import { reportInputRepair, applyInputRepair, rollbackInputRepair, planInputRepair } from "../packages/core/src/codex-input-repair.js";
 import { publicEncryptedAttachmentMessage } from "../packages/core/src/encrypted-attachment-projection.js";
 import ts from "typescript";
@@ -136,6 +136,43 @@ test("repair refuses ambiguous originals and nonterminal inputs", () => {
     const plan = planInputRepair({ id: "thread", ownerUserId: "admin" }, [...originals, imported]);
     assert.equal(plan.candidates.length, 0);
   }
+});
+
+test("repair rejects conflicting executor aliases, foreign thread rows and imported attachment claims", () => {
+  const thread = { id: "thread", ownerUserId: "admin" };
+  const row = { id: "original", role: "user", source: "ui", state: "completed", ownerUserId: "admin",
+    text: "same", codexThreadId: "gen", codexTurnId: "turn" };
+  const imported = { ...row, id: "import", source: "codex-app-server-import", codexItemId: "item" };
+  for (const patch of [{ executorItemId: "conflict" }, { executorThreadId: "conflict" },
+    { executorTurnId: "conflict" }, { threadId: "other" }]) {
+    assert.equal(planInputRepair(thread, [{ ...row, ...patch }, imported]).candidates.length, 0);
+    assert.equal(planInputRepair(thread, [row, { ...imported, ...patch }]).candidates.length, 0);
+  }
+  assert.equal(planInputRepair(thread, [row, { ...imported, attachments: [{ id: "claimed" }] }]).candidates.length, 0);
+  assert.equal(planInputRepair(thread, [{ ...row, text: "edited", codexSubmission: {
+    serializerVersion: 1, payloadDigest: inputDigest("same") } }, imported]).candidates.length, 0);
+  assert.equal(planInputRepair(thread, [row, imported, { id: "foreign-reference", role: "assistant",
+    ownerUserId: "other", parentMessageId: imported.id }]).candidates.length, 0);
+  assert.throws(() => planInputRepair(thread, [row, row, imported]), /invalid_inventory/);
+});
+
+test("repair rebinds dependent parents even when the dependent is also an original", async t => {
+  const { env, thread, home } = await fixture(t);
+  const first = await appendThreadMessage(thread.id, { role: "user", source: "ui", state: "completed", text: "First",
+    codexThreadId: "gen", codexTurnId: "turn-1" }, env);
+  const firstImport = await appendThreadMessage(thread.id, { role: "user", source: "codex-app-server-import", state: "completed", text: "First",
+    codexThreadId: "gen", codexTurnId: "turn-1", codexItemId: "item-1" }, env);
+  const second = await appendThreadMessage(thread.id, { role: "user", source: "ui", state: "completed", text: "Second",
+    codexThreadId: "gen", codexTurnId: "turn-2", parentMessageId: firstImport.id }, env);
+  await appendThreadMessage(thread.id, { role: "user", source: "codex-app-server-import", state: "completed", text: "Second",
+    codexThreadId: "gen", codexTurnId: "turn-2", codexItemId: "item-2" }, env);
+  const report = await reportInputRepair(thread.id, "admin", env);
+  assert.equal(report.candidates.length, 2);
+  const manifestPath = path.join(home, "repair.json");
+  await applyInputRepair(report, { manifestPath, approvalDigest: report.approvalDigest }, env);
+  assert.equal((await listThreadMessages(thread.id, env)).find(row => row.id === second.id).parentMessageId, first.id);
+  await rollbackInputRepair(manifestPath, report.approvalDigest, env);
+  assert.equal((await listThreadMessages(thread.id, env)).find(row => row.id === second.id).parentMessageId, firstImport.id);
 });
 
 test("steering requires fresh item evidence, while a recorded response is authoritative", () => {

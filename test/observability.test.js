@@ -74,7 +74,9 @@ test("Codex input metrics expose only bounded request and delivery labels", () =
 });
 
 test("runtime control release gate reports every invariant independently", () => {
-  const healthy = evaluateRuntimeControlReleaseGate({ maxStopLatencyMs: 4999 }, { ORKESTR_RUNTIME_STOP_LATENCY_GATE_MS: "5000" });
+  const healthy = evaluateRuntimeControlReleaseGate({ falseRecoveries: 0, unresolvedSteeringInputs: 0,
+    duplicateTurns: 0, maxStopLatencyMs: 4999, checkpointResumeFailures: 0, pendingFinalDeliveries: 0 },
+  { ORKESTR_RUNTIME_STOP_LATENCY_GATE_MS: "5000" });
   const blocked = evaluateRuntimeControlReleaseGate({
     falseRecoveries: 1,
     unresolvedSteeringInputs: 2,

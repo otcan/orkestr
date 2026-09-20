@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import { evaluateRuntimeControlReleaseGate } from "../packages/core/src/observability.js";
 import { isMainModule } from "./main-module.mjs";
+import { evaluateRuntimeCanaryEvidence } from "../packages/core/src/runtime-canary-evidence.js";
 
 function inputPath(argv = process.argv.slice(2)) {
   const index = argv.indexOf("--input");
@@ -15,10 +16,14 @@ export async function runRuntimeControlReleaseGate({ argv = process.argv.slice(2
     : String(env.ORKESTR_RUNTIME_CONTROL_GATE_INPUT_JSON || "{}");
   const input = JSON.parse(raw);
   const gate = evaluateRuntimeControlReleaseGate(input, env);
+  const attended = argv.includes("--attended");
+  const evidence = attended ? evaluateRuntimeCanaryEvidence(input) : null;
   return {
     gate: "runtime_control_liveness",
     generatedAt: new Date().toISOString(),
     ...gate,
+    qualification: attended ? "attended_rollout" : "measurements_only",
+    ...(evidence ? { ok: gate.ok && evidence.ok, checks: [...gate.checks, ...evidence.checks] } : {}),
   };
 }
 
