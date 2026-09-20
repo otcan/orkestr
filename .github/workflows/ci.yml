@@ -7,6 +7,34 @@ on:
     branches: [main]
 
 jobs:
+  secret-scan:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      SCAN_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+      - name: Pinned redacted secret scan
+        shell: bash
+        run: |
+          set -euo pipefail
+          scan_dir=$(mktemp -d)
+          curl --fail --silent --show-error --location --max-time 60 https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz -o "$scan_dir/release.tar.gz"
+          printf '551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  %s\n' "$scan_dir/release.tar.gz" | sha256sum --check --status
+          tar -xzf "$scan_dir/release.tar.gz" -C "$scan_dir" gitleaks
+          scan_args=(--binary "$scan_dir/gitleaks" --repository "$GITHUB_WORKSPACE" --label "$GITHUB_REPOSITORY" --report "$scan_dir/evidence.json")
+          if [[ "$SCAN_BASE" =~ ^[a-f0-9]{40}$ && "$SCAN_BASE" != "0000000000000000000000000000000000000000" ]]; then
+            scan_args+=(--base "$SCAN_BASE")
+          fi
+          node scripts/security/secret-scan.mjs "${scan_args[@]}"
+
   syntax:
     runs-on: ubuntu-latest
     env:

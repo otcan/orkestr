@@ -1,0 +1,3 @@
+title = "Pinned default detection without repository-local suppressions"
+[extend]
+useDefault = true
