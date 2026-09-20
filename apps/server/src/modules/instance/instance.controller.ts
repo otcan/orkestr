@@ -1,5 +1,6 @@
 import { Body, Controller, Get, Headers, HttpCode, Param, Patch, Post, Query, Req, Res, UploadedFiles, UseInterceptors } from "@nestjs/common";
 import { AnyFilesInterceptor } from "@nestjs/platform-express";
+import { multipartUploadLimits } from "../../../../../packages/shared/src/multipart-limits.js";
 import {
   getLocalInstanceConfig,
   getLocalInstanceContext,
@@ -185,7 +186,7 @@ export class InstanceController {
 
   @Post("files/uploads")
   @HttpCode(200)
-  @UseInterceptors(AnyFilesInterceptor({ limits: { fileSize: 25 * 1024 * 1024, files: 5 } }))
+  @UseInterceptors(AnyFilesInterceptor({ limits: multipartUploadLimits({ files: 5 }) }))
   async uploadFiles(@Req() request: any, @UploadedFiles() uploadedFiles: any[] = [], @Body() body: Record<string, unknown> = {}) {
     return uploadInstanceFiles({
       mountId: String(body.mount || body.mountId || ""),

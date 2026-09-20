@@ -4,6 +4,7 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { MULTIPART_FIELD_ARRAY_INDEX_LIMIT } from "../packages/shared/src/multipart-limits.js";
 import { callConnectorsMcpTool, connectorsMcpClientConfig, listConnectorsMcpTools } from "../packages/connectors/src/connectors-mcp-client.js";
 import { assertConnectorMcpScope } from "../packages/connectors/src/connectors-mcp-auth.js";
 import {
@@ -239,6 +240,18 @@ test("connector MCP gateway health bounds queue inspection after worker succeeds
 test("connector MCP stages authenticated worker media before durable routing", async () => {
   const item = await fixture();
   try {
+    const rejectedForm = new FormData();
+    rejectedForm.append("files", new Blob(["must not be stored"]), "rejected-multipart.txt");
+    rejectedForm.append(`items[${MULTIPART_FIELD_ARRAY_INDEX_LIMIT + 1}]`, "rejected");
+    rejectedForm.append("items[key]", "must not convert a sparse array");
+    const rejected = await fetch(`${item.gatewayUrl}/api/connectors/whatsapp/inbound-media`, {
+      method: "POST", headers: { authorization: "Bearer worker-event-token" }, body: rejectedForm,
+    });
+    assert.equal(rejected.status, 413);
+    assert.equal((await rejected.json()).error, "Field name array index too large");
+    assert.equal((await fs.readdir(item.env.ORKESTR_HOME, { recursive: true })).some(name => name.includes("rejected-multipart.txt")), false);
+    assert.equal(item.worker.calls.length, 0, "rejected media never reaches worker routing");
+    // The subsequent normal upload must still succeed on this gateway.
     const form = new FormData();
     form.append("files", new Blob(["candidate cv"], { type: "text/plain" }), "candidate.txt");
     form.append("metadata", JSON.stringify([{
