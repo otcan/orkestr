@@ -175,6 +175,54 @@ class AuditTests(unittest.TestCase):
         with self.assertRaises(OSError):
             AuditStore(other)
 
+    def test_symlink_ancestor_rejected_before_creating_descendants(self):
+        target = Path(self.tmp.name) / "target"
+        target.mkdir(mode=0o700)
+        alias = Path(self.tmp.name) / "alias"
+        alias.symlink_to(target, target_is_directory=True)
+        with self.assertRaises(ValueError):
+            AuditStore(str(alias / "new"))
+        self.assertFalse((target / "new").exists())
+
+    def test_writable_ancestor_rejected_before_database_creation(self):
+        parent = Path(self.tmp.name) / "writable"
+        parent.mkdir(mode=0o700)
+        parent.chmod(0o777)
+        with self.assertRaises(ValueError):
+            AuditStore(str(parent / "new"))
+        self.assertFalse((parent / "new").exists())
+
+    @unittest.skipUnless(os.geteuid() == 0, "different-uid fixture requires root")
+    def test_root_collector_rejects_user_owned_ancestor(self):
+        parent = Path(self.tmp.name) / "unprivileged"
+        parent.mkdir(mode=0o700)
+        os.chown(parent, 65534, 65534)
+        with self.assertRaises(ValueError):
+            AuditStore(str(parent / "new"))
+        self.assertFalse((parent / "new").exists())
+
+    def test_hardlinked_database_rejected_without_changing_target(self):
+        other = Path(self.tmp.name) / "hardlink"
+        other.mkdir(mode=0o700)
+        target = Path(self.tmp.name) / "protected"
+        target.write_text("unchanged")
+        target.chmod(0o600)
+        os.link(target, other / "audit.sqlite3")
+        with self.assertRaises(ValueError):
+            AuditStore(str(other))
+        self.assertEqual(target.read_text(), "unchanged")
+
+    def test_unsafe_sqlite_sidecars_rejected_before_open(self):
+        for suffix in ("-wal", "-shm", "-journal"):
+            other = Path(self.tmp.name) / ("sidecar" + suffix)
+            other.mkdir(mode=0o700)
+            target = Path(self.tmp.name) / ("protected" + suffix)
+            target.write_text("unchanged")
+            (other / ("audit.sqlite3" + suffix)).symlink_to(target)
+            with self.assertRaises(ValueError):
+                AuditStore(str(other))
+            self.assertEqual(target.read_text(), "unchanged")
+
 
 if __name__ == "__main__":
     unittest.main()

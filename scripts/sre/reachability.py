@@ -8,6 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import http.client
 import json
+import math
 from pathlib import Path
 import socket
 import ssl
@@ -37,20 +38,43 @@ def classify(ssh_ok, https_ok, internal=None, now=0, stale_seconds=120):
 
 
 class Monitor:
-    def __init__(self, store, probe_id, fail_after=3, recover_after=2):
-        if not token(probe_id) or not 1 <= fail_after <= 10 or not 1 <= recover_after <= 10:
+    def __init__(self, store, probe_id, fail_after=3, recover_after=2, max_gap_seconds=180, targets=None):
+        if (not token(probe_id) or any(not isinstance(value, int) or isinstance(value, bool) or not 1 <= value <= 10
+                                       for value in (fail_after, recover_after))
+                or not isinstance(max_gap_seconds, (int, float)) or isinstance(max_gap_seconds, bool)
+                or not math.isfinite(max_gap_seconds) or not 1 <= max_gap_seconds <= 3600):
             raise ValueError("invalid monitor policy")
+        if targets is not None:
+            if not isinstance(targets, dict) or set(targets) != {"ssh", "https"}:
+                raise ValueError("both explicit probe targets required")
+            for kind, target in targets.items():
+                validate_target(kind, target)
         self.store, self.probe_id = store, probe_id
         self.fail_after, self.recover_after = fail_after, recover_after
+        self.max_gap_seconds = max_gap_seconds
         store.claim_kind("reachability")
         store.db.execute("""CREATE TABLE IF NOT EXISTS monitors (
             id TEXT PRIMARY KEY, state TEXT NOT NULL, last_sample REAL NOT NULL)""")
         store.db.commit()
+        # Policy/target changes must not reuse the old incident history. Bind
+        # before probing, including when the database has no samples yet.
+        policy = json.dumps({"targets": targets, "fail_after": fail_after,
+                             "recover_after": recover_after, "max_gap_seconds": max_gap_seconds}, sort_keys=True)
+        key = "probe_policy:" + probe_id
+        with store.db:
+            existing = store.db.execute("SELECT value FROM state WHERE key=?", (key,)).fetchone()
+            if existing and existing[0] != policy:
+                raise ValueError("monitor policy changed; use a new reviewed probe identity")
+            if not existing:
+                if store.db.execute("SELECT 1 FROM monitors WHERE id=?", (probe_id,)).fetchone():
+                    raise ValueError("unbound legacy monitor; reconcile before using a new probe identity")
+                store.db.execute("INSERT INTO state VALUES(?,?)", (key, policy))
 
     def observe(self, outcome, now):
         allowed = {"healthy", "public_route_drift", "resource_pressure", "https_unreachable",
                    "ssh_unreachable", "public_path_unreachable", "host_or_public_path_unreachable"}
-        if outcome not in allowed:
+        if (outcome not in allowed or not isinstance(now, (int, float)) or isinstance(now, bool)
+                or not math.isfinite(now) or now < 0):
             raise ValueError("invalid observation")
         db = self.store.db
         db.execute("BEGIN IMMEDIATE")
@@ -60,10 +84,15 @@ class Monitor:
             if row and now <= row["last_sample"]:
                 db.rollback()
                 raise ValueError("sample must be newer than prior observation")
+            if row and now - row["last_sample"] > self.max_gap_seconds:
+                # A monitoring gap is not recovery, nor consecutive evidence.
+                state.update(candidate=None, count=0, failure_count=0)
             state["count"] = state["count"] + 1 if state["candidate"] == outcome else 1
             state["candidate"] = outcome
+            state["failure_count"] = 0 if outcome == "healthy" else state.get("failure_count", 0) + 1
             threshold = self.recover_after if outcome == "healthy" else self.fail_after
-            if outcome != state["active"] and state["count"] >= threshold:
+            evidence_count = state["failure_count"] if state["active"] == "healthy" and outcome != "healthy" else state["count"]
+            if outcome != state["active"] and evidence_count >= threshold:
                 count = db.execute("SELECT count(*) FROM events").fetchone()[0]
                 if count >= self.store.max_events:
                     raise RuntimeError("audit capacity reached")
@@ -84,13 +113,16 @@ class Monitor:
 
 
 def validate_target(kind, target):
+    if not isinstance(target, str):
+        raise ValueError("probe target must be a string")
     if kind == "ssh":
         if (not isinstance(target, str) or not target or len(target) > 253
                 or any(c not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-:" for c in target)):
             raise ValueError("invalid SSH host")
     elif kind == "https":
         url = urlsplit(target)
-        if url.scheme != "https" or not url.hostname or url.username or url.password or url.query or url.fragment:
+        if (not isinstance(target, str) or len(target) > 2048 or any(ord(c) < 33 or ord(c) == 127 for c in target)
+                or url.scheme != "https" or not url.hostname or url.username or url.password or url.query or url.fragment):
             raise ValueError("HTTPS target must not contain credentials, query or fragment")
         if url.port not in (None, 443):
             raise ValueError("HTTPS probe is limited to port 443")
@@ -137,13 +169,14 @@ def main():
     parser.add_argument("--probe-id", required=True)
     parser.add_argument("--state-directory", required=True)
     args = parser.parse_args()
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        ssh = executor.submit(probe, "ssh", args.ssh_host)
-        https = executor.submit(probe, "https", args.https_url)
-        outcome = classify(ssh.result(), https.result())
     store = AuditStore(args.state_directory)
     try:
-        state = Monitor(store, args.probe_id).observe(outcome, time.time())
+        monitor = Monitor(store, args.probe_id, targets={"ssh": args.ssh_host, "https": args.https_url})
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            ssh = executor.submit(probe, "ssh", args.ssh_host)
+            https = executor.submit(probe, "https", args.https_url)
+            outcome = classify(ssh.result(), https.result())
+        state = monitor.observe(outcome, time.time())
         print(json.dumps({"observation": outcome, "monitor": state, "dispatch_enabled": False}))
         return 0 if outcome == "healthy" else 2
     finally:

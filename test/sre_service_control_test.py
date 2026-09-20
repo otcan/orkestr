@@ -52,6 +52,57 @@ class ControlTests(unittest.TestCase):
         self.call(lambda *a, **k: subprocess.CompletedProcess(a, 1, "", "SECRET"))
         self.assertNotIn("SECRET", str([tuple(row) for row in self.store.db.execute("SELECT * FROM controls")]))
 
+    def call_keyed(self, runner, **overrides):
+        args = dict(unit="example.service", action="restart", change_ref="CHANGE-1", boot_id="a" * 32,
+                    allowed_units=["example.service"], runner=runner, operation_id="stable-request")
+        args.update(overrides)
+        return control(self.store, **args)
+
+    def test_accepted_operation_replay_does_not_issue_another_action(self):
+        calls = []
+        def run(command, **options):
+            calls.append(command)
+            return subprocess.CompletedProcess(command, 0, '{"type":"o","data":["/org/freedesktop/systemd1/job/42"]}')
+        first = self.call_keyed(run)
+        second = self.call_keyed(run)
+        self.assertEqual(len(calls), 1)
+        self.assertTrue(second["reused"])
+        self.assertEqual(first["job_id"], second["job_id"])
+
+    def test_uncertain_operation_remains_uncertain_after_restart(self):
+        def timeout(*args, **options):
+            raise subprocess.TimeoutExpired("busctl", 7)
+        self.call_keyed(timeout)
+        self.store.close()
+        self.store = AuditStore(self.tmp.name)
+        result = self.call_keyed(lambda *a, **k: self.fail("must not retry uncertain action"))
+        self.assertEqual(result["outcome"], "uncertain")
+        self.assertTrue(result["reused"])
+
+    def test_second_controller_cannot_repeat_an_inflight_operation(self):
+        def run(command, **options):
+            second = AuditStore(self.tmp.name)
+            try:
+                result = control(second, "example.service", "restart", "CHANGE-1", "a" * 32,
+                                 ["example.service"], lambda *a, **k: self.fail("duplicate control"), operation_id="stable-request")
+                self.assertEqual(result["outcome"], "intent")
+            finally:
+                second.close()
+            return subprocess.CompletedProcess(command, 0, '{"type":"o","data":["/org/freedesktop/systemd1/job/42"]}')
+        self.assertEqual(self.call_keyed(run)["outcome"], "accepted")
+
+    def test_operation_identity_cannot_be_rebound(self):
+        self.call_keyed(lambda *a, **k: subprocess.CompletedProcess(a, 1, ""))
+        for overrides in ({"action": "stop"}, {"change_ref": "OTHER"}, {"boot_id": "b" * 32}):
+            with self.assertRaises(ValueError):
+                self.call_keyed(lambda *a, **k: self.fail("must not execute"), **overrides)
+
+    def test_full_control_ledger_blocks_before_execution(self):
+        self.store.max_events = 0
+        with self.assertRaises(RuntimeError):
+            self.call_keyed(lambda *a, **k: self.fail("must not execute"))
+        self.assertEqual(self.store.db.execute("SELECT count(*) FROM controls").fetchone()[0], 0)
+
 
 if __name__ == "__main__":
     unittest.main()

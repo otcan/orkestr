@@ -30,17 +30,34 @@ def initialize(store):
     store.db.commit()
 
 
-def control(store, unit, action, change_ref, boot_id, allowed_units, runner=subprocess.run):
+def control(store, unit, action, change_ref, boot_id, allowed_units, runner=subprocess.run, operation_id=None):
     if unit not in allowed_units or not token(unit) or action not in METHODS or not token(change_ref):
         raise ValueError("unit, action or change reference not approved")
     if not re.fullmatch(r"[a-f0-9]{32}", boot_id):
         raise ValueError("invalid boot identity")
+    if operation_id is not None and not token(operation_id):
+        raise ValueError("invalid operation identity")
     initialize(store)
-    operation_id = str(uuid.uuid4())
-    with store.db:
+    operation_id = operation_id or str(uuid.uuid4())
+    principal = f"uid:{os.getuid()}"
+    store.db.execute("BEGIN IMMEDIATE")
+    try:
+        existing = store.db.execute("SELECT * FROM controls WHERE operation_id=?", (operation_id,)).fetchone()
+        if existing:
+            if (existing["unit"], existing["action"], existing["change_ref"], existing["boot_id"], existing["principal"]) != (
+                    unit, action, change_ref, boot_id, principal):
+                raise ValueError("operation identity is already bound to a different request")
+            store.db.commit()
+            return {"operation_id": operation_id, "outcome": existing["outcome"], "job_id": existing["job_id"], "reused": True}
+        if store.db.execute("SELECT count(*) FROM controls").fetchone()[0] >= store.max_events:
+            raise RuntimeError("control evidence capacity reached; no new service action allowed")
         store.db.execute("INSERT INTO controls VALUES(?,?,?,?,?,?,?,?,?,?)",
-                         (operation_id, f"uid:{os.getuid()}", change_ref, "service-control",
+                         (operation_id, principal, change_ref, "service-control",
                           boot_id, unit, action, "intent", None, time.time()))
+        store.db.commit()
+    except BaseException:
+        store.db.rollback()
+        raise
     outcome, job_id = "uncertain", None
     try:
         result = runner(["/usr/bin/busctl", "--system", "--json=short", "--timeout=5s", "call",
@@ -89,6 +106,7 @@ def main():
     parser.add_argument("unit")
     parser.add_argument("--policy", required=True)
     parser.add_argument("--change-ref", required=True)
+    parser.add_argument("--operation-id", required=True, help="stable request identity; reuse for reconciliation, never for a new action")
     parser.add_argument("--apply", action="store_true")
     args = parser.parse_args()
     if not args.apply or os.geteuid() != 0:
@@ -97,7 +115,7 @@ def main():
     boot = Path("/proc/sys/kernel/random/boot_id").read_text().strip().replace("-", "")
     store = AuditStore(policy["stateDirectory"])
     try:
-        result = control(store, args.unit, args.action, args.change_ref, boot, policy["units"])
+        result = control(store, args.unit, args.action, args.change_ref, boot, policy["units"], operation_id=args.operation_id)
         print(json.dumps(result))
         return 0 if result["outcome"] == "accepted" else 2
     finally:

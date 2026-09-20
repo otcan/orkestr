@@ -9,13 +9,19 @@ allowlists, paths, recipients and identities belong in private operator config.
 ## Exact attribution and durable obligations
 
 `scripts/sre/service_control.py` is an explicitly invoked system-bus controller.
-It requires root, `--apply`, a change reference and a protected private policy
+It requires root, `--apply`, a change reference, stable `--operation-id` and a protected private policy
 containing `units` and `stateDirectory`. Policy files and ancestors must be
 root-owned, not group/world writable, and not symlinks. No shell is used.
 It durably records an intent before invoking a bounded systemd D-Bus call and
 records the exact returned job ID afterward. Acceptance of a job is not service
 health. A timeout or missing job receipt stays uncertain and is never retried
 automatically. An unresolved intent after a process crash needs investigation.
+The operation identity is durably bound to the UID, boot, unit, action and change
+reference before any bus call. Retrying that identity only reads its recorded
+outcome; it does not issue a second action, including while the first controller
+is running or its result is uncertain. Rebinding an identity is refused. Do not
+invent a fresh operation ID to bypass uncertainty; reconcile the original first.
+At the control ledger's capacity, new actions are blocked before invocation.
 
 `scripts/sre/service_watch.py` collects only PID-1 systemd metadata for explicit
 units. Each batch is bounded to the first 1,000 records, with a ten-second
@@ -37,6 +43,12 @@ Only a unique exact boot/job/unit/action receipt is attribution. Nearby
 timestamps, deployment timestamps, free-text reasons and application-authored
 journal records are not. Delayed receipts are reassessed on subsequent polls.
 The database contains no journal MESSAGE, command arguments or environments.
+The private directory and every ancestor must be owned by root or the collector
+and not writable by another identity. Symlink ancestors are rejected; root-owned
+sticky ancestors such as `/tmp` are allowed. A root collector must not place
+evidence beneath an unprivileged user's home. Existing database hard links and
+unsafe SQLite WAL/SHM/journal sidecars are rejected before SQLite opens them.
+These are Unix-mode checks, not an ACL or compromised-collector defense.
 The controller records its numeric UID; binding an originating authenticated
 operator/session and change approval is still an integration requirement, not
 something the wrapper infers from spoofable environment variables.
@@ -65,6 +77,16 @@ follows no redirects and verifies HTTPS certificates. Three consecutive failed
 observations create an incident; two healthy observations create recovery.
 Transitions and pending alerts persist together through restart. The same
 receipt-bound spool is reused; a separate state directory is mandatory.
+Consecutive failures count across changing failure classes, so alternating
+SSH/HTTPS outages cannot indefinitely suppress the initial incident. Changing
+an already-active incident's classification still requires a stable failure
+streak. Gaps over 180 seconds reset evidence streaks without recovering an active
+incident. Recovery therefore requires two fresh consecutive healthy samples.
+The exact targets and threshold/gap policy are durably bound before probing;
+changing them requires a new reviewed probe identity. Existing unbound legacy
+state is refused, not silently reassigned. Reconcile any existing pending
+incidents before replacing identities; monitoring its own scheduling gaps still
+requires the independent supervisor/dead-man check.
 
 ```sh
 python3 scripts/sre/reachability.py \

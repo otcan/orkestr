@@ -8,7 +8,7 @@ import json
 import os
 import re
 import sqlite3
-import stat
+from audit_paths import check_database_file, check_directory_chain, check_sidecars
 
 
 TOKEN = re.compile(r"[A-Za-z0-9_.:@/-]{1,160}\Z")
@@ -67,19 +67,18 @@ def exact_attribution(event, receipts):
 class AuditStore:
     def __init__(self, directory, max_events=10000):
         self.directory = os.path.abspath(directory)
+        check_directory_chain(self.directory, allow_missing=True)
         os.makedirs(self.directory, mode=0o700, exist_ok=True)
-        info = os.lstat(self.directory)
-        if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o077:
-            raise ValueError("audit directory must be private and owned by the collector")
+        check_directory_chain(self.directory)
         # A dedicated protected directory prevents database/WAL substitution.
         db_path = os.path.join(self.directory, "audit.sqlite3")
         fd = os.open(db_path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
         try:
             info = os.fstat(fd)
-            if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o077:
-                raise ValueError("unsafe audit database")
+            check_database_file(info)
         finally:
             os.close(fd)
+        check_sidecars(db_path)
         self.db = sqlite3.connect(db_path, timeout=5)
         self.db.row_factory = sqlite3.Row
         self.db.execute("PRAGMA journal_mode=WAL")
