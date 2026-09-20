@@ -97,6 +97,7 @@ class Baseline:
                            "p95": counts[math.ceil(len(counts) * .95) - 1] if counts else None,
                            "span_seconds": times[-1] - times[0] if times else 0,
                            "largest_gap_seconds": max((b-a for a, b in zip(times, times[1:])), default=None),
+                           "phase_counts": {phase: sum(p == phase for _, p, _ in valid) for phase in sorted(PHASES)},
                            "missing_phases": sorted(PHASES - {phase for _, phase, _ in valid})})
         # Even all four labels are not proof of representative workload coverage.
         return {"services": result, "limit_recommendation": None, "operator_review_required": True}
