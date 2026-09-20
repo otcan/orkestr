@@ -12,6 +12,7 @@ import { persistObservedCodexMetadata } from "../packages/core/src/codex-observe
 import { renderOpenMetrics, resetObservabilityForTests } from "../packages/core/src/observability.js";
 import { parseThreadInputCommand } from "../packages/core/src/thread-commands.js";
 import { resolveCodexThreadSettingsCommand } from "../packages/core/src/codex-thread-settings.js";
+import { CodexAppServerClient } from "../packages/core/src/codex-app-server-client.js";
 
 const models = [
   { id: "gpt-main", isDefault: true, defaultReasoningEffort: "medium", supportedReasoningEfforts: ["low", "medium", "high", null, {}, "invalid", "high"] },
@@ -112,6 +113,80 @@ test("unacknowledged mutation stays uncertain on reload and blocks repeat mutati
   assert.match(status.replyText, /unconfirmed/);
   await assert.rejects(changeCodexModelControls(thread, { principal, client, text: "gpt-main high" }, env), /unconfirmed/);
   assert.equal(calls.filter((call) => call.method === "thread/settings/update").length, 1);
+});
+
+for (const [code, message, expected] of [
+  [-32600, "thread not found: private-generation", /Resume the thread/],
+  [-32601, "unknown method", /does not support/],
+  [-32602, "invalid model with private detail", /rejected these model settings/],
+]) test(`correlated rejection ${code} leaves settings unchanged and permits retry`, async (t) => {
+  const { thread, env, client } = await fixture(t);
+  const original = client.request;
+  client.request = async (...args) => {
+    if (args[0] === "thread/settings/update") throw Object.assign(Error(message), { code, codexRpcMethod: args[0] });
+    return original(...args);
+  };
+  await assert.rejects(changeCodexModelControls(thread, { principal, client, text: "gpt-small low" }, env), (error) => {
+    assert.equal(error.statusCode, 422);
+    assert.match(error.message, expected);
+    assert.doesNotMatch(error.message, /private/);
+    return true;
+  });
+  const current = await getThread(thread.id, env);
+  assert.equal(current.codexModel, "gpt-main");
+  assert.equal(current.codexReasoningEffort, "medium");
+  assert.equal(current.codexSettingsUncertain, null);
+  assert.equal(current.codexSettingsPending, null);
+  assert.equal((await readCodexModelControls(current, principal, env, client)).readOnly, false);
+  const events = await fs.readFile(path.join(env.ORKESTR_HOME, "events.jsonl"), "utf8");
+  assert.doesNotMatch(events, /private-generation|private detail/);
+  assert.ok(events.split("\n").filter(Boolean).map(JSON.parse).some(e => e.type === "codex_model_controls" && e.outcome === "rejected" && e.rpcCode === code));
+  client.request = original;
+  assert.equal((await changeCodexModelControls(current, { principal, client, text: "gpt-small low" }, env)).ok, true);
+});
+
+for (const error of [
+  Object.assign(Error("internal error"), { code: -32603, codexRpcMethod: "thread/settings/update" }),
+  Object.assign(Error("not a correlated RPC"), { code: -32602 }),
+  Object.assign(Error("wrong RPC"), { code: -32602, codexRpcMethod: "thread/read" }),
+  Error("codex_app_server_timeout:thread/settings/update"),
+]) test(`non-definitive failure remains guarded: ${error.message}`, async (t) => {
+  const { thread, env, client } = await fixture(t);
+  const original = client.request;
+  client.request = async (...args) => { if (args[0] === "thread/settings/update") throw error; return original(...args); };
+  await assert.rejects(changeCodexModelControls(thread, { principal, client, text: "gpt-small low" }, env), /Could not confirm/);
+  const current = await getThread(thread.id, env);
+  assert.equal(current.codexSettingsUncertain, true);
+  assert.equal(current.codexModel, "gpt-main");
+  assert.ok(current.codexSettingsPending.failureKind);
+  assert.ok(current.codexSettingsPending.startedAt);
+  assert.deepEqual(current.codexSettingsPending.patch, { codexModel: "gpt-small", codexReasoningEffort: "low" });
+});
+
+for (const replacement of [{ codexThreadId: "new-generation" }, { ownerUserId: "new-owner" }, { codexSettingsPending: { id: "new-operation" } }]) {
+  test(`rejection cannot clear a changed operation: ${Object.keys(replacement)[0]}`, async (t) => {
+    const { thread, env, client } = await fixture(t);
+    const original = client.request;
+    client.request = async (...args) => {
+      if (args[0] !== "thread/settings/update") return original(...args);
+      await updateThread(thread.id, replacement, env);
+      throw Object.assign(Error("rejected"), { code: -32602, codexRpcMethod: args[0] });
+    };
+    await assert.rejects(changeCodexModelControls(thread, { principal, client, text: "gpt-small low" }, env), /thread changed/);
+    const current = await getThread(thread.id, env);
+    assert.equal(current.codexSettingsUncertain, true);
+    assert.equal(current.codexModel, "gpt-main");
+  });
+}
+
+test("wire client marks only correlated RPC errors, not transport failures", async () => {
+  const client = new CodexAppServerClient({ env: {} });
+  client.write = () => {};
+  const request = client.request("thread/settings/update", { threadId: "fake" });
+  client.handleLine(JSON.stringify({ id: 1, error: { code: -32600, message: "thread not found: fake" } }));
+  await assert.rejects(request, error => error.codexRpcMethod === "thread/settings/update" && error.code === -32600);
+  client.closed = true;
+  await assert.rejects(client.request("thread/settings/update"), error => !error.codexRpcMethod);
 });
 
 test("settings audit includes latency and bounded outcome labels without model/thread metric labels", async (t) => {

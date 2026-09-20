@@ -96,6 +96,29 @@ test("uncertain save exposes the API error and refuses repeated Apply until relo
   ui.ngOnDestroy();
 });
 
+for (const status of [400, 422]) test(`definite rejection ${status} preserves selected settings and permits retry`, async () => {
+  let writes = 0;
+  const { component: ui, emissions } = await componentWithApi({
+    getModelSettings: () => rxjs.of(catalog),
+    setModelSettings() {
+      writes++;
+      return writes === 1 ? rxjs.throwError(() => ({ status, error: { error: "The runtime rejected these settings." } })) : rxjs.of({ model: "model-b", effort: "low" });
+    },
+  });
+  ui.ngOnChanges();
+  ui.model = "model-b";
+  ui.selectModel();
+  ui.save();
+  assert.equal(ui.reloadRequired, false);
+  assert.equal(ui.model, "model-b");
+  assert.equal(ui.effort, "low");
+  assert.equal(emissions(), 0);
+  ui.save();
+  assert.equal(writes, 2);
+  assert.equal(emissions(), 1);
+  ui.ngOnDestroy();
+});
+
 test("late reads and saves cannot overwrite a newly selected thread or destroyed overlay", async () => {
   const oldRead = new rxjs.Subject();
   const oldSave = new rxjs.Subject();

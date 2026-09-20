@@ -8,6 +8,7 @@ import { codexRuntimeEnvForThread, codexThreadId, runtimeHome, threadUsesCodexAp
 import { getCodexAppServerClient } from "./codex-app-server-client.js";
 import { assertResourceAccess, policyError } from "./policy.js";
 import { incrementCounter, observeHistogram } from "./observability.js";
+import { classifyCodexSettingsError } from "./codex-settings-error.js";
 
 const catalogs = new WeakMap();
 export const MODEL_CONTROLS_TIMEOUT_MS = 5000;
@@ -20,12 +21,14 @@ export function modelControlsReadOnlyReason(thread, env = process.env) {
   return "";
 }
 
-async function audit(thread, operation, outcome, started, env) {
+async function audit(thread, operation, outcome, started, env, failure = null) {
   const durationMs = Math.max(0, Date.now() - started);
   const labels = { operation, outcome };
   incrementCounter("orkestr_model_controls_total", labels);
   observeHistogram("orkestr_model_controls_duration_seconds", durationMs / 1000, labels, [0.01, 0.1, 0.5, 1, 2, 5, 10]);
-  await appendEvent({ type: "codex_model_controls", threadId: thread.id, operation, outcome, durationMs }, env).catch(() => {});
+  await appendEvent({ type: "codex_model_controls", threadId: thread.id, operation, outcome, durationMs,
+    ...(failure ? { failureKind: failure.kind, rpcCode: failure.code } : {}),
+  }, env).catch(() => {});
 }
 
 export async function withModelDeadline(operation, timeoutMs = MODEL_CONTROLS_TIMEOUT_MS) {
@@ -91,6 +94,7 @@ export async function readCodexModelControls(thread, principal, env = process.en
 export async function changeCodexModelControls(thread, { command = "model", text = "", principal = null, authorized = false, client = null } = {}, env = process.env) {
   const started = Date.now();
   let outcome = "failed";
+  let failure = null;
   try {
     return await withCodexSettingsLock(thread.id, env, async () => {
       thread = await getThread(thread.id, env) || thread;
@@ -111,7 +115,7 @@ export async function changeCodexModelControls(thread, { command = "model", text
       if (resolved.action === "update") {
         if (thread.codexSettingsUncertain) throw policyError(uncertainMessage, 409);
         // Only the correlated RPC acknowledgement confirms this operation.
-        const pending = { id: randomUUID(), codexThreadId: codexThreadId(thread), expected: resolved.runtimePatch };
+        const pending = { id: randomUUID(), codexThreadId: codexThreadId(thread), expected: resolved.runtimePatch, patch: resolved.patch, startedAt: new Date().toISOString() };
         await withCanonicalPublicReferenceLock(async () => {
           const current = await getThread(thread.id, env);
           if (!current || codexThreadId(current) !== pending.codexThreadId || current.ownerUserId !== thread.ownerUserId || modelControlsReadOnlyReason(current, env)) {
@@ -121,12 +125,26 @@ export async function changeCodexModelControls(thread, { command = "model", text
         }, env);
         try {
           await client.request("thread/settings/update", { threadId: codexThreadId(thread), ...resolved.runtimePatch }, { timeoutMs: MODEL_CONTROLS_TIMEOUT_MS });
-        } catch {
+        } catch (error) {
+          failure = classifyCodexSettingsError(error);
+          outcome = failure.definitive ? "rejected" : "uncertain";
+          await withCanonicalPublicReferenceLock(async () => {
+            const current = await getThread(thread.id, env);
+            // Never clear a replacement generation/operation or another owner's
+            // guard, even when the old runtime definitively rejected its RPC.
+            if (!current || current.ownerUserId !== thread.ownerUserId || codexThreadId(current) !== pending.codexThreadId || current.codexSettingsPending?.id !== pending.id) {
+              throw policyError("The thread changed while applying settings. Reload before trying again.", 409);
+            }
+            await updateThread(thread.id, failure.definitive
+              ? { codexSettingsPending: null, codexSettingsUncertain: null }
+              : { codexSettingsPending: { ...pending, failureKind: failure.kind, rpcCode: failure.code } }, env);
+          }, env);
+          if (failure.definitive) throw policyError(failure.message, 422);
           throw policyError("Could not confirm the model change. Settings are read-only until an operator reconciles the runtime.", 502);
         }
         thread = await withCanonicalPublicReferenceLock(async () => {
           const current = await getThread(thread.id, env);
-          if (!current || current.codexSettingsPending?.id !== pending.id || codexThreadId(current) !== pending.codexThreadId) {
+          if (!current || current.ownerUserId !== thread.ownerUserId || modelControlsReadOnlyReason(current, env) || current.codexSettingsPending?.id !== pending.id || codexThreadId(current) !== pending.codexThreadId) {
             throw policyError("The runtime changed while applying settings. The change is unconfirmed; reload the thread before continuing.", 409);
           }
           const patch = { ...resolved.patch, codexModelUpdatedAt: new Date().toISOString() };
@@ -137,5 +155,5 @@ export async function changeCodexModelControls(thread, { command = "model", text
       return { ...resolved, thread };
     });
   } catch (error) { if (error.statusCode === 403) outcome = "denied"; throw error; }
-  finally { await audit(thread, "settings", outcome, started, env); }
+  finally { await audit(thread, "settings", outcome, started, env, failure); }
 }

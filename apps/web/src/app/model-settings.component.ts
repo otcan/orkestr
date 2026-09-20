@@ -85,7 +85,14 @@ export class ModelSettingsComponent implements OnChanges, OnDestroy {
     this.error = this.notice = "";
     this.request = this.api.setModelSettings(this.threadId, this.model, this.effort).pipe(timeout(20000)).subscribe({
       next: (result) => { this.saving = false; this.notice = `Model set to ${result.model} with ${result.effort} effort.`; this.saved.emit(); this.detector.markForCheck(); },
-      error: (error) => { this.saving = false; this.reloadRequired = true; this.error = error?.error?.error || error?.error?.message || "Could not confirm the model change. Reload settings before trying again."; this.detector.markForCheck(); },
+      error: (error) => {
+        this.saving = false;
+        // Validation and explicit runtime rejection leave the saved settings
+        // unchanged. Network errors/timeouts must still require reconciliation.
+        this.reloadRequired = ![400, 422].includes(error?.status);
+        this.error = error?.error?.error || error?.error?.message || "Could not confirm the model change. Reload settings before trying again.";
+        this.detector.markForCheck();
+      },
     });
   }
 }

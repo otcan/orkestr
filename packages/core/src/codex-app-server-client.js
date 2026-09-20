@@ -319,6 +319,7 @@ export class CodexAppServerClient {
         const error = new Error(message.error.message || `codex_app_server_error:${pending.method}`);
         error.code = message.error.code;
         error.data = message.error.data;
+        error.codexRpcMethod = pending.method;
         pending.reject(error);
       } else {
         pending.resolve(message.result);
