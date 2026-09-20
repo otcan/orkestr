@@ -91,6 +91,20 @@ contain `unit`, `properties`, reviewed `paths`, an optional documented
 Missing budgets and persistence inventories are failures, not implicit passes.
 Unix ownership/mode checks are not an ACL or root-compromise guarantee.
 
+`scripts/sre/task_baseline.py` records one bounded, metadata-only observation per
+invocation for up to 32 explicitly scoped units. Use a separate private state
+directory and `--phase normal|startup|peak|recovery`; omit phase for a report.
+The service scope is bound to the durable evidence window. Reports show sampled
+peak/p95, failed observations, gaps and missing workload phases. They never
+recommend or apply a limit. Samples are not continuous peak tracking, and operator
+phase labels do not prove representative load. Read failures remain missing
+evidence rather than zero usage. At 10,000 observations collection stops without
+deleting evidence. No timer, restart, alert, load generator or limit is installed.
+
+```sh
+python3 scripts/sre/task_baseline.py --state-directory /var/lib/example-task-baseline --unit example-api.service --phase normal
+```
+
 Do not derive hard task limits from one idle snapshot. Measure representative
 load, startup, browser processes and recovery peaks; reserve headroom; test each
 candidate cgroup ceiling/backoff in isolation. Inventory writable paths/devices
