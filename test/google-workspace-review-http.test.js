@@ -95,7 +95,11 @@ test("reviewer password opens the actual isolated Orkestr cockpit", async () => 
     const session = await securitySessionForToken(token);
     assert.equal(session.authProvider, "google_workspace_review");
     assert.ok(Date.parse(session.expiresAt) - Date.now() <= 30 * 60_000);
+    assert.equal(await securitySessionForToken(token, { ...process.env, ORKESTR_GOOGLE_WORKSPACE_REVIEW_ENV_TTL_MINUTES: "5" }), null);
     await assert.rejects(deriveInstanceSecuritySession({ sourceSession: session, instanceId: "other-instance" }), /source_browser_session_invalid/);
+    await assert.rejects(deriveInstanceSecuritySession({ sourceSession: session, instanceId: "other-instance", env: {
+      ...process.env, ORKESTR_GOOGLE_WORKSPACE_REVIEW_USER_ID: "replacement", ORKESTR_GOOGLE_WORKSPACE_REVIEW_ACCESS_ENABLED: "0",
+    } }), /source_browser_session_invalid/);
 
     const apiBeforeSignIn = await fetch(`${root}/api/threads`);
     assert.equal(apiBeforeSignIn.status, 401);

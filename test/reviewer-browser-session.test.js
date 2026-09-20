@@ -32,10 +32,14 @@ test("rotation, disabling and changing reviewer identity/instance invalidate onl
     ORKESTR_GOOGLE_WORKSPACE_REVIEW_USER_ID: "other-reviewer",
     ORKESTR_GOOGLE_WORKSPACE_REVIEW_THREAD_ID: "other-thread",
     ORKESTR_GOOGLE_WORKSPACE_REVIEW_PUBLIC_URL: "https://other.example.test",
+    ORKESTR_GOOGLE_WORKSPACE_REVIEW_ENV_TTL_MINUTES: "5",
     ORKESTR_HOME: "/fixture/other-instance",
   })) {
     assert.equal(reviewerBrowserSessionActive(session, { ...env, [key]: value }), false, key);
     assert.equal(reviewerBrowserSessionActive({ userId: "ordinary-operator" }, { ...env, [key]: value }), true);
   }
   assert.equal(reviewerBrowserSessionActive({ userId: "reviewer" }, env), false, "legacy 90-day reviewer sessions need a fresh sign-in");
+  assert.equal(reviewerBrowserSessionActive({ userId: "reviewer" }, { ...env, ORKESTR_GOOGLE_WORKSPACE_REVIEW_ACCESS_ENABLED: "0" }), false, "disabling must not revive legacy sessions");
+  const changed = { ...env, ORKESTR_GOOGLE_WORKSPACE_REVIEW_USER_ID: "replacement", ORKESTR_GOOGLE_WORKSPACE_REVIEW_ACCESS_ENABLED: "0" };
+  assert.equal(reviewerBrowserSessionActive({ ...session, authProvider: "browser_pairing" }, changed), false, "a review binding cannot be downgraded into ordinary pairing");
 });
