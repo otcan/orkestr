@@ -12,6 +12,7 @@ import { publicUrlConfig } from "./public-url-config.js";
 import { defaultAdminUser, getUser, normalizeUserId } from "./users.js";
 import { readJobsJdCacheAccessRecords } from "./jobs-jd-cache-mcp.js";
 import { readWhatsAppScopedTokenRecords } from "./whatsapp-scoped-tokens.js";
+import { reviewerBrowserSessionActive, reviewerBrowserSessionFields } from "./reviewer-browser-session.js";
 
 const execFileAsync = promisify(execFile);
 const cookieName = "orkestr_session";
@@ -1628,7 +1629,7 @@ async function touchSecuritySession(config, session, { env = process.env, reques
   }, env);
 }
 
-export async function pairBrowser({ challengeId, userAgent = "", ip = "", env = process.env, allowApproveCode = true } = {}) {
+export async function pairBrowser({ challengeId, userAgent = "", ip = "", env = process.env, allowApproveCode = true, reviewerSession = false } = {}) {
   const id = String(challengeId || "").trim();
   assertPairingAttemptAllowed({ env, ip });
   const config = await readSecurityConfig(env);
@@ -1657,6 +1658,7 @@ export async function pairBrowser({ challengeId, userAgent = "", ip = "", env = 
     allowedActions: normalizeAllowedActions(challenge.allowedActions || []),
     authIntent: normalizeAuthIntent(challenge.authIntent),
     expiresAt: new Date(Date.now() + sessionTtlMs).toISOString(),
+    ...(reviewerSession ? reviewerBrowserSessionFields(challenge.userId, env) : {}),
   };
   await writeSecurityConfig({
     ...config,
@@ -1803,7 +1805,7 @@ export async function deriveInstanceSecuritySession({
   const persistedSource = (config.sessions || []).find((session) =>
     session.id === sourceId && Date.parse(session.expiresAt || "") > now,
   );
-  if (!persistedSource || persistedSource.parentSessionId) {
+  if (!persistedSource || persistedSource.parentSessionId || persistedSource.authProvider === "google_workspace_review" || !reviewerBrowserSessionActive(persistedSource, env)) {
     throw challengeError("source_browser_session_invalid", 401);
   }
   if (
@@ -1869,7 +1871,7 @@ export async function securitySessionForToken(token, env = process.env, options 
   const session = (config.sessions || []).find((item) =>
     Date.parse(item.expiresAt || "") > now && item.tokenHash === hash,
   );
-  if (!session) return null;
+  if (!session || !reviewerBrowserSessionActive(session, env)) return null;
   if (session.parentSessionId) {
     const parent = (config.sessions || []).find((item) =>
       item.id === session.parentSessionId &&
@@ -1878,7 +1880,7 @@ export async function securitySessionForToken(token, env = process.env, options 
       normalizeUserId(item.userId) === normalizeUserId(session.userId) &&
       String(item.role || "admin").trim().toLowerCase() === String(session.role || "admin").trim().toLowerCase(),
     );
-    if (!parent) return null;
+    if (!parent || !reviewerBrowserSessionActive(parent, env)) return null;
   }
   if (options?.touch !== false) await touchSecuritySession(config, session, { env, request: options?.request }).catch(() => {});
   return {

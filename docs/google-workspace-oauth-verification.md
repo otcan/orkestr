@@ -244,6 +244,20 @@ thread, and rotate `ORKESTR_GOOGLE_WORKSPACE_REVIEW_ACCESS_SECRET` after the
 review. Rotating that secret revokes every reviewer browser session and any
 outstanding internal OAuth ticket.
 
+Reviewer password sessions expire after `ORKESTR_GOOGLE_WORKSPACE_REVIEW_ENV_TTL_MINUTES`
+(5–1440 minutes, default 240), use a host-only cookie, and cannot derive a session
+for another instance. Rotating the review password or signing secret, disabling
+review access, or changing the review identity, hostname or home invalidates
+existing reviewer sessions. Older reviewer sessions with the ordinary browser
+lifetime require a fresh password sign-in after this upgrade. Keep the operator
+account separate from `ORKESTR_GOOGLE_WORKSPACE_REVIEW_USER_ID`.
+
+The capabilities panel enables only granted actions. Sending the self-addressed
+test message and creating the no-guest calendar event display a confirmation
+before submitting; their APIs require the explicit boolean `confirmed: true`.
+Cancelled or missing confirmation never calls the provider. Automated fixtures
+check this contract but do not establish Google consent or live delivery.
+
 Provision this environment as a dedicated tenant VM slice with no WhatsApp,
 desktop, or CRM connector. The stable external reviewer hostname belongs at the
 reverse proxy, while the VM receives a fresh Orkestr home and the reviewer-only

@@ -56,16 +56,23 @@ export function googleWorkspaceReviewActionsPageHtml({ workspaceHref = "/" }: { 
     const accountTitle = document.getElementById("account-title");
     const accountDetail = document.getElementById("account-detail");
     const buttons = [...document.querySelectorAll("button[data-action]")];
+    const capabilitiesByAction = { "gmail-read": "gmail_read", "gmail-draft": "gmail_drafts", "gmail-send": "gmail_send", "calendar-list": "calendar_read", "calendar-create": "calendar_actions" };
     let connected = false;
+    let account = null;
+    let working = false;
+
+    function available(button) { return connected && (account?.capabilities || []).includes(capabilitiesByAction[button.dataset.action]); }
+    function updateButtons() { buttons.forEach((button) => { button.disabled = working || !available(button); }); }
 
     function show(value) { result.textContent = JSON.stringify(value, null, 2); }
     function update(status, showAudit = true) {
       connected = Boolean(status.connected);
+      account = status.account || null;
       accountTitle.textContent = connected ? "Connected: " + status.account.email : "Google account not connected";
       accountDetail.textContent = connected
         ? "Enabled: " + (status.account.capabilities || []).join(", ") + "."
         : "Use Connect or manage Google, then return here after Google consent.";
-      buttons.forEach((button) => { button.disabled = !connected; });
+      updateButtons();
       if (showAudit && status.audit?.length) show({ connection: status.account, recentActions: status.audit });
     }
     async function request(path, options) {
@@ -76,20 +83,25 @@ export function googleWorkspaceReviewActionsPageHtml({ workspaceHref = "/" }: { 
     }
     async function loadStatus(showAudit = true) {
       try { update(await request("/review/google/actions/api/status"), showAudit); }
-      catch (error) { show({ ok: false, error: String(error.message || error) }); }
+      catch (error) { connected = false; account = null; updateButtons(); accountTitle.textContent = "Unable to check Google connection"; show({ ok: false, error: String(error.message || error) }); }
     }
     buttons.forEach((button) => button.addEventListener("click", async () => {
-      if (!connected) return;
+      if (working || !available(button)) return;
+      const action = button.dataset.action;
+      const confirmation = action === "gmail-send"
+        ? "Send the review test message to " + account.email + "?"
+        : action === "calendar-create" ? "Create a 30-minute review event in " + account.email + "'s primary calendar, starting in one hour, with no guests?" : "";
+      if (confirmation && !window.confirm(confirmation)) return;
       const label = button.textContent;
-      button.disabled = true;
+      working = true;
+      updateButtons();
       button.textContent = "Working...";
       try {
-        const action = button.dataset.action;
-        const payload = await request("/review/google/actions/api/" + action, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+        const payload = await request("/review/google/actions/api/" + action, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(confirmation ? { confirmed: true } : {}) });
         show(payload);
         await loadStatus(false);
       } catch (error) { show({ ok: false, error: String(error.message || error) }); }
-      finally { button.textContent = label; button.disabled = !connected; }
+      finally { button.textContent = label; working = false; updateButtons(); }
     }));
     loadStatus();
   </script>
