@@ -18,3 +18,5 @@ secrets/
 *.log
 .wwebjs_cache/
 .wwebjs_auth/
+__pycache__/
+*.pyc
