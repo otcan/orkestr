@@ -12,8 +12,11 @@ or replace an inference already in progress.
 - A correlated JSON-RPC invalid-request, method-not-found or invalid-params
   response rejects the mutation. Orkestr keeps the previous model/effort and
   clears only that operation's pending guard. The API returns 422 and the UI
-  permits another selection or retry. An unloaded thread needs to be resumed;
-  an unsupported runtime needs updating. Neither condition requires resetting
+  permits another selection or retry. An unloaded thread is automatically resumed
+  by its exact native ID and the settings update is retried once, within the same
+  deadline. Resume carries no model overrides and starts no inference or input
+  delivery. If loading fails, the saved model stays unchanged and retry remains
+  available. An unsupported runtime needs updating. Neither condition requires resetting
   the thread or deleting its history.
 - A timeout, disconnect, unclassified failure or internal runtime error does
   not prove whether the change happened. Keep the pending guard and require

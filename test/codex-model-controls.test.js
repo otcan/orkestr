@@ -116,7 +116,7 @@ test("unacknowledged mutation stays uncertain on reload and blocks repeat mutati
 });
 
 for (const [code, message, expected] of [
-  [-32600, "thread not found: private-generation", /Resume the thread/],
+  [-32600, "thread not found: private-generation", /resume the thread/],
   [-32601, "unknown method", /does not support/],
   [-32602, "invalid model with private detail", /rejected these model settings/],
 ]) test(`correlated rejection ${code} leaves settings unchanged and permits retry`, async (t) => {
@@ -140,7 +140,9 @@ for (const [code, message, expected] of [
   assert.equal((await readCodexModelControls(current, principal, env, client)).readOnly, false);
   const events = await fs.readFile(path.join(env.ORKESTR_HOME, "events.jsonl"), "utf8");
   assert.doesNotMatch(events, /private-generation|private detail/);
-  assert.ok(events.split("\n").filter(Boolean).map(JSON.parse).some(e => e.type === "codex_model_controls" && e.outcome === "rejected" && e.rpcCode === code));
+  // Missing history now attempts resume; this mock returns no identity, so
+  // the bounded audit class is a load failure rather than a provider RPC code.
+  assert.ok(events.split("\n").filter(Boolean).map(JSON.parse).some(e => e.type === "codex_model_controls" && e.outcome === "rejected" && e.rpcCode === (code === -32600 ? null : code)));
   client.request = original;
   assert.equal((await changeCodexModelControls(current, { principal, client, text: "gpt-small low" }, env)).ok, true);
 });
@@ -188,6 +190,52 @@ test("wire client marks only correlated RPC errors, not transport failures", asy
   client.closed = true;
   await assert.rejects(client.request("thread/settings/update"), error => !error.codexRpcMethod);
 });
+
+test("unloaded runtime resumes the same history then retries settings exactly once", async (t) => {
+  const { thread, env, client, calls } = await fixture(t);
+  const original = client.request;
+  let updates = 0;
+  client.request = async (...args) => {
+    const result = await original(...args);
+    if (args[0] === "thread/settings/update" && ++updates === 1) throw Object.assign(Error("thread not found: fake-codex"), { code: -32600, codexRpcMethod: args[0] });
+    return args[0] === "thread/resume" ? { thread: { id: "fake-codex" } } : result;
+  };
+  const result = await changeCodexModelControls(thread, { principal, client, text: "gpt-small low" }, env);
+  assert.equal(result.thread.codexModel, "gpt-small");
+  assert.equal(result.thread.codexSettingsUncertain, null);
+  assert.deepEqual(calls.map(c => c.method), ["model/list", "thread/settings/update", "thread/resume", "thread/settings/update"]);
+  assert.deepEqual(calls[2].params, { threadId: "fake-codex" });
+  assert.deepEqual(calls[1].params, calls[3].params);
+  assert.ok(calls[3].options.timeoutMs <= calls[1].options.timeoutMs);
+});
+
+for (const scenario of ["resume-timeout", "wrong-thread", "second-update-timeout", "generation-changed"]) {
+  test(`resume recovery fails safely: ${scenario}`, async (t) => {
+    const { thread, env, client, calls } = await fixture(t);
+    const original = client.request;
+    let updates = 0;
+    client.request = async (...args) => {
+      const result = await original(...args);
+      if (args[0] === "thread/settings/update") {
+        if (++updates === 1) throw Object.assign(Error("thread not loaded: fake-codex"), { code: -32600, codexRpcMethod: args[0] });
+        throw Error("codex_app_server_timeout:thread/settings/update");
+      }
+      if (args[0] === "thread/resume") {
+        if (scenario === "resume-timeout") throw Error("codex_app_server_timeout:thread/resume");
+        if (scenario === "generation-changed") await updateThread(thread.id, { codexThreadId: "replacement" }, env);
+        return { thread: { id: scenario === "wrong-thread" ? "wrong" : "fake-codex" } };
+      }
+      return result;
+    };
+    await assert.rejects(changeCodexModelControls(thread, { principal, client, text: "gpt-small low" }, env));
+    const current = await getThread(thread.id, env);
+    assert.equal(current.codexModel, "gpt-main");
+    const uncertain = ["second-update-timeout", "generation-changed"].includes(scenario);
+    assert.equal(current.codexSettingsUncertain, uncertain ? true : null);
+    assert.equal(calls.filter(c => c.method === "thread/settings/update").length, scenario === "second-update-timeout" ? 2 : 1);
+    assert.ok(!calls.some(c => ["turn/start", "turn/interrupt", "thread/start"].includes(c.method)));
+  });
+}
 
 test("settings audit includes latency and bounded outcome labels without model/thread metric labels", async (t) => {
   const { thread, env, client } = await fixture(t);

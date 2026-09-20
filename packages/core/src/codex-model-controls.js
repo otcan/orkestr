@@ -8,7 +8,7 @@ import { codexRuntimeEnvForThread, codexThreadId, runtimeHome, threadUsesCodexAp
 import { getCodexAppServerClient } from "./codex-app-server-client.js";
 import { assertResourceAccess, policyError } from "./policy.js";
 import { incrementCounter, observeHistogram } from "./observability.js";
-import { classifyCodexSettingsError } from "./codex-settings-error.js";
+import { classifyCodexSettingsError, updateLoadedCodexSettings } from "./codex-settings-error.js";
 
 const catalogs = new WeakMap();
 export const MODEL_CONTROLS_TIMEOUT_MS = 5000;
@@ -124,7 +124,15 @@ export async function changeCodexModelControls(thread, { command = "model", text
           await updateThread(thread.id, { codexSettingsPending: pending, codexSettingsUncertain: true, codexSettingsManaged: true }, env);
         }, env);
         try {
-          await client.request("thread/settings/update", { threadId: codexThreadId(thread), ...resolved.runtimePatch }, { timeoutMs: MODEL_CONTROLS_TIMEOUT_MS });
+          await updateLoadedCodexSettings(client, { threadId: pending.codexThreadId, ...resolved.runtimePatch }, {
+            timeoutMs: MODEL_CONTROLS_TIMEOUT_MS,
+            validate: async () => {
+              const current = await getThread(thread.id, env);
+              if (!current || current.ownerUserId !== thread.ownerUserId || codexThreadId(current) !== pending.codexThreadId || current.codexSettingsPending?.id !== pending.id || modelControlsReadOnlyReason(current, env)) {
+                throw policyError("The thread changed while applying settings. Reload before trying again.", 409);
+              }
+            },
+          });
         } catch (error) {
           failure = classifyCodexSettingsError(error);
           outcome = failure.definitive ? "rejected" : "uncertain";
