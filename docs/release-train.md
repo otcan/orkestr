@@ -232,6 +232,12 @@ unclear.
 
 ## Phase 9: Deploy
 
+Classify code-only versus state-changing releases before activation. Hosts using
+scheduled backups must follow [deployment backup policy](deployment-backup-policy.md):
+nightly state archives, a freshness gate for code-only updates, and a mandatory
+fresh backup via `--state-change` for migrations or other durable-state changes.
+Never use `--no-backup` for a state-changing release.
+
 Deploy only after local release checks and CI pass, unless the user explicitly
 requests a pre-CI deploy.
 

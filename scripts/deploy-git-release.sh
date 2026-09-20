@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$script_dir/deploy-backup-policy.sh"
 
 usage() {
   cat <<'USAGE'
@@ -10,6 +11,7 @@ Usage:
   scripts/deploy-git-release.sh install [--ref REF] [--channel NAME] [--allow-untagged|--require-tagged] [--no-smoke] [--no-backup] [--sync-workers|--no-sync-workers] [--all-instances|--no-all-instances] [--no-interrupt|--allow-interrupt] [--wait-active] [--active-timeout SECONDS]
   scripts/deploy-git-release.sh rollback [--to RELEASE_ID] [--no-interrupt|--allow-interrupt] [--wait-active] [--active-timeout SECONDS]
   scripts/deploy-git-release.sh status [--json]
+  scripts/deploy-git-release.sh backup
   scripts/deploy-git-release.sh --check-only
 
 Environment:
@@ -27,6 +29,9 @@ Environment:
   ORKESTR_DEPLOY_LOCK_FILE      Lock file. Defaults to /var/lock/orkestr-deploy.lock.
   ORKESTR_DEPLOY_RUN_SMOKE      Run npm smoke before activation. Defaults to 1.
   ORKESTR_DEPLOY_BACKUP_STATE   Back up ORKESTR_HOME before activation. Defaults to 1.
+  ORKESTR_DEPLOY_BACKUP_POLICY  always (default) or scheduled (nightly backup; code-only deploys reuse it).
+  ORKESTR_DEPLOY_BACKUP_MAX_AGE_SECONDS Max age for scheduled backup reuse. Defaults to 129600 (36 hours).
+  ORKESTR_DEPLOY_STATE_CHANGE   Set to 1 or pass --state-change for a required fresh pre-migration backup.
   ORKESTR_DEPLOY_BACKUP_EXCLUDES Space-separated paths under ORKESTR_HOME to omit from backups. Defaults to live runtime/session dirs.
   ORKESTR_DEPLOY_BACKUP_COMPRESSOR Backup compressor: auto, pigz, gzip, zstd, or none. Defaults to auto.
   ORKESTR_DEPLOY_BACKUP_GZIP_LEVEL gzip/pigz compression level. Defaults to 1 for faster deploys.
@@ -69,7 +74,8 @@ Environment:
   ORKESTR_BUILD_WEB_FROM_SOURCE Set to 1 to install dev dependencies and rebuild the Angular web app.
 
 The app code is versioned. ORKESTR_HOME and /etc/orkestr/orkestr.env stay
-outside release directories and are backed up before activation.
+outside release directories. --backup forces a fresh backup; --state-change
+requires one and rejects --no-backup. Scheduled policy requires a recent backup.
 USAGE
 }
 
@@ -82,6 +88,7 @@ check_only=0
 run_smoke_arg=""
 tags_only_arg=""
 backup_state_arg=""
+state_change_arg=""
 sync_workers_arg=""
 fanout_arg=""
 no_interrupt_arg=""
@@ -90,7 +97,7 @@ active_timeout_arg=""
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    install|rollback|status)
+    install|rollback|status|backup)
       command="$1"
       shift
       ;;
@@ -128,6 +135,14 @@ while [ "$#" -gt 0 ]; do
       ;;
     --no-backup)
       backup_state_arg=0
+      shift
+      ;;
+    --backup)
+      backup_state_arg=1
+      shift
+      ;;
+    --state-change)
+      state_change_arg=1
       shift
       ;;
     --sync-workers)
@@ -404,21 +419,24 @@ resolve_backup_compressor() {
 }
 
 backup_state() {
-  local stamp target backup_name data_dir data_base data_parent exclude tar_args tar_status compressor_status
+  local stamp target backup_name pending_backup data_dir data_base data_parent exclude tar_args tar_status compressor_status
   local compressor gzip_level extension start_ts end_ts elapsed size
   local -a compressor_cmd statuses
   if [ "$run_backup" != "1" ]; then
+    require_recent_state_backup || return $?
     echo ""
     return 0
   fi
   data_dir="${ORKESTR_HOME:-}"
   if [ -z "$data_dir" ] || [ ! -d "$data_dir" ]; then
+    if [ "$backup_required" = 1 ]; then echo "Required backup source is missing." >&2; return 2; fi
     echo ""
     return 0
   fi
   mkdir -p "$backup_dir"
-  prune_state_backups "$((backup_keep - 1))"
-  stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+  # Never delete the last completed recovery point before its replacement exists.
+  prune_state_backups "$((backup_keep > 1 ? backup_keep - 1 : 1))"
+  stamp="$(date -u +%Y%m%dT%H%M%S%NZ)"
   target="$(sanitize_id "$release_id")"
   compressor="$(resolve_backup_compressor)"
   gzip_level="$(positive_integer_env "${ORKESTR_DEPLOY_BACKUP_GZIP_LEVEL:-}" 1 1)"
@@ -444,6 +462,7 @@ backup_state() {
       ;;
   esac
   backup_name="$backup_dir/${stamp}-${target}-state.$extension"
+  pending_backup="$(mktemp "$backup_dir/.state-backup.XXXXXXXX.part")"
   data_parent="$(dirname "$data_dir")"
   data_base="$(basename "$data_dir")"
   tar_args=(-C "$data_parent" -cf - --ignore-failed-read --warning=no-file-changed --warning=no-file-removed --warning=no-failed-read)
@@ -459,22 +478,29 @@ backup_state() {
   tar_status=0
   compressor_status=0
   set +e
-  tar "${tar_args[@]}" "$data_base" | "${compressor_cmd[@]}" > "$backup_name"
+  tar "${tar_args[@]}" "$data_base" | "${compressor_cmd[@]}" > "$pending_backup"
   statuses=("${PIPESTATUS[@]}")
   set -e
   tar_status="${statuses[0]:-1}"
   compressor_status="${statuses[1]:-0}"
   if [ "$tar_status" -gt 1 ]; then
-    rm -f -- "$backup_name"
+    rm -f -- "$pending_backup"
     return "$tar_status"
   fi
   if [ "$compressor_status" -ne 0 ]; then
-    rm -f -- "$backup_name"
+    rm -f -- "$pending_backup"
     return "$compressor_status"
   fi
   if [ "$tar_status" -eq 1 ]; then
     echo "State backup completed with non-fatal live-file changes." >&2
   fi
+  # A partial stream cannot satisfy the scheduled-backup freshness gate.
+  if ! tar -tf "$pending_backup" >/dev/null; then
+    rm -f -- "$pending_backup"
+    echo "State archive verification failed; previous backup preserved." >&2
+    return 1
+  fi
+  mv -- "$pending_backup" "$backup_name"
   end_ts="$(date +%s)"
   elapsed="$((end_ts - start_ts))"
   size="$(du -h "$backup_name" 2>/dev/null | awk '{print $1}' || true)"
@@ -1505,10 +1531,11 @@ status_command() {
   local active
   active="$(current_release_id)"
   if [ "$json_output" -eq 1 ]; then
-    printf '{"currentRelease":%s,"currentLink":%s,"history":%s}\n' \
+    printf '{"currentRelease":%s,"currentLink":%s,"history":%s,"backupPolicy":%s,"perReleaseBackup":%s,"stateChange":%s}\n' \
       "$(json_string "$active")" \
       "$(json_string "$current_link")" \
-      "$(json_string "$deploy_history")"
+      "$(json_string "$deploy_history")" \
+      "$(json_string "$backup_policy")" "$run_backup" "$state_change"
     return 0
   fi
   echo "Current release: ${active:-none}"
@@ -1752,7 +1779,7 @@ exposure_private_paths="${ORKESTR_DEPLOY_EXPOSURE_PRIVATE_PATHS:-/api/threads /a
 exposure_timeout_seconds="${ORKESTR_DEPLOY_EXPOSURE_TIMEOUT_SECONDS:-12}"
 exposure_curl_insecure="$(bool_value "${ORKESTR_DEPLOY_EXPOSURE_CURL_INSECURE:-0}")"
 run_smoke="${run_smoke_arg:-${ORKESTR_DEPLOY_RUN_SMOKE:-1}}"
-run_backup="${backup_state_arg:-${ORKESTR_DEPLOY_BACKUP_STATE:-1}}"
+configure_backup_policy
 backup_excludes="${ORKESTR_DEPLOY_BACKUP_EXCLUDES:-run tmp whatsapp-bridge/sessions wa-skills/*/session wa-skills/*/state}"
 backup_keep="${ORKESTR_DEPLOY_BACKUP_KEEP:-3}"
 release_keep="${ORKESTR_DEPLOY_RELEASE_KEEP:-3}"
@@ -1838,7 +1865,10 @@ esac
 
 trap cleanup_deploy_on_exit EXIT
 
-if [ "$command" = "status" ]; then
+if [ "$command" = "backup" ]; then
+  need tar
+  need flock
+elif [ "$command" = "status" ]; then
   if [ "$json_output" -eq 1 ]; then
     need node
   fi
@@ -1866,6 +1896,11 @@ case "$command" in
   install) install_command ;;
   rollback) rollback_command ;;
   status) status_command ;;
+  backup)
+    umask 077
+    release_id="scheduled-$(current_release_id)"
+    backup_state
+    ;;
   *)
     echo "Unknown command: $command" >&2
     usage >&2
