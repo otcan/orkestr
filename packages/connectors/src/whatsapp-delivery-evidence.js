@@ -1,9 +1,21 @@
 import { createHash } from "node:crypto";
+import { sanitizeWhatsAppBridgeResponseExcerpt } from "./whatsapp-bridge-diagnostics.js";
 
 const stages = new Set(["preflight", "prepare_media", "send_text", "send_media", "confirm_media", "unknown"]);
 const codes = new Set(["attachment_missing", "attachment_inaccessible", "attachment_too_large", "attachment_invalid", "media_timeout", "media_ack_missing", "runtime_closed", "provider_evaluation_failed", "provider_rejected", "media_prepare_failed", "whatsapp_send_failed"]);
 const outcomes = new Set(["sent", "not_attempted", "failed_preflight", "uncertain"]);
 const id = value => typeof value === "string" && /^[a-zA-Z0-9_@.:-]{1,240}$/.test(value) ? value : "";
+
+// Operator logs only. Never add this diagnostic to the public delivery envelope.
+export function whatsappOperatorFailureDiagnostic(error, stage, sensitiveValues = []) {
+  const message = String(error?.message || "").slice(0, 8192);
+  const redacted = sanitizeWhatsAppBridgeResponseExcerpt(message, null, 512, sensitiveValues)
+    .replace(/https?:\/\/[^\s]+/gi, "[redacted-url]")
+    .replace(/\[redacted-origin\][^\s]*/g, "[redacted-url]")
+    .replace(/(?:\/|[A-Za-z]:\\)[^\s"'<>]+/g, "[redacted-path]")
+    .replace(/[A-Za-z0-9_+/=-]{32,}/g, "[redacted-value]").slice(0, 512);
+  return { event: "whatsapp_media_send_failed", ...whatsappFailureEvidence(error, stage), diagnostic: redacted };
+}
 
 // Never transport a raw provider exception: it can contain paths, URLs or tokens.
 export function whatsappFailureEvidence(error, stage = "unknown") {

@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { publicWhatsAppPartialDelivery, whatsappFailureEvidence } from "./whatsapp-delivery-evidence.js";
+import { publicWhatsAppPartialDelivery, whatsappFailureEvidence, whatsappOperatorFailureDiagnostic } from "./whatsapp-delivery-evidence.js";
 import { dataPaths, ensureDataDirs } from "../../storage/src/paths.js";
 import { appendEvent, readJson, writeJson } from "../../storage/src/store.js";
 import { isRoutableWhatsAppConversationId } from "./whatsapp-identifiers.js";
@@ -7655,6 +7655,10 @@ export async function sendLocalWhatsAppMessage({ chatId = "", text = "", account
           );
         } catch (error) {
           forgetPendingOutboundAttachmentEcho(pendingAttachmentEcho);
+          console.error(JSON.stringify(whatsappOperatorFailureDiagnostic(error, stage, [
+            chatId, text, ...normalizedAttachments.flatMap(item => [item.path, item.filename]),
+            ...Object.entries(env).filter(([key]) => /TOKEN|SECRET|PASSWORD|CREDENTIAL|API_KEY|ENCRYPTION_KEY/i.test(key)).map(([, value]) => value),
+          ])));
           throw error;
         }
         const deliveredMessageId = serializedMessageId(message);
