@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { runtimeOutputMetadata } from "../../shared/src/runtime-output-identity.js";
 import fs from "node:fs/promises";
 import { publicWhatsAppPartialDelivery } from "./whatsapp-delivery-evidence.js";
 import { hasWhatsAppPartialDelivery } from "./whatsapp-replay-safety.js";
@@ -3239,6 +3240,7 @@ async function sendClaimedWhatsAppText({
       routerOutboxId: intent?.outboxId || "",
       ...(canonicalFinalIdempotencyKey ? { canonicalFinalProjection: true } : {}),
       ...(finalProjectionGeneration(message) ? { runtimeGeneration: finalProjectionGeneration(message) } : {}),
+      ...(deliveryType === "final" ? runtimeOutputMetadata(message) : {}),
     },
   }, env);
   const uiReplyIntent = replyDeliveryBindingFence(parent || {}, thread || {});

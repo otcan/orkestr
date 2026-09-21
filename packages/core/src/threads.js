@@ -8,6 +8,7 @@ import { draftAttachmentFingerprint, draftAttachmentIds, withDraftAttachmentClai
 import { threadRecordSnapshotRevision } from "../../storage/src/thread-registry.js";
 import { snapshotEnvironment } from "../../storage/src/test-storage-isolation.js";
 import { enqueueMessageMutation } from "./thread-message-mutation.js";
+import { existingRuntimeOutput } from "./runtime-output-projection.js";
 import { assertSanitizedAction } from "./llm-sanitizer.js";
 import { normalizeNoReplyAssistantMessage } from "./no-reply.js";
 import { assertResourceAccess, assertThreadLimit, filterResourcesForPrincipal, isAdminPrincipal, policyError, resourceOwnerUserId } from "./policy.js";
@@ -750,6 +751,9 @@ export async function appendThreadMessage(threadId, input, env = process.env) {
     const messages = sqlite ? null : await messageRepository.list(thread.id);
     const role = String(input.role || "assistant");
     const source = String(input.source || "manual");
+    const output = await existingRuntimeOutput(messageRepository, thread, { ...input, role, source },
+      normalizeUserId(input.ownerUserId || resourceOwnerUserId(thread, env)));
+    if (output) return { ...output, duplicate: true, duplicateReason: "canonical_runtime_output" };
     const clientMessageId = clientInputIdempotencyKey(input);
     if (role === "user" && clientMessageId) {
       const duplicate = sqlite
@@ -888,7 +892,7 @@ export async function appendThreadMessage(threadId, input, env = process.env) {
   });
   if (message.duplicate) {
     await appendEvent({
-      type: "thread_input_duplicate_suppressed",
+      type: message.role === "assistant" ? "thread_output_duplicate_suppressed" : "thread_input_duplicate_suppressed",
       threadId: thread.id,
       messageId: message.id,
       source: input.source || "",
