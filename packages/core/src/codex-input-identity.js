@@ -38,7 +38,8 @@ export function matchCanonicalInput(messages, input, historyItems = []) {
   const matchingItems = historyItems.filter(row => row.type === "userMessage" && textOf(row) === input.text);
   // A shared turn or identical text is not enough to collapse distinct inputs.
   if (candidates.length !== 1 || matchingItems.length > 1) {
-    return { message: null, outcome: candidates.length > 1 || matchingItems.length > 1 ? "ambiguous" : "unmatched" };
+    return { message: null, outcome: candidates.length > 1 || matchingItems.length > 1 ? "ambiguous" : "unmatched",
+      hasLocalCandidates: candidates.length > 0 };
   }
   const candidate = candidates[0];
   if (scoped.some(row => row.id !== candidate.id && row.source === "codex-app-server-import" && !row.supersededBy && row.text === input.text)) {

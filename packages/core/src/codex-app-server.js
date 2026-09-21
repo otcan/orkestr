@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { withThreadMessageMutation } from "./thread-message-mutation.js";
+import { resourceOwnerUserId } from "./policy.js";
 import { canonicalTurnParent, canonicalUserPatch, createSubmission, identityMetric, matchCanonicalInput, uniqueAcceptedSubmission } from "./codex-input-identity.js";
 import { appendEvent } from "../../storage/src/store.js";
 import {
@@ -2651,6 +2652,16 @@ async function upsertHydratedCodexMessage(thread, input, messages, env = process
 }
 
 async function upsertHydratedCodexMessageLocked(thread, input, messages, env, historyItems) {
+  if (input.role === "user") {
+    const match = matchCanonicalInput(messages, input, historyItems);
+    if (!match.message && (match.outcome === "conflict" || (match.outcome === "ambiguous" && match.hasLocalCandidates))) {
+      identityMetric(match.outcome);
+      // Ambiguity is not a new runtime input. Leave existing evidence intact
+      // for separately approved repair instead of amplifying it every scan.
+      // Distinct native items with no local candidate still import separately.
+      return { message: null, created: false, updated: false, changed: false, reason: match.outcome };
+    }
+  }
   const existing = matchingHydratedMessage(messages, input, historyItems);
   if (!existing) {
     const message = await appendThreadMessage(thread.id, input, env);
@@ -2734,7 +2745,7 @@ export async function hydrateCodexAppServerThreadMessages(thread, codexThread, e
         if (!text) continue;
         const result = await upsertHydratedCodexMessage(thread, {
           role: "user",
-          ownerUserId: thread.ownerUserId,
+          ownerUserId: resourceOwnerUserId(thread, env),
           source: "codex-app-server-import",
           text,
           state: "completed",

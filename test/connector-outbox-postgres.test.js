@@ -10,6 +10,7 @@ import {
   listConnectorOutboxJobs,
   markConnectorOutboxJob,
   readConnectorOutbox,
+  writeConnectorOutbox,
 } from "../packages/connectors/src/connector-outbox.js";
 import { dataPaths } from "../packages/storage/src/paths.js";
 
@@ -49,6 +50,7 @@ function fakePostgresOutboxPool() {
     async query(sql, params = []) {
       const text = String(sql).replace(/\s+/g, " ").trim().toLowerCase();
       if (text.startsWith("create table") || text === "begin" || text === "commit" || text === "rollback") return { rows: [] };
+      if (text.startsWith("select pg_advisory_xact_lock(hashtextextended(")) return { rows: [] };
       if (text.startsWith("select value from orkestr_connector_outbox_meta")) {
         return meta.has(params[0]) ? { rows: [{ value: meta.get(params[0]) }] } : { rows: [] };
       }
@@ -188,4 +190,30 @@ test("connector outbox supports Postgres backend operations", async () => {
   } finally {
     __connectorOutboxTestInternals.setPostgresPoolFactory(null);
   }
+});
+
+test("Postgres logical final identity reuses legacy uncertainty and takes a transaction advisory lock", async t => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-output-pg-"));
+  t.after(() => fs.rm(home, { recursive: true, force: true }));
+  const runtimeEnv = env(home, { ORKESTR_CONNECTOR_OUTBOX_STORE: "postgres",
+    ORKESTR_CONNECTOR_OUTBOX_POSTGRES_URL: "postgres://fixture/output-identity" });
+  const pool = fakePostgresOutboxPool();
+  const queries = [];
+  const query = pool.query;
+  pool.query = async (sql, params) => { queries.push(String(sql)); return query(sql, params); };
+  __connectorOutboxTestInternals.setPostgresPoolFactory(() => pool);
+  t.after(() => __connectorOutboxTestInternals.setPostgresPoolFactory(null));
+  const legacy = whatsappJob({ tenantId: "tenant-a", ownerUserId: "tenant-a", sourceMessageId: "old-local",
+    sourceEventId: "runtime-event", id: "old-job", idempotencyKey: "old-key", state: "delivery_uncertain",
+    metadata: { runtimeGeneration: "gen-a" }, brokerAck: { ids: ["receipt-a"] } });
+  await writeConnectorOutbox({ jobs: [legacy] }, runtimeEnv);
+  for (let i = 0; i < 3; i++) {
+    const result = await ensureConnectorOutboxJob({ ...legacy, id: undefined, idempotencyKey: undefined,
+      sourceMessageId: `copy-${i}`, state: "pending", brokerAck: null,
+      metadata: { runtimeGeneration: "gen-a", runtimeTurnId: "turn-a", runtimeItemId: "item-a" } }, runtimeEnv);
+    assert.equal(result.job.id, "old-job"); assert.equal(result.job.state, "delivery_uncertain");
+    assert.deepEqual(result.job.brokerAck, { ids: ["receipt-a"] });
+  }
+  assert.equal((await readConnectorOutbox(runtimeEnv)).jobs.length, 1);
+  assert.equal(queries.filter(sql => sql.includes("pg_advisory_xact_lock")).length, 3);
 });

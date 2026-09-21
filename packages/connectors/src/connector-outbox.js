@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { logicalOutputKey, sameLogicalOutput } from "../../shared/src/runtime-output-identity.js";
 import { withConnectorOutboxMutation } from "./connector-outbox-lock.js";
 import fs from "node:fs/promises";
 import { hasWhatsAppPartialDelivery, whatsappOutboxQuarantine, protectWhatsAppOutboxUpdate, requiresWhatsAppUncertainOverride } from "./whatsapp-replay-safety.js";
@@ -359,6 +360,8 @@ export function connectorOutboxPayloadHash(payload = {}) {
 }
 
 export function connectorOutboxIdempotencyKey(input = {}) {
+  const logical = logicalOutputKey(input);
+  if (logical) return logical;
   return [
     clean(input.tenantId || input.ownerUserId || "admin"),
     clean(input.connector),
@@ -415,6 +418,11 @@ export function normalizeConnectorOutboxJob(input = {}, env = process.env) {
 }
 
 function mergeJob(existing = {}, next = {}) {
+  if (sameLogicalOutput(existing, next)) {
+    if (connectorOutboxTerminalState(existing.state)) return existing;
+    next = { ...next, id: existing.id, idempotencyKey: existing.idempotencyKey,
+      sourceMessageId: existing.sourceMessageId, sourceEventId: existing.sourceEventId };
+  }
   const withWinner = (winner, loser) => ({
     ...loser,
     ...winner,
@@ -651,12 +659,20 @@ export async function ensureConnectorOutboxJob(input = {}, env = process.env) {
 }
 
 async function ensureConnectorOutboxJobLocked(input, env) {
+  const normalized = normalizeConnectorOutboxJob(input, env);
+  const logical = logicalOutputKey(normalized);
+  if (logical) input = { ...input, idempotencyKey: logical, id: connectorOutboxJobId({ idempotencyKey: logical }) };
   const pg = await openConnectorOutboxPostgres(env);
   if (pg) {
     const job = normalizeConnectorOutboxJob(input, env);
     let created = false;
     const nextJob = await withPostgresTransaction(pg, async (client) => {
-      const existing = await getConnectorOutboxJobRowPostgres(client, job.idempotencyKey, env, { forUpdate: true });
+      // SELECT FOR UPDATE cannot lock a first insertion that does not exist.
+      if (logical) await client.query("select pg_advisory_xact_lock(hashtextextended($1, 0))", [
+        JSON.stringify([job.tenantId, job.ownerUserId, job.connector, job.accountId, job.chatId, job.threadId, job.sourceRevision, job.deliveryType]),
+      ]);
+      const existing = await getConnectorOutboxJobRowPostgres(client, job.idempotencyKey, env, { forUpdate: true }) ||
+        await retainedLogicalOutputJob(job, env, client);
       const merged = existing ? mergeJob(existing, job) : job;
       if (existing && !connectorOutboxJobChanged(existing, merged)) return existing;
       await upsertConnectorOutboxJobRowPostgres(client, merged);
@@ -683,7 +699,7 @@ async function ensureConnectorOutboxJobLocked(input, env) {
   const db = await openConnectorOutboxDatabase(env);
   if (db) {
     const job = normalizeConnectorOutboxJob(input, env);
-    const existing = getConnectorOutboxJobRow(db, job.idempotencyKey, env);
+    const existing = getConnectorOutboxJobRow(db, job.idempotencyKey, env) || await retainedLogicalOutputJob(job, env);
     const nextJob = existing ? mergeJob(existing, job) : job;
     if (existing && !connectorOutboxJobChanged(existing, nextJob)) {
       return { job: existing, created: false };
@@ -716,7 +732,8 @@ async function ensureConnectorOutboxJobLocked(input, env) {
   }
   const store = await readConnectorOutbox(env);
   const job = normalizeConnectorOutboxJob(input, env);
-  const existing = store.jobs.find((item) => item.idempotencyKey === job.idempotencyKey) || null;
+  const existing = store.jobs.find((item) => item.idempotencyKey === job.idempotencyKey) ||
+    await retainedLogicalOutputJob(job, env, null, store.jobs);
   const nextJob = existing ? mergeJob(existing, job) : job;
   store.jobs = mergeConnectorOutboxJobs(store.jobs, [nextJob], env);
   await writeConnectorOutbox(store, env);
@@ -734,6 +751,28 @@ async function ensureConnectorOutboxJobLocked(input, env) {
     }, env).catch(() => {});
   }
   return { job: nextJob, created: !existing };
+}
+
+async function retainedLogicalOutputJob(job, env, client = null, rows = null) {
+  if (!logicalOutputKey(job)) return null;
+  if (!rows && client) {
+    const where = connectorOutboxWherePostgres({ ...job, state: "" });
+    rows = (await client.query(`select data from orkestr_connector_outbox ${where.sql} for update`, where.values))
+      .rows.map(row => rowToConnectorOutboxJob(row, env));
+  }
+  // Delivered/uncertain/partial states must remain visible as replay fences.
+  if (!rows) rows = (await listConnectorOutboxJobs({ connector: job.connector, tenantId: job.tenantId,
+    ownerUserId: job.ownerUserId, accountId: job.accountId, chatId: job.chatId, threadId: job.threadId,
+    deliveryType: job.deliveryType }, env)).jobs;
+  const matches = rows.filter(row => sameLogicalOutput(row, job));
+  const existing = matches.sort((a, b) => statusRank(b.state) - statusRank(a.state) || a.id.localeCompare(b.id))[0];
+  if (!existing) return null;
+  await appendEvent({ type: "connector_outbox_logical_duplicate_suppressed",
+    reason: matches.length > 1 ? "retained_aliases_require_review" : "retained_logical_output",
+    outputFingerprint: logicalOutputKey(job), projectionFingerprint: hash(job.sourceMessageId),
+    outboxFingerprint: hash(existing.id), receiptPresent: Boolean(existing.brokerAck), state: existing.state,
+  }, env).catch(() => {});
+  return existing;
 }
 
 function claimExpired(job = {}, nowMs = Date.now()) {

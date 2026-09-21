@@ -5,6 +5,7 @@ import { markConnectorDeliverySignal } from "./connector-delivery-signals.js";
 import { currentCodexGenerationMatches } from "./codex-generation.js";
 import { markRuntimeFinalDeliveryPending } from "./runtime-final-delivery.js";
 import { getThread, getThreadMessage, updateThreadMessage } from "./threads.js";
+import { runtimeOutputMetadata } from "../../shared/src/runtime-output-identity.js";
 
 // A persisted marker handles restarts; this short-lived reservation closes the
 // in-process race between a live event and history/rollout reconciliation.
@@ -130,6 +131,7 @@ export async function reconcileCodexFinalProjection({
       kind: "thread",
       parentMessageId: clean(message.parentMessageId),
       runtimeGeneration: generation || "",
+      ...runtimeOutputMetadata(message),
       finalProjection: true,
     },
   }, env);
