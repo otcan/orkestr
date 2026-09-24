@@ -7,10 +7,13 @@ import { startServer } from "../apps/server/src/server.js";
 import { listEvents } from "../packages/storage/src/store.js";
 import {
   cancelClaudeCodeLogin,
+  claudeCodeArgs,
+  claudeCodeEventTelemetry,
   claudeCodeLoginSession,
   startClaudeCodeLogin,
   submitClaudeCodeLoginCode,
 } from "../packages/core/src/claude-code-client.js";
+import { changeClaudeModelControls, readClaudeModelControls } from "../packages/core/src/claude-model-controls.js";
 import { getClaudeCodeSession } from "../packages/core/src/claude-code-sessions.js";
 import {
   createLlmAccountProfile,
@@ -40,6 +43,7 @@ async function fixture(t, name = "runtime") {
   await fs.writeFile(delayFile, "0", "utf8");
   await fs.writeFile(fake, `#!/usr/bin/env node
 import fs from "node:fs";
+import { execSync } from "node:child_process";
 const args = process.argv.slice(2);
 if (args[0] === "auth" && args[1] === "status") {
   process.stdout.write(JSON.stringify({ authenticated: true, status: "logged_in" }) + "\\n");
@@ -73,9 +77,19 @@ process.stdin.on("end", () => {
   }
   const session = resumed || "claude_session_fixture";
   const finish = () => {
+    const settingsAt = args.indexOf("--settings");
+    if (settingsAt >= 0) {
+      const settings = JSON.parse(args[settingsAt + 1]);
+      execSync(settings.statusLine.command, { input: JSON.stringify({
+        model: { id: "claude-sonnet-fixture" }, effort: { level: "high" },
+        context_window: { context_window_size: 200000, current_usage: { input_tokens: 120, output_tokens: 30, cache_read_input_tokens: 50 } },
+        rate_limits: { five_hour: { used_percentage: 25, resets_at: 1900000000 }, seven_day: { used_percentage: 40, resets_at: 1900100000 } },
+        session_id: "must-not-persist", transcript_path: "/private/transcript",
+      }), env: process.env });
+    }
     process.stdout.write(JSON.stringify({ type: "system", subtype: "init", session_id: session }) + "\\n");
     process.stdout.write(JSON.stringify({ type: "assistant", session_id: session, message: { content: [{ type: "text", text: "draft" }] } }) + "\\n");
-    process.stdout.write(JSON.stringify({ type: "result", session_id: session, result: "Reply: " + prompt.trim(), is_error: false }) + "\\n");
+    process.stdout.write(JSON.stringify({ type: "result", session_id: session, model: "claude-sonnet-fixture", result: "Reply: " + prompt.trim(), is_error: false, usage: { input_tokens: 120, output_tokens: 30, cache_read_input_tokens: 50 } }) + "\\n");
   };
   setTimeout(finish, Number(fs.readFileSync(${JSON.stringify(delayFile)}, "utf8") || 0));
 });
@@ -264,6 +278,49 @@ test("Claude runtime selects the exact profile, strips inherited API credentials
   const events = await listEvents(env, 100);
   assert.equal(JSON.stringify(events).includes(recorded[0].configDir), false);
   assert.equal(JSON.stringify(events).includes("must-not-reach-subscription-runtime"), false);
+  thread = await getThread(thread.id, env);
+  assert.equal(thread.claudeTokenUsage.total_tokens, 170);
+  assert.equal(thread.claudeRateLimits.primary.used_percent, 25);
+  assert.equal(thread.claudeRateLimits.secondary.used_percent, 40);
+  assert.equal(thread.claudeContextWindow, 200000);
+  const publicState = JSON.stringify({ thread, messages, events });
+  assert.equal(publicState.includes("must-not-persist"), false);
+  assert.equal(publicState.includes("/private/transcript"), false);
+});
+
+test("Claude settings share model controls while YOLO remains explicit and fail closed", async (t) => {
+  const { env } = await fixture(t, "controls");
+  const profile = await readyProfile("owner", "Controls", env);
+  let thread = await claudeThread("owner", profile.id, env, "claude-controls");
+  const principal = { userId: "owner", roles: [] };
+  const controls = await readClaudeModelControls(thread, principal, env);
+  assert.deepEqual(controls.models.map((model) => model.id), ["sonnet", "opus"]);
+  assert.equal(controls.permissionModes.includes("bypassPermissions"), false);
+  await assert.rejects(
+    changeClaudeModelControls(thread, { model: "opus", effort: "max", permissionMode: "bypassPermissions" }, principal, env),
+    /YOLO mode is disabled/,
+  );
+  const yoloEnv = { ...env, ORKESTR_CLAUDE_CODE_ALLOW_BYPASS_PERMISSIONS: "1" };
+  const changed = await changeClaudeModelControls(thread, { model: "opus", effort: "max", permissionMode: "bypassPermissions" }, principal, yoloEnv);
+  assert.equal(changed.thread.executor.metadata.claudeModel, "opus");
+  assert.deepEqual(claudeCodeArgs(changed.thread, {}, yoloEnv).slice(0, 9), [
+    "-p", "--output-format", "stream-json", "--verbose", "--permission-mode", "bypassPermissions", "--allow-dangerously-skip-permissions", "--model", "opus",
+  ]);
+  assert.throws(() => claudeCodeArgs(changed.thread, {}, env), /claude_code_bypass_permissions_disabled/);
+  await assert.rejects(readClaudeModelControls(thread, { userId: "other", roles: [] }, env), /forbidden/i);
+});
+
+test("Claude telemetry normalizes only safe provider usage and remaining windows", () => {
+  const telemetry = claudeCodeEventTelemetry({
+    model: "claude-opus-4-6",
+    usage: { input_tokens: 10, output_tokens: 5, cache_creation_input_tokens: 20, secret: "never" },
+    context_window: { context_window_size: 200000 },
+    rate_limits: { five_hour: { used_percentage: 22, resets_at: 1900000000 }, seven_day: { used_percentage: 44, resets_at: 1900100000 } },
+  });
+  assert.deepEqual(telemetry.tokenUsage, { input_tokens: 10, output_tokens: 5, cache_creation_input_tokens: 20, total_tokens: 30 });
+  assert.equal(telemetry.rateLimits.primary.window_minutes, 300);
+  assert.equal(telemetry.rateLimits.secondary.window_minutes, 10080);
+  assert.equal(JSON.stringify(telemetry).includes("never"), false);
 });
 
 test("Claude runtime enforces one active turn and interruption leaves no late assistant mutation", async (t) => {
@@ -315,6 +372,7 @@ test("Claude API creates a thread with only an opaque exact profile binding", as
   const prior = Object.fromEntries([
     "ORKESTR_CLAUDE_CODE_ENABLED",
     "ORKESTR_CLAUDE_CODE_BIN",
+    "ORKESTR_CLAUDE_CODE_ALLOW_BYPASS_PERMISSIONS",
     "ORKESTR_AUTH_REQUIRED",
     "ORKESTR_UNSAFE_ALLOW_PUBLIC_UNAUTHENTICATED",
     "ORKESTR_WHATSAPP_AUTOSTART",
@@ -323,6 +381,7 @@ test("Claude API creates a thread with only an opaque exact profile binding", as
   Object.assign(process.env, {
     ORKESTR_CLAUDE_CODE_ENABLED: "1",
     ORKESTR_CLAUDE_CODE_BIN: fake,
+    ORKESTR_CLAUDE_CODE_ALLOW_BYPASS_PERMISSIONS: "1",
     ORKESTR_AUTH_REQUIRED: "0",
     ORKESTR_UNSAFE_ALLOW_PUBLIC_UNAUTHENTICATED: "1",
     ORKESTR_WHATSAPP_AUTOSTART: "0",
@@ -349,6 +408,18 @@ test("Claude API creates a thread with only an opaque exact profile binding", as
     assert.equal(payload.thread.executor.accountProfileId, profile.id);
     assert.equal(JSON.stringify(payload).includes("runtimes/claude-code"), false);
     assert.equal(JSON.stringify(payload).includes("claudeSessionId"), false);
+    const controlsResponse = await fetch(`http://127.0.0.1:${port}/api/threads/claude-api-thread/model-settings`);
+    const controls = await controlsResponse.json();
+    assert.equal(controlsResponse.status, 200, JSON.stringify(controls));
+    assert.equal(controls.provider, "anthropic");
+    assert.equal(controls.permissionModes.includes("bypassPermissions"), true);
+    const changeResponse = await fetch(`http://127.0.0.1:${port}/api/threads/claude-api-thread/model-settings`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "opus", effort: "max", permissionMode: "bypassPermissions" }),
+    });
+    const changed = await changeResponse.json();
+    assert.equal(changeResponse.status, 200, JSON.stringify(changed));
+    assert.deepEqual({ model: changed.model, effort: changed.effort, permissionMode: changed.permissionMode }, { model: "opus", effort: "max", permissionMode: "bypassPermissions" });
     const accountsResponse = await fetch(`http://127.0.0.1:${port}/api/llm-accounts?provider=claude-code`);
     const accounts = await accountsResponse.json();
     assert.equal(accountsResponse.status, 200, JSON.stringify(accounts));

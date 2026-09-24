@@ -37,13 +37,15 @@ test("new-thread UI binds Claude to a selected server account profile", async ()
   assert.doesNotMatch(wizard, /credentialRoot|CLAUDE_CONFIG_DIR|claudeSessionId/);
 });
 
-test("server projections and controls do not expose Claude provider sessions or fall through to Codex", async () => {
+test("server projections expose shared Claude controls without provider sessions", async () => {
   const [controller, summary] = await Promise.all([
     fs.readFile(files.controller, "utf8"),
     fs.readFile(files.summary, "utf8"),
   ]);
   assert.doesNotMatch(summary, /claudeSessionId/);
   assert.match(controller, /claude_code_approval_bridge_unavailable/);
-  assert.match(controller, /claude_code_settings_unsupported/);
+  assert.match(controller, /readClaudeModelControls/);
+  assert.match(controller, /changeClaudeModelControls/);
+  assert.match(summary, /claudeRateLimits/);
   assert.match(controller, /claude_code_raw_terminal_attach_unsupported/);
 });
