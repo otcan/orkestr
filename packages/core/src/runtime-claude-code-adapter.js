@@ -8,11 +8,15 @@ import {
   claudeCodeCommand,
   claudeCodeEnabled,
   claudeCodeEventSessionId,
+  claudeCodeEventTelemetry,
   claudeCodeEventText,
   claudeCodeMaxOutputBytes,
   claudeCodeRuntimeEnv,
+  claudeCodeStatusCapture,
   claudeCodeTimeoutMs,
   classifyClaudeCodeFailure,
+  mergeClaudeCodeTelemetry,
+  readClaudeCodeStatusTelemetry,
 } from "./claude-code-client.js";
 import { appendEvent } from "../../storage/src/store.js";
 import { resolveLlmAccountProfile, updateLlmAccountProfileState } from "./llm-account-profiles.js";
@@ -57,6 +61,7 @@ function publicFailure(error) {
   const exact = clean(error?.code || error?.message || error);
   if (new Set([
     "claude_code_disabled",
+    "claude_code_bypass_permissions_disabled",
     "llm_account_profile_not_found",
     "llm_account_provider_mismatch",
     "llm_account_profile_revoked",
@@ -112,9 +117,13 @@ async function existingOutput(threadId, eventId, env) {
 async function runProcess({ thread, profile, prompt, sessionId, attemptId, env }) {
   const command = claudeCodeCommand(env);
   const childEnv = claudeCodeRuntimeEnv(profile, thread, env);
+  const statusCapture = claudeCodeStatusCapture(profile, thread);
   await fs.mkdir(childEnv.HOME, { recursive: true, mode: 0o700 });
+  await fs.mkdir(path.dirname(statusCapture.capturePath), { recursive: true, mode: 0o700 });
+  await fs.rm(statusCapture.capturePath, { force: true });
+  childEnv.ORKESTR_CLAUDE_STATUS_CAPTURE_PATH = statusCapture.capturePath;
   return new Promise((resolve, reject) => {
-    const proc = spawn(command, claudeCodeArgs(thread, { sessionId }), {
+    const proc = spawn(command, claudeCodeArgs(thread, { sessionId, statusCaptureCommand: statusCapture.command }, env), {
       cwd: workspaceForThread(thread),
       env: childEnv,
       stdio: ["pipe", "pipe", "pipe"],
@@ -127,6 +136,7 @@ async function runProcess({ thread, profile, prompt, sessionId, attemptId, env }
     let assistantText = "";
     let observedSessionId = sessionId;
     let resultError = "";
+    let telemetry = {};
     let forceKillTimer = null;
     function terminate(failureCode) {
       if (failureCode) active.failureCode = failureCode;
@@ -155,6 +165,7 @@ async function runProcess({ thread, profile, prompt, sessionId, attemptId, env }
         text: resultText || assistantText,
         sessionId: observedSessionId,
         interrupted: active.interrupted,
+        telemetry,
       });
     }
 
@@ -168,6 +179,7 @@ async function runProcess({ thread, profile, prompt, sessionId, attemptId, env }
       let event;
       try { event = JSON.parse(line); } catch { return; }
       observedSessionId = claudeCodeEventSessionId(event) || observedSessionId;
+      telemetry = mergeClaudeCodeTelemetry(telemetry, claudeCodeEventTelemetry(event));
       const text = claudeCodeEventText(event);
       if (clean(event.type).toLowerCase() === "result") {
         if (text) resultText = text;
@@ -180,8 +192,10 @@ async function runProcess({ thread, profile, prompt, sessionId, attemptId, env }
       stderr = `${stderr}${String(chunk || "")}`.slice(-8192);
     });
     proc.on("error", (error) => finish(error));
-    proc.on("close", (code, signal) => {
+    proc.on("close", async (code, signal) => {
       lines.close();
+      const statusTelemetry = await readClaudeCodeStatusTelemetry(statusCapture.capturePath);
+      if (statusTelemetry) telemetry = mergeClaudeCodeTelemetry(telemetry, statusTelemetry);
       if (active.interrupted) return finish();
       const failure = active.failureCode || (resultError ? classifyClaudeCodeFailure(resultError) : "") || (code === 0 ? "" : classifyClaudeCodeFailure(stderr || `exit_${code}_${signal || ""}`));
       if (failure) {
@@ -316,6 +330,10 @@ async function sendClaudeCodeInputReserved(thread, message, env = process.env) {
     }, env);
     const updated = await updateThread(thread.id, {
       state: "ready",
+      ...(result.telemetry?.model ? { claudeModelResolved: result.telemetry.model } : {}),
+      ...(result.telemetry?.tokenUsage ? { claudeTokenUsage: result.telemetry.tokenUsage } : {}),
+      ...(result.telemetry?.rateLimits ? { claudeRateLimits: result.telemetry.rateLimits } : {}),
+      ...(result.telemetry?.contextWindow ? { claudeContextWindow: result.telemetry.contextWindow } : {}),
       runtime: {
         ...(thread.runtime || {}),
         runtimeKind: "claude-code",
@@ -437,6 +455,11 @@ export async function claudeCodeThreadStatus(thread, env = process.env, counts =
     accountState: profileState,
     activeTurnId: active?.attemptId || null,
     error: state === "interrupted" ? "claude_code_runtime_interrupted" : thread.lastError || null,
+    model: thread.claudeModel || thread.executor?.metadata?.claudeModel || thread.claudeModelResolved || null,
+    effort: thread.claudeEffort || thread.executor?.metadata?.claudeEffort || null,
+    permissionMode: thread.claudePermissionMode || thread.executor?.metadata?.claudePermissionMode || "acceptEdits",
+    tokenUsage: thread.claudeTokenUsage || null,
+    rateLimits: thread.claudeRateLimits || null,
   };
 }
 

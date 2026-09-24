@@ -9,10 +9,13 @@ export interface HealthResponse {
 }
 
 export interface CodexModelControls {
+  provider?: string;
   readOnly: boolean;
   readOnlyReason: string;
   model: string | null;
   effort: string | null;
+  permissionMode?: string | null;
+  permissionModes?: string[];
   models: Array<{ id: string; isDefault?: boolean; defaultReasoningEffort?: string; supportedReasoningEfforts: Array<string | { reasoningEffort: string }> }>;
 }
 
@@ -3184,8 +3187,8 @@ export class ApiService {
     return this.http.get<CodexModelControls>(this.api(`/threads/${encodeURIComponent(id)}/model-settings`));
   }
 
-  setModelSettings(id: string, model: string, effort: string): Observable<{ ok: boolean; model: string; effort: string }> {
-    return this.http.post<{ ok: boolean; model: string; effort: string }>(this.api(`/threads/${encodeURIComponent(id)}/model-settings`), { model, effort });
+  setModelSettings(id: string, model: string, effort: string, permissionMode?: string): Observable<{ ok: boolean; model: string; effort: string; permissionMode?: string }> {
+    return this.http.post<{ ok: boolean; model: string; effort: string; permissionMode?: string }>(this.api(`/threads/${encodeURIComponent(id)}/model-settings`), { model, effort, ...(permissionMode ? { permissionMode } : {}) });
   }
 
   sendThreadInput(

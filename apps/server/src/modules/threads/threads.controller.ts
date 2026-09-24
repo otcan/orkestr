@@ -37,6 +37,7 @@ import { restoreRetiredThread, retireThread } from "../../../../../packages/core
 import { requestPrincipal } from "../../../../../packages/core/src/principal.js";
 import { isAdminPrincipal } from "../../../../../packages/core/src/policy.js";
 import { changeCodexModelControls, readCodexModelControls } from "../../../../../packages/core/src/codex-model-controls.js";
+import { changeClaudeModelControls, readClaudeModelControls } from "../../../../../packages/core/src/claude-model-controls.js";
 import { executeSettingsCommand, parseSettingsCommand } from "../../../../../packages/core/src/codex-settings-command-control.js";
 import { settingsOperationKey } from "../../../../../packages/core/src/codex-settings-operations.js";
 import { parseThreadInputCommand } from "../../../../../packages/core/src/thread-commands.js";
@@ -1294,7 +1295,7 @@ export class ThreadsController {
     const principal = requestPrincipal(request);
     const thread = await getThreadForPrincipal(threadId, principal);
     if (!thread) throw httpError("thread_not_found", 404);
-    if (threadUsesClaudeCode(thread)) throw httpError("claude_code_settings_unsupported", 409);
+    if (threadUsesClaudeCode(thread)) return readClaudeModelControls(thread, principal);
     return readCodexModelControls(thread, principal);
   }
 
@@ -1304,11 +1305,15 @@ export class ThreadsController {
     const principal = requestPrincipal(request);
     const thread = await getThreadForPrincipal(threadId, principal);
     if (!thread) throw httpError("thread_not_found", 404);
-    if (threadUsesClaudeCode(thread)) throw httpError("claude_code_settings_unsupported", 409);
     const model = typeof body.model === "string" ? body.model.trim() : "";
     const effort = typeof body.effort === "string" ? body.effort.trim() : "";
     if (!model || /\s/.test(model) || !effort || /\s/.test(effort) || model.length > 128 || effort.length > 32) throw httpError("A model and supported effort are required.", 400);
-    await this.assertThreadSanitized("thread.model-settings", principal, thread, { model, effort });
+    const permissionMode = typeof body.permissionMode === "string" ? body.permissionMode.trim() : "";
+    await this.assertThreadSanitized("thread.model-settings", principal, thread, { model, effort, permissionMode });
+    if (threadUsesClaudeCode(thread)) {
+      const result = await changeClaudeModelControls(thread, { model, effort, permissionMode }, principal);
+      return { ok: true, model: result.model, effort: result.effort, permissionMode: result.permissionMode };
+    }
     const result: any = await changeCodexModelControls(thread, { command: "model", text: `${model} ${effort}`, principal });
     if (!result.ok) throw httpError(result.error, 400);
     return { ok: true, model: result.thread.codexModel, effort: result.thread.codexReasoningEffort };

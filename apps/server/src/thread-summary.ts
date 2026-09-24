@@ -286,6 +286,8 @@ function codexMetadata(thread: any) {
     };
   }
   if (runtimeKind === "claude-code" || metadata.runtimeKind === "claude-code" || thread?.executor?.type === "claude-code") {
+    const tokenUsage = thread?.claudeTokenUsage || metadata.claudeTokenUsage || null;
+    const rateLimits = thread?.claudeRateLimits || metadata.claudeRateLimits || null;
     return {
       codexMode: null,
       codexModeLabel: null,
@@ -294,15 +296,16 @@ function codexMetadata(thread: any) {
       codexModeUpdatedAt: null,
       desiredCodexMode: null,
       desiredCodexModeUpdatedAt: null,
-      codexModel: thread?.claudeModel || metadata.claudeModel || null,
+      codexModel: thread?.claudeModel || metadata.claudeModel || thread?.claudeModelResolved || null,
       codexModelProvider: "anthropic",
-      codexReasoningEffort: null,
+      codexReasoningEffort: thread?.claudeEffort || metadata.claudeEffort || null,
       codexServiceTier: null,
       codexModelUpdatedAt: null,
-      codexContextWindow: null,
-      codexTokenUsage: null,
+      codexContextWindow: Number(thread?.claudeContextWindow || metadata.claudeContextWindow || 0) || null,
+      codexTokenUsage: tokenUsage,
       codexTotalTokenUsage: null,
-      codexRateLimits: null,
+      codexRateLimits: rateLimits,
+      agentPermissionMode: thread?.claudePermissionMode || metadata.claudePermissionMode || "acceptEdits",
       runtimeKind: "claude-code",
       codexSessionId: null,
       accountProfileId: thread?.executor?.accountProfileId || metadata.accountProfileId || null,

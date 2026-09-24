@@ -69,9 +69,12 @@ strips inherited Anthropic API credentials for subscription profiles, and keeps
 Claude session identifiers in the owner secret store rather than thread/API
 projections. A revoked or non-ready profile fences subsequent turns. The V1
 adapter uses Claude's structured JSONL print protocol and supports bounded
-execution, resume, interruption, and plan/accept-edits permission modes; interactive
-tool approval bridging is deliberately not enabled, so the runtime never uses a
-bypass-permissions mode.
+execution, resume, interruption, thread-scoped model/effort controls, and
+permission modes. Bypass-permissions (shown as YOLO) is available only to the
+admin runtime when the host explicitly enables it; the CLI's separate danger
+enablement flag is always supplied together with that mode. Provider-reported
+context and subscription windows are normalized into the same safe capacity
+projection used by Codex, and remain unknown when Claude does not report them.
 
 ## Deployment Boundary
 

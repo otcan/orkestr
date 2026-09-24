@@ -2,6 +2,8 @@ import path from "node:path";
 import fs from "node:fs/promises";
 import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
+import crypto from "node:crypto";
+import { fileURLToPath } from "node:url";
 
 const execFileAsync = promisify(execFile);
 const loginSessions = new Map();
@@ -58,9 +60,9 @@ export function claudeCodeMaxOutputBytes(env = process.env) {
   return Number.isFinite(parsed) && parsed >= 64 * 1024 ? Math.floor(parsed) : 16 * 1024 * 1024;
 }
 
-function permissionMode(thread = {}) {
+export function claudeCodePermissionMode(thread = {}) {
   const requested = clean(thread?.executor?.metadata?.claudePermissionMode || thread?.claudePermissionMode || "acceptEdits");
-  return new Set(["default", "plan", "acceptEdits", "dontAsk"]).has(requested) ? requested : "acceptEdits";
+  return new Set(["default", "plan", "acceptEdits", "dontAsk", "bypassPermissions"]).has(requested) ? requested : "acceptEdits";
 }
 
 function modelForThread(thread = {}) {
@@ -68,12 +70,97 @@ function modelForThread(thread = {}) {
   return /^[a-zA-Z0-9._:-]{1,120}$/.test(value) ? value : "";
 }
 
-export function claudeCodeArgs(thread = {}, options = {}) {
-  const args = ["-p", "--output-format", "stream-json", "--verbose", "--permission-mode", permissionMode(thread)];
+export function claudeCodeArgs(thread = {}, options = {}, env = process.env) {
+  const mode = claudeCodePermissionMode(thread);
+  if (mode === "bypassPermissions" && !truthy(env.ORKESTR_CLAUDE_CODE_ALLOW_BYPASS_PERMISSIONS)) {
+    const error = new Error("claude_code_bypass_permissions_disabled");
+    error.code = error.message;
+    error.statusCode = 403;
+    throw error;
+  }
+  const args = ["-p", "--output-format", "stream-json", "--verbose", "--permission-mode", mode];
+  if (mode === "bypassPermissions") args.push("--allow-dangerously-skip-permissions");
   const model = modelForThread(thread);
   if (model) args.push("--model", model);
+  const effort = clean(thread?.executor?.metadata?.claudeEffort || thread?.claudeEffort);
+  if (["low", "medium", "high", "max"].includes(effort)) args.push("--effort", effort);
+  if (clean(options.statusCaptureCommand)) {
+    args.push("--settings", JSON.stringify({ statusLine: { type: "command", command: clean(options.statusCaptureCommand) } }));
+  }
   if (clean(options.sessionId)) args.push("--resume", clean(options.sessionId));
   return args;
+}
+
+export function claudeCodeStatusCapture(profile = {}, thread = {}) {
+  const key = crypto.createHash("sha256").update(clean(thread.id)).digest("hex");
+  const capturePath = path.join(profile.credentialRoot, "telemetry", `${key}.json`);
+  const script = fileURLToPath(new URL("./claude-statusline-capture.js", import.meta.url));
+  return { capturePath, command: `${shellQuote(process.execPath)} ${shellQuote(script)}` };
+}
+
+export async function readClaudeCodeStatusTelemetry(capturePath = "") {
+  try {
+    const parsed = JSON.parse(await fs.readFile(capturePath, "utf8"));
+    const observedAt = Date.parse(parsed.observedAt || "");
+    if (!Number.isFinite(observedAt) || Date.now() - observedAt > 5 * 60 * 1000) return null;
+    return claudeCodeEventTelemetry(parsed);
+  } catch {
+    return null;
+  }
+}
+
+function finite(value) {
+  const number = Number(value);
+  return Number.isFinite(number) && number >= 0 ? number : null;
+}
+
+export function claudeCodeEventTelemetry(event = {}) {
+  const usage = event.usage || event.message?.usage || event.context_window?.current_usage || null;
+  const input = finite(usage?.input_tokens);
+  const output = finite(usage?.output_tokens);
+  const cacheWrite = finite(usage?.cache_creation_input_tokens);
+  const cacheRead = finite(usage?.cache_read_input_tokens);
+  const tokenUsage = usage ? {
+    ...(input !== null ? { input_tokens: input } : {}),
+    ...(output !== null ? { output_tokens: output } : {}),
+    ...(cacheWrite !== null ? { cache_creation_input_tokens: cacheWrite } : {}),
+    ...(cacheRead !== null ? { cache_read_input_tokens: cacheRead } : {}),
+    ...([input, cacheWrite, cacheRead].some((value) => value !== null)
+      ? { total_tokens: (input || 0) + (cacheWrite || 0) + (cacheRead || 0) }
+      : {}),
+  } : null;
+  const limits = event.rate_limits || event.rateLimits || null;
+  const window = (value, minutes) => {
+    const used = finite(value?.used_percentage ?? value?.used_percent);
+    const reset = finite(value?.resets_at);
+    return used === null ? null : { used_percent: Math.min(100, used), window_minutes: minutes, ...(reset !== null ? { resets_at: reset } : {}) };
+  };
+  const rateLimits = limits ? {
+    primary: window(limits.five_hour || limits.primary, 300),
+    secondary: window(limits.seven_day || limits.weekly || limits.secondary, 10080),
+    plan_type: "claude_subscription",
+  } : null;
+  const contextSize = finite(event.context_window?.context_window_size);
+  return {
+    tokenUsage: tokenUsage && Object.keys(tokenUsage).length ? tokenUsage : null,
+    rateLimits: rateLimits?.primary || rateLimits?.secondary ? rateLimits : null,
+    contextWindow: contextSize && contextSize > 0 ? contextSize : null,
+    model: validModelTelemetry(event.model?.id || event.model || event.message?.model),
+  };
+}
+
+export function mergeClaudeCodeTelemetry(current = {}, observed = {}) {
+  return {
+    tokenUsage: observed.tokenUsage || current.tokenUsage || null,
+    rateLimits: observed.rateLimits || current.rateLimits || null,
+    contextWindow: observed.contextWindow || current.contextWindow || null,
+    model: observed.model || current.model || null,
+  };
+}
+
+function validModelTelemetry(value = "") {
+  value = clean(value);
+  return /^[a-zA-Z0-9._:-]{1,120}$/.test(value) ? value : null;
 }
 
 export function claudeCodeRuntimeEnv(profile = {}, thread = {}, env = process.env) {

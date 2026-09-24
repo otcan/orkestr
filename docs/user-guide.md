@@ -78,8 +78,14 @@ stored server-side. One thread remains bound to one profile until a separate
 thread is created, and revoking a profile fences its threads. Subscription
 profiles intentionally ignore inherited Anthropic API-key environment variables
 so one account cannot silently run as another. `/plan`, `/code`, `/stop`, and
-`/reset` are supported. Provider tool-approval prompts, Codex model-setting
-commands, raw-terminal attach, and `/implement` are rejected for Claude threads
+`/reset` are supported. The thread capacity dialog changes Claude model and
+effort and shows provider-reported context, five-hour, and seven-day usage.
+Claude may omit subscription windows before its first response, in which case
+the UI shows them as unavailable rather than estimating them. Set
+`ORKESTR_CLAUDE_CODE_ALLOW_BYPASS_PERMISSIONS=1` to expose the admin-only YOLO
+choice; it skips Claude tool prompts and should only be enabled for a suitably
+isolated workspace. Provider tool-approval prompts, raw-terminal attach, and
+`/implement` are rejected for Claude threads
 in this V1 rather than falling through to a Codex path.
 
 ### Migrate Existing Codex Threads
