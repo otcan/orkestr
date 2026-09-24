@@ -61,6 +61,18 @@ Codex execution. Private deployments can customize non-Codex launch behavior
 through environment variables or overlays, but the public repo must not contain
 private host assumptions.
 
+Claude Code is an optional, default-off coding runtime. When enabled, an owner
+creates one or more opaque account profiles in Settings, completes Claude's
+attended subscription login, and binds a new thread to exactly one ready
+profile. Orkestr derives each profile's credential directory on the server,
+strips inherited Anthropic API credentials for subscription profiles, and keeps
+Claude session identifiers in the owner secret store rather than thread/API
+projections. A revoked or non-ready profile fences subsequent turns. The V1
+adapter uses Claude's structured JSONL print protocol and supports bounded
+execution, resume, interruption, and plan/accept-edits permission modes; interactive
+tool approval bridging is deliberately not enabled, so the runtime never uses a
+bypass-permissions mode.
+
 ## Deployment Boundary
 
 Local and VPS deployments use host-native processes. A VPS should use the

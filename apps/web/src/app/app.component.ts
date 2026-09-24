@@ -3645,6 +3645,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     const mode = String(thread?.runtimeMode || this.objectValue(thread?.runtime, "runtimeMode") || "").trim().toLowerCase();
     if (mode) return mode;
     const runtimeKind = String(thread?.runtimeKind || this.objectValue(thread?.runtime, "runtimeKind") || "").trim().toLowerCase();
+    if (runtimeKind === "claude-code") return "claude-code";
     if (runtimeKind === "codex-app-server" || runtimeKind === "app-server") return "codex-api";
     if (runtimeKind === "raw-terminal") return "attached-terminal";
     if (runtimeKind === "api-agent") return "agent";
