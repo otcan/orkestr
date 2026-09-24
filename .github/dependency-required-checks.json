@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "policyOwner": "ORK-478",
+  "implementation": "ORK-511",
+  "state": "proposed-not-applied",
+  "requiredChecks": ["secret-scan", "dependency-policy"],
+  "requireUpToDateBranch": true,
+  "requireCodeOwnerReview": true,
+  "protectedPolicyPaths": [
+    ".github/workflows/**",
+    ".github/CODEOWNERS",
+    ".github/dependency-required-checks.json",
+    "scripts/security/**"
+  ],
+  "activationPrerequisites": [
+    "Owner approves ORK-478 ruleset including no silent bypass and trusted policy review.",
+    "Reviewed scanner bootstrap exists on main; PR base policy must not fall back to candidate code.",
+    "Exact accepted commit passes authorized CI and publishes minimized evidence.",
+    "Add checks without removing any existing required checks; read back the live ruleset.",
+    "Qualify actual denied landing when scanner is failed, skipped, missing or publication fails."
+  ]
+}

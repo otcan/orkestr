@@ -3,10 +3,71 @@ name: CI
 on:
   workflow_dispatch:
   pull_request:
+  merge_group:
   push:
     branches: [main]
+  schedule:
+    - cron: '17 5 * * *'
+
+permissions:
+  contents: read
 
 jobs:
+  dependency-advisories:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      # PR/merge-queue content cannot supply its own scanner or exception policy.
+      POLICY_REF: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.sha }}
+    outputs:
+      evidence-id: ${{ steps.evidence.outputs.artifact-id }}
+      evidence-digest: ${{ steps.evidence.outputs.artifact-digest }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          path: candidate
+          persist-credentials: false
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ env.POLICY_REF }}
+          path: policy
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: '22'
+      - name: Exact lockfile advisory and provenance scan (no install)
+        env:
+          TARGET_COMMIT: ${{ github.sha }}
+        run: >-
+          node policy/scripts/security/dependency-advisories.mjs
+          --root "$GITHUB_WORKSPACE/candidate" --commit "$TARGET_COMMIT"
+          --policy-commit "$POLICY_REF" --report "$RUNNER_TEMP/dependency-evidence.json"
+      - name: Publish minimized aggregate evidence
+        if: ${{ always() }}
+        id: evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: dependency-evidence
+          path: ${{ runner.temp }}/dependency-evidence.json
+          if-no-files-found: error
+          retention-days: 14
+
+  dependency-policy:
+    # Stable required-check name for the ORK-478 ruleset; skipped is not success.
+    if: ${{ always() }}
+    needs: dependency-advisories
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require complete scan and published evidence
+        env:
+          RESULT: ${{ needs.dependency-advisories.result }}
+          EVIDENCE_ID: ${{ needs.dependency-advisories.outputs.evidence-id }}
+          EVIDENCE_DIGEST: ${{ needs.dependency-advisories.outputs.evidence-digest }}
+        run: |
+          test "$RESULT" = success
+          test -n "$EVIDENCE_ID"
+          test -n "$EVIDENCE_DIGEST"
+
   secret-scan:
     runs-on: ubuntu-latest
     permissions:
@@ -51,6 +112,8 @@ jobs:
             while read -r file; do node --check "$file"; done
 
   build:
+    needs: dependency-policy
+    if: ${{ github.event_name != 'schedule' }}
     runs-on: ubuntu-latest
     env:
       ORKESTR_BROWSER_LAUNCH_DISABLED: "1"
@@ -61,7 +124,16 @@ jobs:
         with:
           node-version: "22"
           cache: npm
-      - run: npm ci
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.sha }}
+          path: .dependency-policy
+          sparse-checkout: scripts/security/dependency-*
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - run: npm ci --ignore-scripts --no-audit
+      - run: node .dependency-policy/scripts/security/dependency-lifecycle.mjs --root . --installed
+      - run: node scripts/patch-whatsapp-media-id.mjs
       - name: Build
         run: npm run build
       - uses: actions/upload-artifact@v4
@@ -88,7 +160,16 @@ jobs:
         with:
           node-version: "22"
           cache: npm
-      - run: npm ci
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.sha }}
+          path: .dependency-policy
+          sparse-checkout: scripts/security/dependency-*
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - run: npm ci --ignore-scripts --no-audit
+      - run: node .dependency-policy/scripts/security/dependency-lifecycle.mjs --root . --installed
+      - run: node scripts/patch-whatsapp-media-id.mjs
       - uses: actions/download-artifact@v4
         with:
           name: runtime-dist
@@ -108,7 +189,16 @@ jobs:
         with:
           node-version: "22"
           cache: npm
-      - run: npm ci
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.sha }}
+          path: .dependency-policy
+          sparse-checkout: scripts/security/dependency-*
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - run: npm ci --ignore-scripts --no-audit
+      - run: node .dependency-policy/scripts/security/dependency-lifecycle.mjs --root . --installed
+      - run: node scripts/patch-whatsapp-media-id.mjs
       - uses: actions/download-artifact@v4
         with:
           name: runtime-dist
