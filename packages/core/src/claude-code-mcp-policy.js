@@ -2,7 +2,7 @@ function clean(value = "") {
   return String(value || "").trim();
 }
 
-const allowedMcpToolPattern = /^mcp__[a-zA-Z0-9_-]{1,80}__(?:[a-zA-Z0-9_.-]{1,100}|\*)$/;
+const allowedMcpToolPattern = /^mcp__[a-zA-Z0-9_-]{1,80}(?:__[a-zA-Z0-9_.-]{1,100})?$/;
 
 function policyError(code) {
   const error = new Error(code);

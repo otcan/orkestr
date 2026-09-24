@@ -86,9 +86,10 @@ the UI shows them as unavailable rather than estimating them. Set
 choice; it skips Claude tool prompts and should only be enabled for a suitably
 isolated workspace. A host may additionally set the comma-separated
 `ORKESTR_CLAUDE_CODE_YOLO_ALLOWED_MCP_TOOLS` allowlist to pre-authorize exact
-MCP tool names or one server namespace such as `mcp__atlassian__*`. The
-allowlist is ignored outside YOLO mode and malformed or overbroad expressions
-fail closed before Claude starts. Provider tool-approval prompts not covered by
+MCP tool names or one server namespace such as `mcp__atlassian`; Claude Code
+does not support MCP globs.
+The allowlist is ignored outside YOLO mode and malformed expressions fail
+closed before Claude starts. Provider tool-approval prompts not covered by
 that server-owned allowlist, raw-terminal attach, and `/implement` are rejected
 for Claude threads in this V1 rather than falling through to a Codex path.
 
