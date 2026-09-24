@@ -118,7 +118,10 @@ async function runProcess({ thread, profile, prompt, sessionId, attemptId, env }
   const command = claudeCodeCommand(env);
   const childEnv = claudeCodeRuntimeEnv(profile, thread, env);
   const statusCapture = claudeCodeStatusCapture(profile, thread);
-  await fs.mkdir(childEnv.HOME, { recursive: true, mode: 0o700 });
+  await Promise.all([
+    fs.mkdir(childEnv.HOME, { recursive: true, mode: 0o700 }),
+    fs.mkdir(childEnv.TMPDIR, { recursive: true, mode: 0o700 }),
+  ]);
   await fs.mkdir(path.dirname(statusCapture.capturePath), { recursive: true, mode: 0o700 });
   await fs.rm(statusCapture.capturePath, { force: true });
   childEnv.ORKESTR_CLAUDE_STATUS_CAPTURE_PATH = statusCapture.capturePath;

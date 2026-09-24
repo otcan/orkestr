@@ -10,6 +10,7 @@ import {
   claudeCodeArgs,
   claudeCodeEventTelemetry,
   claudeCodeLoginSession,
+  claudeCodeRuntimeEnv,
   startClaudeCodeLogin,
   submitClaudeCodeLoginCode,
 } from "../packages/core/src/claude-code-client.js";
@@ -68,6 +69,8 @@ process.stdin.on("end", () => {
   fs.appendFileSync(${JSON.stringify(calls)}, JSON.stringify({
     args,
     configDir: process.env.CLAUDE_CONFIG_DIR || "",
+    tempDir: process.env.TMPDIR || "",
+    tempDirWritable: Boolean(process.env.TMPDIR && fs.existsSync(process.env.TMPDIR)),
     leakedApiKey: Boolean(process.env.ANTHROPIC_API_KEY),
     prompt: prompt.trim()
   }) + "\\n");
@@ -115,6 +118,14 @@ async function readyProfile(ownerUserId, label, env) {
   await updateLlmAccountProfileState(ownerUserId, created.id, "ready", { verified: true }, env);
   return created;
 }
+
+test("Claude runtime uses an account-scoped writable temp directory", () => {
+  const runtime = claudeCodeRuntimeEnv({ credentialRoot: "/srv/orkestr/profiles/opaque" }, {}, { TMPDIR: "/shared/tmp" });
+  assert.equal(runtime.TMPDIR, "/srv/orkestr/profiles/opaque/tmp");
+  assert.equal(runtime.TMP, runtime.TMPDIR);
+  assert.equal(runtime.TEMP, runtime.TMPDIR);
+  assert.equal(runtime.TMPDIR.includes("/shared/tmp"), false);
+});
 
 async function claudeThread(ownerUserId, profileId, env, id = "claude-thread") {
   env.ORKESTR_ADMIN_USER_ID = ownerUserId;
@@ -272,6 +283,8 @@ test("Claude runtime selects the exact profile, strips inherited API credentials
   assert.equal(recorded[0].leakedApiKey, false);
   assert.equal(recorded[0].configDir.includes(primary.id), true);
   assert.equal(recorded[0].configDir.includes(home), true);
+  assert.equal(recorded[0].tempDir, path.join(recorded[0].configDir, "tmp"));
+  assert.equal(recorded[0].tempDirWritable, true);
   assert.deepEqual(recorded[1].args.slice(-2), ["--resume", "claude_session_fixture"]);
   const messages = await listThreadMessages(thread.id, env);
   assert.deepEqual(messages.filter((message) => message.role === "assistant").map((message) => message.text), ["Reply: first request", "Reply: second request"]);

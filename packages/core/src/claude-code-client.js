@@ -170,6 +170,7 @@ function validModelTelemetry(value = "") {
 
 export function claudeCodeRuntimeEnv(profile = {}, thread = {}, env = process.env) {
   const runtimeHome = path.join(profile.credentialRoot, "runtime-home");
+  const runtimeTmp = path.join(profile.credentialRoot, "tmp");
   const source = { ...process.env, ...env };
   const inherited = {};
   for (const key of [
@@ -183,6 +184,9 @@ export function claudeCodeRuntimeEnv(profile = {}, thread = {}, env = process.en
   const next = {
     ...inherited,
     HOME: runtimeHome,
+    TMPDIR: runtimeTmp,
+    TMP: runtimeTmp,
+    TEMP: runtimeTmp,
     CLAUDE_CONFIG_DIR: profile.credentialRoot,
     CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1",
     DISABLE_AUTOUPDATER: "1",
@@ -223,7 +227,10 @@ export function claudeCodeEventText(event = {}) {
 export async function claudeCodeLoginStatus(profile = {}, thread = {}, env = process.env) {
   const command = claudeCodeCommand(env);
   const runtimeEnv = claudeCodeRuntimeEnv(profile, thread, env);
-  await fs.mkdir(runtimeEnv.HOME, { recursive: true, mode: 0o700 });
+  await Promise.all([
+    fs.mkdir(runtimeEnv.HOME, { recursive: true, mode: 0o700 }),
+    fs.mkdir(runtimeEnv.TMPDIR, { recursive: true, mode: 0o700 }),
+  ]);
   try {
     const { stdout = "", stderr = "" } = await execFileAsync(command, ["auth", "status", "--json"], {
       env: runtimeEnv,
@@ -370,7 +377,10 @@ export async function startClaudeCodeLogin(profile = {}, thread = {}, env = proc
   const existing = activeLogin(profile.id);
   if (existing) return loginSnapshot(existing);
   const login = loginSpawn(profile, thread, env);
-  await fs.mkdir(login.env.HOME, { recursive: true, mode: 0o700 });
+  await Promise.all([
+    fs.mkdir(login.env.HOME, { recursive: true, mode: 0o700 }),
+    fs.mkdir(login.env.TMPDIR, { recursive: true, mode: 0o700 }),
+  ]);
   const session = {
     state: "starting",
     authUrl: "",
