@@ -55,7 +55,7 @@ test("effort validates current model and never silently substitutes unavailable 
   assert.equal(parseThreadInputCommand({ text: "/effort high" }).command, "effort");
   const resolved = resolveCodexThreadSettingsCommand({ command: "effort", text: "high", models, thread: { codexModel: "gpt-main" } });
   assert.deepEqual(resolved.patch, { codexModel: "gpt-main", codexReasoningEffort: "high" });
-  for (const text of ["", "high extra", "invalid"]) assert.equal(resolveCodexThreadSettingsCommand({ command: "effort", text, models }).ok, false);
+  for (const text of ["high extra", "invalid"]) assert.equal(resolveCodexThreadSettingsCommand({ command: "effort", text, models }).ok, false);
   assert.equal(resolveCodexThreadSettingsCommand({ command: "effort", text: "high", models, thread: { codexModel: "missing" } }).ok, false);
   assert.equal(resolveCodexThreadSettingsCommand({ command: "effort", text: "high", models, thread: { codexModel: "gpt-small" } }).ok, false);
 });

@@ -37,6 +37,8 @@ import { restoreRetiredThread, retireThread } from "../../../../../packages/core
 import { requestPrincipal } from "../../../../../packages/core/src/principal.js";
 import { isAdminPrincipal } from "../../../../../packages/core/src/policy.js";
 import { changeCodexModelControls, readCodexModelControls } from "../../../../../packages/core/src/codex-model-controls.js";
+import { executeSettingsCommand, parseSettingsCommand } from "../../../../../packages/core/src/codex-settings-command-control.js";
+import { settingsOperationKey } from "../../../../../packages/core/src/codex-settings-operations.js";
 import { parseThreadInputCommand } from "../../../../../packages/core/src/thread-commands.js";
 import { createUiReplyDeliveryIntent, publicReplyDeliveryIntentMessage } from "../../../../../packages/core/src/reply-delivery-intent.js";
 import { launchNativeTerminal } from "../../../../../packages/core/src/native-terminal.js";
@@ -669,6 +671,17 @@ export class ThreadsController {
     const parsedCommand = body.parseCommands === true || body.controlAllowed === true || body.originOwner === true
       ? parseThreadInputCommand(body)
       : { command: null, text: String(body.text || "") };
+    const settingsCommand = parseSettingsCommand(String(body.text || ""));
+    if (settingsCommand) {
+      await getThreadForPrincipal(thread.id, principal);
+      await this.assertThreadSanitized("thread.model-settings", principal, thread, { command: settingsCommand.command });
+      const sourceId = String(body.clientMessageId || body.idempotencyKey || "");
+      const result = await executeSettingsCommand({ thread, text: String(body.text || ""), principal,
+        sourceOperationKey: sourceId ? settingsOperationKey(["webui", thread.ownerUserId, principal.userId, thread.id, sourceId]) : "",
+        hasAttachments: Boolean((body.attachments as unknown[] | undefined)?.length),
+      });
+      return { ...result, controlCommand: true, message: null };
+    }
     if (parsedCommand.command === "interrupt") {
       return this.interrupt(request, thread.id, {
         ...body,
@@ -891,7 +904,7 @@ export class ThreadsController {
     const thread = await getThread(threadId);
     if (!thread) throw httpError("thread_not_found", 404);
     await getThreadForPrincipal(thread.id, principal);
-    const replyDeliveryIntent = createUiReplyDeliveryIntent(thread, {
+    const replyDeliveryIntent = parseSettingsCommand(String(body.text || "")) ? null : createUiReplyDeliveryIntent(thread, {
       mode: body.replyDelivery,
       requestedByUserId: principal.userId,
       env: process.env,
@@ -1067,6 +1080,9 @@ export class ThreadsController {
     const serverTrustedUiInput = (body as Record<string | symbol, unknown>)[trustedUiInput] === true;
     body = (serverTrustedUiInput ? body : stripReplyDeliveryAuthority(body)) as Record<string, unknown>;
     validateRequestSchema(threadInterruptSchema, { params: { threadId }, body });
+    if (parseSettingsCommand(String(body.text || ""))) {
+      return this.input(request, threadId, { ...body, parseCommands: true });
+    }
     const principal = requestPrincipal(request);
     const thread = await getThread(threadId);
     if (!thread) throw httpError("thread_not_found", 404);
@@ -1143,7 +1159,7 @@ export class ThreadsController {
     const thread = await getThread(threadId);
     if (!thread) throw httpError("thread_not_found", 404);
     await getThreadForPrincipal(thread.id, principal);
-    const replyDeliveryIntent = createUiReplyDeliveryIntent(thread, {
+    const replyDeliveryIntent = parseSettingsCommand(String(body.text || "")) ? null : createUiReplyDeliveryIntent(thread, {
       mode: body.replyDelivery,
       requestedByUserId: principal.userId,
       env: process.env,

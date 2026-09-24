@@ -1,4 +1,5 @@
 import path from "node:path";
+import { observeSettingsHistoryWrite } from "./codex-settings-command-observability.js";
 import fs from "node:fs/promises";
 import { createHash, randomUUID } from "node:crypto";
 import { ensureDataDirs } from "../../storage/src/paths.js";
@@ -901,6 +902,7 @@ export async function appendThreadMessage(threadId, input, env = process.env) {
     }, env);
     return message;
   }
+  await observeSettingsHistoryWrite(message, env);
   await appendThreadAttachmentEvents(thread, message, attachmentOutcomes, env);
   await updateThread(thread.id, { state: activeInputStates.has(message.state) ? message.state : thread.state }, env);
   await appendEvent({ type: `thread_message_${message.state}`, threadId: thread.id, messageId: message.id, source: message.source, role: message.role, ownerUserId: message.ownerUserId }, env);

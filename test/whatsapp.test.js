@@ -323,7 +323,7 @@ async function writeTestDeliveryClaim(home, { accountId, chatId, textKey, claime
   return { claimKey, filePath };
 }
 
-function assertDebugFooter(text, { mode = "", messageType = "final", model = "[^·\\n]+", queueReason = "", runtime = "", fiveHour = "", weekly = "" } = {}) {
+function assertDebugFooter(text, { mode = "", messageType = "final", model = "[^·\\n]+", queueReason = "", runtime = "", fiveHour = "", weekly = "", modelControls = false } = {}) {
   const escapedModel = model.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const queuePart = queueReason
     ? ` · queue:\\d+ · reason:${queueReason}`
@@ -339,6 +339,7 @@ function assertDebugFooter(text, { mode = "", messageType = "final", model = "[^
       (fiveHour ? ` · 5h:${fiveHour}` : "(?: · 5h:\\d+%)?") +
       (weekly ? ` · wk:${weekly}` : "(?: · wk:\\d+%)?") +
       `${queuePart} · load:\\d+% · api:\\d+% · help:/help` +
+      (modelControls ? " · model:/model · effort:/effort · fast:/fast" : "") +
       (mode === "plan" ? " · mode-switch:/code" : " · mode-switch:/plan") +
       runtimeSwitch +
       "$",
@@ -13492,7 +13493,7 @@ test("whatsapp debug footer reads live Codex rate limits when thread metadata is
 
   assert.equal(delivery.delivered.length, 1);
   assert.equal(stripDebugFooter(calls[0].body.text), "Final with live limits.");
-  assertDebugFooter(calls[0].body.text, { messageType: "final", model: "gpt-5.5/h", runtime: "api", fiveHour: "91%", weekly: "17%" });
+  assertDebugFooter(calls[0].body.text, { messageType: "final", model: "gpt-5.5/h", runtime: "api", fiveHour: "91%", weekly: "17%", modelControls: true });
 });
 
 test("whatsapp debug footer can be disabled", async () => {

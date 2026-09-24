@@ -29,6 +29,7 @@ import {
 } from "../../core/src/router-traces.js";
 import { recordWatcherAlert } from "../../core/src/watcher-alerts.js";
 import { appendThreadMessage, createThreadForPrincipal, enqueueThreadInputForPrincipal, getThread, getThreadMessage, isThreadRetired, listThreadMessages, listThreads, listThreadsForPrincipal, updateThread, updateThreadMessage } from "../../core/src/threads.js";
+import { handleWhatsAppSettingsCommand, deliverWhatsAppSettingsReplies } from "./whatsapp-settings-command.js";
 import { resolveCurrentCodexGeneration } from "../../core/src/codex-generation.js";
 import { adminUserId, findOrCreateExternalUser, getUser, normalizeUserId } from "../../core/src/users.js";
 import { injectRuntimeFault } from "../../core/src/runtime-fault-injection.js";
@@ -4913,23 +4914,6 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
       threadId: threadId || null,
     };
   }
-  const messageInput = {
-    role: "user",
-    source: "whatsapp_inbound",
-    originSurface: "whatsapp",
-    originTransport: "whatsapp-local-bridge",
-    connector: "whatsapp",
-    externalId: canonicalEventId || eventId,
-    sourceEventId: eventId,
-    routerTraceId,
-    turnId,
-    chatId,
-    from,
-    accountId,
-    text,
-    promptFile,
-    attachments,
-  };
   let thread = threadId ? (await listThreads(env)).find((item) => item.id === threadId || item.name === threadId || item.bindingName === threadId) : null;
   thread = await ensureApiAgentWhatsAppThread(thread, env);
   const inboundSecurity = evaluateWhatsAppInboundSecurity({
@@ -4942,12 +4926,6 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
     thread: thread || {},
     env,
   });
-  messageInput.externalPrincipal = inboundSecurity.participant;
-  messageInput.senderParticipantId = inboundSecurity.participant?.senderId || "";
-  messageInput.senderTrustLevel = inboundSecurity.trustLevel || "unknown";
-  messageInput.senderEffectiveRole = inboundSecurity.effectiveRole || inboundSecurity.trustLevel || "unknown";
-  messageInput.senderPolicyMode = inboundSecurity.policyMode || "";
-  messageInput.securityClassification = inboundSecurity.classified || null;
   if (!inboundSecurity.allowed) {
     const blocked = inboundSecurity.action === "block";
     if (blocked) state = addWhatsAppInboundSecurityBlock(state, inboundSecurity);
@@ -5028,6 +5006,29 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
       threadId: thread?.id || threadId || "",
     });
   }
+  const settingsControl = await handleWhatsAppSettingsCommand({
+    thread, text, senderEffectiveRole: inboundSecurity.effectiveRole || inboundSecurity.trustLevel || "unknown",
+    accountId, chatId, canonicalEventId: canonicalEventId || eventId,
+    hasAttachments: Boolean(promptFile || attachments?.length),
+  }, env);
+  if (settingsControl) {
+    await recordRouterTraceEvent({ routerTraceId, turnId, connector: "whatsapp", accountId, chatId,
+      sourceEventId: eventId, threadId: thread?.id || "", phase: "completed",
+      reason: "settings_control", terminal: true }, env).catch(() => {});
+    return settingsControl;
+  }
+  const messageInput = {
+    role: "user", source: "whatsapp_inbound", originSurface: "whatsapp",
+    originTransport: "whatsapp-local-bridge", connector: "whatsapp",
+    externalId: canonicalEventId || eventId, sourceEventId: eventId,
+    routerTraceId, turnId, chatId, from, accountId, text, promptFile, attachments,
+    externalPrincipal: inboundSecurity.participant,
+    senderParticipantId: inboundSecurity.participant?.senderId || "",
+    senderTrustLevel: inboundSecurity.trustLevel || "unknown",
+    senderEffectiveRole: inboundSecurity.effectiveRole || inboundSecurity.trustLevel || "unknown",
+    senderPolicyMode: inboundSecurity.policyMode || "",
+    securityClassification: inboundSecurity.classified || null,
+  };
   await ensureRouterTurn({
     routerTraceId,
     turnId,
@@ -7254,6 +7255,9 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
 }
 
 export async function deliverWhatsAppReplies(env = process.env, fetchImpl = fetch) {
+  // Control replies have no canonical assistant message and must not depend on
+  // the conversation mirror's idle cache or cursor.
+  await deliverWhatsAppSettingsReplies(env, options => sendWhatsAppText({ ...options, env, fetchImpl }));
   const minIntervalMs = whatsappDeliveryMinIntervalMs(env, fetchImpl);
   if (minIntervalMs > 0 && whatsappDeliveryRunCache && Date.now() - whatsappDeliveryRunCache.updatedAt <= minIntervalMs) {
     return whatsappDeliveryRunCache.result;

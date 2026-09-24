@@ -32,14 +32,14 @@ export const SLASH_COMMANDS: SlashCommandInfo[] = [
     command: "/fast",
     aliases: [],
     label: "Fast mode",
-    detail: "Toggle or inspect the Codex fast service tier for this thread.",
+    detail: "Show fast status. Use /fast enable, disable, or toggle to change it.",
     acceptsText: true,
   },
   {
     command: "/effort",
     aliases: [],
     label: "Reasoning effort",
-    detail: "Set a supported reasoning effort for the current Codex model.",
+    detail: "Show current and supported efforts, or use /effort <level> to change it.",
     acceptsText: true,
   },
   {

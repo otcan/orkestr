@@ -2,7 +2,7 @@ import { DatePipe } from "@angular/common";
 import { AfterViewChecked, ChangeDetectorRef, Component, ElementRef, OnDestroy, OnInit, ViewChild, inject, signal } from "@angular/core";
 import { FormsModule } from "@angular/forms";
 import { ModelSettingsComponent } from "./model-settings.component";
-import { firstValueFrom } from "rxjs";
+import { firstValueFrom, timeout } from "rxjs";
 import { AppLauncherPageComponent } from "./app-launcher-page.component";
 import { AttachmentEncryptionBootstrapService } from "./attachment-encryption-bootstrap.service";
 import { DraftUploadQueue } from "./draft-upload-queue";
@@ -197,6 +197,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   filterText = "";
   draft = "";
   error = "";
+  settingsCommandReplies: Record<string, string> = {};
   attachmentEncryptionError = "";
   linkNotice = "";
   logoutBusy = false;
@@ -1299,6 +1300,26 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   async sendMessage(): Promise<void> {
     const thread = this.selectedThread();
     if (!thread || this.sending || this.sendingNow || this.implementingPlan) return;
+    if (/^\s*\/(model|effort|fast)(?=$|[\s:.,])/i.test(this.draft)) {
+      if (this.pendingFiles.length) { this.error = "Send settings commands without attachments."; return; }
+      const commandText = this.draft;
+      this.sending = true;
+      this.error = "";
+      try {
+        const response = await firstValueFrom(this.api.sendThreadInput(thread.id, commandText, [], {
+          replyDelivery: "ui_only", clientMessageId: `settings-${crypto.randomUUID()}`,
+        }).pipe(timeout(20000)));
+        this.settingsCommandReplies[thread.id] = String(response.replyText || "Settings were not changed.");
+        if (this.draft === commandText) this.draft = "";
+        await this.refresh(false);
+      } catch (error) {
+        this.error = this.errorText(error);
+      } finally {
+        this.sending = false;
+        this.renderNow();
+      }
+      return;
+    }
     if (this.pendingFiles.some(file => file.uploadState !== "ready")) { this.error = "Wait for uploads, retry, or remove unfinished attachments."; return; }
     const originalText = this.draft.trim();
     if (!originalText && this.pendingFiles.length === 0) return;
@@ -1378,6 +1399,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   async sendMessageNow(): Promise<void> {
     const thread = this.selectedThread();
     if (!thread || this.sending || this.sendingNow || this.implementingPlan) return;
+    if (/^\s*\/(model|effort|fast)(?=$|[\s:.,])/i.test(this.draft)) return this.sendMessage();
     if (this.pendingFiles.some(file => file.uploadState !== "ready")) { this.error = "Wait for uploads, retry, or remove unfinished attachments."; return; }
     const originalText = this.draft.trim();
     if (!originalText && this.pendingFiles.length === 0) return;

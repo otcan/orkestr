@@ -46,7 +46,7 @@ test("Codex thread settings command reports catalog and validates model effort",
 });
 
 test("Codex fast command toggles, reports, disables, and rejects unsupported models", () => {
-  const enabled = resolveCodexThreadSettingsCommand({ command: "fast", thread: { codexModel: "gpt-main" }, models });
+  const enabled = resolveCodexThreadSettingsCommand({ command: "fast", text: "toggle", thread: { codexModel: "gpt-main" }, models });
   assert.deepEqual(enabled.patch, { codexServiceTier: "priority" });
 
   const status = resolveCodexThreadSettingsCommand({ command: "fast", text: "status", thread: { codexModel: "gpt-main", codexServiceTier: "priority" }, models });

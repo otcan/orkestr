@@ -1,4 +1,5 @@
 import os from "node:os";
+import { modelControlsReadOnlyReason } from "../../core/src/codex-model-controls.js";
 import { capacityResetLabel } from "./whatsapp-capacity-reset.js";
 import { threadRequiresTenantIsolation } from "../../core/src/tenant-policy.js";
 import { codexAssistantSource, threadSuppressesWhatsAppDebugFooter } from "./whatsapp-mirror-policy.js";
@@ -323,6 +324,7 @@ export function whatsappDebugFooter({ message = {}, thread = {}, messages = [], 
     `load:${loadDebugPercent()}%`,
     `api:${processCpuDebugPercent()}%`,
     "help:/help",
+    ...(env.ORKESTR_SETTINGS_COMMANDS_ENABLED !== "0" && !modelControlsReadOnlyReason(thread, env) && !thread.codexSettingsUncertain ? ["model:/model", "effort:/effort", "fast:/fast"] : []),
     ...(mode === "plan" ? ["mode-switch:/code"] : ["mode-switch:/plan"]),
     ...(runtimeSwitch ? [`rt-switch:${runtimeSwitch}`] : []),
   ];
