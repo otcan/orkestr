@@ -113,6 +113,19 @@ function shortReasoningEffort(value) {
   return effort.replace(/\s+/g, "-").slice(0, 8);
 }
 
+function claudeCodeThread(thread = {}) {
+  const executor = thread?.executor && typeof thread.executor === "object" ? thread.executor : {};
+  const metadata = executor.metadata && typeof executor.metadata === "object" ? executor.metadata : {};
+  const runtime = thread?.runtime && typeof thread.runtime === "object" ? thread.runtime : {};
+  return [
+    thread.runtimeKind,
+    runtime.runtimeKind,
+    executor.type,
+    executor.id,
+    metadata.runtimeKind,
+  ].some((value) => pickString(value).toLowerCase() === "claude-code");
+}
+
 function codexModelDebugLabel(message = {}, thread = {}, env = process.env) {
   const metadata = thread?.executor?.metadata && typeof thread.executor.metadata === "object" ? thread.executor.metadata : {};
   const model = pickString(
@@ -137,6 +150,34 @@ function codexModelDebugLabel(message = {}, thread = {}, env = process.env) {
   return effort ? `${model}/${effort}` : model;
 }
 
+function claudeModelDebugLabel(message = {}, thread = {}) {
+  const metadata = thread?.executor?.metadata && typeof thread.executor.metadata === "object" ? thread.executor.metadata : {};
+  const model = pickString(
+    message.claudeModel,
+    message.model,
+    thread.claudeModel,
+    metadata.claudeModel,
+    thread.claudeModelResolved,
+    metadata.claudeModelResolved,
+    "unknown",
+  );
+  const effort = shortReasoningEffort(
+    pickString(
+      message.claudeEffort,
+      message.reasoningEffort,
+      thread.claudeEffort,
+      metadata.claudeEffort,
+    ),
+  );
+  return effort ? `${model}/${effort}` : model;
+}
+
+function modelDebugLabel(message = {}, thread = {}, env = process.env) {
+  return claudeCodeThread(thread)
+    ? claudeModelDebugLabel(message, thread)
+    : codexModelDebugLabel(message, thread, env);
+}
+
 function codexFastDebugValue(message = {}, thread = {}) {
   const metadata = thread?.executor?.metadata && typeof thread.executor.metadata === "object" ? thread.executor.metadata : {};
   return pickString(message.codexServiceTier, thread.codexServiceTier, metadata.codexServiceTier).toLowerCase() === "priority";
@@ -154,6 +195,7 @@ function codexModeDebugValue(message = {}, thread = {}) {
 }
 
 function runtimeSurfaceDebugValue(thread = {}) {
+  if (claudeCodeThread(thread)) return "claude";
   const runtime = thread?.runtime && typeof thread.runtime === "object" ? thread.runtime : {};
   const explicit = pickString(thread.runtimeMode, runtime.runtimeMode).toLowerCase();
   if (explicit === "codex-api") return "api";
@@ -249,13 +291,23 @@ function codexRateLimitsRecord(thread = {}) {
       : null;
 }
 
+function providerRateLimitsRecord(thread = {}) {
+  if (!claudeCodeThread(thread)) return codexRateLimitsRecord(thread);
+  const metadata = thread?.executor?.metadata && typeof thread.executor.metadata === "object" ? thread.executor.metadata : {};
+  return thread?.claudeRateLimits && typeof thread.claudeRateLimits === "object"
+    ? thread.claudeRateLimits
+    : metadata.claudeRateLimits && typeof metadata.claudeRateLimits === "object"
+      ? metadata.claudeRateLimits
+      : null;
+}
+
 function codexRateLimitWindowMinutes(record = null) {
   const minutes = Number(record?.window_minutes);
   return Number.isFinite(minutes) && minutes > 0 ? minutes : null;
 }
 
-function codexRateLimitRecordForPeriod(thread = {}, period = "") {
-  const limits = codexRateLimitsRecord(thread);
+function providerRateLimitRecordForPeriod(thread = {}, period = "") {
+  const limits = providerRateLimitsRecord(thread);
   if (!limits) return null;
   const entries = ["primary", "secondary"]
     .map((key) => ({ key, record: limits?.[key] && typeof limits[key] === "object" ? limits[key] : null }))
@@ -272,8 +324,8 @@ function codexRateLimitRecordForPeriod(thread = {}, period = "") {
   return codexRateLimitWindowMinutes(fallback) ? null : fallback;
 }
 
-function codexRateLimitsDebugValue(thread = {}, period = "") {
-  const limit = codexRateLimitRecordForPeriod(thread, period);
+function providerRateLimitsDebugValue(thread = {}, period = "") {
+  const limit = providerRateLimitRecordForPeriod(thread, period);
   const used = Number(limit?.used_percent);
   if (!Number.isFinite(used)) return "";
   const remaining = Math.max(0, Math.min(100, 100 - used));
@@ -284,7 +336,7 @@ export function shouldAppendWhatsAppDebugFooter(message = {}, env = process.env,
   if (!footerEnabled(env)) return false;
   if (thread && threadRequiresTenantIsolation(thread, env)) return false;
   if (thread && threadSuppressesWhatsAppDebugFooter(thread, message?.chatId, env)) return false;
-  if (codexAssistantSource(message) || message.source === "orkestr_runtime") return true;
+  if (codexAssistantSource(message) || message.source === "claude-code" || message.source === "orkestr_runtime") return true;
   return ["delivery_error", "mode_queued", "queue_notice", "router_update"].includes(String(deliveryType || "").trim());
 }
 
@@ -296,23 +348,24 @@ function footerMessageType(deliveryType = "") {
 
 function runtimeSwitchHint(runtimeSurface = "") {
   const surface = String(runtimeSurface || "").trim().toLowerCase();
-  if (!surface) return "";
+  if (!surface || surface === "claude") return "";
   if (surface === "api") return "/switch-terminal";
   return "/switch-api";
 }
 
 export function whatsappDebugFooter({ message = {}, thread = {}, messages = [], deliveryType = "final", env = process.env } = {}) {
+  const isClaude = claudeCodeThread(thread);
   const mode = codexModeDebugValue(message, thread);
   const runtimeSurface = runtimeSurfaceDebugValue(thread);
   const runtimeSwitch = runtimeSwitchHint(runtimeSurface);
   const queueNotice = String(deliveryType || "").trim() === "queue_notice";
-  const fiveHourRemaining = codexRateLimitsDebugValue(thread, "fiveHour");
-  const weeklyRemaining = codexRateLimitsDebugValue(thread, "weekly");
-  const weeklyReset = capacityResetLabel(codexRateLimitRecordForPeriod(thread, "weekly")?.resets_at, thread.whatsAppDebugOwnerTimezone);
+  const fiveHourRemaining = providerRateLimitsDebugValue(thread, "fiveHour");
+  const weeklyRemaining = providerRateLimitsDebugValue(thread, "weekly");
+  const weeklyReset = capacityResetLabel(providerRateLimitRecordForPeriod(thread, "weekly")?.resets_at, thread.whatsAppDebugOwnerTimezone);
   const parts = [
-    `m:${codexModelDebugLabel(message, thread, env)}`,
-    ...(codexFastDebugValue(message, thread) ? ["fast:on"] : []),
-    ...(mode ? [`mode:${mode}`] : []),
+    `m:${modelDebugLabel(message, thread, env)}`,
+    ...(!isClaude && codexFastDebugValue(message, thread) ? ["fast:on"] : []),
+    ...(!isClaude && mode ? [`mode:${mode}`] : []),
     ...(runtimeSurface ? [`rt:${runtimeSurface}`] : []),
     `msg:${footerMessageType(deliveryType)}`,
     ...(fiveHourRemaining ? [`5h:${fiveHourRemaining}`] : []),
@@ -324,8 +377,8 @@ export function whatsappDebugFooter({ message = {}, thread = {}, messages = [], 
     `load:${loadDebugPercent()}%`,
     `api:${processCpuDebugPercent()}%`,
     "help:/help",
-    ...(env.ORKESTR_SETTINGS_COMMANDS_ENABLED !== "0" && !modelControlsReadOnlyReason(thread, env) && !thread.codexSettingsUncertain ? ["model:/model", "effort:/effort", "fast:/fast"] : []),
-    ...(mode === "plan" ? ["mode-switch:/code"] : ["mode-switch:/plan"]),
+    ...(!isClaude && env.ORKESTR_SETTINGS_COMMANDS_ENABLED !== "0" && !modelControlsReadOnlyReason(thread, env) && !thread.codexSettingsUncertain ? ["model:/model", "effort:/effort", "fast:/fast"] : []),
+    ...(!isClaude ? [mode === "plan" ? "mode-switch:/code" : "mode-switch:/plan"] : []),
     ...(runtimeSwitch ? [`rt-switch:${runtimeSwitch}`] : []),
   ];
   return `dbg: ${parts.join(" · ")}`;

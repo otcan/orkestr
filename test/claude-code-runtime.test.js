@@ -16,6 +16,7 @@ import {
 } from "../packages/core/src/claude-code-client.js";
 import { changeClaudeModelControls, readClaudeModelControls } from "../packages/core/src/claude-model-controls.js";
 import { getClaudeCodeSession } from "../packages/core/src/claude-code-sessions.js";
+import { getRouterTrace } from "../packages/core/src/router-traces.js";
 import {
   createLlmAccountProfile,
   listLlmAccountProfiles,
@@ -299,6 +300,32 @@ test("Claude runtime selects the exact profile, strips inherited API credentials
   const publicState = JSON.stringify({ thread, messages, events });
   assert.equal(publicState.includes("must-not-persist"), false);
   assert.equal(publicState.includes("/private/transcript"), false);
+});
+
+test("Claude runtime records exact router delivery phases for WhatsApp input", async (t) => {
+  const { env } = await fixture(t, "router-trace");
+  const profile = await readyProfile("owner", "Router trace", env);
+  const thread = await claudeThread("owner", profile.id, env, "claude-router-trace");
+  const message = await enqueueThreadInput(thread.id, {
+    text: "trace this delivery",
+    source: "whatsapp_inbound",
+    connector: "whatsapp",
+    accountId: "account-fixture",
+    chatId: "chat-fixture",
+    sourceEventId: "event-fixture",
+    routerTraceId: "rt_claude_fixture",
+    turnId: "turn_claude_fixture",
+  }, env);
+
+  await sendClaudeCodeInput(thread, message, env);
+
+  const trace = await getRouterTrace("rt_claude_fixture", env);
+  const phases = trace.phases.map((phase) => phase.phase);
+  assert.deepEqual(phases, ["delivery_started", "delivered_to_runtime"]);
+  assert.equal(trace.threadId, thread.id);
+  assert.equal(trace.messageId, message.id);
+  assert.equal(trace.ownerProcess.startsWith("claude_turn_"), true);
+  assert.equal(trace.phases.every((phase) => phase.attempt === 1), true);
 });
 
 test("Claude settings share model controls while YOLO remains explicit and fail closed", async (t) => {

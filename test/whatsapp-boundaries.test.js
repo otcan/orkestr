@@ -95,6 +95,38 @@ test("WhatsApp debug footer is gated and marks progress as update", () => {
   assert.match(apiRuntime, /rt-switch:\/switch-terminal/);
 });
 
+test("WhatsApp debug footer reports Claude Code model, runtime, and usage without Codex-only controls", () => {
+  const thread = {
+    runtimeKind: "claude-code",
+    runtimeMode: "sleeping",
+    claudeModel: "sonnet",
+    claudeEffort: "high",
+    claudeRateLimits: {
+      primary: { used_percent: 20, window_minutes: 300 },
+      secondary: { used_percent: 35, window_minutes: 10080 },
+    },
+    executor: { type: "claude-code", metadata: {} },
+  };
+  const final = appendWhatsAppDebugFooter("Done", {
+    env: { ORKESTR_WHATSAPP_DEBUG_FOOTER: "1", ORKESTR_SETTINGS_COMMANDS_ENABLED: "1" },
+    message: { source: "claude-code", phase: "final_answer" },
+    thread,
+  });
+
+  assert.match(final, /^Done\n\ndbg: m:sonnet\/h · rt:claude · msg:final · 5h:80% · wk:65%/);
+  assert.doesNotMatch(final, /fast:|mode:|model:\/model|mode-switch:|rt-switch:/);
+
+  const waking = appendWhatsAppDebugFooter("Waking this thread.", {
+    env: { ORKESTR_WHATSAPP_DEBUG_FOOTER: "1" },
+    deliveryType: "queue_notice",
+    message: { source: "whatsapp_inbound", role: "user", state: "queued", deliveryState: "waiting_runtime_start" },
+    thread,
+    messages: [],
+  });
+  assert.match(waking, /^Waking this thread\.\n\ndbg: m:sonnet\/h · rt:claude · msg:update · 5h:80% · wk:65% · queue:1 · reason:waking/);
+  assert.doesNotMatch(waking, /mode-switch:|rt-switch:/);
+});
+
 test("WhatsApp mirror policy forwards Codex final replies and progress updates", () => {
   assert.equal(shouldMirrorWhatsAppReply({ source: "codex-app-server", phase: "final_answer" }), true);
   assert.equal(shouldMirrorWhatsAppReply({ source: "codex-app-server", phase: "commentary" }), false);
@@ -148,6 +180,33 @@ test("WhatsApp outbound mirror worker serializes delivery and maps app-server qu
     runtimeKind: "codex-app-server",
     activeTurnId: "turn-1",
   }, { text: "hello" }), "awaiting_active_turn");
+});
+
+test("WhatsApp treats ready Claude Code as sessionless but immediately available", () => {
+  assert.equal(initialQueueDeliveryState({
+    state: "ready",
+    runtimeKind: "claude-code",
+    promptReady: true,
+    sessionName: null,
+  }, { text: "start the task" }), "");
+  assert.equal(initialQueueDeliveryState({
+    state: "working",
+    runtimeKind: "claude-code",
+    promptReady: false,
+    sessionName: null,
+  }, { text: "queue this" }), "awaiting_runtime_completion");
+  assert.equal(initialQueueDeliveryState({
+    state: "sleeping",
+    runtimeKind: "claude-code",
+    promptReady: false,
+    sessionName: null,
+  }, { text: "wake this" }), "waiting_runtime_start");
+  assert.equal(initialQueueDeliveryState({
+    state: "ready",
+    runtimeKind: "claude-code",
+    promptReady: false,
+    sessionName: null,
+  }, { text: "wait for login" }), "waiting_runtime_ready");
 });
 
 test("WhatsApp inbound routing requires explicit participants unless a generated group boundary is trusted", () => {

@@ -26,7 +26,6 @@ import {
   getThread,
   getThreadMessage,
   listThreadMessageCandidates,
-  listThreadMessages,
   updateThread,
   updateThreadMessage,
 } from "./threads.js";
@@ -34,7 +33,18 @@ import { appendTurnLifecycleEvent } from "./turn-lifecycle.js";
 import { parseThreadInputCommand } from "./thread-commands.js";
 import { getClaudeCodeSession, setClaudeCodeSession } from "./claude-code-sessions.js";
 import { codexInputText } from "./codex-app-server-common.js";
-import { threadRequiresTenantIsolation } from "./tenant-policy.js";
+import {
+  claudeCodeOutputEventId,
+  existingClaudeCodeOutput,
+  recordClaudeCodeRouterTrace,
+} from "./claude-code-router-trace.js";
+import {
+  assertClaudeCodeHostOwner,
+  publicClaudeCodeFailure,
+  threadUsesClaudeCode,
+} from "./claude-code-runtime-policy.js";
+
+export { assertClaudeCodeHostOwner, threadUsesClaudeCode } from "./claude-code-runtime-policy.js";
 
 const activeTurns = new Map();
 const turnReservations = new Set();
@@ -57,25 +67,6 @@ function workspaceForThread(thread = {}) {
   return clean(thread.cwd || thread.workspace || thread.repoPath || thread.worktreePath) || process.cwd();
 }
 
-function publicFailure(error) {
-  const exact = clean(error?.code || error?.message || error);
-  if (new Set([
-    "claude_code_disabled",
-    "claude_code_bypass_permissions_disabled",
-    "llm_account_profile_not_found",
-    "llm_account_provider_mismatch",
-    "llm_account_profile_revoked",
-    "llm_account_profile_not_ready",
-  ]).has(exact)) return exact;
-  return classifyClaudeCodeFailure(`${error?.code || ""} ${error?.message || error || ""}`);
-}
-
-export function threadUsesClaudeCode(thread = {}) {
-  const executorId = clean(thread.executorId || thread.executor?.id || thread.executor?.type).toLowerCase();
-  const runtimeKind = clean(thread.runtimeKind || thread.runtime?.runtimeKind || thread.executor?.metadata?.runtimeKind).toLowerCase();
-  return executorId === "claude-code" || runtimeKind === "claude-code";
-}
-
 async function profileForThread(thread, env, requireReady = true) {
   assertClaudeCodeHostOwner(thread, env);
   if (requireReady && !claudeCodeEnabled(env)) {
@@ -93,28 +84,7 @@ async function profileForThread(thread, env, requireReady = true) {
   }, env);
 }
 
-// Claude does not yet implement the contained-user runtime sandbox contract.
-// Scope credentials AND process execution: an opaque profile is not isolation.
-export function assertClaudeCodeHostOwner(thread = {}, env = process.env) {
-  const owner = clean(thread.ownerUserId || thread.userId).toLowerCase();
-  const admin = clean(env.ORKESTR_ADMIN_USER_ID || "admin").toLowerCase();
-  if (!owner || owner !== admin || threadRequiresTenantIsolation(thread, env)) {
-    const error = new Error("claude_code_admin_runtime_required");
-    error.code = error.message;
-    error.statusCode = 403;
-    throw error;
-  }
-}
-
-function outputEventId(threadId, attemptId) {
-  return `claude-code:${threadId}:${attemptId}:final`;
-}
-
-async function existingOutput(threadId, eventId, env) {
-  return (await listThreadMessages(threadId, env)).find((message) => message.eventId === eventId) || null;
-}
-
-async function runProcess({ thread, profile, prompt, sessionId, attemptId, env }) {
+async function runProcess({ thread, profile, prompt, sessionId, attemptId, onPromptSubmitted = null, env }) {
   const command = claudeCodeCommand(env);
   const childEnv = claudeCodeRuntimeEnv(profile, thread, env);
   const statusCapture = claudeCodeStatusCapture(profile, thread);
@@ -141,6 +111,7 @@ async function runProcess({ thread, profile, prompt, sessionId, attemptId, env }
     let resultError = "";
     let telemetry = {};
     let forceKillTimer = null;
+    let submissionPromise = Promise.resolve();
     function terminate(failureCode) {
       if (failureCode) active.failureCode = failureCode;
       proc.kill("SIGTERM");
@@ -197,6 +168,7 @@ async function runProcess({ thread, profile, prompt, sessionId, attemptId, env }
     proc.on("error", (error) => finish(error));
     proc.on("close", async (code, signal) => {
       lines.close();
+      await submissionPromise;
       const statusTelemetry = await readClaudeCodeStatusTelemetry(statusCapture.capturePath);
       if (statusTelemetry) telemetry = mergeClaudeCodeTelemetry(telemetry, statusTelemetry);
       if (active.interrupted) return finish();
@@ -214,9 +186,12 @@ async function runProcess({ thread, profile, prompt, sessionId, attemptId, env }
       return finish();
     });
     proc.stdin.on("error", () => {});
-    profileForThread(thread, env, true)
-      .then(() => proc.stdin.end(`${String(prompt || "").replace(/\n*$/g, "")}\n`))
-      .catch((error) => terminate(publicFailure(error)));
+    submissionPromise = profileForThread(thread, env, true)
+      .then(async () => {
+        proc.stdin.end(`${String(prompt || "").replace(/\n*$/g, "")}\n`);
+        await onPromptSubmitted?.();
+      })
+      .catch((error) => terminate(publicClaudeCodeFailure(error)));
   });
 }
 
@@ -276,13 +251,20 @@ async function sendClaudeCodeInputReserved(thread, message, env = process.env) {
   const freshMessage = await getThreadMessage(thread.id, message.id, env);
   if (!freshMessage || !pendingStates.has(clean(freshMessage.state))) return { skipped: true, message: freshMessage || message };
   const attemptId = `claude_turn_${crypto.randomBytes(12).toString("base64url")}`;
+  const deliveryAttempt = Math.max(0, Number(freshMessage.deliveryAttempt || 0) || 0) + 1;
   const sessionId = await getClaudeCodeSession(thread, env);
-  await updateThreadMessage(thread.id, message.id, {
+  const runningMessage = await updateThreadMessage(thread.id, message.id, {
     state: "running",
     deliveryState: "delivering",
+    deliveryAttempt,
     observedVia: "claude_code_stream_json",
     executorKind: "claude-code",
     executorTurnId: attemptId,
+  }, env);
+  await recordClaudeCodeRouterTrace(runningMessage || freshMessage, "delivery_started", {
+    threadId: thread.id,
+    attempt: deliveryAttempt,
+    ownerProcess: attemptId,
   }, env);
   thread = await updateThread(thread.id, {
     state: "working",
@@ -293,7 +275,19 @@ async function sendClaudeCodeInputReserved(thread, message, env = process.env) {
   await appendEvent({ type: "claude_code_turn_started", threadId: thread.id, profileId: profile.id, turnId: attemptId }, env);
 
   try {
-    const result = await runProcess({ thread, profile, prompt: codexInputText(freshMessage), sessionId, attemptId, env });
+    const result = await runProcess({
+      thread,
+      profile,
+      prompt: codexInputText(freshMessage),
+      sessionId,
+      attemptId,
+      onPromptSubmitted: () => recordClaudeCodeRouterTrace(runningMessage || freshMessage, "delivered_to_runtime", {
+        threadId: thread.id,
+        attempt: deliveryAttempt,
+        ownerProcess: attemptId,
+      }, env),
+      env,
+    });
     if (result.interrupted) {
       const updated = await completeInterruptedTurn(thread, freshMessage, attemptId, env);
       return { interrupted: true, message: await getThreadMessage(thread.id, message.id, env), thread: updated };
@@ -301,8 +295,8 @@ async function sendClaudeCodeInputReserved(thread, message, env = process.env) {
     await profileForThread(thread, env, true);
     const nextSessionId = clean(result.sessionId);
     await setClaudeCodeSession(thread, nextSessionId, env);
-    const eventId = outputEventId(thread.id, attemptId);
-    let assistant = await existingOutput(thread.id, eventId, env);
+    const eventId = claudeCodeOutputEventId(thread.id, attemptId);
+    let assistant = await existingClaudeCodeOutput(thread.id, eventId, env);
     if (!assistant) {
       assistant = await appendThreadMessage(thread.id, {
         role: "assistant",
@@ -351,7 +345,7 @@ async function sendClaudeCodeInputReserved(thread, message, env = process.env) {
     deliveryScheduler?.(thread.id, env, 0);
     return { message: completedMessage, assistant, thread: updated };
   } catch (error) {
-    const failureCode = publicFailure(error);
+    const failureCode = publicClaudeCodeFailure(error);
     await updateThreadMessage(thread.id, freshMessage.id, { state: "failed", deliveryState: "failed", error: failureCode }, env).catch(() => {});
     const updated = await updateThread(thread.id, {
       state: "failed",
