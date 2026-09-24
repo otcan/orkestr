@@ -26,6 +26,7 @@ import {
   rollbackCodexAppServerThread,
   threadUsesCodexAppServer,
 } from "../../../../../packages/core/src/codex-app-server.js";
+import { interruptClaudeCodeThread, threadUsesClaudeCode } from "../../../../../packages/core/src/runtime-claude-code-adapter.js";
 import { codexThreadId, threadRuntimeSummary } from "../../thread-summary.js";
 import { httpError } from "../../common/http.js";
 import {
@@ -124,6 +125,8 @@ export class ThreadRuntimeController {
     await this.assertThreadSanitized("thread.stop", requestPrincipal(request), target, body);
     const result: any = threadUsesCodexAppServer(target)
       ? { thread: target, slept: 0, interrupted: await interruptCodexAppServerThread(target).catch(() => ({ interrupted: false })) }
+      : threadUsesClaudeCode(target)
+        ? { thread: target, slept: 0, interrupted: await interruptClaudeCodeThread(target).catch(() => ({ interrupted: false })) }
       : await sleepThread(threadId, { reason: body.reason || "ui_stop", kill: body.kill !== false });
     return {
       ok: true,

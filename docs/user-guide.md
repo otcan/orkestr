@@ -54,6 +54,29 @@ The Codex setup page also lets you import existing Codex app-server threads.
 Imported threads appear as Orkestr threads with their Codex history hydrated
 into the normal conversation view.
 
+### Optional Claude Code Accounts
+
+Set `ORKESTR_CLAUDE_CODE_ENABLED=1` only after installing the Claude Code CLI on
+the Orkestr host. In Settings → Models, add a labeled Claude subscription
+profile, open its attended provider login, and verify it. The new-thread wizard
+then allows that ready profile to be selected as the coding runtime.
+
+The attended login uses a host PTY by default because the Claude CLI's initial
+theme and subscription-login prompts require a terminal. Linux installations
+therefore need the util-linux `script` command (or an equivalent configured with
+`ORKESTR_CLAUDE_CODE_TTY_BIN`). `ORKESTR_CLAUDE_CODE_LOGIN_TRANSPORT=pipe` is a
+compatibility option for non-interactive wrappers, not the normal CLI setup.
+
+Profiles are owner-scoped and default-deny. Thread requests carry only the
+opaque profile ID; credential locations and Claude session IDs are resolved and
+stored server-side. One thread remains bound to one profile until a separate
+thread is created, and revoking a profile fences its threads. Subscription
+profiles intentionally ignore inherited Anthropic API-key environment variables
+so one account cannot silently run as another. `/plan`, `/code`, `/stop`, and
+`/reset` are supported. Provider tool-approval prompts, Codex model-setting
+commands, raw-terminal attach, and `/implement` are rejected for Claude threads
+in this V1 rather than falling through to a Codex path.
+
 ### Migrate Existing Codex Threads
 
 On a host that already ran Orkestr before the app-server cutover, run:

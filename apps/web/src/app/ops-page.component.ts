@@ -6,6 +6,7 @@ import { Agent, AgentTemplate, ApiService, BrowserSession, ConnectorStatus, Desk
 import { MailboxInboxPanelComponent } from "./mailbox-inbox-panel.component";
 import { MailboxRoutesPanelComponent } from "./mailbox-routes-panel.component";
 import { OpsWaitlistComponent } from "./ops-waitlist.component";
+import { LlmAccountsComponent } from "./llm-accounts.component";
 
 export type ToolsView = "system" | "broker" | "timers" | "desktops" | "models" | "settings" | "connectors" | "mailboxes" | "users" | "waitlist" | "audit";
 type MailIdentityProvider = "gmail" | "outlook";
@@ -50,7 +51,7 @@ interface BrokerSavedView {
 
 @Component({
   selector: "ork-ops-page",
-  imports: [DatePipe, FormsModule, MailboxInboxPanelComponent, MailboxRoutesPanelComponent, OpsWaitlistComponent],
+  imports: [DatePipe, FormsModule, MailboxInboxPanelComponent, MailboxRoutesPanelComponent, OpsWaitlistComponent, LlmAccountsComponent],
   templateUrl: "./ops-page.component.html",
 })
 export class OpsPageComponent implements OnInit, OnDestroy {

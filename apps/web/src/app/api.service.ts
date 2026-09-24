@@ -277,6 +277,28 @@ export interface CodexStoredThread {
   [key: string]: unknown;
 }
 
+export interface LlmAccountProfile {
+  id: string;
+  provider: "codex" | "claude-code" | string;
+  label: string;
+  authMode: "subscription" | string;
+  state: "login_required" | "ready" | "rate_limited" | "revoked" | "error" | string;
+  createdAt?: string;
+  updatedAt?: string;
+  lastVerifiedAt?: string | null;
+  revokedAt?: string | null;
+  failureCode?: string | null;
+}
+
+export interface LlmAccountLoginSession {
+  state: "starting" | "pending" | "completed" | "failed" | string;
+  authUrl?: string | null;
+  codeSubmitted?: boolean;
+  startedAt?: string;
+  expiresAt?: string;
+  failureCode?: string | null;
+}
+
 export interface BrowserSession {
   id?: string;
   slug?: string;
@@ -2651,6 +2673,43 @@ export class ApiService {
 
   codexAppServerStatus(): Observable<CodexAppServerStatus> {
     return this.http.get<CodexAppServerStatus>(this.api("/codex/app-server/status"));
+  }
+
+  llmAccounts(provider = ""): Observable<{ enabled: boolean; accounts: LlmAccountProfile[] }> {
+    const suffix = provider ? `?provider=${encodeURIComponent(provider)}` : "";
+    return this.http.get<{ enabled: boolean; accounts: LlmAccountProfile[] }>(this.api(`/llm-accounts${suffix}`));
+  }
+
+  createLlmAccount(body: { provider: string; label: string; authMode?: string }): Observable<{ account: LlmAccountProfile }> {
+    return this.http.post<{ account: LlmAccountProfile }>(this.api("/llm-accounts"), body);
+  }
+
+  verifyLlmAccount(profileId: string): Observable<{ account: LlmAccountProfile; status: { available: boolean; authenticated: boolean; reason: string } }> {
+    return this.http.post<{ account: LlmAccountProfile; status: { available: boolean; authenticated: boolean; reason: string } }>(
+      this.api(`/llm-accounts/${encodeURIComponent(profileId)}/verify`),
+      {},
+    );
+  }
+
+  startLlmAccountLogin(profileId: string): Observable<{ login: LlmAccountLoginSession }> {
+    return this.http.post<{ login: LlmAccountLoginSession }>(this.api(`/llm-accounts/${encodeURIComponent(profileId)}/login`), {});
+  }
+
+  llmAccountLoginStatus(profileId: string): Observable<{ login: LlmAccountLoginSession | null }> {
+    return this.http.get<{ login: LlmAccountLoginSession | null }>(this.api(`/llm-accounts/${encodeURIComponent(profileId)}/login`));
+  }
+
+  submitLlmAccountLoginCode(profileId: string, code: string): Observable<{ login: LlmAccountLoginSession }> {
+    return this.http.post<{ login: LlmAccountLoginSession }>(
+      this.api(`/llm-accounts/${encodeURIComponent(profileId)}/login/code`),
+      { code },
+    );
+  }
+
+  revokeLlmAccount(profileId: string): Observable<{ ok: boolean; account: LlmAccountProfile; interruptedThreads: number }> {
+    return this.http.delete<{ ok: boolean; account: LlmAccountProfile; interruptedThreads: number }>(
+      this.api(`/llm-accounts/${encodeURIComponent(profileId)}`),
+    );
   }
 
   codexThreads(search = ""): Observable<{ threads: CodexStoredThread[]; nextCursor?: string | null }> {

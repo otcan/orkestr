@@ -55,6 +55,15 @@ import {
   threadNeedsNativeCodexRuntimeMigration,
   threadUsesNativeCodexRuntime,
 } from "./runtime-codex-adapter.js";
+import {
+  claudeCodeThreadStatus,
+  deliverClaudeCodePendingInputs,
+  interruptClaudeCodeThread,
+  resumeClaudeCodeThread,
+  setClaudeCodeDeliveryScheduler,
+  threadUsesClaudeCode,
+} from "./runtime-claude-code-adapter.js";
+import { clearClaudeCodeSession } from "./claude-code-sessions.js";
 import { appendOrUpdateEventMessage, normalizeCodexModel, normalizeReasoningEffort } from "./codex-app-server-common.js";
 import { persistObservedCodexMetadata } from "./codex-observed-metadata.js";
 import { completeThreadSecurityApproveCommand, threadSecurityApproveChallengeId } from "./security-thread-command.js";
@@ -817,6 +826,15 @@ export async function runtimeStatus(threadId, env = process.env, messagesOverrid
   if (threadUsesApiAgent(thread, env)) {
     return apiAgentRuntimeStatus(thread, messages, env);
   }
+  if (threadUsesClaudeCode(thread)) {
+    return claudeCodeThreadStatus(thread, env, {
+      pendingCount,
+      awaitingAckCount,
+      nextDeliveryAttemptAt,
+      runningCount,
+      messages,
+    });
+  }
   if (threadUsesNativeCodexRuntime(thread, env)) {
     return codexRuntimeThreadStatus(thread, env, {
       pendingCount,
@@ -1218,6 +1236,7 @@ export async function resolveCodexThreadMetadataBatch(targets = [], env = proces
 
 export async function resolveCodexThreadMetadata(threadOrId, env = process.env) {
   const thread = threadOrId && typeof threadOrId === "object" ? threadOrId : null;
+  if (thread && threadUsesClaudeCode(thread)) return {};
   const threadId = typeof threadOrId === "string" ? threadOrId : codexThreadId(threadOrId);
   const id = String(threadId || "").trim();
   const metadata = await resolveCodexThreadMetadataById(id, env);
@@ -1374,6 +1393,9 @@ export async function wakeThread(threadId, options = {}, env = process.env) {
   }
   if (threadUsesNativeCodexRuntime(thread, env)) {
     return resumeCodexRuntimeThread(thread, env);
+  }
+  if (threadUsesClaudeCode(thread)) {
+    return resumeClaudeCodeThread(thread, env);
   }
   if (threadNeedsNativeCodexRuntimeMigration(thread)) {
     const error = new Error("codex_app_server_migration_required");
@@ -1571,6 +1593,11 @@ export async function sleepThread(threadId, options = {}, env = process.env) {
     error.statusCode = 409;
     throw error;
   }
+  if (threadUsesClaudeCode(thread)) {
+    const error = new Error("claude_code_sleep_unsupported_use_stop");
+    error.statusCode = 409;
+    throw error;
+  }
   const now = nowIso();
   const reason = options.reason || "sleep";
   const { active } = await mutateRuntimeLeases(env, async (leases) => {
@@ -1660,6 +1687,25 @@ export async function resetThreadRuntime(threadId, options = {}, env = process.e
     const error = new Error("thread_not_found");
     error.statusCode = 404;
     throw error;
+  }
+  if (threadUsesClaudeCode(thread)) {
+    const interrupted = await interruptClaudeCodeThread(thread, env).catch(() => ({ interrupted: false }));
+    await clearClaudeCodeSession(thread, env).catch(() => false);
+    const updated = await updateThread(thread.id, {
+      state: "ready",
+      lastError: null,
+      runtime: { ...(thread.runtime || {}), runtimeKind: "claude-code", state: "ready", activeTurnId: null, lastTurnStatus: "reset" },
+    }, env);
+    await appendEvent({
+      type: "thread_runtime_reset",
+      threadId: thread.id,
+      reason,
+      slept: 0,
+      interrupted: Boolean(interrupted?.interrupted),
+      runtimeKind: "claude-code",
+      leaseId: null,
+    }, env).catch(() => {});
+    return { ok: true, reset: true, slept: 0, interrupted, thread: updated, lease: null, status: await runtimeStatus(thread.id, env).catch(() => null) };
   }
   if (threadUsesNativeCodexRuntime(thread, env)) {
     const interrupted = await interruptCodexRuntimeThread(thread, env).catch(() => ({ interrupted: false }));
@@ -1895,7 +1941,9 @@ export async function safeResetThreadRuntime(threadId, options = {}, env = proce
 }
 
 async function completeStopCommand(thread, message, env = process.env) {
-  const interrupted = threadUsesNativeCodexRuntime(thread, env)
+  const interrupted = threadUsesClaudeCode(thread)
+    ? await interruptClaudeCodeThread(thread, env).catch(() => ({ interrupted: false }))
+    : threadUsesNativeCodexRuntime(thread, env)
     ? await interruptCodexRuntimeThread(thread, env).catch(() => ({ interrupted: false }))
     : await runtimeStatus(thread.id, env)
       .then((status) => interruptRuntimeStatus(status, env, { force: true }))
@@ -2185,8 +2233,12 @@ async function supersedeOlderCodexModeCommands(thread, messages, selected, parse
 async function completeInterruptCommand(thread, message, parsed, env = process.env) {
   const reason = whatsappOrigin(message) ? "whatsapp_interrupt_command" : "interrupt_command";
   const woken = await wakeThread(thread.id, { reason }, env);
-  const nativeCodexRuntime = threadUsesNativeCodexRuntime(woken.thread || thread, env);
-  const interrupted = nativeCodexRuntime
+  const currentThread = woken.thread || thread;
+  const claudeRuntime = threadUsesClaudeCode(currentThread);
+  const nativeCodexRuntime = threadUsesNativeCodexRuntime(currentThread, env);
+  const interrupted = claudeRuntime
+    ? Boolean((await interruptClaudeCodeThread(currentThread, env).catch(() => ({ interrupted: false }))).interrupted)
+    : nativeCodexRuntime
     ? Boolean((await interruptCodexRuntimeThread(woken.thread || thread, env).catch(() => ({ interrupted: false }))).interrupted)
     : await interruptRuntimeStatus(woken.status, env);
   const payloadText = String(parsed.text || "").trim();
@@ -3867,6 +3919,9 @@ export async function deliverPendingThreadInputs(threadId, env = process.env, op
     }, env).catch(() => null);
     return delivered;
   }
+  if (threadUsesClaudeCode(thread)) {
+    return deliverClaudeCodePendingInputs(thread, env);
+  }
   if (threadUsesNativeCodexRuntime(thread, env)) {
     return deliverCodexRuntimePendingInputs(thread, env);
   }
@@ -4152,6 +4207,8 @@ export function requestThreadInputDelivery(threadId, env = process.env, delayMs 
   scheduleThreadInputDelivery(threadId, env, delayMs);
 }
 
+setClaudeCodeDeliveryScheduler((threadId, env, delayMs) => scheduleThreadInputDelivery(threadId, env, delayMs));
+
 export function resetThreadInputDeliveryTimersForTest() {
   resetThreadInputDeliverySchedulerForTest();
 }
@@ -4192,12 +4249,13 @@ export function requestThreadWake(threadId, options = {}, env = process.env) {
         return;
       }
       const nativeCodexRuntime = current && threadUsesNativeCodexRuntime(current, wakeEnv);
-      await updateThread(threadId, nativeCodexRuntime ? {
+      const claudeRuntime = current && threadUsesClaudeCode(current);
+      await updateThread(threadId, nativeCodexRuntime || claudeRuntime ? {
         state: "failed",
         lastError: errorText,
         runtime: {
           ...(current.runtime || {}),
-          runtimeKind: "codex-app-server",
+          runtimeKind: claudeRuntime ? "claude-code" : "codex-app-server",
           state: "failed",
           lastError: errorText,
           updatedAt: nowIso(),
@@ -4211,7 +4269,7 @@ export function requestThreadWake(threadId, options = {}, env = process.env) {
         threadId,
         reason: options.reason || "wake",
         error: errorText,
-        runtimeKind: nativeCodexRuntime ? "codex-app-server" : "codex-tmux",
+        runtimeKind: claudeRuntime ? "claude-code" : nativeCodexRuntime ? "codex-app-server" : "codex-tmux",
       }, wakeEnv).catch(() => {});
     });
   });

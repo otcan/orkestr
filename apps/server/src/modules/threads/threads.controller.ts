@@ -65,6 +65,14 @@ import {
   threadNeedsCodexAppServerMigration,
   threadUsesCodexAppServer,
 } from "../../../../../packages/core/src/codex-app-server.js";
+import {
+  interruptClaudeCodeThread,
+  startClaudeCodeThread,
+  threadUsesClaudeCode,
+} from "../../../../../packages/core/src/runtime-claude-code-adapter.js";
+import { resolveLlmAccountProfile } from "../../../../../packages/core/src/llm-account-profiles.js";
+import { claudeCodeEnabled } from "../../../../../packages/core/src/claude-code-client.js";
+import { adminUserId, normalizeUserId } from "../../../../../packages/core/src/users.js";
 import { refreshThreadGitState } from "../../../../../packages/core/src/thread-workers.js";
 import { codexThreadId, threadRuntimeSummary, threadSummaryPayload } from "../../thread-summary.js";
 import { ensureAttachmentsArray, httpError, validateRequestSchema } from "../../common/http.js";
@@ -426,6 +434,25 @@ export class ThreadsController {
   }
 
   private async applyOrQueueCodexModeCommand(thread: any, mode: "code" | "plan", source = "codex_mode_command") {
+    if (threadUsesClaudeCode(thread)) {
+      const permissionMode = mode === "plan" ? "plan" : "acceptEdits";
+      const message = await appendThreadMessage(thread.id, {
+        role: "user",
+        source,
+        text: `/${mode}`,
+        state: "completed",
+        deliveryState: "delivered",
+        deliveredAt: new Date().toISOString(),
+        observedVia: "claude_code_permission_mode",
+      });
+      const updated = await updateThread(thread.id, {
+        executor: {
+          ...(thread.executor || {}),
+          metadata: { ...(thread.executor?.metadata || {}), claudePermissionMode: permissionMode },
+        },
+      });
+      return { applied: true, deferred: false, message, thread: updated, runtimeMode: permissionMode };
+    }
     const message = await appendThreadMessage(thread.id, {
       role: "user",
       source,
@@ -630,8 +657,17 @@ export class ThreadsController {
     const requestedExecutorId = String(prepared.executorId || preparedExecutor.id || preparedExecutor.type || "codex").trim() || "codex";
     const defaultRuntime = defaultTenantThreadRuntime(prepared, principal, process.env);
     const usesApiAgentRuntime = String(prepared.runtimeKind || defaultRuntime || "").trim() === API_AGENT_RUNTIME_KIND;
-    const usesCodexRuntime = !usesApiAgentRuntime && (requestedExecutorId === "codex" || String(preparedExecutor.type || "").trim() === "codex");
-    let thread = await createThreadForPrincipal({
+    const usesClaudeRuntime = !usesApiAgentRuntime && (requestedExecutorId === "claude-code" || String(preparedExecutor.type || "").trim() === "claude-code");
+    const usesCodexRuntime = !usesApiAgentRuntime && !usesClaudeRuntime && (requestedExecutorId === "codex" || String(preparedExecutor.type || "").trim() === "codex");
+    if (usesClaudeRuntime) {
+      if (!claudeCodeEnabled(process.env)) throw httpError("claude_code_disabled", 409);
+      const ownerUserId = isAdminPrincipal(principal)
+        ? normalizeUserId(String(prepared.ownerUserId || prepared.userId || process.env.ORKESTR_ADMIN_USER_ID || adminUserId))
+        : normalizeUserId(principal?.userId);
+      const profileId = String(preparedExecutor.accountProfileId || (preparedExecutor.metadata as any)?.accountProfileId || "").trim();
+      await resolveLlmAccountProfile({ ownerUserId, profileId, provider: "claude-code", requireReady: true });
+    }
+    const createInput: Record<string, any> = {
       wakePolicy: "wake-on-message",
       ...(usesCodexRuntime ? {
         executorId: "codex",
@@ -647,9 +683,32 @@ export class ThreadsController {
         runtimeKind: API_AGENT_RUNTIME_KIND,
       } : {}),
       ...prepared,
-    }, principal);
+    };
+    if (usesClaudeRuntime) {
+      createInput.executorId = "claude-code";
+      createInput.runtimeKind = "claude-code";
+      createInput.executor = {
+        ...preparedExecutor,
+        id: "claude-code",
+        type: "claude-code",
+        transport: "stream-json",
+        accountProfileId: String(preparedExecutor.accountProfileId || (preparedExecutor.metadata as any)?.accountProfileId || "").trim(),
+        metadata: {
+          ...((preparedExecutor as any).metadata || {}),
+          runtimeKind: "claude-code",
+          transport: "stream-json",
+          accountProfileId: String(preparedExecutor.accountProfileId || (preparedExecutor.metadata as any)?.accountProfileId || "").trim(),
+          claudePermissionMode: "acceptEdits",
+        },
+      };
+    }
+    let thread = await createThreadForPrincipal(createInput, principal);
     if (usesCodexRuntime && !codexThreadId(thread)) {
       const started = await startCodexAppServerThread(thread);
+      if (started?.thread) thread = started.thread;
+    }
+    if (usesClaudeRuntime && threadUsesClaudeCode(thread)) {
+      const started = await startClaudeCodeThread(thread);
       if (started?.thread) thread = started.thread;
     }
     if (body.wake === true || body.start === true) {
@@ -675,6 +734,7 @@ export class ThreadsController {
     if (settingsCommand) {
       await getThreadForPrincipal(thread.id, principal);
       await this.assertThreadSanitized("thread.model-settings", principal, thread, { command: settingsCommand.command });
+      if (threadUsesClaudeCode(thread)) throw httpError("claude_code_settings_unsupported", 409);
       const sourceId = String(body.clientMessageId || body.idempotencyKey || "");
       const result = await executeSettingsCommand({ thread, text: String(body.text || ""), principal,
         sourceOperationKey: sourceId ? settingsOperationKey(["webui", thread.ownerUserId, principal.userId, thread.id, sourceId]) : "",
@@ -695,6 +755,8 @@ export class ThreadsController {
       const appServer = threadUsesCodexAppServer(thread);
       const result = appServer
         ? { thread, slept: 0, interrupted: await interruptCodexAppServerThread(thread).catch(() => ({ interrupted: false })) }
+        : threadUsesClaudeCode(thread)
+          ? { thread, slept: 0, interrupted: await interruptClaudeCodeThread(thread).catch(() => ({ interrupted: false })) }
         : await sleepThread(thread.id, { reason: "stop_command", kill: true });
       const message = await appendThreadMessage(thread.id, {
         role: "user",
@@ -721,7 +783,9 @@ export class ThreadsController {
       await this.assertThreadSanitized(parsedCommand.command === "hard_reset" ? "thread.hard-reset" : parsedCommand.command === "safe_reset" ? "thread.safe-reset" : "thread.reset", principal, thread, body);
       const hard = parsedCommand.command === "hard_reset";
       const safe = parsedCommand.command === "safe_reset";
-      const result = safe
+      const result = threadUsesClaudeCode(thread)
+        ? await resetThreadRuntime(thread.id, { reason: body.source === "whatsapp" ? "whatsapp_reset_command" : "reset_command" })
+        : safe
         ? await safeResetThreadRuntime(thread.id, { reason: body.source === "whatsapp" ? "whatsapp_safe_reset_command" : "safe_reset_command" })
         : hard
         ? await hardResetThreadRuntime(thread.id, { reason: body.source === "whatsapp" ? "whatsapp_hard_reset_command" : "hard_reset_command" })
@@ -838,6 +902,7 @@ export class ThreadsController {
     }
     if (parsedCommand.command === "implement") {
       await this.assertThreadSanitized("thread.implement", principal, thread, body);
+      if (threadUsesClaudeCode(thread)) throw httpError("claude_code_implement_command_unsupported", 409);
       const result = await implementRuntimePlan(thread.id);
       const implemented = Boolean(result.implemented);
       const errorText = implemented ? "" : "No active Codex implementation prompt is visible.";
@@ -941,6 +1006,7 @@ export class ThreadsController {
     const takeover = attachBoolean(body, "takeover");
     const interrupt = attachBoolean(body, "interrupt");
     const yes = attachBoolean(body, "yes");
+    if (threadUsesClaudeCode(thread)) throw httpError("claude_code_raw_terminal_attach_unsupported", 409);
     if (threadUsesCodexAppServer(thread)) {
       const currentStatus: any = await this.threadRuntimeService.status(thread.id).catch(() => null);
       const activeStructuredTurn = currentStatus && rawStructuredTurnActive(thread, currentStatus);
@@ -1087,6 +1153,19 @@ export class ThreadsController {
     const thread = await getThread(threadId);
     if (!thread) throw httpError("thread_not_found", 404);
     await this.assertThreadSanitized("thread.interrupt", principal, thread, body);
+    if (threadUsesClaudeCode(thread)) {
+      const interrupted = await interruptClaudeCodeThread(thread).catch(() => ({ interrupted: false }));
+      if (String(body.text || "").trim() || (Array.isArray(body.attachments) && body.attachments.length)) {
+        const message = await enqueueThreadInputForPrincipal(thread.id, {
+          ...body,
+          source: body.source || "interrupt",
+          forceDeliveryAfterInterrupt: true,
+        }, principal);
+        requestThreadInputDelivery(thread.id, process.env, 100);
+        return { ok: true, interrupted: Boolean((interrupted as any).interrupted), message, delivered: [] };
+      }
+      return { ok: true, interrupted: Boolean((interrupted as any).interrupted), thread: await threadRuntimeSummary(thread, await listThreadMessages(thread.id)) };
+    }
     if (threadUsesCodexAppServer(thread)) {
       const interrupted = await interruptCodexAppServerThread(thread).catch(() => ({ interrupted: false }));
       if (String(body.text || "").trim() || (Array.isArray(body.attachments) && body.attachments.length)) {
@@ -1185,6 +1264,7 @@ export class ThreadsController {
     validateRequestSchema(threadApproveSchema, { params: { threadId }, body });
     const thread = await getThread(threadId);
     if (!thread) throw httpError("thread_not_found", 404);
+    if (threadUsesClaudeCode(thread)) throw httpError("claude_code_approval_bridge_unavailable", 409);
     if (threadUsesCodexAppServer(thread)) {
       await this.assertThreadSanitized("thread.approve", requestPrincipal(request), thread, body);
       const result = await answerCodexAppServerPendingRequest(thread, {
@@ -1208,6 +1288,7 @@ export class ThreadsController {
     const principal = requestPrincipal(request);
     const thread = await getThreadForPrincipal(threadId, principal);
     if (!thread) throw httpError("thread_not_found", 404);
+    if (threadUsesClaudeCode(thread)) throw httpError("claude_code_settings_unsupported", 409);
     return readCodexModelControls(thread, principal);
   }
 
@@ -1217,6 +1298,7 @@ export class ThreadsController {
     const principal = requestPrincipal(request);
     const thread = await getThreadForPrincipal(threadId, principal);
     if (!thread) throw httpError("thread_not_found", 404);
+    if (threadUsesClaudeCode(thread)) throw httpError("claude_code_settings_unsupported", 409);
     const model = typeof body.model === "string" ? body.model.trim() : "";
     const effort = typeof body.effort === "string" ? body.effort.trim() : "";
     if (!model || /\s/.test(model) || !effort || /\s/.test(effort) || model.length > 128 || effort.length > 32) throw httpError("A model and supported effort are required.", 400);

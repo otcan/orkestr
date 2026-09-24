@@ -1,7 +1,7 @@
-import { Component, EventEmitter, Input, Output, inject } from "@angular/core";
+import { Component, EventEmitter, Input, OnInit, Output, inject } from "@angular/core";
 import { FormsModule } from "@angular/forms";
 import { firstValueFrom } from "rxjs";
-import { ApiService, ConnectorStatus, SetupStatus, ThreadSummary } from "./api.service";
+import { ApiService, ConnectorStatus, LlmAccountProfile, SetupStatus, ThreadSummary } from "./api.service";
 
 type WizardStepId = "welcome" | "codex" | "whatsapp" | "review";
 type WhatsAppAccessMode = "relay" | "own";
@@ -11,7 +11,7 @@ type WhatsAppAccessMode = "relay" | "own";
   imports: [FormsModule],
   templateUrl: "./first-thread-wizard.component.html",
 })
-export class FirstThreadWizardComponent {
+export class FirstThreadWizardComponent implements OnInit {
   private readonly api = inject(ApiService);
 
   @Input() canCancel = true;
@@ -22,7 +22,7 @@ export class FirstThreadWizardComponent {
 
   readonly steps: Array<{ id: WizardStepId; label: string }> = [
     { id: "welcome", label: "Welcome" },
-    { id: "codex", label: "Connect Codex" },
+    { id: "codex", label: "Coding agent" },
     { id: "whatsapp", label: "WhatsApp" },
     { id: "review", label: "Start" },
   ];
@@ -31,12 +31,33 @@ export class FirstThreadWizardComponent {
   threadName = "orkest";
   repoUrl = "";
   whatsappAccessMode: WhatsAppAccessMode = "relay";
+  runtimeProvider: "codex" | "claude-code" = "codex";
+  claudeAccounts: LlmAccountProfile[] = [];
+  claudeEnabled = false;
+  claudeAccountProfileId = "";
   busy = false;
   error = "";
   desktopWarning = "";
   creationStage = "";
   private draftName = "";
   private draftThreadId = "";
+
+  ngOnInit(): void {
+    void this.loadClaudeAccounts();
+  }
+
+  private async loadClaudeAccounts(): Promise<void> {
+    try {
+      const result = await firstValueFrom(this.api.llmAccounts("claude-code"));
+      this.claudeEnabled = result.enabled === true;
+      this.claudeAccounts = result.accounts || [];
+      const ready = this.claudeAccounts.find((account) => account.state === "ready");
+      if (ready) this.claudeAccountProfileId = ready.id;
+    } catch {
+      this.claudeEnabled = false;
+      this.claudeAccounts = [];
+    }
+  }
 
   activeStep(): WizardStepId {
     return this.steps[this.stepIndex]?.id || "name";
@@ -72,13 +93,13 @@ export class FirstThreadWizardComponent {
   canContinue(): boolean {
     const step = this.activeStep();
     if (step === "welcome") return Boolean(this.agentName());
-    if (step === "codex") return this.codexReady();
+    if (step === "codex") return this.agentReady();
     if (step === "whatsapp") return Boolean(this.whatsappAccessMode);
     return true;
   }
 
   canCreate(): boolean {
-    return Boolean(this.agentName() && this.codexReady() && !this.busy);
+    return Boolean(this.agentName() && this.agentReady() && !this.busy);
   }
 
   agentName(): string {
@@ -120,6 +141,21 @@ export class FirstThreadWizardComponent {
 
   codexReady(): boolean {
     return this.codexConnector()?.state === "connected";
+  }
+
+  selectedClaudeAccount(): LlmAccountProfile | null {
+    return this.claudeAccounts.find((account) => account.id === this.claudeAccountProfileId) || null;
+  }
+
+  agentReady(): boolean {
+    return this.runtimeProvider === "claude-code" ? this.selectedClaudeAccount()?.state === "ready" : this.codexReady();
+  }
+
+  agentSummary(): string {
+    if (this.runtimeProvider === "codex") return this.codexSummary();
+    const account = this.selectedClaudeAccount();
+    if (!account) return "Create and verify a Claude Code subscription profile under Tools → Models first.";
+    return account.state === "ready" ? `${account.label} is ready.` : `${account.label} is ${account.state.replace(/_/g, " ")}. Verify its attended login under Tools → Models.`;
   }
 
   codexBlocked(): boolean {
@@ -164,14 +200,14 @@ export class FirstThreadWizardComponent {
     this.error = "";
     this.desktopWarning = "";
     try {
-      let shouldWake = this.codexReady();
-      if (!this.codexReady()) {
+      let shouldWake = this.runtimeProvider === "claude-code" || this.codexReady();
+      if (this.runtimeProvider === "codex" && !this.codexReady()) {
         const setup = await firstValueFrom(this.api.setupStatus());
         this.setupStatus = setup;
         shouldWake = this.codexReady();
       }
-      if (!shouldWake) {
-        this.error = this.codexSummary();
+      if (!shouldWake || !this.agentReady()) {
+        this.error = this.agentSummary();
         return;
       }
       const name = this.agentName();
@@ -188,8 +224,11 @@ export class FirstThreadWizardComponent {
         title: name,
         bindingName: name,
         wakePolicy: "wake-on-message",
-        executorId: "codex",
-        codexMode: "code",
+        executorId: this.runtimeProvider,
+        executor: this.runtimeProvider === "claude-code"
+          ? { type: "claude-code", accountProfileId: this.claudeAccountProfileId }
+          : { type: "codex" },
+        ...(this.runtimeProvider === "codex" ? { codexMode: "code" } : {}),
         autoWorkspace: true,
         initGit: !cloneRepo,
         repoRemoteUrl: repoUrl,
@@ -202,7 +241,7 @@ export class FirstThreadWizardComponent {
       await this.startVirtualDesk(thread).catch((error) => {
         this.desktopWarning = `Virtual Desk did not start: ${this.errorText(error)}. Open setup desktops after the thread opens.`;
       });
-      this.creationStage = "Starting Codex in background";
+      this.creationStage = this.runtimeProvider === "claude-code" ? "Starting Claude Code in background" : "Starting Codex in background";
       this.created.emit(thread);
     } catch (error) {
       this.error = this.errorText(error);

@@ -33,6 +33,7 @@ type ThreadSummaryOptions = {
 
 type ThreadRuntimeMode =
   | "codex-api"
+  | "claude-code"
   | "codex-tmux"
   | "attached-terminal"
   | "agent"
@@ -281,6 +282,30 @@ function codexMetadata(thread: any) {
       codexRateLimits: null,
       runtimeKind: "api-agent",
       codexSessionId: null,
+      importedFromCodex: false,
+    };
+  }
+  if (runtimeKind === "claude-code" || metadata.runtimeKind === "claude-code" || thread?.executor?.type === "claude-code") {
+    return {
+      codexMode: null,
+      codexModeLabel: null,
+      codexModeRaw: null,
+      codexModeSource: null,
+      codexModeUpdatedAt: null,
+      desiredCodexMode: null,
+      desiredCodexModeUpdatedAt: null,
+      codexModel: thread?.claudeModel || metadata.claudeModel || null,
+      codexModelProvider: "anthropic",
+      codexReasoningEffort: null,
+      codexServiceTier: null,
+      codexModelUpdatedAt: null,
+      codexContextWindow: null,
+      codexTokenUsage: null,
+      codexTotalTokenUsage: null,
+      codexRateLimits: null,
+      runtimeKind: "claude-code",
+      codexSessionId: null,
+      accountProfileId: thread?.executor?.accountProfileId || metadata.accountProfileId || null,
       importedFromCodex: false,
     };
   }
@@ -616,6 +641,7 @@ function threadRuntimeControlSummary(input: {
   const paneAvailable = Boolean(cleanRuntimeValue(input.paneId));
   const terminalAttached = runtimeKind === RAW_TERMINAL_RUNTIME_KIND || transport === RAW_TERMINAL_RUNTIME_KIND || terminalMode === RAW_TERMINAL_RUNTIME_KIND;
   const isCodexAppServer = runtimeKind === "codex-app-server" || runtimeKind === "app-server" || transport === "codex-app-server" || transport === "app-server" || Boolean(input.codexAppServerSocket);
+  const isClaudeCode = runtimeKind === "claude-code" || transport === "stream-json" || executorType === "claude-code";
   const isAgentRuntime = runtimeKind === "api-agent" || executorType === "api-agent";
   const isCodexTmux = !terminalAttached && !isCodexAppServer && !isAgentRuntime && (
     runtimeKind === "codex-tmux" ||
@@ -630,7 +656,12 @@ function threadRuntimeControlSummary(input: {
   let runtimeControlPath = "unknown";
   let runtimeTransport = transport || runtimeKind || null;
 
-  if (isCodexAppServer) {
+  if (isClaudeCode) {
+    runtimeMode = "claude-code";
+    runtimeModeLabel = "Claude Code";
+    runtimeControlPath = "stream-json";
+    runtimeTransport = "stream-json";
+  } else if (isCodexAppServer) {
     runtimeMode = "codex-api";
     runtimeModeLabel = "Codex API";
     runtimeControlPath = "app-server";

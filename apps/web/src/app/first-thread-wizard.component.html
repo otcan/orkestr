@@ -3,7 +3,7 @@
     <div>
       <p class="eyebrow">Orkestr First Run</p>
       <h2>Start your Orkestr workspace</h2>
-      <p class="helper">Connect real Codex, choose WhatsApp access, and create the ready-to-use <strong>orkest</strong> thread with Virtual Desk.</p>
+      <p class="helper">Choose Codex or Claude Code, configure WhatsApp access, and create the ready-to-use <strong>orkest</strong> thread with Virtual Desk.</p>
     </div>
     @if (canCancel) {
       <button class="secondary" type="button" (click)="cancel.emit()" [disabled]="busy">Close</button>
@@ -37,7 +37,7 @@
     <div class="notice">{{ desktopWarning }}</div>
   }
 
-  @if (codexBlocked()) {
+  @if (runtimeProvider === 'codex' && codexBlocked()) {
     <div class="notice">
       <strong>Codex Agent required.</strong>
       <span>{{ codexSummary() }}</span>
@@ -83,18 +83,35 @@
 
     @if (activeStep() === "codex") {
       <div class="wizard-section-title">
-        <p class="eyebrow">Connect Codex</p>
-        <h3>Use the real Codex runtime</h3>
+        <p class="eyebrow">Coding agent</p>
+        <h3>Choose the runtime and subscription</h3>
       </div>
+      <div class="wizard-choice-grid">
+        <button type="button" class="choice-card" [class.active]="runtimeProvider === 'codex'" (click)="runtimeProvider = 'codex'" [disabled]="busy">
+          <strong>OpenAI Codex</strong><span>Use the existing Codex app-server runtime.</span>
+        </button>
+        <button type="button" class="choice-card" [class.active]="runtimeProvider === 'claude-code'" (click)="runtimeProvider = 'claude-code'" [disabled]="busy || !claudeEnabled || !claudeAccounts.length">
+          <strong>Claude Code</strong><span>Use an isolated, server-managed Claude subscription profile.</span>
+        </button>
+      </div>
+      @if (runtimeProvider === 'claude-code') {
+        <label class="wizard-field">
+          <span>Claude account</span>
+          <select name="claude-account-profile" [(ngModel)]="claudeAccountProfileId" [disabled]="busy">
+            @for (account of claudeAccounts; track account.id) { <option [value]="account.id" [disabled]="account.state !== 'ready'">{{ account.label }} · {{ account.state }}</option> }
+          </select>
+          <small>Manage and verify profiles under Tools → Models. Credential paths and tokens remain server-side.</small>
+        </label>
+      }
       <dl class="wizard-review">
         <dt>Status</dt>
-        <dd>Codex Agent · {{ codexStateLabel() }}</dd>
+        <dd>{{ runtimeProvider === 'claude-code' ? (selectedClaudeAccount()?.label || 'Claude Code') : 'Codex Agent' }} · {{ runtimeProvider === 'claude-code' ? (selectedClaudeAccount()?.state || 'not configured') : codexStateLabel() }}</dd>
         <dt>Requirement</dt>
         <dd>No fake or noop executor is used for this path.</dd>
       </dl>
       <div class="notice">
-        {{ codexSummary() }}
-        @if (!codexReady()) {
+        {{ agentSummary() }}
+        @if (runtimeProvider === 'codex' && !codexReady()) {
           <button class="secondary" type="button" (click)="openCodexSetup()" [disabled]="busy">Connect Codex Agent</button>
         }
       </div>
