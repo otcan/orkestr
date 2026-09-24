@@ -1,0 +1,52 @@
+{
+  "schemaVersion": 1,
+  "root": {
+    "scripts": { "postinstall": "node scripts/patch-whatsapp-media-id.mjs" },
+    "patchSha256": "bb24e66cfb659737c144f03f6965cceeca0ed94e4bfeae0895aad6921bc03351"
+  },
+  "installScripts": [
+    {
+      "package": "@parcel/watcher",
+      "version": "2.6.0",
+      "integrity": "sha512-7FNeNl8NCE7aINx7WXiKQrPYZWC/hvrTsmk6zmxbI7LTXE7hVek/n8AfVgpe2y82zl3w0HvCHN0bVKMBoJcC0w==",
+      "scriptSha256": "1c10d242a578c7e3cf44b39c2ffc8036537d85cc4b268393fba945e845885b82",
+      "rationale": "Optional Angular development watcher native fallback; platform prebuild packages suffice in CI. Script execution is not required or allowed in CI."
+    },
+    {
+      "package": "esbuild",
+      "version": "0.28.1",
+      "integrity": "sha512-HrJrvZv5ayxBzPfwphOoNzkzOIIlifzk0KJrGK2c8R4+LKpMtpYLQeUdjnwjWv/LZlkH2laZk+4w78pi99D4Vw==",
+      "scriptSha256": "23bddf6d3adf9f611110e313125c7c8a2cf2f88c5301dcd43a2eede75b206456",
+      "rationale": "Angular bundler binary validation/download fallback; the locked platform optional dependency supplies the binary. Script remains disabled in CI."
+    },
+    {
+      "package": "fsevents",
+      "version": "2.3.3",
+      "integrity": "sha512-5xoDfX+fL7faATnagmWPpbFtwh/R77WmMMqqHGS65C3vvB0YHrgF+B1YmZ3441tMj5n63k0212XNoJwzlhffQw==",
+      "scriptSha256": "9609a5d6d706424ff0f767d1666f2c5c4d48af4dac806432063891a4824af903",
+      "rationale": "Optional macOS filesystem watcher native build; not installed on the Linux CI runner and never executed by CI."
+    },
+    {
+      "package": "lmdb",
+      "version": "3.5.1",
+      "integrity": "sha512-NYHA0MRPjvNX+vSw8Xxg6FLKxzAG+e7Pt8RqAQA/EehzHVXq9SxDqJIN3JL1hK0dweb884y8kIh6rkWvPyg9Wg==",
+      "scriptSha256": "7fe3470940443c19da6ed7cf5e15d0f7a971973858c6e76e1bc48947e1ec806c",
+      "rationale": "Optional Angular cache native fallback; locked platform prebuilds or cache fallback suffice. No lifecycle execution in CI."
+    },
+    {
+      "package": "msgpackr-extract",
+      "version": "3.0.4",
+      "integrity": "sha512-4kmO/MdyUIkLIvTPr8VHLil4AtoKIoniWPIEk5+CDy0xnWC84azhSFmuJ7PxZdsYtiP5kEeQsORAVIeMgxT+Hw==",
+      "scriptSha256": "7fe3470940443c19da6ed7cf5e15d0f7a971973858c6e76e1bc48947e1ec806c",
+      "rationale": "Optional serialization accelerator used by build cache; prebuild or JavaScript fallback is sufficient. No lifecycle execution in CI."
+    },
+    {
+      "package": "puppeteer",
+      "version": "25.9.0",
+      "integrity": "sha512-2JqQszD2pyDTpIvBH1ZCXdrHgENVNdJIeOM6asbwHRgWknFiaLd1gNB91w/B/0hQHNpafkpxa90lPpBaJM87Hw==",
+      "scriptSha256": "0ed1348f56a51eb0cbf097c1a598812c35526ac8166643c53749ebc51f66e115",
+      "rationale": "Browser download provisioner; CI forbids launching browsers and needs no downloaded Chrome. Runtime browsers are separately managed. Script stays disabled."
+    }
+  ],
+  "exceptions": []
+}

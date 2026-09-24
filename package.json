@@ -19,6 +19,8 @@
     "test": "node --import ./test/test-bootstrap.mjs --test",
     "test:ci": "node scripts/ci-test-runner.mjs",
     "oss:boundary-check": "node scripts/oss-boundary-check.mjs",
+    "security:dependencies": "node scripts/security/dependency-advisories.mjs",
+    "security:lifecycle": "node scripts/security/dependency-lifecycle.mjs",
     "deploy:split-plan": "node scripts/deployment-split-plan.mjs",
     "secrets:migrate-env": "node scripts/secure-secrets-migrate-env.mjs",
     "canonical-refs:migrate": "node scripts/migrate-canonical-public-references.mjs",
