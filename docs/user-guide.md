@@ -56,6 +56,11 @@ into the normal conversation view.
 
 ### Optional Claude Code Accounts
 
+Claude Code execution currently supports only the configured instance admin.
+Non-admin and contained-user execution is rejected until the Claude adapter
+implements the tenant sandbox contract. Profile ownership alone is not a
+process isolation boundary.
+
 Set `ORKESTR_CLAUDE_CODE_ENABLED=1` only after installing the Claude Code CLI on
 the Orkestr host. In Settings → Models, add a labeled Claude subscription
 profile, open its attended provider login, and verify it. The new-thread wizard

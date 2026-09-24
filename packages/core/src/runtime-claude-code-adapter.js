@@ -30,6 +30,7 @@ import { appendTurnLifecycleEvent } from "./turn-lifecycle.js";
 import { parseThreadInputCommand } from "./thread-commands.js";
 import { getClaudeCodeSession, setClaudeCodeSession } from "./claude-code-sessions.js";
 import { codexInputText } from "./codex-app-server-common.js";
+import { threadRequiresTenantIsolation } from "./tenant-policy.js";
 
 const activeTurns = new Map();
 const turnReservations = new Set();
@@ -71,6 +72,7 @@ export function threadUsesClaudeCode(thread = {}) {
 }
 
 async function profileForThread(thread, env, requireReady = true) {
+  assertClaudeCodeHostOwner(thread, env);
   if (requireReady && !claudeCodeEnabled(env)) {
     const error = new Error("claude_code_disabled");
     error.code = "claude_code_disabled";
@@ -84,6 +86,19 @@ async function profileForThread(thread, env, requireReady = true) {
     requireReady,
     allowRevoked: !requireReady,
   }, env);
+}
+
+// Claude does not yet implement the contained-user runtime sandbox contract.
+// Scope credentials AND process execution: an opaque profile is not isolation.
+export function assertClaudeCodeHostOwner(thread = {}, env = process.env) {
+  const owner = clean(thread.ownerUserId || thread.userId).toLowerCase();
+  const admin = clean(env.ORKESTR_ADMIN_USER_ID || "admin").toLowerCase();
+  if (!owner || owner !== admin || threadRequiresTenantIsolation(thread, env)) {
+    const error = new Error("claude_code_admin_runtime_required");
+    error.code = error.message;
+    error.statusCode = 403;
+    throw error;
+  }
 }
 
 function outputEventId(threadId, attemptId) {

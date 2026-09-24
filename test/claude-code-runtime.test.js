@@ -20,6 +20,7 @@ import {
   updateLlmAccountProfileState,
 } from "../packages/core/src/llm-account-profiles.js";
 import {
+  assertClaudeCodeHostOwner,
   claudeCodeThreadStatus,
   deliverClaudeCodePendingInputs,
   interruptClaudeCodeThread,
@@ -102,6 +103,7 @@ async function readyProfile(ownerUserId, label, env) {
 }
 
 async function claudeThread(ownerUserId, profileId, env, id = "claude-thread") {
+  env.ORKESTR_ADMIN_USER_ID = ownerUserId;
   const thread = await createThread({
     id,
     name: `Claude fixture ${id}`,
@@ -112,6 +114,16 @@ async function claudeThread(ownerUserId, profileId, env, id = "claude-thread") {
   }, env);
   return (await startClaudeCodeThread(thread, env)).thread;
 }
+
+test("Claude host execution rejects missing, foreign and contained owners before process startup", async (t) => {
+  const { env, calls } = await fixture(t, "isolation");
+  for (const thread of [{}, { ownerUserId: "tenant" }, { ownerUserId: "admin", securityProfile: "external-user" }]) {
+    assert.throws(() => assertClaudeCodeHostOwner(thread, env), /claude_code_admin_runtime_required/);
+    await assert.rejects(startClaudeCodeThread(thread, env), /claude_code_admin_runtime_required/);
+  }
+  assert.doesNotThrow(() => assertClaudeCodeHostOwner({ ownerUserId: "admin" }, env));
+  await assert.rejects(fs.access(calls), { code: "ENOENT" });
+});
 
 test("Claude account profiles are owner-scoped and public projections redact credential roots", async (t) => {
   const { home, env } = await fixture(t, "profiles");
@@ -342,6 +354,11 @@ test("Claude API creates a thread with only an opaque exact profile binding", as
     assert.equal(accountsResponse.status, 200, JSON.stringify(accounts));
     assert.equal(accounts.enabled, true, JSON.stringify(accounts));
     assert.deepEqual(accounts.accounts.map((account) => account.id), [profile.id]);
+    const foreignOwner = await fetch(`http://127.0.0.1:${port}/api/threads`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "Denied tenant Claude", ownerUserId: "tenant", executorId: "claude-code", executor: { type: "claude-code", accountProfileId: profile.id } }),
+    });
+    assert.equal(foreignOwner.status, 403);
   } finally {
     if (server) await new Promise((resolve) => server.close(resolve));
     for (const [key, value] of Object.entries(prior)) {

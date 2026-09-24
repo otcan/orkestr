@@ -30,6 +30,8 @@ authorization.
 | Browser pairing bootstrap | `POST /api/setup/security/challenge`, `GET /api/setup/security/challenges/:id`, `POST /api/setup/security/pair` | Public bootstrap | Pairing challenge state and expiry |
 | Browser pairing administration | challenge list, approve, reject, delete, sessions, enable, revoke | Admin only | control-plane route guard |
 | Threads list and summary | `GET /api/threads`, `GET /api/threads/summary` | Owner-scoped, admin can request all | `threadSummaryPayload` with principal |
+| Claude Code thread creation/execution | `POST /api/threads` with Claude executor, runtime start/resume/input | Configured instance admin only; contained execution denied | Principal check before workspace preparation, owner and containment guard before profile/process access |
+| LLM account profiles | `/api/llm-accounts` and login/verify/revoke children | Current owner; admin may explicitly scope owner | `ownerForRequest`, exact owner/profile/provider lookup; public projection excludes credential roots |
 | Thread summary WebSocket | `WS /api/threads/summary/stream` | Same scope as polling summary | WebSocket auth plus `threadSummaryPayload` principal |
 | Thread read/write | messages, input, wake, stop, reset, delete, binding, timers | Current owner or admin | HTTP thread route guard plus scoped core helpers |
 | Thread model catalog | `GET /api/threads/:id/model-settings` | Current owner or admin; raw terminal and tenant-policy threads read-only | Scoped thread lookup and shared model-control owner checks; bounded catalog fetch only on overlay open |

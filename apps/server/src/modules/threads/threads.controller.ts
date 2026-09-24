@@ -66,6 +66,7 @@ import {
   threadUsesCodexAppServer,
 } from "../../../../../packages/core/src/codex-app-server.js";
 import {
+  assertClaudeCodeHostOwner,
   interruptClaudeCodeThread,
   startClaudeCodeThread,
   threadUsesClaudeCode,
@@ -647,6 +648,11 @@ export class ThreadsController {
   async create(@Req() request: any, @Body() body: Record<string, unknown> = {}) {
     validateRequestSchema(threadCreateSchema, { body });
     const principal = requestPrincipal(request);
+    const requestedExecutor: any = body.executor || {};
+    if ([body.executorId, body.runtimeKind, requestedExecutor.id, requestedExecutor.type, requestedExecutor.metadata?.runtimeKind].includes("claude-code")) {
+      if (!isAdminPrincipal(principal)) throw httpError("claude_code_admin_runtime_required", 403);
+      assertClaudeCodeHostOwner({ ...body, ownerUserId: body.ownerUserId || body.userId || process.env.ORKESTR_ADMIN_USER_ID || adminUserId });
+    }
     await this.assertThreadSanitized("thread.create", principal, {
       id: "",
       ownerUserId: isAdminPrincipal(principal) ? String(body.ownerUserId || body.userId || "") : principal?.userId || "",
