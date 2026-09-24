@@ -75,6 +75,14 @@ process.stdin.on("end", () => {
     leakedApiKey: Boolean(process.env.ANTHROPIC_API_KEY),
     prompt: prompt.trim()
   }) + "\\n");
+  if (prompt.includes("provider limit wording")) {
+    const session = resumed || "claude_session_fixture";
+    process.stdout.write(JSON.stringify({ type: "system", subtype: "init", session_id: session }) + "\\n");
+    process.stdout.write(JSON.stringify({ type: "rate_limit_event", session_id: session, rate_limits: { five_hour: { used_percentage: 100, resets_at: 1900000000 }, seven_day: { used_percentage: 50, resets_at: 1900100000 } } }) + "\\n");
+    process.stdout.write(JSON.stringify({ type: "assistant", session_id: session, error: "rate_limit" }) + "\\n");
+    process.stdout.write(JSON.stringify({ type: "result", subtype: "success", session_id: session, is_error: true, result: "You've hit your limit · resets later" }) + "\\n");
+    process.exit(1);
+  }
   if (prompt.includes("rate limit")) {
     process.stderr.write("429 usage limit reached\\n");
     process.exit(1);
@@ -389,6 +397,13 @@ test("Claude failures are low-cardinality and profile revocation fences later tu
   const limited = await enqueueThreadInput(thread.id, { text: "trigger rate limit", source: "test" }, env);
   await assert.rejects(sendClaudeCodeInput(thread, limited, env), /claude_code_rate_limited/);
   assert.equal((await listLlmAccountProfiles("owner", {}, env))[0].state, "rate_limited");
+
+  await updateLlmAccountProfileState("owner", profile.id, "ready", { verified: true }, env);
+  const providerLimited = await enqueueThreadInput(thread.id, { text: "trigger provider limit wording", source: "test" }, env);
+  await assert.rejects(sendClaudeCodeInput(thread, providerLimited, env), /claude_code_rate_limited/);
+  const limitedThread = await getThread(thread.id, env);
+  assert.equal(limitedThread.claudeRateLimits.primary.used_percent, 100);
+  assert.equal(limitedThread.claudeRateLimits.secondary.used_percent, 50);
 
   await updateLlmAccountProfileState("owner", profile.id, "ready", { verified: true }, env);
   await revokeLlmAccountProfile("owner", profile.id, env);

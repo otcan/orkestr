@@ -196,7 +196,7 @@ export function claudeCodeRuntimeEnv(profile = {}, thread = {}, env = process.en
 
 export function classifyClaudeCodeFailure(value = "") {
   const text = clean(value).toLowerCase();
-  if (/rate.?limit|usage.?limit|quota|too many requests|\b429\b/.test(text)) return "claude_code_rate_limited";
+  if (/rate.?limit|usage.?limit|quota|too many requests|\bhit (?:your )?limit\b|\b429\b/.test(text)) return "claude_code_rate_limited";
   if (/auth|login|sign.?in|credential|unauthori[sz]ed|forbidden|\b401\b|\b403\b/.test(text)) return "claude_code_auth_required";
   if (/timed?.?out|timeout/.test(text)) return "claude_code_timeout";
   if (/not found|enoent/.test(text)) return "claude_code_cli_missing";

@@ -176,6 +176,7 @@ async function runProcess({ thread, profile, prompt, sessionId, attemptId, onPro
       if (failure) {
         const error = new Error(failure);
         error.code = failure;
+        error.telemetry = telemetry;
         return finish(error);
       }
       if (!observedSessionId) {
@@ -346,10 +347,15 @@ async function sendClaudeCodeInputReserved(thread, message, env = process.env) {
     return { message: completedMessage, assistant, thread: updated };
   } catch (error) {
     const failureCode = publicClaudeCodeFailure(error);
+    const failureTelemetry = error?.telemetry || null;
     await updateThreadMessage(thread.id, freshMessage.id, { state: "failed", deliveryState: "failed", error: failureCode }, env).catch(() => {});
     const updated = await updateThread(thread.id, {
       state: "failed",
       lastError: failureCode,
+      ...(failureTelemetry?.model ? { claudeModelResolved: failureTelemetry.model } : {}),
+      ...(failureTelemetry?.tokenUsage ? { claudeTokenUsage: failureTelemetry.tokenUsage } : {}),
+      ...(failureTelemetry?.rateLimits ? { claudeRateLimits: failureTelemetry.rateLimits } : {}),
+      ...(failureTelemetry?.contextWindow ? { claudeContextWindow: failureTelemetry.contextWindow } : {}),
       runtime: { ...(thread.runtime || {}), runtimeKind: "claude-code", state: "failed", activeTurnId: null, lastTurnId: attemptId, lastTurnStatus: "failed", lastTurnError: failureCode },
     }, env).catch(() => thread);
     if (failureCode === "claude_code_rate_limited") {
