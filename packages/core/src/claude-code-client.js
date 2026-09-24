@@ -140,11 +140,27 @@ export function claudeCodeEventTelemetry(event = {}) {
     const reset = finite(value?.resets_at);
     return used === null ? null : { used_percent: Math.min(100, used), window_minutes: minutes, ...(reset !== null ? { resets_at: reset } : {}) };
   };
-  const rateLimits = limits ? {
+  let rateLimits = limits ? {
     primary: window(limits.five_hour || limits.primary, 300),
     secondary: window(limits.seven_day || limits.weekly || limits.secondary, 10080),
     plan_type: "claude_subscription",
   } : null;
+  const providerLimit = event.rate_limit_info || event.rateLimitInfo || null;
+  const providerLimitType = clean(providerLimit?.rateLimitType || providerLimit?.rate_limit_type).toLowerCase();
+  const providerLimitStatus = clean(providerLimit?.status).toLowerCase();
+  if (providerLimitStatus === "rejected" && ["five_hour", "seven_day"].includes(providerLimitType)) {
+    const reset = finite(providerLimit?.resetsAt ?? providerLimit?.resets_at);
+    const rejected = {
+      used_percent: 100,
+      window_minutes: providerLimitType === "five_hour" ? 300 : 10080,
+      ...(reset !== null ? { resets_at: reset } : {}),
+    };
+    rateLimits = {
+      primary: providerLimitType === "five_hour" ? rejected : rateLimits?.primary || null,
+      secondary: providerLimitType === "seven_day" ? rejected : rateLimits?.secondary || null,
+      plan_type: "claude_subscription",
+    };
+  }
   const contextSize = finite(event.context_window?.context_window_size);
   return {
     tokenUsage: tokenUsage && Object.keys(tokenUsage).length ? tokenUsage : null,

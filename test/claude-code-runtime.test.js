@@ -78,7 +78,7 @@ process.stdin.on("end", () => {
   if (prompt.includes("provider limit wording")) {
     const session = resumed || "claude_session_fixture";
     process.stdout.write(JSON.stringify({ type: "system", subtype: "init", session_id: session }) + "\\n");
-    process.stdout.write(JSON.stringify({ type: "rate_limit_event", session_id: session, rate_limits: { five_hour: { used_percentage: 100, resets_at: 1900000000 }, seven_day: { used_percentage: 50, resets_at: 1900100000 } } }) + "\\n");
+    process.stdout.write(JSON.stringify({ type: "rate_limit_event", session_id: session, rate_limit_info: { status: "rejected", rateLimitType: "five_hour", resetsAt: 1900000000, isUsingOverage: false, overageDisabledReason: "must-not-persist" } }) + "\\n");
     process.stdout.write(JSON.stringify({ type: "assistant", session_id: session, error: "rate_limit" }) + "\\n");
     process.stdout.write(JSON.stringify({ type: "result", subtype: "success", session_id: session, is_error: true, result: "You've hit your limit · resets later" }) + "\\n");
     process.exit(1);
@@ -403,7 +403,9 @@ test("Claude failures are low-cardinality and profile revocation fences later tu
   await assert.rejects(sendClaudeCodeInput(thread, providerLimited, env), /claude_code_rate_limited/);
   const limitedThread = await getThread(thread.id, env);
   assert.equal(limitedThread.claudeRateLimits.primary.used_percent, 100);
-  assert.equal(limitedThread.claudeRateLimits.secondary.used_percent, 50);
+  assert.equal(limitedThread.claudeRateLimits.primary.resets_at, 1900000000);
+  assert.equal(limitedThread.claudeRateLimits.secondary, null);
+  assert.equal(JSON.stringify(limitedThread.claudeRateLimits).includes("must-not-persist"), false);
 
   await updateLlmAccountProfileState("owner", profile.id, "ready", { verified: true }, env);
   await revokeLlmAccountProfile("owner", profile.id, env);
