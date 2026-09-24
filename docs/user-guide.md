@@ -84,9 +84,13 @@ Claude may omit subscription windows before its first response, in which case
 the UI shows them as unavailable rather than estimating them. Set
 `ORKESTR_CLAUDE_CODE_ALLOW_BYPASS_PERMISSIONS=1` to expose the admin-only YOLO
 choice; it skips Claude tool prompts and should only be enabled for a suitably
-isolated workspace. Provider tool-approval prompts, raw-terminal attach, and
-`/implement` are rejected for Claude threads
-in this V1 rather than falling through to a Codex path.
+isolated workspace. A host may additionally set the comma-separated
+`ORKESTR_CLAUDE_CODE_YOLO_ALLOWED_MCP_TOOLS` allowlist to pre-authorize exact
+MCP tool names or one server namespace such as `mcp__atlassian__*`. The
+allowlist is ignored outside YOLO mode and malformed or overbroad expressions
+fail closed before Claude starts. Provider tool-approval prompts not covered by
+that server-owned allowlist, raw-terminal attach, and `/implement` are rejected
+for Claude threads in this V1 rather than falling through to a Codex path.
 
 ### Migrate Existing Codex Threads
 

@@ -4,6 +4,7 @@ import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
+import { claudeCodeYoloAllowedMcpTools } from "./claude-code-mcp-policy.js";
 
 const execFileAsync = promisify(execFile);
 const loginSessions = new Map();
@@ -79,7 +80,11 @@ export function claudeCodeArgs(thread = {}, options = {}, env = process.env) {
     throw error;
   }
   const args = ["-p", "--output-format", "stream-json", "--verbose", "--permission-mode", mode];
-  if (mode === "bypassPermissions") args.push("--allow-dangerously-skip-permissions");
+  if (mode === "bypassPermissions") {
+    args.push("--allow-dangerously-skip-permissions");
+    const allowedMcpTools = claudeCodeYoloAllowedMcpTools(env);
+    if (allowedMcpTools.length) args.push("--allowedTools", allowedMcpTools.join(","));
+  }
   const model = modelForThread(thread);
   if (model) args.push("--model", model);
   const effort = clean(thread?.executor?.metadata?.claudeEffort || thread?.claudeEffort);
