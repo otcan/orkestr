@@ -5946,6 +5946,7 @@ test("Codex app-server applies thread-scoped /model, /effort and /fast commands 
       connector: "whatsapp",
       chatId: "chat-settings",
       senderTrustLevel: "owner",
+      senderEffectiveRole: "owner",
     }, env);
     assert.deepEqual(await deliverCodexAppServerPendingInputs(await getThread(first.thread.id, env), env), [modelCommand.id]);
 
@@ -5962,6 +5963,7 @@ test("Codex app-server applies thread-scoped /model, /effort and /fast commands 
       connector: "whatsapp",
       chatId: "chat-settings",
       senderTrustLevel: "owner",
+      senderEffectiveRole: "owner",
     }, env);
     assert.deepEqual(await deliverCodexAppServerPendingInputs(await getThread(first.thread.id, env), env), [fastCommand.id]);
 
@@ -5995,11 +5997,11 @@ test("Codex app-server applies thread-scoped /model, /effort and /fast commands 
     ]);
     assert.equal(rawState.calls.some((call) => call.method === "turn/start"), false);
     assert.equal(rawState.calls.some((call) => call.method === "turn/steer"), false);
-    assert.ok(messages.some((message) => message.role === "assistant" && /Model set to gpt-test with high effort/.test(message.text)));
-    assert.ok(messages.some((message) => message.role === "assistant" && /Fast mode enabled/.test(message.text)));
-    assert.ok(messages.some((message) => message.role === "assistant" && /Effort set to medium/.test(message.text)));
+    assert.equal(messages.filter(message => message.role === "assistant").length, 0);
+    assert.equal(messages.filter(message => message.role === "user").length, 3);
     const secondMessages = await listThreadMessages(secondThread.id, env);
-    assert.ok(secondMessages.some((message) => message.role === "assistant" && /Only a thread owner or Orkestr admin/.test(message.text)));
+    assert.equal(secondMessages.filter(message => message.role === "assistant").length, 0);
+    assert.match(secondMessages.find(message => message.id === deniedCommand.id).error, /Only the thread owner or an Orkestr admin/);
   } finally {
     stopCodexAppServerClients();
   }
@@ -6020,6 +6022,7 @@ test("Codex app-server settings commands cannot bypass contained thread policy",
     const started = await startCodexAppServerThread(thread, env);
     const command = await enqueueThreadInput(started.thread.id, {
       senderTrustLevel: "owner",
+      senderEffectiveRole: "owner",
       text: "/effort high",
       source: "whatsapp_inbound",
       connector: "whatsapp",
@@ -6034,7 +6037,7 @@ test("Codex app-server settings commands cannot bypass contained thread policy",
     const latestState = JSON.parse(await fs.readFile(fake.stateFile, "utf8"));
     assert.equal(completed.deliveryState, "delivered");
     assert.match(completed.error, /managed by tenant policy/i);
-    assert.match(reply.text, /managed by tenant policy/i);
+    assert.equal(reply, undefined);
     assert.equal(latestState.calls.filter((call) => call.method === "model/list").length, 0);
     assert.equal(latestState.calls.filter((call) => call.method === "thread/settings/update").length, 0);
   } finally {

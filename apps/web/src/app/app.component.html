@@ -1474,6 +1474,13 @@
       }
 
       @if (activePanel === "chat") {
+        @if (settingsCommandReplies[thread.id]) {
+          <div role="status" style="white-space: pre-wrap; overflow-wrap: anywhere; max-height: 35vh; overflow: auto; padding: 12px;">
+            {{ settingsCommandReplies[thread.id] }}
+            <button type="button" style="min-height: 44px; min-width: 44px;" aria-label="Dismiss settings result"
+              (click)="settingsCommandReplies[thread.id] = ''">×</button>
+          </div>
+        }
         <ork-thread-composer
           [thread]="thread"
           [draft]="draft"

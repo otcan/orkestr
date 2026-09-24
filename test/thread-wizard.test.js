@@ -166,7 +166,9 @@ test("web thread input renders optimistic user messages before server refresh", 
   assert.ok(sources.includes("const pendingFiles = [...this.pendingFiles]"));
   assert.ok(sendMessage.indexOf("appendOptimisticUserMessage") < sendMessage.indexOf("uploadPendingFiles"));
   assert.ok(sendMessage.indexOf("clearSubmittedComposer(thread, pendingFiles, originalText)") > sendMessage.indexOf("firstValueFrom(this.api.sendThreadInput"));
-  assert.ok(sendMessage.indexOf("appendOptimisticUserMessage") < sendMessage.indexOf("firstValueFrom(this.api.sendThreadInput"));
+  // Settings take a separate control path without optimistic conversation rows.
+  const normalSend = sendMessage.slice(sendMessage.indexOf("const pendingFiles = [...this.pendingFiles]"));
+  assert.ok(normalSend.indexOf("appendOptimisticUserMessage") < normalSend.indexOf("firstValueFrom(this.api.sendThreadInput"));
   assert.ok(sendMessage.includes("response.message"));
 });
 

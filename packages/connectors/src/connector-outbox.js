@@ -519,6 +519,15 @@ function stateFilterMatches(actual = "", expected = "") {
   return !states.length || states.includes(clean(actual || "pending").toLowerCase());
 }
 
+export async function getConnectorOutboxJob(jobIdOrKey, env = process.env) {
+  const pg = await openConnectorOutboxPostgres(env);
+  if (pg) return getConnectorOutboxJobRowPostgres(pg, jobIdOrKey, env);
+  const db = await openConnectorOutboxDatabase(env);
+  if (db) return getConnectorOutboxJobRow(db, jobIdOrKey, env);
+  const target = clean(jobIdOrKey);
+  return (await readConnectorOutbox(env)).jobs.find(job => job.id === target || job.idempotencyKey === target) || null;
+}
+
 export async function listConnectorOutboxJobs(filters = {}, env = process.env) {
   const pg = await openConnectorOutboxPostgres(env);
   if (pg) {

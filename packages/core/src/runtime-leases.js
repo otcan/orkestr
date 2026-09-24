@@ -36,6 +36,8 @@ import {
   updateThreadMessage,
 } from "./threads.js";
 import { parseThreadInputCommand } from "./thread-commands.js";
+import { completeLegacySettingsCommand } from "./codex-settings-command-legacy.js";
+import { handleWhatsAppSettingsCommand } from "../../connectors/src/whatsapp-settings-command.js";
 import { recordRouterTraceEvent } from "./router-traces.js";
 import { performNativeCodexSafeReset } from "./codex-safe-reset.js";
 import {
@@ -3989,6 +3991,11 @@ export async function deliverPendingThreadInputs(threadId, env = process.env, op
         !deliveryAttemptMayBeAmbiguous(message));
       if (!next) break;
       const parsedCommand = parseThreadInputCommand(next);
+      if (["model", "effort", "fast"].includes(parsedCommand.command)) {
+        const result = await completeLegacySettingsCommand(thread, next, env, handleWhatsAppSettingsCommand);
+        if (result?.messageId) delivered.push(result.messageId);
+        continue;
+      }
       if ((parsedCommand.command === "plan" || parsedCommand.command === "code") && parsedCommand.text) {
         const payloadMessageId = await splitCodexModeCommandMessage(thread, next, parsedCommand, env);
         if (payloadMessageId) delivered.push(payloadMessageId);

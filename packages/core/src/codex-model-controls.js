@@ -9,6 +9,7 @@ import { getCodexAppServerClient } from "./codex-app-server-client.js";
 import { assertResourceAccess, policyError } from "./policy.js";
 import { incrementCounter, observeHistogram } from "./observability.js";
 import { classifyCodexSettingsError, updateLoadedCodexSettings } from "./codex-settings-error.js";
+import { runSettingsOperation } from "./codex-settings-operations.js";
 
 const catalogs = new WeakMap();
 export const MODEL_CONTROLS_TIMEOUT_MS = 5000;
@@ -26,7 +27,7 @@ async function audit(thread, operation, outcome, started, env, failure = null) {
   const labels = { operation, outcome };
   incrementCounter("orkestr_model_controls_total", labels);
   observeHistogram("orkestr_model_controls_duration_seconds", durationMs / 1000, labels, [0.01, 0.1, 0.5, 1, 2, 5, 10]);
-  await appendEvent({ type: "codex_model_controls", threadId: thread.id, operation, outcome, durationMs,
+  await appendEvent({ type: "codex_model_controls", threadId: thread?.id || null, operation, outcome, durationMs,
     ...(failure ? { failureKind: failure.kind, rpcCode: failure.code } : {}),
   }, env).catch(() => {});
 }
@@ -91,13 +92,33 @@ export async function readCodexModelControls(thread, principal, env = process.en
 }
 
 // Both chat commands and WebUI changes use this validation, runtime update and persistence path.
-export async function changeCodexModelControls(thread, { command = "model", text = "", principal = null, authorized = false, client = null } = {}, env = process.env) {
+export async function changeCodexModelControls(thread, { command = "model", text = "", principal = null, authorized = false, client = null, sourceOperationKey = "", surface = "webui" } = {}, env = process.env) {
+  const expectedOwner = thread.ownerUserId;
+  if (sourceOperationKey) {
+    // Recheck authorization even for a cached result.
+    thread = await getThread(thread.id, env);
+    if (!thread || thread.ownerUserId !== expectedOwner) throw policyError("Thread ownership changed.", 403);
+    if (principal) assertResourceAccess(principal, thread, "thread.model-settings", env);
+    else if (!authorized) throw policyError("Only a thread owner or Orkestr admin can change Codex settings.", 403);
+    return runSettingsOperation({ key: sourceOperationKey, surface, command }, async () => {
+      try {
+        const result = await changeCodexModelControls(thread, { command, text, principal, authorized, client }, env);
+        return result.ok ? result : { ok: false, outcome: "invalid", replyText: "Invalid settings command or unsupported choice. Use /model, /effort, or /fast status to see supported settings." };
+      } catch (error) {
+        return { ok: false, outcome: [409, 502].includes(error.statusCode) ? "unconfirmed" : "rejected",
+          replyText: [409, 502].includes(error.statusCode)
+            ? "Could not confirm the settings change. Settings remain read-only until an operator reconciles the runtime."
+            : "Settings could not be read or changed. Check the WebUI settings before trying again." };
+      }
+    }, env);
+  }
   const started = Date.now();
   let outcome = "failed";
   let failure = null;
   try {
     return await withCodexSettingsLock(thread.id, env, async () => {
-      thread = await getThread(thread.id, env) || thread;
+      thread = await getThread(thread.id, env);
+      if (!thread || thread.ownerUserId !== expectedOwner) throw policyError("Thread ownership changed.", 403);
       if (principal) assertResourceAccess(principal, thread, "thread.model-settings", env);
       else if (!authorized) throw policyError("Only a thread owner or Orkestr admin can change Codex settings.", 403);
       const reason = modelControlsReadOnlyReason(thread, env);
@@ -105,7 +126,7 @@ export async function changeCodexModelControls(thread, { command = "model", text
       const deadline = Date.now() + MODEL_CONTROLS_TIMEOUT_MS;
       client ||= await clientFor(thread, env);
       const models = await liveCodexModelCatalog(client, { fresh: true, timeoutMs: Math.max(1, deadline - Date.now()) });
-      if (principal && command === "model" && !models.some((entry) => [entry.id, entry.model].filter(Boolean).some((value) => value.toLowerCase() === String(text).split(/\s+/)[0].toLowerCase()))) {
+      if (principal && command === "model" && !["", "status", "default"].includes(String(text).trim().toLowerCase()) && !models.some((entry) => [entry.id, entry.model].filter(Boolean).some((value) => value.toLowerCase() === String(text).split(/\s+/)[0].toLowerCase()))) {
         outcome = "invalid";
         return { ok: false, error: "Select a model from the live catalog." };
       }

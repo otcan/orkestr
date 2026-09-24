@@ -41,7 +41,8 @@ import {
   turnStartParams,
   userInputText,
 } from "./codex-app-server-common.js";
-import { changeCodexModelControls } from "./codex-model-controls.js";
+import { completeLegacySettingsCommand } from "./codex-settings-command-legacy.js";
+import { handleWhatsAppSettingsCommand } from "../../connectors/src/whatsapp-settings-command.js";
 import { getCodexAppServerClient, stopCodexAppServerClients as stopCodexAppServerRuntimeClients } from "./codex-app-server-client.js";
 import { probeLiveCodexThreadState, readLiveCodexThreadState } from "./codex-app-server-live-state.js";
 import { codexAppServerSocket, codexAppServerTransport } from "../../connectors/src/codex-app-server-transport.js";
@@ -766,76 +767,6 @@ async function completeCodexAppServerModeCommand(thread, message, mode, env = pr
     deferred: false,
     runtimeMode: { mode: desired, source: "orkestr-command", reason: "app-server-local-mode" },
   };
-}
-
-async function completeCodexAppServerSettingsCommand(thread, message, parsedCommand, client, env = process.env) {
-  let resolved;
-  try {
-    resolved = await changeCodexModelControls(thread, {
-      command: parsedCommand.command,
-      text: parsedCommand.text,
-      authorized: !externalChatInput(message) || ["owner", "admin"].includes(clean(message.senderEffectiveRole || message.senderTrustLevel).toLowerCase()),
-      client,
-    }, env);
-    if (resolved.thread) thread = resolved.thread;
-  } catch (error) {
-    resolved = { ok: false, error: `Could not update Codex thread settings: ${publicError(error)}` };
-  }
-  const replyText = clean(resolved.replyText || resolved.error) || "Codex thread settings were not changed.";
-  const completed = await updateThreadMessage(thread.id, message.id, {
-    state: "completed",
-    deliveryState: "delivered",
-    observedVia: "codex_app_server_settings_command",
-    deliveredAt: nowIso(),
-    error: resolved.ok ? null : resolved.error,
-  }, env);
-  await recordMessageRouterTrace(completed, "delivery_started", {
-    threadId: thread.id,
-    ownerProcess: codexThreadId(thread),
-    reason: "codex_app_server_settings_command",
-  }, env);
-  await recordMessageRouterTrace(completed, "delivered_to_runtime", {
-    threadId: thread.id,
-    ownerProcess: codexThreadId(thread),
-    reason: "codex_app_server_settings_command",
-  }, env);
-  const reply = await appendThreadMessage(thread.id, {
-    role: "assistant",
-    source: "orkestr_runtime",
-    phase: "final_answer",
-    text: replyText,
-    state: "completed",
-    eventId: threadEventId({
-      codexThreadId: codexThreadId(thread),
-      itemId: message.id,
-      type: `thread-settings-${parsedCommand.command}`,
-      role: "assistant",
-      text: replyText,
-    }),
-    codexModel: thread.codexModel || thread.executor?.metadata?.codexModel || null,
-    codexReasoningEffort: thread.codexReasoningEffort || thread.executor?.metadata?.codexReasoningEffort || null,
-    codexServiceTier: thread.codexServiceTier || thread.executor?.metadata?.codexServiceTier || null,
-    ...codexAppServerMessageFields(codexThreadId(thread), { itemId: message.id }),
-    ...whatsappProjectionFields(message, thread),
-  }, env);
-  const finalProjection = await reconcileCodexFinalProjection({
-    thread,
-    message: reply,
-    runtimeGeneration: codexThreadId(thread),
-    source: "settings_command",
-    env,
-  }).catch(() => null);
-  const projectedReply = finalProjection?.message || reply;
-  if (!finalProjection?.reconciled) markConnectorDeliverySignal(projectedReply);
-  await appendEvent({
-    type: "thread_codex_settings_command",
-    threadId: thread.id,
-    messageId: message.id,
-    command: parsedCommand.command,
-    applied: resolved.ok === true,
-    error: resolved.ok ? null : resolved.error,
-  }, env).catch(() => {});
-  return { messageId: completed.id, message: completed, reply: projectedReply, applied: resolved.ok === true };
 }
 
 function codexAppServerHistorySyncIntervalMs(env = process.env) {
@@ -1858,6 +1789,11 @@ async function deliverCodexAppServerPendingInputsUnlocked(thread, env = process.
 }
 
 async function deliverCodexAppServerClaimedPendingInput(thread, next, env = process.env, delivered = []) {
+  if (["model", "effort", "fast"].includes(parseThreadInputCommand(next).command)) {
+    const completed = await completeLegacySettingsCommand(thread, next, env, handleWhatsAppSettingsCommand);
+    if (completed?.messageId) delivered.push(completed.messageId);
+    return delivered;
+  }
   const expiredQuestionReply = await rejectExpiredLegacyQuestionReply(thread, next, env);
   if (expiredQuestionReply) return delivered;
   let client;
@@ -1999,11 +1935,6 @@ async function deliverCodexAppServerClaimedPendingInput(thread, next, env = proc
   const pendingApproval = client.pendingRequestForThread(thread, { includePersisted: approvalStatusState === "awaiting_approval" });
   const text = clean(next.text);
   const parsedCommand = parseThreadInputCommand(next);
-  if (["model", "effort", "fast"].includes(parsedCommand.command)) {
-    const completed = await completeCodexAppServerSettingsCommand(thread, next, parsedCommand, client, env);
-    if (completed?.messageId) delivered.push(completed.messageId);
-    return delivered;
-  }
   if (pendingApproval?.method === "item/tool/requestUserInput") {
     await client.answerPendingRequest(thread, "answer", { text });
     await updateThreadMessage(thread.id, next.id, {
