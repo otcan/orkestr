@@ -11,7 +11,7 @@ import {
   outboundDeliveryKey,
   pruneOutboundDeliveryClaims,
 } from "../packages/connectors/src/whatsapp-delivery-ledger.js";
-import { appendWhatsAppDebugFooter, formatWhatsAppOutboundText } from "../packages/connectors/src/whatsapp-formatting.js";
+import { appendWhatsAppDebugFooter, formatWhatsAppOutboundText, stripWhatsAppDebugFooter } from "../packages/connectors/src/whatsapp-formatting.js";
 import { whatsappInboundThreadMatchesBinding } from "../packages/connectors/src/whatsapp-inbound-routing.js";
 import { shouldMirrorWhatsAppProgress, shouldMirrorWhatsAppReply } from "../packages/connectors/src/whatsapp-mirror-policy.js";
 import { formatWhatsAppQueueNotice, initialQueueDeliveryState } from "../packages/connectors/src/whatsapp-outbound-mirror.js";
@@ -113,8 +113,9 @@ test("WhatsApp debug footer reports Claude Code model, runtime, and usage withou
     thread,
   });
 
-  assert.match(final, /^Done\n\ndbg: m:sonnet\/h · rt:claude · msg:final · 5h:80% · wk:65%/);
+  assert.match(final, /^Done\n\ndbg: m:sonnet\/h · agent:claude-code · rt:claude · msg:final · quota:remaining · 5h:80% · wk:65%/);
   assert.doesNotMatch(final, /fast:|mode:|model:\/model|mode-switch:|rt-switch:/);
+  assert.equal(stripWhatsAppDebugFooter(final), "Done");
 
   const waking = appendWhatsAppDebugFooter("Waking this thread.", {
     env: { ORKESTR_WHATSAPP_DEBUG_FOOTER: "1" },
@@ -123,7 +124,7 @@ test("WhatsApp debug footer reports Claude Code model, runtime, and usage withou
     thread,
     messages: [],
   });
-  assert.match(waking, /^Waking this thread\.\n\ndbg: m:sonnet\/h · rt:claude · msg:update · 5h:80% · wk:65% · queue:1 · reason:waking/);
+  assert.match(waking, /^Waking this thread\.\n\ndbg: m:sonnet\/h · agent:claude-code · rt:claude · msg:update · quota:remaining · 5h:80% · wk:65% · queue:1 · reason:waking/);
   assert.doesNotMatch(waking, /mode-switch:|rt-switch:/);
 });
 
@@ -143,7 +144,8 @@ test("WhatsApp Claude footer replaces stale or unavailable usage with explicit s
       executor: { type: "claude-code", metadata: {} },
     },
   });
-  assert.match(allowed, / · 5h:available · wk:unknown · /);
+  assert.match(allowed, / · quota:remaining · 5h:available · 5h-reset:/);
+  assert.match(allowed, / · wk:unknown · /);
   assert.doesNotMatch(allowed, / · 5h:0%/);
 
   const expired = appendWhatsAppDebugFooter("Done", {
@@ -162,7 +164,37 @@ test("WhatsApp Claude footer replaces stale or unavailable usage with explicit s
     },
   });
   assert.match(expired, / · 5h:unknown · wk:unknown · /);
+  assert.doesNotMatch(expired, /5h-reset:|wk-reset:/);
   assert.doesNotMatch(expired, / · 5h:0%/);
+});
+
+test("WhatsApp Claude footer validates percentages and classifies both reset windows", () => {
+  const final = appendWhatsAppDebugFooter("Done", {
+    env: { ORKESTR_WHATSAPP_DEBUG_FOOTER: "1" },
+    message: { source: "claude-code", phase: "final_answer" },
+    thread: {
+      runtimeKind: "claude-code",
+      claudeRateLimits: {
+        primary: { used_percent: 25, window_minutes: 10080, resets_at: Date.parse("2099-09-26T12:20:00Z") / 1000 },
+        secondary: { status: "rejected", used_percent: 100, window_minutes: 300, resets_at: Date.parse("2099-09-25T12:20:00Z") / 1000 },
+      },
+      executor: { type: "claude-code", metadata: {} },
+    },
+  });
+  assert.match(final, / · 5h:0% · 5h-reset:25 Sept 12:20 UTC · wk:75% · wk-reset:26 Sept 12:20 UTC · /);
+
+  for (const used_percent of [-1, 101, "not-a-number"]) {
+    const invalid = appendWhatsAppDebugFooter("Done", {
+      env: { ORKESTR_WHATSAPP_DEBUG_FOOTER: "1" },
+      message: { source: "claude-code", phase: "final_answer" },
+      thread: {
+        runtimeKind: "claude-code",
+        claudeRateLimits: { primary: { used_percent, window_minutes: 300 }, secondary: null },
+        executor: { type: "claude-code", metadata: {} },
+      },
+    });
+    assert.match(invalid, / · 5h:unknown · wk:unknown · /);
+  }
 });
 
 test("WhatsApp mirror policy forwards Codex final replies and progress updates", () => {
