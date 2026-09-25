@@ -15,6 +15,9 @@ It never reads service environments, command lines, message bodies, credentials
 or browser state. Each command has a deadline; errors become missing telemetry,
 never a fabricated healthy zero. An intentional `tun0` or tailnet link is not
 mistaken for the prohibited `nordlynx` interface.
+Malformed route/rule/link record lists and empty or unnamed link inventories
+are missing telemetry. A feed claiming healthy routing while reporting the
+prohibited VPN present is rejected as inconsistent.
 
 The private policy shape is:
 
@@ -148,6 +151,11 @@ operator-entered guesses. Include transport listener/health, live readiness,
 disk below the reviewed threshold, no new exact-route failures, service-cycle
 attribution, owner-visible alert receipt, and current dependency exceptions.
 Do not use synthetic customer messages or replay dead letters to produce a pass.
+
+Tenant route configuration responses report `forwardingReady: false` and
+`targetReachability: not_checked` until a health-checked route listing establishes
+reachability. Configured endpoint/token presence alone is not readiness evidence.
+This status correction does not send customer traffic or establish delivery.
 
 Any failed check, release/boot/service-cycle change or excessive sampling gap
 resets the clean span; previous observations and break reasons remain queryable.

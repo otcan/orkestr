@@ -119,6 +119,35 @@ class SignalTests(unittest.TestCase):
         self.assertIsNone(sample["resource_pressure"])
         self.assertTrue(sample["errors"])
 
+    def test_malformed_ip_records_remain_missing_telemetry_without_crashing(self):
+        for command, error in (("route", "route_read_failed"), ("rule", "route_read_failed"),
+                               ("link", "vpn_read_failed")):
+            for payload in ({}, None, "unexpected", [None], ["unexpected"], [1]):
+                with self.subTest(command=command, payload=payload):
+                    def runner(args, **kwargs):
+                        if args[0] == "ip" and command in args:
+                            return SimpleNamespace(returncode=0, stdout=json.dumps(payload))
+                        return self.runner(args, **kwargs)
+                    result = collect(policy(), 100, runner, self.reads.__getitem__)
+                    self.assertIn(error, result["errors"])
+                    self.assertIsNone(result["route_ok"])
+
+    def test_empty_or_unnamed_link_inventory_cannot_prove_vpn_absence(self):
+        for payload in ([], [{}], [{"ifname": None}], [{"ifname": ""}], [{"ifname": 1}]):
+            with self.subTest(payload=payload):
+                def runner(args, **kwargs):
+                    if args[0] == "ip" and "link" in args:
+                        return SimpleNamespace(returncode=0, stdout=json.dumps(payload))
+                    return self.runner(args, **kwargs)
+                result = collect(policy(), 100, runner, self.reads.__getitem__)
+                self.assertIsNone(result["vpn_absent"])
+                self.assertIn("vpn_read_failed", result["errors"])
+
+    def test_contradictory_vpn_and_route_signal_is_not_healthy(self):
+        path = self.save({**self.sample(), "route_ok": True, "vpn_absent": False})
+        with self.assertRaisesRegex(ValueError, "inconsistent"):
+            load_signal(path, "example-core", digest(policy()), 110)
+
     def test_only_fresh_bound_file_signals_accepted_and_extras_stripped(self):
         sample = {**self.sample(), "secret_extra": "not retained"}
         path = self.save(sample)

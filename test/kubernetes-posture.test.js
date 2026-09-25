@@ -14,7 +14,7 @@ test("effective service-account automount honors pod override and default identi
   assert.deepEqual(rules(inspect([pod, account])), ["api_token"]);
   delete pod.spec.template.spec.serviceAccountName;
   delete pod.spec.template.spec.automountServiceAccountToken;
-  assert.deepEqual(rules(inspect([pod])), ["default_identity", "implicit_automount", "api_token"]);
+  assert.deepEqual(rules(inspect([pod])), ["default_identity", "implicit_automount", "api_token", "service_account_not_in_inventory"]);
 });
 
 test("manual projected tokens are caught even when automount is false", () => {
@@ -22,6 +22,30 @@ test("manual projected tokens are caught even when automount is false", () => {
   pod.spec.template.spec.volumes = [{ name: "manual", projected: { sources: [{ serviceAccountToken: { path: "token" } }] } }];
   assert.deepEqual(rules(inspect([pod, account])), ["projected_token"]);
   assert.throws(() => plan(pod, { owner: "operator", reason: "no API", kubernetesApiRequired: false }), /review_required/);
+});
+
+test("default identity exception cannot waive missing service-account inventory", () => {
+  const pod = workload();
+  delete pod.spec.template.spec.serviceAccountName;
+  pod.spec.template.spec.automountServiceAccountToken = false;
+  const policy = { now: Date.parse("2026-01-01"), exceptions: [{ kind: "Deployment", namespace: "example", name: "app",
+    rule: "default_identity", owner: "operator", reason: "reviewed migration", expiresAt: "2026-01-02" }] };
+  const report = inspect([pod], policy);
+  assert.equal(report.ok, false);
+  assert.deepEqual(rules(report), ["service_account_not_in_inventory"]);
+  assert.equal(inspect([pod, { ...account, metadata: { name: "default", namespace: "example" } }], policy).ok, true);
+  assert.throws(() => inspect([pod], { ...policy, exceptions: [{ ...policy.exceptions[0], rule: "service_account_not_in_inventory" }] }), /invalid_or_expired_exception/);
+});
+
+test("ephemeral container legacy-token references cannot evade workload lint", () => {
+  const pod = workload();
+  pod.spec.template.spec.ephemeralContainers = [{ name: "debug", env: [{ name: "TOKEN",
+    valueFrom: { secretKeyRef: { name: "legacy", key: "token" } } }] }];
+  const secret = { kind: "Secret", metadata: { name: "legacy", namespace: "example" }, type: "kubernetes.io/service-account-token" };
+  const report = inspect([pod, account, secret]);
+  assert.equal(report.ok, false);
+  assert.deepEqual(rules(report), ["legacy_token"]);
+  assert.doesNotMatch(JSON.stringify(report), /debug|TOKEN|secretKeyRef/);
 });
 
 test("legacy token Secret metadata detects volume, projection and environment mounting", () => {

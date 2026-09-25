@@ -33,7 +33,10 @@ acceptance. There is deliberately no apply mode.
 
 The Kubernetes exception format is an exact kind/namespace/name/rule plus owner,
 reason and expiry (maximum 90 days). Missing role/account inventories are not
-waivable. An automount patch must not be used for workloads with explicit
+waivable, including a missing default service account even when its use has an
+approved exception. Legacy token references in regular, init and ephemeral
+container environments are checked against supplied token-Secret metadata.
+An automount patch must not be used for workloads with explicit
 projected service-account tokens or an unknown Kubernetes API dependency.
 
 `probeTransportPolicy` is an exported, separate opt-in function for an approved

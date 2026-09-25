@@ -57,12 +57,12 @@ export function inspectKubernetesPosture(input, { exceptions = [], now = Date.no
       if (explicit !== undefined && typeof explicit !== "boolean") throw new Error("invalid_automount_policy");
       if (explicit === undefined) finding(object, "implicit_automount");
       if (explicit !== false) finding(object, "api_token");
-      if (!sa && account !== "default") finding(object, "service_account_not_in_inventory");
+      if (!sa) finding(object, "service_account_not_in_inventory");
       if (spec.volumes !== undefined && !Array.isArray(spec.volumes)) throw new Error("invalid_volumes");
       if (spec.volumes?.some(volume => volume.projected?.sources?.some(source => source.serviceAccountToken !== undefined))) finding(object, "projected_token");
       const secretRefs = (spec.volumes || []).flatMap(volume => [volume.secret?.secretName,
         ...(volume.projected?.sources || []).map(source => source.secret?.name)]).filter(Boolean);
-      for (const container of [...spec.containers, ...(spec.initContainers || [])]) {
+      for (const container of [...spec.containers, ...(spec.initContainers || []), ...(spec.ephemeralContainers || [])]) {
         secretRefs.push(...(container.env || []).map(entry => entry.valueFrom?.secretKeyRef?.name).filter(Boolean),
           ...(container.envFrom || []).map(entry => entry.secretRef?.name).filter(Boolean));
       }

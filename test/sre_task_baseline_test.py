@@ -69,6 +69,24 @@ class TaskBaselineTest(unittest.TestCase):
                 baseline.collect("guessed", now=3)
             baseline.close()
 
+    def test_replayed_or_backward_samples_cannot_inflate_phase_evidence_after_restart(self):
+        with tempfile.TemporaryDirectory() as directory:
+            baseline = Baseline(directory, ["example.service"])
+            baseline.collect("normal", now=100, runner=lambda *a, **k: response())
+            baseline.close()
+            reopened = Baseline(directory, ["example.service"])
+            try:
+                for stamp in (100, 99, True, float("nan"), float("inf")):
+                    with self.subTest(stamp=stamp), self.assertRaises(ValueError):
+                        reopened.collect("peak", now=stamp, runner=lambda *a, **k: response(999))
+                row = reopened.report()["services"][0]
+                self.assertEqual(row["sample_count"], 1)
+                self.assertEqual(row["phase_counts"]["peak"], 0)
+                reopened.collect("recovery", now=101, runner=lambda *a, **k: response())
+                self.assertEqual(reopened.report()["services"][0]["sample_count"], 2)
+            finally:
+                reopened.close()
+
 
 if __name__ == "__main__":
     unittest.main()
