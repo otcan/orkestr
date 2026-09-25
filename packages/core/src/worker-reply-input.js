@@ -1,5 +1,6 @@
 import { getThreadForPrincipal } from "./threads.js";
 import { createWorkerReplyDeliveryIntent } from "./reply-delivery-intent.js";
+import { resourceOwnerUserId } from "./policy.js";
 
 function reject(code, statusCode = 403) {
   throw Object.assign(new Error(code), { statusCode });
@@ -14,7 +15,9 @@ export async function prepareWorkerReplyInput(thread, body, principal, env = pro
   if (principal.kind !== "user" || principal.userId !== thread.ownerUserId) reject("worker_reply_owner_required");
   if (thread.threadKind !== "worker" || !thread.parentThreadId) reject("worker_reply_worker_required", 409);
   const parent = await getThreadForPrincipal(thread.parentThreadId, principal, env);
-  if (!parent || parent.ownerUserId !== thread.ownerUserId) reject("worker_reply_parent_owner_mismatch");
+  // Legacy parents may predate ownerUserId. Use the same ownership policy as
+  // resource access; admin read access alone must never authorize a foreign owner.
+  if (!parent || resourceOwnerUserId(parent, env) !== thread.ownerUserId) reject("worker_reply_parent_owner_mismatch");
   const replyDeliveryIntent = createWorkerReplyDeliveryIntent(thread, {
     mode: body.workerReplyDelivery, requestedByUserId: principal.userId,
   });
