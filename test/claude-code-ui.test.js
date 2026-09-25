@@ -20,6 +20,12 @@ test("Claude account UI uses opaque profiles and attended login APIs", async () 
   assert.match(accounts, /One-time authorization code/);
   assert.match(accounts, /submitLlmAccountLoginCode\(account\.id, code\)/);
   assert.match(accounts, /this\.authorizationCode = ""/);
+  assert.match(accounts, /Recheck after plan change/);
+  assert.match(accounts, /cannot verify the subscription tier or remaining quota/);
+  assert.match(accounts, /Failed prompts were not replayed; retry one explicitly when ready/);
+  assert.match(accounts, /account\.state === 'login_required' \|\| account\.state === 'error'/);
+  assert.match(accounts, /busy \|\| account\.state === 'revoked'/);
+  assert.doesNotMatch(accounts, /replayLlm|retryThread|enqueueThreadInput|wakeThread/);
   assert.match(api, /\/login\/code/);
   assert.match(api, /\/llm-accounts/);
   assert.doesNotMatch(accounts, /credentialRoot|CLAUDE_CONFIG_DIR|ANTHROPIC_API_KEY/);

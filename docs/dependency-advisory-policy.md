@@ -92,9 +92,14 @@ through review rather than silently enabling scripts for all packages.
 
 `.github/dependency-required-checks.json` is an integration contract, NOT proof
 of branch protection. ORK-478 owns live ruleset design and approval. Require
-`dependency-policy` (GitHub Actions producer) alongside `secret-scan`, preserving
+`dependency-policy` and `secret-policy` (GitHub Actions producer) alongside
+`secret-scan`, preserving
 all other existing checks. Require up-to-date branches, owner review of
 workflow/scanner/exception/CODEOWNERS changes, and no silent admin bypass.
+Protect package manifests, lockfile and npm configuration as well: they select
+the parser and the workflow-check command. `secret-policy` additionally requires
+successful aggregate-evidence publication; `secret-scan` alone is not the
+complete ORK-508 landing contract.
 A normal required status check alone cannot prevent a writer modifying its
 own workflow to forge success; protect workflow/policy review or use a separately
 managed required workflow under the reviewed ORK-478 design.

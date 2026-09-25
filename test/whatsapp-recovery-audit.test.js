@@ -84,6 +84,29 @@ test("recovery audit requires explicit scope and never reports unrelated data", 
   assert.throws(() => audit([null]), /inventory/);
 });
 
+test("source alias conflicts and duplicate inventory IDs cannot qualify recovery", () => {
+  for (const patch of [{ executorThreadId: "other-generation" },
+    { codexTurnId: "turn-a", executorTurnId: "other-turn" },
+    { codexItemId: "item-a", executorItemId: "other-item" }]) {
+    assert.equal(audit([job], [{ ...message, ...patch }]).counts.unresolved, 1);
+  }
+  assert.equal(audit([job], [message, { ...message, ownerUserId: "other" }]).counts.unresolved, 1);
+});
+
+test("a delivered sibling cannot hide uncertain, conflicting or duplicate lineage records", () => {
+  const delivered = { ...job, id: "delivered", state: "delivered" };
+  for (const sibling of [
+    { ...job, id: "conflict", sourceRevision: "different" },
+    { ...job, id: "uncertain", state: "delivery_uncertain" },
+    { ...job, id: "partial", state: "partial_delivery" },
+    { ...job, id: "inflight", state: "claimed" },
+    { ...delivered },
+  ]) {
+    const result = audit([job, delivered, sibling]);
+    assert.equal(result.rows.find(row => row.jobId === job.id).disposition, "unresolved");
+  }
+});
+
 test("repository and CLI recovery audit preserve storage and never call a transport", async t => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "ork-recovery-audit-"));
   t.after(() => fs.rm(home, { recursive: true, force: true, maxRetries: 5 }));

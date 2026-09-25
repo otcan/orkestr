@@ -130,7 +130,9 @@ directory and `--phase normal|startup|peak|recovery`; omit phase for a report.
 The service scope is bound to the durable evidence window. Reports show sampled
 peak/p95, failed observations, gaps and missing workload phases. They never
 recommend or apply a limit. Samples are not continuous peak tracking, and operator
-phase labels do not prove representative load. Read failures remain missing
+phase labels do not prove representative load. Replayed or backward timestamps
+are rejected transactionally, including after recorder restart, so they cannot
+inflate phase counts. Read failures remain missing
 evidence rather than zero usage. At 10,000 observations collection stops without
 deleting evidence. No timer, restart, alert, load generator or limit is installed.
 

@@ -59,8 +59,10 @@ test("tenant WhatsApp routes store scoped tokens outside the public VM registry"
   assert.equal(configured.route.bridgeTokenSync.recommendedEnv.WHATSAPP_BRIDGE_TOKEN, configured.route.bridgeSendToken);
   assert.equal(configured.route.bridgeTokenSync.recommendedEnv.ORKESTR_CONNECTORS_MCP_BEARER_TOKEN, configured.route.bridgeSendToken);
   assert.equal(configured.route.tokenConfigured, true);
-  assert.equal(configured.route.diagnostics.status, "active");
-  assert.equal(configured.route.diagnostics.nextAction, "sync_whatsapp_inbound_token_to_target");
+  assert.equal(configured.route.forwardingReady, false);
+  assert.equal(configured.route.targetReachability, "not_checked");
+  assert.equal(configured.route.diagnostics.status, "target_not_checked");
+  assert.equal(configured.route.diagnostics.nextAction, "verify_target_reachability");
   assert.equal(configured.route.tokenSync.recommendedEnv.ORKESTR_WHATSAPP_INBOUND_TOKEN, configured.route.token);
   assert.equal(vm.connectors.whatsappChatId, "wa-group-zero@g.us");
   assert.equal(vm.connectors.whatsappRouteEnabled, true);
@@ -154,6 +156,8 @@ test("tenant WhatsApp route listings expose reachable targets as forwarding-read
     chatId: "wa-group-reachable@g.us",
     accountId: "tenant-wa",
   }, env);
+  assert.equal(configured.route.forwardingReady, false);
+  assert.equal(configured.route.targetReachability, "not_checked");
   const originalFetch = globalThis.fetch;
   const calls = [];
   globalThis.fetch = async (url, options = {}) => {

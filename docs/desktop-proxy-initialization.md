@@ -66,6 +66,25 @@ upstream access after revocation. Transport fixtures cover header/body stalls,
 error-body stalls, downstream cancellation, invalid/oversized WebSocket
 handshakes and continued traffic after successful upgrade.
 
+Rejected WebSocket handshakes close the downstream after flushing the error,
+even when the client keeps its write side open. The half-open transport fixture
+guards against retaining a socket after its handshake deadline is cleared.
+Malformed percent encoding on upgrade routes returns a generic 400 before
+authorization or target lookup; the routing fixture verifies that the async
+upgrade listener does not reject into the server event loop. Both regressions
+were reproduced against worker base `03e12e59` before applying the fixes.
+
+The bounded ORK-499 follow-up passed 65 isolated tests across target, adapter,
+proxy initialization/transport/routing/lifecycle, access, capability-broker and
+share suites after `npm run build:server`. Use
+`ORKESTR_HOST_BOUNDARIES=0 node --import ./test/test-bootstrap.mjs --test`
+with those test files. The real-proxy fixture measured 502/578/779 ms for
+6/16/44 concurrent assets, each with one target read. Its injected upstream
+inventory delay is 250 ms; the 44-request observation exceeds the nominal
+250+500 ms budget by 29 ms. The fixture's 3000 ms regression bound passed;
+this is not evidence that all proposed performance budgets passed. No live
+desktop interaction, service restart or configuration change was performed.
+
 Fixture timings are regression evidence, not a production Keycloak/browser
 waterfall. Before marking the incident resolved after release, capture cold and
 warm authenticated browser loads on desktop and mobile: HTML, JavaScript
@@ -74,3 +93,10 @@ Compare against the pre-release waterfall and phase metrics. Verify grant/share
 revocation and restart/reconnect behavior; do not tune framebuffer/XDAMAGE
 settings based solely on initialization latency. Keep deployment and rollback
 evidence in the release train.
+
+Live acceptance remains separate: record client, bandwidth, RTT and cache state
+for authenticated desktop and mobile waterfalls. Check warm asset p95 <= 500 ms,
+cold fanout within one bounded lookup plus 500 ms, and first-frame p95 <= 5 s
+under the proposed <= 80 ms RTT profile with an already-running desktop. Report
+unmet budgets explicitly. Isolated loopback fixtures do not establish Keycloak
+navigation-to-WebSocket or navigation-to-first-frame performance.

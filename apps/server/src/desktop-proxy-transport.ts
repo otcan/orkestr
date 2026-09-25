@@ -71,7 +71,9 @@ export function proxyDesktopSocket(
     clearTimeout(timer);
     timing("websocket_handshake", start, status === 504 ? "timeout" : "error");
     upstream.destroy();
-    if (!socket.destroyed) socket.end(`HTTP/1.1 ${status} Bad Gateway\r\nConnection: close\r\nContent-Length: ${Buffer.byteLength(code)}\r\n\r\n${code}`);
+    // Do not wait for the peer's FIN after rejection: an allowHalfOpen client
+    // can otherwise retain this socket after the handshake timer is cleared.
+    if (!socket.destroyed) socket.end(`HTTP/1.1 ${status} Bad Gateway\r\nConnection: close\r\nContent-Length: ${Buffer.byteLength(code)}\r\n\r\n${code}`, () => socket.destroy());
   };
   const timer = setTimeout(() => fail("desktop_websocket_timeout", 504),
     desktopProxyTimeout(env, "ORKESTR_DESKTOP_PROXY_WS_TIMEOUT_MS", 10_000));

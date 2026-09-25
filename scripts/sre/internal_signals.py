@@ -99,7 +99,10 @@ def command_json(arguments, runner):
                     env={"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL": "C"})
     if result.returncode or len(result.stdout) > 65536:
         raise ValueError("metadata read failed")
-    return json.loads(result.stdout)
+    rows = json.loads(result.stdout)
+    if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
+        raise ValueError("metadata record list required")
+    return rows
 
 
 def collect(policy, now=None, runner=subprocess.run, read_text=None):
@@ -128,6 +131,10 @@ def collect(policy, now=None, runner=subprocess.run, read_text=None):
             errors.append("route_read_failed")
     try:
         links = command_json(["ip", "-j", "link", "show"], runner)
+        # Even an isolated network namespace has a loopback link. Missing names
+        # or an empty inventory cannot establish absence of a prohibited link.
+        if not links or any(not isinstance(link.get("ifname"), str) or not link["ifname"] for link in links):
+            raise ValueError("complete link metadata required")
         vpn_absent = all(link.get("ifname") != "nordlynx" for link in links)
         for unit in ("nordvpn.service", "nordvpnd.service", "nordvpnd.socket"):
             result = runner(["systemctl", "show", unit, "--no-pager", "--property=Id,ActiveState,UnitFileState"],
@@ -187,6 +194,8 @@ def load_signal(path, source_id, policy_digest, now, stale_seconds=120):
     for key in ("route_ok", "resource_pressure", "vpn_absent"):
         if type(signal.get(key)) is not bool:
             raise ValueError("invalid internal telemetry boolean")
+    if signal["route_ok"] and not signal["vpn_absent"]:
+        raise ValueError("inconsistent internal route telemetry")
     # No caller extras, file paths or arbitrary text enter the incident record.
     return {key: signal.get(key) for key in ("observed_at", "route_ok", "resource_pressure")}
 

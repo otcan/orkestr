@@ -25,10 +25,17 @@ import { ApiService, LlmAccountLoginSession, LlmAccountProfile } from "./api.ser
           <article>
             <div><strong>{{ account.label }}</strong><span>{{ account.provider }} · {{ account.state }}</span></div>
             <div class="actions">
-              @if (account.state !== 'ready') { <button type="button" (click)="connect(account)" [disabled]="busy">Connect</button> }
-              <button class="secondary" type="button" (click)="verify(account)" [disabled]="busy">Verify login</button>
+              @if (account.state === 'login_required' || account.state === 'error') {
+                <button type="button" (click)="connect(account)" [disabled]="busy">Connect</button>
+              }
+              <button class="secondary" type="button" (click)="verify(account)" [disabled]="busy || account.state === 'revoked'">
+                {{ account.state === 'rate_limited' ? 'Recheck after plan change' : 'Verify login' }}
+              </button>
               <button class="secondary danger-soft" type="button" (click)="revoke(account)" [disabled]="busy || account.state === 'revoked'">Revoke</button>
             </div>
+            @if (account.state === 'rate_limited') {
+              <small class="profile-note">Recheck confirms the server login only. It cannot verify the subscription tier or remaining quota, and it never replays failed prompts.</small>
+            }
             @if (activeLoginProfileId === account.id && account.state !== 'ready') {
               <form class="code-form" (submit)="completeLogin(account); $event.preventDefault()">
                 <label>One-time authorization code
@@ -50,8 +57,9 @@ import { ApiService, LlmAccountLoginSession, LlmAccountProfile } from "./api.ser
     form { justify-content:flex-start; flex-wrap:wrap; }
     input { min-width:220px; padding:8px; }
     .profiles { display:grid; gap:8px; }
-    article { border:1px solid var(--line, #d7d7d7); border-radius:10px; padding:12px; }
+    article { border:1px solid var(--line, #d7d7d7); border-radius:10px; padding:12px; flex-wrap:wrap; }
     .code-form { width:100%; justify-content:flex-start; flex-wrap:wrap; }
+    .profile-note { flex:1 1 100%; }
     article span, small { opacity:.75; }
     .error { color:var(--danger, #a22); }
   `],
@@ -94,11 +102,18 @@ export class LlmAccountsComponent implements OnInit {
   }
 
   async verify(account: LlmAccountProfile): Promise<void> {
+    const recheckingPlanChange = account.state === "rate_limited";
     this.busy = true; this.error = this.notice = "";
     try {
       const result = await firstValueFrom(this.api.verifyLlmAccount(account.id));
       this.replace(result.account);
-      this.notice = result.status.authenticated ? `${account.label} is ready.` : `${account.label} still needs an attended Claude login.`;
+      if (recheckingPlanChange) {
+        this.notice = result.status.authenticated
+          ? `${account.label} login is valid. The subscription tier and remaining quota were not verified. Failed prompts were not replayed; retry one explicitly when ready.`
+          : `${account.label} still needs an attended Claude login. The subscription tier and remaining quota were not verified, and failed prompts were not replayed.`;
+      } else {
+        this.notice = result.status.authenticated ? `${account.label} is ready.` : `${account.label} still needs an attended Claude login.`;
+      }
     } catch (error: any) { this.error = error?.error?.message || error?.error?.error || "Could not verify the Claude profile."; }
     finally { this.busy = false; this.detector.markForCheck(); }
   }

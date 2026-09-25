@@ -48,6 +48,27 @@ test("completed answers require exact owner/generation binding", () => {
   }
 });
 
+test("conflicting or duplicate resolution evidence stays under manual review", () => {
+  const answer = { id: "answer", role: "user", ownerUserId: scope.ownerUserId,
+    codexThreadId: scope.runtimeGeneration, answeredInputMessageId: question.id, state: "completed" };
+  for (const patch of [{ executorThreadId: "other-generation" },
+    { codexThreadId: "other-generation", executorThreadId: scope.runtimeGeneration },
+    { codexTurnId: "turn-a", executorTurnId: "other-turn" },
+    { codexRequestId: "request-a", executorRequestId: "other-request" }]) {
+    assert.equal(auditCodexQuestions(thread, [question, { ...answer, ...patch }], scope).counts.manual_review, 1);
+    assert.equal(auditCodexQuestions(thread, [question, answer, { ...answer, ...patch, id: "conflicting-answer" }], scope).counts.manual_review, 1);
+  }
+  assert.equal(auditCodexQuestions(thread, [question, answer, answer], scope).counts.manual_review, 1);
+});
+
+test("pending native requests cannot qualify with conflicting generation aliases", () => {
+  const native = { ...question, source: "codex-app-server", codexRequestId: "42" };
+  const pendingRequest = { requestId: 42, method: "item/tool/requestUserInput",
+    codexThreadId: scope.runtimeGeneration, params: { threadId: "other-generation", turnId: "turn-a" } };
+  assert.equal(auditCodexQuestions({ ...thread, runtime: { ...thread.runtime, pendingRequest } },
+    [native], scope).counts.manual_review, 1);
+});
+
 test("repository question report leaves runtime, messages, events and outbox unchanged", async t => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "ork-question-audit-"));
   t.after(() => fs.rm(home, { recursive: true, force: true, maxRetries: 5 }));

@@ -108,6 +108,10 @@ process.stdin.on("end", () => {
         { type: "text", text: "I am inspecting the relevant implementation." },
         { type: "tool_use", name: "Read", input: { path: "/private/path", token: "must-not-leak-progress" } }
       ] } }) + "\\n");
+      process.stdout.write(JSON.stringify({ type: "assistant", session_id: session, message: { content: [
+        { type: "text", text: "This immediate second milestone should be throttled." },
+        { type: "tool_use", name: "Bash", input: { command: "must-not-leak-command" } }
+      ] } }) + "\\n");
     }
     process.stdout.write(JSON.stringify({ type: "assistant", session_id: session, message: { content: [{ type: "text", text: "draft" }] } }) + "\\n");
     process.stdout.write(JSON.stringify({ type: "result", session_id: session, model: "claude-sonnet-fixture", result: "Reply: " + prompt.trim(), is_error: false, usage: { input_tokens: 120, output_tokens: 30, cache_read_input_tokens: 50 } }) + "\\n");
@@ -436,11 +440,18 @@ test("Claude progress projection requires tool-backed assistant events and never
   });
   assert.equal(described, "I am checking the focused tests.");
   assert.equal(described.includes("private command"), false);
+  const redacted = claudeCodeProgressText({
+    type: "assistant",
+    message: { content: [
+      { type: "text", text: "I am reading /home/example/private/config.json with token=must-not-leak and Bearer secret-value." },
+      { type: "tool_use", name: "Read", input: { path: "/home/example/private/config.json" } },
+    ] },
+  });
+  assert.equal(redacted, "I am reading [redacted-path] with token=[redacted] and Bearer [redacted]");
 });
 
 test("Claude WhatsApp turns persist bounded progress before the final answer", async (t) => {
   const { env } = await fixture(t, "whatsapp-progress");
-  env.ORKESTR_CLAUDE_PROGRESS_MIN_INTERVAL_MS = "0";
   const profile = await readyProfile("owner", "WhatsApp progress", env);
   const thread = await claudeThread("owner", profile.id, env, "claude-whatsapp-progress");
   const input = await enqueueThreadInput(thread.id, {
@@ -460,7 +471,9 @@ test("Claude WhatsApp turns persist bounded progress before the final answer", a
     ["final_answer", "Reply: stream progress"],
   ]);
   assert.equal(JSON.stringify(assistant).includes("must-not-leak-progress"), false);
+  assert.equal(JSON.stringify(assistant).includes("must-not-leak-command"), false);
   assert.equal(JSON.stringify(assistant).includes("/private/path"), false);
+  assert.equal(JSON.stringify(assistant).includes("immediate second milestone"), false);
   assert.equal(assistant.every((message) => message.parentMessageId === input.id), true);
 });
 

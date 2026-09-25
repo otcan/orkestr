@@ -36,12 +36,12 @@ async function mergeFixture(t) {
   git(["symbolic-ref", "HEAD", "refs/heads/main"]);
   assert.deepEqual(git(["show", "--no-patch", "--format=%P", merge]).split(" "), [left, right]);
   for (const parent of [base, left, right]) assert.equal(git(["show", `${parent}:fixture.txt`]).includes(marker), false);
-  return { git, base };
+  return { git, base, merge };
 }
 
-for (const scope of ["all local refs", "commit range"]) {
+for (const scope of ["explicit target history", "commit range"]) {
   test(`secret scan includes merge-only additions across ${scope}`, async t => {
-    const { git, base } = await mergeFixture(t);
+    const { git, base, merge } = await mergeFixture(t);
     const baseCommit = scope === "commit range" ? base : "";
     const oldOptions = baseCommit ? `${baseCommit}..HEAD` : "--all";
     const oldDiff = git(["log", "-p", "-U0", oldOptions]);
@@ -49,7 +49,7 @@ for (const scope of ["all local refs", "commit range"]) {
 
     // Gitleaks splits --log-opts on spaces and appends the resulting arguments
     // to git log -p -U0. Exercise that same parser-visible patch stream.
-    const reviewedOptions = scannerLogOptions(baseCommit).split(" ");
+    const reviewedOptions = scannerLogOptions({ commits: [merge], baseCommit }).split(" ");
     const reviewedDiff = git(["log", "-p", "-U0", ...reviewedOptions]);
     assert.match(reviewedDiff, new RegExp(`^\\+${marker}$`, "m"));
     assert.ok(reviewedOptions.includes("--no-ext-diff"));
@@ -59,6 +59,6 @@ for (const scope of ["all local refs", "commit range"]) {
 
 test("scanner log options reject revision arguments that could become Git options", () => {
   for (const baseCommit of ["HEAD", "--all", "a".repeat(40) + " --textconv", "a".repeat(40) + "\n--ext-diff"]) {
-    assert.throws(() => scannerLogOptions(baseCommit), /explicit_scan_scope_required/);
+    assert.throws(() => scannerLogOptions({ commits: ["b".repeat(40)], baseCommit }), /explicit_scan_scope_required/);
   }
 });
