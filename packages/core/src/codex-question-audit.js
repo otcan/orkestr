@@ -9,6 +9,9 @@ const clean = value => String(value ?? "").trim();
 const generation = row => clean(row.codexThreadId || row.executorThreadId);
 const requestId = row => clean(row.codexRequestId || row.executorRequestId);
 const digest = value => inputDigest(JSON.stringify(value));
+const aliasesAgree = row => ["Thread", "Turn", "Request"].every(kind =>
+  !clean(row[`codex${kind}Id`]) || !clean(row[`executor${kind}Id`]) ||
+  clean(row[`codex${kind}Id`]) === clean(row[`executor${kind}Id`]));
 
 // No rollout files, provider calls, hydration or completion hooks. A candidate
 // is a review target, not permission to rewrite history or answer a request.
@@ -23,13 +26,16 @@ export function auditCodexQuestions(thread, messages, { ownerUserId, runtimeGene
   }
   const pending = thread.runtime?.pendingRequest;
   const pendingId = clean(pending?.requestId);
-  const identities = new Map(), answeredIds = new Set();
+  const identities = new Map(), answeredIds = new Set(), ambiguousAnswers = new Set();
   for (const row of messages) {
     identities.set(row.id, (identities.get(row.id) || 0) + 1);
+  }
+  for (const row of messages) {
     if (row.role === "user" && row.ownerUserId === ownerUserId && (!row.threadId || row.threadId === thread.id) &&
         generation(row) === runtimeGeneration && row.state === "completed") {
-      if (row.answeredInputMessageId) answeredIds.add(row.answeredInputMessageId);
-      if (row.canceledInputMessageId) answeredIds.add(row.canceledInputMessageId);
+      const target = aliasesAgree(row) && identities.get(row.id) === 1 ? answeredIds : ambiguousAnswers;
+      if (row.answeredInputMessageId) target.add(row.answeredInputMessageId);
+      if (row.canceledInputMessageId) target.add(row.canceledInputMessageId);
     }
   }
   const rows = [];
@@ -45,12 +51,15 @@ export function auditCodexQuestions(thread, messages, { ownerUserId, runtimeGene
     const unique = identities.get(message.id) === 1;
     const answered = answeredIds.has(message.id);
     if (sameGeneration && unique) {
-      if (answered || message.supersededBy || message.visibility === "internal") {
+      if (ambiguousAnswers.has(message.id)) {
+        reason = "conflicting_resolution_evidence";
+      } else if (answered || message.supersededBy || message.visibility === "internal") {
         disposition = "resolved"; reason = "persisted_resolution";
       } else if (requestId(message)) {
         const bound = pending?.method === "item/tool/requestUserInput" && pendingId === requestId(message) &&
           (!pending.threadId || pending.threadId === thread.id) &&
           clean(pending.codexThreadId || pending.params?.threadId) === runtimeGeneration &&
+          (!clean(pending.params?.threadId) || clean(pending.params.threadId) === runtimeGeneration) &&
           clean(pending.params?.turnId) === clean(message.codexTurnId || message.executorTurnId) &&
           clean(message.codexTurnId || message.executorTurnId);
         disposition = bound ? "pending_native" : "manual_review";

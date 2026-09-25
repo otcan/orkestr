@@ -6,13 +6,19 @@ import { withConnectorOutboxMutation } from "./connector-outbox-lock.js";
 import { createThreadMessageRepository } from "../../storage/src/repositories.js";
 import { withThreadMessageMutation } from "../../core/src/thread-message-mutation.js";
 import { getThread } from "../../core/src/threads.js";
+import { runtimeOutputMetadata } from "../../shared/src/runtime-output-identity.js";
 
 const clean = value => String(value ?? "").trim();
-const generation = row => clean(row.codexThreadId || row.executorThreadId);
 const digest = value => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const belongs = (row, scope) => row.ownerUserId === scope.ownerUserId && row.threadId === scope.threadId &&
   row.accountId === scope.accountId && row.chatId === scope.chatId && row.connector === "whatsapp";
 const availabilityCodes = new Set(["whatsapp_local_bridge_not_ready", "whatsapp_local_bridge_stale_runtime"]);
+function sourceIdentityMatches(row, runtimeGeneration) {
+  try { return runtimeOutputMetadata(row).runtimeGeneration === runtimeGeneration; }
+  catch { return false; }
+}
+const uncertainOrInflight = job => hasWhatsAppPartialDelivery(job) || requiresWhatsAppUncertainOverride(job) ||
+  ["claimed", "sent_to_broker"].includes(job.state);
 function availabilityFailure(job) {
   const evidence = job.metadata?.bridgeFailure || {};
   const code = clean(evidence.failureCode || job.metadata?.failureCode || job.error);
@@ -52,7 +58,7 @@ export function auditWhatsAppRecovery({ jobs, messages, complete = false }, scop
     let disposition = "unresolved", reason = "lineage_not_proven";
     const created = Date.parse(job.createdAt);
     const sources = (sourceRows.get(job.sourceMessageId) || []).filter(row => row.ownerUserId === scope.ownerUserId &&
-      (!row.threadId || row.threadId === scope.threadId) && generation(row) === scope.runtimeGeneration &&
+      (!row.threadId || row.threadId === scope.threadId) && sourceIdentityMatches(row, scope.runtimeGeneration) &&
       row.role === "assistant" && row.phase === "final_answer" && row.state === "completed" && !row.supersededBy);
     const related = [...new Set([...(jobsBySource.get(job.sourceMessageId) || []),
       ...(job.metadata?.canonicalFinalProjection === true ? jobsByTrace.get(job.metadata.routerTraceId) || [] : [])])];
@@ -60,19 +66,21 @@ export function auditWhatsAppRecovery({ jobs, messages, complete = false }, scop
     if (job.state === "delivered") { disposition = "delivered"; reason = "recorded_delivery"; }
     else if (["cancelled", "suppressed", "skipped", "skipped_policy"].includes(job.state)) {
       disposition = "skipped"; reason = "terminal_disposition";
-    } else if (hasWhatsAppPartialDelivery(job) || requiresWhatsAppUncertainOverride(job) ||
-        ["claimed", "sent_to_broker"].includes(job.state)) reason = "partial_uncertain_or_inflight";
+    } else if (uncertainOrInflight(job)) reason = "partial_uncertain_or_inflight";
     else if (!Number.isFinite(created)) reason = "missing_incident_timestamp";
     else if (created < Date.parse(scope.since) || created > Date.parse(scope.until)) {
       disposition = "skipped"; reason = "outside_incident_window";
     } else if (complete !== true) reason = "incomplete_inventory";
     else if (job.metadata?.runtimeGeneration !== scope.runtimeGeneration || sources.length !== 1 ||
+        sourceRows.get(job.sourceMessageId)?.length !== 1 ||
         jobsById.get(job.id).length !== 1) reason = "ambiguous_source_or_generation";
     else if (!job.payloadHash || !job.sourceRevision) reason = "missing_payload_revision";
+    else if (related.some(row => jobsById.get(row.id).length !== 1)) reason = "ambiguous_lineage_inventory";
+    else if (related.some(row => row.id !== job.id && !exactLineage(job, row))) reason = "conflicting_lineage_revision";
+    else if (lineage.some(row => row.id !== job.id && uncertainOrInflight(row))) reason = "partial_uncertain_or_inflight_lineage";
     else if (lineage.some(row => row.id !== job.id && row.state === "delivered")) {
       disposition = "duplicate"; reason = "exact_delivered_lineage";
-    } else if (related.some(row => row.id !== job.id && !exactLineage(job, row))) reason = "conflicting_lineage_revision";
-    else if (lineage.some(row => row.id !== job.id)) reason = "multiple_unresolved_lineage_records";
+    } else if (lineage.some(row => row.id !== job.id)) reason = "multiple_unresolved_lineage_records";
     else if (job.metadata?.nonRetryable === true || job.metadata?.retrySuppressed === true) reason = "retry_suppressed";
     else if (["failed_retryable", "dead_letter"].includes(job.state) && availabilityFailure(job)) {
       disposition = "eligible"; reason = "incident_availability_failure_review_required";
