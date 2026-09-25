@@ -373,6 +373,7 @@ export function whatsappDebugFooter({ message = {}, thread = {}, messages = [], 
   const weeklyReset = capacityResetLabel(providerRateLimitRecordForPeriod(thread, "weekly")?.resets_at, thread.whatsAppDebugOwnerTimezone);
   const parts = [
     `m:${modelDebugLabel(message, thread, env)}`,
+    ...(isClaude ? ["agent:claude-code"] : []),
     ...(!isClaude && codexFastDebugValue(message, thread) ? ["fast:on"] : []),
     ...(!isClaude && mode ? [`mode:${mode}`] : []),
     ...(runtimeSurface ? [`rt:${runtimeSurface}`] : []),

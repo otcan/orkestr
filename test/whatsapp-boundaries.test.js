@@ -11,7 +11,7 @@ import {
   outboundDeliveryKey,
   pruneOutboundDeliveryClaims,
 } from "../packages/connectors/src/whatsapp-delivery-ledger.js";
-import { appendWhatsAppDebugFooter, formatWhatsAppOutboundText } from "../packages/connectors/src/whatsapp-formatting.js";
+import { appendWhatsAppDebugFooter, formatWhatsAppOutboundText, stripWhatsAppDebugFooter } from "../packages/connectors/src/whatsapp-formatting.js";
 import { whatsappInboundThreadMatchesBinding } from "../packages/connectors/src/whatsapp-inbound-routing.js";
 import { shouldMirrorWhatsAppProgress, shouldMirrorWhatsAppReply } from "../packages/connectors/src/whatsapp-mirror-policy.js";
 import { formatWhatsAppQueueNotice, initialQueueDeliveryState } from "../packages/connectors/src/whatsapp-outbound-mirror.js";
@@ -113,8 +113,9 @@ test("WhatsApp debug footer reports Claude Code model, runtime, and usage withou
     thread,
   });
 
-  assert.match(final, /^Done\n\ndbg: m:sonnet\/h · rt:claude · msg:final · 5h:80% · wk:65%/);
+  assert.match(final, /^Done\n\ndbg: m:sonnet\/h · agent:claude-code · rt:claude · msg:final · 5h:80% · wk:65%/);
   assert.doesNotMatch(final, /fast:|mode:|model:\/model|mode-switch:|rt-switch:/);
+  assert.equal(stripWhatsAppDebugFooter(final), "Done");
 
   const waking = appendWhatsAppDebugFooter("Waking this thread.", {
     env: { ORKESTR_WHATSAPP_DEBUG_FOOTER: "1" },
@@ -123,7 +124,7 @@ test("WhatsApp debug footer reports Claude Code model, runtime, and usage withou
     thread,
     messages: [],
   });
-  assert.match(waking, /^Waking this thread\.\n\ndbg: m:sonnet\/h · rt:claude · msg:update · 5h:80% · wk:65% · queue:1 · reason:waking/);
+  assert.match(waking, /^Waking this thread\.\n\ndbg: m:sonnet\/h · agent:claude-code · rt:claude · msg:update · 5h:80% · wk:65% · queue:1 · reason:waking/);
   assert.doesNotMatch(waking, /mode-switch:|rt-switch:/);
 });
 
