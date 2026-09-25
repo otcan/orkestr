@@ -37,7 +37,8 @@ setTimeout(() => console.log(JSON.stringify({ok:true, sessions:[session], sessio
     await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
     for (const key of Object.keys(process.env)) if (!(key in before)) delete process.env[key];
     Object.assign(process.env, before);
-    await fs.rm(home, {recursive:true, force:true, maxRetries:3, retryDelay:50});
+    // Server-close can race the final asynchronous audit write on busy CI hosts.
+    await fs.rm(home, {recursive:true, force:true, maxRetries:5, retryDelay:100});
   });
   return {
     set,
