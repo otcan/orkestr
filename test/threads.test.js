@@ -8858,7 +8858,9 @@ test("thread message API keeps a legacy epoch duplicate final in the current pag
   const { port } = server.address();
   const baseUrl = `http://127.0.0.1:${port}`;
   try {
-    const env = { ORKESTR_HOME: home };
+    // Seed the same backend as the HTTP server. A home-only environment writes
+    // JSON while CI's server reads SQLite, racing its one-time JSON migration.
+    const env = { ...process.env, ORKESTR_HOME: home };
     const epochSeconds = "1786352641";
     const epochMs = Number(epochSeconds) * 1000;
     const expectedTimestamp = new Date(epochMs).toISOString();
@@ -8873,6 +8875,10 @@ test("thread message API keeps a legacy epoch duplicate final in the current pag
         createdAt: new Date(epochMs - (100 - index) * 1000).toISOString(),
       }, env);
     }
+    // Exercise a history read during seeding, as the runtime monitor can do.
+    const priorPage = await fetch(`${baseUrl}/api/threads/epoch-duplicate-api-thread/messages`);
+    assert.equal(priorPage.status, 200);
+    await priorPage.json();
     await appendThreadMessage("epoch-duplicate-api-thread", {
       role: "assistant",
       source: "codex-app-server",
