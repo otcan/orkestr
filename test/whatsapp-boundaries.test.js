@@ -14,7 +14,7 @@ import {
 import { appendWhatsAppDebugFooter, formatWhatsAppOutboundText } from "../packages/connectors/src/whatsapp-formatting.js";
 import { whatsappInboundThreadMatchesBinding } from "../packages/connectors/src/whatsapp-inbound-routing.js";
 import { shouldMirrorWhatsAppProgress, shouldMirrorWhatsAppReply } from "../packages/connectors/src/whatsapp-mirror-policy.js";
-import { initialQueueDeliveryState } from "../packages/connectors/src/whatsapp-outbound-mirror.js";
+import { formatWhatsAppQueueNotice, initialQueueDeliveryState } from "../packages/connectors/src/whatsapp-outbound-mirror.js";
 import { createWhatsAppOutboundMirrorWorker } from "../packages/connectors/src/whatsapp-outbound-worker.js";
 
 test("WhatsApp formatting strips plan envelopes and preserves code fences", () => {
@@ -207,6 +207,22 @@ test("WhatsApp treats ready Claude Code as sessionless but immediately available
     promptReady: false,
     sessionName: null,
   }, { text: "wait for login" }), "waiting_runtime_ready");
+});
+
+test("WhatsApp explains Claude subscription limits without asking for another login", () => {
+  const notice = formatWhatsAppQueueNotice({
+    text: "Status?",
+    routerTraceId: "rt_fixture",
+    runtimeBlockReason: "claude_code_rate_limited",
+    runtimeBlockWindowMinutes: 300,
+    runtimeRetryAt: new Date(Date.now() + 65 * 60_000).toISOString(),
+  }, "waiting_runtime_ready");
+
+  assert.match(notice, /^Claude Code hit this subscription’s shared 5-hour usage limit\./);
+  assert.match(notice, /Retrying automatically in about 1h 5m; no new login is needed\./);
+  assert.match(notice, /Queued: "Status\?"\./);
+  assert.match(notice, /Trace: rt_fixture$/);
+  assert.doesNotMatch(notice, /handoff|startup/);
 });
 
 test("WhatsApp inbound routing requires explicit participants unless a generated group boundary is trusted", () => {

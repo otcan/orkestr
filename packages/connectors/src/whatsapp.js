@@ -10,6 +10,7 @@ import { resourceOwnerUserId } from "../../core/src/policy.js";
 import { adminPrincipal, userPrincipal } from "../../core/src/principal.js";
 import { appServerStateFromStatus } from "../../core/src/codex-app-server-common.js";
 import { clearRuntimeLeasesForThread, resolveCodexThreadMetadata, runtimeStatus } from "../../core/src/runtime-leases.js";
+import { claudeCodeRateLimitGate } from "../../core/src/claude-code-rate-limit.js";
 import { classifyApprovalReply } from "../../core/src/runtime-settings.js";
 import { processApiAgentThreadInput, threadUsesApiAgent } from "../../core/src/tenant-api-agent.js";
 import { parseThreadInputCommand } from "../../core/src/thread-commands.js";
@@ -3946,6 +3947,7 @@ function generatedWhatsAppQueueNoticeText(text = "") {
     /^Added after the current Codex turn(?:[:.]\s|$)/i,
     /^Queued your message while Orkestr prepares this thread(?:[:.]\s|$)/i,
     /^Runtime handoff is taking longer than expected(?:[:.]\s|$)/i,
+    /^Claude Code (?:hit this subscription['’]s shared|was rate-limited)(?:[:.]\s|$)/i,
     /^Waking this Orkestr thread and queued your message(?:[:.]\s|$)/i,
     /^Waking this thread\. Your message will run after startup(?:[:.]\s|$)/i,
     /^Queued your latest message while current work is still running(?:[:.]\s|$)/i,
@@ -5905,9 +5907,20 @@ export async function sendWhatsAppText({ chatId = "", text = "", accountId = "",
 
 async function annotateInitialThreadQueueNotice(threadId, message, env = process.env) {
   if (!threadId || !message?.id || message.duplicate) return message;
-  const deliveryState = initialQueueDeliveryState(await runtimeStatus(threadId, env).catch(() => null), message);
+  const status = await runtimeStatus(threadId, env).catch(() => null);
+  const deliveryState = initialQueueDeliveryState(status, message);
   if (!deliveryState) return message;
-  return updateThreadMessage(threadId, message.id, { deliveryState }, env).catch(() => message);
+  const rateLimit = status?.runtimeKind === "claude-code" && status?.error === "claude_code_rate_limited"
+    ? claudeCodeRateLimitGate(status)
+    : null;
+  return updateThreadMessage(threadId, message.id, {
+    deliveryState,
+    ...(rateLimit?.observed ? {
+      runtimeBlockReason: "claude_code_rate_limited",
+      runtimeRetryAt: rateLimit.retryAt,
+      runtimeBlockWindowMinutes: rateLimit.windowMinutes,
+    } : {}),
+  }, env).catch(() => message);
 }
 
 function whatsappDeliverySkippedSampleLimit(env = process.env) {

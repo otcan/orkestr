@@ -31,9 +31,10 @@ import {
   interruptClaudeCodeThread,
   resetClaudeCodeRuntimeForTest,
   sendClaudeCodeInput,
+  setClaudeCodeDeliveryScheduler,
   startClaudeCodeThread,
 } from "../packages/core/src/runtime-claude-code-adapter.js";
-import { createThread, enqueueThreadInput, getThread, listThreadMessages } from "../packages/core/src/threads.js";
+import { createThread, enqueueThreadInput, getThread, listThreadMessages, updateThread } from "../packages/core/src/threads.js";
 
 async function fixture(t, name = "runtime") {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), `orkestr-claude-${name}-`));
@@ -413,6 +414,56 @@ test("Claude failures are low-cardinality and profile revocation fences later tu
   assert.equal((await claudeCodeThreadStatus(thread, env)).accountState, "revoked");
   const blocked = await enqueueThreadInput(thread.id, { text: "must not run", source: "test" }, env);
   await assert.rejects(sendClaudeCodeInput(thread, blocked, env), /llm_account_profile_revoked/);
+});
+
+test("Claude rate-limit reset keeps input queued and recovers the existing login automatically", async (t) => {
+  const { calls, env } = await fixture(t, "rate-limit-recovery");
+  const profile = await readyProfile("owner", "Automatic recovery", env);
+  let thread = await claudeThread("owner", profile.id, env, "claude-rate-limit-recovery");
+  const retryAt = Date.now() + 120_000;
+  thread = await updateThread(thread.id, {
+    state: "failed",
+    lastError: "claude_code_rate_limited",
+    claudeRateLimits: {
+      primary: { used_percent: 100, window_minutes: 300, resets_at: Math.floor(retryAt / 1000) },
+      secondary: null,
+      plan_type: "claude_subscription",
+    },
+    runtime: { runtimeKind: "claude-code", state: "failed", activeTurnId: null },
+  }, env);
+  await updateLlmAccountProfileState("owner", profile.id, "rate_limited", { failureCode: "claude_code_rate_limited" }, env);
+  const input = await enqueueThreadInput(thread.id, { text: "continue after reset", source: "test" }, env);
+  const scheduled = [];
+  const clearScheduler = setClaudeCodeDeliveryScheduler((threadId, _env, delayMs) => scheduled.push({ threadId, delayMs }));
+  t.after(clearScheduler);
+
+  assert.deepEqual(await deliverClaudeCodePendingInputs(thread, env), []);
+  let queued = (await listThreadMessages(thread.id, env)).find((message) => message.id === input.id);
+  assert.equal(queued.state, "queued");
+  assert.equal(queued.deliveryState, "waiting_runtime_ready");
+  assert.equal(queued.runtimeBlockReason, "claude_code_rate_limited");
+  assert.equal(queued.runtimeBlockWindowMinutes, 300);
+  assert.equal(Date.parse(queued.runtimeRetryAt) >= retryAt - 1000, true);
+  assert.equal(scheduled.some((entry) => entry.delayMs > 100_000), true);
+
+  thread = await updateThread(thread.id, {
+    claudeRateLimits: {
+      primary: { used_percent: 100, window_minutes: 300, resets_at: Math.floor((Date.now() - 1000) / 1000) },
+      secondary: null,
+      plan_type: "claude_subscription",
+    },
+  }, env);
+  const recoveredStatus = await claudeCodeThreadStatus(thread, env);
+  assert.equal(recoveredStatus.accountState, "ready");
+  assert.equal(recoveredStatus.promptReady, true);
+  assert.equal(scheduled.some((entry) => entry.delayMs === 0), true);
+  assert.equal((await listLlmAccountProfiles("owner", {}, env))[0].state, "ready");
+  assert.deepEqual(await deliverClaudeCodePendingInputs(await getThread(thread.id, env), env), [input.id]);
+  queued = (await listThreadMessages(thread.id, env)).find((message) => message.id === input.id);
+  assert.equal(queued.state, "completed");
+  const recorded = (await fs.readFile(calls, "utf8")).trim().split("\n").map(JSON.parse);
+  assert.equal(recorded.length, 1);
+  assert.equal(recorded.some((entry) => entry.authCodeReceived), false);
 });
 
 test("Claude runtime kill switch fences existing ready threads", async (t) => {

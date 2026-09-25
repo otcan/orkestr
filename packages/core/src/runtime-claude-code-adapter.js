@@ -19,7 +19,8 @@ import {
   readClaudeCodeStatusTelemetry,
 } from "./claude-code-client.js";
 import { appendEvent } from "../../storage/src/store.js";
-import { resolveLlmAccountProfile, updateLlmAccountProfileState } from "./llm-account-profiles.js";
+import { updateLlmAccountProfileState } from "./llm-account-profiles.js";
+import { deferClaudeCodeRateLimitedInput, recoverClaudeCodeThreadState, resolveClaudeCodeRuntimeProfile } from "./claude-code-rate-limit.js";
 import { markConnectorDeliverySignal } from "./connector-delivery-signals.js";
 import {
   appendThreadMessage,
@@ -75,13 +76,7 @@ async function profileForThread(thread, env, requireReady = true) {
     error.statusCode = 409;
     throw error;
   }
-  return resolveLlmAccountProfile({
-    ownerUserId: thread.ownerUserId || thread.userId,
-    profileId: accountProfileId(thread),
-    provider: "claude-code",
-    requireReady,
-    allowRevoked: !requireReady,
-  }, env);
+  return resolveClaudeCodeRuntimeProfile(thread, env, requireReady);
 }
 
 async function runProcess({ thread, profile, prompt, sessionId, attemptId, onPromptSubmitted = null, env }) {
@@ -414,7 +409,14 @@ export async function deliverClaudeCodePendingInputs(thread, env = process.env) 
     const next = candidates[0];
     if (!next) break;
     const current = await getThread(thread.id, env) || thread;
-    const result = await sendClaudeCodeInput(current, next, env);
+    let result;
+    try {
+      result = await sendClaudeCodeInput(current, next, env);
+    } catch (error) {
+      if (error?.rateLimitPreflight !== true) throw error;
+      await deferClaudeCodeRateLimitedInput(current, next, error, deliveryScheduler, env);
+      break;
+    }
     if (result.skipped) break;
     delivered.push(next.id);
   }
@@ -438,6 +440,11 @@ export async function claudeCodeThreadStatus(thread, env = process.env, counts =
   const active = activeTurns.get(thread.id);
   let profileState = "unknown";
   try { profileState = (await profileForThread(thread, env, false)).state; } catch {}
+  if (!active) {
+    const recovery = await recoverClaudeCodeThreadState(thread, profileState, env);
+    thread = recovery.thread;
+    if (recovery.recovered) deliveryScheduler?.(thread.id, env, 0);
+  }
   const persistedState = clean(thread.runtime?.state || thread.state || "ready").toLowerCase();
   const state = active ? "working" : persistedState === "working" ? "interrupted" : persistedState;
   return {

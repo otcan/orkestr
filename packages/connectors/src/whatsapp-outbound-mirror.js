@@ -489,6 +489,7 @@ function stripQueuePreviewNoticeWrapper(text) {
     /^Added after the current Codex turn:\s*["“](.*)["”]\.\s*Use \/now to (?:interrupt|steer into the active turn)\.?\s*$/i,
     /^Queued your message while Orkestr prepares this thread:\s*["“](.*)["”]\.?\s*$/i,
     /^Runtime handoff is taking longer than expected:\s*["“](.*)["”]\.?\s*$/i,
+    /^Claude Code (?:hit this subscription['’]s shared .*|was rate-limited\..*) Queued:\s*["“](.*)["”]\.?\s*$/i,
     /^Waking this Orkestr thread and queued your message:\s*["“](.*)["”]\.?\s*$/i,
     /^Waking this thread\. Your message will run after startup:\s*["“](.*)["”]\.?\s*$/i,
     /^Queued your latest message while current work is still running:\s*["“](.*)["”]\.?\s*$/i,
@@ -508,6 +509,7 @@ function stripQueuePreviewNoticeWrapper(text) {
     /^Added after the current Codex turn:\s*["“]?/i,
     /^Queued your message while Orkestr prepares this thread:\s*["“]?/i,
     /^Runtime handoff is taking longer than expected:\s*["“]?/i,
+    /^Claude Code (?:hit this subscription['’]s shared .*|was rate-limited\..*) Queued:\s*["“]?/i,
     /^Waking this Orkestr thread and queued your message:\s*["“]?/i,
     /^Waking this thread\. Your message will run after startup:\s*["“]?/i,
     /^Queued your latest message while current work is still running:\s*["“]?/i,
@@ -540,6 +542,8 @@ function generatedQueueNoticePreviewFragment(text) {
     "added after the current codex turn",
     "queued your message while orkestr prepares",
     "runtime handoff is taking longer than expected",
+    "claude code hit this subscription",
+    "claude code was rate-limited",
     "waking this orkestr thread and queued",
     "waking this thread. your message will run after startup",
     "queued your latest message while current work",
@@ -567,10 +571,28 @@ function appendTraceReference(text = "", message = {}) {
   return lines.length ? `${text}\n${lines.join("\n")}` : text;
 }
 
+function approximateRetryDelay(retryAt = "") {
+  const remainingMinutes = Math.max(1, Math.ceil((Date.parse(String(retryAt || "")) - Date.now()) / 60_000));
+  if (!Number.isFinite(remainingMinutes)) return "";
+  if (remainingMinutes < 60) return `${remainingMinutes}m`;
+  const hours = Math.floor(remainingMinutes / 60);
+  const minutes = remainingMinutes % 60;
+  return minutes ? `${hours}h ${minutes}m` : `${hours}h`;
+}
+
 export function formatWhatsAppQueueNotice(message, reason = "") {
   const preview = queueNoticePreview(message);
   const normalizedReason = String(reason || "").trim().toLowerCase();
   let notice = "";
+  if (message?.runtimeBlockReason === "claude_code_rate_limited") {
+    const delay = approximateRetryDelay(message.runtimeRetryAt);
+    const windowMinutes = Number(message.runtimeBlockWindowMinutes);
+    const window = windowMinutes === 300 ? "5-hour " : windowMinutes === 10_080 ? "weekly " : "";
+    notice = delay
+      ? `Claude Code hit this subscription’s shared ${window}usage limit. Retrying automatically in about ${delay}; no new login is needed. Queued${queueNoticePreviewClause(preview)}`
+      : `Claude Code was rate-limited. Orkestr is rechecking the existing subscription automatically; no new login is needed. Queued${queueNoticePreviewClause(preview)}`;
+    return appendTraceReference(notice, message);
+  }
   if (normalizedReason === "awaiting_active_turn") {
     notice = `Added after the current Codex turn${queueNoticePreviewClause(preview)}`;
     return appendTraceReference(notice, message);
