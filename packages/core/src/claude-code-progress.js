@@ -5,6 +5,13 @@ function clean(value = "") {
   return String(value || "").trim();
 }
 
+function redactProgressText(value = "") {
+  return clean(value)
+    .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [redacted]")
+    .replace(/(authorization|token|secret|password|api[_-]?key|cookie)\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^\s,;]+)/gi, "$1=[redacted]")
+    .replace(/\/(?:root|home|opt|etc|var|run|tmp)\/[^\s"'`<>()[\]{}]+/g, "[redacted-path]");
+}
+
 function whatsappOrigin(message = {}) {
   return clean(message.connector).toLowerCase() === "whatsapp" ||
     ["whatsapp", "whatsapp_inbound", "whatsapp_client"].includes(clean(message.source).toLowerCase());
@@ -36,7 +43,7 @@ export function claudeCodeProgressText(event = {}) {
     .filter(Boolean)
     .join("\n")
     .trim();
-  return (text || toolProgressText(blocks)).slice(0, 1600);
+  return redactProgressText(text || toolProgressText(blocks)).slice(0, 1600);
 }
 
 function progressIntervalMs(env = process.env) {
@@ -58,7 +65,7 @@ export function createClaudeCodeProgressReporter({ thread = {}, parentMessage = 
   let pending = Promise.resolve();
 
   function queue(text, key, { force = false, affectsThrottle = true } = {}) {
-    text = clean(text).slice(0, 1600);
+    text = redactProgressText(text).slice(0, 1600);
     if (!enabled || !text || seen.has(text) || persisted >= progressLimit(env)) return pending;
     const now = Date.now();
     if (!force && now - lastPersistedAt < progressIntervalMs(env)) return pending;

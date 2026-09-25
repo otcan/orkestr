@@ -440,6 +440,14 @@ test("Claude progress projection requires tool-backed assistant events and never
   });
   assert.equal(described, "I am checking the focused tests.");
   assert.equal(described.includes("private command"), false);
+  const redacted = claudeCodeProgressText({
+    type: "assistant",
+    message: { content: [
+      { type: "text", text: "I am reading /home/example/private/config.json with token=must-not-leak and Bearer secret-value." },
+      { type: "tool_use", name: "Read", input: { path: "/home/example/private/config.json" } },
+    ] },
+  });
+  assert.equal(redacted, "I am reading [redacted-path] with token=[redacted] and Bearer [redacted]");
 });
 
 test("Claude WhatsApp turns persist bounded progress before the final answer", async (t) => {
