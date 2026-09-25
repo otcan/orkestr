@@ -70,16 +70,21 @@ jobs:
 
   secret-scan:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
     env:
       SCAN_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+      SCAN_COMMIT: ${{ github.sha }}
+    outputs:
+      evidence-id: ${{ steps.evidence.outputs.artifact-id }}
+      evidence-digest: ${{ steps.evidence.outputs.artifact-digest }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: "22"
       - name: Pinned redacted secret scan
@@ -90,11 +95,35 @@ jobs:
           curl --fail --silent --show-error --location --max-time 60 https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz -o "$scan_dir/release.tar.gz"
           printf '551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  %s\n' "$scan_dir/release.tar.gz" | sha256sum --check --status
           tar -xzf "$scan_dir/release.tar.gz" -C "$scan_dir" gitleaks
-          scan_args=(--binary "$scan_dir/gitleaks" --repository "$GITHUB_WORKSPACE" --label "$GITHUB_REPOSITORY" --report "$scan_dir/evidence.json")
+          scan_args=(--binary "$scan_dir/gitleaks" --repository "$GITHUB_WORKSPACE" --label "$GITHUB_REPOSITORY" --report "$RUNNER_TEMP/secret-evidence.json" --target-ref HEAD --expected-commit "$SCAN_COMMIT")
           if [[ "$SCAN_BASE" =~ ^[a-f0-9]{40}$ && "$SCAN_BASE" != "0000000000000000000000000000000000000000" ]]; then
             scan_args+=(--base "$SCAN_BASE")
           fi
           node scripts/security/secret-scan.mjs "${scan_args[@]}"
+      - name: Publish aggregate-only secret scan evidence
+        if: ${{ always() }}
+        id: evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: secret-evidence
+          path: ${{ runner.temp }}/secret-evidence.json
+          if-no-files-found: error
+          retention-days: 14
+
+  secret-policy:
+    if: ${{ always() }}
+    needs: secret-scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require complete scan and published evidence
+        env:
+          RESULT: ${{ needs.secret-scan.result }}
+          EVIDENCE_ID: ${{ needs.secret-scan.outputs.evidence-id }}
+          EVIDENCE_DIGEST: ${{ needs.secret-scan.outputs.evidence-digest }}
+        run: |
+          test "$RESULT" = success
+          test -n "$EVIDENCE_ID"
+          test -n "$EVIDENCE_DIGEST"
 
   syntax:
     runs-on: ubuntu-latest
@@ -102,8 +131,10 @@ jobs:
       ORKESTR_BROWSER_LAUNCH_DISABLED: "1"
       ORKESTR_RECOVER_RUNNING_ON_START: "0"
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-node@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: "22"
       - name: Syntax check
@@ -119,8 +150,10 @@ jobs:
       ORKESTR_BROWSER_LAUNCH_DISABLED: "1"
       ORKESTR_RECOVER_RUNNING_ON_START: "0"
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-node@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: "22"
           cache: npm
@@ -135,8 +168,8 @@ jobs:
       - run: node .dependency-policy/scripts/security/dependency-lifecycle.mjs --root . --installed
       - run: node scripts/patch-whatsapp-media-id.mjs
       - name: Build
-        run: npm run build
-      - uses: actions/upload-artifact@v4
+        run: npm run security:workflows && npm run build
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: runtime-dist
           path: dist
@@ -155,8 +188,10 @@ jobs:
       ORKESTR_TEST_SHARD_INDEX: ${{ matrix.shard }}
       ORKESTR_TEST_CONCURRENCY: "1"
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-node@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: "22"
           cache: npm
@@ -170,7 +205,7 @@ jobs:
       - run: npm ci --ignore-scripts --no-audit
       - run: node .dependency-policy/scripts/security/dependency-lifecycle.mjs --root . --installed
       - run: node scripts/patch-whatsapp-media-id.mjs
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: runtime-dist
           path: dist
@@ -184,8 +219,10 @@ jobs:
       ORKESTR_BROWSER_LAUNCH_DISABLED: "1"
       ORKESTR_RECOVER_RUNNING_ON_START: "0"
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-node@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: "22"
           cache: npm
@@ -199,7 +236,7 @@ jobs:
       - run: npm ci --ignore-scripts --no-audit
       - run: node .dependency-policy/scripts/security/dependency-lifecycle.mjs --root . --installed
       - run: node scripts/patch-whatsapp-media-id.mjs
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: runtime-dist
           path: dist

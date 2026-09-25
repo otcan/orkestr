@@ -50,14 +50,16 @@ Systemd/resource/evidence activation is separate from this tooling; see
 CI downloads Gitleaks 8.30.1 from its official release and verifies the pinned
 archive SHA-256 before execution. The wrapper verifies the version, forces its
 reviewed default-rules config, ignores repository-local suppressions, discards
-scanner output and minimizes the redacted JSON. Reports contain only repository,
-commit, path, detector, line, triage status and a per-report salted **location**
-fingerprint; this is not a credential-value fingerprint.
+scanner output and aggregates the redacted JSON. Schema-v2 retained reports
+contain only explicit revision scope, counts, timing, run ID, scanner exit
+status and outcome. File names, line numbers, matches, values, commit messages,
+authors and finding fingerprints are never published. Redacted scanner JSON
+is transient in a private directory and removed before successful completion.
 
 Merge-result diffs are included, and external diff/textconv execution is disabled.
 The separate reviewed-finding policy can classify only exact immutable
 commit/path/detector/line locations, with reviewer, ticket and expiry. Findings
-remain visible in reports with separate reviewed/unresolved counts. No wildcard
+remain counted in reports with separate reviewed/unresolved counts. No wildcard
 or test-directory suppression is supported. The initial two dispositions are
 self-authored local reviewer-session HMAC fixtures, independently confirmed by
 their author as never issued or used externally. They are not provider secrets.
@@ -70,21 +72,39 @@ commits. Exact locations are classified as nonsecret syntax, never whole paths.
 node scripts/security/secret-scan.mjs \
   --binary /absolute/verified/gitleaks \
   --repository /absolute/checkout --label example/repository \
+  --target-ref refs/heads/main --expected-commit <verified-full-commit-id> \
   --report /absolute/private/new-report.json
 ```
 
-Default scope is all locally available Git refs, not inaccessible repositories,
-unfetched provider refs or external artifacts. `--base <full-commit-id>` scans
-that commit to HEAD. CI uses the PR base/push previous SHA; manual dispatch scans
-all checked-out refs. The report is private mode 0600, outside the checkout,
-created exclusively and never uploaded as a public CI artifact. Exit 2 means
-findings requiring private triage; scanner failures never count as clean.
+There is no implicit HEAD or all-ref target. Both target ref and expected immutable
+commit are mandatory; a mismatching ref or stale checkout fails before scanning.
+The target's reachable history is scanned unless an explicit ancestor `--base`
+limits it to a commit range. Repeat `--approved-ref refs/heads/example` to include
+only individually approved reachable histories; this cannot combine with a base.
+The wrapper resolves refs to immutable commits, counts their revision union, and
+verifies the snapshot again after scanning. Shallow histories fail closed.
+Inaccessible repositories, unfetched refs, reflogs and external artifacts are not
+covered. This is committed-history scanning, not a working-tree scan.
+
+CI explicitly supplies HEAD plus the event SHA and optionally the PR base/push
+previous SHA. Manual/scheduled runs scan the explicit event commit's history,
+not every local ref. Evidence is mode 0600 outside the checkout and created
+exclusively; never reuse an output path. An initial incomplete record is fsynced
+before scanning. Controlled errors retain a nonpassing category; an abrupt kill
+can leave incomplete or truncated evidence, neither of which means clean.
+Only aggregate evidence is uploaded to CI, with 14-day retention. The
+`secret-policy` job requires successful scan and artifact ID/digest publication;
+missing reports or publication failures block it. Exit 2 means unresolved
+findings requiring private triage; exit 1 means incomplete/invalid coverage.
 
 Do not print matches, test a detected credential, rewrite history, add a blanket
 baseline ignore, or close provider alerts based only on a clean range scan.
 Branch-protection enforcement is an administrative follow-up, not something
 this workflow silently configures. Repository-private coverage and independent
 revocation evidence remain explicit acceptance gates.
+
+CI action pinning and workflow-review boundaries are documented in
+[ci-workflow-policy.md](ci-workflow-policy.md).
 
 ## Review references
 
