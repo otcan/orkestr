@@ -9,6 +9,7 @@ import {
   cancelClaudeCodeLogin,
   claudeCodeArgs,
   claudeCodeEventTelemetry,
+  mergeClaudeCodeTelemetry,
   claudeCodeLoginSession,
   claudeCodeRuntimeEnv,
   startClaudeCodeLogin,
@@ -370,6 +371,44 @@ test("Claude telemetry normalizes only safe provider usage and remaining windows
   assert.equal(telemetry.rateLimits.primary.window_minutes, 300);
   assert.equal(telemetry.rateLimits.secondary.window_minutes, 10080);
   assert.equal(JSON.stringify(telemetry).includes("never"), false);
+});
+
+test("Claude telemetry replaces a rejected window when the provider allows requests again", () => {
+  const observed = claudeCodeEventTelemetry({
+    type: "rate_limit_event",
+    rate_limit_info: {
+      status: "allowed",
+      rateLimitType: "five_hour",
+      resetsAt: 1900000000,
+      overageStatus: "rejected",
+      overageDisabledReason: "must-not-persist",
+    },
+  });
+  const merged = mergeClaudeCodeTelemetry({
+    rateLimits: {
+      primary: { status: "rejected", used_percent: 100, window_minutes: 300, resets_at: 1899990000 },
+      secondary: { used_percent: 44, window_minutes: 10080, resets_at: 1900100000 },
+      plan_type: "claude_subscription",
+    },
+  }, observed);
+
+  assert.deepEqual(merged.rateLimits.primary, {
+    status: "allowed",
+    window_minutes: 300,
+    resets_at: 1900000000,
+  });
+  assert.equal(merged.rateLimits.secondary.used_percent, 44);
+  assert.equal(JSON.stringify(merged).includes("must-not-persist"), false);
+});
+
+test("Claude telemetry does not normalize missing usage percentages to zero", () => {
+  const telemetry = claudeCodeEventTelemetry({
+    rate_limits: {
+      five_hour: { used_percentage: null, resets_at: 1900000000 },
+      seven_day: { used_percentage: "", resets_at: 1900100000 },
+    },
+  });
+  assert.equal(telemetry.rateLimits, null);
 });
 
 test("Claude runtime enforces one active turn and interruption leaves no late assistant mutation", async (t) => {

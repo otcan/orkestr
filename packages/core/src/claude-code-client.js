@@ -115,8 +115,18 @@ export async function readClaudeCodeStatusTelemetry(capturePath = "") {
 }
 
 function finite(value) {
+  if (value === null || value === undefined || value === "") return null;
   const number = Number(value);
   return Number.isFinite(number) && number >= 0 ? number : null;
+}
+
+function mergeClaudeCodeRateLimits(current = null, observed = null) {
+  if (!observed) return current || null;
+  return {
+    primary: observed.primary || current?.primary || null,
+    secondary: observed.secondary || current?.secondary || null,
+    plan_type: observed.plan_type || current?.plan_type || "claude_subscription",
+  };
 }
 
 export function claudeCodeEventTelemetry(event = {}) {
@@ -148,16 +158,17 @@ export function claudeCodeEventTelemetry(event = {}) {
   const providerLimit = event.rate_limit_info || event.rateLimitInfo || null;
   const providerLimitType = clean(providerLimit?.rateLimitType || providerLimit?.rate_limit_type).toLowerCase();
   const providerLimitStatus = clean(providerLimit?.status).toLowerCase();
-  if (providerLimitStatus === "rejected" && ["five_hour", "seven_day"].includes(providerLimitType)) {
+  if (["allowed", "rejected"].includes(providerLimitStatus) && ["five_hour", "seven_day"].includes(providerLimitType)) {
     const reset = finite(providerLimit?.resetsAt ?? providerLimit?.resets_at);
-    const rejected = {
-      used_percent: 100,
+    const providerWindow = {
+      status: providerLimitStatus,
       window_minutes: providerLimitType === "five_hour" ? 300 : 10080,
+      ...(providerLimitStatus === "rejected" ? { used_percent: 100 } : {}),
       ...(reset !== null ? { resets_at: reset } : {}),
     };
     rateLimits = {
-      primary: providerLimitType === "five_hour" ? rejected : rateLimits?.primary || null,
-      secondary: providerLimitType === "seven_day" ? rejected : rateLimits?.secondary || null,
+      primary: providerLimitType === "five_hour" ? providerWindow : rateLimits?.primary || null,
+      secondary: providerLimitType === "seven_day" ? providerWindow : rateLimits?.secondary || null,
       plan_type: "claude_subscription",
     };
   }
@@ -173,7 +184,7 @@ export function claudeCodeEventTelemetry(event = {}) {
 export function mergeClaudeCodeTelemetry(current = {}, observed = {}) {
   return {
     tokenUsage: observed.tokenUsage || current.tokenUsage || null,
-    rateLimits: observed.rateLimits || current.rateLimits || null,
+    rateLimits: mergeClaudeCodeRateLimits(current.rateLimits, observed.rateLimits),
     contextWindow: observed.contextWindow || current.contextWindow || null,
     model: observed.model || current.model || null,
   };

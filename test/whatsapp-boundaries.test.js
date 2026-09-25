@@ -127,6 +127,44 @@ test("WhatsApp debug footer reports Claude Code model, runtime, and usage withou
   assert.doesNotMatch(waking, /mode-switch:|rt-switch:/);
 });
 
+test("WhatsApp Claude footer replaces stale or unavailable usage with explicit safe states", () => {
+  const allowed = appendWhatsAppDebugFooter("Done", {
+    env: { ORKESTR_WHATSAPP_DEBUG_FOOTER: "1" },
+    message: { source: "claude-code", phase: "final_answer" },
+    thread: {
+      runtimeKind: "claude-code",
+      claudeModel: "sonnet",
+      claudeEffort: "medium",
+      claudeRateLimits: {
+        primary: { status: "allowed", window_minutes: 300, resets_at: Math.floor(Date.now() / 1000) + 3600 },
+        secondary: null,
+        plan_type: "claude_subscription",
+      },
+      executor: { type: "claude-code", metadata: {} },
+    },
+  });
+  assert.match(allowed, / · 5h:available · wk:unknown · /);
+  assert.doesNotMatch(allowed, / · 5h:0%/);
+
+  const expired = appendWhatsAppDebugFooter("Done", {
+    env: { ORKESTR_WHATSAPP_DEBUG_FOOTER: "1" },
+    message: { source: "claude-code", phase: "final_answer" },
+    thread: {
+      runtimeKind: "claude-code",
+      claudeModel: "sonnet",
+      claudeEffort: "medium",
+      claudeRateLimits: {
+        primary: { status: "rejected", used_percent: 100, window_minutes: 300, resets_at: 1 },
+        secondary: null,
+        plan_type: "claude_subscription",
+      },
+      executor: { type: "claude-code", metadata: {} },
+    },
+  });
+  assert.match(expired, / · 5h:unknown · wk:unknown · /);
+  assert.doesNotMatch(expired, / · 5h:0%/);
+});
+
 test("WhatsApp mirror policy forwards Codex final replies and progress updates", () => {
   assert.equal(shouldMirrorWhatsAppReply({ source: "codex-app-server", phase: "final_answer" }), true);
   assert.equal(shouldMirrorWhatsAppReply({ source: "codex-app-server", phase: "commentary" }), false);

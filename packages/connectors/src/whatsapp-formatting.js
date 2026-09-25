@@ -326,8 +326,17 @@ function providerRateLimitRecordForPeriod(thread = {}, period = "") {
 
 function providerRateLimitsDebugValue(thread = {}, period = "") {
   const limit = providerRateLimitRecordForPeriod(thread, period);
-  const used = Number(limit?.used_percent);
-  if (!Number.isFinite(used)) return "";
+  if (!limit) return claudeCodeThread(thread) ? "unknown" : "";
+  const reset = Number(limit.resets_at);
+  if (Number.isFinite(reset) && reset > 0 && reset * (reset < 1e12 ? 1000 : 1) <= Date.now()) {
+    return claudeCodeThread(thread) ? "unknown" : "";
+  }
+  if (String(limit.status || "").trim().toLowerCase() === "allowed" && limit.used_percent == null) return "available";
+  if (limit.used_percent === null || limit.used_percent === undefined || limit.used_percent === "") {
+    return claudeCodeThread(thread) ? "unknown" : "";
+  }
+  const used = Number(limit.used_percent);
+  if (!Number.isFinite(used)) return claudeCodeThread(thread) ? "unknown" : "";
   const remaining = Math.max(0, Math.min(100, 100 - used));
   return `${Math.round(remaining)}%`;
 }
