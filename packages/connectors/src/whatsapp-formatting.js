@@ -328,8 +328,8 @@ function providerRateLimitsDebugValue(thread = {}, period = "") {
   const limit = providerRateLimitRecordForPeriod(thread, period);
   if (!limit) return claudeCodeThread(thread) ? "unknown" : "";
   const reset = Number(limit.resets_at);
-  if (Number.isFinite(reset) && reset > 0 && reset * (reset < 1e12 ? 1000 : 1) <= Date.now()) {
-    return claudeCodeThread(thread) ? "unknown" : "";
+  if (claudeCodeThread(thread) && Number.isFinite(reset) && reset > 0 && reset * (reset < 1e12 ? 1000 : 1) <= Date.now()) {
+    return "unknown";
   }
   if (String(limit.status || "").trim().toLowerCase() === "allowed" && limit.used_percent == null) return "available";
   if (limit.used_percent === null || limit.used_percent === undefined || limit.used_percent === "") {
