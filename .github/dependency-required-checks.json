@@ -3,13 +3,16 @@
   "policyOwner": "ORK-478",
   "implementation": "ORK-511",
   "state": "proposed-not-applied",
-  "requiredChecks": ["secret-scan", "dependency-policy"],
+  "requiredChecks": ["secret-scan", "secret-policy", "dependency-policy"],
   "requireUpToDateBranch": true,
   "requireCodeOwnerReview": true,
   "protectedPolicyPaths": [
     ".github/workflows/**",
     ".github/CODEOWNERS",
     ".github/dependency-required-checks.json",
+    "package.json",
+    "package-lock.json",
+    ".npmrc",
     "scripts/security/**"
   ],
   "activationPrerequisites": [
