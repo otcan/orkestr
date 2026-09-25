@@ -66,13 +66,16 @@ class Baseline:
         if phase not in PHASES:
             raise ValueError("explicit workload phase required")
         observed = time.time() if now is None else now
-        if not isinstance(observed, (float, int)) or not math.isfinite(observed) or observed < 0:
+        if type(observed) not in (float, int) or not math.isfinite(observed) or observed < 0:
             raise ValueError("invalid sample time")
         # Capture errors as missing evidence, never a zero task count.
         rows = [read_sample(unit, runner) for unit in self.units]
         db = self.store.db
         db.execute("BEGIN IMMEDIATE")
         try:
+            latest = db.execute("SELECT max(time) FROM samples").fetchone()[0]
+            if latest is not None and observed <= latest:
+                raise ValueError("baseline observation must advance time")
             if db.execute("SELECT count(*) FROM samples").fetchone()[0] + len(rows) > self.capacity:
                 raise RuntimeError("baseline capacity reached; preserve/export evidence before a new window")
             for row in rows:

@@ -38,7 +38,7 @@ function routeDiagnostics(routeTarget = {}, token = "", { enabled = false, targe
       : "not_checked";
   const status = configured
     ? (enabled
-      ? (targetReachable === false ? "target_unreachable" : "active")
+      ? (targetReachable === true ? "active" : targetReachable === false ? "target_unreachable" : "target_not_checked")
       : "prepared")
     : "incomplete";
   const nextAction = !routeTarget.target
@@ -47,12 +47,16 @@ function routeDiagnostics(routeTarget = {}, token = "", { enabled = false, targe
       ? "configure_route_token"
       : enabled && targetReachable === false
         ? "restore_target_reachability"
+      : enabled && targetReachable !== true
+        ? "verify_target_reachability"
       : enabled
         ? "sync_whatsapp_inbound_token_to_target"
         : "enable_route_when_target_is_ready";
   const safeMessage = configured
     ? enabled && targetReachable === false
       ? "Route target is configured but not reachable. Do not forward until the target responds."
+      : enabled && targetReachable !== true
+      ? "Route target is configured but reachability has not been checked. Refresh route status to verify readiness."
       : enabled
       ? "Route is active. The target instance must also have the same WhatsApp inbound token."
       : "Route is prepared but disabled. Enable it only after the target instance accepts the inbound token."
@@ -299,7 +303,7 @@ function publicRoute(vm, secret = {}, { includeToken = false, bridgeSendToken = 
     chatName: clean(vm.connectors?.whatsappChatName),
     accountId: clean(vm.connectors?.whatsappAccountId),
     enabled,
-    forwardingReady: configuredReady && targetReachable !== false,
+    forwardingReady: configuredReady && targetReachable === true,
     targetReachability: diagnostics.targetReachability,
     target: routeTarget.target,
     routeMode: routeTarget.routeMode,
