@@ -1,4 +1,5 @@
 import type { PublicPage, PublicPageId } from "./public-site-config.js";
+import { renderSolutionFaq } from "./public-site-solution-faq.js";
 import { renderSolutionVisual } from "./public-site-visuals.js";
 
 type SolutionDefinition = {
@@ -118,6 +119,7 @@ export function solutionPage(pageId: PublicPageId): PublicPage {
       <section class="section solution-delivery" aria-labelledby="delivery-title"><div><p class="section-index">FROM REQUIREMENT TO OPERATION</p><h2 id="delivery-title">What the work can include.</h2></div><ol class="phase-list">${solution.stages.map(([title, text], index) => `<li><span>${String(index + 1).padStart(2, "0")}</span><div><h3>${title}</h3><p>${text}</p></div></li>`).join("")}</ol></section>
       <section class="why-section solution-proof" aria-labelledby="proof-title"><div><p class="section-index">WHY ORKESTR</p><h2 id="proof-title">${solution.proofTitle}</h2></div><p class="section-lead">${solution.proofText}</p></section>
       <section class="section limitations"><div><p class="section-index">BOUNDARIES</p><h2>What Discovery must establish.</h2></div><ul>${solution.boundaries.map((boundary) => `<li>${boundary}</li>`).join("")}</ul></section>
+      ${renderSolutionFaq(solution)}
       ${projectCta("Bring us the requirement, even if the solution is not yet clear.")}
     </main>`,
   };

@@ -228,6 +228,8 @@ h3 { margin: 0; font-size: 22px; line-height: 1.15; letter-spacing: -.025em; }
 .evidence-grid p { color: var(--muted); line-height: 1.5; }
 .evidence-grid a { margin-top: auto; font-weight: 780; text-decoration: none; }
 .faq { grid-template-columns: .65fr 1.35fr; background: #ebe6d8; }
+.solution-faq > * { min-width: 0; }
+.solution-faq summary, .solution-faq p { overflow-wrap: anywhere; }
 .faq-list details { border-top: 1px solid var(--line); }
 .faq-list details:last-child { border-bottom: 1px solid var(--line); }
 .faq-list summary { padding: 22px 34px 22px 0; cursor: pointer; font-size: 20px; font-weight: 800; }
