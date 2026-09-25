@@ -11,6 +11,7 @@ const execFileAsync = promisify(execFile);
 const loginSessions = new Map();
 const loginTtlMs = 15 * 60 * 1000;
 const loginVerifyTimeoutMs = 60 * 1000;
+const loginStartTimeoutMs = 3_000;
 
 function clean(value = "") {
   return String(value || "").trim();
@@ -480,6 +481,9 @@ export async function startClaudeCodeLogin(profile = {}, thread = {}, env = proc
     session.failureCode = status?.authenticated ? "" : code === 0 ? status?.reason || "claude_code_auth_required" : classifyClaudeCodeFailure(session.output);
     session.output = "";
   });
-  await new Promise((resolve) => setTimeout(resolve, 300));
+  const startDeadline = Date.now() + loginStartTimeoutMs;
+  while (session.state === "starting" && Date.now() < startDeadline) {
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
   return loginSnapshot(session);
 }
