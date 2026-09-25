@@ -1,5 +1,6 @@
 import { markConnectorDeliverySignal } from "./connector-delivery-signals.js";
 import { appendThreadMessage, listThreadMessages } from "./threads.js";
+import { replyDeliveryProjectionParent, trustedHushReplyDeliveryIntent } from "./reply-delivery-intent.js";
 
 function clean(value = "") {
   return String(value || "").trim();
@@ -57,7 +58,8 @@ function progressLimit(env = process.env) {
 }
 
 export function createClaudeCodeProgressReporter({ thread = {}, parentMessage = {}, attemptId = "", onPersisted = null } = {}, env = process.env) {
-  const enabled = whatsappOrigin(parentMessage);
+  const deliveryParent = replyDeliveryProjectionParent(parentMessage) || parentMessage;
+  const enabled = whatsappOrigin(deliveryParent) && !trustedHushReplyDeliveryIntent(parentMessage);
   const seen = new Set();
   let sequence = 0;
   let persisted = 0;
@@ -87,9 +89,9 @@ export function createClaudeCodeProgressReporter({ thread = {}, parentMessage = 
         eventId,
         executorKind: "claude-code",
         executorTurnId: attemptId,
-        connector: parentMessage.connector || "",
-        chatId: parentMessage.chatId || "",
-        accountId: parentMessage.accountId || "",
+        connector: deliveryParent.connector || "",
+        chatId: deliveryParent.chatId || "",
+        accountId: deliveryParent.accountId || "",
         sourceEventId: parentMessage.sourceEventId || "",
         routerTraceId: parentMessage.routerTraceId || "",
         turnId: parentMessage.turnId || "",

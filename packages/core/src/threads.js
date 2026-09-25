@@ -1,4 +1,5 @@
 import path from "node:path";
+import { nextThreadReplyDeliveryEpoch } from "./reply-delivery-intent.js";
 import { observeSettingsHistoryWrite } from "./codex-settings-command-observability.js";
 import fs from "node:fs/promises";
 import { createHash, randomUUID } from "node:crypto";
@@ -461,6 +462,9 @@ async function updateThreadLocked(threadId, patch = {}, env = process.env) {
       binding: patch.binding ? { ...(thread.binding || {}), ...patch.binding } : thread.binding,
       updatedAt: nowIso(),
     };
+    const replyDeliveryEpoch = nextThreadReplyDeliveryEpoch(thread, candidate);
+    if (replyDeliveryEpoch) candidate.replyDeliveryEpoch = replyDeliveryEpoch;
+    else delete candidate.replyDeliveryEpoch;
     if (comparableThreadState(thread) === comparableThreadState(candidate)) {
       updated = thread;
       return thread;

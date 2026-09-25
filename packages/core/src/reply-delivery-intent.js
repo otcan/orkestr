@@ -145,6 +145,20 @@ export function createHushReplyDeliveryIntent(thread = {}, options = {}) {
   });
 }
 
+export function createWorkerReplyDeliveryIntent(thread = {}, options = {}) {
+  if (options.mode !== "bound_whatsapp") return null;
+  const intent = createBoundWhatsAppReplyDeliveryIntent(thread, { ...options, issuedFor: "worker-assignment" });
+  intent.target.bindingEpoch = clean(thread.replyDeliveryEpoch);
+  return intent;
+}
+
+// Set under the thread-record lock. Caller-supplied epochs cannot roll it back.
+export function nextThreadReplyDeliveryEpoch(previous = {}, next = {}) {
+  const changed = clean(previous.ownerUserId) !== clean(next.ownerUserId) ||
+    whatsappReplyDeliveryBindingRevision(previous.binding || {}) !== whatsappReplyDeliveryBindingRevision(next.binding || {});
+  return changed ? randomUUID() : clean(previous.replyDeliveryEpoch);
+}
+
 function serverReplyDeliveryIntent(message = {}) {
   const intent = message.replyDeliveryIntent;
   if (!intent || typeof intent !== "object" || Array.isArray(intent)) return null;
@@ -156,13 +170,15 @@ function serverReplyDeliveryIntent(message = {}) {
   const trustedUi = (!issuedFor || issuedFor === "webui") && source === "ui" && originSurface === "webui";
   const trustedHush = issuedFor === "hush-mobile" && source === "hush" &&
     originSurface === "mobile" && originTransport === "hush-mobile";
-  if (!trustedUi && !trustedHush) return null;
+  const trustedWorker = issuedFor === "worker-assignment" && source === "worker_assignment" &&
+    originSurface === "orkestr-worker" && originTransport === "authenticated-http";
+  if (!trustedUi && !trustedHush && !trustedWorker) return null;
   return intent;
 }
 
 export function trustedUiReplyDeliveryIntent(message = {}) {
   const intent = serverReplyDeliveryIntent(message);
-  if (!intent || clean(intent.issuedFor).toLowerCase() === "hush-mobile") return null;
+  if (!intent || !["", "webui"].includes(clean(intent.issuedFor).toLowerCase())) return null;
   const target = intent.target;
   if (!target || typeof target !== "object" || Array.isArray(target)) return null;
   if (!clean(target.threadId) || !clean(target.chatId) || !clean(target.bindingRevision)) return null;
@@ -179,7 +195,15 @@ export function trustedHushReplyDeliveryIntent(message = {}) {
 }
 
 export function trustedReplyDeliveryIntent(message = {}) {
-  return trustedUiReplyDeliveryIntent(message) || trustedHushReplyDeliveryIntent(message);
+  return trustedUiReplyDeliveryIntent(message) || trustedHushReplyDeliveryIntent(message) || trustedWorkerReplyDeliveryIntent(message);
+}
+
+export function trustedWorkerReplyDeliveryIntent(message = {}) {
+  const intent = serverReplyDeliveryIntent(message);
+  if (!intent || intent.issuedFor !== "worker-assignment") return null;
+  const target = intent.target;
+  if (!target || !clean(target.threadId) || !clean(target.ownerUserId) || !clean(target.chatId) || !clean(target.bindingRevision)) return null;
+  return intent;
 }
 
 export function uiReplyDeliveryProjectionParent(message = {}) {
@@ -215,6 +239,10 @@ export function replyDeliveryBindingFence(parent = {}, thread = {}) {
     return { applies: true, allowed: false, reason: "binding_not_eligible", intent };
   }
   const target = intent.target || {};
+  if (intent.issuedFor === "worker-assignment" &&
+      (clean(target.bindingEpoch) !== clean(thread.replyDeliveryEpoch) || thread.retired === true || thread.lifecycleState === "retired")) {
+    return { applies: true, allowed: false, reason: "binding_generation_changed", intent };
+  }
   if (clean(target.threadId) !== clean(thread.id)) {
     return { applies: true, allowed: false, reason: "thread_changed", intent };
   }

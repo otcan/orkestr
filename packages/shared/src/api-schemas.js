@@ -153,6 +153,7 @@ export const threadInputSchema = {
       externalId: stringValue,
       clientMessageId: stringValue,
       idempotencyKey: stringValue,
+      workerReplyDelivery: { type: "string", enum: ["bound_whatsapp"] },
       chatId: stringValue,
       from: stringValue,
       accountId: stringValue,

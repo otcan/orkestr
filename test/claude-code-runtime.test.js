@@ -17,6 +17,7 @@ import {
 } from "../packages/core/src/claude-code-client.js";
 import { changeClaudeModelControls, readClaudeModelControls } from "../packages/core/src/claude-model-controls.js";
 import { claudeCodeProgressText } from "../packages/core/src/claude-code-progress.js";
+import { createWorkerReplyDeliveryIntent } from "../packages/core/src/reply-delivery-intent.js";
 import { getClaudeCodeSession } from "../packages/core/src/claude-code-sessions.js";
 import { getRouterTrace } from "../packages/core/src/router-traces.js";
 import {
@@ -420,6 +421,31 @@ test("Claude telemetry does not normalize missing usage percentages to zero", ()
     },
   });
   assert.equal(telemetry.rateLimits, null);
+});
+
+test("Claude delegated worker projects progress and final from explicit intent, but plain CLI stays private", async t => {
+  const { env } = await fixture(t, "worker-reply");
+  const profile = await readyProfile("owner", "Worker reply", env);
+  let thread = await claudeThread("owner", profile.id, env, "claude-worker-reply");
+  thread = await updateThread(thread.id, { binding: { connector: "whatsapp", chatId: "worker-chat", responderAccountId: "account-a" } }, env);
+  const first = await enqueueThreadInput(thread.id, {
+    source: "worker_assignment", originSurface: "orkestr-worker", originTransport: "authenticated-http",
+    text: "stream progress", replyDeliveryIntent: createWorkerReplyDeliveryIntent(thread, { mode: "bound_whatsapp" }),
+  }, env);
+  await sendClaudeCodeInput(thread, first, env);
+  const outputs = (await listThreadMessages(thread.id, env)).filter(m => m.parentMessageId === first.id);
+  assert.deepEqual(outputs.map(m => m.phase), ["commentary", "commentary", "final_answer"]);
+  for (const output of outputs) {
+    assert.equal(output.connector, "whatsapp");
+    assert.equal(output.chatId, "worker-chat");
+    assert.equal(output.accountId, "account-a");
+    assert.equal(output.parentMessageId, first.id);
+  }
+  const second = await enqueueThreadInput(thread.id, { source: "cli", text: "stream progress private task" }, env);
+  await sendClaudeCodeInput(await getThread(thread.id, env), second, env);
+  const privateOutputs = (await listThreadMessages(thread.id, env)).filter(m => m.parentMessageId === second.id);
+  assert.deepEqual(privateOutputs.map(m => m.phase), ["final_answer"]);
+  assert.equal(Boolean(privateOutputs[0].chatId), false);
 });
 
 test("Claude progress projection requires tool-backed assistant events and never exposes tool input", () => {

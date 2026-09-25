@@ -2088,7 +2088,10 @@ async function send(argv, ctx) {
   const payload = await requestJson(`/api/threads/${encodeURIComponent(target)}/input`, {
     ...ctx,
     method: "POST",
-    body: { text, source: "cli", parseCommands: true, controlAllowed: true },
+    body: { text, source: "cli", parseCommands: true, controlAllowed: true,
+      ...(argv.includes("--reply-whatsapp") ? { workerReplyDelivery: "bound_whatsapp" } : {}),
+      ...(flagValue(argv, "--idempotency-key") ? { idempotencyKey: flagValue(argv, "--idempotency-key") } : {}),
+    },
   });
   if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
   else {
@@ -2154,7 +2157,7 @@ Common thread commands:
   orkestr connect google --review --thread <reviewer-thread-id> [--json]
   orkestr connect google --review-environment --thread <reviewer-thread-id> [--json]
   orkestr attach [thread-name-or-id] [--print] [--read-only] [--takeover] [--interrupt] [--yes] [--interval seconds] [--timeout duration] [--json]
-  orkestr send <thread-name-or-id> "<message>" [--json]
+  orkestr send <thread-name-or-id> "<message>" [--reply-whatsapp] [--idempotency-key <key>] [--json]
   orkestr wake <thread-name-or-id> [--json]
   orkestr reset <thread-name-or-id> [--json]
   orkestr hard-reset <thread-name-or-id> [--json]
@@ -2319,6 +2322,7 @@ function formatWhereAmI(payload = {}) {
 function positional(argv) {
   const values = [];
   const flagsWithValues = new Set([
+    "--idempotency-key",
     "--branch",
     "--branch-name",
     "--account",
@@ -2426,6 +2430,7 @@ function positional(argv) {
     "--owner-user-id",
   ]);
   const flagsWithoutValues = new Set([
+    "--reply-whatsapp",
     "--blank",
     "--force-new",
     "--json",

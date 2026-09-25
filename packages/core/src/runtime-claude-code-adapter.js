@@ -21,9 +21,7 @@ import {
 import { appendEvent } from "../../storage/src/store.js";
 import { updateLlmAccountProfileState } from "./llm-account-profiles.js";
 import { deferClaudeCodeRateLimitedInput, recoverClaudeCodeThreadState, resolveClaudeCodeRuntimeProfile } from "./claude-code-rate-limit.js";
-import { markConnectorDeliverySignal } from "./connector-delivery-signals.js";
 import {
-  appendThreadMessage,
   getThread,
   getThreadMessage,
   listThreadMessageCandidates,
@@ -36,6 +34,7 @@ import { getClaudeCodeSession, setClaudeCodeSession } from "./claude-code-sessio
 import { codexInputText } from "./codex-app-server-common.js";
 import {
   claudeCodeOutputEventId,
+  appendClaudeCodeFinal,
   existingClaudeCodeOutput,
   recordClaudeCodeRouterTrace,
 } from "./claude-code-router-trace.js";
@@ -294,24 +293,7 @@ async function sendClaudeCodeInputReserved(thread, message, env = process.env) {
     const eventId = claudeCodeOutputEventId(thread.id, attemptId);
     let assistant = await existingClaudeCodeOutput(thread.id, eventId, env);
     if (!assistant) {
-      assistant = await appendThreadMessage(thread.id, {
-        role: "assistant",
-        source: "claude-code",
-        phase: "final_answer",
-        state: "completed",
-        text: clean(result.text) || "Claude Code completed without text output.",
-        parentMessageId: freshMessage.id,
-        eventId,
-        executorKind: "claude-code",
-        executorTurnId: attemptId,
-        connector: freshMessage.connector || "",
-        chatId: freshMessage.chatId || "",
-        accountId: freshMessage.accountId || "",
-        sourceEventId: freshMessage.sourceEventId || "",
-        routerTraceId: freshMessage.routerTraceId || "",
-        turnId: freshMessage.turnId || "",
-      }, env);
-      markConnectorDeliverySignal(assistant);
+      assistant = await appendClaudeCodeFinal(thread, freshMessage, attemptId, result.text, env);
     }
     const completedMessage = await updateThreadMessage(thread.id, freshMessage.id, {
       state: "completed",
