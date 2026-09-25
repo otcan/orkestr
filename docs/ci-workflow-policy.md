@@ -34,8 +34,20 @@ Candidate code can modify candidate checks; therefore protected reviews of
 workflows, scanner/config/policy and lockfiles remain essential. No privileged
 `pull_request_target` or `workflow_run` execution is introduced. Dependency
 advisory/lifecycle checks retain their existing immutable base-policy checkout.
-The new scanner remains in the candidate's read-only job and its policy changes
-require protected review; do not interpret it as a trusted unmodifiable gate.
+The secret scanner, configuration and exact-finding reviews also execute from
+the immutable PR/merge-queue base checkout (`.secret-policy`), never from the
+candidate tree being scanned. For main, scheduled and explicitly dispatched
+workflows, policy is pinned to the event SHA. Candidate scanner/config changes
+cannot change that run's detector rules or write fabricated passing evidence.
+There is no fallback when the trusted base lacks the new scanner interface: the
+bootstrap fails closed and requires owner-reviewed local qualification and
+initial landing before subsequent PR validation. Do not disable checks to make
+the bootstrap pass.
+
+The workflow definition itself still requires protected review or an externally
+managed required workflow. A contributor able to rewrite the CI job and its
+checks can bypass candidate-side validation; a trusted base checkout alone is
+not administrative enforcement. No live enforcement claim is made here.
 
 ORK-478 owns live ruleset/required-review activation. No ruleset, protected
 branch setting, credential, runner configuration or production service is changed

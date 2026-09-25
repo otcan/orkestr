@@ -69,3 +69,21 @@ test("proposed landing contract preserves scans and requires durable evidence ga
   for (const file of ["package.json", "package-lock.json", ".npmrc", ".github/workflows/**", "scripts/security/**"])
     assert.ok(contract.protectedPolicyPaths.includes(file));
 });
+
+test("secret scanning executes immutable base policy, not candidate scanner or suppressions", async () => {
+  const source = await fs.readFile(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
+  const job = parse(source).jobs["secret-scan"];
+  assert.equal(job.env.POLICY_REF, "${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.sha }}");
+  assert.equal(job.env.SCAN_COMMIT, "${{ github.sha }}");
+  const checkout = job.steps.find(step => step.with?.path === ".secret-policy");
+  assert.equal(checkout.uses, `actions/checkout@${actionPins["actions/checkout"]}`);
+  assert.equal(checkout.with.ref, "${{ env.POLICY_REF }}");
+  assert.equal(checkout.with["persist-credentials"], false);
+  const run = job.steps.find(step => step.name === "Pinned redacted secret scan").run;
+  assert.ok(job.steps.indexOf(checkout) < job.steps.findIndex(step => step.run === run));
+  assert.match(run, /node \.secret-policy\/scripts\/security\/secret-scan\.mjs/);
+  assert.match(run, /--repository "\$GITHUB_WORKSPACE"/);
+  assert.match(run, /--target-ref HEAD --expected-commit "\$SCAN_COMMIT"/);
+  assert.doesNotMatch(run, /node scripts\/security\/secret-scan|\|\||continue-on-error/);
+  assert.match(run, /sha256sum --check --status/);
+});

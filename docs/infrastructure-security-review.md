@@ -58,6 +58,11 @@ contain only explicit revision scope, counts, timing, run ID, scanner exit
 status and outcome. File names, line numbers, matches, values, commit messages,
 authors and finding fingerprints are never published. Redacted scanner JSON
 is transient in a private directory and removed before successful completion.
+For pull requests and merge queues, CI executes the wrapper, config and finding
+reviews from the immutable base policy checkout, not the candidate's scanner.
+Main/manual/scheduled execution uses the event SHA. A missing or incompatible
+base scanner fails closed; see the bootstrap and workflow-review boundary in
+[ci-workflow-policy.md](ci-workflow-policy.md).
 
 Merge-result diffs are included, and external diff/textconv execution is disabled.
 The separate reviewed-finding policy can classify only exact immutable

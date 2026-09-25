@@ -76,6 +76,7 @@ jobs:
     env:
       SCAN_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
       SCAN_COMMIT: ${{ github.sha }}
+      POLICY_REF: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.sha }}
     outputs:
       evidence-id: ${{ steps.evidence.outputs.artifact-id }}
       evidence-digest: ${{ steps.evidence.outputs.artifact-digest }}
@@ -87,6 +88,11 @@ jobs:
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: "22"
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ env.POLICY_REF }}
+          path: .secret-policy
+          persist-credentials: false
       - name: Pinned redacted secret scan
         shell: bash
         run: |
@@ -99,7 +105,7 @@ jobs:
           if [[ "$SCAN_BASE" =~ ^[a-f0-9]{40}$ && "$SCAN_BASE" != "0000000000000000000000000000000000000000" ]]; then
             scan_args+=(--base "$SCAN_BASE")
           fi
-          node scripts/security/secret-scan.mjs "${scan_args[@]}"
+          node .secret-policy/scripts/security/secret-scan.mjs "${scan_args[@]}"
       - name: Publish aggregate-only secret scan evidence
         if: ${{ always() }}
         id: evidence
