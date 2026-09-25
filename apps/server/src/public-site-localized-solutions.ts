@@ -1,4 +1,5 @@
 import { publicPagePath, type PublicLocale, type PublicPage, type PublicPageId } from "./public-site-config.js";
+import { renderSolutionFaq } from "./public-site-solution-faq.js";
 import { renderSolutionVisual } from "./public-site-visuals.js";
 
 type LocalizedSolution = {
@@ -155,6 +156,6 @@ export function localizedSolutionPage(pageId: PublicPageId, locale: "de" | "tr")
       <section class="section solution-outcomes"><div><p class="section-index">${copy.outcomes}</p><h2>${copy.outcomeHeading}</h2></div><ul>${solution.outcomes.map((item) => `<li>${item}</li>`).join("")}</ul></section>
       <section class="section solution-delivery"><div><p class="section-index">${copy.delivery}</p><h2>${copy.deliveryHeading}</h2></div><ol>${solution.stages.map(([title, text], index) => `<li><span>0${index + 1}</span><div><h3>${title}</h3><p>${text}</p></div></li>`).join("")}</ol></section>
       <section class="section solution-proof"><div><p class="section-index">${copy.evidence}</p><h2>${solution.proofTitle}</h2></div><p class="section-lead">${solution.proofText}</p></section>
-      <section class="section limitations"><div><p class="section-index">${copy.boundaries}</p><h2>${copy.boundariesHeading}</h2></div><ul>${solution.boundaries.map((item) => `<li>${item}</li>`).join("")}</ul></section>${solutionCta(locale, copy.cta)}</main>`,
+      <section class="section limitations"><div><p class="section-index">${copy.boundaries}</p><h2>${copy.boundariesHeading}</h2></div><ul>${solution.boundaries.map((item) => `<li>${item}</li>`).join("")}</ul></section>${renderSolutionFaq(solution, locale)}${solutionCta(locale, copy.cta)}</main>`,
   };
 }
