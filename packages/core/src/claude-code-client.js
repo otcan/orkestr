@@ -6,6 +6,8 @@ import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { claudeCodeYoloAllowedMcpTools } from "./claude-code-mcp-policy.js";
 import { claudeCodeStatusAuthenticated } from "./claude-code-auth-status.js";
+import { claudeCodeRuntimeEnv, claudeCodeExecutionEnv } from "./claude-code-environment.js";
+export { claudeCodeRuntimeEnv, claudeCodeExecutionEnv } from "./claude-code-environment.js";
 
 const execFileAsync = promisify(execFile);
 const loginSessions = new Map();
@@ -197,32 +199,6 @@ function validModelTelemetry(value = "") {
   return /^[a-zA-Z0-9._:-]{1,120}$/.test(value) ? value : null;
 }
 
-export function claudeCodeRuntimeEnv(profile = {}, thread = {}, env = process.env) {
-  const runtimeHome = path.join(profile.credentialRoot, "runtime-home");
-  const runtimeTmp = path.join(profile.credentialRoot, "tmp");
-  const source = { ...process.env, ...env };
-  const inherited = {};
-  for (const key of [
-    "PATH", "LANG", "LC_ALL", "LC_CTYPE", "TERM", "COLORTERM", "NO_COLOR",
-    "TMPDIR", "TMP", "TEMP", "USER", "LOGNAME", "SHELL", "SSH_AUTH_SOCK",
-    "XDG_RUNTIME_DIR", "SSL_CERT_FILE", "SSL_CERT_DIR", "NODE_EXTRA_CA_CERTS",
-    "SYSTEMROOT", "WINDIR", "PATHEXT",
-  ]) {
-    if (source[key] !== undefined) inherited[key] = source[key];
-  }
-  const next = {
-    ...inherited,
-    HOME: runtimeHome,
-    TMPDIR: runtimeTmp,
-    TMP: runtimeTmp,
-    TEMP: runtimeTmp,
-    CLAUDE_CONFIG_DIR: profile.credentialRoot,
-    CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1",
-    DISABLE_AUTOUPDATER: "1",
-  };
-  return next;
-}
-
 export function classifyClaudeCodeFailure(value = "") {
   const text = clean(value).toLowerCase();
   if (/rate.?limit|usage.?limit|quota|too many requests|\bhit (?:your )?limit\b|\b429\b/.test(text)) return "claude_code_rate_limited";
@@ -255,7 +231,7 @@ export function claudeCodeEventText(event = {}) {
 
 export async function claudeCodeLoginStatus(profile = {}, thread = {}, env = process.env) {
   const command = claudeCodeCommand(env);
-  const runtimeEnv = claudeCodeRuntimeEnv(profile, thread, env);
+  const runtimeEnv = await claudeCodeExecutionEnv(profile, thread, env);
   await Promise.all([
     fs.mkdir(runtimeEnv.HOME, { recursive: true, mode: 0o700 }),
     fs.mkdir(runtimeEnv.TMPDIR, { recursive: true, mode: 0o700 }),
@@ -387,12 +363,24 @@ function monitorAuthenticatedLogin(session) {
       session.output = "";
       if (!session.closed) session.proc?.kill("SIGTERM");
     }
-  })().finally(() => {
+  })().catch(() => {
+    // A profile may be rotated/revoked while verification is awaiting the CLI.
+    // Keep the attended flow fail-closed without an unhandled rejection.
+    session.state = "failed";
+    session.failureCode = "claude_code_login_failed";
+    session.output = "";
+    if (!session.closed) session.proc?.kill("SIGTERM");
+  }).finally(() => {
     session.verifying = false;
   });
 }
 
 export async function startClaudeCodeLogin(profile = {}, thread = {}, env = process.env) {
+  if (profile.authenticationMethod === "subscription_token") {
+    const error = new Error("claude_subscription_token_rotation_required");
+    error.statusCode = 409;
+    throw error;
+  }
   if (profile.authMode !== "subscription") {
     const error = new Error("llm_account_auth_mode_unsupported");
     error.statusCode = 409;

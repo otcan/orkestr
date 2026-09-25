@@ -51,6 +51,10 @@ async function fixture(t, name = "runtime") {
 import fs from "node:fs";
 import { execSync } from "node:child_process";
 const args = process.argv.slice(2);
+if (args[args.indexOf("--output-format") + 1] === "json") {
+  process.stdout.write(JSON.stringify({ type: "result", subtype: "success", is_error: false, result: "OK" }));
+  process.exit(0);
+}
 if (args[0] === "auth" && args[1] === "status") {
   process.stdout.write(JSON.stringify({ authenticated: true, status: "logged_in" }) + "\\n");
   process.exit(0);
@@ -641,8 +645,8 @@ test("Claude API creates a thread with only an opaque exact profile binding", as
         wake: false,
       }),
     });
-    assert.equal(response.status, 201);
     const payload = await response.json();
+    assert.equal(response.status, 201, JSON.stringify(payload));
     assert.equal(payload.thread.runtimeKind, "claude-code");
     assert.equal(payload.thread.executor.accountProfileId, profile.id);
     assert.equal(JSON.stringify(payload).includes("runtimes/claude-code"), false);
@@ -664,6 +668,33 @@ test("Claude API creates a thread with only an opaque exact profile binding", as
     assert.equal(accountsResponse.status, 200, JSON.stringify(accounts));
     assert.equal(accounts.enabled, true, JSON.stringify(accounts));
     assert.deepEqual(accounts.accounts.map((account) => account.id), [profile.id]);
+    const token = "sk-ant-oat01-" + "x".repeat(40);
+    const tokenResponse = await fetch(`http://127.0.0.1:${port}/api/llm-accounts/${profile.id}/subscription-token`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token }),
+    });
+    const savedToken = await tokenResponse.json();
+    assert.equal(tokenResponse.status, 200, JSON.stringify(savedToken));
+    assert.equal(savedToken.account.authenticationMethod, "subscription_token");
+    assert.equal(savedToken.account.state, "login_required");
+    assert.ok(!JSON.stringify(savedToken).includes(token));
+    const verificationResponse = await fetch(`http://127.0.0.1:${port}/api/llm-accounts/${profile.id}/verify`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: "{}",
+    });
+    const verification = await verificationResponse.json();
+    assert.equal(verificationResponse.status, 200, JSON.stringify(verification));
+    assert.equal(verification.account.authenticationMethod, "subscription_token");
+    assert.equal(verification.account.state, "ready");
+    assert.equal(verification.status.verificationKind, "model_request");
+    const invalidToken = await fetch(`http://127.0.0.1:${port}/api/llm-accounts/${profile.id}/subscription-token`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token: "bad-token" }),
+    });
+    assert.equal(invalidToken.status, 400);
+    const foreignProfile = await readyProfile("different-owner", "Foreign profile", env);
+    const foreignToken = await fetch(`http://127.0.0.1:${port}/api/llm-accounts/${foreignProfile.id}/subscription-token`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token }),
+    });
+    assert.equal(foreignToken.status, 404);
+    assert.ok(!JSON.stringify(await listEvents(env)).includes(token));
     const foreignOwner = await fetch(`http://127.0.0.1:${port}/api/threads`, {
       method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({ name: "Denied tenant Claude", ownerUserId: "tenant", executorId: "claude-code", executor: { type: "claude-code", accountProfileId: profile.id } }),

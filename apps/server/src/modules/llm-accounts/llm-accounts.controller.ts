@@ -3,10 +3,10 @@ import {
   cancelClaudeCodeLogin,
   claudeCodeEnabled,
   claudeCodeLoginSession,
-  claudeCodeLoginStatus,
   startClaudeCodeLogin,
   submitClaudeCodeLoginCode,
 } from "../../../../../packages/core/src/claude-code-client.js";
+import { verifyClaudeCodeInference } from "../../../../../packages/core/src/claude-code-verification.js";
 import {
   createLlmAccountProfile,
   listLlmAccountProfiles,
@@ -14,6 +14,7 @@ import {
   resolveLlmAccountProfile,
   revokeLlmAccountProfile,
   updateLlmAccountProfileState,
+  setClaudeSubscriptionToken,
 } from "../../../../../packages/core/src/llm-account-profiles.js";
 import { isAdminPrincipal } from "../../../../../packages/core/src/policy.js";
 import { requestPrincipal } from "../../../../../packages/core/src/principal.js";
@@ -64,9 +65,11 @@ export class LlmAccountsController {
     const ownerUserId = ownerForRequest(request, String(body.ownerUserId || ""));
     const profile = await resolveLlmAccountProfile({ ownerUserId, profileId, provider: "claude-code", requireReady: false });
     if (profile.authMode !== "subscription") throw httpError("llm_account_auth_mode_unsupported", 409);
-    const status = await claudeCodeLoginStatus(profile, {}, process.env);
-    const state = status.authenticated ? "ready" : status.reason === "claude_code_cli_missing" ? "error" : "login_required";
+    const status = await verifyClaudeCodeInference(profile, process.env);
+    const state = status.authenticated ? "ready" : status.reason === "claude_code_rate_limited" ? "rate_limited"
+      : status.reason === "claude_code_auth_required" ? "login_required" : "error";
     const account = await updateLlmAccountProfileState(ownerUserId, profileId, state, {
+      credentialRevision: profile.credentialRevision || 0,
       verified: status.authenticated,
       failureCode: status.authenticated ? "" : status.reason,
     });
@@ -76,9 +79,21 @@ export class LlmAccountsController {
       profileId,
       provider: "claude-code",
       authenticated: status.authenticated,
+      verificationKind: status.verificationKind,
       failureCode: status.authenticated ? null : status.reason,
     });
     return { account: publicLlmAccountProfile(account), status };
+  }
+
+  @Post(":profileId/subscription-token")
+  @HttpCode(200)
+  async subscriptionToken(@Req() request: any, @Param("profileId") profileId: string, @Body() body: Record<string, unknown> = {}) {
+    assertClaudeCodeEnabled();
+    const ownerUserId = ownerForRequest(request, String(body.ownerUserId || ""));
+    const account = await setClaudeSubscriptionToken(ownerUserId, profileId, body.token, process.env);
+    cancelClaudeCodeLogin(profileId);
+    await appendEvent({ type: "llm_account_subscription_token_rotated", ownerUserId, profileId, provider: "claude-code" });
+    return { account };
   }
 
   @Post(":profileId/login")

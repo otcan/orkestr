@@ -291,6 +291,8 @@ export interface LlmAccountProfile {
   lastVerifiedAt?: string | null;
   revokedAt?: string | null;
   failureCode?: string | null;
+  authenticationMethod?: "browser_login" | "subscription_token";
+  tokenConfiguredAt?: string | null;
 }
 
 export interface LlmAccountLoginSession {
@@ -2696,6 +2698,10 @@ export class ApiService {
 
   startLlmAccountLogin(profileId: string): Observable<{ login: LlmAccountLoginSession }> {
     return this.http.post<{ login: LlmAccountLoginSession }>(this.api(`/llm-accounts/${encodeURIComponent(profileId)}/login`), {});
+  }
+
+  setLlmAccountSubscriptionToken(profileId: string, token: string): Observable<{ account: LlmAccountProfile }> {
+    return this.http.post<{ account: LlmAccountProfile }>(this.api(`/llm-accounts/${encodeURIComponent(profileId)}/subscription-token`), { token });
   }
 
   llmAccountLoginStatus(profileId: string): Observable<{ login: LlmAccountLoginSession | null }> {

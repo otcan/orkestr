@@ -26,15 +26,32 @@ import { ApiService, LlmAccountLoginSession, LlmAccountProfile } from "./api.ser
             <div><strong>{{ account.label }}</strong><span>{{ account.provider }} · {{ account.state }}</span></div>
             <div class="actions">
               @if (account.state === 'login_required' || account.state === 'error') {
-                <button type="button" (click)="connect(account)" [disabled]="busy">Connect</button>
+                @if (account.authenticationMethod !== 'subscription_token') {
+                  <button type="button" (click)="connect(account)" [disabled]="busy">Connect</button>
+                }
               }
               <button class="secondary" type="button" (click)="verify(account)" [disabled]="busy || account.state === 'revoked'">
                 {{ account.state === 'rate_limited' ? 'Recheck after plan change' : 'Verify login' }}
               </button>
               <button class="secondary danger-soft" type="button" (click)="revoke(account)" [disabled]="busy || account.state === 'revoked'">Revoke</button>
+              <button class="secondary" type="button" (click)="openToken(account)" [disabled]="busy || account.state === 'revoked'">{{ account.authenticationMethod === 'subscription_token' ? 'Rotate worker token' : 'Set up long-lived login' }}</button>
             </div>
+            <small class="profile-note">Verify runs a small tool-free model request using your subscription. It does not replay any work.</small>
             @if (account.state === 'rate_limited') {
-              <small class="profile-note">Recheck confirms the server login only. It cannot verify the subscription tier or remaining quota, and it never replays failed prompts.</small>
+              <small class="profile-note">Recheck tests a model request. It cannot verify the subscription tier or remaining quota, and it never replays failed prompts.</small>
+            }
+            @if (account.authenticationMethod === 'subscription_token') {
+              <small class="profile-note">Long-lived subscription token configured {{ account.tokenConfiguredAt }}. Provider expiry or revocation still requires rotation; browser login does not replace this token.</small>
+            }
+            @if (tokenProfileId === account.id) {
+              <form class="code-form" (submit)="saveToken(account); $event.preventDefault()">
+                <small class="profile-note">Run <code>claude setup-token</code> on your trusted computer and authorize your subscription. Paste the resulting token only here, never in chat. Claude documents a one-year lifetime for newly generated tokens; older or revoked tokens may stop earlier.</small>
+                <label>Long-lived subscription token
+                  <input type="password" name="claude-worker-token" [(ngModel)]="subscriptionToken" autocomplete="off" spellcheck="false" maxlength="4110" [disabled]="busy" />
+                </label>
+                <button type="submit" [disabled]="busy || !subscriptionToken.trim()">Save and verify</button>
+                <button type="button" class="secondary" (click)="closeToken()" [disabled]="busy">Cancel</button>
+              </form>
             }
             @if (activeLoginProfileId === account.id && account.state !== 'ready') {
               <form class="code-form" (submit)="completeLogin(account); $event.preventDefault()">
@@ -75,6 +92,37 @@ export class LlmAccountsComponent implements OnInit {
   notice = "";
   activeLoginProfileId = "";
   authorizationCode = "";
+  tokenProfileId = "";
+  subscriptionToken = "";
+
+  openToken(account: LlmAccountProfile): void {
+    this.closeToken();
+    this.tokenProfileId = account.id;
+  }
+
+  closeToken(): void {
+    this.subscriptionToken = "";
+    this.tokenProfileId = "";
+  }
+
+  async saveToken(account: LlmAccountProfile): Promise<void> {
+    if (this.tokenProfileId !== account.id || !this.subscriptionToken.trim()) return;
+    const token = this.subscriptionToken.trim();
+    this.subscriptionToken = "";
+    this.busy = true; this.error = this.notice = "";
+    try {
+      const saved = await firstValueFrom(this.api.setLlmAccountSubscriptionToken(account.id, token));
+      this.replace(saved.account);
+      this.closeToken();
+      this.activeLoginProfileId = "";
+      this.authorizationCode = "";
+      const verified = await firstValueFrom(this.api.verifyLlmAccount(account.id));
+      this.replace(verified.account);
+      this.notice = verified.status.authenticated ? `${account.label}: long-lived login verified by a model request.`
+        : `${account.label}: token saved, but model verification failed (${verified.status.reason}). No work was replayed.`;
+    } catch { this.error = "Could not complete token setup. Refresh the account state before retrying."; }
+    finally { this.subscriptionToken = ""; this.busy = false; this.detector.markForCheck(); }
+  }
 
   ngOnInit(): void { void this.load(); }
 
@@ -110,9 +158,9 @@ export class LlmAccountsComponent implements OnInit {
       if (recheckingPlanChange) {
         this.notice = result.status.authenticated
           ? `${account.label} login is valid. The subscription tier and remaining quota were not verified. Failed prompts were not replayed; retry one explicitly when ready.`
-          : `${account.label} still needs an attended Claude login. The subscription tier and remaining quota were not verified, and failed prompts were not replayed.`;
+          : `${account.label} model verification failed (${result.status.reason}). The subscription tier and remaining quota were not verified, and failed prompts were not replayed.`;
       } else {
-        this.notice = result.status.authenticated ? `${account.label} is ready.` : `${account.label} still needs an attended Claude login.`;
+        this.notice = result.status.authenticated ? `${account.label} is ready; a model request succeeded.` : `${account.label} model verification failed (${result.status.reason}).`;
       }
     } catch (error: any) { this.error = error?.error?.message || error?.error?.error || "Could not verify the Claude profile."; }
     finally { this.busy = false; this.detector.markForCheck(); }
@@ -161,7 +209,7 @@ export class LlmAccountsComponent implements OnInit {
       const verified = await firstValueFrom(this.api.verifyLlmAccount(account.id));
       this.replace(verified.account);
       this.activeLoginProfileId = "";
-      this.notice = verified.status.authenticated ? `${account.label} is ready.` : `${account.label} still needs an attended Claude login.`;
+      this.notice = verified.status.authenticated ? `${account.label} is ready; a model request succeeded.` : `${account.label} model verification failed (${verified.status.reason}).`;
     } catch (error: any) {
       this.error = error?.error?.message || error?.error?.error || error?.message || "Could not complete the Claude login.";
     } finally {

@@ -11,7 +11,7 @@ import {
   claudeCodeEventTelemetry,
   claudeCodeEventText,
   claudeCodeMaxOutputBytes,
-  claudeCodeRuntimeEnv,
+  claudeCodeExecutionEnv,
   claudeCodeStatusCapture,
   claudeCodeTimeoutMs,
   classifyClaudeCodeFailure,
@@ -82,7 +82,7 @@ async function profileForThread(thread, env, requireReady = true) {
 
 async function runProcess({ thread, profile, prompt, sessionId, attemptId, onPromptSubmitted = null, onEvent = null, env }) {
   const command = claudeCodeCommand(env);
-  const childEnv = claudeCodeRuntimeEnv(profile, thread, env);
+  const childEnv = await claudeCodeExecutionEnv(profile, thread, env);
   const statusCapture = claudeCodeStatusCapture(profile, thread);
   await Promise.all([
     fs.mkdir(childEnv.HOME, { recursive: true, mode: 0o700 }),
@@ -336,9 +336,9 @@ async function sendClaudeCodeInputReserved(thread, message, env = process.env) {
       runtime: { ...(thread.runtime || {}), runtimeKind: "claude-code", state: "failed", activeTurnId: null, lastTurnId: attemptId, lastTurnStatus: "failed", lastTurnError: failureCode },
     }, env).catch(() => thread);
     if (failureCode === "claude_code_rate_limited") {
-      await updateLlmAccountProfileState(thread.ownerUserId, profile.id, "rate_limited", { failureCode }, env).catch(() => {});
+      await updateLlmAccountProfileState(thread.ownerUserId, profile.id, "rate_limited", { failureCode, credentialRevision: profile.credentialRevision || 0 }, env).catch(() => {});
     } else if (failureCode === "claude_code_auth_required") {
-      await updateLlmAccountProfileState(thread.ownerUserId, profile.id, "login_required", { failureCode }, env).catch(() => {});
+      await updateLlmAccountProfileState(thread.ownerUserId, profile.id, "login_required", { failureCode, credentialRevision: profile.credentialRevision || 0 }, env).catch(() => {});
     }
     await appendTurnLifecycleEvent("failed", { threadId: thread.id, runtimeKind: "claude-code", turnId: attemptId, state: "failed", source: "claude-code", error: failureCode }, env).catch(() => {});
     await appendEvent({ type: "claude_code_turn_failed", threadId: thread.id, profileId: profile.id, turnId: attemptId, failureCode }, env);
