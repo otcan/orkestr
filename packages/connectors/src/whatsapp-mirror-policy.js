@@ -61,7 +61,7 @@ function bindingHasDisabledFlag(binding = {}, keys = []) {
 }
 
 export function codexAssistantSource(message = {}) {
-  return ["codex-rollout", "codex-app-server", "codex-app-server-import"].includes(clean(message?.source));
+  return ["codex-rollout", "codex-app-server", "codex-app-server-import", "claude-code"].includes(clean(message?.source));
 }
 
 export function codexAssistantPhase(message = {}) {

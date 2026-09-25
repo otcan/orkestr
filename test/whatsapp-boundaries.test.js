@@ -178,6 +178,9 @@ test("WhatsApp mirror policy forwards Codex final replies and progress updates",
   );
   assert.equal(shouldMirrorWhatsAppReply({ source: "codex-app-server-import", phase: "final_answer" }), true);
   assert.equal(shouldMirrorWhatsAppProgress({ source: "codex-app-server-import", phase: "commentary" }), true);
+  assert.equal(shouldMirrorWhatsAppReply({ source: "claude-code", phase: "final_answer" }), true);
+  assert.equal(shouldMirrorWhatsAppReply({ source: "claude-code", phase: "commentary" }), false);
+  assert.equal(shouldMirrorWhatsAppProgress({ source: "claude-code", phase: "commentary" }), true);
   assert.equal(shouldMirrorWhatsAppProgress({ source: "codex-app-server", phase: "awaiting_approval" }), true);
   assert.equal(shouldMirrorWhatsAppReply({ source: "codex-app-server", phase: "context_compaction" }), false);
   assert.equal(shouldMirrorWhatsAppProgress({ source: "codex-app-server", phase: "context_compaction" }), false);

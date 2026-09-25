@@ -44,6 +44,8 @@ import {
   publicClaudeCodeFailure,
   threadUsesClaudeCode,
 } from "./claude-code-runtime-policy.js";
+import { createClaudeCodeProgressReporter } from "./claude-code-progress.js";
+import { completeInterruptedClaudeCodeTurn } from "./claude-code-turn-state.js";
 
 export { assertClaudeCodeHostOwner, threadUsesClaudeCode } from "./claude-code-runtime-policy.js";
 
@@ -79,7 +81,7 @@ async function profileForThread(thread, env, requireReady = true) {
   return resolveClaudeCodeRuntimeProfile(thread, env, requireReady);
 }
 
-async function runProcess({ thread, profile, prompt, sessionId, attemptId, onPromptSubmitted = null, env }) {
+async function runProcess({ thread, profile, prompt, sessionId, attemptId, onPromptSubmitted = null, onEvent = null, env }) {
   const command = claudeCodeCommand(env);
   const childEnv = claudeCodeRuntimeEnv(profile, thread, env);
   const statusCapture = claudeCodeStatusCapture(profile, thread);
@@ -147,6 +149,7 @@ async function runProcess({ thread, profile, prompt, sessionId, attemptId, onPro
       }
       let event;
       try { event = JSON.parse(line); } catch { return; }
+      onEvent?.(event);
       observedSessionId = claudeCodeEventSessionId(event) || observedSessionId;
       telemetry = mergeClaudeCodeTelemetry(telemetry, claudeCodeEventTelemetry(event));
       const text = claudeCodeEventText(event);
@@ -221,22 +224,6 @@ export async function startClaudeCodeThread(thread, env = process.env) {
   return { thread: updated, started: true };
 }
 
-async function completeInterruptedTurn(thread, message, attemptId, env) {
-  await updateThreadMessage(thread.id, message.id, {
-    state: "completed",
-    deliveryState: "delivered",
-    deliveredAt: nowIso(),
-    observedVia: "claude_code_interrupted",
-    error: null,
-  }, env);
-  const updated = await updateThread(thread.id, {
-    state: "ready",
-    runtime: { ...(thread.runtime || {}), runtimeKind: "claude-code", state: "ready", activeTurnId: null, lastTurnId: attemptId, lastTurnStatus: "interrupted" },
-  }, env);
-  await appendTurnLifecycleEvent("interrupted", { threadId: thread.id, runtimeKind: "claude-code", turnId: attemptId, state: "interrupted", source: "claude-code" }, env).catch(() => {});
-  return updated;
-}
-
 async function sendClaudeCodeInputReserved(thread, message, env = process.env) {
   if (activeTurns.has(thread.id)) {
     const error = new Error("claude_code_turn_active");
@@ -269,23 +256,36 @@ async function sendClaudeCodeInputReserved(thread, message, env = process.env) {
   }, env);
   await appendTurnLifecycleEvent("started", { threadId: thread.id, runtimeKind: "claude-code", turnId: attemptId, state: "working", source: "claude-code" }, env).catch(() => {});
   await appendEvent({ type: "claude_code_turn_started", threadId: thread.id, profileId: profile.id, turnId: attemptId }, env);
+  const progress = createClaudeCodeProgressReporter({
+    thread,
+    parentMessage: freshMessage,
+    attemptId,
+    onPersisted: () => deliveryScheduler?.(thread.id, env, 0),
+  }, env);
+  await progress.start();
 
   try {
-    const result = await runProcess({
-      thread,
-      profile,
-      prompt: codexInputText(freshMessage),
-      sessionId,
-      attemptId,
-      onPromptSubmitted: () => recordClaudeCodeRouterTrace(runningMessage || freshMessage, "delivered_to_runtime", {
-        threadId: thread.id,
-        attempt: deliveryAttempt,
-        ownerProcess: attemptId,
-      }, env),
-      env,
-    });
+    let result;
+    try {
+      result = await runProcess({
+        thread,
+        profile,
+        prompt: codexInputText(freshMessage),
+        sessionId,
+        attemptId,
+        onPromptSubmitted: () => recordClaudeCodeRouterTrace(runningMessage || freshMessage, "delivered_to_runtime", {
+          threadId: thread.id,
+          attempt: deliveryAttempt,
+          ownerProcess: attemptId,
+        }, env),
+        onEvent: (event) => progress.observe(event),
+        env,
+      });
+    } finally {
+      await progress.flush();
+    }
     if (result.interrupted) {
-      const updated = await completeInterruptedTurn(thread, freshMessage, attemptId, env);
+      const updated = await completeInterruptedClaudeCodeTurn(thread, freshMessage, attemptId, env);
       return { interrupted: true, message: await getThreadMessage(thread.id, message.id, env), thread: updated };
     }
     await profileForThread(thread, env, true);

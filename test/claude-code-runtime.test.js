@@ -16,6 +16,7 @@ import {
   submitClaudeCodeLoginCode,
 } from "../packages/core/src/claude-code-client.js";
 import { changeClaudeModelControls, readClaudeModelControls } from "../packages/core/src/claude-model-controls.js";
+import { claudeCodeProgressText } from "../packages/core/src/claude-code-progress.js";
 import { getClaudeCodeSession } from "../packages/core/src/claude-code-sessions.js";
 import { getRouterTrace } from "../packages/core/src/router-traces.js";
 import {
@@ -102,6 +103,12 @@ process.stdin.on("end", () => {
       }), env: process.env });
     }
     process.stdout.write(JSON.stringify({ type: "system", subtype: "init", session_id: session }) + "\\n");
+    if (prompt.includes("stream progress")) {
+      process.stdout.write(JSON.stringify({ type: "assistant", session_id: session, message: { content: [
+        { type: "text", text: "I am inspecting the relevant implementation." },
+        { type: "tool_use", name: "Read", input: { path: "/private/path", token: "must-not-leak-progress" } }
+      ] } }) + "\\n");
+    }
     process.stdout.write(JSON.stringify({ type: "assistant", session_id: session, message: { content: [{ type: "text", text: "draft" }] } }) + "\\n");
     process.stdout.write(JSON.stringify({ type: "result", session_id: session, model: "claude-sonnet-fixture", result: "Reply: " + prompt.trim(), is_error: false, usage: { input_tokens: 120, output_tokens: 30, cache_read_input_tokens: 50 } }) + "\\n");
   };
@@ -409,6 +416,52 @@ test("Claude telemetry does not normalize missing usage percentages to zero", ()
     },
   });
   assert.equal(telemetry.rateLimits, null);
+});
+
+test("Claude progress projection requires tool-backed assistant events and never exposes tool input", () => {
+  assert.equal(claudeCodeProgressText({
+    type: "assistant",
+    message: { content: [{ type: "text", text: "This is the final answer." }] },
+  }), "");
+  assert.equal(claudeCodeProgressText({
+    type: "assistant",
+    message: { content: [{ type: "tool_use", name: "Edit", input: { token: "must-not-leak" } }] },
+  }), "Claude Code is applying changes.");
+  const described = claudeCodeProgressText({
+    type: "assistant",
+    message: { content: [
+      { type: "text", text: "I am checking the focused tests." },
+      { type: "tool_use", name: "Bash", input: { command: "private command" } },
+    ] },
+  });
+  assert.equal(described, "I am checking the focused tests.");
+  assert.equal(described.includes("private command"), false);
+});
+
+test("Claude WhatsApp turns persist bounded progress before the final answer", async (t) => {
+  const { env } = await fixture(t, "whatsapp-progress");
+  env.ORKESTR_CLAUDE_PROGRESS_MIN_INTERVAL_MS = "0";
+  const profile = await readyProfile("owner", "WhatsApp progress", env);
+  const thread = await claudeThread("owner", profile.id, env, "claude-whatsapp-progress");
+  const input = await enqueueThreadInput(thread.id, {
+    text: "stream progress",
+    source: "whatsapp_inbound",
+    connector: "whatsapp",
+    accountId: "account-fixture",
+    chatId: "chat-fixture",
+    sourceEventId: "event-fixture",
+  }, env);
+
+  await sendClaudeCodeInput(thread, input, env);
+  const assistant = (await listThreadMessages(thread.id, env)).filter((message) => message.role === "assistant");
+  assert.deepEqual(assistant.map((message) => [message.phase, message.text]), [
+    ["commentary", "Claude Code started working on your request."],
+    ["commentary", "I am inspecting the relevant implementation."],
+    ["final_answer", "Reply: stream progress"],
+  ]);
+  assert.equal(JSON.stringify(assistant).includes("must-not-leak-progress"), false);
+  assert.equal(JSON.stringify(assistant).includes("/private/path"), false);
+  assert.equal(assistant.every((message) => message.parentMessageId === input.id), true);
 });
 
 test("Claude runtime enforces one active turn and interruption leaves no late assistant mutation", async (t) => {
