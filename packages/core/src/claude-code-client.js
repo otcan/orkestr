@@ -5,6 +5,7 @@ import { promisify } from "node:util";
 import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { claudeCodeYoloAllowedMcpTools } from "./claude-code-mcp-policy.js";
+import { claudeCodeStatusAuthenticated } from "./claude-code-auth-status.js";
 
 const execFileAsync = promisify(execFile);
 const loginSessions = new Map();
@@ -259,17 +260,12 @@ export async function claudeCodeLoginStatus(profile = {}, thread = {}, env = pro
     fs.mkdir(runtimeEnv.TMPDIR, { recursive: true, mode: 0o700 }),
   ]);
   try {
-    const { stdout = "", stderr = "" } = await execFileAsync(command, ["auth", "status", "--json"], {
+    const { stdout = "" } = await execFileAsync(command, ["auth", "status", "--json"], {
       env: runtimeEnv,
       timeout: 10_000,
       maxBuffer: 1024 * 1024,
     });
-    const output = `${stdout}\n${stderr}`.trim();
-    let parsed = {};
-    try { parsed = JSON.parse(stdout); } catch {}
-    const authenticated = parsed.loggedIn === true || parsed.authenticated === true ||
-      ["logged_in", "authenticated", "ready"].includes(clean(parsed.status).toLowerCase()) ||
-      /\blogged\s+in\b|\bauthenticated\b/i.test(output) && !/\bnot\s+logged\s+in\b|\bunauthenticated\b/i.test(output);
+    const authenticated = claudeCodeStatusAuthenticated(stdout);
     return { available: true, authenticated, reason: authenticated ? "logged_in" : "not_logged_in" };
   } catch (error) {
     if (error?.code === "ENOENT") return { available: false, authenticated: false, reason: "claude_code_cli_missing" };

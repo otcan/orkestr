@@ -136,6 +136,12 @@ export async function updateLlmAccountProfileState(ownerUserId, profileId, state
   return mutateProfiles(owner, env, async (profiles) => {
     const profile = profiles.find((entry) => entry.id === id && entry.ownerUserId === owner);
     if (!profile) throw profileError("llm_account_profile_not_found", 404);
+    // Verification/recovery may have started before revocation. Check under the
+    // store lock so no delayed login or runtime failure can resurrect this ID.
+    if (profile.state === "revoked") {
+      if (normalizedState !== "revoked") throw profileError("llm_account_profile_revoked", 410);
+      return publicLlmAccountProfile(profile);
+    }
     profile.state = normalizedState;
     profile.updatedAt = nowIso();
     profile.lastVerifiedAt = options.verified === true ? profile.updatedAt : profile.lastVerifiedAt || "";

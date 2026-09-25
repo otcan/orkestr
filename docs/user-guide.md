@@ -66,6 +66,13 @@ the Orkestr host. In Settings → Models, add a labeled Claude subscription
 profile, open its attended provider login, and verify it. The new-thread wizard
 then allows that ready profile to be selected as the coding runtime.
 
+Verify login checks authentication, not the subscription tier or available
+quota. A plan upgrade does not change Orkestr's model settings or manufacture
+new capacity readings; usage remains provider-reported. Negative or ambiguous
+login status fails closed. Revocation is permanent for that profile ID, even if
+a verification or quota-recovery check was already running. Create a new
+profile and complete its attended login if a revoked account is needed again.
+
 The attended login uses a host PTY by default because the Claude CLI's initial
 theme and subscription-login prompts require a terminal. Linux installations
 therefore need the util-linux `script` command (or an equivalent configured with
