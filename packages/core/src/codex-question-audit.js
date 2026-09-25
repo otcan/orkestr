@@ -32,7 +32,7 @@ export function auditCodexQuestions(thread, messages, { ownerUserId, runtimeGene
   }
   for (const row of messages) {
     if (row.role === "user" && row.ownerUserId === ownerUserId && (!row.threadId || row.threadId === thread.id) &&
-        generation(row) === runtimeGeneration && row.state === "completed") {
+        [clean(row.codexThreadId), clean(row.executorThreadId)].includes(runtimeGeneration) && row.state === "completed") {
       const target = aliasesAgree(row) && identities.get(row.id) === 1 ? answeredIds : ambiguousAnswers;
       if (row.answeredInputMessageId) target.add(row.answeredInputMessageId);
       if (row.canceledInputMessageId) target.add(row.canceledInputMessageId);

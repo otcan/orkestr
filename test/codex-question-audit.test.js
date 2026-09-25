@@ -52,9 +52,11 @@ test("conflicting or duplicate resolution evidence stays under manual review", (
   const answer = { id: "answer", role: "user", ownerUserId: scope.ownerUserId,
     codexThreadId: scope.runtimeGeneration, answeredInputMessageId: question.id, state: "completed" };
   for (const patch of [{ executorThreadId: "other-generation" },
+    { codexThreadId: "other-generation", executorThreadId: scope.runtimeGeneration },
     { codexTurnId: "turn-a", executorTurnId: "other-turn" },
     { codexRequestId: "request-a", executorRequestId: "other-request" }]) {
     assert.equal(auditCodexQuestions(thread, [question, { ...answer, ...patch }], scope).counts.manual_review, 1);
+    assert.equal(auditCodexQuestions(thread, [question, answer, { ...answer, ...patch, id: "conflicting-answer" }], scope).counts.manual_review, 1);
   }
   assert.equal(auditCodexQuestions(thread, [question, answer, answer], scope).counts.manual_review, 1);
 });
