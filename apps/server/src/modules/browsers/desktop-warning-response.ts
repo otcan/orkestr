@@ -9,12 +9,13 @@ export function desktopShareReady(browser: any): boolean {
   if (!["running", "active", "open"].includes(status)) return false;
   if (browser.readiness && typeof browser.readiness === "object" && browser.readiness.ok === false) return false;
   if (browser.visual_ok === false || browser.bridge_ok === false || browser.web_ok === false) return false;
-  return true;
+  return browser.visual_ok === true || browser.readiness?.visualOk === true || browser.readiness?.framebuffer?.ok === true;
 }
 
 export function desktopShareNotReadyReason(browser: any, fallback = "desktop_share_not_ready"): string {
   if (!browser) return fallback;
   const readiness = browser.readiness && typeof browser.readiness === "object" ? browser.readiness : null;
+  if (["ready", "running", "active", "open"].includes(String(readiness?.status || browser.status || browser.state))) return "desktop_visual_readiness_unverified";
   return String(readiness?.status || browser.launchError || browser.status || browser.state || fallback).trim() || fallback;
 }
 
