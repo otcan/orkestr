@@ -40,6 +40,7 @@ test("desktop inventory bounds refreshes and keeps reservation loading independe
 
   assert.match(userDeskComponent, /Promise\.allSettled\(/);
   assert.match(userDeskComponent, /timeout\(\{ first: 7_000 \}\)/);
+  assert.match(userDeskComponent, /browserSessions\(threadId\)\.pipe\(timeout\(\{ first: 15_000 \}\)\)/);
   assert.match(userDeskComponent, /inventoryUnavailable = true/);
   assert.match(userDeskTemplate, /Desktop inventory unavailable/);
   assert.match(userDeskTemplate, /!inventoryUnavailable && !reservationsUnavailable/);
@@ -123,4 +124,49 @@ test("late inventory and lease responses cannot overwrite a newer thread refresh
   assert.equal(desk.browsers[0].slug, "new");
   assert.equal(desk.leases.length, 0);
   assert.equal(desk.busy, false);
+});
+
+test("desktop context follows the selected route, not changes in list order", async () => {
+  const calls = [];
+  const desk = await deskWithApi({
+    browserSessions: (id) => { calls.push(id); return rxjs.of({ sessions: [{ slug: "desk" }] }); },
+    desktopLeases: () => rxjs.of({ ok: true, desktopLeases: [] }),
+  });
+  desk.selectedThread = { id: "route-thread" };
+  desk.ngOnInit();
+  await new Promise(setImmediate);
+  assert.equal(desk.primaryThread().id, "route-thread");
+  desk.threads = [{ id: "new-list-first" }];
+  desk.ngOnChanges();
+  assert.deepEqual(calls, ["route-thread"]);
+  assert.equal(desk.actionBusy(desk.browsers[0]), false);
+  desk.selectedThread = { id: "other-route" };
+  desk.ngOnChanges();
+  assert.equal(desk.actionBusy({ slug: "desk" }), true);
+  await new Promise(setImmediate);
+  assert.deepEqual(calls, ["route-thread", "other-route"]);
+  assert.equal(desk.actionBusy(desk.browsers[0]), false);
+});
+
+test("late-arriving threads trigger scoped inventory instead of leaving controls disabled", async () => {
+  const calls = [];
+  const desk = await deskWithApi({
+    browserSessions: (id) => { calls.push(id); return rxjs.of({ sessions: [{ slug: "desk" }] }); },
+    desktopLeases: () => rxjs.of({ ok: true, desktopLeases: [] }),
+  });
+  desk.threads = [];
+  desk.ngOnInit();
+  await new Promise(setImmediate);
+  assert.deepEqual(calls, []);
+  assert.equal(desk.actionBusy({ slug: "desk" }), true);
+  desk.threads = [{ id: "arrived-thread" }];
+  desk.ngOnChanges();
+  await new Promise(setImmediate);
+  assert.deepEqual(calls, ["arrived-thread"]);
+  assert.equal(desk.actionBusy(desk.browsers[0]), false);
+});
+
+test("desktop page receives the current selected thread from its parent", async () => {
+  const template = await fs.readFile(new URL("../apps/web/src/app/app.component.html", import.meta.url), "utf8");
+  assert.match(template, /<ork-user-desk-page[^>]*\[selectedThread\]="selectedThread\(\)"/);
 });

@@ -1,5 +1,5 @@
 import { DatePipe } from "@angular/common";
-import { Component, Input, OnInit, inject } from "@angular/core";
+import { Component, Input, OnChanges, OnInit, inject } from "@angular/core";
 import { firstValueFrom, timeout } from "rxjs";
 import { ApiService, BrowserSession, DesktopAccessWarning, DesktopLeaseRecord, ThreadSummary } from "./api.service";
 
@@ -8,7 +8,7 @@ import { ApiService, BrowserSession, DesktopAccessWarning, DesktopLeaseRecord, T
   imports: [DatePipe],
   templateUrl: "./user-desk-page.component.html",
 })
-export class UserDeskPageComponent implements OnInit {
+export class UserDeskPageComponent implements OnInit, OnChanges {
   private readonly api = inject(ApiService);
 
   busy = false;
@@ -20,13 +20,20 @@ export class UserDeskPageComponent implements OnInit {
   reservationsUnavailable = true;
   private loadedThreadId: string | null = null;
   private loadGeneration = 0;
+  private initialized = false;
   browsers: BrowserSession[] = [];
   leases: DesktopLeaseRecord[] = [];
   @Input() threads: ThreadSummary[] = [];
+  @Input() selectedThread: ThreadSummary | null = null;
   actionWarnings: Record<string, DesktopAccessWarning[]> = {};
 
   ngOnInit(): void {
+    this.initialized = true;
     void this.load();
+  }
+
+  ngOnChanges(): void {
+    if (this.initialized && this.loadedThreadId !== (this.primaryThread()?.id || "")) void this.load();
   }
 
   async load(): Promise<void> {
@@ -42,9 +49,15 @@ export class UserDeskPageComponent implements OnInit {
     this.busy = true;
     this.error = "";
     this.reservationsUnavailable = true;
+    if (!threadId) {
+      this.busy = false;
+      return;
+    }
     try {
       const [browsersResult, leasesResult] = await Promise.allSettled([
-        firstValueFrom(this.api.browserSessions(threadId).pipe(timeout({ first: 7_000 }))),
+        // Inventory includes bounded browser probes plus scoped policy/lease
+        // projection. Allow that complete response, not just the probe budget.
+        firstValueFrom(this.api.browserSessions(threadId).pipe(timeout({ first: 15_000 }))),
         firstValueFrom(this.api.desktopLeases(false, threadId).pipe(timeout({ first: 7_000 }))),
       ]);
       if (generation !== this.loadGeneration || threadId !== (this.primaryThread()?.id || "")) return;
@@ -233,7 +246,7 @@ export class UserDeskPageComponent implements OnInit {
   }
 
   primaryThread(): ThreadSummary | null {
-    return this.threads[0] || null;
+    return this.selectedThread || this.threads[0] || null;
   }
 
   browserSlug(browser: BrowserSession): string {
