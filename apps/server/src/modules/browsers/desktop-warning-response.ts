@@ -8,6 +8,7 @@ export function desktopShareReady(browser: any): boolean {
   const status = String(browser.status || browser.state || "").trim().toLowerCase();
   if (!["running", "active", "open"].includes(status)) return false;
   if (browser.readiness && typeof browser.readiness === "object" && browser.readiness.ok === false) return false;
+  if (browser.readiness?.visualOk === false || browser.readiness?.framebuffer?.ok === false) return false;
   if (browser.visual_ok === false || browser.bridge_ok === false || browser.web_ok === false) return false;
   return browser.visual_ok === true || browser.readiness?.visualOk === true || browser.readiness?.framebuffer?.ok === true;
 }

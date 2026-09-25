@@ -82,6 +82,8 @@ test("start:false mints only from fresh positive visual evidence, never a cached
   for (const session of [
     {status:"degraded", visual_ok:false, readiness:{ok:false,status:"white_frame"}},
     {status:"running"},
+    {status:"running", visual_ok:true, readiness:{ok:true,status:"ready",visualOk:false}},
+    {status:"running", visual_ok:true, readiness:{ok:true,status:"ready",framebuffer:{ok:false}}},
     {status:"stopped"},
     {status:"running", visual_ok:true, readiness:{ok:true,status:"ready"}, slug:"other-desktop"},
     {probeFailure:true},
@@ -90,7 +92,7 @@ test("start:false mints only from fresh positive visual evidence, never a cached
     assert.equal((await f.post({start:false})).status, 503);
     assert.equal((await f.shares()).length, 1);
   }
-  assert.equal((await f.calls()).length, 7);
+  assert.equal((await f.calls()).length, 9);
   assert.equal((await f.calls()).every(args => args.join(" ") === "list --json"), true);
 });
 
