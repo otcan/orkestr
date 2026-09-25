@@ -1,6 +1,6 @@
 import os from "node:os";
 import { modelControlsReadOnlyReason } from "../../core/src/codex-model-controls.js";
-import { capacityResetLabel } from "./whatsapp-capacity-reset.js";
+import { capacityResetDate, capacityResetLabel } from "./whatsapp-capacity-reset.js";
 import { threadRequiresTenantIsolation } from "../../core/src/tenant-policy.js";
 import { codexAssistantSource, threadSuppressesWhatsAppDebugFooter } from "./whatsapp-mirror-policy.js";
 
@@ -336,9 +336,16 @@ function providerRateLimitsDebugValue(thread = {}, period = "") {
     return claudeCodeThread(thread) ? "unknown" : "";
   }
   const used = Number(limit.used_percent);
-  if (!Number.isFinite(used)) return claudeCodeThread(thread) ? "unknown" : "";
+  if (!Number.isFinite(used) || used < 0 || used > 100) return claudeCodeThread(thread) ? "unknown" : "";
   const remaining = Math.max(0, Math.min(100, 100 - used));
   return `${Math.round(remaining)}%`;
+}
+
+function futureProviderResetLabel(thread = {}, period = "") {
+  const reset = providerRateLimitRecordForPeriod(thread, period)?.resets_at;
+  const date = capacityResetDate(reset);
+  if (!date || date.getTime() <= Date.now()) return "";
+  return capacityResetLabel(reset, thread.whatsAppDebugOwnerTimezone);
 }
 
 export function shouldAppendWhatsAppDebugFooter(message = {}, env = process.env, deliveryType = "", thread = null) {
@@ -370,7 +377,10 @@ export function whatsappDebugFooter({ message = {}, thread = {}, messages = [], 
   const queueNotice = String(deliveryType || "").trim() === "queue_notice";
   const fiveHourRemaining = providerRateLimitsDebugValue(thread, "fiveHour");
   const weeklyRemaining = providerRateLimitsDebugValue(thread, "weekly");
-  const weeklyReset = capacityResetLabel(providerRateLimitRecordForPeriod(thread, "weekly")?.resets_at, thread.whatsAppDebugOwnerTimezone);
+  const fiveHourReset = isClaude ? futureProviderResetLabel(thread, "fiveHour") : "";
+  const weeklyReset = isClaude
+    ? futureProviderResetLabel(thread, "weekly")
+    : capacityResetLabel(providerRateLimitRecordForPeriod(thread, "weekly")?.resets_at, thread.whatsAppDebugOwnerTimezone);
   const parts = [
     `m:${modelDebugLabel(message, thread, env)}`,
     ...(isClaude ? ["agent:claude-code"] : []),
@@ -378,9 +388,11 @@ export function whatsappDebugFooter({ message = {}, thread = {}, messages = [], 
     ...(!isClaude && mode ? [`mode:${mode}`] : []),
     ...(runtimeSurface ? [`rt:${runtimeSurface}`] : []),
     `msg:${footerMessageType(deliveryType)}`,
+    ...(isClaude ? ["quota:remaining"] : []),
     ...(fiveHourRemaining ? [`5h:${fiveHourRemaining}`] : []),
+    ...(fiveHourReset ? [`5h-reset:${fiveHourReset}`] : []),
     ...(weeklyRemaining ? [`wk:${weeklyRemaining}`] : []),
-    ...(weeklyReset ? [`reset:${weeklyReset}`] : []),
+    ...(weeklyReset ? [`${isClaude ? "wk-reset" : "reset"}:${weeklyReset}`] : []),
     ...(queueNotice
       ? [`queue:${queueNoticeDebugCount(messages, message)}`, `reason:${queueNoticeDebugReason(message)}`]
       : [`q:${queueDebugCount(messages, message)}`]),
