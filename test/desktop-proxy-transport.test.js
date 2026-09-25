@@ -130,3 +130,24 @@ test("successful WebSocket upgrade forwards buffered bytes and remains open past
   socket.write("later-frame");
   assert.equal(String(await echoed), "later-frame");
 });
+
+test("failed WebSocket handshake releases a downstream that does not acknowledge EOF", { timeout: 3000 }, async (t) => {
+  const port = await listen(t, net.createServer(socket => {
+    socket.on("error", () => {});
+    socket.once("data", () => socket.end("HTTP/1.1 403 Forbidden\r\n\r\n"));
+  }));
+  let downstream;
+  const proxy = await listen(t, net.createServer(socket => {
+    downstream = socket;
+    proxyDesktopSocket(socket, Buffer.alloc(0), port, "GET / HTTP/1.1\r\n\r\n",
+      () => assert.fail("rejected handshake cannot connect"));
+  }));
+  const client = net.connect({ port: proxy, host: "127.0.0.1", allowHalfOpen: true });
+  t.after(() => client.destroy());
+  let response = "";
+  client.on("data", chunk => { response += chunk; });
+  await new Promise((resolve, reject) => { client.once("end", resolve); client.once("error", reject); });
+  assert.match(response, /^HTTP\/1.1 502/);
+  await delay(50);
+  assert.equal(downstream.destroyed, true, "failed handshake must not retain an unbounded half-open socket");
+});

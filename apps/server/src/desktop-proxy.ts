@@ -241,7 +241,14 @@ export function registerDesktopProxy(app: INestApplication): void {
 export function attachDesktopProxyUpgrade(server: Server): void {
   server.on("upgrade", async (request: IncomingMessage, socket: Duplex, head: Buffer) => {
     if (hostBoundaryUpgradeDenied(request)) return;
-    if (!parseDesktopUrl(request.url)) return;
+    // EventEmitter does not consume a rejected async listener. Reject malformed
+    // percent encoding here, before authentication or any upstream work.
+    try {
+      if (!parseDesktopUrl(request.url)) return;
+    } catch {
+      writeUpgradeError(socket, 400, "desktop_route_invalid");
+      return;
+    }
     const auth: any = await authorizeHttpRequest(request).catch((error) => ({
       ok: false,
       statusCode: 500,
