@@ -48,6 +48,18 @@ export function sameLogicalOutput(a, b) {
   for (const key of ["runtimeGeneration", "runtimeTurnId", "runtimeItemId"]) {
     if (a.metadata?.[key] && b.metadata?.[key] && a.metadata[key] !== b.metadata[key]) return false;
   }
-  return Boolean(a.sourceMessageId && a.sourceMessageId === b.sourceMessageId) ||
-    logicalOutputKey(a) === logicalOutputKey(b) || Boolean(a.sourceEventId && a.sourceEventId === b.sourceEventId);
+  if (Boolean(a.sourceMessageId && a.sourceMessageId === b.sourceMessageId) ||
+    logicalOutputKey(a) === logicalOutputKey(b) || Boolean(a.sourceEventId && a.sourceEventId === b.sourceEventId)) return true;
+  // Some rollout event shapes (e.g. legacy event_msg/agent_message entries)
+  // never carry an item id, so one side can lack runtimeItemId entirely while
+  // the other (e.g. app-server history) has one. The loop above already
+  // proved this is not a present-on-both-sides conflict; a shared turn within
+  // the same generation is still the same final answer.
+  return Boolean(
+    a.metadata?.runtimeGeneration && b.metadata?.runtimeGeneration &&
+    a.metadata.runtimeGeneration === b.metadata.runtimeGeneration &&
+    a.metadata?.runtimeTurnId && b.metadata?.runtimeTurnId &&
+    a.metadata.runtimeTurnId === b.metadata.runtimeTurnId &&
+    (!a.metadata?.runtimeItemId || !b.metadata?.runtimeItemId),
+  );
 }

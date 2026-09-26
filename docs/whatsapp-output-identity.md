@@ -22,6 +22,13 @@ No automatic replay or historical record rewrite is introduced. PostgreSQL
 uses a transaction-scoped advisory lock for first insert/legacy-alias lookup;
 JSON and SQLite use the existing cross-process outbox mutation lock.
 
+Some rollout jsonl event shapes (legacy `event_msg`/`agent_message` entries)
+never carry an item id, while the same logical answer observed through
+app-server history hydration always has one. A retained-job match still
+applies when generation and turn agree and item id is absent on at least one
+side; item id present-and-different on both sides remains a hard conflict
+and stays independent.
+
 ## Report-only incident review
 
 Obtain an authorized, owner-scoped snapshot through repository reads. Do not

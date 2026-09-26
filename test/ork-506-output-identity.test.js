@@ -94,6 +94,35 @@ for (const backend of ["json", "sqlite"]) test(`${backend}: retained legacy rece
   assert.equal((await readConnectorOutbox(env)).jobs.length, 1);
 });
 
+// Regression for the pepLab2 incident (ORK-506): some rollout jsonl event
+// shapes (legacy event_msg/agent_message entries) never carry an item id,
+// while the same logical answer observed via app-server history hydration
+// always has one. Without this, the two paths mint distinct outbox jobs for
+// one logical final answer -- the observed duplicate-send root cause.
+for (const backend of ["json", "sqlite"]) test(`${backend}: rollout entry missing an item id still converges onto the app-server item-identified job`, async t => {
+  const env = await fixture(t, backend);
+  const fromAppServer = await ensureConnectorOutboxJob(output("app-server-local"), env);
+  const { metadata: baseMetadata, ...rolloutFields } = output("rollout-local", { sourceEventId: "rollout-event-without-item" });
+  const { runtimeItemId: _omitted, ...metadataWithoutItem } = baseMetadata;
+  const fromRollout = await ensureConnectorOutboxJob({ ...rolloutFields, metadata: metadataWithoutItem }, env);
+  assert.equal(fromRollout.job.id, fromAppServer.job.id);
+  assert.equal(fromRollout.created, false);
+  assert.equal((await readConnectorOutbox(env)).jobs.length, 1);
+});
+
+for (const backend of ["json", "sqlite"]) test(`${backend}: two rollout entries both missing an item id still converge on shared turn identity`, async t => {
+  const env = await fixture(t, backend);
+  const { metadata: baseMetadata, ...rolloutFields } = output("rollout-first", { sourceEventId: "rollout-event-a" });
+  const { runtimeItemId: _omittedA, ...metadataWithoutItemA } = baseMetadata;
+  const first = await ensureConnectorOutboxJob({ ...rolloutFields, metadata: metadataWithoutItemA }, env);
+  const { metadata: baseMetadataB, ...rolloutFieldsB } = output("rollout-second", { sourceEventId: "rollout-event-b" });
+  const { runtimeItemId: _omittedB, ...metadataWithoutItemB } = baseMetadataB;
+  const second = await ensureConnectorOutboxJob({ ...rolloutFieldsB, metadata: metadataWithoutItemB }, env);
+  assert.equal(second.job.id, first.job.id);
+  assert.equal(second.created, false);
+  assert.equal((await readConnectorOutbox(env)).jobs.length, 1);
+});
+
 test("distinct turns, tenants, destinations and explicit revisions remain independent", async t => {
   const env = await fixture(t);
   const first = await ensureConnectorOutboxJob(output("first"), env);
