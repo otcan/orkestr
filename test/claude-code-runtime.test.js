@@ -469,6 +469,18 @@ test("Claude telemetry reads unified subscription windows from current rate-limi
     window_minutes: 10080,
     resets_at: 1900100000,
   });
+
+  const merged = mergeClaudeCodeTelemetry(telemetry, claudeCodeEventTelemetry({
+    type: "rate_limit_event",
+    rate_limit_info: {
+      status: "allowed",
+      rateLimitType: "five_hour",
+      resetsAt: 1900000000,
+    },
+  }));
+  assert.equal(merged.rateLimits.primary.used_percent, 17);
+  assert.equal(merged.rateLimits.primary.status, "allowed");
+  assert.equal(merged.rateLimits.secondary.used_percent, 7);
 });
 
 test("Claude telemetry does not normalize missing usage percentages to zero", () => {

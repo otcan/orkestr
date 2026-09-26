@@ -10,9 +10,17 @@ function finite(value) {
 
 function mergeClaudeCodeRateLimits(current = null, observed = null) {
   if (!observed) return current || null;
+  const mergeWindow = (previous, next) => {
+    if (!next) return previous || null;
+    if (!previous) return next;
+    const previousReset = finite(previous.resets_at);
+    const nextReset = finite(next.resets_at);
+    const sameWindow = previousReset === null || nextReset === null || previousReset === nextReset;
+    return sameWindow ? { ...previous, ...next } : next;
+  };
   return {
-    primary: observed.primary || current?.primary || null,
-    secondary: observed.secondary || current?.secondary || null,
+    primary: mergeWindow(current?.primary, observed.primary),
+    secondary: mergeWindow(current?.secondary, observed.secondary),
     plan_type: observed.plan_type || current?.plan_type || "claude_subscription",
   };
 }
