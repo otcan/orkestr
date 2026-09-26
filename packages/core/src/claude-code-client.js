@@ -8,8 +8,10 @@ import { claudeCodeYoloAllowedMcpTools } from "./claude-code-mcp-policy.js";
 import { claudeCodeStatusAuthenticated } from "./claude-code-auth-status.js";
 import { claudeCodeRuntimeEnv, claudeCodeExecutionEnv } from "./claude-code-environment.js";
 import { claudeCodeEventTelemetry, mergeClaudeCodeTelemetry } from "./claude-code-telemetry.js";
+import { composeClaudeAppendSystemPrompt, resolveStandingMissionAppendText } from "./claude-standing-mission.js";
 export { claudeCodeRuntimeEnv, claudeCodeExecutionEnv } from "./claude-code-environment.js";
 export { claudeCodeEventTelemetry, mergeClaudeCodeTelemetry } from "./claude-code-telemetry.js";
+export { resolveStandingMissionAppendText } from "./claude-standing-mission.js";
 
 const execFileAsync = promisify(execFile);
 const loginSessions = new Map();
@@ -98,11 +100,20 @@ export function claudeCodeArgs(thread = {}, options = {}, env = process.env) {
   if (clean(options.statusCaptureCommand)) {
     args.push("--settings", JSON.stringify({ statusLine: { type: "command", command: clean(options.statusCaptureCommand) } }));
   }
+  // The standing mission is delivered on every turn (first and resumed) so a
+  // long-running worker never loses track of it once the initial handoff
+  // message scrolls out of the effective context. It coexists with the
+  // failed-turn notice below rather than replacing it.
+  const appendPieces = [clean(options.standingMission)];
   if (clean(options.sessionId)) {
     // A resumed transcript keeps the user message of a turn that failed before
     // Claude answered (API errors are not replayed to the model). Without this
     // notice the stale request merges with the new one and reads as an override.
-    if (options.priorTurnFailed) args.push("--append-system-prompt", CLAUDE_CODE_FAILED_TURN_NOTICE);
+    if (options.priorTurnFailed) appendPieces.push(CLAUDE_CODE_FAILED_TURN_NOTICE);
+  }
+  const appendSystemPrompt = composeClaudeAppendSystemPrompt(appendPieces);
+  if (appendSystemPrompt) args.push("--append-system-prompt", appendSystemPrompt);
+  if (clean(options.sessionId)) {
     args.push("--resume", clean(options.sessionId));
   }
   return args;

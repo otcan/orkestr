@@ -38,6 +38,7 @@ export async function runClaudeCodeProcess({
   prompt,
   sessionId,
   priorTurnFailed = false,
+  standingMission = "",
   attemptId,
   onPromptSubmitted = null,
   onEvent = null,
@@ -62,7 +63,7 @@ export async function runClaudeCodeProcess({
   return new Promise((resolve, reject) => {
     const supervisor = spawnSupervised({
       command,
-      args: claudeCodeArgs(thread, { sessionId, priorTurnFailed, statusCaptureCommand: statusCapture.command }, env),
+      args: claudeCodeArgs(thread, { sessionId, priorTurnFailed, standingMission, statusCaptureCommand: statusCapture.command }, env),
       cwd: workspaceForThread(thread),
       env: childEnv,
       attemptId,

@@ -35,6 +35,7 @@ import {
 import { withCanonicalPublicReferenceLock } from "./canonical-public-reference-lock.js";
 import { injectRuntimeFault } from "./runtime-fault-injection.js";
 import { recordRegistryWriteRejectionMetric, recordWatcherAlertMetric } from "./observability.js";
+import { sanitizeStandingMissionText } from "./claude-standing-mission.js";
 
 const runningThreadIds = new Set();
 const activeInputStates = new Set(["queued", "pending_delivery", "awaiting_ack", "running"]);
@@ -375,6 +376,9 @@ async function createThreadLocked(input = {}, env = process.env) {
     forkedFromMessageCursor: Number(input.forkedFromMessageCursor || 0) || null,
     handoffPrompt: String(input.handoffPrompt || "").trim() || null,
     handoffMessageId: String(input.handoffMessageId || "").trim() || null,
+    standingMission: sanitizeStandingMissionText(input.standingMission) || null,
+    standingMissionUpdatedAt: String(input.standingMissionUpdatedAt || "").trim() || null,
+    standingMissionUpdatedBy: String(input.standingMissionUpdatedBy || "").trim() || null,
     createdAt: nowIso(),
     updatedAt: nowIso(),
   };
