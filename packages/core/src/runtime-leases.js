@@ -103,6 +103,7 @@ import { reconcileCodexFinalProjection } from "./codex-final-projection.js";
 import { readCodexRolloutSessionMeta, validateCodexRolloutGeneration } from "./codex-rollout-generation.js";
 import { replyDeliveryProjectionParent } from "./reply-delivery-intent.js";
 import { recordCodexUserInputRequest } from "./codex-input-observability.js";
+import { clearFailedAuthForOperatorWake } from "./codex-auth-failed-thread.js";
 
 setConnectorOutboxJobAdapter(ensureConnectorOutboxJob);
 
@@ -1392,7 +1393,9 @@ export async function wakeThread(threadId, options = {}, env = process.env) {
     throw error;
   }
   if (threadUsesNativeCodexRuntime(thread, env)) {
-    return resumeCodexRuntimeThread(thread, env);
+    // Operator escape hatch: wake clears failed_auth and allows one immediate attempt.
+    const woken = await clearFailedAuthForOperatorWake(thread, env);
+    return resumeCodexRuntimeThread(woken || thread, env);
   }
   if (threadUsesClaudeCode(thread)) {
     return resumeClaudeCodeThread(thread, env);
