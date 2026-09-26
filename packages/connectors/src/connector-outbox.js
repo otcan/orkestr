@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { logicalOutputKey, sameLogicalOutput } from "../../shared/src/runtime-output-identity.js";
+import { logicalOutputKey, logicalOutputMatchReason, outputFenceApplies, outputFenceFingerprint, sameLogicalOutput } from "../../shared/src/runtime-output-identity.js";
 import { withConnectorOutboxMutation } from "./connector-outbox-lock.js";
 import fs from "node:fs/promises";
 import { hasWhatsAppPartialDelivery, whatsappOutboxQuarantine, protectWhatsAppOutboxUpdate, requiresWhatsAppUncertainOverride } from "./whatsapp-replay-safety.js";
@@ -671,13 +671,14 @@ async function ensureConnectorOutboxJobLocked(input, env) {
   const normalized = normalizeConnectorOutboxJob(input, env);
   const logical = logicalOutputKey(normalized);
   if (logical) input = { ...input, idempotencyKey: logical, id: connectorOutboxJobId({ idempotencyKey: logical }) };
+  const fenced = outputFenceApplies(normalized);
   const pg = await openConnectorOutboxPostgres(env);
   if (pg) {
     const job = normalizeConnectorOutboxJob(input, env);
     let created = false;
     const nextJob = await withPostgresTransaction(pg, async (client) => {
       // SELECT FOR UPDATE cannot lock a first insertion that does not exist.
-      if (logical) await client.query("select pg_advisory_xact_lock(hashtextextended($1, 0))", [
+      if (fenced) await client.query("select pg_advisory_xact_lock(hashtextextended($1, 0))", [
         JSON.stringify([job.tenantId, job.ownerUserId, job.connector, job.accountId, job.chatId, job.threadId, job.sourceRevision, job.deliveryType]),
       ]);
       const existing = await getConnectorOutboxJobRowPostgres(client, job.idempotencyKey, env, { forUpdate: true }) ||
@@ -763,7 +764,7 @@ async function ensureConnectorOutboxJobLocked(input, env) {
 }
 
 async function retainedLogicalOutputJob(job, env, client = null, rows = null) {
-  if (!logicalOutputKey(job)) return null;
+  if (!outputFenceApplies(job)) return null;
   if (!rows && client) {
     const where = connectorOutboxWherePostgres({ ...job, state: "" });
     rows = (await client.query(`select data from orkestr_connector_outbox ${where.sql} for update`, where.values))
@@ -778,7 +779,8 @@ async function retainedLogicalOutputJob(job, env, client = null, rows = null) {
   if (!existing) return null;
   await appendEvent({ type: "connector_outbox_logical_duplicate_suppressed",
     reason: matches.length > 1 ? "retained_aliases_require_review" : "retained_logical_output",
-    outputFingerprint: logicalOutputKey(job), projectionFingerprint: hash(job.sourceMessageId),
+    matchReason: logicalOutputMatchReason(existing, job),
+    outputFingerprint: outputFenceFingerprint(job), projectionFingerprint: hash(job.sourceMessageId),
     outboxFingerprint: hash(existing.id), receiptPresent: Boolean(existing.brokerAck), state: existing.state,
   }, env).catch(() => {});
   return existing;
