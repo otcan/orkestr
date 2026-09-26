@@ -444,6 +444,33 @@ test("Claude telemetry replaces a rejected window when the provider allows reque
   assert.equal(JSON.stringify(merged).includes("must-not-persist"), false);
 });
 
+test("Claude telemetry reads unified subscription windows from current rate-limit events", () => {
+  const telemetry = claudeCodeEventTelemetry({
+    type: "rate_limit_event",
+    rate_limit_info: {
+      status: "allowed",
+      rateLimitType: "five_hour",
+      resetsAt: 1900000000,
+      unifiedWindows: {
+        five_hour: { utilization: 0.17, resetsAt: 1900000000 },
+        seven_day: { utilization: 0.07, resetsAt: 1900100000 },
+      },
+    },
+  });
+
+  assert.deepEqual(telemetry.rateLimits.primary, {
+    used_percent: 17,
+    window_minutes: 300,
+    resets_at: 1900000000,
+    status: "allowed",
+  });
+  assert.deepEqual(telemetry.rateLimits.secondary, {
+    used_percent: 7,
+    window_minutes: 10080,
+    resets_at: 1900100000,
+  });
+});
+
 test("Claude telemetry does not normalize missing usage percentages to zero", () => {
   const telemetry = claudeCodeEventTelemetry({
     rate_limits: {
