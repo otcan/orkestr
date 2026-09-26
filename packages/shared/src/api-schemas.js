@@ -358,6 +358,23 @@ export const threadWorkerCreateSchema = {
   },
 };
 
+export const threadStandingMissionUpdateSchema = {
+  ...idParams("threadId"),
+  body: {
+    type: "object",
+    required: ["mission"],
+    properties: {
+      mission: stringValue,
+    },
+    additionalProperties: false,
+  },
+};
+
+export const threadWorkerPushBranchSchema = {
+  ...idParams("threadId"),
+  body: objectValue,
+};
+
 export const taskAgentCreateSchema = {
   ...idParams("threadId"),
   body: {

@@ -13,6 +13,7 @@ import { httpError, validateRequestSchema } from "../../common/http.js";
 import {
   threadRepoUpdateSchema,
   threadWorkerCreateSchema,
+  threadWorkerPushBranchSchema,
 } from "../../../../../packages/shared/src/api-schemas.js";
 import {
   ThreadRepoService,
@@ -20,6 +21,15 @@ import {
   ThreadWorkerService,
 } from "./thread-application.services.js";
 import { assertThreadAdminOnly, threadIsActive } from "./thread-route-helpers.js";
+
+function clean(value: unknown): string {
+  return String(value || "").trim();
+}
+
+function operatorUserId(request: any): string {
+  const principal = requestPrincipal(request);
+  return clean(principal?.userId || principal?.id || principal?.displayName || "admin") || "admin";
+}
 
 @Controller("api/threads")
 export class ThreadWorkersController {
@@ -101,6 +111,18 @@ export class ThreadWorkersController {
     const status = await this.threadRuntimeService.status(thread.id).catch(() => null);
     if (threadIsActive(status)) throw httpError("thread_is_active", 409);
     const result: any = await this.threadWorkerService.syncParent(currentThread.id);
+    return {
+      ...result,
+      thread: await threadRuntimeSummary(result.thread, await listThreadMessages(result.thread.id)),
+    };
+  }
+
+  @Post(":threadId/push-branch")
+  @HttpCode(200)
+  async pushBranch(@Req() request: any, @Param("threadId") threadId: string, @Body() body: Record<string, unknown> = {}) {
+    validateRequestSchema(threadWorkerPushBranchSchema, { params: { threadId }, body });
+    assertThreadAdminOnly("thread.worker.push_branch", requestPrincipal(request));
+    const result: any = await this.threadWorkerService.pushOwnBranch(threadId, operatorUserId(request));
     return {
       ...result,
       thread: await threadRuntimeSummary(result.thread, await listThreadMessages(result.thread.id)),

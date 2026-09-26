@@ -12,6 +12,12 @@ import {
   updateThread,
 } from "../../../../../packages/core/src/threads.js";
 import { createThreadWorker, detectThreadRepo, listThreadWorkers, refreshThreadGitState, syncThreadWorkerWithParent, updateThreadRepo } from "../../../../../packages/core/src/thread-workers.js";
+import { pushWorkerOwnBranch } from "../../../../../packages/core/src/worker-branch-push.js";
+import {
+  clearThreadStandingMission,
+  getThreadStandingMission,
+  setThreadStandingMission,
+} from "../../../../../packages/core/src/claude-standing-mission-admin.js";
 import { cancelTaskAgent, createTaskAgent, listTaskAgents, taskAgentSummary } from "../../../../../packages/core/src/task-agents.js";
 import { userScopedCapabilityHints } from "../../../../../packages/core/src/user-skills.js";
 import { sanitizedThreadActionInput } from "./thread-route-helpers.js";
@@ -74,6 +80,25 @@ export class ThreadWorkerService {
 
   refreshGitState(threadId: string) {
     return refreshThreadGitState(threadId);
+  }
+
+  pushOwnBranch(threadId: string, operatorUserId: string) {
+    return pushWorkerOwnBranch(threadId, { operatorUserId });
+  }
+}
+
+@Injectable()
+export class ThreadStandingMissionService {
+  get(threadId: string) {
+    return getThreadStandingMission(threadId);
+  }
+
+  set(threadId: string, mission: string, operatorUserId: string) {
+    return setThreadStandingMission(threadId, mission, operatorUserId);
+  }
+
+  clear(threadId: string, operatorUserId: string) {
+    return clearThreadStandingMission(threadId, operatorUserId);
   }
 }
 

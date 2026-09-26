@@ -31,6 +31,8 @@ import { jiraCommand } from "./jira-command.js";
 import { mailboxesCommand } from "./mailbox-command.js";
 import { tenantSliceCommand } from "./tenant-slice-command.js";
 import { pickThread as defaultPickThread } from "./thread-picker.js";
+import { threadMissionCommand } from "./thread-mission-command.js";
+import { workerPushBranchCommand } from "./worker-branch-push-command.js";
 
 export async function runCli(argv = process.argv.slice(2), context = {}) {
   const global = parseGlobalFlags(argv);
@@ -1798,7 +1800,8 @@ async function revokeSecuritySessionCommand(argv, ctx) {
 async function threadCommand(argv, ctx) {
   const subcommand = argv[0] || "";
   if (subcommand === "create") return createThreadCommand(argv.slice(1), ctx);
-  throw new Error("Usage: orkestr thread create <name> [--id id] [--cwd path] [--command command] [--executor id] [--json]");
+  if (subcommand === "mission") return threadMissionCommand(argv.slice(1), ctx);
+  throw new Error("Usage: orkestr thread <create|mission> ... (see --help)");
 }
 
 async function createThreadCommand(argv, ctx) {
@@ -1823,7 +1826,8 @@ async function createThreadCommand(argv, ctx) {
 async function workerCommand(argv, ctx) {
   const subcommand = argv[0] || "";
   if (subcommand === "create") return createWorkerCommand(argv.slice(1), ctx);
-  throw new Error("Usage: orkestr worker create <parent-thread> [task text] [--task text] [--blank] [--label label] [--repo path] [--branch branch] [--no-wake] [--json]");
+  if (subcommand === "push-branch") return workerPushBranchCommand(argv.slice(1), ctx);
+  throw new Error("Usage: orkestr worker <create|push-branch> ... (see --help)");
 }
 
 async function createWorkerCommand(argv, ctx) {
@@ -2199,7 +2203,9 @@ Advanced:
   orkestr vm-slice create <owner-user-id> [--id slice-id] [--namespace ns] [--vm-name name] [--no-control-plane] [--execute] [--json]
   orkestr vm-slice [list|status <slice-id>|provision <slice-id>|destroy <slice-id> [--execute]] [--json]
   orkestr thread create <name> [--id id] [--cwd path] [--command command] [--executor id] [--json]
+  orkestr thread mission <get|set|clear> <thread> [mission text] [--text text] [--json]
   orkestr worker create <parent-thread> [task text] [--task text] [--blank] [--label label] [--repo path] [--branch branch] [--no-wake] [--json]
+  orkestr worker push-branch <worker-thread> [--json]
   orkestr task-agent profiles [--json]
   orkestr task-agent spawn <parent-thread> <task text> [--profile sre_engineer] [--context ref]... [--no-run] [--json]
   orkestr task-agent [list <parent-thread>|status <task-agent-thread>|cancel <task-agent-thread>] [--json]

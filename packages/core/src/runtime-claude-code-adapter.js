@@ -33,6 +33,7 @@ import {
   recoverOrphanedAttempt,
 } from "./claude-code-supervised-process.js";
 import { runClaudeCodeProcess, supervisionIdentityPath } from "./claude-code-process-runner.js";
+import { resolveStandingMissionAppendText } from "./claude-standing-mission.js";
 
 export { assertClaudeCodeHostOwner, threadUsesClaudeCode } from "./claude-code-runtime-policy.js";
 
@@ -172,6 +173,7 @@ async function sendClaudeCodeInputReserved(thread, message, env = process.env) {
         prompt: codexInputText(freshMessage),
         sessionId,
         priorTurnFailed,
+        standingMission: resolveStandingMissionAppendText(thread, env),
         attemptId,
         onPromptSubmitted: () => recordClaudeCodeRouterTrace(runningMessage || freshMessage, "delivered_to_runtime", {
           threadId: thread.id,
@@ -382,6 +384,20 @@ export async function resumeClaudeCodeThread(thread, env = process.env) {
     runtime: { ...(thread.runtime || {}), runtimeKind: "claude-code", state: "ready", activeTurnId: null },
   }, env);
   return { thread: updated, resumed: true };
+}
+
+// A stale runtime.activeTurnId with no live supervisor in this process's
+// activeTurns map is the fence orphan-turn recovery uses to decide a turn is
+// truly dead rather than merely running in another concurrent request.
+export function hasActiveClaudeCodeSupervisor(threadId) {
+  return activeTurns.has(threadId);
+}
+
+// Test-only: lets orphan-recovery tests simulate a genuinely live turn
+// without spawning a real Claude Code process.
+export function registerActiveClaudeCodeSupervisorForTest(threadId, supervisor = { attemptId: "test", interrupt() {}, terminate() {}, tickStaleWorking: () => false }) {
+  activeTurns.set(threadId, supervisor);
+  return () => activeTurns.delete(threadId);
 }
 
 export function resetClaudeCodeRuntimeForTest() {
