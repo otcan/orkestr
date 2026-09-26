@@ -160,7 +160,7 @@ function connectSupportPath(method = "GET", rawUrl = ""): boolean {
     "/api/setup/security/pair",
   ].includes(pathname)) return true;
   if (verb === "GET" && /^\/api\/setup\/security\/challenges\/[^/]+$/.test(pathname)) return true;
-  if (verb === "GET" && pathname === "/api/connectors/gmail/oauth/start") return true;
+  // GET /api/connectors/gmail/oauth/start removed: now POST with one-time intent (ORK-512).
   if (verb === "POST" && (
     pathname === "/api/broker/instances/register" ||
     /^\/api\/broker\/instances\/[^/]+\/heartbeat$/.test(pathname) ||
