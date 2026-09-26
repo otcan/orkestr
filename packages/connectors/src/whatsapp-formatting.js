@@ -348,6 +348,39 @@ function futureProviderResetLabel(thread = {}, period = "") {
   return capacityResetLabel(reset, thread.whatsAppDebugOwnerTimezone);
 }
 
+/**
+ * Returns a concise quota summary for Claude threads:
+ *   "limited"  — an active (non-expired) window is rejected/exhausted
+ *   "X%"       — remaining percentage (most constrained active window)
+ *   "ok"       — allowed but no percentage data yet (e.g. first turn)
+ *   null       — no meaningful data available (caller should omit the field)
+ *
+ * Uses providerRateLimitsDebugValue() as the gate so that expired reset
+ * windows (resets_at in the past) are treated as "unknown" rather than
+ * surfacing a stale "rejected" status from before the window reset.
+ */
+function claudeQuotaDebugSummary(thread = {}) {
+  const pct5h = providerRateLimitsDebugValue(thread, "fiveHour");
+  const pctWk = providerRateLimitsDebugValue(thread, "weekly");
+  if (!pct5h && !pctWk) return null;
+  // "limited" only when the window is still active and definitively rejected.
+  // If providerRateLimitsDebugValue returned "unknown" the window has expired —
+  // we don't know the current state, so don't claim it's still limited.
+  const limit5h = pct5h !== "unknown" ? providerRateLimitRecordForPeriod(thread, "fiveHour") : null;
+  const limitWk = pctWk !== "unknown" ? providerRateLimitRecordForPeriod(thread, "weekly") : null;
+  if (
+    String(limit5h?.status || "").trim().toLowerCase() === "rejected" ||
+    String(limitWk?.status || "").trim().toLowerCase() === "rejected"
+  ) return "limited";
+  const numericValues = [pct5h, pctWk]
+    .filter((v) => typeof v === "string" && v.endsWith("%"))
+    .map((v) => Number(v.slice(0, -1)))
+    .filter((v) => Number.isFinite(v));
+  if (numericValues.length > 0) return `${Math.min(...numericValues)}%`;
+  if (pct5h === "available" || pctWk === "available") return "ok";
+  return null;
+}
+
 export function shouldAppendWhatsAppDebugFooter(message = {}, env = process.env, deliveryType = "", thread = null) {
   if (!footerEnabled(env)) return false;
   if (thread && threadRequiresTenantIsolation(thread, env)) return false;
@@ -381,6 +414,7 @@ export function whatsappDebugFooter({ message = {}, thread = {}, messages = [], 
   const weeklyReset = isClaude
     ? futureProviderResetLabel(thread, "weekly")
     : capacityResetLabel(providerRateLimitRecordForPeriod(thread, "weekly")?.resets_at, thread.whatsAppDebugOwnerTimezone);
+  const claudeQuota = isClaude ? claudeQuotaDebugSummary(thread) : null;
   const parts = [
     `m:${modelDebugLabel(message, thread, env)}`,
     ...(isClaude ? ["agent:claude-code"] : []),
@@ -388,10 +422,10 @@ export function whatsappDebugFooter({ message = {}, thread = {}, messages = [], 
     ...(!isClaude && mode ? [`mode:${mode}`] : []),
     ...(runtimeSurface ? [`rt:${runtimeSurface}`] : []),
     `msg:${footerMessageType(deliveryType)}`,
-    ...(isClaude ? ["quota:remaining"] : []),
-    ...(fiveHourRemaining ? [`5h:${fiveHourRemaining}`] : []),
+    ...(claudeQuota ? [`quota:${claudeQuota}`] : []),
+    ...(fiveHourRemaining && fiveHourRemaining !== "unknown" ? [`5h:${fiveHourRemaining}`] : []),
     ...(fiveHourReset ? [`5h-reset:${fiveHourReset}`] : []),
-    ...(weeklyRemaining ? [`wk:${weeklyRemaining}`] : []),
+    ...(weeklyRemaining && weeklyRemaining !== "unknown" ? [`wk:${weeklyRemaining}`] : []),
     ...(weeklyReset ? [`${isClaude ? "wk-reset" : "reset"}:${weeklyReset}`] : []),
     ...(queueNotice
       ? [`queue:${queueNoticeDebugCount(messages, message)}`, `reason:${queueNoticeDebugReason(message)}`]
