@@ -3001,6 +3001,103 @@ test("runtime status ignores stale Codex update prompt text above a live input p
   }
 });
 
+test("runtime sync skips Codex update prompts (new · format)", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-codex-update-prompt-new-fmt-"));
+  const fakeTmux = await createFakeTmux(home);
+  const priorPath = process.env.PATH;
+  const priorTmuxLog = process.env.TMUX_LOG;
+  const priorTmuxState = process.env.TMUX_STATE;
+  const priorTmuxCaptureText = process.env.TMUX_CAPTURE_TEXT;
+  process.env.PATH = `${fakeTmux.bin}:${priorPath || ""}`;
+  process.env.TMUX_LOG = fakeTmux.log;
+  process.env.TMUX_STATE = fakeTmux.state;
+  // New Codex format: "·" separator and "enter continue · esc skip" footer
+  process.env.TMUX_CAPTURE_TEXT = [
+    "  Update available · 0.157.0 → 0.157.1",
+    "  Release notes: https://github.com/openai/codex/releases/latest",
+    "› 1. Update now (runs `npm install -g @openai/codex`)",
+    "  2. Skip",
+    "  3. Skip until next version",
+    "enter continue · esc skip",
+  ].join("\n");
+
+  try {
+    const env = {
+      ORKESTR_HOME: path.join(home, "orkestr-home"),
+      HOME: path.join(home, "runtime-home"),
+      CODEX_HOME: path.join(home, "codex-home"),
+      PATH: process.env.PATH,
+      TMUX_LOG: fakeTmux.log,
+      TMUX_STATE: fakeTmux.state,
+      TMUX_CAPTURE_TEXT: process.env.TMUX_CAPTURE_TEXT,
+    };
+    await createThread({ id: "codex-update-thread-new-fmt", name: "Codex Update Thread New Fmt" }, env);
+    await wakeThread("codex-update-thread-new-fmt", { reason: "test_wake" }, env);
+
+    let status = await runtimeStatus("codex-update-thread-new-fmt", env);
+    assert.equal(status.state, "waking");
+    assert.equal(status.needsCodexUpdatePromptSkip, true);
+
+    await syncRuntimeLeases(env);
+
+    status = await runtimeStatus("codex-update-thread-new-fmt", env);
+    const log = await fs.readFile(fakeTmux.log, "utf8");
+    assert.equal(status.state, "waking");
+    // Should send "3" for "Skip until next version"
+    assert.match(log, /__CALL__\tsend-keys\t-t\t%42\t3\tC-m/);
+    assert.doesNotMatch(log, /__CALL__\tkill-session\t-t\torkestr-codex-update-thread-new-fmt/);
+  } finally {
+    restoreEnvValue("PATH", priorPath);
+    restoreEnvValue("TMUX_LOG", priorTmuxLog);
+    restoreEnvValue("TMUX_STATE", priorTmuxState);
+    restoreEnvValue("TMUX_CAPTURE_TEXT", priorTmuxCaptureText);
+  }
+});
+
+test("runtime sync skips Codex update prompts (new format, no skip-until)", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-codex-update-prompt-new-fmt2-"));
+  const fakeTmux = await createFakeTmux(home);
+  const priorPath = process.env.PATH;
+  const priorTmuxLog = process.env.TMUX_LOG;
+  const priorTmuxState = process.env.TMUX_STATE;
+  const priorTmuxCaptureText = process.env.TMUX_CAPTURE_TEXT;
+  process.env.PATH = `${fakeTmux.bin}:${priorPath || ""}`;
+  process.env.TMUX_LOG = fakeTmux.log;
+  process.env.TMUX_STATE = fakeTmux.state;
+  // New format with only "Skip" (no "Skip until next version")
+  process.env.TMUX_CAPTURE_TEXT = [
+    "  Update available · 0.157.0 → 0.157.1",
+    "› 1. Update now (runs `npm install -g @openai/codex`)",
+    "  2. Skip",
+    "enter continue · esc skip",
+  ].join("\n");
+
+  try {
+    const env = {
+      ORKESTR_HOME: path.join(home, "orkestr-home"),
+      HOME: path.join(home, "runtime-home"),
+      CODEX_HOME: path.join(home, "codex-home"),
+      PATH: process.env.PATH,
+      TMUX_LOG: fakeTmux.log,
+      TMUX_STATE: fakeTmux.state,
+      TMUX_CAPTURE_TEXT: process.env.TMUX_CAPTURE_TEXT,
+    };
+    await createThread({ id: "codex-update-thread-new-fmt2", name: "Codex Update Thread New Fmt2" }, env);
+    await wakeThread("codex-update-thread-new-fmt2", { reason: "test_wake" }, env);
+
+    const status = await runtimeStatus("codex-update-thread-new-fmt2", env);
+    assert.equal(status.state, "waking");
+    assert.equal(status.needsCodexUpdatePromptSkip, true);
+    // Falls back to "2" (Skip) since no "Skip until next version"
+    assert.equal(status.codexUpdatePromptChoice, "2");
+  } finally {
+    restoreEnvValue("PATH", priorPath);
+    restoreEnvValue("TMUX_LOG", priorTmuxLog);
+    restoreEnvValue("TMUX_STATE", priorTmuxState);
+    restoreEnvValue("TMUX_CAPTURE_TEXT", priorTmuxCaptureText);
+  }
+});
+
 test("runtime sync persists live Codex code mode over stale stored plan mode", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-runtime-mode-sync-"));
   const fakeTmux = await createFakeTmux(home);

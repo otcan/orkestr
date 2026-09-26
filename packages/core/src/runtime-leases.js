@@ -747,9 +747,13 @@ function paneCodexUpdatePromptChoice(text) {
     .map((line) => line.trim())
     .filter(Boolean)
     .slice(-12);
-  const pressIndex = lines.findIndex((line) => /Press enter to continue/i.test(line));
+  // Match both old "Press enter to continue" and new "enter continue · esc skip" formats
+  const pressIndex = lines.findIndex(
+    (line) => /Press enter to continue/i.test(line) || /\benter\b.*\bcontinue\b/i.test(line),
+  );
   if (pressIndex < 0 || pressIndex !== lines.length - 1) return null;
-  const updateIndex = lines.findIndex((line) => /Update available!/i.test(line));
+  // Match both old "Update available!" and new "Update available ·" formats
+  const updateIndex = lines.findIndex((line) => /Update available[!·\s]/i.test(line));
   if (updateIndex < 0 || pressIndex - updateIndex > 8) return null;
   const skipUntilLine = lines
     .slice(updateIndex, pressIndex)
