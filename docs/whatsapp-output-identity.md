@@ -22,6 +22,27 @@ No automatic replay or historical record rewrite is introduced. PostgreSQL
 uses a transaction-scoped advisory lock for first insert/legacy-alias lookup;
 JSON and SQLite use the existing cross-process outbox mutation lock.
 
+### Item-less rollout projections
+
+Rollout files usually omit the runtime item ID, and rollout projection
+re-derives the parent on every scan (the latest user input in the turn, which
+changes after a steer). Its duplicate key includes that parent, so a rescan
+could append a second final with a new local ID and a rollout event ID, and the
+outbox then keyed it by event rather than item. Two guards close this:
+
+- `appendThreadMessage` reuses the stored completed final of the same runtime
+  generation and turn when an item-less codex projection has identical
+  whitespace-normalized source text (`canonical_runtime_turn_output`).
+- The outbox fence also matches a final lacking an item ID against a retained
+  job of the same scope, generation and turn with the same
+  `runtimeOutputBodyKey` (a digest of the runtime source text, not the
+  formatted payload). The suppression event records
+  `matchReason: same_turn_output_body`.
+
+Two outputs that both carry item IDs never match on text, and different
+turns, generations, chats or revisions stay independent. A projection with no
+turn identity at all is still not correlated.
+
 ## Report-only incident review
 
 Obtain an authorized, owner-scoped snapshot through repository reads. Do not
