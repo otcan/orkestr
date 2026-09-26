@@ -5,7 +5,7 @@ import tls from "node:tls";
 import type { INestApplication } from "@nestjs/common";
 import type { IncomingMessage, Server } from "node:http";
 import type { Duplex } from "node:stream";
-import { randomUUID } from "node:crypto";
+import crypto, { randomUUID } from "node:crypto";
 import { startGmailOAuth } from "../../../packages/connectors/src/gmail.js";
 import { googleWorkspaceBrokeredConnectorSetupPath } from "../../../packages/connectors/src/google-workspace.js";
 import { googleWorkspaceDefaultGmailCapabilities } from "../../../packages/connectors/src/google-workspace-scopes.js";
@@ -224,36 +224,139 @@ function authIntentAllowsGoogleConnect(session: any, instanceId: string): boolea
     allowedActions.some((action: string) => /^orkestr_auth\.google\.connect(?::|$)/.test(clean(action)));
 }
 
-function brokerGoogleWorkspaceStartRequest(request: any, route: BrokerAppRoute): URL | null {
-  if (String(request?.method || "GET").toUpperCase() !== "GET") return null;
+// Broker-scoped one-time intents for Gmail OAuth start.
+// When the tenant VM UI uses the new intent+POST flow, the broker proxy intercepts
+// POST /api/connectors/gmail/oauth/intent and POST /api/connectors/gmail/oauth/start
+// and handles them locally on the parent instance (same as the legacy GET handler did),
+// because the parent must perform the OAuth — not the tenant VM.
+// These intents are distinct from the parent's regular connector-use-intent store;
+// they are validated within the broker session scope and expire after 10 minutes.
+const brokerOAuthIntents = new Map<string, {
+  intentId: string;
+  token: string;
+  instanceId: string;
+  userId: string;
+  expiresAt: number;
+}>();
+const BROKER_INTENT_TTL_MS = 10 * 60 * 1000;
+
+function pruneBrokerOAuthIntents(): void {
+  const now = Date.now();
+  for (const [id, entry] of brokerOAuthIntents) {
+    if (entry.expiresAt <= now) brokerOAuthIntents.delete(id);
+  }
+}
+
+function brokerGoogleWorkspaceIntentRequest(request: any, route: BrokerAppRoute): boolean {
+  if (String(request?.method || "GET").toUpperCase() !== "POST") return false;
   const parsed = new URL(route.upstreamPath || "/", "http://tenant.local");
-  return parsed.pathname === "/api/connectors/gmail/oauth/start" ? parsed : null;
+  return parsed.pathname === "/api/connectors/gmail/oauth/intent";
+}
+
+function brokerGoogleWorkspaceStartRequest(request: any, route: BrokerAppRoute): URL | null {
+  const method = String(request?.method || "GET").toUpperCase();
+  const parsed = new URL(route.upstreamPath || "/", "http://tenant.local");
+  if (parsed.pathname !== "/api/connectors/gmail/oauth/start") return null;
+  // Accept GET (legacy/backward-compat) and POST (new intent+POST flow, ORK-512).
+  if (method !== "GET" && method !== "POST") return null;
+  return parsed;
+}
+
+async function handleBrokerGoogleWorkspaceIntent(request: any, response: any, route: BrokerAppRoute): Promise<boolean> {
+  if (!brokerGoogleWorkspaceIntentRequest(request, route)) return false;
+  const session = request?.orkestrSecuritySession || null;
+  if (!authIntentAllowsGoogleConnect(session, route.instanceId)) return false;
+  pruneBrokerOAuthIntents();
+  // Create a local broker-scoped intent tied to this session.
+  const intentId = `broker_${randomUUID()}`;
+  const token = Buffer.from(crypto.randomBytes(32)).toString("hex");
+  const owner = await ownerUserForBrokerInstance(route.instanceId);
+  const userId = clean(owner.userId || session?.userId || "");
+  brokerOAuthIntents.set(intentId, {
+    intentId,
+    token,
+    instanceId: route.instanceId,
+    userId,
+    expiresAt: Date.now() + BROKER_INTENT_TTL_MS,
+  });
+  sendJson(response, 201, { intentId, token });
+  return true;
 }
 
 async function handleBrokerGoogleWorkspaceStart(request: any, response: any, route: BrokerAppRoute): Promise<boolean> {
   const parsed = brokerGoogleWorkspaceStartRequest(request, route);
   if (!parsed) return false;
+  const method = String(request?.method || "GET").toUpperCase();
   const session = request?.orkestrSecuritySession || null;
   if (!authIntentAllowsGoogleConnect(session, route.instanceId)) return false;
+
+  // For the new POST+intent flow (ORK-512): validate the broker-scoped one-time intent
+  // issued by handleBrokerGoogleWorkspaceIntent before proceeding with startGmailOAuth.
+  if (method === "POST") {
+    const body = request?.body && typeof request.body === "object" ? request.body : {};
+    const intentId = clean(body.intentId);
+    const token = clean(body.token);
+    if (!intentId || !token) {
+      sendJson(response, 401, { ok: false, error: "broker_oauth_intent_required" });
+      return true;
+    }
+    pruneBrokerOAuthIntents();
+    const brokerIntent = brokerOAuthIntents.get(intentId);
+    if (!brokerIntent || brokerIntent.expiresAt <= Date.now() || brokerIntent.instanceId !== route.instanceId) {
+      sendJson(response, 401, { ok: false, error: "broker_oauth_intent_invalid" });
+      return true;
+    }
+    // Timing-safe token comparison.
+    const tokenBuf = Buffer.from(token, "utf8");
+    const storedBuf = Buffer.from(brokerIntent.token, "utf8");
+    const tokenOk = tokenBuf.length === storedBuf.length && crypto.timingSafeEqual(tokenBuf, storedBuf);
+    if (!tokenOk) {
+      brokerOAuthIntents.delete(intentId);
+      sendJson(response, 401, { ok: false, error: "broker_oauth_intent_invalid" });
+      return true;
+    }
+    // Consume the intent — single use.
+    brokerOAuthIntents.delete(intentId);
+  }
+
   const intent = session.authIntent && typeof session.authIntent === "object" ? session.authIntent : {};
   const owner = await ownerUserForBrokerInstance(route.instanceId);
   const userId = clean(owner.userId || intent.userId || session.userId);
   const tenantVmId = clean(intent.tenantVmId || owner.tenantVmId);
-  const account = clean(parsed.searchParams.get("account")).toLowerCase();
-  const googleConnectionId = clean(parsed.searchParams.get("accountId") || parsed.searchParams.get("account_id") || intent.googleConnectionId);
-  const oauthAppId = clean(parsed.searchParams.get("oauthApp") || parsed.searchParams.get("oauth_app") || intent.oauthAppId);
-  const alias = clean(parsed.searchParams.get("alias") || intent.connectionAlias);
-  const useMode = clean(parsed.searchParams.get("useMode") || parsed.searchParams.get("use_mode") || intent.connectionUseMode);
-  const setAsMain = ["1", "true", "yes"].includes(clean(parsed.searchParams.get("setAsMain") || parsed.searchParams.get("set_as_main") || intent.setAsMain).toLowerCase());
-  const setAsThreadDefault = ["1", "true", "yes"].includes(clean(parsed.searchParams.get("setAsThreadDefault") || parsed.searchParams.get("set_as_thread_default") || intent.setAsThreadDefault).toLowerCase());
-  const capabilities = stringArray(parsed.searchParams.getAll("capability").length
-    ? parsed.searchParams.getAll("capability")
-    : parsed.searchParams.get("capabilities") || googleWorkspaceDefaultGmailCapabilities());
+
+  // GET (legacy): params from query string. POST (new flow): params from request body.
+  const body = method === "POST" && request?.body && typeof request.body === "object" ? request.body : {};
+  const account = (method === "POST"
+    ? clean(body.account || body.email || "")
+    : clean(parsed.searchParams.get("account") || "")).toLowerCase();
+  const googleConnectionId = method === "POST"
+    ? clean(body.accountId || body.account_id || body.googleConnectionId || intent.googleConnectionId || "")
+    : clean(parsed.searchParams.get("accountId") || parsed.searchParams.get("account_id") || intent.googleConnectionId);
+  const oauthAppId = method === "POST"
+    ? clean(body.oauthApp || body.oauth_app || body.oauthAppId || intent.oauthAppId || "")
+    : clean(parsed.searchParams.get("oauthApp") || parsed.searchParams.get("oauth_app") || intent.oauthAppId);
+  const alias = method === "POST"
+    ? clean(body.alias || intent.connectionAlias || "")
+    : clean(parsed.searchParams.get("alias") || intent.connectionAlias);
+  const useMode = method === "POST"
+    ? clean(body.useMode || body.use_mode || intent.connectionUseMode || "")
+    : clean(parsed.searchParams.get("useMode") || parsed.searchParams.get("use_mode") || intent.connectionUseMode);
+  const setAsMain = ["1", "true", "yes"].includes(clean(
+    method === "POST" ? String(body.setAsMain || intent.setAsMain || "") : (parsed.searchParams.get("setAsMain") || parsed.searchParams.get("set_as_main") || intent.setAsMain),
+  ).toLowerCase());
+  const setAsThreadDefault = ["1", "true", "yes"].includes(clean(
+    method === "POST" ? String(body.setAsThreadDefault || intent.setAsThreadDefault || "") : (parsed.searchParams.get("setAsThreadDefault") || parsed.searchParams.get("set_as_thread_default") || intent.setAsThreadDefault),
+  ).toLowerCase());
+  const capabilities = method === "POST"
+    ? stringArray(body.capabilities || body.capability || googleWorkspaceDefaultGmailCapabilities())
+    : stringArray(parsed.searchParams.getAll("capability").length
+        ? parsed.searchParams.getAll("capability")
+        : parsed.searchParams.get("capabilities") || googleWorkspaceDefaultGmailCapabilities());
   const connectId = clean(intent.connectId || session.challengeId || session.id) || randomUUID();
   try {
-    const threadId = clean(intent.threadId);
-    const chatId = clean(intent.chatId);
-    const accountId = clean(intent.accountId);
+    const threadId = clean(intent.threadId || (method === "POST" ? body.threadId : "") || "");
+    const chatId = clean(intent.chatId || (method === "POST" ? body.chatId : "") || "");
+    const accountId = clean(intent.accountId || (method === "POST" ? body.accountId : "") || "");
     const started = await startGmailOAuth(process.env, {
       userId,
       provider: "google_workspace",
@@ -403,6 +506,7 @@ async function proxyBrokerAppHttp(request: any, response: any): Promise<void> {
     });
     return;
   }
+  if (await handleBrokerGoogleWorkspaceIntent(request, response, route)) return;
   if (await handleBrokerGoogleWorkspaceStart(request, response, route)) return;
 
   let target: BrokerAppTarget | null = null;

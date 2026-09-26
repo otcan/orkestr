@@ -2597,7 +2597,13 @@ export class ApiService {
 
   startGmailOAuth(options: { account?: string; accountId?: string; alias?: string; useMode?: string; oauthApp?: string; setAsMain?: boolean; setAsThreadDefault?: boolean; threadId?: string; capabilities?: string[]; privacyConsent?: boolean; privacyPolicyVersion?: string } = {}): Observable<GmailOAuthStartResponse> {
     // ORK-512: create a one-time intent first, then POST to start (CSRF-resistant).
-    return this.http.post<{ intentId: string; token: string }>(this.api("/connectors/gmail/oauth/intent"), {}).pipe(
+    // Pass binding fields at intent creation so the server can guard against account substitution.
+    const intentBody: Record<string, unknown> = {};
+    if (options.account) intentBody["account"] = options.account;
+    if (options.accountId) intentBody["accountId"] = options.accountId;
+    if (options.capabilities?.length) intentBody["capabilities"] = options.capabilities;
+    if (options.threadId) intentBody["returnTarget"] = `/app/threads/${encodeURIComponent(options.threadId)}`;
+    return this.http.post<{ intentId: string; token: string }>(this.api("/connectors/gmail/oauth/intent"), intentBody).pipe(
       switchMap(({ intentId, token }) =>
         this.http.post<GmailOAuthStartResponse>(this.api("/connectors/gmail/oauth/start"), {
           ...options,
