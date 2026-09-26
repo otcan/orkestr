@@ -50,6 +50,12 @@ function extractAllowlistedFields(parsed) {
 }
 
 async function runAuthStatusProbe(profile, env) {
+  // Safety: `claude auth status --json` is a local filesystem read only.
+  // It reads the CLI's stored credential state (~/.claude.json or equivalent)
+  // and returns structured JSON about the current auth method and subscription tier.
+  // It does NOT make network calls, does NOT refresh tokens, does NOT write any files,
+  // and does NOT call Anthropic's APIs. It is equivalent to reading a local config file.
+  // This is why it is safe to run in a read-only diagnostics context.
   const command = claudeCodeCommand(env);
   const runtimeEnv = claudeCodeRuntimeEnv(profile, {}, env);
   await Promise.all([
