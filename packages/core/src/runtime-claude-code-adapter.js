@@ -80,7 +80,7 @@ async function profileForThread(thread, env, requireReady = true) {
   return resolveClaudeCodeRuntimeProfile(thread, env, requireReady);
 }
 
-async function runProcess({ thread, profile, prompt, sessionId, attemptId, onPromptSubmitted = null, onEvent = null, env }) {
+async function runProcess({ thread, profile, prompt, sessionId, priorTurnFailed = false, attemptId, onPromptSubmitted = null, onEvent = null, env }) {
   const command = claudeCodeCommand(env);
   const childEnv = await claudeCodeExecutionEnv(profile, thread, env);
   const statusCapture = claudeCodeStatusCapture(profile, thread);
@@ -92,7 +92,7 @@ async function runProcess({ thread, profile, prompt, sessionId, attemptId, onPro
   await fs.rm(statusCapture.capturePath, { force: true });
   childEnv.ORKESTR_CLAUDE_STATUS_CAPTURE_PATH = statusCapture.capturePath;
   return new Promise((resolve, reject) => {
-    const proc = spawn(command, claudeCodeArgs(thread, { sessionId, statusCaptureCommand: statusCapture.command }, env), {
+    const proc = spawn(command, claudeCodeArgs(thread, { sessionId, priorTurnFailed, statusCaptureCommand: statusCapture.command }, env), {
       cwd: workspaceForThread(thread),
       env: childEnv,
       stdio: ["pipe", "pipe", "pipe"],
@@ -235,6 +235,7 @@ async function sendClaudeCodeInputReserved(thread, message, env = process.env) {
   const attemptId = `claude_turn_${crypto.randomBytes(12).toString("base64url")}`;
   const deliveryAttempt = Math.max(0, Number(freshMessage.deliveryAttempt || 0) || 0) + 1;
   const sessionId = await getClaudeCodeSession(thread, env);
+  const priorTurnFailed = clean(thread.runtime?.lastTurnStatus) === "failed";
   const runningMessage = await updateThreadMessage(thread.id, message.id, {
     state: "running",
     deliveryState: "delivering",
@@ -271,6 +272,7 @@ async function sendClaudeCodeInputReserved(thread, message, env = process.env) {
         profile,
         prompt: codexInputText(freshMessage),
         sessionId,
+        priorTurnFailed,
         attemptId,
         onPromptSubmitted: () => recordClaudeCodeRouterTrace(runningMessage || freshMessage, "delivered_to_runtime", {
           threadId: thread.id,

@@ -96,9 +96,21 @@ export function claudeCodeArgs(thread = {}, options = {}, env = process.env) {
   if (clean(options.statusCaptureCommand)) {
     args.push("--settings", JSON.stringify({ statusLine: { type: "command", command: clean(options.statusCaptureCommand) } }));
   }
-  if (clean(options.sessionId)) args.push("--resume", clean(options.sessionId));
+  if (clean(options.sessionId)) {
+    // A resumed transcript keeps the user message of a turn that failed before
+    // Claude answered (API errors are not replayed to the model). Without this
+    // notice the stale request merges with the new one and reads as an override.
+    if (options.priorTurnFailed) args.push("--append-system-prompt", CLAUDE_CODE_FAILED_TURN_NOTICE);
+    args.push("--resume", clean(options.sessionId));
+  }
   return args;
 }
+
+export const CLAUDE_CODE_FAILED_TURN_NOTICE = [
+  "Orkestr runtime notice: the previous user turn in this conversation failed with a runtime or provider error before you answered it.",
+  "That turn is void; do not complete or enforce its instructions.",
+  "Treat only the latest user message as the current request.",
+].join(" ");
 
 export function claudeCodeStatusCapture(profile = {}, thread = {}) {
   const key = crypto.createHash("sha256").update(clean(thread.id)).digest("hex");

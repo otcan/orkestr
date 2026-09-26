@@ -7,6 +7,7 @@ import { startServer } from "../apps/server/src/server.js";
 import { listEvents } from "../packages/storage/src/store.js";
 import {
   cancelClaudeCodeLogin,
+  CLAUDE_CODE_FAILED_TURN_NOTICE,
   claudeCodeArgs,
   claudeCodeEventTelemetry,
   mergeClaudeCodeTelemetry,
@@ -89,6 +90,10 @@ process.stdin.on("end", () => {
     process.stdout.write(JSON.stringify({ type: "rate_limit_event", session_id: session, rate_limit_info: { status: "rejected", rateLimitType: "five_hour", resetsAt: 1900000000, isUsingOverage: false, overageDisabledReason: "must-not-persist" } }) + "\\n");
     process.stdout.write(JSON.stringify({ type: "assistant", session_id: session, error: "rate_limit" }) + "\\n");
     process.stdout.write(JSON.stringify({ type: "result", subtype: "success", session_id: session, is_error: true, result: "You've hit your limit · resets later" }) + "\\n");
+    process.exit(1);
+  }
+  if (prompt.includes("expired auth")) {
+    process.stdout.write(JSON.stringify({ type: "result", subtype: "success", session_id: resumed, is_error: true, result: "Failed to authenticate. API Error: 401" }) + "\\n");
     process.exit(1);
   }
   if (prompt.includes("rate limit")) {
@@ -326,6 +331,28 @@ test("Claude runtime selects the exact profile, strips inherited API credentials
   const publicState = JSON.stringify({ thread, messages, events });
   assert.equal(publicState.includes("must-not-persist"), false);
   assert.equal(publicState.includes("/private/transcript"), false);
+});
+
+test("Claude runtime voids a failed turn through the system prompt when the next turn resumes", async (t) => {
+  const { calls, env } = await fixture(t, "failed-turn");
+  const primary = await readyProfile("owner", "Primary", env);
+  let thread = await claudeThread("owner", primary.id, env);
+  for (const text of ["first request", "expired auth probe", "replacement request", "follow-up request"]) {
+    await enqueueThreadInput(thread.id, { text, source: "test" }, env);
+    await deliverClaudeCodePendingInputs(thread, env).catch(() => {});
+    // The owner re-authenticates after the provider rejected the expired token.
+    if (text === "expired auth probe") await updateLlmAccountProfileState("owner", primary.id, "ready", { verified: true }, env);
+    thread = await getThread(thread.id, env);
+  }
+
+  const recorded = (await fs.readFile(calls, "utf8")).trim().split("\n").map(JSON.parse);
+  assert.deepEqual(recorded.map((call) => call.prompt), ["first request", "expired auth probe", "replacement request", "follow-up request"]);
+  const notices = recorded.map((call) => {
+    const at = call.args.indexOf("--append-system-prompt");
+    return at >= 0 ? call.args[at + 1] : null;
+  });
+  assert.deepEqual(notices, [null, null, CLAUDE_CODE_FAILED_TURN_NOTICE, null]);
+  assert.deepEqual(recorded[2].args.slice(-2), ["--resume", "claude_session_fixture"]);
 });
 
 test("Claude runtime records exact router delivery phases for WhatsApp input", async (t) => {
