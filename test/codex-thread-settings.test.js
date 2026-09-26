@@ -59,3 +59,35 @@ test("Codex fast command toggles, reports, disables, and rejects unsupported mod
   assert.equal(unsupported.ok, false);
   assert.match(unsupported.error, /does not advertise a fast service tier/);
 });
+
+test("bare settings commands report status content without mutation", () => {
+  const thread = { codexModel: "gpt-main", codexReasoningEffort: "high", codexServiceTier: "priority" };
+  const model = resolveCodexThreadSettingsCommand({ command: "model", text: "", thread, models });
+  assert.equal(model.action, "status");
+  assert.equal(model.patch, undefined);
+  assert.match(model.replyText, /Model: gpt-main · effort: high/);
+  assert.match(model.replyText, /Fast: on/);
+  assert.match(model.replyText, /- gpt-main \(low\/medium\/high\) · fast/);
+  assert.match(model.replyText, /- gpt-small \(low\)/);
+
+  const effort = resolveCodexThreadSettingsCommand({ command: "effort", text: "", thread, models });
+  assert.equal(effort.action, "status");
+  assert.equal(effort.patch, undefined);
+  assert.match(effort.replyText, /Model: gpt-main · effort: high/);
+  assert.match(effort.replyText, /Supported efforts: low, medium, high/);
+
+  const fast = resolveCodexThreadSettingsCommand({ command: "fast", text: "", thread, models });
+  assert.equal(fast.action, "status");
+  assert.equal(fast.patch, undefined);
+  assert.match(fast.replyText, /Fast mode is on/);
+});
+
+test("effort setter validates the current catalog entry and rejects malformed arguments", () => {
+  const thread = { codexModel: "gpt-small" };
+  assert.deepEqual(resolveCodexThreadSettingsCommand({ command: "EFFORT", text: "LOW", thread, models }).runtimePatch, { model: "gpt-small", effort: "low" });
+  assert.match(resolveCodexThreadSettingsCommand({ command: "effort", text: "high", thread, models }).error, /Unsupported effort for gpt-small/);
+  assert.equal(resolveCodexThreadSettingsCommand({ command: "effort", text: "low extra", thread, models }).ok, false);
+  assert.equal(resolveCodexThreadSettingsCommand({ command: "model", text: "gpt-main high extra", thread, models }).ok, false);
+  assert.equal(resolveCodexThreadSettingsCommand({ command: "fast", text: "sometimes", thread, models }).ok, false);
+  assert.match(resolveCodexThreadSettingsCommand({ command: "effort", text: "low", thread: { codexModel: "retired-model" }, models }).error, /current model is unavailable/);
+});
